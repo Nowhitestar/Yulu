@@ -1,0 +1,44 @@
+{
+  "calendars": [
+    {
+      "type": "feishu",
+      "enabled": true
+    },
+    {
+      "type": "google",
+      "enabled": false,
+      "credentials_path": "~/.config/gcp/calendar-credentials.json"
+    }
+  ],
+  "reminder_minutes_before": 5,
+  "check_window_minutes": 10,
+  "audio": {
+    "mic_device": ":0",
+    "system_audio_device": ":1",
+    "output_dir": "~/Downloads/meeting-recordings",
+    "format": "wav"
+  },
+  "transcription": {
+    "mode": "api",
+    "api_key_env": "OPENAI_API_KEY",
+    "language": "zh",
+    "model": "whisper-1"
+  },
+  "llm": {
+    "enabled": false,
+    "provider": "openai",
+    "model": "gpt-4",
+    "api_key_env": "OPENAI_API_KEY"
+  },
+  "output": {
+    "channel": "zulip",
+    "zulip": {
+      "stream": "meetings",
+      "topic": "会议纪要"
+    },
+    "notion": {
+      "api_key_env": "NOTION_API_KEY",
+      "database_id": "your-database-id"
+    }
+  }
+}
