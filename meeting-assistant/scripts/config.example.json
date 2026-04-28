@@ -2,7 +2,9 @@
   "calendars": [
     {
       "type": "feishu",
-      "enabled": true
+      "enabled": true,
+      "app_id_env": "FEISHU_APP_ID",
+      "app_secret_env": "FEISHU_APP_SECRET"
     },
     {
       "type": "google",
@@ -10,13 +12,13 @@
       "credentials_path": "~/.config/gcp/calendar-credentials.json"
     }
   ],
-  "reminder_minutes_before": 5,
-  "check_window_minutes": 10,
   "audio": {
     "mic_device": ":0",
     "system_audio_device": ":1",
     "output_dir": "~/Downloads/meeting-recordings",
-    "format": "wav"
+    "format": "wav",
+    "silence_threshold": 0.01,
+    "silence_duration_sec": 300
   },
   "transcription": {
     "mode": "api",
@@ -31,7 +33,7 @@
     "api_key_env": "OPENAI_API_KEY"
   },
   "output": {
-    "channel": "zulip",
+    "channel": "file",
     "zulip": {
       "stream": "meetings",
       "topic": "会议纪要"
@@ -39,6 +41,9 @@
     "notion": {
       "api_key_env": "NOTION_API_KEY",
       "database_id": "your-database-id"
+    },
+    "telegram": {
+      "chat_id": ""
     }
   }
 }

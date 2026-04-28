@@ -4,26 +4,34 @@
 
 支持两种模式：
 1. OpenAI Whisper API（推荐，需 OPENAI_API_KEY）
-2. 本地 whisper（需安装 openai-whisper，质量更好但较慢）
+2. 本地 whisper（需安装 openai-whisper）
+
+依赖：
+  pip install openai openai-whisper
 
 配置：
 {
   "transcription": {
-    "mode": "api",  # "api" 或 "local"
+    "mode": "api",        # "api" 或 "local"
     "api_key_env": "OPENAI_API_KEY",
     "language": "zh",
     "model": "whisper-1"  # API 模式
+  },
+  "llm": {
+    "enabled": false,
+    "provider": "openai",
+    "model": "gpt-4",
+    "api_key_env": "OPENAI_API_KEY"
   }
 }
 
 输出：
-- 原始转录文本: <meeting>_transcript.txt
-- 会议纪要: <meeting>_summary.md
+- <meeting>_transcript.txt  — 原始转录文本
+- <meeting>_summary.md     — 结构化会议纪要
 """
 
 import json
 import os
-import subprocess
 import sys
 from pathlib import Path
 
@@ -40,7 +48,11 @@ def load_config():
 
 def transcribe_with_api(audio_path, config):
     """使用 OpenAI Whisper API 转录。"""
-    import openai
+    try:
+        import openai
+    except ImportError:
+        print("openai package not installed. Run: pip install openai", file=sys.stderr)
+        sys.exit(1)
 
     api_key = os.environ.get(config.get("api_key_env", "OPENAI_API_KEY"))
     if not api_key:
@@ -73,64 +85,110 @@ def transcribe_with_local(audio_path, config):
     return result["text"]
 
 
-def generate_summary(transcript, config):
-    """使用 LLM 生成会议纪要。"""
-    # 这里可以调用 OpenAI API 或其他 LLM
-    # 作为技能，先提供一个简单框架
-    summary_prompt = f"""请将以下会议转录整理成结构化会议纪要：
+def generate_summary_with_llm(transcript, meeting_title, config):
+    """使用 LLM 生成结构化会议纪要。"""
+    try:
+        import openai
+    except ImportError:
+        return None
+
+    api_key = os.environ.get(config.get("api_key_env", "OPENAI_API_KEY"))
+    if not api_key:
+        return None
+
+    client = openai.OpenAI(api_key=api_key)
+    model = config.get("model", "gpt-4")
+
+    prompt = f"""请将以下会议转录整理成结构化会议纪要。
+
+会议主题：{meeting_title}
 
 要求：
-1. 列出会议主题、时间、参与人（如能从内容推断）
-2. 按议题分类讨论要点
-3. 提取所有 Action Items（待办事项），标注负责人和截止日期
+1. 列出会议基本信息（主题、时间）
+2. 按议题分类讨论要点，每个议题下列出关键发言和结论
+3. 提取所有 Action Items（待办事项），标注负责人和截止日期（如能从内容推断）
 4. 提取关键决策结论
-5. 使用中文输出
+5. 使用中文，Markdown 格式输出
 
 会议转录：
 {transcript}
 
-请输出 Markdown 格式纪要。
+请输出：
 """
 
-    # 如果配置了 LLM API，则调用
-    llm_config = config.get("llm", {})
-    if llm_config.get("enabled", False):
-        # TODO: 实现 LLM 调用
-        pass
+    try:
+        response = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": "你是一个专业的会议助理，擅长整理会议纪要。"},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.3,
+        )
+        return response.choices[0].message.content
+    except Exception as e:
+        print(f"LLM summary failed: {e}", file=sys.stderr)
+        return None
 
-    # 默认返回转录文本，让用户后续手动总结或配置 LLM
-    return summary_prompt
+
+def generate_summary_fallback(transcript, meeting_title):
+    """不使用 LLM 时的简单格式化。"""
+    lines = [
+        f"# 会议纪要：{meeting_title}",
+        "",
+        f"**时间**: {Path(__file__).stem}",
+        "",
+        "## 会议转录",
+        "",
+        transcript,
+        "",
+        "---",
+        "",
+        "*注：未配置 LLM，以上为原始转录文本。如需智能摘要，请在 config 中启用 llm.enabled。*",
+    ]
+    return "\n".join(lines)
 
 
 def process_audio(audio_path):
     config = load_config()
     trans_config = config.get("transcription", {})
     mode = trans_config.get("mode", "api")
+    llm_config = config.get("llm", {})
 
     audio_path = Path(audio_path)
     if not audio_path.exists():
         print(f"Audio file not found: {audio_path}", file=sys.stderr)
         sys.exit(1)
 
-    print(f"Transcribing: {audio_path}")
+    meeting_title = audio_path.stem.rsplit("_", 1)[0].replace("_", " ")
+    print(f"🎙️ 正在转录: {audio_path.name}")
 
+    # 1. 转录
     if mode == "api":
         transcript = transcribe_with_api(str(audio_path), trans_config)
     else:
         transcript = transcribe_with_local(str(audio_path), trans_config)
 
-    # 保存转录文本
+    # 2. 保存转录文本
     transcript_path = audio_path.with_suffix(".transcript.txt")
     with open(transcript_path, "w", encoding="utf-8") as f:
         f.write(transcript)
-    print(f"Transcript saved: {transcript_path}")
+    print(f"✅ 转录已保存: {transcript_path}")
 
-    # 生成会议纪要
-    summary = generate_summary(transcript, config)
+    # 3. 生成纪要
+    print("📝 正在生成纪要...")
+    if llm_config.get("enabled", False):
+        summary = generate_summary_with_llm(transcript, meeting_title, llm_config)
+        if summary is None:
+            summary = generate_summary_fallback(transcript, meeting_title)
+    else:
+        summary = generate_summary_fallback(transcript, meeting_title)
+
+    # 4. 保存纪要
     summary_path = audio_path.with_suffix(".summary.md")
     with open(summary_path, "w", encoding="utf-8") as f:
         f.write(summary)
-    print(f"Summary saved: {summary_path}")
+    print(f"✅ 纪要已保存: {summary_path}")
 
     return str(transcript_path), str(summary_path)
 
