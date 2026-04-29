@@ -36,50 +36,53 @@ def write_wav(path, sr, samples):
         w.writeframes((samples * 32767).astype(np.int16).tobytes())
 
 
-def lms_echo_cancel(ref, mic, filter_len=2048, mu=0.005, block_size=256):
+def nlms_echo_cancel(ref, mic, filter_len=1024, mu=0.1, block_size=256, leak=0.0001):
     """
-    LMS 自适应回声消除。
-
+    NLMS (Normalized Least Mean Squares) 自适应回声消除。
+    相比 LMS：步长按参考信号功率归一化，更稳定，不易发散。
+    
     参数:
         ref: 参考信号 (BlackHole)，shape (n,)
         mic: 带噪信号 (麦克风)，shape (n,)
-        filter_len: 滤波器长度（越长效果越好，但越慢）
-        mu: 步长（太大会发散，太小收敛慢）
-        block_size: 块大小，逐块处理减少延迟
-
-    返回:
-        clean: 消除回声后的信号
+        filter_len: 滤波器长度（默认 1024 ≈ 64ms @16kHz）
+        mu: 归一化步长（0.05-0.5）
+        block_size: 每块采样数
+        leak: 泄露因子，防止权重漂移（0 = 无泄露）
     """
     n = min(len(ref), len(mic))
     ref = ref[:n]
     mic = mic[:n]
 
-    # 归一化信号
-    ref_max = np.max(np.abs(ref)) or 1.0
-    mic_max = np.max(np.abs(mic)) or 1.0
-    ref = ref / ref_max
-    mic = mic / mic_max
+    # 信号归一化
+    peak = max(np.max(np.abs(ref)), np.max(np.abs(mic)), 1e-10)
+    ref = ref / peak
+    mic = mic / peak
 
-    clean = np.zeros(n, dtype=np.float32)
     w = np.zeros(filter_len, dtype=np.float32)
+    clean = np.zeros(n, dtype=np.float32)
+    eps = 1e-6  # 避免除零
 
     for start in range(filter_len, n, block_size):
         end = min(start + block_size, n)
-        block_len = end - start
 
         for i in range(start, end):
-            # 滤波器输出
             ref_block = ref[i - filter_len:i][::-1]
+            
+            # 滤波器输出（估计回声）
             y = np.dot(w, ref_block)
-            # 误差 = 麦克风 - 估计回声
+            
+            # 误差信号 = 麦克风 - 估计回声
             e = mic[i] - y
-            # 更新滤波器权重
-            w += mu * e * ref_block
+            
+            # NLMS 更新：步长按 ||ref_block||² 归一化
+            norm = np.dot(ref_block, ref_block) + eps
+            w = (1 - leak) * w + (mu / norm) * e * ref_block
+            
             clean[i] = e
 
-    # 恢复到原始音量水平
-    clean = clean * mic_max
-    return clean
+    # 恢复音量，限制在合理范围
+    clean = np.clip(clean * peak * 0.5, -1.0, 1.0)
+    return clean.astype(np.float32)
 
 
 def echo_cancel(sys_path, mic_path, output_path):
@@ -89,32 +92,30 @@ def echo_cancel(sys_path, mic_path, output_path):
     print(f"📖 读取带噪(麦克风): {mic_path}")
     sr_mic, mic = read_wav(mic_path)
 
+    sr = sr_ref if sr_ref == sr_mic else min(sr_ref, sr_mic)
     if sr_ref != sr_mic:
-        print(f"⚠️ 采样率不一致: {sr_ref} vs {sr_mic}, 以麦克风为准")
+        print(f"⚠️ 采样率不一致: {sr_ref} vs {sr_mic}, 以 {sr} 为准")
 
-    sr = min(sr_ref, sr_mic)
-    # 对齐到相同采样率
-    if sr_ref != sr:
-        from scipy import signal
-        ref = signal.resample(ref, int(len(ref) * sr / sr_ref))
-    if sr_mic != sr:
-        from scipy import signal
-        mic = signal.resample(mic, int(len(mic) * sr / sr_mic))
+    # 对齐到相同长度
+    min_len = min(len(ref), len(mic))
 
-    # 互相关对齐两个信号（修正 BlackHole 与麦克风的启动时间差）
-    corr = np.correlate(mic[:sr], ref[:sr], mode='valid')
-    delay = np.argmax(np.abs(corr))
-    if delay > 0:
+    # 互相关对齐时间偏移（修正 BlackHole 与麦克风启动时间差）
+    corr_len = min(48000, min_len)  # 最多 1 秒搜索
+    corr = np.correlate(mic[:corr_len], ref[:corr_len], mode='valid')
+    delay = int(np.argmax(np.abs(corr)))
+    if delay > 100:  # 至少 100 采样点才值得对齐
         print(f"⏱️ 检测到 {delay} 采样点偏移 ({delay/sr*1000:.1f}ms)，自动对齐")
         ref = ref[:min_len - delay]
         mic = mic[delay:min_len]
-    else:
         min_len = min(len(ref), len(mic))
         ref = ref[:min_len]
         mic = mic[:min_len]
+    else:
+        ref = ref[:min_len]
+        mic = mic[:min_len]
 
-    print(f"🔊 回声消除中 ({min_len/sr:.1f}s, {sr}Hz)...")
-    clean = lms_echo_cancel(ref, mic)
+    print(f"🔊 回声消除中 ({min_len/sr:.1f}s, {sr}Hz, filter={1024})...")
+    clean = nlms_echo_cancel(ref, mic)
     write_wav(output_path, sr, clean)
 
     size_mb = Path(output_path).stat().st_size / 1024 / 1024
