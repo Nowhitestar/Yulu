@@ -47,7 +47,9 @@ DEFAULT_TRANSCRIBE_CMD = [
     "{{input}}",
 ]
 
-DEFAULT_LLM_CMD = ["claude", "--print", "--model", "claude-opus-4-7"]
+DEFAULT_LLM_CMD = []  # 默认空 = 由 agent (闪电) 处理
+
+NOTIFY_SCRIPT = Path(__file__).parent / "notify.py"
 
 SUMMARY_PROMPT = """请将以下会议转录整理成结构化会议纪要。
 
@@ -112,31 +114,61 @@ def transcribe(audio_path, config):
 
 
 def summarize(transcript, meeting_title, config):
-    """用 claude-cli 生成结构化纪要。返回 markdown 字符串。"""
+    """生成结构化纪要。
+    
+    如果配置了外部命令（如 claude-cli），调用它。
+    否则（默认行为），发通知让 agent（闪电）来总结。
+    返回 markdown 字符串。
+    """
     cmd_template = config.get("command") or DEFAULT_LLM_CMD
-    cmd = render_cmd(cmd_template)
-    prompt = SUMMARY_PROMPT.format(title=meeting_title, transcript=transcript)
-
-    print(f"🤖 claude-cli: {shlex.join(cmd)}")
-    result = subprocess.run(
-        cmd,
-        input=prompt,
-        capture_output=True,
-        text=True,
-        timeout=180,
-    )
-    if result.returncode != 0:
-        print(f"claude-cli failed: {result.stderr}", file=sys.stderr)
+    
+    if cmd_template:
+        # 走外部命令（如 claude-cli）
+        cmd = render_cmd(cmd_template)
+        prompt = SUMMARY_PROMPT.format(title=meeting_title, transcript=transcript)
+        print(f"🤖 LLM: {shlex.join(cmd)}")
+        try:
+            result = subprocess.run(
+                cmd,
+                input=prompt,
+                capture_output=True,
+                text=True,
+                timeout=180,
+            )
+            if result.returncode == 0:
+                return result.stdout.strip()
+            print(f"LLM failed: {result.stderr}", file=sys.stderr)
+        except Exception as e:
+            print(f"LLM error: {e}", file=sys.stderr)
         return None
-    return result.stdout.strip()
+    
+    # 没有外部 LLM → 通知用户找 agent 总结
+    print("🤖 跳过自动摘要，等待 agent 处理...")
+    _send_agent_notification(meeting_title)
+    return None
+
+
+def _send_agent_notification(title):
+    """发系统通知告知转录完成，等待 agent 总结。"""
+    notify = NOTIFY_SCRIPT
+    subprocess.Popen(
+        [sys.executable, str(notify), "remind",
+         "Meeting Assistant",
+         f"「{title}」转录完成，找我出纪要",
+         "待总结"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
 
 
 def fallback_summary(transcript, meeting_title):
-    """LLM 失败时的简单格式化。"""
+    """LLM 失败/未配置时的简单格式化。
+    包含原始转录，方便后续 agent 直接读取总结。
+    """
     return (
         f"# 会议纪要：{meeting_title}\n\n"
-        f"## 转录原文\n\n{transcript}\n\n"
-        f"---\n*未启用 LLM 或调用失败，仅保留原始转录。*\n"
+        f"## 原始转录\n\n{transcript}\n\n"
+        f"---\n*即将由 闪电⚡ 生成结构化摘要*\n"
     )
 
 
