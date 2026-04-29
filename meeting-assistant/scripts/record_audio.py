@@ -50,7 +50,13 @@ def load_config():
 
 
 def start_recording(meeting_title="meeting"):
-    """开始录制音频。"""
+    """开始录制音频。
+    
+    双路 SoX 分别录 BlackHole（扬声器）和麦克风。
+    - 需配置多输出设备（BlackHole + 扬声器/耳机）为默认输出
+    - 戴耳机时无回声，音质最佳
+    - 用扬声器时麦克风会拾取环境音，合并时噪音门过滤
+    """
     config = load_config()
     audio_config = config.get("audio", {})
     output_dir = Path(audio_config.get("output_dir", "~/Downloads/meeting-recordings")).expanduser()
@@ -59,19 +65,8 @@ def start_recording(meeting_title="meeting"):
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     safe_title = "".join(c if c.isalnum() or c in "-_ " else "_" for c in meeting_title)
     output_file = output_dir / f"{safe_title}_{timestamp}.wav"
-
-    mic = audio_config.get("mic_device", ":0")
-    sys_audio = audio_config.get("system_audio_device", ":1")
-
-    # 用 SoX（CoreAudio）分别录制麦克风和系统音频
-    # ffmpeg 的 AVFoundation 数据率只有 1/5（bug），SoX 无此问题
-    # 停止后自动合并两个文件
-    output_file = output_dir / f"{safe_title}_{timestamp}.wav"
-    mic_file = output_file.with_suffix(".mic.wav")
-    sys_file = output_file.with_suffix(".sys.wav")
-
-    # SoX (CoreAudio) 分别录制麦克风和系统音频
-    # 通过 SwitchAudioSource 分别选择设备，一旦 SoX 打开设备后切走不影响它
+    mic_file = output_dir / f"{safe_title}_{timestamp}.mic.wav"
+    sys_file = output_dir / f"{safe_title}_{timestamp}.sys.wav"
 
     def _start_sox(device, out_path):
         """切到指定输入设备后启动 SoX。"""
@@ -86,7 +81,7 @@ def start_recording(meeting_title="meeting"):
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
 
-    # 先启动系统音频（BlackHole），SoX 打开设备后切走
+    # 先启动系统音频（BlackHole），SoX 打开设备后切走不影响
     print(f"🔊 系统音频: {sys_file}")
     sys_proc = _start_sox("BlackHole 2ch", sys_file)
     time.sleep(0.5)
@@ -111,7 +106,7 @@ def start_recording(meeting_title="meeting"):
 
 
 def stop_recording():
-    """停止录制并合并音频。"""
+    """停止录制，回声消除，合并输出。"""
     if not PID_FILE.exists():
         print("No active recording found.", file=sys.stderr)
         return None
@@ -134,7 +129,7 @@ def stop_recording():
 
     output_file = info.get("output_file", info.get("file"))
 
-    # SoX 双进程模式
+    # 双路 SoX 模式（mic + BlackHole）
     if "mic_pid" in info:
         _kill(info["mic_pid"])
         _kill(info["sys_pid"])
@@ -142,49 +137,60 @@ def stop_recording():
         sys_file = Path(info["sys_file"])
         out_file = Path(output_file)
 
-        # 等文件写盘
-        time.sleep(1)
+        time.sleep(1)  # 等 SoX 写盘
 
-        # 合并两个文件
-        # 麦克风通道: 高通(去低频回声)+降噪+音量提升
-        # 系统音频通道: 直接混入
-        if mic_file.exists() and mic_file.stat().st_size > 0 and sys_file.exists() and sys_file.stat().st_size > 0:
-            print(f"🔄 合并+降噪: {mic_file.name} + {sys_file.name}")
-            subprocess.run([
-                "ffmpeg", "-y",
-                "-i", str(mic_file),
-                "-i", str(sys_file),
-                "-filter_complex",
-                "[0:a]highpass=f=200,volume=5.0[mic];"
-                "[1:a]volume=3.0[sys];"
-                "[mic][sys]amix=inputs=2:duration=longest:weights=1 2",
-                "-ar", "16000", "-ac", "1",
-                str(out_file),
-            ], capture_output=True, timeout=30)
-            mic_file.unlink(missing_ok=True)
-            sys_file.unlink(missing_ok=True)
+        if mic_file.exists() and mic_file.stat().st_size > 0 and sys_file.exists():
+            # 回声消除：用 sys(参考) 从 mic 中消除回声
+            clean_file = out_file.with_suffix(".mic_clean.wav")
+            ec_script = Path(__file__).parent / "echo_cancel.py"
+            if ec_script.exists():
+                print(f"🔊 回声消除中...")
+                subprocess.run([
+                    sys.executable, str(ec_script),
+                    str(sys_file), str(mic_file), str(clean_file),
+                ], timeout=120)
+            else:
+                clean_file = mic_file  # 无 AEC 脚本，直接使用原始 mic
+
+            # 合并: 消除回声后的麦克风 + 系统音频
+            if clean_file.exists() and clean_file.stat().st_size > 0:
+                print(f"🔄 合并输出: {out_file.name}")
+                subprocess.run([
+                    "ffmpeg", "-y",
+                    "-i", str(clean_file),
+                    "-i", str(sys_file),
+                    "-filter_complex",
+                    "[0:a]volume=5.0[a0];[1:a]volume=3.0[a1];"
+                    "[a0][a1]amix=inputs=2:duration=longest:weights=1 2",
+                    "-ar", "16000", "-ac", "1",
+                    str(out_file),
+                ], capture_output=True, timeout=30)
+
+            # 清理临时文件（保留原始 mic/sys 的 .wav 父目录清理）
+            for f in [mic_file, sys_file]:
+                if f.exists():
+                    f.unlink(missing_ok=True)
+            if clean_file != mic_file and clean_file.exists():
+                clean_file.unlink(missing_ok=True)
         else:
-            # 有文件失败，用剩下的
+            # 单个文件直接当输出
             existing = [f for f in [mic_file, sys_file] if f.exists() and f.stat().st_size > 0]
             if existing:
                 subprocess.run([
                     "ffmpeg", "-y", "-i", str(existing[0]),
                     "-ar", "16000", "-ac", "1", str(out_file),
                 ], capture_output=True, timeout=30)
-                existing[0].unlink(missing_ok=True)
             else:
                 print("❌ 录音文件为空", file=sys.stderr)
                 PID_FILE.unlink(missing_ok=True)
                 return None
     else:
-        # 旧格式：单进程 ffmpeg
+        # 单路模式
         _kill(info.get("pid", 0))
+        if output_file and Path(output_file).exists():
+            print(f"Recording saved: {output_file}")
 
     PID_FILE.unlink(missing_ok=True)
-
-    time.sleep(0.5)
-    if output_file and Path(output_file).exists():
-        print(f"Recording saved: {output_file}")
 
     # 也停止 monitor
     if MONITOR_PID_FILE.exists():
@@ -195,7 +201,10 @@ def stop_recording():
         except ProcessLookupError:
             pass
 
-    return output_file
+    if output_file and Path(output_file).exists() and Path(output_file).stat().st_size > 0:
+        print(f"Recording saved: {output_file}")
+        return output_file
+    return None
 
 
 # ───────────────────────────────────────────────
