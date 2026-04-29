@@ -1,1 +1,3 @@
 meeting-assistant/scripts/recorder_status
+__pycache__/
+*.py[cod]

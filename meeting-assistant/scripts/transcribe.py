@@ -3,7 +3,7 @@
 转录音频并生成会议纪要。
 
 转录: whisper.cpp (whisper-cli)
-摘要: claude-cli (与 OpenClaw 同款 Anthropic Claude)
+摘要: 默认交给 OpenClaw agent（闪电）根据模板生成；也可配置外部命令
 
 依赖：
   brew install whisper-cpp        # whisper-cli
@@ -116,36 +116,32 @@ def transcribe(audio_path, config):
 
 def summarize(transcript, meeting_title, config):
     """生成结构化纪要。
-    
-    如果配置了外部命令（如 claude-cli），调用它。
-    否则（默认行为），发通知让 agent（闪电）来总结。
-    返回 markdown 字符串。
+
+    如果显式配置了外部命令则调用；默认不使用 claude-cli，交给 OpenClaw agent 队列处理。
+    返回 markdown 字符串；None 表示需要 agent 后续生成。
     """
     cmd_template = config.get("command") or DEFAULT_LLM_CMD
-    
-    if cmd_template:
-        # 走外部命令（如 claude-cli）
-        cmd = render_cmd(cmd_template)
-        prompt = SUMMARY_PROMPT.format(title=meeting_title, transcript=transcript)
-        print(f"🤖 LLM: {shlex.join(cmd)}")
-        try:
-            result = subprocess.run(
-                cmd,
-                input=prompt,
-                capture_output=True,
-                text=True,
-                timeout=180,
-            )
-            if result.returncode == 0:
-                return result.stdout.strip()
-            print(f"LLM failed: {result.stderr}", file=sys.stderr)
-        except Exception as e:
-            print(f"LLM error: {e}", file=sys.stderr)
+
+    if not cmd_template:
+        print("🤖 未配置外部 LLM，交给 agent 根据模板生成摘要...")
         return None
-    
-    # 没有外部 LLM → 通知用户找 agent 总结
-    print("🤖 跳过自动摘要，等待 agent 处理...")
-    _send_agent_notification(meeting_title)
+
+    cmd = render_cmd(cmd_template)
+    prompt = SUMMARY_PROMPT.format(title=meeting_title, transcript=transcript)
+    print(f"🤖 LLM: {shlex.join(cmd)}")
+    try:
+        result = subprocess.run(
+            cmd,
+            input=prompt,
+            capture_output=True,
+            text=True,
+            timeout=180,
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()
+        print(f"LLM failed: {result.stderr}", file=sys.stderr)
+    except Exception as e:
+        print(f"LLM error: {e}", file=sys.stderr)
     return None
 
 
@@ -171,30 +167,38 @@ def _notify_agent(event_type, **kw):
 
 
 def fallback_summary(transcript, meeting_title):
-    """按模板生成结构化摘要（未启用 LLM 时的 fallback）。"""
-    SCRIPT_DIR = Path(__file__).parent
-    template_path = SCRIPT_DIR / "summary_template.md"
-    today = datetime.now().strftime("%Y-%m-%d")
-
-    # 摘要：取转录的前 200 字做 TL;DR
+    """写一个明确标记的草稿，真正摘要由 agent 读取 template + transcript 后覆盖。"""
     tldr = transcript.strip()[:200].replace("\n", " ")
     if len(transcript) > 200:
         tldr += "…"
-        
+
     return (
+        f"# {meeting_title}\n\n"
+        f"> ⚠️ Draft placeholder：等待 OpenClaw agent 根据模板生成最终会议纪要。\n\n"
         f"## TL;DR\n"
-        f"{tldr}\n\n"
+        f"{tldr or '（转录为空）'}\n\n"
         f"## Discussion Points\n"
-        f"- **会议讨论** — {tldr} 【SPEAKER_00】\n\n"
-        f"## Action Items\n"
         f"- （待 agent 根据完整转录提炼）\n\n"
+        f"## Action Items\n"
+        f"- [ ] （待 agent 根据完整转录提炼）\n\n"
         f"## Open Questions / Blockers\n"
-        f"-（待 agent 根据完整转录提炼）\n\n"
+        f"- （待 agent 根据完整转录提炼）\n\n"
         f"## Decisions Made\n"
-        f"-（待 agent 根据完整转录提炼）\n\n"
+        f"- （待 agent 根据完整转录提炼）\n\n"
         f"---\n"
-        f"## 原始转录\n\n{transcript}\n\n"
-        f"*结构化摘要由 闪电⚡ 生成*\n"
+        f"## 原始转录\n\n{transcript}\n"
+    )
+
+
+def request_agent_summary(meeting_title, transcript_path, summary_path):
+    """通知 OpenClaw agent 按模板生成最终 summary。"""
+    template_path = Path(__file__).parent / "summary_template.md"
+    _notify_agent(
+        "summary_request",
+        title=meeting_title,
+        transcript_path=str(transcript_path),
+        summary_path=str(summary_path),
+        template_path=str(template_path),
     )
 
 
@@ -222,17 +226,24 @@ def process_audio(audio_path):
 
     # 3. 摘要
     summary = None
+    agent_should_finalize = False
     if llm_cfg.get("enabled", True):
         summary = summarize(transcript, meeting_title, llm_cfg)
     if summary is None:
         summary = fallback_summary(transcript, meeting_title)
+        agent_should_finalize = True
 
     # 4. 保存摘要
     summary_path = audio_path.with_suffix(".summary.md")
     summary_path.write_text(summary, encoding="utf-8")
     print(f"✅ 纪要已保存: {summary_path}")
     print(f"Summary saved: {summary_path}")
-    _notify_agent("summary_ready", title=meeting_title, path=str(summary_path))
+    if agent_should_finalize:
+        print("Summary status: draft_agent_pending")
+        request_agent_summary(meeting_title, transcript_path, summary_path)
+    else:
+        print("Summary status: final")
+        _notify_agent("summary_ready", title=meeting_title, path=str(summary_path))
 
     return str(transcript_path), str(summary_path)
 

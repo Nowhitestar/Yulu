@@ -105,6 +105,20 @@ def start_recording(meeting_title="meeting"):
     return sys_proc, str(output_file)
 
 
+def _wav_duration_sec(path):
+    """读取 wav 时长；失败时返回 0。"""
+    try:
+        with wave.open(str(path), "rb") as w:
+            return w.getnframes() / float(w.getframerate() or 1)
+    except Exception:
+        return 0
+
+
+def _processing_timeout(duration_sec):
+    """长会议处理 timeout：至少 10 分钟，随录音时长增加。"""
+    return max(600, int(duration_sec * 0.15) + 120)
+
+
 def stop_recording():
     """停止录制，回声消除，合并输出。"""
     if not PID_FILE.exists():
@@ -140,7 +154,10 @@ def stop_recording():
         time.sleep(1)  # 等 SoX 写盘
 
         if mic_file.exists() and mic_file.stat().st_size > 0 and sys_file.exists():
-            # 回声消除：用 sys(参考) 从 mic 中消除回声
+            duration_sec = max(_wav_duration_sec(mic_file), _wav_duration_sec(sys_file))
+            timeout_sec = _processing_timeout(duration_sec)
+
+            # 回声消除/半双工混合：用 sys 判断何时保留 mic
             clean_file = out_file.with_suffix(".mic_clean.wav")
             ec_script = Path(__file__).parent / "echo_cancel.py"
             if ec_script.exists():
@@ -148,7 +165,7 @@ def stop_recording():
                 ec_result = subprocess.run([
                     sys.executable, str(ec_script),
                     str(sys_file), str(mic_file), str(clean_file),
-                ], capture_output=True, text=True, timeout=120)
+                ], capture_output=True, text=True, timeout=timeout_sec)
                 if ec_result.returncode != 0:
                     print(f"❌ 回声消除失败:\n{ec_result.stderr}", file=sys.stderr)
                     clean_file = mic_file  # 退回到原始麦克风
@@ -165,7 +182,7 @@ def stop_recording():
                     "-i", str(clean_file),
                     "-ar", "16000", "-ac", "1",
                     str(out_file),
-                ], capture_output=True, timeout=30)
+                ], capture_output=True, timeout=timeout_sec)
 
             # 清理临时文件（保留原始 mic/sys 的 .wav 父目录清理）
             for f in [mic_file, sys_file]:
@@ -180,7 +197,7 @@ def stop_recording():
                 subprocess.run([
                     "ffmpeg", "-y", "-i", str(existing[0]),
                     "-ar", "16000", "-ac", "1", str(out_file),
-                ], capture_output=True, timeout=30)
+                ], capture_output=True, timeout=_processing_timeout(_wav_duration_sec(existing[0])))
             else:
                 print("❌ 录音文件为空", file=sys.stderr)
                 PID_FILE.unlink(missing_ok=True)

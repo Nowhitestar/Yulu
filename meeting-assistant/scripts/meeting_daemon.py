@@ -57,8 +57,37 @@ def load_schedule():
     return data
 
 
+def _prune_past_events(data, grace_sec=15):
+    """清理已过期事件/会议，避免 schedule reload 后旧测试/ask_stop 重复触发。"""
+    now_ts = datetime.now().timestamp()
+
+    kept_events = []
+    for ev in data.get("events", []):
+        try:
+            at_ts = parse_iso(ev["at"]).timestamp()
+        except Exception:
+            continue
+        if at_ts + grace_sec >= now_ts:
+            kept_events.append(ev)
+    data["events"] = kept_events
+
+    kept_meetings = []
+    for meeting in data.get("meetings", []):
+        try:
+            start = parse_iso(meeting["start"])
+            duration = int(meeting.get("duration_min", DEFAULT_DURATION_MIN))
+            end_ts = (start + timedelta(minutes=duration)).timestamp()
+        except Exception:
+            continue
+        if end_ts + grace_sec >= now_ts:
+            kept_meetings.append(meeting)
+    data["meetings"] = kept_meetings
+    return data
+
+
 def save_schedule(data):
     SCHEDULE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    data = _prune_past_events(data)
     with open(SCHEDULE_PATH, "w") as f:
         json.dump(data, f, indent=2, ensure_ascii=False, default=str)
     notify_scheduler()
@@ -243,7 +272,7 @@ def cmd_test(args):
     data["meetings"].append(meeting)
     data["events"].extend(_build_events_for_meeting(meeting))
     save_schedule(data)
-    print(f"🧪 测试会议「{title}」 @ {start.strftime('%H:%M:%S')} (30秒后)")
+    print(f"🧪 测试会议「{title}」 @ {start.strftime('%H:%M:%S')} (60秒后)")
 
 
 # ───────────────────────────────────────────────
@@ -362,10 +391,10 @@ def cmd_auto_stop():
     choice = result.stdout.strip()
     print(f"Stop choice: {choice}")
 
-    if choice in ("停止", "timeout"):
+    if choice in ("停止录制", "停止", "timeout"):
         _stop_and_process()
     else:
-        # 用户选继续：再延 30 分钟问一次
+        # 用户选继续：再延 30 分钟问一次。save_schedule 会顺手清理已过期 ask_stop。
         end_at = datetime.now() + timedelta(minutes=30)
         _add_runtime_event({
             "id": f"recording-{rec.get('meeting_id','manual')}::ask_stop_extended",
@@ -459,11 +488,14 @@ def _stop_and_process():
     # 4. 通知 agent 转录完成
     transcript_path = None
     summary_path = None
+    summary_pending_agent = False
     for line in result.stdout.split("\n"):
         if line.startswith("Transcript saved:"):
             transcript_path = line.split("Transcript saved:", 1)[1].strip()
         if line.startswith("Summary saved:"):
             summary_path = line.split("Summary saved:", 1)[1].strip()
+        if line.startswith("Summary status:") and "draft_agent_pending" in line:
+            summary_pending_agent = True
 
     try:
         notify("transcript", title=title, path=transcript_path or "")
@@ -474,20 +506,30 @@ def _stop_and_process():
         print("❌ 找不到 summary 路径", file=sys.stderr)
         return
 
-    # 3. 发送
-    send = SCRIPT_DIR / "send_summary.py"
-    subprocess.run([sys.executable, str(send), summary_path], capture_output=True)
+    # 3. 发送。若 summary 等待 agent 最终生成，则不发送草稿，由 heartbeat 的 summary_request 负责覆盖并推送。
+    if not summary_pending_agent:
+        send = SCRIPT_DIR / "send_summary.py"
+        subprocess.run([sys.executable, str(send), summary_path], capture_output=True)
 
-    # 4. 通知 + 清理
-    config = load_config()
-    channel = config.get("output", {}).get("channel", "file")
-    subprocess.Popen(
-        [sys.executable, str(notify), "notify_sent", title, channel],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-    )
+        config = load_config()
+        channel = config.get("output", {}).get("channel", "file")
+        subprocess.Popen(
+            [sys.executable, str(notify), "notify_sent", title, channel],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+    else:
+        print("⏳ Summary 草稿已保存，等待 agent 按模板生成最终版")
 
     state["recording"] = {}
     save_state(state)
+
+    # 清理当前录制相关的过期 ask_stop 事件，避免测试/重载后残留。
+    try:
+        data = load_schedule()
+        save_schedule(data)
+    except Exception:
+        pass
+
     print(f"✅ 完成: {summary_path}")
 
 

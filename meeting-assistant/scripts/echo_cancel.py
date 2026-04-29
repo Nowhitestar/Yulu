@@ -62,9 +62,18 @@ def echo_cancel(sys_path, mic_path, output_path, frame_ms=30):
     mic_audio = mic_audio[:min_len]
     
     # 帧参数
-    frame_size = int(sr * frame_ms / 1000)
-    n_frames = min_len // frame_size
-    
+    frame_size = max(1, int(sr * frame_ms / 1000))
+    n_frames = max(1, (min_len + frame_size - 1) // frame_size)
+
+    # 用原始系统音频做门限判断，避免 normalize 把 BlackHole 底噪放大后误判为“系统有声”。
+    sys_frame_db = np.array([
+        rms_energy(sys_audio[i * frame_size:min((i + 1) * frame_size, min_len)])
+        for i in range(n_frames)
+    ])
+    noise_floor = float(np.percentile(sys_frame_db, 20))
+    sys_threshold = max(-50.0, min(-30.0, noise_floor + 12.0))
+    sys_active_flags = sys_frame_db > sys_threshold
+
     # 音量归一化到同一目标
     print("🎚️ 音量归一化...")
     sys_norm = normalize_to_target(sys_audio, -20)
@@ -75,11 +84,10 @@ def echo_cancel(sys_path, mic_path, output_path, frame_ms=30):
     # sys 无声 → mic_ratio 0→1 渐变过渡（0.5s 从系统切到麦克风）
     # sys 又响 → mic_ratio 立即归 0（切回系统音频）
     output = np.zeros(min_len, dtype=np.float32)
-    sys_threshold = -35  # dB
     fade_samples = int(sr * 0.5)  # 0.5s 渐变长度
     attack = 1.0 / fade_samples  # 每采样点增量
     
-    print(f"🔇 半双工混合 (帧长={frame_ms}ms, 阈值={sys_threshold}dB, 渐变=0.5s)...")
+    print(f"🔇 半双工混合 (帧长={frame_ms}ms, 噪声底={noise_floor:.1f}dB, 阈值={sys_threshold:.1f}dB, 渐变=0.5s)...")
     
     mic_ratio = 0.0  # 0=纯系统音频, 1=纯麦克风
     sys_active = False  # 系统当前是否有声
@@ -90,9 +98,7 @@ def echo_cancel(sys_path, mic_path, output_path, frame_ms=30):
         
         # 每帧计算一次系统音频能量
         if i == frame_start:
-            frame_end = min(frame_start + frame_size, min_len)
-            sys_db = rms_energy(sys_norm[frame_start:frame_end])
-            sys_active = sys_db > sys_threshold
+            sys_active = bool(sys_active_flags[min(frame_idx, n_frames - 1)])
         
         if sys_active:
             # 系统有声音：mic_ratio 立即清零（切回系统音频）
@@ -105,10 +111,7 @@ def echo_cancel(sys_path, mic_path, output_path, frame_ms=30):
         output[i] = (1.0 - mic_ratio) * sys_norm[i] + mic_ratio * mic_norm[i]
     
     # 统计
-    sys_cnt = sum(
-        1 for i in range(n_frames)
-        if rms_energy(sys_norm[i * frame_size:min((i+1) * frame_size, min_len)]) > sys_threshold
-    )
+    sys_cnt = int(np.count_nonzero(sys_active_flags))
     print(f"📊 组成: 系统音频 {sys_cnt/n_frames*100:.0f}% | 麦克风 {(1-sys_cnt/n_frames)*100:.0f}%")
     
     # 最终音量提升
