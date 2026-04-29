@@ -101,10 +101,17 @@ def echo_cancel(sys_path, mic_path, output_path):
         from scipy import signal
         mic = signal.resample(mic, int(len(mic) * sr / sr_mic))
 
-    # 截断到相同长度
-    min_len = min(len(ref), len(mic))
-    ref = ref[:min_len]
-    mic = mic[:min_len]
+    # 互相关对齐两个信号（修正 BlackHole 与麦克风的启动时间差）
+    corr = np.correlate(mic[:sr], ref[:sr], mode='valid')
+    delay = np.argmax(np.abs(corr))
+    if delay > 0:
+        print(f"⏱️ 检测到 {delay} 采样点偏移 ({delay/sr*1000:.1f}ms)，自动对齐")
+        ref = ref[:min_len - delay]
+        mic = mic[delay:min_len]
+    else:
+        min_len = min(len(ref), len(mic))
+        ref = ref[:min_len]
+        mic = mic[:min_len]
 
     print(f"🔊 回声消除中 ({min_len/sr:.1f}s, {sr}Hz)...")
     clean = lms_echo_cancel(ref, mic)

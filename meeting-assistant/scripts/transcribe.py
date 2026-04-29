@@ -34,6 +34,7 @@ import os
 import shlex
 import subprocess
 import sys
+from datetime import datetime
 from pathlib import Path
 
 CONFIG_PATH = Path.home() / ".config" / "meeting-assistant" / "config.json"
@@ -170,13 +171,30 @@ def _notify_agent(event_type, **kw):
 
 
 def fallback_summary(transcript, meeting_title):
-    """LLM 失败/未配置时的简单格式化。
-    包含原始转录，方便后续 agent 直接读取总结。
-    """
+    """按模板生成结构化摘要（未启用 LLM 时的 fallback）。"""
+    SCRIPT_DIR = Path(__file__).parent
+    template_path = SCRIPT_DIR / "summary_template.md"
+    today = datetime.now().strftime("%Y-%m-%d")
+
+    # 摘要：取转录的前 200 字做 TL;DR
+    tldr = transcript.strip()[:200].replace("\n", " ")
+    if len(transcript) > 200:
+        tldr += "…"
+        
     return (
-        f"# 会议纪要：{meeting_title}\n\n"
+        f"## TL;DR\n"
+        f"{tldr}\n\n"
+        f"## Discussion Points\n"
+        f"- **会议讨论** — {tldr} 【SPEAKER_00】\n\n"
+        f"## Action Items\n"
+        f"- （待 agent 根据完整转录提炼）\n\n"
+        f"## Open Questions / Blockers\n"
+        f"-（待 agent 根据完整转录提炼）\n\n"
+        f"## Decisions Made\n"
+        f"-（待 agent 根据完整转录提炼）\n\n"
+        f"---\n"
         f"## 原始转录\n\n{transcript}\n\n"
-        f"---\n*即将由 闪电⚡ 生成结构化摘要*\n"
+        f"*结构化摘要由 闪电⚡ 生成*\n"
     )
 
 
