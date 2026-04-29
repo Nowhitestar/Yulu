@@ -69,13 +69,9 @@ class AppDel: NSObject, NSApplicationDelegate {
         win.isMovableByWindowBackground = false; win.level = .floating
         win.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
         win.isOpaque = false; win.backgroundColor = .clear
-        // 隐藏关闭按钮
         [.closeButton, .miniaturizeButton, .zoomButton].forEach {
             win.standardWindowButton($0)?.isHidden = true
         }
-        // 点击整个窗口切换折叠/展开
-        let c = NSClickGestureRecognizer(target: self, action: #selector(toggle))
-        win.contentView?.addGestureRecognizer(c)
         win.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         pos(expanded: true, anim: false)
@@ -105,13 +101,25 @@ class AppDel: NSObject, NSApplicationDelegate {
         timeLbl.textColor = NSColor(white: 0.8, alpha: 1)
         panel.addSubview(timeLbl)
 
-        // Stop
-        stopBtn = NSButton(title: "■", target: self, action: #selector(doStop))
-        stopBtn.bezelStyle = .rounded; stopBtn.setButtonType(.momentaryPushIn)
-        stopBtn.font = .systemFont(ofSize: 16, weight: .bold)
-        stopBtn.contentTintColor = NSColor(red: 0.9, green: 0.2, blue: 0.2, alpha: 1)
+        // Stop 按钮
+        stopBtn = NSButton(title: "■ Stop", target: self, action: #selector(doStop))
+        stopBtn.bezelStyle = .rounded
+        stopBtn.font = .systemFont(ofSize: 13, weight: .bold)
+        stopBtn.contentTintColor = .white
         stopBtn.toolTip = "Stop Recording"
+        stopBtn.wantsLayer = true
+        stopBtn.layer?.backgroundColor = NSColor(red: 0.85, green: 0.15, blue: 0.15, alpha: 1).cgColor
+        stopBtn.layer?.cornerRadius = 6
         panel.addSubview(stopBtn)
+
+        // 折叠/展开切换按钮（透明，覆盖红点区域）
+        let toggleBtn = NSButton(title: "", target: self, action: #selector(toggle))
+        toggleBtn.isBordered = false
+        toggleBtn.wantsLayer = true
+        toggleBtn.layer?.backgroundColor = NSColor.clear.cgColor
+        toggleBtn.frame = NSRect(x: 0, y: 0, width: COLLAPSED_W, height: PANEL_H)
+        toggleBtn.autoresizingMask = [.maxXMargin]
+        panel.addSubview(toggleBtn, positioned: .above, relativeTo: dot)
 
         setExpanded(false)
     }

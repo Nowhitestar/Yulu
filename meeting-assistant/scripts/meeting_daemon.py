@@ -266,10 +266,27 @@ def cmd_ask_record(args):
     choice = result.stdout.strip()
     print(f"User choice: {choice}")
 
+    # 移除本条 ask_record 事件，防止调度器重载后重复触发
+    _remove_ask_record_event(meeting_id)
+
     if choice == "开始录制":
         _start_recording(title, meeting_id)
     else:
         print("用户跳过录制")
+
+
+def _remove_ask_record_event(meeting_id):
+    """从 schedule 中移除已触发的 ask_record 事件。"""
+    if not meeting_id:
+        return
+    data = load_schedule()
+    before = len(data.get("events", []))
+    data["events"] = [
+        e for e in data.get("events", [])
+        if not (e.get("kind") == "ask_record" and e.get("meeting_id") == meeting_id)
+    ]
+    if len(data.get("events", [])) < before:
+        save_schedule(data)
 
 
 def _start_recording(title, meeting_id=""):

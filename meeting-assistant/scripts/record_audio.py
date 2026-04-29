@@ -64,6 +64,8 @@ def start_recording(meeting_title="meeting"):
     sys_audio = audio_config.get("system_audio_device", ":1")
 
     # ffmpeg 同时录制麦克风和系统音频
+    # 先分别重采样到 16kHz 再混音，防止采样率不一致导致变调
+    # 麦克风权重 2.0，系统音频权重 1.0（防止音乐盖过人声）
     cmd = [
         "ffmpeg",
         "-y",
@@ -71,7 +73,10 @@ def start_recording(meeting_title="meeting"):
         "-i", mic,
         "-f", "avfoundation",
         "-i", sys_audio,
-        "-filter_complex", "amix=inputs=2:duration=longest",
+        "-filter_complex",
+        "[0:a]aresample=16000:resampler=soxr[a0];"
+        "[1:a]aresample=16000:resampler=soxr[a1];"
+        "[a0][a1]amix=inputs=2:duration=longest:weights=2 1",
         "-acodec", "pcm_s16le",
         "-ar", "16000",
         "-ac", "1",
