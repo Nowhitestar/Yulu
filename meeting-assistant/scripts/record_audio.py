@@ -145,10 +145,15 @@ def stop_recording():
             ec_script = Path(__file__).parent / "echo_cancel.py"
             if ec_script.exists():
                 print(f"🔊 回声消除中...")
-                subprocess.run([
+                ec_result = subprocess.run([
                     sys.executable, str(ec_script),
                     str(sys_file), str(mic_file), str(clean_file),
-                ], timeout=120)
+                ], capture_output=True, text=True, timeout=120)
+                if ec_result.returncode != 0:
+                    print(f"❌ 回声消除失败:\n{ec_result.stderr}", file=sys.stderr)
+                    clean_file = mic_file  # 退回到原始麦克风
+                else:
+                    print(ec_result.stdout.strip())
             else:
                 clean_file = mic_file  # 无 AEC 脚本，直接使用原始 mic
 

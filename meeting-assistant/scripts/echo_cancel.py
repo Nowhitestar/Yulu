@@ -105,23 +105,14 @@ def echo_cancel(sys_path, mic_path, output_path, frame_ms=30):
         output[i] = (1.0 - mic_ratio) * sys_norm[i] + mic_ratio * mic_norm[i]
     
     # 统计
-    sys_active_count = 0
-    for i in range(n_frames):
-        s = i * frame_size
-        e = min(s + frame_size, min_len)
-        if rms_energy(sys_norm[s:e]) > sys_threshold:
-            sys_active_count += 1
-    sys_pct = sys_active_count / n_frames * 100
-    mic_pct = 100 - sys_pct
-    print(f"📊 组成: 系统音频 {sys_pct:.0f}% | 麦克风 {mic_pct:.0f}%")
+    sys_cnt = sum(
+        1 for i in range(n_frames)
+        if rms_energy(sys_norm[i * frame_size:min((i+1) * frame_size, min_len)]) > sys_threshold
+    )
+    print(f"📊 组成: 系统音频 {sys_cnt/n_frames*100:.0f}% | 麦克风 {(1-sys_cnt/n_frames)*100:.0f}%")
     
     # 最终音量提升
     output = np.clip(output * 1.5, -0.99, 0.99)
-    
-    # 统计
-    sys_pct = sys_frames / n_frames * 100
-    mic_pct = mic_frames / n_frames * 100
-    print(f"📊 组成: 系统音频 {sys_pct:.0f}% | 麦克风 {mic_pct:.0f}%")
     
     write_wav(output_path, sr, output)
     size_mb = Path(output_path).stat().st_size / 1024 / 1024
