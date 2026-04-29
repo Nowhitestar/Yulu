@@ -102,7 +102,7 @@ class AppDel: NSObject, NSApplicationDelegate {
         panel.addSubview(timeLbl)
 
         // Stop 按钮
-        stopBtn = NSButton(title: "■ Stop", target: self, action: #selector(doStop))
+        stopBtn = NSButton(title: "■", target: self, action: #selector(doStop))
         stopBtn.bezelStyle = .rounded
         stopBtn.font = .systemFont(ofSize: 13, weight: .bold)
         stopBtn.contentTintColor = .white
@@ -143,7 +143,7 @@ class AppDel: NSObject, NSApplicationDelegate {
         if e {
             titleLbl.isHidden = false; titleLbl.frame = NSRect(x: 40, y: my + 6, width: EXPANDED_W - 110, height: 18)
             timeLbl.isHidden = false; timeLbl.frame = NSRect(x: 40, y: my - 26, width: 120, height: 24)
-            stopBtn.isHidden = false; stopBtn.frame = NSRect(x: EXPANDED_W - 56, y: my - 17, width: 44, height: 34)
+            stopBtn.isHidden = false; stopBtn.frame = NSRect(x: EXPANDED_W - 52, y: my - 17, width: 38, height: 34)
         } else {
             titleLbl.isHidden = true; timeLbl.isHidden = true; stopBtn.isHidden = true
         }
