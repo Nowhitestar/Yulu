@@ -95,27 +95,30 @@ def echo_cancel(sys_path, mic_path, output_path, frame_ms=30):
             output[start:end] = mic_norm[start:end]
             mic_frames += 1
     
-    # 对切换点做交叉淡入淡出，避免咔嗒声
-    fade_len = min(frame_size // 4, 512)
-    for i in range(1, n_frames):
-        prev_start = (i - 1) * frame_size
-        prev_end = prev_start + frame_size
-        curr_start = i * frame_size
-        curr_end = curr_start + frame_size
+    # 对切换点做交叉淡入淡出（0.5s 渐变），防咔嗒声和突兀切换
+    fade_len = int(sr * 0.5)  # 0.5s 渐变
+    last_source = None  # 'sys' or 'mic'
+    fade_start = None
+    
+    for i in range(n_frames):
+        start = i * frame_size
+        end = start + frame_size
+        curr_sys = rms_energy(sys_norm[start:end]) > sys_threshold
+        curr_source = 'sys' if curr_sys else 'mic'
         
-        # 判断前后帧来源是否不同
-        prev_sys = rms_energy(sys_norm[prev_start:prev_end]) > sys_threshold
-        curr_sys = rms_energy(sys_norm[curr_start:curr_end]) > sys_threshold
-        
-        if prev_sys != curr_sys:
-            # 切换点：做交叉淡入淡出
-            cross_start = curr_start - min(fade_len, frame_size // 2)
-            cross_end = curr_start + fade_len
-            if cross_start >= 0 and cross_end <= min_len:
-                fade_in = np.linspace(0, 1, fade_len)
-                fade_out = np.linspace(1, 0, fade_len)
-                output[cross_start:cross_start + fade_len] *= fade_out
-                output[cross_start:cross_start + fade_len] += output[cross_start:cross_start + fade_len] * fade_in * 0  # keep original
+        if curr_source != last_source:
+            if fade_start is not None:
+                # 渐变过渡
+                fade_samples = min(fade_len, end - fade_start)
+                ramp = np.linspace(0, 1, fade_samples)
+                if curr_source == 'mic':
+                    # sys→mic: 麦克风渐强
+                    output[fade_start:fade_start + fade_samples] *= ramp
+                else:
+                    # mic→sys: 系统音频渐强
+                    output[fade_start:fade_start + fade_samples] *= ramp
+            fade_start = start
+        last_source = curr_source
     
     # 最终音量提升 + 限制
     output = np.clip(output * 2.0, -0.99, 0.99)
