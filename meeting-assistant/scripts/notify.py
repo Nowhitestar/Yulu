@@ -73,72 +73,29 @@ def remind(title, message, subtitle=""):
 def ask_record(meeting_title, timeout=60):
     """
     会议开始时询问是否录制。
+    使用 osascript display dialog（真正的弹窗，按钮清晰可见）。
     返回: "开始录制" | "忽略" | "timeout"
     """
-    message = f"会议「{meeting_title}」开始了\n\n是否开始录制音频？"
-    
-    if _has_terminal_notifier():
-        cmd = [
-            "terminal-notifier",
-            "-title", "Meeting Assistant",
-            "-subtitle", meeting_title,
-            "-message", "会议开始了，是否录制？",
-            "-actions", "开始录制,忽略",
-            "-dropdownLabel", "选择操作",
-            "-timeout", str(timeout),
-            "-sound", "Hero",
-        ]
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        # terminal-notifier 返回 @CONTENTCLICKED@ 或按钮文本
-        output = result.stdout.strip()
-        if output == "@CONTENTCLICKED@" or "开始录制" in output:
-            return "开始录制"
-        elif "忽略" in output:
-            return "忽略"
-        else:
-            return "timeout"
-    else:
-        return _fallback_dialog(
-            message,
-            buttons=["忽略", "开始录制"],
-            default_button="开始录制",
-            timeout=timeout,
-        )
+    return _fallback_dialog(
+        f"会议「{meeting_title}」开始了\n\n是否开始录制音频？",
+        buttons=["忽略", "开始录制"],
+        default_button="开始录制",
+        timeout=timeout,
+    )
 
 
 def ask_stop(meeting_title, timeout=60):
     """
     检测到静默时询问是否停止录制。
+    使用 osascript display dialog（真正的弹窗，按钮清晰可见）。
     返回: "停止" | "继续" | "timeout"
     """
-    message = f"会议「{meeting_title}」\n已连续 5 分钟无声音\n\n是否停止录制？"
-    
-    if _has_terminal_notifier():
-        cmd = [
-            "terminal-notifier",
-            "-title", "Meeting Assistant",
-            "-subtitle", f"{meeting_title} - 检测静默",
-            "-message", "已连续5分钟无声音，是否停止录制？",
-            "-actions", "停止录制,继续录制",
-            "-dropdownLabel", "选择操作",
-            "-timeout", str(timeout),
-            "-sound", "Purr",
-        ]
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        output = result.stdout.strip()
-        if "停止录制" in output or "停止" in output:
-            return "停止"
-        elif "继续" in output:
-            return "继续"
-        else:
-            return "timeout"
-    else:
-        return _fallback_dialog(
-            message,
-            buttons=["继续录制", "停止录制"],
-            default_button="停止录制",
-            timeout=timeout,
-        )
+    return _fallback_dialog(
+        f"会议「{meeting_title}」\n已连续 5 分钟无声音\n\n是否停止录制？",
+        buttons=["继续录制", "停止录制"],
+        default_button="停止录制",
+        timeout=timeout,
+    )
 
 
 def notify_stop_auto(meeting_title):
