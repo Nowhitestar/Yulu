@@ -8,6 +8,7 @@
 命令：
   schedule                                 扫描今日日历，重写 schedule.json，通知调度器
   add <title> <start_iso> [duration_min]   手动添加一场会议（默认 60 分钟）
+  test [title]                             添加一条 30 秒后的测试会议（默认"测试会议"）
   list                                     显示当前调度
   remove <meeting_id>                      移除某场会议
   ask_record <title> <meeting_id>          会议开始时弹窗询问是否录制（由调度器 fire）
