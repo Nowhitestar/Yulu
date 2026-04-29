@@ -63,42 +63,58 @@ def start_recording(meeting_title="meeting"):
     mic = audio_config.get("mic_device", ":0")
     sys_audio = audio_config.get("system_audio_device", ":1")
 
-    # ffmpeg 同时录制麦克风和系统音频
-    # aresample=async=1000 解决 AVFoundation 数据率偏慢的问题
-    # 麦克风权重 2.0，系统音频权重 1.0（防止音乐盖过人声）
+    # 用 SoX（CoreAudio）分别录制麦克风和系统音频
+    # ffmpeg 的 AVFoundation 数据率只有 1/5（bug），SoX 无此问题
+    # 停止后自动合并两个文件
     output_file = output_dir / f"{safe_title}_{timestamp}.wav"
+    mic_file = output_file.with_suffix(".mic.wav")
+    sys_file = output_file.with_suffix(".sys.wav")
 
-    cmd = [
-        "ffmpeg", "-y",
-        "-f", "avfoundation", "-i", mic,
-        "-f", "avfoundation", "-i", sys_audio,
-        "-filter_complex",
-        "[0:a]aresample=async=1000:min_hard_comp=0.1:first_pts=0[a0];"
-        "[1:a]aresample=async=1000:min_hard_comp=0.1:first_pts=0[a1];"
-        "[a0][a1]amix=inputs=2:duration=longest:weights=2 1",
-        "-acodec", "pcm_s16le",
-        "-ar", "16000",
-        "-ac", "1",
-        str(output_file),
+    mic_cmd = [
+        "rec", "-q",
+        "-b", "16", "-c", "1",
+        "-r", "48000",  # SoX 会 fallback 到设备原生采样率
+        str(mic_file),
+        "trim", "0", "24:00:00",  # 最多录 24 小时
+    ]
+    sys_cmd = [
+        "rec", "-q",
+        "-b", "16", "-c", "1",
+        "-r", "48000",
+        str(sys_file),
+        "trim", "0", "24:00:00",
     ]
 
-    print(f"Starting recording: {output_file}")
-    process = subprocess.Popen(
-        cmd,
+    print(f"🎙️ 麦克风: {mic_file}")
+    mic_proc = subprocess.Popen(
+        mic_cmd,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    print(f"🔊 系统音频: {sys_file}")
+    sys_proc = subprocess.Popen(
+        sys_cmd,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
 
     with open(PID_FILE, "w") as f:
-        json.dump({"pid": process.pid, "file": str(output_file), "title": meeting_title}, f)
+        json.dump({
+            "mic_pid": mic_proc.pid,
+            "sys_pid": sys_proc.pid,
+            "mic_file": str(mic_file),
+            "sys_file": str(sys_file),
+            "output_file": str(output_file),
+            "title": meeting_title,
+        }, f)
 
-    print(f"Recording started (PID: {process.pid})")
+    print(f"✅ 录制中（mic_pid={mic_proc.pid}, sys_pid={sys_proc.pid})")
     print(f"Output: {output_file}")
-    return process, str(output_file)
+    return sys_proc, str(output_file)
 
 
 def stop_recording():
-    """停止录制。"""
+    """停止录制并合并音频。"""
     if not PID_FILE.exists():
         print("No active recording found.", file=sys.stderr)
         return None
@@ -106,23 +122,68 @@ def stop_recording():
     with open(PID_FILE) as f:
         info = json.load(f)
 
-    pid = info["pid"]
-    output_file = info["file"]
-
-    try:
-        os.kill(pid, signal.SIGTERM)
-        time.sleep(1)
+    def _kill(pid):
         try:
-            os.kill(pid, 0)
+            os.kill(pid, signal.SIGTERM)
             time.sleep(1)
-            os.kill(pid, signal.SIGKILL)
+            try:
+                os.kill(pid, 0)
+                time.sleep(0.5)
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
         except ProcessLookupError:
             pass
-    except ProcessLookupError:
-        pass
+
+    output_file = info.get("output_file", info.get("file"))
+
+    # SoX 双进程模式
+    if "mic_pid" in info:
+        _kill(info["mic_pid"])
+        _kill(info["sys_pid"])
+        mic_file = Path(info["mic_file"])
+        sys_file = Path(info["sys_file"])
+        out_file = Path(output_file)
+
+        # 等文件写盘
+        time.sleep(1)
+
+        # 合并两个文件，微调采样率到 16kHz
+        if mic_file.exists() and mic_file.stat().st_size > 0 and sys_file.exists() and sys_file.stat().st_size > 0:
+            print(f"🔄 合并: {mic_file.name} + {sys_file.name}")
+            subprocess.run([
+                "ffmpeg", "-y",
+                "-i", str(mic_file),
+                "-i", str(sys_file),
+                "-filter_complex", "amix=inputs=2:duration=longest:weights=2 1",
+                "-ar", "16000", "-ac", "1",
+                str(out_file),
+            ], capture_output=True, timeout=30)
+            mic_file.unlink(missing_ok=True)
+            sys_file.unlink(missing_ok=True)
+        else:
+            # 有文件失败，用剩下的
+            existing = [f for f in [mic_file, sys_file] if f.exists() and f.stat().st_size > 0]
+            if existing:
+                subprocess.run([
+                    "ffmpeg", "-y", "-i", str(existing[0]),
+                    "-ar", "16000", "-ac", "1", str(out_file),
+                ], capture_output=True, timeout=30)
+                existing[0].unlink(missing_ok=True)
+            else:
+                print("❌ 录音文件为空", file=sys.stderr)
+                PID_FILE.unlink(missing_ok=True)
+                return None
+    else:
+        # 旧格式：单进程 ffmpeg
+        _kill(info.get("pid", 0))
 
     PID_FILE.unlink(missing_ok=True)
-    
+
+    time.sleep(0.5)
+    if output_file and Path(output_file).exists():
+        print(f"Recording saved: {output_file}")
+
     # 也停止 monitor
     if MONITOR_PID_FILE.exists():
         with open(MONITOR_PID_FILE) as f:
@@ -131,9 +192,7 @@ def stop_recording():
             os.kill(mon_info["pid"], signal.SIGTERM)
         except ProcessLookupError:
             pass
-        MONITOR_PID_FILE.unlink(missing_ok=True)
 
-    print(f"Recording saved: {output_file}")
     return output_file
 
 
