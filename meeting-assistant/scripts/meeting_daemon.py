@@ -450,6 +450,7 @@ def main():
     handlers = {
         "schedule": lambda: cmd_schedule(),
         "add": lambda: cmd_add(args),
+        "test": lambda: cmd_test(args),
         "list": lambda: cmd_list(),
         "remove": lambda: cmd_remove(args),
         "ask_record": lambda: cmd_ask_record(args),
