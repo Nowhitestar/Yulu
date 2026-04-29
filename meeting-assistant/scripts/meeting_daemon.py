@@ -227,9 +227,9 @@ def cmd_remove(args):
 
 
 def cmd_test(args):
-    """添加一条30秒后的测试会议。"""
+    """添加一条60秒后的测试会议。"""
     title = args[0] if args else "测试会议"
-    start = datetime.now() + timedelta(seconds=30)
+    start = datetime.now() + timedelta(seconds=60)
     meeting = {
         "id": "__test__",
         "title": title,
