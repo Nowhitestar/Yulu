@@ -145,15 +145,19 @@ def stop_recording():
         # 等文件写盘
         time.sleep(1)
 
-        # 合并两个文件 + 音量提升 5 倍（防止混音后音量偏低被 whisper 漏识）
+        # 合并两个文件
+        # 麦克风通道: 高通(去低频回声)+降噪+音量提升
+        # 系统音频通道: 直接混入
         if mic_file.exists() and mic_file.stat().st_size > 0 and sys_file.exists() and sys_file.stat().st_size > 0:
-            print(f"🔄 合并+归一化: {mic_file.name} + {sys_file.name}")
+            print(f"🔄 合并+降噪: {mic_file.name} + {sys_file.name}")
             subprocess.run([
                 "ffmpeg", "-y",
                 "-i", str(mic_file),
                 "-i", str(sys_file),
                 "-filter_complex",
-                "amix=inputs=2:duration=longest:weights=2 1,volume=5.0",
+                "[0:a]highpass=f=200,volume=5.0[mic];"
+                "[1:a]volume=3.0[sys];"
+                "[mic][sys]amix=inputs=2:duration=longest:weights=1 2",
                 "-ar", "16000", "-ac", "1",
                 str(out_file),
             ], capture_output=True, timeout=30)
