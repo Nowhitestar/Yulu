@@ -276,6 +276,9 @@ def _start_recording(title, meeting_id=""):
     save_state(state)
     print(f"✅ 录制中: {audio_path}")
 
+    # 启动状态浮窗
+    _launch_status_window(title)
+
     # 注册"录制超时询问停止"事件：会议结束时间触发
     duration_min = _meeting_duration(meeting_id)
     end_at = datetime.now() + timedelta(minutes=duration_min)
@@ -341,7 +344,44 @@ def cmd_stop():
     _stop_and_process()
 
 
+def _launch_status_window(title):
+    """启动状态浮窗（先杀掉旧的）。"""
+    _kill_status_window()
+    status_bin = SCRIPT_DIR / "recorder_status"
+    if not status_bin.exists():
+        print("⚠️ recorder_status 未编译，跳过浮窗")
+        return
+    proc = subprocess.Popen(
+        [str(status_bin), title, str(STATE_PATH)],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    state = load_state()
+    state["_status_pid"] = proc.pid
+    save_state(state)
+    print(f"🪟 状态浮窗已启动 (pid={proc.pid})")
+
+
+def _kill_status_window():
+    state = load_state()
+    pid = state.pop("_status_pid", None)
+    save_state(state)
+    if pid:
+        try:
+            os.kill(pid, signal.SIGTERM)
+            # 也杀所有同名进程（防残留）
+            subprocess.run(
+                ["pkill", "-f", "recorder_status"],
+                capture_output=True,
+            )
+        except ProcessLookupError:
+            pass
+
+
 def _stop_and_process():
+    # 先关状态浮窗
+    _kill_status_window()
+
     state = load_state()
     rec = state.get("recording") or {}
     if not rec:
