@@ -70,20 +70,54 @@ def start_recording(meeting_title="meeting"):
     mic_file = output_file.with_suffix(".mic.wav")
     sys_file = output_file.with_suffix(".sys.wav")
 
-    mic_cmd = [
-        "rec", "-q",
-        "-b", "16", "-c", "1",
-        "-r", "48000",  # SoX 会 fallback 到设备原生采样率
-        str(mic_file),
-        "trim", "0", "24:00:00",  # 最多录 24 小时
-    ]
-    sys_cmd = [
-        "rec", "-q",
-        "-b", "16", "-c", "1",
-        "-r", "48000",
-        str(sys_file),
-        "trim", "0", "24:00:00",
-    ]
+    # 用 SoX（CoreAudio）分别录制麦克风和系统音频
+    # 通过 SwitchAudioSource 临时切换默认输入设备来选源
+    def _sox_cmd(device_name, out_path):
+        """切到指定输入设备后启动 SoX。"""
+        subprocess.run(
+            ["SwitchAudioSource", "-s", device_name, "-t", "input"],
+            capture_output=True, timeout=5,
+        )
+        time.sleep(0.3)  # 等设备切换生效
+        return [
+            "rec", "-q",
+            "-b", "16", "-c", "1",
+            "-r", "48000",
+            str(out_path),
+            "trim", "0", "24:00:00",
+        ]
+
+    # 先记录当前输入设备，后面恢复
+    current_input = subprocess.run(
+        ["SwitchAudioSource", "-c", "-t", "input"],
+        capture_output=True, text=True,
+    ).stdout.strip()
+
+    # 启动系统音频录制（BlackHole）
+    print(f"🔊 系统音频: {sys_file}")
+    sys_cmd = _sox_cmd("BlackHole 2ch", sys_file)
+    sys_proc = subprocess.Popen(
+        sys_cmd,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    time.sleep(0.5)  # 确保第一个进程已打开设备
+
+    # 启动麦克风录制
+    print(f"🎙️ 麦克风: {mic_file}")
+    mic_cmd = _sox_cmd("MacBook Pro麦克风", mic_file)
+    mic_proc = subprocess.Popen(
+        mic_cmd,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+    # 恢复默认输入设备
+    if current_input:
+        subprocess.run(
+            ["SwitchAudioSource", "-s", current_input, "-t", "input"],
+            capture_output=True, timeout=5,
+        )
 
     print(f"🎙️ 麦克风: {mic_file}")
     mic_proc = subprocess.Popen(
