@@ -152,16 +152,12 @@ def stop_recording():
             else:
                 clean_file = mic_file  # 无 AEC 脚本，直接使用原始 mic
 
-            # 合并: 消除回声后的麦克风 + 系统音频
+            # 合并: 半双工切换后的音频（echo_cancel 已做音量归一化）
             if clean_file.exists() and clean_file.stat().st_size > 0:
-                print(f"🔄 合并输出: {out_file.name}")
+                print(f"🔄 重采样到 16kHz: {out_file.name}")
                 subprocess.run([
                     "ffmpeg", "-y",
                     "-i", str(clean_file),
-                    "-i", str(sys_file),
-                    "-filter_complex",
-                    "[0:a]volume=5.0[a0];[1:a]volume=3.0[a1];"
-                    "[a0][a1]amix=inputs=2:duration=longest:weights=1 2",
                     "-ar", "16000", "-ac", "1",
                     str(out_file),
                 ], capture_output=True, timeout=30)

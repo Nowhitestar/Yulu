@@ -1,15 +1,14 @@
 """
-声学回声消除（AEC）：用 BlackHole 参考信号从麦克风中消除系统音频回声。
+简单高效的回声消除方案：半双工切换 + 音量归一化。
 
-原理：LMS (Least Mean Squares) 自适应滤波器
-- 参考信号: BlackHole 录到的干净系统音频
-- 带噪信号: 麦克风录到的人声 + 系统音频回声
-- 输出   : 消除回声后的纯净人声
+原理：
+- 扬声器（BlackHole）有声音 → 麦克风有回声 → 只取扬声器
+- 扬声器（BlackHole）无声 → 麦克风录到人声 → 只取麦克风
+- 两者音量归一化到同一级别
 
-依赖: pip install numpy
+优点：O(n) 线性时间，再长的录音也是秒级完成。
 """
 
-import json
 import sys
 import wave
 from pathlib import Path
@@ -18,17 +17,14 @@ import numpy as np
 
 
 def read_wav(path):
-    """读取 WAV 文件返回 (sample_rate, samples_float32)。"""
     with wave.open(str(path), 'rb') as w:
         sr = w.getframerate()
-        n = w.getnframes()
-        raw = w.readframes(n)
+        raw = w.readframes(w.getnframes())
         samples = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
     return sr, samples
 
 
 def write_wav(path, sr, samples):
-    """写入 16-bit WAV 文件。"""
     with wave.open(str(path), 'wb') as w:
         w.setnchannels(1)
         w.setsampwidth(2)
@@ -36,90 +32,102 @@ def write_wav(path, sr, samples):
         w.writeframes((samples * 32767).astype(np.int16).tobytes())
 
 
-def nlms_echo_cancel(ref, mic, filter_len=1024, mu=0.1, block_size=256, leak=0.0001):
+def rms_energy(x):
+    """计算 RMS 能量 (dB)。"""
+    return 20 * np.log10(np.sqrt(np.mean(x ** 2)) + 1e-10)
+
+
+def normalize_to_target(x, target_rms_db=-20):
+    """将信号 RMS 归一化到目标电平。"""
+    current_db = rms_energy(x)
+    gain = 10 ** ((target_rms_db - current_db) / 20)
+    return np.clip(x * gain, -0.99, 0.99)
+
+
+def echo_cancel(sys_path, mic_path, output_path, frame_ms=30):
     """
-    NLMS (Normalized Least Mean Squares) 自适应回声消除。
-    相比 LMS：步长按参考信号功率归一化，更稳定，不易发散。
+    半双工回声消除 + 音量归一化。
     
-    参数:
-        ref: 参考信号 (BlackHole)，shape (n,)
-        mic: 带噪信号 (麦克风)，shape (n,)
-        filter_len: 滤波器长度（默认 1024 ≈ 64ms @16kHz）
-        mu: 归一化步长（0.05-0.5）
-        block_size: 每块采样数
-        leak: 泄露因子，防止权重漂移（0 = 无泄露）
+    策略：逐帧分析系统音频能量，决定当前帧用哪个源。
+    - frame_ms: 分析帧长（毫秒），默认 30ms
     """
-    n = min(len(ref), len(mic))
-    ref = ref[:n]
-    mic = mic[:n]
-
-    # 信号归一化
-    peak = max(np.max(np.abs(ref)), np.max(np.abs(mic)), 1e-10)
-    ref = ref / peak
-    mic = mic / peak
-
-    w = np.zeros(filter_len, dtype=np.float32)
-    clean = np.zeros(n, dtype=np.float32)
-    eps = 1e-6  # 避免除零
-
-    for start in range(filter_len, n, block_size):
-        end = min(start + block_size, n)
-
-        for i in range(start, end):
-            ref_block = ref[i - filter_len:i][::-1]
-            
-            # 滤波器输出（估计回声）
-            y = np.dot(w, ref_block)
-            
-            # 误差信号 = 麦克风 - 估计回声
-            e = mic[i] - y
-            
-            # NLMS 更新：步长按 ||ref_block||² 归一化
-            norm = np.dot(ref_block, ref_block) + eps
-            w = (1 - leak) * w + (mu / norm) * e * ref_block
-            
-            clean[i] = e
-
-    # 恢复音量，限制在合理范围
-    clean = np.clip(clean * peak * 0.5, -1.0, 1.0)
-    return clean.astype(np.float32)
-
-
-def echo_cancel(sys_path, mic_path, output_path):
-    """对一对录制文件执行回声消除。"""
-    print(f"📖 读取参考(系统音频): {sys_path}")
-    sr_ref, ref = read_wav(sys_path)
-    print(f"📖 读取带噪(麦克风): {mic_path}")
-    sr_mic, mic = read_wav(mic_path)
-
-    sr = sr_ref if sr_ref == sr_mic else min(sr_ref, sr_mic)
-    if sr_ref != sr_mic:
-        print(f"⚠️ 采样率不一致: {sr_ref} vs {sr_mic}, 以 {sr} 为准")
-
-    # 对齐到相同长度
-    min_len = min(len(ref), len(mic))
-
-    # 互相关对齐时间偏移（修正 BlackHole 与麦克风启动时间差）
-    corr_len = min(48000, min_len)  # 最多 1 秒搜索
-    corr = np.correlate(mic[:corr_len], ref[:corr_len], mode='valid')
-    delay = int(np.argmax(np.abs(corr)))
-    if delay > 100:  # 至少 100 采样点才值得对齐
-        print(f"⏱️ 检测到 {delay} 采样点偏移 ({delay/sr*1000:.1f}ms)，自动对齐")
-        ref = ref[:min_len - delay]
-        mic = mic[delay:min_len]
-        min_len = min(len(ref), len(mic))
-        ref = ref[:min_len]
-        mic = mic[:min_len]
-    else:
-        ref = ref[:min_len]
-        mic = mic[:min_len]
-
-    print(f"🔊 回声消除中 ({min_len/sr:.1f}s, {sr}Hz, filter={1024})...")
-    clean = nlms_echo_cancel(ref, mic)
-    write_wav(output_path, sr, clean)
-
+    sr, sys_audio = read_wav(sys_path)
+    sr2, mic_audio = read_wav(mic_path)
+    
+    if sr != sr2:
+        sr = min(sr, sr2)
+    
+    min_len = min(len(sys_audio), len(mic_audio))
+    sys_audio = sys_audio[:min_len]
+    mic_audio = mic_audio[:min_len]
+    
+    # 帧参数
+    frame_size = int(sr * frame_ms / 1000)
+    n_frames = min_len // frame_size
+    
+    # 音量归一化到同一目标
+    print("🎚️ 音量归一化...")
+    sys_norm = normalize_to_target(sys_audio, -20)
+    mic_norm = normalize_to_target(mic_audio, -20)
+    
+    # 分析系统音频每个帧的能量
+    output = np.zeros(min_len, dtype=np.float32)
+    sys_threshold = -35  # dB，低于此认为系统无声
+    
+    print(f"🔇 半双工切换 (帧长={frame_ms}ms, 阈值={sys_threshold}dB)...")
+    sys_frames = 0
+    mic_frames = 0
+    
+    for i in range(n_frames):
+        start = i * frame_size
+        end = start + frame_size
+        sys_frame = sys_norm[start:end]
+        
+        # 检测系统音频是否有声
+        sys_db = rms_energy(sys_frame)
+        
+        if sys_db > sys_threshold:
+            # 系统有声音 → 取系统音频（麦克风此时有回声）
+            output[start:end] = sys_frame
+            sys_frames += 1
+        else:
+            # 系统无声 → 取麦克风（此时只有人声）
+            output[start:end] = mic_norm[start:end]
+            mic_frames += 1
+    
+    # 对切换点做交叉淡入淡出，避免咔嗒声
+    fade_len = min(frame_size // 4, 512)
+    for i in range(1, n_frames):
+        prev_start = (i - 1) * frame_size
+        prev_end = prev_start + frame_size
+        curr_start = i * frame_size
+        curr_end = curr_start + frame_size
+        
+        # 判断前后帧来源是否不同
+        prev_sys = rms_energy(sys_norm[prev_start:prev_end]) > sys_threshold
+        curr_sys = rms_energy(sys_norm[curr_start:curr_end]) > sys_threshold
+        
+        if prev_sys != curr_sys:
+            # 切换点：做交叉淡入淡出
+            cross_start = curr_start - min(fade_len, frame_size // 2)
+            cross_end = curr_start + fade_len
+            if cross_start >= 0 and cross_end <= min_len:
+                fade_in = np.linspace(0, 1, fade_len)
+                fade_out = np.linspace(1, 0, fade_len)
+                output[cross_start:cross_start + fade_len] *= fade_out
+                output[cross_start:cross_start + fade_len] += output[cross_start:cross_start + fade_len] * fade_in * 0  # keep original
+    
+    # 最终音量提升 + 限制
+    output = np.clip(output * 2.0, -0.99, 0.99)
+    
+    # 统计
+    sys_pct = sys_frames / n_frames * 100
+    mic_pct = mic_frames / n_frames * 100
+    print(f"📊 组成: 系统音频 {sys_pct:.0f}% | 麦克风 {mic_pct:.0f}%")
+    
+    write_wav(output_path, sr, output)
     size_mb = Path(output_path).stat().st_size / 1024 / 1024
-    print(f"✅ 回声消除完成: {output_path} ({size_mb:.1f}MB)")
+    print(f"✅ 完成: {output_path} ({size_mb:.1f}MB)")
     return str(output_path)
 
 
