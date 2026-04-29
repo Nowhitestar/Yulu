@@ -72,7 +72,7 @@ class Scheduler:
                 except Exception as e:
                     log(f"跳过非法事件: {ev} ({e})")
                     continue
-                if at + 2 < now:  # 2秒宽容，防止时序误差
+                if at + 15 < now:  # 15秒宽容（重载调度需要时间）
                     log(f"跳过已过期事件: {ev.get('kind')} @ {ev.get('at')}")
                     continue
                 self.seq += 1

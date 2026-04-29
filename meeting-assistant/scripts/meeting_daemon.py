@@ -420,7 +420,14 @@ def _stop_and_process():
     subprocess.Popen([sys.executable, str(notify), "notify_stop", title],
                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-    # 2. 转录 + 摘要
+    # 2. 通知 agent 开始转录
+    try:
+        from agent_notify import notify
+        notify("transcribing", title=title)
+    except Exception:
+        pass
+
+    # 3. 转录 + 摘要
     print("📝 转录 + 摘要...")
     transcribe = SCRIPT_DIR / "transcribe.py"
     result = subprocess.run(
@@ -432,10 +439,20 @@ def _stop_and_process():
         return
     print(result.stdout)
 
+    # 4. 通知 agent 转录完成
+    transcript_path = None
     summary_path = None
     for line in result.stdout.split("\n"):
+        if line.startswith("Transcript saved:"):
+            transcript_path = line.split("Transcript saved:", 1)[1].strip()
         if line.startswith("Summary saved:"):
             summary_path = line.split("Summary saved:", 1)[1].strip()
+
+    try:
+        notify("transcript", title=title, path=transcript_path or "")
+    except Exception:
+        pass
+
     if not summary_path:
         print("❌ 找不到 summary 路径", file=sys.stderr)
         return

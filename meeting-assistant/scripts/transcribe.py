@@ -161,6 +161,14 @@ def _send_agent_notification(title):
     )
 
 
+def _notify_agent(event_type, **kw):
+    try:
+        from agent_notify import notify
+        notify(event_type, **kw)
+    except Exception:
+        pass
+
+
 def fallback_summary(transcript, meeting_title):
     """LLM 失败/未配置时的简单格式化。
     包含原始转录，方便后续 agent 直接读取总结。
@@ -206,6 +214,7 @@ def process_audio(audio_path):
     summary_path.write_text(summary, encoding="utf-8")
     print(f"✅ 纪要已保存: {summary_path}")
     print(f"Summary saved: {summary_path}")
+    _notify_agent("summary_ready", title=meeting_title, path=str(summary_path))
 
     return str(transcript_path), str(summary_path)
 
