@@ -45,5 +45,17 @@
     "telegram": {
       "chat_id": ""
     }
+  },
+  "meeting_detection": {
+    "enabled": true,
+    "interval_sec": 10,
+    "stable_sec": 15,
+    "prompt_cooldown_sec": 1800,
+    "window_keywords": [
+      "Zoom Meeting", "腾讯会议", "Google Meet", "meet.google.com",
+      "飞书会议", "Lark Meeting", "语音通话", "视频通话", "微信通话",
+      "Tencent Meeting", "VooV Meeting", "WeMeet"
+    ],
+    "dedicated_meeting_apps": ["zoom.us", "腾讯会议", "TencentMeeting", "VooV Meeting", "WeMeet", "PolyMeet"]
   }
 }

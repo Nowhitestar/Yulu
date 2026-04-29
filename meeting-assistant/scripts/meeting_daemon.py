@@ -14,6 +14,7 @@
   ask_record <title> <meeting_id>          会议开始时弹窗询问是否录制（由调度器 fire）
   auto_stop                                录制超时弹窗询问是否停止（由调度器 fire）
   stop                                     立即停止录制并生成纪要
+  detect [once|daemon]                     检测当前是否处于会议/通话场景
 """
 
 import json
@@ -552,6 +553,11 @@ def main():
         "ask_record": lambda: cmd_ask_record(args),
         "auto_stop": lambda: cmd_auto_stop(),
         "stop": lambda: cmd_stop(),
+        "detect": lambda: subprocess.run([
+            sys.executable,
+            str(SCRIPT_DIR / "meeting_detector.py"),
+            args[0] if args else "once",
+        ]),
     }
     handler = handlers.get(cmd)
     if not handler:

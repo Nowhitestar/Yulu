@@ -5,6 +5,7 @@
 ## 功能
 
 - **每日调度** — 每天早上自动扫描当天日历，设定提醒计划
+- **本地会议检测** — 检测微信语音/视频、腾讯会议、Google Meet、飞书/Lark、Zoom 等常见会议窗口并询问是否录制
 - **系统通知** — 会议前5分钟弹提醒，会议开始时弹窗询问是否录制
 - **可选录制** — 用户确认后才录制，避免录不需要的会议
 - **静默检测** — 连续5分钟无声音自动提示停止录制
@@ -233,6 +234,12 @@ python3 meeting-assistant/scripts/record_audio.py start "项目周会"
 # 手动停止并自动生成纪要
 python3 meeting-assistant/scripts/meeting_daemon.py stop
 
+# 检测当前是否有会议/通话窗口
+python3 meeting-assistant/scripts/meeting_daemon.py detect once
+
+# 启动会议检测守护进程（建议用 LaunchAgent）
+python3 meeting-assistant/scripts/meeting_daemon.py detect daemon
+
 # 转录指定音频文件
 python3 meeting-assistant/scripts/transcribe.py ~/Downloads/meeting-recordings/xxx.wav
 
@@ -282,6 +289,30 @@ python3 meeting-assistant/scripts/send_summary.py ~/Downloads/meeting-recordings
 ```
 
 ---
+
+## 会议检测
+
+`meeting_detector.py` 会读取常见会议/通话 app 的窗口标题，稳定检测到一段时间后调用同一套 `ask_record` 弹窗逻辑。
+
+支持的典型场景：
+
+- 微信 / 企业微信：语音通话、视频通话窗口
+- 腾讯会议 / VooV / WeMeet
+- Google Meet：Chrome / Arc / Safari / Edge / Firefox 浏览器窗口标题
+- 飞书 / Lark 会议窗口
+- Zoom Meeting
+
+注意：检测微信和浏览器会议需要 macOS **辅助功能权限**。如果 `detect once` 提示 `window_scan_failed`，到：
+
+`系统设置 → 隐私与安全性 → 辅助功能`
+
+给 Terminal / OpenClaw / Python 所在终端授权。
+
+```bash
+python3 meeting-assistant/scripts/meeting_detector.py once
+```
+
+若没有辅助功能权限，脚本会退化为只检测专用会议 app（例如 Zoom、腾讯会议、PolyMeet），不会仅凭微信/浏览器常驻就误报。
 
 ## 常见问题
 
