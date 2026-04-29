@@ -71,35 +71,29 @@ def start_recording(meeting_title="meeting"):
     sys_file = output_file.with_suffix(".sys.wav")
 
     # SoX (CoreAudio) 分别录制麦克风和系统音频
-    # 两个进程都走默认输入设备。需要区分设备时修改 Audio MIDI 设置。
-    mic_cmd = [
-        "rec", "-q",
-        "-b", "16", "-c", "1",
-        "-r", "48000",
-        str(mic_file),
-        "trim", "0", "24:00:00",
-    ]
-    sys_cmd = [
-        "rec", "-q",
-        "-b", "16", "-c", "1",
-        "-r", "48000",
-        str(sys_file),
-        "trim", "0", "24:00:00",
-    ]
+    # 通过 SwitchAudioSource 分别选择设备，一旦 SoX 打开设备后切走不影响它
 
-    print(f"🎙️ 麦克风: {mic_file}")
-    mic_proc = subprocess.Popen(
-        mic_cmd,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
+    def _start_sox(device, out_path):
+        """切到指定输入设备后启动 SoX。"""
+        subprocess.run(
+            ["SwitchAudioSource", "-s", device, "-t", "input"],
+            capture_output=True, timeout=5,
+        )
+        time.sleep(0.3)
+        return subprocess.Popen(
+            ["rec", "-q", "-b", "16", "-c", "1", "-r", "48000",
+             str(out_path), "trim", "0", "24:00:00"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+
+    # 先启动系统音频（BlackHole），SoX 打开设备后切走
     print(f"🔊 系统音频: {sys_file}")
-    sys_proc = subprocess.Popen(
-        sys_cmd,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-    time.sleep(0.5)  # 等待两个进程都稳定启动
+    sys_proc = _start_sox("BlackHole 2ch", sys_file)
+    time.sleep(0.5)
+
+    # 再启动麦克风
+    print(f"🎙️ 麦克风: {mic_file}")
+    mic_proc = _start_sox("MacBook Pro麦克风", mic_file)
 
     with open(PID_FILE, "w") as f:
         json.dump({
@@ -151,7 +145,7 @@ def stop_recording():
         # 等文件写盘
         time.sleep(1)
 
-        # 合并两个文件 + 音量归一化（防止混音后音量偏低被 whisper 漏识）
+        # 合并两个文件 + 音量提升 5 倍（防止混音后音量偏低被 whisper 漏识）
         if mic_file.exists() and mic_file.stat().st_size > 0 and sys_file.exists() and sys_file.stat().st_size > 0:
             print(f"🔄 合并+归一化: {mic_file.name} + {sys_file.name}")
             subprocess.run([
@@ -159,7 +153,7 @@ def stop_recording():
                 "-i", str(mic_file),
                 "-i", str(sys_file),
                 "-filter_complex",
-                "amix=inputs=2:duration=longest:weights=2 1,dynaudnorm",
+                "amix=inputs=2:duration=longest:weights=2 1,volume=5.0",
                 "-ar", "16000", "-ac", "1",
                 str(out_file),
             ], capture_output=True, timeout=30)
