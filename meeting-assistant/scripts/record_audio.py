@@ -70,54 +70,22 @@ def start_recording(meeting_title="meeting"):
     mic_file = output_file.with_suffix(".mic.wav")
     sys_file = output_file.with_suffix(".sys.wav")
 
-    # 用 SoX（CoreAudio）分别录制麦克风和系统音频
-    # 通过 SwitchAudioSource 临时切换默认输入设备来选源
-    def _sox_cmd(device_name, out_path):
-        """切到指定输入设备后启动 SoX。"""
-        subprocess.run(
-            ["SwitchAudioSource", "-s", device_name, "-t", "input"],
-            capture_output=True, timeout=5,
-        )
-        time.sleep(0.3)  # 等设备切换生效
-        return [
-            "rec", "-q",
-            "-b", "16", "-c", "1",
-            "-r", "48000",
-            str(out_path),
-            "trim", "0", "24:00:00",
-        ]
-
-    # 先记录当前输入设备，后面恢复
-    current_input = subprocess.run(
-        ["SwitchAudioSource", "-c", "-t", "input"],
-        capture_output=True, text=True,
-    ).stdout.strip()
-
-    # 启动系统音频录制（BlackHole）
-    print(f"🔊 系统音频: {sys_file}")
-    sys_cmd = _sox_cmd("BlackHole 2ch", sys_file)
-    sys_proc = subprocess.Popen(
-        sys_cmd,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-    time.sleep(0.5)  # 确保第一个进程已打开设备
-
-    # 启动麦克风录制
-    print(f"🎙️ 麦克风: {mic_file}")
-    mic_cmd = _sox_cmd("MacBook Pro麦克风", mic_file)
-    mic_proc = subprocess.Popen(
-        mic_cmd,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-
-    # 恢复默认输入设备
-    if current_input:
-        subprocess.run(
-            ["SwitchAudioSource", "-s", current_input, "-t", "input"],
-            capture_output=True, timeout=5,
-        )
+    # SoX (CoreAudio) 分别录制麦克风和系统音频
+    # 两个进程都走默认输入设备。需要区分设备时修改 Audio MIDI 设置。
+    mic_cmd = [
+        "rec", "-q",
+        "-b", "16", "-c", "1",
+        "-r", "48000",
+        str(mic_file),
+        "trim", "0", "24:00:00",
+    ]
+    sys_cmd = [
+        "rec", "-q",
+        "-b", "16", "-c", "1",
+        "-r", "48000",
+        str(sys_file),
+        "trim", "0", "24:00:00",
+    ]
 
     print(f"🎙️ 麦克风: {mic_file}")
     mic_proc = subprocess.Popen(
@@ -131,6 +99,7 @@ def start_recording(meeting_title="meeting"):
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
+    time.sleep(0.5)  # 等待两个进程都稳定启动
 
     with open(PID_FILE, "w") as f:
         json.dump({
@@ -182,14 +151,15 @@ def stop_recording():
         # 等文件写盘
         time.sleep(1)
 
-        # 合并两个文件，微调采样率到 16kHz
+        # 合并两个文件 + 音量归一化（防止混音后音量偏低被 whisper 漏识）
         if mic_file.exists() and mic_file.stat().st_size > 0 and sys_file.exists() and sys_file.stat().st_size > 0:
-            print(f"🔄 合并: {mic_file.name} + {sys_file.name}")
+            print(f"🔄 合并+归一化: {mic_file.name} + {sys_file.name}")
             subprocess.run([
                 "ffmpeg", "-y",
                 "-i", str(mic_file),
                 "-i", str(sys_file),
-                "-filter_complex", "amix=inputs=2:duration=longest:weights=2 1",
+                "-filter_complex",
+                "amix=inputs=2:duration=longest:weights=2 1,dynaudnorm",
                 "-ar", "16000", "-ac", "1",
                 str(out_file),
             ], capture_output=True, timeout=30)
