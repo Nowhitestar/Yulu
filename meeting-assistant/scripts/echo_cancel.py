@@ -70,58 +70,53 @@ def echo_cancel(sys_path, mic_path, output_path, frame_ms=30):
     sys_norm = normalize_to_target(sys_audio, -20)
     mic_norm = normalize_to_target(mic_audio, -20)
     
-    # 分析系统音频每个帧的能量
+    # 逐帧处理：用平滑的 mic_ratio 做交叉混合
+    # sys 有声 → mic_ratio=0（100% 系统音频）
+    # sys 无声 → mic_ratio 0→1 渐变过渡（0.5s 从系统切到麦克风）
+    # sys 又响 → mic_ratio 立即归 0（切回系统音频）
     output = np.zeros(min_len, dtype=np.float32)
-    sys_threshold = -35  # dB，低于此认为系统无声
+    sys_threshold = -35  # dB
+    fade_samples = int(sr * 0.5)  # 0.5s 渐变长度
+    attack = 1.0 / fade_samples  # 每采样点增量
     
-    print(f"🔇 半双工切换 (帧长={frame_ms}ms, 阈值={sys_threshold}dB)...")
-    sys_frames = 0
-    mic_frames = 0
+    print(f"🔇 半双工混合 (帧长={frame_ms}ms, 阈值={sys_threshold}dB, 渐变=0.5s)...")
     
-    for i in range(n_frames):
-        start = i * frame_size
-        end = start + frame_size
-        sys_frame = sys_norm[start:end]
+    mic_ratio = 0.0  # 0=纯系统音频, 1=纯麦克风
+    sys_active = False  # 系统当前是否有声
+    
+    for i in range(min_len):
+        frame_idx = i // frame_size
+        frame_start = frame_idx * frame_size
         
-        # 检测系统音频是否有声
-        sys_db = rms_energy(sys_frame)
+        # 每帧计算一次系统音频能量
+        if i == frame_start:
+            frame_end = min(frame_start + frame_size, min_len)
+            sys_db = rms_energy(sys_norm[frame_start:frame_end])
+            sys_active = sys_db > sys_threshold
         
-        if sys_db > sys_threshold:
-            # 系统有声音 → 取系统音频（麦克风此时有回声）
-            output[start:end] = sys_frame
-            sys_frames += 1
+        if sys_active:
+            # 系统有声音：mic_ratio 立即清零（切回系统音频）
+            mic_ratio = 0.0
         else:
-            # 系统无声 → 取麦克风（此时只有人声）
-            output[start:end] = mic_norm[start:end]
-            mic_frames += 1
-    
-    # 对切换点做交叉淡入淡出（0.5s 渐变），防咔嗒声和突兀切换
-    fade_len = int(sr * 0.5)  # 0.5s 渐变
-    last_source = None  # 'sys' or 'mic'
-    fade_start = None
-    
-    for i in range(n_frames):
-        start = i * frame_size
-        end = start + frame_size
-        curr_sys = rms_energy(sys_norm[start:end]) > sys_threshold
-        curr_source = 'sys' if curr_sys else 'mic'
+            # 系统无声：mic_ratio 渐增（麦克风慢慢变强）
+            mic_ratio = min(1.0, mic_ratio + attack)
         
-        if curr_source != last_source:
-            if fade_start is not None:
-                # 渐变过渡
-                fade_samples = min(fade_len, end - fade_start)
-                ramp = np.linspace(0, 1, fade_samples)
-                if curr_source == 'mic':
-                    # sys→mic: 麦克风渐强
-                    output[fade_start:fade_start + fade_samples] *= ramp
-                else:
-                    # mic→sys: 系统音频渐强
-                    output[fade_start:fade_start + fade_samples] *= ramp
-            fade_start = start
-        last_source = curr_source
+        # 交叉混合
+        output[i] = (1.0 - mic_ratio) * sys_norm[i] + mic_ratio * mic_norm[i]
     
-    # 最终音量提升 + 限制
-    output = np.clip(output * 2.0, -0.99, 0.99)
+    # 统计
+    sys_active_count = 0
+    for i in range(n_frames):
+        s = i * frame_size
+        e = min(s + frame_size, min_len)
+        if rms_energy(sys_norm[s:e]) > sys_threshold:
+            sys_active_count += 1
+    sys_pct = sys_active_count / n_frames * 100
+    mic_pct = 100 - sys_pct
+    print(f"📊 组成: 系统音频 {sys_pct:.0f}% | 麦克风 {mic_pct:.0f}%")
+    
+    # 最终音量提升
+    output = np.clip(output * 1.5, -0.99, 0.99)
     
     # 统计
     sys_pct = sys_frames / n_frames * 100
