@@ -63,47 +63,42 @@ def start_recording(meeting_title="meeting"):
     mic = audio_config.get("mic_device", ":0")
     sys_audio = audio_config.get("system_audio_device", ":1")
 
-    # 分别录制麦克风和系统音频（各自用单独 ffmpeg 进程，避免时钟同步问题）
-    # 录完后 meeting_daemon.py stop 会合并两个文件
-    mic_file = output_dir / f"{safe_title}_{timestamp}_mic.wav"
-    sys_file = output_dir / f"{safe_title}_{timestamp}_sys.wav"
-    mixed_file = output_dir / f"{safe_title}_{timestamp}.wav"
+    # ffmpeg 同时录制麦克风和系统音频
+    # aresample=async=1000 解决 AVFoundation 数据率偏慢的问题
+    # 麦克风权重 2.0，系统音频权重 1.0（防止音乐盖过人声）
+    output_file = output_dir / f"{safe_title}_{timestamp}.wav"
 
-    mic_cmd = [
+    cmd = [
         "ffmpeg", "-y",
         "-f", "avfoundation", "-i", mic,
-        "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1",
-        str(mic_file),
-    ]
-    sys_cmd = [
-        "ffmpeg", "-y",
         "-f", "avfoundation", "-i", sys_audio,
-        "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1",
-        str(sys_file),
+        "-filter_complex",
+        "[0:a]aresample=async=1000:min_hard_comp=0.1:first_pts=0[a0];"
+        "[1:a]aresample=async=1000:min_hard_comp=0.1:first_pts=0[a1];"
+        "[a0][a1]amix=inputs=2:duration=longest:weights=2 1",
+        "-acodec", "pcm_s16le",
+        "-ar", "16000",
+        "-ac", "1",
+        str(output_file),
     ]
 
-    print(f"🎙️ 录制麦克风: {mic_file}")
-    mic_proc = subprocess.Popen(mic_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    print(f"🔊 录制系统音频: {sys_file}")
-    sys_proc = subprocess.Popen(sys_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    print(f"Starting recording: {output_file}")
+    process = subprocess.Popen(
+        cmd,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
 
     with open(PID_FILE, "w") as f:
-        json.dump({
-            "mic_pid": mic_proc.pid,
-            "sys_pid": sys_proc.pid,
-            "mic_file": str(mic_file),
-            "sys_file": str(sys_file),
-            "mixed_file": str(mixed_file),
-            "title": meeting_title,
-        }, f)
+        json.dump({"pid": process.pid, "file": str(output_file), "title": meeting_title}, f)
 
-    print(f"✅ 录制中（mic_pid={mic_proc.pid}, sys_pid={sys_proc.pid})")
-    print(f"Output: {mixed_file}")
-    return mic_proc, str(mixed_file)
+    print(f"Recording started (PID: {process.pid})")
+    print(f"Output: {output_file}")
+    return process, str(output_file)
 
 
 def stop_recording():
-    """停止录制并合并音频文件。"""
+    """停止录制。"""
     if not PID_FILE.exists():
         print("No active recording found.", file=sys.stderr)
         return None
@@ -111,56 +106,20 @@ def stop_recording():
     with open(PID_FILE) as f:
         info = json.load(f)
 
-    def _kill(pid):
+    pid = info["pid"]
+    output_file = info["file"]
+
+    try:
+        os.kill(pid, signal.SIGTERM)
+        time.sleep(1)
         try:
-            os.kill(pid, signal.SIGTERM)
-            time.sleep(0.5)
-            try:
-                os.kill(pid, 0)
-                os.kill(pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
+            os.kill(pid, 0)
+            time.sleep(1)
+            os.kill(pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
-
-    # 兼容旧格式（单 pid）和新格式（mic_pid + sys_pid）
-    if "mic_pid" in info:
-        _kill(info["mic_pid"])
-        _kill(info["sys_pid"])
-        mic_file = Path(info["mic_file"])
-        sys_file = Path(info["sys_file"])
-        mixed_file = Path(info["mixed_file"])
-
-        # 合并两个文件
-        if mic_file.exists() and sys_file.exists() and mic_file.stat().st_size > 0 and sys_file.stat().st_size > 0:
-            print(f"🔄 合并音频: {mic_file.name} + {sys_file.name}")
-            merge_cmd = [
-                "ffmpeg", "-y",
-                "-i", str(mic_file),
-                "-i", str(sys_file),
-                "-filter_complex", "amix=inputs=2:duration=longest:weights=2 1",
-                "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1",
-                str(mixed_file),
-            ]
-            subprocess.run(merge_cmd, capture_output=True, timeout=30)
-            # 清理临时文件
-            mic_file.unlink(missing_ok=True)
-            sys_file.unlink(missing_ok=True)
-            output_file = str(mixed_file)
-        else:
-            # 有文件失败，用剩下的那个
-            existing = [f for f in [mic_file, sys_file] if f.exists() and f.stat().st_size > 0]
-            if existing:
-                existing[0].rename(mixed_file)
-                output_file = str(mixed_file)
-            else:
-                print("❌ 录音文件为空", file=sys.stderr)
-                PID_FILE.unlink(missing_ok=True)
-                return None
-    else:
-        # 旧格式：单进程
-        _kill(info["pid"])
-        output_file = info["file"]
+    except ProcessLookupError:
+        pass
 
     PID_FILE.unlink(missing_ok=True)
     
