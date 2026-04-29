@@ -226,6 +226,26 @@ def cmd_remove(args):
     print(f"✅ 已移除 {before_m - len(data['meetings'])} 场会议")
 
 
+def cmd_test(args):
+    """添加一条30秒后的测试会议。"""
+    title = args[0] if args else "测试会议"
+    start = datetime.now() + timedelta(seconds=30)
+    meeting = {
+        "id": "__test__",
+        "title": title,
+        "start": start.isoformat(),
+        "duration_min": 5,
+    }
+    data = load_schedule()
+    # 清理旧测试事件
+    data["events"] = [e for e in data.get("events", []) if "__test__" not in e.get("id", "")]
+    data["meetings"] = [m for m in data.get("meetings", []) if m.get("id") != "__test__"]
+    data["meetings"].append(meeting)
+    data["events"].extend(_build_events_for_meeting(meeting))
+    save_schedule(data)
+    print(f"🧪 测试会议「{title}」 @ {start.strftime('%H:%M:%S')} (30秒后)")
+
+
 # ───────────────────────────────────────────────
 # 录制控制（由调度器 fire 或用户手动）
 # ───────────────────────────────────────────────
