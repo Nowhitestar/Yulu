@@ -328,10 +328,17 @@ def _start_recording(title, meeting_id=""):
     )
     audio_path = None
     for line in result.stdout.split("\n"):
+        # 新 record_audio.py 日志格式
+        if "/meeting-recordings/" in line and ".wav" in line:
+            import re
+            m = re.search(r'(/Users/[^\s]+\.wav)', line)
+            if m:
+                audio_path = m.group(1)
+        # 旧格式兼容
         if line.startswith("Output:"):
             audio_path = line.split("Output:", 1)[1].strip()
     if not audio_path:
-        print(f"❌ 录制启动失败\n{result.stdout}\n{result.stderr}", file=sys.stderr)
+        print(f"❌ 录制启动失败\nstdout={result.stdout}\nstderr={result.stderr}", file=sys.stderr)
         return
 
     state = load_state()
