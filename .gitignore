@@ -1,3 +1,24 @@
-meeting-assistant/scripts/recorder_status
+# Secrets (config is per-user, never commit it)
+config.json
+.env
+
+# Compiled objects
 __pycache__/
 *.py[cod]
+*.egg-info/
+dist/
+build/
+
+# macOS
+.DS_Store
+*.swp
+*.swo
+*~
+
+# Compiled binaries
+meeting-assistant/scripts/recorder_status
+
+# IDE
+.idea/
+.vscode/
+*.swp
