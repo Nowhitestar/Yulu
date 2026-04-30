@@ -62,11 +62,12 @@ DEFAULT_CONFIG = {
         "Google Chrome", "Arc", "Safari", "Microsoft Edge", "Firefox"
     ],
     "dedicated_meeting_apps": [
-        "zoom.us", "Zoom", "腾讯会议", "TencentMeeting", "VooV Meeting", "WeMeet", "PolyMeet"
+        "zoom.us", "Zoom", "腾讯会议", "TencentMeeting", "VooV Meeting", "WeMeet"
     ],
     "ignore_window_keywords": [
         "Calendar", "日历", "Gmail", "Inbox", "Settings", "Preferences",
         "聊天", "通讯录", "朋友圈", "文件传输助手",
+        "PolyMeet",
     ],
 }
 
@@ -120,17 +121,35 @@ def is_recording_active():
     return (CONFIG_DIR / ".recording_pid").exists()
 
 
-def _osascript(script):
+def _osascript(script, timeout=3):
     return subprocess.run(
         ["osascript", "-e", script],
         capture_output=True,
         text=True,
-        timeout=8,
+        timeout=timeout,
     )
 
 
+def _has_permission():
+    """Quick check if we have accessibility permission.
+    When no permission, osascript/System Events hangs until timeout."""
+    try:
+        r = subprocess.run(
+            ["osascript", "-e", 'tell application "System Events" to get name of first process'],
+            capture_output=True, text=True, timeout=2,
+        )
+        return r.returncode == 0 and len(r.stdout.strip()) > 0
+    except subprocess.TimeoutExpired:
+        return False
+    except Exception:
+        return False
+
+
 def collect_windows(target_app_names=None):
-    """返回 [{app, title}]。只扫描目标 app，避免扫全量窗口导致超时。"""
+    """返回 [{app, title}] 或 None（无权限时返回 None）。"""
+    if not _has_permission():
+        return None
+
     target_app_names = target_app_names or DEFAULT_CONFIG["target_app_names"]
     app_list = ", ".join(json.dumps(x, ensure_ascii=False) for x in target_app_names)
     script = f'''
@@ -154,9 +173,12 @@ tell application "System Events"
 end tell
 return out
 '''
-    result = _osascript(script)
-    if result.returncode != 0:
-        raise RuntimeError(result.stderr.strip() or result.stdout.strip() or "osascript failed")
+    try:
+        result = _osascript(script, timeout=5)
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr.strip() or result.stdout.strip() or "osascript failed")
+    except subprocess.TimeoutExpired:
+        return None
 
     rows = []
     for line in result.stdout.splitlines():
@@ -184,12 +206,12 @@ def detect_meeting(cfg):
     ignore_patterns = _compile_patterns(cfg.get("ignore_window_keywords", []))
     app_hints = _compile_patterns(cfg.get("app_name_hints", []))
 
-    try:
-        windows = collect_windows(cfg.get("target_app_names"))
-    except Exception as e:
-        # 没有辅助功能权限时，用可见 app 名做保守兜底：只检测专用会议 app，不检测微信/浏览器。
+    windows = collect_windows(cfg.get("target_app_names"))
+    if windows is None:
+        # 无辅助功能权限时用可见 app 名做简易检测
         try:
             visible_apps = collect_visible_apps()
+            # 只检查你的真实会议 app
             dedicated = _compile_patterns(cfg.get("dedicated_meeting_apps", []))
             for app in visible_apps:
                 if any(p.search(app) for p in dedicated):
@@ -200,14 +222,25 @@ def detect_meeting(cfg):
                         "window": "",
                         "signature": signature(app, "visible-app"),
                         "fallback": "visible_app",
-                        "permission_hint": "建议给 Terminal/OpenClaw/Python 辅助功能权限，以便检测微信/浏览器/Google Meet 窗口标题。",
+                    }
+            # 也用窗口关键词匹配 visible app 名
+            for app in visible_apps:
+                if any(p.search(app) for p in ignore_patterns):
+                    continue
+                if any(p.search(app) for p in window_patterns):
+                    return {
+                        "active": True,
+                        "title": app,
+                        "app": app,
+                        "window": "",
+                        "signature": signature(app, "visible-keyword"),
+                        "fallback": "visible_keyword",
                     }
         except Exception:
             pass
         return {
             "active": False,
-            "error": f"window_scan_failed: {e}",
-            "permission_hint": "需要给 Terminal/OpenClaw/Python 辅助功能权限，才能检测微信/浏览器/Google Meet 等窗口标题。",
+            "permission_hint": "系统设置 → 隐私与安全性 → 辅助功能，添加 Python.app（/opt/homebrew/Cellar/python@3.14/.../Python.app）以获取完整窗口标题检测。",
         }
 
     matches = []
@@ -221,7 +254,6 @@ def detect_meeting(cfg):
             matches.append(w)
 
     if matches:
-        # 取标题最长的一条，通常信息量最大
         best = sorted(matches, key=lambda x: len(x.get("title", "")), reverse=True)[0]
         title = best.get("title") or best.get("app") or "检测到会议"
         return {
@@ -307,15 +339,10 @@ def run_daemon(args):
             res = detect_meeting(cfg)
             now = time.time()
 
-            if res.get("error"):
-                # 权限错误不要刷屏
-                if now - last_permission_error > 300:
-                    log(f"⚠️ {res.get('error')} | {res.get('permission_hint', '')}")
-                    last_permission_error = now
-                active_since = None
-                active_sig = None
-                time.sleep(interval)
-                continue
+            hint = res.get("permission_hint")
+            if hint and now - last_permission_error > 300:
+                log(f"⚠️ {hint}")
+                last_permission_error = now
 
             if not res.get("active"):
                 active_since = None

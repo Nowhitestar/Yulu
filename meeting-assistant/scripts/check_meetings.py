@@ -11,6 +11,8 @@
 """
 
 import json
+import os
+import subprocess
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -69,14 +71,71 @@ def _fetch_feishu(config, start, end):
 
 def _fetch_google(config, start, end):
     """
-    通过 Google Calendar API 获取会议列表。
-    
-    需要配置：
-    - credentials_path: GCP OAuth 凭证文件路径
-    
-    TODO: 实现具体 API 调用
+    通过 gog CLI 获取 Google Calendar 会议列表。
+    不需要 Google API Python 库，gog 处理了 OAuth。
     """
-    return []
+    import subprocess
+
+    account = config.get("gog_account")
+    if not account:
+        print("⚠️ Google Calendar: 未配置 gog_account", file=sys.stderr)
+        return []
+
+    fmt_start = start.strftime("%Y-%m-%dT%H:%M:%S%z") if hasattr(start, 'strftime') else str(start)
+    fmt_end = end.strftime("%Y-%m-%dT%H:%M:%S%z") if hasattr(end, 'strftime') else str(end)
+
+    cmd = [
+        "gog", "calendar", "events", account,
+        "--from", fmt_start,
+        "--to", fmt_end,
+        "--json",
+    ]
+    env = {**os.environ, "GOG_ACCOUNT": account}
+
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=30, env=env)
+        if r.returncode != 0:
+            print(f"⚠️ gog error: {r.stderr.strip()}", file=sys.stderr)
+            return []
+        data = json.loads(r.stdout)
+    except Exception as e:
+        print(f"⚠️ Google Calendar 获取失败: {e}", file=sys.stderr)
+        return []
+
+    meetings = []
+    for ev in data.get("events", []):
+        start_raw = ev.get("start", {}).get("dateTime") or ev.get("start", {}).get("date")
+        end_raw = ev.get("end", {}).get("dateTime") or ev.get("end", {}).get("date")
+        if not start_raw:
+            continue
+
+        # Google Meet 链接
+        link = ev.get("hangoutLink") or ""
+        if not link and ev.get("conferenceData"):
+            for ep in ev["conferenceData"].get("entryPoints", []):
+                if ep.get("entryPointType") == "video":
+                    link = ep.get("uri", "")
+                    break
+
+        # 参会人
+        attendees = []
+        for a in ev.get("attendees", []):
+            name = a.get("displayName") or a.get("email", "")
+            if name:
+                attendees.append(name)
+
+        meetings.append({
+            "id": ev.get("id", ""),
+            "title": ev.get("summary", "(无标题)"),
+            "start": start_raw,
+            "end": end_raw,
+            "link": link,
+            "attendees": attendees,
+            "description": ev.get("description", ""),
+            "source": "google",
+        })
+
+    return meetings
 
 
 def print_meetings(meetings):
@@ -96,19 +155,29 @@ def print_meetings(meetings):
 
 
 def main():
-    if len(sys.argv) < 2:
-        cmd = "today"
-    else:
-        cmd = sys.argv[1]
-    
-    now = datetime.now()
-    
+    args = sys.argv[1:]
+    use_json = "--json" in args or "-j" in args
+    args = [a for a in args if a not in ("--json", "-j")]
+
+    cmd = args[0] if args else "today"
+
+    now = datetime.now().astimezone()
+
     if cmd == "today":
         start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        end = start + timedelta(days=1)
+    elif cmd == "tomorrow":
+        start = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+        end = start + timedelta(days=1)
+    elif cmd == "yesterday":
+        start = (now - timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
         end = start + timedelta(days=1)
     elif cmd == "upcoming":
         start = now
         end = now + timedelta(hours=24)
+    elif cmd == "week":
+        start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        end = start + timedelta(days=7)
     elif cmd == "json":
         start = now.replace(hour=0, minute=0, second=0, microsecond=0)
         end = start + timedelta(days=1)
@@ -118,9 +187,12 @@ def main():
     else:
         print(f"Unknown command: {cmd}", file=sys.stderr)
         sys.exit(1)
-    
+
     meetings = fetch_meetings(start, end)
-    print_meetings(meetings)
+    if use_json:
+        print(json.dumps(meetings, ensure_ascii=False, indent=2))
+    else:
+        print_meetings(meetings)
 
 
 if __name__ == "__main__":
