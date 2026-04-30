@@ -106,13 +106,11 @@ class AudioRecorder {
     var silenceTask: DispatchWorkItem?
     var silenceSeconds = DEFAULT_SILENCE_SEC
     var onStopRequest: (() -> Void)?
-    let mixQueue = DispatchQueue(label: "mix")
 
-    // 逐帧混音状态（与 echo_cancel.py 一致）
-    let frameSize = Int(SAMPLE_RATE * 30 / 1000) * 2  // 30ms 立体声 samples
-    var sysFrames: [(active: Bool, samples: [Int16])] = []
-    var micFrames: [(active: Bool, samples: [Int16])] = []
-    var fadePos: Float = 0  // 0..1, 从系统向麦克风的交叉淡化进度
+    // Streaming buffers
+    var sysBuf: [Int16] = []
+    var micBuf: [Int16] = []
+    let bufLock = NSLock()
 
     func start(title: String) -> String? {
         let df = DateFormatter(); df.dateFormat = "yyyyMMdd_HHmmss"
@@ -121,7 +119,7 @@ class AudioRecorder {
         try? FileManager.default.createDirectory(at: RECORDING_DIR, withIntermediateDirectories: true)
         guard let w = WavWriter(url: url) else { return nil }
         writer = w; isRecording = true; startTime = Date(); lastAudioTime = Date()
-        sysFrames = []; micFrames = []; fadePos = 0
+        sysBuf = []; micBuf = []
         writeState(recording: true, title: title, path: url.path)
         log("🎙 \(fn)")
         startSilenceMonitor()
@@ -133,8 +131,8 @@ class AudioRecorder {
         isRecording = false
         silenceTask?.cancel()
         let dur = startTime.map { Int(Date().timeIntervalSince($0)) } ?? 0
-        // 刷新剩余帧
-        drainFrames()
+        // Write remaining audio
+        flushBuffers()
         let p = writer?.url.path
         writer?.finalize(); writer = nil
         writeState(recording: false)
@@ -142,84 +140,110 @@ class AudioRecorder {
         return (p, dur)
     }
 
-    /// 收到系统音频帧（stereo Int16）
     func onSysAudio(_ samples: [Int16]) {
         guard isRecording else { return }
-        var sum: Float = 0
-        let m = Float(Int(Int16.max) * Int(Int16.max))
-        for s in samples { sum += Float(s) * Float(s) / m }
-        let rms = sqrt(sum / Float(samples.count))
-        sysFrames.append((active: rms > SILENCE_THRESHOLD, samples: samples))
+        bufLock.lock()
+        sysBuf.append(contentsOf: samples)
+        bufLock.unlock()
+        let rms = calcRMS(samples)
         if rms > SILENCE_THRESHOLD { lastAudioTime = Date() }
         mixAndWrite()
     }
 
-    /// 收到麦克风帧（mono Float32）
     func onMicAudio(_ samples: [Float]) {
         guard isRecording else { return }
         let ints = samples.map { Int16(max(-1.0, min(1.0, $0)) * Float(Int16.max)) }
-        var sum: Float = 0; let m = Float(Int(Int16.max) * Int(Int16.max))
-        for s in ints { sum += Float(s) * Float(s) / m }
-        let rms = sqrt(sum / Float(ints.count))
-        micFrames.append((active: rms > SILENCE_THRESHOLD, samples: ints))
+        bufLock.lock()
+        micBuf.append(contentsOf: ints)
+        bufLock.unlock()
+        let rms = calcRMS(ints)
         if rms > SILENCE_THRESHOLD { lastAudioTime = Date() }
         mixAndWrite()
     }
 
-    /// 混音：当系统帧和麦克风帧都够一帧时，混合后写出
+    private func calcRMS(_ s: [Int16]) -> Float {
+        guard !s.isEmpty else { return 0 }
+        var sum: Float = 0; let m = Float(Int(Int16.max) * Int(Int16.max))
+        for v in s { sum += Float(v) * Float(v) / m }
+        return sqrt(sum / Float(s.count))
+    }
+
+    /// 流式混音：从 sysBuf/micBuf 取等量的样本，半双工混合后写出
     private func mixAndWrite() {
         guard let w = writer else { return }
-        while !sysFrames.isEmpty && !micFrames.isEmpty {
-            let sys = sysFrames.removeFirst()
-            let mic = micFrames.removeFirst()
-            let mixed = mixFrame(sys: sys, mic: mic)
-            w.append(Data(bytes: mixed, count: mixed.count * 2))
-        }
-    }
+        bufLock.lock()
+        // 取能混的最多样本数（sys 是 stereo, mic 是 mono）
+        let outLen = sysBuf.count  // sys 驱动输出速率
+        guard outLen >= 1024 else { bufLock.unlock(); return }  // 至少等 10ms 的数据再写
+        let sysChunk = Array(sysBuf.prefix(outLen))
+        sysBuf.removeFirst(outLen)
 
-    /// 排空剩余帧（stop 时调用）
-    private func drainFrames() {
-        guard let w = writer else { return }
-        while !sysFrames.isEmpty || !micFrames.isEmpty {
-            let sys = sysFrames.isEmpty ? (active: false, samples: [Int16](repeating: 0, count: frameSize)) : sysFrames.removeFirst()
-            let mic = micFrames.isEmpty ? (active: false, samples: [Int16](repeating: 0, count: frameSize / 2)) : micFrames.removeFirst()
-            let mixed = mixFrame(sys: sys, mic: mic)
-            w.append(Data(bytes: mixed, count: mixed.count * 2))
-        }
-    }
-
-    // ── 核心混音（与 echo_cancel.py 一致）──
-
-    private func mixFrame(sys: (active: Bool, samples: [Int16]), mic: (active: Bool, samples: [Int16])) -> [Int16] {
-        let sysLen = sys.samples.count  // stereo
-        let micLen = mic.samples.count  // mono
-        var out = [Int16](repeating: 0, count: sysLen)
-
-        // 音量归一化到 -20dB
-        let sysNorm = normalizeToDBFS(sys.samples)
-        let micMono = normalizeToDBFS(mic.samples)
-        // mono → stereo
-        var micStereo = [Int16](repeating: 0, count: sysLen)
-        for i in 0..<sysLen {
-            micStereo[i] = micMono[min(i / 2, micLen - 1)]
-        }
-
-        // 半双工：用系统活跃标签决定 fadePos
-        let fadeStep: Float = 1.0 / Float(FADE_FRAMES)
-        if sys.active {
-            fadePos = 0
+        // 从 micBuf 取对应 mono 样本数（sys/2 因为 stereo vs mono）
+        let micNeeded = outLen / 2
+        let micChunk: [Int16]
+        if micBuf.count >= micNeeded {
+            micChunk = Array(micBuf.prefix(micNeeded))
+            micBuf.removeFirst(micNeeded)
         } else {
-            fadePos = min(1.0, fadePos + fadeStep)
+            micChunk = micBuf + [Int16](repeating: 0, count: micNeeded - micBuf.count)
+            micBuf.removeAll()
         }
+        bufLock.unlock()
 
-        // 交叉混合
-        for i in 0..<sysLen {
-            let sv = Float(sysNorm[i]) / Float(Int16.max)
-            let mv = Float(micStereo[i]) / Float(Int16.max)
-            let mix = (1.0 - fadePos) * sv + fadePos * mv
-            out[i] = Int16(max(-1.0, min(1.0, mix * 1.5)) * Float(Int16.max))
+        let mixed = halfDuplexMix(sys: sysChunk, mic: micChunk)
+        w.append(Data(bytes: mixed, count: mixed.count * 2))
+    }
+
+    private func halfDuplexMix(sys: [Int16], mic: [Int16]) -> [Int16] {
+        let n = sys.count  // stereo samples
+        let m = min(mic.count, n / 2)  // mono samples
+
+        // Normalize both to -20dB
+        let sysNorm = normalizeToDBFS(sys)
+        let micMono = normalizeToDBFS(mic)
+        var micStereo = [Int16](repeating: 0, count: n)
+        for i in 0..<n { micStereo[i] = micMono[min(i/2, m-1)] }
+
+        // Per-frame RMS analysis (30ms frames)
+        let frameSamples = Int(SAMPLE_RATE * 30 / 1000) * 2  // stereo frame
+        let numFrames = max(1, n / frameSamples)
+        let fadeStep: Float = 1.0 / Float(Int(SAMPLE_RATE) * 2)
+
+        var out = [Int16](repeating: 0, count: n)
+        var fadePos: Float = 0
+
+        for fi in 0..<numFrames {
+            let start = fi * frameSamples
+            let end = min(start + frameSamples, n)
+            let sysFrame = sysNorm[start..<end]
+            var sysSum: Float = 0; let mVal = Float(Int(Int16.max) * Int(Int16.max))
+            for v in sysFrame { sysSum += Float(v) * Float(v) / mVal }
+            let sysActive = sqrt(sysSum / Float(end - start)) > SILENCE_THRESHOLD
+
+            if sysActive { fadePos = 0 }
+            else { fadePos = min(1.0, fadePos + fadeStep * Float(end - start)) }
+
+            let mixRatio = 1.0 - fadePos
+            for i in start..<end {
+                let sv = Float(sysNorm[i]) / Float(Int16.max)
+                let mv = Float(micStereo[i]) / Float(Int16.max)
+                out[i] = Int16(max(-1.0, min(1.0, (mixRatio * sv + fadePos * mv) * 1.5)) * Float(Int16.max))
+            }
         }
         return out
+    }
+
+    private func flushBuffers() {
+        guard let w = writer else { return }
+        bufLock.lock()
+        if !sysBuf.isEmpty || !micBuf.isEmpty {
+            let outLen = sysBuf.isEmpty ? micBuf.count * 2 : sysBuf.count
+            let sys: [Int16] = sysBuf.isEmpty ? [Int16](repeating: 0, count: outLen) : sysBuf
+            let mic: [Int16] = micBuf.isEmpty ? [Int16](repeating: 0, count: outLen/2) : micBuf
+            sysBuf.removeAll(); micBuf.removeAll()
+            bufLock.unlock()
+            w.append(Data(bytes: halfDuplexMix(sys: sys, mic: Array(mic.prefix(outLen/2))), count: outLen * 2))
+        } else { bufLock.unlock() }
     }
 
     private func startSilenceMonitor() {
@@ -235,8 +259,6 @@ class AudioRecorder {
         DispatchQueue.main.asyncAfter(deadline: .now() + silenceSeconds, execute: task)
     }
 }
-
-// ─── 麦克风捕获 ────────────────────────────────────────
 
 class MicCapture {
     let recorder: AudioRecorder
@@ -277,11 +299,13 @@ class SysAudioOutput: NSObject, SCStreamOutput {
         var ptr: UnsafeMutablePointer<Int8>?; var len: Int = 0
         guard CMBlockBufferGetDataPointer(db, atOffset: 0, lengthAtOffsetOut: &len, totalLengthOut: nil, dataPointerOut: &ptr) == noErr,
               let p = ptr, len > 0 else { return }
-        let cnt = len / MemoryLayout<Int16>.size
+        // macOS 26 SCStream provides Float32 audio
+        let cnt = len / MemoryLayout<Float>.size
         guard cnt > 0 else { return }
         let raw = UnsafeMutableRawPointer(p)
-        let samples = [Int16](UnsafeBufferPointer(start: raw.assumingMemoryBound(to: Int16.self), count: cnt))
-        recorder.onSysAudio(samples)
+        let floats = [Float](UnsafeBufferPointer(start: raw.assumingMemoryBound(to: Float.self), count: cnt))
+        let int16s = floats.map { Int16(max(-1.0, min(1.0, $0)) * Float(Int16.max)) }
+        recorder.onSysAudio(int16s)
     }
 }
 
