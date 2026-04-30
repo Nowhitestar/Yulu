@@ -229,7 +229,7 @@ CONFIG
     ok "录制目录已创建: $RECORDING_DIR"
 }
 
-# ─── Step 4: Compile window scanner ──────────────────
+# ─── Step 4: Compile native helpers ──────────────────
 
 compile_scanner() {
     header "编译窗口扫描工具"
@@ -276,6 +276,24 @@ compile_scanner() {
         warn "Swift 编译器未安装（swiftc 不可用），跳过编译"
         warn "后续可以手动编译: xcode-select --install"
     fi
+}
+
+compile_audio_daemon() {
+    header "编译并签名 AudioDaemon"
+
+    local build_script="$SCRIPT_DIR/meeting-assistant/scripts/build_audio_daemon.sh"
+    if [[ ! -x "$build_script" ]]; then
+        warn "AudioDaemon build script 不存在或不可执行，跳过"
+        return
+    fi
+
+    "$build_script"
+    ok "AudioDaemon.app 已使用固定 codesign identity 签名"
+
+    echo
+    echo "  AudioDaemon 负责捕获系统音频和麦克风。"
+    echo "  首次使用需要授权：系统设置 → 隐私与安全性 → 屏幕与系统音频录制。"
+    echo "  如果系统弹出权限对话框，请点击「允许」。"
 }
 
 # ─── Step 5: Google Calendar setup ───────────────────
@@ -528,6 +546,7 @@ install_deps
 setup_audio
 create_config
 compile_scanner
+compile_audio_daemon
 setup_calendar
 install_launchagents
 run_tests

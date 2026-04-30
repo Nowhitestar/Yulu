@@ -23,6 +23,11 @@ let DEFAULT_SILENCE_SEC: TimeInterval = 300
 let FADE_FRAMES = Int(0.5 * 48000)
 let SAMPLE_RATE: UInt32 = 48000
 
+var SYS_READY = false
+var SYS_ERROR = ""
+var MIC_READY = false
+var MIC_ERROR = ""
+
 var logFile: FileHandle?
 func log(_ msg: String) {
     let df = DateFormatter(); df.dateFormat = "yyyy-MM-dd HH:mm:ss"
@@ -111,6 +116,7 @@ class AudioRecorder {
     var sysBuf: [Int16] = []
     var micBuf: [Int16] = []
     let bufLock = NSLock()
+    var fadePos: Float = 0  // 半双工混音进度（跨 chunk 持久）
 
     func start(title: String) -> String? {
         let df = DateFormatter(); df.dateFormat = "yyyyMMdd_HHmmss"
@@ -119,7 +125,7 @@ class AudioRecorder {
         try? FileManager.default.createDirectory(at: RECORDING_DIR, withIntermediateDirectories: true)
         guard let w = WavWriter(url: url) else { return nil }
         writer = w; isRecording = true; startTime = Date(); lastAudioTime = Date()
-        sysBuf = []; micBuf = []
+        sysBuf = []; micBuf = []; fadePos = 0
         writeState(recording: true, title: title, path: url.path)
         log("🎙 \(fn)")
         startSilenceMonitor()
@@ -198,9 +204,9 @@ class AudioRecorder {
         let n = sys.count  // stereo samples
         let m = min(mic.count, n / 2)  // mono samples
 
-        // Normalize both to -20dB
-        let sysNorm = normalizeToDBFS(sys)
-        let micMono = normalizeToDBFS(mic)
+        // No normalization - use raw levels to avoid distortion
+        let sysNorm = sys
+        let micMono = mic
         var micStereo = [Int16](repeating: 0, count: n)
         for i in 0..<n { micStereo[i] = micMono[min(i/2, m-1)] }
 
@@ -210,7 +216,6 @@ class AudioRecorder {
         let fadeStep: Float = 1.0 / Float(Int(SAMPLE_RATE) * 2)
 
         var out = [Int16](repeating: 0, count: n)
-        var fadePos: Float = 0
 
         for fi in 0..<numFrames {
             let start = fi * frameSamples
@@ -227,7 +232,7 @@ class AudioRecorder {
             for i in start..<end {
                 let sv = Float(sysNorm[i]) / Float(Int16.max)
                 let mv = Float(micStereo[i]) / Float(Int16.max)
-                out[i] = Int16(max(-1.0, min(1.0, (mixRatio * sv + fadePos * mv) * 1.5)) * Float(Int16.max))
+                out[i] = Int16(max(-1.0, min(1.0, mixRatio * sv + fadePos * mv)) * Float(Int16.max))
             }
         }
         return out
@@ -279,8 +284,8 @@ class MicCapture {
             self.recorder.onMicAudio(samples)
         }
 
-        do { try engine.start(); self.engine = engine; log("🎤 Mic capture started") }
-        catch { log("Mic start failed: \(error)") }
+        do { try engine.start(); self.engine = engine; MIC_READY = true; MIC_ERROR = ""; log("🎤 Mic capture started") }
+        catch { MIC_READY = false; MIC_ERROR = "\(error)"; log("Mic start failed: \(error)") }
     }
 
     func stop() { engine?.stop(); engine = nil }
@@ -334,9 +339,11 @@ class AudioCapture {
                 try await s.startCapture()
                 try s.addStreamOutput(output, type: .audio, sampleHandlerQueue: .global())
                 self.stream = s
+                SYS_READY = true; SYS_ERROR = ""
                 log("🔊 Sys capture started (display \(d.displayID))")
             } catch {
-                log("Sys capture failed: \((error as NSError).localizedDescription)")
+                SYS_READY = false; SYS_ERROR = (error as NSError).localizedDescription
+                log("Sys capture failed: \(SYS_ERROR)")
             }
         }
     }
@@ -388,12 +395,16 @@ class SocketServer {
         case "windows":
             resp = self.scanWindows()
         case "start":
-            if let p = recorder.start(title: json["title"] as? String ?? "meeting") { resp = ["status":"recording", "file":p] }
+            if !SYS_READY {
+                resp = ["error":"sys_capture_not_ready", "sysReady": SYS_READY, "sysError": SYS_ERROR, "micReady": MIC_READY, "micError": MIC_ERROR]
+            } else if !MIC_READY {
+                resp = ["error":"mic_capture_not_ready", "sysReady": SYS_READY, "sysError": SYS_ERROR, "micReady": MIC_READY, "micError": MIC_ERROR]
+            } else if let p = recorder.start(title: json["title"] as? String ?? "meeting") { resp = ["status":"recording", "file":p] }
             else { resp = ["error":"start_failed"] }
         case "stop":
             let (p, d) = recorder.stop(); resp = ["status":"stopped", "file": p ?? "", "duration": d]
         case "status":
-            resp = ["recording": recorder.isRecording, "file": recorder.writer?.url.path ?? ""]
+            resp = ["recording": recorder.isRecording, "file": recorder.writer?.url.path ?? "", "sysReady": SYS_READY, "sysError": SYS_ERROR, "micReady": MIC_READY, "micError": MIC_ERROR]
         case "quit": resp = ["status":"bye"]; send(c, resp)
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { NSApp.terminate(nil) }; return
         default: resp = ["error":"unknown: \(action)"]
