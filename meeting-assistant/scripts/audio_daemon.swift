@@ -19,6 +19,7 @@ let PID_PATH = CONFIG_DIR.appendingPathComponent(".audio_daemon.pid")
 let RECORDING_DIR = HOME.appendingPathComponent("Downloads/meeting-recordings")
 let LOG_PATH = CONFIG_DIR.appendingPathComponent("audio_daemon.log")
 let SILENCE_THRESHOLD: Float = 0.01
+let SYS_ACTIVE_THRESHOLD: Float = 0.001  // 系统音频常偏低，半双工判断不能用自动静音阈值
 let DEFAULT_SILENCE_SEC: TimeInterval = 300
 let FADE_FRAMES = Int(0.5 * 48000)
 let SAMPLE_RATE: UInt32 = 48000
@@ -27,6 +28,7 @@ var SYS_READY = false
 var SYS_ERROR = ""
 var MIC_READY = false
 var MIC_ERROR = ""
+var SYS_FORMAT_LOGGED = false
 
 var logFile: FileHandle?
 func log(_ msg: String) {
@@ -223,7 +225,7 @@ class AudioRecorder {
             let sysFrame = sysNorm[start..<end]
             var sysSum: Float = 0; let mVal = Float(Int(Int16.max) * Int(Int16.max))
             for v in sysFrame { sysSum += Float(v) * Float(v) / mVal }
-            let sysActive = sqrt(sysSum / Float(end - start)) > SILENCE_THRESHOLD
+            let sysActive = sqrt(sysSum / Float(end - start)) > SYS_ACTIVE_THRESHOLD
 
             if sysActive { fadePos = 0 }
             else { fadePos = min(1.0, fadePos + fadeStep * Float(end - start)) }
@@ -300,16 +302,45 @@ class SysAudioOutput: NSObject, SCStreamOutput {
 
     func stream(_ s: SCStream, didOutputSampleBuffer buf: CMSampleBuffer, of type: SCStreamOutputType) {
         guard type == .audio, recorder.isRecording else { return }
+        let asbd = buf.formatDescription.flatMap { CMAudioFormatDescriptionGetStreamBasicDescription($0)?.pointee }
+        let flags = asbd?.mFormatFlags ?? 0
+        let channels = Int(asbd?.mChannelsPerFrame ?? 2)
+        let isFloat = (flags & kAudioFormatFlagIsFloat) != 0
+        let isInt = (flags & kAudioFormatFlagIsSignedInteger) != 0
+        let nonInterleaved = (flags & kAudioFormatFlagIsNonInterleaved) != 0
+        if !SYS_FORMAT_LOGGED, let a = asbd {
+            SYS_FORMAT_LOGGED = true
+            log("SC audio ASBD: sr=\(a.mSampleRate) ch=\(a.mChannelsPerFrame) bits=\(a.mBitsPerChannel) bytesFrame=\(a.mBytesPerFrame) bytesPacket=\(a.mBytesPerPacket) framesPacket=\(a.mFramesPerPacket) float=\(isFloat) int=\(isInt) nonInterleaved=\(nonInterleaved) flags=0x\(String(flags, radix:16))")
+        }
         guard let db = buf.dataBuffer else { return }
         var ptr: UnsafeMutablePointer<Int8>?; var len: Int = 0
         guard CMBlockBufferGetDataPointer(db, atOffset: 0, lengthAtOffsetOut: &len, totalLengthOut: nil, dataPointerOut: &ptr) == noErr,
               let p = ptr, len > 0 else { return }
-        // macOS 26 SCStream provides Float32 audio
         let cnt = len / MemoryLayout<Float>.size
         guard cnt > 0 else { return }
+
         let raw = UnsafeMutableRawPointer(p)
         let floats = [Float](UnsafeBufferPointer(start: raw.assumingMemoryBound(to: Float.self), count: cnt))
-        let int16s = floats.map { Int16(max(-1.0, min(1.0, $0)) * Float(Int16.max)) }
+        let stereoFloats: [Float]
+        if isFloat && nonInterleaved && channels >= 2 {
+            // ScreenCaptureKit reports planar Float32. In CMBlockBuffer this is
+            // laid out as all left samples followed by all right samples.
+            let frames = cnt / channels
+            var interleaved = [Float](); interleaved.reserveCapacity(frames * 2)
+            for i in 0..<frames {
+                interleaved.append(floats[i])
+                interleaved.append(floats[frames + i])
+            }
+            stereoFloats = interleaved
+        } else if isFloat && channels == 1 {
+            var stereo = [Float](); stereo.reserveCapacity(cnt * 2)
+            for v in floats { stereo.append(v); stereo.append(v) }
+            stereoFloats = stereo
+        } else {
+            stereoFloats = floats
+        }
+        guard !stereoFloats.isEmpty else { return }
+        let int16s = stereoFloats.map { Int16(max(-1.0, min(1.0, $0)) * Float(Int16.max)) }
         recorder.onSysAudio(int16s)
     }
 }
