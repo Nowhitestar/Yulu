@@ -123,7 +123,7 @@ def summarize(transcript, meeting_title, config):
     cmd_template = config.get("command") or DEFAULT_LLM_CMD
 
     if not cmd_template:
-        print("🤖 未配置外部 LLM，交给 agent 根据模板生成摘要...")
+        print("🤖 未配置外部 LLM，使用本地规则生成最终摘要...")
         return None
 
     cmd = render_cmd(cmd_template)
@@ -167,24 +167,51 @@ def _notify_agent(event_type, **kw):
 
 
 def fallback_summary(transcript, meeting_title):
-    """写一个明确标记的草稿，真正摘要由 agent 读取 template + transcript 后覆盖。"""
-    tldr = transcript.strip()[:200].replace("\n", " ")
-    if len(transcript) > 200:
-        tldr += "…"
+    """无外部 LLM 时生成可直接使用的本地摘要，不再输出占位文字。"""
+    import re
+
+    lines = [line.strip() for line in transcript.splitlines() if line.strip()]
+    text = " ".join(lines)
+    tldr = text[:220] + ("…" if len(text) > 220 else "")
+
+    points = []
+    for line in lines:
+        if len(line) >= 4 and line not in points:
+            points.append(line)
+        if len(points) >= 8:
+            break
+
+    action_lines = [
+        line for line in lines
+        if re.search(r"(需要|要做|负责|跟进|安排|确认|明天|下周|todo|action)", line, re.I)
+    ]
+    question_lines = [
+        line for line in lines
+        if "?" in line or "？" in line or re.search(r"(问题|疑问|阻塞|不确定|block)", line, re.I)
+    ]
+    decision_lines = [
+        line for line in lines
+        if re.search(r"(决定|确认|结论|同意|采用|最终)", line)
+    ]
+
+    def bullets(items, empty="无明确内容"):
+        return "\n".join(f"- {x}" for x in items[:8]) if items else f"- {empty}"
+
+    def todos(items):
+        return "\n".join(f"- [ ] {x}" for x in items[:8]) if items else "- [ ] 无明确待办"
 
     return (
         f"# {meeting_title}\n\n"
-        f"> ⚠️ Draft placeholder：等待 OpenClaw agent 根据模板生成最终会议纪要。\n\n"
         f"## TL;DR\n"
-        f"{tldr or '（转录为空）'}\n\n"
+        f"{tldr or '转录为空，无法生成摘要。'}\n\n"
         f"## Discussion Points\n"
-        f"- （待 agent 根据完整转录提炼）\n\n"
+        f"{bullets(points)}\n\n"
         f"## Action Items\n"
-        f"- [ ] （待 agent 根据完整转录提炼）\n\n"
+        f"{todos(action_lines)}\n\n"
         f"## Open Questions / Blockers\n"
-        f"- （待 agent 根据完整转录提炼）\n\n"
+        f"{bullets(question_lines)}\n\n"
         f"## Decisions Made\n"
-        f"- （待 agent 根据完整转录提炼）\n\n"
+        f"{bullets(decision_lines, '无明确决策')}\n\n"
         f"---\n"
         f"## 原始转录\n\n{transcript}\n"
     )
@@ -226,12 +253,11 @@ def process_audio(audio_path):
 
     # 3. 摘要
     summary = None
-    agent_should_finalize = False
     if llm_cfg.get("enabled", True):
         summary = summarize(transcript, meeting_title, llm_cfg)
     if summary is None:
         summary = fallback_summary(transcript, meeting_title)
-        agent_should_finalize = True
+    agent_should_finalize = False
 
     # 4. 保存摘要
     summary_path = audio_path.with_suffix(".summary.md")
