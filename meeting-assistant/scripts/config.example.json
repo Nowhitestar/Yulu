@@ -15,13 +15,15 @@
     }
   ],
   "audio": {
+    "backend": "daemon",
     "mic_device": ":0",
     "system_audio_device": ":1",
     "output_dir": "~/Downloads/meeting-recordings",
     "format": "wav",
     "silence_threshold": 0.01,
     "silence_duration_sec": 300,
-    "half_duplex": true
+    "half_duplex": true,
+    "note": "backend=daemon 使用原生 ScreenCaptureKit + AVFoundation，不需要 BlackHole；mic/system device 仅 SoX fallback 使用"
   },
   "transcription": {
     "mode": "local",

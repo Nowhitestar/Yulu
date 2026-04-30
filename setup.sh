@@ -62,13 +62,11 @@ install_deps() {
     local optional=()
 
     echo "  将安装以下软件包："
-    echo "    - blackhole-2ch  (虚拟音频设备)"
-    echo "    - sox            (音频处理)"
-    echo "    - switchaudio-osx(音频设备切换)"
-    echo "    - ffmpeg         (音频录制)"
-    echo "    - terminal-notifier (系统通知)"
+    echo "    - ffmpeg / sox       (音频检查与备用处理)"
+    echo "    - whisper-cpp        (本地转录 whisper-cli)"
+    echo "    - terminal-notifier  (系统通知)"
     echo "    - steipete/tap/gogcli (Google 日历 CLI)"
-    echo "    - cloudflared    (隧道服务)"
+    echo "    - cloudflared        (日历 webhook 隧道)"
     echo
 
     prompt "继续安装？[Y/n]"
@@ -78,8 +76,8 @@ install_deps() {
         return
     fi
 
-    brew install blackhole-2ch sox switchaudio-osx ffmpeg terminal-notifier 2>&1 | tail -1
-    ok "音频/通知工具安装完成"
+    brew install sox ffmpeg whisper-cpp terminal-notifier 2>&1 | tail -1
+    ok "音频/转录/通知工具安装完成"
 
     brew install steipete/tap/gogcli 2>&1 | tail -1
     ok "gog CLI 安装完成"
@@ -93,78 +91,18 @@ install_deps() {
 setup_audio() {
     header "音频配置"
 
-    echo "  Meeting Assistant 使用 BlackHole 虚拟音频设备来录制系统声音。"
-    echo "  你需要创建一个「多输出设备」，让扬声器同时输出到你的耳机和 BlackHole。"
+    echo "  Meeting Assistant 默认使用原生 macOS ScreenCaptureKit + AVFoundation。"
+    echo "  不需要 BlackHole、多输出设备或虚拟声卡。"
     echo
-    echo "  操作步骤："
-    echo "    1. 打开「音频 MIDI 设置」(应用程序 → 实用工具)"
-    echo "    2. 左下角 + → 创建多输出设备"
-    echo "    3. 勾选: ✅ BlackHole 2ch ✅ 你的扬声器/耳机"
-    echo "    4. 右键 → 将此设备用于声音输出"
+    echo "  首次使用 AudioDaemon.app 时，请授权："
+    echo "    - 麦克风"
+    echo "    - 屏幕与系统音频录制"
     echo
 
-    prompt "已经配置好多输出设备了？[y/N]"
-    read -r ans
-    if [[ ! "$ans" =~ ^[yY] ]]; then
-        warn "请先配置好多输出设备后再继续"
-        prompt "按回车继续..."
-        read -r
-    fi
+    MIC_DEVICE=":0"
+    SYS_DEVICE=":1"  # 仅 SoX fallback 使用；daemon 后端会忽略
 
-    echo
-    info "检测音频设备编号..."
-
-    # Detect devices via ffmpeg
-    local ffmpeg_list
-    ffmpeg_list=$(ffmpeg -f avfoundation -list_devices true -i "" 2>&1)
-
-    # Find microphone
-    local mic_idx=""
-    local blackhole_idx=""
-    while IFS= read -r line; do
-        if [[ "$line" =~ ^\[[0-9]+\] ]]; then
-            idx=$(echo "$line" | sed 's/^\[\([0-9]*\)\].*/\1/')
-            if echo "$line" | grep -qi "microphone"; then
-                mic_idx="$idx"
-            fi
-            if echo "$line" | grep -qi "blackhole"; then
-                blackhole_idx="$idx"
-            fi
-        fi
-    done <<< "$ffmpeg_list"
-
-    if [[ -n "$mic_idx" ]]; then
-        ok "麦克风设备: :$mic_idx"
-    else
-        warn "未检测到麦克风，将使用默认 :0"
-        mic_idx="0"
-    fi
-
-    if [[ -n "$blackhole_idx" ]]; then
-        ok "BlackHole 设备: :$blackhole_idx"
-    else
-        warn "未检测到 BlackHole，将使用默认 :1"
-        blackhole_idx="1"
-    fi
-
-    MIC_DEVICE=":$mic_idx"
-    SYS_DEVICE=":$blackhole_idx"
-
-    # Show current output device
-    echo
-    info "当前输出设备: $(SwitchAudioSource -c -t output 2>/dev/null || echo '未知')"
-    info "当前输入设备: $(SwitchAudioSource -c -t input 2>/dev/null || echo '未知')"
-
-    prompt "使用检测到的设备配置？[Y/n]"
-    read -r ans
-    if [[ "$ans" =~ ^[nN] ]]; then
-        prompt "请输入麦克风设备号 (如 :0):"
-        read -r MIC_DEVICE
-        prompt "请输入系统音频设备号 (如 :1):"
-        read -r SYS_DEVICE
-    fi
-
-    ok "音频配置: mic=$MIC_DEVICE system=$SYS_DEVICE"
+    ok "音频后端: daemon (ScreenCaptureKit 系统音频 + AVFoundation 麦克风)"
 }
 
 # ─── Step 3: Create config ───────────────────────────
@@ -195,6 +133,7 @@ create_config() {
     }
   ],
   "audio": {
+    "backend": "daemon",
     "mic_device": "$MIC_DEVICE",
     "system_audio_device": "$SYS_DEVICE",
     "output_dir": "$RECORDING_DIR",
@@ -292,8 +231,19 @@ compile_audio_daemon() {
 
     echo
     echo "  AudioDaemon 负责捕获系统音频和麦克风。"
-    echo "  首次使用需要授权：系统设置 → 隐私与安全性 → 屏幕与系统音频录制。"
+    echo "  首次使用需要授权：系统设置 → 隐私与安全性 → 屏幕与系统音频录制 / 麦克风。"
     echo "  如果系统弹出权限对话框，请点击「允许」。"
+
+    open "$SCRIPT_DIR/meeting-assistant/scripts/AudioDaemon.app"
+    sleep 4
+    local status
+    status=$(echo '{"action":"status"}' | nc -w 2 -U "$HOME/.config/meeting-assistant/audio_daemon.sock" 2>/dev/null || true)
+    if echo "$status" | grep -q '"sysReady":true' && echo "$status" | grep -q '"micReady":true'; then
+        ok "AudioDaemon 捕获权限正常"
+    else
+        warn "AudioDaemon 尚未 ready: $status"
+        warn "请在系统设置中授权 AudioDaemon.app，然后重新运行测试"
+    fi
 }
 
 # ─── Step 5: Google Calendar setup ───────────────────
@@ -422,6 +372,13 @@ install_launchagents() {
 
     local plist_dir="$SCRIPT_DIR/meeting-assistant/scripts"
 
+    # AudioDaemon (native system audio + mic capture)
+    if [[ -f "$plist_dir/com.meetingassistant.audiodaemon.plist" ]]; then
+        install_plist "$plist_dir/com.meetingassistant.audiodaemon.plist" "com.meetingassistant.audiodaemon.plist"
+        launchctl load "$LAUNCH_AGENTS_DIR/com.meetingassistant.audiodaemon.plist" 2>/dev/null || true
+        ok "audiodaemon 已加载"
+    fi
+
     # Scheduler
     if [[ -f "$plist_dir/com.meetingassistant.scheduler.plist" ]]; then
         install_plist "$plist_dir/com.meetingassistant.scheduler.plist" "com.meetingassistant.scheduler.plist"
@@ -475,7 +432,16 @@ run_tests() {
         warn "日历读取异常（如果未配置日历则正常）"
     fi
 
-    echo "  3/3 通知测试"
+    echo "  3/4 AudioDaemon 测试"
+    local audio_status
+    audio_status=$(echo '{"action":"status"}' | nc -w 2 -U "$HOME/.config/meeting-assistant/audio_daemon.sock" 2>/dev/null || true)
+    if echo "$audio_status" | grep -q '"sysReady":true' && echo "$audio_status" | grep -q '"micReady":true'; then
+        ok "AudioDaemon 运行正常"
+    else
+        warn "AudioDaemon 异常: $audio_status"
+    fi
+
+    echo "  4/4 通知测试"
     if command -v terminal-notifier &>/dev/null; then
         terminal-notifier -title "Meeting Assistant" -message "安装完成！" -sound default 2>/dev/null || true
         ok "通知测试通过"
