@@ -76,12 +76,6 @@ def log(msg):
     ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     line = f"[{ts}] {msg}"
     print(line, flush=True)
-    try:
-        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-        with LOG_PATH.open("a", encoding="utf-8") as f:
-            f.write(line + "\n")
-    except Exception:
-        pass
 
 
 def load_config():
@@ -223,7 +217,7 @@ def detect_meeting(cfg):
                         "signature": signature(app, "visible-app"),
                         "fallback": "visible_app",
                     }
-            # 也用窗口关键词匹配 visible app 名
+            # 也用窗口关键词匹配 visible app 名（仅当 app 名包含会议词汇才触发）
             for app in visible_apps:
                 if any(p.search(app) for p in ignore_patterns):
                     continue
