@@ -1,342 +1,244 @@
 #!/usr/bin/env python3
 """
-录制会议音频（麦克风 + 扬声器），支持静默检测自动停止。
+音频录制控制器 — 支持两种后端：
+  - daemon: ScreenCaptureKit 原生捕获（macOS 12.3+，推荐）
+  - sox: BlackHole + SoX 传统方案
 
-依赖：
-- ffmpeg
-- macOS: BlackHole 虚拟音频设备
-
-安装 BlackHole:
-  brew install blackhole-2ch
-
-用法：
-  record_audio.py start <title>     # 开始录制
-  record_audio.py stop              # 停止录制
-  record_audio.py monitor <title> <audio_path>  # 后台静默检测
+用法和原来一样：
+  record_audio.py start "会议标题"
+  record_audio.py stop
+  record_audio.py status
 """
 
 import json
 import os
-import signal
+import socket
 import struct
 import subprocess
 import sys
-import tempfile
-import threading
 import time
-import wave
 from datetime import datetime
 from pathlib import Path
 
-CONFIG_PATH = Path.home() / ".config" / "meeting-assistant" / "config.json"
-PID_FILE = Path.home() / ".config" / "meeting-assistant" / ".recording_pid"
-MONITOR_PID_FILE = Path.home() / ".config" / "meeting-assistant" / ".monitor_pid"
-SCRIPT_DIR = Path(__file__).parent
+CONFIG_DIR = Path.home() / ".config" / "meeting-assistant"
+CONFIG_PATH = CONFIG_DIR / "config.json"
+SOCKET_PATH = CONFIG_DIR / "audio_daemon.sock"
+STATE_PATH = CONFIG_DIR / ".state.json"
+SCRIPT_DIR = Path(__file__).resolve().parent
 
-# 静默检测阈值（振幅归一化 0.0-1.0）
-SILENCE_THRESHOLD = 0.01
-# 连续静默多少秒后触发自动停止询问
-SILENCE_DURATION_SEC = 300  # 5分钟
-# 检测间隔（秒）
-CHECK_INTERVAL = 10
+
+def log(msg):
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    print(f"[{ts}] {msg}", flush=True)
 
 
 def load_config():
-    if not CONFIG_PATH.exists():
-        print(f"Config not found at {CONFIG_PATH}", file=sys.stderr)
-        sys.exit(1)
-    with open(CONFIG_PATH) as f:
-        return json.load(f)
+    cfg = {}
+    if CONFIG_PATH.exists():
+        try:
+            cfg = json.loads(CONFIG_PATH.read_text())
+        except Exception:
+            pass
+    audio_cfg = cfg.get("audio", {})
+    audio_cfg.setdefault("mic_device", ":0")
+    audio_cfg.setdefault("system_audio_device", ":1")
+    audio_cfg.setdefault("output_dir", str(Path.home() / "Downloads/meeting-recordings"))
+    audio_cfg.setdefault("silence_threshold", 0.01)
+    audio_cfg.setdefault("silence_duration_sec", 300)
+    audio_cfg.setdefault("backend", "daemon")  # "daemon" or "sox"
+    return audio_cfg
 
 
-def start_recording(meeting_title="meeting"):
-    """开始录制音频。
-    
-    双路 SoX 分别录 BlackHole（扬声器）和麦克风。
-    - 需配置多输出设备（BlackHole + 扬声器/耳机）为默认输出
-    - 戴耳机时无回声，音质最佳
-    - 用扬声器时麦克风会拾取环境音，合并时噪音门过滤
-    """
-    config = load_config()
-    audio_config = config.get("audio", {})
-    output_dir = Path(audio_config.get("output_dir", "~/Downloads/meeting-recordings")).expanduser()
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    safe_title = "".join(c if c.isalnum() or c in "-_ " else "_" for c in meeting_title)
-    output_file = output_dir / f"{safe_title}_{timestamp}.wav"
-    mic_file = output_dir / f"{safe_title}_{timestamp}.mic.wav"
-    sys_file = output_dir / f"{safe_title}_{timestamp}.sys.wav"
-
-    def _start_sox(device, out_path):
-        """切到指定输入设备后启动 SoX。"""
-        subprocess.run(
-            ["SwitchAudioSource", "-s", device, "-t", "input"],
-            capture_output=True, timeout=5,
-        )
-        time.sleep(0.3)
-        return subprocess.Popen(
-            ["rec", "-q", "-b", "16", "-c", "1", "-r", "48000",
-             str(out_path), "trim", "0", "24:00:00"],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        )
-
-    # 先启动系统音频（BlackHole），SoX 打开设备后切走不影响
-    print(f"🔊 系统音频: {sys_file}")
-    sys_proc = _start_sox("BlackHole 2ch", sys_file)
-    time.sleep(0.5)
-
-    # 再启动麦克风
-    print(f"🎙️ 麦克风: {mic_file}")
-    mic_proc = _start_sox("MacBook Pro麦克风", mic_file)
-
-    with open(PID_FILE, "w") as f:
-        json.dump({
-            "mic_pid": mic_proc.pid,
-            "sys_pid": sys_proc.pid,
-            "mic_file": str(mic_file),
-            "sys_file": str(sys_file),
-            "output_file": str(output_file),
-            "title": meeting_title,
-        }, f)
-
-    print(f"✅ 录制中（mic_pid={mic_proc.pid}, sys_pid={sys_proc.pid})")
-    print(f"Output: {output_file}")
-    return sys_proc, str(output_file)
-
-
-def _wav_duration_sec(path):
-    """读取 wav 时长；失败时返回 0。"""
+def socket_send(cmd):
+    """发送命令到 audio_daemon Unix socket。"""
+    if not SOCKET_PATH.exists():
+        return None
     try:
-        with wave.open(str(path), "rb") as w:
-            return w.getnframes() / float(w.getframerate() or 1)
-    except Exception:
-        return 0
-
-
-def _processing_timeout(duration_sec):
-    """长会议处理 timeout：至少 10 分钟，随录音时长增加。"""
-    return max(600, int(duration_sec * 0.15) + 120)
-
-
-def stop_recording():
-    """停止录制，回声消除，合并输出。"""
-    if not PID_FILE.exists():
-        print("No active recording found.", file=sys.stderr)
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        sock.settimeout(5)
+        sock.connect(str(SOCKET_PATH))
+        sock.sendall(json.dumps(cmd).encode())
+        sock.shutdown(socket.SHUT_WR)
+        data = b""
+        while True:
+            chunk = sock.recv(4096)
+            if not chunk:
+                break
+            data += chunk
+        sock.close()
+        return json.loads(data.decode()) if data else None
+    except Exception as e:
+        log(f"Socket error: {e}")
         return None
 
-    with open(PID_FILE) as f:
-        info = json.load(f)
 
-    def _kill(pid):
-        try:
-            os.kill(pid, signal.SIGTERM)
-            time.sleep(1)
-            try:
-                os.kill(pid, 0)
-                time.sleep(0.5)
-                os.kill(pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-        except ProcessLookupError:
-            pass
+# ─── 后端: audio_daemon ──────────────────────────────
 
-    output_file = info.get("output_file", info.get("file"))
+def daemon_start(title):
+    cfg = load_config()
+    resp = socket_send({"action": "start", "title": title})
+    if resp and resp.get("status") == "recording":
+        log(f"🎙 Recording started: {resp.get('file')}")
+        return True
+    log(f"❌ Start failed: {resp}")
+    return False
 
-    # 双路 SoX 模式（mic + BlackHole）
-    if "mic_pid" in info:
-        _kill(info["mic_pid"])
-        _kill(info["sys_pid"])
-        mic_file = Path(info["mic_file"])
-        sys_file = Path(info["sys_file"])
-        out_file = Path(output_file)
 
-        time.sleep(1)  # 等 SoX 写盘
-
-        if mic_file.exists() and mic_file.stat().st_size > 0 and sys_file.exists():
-            duration_sec = max(_wav_duration_sec(mic_file), _wav_duration_sec(sys_file))
-            timeout_sec = _processing_timeout(duration_sec)
-
-            # 回声消除/半双工混合：用 sys 判断何时保留 mic
-            clean_file = out_file.with_suffix(".mic_clean.wav")
-            ec_script = Path(__file__).parent / "echo_cancel.py"
-            if ec_script.exists():
-                print(f"🔊 回声消除中...")
-                ec_result = subprocess.run([
-                    sys.executable, str(ec_script),
-                    str(sys_file), str(mic_file), str(clean_file),
-                ], capture_output=True, text=True, timeout=timeout_sec)
-                if ec_result.returncode != 0:
-                    print(f"❌ 回声消除失败:\n{ec_result.stderr}", file=sys.stderr)
-                    clean_file = mic_file  # 退回到原始麦克风
-                else:
-                    print(ec_result.stdout.strip())
-            else:
-                clean_file = mic_file  # 无 AEC 脚本，直接使用原始 mic
-
-            # 合并: 半双工切换后的音频（echo_cancel 已做音量归一化）
-            if clean_file.exists() and clean_file.stat().st_size > 0:
-                print(f"🔄 重采样到 16kHz: {out_file.name}")
-                subprocess.run([
-                    "ffmpeg", "-y",
-                    "-i", str(clean_file),
-                    "-ar", "16000", "-ac", "1",
-                    str(out_file),
-                ], capture_output=True, timeout=timeout_sec)
-
-            # 清理临时文件（保留原始 mic/sys 的 .wav 父目录清理）
-            for f in [mic_file, sys_file]:
-                if f.exists():
-                    f.unlink(missing_ok=True)
-            if clean_file != mic_file and clean_file.exists():
-                clean_file.unlink(missing_ok=True)
-        else:
-            # 单个文件直接当输出
-            existing = [f for f in [mic_file, sys_file] if f.exists() and f.stat().st_size > 0]
-            if existing:
-                subprocess.run([
-                    "ffmpeg", "-y", "-i", str(existing[0]),
-                    "-ar", "16000", "-ac", "1", str(out_file),
-                ], capture_output=True, timeout=_processing_timeout(_wav_duration_sec(existing[0])))
-            else:
-                print("❌ 录音文件为空", file=sys.stderr)
-                PID_FILE.unlink(missing_ok=True)
-                return None
-    else:
-        # 单路模式
-        _kill(info.get("pid", 0))
-        if output_file and Path(output_file).exists():
-            print(f"Recording saved: {output_file}")
-
-    PID_FILE.unlink(missing_ok=True)
-
-    # 也停止 monitor
-    if MONITOR_PID_FILE.exists():
-        with open(MONITOR_PID_FILE) as f:
-            mon_info = json.load(f)
-        try:
-            os.kill(mon_info["pid"], signal.SIGTERM)
-        except ProcessLookupError:
-            pass
-
-    if output_file and Path(output_file).exists() and Path(output_file).stat().st_size > 0:
-        print(f"Recording saved: {output_file}")
-        return output_file
+def daemon_stop():
+    resp = socket_send({"action": "stop"})
+    if resp and resp.get("status") == "stopped":
+        dur = resp.get("duration", 0)
+        path = resp.get("file", "")
+        log(f"⏹ Recording stopped: {dur}s → {path}")
+        return {"path": path, "duration": dur}
+    log(f"❌ Stop failed: {resp}")
     return None
 
 
-# ───────────────────────────────────────────────
-# 静默检测
-# ───────────────────────────────────────────────
-
-def get_audio_level(audio_path, duration_sec=1):
-    """获取最近 N 秒音频的平均音量电平（0.0-1.0）。"""
-    try:
-        # 使用 ffmpeg 获取音频统计信息
-        cmd = [
-            "ffmpeg",
-            "-i", str(audio_path),
-            "-af", f"atrim=end={duration_sec},volumedetect",
-            "-f", "null",
-            "-",
-        ]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
-        
-        # 解析 volumedetect 输出中的 mean_volume
-        for line in result.stderr.split("\n"):
-            if "mean_volume:" in line:
-                # 格式: mean_volume: -20.5 dB
-                db_str = line.split(":")[1].strip().split()[0]
-                db = float(db_str)
-                # 转换 dB 到 0-1 范围（-60dB = 0, 0dB = 1）
-                level = min(1.0, max(0.0, (db + 60) / 60))
-                return level
-        return 0.0
-    except Exception:
-        return 0.0
+def daemon_status():
+    resp = socket_send({"action": "status"})
+    return resp or {"recording": False}
 
 
-def monitor_silence(title, audio_path):
-    """后台静默检测进程。"""
-    audio_path = Path(audio_path)
-    
-    # 保存 monitor PID
-    with open(MONITOR_PID_FILE, "w") as f:
-        json.dump({"pid": os.getpid()}, f)
+def daemon_ensure_running():
+    """如果 daemon 没在运行，尝试启动它。"""
+    resp = socket_send({"action": "status"})
+    if resp is not None:
+        return True
 
-    silence_start = None
-    print(f"🔍 开始静默检测: {title}")
-
-    while True:
-        time.sleep(CHECK_INTERVAL)
-
-        # 检查录制是否还在进行
-        if not PID_FILE.exists():
-            print("录制已停止，退出检测")
+    # 查找已安装的 AudioDaemon.app
+    app_paths = [
+        SCRIPT_DIR / "AudioDaemon.app",
+        Path.home() / "Applications" / "Meeting Assistant.app",
+        Path("/Applications/Meeting Assistant.app"),
+    ]
+    for app in app_paths:
+        binary = app / "Contents/MacOS/audio_daemon"
+        if binary.exists():
+            log("🚀 启动 AudioDaemon...")
+            subprocess.Popen(["open", str(app)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            time.sleep(3)
+            resp = socket_send({"action": "status"})
+            if resp is not None:
+                log("✅ AudioDaemon 已启动")
+                return True
             break
 
-        # 检查音频文件是否存在且有内容
-        if not audio_path.exists() or audio_path.stat().st_size < 1024:
-            continue
-
-        # 获取音量电平
-        level = get_audio_level(audio_path)
-        print(f"  音量电平: {level:.4f}")
-
-        if level < SILENCE_THRESHOLD:
-            if silence_start is None:
-                silence_start = time.time()
-                print(f"  开始检测静默...")
-            else:
-                elapsed = time.time() - silence_start
-                print(f"  已静默 {elapsed:.0f}s")
-                if elapsed >= SILENCE_DURATION_SEC:
-                    print("  ⚠️ 静默超过阈值，触发自动停止询问")
-                    _trigger_auto_stop(title)
-                    break
-        else:
-            if silence_start is not None:
-                print(f"  检测到声音，重置静默计时")
-            silence_start = None
+    log("⚠️ AudioDaemon 未运行")
+    return False
 
 
-def _trigger_auto_stop(title):
-    """触发自动停止询问。"""
-    daemon = SCRIPT_DIR / "meeting_daemon.py"
-    subprocess.Popen([
-        sys.executable, str(daemon), "auto_stop",
-    ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+# ─── 后端: SoX + BlackHole ──────────────────────────
+
+def sox_start(title):
+    """SoX 双路录制（向后兼容）。"""
+    cfg = load_config()
+    output_dir = Path(cfg["output_dir"]).expanduser()
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    safe = title.replace("/", "_").replace(" ", "_")
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    output = output_dir / f"{safe}_{timestamp}.wav"
+
+    state = {
+        "recording": True,
+        "title": title,
+        "file_path": str(output),
+        "started_at": datetime.now().isoformat(),
+    }
+    STATE_PATH.write_text(json.dumps(state, indent=2))
+
+    listen_cmd = [
+        "sox", "-q",
+        "-t", "coreaudio", cfg["system_audio_device"],
+        "-t", "coreaudio", cfg["mic_device"],
+        "-t", "wav", str(output),
+        "remix", "1,2",
+        "gain", "-3",
+    ]
+
+    log(f"🎙 录制中: {output}")
+    log(f"   后端: SoX (mic={cfg['mic_device']}, sys={cfg['system_audio_device']})")
+
+    proc = subprocess.Popen(
+        listen_cmd,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    (CONFIG_DIR / ".recording_pid").write_text(str(proc.pid))
+    return True
 
 
-# ───────────────────────────────────────────────
-# 主入口
-# ───────────────────────────────────────────────
+def sox_stop():
+    pid_path = CONFIG_DIR / ".recording_pid"
+    if pid_path.exists():
+        try:
+            pid = int(pid_path.read_text().strip())
+            os.kill(pid, 15)
+            time.sleep(0.5)
+            pid_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+    state = {"recording": False, "title": "", "file_path": ""}
+    STATE_PATH.write_text(json.dumps(state, indent=2))
+
+    log("⏹ 录制已停止")
+    return {"path": "", "duration": 0}
+
+
+def sox_status():
+    state = {"recording": False, "title": ""}
+    if STATE_PATH.exists():
+        try:
+            state = json.loads(STATE_PATH.read_text())
+        except Exception:
+            pass
+    if (CONFIG_DIR / ".recording_pid").exists():
+        state["recording"] = True
+    return state
+
+
+# ─── 主入口 ──────────────────────────────────────────
 
 def main():
     if len(sys.argv) < 2:
-        print("""Usage: record_audio.py <command> [args]
-
-Commands:
-  start <title>              开始录制
-  stop                       停止录制
-  monitor <title> <path>     后台静默检测
-""")
+        print(f"用法: {sys.argv[0]} <start|stop|status> [标题]")
         sys.exit(1)
 
-    action = sys.argv[1]
-    if action == "start":
-        title = sys.argv[2] if len(sys.argv) > 2 else "meeting"
-        start_recording(title)
-    elif action == "stop":
-        stop_recording()
-    elif action == "monitor":
-        if len(sys.argv) < 4:
-            print("Usage: record_audio.py monitor <title> <audio_path>", file=sys.stderr)
-            sys.exit(1)
-        monitor_silence(sys.argv[2], sys.argv[3])
+    cmd = sys.argv[1]
+    cfg = load_config()
+    backend = cfg.get("backend", "daemon")
+
+    if backend == "daemon":
+        if cmd == "start":
+            title = sys.argv[2] if len(sys.argv) > 2 else "未命名会议"
+            if daemon_ensure_running():
+                daemon_start(title)
+            else:
+                log("⚠️ AudioDaemon 未运行，切换到 SoX 后端")
+                sox_start(title)
+        elif cmd == "stop":
+            result = daemon_stop()
+            if not result:
+                sox_stop()
+        elif cmd == "status":
+            result = daemon_status()
+            print(json.dumps(result, indent=2, ensure_ascii=False))
+        else:
+            print(f"未知命令: {cmd}")
     else:
-        print(f"Unknown action: {action}", file=sys.stderr)
-        sys.exit(1)
+        if cmd == "start":
+            title = sys.argv[2] if len(sys.argv) > 2 else "未命名会议"
+            sox_start(title)
+        elif cmd == "stop":
+            sox_stop()
+        elif cmd == "status":
+            result = sox_status()
+            print(json.dumps(result, indent=2, ensure_ascii=False))
+        else:
+            print(f"未知命令: {cmd}")
 
 
 if __name__ == "__main__":
