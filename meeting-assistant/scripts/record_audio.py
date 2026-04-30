@@ -42,7 +42,7 @@ def load_config():
     audio_cfg = cfg.get("audio", {})
     audio_cfg.setdefault("mic_device", ":0")
     audio_cfg.setdefault("system_audio_device", ":1")
-    audio_cfg.setdefault("output_dir", str(Path.home() / "Downloads/meeting-recordings"))
+    audio_cfg.setdefault("output_dir", str(SCRIPT_DIR.parent.parent / "meeting-recordings"))
     audio_cfg.setdefault("silence_threshold", 0.01)
     audio_cfg.setdefault("silence_duration_sec", 300)
     audio_cfg.setdefault("backend", "daemon")  # "daemon" or "sox"

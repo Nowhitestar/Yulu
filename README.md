@@ -90,7 +90,7 @@ Google Calendar / Window Detector
 
 - Socket：`~/.config/meeting-assistant/audio_daemon.sock`
 - 支持 action：`start` / `stop` / `status` / `windows`
-- 输出：`~/Downloads/meeting-recordings/*.wav`
+- 输出：`<repo>/meeting-recordings/*.wav`
 - WAV：16-bit stereo 48kHz
 - 系统音频：ScreenCaptureKit Float32 planar → interleaved stereo Int16
 - 麦克风：AVAudioEngine Float32 mono → stereo mix
@@ -129,7 +129,7 @@ MEETING_ASSISTANT_CODESIGN_IDENTITY="Developer ID Application: ..." \
 {
   "audio": {
     "backend": "daemon",
-    "output_dir": "~/Downloads/meeting-recordings",
+    "output_dir": "/path/to/meeting-assistant/meeting-recordings",
     "silence_threshold": 0.01,
     "silence_duration_sec": 300,
     "half_duplex": true
@@ -170,7 +170,7 @@ record_audio.py stop
 meeting_daemon.py ask_record "测试会议" "manual-test"
 
 # 转录某个 WAV
-transcribe.py ~/Downloads/meeting-recordings/xxx.wav
+transcribe.py /path/to/meeting-assistant/meeting-recordings/xxx.wav
 
 # 日历
 check_meetings.py today

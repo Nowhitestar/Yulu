@@ -22,3 +22,6 @@ meeting-assistant/scripts/recorder_status
 .idea/
 .vscode/
 *.swp
+
+# Local recordings
+meeting-recordings/

@@ -8,7 +8,7 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONFIG_DIR="$HOME/.config/meeting-assistant"
 GCP_DIR="$HOME/.config/gcp"
-RECORDING_DIR="$HOME/Downloads/meeting-recordings"
+RECORDING_DIR="$SCRIPT_DIR/meeting-recordings"
 LAUNCH_AGENTS_DIR="$HOME/Library/LaunchAgents"
 PYTHON_BIN="/opt/homebrew/bin/python3"
 

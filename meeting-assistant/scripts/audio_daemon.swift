@@ -16,7 +16,6 @@ let CONFIG_DIR = HOME.appendingPathComponent(".config/meeting-assistant")
 let SOCKET_PATH = CONFIG_DIR.appendingPathComponent("audio_daemon.sock")
 let STATE_PATH = CONFIG_DIR.appendingPathComponent(".state.json")
 let PID_PATH = CONFIG_DIR.appendingPathComponent(".audio_daemon.pid")
-let RECORDING_DIR = HOME.appendingPathComponent("Downloads/meeting-recordings")
 let LOG_PATH = CONFIG_DIR.appendingPathComponent("audio_daemon.log")
 let SILENCE_THRESHOLD: Float = 0.01
 let SYS_ACTIVE_THRESHOLD: Float = 0.001  // 系统音频常偏低，半双工判断不能用自动静音阈值
@@ -29,6 +28,32 @@ var SYS_ERROR = ""
 var MIC_READY = false
 var MIC_ERROR = ""
 var SYS_FORMAT_LOGGED = false
+
+func defaultRecordingDir() -> URL {
+    // AudioDaemon.app lives at <repo>/meeting-assistant/scripts/AudioDaemon.app.
+    // Store recordings at <repo>/meeting-recordings by default.
+    let app = Bundle.main.bundleURL
+    let repo = app
+        .deletingLastPathComponent() // scripts
+        .deletingLastPathComponent() // nested meeting-assistant
+        .deletingLastPathComponent() // repo root
+    return repo.appendingPathComponent("meeting-recordings")
+}
+
+func loadRecordingDir() -> URL {
+    let configPath = CONFIG_DIR.appendingPathComponent("config.json")
+    guard let data = try? Data(contentsOf: configPath),
+          let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+          let audio = json["audio"] as? [String: Any],
+          let raw = audio["output_dir"] as? String,
+          !raw.isEmpty else {
+        return defaultRecordingDir()
+    }
+    let path = raw.hasPrefix("~/") ? HOME.appendingPathComponent(String(raw.dropFirst(2))).path : raw
+    return URL(fileURLWithPath: path)
+}
+
+let RECORDING_DIR = loadRecordingDir()
 
 var logFile: FileHandle?
 func log(_ msg: String) {
