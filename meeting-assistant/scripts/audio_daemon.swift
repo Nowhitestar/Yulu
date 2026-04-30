@@ -1,20 +1,15 @@
-// audio_daemon.swift — ScreenCaptureKit 音频捕获守护进程
-// 无需 BlackHole，macOS 原生录制系统音频 + 麦克风。
+// audio_daemon.swift — ScreenCaptureKit 系统音频 + 麦克风 + 半双工混音
+// 替代 BlackHole + SoX 的方案。
 //
 // 编译:
 //   swiftc -o audio_daemon audio_daemon.swift \
 //     -framework Cocoa -framework ScreenCaptureKit \
 //     -framework AVFoundation -framework CoreMedia -framework CoreAudio
-//
-// 运行:
-//   首次运行需授权 Screen Recording 权限
-//   作为 LaunchAgent (LSUIElement) 常驻
 
 import Cocoa
 import ScreenCaptureKit
 import AVFoundation
-
-// ─── 配置常量 ──────────────────────────────────────
+import CoreMedia
 
 let HOME = FileManager.default.homeDirectoryForCurrentUser
 let CONFIG_DIR = HOME.appendingPathComponent(".config/meeting-assistant")
@@ -22,132 +17,86 @@ let SOCKET_PATH = CONFIG_DIR.appendingPathComponent("audio_daemon.sock")
 let STATE_PATH = CONFIG_DIR.appendingPathComponent(".state.json")
 let PID_PATH = CONFIG_DIR.appendingPathComponent(".audio_daemon.pid")
 let RECORDING_DIR = HOME.appendingPathComponent("Downloads/meeting-recordings")
-
-let SAMPLE_RATE = 48000.0
-var CHANNELS: UInt32 = 1
 let LOG_PATH = CONFIG_DIR.appendingPathComponent("audio_daemon.log")
-var BITS_PER_SAMPLE: UInt16 = 16
 let SILENCE_THRESHOLD: Float = 0.01
-let FADE_SAMPLES = Int(0.5 * SAMPLE_RATE)  // 500ms 淡化
-let DEFAULT_SILENCE_SEC: TimeInterval = 300  // 5min
-
-// ─── 日志 ───────────────────────────────────────────
+let DEFAULT_SILENCE_SEC: TimeInterval = 300
+let FADE_FRAMES = Int(0.5 * 48000)
+let SAMPLE_RATE: UInt32 = 48000
 
 var logFile: FileHandle?
 func log(_ msg: String) {
-    let df = DateFormatter()
-    df.dateFormat = "yyyy-MM-dd HH:mm:ss"
-    let ts = df.string(from: Date())
-    let line = "[\(ts)] \(msg)"
-    print(line)
-    fflush(stdout)
-    if let fh = logFile {
-        fh.write((line + "\n").data(using: .utf8)!)
-    }
+    let df = DateFormatter(); df.dateFormat = "yyyy-MM-dd HH:mm:ss"
+    let line = "[\(df.string(from: Date()))] \(msg)"
+    print(line); fflush(stdout)
+    logFile?.write(Data((line + "\n").utf8))
 }
 
-// ─── WAV 写入器 ─────────────────────────────────────
+// ─── WAV 写入器 ───────────────────────────────────────
 
 class WavWriter {
     let url: URL
-    let fh: FileHandle
-    var totalSamples: UInt32 = 0
+    var audioData = Data()
 
     init?(url: URL) {
         self.url = url
-        FileManager.default.createFile(atPath: url.path, contents: Data(count: 44))
-        guard let f = FileHandle(forWritingAtPath: url.path) else { return nil }
-        fh = f
     }
 
-    func append(_ samples: [Int16]) {
-        totalSamples += UInt32(samples.count)
-        samples.withUnsafeBytes { fh.write(Data($0)) }
-    }
+    func append(_ data: Data) { audioData.append(data) }
 
     func finalize() {
-        // Read the actual file size to compute data size
-        let fileEnd = fh.seekToEndOfFile()
-        let dataSize = fileEnd - 44
-        
-        fh.seek(toFileOffset: 0)
-        var riffSize = UInt32(fileEnd - 8)
-        var audioFormat: UInt16 = 1  // PCM
-        var numChannels: UInt16 = 2  // ScreenCaptureKit stereo
-        var sampleRate: UInt32 = 48000
-        var byteRate: UInt32 = 48000 * 2 * 2  // rate * channels * bytesPerSample
-        var blockAlign: UInt16 = 4           // channels * bytesPerSample
-        var bitsPerSample: UInt16 = 16
-        var subChunk1Size: UInt32 = 16
-        var dataSize32 = UInt32(dataSize)
-
-        var header = Data()
-        header.append("RIFF".data(using: .ascii)!)
-        Swift.withUnsafeBytes(of: &riffSize) { header.append(Data($0)) }
-        header.append("WAVE".data(using: .ascii)!)
-        header.append("fmt ".data(using: .ascii)!)
-        Swift.withUnsafeBytes(of: &subChunk1Size) { header.append(Data($0)) }
-        Swift.withUnsafeBytes(of: &audioFormat) { header.append(Data($0)) }
-        Swift.withUnsafeBytes(of: &numChannels) { header.append(Data($0)) }
-        Swift.withUnsafeBytes(of: &sampleRate) { header.append(Data($0)) }
-        Swift.withUnsafeBytes(of: &byteRate) { header.append(Data($0)) }
-        Swift.withUnsafeBytes(of: &blockAlign) { header.append(Data($0)) }
-        Swift.withUnsafeBytes(of: &bitsPerSample) { header.append(Data($0)) }
-        header.append("data".data(using: .ascii)!)
-        Swift.withUnsafeBytes(of: &dataSize32) { header.append(Data($0)) }
-
-        fh.write(header)
-        try? fh.close()
+        let audioSize = UInt32(audioData.count)
+        let fileSize = audioSize + 44 - 8
+        var h = Data()
+        h.append(contentsOf: [0x52,0x49,0x46,0x46] as [UInt8])
+        var v32 = fileSize.littleEndian
+        withUnsafeBytes(of: &v32) { h.append(Data($0)) }
+        h.append(contentsOf: [0x57,0x41,0x56,0x45] as [UInt8])
+        h.append(contentsOf: [0x66,0x6D,0x74,0x20] as [UInt8])
+        v32 = UInt32(16).littleEndian
+        withUnsafeBytes(of: &v32) { h.append(Data($0)) }
+        var v16 = UInt16(1).littleEndian
+        withUnsafeBytes(of: &v16) { h.append(Data($0)) }
+        v16 = UInt16(2).littleEndian
+        withUnsafeBytes(of: &v16) { h.append(Data($0)) }
+        v32 = UInt32(48000).littleEndian
+        withUnsafeBytes(of: &v32) { h.append(Data($0)) }
+        v32 = UInt32(48000*2*2).littleEndian
+        withUnsafeBytes(of: &v32) { h.append(Data($0)) }
+        v16 = UInt16(4).littleEndian
+        withUnsafeBytes(of: &v16) { h.append(Data($0)) }
+        v16 = UInt16(16).littleEndian
+        withUnsafeBytes(of: &v16) { h.append(Data($0)) }
+        h.append(contentsOf: [0x64,0x61,0x74,0x61] as [UInt8])
+        v32 = audioSize.littleEndian
+        withUnsafeBytes(of: &v32) { h.append(Data($0)) }
+        h.append(audioData)
+        try? h.write(to: url)
     }
 }
 
-// ─── 音量归一化 ───────────────────────────────────
-
 func normalizeToDBFS(_ samples: [Int16], targetDB: Float = -20) -> [Int16] {
-    let floats = samples.map { Float($0) / Float(Int16.max) }
-    let rms = sqrt(floats.map { $0 * $0 }.reduce(0, +) / Float(floats.count))
+    guard !samples.isEmpty else { return samples }
+    var sum: Float = 0; let m = Float(Int(Int16.max) * Int(Int16.max))
+    for s in samples { sum += Float(s) * Float(s) / m }
+    let rms = sqrt(sum / Float(samples.count))
     guard rms > 0.0001 else { return samples }
     let gain = pow(10.0, targetDB / 20.0) / rms
     let clamped = min(max(gain, 0.1), 10.0)
-    return floats.map { Int16(max(-1.0, min(1.0, $0 * clamped)) * Float(Int16.max)) }
+    return samples.map { Int16(max(-1.0, min(1.0, Float($0) / Float(Int16.max) * clamped)) * Float(Int16.max)) }
 }
 
-// ─── 半双工混音 ───────────────────────────────────
-
-func halfDuplexMix(sysA: [Int16], micA: [Int16]) -> [Int16] {
-    let n = min(sysA.count, micA.count)
-    var out = [Int16](repeating: 0, count: n)
-
-    let sysSq = sysA.prefix(n).map { Float($0) * Float($0) / Float(Int(Int16.max) * Int(Int16.max)) }
-        let sysRMS = sqrt(sysSq.reduce(0, +) / Float(n))
-    let micSq = micA.prefix(n).map { Float($0) * Float($0) / Float(Int(Int16.max) * Int(Int16.max)) }
-        let micRMS = sqrt(micSq.reduce(0, +) / Float(n))
-
-    if sysRMS > SILENCE_THRESHOLD {
-        out = Array(sysA.prefix(n))
-    } else if micRMS > SILENCE_THRESHOLD {
-        out = Array(micA.prefix(n))
-    }
-    // 都不满阈值则为静音（保持 out 全零）
-    return out
-}
-
-// ─── 状态管理 ─────────────────────────────────────
+// ─── 状态管理 ──────────────────────────────────────────
 
 func writeState(recording: Bool, title: String = "", path: String = "") {
     let df = ISO8601DateFormatter()
-    let dict: [String: Any] = [
-        "recording": recording,
-        "title": title,
-        "file_path": path,
-        "updated_at": df.string(from: Date()),
-    ]
-    if let data = try? JSONSerialization.data(withJSONObject: dict, options: .prettyPrinted) {
+    let d: [String: Any] = ["recording": recording, "title": title, "file_path": path,
+                             "updated_at": df.string(from: Date())]
+    if let data = try? JSONSerialization.data(withJSONObject: d, options: .prettyPrinted) {
         try? data.write(to: STATE_PATH)
     }
 }
 
-// ─── 音频数据管理器 ───────────────────────────────
+// ─── 音频数据管理器 + 半双工混音 ───────────────────────
 
 class AudioRecorder {
     var writer: WavWriter?
@@ -155,39 +104,27 @@ class AudioRecorder {
     var startTime: Date?
     var lastAudioTime: Date?
     var silenceTask: DispatchWorkItem?
-    var silenceSeconds: TimeInterval = DEFAULT_SILENCE_SEC
+    var silenceSeconds = DEFAULT_SILENCE_SEC
     var onStopRequest: (() -> Void)?
-
-    // 系统音频和麦克风数据的环形缓冲区（用于同步）
-    var sysBuffer: [Int16] = []
-    var micBuffer: [Int16] = []
     let mixQueue = DispatchQueue(label: "mix")
-    let writeQueue = DispatchQueue(label: "write")
+
+    // 逐帧混音状态（与 echo_cancel.py 一致）
+    let frameSize = Int(SAMPLE_RATE * 30 / 1000) * 2  // 30ms 立体声 samples
+    var sysFrames: [(active: Bool, samples: [Int16])] = []
+    var micFrames: [(active: Bool, samples: [Int16])] = []
+    var fadePos: Float = 0  // 0..1, 从系统向麦克风的交叉淡化进度
 
     func start(title: String) -> String? {
-        let df = DateFormatter()
-        df.dateFormat = "yyyyMMdd_HHmmss"
-        let dateStr = df.string(from: Date())
-        let safeTitle = title.components(separatedBy: CharacterSet.alphanumerics.inverted).joined()
-        let filename = "\(safeTitle)_\(dateStr).wav"
-        let url = RECORDING_DIR.appendingPathComponent(filename)
-
+        let df = DateFormatter(); df.dateFormat = "yyyyMMdd_HHmmss"
+        let fn = "\(title.components(separatedBy: .alphanumerics.inverted).joined())_\(df.string(from: Date())).wav"
+        let url = RECORDING_DIR.appendingPathComponent(fn)
         try? FileManager.default.createDirectory(at: RECORDING_DIR, withIntermediateDirectories: true)
         guard let w = WavWriter(url: url) else { return nil }
-
-        writer = w
-        isRecording = true
-        startTime = Date()
-        lastAudioTime = Date()
-        sysBuffer = []
-        micBuffer = []
-
+        writer = w; isRecording = true; startTime = Date(); lastAudioTime = Date()
+        sysFrames = []; micFrames = []; fadePos = 0
         writeState(recording: true, title: title, path: url.path)
-        log("🎙 Recording: \(filename)")
-
-        // 静默检测
+        log("🎙 \(fn)")
         startSilenceMonitor()
-
         return url.path
     }
 
@@ -196,15 +133,93 @@ class AudioRecorder {
         isRecording = false
         silenceTask?.cancel()
         let dur = startTime.map { Int(Date().timeIntervalSince($0)) } ?? 0
-        let path = writer?.url.path
-
-        try? FileManager.default.removeItem(at: SOCKET_PATH)
-        writer?.finalize()
-        writer = nil
+        // 刷新剩余帧
+        drainFrames()
+        let p = writer?.url.path
+        writer?.finalize(); writer = nil
         writeState(recording: false)
+        log("⏹ \(dur)s")
+        return (p, dur)
+    }
 
-        log("⏹ Stopped: \(dur)s")
-        return (path, dur)
+    /// 收到系统音频帧（stereo Int16）
+    func onSysAudio(_ samples: [Int16]) {
+        guard isRecording else { return }
+        var sum: Float = 0
+        let m = Float(Int(Int16.max) * Int(Int16.max))
+        for s in samples { sum += Float(s) * Float(s) / m }
+        let rms = sqrt(sum / Float(samples.count))
+        sysFrames.append((active: rms > SILENCE_THRESHOLD, samples: samples))
+        if rms > SILENCE_THRESHOLD { lastAudioTime = Date() }
+        mixAndWrite()
+    }
+
+    /// 收到麦克风帧（mono Float32）
+    func onMicAudio(_ samples: [Float]) {
+        guard isRecording else { return }
+        let ints = samples.map { Int16(max(-1.0, min(1.0, $0)) * Float(Int16.max)) }
+        var sum: Float = 0; let m = Float(Int(Int16.max) * Int(Int16.max))
+        for s in ints { sum += Float(s) * Float(s) / m }
+        let rms = sqrt(sum / Float(ints.count))
+        micFrames.append((active: rms > SILENCE_THRESHOLD, samples: ints))
+        if rms > SILENCE_THRESHOLD { lastAudioTime = Date() }
+        mixAndWrite()
+    }
+
+    /// 混音：当系统帧和麦克风帧都够一帧时，混合后写出
+    private func mixAndWrite() {
+        guard let w = writer else { return }
+        while !sysFrames.isEmpty && !micFrames.isEmpty {
+            let sys = sysFrames.removeFirst()
+            let mic = micFrames.removeFirst()
+            let mixed = mixFrame(sys: sys, mic: mic)
+            w.append(Data(bytes: mixed, count: mixed.count * 2))
+        }
+    }
+
+    /// 排空剩余帧（stop 时调用）
+    private func drainFrames() {
+        guard let w = writer else { return }
+        while !sysFrames.isEmpty || !micFrames.isEmpty {
+            let sys = sysFrames.isEmpty ? (active: false, samples: [Int16](repeating: 0, count: frameSize)) : sysFrames.removeFirst()
+            let mic = micFrames.isEmpty ? (active: false, samples: [Int16](repeating: 0, count: frameSize / 2)) : micFrames.removeFirst()
+            let mixed = mixFrame(sys: sys, mic: mic)
+            w.append(Data(bytes: mixed, count: mixed.count * 2))
+        }
+    }
+
+    // ── 核心混音（与 echo_cancel.py 一致）──
+
+    private func mixFrame(sys: (active: Bool, samples: [Int16]), mic: (active: Bool, samples: [Int16])) -> [Int16] {
+        let sysLen = sys.samples.count  // stereo
+        let micLen = mic.samples.count  // mono
+        var out = [Int16](repeating: 0, count: sysLen)
+
+        // 音量归一化到 -20dB
+        let sysNorm = normalizeToDBFS(sys.samples)
+        let micMono = normalizeToDBFS(mic.samples)
+        // mono → stereo
+        var micStereo = [Int16](repeating: 0, count: sysLen)
+        for i in 0..<sysLen {
+            micStereo[i] = micMono[min(i / 2, micLen - 1)]
+        }
+
+        // 半双工：用系统活跃标签决定 fadePos
+        let fadeStep: Float = 1.0 / Float(FADE_FRAMES)
+        if sys.active {
+            fadePos = 0
+        } else {
+            fadePos = min(1.0, fadePos + fadeStep)
+        }
+
+        // 交叉混合
+        for i in 0..<sysLen {
+            let sv = Float(sysNorm[i]) / Float(Int16.max)
+            let mv = Float(micStereo[i]) / Float(Int16.max)
+            let mix = (1.0 - fadePos) * sv + fadePos * mv
+            out[i] = Int16(max(-1.0, min(1.0, mix * 1.5)) * Float(Int16.max))
+        }
+        return out
     }
 
     private func startSilenceMonitor() {
@@ -212,261 +227,201 @@ class AudioRecorder {
         let task = DispatchWorkItem { [weak self] in
             guard let self = self, self.isRecording else { return }
             if let last = self.lastAudioTime, Date().timeIntervalSince(last) >= self.silenceSeconds {
-                log("🔇 Silence \(Int(self.silenceSeconds))s — auto stop")
+                log("🔇 silence \(Int(self.silenceSeconds))s — auto stop")
                 self.onStopRequest?()
             }
         }
         silenceTask = task
         DispatchQueue.main.asyncAfter(deadline: .now() + silenceSeconds, execute: task)
     }
-
-    func onAudio(_ samples: [Int16], source: String) {
-        guard isRecording, let w = writer else { return }
-
-        var sumSq: Float = 0
-            let maxF = Float(Int16.max)
-            for s in samples { sumSq += Float(s) * Float(s) / (maxF * maxF) }
-            let rms = sqrt(sumSq / Float(samples.count))
-        if rms > SILENCE_THRESHOLD {
-            lastAudioTime = Date()
-        }
-
-        w.append(normalizeToDBFS(samples))
-    }
 }
 
-// ─── Socket 服务器 ────────────────────────────────
+// ─── 麦克风捕获 ────────────────────────────────────────
 
-class SocketServer {
+class MicCapture {
     let recorder: AudioRecorder
-    var sock: Int32 = -1
+    var engine: AVAudioEngine?
 
     init(recorder: AudioRecorder) { self.recorder = recorder }
 
     func start() {
-        try? FileManager.default.removeItem(at: SOCKET_PATH)
+        let engine = AVAudioEngine()
+        let input = engine.inputNode
+        let fmt = input.outputFormat(forBus: 0)
 
-        sock = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
-        guard sock >= 0 else { log("Socket: create failed"); return }
-
-        var addr = sockaddr_un()
-        addr.sun_family = sa_family_t(AF_UNIX)
-        let path = SOCKET_PATH.path
-        _ = path.withCString { strncpy(&addr.sun_path.0, $0, min(path.utf8.count, 103)) }
-
-        let addrSize = MemoryLayout<sockaddr_un>.size
-        let bindRes = withUnsafePointer(to: &addr) {
-            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                Darwin.bind(sock, $0, socklen_t(addrSize))
-            }
+        input.installTap(onBus: 0, bufferSize: 4096, format: fmt) { [weak self] buf, _ in
+            guard let self = self, self.recorder.isRecording else { return }
+            guard let chData = buf.floatChannelData else { return }
+            let len = Int(buf.frameLength)
+            let samples = Array(UnsafeBufferPointer(start: chData[0], count: len))
+            self.recorder.onMicAudio(samples)
         }
-        guard bindRes == 0 else { log("Socket: bind failed (\(bindRes))"); close(sock); sock = -1; return }
 
-        Darwin.listen(sock, 5)
-        chmod(SOCKET_PATH.path, 0o666)
-        log("Socket ready: \(SOCKET_PATH.path)")
-
-        DispatchQueue.global(qos: .background).async { [weak self] in
-            while true {
-                let client = Darwin.accept(self?.sock ?? -1, nil, nil)
-                if client >= 0 {
-                    self?.handle(client: client)
-                    close(client)
-                }
-            }
-        }
+        do { try engine.start(); self.engine = engine; log("🎤 Mic capture started") }
+        catch { log("Mic start failed: \(error)") }
     }
 
-    func stop() {
-        if sock >= 0 { close(sock); sock = -1 }
-    }
+    func stop() { engine?.stop(); engine = nil }
+}
 
-    private func handle(client: Int32) {
-        var data = Data()
-        var buf = [UInt8](repeating: 0, count: 4096)
-        while true {
-            let n = read(client, &buf, 4096)
-            if n <= 0 { break }
-            data.append(buf, count: n)
-        }
+// ─── SCStream 输出处理器 ──────────────────────────────
 
-        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let action = json["action"] as? String else {
-            send(client, ["error": "invalid"])
-            return
-        }
+@available(macOS 12.3, *)
+class SysAudioOutput: NSObject, SCStreamOutput {
+    unowned let recorder: AudioRecorder
+    init(_ r: AudioRecorder) { recorder = r }
 
-        var response: [String: Any]
-        switch action {
-        case "start":
-            let title = json["title"] as? String ?? "会议"
-            if let path = recorder.start(title: title) {
-                response = ["status": "recording", "file": path]
-            } else {
-                response = ["error": "start_failed"]
-            }
-        case "stop":
-            let (path, dur) = recorder.stop()
-            response = ["status": "stopped", "file": path ?? "", "duration": dur]
-        case "status":
-            response = ["recording": recorder.isRecording]
-            if recorder.isRecording {
-                response["file"] = recorder.writer?.url.path ?? ""
-            }
-        case "quit":
-            response = ["status": "bye"]
-            send(client, response)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { NSApp.terminate(nil) }
-            return
-        default:
-            response = ["error": "unknown: \(action)"]
-        }
-        send(client, response)
-    }
-
-    private func send(_ client: Int32, _ dict: [String: Any]) {
-        guard let data = try? JSONSerialization.data(withJSONObject: dict) else { return }
-        data.withUnsafeBytes { ptr in
-            if let base = ptr.baseAddress {
-                _ = write(client, base, data.count)
-            }
-        }
+    func stream(_ s: SCStream, didOutputSampleBuffer buf: CMSampleBuffer, of type: SCStreamOutputType) {
+        guard type == .audio, recorder.isRecording else { return }
+        guard let db = buf.dataBuffer else { return }
+        var ptr: UnsafeMutablePointer<Int8>?; var len: Int = 0
+        guard CMBlockBufferGetDataPointer(db, atOffset: 0, lengthAtOffsetOut: &len, totalLengthOut: nil, dataPointerOut: &ptr) == noErr,
+              let p = ptr, len > 0 else { return }
+        let cnt = len / MemoryLayout<Int16>.size
+        guard cnt > 0 else { return }
+        let raw = UnsafeMutableRawPointer(p)
+        let samples = [Int16](UnsafeBufferPointer(start: raw.assumingMemoryBound(to: Int16.self), count: cnt))
+        recorder.onSysAudio(samples)
     }
 }
 
-// ─── ScreenCaptureKit 音频捕获 ───────────────────
-
-@available(macOS 12.3, *)
-@available(macOS 12.3, *)
-class StreamOutputHandler: NSObject, SCStreamOutput {
-    let recorder: AudioRecorder
-    init(recorder: AudioRecorder) { self.recorder = recorder }
-
-    func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
-        guard type == .audio else { return }
-        if !recorder.isRecording { return }
-
-        // macOS 26: audio data is in CMBlockBuffer (not AudioBufferList)
-        guard let dataBuffer = sampleBuffer.dataBuffer else { return }
-        var dataPtr: UnsafeMutablePointer<Int8>?
-        var length: Int = 0
-        let status = CMBlockBufferGetDataPointer(dataBuffer, atOffset: 0, lengthAtOffsetOut: &length, totalLengthOut: nil, dataPointerOut: &dataPtr)
-        guard status == noErr, let ptr = dataPtr, length > 0 else { return }
-
-        let sampleCount = length / MemoryLayout<Int16>.size
-        let rawPtr = UnsafeMutableRawPointer(ptr)
-        let samples = [Int16](UnsafeBufferPointer(start: rawPtr.assumingMemoryBound(to: Int16.self), count: sampleCount))
-        guard !samples.isEmpty else { return }
-
-        recorder.onAudio(samples, source: "sys")
-    }
-}
+// ─── 屏幕捕获管理器 ───────────────────────────────────
 
 @available(macOS 12.3, *)
 class AudioCapture {
     let recorder: AudioRecorder
-    let streamOutput: StreamOutputHandler
+    let output: SysAudioOutput
     var stream: SCStream?
 
     init(recorder: AudioRecorder) {
         self.recorder = recorder
-        self.streamOutput = StreamOutputHandler(recorder: recorder)
+        self.output = SysAudioOutput(recorder)
     }
 
     func startCapture() {
         Task {
             do {
                 let content = try await SCShareableContent.current
-                guard let display = content.displays.first else {
-                    log("No display available (required for audio capture)")
-                    return
-                }
-
-                let filter = SCContentFilter(display: display, excludingWindows: [])
+                guard let d = content.displays.first else { log("No display"); return }
+                let filter = SCContentFilter(display: d, excludingWindows: [])
                 let config = SCStreamConfiguration()
                 config.capturesAudio = true
-
-                let scStream = SCStream(filter: filter, configuration: config, delegate: nil)
-                // macOS 26: start BEFORE adding output
-                try await scStream.startCapture()
-                try scStream.addStreamOutput(streamOutput, type: .audio, sampleHandlerQueue: .global())
-                self.stream = scStream
-                log("SCAudio capture started (display: \(display.displayID))")
+                let s = SCStream(filter: filter, configuration: config, delegate: nil)
+                try await s.startCapture()
+                try s.addStreamOutput(output, type: .audio, sampleHandlerQueue: .global())
+                self.stream = s
+                log("🔊 Sys capture started (display \(d.displayID))")
             } catch {
-                let nsErr = error as NSError
-                log("SCAudio start failed: \(nsErr.domain) code=\(nsErr.code) \(nsErr.localizedDescription)")
+                log("Sys capture failed: \((error as NSError).localizedDescription)")
             }
         }
     }
 
-    func stopCapture() {
-        Task { try? await stream?.stopCapture() }
-        stream = nil
+    func stopCapture() { Task { try? await stream?.stopCapture() }; stream = nil }
+}
+
+// ─── Socket 服务器 ────────────────────────────────────
+
+class SocketServer {
+    let recorder: AudioRecorder
+    var sock: Int32 = -1
+
+    init(_ r: AudioRecorder) { recorder = r }
+
+    func stop() {
+        if sock >= 0 { close(sock); sock = -1 }
+    }
+
+    func start() {
+        try? FileManager.default.removeItem(at: SOCKET_PATH)
+        sock = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
+        guard sock >= 0 else { log("Socket: create failed"); return }
+        var addr = sockaddr_un()
+        addr.sun_family = sa_family_t(AF_UNIX)
+        _ = SOCKET_PATH.path.withCString { strncpy(&addr.sun_path.0, $0, min(SOCKET_PATH.path.utf8.count, 103)) }
+        let ok = withUnsafePointer(to: &addr) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { Darwin.bind(sock, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) }
+        }
+        guard ok == 0 else { log("Socket: bind \(ok)"); close(sock); sock = -1; return }
+        Darwin.listen(sock, 5); chmod(SOCKET_PATH.path, 0o666)
+        log("Socket ready")
+        DispatchQueue.global(qos: .background).async { [weak self] in
+            while true {
+                let c = Darwin.accept(self?.sock ?? -1, nil, nil)
+                if c >= 0 { self?.handle(c); close(c) }
+            }
+        }
+    }
+
+    private func handle(_ c: Int32) {
+        var data = Data()
+        var buf = [UInt8](repeating: 0, count: 4096)
+        while true { let n = read(c, &buf, 4096); if n <= 0 { break }; data.append(buf, count: n) }
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let action = json["action"] as? String else { send(c, ["error":"invalid"]); return }
+        var resp: [String: Any]
+        switch action {
+        case "start":
+            if let p = recorder.start(title: json["title"] as? String ?? "meeting") { resp = ["status":"recording", "file":p] }
+            else { resp = ["error":"start_failed"] }
+        case "stop":
+            let (p, d) = recorder.stop(); resp = ["status":"stopped", "file": p ?? "", "duration": d]
+        case "status":
+            resp = ["recording": recorder.isRecording, "file": recorder.writer?.url.path ?? ""]
+        case "quit": resp = ["status":"bye"]; send(c, resp)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { NSApp.terminate(nil) }; return
+        default: resp = ["error":"unknown: \(action)"]
+        }
+        send(c, resp)
+    }
+
+    private func send(_ c: Int32, _ d: [String: Any]) {
+        guard let data = try? JSONSerialization.data(withJSONObject: d) else { return }
+        data.withUnsafeBytes { if let b = $0.baseAddress { _ = write(c, b, data.count) } }
     }
 }
+
+// ─── App Delegate ──────────────────────────────────────
+
 class AppDelegate: NSObject, NSApplicationDelegate {
     var recorder: AudioRecorder?
-    var socketServer: SocketServer?
+    var micCapture: MicCapture?
     var audioCapture: AudioCapture?
+    var socketServer: SocketServer?
 
-    func applicationDidFinishLaunching(_ notification: Notification) {
-        // 日志文件
+    func applicationDidFinishLaunching(_ n: Notification) {
         try? FileManager.default.createDirectory(at: CONFIG_DIR, withIntermediateDirectories: true)
         FileManager.default.createFile(atPath: LOG_PATH.path, contents: nil)
         logFile = try? FileHandle(forWritingTo: LOG_PATH)
-
-        // PID
         try? "\(ProcessInfo.processInfo.processIdentifier)".write(to: PID_PATH, atomically: true, encoding: .utf8)
+        log("🎧 Audio Daemon (pid=\(ProcessInfo.processInfo.processIdentifier))")
 
-        log("🎧 Audio Daemon started (pid=\(ProcessInfo.processInfo.processIdentifier))")
-
-        let rec = AudioRecorder()
-        recorder = rec
+        let rec = AudioRecorder(); recorder = rec
+        rec.onStopRequest = { [weak self] in self?.recorder?.stop() }
 
         if #available(macOS 12.3, *) {
-            let ac = AudioCapture(recorder: rec)
-            audioCapture = ac
-            // Delay capture start to let the app fully initialize
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
-                ac.startCapture()
-            }
-        } else {
-            log("ScreenCaptureKit requires macOS 12.3+")
+            let ac = AudioCapture(recorder: rec); audioCapture = ac
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { ac.startCapture() }
         }
+        let mic = MicCapture(recorder: rec); micCapture = mic
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { mic.start() }
 
-        // 静默自动停止的回调
-        rec.onStopRequest = { [weak self] in
-            self?.handleSilenceStop()
-        }
-
-        let ss = SocketServer(recorder: rec)
-        socketServer = ss
-        ss.start()
-
-        log("Ready — listening on \(SOCKET_PATH.path)")
+        let ss = SocketServer(rec); socketServer = ss; ss.start()
+        log("Ready")
     }
 
-    func handleSilenceStop() {
-        recorder?.stop()
-        // 通知 scheduler 停止
-        log("Silence stop triggered")
-    }
-
-    func applicationWillTerminate(_ notification: Notification) {
-        recorder?.stop()
-        socketServer?.stop()
-        audioCapture?.stopCapture()
+    func applicationWillTerminate(_ n: Notification) {
+        recorder?.stop(); socketServer?.stop(); audioCapture?.stopCapture(); micCapture?.stop()
         try? FileManager.default.removeItem(at: PID_PATH)
         try? FileManager.default.removeItem(at: SOCKET_PATH)
-        log("Daemon stopped")
         try? logFile?.close()
     }
 }
 
-// ─── 入口 ─────────────────────────────────────────
+// ─── 入口 ──────────────────────────────────────────────
 
 let app = NSApplication.shared
 let delegate = AppDelegate()
 app.delegate = delegate
-app.setActivationPolicy(.accessory)  // LSUIElement — no dock icon
+app.setActivationPolicy(.accessory)
 app.run()
