@@ -78,6 +78,53 @@ def log(msg):
     print(line, flush=True)
 
 
+WINDOW_SCANNER = SCRIPT_DIR / "window_scanner"
+
+
+def _has_permission():
+    """Quick check: can we read window titles via window_scanner?"""
+    try:
+        r = subprocess.run(
+            [str(WINDOW_SCANNER)],
+            capture_output=True, text=True, timeout=5,
+        )
+        return r.returncode == 0 and len(r.stdout.strip()) > 0
+    except Exception:
+        return False
+
+
+def collect_windows(target_app_names=None):
+    """返回 [{app, title}] 或 None。
+    使用编译好的 window_scanner 工具读取窗口标题。"""
+    if not _has_permission():
+        return None
+
+    try:
+        r = subprocess.run(
+            [str(WINDOW_SCANNER)],
+            capture_output=True, text=True, timeout=5,
+        )
+        if r.returncode != 0:
+            return None
+        windows = json.loads(r.stdout)
+    except Exception:
+        return None
+
+    target_app_names = target_app_names or DEFAULT_CONFIG["target_app_names"]
+    target_patterns = _compile_patterns(target_app_names)
+
+    rows = []
+    for w in windows:
+        app = w.get("app", "")
+        title = w.get("title", "")
+        if not app or not title:
+            continue
+        if not any(p.search(app) for p in target_patterns):
+            continue
+        rows.append({"app": app.strip(), "title": title.strip()})
+    return rows
+
+
 def load_config():
     if not CONFIG_PATH.exists():
         return DEFAULT_CONFIG.copy()
@@ -122,65 +169,6 @@ def _osascript(script, timeout=3):
         text=True,
         timeout=timeout,
     )
-
-
-def _has_permission():
-    """Quick check if we have accessibility permission.
-    When no permission, osascript/System Events hangs until timeout."""
-    try:
-        r = subprocess.run(
-            ["osascript", "-e", 'tell application "System Events" to get name of first process'],
-            capture_output=True, text=True, timeout=2,
-        )
-        return r.returncode == 0 and len(r.stdout.strip()) > 0
-    except subprocess.TimeoutExpired:
-        return False
-    except Exception:
-        return False
-
-
-def collect_windows(target_app_names=None):
-    """返回 [{app, title}] 或 None（无权限时返回 None）。"""
-    if not _has_permission():
-        return None
-
-    target_app_names = target_app_names or DEFAULT_CONFIG["target_app_names"]
-    app_list = ", ".join(json.dumps(x, ensure_ascii=False) for x in target_app_names)
-    script = f'''
-set targetApps to {{{app_list}}}
-set out to ""
-tell application "System Events"
-  repeat with appName in targetApps
-    try
-      if exists application process (appName as text) then
-        tell application process (appName as text)
-          repeat with w in windows
-            set winName to name of w
-            if winName is not "" then
-              set out to out & (appName as text) & "\\t" & winName & "\\n"
-            end if
-          end repeat
-        end tell
-      end if
-    end try
-  end repeat
-end tell
-return out
-'''
-    try:
-        result = _osascript(script, timeout=5)
-        if result.returncode != 0:
-            raise RuntimeError(result.stderr.strip() or result.stdout.strip() or "osascript failed")
-    except subprocess.TimeoutExpired:
-        return None
-
-    rows = []
-    for line in result.stdout.splitlines():
-        if "\t" not in line:
-            continue
-        app, title = line.split("\t", 1)
-        rows.append({"app": app.strip(), "title": title.strip()})
-    return rows
 
 
 def collect_visible_apps():
