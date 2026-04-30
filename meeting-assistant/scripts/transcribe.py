@@ -123,7 +123,7 @@ def summarize(transcript, meeting_title, config):
     cmd_template = config.get("command") or DEFAULT_LLM_CMD
 
     if not cmd_template:
-        print("🤖 未配置外部 LLM，使用本地规则生成最终摘要...")
+        print("🤖 未配置外部 LLM，先生成本地草稿并请求 OpenClaw agent 生成最终摘要...")
         return None
 
     cmd = render_cmd(cmd_template)
