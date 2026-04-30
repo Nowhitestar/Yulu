@@ -66,31 +66,36 @@ class WavWriter {
     }
 
     func finalize() {
-        var dataSize: UInt32 = totalSamples * 2
-        var fileSize: UInt32 = 44 + dataSize
+        // Read the actual file size to compute data size
+        let fileEnd = fh.seekToEndOfFile()
+        let dataSize = fileEnd - 44
+        
+        fh.seek(toFileOffset: 0)
+        var riffSize = UInt32(fileEnd - 8)
+        var audioFormat: UInt16 = 1  // PCM
+        var numChannels: UInt16 = 2  // ScreenCaptureKit stereo
+        var sampleRate: UInt32 = 48000
+        var byteRate: UInt32 = 48000 * 2 * 2  // rate * channels * bytesPerSample
+        var blockAlign: UInt16 = 4           // channels * bytesPerSample
+        var bitsPerSample: UInt16 = 16
+        var subChunk1Size: UInt32 = 16
+        var dataSize32 = UInt32(dataSize)
 
         var header = Data()
         header.append("RIFF".data(using: .ascii)!)
-        header.append(Data(bytes: &fileSize, count: 4))
+        Swift.withUnsafeBytes(of: &riffSize) { header.append(Data($0)) }
         header.append("WAVE".data(using: .ascii)!)
-
-        var subChunk1Size: UInt32 = 16
-        var audioFormat: UInt16 = 1  // PCM
-        header.append(Data(bytes: &subChunk1Size, count: 4))
-        header.append(Data(bytes: &audioFormat, count: 2))
-        header.append(Data(bytes: &CHANNELS, count: 2))
-        var sampleRate = UInt32(SAMPLE_RATE)
-        header.append(Data(bytes: &sampleRate, count: 4))
-        var byteRate = UInt32(SAMPLE_RATE * Double(CHANNELS) * 2)
-        header.append(Data(bytes: &byteRate, count: 4))
-        var blockAlign: UInt16 = UInt16(CHANNELS * 2)
-        header.append(Data(bytes: &blockAlign, count: 2))
-        header.append(Data(bytes: &BITS_PER_SAMPLE, count: 2))
-
+        header.append("fmt ".data(using: .ascii)!)
+        Swift.withUnsafeBytes(of: &subChunk1Size) { header.append(Data($0)) }
+        Swift.withUnsafeBytes(of: &audioFormat) { header.append(Data($0)) }
+        Swift.withUnsafeBytes(of: &numChannels) { header.append(Data($0)) }
+        Swift.withUnsafeBytes(of: &sampleRate) { header.append(Data($0)) }
+        Swift.withUnsafeBytes(of: &byteRate) { header.append(Data($0)) }
+        Swift.withUnsafeBytes(of: &blockAlign) { header.append(Data($0)) }
+        Swift.withUnsafeBytes(of: &bitsPerSample) { header.append(Data($0)) }
         header.append("data".data(using: .ascii)!)
-        header.append(Data(bytes: &dataSize, count: 4))
+        Swift.withUnsafeBytes(of: &dataSize32) { header.append(Data($0)) }
 
-        fh.seek(toFileOffset: 0)
         fh.write(header)
         try? fh.close()
     }
@@ -332,11 +337,41 @@ class SocketServer {
 // ─── ScreenCaptureKit 音频捕获 ───────────────────
 
 @available(macOS 12.3, *)
-class AudioCapture: NSObject, SCStreamOutput {
+@available(macOS 12.3, *)
+class StreamOutputHandler: NSObject, SCStreamOutput {
     let recorder: AudioRecorder
+    init(recorder: AudioRecorder) { self.recorder = recorder }
+
+    func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
+        guard type == .audio else { return }
+        if !recorder.isRecording { return }
+
+        // macOS 26: audio data is in CMBlockBuffer (not AudioBufferList)
+        guard let dataBuffer = sampleBuffer.dataBuffer else { return }
+        var dataPtr: UnsafeMutablePointer<Int8>?
+        var length: Int = 0
+        let status = CMBlockBufferGetDataPointer(dataBuffer, atOffset: 0, lengthAtOffsetOut: &length, totalLengthOut: nil, dataPointerOut: &dataPtr)
+        guard status == noErr, let ptr = dataPtr, length > 0 else { return }
+
+        let sampleCount = length / MemoryLayout<Int16>.size
+        let rawPtr = UnsafeMutableRawPointer(ptr)
+        let samples = [Int16](UnsafeBufferPointer(start: rawPtr.assumingMemoryBound(to: Int16.self), count: sampleCount))
+        guard !samples.isEmpty else { return }
+
+        recorder.onAudio(samples, source: "sys")
+    }
+}
+
+@available(macOS 12.3, *)
+class AudioCapture {
+    let recorder: AudioRecorder
+    let streamOutput: StreamOutputHandler
     var stream: SCStream?
 
-    init(recorder: AudioRecorder) { self.recorder = recorder }
+    init(recorder: AudioRecorder) {
+        self.recorder = recorder
+        self.streamOutput = StreamOutputHandler(recorder: recorder)
+    }
 
     func startCapture() {
         Task {
@@ -350,21 +385,16 @@ class AudioCapture: NSObject, SCStreamOutput {
                 let filter = SCContentFilter(display: display, excludingWindows: [])
                 let config = SCStreamConfiguration()
                 config.capturesAudio = true
-                config.sampleRate = Int(SAMPLE_RATE)
-                config.channelCount = Int(CHANNELS)
-                // Minimize video to reduce resource usage
-                config.width = 1
-                config.height = 1
-                config.pixelFormat = 0
 
-                let s = SCStream(filter: filter, configuration: config, delegate: nil)
-                try s.addStreamOutput(self, type: .audio, sampleHandlerQueue: .global())
-                try await s.startCapture()
-                self.stream = s
+                let scStream = SCStream(filter: filter, configuration: config, delegate: nil)
+                // macOS 26: start BEFORE adding output
+                try await scStream.startCapture()
+                try scStream.addStreamOutput(streamOutput, type: .audio, sampleHandlerQueue: .global())
+                self.stream = scStream
                 log("SCAudio capture started (display: \(display.displayID))")
             } catch {
-                log("SCAudio start failed: \(error.localizedDescription)")
-                log("  → 需要 Screen Recording 权限（系统设置 → 隐私与安全性 → 屏幕录制）")
+                let nsErr = error as NSError
+                log("SCAudio start failed: \(nsErr.domain) code=\(nsErr.code) \(nsErr.localizedDescription)")
             }
         }
     }
@@ -373,27 +403,7 @@ class AudioCapture: NSObject, SCStreamOutput {
         Task { try? await stream?.stopCapture() }
         stream = nil
     }
-
-    func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
-        guard type == .audio, recorder.isRecording else { return }
-
-        // Get audio data from CMSampleBuffer
-        guard let dataBuffer = sampleBuffer.dataBuffer else { return }
-        let totalSize = CMSampleBufferGetTotalSampleSize(sampleBuffer)
-        guard totalSize > 0 else { return }
-        var dataPtr: UnsafeMutablePointer<Int8>?
-        guard CMBlockBufferGetDataPointer(dataBuffer, atOffset: 0, lengthAtOffsetOut: nil, totalLengthOut: nil, dataPointerOut: &dataPtr) == noErr, let ptr = dataPtr else { return }
-        let sampleCount = totalSize / MemoryLayout<Int16>.size
-        let rawPtr = UnsafeMutableRawPointer(ptr)
-        let samples = [Int16](UnsafeBufferPointer(start: rawPtr.assumingMemoryBound(to: Int16.self), count: sampleCount))
-        guard !samples.isEmpty else { return }
-
-        recorder.onAudio(samples, source: "sys")
-    }
 }
-
-// ─── App Delegate ─────────────────────────────────
-
 class AppDelegate: NSObject, NSApplicationDelegate {
     var recorder: AudioRecorder?
     var socketServer: SocketServer?
