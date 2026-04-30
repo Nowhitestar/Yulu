@@ -361,6 +361,8 @@ class SocketServer {
               let action = json["action"] as? String else { send(c, ["error":"invalid"]); return }
         var resp: [String: Any]
         switch action {
+        case "windows":
+            resp = self.scanWindows()
         case "start":
             if let p = recorder.start(title: json["title"] as? String ?? "meeting") { resp = ["status":"recording", "file":p] }
             else { resp = ["error":"start_failed"] }
@@ -378,6 +380,26 @@ class SocketServer {
     private func send(_ c: Int32, _ d: [String: Any]) {
         guard let data = try? JSONSerialization.data(withJSONObject: d) else { return }
         data.withUnsafeBytes { if let b = $0.baseAddress { _ = write(c, b, data.count) } }
+    }
+
+    func scanWindows() -> [String: Any] {
+        let workspace = NSWorkspace.shared
+        var results: [[String: String]] = []
+        let apps = workspace.runningApplications
+        for app in apps where app.activationPolicy == .regular {
+            let appElem = AXUIElementCreateApplication(app.processIdentifier)
+            var winList: CFTypeRef?
+            guard AXUIElementCopyAttributeValue(appElem, kAXWindowsAttribute as CFString, &winList) == .success,
+                  let wins = winList as? [AXUIElement] else { continue }
+            for w in wins {
+                var title: CFTypeRef?
+                AXUIElementCopyAttributeValue(w, kAXTitleAttribute as CFString, &title)
+                if let t = title as? String, !t.isEmpty {
+                    results.append(["app": app.localizedName ?? "", "title": t])
+                }
+            }
+        }
+        return ["windows": results]
     }
 }
 

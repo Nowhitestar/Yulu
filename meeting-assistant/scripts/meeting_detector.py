@@ -78,11 +78,40 @@ def log(msg):
     print(line, flush=True)
 
 
+AUDIO_DAEMON_SOCKET = Path.home() / ".config" / "meeting-assistant" / "audio_daemon.sock"
 WINDOW_SCANNER = SCRIPT_DIR / "window_scanner"
 
 
+def _query_audio_daemon():
+    """通过 AudioDaemon 的 socket 获取窗口列表。"""
+    if not AUDIO_DAEMON_SOCKET.exists():
+        return None
+    try:
+        import socket
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        sock.settimeout(3)
+        sock.connect(str(AUDIO_DAEMON_SOCKET))
+        sock.sendall(b'{"action":"windows"}')
+        sock.shutdown(socket.SHUT_WR)
+        data = b""
+        while True:
+            chunk = sock.recv(4096)
+            if not chunk: break
+            data += chunk
+        sock.close()
+        resp = json.loads(data.decode())
+        return resp.get("windows", [])
+    except Exception:
+        return None
+
+
 def _has_permission():
-    """Quick check: can we read window titles via window_scanner?"""
+    """Quick check: can we read window titles?"""
+    # Try AudioDaemon first (merged scanner)
+    wins = _query_audio_daemon()
+    if wins is not None:
+        return True
+    # Fallback: standalone window_scanner
     try:
         r = subprocess.run(
             [str(WINDOW_SCANNER)],
@@ -95,20 +124,22 @@ def _has_permission():
 
 def collect_windows(target_app_names=None):
     """返回 [{app, title}] 或 None。
-    使用编译好的 window_scanner 工具读取窗口标题。"""
-    if not _has_permission():
-        return None
-
-    try:
-        r = subprocess.run(
-            [str(WINDOW_SCANNER)],
-            capture_output=True, text=True, timeout=5,
-        )
-        if r.returncode != 0:
+    优先用 AudioDaemon 的 socket（如运行中），否则用 window_scanner。"""
+    windows = _query_audio_daemon()
+    if windows is None:
+        try:
+            r = subprocess.run(
+                [str(WINDOW_SCANNER)],
+                capture_output=True, text=True, timeout=5,
+            )
+            if r.returncode != 0:
+                return None
+            windows = json.loads(r.stdout)
+        except Exception:
             return None
-        windows = json.loads(r.stdout)
-    except Exception:
-        return None
+
+    if not windows:
+        return []
 
     target_app_names = target_app_names or DEFAULT_CONFIG["target_app_names"]
     target_patterns = _compile_patterns(target_app_names)
