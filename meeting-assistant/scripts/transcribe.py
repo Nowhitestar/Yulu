@@ -255,9 +255,11 @@ def process_audio(audio_path):
     summary = None
     if llm_cfg.get("enabled", True):
         summary = summarize(transcript, meeting_title, llm_cfg)
-    if summary is None:
-        summary = fallback_summary(transcript, meeting_title)
     agent_should_finalize = False
+    if summary is None:
+        # 先写一份本地可读草稿作为兜底，但不发送；随后交给 OpenClaw agent 覆盖为最终版。
+        summary = fallback_summary(transcript, meeting_title)
+        agent_should_finalize = True
 
     # 4. 保存摘要
     summary_path = audio_path.with_suffix(".summary.md")
