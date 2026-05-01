@@ -1,6 +1,6 @@
 ---
 name: meeting-assistant
-description: "会议全流程自动化：日历/窗口检测 → 弹窗询问 → ScreenCaptureKit 录制系统音频 + 麦克风 → whisper-cli 本地转写 → OpenClaw agent 生成纪要 → 推送到多端。基于 AudioDaemon 原生录制，不需要 BlackHole 等虚拟声卡。Use when: (1) 自动检测会议并提醒录制，(2) 会议音频自动转录，(3) 自动生成并推送到频道的会议纪要，(4) 会议管理全流程自动化。"
+description: "Native macOS meeting automation for OpenClaw: calendar/window detection, prompt-before-recording, ScreenCaptureKit system audio + microphone recording, local whisper-cli transcription, and agent-generated meeting notes. No BlackHole or virtual audio device required. Use when you need automatic meeting detection, recording, transcription, and final summaries delivered by an OpenClaw agent."
 ---
 
 # Meeting Assistant — 会议全流程自动化
