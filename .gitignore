@@ -1,6 +1,11 @@
 # Secrets (config is per-user, never commit it)
 config.json
 .env
+client_secret*.json
+credentials*.json
+token*.json
+*.pem
+*.key
 
 # Compiled objects
 __pycache__/
