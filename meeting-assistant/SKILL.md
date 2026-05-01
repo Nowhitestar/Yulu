@@ -1,193 +1,284 @@
 ---
 name: meeting-assistant
-description: "会议助手：自动识别日历会议、系统通知提醒、可选录制、静默检测自动停止、生成纪要并发送。支持飞书/Google日历，输出到本地/Zulip/Notion/Telegram。Use when: (1) 需要自动提醒即将开始的会议，(2) 需要录制会议音频并转录，(3) 需要自动生成会议纪要，(4) 会议管理自动化。"
+description: "会议全流程自动化：日历/窗口检测 → 弹窗询问 → ScreenCaptureKit 录制系统音频 + 麦克风 → whisper-cli 本地转写 → OpenClaw agent 生成纪要 → 推送到多端。基于 AudioDaemon 原生录制，不需要 BlackHole 等虚拟声卡。Use when: (1) 自动检测会议并提醒录制，(2) 会议音频自动转录，(3) 自动生成并推送到频道的会议纪要，(4) 会议管理全流程自动化。"
 ---
 
-# Meeting Assistant - 会议助手
+# Meeting Assistant — 会议全流程自动化
 
-自动化的会议全流程助手：从日历识别、系统通知提醒、可选录制、静默检测到纪要输出。
+macOS 原生会议助手：日历/窗口检测 → 弹窗询问 → 录制系统音频 + 麦克风 → 本地转录 → OpenClaw agent 生成会议纪要。
+
+## 架构概览
+
+```
+Google Calendar / Window Detector
+          ↓
+ schedule.json → scheduler_daemon.py
+          ↓
+ meeting_daemon.py ask_record
+          ↓
+ notify.py 弹窗：开始录制？
+          ↓
+ record_audio.py → AudioDaemon.app (Unix socket)
+          ↓
+ ScreenCaptureKit 系统音频 + AVFoundation 麦克风
+          ↓
+ WAV → transcribe.py → whisper-cli
+          ↓
+ transcript.txt + summary_request queue
+          ↓
+ OpenClaw agent heartbeat → 覆盖写入最终 summary.md → 发给用户
+```
 
 ## 核心功能
 
-1. **每日调度** — 每天早上扫描当天日历，设定提醒计划
-2. **系统通知** — T-5min 弹提醒，T-0min 弹窗询问是否录制
-3. **可选录制** — 用户确认后才录制，避免录不需要的会议
-4. **静默检测** — 连续5分钟无声音自动提示停止
-5. **自动转录** — Whisper 转录音频
-6. **纪要生成** — LLM 生成结构化纪要（待办、决策、讨论要点）
-7. **多渠道输出** — 支持本地文件/Zulip/Notion/Telegram
+| 功能 | 说明 |
+|------|------|
+| 📅 日历同步 | Google Calendar push notification + 兜底轮询 |
+| 🔔 准时提醒 | 会议前通知，到点弹窗询问是否录制 |
+| 👀 窗口检测 | 微信、腾讯会议、Google Meet、Zoom、飞书等会议窗口 |
+| 🎙️ 原生录制 | ScreenCaptureKit 系统音频 + AVFoundation 麦克风，无需虚拟声卡 |
+| 🌓 半双工混音 | 对方说话时录系统音频；系统静音时切到麦克风 |
+| 🪟 状态浮窗 | 右侧录制状态浮窗 + 手动停止按钮 |
+| 📝 本地转录 | whisper-cli（C++ 版，无需 Python whisper 包的依赖问题） |
+| 🤖 会议纪要 | OpenClaw agent 根据 transcript + template 生成最终 summary |
+| 🛎️ 全流程自动化 | LaunchAgent 常驻服务，无需手动干预 |
 
-## 工作流程
+## 关键特性
 
-```
-每天早上8点
-    │
-    ▼
-┌─────────────┐
-│  schedule   │──扫描当天日历──▶ 保存到 schedule.json
-└─────────────┘
-    │
-    ▼
-每分钟 check
-    │
-    ├── T-5min ──▶ 系统通知: "⏰ 5分钟后有会"
-    │
-    └── T-0min ──▶ 系统弹窗: "会议开始了 [开始录制] [忽略]"
-                        │
-            ┌───────────┴───────────┐
-            │                       │
-        点击"开始录制"          点击"忽略"
-            │                       │
-            ▼                       ▼
-      ┌──────────┐            标记为跳过
-      │  ffmpeg  │
-      │  录制中  │
-      └────┬─────┘
-           │
-    ┌──────┴──────┐
-    │  静默检测    │──每10秒检查音量──▶ 连续5分钟静默?
-    └─────────────┘                              │
-                                 是 ──▶ 弹窗"是否停止? [停止] [继续]"
-                                                    │
-                                              点击"停止"
-                                                    │
-                                                    ▼
-                                           ┌─────────────┐
-                                           │  停止录制    │
-                                           │  Whisper转录 │
-                                           │  LLM生成纪要 │
-                                           │  发送到频道  │
-                                           └─────────────┘
-```
+- **不需要 BlackHole / 多输出设备 / 虚拟声卡** — 直接通过 ScreenCaptureKit 捕获系统音频
+- **AudioDaemon.app 固定签名** — 编译后用 Apple Development 或 Developer ID 证书签名的 app bundle，便于 macOS TCC 权限稳定识别，不会频繁弹出授权请求
+- **半双工混音** — 系统音频有声时优先系统音频；系统静音时渐变到麦克风
+- **OpenClaw agent 集成** — 转写完成后通过 `agent-queue.json` 将 `summary_request` 写入队列，agent heartbeat 自动读取模板+转写文件，生成并覆盖最终版纪要，然后直接推送到用户对话
 
 ## 快速开始
 
-### 1. 安装依赖
+### 一行安装
 
 ```bash
-# macOS 音频录制
-brew install blackhole-2ch ffmpeg terminal-notifier
-
-# Python 依赖
-pip install openai-whisper openai notion-client
-
-# macOS 启用 at 命令（如使用系统 at）
-sudo launchctl load -w /System/Library/LaunchDaemons/com.apple.atrun.plist
+bash scripts/setup.sh
 ```
 
-### 2. 配置音频
+安装脚本交互式完成：
 
-1. 打开 **音频 MIDI 设置** → 创建**多输出设备**
-2. 勾选 **BlackHole 2ch** + 你的实际输出设备
-3. 设为系统默认输出
-4. 验证设备索引：`ffmpeg -f avfoundation -list_devices true -i ""`
+1. 检查 macOS / Homebrew / Python
+2. 安装依赖：`sox`、`ffmpeg`、`whisper-cpp`、`terminal-notifier`
+3. 创建配置文件
+4. 编译窗口扫描工具并授权辅助功能
+5. 编译并固定签名 `AudioDaemon.app`
+6. 引导授权麦克风、屏幕与系统音频录制权限
+7. 配置 Google Calendar（可选）
+8. 安装 LaunchAgent 常驻服务
+9. 运行验证测试
 
-### 3. 创建配置文件
+### 手动安装
 
 ```bash
-mkdir -p ~/.config/meeting-assistant
+# 安装依赖
+brew install sox ffmpeg whisper-cpp terminal-notifier
+
+# 创建配置
 cp scripts/config.example.json ~/.config/meeting-assistant/config.json
-# 编辑 config.json
+# 按需编辑 config.json
+
+# 编译 AudioDaemon（固定签名）
+bash scripts/build_audio_daemon.sh
+
+# 编译窗口扫描工具
+cd AudioDaemon.app/..  # 或 scripts 目录
+swiftc -o window_scanner window_scanner.swift -framework ApplicationServices
+# 授权辅助功能：系统设置 → 隐私 → 辅助功能
+
+# 安装 LaunchAgent
+cp scripts/com.meetingassistant.*.plist ~/Library/LaunchAgents/
+launchctl load ~/Library/LaunchAgents/com.meetingassistant.audiodaemon.plist
 ```
 
-### 4. 设置环境变量
+## 必要 macOS 权限
 
-```bash
-export OPENAI_API_KEY="sk-..."
-export FEISHU_APP_ID="cli_..."
-export FEISHU_APP_SECRET="..."
-```
+| 组件 | 权限 | 用途 |
+|------|------|------|
+| `AudioDaemon.app` | 麦克风 | 录制本机麦克风（自己的声音） |
+| `AudioDaemon.app` | 屏幕与系统音频录制 | 通过 ScreenCaptureKit 捕获对方的声音 |
+| `window_scanner` | 辅助功能 | 读取窗口标题，检测会议/通话状态 |
 
-### 5. 配置 Cron
+如果录不到系统音频：
+系统设置 → 隐私与安全性 → **屏幕与系统音频录制** → 允许 `AudioDaemon.app`
 
-```bash
-# 每天早上8点扫描当天日历设定提醒
-openclaw cron add --name "meeting-schedule" --schedule "0 8 * * *" \
-  --command "python3 scripts/meeting_daemon.py schedule"
+## 配置文件
 
-# 每分钟检查是否有到时间的提醒
-openclaw cron add --name "meeting-check" --schedule "* * * * *" \
-  --command "python3 scripts/meeting_daemon.py check"
+路径：`~/.config/meeting-assistant/config.json`
+
+```json
+{
+  "audio": {
+    "backend": "daemon",
+    "output_dir": "/path/to/meeting-assistant/meeting-recordings",
+    "silence_threshold": 0.01,
+    "silence_duration_sec": 300,
+    "half_duplex": true
+  },
+  "transcription": {
+    "command": [
+      "whisper-cli",
+      "-m", "~/Models/whisper/ggml-medium.bin",
+      "-l", "zh",
+      "-otxt",
+      "-of", "{{output_stem}}",
+      "{{input}}"
+    ]
+  },
+  "llm": {
+    "enabled": true
+  }
+}
 ```
 
 ## 脚本说明
 
+所有脚本位于 `scripts/` 目录：
+
 | 脚本 | 用途 |
 |------|------|
-| `meeting_daemon.py schedule` | 每天早上运行，扫描日历设定提醒 |
-| `meeting_daemon.py check` | 每分钟运行，触发提醒/录制询问 |
-| `meeting_daemon.py stop` | 手动停止录制并生成纪要 |
-| `notify.py` | macOS 系统通知（提醒/询问/确认） |
-| `record_audio.py start/stop/monitor` | 录制/停止/静默检测 |
-| `transcribe.py` | 转录 + 生成纪要 |
-| `send_summary.py` | 发送纪要到频道 |
-| `check_meetings.py` | 查询日历会议 |
+| `setup.sh` | 交互式一键安装脚本 |
+| `AudioDaemon.app/` | 原生音频录制 daemon（固定签名） |
+| `audio_daemon.swift` | ScreenCaptureKit + AVFoundation + Unix socket |
+| `build_audio_daemon.sh` | 编译并固定签名 AudioDaemon |
+| `record_audio.py` | 录制控制（start/stop/status） |
+| `meeting_daemon.py` | 录制流程控制（ask_record / schedule / check） |
+| `scheduler_daemon.py` | 定时调度器，管理日历任务 |
+| `meeting_detector.py` | 会议窗口检测（微信/腾讯会议/飞书等） |
+| `window_scanner.swift` | AX 窗口扫描工具（辅助功能） |
+| `recorder_status.swift` | 录制状态浮窗 app |
+| `transcribe.py` | whisper 转写 + agent queue summary_request |
+| `agent_notify.py` | OpenClaw agent queue 队列写入 |
+| `notify.py` | macOS 系统通知/弹窗 |
+| `check_meetings.py` | 日历查询 |
+| `send_summary.py` | 推送到 Telegram/Zulip 等频道 |
+| `webhook_server.py` | Google Calendar push notification webhook |
+| `echo_cancel.py` | SoX 降噪回显（fallback 模式下） |
+| `summary_template.md` | 会议纪要 Markdown 模板 |
+| `config.example.json` | 配置文件示例 |
+| `com.meetingassistant.*.plist` | LaunchAgents 服务定义 |
 
-## 手动使用
-
-### 测试通知
+## 手动命令
 
 ```bash
-# 测试5分钟提醒
-python3 scripts/notify.py remind "Meeting Assistant" "测试提醒" "项目周会"
+# AudioDaemon 状态
+echo '{"action":"status"}' | nc -w 2 -U ~/.config/meeting-assistant/audio_daemon.sock
 
-# 测试录制询问
-python3 scripts/notify.py ask_record "项目周会"
+# 手动录制
+python3 scripts/record_audio.py start "测试会议"
+python3 scripts/record_audio.py stop
+
+# 弹窗录制流程
+python3 scripts/meeting_daemon.py ask_record "测试会议" "manual-test"
+
+# 转写 WAV
+python3 scripts/transcribe.py /path/to/meeting-recordings/xxx.wav
+
+# 日历
+python3 scripts/check_meetings.py today
+python3 scripts/check_meetings.py upcoming
+python3 scripts/check_meetings.py week --json
+
+# 窗口检测
+python3 scripts/meeting_detector.py once
+python3 scripts/meeting_detector.py daemon
+
+# 手动触发 summary
+echo '{"type":"summary_request","title":"测试会议","transcript_path":"...","template_path":"...","summary_path":"..."}' \
+  > ~/.config/meeting-assistant/agent-queue.json
 ```
 
-### 仅录制当前会议
+## 常用排障
+
+### AudioDaemon 没有系统音频
 
 ```bash
-# 开始录制
-python3 scripts/record_audio.py start "临时会议"
-
-# ... 会议中 ...
-
-# 停止并自动生成纪要
-python3 scripts/meeting_daemon.py stop
+echo '{"action":"status"}' | nc -w 2 -U ~/.config/meeting-assistant/audio_daemon.sock
 ```
 
-## 配置说明
+如果 `sysReady=false`：
+1. 系统设置 → 隐私与安全性 → **屏幕与系统音频录制**
+2. 允许 `AudioDaemon.app`
+3. 重启：`pkill -f audio_daemon` → 重新开
 
-### 飞书日历
+### WAV 生成但全静音
 
-需要创建飞书应用并开启以下权限：
-- `calendar:calendar:readonly`
-- `calendar:calendar.event:readonly`
+通常是 TCC 权限或 daemon 没 ready。新版 `start` 会在 `sysReady`/`micReady` 不满足时拒绝录制。
 
-### Google Calendar
+### Summary 是草稿？
 
-1. Google Cloud Console → 创建 OAuth 应用
-2. 下载 `credentials.json`
-3. 首次运行会引导 OAuth 授权
+检查队列：
 
-### Notion 输出
+```bash
+cat ~/.config/meeting-assistant/agent-queue.json
+```
 
-1. 创建 Notion Integration
-2. 创建数据库（字段：Name, Status）
-3. 将 Integration 添加到数据库页面
-4. 配置 `database_id`
+如果有 `summary_request`，OpenClaw agent heartbeat 会读取 transcript + template，覆盖写最终 summary 并主动推送。
 
-## 常见问题
+### 重新运行安装脚本
 
-**Q: 弹窗通知不显示？**
-A: 检查 terminal-notifier 是否安装：`which terminal-notifier`。如未安装：`brew install terminal-notifier`。
+```bash
+bash scripts/setup.sh
+```
 
-**Q: 录制没有声音？**
-A: 检查 BlackHole 多输出设备是否正确配置，ffmpeg 设备索引是否匹配 config。
+## 音频实现细节
 
-**Q: 静默检测不准确？**
-A: 调整 `config.json` 中的 `silence_threshold`（默认 0.01）和 `silence_duration_sec`（默认 300）。
+- **Socket**：`~/.config/meeting-assistant/audio_daemon.sock`
+- **Action**：`start` / `stop` / `status` / `windows`
+- **输出**：`meeting-recordings/*.wav`
+- **WAV**：16-bit stereo 48kHz
+- **系统音频**：ScreenCaptureKit Float32 planar → interleaved stereo Int16
+- **麦克风**：AVAudioEngine Float32 mono → stereo mix
+- **半双工**：系统音频 active 时优先系统；系统静音时渐变到麦克风
 
-**Q: 转录质量差？**
-A: 切换到本地 whisper（`"mode": "local"`），或使用更大的模型。
+### 固定签名
+
+`build_audio_daemon.sh` 会：
+1. 编译 `audio_daemon.swift`
+2. 复制到 `AudioDaemon.app/Contents/MacOS/audio_daemon`
+3. 写入 TCC usage descriptions
+4. 优先使用本机 Apple Development / Developer ID 证书签名
+5. 无证书时才 fallback 到 ad-hoc
+
+```bash
+MEETING_ASSISTANT_CODESIGN_IDENTITY="Developer ID Application: ..." \
+  bash scripts/build_audio_daemon.sh
+```
+
+## 项目文件结构
+
+```text
+meeting-assistant/
+├── SKILL.md                                    # Agent skill 文档
+├── meeting-assistant.skill                     # Skill 归档包
+└── scripts/
+    ├── setup.sh                                # 交互式一键安装
+    ├── AudioDaemon.app/                        # 原生音频 daemon app（固定签名）
+    ├── audio_daemon.swift                      # ScreenCaptureKit + AVFoundation + socket
+    ├── build_audio_daemon.sh                   # 编译并固定签名 AudioDaemon
+    ├── record_audio.py                         # 录制控制
+    ├── meeting_daemon.py                       # 流程控制
+    ├── scheduler_daemon.py                     # 定时调度
+    ├── meeting_detector.py                     # 窗口检测
+    ├── window_scanner.swift                    # AX 窗口扫描
+    ├── recorder_status.swift                   # 状态浮窗
+    ├── transcribe.py                           # 转写 + agent queue
+    ├── agent_notify.py                         # Agent queue 写入
+    ├── notify.py                               # 系统通知
+    ├── check_meetings.py                       # 日历查询
+    ├── send_summary.py                         # 推送纪要
+    ├── webhook_server.py                       # Google Calendar webhook
+    ├── echo_cancel.py                          # 降噪（fallback）
+    ├── summary_template.md                     # 纪要模板
+    ├── config.example.json                     # 配置示例
+    └── com.meetingassistant.*.plist             # LaunchAgents
+```
 
 ## 依赖
 
+- macOS 14+（ScreenCaptureKit 需要）
+- Homebrew (sox, ffmpeg, whisper-cpp, terminal-notifier)
 - Python 3.8+
-- ffmpeg
-- terminal-notifier (macOS)
-- BlackHole 2ch (macOS)
-- openai (Whisper API / LLM)
-- openai-whisper (optional, 本地转录)
-- notion-client (optional, Notion 输出)
+- OpenClaw（agent heartbeat 集成 summary 生成）

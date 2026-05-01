@@ -16,12 +16,12 @@
 
 ```bash
 # 方式一：一行命令安装
-curl -fsSL https://raw.githubusercontent.com/Nowhitestar/meeting-assistant/main/setup.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Nowhitestar/meeting-assistant/main/meeting-assistant/scripts/setup.sh | bash
 
 # 方式二：克隆后安装
 git clone https://github.com/Nowhitestar/meeting-assistant.git
 cd meeting-assistant
-bash setup.sh
+bash meeting-assistant/scripts/setup.sh
 ```
 
 安装脚本会交互式完成：
@@ -186,7 +186,7 @@ meeting_detector.py daemon
 
 ```text
 meeting-assistant/
-├── setup.sh
+├── scripts/setup.sh
 ├── README.md
 └── meeting-assistant/scripts/
     ├── AudioDaemon.app/                 # 原生音频 daemon app
