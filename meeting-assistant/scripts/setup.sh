@@ -1,16 +1,18 @@
 #!/usr/bin/env bash
 #
 # Meeting Assistant - 交互式安装脚本
-# Usage: bash setup.sh
+# Usage: bash meeting-assistant/scripts/setup.sh
 #
 
 set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SKILL_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+REPO_DIR="$(cd "$SKILL_DIR/.." && pwd)"
 CONFIG_DIR="$HOME/.config/meeting-assistant"
 GCP_DIR="$HOME/.config/gcp"
-RECORDING_DIR="$SCRIPT_DIR/meeting-recordings"
+RECORDING_DIR="$REPO_DIR/meeting-recordings"
 LAUNCH_AGENTS_DIR="$HOME/Library/LaunchAgents"
-PYTHON_BIN="/opt/homebrew/bin/python3"
+PYTHON_BIN="$(command -v python3 || echo /usr/bin/python3)"
 
 # Colors
 RED='\033[0;31m'
@@ -25,6 +27,17 @@ warn()  { echo -e "${YELLOW}⚠️${NC} $1"; }
 err()   { echo -e "${RED}❌${NC} $1"; }
 header(){ echo; echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"; echo -e "${BLUE}  $1${NC}"; echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"; }
 prompt(){ echo -ne "${YELLOW}➡️${NC} $1 "; }
+
+check_repo_layout() {
+    if [[ ! -f "$SCRIPT_DIR/record_audio.py" || ! -f "$SCRIPT_DIR/audio_daemon.swift" ]]; then
+        err "setup.sh 必须在完整仓库中运行，不能直接 curl | bash。"
+        echo "请使用："
+        echo "  git clone https://github.com/Nowhitestar/meeting-assistant.git"
+        echo "  cd meeting-assistant"
+        echo "  bash meeting-assistant/scripts/setup.sh"
+        exit 1
+    fi
+}
 
 # ─── Step 0: Check system ────────────────────────────
 
@@ -177,10 +190,10 @@ compile_scanner() {
     echo
 
     if command -v swiftc &>/dev/null; then
-        swiftc -o "$SCRIPT_DIR/meeting-assistant/scripts/window_scanner" \
-               "$SCRIPT_DIR/meeting-assistant/scripts/window_scanner.swift" \
+        swiftc -o "$SCRIPT_DIR/window_scanner" \
+               "$SCRIPT_DIR/window_scanner.swift" \
                -framework Cocoa 2>&1 | tail -1
-        chmod +x "$SCRIPT_DIR/meeting-assistant/scripts/window_scanner"
+        chmod +x "$SCRIPT_DIR/window_scanner"
         ok "window_scanner 编译成功"
 
         echo
@@ -190,7 +203,7 @@ compile_scanner() {
         prompt "准备好了吗？按回车继续..."
         read -r
 
-        open "$SCRIPT_DIR/meeting-assistant/scripts/window_scanner"
+        open "$SCRIPT_DIR/window_scanner"
         sleep 2
         ok "权限对话框已弹出，请点击允许"
         prompt "点完允许后按回车继续..."
@@ -198,11 +211,11 @@ compile_scanner() {
 
         # Verify
         local result
-        result=$("$SCRIPT_DIR/meeting-assistant/scripts/window_scanner" 2>&1)
+        result=$("$SCRIPT_DIR/window_scanner" 2>&1)
         if [[ "$result" == "[]" ]]; then
             warn "window_scanner 未检测到窗口，可能权限未授权"
             warn "请手动添加: 系统设置 → 隐私与安全性 → 辅助功能"
-            warn "路径: $SCRIPT_DIR/meeting-assistant/scripts/window_scanner"
+            warn "路径: $SCRIPT_DIR/window_scanner"
             prompt "继续？[Y/n]"
             read -r ans
             if [[ "$ans" =~ ^[nN] ]]; then exit 1; fi
@@ -220,7 +233,7 @@ compile_scanner() {
 compile_audio_daemon() {
     header "编译并签名 AudioDaemon"
 
-    local build_script="$SCRIPT_DIR/meeting-assistant/scripts/build_audio_daemon.sh"
+    local build_script="$SCRIPT_DIR/build_audio_daemon.sh"
     if [[ ! -x "$build_script" ]]; then
         warn "AudioDaemon build script 不存在或不可执行，跳过"
         return
@@ -234,7 +247,7 @@ compile_audio_daemon() {
     echo "  首次使用需要授权：系统设置 → 隐私与安全性 → 屏幕与系统音频录制 / 麦克风。"
     echo "  如果系统弹出权限对话框，请点击「允许」。"
 
-    open "$SCRIPT_DIR/meeting-assistant/scripts/AudioDaemon.app"
+    open "$SCRIPT_DIR/AudioDaemon.app"
     sleep 4
     local status
     status=$(echo '{"action":"status"}' | nc -w 2 -U "$HOME/.config/meeting-assistant/audio_daemon.sock" 2>/dev/null || true)
@@ -358,7 +371,8 @@ install_launchagents() {
         sed -i '' \
             -e "s|__PYTHON__|$PYTHON_BIN|g" \
             -e "s|__HOME__|$HOME|g" \
-            -e "s|__SCRIPT_DIR__|$SCRIPT_DIR/meeting-assistant/scripts|g" \
+            -e "s|__SCRIPT_DIR__|$SCRIPT_DIR|g" \
+            -e "s|__PATH__|/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin|g" \
             "$dest" 2>/dev/null || true
 
         # If plist has hardcoded paths, update if needed
@@ -370,7 +384,7 @@ install_launchagents() {
         fi
     }
 
-    local plist_dir="$SCRIPT_DIR/meeting-assistant/scripts"
+    local plist_dir="$SCRIPT_DIR"
 
     # AudioDaemon (native system audio + mic capture)
     if [[ -f "$plist_dir/com.meetingassistant.audiodaemon.plist" ]]; then
@@ -418,7 +432,7 @@ run_tests() {
 
     echo "  1/3 检测器测试"
     local detect_result
-    detect_result=$(python3 "$SCRIPT_DIR/meeting-assistant/scripts/meeting_detector.py" once 2>&1)
+    detect_result=$(python3 "$SCRIPT_DIR/meeting_detector.py" once 2>&1)
     if echo "$detect_result" | grep -q "active"; then
         ok "检测器运行正常"
     else
@@ -426,7 +440,7 @@ run_tests() {
     fi
 
     echo "  2/3 日历测试"
-    if python3 "$SCRIPT_DIR/meeting-assistant/scripts/check_meetings.py" today 2>&1; then
+    if python3 "$SCRIPT_DIR/check_meetings.py" today 2>&1; then
         ok "日历读取正常"
     else
         warn "日历读取异常（如果未配置日历则正常）"
@@ -460,7 +474,7 @@ show_summary() {
     echo
     echo "  📁 配置目录: $CONFIG_DIR"
     echo "  📁 录制目录: $RECORDING_DIR"
-    echo "  📁 项目路径: $SCRIPT_DIR"
+    echo "  📁 项目路径: $REPO_DIR"
     echo
     echo "  ⚡ 已运行的服务："
     launchctl list | grep com.meetingassistant 2>/dev/null | while IFS= read -r line; do
@@ -474,7 +488,7 @@ show_summary() {
     done
     echo
     echo "  📖 使用指南："
-    echo "    bash setup.sh         # 重新运行此安装脚本"
+    echo "    bash meeting-assistant/scripts/setup.sh  # 重新运行此安装脚本"
     echo "    check_meetings.py today   # 查看今天会议"
     echo "    meeting_detector.py once  # 手动检测会议"
     echo
@@ -507,6 +521,7 @@ if [[ "$ans" =~ ^[nN] ]]; then
     exit 0
 fi
 
+check_repo_layout
 check_system
 install_deps
 setup_audio

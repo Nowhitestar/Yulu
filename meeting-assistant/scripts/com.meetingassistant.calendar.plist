@@ -7,8 +7,8 @@
 
     <key>ProgramArguments</key>
     <array>
-        <string>/opt/homebrew/bin/python3</string>
-        <string>/Users/liaoyuxing/.openclaw/workspace/meeting-assistant/meeting-assistant/scripts/run_calendar_services.py</string>
+        <string>__PYTHON__</string>
+        <string>__SCRIPT_DIR__/run_calendar_services.py</string>
     </array>
 
     <key>RunAtLoad</key>
@@ -18,15 +18,15 @@
     <true/>
 
     <key>StandardOutPath</key>
-    <string>/Users/liaoyuxing/.config/meeting-assistant/calendar_services.log</string>
+    <string>__HOME__/.config/meeting-assistant/calendar_services.log</string>
 
     <key>StandardErrorPath</key>
-    <string>/Users/liaoyuxing/.config/meeting-assistant/calendar_services.log</string>
+    <string>__HOME__/.config/meeting-assistant/calendar_services.log</string>
 
     <key>EnvironmentVariables</key>
     <dict>
         <key>PATH</key>
-        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/Users/liaoyuxing/.nvm/versions/node/v22.22.1/bin</string>
+        <string>__PATH__</string>
     </dict>
 </dict>
 </plist>

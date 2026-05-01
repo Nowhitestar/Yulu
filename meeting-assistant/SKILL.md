@@ -52,11 +52,21 @@ Google Calendar / Window Detector
 
 ## 快速开始
 
-### 一行安装
+### 克隆后安装
+
+```bash
+git clone https://github.com/Nowhitestar/meeting-assistant.git
+cd meeting-assistant
+bash meeting-assistant/scripts/setup.sh
+```
+
+如果已经在 skill 目录（包含 `SKILL.md` 和 `scripts/`）中，也可以运行：
 
 ```bash
 bash scripts/setup.sh
 ```
+
+`setup.sh` 需要完整仓库文件，不能直接 `curl | bash`。
 
 安装脚本交互式完成：
 
@@ -103,6 +113,38 @@ launchctl load ~/Library/LaunchAgents/com.meetingassistant.audiodaemon.plist
 
 如果录不到系统音频：
 系统设置 → 隐私与安全性 → **屏幕与系统音频录制** → 允许 `AudioDaemon.app`
+
+## Google Calendar 与隐私
+
+日历授权使用 `gog`，refresh token 存在系统 Keychain；仓库不应包含真实 `client_secret*.json`、refresh token、API key 或个人日历 ID。
+
+推荐配置：
+
+```bash
+# 1. Google Cloud Console 启用 Calendar API，创建 Desktop OAuth client，下载 JSON
+# 2. 本机导入并授权
+gog auth credentials ~/Downloads/client_secret_xxx.json
+gog auth add your.email@example.com --services calendar
+gog auth list
+# 3. 授权成功后可删除 Downloads 中的 client_secret_xxx.json 副本
+```
+
+然后在 `~/.config/meeting-assistant/config.json` 中启用：
+
+```json
+{
+  "calendars": [
+    {
+      "type": "google",
+      "enabled": true,
+      "gog_account": "your.email@example.com",
+      "watch_calendars": ["primary"]
+    }
+  ]
+}
+```
+
+如果凭据曾经发到聊天或公开仓库：删除对应 OAuth client，revoke token，重新创建并授权。
 
 ## 配置文件
 

@@ -36,10 +36,10 @@ GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "")
 GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET", "")
 REFRESH_TOKEN = os.environ.get("GOG_REFRESH_TOKEN", "")
 
-# 要 watch 的日历列表
+# Deprecated fallback server: keep defaults generic and load real calendar IDs
+# from environment when needed. Prefer run_calendar_services.py.
 CALENDARS = [
-    {"id": "primary", "label": "chainbase 主日历"},
-    {"id": "yxliao.lewis@gmail.com", "label": "Gmail 日历（共享）"},
+    {"id": os.environ.get("GOOGLE_CALENDAR_ID", "primary"), "label": "primary"},
 ]
 
 LOCK = threading.Lock()

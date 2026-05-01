@@ -9,9 +9,8 @@
     {
       "type": "google",
       "enabled": false,
-      "credentials_path": "~/.config/gcp/calendar-credentials.json",
       "gog_account": "your.email@example.com",
-      "watch_calendars": ["primary", "shared.calendar@gmail.com"]
+      "watch_calendars": ["primary"]
     }
   ],
   "audio": {

@@ -15,14 +15,13 @@
 ## 快速安装
 
 ```bash
-# 方式一：一行命令安装
-curl -fsSL https://raw.githubusercontent.com/Nowhitestar/meeting-assistant/main/meeting-assistant/scripts/setup.sh | bash
-
-# 方式二：克隆后安装
+# 克隆后安装（setup.sh 需要完整仓库文件，不能直接 curl | bash）
 git clone https://github.com/Nowhitestar/meeting-assistant.git
 cd meeting-assistant
 bash meeting-assistant/scripts/setup.sh
 ```
+
+> 安装脚本会把用户级配置写到 `~/.config/meeting-assistant/` 和 `~/.config/gcp/`。这些路径已在 `.gitignore` 中排除，不要把自己的 `client_secret*.json`、`config.json`、token 或录音文件提交到公开仓库。
 
 安装脚本会交互式完成：
 
@@ -119,6 +118,42 @@ MEETING_ASSISTANT_CODESIGN_IDENTITY="Developer ID Application: ..." \
   meeting-assistant/scripts/build_audio_daemon.sh
 ```
 
+## Google Calendar 配置
+
+日历功能使用 `gog` 存储 OAuth refresh token 到系统 Keychain；仓库不会、也不应该包含任何真实 OAuth secret。
+
+推荐流程：
+
+1. 打开 Google Cloud Console → APIs & Services → Credentials
+2. 启用 Google Calendar API
+3. 创建 OAuth Client ID，Application type 选择 **Desktop app**
+4. 下载 `client_secret_*.json` 到本机，例如 `~/Downloads/client_secret_xxx.json`
+5. 运行：
+
+```bash
+gog auth credentials ~/Downloads/client_secret_xxx.json
+gog auth add your.email@example.com --services calendar
+gog auth list
+```
+
+6. 授权成功后可删除 Downloads 里的 `client_secret_*.json` 副本；`gog` 已把凭据复制到自己的配置目录。
+7. 在 `~/.config/meeting-assistant/config.json` 中启用：
+
+```json
+{
+  "calendars": [
+    {
+      "type": "google",
+      "enabled": true,
+      "gog_account": "your.email@example.com",
+      "watch_calendars": ["primary"]
+    }
+  ]
+}
+```
+
+安全建议：如果任何 `client_secret*.json` 或 refresh token 曾经发到聊天/公开仓库，删除对应 OAuth client 并重新授权。
+
 ## 配置文件
 
 路径：`~/.config/meeting-assistant/config.json`
@@ -163,45 +198,49 @@ MEETING_ASSISTANT_CODESIGN_IDENTITY="Developer ID Application: ..." \
 echo '{"action":"status"}' | nc -w 2 -U ~/.config/meeting-assistant/audio_daemon.sock
 
 # 手动录制
-record_audio.py start "测试会议"
-record_audio.py stop
+python3 meeting-assistant/scripts/record_audio.py start "测试会议"
+python3 meeting-assistant/scripts/record_audio.py stop
 
 # 弹窗录制流程
-meeting_daemon.py ask_record "测试会议" "manual-test"
+python3 meeting-assistant/scripts/meeting_daemon.py ask_record "测试会议" "manual-test"
 
 # 转录某个 WAV
-transcribe.py /path/to/meeting-assistant/meeting-recordings/xxx.wav
+python3 meeting-assistant/scripts/transcribe.py /path/to/meeting-assistant/meeting-recordings/xxx.wav
 
 # 日历
-check_meetings.py today
-check_meetings.py upcoming
-check_meetings.py week --json
+python3 meeting-assistant/scripts/check_meetings.py today
+python3 meeting-assistant/scripts/check_meetings.py upcoming
+python3 meeting-assistant/scripts/check_meetings.py week --json
 
 # 窗口检测
-meeting_detector.py once
-meeting_detector.py daemon
+python3 meeting-assistant/scripts/meeting_detector.py once
+python3 meeting-assistant/scripts/meeting_detector.py daemon
 ```
 
 ## 文件结构
 
 ```text
 meeting-assistant/
-├── scripts/setup.sh
 ├── README.md
-└── meeting-assistant/scripts/
-    ├── AudioDaemon.app/                 # 原生音频 daemon app
-    ├── audio_daemon.swift               # ScreenCaptureKit + AVFoundation + socket
-    ├── build_audio_daemon.sh            # 编译并固定签名 AudioDaemon
-    ├── record_audio.py                  # daemon/sox 后端入口
-    ├── meeting_daemon.py                # 录制流程控制
-    ├── scheduler_daemon.py              # 定时调度器
-    ├── meeting_detector.py              # 会议窗口检测
-    ├── window_scanner.swift             # AX 窗口扫描
-    ├── recorder_status.swift            # 录制状态浮窗
-    ├── transcribe.py                    # whisper 转录 + summary request
-    ├── agent_notify.py                  # OpenClaw agent queue
-    ├── summary_template.md              # 会议纪要模板
-    └── com.meetingassistant.*.plist      # LaunchAgents
+├── meeting-assistant.skill
+├── meeting-recordings/                  # 本地录音输出，git ignored
+└── meeting-assistant/
+    ├── SKILL.md
+    └── scripts/
+        ├── setup.sh                     # 交互式一键安装
+        ├── AudioDaemon.app/             # 原生音频 daemon app
+        ├── audio_daemon.swift           # ScreenCaptureKit + AVFoundation + socket
+        ├── build_audio_daemon.sh        # 编译并固定签名 AudioDaemon
+        ├── record_audio.py              # daemon/sox 后端入口
+        ├── meeting_daemon.py            # 录制流程控制
+        ├── scheduler_daemon.py          # 定时调度器
+        ├── meeting_detector.py          # 会议窗口检测
+        ├── window_scanner.swift         # AX 窗口扫描
+        ├── recorder_status.swift        # 录制状态浮窗
+        ├── transcribe.py                # whisper 转录 + summary request
+        ├── agent_notify.py              # OpenClaw agent queue
+        ├── summary_template.md          # 会议纪要模板
+        └── com.meetingassistant.*.plist # LaunchAgents
 ```
 
 ## 排障
