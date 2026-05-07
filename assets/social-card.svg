@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 640" width="1280" height="640">
+  <rect width="1280" height="640" fill="#F5F1E8"/>
+  <text x="640" y="310"
+        font-family="'Songti SC', 'STSong', 'Source Han Serif CN', 'Noto Serif CJK SC', serif"
+        font-size="280" font-weight="500" fill="#1B1B1B" text-anchor="middle">语</text>
+  <circle cx="800" cy="345" r="14" fill="#A23B2B"/>
+  <text x="640" y="450"
+        font-family="'Charter', 'Iowan Old Style', 'Georgia', serif"
+        font-size="56" font-weight="500" fill="#1B1B1B" text-anchor="middle">Yulu</text>
+  <text x="640" y="510"
+        font-family="'Charter', 'Iowan Old Style', 'Georgia', serif"
+        font-size="26" font-style="italic" fill="#5A5A52" text-anchor="middle">Listen quietly. Capture everything.</text>
+  <text x="640" y="585"
+        font-family="'Songti SC', 'STSong', serif"
+        font-size="20" fill="#888880" text-anchor="middle">语录 · macOS native meeting recorder · whisper.cpp · BYOA</text>
+</svg>
