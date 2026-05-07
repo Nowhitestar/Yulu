@@ -177,7 +177,6 @@ Yulu/
     ├── SKILL.md                          # Claude / OpenClaw skill manifest
     └── scripts/
         ├── setup.sh                      # 交互式安装脚本
-        ├── migrate_to_yulu.sh            # 从旧 meeting-assistant 升级的迁移脚本
         ├── Yulu.app/                     # 签名（或 ad-hoc）后的音频 daemon bundle
         ├── audio_daemon.swift            # ScreenCaptureKit + AVFoundation
         ├── build_audio_daemon.sh         # 编译并签名 Yulu.app
@@ -194,17 +193,6 @@ Yulu/
         ├── summary_template.md           # 默认会议纪要模板
         └── com.yulu.*.plist              # LaunchAgent 定义
 ```
-
-## 从 `meeting-assistant` 升级
-
-如果你装过老版（当时这个项目叫 `meeting-assistant`），重新跑 `setup.sh` 之前先跑迁移脚本：
-
-```bash
-bash yulu/scripts/migrate_to_yulu.sh
-bash yulu/scripts/setup.sh
-```
-
-迁移脚本会把 `~/.config/meeting-assistant/` 移到 `~/.config/yulu/`，并卸载旧的 `com.meetingassistant.*` LaunchAgents。**因为 AudioDaemon 的 bundle id 变了，macOS 会把它当作一个新 app 重新弹麦克风和屏幕录制权限**——这一步无法绕过，是重命名的代价。
 
 ## 支持
 

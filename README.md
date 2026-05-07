@@ -176,7 +176,6 @@ Yulu/
     ├── SKILL.md                          # Claude / OpenClaw skill manifest
     └── scripts/
         ├── setup.sh                      # interactive installer
-        ├── migrate_to_yulu.sh            # one-shot upgrade for old meeting-assistant installs
         ├── Yulu.app/                     # signed (or ad-hoc) audio daemon bundle
         ├── audio_daemon.swift            # ScreenCaptureKit + AVFoundation
         ├── build_audio_daemon.sh         # build & sign Yulu.app
@@ -193,17 +192,6 @@ Yulu/
         ├── summary_template.md           # default meeting note template
         └── com.yulu.*.plist              # LaunchAgent definitions
 ```
-
-## Upgrading from `meeting-assistant`
-
-If you installed an earlier version when this project was called `meeting-assistant`, run the migration script once before re-running `setup.sh`:
-
-```bash
-bash yulu/scripts/migrate_to_yulu.sh
-bash yulu/scripts/setup.sh
-```
-
-The migration script moves `~/.config/meeting-assistant/` → `~/.config/yulu/` and removes the old `com.meetingassistant.*` LaunchAgents. Because the AudioDaemon bundle id changed, **macOS will treat it as a new app and ask for Microphone and Screen Recording permissions again** — that re-grant is expected and unavoidable.
 
 ## Support
 

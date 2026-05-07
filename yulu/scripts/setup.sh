@@ -514,35 +514,6 @@ echo "  本脚本将引导你完成 Yulu 的安装和配置。"
 echo "  全程大约需要 10-15 分钟。"
 echo
 
-# ─── Detect a previous meeting-assistant installation ─────────────
-detect_legacy_install() {
-    local found=0
-    if [[ -d "$HOME/.config/meeting-assistant" ]]; then
-        found=1
-    fi
-    if compgen -G "$HOME/Library/LaunchAgents/com.meetingassistant.*.plist" >/dev/null 2>&1; then
-        found=1
-    fi
-    if [[ $found -eq 1 ]]; then
-        warn "检测到旧版 meeting-assistant 安装。"
-        echo "  Yulu 改名后，配置目录、LaunchAgent 标签、Yulu.app 的 bundle id 都变了。"
-        echo "  建议先运行迁移脚本，再继续安装："
-        echo
-        echo "    bash $SCRIPT_DIR/migrate_to_yulu.sh"
-        echo
-        prompt "现在运行迁移脚本？[Y/n]"
-        read -r ans
-        if [[ ! "$ans" =~ ^[nN] ]]; then
-            bash "$SCRIPT_DIR/migrate_to_yulu.sh"
-            echo
-            ok "迁移完成。继续安装新版 Yulu..."
-            echo
-        else
-            warn "已跳过迁移。继续安装可能与旧版冲突；后续请手动运行 migrate_to_yulu.sh。"
-        fi
-    fi
-}
-
 prompt "开始安装？[Y/n]"
 read -r ans
 if [[ "$ans" =~ ^[nN] ]]; then
@@ -550,7 +521,6 @@ if [[ "$ans" =~ ^[nN] ]]; then
     exit 0
 fi
 
-detect_legacy_install
 check_repo_layout
 check_system
 install_deps

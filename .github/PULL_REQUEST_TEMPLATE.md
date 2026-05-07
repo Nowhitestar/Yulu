@@ -24,5 +24,5 @@ At minimum, say what you ran. For audio/recording changes please include:
 
 - [ ] I read [CONTRIBUTING.md](../CONTRIBUTING.md)
 - [ ] If I touched user-facing behavior, I updated `CHANGELOG.md` under `[Unreleased]`
-- [ ] If I changed a CLI flag, env var, plist label, or bundle id, I called it out in the PR description and (if appropriate) added a `migrate_to_yulu.sh`-style migration note
+- [ ] If I changed a CLI flag, env var, plist label, or bundle id, I called it out in the PR description and the CHANGELOG `[Unreleased]` entry, with explicit migration steps for existing installs
 - [ ] I did NOT commit any `client_secret*.json`, `token*.json`, real refresh tokens, API keys, or personal calendar IDs
