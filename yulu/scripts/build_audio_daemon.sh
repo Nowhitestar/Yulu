@@ -2,10 +2,13 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 APP="$SCRIPT_DIR/AudioDaemon.app"
 BIN="$SCRIPT_DIR/audio_daemon"
 APP_BIN="$APP/Contents/MacOS/audio_daemon"
+RES_DIR="$APP/Contents/Resources"
 INFO="$APP/Contents/Info.plist"
+ICNS_SRC="$REPO_DIR/assets/Yulu.icns"
 
 cd "$SCRIPT_DIR"
 
@@ -16,12 +19,21 @@ swiftc -o "$BIN" audio_daemon.swift \
   -framework CoreMedia \
   -framework CoreAudio
 
-mkdir -p "$APP/Contents/MacOS"
+mkdir -p "$APP/Contents/MacOS" "$RES_DIR"
 cp "$BIN" "$APP_BIN"
 chmod +x "$APP_BIN"
 
-# Force-write the Info.plist fields that govern macOS identity and TCC prompts,
-# so this script is the single source of truth.
+# Bundle the Yulu icon so System Settings, the Dock, TCC prompts, and
+# terminal-notifier (via -sender com.yulu.audiodaemon) all show the
+# parchment-and-ink 语 logo instead of a generic placeholder.
+if [[ -f "$ICNS_SRC" ]]; then
+  cp "$ICNS_SRC" "$RES_DIR/Yulu.icns"
+else
+  echo "⚠️ assets/Yulu.icns missing — bundle will have no icon." >&2
+fi
+
+# Force-write the Info.plist fields that govern macOS identity, icon, and
+# TCC prompt copy. This script is the single source of truth.
 plist_set_or_add() {
   local key="$1" type="$2" value="$3"
   /usr/libexec/PlistBuddy -c "Set :$key $value" "$INFO" >/dev/null 2>&1 || \
@@ -29,8 +41,10 @@ plist_set_or_add() {
 }
 
 plist_set_or_add CFBundleIdentifier      string  com.yulu.audiodaemon
-plist_set_or_add CFBundleName            string  "Yulu AudioDaemon"
-plist_set_or_add CFBundleDisplayName     string  "Yulu AudioDaemon"
+plist_set_or_add CFBundleName            string  Yulu
+plist_set_or_add CFBundleDisplayName     string  Yulu
+plist_set_or_add CFBundleIconFile        string  Yulu
+plist_set_or_add CFBundleIconName        string  Yulu
 plist_set_or_add NSMicrophoneUsageDescription   string  "Yulu records microphone audio for meeting notes."
 plist_set_or_add NSScreenCaptureUsageDescription string "Yulu captures system audio for meeting notes."
 

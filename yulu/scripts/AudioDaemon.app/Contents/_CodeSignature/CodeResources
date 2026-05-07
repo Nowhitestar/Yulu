@@ -3,9 +3,22 @@
 <plist version="1.0">
 <dict>
 	<key>files</key>
-	<dict/>
+	<dict>
+		<key>Resources/Yulu.icns</key>
+		<data>
+		HKr3yQCYab6Qqf6PXpKW7dWCTGc=
+		</data>
+	</dict>
 	<key>files2</key>
-	<dict/>
+	<dict>
+		<key>Resources/Yulu.icns</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			AI/XZjenoVaaIYSUYcuYnCvgmvLrXl6dcrIdkbWDdtE=
+			</data>
+		</dict>
+	</dict>
 	<key>rules</key>
 	<dict>
 		<key>^Resources/</key>

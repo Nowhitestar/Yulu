@@ -54,6 +54,9 @@ def _fallback_dialog(message, buttons, default_button, timeout=60):
     return ""
 
 
+YULU_BUNDLE_ID = "com.yulu.audiodaemon"
+
+
 def remind(title, message, subtitle=""):
     """发送纯提醒通知（会议前5分钟）。"""
     if _has_terminal_notifier():
@@ -62,6 +65,10 @@ def remind(title, message, subtitle=""):
             "-title", title,
             "-message", message,
             "-sound", "Glass",
+            # Show the Yulu logo instead of the calling shell's icon (Terminal,
+            # iTerm, …). -sender requires the bundle id to belong to a launched
+            # app; the AudioDaemon LaunchAgent keeps com.yulu.audiodaemon alive.
+            "-sender", YULU_BUNDLE_ID,
         ]
         if subtitle:
             cmd += ["-subtitle", subtitle]

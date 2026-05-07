@@ -3,13 +3,17 @@
 <plist version="1.0">
 <dict>
 	<key>CFBundleDisplayName</key>
-	<string>Yulu AudioDaemon</string>
+	<string>Yulu</string>
 	<key>CFBundleExecutable</key>
 	<string>audio_daemon</string>
+	<key>CFBundleIconFile</key>
+	<string>Yulu</string>
+	<key>CFBundleIconName</key>
+	<string>Yulu</string>
 	<key>CFBundleIdentifier</key>
 	<string>com.yulu.audiodaemon</string>
 	<key>CFBundleName</key>
-	<string>Yulu AudioDaemon</string>
+	<string>Yulu</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>LSUIElement</key>
