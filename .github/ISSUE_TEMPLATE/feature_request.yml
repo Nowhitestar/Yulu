@@ -1,0 +1,30 @@
+name: Feature request
+description: Suggest something Yulu doesn't do today.
+title: "[feature] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Yulu's stance on scope: local-first, BYOA (bring your own agent), no virtual audio device. Features that fight any of those are unlikely to land — but say so anyway, the scope can move.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What's the underlying problem?
+      description: Describe the situation that this feature would fix. Concrete > abstract.
+      placeholder: e.g. "I have back-to-back meetings and can't tell which `meeting-recordings/<timestamp>/` belongs to which calendar event without opening each summary."
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would you like Yulu to do?
+      placeholder: e.g. "Name the recording folder after the calendar event title (sanitized) instead of just the timestamp."
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you've considered
+      description: Optional. If you've worked around this somehow, what does the workaround cost you?

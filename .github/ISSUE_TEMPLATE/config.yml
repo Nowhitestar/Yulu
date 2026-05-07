@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Question or general discussion
+    url: https://github.com/Nowhitestar/Yulu/discussions
+    about: Not a bug, not a feature request — just want to ask something or share how you use Yulu.
+  - name: Security disclosure
+    url: https://github.com/Nowhitestar/Yulu/security/advisories/new
+    about: Found a vulnerability? Don't open a public issue — use a private security advisory. See SECURITY.md.
