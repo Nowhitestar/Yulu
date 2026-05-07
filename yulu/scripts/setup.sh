@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 #
-# Meeting Assistant - 交互式安装脚本
-# Usage: bash meeting-assistant/scripts/setup.sh
+# Yulu - 交互式安装脚本
+# Usage: bash yulu/scripts/setup.sh
 #
 
 set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SKILL_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 REPO_DIR="$(cd "$SKILL_DIR/.." && pwd)"
-CONFIG_DIR="$HOME/.config/meeting-assistant"
+CONFIG_DIR="$HOME/.config/yulu"
 GCP_DIR="$HOME/.config/gcp"
 RECORDING_DIR="$REPO_DIR/meeting-recordings"
 LAUNCH_AGENTS_DIR="$HOME/Library/LaunchAgents"
@@ -32,9 +32,9 @@ check_repo_layout() {
     if [[ ! -f "$SCRIPT_DIR/record_audio.py" || ! -f "$SCRIPT_DIR/audio_daemon.swift" ]]; then
         err "setup.sh 必须在完整仓库中运行，不能直接 curl | bash。"
         echo "请使用："
-        echo "  git clone https://github.com/Nowhitestar/meeting-assistant.git"
-        echo "  cd meeting-assistant"
-        echo "  bash meeting-assistant/scripts/setup.sh"
+        echo "  git clone https://github.com/Nowhitestar/Yulu.git"
+        echo "  cd Yulu"
+        echo "  bash yulu/scripts/setup.sh"
         exit 1
     fi
 }
@@ -104,7 +104,7 @@ install_deps() {
 setup_audio() {
     header "音频配置"
 
-    echo "  Meeting Assistant 默认使用原生 macOS ScreenCaptureKit + AVFoundation。"
+    echo "  Yulu 默认使用原生 macOS ScreenCaptureKit + AVFoundation。"
     echo "  不需要 BlackHole、多输出设备或虚拟声卡。"
     echo
     echo "  首次使用 AudioDaemon.app 时，请授权："
@@ -250,7 +250,7 @@ compile_audio_daemon() {
     open "$SCRIPT_DIR/AudioDaemon.app"
     sleep 4
     local status
-    status=$(echo '{"action":"status"}' | nc -w 2 -U "$HOME/.config/meeting-assistant/audio_daemon.sock" 2>/dev/null || true)
+    status=$(echo '{"action":"status"}' | nc -w 2 -U "$HOME/.config/yulu/audio_daemon.sock" 2>/dev/null || true)
     if echo "$status" | grep -q '"sysReady":true' && echo "$status" | grep -q '"micReady":true'; then
         ok "AudioDaemon 捕获权限正常"
     else
@@ -264,7 +264,7 @@ compile_audio_daemon() {
 setup_calendar() {
     header "Google 日历配置（可选）"
 
-    echo "  Meeting Assistant 可以读取 Google 日历来自动提醒和录制会议。"
+    echo "  Yulu 可以读取 Google 日历来自动提醒和录制会议。"
     echo "  跳过此步骤也可以使用，只是不会有日历自动同步功能。"
     echo
 
@@ -387,33 +387,33 @@ install_launchagents() {
     local plist_dir="$SCRIPT_DIR"
 
     # AudioDaemon (native system audio + mic capture)
-    if [[ -f "$plist_dir/com.meetingassistant.audiodaemon.plist" ]]; then
-        install_plist "$plist_dir/com.meetingassistant.audiodaemon.plist" "com.meetingassistant.audiodaemon.plist"
-        launchctl load "$LAUNCH_AGENTS_DIR/com.meetingassistant.audiodaemon.plist" 2>/dev/null || true
+    if [[ -f "$plist_dir/com.yulu.audiodaemon.plist" ]]; then
+        install_plist "$plist_dir/com.yulu.audiodaemon.plist" "com.yulu.audiodaemon.plist"
+        launchctl load "$LAUNCH_AGENTS_DIR/com.yulu.audiodaemon.plist" 2>/dev/null || true
         ok "audiodaemon 已加载"
     fi
 
     # Scheduler
-    if [[ -f "$plist_dir/com.meetingassistant.scheduler.plist" ]]; then
-        install_plist "$plist_dir/com.meetingassistant.scheduler.plist" "com.meetingassistant.scheduler.plist"
-        launchctl load "$LAUNCH_AGENTS_DIR/com.meetingassistant.scheduler.plist" 2>/dev/null || true
+    if [[ -f "$plist_dir/com.yulu.scheduler.plist" ]]; then
+        install_plist "$plist_dir/com.yulu.scheduler.plist" "com.yulu.scheduler.plist"
+        launchctl load "$LAUNCH_AGENTS_DIR/com.yulu.scheduler.plist" 2>/dev/null || true
         ok "scheduler 已加载"
     fi
 
     # Detector
-    if [[ -f "$plist_dir/com.meetingassistant.detector.plist" ]]; then
-        install_plist "$plist_dir/com.meetingassistant.detector.plist" "com.meetingassistant.detector.plist"
-        launchctl load "$LAUNCH_AGENTS_DIR/com.meetingassistant.detector.plist" 2>/dev/null || true
+    if [[ -f "$plist_dir/com.yulu.detector.plist" ]]; then
+        install_plist "$plist_dir/com.yulu.detector.plist" "com.yulu.detector.plist"
+        launchctl load "$LAUNCH_AGENTS_DIR/com.yulu.detector.plist" 2>/dev/null || true
         ok "detector 已加载"
     fi
 
     # Calendar service (optional, only if gog configured)
-    if [[ -f "$plist_dir/com.meetingassistant.calendar.plist" ]]; then
+    if [[ -f "$plist_dir/com.yulu.calendar.plist" ]]; then
         prompt "安装日历推送服务（需要 Google 日历）？[y/N]"
         read -r ans
         if [[ "$ans" =~ ^[yY] ]]; then
-            install_plist "$plist_dir/com.meetingassistant.calendar.plist" "com.meetingassistant.calendar.plist"
-            launchctl load "$LAUNCH_AGENTS_DIR/com.meetingassistant.calendar.plist" 2>/dev/null || true
+            install_plist "$plist_dir/com.yulu.calendar.plist" "com.yulu.calendar.plist"
+            launchctl load "$LAUNCH_AGENTS_DIR/com.yulu.calendar.plist" 2>/dev/null || true
             ok "calendar 已加载"
         fi
     fi
@@ -421,7 +421,7 @@ install_launchagents() {
     echo
     info "正在等待服务启动..."
     sleep 3
-    launchctl list | grep com.meetingassistant
+    launchctl list | grep com.yulu
     ok "服务已安装"
 }
 
@@ -448,7 +448,7 @@ run_tests() {
 
     echo "  3/4 AudioDaemon 测试"
     local audio_status
-    audio_status=$(echo '{"action":"status"}' | nc -w 2 -U "$HOME/.config/meeting-assistant/audio_daemon.sock" 2>/dev/null || true)
+    audio_status=$(echo '{"action":"status"}' | nc -w 2 -U "$HOME/.config/yulu/audio_daemon.sock" 2>/dev/null || true)
     if echo "$audio_status" | grep -q '"sysReady":true' && echo "$audio_status" | grep -q '"micReady":true'; then
         ok "AudioDaemon 运行正常"
     else
@@ -457,7 +457,7 @@ run_tests() {
 
     echo "  4/4 通知测试"
     if command -v terminal-notifier &>/dev/null; then
-        terminal-notifier -title "Meeting Assistant" -message "安装完成！" -sound default 2>/dev/null || true
+        terminal-notifier -title "Yulu" -message "安装完成！" -sound default 2>/dev/null || true
         ok "通知测试通过"
     fi
 
@@ -470,14 +470,14 @@ run_tests() {
 show_summary() {
     header "安装完成 🎉"
 
-    echo "  Meeting Assistant 已安装并运行："
+    echo "  Yulu 已安装并运行："
     echo
     echo "  📁 配置目录: $CONFIG_DIR"
     echo "  📁 录制目录: $RECORDING_DIR"
     echo "  📁 项目路径: $REPO_DIR"
     echo
     echo "  ⚡ 已运行的服务："
-    launchctl list | grep com.meetingassistant 2>/dev/null | while IFS= read -r line; do
+    launchctl list | grep com.yulu 2>/dev/null | while IFS= read -r line; do
         pid=$(echo "$line" | awk '{print $1}')
         name=$(echo "$line" | awk '{print $3}')
         if [[ "$pid" != "-" ]]; then
@@ -488,18 +488,18 @@ show_summary() {
     done
     echo
     echo "  📖 使用指南："
-    echo "    bash meeting-assistant/scripts/setup.sh  # 重新运行此安装脚本"
+    echo "    bash yulu/scripts/setup.sh  # 重新运行此安装脚本"
     echo "    check_meetings.py today   # 查看今天会议"
     echo "    meeting_detector.py once  # 手动检测会议"
     echo
     echo "  🛠️  管理命令："
-    echo "    launchctl list | grep com.meetingassistant  # 查看服务状态"
-    echo "    launchctl unload ~/Library/LaunchAgents/com.meetingassistant.XXX.plist  # 停止服务"
-    echo "    launchctl load   ~/Library/LaunchAgents/com.meetingassistant.XXX.plist  # 启动服务"
+    echo "    launchctl list | grep com.yulu  # 查看服务状态"
+    echo "    launchctl unload ~/Library/LaunchAgents/com.yulu.XXX.plist  # 停止服务"
+    echo "    launchctl load   ~/Library/LaunchAgents/com.yulu.XXX.plist  # 启动服务"
     echo
     echo "  ❓ 需要帮助？"
     echo "    README.md 中有完整文档"
-    echo "    https://github.com/Nowhitestar/meeting-assistant"
+    echo "    https://github.com/Nowhitestar/Yulu"
 }
 
 # ─── Main ────────────────────────────────────────────
@@ -507,12 +507,41 @@ show_summary() {
 clear
 echo -e "${BLUE}"
 echo "  ╔══════════════════════════════════════════╗"
-echo "  ║         Meeting Assistant 安装脚本       ║"
+echo "  ║              Yulu 安装脚本               ║"
 echo "  ╚══════════════════════════════════════════╝"
 echo -e "${NC}"
-echo "  本脚本将引导你完成 Meeting Assistant 的安装和配置。"
+echo "  本脚本将引导你完成 Yulu 的安装和配置。"
 echo "  全程大约需要 10-15 分钟。"
 echo
+
+# ─── Detect a previous meeting-assistant installation ─────────────
+detect_legacy_install() {
+    local found=0
+    if [[ -d "$HOME/.config/meeting-assistant" ]]; then
+        found=1
+    fi
+    if compgen -G "$HOME/Library/LaunchAgents/com.meetingassistant.*.plist" >/dev/null 2>&1; then
+        found=1
+    fi
+    if [[ $found -eq 1 ]]; then
+        warn "检测到旧版 meeting-assistant 安装。"
+        echo "  Yulu 改名后，配置目录、LaunchAgent 标签、AudioDaemon bundle id 都变了。"
+        echo "  建议先运行迁移脚本，再继续安装："
+        echo
+        echo "    bash $SCRIPT_DIR/migrate_to_yulu.sh"
+        echo
+        prompt "现在运行迁移脚本？[Y/n]"
+        read -r ans
+        if [[ ! "$ans" =~ ^[nN] ]]; then
+            bash "$SCRIPT_DIR/migrate_to_yulu.sh"
+            echo
+            ok "迁移完成。继续安装新版 Yulu..."
+            echo
+        else
+            warn "已跳过迁移。继续安装可能与旧版冲突；后续请手动运行 migrate_to_yulu.sh。"
+        fi
+    fi
+}
 
 prompt "开始安装？[Y/n]"
 read -r ans
@@ -521,6 +550,7 @@ if [[ "$ans" =~ ^[nN] ]]; then
     exit 0
 fi
 
+detect_legacy_install
 check_repo_layout
 check_system
 install_deps

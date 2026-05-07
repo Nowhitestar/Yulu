@@ -13,7 +13,7 @@ import json
 from datetime import datetime
 from pathlib import Path
 
-QUEUE_PATH = Path.home() / ".config" / "meeting-assistant" / "agent-queue.json"
+QUEUE_PATH = Path.home() / ".config" / "yulu" / "agent-queue.json"
 
 
 def notify(event_type: str, **kwargs):

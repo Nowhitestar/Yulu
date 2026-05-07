@@ -1,11 +1,13 @@
 ---
-name: meeting-assistant
-description: "Native macOS meeting automation for OpenClaw: calendar/window detection, prompt-before-recording, ScreenCaptureKit system audio + microphone recording, local whisper-cli transcription, and agent-generated meeting notes. No BlackHole or virtual audio device required. Use when you need automatic meeting detection, recording, transcription, and final summaries delivered by an OpenClaw agent."
+name: yulu
+description: "Yulu (语录) — native macOS meeting recorder and note-taker. Calendar/window detection, prompt-before-recording, ScreenCaptureKit system audio + microphone recording, local whisper-cli transcription, and agent-generated meeting notes via an agent queue. No BlackHole or virtual audio device required. Use when you need automatic meeting detection, recording, transcription, and final summaries delivered by any coding agent (Claude Code, Codex, OpenClaw)."
 ---
 
-# Meeting Assistant
+# Yulu
 
-Native macOS meeting automation for OpenClaw: calendar/window detection → prompt before recording → system audio + microphone recording → local transcription → agent-generated meeting notes.
+Yulu (语录, *yǔ lù*) is a native macOS meeting recorder and note-taker. The name comes from the Chinese genre of "recorded sayings" — *The Analects* is the classic example.
+
+Pipeline: calendar/window detection → prompt before recording → system audio + microphone capture → local whisper transcription → agent-generated meeting notes.
 
 ## Architecture
 
@@ -44,9 +46,9 @@ Google Calendar / Window Detector
 Clone the full repository first. `setup.sh` needs repository files and should not be run via `curl | bash`.
 
 ```bash
-git clone https://github.com/Nowhitestar/meeting-assistant.git
-cd meeting-assistant
-bash meeting-assistant/scripts/setup.sh
+git clone https://github.com/Nowhitestar/Yulu.git
+cd Yulu
+bash yulu/scripts/setup.sh
 ```
 
 If you are already inside the skill folder that contains `SKILL.md` and `scripts/`, you can run:
@@ -59,7 +61,7 @@ The installer will:
 
 1. Check macOS, Homebrew, and Python
 2. Install `sox`, `ffmpeg`, `whisper-cpp`, `terminal-notifier`, `gogcli`, and `cloudflared`
-3. Create `~/.config/meeting-assistant/config.json`
+3. Create `~/.config/yulu/config.json`
 4. Compile the window scanner and guide Accessibility permission setup
 5. Build and sign `AudioDaemon.app`
 6. Guide Microphone and Screen & System Audio Recording permissions
@@ -95,7 +97,7 @@ gog auth list
 # 4. After auth succeeds, delete the Downloads copy of client_secret_xxx.json.
 ```
 
-Then enable Google Calendar in `~/.config/meeting-assistant/config.json`:
+Then enable Google Calendar in `~/.config/yulu/config.json`:
 
 ```json
 {
@@ -114,7 +116,7 @@ If credentials were ever posted in chat or committed publicly: delete the OAuth 
 
 ## Configuration
 
-Config path: `~/.config/meeting-assistant/config.json`
+Config path: `~/.config/yulu/config.json`
 
 Key fields:
 
@@ -122,7 +124,7 @@ Key fields:
 {
   "audio": {
     "backend": "daemon",
-    "output_dir": "/path/to/meeting-assistant/meeting-recordings",
+    "output_dir": "/path/to/Yulu/meeting-recordings",
     "silence_threshold": 0.01,
     "silence_duration_sec": 300,
     "half_duplex": true
@@ -169,13 +171,13 @@ All scripts live under `scripts/`:
 | `run_calendar_services.py` | Google Calendar webhook + cloudflared tunnel service |
 | `summary_template.md` | Meeting notes template |
 | `config.example.json` | Example config |
-| `com.meetingassistant.*.plist` | LaunchAgent definitions |
+| `com.yulu.*.plist` | LaunchAgent definitions |
 
 ## Manual Commands
 
 ```bash
 # AudioDaemon status
-echo '{"action":"status"}' | nc -w 2 -U ~/.config/meeting-assistant/audio_daemon.sock
+echo '{"action":"status"}' | nc -w 2 -U ~/.config/yulu/audio_daemon.sock
 
 # Manual recording
 python3 scripts/record_audio.py start "Test Meeting"
@@ -202,7 +204,7 @@ python3 scripts/meeting_detector.py daemon
 ### AudioDaemon has no system audio
 
 ```bash
-echo '{"action":"status"}' | nc -w 2 -U ~/.config/meeting-assistant/audio_daemon.sock
+echo '{"action":"status"}' | nc -w 2 -U ~/.config/yulu/audio_daemon.sock
 ```
 
 If `sysReady=false`:
@@ -225,7 +227,7 @@ Usually this is a TCC permission issue or the daemon is not ready. Newer version
 Check the queue:
 
 ```bash
-cat ~/.config/meeting-assistant/agent-queue.json
+cat ~/.config/yulu/agent-queue.json
 ```
 
 If there is a `summary_request`, the OpenClaw heartbeat agent will read the transcript and template, overwrite the final summary, and notify the user.
@@ -234,16 +236,18 @@ If there is a `summary_request`, the OpenClaw heartbeat agent will read the tran
 
 # 中文说明
 
-这是一个 macOS 原生会议助手：日历/窗口检测 → 弹窗询问 → 录制系统音频 + 麦克风 → 本地转录 → OpenClaw agent 生成会议纪要。
+Yulu（语录）是一个 macOS 原生会议助手：日历/窗口检测 → 弹窗询问 → 录制系统音频 + 麦克风 → 本地转录 → agent 生成会议纪要。
 
-核心特点：不需要 BlackHole；通过 ScreenCaptureKit 直接捕获系统音频；用 whisper-cli 本地转写；通过 OpenClaw agent queue 生成最终纪要。
+名字取自《论语》《传习录》的"语录"体——把发言原原本本记下来再读。
+
+核心特点：不需要 BlackHole；通过 ScreenCaptureKit 直接捕获系统音频；用 whisper-cli 本地转写；通过 agent queue 让任意 agent（Claude Code / Codex / OpenClaw）生成最终纪要。
 
 快速安装：
 
 ```bash
-git clone https://github.com/Nowhitestar/meeting-assistant.git
-cd meeting-assistant
-bash meeting-assistant/scripts/setup.sh
+git clone https://github.com/Nowhitestar/Yulu.git
+cd Yulu
+bash yulu/scripts/setup.sh
 ```
 
 Google Calendar 授权使用 `gog`，refresh token 存在系统 Keychain。不要把 `client_secret*.json`、refresh token、API key 或个人日历 ID 提交到公开仓库。

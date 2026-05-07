@@ -2,19 +2,21 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>CFBundleDisplayName</key>
+	<string>Yulu AudioDaemon</string>
 	<key>CFBundleExecutable</key>
 	<string>audio_daemon</string>
 	<key>CFBundleIdentifier</key>
-	<string>com.meetingassistant.audiodaemon</string>
+	<string>com.yulu.audiodaemon</string>
 	<key>CFBundleName</key>
-	<string>AudioDaemon</string>
+	<string>Yulu AudioDaemon</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>LSUIElement</key>
 	<true/>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Meeting Assistant records microphone audio for meeting notes.</string>
+	<string>Yulu records microphone audio for meeting notes.</string>
 	<key>NSScreenCaptureUsageDescription</key>
-	<string>Meeting Assistant captures system audio for meeting notes.</string>
+	<string>Yulu captures system audio for meeting notes.</string>
 </dict>
 </plist>

@@ -17,7 +17,7 @@
     "backend": "daemon",
     "mic_device": ":0",
     "system_audio_device": ":1",
-    "output_dir": "/path/to/meeting-assistant/meeting-recordings",
+    "output_dir": "/path/to/Yulu/meeting-recordings",
     "format": "wav",
     "silence_threshold": 0.01,
     "silence_duration_sec": 300,

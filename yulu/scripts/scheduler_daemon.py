@@ -4,7 +4,7 @@
 
 工作原理：
 - 由 LaunchAgent 启动并保活，常驻后台
-- 读 ~/.config/meeting-assistant/schedule.json，把所有未来事件挂到内部堆
+- 读 ~/.config/yulu/schedule.json，把所有未来事件挂到内部堆
 - 主循环 wait 到"下一个事件时间"再唤醒，CPU 占用 0
 - 收到 SIGHUP 时重新加载 schedule.json（schedule 命令写完文件后发送）
 - 事件触发时 fork 子进程跑 notify.py / meeting_daemon.py，daemon 不阻塞
@@ -25,7 +25,7 @@ import threading
 from datetime import datetime
 from pathlib import Path
 
-CONFIG_DIR = Path.home() / ".config" / "meeting-assistant"
+CONFIG_DIR = Path.home() / ".config" / "yulu"
 SCHEDULE_PATH = CONFIG_DIR / "schedule.json"
 PID_PATH = CONFIG_DIR / ".scheduler.pid"
 LOG_PATH = CONFIG_DIR / "scheduler.log"
@@ -127,7 +127,7 @@ class Scheduler:
             if kind == "remind":
                 self._spawn([
                     sys.executable, str(SCRIPT_DIR / "notify.py"),
-                    "remind", "Meeting Assistant",
+                    "remind", "Yulu",
                     f"会议「{ev.get('title','')}」 5 分钟后开始",
                     ev.get("title", ""),
                 ])

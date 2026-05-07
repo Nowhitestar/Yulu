@@ -26,7 +26,7 @@ import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
 
-CONFIG_DIR = Path.home() / ".config" / "meeting-assistant"
+CONFIG_DIR = Path.home() / ".config" / "yulu"
 CONFIG_PATH = CONFIG_DIR / "config.json"
 SCHEDULE_PATH = CONFIG_DIR / "schedule.json"
 STATE_PATH = CONFIG_DIR / ".state.json"

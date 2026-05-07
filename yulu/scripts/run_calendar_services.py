@@ -28,7 +28,7 @@ from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
-CONFIG_DIR = Path.home() / ".config" / "meeting-assistant"
+CONFIG_DIR = Path.home() / ".config" / "yulu"
 LOG_PATH = CONFIG_DIR / "calendar_services.log"
 STATE_PATH = CONFIG_DIR / ".watch_state.json"
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -238,7 +238,7 @@ class WebhookHandler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", "text/plain")
             self.end_headers()
-            self.wfile.write(b"Meeting Assistant Calendar Webhook\n")
+            self.wfile.write(b"Yulu Calendar Webhook\n")
             return
         if self.path == "/health":
             self.send_response(200)
@@ -365,12 +365,12 @@ def main():
                 break
     except Exception as e:
         log(f"⚠️ 读取 config.json 失败: {e}")
-        log("   请先根据 config.example.json 创建 ~/.config/meeting-assistant/config.json")
+        log("   请先根据 config.example.json 创建 ~/.config/yulu/config.json")
 
     if not GOG_ACCOUNT:
         GOG_ACCOUNT = os.environ.get("GOG_ACCOUNT", "")
 
-    log("⚡ Meeting Assistant Calendar Services 启动")
+    log("⚡ Yulu Calendar Services 启动")
     log(f"    webhook port: {WEBHOOK_PORT}")
     if GOG_ACCOUNT:
         log(f"    gog account: {GOG_ACCOUNT}")

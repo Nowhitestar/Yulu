@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.meetingassistant.audiodaemon</string>
+    <string>com.yulu.audiodaemon</string>
 
     <key>ProgramArguments</key>
     <array>
@@ -18,9 +18,9 @@
     <true/>
 
     <key>StandardOutPath</key>
-    <string>__HOME__/.config/meeting-assistant/audio_daemon.log</string>
+    <string>__HOME__/.config/yulu/audio_daemon.log</string>
 
     <key>StandardErrorPath</key>
-    <string>__HOME__/.config/meeting-assistant/audio_daemon.log</string>
+    <string>__HOME__/.config/yulu/audio_daemon.log</string>
 </dict>
 </plist>

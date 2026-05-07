@@ -32,7 +32,7 @@ import os
 import sys
 from pathlib import Path
 
-CONFIG_PATH = Path.home() / ".config" / "meeting-assistant" / "config.json"
+CONFIG_PATH = Path.home() / ".config" / "yulu" / "config.json"
 
 
 def load_config():

@@ -20,7 +20,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-CONFIG_DIR = Path.home() / ".config" / "meeting-assistant"
+CONFIG_DIR = Path.home() / ".config" / "yulu"
 CONFIG_PATH = CONFIG_DIR / "config.json"
 SOCKET_PATH = CONFIG_DIR / "audio_daemon.sock"
 STATE_PATH = CONFIG_DIR / ".state.json"
@@ -109,8 +109,8 @@ def daemon_ensure_running():
     # 查找已安装的 AudioDaemon.app
     app_paths = [
         SCRIPT_DIR / "AudioDaemon.app",
-        Path.home() / "Applications" / "Meeting Assistant.app",
-        Path("/Applications/Meeting Assistant.app"),
+        Path.home() / "Applications" / "Yulu.app",
+        Path("/Applications/Yulu.app"),
     ]
     for app in app_paths:
         binary = app / "Contents/MacOS/audio_daemon"

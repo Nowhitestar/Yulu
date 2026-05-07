@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.meetingassistant.scheduler</string>
+    <string>com.yulu.scheduler</string>
 
     <key>ProgramArguments</key>
     <array>
@@ -18,10 +18,10 @@
     <true/>
 
     <key>StandardOutPath</key>
-    <string>__HOME__/.config/meeting-assistant/scheduler.log</string>
+    <string>__HOME__/.config/yulu/scheduler.log</string>
 
     <key>StandardErrorPath</key>
-    <string>__HOME__/.config/meeting-assistant/scheduler.log</string>
+    <string>__HOME__/.config/yulu/scheduler.log</string>
 
     <key>EnvironmentVariables</key>
     <dict>

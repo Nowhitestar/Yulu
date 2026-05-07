@@ -23,7 +23,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-CONFIG_DIR = Path.home() / ".config" / "meeting-assistant"
+CONFIG_DIR = Path.home() / ".config" / "yulu"
 CONFIG_PATH = CONFIG_DIR / "config.json"
 STATE_PATH = CONFIG_DIR / ".detector_state.json"
 RECORDING_STATE_PATH = CONFIG_DIR / ".state.json"
@@ -78,7 +78,7 @@ def log(msg):
     print(line, flush=True)
 
 
-AUDIO_DAEMON_SOCKET = Path.home() / ".config" / "meeting-assistant" / "audio_daemon.sock"
+AUDIO_DAEMON_SOCKET = Path.home() / ".config" / "yulu" / "audio_daemon.sock"
 WINDOW_SCANNER = SCRIPT_DIR / "window_scanner"
 
 

@@ -37,7 +37,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-CONFIG_PATH = Path.home() / ".config" / "meeting-assistant" / "config.json"
+CONFIG_PATH = Path.home() / ".config" / "yulu" / "config.json"
 
 DEFAULT_TRANSCRIBE_CMD = [
     "whisper-cli",
@@ -150,7 +150,7 @@ def _send_agent_notification(title):
     notify = NOTIFY_SCRIPT
     subprocess.Popen(
         [sys.executable, str(notify), "remind",
-         "Meeting Assistant",
+         "Yulu",
          f"「{title}」转录完成，找我出纪要",
          "待总结"],
         stdout=subprocess.DEVNULL,

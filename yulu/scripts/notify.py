@@ -101,13 +101,13 @@ def ask_stop(meeting_title, timeout=60):
 def notify_stop_auto(meeting_title):
     """自动停止录制后的通知。"""
     message = f"会议「{meeting_title}」\n已自动停止录制，正在生成纪要..."
-    remind("Meeting Assistant", message, subtitle="自动停止")
+    remind("Yulu", message, subtitle="自动停止")
 
 
 def notify_summary_sent(meeting_title, channel):
     """纪要发送后的通知。"""
     message = f"会议「{meeting_title}」\n纪要已发送到 {channel}"
-    remind("Meeting Assistant", message, subtitle="纪要完成")
+    remind("Yulu", message, subtitle="纪要完成")
 
 
 if __name__ == "__main__":

@@ -12,7 +12,7 @@ import AVFoundation
 import CoreMedia
 
 let HOME = FileManager.default.homeDirectoryForCurrentUser
-let CONFIG_DIR = HOME.appendingPathComponent(".config/meeting-assistant")
+let CONFIG_DIR = HOME.appendingPathComponent(".config/yulu")
 let SOCKET_PATH = CONFIG_DIR.appendingPathComponent("audio_daemon.sock")
 let STATE_PATH = CONFIG_DIR.appendingPathComponent(".state.json")
 let PID_PATH = CONFIG_DIR.appendingPathComponent(".audio_daemon.pid")
@@ -30,12 +30,12 @@ var MIC_ERROR = ""
 var SYS_FORMAT_LOGGED = false
 
 func defaultRecordingDir() -> URL {
-    // AudioDaemon.app lives at <repo>/meeting-assistant/scripts/AudioDaemon.app.
+    // AudioDaemon.app lives at <repo>/yulu/scripts/AudioDaemon.app.
     // Store recordings at <repo>/meeting-recordings by default.
     let app = Bundle.main.bundleURL
     let repo = app
         .deletingLastPathComponent() // scripts
-        .deletingLastPathComponent() // nested meeting-assistant
+        .deletingLastPathComponent() // nested yulu
         .deletingLastPathComponent() // repo root
     return repo.appendingPathComponent("meeting-recordings")
 }

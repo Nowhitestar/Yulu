@@ -26,7 +26,7 @@ from datetime import datetime, timedelta, timezone
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 
-CONFIG_DIR = Path.home() / ".config" / "meeting-assistant"
+CONFIG_DIR = Path.home() / ".config" / "yulu"
 STATE_PATH = CONFIG_DIR / ".watch_state.json"
 LOG_PATH = CONFIG_DIR / "webhook.log"
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -227,7 +227,7 @@ class WebhookHandler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", "text/plain")
             self.end_headers()
-            self.wfile.write(b"Meeting Assistant Calendar Webhook")
+            self.wfile.write(b"Yulu Calendar Webhook")
             return
         self.send_response(404)
         self.end_headers()
