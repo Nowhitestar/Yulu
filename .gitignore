@@ -28,9 +28,10 @@ yulu/scripts/recorder_status
 yulu/scripts/window_scanner
 yulu/scripts/audio_daemon
 
-# IDE
+# IDE / agent local state
 .idea/
 .vscode/
+.claude/
 *.swp
 
 # Local recordings, transcripts, and agent state (per-user, never share)
