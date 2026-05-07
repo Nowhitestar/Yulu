@@ -242,8 +242,13 @@ def process_audio(audio_path):
     meeting_title = audio_path.stem.rsplit("_", 1)[0].replace("_", " ")
     print(f"📁 处理: {audio_path.name}（标题: {meeting_title}）")
 
-    # 1. 转录
-    transcript = transcribe(audio_path, trans_cfg)
+    # 1. 转录。若实时分段转写已经产出滚动 transcript，优先复用，避免会后重复跑整场 Whisper。
+    realtime_transcript_path = audio_path.with_suffix(".realtime.transcript.txt")
+    if realtime_transcript_path.exists() and realtime_transcript_path.read_text(encoding="utf-8").strip():
+        print(f"📝 使用实时转写结果: {realtime_transcript_path}")
+        transcript = realtime_transcript_path.read_text(encoding="utf-8").strip()
+    else:
+        transcript = transcribe(audio_path, trans_cfg)
 
     # 2. 保存转录
     transcript_path = audio_path.with_suffix(".transcript.txt")

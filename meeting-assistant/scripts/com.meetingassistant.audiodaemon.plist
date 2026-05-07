@@ -8,6 +8,7 @@
     <key>ProgramArguments</key>
     <array>
         <string>/usr/bin/open</string>
+        <string>-W</string>
         <string>__SCRIPT_DIR__/AudioDaemon.app</string>
     </array>
 
