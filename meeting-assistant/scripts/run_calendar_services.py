@@ -46,6 +46,8 @@ GOG_ACCOUNT = ""
 LOCK = threading.Lock()
 LAST_SYNC = 0
 SYNC_COOLDOWN = 10  # 防止通知风暴每分钟只同步一次
+POLL_INTERVAL_SEC = 300  # 兜底轮询：5 分钟，避免新会议最多延迟 1 小时才发现
+WATCH_RENEW_BEFORE_SEC = 3600  # Google watch 过期前 1 小时续期
 
 
 def log(msg):
@@ -68,6 +70,13 @@ def _get_gog_credentials():
     if env_id and env_secret and env_token:
         return env_id, env_secret, env_token
 
+    client_id = ""
+    client_secret = ""
+    refresh_token = ""
+
+    # gog stores the OAuth refresh token and OAuth client credentials separately.
+    # Older code returned immediately after reading the token, leaving client_id /
+    # client_secret empty; Google token refresh then failed and watch renewal died.
     try:
         r = subprocess.run(
             ["security", "find-generic-password", "-s", "gogcli",
@@ -76,15 +85,21 @@ def _get_gog_credentials():
         )
         if r.returncode == 0:
             data = json.loads(r.stdout)
-            return data.get("client_id",""), data.get("client_secret",""), data.get("refresh_token","")
+            refresh_token = data.get("refresh_token", "")
+            client_id = data.get("client_id", "")
+            client_secret = data.get("client_secret", "")
     except Exception:
         pass
 
-    # 也可以尝试读取 gog 的 credentials.json
+    # 读取 gog 的 OAuth client credentials
     cred_path = Path.home() / "Library" / "Application Support" / "gogcli" / "credentials.json"
     if cred_path.exists():
         creds = json.loads(cred_path.read_text())
-        return creds.get("client_id",""), creds.get("client_secret",""), ""
+        client_id = client_id or creds.get("client_id", "")
+        client_secret = client_secret or creds.get("client_secret", "")
+
+    if client_id and client_secret and refresh_token:
+        return client_id, client_secret, refresh_token
 
     return "", "", ""
 
@@ -183,6 +198,13 @@ def sync_calendar_to_schedule():
         meetings = json.loads(r.stdout)
         log(f"📅 获取到 {len(meetings)} 个会议")
 
+        # gog / Google 偶发返回 0 时，绝不能直接清空已有未来事件；否则会像
+        # 2026-05-07 15:46 那样把 16:00 会议从 scheduler 里抹掉。
+        if not meetings and _existing_schedule_has_future_events():
+            log("⚠️ 本次日历返回 0，但当前 schedule 仍有未来事件；判定为瞬时异常，保留旧 schedule")
+            _notify_system("Meeting Assistant 日历同步异常", "本次拉取返回 0 个会议，已保留现有提醒。")
+            return
+
         events = []
         now_local = datetime.now(timezone.utc).astimezone()
         for m in meetings:
@@ -228,6 +250,56 @@ def sync_calendar_to_schedule():
             log(f"⚠️ SIGHUP 失败: {e}")
     except Exception as e:
         log(f"❌ 同步异常: {e}")
+
+
+def _existing_schedule_has_future_events():
+    path = CONFIG_DIR / "schedule.json"
+    if not path.exists():
+        return False
+    try:
+        data = json.loads(path.read_text())
+        now_ts = datetime.now(timezone.utc).astimezone().timestamp()
+        for ev in data.get("events", []):
+            try:
+                if datetime.fromisoformat(ev["at"].replace("Z", "+00:00")).timestamp() > now_ts:
+                    return True
+            except Exception:
+                continue
+    except Exception:
+        return False
+    return False
+
+
+def _notify_system(title, message):
+    try:
+        subprocess.Popen(
+            [sys.executable, str(SCRIPT_DIR / "notify.py"), "remind", title, message, "日历健康检查"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except Exception:
+        pass
+
+
+def _watch_expires_soon():
+    if not STATE_PATH.exists():
+        return True
+    try:
+        state = json.loads(STATE_PATH.read_text())
+        channels = state.get("channels") or []
+        if not channels:
+            return True
+        now = datetime.now(timezone.utc)
+        for ch in channels:
+            exp_raw = ch.get("expires")
+            if not exp_raw:
+                return True
+            exp = datetime.fromisoformat(exp_raw.replace("Z", "+00:00"))
+            if exp - now <= timedelta(seconds=WATCH_RENEW_BEFORE_SEC):
+                return True
+    except Exception:
+        return True
+    return False
 
 
 # ─── HTTP webhook server ───────────────────────────────
@@ -302,6 +374,20 @@ def run_tunnel_and_register():
     current_url = None
     registered_once = False
 
+    def renew_loop():
+        while True:
+            time.sleep(300)
+            if current_url and _watch_expires_soon():
+                log("🔄 Google Calendar watch 即将过期/已过期，重新注册...")
+                try:
+                    register_watch_channels(current_url)
+                    sync_calendar_to_schedule()
+                except Exception as e:
+                    log(f"❌ watch 续期失败: {e}")
+                    _notify_system("Meeting Assistant 日历 watch 续期失败", str(e))
+
+    threading.Thread(target=renew_loop, daemon=True).start()
+
     def _signal_handler(signum, frame):
         log(f"收到 signal {signum}，关闭 cloudflared...")
         proc.terminate()
@@ -322,7 +408,11 @@ def run_tunnel_and_register():
 
                 if registered_once:
                     log("🔄 Tunnel 重启，重新注册 watch...")
-                register_watch_channels(current_url)
+                try:
+                    register_watch_channels(current_url)
+                except Exception as e:
+                    log(f"❌ watch 注册失败，将继续依赖 5 分钟兜底轮询: {e}")
+                    _notify_system("Meeting Assistant 日历 watch 注册失败", "将继续依赖 5 分钟兜底轮询。")
 
                 if not registered_once:
                     log("🔄 执行初始日历同步...")
@@ -384,10 +474,10 @@ def main():
     webhook_thread.start()
     time.sleep(0.5)  # 确保 webhook 就绪
 
-    # 兜底轮询线程：每 60 分钟同步一次，防推送丢失
+    # 兜底轮询线程：每 5 分钟同步一次，防推送丢失/watch 过期/新建会议延迟
     def poll_loop():
         while True:
-            time.sleep(3600)
+            time.sleep(POLL_INTERVAL_SEC)
             log("⏰ 兜底轮询：同步日历...")
             sync_calendar_to_schedule()
     polling_thread = threading.Thread(target=poll_loop, daemon=True)
