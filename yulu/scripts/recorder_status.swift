@@ -1,4 +1,5 @@
 import Cocoa
+import Darwin
 
 /// 右侧悬浮录制状态标签
 /// 编译：swiftc -o recorder_status recorder_status.swift
@@ -44,6 +45,9 @@ class AppDel: NSObject, NSApplicationDelegate {
     let statePath: String
     var checkTimer: Timer?
     var aliveCheck: Timer?
+    var lastFileSize: UInt64 = 0
+    var lastFileGrowthAt = Date()
+    var unhealthySince: Date?
 
     init(title: String, path: String) {
         self.meetingTitle = title; self.statePath = path
@@ -161,6 +165,7 @@ class AppDel: NSObject, NSApplicationDelegate {
         checkTimer = Timer.scheduledTimer(timeInterval: 5, target: self,
                                           selector: #selector(check), userInfo: nil, repeats: true)
         checkTimer?.common()
+        check()
     }
 
     @objc func tick() {
@@ -169,17 +174,102 @@ class AppDel: NSObject, NSApplicationDelegate {
     }
 
     @objc func check() {
-        // 不传递 statePath → 不检查，窗口永远保持（直到 Stop 被点击或外部 kill）
-        guard !statePath.isEmpty, FileManager.default.fileExists(atPath: statePath) else { return }
-        guard let d = try? Data(contentsOf: URL(fileURLWithPath: statePath)),
+        guard !statePath.isEmpty, FileManager.default.fileExists(atPath: statePath),
+              let d = try? Data(contentsOf: URL(fileURLWithPath: statePath)),
               let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { return }
-        // 只有在 recording 明确为 {} 或 missing 且 startup 超过 15 秒才退出
-        guard Date().timeIntervalSince(startTime) > 15 else { return }
-        if let r = j["recording"] as? [String: Any], r.isEmpty {
+
+        let info = parseState(j)
+        guard Date().timeIntervalSince(startTime) > 8 else { return }
+
+        if info.recording == false {
             DispatchQueue.main.asyncAfter(deadline: .now() + 2) { NSApp.terminate(nil) }
-        } else if j["recording"] == nil {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { NSApp.terminate(nil) }
+            return
         }
+
+        let socket = audioDaemonStatus()
+        let socketRecording = socket?["recording"] as? Bool
+        let socketFile = socket?["file"] as? String
+        let audioPath = socketFile?.isEmpty == false ? socketFile! : (info.audioPath ?? "")
+
+        var fileGrowing = false
+        if !audioPath.isEmpty,
+           let attrs = try? FileManager.default.attributesOfItem(atPath: audioPath),
+           let size = attrs[.size] as? UInt64 {
+            if size > lastFileSize {
+                lastFileSize = size
+                lastFileGrowthAt = Date()
+                fileGrowing = true
+            } else {
+                fileGrowing = Date().timeIntervalSince(lastFileGrowthAt) < 15
+            }
+        }
+
+        let daemonLost = socket == nil
+        let daemonNotRecording = socketRecording == false && info.recording == true
+        let fileStalled = !audioPath.isEmpty && !fileGrowing && Date().timeIntervalSince(startTime) > 20
+        let unhealthy = daemonLost || daemonNotRecording || fileStalled
+
+        if unhealthy {
+            if unhealthySince == nil { unhealthySince = Date() }
+            showUnhealthy(daemonLost: daemonLost, fileStalled: fileStalled)
+        } else {
+            unhealthySince = nil
+            showHealthy()
+        }
+    }
+
+    func parseState(_ j: [String: Any]) -> (recording: Bool?, audioPath: String?) {
+        if let b = j["recording"] as? Bool {
+            return (b, j["file_path"] as? String)
+        }
+        if let r = j["recording"] as? [String: Any] {
+            if r.isEmpty { return (false, nil) }
+            return (true, r["audio_path"] as? String ?? r["file_path"] as? String)
+        }
+        return (nil, j["file_path"] as? String)
+    }
+
+    func showUnhealthy(daemonLost: Bool, fileStalled: Bool) {
+        panel.layer?.backgroundColor = NSColor(red: 0.45, green: 0.08, blue: 0.06, alpha: 0.96).cgColor
+        titleLbl.stringValue = daemonLost ? "⚠️ 录音后端失联" : (fileStalled ? "⚠️ 录音文件停止增长" : "⚠️ 录音状态异常")
+        timeLbl.stringValue = "请点停止保存/恢复"
+        setExpanded(true)
+    }
+
+    func showHealthy() {
+        panel.layer?.backgroundColor = NSColor(white: 0.12, alpha: 0.92).cgColor
+        titleLbl.stringValue = meetingTitle
+    }
+
+    func audioDaemonStatus() -> [String: Any]? {
+        let sockPath = NSHomeDirectory() + "/.config/yulu/audio_daemon.sock"
+        let fd = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
+        if fd < 0 { return nil }
+        defer { Darwin.close(fd) }
+
+        var addr = sockaddr_un()
+        addr.sun_family = sa_family_t(AF_UNIX)
+        _ = sockPath.withCString { ptr in
+            strncpy(&addr.sun_path.0, ptr, min(strlen(ptr), 103))
+        }
+        let ok = withUnsafePointer(to: &addr) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                Darwin.connect(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
+            }
+        }
+        if ok != 0 { return nil }
+        let payload = Data("{\"action\":\"status\"}".utf8)
+        _ = payload.withUnsafeBytes { ptr in Darwin.write(fd, ptr.baseAddress, payload.count) }
+        shutdown(fd, SHUT_WR)
+        var out = Data(); var buf = [UInt8](repeating: 0, count: 4096)
+        while true {
+            let n = Darwin.read(fd, &buf, buf.count)
+            if n <= 0 { break }
+            out.append(buf, count: n)
+        }
+        guard !out.isEmpty,
+              let j = try? JSONSerialization.jsonObject(with: out) as? [String: Any] else { return nil }
+        return j
     }
 
     @objc func doStop() {

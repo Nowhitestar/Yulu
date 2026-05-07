@@ -17,6 +17,7 @@ let SOCKET_PATH = CONFIG_DIR.appendingPathComponent("audio_daemon.sock")
 let STATE_PATH = CONFIG_DIR.appendingPathComponent(".state.json")
 let PID_PATH = CONFIG_DIR.appendingPathComponent(".audio_daemon.pid")
 let LOG_PATH = CONFIG_DIR.appendingPathComponent("audio_daemon.log")
+let QUEUE_PATH = CONFIG_DIR.appendingPathComponent("agent-queue.json")
 let SILENCE_THRESHOLD: Float = 0.01
 let SYS_ACTIVE_THRESHOLD: Float = 0.001  // 系统音频常偏低，半双工判断不能用自动静音阈值
 let DEFAULT_SILENCE_SEC: TimeInterval = 300
@@ -63,20 +64,70 @@ func log(_ msg: String) {
     logFile?.write(Data((line + "\n").utf8))
 }
 
+func notifyAgent(_ eventType: String, _ fields: [String: Any] = [:]) {
+    var entry = fields
+    entry["type"] = eventType
+    entry["ts"] = ISO8601DateFormatter().string(from: Date())
+
+    var queue: [[String: Any]] = []
+    if let data = try? Data(contentsOf: QUEUE_PATH),
+       let existing = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
+        queue = existing
+    }
+    queue.append(entry)
+    if let data = try? JSONSerialization.data(withJSONObject: queue, options: [.prettyPrinted]) {
+        try? FileManager.default.createDirectory(at: CONFIG_DIR, withIntermediateDirectories: true)
+        try? data.write(to: QUEUE_PATH)
+    }
+}
+
 // ─── WAV 写入器 ───────────────────────────────────────
 
 class WavWriter {
     let url: URL
-    var audioData = Data()
+    private var handle: FileHandle?
+    private var audioSize: UInt32 = 0
+    private var lastHeaderPatch = Date.distantPast
+    private let lock = NSLock()
 
     init?(url: URL) {
         self.url = url
+        FileManager.default.createFile(atPath: url.path, contents: Data(repeating: 0, count: 44))
+        guard let h = try? FileHandle(forUpdating: url) else { return nil }
+        self.handle = h
+        patchHeader(sync: true)
     }
 
-    func append(_ data: Data) { audioData.append(data) }
+    func append(_ data: Data) {
+        lock.lock(); defer { lock.unlock() }
+        guard let h = handle, !data.isEmpty else { return }
+        do {
+            try h.seekToEnd()
+            try h.write(contentsOf: data)
+            audioSize &+= UInt32(data.count)
+            // Crash-resilience: keep the WAV header close to current size so a
+            // force-kill still leaves a mostly playable file, not a 0-byte ghost.
+            if Date().timeIntervalSince(lastHeaderPatch) >= 5 {
+                patchHeaderLocked(sync: true)
+            }
+        } catch {
+            log("WAV append failed: \(error)")
+        }
+    }
 
     func finalize() {
-        let audioSize = UInt32(audioData.count)
+        lock.lock(); defer { lock.unlock() }
+        patchHeaderLocked(sync: true)
+        try? handle?.close()
+        handle = nil
+    }
+
+    private func patchHeader(sync: Bool) {
+        lock.lock(); defer { lock.unlock() }
+        patchHeaderLocked(sync: sync)
+    }
+
+    private func patchHeaderLocked(sync: Bool) {
         let fileSize = audioSize + 44 - 8
         var h = Data()
         h.append(contentsOf: [0x52,0x49,0x46,0x46] as [UInt8])
@@ -101,8 +152,15 @@ class WavWriter {
         h.append(contentsOf: [0x64,0x61,0x74,0x61] as [UInt8])
         v32 = audioSize.littleEndian
         withUnsafeBytes(of: &v32) { h.append(Data($0)) }
-        h.append(audioData)
-        try? h.write(to: url)
+        do {
+            try handle?.seek(toOffset: 0)
+            try handle?.write(contentsOf: h)
+            try handle?.seekToEnd()
+            if sync { handle?.synchronizeFile() }
+            lastHeaderPatch = Date()
+        } catch {
+            log("WAV header patch failed: \(error)")
+        }
     }
 }
 
@@ -155,6 +213,7 @@ class AudioRecorder {
         sysBuf = []; micBuf = []; fadePos = 0
         writeState(recording: true, title: title, path: url.path)
         log("🎙 \(fn)")
+        notifyAgent("recording_started", ["title": title, "path": url.path])
         startSilenceMonitor()
         return url.path
     }
@@ -170,6 +229,9 @@ class AudioRecorder {
         writer?.finalize(); writer = nil
         writeState(recording: false)
         log("⏹ \(dur)s")
+        if let p = p {
+            notifyAgent("recording_stopped", ["path": p, "duration": dur])
+        }
         return (p, dur)
     }
 
