@@ -83,7 +83,7 @@ WINDOW_SCANNER = SCRIPT_DIR / "window_scanner"
 
 
 def _query_audio_daemon():
-    """通过 AudioDaemon 的 socket 获取窗口列表。"""
+    """通过 Yulu 的 socket 获取窗口列表。"""
     if not AUDIO_DAEMON_SOCKET.exists():
         return None
     try:
@@ -107,7 +107,7 @@ def _query_audio_daemon():
 
 def _has_permission():
     """Quick check: can we read window titles?"""
-    # Try AudioDaemon first (merged scanner)
+    # Try Yulu first (merged scanner)
     wins = _query_audio_daemon()
     if wins is not None:
         return True
@@ -124,7 +124,7 @@ def _has_permission():
 
 def collect_windows(target_app_names=None):
     """返回 [{app, title}] 或 None。
-    优先用 AudioDaemon 的 socket（如运行中），否则用 window_scanner。"""
+    优先用 Yulu 的 socket（如运行中），否则用 window_scanner。"""
     windows = _query_audio_daemon()
     if windows is None:
         try:

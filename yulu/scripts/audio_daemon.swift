@@ -31,7 +31,7 @@ var MIC_ERROR = ""
 var SYS_FORMAT_LOGGED = false
 
 func defaultRecordingDir() -> URL {
-    // AudioDaemon.app lives at <repo>/yulu/scripts/AudioDaemon.app.
+    // Yulu.app lives at <repo>/yulu/scripts/Yulu.app.
     // Store recordings at <repo>/meeting-recordings by default.
     let app = Bundle.main.bundleURL
     let repo = app

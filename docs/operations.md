@@ -5,7 +5,7 @@ Manual commands, day-to-day operation, and troubleshooting for Yulu.
 ## Manual commands
 
 ```bash
-# AudioDaemon health check
+# Yulu health check (queries the daemon over its Unix socket)
 echo '{"action":"status"}' | nc -w 2 -U ~/.config/yulu/audio_daemon.sock
 
 # Start / stop a manual recording
@@ -33,20 +33,20 @@ python3 yulu/scripts/meeting_detector.py daemon
 | Path | Purpose |
 |---|---|
 | `~/.config/yulu/config.json` | User configuration |
-| `~/.config/yulu/audio_daemon.sock` | Unix socket exposed by `AudioDaemon.app` |
+| `~/.config/yulu/audio_daemon.sock` | Unix socket exposed by `Yulu.app` |
 | `~/.config/yulu/agent-queue.json` | Pending events waiting for an agent |
 | `~/.config/yulu/schedule.json` | Scheduler state |
 | `<repo>/meeting-recordings/*.wav` | Local recordings (git-ignored) |
 | `~/Library/LaunchAgents/com.yulu.*.plist` | Background services |
 | `~/Library/Logs/yulu/` | Per-daemon logs |
 
-## Codesigning the AudioDaemon
+## Codesigning Yulu.app
 
 ```bash
 yulu/scripts/build_audio_daemon.sh
 ```
 
-The script compiles `audio_daemon.swift`, refreshes `AudioDaemon.app`, writes TCC usage descriptions, and codesigns with an Apple Development / Developer ID identity if available; otherwise it falls back to ad-hoc signing.
+The script compiles `audio_daemon.swift`, refreshes `Yulu.app`, writes TCC usage descriptions, and codesigns with an Apple Development / Developer ID identity if available; otherwise it falls back to ad-hoc signing.
 
 To pin an identity:
 
@@ -59,7 +59,7 @@ After signing, restart the daemon for macOS to re-evaluate TCC:
 
 ```bash
 pkill -f audio_daemon
-open yulu/scripts/AudioDaemon.app
+open yulu/scripts/Yulu.app
 ```
 
 ## Google Calendar setup
@@ -95,18 +95,18 @@ If a `client_secret_*.json` or refresh token has ever been pasted into chat or c
 
 ## Troubleshooting
 
-### `AudioDaemon` reports `sysReady=false`
+### `Yulu` reports `sysReady=false`
 
 ```bash
 echo '{"action":"status"}' | nc -w 2 -U ~/.config/yulu/audio_daemon.sock
 ```
 
 1. Open System Settings → Privacy & Security → **Screen & System Audio Recording**.
-2. Enable `AudioDaemon.app`.
+2. Enable `Yulu.app`.
 3. Restart the daemon:
    ```bash
    pkill -f audio_daemon
-   open yulu/scripts/AudioDaemon.app
+   open yulu/scripts/Yulu.app
    ```
 
 ### WAV file is created but silent

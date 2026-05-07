@@ -67,7 +67,7 @@ The installer will:
 2. Install `sox`, `ffmpeg`, `whisper-cpp`, `terminal-notifier`, `gogcli`, `cloudflared`.
 3. Write per-user config to `~/.config/yulu/config.json`.
 4. Compile the window scanner and walk you through Accessibility permission.
-5. Build and sign `AudioDaemon.app`.
+5. Build and sign `Yulu.app`.
 6. Walk you through Microphone + Screen & System Audio Recording permissions.
 7. (Optional) configure Google Calendar via `gog`.
 8. Install LaunchAgents for background services.
@@ -84,7 +84,7 @@ Google Calendar / Window Detector
           ↓
  meeting_daemon.py  ──►  notify.py prompt: "Start recording?"
           ↓
- record_audio.py  ──►  AudioDaemon.app  (Unix socket)
+ record_audio.py  ──►  Yulu.app  (Unix socket)
           ↓
  ScreenCaptureKit (system audio) + AVFoundation (microphone)
           ↓
@@ -107,11 +107,11 @@ Six numbers worth knowing:
 
 | Component | Permission | Why |
 |---|---|---|
-| `AudioDaemon.app` | Microphone | Record your local microphone |
-| `AudioDaemon.app` | Screen & System Audio Recording | Capture system audio with ScreenCaptureKit |
+| `Yulu.app` | Microphone | Record your local microphone |
+| `Yulu.app` | Screen & System Audio Recording | Capture system audio with ScreenCaptureKit |
 | `window_scanner` | Accessibility | Read window titles to detect meetings |
 
-If system audio is missing: System Settings → Privacy & Security → **Screen & System Audio Recording** → enable `AudioDaemon.app`, then restart it.
+If system audio is missing: System Settings → Privacy & Security → **Screen & System Audio Recording** → enable `Yulu.app`, then restart it.
 
 ## Configuration
 
@@ -150,7 +150,7 @@ A few decisions are load-bearing and worth understanding before contributing:
 - **Recording always asks first.** Detection is best-effort, but consent is not. Every recording goes through `notify.py` with a real prompt.
 - **The LLM is a plug-in, not a dependency.** `transcribe.py` runs all the way to a usable Markdown summary even if no agent ever shows up — `fallback_summary()` uses regex bucketing on the transcript so you never see "TODO: agent will fill this in".
 - **State lives in JSON files, not RAM.** `agent-queue.json`, `schedule.json`, recordings on disk. A power outage mid-meeting loses the audio after the last flush, nothing else.
-- **One-binary security boundary.** Only `AudioDaemon.app` holds the TCC permissions. The Python side talks to it through a Unix socket and cannot bypass macOS privacy on its own.
+- **One-binary security boundary.** Only `Yulu.app` holds the TCC permissions. The Python side talks to it through a Unix socket and cannot bypass macOS privacy on its own.
 
 ## Background
 
@@ -177,9 +177,9 @@ Yulu/
     └── scripts/
         ├── setup.sh                      # interactive installer
         ├── migrate_to_yulu.sh            # one-shot upgrade for old meeting-assistant installs
-        ├── AudioDaemon.app/              # signed (or ad-hoc) audio daemon
+        ├── Yulu.app/                     # signed (or ad-hoc) audio daemon bundle
         ├── audio_daemon.swift            # ScreenCaptureKit + AVFoundation
-        ├── build_audio_daemon.sh         # build & sign AudioDaemon
+        ├── build_audio_daemon.sh         # build & sign Yulu.app
         ├── record_audio.py               # recording control
         ├── meeting_daemon.py             # workflow orchestration
         ├── scheduler_daemon.py           # calendar-based scheduler

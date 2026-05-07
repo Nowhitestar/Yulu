@@ -168,9 +168,9 @@ def detect_daemon_crash(resp=None):
         return False
     title = state.get("title", "")
     path = state.get("file_path", "")
-    log(f"⚠️ 检测到 AudioDaemon 异常退出，录音状态残留: {title} → {path}")
+    log(f"⚠️ 检测到 Yulu 异常退出，录音状态残留: {title} → {path}")
     stop_realtime_transcriber(wait=True)
-    notify("recording_crashed", title=title, path=path, message="AudioDaemon 异常退出，已保留可恢复的部分录音文件。")
+    notify("recording_crashed", title=title, path=path, message="Yulu 异常退出，已保留可恢复的部分录音文件。")
     state["recording"] = False
     state["crashed_at"] = datetime.now().isoformat()
     write_state(state)
@@ -217,25 +217,25 @@ def daemon_ensure_running():
         return True
     detect_daemon_crash(resp)
 
-    # 查找已安装的 AudioDaemon.app
+    # 查找已安装的 Yulu.app
     app_paths = [
-        SCRIPT_DIR / "AudioDaemon.app",
+        SCRIPT_DIR / "Yulu.app",
         Path.home() / "Applications" / "Yulu.app",
         Path("/Applications/Yulu.app"),
     ]
     for app in app_paths:
         binary = app / "Contents/MacOS/audio_daemon"
         if binary.exists():
-            log("🚀 启动 AudioDaemon...")
+            log("🚀 启动 Yulu...")
             subprocess.Popen(["open", str(app)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             time.sleep(3)
             resp = socket_send({"action": "status"})
             if resp is not None:
-                log("✅ AudioDaemon 已启动")
+                log("✅ Yulu 已启动")
                 return True
             break
 
-    log("⚠️ AudioDaemon 未运行")
+    log("⚠️ Yulu 未运行")
     return False
 
 
@@ -331,7 +331,7 @@ def main():
             if daemon_ensure_running():
                 daemon_start(title)
             else:
-                log("⚠️ AudioDaemon 未运行，切换到 SoX 后端")
+                log("⚠️ Yulu 未运行，切换到 SoX 后端")
                 sox_start(title)
         elif cmd == "stop":
             state = read_state()

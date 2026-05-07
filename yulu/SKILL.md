@@ -20,7 +20,7 @@ Google Calendar / Window Detector
           ↓
  notify.py prompt: Start recording?
           ↓
- record_audio.py → AudioDaemon.app (Unix socket)
+ record_audio.py → Yulu.app (Unix socket)
           ↓
  ScreenCaptureKit system audio + AVFoundation microphone
           ↓
@@ -34,7 +34,7 @@ Google Calendar / Window Detector
 ## Key Features
 
 - **No BlackHole required** — captures system audio directly with ScreenCaptureKit.
-- **Native AudioDaemon** — a signed macOS app bundle for stable TCC privacy permissions.
+- **Native Yulu.app bundle** — a signed macOS audio daemon for stable TCC privacy permissions.
 - **System audio + microphone** — records remote speaker audio and local microphone input.
 - **Half-duplex mixing** — prioritize system audio while others speak; fade to microphone during system silence.
 - **Meeting detection** — detects Zoom, Tencent Meeting, Google Meet, Feishu/Lark, WeChat calls, and browser-based meetings.
@@ -63,7 +63,7 @@ The installer will:
 2. Install `sox`, `ffmpeg`, `whisper-cpp`, `terminal-notifier`, `gogcli`, and `cloudflared`
 3. Create `~/.config/yulu/config.json`
 4. Compile the window scanner and guide Accessibility permission setup
-5. Build and sign `AudioDaemon.app`
+5. Build and sign `Yulu.app`
 6. Guide Microphone and Screen & System Audio Recording permissions
 7. Optionally configure Google Calendar
 8. Install LaunchAgent background services
@@ -73,13 +73,13 @@ The installer will:
 
 | Component | Permission | Purpose |
 |---|---|---|
-| `AudioDaemon.app` | Microphone | Record local microphone audio |
-| `AudioDaemon.app` | Screen & System Audio Recording | Capture system audio via ScreenCaptureKit |
+| `Yulu.app` | Microphone | Record local microphone audio |
+| `Yulu.app` | Screen & System Audio Recording | Capture system audio via ScreenCaptureKit |
 | `window_scanner` | Accessibility | Read window titles to detect meetings/calls |
 
 If system audio is missing, open:
 
-System Settings → Privacy & Security → **Screen & System Audio Recording** → enable `AudioDaemon.app`.
+System Settings → Privacy & Security → **Screen & System Audio Recording** → enable `Yulu.app`.
 
 ## Google Calendar and Privacy
 
@@ -153,9 +153,9 @@ All scripts live under `scripts/`:
 | Script | Purpose |
 |---|---|
 | `setup.sh` | Interactive installer |
-| `AudioDaemon.app/` | Native signed audio daemon app |
+| `Yulu.app/` | Native signed audio daemon app bundle |
 | `audio_daemon.swift` | ScreenCaptureKit + AVFoundation + Unix socket |
-| `build_audio_daemon.sh` | Build and sign AudioDaemon |
+| `build_audio_daemon.sh` | Build and sign Yulu.app |
 | `record_audio.py` | Recording control (`start` / `stop` / `status`) |
 | `meeting_daemon.py` | Recording workflow control |
 | `scheduler_daemon.py` | Meeting scheduler daemon |
@@ -176,7 +176,7 @@ All scripts live under `scripts/`:
 ## Manual Commands
 
 ```bash
-# AudioDaemon status
+# Yulu daemon status
 echo '{"action":"status"}' | nc -w 2 -U ~/.config/yulu/audio_daemon.sock
 
 # Manual recording
@@ -201,7 +201,7 @@ python3 scripts/meeting_detector.py daemon
 
 ## Troubleshooting
 
-### AudioDaemon has no system audio
+### Yulu has no system audio
 
 ```bash
 echo '{"action":"status"}' | nc -w 2 -U ~/.config/yulu/audio_daemon.sock
@@ -210,12 +210,12 @@ echo '{"action":"status"}' | nc -w 2 -U ~/.config/yulu/audio_daemon.sock
 If `sysReady=false`:
 
 1. Open System Settings → Privacy & Security → Screen & System Audio Recording
-2. Enable `AudioDaemon.app`
-3. Restart AudioDaemon:
+2. Enable `Yulu.app`
+3. Restart Yulu:
 
 ```bash
 pkill -f audio_daemon
-open scripts/AudioDaemon.app
+open scripts/Yulu.app
 ```
 
 ### WAV exists but is silent

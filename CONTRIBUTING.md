@@ -29,7 +29,7 @@ Thanks for considering a contribution. Yulu is small enough that the process is 
 | Summary templates | New template variants under `scripts/summary_template*.md` |
 | Calendars | Outlook / iCloud calendar adapters that mirror the Google one |
 | Output sinks | Notion / Telegram / Zulip / local Obsidian vault formatters |
-| Packaging | Homebrew tap, signed `AudioDaemon.app` releases on GitHub |
+| Packaging | Homebrew tap, signed `Yulu.app` releases on GitHub |
 
 ## What is out of scope (for now)
 

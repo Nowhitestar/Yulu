@@ -3,7 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
-APP="$SCRIPT_DIR/AudioDaemon.app"
+APP="$SCRIPT_DIR/Yulu.app"
 BIN="$SCRIPT_DIR/audio_daemon"
 APP_BIN="$APP/Contents/MacOS/audio_daemon"
 RES_DIR="$APP/Contents/Resources"
@@ -73,6 +73,6 @@ fi
 codesign --force --deep --timestamp=none --sign "$IDENTITY" "$APP"
 codesign --verify --deep --strict --verbose=2 "$APP"
 
-echo "✅ Built and signed AudioDaemon.app"
+echo "✅ Built and signed Yulu.app"
 echo "   identity: $IDENTITY"
 codesign -dvvv "$APP" 2>&1 | grep -E 'Identifier|Authority|TeamIdentifier|CDHash|Signature' || true

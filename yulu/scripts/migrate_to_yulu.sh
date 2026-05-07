@@ -62,27 +62,50 @@ else
   ok "no old config to migrate"
 fi
 
-# ── 3. Quit and clean the old AudioDaemon process ───────────────────────────
-note "Step 3/3 — stopping the old AudioDaemon process"
+# ── 3. Quit the old audio_daemon process ───────────────────────────────────
+note "Step 3/4 — stopping the old audio_daemon process"
 pkill -f "audio_daemon" 2>/dev/null && ok "killed running audio_daemon process" || ok "no running audio_daemon"
+
+# ── 4. Clean stale LaunchServices registrations ────────────────────────────
+# After the rename, macOS LaunchServices still caches the old AudioDaemon.app
+# bundle. Unregister it and re-register the new Yulu.app so System Settings
+# (Microphone / Screen Recording) shows the new name and icon.
+note "Step 4/4 — refreshing LaunchServices registrations"
+LSREG=/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+NEW_BUNDLE="$SCRIPT_DIR/Yulu.app"
+
+if [[ -d "$NEW_BUNDLE" ]]; then
+  # Try to unregister any old AudioDaemon.app under this repo (path may not exist anymore — that's fine).
+  for old_path in \
+    "$SCRIPT_DIR/AudioDaemon.app" \
+    "${SCRIPT_DIR%/yulu/scripts}/meeting-assistant/scripts/AudioDaemon.app"; do
+    "$LSREG" -u "$old_path" >/dev/null 2>&1 || true
+  done
+  "$LSREG" -f "$NEW_BUNDLE" >/dev/null 2>&1
+  killall Finder Dock SystemUIServer 2>/dev/null || true
+  ok "LaunchServices refreshed; Finder/Dock restarted"
+else
+  warn "$NEW_BUNDLE not built yet — skip; setup.sh will build it and re-register."
+fi
 
 # ── Done ────────────────────────────────────────────────────────────────────
 echo
 ok "Migration finished."
 echo
 warn "Manual steps required:"
-echo "  1. Re-run the installer to set up the new Yulu LaunchAgents:"
+echo "  1. Re-run the installer to build Yulu.app and set up LaunchAgents:"
 echo "       bash yulu/scripts/setup.sh"
 echo
-echo "  2. macOS sees the new AudioDaemon as a different app (bundle id changed"
+echo "  2. macOS sees the new Yulu.app as a different app (bundle id changed"
 echo "     from com.meetingassistant.audiodaemon to com.yulu.audiodaemon)."
 echo "     You will need to GRANT PERMISSIONS AGAIN:"
 echo "       System Settings → Privacy & Security →"
-echo "         • Microphone                         → enable AudioDaemon.app"
-echo "         • Screen & System Audio Recording    → enable AudioDaemon.app"
+echo "         • Microphone                         → enable Yulu"
+echo "         • Screen & System Audio Recording    → enable Yulu"
 echo "         • Accessibility (for window_scanner) → already trusted, no action"
 echo
-echo "  3. (Optional) Remove the stale macOS TCC entry for the old bundle id:"
+echo "  3. (Optional) Remove the stale TCC entries for old bundle ids:"
 echo "       System Settings → Privacy & Security → click each section,"
 echo "       find any entry called 'AudioDaemon' or 'Meeting Assistant' that"
 echo "       is greyed out, click '−' to delete."

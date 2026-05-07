@@ -6,12 +6,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+- Renamed the audio daemon bundle path from `yulu/scripts/AudioDaemon.app` to `yulu/scripts/Yulu.app` so that System Settings, Activity Monitor, the Dock, and TCC prompts identify the app as **Yulu** end-to-end. The `audio_daemon` executable name, `com.yulu.audiodaemon` bundle id, `com.yulu.audiodaemon` LaunchAgent label, and `~/.config/yulu/audio_daemon.sock` socket path are unchanged — TCC permissions granted in 0.1.0 are preserved.
+- User-facing log messages, setup prompts, and documentation now refer to "Yulu" instead of "AudioDaemon" wherever the user is the audience. Internal identifiers (`audio_daemon` binary, `com.yulu.audiodaemon` bundle id, socket name) are deliberately kept.
+- `yulu/scripts/migrate_to_yulu.sh` now also refreshes the LaunchServices database (unregister the old `AudioDaemon.app` paths, re-register the new `Yulu.app`, restart Finder/Dock) so that upgrading users see the new name and icon in System Settings without running `lsregister` by hand.
+
 ## [0.1.0] - 2026-05-07
 
 ### Added
 - Initial public release as **Yulu** (语录).
 - Native macOS recording via `ScreenCaptureKit` (system audio) + `AVFoundation` (microphone), no BlackHole required.
-- Signed `AudioDaemon.app` Unix-socket controller.
+- Signed `Yulu.app` Unix-socket controller.
 - Half-duplex mixing: prioritize system audio, fade to microphone during system silence.
 - Floating recording status window with a manual stop button.
 - Local transcription via `whisper.cpp` (`whisper-cli`).
