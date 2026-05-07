@@ -3,7 +3,7 @@
 转录音频并生成会议纪要。
 
 转录: whisper.cpp (whisper-cli)
-摘要: 默认交给 OpenClaw agent（闪电）根据模板生成；也可配置外部命令
+摘要: 默认优先使用本机 claude CLI 生成高质量纪要；也可配置外部命令。
 
 依赖：
   brew install whisper-cpp        # whisper-cli
@@ -48,13 +48,15 @@ DEFAULT_TRANSCRIBE_CMD = [
     "{{input}}",
 ]
 
-DEFAULT_LLM_CMD = []  # 默认空 = 由 agent (闪电) 处理
+DEFAULT_LLM_CMD = ["claude", "--print"]
 
 NOTIFY_SCRIPT = Path(__file__).parent / "notify.py"
 
 SUMMARY_PROMPT = """请将以下会议转录整理成结构化会议纪要。
 
 会议主题：{title}
+
+{template_section}
 
 要求：
 1. 列出会议基本信息（主题、时间）
@@ -117,17 +119,29 @@ def transcribe(audio_path, config):
 def summarize(transcript, meeting_title, config):
     """生成结构化纪要。
 
-    如果显式配置了外部命令则调用；默认不使用 claude-cli，交给 OpenClaw agent 队列处理。
-    返回 markdown 字符串；None 表示需要 agent 后续生成。
+    如果显式配置了外部命令则调用；否则默认使用本机 claude CLI。
+    返回 markdown 字符串；None 表示 LLM 不可用，需要更弱的本地规则兜底。
     """
     cmd_template = config.get("command") or DEFAULT_LLM_CMD
 
-    if not cmd_template:
-        print("🤖 未配置外部 LLM，先生成本地草稿并请求 OpenClaw agent 生成最终摘要...")
+    if not cmd_template or cmd_template == [""]:
+        print("🤖 LLM 已禁用，使用本地规则摘要兜底...")
         return None
 
+    if cmd_template[0] == "claude":
+        try:
+            subprocess.run(["claude", "--version"], capture_output=True, text=True, timeout=10, check=True)
+        except Exception as e:
+            print(f"Claude CLI unavailable: {e}", file=sys.stderr)
+            return None
+
     cmd = render_cmd(cmd_template)
-    prompt = SUMMARY_PROMPT.format(title=meeting_title, transcript=transcript)
+    template_section = ""
+    template_path = Path(__file__).parent / "summary_template.md"
+    if template_path.exists():
+        template = template_path.read_text(encoding="utf-8").strip()
+        template_section = f"请优先遵循这个纪要模板：\n---\n{template}\n---"
+    prompt = SUMMARY_PROMPT.format(title=meeting_title, transcript=transcript, template_section=template_section)
     print(f"🤖 LLM: {shlex.join(cmd)}")
     try:
         result = subprocess.run(
@@ -135,7 +149,7 @@ def summarize(transcript, meeting_title, config):
             input=prompt,
             capture_output=True,
             text=True,
-            timeout=180,
+            timeout=int(config.get("timeout_sec", 600)),
         )
         if result.returncode == 0:
             return result.stdout.strip()
@@ -262,7 +276,7 @@ def process_audio(audio_path):
         summary = summarize(transcript, meeting_title, llm_cfg)
     agent_should_finalize = False
     if summary is None:
-        # 先写一份本地可读草稿作为兜底，但不发送；随后交给 OpenClaw agent 覆盖为最终版。
+        # LLM 不可用时才退回本地规则摘要；同时排队给 OpenClaw agent 后续尝试覆盖。
         summary = fallback_summary(transcript, meeting_title)
         agent_should_finalize = True
 
