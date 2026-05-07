@@ -6,6 +6,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-05-07
+
 ### Added
 - Initial public release as **Yulu** (语录).
 - Native macOS recording via `ScreenCaptureKit` (system audio) + `AVFoundation` (microphone), no BlackHole required.
@@ -35,3 +37,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ### Security
 - Removed all hardcoded Google OAuth secrets from the repository history.
 - `.gitignore` blocks `config.json`, `client_secret*.json`, `credentials*.json`, `token*.json`, and local recordings by default.
+
+[Unreleased]: https://github.com/Nowhitestar/Yulu/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/Nowhitestar/Yulu/releases/tag/v0.1.0
