@@ -360,6 +360,20 @@ class MicCapture {
 
     init(recorder: AudioRecorder) { self.recorder = recorder }
 
+    /// Called once at daemon startup: just enough to verify TCC permission, then stop.
+    /// Avoids displaying the macOS microphone-in-use indicator while the daemon is idle.
+    func probePermission() {
+        let engine = AVAudioEngine()
+        _ = engine.inputNode  // touching this triggers the TCC prompt
+        do {
+            try engine.start()
+            engine.stop()
+            MIC_READY = true; MIC_ERROR = ""; log("🎤 Mic probe OK (idle until recording starts)")
+        } catch {
+            MIC_READY = false; MIC_ERROR = "\(error)"; log("Mic probe failed: \(error)")
+        }
+    }
+
     func start() {
         let engine = AVAudioEngine()
         let input = engine.inputNode
@@ -377,7 +391,7 @@ class MicCapture {
         catch { MIC_READY = false; MIC_ERROR = "\(error)"; log("Mic start failed: \(error)") }
     }
 
-    func stop() { engine?.stop(); engine = nil }
+    func stop() { engine?.stop(); engine = nil; log("🎤 Mic idle") }
 }
 
 // ─── SCStream 输出处理器 ──────────────────────────────
@@ -445,7 +459,35 @@ class AudioCapture {
         self.output = SysAudioOutput(recorder)
     }
 
+    /// Called once at daemon startup: open an SCStream just long enough to verify the
+    /// TCC permission, then stop it. This means the menu-bar "screen recording in
+    /// progress" indicator does NOT light up while the daemon is idle — only when an
+    /// actual recording is in flight.
+    func probePermission() {
+        Task {
+            do {
+                let content = try await SCShareableContent.current
+                guard let d = content.displays.first else {
+                    SYS_READY = false; SYS_ERROR = "no display"
+                    log("Sys probe failed: no display"); return
+                }
+                let filter = SCContentFilter(display: d, excludingWindows: [])
+                let config = SCStreamConfiguration()
+                config.capturesAudio = true
+                let s = SCStream(filter: filter, configuration: config, delegate: nil)
+                try await s.startCapture()
+                try? await s.stopCapture()  // immediately tear down — we just wanted the TCC handshake
+                SYS_READY = true; SYS_ERROR = ""
+                log("🔊 Sys capture probe OK (idle until recording starts)")
+            } catch {
+                SYS_READY = false; SYS_ERROR = (error as NSError).localizedDescription
+                log("Sys capture probe failed: \(SYS_ERROR)")
+            }
+        }
+    }
+
     func startCapture() {
+        guard stream == nil else { return }  // already capturing — idempotent
         Task {
             do {
                 let content = try await SCShareableContent.current
@@ -466,7 +508,12 @@ class AudioCapture {
         }
     }
 
-    func stopCapture() { Task { try? await stream?.stopCapture() }; stream = nil }
+    func stopCapture() {
+        let s = stream
+        stream = nil
+        Task { try? await s?.stopCapture() }
+        log("🔇 Sys capture idle")
+    }
 }
 
 // ─── Socket 服务器 ────────────────────────────────────
@@ -474,6 +521,11 @@ class AudioCapture {
 class SocketServer {
     let recorder: AudioRecorder
     var sock: Int32 = -1
+    /// Hooks the daemon uses to start/stop ScreenCaptureKit + microphone capture only
+    /// while a recording is in flight, so the macOS menu-bar recording indicator
+    /// reflects reality. AppDelegate wires these to AudioCapture / MicCapture.
+    var onRecordingStart: (() -> Void)?
+    var onRecordingStop: (() -> Void)?
 
     init(_ r: AudioRecorder) { recorder = r }
 
@@ -517,10 +569,15 @@ class SocketServer {
                 resp = ["error":"sys_capture_not_ready", "sysReady": SYS_READY, "sysError": SYS_ERROR, "micReady": MIC_READY, "micError": MIC_ERROR]
             } else if !MIC_READY {
                 resp = ["error":"mic_capture_not_ready", "sysReady": SYS_READY, "sysError": SYS_ERROR, "micReady": MIC_READY, "micError": MIC_ERROR]
-            } else if let p = recorder.start(title: json["title"] as? String ?? "meeting") { resp = ["status":"recording", "file":p] }
+            } else if let p = recorder.start(title: json["title"] as? String ?? "meeting") {
+                onRecordingStart?()  // wake the SCStream + mic engine
+                resp = ["status":"recording", "file":p]
+            }
             else { resp = ["error":"start_failed"] }
         case "stop":
-            let (p, d) = recorder.stop(); resp = ["status":"stopped", "file": p ?? "", "duration": d]
+            let (p, d) = recorder.stop()
+            onRecordingStop?()  // tear down SCStream + mic engine; menu-bar indicator clears
+            resp = ["status":"stopped", "file": p ?? "", "duration": d]
         case "status":
             resp = ["recording": recorder.isRecording, "file": recorder.writer?.url.path ?? "", "sysReady": SYS_READY, "sysError": SYS_ERROR, "micReady": MIC_READY, "micError": MIC_ERROR]
         case "quit": resp = ["status":"bye"]; send(c, resp)
@@ -574,14 +631,28 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let rec = AudioRecorder(); recorder = rec
         rec.onStopRequest = { [weak self] in self?.recorder?.stop() }
 
+        // Probe TCC permissions on launch (each probe opens its underlying capture
+        // briefly, then tears it down) so SYS_READY / MIC_READY are accurate without
+        // leaving the macOS menu-bar "recording" indicator on while the daemon is idle.
         if #available(macOS 12.3, *) {
             let ac = AudioCapture(recorder: rec); audioCapture = ac
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { ac.startCapture() }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { ac.probePermission() }
         }
         let mic = MicCapture(recorder: rec); micCapture = mic
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { mic.start() }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { mic.probePermission() }
 
-        let ss = SocketServer(rec); socketServer = ss; ss.start()
+        let ss = SocketServer(rec); socketServer = ss
+        // Wire the socket "start"/"stop" actions to the actual capture lifecycle.
+        // The daemon is idle (no SCStream, no mic engine) until a recording begins.
+        ss.onRecordingStart = { [weak self] in
+            self?.audioCapture?.startCapture()
+            self?.micCapture?.start()
+        }
+        ss.onRecordingStop = { [weak self] in
+            self?.audioCapture?.stopCapture()
+            self?.micCapture?.stop()
+        }
+        ss.start()
         log("Ready")
     }
 
