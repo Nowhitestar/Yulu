@@ -6,12 +6,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-05-08
+
 ### Fixed
-- `install.sh`: `[[ -e /dev/tty ]]` could be true while the device wasn't actually openable (CI runners, sandboxed agents, certain SSH sessions), causing the install to bail with `/dev/tty: Device not configured` before `setup.sh` ever ran. Now we cascade through `[[ -t 0 ]]` (stdin already a tty) → `(exec 3</dev/tty) 2>/dev/null` (try to open it for real) → `< /dev/null` (truly non-interactive, fall back to defaults). Shipped as a hotfix to `v0.3.0`.
-- **`Yulu.app` no longer triggers the macOS "screen recording in progress" indicator while idle.** Previously the daemon opened an `SCStream` 1 second after launch and kept it alive forever (writing samples only while `recording=true`, but the stream itself counts as "in use" to macOS). The menu-bar purple dot stayed on permanently. Now the daemon only probes the TCC permission at startup (open → immediately stop), and re-opens the `SCStream` only when a recording actually begins. Same change for the microphone engine — the orange dot also clears when idle. Recording-start latency is ~200–300 ms higher because the stream is rebuilt on demand; this is well within the half-second of leading silence we already trim.
+- `install.sh`: `[[ -e /dev/tty ]]` could be true while the device wasn't actually openable (CI runners, sandboxed agents, certain SSH sessions), causing the install to bail with `/dev/tty: Device not configured` before `setup.sh` ever ran. Now we cascade through `[[ -t 0 ]]` (stdin already a tty) → `(exec 3</dev/tty) 2>/dev/null` (try to open it for real) → `< /dev/null` (truly non-interactive, fall back to defaults). First shipped as a hotfix to `v0.3.0`.
+- **`Yulu.app` no longer triggers the macOS "screen recording in progress" indicator while idle.** Previously the daemon opened an `SCStream` 1 second after launch and kept it alive forever (writing samples only while `recording=true`, but the stream itself counts as "in use" to macOS). The menu-bar purple dot stayed on permanently. Now the daemon only probes the TCC permission at startup (open → immediately stop), and re-opens the `SCStream` only when a recording actually begins. Same change for the microphone engine — the orange dot also clears when idle. Recording-start latency goes from <100 ms to roughly 4 s on cold start (the first `SCShareableContent.current` + `SCStream` init are slow); subsequent starts within the same daemon process are faster. The user-visible "Recording started" message now appears only when the stream is actually ready to receive samples.
+- `AudioCapture.startCapture()` and `stopCapture()` are now synchronous (block on a `DispatchSemaphore` until the underlying `SCStream` Task transitions). Without this, a fast stop after start could see `stream==nil` and no-op, then the start Task would finish AFTER the stop and leave the stream alive — the macOS recording indicator stayed on after the user clicked stop.
+- `SocketServer` `stop` action no longer fires `onRecordingStop` when the recorder wasn't actually running. Previously a spurious `stop` (e.g. client retry after `start_failed`) logged fake "Sys capture idle" / "Mic idle" lines.
+- `setup.sh --upgrade` fast-path (when `sysReady=true` is already cached) now `pkill -9` the daemon and lets `launchd` `KeepAlive` respawn the freshly built binary. Previously `launchctl unload` of an `open -W Yulu.app` job killed only the `open` wrapper, not the LSUIElement child process — so `yulu update` shipped code changes that never actually ran until the user rebooted. TCC state is preserved (no `tccutil reset` in the fast-path).
 
 ### Changed
-- `setup.sh` now runs `tccutil reset ScreenCapture com.yulu.audiodaemon` and `tccutil reset Microphone com.yulu.audiodaemon` before relaunching `Yulu.app` (after stopping the running daemon). This guarantees macOS shows the permission dialog instead of silently honoring a previously-denied state. If you'd accidentally clicked "Don't Allow" the first time around, you no longer have to dig into System Settings to recover — re-running setup is enough. Already-granted users see a one-time re-prompt, which is the cost of the simpler recovery path.
+- `setup.sh` now runs `tccutil reset ScreenCapture com.yulu.audiodaemon` and `tccutil reset Microphone com.yulu.audiodaemon` before relaunching `Yulu.app` on the first-grant path (after stopping the running daemon). This guarantees macOS shows the permission dialog instead of silently honoring a previously-denied state. If you'd accidentally clicked "Don't Allow" the first time around, you no longer have to dig into System Settings to recover — re-running setup is enough. Already-granted users on the upgrade fast-path don't see a re-prompt.
 
 ## [0.3.0] - 2026-05-08
 
@@ -75,7 +80,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Removed all hardcoded Google OAuth secrets from the repository history.
 - `.gitignore` blocks `config.json`, `client_secret*.json`, `credentials*.json`, `token*.json`, and local recordings by default.
 
-[Unreleased]: https://github.com/Nowhitestar/Yulu/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/Nowhitestar/Yulu/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/Nowhitestar/Yulu/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/Nowhitestar/Yulu/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/Nowhitestar/Yulu/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/Nowhitestar/Yulu/releases/tag/v0.1.0
