@@ -51,8 +51,6 @@ Compared to Otter / Granola / Fireflies:
 </tr>
 </table>
 
-> Demo assets live under [`assets/demos/`](assets/demos/). Replace the placeholder PNGs with your own captures before publishing.
-
 ## Install
 
 ```bash
