@@ -51,30 +51,61 @@ Yulu 是一个 macOS 原生的会议录制和会议纪要工具。它本地录�
 </tr>
 </table>
 
-> Demo 图放在 [`assets/demos/`](assets/demos/)，发布前请把占位图替换成你自己的截图。
-
 ## 快速安装
 
 ```bash
-git clone https://github.com/Nowhitestar/Yulu.git
-cd Yulu
-bash yulu/scripts/setup.sh
+curl -fsSL https://raw.githubusercontent.com/Nowhitestar/Yulu/main/install.sh | bash
 ```
 
-安装脚本会引导你完成：
+就这一行。安装脚本会做：
 
-1. 检查 macOS 13+、Homebrew、Python 3。
-2. 安装 `sox`、`ffmpeg`、`whisper-cpp`、`terminal-notifier`、`gogcli`、`cloudflared`。
-3. 在 `~/.config/yulu/config.json` 写一份用户级配置。
-4. 编译窗口扫描器，引导你授权"辅助功能"权限。
-5. 编译并签名 `Yulu.app`（默认 ad-hoc 签名，有 Apple Developer 证书会优先用）。
-6. 引导你授权"麦克风"和"屏幕与系统音频录制"。
-7. （可选）通过 `gog` 配置 Google Calendar。
-8. 安装 LaunchAgent 后台服务。
-9. （可选）把 Yulu 注册为 **agent skill**，让 Claude Code / OpenClaw / Codex 等用自然语言驱动 Yulu — 见下文。
-10. 跑一遍冒烟测试。
+1. 检查 macOS 13+、Xcode CLI Tools、Homebrew、Python 3。
+2. 把 Yulu clone 到 `~/.yulu/`（路径固定，别移走）。
+3. 安装 Homebrew 包：`sox`、`ffmpeg`、`whisper-cpp`、`terminal-notifier`、`gogcli`、`cloudflared`。
+4. 写用户级配置到 `~/.config/yulu/config.json`，建录音目录 `~/Movies/Yulu/`。
+5. 编译窗口扫描器，引导授权"辅助功能"。
+6. 编译并签名 `Yulu.app`，引导授权"麦克风"和"屏幕与系统音频录制"。
+7. **下载 `whisper.cpp` 模型文件**（让你选大小，默认 `large-v3-q5_0`，~1.1 GB）。
+8. （可选）通过 `gog` 配置 Google Calendar。
+9. 安装 4 个 LaunchAgent 后台服务。
+10. 把 `yulu` CLI 装到 `~/.local/bin/yulu`。
+11. （可选）把 Yulu 注册为 **agent skill**，让 Claude Code / OpenClaw / Codex 等用自然语言驱动 Yulu。
+12. 跑一遍冒烟测试。
 
-> `setup.sh` 需要完整仓库文件，**不能 `curl | bash`**。
+装完之后**确保 `~/.local/bin` 在 PATH 里**（一般 zsh 默认没加）：
+
+```bash
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc && exec zsh
+```
+
+### 升级
+
+```bash
+yulu update
+```
+
+拉 `~/.yulu/` 最新代码，然后跑 `setup.sh --upgrade` —— 不重弹 TCC、不重做 OAuth、不重下 whisper 模型，已配置过的步骤全部跳过。
+
+### 卸载
+
+```bash
+yulu uninstall
+```
+
+停服务、删 LaunchAgent、删 CLI。**默认保留**录音、配置、agent skill —— 脚本会一项一项问你要不要删。macOS TCC 条目和 Homebrew 包不会动（其他 app 可能在用），脚本最后会列出手动清理的步骤。
+
+### `yulu` CLI
+
+| 命令 | 作用 |
+|---|---|
+| `yulu setup` | 重新跑安装脚本（fresh install） |
+| `yulu update` | `git pull && setup --upgrade` |
+| `yulu start` / `stop` / `restart` | 控制四个 LaunchAgent |
+| `yulu status` | 服务健康、daemon socket、最近录音 |
+| `yulu logs [name]` | tail 日志（默认 `audio_daemon`） |
+| `yulu record start "<title>"` / `yulu record stop` | 手动录音 |
+| `yulu where` | 列出所有相关磁盘路径 |
+| `yulu uninstall` | 见上 |
 
 ### 在 Coding Agent 里用 Yulu
 
@@ -120,7 +151,7 @@ Google 日历 / 窗口检测器
 - WAV：16-bit 立体声 48 kHz。
 - ScreenCaptureKit Float32 planar → 交错立体声 Int16。
 - 半双工 crossfade 触发阈值：默认 `silence_threshold=0.01`。
-- 默认 whisper 模型：`ggml-medium.bin`。
+- 默认 whisper 模型：`ggml-large-v3-q5_0.bin`（~1.1 GB），存在 `~/.config/yulu/models/`。
 - Bundle id：`com.yulu.audiodaemon`（Apple Developer 证书签名，无证书则回退到 ad-hoc）。
 - Agent 队列：`~/.config/yulu/agent-queue.json`。
 
@@ -148,7 +179,7 @@ Google 日历 / 窗口检测器
   },
   "transcription": {
     "whisper_cli": "whisper-cli",
-    "local_model_path": "~/Models/whisper/ggml-medium.bin",
+    "local_model_path": "~/.config/yulu/models/ggml-large-v3-q5_0.bin",
     "language": "zh"
   },
   "llm": {
@@ -183,6 +214,7 @@ Google 日历 / 窗口检测器
 
 ```text
 Yulu/
+├── install.sh                            # 一行命令安装入口
 ├── README.md
 ├── README.zh-CN.md
 ├── LICENSE
@@ -194,10 +226,14 @@ Yulu/
 ├── assets/
 │   ├── logo.svg
 │   └── demos/
+├── skills/
+│   └── yulu/SKILL.md                     # 给 agent 的接口契约（npx skills add 装这个）
 └── yulu/
-    ├── SKILL.md                          # Claude / OpenClaw skill manifest
+    ├── SKILL.md                          # 项目内部架构 / 开发者文档
     └── scripts/
-        ├── setup.sh                      # 交互式安装脚本
+        ├── setup.sh                      # 交互式安装脚本（重跑用 --upgrade）
+        ├── uninstall.sh                  # 被 `yulu uninstall` 调用
+        ├── yulu                          # CLI 分发器（symlink 到 ~/.local/bin/yulu）
         ├── Yulu.app/                     # 签名（或 ad-hoc）后的音频 daemon bundle
         ├── audio_daemon.swift            # ScreenCaptureKit + AVFoundation
         ├── build_audio_daemon.sh         # 编译并签名 Yulu.app
@@ -214,6 +250,19 @@ Yulu/
         ├── summary_template.md           # 默认会议纪要模板
         └── com.yulu.*.plist              # LaunchAgent 定义
 ```
+
+装完之后磁盘上的状态：
+
+| 路径 | 内容 |
+|---|---|
+| `~/.yulu/` | repo clone（别移走，`yulu update` 拉这里） |
+| `~/.config/yulu/config.json` | 用户配置 |
+| `~/.config/yulu/models/ggml-*.bin` | 下载的 whisper.cpp 模型 |
+| `~/.config/yulu/audio_daemon.sock` | daemon 暴露的 Unix socket |
+| `~/.config/yulu/agent-queue.json` | 给 agent 的待办事件队列 |
+| `~/Movies/Yulu/` | 你的会议录音 + 转录 + 纪要 |
+| `~/Library/LaunchAgents/com.yulu.*.plist` | 后台服务（4 个 LaunchAgent） |
+| `~/.local/bin/yulu` | CLI symlink |
 
 ## 支持
 
