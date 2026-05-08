@@ -54,25 +54,58 @@ Compared to Otter / Granola / Fireflies:
 ## Install
 
 ```bash
-git clone https://github.com/Nowhitestar/Yulu.git
-cd Yulu
-bash yulu/scripts/setup.sh
+curl -fsSL https://raw.githubusercontent.com/Nowhitestar/Yulu/main/install.sh | bash
 ```
 
-The installer will:
+That's it. The installer:
 
-1. Check macOS 13+, Homebrew, Python 3.
-2. Install `sox`, `ffmpeg`, `whisper-cpp`, `terminal-notifier`, `gogcli`, `cloudflared`.
-3. Write per-user config to `~/.config/yulu/config.json`.
-4. Compile the window scanner and walk you through Accessibility permission.
-5. Build and sign `Yulu.app`.
-6. Walk you through Microphone + Screen & System Audio Recording permissions.
-7. (Optional) configure Google Calendar via `gog`.
-8. Install LaunchAgents for background services.
-9. (Optional) register Yulu as an **agent skill** so Claude Code / OpenClaw / Codex / etc. can drive it from natural language — see below.
-10. Run a basic smoke test.
+1. Checks macOS 13+, Xcode CLI Tools, Homebrew, Python 3.
+2. Clones Yulu to `~/.yulu/` (a stable path — don't move it around).
+3. Installs Homebrew packages: `sox`, `ffmpeg`, `whisper-cpp`, `terminal-notifier`, `gogcli`, `cloudflared`.
+4. Writes per-user config to `~/.config/yulu/config.json` and creates `~/Movies/Yulu/` for recordings.
+5. Compiles the window scanner; walks you through Accessibility permission.
+6. Builds and signs `Yulu.app`; walks you through Microphone + Screen & System Audio Recording permissions.
+7. **Downloads a `whisper.cpp` GGML model** (you pick the size; default is `large-v3-q5_0`, ~1.1 GB).
+8. (Optional) configures Google Calendar via `gog`.
+9. Installs LaunchAgents for background services.
+10. Installs the `yulu` CLI to `~/.local/bin/yulu`.
+11. (Optional) registers Yulu as an **agent skill** so Claude Code / OpenClaw / Codex etc. can drive it from natural language.
+12. Runs a smoke test.
 
-> `setup.sh` requires the full repository — do not run via `curl | bash`.
+After install, **add `~/.local/bin` to your PATH** if it isn't already, so `yulu` is on your shell:
+
+```bash
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc && exec zsh
+```
+
+### Update
+
+```bash
+yulu update
+```
+
+Pulls the latest code at `~/.yulu/` and re-runs setup in idempotent upgrade mode. Already-granted TCC permissions are not re-prompted; OAuth is not redone; the whisper model isn't re-downloaded.
+
+### Uninstall
+
+```bash
+yulu uninstall
+```
+
+Stops services, removes LaunchAgents and the CLI, and asks before deleting recordings / config / agent skills. macOS TCC entries and Homebrew packages are deliberately left alone (other apps may use them) — see the final summary printed by the script for the manual cleanup steps.
+
+### `yulu` CLI
+
+| Command | What |
+|---|---|
+| `yulu setup` | Re-run the installer interactively (fresh install) |
+| `yulu update` | `git pull && setup --upgrade` |
+| `yulu start` / `stop` / `restart` | Control the four LaunchAgents |
+| `yulu status` | Service health, audio_daemon socket, recent recordings |
+| `yulu logs [name]` | Tail logs (default: `audio_daemon`) |
+| `yulu record start "<title>"` / `yulu record stop` | Manual recording |
+| `yulu where` | Print all the relevant paths on disk |
+| `yulu uninstall` | See above |
 
 ### Use Yulu from your coding agent
 
@@ -118,7 +151,7 @@ Six numbers worth knowing:
 - WAV is 16-bit stereo 48 kHz.
 - ScreenCaptureKit Float32 planar → interleaved stereo Int16.
 - Half-duplex crossfade kicks in below `silence_threshold` (default 0.01).
-- Default whisper model: `ggml-medium.bin`.
+- Default whisper model: `ggml-large-v3-q5_0.bin` (~1.1 GB), stored under `~/.config/yulu/models/`.
 - Bundle id: `com.yulu.audiodaemon` (signed; falls back to ad-hoc).
 - Agent queue: `~/.config/yulu/agent-queue.json`.
 
@@ -146,7 +179,7 @@ Path: `~/.config/yulu/config.json`
   },
   "transcription": {
     "whisper_cli": "whisper-cli",
-    "local_model_path": "~/Models/whisper/ggml-medium.bin",
+    "local_model_path": "~/.config/yulu/models/ggml-large-v3-q5_0.bin",
     "language": "zh"
   },
   "llm": {
@@ -181,6 +214,7 @@ So I wrote my own. The first version was 200 lines of `sox` and a prayer. The ve
 
 ```text
 Yulu/
+├── install.sh                            # one-line installer entry
 ├── README.md
 ├── LICENSE
 ├── CONTRIBUTING.md
@@ -191,10 +225,14 @@ Yulu/
 ├── assets/
 │   ├── logo.svg
 │   └── demos/
+├── skills/
+│   └── yulu/SKILL.md                     # agent contract installed by `npx skills add`
 └── yulu/
-    ├── SKILL.md                          # Claude / OpenClaw skill manifest
+    ├── SKILL.md                          # internal architecture / developer doc
     └── scripts/
-        ├── setup.sh                      # interactive installer
+        ├── setup.sh                      # interactive installer (--upgrade for re-runs)
+        ├── uninstall.sh                  # invoked by `yulu uninstall`
+        ├── yulu                          # CLI dispatcher (symlinked to ~/.local/bin/yulu)
         ├── Yulu.app/                     # signed (or ad-hoc) audio daemon bundle
         ├── audio_daemon.swift            # ScreenCaptureKit + AVFoundation
         ├── build_audio_daemon.sh         # build & sign Yulu.app
@@ -211,6 +249,19 @@ Yulu/
         ├── summary_template.md           # default meeting note template
         └── com.yulu.*.plist              # LaunchAgent definitions
 ```
+
+After installing, the on-disk layout looks like:
+
+| Path | Contents |
+|---|---|
+| `~/.yulu/` | The repo clone (don't move it; `yulu update` pulls here) |
+| `~/.config/yulu/config.json` | User configuration |
+| `~/.config/yulu/models/ggml-*.bin` | Downloaded whisper.cpp models |
+| `~/.config/yulu/audio_daemon.sock` | Unix socket exposed by the daemon |
+| `~/.config/yulu/agent-queue.json` | Pending events for your agent |
+| `~/Movies/Yulu/` | Your meeting recordings + transcripts + summaries |
+| `~/Library/LaunchAgents/com.yulu.*.plist` | Background services (4 LaunchAgents) |
+| `~/.local/bin/yulu` | The CLI symlink |
 
 ## Support
 
