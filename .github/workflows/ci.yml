@@ -1,0 +1,82 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Cancel old runs when a new commit is pushed to the same branch.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Syntax + Swift build
+    runs-on: macos-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Bash syntax check
+        run: |
+          set -euo pipefail
+          for f in install.sh \
+                   yulu/scripts/setup.sh \
+                   yulu/scripts/uninstall.sh \
+                   yulu/scripts/yulu \
+                   yulu/scripts/build_audio_daemon.sh; do
+            printf 'bash -n %s\n' "$f"
+            bash -n "$f"
+          done
+
+      - name: Python syntax check
+        run: |
+          set -euo pipefail
+          python3 --version
+          for f in yulu/scripts/*.py; do
+            printf 'py_compile %s\n' "$f"
+            python3 -m py_compile "$f"
+          done
+
+      - name: Swift build (audio_daemon, window_scanner, recorder_status)
+        run: |
+          set -euo pipefail
+          swift --version
+          mkdir -p .ci-build
+          for f in yulu/scripts/audio_daemon.swift \
+                   yulu/scripts/window_scanner.swift \
+                   yulu/scripts/recorder_status.swift; do
+            stem="$(basename "$f" .swift)"
+            printf 'swiftc %s -> .ci-build/%s\n' "$f" "$stem"
+            swiftc -o ".ci-build/$stem" "$f"
+          done
+
+      - name: Skill manifest sanity (skills/yulu/SKILL.md)
+        run: |
+          # vercel-labs/skills requires `name` + `description` in the frontmatter.
+          # If we ever break the manifest, npx skills add will silently skip Yulu —
+          # easier to catch in CI.
+          python3 - <<'PY'
+          import re, pathlib, sys
+          p = pathlib.Path("skills/yulu/SKILL.md")
+          assert p.exists(), "skills/yulu/SKILL.md is missing"
+          text = p.read_text()
+          m = re.match(r"^---\n(.*?)\n---", text, re.S)
+          assert m, "skills/yulu/SKILL.md has no YAML frontmatter"
+          fm = m.group(1)
+          for key in ("name:", "description:"):
+              assert key in fm, f"skills/yulu/SKILL.md frontmatter missing {key!r}"
+          print("skills/yulu/SKILL.md frontmatter OK")
+          PY
+
+      - name: install.sh top-level guard
+        run: |
+          # Smoke-test: install.sh must exit cleanly when not on macOS / no clone target.
+          # We just run `bash -n` already, but also verify the file opens with the
+          # expected shebang and is executable.
+          test -x install.sh
+          head -1 install.sh | grep -q '^#!/usr/bin/env bash'
+          echo "install.sh shebang + +x OK"
