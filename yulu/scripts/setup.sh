@@ -307,6 +307,21 @@ compile_audio_daemon() {
     echo "  首次使用需要授权：系统设置 → 隐私与安全性 → 屏幕与系统音频录制 / 麦克风。"
     echo "  如果系统弹出权限对话框，请点击「允许」。"
 
+    # Reset TCC for the audio daemon's bundle id so macOS will (re)prompt the user
+    # for Microphone + Screen Recording instead of silently honoring a previously-
+    # denied state. This matters in two cases:
+    #   - User accidentally clicked "Don't Allow" the first time.
+    #   - Bundle id changed across versions (carry-over from old TCC entries).
+    # If the user already granted, macOS just re-prompts and they accept again —
+    # one extra click vs. being silently broken.
+    # The daemon must be stopped before reset, otherwise the new request goes
+    # against the already-running process and the prompt is suppressed.
+    launchctl unload "$LAUNCH_AGENTS_DIR/com.yulu.audiodaemon.plist" 2>/dev/null || true
+    pkill -f "Yulu.app/Contents/MacOS/audio_daemon" 2>/dev/null || true
+    sleep 1
+    tccutil reset ScreenCapture com.yulu.audiodaemon 2>/dev/null || true
+    tccutil reset Microphone com.yulu.audiodaemon 2>/dev/null || true
+
     open "$SCRIPT_DIR/Yulu.app"
     sleep 4
     local status
@@ -315,7 +330,8 @@ compile_audio_daemon() {
         ok "Yulu 捕获权限正常"
     else
         warn "Yulu 尚未 ready: $status"
-        warn "请在系统设置中授权 Yulu.app，然后重新运行测试"
+        warn "如果系统弹出了权限对话框但你来不及点，跑下面这行重新弹一次："
+        warn "  tccutil reset ScreenCapture com.yulu.audiodaemon && open '$SCRIPT_DIR/Yulu.app'"
     fi
 }
 
