@@ -67,7 +67,7 @@ def remind(title, message, subtitle=""):
             "-sound", "Glass",
             # Show the Yulu logo instead of the calling shell's icon (Terminal,
             # iTerm, …). -sender requires the bundle id to belong to a launched
-            # app; the AudioDaemon LaunchAgent keeps com.yulu.audiodaemon alive.
+            # app; the Yulu LaunchAgent keeps com.yulu.audiodaemon alive.
             "-sender", YULU_BUNDLE_ID,
         ]
         if subtitle:

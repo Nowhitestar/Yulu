@@ -107,7 +107,7 @@ setup_audio() {
     echo "  Yulu 默认使用原生 macOS ScreenCaptureKit + AVFoundation。"
     echo "  不需要 BlackHole、多输出设备或虚拟声卡。"
     echo
-    echo "  首次使用 AudioDaemon.app 时，请授权："
+    echo "  首次使用 Yulu.app 时，请授权："
     echo "    - 麦克风"
     echo "    - 屏幕与系统音频录制"
     echo
@@ -231,31 +231,31 @@ compile_scanner() {
 }
 
 compile_audio_daemon() {
-    header "编译并签名 AudioDaemon"
+    header "编译并签名 Yulu.app"
 
     local build_script="$SCRIPT_DIR/build_audio_daemon.sh"
     if [[ ! -x "$build_script" ]]; then
-        warn "AudioDaemon build script 不存在或不可执行，跳过"
+        warn "Yulu.app 的 build script 不存在或不可执行，跳过"
         return
     fi
 
     "$build_script"
-    ok "AudioDaemon.app 已使用固定 codesign identity 签名"
+    ok "Yulu.app 已使用固定 codesign identity 签名"
 
     echo
-    echo "  AudioDaemon 负责捕获系统音频和麦克风。"
+    echo "  Yulu.app 负责捕获系统音频和麦克风。"
     echo "  首次使用需要授权：系统设置 → 隐私与安全性 → 屏幕与系统音频录制 / 麦克风。"
     echo "  如果系统弹出权限对话框，请点击「允许」。"
 
-    open "$SCRIPT_DIR/AudioDaemon.app"
+    open "$SCRIPT_DIR/Yulu.app"
     sleep 4
     local status
     status=$(echo '{"action":"status"}' | nc -w 2 -U "$HOME/.config/yulu/audio_daemon.sock" 2>/dev/null || true)
     if echo "$status" | grep -q '"sysReady":true' && echo "$status" | grep -q '"micReady":true'; then
-        ok "AudioDaemon 捕获权限正常"
+        ok "Yulu 捕获权限正常"
     else
-        warn "AudioDaemon 尚未 ready: $status"
-        warn "请在系统设置中授权 AudioDaemon.app，然后重新运行测试"
+        warn "Yulu 尚未 ready: $status"
+        warn "请在系统设置中授权 Yulu.app，然后重新运行测试"
     fi
 }
 
@@ -386,7 +386,7 @@ install_launchagents() {
 
     local plist_dir="$SCRIPT_DIR"
 
-    # AudioDaemon (native system audio + mic capture)
+    # Yulu.app (native system audio + mic capture)
     if [[ -f "$plist_dir/com.yulu.audiodaemon.plist" ]]; then
         install_plist "$plist_dir/com.yulu.audiodaemon.plist" "com.yulu.audiodaemon.plist"
         launchctl load "$LAUNCH_AGENTS_DIR/com.yulu.audiodaemon.plist" 2>/dev/null || true
@@ -446,13 +446,13 @@ run_tests() {
         warn "日历读取异常（如果未配置日历则正常）"
     fi
 
-    echo "  3/4 AudioDaemon 测试"
+    echo "  3/4 Yulu 录音测试"
     local audio_status
     audio_status=$(echo '{"action":"status"}' | nc -w 2 -U "$HOME/.config/yulu/audio_daemon.sock" 2>/dev/null || true)
     if echo "$audio_status" | grep -q '"sysReady":true' && echo "$audio_status" | grep -q '"micReady":true'; then
-        ok "AudioDaemon 运行正常"
+        ok "Yulu 运行正常"
     else
-        warn "AudioDaemon 异常: $audio_status"
+        warn "Yulu 异常: $audio_status"
     fi
 
     echo "  4/4 通知测试"
@@ -514,35 +514,6 @@ echo "  本脚本将引导你完成 Yulu 的安装和配置。"
 echo "  全程大约需要 10-15 分钟。"
 echo
 
-# ─── Detect a previous meeting-assistant installation ─────────────
-detect_legacy_install() {
-    local found=0
-    if [[ -d "$HOME/.config/meeting-assistant" ]]; then
-        found=1
-    fi
-    if compgen -G "$HOME/Library/LaunchAgents/com.meetingassistant.*.plist" >/dev/null 2>&1; then
-        found=1
-    fi
-    if [[ $found -eq 1 ]]; then
-        warn "检测到旧版 meeting-assistant 安装。"
-        echo "  Yulu 改名后，配置目录、LaunchAgent 标签、AudioDaemon bundle id 都变了。"
-        echo "  建议先运行迁移脚本，再继续安装："
-        echo
-        echo "    bash $SCRIPT_DIR/migrate_to_yulu.sh"
-        echo
-        prompt "现在运行迁移脚本？[Y/n]"
-        read -r ans
-        if [[ ! "$ans" =~ ^[nN] ]]; then
-            bash "$SCRIPT_DIR/migrate_to_yulu.sh"
-            echo
-            ok "迁移完成。继续安装新版 Yulu..."
-            echo
-        else
-            warn "已跳过迁移。继续安装可能与旧版冲突；后续请手动运行 migrate_to_yulu.sh。"
-        fi
-    fi
-}
-
 prompt "开始安装？[Y/n]"
 read -r ans
 if [[ "$ans" =~ ^[nN] ]]; then
@@ -550,7 +521,6 @@ if [[ "$ans" =~ ^[nN] ]]; then
     exit 0
 fi
 
-detect_legacy_install
 check_repo_layout
 check_system
 install_deps

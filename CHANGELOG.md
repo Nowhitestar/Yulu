@@ -6,12 +6,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-05-08
+
+### Changed
+- Renamed the audio daemon bundle path from `yulu/scripts/AudioDaemon.app` to `yulu/scripts/Yulu.app` so that System Settings, Activity Monitor, the Dock, and TCC prompts identify the app as **Yulu** end-to-end. The `audio_daemon` executable name, `com.yulu.audiodaemon` bundle id, `com.yulu.audiodaemon` LaunchAgent label, and `~/.config/yulu/audio_daemon.sock` socket path are unchanged — TCC permissions granted in 0.1.0 are preserved.
+- User-facing log messages, setup prompts, and documentation now refer to "Yulu" instead of "AudioDaemon" wherever the user is the audience. Internal identifiers (`audio_daemon` binary, `com.yulu.audiodaemon` bundle id, socket name) are deliberately kept.
+
+### Removed
+- `yulu/scripts/migrate_to_yulu.sh` and the "Upgrading from `meeting-assistant`" section of both READMEs. The pre-rename `meeting-assistant` codename never had a public release, so there are no installs in the wild that need migrating off it. The `setup.sh` legacy-install detector that prompted users to run the migration script is also gone.
+- `assets/demos/README.md` placeholder — the four demo screenshots it described were committed in 0.1.0, so the placeholder is no longer needed.
+
 ## [0.1.0] - 2026-05-07
 
 ### Added
 - Initial public release as **Yulu** (语录).
 - Native macOS recording via `ScreenCaptureKit` (system audio) + `AVFoundation` (microphone), no BlackHole required.
-- Signed `AudioDaemon.app` Unix-socket controller.
+- Signed `Yulu.app` Unix-socket controller.
 - Half-duplex mixing: prioritize system audio, fade to microphone during system silence.
 - Floating recording status window with a manual stop button.
 - Local transcription via `whisper.cpp` (`whisper-cli`).
@@ -38,5 +48,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Removed all hardcoded Google OAuth secrets from the repository history.
 - `.gitignore` blocks `config.json`, `client_secret*.json`, `credentials*.json`, `token*.json`, and local recordings by default.
 
-[Unreleased]: https://github.com/Nowhitestar/Yulu/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/Nowhitestar/Yulu/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/Nowhitestar/Yulu/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/Nowhitestar/Yulu/releases/tag/v0.1.0

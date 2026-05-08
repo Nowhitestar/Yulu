@@ -44,11 +44,11 @@ These are not vulnerabilities in Yulu, but they are the failure modes I see most
 
 ## Verifying releases
 
-When GitHub Releases ship a signed `AudioDaemon.app`, verify the signature before installing:
+When GitHub Releases ship a signed `Yulu.app`, verify the signature before installing:
 
 ```bash
-codesign -dv --verbose=4 AudioDaemon.app
-spctl -a -t exec -vv AudioDaemon.app
+codesign -dv --verbose=4 Yulu.app
+spctl -a -t exec -vv Yulu.app
 ```
 
 The expected Developer ID identity will be listed in the release notes. If `spctl` reports `rejected`, do not run the binary — open an issue instead.

@@ -1,0 +1,104 @@
+name: Bug report
+description: Something isn't working — recording fails, transcript is wrong, summary never arrives, etc.
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug. Yulu runs entirely on your machine and depends heavily on macOS permissions, audio routing, and local model files — please fill in the environment fields below, otherwise we'll just have to ask anyway.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: A short description of the actual behavior.
+      placeholder: e.g. "Started a Zoom meeting, the recording status panel showed up, but the resulting `audio.wav` is 0 bytes."
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect to happen?
+      placeholder: e.g. "audio.wav should contain the system audio from Zoom plus my microphone."
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Minimal sequence to trigger the bug. If it only happens during specific meetings, say so.
+      value: |
+        1.
+        2.
+        3.
+    validations:
+      required: true
+
+  - type: input
+    id: macos-version
+    attributes:
+      label: macOS version
+      description: Output of `sw_vers -productVersion`
+      placeholder: "14.5"
+    validations:
+      required: true
+
+  - type: input
+    id: yulu-version
+    attributes:
+      label: Yulu version / commit
+      description: Tag, release name, or `git rev-parse --short HEAD` from your clone.
+      placeholder: "v0.1.0 or 17c49f5"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: install-path
+    attributes:
+      label: How did you install?
+      options:
+        - "Cloned the repo and ran `bash yulu/scripts/setup.sh`"
+        - "Cloned the repo, ran setup.sh, then customized config"
+        - "Manual install (no setup.sh)"
+        - "Other (describe below)"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: audiodaemon
+    attributes:
+      label: Yulu.app code-signing identity
+      description: Run `codesign -dv yulu/scripts/Yulu.app 2>&1 | grep Authority` and pick the first result.
+      options:
+        - "Developer ID Application"
+        - "Apple Development"
+        - "ad-hoc (`-`)"
+        - "not signed / unknown"
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: |
+        Paste the last ~30 lines of whichever logs are relevant. Common ones:
+        - `~/Library/Logs/yulu/meeting_daemon.log`
+        - `~/Library/Logs/yulu/audio_daemon.log`
+        - `~/Library/Logs/yulu/scheduler.log`
+        - `tail -f` whatever was running when the bug happened
+        Redact any meeting titles or attendee names you don't want public.
+      render: shell
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else?
+      description: |
+        Optional. Things that often matter:
+        - Are you using BlackHole or a multi-output device? (Yulu is built to NOT need either.)
+        - Is whisper.cpp's `whisper-cli` on your PATH? Which model file?
+        - Which agent picks up `agent-queue.json` (Claude Code, Codex, OpenClaw, custom)?

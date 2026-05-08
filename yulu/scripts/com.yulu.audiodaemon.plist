@@ -9,7 +9,7 @@
     <array>
         <string>/usr/bin/open</string>
         <string>-W</string>
-        <string>__SCRIPT_DIR__/AudioDaemon.app</string>
+        <string>__SCRIPT_DIR__/Yulu.app</string>
     </array>
 
     <key>RunAtLoad</key>

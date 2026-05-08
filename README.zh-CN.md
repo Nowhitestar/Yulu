@@ -67,7 +67,7 @@ bash yulu/scripts/setup.sh
 2. 安装 `sox`、`ffmpeg`、`whisper-cpp`、`terminal-notifier`、`gogcli`、`cloudflared`。
 3. 在 `~/.config/yulu/config.json` 写一份用户级配置。
 4. 编译窗口扫描器，引导你授权"辅助功能"权限。
-5. 编译并签名 `AudioDaemon.app`（默认 ad-hoc 签名，有 Apple Developer 证书会优先用）。
+5. 编译并签名 `Yulu.app`（默认 ad-hoc 签名，有 Apple Developer 证书会优先用）。
 6. 引导你授权"麦克风"和"屏幕与系统音频录制"。
 7. （可选）通过 `gog` 配置 Google Calendar。
 8. 安装 LaunchAgent 后台服务。
@@ -84,7 +84,7 @@ Google 日历 / 窗口检测器
           ↓
  meeting_daemon.py  ──►  notify.py 弹窗："开始录吗？"
           ↓
- record_audio.py  ──►  AudioDaemon.app  (Unix socket)
+ record_audio.py  ──►  Yulu.app  (Unix socket)
           ↓
  ScreenCaptureKit (系统音频) + AVFoundation (麦克风)
           ↓
@@ -107,11 +107,11 @@ Google 日历 / 窗口检测器
 
 | 组件 | 权限 | 用途 |
 |---|---|---|
-| `AudioDaemon.app` | 麦克风 | 录制本机麦克风 |
-| `AudioDaemon.app` | 屏幕与系统音频录制 | 通过 ScreenCaptureKit 捕获系统音频 |
+| `Yulu.app` | 麦克风 | 录制本机麦克风 |
+| `Yulu.app` | 屏幕与系统音频录制 | 通过 ScreenCaptureKit 捕获系统音频 |
 | `window_scanner` | 辅助功能 | 读取窗口标题，检测会议/通话 |
 
-如果系统音频录不到：系统设置 → 隐私与安全性 → **屏幕与系统音频录制** → 启用 `AudioDaemon.app`，然后重启 daemon。
+如果系统音频录不到：系统设置 → 隐私与安全性 → **屏幕与系统音频录制** → 启用 `Yulu.app`，然后重启 daemon。
 
 ## 配置
 
@@ -150,7 +150,7 @@ Google 日历 / 窗口检测器
 - **录音永远先问**。检测可以错，知情同意不能错。每一次录制都走 `notify.py` 真的弹一次窗。
 - **LLM 是插件不是依赖**。`transcribe.py` 即使没有任何 agent 也能跑出一份可读的 Markdown 摘要——`fallback_summary()` 用正则把转录分桶成"决策 / 待办 / 阻塞 / 议题"，不会留 "TODO: agent will fill this in" 这种占位。
 - **状态写在文件里，不在内存里**。`agent-queue.json`、`schedule.json`、本地录音都是磁盘对象。会议中突然断电，最多丢上次 flush 之后的几秒音频，其它都还在。
-- **TCC 权限只挂在一个 binary 上**。整个系统里只有 `AudioDaemon.app` 持有麦克风和屏幕录制权限；Python 代码只能通过 Unix socket 跟它说话，绕不开 macOS 的隐私墙。
+- **TCC 权限只挂在一个 binary 上**。整个系统里只有 `Yulu.app` 持有麦克风和屏幕录制权限；Python 代码只能通过 Unix socket 跟它说话，绕不开 macOS 的隐私墙。
 
 ## 故事
 
@@ -177,10 +177,9 @@ Yulu/
     ├── SKILL.md                          # Claude / OpenClaw skill manifest
     └── scripts/
         ├── setup.sh                      # 交互式安装脚本
-        ├── migrate_to_yulu.sh            # 从旧 meeting-assistant 升级的迁移脚本
-        ├── AudioDaemon.app/              # 签名（或 ad-hoc）后的音频 daemon
+        ├── Yulu.app/                     # 签名（或 ad-hoc）后的音频 daemon bundle
         ├── audio_daemon.swift            # ScreenCaptureKit + AVFoundation
-        ├── build_audio_daemon.sh         # 编译并签名 AudioDaemon
+        ├── build_audio_daemon.sh         # 编译并签名 Yulu.app
         ├── record_audio.py               # 录音控制
         ├── meeting_daemon.py             # 工作流调度
         ├── scheduler_daemon.py           # 基于日历的调度器
@@ -194,17 +193,6 @@ Yulu/
         ├── summary_template.md           # 默认会议纪要模板
         └── com.yulu.*.plist              # LaunchAgent 定义
 ```
-
-## 从 `meeting-assistant` 升级
-
-如果你装过老版（当时这个项目叫 `meeting-assistant`），重新跑 `setup.sh` 之前先跑迁移脚本：
-
-```bash
-bash yulu/scripts/migrate_to_yulu.sh
-bash yulu/scripts/setup.sh
-```
-
-迁移脚本会把 `~/.config/meeting-assistant/` 移到 `~/.config/yulu/`，并卸载旧的 `com.meetingassistant.*` LaunchAgents。**因为 AudioDaemon 的 bundle id 变了，macOS 会把它当作一个新 app 重新弹麦克风和屏幕录制权限**——这一步无法绕过，是重命名的代价。
 
 ## 支持
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Realtime-ish transcription for Meeting Assistant.
 
-Watches the growing 16-bit stereo 48k WAV written by AudioDaemon, cuts stable PCM
+Watches the growing 16-bit stereo 48k WAV written by Yulu, cuts stable PCM
 into small WAV chunks, transcribes chunks with whisper-cli, and appends a rolling
 transcript next to the recording:
 
