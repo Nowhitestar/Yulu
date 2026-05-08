@@ -69,9 +69,30 @@ The installer will:
 6. Walk you through Microphone + Screen & System Audio Recording permissions.
 7. (Optional) configure Google Calendar via `gog`.
 8. Install LaunchAgents for background services.
-9. Run a basic smoke test.
+9. (Optional) register Yulu as an **agent skill** so Claude Code / OpenClaw / Codex / etc. can drive it from natural language — see below.
+10. Run a basic smoke test.
 
 > `setup.sh` requires the full repository — do not run via `curl | bash`.
+
+### Use Yulu from your coding agent
+
+Yulu ships with a `SKILL.md` under [`skills/yulu/`](skills/yulu/SKILL.md) that teaches Claude Code, OpenClaw, Codex, Cursor, and the [50+ other agents supported by `vercel-labs/skills`](https://github.com/vercel-labs/skills#supported-agents) how to drive it. Once installed, you can say things like:
+
+- "Start recording, call it Yulu weekly"
+- "Stop the recording and summarize it"
+- "What did we talk about in last Tuesday's standup?"
+
+`setup.sh` step 9 offers to install it for you. To install or reinstall it later, from anywhere:
+
+```bash
+# Install globally to Claude Code + OpenClaw, non-interactive
+npx skills add Nowhitestar/Yulu -g -a claude-code -a openclaw -y
+
+# Or install from your local clone
+npx skills add . -g -a claude-code -y
+```
+
+The skill is a thin contract — it tells the agent what verbs Yulu exposes (start, stop, status, summary fulfillment) and how to find past meetings on disk. Yulu's macOS app, launchd services, and whisper.cpp install still come from `setup.sh`. Installing the skill alone does not capture audio.
 
 ## How it works
 

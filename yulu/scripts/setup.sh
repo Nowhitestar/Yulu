@@ -425,7 +425,50 @@ install_launchagents() {
     ok "服务已安装"
 }
 
-# ─── Step 7: Test ────────────────────────────────────
+# ─── Step 7: Install Yulu as an agent skill (optional) ─────────
+
+install_agent_skill() {
+    header "（可选）注册 Yulu skill 到 Coding Agent"
+
+    if ! command -v npx >/dev/null 2>&1; then
+        info "未检测到 npx (Node.js)，跳过 agent skill 注册。"
+        info "  以后想装：先装 Node.js，再跑 npx skills add Nowhitestar/Yulu -g"
+        return
+    fi
+
+    echo "  使用 vercel-labs/skills 把 Yulu 的 SKILL.md 注册到指定 agent。"
+    echo "  注册之后，可以直接对 agent 说"开始录制""停止录制""上次会议聊了什么"，"
+    echo "  agent 会看 SKILL.md 学到 Yulu 的命令，自动调用。"
+    echo "  默认目标 agent：claude-code openclaw"
+    echo "  支持列表见：https://github.com/vercel-labs/skills"
+    echo
+
+    prompt "注册 Yulu skill 到 agent？[Y/n]"
+    read -r ans
+    if [[ "$ans" =~ ^[nN] ]]; then
+        info "已跳过 skill 注册。以后想装：npx skills add $REPO_DIR -g -a claude-code -a openclaw -y"
+        return
+    fi
+
+    prompt "目标 agent（空格分隔，回车使用默认 claude-code openclaw）："
+    read -r agents
+    [[ -z "$agents" ]] && agents="claude-code openclaw"
+
+    local agent_args=()
+    for a in $agents; do
+        agent_args+=("-a" "$a")
+    done
+
+    info "运行：npx -y skills add $REPO_DIR -g ${agent_args[*]} -y"
+    if npx -y skills add "$REPO_DIR" -g "${agent_args[@]}" -y; then
+        ok "Yulu skill 已注册到：$agents"
+        echo "  位置：~/.<agent>/skills/yulu/  (symlink 到 $REPO_DIR/skills/yulu/)"
+    else
+        warn "skill 注册失败（不影响 Yulu 主功能）。手动重试：npx skills add $REPO_DIR -g ${agent_args[*]}"
+    fi
+}
+
+# ─── Step 8: Test ────────────────────────────────────
 
 run_tests() {
     header "功能验证"
@@ -530,6 +573,7 @@ compile_scanner
 compile_audio_daemon
 setup_calendar
 install_launchagents
+install_agent_skill
 run_tests
 show_summary
 

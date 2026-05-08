@@ -1,6 +1,9 @@
 ---
 name: yulu
-description: "Yulu (语录) — native macOS meeting recorder and note-taker. Calendar/window detection, prompt-before-recording, ScreenCaptureKit system audio + microphone recording, local whisper-cli transcription, and agent-generated meeting notes via an agent queue. No BlackHole or virtual audio device required. Use when you need automatic meeting detection, recording, transcription, and final summaries delivered by any coding agent (Claude Code, Codex, OpenClaw)."
+description: "Yulu (语录) — native macOS meeting recorder and note-taker. Calendar/window detection, prompt-before-recording, ScreenCaptureKit system audio + microphone recording, local whisper-cli transcription, and agent-generated meeting notes via an agent queue. No BlackHole or virtual audio device required."
+metadata:
+  internal: true
+  notice: "This is the project's internal architecture / developer documentation. The user-facing agent contract that gets installed by `npx skills add` lives at skills/yulu/SKILL.md."
 ---
 
 # Yulu

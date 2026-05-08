@@ -71,9 +71,30 @@ bash yulu/scripts/setup.sh
 6. 引导你授权"麦克风"和"屏幕与系统音频录制"。
 7. （可选）通过 `gog` 配置 Google Calendar。
 8. 安装 LaunchAgent 后台服务。
-9. 跑一遍冒烟测试。
+9. （可选）把 Yulu 注册为 **agent skill**，让 Claude Code / OpenClaw / Codex 等用自然语言驱动 Yulu — 见下文。
+10. 跑一遍冒烟测试。
 
 > `setup.sh` 需要完整仓库文件，**不能 `curl | bash`**。
+
+### 在 Coding Agent 里用 Yulu
+
+仓库里 [`skills/yulu/`](skills/yulu/SKILL.md) 下有一份 `SKILL.md`，告诉 Claude Code、OpenClaw、Codex、Cursor 等[共 50+ 个 vercel-labs/skills 支持的 agent](https://github.com/vercel-labs/skills#supported-agents) 怎么调用 Yulu。注册之后，可以直接说：
+
+- "开始录制，标题就叫 Yulu 周会"
+- "停止录制并出个纪要"
+- "上周二的 standup 我们聊了什么？"
+
+`setup.sh` 第 9 步会问要不要装。日后想装或重装：
+
+```bash
+# 装到全局，目标 Claude Code + OpenClaw，非交互
+npx skills add Nowhitestar/Yulu -g -a claude-code -a openclaw -y
+
+# 或者装本地 clone
+npx skills add . -g -a claude-code -y
+```
+
+skill 只是一份契约——告诉 agent Yulu 暴露了哪些动词（开始/停止/状态/纪要生成），以及历史会议在磁盘哪里。Yulu 的 macOS app、launchd 服务、whisper.cpp 还是要靠 `setup.sh` 装。**单装 skill 不会录音**。
 
 ## 工作原理
 
