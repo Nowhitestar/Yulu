@@ -113,13 +113,23 @@ else
     info "Fresh install — running setup interactively"
 fi
 
-# install.sh is often invoked via `curl | bash`, which means stdin is the curl
-# pipe, not the user's terminal. setup.sh reads from stdin for prompts, so we
-# explicitly redirect stdin from /dev/tty so the user can answer.
-if [[ -e /dev/tty ]]; then
+# install.sh is typically invoked via `curl | bash`, which means stdin is the
+# curl pipe, not the user's terminal. setup.sh reads from stdin for prompts,
+# so we want to redirect from /dev/tty when one is actually available — but
+# `[[ -e /dev/tty ]]` is not enough: the file node can exist while the device
+# is "not configured" (CI runners, certain non-interactive shells). Try to
+# open it for real before relying on it.
+if [[ -t 0 ]]; then
+    # stdin is already a tty — user ran the script directly. Pass through.
+    bash "$SETUP" "${SETUP_ARGS[@]}"
+elif (exec 3</dev/tty) 2>/dev/null; then
+    # stdin is a pipe (curl|bash) but /dev/tty is openable. Redirect.
     bash "$SETUP" "${SETUP_ARGS[@]}" < /dev/tty
 else
-    bash "$SETUP" "${SETUP_ARGS[@]}"
+    # Truly non-interactive (CI, sandboxed agent, certain SSH sessions).
+    # setup.sh's `read` calls will see EOF and fall through to defaults.
+    warn "No interactive terminal available — setup.sh will run non-interactively."
+    bash "$SETUP" "${SETUP_ARGS[@]}" < /dev/null
 fi
 
 header "Done"
