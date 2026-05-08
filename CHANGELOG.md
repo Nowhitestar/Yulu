@@ -6,6 +6,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-05-08
+
 ### Added
 - **One-line installer**: `curl -fsSL https://raw.githubusercontent.com/Nowhitestar/Yulu/main/install.sh | bash`. The installer pre-flights macOS / Xcode CLI / git, clones to `~/.yulu/` (a stable path), then hands off to `setup.sh`. If a previous installation is detected (any `com.yulu.*` LaunchAgent in `~/Library/LaunchAgents/`), it runs in `--upgrade` mode automatically.
 - **`yulu` CLI** (`yulu/scripts/yulu`, symlinked to `~/.local/bin/yulu` by setup): single command surface for `setup`, `update`, `uninstall`, `start`, `stop`, `restart`, `status`, `logs`, `record start/stop`, `where`. Symlink-resolved so the CLI keeps working even if the repo path changes.
@@ -66,6 +68,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Removed all hardcoded Google OAuth secrets from the repository history.
 - `.gitignore` blocks `config.json`, `client_secret*.json`, `credentials*.json`, `token*.json`, and local recordings by default.
 
-[Unreleased]: https://github.com/Nowhitestar/Yulu/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/Nowhitestar/Yulu/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/Nowhitestar/Yulu/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/Nowhitestar/Yulu/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/Nowhitestar/Yulu/releases/tag/v0.1.0
