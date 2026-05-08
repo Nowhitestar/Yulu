@@ -6,6 +6,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- Yulu now ships as an [open agent skill](https://github.com/vercel-labs/skills). A new `skills/yulu/SKILL.md` documents the verbs Yulu exposes (start / stop / status / fulfill `summary_request` / look up past meetings) so any agent in the `vercel-labs/skills` ecosystem (Claude Code, OpenClaw, Codex, Cursor, and 50+ others) can drive Yulu from natural language.
+- `npx skills add Nowhitestar/Yulu -g -a claude-code -a openclaw -y` installs the skill to all configured agents in one shot. The skill is a thin contract — `setup.sh` is still required for the macOS app, launchd services, and whisper.cpp install.
+- `setup.sh` gained an optional Step 9 that runs the above command for you (defaults to Claude Code + OpenClaw, lets you override the target list, and skips silently if `npx` isn't available).
+- Both READMEs now have a "Use Yulu from your coding agent" section walking through this.
+
 ## [0.2.0] - 2026-05-08
 
 ### Changed
