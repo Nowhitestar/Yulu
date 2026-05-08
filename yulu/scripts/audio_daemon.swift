@@ -486,9 +486,16 @@ class AudioCapture {
         }
     }
 
+    /// Start capturing system audio. Blocks until the SCStream is actually
+    /// running (or fails), so that a subsequent stopCapture() call can rely
+    /// on `stream` being set. Without this, start/stop racing each other
+    /// produced "Sys capture started" messages AFTER "Sys capture idle" —
+    /// and worse, left the macOS recording indicator on after stop.
     func startCapture() {
         guard stream == nil else { return }  // already capturing — idempotent
+        let sem = DispatchSemaphore(value: 0)
         Task {
+            defer { sem.signal() }
             do {
                 let content = try await SCShareableContent.current
                 guard let d = content.displays.first else { log("No display"); return }
@@ -506,12 +513,21 @@ class AudioCapture {
                 log("Sys capture failed: \(SYS_ERROR)")
             }
         }
+        _ = sem.wait(timeout: .now() + 5)  // 5s upper bound for SCStream init
     }
 
+    /// Stop capturing. Blocks until the SCStream has actually stopped, so
+    /// the macOS recording indicator clears synchronously with the user's
+    /// "stop" command.
     func stopCapture() {
         let s = stream
         stream = nil
-        Task { try? await s?.stopCapture() }
+        let sem = DispatchSemaphore(value: 0)
+        Task {
+            defer { sem.signal() }
+            try? await s?.stopCapture()
+        }
+        _ = sem.wait(timeout: .now() + 2)
         log("🔇 Sys capture idle")
     }
 }
@@ -575,8 +591,12 @@ class SocketServer {
             }
             else { resp = ["error":"start_failed"] }
         case "stop":
+            let wasRecording = recorder.isRecording
             let (p, d) = recorder.stop()
-            onRecordingStop?()  // tear down SCStream + mic engine; menu-bar indicator clears
+            // Only tear down capture if we actually started it. A spurious "stop"
+            // (e.g. client retry after a start_failed) would otherwise log a fake
+            // "Sys capture idle" / "Mic idle" while neither was running.
+            if wasRecording { onRecordingStop?() }
             resp = ["status":"stopped", "file": p ?? "", "duration": d]
         case "status":
             resp = ["recording": recorder.isRecording, "file": recorder.writer?.url.path ?? "", "sysReady": SYS_READY, "sysError": SYS_ERROR, "micReady": MIC_READY, "micError": MIC_ERROR]

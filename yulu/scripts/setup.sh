@@ -292,12 +292,25 @@ compile_audio_daemon() {
     # the "cannot verify developer" dialog that LSUIElement apps swallow silently.
     xattr -dr com.apple.quarantine "$SCRIPT_DIR/Yulu.app" 2>/dev/null || true
 
-    # On upgrade, if TCC is already granted and the daemon answers status, skip the prompt.
+    # On upgrade, if TCC is already granted and the daemon answers status, skip the
+    # interactive permission walkthrough — but ALWAYS restart the daemon so it
+    # actually picks up the freshly built binary. (`launchctl unload` of an
+    # `open -W Yulu.app` job doesn't kill the LSUIElement child process, so the
+    # old binary keeps running unless we pkill it explicitly.)
     if [[ "$UPGRADE_MODE" == true ]]; then
         local existing
         existing=$(echo '{"action":"status"}' | nc -w 2 -U "$HOME/.config/yulu/audio_daemon.sock" 2>/dev/null || true)
         if echo "$existing" | grep -q '"sysReady":true' && echo "$existing" | grep -q '"micReady":true'; then
-            ok "麦克风 + 屏幕录制权限已就绪（升级模式跳过引导）"
+            info "重载 daemon 让它跑新 binary（TCC 状态保留）..."
+            pkill -9 -f "Yulu.app/Contents/MacOS/audio_daemon" 2>/dev/null || true
+            sleep 2
+            # launchd KeepAlive=true 会自动重启 daemon。如果 plist 已 unload（极端情况），
+            # 我们手动 open。
+            if ! pgrep -f "Yulu.app/Contents/MacOS/audio_daemon" >/dev/null 2>&1; then
+                open "$SCRIPT_DIR/Yulu.app"
+                sleep 3
+            fi
+            ok "麦克风 + 屏幕录制权限已就绪；daemon 已重载"
             return
         fi
     fi
