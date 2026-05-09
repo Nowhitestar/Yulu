@@ -60,7 +60,7 @@ Commands:
   stop             Unload all Yulu LaunchAgents
   restart          stop + start
   status           Service + daemon health snapshot
-  logs [daemon]    Tail logs. Daemon = audio_daemon (default), scheduler, detector, calendar, realtime_transcribe
+  logs [daemon]    Tail logs. Daemon = audio_daemon (default), scheduler, detector, calendar, agentqueue, realtime_transcribe
   record start "title"   Manually start a recording
   record stop            Manually stop the current recording
   where            Print key paths
@@ -195,6 +195,11 @@ except Exception:
 
 cmd_logs() {
     local name="${1:-audio_daemon}"
+    case "$name" in
+        agentqueue|agent_queue|agent-queue)
+            name="agent_queue_worker"
+            ;;
+    esac
     local log_path="$CONFIG_DIR/${name}.log"
     if [[ ! -f "$log_path" ]]; then
         # Try alternative paths used by some daemons.

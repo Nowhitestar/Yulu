@@ -555,12 +555,13 @@ install_launchagents() {
 
         cp "$src" "$dest"
 
+        local launch_path="$HOME/.local/bin:$HOME/.nvm/versions/node/$(node -v 2>/dev/null || true)/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
         # Replace placeholder paths with real paths
         sed -i '' \
             -e "s|__PYTHON__|$PYTHON_BIN|g" \
             -e "s|__HOME__|$HOME|g" \
             -e "s|__SCRIPT_DIR__|$SCRIPT_DIR|g" \
-            -e "s|__PATH__|/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin|g" \
+            -e "s|__PATH__|$launch_path|g" \
             "$dest" 2>/dev/null || true
 
         # If plist has hardcoded paths, update if needed
@@ -593,6 +594,13 @@ install_launchagents() {
         install_plist "$plist_dir/com.yulu.detector.plist" "com.yulu.detector.plist"
         launchctl load "$LAUNCH_AGENTS_DIR/com.yulu.detector.plist" 2>/dev/null || true
         ok "detector 已加载"
+    fi
+
+    # Agent queue worker: promptly handles summary_request events via llm.command.
+    if [[ -f "$plist_dir/com.yulu.agentqueue.plist" ]]; then
+        install_plist "$plist_dir/com.yulu.agentqueue.plist" "com.yulu.agentqueue.plist"
+        launchctl load "$LAUNCH_AGENTS_DIR/com.yulu.agentqueue.plist" 2>/dev/null || true
+        ok "agentqueue 已加载"
     fi
 
     # Calendar service (optional, only if gog configured)
