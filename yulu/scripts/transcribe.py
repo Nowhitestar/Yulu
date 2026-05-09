@@ -2,7 +2,7 @@
 """
 转录音频并生成会议纪要。
 
-转录: whisper.cpp (whisper-cli)
+转录: mlx-whisper（final 优先）/ whisper.cpp（fallback + realtime）
 摘要: 默认优先使用本机 claude CLI 生成高质量纪要；也可配置外部命令。
 
 依赖：
@@ -31,8 +31,10 @@
 
 import json
 import os
+import re
 import shlex
 import subprocess
+import tempfile
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -49,6 +51,15 @@ DEFAULT_TRANSCRIBE_CMD = [
 ]
 
 DEFAULT_LLM_CMD = ["claude", "--print"]
+DEFAULT_MLX_PYTHON = str(Path.home() / ".config/yulu/venv-mlx-whisper/bin/python")
+DEFAULT_MLX_MODEL = "mlx-community/whisper-large-v3-turbo"
+
+DEFAULT_GLOSSARY = [
+    "AgentKey", "OpenClaw", "OpenAI", "Claude", "Cursor", "Deal Hub",
+    "Portfolio", "public market", "candidate", "qualification", "recruiter",
+    "research rollup", "workflow", "GitHub", "screenshot", "VP",
+    "VC", "AI conference", "meetup", "Yulu",
+]
 
 NOTIFY_SCRIPT = Path(__file__).parent / "notify.py"
 
@@ -113,6 +124,155 @@ def transcribe(audio_path, config):
 
     transcript = output_txt.read_text(encoding="utf-8").strip()
     output_txt.unlink()  # 清理 whisper 中间文件
+    return transcript
+
+
+def _glossary_prompt(trans_cfg, title=""):
+    glossary = trans_cfg.get("glossary", DEFAULT_GLOSSARY)
+    if isinstance(glossary, str):
+        glossary = [x.strip() for x in re.split(r"[,\n]", glossary) if x.strip()]
+    terms = ", ".join(dict.fromkeys([*DEFAULT_GLOSSARY, *glossary]))
+    return (
+        "以下是一次中文为主、中英混杂的创业/投资/产品会议。"
+        "请保留英文专有名词，不要翻译人名、产品名和公司名。"
+        f"会议标题：{title}。常见术语：{terms}。"
+    )
+
+
+def transcribe_mlx(audio_path, config, meeting_title=""):
+    """Use mlx-whisper for high-quality full-audio final transcription."""
+    audio_path = Path(audio_path).resolve()
+    mlx_cfg = config.get("mlx", {}) if isinstance(config.get("mlx", {}), dict) else {}
+    py = config.get("mlx_python") or mlx_cfg.get("python") or DEFAULT_MLX_PYTHON
+    model = config.get("mlx_model") or mlx_cfg.get("model") or DEFAULT_MLX_MODEL
+    if not Path(py).exists():
+        raise RuntimeError(f"mlx-whisper python not found: {py}")
+
+    prompt = config.get("initial_prompt") or mlx_cfg.get("initial_prompt") or _glossary_prompt(config, meeting_title)
+    out_json = Path(tempfile.mkstemp(prefix="yulu-mlx-whisper-", suffix=".json")[1])
+    code = """
+import json, sys
+from pathlib import Path
+import mlx_whisper
+
+audio, model, prompt, out = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+res = mlx_whisper.transcribe(
+    audio,
+    path_or_hf_repo=model,
+    language="zh",
+    task="transcribe",
+    verbose=False,
+    initial_prompt=prompt,
+    condition_on_previous_text=True,
+    word_timestamps=False,
+    hallucination_silence_threshold=2.0,
+)
+Path(out).write_text(json.dumps(res, ensure_ascii=False), encoding="utf-8")
+"""
+    cmd = [py, "-c", code, str(audio_path), model, prompt, str(out_json)]
+    print(f"🎙️ mlx-whisper: {shlex.join([py, '-c', '<code>', str(audio_path), model, '<prompt>', str(out_json)])}")
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=int(config.get("timeout_sec", 7200)))
+    if result.returncode != 0:
+        out_json.unlink(missing_ok=True)
+        raise RuntimeError(result.stderr.strip() or f"mlx-whisper failed: {result.returncode}")
+    try:
+        data = json.loads(out_json.read_text(encoding="utf-8"))
+    finally:
+        out_json.unlink(missing_ok=True)
+
+    segments = data.get("segments") or []
+    if segments:
+        lines = []
+        for seg in segments:
+            text = (seg.get("text") or "").strip()
+            if not text:
+                continue
+            start = int(float(seg.get("start", 0)))
+            end = int(float(seg.get("end", start)))
+            lines.append(f"[{start//60:02d}:{start%60:02d}-{end//60:02d}:{end%60:02d}] {text}")
+        transcript = "\n".join(lines).strip()
+    else:
+        transcript = (data.get("text") or "").strip()
+    if not transcript:
+        raise RuntimeError("mlx-whisper produced empty transcript")
+    return transcript
+
+
+def normalize_transcript_text(transcript, trans_cfg):
+    """Deterministic cleanup: fix common terms and remove obvious repeated adjacent lines."""
+    replacements = trans_cfg.get("replacements") or {
+        "agent king": "AgentKey",
+        "Agent King": "AgentKey",
+        "agency": "AgentKey",
+        "Agency": "AgentKey",
+        "open cloud": "OpenClaw",
+        "OpenCloud": "OpenClaw",
+        "OpenCore": "OpenClaw",
+        "deal hub": "Deal Hub",
+        "github": "GitHub",
+    }
+    text = transcript
+    for k, v in replacements.items():
+        text = re.sub(re.escape(k), v, text, flags=re.I if k.islower() else 0)
+
+    out = []
+    prev_norm = None
+    repeat_count = 0
+    for line in text.splitlines():
+        norm = re.sub(r"^\[[^\]]+\]\s*", "", line).strip()
+        norm = re.sub(r"\s+", "", norm).lower()
+        if norm and norm == prev_norm:
+            repeat_count += 1
+            if repeat_count >= 2:
+                continue
+        else:
+            repeat_count = 0
+        prev_norm = norm
+        out.append(line)
+    return "\n".join(out).strip()
+
+
+def refine_transcript(transcript, meeting_title, trans_cfg, llm_cfg):
+    """Optional LLM cleanup for readability; keeps raw transcript separately."""
+    transcript = normalize_transcript_text(transcript, trans_cfg)
+    cleanup_cfg = trans_cfg.get("cleanup", {}) if isinstance(trans_cfg.get("cleanup", {}), dict) else {}
+    enabled = cleanup_cfg.get("enabled", True)
+    if not enabled or not llm_cfg.get("enabled", True):
+        return transcript
+    cmd_template = cleanup_cfg.get("command") or llm_cfg.get("command") or DEFAULT_LLM_CMD
+    if not cmd_template or cmd_template == [""]:
+        return transcript
+    prompt = f"""请清理以下会议转录，输出 cleaned transcript，不要摘要，不要增删事实。
+
+会议主题：{meeting_title}
+
+要求：
+- 保留时间戳。
+- 修正常见专有名词和中英混杂词：{', '.join(DEFAULT_GLOSSARY)}。
+- 去除明显重复幻觉句。
+- 恢复合理标点和段落；口语可轻微整理，但不要改写观点。
+- 不要输出解释，只输出清理后的 transcript。
+
+原始转录：
+---
+{transcript}
+---
+"""
+    cmd = render_cmd(cmd_template)
+    print(f"🧹 Transcript cleanup LLM: {shlex.join(cmd)}")
+    try:
+        result = subprocess.run(
+            cmd,
+            input=prompt,
+            capture_output=True,
+            text=True,
+            timeout=int(cleanup_cfg.get("timeout_sec", llm_cfg.get("timeout_sec", 900))),
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip()
+        print(f"Transcript cleanup failed: {result.stderr}", file=sys.stderr)
+    except Exception as e:
+        print(f"Transcript cleanup error: {e}", file=sys.stderr)
     return transcript
 
 
@@ -256,18 +416,32 @@ def process_audio(audio_path):
     meeting_title = audio_path.stem.rsplit("_", 1)[0].replace("_", " ")
     print(f"📁 处理: {audio_path.name}（标题: {meeting_title}）")
 
-    # 1. 转录。若实时分段转写已经产出滚动 transcript，优先复用，避免会后重复跑整场 Whisper。
+    # 1. 转录。Final transcript 优先跑整段 mlx-whisper；realtime 只作为预览/兜底。
+    raw_transcript_path = audio_path.with_suffix(".raw.transcript.txt")
     realtime_transcript_path = audio_path.with_suffix(".realtime.transcript.txt")
-    if realtime_transcript_path.exists() and realtime_transcript_path.read_text(encoding="utf-8").strip():
-        print(f"📝 使用实时转写结果: {realtime_transcript_path}")
-        transcript = realtime_transcript_path.read_text(encoding="utf-8").strip()
-    else:
-        transcript = transcribe(audio_path, trans_cfg)
+    engine = trans_cfg.get("final_engine", "mlx")
+    transcript = None
+    if engine == "mlx":
+        try:
+            transcript = transcribe_mlx(audio_path, trans_cfg, meeting_title)
+        except Exception as e:
+            print(f"⚠️ mlx-whisper failed, fallback: {e}", file=sys.stderr)
+    if transcript is None:
+        if realtime_transcript_path.exists() and realtime_transcript_path.read_text(encoding="utf-8").strip():
+            print(f"📝 使用实时转写结果兜底: {realtime_transcript_path}")
+            transcript = realtime_transcript_path.read_text(encoding="utf-8").strip()
+        else:
+            transcript = transcribe(audio_path, trans_cfg)
+
+    raw_transcript_path.write_text(transcript, encoding="utf-8")
+    transcript = refine_transcript(transcript, meeting_title, trans_cfg, llm_cfg)
 
     # 2. 保存转录
     transcript_path = audio_path.with_suffix(".transcript.txt")
     transcript_path.write_text(transcript, encoding="utf-8")
-    print(f"✅ 转录已保存: {transcript_path}")
+    print(f"✅ 原始转录已保存: {raw_transcript_path}")
+    print(f"Raw transcript saved: {raw_transcript_path}")
+    print(f"✅ 清理转录已保存: {transcript_path}")
     print(f"Transcript saved: {transcript_path}")
 
     # 3. 摘要
