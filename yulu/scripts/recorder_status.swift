@@ -48,6 +48,7 @@ class AppDel: NSObject, NSApplicationDelegate {
     var lastFileSize: UInt64 = 0
     var lastFileGrowthAt = Date()
     var unhealthySince: Date?
+    var stopping = false
 
     init(title: String, path: String) {
         self.meetingTitle = title; self.statePath = path
@@ -59,7 +60,7 @@ class AppDel: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ n: Notification) {
         makeWin()
         makeUI()
-        setExpanded(true); DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
+        setExpanded(true); DispatchQueue.main.asyncAfter(deadline: .now() + 10) { [weak self] in
             guard let s = self, s.expanded else { return }; s.setExpanded(false)
         }
         startTimers()
@@ -77,6 +78,7 @@ class AppDel: NSObject, NSApplicationDelegate {
             win.standardWindowButton($0)?.isHidden = true
         }
         win.makeKeyAndOrderFront(nil)
+        win.orderFrontRegardless()
         NSApp.activate(ignoringOtherApps: true)
         pos(expanded: true, anim: false)
     }
@@ -182,7 +184,9 @@ class AppDel: NSObject, NSApplicationDelegate {
         guard Date().timeIntervalSince(startTime) > 8 else { return }
 
         if info.recording == false {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { NSApp.terminate(nil) }
+            if !stopping {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2) { NSApp.terminate(nil) }
+            }
             return
         }
 
@@ -273,12 +277,37 @@ class AppDel: NSObject, NSApplicationDelegate {
     }
 
     @objc func doStop() {
+        guard !stopping else { return }
+        stopping = true
+        setExpanded(true)
+        panel.layer?.backgroundColor = NSColor(red: 0.10, green: 0.18, blue: 0.32, alpha: 0.96).cgColor
+        titleLbl.stringValue = "⏳ 正在保存录音"
+        timeLbl.stringValue = "转写/纪要处理中…"
+        stopBtn.isEnabled = false
+        stopBtn.title = "…"
+
         let dir = (CommandLine.arguments[0] as NSString).deletingLastPathComponent
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         p.arguments = ["python3", "\(dir)/meeting_daemon.py", "stop"]
-        try? p.run()
-        NSApp.terminate(nil)
+        p.terminationHandler = { _ in
+            DispatchQueue.main.async {
+                self.titleLbl.stringValue = "✅ 已保存"
+                self.timeLbl.stringValue = "处理完成"
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                    NSApp.terminate(nil)
+                }
+            }
+        }
+        do {
+            try p.run()
+        } catch {
+            titleLbl.stringValue = "⚠️ 停止失败"
+            timeLbl.stringValue = "请在终端/助手里停止"
+            stopBtn.isEnabled = true
+            stopBtn.title = "■"
+            stopping = false
+        }
     }
 }
 

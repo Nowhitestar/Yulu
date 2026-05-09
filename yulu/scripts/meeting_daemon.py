@@ -328,12 +328,14 @@ def _start_recording(title, meeting_id=""):
     )
     audio_path = None
     for line in result.stdout.split("\n"):
-        # 新 record_audio.py 日志格式
-        if "/meeting-recordings/" in line and ".wav" in line:
+        # record_audio.py may write to ~/Movies/Yulu or legacy meeting-recordings.
+        # Accept any absolute .wav path in its stdout. Titles/paths can contain
+        # spaces, so capture to end-of-line instead of using \s-delimited regex.
+        if ".wav" in line:
             import re
-            m = re.search(r'(/Users/[^\s]+\.wav)', line)
+            m = re.search(r'(/Users/.+?\.wav)(?:$|\s*$)', line)
             if m:
-                audio_path = m.group(1)
+                audio_path = m.group(1).strip()
         # 旧格式兼容
         if line.startswith("Output:"):
             audio_path = line.split("Output:", 1)[1].strip()

@@ -586,8 +586,17 @@ class SocketServer {
             } else if !MIC_READY {
                 resp = ["error":"mic_capture_not_ready", "sysReady": SYS_READY, "sysError": SYS_ERROR, "micReady": MIC_READY, "micError": MIC_ERROR]
             } else if let p = recorder.start(title: json["title"] as? String ?? "meeting") {
-                onRecordingStart?()  // wake the SCStream + mic engine
                 resp = ["status":"recording", "file":p]
+                send(c, resp)
+                // Starting ScreenCaptureKit + AVAudioEngine can take several seconds.
+                // Do it after replying so short-lived clients (record_audio.py uses a
+                // 5s socket timeout) do not close the socket first and kill us with
+                // SIGPIPE. The recorder is already marked active; audio starts flowing
+                // as soon as these hooks finish.
+                DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                    self?.onRecordingStart?()
+                }
+                return
             }
             else { resp = ["error":"start_failed"] }
         case "stop":
@@ -649,7 +658,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         log("🎧 Audio Daemon (pid=\(ProcessInfo.processInfo.processIdentifier))")
 
         let rec = AudioRecorder(); recorder = rec
-        rec.onStopRequest = { [weak self] in self?.recorder?.stop() }
+        rec.onStopRequest = { [weak self] in
+            guard let self = self else { return }
+            let wasRecording = self.recorder?.isRecording ?? false
+            _ = self.recorder?.stop()
+            if wasRecording {
+                self.audioCapture?.stopCapture()
+                self.micCapture?.stop()
+            }
+        }
 
         // Probe TCC permissions on launch (each probe opens its underlying capture
         // briefly, then tears it down) so SYS_READY / MIC_READY are accurate without
@@ -687,6 +704,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 // ─── 入口 ──────────────────────────────────────────────
 
 let app = NSApplication.shared
+Darwin.signal(SIGPIPE, SIG_IGN)
 let delegate = AppDelegate()
 app.delegate = delegate
 app.setActivationPolicy(.accessory)
