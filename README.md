@@ -13,12 +13,12 @@
 
 Yulu (语录, *yǔ lù*) is the Chinese word for "recorded sayings" — the genre that gave us *The Analects of Confucius* 2,500 years ago. It is the oldest answer to a problem we still have today: someone said something important in a room, and nobody wrote it down well enough to remember it.
 
-Yulu is a native macOS meeting recorder that listens to your meetings, transcribes them locally with `whisper.cpp`, and hands the transcript to any coding agent (Claude Code, Codex, OpenClaw…) to produce a clean meeting note. No virtual audio device. No cloud transcription. No account. The audio never leaves your laptop unless you tell it to.
+Yulu is a native macOS meeting recorder that listens to your meetings, transcribes them locally with MLX Whisper or `whisper.cpp`, and hands the transcript to any coding agent (Claude Code, Codex, OpenClaw…) to produce a clean meeting note. No virtual audio device. No cloud transcription. No account. The audio never leaves your laptop unless you tell it to.
 
 Compared to Otter / Granola / Fireflies:
 
 - **System audio is captured natively** through `ScreenCaptureKit`, not through BlackHole or a multi-output device.
-- **Transcription is fully local** — `whisper-cli` (whisper.cpp) with your own model file. Chinese works as well as English.
+- **Transcription is fully local** — MLX Whisper on Apple Silicon, or `whisper-cli` (whisper.cpp) with your own model file. Chinese works as well as English.
 - **The summary step is bring-your-own-agent.** Yulu writes a `summary_request` into a JSON queue; whichever agent you trust reads the transcript and the template, and writes back a polished `summary.md`. Nothing is hard-coded to one vendor.
 - **Half-duplex mixing** keeps remote speakers crisp: system audio leads while others speak, microphone takes over during system silence.
 
@@ -46,7 +46,7 @@ Compared to Otter / Granola / Fireflies:
   <td align="center" width="50%">
     <img src="assets/demos/demo-transcript.png" alt="Local transcription with whisper" />
     <br><b>Local transcription</b>
-    <br><sub>whisper-cli runs offline; Chinese / English / mixed</sub>
+    <br><sub>MLX Whisper or whisper-cli runs offline; Chinese / English / mixed</sub>
   </td>
 </tr>
 </table>
@@ -65,12 +65,14 @@ That's it. The installer:
 4. Writes per-user config to `~/.config/yulu/config.json` and creates `~/Movies/Yulu/` for recordings.
 5. Compiles the window scanner; walks you through Accessibility permission.
 6. Builds and signs `Yulu.app`; walks you through Microphone + Screen & System Audio Recording permissions.
-7. **Downloads a `whisper.cpp` GGML model** (you pick the size; default is `large-v3-q5_0`, ~1.1 GB).
-8. (Optional) configures Google Calendar via `gog`.
-9. Installs LaunchAgents for background services.
-10. Installs the `yulu` CLI to `~/.local/bin/yulu`.
-11. (Optional) registers Yulu as an **agent skill** so Claude Code / OpenClaw / Codex etc. can drive it from natural language.
-12. Runs a smoke test.
+7. Lets you choose the transcription profile: MLX `large-v3`, MLX `large-v3-turbo`, or a `whisper.cpp` GGML model.
+8. Lets you choose the stop-time pipeline: realtime transcript → polish → summary, or full final transcription → summary.
+9. Lets you choose how summaries are finalized: agent queue, Claude CLI, Codex CLI, custom command, or local fallback only.
+10. (Optional) configures Google Calendar via `gog`.
+11. Installs LaunchAgents for background services.
+12. Installs the `yulu` CLI to `~/.local/bin/yulu`.
+13. (Optional) registers Yulu as an **agent skill** so Claude Code / OpenClaw / Codex etc. can drive it from natural language.
+14. Runs a smoke test.
 
 After install, **add `~/.local/bin` to your PATH** if it isn't already, so `yulu` is on your shell:
 
@@ -101,9 +103,15 @@ Stops services, removes LaunchAgents and the CLI, and asks before deleting recor
 | `yulu setup` | Re-run the installer interactively (fresh install) |
 | `yulu update` | `git pull && setup --upgrade` |
 | `yulu start` / `stop` / `restart` | Control the four LaunchAgents |
+| `yulu version` | Print Yulu version, git commit, tag, and dirty state |
 | `yulu status` | Service health, audio_daemon socket, recent recordings |
+| `yulu doctor` | Config, daemon, model, queue, calendar health check |
 | `yulu logs [name]` | Tail logs (default: `audio_daemon`) |
-| `yulu record start "<title>"` / `yulu record stop` | Manual recording |
+| `yulu record start "<title>"` / `yulu record stop` | Manual recording with the same stop → transcribe → summarize flow as the floating window |
+| `yulu transcription status` | Show transcription engine and post-recording mode |
+| `yulu transcription mode fast\|full` | Switch between realtime transcript → polish → summary and full final transcription → summary |
+| `yulu transcription engine mlx <model>` | Use MLX Whisper, e.g. `mlx-community/whisper-large-v3-mlx` |
+| `yulu transcription engine whisper <path>` | Use a local whisper.cpp GGML model |
 | `yulu where` | Print all the relevant paths on disk |
 | `yulu uninstall` | See above |
 
@@ -115,17 +123,18 @@ Yulu ships with a `SKILL.md` under [`skills/yulu/`](skills/yulu/SKILL.md) that t
 - "Stop the recording and summarize it"
 - "What did we talk about in last Tuesday's standup?"
 
-`setup.sh` step 9 offers to install it for you. To install or reinstall it later, from anywhere:
+`setup.sh` asks whether to install it and which agents to target. To install or reinstall it later, from anywhere:
 
 ```bash
-# Install globally to Claude Code + OpenClaw, non-interactive
-npx skills add Nowhitestar/Yulu -g -a claude-code -a openclaw -y
+# Install globally to the agents you choose
+npx skills add Nowhitestar/Yulu -g -a claude-code -y
+npx skills add Nowhitestar/Yulu -g -a codex -y
 
 # Or install from your local clone
 npx skills add . -g -a claude-code -y
 ```
 
-The skill is a thin contract — it tells the agent what verbs Yulu exposes (start, stop, status, summary fulfillment) and how to find past meetings on disk. Yulu's macOS app, launchd services, and whisper.cpp install still come from `setup.sh`. Installing the skill alone does not capture audio.
+The skill is a thin contract — it tells the agent what verbs Yulu exposes (start, stop, status, summary fulfillment) and how to find past meetings on disk. Yulu's macOS app, launchd services, and local transcription dependencies still come from `setup.sh`. Installing the skill alone does not capture audio.
 
 ## How it works
 
@@ -140,7 +149,7 @@ Google Calendar / Window Detector
           ↓
  ScreenCaptureKit (system audio) + AVFoundation (microphone)
           ↓
- WAV  ──►  transcribe.py  ──►  whisper-cli
+WAV  ──►  realtime_transcribe.py / transcribe.py  ──►  MLX Whisper or whisper-cli
           ↓
  transcript.txt  +  summary_request  ──►  agent-queue.json
           ↓
@@ -151,7 +160,7 @@ Six numbers worth knowing:
 - WAV is 16-bit stereo 48 kHz.
 - ScreenCaptureKit Float32 planar → interleaved stereo Int16.
 - Half-duplex crossfade kicks in below `silence_threshold` (default 0.01).
-- Default whisper model: `ggml-large-v3-q5_0.bin` (~1.1 GB), stored under `~/.config/yulu/models/`.
+- Default quality profile: MLX `mlx-community/whisper-large-v3-mlx` on Apple Silicon; whisper.cpp `ggml-large-v3.bin` is the non-MLX quality profile.
 - Bundle id: `com.yulu.audiodaemon` (signed; falls back to ad-hoc).
 - Agent queue: `~/.config/yulu/agent-queue.json`.
 
@@ -178,8 +187,19 @@ Path: `~/.config/yulu/config.json`
     "half_duplex": true
   },
   "transcription": {
+    "post_recording_mode": "fast_summary",
+    "final_engine": "mlx",
+    "mlx": {
+      "python": "~/.config/yulu/venv-mlx-whisper/bin/python",
+      "model": "mlx-community/whisper-large-v3-mlx"
+    },
+    "realtime": {
+      "engine": "mlx",
+      "mlx_model": "mlx-community/whisper-large-v3-mlx",
+      "chunk_sec": 60
+    },
     "whisper_cli": "whisper-cli",
-    "local_model_path": "~/.config/yulu/models/ggml-large-v3-q5_0.bin",
+    "local_model_path": "~/.config/yulu/models/ggml-large-v3.bin",
     "language": "zh"
   },
   "llm": {
@@ -189,7 +209,9 @@ Path: `~/.config/yulu/config.json`
 ```
 
 - `audio.backend = "daemon"` is the default. `mic_device` / `system_audio_device` only apply to the legacy SoX fallback.
-- Leave `llm` empty to delegate summarization to your agent. To call an external LLM directly, set `llm.command` to any CLI that accepts a prompt on stdin and writes Markdown to stdout (e.g. `["claude", "--print", "--model", "claude-opus-4-7"]`).
+- `transcription.post_recording_mode = "fast_summary"` uses the realtime transcript generated during the meeting, then polishes and summarizes it. Use `yulu transcription mode full` when you want a slower full-audio final transcription before summarization.
+- `transcription.final_engine = "mlx"` is best on Apple Silicon. Use `mlx-community/whisper-large-v3-mlx` for highest quality, `mlx-community/whisper-large-v3-turbo` for speed. Use `final_engine = "whisper"` with `local_model_path` for the simpler non-MLX route.
+- Leave `llm.command` empty to delegate summarization to your agent through `agent-queue.json`. To call an external LLM directly, set `llm.command` to any CLI that accepts a prompt on stdin and writes Markdown to stdout (e.g. `["claude", "--print", "--model", "claude-opus-4-7"]`). Set `llm.enabled=false` only when the local fallback summary should be final.
 
 Full config reference: [`docs/configuration.md`](docs/configuration.md).
 Manual commands and troubleshooting: [`docs/operations.md`](docs/operations.md).
@@ -201,7 +223,7 @@ A few decisions are load-bearing and worth understanding before contributing:
 - **No virtual audio device.** ScreenCaptureKit was added in macOS 13 specifically so apps could capture system audio without driver hacks. Yulu refuses to fall back to BlackHole even when it would be easier — the install friction is the whole point.
 - **Recording always asks first.** Detection is best-effort, but consent is not. Every recording goes through `notify.py` with a real prompt.
 - **The LLM is a plug-in, not a dependency.** `transcribe.py` runs all the way to a usable Markdown summary even if no agent ever shows up — `fallback_summary()` uses regex bucketing on the transcript so you never see "TODO: agent will fill this in".
-- **State lives in JSON files, not RAM.** `agent-queue.json`, `schedule.json`, recordings on disk. A power outage mid-meeting loses the audio after the last flush, nothing else.
+- **State lives in JSON files, not RAM.** `agent-queue.json`, `schedule.json`, recordings on disk. Queue writes are locked and atomic; a power outage mid-meeting loses the audio after the last flush, nothing else.
 - **One-binary security boundary.** Only `Yulu.app` holds the TCC permissions. The Python side talks to it through a Unix socket and cannot bypass macOS privacy on its own.
 
 ## Background
@@ -242,10 +264,10 @@ Yulu/
         ├── meeting_detector.py           # window-based detector
         ├── window_scanner.swift          # Accessibility window scanner
         ├── recorder_status.swift         # floating status window
-        ├── transcribe.py                 # whisper transcription + agent queue writer
+        ├── transcribe.py                 # MLX / whisper transcription + agent queue writer
         ├── agent_notify.py               # agent queue helper
         ├── notify.py                     # macOS notifications & prompts
-        ├── send_summary.py               # optional Telegram / Notion / Zulip output
+        ├── send_summary.py               # experimental Telegram / Notion / Zulip adapters
         ├── summary_template.md           # default meeting note template
         └── com.yulu.*.plist              # LaunchAgent definitions
 ```

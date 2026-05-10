@@ -11,6 +11,7 @@
   test [title]                             添加一条 30 秒后的测试会议（默认"测试会议"）
   list                                     显示当前调度
   remove <meeting_id>                      移除某场会议
+  start <title>                            手动开始录制并注册状态浮窗/超时询问
   ask_record <title> <meeting_id>          会议开始时弹窗询问是否录制（由调度器 fire）
   auto_stop                                录制超时弹窗询问是否停止（由调度器 fire）
   stop                                     立即停止录制并生成纪要
@@ -25,6 +26,14 @@ import sys
 import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
+
+from state_store import (
+    load_state as load_recording_state,
+    recording_info,
+    save_state as save_recording_state,
+    set_recording_started,
+    set_recording_stopped,
+)
 
 CONFIG_DIR = Path.home() / ".config" / "yulu"
 CONFIG_PATH = CONFIG_DIR / "config.json"
@@ -95,16 +104,11 @@ def save_schedule(data):
 
 
 def load_state():
-    if not STATE_PATH.exists():
-        return {"recording": {}}
-    with open(STATE_PATH) as f:
-        return json.load(f)
+    return load_recording_state(STATE_PATH)
 
 
 def save_state(state):
-    STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with open(STATE_PATH, "w") as f:
-        json.dump(state, f, indent=2, ensure_ascii=False, default=str)
+    save_recording_state(state, STATE_PATH)
 
 
 def notify_scheduler():
@@ -134,25 +138,28 @@ def fetch_today_meetings():
     start_of_day = now.replace(hour=0, minute=0, second=0, microsecond=0)
     end_of_day = start_of_day + timedelta(days=1)
 
-    out = []
-    for cal in config.get("calendars", []):
-        if not cal.get("enabled"):
-            continue
-        kind = cal.get("type")
-        if kind == "feishu":
-            out.extend(_fetch_feishu(cal, start_of_day, end_of_day))
-        elif kind == "google":
-            out.extend(_fetch_google(cal, start_of_day, end_of_day))
-    out.sort(key=lambda m: m["start"])
-    return out
+    try:
+        from check_meetings import fetch_meetings
+        return fetch_meetings(start_of_day, end_of_day, config)
+    except Exception as e:
+        print(f"日历读取失败: {e}", file=sys.stderr)
+        return []
 
 
 def _fetch_feishu(cfg, start, end):
-    return []  # TODO
+    try:
+        from check_meetings import _fetch_feishu as fetch
+        return fetch(cfg, start, end)
+    except Exception:
+        return []
 
 
 def _fetch_google(cfg, start, end):
-    return []  # TODO
+    try:
+        from check_meetings import _fetch_google as fetch
+        return fetch(cfg, start, end)
+    except Exception:
+        return []
 
 
 # ───────────────────────────────────────────────
@@ -333,7 +340,7 @@ def _start_recording(title, meeting_id=""):
         # spaces, so capture to end-of-line instead of using \s-delimited regex.
         if ".wav" in line:
             import re
-            m = re.search(r'(/Users/.+?\.wav)(?:$|\s*$)', line)
+            m = re.search(r'(/\S.*?\.wav)(?:\s*$)', line)
             if m:
                 audio_path = m.group(1).strip()
         # 旧格式兼容
@@ -343,14 +350,7 @@ def _start_recording(title, meeting_id=""):
         print(f"❌ 录制启动失败\nstdout={result.stdout}\nstderr={result.stderr}", file=sys.stderr)
         return
 
-    state = load_state()
-    state["recording"] = {
-        "title": title,
-        "meeting_id": meeting_id,
-        "audio_path": audio_path,
-        "start_time": datetime.now().isoformat(),
-    }
-    save_state(state)
+    set_recording_started(title, audio_path, meeting_id=meeting_id, backend="daemon", path=STATE_PATH)
     print(f"✅ 录制中: {audio_path}")
 
     # 启动状态浮窗
@@ -387,8 +387,7 @@ def _add_runtime_event(ev):
 
 
 def cmd_auto_stop():
-    state = load_state()
-    rec = state.get("recording") or {}
+    rec = recording_info(load_state())
     if not rec:
         print("没有正在进行的录制")
         return
@@ -459,14 +458,13 @@ def _stop_and_process():
     # 先关状态浮窗
     _kill_status_window()
 
-    state = load_state()
-    rec = state.get("recording") or {}
+    rec = recording_info(load_state())
     if not rec:
         print("没有正在进行的录制", file=sys.stderr)
         return
 
     title = rec.get("title", "meeting")
-    audio_path = rec.get("audio_path")
+    audio_path = rec.get("audio_path") or rec.get("file_path")
 
     # 1. 停录制
     record = SCRIPT_DIR / "record_audio.py"
@@ -530,8 +528,7 @@ def _stop_and_process():
     else:
         print("⏳ Summary 草稿已保存，等待 agent 按模板生成最终版")
 
-    state["recording"] = {}
-    save_state(state)
+    set_recording_stopped(path=STATE_PATH)
 
     # 清理当前录制相关的过期 ask_stop 事件，避免测试/重载后残留。
     try:
@@ -555,6 +552,7 @@ def main():
     args = sys.argv[2:]
     handlers = {
         "schedule": lambda: cmd_schedule(),
+        "start": lambda: _start_recording(args[0] if args else "未命名会议"),
         "add": lambda: cmd_add(args),
         "test": lambda: cmd_test(args),
         "list": lambda: cmd_list(),

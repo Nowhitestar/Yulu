@@ -21,6 +21,15 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+from state_store import (
+    is_recording_active,
+    load_state as load_recording_state,
+    recording_info,
+    save_state as save_recording_state,
+    set_recording_started,
+    set_recording_stopped,
+)
+
 try:
     from agent_notify import notify
 except Exception:
@@ -82,16 +91,11 @@ def socket_send(cmd):
 
 
 def read_state():
-    if not STATE_PATH.exists():
-        return {}
-    try:
-        return json.loads(STATE_PATH.read_text())
-    except Exception:
-        return {}
+    return load_recording_state(STATE_PATH)
 
 
 def write_state(state):
-    STATE_PATH.write_text(json.dumps(state, indent=2, ensure_ascii=False))
+    save_recording_state(state, STATE_PATH)
 
 
 def realtime_enabled():
@@ -159,21 +163,20 @@ def detect_daemon_crash(resp=None):
     should point to a recoverable partial recording. We still must tell the user.
     """
     state = read_state()
-    if not state.get("recording"):
+    if not is_recording_active(state):
         return False
-    if state.get("backend") == "sox":
+    rec = recording_info(state)
+    if rec.get("backend") == "sox":
         return False
     socket_missing = resp is None or not SOCKET_PATH.exists()
     if not socket_missing:
         return False
-    title = state.get("title", "")
-    path = state.get("file_path", "")
+    title = rec.get("title", "")
+    path = rec.get("audio_path") or rec.get("file_path", "")
     log(f"⚠️ 检测到 Yulu 异常退出，录音状态残留: {title} → {path}")
     stop_realtime_transcriber(wait=True)
     notify("recording_crashed", title=title, path=path, message="Yulu 异常退出，已保留可恢复的部分录音文件。")
-    state["recording"] = False
-    state["crashed_at"] = datetime.now().isoformat()
-    write_state(state)
+    set_recording_stopped(status="crashed", path=STATE_PATH, extra={"crashed_at": datetime.now().isoformat()})
     return True
 
 
@@ -251,14 +254,7 @@ def sox_start(title):
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     output = output_dir / f"{safe}_{timestamp}.wav"
 
-    state = {
-        "recording": True,
-        "backend": "sox",
-        "title": title,
-        "file_path": str(output),
-        "started_at": datetime.now().isoformat(),
-    }
-    STATE_PATH.write_text(json.dumps(state, indent=2))
+    set_recording_started(title, str(output), backend="sox", path=STATE_PATH)
 
     listen_cmd = [
         "sox", "-q",
@@ -294,8 +290,7 @@ def sox_stop():
         except Exception:
             pass
 
-    state = {"recording": False, "title": "", "file_path": ""}
-    STATE_PATH.write_text(json.dumps(state, indent=2))
+    set_recording_stopped(path=STATE_PATH)
     stop_realtime_transcriber(wait=True, graceful=True)
 
     log("⏹ 录制已停止")
@@ -303,12 +298,7 @@ def sox_stop():
 
 
 def sox_status():
-    state = {"recording": False, "title": ""}
-    if STATE_PATH.exists():
-        try:
-            state = json.loads(STATE_PATH.read_text())
-        except Exception:
-            pass
+    state = read_state()
     if (CONFIG_DIR / ".recording_pid").exists():
         state["recording"] = True
     return state
@@ -334,8 +324,8 @@ def main():
                 log("⚠️ Yulu 未运行，切换到 SoX 后端")
                 sox_start(title)
         elif cmd == "stop":
-            state = read_state()
-            if state.get("backend") == "sox":
+            rec = recording_info(read_state())
+            if rec.get("backend") == "sox":
                 sox_stop()
             else:
                 result = daemon_stop()

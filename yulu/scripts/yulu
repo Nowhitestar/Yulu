@@ -13,10 +13,13 @@
 #   yulu start                Load all yulu LaunchAgents
 #   yulu stop                 Unload all yulu LaunchAgents
 #   yulu restart              stop + start
+#   yulu version              Show Yulu version + git metadata
 #   yulu status               Show service + daemon health
+#   yulu doctor               Check config, daemon, model, queue, and calendar health
 #   yulu logs [name]          Tail logs (default: audio_daemon)
 #   yulu record start "title" Manual recording start
 #   yulu record stop          Manual recording stop
+#   yulu transcription ...    Switch transcription engine and post-recording mode
 #   yulu where                Print key paths (repo / config / recordings / launchagents)
 
 set -e
@@ -59,10 +62,20 @@ Commands:
   start            Load all Yulu LaunchAgents
   stop             Unload all Yulu LaunchAgents
   restart          stop + start
+  version          Show Yulu version + git metadata
   status           Service + daemon health snapshot
+  doctor           Config + daemon + transcription + queue health check
   logs [daemon]    Tail logs. Daemon = audio_daemon (default), scheduler, detector, calendar, agentqueue, realtime_transcribe
   record start "title"   Manually start a recording
   record stop            Manually stop the current recording
+  transcription status   Show transcription engine + post-recording mode
+  transcription mode fast|full
+                    fast = realtime transcript -> polish -> summary
+                    full = final full-audio transcription -> polish -> summary
+  transcription engine mlx [model]
+                    Use mlx-whisper, e.g. mlx-community/whisper-large-v3-mlx
+  transcription engine whisper [model-path]
+                    Use whisper.cpp GGML model
   where            Print key paths
   help             Show this help
 
@@ -193,6 +206,10 @@ except Exception:
     fi
 }
 
+cmd_version() {
+    python3 "$SCRIPT_DIR/version.py" "$@"
+}
+
 cmd_logs() {
     local name="${1:-audio_daemon}"
     case "$name" in
@@ -218,6 +235,10 @@ cmd_logs() {
     tail -f "$log_path"
 }
 
+cmd_doctor() {
+    python3 "$SCRIPT_DIR/doctor.py"
+}
+
 cmd_record() {
     local action="${1:-}"
     case "$action" in
@@ -227,10 +248,10 @@ cmd_record() {
                 err "Usage: yulu record start \"<meeting title>\""
                 exit 1
             fi
-            python3 "$SCRIPT_DIR/record_audio.py" start "$title"
+            python3 "$SCRIPT_DIR/meeting_daemon.py" start "$title"
             ;;
         stop)
-            python3 "$SCRIPT_DIR/record_audio.py" stop
+            python3 "$SCRIPT_DIR/meeting_daemon.py" stop
             ;;
         status)
             python3 "$SCRIPT_DIR/record_audio.py" status
@@ -240,6 +261,10 @@ cmd_record() {
             exit 1
             ;;
     esac
+}
+
+cmd_transcription() {
+    python3 "$SCRIPT_DIR/configure.py" transcription "$@"
 }
 
 cmd_where() {
@@ -270,9 +295,12 @@ case "${1:-help}" in
     start)     shift; cmd_start "$@" ;;
     stop)      shift; cmd_stop "$@" ;;
     restart)   shift; cmd_restart "$@" ;;
+    version|--version) shift; cmd_version "$@" ;;
     status)    shift; cmd_status "$@" ;;
+    doctor)    shift; cmd_doctor "$@" ;;
     logs)      shift; cmd_logs "$@" ;;
     record)    shift; cmd_record "$@" ;;
+    transcription|transcribe) shift; cmd_transcription "$@" ;;
     where)     shift; cmd_where "$@" ;;
     help|-h|--help) usage ;;
     *)         err "Unknown command: $1"; echo; usage; exit 1 ;;

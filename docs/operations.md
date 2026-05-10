@@ -8,6 +8,13 @@ Manual commands, day-to-day operation, and troubleshooting for Yulu.
 # Yulu health check (queries the daemon over its Unix socket)
 echo '{"action":"status"}' | nc -w 2 -U ~/.config/yulu/audio_daemon.sock
 
+# Broader health check
+yulu doctor
+
+# Version and support metadata
+yulu version
+yulu version --json
+
 # Start / stop a manual recording
 python3 yulu/scripts/record_audio.py start "Test Meeting"
 python3 yulu/scripts/record_audio.py stop
@@ -17,6 +24,13 @@ python3 yulu/scripts/meeting_daemon.py ask_record "Test Meeting" "manual-test"
 
 # Transcribe an existing WAV
 python3 yulu/scripts/transcribe.py /path/to/meeting-recordings/xxx.wav
+
+# Show / switch transcription behavior
+yulu transcription status
+yulu transcription mode fast   # realtime transcript -> polish -> summary
+yulu transcription mode full   # full final transcription -> polish -> summary
+yulu transcription engine mlx mlx-community/whisper-large-v3-mlx
+yulu transcription engine whisper ~/.config/yulu/models/ggml-large-v3.bin
 
 # Calendar queries
 python3 yulu/scripts/check_meetings.py today

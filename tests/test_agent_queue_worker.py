@@ -62,3 +62,21 @@ def test_missing_transcript_marks_error_without_crashing(tmp_path):
     queue = json.loads(queue_path.read_text(encoding="utf-8"))
     assert queue[0]["status"] == "error"
     assert "transcript not found" in queue[0]["error"]
+
+
+def test_no_llm_command_leaves_request_pending(tmp_path):
+    queue_path = tmp_path / "agent-queue.json"
+    queue_path.write_text(json.dumps([
+        {
+            "type": "summary_request",
+            "title": "pending",
+            "transcript_path": str(tmp_path / "transcript.txt"),
+            "summary_path": str(tmp_path / "out.md"),
+        }
+    ]), encoding="utf-8")
+
+    processed = process_queue_once(queue_path=queue_path, llm_command=[], timeout_sec=5)
+
+    assert processed == 0
+    queue = json.loads(queue_path.read_text(encoding="utf-8"))
+    assert "status" not in queue[0]

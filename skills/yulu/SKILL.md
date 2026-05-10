@@ -1,11 +1,11 @@
 ---
 name: yulu
-description: "Control Yulu (语录), the local-first macOS meeting recorder. Use this skill when the user asks to start or stop recording a meeting, check recording status, look up past transcripts, or generate / re-generate a meeting summary. Yulu records natively via ScreenCaptureKit + AVFoundation, transcribes locally with whisper.cpp, and routes summary requests through ~/.config/yulu/agent-queue.json — there is no cloud, no virtual audio device, and no account."
+description: "Control Yulu (语录), the local-first macOS meeting recorder. Use this skill when the user asks to start or stop recording a meeting, check recording status, look up past transcripts, or generate / re-generate a meeting summary. Yulu records natively via ScreenCaptureKit + AVFoundation, transcribes locally with MLX Whisper or whisper.cpp, and routes summary requests through ~/.config/yulu/agent-queue.json — there is no cloud, no virtual audio device, and no account."
 ---
 
 # Yulu — agent control surface
 
-This skill tells your agent (Claude Code, OpenClaw, Codex, etc.) **how to drive Yulu from natural-language requests**. Yulu itself — the macOS app, launchd services, whisper.cpp install — is set up separately by `bash yulu/scripts/setup.sh`. Installing this skill alone does not capture audio; it teaches the agent the verbs.
+This skill tells your agent (Claude Code, OpenClaw, Codex, etc.) **how to drive Yulu from natural-language requests**. Yulu itself — the macOS app, launchd services, and local transcription dependencies — is set up separately by `bash yulu/scripts/setup.sh`. Installing this skill alone does not capture audio; it teaches the agent the verbs.
 
 If Yulu is not installed yet, point the user at the [project README](https://github.com/Nowhitestar/Yulu) and run `setup.sh` first.
 
@@ -74,9 +74,9 @@ To fulfill one:
 1. Read `transcript_path` (UTF-8 plain text with timestamps).
 2. Read `template_path` (Markdown with a frontmatter that tells you what sections to write and which language to use; the body is instructions for the agent).
 3. Apply the template to the transcript. Yulu has already written a draft to `summary_path` (a fallback summary when no LLM was available) — overwrite it with your output.
-4. Remove the entry you just handled from the queue (or set `"type": "summary_done"` on it — Yulu doesn't enforce a state machine, but other consumers shouldn't see the same request twice).
+4. Mark the entry you handled with `"status": "done"`, `"processed_by"`, and `"processed_at"`; do not remove unrelated events. If generation fails, set `"status": "error"` and an `"error"` string.
 
-The queue file is plain JSON — use Python or `jq`, not shell string-mangling. After `summary_path` is written, Yulu's `send_summary.py` picks it up and routes to whatever channel the user configured (Telegram, Zulip, Notion).
+The queue file is plain JSON — use Python or `jq`, not shell string-mangling. After `summary_path` is written, run `send_summary.py` if the user wants the configured output channel (Telegram, Zulip, Notion) to receive the final note.
 
 ### Find a past meeting
 
@@ -85,7 +85,7 @@ Recordings live under `<repo>/meeting-recordings/`. Each meeting is a set of sib
 | Suffix | Content |
 |---|---|
 | `.wav` | The recorded audio |
-| `.transcript.txt` | Final transcript (whisper-cli output, post-processed) |
+| `.transcript.txt` | Final transcript (MLX / whisper output, post-processed) |
 | `.realtime.transcript.txt` | Streamed partial transcript captured during recording (may be missing) |
 | `.summary.md` | The meeting note (draft from `transcribe.py`, then overwritten by an agent on `summary_request`) |
 

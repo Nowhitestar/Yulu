@@ -23,21 +23,25 @@ def _has_terminal_notifier():
     ).returncode == 0
 
 
+def _applescript_string(value):
+    return '"' + str(value).replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
 def _fallback_notify(title, message, subtitle=""):
     """fallback 到 osascript display notification。"""
-    script = f'display notification "{message}" with title "{title}"'
+    script = f"display notification {_applescript_string(message)} with title {_applescript_string(title)}"
     if subtitle:
-        script += f' subtitle "{subtitle}"'
+        script += f" subtitle {_applescript_string(subtitle)}"
     subprocess.run(["osascript", "-e", script], capture_output=True)
 
 
 def _fallback_dialog(message, buttons, default_button, timeout=60):
     """fallback 到 osascript display dialog。"""
-    btn_str = ",".join(f'"{b}"' for b in buttons)
+    btn_str = ",".join(_applescript_string(b) for b in buttons)
     script = (
-        f'display dialog "{message}" '
+        f"display dialog {_applescript_string(message)} "
         f'buttons {{{btn_str}}} '
-        f'default button "{default_button}" '
+        f"default button {_applescript_string(default_button)} "
         f'giving up after {timeout}'
     )
     result = subprocess.run(
@@ -46,11 +50,14 @@ def _fallback_dialog(message, buttons, default_button, timeout=60):
         text=True,
     )
     # 解析返回: button returned:xxx, gave up:false
-    for line in result.stdout.split(","):
-        if "button returned:" in line:
-            return line.split(":")[1].strip()
+    parts = [line.strip() for line in result.stdout.split(",")]
+    if any("gave up:true" in line for line in parts):
+        return "timeout"
+    for line in parts:
         if "gave up:true" in line:
             return "timeout"
+        if "button returned:" in line:
+            return line.split(":", 1)[1].strip()
     return ""
 
 
@@ -86,7 +93,7 @@ def ask_record(meeting_title, timeout=60):
     return _fallback_dialog(
         f"会议「{meeting_title}」开始了\n\n是否开始录制音频？",
         buttons=["忽略", "开始录制"],
-        default_button="开始录制",
+        default_button="忽略",
         timeout=timeout,
     )
 

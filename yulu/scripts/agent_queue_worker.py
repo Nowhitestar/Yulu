@@ -10,21 +10,19 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import shlex
 import subprocess
 import sys
-import tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+
+from queue_store import claim_summary_request, update_event
 
 CONFIG_PATH = Path.home() / ".config" / "yulu" / "config.json"
 QUEUE_PATH = Path.home() / ".config" / "yulu" / "agent-queue.json"
 LOG_PATH = Path.home() / ".config" / "yulu" / "agent_queue_worker.log"
 WORKER_NAME = "yulu-agent-queue-worker"
-DEFAULT_LLM_CMD = ["claude", "--print"]
-
 SUMMARY_PROMPT = """请基于以下会议转录生成最终版结构化会议纪要。
 
 会议主题：{title}
@@ -48,9 +46,12 @@ def _now() -> str:
 
 
 def _log(message: str) -> None:
-    LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with LOG_PATH.open("a", encoding="utf-8") as f:
-        f.write(f"{_now()} {message}\n")
+    try:
+        LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with LOG_PATH.open("a", encoding="utf-8") as f:
+            f.write(f"{_now()} {message}\n")
+    except OSError:
+        pass
 
 
 def _load_json(path: Path, default: Any) -> Any:
@@ -63,32 +64,17 @@ def _load_json(path: Path, default: Any) -> Any:
         return default
 
 
-def _write_json_atomic(path: Path, data: Any) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(prefix=f".{path.name}.", dir=str(path.parent))
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
-            f.write("\n")
-        os.replace(tmp, path)
-    finally:
-        try:
-            os.unlink(tmp)
-        except FileNotFoundError:
-            pass
-
-
 def _load_llm_command(config_path: Path = CONFIG_PATH) -> list[str]:
     cfg = _load_json(config_path, {})
     llm_cfg = cfg.get("llm", {}) if isinstance(cfg, dict) else {}
     if not llm_cfg.get("enabled", True):
         return []
-    cmd = llm_cfg.get("command") or DEFAULT_LLM_CMD
+    cmd = llm_cfg.get("command") or []
     if isinstance(cmd, str):
         return shlex.split(cmd)
     if isinstance(cmd, list):
         return [str(x) for x in cmd if str(x)]
-    return DEFAULT_LLM_CMD
+    return []
 
 
 def _render_summary_prompt(entry: dict[str, Any]) -> str:
@@ -142,46 +128,81 @@ def _handle_summary_request(entry: dict[str, Any], llm_command: list[str], timeo
     return True
 
 
+def _dispatch_summary(entry: dict[str, Any]) -> dict[str, Any]:
+    summary_path = Path(str(entry.get("summary_path", ""))).expanduser()
+    if not summary_path.exists():
+        return {"dispatch_status": "skipped", "dispatch_error": "summary file not found"}
+    if not CONFIG_PATH.exists():
+        return {"dispatch_status": "skipped", "dispatch_error": "config not found"}
+
+    script = Path(__file__).resolve().parent / "send_summary.py"
+    result = subprocess.run(
+        [sys.executable, str(script), str(summary_path)],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    if result.returncode != 0:
+        return {
+            "dispatch_status": "error",
+            "dispatch_error": (result.stderr or result.stdout or "").strip()[:1000],
+            "dispatched_at": _now(),
+        }
+
+    try:
+        cfg = _load_json(CONFIG_PATH, {})
+        channel = cfg.get("output", {}).get("channel", "file") if isinstance(cfg, dict) else "file"
+        notify = Path(__file__).resolve().parent / "notify.py"
+        subprocess.Popen(
+            [sys.executable, str(notify), "notify_sent", str(entry.get("title", "")), channel],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except Exception:
+        pass
+    return {"dispatch_status": "done", "dispatched_at": _now()}
+
+
 def process_queue_once(
     queue_path: Path = QUEUE_PATH,
     llm_command: list[str] | None = None,
     timeout_sec: int = 900,
+    dispatch_output: bool = False,
 ) -> int:
     queue_path = Path(queue_path)
-    queue = _load_json(queue_path, [])
-    if not isinstance(queue, list):
-        _log(f"queue is not a list: {queue_path}")
-        return 0
     if llm_command is None:
         llm_command = _load_llm_command()
+    if not llm_command:
+        _log("llm.command not configured; leaving summary_request events for an external agent")
+        return 0
 
     processed = 0
-    changed = False
-    for entry in queue:
-        if not isinstance(entry, dict):
-            continue
-        if entry.get("type") != "summary_request":
-            continue
-        if entry.get("status") in {"done", "error", "processing"}:
-            continue
-        entry["status"] = "processing"
-        entry["processing_by"] = WORKER_NAME
-        entry["processing_at"] = _now()
-        changed = True
+    while True:
+        entry = claim_summary_request(path=queue_path, worker_name=WORKER_NAME)
+        if not entry:
+            break
+        event_id = str(entry.get("id", ""))
+        match = {
+            "type": "summary_request",
+            "transcript_path": entry.get("transcript_path"),
+            "summary_path": entry.get("summary_path"),
+        }
         try:
             _handle_summary_request(entry, llm_command, timeout_sec)
+            if dispatch_output:
+                entry.update(_dispatch_summary(entry))
             processed += 1
-            changed = True
+            update_event(event_id, entry, path=queue_path, match=match)
             _log(f"processed summary_request title={entry.get('title', '')!r}")
         except Exception as exc:
-            entry["status"] = "error"
-            entry["processed_by"] = WORKER_NAME
-            entry["processed_at"] = _now()
-            entry["error"] = str(exc)[:1000]
-            changed = True
+            updates = {
+                "status": "error",
+                "processed_by": WORKER_NAME,
+                "processed_at": _now(),
+                "error": str(exc)[:1000],
+            }
+            update_event(event_id, updates, path=queue_path, match=match)
             _log(f"summary_request error title={entry.get('title', '')!r}: {exc}")
-    if changed:
-        _write_json_atomic(queue_path, queue)
     return processed
 
 
@@ -190,7 +211,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--queue", type=Path, default=QUEUE_PATH)
     parser.add_argument("--timeout", type=int, default=900)
     args = parser.parse_args(argv)
-    count = process_queue_once(queue_path=args.queue, timeout_sec=args.timeout)
+    count = process_queue_once(queue_path=args.queue, timeout_sec=args.timeout, dispatch_output=True)
     if count:
         print(f"processed {count} summary_request event(s)")
     return 0
