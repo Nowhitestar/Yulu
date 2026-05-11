@@ -1036,7 +1036,7 @@ run_tests() {
     local detect_result
     detect_result=$("$PYTHON_BIN" "$SCRIPT_DIR/meeting_detector.py" once 2>&1 || true)
     local detect_summary
-    detect_summary=$(echo "$detect_result" | "$PYTHON_BIN" -c 'import json,sys; d=json.load(sys.stdin); print(f"active={d.get(\"active\")} windows={len(d.get(\"windows\") or [])}")' 2>/dev/null || true)
+    detect_summary=$(echo "$detect_result" | "$PYTHON_BIN" -c 'import json,sys; d=json.load(sys.stdin); print("active={} windows={}".format(d.get("active"), len(d.get("windows") or [])))' 2>/dev/null || true)
     if [[ -n "$detect_summary" ]]; then
         verify_ok "检测器可运行（$detect_summary）"
     else
