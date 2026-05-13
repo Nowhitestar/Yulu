@@ -43,6 +43,8 @@ def normalize_state(raw: Any) -> dict[str, Any]:
     if not isinstance(raw, dict):
         raw = {}
 
+    # Legacy meeting_daemon shape:
+    # {"recording": {"title": ..., "audio_path": ..., "start_time": ...}}
     rec = raw.get("recording")
     if isinstance(rec, dict):
         active = bool(rec)

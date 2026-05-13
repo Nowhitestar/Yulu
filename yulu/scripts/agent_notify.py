@@ -9,26 +9,9 @@ agent（闪电）在心跳中读取并推送到 Telegram。
   notify("summary_ready", title="项目周会", path="/path/to/summary.md")
 """
 
-import json
-from datetime import datetime
-from pathlib import Path
-
-QUEUE_PATH = Path.home() / ".config" / "yulu" / "agent-queue.json"
+from queue_store import append_event
 
 
 def notify(event_type: str, **kwargs):
     """添加一条通知到队列。"""
-    entry = {
-        "type": event_type,
-        "ts": datetime.now().isoformat(),
-        **kwargs,
-    }
-    queue = []
-    if QUEUE_PATH.exists():
-        try:
-            queue = json.loads(QUEUE_PATH.read_text())
-        except (json.JSONDecodeError, OSError):
-            pass
-    queue.append(entry)
-    QUEUE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    QUEUE_PATH.write_text(json.dumps(queue, indent=2, ensure_ascii=False))
+    append_event(event_type, **kwargs)

@@ -9,6 +9,7 @@
 set -e
 
 UPGRADE_MODE=false
+CONFIG_PRESERVED=false
 for arg in "$@"; do
     case "$arg" in
         --upgrade|-u) UPGRADE_MODE=true ;;
@@ -57,6 +58,16 @@ err()   { echo -e "${RED}❌${NC} $1"; }
 header(){ echo; echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"; echo -e "${BLUE}  $1${NC}"; echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"; }
 prompt(){ echo -ne "${YELLOW}➡️${NC} $1 "; }
 
+yulu_version() {
+    if [[ -f "$SCRIPT_DIR/version.py" ]]; then
+        "$PYTHON_BIN" "$SCRIPT_DIR/version.py" --short 2>/dev/null || true
+    elif [[ -f "$REPO_DIR/VERSION" ]]; then
+        tr -d '[:space:]' < "$REPO_DIR/VERSION"
+    else
+        echo "unknown"
+    fi
+}
+
 check_repo_layout() {
     if [[ ! -f "$SCRIPT_DIR/record_audio.py" || ! -f "$SCRIPT_DIR/audio_daemon.swift" ]]; then
         err "setup.sh 必须在完整仓库中运行，不能直接 curl | bash。"
@@ -102,7 +113,7 @@ install_deps() {
 
     echo "  将安装以下软件包："
     echo "    - ffmpeg / sox       (音频检查与备用处理)"
-    echo "    - whisper-cpp        (本地转录 whisper-cli)"
+    echo "    - whisper-cpp        (非 MLX 转录 / fallback whisper-cli)"
     echo "    - terminal-notifier  (系统通知)"
     echo "    - steipete/tap/gogcli (Google 日历 CLI)"
     echo "    - cloudflared        (日历 webhook 隧道)"
@@ -164,6 +175,7 @@ create_config() {
             if [[ ! "$ans" =~ ^[yY] ]]; then
                 info "保留现有配置"
                 mkdir -p "$RECORDING_DIR"
+                CONFIG_PRESERVED=true
                 return
             fi
         fi
@@ -194,12 +206,23 @@ create_config() {
   },
   "transcription": {
     "mode": "local",
+    "post_recording_mode": "fast_summary",
+    "final_engine": "whisper",
     "language": "zh",
     "local_model_path": "",
-    "whisper_cli": "whisper-cli"
+    "whisper_cli": "whisper-cli",
+    "mlx": {
+      "python": "$CONFIG_DIR/venv-mlx-whisper/bin/python",
+      "model": "mlx-community/whisper-large-v3-mlx"
+    },
+    "realtime": {
+      "engine": "whisper",
+      "chunk_sec": 60
+    }
   },
   "llm": {
-    "enabled": false
+    "enabled": true,
+    "command": null
   },
   "output": {
     "channel": "file"
@@ -216,6 +239,104 @@ CONFIG
     mkdir -p "$RECORDING_DIR"
     ok "配置文件已创建: $CONFIG_DIR/config.json"
     ok "录制目录已创建: $RECORDING_DIR"
+}
+
+# ─── Step 3.5: Summary agent / LLM setup ─────────────
+
+configure_summary_mode() {
+    header "摘要生成方式"
+
+    if [[ ! -f "$CONFIG_DIR/config.json" ]]; then
+        warn "配置文件不存在，跳过摘要方式配置"
+        return
+    fi
+
+    if [[ "$UPGRADE_MODE" == true ]]; then
+        info "升级模式：保留现有 llm 配置。"
+        info "  需要修改时，编辑 $CONFIG_DIR/config.json 的 llm.enabled / llm.command。"
+        return
+    fi
+
+    echo "  请选择 Yulu 转录完成后如何生成最终会议纪要："
+    echo "    1) Agent 队列（推荐）：写入 agent-queue.json，由你信任的 Coding Agent 处理"
+    echo "    2) Claude CLI：直接调用 claude --print"
+    echo "    3) Codex CLI：通过 Yulu 的 codex_llm.py shim 调用 codex exec"
+    echo "    4) 自定义命令：任何读取 stdin、输出 Markdown 的命令"
+    echo "    5) 只保留本地规则草稿：不排队、不调用 LLM"
+    echo
+    prompt "选择 [1-5，默认 1]:"
+    read -r choice
+    [[ -z "$choice" ]] && choice="1"
+
+    local mode="queue"
+    local custom_cmd=""
+    case "$choice" in
+        2)
+            mode="claude"
+            if ! command -v claude >/dev/null 2>&1; then
+                warn "当前 PATH 未找到 claude；仍会写入配置，安装后请确保 launchd PATH 能找到它。"
+            fi
+            ;;
+        3)
+            mode="codex"
+            if ! command -v codex >/dev/null 2>&1; then
+                warn "当前 PATH 未找到 codex；codex_llm.py 会继续尝试从 PATH / nvm 路径查找。"
+            fi
+            ;;
+        4)
+            mode="custom"
+            prompt "输入命令（例如：ollama run qwen2.5 或 claude --print）:"
+            read -r custom_cmd
+            if [[ -z "$custom_cmd" ]]; then
+                warn "命令为空，回退到 Agent 队列模式"
+                mode="queue"
+            fi
+            ;;
+        5)
+            mode="fallback"
+            ;;
+        *)
+            mode="queue"
+            ;;
+    esac
+
+    SUMMARY_MODE="$mode" CUSTOM_LLM_CMD="$custom_cmd" PYTHON_BIN="$PYTHON_BIN" SCRIPT_DIR="$SCRIPT_DIR" CONFIG_DIR="$CONFIG_DIR" "$PYTHON_BIN" - <<'PY'
+import json
+import os
+import shlex
+from pathlib import Path
+
+cfg_path = Path(os.environ["CONFIG_DIR"]) / "config.json"
+cfg = json.loads(cfg_path.read_text())
+llm = cfg.setdefault("llm", {})
+mode = os.environ["SUMMARY_MODE"]
+
+if mode == "queue":
+    llm["enabled"] = True
+    llm["command"] = None
+elif mode == "claude":
+    llm["enabled"] = True
+    llm["command"] = ["claude", "--print"]
+elif mode == "codex":
+    llm["enabled"] = True
+    llm["command"] = [os.environ["PYTHON_BIN"], str(Path(os.environ["SCRIPT_DIR"]) / "codex_llm.py")]
+elif mode == "custom":
+    llm["enabled"] = True
+    llm["command"] = shlex.split(os.environ.get("CUSTOM_LLM_CMD", ""))
+elif mode == "fallback":
+    llm["enabled"] = False
+    llm["command"] = None
+
+cfg_path.write_text(json.dumps(cfg, indent=2, ensure_ascii=False) + "\n")
+PY
+
+    case "$mode" in
+        queue) ok "摘要方式：Agent 队列（llm.command=null）" ;;
+        claude) ok "摘要方式：Claude CLI" ;;
+        codex) ok "摘要方式：Codex CLI shim" ;;
+        custom) ok "摘要方式：自定义命令" ;;
+        fallback) ok "摘要方式：只保留本地规则草稿" ;;
+    esac
 }
 
 # ─── Step 4: Compile native helpers ──────────────────
@@ -348,55 +469,175 @@ compile_audio_daemon() {
     fi
 }
 
-# ─── Step 4.5: Download whisper.cpp model ─────────────
+# ─── Step 4.5: Transcription setup ───────────────────
+
+configure_post_recording_mode() {
+    header "停止后的处理模式"
+
+    if [[ "$UPGRADE_MODE" == true || "$CONFIG_PRESERVED" == true ]]; then
+        ok "保留现有停止后处理模式"
+        return
+    fi
+
+    echo "  1) 快速模式（默认）"
+    echo "     会议中持续生成 realtime transcript；停止后只做 polish + summary。"
+    echo "     优点：结束后很快出纪要；适合日常会议。"
+    echo "     代价：依赖实时分块转录，个别断句/术语可能不如完整重转录。"
+    echo
+    echo "  2) 完整模式"
+    echo "     停止后对整段 WAV 再跑一次最终模型，然后 polish + summary。"
+    echo "     优点：质量更稳、长上下文更好；适合正式访谈/客户会议。"
+    echo "     代价：会慢很多，尤其 large-v3。"
+    echo
+
+    local choice="1"
+    prompt "选择处理模式 [1-2，回车默认 1 快速模式]:"
+    read -r choice
+    [[ -z "$choice" ]] && choice="1"
+
+    local mode="fast_summary"
+    [[ "$choice" == "2" ]] && mode="full_transcribe"
+
+    "$PYTHON_BIN" - <<PY
+import json
+from pathlib import Path
+cfg_path = Path("$CONFIG_DIR/config.json")
+cfg = json.loads(cfg_path.read_text())
+cfg.setdefault("transcription", {})["post_recording_mode"] = "$mode"
+cfg_path.write_text(json.dumps(cfg, indent=2, ensure_ascii=False))
+PY
+    ok "停止后处理模式: $mode"
+    info "之后可用命令快速切换：yulu transcription mode fast 或 yulu transcription mode full"
+}
+
+configure_transcription_engine() {
+    header "转录引擎和模型"
+
+    if [[ "$UPGRADE_MODE" == true || "$CONFIG_PRESERVED" == true ]]; then
+        ok "保留现有转录引擎配置"
+        return
+    fi
+
+    echo "  选择你希望停止后完整转录、以及实时分块转录使用的模型。"
+    echo
+    echo "    1) MLX large-v3（默认，Apple Silicon 高质量推荐）"
+    echo "       模型：mlx-community/whisper-large-v3-mlx"
+    echo "       优点：完整 large-v3 能力，Apple Silicon 上通常比 whisper.cpp 更舒服。"
+    echo "       适合：M1/M2/M3/M4，中文会议质量优先；首次转录会下载 Hugging Face 模型缓存。"
+    echo
+    echo "    2) MLX large-v3-turbo（Apple Silicon 速度推荐）"
+    echo "       模型：mlx-community/whisper-large-v3-turbo"
+    echo "       优点：很快，日常会议体验最好。"
+    echo "       代价：多人抢话、噪声、术语场景略弱于完整 large-v3；首次转录会下载 Hugging Face 模型缓存。"
+    echo
+    echo "    3) whisper.cpp large-v3（非 MLX，最高质量/最朴素）"
+    echo "       文件：ggml-large-v3.bin（~3.0 GB）"
+    echo "       优点：CLI 简单、少 Python 依赖，Intel Mac 也能用。"
+    echo "       代价：Apple Silicon 上通常没有 MLX 轻快。"
+    echo
+    echo "    4) whisper.cpp large-v3-q5_0（非 MLX，均衡）"
+    echo "       文件：ggml-large-v3-q5_0.bin（~1.1 GB）"
+    echo "       优点：接近 large-v3，体积/速度更友好。"
+    echo
+    echo "    5) whisper.cpp medium（非 MLX，低配快速）"
+    echo "       文件：ggml-medium.bin（~1.5 GB）"
+    echo "       优点：更快；代价：中文和复杂会议质量低一档。"
+    echo
+
+    local default_choice="1"
+    if [[ "$(uname -m)" != "arm64" ]]; then
+        default_choice="3"
+        warn "当前不是 arm64；MLX 主要适合 Apple Silicon，默认改为 whisper.cpp large-v3。"
+    fi
+
+    local choice="$default_choice"
+    prompt "选择转录方案 [1-5，回车默认 $default_choice]:"
+    read -r choice
+    [[ -z "$choice" ]] && choice="$default_choice"
+    if [[ ! "$choice" =~ ^[1-5]$ ]]; then
+        warn "无效选择，使用默认方案 $default_choice"
+        choice="$default_choice"
+    fi
+
+    case "$choice" in
+        1)
+            install_mlx_whisper
+            write_mlx_to_config "mlx-community/whisper-large-v3-mlx"
+            ;;
+        2)
+            install_mlx_whisper
+            write_mlx_to_config "mlx-community/whisper-large-v3-turbo"
+            ;;
+        3)
+            write_model_to_config "$MODEL_DIR/ggml-large-v3.bin"
+            ;;
+        4)
+            write_model_to_config "$MODEL_DIR/ggml-large-v3-q5_0.bin"
+            ;;
+        5)
+            write_model_to_config "$MODEL_DIR/ggml-medium.bin"
+            ;;
+    esac
+}
+
+install_mlx_whisper() {
+    if [[ "$(uname -m)" != "arm64" ]]; then
+        warn "MLX 主要支持 Apple Silicon；当前机器可能无法安装或运行 mlx-whisper。"
+    fi
+    local venv="$CONFIG_DIR/venv-mlx-whisper"
+    if [[ ! -x "$venv/bin/python" ]]; then
+        info "创建 MLX Python 环境: $venv"
+        "$PYTHON_BIN" -m venv "$venv"
+    fi
+    info "安装/更新 mlx-whisper（首次会下载依赖）..."
+    "$venv/bin/python" -m pip install --upgrade pip mlx-whisper
+    ok "mlx-whisper 已就绪"
+}
 
 download_whisper_model() {
     header "下载 whisper.cpp 模型"
 
     mkdir -p "$MODEL_DIR"
 
-    # If any model file already exists in MODEL_DIR, treat as done unless not in upgrade mode.
-    local existing
-    existing="$(ls "$MODEL_DIR"/ggml-*.bin 2>/dev/null | head -1)"
+    local target
+    target="$("$PYTHON_BIN" - <<PY
+import json
+from pathlib import Path
+cfg_path = Path("$CONFIG_DIR/config.json")
+if not cfg_path.exists():
+    raise SystemExit(0)
+cfg = json.loads(cfg_path.read_text())
+trans = cfg.get("transcription", {})
+realtime = trans.get("realtime", {}) if isinstance(trans.get("realtime", {}), dict) else {}
+needs = trans.get("final_engine", "whisper") == "whisper" or realtime.get("engine") == "whisper"
+if needs:
+    print(Path(trans.get("local_model_path") or "$MODEL_DIR/ggml-large-v3.bin").expanduser())
+PY
+)"
 
-    if [[ -n "$existing" ]]; then
-        ok "模型已存在: $existing"
-        # Make sure config.json points at it.
-        write_model_to_config "$existing"
+    if [[ -z "$target" ]]; then
+        ok "当前选择 MLX 转录，跳过 GGML 模型下载"
         return
     fi
 
-    echo "  Yulu 用 whisper.cpp 在本地转录。需要先下载一个 GGML 模型文件。"
-    echo "  模型尺寸权衡：越大越准、越慢、占盘越多。"
-    echo
-    echo "    1) base         (~142 MB) — 最快，仅适合英文 / 极清晰音频"
-    echo "    2) small        (~466 MB) — 较快，多语言可接受"
-    echo "    3) medium       (~1.5 GB) — 中文质量明显提升"
-    echo "    4) large-v3-q5_0 (~1.1 GB) — 推荐：large-v3 量化版，中文表现接近 large-v3 但体积减半"
-    echo "    5) large-v3     (~3.0 GB) — 最高质量，最慢"
-    echo
-
-    local choice="4"
-    if [[ "$UPGRADE_MODE" != true ]]; then
-        prompt "选择模型 [1-5，回车默认 4 (large-v3-q5_0)]:"
-        read -r choice
-        [[ -z "$choice" ]] && choice="4"
+    if [[ -f "$target" ]]; then
+        ok "模型已存在: $target"
+        write_model_to_config "$target"
+        return
     fi
 
-    local model_name
-    case "$choice" in
-        1) model_name="base" ;;
-        2) model_name="small" ;;
-        3) model_name="medium" ;;
-        4) model_name="large-v3-q5_0" ;;
-        5) model_name="large-v3" ;;
-        *) model_name="large-v3-q5_0" ;;
-    esac
+    local filename model_name url
+    filename="$(basename "$target")"
+    model_name="${filename#ggml-}"
+    model_name="${model_name%.bin}"
+    if [[ "$filename" != ggml-*.bin || -z "$model_name" ]]; then
+        warn "无法自动识别模型文件名: $target"
+        warn "请手动下载模型后运行: yulu transcription engine whisper $target"
+        return
+    fi
 
-    local target="$MODEL_DIR/ggml-${model_name}.bin"
-    local url="https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-${model_name}.bin"
-
-    info "下载 ggml-${model_name}.bin（这一步可能要几分钟到十几分钟，取决于你的网络）..."
+    url="https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-${model_name}.bin"
+    info "下载 ggml-${model_name}.bin（这一步可能要几分钟到十几分钟，取决于网络）..."
     if curl -L --fail --progress-bar "$url" -o "$target.partial"; then
         mv "$target.partial" "$target"
         ok "模型已保存: $target"
@@ -405,7 +646,7 @@ download_whisper_model() {
         rm -f "$target.partial"
         warn "模型下载失败。手动下载方法："
         warn "  curl -L $url -o $target"
-        warn "下载完成后，再次运行 setup.sh 会自动把模型路径写到 config.json。"
+        warn "下载完成后运行：yulu transcription engine whisper $target"
     fi
 }
 
@@ -421,8 +662,11 @@ if not cfg_path.exists():
     raise SystemExit(0)
 cfg = json.loads(cfg_path.read_text())
 trans = cfg.setdefault("transcription", {})
+realtime = trans.setdefault("realtime", {})
 trans.setdefault("mode", "local")
 trans.setdefault("language", "zh")
+trans.setdefault("post_recording_mode", "fast_summary")
+trans["final_engine"] = "whisper"
 # Write the explicit whisper-cli command so transcribe.py uses our chosen model.
 trans["command"] = [
     "whisper-cli",
@@ -433,9 +677,35 @@ trans["command"] = [
     "{{input}}",
 ]
 trans["local_model_path"] = "$model_path"
+realtime["engine"] = "whisper"
 cfg_path.write_text(json.dumps(cfg, indent=2, ensure_ascii=False))
 PY
     ok "config.json 已指向该模型"
+}
+
+write_mlx_to_config() {
+    local model="$1"
+    "$PYTHON_BIN" - <<PY
+import json
+from pathlib import Path
+
+cfg_path = Path("$CONFIG_DIR/config.json")
+cfg = json.loads(cfg_path.read_text())
+trans = cfg.setdefault("transcription", {})
+realtime = trans.setdefault("realtime", {})
+trans.setdefault("mode", "local")
+trans.setdefault("language", "zh")
+trans.setdefault("post_recording_mode", "fast_summary")
+trans["final_engine"] = "mlx"
+trans["mlx"] = {
+    "python": "$CONFIG_DIR/venv-mlx-whisper/bin/python",
+    "model": "$model",
+}
+realtime["engine"] = "mlx"
+realtime["mlx_model"] = "$model"
+cfg_path.write_text(json.dumps(cfg, indent=2, ensure_ascii=False))
+PY
+    ok "config.json 已设置 MLX 模型: $model"
 }
 
 # ─── Step 5: Google Calendar setup ───────────────────
@@ -639,29 +909,40 @@ install_agent_skill() {
         return
     fi
 
-    local agents="claude-code openclaw"
+    echo "  使用 vercel-labs/skills 把 Yulu 的 SKILL.md 注册到你选择的 agent。"
+    echo "  注册之后，可以直接对 agent 说「开始录制」「停止录制」「上次会议聊了什么」，"
+    echo "  agent 会看 SKILL.md 学到 Yulu 的命令，自动调用。"
+    echo "  常见目标：claude-code openclaw codex cursor"
+    echo "  支持列表见：https://github.com/vercel-labs/skills"
+    echo
 
     if [[ "$UPGRADE_MODE" == true ]]; then
-        info "升级模式：刷新已注册的 agent skill"
+        prompt "刷新/安装 Yulu skill 到 agent？[y/N]"
     else
-        echo "  使用 vercel-labs/skills 把 Yulu 的 SKILL.md 注册到指定 agent。"
-        echo "  注册之后，可以直接对 agent 说"开始录制""停止录制""上次会议聊了什么"，"
-        echo "  agent 会看 SKILL.md 学到 Yulu 的命令，自动调用。"
-        echo "  默认目标 agent：claude-code openclaw"
-        echo "  支持列表见：https://github.com/vercel-labs/skills"
-        echo
-
-        prompt "注册 Yulu skill 到 agent？[Y/n]"
-        read -r ans
-        if [[ "$ans" =~ ^[nN] ]]; then
-            info "已跳过 skill 注册。以后想装：npx skills add $REPO_DIR -g -a claude-code -a openclaw -y"
-            return
-        fi
-
-        prompt "目标 agent（空格分隔，回车使用默认 claude-code openclaw）："
-        read -r user_agents
-        [[ -n "$user_agents" ]] && agents="$user_agents"
+        prompt "注册 Yulu skill 到 agent？[y/N]"
     fi
+    read -r ans
+    if [[ ! "$ans" =~ ^[yY] ]]; then
+        info "已跳过 skill 注册。以后想装：npx skills add $REPO_DIR -g -a <agent> -y"
+        return
+    fi
+
+    local agents=""
+    while [[ -z "$agents" ]]; do
+        prompt "目标 agent（空格或逗号分隔，如 claude-code openclaw codex；回车跳过）："
+        read -r agents
+        agents="${agents//,/ }"
+        # Collapse repeated whitespace.
+        agents="$(echo "$agents" | xargs 2>/dev/null || true)"
+        if [[ -z "$agents" ]]; then
+            prompt "未输入目标 agent，跳过 skill 注册？[Y/n]"
+            read -r skip_ans
+            if [[ ! "$skip_ans" =~ ^[nN] ]]; then
+                info "已跳过 skill 注册。"
+                return
+            fi
+        fi
+    done
 
     local agent_args=()
     for a in $agents; do
@@ -708,39 +989,109 @@ install_yulu_cli() {
 run_tests() {
     header "功能验证"
 
-    echo "  1/4 检测器测试"
+    local passed=0
+    local warned=0
+    local skipped=0
+
+    verify_ok() {
+        ok "$1"
+        passed=$((passed + 1))
+    }
+
+    verify_warn() {
+        warn "$1"
+        warned=$((warned + 1))
+    }
+
+    verify_skip() {
+        info "$1"
+        skipped=$((skipped + 1))
+    }
+
+    echo "  - CLI 入口"
+    if [[ -x "$LOCAL_BIN/yulu" ]]; then
+        verify_ok "yulu CLI 已安装: $LOCAL_BIN/yulu"
+    else
+        verify_warn "yulu CLI 未安装或不可执行: $LOCAL_BIN/yulu"
+    fi
+
+    echo "  - 版本"
+    if "$PYTHON_BIN" "$SCRIPT_DIR/version.py" --check >/tmp/yulu-version-test.$$ 2>&1; then
+        verify_ok "$(cat /tmp/yulu-version-test.$$)"
+    else
+        verify_warn "版本信息异常: $(cat /tmp/yulu-version-test.$$ 2>/dev/null)"
+    fi
+    rm -f /tmp/yulu-version-test.$$
+
+    echo "  - 转录配置"
+    if "$PYTHON_BIN" "$SCRIPT_DIR/configure.py" transcription status >/tmp/yulu-transcription-status.$$ 2>&1; then
+        verify_ok "转录配置可读取"
+        sed 's/^/      /' /tmp/yulu-transcription-status.$$
+    else
+        verify_warn "转录配置异常: $(cat /tmp/yulu-transcription-status.$$ 2>/dev/null)"
+    fi
+    rm -f /tmp/yulu-transcription-status.$$
+
+    echo "  - 检测器"
     local detect_result
-    detect_result=$(python3 "$SCRIPT_DIR/meeting_detector.py" once 2>&1)
-    if echo "$detect_result" | grep -q "active"; then
-        ok "检测器运行正常"
+    detect_result=$("$PYTHON_BIN" "$SCRIPT_DIR/meeting_detector.py" once 2>&1 || true)
+    local detect_summary
+    detect_summary=$(echo "$detect_result" | "$PYTHON_BIN" -c 'import json,sys; d=json.load(sys.stdin); print("active={} windows={}".format(d.get("active"), len(d.get("windows") or [])))' 2>/dev/null || true)
+    if [[ -n "$detect_summary" ]]; then
+        verify_ok "检测器可运行（$detect_summary）"
     else
-        warn "检测器异常: $detect_result"
+        verify_warn "检测器异常: $detect_result"
     fi
 
-    echo "  2/4 日历测试"
-    if python3 "$SCRIPT_DIR/check_meetings.py" today 2>&1; then
-        ok "日历读取正常"
+    echo "  - 日历"
+    local calendar_enabled
+    calendar_enabled=$("$PYTHON_BIN" - <<PY
+import json
+from pathlib import Path
+try:
+    cfg = json.loads(Path("$CONFIG_DIR/config.json").read_text())
+    print("yes" if any(c.get("enabled") for c in cfg.get("calendars", [])) else "no")
+except Exception:
+    print("no")
+PY
+)
+    if [[ "$calendar_enabled" == "yes" ]]; then
+        if "$PYTHON_BIN" "$SCRIPT_DIR/check_meetings.py" today >/tmp/yulu-calendar-test.$$ 2>&1; then
+            verify_ok "日历读取正常"
+        else
+            verify_warn "日历读取异常: $(cat /tmp/yulu-calendar-test.$$ 2>/dev/null)"
+        fi
+        rm -f /tmp/yulu-calendar-test.$$
     else
-        warn "日历读取异常（如果未配置日历则正常）"
+        verify_skip "日历未启用，跳过"
     fi
 
-    echo "  3/4 Yulu 录音测试"
+    echo "  - Yulu 录音 daemon"
     local audio_status
     audio_status=$(echo '{"action":"status"}' | nc -w 2 -U "$HOME/.config/yulu/audio_daemon.sock" 2>/dev/null || true)
     if echo "$audio_status" | grep -q '"sysReady":true' && echo "$audio_status" | grep -q '"micReady":true'; then
-        ok "Yulu 运行正常"
+        verify_ok "Yulu 运行正常"
     else
-        warn "Yulu 异常: $audio_status"
+        verify_warn "Yulu daemon 未 ready: ${audio_status:-无响应}"
     fi
 
-    echo "  4/4 通知测试"
+    echo "  - 通知"
     if command -v terminal-notifier &>/dev/null; then
-        terminal-notifier -title "Yulu" -message "安装完成！" -sound default 2>/dev/null || true
-        ok "通知测试通过"
+        if terminal-notifier -title "Yulu" -message "安装完成！" -sound default 2>/dev/null; then
+            verify_ok "通知测试通过"
+        else
+            verify_warn "通知命令存在，但发送失败"
+        fi
+    else
+        verify_skip "terminal-notifier 未安装，跳过通知测试"
     fi
 
     echo
-    ok "安装验证完成！"
+    if [[ "$warned" -eq 0 ]]; then
+        ok "安装验证完成：$passed 通过，$skipped 跳过"
+    else
+        warn "安装验证完成：$passed 通过，$warned 警告，$skipped 跳过"
+    fi
 }
 
 # ─── Summary ─────────────────────────────────────────
@@ -754,6 +1105,7 @@ show_summary() {
 
     echo "  Yulu 已安装并运行："
     echo
+    echo "  🏷️  版本: $(yulu_version)"
     echo "  📁 配置目录: $CONFIG_DIR"
     echo "  📁 录制目录: $RECORDING_DIR"
     echo "  📁 项目路径: $REPO_DIR"
@@ -789,6 +1141,7 @@ if [[ "$UPGRADE_MODE" == true ]]; then
     echo "  ║         Yulu 升级（idempotent）          ║"
     echo "  ╚══════════════════════════════════════════╝"
     echo -e "${NC}"
+    echo "  版本：$(yulu_version)"
     echo "  跳过已配置项；只补缺失或更新过的内容。"
     echo
 else
@@ -797,6 +1150,7 @@ else
     echo "  ║              Yulu 安装脚本               ║"
     echo "  ╚══════════════════════════════════════════╝"
     echo -e "${NC}"
+    echo "  版本：$(yulu_version)"
     echo "  本脚本将引导你完成 Yulu 的安装和配置。"
     echo "  全程大约需要 10-15 分钟。"
     echo
@@ -814,6 +1168,9 @@ check_system
 install_deps
 setup_audio
 create_config
+configure_post_recording_mode
+configure_transcription_engine
+configure_summary_mode
 compile_scanner
 compile_audio_daemon
 download_whisper_model

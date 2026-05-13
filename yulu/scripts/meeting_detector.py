@@ -23,6 +23,8 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+from state_store import is_recording_active as state_recording_active, load_state as load_recording_state
+
 CONFIG_DIR = Path.home() / ".config" / "yulu"
 CONFIG_PATH = CONFIG_DIR / "config.json"
 STATE_PATH = CONFIG_DIR / ".detector_state.json"
@@ -185,8 +187,8 @@ def save_state(state):
 
 def is_recording_active():
     try:
-        state = json.loads(RECORDING_STATE_PATH.read_text())
-        if state.get("recording"):
+        state = load_recording_state(RECORDING_STATE_PATH)
+        if state_recording_active(state):
             return True
     except Exception:
         pass

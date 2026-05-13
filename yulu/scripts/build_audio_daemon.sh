@@ -9,6 +9,9 @@ APP_BIN="$APP/Contents/MacOS/audio_daemon"
 RES_DIR="$APP/Contents/Resources"
 INFO="$APP/Contents/Info.plist"
 ICNS_SRC="$REPO_DIR/assets/Yulu.icns"
+YULU_VERSION_RAW="$(tr -d '[:space:]' < "$REPO_DIR/VERSION" 2>/dev/null || echo "0.0.0+unknown")"
+YULU_BUNDLE_VERSION="${YULU_VERSION_RAW%%[-+]*}"
+YULU_BUILD_NUMBER="$(git -C "$REPO_DIR" rev-list --count HEAD 2>/dev/null || echo 0)"
 
 cd "$SCRIPT_DIR"
 
@@ -43,6 +46,9 @@ plist_set_or_add() {
 plist_set_or_add CFBundleIdentifier      string  com.yulu.audiodaemon
 plist_set_or_add CFBundleName            string  Yulu
 plist_set_or_add CFBundleDisplayName     string  Yulu
+plist_set_or_add CFBundleShortVersionString string "$YULU_BUNDLE_VERSION"
+plist_set_or_add CFBundleVersion         string  "$YULU_BUILD_NUMBER"
+plist_set_or_add YuluVersion             string  "$YULU_VERSION_RAW"
 plist_set_or_add CFBundleIconFile        string  Yulu
 plist_set_or_add CFBundleIconName        string  Yulu
 plist_set_or_add NSMicrophoneUsageDescription   string  "Yulu records microphone audio for meeting notes."
@@ -74,5 +80,6 @@ codesign --force --deep --timestamp=none --sign "$IDENTITY" "$APP"
 codesign --verify --deep --strict --verbose=2 "$APP"
 
 echo "✅ Built and signed Yulu.app"
+echo "   version: $YULU_VERSION_RAW (bundle $YULU_BUNDLE_VERSION, build $YULU_BUILD_NUMBER)"
 echo "   identity: $IDENTITY"
-codesign -dvvv "$APP" 2>&1 | grep -E 'Identifier|Authority|TeamIdentifier|CDHash|Signature' || true
+codesign -dvvv "$APP" 2>&1 | grep -E 'Identifier|Authority|TeamIdentifier|CDHash|Signature|Version' || true

@@ -1,6 +1,6 @@
 ---
 name: yulu
-description: "Yulu (语录) — native macOS meeting recorder and note-taker. Calendar/window detection, prompt-before-recording, ScreenCaptureKit system audio + microphone recording, local whisper-cli transcription, and agent-generated meeting notes via an agent queue. No BlackHole or virtual audio device required."
+description: "Yulu (语录) — native macOS meeting recorder and note-taker. Calendar/window detection, prompt-before-recording, ScreenCaptureKit system audio + microphone recording, local MLX / whisper transcription, and agent-generated meeting notes via an agent queue. No BlackHole or virtual audio device required."
 metadata:
   internal: true
   notice: "This is the project's internal architecture / developer documentation. The user-facing agent contract that gets installed by `npx skills add` lives at skills/yulu/SKILL.md."
@@ -10,7 +10,7 @@ metadata:
 
 Yulu (语录, *yǔ lù*) is a native macOS meeting recorder and note-taker. The name comes from the Chinese genre of "recorded sayings" — *The Analects* is the classic example.
 
-Pipeline: calendar/window detection → prompt before recording → system audio + microphone capture → local whisper transcription → agent-generated meeting notes.
+Pipeline: calendar/window detection → prompt before recording → system audio + microphone capture → local MLX / whisper transcription → agent-generated meeting notes.
 
 ## Architecture
 
@@ -27,7 +27,7 @@ Google Calendar / Window Detector
           ↓
  ScreenCaptureKit system audio + AVFoundation microphone
           ↓
- WAV → transcribe.py → whisper-cli
+WAV → realtime_transcribe.py / transcribe.py → MLX Whisper or whisper-cli
           ↓
  transcript.txt + summary_request queue
           ↓
@@ -41,7 +41,7 @@ Google Calendar / Window Detector
 - **System audio + microphone** — records remote speaker audio and local microphone input.
 - **Half-duplex mixing** — prioritize system audio while others speak; fade to microphone during system silence.
 - **Meeting detection** — detects Zoom, Tencent Meeting, Google Meet, Feishu/Lark, WeChat calls, and browser-based meetings.
-- **Local transcription** — uses `whisper-cli` from whisper.cpp.
+- **Local transcription** — uses MLX Whisper on Apple Silicon, or `whisper-cli` from whisper.cpp.
 - **OpenClaw agent summaries** — transcription writes a `summary_request` into the agent queue; the OpenClaw agent generates the final meeting notes and notifies the user.
 
 ## Install
@@ -133,8 +133,19 @@ Key fields:
     "half_duplex": true
   },
   "transcription": {
+    "post_recording_mode": "fast_summary",
+    "final_engine": "mlx",
+    "mlx": {
+      "python": "~/.config/yulu/venv-mlx-whisper/bin/python",
+      "model": "mlx-community/whisper-large-v3-mlx"
+    },
+    "realtime": {
+      "engine": "mlx",
+      "mlx_model": "mlx-community/whisper-large-v3-mlx",
+      "chunk_sec": 60
+    },
     "whisper_cli": "whisper-cli",
-    "local_model_path": "~/Models/whisper/ggml-medium.bin",
+    "local_model_path": "~/.config/yulu/models/ggml-large-v3.bin",
     "language": "zh"
   },
   "llm": {
@@ -147,6 +158,8 @@ Notes:
 
 - `audio.backend=daemon` is the recommended default and does not require BlackHole.
 - `mic_device` / `system_audio_device` are only for the legacy SoX fallback path.
+- `post_recording_mode=fast_summary` uses realtime transcript → polish → summary; switch with `yulu transcription mode full` for a slower full final transcription.
+- `final_engine=mlx` is best on Apple Silicon. Non-MLX users can switch with `yulu transcription engine whisper <ggml-model-path>`.
 - If no external LLM command is configured, summaries are delegated to the OpenClaw agent queue.
 
 ## Scripts
@@ -165,7 +178,7 @@ All scripts live under `scripts/`:
 | `meeting_detector.py` | Meeting window detector |
 | `window_scanner.swift` | Accessibility window scanner |
 | `recorder_status.swift` | Floating recording status window |
-| `transcribe.py` | whisper transcription + agent queue summary request |
+| `transcribe.py` | MLX / whisper transcription + agent queue summary request |
 | `agent_notify.py` | OpenClaw agent queue writer |
 | `notify.py` | macOS notifications/prompts |
 | `check_meetings.py` | Calendar queries |
@@ -243,7 +256,7 @@ Yulu（语录）是一个 macOS 原生会议助手：日历/窗口检测 → 弹
 
 名字取自《论语》《传习录》的"语录"体——把发言原原本本记下来再读。
 
-核心特点：不需要 BlackHole；通过 ScreenCaptureKit 直接捕获系统音频；用 whisper-cli 本地转写；通过 agent queue 让任意 agent（Claude Code / Codex / OpenClaw）生成最终纪要。
+核心特点：不需要 BlackHole；通过 ScreenCaptureKit 直接捕获系统音频；用 MLX Whisper 或 whisper-cli 本地转写；通过 agent queue 让任意 agent（Claude Code / Codex / OpenClaw）生成最终纪要。
 
 快速安装：
 

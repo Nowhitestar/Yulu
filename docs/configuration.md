@@ -17,8 +17,19 @@ Yulu's configuration lives at `~/.config/yulu/config.json`. The file is created 
   },
   "transcription": {
     "mode": "local",
+    "post_recording_mode": "fast_summary",
+    "final_engine": "mlx",
+    "mlx": {
+      "python": "~/.config/yulu/venv-mlx-whisper/bin/python",
+      "model": "mlx-community/whisper-large-v3-mlx"
+    },
+    "realtime": {
+      "engine": "mlx",
+      "mlx_model": "mlx-community/whisper-large-v3-mlx",
+      "chunk_sec": 60
+    },
     "whisper_cli": "whisper-cli",
-    "local_model_path": "~/Models/whisper/ggml-medium.bin",
+    "local_model_path": "~/.config/yulu/models/ggml-large-v3.bin",
     "language": "zh",
     "command": null
   },
@@ -57,23 +68,39 @@ Yulu's configuration lives at `~/.config/yulu/config.json`. The file is created 
 | Field | Default | Notes |
 |---|---|---|
 | `mode` | `"local"` | Reserved for future cloud adapters |
+| `post_recording_mode` | `"fast_summary"` | `"fast_summary"` uses the realtime transcript generated during the meeting, then polish + summary. `"full_transcribe"` reruns the final engine on the full WAV before summarizing |
+| `final_engine` | `"mlx"` on Apple Silicon, `"whisper"` as non-MLX fallback | `"mlx"` uses `mlx-whisper`; `"whisper"` uses whisper.cpp |
+| `mlx.python` | `~/.config/yulu/venv-mlx-whisper/bin/python` | Python executable with `mlx-whisper` installed |
+| `mlx.model` | `mlx-community/whisper-large-v3-mlx` | Best-quality MLX model. Use `mlx-community/whisper-large-v3-turbo` when speed matters more |
+| `realtime.engine` | same as `final_engine` | Engine for chunked realtime transcription. This transcript is used by `fast_summary` |
+| `realtime.chunk_sec` | `60` | Chunk size for realtime-ish transcription |
 | `whisper_cli` | `"whisper-cli"` | Path or name of the whisper.cpp binary |
-| `local_model_path` | `~/Models/whisper/ggml-medium.bin` | Model file. `medium` and `large-v3` recommended |
+| `local_model_path` | `~/.config/yulu/models/ggml-large-v3.bin` | whisper.cpp model file. `large-v3` is best quality; `large-v3-q5_0` is smaller/faster |
 | `language` | `"zh"` | Whisper language code; use `"auto"` for detection |
 | `command` | `null` | Optional override. A list of argv tokens with `{{input}}` and `{{output_stem}}` placeholders |
+
+Switch at runtime:
+
+```bash
+yulu transcription mode fast
+yulu transcription mode full
+yulu transcription engine mlx mlx-community/whisper-large-v3-mlx
+yulu transcription engine mlx mlx-community/whisper-large-v3-turbo
+yulu transcription engine whisper ~/.config/yulu/models/ggml-large-v3.bin
+```
 
 ### `llm`
 
 | Field | Default | Notes |
 |---|---|---|
-| `enabled` | `true` | If `false`, the local fallback summary is final |
-| `command` | `null` | Optional CLI to call directly. Receives the prompt on stdin, writes Markdown to stdout. Example: `["claude", "--print", "--model", "claude-opus-4-7"]`. If `null`, summarization is queued for an agent |
+| `enabled` | `true` | If `false`, the local fallback summary is final and no `summary_request` is queued |
+| `command` | `null` | Optional CLI to call directly. Receives the prompt on stdin, writes Markdown to stdout. Example: `["claude", "--print", "--model", "claude-opus-4-7"]`. If `null`, summarization is queued for an external agent |
 
 ### `output`
 
 | Field | Default | Notes |
 |---|---|---|
-| `channel` | `"file"` | One of `"file"`, `"telegram"`, `"zulip"`, `"notion"`. Each channel is implemented in `scripts/send_summary.py` |
+| `channel` | `"file"` | One of `"file"`, `"telegram"`, `"zulip"`, `"notion"`. Non-file outputs are experimental and must be configured manually; setup does not install their optional dependencies. `telegram` requires `TELEGRAM_BOT_TOKEN`; `zulip` requires the `zulip` Python package and `~/.zuliprc`; `notion` requires `notion-client` and `NOTION_API_KEY` |
 
 ### `meeting_detection`
 
@@ -101,4 +128,4 @@ Array of calendar adapters. Currently only Google is supported.
 
 - Keep `config.json` out of git. The default `.gitignore` already blocks it.
 - If you change `local_model_path`, run a manual `transcribe.py` against an existing WAV to verify the new model works before relying on it during a meeting.
-- `llm.command` is a generic hatch — anything that reads stdin and writes Markdown works (`claude`, `codex`, `gpt`, `ollama run …`, your own shim).
+- `llm.command` is a generic hatch — anything that reads stdin and writes Markdown works (`claude`, `codex`, `gpt`, `ollama run …`, your own shim). Leave it empty if you want a coding agent to pick up `agent-queue.json`.

@@ -50,8 +50,8 @@ body:
     id: yulu-version
     attributes:
       label: Yulu version / commit
-      description: Tag, release name, or `git rev-parse --short HEAD` from your clone.
-      placeholder: "v0.1.0 or 17c49f5"
+      description: Output of `yulu version`, or `python3 yulu/scripts/version.py --json` from your clone.
+      placeholder: "Yulu 0.5.0-dev (17c49f5, dirty)"
     validations:
       required: true
 

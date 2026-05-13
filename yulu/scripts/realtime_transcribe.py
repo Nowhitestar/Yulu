@@ -15,6 +15,7 @@ and transcribed independently.
 
 import json
 import os
+import re
 import shlex
 import signal
 import struct
@@ -23,6 +24,9 @@ import sys
 import time
 from datetime import datetime
 from pathlib import Path
+
+from queue_store import append_event
+from state_store import is_recording_active, load_state, recording_info
 
 CONFIG_DIR = Path.home() / ".config" / "yulu"
 CONFIG_PATH = CONFIG_DIR / "config.json"
@@ -37,11 +41,17 @@ HEADER_BYTES = 44
 
 DEFAULT_CMD = [
     "whisper-cli",
-    "-m", str(Path.home() / "Models/whisper/ggml-medium.bin"),
+    "-m", str(Path.home() / ".config/yulu/models/ggml-large-v3.bin"),
     "-l", "zh",
     "-otxt",
     "-of", "{{output_stem}}",
     "{{input}}",
+]
+DEFAULT_MLX_PYTHON = str(Path.home() / ".config/yulu/venv-mlx-whisper/bin/python")
+DEFAULT_MLX_MODEL = "mlx-community/whisper-large-v3-mlx"
+DEFAULT_GLOSSARY = [
+    "AgentKey", "OpenClaw", "OpenAI", "Claude", "Cursor", "Deal Hub",
+    "Portfolio", "GitHub", "Yulu",
 ]
 
 stop_requested = False
@@ -63,12 +73,41 @@ def load_config():
         cfg = {}
     trans = cfg.get("transcription", {})
     realtime = trans.get("realtime", {})
-    return {
-        "command": trans.get("command") or DEFAULT_CMD,
-        "chunk_sec": int(os.environ.get("YULU_RT_CHUNK_SEC") or realtime.get("chunk_sec", 60)),
+    engine = realtime.get("engine") or trans.get("final_engine") or "whisper"
+    language = trans.get("language") or realtime.get("language") or "zh"
+    chunk_sec = int(os.environ.get("YULU_RT_CHUNK_SEC") or realtime.get("chunk_sec", 60))
+    base = {
+        "engine": engine,
+        "language": language,
+        "chunk_sec": chunk_sec,
         "poll_sec": float(realtime.get("poll_sec", 2)),
         "min_final_sec": int(realtime.get("min_final_sec", 8)),
+        "timeout_sec": int(realtime.get("timeout_sec", 1800)),
+        "initial_prompt": realtime.get("initial_prompt") or trans.get("initial_prompt"),
+        "glossary": trans.get("glossary") or DEFAULT_GLOSSARY,
     }
+    if engine == "mlx":
+        mlx_cfg = trans.get("mlx", {}) if isinstance(trans.get("mlx", {}), dict) else {}
+        base.update({
+            "mlx_python": realtime.get("mlx_python") or trans.get("mlx_python") or mlx_cfg.get("python") or DEFAULT_MLX_PYTHON,
+            "mlx_model": realtime.get("mlx_model") or trans.get("mlx_model") or mlx_cfg.get("model") or DEFAULT_MLX_MODEL,
+        })
+        return base
+
+    cmd = trans.get("command")
+    if not cmd:
+        whisper_cli = trans.get("whisper_cli") or "whisper-cli"
+        model_path = trans.get("local_model_path") or str(Path.home() / ".config/yulu/models/ggml-large-v3.bin")
+        cmd = [
+            whisper_cli,
+            "-m", str(Path(model_path).expanduser()),
+            "-l", language,
+            "-otxt",
+            "-of", "{{output_stem}}",
+            "{{input}}",
+        ]
+    base["command"] = cmd
+    return base
 
 
 def render_cmd(template, **vars):
@@ -95,27 +134,23 @@ def write_chunk(path, pcm):
     path.write_bytes(wav_header(len(pcm)) + pcm)
 
 
-def read_state():
-    try:
-        return json.loads(STATE_PATH.read_text())
-    except Exception:
-        return {}
-
-
 def notify(event_type, **kwargs):
-    entry = {"type": event_type, "ts": datetime.now().isoformat(), **kwargs}
-    try:
-        queue = json.loads(QUEUE_PATH.read_text()) if QUEUE_PATH.exists() else []
-        if not isinstance(queue, list):
-            queue = []
-    except Exception:
-        queue = []
-    queue.append(entry)
-    QUEUE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    QUEUE_PATH.write_text(json.dumps(queue, indent=2, ensure_ascii=False))
+    append_event(event_type, **kwargs)
 
 
-def transcribe_chunk(chunk_path, cmd_template):
+def _glossary_prompt(cfg, title):
+    glossary = cfg.get("glossary", DEFAULT_GLOSSARY)
+    if isinstance(glossary, str):
+        glossary = [x.strip() for x in re.split(r"[,\n]", glossary) if x.strip()]
+    terms = ", ".join(dict.fromkeys([*DEFAULT_GLOSSARY, *glossary]))
+    return (
+        "以下是一次中文为主、中英混杂的会议。"
+        "请保留英文专有名词，不要翻译人名、产品名和公司名。"
+        f"会议标题：{title}。常见术语：{terms}。"
+    )
+
+
+def transcribe_chunk_whisper(chunk_path, cmd_template):
     stem = chunk_path.with_suffix("").as_posix() + ".whisper"
     txt = Path(stem + ".txt")
     cmd = render_cmd(cmd_template, input=chunk_path, output_stem=stem)
@@ -128,6 +163,49 @@ def transcribe_chunk(chunk_path, cmd_template):
     text = txt.read_text(encoding="utf-8").strip()
     txt.unlink(missing_ok=True)
     return text
+
+
+def transcribe_chunk_mlx(chunk_path, cfg, title):
+    py = cfg["mlx_python"]
+    model = cfg["mlx_model"]
+    prompt = cfg.get("initial_prompt") or _glossary_prompt(cfg, title)
+    language = cfg.get("language") or "zh"
+    if not Path(py).exists():
+        raise RuntimeError(f"mlx-whisper python not found: {py}")
+    code = """
+import sys
+import mlx_whisper
+
+audio, model, prompt, language = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+res = mlx_whisper.transcribe(
+    audio,
+    path_or_hf_repo=model,
+    language=language,
+    task="transcribe",
+    verbose=False,
+    initial_prompt=prompt,
+    condition_on_previous_text=True,
+    word_timestamps=False,
+    hallucination_silence_threshold=2.0,
+)
+segments = res.get("segments") or []
+if segments:
+    print("\\n".join((seg.get("text") or "").strip() for seg in segments if (seg.get("text") or "").strip()))
+else:
+    print((res.get("text") or "").strip())
+"""
+    cmd = [py, "-c", code, str(chunk_path), model, prompt, language]
+    print(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] mlx chunk: {shlex.join([py, '-c', '<code>', str(chunk_path), model, '<prompt>', language])}", flush=True)
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=cfg["timeout_sec"])
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr.strip() or f"mlx-whisper failed: {result.returncode}")
+    return result.stdout.strip()
+
+
+def transcribe_chunk(chunk_path, cfg, title):
+    if cfg.get("engine") == "mlx":
+        return transcribe_chunk_mlx(chunk_path, cfg, title)
+    return transcribe_chunk_whisper(chunk_path, cfg["command"])
 
 
 def append_transcript(transcript_path, index, start_sec, end_sec, text):
@@ -164,8 +242,10 @@ def main():
         exists = audio_path.exists()
         size = audio_path.stat().st_size if exists else 0
         available = max(0, size - offset)
-        state = read_state()
-        still_recording = bool(state.get("recording")) and state.get("file_path") == str(audio_path)
+        state = load_state(STATE_PATH)
+        rec = recording_info(state)
+        current_path = rec.get("audio_path") or rec.get("file_path")
+        still_recording = is_recording_active(state) and current_path == str(audio_path)
 
         should_process = available >= chunk_bytes
         final_tail = (stop_requested or not still_recording) and available >= min_final_bytes
@@ -183,7 +263,7 @@ def main():
                 chunk = chunk_dir / f"chunk_{index:06d}.wav"
                 write_chunk(chunk, pcm)
                 try:
-                    text = transcribe_chunk(chunk, cfg["command"])
+                    text = transcribe_chunk(chunk, cfg, title)
                     append_transcript(transcript_path, index, start_sec, end_sec, text)
                     meta_path.write_text(json.dumps({
                         "audio_path": str(audio_path),

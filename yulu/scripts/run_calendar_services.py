@@ -57,6 +57,31 @@ def log(msg):
     # print 由 LaunchAgent 的 StandardOutPath 捕获到日志文件，不再重复写
 
 
+def _load_watch_state():
+    if not STATE_PATH.exists():
+        return {}
+    try:
+        return json.loads(STATE_PATH.read_text())
+    except Exception:
+        return {}
+
+
+def _save_watch_state(state):
+    STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    STATE_PATH.write_text(json.dumps(state, indent=2, ensure_ascii=False))
+
+
+def _get_or_create_webhook_token():
+    state = _load_watch_state()
+    token = state.get("webhook_token")
+    if token:
+        return token
+    token = uuid.uuid4().hex
+    state["webhook_token"] = token
+    _save_watch_state(state)
+    return token
+
+
 def _get_gog_credentials():
     """从 gog 的 keychain 读取 OAuth 凭证。
     用户需先运行：
@@ -133,6 +158,7 @@ def _get_access_token():
 def register_watch_channels(public_url):
     """为所有日历注册 Google Calendar push notification。"""
     token = _get_access_token()
+    webhook_token = _get_or_create_webhook_token()
     channel_id = str(uuid.uuid4())
     results = []
 
@@ -142,7 +168,7 @@ def register_watch_channels(public_url):
         body = json.dumps({
             "id": channel_id,
             "type": "web_hook",
-            "address": f"{public_url.rstrip('/')}/calendar-webhook",
+            "address": f"{public_url.rstrip('/')}/calendar-webhook?token={webhook_token}",
         }).encode()
         req = urllib.request.Request(
             url, data=body,
@@ -172,10 +198,11 @@ def register_watch_channels(public_url):
 
     state = {
         "public_url": public_url,
+        "webhook_token": webhook_token,
         "channels": results,
         "registered_at": datetime.now(timezone.utc).isoformat(),
     }
-    STATE_PATH.write_text(json.dumps(state, indent=2, ensure_ascii=False))
+    _save_watch_state(state)
     return results
 
 
@@ -322,7 +349,17 @@ class WebhookHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_POST(self):
-        if self.path == "/calendar-webhook":
+        parsed = urllib.parse.urlparse(self.path)
+        if parsed.path == "/calendar-webhook":
+            params = urllib.parse.parse_qs(parsed.query)
+            expected = _get_or_create_webhook_token()
+            received = (params.get("token") or [""])[0]
+            if received != expected:
+                log("⚠️ 拒绝未授权 calendar webhook 请求")
+                self.send_response(403)
+                self.end_headers()
+                self.wfile.write(b"Forbidden")
+                return
             resource_state = self.headers.get("X-Goog-Resource-State", "")
             log(f"📩 推送: state={resource_state}")
 

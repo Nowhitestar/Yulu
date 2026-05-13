@@ -96,6 +96,12 @@ else
     ok "Cloned $(git -C "$INSTALL_DIR" rev-parse --short HEAD)"
 fi
 
+if [[ -f "$INSTALL_DIR/VERSION" ]]; then
+    ok "Yulu version $(tr -d '[:space:]' < "$INSTALL_DIR/VERSION")"
+else
+    warn "VERSION file missing in checkout"
+fi
+
 # ─── Hand off to setup.sh ────────────────────────────────────────
 
 SETUP="$INSTALL_DIR/yulu/scripts/setup.sh"

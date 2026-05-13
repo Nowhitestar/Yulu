@@ -41,11 +41,11 @@ jobs:
             python3 -m py_compile "$f"
           done
 
-      - name: Python tests
+      - name: Python unit tests
         run: |
           set -euo pipefail
-          python3 -m pip install --quiet pytest
-          python3 -m pytest tests -q
+          python3 -m pip install --user pytest
+          python3 -m pytest -q
 
       - name: Doctor JSON smoke test
         run: |
@@ -63,6 +63,13 @@ jobs:
           assert data['legacy_root_exists'] is False
           print('doctor JSON OK')
           PY
+
+      - name: Version sanity
+        run: |
+          set -euo pipefail
+          test -s VERSION
+          python3 yulu/scripts/version.py --check
+          python3 yulu/scripts/version.py --json
 
       - name: Swift build (audio_daemon, window_scanner, recorder_status)
         run: |

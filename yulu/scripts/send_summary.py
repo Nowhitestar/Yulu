@@ -4,9 +4,9 @@
 
 支持：
 - file    — 仅保存到本地（默认）
-- zulip   — 发送到 Zulip 频道
-- notion  — 创建 Notion 页面
-- telegram — 发送 Telegram 消息
+- zulip   — 实验性：发送到 Zulip 频道（需手动安装/配置依赖）
+- notion  — 实验性：创建 Notion 页面（需手动安装/配置依赖）
+- telegram — 实验性：发送 Telegram 消息（需手动配置 bot token）
 
 配置：
 {
@@ -61,20 +61,28 @@ def send_to_zulip(summary_path, config):
     stream = config.get("stream", "general")
     topic = config.get("topic", "会议纪要")
 
-    print(f"📤 发送到 Zulip")
-    print(f"   Stream: {stream}")
-    print(f"   Topic: {topic}")
-    print(f"   内容长度: {len(content)} 字符")
+    try:
+        import zulip
+    except ImportError:
+        print("zulip package not installed. Run: pip install zulip", file=sys.stderr)
+        return False
 
-    # TODO: 实现 Zulip API 调用
-    # 需要配置 zuliprc 文件或 API key
-    # 示例：
-    # import zulip
-    # client = zulip.Client(config_file="~/.zuliprc")
-    # client.send_message({"type": "stream", "to": stream, "topic": topic, "content": content})
-
-    print("   ⚠️ Zulip 发送待实现，请先配置 API 凭证")
-    return True
+    try:
+        client = zulip.Client(config_file=config.get("zuliprc", "~/.zuliprc"))
+        resp = client.send_message({
+            "type": "stream",
+            "to": stream,
+            "topic": topic,
+            "content": content,
+        })
+        if resp.get("result") != "success":
+            print(f"Zulip send failed: {resp}", file=sys.stderr)
+            return False
+        print(f"📤 Zulip 已发送: {stream} / {topic}")
+        return True
+    except Exception as e:
+        print(f"Failed to send Zulip message: {e}", file=sys.stderr)
+        return False
 
 
 def send_to_notion(summary_path, config):
@@ -110,6 +118,22 @@ def send_to_notion(summary_path, config):
 
     notion = Client(auth=api_key)
 
+    def paragraph_blocks(text, chunk_size=1800):
+        blocks = []
+        for i in range(0, len(text), chunk_size):
+            blocks.append({
+                "object": "block",
+                "type": "paragraph",
+                "paragraph": {
+                    "rich_text": [{"type": "text", "text": {"content": text[i:i + chunk_size]}}]
+                },
+            })
+        return blocks or [{
+            "object": "block",
+            "type": "paragraph",
+            "paragraph": {"rich_text": [{"type": "text", "text": {"content": ""}}]},
+        }]
+
     try:
         page = notion.pages.create(
             parent={"database_id": database_id},
@@ -117,15 +141,7 @@ def send_to_notion(summary_path, config):
                 "Name": {"title": [{"text": {"content": title}}]},
                 "Status": {"select": {"name": "已完成"}},
             },
-            children=[
-                {
-                    "object": "block",
-                    "type": "paragraph",
-                    "paragraph": {
-                        "rich_text": [{"type": "text", "text": {"content": content}}]
-                    },
-                }
-            ],
+            children=paragraph_blocks(content),
         )
         print(f"📤 Notion 页面已创建: {page['url']}")
         return True
@@ -135,7 +151,7 @@ def send_to_notion(summary_path, config):
 
 
 def send_to_telegram(summary_path, config):
-    """通过 OpenClaw message 工具发送到 Telegram。"""
+    """通过 Telegram Bot API 发送。"""
     try:
         with open(summary_path, "r", encoding="utf-8") as f:
             content = f.read()
@@ -147,17 +163,40 @@ def send_to_telegram(summary_path, config):
     if not chat_id:
         print("Telegram chat_id not configured", file=sys.stderr)
         return False
+    token = os.environ.get(config.get("bot_token_env", "TELEGRAM_BOT_TOKEN"), "")
+    if not token:
+        print("TELEGRAM_BOT_TOKEN not set", file=sys.stderr)
+        return False
 
-    # 通过 OpenClaw 的 message 工具发送
-    # 这里输出内容，由调用者处理
-    print(f"📤 发送到 Telegram chat: {chat_id}")
-    print(f"   内容长度: {len(content)} 字符")
-    print("\n=== TELEGRAM MESSAGE ===")
-    print(content[:2000])  # 限制长度
-    if len(content) > 2000:
-        print("... (内容已截断)")
-    print("=== END ===")
-    return True
+    import urllib.parse
+    import urllib.request
+
+    def chunks(text, size=3900):
+        for i in range(0, len(text), size):
+            yield text[i:i + size]
+
+    try:
+        for part in chunks(content):
+            data = urllib.parse.urlencode({
+                "chat_id": chat_id,
+                "text": part,
+                "disable_web_page_preview": "true",
+            }).encode()
+            req = urllib.request.Request(
+                f"https://api.telegram.org/bot{token}/sendMessage",
+                data=data,
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=20) as resp:
+                body = json.loads(resp.read())
+            if not body.get("ok"):
+                print(f"Telegram send failed: {body}", file=sys.stderr)
+                return False
+        print(f"📤 Telegram 已发送: {chat_id}")
+        return True
+    except Exception as e:
+        print(f"Failed to send Telegram message: {e}", file=sys.stderr)
+        return False
 
 
 def send_summary(summary_path):
