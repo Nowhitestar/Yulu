@@ -6,6 +6,7 @@ Yulu owns extraction from summary/transcript; LBrain owns reusable templates.
 from __future__ import annotations
 
 import argparse
+import html
 import json
 import re
 from datetime import datetime
@@ -18,7 +19,34 @@ import sys
 if str(RENDER_DIR) not in sys.path:
     sys.path.insert(0, str(RENDER_DIR))
 
-from render_artifact import render_template  # type: ignore
+try:
+    from render_artifact import render_template  # type: ignore
+except Exception:  # pragma: no cover - exercised on machines without LBrain templates
+    def render_template(template_name: str, data: dict[str, Any], markdown: str = "", raw: str = "") -> str:
+        """Small standalone fallback for CI/non-LBrain installs."""
+        title = html.escape(str(data.get("title") or "Yulu Meeting Summary"))
+        body = html.escape(markdown or "")
+        transcript = html.escape(raw or "")
+        return f"""<!doctype html>
+<html lang=\"zh-CN\">
+<head>
+  <meta charset=\"utf-8\">
+  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">
+  <title>{title}</title>
+  <style>
+    body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; margin: 2rem; line-height: 1.6; }}
+    pre {{ white-space: pre-wrap; background: #f6f6f6; padding: 1rem; border-radius: 12px; }}
+  </style>
+</head>
+<body>
+  <h1>{title}</h1>
+  <h2>Summary</h2>
+  <pre>{body}</pre>
+  <h2>Transcript</h2>
+  <pre>{transcript}</pre>
+</body>
+</html>
+"""
 
 
 def _strip_ts(line: str) -> str:
