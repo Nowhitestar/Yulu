@@ -44,6 +44,34 @@ Yulu 是本地优先的 macOS 会议记录器：ScreenCaptureKit + AVFoundation 
 command -v yulu || find ~ -maxdepth 6 -name 'meeting_daemon.py' -path '*/yulu/scripts/*' -print -quit 2>/dev/null
 ```
 
+## 开发 / 发布流（Yulu 不只是 skill）
+
+当用户问 Yulu 的开发、发布、dogfood、GitHub 同步、第三方 code CLI 协作，先把 Yulu 当成完整应用仓库处理，而不是只改 skill。
+
+当前约定：
+
+- Git 源仓库：`~/.yulu`，remote `https://github.com/Nowhitestar/Yulu.git`。
+- 源码脚本：`~/.yulu/yulu/scripts/`。
+- 旧运行态/launchd 可能仍来自：`~/.openclaw/workspace/meeting-assistant/yulu/scripts/`；迁移前必须用 doctor 检查真实进程来源。
+- 运行配置/状态：`~/.config/yulu/`，不进 Git。
+- 会议产物：`~/Movies/Yulu/`，不进 Git。
+- Skill 源头在 Yulu repo：`~/.yulu/skills/yulu/SKILL.md`，同步到 Hermes 和 l-skills。
+
+Repo hygiene workflow：
+
+```bash
+cd ~/.yulu
+make doctor              # 只读检查 source/runtime/legacy process/socket/tools
+make test                # py_compile + pytest + Swift build
+make dev-install-dry-run # 不改运行态；录音中会拒绝
+make sync-skill-dry-run  # 预览 skill 同步
+make sync-skill          # 同步到 ~/.hermes 和 ~/Documents/Codebase/l-skills
+```
+
+当前 hygiene branch：`chore/yulu-repo-hygiene`，本地 commit `b1e2513` 添加了 Makefile、doctor、dev_install dry-run、sync_skill、queue_store、测试、CI 和开发文档。后续迁移 launchd/runtime 前，先让 `make doctor` 明确显示旧 OpenClaw 进程；不要直接手工 patch 旧路径作为最终方案。
+
+第三方 code CLI 协作规则：每次只给一个窄任务，写 `.agent/tasks/<slug>.md`，一个 agent 一个 branch/worktree，要求跑 `make test` 和必要 smoke test；雷子负责审 diff，检查是否误提交 config、录音、transcript、日志、密钥。
+
 ## 动作
 
 ### 开始录音
@@ -120,7 +148,7 @@ Yulu 纪要现在默认保留两种产物：
   - `script#artifact-data[type="application/json"]` 结构化数据（title / tldr / action_items / decisions / open_questions / topics / paths）
   - 工具条：复制 Markdown、复制 JSON、复制 Telegram 版、保存当前 HTML、打印/PDF
 
-实现文件：`scripts/html_artifact.py`。它是 Yulu 薄适配层，优先读取 LBrain 模板 `~/Documents/LBrain/Templates/html-artifacts/meeting-summary.html`，并复用支撑脚本 `~/Documents/LBrain/System/html-artifacts/render_artifact.py`。`transcribe.py` 写完 `.summary.md` 后会自动调用 `write_meeting_summary_html(...)` 生成 `.summary.html`，并在 `summary_ready` 事件里附带 `html_path`。修 `transcribe.py` / `html_artifact.py` 时要同步到 OpenClaw 实际运行路径和 `~/.yulu/yulu/scripts/` Hermes 源副本；改通用模板时优先改 LBrain Templates。
+实现文件：`scripts/html_artifact.py`。它是 Yulu 薄适配层，优先读取 LBrain 模板 `~/Documents/LBrain/Templates/html-artifacts/meeting-summary.html`，并复用支撑脚本 `~/Documents/LBrain/System/html-artifacts/render_artifact.py`。`transcribe.py` 写完 `.summary.md` 后会自动调用 `write_meeting_summary_html(...)` 生成 `.summary.html`，并在 `summary_ready` 事件里附带 `html_path`。`agent_queue_worker.py` 处理 `summary_request` 覆盖 `.summary.md` 前必须校验：不能是 agent-queue JSON，长度不能过短，至少包含 `## TL;DR` / `## Discussion Points` / `## Action Items`；覆盖后也要刷新 `.summary.html`。修 `transcribe.py` / `html_artifact.py` / `agent_queue_worker.py` 时要同步到源码 repo 和当前真实运行态；改通用模板时优先改 LBrain Templates。
 
 ## 查找历史会议
 
