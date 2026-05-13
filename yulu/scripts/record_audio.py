@@ -133,24 +133,45 @@ def stop_realtime_transcriber(wait=True, graceful=False):
         return
     try:
         pid = int(REALTIME_PID_PATH.read_text().strip())
-        if wait:
-            deadline = time.time() + (180 if graceful else 20)
+
+        def alive():
+            try:
+                os.kill(pid, 0)
+                return True
+            except ProcessLookupError:
+                return False
+
+        def wait_until_dead(seconds):
+            deadline = time.time() + seconds
             while time.time() < deadline:
-                try:
-                    os.kill(pid, 0)
-                    time.sleep(0.5)
-                except ProcessLookupError:
+                if not alive():
                     REALTIME_PID_PATH.unlink(missing_ok=True)
-                    return
-        os.kill(pid, signal.SIGTERM)
-        if wait:
-            deadline = time.time() + 20
-            while time.time() < deadline:
+                    return True
+                time.sleep(0.5)
+            return not alive()
+
+        if wait and wait_until_dead(180 if graceful else 20):
+            return
+
+        # realtime_transcribe.py is launched with start_new_session=True and can be
+        # blocked inside an mlx-whisper child process. Its SIGTERM handler only
+        # sets a flag, so a plain os.kill(pid, SIGTERM) can leave the process
+        # group alive and keep appending to the realtime transcript after the
+        # recording has stopped. Kill the whole process group, then escalate.
+        try:
+            os.killpg(pid, signal.SIGTERM)
+        except Exception:
+            os.kill(pid, signal.SIGTERM)
+
+        if wait and not wait_until_dead(20):
+            try:
+                os.killpg(pid, signal.SIGKILL)
+            except Exception:
                 try:
-                    os.kill(pid, 0)
-                    time.sleep(0.5)
-                except ProcessLookupError:
-                    break
+                    os.kill(pid, signal.SIGKILL)
+                except Exception:
+                    pass
+            wait_until_dead(5)
     except Exception:
         pass
     REALTIME_PID_PATH.unlink(missing_ok=True)
@@ -194,15 +215,70 @@ def daemon_start(title):
     return False
 
 
+def emergency_stop_daemon(rec=None):
+    """Best-effort stop when the Swift daemon socket is dead/unresponsive.
+
+    The daemon patches the WAV header every few seconds, so terminating it is
+    preferable to leaving recording stuck forever. Keep the recorded file path
+    from state so downstream transcription can still proceed.
+    """
+    rec = rec or recording_info(read_state())
+    path = rec.get("audio_path") or rec.get("file_path", "")
+    title = rec.get("title", "")
+    patterns = ["Yulu.app/Contents/MacOS/audio_daemon", "/scripts/audio_daemon"]
+    for pat in patterns:
+        try:
+            out = subprocess.run(["pgrep", "-f", pat], capture_output=True, text=True, timeout=2).stdout.split()
+        except Exception:
+            out = []
+        for s in out:
+            try:
+                pid = int(s)
+                try:
+                    os.kill(pid, signal.SIGTERM)
+                except ProcessLookupError:
+                    continue
+            except Exception:
+                pass
+    time.sleep(1)
+    for pat in patterns:
+        try:
+            out = subprocess.run(["pgrep", "-f", pat], capture_output=True, text=True, timeout=2).stdout.split()
+        except Exception:
+            out = []
+        for s in out:
+            try:
+                pid = int(s)
+                os.kill(pid, signal.SIGKILL)
+            except Exception:
+                pass
+    set_recording_stopped(status="stopped_emergency_daemon_unresponsive", path=STATE_PATH, extra={
+        "title": title,
+        "audio_path": path,
+        "file_path": path,
+        "stopped_at": datetime.now().isoformat(timespec="seconds"),
+    })
+    log(f"⚠️ Daemon unresponsive; emergency-stopped and preserved recording: {path}")
+    return {"path": path, "duration": 0, "emergency": True} if path else None
+
+
 def daemon_stop():
+    rec = recording_info(read_state())
     resp = socket_send({"action": "stop"})
-    stop_realtime_transcriber(wait=True, graceful=True)
     if resp and resp.get("status") == "stopped":
+        # Do not let realtime transcription keep the UI stuck for minutes.
+        stop_realtime_transcriber(wait=True, graceful=False)
         dur = resp.get("duration", 0)
         path = resp.get("file", "")
         log(f"⏹ Recording stopped: {dur}s → {path}")
         return {"path": path, "duration": dur}
+
+    # Socket failure while state says daemon recording: stop quickly and keep file.
+    stop_realtime_transcriber(wait=True, graceful=False)
     detect_daemon_crash(resp)
+    result = emergency_stop_daemon(rec)
+    if result:
+        return result
     log(f"❌ Stop failed: {resp}")
     return None
 

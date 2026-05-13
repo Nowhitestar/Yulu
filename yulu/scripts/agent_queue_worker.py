@@ -94,6 +94,43 @@ def _render_summary_prompt(entry: dict[str, Any]) -> str:
     return SUMMARY_PROMPT.format(title=title, transcript=transcript, template_section=template_section)
 
 
+def _looks_like_agent_event_json(text: str) -> bool:
+    """Reject accidental agent-queue JSON returned by an LLM shim."""
+    s = (text or "").strip()
+    if not s.startswith("["):
+        return False
+    try:
+        data = json.loads(s)
+    except Exception:
+        return False
+    if not isinstance(data, list) or not data:
+        return False
+    event_types = {
+        "recording_started",
+        "recording_stopped",
+        "recording_crashed",
+        "transcript",
+        "summary_ready",
+        "summary_request",
+        "transcribing",
+        "realtime_transcribing",
+        "realtime_transcript_ready",
+        "realtime_transcript_error",
+    }
+    return all(isinstance(x, dict) and x.get("type") in event_types for x in data)
+
+
+def _is_valid_summary(text: str) -> bool:
+    """Basic guardrail before overwriting a meeting summary."""
+    s = (text or "").strip()
+    if len(s) < 500:
+        return False
+    if _looks_like_agent_event_json(s):
+        return False
+    required = ["## TL;DR", "## Discussion Points", "## Action Items"]
+    return all(section in s for section in required)
+
+
 def _run_llm(prompt: str, llm_command: list[str], timeout_sec: int) -> str:
     if not llm_command:
         raise RuntimeError("llm command is disabled or empty")
@@ -110,20 +147,40 @@ def _run_llm(prompt: str, llm_command: list[str], timeout_sec: int) -> str:
     output = (result.stdout or "").strip()
     if not output:
         raise RuntimeError("llm command produced empty output")
+    if not _is_valid_summary(output):
+        preview = output[:240].replace("\n", " ")
+        raise RuntimeError(f"llm command produced invalid summary: {preview}")
     return output + "\n"
 
 
 def _handle_summary_request(entry: dict[str, Any], llm_command: list[str], timeout_sec: int) -> bool:
     prompt = _render_summary_prompt(entry)
     summary_path = Path(str(entry.get("summary_path", ""))).expanduser()
+    transcript_path = Path(str(entry.get("transcript_path", ""))).expanduser()
     if not summary_path:
         raise ValueError("summary_path is missing")
     summary = _run_llm(prompt, llm_command, timeout_sec)
     summary_path.parent.mkdir(parents=True, exist_ok=True)
     summary_path.write_text(summary, encoding="utf-8")
+
+    html_path = ""
+    if transcript_path.exists():
+        try:
+            from html_artifact import write_meeting_summary_html
+            html_path = str(write_meeting_summary_html(
+                summary_path,
+                transcript_path,
+                summary_path.with_suffix(".html"),
+                title=str(entry.get("title") or summary_path.stem),
+            ))
+        except Exception as exc:
+            _log(f"html generation failed title={entry.get('title', '')!r}: {exc}")
+
     entry["status"] = "done"
     entry["processed_by"] = WORKER_NAME
     entry["processed_at"] = _now()
+    if html_path:
+        entry["html_path"] = html_path
     entry.pop("error", None)
     return True
 

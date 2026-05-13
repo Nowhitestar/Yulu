@@ -570,9 +570,18 @@ class SocketServer {
         Darwin.listen(sock, 5); chmod(SOCKET_PATH.path, 0o600)
         log("Socket ready")
         DispatchQueue.global(qos: .background).async { [weak self] in
-            while true {
-                let c = Darwin.accept(self?.sock ?? -1, nil, nil)
-                if c >= 0 { self?.handle(c); close(c) }
+            guard let self = self else { return }
+            while self.sock >= 0 {
+                let c = Darwin.accept(self.sock, nil, nil)
+                if c >= 0 {
+                    self.handle(c)
+                    close(c)
+                } else if errno == EINTR {
+                    continue
+                } else {
+                    log("Socket: accept failed errno=\(errno)")
+                    usleep(200_000)
+                }
             }
         }
     }

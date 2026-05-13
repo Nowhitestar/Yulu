@@ -1,169 +1,214 @@
 #!/usr/bin/env python3
-"""Yulu local health check."""
+"""Yulu development/runtime doctor.
+
+Read-only checks for the repository, local runtime, launchd/process leftovers,
+configuration, and required tools. This script must never mutate runtime state.
+"""
 
 from __future__ import annotations
 
+import argparse
 import json
+import os
 import shutil
 import socket
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
-CONFIG_DIR = Path.home() / ".config" / "yulu"
-CONFIG_PATH = CONFIG_DIR / "config.json"
-QUEUE_PATH = CONFIG_DIR / "agent-queue.json"
-SOCKET_PATH = CONFIG_DIR / "audio_daemon.sock"
+DEFAULT_SOURCE_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_RUNTIME_ROOT = Path.home() / ".yulu"
+DEFAULT_LEGACY_ROOT = Path.home() / ".openclaw/workspace/meeting-assistant/yulu"
+DEFAULT_CONFIG_DIR = Path.home() / ".config/yulu"
 
 
-def version_status() -> None:
+def _run(cmd: list[str], timeout: int = 5, cwd: Path | None = None) -> tuple[int, str, str]:
     try:
-        from version import format_version, version_info
-        line(True, "version", format_version(version_info()))
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, cwd=str(cwd) if cwd else None)
+        return result.returncode, result.stdout.strip(), result.stderr.strip()
     except Exception as exc:
-        line(None, "version", f"unavailable: {exc}")
+        return 999, "", str(exc)
 
 
-def line(ok: bool | None, name: str, detail: str = "") -> None:
-    mark = "OK" if ok is True else ("WARN" if ok is None else "FAIL")
-    suffix = f" — {detail}" if detail else ""
-    print(f"[{mark}] {name}{suffix}")
+def _git_info(root: Path) -> dict[str, Any]:
+    if not (root / ".git").exists():
+        return {"is_repo": False}
+    branch = _run(["git", "branch", "--show-current"], cwd=root)[1]
+    remote = _run(["git", "remote", "get-url", "origin"], cwd=root)[1]
+    status = _run(["git", "status", "--short"], cwd=root)[1].splitlines()
+    head = _run(["git", "rev-parse", "--short", "HEAD"], cwd=root)[1]
+    return {
+        "is_repo": True,
+        "branch": branch,
+        "remote": remote,
+        "head": head,
+        "dirty": bool(status),
+        "status": status,
+    }
 
 
-def load_config() -> dict:
-    if not CONFIG_PATH.exists():
-        line(False, "config", f"missing: {CONFIG_PATH}")
-        return {}
+def _check_command(name: str, args: list[str] | None = None) -> dict[str, Any]:
+    path = shutil.which(name)
+    check = {"name": name, "ok": bool(path), "path": path or ""}
+    if path and args:
+        code, out, err = _run([name, *args])
+        check.update({"returncode": code, "version": (out or err).splitlines()[0] if (out or err) else ""})
+    return check
+
+
+def _socket_status(sock_path: Path, timeout: float = 3.0) -> dict[str, Any]:
+    info: dict[str, Any] = {"path": str(sock_path), "exists": sock_path.exists(), "ok": False}
+    if not sock_path.exists():
+        return info
     try:
-        cfg = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
-        line(True, "config", str(CONFIG_PATH))
-        return cfg
-    except Exception as exc:
-        line(False, "config", f"invalid JSON: {exc}")
-        return {}
-
-
-def daemon_status() -> None:
-    if not SOCKET_PATH.exists():
-        line(False, "audio daemon", f"socket missing: {SOCKET_PATH}")
-        return
-    try:
-        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        sock.settimeout(2)
-        sock.connect(str(SOCKET_PATH))
-        sock.sendall(b'{"action":"status"}')
-        sock.shutdown(socket.SHUT_WR)
-        data = b""
-        while True:
-            chunk = sock.recv(4096)
-            if not chunk:
-                break
-            data += chunk
-        resp = json.loads(data.decode())
-    except Exception as exc:
-        line(False, "audio daemon", f"no response: {exc}")
-        return
-    finally:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+            s.settimeout(timeout)
+            s.connect(str(sock_path))
+            s.sendall(b'{"action":"status"}\n')
+            s.shutdown(socket.SHUT_WR)
+            data = s.recv(4096)
+        response = data.decode("utf-8", errors="replace").strip()
+        info["ok"] = True
+        info["response"] = response
         try:
-            sock.close()
+            parsed = json.loads(response)
+            info["recording"] = bool(parsed.get("recording"))
+            info["sysReady"] = parsed.get("sysReady")
+            info["micReady"] = parsed.get("micReady")
+            info["sysError"] = parsed.get("sysError", "")
+            info["micError"] = parsed.get("micError", "")
         except Exception:
             pass
-
-    ready = bool(resp.get("sysReady")) and bool(resp.get("micReady"))
-    detail = f"recording={resp.get('recording')} sysReady={resp.get('sysReady')} micReady={resp.get('micReady')}"
-    line(True if ready else None, "audio daemon", detail)
-
-
-def transcription_status(cfg: dict) -> None:
-    trans = cfg.get("transcription", {}) if isinstance(cfg, dict) else {}
-    mode = trans.get("post_recording_mode", "fast_summary")
-    engine = trans.get("final_engine", "whisper")
-    realtime = trans.get("realtime", {}) if isinstance(trans.get("realtime", {}), dict) else {}
-    line(True, "transcription mode", f"post_recording_mode={mode} final_engine={engine} realtime={realtime.get('engine', engine)}")
-    if engine == "mlx":
-        mlx = trans.get("mlx", {}) if isinstance(trans.get("mlx", {}), dict) else {}
-        py = Path(str(trans.get("mlx_python") or mlx.get("python") or CONFIG_DIR / "venv-mlx-whisper/bin/python")).expanduser()
-        model = trans.get("mlx_model") or mlx.get("model") or "mlx-community/whisper-large-v3-mlx"
-        line(True if py.exists() else False, "mlx python", str(py))
-        line(True, "mlx model", str(model))
-        return
-
-    command = trans.get("command") or []
-    whisper = command[0] if command else trans.get("whisper_cli", "whisper-cli")
-    model = trans.get("local_model_path", "")
-    if command:
-        for i, tok in enumerate(command):
-            if tok == "-m" and i + 1 < len(command):
-                model = command[i + 1]
-                break
-    model_path = Path(str(model)).expanduser() if model else None
-    whisper_ok = bool(shutil.which(str(whisper)))
-    model_ok = bool(model_path and model_path.exists())
-    line(True if whisper_ok else False, "whisper binary", str(whisper))
-    line(True if model_ok else False, "whisper model", str(model_path or "<unset>"))
-
-
-def llm_status(cfg: dict) -> None:
-    llm = cfg.get("llm", {}) if isinstance(cfg, dict) else {}
-    if not llm.get("enabled", True):
-        line(None, "llm", "disabled; fallback summary will be final")
-        return
-    cmd = llm.get("command")
-    if not cmd:
-        line(None, "llm", "no command; summary_request stays for an external agent")
-        return
-    binary = cmd[0] if isinstance(cmd, list) else str(cmd).split()[0]
-    line(True if shutil.which(binary) else False, "llm command", binary)
-
-
-def queue_status() -> None:
-    if not QUEUE_PATH.exists():
-        line(True, "agent queue", "empty")
-        return
-    try:
-        q = json.loads(QUEUE_PATH.read_text(encoding="utf-8"))
-        if not isinstance(q, list):
-            raise ValueError("queue is not a list")
     except Exception as exc:
-        line(False, "agent queue", f"invalid: {exc}")
-        return
-    pending = sum(1 for e in q if isinstance(e, dict) and e.get("type") == "summary_request" and e.get("status") not in {"done", "error"})
-    errors = sum(1 for e in q if isinstance(e, dict) and e.get("status") == "error")
-    line(True if errors == 0 else None, "agent queue", f"{pending} pending, {errors} error")
+        info["error"] = str(exc)
+    return info
 
 
-def calendar_status(cfg: dict) -> None:
-    calendars = cfg.get("calendars", []) if isinstance(cfg, dict) else []
-    enabled = [c for c in calendars if c.get("enabled")]
-    if not enabled:
-        line(None, "calendar", "disabled")
-        return
-    gog = shutil.which("gog")
-    cloudflared = shutil.which("cloudflared")
-    detail = f"{len(enabled)} enabled; gog={'yes' if gog else 'no'} cloudflared={'yes' if cloudflared else 'no'}"
-    line(True if gog else False, "calendar", detail)
+def _yulu_processes() -> list[str]:
+    code, out, _ = _run(["ps", "aux"], timeout=5)
+    if code != 0:
+        return []
+    needles = ("yulu", "Yulu.app", "audio_daemon", "transcribe.py", "realtime_transcribe", "mlx-whisper")
+    return [line for line in out.splitlines() if any(n in line for n in needles) and "doctor.py" not in line]
 
 
-def launchd_status() -> None:
-    try:
-        r = subprocess.run(["launchctl", "list"], capture_output=True, text=True, timeout=5)
-    except Exception as exc:
-        line(None, "launchd", str(exc))
-        return
-    labels = [x for x in ("com.yulu.audiodaemon", "com.yulu.scheduler", "com.yulu.detector", "com.yulu.agentqueue") if x in r.stdout]
-    line(True if labels else None, "launchd", ", ".join(labels) if labels else "no com.yulu services listed")
+def collect_report(
+    source_root: Path = DEFAULT_SOURCE_ROOT,
+    runtime_root: Path = DEFAULT_RUNTIME_ROOT,
+    legacy_root: Path = DEFAULT_LEGACY_ROOT,
+    config_dir: Path = DEFAULT_CONFIG_DIR,
+) -> dict[str, Any]:
+    source_root = Path(source_root).expanduser().resolve()
+    runtime_root = Path(runtime_root).expanduser()
+    legacy_root = Path(legacy_root).expanduser()
+    config_dir = Path(config_dir).expanduser()
+
+    processes = _yulu_processes()
+    legacy_processes = [p for p in processes if str(legacy_root) in p]
+    runtime_processes = [p for p in processes if str(runtime_root) in p]
+
+    checks = [
+        _check_command("python3", ["--version"]),
+        _check_command("ffmpeg", ["-version"]),
+        _check_command("ffprobe", ["-version"]),
+        _check_command("swiftc", ["--version"]),
+        _check_command("codex", ["--version"]),
+        _check_command("gh", ["--version"]),
+    ]
+
+    queue_path = config_dir / "agent-queue.json"
+    config_path = config_dir / "config.json"
+    queue_entries = None
+    if queue_path.exists():
+        try:
+            data = json.loads(queue_path.read_text(encoding="utf-8"))
+            queue_entries = len(data) if isinstance(data, list) else None
+        except Exception:
+            queue_entries = None
+
+    return {
+        "source_root": str(source_root),
+        "source_git": _git_info(source_root),
+        "runtime_root": str(runtime_root),
+        "runtime_exists": runtime_root.exists(),
+        "legacy_root": str(legacy_root),
+        "legacy_root_exists": legacy_root.exists(),
+        "config_dir": str(config_dir),
+        "config_exists": config_dir.exists(),
+        "config_path_exists": config_path.exists(),
+        "queue_path_exists": queue_path.exists(),
+        "queue_entries": queue_entries,
+        "socket": _socket_status(config_dir / "audio_daemon.sock"),
+        "processes": processes,
+        "legacy_processes": legacy_processes,
+        "runtime_processes": runtime_processes,
+        "checks": checks,
+    }
 
 
-def main() -> int:
-    version_status()
-    cfg = load_config()
-    daemon_status()
-    transcription_status(cfg)
-    llm_status(cfg)
-    queue_status()
-    calendar_status(cfg)
-    launchd_status()
-    return 0
+def _overall_ok(report: dict[str, Any]) -> bool:
+    required = ["python3"]
+    checks = {c["name"]: c for c in report.get("checks", [])}
+    if any(not checks.get(name, {}).get("ok") for name in required):
+        return False
+    if report.get("legacy_processes"):
+        return False
+    if not report.get("source_git", {}).get("is_repo"):
+        return False
+    return True
+
+
+def print_human(report: dict[str, Any]) -> None:
+    def mark(ok: bool) -> str:
+        return "✓" if ok else "!"
+
+    git = report["source_git"]
+    print("Yulu doctor")
+    print(f"{mark(git.get('is_repo', False))} source: {report['source_root']}")
+    if git.get("is_repo"):
+        dirty = "dirty" if git.get("dirty") else "clean"
+        print(f"  branch={git.get('branch')} head={git.get('head')} {dirty}")
+        print(f"  remote={git.get('remote')}")
+    print(f"{mark(report['runtime_exists'])} runtime: {report['runtime_root']}")
+    print(f"{mark(not report['legacy_processes'])} legacy root: {report['legacy_root']} exists={report['legacy_root_exists']} legacy_processes={len(report['legacy_processes'])}")
+    print(f"{mark(report['config_exists'])} config: {report['config_dir']} queue_entries={report['queue_entries']}")
+    sock = report["socket"]
+    print(f"{mark(sock.get('ok', False))} audio daemon socket: {sock.get('path')} exists={sock.get('exists')}")
+    if sock.get("ok") and (sock.get("sysReady") is not None or sock.get("micReady") is not None):
+        sys_part = f"sysReady={sock.get('sysReady')}"
+        mic_part = f"micReady={sock.get('micReady')}"
+        err_part = ""
+        if sock.get("sysError"):
+            err_part += f" sysError={sock.get('sysError')}"
+        if sock.get("micError"):
+            err_part += f" micError={sock.get('micError')}"
+        print(f"  {sys_part} {mic_part}{err_part}")
+        if sock.get("sysReady") is False:
+            print("  repair: yulu repair-permissions --reset")
+    for check in report["checks"]:
+        print(f"{mark(check['ok'])} {check['name']}: {check.get('path') or 'missing'}")
+    if report["legacy_processes"]:
+        print("\nLegacy Yulu processes detected:")
+        for line in report["legacy_processes"]:
+            print(f"  {line}")
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Read-only Yulu development/runtime doctor")
+    parser.add_argument("--json", action="store_true", help="print machine-readable JSON")
+    parser.add_argument("--source-root", type=Path, default=DEFAULT_SOURCE_ROOT)
+    parser.add_argument("--runtime-root", type=Path, default=DEFAULT_RUNTIME_ROOT)
+    parser.add_argument("--legacy-root", type=Path, default=DEFAULT_LEGACY_ROOT)
+    parser.add_argument("--config-dir", type=Path, default=DEFAULT_CONFIG_DIR)
+    args = parser.parse_args(argv)
+
+    report = collect_report(args.source_root, args.runtime_root, args.legacy_root, args.config_dir)
+    if args.json:
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+    else:
+        print_human(report)
+    return 0 if _overall_ok(report) else 1
 
 
 if __name__ == "__main__":

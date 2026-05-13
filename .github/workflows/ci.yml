@@ -44,8 +44,28 @@ jobs:
       - name: Python unit tests
         run: |
           set -euo pipefail
-          python3 -m pip install --user pytest
-          python3 -m pytest -q
+          python3 -m venv .venv-ci
+          . .venv-ci/bin/activate
+          python -m pip install --upgrade pip
+          python -m pip install pytest
+          python -m pytest -q
+
+      - name: Doctor JSON smoke test
+        run: |
+          set -euo pipefail
+          python3 yulu/scripts/doctor.py --json \
+            --source-root "$PWD" \
+            --runtime-root "$PWD" \
+            --legacy-root "$PWD/.missing-legacy" \
+            --config-dir "$PWD/.missing-config" \
+            >/tmp/yulu-doctor.json || true
+          python3 - <<'PY'
+          import json
+          data = json.load(open('/tmp/yulu-doctor.json'))
+          assert data['source_git']['is_repo'] is True
+          assert data['legacy_root_exists'] is False
+          print('doctor JSON OK')
+          PY
 
       - name: Version sanity
         run: |

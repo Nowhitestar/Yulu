@@ -250,6 +250,28 @@ def normalize_transcript_text(transcript, trans_cfg):
     return "\n".join(out).strip()
 
 
+def _looks_like_agent_event_json(text):
+    """Reject accidental agent-queue JSON events returned by an LLM shim."""
+    s = (text or "").strip()
+    if not s.startswith("["):
+        return False
+    try:
+        data = json.loads(s)
+    except Exception:
+        return False
+    if not isinstance(data, list) or not data:
+        return False
+    event_types = {
+        "transcript",
+        "summary_ready",
+        "transcribing",
+        "summary_request",
+        "realtime_transcribing",
+        "realtime_transcript_error",
+    }
+    return all(isinstance(x, dict) and x.get("type") in event_types for x in data)
+
+
 def refine_transcript(transcript, meeting_title, trans_cfg, llm_cfg):
     """Optional LLM cleanup for readability; keeps raw transcript separately."""
     transcript = normalize_transcript_text(transcript, trans_cfg)
@@ -287,7 +309,10 @@ def refine_transcript(transcript, meeting_title, trans_cfg, llm_cfg):
             timeout=int(cleanup_cfg.get("timeout_sec", llm_cfg.get("timeout_sec", 900))),
         )
         if result.returncode == 0 and result.stdout.strip():
-            return result.stdout.strip()
+            cleaned = result.stdout.strip()
+            if not _looks_like_agent_event_json(cleaned):
+                return cleaned
+            print("Transcript cleanup returned agent-event JSON; keeping deterministic transcript", file=sys.stderr)
         print(f"Transcript cleanup failed: {result.stderr}", file=sys.stderr)
     except Exception as e:
         print(f"Transcript cleanup error: {e}", file=sys.stderr)
@@ -330,7 +355,10 @@ def summarize(transcript, meeting_title, config):
             timeout=int(config.get("timeout_sec", 600)),
         )
         if result.returncode == 0:
-            return result.stdout.strip()
+            summary = result.stdout.strip()
+            if summary and not _looks_like_agent_event_json(summary):
+                return summary
+            print("LLM returned empty or agent-event JSON; falling back", file=sys.stderr)
         print(f"LLM failed: {result.stderr}", file=sys.stderr)
     except Exception as e:
         print(f"LLM error: {e}", file=sys.stderr)
@@ -516,17 +544,32 @@ def process_audio(audio_path):
         summary = fallback_summary(transcript, meeting_title)
         agent_should_finalize = bool(llm_enabled)
 
-    # 4. 保存摘要
+    # 4. 保存摘要（Markdown + HTML workbench）
     summary_path = audio_path.with_suffix(".summary.md")
     summary_path.write_text(summary, encoding="utf-8")
     print(f"✅ 纪要已保存: {summary_path}")
     print(f"Summary saved: {summary_path}")
+
+    summary_html_path = None
+    try:
+        from html_artifact import write_meeting_summary_html
+        summary_html_path = write_meeting_summary_html(
+            summary_path,
+            transcript_path,
+            audio_path.with_suffix(".summary.html"),
+            title=meeting_title,
+        )
+        print(f"✅ HTML 工作台已保存: {summary_html_path}")
+        print(f"Summary HTML saved: {summary_html_path}")
+    except Exception as e:
+        print(f"⚠️ HTML summary generation failed: {e}", file=sys.stderr)
+
     if agent_should_finalize:
         print("Summary status: draft_agent_pending")
         request_agent_summary(meeting_title, transcript_path, summary_path)
     else:
         print("Summary status: final")
-        _notify_agent("summary_ready", title=meeting_title, path=str(summary_path))
+        _notify_agent("summary_ready", title=meeting_title, path=str(summary_path), html_path=str(summary_html_path or ""))
 
     return str(transcript_path), str(summary_path)
 

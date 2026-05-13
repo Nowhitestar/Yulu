@@ -19,6 +19,7 @@
 #   yulu logs [name]          Tail logs (default: audio_daemon)
 #   yulu record start "title" Manual recording start
 #   yulu record stop          Manual recording stop
+#   yulu repair-permissions   Reset/open Screen & System Audio Recording permission helper
 #   yulu transcription ...    Switch transcription engine and post-recording mode
 #   yulu where                Print key paths (repo / config / recordings / launchagents)
 
@@ -68,6 +69,7 @@ Commands:
   logs [daemon]    Tail logs. Daemon = audio_daemon (default), scheduler, detector, calendar, agentqueue, realtime_transcribe
   record start "title"   Manually start a recording
   record stop            Manually stop the current recording
+  repair-permissions     Open/reset Screen & System Audio Recording permission helper
   transcription status   Show transcription engine + post-recording mode
   transcription mode fast|full
                     fast = realtime transcript -> polish -> summary
@@ -263,6 +265,10 @@ cmd_record() {
     esac
 }
 
+cmd_repair_permissions() {
+    python3 "$SCRIPT_DIR/repair_permissions.py" "$@"
+}
+
 cmd_transcription() {
     python3 "$SCRIPT_DIR/configure.py" transcription "$@"
 }
@@ -300,6 +306,7 @@ case "${1:-help}" in
     doctor)    shift; cmd_doctor "$@" ;;
     logs)      shift; cmd_logs "$@" ;;
     record)    shift; cmd_record "$@" ;;
+    repair-permissions|repair_permissions) shift; cmd_repair_permissions "$@" ;;
     transcription|transcribe) shift; cmd_transcription "$@" ;;
     where)     shift; cmd_where "$@" ;;
     help|-h|--help) usage ;;

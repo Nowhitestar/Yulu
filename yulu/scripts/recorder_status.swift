@@ -251,6 +251,11 @@ class AppDel: NSObject, NSApplicationDelegate {
         if fd < 0 { return nil }
         defer { Darwin.close(fd) }
 
+        // Never let a stale/unresponsive daemon freeze the floating window.
+        var tv = timeval(tv_sec: 1, tv_usec: 0)
+        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
+        setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
+
         var addr = sockaddr_un()
         addr.sun_family = sa_family_t(AF_UNIX)
         _ = sockPath.withCString { ptr in
@@ -263,7 +268,8 @@ class AppDel: NSObject, NSApplicationDelegate {
         }
         if ok != 0 { return nil }
         let payload = Data("{\"action\":\"status\"}".utf8)
-        _ = payload.withUnsafeBytes { ptr in Darwin.write(fd, ptr.baseAddress, payload.count) }
+        let wrote = payload.withUnsafeBytes { ptr in Darwin.write(fd, ptr.baseAddress, payload.count) }
+        if wrote <= 0 { return nil }
         shutdown(fd, SHUT_WR)
         var out = Data(); var buf = [UInt8](repeating: 0, count: 4096)
         while true {

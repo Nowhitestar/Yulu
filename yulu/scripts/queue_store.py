@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Shared agent queue helpers.
 
-The queue remains a JSON file for transparency, but writes are now locked and
-atomic so multiple Yulu processes do not overwrite each other's events.
+The queue remains a JSON file for transparency, but writes are locked and atomic
+so multiple Yulu processes do not overwrite each other's events.
 """
 
 from __future__ import annotations
