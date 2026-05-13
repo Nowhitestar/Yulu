@@ -35,6 +35,7 @@ yulu/scripts/audio_daemon
 .hermes/
 .agent/runs/
 .ci-build/
+.mcp/
 *.swp
 
 # Local recordings, transcripts, and agent state (per-user, never share)
