@@ -41,6 +41,29 @@ jobs:
             python3 -m py_compile "$f"
           done
 
+      - name: Python tests
+        run: |
+          set -euo pipefail
+          python3 -m pip install --quiet pytest
+          python3 -m pytest tests -q
+
+      - name: Doctor JSON smoke test
+        run: |
+          set -euo pipefail
+          python3 yulu/scripts/doctor.py --json \
+            --source-root "$PWD" \
+            --runtime-root "$PWD" \
+            --legacy-root "$PWD/.missing-legacy" \
+            --config-dir "$PWD/.missing-config" \
+            >/tmp/yulu-doctor.json || true
+          python3 - <<'PY'
+          import json
+          data = json.load(open('/tmp/yulu-doctor.json'))
+          assert data['source_git']['is_repo'] is True
+          assert data['legacy_root_exists'] is False
+          print('doctor JSON OK')
+          PY
+
       - name: Swift build (audio_daemon, window_scanner, recorder_status)
         run: |
           set -euo pipefail

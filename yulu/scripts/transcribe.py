@@ -2,20 +2,22 @@
 """
 转录音频并生成会议纪要。
 
-转录: mlx-whisper（final 优先）/ whisper.cpp（fallback + realtime）
-摘要: 默认优先使用本机 claude CLI 生成高质量纪要；也可配置外部命令。
+转录: whisper.cpp / mlx-whisper
+摘要: 有 llm.command 时直接生成；否则写 summary_request 交给 agent。
 
 依赖：
-  brew install whisper-cpp        # whisper-cli
-  npm i -g @anthropic-ai/claude-code  # claude-cli (OpenClaw 默认已装)
+  brew install whisper-cpp        # whisper-cli（非 MLX / fallback）
+  pip install mlx-whisper         # MLX 路线，仅 Apple Silicon 推荐
+  可选：配置任意读取 stdin、输出 Markdown 的 llm.command
 
 模型：
-  下载 ggml-medium.bin / ggml-large-v3.bin 到 ~/Models/whisper/
+  whisper.cpp 默认模型：~/.config/yulu/models/ggml-large-v3.bin
+  MLX 高质量模型：mlx-community/whisper-large-v3-mlx
 
 配置（config.json）：
 {
   "transcription": {
-    "command": ["whisper-cli", "-m", "/Users/x/Models/whisper/ggml-medium.bin",
+    "command": ["whisper-cli", "-m", "/Users/x/.config/yulu/models/ggml-large-v3.bin",
                 "-l", "zh", "-otxt", "-of", "{{output_stem}}", "{{input}}"]
   },
   "llm": {
@@ -43,16 +45,18 @@ CONFIG_PATH = Path.home() / ".config" / "yulu" / "config.json"
 
 DEFAULT_TRANSCRIBE_CMD = [
     "whisper-cli",
-    "-m", str(Path.home() / "Models/whisper/ggml-medium.bin"),
+    "-m", str(Path.home() / ".config/yulu/models/ggml-large-v3.bin"),
     "-l", "zh",
     "-otxt",
     "-of", "{{output_stem}}",
     "{{input}}",
 ]
 
-DEFAULT_LLM_CMD = ["claude", "--print"]
+DEFAULT_LLM_CMD: list[str] = []
 DEFAULT_MLX_PYTHON = str(Path.home() / ".config/yulu/venv-mlx-whisper/bin/python")
-DEFAULT_MLX_MODEL = "mlx-community/whisper-large-v3-turbo"
+DEFAULT_MLX_MODEL = "mlx-community/whisper-large-v3-mlx"
+FAST_POST_RECORDING_MODE = "fast_summary"
+FULL_POST_RECORDING_MODE = "full_transcribe"
 
 DEFAULT_GLOSSARY = [
     "AgentKey", "OpenClaw", "OpenAI", "Claude", "Cursor", "Deal Hub",
@@ -104,7 +108,19 @@ def render_cmd(template, **vars):
 def transcribe(audio_path, config):
     """用 whisper-cli 转录。返回转录文本。"""
     audio_path = Path(audio_path).resolve()
-    cmd_template = config.get("command") or DEFAULT_TRANSCRIBE_CMD
+    cmd_template = config.get("command")
+    if not cmd_template:
+        whisper_cli = config.get("whisper_cli") or "whisper-cli"
+        model_path = config.get("local_model_path") or str(Path.home() / ".config/yulu/models/ggml-large-v3.bin")
+        language = config.get("language") or "zh"
+        cmd_template = [
+            whisper_cli,
+            "-m", str(Path(model_path).expanduser()),
+            "-l", language,
+            "-otxt",
+            "-of", "{{output_stem}}",
+            "{{input}}",
+        ]
 
     # whisper-cli 的 -otxt -of <stem> 会写到 <stem>.txt
     output_stem = audio_path.with_suffix("").as_posix() + ".whisper"
@@ -145,6 +161,7 @@ def transcribe_mlx(audio_path, config, meeting_title=""):
     mlx_cfg = config.get("mlx", {}) if isinstance(config.get("mlx", {}), dict) else {}
     py = config.get("mlx_python") or mlx_cfg.get("python") or DEFAULT_MLX_PYTHON
     model = config.get("mlx_model") or mlx_cfg.get("model") or DEFAULT_MLX_MODEL
+    language = config.get("language") or mlx_cfg.get("language") or "zh"
     if not Path(py).exists():
         raise RuntimeError(f"mlx-whisper python not found: {py}")
 
@@ -156,10 +173,11 @@ from pathlib import Path
 import mlx_whisper
 
 audio, model, prompt, out = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+language = sys.argv[5]
 res = mlx_whisper.transcribe(
     audio,
     path_or_hf_repo=model,
-    language="zh",
+    language=language,
     task="transcribe",
     verbose=False,
     initial_prompt=prompt,
@@ -169,8 +187,8 @@ res = mlx_whisper.transcribe(
 )
 Path(out).write_text(json.dumps(res, ensure_ascii=False), encoding="utf-8")
 """
-    cmd = [py, "-c", code, str(audio_path), model, prompt, str(out_json)]
-    print(f"🎙️ mlx-whisper: {shlex.join([py, '-c', '<code>', str(audio_path), model, '<prompt>', str(out_json)])}")
+    cmd = [py, "-c", code, str(audio_path), model, prompt, str(out_json), language]
+    print(f"🎙️ mlx-whisper: {shlex.join([py, '-c', '<code>', str(audio_path), model, '<prompt>', str(out_json), language])}")
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=int(config.get("timeout_sec", 7200)))
     if result.returncode != 0:
         out_json.unlink(missing_ok=True)
@@ -232,6 +250,28 @@ def normalize_transcript_text(transcript, trans_cfg):
     return "\n".join(out).strip()
 
 
+def _looks_like_agent_event_json(text):
+    """Reject accidental agent-queue JSON events returned by an LLM shim."""
+    s = (text or "").strip()
+    if not s.startswith("["):
+        return False
+    try:
+        data = json.loads(s)
+    except Exception:
+        return False
+    if not isinstance(data, list) or not data:
+        return False
+    event_types = {
+        "transcript",
+        "summary_ready",
+        "transcribing",
+        "summary_request",
+        "realtime_transcribing",
+        "realtime_transcript_error",
+    }
+    return all(isinstance(x, dict) and x.get("type") in event_types for x in data)
+
+
 def refine_transcript(transcript, meeting_title, trans_cfg, llm_cfg):
     """Optional LLM cleanup for readability; keeps raw transcript separately."""
     transcript = normalize_transcript_text(transcript, trans_cfg)
@@ -269,7 +309,10 @@ def refine_transcript(transcript, meeting_title, trans_cfg, llm_cfg):
             timeout=int(cleanup_cfg.get("timeout_sec", llm_cfg.get("timeout_sec", 900))),
         )
         if result.returncode == 0 and result.stdout.strip():
-            return result.stdout.strip()
+            cleaned = result.stdout.strip()
+            if not _looks_like_agent_event_json(cleaned):
+                return cleaned
+            print("Transcript cleanup returned agent-event JSON; keeping deterministic transcript", file=sys.stderr)
         print(f"Transcript cleanup failed: {result.stderr}", file=sys.stderr)
     except Exception as e:
         print(f"Transcript cleanup error: {e}", file=sys.stderr)
@@ -279,13 +322,13 @@ def refine_transcript(transcript, meeting_title, trans_cfg, llm_cfg):
 def summarize(transcript, meeting_title, config):
     """生成结构化纪要。
 
-    如果显式配置了外部命令则调用；否则默认使用本机 claude CLI。
+    如果显式配置了外部命令则调用；否则返回 None，交给 agent queue。
     返回 markdown 字符串；None 表示 LLM 不可用，需要更弱的本地规则兜底。
     """
     cmd_template = config.get("command") or DEFAULT_LLM_CMD
 
     if not cmd_template or cmd_template == [""]:
-        print("🤖 LLM 已禁用，使用本地规则摘要兜底...")
+        print("🤖 未配置 llm.command，写入 agent queue 后使用本地规则草稿...")
         return None
 
     if cmd_template[0] == "claude":
@@ -312,7 +355,10 @@ def summarize(transcript, meeting_title, config):
             timeout=int(config.get("timeout_sec", 600)),
         )
         if result.returncode == 0:
-            return result.stdout.strip()
+            summary = result.stdout.strip()
+            if summary and not _looks_like_agent_event_json(summary):
+                return summary
+            print("LLM returned empty or agent-event JSON; falling back", file=sys.stderr)
         print(f"LLM failed: {result.stderr}", file=sys.stderr)
     except Exception as e:
         print(f"LLM error: {e}", file=sys.stderr)
@@ -403,6 +449,43 @@ def request_agent_summary(meeting_title, transcript_path, summary_path):
     )
 
 
+def normalize_post_recording_mode(value):
+    """Return the configured post-recording mode with friendly aliases."""
+    raw = str(value or FAST_POST_RECORDING_MODE).strip().lower().replace("-", "_")
+    aliases = {
+        "fast": FAST_POST_RECORDING_MODE,
+        "quick": FAST_POST_RECORDING_MODE,
+        "realtime": FAST_POST_RECORDING_MODE,
+        "realtime_polish": FAST_POST_RECORDING_MODE,
+        "realtime_summary": FAST_POST_RECORDING_MODE,
+        "fast_summary": FAST_POST_RECORDING_MODE,
+        "full": FULL_POST_RECORDING_MODE,
+        "quality": FULL_POST_RECORDING_MODE,
+        "final": FULL_POST_RECORDING_MODE,
+        "full_transcribe": FULL_POST_RECORDING_MODE,
+        "final_transcribe": FULL_POST_RECORDING_MODE,
+    }
+    return aliases.get(raw, raw if raw in {FAST_POST_RECORDING_MODE, FULL_POST_RECORDING_MODE} else FAST_POST_RECORDING_MODE)
+
+
+def read_realtime_transcript(path):
+    if not path.exists():
+        return None
+    text = path.read_text(encoding="utf-8").strip()
+    return text or None
+
+
+def final_transcribe_audio(audio_path, trans_cfg, meeting_title):
+    engine = trans_cfg.get("final_engine", "whisper")
+    if engine == "mlx":
+        try:
+            return transcribe_mlx(audio_path, trans_cfg, meeting_title)
+        except Exception as e:
+            print(f"⚠️ mlx-whisper failed, fallback: {e}", file=sys.stderr)
+            return None
+    return transcribe(audio_path, trans_cfg)
+
+
 def process_audio(audio_path):
     config = load_config()
     trans_cfg = config.get("transcription", {})
@@ -416,22 +499,28 @@ def process_audio(audio_path):
     meeting_title = audio_path.stem.rsplit("_", 1)[0].replace("_", " ")
     print(f"📁 处理: {audio_path.name}（标题: {meeting_title}）")
 
-    # 1. 转录。Final transcript 优先跑整段 mlx-whisper；realtime 只作为预览/兜底。
+    # 1. 转录。fast_summary 使用录制中持续生成的 realtime transcript；
+    # full_transcribe 则在停止后对整段音频重新跑最终模型。
     raw_transcript_path = audio_path.with_suffix(".raw.transcript.txt")
     realtime_transcript_path = audio_path.with_suffix(".realtime.transcript.txt")
-    engine = trans_cfg.get("final_engine", "mlx")
     transcript = None
-    if engine == "mlx":
-        try:
-            transcript = transcribe_mlx(audio_path, trans_cfg, meeting_title)
-        except Exception as e:
-            print(f"⚠️ mlx-whisper failed, fallback: {e}", file=sys.stderr)
-    if transcript is None:
-        if realtime_transcript_path.exists() and realtime_transcript_path.read_text(encoding="utf-8").strip():
-            print(f"📝 使用实时转写结果兜底: {realtime_transcript_path}")
-            transcript = realtime_transcript_path.read_text(encoding="utf-8").strip()
+    post_mode = normalize_post_recording_mode(trans_cfg.get("post_recording_mode"))
+
+    if post_mode == FAST_POST_RECORDING_MODE:
+        transcript = read_realtime_transcript(realtime_transcript_path)
+        if transcript:
+            print(f"⚡ 使用实时转写结果进行清理和摘要: {realtime_transcript_path}")
         else:
-            transcript = transcribe(audio_path, trans_cfg)
+            print("⚠️ 未找到可用实时转写，自动回退到完整转录", file=sys.stderr)
+
+    if transcript is None:
+        transcript = final_transcribe_audio(audio_path, trans_cfg, meeting_title)
+        if transcript is None:
+            transcript = read_realtime_transcript(realtime_transcript_path)
+            if transcript:
+                print(f"📝 完整转录失败，使用实时转写结果兜底: {realtime_transcript_path}")
+            else:
+                transcript = transcribe(audio_path, trans_cfg)
 
     raw_transcript_path.write_text(transcript, encoding="utf-8")
     transcript = refine_transcript(transcript, meeting_title, trans_cfg, llm_cfg)
@@ -446,25 +535,41 @@ def process_audio(audio_path):
 
     # 3. 摘要
     summary = None
-    if llm_cfg.get("enabled", True):
+    llm_enabled = llm_cfg.get("enabled", True)
+    if llm_enabled:
         summary = summarize(transcript, meeting_title, llm_cfg)
     agent_should_finalize = False
     if summary is None:
-        # LLM 不可用时才退回本地规则摘要；同时排队给 OpenClaw agent 后续尝试覆盖。
+        # LLM 不可用时先写本地规则摘要；如果 llm.enabled=true，则排队给 agent 后续覆盖。
         summary = fallback_summary(transcript, meeting_title)
-        agent_should_finalize = True
+        agent_should_finalize = bool(llm_enabled)
 
-    # 4. 保存摘要
+    # 4. 保存摘要（Markdown + HTML workbench）
     summary_path = audio_path.with_suffix(".summary.md")
     summary_path.write_text(summary, encoding="utf-8")
     print(f"✅ 纪要已保存: {summary_path}")
     print(f"Summary saved: {summary_path}")
+
+    summary_html_path = None
+    try:
+        from html_artifact import write_meeting_summary_html
+        summary_html_path = write_meeting_summary_html(
+            summary_path,
+            transcript_path,
+            audio_path.with_suffix(".summary.html"),
+            title=meeting_title,
+        )
+        print(f"✅ HTML 工作台已保存: {summary_html_path}")
+        print(f"Summary HTML saved: {summary_html_path}")
+    except Exception as e:
+        print(f"⚠️ HTML summary generation failed: {e}", file=sys.stderr)
+
     if agent_should_finalize:
         print("Summary status: draft_agent_pending")
         request_agent_summary(meeting_title, transcript_path, summary_path)
     else:
         print("Summary status: final")
-        _notify_agent("summary_ready", title=meeting_title, path=str(summary_path))
+        _notify_agent("summary_ready", title=meeting_title, path=str(summary_path), html_path=str(summary_html_path or ""))
 
     return str(transcript_path), str(summary_path)
 

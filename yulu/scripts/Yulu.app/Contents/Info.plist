@@ -16,11 +16,17 @@
 	<string>Yulu</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>0.5.0</string>
+	<key>CFBundleVersion</key>
+	<string>100</string>
 	<key>LSUIElement</key>
 	<true/>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Yulu records microphone audio for meeting notes.</string>
 	<key>NSScreenCaptureUsageDescription</key>
 	<string>Yulu captures system audio for meeting notes.</string>
+	<key>YuluVersion</key>
+	<string>0.5.0-dev</string>
 </dict>
 </plist>

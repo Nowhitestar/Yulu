@@ -66,8 +66,11 @@ func log(_ msg: String) {
 
 func notifyAgent(_ eventType: String, _ fields: [String: Any] = [:]) {
     var entry = fields
+    entry["id"] = UUID().uuidString
     entry["type"] = eventType
     entry["ts"] = ISO8601DateFormatter().string(from: Date())
+
+    try? FileManager.default.createDirectory(at: CONFIG_DIR, withIntermediateDirectories: true)
 
     var queue: [[String: Any]] = []
     if let data = try? Data(contentsOf: QUEUE_PATH),
@@ -76,8 +79,7 @@ func notifyAgent(_ eventType: String, _ fields: [String: Any] = [:]) {
     }
     queue.append(entry)
     if let data = try? JSONSerialization.data(withJSONObject: queue, options: [.prettyPrinted]) {
-        try? FileManager.default.createDirectory(at: CONFIG_DIR, withIntermediateDirectories: true)
-        try? data.write(to: QUEUE_PATH)
+        try? data.write(to: QUEUE_PATH, options: [.atomic])
     }
 }
 
@@ -179,10 +181,19 @@ func normalizeToDBFS(_ samples: [Int16], targetDB: Float = -20) -> [Int16] {
 
 func writeState(recording: Bool, title: String = "", path: String = "") {
     let df = ISO8601DateFormatter()
-    let d: [String: Any] = ["recording": recording, "title": title, "file_path": path,
-                             "updated_at": df.string(from: Date())]
+    let d: [String: Any] = [
+        "version": 2,
+        "recording": recording,
+        "status": recording ? "recording" : "idle",
+        "title": recording ? title : "",
+        "file_path": recording ? path : "",
+        "audio_path": recording ? path : "",
+        "backend": "daemon",
+        "started_at": recording ? df.string(from: Date()) : "",
+        "updated_at": df.string(from: Date()),
+    ]
     if let data = try? JSONSerialization.data(withJSONObject: d, options: .prettyPrinted) {
-        try? data.write(to: STATE_PATH)
+        try? data.write(to: STATE_PATH, options: [.atomic])
     }
 }
 
@@ -213,7 +224,6 @@ class AudioRecorder {
         sysBuf = []; micBuf = []; fadePos = 0
         writeState(recording: true, title: title, path: url.path)
         log("🎙 \(fn)")
-        notifyAgent("recording_started", ["title": title, "path": url.path])
         startSilenceMonitor()
         return url.path
     }
@@ -229,9 +239,6 @@ class AudioRecorder {
         writer?.finalize(); writer = nil
         writeState(recording: false)
         log("⏹ \(dur)s")
-        if let p = p {
-            notifyAgent("recording_stopped", ["path": p, "duration": dur])
-        }
         return (p, dur)
     }
 
@@ -560,12 +567,21 @@ class SocketServer {
             $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { Darwin.bind(sock, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) }
         }
         guard ok == 0 else { log("Socket: bind \(ok)"); close(sock); sock = -1; return }
-        Darwin.listen(sock, 5); chmod(SOCKET_PATH.path, 0o666)
+        Darwin.listen(sock, 5); chmod(SOCKET_PATH.path, 0o600)
         log("Socket ready")
         DispatchQueue.global(qos: .background).async { [weak self] in
-            while true {
-                let c = Darwin.accept(self?.sock ?? -1, nil, nil)
-                if c >= 0 { self?.handle(c); close(c) }
+            guard let self = self else { return }
+            while self.sock >= 0 {
+                let c = Darwin.accept(self.sock, nil, nil)
+                if c >= 0 {
+                    self.handle(c)
+                    close(c)
+                } else if errno == EINTR {
+                    continue
+                } else {
+                    log("Socket: accept failed errno=\(errno)")
+                    usleep(200_000)
+                }
             }
         }
     }

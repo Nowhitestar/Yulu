@@ -21,6 +21,15 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+from state_store import (
+    is_recording_active,
+    load_state as load_recording_state,
+    recording_info,
+    save_state as save_recording_state,
+    set_recording_started,
+    set_recording_stopped,
+)
+
 try:
     from agent_notify import notify
 except Exception:
@@ -82,16 +91,11 @@ def socket_send(cmd):
 
 
 def read_state():
-    if not STATE_PATH.exists():
-        return {}
-    try:
-        return json.loads(STATE_PATH.read_text())
-    except Exception:
-        return {}
+    return load_recording_state(STATE_PATH)
 
 
 def write_state(state):
-    STATE_PATH.write_text(json.dumps(state, indent=2, ensure_ascii=False))
+    save_recording_state(state, STATE_PATH)
 
 
 def realtime_enabled():
@@ -129,24 +133,45 @@ def stop_realtime_transcriber(wait=True, graceful=False):
         return
     try:
         pid = int(REALTIME_PID_PATH.read_text().strip())
-        if wait:
-            deadline = time.time() + (180 if graceful else 20)
+
+        def alive():
+            try:
+                os.kill(pid, 0)
+                return True
+            except ProcessLookupError:
+                return False
+
+        def wait_until_dead(seconds):
+            deadline = time.time() + seconds
             while time.time() < deadline:
-                try:
-                    os.kill(pid, 0)
-                    time.sleep(0.5)
-                except ProcessLookupError:
+                if not alive():
                     REALTIME_PID_PATH.unlink(missing_ok=True)
-                    return
-        os.kill(pid, signal.SIGTERM)
-        if wait:
-            deadline = time.time() + 20
-            while time.time() < deadline:
+                    return True
+                time.sleep(0.5)
+            return not alive()
+
+        if wait and wait_until_dead(180 if graceful else 20):
+            return
+
+        # realtime_transcribe.py is launched with start_new_session=True and can be
+        # blocked inside an mlx-whisper child process. Its SIGTERM handler only
+        # sets a flag, so a plain os.kill(pid, SIGTERM) can leave the process
+        # group alive and keep appending to the realtime transcript after the
+        # recording has stopped. Kill the whole process group, then escalate.
+        try:
+            os.killpg(pid, signal.SIGTERM)
+        except Exception:
+            os.kill(pid, signal.SIGTERM)
+
+        if wait and not wait_until_dead(20):
+            try:
+                os.killpg(pid, signal.SIGKILL)
+            except Exception:
                 try:
-                    os.kill(pid, 0)
-                    time.sleep(0.5)
-                except ProcessLookupError:
-                    break
+                    os.kill(pid, signal.SIGKILL)
+                except Exception:
+                    pass
+            wait_until_dead(5)
     except Exception:
         pass
     REALTIME_PID_PATH.unlink(missing_ok=True)
@@ -159,21 +184,20 @@ def detect_daemon_crash(resp=None):
     should point to a recoverable partial recording. We still must tell the user.
     """
     state = read_state()
-    if not state.get("recording"):
+    if not is_recording_active(state):
         return False
-    if state.get("backend") == "sox":
+    rec = recording_info(state)
+    if rec.get("backend") == "sox":
         return False
     socket_missing = resp is None or not SOCKET_PATH.exists()
     if not socket_missing:
         return False
-    title = state.get("title", "")
-    path = state.get("file_path", "")
+    title = rec.get("title", "")
+    path = rec.get("audio_path") or rec.get("file_path", "")
     log(f"⚠️ 检测到 Yulu 异常退出，录音状态残留: {title} → {path}")
     stop_realtime_transcriber(wait=True)
     notify("recording_crashed", title=title, path=path, message="Yulu 异常退出，已保留可恢复的部分录音文件。")
-    state["recording"] = False
-    state["crashed_at"] = datetime.now().isoformat()
-    write_state(state)
+    set_recording_stopped(status="crashed", path=STATE_PATH, extra={"crashed_at": datetime.now().isoformat()})
     return True
 
 
@@ -191,15 +215,70 @@ def daemon_start(title):
     return False
 
 
+def emergency_stop_daemon(rec=None):
+    """Best-effort stop when the Swift daemon socket is dead/unresponsive.
+
+    The daemon patches the WAV header every few seconds, so terminating it is
+    preferable to leaving recording stuck forever. Keep the recorded file path
+    from state so downstream transcription can still proceed.
+    """
+    rec = rec or recording_info(read_state())
+    path = rec.get("audio_path") or rec.get("file_path", "")
+    title = rec.get("title", "")
+    patterns = ["Yulu.app/Contents/MacOS/audio_daemon", "/scripts/audio_daemon"]
+    for pat in patterns:
+        try:
+            out = subprocess.run(["pgrep", "-f", pat], capture_output=True, text=True, timeout=2).stdout.split()
+        except Exception:
+            out = []
+        for s in out:
+            try:
+                pid = int(s)
+                try:
+                    os.kill(pid, signal.SIGTERM)
+                except ProcessLookupError:
+                    continue
+            except Exception:
+                pass
+    time.sleep(1)
+    for pat in patterns:
+        try:
+            out = subprocess.run(["pgrep", "-f", pat], capture_output=True, text=True, timeout=2).stdout.split()
+        except Exception:
+            out = []
+        for s in out:
+            try:
+                pid = int(s)
+                os.kill(pid, signal.SIGKILL)
+            except Exception:
+                pass
+    set_recording_stopped(status="stopped_emergency_daemon_unresponsive", path=STATE_PATH, extra={
+        "title": title,
+        "audio_path": path,
+        "file_path": path,
+        "stopped_at": datetime.now().isoformat(timespec="seconds"),
+    })
+    log(f"⚠️ Daemon unresponsive; emergency-stopped and preserved recording: {path}")
+    return {"path": path, "duration": 0, "emergency": True} if path else None
+
+
 def daemon_stop():
+    rec = recording_info(read_state())
     resp = socket_send({"action": "stop"})
-    stop_realtime_transcriber(wait=True, graceful=True)
     if resp and resp.get("status") == "stopped":
+        # Do not let realtime transcription keep the UI stuck for minutes.
+        stop_realtime_transcriber(wait=True, graceful=False)
         dur = resp.get("duration", 0)
         path = resp.get("file", "")
         log(f"⏹ Recording stopped: {dur}s → {path}")
         return {"path": path, "duration": dur}
+
+    # Socket failure while state says daemon recording: stop quickly and keep file.
+    stop_realtime_transcriber(wait=True, graceful=False)
     detect_daemon_crash(resp)
+    result = emergency_stop_daemon(rec)
+    if result:
+        return result
     log(f"❌ Stop failed: {resp}")
     return None
 
@@ -251,14 +330,7 @@ def sox_start(title):
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     output = output_dir / f"{safe}_{timestamp}.wav"
 
-    state = {
-        "recording": True,
-        "backend": "sox",
-        "title": title,
-        "file_path": str(output),
-        "started_at": datetime.now().isoformat(),
-    }
-    STATE_PATH.write_text(json.dumps(state, indent=2))
+    set_recording_started(title, str(output), backend="sox", path=STATE_PATH)
 
     listen_cmd = [
         "sox", "-q",
@@ -294,8 +366,7 @@ def sox_stop():
         except Exception:
             pass
 
-    state = {"recording": False, "title": "", "file_path": ""}
-    STATE_PATH.write_text(json.dumps(state, indent=2))
+    set_recording_stopped(path=STATE_PATH)
     stop_realtime_transcriber(wait=True, graceful=True)
 
     log("⏹ 录制已停止")
@@ -303,12 +374,7 @@ def sox_stop():
 
 
 def sox_status():
-    state = {"recording": False, "title": ""}
-    if STATE_PATH.exists():
-        try:
-            state = json.loads(STATE_PATH.read_text())
-        except Exception:
-            pass
+    state = read_state()
     if (CONFIG_DIR / ".recording_pid").exists():
         state["recording"] = True
     return state
@@ -334,8 +400,8 @@ def main():
                 log("⚠️ Yulu 未运行，切换到 SoX 后端")
                 sox_start(title)
         elif cmd == "stop":
-            state = read_state()
-            if state.get("backend") == "sox":
+            rec = recording_info(read_state())
+            if rec.get("backend") == "sox":
                 sox_stop()
             else:
                 result = daemon_stop()
