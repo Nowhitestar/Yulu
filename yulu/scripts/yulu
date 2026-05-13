@@ -17,6 +17,7 @@
 #   yulu logs [name]          Tail logs (default: audio_daemon)
 #   yulu record start "title" Manual recording start
 #   yulu record stop          Manual recording stop
+#   yulu repair-permissions   Reset/open Screen & System Audio Recording permission helper
 #   yulu where                Print key paths (repo / config / recordings / launchagents)
 
 set -e
@@ -63,6 +64,7 @@ Commands:
   logs [daemon]    Tail logs. Daemon = audio_daemon (default), scheduler, detector, calendar, agentqueue, realtime_transcribe
   record start "title"   Manually start a recording
   record stop            Manually stop the current recording
+  repair-permissions     Open/reset Screen & System Audio Recording permission helper
   where            Print key paths
   help             Show this help
 
@@ -242,6 +244,10 @@ cmd_record() {
     esac
 }
 
+cmd_repair_permissions() {
+    python3 "$SCRIPT_DIR/repair_permissions.py" "$@"
+}
+
 cmd_where() {
     echo "Repo (code):       $REPO_DIR"
     echo "Config:            $CONFIG_DIR"
@@ -273,6 +279,7 @@ case "${1:-help}" in
     status)    shift; cmd_status "$@" ;;
     logs)      shift; cmd_logs "$@" ;;
     record)    shift; cmd_record "$@" ;;
+    repair-permissions|repair_permissions) shift; cmd_repair_permissions "$@" ;;
     where)     shift; cmd_where "$@" ;;
     help|-h|--help) usage ;;
     *)         err "Unknown command: $1"; echo; usage; exit 1 ;;

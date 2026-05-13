@@ -184,6 +184,8 @@ def print_human(report: dict[str, Any]) -> None:
         if sock.get("micError"):
             err_part += f" micError={sock.get('micError')}"
         print(f"  {sys_part} {mic_part}{err_part}")
+        if sock.get("sysReady") is False:
+            print("  repair: yulu repair-permissions --reset")
     for check in report["checks"]:
         print(f"{mark(check['ok'])} {check['name']}: {check.get('path') or 'missing'}")
     if report["legacy_processes"]:

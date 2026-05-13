@@ -64,11 +64,12 @@ cd ~/.yulu
 make doctor              # 只读检查 source/runtime/legacy process/socket/tools
 make test                # py_compile + pytest + Swift build
 make dev-install-dry-run # 不改运行态；录音中会拒绝
+make dev-install         # 真实迁移/reload launchd 到当前 repo runtime
 make sync-skill-dry-run  # 预览 skill 同步
 make sync-skill          # 同步到 ~/.hermes 和 ~/Documents/Codebase/l-skills
 ```
 
-当前 hygiene branch：`chore/yulu-repo-hygiene`，本地 commit `b1e2513` 添加了 Makefile、doctor、dev_install dry-run、sync_skill、queue_store、测试、CI 和开发文档。后续迁移 launchd/runtime 前，先让 `make doctor` 明确显示旧 OpenClaw 进程；不要直接手工 patch 旧路径作为最终方案。
+当前 hygiene branch：`chore/yulu-repo-hygiene`，PR `https://github.com/Nowhitestar/Yulu/pull/15`。已加入 Makefile、doctor、dev_install、repair_permissions、sync_skill、queue_store/state_store、HTML artifact、测试、CI 和开发文档。`make dev-install` 可执行真实迁移：录音中拒绝安装，编译 helper，渲染并 reload LaunchAgents，停止旧 OpenClaw 进程，把运行态切到 `~/.yulu/yulu/scripts/`。迁移后用 `make doctor` 验证 legacy_processes=0；若 `sysReady=false`，先跑 `yulu repair-permissions`，必要时再跑 `yulu repair-permissions --reset` 并在系统设置里手动启用 Yulu。
 
 第三方 code CLI 协作规则：每次只给一个窄任务，写 `.agent/tasks/<slug>.md`，一个 agent 一个 branch/worktree，要求跑 `make test` 和必要 smoke test；雷子负责审 diff，检查是否误提交 config、录音、transcript、日志、密钥。
 
@@ -170,6 +171,7 @@ Yulu 纪要现在默认保留两种产物：
 
 ## 已知排障点
 
+- 如果 `sysReady=false` 且 `sysError` 是 `no display` 或 TCC 拒绝，先跑 `yulu repair-permissions`；它会重启 audio daemon 并打开 Screen & System Audio Recording 设置页。若需要清掉旧授权状态，再跑 `yulu repair-permissions --reset`，然后在系统设置里手动启用 Yulu。
 - 如果 `.transcript.txt` 或 `.summary.md` 里只有类似 `[{"type":"transcript"...}]` / `summary_ready` / `realtime_transcript_error` 的 JSON 数组，这是 LLM shim/Codex 或 realtime 转写错误事件被误当正文。应检查 `transcribe.py` 的 `_looks_like_agent_event_json`，把所有 agent-queue event type 加进拒绝名单；遇到这种输出必须拒绝并保留原 transcript / fallback summary，不能覆盖成 JSON。
 - 如果录音停止后 `realtime_transcribe.py` 还在跑，通常是它卡在 `mlx-whisper` 子进程里；`record_audio.py` 需要 kill 整个 process group（`start_new_session=True` 对应 `os.killpg`），否则 fast_summary 会读到不完整 realtime transcript。
 - 如果浮窗卡死、点不了停止，但 wav 文件仍在增长：常见根因是 Swift `audio_daemon` 进程活着但 Unix socket accept/read 不响应。排障顺序：`record_audio.py status`/`nc` 验证 socket；检查 `.state.json` 和 wav mtime/size；若 socket 失联，先保留 wav，kill `recorder_status`、`realtime_transcribe.py` process group、卡住的 `mlx_whisper`、`Yulu.app/Contents/MacOS/audio_daemon`，再把 state 标成 stopped/crashed。修复点：`recorder_status.swift` 的 socket read/write 必须设置 1s `SO_RCVTIMEO`/`SO_SNDTIMEO`，避免 UI 主线程阻塞；`record_audio.py stop` 应有 `emergency_stop_daemon()` 兜底，daemon 不响应时终止 daemon 并保留录音路径；`audio_daemon.swift` 的 accept loop 不要用会失效的 weak self 静默退出，失败要 log errno。
