@@ -57,7 +57,7 @@ def _check_command(name: str, args: list[str] | None = None) -> dict[str, Any]:
     return check
 
 
-def _socket_status(sock_path: Path, timeout: float = 1.0) -> dict[str, Any]:
+def _socket_status(sock_path: Path, timeout: float = 3.0) -> dict[str, Any]:
     info: dict[str, Any] = {"path": str(sock_path), "exists": sock_path.exists(), "ok": False}
     if not sock_path.exists():
         return info
@@ -66,9 +66,20 @@ def _socket_status(sock_path: Path, timeout: float = 1.0) -> dict[str, Any]:
             s.settimeout(timeout)
             s.connect(str(sock_path))
             s.sendall(b'{"action":"status"}\n')
+            s.shutdown(socket.SHUT_WR)
             data = s.recv(4096)
+        response = data.decode("utf-8", errors="replace").strip()
         info["ok"] = True
-        info["response"] = data.decode("utf-8", errors="replace").strip()
+        info["response"] = response
+        try:
+            parsed = json.loads(response)
+            info["recording"] = bool(parsed.get("recording"))
+            info["sysReady"] = parsed.get("sysReady")
+            info["micReady"] = parsed.get("micReady")
+            info["sysError"] = parsed.get("sysError", "")
+            info["micError"] = parsed.get("micError", "")
+        except Exception:
+            pass
     except Exception as exc:
         info["error"] = str(exc)
     return info
@@ -164,6 +175,15 @@ def print_human(report: dict[str, Any]) -> None:
     print(f"{mark(report['config_exists'])} config: {report['config_dir']} queue_entries={report['queue_entries']}")
     sock = report["socket"]
     print(f"{mark(sock.get('ok', False))} audio daemon socket: {sock.get('path')} exists={sock.get('exists')}")
+    if sock.get("ok") and (sock.get("sysReady") is not None or sock.get("micReady") is not None):
+        sys_part = f"sysReady={sock.get('sysReady')}"
+        mic_part = f"micReady={sock.get('micReady')}"
+        err_part = ""
+        if sock.get("sysError"):
+            err_part += f" sysError={sock.get('sysError')}"
+        if sock.get("micError"):
+            err_part += f" micError={sock.get('micError')}"
+        print(f"  {sys_part} {mic_part}{err_part}")
     for check in report["checks"]:
         print(f"{mark(check['ok'])} {check['name']}: {check.get('path') or 'missing'}")
     if report["legacy_processes"]:

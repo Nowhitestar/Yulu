@@ -48,6 +48,10 @@ dev-install-dry-run:
 	$(PYTHON) yulu/scripts/dev_install.py
 
 
+dev-install:
+	$(PYTHON) yulu/scripts/dev_install.py --apply
+
+
 sync-skill:
 	$(PYTHON) yulu/scripts/sync_skill.py
 
