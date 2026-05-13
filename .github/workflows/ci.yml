@@ -44,8 +44,11 @@ jobs:
       - name: Python unit tests
         run: |
           set -euo pipefail
-          python3 -m pip install --user pytest
-          python3 -m pytest -q
+          python3 -m venv .venv-ci
+          . .venv-ci/bin/activate
+          python -m pip install --upgrade pip
+          python -m pip install pytest
+          python -m pytest -q
 
       - name: Doctor JSON smoke test
         run: |
