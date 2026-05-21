@@ -1714,16 +1714,31 @@ class VocabCache:
                 (w.term, w.canonical, _compile_rule(w.term)) for w in replace_words
             ]
             try:
-                self._mtime = self.db_path.stat().st_mtime
+                self._mtime = self._max_mtime()
             except OSError:
                 self._mtime = 0.0
+
+    def _max_mtime(self) -> float:
+        """Return max(main file mtime, -wal sidecar mtime).
+
+        SQLite WAL mode writes go to a `-wal` sidecar before checkpointing back
+        to the main file, so the main file's mtime alone misses in-flight writes.
+        Tracking max(main, wal) in BOTH reload() and maybe_reload() ensures we
+        catch updates promptly without thrashing reloads when the wal sidecar
+        sits persistently ahead of the main file.
+        """
+        m = self.db_path.stat().st_mtime
+        wal_path = Path(str(self.db_path) + "-wal")
+        if wal_path.exists():
+            m = max(m, wal_path.stat().st_mtime)
+        return m
 
     def maybe_reload(self) -> bool:
         """If autoreload enabled and DB mtime changed since last load, reload."""
         if not self.autoreload or not self.db_path.exists():
             return False
         try:
-            current_mtime = self.db_path.stat().st_mtime
+            current_mtime = self._max_mtime()
         except OSError:
             return False
         if current_mtime > self._mtime:
