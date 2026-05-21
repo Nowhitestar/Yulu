@@ -4077,7 +4077,10 @@ class LiveSessionManager:
                     return
                 await asyncio.sleep(active.spec.chunk_sec)
         except asyncio.CancelledError:
-            pass
+            # MUST re-raise: Python 3.8+ asyncio task.cancel() requires the
+            # CancelledError to propagate so the task actually terminates.
+            # Swallowing here causes asyncio.run() cleanup to hang.
+            raise
 
     async def _tail_iteration(self, sid: str) -> None:
         active = self._active.get(sid)
@@ -4132,6 +4135,11 @@ class LiveSessionManager:
         try:
             result: STTResult = await fut
         except asyncio.CancelledError:
+            # Differentiate task-level cancel (must propagate) from future-level
+            # cancel (scheduler dropped the job — best-effort, swallow).
+            task = asyncio.current_task()
+            if task is not None and task.cancelling() > 0:
+                raise
             return
         except Exception:
             return  # Errors logged elsewhere; live chunks are best-effort.
