@@ -10,11 +10,18 @@ from .config import DaemonConfig
 
 
 def _build_real_backends(config: DaemonConfig):
-    """Return real backends. Implemented in Phase 3."""
-    from .runtime import MockSTTBackend
+    from .backends.mlx import MlxWhisperBackend
+    from .backends.whisper_cli import WhisperCliBackend
+
     return {
-        "mlx": MockSTTBackend(canned_text="(mock — install Phase 3 backends)"),
-        "whisper": MockSTTBackend(canned_text="(mock whisper-cli)"),
+        "mlx": MlxWhisperBackend(
+            model=config.mlx_model,
+            language=config.default_language,
+        ),
+        "whisper": WhisperCliBackend(
+            binary=config.whisper_cli,
+            model_path=config.whisper_model,
+        ),
     }
 
 
