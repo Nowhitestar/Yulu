@@ -309,6 +309,7 @@ case "${1:-help}" in
     repair-permissions|repair_permissions) shift; cmd_repair_permissions "$@" ;;
     transcription|transcribe) shift; cmd_transcription "$@" ;;
     vocab)     shift; PYTHONPATH="$SCRIPT_DIR:${PYTHONPATH:-}" exec "${PYTHON:-python3}" -m vocab.cli "$@" ;;
+    stt)       shift; PYTHONPATH="$SCRIPT_DIR:${PYTHONPATH:-}" exec "${PYTHON:-python3}" -m stt_cli "$@" ;;
     where)     shift; cmd_where "$@" ;;
     help|-h|--help) usage ;;
     *)         err "Unknown command: $1"; echo; usage; exit 1 ;;

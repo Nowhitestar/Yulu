@@ -249,11 +249,12 @@ class STTDaemonApp:
         for sig in (signal.SIGTERM, signal.SIGINT):
             try:
                 loop.add_signal_handler(sig, lambda s=sig: asyncio.create_task(self._handle_signal(s)))
-            except NotImplementedError:
+            except (NotImplementedError, RuntimeError):
+                # RuntimeError is raised when not in the main thread (e.g. tests).
                 pass
         try:
             loop.add_signal_handler(signal.SIGHUP, self._on_sighup)
-        except NotImplementedError:
+        except (NotImplementedError, RuntimeError):
             pass
 
     def _on_sighup(self) -> None:
