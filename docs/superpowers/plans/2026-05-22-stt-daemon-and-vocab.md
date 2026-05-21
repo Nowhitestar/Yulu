@@ -596,17 +596,45 @@ def seed_from_current(
 
 
 def restore_defaults(repo: VocabRepo) -> dict[str, int]:
-    """Overwrite seed rows back to bundled snapshots; preserve manual rows."""
-    # delete every existing seed row, then re-apply
+    """Overwrite seed rows back to bundled snapshots; preserve manual rows.
+
+    Seed rows are updated in-place (IDs preserved) so that callers holding
+    IDs still get the reverted values. Seed rows that have no match in the
+    bundled snapshots are removed. Manual rows are never touched.
+    """
+    # Build lookup tables for the bundled snapshots
+    glossary_by_term: dict[str, str] = {t: t for t in SEED_GLOSSARY}
+    replacements_by_term: dict[str, str] = dict(SEED_REPLACEMENTS)
+
     rows = repo.list_words()
-    deleted = 0
+    reverted = 0
+    removed = 0
     for w in rows:
-        if w.source == Source.SEED:
+        if w.source != Source.SEED:
+            continue
+        if w.scope == Scope.PROMPT and w.term in glossary_by_term:
+            canonical = glossary_by_term[w.term]
+            if w.canonical != canonical:
+                repo.edit(w.id, canonical=canonical)
+            reverted += 1
+        elif w.scope == Scope.BOTH and w.term in replacements_by_term:
+            canonical = replacements_by_term[w.term]
+            if w.canonical != canonical:
+                repo.edit(w.id, canonical=canonical)
+            reverted += 1
+        else:
+            # seed row no longer in snapshots — remove it
             repo.remove(w.id)
-            deleted += 1
+            removed += 1
+
+    # Insert any snapshot entries that don't exist yet
     inserted = seed_from_current(repo, config_replacements=None)
-    inserted["deleted_seed"] = deleted
-    return inserted
+    return {
+        "reverted": reverted,
+        "removed_stale": removed,
+        "glossary_inserted": inserted["glossary_inserted"],
+        "replacements_inserted": inserted["replacements_inserted"],
+    }
 ```
 
 - [ ] **Step 4: Run tests — verify PASS**
