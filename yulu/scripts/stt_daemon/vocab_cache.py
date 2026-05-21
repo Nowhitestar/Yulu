@@ -78,24 +78,29 @@ class VocabCache:
                 (w.term, w.canonical, _compile_rule(w.term)) for w in replace_words
             ]
             try:
-                self._mtime = self.db_path.stat().st_mtime
+                self._mtime = self._max_mtime()
             except OSError:
                 self._mtime = 0.0
 
-    def maybe_reload(self) -> bool:
-        """If autoreload enabled and DB mtime changed since last load, reload.
+    def _max_mtime(self) -> float:
+        """Return the latest mtime across the db file and its WAL sidecar.
 
         SQLite WAL mode writes go to a -wal sidecar before checkpointing back
-        to the main file, so the main file's mtime may not advance immediately.
-        We therefore also check the -wal file mtime to catch in-flight writes.
+        to the main file. We track the max so maybe_reload doesn't thrash
+        when the wal mtime is persistently ahead of the main file mtime.
         """
+        m = self.db_path.stat().st_mtime
+        wal_path = Path(str(self.db_path) + "-wal")
+        if wal_path.exists():
+            m = max(m, wal_path.stat().st_mtime)
+        return m
+
+    def maybe_reload(self) -> bool:
+        """If autoreload enabled and DB mtime changed since last load, reload."""
         if not self.autoreload or not self.db_path.exists():
             return False
         try:
-            current_mtime = self.db_path.stat().st_mtime
-            wal_path = Path(str(self.db_path) + "-wal")
-            if wal_path.exists():
-                current_mtime = max(current_mtime, wal_path.stat().st_mtime)
+            current_mtime = self._max_mtime()
         except OSError:
             return False
         if current_mtime > self._mtime:
