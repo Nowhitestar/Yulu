@@ -93,6 +93,66 @@ def _yulu_processes() -> list[str]:
     return [line for line in out.splitlines() if any(n in line for n in needles) and "doctor.py" not in line]
 
 
+def check_stt_daemon(config_dir: Path) -> dict[str, Any]:
+    """Health check the resident stt_daemon: socket, pid, vocab DB, model load."""
+    socket_path = config_dir / "stt_daemon.sock"
+    pid_file = config_dir / "stt_daemon.pid"
+    vocab_db = config_dir / "vocab.sqlite"
+    log_file = config_dir / "logs" / "stt_daemon.log"
+    report: dict[str, Any] = {
+        "socket_path": str(socket_path),
+        "socket_present": socket_path.exists(),
+        "pid_file_present": pid_file.exists(),
+        "vocab_db_present": vocab_db.exists(),
+        "log_path": str(log_file),
+        "log_present": log_file.exists(),
+        "vocab_term_count": None,
+        "daemon_reachable": False,
+        "model_loaded": None,
+        "in_flight_jobs": None,
+        "active_sessions": None,
+        "error": None,
+    }
+
+    if vocab_db.exists():
+        try:
+            import sqlite3
+            conn = sqlite3.connect(str(vocab_db))
+            try:
+                row = conn.execute("SELECT COUNT(*) FROM custom_words").fetchone()
+                report["vocab_term_count"] = row[0]
+            finally:
+                conn.close()
+        except sqlite3.DatabaseError as exc:
+            report["error"] = f"vocab.sqlite read error: {exc}"
+
+    if socket_path.exists():
+        try:
+            import asyncio
+            async def _ask() -> dict[str, Any]:
+                reader, writer = await asyncio.wait_for(
+                    asyncio.open_unix_connection(str(socket_path)), timeout=2.0
+                )
+                writer.write(b'{"type":"health"}\n')
+                await writer.drain()
+                line = await asyncio.wait_for(reader.readline(), timeout=2.0)
+                writer.close()
+                try:
+                    await writer.wait_closed()
+                except (ConnectionResetError, BrokenPipeError):
+                    pass
+                return json.loads(line.decode())
+            payload = asyncio.run(_ask())
+            report["daemon_reachable"] = True
+            report["model_loaded"] = payload.get("model_loaded")
+            report["in_flight_jobs"] = payload.get("in_flight_jobs")
+            report["active_sessions"] = payload.get("active_sessions")
+        except Exception as exc:
+            report["error"] = f"health rpc failed: {exc}"
+
+    return report
+
+
 def collect_report(
     source_root: Path = DEFAULT_SOURCE_ROOT,
     runtime_root: Path = DEFAULT_RUNTIME_ROOT,
@@ -140,6 +200,7 @@ def collect_report(
         "queue_path_exists": queue_path.exists(),
         "queue_entries": queue_entries,
         "socket": _socket_status(config_dir / "audio_daemon.sock"),
+        "stt_daemon": check_stt_daemon(config_dir),
         "processes": processes,
         "legacy_processes": legacy_processes,
         "runtime_processes": runtime_processes,
@@ -186,6 +247,15 @@ def print_human(report: dict[str, Any]) -> None:
         print(f"  {sys_part} {mic_part}{err_part}")
         if sock.get("sysReady") is False:
             print("  repair: yulu repair-permissions --reset")
+    sd = report.get("stt_daemon", {})
+    if sd:
+        print(f"{mark(sd.get('daemon_reachable', False))} stt_daemon socket: {sd.get('socket_path')} present={sd.get('socket_present')} reachable={sd.get('daemon_reachable')}")
+        if sd.get("vocab_term_count") is not None:
+            print(f"  vocab terms: {sd['vocab_term_count']}")
+        if sd.get("daemon_reachable"):
+            print(f"  model_loaded={sd.get('model_loaded')} in_flight={sd.get('in_flight_jobs')} sessions={sd.get('active_sessions')}")
+        elif sd.get("error"):
+            print(f"  error: {sd['error']}")
     for check in report["checks"]:
         print(f"{mark(check['ok'])} {check['name']}: {check.get('path') or 'missing'}")
     if report["legacy_processes"]:

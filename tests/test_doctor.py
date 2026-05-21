@@ -47,3 +47,18 @@ def test_main_prints_json_report(capsys):
     data = json.loads(capsys.readouterr().out)
     assert data["source_root"] == str(ROOT)
     assert data["legacy_root_exists"] is False
+
+
+def test_stt_daemon_section_present_when_config_empty(tmp_path):
+    doctor = load_doctor()
+    report = doctor.collect_report(
+        source_root=ROOT,
+        runtime_root=ROOT,
+        legacy_root=ROOT / "missing-legacy",
+        config_dir=tmp_path,
+    )
+    assert "stt_daemon" in report
+    sd = report["stt_daemon"]
+    assert sd["socket_present"] is False
+    assert sd["daemon_reachable"] is False
+    assert sd["vocab_db_present"] is False
