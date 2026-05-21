@@ -41,6 +41,10 @@
       "chunk_sec": 60
     }
   },
+  "stt_daemon": {
+    "default_engine": "mlx",
+    "live_chunk_max_per_session": 4
+  },
   "llm": {
     "enabled": true,
     "command": null
