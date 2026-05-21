@@ -2469,13 +2469,22 @@ from stt_daemon.config import DaemonConfig
 from stt_daemon.runtime import MockSTTBackend
 
 
+def _short_sock_dir() -> Path:
+    """AF_UNIX paths must be ≤104 bytes on macOS; pytest's tmp_path under
+    /private/var/folders/... routinely exceeds that. Allocate the socket
+    in a short /tmp/... dir while keeping the rest of test data in tmp_path."""
+    import tempfile
+    return Path(tempfile.mkdtemp(dir="/tmp"))
+
+
 def _build_app(tmp_path):
     db = tmp_path / "vocab.sqlite"
     repo = VocabRepo(open_db(db))
     repo.add(term="Kubernetes", canonical="Kubernetes", scope=Scope.PROMPT)
     repo.add(term="github", canonical="GitHub", scope=Scope.BOTH)
+    sock_dir = _short_sock_dir()
     cfg = DaemonConfig(
-        socket_path=tmp_path / "stt.sock",
+        socket_path=sock_dir / "stt.sock",
         vocab_db_path=db,
         pid_file=tmp_path / "stt.pid",
         log_path=None,
