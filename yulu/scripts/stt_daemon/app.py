@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import os
 import signal
-import uuid
 from pathlib import Path
 from typing import Optional
 
@@ -21,6 +20,7 @@ from .protocol import (
     CancelRequest,
     SubscribeSessionRequest, UnsubscribeSessionRequest,
 )
+from .live_session import LiveSession, LiveSessionManager
 from .runtime import STTRuntime, STTBackend
 from .scheduler import STTScheduler, Job
 from .vocab_cache import VocabCache
@@ -46,7 +46,13 @@ class STTDaemonApp:
             logger=self.logger,
             max_connections=config.max_concurrent_connections,
         )
-        self._active_sessions: dict[str, "_SessionEntry"] = {}
+        self.live_sessions = LiveSessionManager(
+            scheduler=self.scheduler,
+            vocab_cache=self.vocab_cache,
+            sessions_dir=config.sessions_dir,
+            on_partial=self._broadcast_partial,
+        )
+        self._subscribers: dict[str, list[asyncio.StreamWriter]] = {}
 
     async def start(self) -> None:
         self.vocab_cache.load()
@@ -55,7 +61,10 @@ class STTDaemonApp:
         await self.control_server.start()
         self._write_pid()
         self._install_signal_handlers()
-        self.logger.info("daemon_ready", vocab=len(self.vocab_cache.prompt_terms))
+        recovered = self.live_sessions.recover_from_disk()
+        self.logger.info("daemon_ready",
+                          vocab=len(self.vocab_cache.prompt_terms),
+                          recovered_sessions=recovered)
 
     async def stop(self) -> None:
         await self.control_server.stop()
@@ -80,7 +89,7 @@ class STTDaemonApp:
             model_loaded=any(self.runtime.is_ready(e) for e in self.runtime.backends),
             vocab_size=len(self.vocab_cache.prompt_terms) + len(self.vocab_cache.replace_rules),
             in_flight_jobs=self.scheduler.in_flight_count(),
-            active_sessions=len(self._active_sessions),
+            active_sessions=len(self.live_sessions.active_sessions()),
         )
 
     async def _on_warm_up(self, msg: WarmUpRequest, writer):
@@ -152,16 +161,78 @@ class STTDaemonApp:
         return OkResponse(detail="cancelled" if ok else "not_found")
 
     async def _on_subscribe_session(self, msg: SubscribeSessionRequest, writer):
-        return ErrorEvent(
-            code=ErrorCode.INTERNAL,
-            message="subscribe_session not implemented until Phase 4",
+        spec = LiveSession(
+            sid=msg.sid,
+            mic_path=msg.mic_path,
+            sys_path=msg.sys_path,
+            engine=msg.engine,
+            language=msg.language,
+            chunk_sec=msg.chunk_sec,
         )
+        await self.live_sessions.start_session(spec)
+        self._subscribers.setdefault(msg.sid, []).append(writer)
+        self.logger.info("session_subscribed", sid=msg.sid, mic=msg.mic_path)
+        return OkResponse(detail=f"subscribed:{msg.sid}")
 
     async def _on_unsubscribe_session(self, msg: UnsubscribeSessionRequest, writer):
-        return ErrorEvent(
-            code=ErrorCode.INTERNAL,
-            message="unsubscribe_session not implemented until Phase 4",
+        fut = await self.live_sessions.stop_session(msg.sid, reason=msg.reason)
+        subscribers = self._subscribers.pop(msg.sid, [])
+        if fut is not None:
+            asyncio.create_task(self._announce_final_when_ready(msg.sid, fut, subscribers))
+        return OkResponse(detail=f"unsubscribed:{msg.sid}")
+
+    async def _broadcast_partial(self, event) -> None:
+        subscribers = self._subscribers.get(event.sid, [])
+        if not subscribers:
+            return
+        from .protocol import encode
+        payload = encode(event).encode()
+        for writer in list(subscribers):
+            if writer.is_closing():
+                subscribers.remove(writer)
+                continue
+            try:
+                writer.write(payload)
+                await writer.drain()
+            except (ConnectionResetError, BrokenPipeError):
+                subscribers.remove(writer)
+
+    async def _announce_final_when_ready(self, sid, fut, subscribers) -> None:
+        from .protocol import FinalReadyEvent, encode
+        try:
+            result = await fut
+        except (asyncio.CancelledError, Exception) as exc:
+            self.logger.warn("final_transcribe_failed_after_session_stop", sid=sid, err=str(exc))
+            return
+        active_paths = self._session_artifact_paths(sid, result)
+        if active_paths is None:
+            return
+        transcript_path, raw_path = active_paths
+        evt = FinalReadyEvent(
+            sid=sid,
+            transcript_path=str(transcript_path),
+            raw_path=str(raw_path),
+            engine=result.language or "",
+            duration_ms=result.duration_ms,
         )
+        payload = encode(evt).encode()
+        for writer in subscribers:
+            if writer.is_closing():
+                continue
+            try:
+                writer.write(payload)
+                await writer.drain()
+            except (ConnectionResetError, BrokenPipeError):
+                continue
+
+    def _session_artifact_paths(self, sid, result):
+        artifact_dir = self.config.sessions_dir / sid
+        artifact_dir.mkdir(parents=True, exist_ok=True)
+        transcript_path = artifact_dir / "final.transcript.txt"
+        raw_path = artifact_dir / "final.raw.transcript.txt"
+        transcript_path.write_text(result.text or "", encoding="utf-8")
+        raw_path.write_text(result.raw_text or "", encoding="utf-8")
+        return transcript_path, raw_path
 
     def _write_pid(self) -> None:
         self.config.pid_file.parent.mkdir(parents=True, exist_ok=True)
@@ -194,8 +265,3 @@ class STTDaemonApp:
     async def _handle_signal(self, sig) -> None:
         self.logger.info("signal_received", sig=int(sig))
         await self.stop()
-
-
-class _SessionEntry:
-    """Placeholder; replaced by Phase 4."""
-    pass

@@ -126,3 +126,70 @@ def test_vocab_reload_applies_new_rows(tmp_path):
     payload = asyncio.run(go())
     assert payload["type"] == "vocab_reloaded"
     assert payload["replace_rules"] >= 2
+
+
+import wave
+
+
+def _write_wav(path, seconds=1.0, rate=16000):
+    n = int(seconds * rate)
+    with wave.open(str(path), "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(rate)
+        wf.writeframes(b"\x00\x10" * n)
+
+
+def test_subscribe_session_returns_ok(tmp_path):
+    async def go():
+        app = _build_app(tmp_path)
+        await app.start()
+        try:
+            wav = tmp_path / "rec.wav"
+            _write_wav(wav, seconds=1.0)
+            req = {
+                "type": "subscribe_session",
+                "sid": "test-sid",
+                "mic_path": str(wav),
+                "sys_path": None,
+                "engine": "mlx",
+                "language": "zh",
+                "chunk_sec": 10,
+            }
+            results = await _send(app.config.socket_path, [json.dumps(req)])
+            return json.loads(results[0])
+        finally:
+            await app.stop()
+    payload = asyncio.run(go())
+    assert payload["type"] == "ok"
+    assert "subscribed" in payload["detail"]
+
+
+def test_unsubscribe_session_triggers_final(tmp_path):
+    async def go():
+        app = _build_app(tmp_path)
+        await app.start()
+        try:
+            wav = tmp_path / "rec.wav"
+            _write_wav(wav, seconds=1.0)
+            req_sub = {
+                "type": "subscribe_session",
+                "sid": "fin-sid",
+                "mic_path": str(wav),
+                "sys_path": None,
+                "engine": "mlx",
+                "language": "zh",
+                "chunk_sec": 10,
+            }
+            req_unsub = {
+                "type": "unsubscribe_session",
+                "sid": "fin-sid",
+                "reason": "stopped",
+            }
+            results = await _send(app.config.socket_path, [json.dumps(req_sub), json.dumps(req_unsub)])
+            return [json.loads(r) for r in results]
+        finally:
+            await app.stop()
+    payloads = asyncio.run(go())
+    assert payloads[0]["type"] == "ok"
+    assert payloads[1]["type"] == "ok"
