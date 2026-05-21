@@ -803,7 +803,7 @@ def _print_table(rows: list[dict]) -> None:
 
 def _cmd_list(args: argparse.Namespace, repo: VocabRepo) -> int:
     scope = Scope(args.scope) if args.scope else None
-    words = repo.list_words(scope=scope, enabled_only=not args.disabled)
+    words = repo.list_words(scope=scope, enabled_only=False)
     if args.disabled:
         words = [w for w in words if not w.enabled]
     rows = [_word_to_dict(w) for w in words]
@@ -978,9 +978,35 @@ def _build_parser() -> argparse.ArgumentParser:
     return p
 
 
+def _extract_db_from_argv(argv: list[str]) -> tuple[str, list[str]]:
+    """Extract --db value from argv (may appear anywhere). Required because
+    argparse subparsers consume positional+optional args after the subcommand
+    name, so a top-level --db placed after the subcommand would be rejected.
+    Returns (db_path, remaining_argv)."""
+    remaining = []
+    db_path = str(DEFAULT_DB)
+    i = 0
+    while i < len(argv):
+        if argv[i] == "--db" and i + 1 < len(argv):
+            db_path = argv[i + 1]
+            i += 2
+        elif argv[i].startswith("--db="):
+            db_path = argv[i][len("--db="):]
+            i += 1
+        else:
+            remaining.append(argv[i])
+            i += 1
+    return db_path, remaining
+
+
 def main(argv: Optional[list[str]] = None) -> int:
+    if argv is None:
+        argv = sys.argv[1:]
+    db_path, remaining_argv = _extract_db_from_argv(list(argv))
+
     parser = _build_parser()
-    args = parser.parse_args(argv)
+    args = parser.parse_args(remaining_argv)
+    args.db = db_path
 
     repo = VocabRepo(open_db(Path(args.db)))
     handlers = {
