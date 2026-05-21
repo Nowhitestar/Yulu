@@ -1,69 +1,28 @@
 #!/usr/bin/env python3
+"""Process a recorded meeting: orchestrate transcription via stt_daemon,
+optionally polish via LLM, persist summary, and dispatch to agent queue.
+
+This file replaces the previous in-process mlx-whisper / whisper-cli
+subprocess invocations with stt_daemon RPC calls. All STT lives in the
+daemon now; transcribe.py is the *business* orchestrator.
 """
-转录音频并生成会议纪要。
 
-转录: whisper.cpp / mlx-whisper
-摘要: 有 llm.command 时直接生成；否则写 summary_request 交给 agent。
-
-依赖：
-  brew install whisper-cpp        # whisper-cli（非 MLX / fallback）
-  pip install mlx-whisper         # MLX 路线，仅 Apple Silicon 推荐
-  可选：配置任意读取 stdin、输出 Markdown 的 llm.command
-
-模型：
-  whisper.cpp 默认模型：~/.config/yulu/models/ggml-large-v3.bin
-  MLX 高质量模型：mlx-community/whisper-large-v3-mlx
-
-配置（config.json）：
-{
-  "transcription": {
-    "command": ["whisper-cli", "-m", "/Users/x/.config/yulu/models/ggml-large-v3.bin",
-                "-l", "zh", "-otxt", "-of", "{{output_stem}}", "{{input}}"]
-  },
-  "llm": {
-    "enabled": true,
-    "command": ["claude", "--print", "--model", "claude-opus-4-7"]
-  }
-}
-
-输出：
-  <meeting>.transcript.txt  — 原始转录
-  <meeting>.summary.md      — 结构化纪要
-"""
+from __future__ import annotations
 
 import json
-import os
 import re
 import shlex
 import subprocess
-import tempfile
 import sys
-from datetime import datetime
 from pathlib import Path
+from typing import Optional
+
+from transcribe_client import transcribe_file, DaemonUnavailable, DaemonError
 
 CONFIG_PATH = Path.home() / ".config" / "yulu" / "config.json"
 
-DEFAULT_TRANSCRIBE_CMD = [
-    "whisper-cli",
-    "-m", str(Path.home() / ".config/yulu/models/ggml-large-v3.bin"),
-    "-l", "zh",
-    "-otxt",
-    "-of", "{{output_stem}}",
-    "{{input}}",
-]
-
-DEFAULT_LLM_CMD: list[str] = []
-DEFAULT_MLX_PYTHON = str(Path.home() / ".config/yulu/venv-mlx-whisper/bin/python")
-DEFAULT_MLX_MODEL = "mlx-community/whisper-large-v3-mlx"
 FAST_POST_RECORDING_MODE = "fast_summary"
 FULL_POST_RECORDING_MODE = "full_transcribe"
-
-DEFAULT_GLOSSARY = [
-    "AgentKey", "OpenClaw", "OpenAI", "Claude", "Cursor", "Deal Hub",
-    "Portfolio", "public market", "candidate", "qualification", "recruiter",
-    "research rollup", "workflow", "GitHub", "screenshot", "VP",
-    "VC", "AI conference", "meetup", "Yulu",
-]
 
 NOTIFY_SCRIPT = Path(__file__).parent / "notify.py"
 
@@ -95,163 +54,7 @@ def load_config():
         return json.load(f)
 
 
-def render_cmd(template, **vars):
-    """把命令模板里的 {{key}} 替换成实际值。"""
-    rendered = []
-    for tok in template:
-        for k, v in vars.items():
-            tok = tok.replace(f"{{{{{k}}}}}", v)
-        rendered.append(tok)
-    return rendered
-
-
-def transcribe(audio_path, config):
-    """用 whisper-cli 转录。返回转录文本。"""
-    audio_path = Path(audio_path).resolve()
-    cmd_template = config.get("command")
-    if not cmd_template:
-        whisper_cli = config.get("whisper_cli") or "whisper-cli"
-        model_path = config.get("local_model_path") or str(Path.home() / ".config/yulu/models/ggml-large-v3.bin")
-        language = config.get("language") or "zh"
-        cmd_template = [
-            whisper_cli,
-            "-m", str(Path(model_path).expanduser()),
-            "-l", language,
-            "-otxt",
-            "-of", "{{output_stem}}",
-            "{{input}}",
-        ]
-
-    # whisper-cli 的 -otxt -of <stem> 会写到 <stem>.txt
-    output_stem = audio_path.with_suffix("").as_posix() + ".whisper"
-    output_txt = Path(f"{output_stem}.txt")
-
-    cmd = render_cmd(cmd_template, input=str(audio_path), output_stem=output_stem)
-    print(f"🎙️ whisper-cli: {shlex.join(cmd)}")
-
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    if result.returncode != 0:
-        print(f"whisper-cli failed: {result.stderr}", file=sys.stderr)
-        sys.exit(1)
-
-    if not output_txt.exists():
-        print(f"Transcript file not written: {output_txt}", file=sys.stderr)
-        sys.exit(1)
-
-    transcript = output_txt.read_text(encoding="utf-8").strip()
-    output_txt.unlink()  # 清理 whisper 中间文件
-    return transcript
-
-
-def _glossary_prompt(trans_cfg, title=""):
-    glossary = trans_cfg.get("glossary", DEFAULT_GLOSSARY)
-    if isinstance(glossary, str):
-        glossary = [x.strip() for x in re.split(r"[,\n]", glossary) if x.strip()]
-    terms = ", ".join(dict.fromkeys([*DEFAULT_GLOSSARY, *glossary]))
-    return (
-        "以下是一次中文为主、中英混杂的创业/投资/产品会议。"
-        "请保留英文专有名词，不要翻译人名、产品名和公司名。"
-        f"会议标题：{title}。常见术语：{terms}。"
-    )
-
-
-def transcribe_mlx(audio_path, config, meeting_title=""):
-    """Use mlx-whisper for high-quality full-audio final transcription."""
-    audio_path = Path(audio_path).resolve()
-    mlx_cfg = config.get("mlx", {}) if isinstance(config.get("mlx", {}), dict) else {}
-    py = config.get("mlx_python") or mlx_cfg.get("python") or DEFAULT_MLX_PYTHON
-    model = config.get("mlx_model") or mlx_cfg.get("model") or DEFAULT_MLX_MODEL
-    language = config.get("language") or mlx_cfg.get("language") or "zh"
-    if not Path(py).exists():
-        raise RuntimeError(f"mlx-whisper python not found: {py}")
-
-    prompt = config.get("initial_prompt") or mlx_cfg.get("initial_prompt") or _glossary_prompt(config, meeting_title)
-    out_json = Path(tempfile.mkstemp(prefix="yulu-mlx-whisper-", suffix=".json")[1])
-    code = """
-import json, sys
-from pathlib import Path
-import mlx_whisper
-
-audio, model, prompt, out = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
-language = sys.argv[5]
-res = mlx_whisper.transcribe(
-    audio,
-    path_or_hf_repo=model,
-    language=language,
-    task="transcribe",
-    verbose=False,
-    initial_prompt=prompt,
-    condition_on_previous_text=True,
-    word_timestamps=False,
-    hallucination_silence_threshold=2.0,
-)
-Path(out).write_text(json.dumps(res, ensure_ascii=False), encoding="utf-8")
-"""
-    cmd = [py, "-c", code, str(audio_path), model, prompt, str(out_json), language]
-    print(f"🎙️ mlx-whisper: {shlex.join([py, '-c', '<code>', str(audio_path), model, '<prompt>', str(out_json), language])}")
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=int(config.get("timeout_sec", 7200)))
-    if result.returncode != 0:
-        out_json.unlink(missing_ok=True)
-        raise RuntimeError(result.stderr.strip() or f"mlx-whisper failed: {result.returncode}")
-    try:
-        data = json.loads(out_json.read_text(encoding="utf-8"))
-    finally:
-        out_json.unlink(missing_ok=True)
-
-    segments = data.get("segments") or []
-    if segments:
-        lines = []
-        for seg in segments:
-            text = (seg.get("text") or "").strip()
-            if not text:
-                continue
-            start = int(float(seg.get("start", 0)))
-            end = int(float(seg.get("end", start)))
-            lines.append(f"[{start//60:02d}:{start%60:02d}-{end//60:02d}:{end%60:02d}] {text}")
-        transcript = "\n".join(lines).strip()
-    else:
-        transcript = (data.get("text") or "").strip()
-    if not transcript:
-        raise RuntimeError("mlx-whisper produced empty transcript")
-    return transcript
-
-
-def normalize_transcript_text(transcript, trans_cfg):
-    """Deterministic cleanup: fix common terms and remove obvious repeated adjacent lines."""
-    replacements = trans_cfg.get("replacements") or {
-        "agent king": "AgentKey",
-        "Agent King": "AgentKey",
-        "agency": "AgentKey",
-        "Agency": "AgentKey",
-        "open cloud": "OpenClaw",
-        "OpenCloud": "OpenClaw",
-        "OpenCore": "OpenClaw",
-        "deal hub": "Deal Hub",
-        "github": "GitHub",
-    }
-    text = transcript
-    for k, v in replacements.items():
-        text = re.sub(re.escape(k), v, text, flags=re.I if k.islower() else 0)
-
-    out = []
-    prev_norm = None
-    repeat_count = 0
-    for line in text.splitlines():
-        norm = re.sub(r"^\[[^\]]+\]\s*", "", line).strip()
-        norm = re.sub(r"\s+", "", norm).lower()
-        if norm and norm == prev_norm:
-            repeat_count += 1
-            if repeat_count >= 2:
-                continue
-        else:
-            repeat_count = 0
-        prev_norm = norm
-        out.append(line)
-    return "\n".join(out).strip()
-
-
-def _looks_like_agent_event_json(text):
-    """Reject accidental agent-queue JSON events returned by an LLM shim."""
+def _looks_like_agent_event_json(text: str) -> bool:
     s = (text or "").strip()
     if not s.startswith("["):
         return False
@@ -262,24 +65,19 @@ def _looks_like_agent_event_json(text):
     if not isinstance(data, list) or not data:
         return False
     event_types = {
-        "transcript",
-        "summary_ready",
-        "transcribing",
-        "summary_request",
-        "realtime_transcribing",
-        "realtime_transcript_error",
+        "transcript", "summary_ready", "transcribing", "summary_request",
+        "realtime_transcribing", "realtime_transcript_error",
     }
     return all(isinstance(x, dict) and x.get("type") in event_types for x in data)
 
 
-def refine_transcript(transcript, meeting_title, trans_cfg, llm_cfg):
-    """Optional LLM cleanup for readability; keeps raw transcript separately."""
-    transcript = normalize_transcript_text(transcript, trans_cfg)
-    cleanup_cfg = trans_cfg.get("cleanup", {}) if isinstance(trans_cfg.get("cleanup", {}), dict) else {}
+def refine_transcript(transcript: str, meeting_title: str, trans_cfg: dict, llm_cfg: dict) -> str:
+    """Optional LLM polish pass over the daemon-returned transcript."""
+    cleanup_cfg = trans_cfg.get("cleanup", {}) if isinstance(trans_cfg.get("cleanup"), dict) else {}
     enabled = cleanup_cfg.get("enabled", True)
     if not enabled or not llm_cfg.get("enabled", True):
         return transcript
-    cmd_template = cleanup_cfg.get("command") or llm_cfg.get("command") or DEFAULT_LLM_CMD
+    cmd_template = cleanup_cfg.get("command") or llm_cfg.get("command") or []
     if not cmd_template or cmd_template == [""]:
         return transcript
     prompt = f"""请清理以下会议转录，输出 cleaned transcript，不要摘要，不要增删事实。
@@ -288,7 +86,6 @@ def refine_transcript(transcript, meeting_title, trans_cfg, llm_cfg):
 
 要求：
 - 保留时间戳。
-- 修正常见专有名词和中英混杂词：{', '.join(DEFAULT_GLOSSARY)}。
 - 去除明显重复幻觉句。
 - 恢复合理标点和段落；口语可轻微整理，但不要改写观点。
 - 不要输出解释，只输出清理后的 transcript。
@@ -298,109 +95,72 @@ def refine_transcript(transcript, meeting_title, trans_cfg, llm_cfg):
 {transcript}
 ---
 """
-    cmd = render_cmd(cmd_template)
-    print(f"🧹 Transcript cleanup LLM: {shlex.join(cmd)}")
+    print(f"🧹 Transcript cleanup LLM: {shlex.join(cmd_template)}")
     try:
         result = subprocess.run(
-            cmd,
-            input=prompt,
-            capture_output=True,
-            text=True,
+            cmd_template, input=prompt,
+            capture_output=True, text=True,
             timeout=int(cleanup_cfg.get("timeout_sec", llm_cfg.get("timeout_sec", 900))),
         )
         if result.returncode == 0 and result.stdout.strip():
             cleaned = result.stdout.strip()
             if not _looks_like_agent_event_json(cleaned):
                 return cleaned
-            print("Transcript cleanup returned agent-event JSON; keeping deterministic transcript", file=sys.stderr)
-        print(f"Transcript cleanup failed: {result.stderr}", file=sys.stderr)
-    except Exception as e:
-        print(f"Transcript cleanup error: {e}", file=sys.stderr)
+            print("Transcript cleanup returned agent-event JSON; keeping daemon transcript", file=sys.stderr)
+        else:
+            print(f"Transcript cleanup failed: {result.stderr}", file=sys.stderr)
+    except Exception as exc:
+        print(f"Transcript cleanup error: {exc}", file=sys.stderr)
     return transcript
 
 
-def summarize(transcript, meeting_title, config):
-    """生成结构化纪要。
-
-    如果显式配置了外部命令则调用；否则返回 None，交给 agent queue。
-    返回 markdown 字符串；None 表示 LLM 不可用，需要更弱的本地规则兜底。
-    """
-    cmd_template = config.get("command") or DEFAULT_LLM_CMD
-
+def summarize(transcript: str, meeting_title: str, llm_cfg: dict) -> Optional[str]:
+    cmd_template = llm_cfg.get("command") or []
     if not cmd_template or cmd_template == [""]:
         print("🤖 未配置 llm.command，写入 agent queue 后使用本地规则草稿...")
         return None
-
     if cmd_template[0] == "claude":
         try:
             subprocess.run(["claude", "--version"], capture_output=True, text=True, timeout=10, check=True)
-        except Exception as e:
-            print(f"Claude CLI unavailable: {e}", file=sys.stderr)
+        except Exception as exc:
+            print(f"Claude CLI unavailable: {exc}", file=sys.stderr)
             return None
 
-    cmd = render_cmd(cmd_template)
     template_section = ""
     template_path = Path(__file__).parent / "summary_template.md"
     if template_path.exists():
         template = template_path.read_text(encoding="utf-8").strip()
         template_section = f"请优先遵循这个纪要模板：\n---\n{template}\n---"
     prompt = SUMMARY_PROMPT.format(title=meeting_title, transcript=transcript, template_section=template_section)
-    print(f"🤖 LLM: {shlex.join(cmd)}")
+    print(f"🤖 LLM: {shlex.join(cmd_template)}")
     try:
         result = subprocess.run(
-            cmd,
-            input=prompt,
-            capture_output=True,
-            text=True,
-            timeout=int(config.get("timeout_sec", 600)),
+            cmd_template, input=prompt,
+            capture_output=True, text=True,
+            timeout=int(llm_cfg.get("timeout_sec", 600)),
         )
         if result.returncode == 0:
             summary = result.stdout.strip()
             if summary and not _looks_like_agent_event_json(summary):
                 return summary
             print("LLM returned empty or agent-event JSON; falling back", file=sys.stderr)
-        print(f"LLM failed: {result.stderr}", file=sys.stderr)
-    except Exception as e:
-        print(f"LLM error: {e}", file=sys.stderr)
+        else:
+            print(f"LLM failed: {result.stderr}", file=sys.stderr)
+    except Exception as exc:
+        print(f"LLM error: {exc}", file=sys.stderr)
     return None
 
 
-def _send_agent_notification(title):
-    """发系统通知告知转录完成，等待 agent 总结。"""
-    notify = NOTIFY_SCRIPT
-    subprocess.Popen(
-        [sys.executable, str(notify), "remind",
-         "Yulu",
-         f"「{title}」转录完成，找我出纪要",
-         "待总结"],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-
-
-def _notify_agent(event_type, **kw):
-    try:
-        from agent_notify import notify
-        notify(event_type, **kw)
-    except Exception:
-        pass
-
-
-def fallback_summary(transcript, meeting_title):
-    """无外部 LLM 时生成可直接使用的本地摘要，不再输出占位文字。"""
-    import re
-
+def fallback_summary(transcript: str, meeting_title: str) -> str:
     lines = [line.strip() for line in transcript.splitlines() if line.strip()]
     text = " ".join(lines)
     tldr = text[:220] + ("…" if len(text) > 220 else "")
-
     points = []
     for line in lines:
         if len(line) >= 4 and line not in points:
             points.append(line)
         if len(points) >= 8:
             break
-
     action_lines = [
         line for line in lines
         if re.search(r"(需要|要做|负责|跟进|安排|确认|明天|下周|todo|action)", line, re.I)
@@ -413,85 +173,95 @@ def fallback_summary(transcript, meeting_title):
         line for line in lines
         if re.search(r"(决定|确认|结论|同意|采用|最终)", line)
     ]
-
     def bullets(items, empty="无明确内容"):
         return "\n".join(f"- {x}" for x in items[:8]) if items else f"- {empty}"
-
     def todos(items):
         return "\n".join(f"- [ ] {x}" for x in items[:8]) if items else "- [ ] 无明确待办"
-
     return (
         f"# {meeting_title}\n\n"
-        f"## TL;DR\n"
-        f"{tldr or '转录为空，无法生成摘要。'}\n\n"
-        f"## Discussion Points\n"
-        f"{bullets(points)}\n\n"
-        f"## Action Items\n"
-        f"{todos(action_lines)}\n\n"
-        f"## Open Questions / Blockers\n"
-        f"{bullets(question_lines)}\n\n"
-        f"## Decisions Made\n"
-        f"{bullets(decision_lines, '无明确决策')}\n\n"
+        f"## TL;DR\n{tldr or '转录为空，无法生成摘要。'}\n\n"
+        f"## Discussion Points\n{bullets(points)}\n\n"
+        f"## Action Items\n{todos(action_lines)}\n\n"
+        f"## Open Questions / Blockers\n{bullets(question_lines)}\n\n"
+        f"## Decisions Made\n{bullets(decision_lines, '无明确决策')}\n\n"
         f"---\n"
         f"## 原始转录\n\n{transcript}\n"
     )
 
 
-def request_agent_summary(meeting_title, transcript_path, summary_path):
-    """通知 OpenClaw agent 按模板生成最终 summary。"""
+def request_agent_summary(meeting_title: str, transcript_path: Path, summary_path: Path) -> None:
     template_path = Path(__file__).parent / "summary_template.md"
-    _notify_agent(
-        "summary_request",
-        title=meeting_title,
-        transcript_path=str(transcript_path),
-        summary_path=str(summary_path),
-        template_path=str(template_path),
-    )
+    try:
+        from agent_notify import notify
+        notify(
+            "summary_request",
+            title=meeting_title,
+            transcript_path=str(transcript_path),
+            summary_path=str(summary_path),
+            template_path=str(template_path),
+        )
+    except Exception as exc:
+        print(f"agent_notify failed: {exc}", file=sys.stderr)
 
 
-def normalize_post_recording_mode(value):
-    """Return the configured post-recording mode with friendly aliases."""
+def _notify_agent(event_type: str, **kw):
+    try:
+        from agent_notify import notify
+        notify(event_type, **kw)
+    except Exception:
+        pass
+
+
+def normalize_post_recording_mode(value) -> str:
     raw = str(value or FAST_POST_RECORDING_MODE).strip().lower().replace("-", "_")
     aliases = {
-        "fast": FAST_POST_RECORDING_MODE,
-        "quick": FAST_POST_RECORDING_MODE,
-        "realtime": FAST_POST_RECORDING_MODE,
-        "realtime_polish": FAST_POST_RECORDING_MODE,
-        "realtime_summary": FAST_POST_RECORDING_MODE,
-        "fast_summary": FAST_POST_RECORDING_MODE,
-        "full": FULL_POST_RECORDING_MODE,
-        "quality": FULL_POST_RECORDING_MODE,
-        "final": FULL_POST_RECORDING_MODE,
-        "full_transcribe": FULL_POST_RECORDING_MODE,
+        "fast": FAST_POST_RECORDING_MODE, "quick": FAST_POST_RECORDING_MODE,
+        "realtime": FAST_POST_RECORDING_MODE, "realtime_polish": FAST_POST_RECORDING_MODE,
+        "realtime_summary": FAST_POST_RECORDING_MODE, "fast_summary": FAST_POST_RECORDING_MODE,
+        "full": FULL_POST_RECORDING_MODE, "quality": FULL_POST_RECORDING_MODE,
+        "final": FULL_POST_RECORDING_MODE, "full_transcribe": FULL_POST_RECORDING_MODE,
         "final_transcribe": FULL_POST_RECORDING_MODE,
     }
     return aliases.get(raw, raw if raw in {FAST_POST_RECORDING_MODE, FULL_POST_RECORDING_MODE} else FAST_POST_RECORDING_MODE)
 
 
-def read_realtime_transcript(path):
+def read_realtime_transcript(path: Path) -> Optional[str]:
     if not path.exists():
         return None
     text = path.read_text(encoding="utf-8").strip()
     return text or None
 
 
-def final_transcribe_audio(audio_path, trans_cfg, meeting_title):
-    engine = trans_cfg.get("final_engine", "whisper")
-    if engine == "mlx":
-        try:
-            return transcribe_mlx(audio_path, trans_cfg, meeting_title)
-        except Exception as e:
-            print(f"⚠️ mlx-whisper failed, fallback: {e}", file=sys.stderr)
-            return None
-    return transcribe(audio_path, trans_cfg)
+def _request_final_transcribe(audio_path: Path, trans_cfg: dict, meeting_title: str) -> Optional[str]:
+    """Ask the daemon to transcribe the file. Returns text or None on failure."""
+    engine = trans_cfg.get("final_engine", "mlx")
+    language = trans_cfg.get("language", "zh")
+    try:
+        response = transcribe_file(
+            audio_path=str(audio_path),
+            engine=engine,
+            language=language,
+            meeting_title=meeting_title,
+            kind="file_transcribe",
+        )
+    except DaemonUnavailable as exc:
+        print(f"⚠️ stt_daemon unavailable: {exc}", file=sys.stderr)
+        return None
+    except DaemonError as exc:
+        print(f"⚠️ stt_daemon error: {exc}", file=sys.stderr)
+        return None
+    if response.get("status") != "ok":
+        print(f"⚠️ daemon transcribe failed: {response.get('error')}", file=sys.stderr)
+        return None
+    return response["text"]
 
 
-def process_audio(audio_path):
+def process_audio(audio_path_str: str) -> tuple[str, str]:
     config = load_config()
     trans_cfg = config.get("transcription", {})
     llm_cfg = config.get("llm", {})
 
-    audio_path = Path(audio_path)
+    audio_path = Path(audio_path_str)
     if not audio_path.exists():
         print(f"Audio file not found: {audio_path}", file=sys.stderr)
         sys.exit(1)
@@ -499,11 +269,9 @@ def process_audio(audio_path):
     meeting_title = audio_path.stem.rsplit("_", 1)[0].replace("_", " ")
     print(f"📁 处理: {audio_path.name}（标题: {meeting_title}）")
 
-    # 1. 转录。fast_summary 使用录制中持续生成的 realtime transcript；
-    # full_transcribe 则在停止后对整段音频重新跑最终模型。
     raw_transcript_path = audio_path.with_suffix(".raw.transcript.txt")
     realtime_transcript_path = audio_path.with_suffix(".realtime.transcript.txt")
-    transcript = None
+    transcript: Optional[str] = None
     post_mode = normalize_post_recording_mode(trans_cfg.get("post_recording_mode"))
 
     if post_mode == FAST_POST_RECORDING_MODE:
@@ -511,65 +279,56 @@ def process_audio(audio_path):
         if transcript:
             print(f"⚡ 使用实时转写结果进行清理和摘要: {realtime_transcript_path}")
         else:
-            print("⚠️ 未找到可用实时转写，自动回退到完整转录", file=sys.stderr)
+            print("⚠️ 未找到可用实时转写，回退到完整 daemon 转录", file=sys.stderr)
 
     if transcript is None:
-        transcript = final_transcribe_audio(audio_path, trans_cfg, meeting_title)
+        transcript = _request_final_transcribe(audio_path, trans_cfg, meeting_title)
         if transcript is None:
             transcript = read_realtime_transcript(realtime_transcript_path)
-            if transcript:
-                print(f"📝 完整转录失败，使用实时转写结果兜底: {realtime_transcript_path}")
-            else:
-                transcript = transcribe(audio_path, trans_cfg)
+            if transcript is None:
+                print("❌ 无法获取任何转录，daemon 不可用且无 realtime 结果", file=sys.stderr)
+                sys.exit(2)
 
     raw_transcript_path.write_text(transcript, encoding="utf-8")
     transcript = refine_transcript(transcript, meeting_title, trans_cfg, llm_cfg)
 
-    # 2. 保存转录
     transcript_path = audio_path.with_suffix(".transcript.txt")
     transcript_path.write_text(transcript, encoding="utf-8")
     print(f"✅ 原始转录已保存: {raw_transcript_path}")
-    print(f"Raw transcript saved: {raw_transcript_path}")
     print(f"✅ 清理转录已保存: {transcript_path}")
-    print(f"Transcript saved: {transcript_path}")
 
-    # 3. 摘要
     summary = None
     llm_enabled = llm_cfg.get("enabled", True)
     if llm_enabled:
         summary = summarize(transcript, meeting_title, llm_cfg)
     agent_should_finalize = False
     if summary is None:
-        # LLM 不可用时先写本地规则摘要；如果 llm.enabled=true，则排队给 agent 后续覆盖。
         summary = fallback_summary(transcript, meeting_title)
         agent_should_finalize = bool(llm_enabled)
 
-    # 4. 保存摘要（Markdown + HTML workbench）
     summary_path = audio_path.with_suffix(".summary.md")
     summary_path.write_text(summary, encoding="utf-8")
     print(f"✅ 纪要已保存: {summary_path}")
-    print(f"Summary saved: {summary_path}")
 
-    summary_html_path = None
+    summary_html_path = ""
     try:
         from html_artifact import write_meeting_summary_html
-        summary_html_path = write_meeting_summary_html(
+        summary_html_path = str(write_meeting_summary_html(
             summary_path,
             transcript_path,
             audio_path.with_suffix(".summary.html"),
             title=meeting_title,
-        )
+        ))
         print(f"✅ HTML 工作台已保存: {summary_html_path}")
-        print(f"Summary HTML saved: {summary_html_path}")
-    except Exception as e:
-        print(f"⚠️ HTML summary generation failed: {e}", file=sys.stderr)
+    except Exception as exc:
+        print(f"⚠️ HTML summary generation failed: {exc}", file=sys.stderr)
 
     if agent_should_finalize:
         print("Summary status: draft_agent_pending")
         request_agent_summary(meeting_title, transcript_path, summary_path)
     else:
         print("Summary status: final")
-        _notify_agent("summary_ready", title=meeting_title, path=str(summary_path), html_path=str(summary_html_path or ""))
+        _notify_agent("summary_ready", title=meeting_title, path=str(summary_path), html_path=summary_html_path)
 
     return str(transcript_path), str(summary_path)
 
