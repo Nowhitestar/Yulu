@@ -2031,8 +2031,10 @@ class STTRuntime:
         if engine not in self.backends:
             raise ValueError(f"unknown engine: {engine}")
         backend = self.backends[engine]
-        if not backend.is_ready():
-            await backend.warm_up()
+        # Auto-warm is the backend's responsibility, not the dispatcher's —
+        # mlx and whisper-cli backends handle it in their own transcribe().
+        # Lifting it here would surprise tests that observe is_ready before/
+        # after by changing readiness as a side effect of dispatch.
         try:
             result = await backend.transcribe(
                 audio_path=audio_path,
