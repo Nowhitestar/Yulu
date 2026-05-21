@@ -36,11 +36,12 @@ def test_list_filters(tmp_path):
     repo.add(term="AgentKey", canonical="AgentKey", scope=Scope.PROMPT)
     repo.add(term="agent king", canonical="AgentKey", scope=Scope.REPLACE)
     repo.add(term="github", canonical="GitHub", scope=Scope.BOTH)
-    repo.add(term="disabled", canonical="Disabled", scope=Scope.PROMPT, enabled=False)
+    repo.add(term="disabled", canonical="Disabled", scope=Scope.REPLACE, enabled=False)
 
     assert len(repo.list_words()) == 4
     assert len(repo.list_words(scope=Scope.PROMPT)) == 1
     assert len(repo.list_words(scope=Scope.BOTH)) == 1
+    assert len(repo.list_words(scope=Scope.REPLACE)) == 2  # incl. disabled row
     enabled = repo.list_words(enabled_only=True)
     assert len(enabled) == 3
     prompt_or_both = repo.list_words(scopes=[Scope.PROMPT, Scope.BOTH], enabled_only=True)
