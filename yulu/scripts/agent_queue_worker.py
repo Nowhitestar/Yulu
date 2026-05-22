@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shlex
 import subprocess
 import sys
@@ -22,6 +23,7 @@ from queue_store import claim_summary_request, update_event
 CONFIG_PATH = Path.home() / ".config" / "yulu" / "config.json"
 QUEUE_PATH = Path.home() / ".config" / "yulu" / "agent-queue.json"
 LOG_PATH = Path.home() / ".config" / "yulu" / "agent_queue_worker.log"
+PID_PATH = Path.home() / ".config" / "yulu" / "agent_queue_worker.pid"
 WORKER_NAME = "yulu-agent-queue-worker"
 SUMMARY_PROMPT = """请基于以下会议转录生成最终版结构化会议纪要。
 
@@ -268,6 +270,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--queue", type=Path, default=QUEUE_PATH)
     parser.add_argument("--timeout", type=int, default=900)
     args = parser.parse_args(argv)
+
+    # Write pid file so `yulu prompts ...` mutations can SIGHUP us for
+    # PromptsCache reload between events. Best-effort; failure is ignored.
+    try:
+        PID_PATH.parent.mkdir(parents=True, exist_ok=True)
+        PID_PATH.write_text(str(os.getpid()), encoding="utf-8")
+    except OSError:
+        pass
+
     count = process_queue_once(queue_path=args.queue, timeout_sec=args.timeout, dispatch_output=True)
     if count:
         print(f"processed {count} summary_request event(s)")
