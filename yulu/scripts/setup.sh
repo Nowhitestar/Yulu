@@ -873,6 +873,20 @@ install_launchagents() {
         ok "agentqueue 已加载"
     fi
 
+    # STT daemon: resident mlx-whisper service + vocab cache.
+    if [[ -f "$plist_dir/com.yulu.sttdaemon.plist" ]]; then
+        mkdir -p "$HOME/.config/yulu/logs"
+        install_plist "$plist_dir/com.yulu.sttdaemon.plist" "com.yulu.sttdaemon.plist"
+        launchctl load "$LAUNCH_AGENTS_DIR/com.yulu.sttdaemon.plist" 2>/dev/null || true
+        ok "sttdaemon 已加载"
+
+        # Seed vocab.sqlite from frozen snapshots (idempotent).
+        info "种子词表 vocab.sqlite..."
+        PYTHONPATH="$SCRIPT_DIR" "$PYTHON_BIN" -m vocab.cli seed --from-current >/dev/null 2>&1 \
+          && ok "vocab seed 完成" \
+          || warn "vocab seed 失败（可稍后重试: yulu vocab seed --from-current）"
+    fi
+
     # Calendar service (optional, only if gog configured)
     if [[ -f "$plist_dir/com.yulu.calendar.plist" ]]; then
         local install_calendar=false

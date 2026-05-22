@@ -37,6 +37,7 @@ LAUNCHAGENTS = [
     "com.yulu.detector.plist",
     "com.yulu.agentqueue.plist",
     "com.yulu.calendar.plist",
+    "com.yulu.sttdaemon.plist",
 ]
 
 
