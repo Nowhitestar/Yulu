@@ -37,6 +37,12 @@ class LiveSession:
     language: str
     chunk_sec: float = 10.0
     meeting_title: Optional[str] = None
+    # Phase 3 — stride extraction from a single stereo WAV.
+    # When stride_step > 1, mic_path == sys_path and we slice every
+    # `stride_step` bytes starting at `<channel>_stride_offset`.
+    mic_stride_offset: int = 0
+    sys_stride_offset: int = 0
+    stride_step: int = 1
 
 
 @dataclass
@@ -52,6 +58,10 @@ class TailState:
     next_seq: int
     started_at: str
     last_partial_at: str
+    # Phase 3
+    mic_stride_offset: int = 0
+    sys_stride_offset: int = 0
+    stride_step: int = 1
 
     def persist(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -115,6 +125,9 @@ class LiveSessionManager:
                 next_seq=0,
                 started_at=_now_iso(),
                 last_partial_at=_now_iso(),
+                mic_stride_offset=spec.mic_stride_offset,
+                sys_stride_offset=spec.sys_stride_offset,
+                stride_step=spec.stride_step,
             )
             state.persist(existing_state_path)
         self._active[spec.sid] = _ActiveSession(spec=spec, state=state)
@@ -322,3 +335,28 @@ def _write_wav_chunk(path: Path, pcm_bytes: bytes) -> None:
         wf.setsampwidth(SAMPLE_BYTES)
         wf.setframerate(SAMPLE_RATE_HZ)
         wf.writeframes(pcm_bytes)
+
+
+def _read_with_stride(
+    *, path: Path, out_path: Path,
+    start_byte: int, end_byte: int,
+    stride_offset: int, stride_step: int,
+    sample_width: int, framerate: int,
+) -> None:
+    """Extract every `stride_step`-th sample of width `sample_width`
+    starting at `stride_offset` within each frame, from a slice of `path`
+    delimited by `[start_byte, end_byte)`. Write as mono WAV to out_path."""
+    import wave as _wave
+    with path.open("rb") as src:
+        src.seek(start_byte)
+        data = src.read(end_byte - start_byte)
+
+    mono = bytearray()
+    for i in range(0, len(data) - stride_step + 1, stride_step):
+        mono += data[i + stride_offset : i + stride_offset + sample_width]
+
+    with _wave.open(str(out_path), "wb") as dst:
+        dst.setnchannels(1)
+        dst.setsampwidth(sample_width)
+        dst.setframerate(framerate)
+        dst.writeframes(bytes(mono))
