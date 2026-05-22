@@ -21,9 +21,16 @@ from .protocol import (
     SubscribeSessionRequest, UnsubscribeSessionRequest,
 )
 from .live_session import LiveSession, LiveSessionManager
-from .runtime import STTRuntime, STTBackend
+from .runtime import (
+    STTRuntime, STTBackend,
+    _extract_channel, _downmix_stereo_to_mono,
+)
 from .scheduler import STTScheduler, Job
 from .vocab_cache import VocabCache
+from .wav_inspect import WavLayout, classify
+
+import tempfile
+import uuid
 
 
 class STTDaemonApp:
@@ -125,19 +132,91 @@ class STTDaemonApp:
         initial_prompt = self.vocab_cache.inject_prompt(
             meeting_title=msg.meeting_title or "",
         )
-        job = Job(
-            job_id=msg.job_id,
-            kind=msg.kind,
-            engine=msg.engine,
-            language=msg.language,
-            audio_path=msg.audio_path,
-            initial_prompt=initial_prompt,
-            session_id=msg.session_id,
-            meeting_title=msg.meeting_title,
-        )
-        fut = await self.scheduler.submit(job)
+
+        # Channel-aware dispatch (Phase 3). When channel_split=False, the
+        # daemon classifies as MONO and runs exactly one scheduler job on
+        # the original file — preserving the pre-Phase-3 behavior.
+        if not msg.channel_split:
+            layout = WavLayout.MONO
+        else:
+            layout = classify(Path(msg.audio_path))
+
         try:
-            result = await fut
+            if layout is WavLayout.MONO:
+                result = await self._run_one_job(msg, msg.audio_path, initial_prompt)
+                cleaned, n_replace = self.vocab_cache.apply_replacements(result.text)
+                return TranscribeResponse(
+                    job_id=msg.job_id, status="ok",
+                    engine_used=msg.engine,
+                    language_used=result.language or msg.language,
+                    text=cleaned, raw_text=result.raw_text, segments=result.segments,
+                    vocab_prompt_terms_count=initial_prompt.count(",") + (1 if initial_prompt else 0),
+                    vocab_replacements_count=n_replace,
+                    duration_ms=result.duration_ms,
+                    layout=layout.value,
+                )
+
+            if layout is WavLayout.LEGACY_STEREO:
+                self.logger.warn("legacy_stereo_wav_no_source_separation",
+                                  path=msg.audio_path)
+                tmp_path = Path(tempfile.NamedTemporaryFile(suffix=".wav", delete=False).name)
+                try:
+                    _downmix_stereo_to_mono(Path(msg.audio_path), tmp_path)
+                    result = await self._run_one_job(msg, str(tmp_path), initial_prompt)
+                finally:
+                    tmp_path.unlink(missing_ok=True)
+                cleaned, n_replace = self.vocab_cache.apply_replacements(result.text)
+                return TranscribeResponse(
+                    job_id=msg.job_id, status="ok",
+                    engine_used=msg.engine,
+                    language_used=result.language or msg.language,
+                    text=cleaned, raw_text=result.raw_text, segments=result.segments,
+                    vocab_prompt_terms_count=initial_prompt.count(",") + (1 if initial_prompt else 0),
+                    vocab_replacements_count=n_replace,
+                    duration_ms=result.duration_ms,
+                    layout=layout.value,
+                )
+
+            # DUAL_TRACK
+            tmp_mic = Path(tempfile.NamedTemporaryFile(suffix=".mic.wav", delete=False).name)
+            tmp_sys = Path(tempfile.NamedTemporaryFile(suffix=".sys.wav", delete=False).name)
+            try:
+                _extract_channel(Path(msg.audio_path), channel=0, out_path=tmp_mic)
+                _extract_channel(Path(msg.audio_path), channel=1, out_path=tmp_sys)
+                mic_r = await self._run_one_job(msg, str(tmp_mic), initial_prompt,
+                                                 job_id_suffix=":mic")
+                sys_r = await self._run_one_job(msg, str(tmp_sys), initial_prompt,
+                                                 job_id_suffix=":sys")
+            finally:
+                tmp_mic.unlink(missing_ok=True)
+                tmp_sys.unlink(missing_ok=True)
+
+            mic_clean, mic_n = self.vocab_cache.apply_replacements(mic_r.text)
+            sys_clean, sys_n = self.vocab_cache.apply_replacements(sys_r.text)
+            return TranscribeResponse(
+                job_id=msg.job_id, status="ok",
+                engine_used=msg.engine,
+                language_used=mic_r.language or msg.language,
+                text="", raw_text="", segments=[],
+                vocab_prompt_terms_count=initial_prompt.count(",") + (1 if initial_prompt else 0),
+                vocab_replacements_count=mic_n + sys_n,
+                duration_ms=mic_r.duration_ms + sys_r.duration_ms,
+                layout=layout.value,
+                channels={
+                    "mic": {
+                        "text": mic_clean,
+                        "raw_text": mic_r.raw_text,
+                        "segments": mic_r.segments,
+                        "duration_ms": mic_r.duration_ms,
+                    },
+                    "sys": {
+                        "text": sys_clean,
+                        "raw_text": sys_r.raw_text,
+                        "segments": sys_r.segments,
+                        "duration_ms": sys_r.duration_ms,
+                    },
+                },
+            )
         except asyncio.CancelledError:
             return TranscribeResponse(
                 job_id=msg.job_id, status="cancelled",
@@ -145,23 +224,38 @@ class STTDaemonApp:
                 text="", raw_text="", segments=[],
                 vocab_prompt_terms_count=0, vocab_replacements_count=0,
                 duration_ms=0, error="cancelled",
+                layout=layout.value,
             )
         except Exception as exc:
             return ErrorEvent(job_id=msg.job_id, code=ErrorCode.INTERNAL, message=str(exc))
 
-        cleaned, n_replace = self.vocab_cache.apply_replacements(result.text)
-        return TranscribeResponse(
-            job_id=msg.job_id,
-            status="ok",
-            engine_used=msg.engine,
-            language_used=result.language or msg.language,
-            text=cleaned,
-            raw_text=result.raw_text,
-            segments=result.segments,
-            vocab_prompt_terms_count=initial_prompt.count(",") + (1 if initial_prompt else 0),
-            vocab_replacements_count=n_replace,
-            duration_ms=result.duration_ms,
+    async def _run_one_job(
+        self,
+        msg: TranscribeRequest,
+        audio_path: str,
+        initial_prompt: str,
+        *,
+        job_id_suffix: str = "",
+    ):
+        """Submit a single Job through the scheduler and await the result.
+
+        For dual-track we submit two jobs sequentially so they share the
+        background slot's priority queue with everything else. A unique
+        suffix avoids `_all_jobs` key collisions when both halves share the
+        same parent job_id.
+        """
+        job = Job(
+            job_id=msg.job_id + job_id_suffix,
+            kind=msg.kind,
+            engine=msg.engine,
+            language=msg.language,
+            audio_path=audio_path,
+            initial_prompt=initial_prompt,
+            session_id=msg.session_id,
+            meeting_title=msg.meeting_title,
         )
+        fut = await self.scheduler.submit(job)
+        return await fut
 
     async def _on_cancel(self, msg: CancelRequest, writer):
         ok = await self.scheduler.cancel(msg.job_id)
