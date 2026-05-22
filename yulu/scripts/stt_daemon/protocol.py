@@ -103,6 +103,7 @@ class TranscribeRequest:
     condition_on_previous: bool = True
     hallucination_silence_threshold: float = 2.0
     timeout_sec: int = 7200
+    channel_split: bool = False
 
 
 @dataclass
