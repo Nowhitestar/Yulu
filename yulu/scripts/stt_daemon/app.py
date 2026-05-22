@@ -30,7 +30,6 @@ from .vocab_cache import VocabCache
 from .wav_inspect import WavLayout, classify
 
 import tempfile
-import uuid
 
 
 class STTDaemonApp:
@@ -135,13 +134,17 @@ class STTDaemonApp:
 
         # Channel-aware dispatch (Phase 3). When channel_split=False, the
         # daemon classifies as MONO and runs exactly one scheduler job on
-        # the original file — preserving the pre-Phase-3 behavior.
-        if not msg.channel_split:
-            layout = WavLayout.MONO
-        else:
-            layout = classify(Path(msg.audio_path))
-
+        # the original file — preserving the pre-Phase-3 behavior. The
+        # classify() call must live inside the try/except so a vanishing
+        # file or malformed RIFF returns a clean ErrorEvent instead of
+        # crashing the connection.
+        layout = WavLayout.MONO  # safe default for the cancelled/error response
         try:
+            if not msg.channel_split:
+                layout = WavLayout.MONO
+            else:
+                layout = classify(Path(msg.audio_path))
+
             if layout is WavLayout.MONO:
                 result = await self._run_one_job(msg, msg.audio_path, initial_prompt)
                 cleaned, n_replace = self.vocab_cache.apply_replacements(result.text)
@@ -177,10 +180,13 @@ class STTDaemonApp:
                     layout=layout.value,
                 )
 
-            # DUAL_TRACK
-            tmp_mic = Path(tempfile.NamedTemporaryFile(suffix=".mic.wav", delete=False).name)
-            tmp_sys = Path(tempfile.NamedTemporaryFile(suffix=".sys.wav", delete=False).name)
+            # DUAL_TRACK — allocate inside try so that a failure between
+            # the two NamedTemporaryFile() calls cannot leak the first file.
+            tmp_mic: Optional[Path] = None
+            tmp_sys: Optional[Path] = None
             try:
+                tmp_mic = Path(tempfile.NamedTemporaryFile(suffix=".mic.wav", delete=False).name)
+                tmp_sys = Path(tempfile.NamedTemporaryFile(suffix=".sys.wav", delete=False).name)
                 _extract_channel(Path(msg.audio_path), channel=0, out_path=tmp_mic)
                 _extract_channel(Path(msg.audio_path), channel=1, out_path=tmp_sys)
                 mic_r = await self._run_one_job(msg, str(tmp_mic), initial_prompt,
@@ -188,8 +194,10 @@ class STTDaemonApp:
                 sys_r = await self._run_one_job(msg, str(tmp_sys), initial_prompt,
                                                  job_id_suffix=":sys")
             finally:
-                tmp_mic.unlink(missing_ok=True)
-                tmp_sys.unlink(missing_ok=True)
+                if tmp_mic is not None:
+                    tmp_mic.unlink(missing_ok=True)
+                if tmp_sys is not None:
+                    tmp_sys.unlink(missing_ok=True)
 
             mic_clean, mic_n = self.vocab_cache.apply_replacements(mic_r.text)
             sys_clean, sys_n = self.vocab_cache.apply_replacements(sys_r.text)
@@ -258,8 +266,15 @@ class STTDaemonApp:
         return await fut
 
     async def _on_cancel(self, msg: CancelRequest, writer):
-        ok = await self.scheduler.cancel(msg.job_id)
-        return OkResponse(detail="cancelled" if ok else "not_found")
+        # Dual-track transcribe (Phase 3) submits two scheduler Jobs keyed
+        # `<job_id>:mic` and `<job_id>:sys`. A client cancellation arrives
+        # with just the parent job_id, so fan out across all known suffixes
+        # to preserve the Phase 1 cancellation guarantee.
+        cancelled_any = False
+        for key in (msg.job_id, f"{msg.job_id}:mic", f"{msg.job_id}:sys"):
+            if await self.scheduler.cancel(key):
+                cancelled_any = True
+        return OkResponse(detail="cancelled" if cancelled_any else "not_found")
 
     async def _on_subscribe_session(self, msg: SubscribeSessionRequest, writer):
         spec = LiveSession(

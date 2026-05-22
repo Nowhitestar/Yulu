@@ -137,10 +137,13 @@ def dispatch_transcribe(
         finally:
             tmp.unlink(missing_ok=True)
 
-    # DUAL_TRACK
-    tmp_mic = Path(tempfile.NamedTemporaryFile(suffix=".mic.wav", delete=False).name)
-    tmp_sys = Path(tempfile.NamedTemporaryFile(suffix=".sys.wav", delete=False).name)
+    # DUAL_TRACK — allocate inside try so that a failure between the two
+    # NamedTemporaryFile() calls cannot leak the first file.
+    tmp_mic: Optional[Path] = None
+    tmp_sys: Optional[Path] = None
     try:
+        tmp_mic = Path(tempfile.NamedTemporaryFile(suffix=".mic.wav", delete=False).name)
+        tmp_sys = Path(tempfile.NamedTemporaryFile(suffix=".sys.wav", delete=False).name)
         _extract_channel(wav_path, channel=0, out_path=tmp_mic)
         _extract_channel(wav_path, channel=1, out_path=tmp_sys)
         mic_r = backend.transcribe(audio_path=str(tmp_mic),
@@ -155,8 +158,10 @@ def dispatch_transcribe(
             },
         )
     finally:
-        tmp_mic.unlink(missing_ok=True)
-        tmp_sys.unlink(missing_ok=True)
+        if tmp_mic is not None:
+            tmp_mic.unlink(missing_ok=True)
+        if tmp_sys is not None:
+            tmp_sys.unlink(missing_ok=True)
 
 
 class CancelToken:
