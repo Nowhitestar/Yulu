@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import tempfile
 import wave
 from dataclasses import dataclass, field
@@ -67,6 +68,27 @@ def _extract_channel(stereo_path: Path, channel: int, out_path: Path) -> None:
         dst.setsampwidth(sample_width)
         dst.setframerate(params.framerate)
         dst.writeframes(bytes(mono))
+
+
+EMPTY_CHANNEL_DBFS_THRESHOLD = -50.0  # below this → treat as silent
+
+
+def _channel_rms_dbfs(mono_wav: Path) -> float:
+    """Whole-file RMS of a mono Int16 WAV expressed in dBFS.
+    Returns -inf for empty or unsupported files."""
+    with wave.open(str(mono_wav), "rb") as f:
+        sw = f.getsampwidth()
+        n = f.getnframes()
+        raw = f.readframes(n)
+    if n == 0 or sw != 2:
+        return -math.inf
+    max_amp = float((1 << (8 * sw - 1)) - 1)
+    total = 0.0
+    for i in range(n):
+        v = int.from_bytes(raw[i * 2 : i * 2 + 2], "little", signed=True)
+        total += (v / max_amp) ** 2
+    rms = math.sqrt(total / n)
+    return 20.0 * math.log10(rms) if rms > 0 else -math.inf
 
 
 def _downmix_stereo_to_mono(stereo_path: Path, out_path: Path) -> None:
@@ -146,16 +168,27 @@ def dispatch_transcribe(
         tmp_sys = Path(tempfile.NamedTemporaryFile(suffix=".sys.wav", delete=False).name)
         _extract_channel(wav_path, channel=0, out_path=tmp_mic)
         _extract_channel(wav_path, channel=1, out_path=tmp_sys)
-        mic_r = backend.transcribe(audio_path=str(tmp_mic),
+
+        mic_dbfs = _channel_rms_dbfs(tmp_mic)
+        sys_dbfs = _channel_rms_dbfs(tmp_sys)
+
+        if mic_dbfs > EMPTY_CHANNEL_DBFS_THRESHOLD:
+            r = backend.transcribe(audio_path=str(tmp_mic),
                                    language=language, initial_prompt=initial_prompt)
-        sys_r = backend.transcribe(audio_path=str(tmp_sys),
+            mic_entry = {"text": r.text, "segments": r.segments}
+        else:
+            mic_entry = {"skipped_silent": True, "text": "", "segments": []}
+
+        if sys_dbfs > EMPTY_CHANNEL_DBFS_THRESHOLD:
+            r = backend.transcribe(audio_path=str(tmp_sys),
                                    language=language, initial_prompt=initial_prompt)
+            sys_entry = {"text": r.text, "segments": r.segments}
+        else:
+            sys_entry = {"skipped_silent": True, "text": "", "segments": []}
+
         return TranscribeDispatchResult(
             layout=layout,
-            channels={
-                "mic": {"text": mic_r.text, "segments": mic_r.segments},
-                "sys": {"text": sys_r.text, "segments": sys_r.segments},
-            },
+            channels={"mic": mic_entry, "sys": sys_entry},
         )
     finally:
         if tmp_mic is not None:

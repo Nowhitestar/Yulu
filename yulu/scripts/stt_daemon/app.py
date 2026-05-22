@@ -24,6 +24,7 @@ from .live_session import LiveSession, LiveSessionManager
 from .runtime import (
     STTRuntime, STTBackend,
     _extract_channel, _downmix_stereo_to_mono,
+    _channel_rms_dbfs, EMPTY_CHANNEL_DBFS_THRESHOLD,
 )
 from .scheduler import STTScheduler, Job
 from .vocab_cache import VocabCache
@@ -184,45 +185,70 @@ class STTDaemonApp:
             # the two NamedTemporaryFile() calls cannot leak the first file.
             tmp_mic: Optional[Path] = None
             tmp_sys: Optional[Path] = None
+            mic_channel: dict = {}
+            sys_channel: dict = {}
+            language_used = msg.language
+            total_duration_ms = 0
+            total_replacements = 0
             try:
                 tmp_mic = Path(tempfile.NamedTemporaryFile(suffix=".mic.wav", delete=False).name)
                 tmp_sys = Path(tempfile.NamedTemporaryFile(suffix=".sys.wav", delete=False).name)
                 _extract_channel(Path(msg.audio_path), channel=0, out_path=tmp_mic)
                 _extract_channel(Path(msg.audio_path), channel=1, out_path=tmp_sys)
-                mic_r = await self._run_one_job(msg, str(tmp_mic), initial_prompt,
-                                                 job_id_suffix=":mic")
-                sys_r = await self._run_one_job(msg, str(tmp_sys), initial_prompt,
-                                                 job_id_suffix=":sys")
+
+                mic_dbfs = _channel_rms_dbfs(tmp_mic)
+                sys_dbfs = _channel_rms_dbfs(tmp_sys)
+
+                if mic_dbfs > EMPTY_CHANNEL_DBFS_THRESHOLD:
+                    mic_r = await self._run_one_job(msg, str(tmp_mic), initial_prompt,
+                                                     job_id_suffix=":mic")
+                    mic_clean, mic_n = self.vocab_cache.apply_replacements(mic_r.text)
+                    mic_channel = {
+                        "text": mic_clean,
+                        "raw_text": mic_r.raw_text,
+                        "segments": mic_r.segments,
+                        "duration_ms": mic_r.duration_ms,
+                    }
+                    language_used = mic_r.language or language_used
+                    total_duration_ms += mic_r.duration_ms
+                    total_replacements += mic_n
+                else:
+                    mic_channel = {"skipped_silent": True, "text": "", "segments": []}
+
+                if sys_dbfs > EMPTY_CHANNEL_DBFS_THRESHOLD:
+                    sys_r = await self._run_one_job(msg, str(tmp_sys), initial_prompt,
+                                                     job_id_suffix=":sys")
+                    sys_clean, sys_n = self.vocab_cache.apply_replacements(sys_r.text)
+                    sys_channel = {
+                        "text": sys_clean,
+                        "raw_text": sys_r.raw_text,
+                        "segments": sys_r.segments,
+                        "duration_ms": sys_r.duration_ms,
+                    }
+                    if language_used == msg.language:
+                        language_used = sys_r.language or language_used
+                    total_duration_ms += sys_r.duration_ms
+                    total_replacements += sys_n
+                else:
+                    sys_channel = {"skipped_silent": True, "text": "", "segments": []}
             finally:
                 if tmp_mic is not None:
                     tmp_mic.unlink(missing_ok=True)
                 if tmp_sys is not None:
                     tmp_sys.unlink(missing_ok=True)
 
-            mic_clean, mic_n = self.vocab_cache.apply_replacements(mic_r.text)
-            sys_clean, sys_n = self.vocab_cache.apply_replacements(sys_r.text)
             return TranscribeResponse(
                 job_id=msg.job_id, status="ok",
                 engine_used=msg.engine,
-                language_used=mic_r.language or msg.language,
+                language_used=language_used,
                 text="", raw_text="", segments=[],
                 vocab_prompt_terms_count=initial_prompt.count(",") + (1 if initial_prompt else 0),
-                vocab_replacements_count=mic_n + sys_n,
-                duration_ms=mic_r.duration_ms + sys_r.duration_ms,
+                vocab_replacements_count=total_replacements,
+                duration_ms=total_duration_ms,
                 layout=layout.value,
                 channels={
-                    "mic": {
-                        "text": mic_clean,
-                        "raw_text": mic_r.raw_text,
-                        "segments": mic_r.segments,
-                        "duration_ms": mic_r.duration_ms,
-                    },
-                    "sys": {
-                        "text": sys_clean,
-                        "raw_text": sys_r.raw_text,
-                        "segments": sys_r.segments,
-                        "duration_ms": sys_r.duration_ms,
-                    },
+                    "mic": mic_channel,
+                    "sys": sys_channel,
                 },
             )
         except asyncio.CancelledError:

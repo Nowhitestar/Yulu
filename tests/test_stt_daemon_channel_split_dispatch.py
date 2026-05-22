@@ -35,7 +35,14 @@ def _write_mono(path: Path):
 
 
 def _write_dual_track(path: Path):
-    pcm = b"\x00\x00\x00\x00" * 64
+    # Non-silent samples on BOTH channels so the per-channel RMS gate
+    # (introduced in Task C.3) does not skip either side.
+    n_frames = 4800  # 100 ms at 48 kHz
+    pcm = bytearray()
+    for _ in range(n_frames):
+        s = (0x1FFF).to_bytes(2, "little", signed=True)
+        pcm += s + s
+    pcm = bytes(pcm)
     body = bytearray()
     body += b"RIFF" + struct.pack("<I", 0) + b"WAVE"
     body += b"fmt " + struct.pack("<I", 16) + struct.pack("<HHIIHH", 1, 2, 48000, 192000, 4, 16)
@@ -167,3 +174,39 @@ def test_dispatch_dual_track_handles_missing_file_gracefully(tmp_path):
         )
     # Backend was never invoked
     assert backend.calls == []
+
+
+def _write_dual_track_one_silent_channel(path: Path, silent: str):
+    """silent='R' → mic non-zero, sys all 0. silent='L' → opposite."""
+    n_frames = 4800  # 100 ms at 48 kHz
+    pcm = bytearray()
+    for _ in range(n_frames):
+        L = (0x1FFF).to_bytes(2, "little", signed=True) if silent != "L" else (0).to_bytes(2, "little", signed=True)
+        R = (0x1FFF).to_bytes(2, "little", signed=True) if silent != "R" else (0).to_bytes(2, "little", signed=True)
+        pcm += L + R
+    pcm = bytes(pcm)
+    body = bytearray()
+    body += b"RIFF" + struct.pack("<I", 0) + b"WAVE"
+    body += b"fmt " + struct.pack("<I", 16) + struct.pack("<HHIIHH", 1, 2, 48000, 192000, 4, 16)
+    body += b"LIST" + struct.pack("<I", 30) + b"INFO" + b"ICMT" + struct.pack("<I", 18) + b"Yulu DualTrack v1\x00"
+    body += b"data" + struct.pack("<I", len(pcm)) + pcm
+    body[4:8] = struct.pack("<I", len(body) - 8)
+    path.write_bytes(bytes(body))
+
+
+def test_dispatch_skips_silent_channel(tmp_path):
+    p = tmp_path / "voicemail.wav"
+    _write_dual_track_one_silent_channel(p, silent="R")
+    backend = _FakeBackend()
+
+    resp = dispatch_transcribe(
+        wav_path=p, channel_split=True, backend=backend,
+        language="zh", initial_prompt="",
+    )
+
+    assert resp.layout is WavLayout.DUAL_TRACK
+    assert resp.channels["mic"]["text"] == "chunk1"        # ran
+    assert resp.channels["sys"].get("skipped_silent") is True
+    assert "text" not in resp.channels["sys"] or resp.channels["sys"]["text"] == ""
+    # Only mic was dispatched
+    assert len(backend.calls) == 1
