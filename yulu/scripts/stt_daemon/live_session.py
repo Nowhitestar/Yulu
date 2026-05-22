@@ -217,6 +217,8 @@ class LiveSessionManager:
             Path(active.spec.mic_path),
             active.state.mic_offset_bytes,
             min_seconds=active.spec.chunk_sec,
+            stride_offset=active.state.mic_stride_offset,
+            stride_step=active.state.stride_step,
         )
         if mic_chunk is not None:
             chunk_path, new_offset, duration_ms = mic_chunk
@@ -227,6 +229,8 @@ class LiveSessionManager:
                 Path(active.spec.sys_path),
                 active.state.sys_offset_bytes,
                 min_seconds=active.spec.chunk_sec,
+                stride_offset=active.state.sys_stride_offset,
+                stride_step=active.state.stride_step,
             )
             if sys_chunk is not None:
                 chunk_path, new_offset, duration_ms = sys_chunk
@@ -285,7 +289,10 @@ class LiveSessionManager:
     def _offset_to_ms(self, state: TailState, source: str, *, before_chunk: bool, duration_ms: int) -> int:
         offset = state.mic_offset_bytes if source == "mic" else state.sys_offset_bytes
         offset = max(offset - WAV_HEADER_BYTES, 0)
-        ms = int(offset / (SAMPLE_RATE_HZ * SAMPLE_BYTES) * 1000)
+        # In stride mode the offset is in interleaved source bytes; divide by
+        # stride_step to convert to mono-equivalent bytes.
+        divisor = SAMPLE_RATE_HZ * SAMPLE_BYTES * max(state.stride_step, 1)
+        ms = int(offset / divisor * 1000)
         if before_chunk:
             ms = max(ms - duration_ms, 0)
         return ms
@@ -303,18 +310,55 @@ class LiveSessionManager:
         offset: int,
         *,
         min_seconds: float,
+        stride_offset: int = 0,
+        stride_step: int = 1,
     ) -> Optional[tuple[Path, int, int]]:
         """Read >= min_seconds of audio after `offset`, write a temp WAV.
 
         Returns (chunk_wav_path, new_offset, duration_ms) or None if too little.
+
+        When ``stride_step > 1``, the source file is treated as interleaved
+        samples (e.g. a stereo WAV) and only every ``stride_step``-th sample
+        starting at ``stride_offset`` is extracted into a mono chunk. This
+        requires reading ``stride_step``× more source bytes per second of
+        output audio. When ``stride_step == 1`` (default) behavior is
+        identical to Phase 1.
         """
         try:
             current_size = path.stat().st_size
         except FileNotFoundError:
             return None
         available = current_size - offset
-        if available < int(min_seconds * SAMPLE_RATE_HZ * SAMPLE_BYTES):
+        bytes_per_second = SAMPLE_RATE_HZ * SAMPLE_BYTES
+        if stride_step > 1:
+            min_source_bytes = int(min_seconds * bytes_per_second) * stride_step
+        else:
+            min_source_bytes = int(min_seconds * bytes_per_second)
+        if available < min_source_bytes:
             return None
+        if stride_step > 1:
+            # Align to a whole-frame boundary so each output sample maps to a
+            # complete interleaved frame of `stride_step` source bytes.
+            consume = (available // stride_step) * stride_step
+            if consume < min_source_bytes:
+                return None
+            new_offset = offset + consume
+            chunk_path = path.with_name(
+                f"{path.stem}.chunk-{offset}-{new_offset}-s{stride_offset}.wav"
+            )
+            _read_with_stride(
+                path=path,
+                out_path=chunk_path,
+                start_byte=offset,
+                end_byte=new_offset,
+                stride_offset=stride_offset,
+                stride_step=stride_step,
+                sample_width=SAMPLE_BYTES,
+                framerate=SAMPLE_RATE_HZ,
+            )
+            mono_bytes = (consume // stride_step) * SAMPLE_BYTES
+            duration_ms = int(mono_bytes / bytes_per_second * 1000)
+            return chunk_path, new_offset, duration_ms
         with open(path, "rb") as f:
             f.seek(offset)
             pcm = f.read(available)
@@ -324,7 +368,7 @@ class LiveSessionManager:
             f"{path.stem}.chunk-{offset}-{offset + len(pcm)}.wav"
         )
         _write_wav_chunk(chunk_path, pcm)
-        duration_ms = int(len(pcm) / (SAMPLE_RATE_HZ * SAMPLE_BYTES) * 1000)
+        duration_ms = int(len(pcm) / bytes_per_second * 1000)
         return chunk_path, offset + len(pcm), duration_ms
 
 
