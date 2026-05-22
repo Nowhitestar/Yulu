@@ -92,6 +92,36 @@ SEED_PROMPTS: list[dict] = [
             "---\n"
         ),
     },
+    {
+        "slug": "action-items-by-speaker",
+        "name": "Action Items by Speaker",
+        "category": "summary",
+        "is_auto_run": False,
+        "sort_order": 30,
+        "content": (
+            "请基于以下双轨会议转录，按发言人输出 Action Items。\n"
+            "\n"
+            "会议主题：{{meeting_title}}\n"
+            "会议日期：{{date}}\n"
+            "\n"
+            "我说过的话（mic 通道）：\n"
+            "---\n"
+            "{{my_transcript}}\n"
+            "---\n"
+            "\n"
+            "对方说过的话（sys 通道）：\n"
+            "---\n"
+            "{{their_transcript}}\n"
+            "---\n"
+            "\n"
+            "要求：\n"
+            "- 输出中文 Markdown，包含两个章节：`## 我承诺的事` / `## 对方承诺的事`。\n"
+            "- 每条 Action Item 一行 `- [ ] <内容> (截止: <日期>)`；"
+            "截止日期仅在对话中明确提到时填写，否则写 `截止: 未指定`。\n"
+            "- 不要输出未明确承诺的「可能要做」的事；如果一方没有任何承诺，对应章节写 `- 无`。\n"
+            "- 不输出讨论摘要、TL;DR 等其它内容。\n"
+        ),
+    },
 ]
 
 

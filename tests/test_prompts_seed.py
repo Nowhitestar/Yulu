@@ -16,12 +16,46 @@ def test_seed_constants_complete():
     assert {"summary", "transcript-cleanup", "action-items"} <= slugs
     for p in SEED_PROMPTS:
         assert p["category"] in ("summary", "cleanup")
-        assert "{{transcript}}" in p["content"]
+        # Legacy single-track prompts must include {{transcript}};
+        # dual-track prompts use {{my_transcript}}/{{their_transcript}} instead.
+        if p["slug"] == "action-items-by-speaker":
+            assert "{{my_transcript}}" in p["content"]
+            assert "{{their_transcript}}" in p["content"]
+        else:
+            assert "{{transcript}}" in p["content"]
     # auto-run: summary + transcript-cleanup yes, action-items no
     auto = {p["slug"]: p["is_auto_run"] for p in SEED_PROMPTS}
     assert auto["summary"] is True
     assert auto["transcript-cleanup"] is True
     assert auto["action-items"] is False
+
+
+def test_seed_includes_action_items_by_speaker(tmp_path):
+    from prompts.db import PromptsRepo, open_db
+    from prompts.seed import seed_from_current
+
+    repo = PromptsRepo(open_db(tmp_path / "p.sqlite"))
+    seed_from_current(repo)
+    slugs = {p.slug for p in repo.list_prompts()}
+    assert "action-items-by-speaker" in slugs
+
+    p = repo.by_slug("action-items-by-speaker")
+    # OFF by default — opt-in
+    assert p.is_auto_run is False
+    # Uses both new template vars
+    assert "{{my_transcript}}" in p.content
+    assert "{{their_transcript}}" in p.content
+
+
+def test_seed_total_count_at_least_four():
+    """summary + transcript-cleanup + action-items + action-items-by-speaker."""
+    from prompts.db import PromptsRepo, open_db
+    from prompts.seed import seed_from_current
+    import tempfile, pathlib
+    with tempfile.TemporaryDirectory() as td:
+        repo = PromptsRepo(open_db(pathlib.Path(td) / "p.sqlite"))
+        seed_from_current(repo)
+        assert len(repo.list_prompts()) >= 4
 
 
 def test_seed_from_current_inserts(tmp_path):
