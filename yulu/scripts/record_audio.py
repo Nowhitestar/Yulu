@@ -29,6 +29,11 @@ from state_store import (
     set_recording_started,
     set_recording_stopped,
 )
+from recording_lock import (
+    acquire as acquire_recording_lock,
+    record as record_lock,
+    RecordingBusy,
+)
 
 try:
     from agent_notify import notify
@@ -203,11 +208,18 @@ def detect_daemon_crash(resp=None):
 
 # ─── 后端: audio_daemon ──────────────────────────────
 
-def daemon_start(title):
+def daemon_start(title, lock_handle=None):
     cfg = load_config()
     resp = socket_send({"action": "start", "title": title})
     if resp and resp.get("status") == "recording":
         path = resp.get("file")
+        if lock_handle is not None:
+            record_lock(
+                lock_handle,
+                title=title,
+                path=path or "",
+                started_at=datetime.now().isoformat(),
+            )
         log(f"🎙 Recording started: {path}")
         start_realtime_transcriber(path, title)
         return True
@@ -320,7 +332,7 @@ def daemon_ensure_running():
 
 # ─── 后端: SoX + BlackHole ──────────────────────────
 
-def sox_start(title):
+def sox_start(title, lock_handle=None):
     """SoX 双路录制（向后兼容）。"""
     cfg = load_config()
     output_dir = Path(cfg["output_dir"]).expanduser()
@@ -351,6 +363,13 @@ def sox_start(title):
         start_new_session=True,
     )
     (CONFIG_DIR / ".recording_pid").write_text(str(proc.pid))
+    if lock_handle is not None:
+        record_lock(
+            lock_handle,
+            title=title,
+            path=str(output),
+            started_at=datetime.now().isoformat(),
+        )
     start_realtime_transcriber(output, title)
     return True
 
@@ -394,11 +413,22 @@ def main():
     if backend == "daemon":
         if cmd == "start":
             title = sys.argv[2] if len(sys.argv) > 2 else "未命名会议"
-            if daemon_ensure_running():
-                daemon_start(title)
-            else:
-                log("⚠️ Yulu 未运行，切换到 SoX 后端")
-                sox_start(title)
+            try:
+                with acquire_recording_lock(timeout=0.5) as lock_handle:
+                    if daemon_ensure_running():
+                        daemon_start(title, lock_handle=lock_handle)
+                    else:
+                        log("⚠️ Yulu 未运行，切换到 SoX 后端")
+                        sox_start(title, lock_handle=lock_handle)
+            except RecordingBusy as exc:
+                info = exc.info or {}
+                print(
+                    f"⚠️ 录音正在进行中: {info.get('title', '<unknown>')}\n"
+                    f"   file: {info.get('path', '<unknown>')}\n"
+                    f"   started: {info.get('started_at', '<unknown>')}",
+                    file=sys.stderr,
+                )
+                sys.exit(2)
         elif cmd == "stop":
             rec = recording_info(read_state())
             if rec.get("backend") == "sox":
@@ -415,7 +445,18 @@ def main():
     else:
         if cmd == "start":
             title = sys.argv[2] if len(sys.argv) > 2 else "未命名会议"
-            sox_start(title)
+            try:
+                with acquire_recording_lock(timeout=0.5) as lock_handle:
+                    sox_start(title, lock_handle=lock_handle)
+            except RecordingBusy as exc:
+                info = exc.info or {}
+                print(
+                    f"⚠️ 录音正在进行中: {info.get('title', '<unknown>')}\n"
+                    f"   file: {info.get('path', '<unknown>')}\n"
+                    f"   started: {info.get('started_at', '<unknown>')}",
+                    file=sys.stderr,
+                )
+                sys.exit(2)
         elif cmd == "stop":
             sox_stop()
         elif cmd == "status":
