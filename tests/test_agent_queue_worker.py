@@ -7,6 +7,7 @@ SCRIPTS = ROOT / "yulu" / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
 from agent_queue_worker import _is_valid_summary, process_queue_once
+from prompts import PromptsRepo, Category, open_db
 
 
 def valid_summary_text():
@@ -25,6 +26,20 @@ def valid_summary_text():
     )
 
 
+def _setup_prompts_db(tmp_path: Path) -> Path:
+    """Create a minimal prompts.sqlite with the default 'summary' slug."""
+    prompts_db = tmp_path / "prompts.sqlite"
+    repo = PromptsRepo(open_db(prompts_db))
+    repo.add(
+        slug="summary",
+        name="Standard Summary",
+        category=Category.SUMMARY,
+        content="summarize: {{transcript}}",
+        is_auto_run=True,
+    )
+    return prompts_db
+
+
 def write_fake_llm(tmp_path, output):
     llm = tmp_path / "fake_llm.py"
     llm.write_text(
@@ -38,6 +53,7 @@ def write_fake_llm(tmp_path, output):
 
 
 def test_processes_summary_request_writes_summary_marks_done_and_refreshes_html(tmp_path):
+    prompts_db = _setup_prompts_db(tmp_path)
     transcript = tmp_path / "meeting.transcript.txt"
     transcript.write_text("[00:00] 我们讨论了 AgentKey。需要 Lewis 跟进安装。", encoding="utf-8")
     summary = tmp_path / "meeting.summary.md"
@@ -56,7 +72,12 @@ def test_processes_summary_request_writes_summary_marks_done_and_refreshes_html(
         }
     ], ensure_ascii=False), encoding="utf-8")
 
-    processed = process_queue_once(queue_path=queue_path, llm_command=[sys.executable, str(llm)], timeout_sec=5)
+    processed = process_queue_once(
+        queue_path=queue_path,
+        llm_command=[sys.executable, str(llm)],
+        timeout_sec=5,
+        prompts_db=prompts_db,
+    )
 
     assert processed == 1
     assert summary.read_text(encoding="utf-8") == valid_summary_text()
@@ -69,6 +90,7 @@ def test_processes_summary_request_writes_summary_marks_done_and_refreshes_html(
 
 
 def test_invalid_agent_event_json_marks_error_and_does_not_overwrite_existing_summary(tmp_path):
+    prompts_db = _setup_prompts_db(tmp_path)
     transcript = tmp_path / "meeting.transcript.txt"
     transcript.write_text("[00:00] AgentKey 增长会议", encoding="utf-8")
     summary = tmp_path / "meeting.summary.md"
@@ -84,7 +106,12 @@ def test_invalid_agent_event_json_marks_error_and_does_not_overwrite_existing_su
         }
     ]), encoding="utf-8")
 
-    processed = process_queue_once(queue_path=queue_path, llm_command=[sys.executable, str(llm)], timeout_sec=5)
+    processed = process_queue_once(
+        queue_path=queue_path,
+        llm_command=[sys.executable, str(llm)],
+        timeout_sec=5,
+        prompts_db=prompts_db,
+    )
 
     assert processed == 0
     assert summary.read_text(encoding="utf-8") == "existing summary"
@@ -100,6 +127,7 @@ def test_summary_guardrail_rejects_short_output_and_agent_queue_json():
 
 
 def test_missing_transcript_marks_error_without_crashing(tmp_path):
+    prompts_db = _setup_prompts_db(tmp_path)
     queue_path = tmp_path / "agent-queue.json"
     queue_path.write_text(json.dumps([
         {
@@ -110,7 +138,12 @@ def test_missing_transcript_marks_error_without_crashing(tmp_path):
         }
     ]), encoding="utf-8")
 
-    processed = process_queue_once(queue_path=queue_path, llm_command=[sys.executable, "-c", "print('unused')"], timeout_sec=5)
+    processed = process_queue_once(
+        queue_path=queue_path,
+        llm_command=[sys.executable, "-c", "print('unused')"],
+        timeout_sec=5,
+        prompts_db=prompts_db,
+    )
 
     assert processed == 0
     queue = json.loads(queue_path.read_text(encoding="utf-8"))
