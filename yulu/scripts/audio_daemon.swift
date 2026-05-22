@@ -23,6 +23,9 @@ let DEFAULT_SILENCE_SEC: TimeInterval = 300
 let SAMPLE_RATE: UInt32 = 48000
 
 var SYS_READY = false
+/// When true, SCStream / ScreenCaptureKit is intentionally not started
+/// (voicemail / dictation use case). The WAV's R channel stays at 0.
+var SYS_DISABLED = false
 var SYS_ERROR = ""
 var MIC_READY = false
 var MIC_ERROR = ""
@@ -528,6 +531,11 @@ class AudioCapture {
     /// produced "Sys capture started" messages AFTER "Sys capture idle" —
     /// and worse, left the macOS recording indicator on after stop.
     func startCapture() {
+        if SYS_DISABLED {
+            log("🔇 SYS_DISABLED — mic-only recording mode")
+            SYS_READY = false
+            return
+        }
         guard stream == nil else { return }  // already capturing — idempotent
         let sem = DispatchSemaphore(value: 0)
         Task {
@@ -626,7 +634,11 @@ class SocketServer {
         case "windows":
             resp = self.scanWindows()
         case "start":
-            if !SYS_READY {
+            // Reset SYS_DISABLED per-request so each "start" reflects the caller's intent
+            // cleanly (a sys-disabled recording followed by a normal one must NOT inherit
+            // the previous flag).
+            SYS_DISABLED = (json["sys_disabled"] as? Bool) ?? false
+            if !SYS_READY && !SYS_DISABLED {
                 resp = ["error":"sys_capture_not_ready", "sysReady": SYS_READY, "sysError": SYS_ERROR, "micReady": MIC_READY, "micError": MIC_ERROR]
             } else if !MIC_READY {
                 resp = ["error":"mic_capture_not_ready", "sysReady": SYS_READY, "sysError": SYS_ERROR, "micReady": MIC_READY, "micError": MIC_ERROR]
