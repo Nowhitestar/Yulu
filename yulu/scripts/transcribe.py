@@ -15,7 +15,9 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-from transcribe_client import transcribe_file, DaemonUnavailable, DaemonError
+from transcribe_client import (
+    request_final_transcribe, DaemonUnavailable, DaemonError,
+)
 
 CONFIG_PATH = Path.home() / ".config" / "yulu" / "config.json"
 PROMPTS_DB = Path.home() / ".config" / "yulu" / "prompts.sqlite"
@@ -53,59 +55,42 @@ def read_realtime_transcript(path: Path) -> Optional[str]:
     return text or None
 
 
-def _notify_agent(event_type: str, **kw):
+def _request_final_transcribe_raw(audio_path: Path, trans_cfg: dict, meeting_title: str) -> dict:
+    """Channel-aware transcribe RPC; returns raw daemon payload or error envelope."""
     try:
-        from agent_notify import notify
-        notify(event_type, **kw)
-    except Exception:
-        pass
-
-
-def _request_final_transcribe(audio_path: Path, trans_cfg: dict, meeting_title: str) -> Optional[str]:
-    engine = trans_cfg.get("final_engine", "mlx")
-    language = trans_cfg.get("language", "zh")
-    try:
-        response = transcribe_file(
-            audio_path=str(audio_path),
-            engine=engine, language=language,
-            meeting_title=meeting_title, kind="file_transcribe",
+        return request_final_transcribe(
+            wav=str(audio_path), title=meeting_title,
+            language=trans_cfg.get("language", "zh"),
+            engine=trans_cfg.get("final_engine", "mlx"),
+            channel_split=True,
         )
-    except DaemonUnavailable as exc:
-        print(f"⚠️ stt_daemon unavailable: {exc}", file=sys.stderr)
-        return None
-    except DaemonError as exc:
+    except (DaemonUnavailable, DaemonError) as exc:
         print(f"⚠️ stt_daemon error: {exc}", file=sys.stderr)
+        return {"status": "error", "error": str(exc)}
+
+
+def _request_final_transcribe(audio_path: Path, trans_cfg: dict, meeting_title: str) -> Optional[dict]:
+    """Returns the daemon's response dict if status=ok, else None."""
+    resp = _request_final_transcribe_raw(audio_path, trans_cfg, meeting_title)
+    if resp.get("status") != "ok":
+        print(f"⚠️ daemon transcribe failed: {resp.get('error')}", file=sys.stderr)
         return None
-    if response.get("status") != "ok":
-        print(f"⚠️ daemon transcribe failed: {response.get('error')}", file=sys.stderr)
-        return None
-    return response["text"]
+    return resp
 
 
 def _enqueue_summary_request(*, prompt, audio_path, transcript_path,
                              meeting_title, output_path, queue_path) -> None:
-    """Build a summary_request event and append to queue_path.
-
-    For category=='summary' prompts: include html_path_hint pointing at
-    the .html sibling of output_path. For category=='cleanup': omit
-    html_path_hint (worker won't generate html for cleanup).
-    """
+    """Append a summary_request event; summary prompts also carry html_path_hint."""
     from queue_store import append_event
     extras = {}
     if prompt.category.value == "summary":
         extras["html_path_hint"] = str(output_path.with_suffix(".html"))
     append_event(
-        "summary_request",
-        path=queue_path,
-        title=meeting_title,
-        audio_path=str(audio_path),
-        transcript_path=str(transcript_path),
+        "summary_request", path=queue_path, title=meeting_title,
+        audio_path=str(audio_path), transcript_path=str(transcript_path),
         summary_path=str(output_path),
-        prompt_id=prompt.id,
-        prompt_slug=prompt.slug,
-        prompt_name=prompt.name,
-        prompt_content_snapshot=prompt.content,
-        **extras,
+        prompt_id=prompt.id, prompt_slug=prompt.slug, prompt_name=prompt.name,
+        prompt_content_snapshot=prompt.content, **extras,
     )
 
 
@@ -121,37 +106,56 @@ def process_audio(audio_path_str: str) -> None:
     meeting_title = audio_path.stem.rsplit("_", 1)[0].replace("_", " ")
     print(f"📁 处理: {audio_path.name}（标题: {meeting_title}）")
 
-    # 1. Acquire transcript via stt_daemon (with realtime fallback per mode)
-    raw_transcript_path = audio_path.with_suffix(".raw.transcript.txt")
-    realtime_transcript_path = audio_path.with_suffix(".realtime.transcript.txt")
-    transcript: Optional[str] = None
+    raw_path = audio_path.with_suffix(".raw.transcript.txt")
+    transcript_path = audio_path.with_suffix(".transcript.txt")
+    realtime_path = audio_path.with_suffix(".realtime.transcript.txt")
     post_mode = normalize_post_recording_mode(trans_cfg.get("post_recording_mode"))
 
+    # 1. Acquire transcripts. Fast mode prefers realtime mono; otherwise hit
+    # the daemon with channel_split=True so dual-track WAVs come back split.
+    merged: Optional[str] = None
+    mic_text: Optional[str] = None
+    sys_text: Optional[str] = None
+
     if post_mode == FAST_POST_RECORDING_MODE:
-        transcript = read_realtime_transcript(realtime_transcript_path)
-        if transcript:
-            print(f"⚡ 使用实时转写结果: {realtime_transcript_path}")
+        merged = read_realtime_transcript(realtime_path)
+        if merged:
+            print(f"⚡ 使用实时转写结果: {realtime_path}")
         else:
             print("⚠️ 未找到可用实时转写，回退到完整 daemon 转录", file=sys.stderr)
 
-    if transcript is None:
-        transcript = _request_final_transcribe(audio_path, trans_cfg, meeting_title)
-        if transcript is None:
-            transcript = read_realtime_transcript(realtime_transcript_path)
-            if transcript is None:
+    if merged is None:
+        response = _request_final_transcribe(audio_path, trans_cfg, meeting_title)
+        if response is None:
+            merged = read_realtime_transcript(realtime_path)
+            if merged is None:
                 print("❌ 无法获取任何转录，daemon 不可用且无 realtime 结果", file=sys.stderr)
                 sys.exit(2)
+        elif "channels" in response:
+            from stt_daemon.transcript_merge import merge_segments
+            mic_payload = response["channels"].get("mic", {}) or {}
+            sys_payload = response["channels"].get("sys", {}) or {}
+            mic_text = mic_payload.get("text", "") or ""
+            sys_text = sys_payload.get("text", "") or ""
+            merged = merge_segments(
+                mic=mic_payload.get("segments", []) or [],
+                sys=sys_payload.get("segments", []) or [],
+            )
+        else:
+            merged = response.get("text", "") or ""
 
-    # 2. Persist raw and (initial) clean transcript files.
-    # The .transcript.txt may be overwritten later by a cleanup prompt
-    # dispatched through the queue.
-    raw_transcript_path.write_text(transcript, encoding="utf-8")
-    transcript_path = audio_path.with_suffix(".transcript.txt")
-    transcript_path.write_text(transcript, encoding="utf-8")
-    print(f"✅ 原始转录已保存: {raw_transcript_path}")
+    # 2. Persist transcripts. `.transcript.txt` may be overwritten later by a
+    # cleanup prompt; `.raw.transcript.txt` preserves the pre-cleanup snapshot.
+    raw_path.write_text(merged, encoding="utf-8")
+    transcript_path.write_text(merged, encoding="utf-8")
+    print(f"✅ 原始转录已保存: {raw_path}")
     print(f"✅ 初始 transcript 已保存: {transcript_path}")
+    if mic_text is not None:
+        audio_path.with_suffix(".mic.transcript.txt").write_text(mic_text, encoding="utf-8")
+    if sys_text is not None:
+        audio_path.with_suffix(".sys.transcript.txt").write_text(sys_text, encoding="utf-8")
 
-    # 3. Enqueue auto-run prompts.
+    # 3. Enqueue auto-run prompts (unchanged from Phase 2).
     from prompts.cache import PromptsCache
     cache = PromptsCache(PROMPTS_DB)
     cache.load()

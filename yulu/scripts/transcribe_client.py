@@ -100,12 +100,18 @@ def transcribe_file(
     socket_path: Optional[Path] = None,
     connect_timeout_sec: float = 5.0,
     response_timeout_sec: float = 7200.0,
+    channel_split: bool = False,
 ) -> dict[str, Any]:
     """Synchronously transcribe one audio file via the running stt_daemon.
 
     Returns the daemon's `transcribe_result` payload (dict). Raises
     `DaemonUnavailable` if the daemon is not running. Retries once if the
     daemon closes the connection mid-request (covers daemon-restart races).
+
+    When `channel_split=True`, the daemon classifies the WAV via WavLayout
+    and may return a `channels` dict with per-channel results (DUAL_TRACK).
+    MONO / LEGACY_STEREO inputs still return a single `text`/`segments` pair.
+    Defaults to False to keep existing callers behaving exactly as before.
     """
     socket_path = Path(socket_path or DEFAULT_SOCKET)
     request = {
@@ -124,6 +130,7 @@ def transcribe_file(
         "condition_on_previous": condition_on_previous,
         "hallucination_silence_threshold": hallucination_silence_threshold,
         "timeout_sec": timeout_sec,
+        "channel_split": channel_split,
     }
     response = _run_with_retry(
         socket_path, request,
@@ -135,3 +142,31 @@ def transcribe_file(
     if response.get("type") != "transcribe_result":
         raise DaemonError(f"unexpected response: {response.get('type')}")
     return response
+
+
+def request_final_transcribe(
+    *,
+    wav: str,
+    title: Optional[str] = None,
+    language: str = "zh",
+    engine: str = "mlx",
+    channel_split: bool = False,
+    session_id: Optional[str] = None,
+    socket_path: Optional[Path] = None,
+) -> dict[str, Any]:
+    """Thin wrapper around :func:`transcribe_file` for post-recording callers.
+
+    Uses the `final_transcribe` kind and returns the raw daemon payload. The
+    Phase 3 orchestrator in `transcribe.py` calls this with
+    `channel_split=True` so dual-track WAVs come back with `channels` set.
+    """
+    return transcribe_file(
+        audio_path=wav,
+        engine=engine,
+        language=language,
+        meeting_title=title,
+        session_id=session_id,
+        kind="final_transcribe",
+        channel_split=channel_split,
+        socket_path=socket_path,
+    )
