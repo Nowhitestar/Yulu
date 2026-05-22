@@ -1,4 +1,4 @@
-// audio_daemon.swift — ScreenCaptureKit 系统音频 + 麦克风 + 半双工混音
+// Yulu audio_daemon: AVAudioEngine mic + ScreenCaptureKit sys, source-separated stereo WAV.
 // 替代 BlackHole + SoX 的方案。
 //
 // 编译:
@@ -19,9 +19,7 @@ let PID_PATH = CONFIG_DIR.appendingPathComponent(".audio_daemon.pid")
 let LOG_PATH = CONFIG_DIR.appendingPathComponent("audio_daemon.log")
 let QUEUE_PATH = CONFIG_DIR.appendingPathComponent("agent-queue.json")
 let SILENCE_THRESHOLD: Float = 0.01
-let SYS_ACTIVE_THRESHOLD: Float = 0.001  // 系统音频常偏低，半双工判断不能用自动静音阈值
 let DEFAULT_SILENCE_SEC: TimeInterval = 300
-let FADE_FRAMES = Int(0.5 * 48000)
 let SAMPLE_RATE: UInt32 = 48000
 
 var SYS_READY = false
@@ -220,13 +218,14 @@ func writeState(recording: Bool, title: String = "", path: String = "") {
     }
 }
 
-// ─── 音频数据管理器 + 半双工混音 ───────────────────────
+// ─── 音频数据管理器 + 源分离立体声 (L=mic, R=sys) ───
 
 class AudioRecorder {
     var writer: WavWriter?
     var isRecording = false
     var startTime: Date?
-    var lastAudioTime: Date?
+    var lastMicAudioTime: Date?
+    var lastSysAudioTime: Date?
     var silenceTask: DispatchWorkItem?
     var silenceSeconds = DEFAULT_SILENCE_SEC
     var onStopRequest: (() -> Void)?
@@ -242,7 +241,8 @@ class AudioRecorder {
         let url = RECORDING_DIR.appendingPathComponent(fn)
         try? FileManager.default.createDirectory(at: RECORDING_DIR, withIntermediateDirectories: true)
         guard let w = WavWriter(url: url) else { return nil }
-        writer = w; isRecording = true; startTime = Date(); lastAudioTime = Date()
+        writer = w; isRecording = true; startTime = Date()
+        lastMicAudioTime = Date(); lastSysAudioTime = Date()
         sysBuf = []; micBuf = []
         writeState(recording: true, title: title, path: url.path)
         log("🎙 \(fn)")
@@ -270,7 +270,7 @@ class AudioRecorder {
         sysBuf.append(contentsOf: samples)
         bufLock.unlock()
         let rms = calcRMS(samples)
-        if rms > SILENCE_THRESHOLD { lastAudioTime = Date() }
+        if rms > SILENCE_THRESHOLD { lastSysAudioTime = Date() }
         mixAndWrite()
     }
 
@@ -281,7 +281,7 @@ class AudioRecorder {
         micBuf.append(contentsOf: ints)
         bufLock.unlock()
         let rms = calcRMS(ints)
-        if rms > SILENCE_THRESHOLD { lastAudioTime = Date() }
+        if rms > SILENCE_THRESHOLD { lastMicAudioTime = Date() }
         mixAndWrite()
     }
 
@@ -377,8 +377,11 @@ class AudioRecorder {
         silenceTask?.cancel()
         let task = DispatchWorkItem { [weak self] in
             guard let self = self, self.isRecording else { return }
-            if let last = self.lastAudioTime, Date().timeIntervalSince(last) >= self.silenceSeconds {
-                log("🔇 silence \(Int(self.silenceSeconds))s — auto stop")
+            let now = Date()
+            let micQuiet = (self.lastMicAudioTime.map { now.timeIntervalSince($0) } ?? .infinity) >= self.silenceSeconds
+            let sysQuiet = (self.lastSysAudioTime.map { now.timeIntervalSince($0) } ?? .infinity) >= self.silenceSeconds
+            if micQuiet && sysQuiet {
+                log("🔇 silence \(Int(self.silenceSeconds))s (both channels) — auto stop")
                 self.onStopRequest?()
             }
         }
