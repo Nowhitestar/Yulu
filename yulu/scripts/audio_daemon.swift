@@ -94,7 +94,8 @@ class WavWriter {
 
     init?(url: URL) {
         self.url = url
-        FileManager.default.createFile(atPath: url.path, contents: Data(repeating: 0, count: 44))
+        // 82 bytes = RIFF(12) + fmt chunk(24) + LIST-INFO-ICMT chunk(38) + data header(8)
+        FileManager.default.createFile(atPath: url.path, contents: Data(repeating: 0, count: 82))
         guard let h = try? FileHandle(forUpdating: url) else { return nil }
         self.handle = h
         patchHeader(sync: true)
@@ -130,30 +131,52 @@ class WavWriter {
     }
 
     private func patchHeaderLocked(sync: Bool) {
-        let fileSize = audioSize + 44 - 8
+        let HDR_BYTES: UInt32 = 82
+        let fileSize = audioSize + HDR_BYTES - 8  // RIFF size = total - 8
+
         var h = Data()
-        h.append(contentsOf: [0x52,0x49,0x46,0x46] as [UInt8])
+        // RIFF header
+        h.append(contentsOf: [0x52,0x49,0x46,0x46] as [UInt8])   // "RIFF"
         var v32 = fileSize.littleEndian
         withUnsafeBytes(of: &v32) { h.append(Data($0)) }
-        h.append(contentsOf: [0x57,0x41,0x56,0x45] as [UInt8])
-        h.append(contentsOf: [0x66,0x6D,0x74,0x20] as [UInt8])
+        h.append(contentsOf: [0x57,0x41,0x56,0x45] as [UInt8])   // "WAVE"
+
+        // fmt chunk
+        h.append(contentsOf: [0x66,0x6D,0x74,0x20] as [UInt8])   // "fmt "
         v32 = UInt32(16).littleEndian
         withUnsafeBytes(of: &v32) { h.append(Data($0)) }
-        var v16 = UInt16(1).littleEndian
+        var v16 = UInt16(1).littleEndian                          // PCM
         withUnsafeBytes(of: &v16) { h.append(Data($0)) }
-        v16 = UInt16(2).littleEndian
+        v16 = UInt16(2).littleEndian                              // channels=2
         withUnsafeBytes(of: &v16) { h.append(Data($0)) }
-        v32 = UInt32(48000).littleEndian
+        v32 = UInt32(48000).littleEndian                          // sample rate
         withUnsafeBytes(of: &v32) { h.append(Data($0)) }
-        v32 = UInt32(48000*2*2).littleEndian
+        v32 = UInt32(48000 * 2 * 2).littleEndian                  // byte rate
         withUnsafeBytes(of: &v32) { h.append(Data($0)) }
-        v16 = UInt16(4).littleEndian
+        v16 = UInt16(4).littleEndian                              // block align
         withUnsafeBytes(of: &v16) { h.append(Data($0)) }
-        v16 = UInt16(16).littleEndian
+        v16 = UInt16(16).littleEndian                             // bits/sample
         withUnsafeBytes(of: &v16) { h.append(Data($0)) }
-        h.append(contentsOf: [0x64,0x61,0x74,0x61] as [UInt8])
+
+        // LIST chunk with INFO/ICMT="Yulu DualTrack v1\0"
+        h.append(contentsOf: [0x4C,0x49,0x53,0x54] as [UInt8])   // "LIST"
+        v32 = UInt32(30).littleEndian                             // LIST body size
+        withUnsafeBytes(of: &v32) { h.append(Data($0)) }
+        h.append(contentsOf: [0x49,0x4E,0x46,0x4F] as [UInt8])   // "INFO"
+        h.append(contentsOf: [0x49,0x43,0x4D,0x54] as [UInt8])   // "ICMT"
+        v32 = UInt32(18).littleEndian                             // ICMT payload size
+        withUnsafeBytes(of: &v32) { h.append(Data($0)) }
+        // "Yulu DualTrack v1\0" = 18 bytes (even, no pad needed)
+        h.append("Yulu DualTrack v1".data(using: .ascii)!)
+        h.append(contentsOf: [0x00] as [UInt8])                   // null terminator
+
+        // data chunk header
+        h.append(contentsOf: [0x64,0x61,0x74,0x61] as [UInt8])   // "data"
         v32 = audioSize.littleEndian
         withUnsafeBytes(of: &v32) { h.append(Data($0)) }
+
+        precondition(h.count == 82, "WAV header must be exactly 82 bytes (got \(h.count))")
+
         do {
             try handle?.seek(toOffset: 0)
             try handle?.write(contentsOf: h)
