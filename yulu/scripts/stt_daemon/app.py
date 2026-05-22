@@ -53,6 +53,10 @@ class STTDaemonApp:
             on_partial=self._broadcast_partial,
         )
         self._subscribers: dict[str, list[asyncio.StreamWriter]] = {}
+        # Set when stop() completes; __main__'s _run awaits this to know
+        # when to exit cleanly without needing a parent-task cancellation
+        # ping from the signal handler.
+        self.stopped_event = asyncio.Event()
 
     async def start(self) -> None:
         self.vocab_cache.load()
@@ -67,11 +71,14 @@ class STTDaemonApp:
                           recovered_sessions=recovered)
 
     async def stop(self) -> None:
+        if self.stopped_event.is_set():
+            return  # idempotent — signal handler + outer cleanup both reach here
         await self.control_server.stop()
         await self.scheduler.stop()
         await self.runtime.shutdown()
         self._remove_pid()
         self.logger.info("daemon_stopped")
+        self.stopped_event.set()
 
     def _register_handlers(self) -> None:
         cs = self.control_server

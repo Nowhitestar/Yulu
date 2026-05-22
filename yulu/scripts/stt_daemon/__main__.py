@@ -31,10 +31,12 @@ async def _run() -> int:
     app = STTDaemonApp(cfg, backends=backends)
     await app.start()
     try:
-        while True:
-            await asyncio.sleep(3600)
+        # Park until the signal handler stops the app. The handler awaits
+        # app.stop() which sets stopped_event — that's our exit signal.
+        await app.stopped_event.wait()
     except asyncio.CancelledError:
-        await app.stop()
+        if not app.stopped_event.is_set():
+            await app.stop()
     return 0
 
 
