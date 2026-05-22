@@ -92,6 +92,34 @@ def test_classify_truncated_file_returns_legacy_stereo(tmp_path):
     """A 12-byte header-only file should not crash — degrade gracefully."""
     p = tmp_path / "trunc.wav"
     p.write_bytes(b"RIFF\x00\x00\x00\x00WAVE")
-    # No fmt → channels unknown → safest fallback is LEGACY_STEREO so the
-    # caller treats it as opaque and downmixes/skips.
-    assert classify(p) in {WavLayout.LEGACY_STEREO, WavLayout.MONO}
+    # No fmt → channels stays None → falls through to LEGACY_STEREO so the
+    # caller treats it as opaque and downmixes/skips. Deterministic.
+    assert classify(p) is WavLayout.LEGACY_STEREO
+
+
+def test_classify_marker_after_data_is_missed_by_design(tmp_path):
+    """Documents that classify() stops at the data chunk — a writer that puts
+    LIST/INFO/ICMT *after* data will be silently classified as LEGACY_STEREO.
+
+    Yulu's WavWriter always writes INFO before data, so this is fine. The test
+    exists to catch future writer-side changes that would break the contract:
+    if someone moves the INFO chunk after data, this test still passes (proving
+    nothing changed in classify), but a sibling end-to-end test would fail
+    because real recordings would lose their DUAL_TRACK identity."""
+    import struct as _s
+    pcm = b"\x00\x00\x00\x00" * 16
+    fmt = _s.pack("<HHIIHH", 1, 2, 48000, 48000 * 2 * 2, 4, 16)
+    fmt_chunk = b"fmt " + _s.pack("<I", len(fmt)) + fmt
+    data_chunk = b"data" + _s.pack("<I", len(pcm)) + pcm
+    # ICMT after data
+    payload = DUAL_TRACK_MARKER + b"\x00"
+    icmt = b"ICMT" + _s.pack("<I", len(payload)) + payload
+    list_body = b"INFO" + icmt
+    list_chunk = b"LIST" + _s.pack("<I", len(list_body)) + list_body
+
+    body = b"WAVE" + fmt_chunk + data_chunk + list_chunk
+    riff = b"RIFF" + _s.pack("<I", len(body)) + body
+    p = tmp_path / "marker_after_data.wav"
+    p.write_bytes(riff)
+
+    assert classify(p) is WavLayout.LEGACY_STEREO

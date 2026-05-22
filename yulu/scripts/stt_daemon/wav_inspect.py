@@ -58,7 +58,7 @@ def classify(path: Path) -> WavLayout:
 
             elif chunk_id == b"LIST":
                 body = f.read(chunk_size)
-                if body[:4] == b"INFO" and DUAL_TRACK_MARKER in body:
+                if len(body) >= 4 and body[:4] == b"INFO" and DUAL_TRACK_MARKER in body:
                     has_marker = True
                 if chunk_size % 2:
                     f.read(1)
