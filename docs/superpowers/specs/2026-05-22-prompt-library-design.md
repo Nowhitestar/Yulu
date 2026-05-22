@@ -91,7 +91,7 @@ CREATE TABLE prompts (
                                             -- e.g. "summary", "action-items", "transcript-cleanup"
     name        TEXT NOT NULL,              -- human-readable display name
     category    TEXT NOT NULL CHECK(category IN ('summary', 'cleanup')),
-    content     TEXT NOT NULL,              -- template; supports {{transcript}}, {{meeting_title}}
+    content     TEXT NOT NULL,              -- template; supports {{transcript}}, {{meeting_title}}, {{date}}
     is_auto_run INTEGER NOT NULL DEFAULT 0, -- 1 = fires automatically per meeting
     source      TEXT NOT NULL DEFAULT 'manual'
                 CHECK(source IN ('seed', 'manual', 'learned')),
@@ -134,7 +134,8 @@ CREATE TABLE meta (
 - `slug` is the user-stable identifier. It must be URL-safe filename-safe (lowercase letters, digits, hyphens). CLI validates on add/edit.
 - A row with `slug='summary'` is treated as "default" — its output is written to `<meeting>.summary.md` (no slug infix) for back-compat. Other slugs get `<meeting>.<slug>.summary.md`.
 - `category='cleanup'` rows write their output back to `<audio>.transcript.txt` (overwriting transcribe.py's raw write). At most one cleanup prompt can be `is_auto_run` simultaneously; CLI add/edit enforces this.
-- Templates support **exactly two variables**: `{{transcript}}` and `{{meeting_title}}`. Substitution is single-pass, literal — no Jinja, no escaping.
+- Templates support **exactly three variables**: `{{transcript}}`, `{{meeting_title}}`, and `{{date}}`. Substitution is single-pass, literal — no Jinja, no escaping.
+  - `{{date}}` resolves to the meeting recording's date in `YYYY-MM-DD` form. The recording date is parsed from the audio filename's trailing `_YYYYMMDD_HHMMSS` suffix (Yulu's audio_daemon naming convention); on parse failure, falls back to `os.stat(audio_path).st_mtime` formatted as `YYYY-MM-DD` in the system timezone. The same resolution is reused everywhere the variable is referenced (transcribe.py at enqueue, worker at dispatch).
 - Prompt edits do not retroactively change existing `summaries` rows (snapshot fields make those reproducible).
 
 ### Seed snapshots (frozen)
@@ -223,10 +224,29 @@ class PromptsCache:
     def auto_run(self, category: str) -> list[Prompt]: ...  # filtered + sorted by sort_order
     def by_slug(self, slug: str) -> Optional[Prompt]: ...
     def by_id(self, prompt_id: str) -> Optional[Prompt]: ...
-    def render(self, prompt: Prompt, *, transcript: str, meeting_title: str) -> str:
+    def render(self, prompt: Prompt, *, transcript: str, meeting_title: str, date: str) -> str:
         return (prompt.content
                 .replace("{{transcript}}", transcript)
-                .replace("{{meeting_title}}", meeting_title))
+                .replace("{{meeting_title}}", meeting_title)
+                .replace("{{date}}", date))
+
+
+def resolve_meeting_date(audio_path: Path) -> str:
+    """Extract YYYY-MM-DD from audio filename's trailing _YYYYMMDD_HHMMSS suffix.
+    Falls back to file mtime in system timezone. Same logic used by transcribe.py
+    (at enqueue) and agent_queue_worker (at dispatch) so the value is identical."""
+    import re
+    from datetime import datetime
+    m = re.search(r"_(\d{8})_\d{6}\.", audio_path.name)
+    if m:
+        try:
+            return datetime.strptime(m.group(1), "%Y%m%d").strftime("%Y-%m-%d")
+        except ValueError:
+            pass
+    try:
+        return datetime.fromtimestamp(audio_path.stat().st_mtime).strftime("%Y-%m-%d")
+    except OSError:
+        return datetime.now().strftime("%Y-%m-%d")
 ```
 
 Used by:
@@ -315,9 +335,12 @@ def _handle_summary_request(entry, llm_command, timeout_sec, cache: PromptsCache
 
     transcript_path = Path(entry['transcript_path'])
     transcript = transcript_path.read_text(encoding='utf-8') if transcript_path.exists() else ''
+    from prompts.cache import resolve_meeting_date
+    date = resolve_meeting_date(Path(entry.get('audio_path', transcript_path)))
     rendered = (snapshot
                 .replace('{{transcript}}', transcript)
-                .replace('{{meeting_title}}', entry.get('title', '')))
+                .replace('{{meeting_title}}', entry.get('title', ''))
+                .replace('{{date}}', date))
 
     # 2. record start
     summary_id = summaries_repo.start(
@@ -377,7 +400,7 @@ Deleted from `agent_queue_worker.py`:
 |---|---|---|
 | `tests/test_prompts_db.py` | CRUD, slug uniqueness, category check, summaries-table CRUD | unit |
 | `tests/test_prompts_seed.py` | 3 seed rows idempotent, restore-defaults preserves manual | unit |
-| `tests/test_prompts_cache.py` | auto_run filter, by_slug, render substitution, WAL mtime reload, SIGHUP | unit + integration |
+| `tests/test_prompts_cache.py` | auto_run filter, by_slug, render substitution (all 3 vars), `resolve_meeting_date` with valid suffix / unparseable suffix / missing file, WAL mtime reload, SIGHUP | unit + integration |
 | `tests/test_prompts_cli.py` | argparse subcommands, slug validation, --from-file, --auto-run flag, SIGHUP fire | unit |
 | `tests/test_transcribe_enqueue.py` | with mocked queue_store + cache, verify N events enqueued per meeting | unit |
 | `tests/test_agent_queue_worker_prompts.py` | snapshot resolution, legacy event fallback, summary file write, summaries-table row insert (status flow), error path | integration |
