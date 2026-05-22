@@ -41,7 +41,8 @@ WAV → realtime_transcribe.py / transcribe.py → MLX Whisper or whisper-cli
 - **System audio + microphone** — records remote speaker audio and local microphone input.
 - **Half-duplex mixing** — prioritize system audio while others speak; fade to microphone during system silence.
 - **Meeting detection** — detects Zoom, Tencent Meeting, Google Meet, Feishu/Lark, WeChat calls, and browser-based meetings.
-- **Local transcription** — uses MLX Whisper on Apple Silicon, or `whisper-cli` from whisper.cpp.
+- **Resident STT daemon** — `stt_daemon` keeps MLX Whisper (or whisper-cli) loaded under launchd; eliminates the 3–10s per-transcribe cold-start tax. Two-slot scheduler (interactive + background) with priority + cancellation. See [ADR-001](spec/adr/001-resident-stt-daemon.md).
+- **User-editable vocabulary** — `~/.config/yulu/vocab.sqlite` drives both `mlx-whisper` `initial_prompt` injection and post-transcription regex replacement. Edit via `yulu vocab add/list/edit/remove`. See [ADR-002](spec/adr/002-vocab-sqlite-single-source.md).
 - **OpenClaw agent summaries** — transcription writes a `summary_request` into the agent queue; the OpenClaw agent generates the final meeting notes and notifies the user.
 
 ## Install
@@ -178,7 +179,12 @@ All scripts live under `scripts/`:
 | `meeting_detector.py` | Meeting window detector |
 | `window_scanner.swift` | Accessibility window scanner |
 | `recorder_status.swift` | Floating recording status window |
-| `transcribe.py` | MLX / whisper transcription + agent queue summary request |
+| `transcribe.py` | Thin client: orchestrate via `stt_daemon` + refine/summary/agent-queue dispatch |
+| `transcribe_client.py` | Synchronous RPC client for `stt_daemon` (retry-on-EOF) |
+| `realtime_transcribe.py` | Daemon **subscriber** (writes `<audio>.realtime.transcript.txt` from partial events) |
+| `stt_daemon/` | Resident STT service — protocol, scheduler, runtime, vocab cache, live-session tail loop, control server |
+| `vocab/` | `custom_words` SQLite repository, frozen seed snapshots, `yulu vocab` CLI |
+| `stt_cli.py` | `yulu stt` subcommand handlers (status / warm-up / logs / restart) |
 | `agent_notify.py` | OpenClaw agent queue writer |
 | `notify.py` | macOS notifications/prompts |
 | `check_meetings.py` | Calendar queries |
@@ -187,13 +193,40 @@ All scripts live under `scripts/`:
 | `run_calendar_services.py` | Google Calendar webhook + cloudflared tunnel service |
 | `summary_template.md` | Meeting notes template |
 | `config.example.json` | Example config |
-| `com.yulu.*.plist` | LaunchAgent definitions |
+| `com.yulu.*.plist` | LaunchAgent definitions (includes `com.yulu.sttdaemon.plist`) |
+
+## CLI Surfaces
+
+```bash
+# Vocabulary (custom_words SQLite)
+yulu vocab seed --from-current        # one-time, install the bundled glossary
+yulu vocab list --json                 # show all rows
+yulu vocab add "agent king" "AgentKey" --scope both
+yulu vocab edit <id> --disable
+yulu vocab remove <id>
+yulu vocab export --format json -o backup.json
+yulu vocab import backup.json
+yulu vocab reload                      # SIGHUP daemon (also auto-fired after mutations)
+
+# STT daemon operations
+yulu stt status                        # health: model_loaded, in_flight, sessions
+yulu stt status --json                 # same, machine-readable
+yulu stt warm-up                       # explicit warm (otherwise lazy on first transcribe)
+yulu stt logs --tail 50                # tail structured JSON log
+yulu stt restart                       # launchctl kickstart -k
+
+# Health check (covers stt_daemon section)
+yulu doctor --json | jq .stt_daemon
+```
 
 ## Manual Commands
 
 ```bash
-# Yulu daemon status
+# Audio daemon status (existing)
 echo '{"action":"status"}' | nc -w 2 -U ~/.config/yulu/audio_daemon.sock
+
+# Direct daemon RPC (debugging)
+echo '{"type":"health"}' | nc -U ~/.config/yulu/stt_daemon.sock
 
 # Manual recording
 python3 scripts/record_audio.py start "Test Meeting"
