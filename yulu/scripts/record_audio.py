@@ -32,6 +32,7 @@ from state_store import (
 from recording_lock import (
     acquire as acquire_recording_lock,
     record as record_lock,
+    read_meta as read_lock_meta,
     RecordingBusy,
 )
 
@@ -208,8 +209,34 @@ def detect_daemon_crash(resp=None):
 
 # ─── 后端: audio_daemon ──────────────────────────────
 
+def _raise_if_daemon_recording(lock_handle):
+    """Defer to the audio_daemon as the canonical "is recording" arbiter.
+
+    The flock is held only for the start-handshake (~50ms) while the recording
+    it gated runs for minutes/hours. So a second `start` invocation can
+    acquire the flock cleanly while the daemon is still recording. Probe the
+    daemon: if it reports recording, raise RecordingBusy carrying the live
+    holder's metadata (read from the lock file, which now persists past the
+    holder's release per the new lock semantics).
+    """
+    status = socket_send({"action": "status"})
+    if not (status and status.get("recording") is True):
+        return
+    info = {}
+    if lock_handle is not None:
+        info = read_lock_meta(lock_handle.path)
+    if not info:
+        info = {
+            "title": "<unknown>",
+            "path": status.get("file") or "<unknown>",
+            "started_at": "<unknown>",
+        }
+    raise RecordingBusy(info)
+
+
 def daemon_start(title, lock_handle=None):
     cfg = load_config()
+    _raise_if_daemon_recording(lock_handle)
     resp = socket_send({"action": "start", "title": title})
     if resp and resp.get("status") == "recording":
         path = resp.get("file")

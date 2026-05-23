@@ -335,7 +335,7 @@ def _start_recording(title, meeting_id=""):
     print(f"🎙️ 开始录制: {title}")
     try:
         with acquire_recording_lock(timeout=0.5) as lock_handle:
-            audio_path = _daemon_start_recording(title)
+            audio_path = _daemon_start_recording(title, lock_handle=lock_handle)
             if not audio_path:
                 print(
                     f"❌ 录制启动失败: daemon 未返回有效路径 (title={title!r})",
@@ -378,7 +378,7 @@ def _start_recording(title, meeting_id=""):
         )
 
 
-def _daemon_start_recording(title):
+def _daemon_start_recording(title, lock_handle=None):
     """Send a start RPC to the audio_daemon directly and return the recorded
     file path on success, or ``None`` on failure.
 
@@ -387,9 +387,16 @@ def _daemon_start_recording(title):
     keeping ``meeting_daemon`` free to call them inside the recording-lock
     critical section without the child-process flock contention that a
     ``subprocess.run(record_audio.py start)`` would introduce.
-    """
-    from record_audio import socket_send
 
+    Defers to the daemon as the canonical "is recording" arbiter: probes
+    status first, and raises ``RecordingBusy`` if a recording is already in
+    flight (the flock alone cannot prevent this — see ``recording_lock``
+    docstring for why). Lets the caller's existing ``except RecordingBusy``
+    surface the live recording's metadata.
+    """
+    from record_audio import _raise_if_daemon_recording, socket_send
+
+    _raise_if_daemon_recording(lock_handle)
     resp = socket_send({"action": "start", "title": title})
     if not resp or resp.get("status") != "recording":
         print(f"⚠️ daemon failed to start: {resp}", file=sys.stderr)

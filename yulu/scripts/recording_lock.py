@@ -48,7 +48,12 @@ class RecordingBusy(RuntimeError):
         self.info = info
 
 
-def _read_meta(path: Path) -> dict:
+def read_meta(path: Path) -> dict:
+    """Read the JSON metadata blob from a lock file path. Returns ``{}`` when
+    the file is missing, empty, or malformed. Used by contenders to surface
+    the live recording's title / path / started_at when the daemon reports
+    a recording in progress (the daemon's status RPC does not carry these).
+    """
     try:
         text = path.read_text(encoding="utf-8")
     except FileNotFoundError:
@@ -85,7 +90,7 @@ def acquire(
                 os.close(fd)
                 raise
             if time.monotonic() >= deadline:
-                info = _read_meta(lock_path)
+                info = read_meta(lock_path)
                 os.close(fd)
                 raise RecordingBusy(info)
             time.sleep(0.05)
@@ -93,11 +98,14 @@ def acquire(
     try:
         yield RecordingLockHandle(fd=fd, path=lock_path)
     finally:
-        try:
-            # Clear metadata: lock is being released, info is stale.
-            os.ftruncate(fd, 0)
-        except OSError:
-            pass
+        # NOTE: do NOT truncate metadata on release. The flock is held only
+        # for the duration of the daemon-start handshake (~50ms), but the
+        # recording it gated continues for minutes/hours. A second `start`
+        # caller acquires the flock cleanly the moment the first releases,
+        # and uses the persisted metadata (title/started_at — fields the
+        # daemon's status RPC does not carry) to surface a RecordingBusy
+        # error. The daemon itself remains the canonical arbiter of "is
+        # recording", consulted via socket_send({"action":"status"}).
         try:
             fcntl.flock(fd, fcntl.LOCK_UN)
         finally:
