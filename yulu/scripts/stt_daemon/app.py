@@ -303,17 +303,49 @@ class STTDaemonApp:
         return OkResponse(detail="cancelled" if cancelled_any else "not_found")
 
     async def _on_subscribe_session(self, msg: SubscribeSessionRequest, writer):
-        spec = LiveSession(
-            sid=msg.sid,
-            mic_path=msg.mic_path,
-            sys_path=msg.sys_path,
-            engine=msg.engine,
-            language=msg.language,
-            chunk_sec=msg.chunk_sec,
-        )
+        # Classify the mic WAV so a Phase-3 dual-track recording is read with
+        # stride extraction (L=mic, R=sys interleaved Int16 at 48 kHz). Without
+        # this branch the tail loop would feed whisper raw interleaved bytes
+        # and produce hallucinated boilerplate captions.
+        try:
+            layout = classify(Path(msg.mic_path))
+        except (FileNotFoundError, OSError, ValueError):
+            layout = WavLayout.MONO
+
+        if layout is WavLayout.DUAL_TRACK:
+            spec = LiveSession(
+                sid=msg.sid,
+                mic_path=msg.mic_path,
+                sys_path=msg.mic_path,  # stride-extracted from the same file
+                engine=msg.engine,
+                language=msg.language,
+                chunk_sec=msg.chunk_sec,
+                mic_stride_offset=0,
+                sys_stride_offset=2,
+                stride_step=4,
+                source_sample_rate_hz=48000,
+                wav_header_bytes=82,
+            )
+        else:
+            # MONO and LEGACY_STEREO both keep Phase-1 defaults (16 kHz / 44-byte
+            # header / no stride). Legacy stereo is downmixed at final-transcribe
+            # time, not in the live tail.
+            spec = LiveSession(
+                sid=msg.sid,
+                mic_path=msg.mic_path,
+                sys_path=msg.sys_path,
+                engine=msg.engine,
+                language=msg.language,
+                chunk_sec=msg.chunk_sec,
+            )
         await self.live_sessions.start_session(spec)
         self._subscribers.setdefault(msg.sid, []).append(writer)
-        self.logger.info("session_subscribed", sid=msg.sid, mic=msg.mic_path)
+        self.logger.info(
+            "session_subscribed",
+            sid=msg.sid,
+            mic=msg.mic_path,
+            layout=layout.value,
+        )
         return OkResponse(detail=f"subscribed:{msg.sid}")
 
     async def _on_unsubscribe_session(self, msg: UnsubscribeSessionRequest, writer):
