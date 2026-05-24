@@ -638,6 +638,16 @@ class SocketServer {
             // cleanly (a sys-disabled recording followed by a normal one must NOT inherit
             // the previous flag).
             SYS_DISABLED = (json["sys_disabled"] as? Bool) ?? false
+            // Per-request silence threshold: voicemail uses ~3s, meetings use the default.
+            // Omitting the field MUST reset to DEFAULT_SILENCE_SEC so a previous short
+            // threshold does not leak into the next recording.
+            if let s = json["silence_seconds"] as? Int, s > 0 {
+                recorder.silenceSeconds = Double(s)
+            } else if let s = json["silence_seconds"] as? Double, s > 0 {
+                recorder.silenceSeconds = s
+            } else {
+                recorder.silenceSeconds = DEFAULT_SILENCE_SEC
+            }
             if !SYS_READY && !SYS_DISABLED {
                 resp = ["error":"sys_capture_not_ready", "sysReady": SYS_READY, "sysError": SYS_ERROR, "micReady": MIC_READY, "micError": MIC_ERROR]
             } else if !MIC_READY {
