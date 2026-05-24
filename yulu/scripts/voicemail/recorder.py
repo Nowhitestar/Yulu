@@ -13,7 +13,10 @@ duplicate any Phase 1-3 primitives:
 
 from __future__ import annotations
 
+import signal
 import sys
+import time
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -114,4 +117,113 @@ def _transcribe_and_enqueue(wav_path: Path, *, title: Optional[str]) -> int:
         queue_path=AGENT_QUEUE_PATH,
     )
     print(f"📤 enqueued {queued} voicemail prompt(s)", file=sys.stderr)
+    return 0
+
+
+# Module-level seam for tests (patchable)
+_poll_interval = 1.0
+
+
+def _socket_send(cmd: dict):
+    """Indirection so tests can stub the daemon socket without importing
+    record_audio.socket_send everywhere."""
+    from record_audio import socket_send
+    return socket_send(cmd)
+
+
+def _acquire_recording_lock(*, timeout: float = 0.5):
+    """Re-exposed so tests can stub away the OS-level flock."""
+    from recording_lock import acquire as _acquire
+    return _acquire(timeout=timeout)
+
+
+def _record_lock_meta(handle, *, title: str, path: str, started_at: str) -> None:
+    from recording_lock import record as _record
+    _record(handle, title=title, path=path, started_at=started_at)
+
+
+def _gen_stem(now: Optional[datetime] = None) -> str:
+    now = now or datetime.now()
+    return now.strftime("voicemail_%Y%m%d_%H%M%S")
+
+
+def cmd_new(title: Optional[str] = None, *,
+            silence_seconds: int = DEFAULT_SILENCE_SECONDS) -> int:
+    """Start a voicemail recording and block until the daemon stops
+    recording (Ctrl-C or silence-stop). Then transcribe + enqueue."""
+    from recording_lock import RecordingBusy
+
+    VOICEMAIL_DIR.mkdir(parents=True, exist_ok=True)
+    stem = _gen_stem()
+
+    try:
+        lock_ctx = _acquire_recording_lock(timeout=0.5)
+    except RecordingBusy as exc:
+        info = exc.info or {}
+        print(
+            f"⚠️ 录音正在进行中: {info.get('title', '<unknown>')}\n"
+            f"   file: {info.get('path', '<unknown>')}\n"
+            f"   started: {info.get('started_at', '<unknown>')}",
+            file=sys.stderr,
+        )
+        return 2
+
+    wav_path: Optional[Path] = None
+    with lock_ctx as lock_handle:
+        resp = _socket_send({
+            "action": "start",
+            "title": stem,
+            "sys_disabled": True,
+            "silence_seconds": silence_seconds,
+            "output_dir": str(VOICEMAIL_DIR),
+        })
+        if not resp or resp.get("status") != "recording":
+            print(f"⚠️ daemon failed to start: {resp}", file=sys.stderr)
+            return 1
+        wav_path = Path(resp.get("file") or (VOICEMAIL_DIR / f"{stem}.wav"))
+        _record_lock_meta(
+            lock_handle,
+            title=stem,
+            path=str(wav_path),
+            started_at=datetime.now().isoformat(),
+        )
+        print(f"🎤 录音中 — Ctrl+C 停止 ({silence_seconds}s 静音自动停)",
+              file=sys.stderr)
+
+        stop_requested = {"v": False}
+
+        def _on_sigint(_sig, _frame):
+            stop_requested["v"] = True
+
+        prev = signal.signal(signal.SIGINT, _on_sigint)
+        try:
+            # Poll daemon status until it flips to not-recording.
+            while True:
+                if stop_requested["v"]:
+                    _socket_send({"action": "stop"})
+                    stop_requested["v"] = False  # one-shot
+                status = _socket_send({"action": "status"}) or {}
+                if not status.get("recording"):
+                    break
+                time.sleep(_poll_interval)
+        finally:
+            signal.signal(signal.SIGINT, prev)
+        print("⏹ Stopped", file=sys.stderr)
+
+    if wav_path is None or not wav_path.exists():
+        print("⚠️ recording stopped but no .wav file present", file=sys.stderr)
+        return 1
+    return _transcribe_and_enqueue(wav_path, title=title)
+
+
+def cmd_stop() -> int:
+    """Stop any in-flight recording. Idempotent: prints 'no active recording'
+    if nothing was recording. Does NOT trigger transcribe — that's the
+    owner cmd_new's responsibility."""
+    status = _socket_send({"action": "status"}) or {}
+    if not status.get("recording"):
+        print("no active recording", file=sys.stderr)
+        return 0
+    resp = _socket_send({"action": "stop"}) or {}
+    print(f"⏹ Stopped: {resp.get('file', '<unknown>')}", file=sys.stderr)
     return 0

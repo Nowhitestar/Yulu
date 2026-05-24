@@ -131,3 +131,110 @@ def test_transcribe_handles_daemon_error_gracefully(isolated_paths, tmp_path, mo
     assert not wav.with_suffix(".transcript.txt").exists()
     events = json.loads(queue.read_text(encoding="utf-8"))
     assert events == []
+
+
+def test_cmd_new_sends_start_with_sys_disabled_and_silence_seconds(
+    isolated_paths, tmp_path, monkeypatch,
+):
+    """cmd_new must invoke the daemon with sys_disabled=True and a
+    3-second silence_seconds; must acquire the recording lock; must
+    block until the recording state flips to not-recording."""
+    queue, _ = isolated_paths
+    # Redirect VOICEMAIL_DIR to tmp_path so the wav lands somewhere we control
+    monkeypatch.setattr(recorder, "VOICEMAIL_DIR", tmp_path)
+
+    wav_path = tmp_path / "voicemail_20260523_201500.wav"
+    # The post-stop pipeline checks wav existence — touch it now so the
+    # success branch is reachable.
+    wav_path.touch()
+
+    sent: list[dict] = []
+    status_responses = iter([
+        {"recording": True, "file": str(wav_path)},
+        {"recording": True, "file": str(wav_path)},
+        {"recording": False, "file": str(wav_path)},
+    ])
+
+    def fake_socket_send(cmd):
+        sent.append(cmd)
+        if cmd.get("action") == "status":
+            return next(status_responses)
+        if cmd.get("action") == "start":
+            return {"status": "recording", "file": str(wav_path)}
+        if cmd.get("action") == "stop":
+            return {"status": "stopped", "file": str(wav_path)}
+        return None
+
+    fake_response = {
+        "status": "ok",
+        "channels": {
+            "mic": {"text": "test memo",
+                    "segments": [{"start": 0.0, "end": 1.0, "text": "test memo"}]},
+            "sys": {"skipped_silent": True, "text": "", "segments": []},
+        },
+    }
+
+    monkeypatch.setattr(recorder, "_socket_send", fake_socket_send)
+    monkeypatch.setattr(recorder, "_poll_interval", 0.01)
+    with patch.object(recorder, "_request_transcribe", return_value=fake_response):
+        rc = recorder.cmd_new(title="MyMemo")
+
+    assert rc == 0
+    # First non-status RPC is the start
+    starts = [c for c in sent if c.get("action") == "start"]
+    assert len(starts) == 1
+    assert starts[0]["sys_disabled"] is True
+    assert starts[0]["silence_seconds"] == 3
+    assert starts[0]["title"].startswith("voicemail_")
+    assert starts[0]["output_dir"] == str(tmp_path)
+
+    # Title sidecar landed
+    assert (wav_path.with_suffix(".title")).exists()
+
+
+def test_cmd_new_returns_2_on_busy(tmp_path, monkeypatch):
+    """If the recording_lock acquire raises RecordingBusy, cmd_new exits 2
+    with a friendly Chinese error mentioning the in-flight recording."""
+    from recording_lock import RecordingBusy
+    monkeypatch.setattr(recorder, "VOICEMAIL_DIR", tmp_path)
+
+    def fake_acquire(*args, **kwargs):
+        raise RecordingBusy({
+            "title": "ProductWeekly", "path": "/tmp/foo.wav",
+            "started_at": "2026-05-23T12:00:00",
+        })
+    monkeypatch.setattr(recorder, "_acquire_recording_lock", fake_acquire)
+
+    rc = recorder.cmd_new()
+    assert rc == 2
+
+
+def test_cmd_stop_idempotent_when_not_recording(monkeypatch):
+    """If status reports not-recording, cmd_stop exits 0 without sending
+    a stop RPC."""
+    sent: list[dict] = []
+    def fake_socket_send(cmd):
+        sent.append(cmd)
+        if cmd.get("action") == "status":
+            return {"recording": False, "file": ""}
+        return None
+    monkeypatch.setattr(recorder, "_socket_send", fake_socket_send)
+    rc = recorder.cmd_stop()
+    assert rc == 0
+    assert all(c.get("action") != "stop" for c in sent)
+
+
+def test_cmd_stop_sends_stop_when_recording(monkeypatch):
+    sent: list[dict] = []
+    def fake_socket_send(cmd):
+        sent.append(cmd)
+        if cmd.get("action") == "status":
+            return {"recording": True, "file": "/tmp/voicemail_20260523_201500.wav"}
+        if cmd.get("action") == "stop":
+            return {"status": "stopped",
+                    "file": "/tmp/voicemail_20260523_201500.wav"}
+        return None
+    monkeypatch.setattr(recorder, "_socket_send", fake_socket_send)
+    rc = recorder.cmd_stop()
+    assert rc == 0
+    assert any(c.get("action") == "stop" for c in sent)

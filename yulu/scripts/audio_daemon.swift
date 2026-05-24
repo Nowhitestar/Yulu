@@ -231,6 +231,7 @@ class AudioRecorder {
     var lastSysAudioTime: Date?
     var silenceTask: DispatchWorkItem?
     var silenceSeconds = DEFAULT_SILENCE_SEC
+    var outputDir: URL = RECORDING_DIR
     var onStopRequest: (() -> Void)?
 
     // Streaming buffers
@@ -241,8 +242,8 @@ class AudioRecorder {
     func start(title: String) -> String? {
         let df = DateFormatter(); df.dateFormat = "yyyyMMdd_HHmmss"
         let fn = "\(title.components(separatedBy: .alphanumerics.inverted).joined())_\(df.string(from: Date())).wav"
-        let url = RECORDING_DIR.appendingPathComponent(fn)
-        try? FileManager.default.createDirectory(at: RECORDING_DIR, withIntermediateDirectories: true)
+        let url = outputDir.appendingPathComponent(fn)
+        try? FileManager.default.createDirectory(at: outputDir, withIntermediateDirectories: true)
         guard let w = WavWriter(url: url) else { return nil }
         writer = w; isRecording = true; startTime = Date()
         lastMicAudioTime = Date(); lastSysAudioTime = Date()
@@ -647,6 +648,15 @@ class SocketServer {
                 recorder.silenceSeconds = s
             } else {
                 recorder.silenceSeconds = DEFAULT_SILENCE_SEC
+            }
+            // Per-request output directory: voicemails land in ~/yulu/voicemails,
+            // meetings use the default RECORDING_DIR. Omitting the field resets
+            // to RECORDING_DIR so a previous voicemail does not leak into the
+            // next meeting recording.
+            if let dir = json["output_dir"] as? String, !dir.isEmpty {
+                recorder.outputDir = URL(fileURLWithPath: dir)
+            } else {
+                recorder.outputDir = RECORDING_DIR
             }
             if !SYS_READY && !SYS_DISABLED {
                 resp = ["error":"sys_capture_not_ready", "sysReady": SYS_READY, "sysError": SYS_ERROR, "micReady": MIC_READY, "micError": MIC_ERROR]
