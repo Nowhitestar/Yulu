@@ -18,6 +18,7 @@ SCHEMA_VERSION = "1"
 class Category(str, Enum):
     SUMMARY = "summary"
     CLEANUP = "cleanup"
+    VOICEMAIL = "voicemail"
 
 
 class Source(str, Enum):
@@ -72,7 +73,7 @@ CREATE TABLE IF NOT EXISTS prompts (
     id TEXT PRIMARY KEY,
     slug TEXT NOT NULL UNIQUE,
     name TEXT NOT NULL,
-    category TEXT NOT NULL CHECK(category IN ('summary', 'cleanup')),
+    category TEXT NOT NULL CHECK(category IN ('summary', 'cleanup', 'voicemail')),
     content TEXT NOT NULL,
     is_auto_run INTEGER NOT NULL DEFAULT 0,
     source TEXT NOT NULL DEFAULT 'manual'
@@ -119,6 +120,48 @@ def _now_iso() -> str:
             .isoformat(timespec="seconds").replace("+00:00", "Z"))
 
 
+def _migrate_category_check_constraint(conn: sqlite3.Connection) -> None:
+    """One-shot migration: if the `prompts.category` CHECK constraint
+    doesn't include 'voicemail', rebuild the table with the new constraint.
+    Idempotent — re-running is a no-op.
+
+    SQLite has no `ALTER TABLE ... DROP CONSTRAINT`, so we use the standard
+    rebuild dance (PRAGMA table_info won't show CHECK constraints — we
+    inspect sqlite_master.sql instead).
+    """
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='prompts'"
+    ).fetchone()
+    if row is None:
+        return  # no prompts table yet — fresh DB will get the new schema
+    table_sql = row[0] if isinstance(row, tuple) else row["sql"]
+    if "'voicemail'" in table_sql:
+        return  # already migrated
+    conn.executescript("""
+        BEGIN;
+        CREATE TABLE prompts_new (
+            id TEXT PRIMARY KEY,
+            slug TEXT NOT NULL UNIQUE,
+            name TEXT NOT NULL,
+            category TEXT NOT NULL CHECK(category IN ('summary', 'cleanup', 'voicemail')),
+            content TEXT NOT NULL,
+            is_auto_run INTEGER NOT NULL DEFAULT 0,
+            source TEXT NOT NULL DEFAULT 'manual'
+                CHECK(source IN ('seed', 'manual', 'learned')),
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            note TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        INSERT INTO prompts_new SELECT * FROM prompts;
+        DROP TABLE prompts;
+        ALTER TABLE prompts_new RENAME TO prompts;
+        CREATE INDEX IF NOT EXISTS idx_prompts_category_autorun
+            ON prompts(category, is_auto_run);
+        COMMIT;
+    """)
+
+
 def open_db(path: Path) -> sqlite3.Connection:
     """Open WAL-mode sqlite, ensure schema; mirrors vocab.db.open_db.
 
@@ -131,6 +174,7 @@ def open_db(path: Path) -> sqlite3.Connection:
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=2000")
     conn.executescript(_SCHEMA_SQL)
+    _migrate_category_check_constraint(conn)   # NEW — runs on every open, idempotent
     conn.execute(
         "INSERT OR IGNORE INTO meta(key, value) VALUES ('schema_version', ?)",
         (SCHEMA_VERSION,),
