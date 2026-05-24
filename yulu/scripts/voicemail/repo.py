@@ -132,3 +132,76 @@ def list_voicemails(*, directory: Path = VOICEMAIL_DIR_DEFAULT,
         if rec is not None:
             out.append(rec)
     return out
+
+
+class VoicemailNotFound(LookupError):
+    """Raised when no voicemail matches the given id prefix."""
+
+    def __init__(self, id_prefix: str):
+        super().__init__(f"no voicemail matches '{id_prefix}'")
+        self.id_prefix = id_prefix
+
+
+class AmbiguousVoicemailId(LookupError):
+    """Raised when an id prefix matches more than one voicemail."""
+
+    def __init__(self, id_prefix: str, candidates: List[str]):
+        super().__init__(
+            f"id prefix '{id_prefix}' matches {len(candidates)} voicemails: {candidates}"
+        )
+        self.id_prefix = id_prefix
+        self.candidates = candidates
+
+
+def get_voicemail(id_prefix: str, *,
+                  directory: Path = VOICEMAIL_DIR_DEFAULT) -> VoicemailRecord:
+    """Resolve `id_prefix` to a unique VoicemailRecord, or raise.
+
+    Exact stem match wins over prefix match.
+    """
+    directory = Path(directory)
+    if not directory.exists():
+        raise VoicemailNotFound(id_prefix)
+
+    exact = _make_record(id_prefix, directory)
+    if exact is not None:
+        return exact
+
+    matches: List[str] = []
+    for child in directory.iterdir():
+        if child.suffix != ".wav":
+            continue
+        stem = child.stem
+        if _STEM_RE.match(stem) and stem.startswith(id_prefix):
+            matches.append(stem)
+    if not matches:
+        raise VoicemailNotFound(id_prefix)
+    if len(matches) > 1:
+        matches.sort()
+        raise AmbiguousVoicemailId(id_prefix, matches)
+    rec = _make_record(matches[0], directory)
+    if rec is None:
+        raise VoicemailNotFound(id_prefix)
+    return rec
+
+
+def delete_voicemail(record: VoicemailRecord) -> int:
+    """Remove the WAV and all `<stem>.*` sibling files. Returns the count."""
+    directory = record.wav_path.parent
+    prefix = f"{record.stem}."
+    removed = 0
+    # Remove the .wav itself
+    if record.wav_path.exists():
+        record.wav_path.unlink()
+        removed += 1
+    # Remove every sibling whose name starts with `<stem>.`
+    for child in directory.iterdir():
+        if child.name == record.wav_path.name:
+            continue   # already removed above
+        if child.name.startswith(prefix):
+            try:
+                child.unlink()
+                removed += 1
+            except OSError:
+                pass
+    return removed

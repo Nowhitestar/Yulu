@@ -121,3 +121,75 @@ def test_list_ignores_non_voicemail_wavs(tmp_path):
 def test_default_dir_constant():
     assert VOICEMAIL_DIR_DEFAULT.name == "voicemails"
     assert "Movies/Yulu" in str(VOICEMAIL_DIR_DEFAULT)
+
+
+import pytest
+
+from voicemail.repo import (
+    AmbiguousVoicemailId,
+    VoicemailNotFound,
+    delete_voicemail,
+    get_voicemail,
+)
+
+
+def test_get_by_exact_stem(tmp_path):
+    wav = tmp_path / "voicemail_20260523_120000.wav"
+    _write_minimal_wav(wav, duration_sec=1)
+    rec = get_voicemail("voicemail_20260523_120000", directory=tmp_path)
+    assert rec.stem == "voicemail_20260523_120000"
+
+
+def test_get_by_unique_prefix(tmp_path):
+    _write_minimal_wav(tmp_path / "voicemail_20260523_120000.wav")
+    _write_minimal_wav(tmp_path / "voicemail_20260521_120000.wav")
+    rec = get_voicemail("voicemail_20260523", directory=tmp_path)
+    assert rec.stem == "voicemail_20260523_120000"
+
+
+def test_get_by_ambiguous_prefix_raises(tmp_path):
+    _write_minimal_wav(tmp_path / "voicemail_20260523_120000.wav")
+    _write_minimal_wav(tmp_path / "voicemail_20260523_180000.wav")
+    with pytest.raises(AmbiguousVoicemailId) as exc:
+        get_voicemail("voicemail_20260523", directory=tmp_path)
+    assert "voicemail_20260523_120000" in exc.value.candidates
+    assert "voicemail_20260523_180000" in exc.value.candidates
+
+
+def test_get_missing_raises(tmp_path):
+    with pytest.raises(VoicemailNotFound):
+        get_voicemail("voicemail_00000000_000000", directory=tmp_path)
+
+
+def test_delete_removes_all_siblings(tmp_path):
+    stem = "voicemail_20260523_120000"
+    _write_minimal_wav(tmp_path / f"{stem}.wav")
+    (tmp_path / f"{stem}.transcript.txt").write_text("hi")
+    (tmp_path / f"{stem}.raw.transcript.txt").write_text("hi")
+    (tmp_path / f"{stem}.title").write_text("hi")
+    (tmp_path / f"{stem}.summary.md").write_text("hi")
+    (tmp_path / f"{stem}.voicemail-clean.summary.md").write_text("hi")
+    (tmp_path / f"{stem}.summary.html").write_text("hi")
+
+    rec = get_voicemail(stem, directory=tmp_path)
+    removed = delete_voicemail(rec)
+    assert removed == 7
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_delete_idempotent_on_missing_siblings(tmp_path):
+    stem = "voicemail_20260523_120000"
+    _write_minimal_wav(tmp_path / f"{stem}.wav")
+    # No siblings — just the wav
+    rec = get_voicemail(stem, directory=tmp_path)
+    removed = delete_voicemail(rec)
+    assert removed == 1
+    assert not (tmp_path / f"{stem}.wav").exists()
+
+
+def test_delete_does_not_touch_other_voicemails(tmp_path):
+    _write_minimal_wav(tmp_path / "voicemail_20260523_120000.wav")
+    _write_minimal_wav(tmp_path / "voicemail_20260521_120000.wav")
+    rec = get_voicemail("voicemail_20260523_120000", directory=tmp_path)
+    delete_voicemail(rec)
+    assert (tmp_path / "voicemail_20260521_120000.wav").exists()
