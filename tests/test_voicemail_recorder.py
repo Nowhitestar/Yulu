@@ -185,28 +185,41 @@ def test_cmd_new_sends_start_with_sys_disabled_and_silence_seconds(
     assert len(starts) == 1
     assert starts[0]["sys_disabled"] is True
     assert starts[0]["silence_seconds"] == 3
-    assert starts[0]["title"].startswith("voicemail_")
+    # Literal "voicemail" — Swift appends its own _YYYYMMDD_HHMMSS suffix
+    # after stripping non-alphanumerics. See recorder.py::cmd_new.
+    assert starts[0]["title"] == "voicemail"
     assert starts[0]["output_dir"] == str(tmp_path)
 
     # Title sidecar landed
     assert (wav_path.with_suffix(".title")).exists()
 
 
-def test_cmd_new_returns_2_on_busy(tmp_path, monkeypatch):
-    """If the recording_lock acquire raises RecordingBusy, cmd_new exits 2
-    with a friendly Chinese error mentioning the in-flight recording."""
+def test_cmd_new_returns_2_on_busy(tmp_path, monkeypatch, capsys):
+    """If the recording_lock acquire raises RecordingBusy at __enter__,
+    cmd_new exits 2 with a friendly Chinese error mentioning the in-flight
+    recording. The mock must be a real @contextmanager so the raise fires
+    at __enter__ (matching production); a plain function that raises at
+    call time would pass even when cmd_new wraps the bare acquire() in
+    try/except instead of the with-block."""
+    from contextlib import contextmanager
     from recording_lock import RecordingBusy
     monkeypatch.setattr(recorder, "VOICEMAIL_DIR", tmp_path)
 
+    @contextmanager
     def fake_acquire(*args, **kwargs):
         raise RecordingBusy({
             "title": "ProductWeekly", "path": "/tmp/foo.wav",
             "started_at": "2026-05-23T12:00:00",
         })
+        yield  # unreachable; makes this a generator so @contextmanager applies
     monkeypatch.setattr(recorder, "_acquire_recording_lock", fake_acquire)
 
     rc = recorder.cmd_new()
     assert rc == 2
+    err = capsys.readouterr().err
+    assert "录音正在进行中: ProductWeekly" in err
+    assert "/tmp/foo.wav" in err
+    assert "2026-05-23T12:00:00" in err
 
 
 def test_cmd_stop_idempotent_when_not_recording(monkeypatch):

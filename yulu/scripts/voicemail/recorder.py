@@ -156,8 +156,57 @@ def cmd_new(title: Optional[str] = None, *,
     VOICEMAIL_DIR.mkdir(parents=True, exist_ok=True)
     stem = _gen_stem()
 
+    wav_path: Optional[Path] = None
     try:
-        lock_ctx = _acquire_recording_lock(timeout=0.5)
+        # NOTE: _acquire_recording_lock is a @contextmanager — the flock
+        # (and RecordingBusy) only fires at __enter__, so the try must
+        # wrap the `with`, not the bare call.
+        with _acquire_recording_lock(timeout=0.5) as lock_handle:
+            resp = _socket_send({
+                "action": "start",
+                # Send literal "voicemail" — Swift's AudioRecorder.start
+                # strips all non-alphanumerics from the title and appends
+                # its own _<YYYYMMDD>_<HHMMSS>.wav suffix. A pre-stamped
+                # stem would produce
+                # "voicemailYYYYMMDDHHMMSS_YYYYMMDD_HHMMSS.wav" that fails
+                # repo._STEM_RE.
+                "title": "voicemail",
+                "sys_disabled": True,
+                "silence_seconds": silence_seconds,
+                "output_dir": str(VOICEMAIL_DIR),
+            })
+            if not resp or resp.get("status") != "recording":
+                print(f"⚠️ daemon failed to start: {resp}", file=sys.stderr)
+                return 1
+            wav_path = Path(resp.get("file") or (VOICEMAIL_DIR / f"{stem}.wav"))
+            _record_lock_meta(
+                lock_handle,
+                title=stem,
+                path=str(wav_path),
+                started_at=datetime.now().isoformat(),
+            )
+            print(f"🎤 录音中 — Ctrl+C 停止 ({silence_seconds}s 静音自动停)",
+                  file=sys.stderr)
+
+            stop_requested = {"v": False}
+
+            def _on_sigint(_sig, _frame):
+                stop_requested["v"] = True
+
+            prev = signal.signal(signal.SIGINT, _on_sigint)
+            try:
+                # Poll daemon status until it flips to not-recording.
+                while True:
+                    if stop_requested["v"]:
+                        _socket_send({"action": "stop"})
+                        stop_requested["v"] = False  # one-shot
+                    status = _socket_send({"action": "status"}) or {}
+                    if not status.get("recording"):
+                        break
+                    time.sleep(_poll_interval)
+            finally:
+                signal.signal(signal.SIGINT, prev)
+            print("⏹ Stopped", file=sys.stderr)
     except RecordingBusy as exc:
         info = exc.info or {}
         print(
@@ -167,48 +216,6 @@ def cmd_new(title: Optional[str] = None, *,
             file=sys.stderr,
         )
         return 2
-
-    wav_path: Optional[Path] = None
-    with lock_ctx as lock_handle:
-        resp = _socket_send({
-            "action": "start",
-            "title": stem,
-            "sys_disabled": True,
-            "silence_seconds": silence_seconds,
-            "output_dir": str(VOICEMAIL_DIR),
-        })
-        if not resp or resp.get("status") != "recording":
-            print(f"⚠️ daemon failed to start: {resp}", file=sys.stderr)
-            return 1
-        wav_path = Path(resp.get("file") or (VOICEMAIL_DIR / f"{stem}.wav"))
-        _record_lock_meta(
-            lock_handle,
-            title=stem,
-            path=str(wav_path),
-            started_at=datetime.now().isoformat(),
-        )
-        print(f"🎤 录音中 — Ctrl+C 停止 ({silence_seconds}s 静音自动停)",
-              file=sys.stderr)
-
-        stop_requested = {"v": False}
-
-        def _on_sigint(_sig, _frame):
-            stop_requested["v"] = True
-
-        prev = signal.signal(signal.SIGINT, _on_sigint)
-        try:
-            # Poll daemon status until it flips to not-recording.
-            while True:
-                if stop_requested["v"]:
-                    _socket_send({"action": "stop"})
-                    stop_requested["v"] = False  # one-shot
-                status = _socket_send({"action": "status"}) or {}
-                if not status.get("recording"):
-                    break
-                time.sleep(_poll_interval)
-        finally:
-            signal.signal(signal.SIGINT, prev)
-        print("⏹ Stopped", file=sys.stderr)
 
     if wav_path is None or not wav_path.exists():
         print("⚠️ recording stopped but no .wav file present", file=sys.stderr)
