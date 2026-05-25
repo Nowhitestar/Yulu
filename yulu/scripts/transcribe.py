@@ -150,6 +150,15 @@ def process_audio(audio_path_str: str) -> None:
     transcript_path.write_text(merged, encoding="utf-8")
     print(f"✅ 原始转录已保存: {raw_path}")
     print(f"✅ 初始 transcript 已保存: {transcript_path}")
+
+    try:  # best-effort search-index push; reader sweep covers misses
+        from search import indexer as _idx
+        _idx.upsert_doc(source_path=transcript_path,
+                        kind=_idx.KIND_MEETING_TRANSCRIPT, body=merged)
+    except Exception as exc:
+        print(f"⚠️ search index upsert failed for {transcript_path}: {exc}",
+              file=sys.stderr)
+
     if mic_text is not None:
         audio_path.with_suffix(".mic.transcript.txt").write_text(mic_text, encoding="utf-8")
     if sys_text is not None:
