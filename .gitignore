@@ -27,6 +27,7 @@ build/
 yulu/scripts/recorder_status
 yulu/scripts/window_scanner
 yulu/scripts/audio_daemon
+yulu/scripts/status_agent
 
 # IDE / agent local state
 .idea/
