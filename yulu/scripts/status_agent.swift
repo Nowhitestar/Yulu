@@ -274,12 +274,22 @@ class DaemonClient {
         _ = setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
         _ = setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
 
-        // Write JSON + newline
+        // Write JSON + newline, then half-close the write side.
+        //
+        // Why SHUT_WR: audio_daemon's SocketServer reads "until newline OR
+        // EOF" but the newline path was empirically broken — server stayed
+        // blocked on read() even after a properly terminated request. The
+        // SHUT_WR path is the reliable framing used by every Python client
+        // in the tree (record_audio.py, meeting_daemon.py, voicemail.recorder),
+        // and it works regardless of which framing variant the server
+        // happens to support. This decouples our IPC reliability from any
+        // single server-side framing assumption.
         var line = json
         line.append(0x0A)
         _ = line.withUnsafeBytes { buf in
             write(fd, buf.baseAddress, buf.count)
         }
+        _ = shutdown(fd, Int32(SHUT_WR))
 
         // Read response (up to 64 KB, blocking — daemon is local)
         var buffer = [UInt8](repeating: 0, count: 65536)
@@ -698,7 +708,14 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let file = (resp["file"] as? String) ?? ""
 
         if recording {
-            if file.contains("/voicemails/") {
+            // Classify by filename stem prefix, not parent directory.
+            // voicemail.cli writes wavs to ~/Movies/Yulu/<stem>.wav with
+            // stem "voicemail_<ts>" — the subdirectory '/voicemails/' is
+            // only used by the *.transcript.txt / *.summary.md siblings,
+            // not the WAV itself. Checking for the stem prefix matches
+            // both layouts (wav at root, sidecars in subdir).
+            let stem = ((file as NSString).lastPathComponent as NSString).deletingPathExtension
+            if stem.hasPrefix("voicemail_") || file.contains("/voicemails/") {
                 applyState(.recording)
             } else {
                 applyState(.meetingBusy)
