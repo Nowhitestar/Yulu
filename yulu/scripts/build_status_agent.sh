@@ -37,6 +37,7 @@ plist_set_or_add() {
         /usr/libexec/PlistBuddy -c "Add :$key $type $value" "$INFO" >/dev/null 2>&1 || true
 }
 
+plist_set_or_add CFBundleExecutable         string  status_agent
 plist_set_or_add CFBundleIdentifier         string  com.yulu.statusagent
 plist_set_or_add CFBundleName               string  "Yulu Status Agent"
 plist_set_or_add CFBundleDisplayName        string  "Yulu Status Agent"

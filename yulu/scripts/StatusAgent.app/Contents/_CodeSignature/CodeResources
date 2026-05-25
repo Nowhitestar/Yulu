@@ -35,15 +35,6 @@
 	</dict>
 	<key>files2</key>
 	<dict>
-		<key>MacOS/status_agent</key>
-		<dict>
-			<key>cdhash</key>
-			<data>
-			5g60i8aspumDpn4q97zNQOGy594=
-			</data>
-			<key>requirement</key>
-			<string>identifier "status_agent" and anchor apple generic and certificate leaf[subject.CN] = "Apple Development: nowhitestar@gmail.com (248D6L6JS2)" and certificate 1[field.1.2.840.113635.100.6.2.1] /* exists */</string>
-		</dict>
 		<key>Resources/Yulu.icns</key>
 		<dict>
 			<key>hash2</key>

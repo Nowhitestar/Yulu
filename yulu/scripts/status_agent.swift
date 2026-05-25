@@ -354,6 +354,10 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var state: AgentState = .idle
     var daemonDownStreak: Int = 0
     var launcherPid: Int32?
+    // Must be retained — DispatchSource is silently cancelled when its
+    // sole reference goes out of scope. Storing as a class property keeps
+    // the SIGHUP handler alive for the agent's lifetime.
+    var sighupSource: DispatchSourceSignal?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         writePidFile()
@@ -371,16 +375,16 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // Initial hotkey registration
         registerHotkeyFromConfig()
 
-        // SIGHUP → re-read config + re-register
-        let sigsrc = DispatchSource.makeSignalSource(signal: SIGHUP, queue: .main)
-        sigsrc.setEventHandler { [weak self] in
+        // SIGHUP → re-read config + re-register. Suppress SIG_DFL first
+        // (default would terminate us) and use a stored DispatchSource so
+        // it isn't deallocated when this function returns.
+        signal(SIGHUP, SIG_IGN)
+        sighupSource = DispatchSource.makeSignalSource(signal: SIGHUP, queue: .main)
+        sighupSource?.setEventHandler { [weak self] in
             log("SIGHUP received — re-registering hotkey")
             self?.registerHotkeyFromConfig()
         }
-        sigsrc.resume()
-        // Carbon expects SIGHUP delivered to the process, so suppress the
-        // default SIG_DFL action that would otherwise terminate us.
-        signal(SIGHUP, SIG_IGN)
+        sighupSource?.resume()
 
         // Start polling at 1 Hz
         pollerTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
