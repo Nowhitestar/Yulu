@@ -313,3 +313,81 @@ def test_voicemail_cli_default_dir_is_voicemails_subdir():
     sys.path.insert(0, str(SCRIPTS))
     from voicemail.repo import VOICEMAIL_DIR_DEFAULT
     assert VOICEMAIL_DIR_DEFAULT.name == "voicemails"
+
+
+# ── Status Agent acceptance (spec 2026-05-26-status-agent-design.md) ──
+
+def test_status_agent_config_module_exists():
+    assert (SCRIPTS / "status_agent_config.py").exists()
+
+
+def test_status_agent_swift_source_exists():
+    assert (SCRIPTS / "status_agent.swift").exists()
+
+
+def test_status_agent_plist_template_exists():
+    assert (SCRIPTS / "com.yulu.statusagent.plist").exists()
+
+
+def test_status_agent_build_script_exists():
+    p = SCRIPTS / "build_status_agent.sh"
+    assert p.exists()
+    import os
+    assert os.access(p, os.X_OK), "build_status_agent.sh must be executable"
+
+
+def test_status_agent_app_bundle_exists():
+    """StatusAgent.app should be built (tracked binary, like Yulu.app)."""
+    app = SCRIPTS / "StatusAgent.app" / "Contents" / "MacOS" / "status_agent"
+    assert app.exists()
+
+
+def test_status_agent_binary_has_required_strings():
+    """Static verification that the Swift binary embeds the key contracts."""
+    app = SCRIPTS / "StatusAgent.app" / "Contents" / "MacOS" / "status_agent"
+    blob = app.read_bytes()
+    for needle in (
+        b"Yulu Status Agent",          # log line + bundle name
+        b"audio_daemon.sock",           # daemon client target
+        b"voicemail.cli",               # launcher subprocess
+        b"hotkey_registered",           # registrar success log
+        b"status_agent.pid",            # pid file
+    ):
+        assert needle in blob, f"missing string: {needle!r}"
+
+
+def test_audio_daemon_silence_monitor_periodic():
+    """Acceptance #9: silence_monitor re-armed on every mixAndWrite event."""
+    text = (SCRIPTS / "audio_daemon.swift").read_text(encoding="utf-8")
+    # The re-arm call must appear inside mixAndWrite (search for the function
+    # then check the next ~40 lines contain another startSilenceMonitor() call)
+    import re
+    match = re.search(r"private func mixAndWrite\(\)\s*\{(.*?)\n    \}", text, re.DOTALL)
+    assert match is not None, "mixAndWrite function not found"
+    body = match.group(1)
+    assert "startSilenceMonitor()" in body, "silence monitor not re-armed in mixAndWrite"
+
+
+def test_yulu_wrapper_dispatches_status_agent():
+    text = (SCRIPTS / "yulu").read_text(encoding="utf-8")
+    assert "status-agent)" in text or "status-agent|statusagent" in text
+    assert "status_agent_config" in text
+
+
+def test_status_agent_plist_lsuielement_via_build():
+    """The build script must set LSUIElement=true so the agent has no Dock icon."""
+    text = (SCRIPTS / "build_status_agent.sh").read_text(encoding="utf-8")
+    assert "LSUIElement" in text
+    assert "true" in text  # the build_status_agent.sh sets it via PlistBuddy
+
+
+def test_setup_sh_installs_statusagent_plist():
+    text = (SCRIPTS / "setup.sh").read_text(encoding="utf-8")
+    assert "com.yulu.statusagent.plist" in text
+
+
+def test_config_example_has_status_agent_block():
+    text = (SCRIPTS / "config.example.json").read_text(encoding="utf-8")
+    assert "status_agent" in text
+    # Confirm the default hotkey is there
+    assert '"V"' in text or "'V'" in text
