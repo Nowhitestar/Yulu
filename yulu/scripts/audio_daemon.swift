@@ -356,6 +356,13 @@ class AudioRecorder {
 
         let out = channelInterleave(sysStereo: sysChunk, micMono: micChunk)
         w.append(Data(bytes: out, count: out.count * 2))
+
+        // Re-arm the silence monitor on every audio event. Phase-3 design
+        // was one-shot at +silenceSeconds; under voicemail's 3-second threshold
+        // any speaker feedback during the window made the check pass once and
+        // never run again. With this re-arm, silence-stop means "no audio for
+        // the last N seconds" — which is what users expect.
+        startSilenceMonitor()
     }
 
     private func flushBuffers() {
