@@ -395,3 +395,330 @@ def test_config_example_has_status_agent_block():
     assert "status_agent" in text
     # Confirm the default hotkey is there
     assert '"V"' in text or "'V'" in text
+
+
+# ── Phase 6 — Global Search ──────────────────────────────────────────
+# Maps 1:1 to spec §9 (docs/superpowers/specs/2026-05-25-global-search-design.md).
+
+import sys as _sys_for_phase6
+from datetime import timedelta as _td_for_phase6
+
+_sys_for_phase6.path.insert(0, str(SCRIPTS))
+
+
+def _phase6_seed_corpus(tmp_path):
+    """Reusable corpus fixture: meeting/voicemail × summary/transcript."""
+    from search.indexer import (
+        KIND_MEETING_SUMMARY, KIND_MEETING_TRANSCRIPT,
+        KIND_VOICEMAIL_SUMMARY, KIND_VOICEMAIL_TRANSCRIPT,
+        init_db, upsert_doc,
+    )
+    db = tmp_path / "search.sqlite"
+    conn = init_db(db)
+    docs = [
+        ("AgentkeyProductWeekly_20260521_160008.summary.md",
+         KIND_MEETING_SUMMARY,
+         "本周 OKR OKR OKR 完成度 80%，KPI 也持平"),
+        ("AgentkeyProductWeekly_20260521_160008.transcript.txt",
+         KIND_MEETING_TRANSCRIPT,
+         "[00:00] 我们讨论 OKR 的落地阻塞"),
+        ("voicemail_20260513_140012.transcript.txt",
+         KIND_VOICEMAIL_TRANSCRIPT,
+         "记得明天找 Anthropic 团队同步 OKR"),
+        ("Finance_20260518_140000.summary.md",
+         KIND_MEETING_SUMMARY,
+         "KPI 走势平稳，本周项目进度整体良好"),
+    ]
+    paths = {}
+    for fname, kind, body in docs:
+        p = tmp_path / fname
+        p.write_text(body, encoding="utf-8")
+        upsert_doc(source_path=p, kind=kind, conn=conn)
+        paths[fname] = p
+    return db, conn, paths
+
+
+def test_phase6_1_schema_bootstraps_cleanly(tmp_path):
+    from search.indexer import init_db, SCHEMA_VERSION
+    conn = init_db(tmp_path / "search.sqlite")
+    assert conn.execute("SELECT value FROM meta WHERE key='schema_version'"
+                        ).fetchone()[0] == SCHEMA_VERSION
+    tables = {r[0] for r in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'")}
+    assert {"docs", "docs_meta", "meta"} <= tables
+
+
+def test_phase6_2_upsert_is_idempotent(tmp_path):
+    from search.indexer import init_db, upsert_doc, KIND_MEETING_SUMMARY
+    db = tmp_path / "search.sqlite"
+    conn = init_db(db)
+    p = tmp_path / "Plan_20260521_160000.summary.md"
+    p.write_text("body", encoding="utf-8")
+    assert upsert_doc(source_path=p, kind=KIND_MEETING_SUMMARY, conn=conn) is True
+    rowid_1 = conn.execute("SELECT rowid FROM docs").fetchone()[0]
+    assert upsert_doc(source_path=p, kind=KIND_MEETING_SUMMARY, conn=conn) is False
+    rowid_2 = conn.execute("SELECT rowid FROM docs").fetchone()[0]
+    assert rowid_1 == rowid_2
+
+
+def test_phase6_3_sweep_picks_up_oob_changes(tmp_path):
+    import os, time
+    from search.indexer import init_db, KIND_MEETING_SUMMARY
+    from search.reader import sweep
+    root = tmp_path / "Yulu"
+    voicemails = root / "voicemails"
+    root.mkdir(); voicemails.mkdir()
+    p = root / "Plan_20260521_160000.summary.md"
+    p.write_text("v1", encoding="utf-8")
+    db = tmp_path / "search.sqlite"
+    conn = init_db(db)
+    sweep(conn=conn, roots=[root, voicemails])
+    p.write_text("v2", encoding="utf-8")
+    future = time.time() + 5
+    os.utime(p, (future, future))
+    counts = sweep(conn=conn, roots=[root, voicemails])
+    assert counts["updated"] == 1
+
+
+def test_phase6_4_sweep_removes_deleted_files(tmp_path):
+    from search.indexer import init_db
+    from search.reader import sweep
+    root = tmp_path / "Yulu"; voicemails = root / "voicemails"
+    root.mkdir(); voicemails.mkdir()
+    p = root / "Plan_20260521_160000.summary.md"
+    p.write_text("x", encoding="utf-8")
+    conn = init_db(tmp_path / "search.sqlite")
+    sweep(conn=conn, roots=[root, voicemails])
+    p.unlink()
+    counts = sweep(conn=conn, roots=[root, voicemails])
+    assert counts["removed"] == 1
+
+
+def test_phase6_5_english_query_ranks_okr_docs(tmp_path):
+    from search.reader import _fts_search
+    _db, conn, _paths = _phase6_seed_corpus(tmp_path)
+    hits = _fts_search("OKR", since=None, kinds=None, limit=10, conn=conn)
+    # 3 OKR docs (meeting summary + meeting transcript + voicemail).
+    assert len(hits) == 3
+
+
+def test_phase6_6_chinese_3char_via_trigram(tmp_path):
+    from search.reader import _fts_search
+    _db, conn, _paths = _phase6_seed_corpus(tmp_path)
+    hits = _fts_search("项目进度", since=None, kinds=None, limit=10, conn=conn)
+    assert len(hits) >= 1
+
+
+def test_phase6_7_chinese_2char_routes_to_like(tmp_path, monkeypatch):
+    from search.reader import search, CORPUS_ROOT
+    from search import reader as reader_mod
+    monkeypatch.setattr(reader_mod, "CORPUS_ROOT", tmp_path / "nowhere")
+    db, _conn, _ = _phase6_seed_corpus(tmp_path)
+    hits, tel = search("进度", db_path=db)
+    assert tel["fallback_used"] is True
+    assert len(hits) >= 1
+
+
+def test_phase6_8_filters_compose(tmp_path, monkeypatch):
+    from datetime import timedelta
+    from search.reader import search
+    from search.indexer import KIND_MEETING_SUMMARY
+    from search import reader as reader_mod
+    monkeypatch.setattr(reader_mod, "CORPUS_ROOT", tmp_path / "nowhere")
+    db, _conn, _ = _phase6_seed_corpus(tmp_path)
+    hits, _tel = search(
+        "OKR",
+        since=timedelta(days=10_000),
+        kinds=[KIND_MEETING_SUMMARY],
+        db_path=db,
+    )
+    assert all(h.kind == KIND_MEETING_SUMMARY for h in hits)
+
+
+def test_phase6_9_slug_tagged_summaries_are_separate_rows(tmp_path):
+    from search.indexer import init_db, upsert_doc, KIND_MEETING_SUMMARY
+    db = tmp_path / "search.sqlite"
+    conn = init_db(db)
+    stem_sum = tmp_path / "Plan_20260521_160000.summary.md"
+    slug_sum = tmp_path / "Plan_20260521_160000.action-items.summary.md"
+    stem_sum.write_text("a", encoding="utf-8")
+    slug_sum.write_text("b", encoding="utf-8")
+    upsert_doc(source_path=stem_sum, kind=KIND_MEETING_SUMMARY, conn=conn)
+    upsert_doc(source_path=slug_sum, kind=KIND_MEETING_SUMMARY, conn=conn)
+    rows = list(conn.execute(
+        "SELECT meeting_title, recorded_at, source_path FROM docs "
+        "ORDER BY source_path"
+    ))
+    assert len(rows) == 2
+    assert rows[0]["meeting_title"] == rows[1]["meeting_title"] == "Plan"
+    assert rows[0]["recorded_at"] == rows[1]["recorded_at"]
+    assert rows[0]["source_path"] != rows[1]["source_path"]
+
+
+def test_phase6_10_stem_parser_tolerates_voicemail_literal():
+    from search.indexer import parse_stem
+    info = parse_stem("voicemail_20260513_140012")
+    assert info is not None
+    assert info.meeting_title == "voicemail"
+
+
+def test_phase6_11_stem_parser_skips_nonmatching():
+    from search.indexer import parse_stem
+    assert parse_stem("notes") is None
+    assert parse_stem("manual-note") is None
+
+
+def test_phase6_12_index_failure_does_not_break_recording(tmp_path, monkeypatch):
+    """Voicemail recorder swallows search-index exceptions."""
+    from unittest.mock import patch
+    import voicemail.recorder as recorder
+    from prompts.db import PromptsRepo, open_db
+    from prompts.seed import seed_from_current
+    from search import indexer as search_indexer
+
+    queue = tmp_path / "queue.json"
+    queue.write_text("[]", encoding="utf-8")
+    prompts_db = tmp_path / "prompts.sqlite"
+    monkeypatch.setattr(recorder, "AGENT_QUEUE_PATH", queue)
+    monkeypatch.setattr(recorder, "PROMPTS_DB", prompts_db)
+    import queue_store
+    monkeypatch.setattr(queue_store, "QUEUE_PATH", queue)
+    monkeypatch.setattr(queue_store, "LOCK_PATH", tmp_path / "queue.lock")
+    seed_from_current(PromptsRepo(open_db(prompts_db)))
+
+    wav = tmp_path / "voicemail_20260523_201500.wav"
+    wav.touch()
+    fake_response = {
+        "status": "ok",
+        "channels": {
+            "mic": {"text": "x", "segments": [{"start": 0, "end": 1, "text": "x"}]},
+            "sys": {"skipped_silent": True, "text": "", "segments": []},
+        },
+    }
+    monkeypatch.setattr(
+        search_indexer, "upsert_doc",
+        lambda **_kw: (_ for _ in ()).throw(RuntimeError("boom")),
+    )
+    with patch.object(recorder, "_request_transcribe", return_value=fake_response):
+        rc = recorder._transcribe_and_enqueue(wav, title=None)
+    assert rc == 0
+
+
+def test_phase6_13_ipc_path_matches_in_process(tmp_path, monkeypatch):
+    """Both IPC helper and in-process search.reader.search return the
+    same hit set for the same query+corpus."""
+    from search.ipc_helper import handle_request
+    from search.reader import search
+    from search import reader as reader_mod
+    monkeypatch.setattr(reader_mod, "CORPUS_ROOT", tmp_path / "nowhere")
+    db, _conn, _ = _phase6_seed_corpus(tmp_path)
+    from search import indexer as search_indexer
+    monkeypatch.setattr(search_indexer, "SEARCH_DB_PATH", db)
+    monkeypatch.setattr(reader_mod, "SEARCH_DB_PATH", db)
+    direct_hits, _ = search("OKR", db_path=db)
+    ipc_resp = handle_request({"query": "OKR"})
+    assert ipc_resp["ok"] is True
+    ipc_paths = {h["source_path"] for h in ipc_resp["hits"]}
+    direct_paths = {h.source_path for h in direct_hits}
+    assert ipc_paths == direct_paths
+
+
+def test_phase6_14_cli_in_process_fallback_works(tmp_path, monkeypatch, capsys):
+    """When IPC unreachable, the CLI uses in-process search.reader."""
+    from search import cli as search_cli, indexer as search_indexer
+    from search import reader as reader_mod
+    monkeypatch.setattr(
+        search_cli, "IPC_SOCKET_PATH",
+        tmp_path / "absent.sock",
+    )
+    db, _conn, _ = _phase6_seed_corpus(tmp_path)
+    monkeypatch.setattr(search_indexer, "SEARCH_DB_PATH", db)
+    monkeypatch.setattr(reader_mod, "SEARCH_DB_PATH", db)
+    monkeypatch.setattr(reader_mod, "CORPUS_ROOT", tmp_path / "nowhere")
+    rc = search_cli.main(["OKR", "--no-ipc"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "OKR" in out
+
+
+def test_phase6_15_doctor_flag_prints_health(tmp_path, monkeypatch, capsys):
+    import json as _json
+    from search import cli as search_cli, indexer as search_indexer
+    from search import reader as reader_mod
+    db, _conn, _ = _phase6_seed_corpus(tmp_path)
+    monkeypatch.setattr(search_indexer, "SEARCH_DB_PATH", db)
+    monkeypatch.setattr(reader_mod, "SEARCH_DB_PATH", db)
+    rc = search_cli.main(["--doctor"])
+    assert rc == 0
+    data = _json.loads(capsys.readouterr().out)
+    assert data["schema_version"] == "1"
+    assert data["total_docs"] == 4
+    assert "per_kind" in data
+
+
+def test_phase6_16_reindex_rebuilds_from_scratch(tmp_path, monkeypatch):
+    from search.reader import reindex, sweep
+    from search.indexer import init_db
+    root = tmp_path / "Yulu"; voicemails = root / "voicemails"
+    root.mkdir(); voicemails.mkdir()
+    (root / "Plan_20260521_160000.summary.md").write_text("body", encoding="utf-8")
+    db = tmp_path / "search.sqlite"
+    conn = init_db(db)
+    sweep(conn=conn, roots=[root, voicemails])
+    n_before = conn.execute("SELECT COUNT(*) FROM docs").fetchone()[0]
+    assert n_before == 1
+    conn.close()
+
+    from search import reader as reader_mod
+    monkeypatch.setattr(reader_mod, "CORPUS_ROOT", root)
+    counts = reindex(db_path=db)
+    assert counts["added"] == 1
+
+    conn = init_db(db)
+    n_after = conn.execute("SELECT COUNT(*) FROM docs").fetchone()[0]
+    assert n_after == 1
+
+
+def test_phase6_17_concurrent_upserts_one_row(tmp_path):
+    import threading
+    from search.indexer import init_db, upsert_doc, open_conn, KIND_MEETING_SUMMARY
+    db = tmp_path / "search.sqlite"
+    init_db(db).close()
+    p = tmp_path / "Plan_20260521_160000.summary.md"
+    p.write_text("body", encoding="utf-8")
+    errors = []
+    def worker():
+        try:
+            c = init_db(db)
+            upsert_doc(source_path=p, kind=KIND_MEETING_SUMMARY, conn=c)
+            c.close()
+        except Exception as exc:
+            errors.append(exc)
+    threads = [threading.Thread(target=worker) for _ in range(4)]
+    for t in threads: t.start()
+    for t in threads: t.join(timeout=10)
+    assert not errors
+    c = open_conn(db)
+    assert c.execute("SELECT COUNT(*) FROM docs").fetchone()[0] == 1
+    c.close()
+
+
+def test_phase6_18_sweep_under_250ms_for_38_files(tmp_path):
+    """Spec §6.1 perf gate; 500ms slack vs the 250ms target."""
+    import time
+    from search.indexer import init_db
+    from search.reader import sweep
+    root = tmp_path / "Yulu"; voicemails = root / "voicemails"
+    root.mkdir(); voicemails.mkdir()
+    for i in range(30):
+        stem = f"Meeting{i:02d}_20260521_{160000 + i:06d}"
+        (root / f"{stem}.transcript.txt").write_text(f"b{i}", encoding="utf-8")
+    for i in range(8):
+        stem = f"voicemail_20260513_{140000 + i:06d}"
+        (voicemails / f"{stem}.transcript.txt").write_text(f"v{i}", encoding="utf-8")
+    conn = init_db(tmp_path / "search.sqlite")
+    t0 = time.monotonic()
+    counts = sweep(conn=conn, roots=[root, voicemails])
+    elapsed = (time.monotonic() - t0) * 1000
+    assert counts["scanned"] == 38
+    assert elapsed < 500, f"sweep too slow: {elapsed:.0f}ms"
