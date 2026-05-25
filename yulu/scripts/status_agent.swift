@@ -280,14 +280,18 @@ enum AgentState: String {
 }
 
 class IconStateMachine {
-    static func glyph(for state: AgentState) -> String {
+    static func image(for state: AgentState) -> NSImage? {
+        let name: String
         switch state {
-        case .idle:         return "语"
-        case .recording:    return "🔴语"
-        case .processing:   return "⋯语"
-        case .meetingBusy:  return "🟡语"
-        case .daemonDown:   return "🚫语"
+        case .idle:         name = "status_idle"
+        case .recording:    name = "status_recording"
+        case .processing:   name = "status_processing"
+        case .meetingBusy:  name = "status_idle"   // greyed-out via alpha (set by caller)
+        case .daemonDown:   name = "status_idle"   // (caller can overlay; not in v1)
         }
+        guard let img = NSImage(named: name) else { return nil }
+        img.isTemplate = true
+        return img
     }
 }
 
@@ -419,7 +423,25 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard new != state else { return }
         state = new
         if let btn = statusItem.button {
-            btn.title = IconStateMachine.glyph(for: new)
+            if let img = IconStateMachine.image(for: new) {
+                btn.image = img
+                btn.title = ""
+            } else {
+                // Fallback if assets missing — keep text glyph
+                btn.image = nil
+                switch new {
+                case .idle:        btn.title = "语"
+                case .recording:   btn.title = "● 语"
+                case .processing:  btn.title = "⋯ 语"
+                case .meetingBusy: btn.title = "🟡 语"
+                case .daemonDown:  btn.title = "🚫 语"
+                }
+            }
+            if new == .meetingBusy {
+                btn.alphaValue = 0.4  // greyed-out
+            } else {
+                btn.alphaValue = 1.0
+            }
         }
         // Update the menu's toggle label (use items.first since NSMenu has
         // no item(withIdentifier:) API)

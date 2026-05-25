@@ -8,6 +8,30 @@
 		<data>
 		HKr3yQCYab6Qqf6PXpKW7dWCTGc=
 		</data>
+		<key>Resources/status_idle.png</key>
+		<data>
+		GbsCV8JSMdL2NZ57EG3yLXLSOzg=
+		</data>
+		<key>Resources/status_idle@2x.png</key>
+		<data>
+		PnIQm6n/LCYeHs/PZvqZ7SpaX8Y=
+		</data>
+		<key>Resources/status_processing.png</key>
+		<data>
+		tfFqKZ3vP3SbSX4uX5JNhvlMGGA=
+		</data>
+		<key>Resources/status_processing@2x.png</key>
+		<data>
+		tqd45pbN1dN5fAHgxTpIQ2UJRX8=
+		</data>
+		<key>Resources/status_recording.png</key>
+		<data>
+		asiydlXfghNKuc6CeDFUxUXJplk=
+		</data>
+		<key>Resources/status_recording@2x.png</key>
+		<data>
+		YXVK0F4Ke9PLhbWJL3d5Vx2tA6I=
+		</data>
 	</dict>
 	<key>files2</key>
 	<dict>
@@ -15,7 +39,7 @@
 		<dict>
 			<key>cdhash</key>
 			<data>
-			L33lbOw2+6H+/Ih7OtTpIo8E7VA=
+			5g60i8aspumDpn4q97zNQOGy594=
 			</data>
 			<key>requirement</key>
 			<string>identifier "status_agent" and anchor apple generic and certificate leaf[subject.CN] = "Apple Development: nowhitestar@gmail.com (248D6L6JS2)" and certificate 1[field.1.2.840.113635.100.6.2.1] /* exists */</string>
@@ -25,6 +49,48 @@
 			<key>hash2</key>
 			<data>
 			AI/XZjenoVaaIYSUYcuYnCvgmvLrXl6dcrIdkbWDdtE=
+			</data>
+		</dict>
+		<key>Resources/status_idle.png</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			QjyiopE5JUsD3aIklxsz430R5Ph/vLx9FtlNQ4HYXvY=
+			</data>
+		</dict>
+		<key>Resources/status_idle@2x.png</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			P/KPt0plUjF/sOPz9yDWWBRO14ZFFGUM/6GaBlxQClw=
+			</data>
+		</dict>
+		<key>Resources/status_processing.png</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			9XfhsWFP77dsBMXjFE7bM7iBytZshHe1V6w66uM0a0k=
+			</data>
+		</dict>
+		<key>Resources/status_processing@2x.png</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			kR++LgsPJIgoz3X0JFNhMcWZkCd4aNCz18sJKDiCUMU=
+			</data>
+		</dict>
+		<key>Resources/status_recording.png</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			7DQRfwTzSi5nNJYug5LCy5YxiZ4QXiavbDmlmAcy8fo=
+			</data>
+		</dict>
+		<key>Resources/status_recording@2x.png</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			8go9SeyfpLC+Gn618f3Nm67s4lRF4KiE9ZAmalPkbU0=
 			</data>
 		</dict>
 	</dict>
