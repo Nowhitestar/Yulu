@@ -455,9 +455,79 @@ class IPCServer {
         case "open_inbox":
             DispatchQueue.main.async { [weak self] in self?.app?.onOpenInbox() }
             sendJSON(c, ["ok": true])
+        case "search":
+            // Shell out to python3 -m search.ipc_helper. Keeps all FTS5
+            // logic in Python so the Swift binary doesn't need to bind
+            // SQLite + FTS5 + the trigram tokenizer. Bounded timeout so
+            // a runaway query can't pin the IPC server.
+            sendJSON(c, searchResponse(obj: obj, data: data))
         default:
             sendJSON(c, ["ok": false, "error": "unknown_action: \(action)"])
         }
+    }
+
+    /// Spawn `python3 -m search.ipc_helper`, pipe the raw request JSON
+    /// to stdin, read JSON response from stdout (3s timeout). Returns
+    /// a fallback error envelope on any failure so the client always
+    /// gets a valid response.
+    private func searchResponse(obj: [String: Any], data: Data) -> [String: Any] {
+        let scriptsDir = Bundle.main.bundlePath.hasSuffix(".app")
+            ? (Bundle.main.bundleURL
+                .deletingLastPathComponent()      // /scripts
+                .path)
+            : URL(fileURLWithPath: CommandLine.arguments[0])
+                .deletingLastPathComponent().path
+
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        task.arguments = ["python3", "-m", "search.ipc_helper"]
+        var env = ProcessInfo.processInfo.environment
+        let existing = env["PYTHONPATH"] ?? ""
+        env["PYTHONPATH"] = existing.isEmpty
+            ? scriptsDir
+            : "\(scriptsDir):\(existing)"
+        task.environment = env
+
+        let stdinPipe = Pipe()
+        let stdoutPipe = Pipe()
+        let stderrPipe = Pipe()
+        task.standardInput = stdinPipe
+        task.standardOutput = stdoutPipe
+        task.standardError = stderrPipe
+
+        do {
+            try task.run()
+        } catch {
+            return ["ok": false, "error": "search helper spawn failed: \(error)"]
+        }
+
+        // Write the original request bytes (so we don't re-serialize and
+        // risk losing ordering or precision) then close stdin so the
+        // helper sees EOF.
+        stdinPipe.fileHandleForWriting.write(data)
+        try? stdinPipe.fileHandleForWriting.close()
+
+        // Bounded wait — 3s is generous for a 38-doc corpus (~50ms p50).
+        let deadline = Date().addingTimeInterval(3.0)
+        while task.isRunning && Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+        if task.isRunning {
+            task.terminate()
+            return ["ok": false, "error": "search helper timed out"]
+        }
+        let out = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
+        let firstLine = out.split(separator: 0x0A, maxSplits: 1).first ?? Data()
+        if firstLine.isEmpty {
+            let err = stderrPipe.fileHandleForReading.readDataToEndOfFile()
+            let errStr = String(data: err, encoding: .utf8) ?? "<no stderr>"
+            return ["ok": false, "error": "search helper empty stdout: \(errStr)"]
+        }
+        if let parsed = try? JSONSerialization.jsonObject(with: Data(firstLine))
+                as? [String: Any] {
+            return parsed
+        }
+        return ["ok": false, "error": "search helper returned invalid JSON"]
     }
 
     private func statusResponse() -> [String: Any] {
@@ -533,16 +603,50 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // Initial hotkey registration
         registerHotkeyFromConfig()
 
-        // SIGHUP → re-read config + re-register. Suppress SIG_DFL first
-        // (default would terminate us) and use a stored DispatchSource so
-        // it isn't deallocated when this function returns.
+        // SIGHUP → re-read config + re-register hotkey.
+        //
+        // Phase 5 real-machine debug found the textbook signal(SIG_IGN) +
+        // DispatchSource(.main) pattern silently failing in this Cocoa
+        // app launched via `launchd → open -W → LaunchServices`. Root
+        // cause: SIGHUP was BLOCKED at the thread level (inherited from
+        // the launchd/LaunchServices spawn chain). A blocked signal is
+        // invisible to both signal() disposition AND to GCD's
+        // EVFILT_SIGNAL kqueue filter — which made the symptom look like
+        // a GCD/Cocoa runloop bug even though the signal simply never
+        // got delivered. (The agent "surviving" kill -HUP was misleading
+        // evidence: a blocked SIGHUP would also not terminate the
+        // process, with or without SIG_IGN.)
+        //
+        // Belt-and-braces:
+        //   1. Unblock SIGHUP via pthread_sigmask so the kernel actually
+        //      delivers it (the real fix).
+        //   2. SIG_IGN as a safety net so the default disposition can't
+        //      terminate us if the dispatch source somehow lags.
+        //   3. DispatchSource on a private background queue (not .main),
+        //      with the handler hopping to .main for UI/log work. Avoids
+        //      a separate class of edge cases where DispatchSourceSignal
+        //      bound to the main runloop fails to fire under some
+        //      LaunchServices-spawned bundles.
+        var sighupMask = sigset_t()
+        sigemptyset(&sighupMask)
+        sigaddset(&sighupMask, SIGHUP)
+        let unblockResult = pthread_sigmask(SIG_UNBLOCK, &sighupMask, nil)
         signal(SIGHUP, SIG_IGN)
-        sighupSource = DispatchSource.makeSignalSource(signal: SIGHUP, queue: .main)
-        sighupSource?.setEventHandler { [weak self] in
-            log("SIGHUP received — re-registering hotkey")
-            self?.registerHotkeyFromConfig()
+        log("SIGHUP setup: pthread_sigmask(UNBLOCK)=\(unblockResult)")
+
+        let sighupQueue = DispatchQueue(label: "com.yulu.statusagent.sighup",
+                                         qos: .userInitiated)
+        let src = DispatchSource.makeSignalSource(signal: SIGHUP,
+                                                   queue: sighupQueue)
+        src.setEventHandler { [weak self] in
+            DispatchQueue.main.async {
+                log("SIGHUP received — re-registering hotkey")
+                self?.registerHotkeyFromConfig()
+            }
         }
-        sighupSource?.resume()
+        src.resume()
+        sighupSource = src
+        log("SIGHUP DispatchSource installed on private queue")
 
         // IPC server: start BEFORE the initial poll(). poll() does a
         // blocking read from audio_daemon — if audiodaemon's accept queue
