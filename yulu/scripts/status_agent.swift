@@ -10,11 +10,18 @@ import Carbon
 let CONFIG_DIR = ("~/.config/yulu" as NSString).expandingTildeInPath
 let PID_FILE = "\(CONFIG_DIR)/status_agent.pid"
 let LOG_FILE = "\(CONFIG_DIR)/status_agent.log"
+let IPC_SOCKET_PATH = "\(CONFIG_DIR)/status_agent.sock"
 
 func log(_ msg: String) {
     let ts = ISO8601DateFormatter().string(from: Date())
     let line = "[\(ts)] \(msg)\n"
-    FileManager.default.createFile(atPath: LOG_FILE, contents: nil)  // no-op if exists
+    // FileManager.createFile(atPath:contents:) TRUNCATES if the file
+    // exists — earlier code called it on every log() and lost all prior
+    // lines except the most recent. Guard with fileExists so we only
+    // create when missing, then append.
+    if !FileManager.default.fileExists(atPath: LOG_FILE) {
+        FileManager.default.createFile(atPath: LOG_FILE, contents: nil)
+    }
     if let fh = FileHandle(forWritingAtPath: LOG_FILE) {
         defer { try? fh.close() }
         _ = try? fh.seekToEnd()
@@ -259,6 +266,14 @@ class DaemonClient {
         }
         guard connectResult >= 0 else { return nil }
 
+        // Defense in depth: a hung audio_daemon must not tie up our
+        // background pollers forever. SO_RCVTIMEO + SO_SNDTIMEO at 3s
+        // each turns blocking reads/writes into bounded operations that
+        // surface as nil (caller treats as daemon-down after 3 strikes).
+        var tv = timeval(tv_sec: 3, tv_usec: 0)
+        _ = setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
+        _ = setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
+
         // Write JSON + newline
         var line = json
         line.append(0x0A)
@@ -346,6 +361,145 @@ class VoicemailLauncher {
     }
 }
 
+// IPC server for programmatic toggle/status/open-inbox. Mirrors
+// audio_daemon's line-delimited JSON contract (write one JSON object +
+// newline, read one back). Wired to a weak StatusAgentApp reference so
+// state queries always read from the live delegate; mutating actions
+// (`toggle`, `open_inbox`) dispatch onto the main queue before invoking
+// AppKit code.
+//
+// Why a Unix socket and not just a CLI flag: the running agent is a
+// long-lived launchd job, not something you re-exec. The socket gives
+// `yulu status-agent toggle/state/open-inbox` and acceptance tests a
+// way to drive the agent without UI clicks or osascript hackery.
+class IPCServer {
+    weak var app: StatusAgentApp?
+    var sock: Int32 = -1
+
+    init(app: StatusAgentApp) { self.app = app }
+
+    func stop() {
+        if sock >= 0 { close(sock); sock = -1 }
+        try? FileManager.default.removeItem(atPath: IPC_SOCKET_PATH)
+    }
+
+    func start() {
+        try? FileManager.default.removeItem(atPath: IPC_SOCKET_PATH)
+        sock = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
+        guard sock >= 0 else { log("IPC: socket() failed"); return }
+        var addr = sockaddr_un()
+        addr.sun_family = sa_family_t(AF_UNIX)
+        let pathBytes = IPC_SOCKET_PATH.utf8CString
+        guard pathBytes.count < MemoryLayout.size(ofValue: addr.sun_path) else {
+            log("IPC: socket path too long (\(pathBytes.count))")
+            close(sock); sock = -1; return
+        }
+        withUnsafeMutablePointer(to: &addr.sun_path) { ptr in
+            ptr.withMemoryRebound(to: CChar.self, capacity: pathBytes.count) { p in
+                pathBytes.withUnsafeBufferPointer { src in
+                    _ = strncpy(p, src.baseAddress!, pathBytes.count)
+                }
+            }
+        }
+        let bindResult = withUnsafePointer(to: &addr) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                Darwin.bind(sock, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
+            }
+        }
+        guard bindResult == 0 else {
+            log("IPC: bind failed errno=\(errno)")
+            close(sock); sock = -1; return
+        }
+        Darwin.listen(sock, 5)
+        chmod(IPC_SOCKET_PATH, 0o600)
+        log("IPC: ready at \(IPC_SOCKET_PATH)")
+
+        DispatchQueue.global(qos: .background).async { [weak self] in
+            guard let self = self else { return }
+            while self.sock >= 0 {
+                let c = Darwin.accept(self.sock, nil, nil)
+                if c >= 0 {
+                    self.handle(c)
+                    close(c)
+                } else if errno == EINTR {
+                    continue
+                } else {
+                    log("IPC: accept failed errno=\(errno)")
+                    usleep(200_000)
+                }
+            }
+        }
+    }
+
+    private func handle(_ c: Int32) {
+        var data = Data()
+        var buf = [UInt8](repeating: 0, count: 4096)
+        // Read until newline or EOF. Clients are local + cooperative;
+        // we don't bound the read because requests are tiny (<200 bytes).
+        while true {
+            let n = read(c, &buf, 4096)
+            if n <= 0 { break }
+            data.append(buf, count: n)
+            if data.last == 0x0A { break }
+        }
+        guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let action = obj["action"] as? String else {
+            sendJSON(c, ["ok": false, "error": "invalid_json"])
+            return
+        }
+        switch action {
+        case "status":
+            sendJSON(c, statusResponse())
+        case "toggle":
+            sendJSON(c, toggleResponse())
+        case "open_inbox":
+            DispatchQueue.main.async { [weak self] in self?.app?.onOpenInbox() }
+            sendJSON(c, ["ok": true])
+        default:
+            sendJSON(c, ["ok": false, "error": "unknown_action: \(action)"])
+        }
+    }
+
+    private func statusResponse() -> [String: Any] {
+        var resp: [String: Any] = ["ok": true]
+        let sem = DispatchSemaphore(value: 0)
+        DispatchQueue.main.async { [weak self] in
+            defer { sem.signal() }
+            guard let app = self?.app else { return }
+            resp["state"] = app.state.rawValue
+            if let pid = app.launcherPid { resp["launcher_pid"] = Int(pid) }
+        }
+        _ = sem.wait(timeout: .now() + 2)
+        // Hotkey is read from config (file-backed, not main-thread-bound).
+        let (_, _, pretty) = readHotkeyFromConfig()
+        resp["hotkey"] = pretty
+        return resp
+    }
+
+    private func toggleResponse() -> [String: Any] {
+        var before = "unknown"
+        var after = "unknown"
+        let sem = DispatchSemaphore(value: 0)
+        DispatchQueue.main.async { [weak self] in
+            defer { sem.signal() }
+            guard let app = self?.app else { return }
+            before = app.state.rawValue
+            app.onMenuToggle()
+            after = app.state.rawValue
+        }
+        _ = sem.wait(timeout: .now() + 3)
+        return ["ok": true, "state_before": before, "state_after": after]
+    }
+
+    private func sendJSON(_ c: Int32, _ obj: [String: Any]) {
+        guard var data = try? JSONSerialization.data(withJSONObject: obj, options: []) else {
+            return
+        }
+        data.append(0x0A)
+        _ = data.withUnsafeBytes { buf in write(c, buf.baseAddress, buf.count) }
+    }
+}
+
 class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var statusItem: NSStatusItem!
     var menu: NSMenu!
@@ -358,6 +512,10 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // sole reference goes out of scope. Storing as a class property keeps
     // the SIGHUP handler alive for the agent's lifetime.
     var sighupSource: DispatchSourceSignal?
+    // IPC server exposing `status` / `toggle` / `open_inbox` on
+    // ~/.config/yulu/status_agent.sock. Lets `yulu status-agent toggle`
+    // and acceptance tests drive the agent without UI clicks.
+    var ipcServer: IPCServer?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         writePidFile()
@@ -386,6 +544,16 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         sighupSource?.resume()
 
+        // IPC server: start BEFORE the initial poll(). poll() does a
+        // blocking read from audio_daemon — if audiodaemon's accept queue
+        // is full (a known failure mode under high poll traffic) the read
+        // hangs and would otherwise prevent IPC from ever coming up. By
+        // ordering IPC first we guarantee the agent stays addressable
+        // even when audiodaemon is sick.
+        let ipc = IPCServer(app: self)
+        ipc.start()
+        ipcServer = ipc
+
         // Start polling at 1 Hz
         pollerTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
             self?.poll()
@@ -394,7 +562,22 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func poll() {
-        guard let resp = DaemonClient.send(["action": "status"]) else {
+        // Move the blocking socket round-trip OFF the main thread.
+        // DaemonClient.send does a blocking read with no timeout — when
+        // audio_daemon's accept queue is starved (a documented failure
+        // mode under sustained polling) the read hangs forever. If poll()
+        // runs on main, that hang freezes NSApplication.run() and the
+        // entire UI + IPC main-queue dispatches die with it.
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let resp = DaemonClient.send(["action": "status"])
+            DispatchQueue.main.async { [weak self] in
+                self?.applyPollResult(resp)
+            }
+        }
+    }
+
+    private func applyPollResult(_ resp: [String: Any]?) {
+        guard let resp = resp else {
             daemonDownStreak += 1
             if daemonDownStreak >= 3 {
                 applyState(.daemonDown)
@@ -482,6 +665,7 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         log("🔴 Yulu Status Agent terminating")
+        ipcServer?.stop()
         try? FileManager.default.removeItem(atPath: PID_FILE)
     }
 

@@ -17,6 +17,7 @@ from typing import Optional
 
 CONFIG_PATH = Path.home() / ".config" / "yulu" / "config.json"
 PID_PATH = Path.home() / ".config" / "yulu" / "status_agent.pid"
+IPC_SOCKET_PATH = Path.home() / ".config" / "yulu" / "status_agent.sock"
 
 DEFAULT_BLOCK = {
     "enabled": True,
@@ -243,6 +244,94 @@ def _cmd_status() -> int:
     return 0
 
 
+# ─── IPC client (talks to running StatusAgent.app via Unix socket) ────
+
+def _ipc_send(action: str, timeout: float = 3.0, **fields) -> dict:
+    """Send one line-delimited JSON command to status_agent.sock and read
+    the single-line response. Raises RuntimeError when the agent isn't
+    reachable so callers can render a uniform error message."""
+    import socket as _socket
+    payload = {"action": action, **fields}
+    line = (json.dumps(payload) + "\n").encode("utf-8")
+    s = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
+    s.settimeout(timeout)
+    try:
+        try:
+            s.connect(str(IPC_SOCKET_PATH))
+        except (FileNotFoundError, ConnectionRefusedError, OSError) as exc:
+            # OSError also catches macOS's "AF_UNIX path too long" and other
+            # bind-time failures — all of which mean "agent unreachable" from
+            # the user's perspective. socket.timeout subclasses OSError in
+            # Python 3.10+, so it's caught here too.
+            raise RuntimeError(
+                f"status_agent IPC unreachable ({exc}). Is the agent running? "
+                f"`yulu status-agent status` to check."
+            ) from exc
+        s.sendall(line)
+        chunks: list[bytes] = []
+        while True:
+            buf = s.recv(4096)
+            if not buf:
+                break
+            chunks.append(buf)
+            if buf.endswith(b"\n"):
+                break
+    finally:
+        s.close()
+    body = b"".join(chunks).strip()
+    if not body:
+        raise RuntimeError("empty response from status_agent")
+    try:
+        return json.loads(body.decode("utf-8"))
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"malformed response: {body!r}") from exc
+
+
+def _cmd_toggle() -> int:
+    try:
+        resp = _ipc_send("toggle")
+    except RuntimeError as exc:
+        print(f"⚠️ {exc}", file=sys.stderr)
+        return 1
+    if not resp.get("ok"):
+        print(f"⚠️ {resp.get('error', 'toggle failed')}", file=sys.stderr)
+        return 1
+    before = resp.get("state_before", "?")
+    after = resp.get("state_after", "?")
+    print(f"✅ toggle: {before} → {after}")
+    return 0
+
+
+def _cmd_state() -> int:
+    try:
+        resp = _ipc_send("status")
+    except RuntimeError as exc:
+        print(f"⚠️ {exc}", file=sys.stderr)
+        return 1
+    if not resp.get("ok"):
+        print(f"⚠️ {resp.get('error', 'status failed')}", file=sys.stderr)
+        return 1
+    print(f"state: {resp.get('state', 'unknown')}")
+    if "launcher_pid" in resp:
+        print(f"launcher pid: {resp['launcher_pid']}")
+    if "hotkey" in resp:
+        print(f"hotkey: {resp['hotkey']}")
+    return 0
+
+
+def _cmd_open_inbox() -> int:
+    try:
+        resp = _ipc_send("open_inbox")
+    except RuntimeError as exc:
+        print(f"⚠️ {exc}", file=sys.stderr)
+        return 1
+    if resp.get("ok"):
+        print("✅ open_inbox dispatched")
+        return 0
+    print(f"⚠️ {resp.get('error', 'failed')}", file=sys.stderr)
+    return 1
+
+
 def _cmd_install() -> int:
     if not STATUS_AGENT_APP.exists():
         print(
@@ -280,6 +369,9 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("enable",  help="Set enabled=true and load plist")
     sub.add_parser("disable", help="Set enabled=false and unload plist")
     sub.add_parser("status",  help="Show current config + plist load state")
+    sub.add_parser("state",   help="Show live state via IPC (idle/recording/...)")
+    sub.add_parser("toggle",  help="Toggle recording via IPC (idle ↔ recording)")
+    sub.add_parser("open-inbox", help="Open voicemail inbox in Terminal via IPC")
     sh = sub.add_parser("set-hotkey", help="Rebind the global hotkey "
                                           "(e.g. 'cmd+shift+V', 'alt+space')")
     sh.add_argument("spec", help="Hotkey spec: modifiers + key, plus-separated")
@@ -295,6 +387,12 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_status()
     if args.cmd == "install":
         return _cmd_install()
+    if args.cmd == "state":
+        return _cmd_state()
+    if args.cmd == "toggle":
+        return _cmd_toggle()
+    if args.cmd == "open-inbox":
+        return _cmd_open_inbox()
     parser.print_help()
     return 1
 
