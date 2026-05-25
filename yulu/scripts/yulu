@@ -313,6 +313,7 @@ case "${1:-help}" in
     prompts)   shift; PYTHONPATH="$SCRIPT_DIR:${PYTHONPATH:-}" exec "${PYTHON:-python3}" -m prompts.cli "$@" ;;
     summaries) shift; PYTHONPATH="$SCRIPT_DIR:${PYTHONPATH:-}" exec "${PYTHON:-python3}" -m summaries_cli "$@" ;;
     memo)      shift; PYTHONPATH="$SCRIPT_DIR:${PYTHONPATH:-}" exec "${PYTHON:-python3}" -m voicemail.cli "$@" ;;
+    status-agent|statusagent) shift; PYTHONPATH="$SCRIPT_DIR:${PYTHONPATH:-}" exec "${PYTHON:-python3}" -m status_agent_config "$@" ;;
     where)     shift; cmd_where "$@" ;;
     help|-h|--help) usage ;;
     *)         err "Unknown command: $1"; echo; usage; exit 1 ;;

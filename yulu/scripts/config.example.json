@@ -95,5 +95,13 @@
       "聊天", "通讯录", "朋友圈", "文件传输助手",
       "PolyMeet"
     ]
+  },
+  "status_agent": {
+    "enabled": true,
+    "hotkey": {
+      "key": "V",
+      "modifiers": ["cmd", "shift"]
+    },
+    "note": "Phase 5 menu-bar agent + global hotkey. Toggle voicemail capture from any app."
   }
 }
