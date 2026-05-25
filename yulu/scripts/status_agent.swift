@@ -291,6 +291,57 @@ class IconStateMachine {
     }
 }
 
+// Spawn `voicemail.cli new` / `voicemail.cli stop` as detached subprocesses.
+// All recording lifecycle + transcribe + enqueue stays in the Phase 4
+// Python module — the status agent is just a button.
+class VoicemailLauncher {
+    static func launchNew() -> Int32? {
+        let scriptDir = ProcessInfo.processInfo.environment["YULU_SCRIPT_DIR"]
+            ?? "\((Bundle.main.bundlePath as NSString).deletingLastPathComponent)"
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        task.arguments = [
+            "PYTHONPATH=\(scriptDir)",
+            "python3", "-m", "voicemail.cli", "new",
+        ]
+        // Detach from agent's stdio so the subprocess survives independently
+        task.standardInput = FileHandle.nullDevice
+        let logPath = (("~/.config/yulu/status_agent_launcher.log") as NSString).expandingTildeInPath
+        FileManager.default.createFile(atPath: logPath, contents: nil)
+        let logFH = FileHandle(forWritingAtPath: logPath) ?? FileHandle.nullDevice
+        _ = try? logFH.seekToEnd()
+        task.standardOutput = logFH
+        task.standardError = logFH
+        do {
+            try task.run()
+            return task.processIdentifier
+        } catch {
+            log("⚠️ failed to launch voicemail.cli new: \(error)")
+            return nil
+        }
+    }
+
+    static func sendStop() {
+        // `voicemail.cli stop` is the user-visible idempotent stop. The
+        // already-running `voicemail.cli new` subprocess detects the
+        // recording→idle transition in its poll loop and triggers
+        // _transcribe_and_enqueue itself; cmd_stop's role is just to send
+        // the daemon stop RPC.
+        let scriptDir = ProcessInfo.processInfo.environment["YULU_SCRIPT_DIR"]
+            ?? "\((Bundle.main.bundlePath as NSString).deletingLastPathComponent)"
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        task.arguments = [
+            "PYTHONPATH=\(scriptDir)",
+            "python3", "-m", "voicemail.cli", "stop",
+        ]
+        task.standardOutput = FileHandle.nullDevice
+        task.standardError = FileHandle.nullDevice
+        try? task.run()
+        task.waitUntilExit()  // stop is fast (just one socket roundtrip)
+    }
+}
+
 class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var statusItem: NSStatusItem!
     var menu: NSMenu!
@@ -430,8 +481,42 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc func onMenuToggle() {
-        // Wired in D.5 (VoicemailLauncher). For now, just log.
-        log("menu → Start/Stop tapped (toggle stub)")
+        log("toggle (state=\(state.rawValue))")
+        switch state {
+        case .idle:
+            if let pid = VoicemailLauncher.launchNew() {
+                launcherPid = pid
+                applyState(.recording)
+            }
+        case .recording:
+            VoicemailLauncher.sendStop()
+            // Poller will see recording=false; launcherPid still alive → processing
+        case .processing:
+            log("ignoring click while processing")
+        case .meetingBusy:
+            showMeetingBusyNotification()
+        case .daemonDown:
+            showDaemonDownNotification()
+        }
+    }
+
+    private func showMeetingBusyNotification() {
+        guard let resp = DaemonClient.send(["action": "status"]) else { return }
+        let file = (resp["file"] as? String) ?? "<unknown>"
+        let title = (file as NSString).lastPathComponent
+        log("meeting busy: \(title)")
+        let note = NSUserNotification()
+        note.title = "Yulu"
+        note.informativeText = "Recording in progress: \(title)"
+        NSUserNotificationCenter.default.deliver(note)
+    }
+
+    private func showDaemonDownNotification() {
+        log("daemon down — surfacing notification")
+        let note = NSUserNotification()
+        note.title = "Yulu"
+        note.informativeText = "audio_daemon not running. Restart with: launchctl load ~/Library/LaunchAgents/com.yulu.audiodaemon.plist"
+        NSUserNotificationCenter.default.deliver(note)
     }
 
     @objc func onOpenInbox() {
