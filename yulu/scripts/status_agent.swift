@@ -471,12 +471,17 @@ class IPCServer {
     /// a fallback error envelope on any failure so the client always
     /// gets a valid response.
     private func searchResponse(obj: [String: Any], data: Data) -> [String: Any] {
-        let scriptsDir = Bundle.main.bundlePath.hasSuffix(".app")
-            ? (Bundle.main.bundleURL
-                .deletingLastPathComponent()      // /scripts
-                .path)
-            : URL(fileURLWithPath: CommandLine.arguments[0])
-                .deletingLastPathComponent().path
+        // Same precedence rule as readHotkeyFromConfig: YULU_SCRIPT_DIR
+        // env wins so a launchd-installed bundle can point at a different
+        // tree (e.g. a PR-branch worktree being smoke-tested) without a
+        // rebuild. Falls back to bundle-relative for the production install.
+        let scriptsDir = ProcessInfo.processInfo.environment["YULU_SCRIPT_DIR"]
+            ?? (Bundle.main.bundlePath.hasSuffix(".app")
+                ? (Bundle.main.bundleURL
+                    .deletingLastPathComponent()      // /scripts
+                    .path)
+                : URL(fileURLWithPath: CommandLine.arguments[0])
+                    .deletingLastPathComponent().path)
 
         let task = Process()
         task.executableURL = URL(fileURLWithPath: "/usr/bin/env")
