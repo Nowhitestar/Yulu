@@ -62,3 +62,46 @@ def test_stt_daemon_section_present_when_config_empty(tmp_path):
     assert sd["socket_present"] is False
     assert sd["daemon_reachable"] is False
     assert sd["vocab_db_present"] is False
+
+
+def test_search_index_section_absent_db_reports_missing(tmp_path):
+    """Phase 6 F.2: doctor returns a clean 'not initialized' report when
+    search.sqlite is missing rather than raising."""
+    doctor = load_doctor()
+    report = doctor.collect_report(
+        source_root=ROOT, runtime_root=ROOT,
+        legacy_root=ROOT / "missing-legacy",
+        config_dir=tmp_path,
+    )
+    assert "search_index" in report
+    si = report["search_index"]
+    assert si["present"] is False
+    assert si["ok"] is False
+    assert "not initialized" in si.get("error", "")
+
+
+def test_search_index_section_reports_health(tmp_path):
+    """When search.sqlite exists and is healthy, doctor returns the
+    full health dict (schema_version, total_docs, per_kind, ...)."""
+    import sys as _sys
+    _sys.path.insert(0, str(ROOT / "yulu" / "scripts"))
+    from search.indexer import init_db, upsert_doc, KIND_MEETING_SUMMARY
+    db = tmp_path / "search.sqlite"
+    conn = init_db(db)
+    p = tmp_path / "Plan_20260521_160000.summary.md"
+    p.write_text("body", encoding="utf-8")
+    upsert_doc(source_path=p, kind=KIND_MEETING_SUMMARY, conn=conn)
+    conn.close()
+
+    doctor = load_doctor()
+    report = doctor.collect_report(
+        source_root=ROOT, runtime_root=ROOT,
+        legacy_root=ROOT / "missing-legacy",
+        config_dir=tmp_path,
+    )
+    si = report["search_index"]
+    assert si["present"] is True
+    assert si["ok"] is True
+    assert si["schema_version"] == "1"
+    assert si["total_docs"] == 1
+    assert KIND_MEETING_SUMMARY in si["per_kind"]

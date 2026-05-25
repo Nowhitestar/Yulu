@@ -153,6 +153,39 @@ def check_stt_daemon(config_dir: Path) -> dict[str, Any]:
     return report
 
 
+def check_search_index(config_dir: Path) -> dict[str, Any]:
+    """Phase 6 health check: open search.sqlite via search.reader.doctor()
+    and return a uniform dict. Always returns a dict — never raises —
+    so doctor.py can render it inline even if FTS5 or the module is
+    unavailable."""
+    db_path = config_dir / "search.sqlite"
+    report: dict[str, Any] = {
+        "db_path": str(db_path),
+        "present": db_path.exists(),
+        "ok": False,
+    }
+    if not db_path.exists():
+        report["error"] = "search.sqlite not initialized (run setup.sh or `yulu search --reindex`)"
+        return report
+    try:
+        # Lazy import so doctor.py keeps working even if search.indexer
+        # has a typo / unreadable schema.
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from search.reader import doctor as _doctor
+        from search.indexer import SEARCH_DB_PATH as _DEFAULT_DB
+        # Use the requested db_path explicitly so a non-standard config_dir
+        # still produces a meaningful report (tests rely on this).
+        if db_path == _DEFAULT_DB:
+            health = _doctor()
+        else:
+            health = _doctor(db_path=db_path)
+        report.update(health)
+        report["ok"] = bool(health.get("integrity_ok"))
+    except Exception as exc:
+        report["error"] = f"search doctor failed: {exc}"
+    return report
+
+
 def collect_report(
     source_root: Path = DEFAULT_SOURCE_ROOT,
     runtime_root: Path = DEFAULT_RUNTIME_ROOT,
@@ -201,6 +234,7 @@ def collect_report(
         "queue_entries": queue_entries,
         "socket": _socket_status(config_dir / "audio_daemon.sock"),
         "stt_daemon": check_stt_daemon(config_dir),
+        "search_index": check_search_index(config_dir),
         "processes": processes,
         "legacy_processes": legacy_processes,
         "runtime_processes": runtime_processes,
@@ -256,6 +290,17 @@ def print_human(report: dict[str, Any]) -> None:
             print(f"  model_loaded={sd.get('model_loaded')} in_flight={sd.get('in_flight_jobs')} sessions={sd.get('active_sessions')}")
         elif sd.get("error"):
             print(f"  error: {sd['error']}")
+    si = report.get("search_index", {})
+    if si:
+        print(f"{mark(si.get('ok', False))} search index: {si.get('db_path')} present={si.get('present')}")
+        if si.get("ok"):
+            per_kind = si.get("per_kind", {}) or {}
+            kinds_str = " ".join(f"{k}={v}" for k, v in sorted(per_kind.items())) or "(empty)"
+            print(f"  total_docs={si.get('total_docs')} schema=v{si.get('schema_version')} "
+                  f"last_sweep={si.get('last_full_sweep_at') or 'never'}")
+            print(f"  per_kind: {kinds_str}")
+        elif si.get("error"):
+            print(f"  error: {si['error']}")
     for check in report["checks"]:
         print(f"{mark(check['ok'])} {check['name']}: {check.get('path') or 'missing'}")
     if report["legacy_processes"]:

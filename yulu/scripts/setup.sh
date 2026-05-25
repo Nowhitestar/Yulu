@@ -910,6 +910,13 @@ install_launchagents() {
         PYTHONPATH="$SCRIPT_DIR" "$PYTHON_BIN" -m prompts.cli seed --from-current >/dev/null 2>&1 \
           && ok "prompts seed 完成" \
           || warn "prompts seed 失败（可稍后重试: yulu prompts seed --from-current）"
+
+        # Bootstrap search.sqlite schema (idempotent). First `yulu search`
+        # call will run a full sweep over ~/Movies/Yulu to populate it.
+        info "初始化 search.sqlite..."
+        PYTHONPATH="$SCRIPT_DIR" "$PYTHON_BIN" -m search.indexer init >/dev/null 2>&1 \
+          && ok "search index 初始化完成（首次 yulu search 会全量索引）" \
+          || warn "search index 初始化失败（可稍后重试: yulu search --reindex）"
     fi
 
     # Calendar service (optional, only if gog configured)
