@@ -162,3 +162,142 @@ def sighup_running_agent() -> bool:
         return True
     except (ProcessLookupError, PermissionError):
         return False
+
+
+# ─── CLI ────────────────────────────────────────────────────────
+
+import argparse
+import subprocess
+
+# Paths the install/enable/disable commands need
+SCRIPT_DIR = Path(__file__).resolve().parent
+STATUS_AGENT_APP = SCRIPT_DIR / "StatusAgent.app"
+PLIST_NAME = "com.yulu.statusagent.plist"
+PLIST_DEST = Path.home() / "Library" / "LaunchAgents" / PLIST_NAME
+
+# Accept user-facing 'option' as an alias for 'alt' (Apple keyboards
+# label the key as Option). Normalize before parse_hotkey() sees it.
+_MOD_ALIASES = {"option": "alt", "opt": "alt", "control": "ctrl", "command": "cmd"}
+
+
+def _normalize_modifier_aliases(spec: str) -> str:
+    out_parts = []
+    for part in spec.split("+"):
+        p = part.strip().lower()
+        out_parts.append(_MOD_ALIASES.get(p, part.strip()))
+    return "+".join(out_parts)
+
+
+def _cmd_set_hotkey(spec: str) -> int:
+    try:
+        hotkey = parse_hotkey(_normalize_modifier_aliases(spec))
+    except ValueError as exc:
+        print(f"⚠️ invalid hotkey '{spec}': {exc}", file=sys.stderr)
+        return 1
+    block = load()
+    block["hotkey"] = hotkey
+    save(block)
+    print(f"✅ hotkey set to {format_hotkey(hotkey)}")
+    if sighup_running_agent():
+        print("   (SIGHUP'd running status agent to re-register)")
+    else:
+        print("   (status agent not running; will pick up on next start)")
+    return 0
+
+
+def _cmd_enable() -> int:
+    block = load()
+    block["enabled"] = True
+    save(block)
+    print("✅ status agent enabled in config")
+    # If plist already installed, load it.
+    if PLIST_DEST.exists():
+        subprocess.run(["launchctl", "load", str(PLIST_DEST)],
+                       capture_output=True)
+        print("   (launchctl load issued)")
+    return 0
+
+
+def _cmd_disable() -> int:
+    block = load()
+    block["enabled"] = False
+    save(block)
+    print("✅ status agent disabled in config")
+    # Always attempt launchctl unload — harmless if the agent isn't loaded
+    # (capture_output swallows the "Could not find specified service" noise),
+    # and guarantees a stopped daemon even if the plist file was removed
+    # out-of-band.
+    subprocess.run(["launchctl", "unload", str(PLIST_DEST)],
+                   capture_output=True)
+    print("   (launchctl unload issued)")
+    return 0
+
+
+def _cmd_status() -> int:
+    block = load()
+    state = "enabled" if block.get("enabled") else "disabled"
+    print(f"status_agent: {state}")
+    print(f"hotkey: {format_hotkey(block.get('hotkey', {}))}")
+    print(f"plist: {'installed' if PLIST_DEST.exists() else 'not installed'}")
+    print(f"pid file: {'present' if PID_PATH.exists() else 'absent'}")
+    return 0
+
+
+def _cmd_install() -> int:
+    if not STATUS_AGENT_APP.exists():
+        print(
+            f"⚠️ StatusAgent.app not found at {STATUS_AGENT_APP}",
+            file=sys.stderr,
+        )
+        print(
+            "   Build it first: bash yulu/scripts/build_status_agent.sh",
+            file=sys.stderr,
+        )
+        return 1
+    # Plist install is normally done by setup.sh; this command is a
+    # convenience for re-installs without a full setup pass.
+    src_plist = SCRIPT_DIR / PLIST_NAME
+    if not src_plist.exists():
+        print(f"⚠️ plist source missing: {src_plist}", file=sys.stderr)
+        return 1
+    PLIST_DEST.parent.mkdir(parents=True, exist_ok=True)
+    text = src_plist.read_text(encoding="utf-8")
+    text = text.replace("__SCRIPT_DIR__", str(SCRIPT_DIR))
+    PLIST_DEST.write_text(text, encoding="utf-8")
+    subprocess.run(["launchctl", "unload", str(PLIST_DEST)],
+                   capture_output=True)
+    subprocess.run(["launchctl", "load", str(PLIST_DEST)],
+                   capture_output=True)
+    print(f"✅ {PLIST_NAME} installed and loaded")
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(prog="yulu status-agent",
+                                     description="Manage the menu-bar status agent.")
+    sub = parser.add_subparsers(dest="cmd")
+    sub.add_parser("install", help="Install plist + load via launchctl")
+    sub.add_parser("enable",  help="Set enabled=true and load plist")
+    sub.add_parser("disable", help="Set enabled=false and unload plist")
+    sub.add_parser("status",  help="Show current config + plist load state")
+    sh = sub.add_parser("set-hotkey", help="Rebind the global hotkey "
+                                          "(e.g. 'cmd+shift+V', 'alt+space')")
+    sh.add_argument("spec", help="Hotkey spec: modifiers + key, plus-separated")
+
+    args = parser.parse_args(argv)
+    if args.cmd == "set-hotkey":
+        return _cmd_set_hotkey(args.spec)
+    if args.cmd == "enable":
+        return _cmd_enable()
+    if args.cmd == "disable":
+        return _cmd_disable()
+    if args.cmd == "status":
+        return _cmd_status()
+    if args.cmd == "install":
+        return _cmd_install()
+    parser.print_help()
+    return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
