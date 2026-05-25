@@ -19,6 +19,13 @@ from search.indexer import (
     parse_stem,
     upsert_doc,
 )
+from search.reader import (
+    SearchHit,
+    doctor,
+    reindex,
+    search,
+    sweep,
+)
 
 __all__ = [
     "SEARCH_DB_PATH",
@@ -34,5 +41,9 @@ __all__ = [
     "open_conn",
     "parse_stem",
     "upsert_doc",
+    "SearchHit",
+    "doctor",
+    "reindex",
+    "search",
+    "sweep",
 ]
-
