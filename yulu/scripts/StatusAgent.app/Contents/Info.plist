@@ -13,7 +13,7 @@
 	<key>CFBundleShortVersionString</key>
 	<string>0.5.0</string>
 	<key>CFBundleVersion</key>
-	<string>118</string>
+	<string>119</string>
 	<key>LSUIElement</key>
 	<true/>
 	<key>NSAppleEventsUsageDescription</key>
