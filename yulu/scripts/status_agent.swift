@@ -106,7 +106,7 @@ func loadRecentVoicemails(limit: Int = 5) -> [(stem: String, hasSummary: Bool)] 
         return []
     }
     guard let data = try? pipe.fileHandleForReading.readToEnd(),
-          let text = String(data: data ?? Data(), encoding: .utf8) else {
+          let text = String(data: data, encoding: .utf8) else {
         return []
     }
     var out: [(stem: String, hasSummary: Bool)] = []
