@@ -595,6 +595,18 @@ class SocketServer {
     var onRecordingStart: (() -> Void)?
     var onRecordingStop: (() -> Void)?
 
+    // Serial queue that runs all request handlers off the accept thread. The
+    // old design called handle() synchronously inside the accept loop, so a
+    // single slow request (status_agent without SHUT_WR, scanWindows, etc.)
+    // would block every subsequent connect until the listen backlog overflowed
+    // and the kernel started dropping clients. Serializing keeps recorder
+    // state mutations one-at-a-time without freezing the listener.
+    private let ipcQueue = DispatchQueue(label: "yulu.audio-daemon.ipc")
+
+    // Cap individual request payloads so a runaway/malicious client cannot
+    // grow the read buffer without bound. Real requests are <200 bytes.
+    private let maxRequestBytes = 64 * 1024
+
     init(_ r: AudioRecorder) { recorder = r }
 
     func stop() {
@@ -612,15 +624,21 @@ class SocketServer {
             $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { Darwin.bind(sock, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) }
         }
         guard ok == 0 else { log("Socket: bind \(ok)"); close(sock); sock = -1; return }
-        Darwin.listen(sock, 5); chmod(SOCKET_PATH.path, 0o600)
+        // status_agent polls at 1Hz, voicemail.cli polls during recording, and
+        // shell scripts ping ad-hoc — a backlog of 5 is trivial to overrun if
+        // any handler stalls. 64 absorbs realistic bursts without queueing.
+        Darwin.listen(sock, 64); chmod(SOCKET_PATH.path, 0o600)
         log("Socket ready")
         DispatchQueue.global(qos: .background).async { [weak self] in
             guard let self = self else { return }
             while self.sock >= 0 {
                 let c = Darwin.accept(self.sock, nil, nil)
                 if c >= 0 {
-                    self.handle(c)
-                    close(c)
+                    self.prepareClient(c)
+                    self.ipcQueue.async { [weak self] in
+                        self?.handle(c)
+                        close(c)
+                    }
                 } else if errno == EINTR {
                     continue
                 } else {
@@ -631,10 +649,40 @@ class SocketServer {
         }
     }
 
+    /// Per-accepted-fd hardening:
+    ///   * SO_RCVTIMEO / SO_SNDTIMEO bound each read/write so a half-dead
+    ///     client cannot tie up the IPC queue indefinitely.
+    ///   * SO_NOSIGPIPE keeps `write` to a peer that already disconnected
+    ///     from raising SIGPIPE and killing the daemon — the documented
+    ///     hazard around the `start` action's late hook callback.
+    private func prepareClient(_ c: Int32) {
+        var tv = timeval(tv_sec: 5, tv_usec: 0)
+        _ = setsockopt(c, SOL_SOCKET, SO_RCVTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
+        _ = setsockopt(c, SOL_SOCKET, SO_SNDTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
+        var on: Int32 = 1
+        _ = setsockopt(c, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size))
+    }
+
     private func handle(_ c: Int32) {
+        // Framing: every in-tree client (Python record_audio /
+        // meeting_daemon / voicemail.recorder, Swift status_agent's
+        // DaemonClient since #20) writes the request then `shutdown(SHUT_WR)`
+        // — read-until-EOF works for everyone. SO_RCVTIMEO (set in
+        // prepareClient) bounds the wait at 5s for a misbehaving client.
+        //
+        // A newline-framing alternative was attempted in an earlier
+        // revision of this commit but proved unreliable in practice
+        // (`buf.prefix(n).contains(0x0A)` didn't break the loop against
+        // the live socket — likely a `&buf` → C `read()` storage-sync
+        // issue worth a dedicated debugging pass) and is no longer
+        // needed now that the Swift client matches the Python framing.
         var data = Data()
         var buf = [UInt8](repeating: 0, count: 4096)
-        while true { let n = read(c, &buf, 4096); if n <= 0 { break }; data.append(buf, count: n) }
+        while data.count < maxRequestBytes {
+            let n = read(c, &buf, buf.count)
+            if n <= 0 { break }
+            data.append(buf, count: n)
+        }
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let action = json["action"] as? String else { send(c, ["error":"invalid"]); return }
         var resp: [String: Any]
