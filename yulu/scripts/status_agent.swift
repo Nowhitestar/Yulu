@@ -226,10 +226,79 @@ func readHotkeyFromConfig() -> (keyCode: UInt32, modifierMask: UInt32, pretty: S
     return (kc, mm, String(parts[2]))
 }
 
+// Synchronous Unix-socket client. Mirrors record_audio.socket_send's
+// line-delimited JSON contract: write one JSON object + newline, read
+// one JSON object back.
+class DaemonClient {
+    static let socketPath = (("~/.config/yulu/audio_daemon.sock") as NSString).expandingTildeInPath
+
+    static func send(_ payload: [String: Any]) -> [String: Any]? {
+        guard let json = try? JSONSerialization.data(withJSONObject: payload, options: []) else {
+            return nil
+        }
+        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+        guard fd >= 0 else { return nil }
+        defer { close(fd) }
+
+        var addr = sockaddr_un()
+        addr.sun_family = sa_family_t(AF_UNIX)
+        let pathBytes = socketPath.utf8CString
+        guard pathBytes.count < MemoryLayout.size(ofValue: addr.sun_path) else { return nil }
+        withUnsafeMutablePointer(to: &addr.sun_path) { ptr in
+            ptr.withMemoryRebound(to: CChar.self, capacity: pathBytes.count) { p in
+                pathBytes.withUnsafeBufferPointer { src in
+                    _ = strncpy(p, src.baseAddress!, pathBytes.count)
+                }
+            }
+        }
+        let len = socklen_t(MemoryLayout<sockaddr_un>.size)
+        let connectResult = withUnsafePointer(to: &addr) { ptr -> Int32 in
+            ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sa in
+                Darwin.connect(fd, sa, len)
+            }
+        }
+        guard connectResult >= 0 else { return nil }
+
+        // Write JSON + newline
+        var line = json
+        line.append(0x0A)
+        _ = line.withUnsafeBytes { buf in
+            write(fd, buf.baseAddress, buf.count)
+        }
+
+        // Read response (up to 64 KB, blocking — daemon is local)
+        var buffer = [UInt8](repeating: 0, count: 65536)
+        let n = read(fd, &buffer, buffer.count)
+        guard n > 0 else { return nil }
+        let data = Data(buffer[0..<n])
+        return (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+    }
+}
+
+enum AgentState: String {
+    case idle, recording, processing, meetingBusy, daemonDown
+}
+
+class IconStateMachine {
+    static func glyph(for state: AgentState) -> String {
+        switch state {
+        case .idle:         return "语"
+        case .recording:    return "🔴语"
+        case .processing:   return "⋯语"
+        case .meetingBusy:  return "🟡语"
+        case .daemonDown:   return "🚫语"
+        }
+    }
+}
+
 class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var statusItem: NSStatusItem!
     var menu: NSMenu!
     let hotkey = HotkeyRegistrar()
+    var pollerTimer: Timer?
+    var state: AgentState = .idle
+    var daemonDownStreak: Int = 0
+    var launcherPid: Int32?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         writePidFile()
@@ -257,6 +326,63 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // Carbon expects SIGHUP delivered to the process, so suppress the
         // default SIG_DFL action that would otherwise terminate us.
         signal(SIGHUP, SIG_IGN)
+
+        // Start polling at 1 Hz
+        pollerTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+            self?.poll()
+        }
+        poll()  // immediate first tick
+    }
+
+    private func poll() {
+        guard let resp = DaemonClient.send(["action": "status"]) else {
+            daemonDownStreak += 1
+            if daemonDownStreak >= 3 {
+                applyState(.daemonDown)
+            }
+            return
+        }
+        daemonDownStreak = 0
+        let recording = (resp["recording"] as? Bool) ?? false
+        let file = (resp["file"] as? String) ?? ""
+
+        if recording {
+            if file.contains("/voicemails/") {
+                applyState(.recording)
+            } else {
+                applyState(.meetingBusy)
+            }
+            return
+        }
+
+        // Not recording. Are we waiting for a launcher to finish (processing)?
+        if let pid = launcherPid, kill(pid, 0) == 0 {
+            applyState(.processing)
+            return
+        }
+        if launcherPid != nil { launcherPid = nil }
+        applyState(.idle)
+    }
+
+    private func applyState(_ new: AgentState) {
+        guard new != state else { return }
+        state = new
+        if let btn = statusItem.button {
+            btn.title = IconStateMachine.glyph(for: new)
+        }
+        // Update the menu's toggle label (use items.first since NSMenu has
+        // no item(withIdentifier:) API)
+        let wantId = NSUserInterfaceItemIdentifier("toggle")
+        if let item = menu.items.first(where: { $0.identifier == wantId }) {
+            switch new {
+            case .idle:        item.title = "Start Voicemail"
+            case .recording:   item.title = "● Recording — click to stop"
+            case .processing:  item.title = "⋯ Transcribing…"
+            case .meetingBusy: item.title = "Meeting in progress"
+            case .daemonDown:  item.title = "Audio daemon not running"
+            }
+            item.isEnabled = (new == .idle || new == .recording)
+        }
     }
 
     private func registerHotkeyFromConfig() {
