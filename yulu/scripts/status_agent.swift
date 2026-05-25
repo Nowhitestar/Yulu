@@ -119,9 +119,117 @@ func loadRecentVoicemails(limit: Int = 5) -> [(stem: String, hasSummary: Bool)] 
     return out
 }
 
+// Carbon RegisterEventHotKey wrapper.
+//
+// We use Carbon (not NSEvent.addGlobalMonitorForEvents) because Carbon
+// doesn't require Input Monitoring permission — system-wide hotkeys with
+// modifier keys work out of the box. The API is legacy but stable on
+// macOS 14/15. RegisterEventHotKey contract: returns OSStatus, fills in
+// an EventHotKeyRef out-parameter, fires kEventHotKeyPressed events to
+// the application event target. We install one handler that fires our
+// toggle closure.
+
+class HotkeyRegistrar {
+    private var hotKeyRef: EventHotKeyRef?
+    private var handlerRef: EventHandlerRef?
+    private var onTrigger: (() -> Void)?
+
+    static let signature: OSType = 0x59556C75  // 'YuLu' fourcc
+
+    func register(keyCode: UInt32, modifierMask: UInt32, _ trigger: @escaping () -> Void) -> Bool {
+        unregister()
+        onTrigger = trigger
+
+        let hotKeyID = EventHotKeyID(signature: HotkeyRegistrar.signature, id: 1)
+        var spec = EventTypeSpec(eventClass: OSType(kEventClassKeyboard),
+                                  eventKind: UInt32(kEventHotKeyPressed))
+
+        // Install global handler if not yet installed
+        let handler: EventHandlerUPP = { (_, eventRef, userData) -> OSStatus in
+            guard let userData = userData else { return noErr }
+            let me = Unmanaged<HotkeyRegistrar>.fromOpaque(userData).takeUnretainedValue()
+            DispatchQueue.main.async { me.onTrigger?() }
+            return noErr
+        }
+        let selfPtr = Unmanaged.passUnretained(self).toOpaque()
+        let installStatus = InstallEventHandler(
+            GetApplicationEventTarget(),
+            handler, 1, &spec, selfPtr, &handlerRef
+        )
+        if installStatus != noErr {
+            log("⚠️ InstallEventHandler failed: \(installStatus)")
+            return false
+        }
+
+        let regStatus = RegisterEventHotKey(
+            keyCode, modifierMask, hotKeyID,
+            GetApplicationEventTarget(), 0, &hotKeyRef
+        )
+        if regStatus != noErr {
+            log("⚠️ RegisterEventHotKey failed: \(regStatus) (key conflict?)")
+            return false
+        }
+        log("hotkey_registered keyCode=\(keyCode) modifiers=0x\(String(modifierMask, radix: 16))")
+        return true
+    }
+
+    func unregister() {
+        if let ref = hotKeyRef {
+            UnregisterEventHotKey(ref)
+            hotKeyRef = nil
+        }
+        if let h = handlerRef {
+            RemoveEventHandler(h)
+            handlerRef = nil
+        }
+    }
+}
+
+// Read config (key + modifiers) by shelling to the Python helper.
+// Returns (keyCode, modifierMask, prettyLabel). Falls back to ⌘⇧V on error.
+func readHotkeyFromConfig() -> (keyCode: UInt32, modifierMask: UInt32, pretty: String) {
+    let scriptDir = ProcessInfo.processInfo.environment["YULU_SCRIPT_DIR"]
+        ?? "\((Bundle.main.bundlePath as NSString).deletingLastPathComponent)"
+    let task = Process()
+    task.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+    task.arguments = [
+        "PYTHONPATH=\(scriptDir)",
+        "python3", "-c",
+        """
+        import status_agent_config as sac
+        b = sac.load()
+        k = sac.keycode_for(b['hotkey']['key'])
+        m = sac.modifier_mask(b['hotkey']['modifiers'])
+        p = sac.format_hotkey(b['hotkey'])
+        print(f'{k}\\t{m}\\t{p}')
+        """
+    ]
+    let pipe = Pipe()
+    task.standardOutput = pipe
+    task.standardError = Pipe()
+    do {
+        try task.run()
+        task.waitUntilExit()
+    } catch {
+        return (9, 0x300, "⌘⇧V")  // fallback
+    }
+    guard let data = try? pipe.fileHandleForReading.readToEnd(),
+          let text = String(data: data, encoding: .utf8) else {
+        return (9, 0x300, "⌘⇧V")
+    }
+    let parts = text.trimmingCharacters(in: .whitespacesAndNewlines).split(separator: "\t")
+    guard parts.count == 3,
+          let kc = UInt32(parts[0]),
+          let mm = UInt32(parts[1]) else {
+        return (9, 0x300, "⌘⇧V")
+    }
+    return (kc, mm, String(parts[2]))
+}
+
 class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var statusItem: NSStatusItem!
     var menu: NSMenu!
+    let hotkey = HotkeyRegistrar()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         writePidFile()
@@ -135,6 +243,38 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu = MenuBuilder.build(target: self)
         menu.delegate = self
         statusItem.menu = menu
+
+        // Initial hotkey registration
+        registerHotkeyFromConfig()
+
+        // SIGHUP → re-read config + re-register
+        let sigsrc = DispatchSource.makeSignalSource(signal: SIGHUP, queue: .main)
+        sigsrc.setEventHandler { [weak self] in
+            log("SIGHUP received — re-registering hotkey")
+            self?.registerHotkeyFromConfig()
+        }
+        sigsrc.resume()
+        // Carbon expects SIGHUP delivered to the process, so suppress the
+        // default SIG_DFL action that would otherwise terminate us.
+        signal(SIGHUP, SIG_IGN)
+    }
+
+    private func registerHotkeyFromConfig() {
+        let (kc, mm, pretty) = readHotkeyFromConfig()
+        let ok = hotkey.register(keyCode: kc, modifierMask: mm) { [weak self] in
+            self?.onHotkeyToggle()
+        }
+        // Update the menu's hotkey label (use items.first since NSMenu has
+        // no item(withIdentifier:) API)
+        let wantId = NSUserInterfaceItemIdentifier("hotkey_label")
+        if let item = menu.items.first(where: { $0.identifier == wantId }) {
+            item.title = ok ? "Hotkey: \(pretty)" : "Hotkey: unavailable (\(pretty) — registration failed)"
+        }
+    }
+
+    @objc func onHotkeyToggle() {
+        log("hotkey → toggle")
+        onMenuToggle()
     }
 
     func applicationWillTerminate(_ notification: Notification) {

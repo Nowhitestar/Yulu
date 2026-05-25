@@ -15,7 +15,7 @@
 		<dict>
 			<key>cdhash</key>
 			<data>
-			/HSUKzqSiqjQkC4a7NYngp7nsgU=
+			UYvIaBD+vZp6qQh+CBmF36vVA00=
 			</data>
 			<key>requirement</key>
 			<string>identifier "status_agent" and anchor apple generic and certificate leaf[subject.CN] = "Apple Development: nowhitestar@gmail.com (248D6L6JS2)" and certificate 1[field.1.2.840.113635.100.6.2.1] /* exists */</string>
