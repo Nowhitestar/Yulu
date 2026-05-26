@@ -1,7 +1,7 @@
 // web/src/routes/inbox/search.tsx
 import type React from "react";
 import { useState } from "react";
-import { useSearchParams } from "react-router";
+import { Link, useSearchParams } from "react-router";
 import { trpc } from "../../trpc.js";
 import { useDebounced } from "../../hooks/useDebounced.js";
 import { FilterChips, type ChipDef } from "../../components/FilterChips.js";
@@ -140,8 +140,16 @@ export function Search() {
 }
 
 function SearchResultRow({ hit }: { hit: Hit }) {
+  // Map kind ("voicemail_summary" / "meeting_transcript" / ...) to route + tab
+  const [kindType, kindIn] = hit.kind.split("_");
+  const basePath = kindType === "voicemail" ? "voicemails" : "meetings";
+  const tab = kindIn === "summary" ? "summary" : kindIn === "transcript" ? "transcript" : "raw";
+  // Strip [hit] markers so the snippet matcher in the reader can find a clean string
+  const cleanSnippet = hit.snippet.replace(/\[\/?hit\]/g, "").trim().slice(0, 80);
+  const target = `/inbox/${basePath}/${hit.stem}?tab=${tab}&snippet=${encodeURIComponent(cleanSnippet)}`;
+
   return (
-    <div className="search-result">
+    <Link to={target} className="search-result">
       <div className="search-result-title">{hit.meetingTitle === "voicemail" ? hit.stem : hit.meetingTitle}</div>
       <div className="search-result-meta">
         <span>{hit.recordedAt}</span>
@@ -151,7 +159,7 @@ function SearchResultRow({ hit }: { hit: Hit }) {
         <span>{hit.kind}</span>
       </div>
       <div className="search-result-snippet">{renderSnippet(hit.snippet)}</div>
-    </div>
+    </Link>
   );
 }
 

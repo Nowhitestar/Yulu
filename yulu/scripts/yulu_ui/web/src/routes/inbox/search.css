@@ -32,6 +32,9 @@
   font-size: 12px;
 }
 .search-result {
+  display: block;
+  color: inherit;
+  text-decoration: none;
   padding: 12px 14px;
   border-radius: var(--radius-inner);
   margin-bottom: 4px;
