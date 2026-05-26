@@ -1,0 +1,31 @@
+.audioplayer {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  background: var(--glass);
+  border-radius: var(--radius-panel);
+  box-shadow: var(--edge-shadow);
+}
+.audioplayer-play {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.audioplayer-play:hover { background: var(--glass-3); }
+.audioplayer-wave {
+  flex: 1;
+  min-width: 0;
+}
+.audioplayer-time {
+  font-family: "SF Mono", ui-monospace, monospace;
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+  color: var(--fg-2);
+}
