@@ -270,20 +270,79 @@ def detect_meeting(cfg):
 
     if matches:
         best = sorted(matches, key=lambda x: len(x.get("title", "")), reverse=True)[0]
-        title = best.get("title") or best.get("app") or "检测到会议"
+        raw_title = best.get("title") or best.get("app") or "检测到会议"
+        # signature 必须用 strip 后的 title，否则系统注入的 "麦克风正在录音"
+        # 等尾部短语会让 sig 每隔几秒漂移一次，stable_sec 永远凑不齐。
+        stable_title = strip_system_status(raw_title)
         return {
             "active": True,
-            "title": normalize_title(title),
+            "title": normalize_title(raw_title),
             "app": best.get("app", ""),
             "window": best.get("title", ""),
-            "signature": signature(best.get("app", ""), title),
+            "signature": signature(best.get("app", ""), stable_title),
             "matches": matches[:5],
         }
 
     return {"active": False, "windows": windows[:10]}
 
 
+# macOS 14+ 会把媒体/资源状态拼到 Chrome 等浏览器的窗口标题里，例如
+# "Meet - tcu-oyza-tje - 麦克风正在录音 - 内存用量高 - 811 MB - Google Chrome - Bill"。
+# 这些短语每隔几秒就变一次，会让 signature(app, title) 永远漂移，凑不齐 stable_sec。
+# 在算 signature 前先剥掉这些尾部噪声，让同一会议在标题里保持稳定指纹。
+_SYSTEM_STATUS_PATTERNS = [
+    re.compile(r"\s*[-–—]\s*摄像头正在录像且麦克风正在录音"),
+    re.compile(r"\s*[-–—]\s*麦克风正在录音"),
+    re.compile(r"\s*[-–—]\s*摄像头正在录像"),
+    re.compile(r"\s*[-–—]\s*已分享桌面内容"),
+    re.compile(r"\s*[-–—]\s*正在共享屏幕"),
+    re.compile(r"\s*[-–—]\s*内存用量高\s*[-–—]\s*[\d.,]+\s*(?:KB|MB|GB|TB)", re.IGNORECASE),
+    re.compile(r"\s*[-–—]\s*Audio is playing", re.IGNORECASE),
+    re.compile(r"\s*[-–—]\s*Camera (?:and microphone )?is on", re.IGNORECASE),
+    re.compile(r"\s*[-–—]\s*Microphone is on", re.IGNORECASE),
+    re.compile(r"\s*[-–—]\s*Screen sharing", re.IGNORECASE),
+    re.compile(r"\s*[-–—]\s*High memory usage\s*[-–—]\s*[\d.,]+\s*(?:KB|MB|GB|TB)", re.IGNORECASE),
+]
+
+# 浏览器和它后面跟着的 profile 名（"- Google Chrome - Bill"）有时出现有时不出现，
+# 同一会议会在两种格式间切换。一旦剥完媒体状态短语后还剩浏览器尾巴，整段连同
+# profile 名都砍掉，让会议标识只留会议本体（"Meet - tcu-oyza-tje"）。
+_BROWSER_TAIL_PATTERN = re.compile(
+    r"\s*[-–—]\s*(?:Google Chrome|Chrome|Arc|Safari|Microsoft Edge|Edge|Firefox|Brave|Vivaldi|Opera)\b.*$",
+    re.IGNORECASE,
+)
+
+# Chrome 不在前台时窗口标题会丢掉 "- Google Chrome"，只剩 "- <profile>"，
+# 例如 "Meet - tcu-oyza-tje - Bill"。这种情况 _BROWSER_TAIL_PATTERN 不命中，
+# 兜底剥一次单段尾巴。只匹配 ASCII profile（Chrome 默认 profile 名都是
+# 英文："Bill" / "Personal" / "Work"），避免误伤中文会议名末段如
+# "腾讯会议 - 周会"。
+_TRAILING_PROFILE_PATTERN = re.compile(
+    r"\s*[-–—]\s*[A-Za-z][A-Za-z0-9_.\-]{0,19}\s*$"
+)
+
+
+def strip_system_status(title):
+    """剥掉 macOS 在标题末尾注入的浏览器状态短语和浏览器/profile 尾巴，
+    保留会议本身的标题。让同一会议在 detector 看来 signature 稳定。"""
+    if not title:
+        return title
+    prev = None
+    # 反复跑直到没有可剥的，应对多状态叠加（如 麦克风 + 内存）
+    while prev != title:
+        prev = title
+        for pat in _SYSTEM_STATUS_PATTERNS:
+            title = pat.sub("", title)
+    # 媒体状态短语剥光后，再砍掉浏览器/profile 尾巴。
+    new_title = _BROWSER_TAIL_PATTERN.sub("", title)
+    if new_title == title:
+        # 浏览器名缺失（窗口失焦），用 profile 兜底再剥一次单段尾巴。
+        new_title = _TRAILING_PROFILE_PATTERN.sub("", title)
+    return new_title.rstrip(" -–—")
+
+
 def normalize_title(title):
+    title = strip_system_status(title)
     title = re.sub(r"\s+", " ", title).strip()
     title = title[:80]
     return title or "检测到会议"

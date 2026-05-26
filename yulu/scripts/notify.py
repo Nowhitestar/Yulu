@@ -35,15 +35,20 @@ def _fallback_notify(title, message, subtitle=""):
     subprocess.run(["osascript", "-e", script], capture_output=True)
 
 
-def _fallback_dialog(message, buttons, default_button, timeout=60):
-    """fallback 到 osascript display dialog。"""
+def _fallback_dialog(message, buttons, default_button, timeout=None):
+    """fallback 到 osascript display dialog。
+
+    timeout=None 时不附加 'giving up after'，对话框一直存在直到用户点击。
+    timeout 是整数秒时，超时后 osascript 返回 gave up:true，函数返回 'timeout'。
+    """
     btn_str = ",".join(_applescript_string(b) for b in buttons)
     script = (
         f"display dialog {_applescript_string(message)} "
         f'buttons {{{btn_str}}} '
-        f"default button {_applescript_string(default_button)} "
-        f'giving up after {timeout}'
+        f"default button {_applescript_string(default_button)}"
     )
+    if timeout is not None:
+        script += f' giving up after {int(timeout)}'
     result = subprocess.run(
         ["osascript", "-e", script],
         capture_output=True,
@@ -54,8 +59,6 @@ def _fallback_dialog(message, buttons, default_button, timeout=60):
     if any("gave up:true" in line for line in parts):
         return "timeout"
     for line in parts:
-        if "gave up:true" in line:
-            return "timeout"
         if "button returned:" in line:
             return line.split(":", 1)[1].strip()
     return ""
@@ -84,25 +87,27 @@ def remind(title, message, subtitle=""):
         _fallback_notify(title, message, subtitle)
 
 
-def ask_record(meeting_title, timeout=60):
+def ask_record(meeting_title, timeout=None):
     """
     会议开始时询问是否录制。
     使用 osascript display dialog（真正的弹窗，按钮清晰可见）。
-    返回: "开始录制" | "忽略" | "timeout"
+    默认 timeout=None：弹窗常驻，用户不点不会消失。
+    返回: "开始录制" | "忽略" | "timeout"（仅当显式传入 timeout）
     """
     return _fallback_dialog(
         f"会议「{meeting_title}」开始了\n\n是否开始录制音频？",
         buttons=["忽略", "开始录制"],
-        default_button="忽略",
+        default_button="开始录制",
         timeout=timeout,
     )
 
 
-def ask_stop(meeting_title, timeout=60):
+def ask_stop(meeting_title, timeout=None):
     """
     检测到静默时询问是否停止录制。
     使用 osascript display dialog（真正的弹窗，按钮清晰可见）。
-    返回: "停止" | "继续" | "timeout"
+    默认 timeout=None：弹窗常驻，用户不点不会消失。
+    返回: "停止" | "继续" | "timeout"（仅当显式传入 timeout）
     """
     return _fallback_dialog(
         f"会议「{meeting_title}」\n已连续 5 分钟无声音\n\n是否停止录制？",

@@ -31,12 +31,87 @@ def isolated_paths(tmp_path, monkeypatch):
     # was appended (e.g. the daemon-error path).
     queue.write_text("[]", encoding="utf-8")
 
+    # Voicemail now starts a realtime tail by default; stub it so tests
+    # neither spawn a real subprocess nor wait on whisper to flush.
+    monkeypatch.setattr(recorder, "_start_realtime_tail", lambda *a, **k: None)
+    monkeypatch.setattr(recorder, "_stop_realtime_tail", lambda *a, **k: None)
+
+    # Force full_transcribe mode for legacy tests so they keep exercising the
+    # daemon path even when the production default is fast_summary.
+    monkeypatch.setattr(recorder, "_post_recording_mode", lambda: "full_transcribe")
+
     # Seed prompts so the cache returns voicemail prompts
     from prompts.db import PromptsRepo, open_db
     from prompts.seed import seed_from_current
     repo = PromptsRepo(open_db(prompts_db))
     seed_from_current(repo)
     return queue, prompts_db
+
+
+def test_fast_summary_uses_realtime_tail_and_skips_daemon(
+    isolated_paths, tmp_path, monkeypatch,
+):
+    """Default mode reads <wav>.realtime.transcript.txt, strips [Me]/[Them]
+    speaker tags, and never invokes _request_transcribe — that's the whole
+    point of fast_summary."""
+    queue, _ = isolated_paths
+    monkeypatch.setattr(recorder, "_post_recording_mode", lambda: "fast_summary")
+
+    wav = tmp_path / "voicemail_20260523_201500.wav"
+    wav.touch()
+    realtime = wav.with_suffix(".realtime.transcript.txt")
+    realtime.write_text(
+        "[Me] 嗯，记得明天找 Anthropic 聊 pricing。\n"
+        "[Me] 还要修 dual-track 那个 bug。\n",
+        encoding="utf-8",
+    )
+
+    daemon_called = {"n": 0}
+
+    def boom(*_a, **_kw):
+        daemon_called["n"] += 1
+        raise AssertionError("fast_summary must not hit stt_daemon when realtime exists")
+
+    monkeypatch.setattr(recorder, "_request_transcribe", boom)
+    rc = recorder._transcribe_and_enqueue(wav, title=None)
+
+    assert rc == 0
+    assert daemon_called["n"] == 0
+    transcript = (wav.with_suffix(".transcript.txt")).read_text(encoding="utf-8")
+    assert "Anthropic" in transcript
+    # Speaker tags must be stripped — voicemail is single-speaker, prompts
+    # template doesn't want "[Me]" noise.
+    assert "[Me]" not in transcript
+    events = json.loads(queue.read_text(encoding="utf-8"))
+    assert [e["prompt_slug"] for e in events] == ["voicemail-todos"]
+
+
+def test_fast_summary_falls_back_to_daemon_when_realtime_missing(
+    isolated_paths, tmp_path, monkeypatch,
+):
+    """If the realtime tail crashed or never wrote anything, fast_summary
+    must still produce a transcript via the daemon — no silent data loss."""
+    queue, _ = isolated_paths
+    monkeypatch.setattr(recorder, "_post_recording_mode", lambda: "fast_summary")
+
+    wav = tmp_path / "voicemail_20260523_201500.wav"
+    wav.touch()
+    # No realtime file written → fallback path.
+
+    fake_response = {
+        "status": "ok",
+        "channels": {
+            "mic": {"text": "fallback text",
+                    "segments": [{"start": 0.0, "end": 1.0, "text": "fallback text"}]},
+            "sys": {"skipped_silent": True, "text": "", "segments": []},
+        },
+    }
+    with patch.object(recorder, "_request_transcribe", return_value=fake_response):
+        rc = recorder._transcribe_and_enqueue(wav, title=None)
+
+    assert rc == 0
+    transcript = (wav.with_suffix(".transcript.txt")).read_text(encoding="utf-8")
+    assert transcript == "fallback text"
 
 
 def test_transcribe_writes_mic_text_only(isolated_paths, tmp_path, monkeypatch):

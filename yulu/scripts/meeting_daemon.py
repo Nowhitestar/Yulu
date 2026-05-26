@@ -45,9 +45,23 @@ CONFIG_PATH = CONFIG_DIR / "config.json"
 SCHEDULE_PATH = CONFIG_DIR / "schedule.json"
 STATE_PATH = CONFIG_DIR / ".state.json"
 SCHEDULER_PID = CONFIG_DIR / ".scheduler.pid"
+LOG_PATH = CONFIG_DIR / "meeting_daemon.log"
 SCRIPT_DIR = Path(__file__).resolve().parent
 
 DEFAULT_DURATION_MIN = 60
+
+
+def dlog(msg):
+    """写到 meeting_daemon.log，便于 scheduler/detector subprocess.Popen+DEVNULL
+    场景下追踪 ask_record / _start_recording 的真实结果。"""
+    try:
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with open(LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(f"[{ts}] {msg}\n")
+    except Exception:
+        pass
+    print(msg)
 
 
 # ───────────────────────────────────────────────
@@ -300,13 +314,14 @@ def cmd_ask_record(args):
     title = args[0]
     meeting_id = args[1] if len(args) > 1 else ""
 
+    dlog(f"ask_record: prompting | title={title!r} meeting_id={meeting_id!r}")
     notify = SCRIPT_DIR / "notify.py"
     result = subprocess.run(
         [sys.executable, str(notify), "ask_record", title],
         capture_output=True, text=True,
     )
     choice = result.stdout.strip()
-    print(f"User choice: {choice}")
+    dlog(f"ask_record: choice={choice!r} stderr={result.stderr.strip()!r}")
 
     # 移除本条 ask_record 事件，防止调度器重载后重复触发
     _remove_ask_record_event(meeting_id)
@@ -314,7 +329,7 @@ def cmd_ask_record(args):
     if choice == "开始录制":
         _start_recording(title, meeting_id)
     else:
-        print("用户跳过录制")
+        dlog(f"ask_record: user skipped recording (choice={choice!r})")
 
 
 def _remove_ask_record_event(meeting_id):
@@ -332,14 +347,18 @@ def _remove_ask_record_event(meeting_id):
 
 
 def _start_recording(title, meeting_id=""):
-    print(f"🎙️ 开始录制: {title}")
+    dlog(f"_start_recording: title={title!r} meeting_id={meeting_id!r}")
     try:
         with acquire_recording_lock(timeout=0.5) as lock_handle:
-            audio_path = _daemon_start_recording(title, lock_handle=lock_handle)
+            try:
+                audio_path = _daemon_start_recording(title, lock_handle=lock_handle)
+            except Exception as exc:
+                dlog(f"_start_recording: daemon start raised {type(exc).__name__}: {exc}")
+                raise
             if not audio_path:
-                print(
-                    f"❌ 录制启动失败: daemon 未返回有效路径 (title={title!r})",
-                    file=sys.stderr,
+                dlog(
+                    f"_start_recording: daemon returned no path "
+                    f"(title={title!r}) — audio_daemon socket likely failed"
                 )
                 return
 
@@ -354,7 +373,7 @@ def _start_recording(title, meeting_id=""):
                 title, audio_path,
                 meeting_id=meeting_id, backend="daemon", path=STATE_PATH,
             )
-            print(f"✅ 录制中: {audio_path}")
+            dlog(f"_start_recording: recording started → {audio_path}")
 
             # 启动状态浮窗
             _launch_status_window(title)
@@ -369,12 +388,11 @@ def _start_recording(title, meeting_id=""):
                 "meeting_id": meeting_id,
                 "title": title,
             })
-            print(f"📅 已注册超时停止询问 @ {end_at.strftime('%H:%M')}")
+            dlog(f"_start_recording: ask_stop scheduled @ {end_at.strftime('%Y-%m-%d %H:%M')}")
     except RecordingBusy as exc:
-        print(
-            f"⚠️ recording lock busy: meeting_id={meeting_id} "
-            f"title={title!r} holder={exc.info}",
-            file=sys.stderr,
+        dlog(
+            f"_start_recording: RecordingBusy meeting_id={meeting_id!r} "
+            f"title={title!r} holder={exc.info!r}"
         )
 
 

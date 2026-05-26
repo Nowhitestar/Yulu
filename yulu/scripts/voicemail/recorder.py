@@ -5,14 +5,17 @@ audio_daemon / stt_daemon / agent_queue_worker pipeline. It does NOT
 duplicate any Phase 1-3 primitives:
 
 - Recording start  → record_audio.socket_send({action:'start', sys_disabled:true, ...})
+- Realtime tail    → record_audio.start_realtime_transcriber (Phase 1, reused)
 - Recording stop   → record_audio.socket_send({action:'stop'})
-- Transcript       → transcribe_client.request_final_transcribe(channel_split=True)
+- Transcript       → realtime tail by default (fast_summary), fallback final transcribe
 - Enqueue          → transcribe._enqueue_summary_request (reused verbatim)
 - LLM dispatch     → agent_queue_worker (unchanged)
 """
 
 from __future__ import annotations
 
+import json
+import re
 import signal
 import sys
 import time
@@ -23,10 +26,41 @@ from typing import Optional
 from voicemail.repo import VOICEMAIL_DIR_DEFAULT
 
 # Mirror Phase 2/3 constants for the live deployment
+CONFIG_PATH = Path.home() / ".config" / "yulu" / "config.json"
 AGENT_QUEUE_PATH = Path.home() / ".config" / "yulu" / "agent-queue.json"
 PROMPTS_DB = Path.home() / ".config" / "yulu" / "prompts.sqlite"
 VOICEMAIL_DIR = VOICEMAIL_DIR_DEFAULT
 DEFAULT_SILENCE_SECONDS = 3
+
+_SPEAKER_TAG_RE = re.compile(r"^\s*\[(?:Me|Them|我|对方)\]\s*", re.IGNORECASE)
+
+
+def _load_transcription_cfg() -> dict:
+    try:
+        return json.loads(CONFIG_PATH.read_text()).get("transcription", {}) or {}
+    except Exception:
+        return {}
+
+
+def _post_recording_mode() -> str:
+    from transcribe import normalize_post_recording_mode
+    cfg = _load_transcription_cfg()
+    return normalize_post_recording_mode(cfg.get("post_recording_mode"))
+
+
+def _read_realtime_voicemail(path: Path) -> Optional[str]:
+    """读 realtime tail 的 `.realtime.transcript.txt`，剥掉 [Me] / [Them] 前缀。
+    voicemail 是单说话人，prompt 模板只关心干净文本。"""
+    if not path.exists():
+        return None
+    raw = path.read_text(encoding="utf-8")
+    cleaned_lines = []
+    for line in raw.splitlines():
+        stripped = _SPEAKER_TAG_RE.sub("", line).strip()
+        if stripped:
+            cleaned_lines.append(stripped)
+    text = "\n".join(cleaned_lines).strip()
+    return text or None
 
 
 def _request_transcribe(wav_path: Path) -> dict:
@@ -91,16 +125,39 @@ def _persist_title_sidecar(wav_path: Path, title: Optional[str]) -> None:
 
 
 def _transcribe_and_enqueue(wav_path: Path, *, title: Optional[str]) -> int:
-    """Post-stop pipeline. Returns 0 on success, non-zero on failure."""
-    response = _request_transcribe(wav_path)
-    if response.get("status") != "ok":
-        print(
-            f"⚠️ stt_daemon transcribe failed: {response.get('error')}",
-            file=sys.stderr,
-        )
-        return 2
+    """Post-stop pipeline. Returns 0 on success, non-zero on failure.
 
-    text = _extract_mic_text(response)
+    Modes (transcription.post_recording_mode in config.json):
+    - fast_summary (default): use the realtime tail transcript directly,
+      skipping the full stt_daemon transcribe to keep wall-clock latency
+      under a second.
+    - full_transcribe: hit stt_daemon for a full pass (legacy behaviour),
+      kept for cases where the user wants higher-fidelity transcripts.
+    Fast mode falls back to a full transcribe if the realtime file is
+    missing (daemon crashed, realtime disabled, etc.)."""
+    mode = _post_recording_mode()
+    realtime_path = wav_path.with_suffix(".realtime.transcript.txt")
+    text: Optional[str] = None
+
+    if mode == "fast_summary":
+        text = _read_realtime_voicemail(realtime_path)
+        if text:
+            print(f"⚡ 使用实时转写结果: {realtime_path.name}", file=sys.stderr)
+        else:
+            print(
+                "⚠️ 未找到实时转写结果，回退到 stt_daemon 完整转录",
+                file=sys.stderr,
+            )
+
+    if text is None:
+        response = _request_transcribe(wav_path)
+        if response.get("status") != "ok":
+            print(
+                f"⚠️ stt_daemon transcribe failed: {response.get('error')}",
+                file=sys.stderr,
+            )
+            return 2
+        text = _extract_mic_text(response)
 
     raw_path = wav_path.with_suffix(".raw.transcript.txt")
     transcript_path = wav_path.with_suffix(".transcript.txt")
@@ -144,6 +201,26 @@ def _socket_send(cmd: dict):
     record_audio.socket_send everywhere."""
     from record_audio import socket_send
     return socket_send(cmd)
+
+
+def _start_realtime_tail(wav_path: Path, title: str) -> None:
+    """Spawn realtime_transcribe.py via the Phase-1 helper. No-op if disabled
+    in config (transcription.realtime_enabled / audio.realtime_transcribe)."""
+    try:
+        from record_audio import start_realtime_transcriber
+        start_realtime_transcriber(str(wav_path), title)
+    except Exception as exc:
+        print(f"⚠️ realtime tail start failed: {exc}", file=sys.stderr)
+
+
+def _stop_realtime_tail(*, graceful: bool) -> None:
+    """Tell realtime_transcribe.py to wind down. graceful=True waits up to
+    ~3 min for whisper to flush the last chunk; graceful=False kills hard."""
+    try:
+        from record_audio import stop_realtime_transcriber
+        stop_realtime_transcriber(wait=True, graceful=graceful)
+    except Exception as exc:
+        print(f"⚠️ realtime tail stop failed: {exc}", file=sys.stderr)
 
 
 def _acquire_recording_lock(*, timeout: float = 0.5):
@@ -200,6 +277,10 @@ def cmd_new(title: Optional[str] = None, *,
                 path=str(wav_path),
                 started_at=datetime.now().isoformat(),
             )
+            # 启动实时转写 tail：subscribe stt_daemon session，把 partials 增量写入
+            # <wav>.realtime.transcript.txt。post_recording_mode=fast_summary 时，
+            # 录制结束后直接读这个文件给 LLM，跳过整段重转，秒级出 summary。
+            _start_realtime_tail(wav_path, title or stem)
             print(f"🎤 录音中 — Ctrl+C 停止 ({silence_seconds}s 静音自动停)",
                   file=sys.stderr)
 
@@ -221,6 +302,9 @@ def cmd_new(title: Optional[str] = None, *,
                     time.sleep(_poll_interval)
             finally:
                 signal.signal(signal.SIGINT, prev)
+            # graceful=True：让 realtime tail 把 daemon 通知的最后一段 partial
+            # 落盘后再退，避免末尾几秒丢失。
+            _stop_realtime_tail(graceful=True)
             print("⏹ Stopped", file=sys.stderr)
     except RecordingBusy as exc:
         info = exc.info or {}
@@ -231,6 +315,10 @@ def cmd_new(title: Optional[str] = None, *,
             file=sys.stderr,
         )
         return 2
+    except BaseException:
+        # 录制循环异常退出时也要清理 realtime tail，避免 PID 文件残留。
+        _stop_realtime_tail(graceful=False)
+        raise
 
     if wav_path is None or not wav_path.exists():
         print("⚠️ recording stopped but no .wav file present", file=sys.stderr)
