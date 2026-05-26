@@ -1,0 +1,68 @@
+/* web/src/routes/inbox/voicemails.reader.css */
+.reader {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 10px 14px;
+}
+.reader-header {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.reader-title {
+  font-size: 15px;
+  font-weight: 500;
+  margin: 0;
+  color: var(--fg);
+}
+.reader-meta {
+  font-size: 11px;
+  color: var(--fg-3);
+}
+.reader-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  background: var(--row-hover);
+  border-radius: var(--radius-inner);
+  width: fit-content;
+}
+.reader-tab {
+  padding: 4px 12px;
+  border-radius: 6px;
+  font-size: 11px;
+  color: var(--fg-2);
+}
+.reader-tab:hover { color: var(--fg); }
+.reader-tab.active {
+  background: var(--glass-3);
+  color: var(--fg);
+}
+.reader-body {
+  font-size: 13px;
+  line-height: 1.7;
+}
+.reader-md, .reader-raw {
+  font-family: inherit;
+  font-size: 13px;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  margin: 0;
+}
+.reader-raw {
+  font-family: "SF Mono", ui-monospace, monospace;
+  font-size: 11px;
+  color: var(--fg-2);
+}
+.search-highlight {
+  background: var(--accent);
+  color: var(--wp-1);
+  padding: 0 2px;
+  border-radius: 2px;
+  transition: background 2s ease-out, color 2s ease-out;
+}
+.search-highlight.fade {
+  background: transparent;
+  color: inherit;
+}

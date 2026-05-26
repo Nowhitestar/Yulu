@@ -10,6 +10,7 @@ import { VoicemailsIndex } from "./routes/inbox/voicemails.index.js";
 import { VoicemailReader, handle as voicemailReaderHandle } from "./routes/inbox/voicemails.$stem.js";
 import { Meetings,   handle as meetingsHandle   } from "./routes/inbox/meetings.js";
 import { MeetingsIndex } from "./routes/inbox/meetings.index.js";
+import { MeetingReader, handle as meetingReaderHandle } from "./routes/inbox/meetings.$stem.js";
 import { Search,     handle as searchHandle     } from "./routes/inbox/search.js";
 import { Prompts,    handle as promptsHandle    } from "./routes/knowledge/prompts.js";
 import { Glossary,   handle as glossaryHandle   } from "./routes/knowledge/glossary.js";
@@ -43,6 +44,7 @@ const router = createBrowserRouter([
         handle: meetingsHandle,
         children: [
           { index: true, Component: MeetingsIndex },
+          { path: ":stem", Component: MeetingReader, handle: meetingReaderHandle },
         ],
       },
       { path: "inbox/search",         Component: Search,               handle: searchHandle },
