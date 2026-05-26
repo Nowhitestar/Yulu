@@ -22,3 +22,21 @@ button {
   padding: 0;
 }
 a { color: inherit; text-decoration: none; }
+.root-shell {
+  display: flex;
+  height: 100vh;
+  padding: 12px;
+  gap: 10px;
+}
+.root-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+.root-body {
+  flex: 1;
+  overflow-y: auto;
+  border-radius: var(--radius-panel);
+}
