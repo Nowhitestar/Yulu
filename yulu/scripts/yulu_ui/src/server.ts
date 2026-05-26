@@ -12,6 +12,7 @@ import { openDb } from "./db.js";
 import { appPubSub } from "./pubsub.js";
 import { paths } from "./paths.js";
 import { mountWsMultiplexer } from "./ws.js";
+import { startInboxWatcher } from "./inboxWatcher.js";
 import { serveStaticFile } from "./staticFile.js";
 import { homedir } from "node:os";
 import type { AppContext } from "./trpc.js";
@@ -92,12 +93,18 @@ export async function startServer(): Promise<RunningServer> {
   const http = createServer((req, res) => bridgeNodeToFetch(req, res, (r) => Promise.resolve(app.fetch(r))));
   mountWsMultiplexer(http, appPubSub);
 
+  const inboxWatcher = startInboxWatcher({
+    voicemailsDir: paths.voicemailsDir,
+    moviesDir: paths.moviesDir,
+    pubsub: appPubSub,
+  });
+
   await new Promise<void>((resolve) => http.listen(port, host, resolve));
   const addr = http.address() as { port: number };
   return {
     http,
     address: addr,
-    close: () => new Promise<void>((resolve) => http.close(() => resolve())),
+    close: () => new Promise<void>((resolve) => { inboxWatcher.stop(); http.close(() => resolve()); }),
   };
 }
 
