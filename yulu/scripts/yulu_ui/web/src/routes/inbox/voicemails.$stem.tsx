@@ -1,5 +1,5 @@
 // web/src/routes/inbox/voicemails.$stem.tsx
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useParams, useSearchParams } from "react-router";
 import { trpc } from "../../trpc.js";
 import { AudioPlayer } from "../../components/AudioPlayer.js";
@@ -24,13 +24,48 @@ export function VoicemailReader() {
   // is debounced (or rejected in jsdom test environment). URL is still
   // updated via setSearchParams for shareable deep links.
   const [override, setOverride] = useState<Tab | null>(null);
+  const bodyRef = useRef<HTMLDivElement>(null);
+
+  const tabParam = params.get("tab");
+  const defaultTab: Tab = data?.summary ? "summary" : "transcript";
+  const tab: Tab = override ?? (isTab(tabParam) ? tabParam : defaultTab);
+
+  const snippet = (params.get("snippet") ?? "").replace(/\[\/?hit\]/g, "").trim();
+
+  useEffect(() => {
+    if (!snippet || !bodyRef.current) return;
+    const body = bodyRef.current;
+    const text = body.textContent ?? "";
+    const idx = text.toLowerCase().indexOf(snippet.toLowerCase());
+    if (idx < 0) return;
+    const walker = document.createTreeWalker(body, NodeFilter.SHOW_TEXT);
+    let acc = 0;
+    while (true) {
+      const node = walker.nextNode() as Text | null;
+      if (!node) break;
+      const nodeLen = node.data.length;
+      if (acc + nodeLen > idx) {
+        const start = idx - acc;
+        const span = document.createElement("span");
+        span.className = "search-highlight";
+        const matched = node.splitText(start);
+        const remainder = matched.splitText(Math.min(snippet.length, matched.data.length));
+        void remainder;
+        span.textContent = matched.data;
+        matched.replaceWith(span);
+        if (typeof span.scrollIntoView === "function") {
+          span.scrollIntoView({ block: "center" });
+        }
+        const t = setTimeout(() => span.classList.add("fade"), 50);
+        const t2 = setTimeout(() => span.classList.remove("search-highlight", "fade"), 2050);
+        return () => { clearTimeout(t); clearTimeout(t2); };
+      }
+      acc += nodeLen;
+    }
+  }, [snippet, tab, data]);
 
   if (isPending) return <EmptyState label="Loading…" />;
   if (!data) return <EmptyState label={`Voicemail "${stem}" not found.`} />;
-
-  const tabParam = params.get("tab");
-  const defaultTab: Tab = data.summary ? "summary" : "transcript";
-  const tab: Tab = override ?? (isTab(tabParam) ? tabParam : defaultTab);
 
   const setTab = (t: Tab) => {
     setOverride(t);
@@ -71,7 +106,7 @@ export function VoicemailReader() {
         ))}
       </div>
 
-      <div className="reader-body">
+      <div className="reader-body" ref={bodyRef}>
         {tab === "transcript" && (
           data.transcript ? <TranscriptView text={data.transcript} /> : <EmptyState label="No transcript available." />
         )}
