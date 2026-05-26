@@ -29,7 +29,7 @@ describe("voicemailsRouter", () => {
     const { ctx, cleanup } = makeCtx();
     try {
       const caller = createCaller(voicemailsRouter, ctx);
-      const rows = await caller.list({});
+      const rows = (await caller.list({})) as Array<{ stem: string; hasTranscript: boolean; hasSummary: boolean }>;
       expect(rows.map((r) => r.stem)).toEqual([
         "voicemail_20260526_120000",
         "voicemail_20260526_110000",

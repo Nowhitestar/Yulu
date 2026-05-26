@@ -37,8 +37,8 @@ describe("promptsRouter", () => {
     const { ctx, cleanup } = makeCtx();
     try {
       const caller = createCaller(promptsRouter, ctx);
-      const rows = await caller.list({});
-      expect(rows.map((r) => (r as { slug: string }).slug)).toEqual(["default", "cleanup"]);
+      const rows = (await caller.list({})) as Array<{ slug: string }>;
+      expect(rows.map((r) => r.slug)).toEqual(["default", "cleanup"]);
     } finally { cleanup(); }
   });
 

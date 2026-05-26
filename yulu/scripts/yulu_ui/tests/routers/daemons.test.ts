@@ -26,7 +26,7 @@ describe("daemonsRouter", () => {
 
   it("health() reports running vs stopped per launchctl", async () => {
     const caller = createCaller(daemonsRouter, makeCtx());
-    const r = await caller.health();
+    const r = (await caller.health()) as Array<{ name: string; status: string; pid: number }>;
     const audio = r.find((d) => d.name === "com.yulu.audiodaemon")!;
     const stt   = r.find((d) => d.name === "com.yulu.sttdaemon")!;
     expect(audio.status).toBe("running");

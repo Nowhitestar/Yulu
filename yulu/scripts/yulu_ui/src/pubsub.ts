@@ -29,11 +29,11 @@ export class PubSub<Channels extends Record<string, unknown>> {
   }
 }
 
-export interface AppChannels {
+export type AppChannels = {
   "recording":       { state: "idle" | "recording" | "processing" | "meetingBusy" | "daemonDown"; file?: string; elapsedSec?: number; level?: number; };
   "daemons":         { name: string; status: "running" | "stopped" | "crashed"; pid: number; lastLog?: string; };
   "sidebar-counts":  { voicemails: number; meetings: number; prompts: number; glossary: number; };
   "logs":            { name: string; line: string; ts: number; };
-}
+};
 
 export const appPubSub = new PubSub<AppChannels>();

@@ -21,8 +21,12 @@ const t = initTRPC.context<AppContext>().create();
 export const router = t.router;
 export const publicProcedure = t.procedure;
 export const mergeRouters = t.mergeRouters;
+export const createCallerFactory = t.createCallerFactory;
 
-// Convenience for tests + unit calls
-export function createCaller<R extends ReturnType<typeof router>>(r: R, ctx: AppContext) {
-  return t.createCallerFactory(r)(ctx);
+// Convenience for tests. Returns `any` so tests can call any procedure
+// without dragging tRPC's deep generic types through every test file —
+// tests assert specific shapes on the returned values themselves.
+export function createCaller(r: unknown, ctx: AppContext): any {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return (t.createCallerFactory as unknown as (r: unknown) => (ctx: AppContext) => unknown)(r)(ctx) as any;
 }

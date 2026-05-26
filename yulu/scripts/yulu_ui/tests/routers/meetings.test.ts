@@ -25,7 +25,7 @@ describe("meetingsRouter", () => {
     const { ctx, cleanup } = makeCtx();
     try {
       const caller = createCaller(meetingsRouter, ctx);
-      const rows = await caller.list({});
+      const rows = (await caller.list({})) as Array<{ meetingTitle: string }>;
       const titles = rows.map((r) => r.meetingTitle).sort();
       expect(titles).toEqual(["1on1", "WeeklyStandup"]);
     } finally { cleanup(); }
