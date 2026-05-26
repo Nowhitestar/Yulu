@@ -1,4 +1,4 @@
-// tests/web/ws.test.ts
+// tests/web/ws.test.tsx
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { renderHook, act, cleanup } from "@testing-library/react";
 import { Server as MockServer, WebSocket as MockWebSocket } from "mock-socket";

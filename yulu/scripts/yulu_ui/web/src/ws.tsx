@@ -26,13 +26,13 @@ interface WsProviderProps {
  * channel so the unsubscribe frame fires only when the last listener leaves.
  */
 export function WsProvider({ url, children }: WsProviderProps) {
-  const managerRef = useRef<WsManager | null>(null);
+  const managerRef = useRef<ManagerInternals | null>(null);
 
   if (!managerRef.current) managerRef.current = createManager(url ?? defaultUrl());
 
   useEffect(() => () => {
     // Provider unmount = full teardown (page unload)
-    (managerRef.current as ReturnType<typeof createManager>).destroy();
+    managerRef.current?.destroy();
     managerRef.current = null;
   }, []);
 
@@ -71,6 +71,7 @@ function createManager(url: string): ManagerInternals {
 
   function ensureOpen() {
     if (destroyed) return;
+    if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
     if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) return;
     const ws = new WebSocket(url);
     socket = ws;
