@@ -49,3 +49,4 @@ schedule.json
 
 # Path-converted SVG (regenerate from logo.svg before each release)
 assets/logo-flat.svg
+.superpowers/
