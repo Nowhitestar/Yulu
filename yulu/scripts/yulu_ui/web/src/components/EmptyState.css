@@ -1,0 +1,27 @@
+.emptystate {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 60px 24px;
+  gap: 10px;
+  color: var(--fg-2);
+}
+.emptystate-icon {
+  font-size: 36px;
+  opacity: 0.6;
+}
+.emptystate-label {
+  font-size: 13px;
+  text-align: center;
+  max-width: 340px;
+}
+.emptystate-cta {
+  margin-top: 8px;
+  padding: 6px 14px;
+  border-radius: var(--radius-inner);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 11px;
+}
+.emptystate-cta:hover { background: var(--glass-3); }
