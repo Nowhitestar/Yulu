@@ -31,3 +31,39 @@
   color: var(--fg-3);
   font-size: 12px;
 }
+.search-result {
+  padding: 12px 14px;
+  border-radius: var(--radius-inner);
+  margin-bottom: 4px;
+  cursor: pointer;
+  transition: background 100ms;
+}
+.search-result:hover { background: var(--row-hover); }
+.search-result-title {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--fg);
+}
+.search-result-meta {
+  display: flex;
+  gap: 4px;
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--fg-3);
+}
+.search-result-snippet {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--fg-2);
+  line-height: 1.5;
+}
+.search-snippet-hit {
+  color: var(--accent);
+  font-weight: 500;
+}
+.search-telemetry {
+  margin-top: 14px;
+  font-size: 11px;
+  color: var(--fg-3);
+  font-family: "SF Mono", ui-monospace, monospace;
+}

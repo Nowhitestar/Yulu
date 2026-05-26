@@ -50,4 +50,48 @@ describe("Search page", () => {
     await user.type(screen.getByRole("searchbox"), "OKR");
     expect((screen.getByRole("searchbox") as HTMLInputElement).value).toBe("OKR");
   });
+
+  it("renders result rows with stem + score + snippet (hit segments colored)", async () => {
+    // Override the mock to return some hits
+    const hits = {
+      hits: [
+        {
+          kind: "voicemail_summary",
+          stem: "voicemail_20260526_120000",
+          meetingTitle: "voicemail",
+          recordedAt: "2026-05-26T12:00:00",
+          sourcePath: "/x/y.md",
+          score: 1.5,
+          snippet: "Quarter [hit]OKR[/hit] review next",
+        },
+      ],
+      telemetry: { sweepMs: 12, queryMs: 4, fallbackUsed: false, hitCount: 1 },
+    };
+    // Reset module mock with new return value
+    const { vi } = await import("vitest");
+    vi.resetModules();
+    vi.doMock("../../web/src/trpc.js", () => ({
+      trpc: {
+        search: { run: { useQuery: () => ({ data: hits, isPending: false }) } },
+      },
+    }));
+    // Re-import after re-mock (vitest convention)
+    const { Search: SearchHits } = await import("../../web/src/routes/inbox/search.js");
+    const { createMemoryRouter, RouterProvider } = await import("react-router");
+    const { QueryClient, QueryClientProvider } = await import("@tanstack/react-query");
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const router = createMemoryRouter(
+      [{ path: "/inbox/search", Component: SearchHits }],
+      { initialEntries: ["/inbox/search?q=OKR"] },
+    );
+    const { render } = await import("@testing-library/react");
+    const { container } = render(
+      <QueryClientProvider client={qc}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>
+    );
+    expect(container.querySelector(".search-result")).not.toBeNull();
+    expect(container.querySelector(".search-snippet-hit")).not.toBeNull();
+    expect(container.querySelector(".search-snippet-hit")?.textContent).toBe("OKR");
+  });
 });
