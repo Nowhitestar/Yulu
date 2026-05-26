@@ -10,9 +10,11 @@ import "./meetings.css";
 
 export const handle = { breadcrumb: "Inbox / Meetings", filters: null };
 
-// Filters wired in C.16; chip definition kept minimal here.
 const FILTER_CHIPS: ChipDef[] = [
   { id: "all", label: "All" },
+  { id: "summarized", label: "Summarized" },
+  { id: "last30d", label: "Last 30d" },
+  { id: "has-realtime", label: "Has realtime" },
 ];
 
 interface Row {
@@ -39,7 +41,13 @@ export function Meetings() {
 
   const [activeFilters, setActiveFilters] = useState<string[]>([]);
   const rows = useMemo(() => {
-    const out = ((data as Row[] | undefined) ?? []);
+    let out = ((data as Row[] | undefined) ?? []);
+    if (activeFilters.includes("summarized")) out = out.filter((r) => r.hasSummary);
+    if (activeFilters.includes("last30d")) {
+      const cutoff = Date.now() - 30 * 86_400_000;
+      out = out.filter((r) => r.mtimeMs >= cutoff);
+    }
+    if (activeFilters.includes("has-realtime")) out = out.filter((r) => r.hasRealtime);
     return out;
   }, [data, activeFilters]);
 
