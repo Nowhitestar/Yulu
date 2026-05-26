@@ -1,4 +1,9 @@
 /* web/src/routes/inbox/voicemails.css */
+.voicemail-filterbar {
+  padding: 6px 4px 10px;
+  border-bottom: 1px solid var(--edge);
+  margin-bottom: 6px;
+}
 .voicemail-list {
   display: flex;
   flex-direction: column;

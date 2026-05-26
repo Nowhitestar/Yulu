@@ -1,12 +1,20 @@
 // web/src/routes/inbox/voicemails.tsx
+import { useMemo, useState } from "react";
 import { NavLink, Outlet, useParams } from "react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import { trpc } from "../../trpc.js";
 import { useWsChannel } from "../../ws.js";
 import { MasterDetail } from "../../components/MasterDetail.js";
+import { FilterChips, type ChipDef } from "../../components/FilterChips.js";
 import "./voicemails.css";
 
 export const handle = { breadcrumb: "Inbox / Voicemails", filters: null };
+
+const FILTER_CHIPS: ChipDef[] = [
+  { id: "all", label: "All" },
+  { id: "summarized", label: "Summarized" },
+  { id: "last7d", label: "Last 7d" },
+];
 
 interface Row {
   stem: string;
@@ -26,7 +34,16 @@ export function Voicemails() {
   const params = useParams();
   const activeStem = params.stem;
 
-  const rows = (data as Row[] | undefined) ?? [];
+  const [activeFilters, setActiveFilters] = useState<string[]>([]);
+  const rows = useMemo(() => {
+    let out = ((data as Row[] | undefined) ?? []);
+    if (activeFilters.includes("summarized")) out = out.filter((r) => r.hasSummary);
+    if (activeFilters.includes("last7d")) {
+      const cutoff = Date.now() - 7 * 86_400_000;
+      out = out.filter((r) => r.mtimeMs >= cutoff);
+    }
+    return out;
+  }, [data, activeFilters]);
 
   const list = rows.length === 0
     ? null  // empty state handled in the index route
@@ -50,7 +67,14 @@ export function Voicemails() {
   return (
     <MasterDetail
       listPending={isPending}
-      listSlot={<div className="voicemail-list">{list}</div>}
+      listSlot={
+        <>
+          <div className="voicemail-filterbar">
+            <FilterChips chips={FILTER_CHIPS} activeIds={activeFilters} onChange={setActiveFilters} />
+          </div>
+          <div className="voicemail-list">{list}</div>
+        </>
+      }
       detailSlot={<Outlet />}
     />
   );
