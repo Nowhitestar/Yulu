@@ -1,0 +1,37 @@
+:root {
+  --radius-panel: 12px;
+  --radius-pill:  22px;
+  --radius-inner: 8px;
+  --blur-glass:   blur(28px) saturate(180%);
+  --blur-pill:    blur(32px) saturate(200%);
+  --edge-shadow:  0 1px 0 var(--edge-top) inset, 0 0 0 1px var(--edge);
+}
+
+[data-theme="dark"] {
+  --wp-1: #161A23;  --wp-2: #1F2430;  --wp-3: #2B3343;
+  --glass:   rgba(255, 255, 255, 0.045);
+  --glass-2: rgba(255, 255, 255, 0.08);
+  --glass-3: rgba(255, 255, 255, 0.12);
+  --edge:    rgba(255, 255, 255, 0.08);
+  --edge-top:rgba(255, 255, 255, 0.14);
+  --fg: #E4E4DE;  --fg-2: #8B92A0;  --fg-3: #5A6172;
+  --accent: #FFCC66;  --accent-soft: rgba(255, 204, 102, 0.18);
+  --blue:   #5CCFE6;  --green: #BAE67E;
+  --red:    #FF7B72;  --purple: #DFBFFF;
+  --shadow: 0 12px 32px rgba(0, 0, 0, 0.35), 0 2px 6px rgba(0, 0, 0, 0.20);
+  --row-hover: rgba(255, 255, 255, 0.04);
+}
+[data-theme="light"] {
+  --wp-1: #F0F2F5;  --wp-2: #F8FAFC;  --wp-3: #E5EAF1;
+  --glass:   rgba(255, 255, 255, 0.55);
+  --glass-2: rgba(255, 255, 255, 0.72);
+  --glass-3: rgba(255, 255, 255, 0.88);
+  --edge:    rgba(255, 255, 255, 0.80);
+  --edge-top:rgba(255, 255, 255, 1);
+  --fg: #3B4252;  --fg-2: #7A8290;  --fg-3: #A8AEB8;
+  --accent: #F2AE49;  --accent-soft: rgba(242, 174, 73, 0.18);
+  --blue:   #399EE6;  --green: #6CBF00;
+  --red:    #E55050;  --purple: #8E5BD8;
+  --shadow: 0 10px 28px rgba(60, 80, 110, 0.10), 0 1px 4px rgba(60, 80, 110, 0.05);
+  --row-hover: rgba(0, 0, 0, 0.025);
+}
