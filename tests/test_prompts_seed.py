@@ -15,7 +15,7 @@ def test_seed_constants_complete():
     slugs = {p["slug"] for p in SEED_PROMPTS}
     assert {"summary", "transcript-cleanup", "action-items"} <= slugs
     for p in SEED_PROMPTS:
-        assert p["category"] in ("summary", "cleanup")
+        assert p["category"] in ("summary", "cleanup", "voicemail")
         # Legacy single-track prompts must include {{transcript}};
         # dual-track prompts use {{my_transcript}}/{{their_transcript}} instead.
         if p["slug"] == "action-items-by-speaker":
@@ -92,3 +92,41 @@ def test_restore_defaults_preserves_manual(tmp_path):
     assert repo.by_slug("summary").content != "MUTATED"
     # Manual row preserved
     assert repo.by_slug("custom") is not None
+
+
+def test_seed_includes_voicemail_todos(tmp_path):
+    from prompts.db import PromptsRepo, open_db
+    from prompts.seed import seed_from_current
+
+    repo = PromptsRepo(open_db(tmp_path / "p.sqlite"))
+    seed_from_current(repo)
+    p = repo.by_slug("voicemail-todos")
+    assert p is not None
+    assert p.category.value == "voicemail"
+    assert p.is_auto_run is True
+    assert "{{transcript}}" in p.content
+    assert "{{meeting_title}}" in p.content
+    assert "{{date}}" in p.content
+
+
+def test_seed_includes_voicemail_clean(tmp_path):
+    from prompts.db import PromptsRepo, open_db
+    from prompts.seed import seed_from_current
+
+    repo = PromptsRepo(open_db(tmp_path / "p.sqlite"))
+    seed_from_current(repo)
+    p = repo.by_slug("voicemail-clean")
+    assert p is not None
+    assert p.category.value == "voicemail"
+    assert p.is_auto_run is False     # opt-in
+    assert "{{transcript}}" in p.content
+
+
+def test_seed_total_count_after_phase4(tmp_path):
+    """4 phase-2/3 seeds + 2 phase-4 voicemail seeds = 6 minimum."""
+    from prompts.db import PromptsRepo, open_db
+    from prompts.seed import seed_from_current
+
+    repo = PromptsRepo(open_db(tmp_path / "p.sqlite"))
+    seed_from_current(repo)
+    assert len(repo.list_prompts()) >= 6

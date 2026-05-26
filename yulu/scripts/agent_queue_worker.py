@@ -131,6 +131,41 @@ def _run_llm(prompt: str, llm_command: list[str], timeout_sec: int) -> str:
     return output + "\n"
 
 
+def _maybe_voicemail_notify(*, audio_path: Path, summary_path: Path,
+                             prompt_slug: str) -> None:
+    """Voicemail-only completion notification. Quiet for meetings.
+
+    Fires only when:
+      - audio_path is under a 'voicemails' directory
+      - prompt_slug == 'voicemail-todos' (the default auto-run voicemail prompt)
+    """
+    if "voicemails" not in audio_path.parts:
+        return
+    if prompt_slug != "voicemail-todos":
+        return
+    first_line = ""
+    try:
+        for line in summary_path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line and not line.startswith("#"):
+                first_line = line[:80]
+                break
+    except OSError:
+        return
+    if not first_line:
+        first_line = "summary ready"
+    try:
+        subprocess.Popen([
+            "terminal-notifier",
+            "-title", "Yulu Voicemail",
+            "-message", first_line,
+            "-open", f"file://{summary_path}",
+            "-sender", "com.yulu.audiodaemon",
+        ])
+    except (FileNotFoundError, OSError):
+        pass
+
+
 def _handle_summary_request(
     entry: dict[str, Any],
     llm_command: list[str],
@@ -316,6 +351,16 @@ def _handle_summary_request(
     if html_path:
         entry["html_path"] = html_path
     entry.pop("error", None)
+
+    # Voicemail completion notification (best-effort, post-persistence).
+    # Fires only for voicemails/* audio AND voicemail-todos slug.
+    if audio_path is not None:
+        _maybe_voicemail_notify(
+            audio_path=audio_path,
+            summary_path=Path(str(entry.get("summary_path", ""))),
+            prompt_slug=prompt_slug,
+        )
+
     return True
 
 

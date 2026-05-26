@@ -243,3 +243,73 @@ def test_record_audio_acquires_recording_lock():
 def test_meeting_daemon_acquires_recording_lock():
     text = (SCRIPTS / "meeting_daemon.py").read_text(encoding="utf-8")
     assert "acquire_recording_lock" in text or "from recording_lock import" in text
+
+
+# ── Voicemail Inbox acceptance (spec 2026-05-23-voicemail-inbox-design.md) ──
+
+def test_voicemail_package_exists():
+    pkg = SCRIPTS / "voicemail"
+    assert (pkg / "__init__.py").exists()
+    assert (pkg / "repo.py").exists()
+    assert (pkg / "recorder.py").exists()
+    assert (pkg / "cli.py").exists()
+
+
+def test_category_voicemail_seeds():
+    sys.path.insert(0, str(SCRIPTS))
+    from prompts.db import PromptsRepo, open_db
+    from prompts.seed import seed_from_current
+    import tempfile, pathlib
+    with tempfile.TemporaryDirectory() as td:
+        repo = PromptsRepo(open_db(pathlib.Path(td) / "p.sqlite"))
+        seed_from_current(repo)
+        slugs = {p.slug for p in repo.list_prompts()}
+    assert "voicemail-todos" in slugs
+    assert "voicemail-clean" in slugs
+
+
+def test_prompts_db_check_constraint_includes_voicemail():
+    text = (SCRIPTS / "prompts" / "db.py").read_text(encoding="utf-8")
+    assert "CHECK(category IN ('summary', 'cleanup', 'voicemail'))" in text
+    assert "_migrate_category_check_constraint" in text
+
+
+def test_audio_daemon_accepts_silence_seconds_and_output_dir():
+    text = (SCRIPTS / "audio_daemon.swift").read_text(encoding="utf-8")
+    assert "silence_seconds" in text
+    assert "output_dir" in text
+
+
+def test_agent_queue_worker_has_voicemail_notify():
+    text = (SCRIPTS / "agent_queue_worker.py").read_text(encoding="utf-8")
+    assert "_maybe_voicemail_notify" in text
+    assert "voicemails" in text
+
+
+def test_yulu_wrapper_dispatches_memo():
+    text = (SCRIPTS / "yulu").read_text(encoding="utf-8")
+    assert "memo)" in text
+    assert "voicemail.cli" in text
+
+
+def test_voicemail_recorder_does_not_call_merge_segments():
+    """Acceptance #4: voicemail transcripts have NO speaker tags, so
+    voicemail.recorder MUST NOT invoke merge_segments. We allow the name to
+    appear in docstrings/comments (which document the negative invariant),
+    but it must never appear as a call or an import."""
+    text = (SCRIPTS / "voicemail" / "recorder.py").read_text(encoding="utf-8")
+    assert "merge_segments(" not in text
+    assert "import merge_segments" not in text
+    assert "from transcript_merge" not in text
+
+
+def test_voicemail_recorder_sends_sys_disabled():
+    text = (SCRIPTS / "voicemail" / "recorder.py").read_text(encoding="utf-8")
+    assert "sys_disabled" in text
+    assert "silence_seconds" in text
+
+
+def test_voicemail_cli_default_dir_is_voicemails_subdir():
+    sys.path.insert(0, str(SCRIPTS))
+    from voicemail.repo import VOICEMAIL_DIR_DEFAULT
+    assert VOICEMAIL_DIR_DEFAULT.name == "voicemails"
