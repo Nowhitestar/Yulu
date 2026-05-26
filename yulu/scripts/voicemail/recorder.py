@@ -108,6 +108,21 @@ def _transcribe_and_enqueue(wav_path: Path, *, title: Optional[str]) -> int:
     transcript_path.write_text(text, encoding="utf-8")
     _persist_title_sidecar(wav_path, title)
 
+    # Best-effort search-index push. Failures here MUST NOT break the
+    # recording pipeline — the reader-side sweep recovers any miss.
+    try:
+        from search import indexer as _search_indexer
+        _search_indexer.upsert_doc(
+            source_path=transcript_path,
+            kind=_search_indexer.KIND_VOICEMAIL_TRANSCRIPT,
+            body=text,
+        )
+    except Exception as exc:
+        print(
+            f"⚠️ search index upsert failed for {transcript_path}: {exc}",
+            file=sys.stderr,
+        )
+
     meeting_title = title or wav_path.stem
     queued = _enqueue_voicemail_prompts(
         audio_path=wav_path,

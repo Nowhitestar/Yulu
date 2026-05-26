@@ -467,6 +467,18 @@ compile_audio_daemon() {
         warn "如果系统弹出了权限对话框但你来不及点，跑下面这行重新弹一次："
         warn "  tccutil reset ScreenCapture com.yulu.audiodaemon && open '$SCRIPT_DIR/Yulu.app'"
     fi
+
+    # Build the status agent bundle (Phase 5). Skip silently if D.1 hasn't shipped
+    # the build script yet — keeps the rest of setup usable on partial checkouts.
+    local sa_build="$SCRIPT_DIR/build_status_agent.sh"
+    if [[ -x "$sa_build" ]]; then
+        info "Building StatusAgent.app..."
+        if bash "$sa_build" >/dev/null 2>&1; then
+            ok "StatusAgent.app built"
+        else
+            warn "StatusAgent.app build failed (continuing — status agent will be unavailable)"
+        fi
+    fi
 }
 
 # ─── Step 4.5: Transcription setup ───────────────────
@@ -852,6 +864,13 @@ install_launchagents() {
         ok "audiodaemon 已加载"
     fi
 
+    # Status agent (Phase 5): menu-bar item + global hotkey for voicemail capture.
+    if [[ -f "$plist_dir/com.yulu.statusagent.plist" ]]; then
+        install_plist "$plist_dir/com.yulu.statusagent.plist" "com.yulu.statusagent.plist"
+        launchctl load "$LAUNCH_AGENTS_DIR/com.yulu.statusagent.plist" 2>/dev/null || true
+        ok "statusagent 已加载"
+    fi
+
     # Scheduler
     if [[ -f "$plist_dir/com.yulu.scheduler.plist" ]]; then
         install_plist "$plist_dir/com.yulu.scheduler.plist" "com.yulu.scheduler.plist"
@@ -891,6 +910,13 @@ install_launchagents() {
         PYTHONPATH="$SCRIPT_DIR" "$PYTHON_BIN" -m prompts.cli seed --from-current >/dev/null 2>&1 \
           && ok "prompts seed 完成" \
           || warn "prompts seed 失败（可稍后重试: yulu prompts seed --from-current）"
+
+        # Bootstrap search.sqlite schema (idempotent). First `yulu search`
+        # call will run a full sweep over ~/Movies/Yulu to populate it.
+        info "初始化 search.sqlite..."
+        PYTHONPATH="$SCRIPT_DIR" "$PYTHON_BIN" -m search.indexer init >/dev/null 2>&1 \
+          && ok "search index 初始化完成（首次 yulu search 会全量索引）" \
+          || warn "search index 初始化失败（可稍后重试: yulu search --reindex）"
     fi
 
     # Calendar service (optional, only if gog configured)

@@ -318,6 +318,28 @@ def _handle_summary_request(
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(output, encoding="utf-8")
 
+    # Best-effort search-index push. Writer-hook failures must NEVER break
+    # the recording / summary pipeline — the sweep on the reader side will
+    # pick up anything we miss here.
+    try:
+        from search import indexer as _search_indexer
+        is_voicemail = "/voicemails/" in str(audio_path) if audio_path else False
+        if is_cleanup:
+            search_kind = (
+                _search_indexer.KIND_VOICEMAIL_TRANSCRIPT
+                if is_voicemail else _search_indexer.KIND_MEETING_TRANSCRIPT
+            )
+        else:
+            search_kind = (
+                _search_indexer.KIND_VOICEMAIL_SUMMARY
+                if is_voicemail else _search_indexer.KIND_MEETING_SUMMARY
+            )
+        _search_indexer.upsert_doc(
+            source_path=output_path, kind=search_kind, body=output,
+        )
+    except Exception as exc:
+        _log(f"search index upsert failed for {output_path}: {exc}")
+
     # HTML artifact: only for summary-category prompts that produce a .md
     html_path = ""
     if not is_cleanup and transcript_path.exists():

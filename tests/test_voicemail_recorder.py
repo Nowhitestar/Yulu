@@ -237,6 +237,70 @@ def test_cmd_stop_idempotent_when_not_recording(monkeypatch):
     assert all(c.get("action") != "stop" for c in sent)
 
 
+def test_transcribe_pushes_to_search_index(isolated_paths, tmp_path, monkeypatch):
+    """B.3 hook: after the voicemail transcript lands on disk, the search
+    indexer is called with kind=voicemail_transcript and the same body."""
+    queue, _ = isolated_paths
+    wav = tmp_path / "voicemail_20260523_201500.wav"
+    wav.touch()
+    fake_response = {
+        "status": "ok",
+        "channels": {
+            "mic": {"text": "memo body",
+                    "segments": [{"start": 0.0, "end": 1.0, "text": "memo body"}]},
+            "sys": {"skipped_silent": True, "text": "", "segments": []},
+        },
+    }
+
+    calls: list[dict] = []
+    from search import indexer as search_indexer
+    monkeypatch.setattr(
+        search_indexer, "upsert_doc",
+        lambda **kw: calls.append(kw) or True,
+    )
+
+    with patch.object(recorder, "_request_transcribe", return_value=fake_response):
+        recorder._transcribe_and_enqueue(wav, title=None)
+
+    assert len(calls) == 1
+    assert calls[0]["kind"] == search_indexer.KIND_VOICEMAIL_TRANSCRIPT
+    assert calls[0]["source_path"] == wav.with_suffix(".transcript.txt")
+    assert calls[0]["body"] == "memo body"
+
+
+def test_transcribe_swallows_search_index_failure(isolated_paths, tmp_path,
+                                                  monkeypatch, capsys):
+    """B.3 hook contract: search-indexer raising must not break the
+    voicemail pipeline. The transcript still lands on disk; the prompt
+    queue still gets the request; rc==0."""
+    queue, _ = isolated_paths
+    wav = tmp_path / "voicemail_20260523_201500.wav"
+    wav.touch()
+    fake_response = {
+        "status": "ok",
+        "channels": {
+            "mic": {"text": "memo body",
+                    "segments": [{"start": 0.0, "end": 1.0, "text": "memo body"}]},
+            "sys": {"skipped_silent": True, "text": "", "segments": []},
+        },
+    }
+
+    from search import indexer as search_indexer
+    monkeypatch.setattr(
+        search_indexer, "upsert_doc",
+        lambda **_kw: (_ for _ in ()).throw(RuntimeError("boom")),
+    )
+
+    with patch.object(recorder, "_request_transcribe", return_value=fake_response):
+        rc = recorder._transcribe_and_enqueue(wav, title=None)
+    assert rc == 0
+    assert wav.with_suffix(".transcript.txt").exists()
+    events = json.loads(queue.read_text(encoding="utf-8"))
+    assert len(events) >= 1
+    err = capsys.readouterr().err
+    assert "search index upsert failed" in err
+
+
 def test_cmd_stop_sends_stop_when_recording(monkeypatch):
     sent: list[dict] = []
     def fake_socket_send(cmd):

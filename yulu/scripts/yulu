@@ -78,6 +78,8 @@ Commands:
                     Use mlx-whisper, e.g. mlx-community/whisper-large-v3-mlx
   transcription engine whisper [model-path]
                     Use whisper.cpp GGML model
+  search "term" [--since 7d --type meeting --in summary --json --open]
+                    Search across voicemails, meetings, and summaries
   where            Print key paths
   help             Show this help
 
@@ -313,6 +315,8 @@ case "${1:-help}" in
     prompts)   shift; PYTHONPATH="$SCRIPT_DIR:${PYTHONPATH:-}" exec "${PYTHON:-python3}" -m prompts.cli "$@" ;;
     summaries) shift; PYTHONPATH="$SCRIPT_DIR:${PYTHONPATH:-}" exec "${PYTHON:-python3}" -m summaries_cli "$@" ;;
     memo)      shift; PYTHONPATH="$SCRIPT_DIR:${PYTHONPATH:-}" exec "${PYTHON:-python3}" -m voicemail.cli "$@" ;;
+    search)    shift; PYTHONPATH="$SCRIPT_DIR:${PYTHONPATH:-}" exec "${PYTHON:-python3}" -m search.cli "$@" ;;
+    status-agent|statusagent) shift; PYTHONPATH="$SCRIPT_DIR:${PYTHONPATH:-}" exec "${PYTHON:-python3}" -m status_agent_config "$@" ;;
     where)     shift; cmd_where "$@" ;;
     help|-h|--help) usage ;;
     *)         err "Unknown command: $1"; echo; usage; exit 1 ;;
