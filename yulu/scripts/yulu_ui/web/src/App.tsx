@@ -5,6 +5,7 @@ import { trpc, makeTrpcClient } from "./trpc.js";
 import { ThemeProvider } from "./theme.js";
 import { WsProvider } from "./ws.js";
 import { RootLayout } from "./routes/root.js";
+import { InboxLayout } from "./routes/inbox/_layout.js";
 import { Voicemails, handle as voicemailsHandle } from "./routes/inbox/voicemails.js";
 import { VoicemailsIndex } from "./routes/inbox/voicemails.index.js";
 import { VoicemailReader, handle as voicemailReaderHandle } from "./routes/inbox/voicemails.$stem.js";
@@ -30,24 +31,30 @@ const router = createBrowserRouter([
     children: [
       { index: true, element: <Navigate to="/inbox/voicemails" replace /> },
       {
-        path: "inbox/voicemails",
-        Component: Voicemails,
-        handle: voicemailsHandle,
+        path: "inbox",
+        Component: InboxLayout,
         children: [
-          { index: true, Component: VoicemailsIndex },
-          { path: ":stem", Component: VoicemailReader, handle: voicemailReaderHandle },
+          {
+            path: "voicemails",
+            Component: Voicemails,
+            handle: voicemailsHandle,
+            children: [
+              { index: true, Component: VoicemailsIndex },
+              { path: ":stem", Component: VoicemailReader, handle: voicemailReaderHandle },
+            ],
+          },
+          {
+            path: "meetings",
+            Component: Meetings,
+            handle: meetingsHandle,
+            children: [
+              { index: true, Component: MeetingsIndex },
+              { path: ":stem", Component: MeetingReader, handle: meetingReaderHandle },
+            ],
+          },
+          { path: "search", Component: Search, handle: searchHandle },
         ],
       },
-      {
-        path: "inbox/meetings",
-        Component: Meetings,
-        handle: meetingsHandle,
-        children: [
-          { index: true, Component: MeetingsIndex },
-          { path: ":stem", Component: MeetingReader, handle: meetingReaderHandle },
-        ],
-      },
-      { path: "inbox/search",         Component: Search,               handle: searchHandle },
       { path: "knowledge/prompts",    Component: Prompts,              handle: promptsHandle },
       { path: "knowledge/glossary",   Component: Glossary,             handle: glossaryHandle },
       { path: "settings/audio",         Component: SettingsAudio,         handle: audioHandle },
