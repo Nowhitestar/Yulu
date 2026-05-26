@@ -93,9 +93,25 @@ describe("server", () => {
   });
 
   it("503s when SPA index.html is missing (dev-without-build scenario)", async () => {
-    delete process.env.YULU_UI_DIST_WEB;
+    // Point at a path guaranteed not to contain an index.html so we don't
+    // rely on the package's actual `dist/web` being absent (it isn't, in dev).
+    process.env.YULU_UI_DIST_WEB = join(env.root, "definitely-no-build-here");
     const r = await fetch(`${env.baseUrl}/some/unknown/path`);
     expect(r.status).toBe(503);
     expect(await r.text()).toMatch(/UI not built/);
+  });
+
+  it("falls back to index.html for deep multi-segment SPA paths", async () => {
+    const distWeb = join(env.root, "dist/web");
+    mkdirSync(distWeb, { recursive: true });
+    writeFileSync(join(distWeb, "index.html"), "<!doctype html><html><body>SPA</body></html>");
+    process.env.YULU_UI_DIST_WEB = distWeb;
+
+    for (const p of ["/inbox/voicemails", "/health/daemons", "/a/b/c/d/e"]) {
+      const r = await fetch(`${env.baseUrl}${p}`);
+      expect(r.status, `path ${p}`).toBe(200);
+      expect(r.headers.get("content-type")).toMatch(/text\/html/);
+      expect(await r.text()).toContain("SPA");
+    }
   });
 });

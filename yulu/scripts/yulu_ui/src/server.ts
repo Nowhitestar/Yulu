@@ -76,8 +76,11 @@ export async function startServer(): Promise<RunningServer> {
 
   app.get("/assets/*", (c) => serveStaticFile(c.req.raw, join(distWebDir(), "assets")));
 
-  // SPA fallback — must be the last GET route
-  app.get("*", (c) => {
+  // SPA fallback — return index.html for any unmatched GET path so React
+  // Router can handle client-side routing (e.g. /inbox/voicemails, /health/daemons).
+  // `app.notFound` catches everything not handled above, including deep
+  // multi-segment paths where `app.get("*")` can be unreliable across Hono versions.
+  app.notFound((c) => {
     if (c.req.method !== "GET") return c.text("not found", 404);
     const indexPath = join(distWebDir(), "index.html");
     if (!existsSync(indexPath)) {
