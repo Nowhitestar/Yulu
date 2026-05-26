@@ -203,12 +203,45 @@ def _handle_summary_request(
     transcript_text = transcript_path.read_text(encoding="utf-8")
 
     title = entry.get("title", "") or ""
-    date = resolve_meeting_date(Path(audio_path_str)) if audio_path_str else ""
-    rendered = (
-        snapshot
-        .replace("{{transcript}}", transcript_text)
-        .replace("{{meeting_title}}", title)
-        .replace("{{date}}", date)
+    audio_path = Path(audio_path_str) if audio_path_str else None
+    date = resolve_meeting_date(audio_path) if audio_path else ""
+
+    # Phase 3: read per-channel transcripts if they exist (dual-track).
+    # Mono / legacy recordings won't have these sidecars → empty strings,
+    # which render() treats as no-op substitution for legacy prompts.
+    my_transcript = ""
+    their_transcript = ""
+    if audio_path is not None:
+        mic_path = audio_path.with_suffix(".mic.transcript.txt")
+        sys_path = audio_path.with_suffix(".sys.transcript.txt")
+        if mic_path.exists():
+            my_transcript = mic_path.read_text(encoding="utf-8")
+        if sys_path.exists():
+            their_transcript = sys_path.read_text(encoding="utf-8")
+
+    # Single-pass substitution via a throwaway Prompt-shaped object so we
+    # share the PromptsCache.render() codepath (and test coverage).
+    from prompts.db import Prompt, Category, Source
+    snapshot_prompt = Prompt(
+        id=prompt_id or "snapshot",
+        slug=prompt_slug,
+        name=prompt_name,
+        category=Category.SUMMARY,
+        content=snapshot,
+        is_auto_run=False,
+        source=Source.MANUAL,
+        sort_order=0,
+        note=None,
+        created_at="",
+        updated_at="",
+    )
+    rendered = cache.render(
+        snapshot_prompt,
+        transcript=transcript_text,
+        meeting_title=title,
+        date=date,
+        my_transcript=my_transcript,
+        their_transcript=their_transcript,
     )
 
     # cleanup slug writes back to transcript_path

@@ -8,17 +8,193 @@ of the implementation plan.
 from __future__ import annotations
 
 import asyncio
+import logging
+import math
+import tempfile
+import wave
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Protocol, Optional
+
+from .wav_inspect import WavLayout, classify
+
+_log = logging.getLogger(__name__)
 
 
 @dataclass
 class STTResult:
     text: str
-    raw_text: str
+    raw_text: str = ""
     segments: list[dict] = field(default_factory=list)
     language: Optional[str] = None
     duration_ms: int = 0
+
+
+@dataclass
+class TranscribeDispatchResult:
+    """Channel-aware dispatch result returned by `dispatch_transcribe`.
+
+    - For MONO / LEGACY_STEREO / channel_split=False: `text` + `segments` set,
+      `channels` is None.
+    - For DUAL_TRACK: `channels` is a dict with keys 'mic' and 'sys', each
+      mapping to {'text': str, 'segments': list[dict]}; `text` is empty.
+    """
+    layout: WavLayout
+    text: str = ""
+    segments: Optional[list[dict]] = None
+    channels: Optional[dict[str, dict]] = None
+
+
+def _extract_channel(stereo_path: Path, channel: int, out_path: Path) -> None:
+    """Write a mono WAV containing only the L (channel=0) or R (channel=1)
+    samples of `stereo_path`. Uses the `wave` module; preserves sample rate."""
+    with wave.open(str(stereo_path), "rb") as src:
+        assert src.getnchannels() == 2, "extract_channel requires stereo input"
+        params = src.getparams()
+        sample_width = src.getsampwidth()
+        n_frames = src.getnframes()
+        raw = src.readframes(n_frames)
+
+    # interleaved: [L0_lo L0_hi R0_lo R0_hi L1_lo L1_hi R1_lo R1_hi ...]
+    frame_bytes = sample_width * 2
+    stride_start = channel * sample_width
+    mono = bytearray()
+    for i in range(n_frames):
+        base = i * frame_bytes + stride_start
+        mono += raw[base : base + sample_width]
+
+    with wave.open(str(out_path), "wb") as dst:
+        dst.setnchannels(1)
+        dst.setsampwidth(sample_width)
+        dst.setframerate(params.framerate)
+        dst.writeframes(bytes(mono))
+
+
+EMPTY_CHANNEL_DBFS_THRESHOLD = -50.0  # below this → treat as silent
+
+
+def _channel_rms_dbfs(mono_wav: Path) -> float:
+    """Whole-file RMS of a mono Int16 WAV expressed in dBFS.
+    Returns -inf for empty or unsupported files."""
+    with wave.open(str(mono_wav), "rb") as f:
+        sw = f.getsampwidth()
+        n = f.getnframes()
+        raw = f.readframes(n)
+    if n == 0 or sw != 2:
+        return -math.inf
+    max_amp = float((1 << (8 * sw - 1)) - 1)
+    total = 0.0
+    for i in range(n):
+        v = int.from_bytes(raw[i * 2 : i * 2 + 2], "little", signed=True)
+        total += (v / max_amp) ** 2
+    rms = math.sqrt(total / n)
+    return 20.0 * math.log10(rms) if rms > 0 else -math.inf
+
+
+def _downmix_stereo_to_mono(stereo_path: Path, out_path: Path) -> None:
+    """Write `(L + R) / 2` mono WAV."""
+    with wave.open(str(stereo_path), "rb") as src:
+        assert src.getnchannels() == 2
+        params = src.getparams()
+        sw = src.getsampwidth()
+        n_frames = src.getnframes()
+        raw = src.readframes(n_frames)
+
+    out = bytearray()
+    for i in range(n_frames):
+        base = i * sw * 2
+        L = int.from_bytes(raw[base : base + sw], "little", signed=True)
+        R = int.from_bytes(raw[base + sw : base + 2 * sw], "little", signed=True)
+        mix = (L + R) // 2
+        out += mix.to_bytes(sw, "little", signed=True)
+
+    with wave.open(str(out_path), "wb") as dst:
+        dst.setnchannels(1); dst.setsampwidth(sw); dst.setframerate(params.framerate)
+        dst.writeframes(bytes(out))
+
+
+def dispatch_transcribe(
+    *, wav_path: Path, channel_split: bool, backend,
+    language: str, initial_prompt: str,
+) -> TranscribeDispatchResult:
+    """Channel-aware single-WAV transcribe entry point.
+
+    - channel_split=False -> always single mono pass on the original file.
+    - channel_split=True  -> classify via WavLayout:
+        MONO          -> single pass on the original file.
+        LEGACY_STEREO -> downmix L+R -> mono pass; log WARN.
+        DUAL_TRACK    -> extract L+R into two temp mono WAVs; run backend
+                        twice (mic then sys); return `channels` dict.
+
+    The `backend` contract is a sync callable:
+        backend.transcribe(audio_path=..., language=..., initial_prompt=...) -> STTResult
+    Callers that need to bridge an async/scheduler-driven backend should wrap
+    it in a small adapter object.
+    """
+    wav_path = Path(wav_path)
+    if not channel_split:
+        result = backend.transcribe(audio_path=str(wav_path),
+                                    language=language,
+                                    initial_prompt=initial_prompt)
+        return TranscribeDispatchResult(
+            layout=WavLayout.MONO, text=result.text, segments=result.segments
+        )
+
+    layout = classify(wav_path)
+
+    if layout is WavLayout.MONO:
+        r = backend.transcribe(audio_path=str(wav_path),
+                               language=language, initial_prompt=initial_prompt)
+        return TranscribeDispatchResult(layout=layout, text=r.text, segments=r.segments)
+
+    if layout is WavLayout.LEGACY_STEREO:
+        _log.warning("legacy stereo wav, no source separation: %s", wav_path)
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tf:
+            tmp = Path(tf.name)
+        try:
+            _downmix_stereo_to_mono(wav_path, tmp)
+            r = backend.transcribe(audio_path=str(tmp),
+                                   language=language, initial_prompt=initial_prompt)
+            return TranscribeDispatchResult(layout=layout, text=r.text, segments=r.segments)
+        finally:
+            tmp.unlink(missing_ok=True)
+
+    # DUAL_TRACK — allocate inside try so that a failure between the two
+    # NamedTemporaryFile() calls cannot leak the first file.
+    tmp_mic: Optional[Path] = None
+    tmp_sys: Optional[Path] = None
+    try:
+        tmp_mic = Path(tempfile.NamedTemporaryFile(suffix=".mic.wav", delete=False).name)
+        tmp_sys = Path(tempfile.NamedTemporaryFile(suffix=".sys.wav", delete=False).name)
+        _extract_channel(wav_path, channel=0, out_path=tmp_mic)
+        _extract_channel(wav_path, channel=1, out_path=tmp_sys)
+
+        mic_dbfs = _channel_rms_dbfs(tmp_mic)
+        sys_dbfs = _channel_rms_dbfs(tmp_sys)
+
+        if mic_dbfs > EMPTY_CHANNEL_DBFS_THRESHOLD:
+            r = backend.transcribe(audio_path=str(tmp_mic),
+                                   language=language, initial_prompt=initial_prompt)
+            mic_entry = {"text": r.text, "segments": r.segments}
+        else:
+            mic_entry = {"skipped_silent": True, "text": "", "segments": []}
+
+        if sys_dbfs > EMPTY_CHANNEL_DBFS_THRESHOLD:
+            r = backend.transcribe(audio_path=str(tmp_sys),
+                                   language=language, initial_prompt=initial_prompt)
+            sys_entry = {"text": r.text, "segments": r.segments}
+        else:
+            sys_entry = {"skipped_silent": True, "text": "", "segments": []}
+
+        return TranscribeDispatchResult(
+            layout=layout,
+            channels={"mic": mic_entry, "sys": sys_entry},
+        )
+    finally:
+        if tmp_mic is not None:
+            tmp_mic.unlink(missing_ok=True)
+        if tmp_sys is not None:
+            tmp_sys.unlink(missing_ok=True)
 
 
 class CancelToken:

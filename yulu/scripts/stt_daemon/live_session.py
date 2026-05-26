@@ -20,6 +20,9 @@ from .vocab_cache import VocabCache
 WAV_HEADER_BYTES = 44
 SAMPLE_RATE_HZ = 16000
 SAMPLE_BYTES = 2  # int16 mono
+DUAL_TRACK_HEADER_BYTES = 82
+DUAL_TRACK_SAMPLE_RATE_HZ = 48000
+DUAL_TRACK_FRAME_BYTES = 4  # stereo Int16 → L_lo L_hi R_lo R_hi
 
 PartialCallback = Callable[[PartialEvent], Optional[Awaitable[None]]]
 
@@ -37,6 +40,16 @@ class LiveSession:
     language: str
     chunk_sec: float = 10.0
     meeting_title: Optional[str] = None
+    # Phase 3 — stride extraction from a single stereo WAV.
+    # When stride_step > 1, mic_path == sys_path and we slice every
+    # `stride_step` bytes starting at `<channel>_stride_offset`.
+    mic_stride_offset: int = 0
+    sys_stride_offset: int = 0
+    stride_step: int = 1
+    # Per-session WAV constants (Phase 3 dual-track recordings have an
+    # 82-byte header and a 48 kHz source rate; Phase-1 mono stays at 44 / 16k).
+    source_sample_rate_hz: int = SAMPLE_RATE_HZ
+    wav_header_bytes: int = WAV_HEADER_BYTES
 
 
 @dataclass
@@ -52,6 +65,12 @@ class TailState:
     next_seq: int
     started_at: str
     last_partial_at: str
+    # Phase 3
+    mic_stride_offset: int = 0
+    sys_stride_offset: int = 0
+    stride_step: int = 1
+    source_sample_rate_hz: int = SAMPLE_RATE_HZ
+    wav_header_bytes: int = WAV_HEADER_BYTES
 
     def persist(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -101,8 +120,12 @@ class LiveSessionManager:
         if existing_state_path.exists():
             state = TailState.load(existing_state_path)
         else:
-            mic_size = self._size_or_header(Path(spec.mic_path))
-            sys_size = self._size_or_header(Path(spec.sys_path)) if spec.sys_path else 0
+            mic_size = self._size_or_header(Path(spec.mic_path), spec.wav_header_bytes)
+            sys_size = (
+                self._size_or_header(Path(spec.sys_path), spec.wav_header_bytes)
+                if spec.sys_path
+                else 0
+            )
             state = TailState(
                 sid=spec.sid,
                 mic_path=spec.mic_path,
@@ -115,6 +138,11 @@ class LiveSessionManager:
                 next_seq=0,
                 started_at=_now_iso(),
                 last_partial_at=_now_iso(),
+                mic_stride_offset=spec.mic_stride_offset,
+                sys_stride_offset=spec.sys_stride_offset,
+                stride_step=spec.stride_step,
+                source_sample_rate_hz=spec.source_sample_rate_hz,
+                wav_header_bytes=spec.wav_header_bytes,
             )
             state.persist(existing_state_path)
         self._active[spec.sid] = _ActiveSession(spec=spec, state=state)
@@ -204,6 +232,9 @@ class LiveSessionManager:
             Path(active.spec.mic_path),
             active.state.mic_offset_bytes,
             min_seconds=active.spec.chunk_sec,
+            stride_offset=active.state.mic_stride_offset,
+            stride_step=active.state.stride_step,
+            source_sample_rate_hz=active.state.source_sample_rate_hz,
         )
         if mic_chunk is not None:
             chunk_path, new_offset, duration_ms = mic_chunk
@@ -214,6 +245,9 @@ class LiveSessionManager:
                 Path(active.spec.sys_path),
                 active.state.sys_offset_bytes,
                 min_seconds=active.spec.chunk_sec,
+                stride_offset=active.state.sys_stride_offset,
+                stride_step=active.state.stride_step,
+                source_sample_rate_hz=active.state.source_sample_rate_hz,
             )
             if sys_chunk is not None:
                 chunk_path, new_offset, duration_ms = sys_chunk
@@ -271,18 +305,22 @@ class LiveSessionManager:
 
     def _offset_to_ms(self, state: TailState, source: str, *, before_chunk: bool, duration_ms: int) -> int:
         offset = state.mic_offset_bytes if source == "mic" else state.sys_offset_bytes
-        offset = max(offset - WAV_HEADER_BYTES, 0)
-        ms = int(offset / (SAMPLE_RATE_HZ * SAMPLE_BYTES) * 1000)
+        offset = max(offset - state.wav_header_bytes, 0)
+        # Bytes/sec of the SOURCE file. In stride mode each frame is
+        # `stride_step` bytes; in mono mode a frame is one Int16 sample.
+        frame_bytes = state.stride_step if state.stride_step > 1 else SAMPLE_BYTES
+        divisor = state.source_sample_rate_hz * frame_bytes
+        ms = int(offset / divisor * 1000)
         if before_chunk:
             ms = max(ms - duration_ms, 0)
         return ms
 
     @staticmethod
-    def _size_or_header(path: Path) -> int:
+    def _size_or_header(path: Path, header_bytes: int) -> int:
         try:
-            return max(path.stat().st_size, WAV_HEADER_BYTES)
+            return max(path.stat().st_size, header_bytes)
         except FileNotFoundError:
-            return WAV_HEADER_BYTES
+            return header_bytes
 
     def _read_pending(
         self,
@@ -290,18 +328,57 @@ class LiveSessionManager:
         offset: int,
         *,
         min_seconds: float,
+        stride_offset: int = 0,
+        stride_step: int = 1,
+        source_sample_rate_hz: int = SAMPLE_RATE_HZ,
     ) -> Optional[tuple[Path, int, int]]:
         """Read >= min_seconds of audio after `offset`, write a temp WAV.
 
         Returns (chunk_wav_path, new_offset, duration_ms) or None if too little.
+
+        When ``stride_step > 1``, the source file is treated as interleaved
+        samples (e.g. a stereo WAV) and only every ``stride_step``-th sample
+        starting at ``stride_offset`` is extracted into a mono chunk. This
+        requires reading ``stride_step``× more source bytes per second of
+        output audio. When ``stride_step == 1`` (default) behavior is
+        identical to Phase 1.
         """
         try:
             current_size = path.stat().st_size
         except FileNotFoundError:
             return None
         available = current_size - offset
-        if available < int(min_seconds * SAMPLE_RATE_HZ * SAMPLE_BYTES):
+        if stride_step > 1:
+            # Source frame = stride_step bytes (e.g. stereo Int16 = 4 bytes).
+            source_bytes_per_second = source_sample_rate_hz * stride_step
+            min_source_bytes = int(min_seconds * source_bytes_per_second)
+        else:
+            source_bytes_per_second = source_sample_rate_hz * SAMPLE_BYTES
+            min_source_bytes = int(min_seconds * source_bytes_per_second)
+        if available < min_source_bytes:
             return None
+        if stride_step > 1:
+            # Align to a whole-frame boundary so each output sample maps to a
+            # complete interleaved frame of `stride_step` source bytes.
+            consume = (available // stride_step) * stride_step
+            if consume < min_source_bytes:
+                return None
+            new_offset = offset + consume
+            chunk_path = path.with_name(
+                f"{path.stem}.chunk-{offset}-{new_offset}-s{stride_offset}.wav"
+            )
+            _read_with_stride(
+                path=path,
+                out_path=chunk_path,
+                start_byte=offset,
+                end_byte=new_offset,
+                stride_offset=stride_offset,
+                stride_step=stride_step,
+                sample_width=SAMPLE_BYTES,
+                framerate=source_sample_rate_hz,
+            )
+            duration_ms = int(consume / source_bytes_per_second * 1000)
+            return chunk_path, new_offset, duration_ms
         with open(path, "rb") as f:
             f.seek(offset)
             pcm = f.read(available)
@@ -310,15 +387,40 @@ class LiveSessionManager:
         chunk_path = path.with_name(
             f"{path.stem}.chunk-{offset}-{offset + len(pcm)}.wav"
         )
-        _write_wav_chunk(chunk_path, pcm)
-        duration_ms = int(len(pcm) / (SAMPLE_RATE_HZ * SAMPLE_BYTES) * 1000)
+        _write_wav_chunk(chunk_path, pcm, framerate=source_sample_rate_hz)
+        duration_ms = int(len(pcm) / source_bytes_per_second * 1000)
         return chunk_path, offset + len(pcm), duration_ms
 
 
-def _write_wav_chunk(path: Path, pcm_bytes: bytes) -> None:
+def _write_wav_chunk(path: Path, pcm_bytes: bytes, *, framerate: int = SAMPLE_RATE_HZ) -> None:
     import wave
     with wave.open(str(path), "wb") as wf:
         wf.setnchannels(1)
         wf.setsampwidth(SAMPLE_BYTES)
-        wf.setframerate(SAMPLE_RATE_HZ)
+        wf.setframerate(framerate)
         wf.writeframes(pcm_bytes)
+
+
+def _read_with_stride(
+    *, path: Path, out_path: Path,
+    start_byte: int, end_byte: int,
+    stride_offset: int, stride_step: int,
+    sample_width: int, framerate: int,
+) -> None:
+    """Extract every `stride_step`-th sample of width `sample_width`
+    starting at `stride_offset` within each frame, from a slice of `path`
+    delimited by `[start_byte, end_byte)`. Write as mono WAV to out_path."""
+    import wave as _wave
+    with path.open("rb") as src:
+        src.seek(start_byte)
+        data = src.read(end_byte - start_byte)
+
+    mono = bytearray()
+    for i in range(0, len(data) - stride_step + 1, stride_step):
+        mono += data[i + stride_offset : i + stride_offset + sample_width]
+
+    with _wave.open(str(out_path), "wb") as dst:
+        dst.setnchannels(1)
+        dst.setsampwidth(sample_width)
+        dst.setframerate(framerate)
+        dst.writeframes(bytes(mono))

@@ -34,6 +34,11 @@ from state_store import (
     set_recording_started,
     set_recording_stopped,
 )
+from recording_lock import (
+    acquire as acquire_recording_lock,
+    record as record_lock,
+    RecordingBusy,
+)
 
 CONFIG_DIR = Path.home() / ".config" / "yulu"
 CONFIG_PATH = CONFIG_DIR / "config.json"
@@ -328,45 +333,75 @@ def _remove_ask_record_event(meeting_id):
 
 def _start_recording(title, meeting_id=""):
     print(f"🎙️ 开始录制: {title}")
-    record = SCRIPT_DIR / "record_audio.py"
-    result = subprocess.run(
-        [sys.executable, str(record), "start", title],
-        capture_output=True, text=True,
-    )
-    audio_path = None
-    for line in result.stdout.split("\n"):
-        # record_audio.py may write to ~/Movies/Yulu or legacy meeting-recordings.
-        # Accept any absolute .wav path in its stdout. Titles/paths can contain
-        # spaces, so capture to end-of-line instead of using \s-delimited regex.
-        if ".wav" in line:
-            import re
-            m = re.search(r'(/\S.*?\.wav)(?:\s*$)', line)
-            if m:
-                audio_path = m.group(1).strip()
-        # 旧格式兼容
-        if line.startswith("Output:"):
-            audio_path = line.split("Output:", 1)[1].strip()
-    if not audio_path:
-        print(f"❌ 录制启动失败\nstdout={result.stdout}\nstderr={result.stderr}", file=sys.stderr)
-        return
+    try:
+        with acquire_recording_lock(timeout=0.5) as lock_handle:
+            audio_path = _daemon_start_recording(title, lock_handle=lock_handle)
+            if not audio_path:
+                print(
+                    f"❌ 录制启动失败: daemon 未返回有效路径 (title={title!r})",
+                    file=sys.stderr,
+                )
+                return
 
-    set_recording_started(title, audio_path, meeting_id=meeting_id, backend="daemon", path=STATE_PATH)
-    print(f"✅ 录制中: {audio_path}")
+            record_lock(
+                lock_handle,
+                title=title,
+                path=audio_path,
+                started_at=datetime.now().isoformat(),
+            )
 
-    # 启动状态浮窗
-    _launch_status_window(title)
+            set_recording_started(
+                title, audio_path,
+                meeting_id=meeting_id, backend="daemon", path=STATE_PATH,
+            )
+            print(f"✅ 录制中: {audio_path}")
 
-    # 注册"录制超时询问停止"事件：会议结束时间触发
-    duration_min = _meeting_duration(meeting_id)
-    end_at = datetime.now() + timedelta(minutes=duration_min)
-    _add_runtime_event({
-        "id": f"recording-{meeting_id or 'manual'}::ask_stop",
-        "kind": "ask_stop",
-        "at": end_at.isoformat(),
-        "meeting_id": meeting_id,
-        "title": title,
-    })
-    print(f"📅 已注册超时停止询问 @ {end_at.strftime('%H:%M')}")
+            # 启动状态浮窗
+            _launch_status_window(title)
+
+            # 注册"录制超时询问停止"事件：会议结束时间触发
+            duration_min = _meeting_duration(meeting_id)
+            end_at = datetime.now() + timedelta(minutes=duration_min)
+            _add_runtime_event({
+                "id": f"recording-{meeting_id or 'manual'}::ask_stop",
+                "kind": "ask_stop",
+                "at": end_at.isoformat(),
+                "meeting_id": meeting_id,
+                "title": title,
+            })
+            print(f"📅 已注册超时停止询问 @ {end_at.strftime('%H:%M')}")
+    except RecordingBusy as exc:
+        print(
+            f"⚠️ recording lock busy: meeting_id={meeting_id} "
+            f"title={title!r} holder={exc.info}",
+            file=sys.stderr,
+        )
+
+
+def _daemon_start_recording(title, lock_handle=None):
+    """Send a start RPC to the audio_daemon directly and return the recorded
+    file path on success, or ``None`` on failure.
+
+    Imported lazily from ``record_audio`` so that the audio_daemon socket
+    helpers stay co-located with the rest of the daemon-talking code while
+    keeping ``meeting_daemon`` free to call them inside the recording-lock
+    critical section without the child-process flock contention that a
+    ``subprocess.run(record_audio.py start)`` would introduce.
+
+    Defers to the daemon as the canonical "is recording" arbiter: probes
+    status first, and raises ``RecordingBusy`` if a recording is already in
+    flight (the flock alone cannot prevent this — see ``recording_lock``
+    docstring for why). Lets the caller's existing ``except RecordingBusy``
+    surface the live recording's metadata.
+    """
+    from record_audio import _raise_if_daemon_recording, socket_send
+
+    _raise_if_daemon_recording(lock_handle)
+    resp = socket_send({"action": "start", "title": title})
+    if not resp or resp.get("status") != "recording":
+        print(f"⚠️ daemon failed to start: {resp}", file=sys.stderr)
+        return None
+    return resp.get("file") or None
 
 
 def _meeting_duration(meeting_id):

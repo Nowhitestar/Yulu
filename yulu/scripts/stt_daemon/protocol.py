@@ -103,6 +103,7 @@ class TranscribeRequest:
     condition_on_previous: bool = True
     hallucination_silence_threshold: float = 2.0
     timeout_sec: int = 7200
+    channel_split: bool = False
 
 
 @dataclass
@@ -118,6 +119,11 @@ class TranscribeResponse:
     vocab_replacements_count: int
     duration_ms: int
     error: Optional[str] = None
+    # Phase 3 (dual-track): which layout the daemon dispatched for. Always
+    # set on successful transcribe_result responses. For DUAL_TRACK, `text`
+    # / `segments` stay empty and per-channel results live in `channels`.
+    layout: Optional[str] = None
+    channels: Optional[dict] = None
 
 
 @dataclass

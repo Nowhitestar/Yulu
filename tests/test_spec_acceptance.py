@@ -175,3 +175,71 @@ def test_summaries_cli_exists():
 def test_adr_004_exists():
     adr = SCRIPTS.parent / "spec" / "adr" / "004-prompt-library.md"
     assert adr.exists(), f"ADR-004 missing at {adr}"
+
+
+# ── Dual-Track + Recording Lock acceptance (spec 2026-05-22-dual-track-recording-design.md) ──
+
+def test_wav_inspect_classifier_module_exists():
+    pkg = SCRIPTS / "stt_daemon"
+    assert (pkg / "wav_inspect.py").exists()
+
+
+def test_transcript_merge_module_exists():
+    pkg = SCRIPTS / "stt_daemon"
+    assert (pkg / "transcript_merge.py").exists()
+
+
+def test_recording_lock_module_exists():
+    assert (SCRIPTS / "recording_lock.py").exists()
+
+
+def test_audio_daemon_no_half_duplex_mix_references():
+    text = (SCRIPTS / "audio_daemon.swift").read_text(encoding="utf-8")
+    assert "halfDuplexMix" not in text, "halfDuplexMix should be removed in Phase 3"
+    assert "channelInterleave" in text, "channelInterleave is the new mix method"
+
+
+def test_audio_daemon_writes_dual_track_marker():
+    text = (SCRIPTS / "audio_daemon.swift").read_text(encoding="utf-8")
+    assert "Yulu DualTrack v1" in text
+    assert "LIST" in text and "INFO" in text and "ICMT" in text
+
+
+def test_seed_has_action_items_by_speaker():
+    sys.path.insert(0, str(SCRIPTS))
+    from prompts.db import PromptsRepo, open_db
+    from prompts.seed import seed_from_current
+    import tempfile, pathlib
+    with tempfile.TemporaryDirectory() as td:
+        repo = PromptsRepo(open_db(pathlib.Path(td) / "p.sqlite"))
+        seed_from_current(repo)
+        slugs = {p.slug for p in repo.list_prompts()}
+    assert "action-items-by-speaker" in slugs
+
+
+def test_promptscache_render_accepts_speaker_vars():
+    sys.path.insert(0, str(SCRIPTS))
+    import inspect
+    from prompts.cache import PromptsCache
+    params = inspect.signature(PromptsCache.render).parameters
+    assert "my_transcript" in params
+    assert "their_transcript" in params
+
+
+def test_transcribe_uses_channel_split_and_three_outputs():
+    text = (SCRIPTS / "transcribe.py").read_text(encoding="utf-8")
+    assert "channel_split=True" in text
+    assert ".mic.transcript.txt" in text
+    assert ".sys.transcript.txt" in text
+    assert "transcript_merge" in text
+
+
+def test_record_audio_acquires_recording_lock():
+    text = (SCRIPTS / "record_audio.py").read_text(encoding="utf-8")
+    assert "acquire_recording_lock" in text or "from recording_lock import" in text
+    assert "RecordingBusy" in text
+
+
+def test_meeting_daemon_acquires_recording_lock():
+    text = (SCRIPTS / "meeting_daemon.py").read_text(encoding="utf-8")
+    assert "acquire_recording_lock" in text or "from recording_lock import" in text

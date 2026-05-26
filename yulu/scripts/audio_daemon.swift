@@ -1,4 +1,4 @@
-// audio_daemon.swift — ScreenCaptureKit 系统音频 + 麦克风 + 半双工混音
+// Yulu audio_daemon: AVAudioEngine mic + ScreenCaptureKit sys, source-separated stereo WAV.
 // 替代 BlackHole + SoX 的方案。
 //
 // 编译:
@@ -19,12 +19,13 @@ let PID_PATH = CONFIG_DIR.appendingPathComponent(".audio_daemon.pid")
 let LOG_PATH = CONFIG_DIR.appendingPathComponent("audio_daemon.log")
 let QUEUE_PATH = CONFIG_DIR.appendingPathComponent("agent-queue.json")
 let SILENCE_THRESHOLD: Float = 0.01
-let SYS_ACTIVE_THRESHOLD: Float = 0.001  // 系统音频常偏低，半双工判断不能用自动静音阈值
 let DEFAULT_SILENCE_SEC: TimeInterval = 300
-let FADE_FRAMES = Int(0.5 * 48000)
 let SAMPLE_RATE: UInt32 = 48000
 
 var SYS_READY = false
+/// When true, SCStream / ScreenCaptureKit is intentionally not started
+/// (voicemail / dictation use case). The WAV's R channel stays at 0.
+var SYS_DISABLED = false
 var SYS_ERROR = ""
 var MIC_READY = false
 var MIC_ERROR = ""
@@ -94,7 +95,8 @@ class WavWriter {
 
     init?(url: URL) {
         self.url = url
-        FileManager.default.createFile(atPath: url.path, contents: Data(repeating: 0, count: 44))
+        // 82 bytes = RIFF(12) + fmt chunk(24) + LIST-INFO-ICMT chunk(38) + data header(8)
+        FileManager.default.createFile(atPath: url.path, contents: Data(repeating: 0, count: 82))
         guard let h = try? FileHandle(forUpdating: url) else { return nil }
         self.handle = h
         patchHeader(sync: true)
@@ -130,30 +132,52 @@ class WavWriter {
     }
 
     private func patchHeaderLocked(sync: Bool) {
-        let fileSize = audioSize + 44 - 8
+        let HDR_BYTES: UInt32 = 82
+        let fileSize = audioSize + HDR_BYTES - 8  // RIFF size = total - 8
+
         var h = Data()
-        h.append(contentsOf: [0x52,0x49,0x46,0x46] as [UInt8])
+        // RIFF header
+        h.append(contentsOf: [0x52,0x49,0x46,0x46] as [UInt8])   // "RIFF"
         var v32 = fileSize.littleEndian
         withUnsafeBytes(of: &v32) { h.append(Data($0)) }
-        h.append(contentsOf: [0x57,0x41,0x56,0x45] as [UInt8])
-        h.append(contentsOf: [0x66,0x6D,0x74,0x20] as [UInt8])
+        h.append(contentsOf: [0x57,0x41,0x56,0x45] as [UInt8])   // "WAVE"
+
+        // fmt chunk
+        h.append(contentsOf: [0x66,0x6D,0x74,0x20] as [UInt8])   // "fmt "
         v32 = UInt32(16).littleEndian
         withUnsafeBytes(of: &v32) { h.append(Data($0)) }
-        var v16 = UInt16(1).littleEndian
+        var v16 = UInt16(1).littleEndian                          // PCM
         withUnsafeBytes(of: &v16) { h.append(Data($0)) }
-        v16 = UInt16(2).littleEndian
+        v16 = UInt16(2).littleEndian                              // channels=2
         withUnsafeBytes(of: &v16) { h.append(Data($0)) }
-        v32 = UInt32(48000).littleEndian
+        v32 = UInt32(48000).littleEndian                          // sample rate
         withUnsafeBytes(of: &v32) { h.append(Data($0)) }
-        v32 = UInt32(48000*2*2).littleEndian
+        v32 = UInt32(48000 * 2 * 2).littleEndian                  // byte rate
         withUnsafeBytes(of: &v32) { h.append(Data($0)) }
-        v16 = UInt16(4).littleEndian
+        v16 = UInt16(4).littleEndian                              // block align
         withUnsafeBytes(of: &v16) { h.append(Data($0)) }
-        v16 = UInt16(16).littleEndian
+        v16 = UInt16(16).littleEndian                             // bits/sample
         withUnsafeBytes(of: &v16) { h.append(Data($0)) }
-        h.append(contentsOf: [0x64,0x61,0x74,0x61] as [UInt8])
+
+        // LIST chunk with INFO/ICMT="Yulu DualTrack v1\0"
+        h.append(contentsOf: [0x4C,0x49,0x53,0x54] as [UInt8])   // "LIST"
+        v32 = UInt32(30).littleEndian                             // LIST body size
+        withUnsafeBytes(of: &v32) { h.append(Data($0)) }
+        h.append(contentsOf: [0x49,0x4E,0x46,0x4F] as [UInt8])   // "INFO"
+        h.append(contentsOf: [0x49,0x43,0x4D,0x54] as [UInt8])   // "ICMT"
+        v32 = UInt32(18).littleEndian                             // ICMT payload size
+        withUnsafeBytes(of: &v32) { h.append(Data($0)) }
+        // "Yulu DualTrack v1\0" = 18 bytes (even, no pad needed)
+        h.append("Yulu DualTrack v1".data(using: .ascii)!)
+        h.append(contentsOf: [0x00] as [UInt8])                   // null terminator
+
+        // data chunk header
+        h.append(contentsOf: [0x64,0x61,0x74,0x61] as [UInt8])   // "data"
         v32 = audioSize.littleEndian
         withUnsafeBytes(of: &v32) { h.append(Data($0)) }
+
+        precondition(h.count == 82, "WAV header must be exactly 82 bytes (got \(h.count))")
+
         do {
             try handle?.seek(toOffset: 0)
             try handle?.write(contentsOf: h)
@@ -197,13 +221,14 @@ func writeState(recording: Bool, title: String = "", path: String = "") {
     }
 }
 
-// ─── 音频数据管理器 + 半双工混音 ───────────────────────
+// ─── 音频数据管理器 + 源分离立体声 (L=mic, R=sys) ───
 
 class AudioRecorder {
     var writer: WavWriter?
     var isRecording = false
     var startTime: Date?
-    var lastAudioTime: Date?
+    var lastMicAudioTime: Date?
+    var lastSysAudioTime: Date?
     var silenceTask: DispatchWorkItem?
     var silenceSeconds = DEFAULT_SILENCE_SEC
     var onStopRequest: (() -> Void)?
@@ -212,7 +237,6 @@ class AudioRecorder {
     var sysBuf: [Int16] = []
     var micBuf: [Int16] = []
     let bufLock = NSLock()
-    var fadePos: Float = 0  // 半双工混音进度（跨 chunk 持久）
 
     func start(title: String) -> String? {
         let df = DateFormatter(); df.dateFormat = "yyyyMMdd_HHmmss"
@@ -220,8 +244,9 @@ class AudioRecorder {
         let url = RECORDING_DIR.appendingPathComponent(fn)
         try? FileManager.default.createDirectory(at: RECORDING_DIR, withIntermediateDirectories: true)
         guard let w = WavWriter(url: url) else { return nil }
-        writer = w; isRecording = true; startTime = Date(); lastAudioTime = Date()
-        sysBuf = []; micBuf = []; fadePos = 0
+        writer = w; isRecording = true; startTime = Date()
+        lastMicAudioTime = Date(); lastSysAudioTime = Date()
+        sysBuf = []; micBuf = []
         writeState(recording: true, title: title, path: url.path)
         log("🎙 \(fn)")
         startSilenceMonitor()
@@ -248,7 +273,7 @@ class AudioRecorder {
         sysBuf.append(contentsOf: samples)
         bufLock.unlock()
         let rms = calcRMS(samples)
-        if rms > SILENCE_THRESHOLD { lastAudioTime = Date() }
+        if rms > SILENCE_THRESHOLD { lastSysAudioTime = Date() }
         mixAndWrite()
     }
 
@@ -259,7 +284,7 @@ class AudioRecorder {
         micBuf.append(contentsOf: ints)
         bufLock.unlock()
         let rms = calcRMS(ints)
-        if rms > SILENCE_THRESHOLD { lastAudioTime = Date() }
+        if rms > SILENCE_THRESHOLD { lastMicAudioTime = Date() }
         mixAndWrite()
     }
 
@@ -270,89 +295,96 @@ class AudioRecorder {
         return sqrt(sum / Float(s.count))
     }
 
-    /// 流式混音：从 sysBuf/micBuf 取等量的样本，半双工混合后写出
+    /// Produce an interleaved stereo PCM stream where L=mic mono and
+    /// R=(sysL + sysR)/2 downmixed to mono. Source-separated; no ducking.
+    /// Inputs:
+    ///   - sysStereo: interleaved Int16 stereo (length must be even)
+    ///   - micMono:   Int16 mono samples
+    /// Output length is `sysStereo.count` (one stereo Int16 per frame).
+    private func channelInterleave(sysStereo: [Int16], micMono: [Int16]) -> [Int16] {
+        let frames = sysStereo.count / 2
+        var out = [Int16](repeating: 0, count: frames * 2)
+        let micFrames = micMono.count
+
+        for i in 0..<frames {
+            // L = mic mono (zero-padded if mic short)
+            out[2 * i] = i < micFrames ? micMono[i] : 0
+            // R = (sysL + sysR) / 2 with overflow-safe Int32 widening
+            let sysL = Int32(sysStereo[2 * i])
+            let sysR = Int32(sysStereo[2 * i + 1])
+            out[2 * i + 1] = Int16((sysL + sysR) / 2)
+        }
+        return out
+    }
+
+    /// 流式 source-separated: 从 sysBuf/micBuf 取等量数据,
+    /// 写出 L=mic / R=sys downmix(L+R/2) 的立体声 PCM.
     private func mixAndWrite() {
         guard let w = writer else { return }
         bufLock.lock()
-        // 取能混的最多样本数（sys 是 stereo, mic 是 mono）
-        let outLen = sysBuf.count  // sys 驱动输出速率
-        guard outLen >= 1024 else { bufLock.unlock(); return }  // 至少等 10ms 的数据再写
-        let sysChunk = Array(sysBuf.prefix(outLen))
-        sysBuf.removeFirst(outLen)
 
-        // 从 micBuf 取对应 mono 样本数（sys/2 因为 stereo vs mono）
-        let micNeeded = outLen / 2
+        // Drive output frame count by whichever side has more buffered;
+        // zero-pad the shorter side. This preserves recording continuity
+        // when one source is silent (no sys = mic-only voicemail; no mic
+        // = sys-only, currently rare but a future capture mode).
+        let sysFrames = sysBuf.count / 2
+        let micFrames = micBuf.count
+        let outFrames = max(sysFrames, micFrames)
+        guard outFrames >= 512 else { bufLock.unlock(); return }  // wait for ~10 ms
+
+        // Take outFrames mono mic samples (zero-pad if short).
         let micChunk: [Int16]
-        if micBuf.count >= micNeeded {
-            micChunk = Array(micBuf.prefix(micNeeded))
-            micBuf.removeFirst(micNeeded)
+        if micBuf.count >= outFrames {
+            micChunk = Array(micBuf.prefix(outFrames))
+            micBuf.removeFirst(outFrames)
         } else {
-            micChunk = micBuf + [Int16](repeating: 0, count: micNeeded - micBuf.count)
+            micChunk = micBuf + [Int16](repeating: 0, count: outFrames - micBuf.count)
             micBuf.removeAll()
+        }
+
+        // Take outFrames stereo sys samples (zero-pad if short).
+        let sysChunk: [Int16]
+        if sysBuf.count >= outFrames * 2 {
+            sysChunk = Array(sysBuf.prefix(outFrames * 2))
+            sysBuf.removeFirst(outFrames * 2)
+        } else {
+            sysChunk = sysBuf + [Int16](repeating: 0, count: outFrames * 2 - sysBuf.count)
+            sysBuf.removeAll()
         }
         bufLock.unlock()
 
-        let mixed = halfDuplexMix(sys: sysChunk, mic: micChunk)
-        w.append(Data(bytes: mixed, count: mixed.count * 2))
-    }
-
-    private func halfDuplexMix(sys: [Int16], mic: [Int16]) -> [Int16] {
-        let n = sys.count  // stereo samples
-        let m = min(mic.count, n / 2)  // mono samples
-
-        // No normalization - use raw levels to avoid distortion
-        let sysNorm = sys
-        let micMono = mic
-        var micStereo = [Int16](repeating: 0, count: n)
-        for i in 0..<n { micStereo[i] = micMono[min(i/2, m-1)] }
-
-        // Per-frame RMS analysis (30ms frames)
-        let frameSamples = Int(SAMPLE_RATE * 30 / 1000) * 2  // stereo frame
-        let numFrames = max(1, n / frameSamples)
-        let fadeStep: Float = 1.0 / Float(Int(SAMPLE_RATE) * 2)
-
-        var out = [Int16](repeating: 0, count: n)
-
-        for fi in 0..<numFrames {
-            let start = fi * frameSamples
-            let end = min(start + frameSamples, n)
-            let sysFrame = sysNorm[start..<end]
-            var sysSum: Float = 0; let mVal = Float(Int(Int16.max) * Int(Int16.max))
-            for v in sysFrame { sysSum += Float(v) * Float(v) / mVal }
-            let sysActive = sqrt(sysSum / Float(end - start)) > SYS_ACTIVE_THRESHOLD
-
-            if sysActive { fadePos = 0 }
-            else { fadePos = min(1.0, fadePos + fadeStep * Float(end - start)) }
-
-            let mixRatio = 1.0 - fadePos
-            for i in start..<end {
-                let sv = Float(sysNorm[i]) / Float(Int16.max)
-                let mv = Float(micStereo[i]) / Float(Int16.max)
-                out[i] = Int16(max(-1.0, min(1.0, mixRatio * sv + fadePos * mv)) * Float(Int16.max))
-            }
-        }
-        return out
+        let out = channelInterleave(sysStereo: sysChunk, micMono: micChunk)
+        w.append(Data(bytes: out, count: out.count * 2))
     }
 
     private func flushBuffers() {
         guard let w = writer else { return }
         bufLock.lock()
-        if !sysBuf.isEmpty || !micBuf.isEmpty {
-            let outLen = sysBuf.isEmpty ? micBuf.count * 2 : sysBuf.count
-            let sys: [Int16] = sysBuf.isEmpty ? [Int16](repeating: 0, count: outLen) : sysBuf
-            let mic: [Int16] = micBuf.isEmpty ? [Int16](repeating: 0, count: outLen/2) : micBuf
-            sysBuf.removeAll(); micBuf.removeAll()
-            bufLock.unlock()
-            w.append(Data(bytes: halfDuplexMix(sys: sys, mic: Array(mic.prefix(outLen/2))), count: outLen * 2))
-        } else { bufLock.unlock() }
+        let sysFrames = sysBuf.count / 2
+        let micFrames = micBuf.count
+        let outFrames = max(sysFrames, micFrames)
+        if outFrames == 0 { bufLock.unlock(); return }
+
+        let micChunk: [Int16] = micBuf + [Int16](repeating: 0, count: max(0, outFrames - micFrames))
+        let sysChunk: [Int16] = sysBuf + [Int16](repeating: 0, count: max(0, outFrames * 2 - sysBuf.count))
+        micBuf.removeAll()
+        sysBuf.removeAll()
+        bufLock.unlock()
+
+        let out = channelInterleave(sysStereo: Array(sysChunk.prefix(outFrames * 2)),
+                                     micMono:   Array(micChunk.prefix(outFrames)))
+        w.append(Data(bytes: out, count: out.count * 2))
     }
 
     private func startSilenceMonitor() {
         silenceTask?.cancel()
         let task = DispatchWorkItem { [weak self] in
             guard let self = self, self.isRecording else { return }
-            if let last = self.lastAudioTime, Date().timeIntervalSince(last) >= self.silenceSeconds {
-                log("🔇 silence \(Int(self.silenceSeconds))s — auto stop")
+            let now = Date()
+            let micQuiet = (self.lastMicAudioTime.map { now.timeIntervalSince($0) } ?? .infinity) >= self.silenceSeconds
+            let sysQuiet = (self.lastSysAudioTime.map { now.timeIntervalSince($0) } ?? .infinity) >= self.silenceSeconds
+            if micQuiet && sysQuiet {
+                log("🔇 silence \(Int(self.silenceSeconds))s (both channels) — auto stop")
                 self.onStopRequest?()
             }
         }
@@ -499,6 +531,11 @@ class AudioCapture {
     /// produced "Sys capture started" messages AFTER "Sys capture idle" —
     /// and worse, left the macOS recording indicator on after stop.
     func startCapture() {
+        if SYS_DISABLED {
+            log("🔇 SYS_DISABLED — mic-only recording mode")
+            SYS_READY = false
+            return
+        }
         guard stream == nil else { return }  // already capturing — idempotent
         let sem = DispatchSemaphore(value: 0)
         Task {
@@ -597,7 +634,11 @@ class SocketServer {
         case "windows":
             resp = self.scanWindows()
         case "start":
-            if !SYS_READY {
+            // Reset SYS_DISABLED per-request so each "start" reflects the caller's intent
+            // cleanly (a sys-disabled recording followed by a normal one must NOT inherit
+            // the previous flag).
+            SYS_DISABLED = (json["sys_disabled"] as? Bool) ?? false
+            if !SYS_READY && !SYS_DISABLED {
                 resp = ["error":"sys_capture_not_ready", "sysReady": SYS_READY, "sysError": SYS_ERROR, "micReady": MIC_READY, "micError": MIC_ERROR]
             } else if !MIC_READY {
                 resp = ["error":"mic_capture_not_ready", "sysReady": SYS_READY, "sysError": SYS_ERROR, "micReady": MIC_READY, "micError": MIC_ERROR]

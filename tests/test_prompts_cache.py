@@ -109,3 +109,49 @@ def test_resolve_meeting_date_unparseable_suffix(tmp_path):
     # Should fall back to mtime, not raise
     d = resolve_meeting_date(p)
     assert len(d) == 10
+
+
+# ── speaker-aware template variables (Phase 3) ─────────────────────
+
+def test_render_substitutes_my_and_their_transcript(tmp_path):
+    db = tmp_path / "p.sqlite"
+    repo = PromptsRepo(open_db(db))
+    repo.add(
+        slug="speaker-test",
+        name="Speaker Test",
+        category=Category.SUMMARY,
+        content="我说：{{my_transcript}}\n对方说：{{their_transcript}}\n合并：{{transcript}}",
+        is_auto_run=False,
+    )
+
+    cache = PromptsCache(db); cache.load()
+    p = cache.by_slug("speaker-test")
+    out = cache.render(
+        p,
+        meeting_title="t",
+        transcript="MERGED",
+        my_transcript="MIC",
+        their_transcript="SYS",
+        date="2026-05-22",
+    )
+    assert "我说：MIC" in out
+    assert "对方说：SYS" in out
+    assert "合并：MERGED" in out
+
+
+def test_render_defaults_unknown_speaker_vars_to_empty_string(tmp_path):
+    """Legacy prompts that don't pass my_/their_transcript still render OK."""
+    db = tmp_path / "p.sqlite"
+    repo = PromptsRepo(open_db(db))
+    repo.add(
+        slug="legacy",
+        name="Legacy",
+        category=Category.SUMMARY,
+        content="只有 mic：[{{my_transcript}}] 只有 sys：[{{their_transcript}}]",
+        is_auto_run=False,
+    )
+
+    cache = PromptsCache(db); cache.load()
+    p = cache.by_slug("legacy")
+    out = cache.render(p, meeting_title="t", transcript="X", date="2026-05-22")
+    assert out == "只有 mic：[] 只有 sys：[]"

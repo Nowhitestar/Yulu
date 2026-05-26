@@ -37,8 +37,11 @@ def test_enqueues_one_event_per_auto_run_prompt(tmp_path, monkeypatch):
     }))
     db = _bootstrap_db(tmp_path, with_action_items=True)
     monkeypatch.setattr(transcribe, "PROMPTS_DB", db, raising=False)
-    monkeypatch.setattr(transcribe, "_request_final_transcribe",
-                        lambda *a, **k: "the transcript")
+    monkeypatch.setattr(
+        transcribe, "_request_final_transcribe_raw",
+        lambda *a, **k: {"status": "ok", "layout": "mono",
+                         "text": "the transcript", "segments": []},
+    )
     queue_path = fake_home / "agent-queue.json"
     monkeypatch.setattr(transcribe, "AGENT_QUEUE_PATH", queue_path, raising=False)
 
@@ -72,8 +75,11 @@ def test_no_auto_run_prompts_means_no_events(tmp_path, monkeypatch):
     db = tmp_path / "prompts.sqlite"
     open_db(db)  # schema only
     monkeypatch.setattr(transcribe, "PROMPTS_DB", db, raising=False)
-    monkeypatch.setattr(transcribe, "_request_final_transcribe",
-                        lambda *a, **k: "x")
+    monkeypatch.setattr(
+        transcribe, "_request_final_transcribe_raw",
+        lambda *a, **k: {"status": "ok", "layout": "mono",
+                         "text": "x", "segments": []},
+    )
     queue_path = fake_home / "agent-queue.json"
     monkeypatch.setattr(transcribe, "AGENT_QUEUE_PATH", queue_path, raising=False)
 
