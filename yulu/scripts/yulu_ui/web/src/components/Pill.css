@@ -1,0 +1,67 @@
+/* web/src/components/Pill.css */
+.pill {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 100;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px;
+  border-radius: var(--radius-pill);
+  background: var(--glass);
+  backdrop-filter: var(--blur-pill);
+  -webkit-backdrop-filter: var(--blur-pill);
+  box-shadow: var(--edge-shadow), var(--shadow);
+  font-size: 13px;
+  color: var(--fg);
+  user-select: none;
+}
+.pill-idle:hover { background: var(--glass-2); cursor: pointer; }
+.pill-mic { font-size: 14px; }
+.pill-hotkey {
+  font-family: "SF Mono", ui-monospace, monospace;
+  font-size: 11px;
+  color: var(--fg-3);
+}
+.pill-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--red);
+}
+.pill-dot.pulse { animation: pillPulse 1s ease-in-out infinite; }
+@keyframes pillPulse { 0%,100% { opacity: 1; } 50% { opacity: 0.45; } }
+.pill-time {
+  font-family: "SF Mono", ui-monospace, monospace;
+  font-variant-numeric: tabular-nums;
+  font-size: 13px;
+}
+.pill-meter { display: inline-flex; gap: 2px; }
+.pill-meter .cell {
+  width: 4px; height: 12px; border-radius: 1px;
+  background: var(--row-hover);
+}
+.pill-meter .cell.on { background: var(--accent); }
+.pill-stop {
+  width: 22px; height: 22px;
+  border-radius: 6px;
+  background: var(--row-hover);
+  color: var(--fg);
+}
+.pill-stop:hover { background: var(--glass-3); }
+.pill-processing { color: var(--fg-2); }
+.pill-spinner {
+  width: 12px; height: 12px;
+  border-radius: 50%;
+  border: 2px solid var(--fg-3);
+  border-top-color: var(--accent);
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.pill-meeting { color: var(--fg-2); }
+.pill-meeting .pill-dot { background: var(--fg-3); animation: none; }
+.pill-down {
+  cursor: pointer;
+  color: var(--red);
+  box-shadow: var(--edge-shadow), 0 0 0 1px var(--red);
+}
+.pill-warn { font-size: 14px; }
