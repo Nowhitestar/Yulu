@@ -15,17 +15,31 @@ function listFromDir(dir: string) {
     const stem = m[1]!;
     const wavPath = join(dir, f);
     const stat = statSync(wavPath);
+    const transcriptPath = join(dir, `${stem}.transcript.txt`);
+    const hasTranscript = existsSync(transcriptPath);
     rows.push({
       stem,
       wavPath,
       sizeBytes: stat.size,
       mtimeMs: stat.mtimeMs,
-      hasTranscript: existsSync(join(dir, `${stem}.transcript.txt`)),
+      hasTranscript,
       hasSummary:    existsSync(join(dir, `${stem}.summary.md`)),
+      firstWords:    hasTranscript ? firstWordsOf(transcriptPath) : null,
     });
   }
   rows.sort((a, b) => b.mtimeMs - a.mtimeMs);
   return rows;
+}
+
+function firstWordsOf(path: string): string | null {
+  try {
+    const raw = readFileSync(path, "utf8").trim();
+    if (!raw) return null;
+    if (raw.length <= 80) return raw;
+    return raw.slice(0, 80) + "…";
+  } catch {
+    return null;
+  }
 }
 
 export const voicemailsRouter = router({

@@ -60,4 +60,35 @@ describe("voicemailsRouter", () => {
       expect(existsSync(join(voicemailsDir, "voicemail_20260526_100000.transcript.txt"))).toBe(false);
     } finally { cleanup(); }
   });
+
+  it("list() returns firstWords from transcript.txt (first 80 chars, ellipsis if longer)", async () => {
+    const { ctx, voicemailsDir, cleanup } = makeCtx();
+    try {
+      const { writeFileSync } = await import("node:fs");
+      const long = "A".repeat(100);
+      writeFileSync(join(voicemailsDir, "voicemail_20260526_110000.transcript.txt"), long);
+      const caller = createCaller(voicemailsRouter, ctx);
+      const rows = (await caller.list({})) as Array<{ stem: string; firstWords: string | null }>;
+      const r110 = rows.find((r) => r.stem === "voicemail_20260526_110000")!;
+      expect(r110.firstWords).toBe("A".repeat(80) + "…");
+
+      const r100 = rows.find((r) => r.stem === "voicemail_20260526_100000")!;
+      expect(r100.firstWords).toBe("hello world");
+
+      const r120 = rows.find((r) => r.stem === "voicemail_20260526_120000")!;
+      expect(r120.firstWords).toBe("second message");
+    } finally { cleanup(); }
+  });
+
+  it("list() returns firstWords: null when no transcript file", async () => {
+    const { ctx, voicemailsDir, cleanup } = makeCtx();
+    try {
+      const { unlinkSync } = await import("node:fs");
+      unlinkSync(join(voicemailsDir, "voicemail_20260526_120000.transcript.txt"));
+      const caller = createCaller(voicemailsRouter, ctx);
+      const rows = (await caller.list({})) as Array<{ stem: string; firstWords: string | null }>;
+      const r120 = rows.find((r) => r.stem === "voicemail_20260526_120000")!;
+      expect(r120.firstWords).toBeNull();
+    } finally { cleanup(); }
+  });
 });

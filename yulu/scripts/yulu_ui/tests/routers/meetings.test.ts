@@ -40,4 +40,18 @@ describe("meetingsRouter", () => {
       expect(r.realtime).toBe("noisy live");
     } finally { cleanup(); }
   });
+
+  it("list() returns firstWords + attendeeCount (undefined for v1)", async () => {
+    const { ctx, cleanup } = makeCtx();
+    try {
+      const caller = createCaller(meetingsRouter, ctx);
+      const rows = (await caller.list({})) as Array<{ stem: string; firstWords: string | null; attendeeCount?: number }>;
+      const standup = rows.find((r) => r.stem === "WeeklyStandup_20260520_100000")!;
+      expect(standup.firstWords).toBe("agenda");
+      expect(standup.attendeeCount).toBeUndefined();
+
+      const oneOnOne = rows.find((r) => r.stem === "1on1_20260521_140000")!;
+      expect(oneOnOne.firstWords).toBeNull();
+    } finally { cleanup(); }
+  });
 });

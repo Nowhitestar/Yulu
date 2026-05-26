@@ -39,6 +39,8 @@ export const meetingsRouter = router({
           hasTranscript: existsSync(join(dir, `${parsed.stem}.transcript.txt`)),
           hasSummary:    existsSync(join(dir, `${parsed.stem}.summary.md`)),
           hasRealtime:   existsSync(join(dir, `${parsed.stem}.realtime.transcript.txt`)),
+          firstWords:    firstWordsOf(join(dir, `${parsed.stem}.transcript.txt`)),
+          attendeeCount: undefined as number | undefined,
         });
       }
       rows.sort((a, b) => b.mtimeMs - a.mtimeMs);
@@ -89,3 +91,15 @@ export const meetingsRouter = router({
       return { removed };
     }),
 });
+
+function firstWordsOf(path: string): string | null {
+  try {
+    if (!existsSync(path)) return null;
+    const raw = readFileSync(path, "utf8").trim();
+    if (!raw) return null;
+    if (raw.length <= 80) return raw;
+    return raw.slice(0, 80) + "…";
+  } catch {
+    return null;
+  }
+}
