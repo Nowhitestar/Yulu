@@ -1,0 +1,33 @@
+/* web/src/routes/inbox/search.css */
+.search-page {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  padding: 10px 14px;
+  gap: 10px;
+}
+.search-header {
+  display: flex;
+  gap: 10px;
+}
+.search-input {
+  flex: 1;
+  padding: 10px 14px;
+  border-radius: var(--radius-panel);
+  background: var(--glass);
+  color: var(--fg);
+  font-size: 13px;
+  border: none;
+  box-shadow: var(--edge-shadow);
+}
+.search-input::placeholder { color: var(--fg-3); }
+.search-input:focus { outline: 2px solid var(--accent-soft); outline-offset: 0; }
+.search-results {
+  flex: 1;
+  overflow-y: auto;
+}
+.search-empty {
+  padding: 20px;
+  color: var(--fg-3);
+  font-size: 12px;
+}
