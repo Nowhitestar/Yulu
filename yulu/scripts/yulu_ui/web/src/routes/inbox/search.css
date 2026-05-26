@@ -67,3 +67,18 @@
   color: var(--fg-3);
   font-family: "SF Mono", ui-monospace, monospace;
 }
+.search-select-wrap {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--fg-3);
+}
+.search-select {
+  padding: 6px 8px;
+  border-radius: var(--radius-inner);
+  background: var(--glass);
+  color: var(--fg);
+  font-size: 12px;
+  border: none;
+}

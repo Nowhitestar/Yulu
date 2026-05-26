@@ -4,9 +4,17 @@ import { useState } from "react";
 import { useSearchParams } from "react-router";
 import { trpc } from "../../trpc.js";
 import { useDebounced } from "../../hooks/useDebounced.js";
+import { FilterChips, type ChipDef } from "../../components/FilterChips.js";
 import "./search.css";
 
 export const handle = { breadcrumb: "Inbox / Search", filters: null };
+
+const SINCE_CHIPS: ChipDef[] = [
+  { id: "all", label: "All time" },
+  { id: "7d", label: "Last 7d" },
+  { id: "30d", label: "Last 30d" },
+  { id: "90d", label: "Last 90d" },
+];
 
 interface Hit {
   kind: string;
@@ -20,10 +28,13 @@ interface Hit {
 
 export function Search() {
   const [params, setParams] = useSearchParams();
-  // Local override lets the controlled input reflect typing immediately
+  // Local override lets controlled inputs reflect changes immediately
   // even if the router debounces or rejects setSearchParams (e.g. jsdom in
   // tests). The URL is still updated for shareable deep links.
   const [override, setOverride] = useState<string | null>(null);
+  const [typeOverride, setTypeOverride] = useState<string | null>(null);
+  const [inOverride, setInOverride] = useState<string | null>(null);
+  const [sinceOverride, setSinceOverride] = useState<string | null>(null);
   const urlQ = params.get("q") ?? "";
   const q = override ?? urlQ;
   const debouncedQ = useDebounced(q, 300);
@@ -36,18 +47,28 @@ export function Search() {
     setParams(next, { replace: true });
   };
 
-  const type = params.get("type");
-  const inLayer = params.get("in");
+  const type = typeOverride ?? params.get("type") ?? "";
+  const inLayer = inOverride ?? params.get("in") ?? "";
+  const since = sinceOverride ?? params.get("since") ?? "";
+
+  const setParam = (key: string, value: string) => {
+    if (key === "type") setTypeOverride(value);
+    else if (key === "in") setInOverride(value);
+    else if (key === "since") setSinceOverride(value);
+    const next = new URLSearchParams(params);
+    if (value) next.set(key, value);
+    else next.delete(key);
+    setParams(next, { replace: true });
+  };
+
   const kinds =
     (type === "voicemail" || type === "meeting") &&
     (inLayer === "summary" || inLayer === "transcript")
       ? ([`${type}_${inLayer}`] as const)
       : undefined;
 
-  const since = params.get("since") ?? undefined;
-
   const { data, isPending } = trpc.search.run.useQuery(
-    { query: debouncedQ, kinds: kinds as never, since },
+    { query: debouncedQ, kinds: kinds as never, since: since || undefined },
     { enabled: debouncedQ.length >= 2 },
   );
 
@@ -62,6 +83,37 @@ export function Search() {
           value={q}
           onChange={(e) => setQ(e.target.value)}
           autoFocus
+        />
+        <label className="search-select-wrap">
+          <span className="search-select-label">Type</span>
+          <select
+            className="search-select"
+            aria-label="Type"
+            value={type}
+            onChange={(e) => setParam("type", e.target.value)}
+          >
+            <option value="">Any</option>
+            <option value="voicemail">Voicemail</option>
+            <option value="meeting">Meeting</option>
+          </select>
+        </label>
+        <label className="search-select-wrap">
+          <span className="search-select-label">In</span>
+          <select
+            className="search-select"
+            aria-label="In"
+            value={inLayer}
+            onChange={(e) => setParam("in", e.target.value)}
+          >
+            <option value="">Any</option>
+            <option value="summary">Summary</option>
+            <option value="transcript">Transcript</option>
+          </select>
+        </label>
+        <FilterChips
+          chips={SINCE_CHIPS}
+          activeIds={since ? [since] : []}
+          onChange={(ids) => setParam("since", ids[0] === "all" ? "" : (ids[0] ?? ""))}
         />
       </div>
       <div className="search-results">
