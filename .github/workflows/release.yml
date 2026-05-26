@@ -1,0 +1,234 @@
+name: Release
+
+# Trigger: push a tag matching v*.
+# Example: `git tag v0.6.0 && git push origin v0.6.0` cuts a release.
+#
+# What this workflow does NOT do:
+#   - run on every push to main (releases are explicit)
+#   - run on PRs (those go through ci.yml)
+#   - notarize the binaries (deferred — see RELEASING.md)
+#
+# Required repo secrets (Settings → Secrets and variables → Actions):
+#   MACOS_CERT_P12_BASE64    base64 of the Developer ID Application .p12 export
+#   MACOS_CERT_PASSWORD      password used when exporting the .p12
+#   MACOS_KEYCHAIN_PASSWORD  anything — ephemeral keychain password used in CI
+#   YULU_CODESIGN_IDENTITY   cert Common Name, e.g.
+#                            "Developer ID Application: 不白 (WMU9678ZQL)"
+#
+# If signing secrets are missing, the workflow falls back to ad-hoc signing
+# (signature "-") so a release still ships — just with Gatekeeper warnings
+# for end users.
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write        # create release + push VERSION-bump commit back to main
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false   # never abort a release mid-flight
+
+jobs:
+  release:
+    name: Build, sign, package, release
+    runs-on: macos-14            # Apple silicon to match user's hardware
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout (full history, on the tag's commit)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.ref }}
+
+      - name: Parse version from tag
+        id: ver
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF#refs/tags/}"
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.+-]+)?$ ]]; then
+            echo "::error::Tag must look like v0.6.0 or v0.6.0-rc1, got: $TAG"
+            exit 1
+          fi
+          VERSION="${TAG#v}"
+          echo "tag=$TAG"          >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION"  >> "$GITHUB_OUTPUT"
+          echo "Released version: $VERSION (tag $TAG)"
+
+      - name: Import Apple Developer signing identity (if secret present)
+        id: signing
+        env:
+          MACOS_CERT_P12_BASE64:    ${{ secrets.MACOS_CERT_P12_BASE64 }}
+          MACOS_CERT_PASSWORD:      ${{ secrets.MACOS_CERT_PASSWORD }}
+          MACOS_KEYCHAIN_PASSWORD:  ${{ secrets.MACOS_KEYCHAIN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${MACOS_CERT_P12_BASE64:-}" ]]; then
+            echo "::warning::No MACOS_CERT_P12_BASE64 secret set — falling back to ad-hoc signing (-)"
+            echo "have_cert=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          KEYCHAIN="$RUNNER_TEMP/yulu-release.keychain-db"
+          CERT_PATH="$RUNNER_TEMP/cert.p12"
+          echo "$MACOS_CERT_P12_BASE64" | base64 --decode > "$CERT_PATH"
+          security create-keychain -p "$MACOS_KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$MACOS_KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security import "$CERT_PATH" -P "$MACOS_CERT_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN"
+          security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | xargs)
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$MACOS_KEYCHAIN_PASSWORD" "$KEYCHAIN" >/dev/null
+          rm -f "$CERT_PATH"
+          # Show which identities are now visible to the build scripts.
+          security find-identity -v -p codesigning "$KEYCHAIN"
+          echo "have_cert=true" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Python test deps
+        run: |
+          set -euo pipefail
+          python3 -m pip install --upgrade pip
+          python3 -m pip install pytest
+
+      - name: Run full test suite (release gate)
+        run: |
+          set -euo pipefail
+          python3 -m pytest tests/ -q
+          # If anything fails, this step exits non-zero and the release aborts
+          # before any artifact is produced or any tag-side commit is pushed.
+
+      - name: Build Yulu.app (audio_daemon)
+        env:
+          YULU_CODESIGN_IDENTITY: ${{ secrets.YULU_CODESIGN_IDENTITY }}
+        run: |
+          set -euo pipefail
+          bash yulu/scripts/build_audio_daemon.sh
+          codesign -dvv yulu/scripts/Yulu.app 2>&1 | head -5 || true
+
+      - name: Build StatusAgent.app
+        env:
+          YULU_CODESIGN_IDENTITY: ${{ secrets.YULU_CODESIGN_IDENTITY }}
+        run: |
+          set -euo pipefail
+          bash yulu/scripts/build_status_agent.sh
+          codesign -dvv yulu/scripts/StatusAgent.app 2>&1 | head -5 || true
+
+      - name: Sync VERSION file to tag (commit back to main if changed)
+        env:
+          NEW_VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          set -euo pipefail
+          CURRENT="$(tr -d '[:space:]' < VERSION)"
+          if [[ "$CURRENT" == "$NEW_VERSION" ]]; then
+            echo "VERSION already at $NEW_VERSION — no commit needed"
+            exit 0
+          fi
+          echo "Bumping VERSION: $CURRENT → $NEW_VERSION"
+          # The tag is on a specific commit; we sync VERSION on main, then
+          # leave the release artifact as-built (the tag commit's app bundles
+          # already match $NEW_VERSION because build scripts read VERSION at
+          # build time — verify and re-build if needed below).
+          if [[ "$CURRENT" != "$NEW_VERSION" ]]; then
+            # Re-build with corrected VERSION so the embedded plist matches.
+            echo "$NEW_VERSION" > VERSION
+            bash yulu/scripts/build_audio_daemon.sh
+            bash yulu/scripts/build_status_agent.sh
+          fi
+          # Push the bump back to main on a side branch so we don't fight the
+          # tag's own ref. Use a noreply identity so the commit is clearly CI.
+          git config user.name  "yulu-release-bot"
+          git config user.email "yulu-release-bot@users.noreply.github.com"
+          git fetch origin main
+          git checkout -B release-version-bump origin/main
+          echo "$NEW_VERSION" > VERSION
+          git add VERSION
+          git commit -m "chore(release): bump VERSION to $NEW_VERSION
+
+Auto-generated by .github/workflows/release.yml after tag v$NEW_VERSION
+was pushed. The release artifact attached to the GitHub Release was built
+from the tagged commit; this commit keeps main's VERSION file in sync so
+yulu --version on a freshly cloned tree reports the released number.
+"
+          git push origin release-version-bump:main
+
+      - name: Package release tarball
+        id: pkg
+        env:
+          NEW_VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          set -euo pipefail
+          STAGE="$RUNNER_TEMP/yulu-${NEW_VERSION}-mac-arm64"
+          mkdir -p "$STAGE"
+          # Copy everything an end user needs to run setup.sh on a fresh box.
+          # Exclude dev-only paths (.git, tests, .planning, docs/superpowers, .claude).
+          rsync -a \
+            --exclude='.git' \
+            --exclude='.github' \
+            --exclude='.claude' \
+            --exclude='.planning' \
+            --exclude='tests' \
+            --exclude='docs/superpowers' \
+            --exclude='__pycache__' \
+            --exclude='*.pyc' \
+            --exclude='.pytest_cache' \
+            ./ "$STAGE/"
+          # Confirm the pre-built apps made it in (they're the whole point).
+          test -x "$STAGE/yulu/scripts/Yulu.app/Contents/MacOS/audio_daemon"
+          test -x "$STAGE/yulu/scripts/StatusAgent.app/Contents/MacOS/status_agent"
+          # Tar it up.
+          TAR="$RUNNER_TEMP/yulu-${NEW_VERSION}-mac-arm64.tar.gz"
+          tar -C "$RUNNER_TEMP" -czf "$TAR" "yulu-${NEW_VERSION}-mac-arm64"
+          ls -lh "$TAR"
+          echo "tarball=$TAR" >> "$GITHUB_OUTPUT"
+          echo "tarname=yulu-${NEW_VERSION}-mac-arm64.tar.gz" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG:      ${{ steps.ver.outputs.tag }}
+          VERSION:  ${{ steps.ver.outputs.version }}
+          TARBALL:  ${{ steps.pkg.outputs.tarball }}
+          HAVE_CERT: ${{ steps.signing.outputs.have_cert }}
+        run: |
+          set -euo pipefail
+          SIGN_NOTE="Self-signed with Apple Developer ID."
+          if [[ "$HAVE_CERT" != "true" ]]; then
+            SIGN_NOTE="⚠️ Ad-hoc signed (no MACOS_CERT_P12_BASE64 in CI). Gatekeeper will warn on first run — open with right-click → Open the first time."
+          fi
+          BODY=$(cat <<EOF
+          Yulu $VERSION — macOS, Apple Silicon.
+
+          ## Install (fresh machine)
+
+          \`\`\`bash
+          curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/install.sh | bash
+          \`\`\`
+
+          ## Install (offline / from tarball)
+
+          1. Download \`yulu-${VERSION}-mac-arm64.tar.gz\` below.
+          2. Extract: \`tar -xzf yulu-${VERSION}-mac-arm64.tar.gz\`
+          3. Run setup: \`cd yulu-${VERSION}-mac-arm64 && bash yulu/scripts/setup.sh\`
+
+          ## Upgrade an existing install
+
+          \`\`\`bash
+          yulu update    # runs git pull + setup.sh --upgrade
+          \`\`\`
+
+          $SIGN_NOTE
+          EOF
+          )
+          # --generate-notes auto-fills PR/commit history since previous tag.
+          # We append our install-instructions body on top.
+          gh release create "$TAG" \
+            --title "$TAG" \
+            --notes "$BODY" \
+            --generate-notes \
+            "$TARBALL#yulu-${VERSION}-mac-arm64.tar.gz"
