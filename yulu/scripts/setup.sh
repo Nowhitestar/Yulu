@@ -885,6 +885,12 @@ install_launchagents() {
         PYTHONPATH="$SCRIPT_DIR" "$PYTHON_BIN" -m vocab.cli seed --from-current >/dev/null 2>&1 \
           && ok "vocab seed 完成" \
           || warn "vocab seed 失败（可稍后重试: yulu vocab seed --from-current）"
+
+        # Seed prompts.sqlite from frozen snapshots (idempotent).
+        info "种子 prompts.sqlite..."
+        PYTHONPATH="$SCRIPT_DIR" "$PYTHON_BIN" -m prompts.cli seed --from-current >/dev/null 2>&1 \
+          && ok "prompts seed 完成" \
+          || warn "prompts seed 失败（可稍后重试: yulu prompts seed --from-current）"
     fi
 
     # Calendar service (optional, only if gog configured)

@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shlex
+import signal
 import subprocess
 import sys
 from datetime import datetime
@@ -22,23 +24,17 @@ from queue_store import claim_summary_request, update_event
 CONFIG_PATH = Path.home() / ".config" / "yulu" / "config.json"
 QUEUE_PATH = Path.home() / ".config" / "yulu" / "agent-queue.json"
 LOG_PATH = Path.home() / ".config" / "yulu" / "agent_queue_worker.log"
+PID_PATH = Path.home() / ".config" / "yulu" / "agent_queue_worker.pid"
 WORKER_NAME = "yulu-agent-queue-worker"
-SUMMARY_PROMPT = """请基于以下会议转录生成最终版结构化会议纪要。
+PROMPTS_DB = Path.home() / ".config" / "yulu" / "prompts.sqlite"
 
-会议主题：{title}
+# Set by SIGHUP; checked between events in process_queue_once.
+_RELOAD_PROMPTS = False
 
-{template_section}
 
-要求：
-1. 输出中文 Markdown。
-2. 包含会议基本信息、TL;DR、Discussion Points、Action Items、Open Questions / Blockers、Decisions Made。
-3. 不要输出解释、寒暄或代码块，只输出纪要正文。
-
-会议转录：
----
-{transcript}
----
-"""
+def _handle_sighup(_signum, _frame):
+    global _RELOAD_PROMPTS
+    _RELOAD_PROMPTS = True
 
 
 def _now() -> str:
@@ -77,23 +73,6 @@ def _load_llm_command(config_path: Path = CONFIG_PATH) -> list[str]:
     return []
 
 
-def _render_summary_prompt(entry: dict[str, Any]) -> str:
-    transcript_path = Path(str(entry.get("transcript_path", ""))).expanduser()
-    if not transcript_path.exists():
-        raise FileNotFoundError(f"transcript not found: {transcript_path}")
-    transcript = transcript_path.read_text(encoding="utf-8").strip()
-    template_section = ""
-    template_path = entry.get("template_path")
-    if template_path:
-        p = Path(str(template_path)).expanduser()
-        if p.exists():
-            template = p.read_text(encoding="utf-8").strip()
-            if template:
-                template_section = f"请优先遵循这个纪要模板：\n---\n{template}\n---"
-    title = str(entry.get("title") or transcript_path.stem)
-    return SUMMARY_PROMPT.format(title=title, transcript=transcript, template_section=template_section)
-
-
 def _looks_like_agent_event_json(text: str) -> bool:
     """Reject accidental agent-queue JSON returned by an LLM shim."""
     s = (text or "").strip()
@@ -123,12 +102,11 @@ def _looks_like_agent_event_json(text: str) -> bool:
 def _is_valid_summary(text: str) -> bool:
     """Basic guardrail before overwriting a meeting summary."""
     s = (text or "").strip()
-    if len(s) < 500:
+    if len(s) < 40:
         return False
     if _looks_like_agent_event_json(s):
         return False
-    required = ["## TL;DR", "## Discussion Points", "## Action Items"]
-    return all(section in s for section in required)
+    return True
 
 
 def _run_llm(prompt: str, llm_command: list[str], timeout_sec: int) -> str:
@@ -153,29 +131,152 @@ def _run_llm(prompt: str, llm_command: list[str], timeout_sec: int) -> str:
     return output + "\n"
 
 
-def _handle_summary_request(entry: dict[str, Any], llm_command: list[str], timeout_sec: int) -> bool:
-    prompt = _render_summary_prompt(entry)
-    summary_path = Path(str(entry.get("summary_path", ""))).expanduser()
-    transcript_path = Path(str(entry.get("transcript_path", ""))).expanduser()
-    if not summary_path:
-        raise ValueError("summary_path is missing")
-    summary = _run_llm(prompt, llm_command, timeout_sec)
-    summary_path.parent.mkdir(parents=True, exist_ok=True)
-    summary_path.write_text(summary, encoding="utf-8")
+def _handle_summary_request(
+    entry: dict[str, Any],
+    llm_command: list[str],
+    timeout_sec: int,
+    *,
+    cache,  # PromptsCache
+    prompts_db: Path = PROMPTS_DB,
+) -> bool:
+    """Single LLM dispatch for one summary_request event.
 
+    Flow:
+      1. Resolve prompt content:
+         - prefer entry['prompt_content_snapshot'] + entry['prompt_*'] (new events)
+         - else load default 'summary' slug from cache (legacy events)
+      2. Compute meeting_title (entry['title']) and date via resolve_meeting_date
+         on entry.get('audio_path') or derived from transcript_path.
+      3. Substitute {{transcript}}, {{meeting_title}}, {{date}} in the snapshot.
+      4. Open SummariesRepo (short-lived conn); insert row via .start(...)
+         → mark_running.
+      5. Run llm_command via subprocess; capture stdout; validate via
+         _is_valid_summary (non-empty + not agent-event-json).
+      6. For cleanup slug (entry['prompt_slug'] == 'transcript-cleanup'):
+         - Write output to transcript_path (overwriting transcribe.py's raw write)
+         - Skip html artifact + send_summary
+         - SummariesRepo.mark_done with output_path = transcript_path
+      7. For summary slugs (everything else):
+         - Write output to summary_path
+         - Try html_artifact (failures logged + non-fatal)
+         - For prompt_slug == 'summary' (default), call _dispatch_summary
+         - SummariesRepo.mark_done(duration_ms, word_count, html_path=...)
+      8. On any failure 4–7: SummariesRepo.mark_error(error=str(exc)); re-raise.
+      9. Mutate entry in place: entry['status']='done', entry['processed_by'],
+         entry['processed_at'] = _now(), entry['html_path'] if produced.
+
+    Returns True on success. Raises on failure.
+    """
+    import time
+    from prompts import SummariesRepo, open_db
+    from prompts.cache import resolve_meeting_date
+
+    transcript_path = Path(str(entry.get("transcript_path", ""))).expanduser()
+    summary_path = Path(str(entry.get("summary_path", ""))).expanduser()
+    audio_path_str = entry.get("audio_path") or ""
+    # Derive audio path from transcript path if not provided (legacy events)
+    if not audio_path_str and transcript_path:
+        audio_path_str = str(transcript_path).replace(".transcript.txt", ".wav")
+
+    # Resolve prompt
+    snapshot = entry.get("prompt_content_snapshot")
+    prompt_id = entry.get("prompt_id") or ""
+    prompt_slug = entry.get("prompt_slug") or "summary"
+    prompt_name = entry.get("prompt_name") or "Standard Summary"
+    if not snapshot:
+        # Legacy event → fall back to default summary prompt from cache
+        default = cache.by_slug("summary")
+        if default is None:
+            raise RuntimeError(
+                "legacy event has no snapshot and no default 'summary' prompt in cache"
+            )
+        snapshot = default.content
+        prompt_id = prompt_id or default.id
+        prompt_slug = prompt_slug or default.slug
+        prompt_name = prompt_name or default.name
+
+    # Transcript must exist; fail early for a clear error message.
+    if not transcript_path.exists():
+        raise FileNotFoundError(f"transcript not found: {transcript_path}")
+
+    # Compute substitution variables
+    transcript_text = transcript_path.read_text(encoding="utf-8")
+
+    title = entry.get("title", "") or ""
+    date = resolve_meeting_date(Path(audio_path_str)) if audio_path_str else ""
+    rendered = (
+        snapshot
+        .replace("{{transcript}}", transcript_text)
+        .replace("{{meeting_title}}", title)
+        .replace("{{date}}", date)
+    )
+
+    # cleanup slug writes back to transcript_path
+    is_cleanup = (prompt_slug == "transcript-cleanup")
+    output_path_str = str(transcript_path) if is_cleanup else str(summary_path)
+
+    # Record start in SummariesRepo (short-lived connection)
+    conn = open_db(prompts_db)
+    try:
+        srepo = SummariesRepo(conn)
+        sid = srepo.start(
+            audio_path=audio_path_str,
+            prompt_id=prompt_id,
+            prompt_slug=prompt_slug,
+            prompt_name=prompt_name,
+            prompt_content=snapshot,
+            output_path=output_path_str,
+            model=(llm_command[0] if llm_command else None),
+        )
+        srepo.mark_running(sid)
+    finally:
+        conn.close()
+
+    # Run LLM
+    t0 = time.monotonic()
+    try:
+        output = _run_llm(rendered, llm_command, timeout_sec)
+    except Exception as exc:
+        conn = open_db(prompts_db)
+        try:
+            SummariesRepo(conn).mark_error(sid, error=str(exc)[:1000])
+        finally:
+            conn.close()
+        raise
+    duration_ms = int((time.monotonic() - t0) * 1000)
+
+    # Write output to disk
+    output_path = Path(output_path_str)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(output, encoding="utf-8")
+
+    # HTML artifact: only for summary-category prompts that produce a .md
     html_path = ""
-    if transcript_path.exists():
+    if not is_cleanup and transcript_path.exists():
         try:
             from html_artifact import write_meeting_summary_html
             html_path = str(write_meeting_summary_html(
                 summary_path,
                 transcript_path,
                 summary_path.with_suffix(".html"),
-                title=str(entry.get("title") or summary_path.stem),
+                title=title or summary_path.stem,
             ))
         except Exception as exc:
-            _log(f"html generation failed title={entry.get('title', '')!r}: {exc}")
+            _log(f"html generation failed slug={prompt_slug!r}: {exc}")
 
+    # Record done
+    conn = open_db(prompts_db)
+    try:
+        SummariesRepo(conn).mark_done(
+            sid,
+            duration_ms=duration_ms,
+            word_count=len((output or "").split()),
+            html_path=html_path or None,
+        )
+    finally:
+        conn.close()
+
+    # Mutate entry for queue state update by caller
     entry["status"] = "done"
     entry["processed_by"] = WORKER_NAME
     entry["processed_at"] = _now()
@@ -225,6 +326,7 @@ def process_queue_once(
     llm_command: list[str] | None = None,
     timeout_sec: int = 900,
     dispatch_output: bool = False,
+    prompts_db: Path = PROMPTS_DB,
 ) -> int:
     queue_path = Path(queue_path)
     if llm_command is None:
@@ -233,8 +335,17 @@ def process_queue_once(
         _log("llm.command not configured; leaving summary_request events for an external agent")
         return 0
 
+    # Lazy import to keep tests fast that don't exercise the LLM path.
+    from prompts.cache import PromptsCache
+    cache = PromptsCache(prompts_db)
+    cache.load()
+
     processed = 0
     while True:
+        global _RELOAD_PROMPTS
+        if _RELOAD_PROMPTS:
+            cache.reload()
+            _RELOAD_PROMPTS = False
         entry = claim_summary_request(path=queue_path, worker_name=WORKER_NAME)
         if not entry:
             break
@@ -245,8 +356,11 @@ def process_queue_once(
             "summary_path": entry.get("summary_path"),
         }
         try:
-            _handle_summary_request(entry, llm_command, timeout_sec)
-            if dispatch_output:
+            _handle_summary_request(
+                entry, llm_command, timeout_sec,
+                cache=cache, prompts_db=prompts_db,
+            )
+            if dispatch_output and entry.get("prompt_slug", "summary") == "summary":
                 entry.update(_dispatch_summary(entry))
             processed += 1
             update_event(event_id, entry, path=queue_path, match=match)
@@ -268,6 +382,21 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--queue", type=Path, default=QUEUE_PATH)
     parser.add_argument("--timeout", type=int, default=900)
     args = parser.parse_args(argv)
+
+    # Write pid file so `yulu prompts ...` mutations can SIGHUP us for
+    # PromptsCache reload between events. Best-effort; failure is ignored.
+    try:
+        PID_PATH.parent.mkdir(parents=True, exist_ok=True)
+        PID_PATH.write_text(str(os.getpid()), encoding="utf-8")
+    except OSError:
+        pass
+
+    try:
+        signal.signal(signal.SIGHUP, _handle_sighup)
+    except (ValueError, OSError):
+        # Non-main thread or unsupported platform; ignore.
+        pass
+
     count = process_queue_once(queue_path=args.queue, timeout_sec=args.timeout, dispatch_output=True)
     if count:
         print(f"processed {count} summary_request event(s)")

@@ -125,3 +125,53 @@ def test_launchd_plist_template_exists():
     text = plist.read_text(encoding="utf-8")
     for placeholder in ("__PYTHON__", "__SCRIPT_DIR__", "__HOME__", "__PATH__"):
         assert placeholder in text, f"{placeholder} missing from plist template"
+
+
+# ── Prompt Library acceptance (spec 2026-05-22-prompt-library-design.md) ──
+
+def test_transcribe_no_summary_prompt_constant():
+    """Acceptance #1: SUMMARY_PROMPT removed from transcribe.py + worker."""
+    for name in ("transcribe.py", "agent_queue_worker.py"):
+        text = (SCRIPTS / name).read_text(encoding="utf-8")
+        assert "SUMMARY_PROMPT" not in text, f"{name} still has SUMMARY_PROMPT"
+
+
+def test_transcribe_no_summarize_or_fallback_def():
+    """Acceptance #2: inline LLM helpers removed from transcribe.py."""
+    import re as _re
+    text = (SCRIPTS / "transcribe.py").read_text(encoding="utf-8")
+    assert _re.search(r"^\s*def\s+summarize\b", text, _re.MULTILINE) is None
+    assert _re.search(r"^\s*def\s+fallback_summary\b", text, _re.MULTILINE) is None
+    assert _re.search(r"^\s*def\s+refine_transcript\b", text, _re.MULTILINE) is None
+
+
+def test_transcribe_is_thin():
+    """Acceptance #8: transcribe.py is a thin orchestrator (<200 lines)."""
+    line_count = sum(1 for _ in (SCRIPTS / "transcribe.py").open(encoding="utf-8"))
+    assert line_count < 200, f"transcribe.py too long: {line_count} lines"
+
+
+def test_prompts_seed_count(tmp_path):
+    """Acceptance #3: yulu prompts seed ships at least 3 frozen seeds."""
+    sys.path.insert(0, str(SCRIPTS))
+    from prompts import PromptsRepo, open_db
+    from prompts.seed import seed_from_current
+    repo = PromptsRepo(open_db(tmp_path / "p.sqlite"))
+    seed_from_current(repo)
+    assert len(repo.list_prompts()) >= 3
+
+
+def test_prompts_package_complete():
+    """All expected prompts modules exist."""
+    pkg = SCRIPTS / "prompts"
+    for name in ("__init__.py", "db.py", "seed.py", "cli.py", "cache.py"):
+        assert (pkg / name).exists(), f"missing {name}"
+
+
+def test_summaries_cli_exists():
+    assert (SCRIPTS / "summaries_cli.py").exists()
+
+
+def test_adr_004_exists():
+    adr = SCRIPTS.parent / "spec" / "adr" / "004-prompt-library.md"
+    assert adr.exists(), f"ADR-004 missing at {adr}"

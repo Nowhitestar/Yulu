@@ -219,11 +219,34 @@ def send_summary(summary_path):
         return False
 
 
-if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        print("Usage: send_summary.py <summary_file_path>", file=sys.stderr)
-        sys.exit(1)
+def _resolve_summary_path(arg: str, prompt_slug: str | None) -> str:
+    """If `arg` looks like a .summary.md path, use it directly.
+    Else treat it as an audio path and derive the summary path from prompt_slug.
+    Default slug 'summary' → <audio>.summary.md; else <audio>.<slug>.summary.md."""
+    p = Path(arg)
+    if p.name.endswith(".summary.md") or p.name.endswith(".md"):
+        return str(p)
+    slug = prompt_slug or "summary"
+    suffix = ".summary.md" if slug == "summary" else f".{slug}.summary.md"
+    return str(p.with_suffix(suffix))
 
-    summary_file = sys.argv[1]
+
+if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser(
+        prog="send_summary.py",
+        description="Send a meeting summary to the configured channel.")
+    parser.add_argument("path",
+                        help="Summary .md path OR audio .wav path (combined with --prompt)")
+    parser.add_argument("--prompt", default=None,
+                        help="When path is an audio file, prompt slug to pick the "
+                             "summary version (default: 'summary' → <audio>.summary.md)")
+    args = parser.parse_args()
+
+    summary_file = _resolve_summary_path(args.path, args.prompt)
+    if not Path(summary_file).exists():
+        print(f"summary file not found: {summary_file}", file=sys.stderr)
+        print(f"  hint: yulu summaries list --audio {args.path}", file=sys.stderr)
+        sys.exit(1)
     success = send_summary(summary_file)
     sys.exit(0 if success else 1)
