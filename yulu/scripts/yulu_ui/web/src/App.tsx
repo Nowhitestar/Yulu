@@ -6,6 +6,7 @@ import { ThemeProvider } from "./theme.js";
 import { WsProvider } from "./ws.js";
 import { RootLayout } from "./routes/root.js";
 import { Voicemails, handle as voicemailsHandle } from "./routes/inbox/voicemails.js";
+import { VoicemailsIndex } from "./routes/inbox/voicemails.index.js";
 import { Meetings,   handle as meetingsHandle   } from "./routes/inbox/meetings.js";
 import { Search,     handle as searchHandle     } from "./routes/inbox/search.js";
 import { Prompts,    handle as promptsHandle    } from "./routes/knowledge/prompts.js";
@@ -25,7 +26,15 @@ const router = createBrowserRouter([
     Component: RootLayout,
     children: [
       { index: true, element: <Navigate to="/inbox/voicemails" replace /> },
-      { path: "inbox/voicemails",     Component: Voicemails,           handle: voicemailsHandle },
+      {
+        path: "inbox/voicemails",
+        Component: Voicemails,
+        handle: voicemailsHandle,
+        children: [
+          { index: true, Component: VoicemailsIndex },
+          // { path: ":stem", Component: VoicemailReader, handle: voicemailReaderHandle }, // wired in C.11
+        ],
+      },
       { path: "inbox/meetings",       Component: Meetings,             handle: meetingsHandle },
       { path: "inbox/search",         Component: Search,               handle: searchHandle },
       { path: "knowledge/prompts",    Component: Prompts,              handle: promptsHandle },
