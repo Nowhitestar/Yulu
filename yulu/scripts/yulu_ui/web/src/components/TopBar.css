@@ -1,0 +1,24 @@
+/* web/src/components/TopBar.css */
+.topbar {
+  display: flex;
+  align-items: center;
+  padding: 10px 14px;
+  background: var(--glass);
+  backdrop-filter: var(--blur-glass);
+  -webkit-backdrop-filter: var(--blur-glass);
+  border-radius: var(--radius-panel);
+  box-shadow: var(--edge-shadow);
+  gap: 14px;
+  min-height: 38px;
+}
+.topbar-breadcrumb {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--fg);
+}
+.topbar-filters {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
