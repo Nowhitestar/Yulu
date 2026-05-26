@@ -1,5 +1,5 @@
 import { describe, it, expect, afterAll, beforeAll } from "vitest";
-import { mkdtempSync, mkdirSync, cpSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, cpSync, rmSync, writeFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -64,5 +64,38 @@ describe("server", () => {
   it("rejects non-localhost via Host header guard", async () => {
     const r = await rawHttp(env.server.address.port, "/healthz", "evil.com:7777");
     expect(r.status).toBe(403);
+  });
+
+  it("serves /assets/* from dist/web/assets with the right Content-Type", async () => {
+    // Bootstrap a fake built UI directory for this test
+    const distWeb = join(env.root, "dist/web/assets");
+    mkdirSync(distWeb, { recursive: true });
+    writeFileSync(join(distWeb, "smoke.css"), ".x{color:red}");
+    process.env.YULU_UI_DIST_WEB = join(env.root, "dist/web");
+
+    const r = await fetch(`${env.baseUrl}/assets/smoke.css`);
+    expect(r.status).toBe(200);
+    expect(r.headers.get("content-type")).toMatch(/text\/css/);
+    expect(await r.text()).toContain("color:red");
+  });
+
+  it("falls back to index.html for unknown SPA paths", async () => {
+    // Ensure index.html exists
+    const distWeb = join(env.root, "dist/web");
+    mkdirSync(distWeb, { recursive: true });
+    writeFileSync(join(distWeb, "index.html"), "<!doctype html><html><body>SPA</body></html>");
+    process.env.YULU_UI_DIST_WEB = distWeb;
+
+    const r = await fetch(`${env.baseUrl}/inbox/voicemails`);
+    expect(r.status).toBe(200);
+    expect(r.headers.get("content-type")).toMatch(/text\/html/);
+    expect(await r.text()).toContain("SPA");
+  });
+
+  it("503s when SPA index.html is missing (dev-without-build scenario)", async () => {
+    delete process.env.YULU_UI_DIST_WEB;
+    const r = await fetch(`${env.baseUrl}/some/unknown/path`);
+    expect(r.status).toBe(503);
+    expect(await r.text()).toMatch(/UI not built/);
   });
 });

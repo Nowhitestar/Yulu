@@ -1,7 +1,8 @@
 import { createServer, type Server as HttpServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { Hono } from "hono";
 import { createReadStream, statSync, existsSync } from "node:fs";
-import { join, basename } from "node:path";
+import { join, basename, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
 import { Readable } from "node:stream";
 import { appRouter } from "./routers/_app.js";
@@ -11,8 +12,11 @@ import { openDb } from "./db.js";
 import { appPubSub } from "./pubsub.js";
 import { paths } from "./paths.js";
 import { mountWsMultiplexer } from "./ws.js";
+import { serveStaticFile } from "./staticFile.js";
 import { homedir } from "node:os";
 import type { AppContext } from "./trpc.js";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
 
 export interface RunningServer {
   http: HttpServer;
@@ -66,6 +70,21 @@ export async function startServer(): Promise<RunningServer> {
 
   app.get("/files/voicemails/*", (c) => streamAudio(c.req.raw, paths.voicemailsDir));
   app.get("/files/meetings/*",   (c) => streamAudio(c.req.raw, paths.moviesDir));
+
+  // Looked up dynamically so tests can flip YULU_UI_DIST_WEB between cases.
+  const distWebDir = () => process.env.YULU_UI_DIST_WEB ?? join(__dirname, "../dist/web");
+
+  app.get("/assets/*", (c) => serveStaticFile(c.req.raw, join(distWebDir(), "assets")));
+
+  // SPA fallback — must be the last GET route
+  app.get("*", (c) => {
+    if (c.req.method !== "GET") return c.text("not found", 404);
+    const indexPath = join(distWebDir(), "index.html");
+    if (!existsSync(indexPath)) {
+      return c.text("UI not built — run `npm run build` or use `npm run dev:web`", 503);
+    }
+    return serveStaticFile(c.req.raw, distWebDir(), "index.html");
+  });
 
   const http = createServer((req, res) => bridgeNodeToFetch(req, res, (r) => Promise.resolve(app.fetch(r))));
   mountWsMultiplexer(http, appPubSub);
