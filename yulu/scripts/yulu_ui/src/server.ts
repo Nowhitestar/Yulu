@@ -13,6 +13,7 @@ import { appPubSub } from "./pubsub.js";
 import { paths } from "./paths.js";
 import { mountWsMultiplexer } from "./ws.js";
 import { startInboxWatcher } from "./inboxWatcher.js";
+import { startLogTailer } from "./logTailer.js";
 import { serveStaticFile } from "./staticFile.js";
 import { homedir } from "node:os";
 import type { AppContext } from "./trpc.js";
@@ -99,12 +100,21 @@ export async function startServer(): Promise<RunningServer> {
     pubsub: appPubSub,
   });
 
+  const logTailer = startLogTailer({
+    configDir: paths.configDir,
+    pubsub: appPubSub,
+  });
+
   await new Promise<void>((resolve) => http.listen(port, host, resolve));
   const addr = http.address() as { port: number };
   return {
     http,
     address: addr,
-    close: () => new Promise<void>((resolve) => { inboxWatcher.stop(); http.close(() => resolve()); }),
+    close: () => new Promise<void>((resolve) => {
+      logTailer.stop();
+      inboxWatcher.stop();
+      http.close(() => resolve());
+    }),
   };
 }
 
