@@ -1,0 +1,45 @@
+.rpb {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 12px;
+  border: 1px solid var(--edge);
+  border-radius: 6px;
+  background: var(--glass-2);
+  color: var(--fg);
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 100ms, border-color 100ms, color 100ms;
+}
+.rpb:hover:not(:disabled) {
+  background: var(--glass-3);
+}
+.rpb:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.rpb-running {
+  border-color: var(--accent);
+  color: var(--accent-on, var(--accent));
+  background: var(--accent-soft);
+}
+.rpb-done {
+  border-color: var(--green);
+  color: var(--green);
+  background: color-mix(in oklch, var(--green) 14%, transparent);
+}
+.rpb-failed {
+  border-color: var(--red);
+  color: var(--red);
+  background: color-mix(in oklch, var(--red) 12%, transparent);
+}
+
+@keyframes rpb-spin {
+  to { transform: rotate(360deg); }
+}
+.rpb-spin {
+  animation: rpb-spin 1s linear infinite;
+}
