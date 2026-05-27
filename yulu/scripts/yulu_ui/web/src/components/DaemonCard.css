@@ -1,0 +1,87 @@
+/* web/src/components/DaemonCard.css */
+.daemon-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  background: var(--glass);
+  border-radius: var(--radius-panel);
+  box-shadow: var(--edge-shadow);
+  min-width: 0;
+}
+.daemon-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+.daemon-card-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--fg);
+  font-family: "SF Mono", ui-monospace, monospace;
+}
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 10px;
+  font-weight: 500;
+}
+.status-pill[data-status="running"] {
+  background: rgba(186, 230, 126, 0.18);
+  color: var(--green);
+}
+.status-pill[data-status="stopped"] {
+  background: var(--row-hover);
+  color: var(--fg-3);
+}
+.status-pill[data-status="crashed"] {
+  background: rgba(255, 123, 114, 0.18);
+  color: var(--red);
+}
+.status-pill-glyph { font-size: 9px; }
+.daemon-card-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.daemon-card-pid {
+  font-size: 10px;
+  color: var(--fg-3);
+  font-family: "SF Mono", ui-monospace, monospace;
+}
+.daemon-card-lastlog {
+  font-size: 11px;
+  color: var(--fg-2);
+  font-family: "SF Mono", ui-monospace, monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.daemon-card-actions {
+  display: flex;
+  gap: 6px;
+  padding-top: 4px;
+  border-top: 1px solid var(--edge);
+}
+.daemon-card-btn {
+  padding: 3px 10px;
+  font-size: 11px;
+  border-radius: var(--radius-inner);
+  text-decoration: none;
+  background: var(--row-hover);
+  color: var(--fg-2);
+  border: none;
+  cursor: pointer;
+}
+.daemon-card-btn:hover { color: var(--fg); background: var(--glass-3); }
+.daemon-card-btn.restart { color: var(--accent); }
+.daemon-card-btn.restart:hover { background: var(--accent-soft); }
+.daemon-card-btn.stop { color: var(--red); }
+.daemon-card-btn.stop:hover { background: rgba(255, 123, 114, 0.18); }
+.daemon-card-btn.link { color: var(--fg-3); margin-left: auto; }
+.daemon-card-btn:disabled { opacity: 0.4; cursor: not-allowed; }
