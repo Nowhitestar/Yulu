@@ -78,4 +78,29 @@ describe("logTailer", () => {
     await waitMs(200);
     expect(events.length).toBe(before);
   });
+
+  it("survives logrotate-style rotation (mv + new inode at same path)", async () => {
+    const renameSync = (await import("node:fs")).renameSync;
+    const logPath = join(root, "audiodaemon.log");
+    writeFileSync(logPath, "");
+    tailer = startLogTailer({ configDir: root, pubsub });
+    await waitMs(50);
+
+    // First write — verify the tailer is alive.
+    appendFileSync(logPath, "before rotation\n");
+    await vi.waitFor(() => expect(events.some((e) => e.line === "before rotation")).toBe(true), { timeout: 1000 });
+
+    // Rotate: rename, recreate fresh file at the same path with new inode.
+    renameSync(logPath, join(root, "audiodaemon.log.1"));
+    writeFileSync(logPath, "");           // new inode at the original path
+    await waitMs(100);
+    appendFileSync(logPath, "after rotation\n");
+
+    // The tailer should publish the post-rotation line — meaning it noticed
+    // the inode change, closed the old fd, and reopened the new file.
+    await vi.waitFor(
+      () => expect(events.some((e) => e.line === "after rotation")).toBe(true),
+      { timeout: 2000 },
+    );
+  });
 });

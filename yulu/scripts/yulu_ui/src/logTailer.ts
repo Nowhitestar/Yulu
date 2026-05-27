@@ -8,6 +8,7 @@ const DAEMON_SHORT_NAMES = [
 ] as const;
 
 const READ_CHUNK_SIZE = 64 * 1024;
+const ROTATION_POLL_MS = 250;
 
 export interface LogTailerOptions {
   configDir: string;
@@ -23,25 +24,69 @@ export interface LogTailer {
  * bytes appended since last poll, splits on newline, and publishes one event
  * per line via the `logs` channel.
  *
- * Strategy: open each existing file read-only, record current size, watch
- * via fs.watch. On change events, read from last position to current size
- * and emit. Empty trailing lines are skipped.
+ * Rotation safety:
+ *   - Truncation (`> file.log`): detected via `stat.size <= lastPos`; position
+ *     is reset to `stat.size` and we wait for the next append.
+ *   - logrotate (mv + recreate at same path): detected via inode change. We
+ *     closeSync the old fd, openSync the new path, and reset position to 0.
+ *
+ * Because macOS `fs.watch` follows the inode (and so stops firing for the
+ * original path after a rename), we also run a low-rate interval poll so
+ * rotation is noticed even when the watcher is stranded on the old inode.
  */
 export function startLogTailer(opts: LogTailerOptions): LogTailer {
-  const watchers: FSWatcher[] = [];
-  const fds: number[] = [];
-  const positions = new Map<string, number>();   // daemon short name → last read offset
-  const pending = new Set<string>();              // debounce: in-flight reads per daemon
+  const watchers = new Map<string, FSWatcher>();
+  const fds = new Map<string, number>();
+  const positions = new Map<string, number>();
+  const inodes = new Map<string, number>();
+  const paths = new Map<string, string>();
+  const pending = new Set<string>();
 
-  function pollFile(shortName: string, path: string, fd: number) {
+  function reopenIfRotated(shortName: string, path: string): boolean {
+    /** Returns true if a re-open happened (caller should restart its read loop). */
+    try {
+      const stat = statSync(path);
+      const stored = inodes.get(shortName);
+      if (stored !== undefined && stat.ino !== stored) {
+        // Inode changed → file was rotated. Close old fd, open new file.
+        const oldFd = fds.get(shortName);
+        if (oldFd !== undefined) {
+          try { closeSync(oldFd); } catch { /* ignore */ }
+        }
+        const newFd = openSync(path, "r");
+        fds.set(shortName, newFd);
+        inodes.set(shortName, stat.ino);
+        positions.set(shortName, 0);
+        // Re-attach watcher to the new inode so subsequent appends fire events.
+        const oldWatcher = watchers.get(shortName);
+        if (oldWatcher !== undefined) {
+          try { oldWatcher.close(); } catch { /* ignore */ }
+        }
+        try {
+          const w = watch(path, { persistent: false }, () => pollFile(shortName, path));
+          w.on("error", () => { /* swallow */ });
+          watchers.set(shortName, w);
+        } catch { /* ignore — interval poll will continue to drive reads */ }
+        return true;
+      }
+    } catch {
+      // Path may have been removed between rotation steps; skip this poll.
+    }
+    return false;
+  }
+
+  function pollFile(shortName: string, path: string) {
     if (pending.has(shortName)) return;
     pending.add(shortName);
     queueMicrotask(() => {
       try {
+        reopenIfRotated(shortName, path);
+        const fd = fds.get(shortName);
+        if (fd === undefined) return;
         const stat = statSync(path);
         const lastPos = positions.get(shortName) ?? stat.size;
         if (stat.size <= lastPos) {
-          // File truncated (rotation) — reset to current end and skip
+          // Truncated in place — reset and bail this cycle.
           positions.set(shortName, stat.size);
           return;
         }
@@ -75,20 +120,32 @@ export function startLogTailer(opts: LogTailerOptions): LogTailer {
     if (!existsSync(path)) continue;
     try {
       const fd = openSync(path, "r");
-      positions.set(shortName, statSync(path).size);   // start tailing from end
-      fds.push(fd);
-      const w = watch(path, { persistent: false }, () => pollFile(shortName, path, fd));
+      const stat = statSync(path);
+      positions.set(shortName, stat.size);   // start tailing from end
+      inodes.set(shortName, stat.ino);
+      fds.set(shortName, fd);
+      paths.set(shortName, path);
+      const w = watch(path, { persistent: false }, () => pollFile(shortName, path));
       w.on("error", () => { /* swallow */ });
-      watchers.push(w);
+      watchers.set(shortName, w);
     } catch {
       // Skip files we can't open
     }
   }
 
+  // Backup interval poll — catches rotation that strands the inode-bound watcher.
+  const interval = setInterval(() => {
+    for (const [shortName, path] of paths.entries()) {
+      pollFile(shortName, path);
+    }
+  }, ROTATION_POLL_MS);
+  if (typeof interval.unref === "function") interval.unref();
+
   return {
     stop() {
-      for (const w of watchers) w.close();
-      for (const fd of fds) {
+      clearInterval(interval);
+      for (const w of watchers.values()) w.close();
+      for (const fd of fds.values()) {
         try { closeSync(fd); } catch { /* ignore */ }
       }
     },
