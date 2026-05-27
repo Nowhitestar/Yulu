@@ -113,3 +113,42 @@ jobs:
           test -x install.sh
           head -1 install.sh | grep -q '^#!/usr/bin/env bash'
           echo "install.sh shebang + +x OK"
+
+  yulu_ui:
+    name: yulu_ui (typecheck + vitest + build)
+    runs-on: macos-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: yulu/scripts/yulu_ui
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: yulu/scripts/yulu_ui/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: TypeScript typecheck
+        run: npm run typecheck
+
+      - name: Vitest
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+      - name: Verify build artifacts
+        run: |
+          set -euo pipefail
+          test -s dist/server.js
+          test -s dist/web/index.html
+          test -d dist/web/assets
+          ls -la dist/web/assets | head -10
+          echo "yulu_ui build artifacts OK"
