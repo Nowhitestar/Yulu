@@ -1,0 +1,28 @@
+.logtail {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  background: var(--wp-1);
+  border-radius: var(--radius-panel);
+  overflow: hidden;
+}
+.logtail-pre {
+  flex: 1;
+  overflow-y: auto;
+  margin: 0;
+  padding: 8px 12px;
+  font-family: "SF Mono", ui-monospace, monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--fg-2);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.logtail-line { padding: 0; }
+.logtail-empty {
+  padding: 40px;
+  text-align: center;
+  color: var(--fg-3);
+  font-size: 12px;
+}
