@@ -1,0 +1,12 @@
+.category-chip {
+  display: inline-block;
+  padding: 1px 7px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 500;
+  text-transform: lowercase;
+  letter-spacing: 0.02em;
+}
+.category-chip[data-category="summary"]   { background: rgba(92, 207, 230, 0.18); color: var(--blue); }
+.category-chip[data-category="cleanup"]   { background: rgba(186, 230, 126, 0.18); color: var(--green); }
+.category-chip[data-category="voicemail"] { background: rgba(223, 191, 255, 0.20); color: var(--purple); }
