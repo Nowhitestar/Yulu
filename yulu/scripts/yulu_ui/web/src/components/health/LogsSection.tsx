@@ -1,10 +1,8 @@
 import { useState } from "react";
 import { useSearchParams } from "react-router";
 import { trpc } from "../../trpc.js";
-import { LogTail } from "../../components/LogTail.js";
-import "./logs.css";
-
-export const handle = { breadcrumb: "Logs", filters: null };
+import { LogTail } from "../LogTail.js";
+import "./LogsSection.css";
 
 const YULU_DAEMONS = [
   "com.yulu.audiodaemon",
@@ -19,7 +17,7 @@ const YULU_DAEMONS = [
 
 type DaemonName = typeof YULU_DAEMONS[number];
 
-export function HealthLogs() {
+export function LogsSection() {
   const [params, setParams] = useSearchParams();
   // Local override mirrors search.tsx pattern — controlled select reflects
   // changes immediately even if the router debounces or rejects
@@ -41,11 +39,12 @@ export function HealthLogs() {
   };
 
   return (
-    <div className="logs-page">
-      <div className="logs-header">
+    <div className="logs-section">
+      <div className="logs-toolbar">
         <select
           aria-label="Daemon"
           className="logs-select"
+          data-testid="logs-daemon"
           value={fullName}
           onChange={(e) => setName(e.target.value)}
         >

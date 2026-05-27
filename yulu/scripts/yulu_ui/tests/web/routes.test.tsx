@@ -36,8 +36,7 @@ import { Meetings }   from "../../web/src/routes/inbox/meetings.js";
 import { Prompts }    from "../../web/src/routes/knowledge/prompts.js";
 import { Glossary }   from "../../web/src/routes/knowledge/glossary.js";
 import { Settings }  from "../../web/src/routes/settings.js";
-import { HealthDaemons } from "../../web/src/routes/health/daemons.js";
-import { HealthLogs }    from "../../web/src/routes/health/logs.js";
+import { Health }    from "../../web/src/routes/health.js";
 
 const ROUTES: { name: string; Component: React.ComponentType }[] = [
   { name: "inbox/voicemails",       Component: Voicemails },
@@ -45,8 +44,7 @@ const ROUTES: { name: string; Component: React.ComponentType }[] = [
   { name: "knowledge/prompts",      Component: Prompts },
   { name: "knowledge/glossary",     Component: Glossary },
   { name: "settings",               Component: Settings },
-  { name: "health/daemons",         Component: HealthDaemons },
-  { name: "health/logs",            Component: HealthLogs },
+  { name: "health",                 Component: Health },
 ];
 
 describe("placeholder routes smoke", () => {
@@ -66,7 +64,7 @@ describe("placeholder routes smoke", () => {
     ).not.toThrow();
   });
 
-  it("has exactly 7 routes", () => {
-    expect(ROUTES).toHaveLength(7);
+  it("has exactly 6 routes", () => {
+    expect(ROUTES).toHaveLength(6);
   });
 });

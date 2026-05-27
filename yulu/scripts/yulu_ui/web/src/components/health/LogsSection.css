@@ -1,12 +1,10 @@
-/* web/src/routes/health/logs.css */
-.logs-page {
+.logs-section {
   display: flex;
   flex-direction: column;
   height: 100%;
-  padding: 10px 14px;
   gap: 10px;
 }
-.logs-header {
+.logs-toolbar {
   display: flex;
   gap: 8px;
   align-items: center;

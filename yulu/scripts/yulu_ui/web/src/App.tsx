@@ -17,8 +17,7 @@ import { PromptsIndex } from "./routes/knowledge/prompts.index.js";
 import { PromptReaderRoute, handle as promptReaderHandle } from "./routes/knowledge/prompts.$id.js";
 import { Glossary,   handle as glossaryHandle   } from "./routes/knowledge/glossary.js";
 import { Settings as SettingsPageRoute, handle as settingsHandle } from "./routes/settings.js";
-import { HealthDaemons, handle as daemonsHandle } from "./routes/health/daemons.js";
-import { HealthLogs,    handle as logsHandle    } from "./routes/health/logs.js";
+import { Health, handle as healthHandle } from "./routes/health.js";
 
 const router = createBrowserRouter([
   {
@@ -68,8 +67,9 @@ const router = createBrowserRouter([
       { path: "settings/hotkey",        element: <Navigate to="/settings#hotkey"        replace /> },
       { path: "settings/integrations",  element: <Navigate to="/settings#integrations"  replace /> },
       { path: "settings/storage",       element: <Navigate to="/settings#storage"       replace /> },
-      { path: "health/daemons",         Component: HealthDaemons,         handle: daemonsHandle },
-      { path: "health/logs",            Component: HealthLogs,            handle: logsHandle },
+      { path: "health",                 Component: Health,                handle: healthHandle },
+      { path: "health/daemons",         element: <Navigate to="/health#daemons" replace /> },
+      { path: "health/logs",            element: <Navigate to="/health#logs"    replace /> },
     ],
   },
 ]);
