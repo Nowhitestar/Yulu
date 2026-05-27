@@ -29,6 +29,7 @@ GCP_DIR="$HOME/.config/gcp"
 MODEL_DIR="$CONFIG_DIR/models"
 LAUNCH_AGENTS_DIR="$HOME/Library/LaunchAgents"
 PYTHON_BIN="$(command -v python3 || echo /usr/bin/python3)"
+NODE_BIN="$(command -v node || echo /usr/local/bin/node)"
 LOCAL_BIN="$HOME/.local/bin"
 RECORDING_DIR_DEFAULT="$HOME/Movies/Yulu"
 # Honor an existing config's audio.output_dir on upgrade; fall back to the new default.
@@ -841,6 +842,7 @@ install_launchagents() {
         # Replace placeholder paths with real paths
         sed -i '' \
             -e "s|__PYTHON__|$PYTHON_BIN|g" \
+            -e "s|__NODE_BIN__|$NODE_BIN|g" \
             -e "s|__HOME__|$HOME|g" \
             -e "s|__SCRIPT_DIR__|$SCRIPT_DIR|g" \
             -e "s|__PATH__|$launch_path|g" \
@@ -1001,6 +1003,99 @@ install_agent_skill() {
         echo "  位置：~/.<agent>/skills/yulu/  (symlink 到 $REPO_DIR/skills/yulu/)"
     else
         warn "skill 注册失败（不影响 Yulu 主功能）。手动重试：npx skills add $REPO_DIR -g ${agent_args[*]}"
+    fi
+}
+
+# ─── Step 7.4: Install yulu_ui (web UI on :7777) ─────
+
+install_yulu_ui() {
+    header "构建 + 安装 yulu_ui (本地 Web UI)"
+
+    local ui_dir="$SCRIPT_DIR/yulu_ui"
+    if [[ ! -d "$ui_dir" ]]; then
+        warn "yulu_ui/ 不存在于 $ui_dir，跳过"
+        return
+    fi
+
+    if ! command -v node &>/dev/null; then
+        warn "未检测到 node；yulu_ui 是可选组件，跳过安装。"
+        warn "  以后想装：brew install node && bash $0 --upgrade"
+        return
+    fi
+
+    local node_major
+    node_major="$(node -v 2>/dev/null | sed -E 's/^v([0-9]+).*/\1/')"
+    if [[ -z "$node_major" || "$node_major" -lt 20 ]]; then
+        warn "node 版本过低（$(node -v 2>/dev/null || echo 'unknown')），yulu_ui 需要 Node 20+。跳过。"
+        return
+    fi
+    ok "Node $(node -v) 满足 yulu_ui 要求"
+
+    # Idempotency marker: skip npm ci when package-lock.json hasn't changed.
+    local lock="$ui_dir/package-lock.json"
+    local marker="$ui_dir/node_modules/.yulu-built-from"
+    local lock_sha=""
+    if [[ -f "$lock" ]]; then
+        lock_sha="$(shasum -a 256 "$lock" | cut -d' ' -f1)"
+    fi
+    if [[ -f "$marker" ]] && [[ "$(cat "$marker" 2>/dev/null)" == "$lock_sha" ]]; then
+        info "npm ci 已是最新（lockfile sha 未变），跳过依赖安装"
+    else
+        info "运行 npm ci (这一步可能需要 30-60 秒)..."
+        ( cd "$ui_dir" && npm ci ) || { err "npm ci 失败"; exit 1; }
+        echo -n "$lock_sha" > "$marker"
+        ok "依赖已安装"
+    fi
+
+    info "运行 npm run build..."
+    ( cd "$ui_dir" && npm run build ) || { err "npm run build 失败"; exit 1; }
+    ok "yulu_ui dist/ 已生成"
+
+    if [[ ! -s "$ui_dir/dist/server.js" || ! -s "$ui_dir/dist/web/index.html" ]]; then
+        err "build 产物不完整：dist/server.js 或 dist/web/index.html 缺失"
+        exit 1
+    fi
+
+    # Install + load LaunchAgent. install_plist is defined inside install_launchagents;
+    # we duplicate the minimal sed+copy here so we don't rely on shell-function scoping.
+    local plist_src="$SCRIPT_DIR/com.yulu.ui.plist"
+    local plist_dest="$LAUNCH_AGENTS_DIR/com.yulu.ui.plist"
+    if [[ ! -f "$plist_src" ]]; then
+        warn "com.yulu.ui.plist 不存在于 $plist_src，跳过 launchd 安装"
+        return
+    fi
+
+    if [[ -f "$plist_dest" ]]; then
+        launchctl unload "$plist_dest" 2>/dev/null || true
+    fi
+    cp "$plist_src" "$plist_dest"
+    sed -i '' \
+        -e "s|__NODE_BIN__|$NODE_BIN|g" \
+        -e "s|__HOME__|$HOME|g" \
+        -e "s|__SCRIPT_DIR__|$SCRIPT_DIR|g" \
+        "$plist_dest"
+    launchctl load "$plist_dest" 2>/dev/null || warn "launchctl load com.yulu.ui 失败"
+    ok "com.yulu.ui.plist 已安装并 load"
+
+    # Verify /healthz within ~10s wall time. We drop --max-time because curl
+    # against a closed local port returns "connection refused" instantly; on
+    # the rare case the port is open but the request hangs, --max-time 1 would
+    # have stretched our budget to ~30s. The 0.5s sleep is our sole pacing.
+    info "等待 yulu_ui 启动 (最多 10 秒)..."
+    local i=0
+    local healthy=false
+    while [[ $i -lt 20 ]]; do
+        if curl -s "http://127.0.0.1:7777/healthz" 2>/dev/null | grep -q '"status":"ok"'; then
+            healthy=true
+            break
+        fi
+        sleep 0.5
+        i=$((i + 1))
+    done
+    if [[ "$healthy" == true ]]; then
+        ok "yulu_ui 健康检查通过：http://127.0.0.1:7777/"
+    else
+        warn "yulu_ui 未在 10 秒内响应 /healthz；查看 ~/.config/yulu/ui.log"
     fi
 }
 
@@ -1222,6 +1317,7 @@ compile_audio_daemon
 download_whisper_model
 setup_calendar
 install_launchagents
+install_yulu_ui
 install_yulu_cli
 install_agent_skill
 run_tests
