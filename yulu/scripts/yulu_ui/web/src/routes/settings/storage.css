@@ -1,0 +1,8 @@
+.storage-section {
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.10em;
+  color: var(--fg-3);
+  margin: 16px 12px 4px;
+  text-transform: uppercase;
+}
