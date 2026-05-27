@@ -33,7 +33,6 @@ vi.mock("../../web/src/ws.js", () => ({
 
 import { Voicemails } from "../../web/src/routes/inbox/voicemails.js";
 import { Meetings }   from "../../web/src/routes/inbox/meetings.js";
-import { Search }     from "../../web/src/routes/inbox/search.js";
 import { Prompts }    from "../../web/src/routes/knowledge/prompts.js";
 import { Glossary }   from "../../web/src/routes/knowledge/glossary.js";
 import { SettingsAudio }         from "../../web/src/routes/settings/audio.js";
@@ -48,7 +47,6 @@ import { HealthLogs }    from "../../web/src/routes/health/logs.js";
 const ROUTES: { name: string; Component: React.ComponentType }[] = [
   { name: "inbox/voicemails",       Component: Voicemails },
   { name: "inbox/meetings",         Component: Meetings },
-  { name: "inbox/search",           Component: Search },
   { name: "knowledge/prompts",      Component: Prompts },
   { name: "knowledge/glossary",     Component: Glossary },
   { name: "settings/audio",         Component: SettingsAudio },
@@ -78,7 +76,7 @@ describe("placeholder routes smoke", () => {
     ).not.toThrow();
   });
 
-  it("has exactly 13 routes", () => {
-    expect(ROUTES).toHaveLength(13);
+  it("has exactly 12 routes", () => {
+    expect(ROUTES).toHaveLength(12);
   });
 });

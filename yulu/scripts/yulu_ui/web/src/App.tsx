@@ -12,7 +12,6 @@ import { VoicemailReader, handle as voicemailReaderHandle } from "./routes/inbox
 import { Meetings,   handle as meetingsHandle   } from "./routes/inbox/meetings.js";
 import { MeetingsIndex } from "./routes/inbox/meetings.index.js";
 import { MeetingReader, handle as meetingReaderHandle } from "./routes/inbox/meetings.$stem.js";
-import { Search,     handle as searchHandle     } from "./routes/inbox/search.js";
 import { Prompts,    handle as promptsHandle    } from "./routes/knowledge/prompts.js";
 import { PromptsIndex } from "./routes/knowledge/prompts.index.js";
 import { PromptReaderRoute, handle as promptReaderHandle } from "./routes/knowledge/prompts.$id.js";
@@ -55,7 +54,6 @@ const router = createBrowserRouter([
               { path: ":stem", Component: MeetingReader, handle: meetingReaderHandle },
             ],
           },
-          { path: "search", Component: Search, handle: searchHandle },
         ],
       },
       {
