@@ -77,3 +77,42 @@ describe("system.openInFinder", () => {
     expect(spawnMock.mock.calls[0]![1]).toEqual(["-R", "/x/y.txt"]);
   });
 });
+
+describe("system.audioDevices", () => {
+  it("returns input + output devices parsed from system_profiler JSON", async () => {
+    const fixture = JSON.stringify({
+      SPAudioDataType: [{
+        _items: [
+          { _name: "MacBook Pro Microphone", coreaudio_device_input: 1, coreaudio_device_uid: "BuiltInMic" },
+          { _name: "BlackHole 2ch", coreaudio_device_input: 2, coreaudio_device_uid: "BlackHole2ch" },
+          { _name: "MacBook Pro Speakers", coreaudio_device_output: 2, coreaudio_device_uid: "BuiltInSpeaker" },
+        ],
+      }],
+    });
+    mockSpawn(fixture);
+    const caller = createCaller(systemRouter, {} as AppContext);
+    const r = (await caller.audioDevices()) as {
+      input: Array<{ uid: string; name: string }>;
+      output: Array<{ uid: string; name: string }>;
+    };
+    expect(r.input.map((d) => d.name)).toEqual(["MacBook Pro Microphone", "BlackHole 2ch"]);
+    expect(r.output.map((d) => d.name)).toEqual(["MacBook Pro Speakers"]);
+    expect(r.input[0]!.uid).toBe("BuiltInMic");
+  });
+
+  it("returns empty arrays on parse failure", async () => {
+    mockSpawn("not json", 0);
+    const caller = createCaller(systemRouter, {} as AppContext);
+    const r = await caller.audioDevices();
+    expect(r.input).toEqual([]);
+    expect(r.output).toEqual([]);
+  });
+
+  it("returns empty arrays on non-zero exit", async () => {
+    mockSpawn("", 1, "failed");
+    const caller = createCaller(systemRouter, {} as AppContext);
+    const r = await caller.audioDevices();
+    expect(r.input).toEqual([]);
+    expect(r.output).toEqual([]);
+  });
+});

@@ -69,4 +69,25 @@ export const systemRouter = router({
       await runSpawn("open", args);
       return { ok: true as const };
     }),
+
+  audioDevices: publicProcedure.query(async () => {
+    const { stdout, code } = await runSpawn("system_profiler", ["SPAudioDataType", "-json"]);
+    if (code !== 0) return { input: [], output: [] };
+    try {
+      const parsed = JSON.parse(stdout) as { SPAudioDataType?: Array<{ _items?: Array<Record<string, unknown>> }> };
+      const items = parsed.SPAudioDataType?.[0]?._items ?? [];
+      const input: Array<{ uid: string; name: string }> = [];
+      const output: Array<{ uid: string; name: string }> = [];
+      for (const item of items) {
+        const name = String(item._name ?? "");
+        const uid = String(item.coreaudio_device_uid ?? "");
+        if (!name || !uid) continue;
+        if (item.coreaudio_device_input !== undefined) input.push({ uid, name });
+        if (item.coreaudio_device_output !== undefined) output.push({ uid, name });
+      }
+      return { input, output };
+    } catch {
+      return { input: [], output: [] };
+    }
+  }),
 });
