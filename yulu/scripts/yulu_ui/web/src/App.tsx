@@ -15,6 +15,7 @@ import { MeetingReader, handle as meetingReaderHandle } from "./routes/inbox/mee
 import { Search,     handle as searchHandle     } from "./routes/inbox/search.js";
 import { Prompts,    handle as promptsHandle    } from "./routes/knowledge/prompts.js";
 import { PromptsIndex } from "./routes/knowledge/prompts.index.js";
+import { PromptReaderRoute, handle as promptReaderHandle } from "./routes/knowledge/prompts.$id.js";
 import { Glossary,   handle as glossaryHandle   } from "./routes/knowledge/glossary.js";
 import { SettingsAudio,         handle as audioHandle         } from "./routes/settings/audio.js";
 import { SettingsTranscription, handle as transcriptionHandle } from "./routes/settings/transcription.js";
@@ -62,7 +63,7 @@ const router = createBrowserRouter([
         handle: promptsHandle,
         children: [
           { index: true, Component: PromptsIndex },
-          // { path: ":id", Component: PromptReaderRoute, ... }  // wired in E.7
+          { path: ":id", Component: PromptReaderRoute, handle: promptReaderHandle },
         ],
       },
       { path: "knowledge/glossary",   Component: Glossary,             handle: glossaryHandle },
