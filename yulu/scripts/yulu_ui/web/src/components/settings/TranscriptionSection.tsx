@@ -90,7 +90,8 @@ export function TranscriptionSection({ tracker }: TranscriptionSectionProps) {
         status={tracker.statusFor("transcription.mlx.preprocess_audio")}
       />
       <InlineEditRow
-        label="MLX passthrough max sec"
+        label="MLX passthrough max"
+        help="seconds"
         type="number"
         min={0}
         step={1}
