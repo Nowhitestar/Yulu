@@ -1,0 +1,56 @@
+/* web/src/components/EditableTable.css */
+.etable {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+.etable-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--edge);
+  font-size: 13px;
+}
+.etable-row:last-child { border-bottom: none; }
+.etable-header {
+  background: var(--row-hover);
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--fg-3);
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+.etable-cell {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.etable-cell-editable {
+  cursor: text;
+  padding: 2px 4px;
+  border-radius: 4px;
+}
+.etable-cell-editable:hover { background: var(--row-hover); }
+.etable-cell-placeholder { color: var(--fg-3); }
+.etable-input {
+  width: 100%;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--glass-2);
+  color: var(--fg);
+  font-size: 13px;
+  border: none;
+  outline: 2px solid var(--accent-soft);
+}
+.etable-empty {
+  padding: 40px 10px;
+  text-align: center;
+  color: var(--fg-3);
+  font-size: 12px;
+}
