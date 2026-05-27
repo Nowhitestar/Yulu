@@ -35,12 +35,7 @@ import { Voicemails } from "../../web/src/routes/inbox/voicemails.js";
 import { Meetings }   from "../../web/src/routes/inbox/meetings.js";
 import { Prompts }    from "../../web/src/routes/knowledge/prompts.js";
 import { Glossary }   from "../../web/src/routes/knowledge/glossary.js";
-import { SettingsAudio }         from "../../web/src/routes/settings/audio.js";
-import { SettingsTranscription } from "../../web/src/routes/settings/transcription.js";
-import { SettingsLlm }           from "../../web/src/routes/settings/llm.js";
-import { SettingsHotkey }        from "../../web/src/routes/settings/hotkey.js";
-import { SettingsIntegrations }  from "../../web/src/routes/settings/integrations.js";
-import { SettingsStorage }       from "../../web/src/routes/settings/storage.js";
+import { Settings }  from "../../web/src/routes/settings.js";
 import { HealthDaemons } from "../../web/src/routes/health/daemons.js";
 import { HealthLogs }    from "../../web/src/routes/health/logs.js";
 
@@ -49,12 +44,7 @@ const ROUTES: { name: string; Component: React.ComponentType }[] = [
   { name: "inbox/meetings",         Component: Meetings },
   { name: "knowledge/prompts",      Component: Prompts },
   { name: "knowledge/glossary",     Component: Glossary },
-  { name: "settings/audio",         Component: SettingsAudio },
-  { name: "settings/transcription", Component: SettingsTranscription },
-  { name: "settings/llm",           Component: SettingsLlm },
-  { name: "settings/hotkey",        Component: SettingsHotkey },
-  { name: "settings/integrations",  Component: SettingsIntegrations },
-  { name: "settings/storage",       Component: SettingsStorage },
+  { name: "settings",               Component: Settings },
   { name: "health/daemons",         Component: HealthDaemons },
   { name: "health/logs",            Component: HealthLogs },
 ];
@@ -76,7 +66,7 @@ describe("placeholder routes smoke", () => {
     ).not.toThrow();
   });
 
-  it("has exactly 12 routes", () => {
-    expect(ROUTES).toHaveLength(12);
+  it("has exactly 7 routes", () => {
+    expect(ROUTES).toHaveLength(7);
   });
 });

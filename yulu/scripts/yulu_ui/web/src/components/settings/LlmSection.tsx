@@ -1,34 +1,19 @@
 import { useState } from "react";
-import type { inferProcedureInput } from "@trpc/server";
-import type { AppRouter } from "../../../../src/routers/_app.js";
 import { trpc } from "../../trpc.js";
-import { useSettingsRestartTracker } from "../../hooks/useSettingsRestartTracker.js";
-import { SettingsPage } from "../../components/SettingsPage.js";
-import { InlineEditRow } from "../../components/InlineEditRow.js";
-import { RestartBanner } from "../../components/RestartBanner.js";
-import { CommandEditor } from "../../components/CommandEditor.js";
-import { TestPopover } from "../../components/TestPopover.js";
+import { InlineEditRow } from "../InlineEditRow.js";
+import { CommandEditor } from "../CommandEditor.js";
+import { TestPopover } from "../TestPopover.js";
+import type { SettingsRestartTracker } from "../../hooks/useSettingsRestartTracker.js";
 
-type DaemonLabel = inferProcedureInput<AppRouter["daemons"]["restart"]>["name"];
+export interface LlmSectionProps {
+  tracker: SettingsRestartTracker;
+}
 
-export const handle = { breadcrumb: "LLM", filters: null };
-
-const DAEMON_LABEL: Record<string, DaemonLabel> = {
-  agentqueue: "com.yulu.agentqueue",
-};
-
-export function SettingsLlm() {
+export function LlmSection({ tracker }: LlmSectionProps) {
   const { data: cfg } = trpc.config.get.useQuery();
-  const tracker = useSettingsRestartTracker();
   const updateMut = trpc.config.update.useMutation({
     onSuccess: (res: { daemonsNeedingRestart: string[] }, vars: { key: string }) => {
       tracker.record(vars.key, res.daemonsNeedingRestart);
-    },
-  });
-  const restartMut = trpc.daemons.restart.useMutation({
-    onSuccess: (_res: unknown, vars: { name: string }) => {
-      const short = vars.name.replace(/^com\.yulu\./, "");
-      tracker.clearDaemon(short);
     },
   });
   const testMut = trpc.llm.test.useMutation();
@@ -37,19 +22,9 @@ export function SettingsLlm() {
   const [popStdout, setPopStdout] = useState("");
   const [popStderr, setPopStderr] = useState("");
 
-  if (!cfg) return <SettingsPage>Loading config…</SettingsPage>;
+  if (!cfg) return null;
 
   const llm = cfg.llm ?? {};
-
-  const banner = tracker.daemons.size > 0 ? (
-    <RestartBanner
-      daemons={Array.from(tracker.daemons, ([name, keys]) => ({ name, keys: Array.from(keys) }))}
-      onRestart={(name) => { restartMut.mutateAsync({ name: (DAEMON_LABEL[name] ?? name) as DaemonLabel }); }}
-      onRestartAll={() => {
-        for (const name of tracker.daemons.keys()) restartMut.mutateAsync({ name: (DAEMON_LABEL[name] ?? name) as DaemonLabel });
-      }}
-    />
-  ) : null;
 
   const runTest = async () => {
     setPopState("pending");
@@ -67,7 +42,9 @@ export function SettingsLlm() {
   };
 
   return (
-    <SettingsPage banner={banner}>
+    <section id="llm" className="settings-section">
+      <h2 className="settings-section-h">LLM</h2>
+      <p className="settings-section-sub">Summary generation method</p>
       <InlineEditRow
         label="Enabled"
         type="toggle"
@@ -96,6 +73,6 @@ export function SettingsLlm() {
         <div className="row-status" />
       </div>
       {popState && <TestPopover state={popState} stdout={popStdout} stderr={popStderr} onClose={() => setPopState(null)} />}
-    </SettingsPage>
+    </section>
   );
 }

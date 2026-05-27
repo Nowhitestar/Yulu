@@ -1,13 +1,14 @@
 import { useState } from "react";
 import { trpc } from "../../trpc.js";
-import { SettingsPage } from "../../components/SettingsPage.js";
-import { InlineEditRow } from "../../components/InlineEditRow.js";
-import { TestPopover } from "../../components/TestPopover.js";
-import "./integrations.css";
+import { InlineEditRow } from "../InlineEditRow.js";
+import { TestPopover } from "../TestPopover.js";
+import type { SettingsRestartTracker } from "../../hooks/useSettingsRestartTracker.js";
 
-export const handle = { breadcrumb: "Integrations", filters: null };
+export interface IntegrationsSectionProps {
+  tracker: SettingsRestartTracker;
+}
 
-export function SettingsIntegrations() {
+export function IntegrationsSection({ tracker: _tracker }: IntegrationsSectionProps) {
   const { data: cfg } = trpc.config.get.useQuery();
   const updateMut = trpc.config.update.useMutation();
   const testMut = trpc.integrations.test.useMutation();
@@ -16,7 +17,7 @@ export function SettingsIntegrations() {
   const [popStdout, setPopStdout] = useState("");
   const [popStderr, setPopStderr] = useState("");
 
-  if (!cfg) return <SettingsPage>Loading config…</SettingsPage>;
+  if (!cfg) return null;
 
   const calendars = cfg.calendars ?? [];
 
@@ -37,7 +38,9 @@ export function SettingsIntegrations() {
   };
 
   return (
-    <SettingsPage>
+    <section id="integrations" className="settings-section">
+      <h2 className="settings-section-h">Integrations</h2>
+      <p className="settings-section-sub">Google Calendar and external services</p>
       {calendars.length === 0 && (
         <div className="integrations-empty">No calendar providers configured.</div>
       )}
@@ -81,6 +84,6 @@ export function SettingsIntegrations() {
           )}
         </div>
       ))}
-    </SettingsPage>
+    </section>
   );
 }

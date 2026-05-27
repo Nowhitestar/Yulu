@@ -16,12 +16,7 @@ import { Prompts,    handle as promptsHandle    } from "./routes/knowledge/promp
 import { PromptsIndex } from "./routes/knowledge/prompts.index.js";
 import { PromptReaderRoute, handle as promptReaderHandle } from "./routes/knowledge/prompts.$id.js";
 import { Glossary,   handle as glossaryHandle   } from "./routes/knowledge/glossary.js";
-import { SettingsAudio,         handle as audioHandle         } from "./routes/settings/audio.js";
-import { SettingsTranscription, handle as transcriptionHandle } from "./routes/settings/transcription.js";
-import { SettingsLlm,           handle as llmHandle           } from "./routes/settings/llm.js";
-import { SettingsHotkey,        handle as hotkeyHandle        } from "./routes/settings/hotkey.js";
-import { SettingsIntegrations,  handle as integrationsHandle  } from "./routes/settings/integrations.js";
-import { SettingsStorage,       handle as storageHandle       } from "./routes/settings/storage.js";
+import { Settings as SettingsPageRoute, handle as settingsHandle } from "./routes/settings.js";
 import { HealthDaemons, handle as daemonsHandle } from "./routes/health/daemons.js";
 import { HealthLogs,    handle as logsHandle    } from "./routes/health/logs.js";
 
@@ -66,12 +61,13 @@ const router = createBrowserRouter([
         ],
       },
       { path: "knowledge/glossary",   Component: Glossary,             handle: glossaryHandle },
-      { path: "settings/audio",         Component: SettingsAudio,         handle: audioHandle },
-      { path: "settings/transcription", Component: SettingsTranscription, handle: transcriptionHandle },
-      { path: "settings/llm",           Component: SettingsLlm,           handle: llmHandle },
-      { path: "settings/hotkey",        Component: SettingsHotkey,        handle: hotkeyHandle },
-      { path: "settings/integrations",  Component: SettingsIntegrations,  handle: integrationsHandle },
-      { path: "settings/storage",       Component: SettingsStorage,       handle: storageHandle },
+      { path: "settings",               Component: SettingsPageRoute,     handle: settingsHandle },
+      { path: "settings/audio",         element: <Navigate to="/settings#audio"         replace /> },
+      { path: "settings/transcription", element: <Navigate to="/settings#transcription" replace /> },
+      { path: "settings/llm",           element: <Navigate to="/settings#llm"           replace /> },
+      { path: "settings/hotkey",        element: <Navigate to="/settings#hotkey"        replace /> },
+      { path: "settings/integrations",  element: <Navigate to="/settings#integrations"  replace /> },
+      { path: "settings/storage",       element: <Navigate to="/settings#storage"       replace /> },
       { path: "health/daemons",         Component: HealthDaemons,         handle: daemonsHandle },
       { path: "health/logs",            Component: HealthLogs,            handle: logsHandle },
     ],

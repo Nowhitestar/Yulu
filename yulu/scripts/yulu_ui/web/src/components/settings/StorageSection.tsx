@@ -1,24 +1,27 @@
 import { trpc } from "../../trpc.js";
-import { SettingsPage } from "../../components/SettingsPage.js";
-import { InlineEditRow } from "../../components/InlineEditRow.js";
-import { DbStatsRow } from "../../components/DbStatsRow.js";
-import "./storage.css";
+import { InlineEditRow } from "../InlineEditRow.js";
+import { DbStatsRow } from "../DbStatsRow.js";
+import type { SettingsRestartTracker } from "../../hooks/useSettingsRestartTracker.js";
 
-export const handle = { breadcrumb: "Storage", filters: null };
+export interface StorageSectionProps {
+  tracker: SettingsRestartTracker;
+}
 
-export function SettingsStorage() {
+export function StorageSection({ tracker: _tracker }: StorageSectionProps) {
   const { data: cfg } = trpc.config.get.useQuery();
   const { data: dbStats } = trpc.system.dbStats.useQuery();
   const { data: logPaths } = trpc.system.logPaths.useQuery();
   const updateMut = trpc.config.update.useMutation();
   const reindexMut = trpc.search.reindex.useMutation();
 
-  if (!cfg) return <SettingsPage>Loading config…</SettingsPage>;
+  if (!cfg) return null;
 
   return (
-    <SettingsPage>
+    <section id="storage" className="settings-section">
+      <h2 className="settings-section-h">Storage</h2>
+      <p className="settings-section-sub">Database statistics and log paths</p>
       <InlineEditRow
-        label="Output dir"
+        label="Output directory"
         type="path"
         mode="folder"
         value={cfg.audio.output_dir}
@@ -43,6 +46,6 @@ export function SettingsStorage() {
       {(logPaths ?? []).map((lp) => (
         <InlineEditRow key={lp.name} label={lp.name} type="readonly" value={lp.path} revealInFinder />
       ))}
-    </SettingsPage>
+    </section>
   );
 }
