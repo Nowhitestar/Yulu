@@ -19,6 +19,10 @@
   justify-content: center;
 }
 .audioplayer-play:hover { background: var(--glass-3); }
+.audioplayer-play:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
 .audioplayer-wave {
   flex: 1;
   min-width: 0;

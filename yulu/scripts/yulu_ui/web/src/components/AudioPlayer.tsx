@@ -15,9 +15,17 @@ export function AudioPlayer({ src, initialSeek, onSeek }: AudioPlayerProps) {
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
+  const [ready, setReady] = useState(false);
 
   useEffect(() => {
     if (!containerRef.current) return;
+    // Reset local state for the new src — prevents stale isPlaying / duration
+    // from leaking into the new track's UI before its events fire.
+    setIsPlaying(false);
+    setCurrentTime(0);
+    setDuration(0);
+    setReady(false);
+
     const ws = WaveSurfer.create({
       container: containerRef.current,
       url: src,
@@ -33,6 +41,7 @@ export function AudioPlayer({ src, initialSeek, onSeek }: AudioPlayerProps) {
     wsRef.current = ws;
     ws.on("ready", () => {
       setDuration(ws.getDuration());
+      setReady(true);
       if (typeof initialSeek === "number" && initialSeek > 0) ws.setTime(initialSeek);
     });
     ws.on("play", () => setIsPlaying(true));
@@ -55,7 +64,7 @@ export function AudioPlayer({ src, initialSeek, onSeek }: AudioPlayerProps) {
 
   const toggle = () => {
     const ws = wsRef.current;
-    if (!ws) return;
+    if (!ws || !ready) return;
     if (isPlaying) ws.pause();
     else ws.play();
   };
@@ -66,6 +75,7 @@ export function AudioPlayer({ src, initialSeek, onSeek }: AudioPlayerProps) {
         type="button"
         className="audioplayer-play"
         onClick={toggle}
+        disabled={!ready}
         aria-label={isPlaying ? "Pause" : "Play"}
       >
         {isPlaying ? <Pause size={14} strokeWidth={1.75} /> : <Play size={14} strokeWidth={1.75} />}
