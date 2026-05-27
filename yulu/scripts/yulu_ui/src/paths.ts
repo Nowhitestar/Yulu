@@ -1,9 +1,30 @@
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const HOME = homedir();
 const CONFIG_DIR = join(HOME, ".config", "yulu");
 const MOVIES_DIR = join(HOME, "Movies", "Yulu");
+
+/**
+ * Locate yulu/scripts/ at runtime.
+ *
+ * 1. YULU_SCRIPT_DIR env var (set by the LaunchAgent installer).
+ * 2. Walk up from this file's URL: paths.ts → src → yulu_ui → scripts.
+ *
+ * Result is the directory containing `transcribe.py`, daemon plists, etc.
+ */
+function locateScriptDir(): string {
+  if (process.env.YULU_SCRIPT_DIR) return process.env.YULU_SCRIPT_DIR;
+  try {
+    const here = dirname(fileURLToPath(import.meta.url));
+    return resolve(here, "..", "..");
+  } catch {
+    return resolve(process.cwd(), "..", "..");
+  }
+}
+
+const SCRIPT_DIR = locateScriptDir();
 
 export const paths = {
   configDir:        CONFIG_DIR,
@@ -18,4 +39,7 @@ export const paths = {
   uiPid:            join(CONFIG_DIR, "yulu_ui.pid"),
   moviesDir:        MOVIES_DIR,
   voicemailsDir:    join(MOVIES_DIR, "voicemails"),
+  scriptDir:        SCRIPT_DIR,
+  transcribePy:     join(SCRIPT_DIR, "transcribe.py"),
+  agentQueueJson:   join(CONFIG_DIR, "agent-queue.json"),
 } as const;

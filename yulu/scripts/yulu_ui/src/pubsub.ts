@@ -34,6 +34,7 @@ export type AppChannels = {
   "daemons":         { name: string; status: "running" | "stopped" | "crashed"; pid: number; lastLog?: string; };
   "sidebar-counts":  { voicemails: number; meetings: number; prompts: number; glossary: number; };
   "logs":            { name: string; line: string; ts: number; };
+  "jobs":            { stem: string; jobId: string; state: "transcribing" | "summarizing" | "done" | "failed"; error?: string };
 };
 
 export const appPubSub = new PubSub<AppChannels>();

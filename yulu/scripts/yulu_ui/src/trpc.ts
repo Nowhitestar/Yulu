@@ -4,12 +4,14 @@ import type { LaunchctlClient } from "./launchctl.js";
 import type { PubSub, AppChannels } from "./pubsub.js";
 import type { Database as DbType } from "better-sqlite3";
 import type { paths as pathsType } from "./paths.js";
+import type { JobRegistry } from "./jobStatus.js";
 
 export interface AppContext {
   config: ConfigManager;
   launchctl: LaunchctlClient;
   pubsub: PubSub<AppChannels>;
   paths: typeof pathsType;
+  jobs: JobRegistry;
   db: {
     prompts: DbType;
     vocab: DbType;

@@ -17,6 +17,7 @@ import { startLogTailer } from "./logTailer.js";
 import { serveStaticFile } from "./staticFile.js";
 import { homedir } from "node:os";
 import type { AppContext } from "./trpc.js";
+import { JobRegistry } from "./jobStatus.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -41,11 +42,14 @@ export async function startServer(): Promise<RunningServer> {
     get search()  { return (_search ??= openDb(paths.searchDb)); },
   };
 
+  const jobRegistry = new JobRegistry();
+
   const ctx: AppContext = {
     config:    new ConfigManager(paths.configFile),
     launchctl: new LaunchctlClient(launchAgents),
     pubsub:    appPubSub,
     paths,
+    jobs:      jobRegistry,
     db:        dbProxy,
   };
 
