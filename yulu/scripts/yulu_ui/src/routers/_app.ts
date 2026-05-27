@@ -10,19 +10,21 @@ import { logsRouter }       from "./logs.js";
 import { recordingRouter }  from "./recording.js";
 import { sidebarRouter }    from "./sidebar.js";
 import { systemRouter }     from "./system.js";
+import { integrationsRouter } from "./integrations.js";
 
 export const appRouter = router({
-  voicemails: voicemailsRouter,
-  meetings:   meetingsRouter,
-  search:     searchRouter,
-  config:     configRouter,
-  prompts:    promptsRouter,
-  glossary:   glossaryRouter,
-  daemons:    daemonsRouter,
-  logs:       logsRouter,
-  recording:  recordingRouter,
-  sidebar:    sidebarRouter,
-  system:     systemRouter,
+  voicemails:   voicemailsRouter,
+  meetings:     meetingsRouter,
+  search:       searchRouter,
+  config:       configRouter,
+  prompts:      promptsRouter,
+  glossary:     glossaryRouter,
+  daemons:      daemonsRouter,
+  logs:         logsRouter,
+  recording:    recordingRouter,
+  sidebar:      sidebarRouter,
+  system:       systemRouter,
+  integrations: integrationsRouter,
 });
 
 export type AppRouter = typeof appRouter;
