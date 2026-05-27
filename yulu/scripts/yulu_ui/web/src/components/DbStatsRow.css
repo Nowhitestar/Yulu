@@ -1,0 +1,21 @@
+.dbstats-row {
+  display: grid;
+  grid-template-columns: 100px 1fr auto auto;
+  align-items: center;
+  gap: 14px;
+  padding: 8px 12px;
+  border-radius: var(--radius-inner);
+}
+.dbstats-row:hover { background: var(--row-hover); }
+.dbstats-name { font-size: 13px; color: var(--fg); }
+.dbstats-path { font-family: "SF Mono", ui-monospace, monospace; font-size: 11px; color: var(--fg-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dbstats-meta { display: flex; gap: 12px; font-size: 11px; color: var(--fg-2); font-variant-numeric: tabular-nums; }
+.dbstats-action {
+  padding: 3px 10px;
+  font-size: 11px;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-radius: var(--radius-inner);
+}
+.dbstats-action:hover { background: var(--glass-3); }
+.dbstats-action:disabled { opacity: 0.5; cursor: wait; }
