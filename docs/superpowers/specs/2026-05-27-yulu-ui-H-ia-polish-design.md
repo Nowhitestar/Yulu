@@ -372,13 +372,14 @@ This spec deliberately does NOT include the following — they belong in their o
 - UI: Reader detail pane gets "Re-transcribe" + "Re-generate summary" buttons with running/done/failed state.
 - WebSocket progress channel (or polling) for in-flight reprocessing jobs.
 
-**Phase J — Recordings inbox unification** (~5 tasks)
+**Phase J — Recordings inbox unification** (~6 tasks)
 
 - Backend: introduce a unified `recordings.list` facade (or refactor existing routers behind a common interface). Add `type: "voicemail" | "meeting"` field.
 - Frontend: replace `<VoicemailsList>` + `<MeetingsList>` with a single `<RecordingsList>` taking a `?type=` filter; add a "type" badge per row.
 - Routing: `/inbox/voicemails` + `/inbox/meetings` → `/inbox?type=voicemail` + `/inbox?type=meeting` (or keep three URLs as aliases of one component); reader at `/inbox/:stem` regardless of type.
 - Realtime tab in reader: conditional render based on the recording's type (meetings only).
 - inboxWatcher.ts: simplify to one watcher with type tagging at publish time.
+- **macOS menu bar (StatusAgent.app) sync:** The menu bar's "Voicemails" and "Meetings" entries should be consolidated into a single "Recordings" entry (matching the new sidebar IA). Touch `yulu/scripts/status_agent_*` + `com.yulu.statusagent.plist`-bound config to mirror the unified inbox naming.
 
 Phase J should not start until Phase I is in. Phase I should not start until Phase H is merged (Phase I's UI sits in the Inbox Reader which Phase H may still be polishing).
 
