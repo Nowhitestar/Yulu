@@ -19,7 +19,6 @@ export function Logo({ size = 30 }: LogoProps) {
       role="img"
       aria-label="Yulu"
     >
-      <title>Yulu</title>
       <rect width="120" height="120" rx="22" fill="#F5F1E8" />
       <text
         x="60"
