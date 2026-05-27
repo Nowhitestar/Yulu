@@ -7,13 +7,6 @@ import "./integrations.css";
 
 export const handle = { breadcrumb: "Settings / Integrations", filters: null };
 
-interface Calendar {
-  type: "feishu" | "google";
-  enabled?: boolean;
-  credentials_path?: string;
-  account?: string;
-}
-
 export function SettingsIntegrations() {
   const { data: cfg } = trpc.config.get.useQuery();
   const updateMut = trpc.config.update.useMutation();
@@ -25,7 +18,7 @@ export function SettingsIntegrations() {
 
   if (!cfg) return <SettingsPage>Loading config…</SettingsPage>;
 
-  const calendars = ((cfg as { calendars?: Calendar[] }).calendars ?? []) as Calendar[];
+  const calendars = cfg.calendars ?? [];
 
   const runTest = async (provider: "feishu" | "google") => {
     setPopFor(provider);

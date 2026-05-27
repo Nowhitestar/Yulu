@@ -39,7 +39,7 @@ export function SettingsLlm() {
 
   if (!cfg) return <SettingsPage>Loading config…</SettingsPage>;
 
-  const llm = (cfg.llm ?? {}) as { enabled?: boolean; command?: string[] };
+  const llm = cfg.llm ?? {};
 
   const banner = tracker.daemons.size > 0 ? (
     <RestartBanner

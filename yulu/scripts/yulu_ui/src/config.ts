@@ -6,9 +6,15 @@ const HotkeySchema = z.object({
   modifiers: z.array(z.enum(["cmd", "shift", "alt", "ctrl"])),
 });
 const CalendarSchema = z.object({
-  type: z.string(),
+  type: z.enum(["feishu", "google"]),
   enabled: z.boolean().optional(),
-}).passthrough();
+  credentials_path: z.string().optional(),
+  account: z.string().optional(),
+  app_id_env: z.string().optional(),
+  app_secret_env: z.string().optional(),
+  gog_account: z.string().optional(),
+  watch_calendars: z.array(z.string()).optional(),
+});
 
 export const ConfigSchema = z.object({
   audio: z.object({
@@ -30,12 +36,12 @@ export const ConfigSchema = z.object({
   llm: z.object({
     enabled: z.boolean().optional(),
     command: z.array(z.string()).optional(),
-  }).passthrough().optional(),
+  }).default({}),
   status_agent: z.object({
-    enabled: z.boolean(),
-    hotkey: HotkeySchema,
-  }).optional(),
-  calendars: z.array(CalendarSchema).optional(),
+    enabled: z.boolean().optional(),
+    hotkey: HotkeySchema.optional(),
+  }).default({}),
+  calendars: z.array(CalendarSchema).default([]),
 }).passthrough();
 
 export type YuluConfig = z.infer<typeof ConfigSchema>;

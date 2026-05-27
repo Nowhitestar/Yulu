@@ -43,8 +43,8 @@ export function SettingsHotkey() {
     />
   ) : null;
 
-  const statusAgent = (cfg.status_agent ?? {}) as { enabled?: boolean; hotkey?: HotkeyValue };
-  const hotkey: HotkeyValue = statusAgent.hotkey ?? { key: "V", modifiers: ["cmd", "shift"] };
+  const statusAgent = cfg.status_agent;
+  const hotkey: HotkeyValue = statusAgent?.hotkey ?? { key: "V", modifiers: ["cmd", "shift"] };
 
   return (
     <SettingsPage banner={banner}>
