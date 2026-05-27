@@ -161,6 +161,7 @@ done
 pkill -f "Yulu.app/Contents/MacOS/audio_daemon" 2>/dev/null && ok "killed running audio_daemon" || true
 pkill -f "yulu/scripts/scheduler_daemon.py" 2>/dev/null || true
 pkill -f "yulu/scripts/meeting_detector.py" 2>/dev/null || true
+pkill -f "yulu_ui/dist/server.js" 2>/dev/null && ok "killed running yulu_ui server" || true
 
 # ─── 3. Remove yulu CLI symlink ──────────────────────────────────
 
