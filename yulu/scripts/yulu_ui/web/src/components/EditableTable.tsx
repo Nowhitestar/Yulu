@@ -1,5 +1,5 @@
 // web/src/components/EditableTable.tsx
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import "./EditableTable.css";
 
 export interface ColumnDef<Row> {
@@ -14,14 +14,47 @@ export interface EditableTableProps<Row extends { id: string | number }> {
   columns: ColumnDef<Row>[];
   rows: Row[];
   onCellCommit: (rowId: Row["id"], key: string, value: string) => void;
+  selectable?: boolean;
+  onBulkDelete?: (rowIds: Row["id"][]) => void;
   emptyLabel?: string;
 }
 
 export function EditableTable<Row extends { id: string | number }>(props: EditableTableProps<Row>) {
-  const { columns, rows, onCellCommit, emptyLabel } = props;
+  const { columns, rows, onCellCommit, selectable = false, onBulkDelete, emptyLabel } = props;
+  const [selected, setSelected] = useState<Set<Row["id"]>>(new Set());
+
+  const allSelected = rows.length > 0 && rows.every((r) => selected.has(r.id));
+  const selectedCount = selected.size;
+
+  const toggleRow = (id: Row["id"]) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+  const toggleAll = () => {
+    setSelected(allSelected ? new Set() : new Set(rows.map((r) => r.id)));
+  };
+
+  const orderedIds = useMemo(() => rows.filter((r) => selected.has(r.id)).map((r) => r.id), [rows, selected]);
+
+  const runBulkDelete = () => {
+    if (!onBulkDelete || selectedCount === 0) return;
+    const ok = window.confirm(`Delete ${selectedCount} ${selectedCount === 1 ? "item" : "items"}?`);
+    if (!ok) return;
+    onBulkDelete(orderedIds);
+    setSelected(new Set());
+  };
+
   return (
     <div className="etable">
       <div className="etable-row etable-header">
+        {selectable && (
+          <div className="etable-cell etable-cell-check">
+            <input type="checkbox" checked={allSelected} onChange={toggleAll} aria-label="Select all" />
+          </div>
+        )}
         {columns.map((c) => (
           <div key={c.key} className="etable-cell" style={{ width: c.width }}>{c.label}</div>
         ))}
@@ -31,6 +64,16 @@ export function EditableTable<Row extends { id: string | number }>(props: Editab
       )}
       {rows.map((row) => (
         <div key={String(row.id)} className="etable-row">
+          {selectable && (
+            <div className="etable-cell etable-cell-check">
+              <input
+                type="checkbox"
+                checked={selected.has(row.id)}
+                onChange={() => toggleRow(row.id)}
+                aria-label={`Select row ${row.id}`}
+              />
+            </div>
+          )}
           {columns.map((c) => (
             <Cell
               key={c.key}
@@ -42,6 +85,15 @@ export function EditableTable<Row extends { id: string | number }>(props: Editab
           ))}
         </div>
       ))}
+      {selectable && selectedCount > 0 && (
+        <div className="etable-bulkbar" role="status">
+          <span>{selectedCount} selected</span>
+          {onBulkDelete && (
+            <button type="button" className="etable-bulk-delete" onClick={runBulkDelete}>Delete</button>
+          )}
+          <button type="button" className="etable-bulk-clear" onClick={() => setSelected(new Set())}>Clear</button>
+        </div>
+      )}
     </div>
   );
 }

@@ -86,4 +86,51 @@ describe("EditableTable", () => {
     render(<EditableTable columns={cols} rows={[{ id: 1, ts: "2026-01-01" }]} onCellCommit={() => {}} />);
     expect(screen.getByText("formatted:2026-01-01")).toBeInTheDocument();
   });
+
+  it("selectable: renders checkbox column when selectable=true", () => {
+    render(<EditableTable columns={COLUMNS} rows={ROWS} onCellCommit={() => {}} selectable />);
+    expect(screen.getAllByRole("checkbox").length).toBe(ROWS.length + 1); // +1 = header "select all"
+  });
+
+  it("selectable: selecting a row shows the bulk action bar", async () => {
+    render(<EditableTable columns={COLUMNS} rows={ROWS} onCellCommit={() => {}} selectable onBulkDelete={() => {}} />);
+    const user = userEvent.setup();
+    const checkboxes = screen.getAllByRole("checkbox");
+    await user.click(checkboxes[1]!);   // first row (after header)
+    expect(screen.getByText(/1 selected/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^delete$/i })).toBeInTheDocument();
+  });
+
+  it("selectable: header checkbox toggles all rows", async () => {
+    render(<EditableTable columns={COLUMNS} rows={ROWS} onCellCommit={() => {}} selectable onBulkDelete={() => {}} />);
+    const user = userEvent.setup();
+    const [headerCb] = screen.getAllByRole("checkbox");
+    await user.click(headerCb!);
+    expect(screen.getByText(/2 selected/i)).toBeInTheDocument();
+    await user.click(headerCb!);
+    expect(screen.queryByText(/selected/i)).toBeNull();
+  });
+
+  it("selectable: clicking Delete fires onBulkDelete with selected ids (after confirm=true)", async () => {
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    const onBulkDelete = vi.fn();
+    render(<EditableTable columns={COLUMNS} rows={ROWS} onCellCommit={() => {}} selectable onBulkDelete={onBulkDelete} />);
+    const user = userEvent.setup();
+    const checkboxes = screen.getAllByRole("checkbox");
+    await user.click(checkboxes[1]!);   // row id=1
+    await user.click(checkboxes[2]!);   // row id=2
+    await user.click(screen.getByRole("button", { name: /^delete$/i }));
+    expect(onBulkDelete).toHaveBeenCalledWith([1, 2]);
+  });
+
+  it("selectable: confirm=false aborts bulk delete", async () => {
+    vi.spyOn(window, "confirm").mockReturnValue(false);
+    const onBulkDelete = vi.fn();
+    render(<EditableTable columns={COLUMNS} rows={ROWS} onCellCommit={() => {}} selectable onBulkDelete={onBulkDelete} />);
+    const user = userEvent.setup();
+    const [, firstRow] = screen.getAllByRole("checkbox");
+    await user.click(firstRow!);
+    await user.click(screen.getByRole("button", { name: /^delete$/i }));
+    expect(onBulkDelete).not.toHaveBeenCalled();
+  });
 });
