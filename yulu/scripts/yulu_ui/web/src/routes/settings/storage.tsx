@@ -4,7 +4,7 @@ import { InlineEditRow } from "../../components/InlineEditRow.js";
 import { DbStatsRow } from "../../components/DbStatsRow.js";
 import "./storage.css";
 
-export const handle = { breadcrumb: "Settings / Storage", filters: null };
+export const handle = { breadcrumb: "Storage", filters: null };
 
 export function SettingsStorage() {
   const { data: cfg } = trpc.config.get.useQuery();

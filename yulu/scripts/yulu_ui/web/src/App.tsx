@@ -5,7 +5,7 @@ import { trpc, makeTrpcClient } from "./trpc.js";
 import { ThemeProvider } from "./theme.js";
 import { WsProvider } from "./ws.js";
 import { RootLayout } from "./routes/root.js";
-import { InboxLayout } from "./routes/inbox/_layout.js";
+import { InboxLayout, handle as inboxLayoutHandle } from "./routes/inbox/_layout.js";
 import { Voicemails, handle as voicemailsHandle } from "./routes/inbox/voicemails.js";
 import { VoicemailsIndex } from "./routes/inbox/voicemails.index.js";
 import { VoicemailReader, handle as voicemailReaderHandle } from "./routes/inbox/voicemails.$stem.js";
@@ -35,6 +35,7 @@ const router = createBrowserRouter([
       {
         path: "inbox",
         Component: InboxLayout,
+        handle: inboxLayoutHandle,
         children: [
           {
             path: "voicemails",

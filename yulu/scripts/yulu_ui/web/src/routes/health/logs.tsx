@@ -4,7 +4,7 @@ import { trpc } from "../../trpc.js";
 import { LogTail } from "../../components/LogTail.js";
 import "./logs.css";
 
-export const handle = { breadcrumb: "Health / Logs", filters: null };
+export const handle = { breadcrumb: "Logs", filters: null };
 
 const YULU_DAEMONS = [
   "com.yulu.audiodaemon",

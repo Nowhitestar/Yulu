@@ -10,7 +10,7 @@ import { ThemeToggle } from "../../components/ThemeToggle.js";
 
 type DaemonLabel = inferProcedureInput<AppRouter["daemons"]["restart"]>["name"];
 
-export const handle = { breadcrumb: "Settings / Hotkey & UI", filters: null };
+export const handle = { breadcrumb: "Hotkey & UI", filters: null };
 
 const DAEMON_LABEL: Record<string, DaemonLabel> = {
   statusagent: "com.yulu.statusagent",

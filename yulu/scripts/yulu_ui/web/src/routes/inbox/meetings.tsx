@@ -8,7 +8,7 @@ import { MasterDetail } from "../../components/MasterDetail.js";
 import { FilterChips, type ChipDef } from "../../components/FilterChips.js";
 import "./meetings.css";
 
-export const handle = { breadcrumb: "Inbox / Meetings", filters: null };
+export const handle = { breadcrumb: "Meetings", filters: null };
 
 const FILTER_CHIPS: ChipDef[] = [
   { id: "all", label: "All" },

@@ -8,7 +8,7 @@ import { MasterDetail } from "../../components/MasterDetail.js";
 import { FilterChips, type ChipDef } from "../../components/FilterChips.js";
 import "./voicemails.css";
 
-export const handle = { breadcrumb: "Inbox / Voicemails", filters: null };
+export const handle = { breadcrumb: "Voicemails", filters: null };
 
 const FILTER_CHIPS: ChipDef[] = [
   { id: "all", label: "All" },

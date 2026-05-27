@@ -10,7 +10,7 @@ import {
 } from "../../components/PromptReader.js";
 import { EmptyState } from "../../components/EmptyState.js";
 
-export const handle = { breadcrumb: "Knowledge / Prompts", filters: null };
+export const handle = { breadcrumb: "Reader", filters: null };
 
 export function PromptReaderRoute() {
   const { id = "" } = useParams();

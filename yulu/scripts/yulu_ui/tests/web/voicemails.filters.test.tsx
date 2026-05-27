@@ -6,6 +6,7 @@ import { createMemoryRouter, RouterProvider, Outlet } from "react-router";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Voicemails } from "../../web/src/routes/inbox/voicemails.js";
 import { TopBar } from "../../web/src/components/TopBar.js";
+import { ThemeProvider } from "../../web/src/theme.js";
 
 vi.mock("../../web/src/trpc.js", () => ({
   trpc: {
@@ -44,9 +45,11 @@ function mount() {
     },
   ], { initialEntries: ["/inbox/voicemails"] });
   return render(
-    <QueryClientProvider client={qc}>
-      <RouterProvider router={router} />
-    </QueryClientProvider>
+    <ThemeProvider>
+      <QueryClientProvider client={qc}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>
+    </ThemeProvider>
   );
 }
 

@@ -7,7 +7,7 @@ import { useDebounced } from "../../hooks/useDebounced.js";
 import { FilterChips, type ChipDef } from "../../components/FilterChips.js";
 import "./search.css";
 
-export const handle = { breadcrumb: "Inbox / Search", filters: null };
+export const handle = { breadcrumb: "Search", filters: null };
 
 const SINCE_CHIPS: ChipDef[] = [
   { id: "all", label: "All time" },

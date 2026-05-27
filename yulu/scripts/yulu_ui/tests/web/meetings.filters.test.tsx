@@ -6,6 +6,7 @@ import { createMemoryRouter, RouterProvider, Outlet } from "react-router";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Meetings } from "../../web/src/routes/inbox/meetings.js";
 import { TopBar } from "../../web/src/components/TopBar.js";
+import { ThemeProvider } from "../../web/src/theme.js";
 
 const NOW = Date.now();
 const RECENT = NOW - 1000;
@@ -53,9 +54,11 @@ function mount() {
     },
   ], { initialEntries: ["/inbox/meetings"] });
   return render(
-    <QueryClientProvider client={qc}>
-      <RouterProvider router={router} />
-    </QueryClientProvider>
+    <ThemeProvider>
+      <QueryClientProvider client={qc}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>
+    </ThemeProvider>
   );
 }
 

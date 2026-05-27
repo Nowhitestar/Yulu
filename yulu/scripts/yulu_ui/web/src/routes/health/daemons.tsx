@@ -3,7 +3,7 @@ import { trpc } from "../../trpc.js";
 import { DaemonCard, type DaemonHealth } from "../../components/DaemonCard.js";
 import "./daemons.css";
 
-export const handle = { breadcrumb: "Health / Daemons", filters: null };
+export const handle = { breadcrumb: "Daemons", filters: null };
 
 export function HealthDaemons() {
   const { data } = trpc.daemons.health.useQuery(undefined, { refetchInterval: 5_000 });

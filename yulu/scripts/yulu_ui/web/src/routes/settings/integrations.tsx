@@ -5,7 +5,7 @@ import { InlineEditRow } from "../../components/InlineEditRow.js";
 import { TestPopover } from "../../components/TestPopover.js";
 import "./integrations.css";
 
-export const handle = { breadcrumb: "Settings / Integrations", filters: null };
+export const handle = { breadcrumb: "Integrations", filters: null };
 
 export function SettingsIntegrations() {
   const { data: cfg } = trpc.config.get.useQuery();

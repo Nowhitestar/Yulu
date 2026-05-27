@@ -9,7 +9,7 @@ import { RestartBanner } from "../../components/RestartBanner.js";
 
 type DaemonLabel = inferProcedureInput<AppRouter["daemons"]["restart"]>["name"];
 
-export const handle = { breadcrumb: "Settings / Transcription", filters: null };
+export const handle = { breadcrumb: "Transcription", filters: null };
 
 // Daemon short name → LaunchAgent label
 const DAEMON_LABEL: Record<string, DaemonLabel> = {

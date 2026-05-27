@@ -16,9 +16,8 @@
   font-weight: 500;
   color: var(--fg);
 }
-.topbar-filters {
-  margin-left: auto;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
+.topbar-breadcrumb:empty { display: none; }
+.topbar-filters { display: flex; gap: 8px; align-items: center; }
+.topbar-spacer { flex: 1; }
+.topbar-search { flex-shrink: 0; }
+.topbar-theme   { flex-shrink: 0; }

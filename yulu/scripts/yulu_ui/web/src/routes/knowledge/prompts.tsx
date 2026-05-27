@@ -12,7 +12,7 @@ import { EmptyState } from "../../components/EmptyState.js";
 import type { Category } from "../../components/PromptReader.js";
 import "./prompts.css";
 
-export const handle = { breadcrumb: "Knowledge / Prompts", filters: null };
+export const handle = { breadcrumb: "Prompts", filters: null };
 
 interface Row {
   id: string;

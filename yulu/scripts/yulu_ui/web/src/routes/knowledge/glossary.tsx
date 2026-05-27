@@ -5,7 +5,7 @@ import { useWsChannel } from "../../ws.js";
 import { EditableTable, type ColumnDef } from "../../components/EditableTable.js";
 import "./glossary.css";
 
-export const handle = { breadcrumb: "Knowledge / Glossary", filters: null };
+export const handle = { breadcrumb: "Glossary", filters: null };
 
 interface VocabRow {
   id: number;

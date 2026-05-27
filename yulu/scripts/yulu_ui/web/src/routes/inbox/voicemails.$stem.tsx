@@ -7,7 +7,10 @@ import { TranscriptView } from "../../components/TranscriptView.js";
 import { EmptyState } from "../../components/EmptyState.js";
 import "./voicemails.reader.css";
 
-export const handle = { breadcrumb: "Inbox / Voicemails", filters: null };
+export const handle = {
+  breadcrumb: (params: { stem?: string }) => params.stem ?? "Voicemail",
+  filters: null,
+};
 
 type Tab = "transcript" | "summary" | "raw";
 

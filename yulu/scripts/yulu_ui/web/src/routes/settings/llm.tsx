@@ -11,7 +11,7 @@ import { TestPopover } from "../../components/TestPopover.js";
 
 type DaemonLabel = inferProcedureInput<AppRouter["daemons"]["restart"]>["name"];
 
-export const handle = { breadcrumb: "Settings / LLM", filters: null };
+export const handle = { breadcrumb: "LLM", filters: null };
 
 const DAEMON_LABEL: Record<string, DaemonLabel> = {
   agentqueue: "com.yulu.agentqueue",

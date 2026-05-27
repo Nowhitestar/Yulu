@@ -7,7 +7,10 @@ import { TranscriptView } from "../../components/TranscriptView.js";
 import { EmptyState } from "../../components/EmptyState.js";
 import "./meetings.reader.css";
 
-export const handle = { breadcrumb: "Inbox / Meetings", filters: null };
+export const handle = {
+  breadcrumb: (params: { stem?: string }) => params.stem ?? "Meeting",
+  filters: null,
+};
 
 type Tab = "transcript" | "summary" | "realtime" | "raw";
 
