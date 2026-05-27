@@ -1,0 +1,9 @@
+/* web/src/routes/health/daemons.css */
+.daemons-page {
+  padding: 12px 14px;
+}
+.daemons-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 12px;
+}
