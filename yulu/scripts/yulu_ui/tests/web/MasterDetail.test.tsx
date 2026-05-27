@@ -16,10 +16,13 @@ describe("MasterDetail", () => {
     expect(screen.getAllByTestId("masterdetail-skeleton")).toHaveLength(8);
   });
 
-  it("list column has fixed 220px width via data attribute", () => {
+  it("list column is wrapped in ResizableSplit with default 360px width", () => {
     const { container } = render(<MasterDetail listSlot={<span />} detailSlot={<span />} />);
     const list = container.querySelector(".masterdetail-list");
     expect(list).not.toBeNull();
-    expect(list?.getAttribute("data-width")).toBe("220");
+    const pane = container.querySelector(".rs-pane") as HTMLElement | null;
+    expect(pane).not.toBeNull();
+    expect(pane?.style.width).toBe("360px");
+    expect(container.querySelector(".rs-handle")).not.toBeNull();
   });
 });

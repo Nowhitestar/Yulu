@@ -75,6 +75,7 @@ export function Meetings() {
 
   return (
     <MasterDetail
+      storageKey="yulu_ui.inbox.meetings.width"
       listPending={isPending}
       listSlot={
         <>

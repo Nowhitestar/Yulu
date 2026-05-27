@@ -66,6 +66,7 @@ export function Voicemails() {
 
   return (
     <MasterDetail
+      storageKey="yulu_ui.inbox.voicemails.width"
       listPending={isPending}
       listSlot={
         <>

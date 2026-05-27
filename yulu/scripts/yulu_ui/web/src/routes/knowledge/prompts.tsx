@@ -65,6 +65,7 @@ export function Prompts() {
 
   return (
     <MasterDetail
+      storageKey="yulu_ui.knowledge.prompts.width"
       listPending={isPending}
       listSlot={
         <>
