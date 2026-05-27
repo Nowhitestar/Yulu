@@ -116,3 +116,48 @@ describe("system.audioDevices", () => {
     expect(r.output).toEqual([]);
   });
 });
+
+import { mkdtempSync, mkdirSync, writeFileSync as _writeFileSync } from "node:fs";
+import { tmpdir as _tmpdir } from "node:os";
+import { join as _join } from "node:path";
+import Database from "better-sqlite3";
+
+describe("system.dbStats", () => {
+  it("returns size + row count for prompts/vocab/search SQLite files", async () => {
+    const dir = mkdtempSync(_join(_tmpdir(), "yulu_dbst_"));
+    const promptsPath = _join(dir, "prompts.sqlite");
+    const vocabPath = _join(dir, "vocab.sqlite");
+    const searchPath = _join(dir, "search.sqlite");
+    const p = new Database(promptsPath); p.exec("CREATE TABLE prompts (id TEXT); INSERT INTO prompts VALUES ('a');"); p.close();
+    const v = new Database(vocabPath); v.exec("CREATE TABLE vocab (id INTEGER PRIMARY KEY); INSERT INTO vocab VALUES (1),(2);"); v.close();
+    const s = new Database(searchPath); s.exec("CREATE VIRTUAL TABLE docs USING fts5(body);"); s.close();
+    const ctx = { paths: { promptsDb: promptsPath, vocabDb: vocabPath, searchDb: searchPath } } as unknown as AppContext;
+    const caller = createCaller(systemRouter, ctx);
+    const r = await caller.dbStats();
+    expect(r.find((d: { name: string }) => d.name === "prompts")!.rows).toBe(1);
+    expect(r.find((d: { name: string }) => d.name === "vocab")!.rows).toBe(2);
+    expect(r.find((d: { name: string }) => d.name === "search")!.rows).toBe(0);
+    expect(r.every((d: { size: number }) => d.size > 0)).toBe(true);
+  });
+
+  it("returns rows=null + size=0 when DB file missing", async () => {
+    const ctx = { paths: { promptsDb: "/no/such/p.sqlite", vocabDb: "/no/such/v.sqlite", searchDb: "/no/such/s.sqlite" } } as unknown as AppContext;
+    const caller = createCaller(systemRouter, ctx);
+    const r = await caller.dbStats();
+    expect(r.every((d: { rows: number | null; size: number }) => d.rows === null && d.size === 0)).toBe(true);
+  });
+});
+
+describe("system.logPaths", () => {
+  it("returns the 8 known yulu daemon log paths under configDir", async () => {
+    const ctx = { paths: { configDir: "/x/.config/yulu" } } as unknown as AppContext;
+    const caller = createCaller(systemRouter, ctx);
+    const r = await caller.logPaths();
+    expect(r).toHaveLength(8);
+    expect(r.map((p: { name: string }) => p.name).sort()).toEqual(
+      ["agentqueue","audiodaemon","calendar","detector","scheduler","statusagent","sttdaemon","ui"]
+    );
+    expect(r.every((p: { path: string }) => p.path.startsWith("/x/.config/yulu/"))).toBe(true);
+    expect(r.every((p: { path: string }) => p.path.endsWith(".log"))).toBe(true);
+  });
+});

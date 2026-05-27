@@ -1,9 +1,10 @@
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, statSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { spawn } from "node:child_process";
 import { z } from "zod";
 import { router, publicProcedure } from "../trpc.js";
+import { openDb } from "../db.js";
 
 // esbuild inlines these via `define` at build time. In dev (tsx) the
 // identifiers are undefined and we fall back to reading package.json.
@@ -89,5 +90,31 @@ export const systemRouter = router({
     } catch {
       return { input: [], output: [] };
     }
+  }),
+
+  dbStats: publicProcedure.query(({ ctx }) => {
+    const entries: Array<{ name: "prompts" | "vocab" | "search"; mainTable: string; path: string }> = [
+      { name: "prompts", mainTable: "prompts", path: ctx.paths.promptsDb },
+      { name: "vocab",   mainTable: "vocab",   path: ctx.paths.vocabDb },
+      { name: "search",  mainTable: "docs",    path: ctx.paths.searchDb },
+    ];
+    return entries.map(({ name, mainTable, path }) => {
+      if (!existsSync(path)) return { name, path, size: 0, rows: null as number | null };
+      let size = 0; try { size = statSync(path).size; } catch { /* ignore */ }
+      let rows: number | null = null;
+      try {
+        const db = openDb(path);
+        try {
+          const row = db.prepare(`SELECT COUNT(*) AS n FROM ${mainTable}`).get() as { n: number };
+          rows = row?.n ?? 0;
+        } finally { db.close(); }
+      } catch { rows = null; }
+      return { name, path, size, rows };
+    });
+  }),
+
+  logPaths: publicProcedure.query(({ ctx }) => {
+    const names = ["audiodaemon", "sttdaemon", "agentqueue", "statusagent", "scheduler", "detector", "calendar", "ui"];
+    return names.map((name) => ({ name, path: `${ctx.paths.configDir}/${name}.log` }));
   }),
 });
