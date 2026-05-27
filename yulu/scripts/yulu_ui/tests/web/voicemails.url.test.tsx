@@ -16,13 +16,18 @@ vi.mock("../../web/src/trpc.js", () => ({
           mtimeMs: 1000003,
           transcript: "alpha beta gamma OKR delta epsilon",
           summary: null,
+          status: "idle",
         },
         isPending: false,
       }) },
+      transcribe: { useMutation: () => ({ mutate: vi.fn() }) },
+      summarize:  { useMutation: () => ({ mutate: vi.fn() }) },
     },
     glossary: { list: { useQuery: () => ({ data: [], isError: false }) } },
   },
 }));
+
+vi.mock("../../web/src/ws.js", () => ({ useWsChannel: () => {} }));
 
 vi.mock("../../web/src/components/AudioPlayer.js", () => ({
   AudioPlayer: ({ initialSeek }: { initialSeek?: number }) => <div data-testid="audio-stub" data-seek={initialSeek ?? "none"} />,

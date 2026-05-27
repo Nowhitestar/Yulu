@@ -112,3 +112,41 @@ test("Health — Logs tab via #logs hash + dropdown defaults to audiodaemon", as
   await expect(select).toHaveValue("com.yulu.audiodaemon");
   await expect(page.getByRole("button", { name: /pause auto-scroll/i })).toBeVisible();
 });
+
+test("AudioPlayer survives A → B → A switch (Phase I regression)", async ({ page }) => {
+  await page.goto("/inbox/voicemails");
+  const rows = page.getByTestId("voicemail-row");
+  const count = await rows.count();
+  if (count < 2) {
+    test.info().annotations.push({ type: "skip", description: "need at least 2 voicemails" });
+    return;
+  }
+  await rows.nth(0).click();
+  const playA = page.getByRole("button", { name: /^play$/i });
+  await expect(playA).toBeEnabled({ timeout: 10_000 });
+  await playA.click();
+  await expect(page.getByRole("button", { name: /^pause$/i })).toBeVisible({ timeout: 5_000 });
+
+  await rows.nth(1).click();
+  const playB = page.getByRole("button", { name: /^play$/i });
+  await expect(playB).toBeEnabled({ timeout: 10_000 });
+
+  await rows.nth(0).click();
+  const playA2 = page.getByRole("button", { name: /^play$/i });
+  await expect(playA2).toBeEnabled({ timeout: 10_000 });
+  await playA2.click();
+  await expect(page.getByRole("button", { name: /^pause$/i })).toBeVisible({ timeout: 5_000 });
+});
+
+test("VoicemailReader has Re-transcribe and Re-generate summary buttons", async ({ page }) => {
+  await page.goto("/inbox/voicemails");
+  const rows = page.getByTestId("voicemail-row");
+  const count = await rows.count();
+  if (count === 0) {
+    test.info().annotations.push({ type: "skip", description: "no voicemails" });
+    return;
+  }
+  await rows.first().click();
+  await expect(page.getByRole("button", { name: /Re-transcribe/i })).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByRole("button", { name: /Re-generate summary/i })).toBeVisible();
+});

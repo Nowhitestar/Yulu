@@ -16,13 +16,18 @@ vi.mock("../../web/src/trpc.js", () => ({
           mtimeMs: 1000003,
           transcript: "Speaker A: hello\nSpeaker B: world",
           summary: "## summary\n- point one\n- point two",
+          status: "idle",
         },
         isPending: false,
       }) },
+      transcribe: { useMutation: () => ({ mutate: vi.fn() }) },
+      summarize:  { useMutation: () => ({ mutate: vi.fn() }) },
     },
     glossary: { list: { useQuery: () => ({ data: [], isError: false }) } },
   },
 }));
+
+vi.mock("../../web/src/ws.js", () => ({ useWsChannel: () => {} }));
 
 // AudioPlayer stub so tests don't need wavesurfer
 vi.mock("../../web/src/components/AudioPlayer.js", () => ({

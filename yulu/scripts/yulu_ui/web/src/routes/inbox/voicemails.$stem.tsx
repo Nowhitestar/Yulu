@@ -1,10 +1,14 @@
 // web/src/routes/inbox/voicemails.$stem.tsx
 import { useEffect, useRef, useState } from "react";
 import { useParams, useSearchParams } from "react-router";
+import { useQueryClient } from "@tanstack/react-query";
+import { RefreshCw, Sparkles } from "lucide-react";
 import { trpc } from "../../trpc.js";
 import { AudioPlayer } from "../../components/AudioPlayer.js";
 import { TranscriptView } from "../../components/TranscriptView.js";
 import { EmptyState } from "../../components/EmptyState.js";
+import { ReprocessButton, type ReprocessButtonState } from "../../components/ReprocessButton.js";
+import { useWsChannel } from "../../ws.js";
 import "./voicemails.reader.css";
 
 export const handle = {
@@ -22,6 +26,42 @@ export function VoicemailReader() {
   const { stem = "" } = useParams();
   const [params, setParams] = useSearchParams();
   const { data, isPending } = trpc.voicemails.get.useQuery({ stem }, { enabled: stem.length > 0 });
+
+  const qc = useQueryClient();
+  const [lastAction, setLastAction] = useState<"transcribe" | "summarize" | null>(null);
+
+  const transcribeMut = trpc.voicemails.transcribe.useMutation();
+  const summarizeMut = trpc.voicemails.summarize.useMutation();
+
+  useWsChannel("jobs", (msg) => {
+    if (msg.stem !== stem) return;
+    if (msg.state === "done" || msg.state === "failed") {
+      qc.invalidateQueries({ queryKey: [["voicemails", "get"]] });
+      qc.invalidateQueries({ queryKey: [["voicemails", "list"]] });
+    }
+  });
+
+  function deriveButtonState(action: "transcribe" | "summarize"): ReprocessButtonState {
+    const status = data?.status ?? "idle";
+    const targetRunning = action === "transcribe" ? "transcribing" : "summarizing";
+    if (status === targetRunning) return "running";
+    if (status === "failed" && lastAction === action) return "failed";
+    if (status === "idle" && lastAction === action) return "done";
+    return "idle";
+  }
+
+  const handleTranscribe = () => {
+    setLastAction("transcribe");
+    transcribeMut.mutate({ stem }, {
+      onError: (err) => console.error("transcribe failed:", err.message),
+    });
+  };
+  const handleSummarize = () => {
+    setLastAction("summarize");
+    summarizeMut.mutate({ stem }, {
+      onError: (err) => console.error("summarize failed:", err.message),
+    });
+  };
 
   // Local override lets clicks switch tabs even if the router's navigation
   // is debounced (or rejected in jsdom test environment). URL is still
@@ -88,6 +128,27 @@ export function VoicemailReader() {
         <div className="reader-meta">
           <span>{new Date(data.mtimeMs).toLocaleString()}</span>
         </div>
+      </div>
+
+      <div className="reader-actions">
+        <ReprocessButton
+          label="Re-transcribe"
+          icon={<RefreshCw size={14} strokeWidth={1.75} />}
+          state={deriveButtonState("transcribe")}
+          error={data?.statusError}
+          onClick={handleTranscribe}
+          disabled={!data?.wavPath}
+          disabledReason={!data?.wavPath ? "Original WAV file missing" : undefined}
+        />
+        <ReprocessButton
+          label="Re-generate summary"
+          icon={<Sparkles size={14} strokeWidth={1.75} />}
+          state={deriveButtonState("summarize")}
+          error={data?.statusError}
+          onClick={handleSummarize}
+          disabled={!data?.transcript}
+          disabledReason={!data?.transcript ? "Transcript required first — click Re-transcribe" : undefined}
+        />
       </div>
 
       <AudioPlayer

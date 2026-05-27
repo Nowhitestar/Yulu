@@ -66,3 +66,8 @@
   background: transparent;
   color: inherit;
 }
+.reader-actions {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 10px;
+}

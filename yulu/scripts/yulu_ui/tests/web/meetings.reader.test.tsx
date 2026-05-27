@@ -13,6 +13,7 @@ let mockData: {
   transcript: string | null;
   summary: string | null;
   realtime: string | null;
+  status: string;
 } = {
   stem: "standup_20260526_120000",
   wavPath: "/x/standup_20260526_120000.wav",
@@ -21,16 +22,21 @@ let mockData: {
   transcript: "Speaker A: hello\nSpeaker B: world",
   summary: "## summary\n- point one\n- point two",
   realtime: "rough live transcript",
+  status: "idle",
 };
 
 vi.mock("../../web/src/trpc.js", () => ({
   trpc: {
     meetings: {
       get: { useQuery: () => ({ data: mockData, isPending: false }) },
+      transcribe: { useMutation: () => ({ mutate: vi.fn() }) },
+      summarize:  { useMutation: () => ({ mutate: vi.fn() }) },
     },
     glossary: { list: { useQuery: () => ({ data: [], isError: false }) } },
   },
 }));
+
+vi.mock("../../web/src/ws.js", () => ({ useWsChannel: () => {} }));
 
 // AudioPlayer stub so tests don't need wavesurfer
 vi.mock("../../web/src/components/AudioPlayer.js", () => ({
