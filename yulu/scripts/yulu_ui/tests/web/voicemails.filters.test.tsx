@@ -20,6 +20,10 @@ vi.mock("../../web/src/trpc.js", () => ({
         isPending: false,
       }) },
     },
+    // GlobalSearch (now rendered inside TopBar) calls this — gate via disabled state.
+    search: {
+      run: { useQuery: () => ({ data: undefined, isFetching: false }) },
+    },
   },
 }));
 

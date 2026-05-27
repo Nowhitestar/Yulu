@@ -3,8 +3,10 @@ import type { ReactNode } from "react";
 import { describe, it, expect, vi } from "vitest";
 import { render } from "@testing-library/react";
 import { MemoryRouter, useMatches } from "react-router";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { TopBar } from "../../../web/src/components/TopBar.js";
 import { ThemeProvider } from "../../../web/src/theme.js";
+import { trpc, makeTrpcClient } from "../../../web/src/trpc.js";
 
 vi.mock("react-router", async () => {
   const actual = await vi.importActual<typeof import("react-router")>("react-router");
@@ -24,10 +26,16 @@ function setMatches(handles: unknown[]) {
 }
 
 function Wrap({ children }: { children: ReactNode }) {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const tc = makeTrpcClient();
   return (
-    <ThemeProvider>
-      <MemoryRouter>{children}</MemoryRouter>
-    </ThemeProvider>
+    <trpc.Provider client={tc} queryClient={qc}>
+      <QueryClientProvider client={qc}>
+        <ThemeProvider>
+          <MemoryRouter>{children}</MemoryRouter>
+        </ThemeProvider>
+      </QueryClientProvider>
+    </trpc.Provider>
   );
 }
 
