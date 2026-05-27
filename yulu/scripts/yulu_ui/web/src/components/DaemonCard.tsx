@@ -1,5 +1,7 @@
 // web/src/components/DaemonCard.tsx
+import type { JSX } from "react";
 import { Link } from "react-router";
+import { Circle, Pause, AlertCircle } from "lucide-react";
 import "./DaemonCard.css";
 
 export interface DaemonHealth {
@@ -18,10 +20,10 @@ export interface DaemonCardProps {
   stopPending?: boolean;
 }
 
-const STATUS_GLYPH: Record<DaemonHealth["status"], string> = {
-  running: "●",
-  stopped: "⏸",
-  crashed: "⚠",
+const STATUS_GLYPH: Record<DaemonHealth["status"], JSX.Element> = {
+  running: <Circle size={9} strokeWidth={3} fill="currentColor" />,
+  stopped: <Pause size={11} strokeWidth={2} />,
+  crashed: <AlertCircle size={11} strokeWidth={2} />,
 };
 
 const STATUS_LABEL: Record<DaemonHealth["status"], string> = {

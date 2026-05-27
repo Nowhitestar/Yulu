@@ -2,6 +2,7 @@
 import { useState, useMemo } from "react";
 import { NavLink, Outlet, Link } from "react-router";
 import { useQueryClient } from "@tanstack/react-query";
+import { FileText } from "lucide-react";
 import { trpc } from "../../trpc.js";
 import { useWsChannel } from "../../ws.js";
 import { MasterDetail } from "../../components/MasterDetail.js";
@@ -44,7 +45,7 @@ export function Prompts() {
   }, [data, activeFilters]);
 
   const list = rows.length === 0 && !isPending ? (
-    <EmptyState icon="📝" label="No prompts yet. Click + New prompt to add one." />
+    <EmptyState icon={<FileText size={32} strokeWidth={1.5} />} label="No prompts yet. Click + New prompt to add one." />
   ) : (
     rows.map((p) => (
       <NavLink

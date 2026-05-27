@@ -1,7 +1,8 @@
+import type { ReactNode } from "react";
 import "./EmptyState.css";
 
 export interface EmptyStateProps {
-  icon?: string;
+  icon?: ReactNode;
   label: string;
   cta?: { label: string; onClick: () => void };
 }

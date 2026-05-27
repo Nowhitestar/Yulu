@@ -39,14 +39,14 @@ describe("DaemonCard", () => {
     expect(pill?.textContent).toMatch(/running/);
   });
 
-  it("shows ⚠ glyph for crashed status", () => {
-    mount({ ...RUNNING, status: "crashed", exitStatus: 137 });
-    expect(screen.getByText(/⚠/)).toBeInTheDocument();
+  it("shows alert-circle icon for crashed status", () => {
+    const { container } = mount({ ...RUNNING, status: "crashed", exitStatus: 137 });
+    expect(container.querySelector(".status-pill-glyph .lucide-circle-alert, .status-pill-glyph .lucide-alert-circle")).not.toBeNull();
   });
 
-  it("shows ⏸ glyph for stopped status", () => {
-    mount({ ...RUNNING, status: "stopped", pid: 0 });
-    expect(screen.getByText(/⏸/)).toBeInTheDocument();
+  it("shows pause icon for stopped status", () => {
+    const { container } = mount({ ...RUNNING, status: "stopped", pid: 0 });
+    expect(container.querySelector(".status-pill-glyph .lucide-pause")).not.toBeNull();
   });
 
   it("renders PID + last log line", () => {

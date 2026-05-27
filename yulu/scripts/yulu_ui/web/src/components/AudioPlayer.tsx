@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import WaveSurfer from "wavesurfer.js";
+import { Play, Pause } from "lucide-react";
 import "./AudioPlayer.css";
 
 export interface AudioPlayerProps {
@@ -67,7 +68,7 @@ export function AudioPlayer({ src, initialSeek, onSeek }: AudioPlayerProps) {
         onClick={toggle}
         aria-label={isPlaying ? "Pause" : "Play"}
       >
-        {isPlaying ? "❚❚" : "▶"}
+        {isPlaying ? <Pause size={14} strokeWidth={1.75} /> : <Play size={14} strokeWidth={1.75} />}
       </button>
       <div ref={containerRef} className="audioplayer-wave" />
       <div className="audioplayer-time">

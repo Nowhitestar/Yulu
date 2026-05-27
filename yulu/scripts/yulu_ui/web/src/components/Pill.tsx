@@ -1,5 +1,6 @@
 // web/src/components/Pill.tsx
 import { useEffect, useRef, useState } from "react";
+import { Mic } from "lucide-react";
 import { trpc } from "../trpc.js";
 import { useWsChannel } from "../ws.js";
 import "./Pill.css";
@@ -48,7 +49,7 @@ export function Pill() {
     case "idle":
       return (
         <button className="pill pill-idle" onClick={() => toggle.mutate()} aria-label="Record">
-          <span className="pill-mic">🎤</span>
+          <span className="pill-mic"><Mic size={12} strokeWidth={1.75} /></span>
           <span className="pill-label">Record</span>
           <span className="pill-hotkey">{hotkey}</span>
         </button>
