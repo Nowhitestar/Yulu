@@ -1,7 +1,9 @@
 import { readdirSync, readFileSync, statSync, existsSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
+import { TRPCError } from "@trpc/server";
 import { router, publicProcedure } from "../trpc.js";
+import { runTranscribe, runSummarize } from "../jobRunner.js";
 
 const STEM_RE = /^(.+?)_(\d{8})_(\d{6})\.wav$/;
 
@@ -29,6 +31,7 @@ export const meetingsRouter = router({
         if (!parsed) continue;
         const wavPath = join(dir, f);
         const stat = statSync(wavPath);
+        const job = ctx.jobs.get(parsed.stem);
         rows.push({
           stem: parsed.stem,
           meetingTitle: parsed.title,
@@ -41,6 +44,8 @@ export const meetingsRouter = router({
           hasRealtime:   existsSync(join(dir, `${parsed.stem}.realtime.transcript.txt`)),
           firstWords:    firstWordsOf(join(dir, `${parsed.stem}.transcript.txt`)),
           attendeeCount: undefined as number | undefined,
+          status:        job?.state ?? "idle",
+          statusError:   job?.error,
         });
       }
       rows.sort((a, b) => b.mtimeMs - a.mtimeMs);
@@ -60,6 +65,7 @@ export const meetingsRouter = router({
         const p = join(dir, `${input.stem}${suffix}`);
         return existsSync(p) ? readFileSync(p, "utf8") : null;
       };
+      const job = ctx.jobs.get(input.stem);
       return {
         stem: input.stem,
         wavPath: wav,
@@ -68,6 +74,8 @@ export const meetingsRouter = router({
         transcript: read(".transcript.txt"),
         summary:    read(".summary.md"),
         realtime:   read(".realtime.transcript.txt"),
+        status:      job?.state ?? "idle",
+        statusError: job?.error,
       };
     }),
 
@@ -89,6 +97,54 @@ export const meetingsRouter = router({
       }
       ctx.pubsub.publish("sidebar-counts", { voicemails: 0, meetings: -1, prompts: 0, glossary: 0 });
       return { removed };
+    }),
+
+  transcribe: publicProcedure
+    .input(z.object({ stem: z.string().regex(/^.+?_\d{8}_\d{6}$/) }))
+    .mutation(async ({ ctx, input }) => {
+      const wavPath = join(ctx.paths.moviesDir, `${input.stem}.wav`);
+      if (!existsSync(wavPath)) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "WAV file missing" });
+      }
+      if (ctx.jobs.get(input.stem)) {
+        throw new TRPCError({ code: "CONFLICT", message: "Job already running for this recording" });
+      }
+      void runTranscribe({
+        stem: input.stem,
+        wavPath,
+        transcribePy: ctx.paths.transcribePy,
+        registry: ctx.jobs,
+        pubsub: ctx.pubsub,
+      });
+      return { ok: true as const };
+    }),
+
+  summarize: publicProcedure
+    .input(z.object({ stem: z.string().regex(/^.+?_\d{8}_\d{6}$/) }))
+    .mutation(async ({ ctx, input }) => {
+      const transcriptPath = join(ctx.paths.moviesDir, `${input.stem}.transcript.txt`);
+      if (!existsSync(transcriptPath)) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: "Transcript missing — run Re-transcribe first",
+        });
+      }
+      if (ctx.jobs.get(input.stem)) {
+        throw new TRPCError({ code: "CONFLICT", message: "Job already running for this recording" });
+      }
+      const summaryPath = join(ctx.paths.moviesDir, `${input.stem}.summary.md`);
+      const cfg = ctx.config.read();
+      const llmCommand = (cfg.llm?.command ?? null) as string[] | null;
+      void runSummarize({
+        stem: input.stem,
+        transcriptPath,
+        summaryPath,
+        llmCommand,
+        agentQueueJson: ctx.paths.agentQueueJson,
+        registry: ctx.jobs,
+        pubsub: ctx.pubsub,
+      });
+      return { ok: true as const };
     }),
 });
 
