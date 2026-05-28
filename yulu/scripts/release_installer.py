@@ -8,6 +8,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import urllib.parse
 import urllib.request
 import zipfile
 from dataclasses import dataclass
@@ -203,9 +204,18 @@ def read_install_metadata(runtime_dir: Path) -> dict:
     return data if isinstance(data, dict) else {}
 
 
+def file_url_to_path(url: str) -> Path:
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme != "file":
+        raise InstallError(f"Expected file URL, got {url!r}")
+    if parsed.netloc not in ("", "localhost"):
+        raise InstallError(f"Refusing non-local file URL host {parsed.netloc!r}")
+    return Path(urllib.request.url2pathname(parsed.path))
+
+
 def download_to_path(url: str, dest: Path) -> None:
     if url.startswith("file://"):
-        src = Path(urllib.request.url2pathname(url.removeprefix("file://")))
+        src = file_url_to_path(url)
         shutil.copy2(src, dest)
         return
     with urllib.request.urlopen(url, timeout=30) as response, dest.open("wb") as handle:
@@ -214,7 +224,7 @@ def download_to_path(url: str, dest: Path) -> None:
 
 def read_url_text(url: str) -> str:
     if url.startswith("file://"):
-        src = Path(urllib.request.url2pathname(url.removeprefix("file://")))
+        src = file_url_to_path(url)
         return src.read_text(encoding="utf-8")
     with urllib.request.urlopen(url, timeout=30) as response:
         return response.read().decode("utf-8")
@@ -244,7 +254,10 @@ def replace_runtime_with_backup(staged_runtime: Path, install_dir: Path) -> Path
 
 def restore_backup(backup: Path, install_dir: Path) -> None:
     if install_dir.exists():
-        shutil.rmtree(install_dir)
+        if install_dir.is_dir() and not install_dir.is_symlink():
+            shutil.rmtree(install_dir)
+        else:
+            install_dir.unlink()
     shutil.move(str(backup), str(install_dir))
 
 
@@ -296,9 +309,17 @@ def install_release_from_urls(
             )
             if run_setup:
                 _run_setup_script(install_dir, upgrade=existed, timeout=setup_timeout)
-        except Exception:
-            if backup is not None:
-                restore_backup(backup, install_dir)
-            elif install_dir.exists():
-                shutil.rmtree(install_dir)
+        except Exception as install_error:
+            try:
+                if backup is not None:
+                    restore_backup(backup, install_dir)
+                elif install_dir.exists():
+                    if install_dir.is_dir() and not install_dir.is_symlink():
+                        shutil.rmtree(install_dir)
+                    else:
+                        install_dir.unlink()
+            except Exception as rollback_error:
+                raise InstallError(
+                    f"Install failed ({install_error}); rollback failed ({rollback_error})"
+                ) from install_error
             raise

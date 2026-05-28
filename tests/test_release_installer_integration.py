@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+import release_installer
 from release_installer import InstallError, install_release_from_urls
 
 
@@ -65,6 +66,33 @@ def test_install_release_rolls_back_when_setup_fails(tmp_path):
 
     assert (install_dir / "VERSION").read_text(encoding="utf-8").strip() == "0.4.0"
     assert (install_dir / "old.txt").read_text(encoding="utf-8") == "old"
+
+
+def test_install_release_reports_original_error_when_rollback_fails(tmp_path, monkeypatch):
+    zip_path, checksums = build_fake_asset(tmp_path, setup_body="#!/usr/bin/env bash\nexit 9\n")
+    install_dir = tmp_path / "install"
+    install_dir.mkdir()
+    (install_dir / "VERSION").write_text("0.4.0\n", encoding="utf-8")
+
+    def fail_restore(*args, **kwargs):
+        raise RuntimeError("restore exploded")
+
+    monkeypatch.setattr(release_installer, "restore_backup", fail_restore)
+
+    with pytest.raises(InstallError) as excinfo:
+        install_release_from_urls(
+            tag="v0.5.0",
+            asset_name=zip_path.name,
+            asset_url=zip_path.as_uri(),
+            checksums_url=checksums.as_uri(),
+            install_dir=install_dir,
+            run_setup=True,
+        )
+
+    message = str(excinfo.value)
+    assert "setup.sh failed with exit code 9" in message
+    assert "rollback failed" in message
+    assert "restore exploded" in message
 
 
 def test_install_release_rolls_back_when_setup_times_out(tmp_path):

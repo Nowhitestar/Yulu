@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from release_installer import (
+    download_to_path,
     InstallMetadata,
     InstallError,
     ReleaseAsset,
@@ -14,6 +15,7 @@ from release_installer import (
     normalize_version_tag,
     parse_checksums,
     parse_target_args,
+    read_url_text,
     restore_backup,
     select_release_asset,
     sha256_file,
@@ -306,3 +308,51 @@ def test_restore_backup_replaces_failed_runtime(tmp_path):
 
     assert (install_dir / "old.txt").read_text(encoding="utf-8") == "old"
     assert not (install_dir / "bad.txt").exists()
+
+
+def test_restore_backup_replaces_failed_file_runtime(tmp_path):
+    install_dir = tmp_path / "install"
+    install_dir.write_text("bad", encoding="utf-8")
+    backup = tmp_path / "backup"
+    backup.mkdir()
+    (backup / "old.txt").write_text("old", encoding="utf-8")
+
+    restore_backup(backup, install_dir)
+
+    assert install_dir.is_dir()
+    assert (install_dir / "old.txt").read_text(encoding="utf-8") == "old"
+
+
+def test_restore_backup_replaces_failed_symlink_runtime(tmp_path):
+    target = tmp_path / "failed-target"
+    target.mkdir()
+    install_dir = tmp_path / "install"
+    try:
+        install_dir.symlink_to(target, target_is_directory=True)
+    except OSError:
+        pytest.skip("symlinks are not supported on this filesystem")
+    backup = tmp_path / "backup"
+    backup.mkdir()
+    (backup / "old.txt").write_text("old", encoding="utf-8")
+
+    restore_backup(backup, install_dir)
+
+    assert install_dir.is_dir()
+    assert not install_dir.is_symlink()
+    assert (install_dir / "old.txt").read_text(encoding="utf-8") == "old"
+
+
+def test_file_url_helpers_accept_localhost_and_reject_remote_hosts(tmp_path):
+    source = tmp_path / "source.txt"
+    source.write_text("hello", encoding="utf-8")
+    localhost_url = f"file://localhost{source.as_posix()}"
+    dest = tmp_path / "dest.txt"
+
+    assert read_url_text(localhost_url) == "hello"
+    download_to_path(localhost_url, dest)
+    assert dest.read_text(encoding="utf-8") == "hello"
+
+    with pytest.raises(InstallError, match="non-local file URL"):
+        read_url_text("file://example.com/tmp/source.txt")
+    with pytest.raises(InstallError, match="non-local file URL"):
+        download_to_path("file://example.com/tmp/source.txt", tmp_path / "bad.txt")
