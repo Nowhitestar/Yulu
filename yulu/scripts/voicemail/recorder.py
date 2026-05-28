@@ -182,6 +182,25 @@ def _socket_send(cmd: dict):
     return socket_send(cmd)
 
 
+def _realtime_enabled() -> bool:
+    """Indirection over record_audio.realtime_enabled (the global flag)."""
+    from record_audio import realtime_enabled
+    return bool(realtime_enabled())
+
+
+def _start_realtime(wav_path: Path) -> None:
+    """Start the live transcriber for this voicemail. No-op when realtime is
+    disabled (start_realtime_transcriber self-guards on realtime_enabled())."""
+    from record_audio import start_realtime_transcriber
+    start_realtime_transcriber(str(wav_path), "voicemail")
+
+
+def _stop_realtime() -> None:
+    """Stop + reap the live transcriber. No-op if it was never started."""
+    from record_audio import stop_realtime_transcriber
+    stop_realtime_transcriber(wait=True)
+
+
 def _acquire_recording_lock(*, timeout: float = 0.5):
     """Re-exposed so tests can stub away the OS-level flock."""
     from recording_lock import acquire as _acquire
@@ -238,6 +257,7 @@ def cmd_new(title: Optional[str] = None, *,
             )
             print(f"🎤 录音中 — Ctrl+C 停止 ({silence_seconds}s 静音自动停)",
                   file=sys.stderr)
+            _start_realtime(wav_path)   # no-op when realtime disabled
 
             stop_requested = {"v": False}
 
@@ -257,6 +277,7 @@ def cmd_new(title: Optional[str] = None, *,
                     time.sleep(_poll_interval)
             finally:
                 signal.signal(signal.SIGINT, prev)
+                _stop_realtime()        # flush + reap even on exception
             print("⏹ Stopped", file=sys.stderr)
     except RecordingBusy as exc:
         info = exc.info or {}
@@ -271,6 +292,15 @@ def cmd_new(title: Optional[str] = None, *,
     if wav_path is None or not wav_path.exists():
         print("⚠️ recording stopped but no .wav file present", file=sys.stderr)
         return 1
+
+    if _realtime_enabled():
+        rc = _promote_realtime_transcript(wav_path, title=title)
+        if rc == 0:
+            return 0
+        print(
+            "⚠️ realtime transcript empty/missing — falling back to whole-file transcribe",
+            file=sys.stderr,
+        )
     return _transcribe_and_enqueue(wav_path, title=title)
 
 
