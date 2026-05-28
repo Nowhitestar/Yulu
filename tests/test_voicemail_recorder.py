@@ -176,6 +176,12 @@ def test_cmd_new_sends_start_with_sys_disabled_and_silence_seconds(
 
     monkeypatch.setattr(recorder, "_socket_send", fake_socket_send)
     monkeypatch.setattr(recorder, "_poll_interval", 0.01)
+    # Keep this test hermetic: force the whole-file path and no-op the realtime
+    # seams so cmd_new never spawns the real realtime_transcribe.py subprocess
+    # or writes to the real ~/.config/yulu PID file.
+    monkeypatch.setattr(recorder, "_start_realtime", lambda p: None)
+    monkeypatch.setattr(recorder, "_stop_realtime", lambda: None)
+    monkeypatch.setattr(recorder, "_realtime_enabled", lambda: False)
     with patch.object(recorder, "_request_transcribe", return_value=fake_response):
         rc = recorder.cmd_new(title="MyMemo")
 
