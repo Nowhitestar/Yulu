@@ -25,6 +25,7 @@ SEMVER_RE = re.compile(
 )
 SHA256_RE = re.compile(r"^[0-9a-fA-F]{64}$")
 VERSION_CHECK_TIMEOUT_SECONDS = 10
+SETUP_TIMEOUT_SECONDS = 300
 
 
 class InstallError(RuntimeError):
@@ -232,9 +233,10 @@ def replace_runtime_with_backup(staged_runtime: Path, install_dir: Path) -> Path
     install_dir.parent.mkdir(parents=True, exist_ok=True)
     backup = None
     if install_dir.exists():
-        backup = install_dir.with_name(
-            f"{install_dir.name}.backup-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}"
+        backup = Path(
+            tempfile.mkdtemp(prefix=f"{install_dir.name}.backup-", dir=str(install_dir.parent))
         )
+        backup.rmdir()
         shutil.move(str(install_dir), str(backup))
     shutil.move(str(staged_runtime), str(install_dir))
     return backup
@@ -246,12 +248,15 @@ def restore_backup(backup: Path, install_dir: Path) -> None:
     shutil.move(str(backup), str(install_dir))
 
 
-def _run_setup_script(install_dir: Path, upgrade: bool) -> None:
+def _run_setup_script(install_dir: Path, upgrade: bool, timeout: float = SETUP_TIMEOUT_SECONDS) -> None:
     setup = install_dir / "yulu" / "scripts" / "setup.sh"
     cmd = ["bash", str(setup)]
     if upgrade:
         cmd.append("--upgrade")
-    result = subprocess.run(cmd, cwd=str(install_dir))
+    try:
+        result = subprocess.run(cmd, cwd=str(install_dir), timeout=timeout)
+    except subprocess.TimeoutExpired as exc:
+        raise InstallError(f"setup.sh timed out after {timeout}s") from exc
     if result.returncode != 0:
         raise InstallError(f"setup.sh failed with exit code {result.returncode}")
 
@@ -267,6 +272,7 @@ def install_release_from_urls(
     checksums_url: str,
     install_dir: Path,
     run_setup: bool = True,
+    setup_timeout: float = SETUP_TIMEOUT_SECONDS,
 ) -> None:
     existed = install_dir.exists()
     with tempfile.TemporaryDirectory(prefix="yulu-install-") as tmp:
@@ -289,7 +295,7 @@ def install_release_from_urls(
                 InstallMetadata(source="release", version=tag, asset=asset_name, sha256=expected),
             )
             if run_setup:
-                _run_setup_script(install_dir, upgrade=existed)
+                _run_setup_script(install_dir, upgrade=existed, timeout=setup_timeout)
         except Exception:
             if backup is not None:
                 restore_backup(backup, install_dir)

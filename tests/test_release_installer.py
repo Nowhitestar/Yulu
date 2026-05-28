@@ -274,6 +274,26 @@ def test_replace_runtime_with_backup_moves_existing_runtime(tmp_path):
     assert (backup / "old.txt").read_text(encoding="utf-8") == "old"
 
 
+def test_replace_runtime_with_backup_avoids_existing_backup_collision(tmp_path):
+    install_dir = tmp_path / "install"
+    install_dir.mkdir()
+    (install_dir / "old.txt").write_text("old", encoding="utf-8")
+    staged = tmp_path / "staged"
+    staged.mkdir()
+    (staged / "new.txt").write_text("new", encoding="utf-8")
+    existing_backup = tmp_path / "install.backup-existing"
+    existing_backup.mkdir()
+    (existing_backup / "sentinel.txt").write_text("sentinel", encoding="utf-8")
+
+    backup = replace_runtime_with_backup(staged, install_dir)
+
+    assert backup is not None
+    assert backup != existing_backup
+    assert (backup / "old.txt").read_text(encoding="utf-8") == "old"
+    assert not (backup / "install").exists()
+    assert (existing_backup / "sentinel.txt").read_text(encoding="utf-8") == "sentinel"
+
+
 def test_restore_backup_replaces_failed_runtime(tmp_path):
     install_dir = tmp_path / "install"
     install_dir.mkdir()

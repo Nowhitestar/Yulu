@@ -67,6 +67,28 @@ def test_install_release_rolls_back_when_setup_fails(tmp_path):
     assert (install_dir / "old.txt").read_text(encoding="utf-8") == "old"
 
 
+def test_install_release_rolls_back_when_setup_times_out(tmp_path):
+    zip_path, checksums = build_fake_asset(tmp_path, setup_body="#!/usr/bin/env bash\nsleep 5\n")
+    install_dir = tmp_path / "install"
+    install_dir.mkdir()
+    (install_dir / "VERSION").write_text("0.4.0\n", encoding="utf-8")
+    (install_dir / "old.txt").write_text("old", encoding="utf-8")
+
+    with pytest.raises(InstallError, match="setup.sh timed out"):
+        install_release_from_urls(
+            tag="v0.5.0",
+            asset_name=zip_path.name,
+            asset_url=zip_path.as_uri(),
+            checksums_url=checksums.as_uri(),
+            install_dir=install_dir,
+            run_setup=True,
+            setup_timeout=0.01,
+        )
+
+    assert (install_dir / "VERSION").read_text(encoding="utf-8").strip() == "0.4.0"
+    assert (install_dir / "old.txt").read_text(encoding="utf-8") == "old"
+
+
 def test_install_release_checksum_mismatch_preserves_existing_runtime(tmp_path):
     zip_path, checksums = build_fake_asset(tmp_path)
     checksums.write_text(f"{'0' * 64}  {zip_path.name}\n", encoding="utf-8")
