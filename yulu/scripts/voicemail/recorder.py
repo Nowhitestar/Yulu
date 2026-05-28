@@ -90,18 +90,12 @@ def _persist_title_sidecar(wav_path: Path, title: Optional[str]) -> None:
     wav_path.with_suffix(".title").write_text(title + "\n", encoding="utf-8")
 
 
-def _transcribe_and_enqueue(wav_path: Path, *, title: Optional[str]) -> int:
-    """Post-stop pipeline. Returns 0 on success, non-zero on failure."""
-    response = _request_transcribe(wav_path)
-    if response.get("status") != "ok":
-        print(
-            f"⚠️ stt_daemon transcribe failed: {response.get('error')}",
-            file=sys.stderr,
-        )
-        return 2
+def _finalize_transcript(wav_path: Path, text: str, *, title: Optional[str]) -> int:
+    """Write raw+final transcript, persist title sidecar, push to the search
+    index (best-effort), and enqueue voicemail prompts. Returns 0.
 
-    text = _extract_mic_text(response)
-
+    Shared by the whole-file path (_transcribe_and_enqueue) and the realtime
+    promote path (_promote_realtime_transcript)."""
     raw_path = wav_path.with_suffix(".raw.transcript.txt")
     transcript_path = wav_path.with_suffix(".transcript.txt")
     raw_path.write_text(text, encoding="utf-8")
@@ -133,6 +127,19 @@ def _transcribe_and_enqueue(wav_path: Path, *, title: Optional[str]) -> int:
     )
     print(f"📤 enqueued {queued} voicemail prompt(s)", file=sys.stderr)
     return 0
+
+
+def _transcribe_and_enqueue(wav_path: Path, *, title: Optional[str]) -> int:
+    """Whole-file post-stop pipeline. Returns 0 on success, non-zero on failure."""
+    response = _request_transcribe(wav_path)
+    if response.get("status") != "ok":
+        print(
+            f"⚠️ stt_daemon transcribe failed: {response.get('error')}",
+            file=sys.stderr,
+        )
+        return 2
+    text = _extract_mic_text(response)
+    return _finalize_transcript(wav_path, text, title=title)
 
 
 # Module-level seam for tests (patchable)
