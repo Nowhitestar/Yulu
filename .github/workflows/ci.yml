@@ -24,10 +24,13 @@ jobs:
         run: |
           set -euo pipefail
           for f in install.sh \
+                   packaging/scripts/package.sh \
+                   packaging/scripts/checksums.sh \
                    yulu/scripts/setup.sh \
                    yulu/scripts/uninstall.sh \
                    yulu/scripts/yulu \
-                   yulu/scripts/build_audio_daemon.sh; do
+                   yulu/scripts/build_audio_daemon.sh \
+                   yulu/scripts/build_status_agent.sh; do
             printf 'bash -n %s\n' "$f"
             bash -n "$f"
           done
