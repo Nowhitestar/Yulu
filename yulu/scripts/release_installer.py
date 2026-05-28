@@ -276,7 +276,7 @@ def replace_runtime_with_backup(staged_runtime: Path, install_dir: Path) -> Path
 
 
 def restore_backup(backup: Path, install_dir: Path) -> None:
-    if install_dir.exists():
+    if install_dir.exists() or install_dir.is_symlink():
         if install_dir.is_dir() and not install_dir.is_symlink():
             shutil.rmtree(install_dir)
         else:
