@@ -72,7 +72,6 @@ Build the package and checksums locally before tagging when you want a dry run:
 ```bash
 VERSION="$(cat VERSION)"
 rm -rf dist
-mkdir -p dist
 packaging/scripts/package.sh "v${VERSION}"
-shasum -a 256 "dist/yulu-macos-arm64-v${VERSION}.zip" dist/install.sh > dist/checksums.txt
+packaging/scripts/checksums.sh dist
 ```

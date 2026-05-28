@@ -274,14 +274,6 @@ def build_dev_metadata(branch: str, commit: str) -> InstallMetadata:
     return InstallMetadata(source="dev", branch=branch, commit=commit)
 
 
-def ensure_dev_switch_allowed(install_dir: Path) -> None:
-    if not path_exists_or_symlink(install_dir):
-        return
-    if (install_dir / ".git").exists():
-        return
-    raise InstallError(f"Cannot switch release runtime to dev in-place. Move {install_dir} aside or reinstall with --dev.")
-
-
 def file_url_to_path(url: str) -> Path:
     parsed = urllib.parse.urlparse(url)
     if parsed.scheme != "file":
@@ -292,20 +284,38 @@ def file_url_to_path(url: str) -> Path:
 
 
 def download_to_path(url: str, dest: Path) -> None:
-    if url.startswith("file://"):
-        src = file_url_to_path(url)
-        shutil.copy2(src, dest)
-        return
-    with urllib.request.urlopen(url, timeout=30) as response, dest.open("wb") as handle:
-        shutil.copyfileobj(response, handle)
+    try:
+        if url.startswith("file://"):
+            src = file_url_to_path(url)
+            shutil.copy2(src, dest)
+            return
+        with urllib.request.urlopen(url, timeout=30) as response, dest.open("wb") as handle:
+            shutil.copyfileobj(response, handle)
+    except InstallError:
+        raise
+    except urllib.error.HTTPError as exc:
+        raise InstallError(f"Failed to download {url}: HTTP {exc.code} {exc.reason}") from exc
+    except urllib.error.URLError as exc:
+        raise InstallError(f"Failed to download {url}: {exc.reason}") from exc
+    except OSError as exc:
+        raise InstallError(f"Failed to save {url}: {exc}") from exc
 
 
 def read_url_text(url: str) -> str:
-    if url.startswith("file://"):
-        src = file_url_to_path(url)
-        return src.read_text(encoding="utf-8")
-    with urllib.request.urlopen(url, timeout=30) as response:
-        return response.read().decode("utf-8")
+    try:
+        if url.startswith("file://"):
+            src = file_url_to_path(url)
+            return src.read_text(encoding="utf-8")
+        with urllib.request.urlopen(url, timeout=30) as response:
+            return response.read().decode("utf-8")
+    except InstallError:
+        raise
+    except urllib.error.HTTPError as exc:
+        raise InstallError(f"Failed to download {url}: HTTP {exc.code} {exc.reason}") from exc
+    except urllib.error.URLError as exc:
+        raise InstallError(f"Failed to download {url}: {exc.reason}") from exc
+    except (OSError, UnicodeDecodeError) as exc:
+        raise InstallError(f"Failed to read {url}: {exc}") from exc
 
 
 def _assert_safe_zip_member(dest: Path, member: str) -> None:
@@ -382,10 +392,28 @@ def _run_setup_script(install_dir: Path, upgrade: bool, timeout: float = SETUP_T
 run_setup = _run_setup_script
 
 
+def move_existing_runtime_to_backup(install_dir: Path) -> Path | None:
+    if not path_exists_or_symlink(install_dir):
+        return None
+    install_dir.parent.mkdir(parents=True, exist_ok=True)
+    backup = Path(tempfile.mkdtemp(prefix=f"{install_dir.name}.backup-", dir=str(install_dir.parent)))
+    backup.rmdir()
+    shutil.move(str(install_dir), str(backup))
+    return backup
+
+
+def remove_runtime(path: Path) -> None:
+    if path_exists_or_symlink(path):
+        if path.is_dir() and not path.is_symlink():
+            shutil.rmtree(path)
+        else:
+            path.unlink()
+
+
 def install_dev_channel(install_dir: Path, run_setup_flag: bool = True) -> None:
-    ensure_dev_switch_allowed(install_dir)
-    existed = install_dir.exists()
-    if existed:
+    existed = path_exists_or_symlink(install_dir)
+    backup = None
+    if existed and (install_dir / ".git").exists():
         status = run(["git", "status", "--porcelain"], cwd=install_dir)
         if status:
             raise InstallError(f"Dev checkout has local changes in {install_dir}; commit or stash them before updating.")
@@ -400,12 +428,36 @@ def install_dev_channel(install_dir: Path, run_setup_flag: bool = True) -> None:
                 "Resolve local commits or reinstall with --dev."
             )
     else:
-        install_dir.parent.mkdir(parents=True, exist_ok=True)
-        run(["git", "clone", "--branch", "main", REPO_URL, str(install_dir)])
-    commit = run(["git", "rev-parse", "--short", "HEAD"], cwd=install_dir)
-    if run_setup_flag:
-        run_setup(install_dir, upgrade=existed)
-    write_install_metadata(install_dir, build_dev_metadata(branch="main", commit=commit))
+        try:
+            backup = move_existing_runtime_to_backup(install_dir)
+            install_dir.parent.mkdir(parents=True, exist_ok=True)
+            run(["git", "clone", "--branch", "main", REPO_URL, str(install_dir)])
+        except Exception as install_error:
+            try:
+                remove_runtime(install_dir)
+                if backup is not None:
+                    restore_backup(backup, install_dir)
+            except Exception as rollback_error:
+                raise InstallError(
+                    f"Dev install failed ({install_error}); rollback failed ({rollback_error})"
+                ) from install_error
+            raise
+    try:
+        commit = run(["git", "rev-parse", "--short", "HEAD"], cwd=install_dir)
+        if run_setup_flag:
+            run_setup(install_dir, upgrade=existed)
+        write_install_metadata(install_dir, build_dev_metadata(branch="main", commit=commit))
+    except Exception as install_error:
+        if backup is None:
+            raise
+        try:
+            remove_runtime(install_dir)
+            restore_backup(backup, install_dir)
+        except Exception as rollback_error:
+            raise InstallError(
+                f"Dev install failed ({install_error}); rollback failed ({rollback_error})"
+            ) from install_error
+        raise
 
 
 def install_release_from_urls(

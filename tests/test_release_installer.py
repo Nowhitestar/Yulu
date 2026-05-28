@@ -12,7 +12,6 @@ from release_installer import (
     build_dev_metadata,
     fetch_json,
     download_to_path,
-    ensure_dev_switch_allowed,
     extract_release_zip,
     github_release_api_url,
     install_dev_channel,
@@ -246,6 +245,52 @@ def test_fetch_json_wraps_url_errors(monkeypatch):
         fetch_json("https://api.github.com/repos/Nowhitestar/Yulu/releases/latest")
 
 
+def test_download_to_path_wraps_url_errors(tmp_path, monkeypatch):
+    def raise_url_error(*args, **kwargs):
+        raise urllib.error.URLError("network down")
+
+    monkeypatch.setattr(release_installer.urllib.request, "urlopen", raise_url_error)
+
+    with pytest.raises(InstallError, match="Failed to download"):
+        download_to_path("https://example.invalid/yulu.zip", tmp_path / "yulu.zip")
+
+
+def test_read_url_text_wraps_url_errors(monkeypatch):
+    def raise_url_error(*args, **kwargs):
+        raise urllib.error.URLError("network down")
+
+    monkeypatch.setattr(release_installer.urllib.request, "urlopen", raise_url_error)
+
+    with pytest.raises(InstallError, match="Failed to download"):
+        read_url_text("https://example.invalid/checksums.txt")
+
+
+def test_main_reports_asset_download_errors_cleanly(tmp_path, monkeypatch, capsys):
+    payload = {
+        "tag_name": "v0.5.0",
+        "assets": [
+            {"name": "checksums.txt", "browser_download_url": "https://example.invalid/checksums.txt"},
+            {
+                "name": "yulu-macos-arm64-v0.5.0.zip",
+                "browser_download_url": "https://example.invalid/yulu.zip",
+            },
+        ],
+    }
+
+    def raise_url_error(*args, **kwargs):
+        raise urllib.error.URLError("network down")
+
+    monkeypatch.setattr(release_installer, "fetch_json", lambda _url: payload)
+    monkeypatch.setattr(release_installer.urllib.request, "urlopen", raise_url_error)
+
+    exit_code = main(["install", "--latest", "--install-dir", str(tmp_path / "install"), "--no-setup"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert "Yulu install failed: Failed to download" in captured.err
+    assert "Traceback" not in captured.err
+
+
 def test_main_installs_release_target(tmp_path, monkeypatch):
     calls = []
 
@@ -437,15 +482,6 @@ def test_build_dev_metadata():
     assert metadata.commit == "abc1234"
 
 
-def test_release_runtime_cannot_switch_to_dev_in_place(tmp_path):
-    install_dir = tmp_path / "install"
-    install_dir.mkdir()
-    (install_dir / ".yulu-install.json").write_text('{"source":"release"}\n', encoding="utf-8")
-
-    with pytest.raises(InstallError, match="Cannot switch release runtime to dev in-place"):
-        ensure_dev_switch_allowed(install_dir)
-
-
 def test_install_dev_channel_updates_clean_existing_checkout(tmp_path, monkeypatch):
     install_dir = tmp_path / "install"
     (install_dir / ".git").mkdir(parents=True)
@@ -601,6 +637,74 @@ def test_install_dev_channel_clones_missing_install_dir_with_fresh_setup(tmp_pat
     assert read_install_metadata(install_dir)["branch"] == "main"
     assert read_install_metadata(install_dir)["commit"] == "def5678"
     assert setup_calls == [(install_dir, False)]
+
+
+def test_install_dev_channel_replaces_release_runtime_with_checkout(tmp_path, monkeypatch):
+    install_dir = tmp_path / "install"
+    install_dir.mkdir()
+    (install_dir / "VERSION").write_text("0.5.0\n", encoding="utf-8")
+    (install_dir / ".yulu-install.json").write_text('{"source":"release"}\n', encoding="utf-8")
+    commands = []
+    setup_calls = []
+
+    def fake_run(cmd, cwd=None):
+        commands.append((cmd, cwd))
+        if cmd[:3] == ["git", "clone", "--branch"]:
+            assert not install_dir.exists()
+            install_dir.mkdir()
+            (install_dir / ".git").mkdir()
+            return ""
+        if cmd == ["git", "rev-parse", "--short", "HEAD"]:
+            return "def5678"
+        return ""
+
+    def fake_setup(path, upgrade):
+        setup_calls.append((path, upgrade))
+
+    monkeypatch.setattr(release_installer, "run", fake_run)
+    monkeypatch.setattr(release_installer, "run_setup", fake_setup)
+
+    install_dev_channel(install_dir)
+
+    backups = list(tmp_path.glob("install.backup-*"))
+    assert len(backups) == 1
+    assert (backups[0] / "VERSION").read_text(encoding="utf-8") == "0.5.0\n"
+    assert (install_dir / ".git").is_dir()
+    assert read_install_metadata(install_dir)["source"] == "dev"
+    assert setup_calls == [(install_dir, True)]
+    assert commands == [
+        (["git", "clone", "--branch", "main", release_installer.REPO_URL, str(install_dir)], None),
+        (["git", "rev-parse", "--short", "HEAD"], install_dir),
+    ]
+
+
+def test_install_dev_channel_rolls_back_release_runtime_when_setup_fails(tmp_path, monkeypatch):
+    install_dir = tmp_path / "install"
+    install_dir.mkdir()
+    (install_dir / "VERSION").write_text("0.5.0\n", encoding="utf-8")
+    (install_dir / ".yulu-install.json").write_text('{"source":"release"}\n', encoding="utf-8")
+
+    def fake_run(cmd, cwd=None):
+        if cmd[:3] == ["git", "clone", "--branch"]:
+            install_dir.mkdir()
+            (install_dir / ".git").mkdir()
+            return ""
+        if cmd == ["git", "rev-parse", "--short", "HEAD"]:
+            return "def5678"
+        return ""
+
+    def fail_setup(path, upgrade):
+        raise InstallError("setup failed")
+
+    monkeypatch.setattr(release_installer, "run", fake_run)
+    monkeypatch.setattr(release_installer, "run_setup", fail_setup)
+
+    with pytest.raises(InstallError, match="setup failed"):
+        install_dev_channel(install_dir)
+
+    assert (install_dir / "VERSION").read_text(encoding="utf-8") == "0.5.0\n"
+    assert not (install_dir / ".git").exists()
+    assert read_install_metadata(install_dir)["source"] == "release"
 
 
 def test_run_wraps_timeout_as_install_error(monkeypatch):
