@@ -7,7 +7,6 @@ import { glossaryRouter }   from "./glossary.js";
 import { daemonsRouter }    from "./daemons.js";
 import { logsRouter }       from "./logs.js";
 import { recordingRouter }  from "./recording.js";
-import { sidebarRouter }    from "./sidebar.js";
 import { systemRouter }     from "./system.js";
 import { integrationsRouter } from "./integrations.js";
 import { llmRouter }          from "./llm.js";
@@ -21,7 +20,6 @@ export const appRouter = router({
   daemons:      daemonsRouter,
   logs:         logsRouter,
   recording:    recordingRouter,
-  sidebar:      sidebarRouter,
   system:       systemRouter,
   integrations: integrationsRouter,
   llm:          llmRouter,
