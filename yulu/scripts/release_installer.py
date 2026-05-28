@@ -27,10 +27,18 @@ SEMVER_RE = re.compile(
 SHA256_RE = re.compile(r"^[0-9a-fA-F]{64}$")
 VERSION_CHECK_TIMEOUT_SECONDS = 10
 SETUP_TIMEOUT_SECONDS = 300
+REPO_URL = "https://github.com/Nowhitestar/Yulu.git"
 
 
 class InstallError(RuntimeError):
     pass
+
+
+def run(cmd: list[str], cwd: Path | None = None) -> str:
+    result = subprocess.run(cmd, cwd=str(cwd) if cwd else None, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise InstallError(result.stderr.strip() or result.stdout.strip() or f"{cmd[0]} failed")
+    return result.stdout.strip()
 
 
 @dataclass(frozen=True)
@@ -204,6 +212,18 @@ def read_install_metadata(runtime_dir: Path) -> dict:
     return data if isinstance(data, dict) else {}
 
 
+def build_dev_metadata(branch: str, commit: str) -> InstallMetadata:
+    return InstallMetadata(source="dev", branch=branch, commit=commit)
+
+
+def ensure_dev_switch_allowed(install_dir: Path) -> None:
+    if not path_exists_or_symlink(install_dir):
+        return
+    if (install_dir / ".git").exists():
+        return
+    raise InstallError(f"Cannot switch release runtime to dev in-place. Move {install_dir} aside or reinstall with --dev.")
+
+
 def file_url_to_path(url: str) -> Path:
     parsed = urllib.parse.urlparse(url)
     if parsed.scheme != "file":
@@ -302,6 +322,24 @@ def _run_setup_script(install_dir: Path, upgrade: bool, timeout: float = SETUP_T
 
 
 run_setup = _run_setup_script
+
+
+def install_dev_channel(install_dir: Path, run_setup_flag: bool = True) -> None:
+    ensure_dev_switch_allowed(install_dir)
+    if install_dir.exists():
+        run(["git", "fetch", "--quiet", "origin"], cwd=install_dir)
+        status = run(["git", "status", "--porcelain"], cwd=install_dir)
+        if status:
+            raise InstallError(f"Dev checkout has local changes in {install_dir}; commit or stash them before updating.")
+        run(["git", "checkout", "--quiet", "main"], cwd=install_dir)
+        run(["git", "pull", "--ff-only", "origin", "main"], cwd=install_dir)
+    else:
+        install_dir.parent.mkdir(parents=True, exist_ok=True)
+        run(["git", "clone", "--branch", "main", REPO_URL, str(install_dir)])
+    commit = run(["git", "rev-parse", "--short", "HEAD"], cwd=install_dir)
+    write_install_metadata(install_dir, build_dev_metadata(branch="main", commit=commit))
+    if run_setup_flag:
+        run_setup(install_dir, upgrade=True)
 
 
 def install_release_from_urls(

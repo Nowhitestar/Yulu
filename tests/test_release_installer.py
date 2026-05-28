@@ -8,7 +8,9 @@ import pytest
 
 import release_installer
 from release_installer import (
+    build_dev_metadata,
     download_to_path,
+    ensure_dev_switch_allowed,
     extract_release_zip,
     InstallMetadata,
     InstallError,
@@ -263,6 +265,22 @@ def test_install_metadata_roundtrip(tmp_path):
     assert data["sha256"] == "abc"
     assert "installed_at" in data
     assert json.loads((tmp_path / ".yulu-install.json").read_text(encoding="utf-8")) == data
+
+
+def test_build_dev_metadata():
+    metadata = build_dev_metadata(branch="main", commit="abc1234")
+    assert metadata.source == "dev"
+    assert metadata.branch == "main"
+    assert metadata.commit == "abc1234"
+
+
+def test_release_runtime_cannot_switch_to_dev_in_place(tmp_path):
+    install_dir = tmp_path / "install"
+    install_dir.mkdir()
+    (install_dir / ".yulu-install.json").write_text('{"source":"release"}\n', encoding="utf-8")
+
+    with pytest.raises(InstallError, match="Cannot switch release runtime to dev in-place"):
+        ensure_dev_switch_allowed(install_dir)
 
 
 def test_replace_runtime_with_backup_moves_existing_runtime(tmp_path):
