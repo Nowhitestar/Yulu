@@ -1,4 +1,5 @@
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -190,9 +191,49 @@ def test_validate_runtime_layout_accepts_matching_version(tmp_path):
     validate_runtime_layout(runtime, "v0.5.0")
 
 
+def test_validate_runtime_layout_accepts_relative_runtime_path(tmp_path, monkeypatch):
+    make_runtime(tmp_path, "0.5.0")
+    monkeypatch.chdir(tmp_path)
+
+    validate_runtime_layout(Path("yulu"), "v0.5.0")
+
+
 def test_validate_runtime_layout_rejects_version_drift(tmp_path):
     runtime = make_runtime(tmp_path, "0.5.1")
     with pytest.raises(InstallError, match="VERSION"):
+        validate_runtime_layout(runtime, "v0.5.0")
+
+
+def test_validate_runtime_layout_rejects_required_directory(tmp_path):
+    runtime = make_runtime(tmp_path, "0.5.0")
+    setup_script = runtime / "yulu" / "scripts" / "setup.sh"
+    setup_script.unlink()
+    setup_script.mkdir()
+
+    with pytest.raises(InstallError, match="setup.sh"):
+        validate_runtime_layout(runtime, "v0.5.0")
+
+
+def test_validate_runtime_layout_rejects_failed_version_check(tmp_path):
+    runtime = make_runtime(tmp_path, "0.5.0")
+    (runtime / "yulu" / "scripts" / "version.py").write_text(
+        "import sys\nsys.stderr.write('bad version\\n')\nsys.exit(2)\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(InstallError, match="version.py --check failed"):
+        validate_runtime_layout(runtime, "v0.5.0")
+
+
+def test_validate_runtime_layout_wraps_version_check_timeout(tmp_path, monkeypatch):
+    runtime = make_runtime(tmp_path, "0.5.0")
+
+    def raise_timeout(*args, **kwargs):
+        raise subprocess.TimeoutExpired(cmd=args[0], timeout=kwargs.get("timeout"))
+
+    monkeypatch.setattr("release_installer.subprocess.run", raise_timeout)
+
+    with pytest.raises(InstallError, match="timed out"):
         validate_runtime_layout(runtime, "v0.5.0")
 
 

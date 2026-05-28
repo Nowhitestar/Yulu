@@ -20,6 +20,7 @@ SEMVER_RE = re.compile(
     r"$"
 )
 SHA256_RE = re.compile(r"^[0-9a-fA-F]{64}$")
+VERSION_CHECK_TIMEOUT_SECONDS = 10
 
 
 class InstallError(RuntimeError):
@@ -137,6 +138,7 @@ def verify_checksum(path: Path, expected: str) -> None:
 
 
 def validate_runtime_layout(runtime_dir: Path, tag: str) -> None:
+    runtime_dir = runtime_dir.resolve()
     required = [
         runtime_dir / "VERSION",
         runtime_dir / "yulu" / "scripts" / "setup.sh",
@@ -144,19 +146,23 @@ def validate_runtime_layout(runtime_dir: Path, tag: str) -> None:
         runtime_dir / "yulu" / "scripts" / "version.py",
     ]
     for path in required:
-        if not path.exists():
+        if not path.is_file():
             raise InstallError(f"Invalid release asset: missing {path.relative_to(runtime_dir)}")
 
     version = (runtime_dir / "VERSION").read_text(encoding="utf-8").strip()
     if version != _tag_without_v(tag):
         raise InstallError(f"VERSION {version!r} does not match release tag {tag!r}")
 
-    result = subprocess.run(
-        ["python3", str(runtime_dir / "yulu" / "scripts" / "version.py"), "--check"],
-        cwd=str(runtime_dir),
-        capture_output=True,
-        text=True,
-    )
+    try:
+        result = subprocess.run(
+            ["python3", str(runtime_dir / "yulu" / "scripts" / "version.py"), "--check"],
+            cwd=str(runtime_dir),
+            capture_output=True,
+            text=True,
+            timeout=VERSION_CHECK_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise InstallError(f"version.py --check timed out after {VERSION_CHECK_TIMEOUT_SECONDS}s") from exc
     if result.returncode != 0:
         raise InstallError(f"version.py --check failed: {result.stderr or result.stdout}")
 
