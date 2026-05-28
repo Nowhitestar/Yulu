@@ -32,6 +32,7 @@ export const ConfigSchema = z.object({
     local_model_path: z.string().optional(),
     mlx: z.record(z.unknown()).optional(),
     command: z.array(z.string()).optional(),
+    realtime_enabled: z.boolean().optional(),
   }).passthrough(),
   llm: z.object({
     enabled: z.boolean().optional(),
@@ -64,6 +65,7 @@ const RESTART_MAP: Record<string, string> = {
   "transcription.command":           "restart:sttdaemon",
   "transcription.local_model_path":  "restart:sttdaemon",
   "transcription.mlx":               "restart:sttdaemon",
+  "transcription.realtime_enabled":  "none",
   "llm.enabled":                     "sighup:agentqueue",
   "llm.command":                     "sighup:agentqueue",
   "calendars":                       "restart:calendar,scheduler",

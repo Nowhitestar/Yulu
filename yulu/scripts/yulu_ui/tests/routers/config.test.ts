@@ -35,4 +35,14 @@ describe("configRouter", () => {
       expect(r.daemonsNeedingRestart).toContain("audiodaemon");
     } finally { cleanup(); }
   });
+
+  it("update(transcription.realtime_enabled) needs no daemon restart", async () => {
+    const { ctx, cleanup } = makeCtx();
+    try {
+      const caller = createCaller(configRouter, ctx);
+      const r = await caller.update({ key: "transcription.realtime_enabled", value: false });
+      expect(r.daemonsNeedingRestart).toEqual([]);
+      expect(r.daemonsNeedingSighup).toEqual([]);
+    } finally { cleanup(); }
+  });
 });
