@@ -62,7 +62,7 @@ while (($# > 0)); do
                 err "--version requires a value like v0.5.0"
                 exit 2
             fi
-            if [[ "$2" == --* ]]; then
+            if [[ -z "$2" || "$2" == --* ]]; then
                 err "--version requires a value like v0.5.0"
                 exit 2
             fi
@@ -144,10 +144,13 @@ trap cleanup EXIT
 
 HELPER="$TMP_DIR/release_installer.py"
 if command -v curl &>/dev/null; then
-    curl -fsSL "$HELPER_URL" -o "$HELPER"
+    if ! curl -fsSL "$HELPER_URL" -o "$HELPER"; then
+        err "Failed to download installer helper from $HELPER_URL"
+        exit 1
+    fi
 else
     warn "curl not found; downloading with python3 urllib."
-    python3 - "$HELPER_URL" "$HELPER" <<'PY'
+    if ! python3 - "$HELPER_URL" "$HELPER" <<'PY'
 import sys
 import urllib.request
 
@@ -158,16 +161,47 @@ with urllib.request.urlopen(request, timeout=30) as response:
 with open(output, "wb") as handle:
     handle.write(data)
 PY
+    then
+        err "Failed to download installer helper from $HELPER_URL"
+        exit 1
+    fi
+fi
+if [[ ! -s "$HELPER" ]]; then
+    err "Downloaded installer helper is empty: $HELPER_URL"
+    exit 1
 fi
 ok "Installer helper downloaded"
+
+python3 -m py_compile "$HELPER"
+ok "Installer helper validated"
 
 # ─── Hand off ────────────────────────────────────────────────────
 
 header "Installing Yulu"
 
-python3 "$HELPER" install --install-dir "$INSTALL_DIR" "${TARGET_ARGS[@]}"
+INSTALL_CMD=(python3 "$HELPER" install --install-dir "$INSTALL_DIR" "${TARGET_ARGS[@]}")
+if [[ -t 0 ]]; then
+    "${INSTALL_CMD[@]}"
+elif (exec 3</dev/tty) 2>/dev/null; then
+    "${INSTALL_CMD[@]}" < /dev/tty
+else
+    warn "No interactive terminal available — setup will run non-interactively."
+    "${INSTALL_CMD[@]}" < /dev/null
+fi
+
+if [[ ! -d "$INSTALL_DIR" ]]; then
+    err "Install did not create $INSTALL_DIR"
+    exit 1
+fi
+if [[ ! -f "$INSTALL_DIR/VERSION" ]]; then
+    err "Install completed but VERSION is missing in $INSTALL_DIR"
+    exit 1
+fi
+if [[ ! -f "$INSTALL_DIR/yulu/scripts/setup.sh" && ! -f "$INSTALL_DIR/yulu/scripts/yulu" ]]; then
+    err "Install completed but runtime scripts are missing in $INSTALL_DIR/yulu/scripts"
+    exit 1
+fi
 
 header "Done"
 echo "Yulu is ready at:   $INSTALL_DIR"
-echo "Update later with:  yulu update"
 echo "Uninstall with:     yulu uninstall"
