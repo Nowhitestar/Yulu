@@ -46,6 +46,8 @@ def run(cmd: list[str], cwd: Path | None = None, timeout: float = RUN_TIMEOUT_SE
         )
     except subprocess.TimeoutExpired as exc:
         raise InstallError(f"{cmd[0]} timed out after {timeout}s") from exc
+    except OSError as exc:
+        raise InstallError(f"{' '.join(cmd)} failed: {exc}") from exc
     if result.returncode != 0:
         raise InstallError(result.stderr.strip() or result.stdout.strip() or f"{cmd[0]} failed")
     return result.stdout.strip()
@@ -344,10 +346,17 @@ def install_dev_channel(install_dir: Path, run_setup_flag: bool = True) -> None:
         run(["git", "fetch", "--quiet", "origin"], cwd=install_dir)
         run(["git", "checkout", "--quiet", "main"], cwd=install_dir)
         run(["git", "pull", "--ff-only", "origin", "main"], cwd=install_dir)
+        commit = run(["git", "rev-parse", "--short", "HEAD"], cwd=install_dir)
+        origin_commit = run(["git", "rev-parse", "--short", "origin/main"], cwd=install_dir)
+        if commit != origin_commit:
+            raise InstallError(
+                f"Dev checkout local main differs from origin/main in {install_dir}. "
+                "Resolve local commits or reinstall with --dev."
+            )
     else:
         install_dir.parent.mkdir(parents=True, exist_ok=True)
         run(["git", "clone", "--branch", "main", REPO_URL, str(install_dir)])
-    commit = run(["git", "rev-parse", "--short", "HEAD"], cwd=install_dir)
+        commit = run(["git", "rev-parse", "--short", "HEAD"], cwd=install_dir)
     write_install_metadata(install_dir, build_dev_metadata(branch="main", commit=commit))
     if run_setup_flag:
         run_setup(install_dir, upgrade=existed)

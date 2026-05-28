@@ -297,6 +297,8 @@ def test_install_dev_channel_updates_clean_existing_checkout(tmp_path, monkeypat
             return ""
         if cmd == ["git", "rev-parse", "--short", "HEAD"]:
             return "abc1234"
+        if cmd == ["git", "rev-parse", "--short", "origin/main"]:
+            return "abc1234"
         return ""
 
     def fake_setup(path, upgrade):
@@ -313,6 +315,7 @@ def test_install_dev_channel_updates_clean_existing_checkout(tmp_path, monkeypat
         ["git", "checkout", "--quiet", "main"],
         ["git", "pull", "--ff-only", "origin", "main"],
         ["git", "rev-parse", "--short", "HEAD"],
+        ["git", "rev-parse", "--short", "origin/main"],
     ]
     assert all(cwd == install_dir for _, cwd in commands)
     assert read_install_metadata(install_dir)["source"] == "dev"
@@ -338,6 +341,43 @@ def test_install_dev_channel_rejects_dirty_existing_checkout_before_fetch(tmp_pa
         install_dev_channel(install_dir)
 
     assert commands == [["git", "status", "--porcelain"]]
+
+
+def test_install_dev_channel_rejects_existing_checkout_that_differs_from_origin_main(tmp_path, monkeypatch):
+    install_dir = tmp_path / "install"
+    (install_dir / ".git").mkdir(parents=True)
+    commands = []
+    setup_calls = []
+
+    def fake_run(cmd, cwd=None):
+        commands.append(cmd)
+        if cmd == ["git", "status", "--porcelain"]:
+            return ""
+        if cmd == ["git", "rev-parse", "--short", "HEAD"]:
+            return "local123"
+        if cmd == ["git", "rev-parse", "--short", "origin/main"]:
+            return "remote456"
+        return ""
+
+    def fake_setup(path, upgrade):
+        setup_calls.append((path, upgrade))
+
+    monkeypatch.setattr(release_installer, "run", fake_run)
+    monkeypatch.setattr(release_installer, "run_setup", fake_setup)
+
+    with pytest.raises(InstallError, match="local main differs from origin/main"):
+        install_dev_channel(install_dir)
+
+    assert commands == [
+        ["git", "status", "--porcelain"],
+        ["git", "fetch", "--quiet", "origin"],
+        ["git", "checkout", "--quiet", "main"],
+        ["git", "pull", "--ff-only", "origin", "main"],
+        ["git", "rev-parse", "--short", "HEAD"],
+        ["git", "rev-parse", "--short", "origin/main"],
+    ]
+    assert read_install_metadata(install_dir) == {}
+    assert setup_calls == []
 
 
 def test_install_dev_channel_clones_missing_install_dir_with_fresh_setup(tmp_path, monkeypatch):
@@ -380,6 +420,16 @@ def test_run_wraps_timeout_as_install_error(monkeypatch):
 
     with pytest.raises(InstallError, match="timed out"):
         run(["git", "status"], timeout=1)
+
+
+def test_run_wraps_os_error_as_install_error(monkeypatch):
+    def raise_os_error(*args, **kwargs):
+        raise OSError("no such file")
+
+    monkeypatch.setattr("release_installer.subprocess.run", raise_os_error)
+
+    with pytest.raises(InstallError, match="git status failed"):
+        run(["git", "status"])
 
 
 def test_replace_runtime_with_backup_moves_existing_runtime(tmp_path):
