@@ -4,10 +4,13 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
+import urllib.error
 import urllib.parse
 import urllib.request
 import zipfile
@@ -29,6 +32,8 @@ VERSION_CHECK_TIMEOUT_SECONDS = 10
 SETUP_TIMEOUT_SECONDS = 300
 RUN_TIMEOUT_SECONDS = 300
 REPO_URL = "https://github.com/Nowhitestar/Yulu.git"
+REPO = "Nowhitestar/Yulu"
+GITHUB_API = "https://api.github.com"
 
 
 class InstallError(RuntimeError):
@@ -131,6 +136,47 @@ def select_release_asset(release: dict) -> ReleaseAsset:
         asset_url=zip_url,
         checksums_url=checksums_url,
     )
+
+
+def github_release_api_url(target: ReleaseTarget) -> str:
+    if target.kind == "latest":
+        return f"{GITHUB_API}/repos/{REPO}/releases/latest"
+    if target.kind == "version" and target.tag:
+        return f"{GITHUB_API}/repos/{REPO}/releases/tags/{target.tag}"
+    raise InstallError(f"GitHub release URL is not valid for target {target}")
+
+
+def _release_not_found_message(url: str) -> str:
+    marker = "/releases/tags/"
+    if marker in url:
+        tag = urllib.parse.unquote(url.rsplit(marker, 1)[1])
+        return f"Release {tag} was not found"
+    return "Latest release was not found"
+
+
+def fetch_json(url: str) -> dict:
+    request = urllib.request.Request(
+        url,
+        headers={"Accept": "application/vnd.github+json", "User-Agent": "YuluInstaller"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            data = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        if exc.code == 404:
+            raise InstallError(_release_not_found_message(url)) from exc
+        raise InstallError(f"Failed to fetch GitHub release metadata: HTTP {exc.code} {exc.reason}") from exc
+    except urllib.error.URLError as exc:
+        raise InstallError(f"Failed to fetch GitHub release metadata: {exc.reason}") from exc
+    except json.JSONDecodeError as exc:
+        raise InstallError("GitHub release metadata was not valid JSON") from exc
+    if not isinstance(data, dict):
+        raise InstallError("GitHub release metadata was not a JSON object")
+    return data
+
+
+def resolve_release_from_payload(payload: dict) -> ReleaseAsset:
+    return select_release_asset(payload)
 
 
 def parse_checksums(text: str) -> dict[str, str]:
@@ -409,3 +455,54 @@ def install_release_from_urls(
                     f"Install failed ({install_error}); rollback failed ({rollback_error})"
                 ) from install_error
             raise
+
+
+def install_release_target(target: ReleaseTarget, install_dir: Path, run_setup_flag: bool = True) -> None:
+    payload = fetch_json(github_release_api_url(target))
+    asset = resolve_release_from_payload(payload)
+    install_release_from_urls(
+        tag=asset.tag,
+        asset_name=asset.asset_name,
+        asset_url=asset.asset_url,
+        checksums_url=asset.checksums_url,
+        install_dir=install_dir,
+        run_setup=run_setup_flag,
+    )
+
+
+def build_main_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Install or update Yulu from release assets")
+    parser.add_argument("command", choices=["install", "update"])
+    parser.add_argument("--install-dir", default=os.path.expanduser("~/.yulu"))
+    parser.add_argument("--no-setup", action="store_true", help=argparse.SUPPRESS)
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument("--latest", action="store_true")
+    group.add_argument("--version")
+    group.add_argument("--dev", action="store_true")
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = build_main_parser()
+    args = parser.parse_args(argv)
+    target_argv: list[str] = []
+    if args.latest:
+        target_argv.append("--latest")
+    if args.version:
+        target_argv.extend(["--version", args.version])
+    if args.dev:
+        target_argv.append("--dev")
+    target = parse_target_args(target_argv)
+    try:
+        if target.kind == "dev":
+            install_dev_channel(Path(args.install_dir), run_setup_flag=not args.no_setup)
+        else:
+            install_release_target(target, Path(args.install_dir), run_setup_flag=not args.no_setup)
+    except InstallError as exc:
+        print(f"Yulu install failed: {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

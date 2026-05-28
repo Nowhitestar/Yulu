@@ -1,6 +1,7 @@
 import json
 import shutil
 import subprocess
+import urllib.error
 import zipfile
 from pathlib import Path
 
@@ -9,12 +10,16 @@ import pytest
 import release_installer
 from release_installer import (
     build_dev_metadata,
+    fetch_json,
     download_to_path,
     ensure_dev_switch_allowed,
     extract_release_zip,
+    github_release_api_url,
     install_dev_channel,
+    install_release_target,
     InstallMetadata,
     InstallError,
+    main,
     ReleaseAsset,
     ReleaseTarget,
     replace_runtime_with_backup,
@@ -26,6 +31,7 @@ from release_installer import (
     read_url_text,
     restore_backup,
     select_release_asset,
+    resolve_release_from_payload,
     sha256_file,
     validate_runtime_layout,
     verify_checksum,
@@ -149,6 +155,135 @@ def test_select_release_asset_errors_when_checksum_url_missing_or_empty(url):
 
     with pytest.raises(InstallError, match="checksums.txt download URL"):
         select_release_asset(release)
+
+
+def test_github_latest_release_url():
+    assert github_release_api_url(ReleaseTarget(kind="latest")).endswith("/releases/latest")
+
+
+def test_github_version_release_url():
+    assert github_release_api_url(ReleaseTarget(kind="version", tag="v0.5.0")).endswith(
+        "/releases/tags/v0.5.0"
+    )
+
+
+def test_github_release_url_rejects_dev_target():
+    with pytest.raises(InstallError, match="not valid"):
+        github_release_api_url(ReleaseTarget(kind="dev"))
+
+
+def test_resolve_release_from_payload_returns_selected_asset():
+    payload = {
+        "tag_name": "v0.5.0",
+        "assets": [
+            {"name": "checksums.txt", "browser_download_url": "https://example/checksums.txt"},
+            {"name": "yulu-macos-arm64-v0.5.0.zip", "browser_download_url": "https://example/yulu.zip"},
+        ],
+    }
+    asset = resolve_release_from_payload(payload)
+    assert asset.tag == "v0.5.0"
+
+
+def test_install_release_target_fetches_payload_and_installs_selected_asset(tmp_path, monkeypatch):
+    payload = {
+        "tag_name": "v0.5.0",
+        "assets": [
+            {"name": "checksums.txt", "browser_download_url": "https://example/checksums.txt"},
+            {"name": "yulu-macos-arm64-v0.5.0.zip", "browser_download_url": "https://example/yulu.zip"},
+        ],
+    }
+    calls = []
+
+    def fake_fetch_json(url):
+        calls.append(("fetch", url))
+        return payload
+
+    def fake_install_release_from_urls(**kwargs):
+        calls.append(("install", kwargs))
+
+    monkeypatch.setattr(release_installer, "fetch_json", fake_fetch_json)
+    monkeypatch.setattr(release_installer, "install_release_from_urls", fake_install_release_from_urls)
+
+    install_release_target(ReleaseTarget(kind="version", tag="v0.5.0"), tmp_path / "install", run_setup_flag=False)
+
+    assert calls[0] == (
+        "fetch",
+        "https://api.github.com/repos/Nowhitestar/Yulu/releases/tags/v0.5.0",
+    )
+    assert calls[1][1] == {
+        "tag": "v0.5.0",
+        "asset_name": "yulu-macos-arm64-v0.5.0.zip",
+        "asset_url": "https://example/yulu.zip",
+        "checksums_url": "https://example/checksums.txt",
+        "install_dir": tmp_path / "install",
+        "run_setup": False,
+    }
+
+
+def test_fetch_json_maps_github_404_to_install_error(monkeypatch):
+    def raise_not_found(*args, **kwargs):
+        raise urllib.error.HTTPError(
+            "https://api.github.com/repos/Nowhitestar/Yulu/releases/tags/v0.0.0",
+            404,
+            "Not Found",
+            {},
+            None,
+        )
+
+    monkeypatch.setattr(release_installer.urllib.request, "urlopen", raise_not_found)
+
+    with pytest.raises(InstallError, match="Release v0.0.0 was not found"):
+        fetch_json("https://api.github.com/repos/Nowhitestar/Yulu/releases/tags/v0.0.0")
+
+
+def test_fetch_json_wraps_url_errors(monkeypatch):
+    def raise_url_error(*args, **kwargs):
+        raise urllib.error.URLError("network down")
+
+    monkeypatch.setattr(release_installer.urllib.request, "urlopen", raise_url_error)
+
+    with pytest.raises(InstallError, match="Failed to fetch GitHub release metadata"):
+        fetch_json("https://api.github.com/repos/Nowhitestar/Yulu/releases/latest")
+
+
+def test_main_installs_release_target(tmp_path, monkeypatch):
+    calls = []
+
+    def fake_install_release_target(target, install_dir, run_setup_flag=True):
+        calls.append((target, install_dir, run_setup_flag))
+
+    monkeypatch.setattr(release_installer, "install_release_target", fake_install_release_target)
+
+    exit_code = main(["install", "--version", "0.5.0", "--install-dir", str(tmp_path / "install"), "--no-setup"])
+
+    assert exit_code == 0
+    assert calls == [(ReleaseTarget(kind="version", tag="v0.5.0"), tmp_path / "install", False)]
+
+
+def test_main_installs_dev_channel(tmp_path, monkeypatch):
+    calls = []
+
+    def fake_install_dev_channel(install_dir, run_setup_flag=True):
+        calls.append((install_dir, run_setup_flag))
+
+    monkeypatch.setattr(release_installer, "install_dev_channel", fake_install_dev_channel)
+
+    exit_code = main(["update", "--dev", "--install-dir", str(tmp_path / "install")])
+
+    assert exit_code == 0
+    assert calls == [(tmp_path / "install", True)]
+
+
+def test_main_returns_one_for_install_errors(tmp_path, monkeypatch, capsys):
+    def fail_install_release_target(*args, **kwargs):
+        raise InstallError("no release")
+
+    monkeypatch.setattr(release_installer, "install_release_target", fail_install_release_target)
+
+    exit_code = main(["install", "--latest", "--install-dir", str(tmp_path / "install")])
+
+    assert exit_code == 1
+    assert "Yulu install failed: no release" in capsys.readouterr().err
 
 
 def test_parse_checksums_accepts_sha256_lines():
