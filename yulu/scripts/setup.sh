@@ -206,6 +206,7 @@ create_config() {
     "half_duplex": true
   },
   "transcription": {
+    "realtime_enabled": true,
     "mode": "local",
     "post_recording_mode": "fast_summary",
     "final_engine": "whisper",
