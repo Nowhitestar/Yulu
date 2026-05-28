@@ -488,17 +488,17 @@ def main(argv: list[str] | None = None) -> int:
     target_argv: list[str] = []
     if args.latest:
         target_argv.append("--latest")
-    if args.version:
+    if args.version is not None:
         target_argv.extend(["--version", args.version])
     if args.dev:
         target_argv.append("--dev")
-    target = parse_target_args(target_argv)
     try:
+        target = parse_target_args(target_argv)
         if target.kind == "dev":
             install_dev_channel(Path(args.install_dir), run_setup_flag=not args.no_setup)
         else:
             install_release_target(target, Path(args.install_dir), run_setup_flag=not args.no_setup)
-    except InstallError as exc:
+    except (InstallError, ValueError) as exc:
         print(f"Yulu install failed: {exc}", file=sys.stderr)
         return 1
     return 0

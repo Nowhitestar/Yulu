@@ -286,6 +286,32 @@ def test_main_returns_one_for_install_errors(tmp_path, monkeypatch, capsys):
     assert "Yulu install failed: no release" in capsys.readouterr().err
 
 
+def test_main_rejects_empty_version_cleanly_without_resolving_latest(tmp_path, monkeypatch, capsys):
+    def fail_install_release_target(*args, **kwargs):
+        raise AssertionError("install_release_target should not be called")
+
+    monkeypatch.setattr(release_installer, "install_release_target", fail_install_release_target)
+
+    exit_code = main(["install", "--version", "", "--install-dir", str(tmp_path / "install")])
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert "Yulu install failed:" in captured.err
+    assert "valid SemVer" in captured.err
+    assert captured.out == ""
+
+
+def test_main_rejects_invalid_version_cleanly_without_traceback(tmp_path, capsys):
+    exit_code = main(["install", "--version", "banana", "--install-dir", str(tmp_path / "install")])
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert "Yulu install failed:" in captured.err
+    assert "valid SemVer" in captured.err
+    assert "Traceback" not in captured.err
+    assert captured.out == ""
+
+
 def test_parse_checksums_accepts_sha256_lines():
     zip_checksum = "a" * 64
     script_checksum = "1" * 64
