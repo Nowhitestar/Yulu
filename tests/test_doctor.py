@@ -107,9 +107,18 @@ def test_search_index_section_reports_health(tmp_path):
     assert KIND_MEETING_SUMMARY in si["per_kind"]
 
 
-def test_check_yulu_ui_returns_required_keys_when_everything_missing(tmp_path):
+def test_check_yulu_ui_returns_required_keys_when_everything_missing(tmp_path, monkeypatch):
     """check_yulu_ui must always return a dict with the contract keys, even
     when nothing is installed. This lets the JSON consumer rely on the shape."""
+    # Hermetic: the healthz probe hits 127.0.0.1:7777, so on a dev machine
+    # where the real yulu_ui server is running it would flip healthz_ok True.
+    # Stub urlopen to fail so this "nothing installed" case is deterministic.
+    import urllib.error
+    import urllib.request as _urllib_request
+    monkeypatch.setattr(
+        _urllib_request, "urlopen",
+        lambda *a, **k: (_ for _ in ()).throw(urllib.error.URLError("no server (hermetic test)")),
+    )
     doctor = load_doctor()
     script_dir = tmp_path / "scripts"   # contains no yulu_ui/
     config_dir = tmp_path / "config"    # contains no ui.log
