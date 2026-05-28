@@ -10,6 +10,64 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 DIST="dist"
 SKIP_BUILD=false
+EXCLUDES=(
+    ".git"
+    ".github"
+    ".omc"
+    ".claude"
+    "dist"
+    ".ci-build"
+    ".venv*"
+    "venv"
+    "__pycache__"
+    ".pytest_cache"
+    ".mypy_cache"
+    ".ruff_cache"
+    ".DS_Store"
+    "tests"
+    "docs/superpowers"
+    "packaging"
+    "worktrees"
+    "*.log"
+    "*.pid"
+    "*.sock"
+    "client_secret*.json"
+    "*token*.json"
+    "secrets"
+    "tokens"
+    ".env"
+    ".env.*"
+)
+
+rsync_exclude_args() {
+    local pattern
+    for pattern in "${EXCLUDES[@]}"; do
+        printf '%s\n' "--exclude=$pattern"
+    done
+}
+
+tar_exclude_args() {
+    local pattern
+    for pattern in "${EXCLUDES[@]}"; do
+        printf '%s\n' "--exclude=$pattern"
+        printf '%s\n' "--exclude=./$pattern"
+    done
+}
+
+check_clean_build_outputs() {
+    if ! git -C "$ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+        return 0
+    fi
+
+    local dirty
+    dirty="$(git -C "$ROOT" status --porcelain)"
+    if [[ -n "$dirty" ]]; then
+        echo "Build left the worktree dirty; refusing to package release assets." >&2
+        echo "$dirty" >&2
+        echo "Commit or clean generated build outputs, or use --skip-build for packaging-only tests." >&2
+        exit 1
+    fi
+}
 
 if [[ $# -gt 0 && "$1" != --* ]]; then
     TAG="$1"
@@ -71,6 +129,7 @@ if [[ "$SKIP_BUILD" != true ]]; then
     if [[ -x "$ROOT/yulu/scripts/build_status_agent.sh" ]]; then
         bash "$ROOT/yulu/scripts/build_status_agent.sh"
     fi
+    check_clean_build_outputs
 fi
 
 DIST_ABS="$(mkdir -p "$DIST" && cd "$DIST" && pwd)"
@@ -86,49 +145,17 @@ trap cleanup EXIT
 mkdir -p "$STAGE/yulu"
 
 if command -v rsync >/dev/null 2>&1; then
-    rsync -a \
-        --exclude '.git/' \
-        --exclude '.github/' \
-        --exclude '.omc/' \
-        --exclude '.claude/' \
-        --exclude 'dist/' \
-        --exclude '.ci-build/' \
-        --exclude '.venv*/' \
-        --exclude 'venv/' \
-        --exclude '__pycache__/' \
-        --exclude '.pytest_cache/' \
-        --exclude '.mypy_cache/' \
-        --exclude '.ruff_cache/' \
-        --exclude '.DS_Store' \
-        --exclude 'tests/' \
-        --exclude 'docs/superpowers/' \
-        --exclude 'packaging/' \
-        --exclude 'worktrees/' \
-        --exclude '*.log' \
-        --exclude '*.pid' \
-        --exclude '*.sock' \
-        --exclude 'client_secret*.json' \
-        --exclude '*token*.json' \
-        "$ROOT/" "$STAGE/yulu/"
+    RSYNC_ARGS=(-a)
+    while IFS= read -r arg; do
+        RSYNC_ARGS+=("$arg")
+    done < <(rsync_exclude_args)
+    rsync "${RSYNC_ARGS[@]}" "$ROOT/" "$STAGE/yulu/"
 else
-    (cd "$ROOT" && tar \
-        --exclude './.git' \
-        --exclude './.github' \
-        --exclude './.omc' \
-        --exclude './.claude' \
-        --exclude './dist' \
-        --exclude './.ci-build' \
-        --exclude './.venv*' \
-        --exclude './venv' \
-        --exclude './__pycache__' \
-        --exclude './.pytest_cache' \
-        --exclude './.mypy_cache' \
-        --exclude './.ruff_cache' \
-        --exclude './tests' \
-        --exclude './docs/superpowers' \
-        --exclude './packaging' \
-        --exclude './worktrees' \
-        -cf - .) | (cd "$STAGE/yulu" && tar -xf -)
+    TAR_ARGS=()
+    while IFS= read -r arg; do
+        TAR_ARGS+=("$arg")
+    done < <(tar_exclude_args)
+    (cd "$ROOT" && tar "${TAR_ARGS[@]}" -cf - .) | (cd "$STAGE/yulu" && tar -xf -)
 fi
 
 if [[ -f "$ROOT/install.sh" ]]; then
