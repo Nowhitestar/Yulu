@@ -5,7 +5,11 @@ import argparse
 import hashlib
 import json
 import re
+import shutil
 import subprocess
+import tempfile
+import urllib.request
+import zipfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -196,3 +200,99 @@ def read_install_metadata(runtime_dir: Path) -> dict:
     except Exception:
         return {}
     return data if isinstance(data, dict) else {}
+
+
+def download_to_path(url: str, dest: Path) -> None:
+    if url.startswith("file://"):
+        src = Path(urllib.request.url2pathname(url.removeprefix("file://")))
+        shutil.copy2(src, dest)
+        return
+    with urllib.request.urlopen(url, timeout=30) as response, dest.open("wb") as handle:
+        shutil.copyfileobj(response, handle)
+
+
+def read_url_text(url: str) -> str:
+    if url.startswith("file://"):
+        src = Path(urllib.request.url2pathname(url.removeprefix("file://")))
+        return src.read_text(encoding="utf-8")
+    with urllib.request.urlopen(url, timeout=30) as response:
+        return response.read().decode("utf-8")
+
+
+def extract_release_zip(zip_path: Path, dest: Path) -> Path:
+    with zipfile.ZipFile(zip_path) as archive:
+        archive.extractall(dest)
+    runtime = dest / "yulu"
+    if not runtime.exists():
+        raise InstallError("Release zip must expand to a top-level yulu/ directory")
+    return runtime
+
+
+def replace_runtime_with_backup(staged_runtime: Path, install_dir: Path) -> Path | None:
+    install_dir.parent.mkdir(parents=True, exist_ok=True)
+    backup = None
+    if install_dir.exists():
+        backup = install_dir.with_name(
+            f"{install_dir.name}.backup-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}"
+        )
+        shutil.move(str(install_dir), str(backup))
+    shutil.move(str(staged_runtime), str(install_dir))
+    return backup
+
+
+def restore_backup(backup: Path, install_dir: Path) -> None:
+    if install_dir.exists():
+        shutil.rmtree(install_dir)
+    shutil.move(str(backup), str(install_dir))
+
+
+def _run_setup_script(install_dir: Path, upgrade: bool) -> None:
+    setup = install_dir / "yulu" / "scripts" / "setup.sh"
+    cmd = ["bash", str(setup)]
+    if upgrade:
+        cmd.append("--upgrade")
+    result = subprocess.run(cmd, cwd=str(install_dir))
+    if result.returncode != 0:
+        raise InstallError(f"setup.sh failed with exit code {result.returncode}")
+
+
+run_setup = _run_setup_script
+
+
+def install_release_from_urls(
+    *,
+    tag: str,
+    asset_name: str,
+    asset_url: str,
+    checksums_url: str,
+    install_dir: Path,
+    run_setup: bool = True,
+) -> None:
+    existed = install_dir.exists()
+    with tempfile.TemporaryDirectory(prefix="yulu-install-") as tmp:
+        tmpdir = Path(tmp)
+        zip_path = tmpdir / asset_name
+        download_to_path(asset_url, zip_path)
+        checksums = parse_checksums(read_url_text(checksums_url))
+        expected = checksums.get(asset_name)
+        if expected is None:
+            raise InstallError(f"checksums.txt does not include {asset_name}")
+        verify_checksum(zip_path, expected)
+        staged_parent = tmpdir / "staged"
+        staged_parent.mkdir()
+        staged_runtime = extract_release_zip(zip_path, staged_parent)
+        validate_runtime_layout(staged_runtime, tag)
+        backup = replace_runtime_with_backup(staged_runtime, install_dir)
+        try:
+            write_install_metadata(
+                install_dir,
+                InstallMetadata(source="release", version=tag, asset=asset_name, sha256=expected),
+            )
+            if run_setup:
+                _run_setup_script(install_dir, upgrade=existed)
+        except Exception:
+            if backup is not None:
+                restore_backup(backup, install_dir)
+            elif install_dir.exists():
+                shutil.rmtree(install_dir)
+            raise

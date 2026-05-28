@@ -9,10 +9,12 @@ from release_installer import (
     InstallError,
     ReleaseAsset,
     ReleaseTarget,
+    replace_runtime_with_backup,
     read_install_metadata,
     normalize_version_tag,
     parse_checksums,
     parse_target_args,
+    restore_backup,
     select_release_asset,
     sha256_file,
     validate_runtime_layout,
@@ -255,3 +257,32 @@ def test_install_metadata_roundtrip(tmp_path):
     assert data["sha256"] == "abc"
     assert "installed_at" in data
     assert json.loads((tmp_path / ".yulu-install.json").read_text(encoding="utf-8")) == data
+
+
+def test_replace_runtime_with_backup_moves_existing_runtime(tmp_path):
+    install_dir = tmp_path / "install"
+    install_dir.mkdir()
+    (install_dir / "old.txt").write_text("old", encoding="utf-8")
+    staged = tmp_path / "staged"
+    staged.mkdir()
+    (staged / "new.txt").write_text("new", encoding="utf-8")
+
+    backup = replace_runtime_with_backup(staged, install_dir)
+
+    assert (install_dir / "new.txt").read_text(encoding="utf-8") == "new"
+    assert backup is not None
+    assert (backup / "old.txt").read_text(encoding="utf-8") == "old"
+
+
+def test_restore_backup_replaces_failed_runtime(tmp_path):
+    install_dir = tmp_path / "install"
+    install_dir.mkdir()
+    (install_dir / "bad.txt").write_text("bad", encoding="utf-8")
+    backup = tmp_path / "backup"
+    backup.mkdir()
+    (backup / "old.txt").write_text("old", encoding="utf-8")
+
+    restore_backup(backup, install_dir)
+
+    assert (install_dir / "old.txt").read_text(encoding="utf-8") == "old"
+    assert not (install_dir / "bad.txt").exists()
