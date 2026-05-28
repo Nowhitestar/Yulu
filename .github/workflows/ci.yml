@@ -86,6 +86,8 @@ jobs:
             printf 'swiftc %s -> .ci-build/%s\n' "$f" "$stem"
             swiftc -o ".ci-build/$stem" "$f"
           done
+          printf 'swiftc status_agent.swift (Cocoa + Carbon)\n'
+          swiftc -o ".ci-build/status_agent" yulu/scripts/status_agent.swift -framework Cocoa -framework Carbon
 
       - name: Skill manifest sanity (skills/yulu/SKILL.md)
         run: |

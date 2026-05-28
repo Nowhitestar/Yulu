@@ -40,7 +40,7 @@ class MenuBuilder {
         // The Start/Stop title is updated dynamically by StatusAgentApp;
         // here we just provide an action wire-up.
         let toggleItem = NSMenuItem(
-            title: "Start Voicemail",
+            title: "Start Recording",
             action: #selector(StatusAgentApp.onMenuToggle),
             keyEquivalent: ""
         )
@@ -49,7 +49,7 @@ class MenuBuilder {
         menu.addItem(toggleItem)
         menu.addItem(NSMenuItem.separator())
 
-        let recentLabel = NSMenuItem(title: "Recent voicemails", action: nil, keyEquivalent: "")
+        let recentLabel = NSMenuItem(title: "Recent recordings", action: nil, keyEquivalent: "")
         recentLabel.isEnabled = false
         menu.addItem(recentLabel)
         // Up to 5 dynamic items inserted here at menuWillOpen time
@@ -60,7 +60,7 @@ class MenuBuilder {
             menu.addItem(item)
         }
         let openInbox = NSMenuItem(
-            title: "Open inbox in Terminal",
+            title: "Open inbox",
             action: #selector(StatusAgentApp.onOpenInbox),
             keyEquivalent: ""
         )
@@ -85,45 +85,36 @@ class MenuBuilder {
     }
 }
 
-// Helper to read recent voicemails via the existing Python repo.
-// Shells out to a tiny one-liner so we don't reimplement repo logic
-// in Swift. Returns up to N (stem, has_summary) tuples; empty on error.
-func loadRecentVoicemails(limit: Int = 5) -> [(stem: String, hasSummary: Bool)] {
-    let scriptDir = ProcessInfo.processInfo.environment["YULU_SCRIPT_DIR"]
-        ?? "\((Bundle.main.bundlePath as NSString).deletingLastPathComponent)"
-    let task = Process()
-    task.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-    task.arguments = [
-        "PYTHONPATH=\(scriptDir)",
-        "python3", "-c",
-        """
-        from voicemail.repo import list_voicemails
-        for r in list_voicemails(limit=\(limit)):
-            print(f"{r.stem}\\t{int(r.has_summary)}")
-        """
-    ]
-    let pipe = Pipe()
-    task.standardOutput = pipe
-    task.standardError = Pipe()
-    do {
-        try task.run()
-        task.waitUntilExit()
-    } catch {
-        log("⚠️ failed to enumerate voicemails: \(error)")
-        return []
-    }
-    guard let data = try? pipe.fileHandleForReading.readToEnd(),
-          let text = String(data: data, encoding: .utf8) else {
-        return []
-    }
-    var out: [(stem: String, hasSummary: Bool)] = []
-    for line in text.split(separator: "\n") {
-        let parts = line.split(separator: "\t")
-        if parts.count == 2 {
-            out.append((String(parts[0]), parts[1] == "1"))
+struct RecentRecording {
+    let stem: String
+    let type: String   // "VM" or "MTG"
+    let mtime: Date
+}
+
+// Enumerate both recording directories directly off disk (no Python, no
+// dependency on the web server). Merge, sort newest-first, return top N.
+func loadRecentRecordings(limit: Int = 5) -> [RecentRecording] {
+    let home = FileManager.default.homeDirectoryForCurrentUser.path
+    let vmDir = "\(home)/Movies/Yulu/voicemails"
+    let mvDir = "\(home)/Movies/Yulu"
+    var out: [RecentRecording] = []
+
+    func scan(_ dir: String, type: String) {
+        guard let entries = try? FileManager.default.contentsOfDirectory(atPath: dir) else { return }
+        for f in entries where f.hasSuffix(".wav") {
+            let stem = String(f.dropLast(4))
+            if type == "MTG" && stem.hasPrefix("voicemail_") { continue }   // strays belong to vmDir
+            if type == "VM" && !stem.hasPrefix("voicemail_") { continue }
+            let path = "\(dir)/\(f)"
+            let attrs = try? FileManager.default.attributesOfItem(atPath: path)
+            let mtime = (attrs?[.modificationDate] as? Date) ?? Date.distantPast
+            out.append(RecentRecording(stem: stem, type: type, mtime: mtime))
         }
     }
-    return out
+    scan(vmDir, type: "VM")
+    scan(mvDir, type: "MTG")
+    out.sort { $0.mtime > $1.mtime }
+    return Array(out.prefix(limit))
 }
 
 // Carbon RegisterEventHotKey wrapper.
@@ -609,7 +600,7 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let btn = statusItem.button {
             btn.title = "语"
-            btn.toolTip = "Yulu — click to record voicemail"
+            btn.toolTip = "Yulu — click to record"
         }
         menu = MenuBuilder.build(target: self)
         menu.delegate = self
@@ -761,7 +752,7 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let wantId = NSUserInterfaceItemIdentifier("toggle")
         if let item = menu.items.first(where: { $0.identifier == wantId }) {
             switch new {
-            case .idle:        item.title = "Start Voicemail"
+            case .idle:        item.title = "Start Recording"
             case .recording:   item.title = "● Recording — click to stop"
             case .processing:  item.title = "⋯ Transcribing…"
             case .meetingBusy: item.title = "Meeting in progress"
@@ -797,15 +788,14 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     // Refresh dynamic items whenever the menu is about to display
     func menuWillOpen(_ menu: NSMenu) {
-        let recents = loadRecentVoicemails(limit: 5)
+        let recents = loadRecentRecordings(limit: 5)
         for i in 0..<5 {
             let wantId = NSUserInterfaceItemIdentifier("recent_\(i)")
             guard let item = menu.items.first(where: { $0.identifier == wantId })
                 else { continue }
             if i < recents.count {
                 let r = recents[i]
-                let glyph = r.hasSummary ? "✓ " : "  "
-                item.title = "\(glyph)\(r.stem)"
+                item.title = "[\(r.type)] \(r.stem)"
                 item.target = self
                 item.action = #selector(onRecentClicked(_:))
                 item.representedObject = r.stem
@@ -856,23 +846,15 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc func onOpenInbox() {
-        let task = Process()
-        task.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-        task.arguments = ["-e", "tell application \"Terminal\" to do script \"yulu memo list\""]
-        try? task.run()
+        if let url = URL(string: "http://127.0.0.1:7777/inbox") {
+            NSWorkspace.shared.open(url)
+        }
     }
 
     @objc func onRecentClicked(_ sender: NSMenuItem) {
-        guard let stem = sender.representedObject as? String else { return }
-        let dir = ("~/Movies/Yulu/voicemails" as NSString).expandingTildeInPath
-        // Prefer summary over transcript over wav
-        for ext in [".summary.md", ".transcript.txt", ".wav"] {
-            let path = "\(dir)/\(stem)\(ext)"
-            if FileManager.default.fileExists(atPath: path) {
-                NSWorkspace.shared.open(URL(fileURLWithPath: path))
-                return
-            }
-        }
+        guard let stem = sender.representedObject as? String,
+              let url = URL(string: "http://127.0.0.1:7777/inbox/\(stem)") else { return }
+        NSWorkspace.shared.open(url)
     }
 }
 
