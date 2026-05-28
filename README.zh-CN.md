@@ -116,7 +116,7 @@ yulu update --version v0.5.0
 yulu update --dev
 ```
 
-升级会把对应 GitHub Release assets 下载到 `~/.yulu/`，然后跑幂等升级流程；不重弹 TCC、不重做 OAuth、不重下 whisper 模型，已配置过的步骤全部跳过。
+稳定版和指定版本升级会把 GitHub Release assets 下载到 `~/.yulu/`；`--dev` 则从 `main` 安装或更新。之后都会跑幂等升级流程；不重弹 TCC、不重做 OAuth、不重下 whisper 模型，已配置过的步骤全部跳过。
 
 `--version` 只影响这一次操作；下一次直接跑 `yulu update` 会回到最新稳定版。
 

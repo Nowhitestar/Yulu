@@ -117,7 +117,7 @@ Dev channel from `main`:
 yulu update --dev
 ```
 
-Updates download the requested GitHub Release assets into `~/.yulu/` and re-run setup in idempotent upgrade mode. Already-granted TCC permissions are not re-prompted; OAuth is not redone; the whisper model isn't re-downloaded.
+Stable and specific-version updates download GitHub Release assets into `~/.yulu/`; `--dev` installs or updates from `main`. Either way, setup re-runs in idempotent upgrade mode. Already-granted TCC permissions are not re-prompted; OAuth is not redone; the whisper model isn't re-downloaded.
 
 `--version` affects only that one operation. The next plain `yulu update` returns to the latest stable release.
 

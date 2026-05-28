@@ -59,7 +59,7 @@ GitHub Actions publishes the release assets after the tag is pushed.
 
 Required assets, exactly:
 
-- `yulu-macos-arm64-vX.Y.Z.zip`
+- `yulu-macos-arm64-<tag>.zip`
 - `install.sh`
 - `checksums.txt`
 
