@@ -46,6 +46,6 @@ def parse_target_args(argv: list[str]) -> ReleaseTarget:
     args = build_target_parser().parse_args(argv)
     if args.dev:
         return ReleaseTarget(kind="dev")
-    if args.version:
+    if args.version is not None:
         return ReleaseTarget(kind="version", tag=normalize_version_tag(args.version))
     return ReleaseTarget(kind="latest")
