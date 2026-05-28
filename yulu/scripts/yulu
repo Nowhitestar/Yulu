@@ -60,7 +60,8 @@ Usage: yulu <command> [args]
 Commands:
   setup            Run the interactive installer (fresh install)
   update [--latest|--version vX.Y.Z|--dev]
-                    Update via release installer (default: latest stable)
+                    Update from release assets (default: latest stable);
+                    --version installs one specific release, --dev uses main
   uninstall        Remove Yulu from this machine
   start            Load all Yulu LaunchAgents
   stop             Unload all Yulu LaunchAgents

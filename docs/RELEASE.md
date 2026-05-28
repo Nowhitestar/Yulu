@@ -39,28 +39,40 @@ A public package must include runtime code and setup files only. Exclude:
 - local API keys or OAuth tokens
 - `.agent/runs` outputs unless intentionally documented
 
-## Manual release skeleton
+## Release workflow
 
 ```bash
+# 1. Update VERSION and CHANGELOG.md.
+$EDITOR VERSION CHANGELOG.md
+
+# 2. Ensure the tree is clean and tests pass.
+git status --short
 make test
-mkdir -p dist
-# package script to be implemented in a later sprint
-# ./packaging/scripts/package.sh v0.1.0-dogfood
-shasum -a 256 dist/* > dist/checksums.txt
 
-git tag v0.1.0-dogfood
-git push origin v0.1.0-dogfood
-
-gh release create v0.1.0-dogfood dist/* \
-  --title "v0.1.0-dogfood" \
-  --notes-file CHANGELOG.md
+# 3. Tag v$(VERSION) and push the tag.
+VERSION="$(cat VERSION)"
+git tag "v${VERSION}"
+git push origin "v${VERSION}"
 ```
 
-## Automation target
+GitHub Actions publishes the release assets after the tag is pushed.
 
-Later sprint should add:
+Required assets, exactly:
 
-- `make package`
-- `make release`
-- GitHub Actions tag workflow
-- release assets: `yulu-macos-arm64-<version>.zip`, `install.sh`, `checksums.txt`
+- `yulu-macos-arm64-vX.Y.Z.zip`
+- `install.sh`
+- `checksums.txt`
+
+Tags with a prerelease suffix, such as `v0.5.0-beta.1` or `v0.5.0-dogfood`, are published as prereleases.
+
+## Local dry run
+
+Build the package and checksums locally before tagging when you want a dry run:
+
+```bash
+VERSION="$(cat VERSION)"
+rm -rf dist
+mkdir -p dist
+packaging/scripts/package.sh "v${VERSION}"
+shasum -a 256 "dist/yulu-macos-arm64-v${VERSION}.zip" dist/install.sh > dist/checksums.txt
+```
