@@ -3,40 +3,50 @@ import { test, expect } from "@playwright/test";
 
 test.describe.configure({ mode: "serial" });
 
-test("shell loads + redirects / to /inbox/voicemails", async ({ page }) => {
+test("shell loads + redirects / to /inbox", async ({ page }) => {
   await page.goto("/");
-  await expect(page).toHaveURL(/\/inbox\/voicemails/);
+  await expect(page).toHaveURL(/\/inbox$/);
   // Sidebar brand text capitalized
   await expect(page.getByText("Yulu", { exact: true }).first()).toBeVisible();
-  await expect(page.getByText("Voicemails").first()).toBeVisible();
+  await expect(page.getByText("Recordings").first()).toBeVisible();
 });
 
-test("Sidebar has no count badges and no Search link", async ({ page }) => {
-  await page.goto("/inbox/voicemails");
+test("Sidebar: single Recordings entry, no Voicemails/Meetings, no counts", async ({ page }) => {
+  await page.goto("/inbox");
   await expect(page.locator(".sidebar-count")).toHaveCount(0);
-  await expect(page.locator(".sidebar a", { hasText: /^Search$/ })).toHaveCount(0);
+  await expect(page.locator(".sidebar a", { hasText: /^Recordings$/ })).toHaveCount(1);
+  await expect(page.locator(".sidebar a", { hasText: /^Voicemails$/ })).toHaveCount(0);
+  await expect(page.locator(".sidebar a", { hasText: /^Meetings$/ })).toHaveCount(0);
   // Bottom region with Settings + Health
   const bottom = page.locator('[data-testid="sidebar-bottom"]');
   await expect(bottom).toContainText("Settings");
   await expect(bottom).toContainText("Health");
 });
 
-test("Inbox/Voicemails — list renders + clicking a row opens reader", async ({ page }) => {
-  await page.goto("/inbox/voicemails");
+test("Recordings — list renders + clicking a row opens reader", async ({ page }) => {
+  await page.goto("/inbox");
   await expect(page.getByRole("button", { name: "All", exact: true })).toBeVisible();
-  const rows = page.getByTestId("voicemail-row");
+  const rows = page.getByTestId("recording-row");
   const count = await rows.count();
   if (count === 0) {
-    test.info().annotations.push({ type: "skip", description: "no voicemails on this machine" });
+    test.info().annotations.push({ type: "skip", description: "no recordings on this machine" });
     return;
   }
   await rows.first().click();
+  await expect(page).toHaveURL(/\/inbox\/.+/);
   await expect(page.getByRole("button", { name: /play|pause/i })).toBeVisible({ timeout: 10_000 });
   await expect(page.getByRole("button", { name: "Transcript" })).toBeVisible();
 });
 
-test("GlobalSearch popover opens via ⌘K, lists results, closes on Esc", async ({ page }) => {
+test("Recordings — old /inbox/voicemails + /inbox/meetings redirect to /inbox", async ({ page }) => {
   await page.goto("/inbox/voicemails");
+  await expect(page).toHaveURL(/\/inbox$/);
+  await page.goto("/inbox/meetings");
+  await expect(page).toHaveURL(/\/inbox$/);
+});
+
+test("GlobalSearch popover opens via ⌘K, lists results, closes on Esc", async ({ page }) => {
+  await page.goto("/inbox");
   const input = page.getByPlaceholder("Search");
   // Make sure the input has mounted before firing the hotkey.
   await expect(input).toBeVisible();
@@ -114,11 +124,11 @@ test("Health — Logs tab via #logs hash + dropdown defaults to audiodaemon", as
 });
 
 test("AudioPlayer survives A → B → A switch (Phase I regression)", async ({ page }) => {
-  await page.goto("/inbox/voicemails");
-  const rows = page.getByTestId("voicemail-row");
+  await page.goto("/inbox");
+  const rows = page.getByTestId("recording-row");
   const count = await rows.count();
   if (count < 2) {
-    test.info().annotations.push({ type: "skip", description: "need at least 2 voicemails" });
+    test.info().annotations.push({ type: "skip", description: "need at least 2 recordings" });
     return;
   }
   await rows.nth(0).click();
@@ -138,12 +148,12 @@ test("AudioPlayer survives A → B → A switch (Phase I regression)", async ({ 
   await expect(page.getByRole("button", { name: /^pause$/i })).toBeVisible({ timeout: 5_000 });
 });
 
-test("VoicemailReader has Re-transcribe and Re-generate summary buttons", async ({ page }) => {
-  await page.goto("/inbox/voicemails");
-  const rows = page.getByTestId("voicemail-row");
+test("RecordingReader has Re-transcribe and Re-generate summary buttons", async ({ page }) => {
+  await page.goto("/inbox");
+  const rows = page.getByTestId("recording-row");
   const count = await rows.count();
   if (count === 0) {
-    test.info().annotations.push({ type: "skip", description: "no voicemails" });
+    test.info().annotations.push({ type: "skip", description: "no recordings" });
     return;
   }
   await rows.first().click();
