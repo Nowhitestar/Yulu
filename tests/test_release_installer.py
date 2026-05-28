@@ -1,15 +1,22 @@
+import json
+from pathlib import Path
+
 import pytest
 
 from release_installer import (
+    InstallMetadata,
     InstallError,
     ReleaseAsset,
     ReleaseTarget,
+    read_install_metadata,
     normalize_version_tag,
     parse_checksums,
     parse_target_args,
     select_release_asset,
     sha256_file,
+    validate_runtime_layout,
     verify_checksum,
+    write_install_metadata,
 )
 
 
@@ -163,3 +170,47 @@ def test_verify_checksum_passes_and_fails(tmp_path):
 
     with pytest.raises(InstallError, match="Checksum mismatch"):
         verify_checksum(artifact, "0" * 64)
+
+
+def make_runtime(root: Path, version: str = "0.5.0") -> Path:
+    runtime = root / "yulu"
+    (runtime / "yulu" / "scripts").mkdir(parents=True)
+    (runtime / "VERSION").write_text(version + "\n", encoding="utf-8")
+    (runtime / "yulu" / "scripts" / "setup.sh").write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+    (runtime / "yulu" / "scripts" / "yulu").write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+    (runtime / "yulu" / "scripts" / "version.py").write_text(
+        "import sys\nsys.exit(0)\n",
+        encoding="utf-8",
+    )
+    return runtime
+
+
+def test_validate_runtime_layout_accepts_matching_version(tmp_path):
+    runtime = make_runtime(tmp_path, "0.5.0")
+    validate_runtime_layout(runtime, "v0.5.0")
+
+
+def test_validate_runtime_layout_rejects_version_drift(tmp_path):
+    runtime = make_runtime(tmp_path, "0.5.1")
+    with pytest.raises(InstallError, match="VERSION"):
+        validate_runtime_layout(runtime, "v0.5.0")
+
+
+def test_install_metadata_roundtrip(tmp_path):
+    metadata = InstallMetadata(
+        source="release",
+        version="v0.5.0",
+        asset="yulu-macos-arm64-v0.5.0.zip",
+        sha256="abc",
+    )
+    write_install_metadata(tmp_path, metadata)
+
+    data = read_install_metadata(tmp_path)
+
+    assert data["schema"] == 1
+    assert data["source"] == "release"
+    assert data["version"] == "v0.5.0"
+    assert data["asset"] == "yulu-macos-arm64-v0.5.0.zip"
+    assert data["sha256"] == "abc"
+    assert "installed_at" in data
+    assert json.loads((tmp_path / ".yulu-install.json").read_text(encoding="utf-8")) == data

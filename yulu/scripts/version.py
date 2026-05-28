@@ -61,6 +61,17 @@ def git_dirty(repo_dir: Path = REPO_DIR) -> bool | None:
     return bool(status)
 
 
+def read_install_metadata(repo_dir: Path = REPO_DIR) -> dict[str, object]:
+    path = repo_dir / ".yulu-install.json"
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
 def version_info(repo_dir: Path = REPO_DIR, version_path: Path = VERSION_PATH) -> dict[str, object]:
     version = read_version(version_path)
     return {
@@ -70,6 +81,7 @@ def version_info(repo_dir: Path = REPO_DIR, version_path: Path = VERSION_PATH) -
         "git_commit": git_commit(repo_dir),
         "git_tag": git_tag(repo_dir),
         "git_dirty": git_dirty(repo_dir),
+        "install": read_install_metadata(repo_dir),
         "version_file": str(version_path),
     }
 
@@ -80,14 +92,23 @@ def format_version(info: dict[str, object], short: bool = False) -> str:
         return version
 
     parts = [f"Yulu {version}"]
+    git_bits = []
     commit = info.get("git_commit")
     if commit:
-        git_bits = [str(commit)]
+        git_bits.append(str(commit))
         if info.get("git_dirty") is True:
             git_bits.append("dirty")
         tag = info.get("git_tag")
         if tag:
             git_bits.append(str(tag))
+    install = info.get("install")
+    if isinstance(install, dict):
+        source = install.get("source")
+        if source == "release" and install.get("version"):
+            git_bits.append(f"release {install['version']}")
+        elif source == "dev" and install.get("branch"):
+            git_bits.append(f"dev {install['branch']}")
+    if git_bits:
         parts.append(f"({', '.join(git_bits)})")
     if not info.get("valid_semver"):
         parts.append("[invalid VERSION]")

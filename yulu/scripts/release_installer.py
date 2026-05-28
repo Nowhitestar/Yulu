@@ -3,8 +3,11 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import re
+import subprocess
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 
 SEMVER_RE = re.compile(
@@ -37,11 +40,25 @@ class ReleaseAsset:
     checksums_url: str
 
 
+@dataclass(frozen=True)
+class InstallMetadata:
+    source: str
+    version: str | None = None
+    asset: str | None = None
+    sha256: str | None = None
+    branch: str | None = None
+    commit: str | None = None
+
+
 def normalize_version_tag(value: str) -> str:
     version = value.strip()
     if not SEMVER_RE.match(version):
         raise ValueError(f"{value!r} is not a valid SemVer release tag")
     return version if version.startswith("v") else f"v{version}"
+
+
+def _tag_without_v(tag: str) -> str:
+    return tag[1:] if tag.startswith("v") else tag
 
 
 def build_target_parser() -> argparse.ArgumentParser:
@@ -117,3 +134,59 @@ def verify_checksum(path: Path, expected: str) -> None:
     actual = sha256_file(path)
     if actual.lower() != expected.lower():
         raise InstallError(f"Checksum mismatch for {path.name}: expected {expected}, got {actual}")
+
+
+def validate_runtime_layout(runtime_dir: Path, tag: str) -> None:
+    required = [
+        runtime_dir / "VERSION",
+        runtime_dir / "yulu" / "scripts" / "setup.sh",
+        runtime_dir / "yulu" / "scripts" / "yulu",
+        runtime_dir / "yulu" / "scripts" / "version.py",
+    ]
+    for path in required:
+        if not path.exists():
+            raise InstallError(f"Invalid release asset: missing {path.relative_to(runtime_dir)}")
+
+    version = (runtime_dir / "VERSION").read_text(encoding="utf-8").strip()
+    if version != _tag_without_v(tag):
+        raise InstallError(f"VERSION {version!r} does not match release tag {tag!r}")
+
+    result = subprocess.run(
+        ["python3", str(runtime_dir / "yulu" / "scripts" / "version.py"), "--check"],
+        cwd=str(runtime_dir),
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        raise InstallError(f"version.py --check failed: {result.stderr or result.stdout}")
+
+
+def install_metadata_path(runtime_dir: Path) -> Path:
+    return runtime_dir / ".yulu-install.json"
+
+
+def write_install_metadata(runtime_dir: Path, metadata: InstallMetadata) -> None:
+    payload = {
+        "schema": 1,
+        "source": metadata.source,
+        "installed_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+    }
+    for key in ("version", "asset", "sha256", "branch", "commit"):
+        value = getattr(metadata, key)
+        if value is not None:
+            payload[key] = value
+    install_metadata_path(runtime_dir).write_text(
+        json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+
+
+def read_install_metadata(runtime_dir: Path) -> dict:
+    path = install_metadata_path(runtime_dir)
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
