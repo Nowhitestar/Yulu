@@ -20,6 +20,26 @@ if (typeof process !== "undefined" && process.on) {
   });
 }
 
+// Node ≥ 22 ships a native localStorage stub that is undefined unless
+// --localstorage-file is provided. jsdom normally supplies one, but when
+// Node's own global shadows it the property can come through as undefined.
+// Provide an in-memory shim so ThemeProvider (and any test that uses
+// localStorage) doesn't crash with "Cannot read properties of undefined".
+if (typeof localStorage === "undefined" || localStorage == null) {
+  const store: Record<string, string> = {};
+  Object.defineProperty(globalThis, "localStorage", {
+    writable: true,
+    value: {
+      getItem:    (k: string) => store[k] ?? null,
+      setItem:    (k: string, v: string) => { store[k] = v; },
+      removeItem: (k: string) => { delete store[k]; },
+      clear:      () => { for (const k in store) delete store[k]; },
+      get length() { return Object.keys(store).length; },
+      key:        (i: number) => Object.keys(store)[i] ?? null,
+    },
+  });
+}
+
 // jsdom lacks matchMedia; provide a minimal mock so ThemeProvider doesn't crash.
 if (!window.matchMedia) {
   Object.defineProperty(window, "matchMedia", {

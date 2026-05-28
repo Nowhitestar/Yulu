@@ -15,6 +15,7 @@ vi.mock("../../../web/src/trpc.js", () => {
       backend: "daemon",
     },
     transcription: {
+      realtime_enabled: true,
       final_engine: "mlx",
       language: "auto",
       local_model_path: "",
@@ -100,5 +101,15 @@ describe("Settings (consolidated)", () => {
     const { container } = wrap();
     expect(container.querySelector(".settings-toc")).toBeNull();
     expect(container.querySelector('[data-testid="settings-toc"]')).toBeNull();
+  });
+
+  it("renders the realtime transcription toggle, default on", () => {
+    const { getByText } = wrap();
+    const labelEl = getByText("Realtime transcription");
+    const row = labelEl.closest(".row");
+    expect(row).not.toBeNull();
+    const sw = row!.querySelector('[role="switch"]');
+    expect(sw).not.toBeNull();
+    expect(sw!.getAttribute("aria-checked")).toBe("true");
   });
 });

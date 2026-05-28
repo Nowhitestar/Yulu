@@ -21,6 +21,7 @@ export function TranscriptionSection({ tracker }: TranscriptionSectionProps) {
   if (!cfg) return null;
 
   const tr = cfg.transcription as {
+    realtime_enabled?: boolean;
     final_engine?: "mlx" | "whisper-cli";
     language?: string;
     local_model_path?: string;
@@ -38,6 +39,14 @@ export function TranscriptionSection({ tracker }: TranscriptionSectionProps) {
     <section id="transcription" className="settings-section">
       <h2 className="settings-section-h">Transcription</h2>
       <p className="settings-section-sub">Whisper / MLX engine and post-recording mode</p>
+      <InlineEditRow
+        label="Realtime transcription"
+        help="Transcribe live while recording. Off = transcribe after the recording stops."
+        type="toggle"
+        value={tr.realtime_enabled ?? true}
+        onCommit={commit("transcription.realtime_enabled") as (v: boolean) => void}
+        status={tracker.statusFor("transcription.realtime_enabled")}
+      />
       <InlineEditRow
         label="Final engine"
         type="select"
