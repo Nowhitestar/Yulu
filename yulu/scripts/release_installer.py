@@ -16,6 +16,7 @@ SEMVER_RE = re.compile(
     r"(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?"
     r"$"
 )
+SHA256_RE = re.compile(r"^[0-9a-fA-F]{64}$")
 
 
 class InstallError(RuntimeError):
@@ -74,11 +75,17 @@ def select_release_asset(release: dict) -> ReleaseAsset:
         raise InstallError(f"Release {tag} does not provide {expected_zip}. It may predate asset-based installs.")
     if checksum_asset is None:
         raise InstallError(f"Release {tag} does not provide checksums.txt.")
+    zip_url = str(zip_asset.get("browser_download_url") or "").strip()
+    checksums_url = str(checksum_asset.get("browser_download_url") or "").strip()
+    if not zip_url:
+        raise InstallError(f"Release {tag} asset {expected_zip} did not include a download URL.")
+    if not checksums_url:
+        raise InstallError(f"Release {tag} asset checksums.txt did not include a checksums.txt download URL.")
     return ReleaseAsset(
         tag=tag,
         asset_name=expected_zip,
-        asset_url=str(zip_asset.get("browser_download_url") or ""),
-        checksums_url=str(checksum_asset.get("browser_download_url") or ""),
+        asset_url=zip_url,
+        checksums_url=checksums_url,
     )
 
 
@@ -86,12 +93,14 @@ def parse_checksums(text: str) -> dict[str, str]:
     checksums: dict[str, str] = {}
     for line in text.splitlines():
         stripped = line.strip()
-        if not stripped:
+        if not stripped or stripped.startswith("#"):
             continue
         parts = stripped.split()
         if len(parts) < 2:
             continue
         checksum, name = parts[0], parts[-1].lstrip("*")
+        if not SHA256_RE.match(checksum):
+            continue
         checksums[name] = checksum
     return checksums
 

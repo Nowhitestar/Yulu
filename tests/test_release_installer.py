@@ -1,6 +1,7 @@
 import pytest
 
 from release_installer import (
+    InstallError,
     ReleaseAsset,
     ReleaseTarget,
     normalize_version_tag,
@@ -95,14 +96,62 @@ def test_select_release_asset_finds_zip_and_checksums():
 
 
 def test_select_release_asset_errors_when_zip_missing():
-    with pytest.raises(Exception, match="does not provide"):
+    with pytest.raises(InstallError, match="does not provide"):
         select_release_asset({"tag_name": "v0.5.0", "assets": []})
 
 
+@pytest.mark.parametrize("url", [None, ""])
+def test_select_release_asset_errors_when_zip_url_missing_or_empty(url):
+    release = {
+        "tag_name": "v0.5.0",
+        "assets": [
+            {"name": "checksums.txt", "browser_download_url": "https://example/checksums.txt"},
+            {"name": "yulu-macos-arm64-v0.5.0.zip", "browser_download_url": url},
+        ],
+    }
+
+    with pytest.raises(InstallError, match="download URL"):
+        select_release_asset(release)
+
+
+@pytest.mark.parametrize("url", [None, ""])
+def test_select_release_asset_errors_when_checksum_url_missing_or_empty(url):
+    release = {
+        "tag_name": "v0.5.0",
+        "assets": [
+            {"name": "checksums.txt", "browser_download_url": url},
+            {
+                "name": "yulu-macos-arm64-v0.5.0.zip",
+                "browser_download_url": "https://example/yulu.zip",
+            },
+        ],
+    }
+
+    with pytest.raises(InstallError, match="checksums.txt download URL"):
+        select_release_asset(release)
+
+
 def test_parse_checksums_accepts_sha256_lines():
-    checksums = parse_checksums("abc  yulu.zip\n123  install.sh\n")
-    assert checksums["yulu.zip"] == "abc"
-    assert checksums["install.sh"] == "123"
+    zip_checksum = "a" * 64
+    script_checksum = "1" * 64
+    checksums = parse_checksums(f"{zip_checksum}  yulu.zip\n{script_checksum}  install.sh\n")
+    assert checksums["yulu.zip"] == zip_checksum
+    assert checksums["install.sh"] == script_checksum
+
+
+def test_parse_checksums_ignores_comments_and_non_sha256_lines():
+    valid_checksum = "f" * 64
+    checksums = parse_checksums(
+        "\n"
+        "# checksums for release\n"
+        "abc  short.txt\n"
+        f"{valid_checksum}  yulu.zip\n"
+        "not-a-checksum  junk.zip\n"
+        f"{'0' * 63}  too-short.zip\n"
+        f"{'g' * 64}  non-hex.zip\n"
+    )
+
+    assert checksums == {"yulu.zip": valid_checksum}
 
 
 def test_verify_checksum_passes_and_fails(tmp_path):
@@ -112,5 +161,5 @@ def test_verify_checksum_passes_and_fails(tmp_path):
 
     verify_checksum(artifact, expected)
 
-    with pytest.raises(Exception, match="Checksum mismatch"):
+    with pytest.raises(InstallError, match="Checksum mismatch"):
         verify_checksum(artifact, "0" * 64)
