@@ -1,6 +1,7 @@
 import { router } from "../trpc.js";
 import { voicemailsRouter } from "./voicemails.js";
 import { meetingsRouter }   from "./meetings.js";
+import { recordingsRouter } from "./recordings.js";
 import { searchRouter }     from "./search.js";
 import { configRouter }     from "./config.js";
 import { promptsRouter }    from "./prompts.js";
@@ -16,6 +17,7 @@ import { llmRouter }          from "./llm.js";
 export const appRouter = router({
   voicemails:   voicemailsRouter,
   meetings:     meetingsRouter,
+  recordings:   recordingsRouter,
   search:       searchRouter,
   config:       configRouter,
   prompts:      promptsRouter,
