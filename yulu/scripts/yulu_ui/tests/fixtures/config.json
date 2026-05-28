@@ -1,0 +1,24 @@
+{
+  "audio": {
+    "mic_device": ":0",
+    "system_audio_device": ":1",
+    "output_dir": "/Users/test/Movies/Yulu",
+    "silence_threshold": 0.01,
+    "silence_duration_sec": 300,
+    "backend": "daemon"
+  },
+  "transcription": {
+    "final_engine": "mlx",
+    "language": "zh",
+    "glossary": ["AgentKey", "OpenClaw"]
+  },
+  "llm": {
+    "enabled": true,
+    "command": ["claude", "--print"]
+  },
+  "status_agent": {
+    "enabled": true,
+    "hotkey": { "key": "V", "modifiers": ["cmd", "shift"] }
+  },
+  "calendars": []
+}

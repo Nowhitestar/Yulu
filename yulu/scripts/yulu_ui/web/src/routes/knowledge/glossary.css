@@ -1,0 +1,19 @@
+.glossary-page {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+.glossary-header {
+  display: flex;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--edge);
+}
+.glossary-add-btn {
+  padding: 4px 12px;
+  border-radius: var(--radius-inner);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 500;
+}
+.glossary-add-btn:hover { background: var(--glass-3); }

@@ -1,0 +1,21 @@
+.placeholder {
+  padding: 48px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 12px;
+}
+.placeholder-label {
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.10em;
+  color: var(--fg-3);
+}
+.placeholder-backend {
+  font-family: "SF Mono", ui-monospace, "JetBrains Mono", monospace;
+  font-size: 11px;
+  color: var(--fg-2);
+  padding: 6px 10px;
+  background: var(--row-hover);
+  border-radius: var(--radius-inner);
+}

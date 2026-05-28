@@ -13,6 +13,7 @@ duplicate any Phase 1-3 primitives:
 
 from __future__ import annotations
 
+import re
 import signal
 import sys
 import time
@@ -90,18 +91,12 @@ def _persist_title_sidecar(wav_path: Path, title: Optional[str]) -> None:
     wav_path.with_suffix(".title").write_text(title + "\n", encoding="utf-8")
 
 
-def _transcribe_and_enqueue(wav_path: Path, *, title: Optional[str]) -> int:
-    """Post-stop pipeline. Returns 0 on success, non-zero on failure."""
-    response = _request_transcribe(wav_path)
-    if response.get("status") != "ok":
-        print(
-            f"⚠️ stt_daemon transcribe failed: {response.get('error')}",
-            file=sys.stderr,
-        )
-        return 2
+def _finalize_transcript(wav_path: Path, text: str, *, title: Optional[str]) -> int:
+    """Write raw+final transcript, persist title sidecar, push to the search
+    index (best-effort), and enqueue voicemail prompts. Returns 0.
 
-    text = _extract_mic_text(response)
-
+    Shared by the whole-file path (_transcribe_and_enqueue) and the realtime
+    promote path (_promote_realtime_transcript)."""
     raw_path = wav_path.with_suffix(".raw.transcript.txt")
     transcript_path = wav_path.with_suffix(".transcript.txt")
     raw_path.write_text(text, encoding="utf-8")
@@ -135,6 +130,47 @@ def _transcribe_and_enqueue(wav_path: Path, *, title: Optional[str]) -> int:
     return 0
 
 
+_SPEAKER_TAG_RE = re.compile(r"^\[(?:Me|Them)\]\s*")
+
+
+def _strip_speaker_tags(raw: str) -> str:
+    """Realtime transcripts are line-per-partial with a [Me]/[Them] prefix.
+    Voicemails are single-speaker — strip the tag, drop blank lines, and
+    rejoin so the result matches the plain-text whole-file transcript."""
+    out: list[str] = []
+    for line in raw.splitlines():
+        cleaned = _SPEAKER_TAG_RE.sub("", line).strip()
+        if cleaned:
+            out.append(cleaned)
+    return "\n".join(out)
+
+
+def _promote_realtime_transcript(wav_path: Path, *, title: Optional[str]) -> int:
+    """Promote the live realtime transcript to the final transcript.
+    Returns 0 on success; 2 if the realtime transcript is missing or empty
+    (caller falls back to whole-file transcribe)."""
+    rt_path = wav_path.with_suffix(".realtime.transcript.txt")
+    if not rt_path.exists():
+        return 2
+    text = _strip_speaker_tags(rt_path.read_text(encoding="utf-8"))
+    if not text:
+        return 2
+    return _finalize_transcript(wav_path, text, title=title)
+
+
+def _transcribe_and_enqueue(wav_path: Path, *, title: Optional[str]) -> int:
+    """Whole-file post-stop pipeline. Returns 0 on success, non-zero on failure."""
+    response = _request_transcribe(wav_path)
+    if response.get("status") != "ok":
+        print(
+            f"⚠️ stt_daemon transcribe failed: {response.get('error')}",
+            file=sys.stderr,
+        )
+        return 2
+    text = _extract_mic_text(response)
+    return _finalize_transcript(wav_path, text, title=title)
+
+
 # Module-level seam for tests (patchable)
 _poll_interval = 1.0
 
@@ -144,6 +180,25 @@ def _socket_send(cmd: dict):
     record_audio.socket_send everywhere."""
     from record_audio import socket_send
     return socket_send(cmd)
+
+
+def _realtime_enabled() -> bool:
+    """Indirection over record_audio.realtime_enabled (the global flag)."""
+    from record_audio import realtime_enabled
+    return bool(realtime_enabled())
+
+
+def _start_realtime(wav_path: Path) -> None:
+    """Start the live transcriber for this voicemail. No-op when realtime is
+    disabled (start_realtime_transcriber self-guards on realtime_enabled())."""
+    from record_audio import start_realtime_transcriber
+    start_realtime_transcriber(str(wav_path), "voicemail")
+
+
+def _stop_realtime() -> None:
+    """Stop + reap the live transcriber. No-op if it was never started."""
+    from record_audio import stop_realtime_transcriber
+    stop_realtime_transcriber(wait=True)
 
 
 def _acquire_recording_lock(*, timeout: float = 0.5):
@@ -172,6 +227,10 @@ def cmd_new(title: Optional[str] = None, *,
     stem = _gen_stem()
 
     wav_path: Optional[Path] = None
+    # Capture the realtime flag ONCE at recording start so the post-stop
+    # promote/whole-file decision matches what the transcriber actually did,
+    # even if the config flag is toggled mid-recording.
+    realtime_on = False
     try:
         # NOTE: _acquire_recording_lock is a @contextmanager — the flock
         # (and RecordingBusy) only fires at __enter__, so the try must
@@ -202,6 +261,8 @@ def cmd_new(title: Optional[str] = None, *,
             )
             print(f"🎤 录音中 — Ctrl+C 停止 ({silence_seconds}s 静音自动停)",
                   file=sys.stderr)
+            realtime_on = _realtime_enabled()
+            _start_realtime(wav_path)   # no-op when realtime disabled
 
             stop_requested = {"v": False}
 
@@ -221,6 +282,7 @@ def cmd_new(title: Optional[str] = None, *,
                     time.sleep(_poll_interval)
             finally:
                 signal.signal(signal.SIGINT, prev)
+                _stop_realtime()        # flush + reap even on exception
             print("⏹ Stopped", file=sys.stderr)
     except RecordingBusy as exc:
         info = exc.info or {}
@@ -235,6 +297,15 @@ def cmd_new(title: Optional[str] = None, *,
     if wav_path is None or not wav_path.exists():
         print("⚠️ recording stopped but no .wav file present", file=sys.stderr)
         return 1
+
+    if realtime_on:
+        rc = _promote_realtime_transcript(wav_path, title=title)
+        if rc == 0:
+            return 0
+        print(
+            "⚠️ realtime transcript empty/missing — falling back to whole-file transcribe",
+            file=sys.stderr,
+        )
     return _transcribe_and_enqueue(wav_path, title=title)
 
 

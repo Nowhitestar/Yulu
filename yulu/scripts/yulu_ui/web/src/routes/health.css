@@ -1,0 +1,23 @@
+.health-page { padding: 4px 8px; }
+.health-tabs {
+  display: flex;
+  gap: 0;
+  border-bottom: 1px solid var(--edge);
+  margin-bottom: 18px;
+}
+.health-tab {
+  padding: 9px 16px;
+  font-size: 13px;
+  color: var(--fg-2);
+  cursor: pointer;
+  background: transparent;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+}
+.health-tab:hover { color: var(--fg); }
+.health-tab.active {
+  color: var(--accent-on, var(--accent));
+  border-bottom-color: var(--accent);
+  font-weight: 500;
+}

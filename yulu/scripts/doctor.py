@@ -186,6 +186,64 @@ def check_search_index(config_dir: Path) -> dict[str, Any]:
     return report
 
 
+def check_yulu_ui(
+    script_dir: Path,
+    config_dir: Path,
+    timeout: float = 2.0,
+) -> dict[str, Any]:
+    """Phase G health check: verify yulu_ui dist artifacts, LaunchAgent, and
+    /healthz. UI is optional — missing artifacts are not a doctor-level failure.
+    Always returns a dict with the same keys so JSON consumers can rely on it."""
+    script_dir = Path(script_dir).expanduser()
+    config_dir = Path(config_dir).expanduser()
+
+    ui_dir = script_dir / "yulu_ui"
+    dist_server = ui_dir / "dist" / "server.js"
+    dist_index = ui_dir / "dist" / "web" / "index.html"
+    plist_path = Path.home() / "Library" / "LaunchAgents" / "com.yulu.ui.plist"
+    log_path = config_dir / "ui.log"
+
+    report: dict[str, Any] = {
+        "dist_server_present": dist_server.is_file() and dist_server.stat().st_size > 0,
+        "dist_web_present": dist_index.is_file() and dist_index.stat().st_size > 0,
+        "plist_installed": plist_path.is_file(),
+        "launchctl_loaded": False,
+        "port": 7777,
+        "healthz_ok": False,
+        "healthz_response": None,
+        "log_path": str(log_path),
+        "log_present": log_path.is_file(),
+        "log_size_bytes": log_path.stat().st_size if log_path.is_file() else None,
+        "error": None,
+    }
+
+    # launchctl loaded?
+    code, out, _ = _run(["launchctl", "list"], timeout=3)
+    if code == 0 and any("com.yulu.ui" in line for line in out.splitlines()):
+        report["launchctl_loaded"] = True
+
+    # /healthz
+    try:
+        import urllib.request
+        with urllib.request.urlopen(
+            f"http://127.0.0.1:{report['port']}/healthz", timeout=timeout
+        ) as resp:
+            body = resp.read().decode("utf-8", errors="replace")[:200]
+            report["healthz_response"] = body
+            if resp.status == 200 and '"status":"ok"' in body:
+                report["healthz_ok"] = True
+    except Exception as exc:
+        report["error"] = f"healthz fetch failed: {exc}"
+
+    # Categorize the most actionable single error message
+    if not report["dist_server_present"] or not report["dist_web_present"]:
+        report["error"] = "build artifacts missing — run setup.sh --upgrade"
+    elif report["plist_installed"] and not report["launchctl_loaded"]:
+        report["error"] = "plist installed but service not loaded — run yulu start"
+
+    return report
+
+
 def collect_report(
     source_root: Path = DEFAULT_SOURCE_ROOT,
     runtime_root: Path = DEFAULT_RUNTIME_ROOT,
@@ -235,6 +293,7 @@ def collect_report(
         "socket": _socket_status(config_dir / "audio_daemon.sock"),
         "stt_daemon": check_stt_daemon(config_dir),
         "search_index": check_search_index(config_dir),
+        "yulu_ui": check_yulu_ui(source_root / "yulu" / "scripts", config_dir),
         "processes": processes,
         "legacy_processes": legacy_processes,
         "runtime_processes": runtime_processes,
@@ -301,6 +360,17 @@ def print_human(report: dict[str, Any]) -> None:
             print(f"  per_kind: {kinds_str}")
         elif si.get("error"):
             print(f"  error: {si['error']}")
+    ui = report.get("yulu_ui", {})
+    if ui:
+        ok_state = ui.get("healthz_ok", False) and ui.get("dist_server_present", False)
+        size_kb = (ui.get("log_size_bytes") or 0) / 1024
+        print(f"{mark(ok_state)} yulu_ui: port={ui.get('port')} "
+              f"dist={ui.get('dist_server_present')} loaded={ui.get('launchctl_loaded')} "
+              f"healthz={'ok' if ui.get('healthz_ok') else 'fail'}")
+        if ui.get("log_present"):
+            print(f"  log: {ui['log_path']} ({size_kb:.1f} KB)")
+        if ui.get("error"):
+            print(f"  error: {ui['error']}")
     for check in report["checks"]:
         print(f"{mark(check['ok'])} {check['name']}: {check.get('path') or 'missing'}")
     if report["legacy_processes"]:

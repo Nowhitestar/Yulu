@@ -1,0 +1,35 @@
+.testpop {
+  margin-top: 6px;
+  padding: 10px 12px;
+  background: var(--glass-2);
+  backdrop-filter: var(--blur-glass);
+  border-radius: var(--radius-panel);
+  box-shadow: var(--edge-shadow), var(--shadow);
+  max-width: 560px;
+  max-height: 300px;
+  overflow: auto;
+}
+.testpop-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 6px;
+}
+.testpop-status { font-size: 12px; }
+.testpop-status.pending { color: var(--fg-2); }
+.testpop-status.ok { color: var(--green); }
+.testpop-status.failed { color: var(--red); }
+.testpop-close { width: 20px; height: 20px; border-radius: 50%; color: var(--fg-3); font-size: 13px; }
+.testpop-close:hover { color: var(--fg); background: var(--row-hover); }
+.testpop-out, .testpop-err {
+  font-family: "SF Mono", ui-monospace, monospace;
+  font-size: 11px;
+  margin: 4px 0 0 0;
+  padding: 6px 8px;
+  background: var(--wp-1);
+  border-radius: var(--radius-inner);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.testpop-err { color: var(--red); }
+.testpop-out { color: var(--fg); }

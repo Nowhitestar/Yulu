@@ -176,6 +176,12 @@ def test_cmd_new_sends_start_with_sys_disabled_and_silence_seconds(
 
     monkeypatch.setattr(recorder, "_socket_send", fake_socket_send)
     monkeypatch.setattr(recorder, "_poll_interval", 0.01)
+    # Keep this test hermetic: force the whole-file path and no-op the realtime
+    # seams so cmd_new never spawns the real realtime_transcribe.py subprocess
+    # or writes to the real ~/.config/yulu PID file.
+    monkeypatch.setattr(recorder, "_start_realtime", lambda p: None)
+    monkeypatch.setattr(recorder, "_stop_realtime", lambda: None)
+    monkeypatch.setattr(recorder, "_realtime_enabled", lambda: False)
     with patch.object(recorder, "_request_transcribe", return_value=fake_response):
         rc = recorder.cmd_new(title="MyMemo")
 
@@ -315,3 +321,156 @@ def test_cmd_stop_sends_stop_when_recording(monkeypatch):
     rc = recorder.cmd_stop()
     assert rc == 0
     assert any(c.get("action") == "stop" for c in sent)
+
+
+def test_promote_strips_speaker_tags_and_finalizes(isolated_paths, tmp_path):
+    queue, _ = isolated_paths
+    wav = tmp_path / "voicemail_20260528_120000.wav"
+    wav.touch()
+    # Mix [Me] and [Them] to prove both tags are stripped (defensive — voicemails
+    # are mic-only, but the promote step must handle either prefix).
+    wav.with_suffix(".realtime.transcript.txt").write_text(
+        "[Me] line one\n[Them] line two\n[Me] line three\n", encoding="utf-8")
+
+    rc = recorder._promote_realtime_transcript(wav, title=None)
+
+    assert rc == 0
+    assert wav.with_suffix(".transcript.txt").read_text(encoding="utf-8") == "line one\nline two\nline three"
+    assert wav.with_suffix(".raw.transcript.txt").read_text(encoding="utf-8") == "line one\nline two\nline three"
+    events = json.loads(queue.read_text(encoding="utf-8"))
+    assert [e["prompt_slug"] for e in events] == ["voicemail-todos"]
+
+
+def test_promote_returns_2_when_realtime_missing(isolated_paths, tmp_path):
+    queue, _ = isolated_paths
+    wav = tmp_path / "voicemail_20260528_120000.wav"
+    wav.touch()
+
+    rc = recorder._promote_realtime_transcript(wav, title=None)
+
+    assert rc == 2
+    assert not wav.with_suffix(".transcript.txt").exists()
+    assert json.loads(queue.read_text(encoding="utf-8")) == []
+
+
+def test_promote_returns_2_when_realtime_empty(isolated_paths, tmp_path):
+    queue, _ = isolated_paths
+    wav = tmp_path / "voicemail_20260528_120000.wav"
+    wav.touch()
+    wav.with_suffix(".realtime.transcript.txt").write_text("[Me]\n   \n", encoding="utf-8")
+
+    rc = recorder._promote_realtime_transcript(wav, title=None)
+
+    assert rc == 2
+    assert not wav.with_suffix(".transcript.txt").exists()
+
+
+def test_promote_pushes_stripped_body_to_search_index(isolated_paths, tmp_path, monkeypatch):
+    queue, _ = isolated_paths
+    wav = tmp_path / "voicemail_20260528_120000.wav"
+    wav.touch()
+    wav.with_suffix(".realtime.transcript.txt").write_text("[Me] hello world\n", encoding="utf-8")
+
+    calls: list[dict] = []
+    from search import indexer as search_indexer
+    monkeypatch.setattr(search_indexer, "upsert_doc", lambda **kw: calls.append(kw) or True)
+
+    rc = recorder._promote_realtime_transcript(wav, title=None)
+
+    assert rc == 0
+    assert len(calls) == 1
+    assert calls[0]["kind"] == search_indexer.KIND_VOICEMAIL_TRANSCRIPT
+    assert calls[0]["body"] == "hello world"
+
+
+def _make_cmd_new_socket(wav_path):
+    """status: recording once, then stopped; start->recording; stop->stopped."""
+    status_responses = iter([
+        {"recording": True, "file": str(wav_path)},
+        {"recording": False, "file": str(wav_path)},
+    ])
+
+    def fake_socket_send(cmd):
+        if cmd.get("action") == "status":
+            return next(status_responses)
+        if cmd.get("action") == "start":
+            return {"status": "recording", "file": str(wav_path)}
+        if cmd.get("action") == "stop":
+            return {"status": "stopped", "file": str(wav_path)}
+        return None
+    return fake_socket_send
+
+
+def test_cmd_new_realtime_on_promotes_without_wholefile(isolated_paths, tmp_path, monkeypatch):
+    monkeypatch.setattr(recorder, "VOICEMAIL_DIR", tmp_path)
+    monkeypatch.setattr(recorder, "_realtime_enabled", lambda: True)
+    monkeypatch.setattr(recorder, "_poll_interval", 0.01)
+
+    wav_path = tmp_path / "voicemail_20260528_120000.wav"
+    wav_path.touch()
+
+    def fake_start_realtime(p):
+        Path(p).with_suffix(".realtime.transcript.txt").write_text(
+            "[Me] live text\n", encoding="utf-8")
+    monkeypatch.setattr(recorder, "_start_realtime", fake_start_realtime)
+    monkeypatch.setattr(recorder, "_stop_realtime", lambda: None)
+    monkeypatch.setattr(recorder, "_socket_send", _make_cmd_new_socket(wav_path))
+
+    def boom(_wav):
+        raise AssertionError("whole-file transcribe must not run when realtime promotes")
+    monkeypatch.setattr(recorder, "_request_transcribe", boom)
+
+    rc = recorder.cmd_new(title="MyMemo")
+    assert rc == 0
+    assert wav_path.with_suffix(".transcript.txt").read_text(encoding="utf-8") == "live text"
+
+
+def test_cmd_new_realtime_off_uses_wholefile(isolated_paths, tmp_path, monkeypatch):
+    monkeypatch.setattr(recorder, "VOICEMAIL_DIR", tmp_path)
+    monkeypatch.setattr(recorder, "_realtime_enabled", lambda: False)
+    monkeypatch.setattr(recorder, "_poll_interval", 0.01)
+    monkeypatch.setattr(recorder, "_start_realtime", lambda p: None)
+    monkeypatch.setattr(recorder, "_stop_realtime", lambda: None)
+
+    wav_path = tmp_path / "voicemail_20260528_120000.wav"
+    wav_path.touch()
+    monkeypatch.setattr(recorder, "_socket_send", _make_cmd_new_socket(wav_path))
+
+    fake_response = {
+        "status": "ok",
+        "channels": {
+            "mic": {"text": "whole file text", "segments": [{"start": 0.0, "end": 1.0, "text": "whole file text"}]},
+            "sys": {"skipped_silent": True, "text": "", "segments": []},
+        },
+    }
+    with patch.object(recorder, "_request_transcribe", return_value=fake_response):
+        rc = recorder.cmd_new(title="MyMemo")
+
+    assert rc == 0
+    assert wav_path.with_suffix(".transcript.txt").read_text(encoding="utf-8") == "whole file text"
+
+
+def test_cmd_new_realtime_on_empty_falls_back_to_wholefile(isolated_paths, tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(recorder, "VOICEMAIL_DIR", tmp_path)
+    monkeypatch.setattr(recorder, "_realtime_enabled", lambda: True)
+    monkeypatch.setattr(recorder, "_poll_interval", 0.01)
+    monkeypatch.setattr(recorder, "_start_realtime", lambda p: None)  # writes no rt file
+    monkeypatch.setattr(recorder, "_stop_realtime", lambda: None)
+
+    wav_path = tmp_path / "voicemail_20260528_120000.wav"
+    wav_path.touch()
+    monkeypatch.setattr(recorder, "_socket_send", _make_cmd_new_socket(wav_path))
+
+    fake_response = {
+        "status": "ok",
+        "channels": {
+            "mic": {"text": "fallback text", "segments": [{"start": 0.0, "end": 1.0, "text": "fallback text"}]},
+            "sys": {"skipped_silent": True, "text": "", "segments": []},
+        },
+    }
+    with patch.object(recorder, "_request_transcribe", return_value=fake_response):
+        rc = recorder.cmd_new(title="MyMemo")
+
+    assert rc == 0
+    assert wav_path.with_suffix(".transcript.txt").read_text(encoding="utf-8") == "fallback text"
+    assert "falling back to whole-file transcribe" in capsys.readouterr().err

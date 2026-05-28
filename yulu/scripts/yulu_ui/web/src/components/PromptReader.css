@@ -1,0 +1,85 @@
+/* web/src/components/PromptReader.css */
+.preader {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px 18px;
+}
+.preader-field {
+  display: grid;
+  grid-template-columns: 100px 1fr;
+  align-items: center;
+  gap: 10px;
+}
+.preader-field-content { align-items: flex-start; }
+.preader-label {
+  font-size: 11px;
+  color: var(--fg-3);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.preader-input {
+  padding: 6px 10px;
+  border-radius: var(--radius-inner);
+  background: var(--glass-2);
+  color: var(--fg);
+  font-size: 13px;
+  border: none;
+  outline: 2px solid transparent;
+}
+.preader-input:focus { outline-color: var(--accent-soft); }
+.preader-textarea {
+  padding: 8px 12px;
+  border-radius: var(--radius-inner);
+  background: var(--glass-2);
+  color: var(--fg);
+  font-family: "SF Mono", ui-monospace, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  border: none;
+  outline: 2px solid transparent;
+  resize: vertical;
+}
+.preader-textarea:focus { outline-color: var(--accent-soft); }
+.preader-toggle {
+  width: 32px;
+  height: 18px;
+  border-radius: 9px;
+  background: var(--row-hover);
+  position: relative;
+  transition: background 120ms;
+}
+.preader-toggle.on { background: var(--accent); }
+.preader-toggle-knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: white;
+  transition: transform 120ms;
+}
+.preader-toggle.on .preader-toggle-knob { transform: translateX(14px); }
+.preader-actions {
+  display: flex;
+  gap: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--edge);
+}
+.preader-btn {
+  padding: 5px 14px;
+  border-radius: var(--radius-inner);
+  font-size: 12px;
+}
+.preader-btn.primary {
+  background: var(--accent);
+  color: var(--wp-1);
+}
+.preader-btn.primary:hover { opacity: 0.9; }
+.preader-btn.primary:disabled { opacity: 0.4; cursor: not-allowed; }
+.preader-btn.danger {
+  background: var(--row-hover);
+  color: var(--red);
+}
+.preader-btn.danger:hover { background: var(--red); color: var(--wp-1); }

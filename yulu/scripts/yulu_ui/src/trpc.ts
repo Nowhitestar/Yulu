@@ -1,0 +1,34 @@
+import { initTRPC } from "@trpc/server";
+import type { ConfigManager } from "./config.js";
+import type { LaunchctlClient } from "./launchctl.js";
+import type { PubSub, AppChannels } from "./pubsub.js";
+import type { Database as DbType } from "better-sqlite3";
+import type { paths as pathsType } from "./paths.js";
+import type { JobRegistry } from "./jobStatus.js";
+
+export interface AppContext {
+  config: ConfigManager;
+  launchctl: LaunchctlClient;
+  pubsub: PubSub<AppChannels>;
+  paths: typeof pathsType;
+  jobs: JobRegistry;
+  db: {
+    prompts: DbType;
+    vocab: DbType;
+    search: DbType;
+  };
+}
+
+const t = initTRPC.context<AppContext>().create();
+export const router = t.router;
+export const publicProcedure = t.procedure;
+export const mergeRouters = t.mergeRouters;
+export const createCallerFactory = t.createCallerFactory;
+
+// Convenience for tests. Returns `any` so tests can call any procedure
+// without dragging tRPC's deep generic types through every test file —
+// tests assert specific shapes on the returned values themselves.
+export function createCaller(r: unknown, ctx: AppContext): any {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return (t.createCallerFactory as unknown as (r: unknown) => (ctx: AppContext) => unknown)(r)(ctx) as any;
+}

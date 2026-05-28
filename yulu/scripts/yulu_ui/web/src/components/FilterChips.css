@@ -1,0 +1,18 @@
+.filterchips {
+  display: inline-flex;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.filterchip {
+  padding: 4px 10px;
+  border-radius: var(--radius-inner);
+  font-size: 11px;
+  color: var(--fg-2);
+  background: var(--row-hover);
+  transition: background 100ms, color 100ms;
+}
+.filterchip:hover { color: var(--fg); }
+.filterchip.active {
+  background: var(--accent-soft);
+  color: var(--accent);
+}

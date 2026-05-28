@@ -1,0 +1,20 @@
+/* web/src/components/ThemeToggle.css */
+.theme-toggle {
+  display: inline-flex;
+  background: var(--row-hover);
+  border-radius: var(--radius-inner);
+  padding: 2px;
+  gap: 1px;
+}
+.theme-toggle button {
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: 11px;
+  color: var(--fg-2);
+  transition: background 120ms, color 120ms;
+}
+.theme-toggle button:hover { color: var(--fg); }
+.theme-toggle button.active {
+  background: var(--glass-3);
+  color: var(--fg);
+}

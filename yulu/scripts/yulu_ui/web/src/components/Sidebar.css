@@ -1,0 +1,99 @@
+/* web/src/components/Sidebar.css */
+.sidebar {
+  height: 100%;
+  padding: 14px 10px;
+  background: var(--glass);
+  backdrop-filter: var(--blur-glass);
+  -webkit-backdrop-filter: var(--blur-glass);
+  border-radius: var(--radius-panel);
+  box-shadow: var(--edge-shadow);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  min-width: 0;
+}
+
+.sidebar-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 2px 6px 10px;
+  border-bottom: 1px solid var(--edge);
+}
+.sidebar-brand-text {
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  color: var(--fg);
+}
+
+.sidebar-section { display: flex; flex-direction: column; gap: 1px; }
+.sidebar-heading {
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.10em;
+  color: var(--fg-3);
+  padding: 0 6px 4px;
+  text-transform: uppercase;
+}
+.sidebar-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border-radius: 7px;
+  font-size: 13px;
+  color: var(--fg-2);
+  text-decoration: none;
+  transition: background 100ms, color 100ms;
+}
+.sidebar-item svg { flex-shrink: 0; opacity: 0.8; }
+.sidebar-item:hover { background: var(--row-hover); color: var(--fg); }
+.sidebar-item.active {
+  background: var(--accent-soft);
+  color: var(--accent-on, var(--accent));
+  font-weight: 500;
+}
+
+.sidebar-spacer { flex: 1; min-height: 8px; }
+
+.sidebar-bottom {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  border-top: 1px solid var(--edge);
+  padding-top: 8px;
+}
+.sidebar-bottom-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 8px;
+  border-radius: 7px;
+  font-size: 13px;
+  color: var(--fg-2);
+  text-decoration: none;
+  transition: background 100ms, color 100ms;
+}
+.sidebar-bottom-item:hover { background: var(--row-hover); color: var(--fg); }
+.sidebar-bottom-item.active {
+  background: var(--accent-soft);
+  color: var(--accent-on, var(--accent));
+  font-weight: 500;
+}
+.sidebar-bottom-item svg { flex-shrink: 0; opacity: 0.85; }
+
+.sidebar-health-dot {
+  margin-left: auto;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--fg-3);
+  transition: background 200ms, box-shadow 200ms;
+}
+.sidebar-health-dot.health-ok   { background: var(--green);  box-shadow: 0 0 5px color-mix(in oklch, var(--green) 60%, transparent); }
+.sidebar-health-dot.health-warn { background: var(--accent); box-shadow: 0 0 5px color-mix(in oklch, var(--accent) 60%, transparent); }
+.sidebar-health-dot.health-crit { background: var(--red);    box-shadow: 0 0 5px color-mix(in oklch, var(--red) 60%, transparent); }
+.sidebar-health-dot.health-loading { background: var(--fg-3); }

@@ -1,0 +1,26 @@
+.rs-root {
+  display: flex;
+  flex-direction: row;
+  height: 100%;
+  position: relative;
+}
+.rs-root[data-side="left"] { flex-direction: row-reverse; }
+
+.rs-pane {
+  height: 100%;
+  overflow: hidden;
+  min-width: 0;
+}
+
+.rs-handle {
+  width: 4px;
+  cursor: col-resize;
+  background: transparent;
+  flex: 0 0 4px;
+  transition: background 100ms;
+  user-select: none;
+}
+.rs-handle:hover,
+.rs-handle:active {
+  background: var(--accent-soft);
+}

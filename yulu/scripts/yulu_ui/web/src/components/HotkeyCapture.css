@@ -1,0 +1,32 @@
+.hotkey-display {
+  display: inline-block;
+  padding: 4px 12px;
+  border-radius: var(--radius-inner);
+  background: var(--glass-2);
+  font-family: "SF Mono", ui-monospace, monospace;
+  font-size: 13px;
+  cursor: pointer;
+}
+.hotkey-display:hover { background: var(--glass-3); }
+.hotkey-capture {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.hotkey-capture-area {
+  padding: 4px 12px;
+  border-radius: var(--radius-inner);
+  background: var(--accent-soft);
+  font-family: "SF Mono", ui-monospace, monospace;
+  font-size: 13px;
+  color: var(--accent);
+  outline: 2px solid var(--accent);
+  min-width: 200px;
+}
+.hotkey-btn {
+  padding: 3px 10px;
+  font-size: 11px;
+  border-radius: var(--radius-inner);
+}
+.hotkey-btn.save { background: var(--accent); color: var(--wp-1); }
+.hotkey-btn.cancel { background: var(--row-hover); color: var(--fg-2); }

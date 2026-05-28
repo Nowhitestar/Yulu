@@ -1,0 +1,23 @@
+/* web/src/components/TopBar.css */
+.topbar {
+  display: flex;
+  align-items: center;
+  padding: 10px 14px;
+  background: var(--glass);
+  backdrop-filter: var(--blur-glass);
+  -webkit-backdrop-filter: var(--blur-glass);
+  border-radius: var(--radius-panel);
+  box-shadow: var(--edge-shadow);
+  gap: 14px;
+  min-height: 38px;
+}
+.topbar-breadcrumb {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--fg);
+}
+.topbar-breadcrumb:empty { display: none; }
+.topbar-filters { display: flex; gap: 8px; align-items: center; }
+.topbar-spacer { flex: 1; }
+.topbar-search { flex-shrink: 0; }
+.topbar-theme   { flex-shrink: 0; }

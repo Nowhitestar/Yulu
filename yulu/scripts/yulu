@@ -66,7 +66,7 @@ Commands:
   version          Show Yulu version + git metadata
   status           Service + daemon health snapshot
   doctor           Config + daemon + transcription + queue health check
-  logs [daemon]    Tail logs. Daemon = audio_daemon (default), scheduler, detector, calendar, agentqueue, realtime_transcribe
+  logs [daemon]    Tail logs. Daemon = audio_daemon (default), scheduler, detector, calendar, agentqueue, realtime_transcribe, ui
   record start "title"   Manually start a recording
   record stop            Manually stop the current recording
   repair-permissions     Open/reset Screen & System Audio Recording permission helper
@@ -207,6 +207,15 @@ except Exception:
         ls -lt "$rec_dir"/*.wav 2>/dev/null | head -5 | awk '{print "    "$NF" ("$5" bytes)"}'
     else
         warn "recording directory not configured or missing"
+    fi
+    echo
+    info "Web UI:"
+    local ui_resp
+    ui_resp=$(curl -s --max-time 2 "http://127.0.0.1:7777/healthz" 2>/dev/null || true)
+    if [[ -n "$ui_resp" ]] && echo "$ui_resp" | grep -q '"status":"ok"'; then
+        ok "http://127.0.0.1:7777/  ($ui_resp)"
+    else
+        warn "yulu_ui not reachable at 127.0.0.1:7777 (try: yulu start)"
     fi
 }
 

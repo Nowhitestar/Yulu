@@ -1,0 +1,30 @@
+.logs-section {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  gap: 10px;
+}
+.logs-toolbar {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.logs-select {
+  padding: 6px 10px;
+  border-radius: var(--radius-inner);
+  background: var(--glass);
+  color: var(--fg);
+  font-size: 12px;
+  font-family: "SF Mono", ui-monospace, monospace;
+  border: none;
+}
+.logs-btn {
+  padding: 5px 12px;
+  border-radius: var(--radius-inner);
+  background: var(--row-hover);
+  color: var(--fg-2);
+  font-size: 11px;
+  border: none;
+  cursor: pointer;
+}
+.logs-btn:hover { color: var(--fg); background: var(--glass-3); }

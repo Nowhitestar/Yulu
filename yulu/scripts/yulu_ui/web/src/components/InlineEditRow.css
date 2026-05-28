@@ -1,0 +1,95 @@
+.row {
+  display: grid;
+  grid-template-columns: 240px 1fr 28px;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 12px;
+  border-radius: var(--radius-inner);
+  min-height: 40px;
+}
+.row:hover { background: var(--row-hover); }
+.row-label {
+  font-size: 13px;
+  color: var(--fg);
+}
+.row-help {
+  font-size: 11px;
+  color: var(--fg-3);
+  margin-top: 2px;
+}
+.row-value {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.row-status {
+  text-align: right;
+  font-size: 13px;
+}
+.status-saved { color: var(--green); }
+.status-restart { color: var(--accent); animation: spin 1.4s linear infinite; display: inline-block; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.status-typing { color: var(--fg-3); }
+.value-display {
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 13px;
+}
+.value-display:hover { background: var(--glass-2); }
+.value-input {
+  padding: 4px 8px;
+  border-radius: var(--radius-inner);
+  background: var(--glass-2);
+  color: var(--fg);
+  font-size: 13px;
+  border: none;
+  outline: 2px solid var(--accent-soft);
+}
+.toggle {
+  width: 32px;
+  height: 18px;
+  border-radius: 9px;
+  background: var(--row-hover);
+  position: relative;
+  transition: background 120ms;
+}
+.toggle.on { background: var(--accent); }
+.toggle-knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: white;
+  transition: transform 120ms;
+}
+.toggle.on .toggle-knob { transform: translateX(14px); }
+.path-value {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  flex: 1;
+}
+.path-display {
+  font-family: "SF Mono", ui-monospace, monospace;
+  font-size: 11px;
+  color: var(--fg-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+.path-btn {
+  padding: 3px 10px;
+  font-size: 11px;
+  background: var(--row-hover);
+  color: var(--fg-2);
+  border-radius: var(--radius-inner);
+}
+.path-btn:hover { background: var(--glass-3); color: var(--fg); }
+.path-btn:disabled { opacity: 0.5; cursor: wait; }

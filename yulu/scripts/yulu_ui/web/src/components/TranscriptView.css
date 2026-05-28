@@ -1,0 +1,17 @@
+.transcript {
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--fg);
+}
+.transcript-line {
+  margin: 0 0 8px 0;
+}
+.transcript .speaker {
+  font-family: "SF Mono", ui-monospace, monospace;
+  font-size: 11px;
+  color: var(--fg-3);
+  margin-right: 4px;
+}
+.transcript .vocab {
+  color: var(--purple);
+}

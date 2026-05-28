@@ -105,3 +105,70 @@ def test_search_index_section_reports_health(tmp_path):
     assert si["schema_version"] == "1"
     assert si["total_docs"] == 1
     assert KIND_MEETING_SUMMARY in si["per_kind"]
+
+
+def test_check_yulu_ui_returns_required_keys_when_everything_missing(tmp_path, monkeypatch):
+    """check_yulu_ui must always return a dict with the contract keys, even
+    when nothing is installed. This lets the JSON consumer rely on the shape."""
+    # Hermetic: the healthz probe hits 127.0.0.1:7777, so on a dev machine
+    # where the real yulu_ui server is running it would flip healthz_ok True.
+    # Stub urlopen to fail so this "nothing installed" case is deterministic.
+    import urllib.error
+    import urllib.request as _urllib_request
+    monkeypatch.setattr(
+        _urllib_request, "urlopen",
+        lambda *a, **k: (_ for _ in ()).throw(urllib.error.URLError("no server (hermetic test)")),
+    )
+    doctor = load_doctor()
+    script_dir = tmp_path / "scripts"   # contains no yulu_ui/
+    config_dir = tmp_path / "config"    # contains no ui.log
+    report = doctor.check_yulu_ui(script_dir, config_dir)
+    for key in (
+        "dist_server_present", "dist_web_present",
+        "plist_installed", "launchctl_loaded",
+        "port", "healthz_ok", "healthz_response",
+        "log_path", "log_present", "log_size_bytes",
+        "error",
+    ):
+        assert key in report, f"missing key {key} in {report.keys()}"
+    assert report["dist_server_present"] is False
+    assert report["dist_web_present"] is False
+    assert report["healthz_ok"] is False
+    assert report["log_present"] is False
+    assert report["port"] == 7777
+
+
+def test_check_yulu_ui_detects_built_artifacts(tmp_path):
+    doctor = load_doctor()
+    ui = tmp_path / "yulu_ui"
+    (ui / "dist" / "web" / "assets").mkdir(parents=True)
+    (ui / "dist" / "server.js").write_text("// built\n")
+    (ui / "dist" / "web" / "index.html").write_text("<!doctype html>\n")
+    report = doctor.check_yulu_ui(tmp_path, tmp_path / "config")
+    assert report["dist_server_present"] is True
+    assert report["dist_web_present"] is True
+
+
+def test_check_yulu_ui_reads_log_size(tmp_path):
+    doctor = load_doctor()
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    log = config_dir / "ui.log"
+    log.write_text("line one\nline two\n")
+    report = doctor.check_yulu_ui(tmp_path, config_dir)
+    assert report["log_present"] is True
+    assert report["log_size_bytes"] == len("line one\nline two\n")
+
+
+def test_collect_report_includes_yulu_ui(tmp_path):
+    """collect_report wires check_yulu_ui in. The key 'yulu_ui' must appear in the
+    final report so doctor --json consumers (CI smoke) can branch on it."""
+    doctor = load_doctor()
+    report = doctor.collect_report(
+        source_root=ROOT,
+        runtime_root=ROOT,
+        legacy_root=ROOT / "missing-legacy",
+        config_dir=tmp_path,
+    )
+    assert "yulu_ui" in report
+    assert "dist_server_present" in report["yulu_ui"]

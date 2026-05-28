@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.yulu.ui</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>__NODE_BIN__</string>
+        <string>__SCRIPT_DIR__/yulu_ui/dist/server.js</string>
+    </array>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>YULU_UI_PORT</key>
+        <string>7777</string>
+        <key>NODE_ENV</key>
+        <string>production</string>
+        <key>YULU_SCRIPT_DIR</key>
+        <string>__SCRIPT_DIR__</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+
+    <key>StandardOutPath</key>
+    <string>__HOME__/.config/yulu/ui.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>__HOME__/.config/yulu/ui.log</string>
+</dict>
+</plist>
