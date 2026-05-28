@@ -227,6 +227,10 @@ def cmd_new(title: Optional[str] = None, *,
     stem = _gen_stem()
 
     wav_path: Optional[Path] = None
+    # Capture the realtime flag ONCE at recording start so the post-stop
+    # promote/whole-file decision matches what the transcriber actually did,
+    # even if the config flag is toggled mid-recording.
+    realtime_on = False
     try:
         # NOTE: _acquire_recording_lock is a @contextmanager — the flock
         # (and RecordingBusy) only fires at __enter__, so the try must
@@ -257,6 +261,7 @@ def cmd_new(title: Optional[str] = None, *,
             )
             print(f"🎤 录音中 — Ctrl+C 停止 ({silence_seconds}s 静音自动停)",
                   file=sys.stderr)
+            realtime_on = _realtime_enabled()
             _start_realtime(wav_path)   # no-op when realtime disabled
 
             stop_requested = {"v": False}
@@ -293,7 +298,7 @@ def cmd_new(title: Optional[str] = None, *,
         print("⚠️ recording stopped but no .wav file present", file=sys.stderr)
         return 1
 
-    if _realtime_enabled():
+    if realtime_on:
         rc = _promote_realtime_transcript(wav_path, title=title)
         if rc == 0:
             return 0

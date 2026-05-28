@@ -327,14 +327,16 @@ def test_promote_strips_speaker_tags_and_finalizes(isolated_paths, tmp_path):
     queue, _ = isolated_paths
     wav = tmp_path / "voicemail_20260528_120000.wav"
     wav.touch()
+    # Mix [Me] and [Them] to prove both tags are stripped (defensive — voicemails
+    # are mic-only, but the promote step must handle either prefix).
     wav.with_suffix(".realtime.transcript.txt").write_text(
-        "[Me] line one\n[Me] line two\n", encoding="utf-8")
+        "[Me] line one\n[Them] line two\n[Me] line three\n", encoding="utf-8")
 
     rc = recorder._promote_realtime_transcript(wav, title=None)
 
     assert rc == 0
-    assert wav.with_suffix(".transcript.txt").read_text(encoding="utf-8") == "line one\nline two"
-    assert wav.with_suffix(".raw.transcript.txt").read_text(encoding="utf-8") == "line one\nline two"
+    assert wav.with_suffix(".transcript.txt").read_text(encoding="utf-8") == "line one\nline two\nline three"
+    assert wav.with_suffix(".raw.transcript.txt").read_text(encoding="utf-8") == "line one\nline two\nline three"
     events = json.loads(queue.read_text(encoding="utf-8"))
     assert [e["prompt_slug"] for e in events] == ["voicemail-todos"]
 
