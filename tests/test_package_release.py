@@ -159,7 +159,7 @@ def test_checksums_fail_when_no_artifacts(tmp_path):
     assert not (dist / "checksums.txt").exists()
 
 
-def test_default_build_refuses_dirty_generated_outputs(tmp_path):
+def test_default_build_allows_expected_app_bundle_outputs(tmp_path):
     project = make_project(tmp_path, git_marker=None)
     build_script = project / "yulu" / "scripts" / "build_audio_daemon.sh"
     write_file(
@@ -193,9 +193,47 @@ def test_default_build_refuses_dirty_generated_outputs(tmp_path):
         cwd=project,
     )
 
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert (tmp_path / "dist" / "yulu-macos-arm64-v0.5.0-dev.zip").exists()
+
+
+def test_default_build_refuses_unexpected_dirty_outputs(tmp_path):
+    project = make_project(tmp_path, git_marker=None)
+    build_script = project / "yulu" / "scripts" / "build_audio_daemon.sh"
+    write_file(
+        build_script,
+        "#!/usr/bin/env bash\n"
+        "printf 'changed\\n' > README.md\n",
+    )
+    build_script.chmod(0o755)
+
+    init = run(["git", "init"], cwd=project)
+    assert init.returncode == 0, init.stderr + init.stdout
+    add = run(["git", "add", "."], cwd=project)
+    assert add.returncode == 0, add.stderr + add.stdout
+    commit = run(
+        [
+            "git",
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "-m",
+            "fixture",
+        ],
+        cwd=project,
+    )
+    assert commit.returncode == 0, commit.stderr + commit.stdout
+
+    result = run(
+        ["bash", "packaging/scripts/package.sh", "v0.5.0-dev", "--dist", str(tmp_path / "dist")],
+        cwd=project,
+    )
+
     assert result.returncode != 0
-    assert "Build left the worktree dirty" in result.stderr
-    assert "Yulu.app/Contents/MacOS/audio_daemon" in result.stderr
+    assert "Worktree is dirty after build" in result.stderr
+    assert "README.md" in result.stderr
 
 
 def test_release_installer_source_exists_for_release_assets():

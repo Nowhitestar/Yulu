@@ -38,6 +38,12 @@ EXCLUDES=(
     ".env"
     ".env.*"
 )
+ALLOWED_BUILD_OUTPUTS=(
+    "yulu/scripts/StatusAgent.app/Contents/Info.plist"
+    "yulu/scripts/StatusAgent.app/Contents/MacOS/status_agent"
+    "yulu/scripts/Yulu.app/Contents/Info.plist"
+    "yulu/scripts/Yulu.app/Contents/MacOS/audio_daemon"
+)
 
 rsync_exclude_args() {
     local pattern
@@ -54,17 +60,44 @@ tar_exclude_args() {
     done
 }
 
-check_clean_build_outputs() {
+is_allowed_build_output() {
+    local candidate="$1"
+    local allowed
+    for allowed in "${ALLOWED_BUILD_OUTPUTS[@]}"; do
+        if [[ "$candidate" == "$allowed" ]]; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+check_clean_worktree() {
+    local phase="$1"
     if ! git -C "$ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
         return 0
     fi
 
     local dirty
     dirty="$(git -C "$ROOT" status --porcelain)"
-    if [[ -n "$dirty" ]]; then
-        echo "Build left the worktree dirty; refusing to package release assets." >&2
-        echo "$dirty" >&2
-        echo "Commit or clean generated build outputs, or use --skip-build for packaging-only tests." >&2
+    if [[ -z "$dirty" ]]; then
+        return 0
+    fi
+
+    local unexpected=()
+    local line path
+    while IFS= read -r line; do
+        [[ -n "$line" ]] || continue
+        path="${line:3}"
+        if [[ "$phase" == "after build" ]] && is_allowed_build_output "$path"; then
+            continue
+        fi
+        unexpected+=("$line")
+    done <<< "$dirty"
+
+    if ((${#unexpected[@]} > 0)); then
+        echo "Worktree is dirty $phase; refusing to package release assets." >&2
+        printf '%s\n' "${unexpected[@]}" >&2
+        echo "Commit or clean these files, or use --skip-build for packaging-only tests." >&2
         exit 1
     fi
 }
@@ -123,13 +156,14 @@ if [[ -f "$ROOT/VERSION" ]]; then
 fi
 
 if [[ "$SKIP_BUILD" != true ]]; then
+    check_clean_worktree "before build"
     if [[ -x "$ROOT/yulu/scripts/build_audio_daemon.sh" ]]; then
         bash "$ROOT/yulu/scripts/build_audio_daemon.sh"
     fi
     if [[ -x "$ROOT/yulu/scripts/build_status_agent.sh" ]]; then
         bash "$ROOT/yulu/scripts/build_status_agent.sh"
     fi
-    check_clean_build_outputs
+    check_clean_worktree "after build"
 fi
 
 DIST_ABS="$(mkdir -p "$DIST" && cd "$DIST" && pwd)"
