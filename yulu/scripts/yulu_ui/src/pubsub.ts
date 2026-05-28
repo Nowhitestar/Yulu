@@ -32,7 +32,6 @@ export class PubSub<Channels extends Record<string, unknown>> {
 export type AppChannels = {
   "recording":       { state: "idle" | "recording" | "processing" | "meetingBusy" | "daemonDown"; file?: string; elapsedSec?: number; level?: number; };
   "daemons":         { name: string; status: "running" | "stopped" | "crashed"; pid: number; lastLog?: string; };
-  "sidebar-counts":  { voicemails: number; meetings: number; prompts: number; glossary: number; };
   "recordings-changed": { reason: "added" | "removed" | "changed" };
   "logs":            { name: string; line: string; ts: number; };
   "jobs":            { stem: string; jobId: string; state: "transcribing" | "summarizing" | "done" | "failed"; error?: string };

@@ -16,7 +16,7 @@ export interface InboxWatcher {
 
 /**
  * Watch the two directories that hold user recordings and emit a
- * sidebar-counts WS event whenever a relevant file appears or disappears.
+ * recordings-changed WS event whenever a relevant file appears or disappears.
  * Debounces bursts (typical: a recording lands as .wav + .transcript.txt
  * + .summary.md within milliseconds) so the UI doesn't get hammered.
  */
@@ -26,12 +26,10 @@ export function startInboxWatcher(opts: InboxWatcherOptions): InboxWatcher {
 
   const flush = () => {
     pendingTimer = null;
-    // Emit an "unknown deltas" signal — the UI invalidates relevant queries
-    // and re-fetches counts itself. We don't try to be clever about which
-    // count changed because the file system event is too noisy.
-    opts.pubsub.publish("sidebar-counts", {
-      voicemails: 0, meetings: 0, prompts: 0, glossary: 0,
-    });
+    // Emit an "unknown deltas" signal — the recordings list invalidates
+    // its query and re-fetches. We don't compute which delta because the
+    // fs event is too noisy.
+    opts.pubsub.publish("recordings-changed", { reason: "changed" });
   };
 
   const onEvent = (_event: string, filename: string | Buffer | null) => {

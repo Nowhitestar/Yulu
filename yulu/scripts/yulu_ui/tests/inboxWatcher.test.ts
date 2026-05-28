@@ -12,7 +12,7 @@ describe("inboxWatcher", () => {
   let moviesDir: string;
   let watcher: InboxWatcher | undefined;
   let pubsub: PubSub<AppChannels>;
-  let events: AppChannels["sidebar-counts"][];
+  let events: AppChannels["recordings-changed"][];
 
   beforeEach(() => {
     root = mkdtempSync(join(tmpdir(), "yulu_iw_"));
@@ -21,7 +21,7 @@ describe("inboxWatcher", () => {
     mkdirSync(voicemailsDir);
     pubsub = new PubSub<AppChannels>();
     events = [];
-    pubsub.subscribe("sidebar-counts", (m) => events.push(m));
+    pubsub.subscribe("recordings-changed", (m) => events.push(m));
   });
 
   afterEach(() => {
@@ -31,14 +31,15 @@ describe("inboxWatcher", () => {
 
   function waitMs(ms: number) { return new Promise((r) => setTimeout(r, ms)); }
 
-  it("publishes sidebar-counts when a new .wav appears in voicemails dir", async () => {
+  it("publishes recordings-changed when a new .wav appears in voicemails dir", async () => {
     watcher = startInboxWatcher({ voicemailsDir, moviesDir, pubsub });
     await waitMs(50); // let fs.watch initialize
     writeFileSync(join(voicemailsDir, "voicemail_20260526_180000.wav"), Buffer.alloc(0));
     await vi.waitFor(() => expect(events.length).toBeGreaterThan(0), { timeout: 1000 });
+    expect(events[0]).toEqual({ reason: "changed" });
   });
 
-  it("publishes sidebar-counts when a .summary.md appears in voicemails dir", async () => {
+  it("publishes recordings-changed when a .summary.md appears in voicemails dir", async () => {
     writeFileSync(join(voicemailsDir, "voicemail_20260526_180000.wav"), Buffer.alloc(0));
     watcher = startInboxWatcher({ voicemailsDir, moviesDir, pubsub });
     await waitMs(50);
@@ -46,7 +47,7 @@ describe("inboxWatcher", () => {
     await vi.waitFor(() => expect(events.length).toBeGreaterThan(0), { timeout: 1000 });
   });
 
-  it("publishes sidebar-counts when a meeting .wav appears in movies dir", async () => {
+  it("publishes recordings-changed when a meeting .wav appears in movies dir", async () => {
     watcher = startInboxWatcher({ voicemailsDir, moviesDir, pubsub });
     await waitMs(50);
     writeFileSync(join(moviesDir, "Standup_20260526_180000.wav"), Buffer.alloc(0));
