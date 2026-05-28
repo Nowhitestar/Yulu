@@ -1,11 +1,15 @@
 import json
+import shutil
 import subprocess
+import zipfile
 from pathlib import Path
 
 import pytest
 
+import release_installer
 from release_installer import (
     download_to_path,
+    extract_release_zip,
     InstallMetadata,
     InstallError,
     ReleaseAsset,
@@ -296,6 +300,31 @@ def test_replace_runtime_with_backup_avoids_existing_backup_collision(tmp_path):
     assert (existing_backup / "sentinel.txt").read_text(encoding="utf-8") == "sentinel"
 
 
+def test_replace_runtime_with_backup_restores_old_runtime_when_staged_move_fails(tmp_path, monkeypatch):
+    install_dir = tmp_path / "install"
+    install_dir.mkdir()
+    (install_dir / "old.txt").write_text("old", encoding="utf-8")
+    staged = tmp_path / "staged"
+    staged.mkdir()
+    (staged / "new.txt").write_text("new", encoding="utf-8")
+    real_move = shutil.move
+    move_calls = []
+
+    def fail_second_move(src, dst, *args, **kwargs):
+        move_calls.append((src, dst))
+        if len(move_calls) == 2:
+            raise OSError("staged move failed")
+        return real_move(src, dst, *args, **kwargs)
+
+    monkeypatch.setattr(release_installer.shutil, "move", fail_second_move)
+
+    with pytest.raises(InstallError, match="staged move failed"):
+        replace_runtime_with_backup(staged, install_dir)
+
+    assert (install_dir / "old.txt").read_text(encoding="utf-8") == "old"
+    assert not (install_dir / "install").exists()
+
+
 def test_restore_backup_replaces_failed_runtime(tmp_path):
     install_dir = tmp_path / "install"
     install_dir.mkdir()
@@ -356,3 +385,17 @@ def test_file_url_helpers_accept_localhost_and_reject_remote_hosts(tmp_path):
         read_url_text("file://example.com/tmp/source.txt")
     with pytest.raises(InstallError, match="non-local file URL"):
         download_to_path("file://example.com/tmp/source.txt", tmp_path / "bad.txt")
+
+
+def test_extract_release_zip_rejects_path_traversal(tmp_path):
+    zip_path = tmp_path / "bad.zip"
+    dest = tmp_path / "extract"
+    outside = tmp_path / "evil.txt"
+    with zipfile.ZipFile(zip_path, "w") as archive:
+        archive.writestr("../evil.txt", "evil")
+        archive.writestr("yulu/VERSION", "0.5.0\n")
+
+    with pytest.raises(InstallError, match="Unsafe zip member"):
+        extract_release_zip(zip_path, dest)
+
+    assert not outside.exists()

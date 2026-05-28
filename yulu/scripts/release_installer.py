@@ -230,8 +230,20 @@ def read_url_text(url: str) -> str:
         return response.read().decode("utf-8")
 
 
+def _assert_safe_zip_member(dest: Path, member: str) -> None:
+    member_path = Path(member)
+    if member_path.is_absolute():
+        raise InstallError(f"Unsafe zip member {member!r}: absolute paths are not allowed")
+    resolved_dest = dest.resolve()
+    resolved_member = (dest / member_path).resolve()
+    if resolved_dest != resolved_member and resolved_dest not in resolved_member.parents:
+        raise InstallError(f"Unsafe zip member {member!r}: path escapes extraction directory")
+
+
 def extract_release_zip(zip_path: Path, dest: Path) -> Path:
     with zipfile.ZipFile(zip_path) as archive:
+        for member in archive.namelist():
+            _assert_safe_zip_member(dest, member)
         archive.extractall(dest)
     runtime = dest / "yulu"
     if not runtime.exists():
@@ -243,12 +255,23 @@ def replace_runtime_with_backup(staged_runtime: Path, install_dir: Path) -> Path
     install_dir.parent.mkdir(parents=True, exist_ok=True)
     backup = None
     if install_dir.exists():
+        # Keep successful-install backups for manual recovery until a later cleanup policy exists.
         backup = Path(
             tempfile.mkdtemp(prefix=f"{install_dir.name}.backup-", dir=str(install_dir.parent))
         )
         backup.rmdir()
         shutil.move(str(install_dir), str(backup))
-    shutil.move(str(staged_runtime), str(install_dir))
+    try:
+        shutil.move(str(staged_runtime), str(install_dir))
+    except Exception as move_error:
+        if backup is not None:
+            try:
+                restore_backup(backup, install_dir)
+            except Exception as restore_error:
+                raise InstallError(
+                    f"Failed to replace runtime ({move_error}); backup restore failed ({restore_error})"
+                ) from move_error
+        raise InstallError(f"Failed to replace runtime: {move_error}") from move_error
     return backup
 
 
