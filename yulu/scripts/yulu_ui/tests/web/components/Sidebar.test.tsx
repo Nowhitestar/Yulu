@@ -24,17 +24,27 @@ describe("Sidebar", () => {
     expect(getByText("Yulu")).toBeInTheDocument();
   });
 
-  it("shows Inbox section with Voicemails + Meetings, no Search", () => {
+  it("shows Inbox section with a single Recordings entry, no Voicemails/Meetings/Search", () => {
     const { getByText, queryByText } = wrap(<Sidebar />);
-    expect(getByText("Voicemails")).toBeInTheDocument();
-    expect(getByText("Meetings")).toBeInTheDocument();
+    expect(getByText("Recordings")).toBeInTheDocument();
+    expect(queryByText("Voicemails")).toBeNull();
+    expect(queryByText("Meetings")).toBeNull();
     expect(queryByText("Search")).toBeNull();
+    expect(getByText("Recordings").closest("a")?.getAttribute("href")).toBe("/inbox");
   });
 
   it("shows Knowledge section with Prompts + Glossary", () => {
     const { getByText } = wrap(<Sidebar />);
     expect(getByText("Prompts")).toBeInTheDocument();
     expect(getByText("Glossary")).toBeInTheDocument();
+  });
+
+  it("renders an icon (svg) on each top-nav item", () => {
+    const { getByText } = wrap(<Sidebar />);
+    for (const label of ["Recordings", "Prompts", "Glossary"]) {
+      const link = getByText(label).closest("a");
+      expect(link?.querySelector("svg")).not.toBeNull();
+    }
   });
 
   it("does NOT render Settings or Health as nav sections (they are bottom-only)", () => {

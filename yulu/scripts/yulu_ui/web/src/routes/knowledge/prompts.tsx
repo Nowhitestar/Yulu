@@ -1,10 +1,8 @@
 // web/src/routes/knowledge/prompts.tsx
 import { useState, useMemo } from "react";
 import { NavLink, Outlet, Link } from "react-router";
-import { useQueryClient } from "@tanstack/react-query";
 import { FileText } from "lucide-react";
 import { trpc } from "../../trpc.js";
-import { useWsChannel } from "../../ws.js";
 import { MasterDetail } from "../../components/MasterDetail.js";
 import { FilterChips, type ChipDef } from "../../components/FilterChips.js";
 import { CategoryChip } from "../../components/CategoryChip.js";
@@ -32,10 +30,6 @@ const FILTER_CHIPS: ChipDef[] = [
 
 export function Prompts() {
   const { data, isPending } = trpc.prompts.list.useQuery({});
-  const qc = useQueryClient();
-  useWsChannel("sidebar-counts", () => {
-    qc.invalidateQueries({ queryKey: [["prompts", "list"]] });
-  });
 
   const [activeFilters, setActiveFilters] = useState<string[]>([]);
   const rows = useMemo(() => {

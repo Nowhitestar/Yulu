@@ -50,9 +50,7 @@ function hitTimestamp(h: Hit): string {
 function hitTargetUrl(h: Hit): string {
   const cleanSnip = h.snippet.replace(/\[\/?hit\]/g, "").trim().slice(0, 80);
   const snip = encodeURIComponent(cleanSnip);
-  if (h.kind.startsWith("voicemail")) return `/inbox/voicemails/${h.stem}?snippet=${snip}`;
-  // meeting / summary both go to meetings reader
-  return `/inbox/meetings/${h.stem}?snippet=${snip}`;
+  return `/inbox/${h.stem}?snippet=${snip}`;
 }
 
 /**

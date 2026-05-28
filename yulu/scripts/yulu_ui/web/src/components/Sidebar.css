@@ -41,6 +41,7 @@
 .sidebar-item {
   display: flex;
   align-items: center;
+  gap: 8px;
   padding: 5px 8px;
   border-radius: 7px;
   font-size: 13px;
@@ -48,6 +49,7 @@
   text-decoration: none;
   transition: background 100ms, color 100ms;
 }
+.sidebar-item svg { flex-shrink: 0; opacity: 0.8; }
 .sidebar-item:hover { background: var(--row-hover); color: var(--fg); }
 .sidebar-item.active {
   background: var(--accent-soft);

@@ -10,7 +10,8 @@ export const handle = { breadcrumb: "Inbox", filters: null };
 /**
  * Wraps all /inbox/* routes. Registers keyboard shortcuts (j/k) once.
  * Reads the React Query cache (or the live tRPC hook as a fallback) to
- * compute the next/prev stem in the active list and navigate there.
+ * compute the next/prev stem in the unified recordings list and navigate
+ * to /inbox/:stem.
  */
 export function InboxLayout() {
   const navigate = useNavigate();
@@ -18,23 +19,16 @@ export function InboxLayout() {
   const params = useParams();
   const qc = useQueryClient();
 
-  // Determine which list to navigate based on current path
-  const isVoicemails = location.pathname.startsWith("/inbox/voicemails");
-  const isMeetings = location.pathname.startsWith("/inbox/meetings");
-
-  // Live data via the tRPC hooks. React-query dedupes against the same key
-  // used by the list-page components, so this is essentially free in prod
-  // and gives the test (which mocks useQuery directly) a way to provide data.
-  const vmList = trpc.voicemails.list.useQuery({}, { enabled: isVoicemails });
-  const mtList = trpc.meetings.list.useQuery({}, { enabled: isMeetings });
+  // Live data via the tRPC hook. React-query dedupes against the same key
+  // used by RecordingsList, so this is essentially free in prod and gives
+  // the test (which mocks useQuery directly) a way to provide data.
+  const recList = trpc.recordings.list.useQuery({});
 
   const moveSelection = useCallback((direction: 1 | -1) => {
-    if (!isVoicemails && !isMeetings) return;
-    const queryKey = isVoicemails ? ["voicemails", "list"] : ["meetings", "list"];
     const cached =
-      (qc.getQueryData([queryKey, { input: {} }]) as Array<{ stem: string }> | undefined) ??
-      (qc.getQueryData([queryKey]) as Array<{ stem: string }> | undefined);
-    const live = (isVoicemails ? vmList.data : mtList.data) as Array<{ stem: string }> | undefined;
+      (qc.getQueryData([["recordings", "list"], { input: {} }]) as Array<{ stem: string }> | undefined) ??
+      (qc.getQueryData([["recordings", "list"]]) as Array<{ stem: string }> | undefined);
+    const live = recList.data as Array<{ stem: string }> | undefined;
     const data = cached ?? live;
     if (!data || data.length === 0) return;
     const currentStem = params.stem;
@@ -43,10 +37,9 @@ export function InboxLayout() {
     else idx = Math.max(0, Math.min(data.length - 1, idx + direction));
     const next = data[idx]?.stem;
     if (next) {
-      const basePath = isVoicemails ? "/inbox/voicemails" : "/inbox/meetings";
-      navigate(`${basePath}/${next}${location.search}`);
+      navigate(`/inbox/${next}${location.search}`);
     }
-  }, [isVoicemails, isMeetings, qc, params.stem, navigate, location.search, vmList.data, mtList.data]);
+  }, [qc, params.stem, navigate, location.search, recList.data]);
 
   useHotkeys({
     j: () => moveSelection(1),

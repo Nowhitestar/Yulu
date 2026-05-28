@@ -1,17 +1,13 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { createBrowserRouter, RouterProvider, Navigate } from "react-router";
+import { createBrowserRouter, RouterProvider, Navigate, useParams, useSearchParams } from "react-router";
 import { useState } from "react";
 import { trpc, makeTrpcClient } from "./trpc.js";
 import { ThemeProvider } from "./theme.js";
 import { WsProvider } from "./ws.js";
 import { RootLayout } from "./routes/root.js";
 import { InboxLayout, handle as inboxLayoutHandle } from "./routes/inbox/_layout.js";
-import { Voicemails, handle as voicemailsHandle } from "./routes/inbox/voicemails.js";
-import { VoicemailsIndex } from "./routes/inbox/voicemails.index.js";
-import { VoicemailReader, handle as voicemailReaderHandle } from "./routes/inbox/voicemails.$stem.js";
-import { Meetings,   handle as meetingsHandle   } from "./routes/inbox/meetings.js";
-import { MeetingsIndex } from "./routes/inbox/meetings.index.js";
-import { MeetingReader, handle as meetingReaderHandle } from "./routes/inbox/meetings.$stem.js";
+import { RecordingsList, handle as recordingsHandle } from "./routes/inbox/recordings.js";
+import { RecordingReader, handle as recordingReaderHandle } from "./routes/inbox/recordings.$stem.js";
 import { Prompts,    handle as promptsHandle    } from "./routes/knowledge/prompts.js";
 import { PromptsIndex } from "./routes/knowledge/prompts.index.js";
 import { PromptReaderRoute, handle as promptReaderHandle } from "./routes/knowledge/prompts.$id.js";
@@ -19,37 +15,38 @@ import { Glossary,   handle as glossaryHandle   } from "./routes/knowledge/gloss
 import { Settings as SettingsPageRoute, handle as settingsHandle } from "./routes/settings.js";
 import { Health, handle as healthHandle } from "./routes/health.js";
 
+function RecordingRedirect() {
+  const { stem } = useParams();
+  const [sp] = useSearchParams();
+  const qs = sp.toString();
+  return <Navigate to={`/inbox/${stem}${qs ? `?${qs}` : ""}`} replace />;
+}
+
 const router = createBrowserRouter([
   {
     path: "/",
     Component: RootLayout,
     children: [
-      { index: true, element: <Navigate to="/inbox/voicemails" replace /> },
+      { index: true, element: <Navigate to="/inbox" replace /> },
       {
         path: "inbox",
         Component: InboxLayout,
         handle: inboxLayoutHandle,
         children: [
           {
-            path: "voicemails",
-            Component: Voicemails,
-            handle: voicemailsHandle,
+            Component: RecordingsList,
+            handle: recordingsHandle,
             children: [
-              { index: true, Component: VoicemailsIndex },
-              { path: ":stem", Component: VoicemailReader, handle: voicemailReaderHandle },
-            ],
-          },
-          {
-            path: "meetings",
-            Component: Meetings,
-            handle: meetingsHandle,
-            children: [
-              { index: true, Component: MeetingsIndex },
-              { path: ":stem", Component: MeetingReader, handle: meetingReaderHandle },
+              { index: true, element: null },
+              { path: ":stem", Component: RecordingReader, handle: recordingReaderHandle },
             ],
           },
         ],
       },
+      { path: "inbox/voicemails",       element: <Navigate to="/inbox" replace /> },
+      { path: "inbox/meetings",         element: <Navigate to="/inbox" replace /> },
+      { path: "inbox/voicemails/:stem", element: <RecordingRedirect /> },
+      { path: "inbox/meetings/:stem",   element: <RecordingRedirect /> },
       {
         path: "knowledge/prompts",
         Component: Prompts,

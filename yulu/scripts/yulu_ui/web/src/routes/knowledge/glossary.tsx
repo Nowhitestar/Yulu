@@ -1,7 +1,6 @@
 // web/src/routes/knowledge/glossary.tsx
 import { useQueryClient } from "@tanstack/react-query";
 import { trpc } from "../../trpc.js";
-import { useWsChannel } from "../../ws.js";
 import { EditableTable, type ColumnDef } from "../../components/EditableTable.js";
 import "./glossary.css";
 
@@ -37,9 +36,6 @@ function formatDate(iso: string): string {
 export function Glossary() {
   const { data } = trpc.glossary.list.useQuery();
   const qc = useQueryClient();
-  useWsChannel("sidebar-counts", () => {
-    qc.invalidateQueries({ queryKey: [["glossary", "list"]] });
-  });
 
   const addMut = trpc.glossary.add.useMutation({
     onSuccess: () => qc.invalidateQueries({ queryKey: [["glossary", "list"]] }),

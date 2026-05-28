@@ -30,9 +30,9 @@ describe("RecordingsList", () => {
   it("renders All / Voicemail / Meeting filter chips", () => {
     listMock.mockReturnValue({ data: rows(), isPending: false });
     render(<MemoryRouter><RecordingsList /></MemoryRouter>);
-    expect(screen.getByRole("button", { name: "All", exact: true })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Voicemail", exact: true })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Meeting", exact: true })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "All" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Voicemail" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Meeting" })).toBeInTheDocument();
   });
 
   it("shows a status chip on a transcribing row", () => {
@@ -44,8 +44,8 @@ describe("RecordingsList", () => {
   it("clicking the Voicemail chip re-queries with type: voicemail", () => {
     listMock.mockReturnValue({ data: rows(), isPending: false });
     render(<MemoryRouter><RecordingsList /></MemoryRouter>);
-    fireEvent.click(screen.getByRole("button", { name: "Voicemail", exact: true }));
-    const lastArg = listMock.mock.calls[listMock.mock.calls.length - 1][0];
+    fireEvent.click(screen.getByRole("button", { name: "Voicemail" }));
+    const lastArg = listMock.mock.calls[listMock.mock.calls.length - 1]?.[0];
     expect(lastArg).toMatchObject({ type: "voicemail" });
   });
 });

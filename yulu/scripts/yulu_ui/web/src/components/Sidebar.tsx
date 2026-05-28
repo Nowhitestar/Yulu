@@ -1,25 +1,25 @@
 // web/src/components/Sidebar.tsx
 import { NavLink } from "react-router";
-import { Settings as SettingsIcon, HeartPulse } from "lucide-react";
+import { Settings as SettingsIcon, HeartPulse, Mic, FileText, BookOpen } from "lucide-react";
+import type { ReactNode } from "react";
 import { Logo } from "./Logo.js";
 import { useDaemonHealthState } from "../hooks/useDaemonHealthState.js";
 import "./Sidebar.css";
 
-interface NavItem { to: string; label: string; }
+interface NavItem { to: string; label: string; icon: ReactNode; }
 
 const TOP_SECTIONS: { heading: string; items: NavItem[] }[] = [
   {
     heading: "Inbox",
     items: [
-      { to: "/inbox/voicemails", label: "Voicemails" },
-      { to: "/inbox/meetings",   label: "Meetings" },
+      { to: "/inbox", label: "Recordings", icon: <Mic size={15} strokeWidth={1.8} /> },
     ],
   },
   {
     heading: "Knowledge",
     items: [
-      { to: "/knowledge/prompts",  label: "Prompts" },
-      { to: "/knowledge/glossary", label: "Glossary" },
+      { to: "/knowledge/prompts",  label: "Prompts",  icon: <FileText size={15} strokeWidth={1.8} /> },
+      { to: "/knowledge/glossary", label: "Glossary", icon: <BookOpen size={15} strokeWidth={1.8} /> },
     ],
   },
 ];
@@ -42,6 +42,7 @@ export function Sidebar() {
               to={it.to}
               className={({ isActive }) => "sidebar-item" + (isActive ? " active" : "")}
             >
+              {it.icon}
               <span className="sidebar-item-label">{it.label}</span>
             </NavLink>
           ))}
