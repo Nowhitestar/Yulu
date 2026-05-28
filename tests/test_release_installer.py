@@ -295,9 +295,11 @@ def test_install_dev_channel_updates_clean_existing_checkout(tmp_path, monkeypat
         commands.append((cmd, cwd))
         if cmd == ["git", "status", "--porcelain"]:
             return ""
+        if cmd == ["git", "rev-parse", "HEAD"]:
+            return "abc1234def5678abc1234def5678abc1234def56"
+        if cmd == ["git", "rev-parse", "origin/main"]:
+            return "abc1234def5678abc1234def5678abc1234def56"
         if cmd == ["git", "rev-parse", "--short", "HEAD"]:
-            return "abc1234"
-        if cmd == ["git", "rev-parse", "--short", "origin/main"]:
             return "abc1234"
         return ""
 
@@ -314,8 +316,9 @@ def test_install_dev_channel_updates_clean_existing_checkout(tmp_path, monkeypat
         ["git", "fetch", "--quiet", "origin"],
         ["git", "checkout", "--quiet", "main"],
         ["git", "pull", "--ff-only", "origin", "main"],
+        ["git", "rev-parse", "HEAD"],
+        ["git", "rev-parse", "origin/main"],
         ["git", "rev-parse", "--short", "HEAD"],
-        ["git", "rev-parse", "--short", "origin/main"],
     ]
     assert all(cwd == install_dir for _, cwd in commands)
     assert read_install_metadata(install_dir)["source"] == "dev"
@@ -343,7 +346,7 @@ def test_install_dev_channel_rejects_dirty_existing_checkout_before_fetch(tmp_pa
     assert commands == [["git", "status", "--porcelain"]]
 
 
-def test_install_dev_channel_rejects_existing_checkout_that_differs_from_origin_main(tmp_path, monkeypatch):
+def test_install_dev_channel_rejects_full_sha_mismatch_even_with_same_short_prefix(tmp_path, monkeypatch):
     install_dir = tmp_path / "install"
     (install_dir / ".git").mkdir(parents=True)
     commands = []
@@ -353,10 +356,10 @@ def test_install_dev_channel_rejects_existing_checkout_that_differs_from_origin_
         commands.append(cmd)
         if cmd == ["git", "status", "--porcelain"]:
             return ""
-        if cmd == ["git", "rev-parse", "--short", "HEAD"]:
-            return "local123"
-        if cmd == ["git", "rev-parse", "--short", "origin/main"]:
-            return "remote456"
+        if cmd == ["git", "rev-parse", "HEAD"]:
+            return "abc12340000000000000000000000000000000000"
+        if cmd == ["git", "rev-parse", "origin/main"]:
+            return "abc1234fffffffffffffffffffffffffffffffff"
         return ""
 
     def fake_setup(path, upgrade):
@@ -373,11 +376,38 @@ def test_install_dev_channel_rejects_existing_checkout_that_differs_from_origin_
         ["git", "fetch", "--quiet", "origin"],
         ["git", "checkout", "--quiet", "main"],
         ["git", "pull", "--ff-only", "origin", "main"],
-        ["git", "rev-parse", "--short", "HEAD"],
-        ["git", "rev-parse", "--short", "origin/main"],
+        ["git", "rev-parse", "HEAD"],
+        ["git", "rev-parse", "origin/main"],
     ]
     assert read_install_metadata(install_dir) == {}
     assert setup_calls == []
+
+
+def test_install_dev_channel_does_not_write_metadata_when_setup_fails(tmp_path, monkeypatch):
+    install_dir = tmp_path / "install"
+    (install_dir / ".git").mkdir(parents=True)
+
+    def fake_run(cmd, cwd=None):
+        if cmd == ["git", "status", "--porcelain"]:
+            return ""
+        if cmd == ["git", "rev-parse", "HEAD"]:
+            return "abc1234def5678abc1234def5678abc1234def56"
+        if cmd == ["git", "rev-parse", "origin/main"]:
+            return "abc1234def5678abc1234def5678abc1234def56"
+        if cmd == ["git", "rev-parse", "--short", "HEAD"]:
+            return "abc1234"
+        return ""
+
+    def fail_setup(path, upgrade):
+        raise InstallError("setup failed")
+
+    monkeypatch.setattr(release_installer, "run", fake_run)
+    monkeypatch.setattr(release_installer, "run_setup", fail_setup)
+
+    with pytest.raises(InstallError, match="setup failed"):
+        install_dev_channel(install_dir)
+
+    assert not (install_dir / ".yulu-install.json").exists()
 
 
 def test_install_dev_channel_clones_missing_install_dir_with_fresh_setup(tmp_path, monkeypatch):

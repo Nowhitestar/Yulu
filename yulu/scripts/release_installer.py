@@ -346,8 +346,8 @@ def install_dev_channel(install_dir: Path, run_setup_flag: bool = True) -> None:
         run(["git", "fetch", "--quiet", "origin"], cwd=install_dir)
         run(["git", "checkout", "--quiet", "main"], cwd=install_dir)
         run(["git", "pull", "--ff-only", "origin", "main"], cwd=install_dir)
-        commit = run(["git", "rev-parse", "--short", "HEAD"], cwd=install_dir)
-        origin_commit = run(["git", "rev-parse", "--short", "origin/main"], cwd=install_dir)
+        commit = run(["git", "rev-parse", "HEAD"], cwd=install_dir)
+        origin_commit = run(["git", "rev-parse", "origin/main"], cwd=install_dir)
         if commit != origin_commit:
             raise InstallError(
                 f"Dev checkout local main differs from origin/main in {install_dir}. "
@@ -356,10 +356,10 @@ def install_dev_channel(install_dir: Path, run_setup_flag: bool = True) -> None:
     else:
         install_dir.parent.mkdir(parents=True, exist_ok=True)
         run(["git", "clone", "--branch", "main", REPO_URL, str(install_dir)])
-        commit = run(["git", "rev-parse", "--short", "HEAD"], cwd=install_dir)
-    write_install_metadata(install_dir, build_dev_metadata(branch="main", commit=commit))
+    commit = run(["git", "rev-parse", "--short", "HEAD"], cwd=install_dir)
     if run_setup_flag:
         run_setup(install_dir, upgrade=existed)
+    write_install_metadata(install_dir, build_dev_metadata(branch="main", commit=commit))
 
 
 def install_release_from_urls(
