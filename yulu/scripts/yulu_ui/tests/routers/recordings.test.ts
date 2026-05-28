@@ -82,12 +82,6 @@ describe("recordings router", () => {
     await expect(caller.transcribe({ stem: "voicemail_20260101_120000" })).rejects.toThrow(/WAV file missing/);
   });
 
-  it("audioUrl returns the right path per type", async () => {
-    const caller = createCaller(recordingsRouter, mkCtx({ voicemailsDir: vmDir, moviesDir: mvDir }));
-    expect(await caller.audioUrl({ stem: "voicemail_20260101_120000" })).toBe("/files/voicemails/voicemail_20260101_120000.wav");
-    expect(await caller.audioUrl({ stem: "TeamSync_20260102_090000" })).toBe("/files/meetings/TeamSync_20260102_090000.wav");
-  });
-
   it("list reflects JobRegistry status", async () => {
     writeFileSync(join(vmDir, "voicemail_20260101_120000.wav"), "");
     const ctx = mkCtx({ voicemailsDir: vmDir, moviesDir: mvDir });

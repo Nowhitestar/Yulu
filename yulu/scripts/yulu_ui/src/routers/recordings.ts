@@ -149,13 +149,6 @@ export const recordingsRouter = router({
       };
     }),
 
-  audioUrl: publicProcedure
-    .input(z.object({ stem: z.string() }))
-    .query(({ input }) => {
-      const type = dispatchType(input.stem);
-      return type === "voicemail" ? `/files/voicemails/${input.stem}.wav` : `/files/meetings/${input.stem}.wav`;
-    }),
-
   delete: publicProcedure
     .input(z.object({ stem: z.string() }))
     .mutation(({ ctx, input }) => {
