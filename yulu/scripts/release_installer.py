@@ -27,6 +27,7 @@ SEMVER_RE = re.compile(
 SHA256_RE = re.compile(r"^[0-9a-fA-F]{64}$")
 VERSION_CHECK_TIMEOUT_SECONDS = 10
 SETUP_TIMEOUT_SECONDS = 300
+RUN_TIMEOUT_SECONDS = 300
 REPO_URL = "https://github.com/Nowhitestar/Yulu.git"
 
 
@@ -34,8 +35,17 @@ class InstallError(RuntimeError):
     pass
 
 
-def run(cmd: list[str], cwd: Path | None = None) -> str:
-    result = subprocess.run(cmd, cwd=str(cwd) if cwd else None, capture_output=True, text=True)
+def run(cmd: list[str], cwd: Path | None = None, timeout: float = RUN_TIMEOUT_SECONDS) -> str:
+    try:
+        result = subprocess.run(
+            cmd,
+            cwd=str(cwd) if cwd else None,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise InstallError(f"{cmd[0]} timed out after {timeout}s") from exc
     if result.returncode != 0:
         raise InstallError(result.stderr.strip() or result.stdout.strip() or f"{cmd[0]} failed")
     return result.stdout.strip()
@@ -326,11 +336,12 @@ run_setup = _run_setup_script
 
 def install_dev_channel(install_dir: Path, run_setup_flag: bool = True) -> None:
     ensure_dev_switch_allowed(install_dir)
-    if install_dir.exists():
-        run(["git", "fetch", "--quiet", "origin"], cwd=install_dir)
+    existed = install_dir.exists()
+    if existed:
         status = run(["git", "status", "--porcelain"], cwd=install_dir)
         if status:
             raise InstallError(f"Dev checkout has local changes in {install_dir}; commit or stash them before updating.")
+        run(["git", "fetch", "--quiet", "origin"], cwd=install_dir)
         run(["git", "checkout", "--quiet", "main"], cwd=install_dir)
         run(["git", "pull", "--ff-only", "origin", "main"], cwd=install_dir)
     else:
@@ -339,7 +350,7 @@ def install_dev_channel(install_dir: Path, run_setup_flag: bool = True) -> None:
     commit = run(["git", "rev-parse", "--short", "HEAD"], cwd=install_dir)
     write_install_metadata(install_dir, build_dev_metadata(branch="main", commit=commit))
     if run_setup_flag:
-        run_setup(install_dir, upgrade=True)
+        run_setup(install_dir, upgrade=existed)
 
 
 def install_release_from_urls(
