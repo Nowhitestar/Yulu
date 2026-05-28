@@ -108,6 +108,17 @@ jobs:
             "dist/checksums.txt"
           )
           if gh release view "$TAG" >/dev/null 2>&1; then
+            EDIT_ARGS=(
+              "$TAG"
+              --title "$TAG"
+              --notes-file "$RUNNER_TEMP/release-notes.md"
+            )
+            if [[ "$TAG" == *-* ]]; then
+              EDIT_ARGS+=(--prerelease)
+            else
+              EDIT_ARGS+=(--prerelease=false)
+            fi
+            gh release edit "${EDIT_ARGS[@]}"
             gh release upload "$TAG" "${ASSETS[@]}" --clobber
           else
             CREATE_ARGS=(
