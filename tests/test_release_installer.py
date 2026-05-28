@@ -389,6 +389,25 @@ def test_restore_backup_replaces_dangling_symlink_runtime(tmp_path):
     assert (install_dir / "old.txt").read_text(encoding="utf-8") == "old"
 
 
+def test_replace_runtime_with_backup_treats_dangling_symlink_as_existing(tmp_path):
+    install_dir = tmp_path / "install"
+    missing_target = tmp_path / "missing-target"
+    try:
+        install_dir.symlink_to(missing_target, target_is_directory=True)
+    except OSError:
+        pytest.skip("symlinks are not supported on this filesystem")
+    staged = tmp_path / "staged"
+    staged.mkdir()
+    (staged / "new.txt").write_text("new", encoding="utf-8")
+
+    backup = replace_runtime_with_backup(staged, install_dir)
+
+    assert backup is not None
+    assert backup.is_symlink()
+    assert not install_dir.is_symlink()
+    assert (install_dir / "new.txt").read_text(encoding="utf-8") == "new"
+
+
 def test_file_url_helpers_accept_localhost_and_reject_remote_hosts(tmp_path):
     source = tmp_path / "source.txt"
     source.write_text("hello", encoding="utf-8")

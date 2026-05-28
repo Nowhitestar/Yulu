@@ -251,10 +251,14 @@ def extract_release_zip(zip_path: Path, dest: Path) -> Path:
     return runtime
 
 
+def path_exists_or_symlink(path: Path) -> bool:
+    return path.exists() or path.is_symlink()
+
+
 def replace_runtime_with_backup(staged_runtime: Path, install_dir: Path) -> Path | None:
     install_dir.parent.mkdir(parents=True, exist_ok=True)
     backup = None
-    if install_dir.exists():
+    if path_exists_or_symlink(install_dir):
         # Keep successful-install backups for manual recovery until a later cleanup policy exists.
         backup = Path(
             tempfile.mkdtemp(prefix=f"{install_dir.name}.backup-", dir=str(install_dir.parent))
@@ -276,7 +280,7 @@ def replace_runtime_with_backup(staged_runtime: Path, install_dir: Path) -> Path
 
 
 def restore_backup(backup: Path, install_dir: Path) -> None:
-    if install_dir.exists() or install_dir.is_symlink():
+    if path_exists_or_symlink(install_dir):
         if install_dir.is_dir() and not install_dir.is_symlink():
             shutil.rmtree(install_dir)
         else:
@@ -310,8 +314,9 @@ def install_release_from_urls(
     run_setup: bool = True,
     setup_timeout: float = SETUP_TIMEOUT_SECONDS,
 ) -> None:
-    existed = install_dir.exists()
-    with tempfile.TemporaryDirectory(prefix="yulu-install-") as tmp:
+    install_dir.parent.mkdir(parents=True, exist_ok=True)
+    existed = path_exists_or_symlink(install_dir)
+    with tempfile.TemporaryDirectory(prefix="yulu-install-", dir=str(install_dir.parent)) as tmp:
         tmpdir = Path(tmp)
         zip_path = tmpdir / asset_name
         download_to_path(asset_url, zip_path)
@@ -336,7 +341,7 @@ def install_release_from_urls(
             try:
                 if backup is not None:
                     restore_backup(backup, install_dir)
-                elif install_dir.exists():
+                elif path_exists_or_symlink(install_dir):
                     if install_dir.is_dir() and not install_dir.is_symlink():
                         shutil.rmtree(install_dir)
                     else:

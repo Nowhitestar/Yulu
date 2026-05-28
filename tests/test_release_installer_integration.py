@@ -1,5 +1,6 @@
 import hashlib
 import json
+import tempfile
 import zipfile
 from pathlib import Path
 
@@ -45,6 +46,30 @@ def test_install_release_from_file_urls(tmp_path):
     metadata = json.loads((install_dir / ".yulu-install.json").read_text(encoding="utf-8"))
     assert metadata["source"] == "release"
     assert metadata["version"] == "v0.5.0"
+
+
+def test_install_release_stages_under_install_parent(tmp_path, monkeypatch):
+    zip_path, checksums = build_fake_asset(tmp_path)
+    install_dir = tmp_path / "nested" / "install"
+    real_temporary_directory = tempfile.TemporaryDirectory
+    seen_dirs = []
+
+    def tracking_temporary_directory(*args, **kwargs):
+        seen_dirs.append(Path(kwargs["dir"]))
+        return real_temporary_directory(*args, **kwargs)
+
+    monkeypatch.setattr(release_installer.tempfile, "TemporaryDirectory", tracking_temporary_directory)
+
+    install_release_from_urls(
+        tag="v0.5.0",
+        asset_name=zip_path.name,
+        asset_url=zip_path.as_uri(),
+        checksums_url=checksums.as_uri(),
+        install_dir=install_dir,
+        run_setup=False,
+    )
+
+    assert seen_dirs == [install_dir.parent]
 
 
 def test_install_release_rolls_back_when_setup_fails(tmp_path):
