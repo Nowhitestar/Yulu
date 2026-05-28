@@ -31,3 +31,18 @@ def test_parse_rejects_version_and_dev_together():
 def test_normalize_version_tag_rejects_invalid_semver():
     with pytest.raises(ValueError, match="valid SemVer"):
         normalize_version_tag("banana")
+
+
+@pytest.mark.parametrize(
+    "version",
+    [
+        "01.2.3",
+        "1.02.3",
+        "1.2.03",
+        "1.2.3-alpha..1",
+        "1.2.3-01",
+    ],
+)
+def test_normalize_version_tag_rejects_invalid_semver_boundaries(version):
+    with pytest.raises(ValueError, match="valid SemVer"):
+        normalize_version_tag(version)
