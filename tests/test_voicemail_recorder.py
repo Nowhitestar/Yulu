@@ -315,3 +315,61 @@ def test_cmd_stop_sends_stop_when_recording(monkeypatch):
     rc = recorder.cmd_stop()
     assert rc == 0
     assert any(c.get("action") == "stop" for c in sent)
+
+
+def test_promote_strips_speaker_tags_and_finalizes(isolated_paths, tmp_path):
+    queue, _ = isolated_paths
+    wav = tmp_path / "voicemail_20260528_120000.wav"
+    wav.touch()
+    wav.with_suffix(".realtime.transcript.txt").write_text(
+        "[Me] line one\n[Me] line two\n", encoding="utf-8")
+
+    rc = recorder._promote_realtime_transcript(wav, title=None)
+
+    assert rc == 0
+    assert wav.with_suffix(".transcript.txt").read_text(encoding="utf-8") == "line one\nline two"
+    assert wav.with_suffix(".raw.transcript.txt").read_text(encoding="utf-8") == "line one\nline two"
+    events = json.loads(queue.read_text(encoding="utf-8"))
+    assert [e["prompt_slug"] for e in events] == ["voicemail-todos"]
+
+
+def test_promote_returns_2_when_realtime_missing(isolated_paths, tmp_path):
+    queue, _ = isolated_paths
+    wav = tmp_path / "voicemail_20260528_120000.wav"
+    wav.touch()
+
+    rc = recorder._promote_realtime_transcript(wav, title=None)
+
+    assert rc == 2
+    assert not wav.with_suffix(".transcript.txt").exists()
+    assert json.loads(queue.read_text(encoding="utf-8")) == []
+
+
+def test_promote_returns_2_when_realtime_empty(isolated_paths, tmp_path):
+    queue, _ = isolated_paths
+    wav = tmp_path / "voicemail_20260528_120000.wav"
+    wav.touch()
+    wav.with_suffix(".realtime.transcript.txt").write_text("[Me]\n   \n", encoding="utf-8")
+
+    rc = recorder._promote_realtime_transcript(wav, title=None)
+
+    assert rc == 2
+    assert not wav.with_suffix(".transcript.txt").exists()
+
+
+def test_promote_pushes_stripped_body_to_search_index(isolated_paths, tmp_path, monkeypatch):
+    queue, _ = isolated_paths
+    wav = tmp_path / "voicemail_20260528_120000.wav"
+    wav.touch()
+    wav.with_suffix(".realtime.transcript.txt").write_text("[Me] hello world\n", encoding="utf-8")
+
+    calls: list[dict] = []
+    from search import indexer as search_indexer
+    monkeypatch.setattr(search_indexer, "upsert_doc", lambda **kw: calls.append(kw) or True)
+
+    rc = recorder._promote_realtime_transcript(wav, title=None)
+
+    assert rc == 0
+    assert len(calls) == 1
+    assert calls[0]["kind"] == search_indexer.KIND_VOICEMAIL_TRANSCRIPT
+    assert calls[0]["body"] == "hello world"

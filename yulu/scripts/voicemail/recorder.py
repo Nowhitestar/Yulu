@@ -13,6 +13,7 @@ duplicate any Phase 1-3 primitives:
 
 from __future__ import annotations
 
+import re
 import signal
 import sys
 import time
@@ -127,6 +128,34 @@ def _finalize_transcript(wav_path: Path, text: str, *, title: Optional[str]) -> 
     )
     print(f"📤 enqueued {queued} voicemail prompt(s)", file=sys.stderr)
     return 0
+
+
+_SPEAKER_TAG_RE = re.compile(r"^\[(?:Me|Them)\]\s*")
+
+
+def _strip_speaker_tags(raw: str) -> str:
+    """Realtime transcripts are line-per-partial with a [Me]/[Them] prefix.
+    Voicemails are single-speaker — strip the tag, drop blank lines, and
+    rejoin so the result matches the plain-text whole-file transcript."""
+    out: list[str] = []
+    for line in raw.splitlines():
+        cleaned = _SPEAKER_TAG_RE.sub("", line).strip()
+        if cleaned:
+            out.append(cleaned)
+    return "\n".join(out)
+
+
+def _promote_realtime_transcript(wav_path: Path, *, title: Optional[str]) -> int:
+    """Promote the live realtime transcript to the final transcript.
+    Returns 0 on success; 2 if the realtime transcript is missing or empty
+    (caller falls back to whole-file transcribe)."""
+    rt_path = wav_path.with_suffix(".realtime.transcript.txt")
+    if not rt_path.exists():
+        return 2
+    text = _strip_speaker_tags(rt_path.read_text(encoding="utf-8"))
+    if not text:
+        return 2
+    return _finalize_transcript(wav_path, text, title=title)
 
 
 def _transcribe_and_enqueue(wav_path: Path, *, title: Optional[str]) -> int:
