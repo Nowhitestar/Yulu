@@ -69,7 +69,9 @@ def load_config():
     audio_cfg.setdefault("silence_threshold", 0.01)
     audio_cfg.setdefault("silence_duration_sec", 300)
     audio_cfg.setdefault("backend", "daemon")  # "daemon" or "sox"
-    audio_cfg.setdefault("realtime_transcribe", True)
+    # NOTE: realtime transcription is governed by transcription.realtime_enabled
+    # (see realtime_enabled()); the old audio.realtime_transcribe default was
+    # vestigial — nothing consumed it — so it is no longer injected here.
     return audio_cfg
 
 
@@ -112,6 +114,9 @@ def realtime_enabled():
     trans_cfg = cfg.get("transcription", {})
     if "realtime_enabled" in trans_cfg:
         return bool(trans_cfg.get("realtime_enabled"))
+    # Legacy fallback: pre-Phase-K configs used audio.realtime_transcribe.
+    # Honored for backward compat; new installs use transcription.realtime_enabled
+    # (seeded true by setup.sh). Defaults true when neither key is present.
     return bool(cfg.get("audio", {}).get("realtime_transcribe", True))
 
 
