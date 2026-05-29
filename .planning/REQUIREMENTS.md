@@ -1,0 +1,121 @@
+# Requirements: Yulu — Agent-Native Provisioning & Cross-Platform Foundation
+
+**Defined:** 2026-05-29
+**Core Value:** A meeting becomes a clean, searchable note entirely on the user's machine, through the agent they already trust — capture and transcription never depend on the cloud, and Yulu never makes the user reconfigure what their agent already provides.
+
+## v1 Requirements
+
+Requirements for this milestone. Each maps to exactly one roadmap phase.
+
+### Build & Signing (BUILD)
+
+- [ ] **BUILD-01**: The monolithic `setup.sh` is decomposed into per-concern scripts with `set -uo pipefail`, so any failing step is visible and individually testable
+- [ ] **BUILD-02**: macOS binaries are Developer ID signed (bottom-up, never `--deep`) and notarized + stapled, replacing the `--timestamp=none` + `xattr` quarantine-strip
+- [ ] **BUILD-03**: Release installs ship pre-built signed binaries and no longer require `swiftc`/Xcode on the user's machine
+- [ ] **BUILD-04**: CI publishes GitHub Artifact Attestations for release assets so integrity is verifiable via `gh attestation verify`
+
+### Platform Abstraction (PLAT)
+
+- [ ] **PLAT-01**: A `CaptureBackend` interface ("PCM frames + source list") exists with a macOS implementation; Linux/Windows are `NotImplementedError` stubs
+- [ ] **PLAT-02**: macOS system-audio capture uses Core Audio process taps on 14.4+, with a ScreenCaptureKit fallback arm behind the same seam (`if #available`)
+- [ ] **PLAT-03**: A `DaemonManager` interface (`ServiceSpec` + install/load/unload/status) wraps launchd; the audio daemon launches directly (no `open -W` orphan) so `stop()` leaves zero processes
+- [ ] **PLAT-04**: A `PathResolver` removes hardcoded `~/Movies/Yulu` / `~/.config/yulu` (including fixing `status_agent.swift` to read `config.json`)
+- [ ] **PLAT-05**: `PermissionModel` and `DependencyManager` interfaces exist with macOS implementations; TCC calls are gated behind a Darwin check
+
+### Capability Detection (DETECT)
+
+- [ ] **DETECT-01**: `doctor.py` produces a versioned `HostCapabilityReport` JSON with per-capability provenance (host-path / yulu-managed / agent-config / absent) and tri-state status (usable / present-but-unverified / absent)
+- [ ] **DETECT-02**: Capability probes resolve binaries via the login-shell PATH (not bare `shutil.which`) and Python importability via the daemon's own interpreter
+- [ ] **DETECT-03**: `doctor` probes `claude` CLI, `whisper-cli`, `mlx-whisper` importability, configured `llm.command` validity, model paths/sizes, and recording-dir writability
+- [ ] **DETECT-04**: The `mlx_python` interpreter ambiguity is resolved so "usable" reflects what the daemon can actually import
+- [ ] **DETECT-05**: A `CapabilityProvider` interface exists with a ClaudeCode implementation working end-to-end
+
+### Settings & Onboarding (SET)
+
+- [ ] **SET-01**: A `host_capabilities` tRPC endpoint serves the doctor report to the web UI
+- [ ] **SET-02**: The settings page shows each capability's provenance ("reused from your PATH" vs "Yulu-managed") with the resolved path
+- [ ] **SET-03**: A skippable browser first-run onboarding walkthrough shows live permission status
+- [ ] **SET-04**: A model selector lets the user choose among detected models across host caches
+
+### Transcription Modes (TRANS)
+
+- [ ] **TRANS-01**: User can set transcription mode to local (default), cloud-fallback, or cloud-priority
+- [ ] **TRANS-02**: Cloud transcription uses the user's own configured command (same trust model as `llm.command`); Yulu holds no cloud keys
+
+### Data Folder & Cloud Sync (DATA)
+
+- [ ] **DATA-01**: User can configure the data folder (recordings/transcripts/summaries) location
+- [ ] **DATA-02**: Runtime/state (SQLite DBs, sockets, locks, PIDs) is physically separated from syncable content and never placed in a synced folder
+- [ ] **DATA-03**: When the data folder points at a detected cloud-sync root (iCloud / Google Drive…), Yulu detects it and warns about the relevant risks
+
+### Capability Reuse (REUSE)
+
+- [ ] **REUSE-01**: When a *usable* host whisper / model / `claude` / `gog` is detected, Yulu reuses it instead of installing its own
+- [ ] **REUSE-02**: Yulu no longer unconditionally `brew install`s whisper-cpp or creates a duplicate MLX venv when the host already provides them
+
+### Agent-Orchestrated Provisioning (PROV)
+
+- [ ] **PROV-01**: Provisioning is a registry of named, idempotent steps (`check`/`apply` → `StepResult`), invocable via `yulu provision <step>`
+- [ ] **PROV-02**: A spike validates agent-orchestrated provisioning (who calls the steps), with partial-failure/resume and tampered-asset rejection as explicit exit criteria
+- [ ] **PROV-03**: Provisioning verifies asset integrity (`gh attestation verify`) before execution; the signed-zip path remains a non-negotiable fallback
+- [ ] **PROV-04**: Provisioning is resumable via a per-step state file (`.yulu-install.json`)
+- [ ] **PROV-05**: `yulu skill install [--agent]` installs/updates the agent skill independently of core install (idempotent), decoupled from `setup.sh`
+
+### Seamless Migration (MIG)
+
+- [ ] **MIG-01**: On upgrade, an existing v0.5.x `~/.yulu` install is detected and migrated (detect→plan→apply→verify) with no data loss and no reconfiguration
+- [ ] **MIG-02**: Migration guards against active recordings before stopping any daemon (no `pkill -9` truncation)
+- [ ] **MIG-03**: Migration is transactional with `yulu rollback`; backups are pruned only after verified success
+
+### Multi-Agent Providers (AGENT)
+
+- [ ] **AGENT-01**: A `CodexProvider` implements the capability-provider contract
+- [ ] **AGENT-02**: An `OpenClawProvider` implements the capability-provider contract
+
+## v2 Requirements
+
+Deferred to a future milestone. Tracked but not in this roadmap.
+
+### Cross-Platform Runtime (XPLAT)
+
+- **XPLAT-01**: Linux runtime implementation of the platform seams (PipeWire capture, systemd daemons)
+- **XPLAT-02**: Windows runtime implementation of the platform seams (WASAPI loopback, Task Scheduler/service)
+
+### Hardening (HARD)
+
+- **HARD-01**: iCloud pinning robustness for in-use recordings (`com.apple.fileprovider.pinned` / File Provider API)
+- **HARD-02**: Installer signature `--verify` hardening beyond attestation
+- **HARD-03**: Backup-cleanup policy beyond migration's own lifecycle (`yulu cleanup-backups`)
+
+## Out of Scope
+
+Explicitly excluded. Documented to prevent scope creep. Anti-features from research.
+
+| Feature | Reason |
+|---------|--------|
+| Yulu-hosted cloud sync / backup service | Violates local-first; cloud sync is delegated to the user's own folder sync (iCloud/Drive) |
+| Accounts / multi-user / teams | Yulu is local-first and single-user |
+| Drag-to-`/Applications` `.app` as THE install model | Over-fits macOS; superseded by agent-orchestrated provisioning |
+| Yulu-held cloud API keys | User brings their own cloud command; no keys held by Yulu |
+| Forced, unskippable onboarding | Onboarding must be skippable |
+| Auto-installing Homebrew without consent | Reuse-first; never silently mutate the host's package manager |
+| A second Yulu-specific venv when the host already has one | Directly contradicts the reuse goal |
+| Custom CRDT / sync-conflict engine | Folder sync is the OS's job; no conflict engine |
+| Actual Windows/Linux implementations (this milestone) | Architecture is abstracted now; implementations deferred to a future milestone |
+
+## Traceability
+
+Populated during roadmap creation — each requirement maps to exactly one phase.
+
+| Requirement | Phase | Status |
+|-------------|-------|--------|
+| _(filled by roadmapper)_ | — | Pending |
+
+**Coverage:**
+- v1 requirements: 33 total
+- Mapped to phases: _(set by roadmapper)_
+- Unmapped: _(validated by roadmapper — must be 0)_
+
+---
+*Requirements defined: 2026-05-29*
+*Last updated: 2026-05-29 after initial definition*
