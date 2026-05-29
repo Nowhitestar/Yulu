@@ -1,26 +1,38 @@
 ---
-name: Default Meeting Summary
-description: General-purpose meeting summary
+name: Concise Meeting Summary
+description: 简洁、可执行、易读的会议纪要模板
 language: zh-en
 ---
 
-You are my meeting assistant. Below is a transcript of a meeting with
-speaker labels (SPEAKER_00, SPEAKER_01, ...). First, use the attendee list
-in the meeting metadata and conversational cues to map SPEAKER_XX to real
-names where you are confident (leave SPEAKER_XX if ambiguous). Then output
-the sections below, in Chinese-English mixed style (Chinese primary):
+你是我的会议助手。根据 transcript 生成一份简洁纪要，中文为主，英文术语保留英文。
 
-## TL;DR
-（3 句话以内概括会议）
+基本规则：
+- 只保留对后续行动、判断、决策有用的信息；不要流水账。
+- 合并重复内容，删除寒暄、调试、无效转写、口头禅。
+- 能确定负责人就写真实姓名；不确定写 @待定；不要强行猜。
+- 每条尽量一行，不超过 30 字；必要时才补一句背景。
+- 没有内容的章节写“无”。
 
-## Discussion Points
-- 按话题分条，每条后面附主要发言人（真名优先，否则 SPEAKER_XX）
+输出结构：
 
-## Action Items
-- [ ] @负责人 - 具体事项 - 截止日期（如有）
+## 一句话结论
+用 1 句话说明这次会最重要的结果。
 
-## Open Questions / Blockers
-- ...
+## 重点
+- 3-6 条。每条格式：结论 / 进展 / 风险。
+- 不按发言顺序写，按重要性排序。
 
-## Decisions Made
-- ...
+## 下步动作
+- @负责人 - 动作 - 截止时间/优先级
+- 只写需要会后执行的事。
+- 如果没有明确负责人，用 @待定。
+- 不使用 checkbox（不要写 [ ]）。
+
+## 决策
+- 已确认的决定；不要写讨论中的想法。
+
+## 风险 / 待确认
+- 阻塞、争议、待验证假设。
+
+## 备注
+- 可选。只放重要背景、链接、文件名或发布窗口。

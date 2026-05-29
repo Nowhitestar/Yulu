@@ -7,7 +7,7 @@ from pathlib import Path
 
 CONFIG_PATH = Path.home() / ".config" / "yulu" / "config.json"
 DEFAULT_MLX_PYTHON = str(Path.home() / ".config/yulu/venv-mlx-whisper/bin/python")
-DEFAULT_MLX_MODEL = "mlx-community/whisper-large-v3-mlx"
+DEFAULT_MLX_MODEL = "mlx-community/whisper-large-v3-turbo"
 DEFAULT_WHISPER_MODEL = str(Path.home() / ".config/yulu/models/ggml-large-v3.bin")
 FAST_MODE = "fast_summary"
 FULL_MODE = "full_transcribe"
@@ -69,6 +69,8 @@ def set_engine(engine, model=None, path=CONFIG_PATH):
         mlx = trans.setdefault("mlx", {})
         mlx["python"] = mlx.get("python") or DEFAULT_MLX_PYTHON
         mlx["model"] = model or mlx.get("model") or DEFAULT_MLX_MODEL
+        mlx["final_model"] = model or mlx.get("final_model") or DEFAULT_MLX_MODEL
+        mlx["preprocess_audio"] = mlx.get("preprocess_audio", True)
         trans["final_engine"] = "mlx"
         realtime["engine"] = "mlx"
         realtime["mlx_model"] = mlx["model"]
@@ -112,6 +114,8 @@ def status(path=CONFIG_PATH):
     if engine == "mlx":
         print(f"mlx.python={mlx.get('python') or DEFAULT_MLX_PYTHON}")
         print(f"mlx.model={mlx.get('model') or DEFAULT_MLX_MODEL}")
+        print(f"mlx.final_model={mlx.get('final_model') or mlx.get('model') or DEFAULT_MLX_MODEL}")
+        print(f"mlx.preprocess_audio={mlx.get('preprocess_audio', True)}")
     else:
         print(f"whisper_cli={trans.get('whisper_cli') or 'whisper-cli'}")
         print(f"local_model_path={trans.get('local_model_path') or DEFAULT_WHISPER_MODEL}")

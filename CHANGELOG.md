@@ -6,13 +6,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-05-29
+
 ### Added
+- **Yulu web UI** — a unified localhost interface at `http://127.0.0.1:7777`: recordings inbox + reader (audio player, transcript, summary, re-transcribe/re-generate), single Settings page (Audio / Transcription / LLM / Hotkey & UI / Integrations / Storage), Knowledge (Prompts + Glossary), Health (daemons + logs), and a ⌘K global search. Served by a Node + Hono + tRPC server (`com.yulu.ui` LaunchAgent); `yulu logs ui` tails it.
+- **Voicemail realtime transcription** with a global Settings toggle (`transcription.realtime_enabled`, default on). On stop the live transcript is promoted to the final transcript; an empty/missing realtime transcript falls back to whole-file transcription.
 - Central version management via the root `VERSION` file and `yulu/scripts/version.py`; `yulu version` now prints the installed version plus git metadata for support/debugging.
-- Release-asset based installer/updater with `--version` and `--dev`.
+- Release-asset based installer/updater (`yulu update [--latest|--version vX.Y.Z|--dev]`) with sha256-verified packages.
 - Packaging scripts and a tag-triggered GitHub Actions workflow for `yulu-macos-arm64-<version>.zip`, `install.sh`, and `checksums.txt`.
+- MLX transcription `final_model` and `preprocess_audio` options.
 
 ### Changed
+- Default MLX model is now `mlx-community/whisper-large-v3-turbo`.
+- Rewrote the meeting summary template to a concise, action-oriented format (一句话结论 / 重点 / 下步动作).
 - Default install/update path from main checkout to stable release assets.
+- Upgraded build/test tooling — vite 6, vitest 3, esbuild 0.25 — clearing dev-tooling security advisories (production serves a prebuilt static bundle and is unaffected).
+
+### Fixed
+- `read_realtime_transcript` now ignores agent-event JSON payloads (treats them as "no transcript" and falls back to whole-file transcription).
+- Removed the vestigial `audio.realtime_transcribe` config default; `transcription.realtime_enabled` is the single source of truth (legacy key still honored as a fallback).
 
 ## [0.4.0] - 2026-05-08
 

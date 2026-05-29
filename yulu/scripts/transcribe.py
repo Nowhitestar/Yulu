@@ -52,7 +52,22 @@ def read_realtime_transcript(path: Path) -> Optional[str]:
     if not path.exists():
         return None
     text = path.read_text(encoding="utf-8").strip()
-    return text or None
+    if not text:
+        return None
+    # Guard: the realtime transcript file sometimes ends up holding agent-event
+    # JSON (e.g. realtime_transcript_error / realtime_transcript_ready events)
+    # instead of transcript text. A real transcript is never a JSON object/array
+    # (the live format is plain "[Me] ..." lines, which is NOT valid JSON), so if
+    # the content parses as a JSON list/dict, treat it as "no transcript" and let
+    # the caller fall back to whole-file transcription.
+    if text[0] in "[{":
+        try:
+            parsed = json.loads(text)
+        except ValueError:
+            return text
+        if isinstance(parsed, (list, dict)):
+            return None
+    return text
 
 
 def _request_final_transcribe_raw(audio_path: Path, trans_cfg: dict, meeting_title: str) -> dict:

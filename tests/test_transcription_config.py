@@ -7,7 +7,7 @@ SCRIPTS = ROOT / "yulu" / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
 from configure import FULL_MODE, FAST_MODE, set_engine, set_mode
-from transcribe import normalize_post_recording_mode
+from transcribe import normalize_post_recording_mode, read_realtime_transcript
 
 
 def write_config(path):
@@ -19,6 +19,19 @@ def test_post_recording_mode_aliases():
     assert normalize_post_recording_mode("realtime") == FAST_MODE
     assert normalize_post_recording_mode("full") == FULL_MODE
     assert normalize_post_recording_mode("quality") == FULL_MODE
+
+
+def test_realtime_transcript_rejects_agent_event_json(tmp_path):
+    transcript = tmp_path / "meeting.realtime.transcript.txt"
+    transcript.write_text(
+        json.dumps([
+            {"type": "realtime_transcript_error", "title": "Weekly"},
+            {"type": "realtime_transcript_ready", "title": "Weekly"},
+        ], ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    assert read_realtime_transcript(transcript) is None
 
 
 def test_configure_sets_fast_and_full_modes(tmp_path):
@@ -43,6 +56,8 @@ def test_configure_sets_mlx_engine_for_final_and_realtime(tmp_path):
     trans = json.loads(cfg.read_text(encoding="utf-8"))["transcription"]
     assert trans["final_engine"] == "mlx"
     assert trans["mlx"]["model"] == "mlx-community/whisper-large-v3-mlx"
+    assert trans["mlx"]["final_model"] == "mlx-community/whisper-large-v3-mlx"
+    assert trans["mlx"]["preprocess_audio"] is True
     assert trans["realtime"]["engine"] == "mlx"
     assert trans["realtime"]["mlx_model"] == "mlx-community/whisper-large-v3-mlx"
 
