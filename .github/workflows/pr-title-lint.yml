@@ -1,0 +1,43 @@
+name: PR Title Lint
+
+# Auto-release reads Conventional Commits to decide the next version. With
+# squash-merge, the PR title becomes the commit on main — so this gate keeps
+# titles in the conventional format (feat:/fix:/chore:…). Without it, a stray
+# title would silently skip versioning or pick the wrong bump.
+#
+# NOTE: this assumes squash-merge. Enable "Allow squash merging" (and ideally
+# default to it) in the repo's merge settings so the PR title is what lands.
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  pull-requests: read
+
+jobs:
+  lint:
+    name: Validate PR title (Conventional Commits)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: amannn/action-semantic-pull-request@v5
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          # Allowed types — mirror the version-bump rules in the design doc.
+          types: |
+            feat
+            fix
+            chore
+            docs
+            refactor
+            test
+            ci
+            build
+            style
+            perf
+            revert
+          requireScope: false
+          subjectPattern: ^(?![A-Z]).+$
+          subjectPatternError: |
+            The subject "{subject}" must start with a lowercase letter.

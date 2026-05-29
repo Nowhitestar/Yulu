@@ -1,0 +1,51 @@
+name: Release Please
+
+# Automatic release path. On every push to main, release-please maintains a
+# rolling "Release PR" that accumulates the CHANGELOG and computes the next
+# version from Conventional Commits (feat→minor, fix→patch, !/BREAKING→major).
+# Merge that PR when you're ready to ship — release-please then bumps VERSION,
+# updates CHANGELOG, tags, and creates the GitHub Release; the publish job in
+# THIS SAME workflow (gated on release_created) builds and uploads the assets.
+#
+# Why publish in the same workflow instead of letting the tag trigger
+# release.yml: a tag pushed with the default GITHUB_TOKEN does NOT trigger other
+# workflows. Chaining via `needs` + `if: release_created` keeps everything on
+# GITHUB_TOKEN — no PAT to manage or let expire.
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: release-please-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release-please:
+    name: Maintain Release PR / cut release
+    runs-on: ubuntu-latest
+    outputs:
+      release_created: ${{ steps.rp.outputs.release_created }}
+      tag_name: ${{ steps.rp.outputs.tag_name }}
+    steps:
+      - uses: googleapis/release-please-action@v4
+        id: rp
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+  publish:
+    name: Publish assets for the cut release
+    needs: release-please
+    if: ${{ needs.release-please.outputs.release_created == 'true' }}
+    permissions:
+      contents: write
+    uses: ./.github/workflows/release-publish.yml
+    with:
+      tag: ${{ needs.release-please.outputs.tag_name }}
+    secrets: inherit
