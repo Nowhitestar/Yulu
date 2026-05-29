@@ -4,6 +4,13 @@ All notable changes to Yulu are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.5.1](https://github.com/Nowhitestar/Yulu/compare/v0.5.0...v0.5.1) (2026-05-29)
+
+
+### Bug Fixes
+
+* restore exec bits on release extract; harden setup & packaging ([#31](https://github.com/Nowhitestar/Yulu/issues/31)) ([82b0ab2](https://github.com/Nowhitestar/Yulu/commit/82b0ab26ed4c893dd0e8578bd254f8ef918b4c25))
+
 ## [Unreleased]
 
 ### Fixed
