@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 - Central version management via the root `VERSION` file and `yulu/scripts/version.py`; `yulu version` now prints the installed version plus git metadata for support/debugging.
+- Release-asset based installer/updater with `--version` and `--dev`.
+- Packaging scripts and a tag-triggered GitHub Actions workflow for `yulu-macos-arm64-<version>.zip`, `install.sh`, and `checksums.txt`.
+
+### Changed
+- Default install/update path from main checkout to stable release assets.
 
 ## [0.4.0] - 2026-05-08
 

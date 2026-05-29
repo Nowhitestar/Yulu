@@ -1,0 +1,134 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Publish release assets
+    runs-on: macos-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify tag matches VERSION
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          EXPECTED="v$(tr -d '[:space:]' < VERSION)"
+          if [[ "$TAG" != "$EXPECTED" ]]; then
+            echo "Tag $TAG does not match VERSION $EXPECTED" >&2
+            exit 1
+          fi
+          echo "TAG=$TAG" >> "$GITHUB_ENV"
+
+      - name: Bash syntax check
+        run: |
+          set -euo pipefail
+          for f in install.sh \
+                   packaging/scripts/package.sh \
+                   packaging/scripts/checksums.sh \
+                   yulu/scripts/setup.sh \
+                   yulu/scripts/uninstall.sh \
+                   yulu/scripts/yulu \
+                   yulu/scripts/build_audio_daemon.sh \
+                   yulu/scripts/build_status_agent.sh; do
+            printf 'bash -n %s\n' "$f"
+            bash -n "$f"
+          done
+
+      - name: Python syntax check
+        run: |
+          set -euo pipefail
+          python3 --version
+          for f in yulu/scripts/*.py; do
+            printf 'py_compile %s\n' "$f"
+            python3 -m py_compile "$f"
+          done
+
+      - name: Python unit tests
+        run: |
+          set -euo pipefail
+          python3 -m venv "$RUNNER_TEMP/yulu-release-venv"
+          . "$RUNNER_TEMP/yulu-release-venv/bin/activate"
+          python -m pip install --upgrade pip
+          python -m pip install pytest
+          python -m pytest -q
+
+      - name: Package release assets
+        run: |
+          set -euo pipefail
+          make package TAG="$TAG"
+          make checksums
+          test -f "dist/yulu-macos-arm64-$TAG.zip"
+          test -f dist/install.sh
+          test -f dist/checksums.txt
+
+      - name: Prepare release notes
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os
+          import pathlib
+          import re
+
+          tag = os.environ["TAG"]
+          version = tag[1:]
+          changelog = pathlib.Path("CHANGELOG.md")
+          notes = pathlib.Path(os.environ["RUNNER_TEMP"]) / "release-notes.md"
+
+          text = changelog.read_text() if changelog.exists() else ""
+          pattern = rf"^## \[{re.escape(version)}\].*?(?=^## \[|\Z)"
+          match = re.search(pattern, text, re.M | re.S)
+          if match:
+              body = match.group(0).strip()
+          else:
+              body = f"Release {tag}"
+          notes.write_text(body + "\n")
+          print(notes)
+          PY
+
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          ASSETS=(
+            "dist/yulu-macos-arm64-$TAG.zip"
+            "dist/install.sh"
+            "dist/checksums.txt"
+          )
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            EDIT_ARGS=(
+              "$TAG"
+              --title "$TAG"
+              --notes-file "$RUNNER_TEMP/release-notes.md"
+            )
+            if [[ "$TAG" == *-* ]]; then
+              EDIT_ARGS+=(--prerelease)
+            else
+              EDIT_ARGS+=(--prerelease=false)
+            fi
+            gh release edit "${EDIT_ARGS[@]}"
+            gh release upload "$TAG" "${ASSETS[@]}" --clobber
+          else
+            CREATE_ARGS=(
+              "$TAG"
+              "${ASSETS[@]}"
+              --title "$TAG"
+              --notes-file "$RUNNER_TEMP/release-notes.md"
+            )
+            if [[ "$TAG" == *-* ]]; then
+              CREATE_ARGS+=(--prerelease)
+            fi
+            gh release create "${CREATE_ARGS[@]}"
+          fi

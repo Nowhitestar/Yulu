@@ -53,14 +53,30 @@ Yulu 是一个 macOS 原生的会议录制和会议纪要工具。它本地录�
 
 ## 快速安装
 
+默认安装最新稳定版：
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Nowhitestar/Yulu/main/install.sh | bash
 ```
 
-就这一行。安装脚本会做：
+安装指定版本：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Nowhitestar/Yulu/main/install.sh | bash -s -- --version v0.5.0
+```
+
+开发通道：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Nowhitestar/Yulu/main/install.sh | bash -s -- --dev
+```
+
+默认安装会把最新稳定版 GitHub Release assets 下载到 `~/.yulu`，不是 clone `main`。`--version` 只影响这一次安装，`--dev` 才使用开发通道。
+
+安装脚本会做：
 
 1. 检查 macOS 13+、Xcode CLI Tools、Homebrew、Python 3。
-2. 把 Yulu clone 到 `~/.yulu/`（路径固定，别移走）。
+2. 把选定的 Yulu runtime 安装到 `~/.yulu/`（路径固定，别移走）。
 3. 安装 Homebrew 包：`sox`、`ffmpeg`、`whisper-cpp`、`terminal-notifier`、`gogcli`、`cloudflared`。
 4. 写用户级配置到 `~/.config/yulu/config.json`，建录音目录 `~/Movies/Yulu/`。
 5. 编译窗口扫描器，引导授权"辅助功能"。
@@ -82,11 +98,27 @@ echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc && exec zsh
 
 ### 升级
 
+升级到最新稳定版：
+
 ```bash
 yulu update
 ```
 
-拉 `~/.yulu/` 最新代码，然后跑 `setup.sh --upgrade` —— 不重弹 TCC、不重做 OAuth、不重下 whisper 模型，已配置过的步骤全部跳过。
+升级到指定版本：
+
+```bash
+yulu update --version v0.5.0
+```
+
+升级到开发通道：
+
+```bash
+yulu update --dev
+```
+
+稳定版和指定版本升级会把 GitHub Release assets 下载到 `~/.yulu/`；`--dev` 则从 `main` 安装或更新。之后都会跑幂等升级流程；不重弹 TCC、不重做 OAuth、不重下 whisper 模型，已配置过的步骤全部跳过。
+
+`--version` 只影响这一次操作；下一次直接跑 `yulu update` 会回到最新稳定版。
 
 ### 卸载
 
@@ -101,7 +133,7 @@ yulu uninstall
 | 命令 | 作用 |
 |---|---|
 | `yulu setup` | 重新跑安装脚本（fresh install） |
-| `yulu update` | `git pull && setup --upgrade` |
+| `yulu update [--version vX.Y.Z \| --dev]` | 用最新稳定版 release assets、指定版本或开发通道升级 |
 | `yulu start` / `stop` / `restart` | 控制四个 LaunchAgent |
 | `yulu version` | 输出 Yulu 版本、git commit、tag 和 dirty 状态 |
 | `yulu status` | 服务健康、daemon socket、最近录音 |
@@ -277,7 +309,7 @@ Yulu/
 
 | 路径 | 内容 |
 |---|---|
-| `~/.yulu/` | repo clone（别移走，`yulu update` 拉这里） |
+| `~/.yulu/` | 从 release assets 或开发通道安装的运行时 |
 | `~/.config/yulu/config.json` | 用户配置 |
 | `~/.config/yulu/models/ggml-*.bin` | 下载的 whisper.cpp 模型 |
 | `~/.config/yulu/audio_daemon.sock` | daemon 暴露的 Unix socket |

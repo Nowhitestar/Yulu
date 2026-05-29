@@ -1,4 +1,4 @@
-.PHONY: doctor doctor-json test py-compile pytest swift-build dev-install-dry-run sync-skill sync-skill-dry-run
+.PHONY: doctor doctor-json test py-compile pytest swift-build dev-install-dry-run sync-skill sync-skill-dry-run package checksums
 
 PYTHON ?= python3
 SWIFT_BUILD_DIR ?= .ci-build
@@ -58,3 +58,12 @@ sync-skill:
 
 sync-skill-dry-run:
 	$(PYTHON) yulu/scripts/sync_skill.py --dry-run
+
+
+package:
+	@if [ -z "$(TAG)" ]; then echo "Usage: make package TAG=vX.Y.Z"; exit 1; fi
+	bash packaging/scripts/package.sh "$(TAG)"
+
+
+checksums:
+	bash packaging/scripts/checksums.sh dist

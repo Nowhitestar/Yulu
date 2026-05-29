@@ -54,14 +54,30 @@ Compared to Otter / Granola / Fireflies:
 
 ## Install
 
+Latest stable release:
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Nowhitestar/Yulu/main/install.sh | bash
 ```
 
-That's it. The installer:
+Specific version:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Nowhitestar/Yulu/main/install.sh | bash -s -- --version v0.5.0
+```
+
+Dev channel from `main`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Nowhitestar/Yulu/main/install.sh | bash -s -- --dev
+```
+
+By default, the installer downloads the latest stable GitHub Release assets into `~/.yulu`; it does not clone `main`. The `--version` flag pins only that install operation, and `--dev` opts into the development channel.
+
+The installer:
 
 1. Checks macOS 13+, Xcode CLI Tools, Homebrew, Python 3.
-2. Clones Yulu to `~/.yulu/` (a stable path — don't move it around).
+2. Installs the selected Yulu runtime into `~/.yulu/` (a stable path — don't move it around).
 3. Installs Homebrew packages: `sox`, `ffmpeg`, `whisper-cpp`, `terminal-notifier`, `gogcli`, `cloudflared`.
 4. Writes per-user config to `~/.config/yulu/config.json` and creates `~/Movies/Yulu/` for recordings.
 5. Compiles the window scanner; walks you through Accessibility permission.
@@ -83,11 +99,27 @@ echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc && exec zsh
 
 ### Update
 
+Latest stable release:
+
 ```bash
 yulu update
 ```
 
-Pulls the latest code at `~/.yulu/` and re-runs setup in idempotent upgrade mode. Already-granted TCC permissions are not re-prompted; OAuth is not redone; the whisper model isn't re-downloaded.
+Specific version:
+
+```bash
+yulu update --version v0.5.0
+```
+
+Dev channel from `main`:
+
+```bash
+yulu update --dev
+```
+
+Stable and specific-version updates download GitHub Release assets into `~/.yulu/`; `--dev` installs or updates from `main`. Either way, setup re-runs in idempotent upgrade mode. Already-granted TCC permissions are not re-prompted; OAuth is not redone; the whisper model isn't re-downloaded.
+
+`--version` affects only that one operation. The next plain `yulu update` returns to the latest stable release.
 
 ### Uninstall
 
@@ -102,7 +134,7 @@ Stops services, removes LaunchAgents and the CLI, and asks before deleting recor
 | Command | What |
 |---|---|
 | `yulu setup` | Re-run the installer interactively (fresh install) |
-| `yulu update` | `git pull && setup --upgrade` |
+| `yulu update [--version vX.Y.Z \| --dev]` | Update from latest stable release assets, a specific version, or the dev channel |
 | `yulu start` / `stop` / `restart` | Control the four LaunchAgents |
 | `yulu version` | Print Yulu version, git commit, tag, and dirty state |
 | `yulu status` | Service health, audio_daemon socket, recent recordings |
@@ -277,7 +309,7 @@ After installing, the on-disk layout looks like:
 
 | Path | Contents |
 |---|---|
-| `~/.yulu/` | The repo clone (don't move it; `yulu update` pulls here) |
+| `~/.yulu/` | Installed runtime from release assets or the dev channel |
 | `~/.config/yulu/config.json` | User configuration |
 | `~/.config/yulu/models/ggml-*.bin` | Downloaded whisper.cpp models |
 | `~/.config/yulu/audio_daemon.sock` | Unix socket exposed by the daemon |

@@ -8,7 +8,8 @@
 #
 # Subcommands:
 #   yulu setup                Run the interactive installer (fresh install)
-#   yulu update               git pull + setup.sh --upgrade
+#   yulu update [--latest|--version vX.Y.Z|--dev]
+#                             Update via release installer (default: latest stable)
 #   yulu uninstall            Remove launchd, Yulu.app, agent skills, ~/.config/yulu
 #   yulu start                Load all yulu LaunchAgents
 #   yulu stop                 Unload all yulu LaunchAgents
@@ -58,7 +59,9 @@ Usage: yulu <command> [args]
 
 Commands:
   setup            Run the interactive installer (fresh install)
-  update           Pull latest code and re-run setup in upgrade mode
+  update [--latest|--version vX.Y.Z|--dev]
+                    Update from release assets (default: latest stable);
+                    --version installs one specific release, --dev uses main
   uninstall        Remove Yulu from this machine
   start            Load all Yulu LaunchAgents
   stop             Unload all Yulu LaunchAgents
@@ -94,35 +97,13 @@ cmd_setup() {
 }
 
 cmd_update() {
-    info "Updating Yulu"
-    cd "$REPO_DIR"
-    if ! git -C "$REPO_DIR" rev-parse --git-dir &>/dev/null; then
-        err "$REPO_DIR is not a git checkout — can't auto-update."
-        echo "  Reinstall manually:"
-        echo "    rm -rf $REPO_DIR && curl -fsSL https://raw.githubusercontent.com/Nowhitestar/Yulu/main/install.sh | bash"
+    if [[ ! -f "$SCRIPT_DIR/release_installer.py" ]]; then
+        err "release_installer.py not found at $SCRIPT_DIR — your install may be partial."
         exit 1
     fi
-
-    local before_sha
-    before_sha=$(git -C "$REPO_DIR" rev-parse HEAD)
-    git -C "$REPO_DIR" fetch --quiet origin
-    if ! git -C "$REPO_DIR" pull --ff-only origin main; then
-        err "git pull failed (uncommitted changes?). Resolve manually in $REPO_DIR."
-        exit 1
-    fi
-    local after_sha
-    after_sha=$(git -C "$REPO_DIR" rev-parse HEAD)
-
-    if [[ "$before_sha" == "$after_sha" ]]; then
-        ok "Already up to date ($after_sha)"
-        echo
-        info "Re-running setup --upgrade anyway in case any host-side state needs refreshing."
-    else
-        ok "Pulled $before_sha → $after_sha"
-    fi
-
-    echo
-    bash "$SCRIPT_DIR/setup.sh" --upgrade
+    python3 "$SCRIPT_DIR/release_installer.py" update \
+        --install-dir "$REPO_DIR" \
+        "$@"
 }
 
 cmd_uninstall() {
