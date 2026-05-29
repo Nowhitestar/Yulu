@@ -4,6 +4,13 @@ All notable changes to Yulu are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.5.2](https://github.com/Nowhitestar/Yulu/compare/v0.5.1...v0.5.2) (2026-05-29)
+
+
+### Bug Fixes
+
+* stabilize meeting-detector signature; persistent record dialog ([#35](https://github.com/Nowhitestar/Yulu/issues/35)) ([61ed4a9](https://github.com/Nowhitestar/Yulu/commit/61ed4a93891b45e005c107bf3b432d2d6eae4882))
+
 ## [0.5.1](https://github.com/Nowhitestar/Yulu/compare/v0.5.0...v0.5.1) (2026-05-29)
 
 
