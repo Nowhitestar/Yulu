@@ -283,7 +283,60 @@ def detect_meeting(cfg):
     return {"active": False, "windows": windows[:10]}
 
 
+# macOS 14+ 会把动态状态短语塞进浏览器窗口标题末尾（"麦克风正在录音"、
+# "内存用量高 - 811 MB" 等），还带 "- Google Chrome - <profile>" 尾巴。这些
+# 每隔几秒就变，导致 signature 漂移、detector 永远凑不满 stable_sec、
+# `🔔 提醒录制` 不触发。剥掉它们让同一会议产生稳定 signature。
+_SYSTEM_STATUS_PATTERNS = [
+    re.compile(r"\s*[-–—]\s*摄像头正在录像且麦克风正在录音"),
+    re.compile(r"\s*[-–—]\s*麦克风正在录音"),
+    re.compile(r"\s*[-–—]\s*摄像头正在录像"),
+    re.compile(r"\s*[-–—]\s*已分享桌面内容"),
+    re.compile(r"\s*[-–—]\s*正在共享屏幕"),
+    re.compile(r"\s*[-–—]\s*内存用量高\s*[-–—]\s*[\d.,]+\s*(?:KB|MB|GB|TB)", re.IGNORECASE),
+    re.compile(r"\s*[-–—]\s*Audio is playing", re.IGNORECASE),
+    re.compile(r"\s*[-–—]\s*Camera (?:and microphone )?is on", re.IGNORECASE),
+    re.compile(r"\s*[-–—]\s*Microphone is on", re.IGNORECASE),
+    re.compile(r"\s*[-–—]\s*Screen sharing", re.IGNORECASE),
+    re.compile(r"\s*[-–—]\s*High memory usage\s*[-–—]\s*[\d.,]+\s*(?:KB|MB|GB|TB)", re.IGNORECASE),
+]
+
+_BROWSER_TAIL_PATTERN = re.compile(
+    r"\s*[-–—]\s*(?:Google Chrome|Chrome|Arc|Safari|Microsoft Edge|Edge|Firefox|Brave|Vivaldi|Opera)\b.*$",
+    re.IGNORECASE,
+)
+
+# Chrome 不在前台时窗口标题会丢掉 "- Google Chrome"，只剩 "- <profile>"，
+# 例如 "Meet - tcu-oyza-tje - Bill"。这种情况 _BROWSER_TAIL_PATTERN 不命中，
+# 兜底剥一次单段尾巴。只匹配 ASCII profile（Chrome 默认 profile 名都是
+# 英文："Bill" / "Personal" / "Work"），避免误伤中文会议名末段如
+# "腾讯会议 - 周会"。
+_TRAILING_PROFILE_PATTERN = re.compile(
+    r"\s*[-–—]\s*[A-Za-z][A-Za-z0-9_.\-]{0,19}\s*$"
+)
+
+
+def strip_system_status(title):
+    """剥掉 macOS 在标题末尾注入的浏览器状态短语和浏览器/profile 尾巴，
+    保留会议本身的标题。让同一会议在 detector 看来 signature 稳定。"""
+    if not title:
+        return title
+    prev = None
+    # 反复跑直到没有可剥的，应对多状态叠加（如 麦克风 + 内存）
+    while prev != title:
+        prev = title
+        for pat in _SYSTEM_STATUS_PATTERNS:
+            title = pat.sub("", title)
+    # 媒体状态短语剥光后，再砍掉浏览器/profile 尾巴。
+    new_title = _BROWSER_TAIL_PATTERN.sub("", title)
+    if new_title == title:
+        # 浏览器名缺失（窗口失焦），用 profile 兜底再剥一次单段尾巴。
+        new_title = _TRAILING_PROFILE_PATTERN.sub("", title)
+    return new_title.rstrip(" -–—")
+
+
 def normalize_title(title):
+    title = strip_system_status(title)
     title = re.sub(r"\s+", " ", title).strip()
     title = title[:80]
     return title or "检测到会议"
