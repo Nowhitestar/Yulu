@@ -1,5 +1,7 @@
 # Secrets (config is per-user, never commit it)
 config.json
+# GSD project config is tracked (distinct from the per-user runtime config.json above)
+!.planning/config.json
 .env
 .env.*
 client_secret*.json
