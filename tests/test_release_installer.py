@@ -898,3 +898,24 @@ def test_extract_release_zip_rejects_path_traversal(tmp_path):
         extract_release_zip(zip_path, dest)
 
     assert not outside.exists()
+
+
+def test_extract_release_zip_restores_executable_bits(tmp_path):
+    """ZipFile.extractall() drops the Unix mode stored in external_attr, landing
+    every file as 0644 — which makes the Mach-O binaries launchd spawns directly
+    fail to launch. extract_release_zip must restore the recorded mode."""
+    zip_path = tmp_path / "release.zip"
+    dest = tmp_path / "extract"
+    with zipfile.ZipFile(zip_path, "w") as archive:
+        archive.writestr("yulu/VERSION", "0.5.0\n")
+        archive.writestr("yulu/README.md", "doc")  # plain file: must stay non-exec
+        exe = zipfile.ZipInfo("yulu/scripts/run.sh")
+        exe.external_attr = 0o755 << 16
+        archive.writestr(exe, "#!/bin/sh\necho hi\n")
+
+    runtime = extract_release_zip(zip_path, dest)
+
+    run_sh = runtime / "scripts" / "run.sh"
+    assert run_sh.stat().st_mode & 0o111, "executable bit must survive extraction"
+    assert run_sh.stat().st_mode & 0o777 == 0o755
+    assert not (runtime / "README.md").stat().st_mode & 0o111, "plain file must not gain +x"

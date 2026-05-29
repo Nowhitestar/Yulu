@@ -402,6 +402,16 @@ compile_scanner() {
 compile_audio_daemon() {
     header "编译并签名 Yulu.app"
 
+    # Release zips lose Unix exec bits (Python zipfile.extractall drops them), so
+    # the prebuilt .app binaries can land as 0644 and launchd then fails to spawn
+    # them ("Launchd job spawn failed"). Re-assert +x up front so release installs
+    # and `yulu update` self-heal regardless of which release_installer extracted.
+    local _bin
+    for _bin in "$SCRIPT_DIR/Yulu.app/Contents/MacOS/audio_daemon" \
+                "$SCRIPT_DIR/StatusAgent.app/Contents/MacOS/status_agent"; do
+        [[ -f "$_bin" ]] && chmod +x "$_bin"
+    done
+
     local build_script="$SCRIPT_DIR/build_audio_daemon.sh"
     if [[ ! -x "$build_script" ]]; then
         warn "Yulu.app 的 build script 不存在或不可执行，跳过"
@@ -970,7 +980,7 @@ install_agent_skill() {
     else
         prompt "注册 Yulu skill 到 agent？[y/N]"
     fi
-    read -r ans
+    read -r ans || ans=""   # tolerate EOF under non-interactive stdin (set -e)
     if [[ ! "$ans" =~ ^[yY] ]]; then
         info "已跳过 skill 注册。以后想装：npx skills add $REPO_DIR -g -a <agent> -y"
         return
@@ -979,13 +989,13 @@ install_agent_skill() {
     local agents=""
     while [[ -z "$agents" ]]; do
         prompt "目标 agent（空格或逗号分隔，如 claude-code openclaw codex；回车跳过）："
-        read -r agents
+        read -r agents || agents=""   # tolerate EOF under non-interactive stdin (set -e)
         agents="${agents//,/ }"
         # Collapse repeated whitespace.
         agents="$(echo "$agents" | xargs 2>/dev/null || true)"
         if [[ -z "$agents" ]]; then
             prompt "未输入目标 agent，跳过 skill 注册？[Y/n]"
-            read -r skip_ans
+            read -r skip_ans || skip_ans=""   # tolerate EOF under non-interactive stdin (set -e)
             if [[ ! "$skip_ans" =~ ^[nN] ]]; then
                 info "已跳过 skill 注册。"
                 return
