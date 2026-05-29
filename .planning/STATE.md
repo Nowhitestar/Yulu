@@ -69,7 +69,7 @@ None yet.
 
 [Issues that affect future work]
 
-- **External prerequisite (Phase 1):** Apple Developer ID ($99/yr) must be acquired before Phase 1 can ship signed/notarized binaries.
+- **External prerequisite (Phase 1): ✓ RESOLVED 2026-05-29** — Apple Developer ID is available (confirmed by Lewis). Phase 1 can ship signed/notarized binaries; Phase 1 planning should capture the exact "Developer ID Application" signing identity / Team ID and wire it into the build scripts (`YULU_CODESIGN_IDENTITY`).
 - **PROJECT.md constraint decision (Phase 2):** SCK→Core-Audio-taps raises the macOS floor 13→14.4 for the audio path — decide keep-13–14.3-SCK-arm vs raise-floor and record in PROJECT.md before the tap migration lands.
 - **Decision to log (Phase 1):** bundled-vs-host Python — affects signing scope and is the stable interpreter target for Phase 3 detection.
 - **Spike-gated (Phase 6):** WHO calls provisioning (host agent vs `curl|bash`); step registry is BUILD NOW regardless. Exit criteria: kill-at-step-N resume + tampered-asset rejection.

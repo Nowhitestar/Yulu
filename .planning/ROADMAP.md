@@ -35,7 +35,7 @@ Decimal phases appear between their surrounding integers in numeric order.
   5. `platform/base.py` exposes the platform ABCs with `linux/` and `windows/` arms raising `NotImplementedError`
 **Plans**: TBD
 **Research**: standard pattern (skip research-phase) — Apple's signing/notarization workflow and the anti-patterns (`--deep`, `--timestamp=none`) are well-documented; execution, not research.
-**Prerequisite (external)**: Apple Developer ID ($99/yr) must be acquired before this phase begins.
+**Prerequisite (external)**: ✓ Apple Developer ID available (confirmed 2026-05-29). Phase 1 planning should capture the exact "Developer ID Application" signing identity / Team ID and wire it via `YULU_CODESIGN_IDENTITY`.
 **Decision to log**: bundled-vs-host Python must be decided and recorded here (recommend host-provided — sidesteps the hardest notarization case and is the stable interpreter target for Phase 3 detection).
 
 ### Phase 2: Platform-Abstraction Seams
