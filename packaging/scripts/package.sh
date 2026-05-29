@@ -199,6 +199,13 @@ fi
 rm -f "$ZIP_PATH"
 (cd "$STAGE" && find yulu -type f -exec touch -t 202001010000 {} +)
 (cd "$STAGE" && find yulu -type d -exec touch -t 202001010000 {} +)
+# Belt-and-suspenders: re-assert +x on every git-executable file in the staged
+# tree so the packaged zip carries correct modes even if the source checkout's
+# permission bits have drifted. zip stores these in external_attr; chmod only
+# touches the mode, not mtime, so the reproducible timestamps above stay intact.
+while IFS= read -r _exe; do
+    [[ -n "$_exe" && -f "$STAGE/yulu/$_exe" ]] && chmod +x "$STAGE/yulu/$_exe"
+done < <(git -C "$ROOT" ls-files --stage 2>/dev/null | awk '$1=="100755"{print $4}')
 (cd "$STAGE" && find yulu -print | LC_ALL=C sort | zip -X -q "$ZIP_PATH" -@)
 
 echo "$ZIP_PATH"

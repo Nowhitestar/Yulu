@@ -6,6 +6,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+- **Release installs lost Unix executable bits.** `release_installer.py` used `ZipFile.extractall()`, which does not restore the mode stored in each entry's `external_attr` — every file (including the `Yulu.app` / `StatusAgent.app` Mach-O binaries launchd spawns directly) landed as `0644`, so the menu-bar agent and audio daemon failed with "Launchd job spawn failed" on a fresh install. The installer now re-applies each entry's recorded permission bits after extraction.
+- **`setup.sh` aborted under non-interactive stdin.** The optional agent-skill registration `read` returned non-zero at EOF and, under `set -e`, failed the whole run — which triggered an install rollback. The `read`s now tolerate EOF.
+- **`setup.sh` self-heals `.app` exec bits.** `chmod +x` is re-asserted on the bundled binaries before launch, so existing installs recover on `yulu update` even when extracted by an older installer.
+
+### Changed
+- **Packaging hardening.** `package.sh` re-asserts `+x` on git-executable files in the staged tree before zipping, so release archives carry correct modes even if the source checkout's permission bits drift.
+
 ## [0.5.0] - 2026-05-29
 
 ### Added

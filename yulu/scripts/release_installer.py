@@ -333,6 +333,19 @@ def extract_release_zip(zip_path: Path, dest: Path) -> Path:
         for member in archive.namelist():
             _assert_safe_zip_member(dest, member)
         archive.extractall(dest)
+        # ZipFile.extractall() does NOT restore the Unix permission bits stored
+        # in each entry's external_attr — every file lands as 0644. That breaks
+        # the Mach-O binaries launchd must spawn directly (Yulu.app /
+        # StatusAgent.app), which then fail with "Launchd job spawn failed".
+        # Re-apply the recorded mode so the extracted runtime is self-contained.
+        for info in archive.infolist():
+            mode = (info.external_attr >> 16) & 0o7777
+            if not mode:
+                continue
+            target = dest / info.filename
+            if target.is_symlink() or not target.exists():
+                continue
+            os.chmod(target, mode)
     runtime = dest / "yulu"
     if not runtime.exists():
         raise InstallError("Release zip must expand to a top-level yulu/ directory")
