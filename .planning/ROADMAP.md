@@ -33,7 +33,13 @@ Decimal phases appear between their surrounding integers in numeric order.
   3. Each former `setup.sh` concern (audio / models / daemons / capabilities) runs as its own script under `set -uo pipefail`, and any single failing step is visible and re-runnable in isolation
   4. A release asset's integrity verifies via `gh attestation verify` against Yulu's own CI
   5. `platform/base.py` exposes the platform ABCs with `linux/` and `windows/` arms raising `NotImplementedError`
-**Plans**: TBD
+**Plans**: 6 plans (3 waves)
+- [ ] 01-01-PLAN.md — Python platform-seam ABCs (yulu_platform) + stub/shadow tests (SC-5)
+- [ ] 01-02-PLAN.md — lib/common.sh shared helpers + extract deps/models/ui concerns (BUILD-01)
+- [ ] 01-03-PLAN.md — entitlements + bottom-up hardened-runtime signing of both build_*.sh (BUILD-02 sign-side)
+- [ ] 01-04-PLAN.md — extract audio (dev/release fork)/capabilities (no venv)/daemons concerns (BUILD-01, BUILD-03)
+- [ ] 01-05-PLAN.md — thin orchestrator + install.sh Xcode gate + decomposition/no-swiftc tests (BUILD-03)
+- [ ] 01-06-PLAN.md — CI notarize+staple+attest + shellcheck/bash-n gates [checkpoint] (BUILD-02 notarize, BUILD-04)
 **Research**: standard pattern (skip research-phase) — Apple's signing/notarization workflow and the anti-patterns (`--deep`, `--timestamp=none`) are well-documented; execution, not research.
 **Prerequisite (external)**: ✓ Apple Developer ID available (confirmed 2026-05-29). Phase 1 planning should capture the exact "Developer ID Application" signing identity / Team ID and wire it via `YULU_CODESIGN_IDENTITY`.
 **Decision to log**: bundled-vs-host Python must be decided and recorded here (recommend host-provided — sidesteps the hardest notarization case and is the stable interpreter target for Phase 3 detection).
@@ -139,7 +145,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Build Foundation | 0/TBD | Not started | - |
+| 1. Build Foundation | 0/6 | Not started | - |
 | 2. Platform-Abstraction Seams | 0/TBD | Not started | - |
 | 3. Detection Spine | 0/TBD | Not started | - |
 | 4. Settings & Onboarding | 0/TBD | Not started | - |
