@@ -105,17 +105,51 @@ Explicitly excluded. Documented to prevent scope creep. Anti-features from resea
 
 ## Traceability
 
-Populated during roadmap creation — each requirement maps to exactly one phase.
+Each v1 requirement maps to exactly one phase. See `.planning/ROADMAP.md` for phase goals and success criteria.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| _(filled by roadmapper)_ | — | Pending |
+| BUILD-01 | Phase 1 | Pending |
+| BUILD-02 | Phase 1 | Pending |
+| BUILD-03 | Phase 1 | Pending |
+| BUILD-04 | Phase 1 | Pending |
+| PLAT-01 | Phase 2 | Pending |
+| PLAT-02 | Phase 2 | Pending |
+| PLAT-03 | Phase 2 | Pending |
+| PLAT-04 | Phase 2 | Pending |
+| PLAT-05 | Phase 2 | Pending |
+| DETECT-01 | Phase 3 | Pending |
+| DETECT-02 | Phase 3 | Pending |
+| DETECT-03 | Phase 3 | Pending |
+| DETECT-04 | Phase 3 | Pending |
+| DETECT-05 | Phase 3 | Pending |
+| SET-01 | Phase 4 | Pending |
+| SET-02 | Phase 4 | Pending |
+| SET-03 | Phase 4 | Pending |
+| SET-04 | Phase 4 | Pending |
+| TRANS-01 | Phase 4 | Pending |
+| TRANS-02 | Phase 4 | Pending |
+| REUSE-01 | Phase 5 | Pending |
+| REUSE-02 | Phase 5 | Pending |
+| DATA-01 | Phase 5 | Pending |
+| DATA-02 | Phase 5 | Pending |
+| DATA-03 | Phase 5 | Pending |
+| PROV-01 | Phase 6 | Pending |
+| PROV-02 | Phase 6 | Pending |
+| PROV-03 | Phase 6 | Pending |
+| PROV-04 | Phase 6 | Pending |
+| PROV-05 | Phase 6 | Pending |
+| MIG-01 | Phase 7 | Pending |
+| MIG-02 | Phase 7 | Pending |
+| MIG-03 | Phase 7 | Pending |
+| AGENT-01 | Phase 8 | Pending |
+| AGENT-02 | Phase 8 | Pending |
 
 **Coverage:**
-- v1 requirements: 33 total
-- Mapped to phases: _(set by roadmapper)_
-- Unmapped: _(validated by roadmapper — must be 0)_
+- v1 requirements: 35 total (the enumerated checkbox list sums to 35; the original "33 total" prose was a miscount — all 10 categories are fully mapped)
+- Mapped to phases: 35 (BUILD 4 → P1 · PLAT 5 → P2 · DETECT 5 → P3 · SET 4 + TRANS 2 → P4 · REUSE 2 + DATA 3 → P5 · PROV 5 → P6 · MIG 3 → P7 · AGENT 2 → P8)
+- Unmapped: 0 ✓
 
 ---
 *Requirements defined: 2026-05-29*
-*Last updated: 2026-05-29 after initial definition*
+*Last updated: 2026-05-29 after roadmap traceability mapping*
