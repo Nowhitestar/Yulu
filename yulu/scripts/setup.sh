@@ -919,10 +919,12 @@ confirm_calendar_plist
 "$SCRIPT_DIR/setup_ui.sh" "$MODE"
 
 # ── Orchestrator-resident tail (NOT in the D-11 six-concern set) ─────
-# install_yulu_cli / install_agent_skill / run_tests / show_summary stay here;
-# install_agent_skill decoupling is Phase 6 PROV-05 (not changed here).
+# install_yulu_cli / run_tests / show_summary stay here. Agent-skill registration
+# is DECOUPLED from core install (Phase 6 PROV-05, D-05/D-08): it is no longer run
+# here. Install/refresh the skill independently with:  yulu skill install --agent <name>
+# (the install_agent_skill function body is retained above for reference but is
+# intentionally NOT called in the main flow).
 install_yulu_cli
-install_agent_skill
 run_tests
 show_summary
 
