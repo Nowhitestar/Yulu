@@ -28,8 +28,36 @@ log = logging.getLogger(__name__)
 
 SCHEMA_VERSION = "1"
 
-SEARCH_DB_PATH = Path.home() / ".config" / "yulu" / "search.sqlite"
-CORPUS_ROOT = Path.home() / "Movies" / "Yulu"
+
+# Phase 5 DATA-01/DATA-02 — resolve the runtime (locked) and content (configurable)
+# roots through PathResolver instead of bare literals. Both helpers lazily +
+# guardedly import MacOSPathResolver (mirroring capabilities.probes.probe_recording_dir)
+# so this module still imports off-Darwin / before the resolver is available, degrading
+# to the historical literals. Existing-file migration at the old root is Phase 7 (D-08).
+def _resolve_runtime_dir() -> Path:
+    """Locked machine-local runtime root (== ~/.config/yulu); never synced (D-01)."""
+    try:
+        from yulu_platform.macos.path_resolver import MacOSPathResolver
+
+        return MacOSPathResolver().runtime_dir()
+    except Exception:
+        return Path.home() / ".config" / "yulu"
+
+
+def _resolve_data_dir() -> Path:
+    """Configurable content root — follows data_dir() (audio.output_dir)."""
+    try:
+        from yulu_platform.macos.path_resolver import MacOSPathResolver
+
+        return MacOSPathResolver().data_dir()
+    except Exception:
+        return Path.home() / "Movies" / "Yulu"
+
+
+# SEARCH_DB_PATH is RUNTIME (WAL-mode SQLite) — stays machine-local via runtime_dir().
+SEARCH_DB_PATH = _resolve_runtime_dir() / "search.sqlite"
+# CORPUS_ROOT is CONTENT — follows the configurable data_dir().
+CORPUS_ROOT = _resolve_data_dir()
 
 KIND_MEETING_SUMMARY = "meeting_summary"
 KIND_MEETING_TRANSCRIPT = "meeting_transcript"

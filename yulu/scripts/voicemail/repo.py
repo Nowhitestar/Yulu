@@ -23,7 +23,20 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 
-VOICEMAIL_DIR_DEFAULT = Path.home() / "Movies" / "Yulu" / "voicemails"
+# Phase 5 DATA-01 — content root follows data_dir(); existing-file migration is
+# Phase 7 (D-08). Lazy + guarded resolver import (mirrors probes.probe_recording_dir)
+# so this module imports off-Darwin / before the resolver lands, degrading to the
+# historical ~/Movies/Yulu literal.
+def _resolve_data_dir() -> Path:
+    try:
+        from yulu_platform.macos.path_resolver import MacOSPathResolver
+
+        return MacOSPathResolver().data_dir()
+    except Exception:
+        return Path.home() / "Movies" / "Yulu"
+
+
+VOICEMAIL_DIR_DEFAULT = _resolve_data_dir() / "voicemails"
 _STEM_RE = re.compile(r"^voicemail_(\d{8})_(\d{6})$")
 _DEFAULT_SUMMARY_SLUG = "voicemail-todos"
 
