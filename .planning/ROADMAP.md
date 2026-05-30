@@ -188,7 +188,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 - [x] 06-01-PLAN.md — provision/registry.py: Step ABC + StepResult + ScriptStep wrapping the six setup_*.sh 1:1 (PROV-01, D-01/D-06/D-07)
 - [x] 06-02-PLAN.md — provision/state.py: resumable .yulu-install.json ledger (atomic write, kill-at-step-N, preserve installer source) (PROV-04, D-04/D-08)
-- [ ] 06-03-PLAN.md — provision/attest.py: fail-closed gh-auth-ladder gate + checksum floor + tamper rejection [checkpoint] (PROV-03, D-03)
+- [x] 06-03-PLAN.md — provision/attest.py: fail-closed gh-auth-ladder gate + checksum floor + tamper rejection [checkpoint] (PROV-03, D-03)
 
 **Wave 2** *(blocked on 06-01/02/03 — composes all three)*
 
@@ -238,6 +238,6 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8
 | 3. Detection Spine | 3/3 | Complete    | 2026-05-30 |
 | 4. Settings & Onboarding | 4/4 | Complete    | 2026-05-30 |
 | 5. Reuse + Data-Folder Safety | 4/4 | Complete    | 2026-05-30 |
-| 6. Agent-Orchestrated Provisioning | 2/4 | In Progress|  |
+| 6. Agent-Orchestrated Provisioning | 3/4 | In Progress|  |
 | 7. Seamless Auto-Migration | 0/TBD | Not started | - |
 | 8. Multi-Agent Providers | 0/TBD | Not started | - |

@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v0.5
 milestone_name: milestone
 status: executing
-last_updated: "2026-05-30T12:21:51.947Z"
+last_updated: "2026-05-30T12:38:57.230Z"
 last_activity: 2026-05-30
 progress:
   total_phases: 8
   completed_phases: 5
   total_plans: 25
-  completed_plans: 23
+  completed_plans: 24
   percent: 63
 ---
 
@@ -25,11 +25,11 @@ See: .planning/PROJECT.md (updated 2026-05-29)
 ## Current Position
 
 Phase: 6 (Agent-Orchestrated Provisioning + Decoupled Skill Install) — EXECUTING
-Plan: 3 of 4
+Plan: 4 of 4
 Status: Ready to execute
 Last activity: 2026-05-30
 
-Progress: [█████████░] 92%
+Progress: [██████████] 96%
 
 ## Performance Metrics
 
@@ -78,6 +78,7 @@ Progress: [█████████░] 92%
 | Phase 05 P04 | 13min | 3 tasks | 7 files |
 | Phase 06 P01 | 11 | 2 tasks tasks | 3 files files |
 | Phase 06 P02 | 16 | 2 tasks | 4 files |
+| Phase 06 P03 | 8min | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -150,6 +151,7 @@ Recent decisions affecting current work:
 - [Phase ?]: [06-01] uv/uvx DEFERRED (D-07) recorded in module docstring (host python3 locked, stdlib-only); six check() probes degrade to False never raise; models probe treats engine==mlx as done; step_by_name fixed-table dispatch raises on unknown name (T-06-02)
 - [Phase ?]: [06-02] provision/state.py = atomic .yulu-install.json ledger (mkstemp+os.replace mirror of queue_store); mark(running) BEFORE apply / mark(ok) AFTER so a SIGKILL re-runs exactly the killed step and only steps after it; state.py provides primitives only (mark/is_done/resume_order), the walk loop is the Plan-04 driver — no REGISTRY import
 - [Phase ?]: [06-02] mark() preserves _INSTALLER_KEYS (source/version/sha256/installed_at) via setdefault (Pitfall 3 / T-06-07): a dropped source flips lib/common.sh:detect_source into the swiftc dev branch; schema_version:2 ADDED alongside installer schema:1; missing steps OR corrupt ledger => fresh (NOT a migration; D-08)
+- [Phase ?]: [06-03] attest.py gate fail-closed: gh-present-AND-(verify==0)->attestation (NOT command -v gh — unauthed gh exit-4s, cli/cli #11803); gh exit-4 OR absent->SHA-256 checksums.txt floor (fallback, NOT a rejection); non-4 nonzero on authed gh->corroborate-with-checksum-or-REJECT (never silent downgrade, T-06-12); TamperError raised BEFORE any step.apply() (D-03). Reuses release_installer.verify_checksum/parse_checksums (no hand-rolled crypto). CLI skips gate when no --asset (installed-tree integrity established at install)
 
 ### Pending Todos
 
@@ -177,6 +179,6 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-05-30T12:21:13.992Z
+Last session: 2026-05-30T12:37:04.394Z
 Stopped at: Completed 05-02-PLAN.md (plan 2 of 4); resume at plan 3
 Resume file: None
