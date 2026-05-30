@@ -72,3 +72,49 @@
   margin: 16px 12px 4px;
   text-transform: uppercase;
 }
+
+/* Capabilities section — heading row with a manual Refresh, monospace paths,
+   and a tri-state status badge (reuses existing tokens; no new design system). */
+.cap-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+.cap-error {
+  padding: 14px 12px;
+  color: var(--fg-2);
+  font-size: 12.5px;
+}
+.cap-path {
+  font-family: "SF Mono", ui-monospace, monospace;
+  font-size: 11px;
+  color: var(--fg-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.cap-path--empty {
+  color: var(--fg-3);
+}
+.cap-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 10px;
+  font-weight: 500;
+}
+.cap-badge[data-status="usable"] {
+  background: rgba(186, 230, 126, 0.18);
+  color: var(--green);
+}
+.cap-badge[data-status="present-but-unverified"] {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.cap-badge[data-status="absent"] {
+  background: var(--row-hover);
+  color: var(--fg-3);
+}
