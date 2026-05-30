@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v0.5
 milestone_name: milestone
 status: executing
-last_updated: "2026-05-30T11:46:40.432Z"
-last_activity: 2026-05-30 -- Phase 6 planning complete
+last_updated: "2026-05-30T12:03:18.281Z"
+last_activity: 2026-05-30
 progress:
   total_phases: 8
   completed_phases: 5
   total_plans: 25
-  completed_plans: 21
+  completed_plans: 22
   percent: 63
 ---
 
@@ -20,16 +20,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-05-29)
 
 **Core value:** A meeting becomes a clean, searchable note entirely on the user's machine, through the agent they already trust — capture and transcription never depend on the cloud, and Yulu never makes the user reconfigure what their agent already provides.
-**Current focus:** Phase 6 — agent orchestrated provisioning + decoupled skill install
+**Current focus:** Phase 6 — Agent-Orchestrated Provisioning + Decoupled Skill Install
 
 ## Current Position
 
-Phase: 6
-Plan: Not started
+Phase: 6 (Agent-Orchestrated Provisioning + Decoupled Skill Install) — EXECUTING
+Plan: 2 of 4
 Status: Ready to execute
-Last activity: 2026-05-30 -- Phase 6 planning complete
+Last activity: 2026-05-30
 
-Progress: [██████████] 100%
+Progress: [█████████░] 88%
 
 ## Performance Metrics
 
@@ -76,6 +76,7 @@ Progress: [██████████] 100%
 | Phase 05 P02 | 13 | 3 tasks | 5 files |
 | Phase 05 P03 | 11 | 2 tasks | 3 files |
 | Phase 05 P04 | 13min | 3 tasks | 7 files |
+| Phase 06 P01 | 11 | 2 tasks tasks | 3 files files |
 
 ## Accumulated Context
 
@@ -144,6 +145,8 @@ Recent decisions affecting current work:
 - [Phase 05]: [05-04] audio.output_dir -> restart:audiodaemon: the audio daemon caches RECORDING_DIR at start and no plist injects YULU_OUTPUT_DIR, so a data-folder change needs a daemon restart, not SIGHUP/plist re-render (RESEARCH Pitfall 5)
 - [Phase 05]: [05-04] folder picker calls cloud.detect imperatively via trpc.useUtils().system.cloud.detect.fetch(), gated on mode=folder; a detected cloud root shows an inline eviction/corruption warning and commits only on opt-in; detection failure degrades to immediate commit (detect-and-warn, NOT block - D-03)
 - [Phase 05]: [05-04] trpc.useUtils() is now part of InlineEditRow.PathValue render: every test rendering a path-type InlineEditRow must mock useUtils().system.cloud.detect.fetch (extends the 04-02/04-03 consolidated-render mock trap)
+- [Phase ?]: [06-01] provision/ registry WRAPS the six setup_*.sh 1:1 via argv-list subprocess (no shell); StepResult frozen dataclass {name,status in ok|skipped|error,detail}; apply() short-circuits to skipped when read-only check() satisfied (idempotency contract for 06-02 resume); zero bash logic ported (D-01/D-06)
+- [Phase ?]: [06-01] uv/uvx DEFERRED (D-07) recorded in module docstring (host python3 locked, stdlib-only); six check() probes degrade to False never raise; models probe treats engine==mlx as done; step_by_name fixed-table dispatch raises on unknown name (T-06-02)
 
 ### Pending Todos
 
@@ -171,6 +174,6 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-05-30T11:07:28.407Z
+Last session: 2026-05-30T12:02:43.411Z
 Stopped at: Completed 05-02-PLAN.md (plan 2 of 4); resume at plan 3
 Resume file: None
