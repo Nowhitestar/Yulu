@@ -19,7 +19,7 @@ Decompose the 1,342-line monolithic `setup.sh` into per-concern, individually te
 - **D-01:** daemon interpreter = **host system `python3`**. Yulu bundles NO Python runtime.
 - **D-02:** Remove the dedicated `~/.config/yulu/venv-mlx-whisper` creation; the `stt_daemon` runs under the system `python3` launched by its plist (`__PYTHON__`).
 - **D-03:** Fix the dead `mlx_python` config field (read but never used — CONCERNS §4a/§6e): drop it or make the daemon interpreter explicit. Full resolution of the interpreter ambiguity is Phase 3 (DETECT-04); Phase 1 just stops creating the venv and points at system `python3`.
-- **D-04:** Signing/notarization scope therefore **excludes a Python runtime** — this is the whole point of choosing host-provided (sidesteps the hardest notarization case).
+- **D-04 [informational]:** Signing/notarization scope **excludes a Python runtime** — descriptive consequence of D-01 (host python), not a standalone task: the signing plans (01-03 / 01-06) sign only the Swift `.app` bundles, so "no Python in notarization scope" holds by construction.
 - **D-05:** *How* `mlx-whisper` actually lands in the system `python3` (reuse-if-present vs install) is OUT of Phase 1's decision scope — it belongs to the decomposed `capabilities` script's contract + Phase 5 reuse. Phase 1 only fixes the interpreter *target*.
 
 ### Signing & Notarization — *mechanism user chose; recording strategy Claude decided*
