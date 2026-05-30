@@ -1,5 +1,15 @@
-"""Capabilities package — the versioned HostCapabilityReport schema + honest probes."""
+"""Capabilities package — the versioned HostCapabilityReport schema, honest probes, and
+the CapabilityProvider seam (Phase 8 generalizes the provider to Codex/OpenClaw)."""
 
 from .report import HostCapabilityReport, Capability, Provenance, Status
+from .provider import CapabilityProvider, ClaudeCodeProvider, default_providers
 
-__all__ = ["HostCapabilityReport", "Capability", "Provenance", "Status"]
+__all__ = [
+    "HostCapabilityReport",
+    "Capability",
+    "Provenance",
+    "Status",
+    "CapabilityProvider",
+    "ClaudeCodeProvider",
+    "default_providers",
+]
