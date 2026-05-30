@@ -211,14 +211,54 @@ def test_provider_returns_purely_from_the_two_probes(cls, agent_name, cli_key, m
 
 
 def test_provider_module_has_no_new_exec_surface():
-    """Static guard (T-08-04): provider.py issues no subprocess of its own. The two new
-    providers delegate to probe_command / probe_mlx_whisper; the module must not import or
-    call subprocess / os.system / shutil.which (comments excluded)."""
+    """Static guard (T-08-04): provider.py issues no process of its own. The two new providers
+    delegate to probe_command / probe_mlx_whisper; the module must not IMPORT or CALL any
+    exec primitive (subprocess / os.system / shutil.which / Popen).
+
+    Asserted over the parsed AST (imports + call targets), NOT raw text, so a benign prose
+    mention in a docstring (e.g. "issues no new subprocess of its own") is never a false
+    positive — only a real import or call trips the gate."""
+    import ast
+
     src = (ROOT / "yulu" / "scripts" / "capabilities" / "provider.py").read_text(encoding="utf-8")
-    code_lines = [ln for ln in src.splitlines() if not ln.lstrip().startswith("#")]
-    code = "\n".join(code_lines)
-    for forbidden in ("subprocess", "os.system", "shutil.which", "Popen"):
-        assert forbidden not in code, f"new exec surface in provider.py: {forbidden!r}"
+    tree = ast.parse(src)
+
+    forbidden_modules = {"subprocess"}
+    forbidden_callables = {"system", "which", "Popen", "run", "call", "check_output", "check_call", "getoutput"}
+
+    def _dotted(node):
+        # Reconstruct a dotted attribute chain (e.g. subprocess.run -> "subprocess.run").
+        parts = []
+        while isinstance(node, ast.Attribute):
+            parts.append(node.attr)
+            node = node.value
+        if isinstance(node, ast.Name):
+            parts.append(node.id)
+        return ".".join(reversed(parts))
+
+    offenders = []
+    for n in ast.walk(tree):
+        # No `import subprocess` / `from subprocess import ...`.
+        if isinstance(n, ast.Import):
+            for alias in n.names:
+                if alias.name.split(".")[0] in forbidden_modules:
+                    offenders.append(f"import {alias.name}")
+        elif isinstance(n, ast.ImportFrom):
+            if (n.module or "").split(".")[0] in forbidden_modules:
+                offenders.append(f"from {n.module} import ...")
+        # No exec-primitive CALL: subprocess.*(), os.system(), shutil.which(), Popen().
+        elif isinstance(n, ast.Call):
+            dotted = _dotted(n.func)
+            head = dotted.split(".")[0] if dotted else ""
+            tail = dotted.split(".")[-1] if dotted else ""
+            if head in forbidden_modules:
+                offenders.append(f"call {dotted}()")
+            elif dotted in ("os.system", "shutil.which") or (head in ("os", "shutil") and tail in forbidden_callables):
+                offenders.append(f"call {dotted}()")
+            elif tail == "Popen":
+                offenders.append(f"call {dotted}()")
+
+    assert not offenders, f"new exec surface in provider.py: {offenders}"
 
 
 # ── Group B: collision-free three-agent doctor aggregation (SC3, D-03) ──
