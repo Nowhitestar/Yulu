@@ -63,7 +63,7 @@ A meeting said out loud becomes a clean, searchable note **entirely on the user'
 
 ## Constraints
 
-- **Platform**: macOS 13+ today — but architecture must NOT hard-couple to macOS; a cross-platform abstraction layer is a first-class deliverable this milestone.
+- **Platform**: macOS 13+ today — **floor STAYS 13+** (confirmed Phase 2): system audio is dual-arm behind one `if #available` seam — Core Audio process taps on 14.4+ (removes the weekly re-permission nag) / ScreenCaptureKit on 13–14.3 (preserves compatibility). We do NOT raise the floor to 14.4. Architecture must NOT hard-couple to macOS; a cross-platform abstraction layer is a first-class deliverable this milestone.
 - **Privacy**: audio + transcripts stay local by default; any cloud (transcription or sync) is strictly opt-in and user-configured.
 - **Agent-native**: reuse host coding-agent capabilities (`claude`/whisper/models/`gog`); do not duplicate runtimes/models the agent already has.
 - **Compatibility**: existing v0.5.x `~/.yulu` installs must auto-migrate seamlessly on upgrade.
@@ -83,6 +83,7 @@ A meeting said out loud becomes a clean, searchable note **entirely on the user'
 | Transcription is **configurable**: local / cloud-fallback / cloud-priority | Local-first default, but user choice | — Pending |
 | **Multi-agent from v1** (Claude Code + Codex + OpenClaw) via a capability-provider abstraction | Yulu is agent-native, not single-vendor | — Pending |
 | **Decouple skill install** from core install | The agent must be able to install/update the skill independently | — Pending |
+| **macOS floor stays 13+** — dual-arm audio capture (Core Audio taps on 14.4+ / ScreenCaptureKit on 13–14.3 behind one `if #available` seam) | Milestone goal is abstraction, not platform-dropping; raising the floor to 14.4 would strand existing 13–14.3 users. Taps arm kills the 14.4+ re-permission nag; SCK arm keeps compatibility | ✓ Decided 2026-05-30 (Phase 2) |
 
 ## Evolution
 
