@@ -211,6 +211,68 @@ def check_search_index(config_dir: Path) -> dict[str, Any]:
     return report
 
 
+def _host_capabilities(config_dir: Path, runtime_root: Path) -> dict[str, Any]:
+    """Assemble the versioned ``host_capabilities`` section (DETECT-01/03/05).
+
+    Mirrors :func:`check_search_index`'s lazy-import + never-raise contract: it inserts the
+    scripts dir on ``sys.path``, guardedly imports the stdlib-only ``capabilities`` module,
+    and builds a :class:`HostCapabilityReport` from Plan 01's probes plus Plan 02's providers.
+
+    The six DETECT-03 probes are folded in directly:
+    ``claude`` / ``whisper_cli`` (login-shell PATH via ``probe_command``), ``mlx_whisper``
+    (daemon-interpreter importability), ``llm_command`` (RESOLVED + statted, NEVER executed —
+    T-03-01), ``models`` (path-bounded model scan), and ``recording_dir`` (writability via the
+    Phase 2 PathResolver). Then every ``default_providers()`` entry's ``capabilities()`` dict is
+    merged (``agent-config`` provenance) — so the ClaudeCodeProvider's ``claude_cli`` /
+    ``agent_mlx_whisper`` reach the report end-to-end (DETECT-05).
+
+    The WHOLE body is wrapped in try/except so any failure degrades to
+    ``{"error": str(exc), "schema_version": 1, "capabilities": {}}`` — this NEVER raises and
+    never hangs ``yulu doctor`` (the doctor never-raise contract; T-03-07). It is read-only:
+    no subprocess executes the configured ``llm.command`` and nothing mutates runtime state.
+
+    ``runtime_root`` is accepted for symmetry with the other runtime-scoped checks (the probes
+    resolve their own well-known roots today); it lets a future revision scope model/recording
+    discovery to the running install without changing this signature.
+    """
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from capabilities.probes import (
+            probe_command,
+            probe_llm_command,
+            probe_mlx_whisper,
+            probe_recording_dir,
+            scan_models,
+        )
+        from capabilities.provider import default_providers
+        from capabilities.report import HostCapabilityReport
+
+        report = HostCapabilityReport()
+        # The six DETECT-03 capabilities (claude/whisper-cli/mlx-whisper/llm.command/models/dir).
+        report.capabilities["claude"] = probe_command("claude", ("--version",))
+        report.capabilities["whisper_cli"] = probe_command("whisper-cli", ("--version",))
+        report.capabilities["mlx_whisper"] = probe_mlx_whisper()
+        # llm.command is RESOLVED + statted only — the configured command is never executed.
+        report.capabilities["llm_command"] = probe_llm_command(config_dir / "config.json")
+        report.capabilities["models"] = scan_models()
+        report.capabilities["recording_dir"] = probe_recording_dir()
+
+        # Merge every registered provider's agent-config entries (DETECT-05). default_providers()
+        # is the single Phase-8 extension point — a new provider arm flows in here with no edit.
+        for provider in default_providers():
+            try:
+                for name, cap in provider.capabilities().items():
+                    report.capabilities[name] = cap
+            except Exception:
+                # A misbehaving provider must not break the section (never-raise contract).
+                continue
+
+        return report.to_dict()
+    except Exception as exc:
+        # Degrade cleanly — same shape (schema_version + capabilities) plus an error marker.
+        return {"error": str(exc), "schema_version": 1, "capabilities": {}}
+
+
 def check_yulu_ui(
     script_dir: Path,
     config_dir: Path,
@@ -318,7 +380,11 @@ def collect_report(
         "socket": _socket_status(config_dir / "audio_daemon.sock"),
         "stt_daemon": check_stt_daemon(config_dir),
         "search_index": check_search_index(config_dir),
-        "yulu_ui": check_yulu_ui(source_root / "yulu" / "scripts", config_dir),
+        # §5d fix (CONCERNS §5d, D-07): the UI check must look at the RUNTIME install, not the
+        # source checkout — a production install (source_root != runtime_root) now reports the
+        # installed UI dist honestly. When source_root == runtime_root (dev), behavior is unchanged.
+        "yulu_ui": check_yulu_ui(runtime_root / "yulu" / "scripts", config_dir),
+        "host_capabilities": _host_capabilities(config_dir, runtime_root),
         "processes": processes,
         "legacy_processes": legacy_processes,
         "runtime_processes": runtime_processes,
@@ -396,6 +462,14 @@ def print_human(report: dict[str, Any]) -> None:
             print(f"  log: {ui['log_path']} ({size_kb:.1f} KB)")
         if ui.get("error"):
             print(f"  error: {ui['error']}")
+    hc = report.get("host_capabilities", {})
+    if hc:
+        caps = hc.get("capabilities", {}) or {}
+        usable = sum(1 for c in caps.values() if c.get("status") == "usable")
+        print(f"  host capabilities: schema=v{hc.get('schema_version')} "
+              f"usable={usable}/{len(caps)}")
+        if hc.get("error"):
+            print(f"  host_capabilities error: {hc['error']}")
     for check in report["checks"]:
         print(f"{mark(check['ok'])} {check['name']}: {check.get('path') or 'missing'}")
     if report["legacy_processes"]:
