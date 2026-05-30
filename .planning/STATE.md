@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v0.5
 milestone_name: milestone
 status: executing
-last_updated: "2026-05-30T06:04:48.555Z"
+last_updated: "2026-05-30T06:15:15.287Z"
 last_activity: 2026-05-30
 progress:
   total_phases: 8
   completed_phases: 1
   total_plans: 10
-  completed_plans: 7
+  completed_plans: 8
   percent: 13
 ---
 
@@ -25,11 +25,11 @@ See: .planning/PROJECT.md (updated 2026-05-29)
 ## Current Position
 
 Phase: 2 (Platform-Abstraction Seams) — EXECUTING
-Plan: 2 of 4
+Plan: 3 of 4
 Status: Ready to execute
 Last activity: 2026-05-30
 
-Progress: [███████░░░] 70%
+Progress: [████████░░] 80%
 
 ## Performance Metrics
 
@@ -58,6 +58,7 @@ Progress: [███████░░░] 70%
 | Phase 01 P05 | 19 | 2 tasks | 6 files |
 | Phase 01 P06 | 7 | 2 tasks | 4 files |
 | Phase 02 P01 | 6 | 3 tasks | 5 files |
+| Phase 02 P03 | 6 | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -88,6 +89,10 @@ Recent decisions affecting current work:
 - [Phase ?]: [02-01] Signature-scoped D-09 gate (inspect.signature + dataclasses.fields, never module source): base.py DependencyManager docstring names Homebrew/apt as prose, so a whole-module scan would false-positive on brew — scoping to signatures honors D-09 intent AND stays GREEN against the frozen base
 - [Phase ?]: [02-01] MacOSDaemonManager.install renders ServiceSpec → launchd plist via stdlib plistlib.dump; all launchd key names + launchctl verbs confined to the macOS arm methods (D-09); status returns neutral running/stopped/unknown, never raw launchctl codes
 - [Phase ?]: [02-01] PathResolver runtime_dir() kept distinct from config_dir() (equal today) so Phase 5 DATA-02 runtime/content split diverges it without touching callers; this plan adds the seam only — read-side caller routing (plist direct-launch, status_agent path) lands in 02-03
+- [Phase ?]: [02-03] CaptureBackend = protocol: AnyObject hiding SCStreamConfiguration/CATapDescription/TCC behind isReady/lastError/probePermission/startCapture/stopCapture/sources()+CaptureSource (D-09); SCK arm conforms in place as ScreenCaptureKitBackend (D-03), AppDelegate.audioCapture retyped to the protocol with a 02-04 tap-arm insertion point
+- [Phase ?]: [02-03] ScreenCaptureKitBackend conforms to CaptureBackend ONLY (not NSObject/SCStreamOutput as RESEARCH's idealized snippet) — the real AudioCapture delegates frame output to a separate SysAudioOutput, so conformance added without collapsing that split (true wrap-don't-rewrite)
+- [Phase ?]: [02-03] com.yulu.audiodaemon.plist launches __SCRIPT_DIR__/Yulu.app/Contents/MacOS/audio_daemon directly (open -W removed, D-05); LSUIElement+setActivationPolicy(.accessory) already present so no Dock icon returns; record_audio.py socket boundary untouched
+- [Phase ?]: [02-03] status_agent loadRecordingDir() returns String (not URL) to match interpolated vmDir/mvDir + NSString.expandingTildeInPath idiom; reads audio.output_dir, ~/Movies/Yulu survives only as fallback (D-07)
 
 ### Pending Todos
 
@@ -115,6 +120,6 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-05-30T06:04:48.549Z
-Stopped at: Completed 02-01-PLAN.md (plan 1 of 4); resume at plan 2
+Last session: 2026-05-30T06:15:15.281Z
+Stopped at: Completed 02-03-PLAN.md (plan 3 of 4); resume at plan 4
 Resume file: None
