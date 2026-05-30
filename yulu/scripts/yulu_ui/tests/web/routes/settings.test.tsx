@@ -30,8 +30,19 @@ vi.mock("../../../web/src/trpc.js", () => {
     mutateAsync: async () => ({ daemonsNeedingRestart: [], daemonsNeedingSighup: [] }),
     isPending: false,
   });
+  // PathValue (InlineEditRow) calls trpc.useUtils().system.cloud.detect.fetch()
+  // on a folder pick. Without this the consolidated render crashes ([04-02]/[04-03]
+  // recurring trap). Default to not-cloud so the Storage section stays green.
+  const utils = {
+    system: {
+      cloud: {
+        detect: { fetch: async () => ({ is_cloud: false, engine: "", reason: "", dataless: false }) },
+      },
+    },
+  };
   return {
     trpc: {
+      useUtils: () => utils,
       config: {
         get: { useQuery: () => ({ data: cfg, isPending: false }) },
         update: { useMutation: noopMutation },

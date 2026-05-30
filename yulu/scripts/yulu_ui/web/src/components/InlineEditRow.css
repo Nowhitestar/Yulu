@@ -93,3 +93,40 @@
 }
 .path-btn:hover { background: var(--glass-3); color: var(--fg); }
 .path-btn:disabled { opacity: 0.5; cursor: wait; }
+
+/* DATA-03 cloud-root warning: detect-and-warn before accepting a synced folder.
+   Spans the full row so the risk copy is readable; opt-in, never a block. */
+.cloud-warn {
+  flex-basis: 100%;
+  margin-top: 8px;
+  padding: 10px 12px;
+  border-radius: var(--radius-inner);
+  background: var(--glass-2);
+  border: 1px solid var(--accent-soft);
+}
+.cloud-warn-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg);
+  margin-bottom: 6px;
+}
+.cloud-warn-risks {
+  margin: 0 0 6px;
+  padding-left: 18px;
+  font-size: 11px;
+  color: var(--fg-2);
+  line-height: 1.5;
+}
+.cloud-warn-risks li { margin-bottom: 4px; }
+.cloud-warn-note {
+  font-size: 11px;
+  color: var(--fg-3);
+  margin-bottom: 8px;
+}
+.cloud-warn-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.cloud-warn-accept { background: var(--accent); color: white; }
+.cloud-warn-accept:hover { background: var(--accent); opacity: 0.9; color: white; }
