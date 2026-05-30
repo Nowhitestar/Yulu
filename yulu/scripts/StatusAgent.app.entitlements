@@ -2,19 +2,6 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<!--
-	  Least-privilege entitlements for StatusAgent.app (status_agent) under the
-	  hardened runtime. Only the Apple Events automation entitlement is declared.
-
-	  com.apple.security.automation.apple-events is REQUIRED because the status
-	  agent shells osascript / sends Apple Events to open the inbox in Terminal.
-	  Under `codesign --options runtime` the Info.plist NSAppleEventsUsageDescription
-	  string alone is not sufficient — both the usage string and this entitlement
-	  are needed.
-
-	  No microphone, screen-capture, or other entitlement: the status agent only
-	  drives the menu bar and opens Terminal.
-	-->
 	<key>com.apple.security.automation.apple-events</key>
 	<true/>
 </dict>

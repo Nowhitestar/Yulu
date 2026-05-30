@@ -2,19 +2,6 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<!--
-	  Least-privilege entitlements for Yulu.app (audio_daemon) under the
-	  hardened runtime. Only the microphone-capture entitlement is declared.
-
-	  com.apple.security.device.audio-input is REQUIRED for AVFoundation
-	  microphone capture once `codesign --options runtime` is in effect; the
-	  Info.plist NSMicrophoneUsageDescription string alone is not sufficient.
-
-	  Deliberately no display/system-audio capture entitlement: ScreenCaptureKit
-	  is purely TCC-gated and has no code-signing entitlement, so declaring one
-	  here would be wrong (no such entitlement exists) and would widen the
-	  bundle's declared surface.
-	-->
 	<key>com.apple.security.device.audio-input</key>
 	<true/>
 </dict>
