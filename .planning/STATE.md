@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v0.5
 milestone_name: milestone
-status: executing
-last_updated: "2026-05-30T08:57:34.515Z"
+status: verifying
+last_updated: "2026-05-30T09:09:02.506Z"
 last_activity: 2026-05-30
 progress:
   total_phases: 8
-  completed_phases: 3
+  completed_phases: 4
   total_plans: 17
-  completed_plans: 16
-  percent: 38
+  completed_plans: 17
+  percent: 50
 ---
 
 # Project State
@@ -26,10 +26,10 @@ See: .planning/PROJECT.md (updated 2026-05-29)
 
 Phase: 4 (Settings & Onboarding Surface) — EXECUTING
 Plan: 4 of 4
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-05-30
 
-Progress: [█████████░] 94%
+Progress: [██████████] 100%
 
 ## Performance Metrics
 
@@ -69,6 +69,7 @@ Progress: [█████████░] 94%
 | Phase 04 P01 | 13 | 2 tasks | 5 files |
 | Phase 04 P02 | 5 | 2 tasks | 4 files |
 | Phase 04 P03 | 4min | 2 tasks | 4 files |
+| Phase 04 P04 | 3 | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -122,6 +123,8 @@ Recent decisions affecting current work:
 - [Phase 04]: [04-03] TranscriptionSection extended (D-03/D-04/D-05, D-07 extend-not-replace): mode radios (local default/cloud-fallback/cloud-priority -> transcription.mode) + cloud COMMAND via CommandEditor (-> transcription.cloud_command, llm.command trust model, NO key) + detected-model selector (trpc.capabilities.detected_models -> transcription.local_model_path); both new keys map to restart:sttdaemon in RESTART_MAP
 - [Phase 04]: [04-03] Keyless-cloud guardrail (T-04-KEY, HIGH) enforced by TWO tests: source-grep over config.ts (no api_key/token/secret/password identifier) AND a rendered no-key invariant in TranscriptionSection.test.tsx (no type=password, no api-key/token/secret label/placeholder/text). cloud_command is a SEPARATE key from pre-existing transcription.command (classify longest-prefix match, no collision)
 - [Phase 04]: [04-03] Model-selector persists to one deterministic key transcription.local_model_path (list_models returns whisper model FILES .bin/.gguf/.safetensors, matching existing Local-model-path filter=bin row); empty detected_models -> disabled 'no models detected' select. Recurring trap re-hit: adding a new trpc query (detected_models) to a section crashes tests/web/routes/settings.test.tsx until its mock path is added (deviation Rule 1/3)
+- [Phase 04]: [04-04] Onboarding first-run gating uses BOTH localStorage (synchronous short-circuit, no-flash) + config.onboarding_dismissed (durable): dismissed = localFlag || cfg.onboarding_dismissed === true -> renders null (never forced, SET-03)
+- [Phase 04]: [04-04] Onboarding Skip hides immediately via local state then awaits config.update (skip-without-complete); a config-write failure can't re-show it because localStorage already gates it. Mounted self-gating in RootLayout (sibling of Pill), not a route
 
 ### Pending Todos
 
@@ -149,6 +152,6 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-05-30T08:56:27.842Z
+Last session: 2026-05-30T09:08:45.935Z
 Stopped at: Completed 04-03-PLAN.md (plan 3 of 4); resume at plan 4
 Resume file: None

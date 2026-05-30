@@ -16,7 +16,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 1: Build Foundation — Setup Decomposition + Signed/Notarized Binaries** - Decompose `setup.sh`, ship Developer ID signed + notarized pre-built binaries, CI attestations, introduce platform ABCs (completed 2026-05-30)
 - [x] **Phase 2: Platform-Abstraction Seams** - `PathResolver`, `DaemonManager`, `PermissionModel`, `DependencyManager`, and the Swift `CaptureBackend` (SCK→Core-Audio-tap) behind neutral interfaces (completed 2026-05-30)
 - [x] **Phase 3: Host-Capability Detection Spine** - `doctor.py` produces the versioned, tri-state, provenance-labeled `HostCapabilityReport`; `CapabilityProvider` interface + ClaudeCode end-to-end (completed 2026-05-30)
-- [ ] **Phase 4: Settings & Onboarding Surface** - tRPC capability endpoint, provenance-labeled settings, transcription-mode radios, model selector, skippable browser onboarding
+- [x] **Phase 4: Settings & Onboarding Surface** - tRPC capability endpoint, provenance-labeled settings, transcription-mode radios, model selector, skippable browser onboarding (completed 2026-05-30)
 - [ ] **Phase 5: Capability Reuse + Data-Folder / Cloud-Sync Safety** - Detect-first reuse of host whisper/models/`claude`/`gog`; physically separate syncable content from local-only runtime; cloud-root detect-and-warn folder picker
 - [ ] **Phase 6: Agent-Orchestrated Provisioning + Decoupled Skill Install** - Named idempotent step registry, `yulu provision <step>`, attestation gate, resumable state, `yulu skill install --agent`; spike validates WHO calls provisioning
 - [ ] **Phase 7: Seamless Auto-Migration** - `yulu migrate` detect→plan→apply→verify with recording-guard, transactional rollback, and bounded backup lifecycle
@@ -139,7 +139,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 - [x] 04-02-PLAN.md — CapabilitiesSection (provenance label + resolved path + tri-state badge) slotted into settings (SET-01 consumer, SET-02, D-02)
 - [x] 04-03-PLAN.md — extend TranscriptionSection: mode radios local/cloud-fallback/cloud-priority + cloud COMMAND field (not a key) + detected-model selector (TRANS-01, TRANS-02, SET-04, D-03/D-04/D-05)
-- [ ] 04-04-PLAN.md — skippable first-run Onboarding overlay reflecting live permission status, dismissable without completing (SET-03, D-06)
+- [x] 04-04-PLAN.md — skippable first-run Onboarding overlay reflecting live permission status, dismissable without completing (SET-03, D-06)
 **Research**: standard pattern (skip research-phase) — tRPC-over-`doctor.py --json` and the settings UI follow established codebase conventions.
 **UI hint**: yes
 
@@ -216,7 +216,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8
 | 1. Build Foundation | 6/6 | Complete    | 2026-05-30 |
 | 2. Platform-Abstraction Seams | 4/4 | Complete    | 2026-05-30 |
 | 3. Detection Spine | 3/3 | Complete    | 2026-05-30 |
-| 4. Settings & Onboarding | 3/4 | In Progress|  |
+| 4. Settings & Onboarding | 4/4 | Complete   | 2026-05-30 |
 | 5. Reuse + Data-Folder Safety | 0/TBD | Not started | - |
 | 6. Agent-Orchestrated Provisioning | 0/TBD | Not started | - |
 | 7. Seamless Auto-Migration | 0/TBD | Not started | - |
