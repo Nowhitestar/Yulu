@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v0.5
 milestone_name: milestone
-status: executing
-last_updated: "2026-05-30T12:38:57.230Z"
+status: verifying
+last_updated: "2026-05-30T12:58:28.400Z"
 last_activity: 2026-05-30
 progress:
   total_phases: 8
-  completed_phases: 5
+  completed_phases: 6
   total_plans: 25
-  completed_plans: 24
-  percent: 63
+  completed_plans: 25
+  percent: 75
 ---
 
 # Project State
@@ -26,10 +26,10 @@ See: .planning/PROJECT.md (updated 2026-05-29)
 
 Phase: 6 (Agent-Orchestrated Provisioning + Decoupled Skill Install) — EXECUTING
 Plan: 4 of 4
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-05-30
 
-Progress: [██████████] 96%
+Progress: [██████████] 100%
 
 ## Performance Metrics
 
@@ -79,6 +79,7 @@ Progress: [██████████] 96%
 | Phase 06 P01 | 11 | 2 tasks tasks | 3 files files |
 | Phase 06 P02 | 16 | 2 tasks | 4 files |
 | Phase 06 P03 | 8min | 2 tasks | 3 files |
+| Phase 06 P04 | 12min | 2 tasks tasks | 7 files files |
 
 ## Accumulated Context
 
@@ -152,6 +153,9 @@ Recent decisions affecting current work:
 - [Phase ?]: [06-02] provision/state.py = atomic .yulu-install.json ledger (mkstemp+os.replace mirror of queue_store); mark(running) BEFORE apply / mark(ok) AFTER so a SIGKILL re-runs exactly the killed step and only steps after it; state.py provides primitives only (mark/is_done/resume_order), the walk loop is the Plan-04 driver — no REGISTRY import
 - [Phase ?]: [06-02] mark() preserves _INSTALLER_KEYS (source/version/sha256/installed_at) via setdefault (Pitfall 3 / T-06-07): a dropped source flips lib/common.sh:detect_source into the swiftc dev branch; schema_version:2 ADDED alongside installer schema:1; missing steps OR corrupt ledger => fresh (NOT a migration; D-08)
 - [Phase ?]: [06-03] attest.py gate fail-closed: gh-present-AND-(verify==0)->attestation (NOT command -v gh — unauthed gh exit-4s, cli/cli #11803); gh exit-4 OR absent->SHA-256 checksums.txt floor (fallback, NOT a rejection); non-4 nonzero on authed gh->corroborate-with-checksum-or-REJECT (never silent downgrade, T-06-12); TamperError raised BEFORE any step.apply() (D-03). Reuses release_installer.verify_checksum/parse_checksums (no hand-rolled crypto). CLI skips gate when no --asset (installed-tree integrity established at install)
+- [Phase ?]: [06-04] provision/cli.py COMPOSES registry+state+attest (never re-implements gate/ledger): --all runs attest.verify_asset FIRST (fail-closed, abort on TamperError before any apply) when --asset given, SKIPS the gate with no asset (Pitfall 5), then walks REGISTRY skipping ok steps with running-before-apply/result-after marking
+- [Phase ?]: [06-04] yulu dispatcher routes provision)/skill) to provision.cli (one cli.py, two argparse subcommands, mirrors vocab.cli); setup.sh DECOUPLE removes only the install_agent_skill CALL (body retained), static guard greps for a bare call so body coexists without re-coupling (D-05/D-08); install.sh/release_installer untouched (additive, signed-zip PRIMARY D-02)
+- [Phase ?]: [06-04] skill_install lifted from setup.sh:620-676 minus prompts: argv-list npx -y skills add <repo> -g -a <agent> -y, NON-FATAL on npx-absent AND npx-failure (returns 0 both, T-06-19), idempotent on re-invoke (overwrites symlink); REPO_DIR=parents[3] mirrors setup.sh
 
 ### Pending Todos
 
@@ -179,6 +183,6 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-05-30T12:37:04.394Z
+Last session: 2026-05-30T12:57:45.906Z
 Stopped at: Completed 05-02-PLAN.md (plan 2 of 4); resume at plan 3
 Resume file: None

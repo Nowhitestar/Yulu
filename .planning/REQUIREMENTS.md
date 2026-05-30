@@ -59,7 +59,7 @@ Requirements for this milestone. Each maps to exactly one roadmap phase.
 - [x] **PROV-02**: A spike validates agent-orchestrated provisioning (who calls the steps), with partial-failure/resume and tampered-asset rejection as explicit exit criteria
 - [x] **PROV-03**: Provisioning verifies asset integrity (`gh attestation verify`) before execution; the signed-zip path remains a non-negotiable fallback
 - [x] **PROV-04**: Provisioning is resumable via a per-step state file (`.yulu-install.json`)
-- [ ] **PROV-05**: `yulu skill install [--agent]` installs/updates the agent skill independently of core install (idempotent), decoupled from `setup.sh`
+- [x] **PROV-05**: `yulu skill install [--agent]` installs/updates the agent skill independently of core install (idempotent), decoupled from `setup.sh`
 
 ### Seamless Migration (MIG)
 
@@ -138,7 +138,7 @@ Each v1 requirement maps to exactly one phase. See `.planning/ROADMAP.md` for ph
 | PROV-02 | Phase 6 | Complete |
 | PROV-03 | Phase 6 | Complete |
 | PROV-04 | Phase 6 | Complete |
-| PROV-05 | Phase 6 | Pending |
+| PROV-05 | Phase 6 | Complete |
 | MIG-01 | Phase 7 | Pending |
 | MIG-02 | Phase 7 | Pending |
 | MIG-03 | Phase 7 | Pending |

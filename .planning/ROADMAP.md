@@ -18,7 +18,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 3: Host-Capability Detection Spine** - `doctor.py` produces the versioned, tri-state, provenance-labeled `HostCapabilityReport`; `CapabilityProvider` interface + ClaudeCode end-to-end (completed 2026-05-30)
 - [x] **Phase 4: Settings & Onboarding Surface** - tRPC capability endpoint, provenance-labeled settings, transcription-mode radios, model selector, skippable browser onboarding (completed 2026-05-30)
 - [x] **Phase 5: Capability Reuse + Data-Folder / Cloud-Sync Safety** - Detect-first reuse of host whisper/models/`claude`/`gog`; physically separate syncable content from local-only runtime; cloud-root detect-and-warn folder picker (completed 2026-05-30)
-- [ ] **Phase 6: Agent-Orchestrated Provisioning + Decoupled Skill Install** - Named idempotent step registry, `yulu provision <step>`, attestation gate, resumable state, `yulu skill install --agent`; spike validates WHO calls provisioning
+- [x] **Phase 6: Agent-Orchestrated Provisioning + Decoupled Skill Install** - Named idempotent step registry, `yulu provision <step>`, attestation gate, resumable state, `yulu skill install --agent`; spike validates WHO calls provisioning (completed 2026-05-30)
 - [ ] **Phase 7: Seamless Auto-Migration** - `yulu migrate` detect→plan→apply→verify with recording-guard, transactional rollback, and bounded backup lifecycle
 - [ ] **Phase 8: Multi-Agent Providers (Codex + OpenClaw)** - Generalize the proven ClaudeCode provider to complete the multi-agent-from-v1 lock
 
@@ -192,7 +192,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 **Wave 2** *(blocked on 06-01/02/03 — composes all three)*
 
-- [ ] 06-04-PLAN.md — provision/cli.py resume-walk driver + skill.py + yulu dispatcher wiring + setup.sh skill decouple (PROV-01/PROV-05, D-02/D-05/D-08)
+- [x] 06-04-PLAN.md — provision/cli.py resume-walk driver + skill.py + yulu dispatcher wiring + setup.sh skill decouple (PROV-01/PROV-05, D-02/D-05/D-08)
 **Research**: needs deeper per-phase research (the spike IS the research) — `/gsd-plan-phase --research-phase 6`. FEATURES.md flags agent-as-primary-provisioning-UX as LOW confidence; STACK.md flags `uv`/`uvx` as "EVALUATE in spike." Exit criteria are explicit: partial-failure/resume (kill-at-step-N) and tampered-asset rejection, not just the happy path.
 **Spike-gated open question**: WHO calls provisioning — host agent vs `curl|bash`. The step registry itself is BUILD NOW regardless (the decomposed `setup_*.sh` scripts from Phase 1 map 1:1 onto these steps); the spike decides only the *caller*. If the spike fails, the verified signed-zip path stays primary.
 
@@ -238,6 +238,6 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8
 | 3. Detection Spine | 3/3 | Complete    | 2026-05-30 |
 | 4. Settings & Onboarding | 4/4 | Complete    | 2026-05-30 |
 | 5. Reuse + Data-Folder Safety | 4/4 | Complete    | 2026-05-30 |
-| 6. Agent-Orchestrated Provisioning | 3/4 | In Progress|  |
+| 6. Agent-Orchestrated Provisioning | 4/4 | Complete   | 2026-05-30 |
 | 7. Seamless Auto-Migration | 0/TBD | Not started | - |
 | 8. Multi-Agent Providers | 0/TBD | Not started | - |
