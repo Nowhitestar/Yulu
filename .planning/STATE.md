@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v0.5
 milestone_name: milestone
 status: executing
-last_updated: "2026-05-30T06:15:15.287Z"
+last_updated: "2026-05-30T06:27:12.293Z"
 last_activity: 2026-05-30
 progress:
   total_phases: 8
   completed_phases: 1
   total_plans: 10
-  completed_plans: 8
+  completed_plans: 9
   percent: 13
 ---
 
@@ -25,11 +25,11 @@ See: .planning/PROJECT.md (updated 2026-05-29)
 ## Current Position
 
 Phase: 2 (Platform-Abstraction Seams) — EXECUTING
-Plan: 3 of 4
+Plan: 4 of 4
 Status: Ready to execute
 Last activity: 2026-05-30
 
-Progress: [████████░░] 80%
+Progress: [█████████░] 90%
 
 ## Performance Metrics
 
@@ -59,6 +59,7 @@ Progress: [████████░░] 80%
 | Phase 01 P06 | 7 | 2 tasks | 4 files |
 | Phase 02 P01 | 6 | 3 tasks | 5 files |
 | Phase 02 P03 | 6 | 2 tasks | 6 files |
+| Phase 02 P02 | 7min | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -93,6 +94,9 @@ Recent decisions affecting current work:
 - [Phase ?]: [02-03] ScreenCaptureKitBackend conforms to CaptureBackend ONLY (not NSObject/SCStreamOutput as RESEARCH's idealized snippet) — the real AudioCapture delegates frame output to a separate SysAudioOutput, so conformance added without collapsing that split (true wrap-don't-rewrite)
 - [Phase ?]: [02-03] com.yulu.audiodaemon.plist launches __SCRIPT_DIR__/Yulu.app/Contents/MacOS/audio_daemon directly (open -W removed, D-05); LSUIElement+setActivationPolicy(.accessory) already present so no Dock icon returns; record_audio.py socket boundary untouched
 - [Phase ?]: [02-03] status_agent loadRecordingDir() returns String (not URL) to match interpolated vmDir/mvDir + NSString.expandingTildeInPath idiom; reads audio.output_dir, ~/Movies/Yulu survives only as fallback (D-07)
+- [Phase ?]: [02-02] PermissionModel reads capture-permission via the existing audio_daemon.sock {action:status} liveness probe (sysReady/micReady), not a private TCC API
+- [Phase ?]: [02-02] DependencyManager wraps brew but never bootstraps Homebrew (fixed RuntimeError when absent); is_available falls back which() and returns bool, never raises (PLAT-05, D-08)
+- [Phase ?]: [02-02] Read-side routing only: doctor.py/repair_permissions.py consume the seams; dev_install.py/setup.sh install pipeline left intact (coexist, not rip-out)
 
 ### Pending Todos
 
@@ -120,6 +124,6 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-05-30T06:15:15.281Z
+Last session: 2026-05-30T06:26:52.347Z
 Stopped at: Completed 02-03-PLAN.md (plan 3 of 4); resume at plan 4
 Resume file: None

@@ -78,7 +78,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 **Wave 2** *(blocked on 02-01: shares macos/__init__.py + the conformance test)*
 
-- [ ] 02-02-PLAN.md — MacOSPermissionModel + MacOSDependencyManager (Darwin-gated) + route doctor/repair_permissions through the seams (PLAT-05, D-08)
+- [x] 02-02-PLAN.md — MacOSPermissionModel + MacOSDependencyManager (Darwin-gated) + route doctor/repair_permissions through the seams (PLAT-05, D-08)
 
 **Wave 3** *(blocked on 02-03: shares audio_daemon.swift; has the blocking human-verify)*
 
@@ -192,7 +192,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Build Foundation | 6/6 | Complete    | 2026-05-30 |
-| 2. Platform-Abstraction Seams | 2/4 | In Progress|  |
+| 2. Platform-Abstraction Seams | 3/4 | In Progress|  |
 | 3. Detection Spine | 0/TBD | Not started | - |
 | 4. Settings & Onboarding | 0/TBD | Not started | - |
 | 5. Reuse + Data-Folder Safety | 0/TBD | Not started | - |

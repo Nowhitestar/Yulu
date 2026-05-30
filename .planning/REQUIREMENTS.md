@@ -20,7 +20,7 @@ Requirements for this milestone. Each maps to exactly one roadmap phase.
 - [ ] **PLAT-02**: macOS system-audio capture uses Core Audio process taps on 14.4+, with a ScreenCaptureKit fallback arm behind the same seam (`if #available`)
 - [x] **PLAT-03**: A `DaemonManager` interface (`ServiceSpec` + install/load/unload/status) wraps launchd; the audio daemon launches directly (no `open -W` orphan) so `stop()` leaves zero processes
 - [x] **PLAT-04**: A `PathResolver` removes hardcoded `~/Movies/Yulu` / `~/.config/yulu` (including fixing `status_agent.swift` to read `config.json`)
-- [ ] **PLAT-05**: `PermissionModel` and `DependencyManager` interfaces exist with macOS implementations; TCC calls are gated behind a Darwin check
+- [x] **PLAT-05**: `PermissionModel` and `DependencyManager` interfaces exist with macOS implementations; TCC calls are gated behind a Darwin check
 
 ### Capability Detection (DETECT)
 
@@ -117,7 +117,7 @@ Each v1 requirement maps to exactly one phase. See `.planning/ROADMAP.md` for ph
 | PLAT-02 | Phase 2 | Pending |
 | PLAT-03 | Phase 2 | Complete |
 | PLAT-04 | Phase 2 | Complete |
-| PLAT-05 | Phase 2 | Pending |
+| PLAT-05 | Phase 2 | Complete |
 | DETECT-01 | Phase 3 | Pending |
 | DETECT-02 | Phase 3 | Pending |
 | DETECT-03 | Phase 3 | Pending |
