@@ -233,7 +233,12 @@ Decimal phases appear between their surrounding integers in numeric order.
   2. An `OpenClawProvider` implements the same contract end-to-end
   3. With all three agents present, `doctor.py` aggregates each agent's configured stack into one report without re-probing or schema breakage
 
-**Plans**: TBD
+**Plans**: 1 plan (1 wave)
+
+**Wave 1**
+
+- [ ] 08-01-PLAN.md — CodexProvider + OpenClawProvider (mirror ClaudeCodeProvider) + register in default_providers() + namespace mlx-whisper key to avoid the doctor-fold collision + Wave-0 contract/aggregation tests (AGENT-01, AGENT-02, D-01..D-05)
+
 **Research**: standard pattern (skip research-phase) — generalizes the reference implementation proven in Phase 3 against an already-locked interface.
 
 ## Progress
@@ -250,4 +255,4 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8
 | 5. Reuse + Data-Folder Safety | 4/4 | Complete    | 2026-05-30 |
 | 6. Agent-Orchestrated Provisioning | 4/4 | Complete    | 2026-05-30 |
 | 7. Seamless Auto-Migration | 3/3 | Complete    | 2026-05-30 |
-| 8. Multi-Agent Providers | 0/TBD | Not started | - |
+| 8. Multi-Agent Providers | 0/1 | Planned | - |
