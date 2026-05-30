@@ -123,3 +123,38 @@ def test_path_resolver_missing_config_falls_back(tmp_path, monkeypatch):
     monkeypatch.delenv("YULU_OUTPUT_DIR", raising=False)
     # No config.json on disk → default.
     assert resolver.data_dir() == fake_home / "Movies/Yulu"
+
+
+# --- Wave-2 seams: PermissionModel + DependencyManager (PLAT-05 / D-08) ---
+
+_NEUTRAL_STATUS = {"granted", "denied", "unknown"}
+
+
+def test_permission_model_conformance(tmp_path, monkeypatch):
+    """MacOSPermissionModel subclasses the frozen ABC, constructs, and returns
+    only neutral status strings — for known tokens AND an unknown one (never raises)."""
+    from yulu_platform.macos import MacOSPermissionModel
+
+    assert issubclass(MacOSPermissionModel, base.PermissionModel)
+    model = MacOSPermissionModel()  # every abstractmethod implemented → no TypeError
+
+    # Point the socket at a path that does not exist so the probe fails cleanly
+    # (no live daemon required in CI) → must degrade to "unknown", never raise.
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+
+    for token in ("microphone", "system-audio-capture", "bogus-token"):
+        status = model.check(token)
+        assert isinstance(status, str)
+        assert status in _NEUTRAL_STATUS, f"{token!r} → {status!r} not neutral"
+
+
+def test_dependency_manager_conformance():
+    """MacOSDependencyManager subclasses the frozen ABC, constructs, and
+    is_available returns a bool without raising even for an absent formula."""
+    from yulu_platform.macos import MacOSDependencyManager
+
+    assert issubclass(MacOSDependencyManager, base.DependencyManager)
+    mgr = MacOSDependencyManager()  # every abstractmethod implemented → no TypeError
+
+    result = mgr.is_available("definitely-not-a-formula-xyz")
+    assert isinstance(result, bool)  # absent formula → False, never an exception
