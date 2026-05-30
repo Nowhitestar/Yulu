@@ -69,7 +69,20 @@ Decimal phases appear between their surrounding integers in numeric order.
   4. The platform interfaces carry no leaked macOS vocabulary (no plist keys / `SCStreamConfiguration` / TCC scopes in signatures) — a reviewer confirms a systemd arm could implement the same methods
   5. `PermissionModel` and `DependencyManager` expose macOS implementations with TCC calls gated behind a Darwin check
 
-**Plans**: TBD
+**Plans**: 4 plans (3 waves)
+
+**Wave 1** *(parallel: Python seams ∥ Swift capture — no file overlap)*
+
+- [ ] 02-01-PLAN.md — MacOSPathResolver + MacOSDaemonManager + Wave-0 conformance/neutrality scaffold (PLAT-03, PLAT-04, D-04/D-06/D-09)
+- [ ] 02-03-PLAN.md — Swift CaptureBackend protocol + SCK-arm wrap + status_agent config.json fix + direct-launch plist (PLAT-01, PLAT-03, PLAT-04, D-02/D-03/D-05/D-07)
+
+**Wave 2** *(blocked on 02-01: shares macos/__init__.py + the conformance test)*
+
+- [ ] 02-02-PLAN.md — MacOSPermissionModel + MacOSDependencyManager (Darwin-gated) + route doctor/repair_permissions through the seams (PLAT-05, D-08)
+
+**Wave 3** *(blocked on 02-03: shares audio_daemon.swift; has the blocking human-verify)*
+
+- [ ] 02-04-PLAN.md — Core Audio process-tap arm (14.4+) behind if #available + NSAudioCaptureUsageDescription/entitlement/frameworks + VM/clean-machine validation checkpoint (PLAT-02, D-01/D-03/D-05) [checkpoint]
 **Research**: needs deeper per-phase research (Core-Audio-taps migration) — the SCK→tap swap is HIGH-confidence on the API but must be tested on 14.2 and 13.x VMs to verify the version gate + fallback (the dev's machine never reproduces the failure).
 **PROJECT.md update needed**: the SCK→Core-Audio-taps swap raises the effective macOS floor 13→14.4 for the audio path — keeping the 13–14.3 SCK arm vs raising the floor is a **constraint decision** to record in PROJECT.md, not an eng choice.
 **Parallelization**: the Swift `CaptureBackend` seam (ARCH #10) is independent of the Python detection/provisioning stack and can proceed in parallel after Phase 1 — they meet only at the `record_audio.py ↔ CaptureBackend` boundary.
@@ -179,7 +192,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Build Foundation | 6/6 | Complete    | 2026-05-30 |
-| 2. Platform-Abstraction Seams | 0/TBD | Not started | - |
+| 2. Platform-Abstraction Seams | 0/4 | Planned     | - |
 | 3. Detection Spine | 0/TBD | Not started | - |
 | 4. Settings & Onboarding | 0/TBD | Not started | - |
 | 5. Reuse + Data-Folder Safety | 0/TBD | Not started | - |
