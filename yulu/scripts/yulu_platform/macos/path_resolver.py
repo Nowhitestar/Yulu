@@ -60,13 +60,74 @@ class MacOSPathResolver(PathResolver):
 
         return Path.home() / _DEFAULT_DATA_SUBDIR
 
-    def runtime_dir(self) -> Path:
-        """Machine-local runtime root (sockets/PIDs/locks).
+    # ── Phase 5 DATA-02: the runtime/content split (D-01) ──────────────────────
+    #
+    # ``runtime_dir()`` and ``data_dir()`` diverge precisely here, by DESIGN:
+    #
+    #   • runtime_dir()  = LOCKED, machine-local. Sockets (``*.sock``), PIDs/locks
+    #     (``.recording.lock``, ``*.pid``), ``.state.json``, ``schedule.json``, and
+    #     the WAL-mode SQLite DBs (``vocab.sqlite``/``prompts.sqlite``/``search.sqlite``
+    #     + their ``-wal``/``-shm`` sidecars). It is NEVER sourced from user config —
+    #     it does not read ``audio.output_dir`` — so a content-folder choice can never
+    #     relocate runtime state into a synced folder.
+    #   • data_dir()     = CONFIGURABLE content (recordings/transcripts/summaries/
+    #     voicemails). Reads ``audio.output_dir``; this is the only thing the picker moves.
+    #
+    # Why the lock matters (D-01): a sync engine on the runtime dir CORRUPTS, it does
+    # not merely inconvenience. SQLite explicitly does not support a cloud-synced live
+    # DB — WAL checkpoint + hot-journal relocation corrupts the database (sqlite.org/
+    # howtocorrupt.html). And the OS can EVICT (make "dataless") an in-use file mid-write.
+    # NB: the lock is NOT justified by "a socket can't exist in a synced folder" — a Unix
+    # socket CAN bind under iCloud Drive (verified on-device). The harm is corruption and
+    # eviction, never physical impossibility.
 
-        Equals ``config_dir()`` today. Kept as a distinct method so Phase 5
-        (DATA-02 runtime/content split) can diverge it without touching callers.
+    def runtime_dir(self) -> Path:
+        """LOCKED machine-local runtime root — NOT configurable (D-01/D-07).
+
+        Holds runtime/state that must never sync: sockets, PIDs, locks,
+        ``.state.json``, and the WAL-mode SQLite DBs. NEVER sourced from
+        ``audio.output_dir`` — this is exactly where it diverges from
+        ``data_dir()`` (data_dir reads config; runtime_dir never does).
+
+        Stays ``== config_dir()`` (``~/.config/yulu``, or ``$YULU_CONFIG_DIR`` for
+        tests/dev — still machine-local). It is deliberately NOT relocated to
+        ``~/Library/Application Support`` (pure churn against 38+ callers; D-07).
         """
         return self.config_dir()
+
+    def assert_runtime_not_synced(self) -> None:
+        """D-01 hard guard: refuse to run if the runtime dir is under a sync root.
+
+        Since ``runtime_dir()`` is not user-configurable, the only way it can land
+        under a cloud-sync root is a misconfigured ``$YULU_CONFIG_DIR`` (dev/test) —
+        this assertion catches that at startup. Raises ``RuntimeError`` naming the
+        detected reason and framing the refusal as machine-local corruption/eviction
+        safety (NOT "impossible").
+
+        Imports the cloud detector LAZILY inside a guarded ``try`` (mirroring
+        ``capabilities.probes.probe_recording_dir``): ``cloud_detect`` is created by
+        a same-wave sibling plan, so on ``ImportError`` (sibling not landed / off
+        Darwin) this degrades to a no-op rather than raising spuriously.
+        """
+        try:
+            from yulu_platform.macos.cloud_detect import is_cloud_root
+        except Exception:
+            # Detector unavailable (sibling plan not landed / off-platform):
+            # degrade to no-op — never raise spuriously. The guard re-arms once
+            # cloud_detect is importable.
+            return None
+
+        result = is_cloud_root(self.runtime_dir())
+        if getattr(result, "is_cloud", False):
+            raise RuntimeError(
+                f"Yulu runtime dir {self.runtime_dir()} is under a cloud-sync root "
+                f"({result.reason}). Runtime/state — SQLite DBs (+ WAL), Unix sockets, "
+                "locks and PIDs — must be machine-local: a sync engine corrupts a live "
+                "SQLite database (WAL checkpoint + hot-journal relocation) and may evict "
+                "an in-use file mid-write. Refusing to start. Point $YULU_CONFIG_DIR at a "
+                "machine-local path."
+            )
+        return None
 
     def _config_output_dir(self) -> Path | None:
         """Read ``audio.output_dir`` from config.json, or ``None`` to use the default.
