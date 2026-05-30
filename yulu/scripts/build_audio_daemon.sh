@@ -20,7 +20,8 @@ swiftc -o "$BIN" audio_daemon.swift \
   -framework ScreenCaptureKit \
   -framework AVFoundation \
   -framework CoreMedia \
-  -framework CoreAudio
+  -framework CoreAudio \
+  -framework AudioToolbox
 
 mkdir -p "$APP/Contents/MacOS" "$RES_DIR"
 cp "$BIN" "$APP_BIN"
@@ -53,6 +54,10 @@ plist_set_or_add CFBundleIconFile        string  Yulu
 plist_set_or_add CFBundleIconName        string  Yulu
 plist_set_or_add NSMicrophoneUsageDescription   string  "Yulu records microphone audio for meeting notes."
 plist_set_or_add NSScreenCaptureUsageDescription string "Yulu captures system audio for meeting notes."
+# NSAudioCaptureUsageDescription drives the macOS 14.4+ Core Audio process-tap
+# prompt ("System Audio Recording Only" scope). Required for the tap arm
+# (Pitfall 4); the SCK arm uses NSScreenCaptureUsageDescription above.
+plist_set_or_add NSAudioCaptureUsageDescription string "Yulu captures system audio for meeting notes."
 
 # Code-signing identity selection.
 #

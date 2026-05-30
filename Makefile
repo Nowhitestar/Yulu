@@ -33,8 +33,14 @@ swift-build:
 		mkdir -p $(SWIFT_BUILD_DIR); \
 		for f in $(SWIFT_FILES); do \
 			stem="$$(basename "$$f" .swift)"; \
-			echo "swiftc $$f -> $(SWIFT_BUILD_DIR)/$$stem"; \
-			swiftc -o "$(SWIFT_BUILD_DIR)/$$stem" "$$f"; \
+			case "$$stem" in \
+				audio_daemon) \
+					FW="-framework Cocoa -framework ScreenCaptureKit -framework AVFoundation -framework CoreMedia -framework CoreAudio -framework AudioToolbox" ;; \
+				*) \
+					FW="" ;; \
+			esac; \
+			echo "swiftc $$f -> $(SWIFT_BUILD_DIR)/$$stem $$FW"; \
+			swiftc -o "$(SWIFT_BUILD_DIR)/$$stem" "$$f" $$FW; \
 		done; \
 	else \
 		echo "swiftc missing; skipping Swift build"; \

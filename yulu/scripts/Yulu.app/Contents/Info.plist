@@ -22,6 +22,8 @@
 	<string>145</string>
 	<key>LSUIElement</key>
 	<true/>
+	<key>NSAudioCaptureUsageDescription</key>
+	<string>Yulu captures system audio for meeting notes.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Yulu records microphone audio for meeting notes.</string>
 	<key>NSScreenCaptureUsageDescription</key>
