@@ -17,7 +17,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 2: Platform-Abstraction Seams** - `PathResolver`, `DaemonManager`, `PermissionModel`, `DependencyManager`, and the Swift `CaptureBackend` (SCK→Core-Audio-tap) behind neutral interfaces (completed 2026-05-30)
 - [x] **Phase 3: Host-Capability Detection Spine** - `doctor.py` produces the versioned, tri-state, provenance-labeled `HostCapabilityReport`; `CapabilityProvider` interface + ClaudeCode end-to-end (completed 2026-05-30)
 - [x] **Phase 4: Settings & Onboarding Surface** - tRPC capability endpoint, provenance-labeled settings, transcription-mode radios, model selector, skippable browser onboarding (completed 2026-05-30)
-- [ ] **Phase 5: Capability Reuse + Data-Folder / Cloud-Sync Safety** - Detect-first reuse of host whisper/models/`claude`/`gog`; physically separate syncable content from local-only runtime; cloud-root detect-and-warn folder picker
+- [x] **Phase 5: Capability Reuse + Data-Folder / Cloud-Sync Safety** - Detect-first reuse of host whisper/models/`claude`/`gog`; physically separate syncable content from local-only runtime; cloud-root detect-and-warn folder picker (completed 2026-05-30)
 - [ ] **Phase 6: Agent-Orchestrated Provisioning + Decoupled Skill Install** - Named idempotent step registry, `yulu provision <step>`, attestation gate, resumable state, `yulu skill install --agent`; spike validates WHO calls provisioning
 - [ ] **Phase 7: Seamless Auto-Migration** - `yulu migrate` detect→plan→apply→verify with recording-guard, transactional rollback, and bounded backup lifecycle
 - [ ] **Phase 8: Multi-Agent Providers (Codex + OpenClaw)** - Generalize the proven ClaudeCode provider to complete the multi-agent-from-v1 lock
@@ -165,7 +165,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 **Wave 2** *(blocked on 05-01 + 05-03 — D-06 hard sequencing: the cloud picker ships only after the runtime split/lock)*
 
-- [ ] 05-04-PLAN.md — wire the cloud-capable folder picker: audio.output_dir -> restart:audiodaemon propagation + cloud-warn-before-accept in the picker + live-cloud/live-restart human-verify checkpoint (DATA-01, DATA-03)
+- [x] 05-04-PLAN.md — wire the cloud-capable folder picker: audio.output_dir -> restart:audiodaemon propagation + cloud-warn-before-accept in the picker + live-cloud/live-restart human-verify checkpoint (DATA-01, DATA-03)
 **Research**: needs deeper per-phase research (cloud-sync data folder) — iCloud pinning robustness (`com.apple.fileprovider.pinned` vs File Provider API; Sequoia's 10-item Finder cap) and the content/runtime split for `vocab`/`prompts` SQLite need validation against real sync behavior.
 **Hard sequencing (in-phase)**: the content-vs-runtime separation (DATA-02) MUST land before the folder picker is wired to cloud roots (DATA-01/DATA-03) — users must never be able to put SQLite/sockets in a synced folder. Tri-state detection (Phase 3) gates the reuse-vs-install decision here.
 
@@ -227,7 +227,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8
 | 2. Platform-Abstraction Seams | 4/4 | Complete    | 2026-05-30 |
 | 3. Detection Spine | 3/3 | Complete    | 2026-05-30 |
 | 4. Settings & Onboarding | 4/4 | Complete    | 2026-05-30 |
-| 5. Reuse + Data-Folder Safety | 3/4 | In Progress|  |
+| 5. Reuse + Data-Folder Safety | 4/4 | Complete   | 2026-05-30 |
 | 6. Agent-Orchestrated Provisioning | 0/TBD | Not started | - |
 | 7. Seamless Auto-Migration | 0/TBD | Not started | - |
 | 8. Multi-Agent Providers | 0/TBD | Not started | - |

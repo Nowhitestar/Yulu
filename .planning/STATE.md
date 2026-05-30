@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v0.5
 milestone_name: milestone
-status: executing
-last_updated: "2026-05-30T10:47:39.924Z"
+status: verifying
+last_updated: "2026-05-30T11:08:06.314Z"
 last_activity: 2026-05-30
 progress:
   total_phases: 8
-  completed_phases: 4
+  completed_phases: 5
   total_plans: 21
-  completed_plans: 20
-  percent: 50
+  completed_plans: 21
+  percent: 63
 ---
 
 # Project State
@@ -26,10 +26,10 @@ See: .planning/PROJECT.md (updated 2026-05-29)
 
 Phase: 5 (Capability Reuse + Data-Folder / Cloud-Sync Safety) — EXECUTING
 Plan: 4 of 4
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-05-30
 
-Progress: [██████████] 95%
+Progress: [██████████] 100%
 
 ## Performance Metrics
 
@@ -74,6 +74,7 @@ Progress: [██████████] 95%
 | Phase 05 P01 | 17 | 2 tasks | 6 files |
 | Phase 05 P02 | 13 | 3 tasks | 5 files |
 | Phase 05 P03 | 11 | 2 tasks | 3 files |
+| Phase 05 P04 | 13min | 3 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -139,6 +140,9 @@ Recent decisions affecting current work:
 - [Phase ?]: [05-03] cloud_detect eviction uses stat.SF_DATALESS (0x40000000), NEVER os.getxattr (absent on macOS CPython, Pitfall 2); detection is metadata-only (os.stat, no open) — never materializes a dataless file
 - [Phase ?]: [05-03] cloud.detect tRPC route passes the user path as a SEPARATE spawn argv element (sys.argv[1]), never shell-interpolated (T-05-07, verified an adversarial $(touch) path did not execute); degrades to a typed not-cloud default so detection never blocks the folder picker
 - [Phase ?]: [05-03] cloud_detect.py is pure stdlib with NO Darwin gate at import (imports on any OS); CloudRootResult(is_cloud,engine,reason,dataless_sample) is the shared contract for the runtime-lock guard AND the UI route; landing it unskipped 05-01's assert_runtime_not_synced guard tests
+- [Phase 05]: [05-04] audio.output_dir -> restart:audiodaemon: the audio daemon caches RECORDING_DIR at start and no plist injects YULU_OUTPUT_DIR, so a data-folder change needs a daemon restart, not SIGHUP/plist re-render (RESEARCH Pitfall 5)
+- [Phase 05]: [05-04] folder picker calls cloud.detect imperatively via trpc.useUtils().system.cloud.detect.fetch(), gated on mode=folder; a detected cloud root shows an inline eviction/corruption warning and commits only on opt-in; detection failure degrades to immediate commit (detect-and-warn, NOT block - D-03)
+- [Phase 05]: [05-04] trpc.useUtils() is now part of InlineEditRow.PathValue render: every test rendering a path-type InlineEditRow must mock useUtils().system.cloud.detect.fetch (extends the 04-02/04-03 consolidated-render mock trap)
 
 ### Pending Todos
 
@@ -166,6 +170,6 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-05-30T10:46:47.335Z
+Last session: 2026-05-30T11:07:28.407Z
 Stopped at: Completed 05-02-PLAN.md (plan 2 of 4); resume at plan 3
 Resume file: None
