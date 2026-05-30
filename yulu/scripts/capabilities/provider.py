@@ -97,19 +97,95 @@ class ClaudeCodeProvider(CapabilityProvider):
         return caps
 
 
+class CodexProvider(CapabilityProvider):
+    """Provider for the Codex host agent (AGENT-01, D-01).
+
+    A near-verbatim mirror of :class:`ClaudeCodeProvider` against a different agent: it
+    delegates to Plan 01's probes and reframes the host findings to ``agent-config``
+    provenance — issuing no new process of its own, adding no exec surface (D-05, T-03-05):
+
+    - ``codex_cli`` — the host ``codex`` CLI resolved via the login-shell PATH
+      (:func:`probe_command`). Present → an ``agent-config`` entry carrying the resolved path
+      and ``--version`` detail; absent → ``report.absent("codex not on login PATH")``.
+    - ``codex_mlx_whisper`` — the mlx-whisper the agent's interpreter can import
+      (:func:`probe_mlx_whisper`), reframed to ``agent-config`` when present.
+
+    The mlx-whisper key is **namespaced by** :attr:`agent_name` (``codex_mlx_whisper``, NOT the
+    bare ``agent_mlx_whisper`` that :class:`ClaudeCodeProvider` emits) so the doctor fold's
+    last-writer-wins merge (``doctor.py:271-272``) never clobbers one agent's mlx-whisper
+    finding with another's (T-08-01). Codex is a real configured agent (``codex_llm.py`` shim).
+    """
+
+    agent_name = "codex"
+
+    def capabilities(self) -> dict[str, Capability]:
+        caps: dict[str, Capability] = {}
+
+        # Host `codex` CLI — resolve via the login-shell PATH (Plan 01), reframe to agent-config.
+        codex = probe_command("codex", ("--version",))
+        if codex.status is Status.ABSENT:
+            caps["codex_cli"] = report.absent("codex not on login PATH")
+        else:
+            caps["codex_cli"] = _as_agent_config(codex)
+
+        # The agent's whisper view — namespaced key (T-08-01) so three agents never collide.
+        caps["codex_mlx_whisper"] = _as_agent_config(probe_mlx_whisper())
+
+        return caps
+
+
+class OpenClawProvider(CapabilityProvider):
+    """Provider for the OpenClaw host agent (AGENT-02, D-02).
+
+    The same contract end-to-end as :class:`CodexProvider`, against the ``openclaw`` CLI:
+
+    - ``openclaw_cli`` — the host ``openclaw`` CLI resolved via the login-shell PATH
+      (:func:`probe_command`). Present → an ``agent-config`` entry; absent →
+      ``report.absent("openclaw not on login PATH")``.
+    - ``openclaw_mlx_whisper`` — mlx-whisper importability (:func:`probe_mlx_whisper`),
+      reframed to ``agent-config`` when present, under a key **namespaced by** :attr:`agent_name`.
+
+    The probed binary name is ``openclaw``; if the OpenClaw CLI is named differently on a given
+    host, the login-PATH probe simply returns ``absent`` and the entry degrades safely — the
+    CONTRACT (a present CLI relabels to agent-config; an absent one degrades) is what this phase
+    locks, not a live OpenClaw install. Issues no new process of its own (D-05, T-03-05).
+    """
+
+    agent_name = "openclaw"
+
+    def capabilities(self) -> dict[str, Capability]:
+        caps: dict[str, Capability] = {}
+
+        # Host `openclaw` CLI — resolve via the login-shell PATH (Plan 01), reframe to agent-config.
+        openclaw = probe_command("openclaw", ("--version",))
+        if openclaw.status is Status.ABSENT:
+            caps["openclaw_cli"] = report.absent("openclaw not on login PATH")
+        else:
+            caps["openclaw_cli"] = _as_agent_config(openclaw)
+
+        # The agent's whisper view — namespaced key (T-08-01) so three agents never collide.
+        caps["openclaw_mlx_whisper"] = _as_agent_config(probe_mlx_whisper())
+
+        return caps
+
+
 def default_providers() -> list[CapabilityProvider]:
     """The registered providers Yulu queries today — the single Phase-8 extension point.
 
-    Returns ``[ClaudeCodeProvider()]`` now. Adding the host's Codex/OpenClaw arms in Phase 8
-    is *pure addition*: append a new subclass instance here, with no edits to ``report.py``,
-    ``probes.py``, or ``doctor.py``. Plan 03's doctor wiring iterates this list to fold each
-    provider's contributed entries into the ``host_capabilities`` section.
+    Returns all three v1 agents: :class:`ClaudeCodeProvider`, :class:`CodexProvider`, and
+    :class:`OpenClawProvider`. Phase 8 added Codex/OpenClaw as *pure addition* — two new
+    subclass instances appended here, with NO edits to ``report.py``, ``probes.py``, or
+    ``doctor.py``. Plan 03's doctor wiring iterates this list to fold each provider's
+    contributed entries into the ``host_capabilities`` section; the new providers namespace
+    their mlx-whisper key by ``agent_name`` so all three agents aggregate without collision.
     """
-    return [ClaudeCodeProvider()]
+    return [ClaudeCodeProvider(), CodexProvider(), OpenClawProvider()]
 
 
 __all__ = [
     "CapabilityProvider",
     "ClaudeCodeProvider",
+    "CodexProvider",
+    "OpenClawProvider",
     "default_providers",
 ]
