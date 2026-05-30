@@ -493,10 +493,57 @@ class SysAudioOutput: NSObject, SCStreamOutput {
     }
 }
 
-// ─── 屏幕捕获管理器 ───────────────────────────────────
+// ─── 捕获后端协议 (CaptureBackend) ────────────────────
+//
+// PLAT-01 / D-02: the single platform seam for system-audio capture. It hides
+// BOTH the ScreenCaptureKit vocabulary (SCStreamConfiguration / SCContentFilter)
+// and the macOS-14.4 Core Audio process-tap vocabulary (CATapDescription) behind
+// "emit PCM frames + list sources." The frame sink stays exactly as today —
+// each conformer converts its native buffer to interleaved Int16 and pushes it
+// through `recorder.onSysAudio([Int16])`.
+//
+// D-09 (interface neutrality): NO SCStreamConfiguration / SCContentFilter /
+// CATapDescription / TCC token may appear in this protocol or in CaptureSource.
+// The arms own those internally. The 13–14.3 arm is ScreenCaptureKitBackend
+// (below); the 14.4+ ProcessTapBackend arm lands in 02-04 behind `if #available`.
+
+/// A capturable audio source (display / app / system). Neutral by design:
+/// SCK derives these from SCShareableContent displays; the tap arm will derive
+/// them from the process-object list. Hides both representations.
+struct CaptureSource {
+    let id: String
+    let name: String
+    let kind: String   // "display" | "app" | "system"
+}
+
+protocol CaptureBackend: AnyObject {
+    /// True once the backend has verified its capture permission (TCC handshake done).
+    var isReady: Bool { get }
+    /// Last capture error surfaced by the backend ("" when healthy).
+    var lastError: String { get }
+
+    /// Probe permission without leaving the OS recording indicator on (idle daemon).
+    func probePermission()
+
+    /// Begin emitting system-audio PCM to the sink. Blocks until actually capturing.
+    func startCapture()
+    /// Stop capturing; blocks until the OS-level capture indicator clears.
+    func stopCapture()
+
+    /// Capturable sources. SCK: SCShareableContent displays; taps: process list.
+    func sources() -> [CaptureSource]
+}
+
+// ─── 屏幕捕获管理器 (ScreenCaptureKit arm, macOS 13–14.3) ─────
+//
+// D-03: this is the EXISTING capture code, refactored in place to conform to
+// CaptureBackend — NOT rewritten. The planar-Float32 → interleaved-Int16
+// conversion (SysAudioOutput, above) and the start/stop/probe bodies are kept
+// verbatim; only the type name, conformance, and isReady/lastError/sources()
+// bridge are added.
 
 @available(macOS 12.3, *)
-class AudioCapture {
+final class ScreenCaptureKitBackend: CaptureBackend {
     let recorder: AudioRecorder
     let output: SysAudioOutput
     var stream: SCStream?
@@ -504,6 +551,33 @@ class AudioCapture {
     init(recorder: AudioRecorder) {
         self.recorder = recorder
         self.output = SysAudioOutput(recorder)
+    }
+
+    /// CaptureBackend.isReady — bridge the existing process-level SYS_READY global.
+    var isReady: Bool { SYS_READY }
+    /// CaptureBackend.lastError — bridge the existing process-level SYS_ERROR global.
+    var lastError: String { SYS_ERROR }
+
+    /// CaptureBackend.sources() — minimal source list from SCShareableContent
+    /// displays. Returns [] if the shareable content cannot be fetched in time;
+    /// callers treat an empty list as "no enumerable sources right now."
+    func sources() -> [CaptureSource] {
+        var result: [CaptureSource] = []
+        let sem = DispatchSemaphore(value: 0)
+        Task {
+            defer { sem.signal() }
+            if let content = try? await SCShareableContent.current {
+                for d in content.displays {
+                    result.append(CaptureSource(
+                        id: String(d.displayID),
+                        name: "Display \(d.displayID)",
+                        kind: "display"
+                    ))
+                }
+            }
+        }
+        _ = sem.wait(timeout: .now() + 2)
+        return result
     }
 
     /// Called once at daemon startup: open an SCStream just long enough to verify the
@@ -591,7 +665,7 @@ class SocketServer {
     var sock: Int32 = -1
     /// Hooks the daemon uses to start/stop ScreenCaptureKit + microphone capture only
     /// while a recording is in flight, so the macOS menu-bar recording indicator
-    /// reflects reality. AppDelegate wires these to AudioCapture / MicCapture.
+    /// reflects reality. AppDelegate wires these to the CaptureBackend / MicCapture.
     var onRecordingStart: (() -> Void)?
     var onRecordingStop: (() -> Void)?
 
@@ -779,7 +853,7 @@ class SocketServer {
 class AppDelegate: NSObject, NSApplicationDelegate {
     var recorder: AudioRecorder?
     var micCapture: MicCapture?
-    var audioCapture: AudioCapture?
+    var audioCapture: CaptureBackend?   // D-02 seam: SCK arm now, tap arm (02-04) drops in here
     var socketServer: SocketServer?
 
     func applicationDidFinishLaunching(_ n: Notification) {
@@ -804,7 +878,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // briefly, then tears it down) so SYS_READY / MIC_READY are accurate without
         // leaving the macOS menu-bar "recording" indicator on while the daemon is idle.
         if #available(macOS 12.3, *) {
-            let ac = AudioCapture(recorder: rec); audioCapture = ac
+            // ── 02-04 insertion point ──────────────────────────────────────
+            // The 14.4+ Core Audio process-tap arm lands here as:
+            //   if #available(macOS 14.4, *) { ac = ProcessTapBackend(recorder: rec) }
+            //   else                        { ac = ScreenCaptureKitBackend(recorder: rec) }
+            // 02-03 is SCK-only: always select the ScreenCaptureKit arm for now.
+            let ac: CaptureBackend = ScreenCaptureKitBackend(recorder: rec); audioCapture = ac
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) { ac.probePermission() }
         }
         let mic = MicCapture(recorder: rec); micCapture = mic
