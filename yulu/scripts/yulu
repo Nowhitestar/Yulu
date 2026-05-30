@@ -90,6 +90,11 @@ Commands:
   skill install [--agent <name>]
                     Install/refresh the Yulu agent skill (decoupled from install,
                     idempotent), e.g. --agent claude-code --agent codex
+  migrate [--dry-run]
+                    Migrate an existing v0.5.x ~/.yulu install (detect->plan->apply
+                    ->verify), transactional + no data loss; --dry-run prints the
+                    planned corrections without applying anything
+  rollback          Restore the prior state from the most-recent migration backup
   where            Print key paths
   help             Show this help
 
@@ -310,6 +315,8 @@ case "${1:-help}" in
     vocab)     shift; PYTHONPATH="$SCRIPT_DIR:${PYTHONPATH:-}" exec "${PYTHON:-python3}" -m vocab.cli "$@" ;;
     provision) shift; PYTHONPATH="$SCRIPT_DIR:${PYTHONPATH:-}" exec "${PYTHON:-python3}" -m provision.cli provision "$@" ;;
     skill)     shift; PYTHONPATH="$SCRIPT_DIR:${PYTHONPATH:-}" exec "${PYTHON:-python3}" -m provision.cli skill "$@" ;;
+    migrate)   shift; PYTHONPATH="$SCRIPT_DIR:${PYTHONPATH:-}" exec "${PYTHON:-python3}" -m migrate.cli migrate "$@" ;;
+    rollback)  shift; PYTHONPATH="$SCRIPT_DIR:${PYTHONPATH:-}" exec "${PYTHON:-python3}" -m migrate.cli rollback "$@" ;;
     stt)       shift; PYTHONPATH="$SCRIPT_DIR:${PYTHONPATH:-}" exec "${PYTHON:-python3}" -m stt_cli "$@" ;;
     prompts)   shift; PYTHONPATH="$SCRIPT_DIR:${PYTHONPATH:-}" exec "${PYTHON:-python3}" -m prompts.cli "$@" ;;
     summaries) shift; PYTHONPATH="$SCRIPT_DIR:${PYTHONPATH:-}" exec "${PYTHON:-python3}" -m summaries_cli "$@" ;;
