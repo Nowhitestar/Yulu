@@ -60,8 +60,17 @@ def test_module_init_is_idempotent(tmp_path):
 
 
 def test_setup_sh_invokes_search_init():
-    """Static check: setup.sh runs `python3 -m search.indexer init`."""
-    setup_sh = SCRIPTS / "setup.sh"
-    text = setup_sh.read_text(encoding="utf-8")
-    assert "search.indexer init" in text, \
-        "setup.sh missing 'python3 -m search.indexer init' line"
+    """Static check: the setup install pipeline runs `python3 -m search.indexer init`.
+
+    After the Phase-1 setup decomposition (D-12), setup.sh is a thin orchestrator
+    that sequences setup_daemons.sh, which owns the vocab/prompts/search seed steps.
+    So the `search.indexer init` line now lives in setup_daemons.sh and the
+    orchestrator reaches it by invoking that concern script."""
+    daemons_sh = SCRIPTS / "setup_daemons.sh"
+    daemons_text = daemons_sh.read_text(encoding="utf-8")
+    assert "search.indexer init" in daemons_text, \
+        "setup_daemons.sh missing 'python3 -m search.indexer init' line"
+
+    setup_text = (SCRIPTS / "setup.sh").read_text(encoding="utf-8")
+    assert "setup_daemons.sh" in setup_text, \
+        "setup.sh orchestrator must sequence setup_daemons.sh (which runs search.indexer init)"
