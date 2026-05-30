@@ -2,8 +2,8 @@
 gsd_state_version: 1.0
 milestone: v0.5
 milestone_name: milestone
-status: verifying
-last_updated: "2026-05-30T11:08:06.314Z"
+status: ready_to_plan
+last_updated: 2026-05-30T11:19:26.531Z
 last_activity: 2026-05-30
 progress:
   total_phases: 8
@@ -11,6 +11,7 @@ progress:
   total_plans: 21
   completed_plans: 21
   percent: 63
+stopped_at: Phase 5 complete (4/4) — ready to discuss Phase 6
 ---
 
 # Project State
@@ -20,13 +21,13 @@ progress:
 See: .planning/PROJECT.md (updated 2026-05-29)
 
 **Core value:** A meeting becomes a clean, searchable note entirely on the user's machine, through the agent they already trust — capture and transcription never depend on the cloud, and Yulu never makes the user reconfigure what their agent already provides.
-**Current focus:** Phase 5 — Capability Reuse + Data-Folder / Cloud-Sync Safety
+**Current focus:** Phase 6 — agent orchestrated provisioning + decoupled skill install
 
 ## Current Position
 
-Phase: 5 (Capability Reuse + Data-Folder / Cloud-Sync Safety) — EXECUTING
-Plan: 4 of 4
-Status: Phase complete — ready for verification
+Phase: 6
+Plan: Not started
+Status: Ready to plan
 Last activity: 2026-05-30
 
 Progress: [██████████] 100%
@@ -35,7 +36,7 @@ Progress: [██████████] 100%
 
 **Velocity:**
 
-- Total plans completed: 17
+- Total plans completed: 21
 - Average duration: — min
 - Total execution time: 0.0 hours
 
@@ -47,6 +48,7 @@ Progress: [██████████] 100%
 | 2 | 4 | - | - |
 | 3 | 3 | - | - |
 | 4 | 4 | - | - |
+| 5 | 4 | - | - |
 
 **Recent Trend:**
 
