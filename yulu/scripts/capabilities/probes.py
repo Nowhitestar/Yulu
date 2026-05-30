@@ -224,6 +224,47 @@ def scan_models() -> Capability:
         return report.absent(str(exc))
 
 
+def list_models() -> list[dict]:
+    """List individual whisper models under the fixed roots — the SET-04 pick-list source.
+
+    ADDITIVE sibling to :func:`scan_models` (the Phase 3 ``models`` Capability keeps its
+    aggregate ``detail``; this function is NOT a report entry). Where ``scan_models`` returns a
+    single aggregate Capability, ``list_models`` returns one ``{"name", "path", "size"}`` dict
+    PER model file so the Phase 4 UI model selector has real, selectable options.
+
+    Identical discipline to ``scan_models`` (T-04-01): it globs ONLY the fixed, well-known
+    :func:`_model_roots` (no ``..``, no user-supplied path segment) with the same six patterns,
+    and dedupes by ``Path.resolve()`` so a file reachable via overlapping globs (``*.bin`` and
+    ``**/*.bin``) is listed once. Results are sorted by ``name`` for stable output. The whole
+    body is wrapped in try/except returning ``[]`` on any failure (never-raise contract — same
+    as ``scan_models``). stat/size only; model contents are never read.
+    """
+    try:
+        seen: set[str] = set()  # dedupe: overlapping globs (*.bin and **/*.bin) can match the same file
+        out: list[dict] = []
+        for root in _model_roots():
+            if not root.exists():
+                continue
+            for pattern in ("*.bin", "*.gguf", "*.safetensors", "**/*.bin", "**/*.gguf", "**/*.safetensors"):
+                for hit in glob.glob(str(root / pattern), recursive=True):
+                    p = Path(hit)
+                    if not p.is_file():
+                        continue
+                    real = str(p.resolve())
+                    if real in seen:
+                        continue
+                    seen.add(real)
+                    try:
+                        size = p.stat().st_size
+                    except OSError:
+                        size = 0
+                    out.append({"name": p.name, "path": real, "size": size})
+        out.sort(key=lambda m: m["name"])
+        return out
+    except Exception:
+        return []
+
+
 def probe_recording_dir() -> Capability:
     """Recording-dir writability via the Phase 2 PathResolver (D-05).
 
