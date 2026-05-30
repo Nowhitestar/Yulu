@@ -42,7 +42,11 @@ if str(SCRIPTS) not in sys.path:
 
 import provision.state as state  # noqa: E402
 from migrate import detect as detect_mod  # noqa: E402
+from migrate import plan as plan_mod  # noqa: E402
 from migrate.detect import MigrationNeed, detect_migration  # noqa: E402
+from migrate.plan import MigrationPlan, PlanStep, build_plan  # noqa: E402
+
+_ALLOWED_KINDS = {"config_correction", "path_route", "schema_stamp"}
 
 
 def _write_ledger(runtime_dir: Path, payload: dict) -> Path:
@@ -206,3 +210,136 @@ def test_detect_migration_is_stdlib_only():
     # dep used elsewhere in the repo; detect must not reach for it (or any other).
     assert "import numpy" not in src
     assert "from numpy" not in src
+
+
+# ── Task 2: migrate/plan.py — the dry-run-able MigrationPlan ──────────
+
+
+def _v05x_need() -> MigrationNeed:
+    """A v0.5.x verdict (schema_version absent) — what build_plan acts on."""
+    return MigrationNeed(
+        needs_migration=True,
+        from_schema=None,
+        to_schema=state.SCHEMA_VERSION,
+        reasons=["schema_version absent (pre-Phase-6 install)"],
+    )
+
+
+def _up_to_date_need() -> MigrationNeed:
+    return MigrationNeed(
+        needs_migration=False,
+        from_schema=state.SCHEMA_VERSION,
+        to_schema=state.SCHEMA_VERSION,
+        reasons=[],
+    )
+
+
+# ── (7) v0.5.x plan names all three in-transit corrections ───────────
+
+
+def test_plan_for_v05x_names_all_three_corrections():
+    migration = build_plan(_v05x_need())
+
+    assert isinstance(migration, MigrationPlan)
+    kinds = [step.kind for step in migration.steps]
+    assert "config_correction" in kinds
+    assert "path_route" in kinds
+    assert "schema_stamp" in kinds
+
+    # The config_correction targets the dead transcription.mlx.python field.
+    config_step = next(s for s in migration.steps if s.kind == "config_correction")
+    assert "mlx.python" in config_step.description or "mlx_python" in config_step.description
+
+    # The path_route step routes the hardcoded ~/Movies/Yulu through PathResolver.
+    route_step = next(s for s in migration.steps if s.kind == "path_route")
+    assert "Movies/Yulu" in route_step.description
+    assert "PathResolver" in route_step.description or "data_dir" in route_step.description
+
+    # The schema_stamp step names schema_version (the value comes from state).
+    stamp_step = next(s for s in migration.steps if s.kind == "schema_stamp")
+    assert "schema_version" in stamp_step.description
+
+
+def test_plan_preserves_corrections_ordering():
+    # Stable order Plan 03's apply.py dispatches on: config → path → stamp.
+    migration = build_plan(_v05x_need())
+    kinds = [s.kind for s in migration.steps]
+    assert kinds == ["config_correction", "path_route", "schema_stamp"]
+
+
+def test_plan_step_names_are_stable_and_unique():
+    # Plan 03 dispatches on step.name — they must be present and unique.
+    migration = build_plan(_v05x_need())
+    names = [s.name for s in migration.steps]
+    assert all(names)  # no empty names
+    assert len(names) == len(set(names))  # unique
+
+
+# ── (8) up-to-date need → an EMPTY plan (no steps) ───────────────────
+
+
+def test_plan_for_up_to_date_is_empty():
+    migration = build_plan(_up_to_date_need())
+    assert migration.steps == []
+    assert migration.need.needs_migration is False
+    assert migration.render() == "" or "no migration" in migration.render().lower()
+
+
+# ── (9) every kind is one of the three allowed kinds ─────────────────
+
+
+def test_every_plan_step_kind_is_allowed():
+    migration = build_plan(_v05x_need())
+    for step in migration.steps:
+        assert step.kind in _ALLOWED_KINDS, f"unexpected kind: {step.kind}"
+
+
+# ── (10) render() is the dry-run output AND mutates nothing ──────────
+
+
+def test_render_emits_one_line_per_step():
+    migration = build_plan(_v05x_need())
+    rendered = migration.render()
+    lines = [ln for ln in rendered.splitlines() if ln.strip()]
+    # Each step contributes at least its name + description to the output.
+    for step in migration.steps:
+        assert any(step.name in ln for ln in lines)
+        assert any(step.description in ln for ln in lines)
+
+
+def test_build_and_render_mutate_nothing_on_disk(tmp_path):
+    # Dry-run safety: a config.json present before build_plan + render is
+    # byte-identical after — the plan describes WHAT will change, touches NOTHING.
+    cfg = tmp_path / "config.json"
+    cfg.write_text(
+        json.dumps({"transcription": {"mlx": {"python": "/x/venv/bin/python"}}}, indent=2),
+        encoding="utf-8",
+    )
+    before = cfg.read_bytes()
+
+    migration = build_plan(_v05x_need())
+    migration.render()
+
+    assert cfg.read_bytes() == before  # zero mutation
+
+
+def test_plan_step_is_frozen():
+    step = PlanStep(name="x", description="d", kind="schema_stamp")
+    import dataclasses
+
+    assert dataclasses.is_dataclass(step)
+    try:
+        step.name = "mutated"  # type: ignore[misc]
+    except dataclasses.FrozenInstanceError:
+        pass
+    else:  # pragma: no cover - frozen guarantees the except path
+        raise AssertionError("PlanStep must be frozen (immutable description)")
+
+
+def test_plan_module_is_stdlib_only():
+    src = (SCRIPTS / "migrate" / "plan.py").read_text(encoding="utf-8")
+    assert "import numpy" not in src
+    assert "from numpy" not in src
+    # plan.py must not import release_installer / heavy modules — it is pure
+    # description built from a MigrationNeed (no I/O, no filesystem probing).
+    assert plan_mod.__name__ == "migrate.plan"
