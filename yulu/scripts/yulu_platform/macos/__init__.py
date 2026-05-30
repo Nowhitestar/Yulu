@@ -1,1 +1,7 @@
-"""macOS platform arm — implementations land in Phase 2 (D-17). Empty stub for now."""
+"""macOS platform arm — concrete impls of the frozen ``yulu_platform`` seams (D-17)."""
+
+from __future__ import annotations
+
+from .path_resolver import MacOSPathResolver
+
+__all__ = ["MacOSPathResolver"]
