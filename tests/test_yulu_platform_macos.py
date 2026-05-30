@@ -125,6 +125,123 @@ def test_path_resolver_missing_config_falls_back(tmp_path, monkeypatch):
     assert resolver.data_dir() == fake_home / "Movies/Yulu"
 
 
+# --- Phase 5 DATA-02: runtime_dir locked + assert_runtime_not_synced guard ---
+
+
+def test_runtime_dir_locked_ignores_output_dir(tmp_path, monkeypatch):
+    """runtime_dir() is machine-local and NEVER reads audio.output_dir.
+
+    Setting audio.output_dir in config.json moves data_dir() but must NOT move
+    runtime_dir() — the two diverge precisely here (D-01: runtime is locked,
+    content is configurable). runtime_dir() stays == config_dir() (~/.config/yulu).
+    """
+    from yulu_platform.macos import MacOSPathResolver
+
+    resolver = MacOSPathResolver()
+    cfg_home = tmp_path / "cfghome"
+    cfg_dir = cfg_home / ".config/yulu"
+    cfg_dir.mkdir(parents=True)
+    monkeypatch.setenv("YULU_CONFIG_DIR", str(cfg_dir))
+    monkeypatch.delenv("YULU_OUTPUT_DIR", raising=False)
+
+    synced_out = tmp_path / "iCloudish" / "recordings"
+    (cfg_dir / "config.json").write_text(
+        '{"audio": {"output_dir": "%s"}}' % synced_out, encoding="utf-8"
+    )
+
+    # data_dir() follows config; runtime_dir() does NOT.
+    assert resolver.data_dir() == synced_out
+    assert resolver.runtime_dir() == cfg_dir
+    assert resolver.runtime_dir() == resolver.config_dir()
+
+
+def _cloud_detect_or_skip():
+    """Import the sibling Plan-03 detector or skip — cloud_detect.py is a
+    same-wave deliverable (Plan 03); the non-degraded guard path can only be
+    exercised once it lands. The degrade-to-no-op contract (Plan 01's own) is
+    tested separately and does NOT need it."""
+    try:
+        from yulu_platform.macos import cloud_detect
+    except Exception:  # pragma: no cover - sibling plan not landed yet
+        pytest.skip("yulu_platform.macos.cloud_detect (Plan 03) not landed yet")
+    return cloud_detect
+
+
+def test_assert_runtime_not_synced_local_is_noop(tmp_path, monkeypatch):
+    """A normal machine-local runtime dir → assert returns None (no raise)."""
+    from yulu_platform.macos import MacOSPathResolver
+
+    _cloud_detect_or_skip()
+    resolver = MacOSPathResolver()
+    local_runtime = tmp_path / "localcfg"
+    local_runtime.mkdir()
+    monkeypatch.setenv("YULU_CONFIG_DIR", str(local_runtime))
+    # is_cloud_root on a plain tmp path → not cloud → no raise.
+    assert resolver.assert_runtime_not_synced() is None
+
+
+def test_assert_runtime_not_synced_rejects_cloud_root(tmp_path, monkeypatch):
+    """When runtime_dir() resolves under a detected cloud-sync root, the guard
+    raises RuntimeError whose message names the cloud reason (D-01 hard lock)."""
+    from yulu_platform.macos import MacOSPathResolver
+
+    cloud_detect = _cloud_detect_or_skip()
+    resolver = MacOSPathResolver()
+    # Point the runtime dir under a faked iCloud Drive root and force the
+    # detector to classify that prefix as cloud (independent of real on-disk
+    # cloud state, so the test is hermetic on any Mac).
+    fake_home = tmp_path / "home"
+    icloud = fake_home / "Library/Mobile Documents/com~apple~CloudDocs/yulu"
+    icloud.mkdir(parents=True)
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: fake_home))
+    monkeypatch.setenv("YULU_CONFIG_DIR", str(icloud))
+
+    def fake_is_cloud_root(path):
+        return cloud_detect.CloudRootResult(
+            True, "icloud", "iCloud Drive (test)", False
+        )
+
+    monkeypatch.setattr(cloud_detect, "is_cloud_root", fake_is_cloud_root)
+
+    with pytest.raises(RuntimeError) as exc:
+        resolver.assert_runtime_not_synced()
+    msg = str(exc.value)
+    assert "iCloud" in msg or "cloud" in msg.lower()
+    # Framed as machine-local corruption/eviction safety, never "impossible".
+    assert "machine-local" in msg.lower()
+    assert "impossible" not in msg.lower()
+
+
+def test_assert_runtime_not_synced_noop_when_detector_unimportable(
+    tmp_path, monkeypatch
+):
+    """If yulu_platform.macos.cloud_detect cannot be imported (sibling Plan 03
+    not landed / off-platform), the guard degrades to a no-op — never raises.
+
+    Simulated by making the lazy `import cloud_detect` fail via a meta-path
+    finder that blocks just that module.
+    """
+    import builtins
+
+    from yulu_platform.macos import MacOSPathResolver
+
+    resolver = MacOSPathResolver()
+    local_runtime = tmp_path / "cfg"
+    local_runtime.mkdir()
+    monkeypatch.setenv("YULU_CONFIG_DIR", str(local_runtime))
+
+    real_import = builtins.__import__
+
+    def blocked_import(name, *args, **kwargs):
+        if "cloud_detect" in name:
+            raise ImportError("simulated: cloud_detect unavailable")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", blocked_import)
+    # Must not raise even though the detector import fails.
+    assert resolver.assert_runtime_not_synced() is None
+
+
 # --- Wave-2 seams: PermissionModel + DependencyManager (PLAT-05 / D-08) ---
 
 _NEUTRAL_STATUS = {"granted", "denied", "unknown"}
