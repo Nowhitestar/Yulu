@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v0.5
 milestone_name: milestone
 status: executing
-last_updated: "2026-05-30T03:50:27.256Z"
+last_updated: "2026-05-30T04:00:32.710Z"
 last_activity: 2026-05-30
 progress:
   total_phases: 8
   completed_phases: 0
   total_plans: 6
-  completed_plans: 1
-  percent: 17
+  completed_plans: 2
+  percent: 33
 ---
 
 # Project State
@@ -25,11 +25,11 @@ See: .planning/PROJECT.md (updated 2026-05-29)
 ## Current Position
 
 Phase: 1 (Build Foundation — Setup Decomposition + Signed/Notarized Binaries) — EXECUTING
-Plan: 2 of 6
+Plan: 3 of 6
 Status: Ready to execute
 Last activity: 2026-05-30
 
-Progress: [██░░░░░░░░] 17%
+Progress: [███░░░░░░░] 33%
 
 ## Performance Metrics
 
@@ -52,6 +52,7 @@ Progress: [██░░░░░░░░] 17%
 
 *Updated after each plan completion*
 | Phase 1 P01 | 4 | 2 tasks | 7 files |
+| Phase 01 P02 | 5 | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -67,6 +68,7 @@ Recent decisions affecting current work:
 - [Roadmap]: All three DATA requirements assigned to Phase 5 (separation-first) so the folder picker is never wired to cloud roots before content/runtime separation lands.
 - [Phase 1]: [01-01] Package named yulu_platform not platform — a platform/ package on yulu/scripts (stt_daemon plist PYTHONPATH) shadows stdlib platform that numpy imports; guarded permanently by test_yulu_platform_no_shadow.py
 - [Phase 1]: [01-01] Platform-seam ABCs are interface signatures only this phase (D-15); macOS impls Phase 2 (D-17); linux/windows arms raise NotImplementedError until v2 (XPLAT-01)
+- [Phase ?]: [Phase 1]: [01-02] install_plist hoisted to one canonical lib/common.sh copy (§8c, D-14); §6b launch_path globs nvm node dir but never bakes a node -v version literal into the plist __PATH__
 
 ### Pending Todos
 
@@ -93,6 +95,6 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-05-30T03:50:27.250Z
-Stopped at: Completed 01-01-PLAN.md (plan 1 of 6); resume at plan 2
+Last session: 2026-05-30T03:59:58.895Z
+Stopped at: Completed 01-02-PLAN.md (plan 2 of 6); resume at plan 3
 Resume file: None
