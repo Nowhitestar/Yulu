@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v0.5
 milestone_name: milestone
 status: executing
-last_updated: "2026-05-30T04:21:05.107Z"
+last_updated: "2026-05-30T04:43:11.408Z"
 last_activity: 2026-05-30
 progress:
   total_phases: 8
   completed_phases: 0
   total_plans: 6
-  completed_plans: 4
+  completed_plans: 5
   percent: 0
 ---
 
@@ -25,11 +25,11 @@ See: .planning/PROJECT.md (updated 2026-05-29)
 ## Current Position
 
 Phase: 1 (Build Foundation — Setup Decomposition + Signed/Notarized Binaries) — EXECUTING
-Plan: 5 of 6
+Plan: 6 of 6
 Status: Ready to execute
 Last activity: 2026-05-30
 
-Progress: [███████░░░] 67%
+Progress: [████████░░] 83%
 
 ## Performance Metrics
 
@@ -55,6 +55,7 @@ Progress: [███████░░░] 67%
 | Phase 01 P02 | 5 | 2 tasks | 4 files |
 | Phase 01 P03 | 8 | 2 tasks | 6 files |
 | Phase 01 P04 | 7 | 2 tasks | 3 files |
+| Phase 01 P05 | 19 | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -76,6 +77,9 @@ Recent decisions affecting current work:
 - [Phase ?]: [Phase 1]: [01-04] setup_audio.sh dev/release fork (D-13): swiftc (build_audio_daemon.sh + build_status_agent.sh) runs ONLY in the dev branch; release self-heals exec bits on pre-built signed+stapled binaries — zero swiftc/xattr executable lines in the release path (asserted by plan-05 test_release_no_swiftc.py)
 - [Phase ?]: [Phase 1]: [01-04] D-07 anti-pattern removed: xattr -dr com.apple.quarantine gone from setup_audio.sh's release path (stapled notarized bundle passes Gatekeeper unaided), kept only behind the --dev/ad-hoc guard
 - [Phase ?]: [Phase 1]: [01-04] setup_capabilities.sh = D-01/D-02/D-03/D-05: no venv (host python3 via plist __PYTHON__), dead transcription.mlx.python dropped + stale value normalized (mlx.pop('python')), mlx-whisper VERIFIED via find_spec (warn-not-fail), no pip install (install/reuse deferred to Phase 5); setup_daemons.sh uses the hoisted install_plist (§8c)
+- [Phase ?]: [Phase 1]: [01-05] setup.sh is now a thin orchestrator (D-12): resolves MODE once via resolve_install_mode, owns ALL interactive prompts, exports decisions and sequences the six setup_*.sh concerns as subprocess calls passing $MODE — swiftc reached ONLY via setup_audio.sh's dev branch
+- [Phase ?]: [Phase 1]: [01-05] install.sh Xcode pre-flight gated on --dev (BUILD-03): a SINGLE --dev block wraps both xcode-select AND the git check — a release install requires neither Xcode nor git
+- [Phase ?]: [Phase 1]: [01-05] orchestrator configure_transcription_engine writes only the engine+model CHOICE (record_engine_choice); concerns do the work (setup_capabilities verifies mlx, setup_models downloads GGML) — no venv (D-02), no download in orchestrator, no dead mlx.python (D-03); create_config template dropped the stale mlx.python venv path too
 
 ### Pending Todos
 
@@ -103,6 +107,6 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-05-30T04:20:32.540Z
-Stopped at: Completed 01-02-PLAN.md (plan 2 of 6); resume at plan 3
+Last session: 2026-05-30T04:43:11.402Z
+Stopped at: Completed 01-05-PLAN.md (plan 5 of 6); resume at plan 6
 Resume file: None
