@@ -2,6 +2,7 @@ import { router } from "../trpc.js";
 import { recordingsRouter } from "./recordings.js";
 import { searchRouter }     from "./search.js";
 import { configRouter }     from "./config.js";
+import { capabilitiesRouter } from "./capabilities.js";
 import { promptsRouter }    from "./prompts.js";
 import { glossaryRouter }   from "./glossary.js";
 import { daemonsRouter }    from "./daemons.js";
@@ -15,6 +16,7 @@ export const appRouter = router({
   recordings:   recordingsRouter,
   search:       searchRouter,
   config:       configRouter,
+  capabilities: capabilitiesRouter,
   prompts:      promptsRouter,
   glossary:     glossaryRouter,
   daemons:      daemonsRouter,
