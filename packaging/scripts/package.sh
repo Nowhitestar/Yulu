@@ -38,11 +38,19 @@ EXCLUDES=(
     ".env"
     ".env.*"
 )
+# Tracked files that the build legitimately rewrites and may therefore be dirty
+# "after build". The *.entitlements files are committed source (never rewritten
+# by the build) and are deliberately NOT listed here. The _CodeSignature/
+# CodeResources files ARE tracked and ARE regenerated every time codesign signs
+# the bundle (hardened runtime + entitlements), so re-signing makes them dirty —
+# they must be allowlisted alongside the Mach-O binaries and Info.plist.
 ALLOWED_BUILD_OUTPUTS=(
     "yulu/scripts/StatusAgent.app/Contents/Info.plist"
     "yulu/scripts/StatusAgent.app/Contents/MacOS/status_agent"
+    "yulu/scripts/StatusAgent.app/Contents/_CodeSignature/CodeResources"
     "yulu/scripts/Yulu.app/Contents/Info.plist"
     "yulu/scripts/Yulu.app/Contents/MacOS/audio_daemon"
+    "yulu/scripts/Yulu.app/Contents/_CodeSignature/CodeResources"
 )
 
 rsync_exclude_args() {
