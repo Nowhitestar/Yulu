@@ -10,7 +10,7 @@ D-18 is a hard constraint on every signature here: the method contracts carry NO
 leaked macOS vocabulary — no launchd property-list keys, no capture-config struct
 names, no consent-database scope strings. A reviewer must be able to imagine a
 systemd / Linux arm implementing the exact same methods. This is a Python-only
-package (D-17): the Swift capture-backend seam is NOT here.
+package (D-17): the native audio-capture seam is implemented elsewhere, not here.
 """
 
 from __future__ import annotations
