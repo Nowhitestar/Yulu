@@ -58,7 +58,12 @@ const RESTART_MAP: Record<string, string> = {
   "audio.silence_threshold":         "restart:audiodaemon",
   "audio.silence_duration_sec":      "restart:audiodaemon",
   "audio.backend":                   "restart:audiodaemon",
-  "audio.output_dir":                "none",
+  // DATA-01: the audio daemon caches RECORDING_DIR = loadRecordingDir() at process
+  // start (audio_daemon.swift) and NO plist injects YULU_OUTPUT_DIR, so a data-folder
+  // change only takes effect after an audio-daemon RESTART — not a plist re-render and
+  // not a SIGHUP. Only the audio daemon caches output_dir; record_audio.py re-reads it
+  // each invocation and the status_agent menu reflects it (RESEARCH Pitfall 5 / Open-Q3).
+  "audio.output_dir":                "restart:audiodaemon",
   "transcription.mode":              "restart:sttdaemon",
   "transcription.cloud_command":     "restart:sttdaemon",
   "transcription.final_engine":      "restart:sttdaemon",
