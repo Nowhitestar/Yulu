@@ -256,6 +256,13 @@ def _host_capabilities(config_dir: Path, runtime_root: Path) -> dict[str, Any]:
         report.capabilities["llm_command"] = probe_llm_command(config_dir / "config.json")
         report.capabilities["models"] = scan_models()
         report.capabilities["recording_dir"] = probe_recording_dir()
+        # gog (Google Calendar CLI from steipete/tap/gogcli) — a host CLI with host-path
+        # provenance, NOT an agent-config reframe (D-06 provider neutrality stays intact).
+        # Added so REUSE-01's wording (whisper / model / claude / gog) is fully covered and
+        # setup_deps.sh can gate `brew install steipete/tap/gogcli` on its tri-state.
+        # probe_command resolves on the login PATH and reports USABLE even if `--version`
+        # yields nothing (resolution, not version, drives usability).
+        report.capabilities["gog"] = probe_command("gog", ("--version",))
 
         # Merge every registered provider's agent-config entries (DETECT-05). default_providers()
         # is the single Phase-8 extension point — a new provider arm flows in here with no edit.

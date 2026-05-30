@@ -121,7 +121,7 @@ def probe_importable(module: str, python_bin: str | None = None) -> tuple[bool, 
 
 
 def probe_command(binary: str, version_args: tuple[str, ...] = ("--version",)) -> Capability:
-    """Probe a host CLI (``claude`` / ``whisper-cli``) via the login-shell PATH.
+    """Probe a host CLI (``claude`` / ``whisper-cli`` / ``gog``) via the login-shell PATH.
 
     Found → ``Capability(HOST_PATH, USABLE, path, version-or-"")``; not found → ``absent()``.
     Never raises. The version probe DOES run the binary with ``version_args`` (a benign
