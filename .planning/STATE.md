@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v0.5
 milestone_name: milestone
 status: executing
-last_updated: "2026-05-30T07:22:15.232Z"
+last_updated: "2026-05-30T07:31:26.400Z"
 last_activity: 2026-05-30
 progress:
   total_phases: 8
   completed_phases: 2
   total_plans: 13
-  completed_plans: 11
+  completed_plans: 12
   percent: 25
 ---
 
@@ -25,11 +25,11 @@ See: .planning/PROJECT.md (updated 2026-05-29)
 ## Current Position
 
 Phase: 3 (Host-Capability Detection Spine) — EXECUTING
-Plan: 2 of 3
+Plan: 3 of 3
 Status: Ready to execute
 Last activity: 2026-05-30
 
-Progress: [█████████░] 85%
+Progress: [█████████░] 92%
 
 ## Performance Metrics
 
@@ -63,6 +63,7 @@ Progress: [█████████░] 85%
 | Phase 02 P02 | 7min | 2 tasks | 6 files |
 | Phase 02 P04 | 11 | 2 tasks | 6 files |
 | Phase 03 P01 | 9 | 2 tasks | 5 files |
+| Phase 03 P02 | 5 | 1 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -103,6 +104,8 @@ Recent decisions affecting current work:
 - [Phase ?]: [03-01] daemon_python() mirrors lib/common.sh:124 (PYTHON_BIN -> which python3 -> /usr/bin/python3) — the ONE canonical interpreter resolves DETECT-04; mlx-whisper importability is probed against IT via subprocess
 - [Phase ?]: [03-01] HostCapabilityReport.to_dict() coerces Provenance/Status enums to .value strings — JSON carries human strings, structurally never a bool for status (D-01/D-08)
 - [Phase ?]: [03-01] probe_llm_command RESOLVES+STATS the configured command head only, never executes it (T-03-01); scan_models globs 3 fixed roots + dedupes by resolved path (T-03-03); every probe degrades to absent() not raise
+- [Phase 03]: [03-02] CapabilityProvider ABC = agent_name (plain class attribute) + a SINGLE @abstractmethod capabilities() -> dict[str, Capability]; agent-neutral by contract so a second provider (Phase 8 Codex/OpenClaw) is pure addition — a subclass + one default_providers() entry, zero edits to report.py/probes.py/doctor.py (D-06)
+- [Phase 03]: [03-02] _as_agent_config relabels host-path->agent-config provenance ONLY for present/usable entries; an ABSENT probe finding passes through unchanged — a provider reframes a tool as 'the host coding agent provides this' only when it actually exists, never disguises a missing tool. ClaudeCodeProvider delegates to Plan 01 probes (no new exec surface, T-03-05); keys: claude_cli + agent_mlx_whisper
 
 ### Pending Todos
 
@@ -130,6 +133,6 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-05-30T07:21:50.928Z
-Stopped at: Completed 02-03-PLAN.md (plan 3 of 4); resume at plan 4
+Last session: 2026-05-30T07:31:26.393Z
+Stopped at: Completed 03-02-PLAN.md (plan 2 of 3); resume at plan 3
 Resume file: None

@@ -108,7 +108,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 **Wave 2** *(blocked on 03-01: imports report.py types + probes)*
 
-- [ ] 03-02-PLAN.md — capabilities/provider.py CapabilityProvider ABC + ClaudeCodeProvider end-to-end (agent-config provenance; designed so Phase 8 Codex/OpenClaw is pure addition) (DETECT-05, D-06)
+- [x] 03-02-PLAN.md — capabilities/provider.py CapabilityProvider ABC + ClaudeCodeProvider end-to-end (agent-config provenance; designed so Phase 8 Codex/OpenClaw is pure addition) (DETECT-05, D-06)
 
 **Wave 3** *(blocked on 03-01 + 03-02: assembles the report in doctor)*
 
@@ -205,7 +205,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8
 |-------|----------------|--------|-----------|
 | 1. Build Foundation | 6/6 | Complete    | 2026-05-30 |
 | 2. Platform-Abstraction Seams | 4/4 | Complete    | 2026-05-30 |
-| 3. Detection Spine | 1/3 | In Progress|  |
+| 3. Detection Spine | 2/3 | In Progress|  |
 | 4. Settings & Onboarding | 0/TBD | Not started | - |
 | 5. Reuse + Data-Folder Safety | 0/TBD | Not started | - |
 | 6. Agent-Orchestrated Provisioning | 0/TBD | Not started | - |

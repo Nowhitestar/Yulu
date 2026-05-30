@@ -28,7 +28,7 @@ Requirements for this milestone. Each maps to exactly one roadmap phase.
 - [x] **DETECT-02**: Capability probes resolve binaries via the login-shell PATH (not bare `shutil.which`) and Python importability via the daemon's own interpreter
 - [x] **DETECT-03**: `doctor` probes `claude` CLI, `whisper-cli`, `mlx-whisper` importability, configured `llm.command` validity, model paths/sizes, and recording-dir writability
 - [x] **DETECT-04**: The `mlx_python` interpreter ambiguity is resolved so "usable" reflects what the daemon can actually import
-- [ ] **DETECT-05**: A `CapabilityProvider` interface exists with a ClaudeCode implementation working end-to-end
+- [x] **DETECT-05**: A `CapabilityProvider` interface exists with a ClaudeCode implementation working end-to-end
 
 ### Settings & Onboarding (SET)
 
@@ -122,7 +122,7 @@ Each v1 requirement maps to exactly one phase. See `.planning/ROADMAP.md` for ph
 | DETECT-02 | Phase 3 | Complete |
 | DETECT-03 | Phase 3 | Complete |
 | DETECT-04 | Phase 3 | Complete |
-| DETECT-05 | Phase 3 | Pending |
+| DETECT-05 | Phase 3 | Complete |
 | SET-01 | Phase 4 | Pending |
 | SET-02 | Phase 4 | Pending |
 | SET-03 | Phase 4 | Pending |
