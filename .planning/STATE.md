@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v0.5
 milestone_name: milestone
-status: executing
-last_updated: "2026-05-30T14:23:51.779Z"
+status: verifying
+last_updated: "2026-05-30T14:50:58.672Z"
 last_activity: 2026-05-30
 progress:
   total_phases: 8
-  completed_phases: 6
+  completed_phases: 7
   total_plans: 28
-  completed_plans: 27
-  percent: 75
+  completed_plans: 28
+  percent: 88
 ---
 
 # Project State
@@ -26,10 +26,10 @@ See: .planning/PROJECT.md (updated 2026-05-29)
 
 Phase: 7 (Seamless Auto-Migration) — EXECUTING
 Plan: 3 of 3
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-05-30
 
-Progress: [██████████] 96%
+Progress: [██████████] 100%
 
 ## Performance Metrics
 
@@ -83,6 +83,7 @@ Progress: [██████████] 96%
 | Phase 06 P04 | 12min | 2 tasks tasks | 7 files files |
 | Phase 07 P01 | 14 | 2 tasks | 4 files |
 | Phase 07 P02 | 10min | 2 tasks tasks | 2 files files |
+| Phase 07 P03 | 38 | 3 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -165,6 +166,9 @@ Recent decisions affecting current work:
 - [Phase ?]: [07-02] recording_active defers to the audio_daemon status socket as the SOLE recording arbiter (reuses record_audio.socket_send, lazy/guarded); None/absent/keyless status degrades to False so a down daemon never blocks migration (T-07-06)
 - [Phase ?]: [07-02] stop_daemons_guarded raises RecordingActive BEFORE any manager.unload while recording (assert unload count 0, T-07-04); .recording.lock only enriches the refusal, stale lock can't trigger it (T-07-07)
 - [Phase ?]: [07-02] guard.py has ZERO forced-kill (pkill) and ZERO fcntl/flock — two static source-grep gates in the test assert it; literal tokens scrubbed from docstrings since the gate scans the whole file; MacOSDaemonManager() instantiated directly (no get_platform accessor)
+- [Phase ?]: [07-03] Transactional apply: move tree to a pristine backup, copytree a working copy back, correct in place — backup stays pristine for rollback while the live tree keeps data + ledger source (no data loss, Pitfall-3 source preserved)
+- [Phase ?]: [07-03] Prune-on-verified-success-only: finalize prunes ONLY when result.ok AND verify passes; a failed/refused verify KEEPS the backup and points at yulu rollback (CONCERNS §2e bounded-lifecycle fix)
+- [Phase ?]: [07-03] verify is resolve-not-execute + fail-closed: doctor._host_capabilities called directly with Path args (no shell); a verify that cannot run is unhealthy so the backup is retained
 
 ### Pending Todos
 
@@ -192,6 +196,6 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-05-30T14:22:59.522Z
+Last session: 2026-05-30T14:50:49.094Z
 Stopped at: Completed 07-01-PLAN.md (plan 1 of 3); resume at plan 2 (07-02 recording-guard / 07-03 apply blocked on 01+02)
 Resume file: None
