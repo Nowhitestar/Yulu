@@ -62,7 +62,7 @@ sync-skill-dry-run:
 
 package:
 	@if [ -z "$(TAG)" ]; then echo "Usage: make package TAG=vX.Y.Z"; exit 1; fi
-	bash packaging/scripts/package.sh "$(TAG)"
+	bash packaging/scripts/package.sh "$(TAG)" $(PACKAGE_ARGS)
 
 
 checksums:
