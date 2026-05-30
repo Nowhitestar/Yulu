@@ -14,7 +14,7 @@ This is a brownfield re-architecture milestone. Yulu already ships (8 launchd da
 Decimal phases appear between their surrounding integers in numeric order.
 
 - [x] **Phase 1: Build Foundation — Setup Decomposition + Signed/Notarized Binaries** - Decompose `setup.sh`, ship Developer ID signed + notarized pre-built binaries, CI attestations, introduce platform ABCs (completed 2026-05-30)
-- [ ] **Phase 2: Platform-Abstraction Seams** - `PathResolver`, `DaemonManager`, `PermissionModel`, `DependencyManager`, and the Swift `CaptureBackend` (SCK→Core-Audio-tap) behind neutral interfaces
+- [x] **Phase 2: Platform-Abstraction Seams** - `PathResolver`, `DaemonManager`, `PermissionModel`, `DependencyManager`, and the Swift `CaptureBackend` (SCK→Core-Audio-tap) behind neutral interfaces (completed 2026-05-30)
 - [ ] **Phase 3: Host-Capability Detection Spine** - `doctor.py` produces the versioned, tri-state, provenance-labeled `HostCapabilityReport`; `CapabilityProvider` interface + ClaudeCode end-to-end
 - [ ] **Phase 4: Settings & Onboarding Surface** - tRPC capability endpoint, provenance-labeled settings, transcription-mode radios, model selector, skippable browser onboarding
 - [ ] **Phase 5: Capability Reuse + Data-Folder / Cloud-Sync Safety** - Detect-first reuse of host whisper/models/`claude`/`gog`; physically separate syncable content from local-only runtime; cloud-root detect-and-warn folder picker
@@ -82,7 +82,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 **Wave 3** *(blocked on 02-03: shares audio_daemon.swift; has the blocking human-verify)*
 
-- [ ] 02-04-PLAN.md — Core Audio process-tap arm (14.4+) behind if #available + NSAudioCaptureUsageDescription/entitlement/frameworks + VM/clean-machine validation checkpoint (PLAT-02, D-01/D-03/D-05) [checkpoint]
+- [x] 02-04-PLAN.md — Core Audio process-tap arm (14.4+) behind if #available + NSAudioCaptureUsageDescription/entitlement/frameworks + VM/clean-machine validation checkpoint (PLAT-02, D-01/D-03/D-05) [checkpoint]
 **Research**: needs deeper per-phase research (Core-Audio-taps migration) — the SCK→tap swap is HIGH-confidence on the API but must be tested on 14.2 and 13.x VMs to verify the version gate + fallback (the dev's machine never reproduces the failure).
 **PROJECT.md update needed**: the SCK→Core-Audio-taps swap raises the effective macOS floor 13→14.4 for the audio path — keeping the 13–14.3 SCK arm vs raising the floor is a **constraint decision** to record in PROJECT.md, not an eng choice.
 **Parallelization**: the Swift `CaptureBackend` seam (ARCH #10) is independent of the Python detection/provisioning stack and can proceed in parallel after Phase 1 — they meet only at the `record_audio.py ↔ CaptureBackend` boundary.
@@ -192,7 +192,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Build Foundation | 6/6 | Complete    | 2026-05-30 |
-| 2. Platform-Abstraction Seams | 3/4 | In Progress|  |
+| 2. Platform-Abstraction Seams | 4/4 | Complete   | 2026-05-30 |
 | 3. Detection Spine | 0/TBD | Not started | - |
 | 4. Settings & Onboarding | 0/TBD | Not started | - |
 | 5. Reuse + Data-Folder Safety | 0/TBD | Not started | - |

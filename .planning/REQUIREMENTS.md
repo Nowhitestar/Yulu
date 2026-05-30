@@ -17,7 +17,7 @@ Requirements for this milestone. Each maps to exactly one roadmap phase.
 ### Platform Abstraction (PLAT)
 
 - [x] **PLAT-01**: A `CaptureBackend` interface ("PCM frames + source list") exists with a macOS implementation; Linux/Windows are `NotImplementedError` stubs
-- [ ] **PLAT-02**: macOS system-audio capture uses Core Audio process taps on 14.4+, with a ScreenCaptureKit fallback arm behind the same seam (`if #available`)
+- [x] **PLAT-02**: macOS system-audio capture uses Core Audio process taps on 14.4+, with a ScreenCaptureKit fallback arm behind the same seam (`if #available`)
 - [x] **PLAT-03**: A `DaemonManager` interface (`ServiceSpec` + install/load/unload/status) wraps launchd; the audio daemon launches directly (no `open -W` orphan) so `stop()` leaves zero processes
 - [x] **PLAT-04**: A `PathResolver` removes hardcoded `~/Movies/Yulu` / `~/.config/yulu` (including fixing `status_agent.swift` to read `config.json`)
 - [x] **PLAT-05**: `PermissionModel` and `DependencyManager` interfaces exist with macOS implementations; TCC calls are gated behind a Darwin check
@@ -114,7 +114,7 @@ Each v1 requirement maps to exactly one phase. See `.planning/ROADMAP.md` for ph
 | BUILD-03 | Phase 1 | Complete |
 | BUILD-04 | Phase 1 | Complete |
 | PLAT-01 | Phase 2 | Complete |
-| PLAT-02 | Phase 2 | Pending |
+| PLAT-02 | Phase 2 | Complete |
 | PLAT-03 | Phase 2 | Complete |
 | PLAT-04 | Phase 2 | Complete |
 | PLAT-05 | Phase 2 | Complete |
