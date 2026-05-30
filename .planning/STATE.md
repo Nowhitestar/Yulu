@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v0.5
 milestone_name: milestone
-status: executing
-last_updated: "2026-05-30T04:43:11.408Z"
+status: verifying
+last_updated: "2026-05-30T04:56:44.238Z"
 last_activity: 2026-05-30
 progress:
   total_phases: 8
-  completed_phases: 0
+  completed_phases: 1
   total_plans: 6
-  completed_plans: 5
-  percent: 0
+  completed_plans: 6
+  percent: 13
 ---
 
 # Project State
@@ -26,10 +26,10 @@ See: .planning/PROJECT.md (updated 2026-05-29)
 
 Phase: 1 (Build Foundation — Setup Decomposition + Signed/Notarized Binaries) — EXECUTING
 Plan: 6 of 6
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-05-30
 
-Progress: [████████░░] 83%
+Progress: [██████████] 100%
 
 ## Performance Metrics
 
@@ -56,6 +56,7 @@ Progress: [████████░░] 83%
 | Phase 01 P03 | 8 | 2 tasks | 6 files |
 | Phase 01 P04 | 7 | 2 tasks | 3 files |
 | Phase 01 P05 | 19 | 2 tasks | 6 files |
+| Phase 01 P06 | 7 | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -80,6 +81,9 @@ Recent decisions affecting current work:
 - [Phase ?]: [Phase 1]: [01-05] setup.sh is now a thin orchestrator (D-12): resolves MODE once via resolve_install_mode, owns ALL interactive prompts, exports decisions and sequences the six setup_*.sh concerns as subprocess calls passing $MODE — swiftc reached ONLY via setup_audio.sh's dev branch
 - [Phase ?]: [Phase 1]: [01-05] install.sh Xcode pre-flight gated on --dev (BUILD-03): a SINGLE --dev block wraps both xcode-select AND the git check — a release install requires neither Xcode nor git
 - [Phase ?]: [Phase 1]: [01-05] orchestrator configure_transcription_engine writes only the engine+model CHOICE (record_engine_choice); concerns do the work (setup_capabilities verifies mlx, setup_models downloads GGML) — no venv (D-02), no download in orchestrator, no dead mlx.python (D-03); create_config template dropped the stale mlx.python venv path too
+- [Phase ?]: [Phase 1]: [01-06] CI sole producer of signed+notarized binaries: sign_and_notarize.sh = ephemeral keychain + build_*.sh bottom-up sign + ditto + notarytool submit --wait (App Store Connect API key) + staple .app dirs before packaging (Pitfall 4); package uses --skip-build so staple survives; attest-build-provenance@v4 on the zip (BUILD-02/BUILD-04); keychain torn down if:always() (D-08)
+- [Phase ?]: [Phase 1]: [01-06] Makefile package target forwards $(PACKAGE_ARGS) (default empty) so CI passes --skip-build without changing plain make package TAG=...; CI shellcheck gate uses -P SCRIPTDIR to resolve the runtime $SCRIPT_DIR/lib/common.sh source (else SC1091 fails the gate)
+- [Phase ?]: [Phase 1]: [01-06] A4 (reusable-workflow OIDC permission inheritance) NOT verified — declared id-token/attestations: write on the called release-publish.yml job only; release-please.yml untouched (D-09). If first signed release fails at Attest with an OIDC error, add those two scopes to the caller publish job
 
 ### Pending Todos
 
@@ -107,6 +111,6 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-05-30T04:43:11.402Z
+Last session: 2026-05-30T04:55:59.810Z
 Stopped at: Completed 01-05-PLAN.md (plan 5 of 6); resume at plan 6
 Resume file: None

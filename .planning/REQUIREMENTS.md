@@ -12,7 +12,7 @@ Requirements for this milestone. Each maps to exactly one roadmap phase.
 - [x] **BUILD-01**: The monolithic `setup.sh` is decomposed into per-concern scripts with `set -uo pipefail`, so any failing step is visible and individually testable
 - [x] **BUILD-02**: macOS binaries are Developer ID signed (bottom-up, never `--deep`) and notarized + stapled, replacing the `--timestamp=none` + `xattr` quarantine-strip
 - [x] **BUILD-03**: Release installs ship pre-built signed binaries and no longer require `swiftc`/Xcode on the user's machine
-- [ ] **BUILD-04**: CI publishes GitHub Artifact Attestations for release assets so integrity is verifiable via `gh attestation verify`
+- [x] **BUILD-04**: CI publishes GitHub Artifact Attestations for release assets so integrity is verifiable via `gh attestation verify`
 
 ### Platform Abstraction (PLAT)
 
@@ -112,7 +112,7 @@ Each v1 requirement maps to exactly one phase. See `.planning/ROADMAP.md` for ph
 | BUILD-01 | Phase 1 | Complete |
 | BUILD-02 | Phase 1 | Complete |
 | BUILD-03 | Phase 1 | Complete |
-| BUILD-04 | Phase 1 | Pending |
+| BUILD-04 | Phase 1 | Complete |
 | PLAT-01 | Phase 2 | Pending |
 | PLAT-02 | Phase 2 | Pending |
 | PLAT-03 | Phase 2 | Pending |

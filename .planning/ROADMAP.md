@@ -13,7 +13,7 @@ This is a brownfield re-architecture milestone. Yulu already ships (8 launchd da
 
 Decimal phases appear between their surrounding integers in numeric order.
 
-- [ ] **Phase 1: Build Foundation — Setup Decomposition + Signed/Notarized Binaries** - Decompose `setup.sh`, ship Developer ID signed + notarized pre-built binaries, CI attestations, introduce platform ABCs
+- [x] **Phase 1: Build Foundation — Setup Decomposition + Signed/Notarized Binaries** - Decompose `setup.sh`, ship Developer ID signed + notarized pre-built binaries, CI attestations, introduce platform ABCs (completed 2026-05-30)
 - [ ] **Phase 2: Platform-Abstraction Seams** - `PathResolver`, `DaemonManager`, `PermissionModel`, `DependencyManager`, and the Swift `CaptureBackend` (SCK→Core-Audio-tap) behind neutral interfaces
 - [ ] **Phase 3: Host-Capability Detection Spine** - `doctor.py` produces the versioned, tri-state, provenance-labeled `HostCapabilityReport`; `CapabilityProvider` interface + ClaudeCode end-to-end
 - [ ] **Phase 4: Settings & Onboarding Surface** - tRPC capability endpoint, provenance-labeled settings, transcription-mode radios, model selector, skippable browser onboarding
@@ -50,7 +50,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 **Wave 3** *(blocked on Wave 2 completion)*
 
 - [x] 01-05-PLAN.md — thin orchestrator + install.sh Xcode gate + decomposition/no-swiftc tests (BUILD-03)
-- [ ] 01-06-PLAN.md — CI notarize+staple+attest + shellcheck/bash-n gates [checkpoint] (BUILD-02 notarize, BUILD-04)
+- [x] 01-06-PLAN.md — CI notarize+staple+attest + shellcheck/bash-n gates [checkpoint] (BUILD-02 notarize, BUILD-04)
 
 **Research**: standard pattern (skip research-phase) — Apple's signing/notarization workflow and the anti-patterns (`--deep`, `--timestamp=none`) are well-documented; execution, not research.
 **Prerequisite (external)**: ✓ Apple Developer ID available (confirmed 2026-05-29). Phase 1 planning should capture the exact "Developer ID Application" signing identity / Team ID and wire it via `YULU_CODESIGN_IDENTITY`.
@@ -178,7 +178,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Build Foundation | 5/6 | In Progress|  |
+| 1. Build Foundation | 6/6 | Complete   | 2026-05-30 |
 | 2. Platform-Abstraction Seams | 0/TBD | Not started | - |
 | 3. Detection Spine | 0/TBD | Not started | - |
 | 4. Settings & Onboarding | 0/TBD | Not started | - |
