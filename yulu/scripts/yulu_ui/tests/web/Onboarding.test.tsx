@@ -88,9 +88,10 @@ describe("Onboarding (SET-03 — skippable first-run walkthrough)", () => {
     expect(dlg.querySelector('[data-status="usable"]')).not.toBeNull();
     expect(dlg.querySelector('[data-status="absent"]')).not.toBeNull();
 
-    // The capability names the walkthrough reflects appear.
-    expect(screen.getByText(/recording/i)).toBeInTheDocument();
-    expect(screen.getByText(/whisper/i)).toBeInTheDocument();
+    // The capability names the walkthrough reflects appear (label + line both
+    // mention them, so assert at least one match each).
+    expect(screen.getAllByText(/recording/i).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText(/whisper/i).length).toBeGreaterThanOrEqual(1);
   });
 
   it("Test 2 — Skip dismisses WITHOUT completing a step: persists config flag + localStorage, hides overlay", async () => {
@@ -141,8 +142,9 @@ describe("Onboarding (SET-03 — skippable first-run walkthrough)", () => {
       isError: false,
     };
     expect(() => render(<Onboarding />)).not.toThrow();
-    // Still renders the overlay (so the user can skip), with a "couldn't check" placeholder.
+    // Still renders the overlay (so the user can skip), with "couldn't check"
+    // placeholders for each capability instead of implying a failure.
     expect(screen.getByRole("dialog")).toBeInTheDocument();
-    expect(screen.getByText(/couldn'?t check/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/couldn'?t check/i).length).toBeGreaterThanOrEqual(1);
   });
 });
