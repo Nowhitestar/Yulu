@@ -2,8 +2,8 @@
 gsd_state_version: 1.0
 milestone: v0.5
 milestone_name: milestone
-status: verifying
-last_updated: "2026-05-30T09:09:02.506Z"
+status: ready_to_plan
+last_updated: 2026-05-30T09:14:53.752Z
 last_activity: 2026-05-30
 progress:
   total_phases: 8
@@ -11,6 +11,7 @@ progress:
   total_plans: 17
   completed_plans: 17
   percent: 50
+stopped_at: Phase 4 complete (4/4) — ready to discuss Phase 5
 ---
 
 # Project State
@@ -20,13 +21,13 @@ progress:
 See: .planning/PROJECT.md (updated 2026-05-29)
 
 **Core value:** A meeting becomes a clean, searchable note entirely on the user's machine, through the agent they already trust — capture and transcription never depend on the cloud, and Yulu never makes the user reconfigure what their agent already provides.
-**Current focus:** Phase 4 — Settings & Onboarding Surface
+**Current focus:** Phase 5 — capability reuse + data folder / cloud sync safety
 
 ## Current Position
 
-Phase: 4 (Settings & Onboarding Surface) — EXECUTING
-Plan: 4 of 4
-Status: Phase complete — ready for verification
+Phase: 5
+Plan: Not started
+Status: Ready to plan
 Last activity: 2026-05-30
 
 Progress: [██████████] 100%
@@ -35,7 +36,7 @@ Progress: [██████████] 100%
 
 **Velocity:**
 
-- Total plans completed: 13
+- Total plans completed: 17
 - Average duration: — min
 - Total execution time: 0.0 hours
 
@@ -46,6 +47,7 @@ Progress: [██████████] 100%
 | 1 | 6 | - | - |
 | 2 | 4 | - | - |
 | 3 | 3 | - | - |
+| 4 | 4 | - | - |
 
 **Recent Trend:**
 
