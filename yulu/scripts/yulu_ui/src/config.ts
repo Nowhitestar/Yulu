@@ -59,6 +59,8 @@ const RESTART_MAP: Record<string, string> = {
   "audio.silence_duration_sec":      "restart:audiodaemon",
   "audio.backend":                   "restart:audiodaemon",
   "audio.output_dir":                "none",
+  "transcription.mode":              "restart:sttdaemon",
+  "transcription.cloud_command":     "restart:sttdaemon",
   "transcription.final_engine":      "restart:sttdaemon",
   "transcription.language":          "sighup:sttdaemon",
   "transcription.glossary":          "sighup:sttdaemon",
