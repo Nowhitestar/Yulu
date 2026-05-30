@@ -161,7 +161,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 - [x] 05-01-PLAN.md — DATA-02 runtime/content split + runtime LOCK (assert_runtime_not_synced) + route the 3 hardcoded content literals through data_dir() (DATA-02, DATA-01) [hard-prereq, lands first]
 - [x] 05-02-PLAN.md — reuse gating: add the gog probe + capability_status() helper, gate setup_deps.sh (whisper-cpp/gogcli) + setup_capabilities.sh (mlx) on the tri-state usable (REUSE-01, REUSE-02)
-- [ ] 05-03-PLAN.md — cloud_detect.py (stdlib path-prefix + SF_DATALESS, NOT os.getxattr) + read-only cloud.detect tRPC route (DATA-03 detection primitive)
+- [x] 05-03-PLAN.md — cloud_detect.py (stdlib path-prefix + SF_DATALESS, NOT os.getxattr) + read-only cloud.detect tRPC route (DATA-03 detection primitive)
 
 **Wave 2** *(blocked on 05-01 + 05-03 — D-06 hard sequencing: the cloud picker ships only after the runtime split/lock)*
 
@@ -227,7 +227,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8
 | 2. Platform-Abstraction Seams | 4/4 | Complete    | 2026-05-30 |
 | 3. Detection Spine | 3/3 | Complete    | 2026-05-30 |
 | 4. Settings & Onboarding | 4/4 | Complete    | 2026-05-30 |
-| 5. Reuse + Data-Folder Safety | 2/4 | In Progress|  |
+| 5. Reuse + Data-Folder Safety | 3/4 | In Progress|  |
 | 6. Agent-Orchestrated Provisioning | 0/TBD | Not started | - |
 | 7. Seamless Auto-Migration | 0/TBD | Not started | - |
 | 8. Multi-Agent Providers | 0/TBD | Not started | - |

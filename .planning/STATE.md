@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v0.5
 milestone_name: milestone
 status: executing
-last_updated: "2026-05-30T10:32:28.154Z"
+last_updated: "2026-05-30T10:47:39.924Z"
 last_activity: 2026-05-30
 progress:
   total_phases: 8
   completed_phases: 4
   total_plans: 21
-  completed_plans: 19
+  completed_plans: 20
   percent: 50
 ---
 
@@ -25,11 +25,11 @@ See: .planning/PROJECT.md (updated 2026-05-29)
 ## Current Position
 
 Phase: 5 (Capability Reuse + Data-Folder / Cloud-Sync Safety) — EXECUTING
-Plan: 3 of 4
+Plan: 4 of 4
 Status: Ready to execute
 Last activity: 2026-05-30
 
-Progress: [█████████░] 90%
+Progress: [██████████] 95%
 
 ## Performance Metrics
 
@@ -73,6 +73,7 @@ Progress: [█████████░] 90%
 | Phase 04 P04 | 3 | 2 tasks | 4 files |
 | Phase 05 P01 | 17 | 2 tasks | 6 files |
 | Phase 05 P02 | 13 | 3 tasks | 5 files |
+| Phase 05 P03 | 11 | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -135,6 +136,9 @@ Recent decisions affecting current work:
 - [Phase ?]: [05-02] Reuse gate is STRICT string-equality on status == usable (capability_status whisper_cli/gog/mlx_whisper); present-but-unverified AND absent both install — no boolean collapse, no -n/!=absent (Pitfall 4, report.py:35)
 - [Phase ?]: [05-02] capability_status() reads host_capabilities.capabilities.<cap>.status from doctor.py --json with FIXED argv + Python JSON parse; echoes only status, never interpolates resolved_path into a shell (T-05-04 resolve-not-execute); any failure -> absent -> install (safe default)
 - [Phase ?]: [05-02] setup_capabilities.sh mlx gate changes only the MESSAGE (reuse vs advise) — NO venv, NO pip install on either branch (D-02/D-05; a second Yulu-specific venv is Out-of-Scope)
+- [Phase ?]: [05-03] cloud_detect eviction uses stat.SF_DATALESS (0x40000000), NEVER os.getxattr (absent on macOS CPython, Pitfall 2); detection is metadata-only (os.stat, no open) — never materializes a dataless file
+- [Phase ?]: [05-03] cloud.detect tRPC route passes the user path as a SEPARATE spawn argv element (sys.argv[1]), never shell-interpolated (T-05-07, verified an adversarial $(touch) path did not execute); degrades to a typed not-cloud default so detection never blocks the folder picker
+- [Phase ?]: [05-03] cloud_detect.py is pure stdlib with NO Darwin gate at import (imports on any OS); CloudRootResult(is_cloud,engine,reason,dataless_sample) is the shared contract for the runtime-lock guard AND the UI route; landing it unskipped 05-01's assert_runtime_not_synced guard tests
 
 ### Pending Todos
 
@@ -162,6 +166,6 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-05-30T10:32:28.147Z
+Last session: 2026-05-30T10:46:47.335Z
 Stopped at: Completed 05-02-PLAN.md (plan 2 of 4); resume at plan 3
 Resume file: None
