@@ -43,6 +43,35 @@ header() {
 
 prompt() { printf '%b➡️%b %s ' "$YELLOW" "$NC" "$1"; }
 
+# ─── 1b. capability_status — read one capability's tri-state from the report ──
+# The reuse gate (REUSE-01/02, D-04) shared by setup_deps.sh + setup_capabilities.sh.
+#
+# Runs `doctor.py --json` with FIXED argv and parses
+# `host_capabilities.capabilities.<cap>.status` in Python (T-05-04). It echoes ONLY
+# the tri-state status string — it NEVER interpolates a capability's resolved_path
+# into a shell command (the probes.py T-03-02 discipline: resolve-not-execute is
+# preserved; llm.command is never run). On ANY failure (no doctor, malformed JSON,
+# missing key) it echoes `absent` — the SAFE default, which means "install Yulu's own"
+# (a slow/broken doctor degrades to install, never to over-skip; T-05-06).
+#
+# Callers MUST gate STRICTLY on `== "usable"` (Pitfall 4 / report.py:35): the tri-state
+# is never collapsed to a boolean. `present-but-unverified` and `absent` both install.
+#
+# Usage: status="$(capability_status whisper_cli)"   # whisper_cli | mlx_whisper | gog | …
+capability_status() {
+    local cap="$1"
+    local py="${PYTHON_BIN:-$(command -v python3 || echo /usr/bin/python3)}"
+    local script_dir="${SCRIPT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+    "$py" "$script_dir/doctor.py" --json 2>/dev/null \
+        | "$py" -c 'import sys, json
+try:
+    r = json.load(sys.stdin)
+    print(r.get("host_capabilities", {}).get("capabilities", {}).get(sys.argv[1], {}).get("status", "absent"))
+except Exception:
+    print("absent")' "$cap" 2>/dev/null \
+        || echo "absent"
+}
+
 # ─── 2. launch_path — stable PATH for launchd plists (§6b fix) ────────
 # Ports dev_install.py::_launch_path (lines 86-99) to bash. The monolith
 # (setup.sh:852) baked an nvm-VERSIONED node path — `$(node -v)` — straight

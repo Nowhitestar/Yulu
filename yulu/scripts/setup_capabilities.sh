@@ -92,9 +92,19 @@ setup_capabilities() {
         warn "MLX 主要支持 Apple Silicon；当前机器可能无法运行 mlx-whisper。"
     fi
 
-    # D-02/D-05: NO venv creation, NO pip install. Just verify importability from
-    # the system interpreter the daemon will actually use.
-    verify_mlx_whisper
+    # REUSE-02 / D-04: gate on the Phase-3 tri-state. ONLY status == "usable" is a
+    # reuse-and-skip (Pitfall 4 — present-but-unverified and absent BOTH fall through
+    # to the advisory verify; never a boolean collapse). D-02/D-05: this gate changes
+    # only the MESSAGE — there is NO venv creation and NO pip install on either branch
+    # (the install/reuse decision for MLX is "reuse-or-advise", a second Yulu-specific
+    # venv is Out-of-Scope). A doctor error degrades to `absent` → the advisory warn.
+    if [[ "$(capability_status mlx_whisper)" == "usable" ]]; then
+        ok "检测到可用的 mlx-whisper（复用主机的），无需 Yulu 自行提供"
+    else
+        # NO venv, NO pip install — just verify importability from the system
+        # interpreter the daemon will actually use, and WARN (advisory) if absent.
+        verify_mlx_whisper
+    fi
 }
 
 [[ "${BASH_SOURCE[0]}" == "${0}" ]] && setup_capabilities "$@"
