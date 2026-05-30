@@ -182,7 +182,17 @@ Decimal phases appear between their surrounding integers in numeric order.
   4. A tampered asset is rejected before any step executes
   5. `yulu skill install [--agent]` installs/updates the agent skill independently of core install (idempotent), no longer coupled into `setup.sh`
 
-**Plans**: TBD
+**Plans**: 4 plans (2 waves)
+
+**Wave 1** *(parallel — provision/ module spine; file-disjoint)*
+
+- [ ] 06-01-PLAN.md — provision/registry.py: Step ABC + StepResult + ScriptStep wrapping the six setup_*.sh 1:1 (PROV-01, D-01/D-06/D-07)
+- [ ] 06-02-PLAN.md — provision/state.py: resumable .yulu-install.json ledger (atomic write, kill-at-step-N, preserve installer source) (PROV-04, D-04/D-08)
+- [ ] 06-03-PLAN.md — provision/attest.py: fail-closed gh-auth-ladder gate + checksum floor + tamper rejection [checkpoint] (PROV-03, D-03)
+
+**Wave 2** *(blocked on 06-01/02/03 — composes all three)*
+
+- [ ] 06-04-PLAN.md — provision/cli.py resume-walk driver + skill.py + yulu dispatcher wiring + setup.sh skill decouple (PROV-01/PROV-05, D-02/D-05/D-08)
 **Research**: needs deeper per-phase research (the spike IS the research) — `/gsd-plan-phase --research-phase 6`. FEATURES.md flags agent-as-primary-provisioning-UX as LOW confidence; STACK.md flags `uv`/`uvx` as "EVALUATE in spike." Exit criteria are explicit: partial-failure/resume (kill-at-step-N) and tampered-asset rejection, not just the happy path.
 **Spike-gated open question**: WHO calls provisioning — host agent vs `curl|bash`. The step registry itself is BUILD NOW regardless (the decomposed `setup_*.sh` scripts from Phase 1 map 1:1 onto these steps); the spike decides only the *caller*. If the spike fails, the verified signed-zip path stays primary.
 
@@ -228,6 +238,6 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8
 | 3. Detection Spine | 3/3 | Complete    | 2026-05-30 |
 | 4. Settings & Onboarding | 4/4 | Complete    | 2026-05-30 |
 | 5. Reuse + Data-Folder Safety | 4/4 | Complete    | 2026-05-30 |
-| 6. Agent-Orchestrated Provisioning | 0/TBD | Not started | - |
+| 6. Agent-Orchestrated Provisioning | 0/4 | Planned     | - |
 | 7. Seamless Auto-Migration | 0/TBD | Not started | - |
 | 8. Multi-Agent Providers | 0/TBD | Not started | - |
