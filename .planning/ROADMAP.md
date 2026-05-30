@@ -208,7 +208,17 @@ Decimal phases appear between their surrounding integers in numeric order.
   3. Migration is transactional: `yulu rollback` restores the prior state, and the backup is pruned only after verification passes
   4. The dead `mlx_python` field and hardcoded `~/Movies/Yulu` path are corrected in transit, and the new install carries a `schema_version` stamp
 
-**Plans**: TBD
+**Plans**: 3 plans (2 waves)
+
+**Wave 1** *(parallel — file-disjoint: detect/plan ∥ recording-guard)*
+
+- [ ] 07-01-PLAN.md — migrate/detect.py (v0.5.x detection) + migrate/plan.py (dry-run-able MigrationPlan naming the in-transit corrections) (MIG-01, D-01/D-04/D-05/D-07)
+- [ ] 07-02-PLAN.md — migrate/guard.py recording-guard: refuse daemon-stop while recording (audio_daemon arbiter) + clean DaemonManager unload, no pkill -9 (MIG-02, D-02/D-06)
+
+**Wave 2** *(blocked on 07-01 + 07-02 — composes detect/plan + guard)*
+
+- [ ] 07-03-PLAN.md — migrate/apply.py (transactional backup→guarded-stop→corrections→mark) + verify.py (post-doctor + prune-only-on-success) + rollback + yulu CLI wiring + real-upgrade/live-recording human-verify checkpoint (MIG-01/MIG-02/MIG-03, D-01/D-03/D-04/D-05)
+
 **Research**: standard pattern (skip research-phase) — the detect→plan→apply→verify pattern is fully specified and its hard dependencies (the `open -W` fix, the recording-guard) are known and land in Phase 2.
 **Hard dependencies**: the `open -W`→direct-launch fix (Phase 2) MUST precede migration — it removes the `pkill -9` truncation vector at its root.
 
@@ -239,5 +249,5 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8
 | 4. Settings & Onboarding | 4/4 | Complete    | 2026-05-30 |
 | 5. Reuse + Data-Folder Safety | 4/4 | Complete    | 2026-05-30 |
 | 6. Agent-Orchestrated Provisioning | 4/4 | Complete    | 2026-05-30 |
-| 7. Seamless Auto-Migration | 0/TBD | Not started | - |
+| 7. Seamless Auto-Migration | 0/3 | Planned     | - |
 | 8. Multi-Agent Providers | 0/TBD | Not started | - |
