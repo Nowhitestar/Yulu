@@ -48,7 +48,15 @@ jobs:
           for f in install.sh \
                    packaging/scripts/package.sh \
                    packaging/scripts/checksums.sh \
+                   packaging/scripts/sign_and_notarize.sh \
                    yulu/scripts/setup.sh \
+                   yulu/scripts/setup_deps.sh \
+                   yulu/scripts/setup_audio.sh \
+                   yulu/scripts/setup_models.sh \
+                   yulu/scripts/setup_capabilities.sh \
+                   yulu/scripts/setup_daemons.sh \
+                   yulu/scripts/setup_ui.sh \
+                   yulu/scripts/lib/common.sh \
                    yulu/scripts/uninstall.sh \
                    yulu/scripts/yulu \
                    yulu/scripts/build_audio_daemon.sh \
