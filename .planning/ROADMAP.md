@@ -15,7 +15,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 - [x] **Phase 1: Build Foundation — Setup Decomposition + Signed/Notarized Binaries** - Decompose `setup.sh`, ship Developer ID signed + notarized pre-built binaries, CI attestations, introduce platform ABCs (completed 2026-05-30)
 - [x] **Phase 2: Platform-Abstraction Seams** - `PathResolver`, `DaemonManager`, `PermissionModel`, `DependencyManager`, and the Swift `CaptureBackend` (SCK→Core-Audio-tap) behind neutral interfaces (completed 2026-05-30)
-- [ ] **Phase 3: Host-Capability Detection Spine** - `doctor.py` produces the versioned, tri-state, provenance-labeled `HostCapabilityReport`; `CapabilityProvider` interface + ClaudeCode end-to-end
+- [x] **Phase 3: Host-Capability Detection Spine** - `doctor.py` produces the versioned, tri-state, provenance-labeled `HostCapabilityReport`; `CapabilityProvider` interface + ClaudeCode end-to-end (completed 2026-05-30)
 - [ ] **Phase 4: Settings & Onboarding Surface** - tRPC capability endpoint, provenance-labeled settings, transcription-mode radios, model selector, skippable browser onboarding
 - [ ] **Phase 5: Capability Reuse + Data-Folder / Cloud-Sync Safety** - Detect-first reuse of host whisper/models/`claude`/`gog`; physically separate syncable content from local-only runtime; cloud-root detect-and-warn folder picker
 - [ ] **Phase 6: Agent-Orchestrated Provisioning + Decoupled Skill Install** - Named idempotent step registry, `yulu provision <step>`, attestation gate, resumable state, `yulu skill install --agent`; spike validates WHO calls provisioning
@@ -112,7 +112,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 **Wave 3** *(blocked on 03-01 + 03-02: assembles the report in doctor)*
 
-- [ ] 03-03-PLAN.md — doctor.py host_capabilities section (probes + default_providers aggregation) + §5d source-vs-runtime root fix (DETECT-01/03/05, D-05/D-07)
+- [x] 03-03-PLAN.md — doctor.py host_capabilities section (probes + default_providers aggregation) + §5d source-vs-runtime root fix (DETECT-01/03/05, D-05/D-07)
 **Research**: standard pattern (skip research-phase) — the report schema, login-shell PATH, and tri-state are well-specified across STACK/ARCHITECTURE/PITFALLS; schema design, not research.
 **Hard prerequisite (in-phase)**: resolve the `mlx_python` interpreter ambiguity (DETECT-04) before or within this phase — detection is meaningless without a defined "daemon interpreter" to probe. Tri-state must land here so a boolean never drives a "skip install" decision downstream.
 
@@ -205,7 +205,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8
 |-------|----------------|--------|-----------|
 | 1. Build Foundation | 6/6 | Complete    | 2026-05-30 |
 | 2. Platform-Abstraction Seams | 4/4 | Complete    | 2026-05-30 |
-| 3. Detection Spine | 2/3 | In Progress|  |
+| 3. Detection Spine | 3/3 | Complete   | 2026-05-30 |
 | 4. Settings & Onboarding | 0/TBD | Not started | - |
 | 5. Reuse + Data-Folder Safety | 0/TBD | Not started | - |
 | 6. Agent-Orchestrated Provisioning | 0/TBD | Not started | - |

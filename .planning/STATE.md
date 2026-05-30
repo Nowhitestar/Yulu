@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v0.5
 milestone_name: milestone
-status: executing
-last_updated: "2026-05-30T07:31:26.400Z"
+status: verifying
+last_updated: "2026-05-30T07:50:04.429Z"
 last_activity: 2026-05-30
 progress:
   total_phases: 8
-  completed_phases: 2
+  completed_phases: 3
   total_plans: 13
-  completed_plans: 12
-  percent: 25
+  completed_plans: 13
+  percent: 38
 ---
 
 # Project State
@@ -26,10 +26,10 @@ See: .planning/PROJECT.md (updated 2026-05-29)
 
 Phase: 3 (Host-Capability Detection Spine) — EXECUTING
 Plan: 3 of 3
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-05-30
 
-Progress: [█████████░] 92%
+Progress: [██████████] 100%
 
 ## Performance Metrics
 
@@ -64,6 +64,7 @@ Progress: [█████████░] 92%
 | Phase 02 P04 | 11 | 2 tasks | 6 files |
 | Phase 03 P01 | 9 | 2 tasks | 5 files |
 | Phase 03 P02 | 5 | 1 tasks | 3 files |
+| Phase 03 P03 | 12 | 1 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -106,6 +107,8 @@ Recent decisions affecting current work:
 - [Phase ?]: [03-01] probe_llm_command RESOLVES+STATS the configured command head only, never executes it (T-03-01); scan_models globs 3 fixed roots + dedupes by resolved path (T-03-03); every probe degrades to absent() not raise
 - [Phase 03]: [03-02] CapabilityProvider ABC = agent_name (plain class attribute) + a SINGLE @abstractmethod capabilities() -> dict[str, Capability]; agent-neutral by contract so a second provider (Phase 8 Codex/OpenClaw) is pure addition — a subclass + one default_providers() entry, zero edits to report.py/probes.py/doctor.py (D-06)
 - [Phase 03]: [03-02] _as_agent_config relabels host-path->agent-config provenance ONLY for present/usable entries; an ABSENT probe finding passes through unchanged — a provider reframes a tool as 'the host coding agent provides this' only when it actually exists, never disguises a missing tool. ClaudeCodeProvider delegates to Plan 01 probes (no new exec surface, T-03-05); keys: claude_cli + agent_mlx_whisper
+- [Phase ?]: [03-03] doctor host_capabilities = lazy-import + never-raise helper (mirrors check_search_index): assembles HostCapabilityReport from Plan 01's six probes + merges default_providers() agent-config entries; degrades to {error, schema_version, capabilities} so it never raises/hangs doctor (T-03-07)
+- [Phase ?]: [03-03] §5d fixed: check_yulu_ui now receives runtime_root not source_root so a production install reports the running UI dist honestly (D-07); host_capabilities is purely additive (existing report shape intact, _overall_ok untouched)
 
 ### Pending Todos
 
@@ -133,6 +136,6 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-05-30T07:31:26.393Z
+Last session: 2026-05-30T07:49:36.119Z
 Stopped at: Completed 03-02-PLAN.md (plan 2 of 3); resume at plan 3
 Resume file: None
