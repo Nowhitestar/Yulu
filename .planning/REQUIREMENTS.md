@@ -32,10 +32,10 @@ Requirements for this milestone. Each maps to exactly one roadmap phase.
 
 ### Settings & Onboarding (SET)
 
-- [ ] **SET-01**: A `host_capabilities` tRPC endpoint serves the doctor report to the web UI
+- [x] **SET-01**: A `host_capabilities` tRPC endpoint serves the doctor report to the web UI
 - [ ] **SET-02**: The settings page shows each capability's provenance ("reused from your PATH" vs "Yulu-managed") with the resolved path
 - [ ] **SET-03**: A skippable browser first-run onboarding walkthrough shows live permission status
-- [ ] **SET-04**: A model selector lets the user choose among detected models across host caches
+- [x] **SET-04**: A model selector lets the user choose among detected models across host caches
 
 ### Transcription Modes (TRANS)
 
@@ -123,10 +123,10 @@ Each v1 requirement maps to exactly one phase. See `.planning/ROADMAP.md` for ph
 | DETECT-03 | Phase 3 | Complete |
 | DETECT-04 | Phase 3 | Complete |
 | DETECT-05 | Phase 3 | Complete |
-| SET-01 | Phase 4 | Pending |
+| SET-01 | Phase 4 | Complete |
 | SET-02 | Phase 4 | Pending |
 | SET-03 | Phase 4 | Pending |
-| SET-04 | Phase 4 | Pending |
+| SET-04 | Phase 4 | Complete |
 | TRANS-01 | Phase 4 | Pending |
 | TRANS-02 | Phase 4 | Pending |
 | REUSE-01 | Phase 5 | Pending |

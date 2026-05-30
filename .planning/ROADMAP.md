@@ -133,7 +133,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 **Wave 1**
 
-- [ ] 04-01-PLAN.md — capabilities tRPC router (shells doctor.py --json → host_capabilities) + additive list_models() Python helper for the model selector (SET-01, SET-04)
+- [x] 04-01-PLAN.md — capabilities tRPC router (shells doctor.py --json → host_capabilities) + additive list_models() Python helper for the model selector (SET-01, SET-04)
 
 **Wave 2** *(blocked on 04-01: all three consume the capabilities router)*
 
@@ -216,7 +216,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8
 | 1. Build Foundation | 6/6 | Complete    | 2026-05-30 |
 | 2. Platform-Abstraction Seams | 4/4 | Complete    | 2026-05-30 |
 | 3. Detection Spine | 3/3 | Complete    | 2026-05-30 |
-| 4. Settings & Onboarding | 0/4 | Planned     | - |
+| 4. Settings & Onboarding | 1/4 | In Progress|  |
 | 5. Reuse + Data-Folder Safety | 0/TBD | Not started | - |
 | 6. Agent-Orchestrated Provisioning | 0/TBD | Not started | - |
 | 7. Seamless Auto-Migration | 0/TBD | Not started | - |

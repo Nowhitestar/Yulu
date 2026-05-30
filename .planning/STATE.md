@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v0.5
 milestone_name: milestone
 status: executing
-last_updated: "2026-05-30T08:16:33.349Z"
-last_activity: 2026-05-30 -- Phase 4 planning complete
+last_updated: "2026-05-30T08:34:12.786Z"
+last_activity: 2026-05-30
 progress:
   total_phases: 8
   completed_phases: 3
   total_plans: 17
-  completed_plans: 13
+  completed_plans: 14
   percent: 38
 ---
 
@@ -20,16 +20,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-05-29)
 
 **Core value:** A meeting becomes a clean, searchable note entirely on the user's machine, through the agent they already trust — capture and transcription never depend on the cloud, and Yulu never makes the user reconfigure what their agent already provides.
-**Current focus:** Phase 4 — settings & onboarding surface
+**Current focus:** Phase 4 — Settings & Onboarding Surface
 
 ## Current Position
 
-Phase: 4
-Plan: Not started
+Phase: 4 (Settings & Onboarding Surface) — EXECUTING
+Plan: 2 of 4
 Status: Ready to execute
-Last activity: 2026-05-30 -- Phase 4 planning complete
+Last activity: 2026-05-30
 
-Progress: [██████████] 100%
+Progress: [████████░░] 82%
 
 ## Performance Metrics
 
@@ -66,6 +66,7 @@ Progress: [██████████] 100%
 | Phase 03 P01 | 9 | 2 tasks | 5 files |
 | Phase 03 P02 | 5 | 1 tasks | 3 files |
 | Phase 03 P03 | 12 | 1 tasks | 2 files |
+| Phase 04 P01 | 13 | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -110,6 +111,9 @@ Recent decisions affecting current work:
 - [Phase 03]: [03-02] _as_agent_config relabels host-path->agent-config provenance ONLY for present/usable entries; an ABSENT probe finding passes through unchanged — a provider reframes a tool as 'the host coding agent provides this' only when it actually exists, never disguises a missing tool. ClaudeCodeProvider delegates to Plan 01 probes (no new exec surface, T-03-05); keys: claude_cli + agent_mlx_whisper
 - [Phase ?]: [03-03] doctor host_capabilities = lazy-import + never-raise helper (mirrors check_search_index): assembles HostCapabilityReport from Plan 01's six probes + merges default_providers() agent-config entries; degrades to {error, schema_version, capabilities} so it never raises/hangs doctor (T-03-07)
 - [Phase ?]: [03-03] §5d fixed: check_yulu_ui now receives runtime_root not source_root so a production install reports the running UI dist honestly (D-07); host_capabilities is purely additive (existing report shape intact, _overall_ok untouched)
+- [Phase ?]: [04-01] capabilities tRPC router shells ONLY doctor.py --json (T-04-EX): never executes config.llm.command/cloud_command; 10s timeout+SIGKILL (T-04-DOS); degrades to typed {error,schema_version,capabilities:{}} so a doctor failure never blanks the settings page
+- [Phase ?]: [04-01] list_models() is an ADDITIVE sibling to scan_models (Phase 3 frozen contract preserved byte-for-byte): per-model {name,path,size} over the same fixed _model_roots() allowlist + resolve-dedupe; detection stays in Python (one-way layer dep), router never re-globs in TS
+- [Phase ?]: [04-01] Python tests live at repo-root tests/ (make pytest = 'pytest tests'), NOT yulu/scripts/tests/ — a test under the latter would never run in CI (deviation Rule 3)
 
 ### Pending Todos
 
@@ -137,6 +141,6 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-05-30T07:49:36.119Z
+Last session: 2026-05-30T08:33:47.863Z
 Stopped at: Completed 03-02-PLAN.md (plan 2 of 3); resume at plan 3
 Resume file: None
