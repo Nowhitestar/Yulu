@@ -45,7 +45,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 01-04-PLAN.md — extract audio (dev/release fork)/capabilities (no venv)/daemons concerns (BUILD-01, BUILD-03)
+- [x] 01-04-PLAN.md — extract audio (dev/release fork)/capabilities (no venv)/daemons concerns (BUILD-01, BUILD-03)
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
@@ -178,7 +178,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Build Foundation | 3/6 | In Progress|  |
+| 1. Build Foundation | 4/6 | In Progress|  |
 | 2. Platform-Abstraction Seams | 0/TBD | Not started | - |
 | 3. Detection Spine | 0/TBD | Not started | - |
 | 4. Settings & Onboarding | 0/TBD | Not started | - |

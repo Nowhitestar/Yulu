@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v0.5
 milestone_name: milestone
 status: executing
-last_updated: "2026-05-30T04:09:45.787Z"
+last_updated: "2026-05-30T04:21:05.107Z"
 last_activity: 2026-05-30
 progress:
   total_phases: 8
   completed_phases: 0
   total_plans: 6
-  completed_plans: 3
+  completed_plans: 4
   percent: 0
 ---
 
@@ -25,11 +25,11 @@ See: .planning/PROJECT.md (updated 2026-05-29)
 ## Current Position
 
 Phase: 1 (Build Foundation — Setup Decomposition + Signed/Notarized Binaries) — EXECUTING
-Plan: 4 of 6
+Plan: 5 of 6
 Status: Ready to execute
 Last activity: 2026-05-30
 
-Progress: [█████░░░░░] 50%
+Progress: [███████░░░] 67%
 
 ## Performance Metrics
 
@@ -54,6 +54,7 @@ Progress: [█████░░░░░] 50%
 | Phase 1 P01 | 4 | 2 tasks | 7 files |
 | Phase 01 P02 | 5 | 2 tasks | 4 files |
 | Phase 01 P03 | 8 | 2 tasks | 6 files |
+| Phase 01 P04 | 7 | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -72,6 +73,9 @@ Recent decisions affecting current work:
 - [Phase ?]: [Phase 1]: [01-02] install_plist hoisted to one canonical lib/common.sh copy (§8c, D-14); §6b launch_path globs nvm node dir but never bakes a node -v version literal into the plist __PATH__
 - [Phase ?]: [Phase 1]: [01-03] Entitlements XML must be comment-free — the '--' in flag names (e.g. --options) is illegal inside XML comments and breaks strict expat/plistlib parsers even though plutil tolerates it
 - [Phase ?]: [Phase 1]: [01-03] _CodeSignature/CodeResources is git-tracked AND rewritten by re-signing, so both bundles' CodeResources were added to package.sh ALLOWED_BUILD_OUTPUTS; *.entitlements stay OUT of the allowlist (committed source)
+- [Phase ?]: [Phase 1]: [01-04] setup_audio.sh dev/release fork (D-13): swiftc (build_audio_daemon.sh + build_status_agent.sh) runs ONLY in the dev branch; release self-heals exec bits on pre-built signed+stapled binaries — zero swiftc/xattr executable lines in the release path (asserted by plan-05 test_release_no_swiftc.py)
+- [Phase ?]: [Phase 1]: [01-04] D-07 anti-pattern removed: xattr -dr com.apple.quarantine gone from setup_audio.sh's release path (stapled notarized bundle passes Gatekeeper unaided), kept only behind the --dev/ad-hoc guard
+- [Phase ?]: [Phase 1]: [01-04] setup_capabilities.sh = D-01/D-02/D-03/D-05: no venv (host python3 via plist __PYTHON__), dead transcription.mlx.python dropped + stale value normalized (mlx.pop('python')), mlx-whisper VERIFIED via find_spec (warn-not-fail), no pip install (install/reuse deferred to Phase 5); setup_daemons.sh uses the hoisted install_plist (§8c)
 
 ### Pending Todos
 
@@ -87,6 +91,7 @@ None yet.
 - **PROJECT.md constraint decision (Phase 2):** SCK→Core-Audio-taps raises the macOS floor 13→14.4 for the audio path — decide keep-13–14.3-SCK-arm vs raise-floor and record in PROJECT.md before the tap migration lands.
 - **Decision to log (Phase 1):** bundled-vs-host Python — affects signing scope and is the stable interpreter target for Phase 3 detection.
 - **Spike-gated (Phase 6):** WHO calls provisioning (host agent vs `curl|bash`); step registry is BUILD NOW regardless. Exit criteria: kill-at-step-N resume + tampered-asset rejection.
+- **Migration (Phase 7) — from 01-04:** `setup_capabilities.sh` stops CREATING the mlx virtualenv (D-02) but intentionally does NOT delete an existing user's. Add an upgrade migration to remove the stale `~/.config/yulu/venv-mlx-whisper` (and normalize any lingering `transcription.mlx.python` config value) so old installs don't orphan a dead venv.
 
 ## Deferred Items
 
@@ -98,6 +103,6 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-05-30T04:09:20.645Z
+Last session: 2026-05-30T04:20:32.540Z
 Stopped at: Completed 01-02-PLAN.md (plan 2 of 6); resume at plan 3
 Resume file: None
