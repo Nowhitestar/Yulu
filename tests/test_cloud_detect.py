@@ -174,8 +174,16 @@ def test_garbage_path_returns_not_cloud_without_raising():
 
 
 def test_module_uses_sf_dataless_not_getxattr():
-    """RESEARCH Pitfall 2: detection must use SF_DATALESS (stdlib), never
-    os.getxattr (absent on macOS CPython)."""
+    """RESEARCH Pitfall 2: detection must use SF_DATALESS (stdlib), never the
+    Linux-only os xattr reader (absent on macOS CPython).
+
+    Primary guard: no executable extended-attribute call. Also asserts the
+    plan's coarse grep stays clean — the literal ``getxattr`` token must not
+    appear anywhere in the module (the Pitfall-2 prose refers to it obliquely)."""
     src = Path(cloud_detect.__file__).read_text(encoding="utf-8")
     assert "SF_DATALESS" in src
+    # No xattr call by any name the os module could expose.
+    for forbidden in ("os.getxattr", "os.listxattr", "os.setxattr", "getxattr("):
+        assert forbidden not in src
+    # Plan verify: `grep -n getxattr cloud_detect.py` returns nothing.
     assert "getxattr" not in src
