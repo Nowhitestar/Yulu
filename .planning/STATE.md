@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v0.5
 milestone_name: milestone
 status: executing
-last_updated: "2026-05-30T04:00:32.710Z"
+last_updated: "2026-05-30T04:09:45.787Z"
 last_activity: 2026-05-30
 progress:
   total_phases: 8
   completed_phases: 0
   total_plans: 6
-  completed_plans: 2
-  percent: 33
+  completed_plans: 3
+  percent: 0
 ---
 
 # Project State
@@ -25,11 +25,11 @@ See: .planning/PROJECT.md (updated 2026-05-29)
 ## Current Position
 
 Phase: 1 (Build Foundation — Setup Decomposition + Signed/Notarized Binaries) — EXECUTING
-Plan: 3 of 6
+Plan: 4 of 6
 Status: Ready to execute
 Last activity: 2026-05-30
 
-Progress: [███░░░░░░░] 33%
+Progress: [█████░░░░░] 50%
 
 ## Performance Metrics
 
@@ -53,6 +53,7 @@ Progress: [███░░░░░░░] 33%
 *Updated after each plan completion*
 | Phase 1 P01 | 4 | 2 tasks | 7 files |
 | Phase 01 P02 | 5 | 2 tasks | 4 files |
+| Phase 01 P03 | 8 | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -69,6 +70,8 @@ Recent decisions affecting current work:
 - [Phase 1]: [01-01] Package named yulu_platform not platform — a platform/ package on yulu/scripts (stt_daemon plist PYTHONPATH) shadows stdlib platform that numpy imports; guarded permanently by test_yulu_platform_no_shadow.py
 - [Phase 1]: [01-01] Platform-seam ABCs are interface signatures only this phase (D-15); macOS impls Phase 2 (D-17); linux/windows arms raise NotImplementedError until v2 (XPLAT-01)
 - [Phase ?]: [Phase 1]: [01-02] install_plist hoisted to one canonical lib/common.sh copy (§8c, D-14); §6b launch_path globs nvm node dir but never bakes a node -v version literal into the plist __PATH__
+- [Phase ?]: [Phase 1]: [01-03] Entitlements XML must be comment-free — the '--' in flag names (e.g. --options) is illegal inside XML comments and breaks strict expat/plistlib parsers even though plutil tolerates it
+- [Phase ?]: [Phase 1]: [01-03] _CodeSignature/CodeResources is git-tracked AND rewritten by re-signing, so both bundles' CodeResources were added to package.sh ALLOWED_BUILD_OUTPUTS; *.entitlements stay OUT of the allowlist (committed source)
 
 ### Pending Todos
 
@@ -95,6 +98,6 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-05-30T03:59:58.895Z
+Last session: 2026-05-30T04:09:20.645Z
 Stopped at: Completed 01-02-PLAN.md (plan 2 of 6); resume at plan 3
 Resume file: None

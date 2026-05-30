@@ -41,7 +41,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 - [x] 01-01-PLAN.md — Python platform-seam ABCs (yulu_platform) + stub/shadow tests (SC-5)
 - [x] 01-02-PLAN.md — lib/common.sh shared helpers + extract deps/models/ui concerns (BUILD-01)
-- [ ] 01-03-PLAN.md — entitlements + bottom-up hardened-runtime signing of both build_*.sh (BUILD-02 sign-side)
+- [x] 01-03-PLAN.md — entitlements + bottom-up hardened-runtime signing of both build_*.sh (BUILD-02 sign-side)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
@@ -178,7 +178,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Build Foundation | 2/6 | In Progress|  |
+| 1. Build Foundation | 3/6 | In Progress|  |
 | 2. Platform-Abstraction Seams | 0/TBD | Not started | - |
 | 3. Detection Spine | 0/TBD | Not started | - |
 | 4. Settings & Onboarding | 0/TBD | Not started | - |
