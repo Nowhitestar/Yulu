@@ -48,9 +48,34 @@ def _git_info(root: Path) -> dict[str, Any]:
     }
 
 
+def _dependency_manager() -> Any:
+    """Return a MacOSDependencyManager on Darwin, else None (guarded import).
+
+    Routes brew-managed dependency *presence* reads through the PermissionModel/
+    DependencyManager seams so the package-manager vocabulary lives behind the
+    abstraction (PLAT-05). Import is lazy+guarded so doctor.py keeps working off
+    Darwin or if the seam package is unavailable (it then falls back to which()).
+    """
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from yulu_platform.macos import MacOSDependencyManager
+        return MacOSDependencyManager()
+    except Exception:
+        return None
+
+
 def _check_command(name: str, args: list[str] | None = None) -> dict[str, Any]:
     path = shutil.which(name)
-    check = {"name": name, "ok": bool(path), "path": path or ""}
+    # Presence read routes through the DependencyManager seam when available;
+    # falls back to the which() result off Darwin / when the seam is absent.
+    ok = bool(path)
+    mgr = _dependency_manager()
+    if mgr is not None:
+        try:
+            ok = bool(mgr.is_available(name))
+        except Exception:
+            ok = bool(path)
+    check = {"name": name, "ok": ok, "path": path or ""}
     if path and args:
         code, out, err = _run([name, *args])
         check.update({"returncode": code, "version": (out or err).splitlines()[0] if (out or err) else ""})

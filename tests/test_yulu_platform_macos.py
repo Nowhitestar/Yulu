@@ -158,3 +158,46 @@ def test_dependency_manager_conformance():
 
     result = mgr.is_available("definitely-not-a-formula-xyz")
     assert isinstance(result, bool)  # absent formula → False, never an exception
+
+
+# --- Task 2: read-side callers route through the seams (source-static gate) ---
+# These assertions run on every OS (not Darwin-gated) — they read the caller
+# source text and prove the inline TCC/brew coupling has moved behind the seam,
+# without shelling out to launchctl/brew (mirrors tests/test_status_agent_config.py).
+
+_SCRIPTS = ROOT / "yulu" / "scripts"
+
+
+def test_repair_permissions_routes_reset_through_seam():
+    """repair_permissions.py no longer carries the inline ``tccutil reset
+    ScreenCapture`` list-form call — it routes through MacOSPermissionModel.reset."""
+    src = (_SCRIPTS / "repair_permissions.py").read_text(encoding="utf-8")
+    # The inline list-form subprocess call with the TCC scope literal must be gone.
+    assert '"tccutil", "reset", "ScreenCapture"' not in src, (
+        "repair_permissions still calls tccutil reset ScreenCapture inline; "
+        "it must route through MacOSPermissionModel().reset(...)"
+    )
+    # And it must actually consume the seam.
+    assert "MacOSPermissionModel" in src, (
+        "repair_permissions must route the reset through MacOSPermissionModel"
+    )
+
+
+def test_doctor_routes_dependency_presence_through_seam():
+    """doctor.py references the DependencyManager seam for dependency presence."""
+    src = (_SCRIPTS / "doctor.py").read_text(encoding="utf-8")
+    assert "MacOSDependencyManager" in src and "is_available" in src, (
+        "doctor.py must route brew-managed dependency presence through "
+        "MacOSDependencyManager.is_available"
+    )
+
+
+def test_install_pipeline_untouched_by_seam_routing():
+    """The macOS-only install pipeline stays intact (coexist, not rip-out):
+    neither caller imports/rewires dev_install, and setup.sh is not referenced."""
+    repair = (_SCRIPTS / "repair_permissions.py").read_text(encoding="utf-8")
+    doctor = (_SCRIPTS / "doctor.py").read_text(encoding="utf-8")
+    for src, who in ((repair, "repair_permissions.py"), (doctor, "doctor.py")):
+        assert "dev_install" not in src, (
+            f"{who} must not rewire dev_install this milestone (coexist, not rip-out)"
+        )
