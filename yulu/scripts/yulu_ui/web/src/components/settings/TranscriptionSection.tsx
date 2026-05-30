@@ -1,7 +1,14 @@
 import { Link } from "react-router";
 import { trpc } from "../../trpc.js";
 import { InlineEditRow } from "../InlineEditRow.js";
+import { CommandEditor } from "../CommandEditor.js";
 import type { SettingsRestartTracker } from "../../hooks/useSettingsRestartTracker.js";
+
+const TRANSCRIPTION_MODES = [
+  { value: "local", label: "local" },
+  { value: "cloud-fallback", label: "cloud-fallback" },
+  { value: "cloud-priority", label: "cloud-priority" },
+] as const;
 
 export interface TranscriptionSectionProps {
   tracker: SettingsRestartTracker;
@@ -9,6 +16,8 @@ export interface TranscriptionSectionProps {
 
 export function TranscriptionSection({ tracker }: TranscriptionSectionProps) {
   const { data: cfg } = trpc.config.get.useQuery();
+  // SET-04: the model selector lists whisper models Phase 3 detected across host caches.
+  const { data: models } = trpc.capabilities.detected_models.useQuery();
 
   const updateMut = trpc.config.update.useMutation({
     onSuccess: (res: { daemonsNeedingRestart: string[] }, vars: { key: string }) => {
@@ -21,12 +30,16 @@ export function TranscriptionSection({ tracker }: TranscriptionSectionProps) {
   if (!cfg) return null;
 
   const tr = cfg.transcription as {
+    mode?: "local" | "cloud-fallback" | "cloud-priority";
+    cloud_command?: string[];
     realtime_enabled?: boolean;
     final_engine?: "mlx" | "whisper-cli";
     language?: string;
     local_model_path?: string;
     mlx?: Record<string, unknown>;
   };
+  const mode = tr.mode ?? "local";
+  const modelOptions = (models ?? []).map((m) => ({ value: m.path, label: m.name }));
   const mlx = (tr.mlx ?? {}) as {
     model?: string;
     final_model?: string;
@@ -39,6 +52,77 @@ export function TranscriptionSection({ tracker }: TranscriptionSectionProps) {
     <section id="transcription" className="settings-section">
       <h2 className="settings-section-h">Transcription</h2>
       <p className="settings-section-sub">Whisper / MLX engine and post-recording mode</p>
+
+      {/* TRANS-01 (D-03): transcription mode — local (default) / cloud-fallback / cloud-priority. */}
+      <div className="row">
+        <div className="row-label">
+          <div>Transcription mode</div>
+          <div className="row-help">local keeps transcription on this machine (default). Cloud modes use your own command below.</div>
+        </div>
+        <div className="row-value">
+          <div role="radiogroup" aria-label="Transcription mode">
+            {TRANSCRIPTION_MODES.map((m) => (
+              <label key={m.value} style={{ marginRight: 16 }}>
+                <input
+                  type="radio"
+                  name="transcription-mode"
+                  value={m.value}
+                  checked={mode === m.value}
+                  onChange={() => commit("transcription.mode")(m.value)}
+                />{" "}
+                {m.label}
+              </label>
+            ))}
+          </div>
+        </div>
+        <div className="row-status">{tracker.statusFor("transcription.mode") === "saved" ? "✓" : tracker.statusFor("transcription.mode") === "restart" ? "⟳" : null}</div>
+      </div>
+
+      {/* TRANS-02 (D-04): cloud transcription is the user's OWN command — the llm.command trust model.
+          Yulu holds and asks for no cloud credentials. This is a command array, never a credential field. */}
+      <div className="row">
+        <div className="row-label">
+          <div>Cloud transcription command</div>
+          <div className="row-help">Your own cloud transcription command — spawned with the audio. Yulu holds no cloud keys.</div>
+        </div>
+        <div className="row-value">
+          <CommandEditor
+            value={tr.cloud_command ?? []}
+            onChange={(next) => updateMut.mutateAsync({ key: "transcription.cloud_command", value: next })}
+          />
+        </div>
+        <div className="row-status" />
+      </div>
+
+      {/* SET-04 (D-05): pick among the whisper models Phase 3 detected; persists the chosen .bin path. */}
+      <div className="row">
+        <div className="row-label">
+          <div>Detected model</div>
+          <div className="row-help">Whisper models found across your host caches. Choosing one sets the local model path.</div>
+        </div>
+        <div className="row-value">
+          <select
+            aria-label="Detected model"
+            className="value-input"
+            disabled={modelOptions.length === 0}
+            value={tr.local_model_path ?? ""}
+            onChange={(e) => commit("transcription.local_model_path")(e.target.value)}
+          >
+            {modelOptions.length === 0 ? (
+              <option value="">no models detected</option>
+            ) : (
+              <>
+                <option value="">(choose a model)</option>
+                {modelOptions.map((o) => (
+                  <option key={o.value} value={o.value}>{o.label}</option>
+                ))}
+              </>
+            )}
+          </select>
+        </div>
+        <div className="row-status" />
+      </div>
+
       <InlineEditRow
         label="Realtime transcription"
         help="Transcribe live while recording. Off = transcribe after the recording stops."
