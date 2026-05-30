@@ -50,8 +50,8 @@ Requirements for this milestone. Each maps to exactly one roadmap phase.
 
 ### Capability Reuse (REUSE)
 
-- [ ] **REUSE-01**: When a *usable* host whisper / model / `claude` / `gog` is detected, Yulu reuses it instead of installing its own
-- [ ] **REUSE-02**: Yulu no longer unconditionally `brew install`s whisper-cpp or creates a duplicate MLX venv when the host already provides them
+- [x] **REUSE-01**: When a *usable* host whisper / model / `claude` / `gog` is detected, Yulu reuses it instead of installing its own
+- [x] **REUSE-02**: Yulu no longer unconditionally `brew install`s whisper-cpp or creates a duplicate MLX venv when the host already provides them
 
 ### Agent-Orchestrated Provisioning (PROV)
 
@@ -129,8 +129,8 @@ Each v1 requirement maps to exactly one phase. See `.planning/ROADMAP.md` for ph
 | SET-04 | Phase 4 | Complete |
 | TRANS-01 | Phase 4 | Complete |
 | TRANS-02 | Phase 4 | Complete |
-| REUSE-01 | Phase 5 | Pending |
-| REUSE-02 | Phase 5 | Pending |
+| REUSE-01 | Phase 5 | Complete |
+| REUSE-02 | Phase 5 | Complete |
 | DATA-01 | Phase 5 | Complete |
 | DATA-02 | Phase 5 | Complete |
 | DATA-03 | Phase 5 | Pending |

@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v0.5
 milestone_name: milestone
 status: executing
-last_updated: "2026-05-30T10:13:10.644Z"
+last_updated: "2026-05-30T10:32:28.154Z"
 last_activity: 2026-05-30
 progress:
   total_phases: 8
   completed_phases: 4
   total_plans: 21
-  completed_plans: 18
+  completed_plans: 19
   percent: 50
 ---
 
@@ -25,11 +25,11 @@ See: .planning/PROJECT.md (updated 2026-05-29)
 ## Current Position
 
 Phase: 5 (Capability Reuse + Data-Folder / Cloud-Sync Safety) — EXECUTING
-Plan: 2 of 4
+Plan: 3 of 4
 Status: Ready to execute
 Last activity: 2026-05-30
 
-Progress: [█████████░] 86%
+Progress: [█████████░] 90%
 
 ## Performance Metrics
 
@@ -72,6 +72,7 @@ Progress: [█████████░] 86%
 | Phase 04 P03 | 4min | 2 tasks | 4 files |
 | Phase 04 P04 | 3 | 2 tasks | 4 files |
 | Phase 05 P01 | 17 | 2 tasks | 6 files |
+| Phase 05 P02 | 13 | 3 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -130,6 +131,10 @@ Recent decisions affecting current work:
 - [Phase ?]: [05-01] runtime_dir() LOCKED machine-local (never reads audio.output_dir), stays ~/.config/yulu — NOT relocated (Pitfall 1: churn vs 38+ callers); data_dir() is the only configurable content root
 - [Phase ?]: [05-01] Runtime lock framed as SQLite-WAL corruption + file eviction, never 'sockets can't exist in a synced folder' (Pitfall 3: a socket CAN bind under iCloud, verified on-device)
 - [Phase ?]: [05-01] 3 content literals (search CORPUS_ROOT, voicemail VOICEMAIL_DIR_DEFAULT, record_audio output_dir fallback) route via _resolve_data_dir(); SEARCH_DB_PATH stays on runtime_dir(); helpers degrade to historical literal off-Darwin; assert_runtime_not_synced lazily imports cloud_detect (Plan 03 same-wave) and no-ops until it lands
+- [Phase ?]: [05-02] gog added as a host CLI (host-path) in doctor.py _host_capabilities, NOT a CapabilityProvider entry — D-06 provider neutrality preserved; closes RESEARCH Open-Q1 (gog was absent from the Phase-3 report)
+- [Phase ?]: [05-02] Reuse gate is STRICT string-equality on status == usable (capability_status whisper_cli/gog/mlx_whisper); present-but-unverified AND absent both install — no boolean collapse, no -n/!=absent (Pitfall 4, report.py:35)
+- [Phase ?]: [05-02] capability_status() reads host_capabilities.capabilities.<cap>.status from doctor.py --json with FIXED argv + Python JSON parse; echoes only status, never interpolates resolved_path into a shell (T-05-04 resolve-not-execute); any failure -> absent -> install (safe default)
+- [Phase ?]: [05-02] setup_capabilities.sh mlx gate changes only the MESSAGE (reuse vs advise) — NO venv, NO pip install on either branch (D-02/D-05; a second Yulu-specific venv is Out-of-Scope)
 
 ### Pending Todos
 
@@ -157,6 +162,6 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-05-30T10:13:10.638Z
-Stopped at: Completed 05-01-PLAN.md (plan 1 of 4); resume at plan 2
+Last session: 2026-05-30T10:32:28.147Z
+Stopped at: Completed 05-02-PLAN.md (plan 2 of 4); resume at plan 3
 Resume file: None
