@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v0.5
 milestone_name: milestone
 status: executing
-last_updated: "2026-05-30T08:34:12.786Z"
+last_updated: "2026-05-30T08:45:16.270Z"
 last_activity: 2026-05-30
 progress:
   total_phases: 8
   completed_phases: 3
   total_plans: 17
-  completed_plans: 14
-  percent: 38
+  completed_plans: 15
+  percent: 88
 ---
 
 # Project State
@@ -25,11 +25,11 @@ See: .planning/PROJECT.md (updated 2026-05-29)
 ## Current Position
 
 Phase: 4 (Settings & Onboarding Surface) — EXECUTING
-Plan: 2 of 4
+Plan: 3 of 4
 Status: Ready to execute
 Last activity: 2026-05-30
 
-Progress: [████████░░] 82%
+Progress: [█████████░] 88%
 
 ## Performance Metrics
 
@@ -67,6 +67,7 @@ Progress: [████████░░] 82%
 | Phase 03 P02 | 5 | 1 tasks | 3 files |
 | Phase 03 P03 | 12 | 1 tasks | 2 files |
 | Phase 04 P01 | 13 | 2 tasks | 5 files |
+| Phase 04 P02 | 5 | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -114,6 +115,9 @@ Recent decisions affecting current work:
 - [Phase ?]: [04-01] capabilities tRPC router shells ONLY doctor.py --json (T-04-EX): never executes config.llm.command/cloud_command; 10s timeout+SIGKILL (T-04-DOS); degrades to typed {error,schema_version,capabilities:{}} so a doctor failure never blanks the settings page
 - [Phase ?]: [04-01] list_models() is an ADDITIVE sibling to scan_models (Phase 3 frozen contract preserved byte-for-byte): per-model {name,path,size} over the same fixed _model_roots() allowlist + resolve-dedupe; detection stays in Python (one-way layer dep), router never re-globs in TS
 - [Phase ?]: [04-01] Python tests live at repo-root tests/ (make pytest = 'pytest tests'), NOT yulu/scripts/tests/ — a test under the latter would never run in CI (deviation Rule 3)
+- [Phase ?]: [Phase 04]: [04-02] CapabilitiesSection is the first UI consumer of the Phase 3 host_capabilities report — renders provenance label (D-02 copy) + resolved_path + a tri-state .cap-badge[data-status] pill; report strings are JSX text children only (T-04-XSS, no dangerouslySetInnerHTML)
+- [Phase ?]: [Phase 04]: [04-02] Read-only settings sections take NO tracker prop (CapabilitiesSection omits SettingsRestartTracker); only config-writing sections carry it. statusLabel('absent')='absent' kept distinct from the 'not found' provenance label
+- [Phase ?]: [Phase 04]: [04-02] Slotting a new section into settings.tsx requires extending tests/web/routes/settings.test.tsx (consolidated render): add the section's trpc mock path + its heading/anchor, else the whole Settings render crashes (deviation Rule 1/3)
 
 ### Pending Todos
 
@@ -141,6 +145,6 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-05-30T08:33:47.863Z
-Stopped at: Completed 03-02-PLAN.md (plan 2 of 3); resume at plan 3
+Last session: 2026-05-30T08:44:55.265Z
+Stopped at: Completed 04-02-PLAN.md (plan 2 of 4); resume at plan 3
 Resume file: None

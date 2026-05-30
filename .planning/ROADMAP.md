@@ -137,7 +137,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 **Wave 2** *(blocked on 04-01: all three consume the capabilities router)*
 
-- [ ] 04-02-PLAN.md — CapabilitiesSection (provenance label + resolved path + tri-state badge) slotted into settings (SET-01 consumer, SET-02, D-02)
+- [x] 04-02-PLAN.md — CapabilitiesSection (provenance label + resolved path + tri-state badge) slotted into settings (SET-01 consumer, SET-02, D-02)
 - [ ] 04-03-PLAN.md — extend TranscriptionSection: mode radios local/cloud-fallback/cloud-priority + cloud COMMAND field (not a key) + detected-model selector (TRANS-01, TRANS-02, SET-04, D-03/D-04/D-05)
 - [ ] 04-04-PLAN.md — skippable first-run Onboarding overlay reflecting live permission status, dismissable without completing (SET-03, D-06)
 **Research**: standard pattern (skip research-phase) — tRPC-over-`doctor.py --json` and the settings UI follow established codebase conventions.
@@ -216,7 +216,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8
 | 1. Build Foundation | 6/6 | Complete    | 2026-05-30 |
 | 2. Platform-Abstraction Seams | 4/4 | Complete    | 2026-05-30 |
 | 3. Detection Spine | 3/3 | Complete    | 2026-05-30 |
-| 4. Settings & Onboarding | 1/4 | In Progress|  |
+| 4. Settings & Onboarding | 2/4 | In Progress|  |
 | 5. Reuse + Data-Folder Safety | 0/TBD | Not started | - |
 | 6. Agent-Orchestrated Provisioning | 0/TBD | Not started | - |
 | 7. Seamless Auto-Migration | 0/TBD | Not started | - |
