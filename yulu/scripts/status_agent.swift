@@ -91,12 +91,33 @@ struct RecentRecording {
     let mtime: Date
 }
 
+// Resolve the recordings base directory from config.json (D-07): read
+// `audio.output_dir`, honor a leading `~/`, and fall back to the historical
+// ~/Movies/Yulu default when the key is missing/empty or the file is unreadable.
+// Ported from audio_daemon.swift:45-58 — kept on status_agent's
+// NSString.expandingTildeInPath / NSHomeDirectory() idiom (line 10) for in-file
+// consistency, rather than FileManager.homeDirectoryForCurrentUser.
+func loadRecordingDir() -> String {
+    let defaultDir = ("~/Movies/Yulu" as NSString).expandingTildeInPath
+    let configPath = "\(CONFIG_DIR)/config.json"
+    guard let data = FileManager.default.contents(atPath: configPath),
+          let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+          let audio = json["audio"] as? [String: Any],
+          let raw = audio["output_dir"] as? String,
+          !raw.isEmpty else {
+        return defaultDir
+    }
+    return raw.hasPrefix("~/")
+        ? ("\(raw)" as NSString).expandingTildeInPath
+        : raw
+}
+
 // Enumerate both recording directories directly off disk (no Python, no
 // dependency on the web server). Merge, sort newest-first, return top N.
 func loadRecentRecordings(limit: Int = 5) -> [RecentRecording] {
-    let home = FileManager.default.homeDirectoryForCurrentUser.path
-    let vmDir = "\(home)/Movies/Yulu/voicemails"
-    let mvDir = "\(home)/Movies/Yulu"
+    let base = loadRecordingDir()
+    let vmDir = "\(base)/voicemails"
+    let mvDir = base
     var out: [RecentRecording] = []
 
     func scan(_ dir: String, type: String) {

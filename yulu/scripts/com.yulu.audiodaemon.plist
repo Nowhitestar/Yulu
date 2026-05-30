@@ -7,9 +7,7 @@
 
     <key>ProgramArguments</key>
     <array>
-        <string>/usr/bin/open</string>
-        <string>-W</string>
-        <string>__SCRIPT_DIR__/Yulu.app</string>
+        <string>__SCRIPT_DIR__/Yulu.app/Contents/MacOS/audio_daemon</string>
     </array>
 
     <key>RunAtLoad</key>
