@@ -20,7 +20,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 5: Capability Reuse + Data-Folder / Cloud-Sync Safety** - Detect-first reuse of host whisper/models/`claude`/`gog`; physically separate syncable content from local-only runtime; cloud-root detect-and-warn folder picker (completed 2026-05-30)
 - [x] **Phase 6: Agent-Orchestrated Provisioning + Decoupled Skill Install** - Named idempotent step registry, `yulu provision <step>`, attestation gate, resumable state, `yulu skill install --agent`; spike validates WHO calls provisioning (completed 2026-05-30)
 - [x] **Phase 7: Seamless Auto-Migration** - `yulu migrate` detect→plan→apply→verify with recording-guard, transactional rollback, and bounded backup lifecycle (completed 2026-05-30)
-- [ ] **Phase 8: Multi-Agent Providers (Codex + OpenClaw)** - Generalize the proven ClaudeCode provider to complete the multi-agent-from-v1 lock
+- [x] **Phase 8: Multi-Agent Providers (Codex + OpenClaw)** - Generalize the proven ClaudeCode provider to complete the multi-agent-from-v1 lock (completed 2026-05-30)
 
 ## Phase Details
 
@@ -237,7 +237,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 **Wave 1**
 
-- [ ] 08-01-PLAN.md — CodexProvider + OpenClawProvider (mirror ClaudeCodeProvider) + register in default_providers() + namespace mlx-whisper key to avoid the doctor-fold collision + Wave-0 contract/aggregation tests (AGENT-01, AGENT-02, D-01..D-05)
+- [x] 08-01-PLAN.md — CodexProvider + OpenClawProvider (mirror ClaudeCodeProvider) + register in default_providers() + namespace mlx-whisper key to avoid the doctor-fold collision + Wave-0 contract/aggregation tests (AGENT-01, AGENT-02, D-01..D-05)
 
 **Research**: standard pattern (skip research-phase) — generalizes the reference implementation proven in Phase 3 against an already-locked interface.
 
@@ -255,4 +255,4 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8
 | 5. Reuse + Data-Folder Safety | 4/4 | Complete    | 2026-05-30 |
 | 6. Agent-Orchestrated Provisioning | 4/4 | Complete    | 2026-05-30 |
 | 7. Seamless Auto-Migration | 3/3 | Complete    | 2026-05-30 |
-| 8. Multi-Agent Providers | 0/1 | Planned | - |
+| 8. Multi-Agent Providers | 1/1 | Complete   | 2026-05-30 |

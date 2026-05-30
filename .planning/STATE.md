@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v0.5
 milestone_name: milestone
-status: executing
-last_updated: "2026-05-30T15:16:52.790Z"
-last_activity: 2026-05-30 -- Phase 8 planning complete
+status: verifying
+last_updated: "2026-05-30T15:36:28.051Z"
+last_activity: 2026-05-30
 progress:
   total_phases: 8
-  completed_phases: 7
+  completed_phases: 8
   total_plans: 29
-  completed_plans: 28
-  percent: 88
+  completed_plans: 29
+  percent: 100
 ---
 
 # Project State
@@ -20,14 +20,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-05-29)
 
 **Core value:** A meeting becomes a clean, searchable note entirely on the user's machine, through the agent they already trust — capture and transcription never depend on the cloud, and Yulu never makes the user reconfigure what their agent already provides.
-**Current focus:** Phase 8 — multi agent providers (codex + openclaw)
+**Current focus:** Phase 8 — Multi-Agent Providers (Codex + OpenClaw)
 
 ## Current Position
 
-Phase: 8
-Plan: 08-01 (planned, not executed)
-Status: Ready to execute
-Last activity: 2026-05-30 -- Phase 8 planning complete
+Phase: 8 (Multi-Agent Providers (Codex + OpenClaw)) — EXECUTING
+Plan: 1 of 1
+Status: Phase complete — ready for verification
+Last activity: 2026-05-30
 
 Progress: [██████████] 100%
 
@@ -85,6 +85,7 @@ Progress: [██████████] 100%
 | Phase 07 P01 | 14 | 2 tasks | 4 files |
 | Phase 07 P02 | 10min | 2 tasks tasks | 2 files files |
 | Phase 07 P03 | 38 | 3 tasks | 7 files |
+| Phase 08 P01 | 14 | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -170,6 +171,8 @@ Recent decisions affecting current work:
 - [Phase ?]: [07-03] Transactional apply: move tree to a pristine backup, copytree a working copy back, correct in place — backup stays pristine for rollback while the live tree keeps data + ledger source (no data loss, Pitfall-3 source preserved)
 - [Phase ?]: [07-03] Prune-on-verified-success-only: finalize prunes ONLY when result.ok AND verify passes; a failed/refused verify KEEPS the backup and points at yulu rollback (CONCERNS §2e bounded-lifecycle fix)
 - [Phase ?]: [07-03] verify is resolve-not-execute + fail-closed: doctor._host_capabilities called directly with Path args (no shell); a verify that cannot run is unhealthy so the backup is retained
+- [Phase ?]: [Phase 08]: [08-01] Namespaced ONLY the new providers' mlx-whisper key (codex_mlx_whisper / openclaw_mlx_whisper); ClaudeCodeProvider stays byte-for-byte so the doctor last-writer-wins fold aggregates all three agents collision-free WITHOUT editing doctor.py — provider-side fix because the collision is real
+- [Phase ?]: [Phase 08]: [08-01] No-exec-surface guard via AST import/call detection, not the plan's raw-text grep — the bare-word grep false-positives on the pre-existing ClaudeCodeProvider docstring prose 'no new subprocess of its own'
 
 ### Pending Todos
 
@@ -197,6 +200,6 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-05-30T14:50:49.094Z
+Last session: 2026-05-30T15:36:20.387Z
 Stopped at: Planned Phase 8 (08-01-PLAN.md — 1 plan, 1 wave); resume by executing `/gsd-execute-phase 8`
 Resume file: None

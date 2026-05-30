@@ -69,8 +69,8 @@ Requirements for this milestone. Each maps to exactly one roadmap phase.
 
 ### Multi-Agent Providers (AGENT)
 
-- [ ] **AGENT-01**: A `CodexProvider` implements the capability-provider contract
-- [ ] **AGENT-02**: An `OpenClawProvider` implements the capability-provider contract
+- [x] **AGENT-01**: A `CodexProvider` implements the capability-provider contract
+- [x] **AGENT-02**: An `OpenClawProvider` implements the capability-provider contract
 
 ## v2 Requirements
 
@@ -142,8 +142,8 @@ Each v1 requirement maps to exactly one phase. See `.planning/ROADMAP.md` for ph
 | MIG-01 | Phase 7 | Complete |
 | MIG-02 | Phase 7 | Complete |
 | MIG-03 | Phase 7 | Complete |
-| AGENT-01 | Phase 8 | Pending |
-| AGENT-02 | Phase 8 | Pending |
+| AGENT-01 | Phase 8 | Complete |
+| AGENT-02 | Phase 8 | Complete |
 
 **Coverage:**
 - v1 requirements: 35 total (the enumerated checkbox list sums to 35; the original "33 total" prose was a miscount — all 10 categories are fully mapped)
