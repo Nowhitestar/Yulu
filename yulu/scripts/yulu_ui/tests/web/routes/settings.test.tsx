@@ -55,6 +55,11 @@ vi.mock("../../../web/src/trpc.js", () => {
       search: {
         reindex: { useMutation: noopMutation },
       },
+      capabilities: {
+        host_capabilities: {
+          useQuery: () => ({ data: { schema_version: 1, capabilities: {} }, refetch: () => {}, isError: false }),
+        },
+      },
     },
     makeTrpcClient: () => ({}),
   };
@@ -77,8 +82,9 @@ function wrap(initial = "/settings") {
 }
 
 describe("Settings (consolidated)", () => {
-  it("renders all 6 section headings on one page", () => {
+  it("renders all 7 section headings on one page", () => {
     const { getByText } = wrap();
+    expect(getByText("Capabilities")).toBeInTheDocument();
     expect(getByText("Audio")).toBeInTheDocument();
     expect(getByText("Transcription")).toBeInTheDocument();
     expect(getByText("LLM")).toBeInTheDocument();
@@ -89,6 +95,7 @@ describe("Settings (consolidated)", () => {
 
   it("sections have correct anchor IDs", () => {
     const { container } = wrap();
+    expect(container.querySelector("#capabilities")).not.toBeNull();
     expect(container.querySelector("#audio")).not.toBeNull();
     expect(container.querySelector("#transcription")).not.toBeNull();
     expect(container.querySelector("#llm")).not.toBeNull();
