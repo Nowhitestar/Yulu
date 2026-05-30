@@ -145,3 +145,104 @@ def test_capture_source_struct_is_neutral():
         assert forbidden not in block, (
             f"D-09 violation: '{forbidden}' appears in CaptureSource"
         )
+
+
+# ── 02-04: Core Audio process-tap arm (PLAT-02 / D-01 / D-03) ────────────────
+#
+# The 14.4+ tap arm (ProcessTapBackend) must exist, conform to CaptureBackend,
+# be selected behind `if #available(macOS 14.4, *)` with the SCK arm as the
+# `else`, and carry the Pitfall-3 teardown+rebuild destroy order. The macOS floor
+# stays 13+ — the gate must be 14.4 and must NOT be lowered to 14.2.
+
+
+def test_process_tap_backend_declared_and_conforms():
+    src = _source()
+    assert "ProcessTapBackend" in src, "ProcessTapBackend (14.4+ tap arm) is missing"
+    # class decl line carries both the type name and CaptureBackend conformance.
+    m = re.search(r"class ProcessTapBackend[^\n{]*", src)
+    assert m, "ProcessTapBackend declaration not found"
+    assert "CaptureBackend" in m.group(0), (
+        "ProcessTapBackend must conform to CaptureBackend"
+    )
+
+
+def test_process_tap_backend_referenced_at_least_twice():
+    # Once for the class declaration, once for the AppDelegate selection — proves
+    # the consumer actually switches to the tap arm, not just declares it.
+    src = _source()
+    assert src.count("ProcessTapBackend") >= 2, (
+        "ProcessTapBackend must appear at least twice (declaration + AppDelegate selection)"
+    )
+
+
+def test_tap_arm_gated_at_14_4_not_lowered():
+    src = _source()
+    assert "#available(macOS 14.4" in src, (
+        "the tap arm must be gated behind `if #available(macOS 14.4, *)`"
+    )
+    # D-01/D-03: the gate must NOT be lowered to 14.2 (symbols exist there but the
+    # runtime is unreliable). A 14.2 gate anywhere is a regression.
+    assert "#available(macOS 14.2" not in src, (
+        "the capture gate was lowered to 14.2 — D-01/D-03 require exactly 14.4"
+    )
+
+
+def test_tap_arm_availability_attribute_present():
+    # The class itself must be @available(macOS 14.4, *) so the tap symbols are
+    # only referenced where they exist.
+    assert "@available(macOS 14.4, *)" in _source(), (
+        "ProcessTapBackend must be annotated @available(macOS 14.4, *)"
+    )
+
+
+def test_sck_arm_is_the_else_branch():
+    # The selection must fall back to ScreenCaptureKitBackend on < 14.4 — the floor
+    # stays 13+. Anchor on the ACTUAL construction site (ProcessTapBackend(recorder:)),
+    # not the class doc-comment, then assert the enclosing availability switch.
+    src = _source()
+    ctor = src.index("ProcessTapBackend(recorder:")
+    # The `if #available(macOS 14.4, *)` guard must immediately precede the ctor.
+    preceding = src[max(0, ctor - 200) : ctor]
+    assert "#available(macOS 14.4" in preceding, (
+        "the ProcessTapBackend construction must sit inside `if #available(macOS 14.4, *)`"
+    )
+    following = src[ctor : ctor + 200]
+    assert "else" in following and "ScreenCaptureKitBackend(recorder:" in following, (
+        "the else branch must construct ScreenCaptureKitBackend(recorder:) (floor stays 13+)"
+    )
+
+
+def test_pitfall3_teardown_destroy_order_present():
+    # Pitfall 3 recovery (02-RESEARCH.md:399-403): all three Core Audio destroy
+    # calls must be wired so the zero-buffer teardown+rebuild actually frees the
+    # tap + aggregate stack (not merely logs).
+    src = _source()
+    for symbol in (
+        "AudioDeviceDestroyIOProcID",
+        "AudioHardwareDestroyAggregateDevice",
+        "AudioHardwareDestroyProcessTap",
+    ):
+        assert symbol in src, f"Pitfall-3 teardown is missing {symbol}"
+
+
+def test_pitfall3_zero_buffer_detection_and_rebuild():
+    # The all-zero-buffer bug must be DETECTED (frameCount>0 yet all samples 0.0)
+    # and RECOVERED via a rebuild, not just logged.
+    src = _source()
+    assert "allSatisfy { $0 == 0.0 }" in src, (
+        "zero-buffer detection (allSatisfy { $0 == 0.0 }) is missing"
+    )
+    assert "buildTap" in src, "tap (re)build entry point buildTap is missing"
+
+
+def test_tap_feeds_existing_sink():
+    # The tap must push into the SAME frame sink as the SCK arm and reuse the
+    # exact SysAudioOutput Int16 clamp (no re-derivation).
+    src = _source()
+    # recorder.onSysAudio appears for both SCK (SysAudioOutput) and the tap.
+    assert src.count("recorder.onSysAudio(") >= 2, (
+        "the tap arm must feed recorder.onSysAudio like the SCK arm"
+    )
+    assert src.count("Int16(max(-1.0, min(1.0, $0)) * Float(Int16.max))") >= 2, (
+        "the tap must reuse the SysAudioOutput Int16 clamp verbatim (no re-derivation)"
+    )
