@@ -155,7 +155,17 @@ Decimal phases appear between their surrounding integers in numeric order.
   3. A user can configure the data-folder (recordings/transcripts/summaries) location, and the change takes effect across daemons
   4. When the chosen data folder is a detected cloud-sync root (iCloud / Google Drive…), Yulu detects it and warns about the relevant risks before accepting it
 
-**Plans**: TBD
+**Plans**: 4 plans (2 waves)
+
+**Wave 1** *(parallel — no file overlap)*
+
+- [ ] 05-01-PLAN.md — DATA-02 runtime/content split + runtime LOCK (assert_runtime_not_synced) + route the 3 hardcoded content literals through data_dir() (DATA-02, DATA-01) [hard-prereq, lands first]
+- [ ] 05-02-PLAN.md — reuse gating: add the gog probe + capability_status() helper, gate setup_deps.sh (whisper-cpp/gogcli) + setup_capabilities.sh (mlx) on the tri-state usable (REUSE-01, REUSE-02)
+- [ ] 05-03-PLAN.md — cloud_detect.py (stdlib path-prefix + SF_DATALESS, NOT os.getxattr) + read-only cloud.detect tRPC route (DATA-03 detection primitive)
+
+**Wave 2** *(blocked on 05-01 + 05-03 — D-06 hard sequencing: the cloud picker ships only after the runtime split/lock)*
+
+- [ ] 05-04-PLAN.md — wire the cloud-capable folder picker: audio.output_dir -> restart:audiodaemon propagation + cloud-warn-before-accept in the picker + live-cloud/live-restart human-verify checkpoint (DATA-01, DATA-03)
 **Research**: needs deeper per-phase research (cloud-sync data folder) — iCloud pinning robustness (`com.apple.fileprovider.pinned` vs File Provider API; Sequoia's 10-item Finder cap) and the content/runtime split for `vocab`/`prompts` SQLite need validation against real sync behavior.
 **Hard sequencing (in-phase)**: the content-vs-runtime separation (DATA-02) MUST land before the folder picker is wired to cloud roots (DATA-01/DATA-03) — users must never be able to put SQLite/sockets in a synced folder. Tri-state detection (Phase 3) gates the reuse-vs-install decision here.
 
@@ -217,7 +227,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8
 | 2. Platform-Abstraction Seams | 4/4 | Complete    | 2026-05-30 |
 | 3. Detection Spine | 3/3 | Complete    | 2026-05-30 |
 | 4. Settings & Onboarding | 4/4 | Complete    | 2026-05-30 |
-| 5. Reuse + Data-Folder Safety | 0/TBD | Not started | - |
+| 5. Reuse + Data-Folder Safety | 0/4 | Not started | - |
 | 6. Agent-Orchestrated Provisioning | 0/TBD | Not started | - |
 | 7. Seamless Auto-Migration | 0/TBD | Not started | - |
 | 8. Multi-Agent Providers | 0/TBD | Not started | - |
