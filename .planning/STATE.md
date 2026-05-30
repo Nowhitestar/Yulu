@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v0.5
 milestone_name: milestone
 status: executing
-last_updated: "2026-05-30T07:08:19.421Z"
-last_activity: 2026-05-30 -- Phase 3 planning complete
+last_updated: "2026-05-30T07:22:15.232Z"
+last_activity: 2026-05-30
 progress:
   total_phases: 8
   completed_phases: 2
   total_plans: 13
-  completed_plans: 10
+  completed_plans: 11
   percent: 25
 ---
 
@@ -20,16 +20,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-05-29)
 
 **Core value:** A meeting becomes a clean, searchable note entirely on the user's machine, through the agent they already trust — capture and transcription never depend on the cloud, and Yulu never makes the user reconfigure what their agent already provides.
-**Current focus:** Phase 3 — host capability detection spine
+**Current focus:** Phase 3 — Host-Capability Detection Spine
 
 ## Current Position
 
-Phase: 3
-Plan: Not started
+Phase: 3 (Host-Capability Detection Spine) — EXECUTING
+Plan: 2 of 3
 Status: Ready to execute
-Last activity: 2026-05-30 -- Phase 3 planning complete
+Last activity: 2026-05-30
 
-Progress: [██████████] 100%
+Progress: [█████████░] 85%
 
 ## Performance Metrics
 
@@ -62,6 +62,7 @@ Progress: [██████████] 100%
 | Phase 02 P03 | 6 | 2 tasks | 6 files |
 | Phase 02 P02 | 7min | 2 tasks | 6 files |
 | Phase 02 P04 | 11 | 2 tasks | 6 files |
+| Phase 03 P01 | 9 | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -99,6 +100,9 @@ Recent decisions affecting current work:
 - [Phase ?]: [02-02] PermissionModel reads capture-permission via the existing audio_daemon.sock {action:status} liveness probe (sysReady/micReady), not a private TCC API
 - [Phase ?]: [02-02] DependencyManager wraps brew but never bootstraps Homebrew (fixed RuntimeError when absent); is_available falls back which() and returns bool, never raises (PLAT-05, D-08)
 - [Phase ?]: [02-02] Read-side routing only: doctor.py/repair_permissions.py consume the seams; dev_install.py/setup.sh install pipeline left intact (coexist, not rip-out)
+- [Phase ?]: [03-01] daemon_python() mirrors lib/common.sh:124 (PYTHON_BIN -> which python3 -> /usr/bin/python3) — the ONE canonical interpreter resolves DETECT-04; mlx-whisper importability is probed against IT via subprocess
+- [Phase ?]: [03-01] HostCapabilityReport.to_dict() coerces Provenance/Status enums to .value strings — JSON carries human strings, structurally never a bool for status (D-01/D-08)
+- [Phase ?]: [03-01] probe_llm_command RESOLVES+STATS the configured command head only, never executes it (T-03-01); scan_models globs 3 fixed roots + dedupes by resolved path (T-03-03); every probe degrades to absent() not raise
 
 ### Pending Todos
 
@@ -126,6 +130,6 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-05-30T06:42:11.321Z
+Last session: 2026-05-30T07:21:50.928Z
 Stopped at: Completed 02-03-PLAN.md (plan 3 of 4); resume at plan 4
 Resume file: None

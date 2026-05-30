@@ -24,10 +24,10 @@ Requirements for this milestone. Each maps to exactly one roadmap phase.
 
 ### Capability Detection (DETECT)
 
-- [ ] **DETECT-01**: `doctor.py` produces a versioned `HostCapabilityReport` JSON with per-capability provenance (host-path / yulu-managed / agent-config / absent) and tri-state status (usable / present-but-unverified / absent)
-- [ ] **DETECT-02**: Capability probes resolve binaries via the login-shell PATH (not bare `shutil.which`) and Python importability via the daemon's own interpreter
-- [ ] **DETECT-03**: `doctor` probes `claude` CLI, `whisper-cli`, `mlx-whisper` importability, configured `llm.command` validity, model paths/sizes, and recording-dir writability
-- [ ] **DETECT-04**: The `mlx_python` interpreter ambiguity is resolved so "usable" reflects what the daemon can actually import
+- [x] **DETECT-01**: `doctor.py` produces a versioned `HostCapabilityReport` JSON with per-capability provenance (host-path / yulu-managed / agent-config / absent) and tri-state status (usable / present-but-unverified / absent)
+- [x] **DETECT-02**: Capability probes resolve binaries via the login-shell PATH (not bare `shutil.which`) and Python importability via the daemon's own interpreter
+- [x] **DETECT-03**: `doctor` probes `claude` CLI, `whisper-cli`, `mlx-whisper` importability, configured `llm.command` validity, model paths/sizes, and recording-dir writability
+- [x] **DETECT-04**: The `mlx_python` interpreter ambiguity is resolved so "usable" reflects what the daemon can actually import
 - [ ] **DETECT-05**: A `CapabilityProvider` interface exists with a ClaudeCode implementation working end-to-end
 
 ### Settings & Onboarding (SET)
@@ -118,10 +118,10 @@ Each v1 requirement maps to exactly one phase. See `.planning/ROADMAP.md` for ph
 | PLAT-03 | Phase 2 | Complete |
 | PLAT-04 | Phase 2 | Complete |
 | PLAT-05 | Phase 2 | Complete |
-| DETECT-01 | Phase 3 | Pending |
-| DETECT-02 | Phase 3 | Pending |
-| DETECT-03 | Phase 3 | Pending |
-| DETECT-04 | Phase 3 | Pending |
+| DETECT-01 | Phase 3 | Complete |
+| DETECT-02 | Phase 3 | Complete |
+| DETECT-03 | Phase 3 | Complete |
+| DETECT-04 | Phase 3 | Complete |
 | DETECT-05 | Phase 3 | Pending |
 | SET-01 | Phase 4 | Pending |
 | SET-02 | Phase 4 | Pending |
