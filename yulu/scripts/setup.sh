@@ -1,22 +1,46 @@
 #!/usr/bin/env bash
 #
-# Yulu - 交互式安装脚本
+# Yulu — 交互式安装编排器 (thin orchestrator)
 # Usage:
-#   bash yulu/scripts/setup.sh             # fresh install
+#   bash yulu/scripts/setup.sh             # fresh install (mode auto-resolved)
 #   bash yulu/scripts/setup.sh --upgrade   # idempotent re-run after a `git pull`
+#   bash yulu/scripts/setup.sh --dev       # force the dev fork (build from source via swiftc)
+#
+# D-12 — This is a THIN ORCHESTRATOR. It:
+#   1. resolves the install mode ONCE (dev|release) via lib/common.sh source-detection
+#      (.yulu-install.json `source` field + an explicit `--dev` override),
+#   2. owns ALL interactive prompts (deps confirm, transcription/summary mode,
+#      calendar opt-in, upgrade detection) and resolves them into variables/env, then
+#   3. sequences the six decomposed setup_*.sh concern scripts in order, passing the
+#      resolved `mode` + decisions DOWN via args/env (Pitfall 5 — no shared globals).
+#
+# The six concern scripts (setup_deps.sh, setup_audio.sh, setup_models.sh,
+# setup_capabilities.sh, setup_daemons.sh, setup_ui.sh) each:
+#   - are standalone-or-sourced under `set -uo pipefail`,
+#   - accept `mode` as $1 and read decision state from env (with safe defaults),
+#   - are non-interactive when invoked standalone,
+#   - map 1:1 onto a future Phase 6 `yulu provision <step>` (D-12 check/apply shape).
+#
+# swiftc / Xcode is reached ONLY through the dev branch of setup_audio.sh (D-13 /
+# BUILD-03). A release install runs with no compiler present.
 #
 
-set -e
+set -uo pipefail
 
+# ─── Arg parsing (orchestrator owns this) ────────────────────────────
 UPGRADE_MODE=false
 CONFIG_PRESERVED=false
 for arg in "$@"; do
     case "$arg" in
         --upgrade|-u) UPGRADE_MODE=true ;;
+        --dev) : ;;  # consumed by resolve_install_mode below; no-op here
         --help|-h)
-            echo "Usage: bash yulu/scripts/setup.sh [--upgrade]"
+            echo "Usage: bash yulu/scripts/setup.sh [--upgrade] [--dev]"
             echo "  --upgrade   Skip steps that have already been completed (whisper model exists,"
             echo "              config exists, OAuth granted, TCC granted, LaunchAgents loaded)."
+            echo "  --dev       Force the development fork: build Yulu.app/StatusAgent.app from"
+            echo "              source via swiftc (requires Xcode CLT). Default resolves from"
+            echo "              .yulu-install.json (release installs use pre-built signed binaries)."
             exit 0 ;;
     esac
 done
@@ -32,6 +56,22 @@ PYTHON_BIN="$(command -v python3 || echo /usr/bin/python3)"
 NODE_BIN="$(command -v node || echo /usr/local/bin/node)"
 LOCAL_BIN="$HOME/.local/bin"
 RECORDING_DIR_DEFAULT="$HOME/Movies/Yulu"
+
+# ─── Shared helpers (colors/log/prompt + resolve_install_mode) ───────
+# lib/common.sh provides ok/warn/err/info/header/prompt and the D-13
+# resolve_install_mode / detect_source readers. Sourcing is side-effect-free.
+# shellcheck source=lib/common.sh
+. "$SCRIPT_DIR/lib/common.sh"
+
+# Resolve the install mode ONCE (D-12/D-13). `--dev` (anywhere in "$@") overrides;
+# otherwise .yulu-install.json's `source` field decides (missing → dev checkout).
+MODE="$(resolve_install_mode "$@")"
+
+# Export the resolved decision state so the sequenced concern scripts (and the
+# hoisted lib/common.sh::install_plist) read identical values via env (Pitfall 5).
+export SCRIPT_DIR PYTHON_BIN NODE_BIN CONFIG_DIR MODEL_DIR LAUNCH_AGENTS_DIR
+export UPGRADE_MODE
+
 # Honor an existing config's audio.output_dir on upgrade; fall back to the new default.
 RECORDING_DIR="$RECORDING_DIR_DEFAULT"
 if [[ -f "$CONFIG_DIR/config.json" ]]; then
@@ -44,20 +84,6 @@ except Exception:
         RECORDING_DIR="${existing_dir/#\~/$HOME}"
     fi
 fi
-
-# Colors
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m' # No Color
-
-info()  { echo -e "${BLUE}ℹ️${NC} $1"; }
-ok()    { echo -e "${GREEN}✅${NC} $1"; }
-warn()  { echo -e "${YELLOW}⚠️${NC} $1"; }
-err()   { echo -e "${RED}❌${NC} $1"; }
-header(){ echo; echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"; echo -e "${BLUE}  $1${NC}"; echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"; }
-prompt(){ echo -ne "${YELLOW}➡️${NC} $1 "; }
 
 yulu_version() {
     if [[ -f "$SCRIPT_DIR/version.py" ]]; then
@@ -107,9 +133,12 @@ check_system() {
     fi
 }
 
-# ─── Step 1: Install system deps ─────────────────────
+# ─── Deps confirmation (orchestrator owns the prompt; setup_deps.sh installs) ─
 
-install_deps() {
+confirm_deps_install() {
+    # Returns 0 to proceed with the brew install, 1 to skip it. The interactive
+    # confirmation that the monolith carried inside install_deps now lives here
+    # (Pitfall 5): setup_deps.sh is non-interactive and only runs once we consent.
     header "安装系统依赖"
 
     echo "  将安装以下软件包："
@@ -125,38 +154,10 @@ install_deps() {
         read -r ans
         if [[ "$ans" =~ ^[nN] ]]; then
             warn "跳过依赖安装"
-            return
+            return 1
         fi
     fi
-
-    # `brew install` is idempotent — already-installed packages emit a one-line warning and exit 0.
-    brew install sox ffmpeg whisper-cpp terminal-notifier 2>&1 | tail -1
-    ok "音频/转录/通知工具安装完成"
-
-    brew install steipete/tap/gogcli 2>&1 | tail -1
-    ok "gog CLI 安装完成"
-
-    brew install cloudflared 2>&1 | tail -1
-    ok "cloudflared 安装完成"
-}
-
-# ─── Step 2: Audio setup ─────────────────────────────
-
-setup_audio() {
-    header "音频配置"
-
-    echo "  Yulu 默认使用原生 macOS ScreenCaptureKit + AVFoundation。"
-    echo "  不需要 BlackHole、多输出设备或虚拟声卡。"
-    echo
-    echo "  首次使用 Yulu.app 时，请授权："
-    echo "    - 麦克风"
-    echo "    - 屏幕与系统音频录制"
-    echo
-
-    MIC_DEVICE=":0"
-    SYS_DEVICE=":1"  # 仅 SoX fallback 使用；daemon 后端会忽略
-
-    ok "音频后端: daemon (ScreenCaptureKit 系统音频 + AVFoundation 麦克风)"
+    return 0
 }
 
 # ─── Step 3: Create config ───────────────────────────
@@ -197,8 +198,8 @@ create_config() {
   ],
   "audio": {
     "backend": "daemon",
-    "mic_device": "$MIC_DEVICE",
-    "system_audio_device": "$SYS_DEVICE",
+    "mic_device": ":0",
+    "system_audio_device": ":1",
     "output_dir": "$RECORDING_DIR",
     "format": "wav",
     "silence_threshold": 0.01,
@@ -214,7 +215,6 @@ create_config() {
     "local_model_path": "",
     "whisper_cli": "whisper-cli",
     "mlx": {
-      "python": "$CONFIG_DIR/venv-mlx-whisper/bin/python",
       "model": "mlx-community/whisper-large-v3-mlx"
     },
     "realtime": {
@@ -302,7 +302,11 @@ configure_summary_mode() {
             ;;
     esac
 
-    SUMMARY_MODE="$mode" CUSTOM_LLM_CMD="$custom_cmd" PYTHON_BIN="$PYTHON_BIN" SCRIPT_DIR="$SCRIPT_DIR" CONFIG_DIR="$CONFIG_DIR" "$PYTHON_BIN" - <<'PY'
+    # PYTHON_BIN / SCRIPT_DIR / CONFIG_DIR are already exported at the orchestrator
+    # top; only the two per-call decisions are passed as the command prefix here.
+    # (Avoids SC2097/SC2098: don't re-assign a var on the prefix AND expand it on
+    # the same line — the prefix assignment is only visible to the forked process.)
+    SUMMARY_MODE="$mode" CUSTOM_LLM_CMD="$custom_cmd" "$PYTHON_BIN" - <<'PY'
 import json
 import os
 import shlex
@@ -341,159 +345,13 @@ PY
     esac
 }
 
-# ─── Step 4: Compile native helpers ──────────────────
-
-compile_scanner() {
-    header "编译窗口扫描工具"
-
-    if ! command -v swiftc &>/dev/null; then
-        warn "Swift 编译器未安装（swiftc 不可用），跳过编译"
-        warn "后续可以手动编译: xcode-select --install"
-        return
-    fi
-
-    swiftc -o "$SCRIPT_DIR/window_scanner" \
-           "$SCRIPT_DIR/window_scanner.swift" \
-           -framework Cocoa 2>&1 | tail -1
-    chmod +x "$SCRIPT_DIR/window_scanner"
-    ok "window_scanner 编译成功"
-
-    # Upgrade path: if scanner already returns a non-empty window list, TCC is granted, skip the prompts.
-    if [[ "$UPGRADE_MODE" == true ]]; then
-        local result
-        result=$("$SCRIPT_DIR/window_scanner" 2>&1 || true)
-        if [[ "$result" != "[]" && -n "$result" ]]; then
-            ok "辅助功能权限已就绪（升级模式跳过引导）"
-            return
-        fi
-    fi
-
-    echo
-    echo "  window_scanner 用于读取会议窗口标题（Zoom / Tencent Meeting / etc.）。"
-    echo "  首次运行需要授权辅助功能权限。即将打开 window_scanner..."
-    echo "  当系统弹出对话框时，请点击「允许」或「好」。"
-    echo
-    prompt "准备好了吗？按回车继续..."
-    read -r
-
-    open "$SCRIPT_DIR/window_scanner"
-    sleep 2
-    ok "权限对话框已弹出，请点击允许"
-    prompt "点完允许后按回车继续..."
-    read -r
-
-    # Verify
-    local result
-    result=$("$SCRIPT_DIR/window_scanner" 2>&1)
-    if [[ "$result" == "[]" ]]; then
-        warn "window_scanner 未检测到窗口，可能权限未授权"
-        warn "请手动添加: 系统设置 → 隐私与安全性 → 辅助功能"
-        warn "路径: $SCRIPT_DIR/window_scanner"
-        prompt "继续？[Y/n]"
-        read -r ans
-        if [[ "$ans" =~ ^[nN] ]]; then exit 1; fi
-    else
-        local count
-        count=$(echo "$result" | python3 -c "import json,sys; print(len(json.load(sys.stdin)))" 2>/dev/null)
-        ok "window_scanner 工作正常，检测到 $count 个窗口"
-    fi
-}
-
-compile_audio_daemon() {
-    header "编译并签名 Yulu.app"
-
-    # Release zips lose Unix exec bits (Python zipfile.extractall drops them), so
-    # the prebuilt .app binaries can land as 0644 and launchd then fails to spawn
-    # them ("Launchd job spawn failed"). Re-assert +x up front so release installs
-    # and `yulu update` self-heal regardless of which release_installer extracted.
-    local _bin
-    for _bin in "$SCRIPT_DIR/Yulu.app/Contents/MacOS/audio_daemon" \
-                "$SCRIPT_DIR/StatusAgent.app/Contents/MacOS/status_agent"; do
-        [[ -f "$_bin" ]] && chmod +x "$_bin"
-    done
-
-    local build_script="$SCRIPT_DIR/build_audio_daemon.sh"
-    if [[ ! -x "$build_script" ]]; then
-        warn "Yulu.app 的 build script 不存在或不可执行，跳过"
-        return
-    fi
-
-    "$build_script"
-    ok "Yulu.app 已使用固定 codesign identity 签名"
-
-    # Strip Gatekeeper quarantine so that ad-hoc-signed Yulu.app launches without
-    # the "cannot verify developer" dialog that LSUIElement apps swallow silently.
-    xattr -dr com.apple.quarantine "$SCRIPT_DIR/Yulu.app" 2>/dev/null || true
-
-    # On upgrade, if TCC is already granted and the daemon answers status, skip the
-    # interactive permission walkthrough — but ALWAYS restart the daemon so it
-    # actually picks up the freshly built binary. (`launchctl unload` of an
-    # `open -W Yulu.app` job doesn't kill the LSUIElement child process, so the
-    # old binary keeps running unless we pkill it explicitly.)
-    if [[ "$UPGRADE_MODE" == true ]]; then
-        local existing
-        existing=$(echo '{"action":"status"}' | nc -w 2 -U "$HOME/.config/yulu/audio_daemon.sock" 2>/dev/null || true)
-        if echo "$existing" | grep -q '"sysReady":true' && echo "$existing" | grep -q '"micReady":true'; then
-            info "重载 daemon 让它跑新 binary（TCC 状态保留）..."
-            pkill -9 -f "Yulu.app/Contents/MacOS/audio_daemon" 2>/dev/null || true
-            sleep 2
-            # launchd KeepAlive=true 会自动重启 daemon。如果 plist 已 unload（极端情况），
-            # 我们手动 open。
-            if ! pgrep -f "Yulu.app/Contents/MacOS/audio_daemon" >/dev/null 2>&1; then
-                open "$SCRIPT_DIR/Yulu.app"
-                sleep 3
-            fi
-            ok "麦克风 + 屏幕录制权限已就绪；daemon 已重载"
-            return
-        fi
-    fi
-
-    echo
-    echo "  Yulu.app 负责捕获系统音频和麦克风。"
-    echo "  首次使用需要授权：系统设置 → 隐私与安全性 → 屏幕与系统音频录制 / 麦克风。"
-    echo "  如果系统弹出权限对话框，请点击「允许」。"
-
-    # Reset TCC for the audio daemon's bundle id so macOS will (re)prompt the user
-    # for Microphone + Screen Recording instead of silently honoring a previously-
-    # denied state. This matters in two cases:
-    #   - User accidentally clicked "Don't Allow" the first time.
-    #   - Bundle id changed across versions (carry-over from old TCC entries).
-    # If the user already granted, macOS just re-prompts and they accept again —
-    # one extra click vs. being silently broken.
-    # The daemon must be stopped before reset, otherwise the new request goes
-    # against the already-running process and the prompt is suppressed.
-    launchctl unload "$LAUNCH_AGENTS_DIR/com.yulu.audiodaemon.plist" 2>/dev/null || true
-    pkill -f "Yulu.app/Contents/MacOS/audio_daemon" 2>/dev/null || true
-    sleep 1
-    tccutil reset ScreenCapture com.yulu.audiodaemon 2>/dev/null || true
-    tccutil reset Microphone com.yulu.audiodaemon 2>/dev/null || true
-
-    open "$SCRIPT_DIR/Yulu.app"
-    sleep 4
-    local status
-    status=$(echo '{"action":"status"}' | nc -w 2 -U "$HOME/.config/yulu/audio_daemon.sock" 2>/dev/null || true)
-    if echo "$status" | grep -q '"sysReady":true' && echo "$status" | grep -q '"micReady":true'; then
-        ok "Yulu 捕获权限正常"
-    else
-        warn "Yulu 尚未 ready: $status"
-        warn "如果系统弹出了权限对话框但你来不及点，跑下面这行重新弹一次："
-        warn "  tccutil reset ScreenCapture com.yulu.audiodaemon && open '$SCRIPT_DIR/Yulu.app'"
-    fi
-
-    # Build the status agent bundle (Phase 5). Skip silently if D.1 hasn't shipped
-    # the build script yet — keeps the rest of setup usable on partial checkouts.
-    local sa_build="$SCRIPT_DIR/build_status_agent.sh"
-    if [[ -x "$sa_build" ]]; then
-        info "Building StatusAgent.app..."
-        if bash "$sa_build" >/dev/null 2>&1; then
-            ok "StatusAgent.app built"
-        else
-            warn "StatusAgent.app build failed (continuing — status agent will be unavailable)"
-        fi
-    fi
-}
-
-# ─── Step 4.5: Transcription setup ───────────────────
+# ─── Step 4.5: Transcription engine selection (writes the CHOICE to config) ──
+# The orchestrator owns the interactive engine/model choice and records it in
+# config.json. The heavy lifting then happens in the sequenced concern scripts:
+#   - setup_capabilities.sh VERIFIES mlx-whisper importability (D-05, no install),
+#   - setup_models.sh DOWNLOADS the GGML model + writes the whisper-cli command.
+# So this function only sets final_engine + the chosen model; it does NOT create a
+# venv (D-02 removed that) and does NOT download (setup_models.sh owns the download).
 
 configure_post_recording_mode() {
     header "停止后的处理模式"
@@ -583,153 +441,59 @@ configure_transcription_engine() {
         choice="$default_choice"
     fi
 
+    # Record only the engine + model CHOICE here. setup_capabilities.sh (verify
+    # mlx) and setup_models.sh (download GGML + write whisper-cli command) act on
+    # this config later in the sequence — the orchestrator does NOT venv/download.
     case "$choice" in
-        1)
-            install_mlx_whisper
-            write_mlx_to_config "mlx-community/whisper-large-v3-mlx"
-            ;;
-        2)
-            install_mlx_whisper
-            write_mlx_to_config "mlx-community/whisper-large-v3-turbo"
-            ;;
-        3)
-            write_model_to_config "$MODEL_DIR/ggml-large-v3.bin"
-            ;;
-        4)
-            write_model_to_config "$MODEL_DIR/ggml-large-v3-q5_0.bin"
-            ;;
-        5)
-            write_model_to_config "$MODEL_DIR/ggml-medium.bin"
-            ;;
+        1) record_engine_choice mlx     "mlx-community/whisper-large-v3-mlx" ;;
+        2) record_engine_choice mlx     "mlx-community/whisper-large-v3-turbo" ;;
+        3) record_engine_choice whisper "$MODEL_DIR/ggml-large-v3.bin" ;;
+        4) record_engine_choice whisper "$MODEL_DIR/ggml-large-v3-q5_0.bin" ;;
+        5) record_engine_choice whisper "$MODEL_DIR/ggml-medium.bin" ;;
     esac
 }
 
-install_mlx_whisper() {
-    if [[ "$(uname -m)" != "arm64" ]]; then
-        warn "MLX 主要支持 Apple Silicon；当前机器可能无法安装或运行 mlx-whisper。"
-    fi
-    local venv="$CONFIG_DIR/venv-mlx-whisper"
-    if [[ ! -x "$venv/bin/python" ]]; then
-        info "创建 MLX Python 环境: $venv"
-        "$PYTHON_BIN" -m venv "$venv"
-    fi
-    info "安装/更新 mlx-whisper（首次会下载依赖）..."
-    "$venv/bin/python" -m pip install --upgrade pip mlx-whisper
-    ok "mlx-whisper 已就绪"
-}
-
-download_whisper_model() {
-    header "下载 whisper.cpp 模型"
-
-    mkdir -p "$MODEL_DIR"
-
-    local target
-    target="$("$PYTHON_BIN" - <<PY
+# Write the transcription engine + chosen model into config.json. For whisper it
+# records local_model_path (setup_models.sh downloads it + writes the command); for
+# mlx it records mlx.model (setup_capabilities.sh verifies importability). No venv
+# (D-02), no download (setup_models.sh owns it), no dead mlx.python field (D-03).
+record_engine_choice() {
+    local engine="$1" model="$2"
+    ENGINE="$engine" MODEL_CHOICE="$model" CONFIG_DIR="$CONFIG_DIR" "$PYTHON_BIN" - <<'PY'
 import json
+import os
 from pathlib import Path
-cfg_path = Path("$CONFIG_DIR/config.json")
-if not cfg_path.exists():
-    raise SystemExit(0)
+
+cfg_path = Path(os.environ["CONFIG_DIR"]) / "config.json"
 cfg = json.loads(cfg_path.read_text())
-trans = cfg.get("transcription", {})
-realtime = trans.get("realtime", {}) if isinstance(trans.get("realtime", {}), dict) else {}
-needs = trans.get("final_engine", "whisper") == "whisper" or realtime.get("engine") == "whisper"
-if needs:
-    print(Path(trans.get("local_model_path") or "$MODEL_DIR/ggml-large-v3.bin").expanduser())
+trans = cfg.setdefault("transcription", {})
+realtime = trans.setdefault("realtime", {})
+trans.setdefault("mode", "local")
+trans.setdefault("language", "zh")
+trans.setdefault("post_recording_mode", "fast_summary")
+
+engine = os.environ["ENGINE"]
+model = os.environ["MODEL_CHOICE"]
+
+if engine == "mlx":
+    trans["final_engine"] = "mlx"
+    mlx = trans.setdefault("mlx", {})
+    mlx.pop("python", None)  # D-03: no venv path; daemon uses plist __PYTHON__
+    mlx["model"] = model
+    realtime["engine"] = "mlx"
+    realtime["mlx_model"] = model
+else:
+    trans["final_engine"] = "whisper"
+    trans["local_model_path"] = model
+    realtime["engine"] = "whisper"
+
+cfg_path.write_text(json.dumps(cfg, indent=2, ensure_ascii=False))
 PY
-)"
-
-    if [[ -z "$target" ]]; then
-        ok "当前选择 MLX 转录，跳过 GGML 模型下载"
-        return
-    fi
-
-    if [[ -f "$target" ]]; then
-        ok "模型已存在: $target"
-        write_model_to_config "$target"
-        return
-    fi
-
-    local filename model_name url
-    filename="$(basename "$target")"
-    model_name="${filename#ggml-}"
-    model_name="${model_name%.bin}"
-    if [[ "$filename" != ggml-*.bin || -z "$model_name" ]]; then
-        warn "无法自动识别模型文件名: $target"
-        warn "请手动下载模型后运行: yulu transcription engine whisper $target"
-        return
-    fi
-
-    url="https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-${model_name}.bin"
-    info "下载 ggml-${model_name}.bin（这一步可能要几分钟到十几分钟，取决于网络）..."
-    if curl -L --fail --progress-bar "$url" -o "$target.partial"; then
-        mv "$target.partial" "$target"
-        ok "模型已保存: $target"
-        write_model_to_config "$target"
+    if [[ "$engine" == "mlx" ]]; then
+        ok "转录引擎：MLX（$model）— 将在能力检查中验证可用性"
     else
-        rm -f "$target.partial"
-        warn "模型下载失败。手动下载方法："
-        warn "  curl -L $url -o $target"
-        warn "下载完成后运行：yulu transcription engine whisper $target"
+        ok "转录引擎：whisper.cpp（$(basename "$model")）— 将在模型步骤中下载"
     fi
-}
-
-# Update config.json so transcribe.py knows which model to use.
-write_model_to_config() {
-    local model_path="$1"
-    "$PYTHON_BIN" - <<PY
-import json
-from pathlib import Path
-
-cfg_path = Path("$CONFIG_DIR/config.json")
-if not cfg_path.exists():
-    raise SystemExit(0)
-cfg = json.loads(cfg_path.read_text())
-trans = cfg.setdefault("transcription", {})
-realtime = trans.setdefault("realtime", {})
-trans.setdefault("mode", "local")
-trans.setdefault("language", "zh")
-trans.setdefault("post_recording_mode", "fast_summary")
-trans["final_engine"] = "whisper"
-# Write the explicit whisper-cli command so transcribe.py uses our chosen model.
-trans["command"] = [
-    "whisper-cli",
-    "-m", "$model_path",
-    "-l", trans.get("language", "zh"),
-    "-otxt",
-    "-of", "{{output_stem}}",
-    "{{input}}",
-]
-trans["local_model_path"] = "$model_path"
-realtime["engine"] = "whisper"
-cfg_path.write_text(json.dumps(cfg, indent=2, ensure_ascii=False))
-PY
-    ok "config.json 已指向该模型"
-}
-
-write_mlx_to_config() {
-    local model="$1"
-    "$PYTHON_BIN" - <<PY
-import json
-from pathlib import Path
-
-cfg_path = Path("$CONFIG_DIR/config.json")
-cfg = json.loads(cfg_path.read_text())
-trans = cfg.setdefault("transcription", {})
-realtime = trans.setdefault("realtime", {})
-trans.setdefault("mode", "local")
-trans.setdefault("language", "zh")
-trans.setdefault("post_recording_mode", "fast_summary")
-trans["final_engine"] = "mlx"
-trans["mlx"] = {
-    "python": "$CONFIG_DIR/venv-mlx-whisper/bin/python",
-    "model": "$model",
-}
-realtime["engine"] = "mlx"
-realtime["mlx_model"] = "$model"
-cfg_path.write_text(json.dumps(cfg, indent=2, ensure_ascii=False))
-PY
-    ok "config.json 已设置 MLX 模型: $model"
 }
 
 # ─── Step 5: Google Calendar setup ───────────────────
@@ -828,133 +592,27 @@ json.dump(cfg, open('$tmp', 'w'), indent=2, ensure_ascii=False)
     info "测试日历读取..."
     gog calendar events "$email" --from "$(date -u +%Y-%m-%dT00:00:00Z)" --to "$(date -u -v+1d +%Y-%m-%dT00:00:00Z)" 2>&1
     ok "日历读取成功"
+
+    # Signal that the calendar LaunchAgent should be installed by setup_daemons.sh.
+    YULU_INSTALL_CALENDAR=1
+    export YULU_INSTALL_CALENDAR
 }
 
-# ─── Step 6: Install LaunchAgents ────────────────────
+# Calendar-plist opt-in prompt (the monolith asked this inside install_launchagents;
+# the orchestrator owns it now and passes YULU_INSTALL_CALENDAR=1 to setup_daemons.sh).
+confirm_calendar_plist() {
+    [[ -f "$SCRIPT_DIR/com.yulu.calendar.plist" ]] || return 0
+    # Already opted in during setup_calendar (fresh OAuth) → keep it.
+    [[ "${YULU_INSTALL_CALENDAR:-}" == "1" ]] && return 0
+    # On upgrade, setup_daemons.sh inherits the prior decision; no prompt needed.
+    [[ "$UPGRADE_MODE" == true ]] && return 0
 
-install_launchagents() {
-    header "安装 LaunchAgent 常驻服务"
-
-    mkdir -p "$LAUNCH_AGENTS_DIR"
-
-    # Helper function to fix paths in plist
-    install_plist() {
-        local src="$1"
-        local name="$2"
-        local dest="$LAUNCH_AGENTS_DIR/$name"
-
-        if [[ -f "$dest" ]]; then
-            launchctl unload "$dest" 2>/dev/null || true
-        fi
-
-        cp "$src" "$dest"
-
-        local launch_path="$HOME/.local/bin:$HOME/.nvm/versions/node/$(node -v 2>/dev/null || true)/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
-        # Replace placeholder paths with real paths
-        sed -i '' \
-            -e "s|__PYTHON__|$PYTHON_BIN|g" \
-            -e "s|__NODE_BIN__|$NODE_BIN|g" \
-            -e "s|__HOME__|$HOME|g" \
-            -e "s|__SCRIPT_DIR__|$SCRIPT_DIR|g" \
-            -e "s|__PATH__|$launch_path|g" \
-            "$dest" 2>/dev/null || true
-
-        # If plist has hardcoded paths, update if needed
-        if grep -q "$HOME" "$dest"; then
-            ok "$name: 已复制"
-        else
-            # For plists with absolute paths, just copy
-            ok "$name: 已复制"
-        fi
-    }
-
-    local plist_dir="$SCRIPT_DIR"
-
-    # Yulu.app (native system audio + mic capture)
-    if [[ -f "$plist_dir/com.yulu.audiodaemon.plist" ]]; then
-        install_plist "$plist_dir/com.yulu.audiodaemon.plist" "com.yulu.audiodaemon.plist"
-        launchctl load "$LAUNCH_AGENTS_DIR/com.yulu.audiodaemon.plist" 2>/dev/null || true
-        ok "audiodaemon 已加载"
+    prompt "安装日历推送服务（需要 Google 日历）？[y/N]"
+    read -r ans
+    if [[ "$ans" =~ ^[yY] ]]; then
+        YULU_INSTALL_CALENDAR=1
+        export YULU_INSTALL_CALENDAR
     fi
-
-    # Status agent (Phase 5): menu-bar item + global hotkey for voicemail capture.
-    if [[ -f "$plist_dir/com.yulu.statusagent.plist" ]]; then
-        install_plist "$plist_dir/com.yulu.statusagent.plist" "com.yulu.statusagent.plist"
-        launchctl load "$LAUNCH_AGENTS_DIR/com.yulu.statusagent.plist" 2>/dev/null || true
-        ok "statusagent 已加载"
-    fi
-
-    # Scheduler
-    if [[ -f "$plist_dir/com.yulu.scheduler.plist" ]]; then
-        install_plist "$plist_dir/com.yulu.scheduler.plist" "com.yulu.scheduler.plist"
-        launchctl load "$LAUNCH_AGENTS_DIR/com.yulu.scheduler.plist" 2>/dev/null || true
-        ok "scheduler 已加载"
-    fi
-
-    # Detector
-    if [[ -f "$plist_dir/com.yulu.detector.plist" ]]; then
-        install_plist "$plist_dir/com.yulu.detector.plist" "com.yulu.detector.plist"
-        launchctl load "$LAUNCH_AGENTS_DIR/com.yulu.detector.plist" 2>/dev/null || true
-        ok "detector 已加载"
-    fi
-
-    # Agent queue worker: promptly handles summary_request events via llm.command.
-    if [[ -f "$plist_dir/com.yulu.agentqueue.plist" ]]; then
-        install_plist "$plist_dir/com.yulu.agentqueue.plist" "com.yulu.agentqueue.plist"
-        launchctl load "$LAUNCH_AGENTS_DIR/com.yulu.agentqueue.plist" 2>/dev/null || true
-        ok "agentqueue 已加载"
-    fi
-
-    # STT daemon: resident mlx-whisper service + vocab cache.
-    if [[ -f "$plist_dir/com.yulu.sttdaemon.plist" ]]; then
-        mkdir -p "$HOME/.config/yulu/logs"
-        install_plist "$plist_dir/com.yulu.sttdaemon.plist" "com.yulu.sttdaemon.plist"
-        launchctl load "$LAUNCH_AGENTS_DIR/com.yulu.sttdaemon.plist" 2>/dev/null || true
-        ok "sttdaemon 已加载"
-
-        # Seed vocab.sqlite from frozen snapshots (idempotent).
-        info "种子词表 vocab.sqlite..."
-        PYTHONPATH="$SCRIPT_DIR" "$PYTHON_BIN" -m vocab.cli seed --from-current >/dev/null 2>&1 \
-          && ok "vocab seed 完成" \
-          || warn "vocab seed 失败（可稍后重试: yulu vocab seed --from-current）"
-
-        # Seed prompts.sqlite from frozen snapshots (idempotent).
-        info "种子 prompts.sqlite..."
-        PYTHONPATH="$SCRIPT_DIR" "$PYTHON_BIN" -m prompts.cli seed --from-current >/dev/null 2>&1 \
-          && ok "prompts seed 完成" \
-          || warn "prompts seed 失败（可稍后重试: yulu prompts seed --from-current）"
-
-        # Bootstrap search.sqlite schema (idempotent). First `yulu search`
-        # call will run a full sweep over ~/Movies/Yulu to populate it.
-        info "初始化 search.sqlite..."
-        PYTHONPATH="$SCRIPT_DIR" "$PYTHON_BIN" -m search.indexer init >/dev/null 2>&1 \
-          && ok "search index 初始化完成（首次 yulu search 会全量索引）" \
-          || warn "search index 初始化失败（可稍后重试: yulu search --reindex）"
-    fi
-
-    # Calendar service (optional, only if gog configured)
-    if [[ -f "$plist_dir/com.yulu.calendar.plist" ]]; then
-        local install_calendar=false
-        if [[ "$UPGRADE_MODE" == true ]]; then
-            # Inherit existing decision: if user installed calendar plist last time, refresh it.
-            [[ -f "$LAUNCH_AGENTS_DIR/com.yulu.calendar.plist" ]] && install_calendar=true
-        else
-            prompt "安装日历推送服务（需要 Google 日历）？[y/N]"
-            read -r ans
-            [[ "$ans" =~ ^[yY] ]] && install_calendar=true
-        fi
-        if [[ "$install_calendar" == true ]]; then
-            install_plist "$plist_dir/com.yulu.calendar.plist" "com.yulu.calendar.plist"
-            launchctl load "$LAUNCH_AGENTS_DIR/com.yulu.calendar.plist" 2>/dev/null || true
-            ok "calendar 已加载"
-        fi
-    fi
-
-    echo
-    info "正在等待服务启动..."
-    sleep 3
-    launchctl list | grep com.yulu
-    ok "服务已安装"
 }
 
 # ─── Step 7: Install Yulu as an agent skill (optional) ─────────
@@ -980,7 +638,7 @@ install_agent_skill() {
     else
         prompt "注册 Yulu skill 到 agent？[y/N]"
     fi
-    read -r ans || ans=""   # tolerate EOF under non-interactive stdin (set -e)
+    read -r ans || ans=""   # tolerate EOF under non-interactive stdin
     if [[ ! "$ans" =~ ^[yY] ]]; then
         info "已跳过 skill 注册。以后想装：npx skills add $REPO_DIR -g -a <agent> -y"
         return
@@ -989,13 +647,13 @@ install_agent_skill() {
     local agents=""
     while [[ -z "$agents" ]]; do
         prompt "目标 agent（空格或逗号分隔，如 claude-code openclaw codex；回车跳过）："
-        read -r agents || agents=""   # tolerate EOF under non-interactive stdin (set -e)
+        read -r agents || agents=""   # tolerate EOF under non-interactive stdin
         agents="${agents//,/ }"
         # Collapse repeated whitespace.
         agents="$(echo "$agents" | xargs 2>/dev/null || true)"
         if [[ -z "$agents" ]]; then
             prompt "未输入目标 agent，跳过 skill 注册？[Y/n]"
-            read -r skip_ans || skip_ans=""   # tolerate EOF under non-interactive stdin (set -e)
+            read -r skip_ans || skip_ans=""   # tolerate EOF under non-interactive stdin
             if [[ ! "$skip_ans" =~ ^[nN] ]]; then
                 info "已跳过 skill 注册。"
                 return
@@ -1014,99 +672,6 @@ install_agent_skill() {
         echo "  位置：~/.<agent>/skills/yulu/  (symlink 到 $REPO_DIR/skills/yulu/)"
     else
         warn "skill 注册失败（不影响 Yulu 主功能）。手动重试：npx skills add $REPO_DIR -g ${agent_args[*]}"
-    fi
-}
-
-# ─── Step 7.4: Install yulu_ui (web UI on :7777) ─────
-
-install_yulu_ui() {
-    header "构建 + 安装 yulu_ui (本地 Web UI)"
-
-    local ui_dir="$SCRIPT_DIR/yulu_ui"
-    if [[ ! -d "$ui_dir" ]]; then
-        warn "yulu_ui/ 不存在于 $ui_dir，跳过"
-        return
-    fi
-
-    if ! command -v node &>/dev/null; then
-        warn "未检测到 node；yulu_ui 是可选组件，跳过安装。"
-        warn "  以后想装：brew install node && bash $0 --upgrade"
-        return
-    fi
-
-    local node_major
-    node_major="$(node -v 2>/dev/null | sed -E 's/^v([0-9]+).*/\1/')"
-    if [[ -z "$node_major" || "$node_major" -lt 20 ]]; then
-        warn "node 版本过低（$(node -v 2>/dev/null || echo 'unknown')），yulu_ui 需要 Node 20+。跳过。"
-        return
-    fi
-    ok "Node $(node -v) 满足 yulu_ui 要求"
-
-    # Idempotency marker: skip npm ci when package-lock.json hasn't changed.
-    local lock="$ui_dir/package-lock.json"
-    local marker="$ui_dir/node_modules/.yulu-built-from"
-    local lock_sha=""
-    if [[ -f "$lock" ]]; then
-        lock_sha="$(shasum -a 256 "$lock" | cut -d' ' -f1)"
-    fi
-    if [[ -f "$marker" ]] && [[ "$(cat "$marker" 2>/dev/null)" == "$lock_sha" ]]; then
-        info "npm ci 已是最新（lockfile sha 未变），跳过依赖安装"
-    else
-        info "运行 npm ci (这一步可能需要 30-60 秒)..."
-        ( cd "$ui_dir" && npm ci ) || { err "npm ci 失败"; exit 1; }
-        echo -n "$lock_sha" > "$marker"
-        ok "依赖已安装"
-    fi
-
-    info "运行 npm run build..."
-    ( cd "$ui_dir" && npm run build ) || { err "npm run build 失败"; exit 1; }
-    ok "yulu_ui dist/ 已生成"
-
-    if [[ ! -s "$ui_dir/dist/server.js" || ! -s "$ui_dir/dist/web/index.html" ]]; then
-        err "build 产物不完整：dist/server.js 或 dist/web/index.html 缺失"
-        exit 1
-    fi
-
-    # Install + load LaunchAgent. install_plist is defined inside install_launchagents;
-    # we duplicate the minimal sed+copy here so we don't rely on shell-function scoping.
-    local plist_src="$SCRIPT_DIR/com.yulu.ui.plist"
-    local plist_dest="$LAUNCH_AGENTS_DIR/com.yulu.ui.plist"
-    if [[ ! -f "$plist_src" ]]; then
-        warn "com.yulu.ui.plist 不存在于 $plist_src，跳过 launchd 安装"
-        return
-    fi
-
-    if [[ -f "$plist_dest" ]]; then
-        launchctl unload "$plist_dest" 2>/dev/null || true
-    fi
-    cp "$plist_src" "$plist_dest"
-    sed -i '' \
-        -e "s|__NODE_BIN__|$NODE_BIN|g" \
-        -e "s|__HOME__|$HOME|g" \
-        -e "s|__SCRIPT_DIR__|$SCRIPT_DIR|g" \
-        "$plist_dest"
-    launchctl load "$plist_dest" 2>/dev/null || warn "launchctl load com.yulu.ui 失败"
-    ok "com.yulu.ui.plist 已安装并 load"
-
-    # Verify /healthz within ~10s wall time. We drop --max-time because curl
-    # against a closed local port returns "connection refused" instantly; on
-    # the rare case the port is open but the request hangs, --max-time 1 would
-    # have stretched our budget to ~30s. The 0.5s sleep is our sole pacing.
-    info "等待 yulu_ui 启动 (最多 10 秒)..."
-    local i=0
-    local healthy=false
-    while [[ $i -lt 20 ]]; do
-        if curl -s "http://127.0.0.1:7777/healthz" 2>/dev/null | grep -q '"status":"ok"'; then
-            healthy=true
-            break
-        fi
-        sleep 0.5
-        i=$((i + 1))
-    done
-    if [[ "$healthy" == true ]]; then
-        ok "yulu_ui 健康检查通过：http://127.0.0.1:7777/"
-    else
-        warn "yulu_ui 未在 10 秒内响应 /healthz；查看 ~/.config/yulu/ui.log"
     fi
 }
 
@@ -1285,7 +850,10 @@ show_summary() {
     echo "    https://github.com/Nowhitestar/Yulu"
 }
 
-# ─── Main ────────────────────────────────────────────
+# ─── Main: thin orchestrator (D-12) ──────────────────
+# Resolve mode once (done above as $MODE), own the prompts here, then sequence the
+# six concern scripts passing $MODE + decisions via env. swiftc is reached ONLY via
+# setup_audio.sh's dev branch (D-13 / BUILD-03).
 
 if [[ "$UPGRADE_MODE" == true ]]; then
     echo -e "${BLUE}"
@@ -1294,6 +862,7 @@ if [[ "$UPGRADE_MODE" == true ]]; then
     echo "  ╚══════════════════════════════════════════╝"
     echo -e "${NC}"
     echo "  版本：$(yulu_version)"
+    echo "  安装模式：$MODE"
     echo "  跳过已配置项；只补缺失或更新过的内容。"
     echo
 else
@@ -1303,6 +872,7 @@ else
     echo "  ╚══════════════════════════════════════════╝"
     echo -e "${NC}"
     echo "  版本：$(yulu_version)"
+    echo "  安装模式：$MODE"
     echo "  本脚本将引导你完成 Yulu 的安装和配置。"
     echo "  全程大约需要 10-15 分钟。"
     echo
@@ -1315,20 +885,42 @@ else
     fi
 fi
 
+# ── Pre-flight (orchestrator-resident) ──────────────────────────────
 check_repo_layout
 check_system
-install_deps
-setup_audio
+
+# ── Interactive prompts resolved up-front; decisions passed DOWN via env/args ──
+# 1) Deps (orchestrator confirms, setup_deps.sh installs non-interactively).
+if confirm_deps_install; then
+    "$SCRIPT_DIR/setup_deps.sh" "$MODE"
+fi
+
+# 2) Config + transcription/summary choices (orchestrator-owned, write to config).
 create_config
 configure_post_recording_mode
 configure_transcription_engine
 configure_summary_mode
-compile_scanner
-compile_audio_daemon
-download_whisper_model
+
+# 3) Audio: dev/release fork lives INSIDE setup_audio.sh (swiftc only on dev).
+"$SCRIPT_DIR/setup_audio.sh" "$MODE"
+
+# 4) Models: download the chosen GGML model + write the whisper-cli command.
+"$SCRIPT_DIR/setup_models.sh" "$MODE"
+
+# 5) Capabilities: verify mlx-whisper importability (no venv, no install — D-02/D-05).
+"$SCRIPT_DIR/setup_capabilities.sh" "$MODE"
+
+# 6) Calendar opt-in (orchestrator owns the prompt + OAuth), then daemons.
 setup_calendar
-install_launchagents
-install_yulu_ui
+confirm_calendar_plist
+"$SCRIPT_DIR/setup_daemons.sh" "$MODE"
+
+# 7) UI: build yulu_ui + install its LaunchAgent.
+"$SCRIPT_DIR/setup_ui.sh" "$MODE"
+
+# ── Orchestrator-resident tail (NOT in the D-11 six-concern set) ─────
+# install_yulu_cli / install_agent_skill / run_tests / show_summary stay here;
+# install_agent_skill decoupling is Phase 6 PROV-05 (not changed here).
 install_yulu_cli
 install_agent_skill
 run_tests
