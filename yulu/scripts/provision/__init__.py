@@ -7,7 +7,15 @@ logic). The state ledger (``state.py``, 06-02), the attestation gate
 compose against the names exported here.
 """
 
-from . import state
+from . import attest, state
 from .registry import REGISTRY, ScriptStep, Step, StepResult, step_by_name
 
-__all__ = ["Step", "StepResult", "ScriptStep", "REGISTRY", "step_by_name", "state"]
+__all__ = [
+    "Step",
+    "StepResult",
+    "ScriptStep",
+    "REGISTRY",
+    "step_by_name",
+    "state",
+    "attest",
+]
