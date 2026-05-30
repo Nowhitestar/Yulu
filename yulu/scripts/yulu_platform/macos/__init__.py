@@ -3,6 +3,13 @@
 from __future__ import annotations
 
 from .daemon_manager import MacOSDaemonManager
+from .dependency_manager import MacOSDependencyManager
 from .path_resolver import MacOSPathResolver
+from .permission_model import MacOSPermissionModel
 
-__all__ = ["MacOSDaemonManager", "MacOSPathResolver"]
+__all__ = [
+    "MacOSDaemonManager",
+    "MacOSDependencyManager",
+    "MacOSPathResolver",
+    "MacOSPermissionModel",
+]
