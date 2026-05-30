@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v0.5
 milestone_name: milestone
 status: executing
-last_updated: "2026-05-30T13:50:33.443Z"
-last_activity: 2026-05-30 -- Phase 7 planning complete
+last_updated: "2026-05-30T14:10:36.926Z"
+last_activity: 2026-05-30
 progress:
   total_phases: 8
   completed_phases: 6
   total_plans: 28
-  completed_plans: 25
+  completed_plans: 26
   percent: 75
 ---
 
@@ -20,16 +20,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-05-29)
 
 **Core value:** A meeting becomes a clean, searchable note entirely on the user's machine, through the agent they already trust — capture and transcription never depend on the cloud, and Yulu never makes the user reconfigure what their agent already provides.
-**Current focus:** Phase 7 — seamless auto migration
+**Current focus:** Phase 7 — Seamless Auto-Migration
 
 ## Current Position
 
-Phase: 7
-Plan: Not started
+Phase: 7 (Seamless Auto-Migration) — EXECUTING
+Plan: 2 of 3
 Status: Ready to execute
-Last activity: 2026-05-30 -- Phase 7 planning complete
+Last activity: 2026-05-30
 
-Progress: [██████████] 100%
+Progress: [█████████░] 93%
 
 ## Performance Metrics
 
@@ -81,6 +81,7 @@ Progress: [██████████] 100%
 | Phase 06 P02 | 16 | 2 tasks | 4 files |
 | Phase 06 P03 | 8min | 2 tasks | 3 files |
 | Phase 06 P04 | 12min | 2 tasks tasks | 7 files files |
+| Phase 07 P01 | 14 | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -157,6 +158,9 @@ Recent decisions affecting current work:
 - [Phase ?]: [06-04] provision/cli.py COMPOSES registry+state+attest (never re-implements gate/ledger): --all runs attest.verify_asset FIRST (fail-closed, abort on TamperError before any apply) when --asset given, SKIPS the gate with no asset (Pitfall 5), then walks REGISTRY skipping ok steps with running-before-apply/result-after marking
 - [Phase ?]: [06-04] yulu dispatcher routes provision)/skill) to provision.cli (one cli.py, two argparse subcommands, mirrors vocab.cli); setup.sh DECOUPLE removes only the install_agent_skill CALL (body retained), static guard greps for a bare call so body coexists without re-coupling (D-05/D-08); install.sh/release_installer untouched (additive, signed-zip PRIMARY D-02)
 - [Phase ?]: [06-04] skill_install lifted from setup.sh:620-676 minus prompts: argv-list npx -y skills add <repo> -g -a <agent> -y, NON-FATAL on npx-absent AND npx-failure (returns 0 both, T-06-19), idempotent on re-invoke (overwrites symlink); REPO_DIR=parents[3] mirrors setup.sh
+- [Phase 07]: [07-01] detect_migration(runtime_dir,config_dir): runtime_dir==~/.yulu install tree (ledger), config_dir==~/.config/yulu (config.json + venv-mlx-whisper) — two distinct roots (release_installer runtime_dir sense != PathResolver.runtime_dir())
+- [Phase 07]: [07-01] schema_version is the primary v0.5.x signal; legacy markers (transcription.mlx.python, venv-mlx-whisper dir) only corroborate under an absent schema — a Phase-6-stamped install stays authoritative even with stray legacy files
+- [Phase 07]: [07-01] PlanStep is a pure description; the 3 corrections (drop mlx_python / route ~/Movies/Yulu via PathResolver / stamp schema_version) are NAMED in plan.py, EXECUTED in Plan 03 apply.py (the D-08 boundary state.py references); stable step-name constants for dispatch; SCHEMA_VERSION imported from provision.state (no literal 2)
 
 ### Pending Todos
 
@@ -184,6 +188,6 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-05-30T12:57:45.906Z
-Stopped at: Completed 05-02-PLAN.md (plan 2 of 4); resume at plan 3
+Last session: 2026-05-30T14:10:36.920Z
+Stopped at: Completed 07-01-PLAN.md (plan 1 of 3); resume at plan 2 (07-02 recording-guard / 07-03 apply blocked on 01+02)
 Resume file: None

@@ -63,7 +63,7 @@ Requirements for this milestone. Each maps to exactly one roadmap phase.
 
 ### Seamless Migration (MIG)
 
-- [ ] **MIG-01**: On upgrade, an existing v0.5.x `~/.yulu` install is detected and migrated (detect→plan→apply→verify) with no data loss and no reconfiguration
+- [x] **MIG-01**: On upgrade, an existing v0.5.x `~/.yulu` install is detected and migrated (detect→plan→apply→verify) with no data loss and no reconfiguration
 - [ ] **MIG-02**: Migration guards against active recordings before stopping any daemon (no `pkill -9` truncation)
 - [ ] **MIG-03**: Migration is transactional with `yulu rollback`; backups are pruned only after verified success
 
@@ -139,7 +139,7 @@ Each v1 requirement maps to exactly one phase. See `.planning/ROADMAP.md` for ph
 | PROV-03 | Phase 6 | Complete |
 | PROV-04 | Phase 6 | Complete |
 | PROV-05 | Phase 6 | Complete |
-| MIG-01 | Phase 7 | Pending |
+| MIG-01 | Phase 7 | Complete |
 | MIG-02 | Phase 7 | Pending |
 | MIG-03 | Phase 7 | Pending |
 | AGENT-01 | Phase 8 | Pending |
