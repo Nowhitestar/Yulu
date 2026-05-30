@@ -73,7 +73,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 **Wave 1** *(parallel: Python seams ∥ Swift capture — no file overlap)*
 
-- [ ] 02-01-PLAN.md — MacOSPathResolver + MacOSDaemonManager + Wave-0 conformance/neutrality scaffold (PLAT-03, PLAT-04, D-04/D-06/D-09)
+- [x] 02-01-PLAN.md — MacOSPathResolver + MacOSDaemonManager + Wave-0 conformance/neutrality scaffold (PLAT-03, PLAT-04, D-04/D-06/D-09)
 - [ ] 02-03-PLAN.md — Swift CaptureBackend protocol + SCK-arm wrap + status_agent config.json fix + direct-launch plist (PLAT-01, PLAT-03, PLAT-04, D-02/D-03/D-05/D-07)
 
 **Wave 2** *(blocked on 02-01: shares macos/__init__.py + the conformance test)*
@@ -192,7 +192,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Build Foundation | 6/6 | Complete    | 2026-05-30 |
-| 2. Platform-Abstraction Seams | 0/4 | Planned     | - |
+| 2. Platform-Abstraction Seams | 1/4 | In Progress|  |
 | 3. Detection Spine | 0/TBD | Not started | - |
 | 4. Settings & Onboarding | 0/TBD | Not started | - |
 | 5. Reuse + Data-Folder Safety | 0/TBD | Not started | - |

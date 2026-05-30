@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v0.5
 milestone_name: milestone
 status: executing
-last_updated: "2026-05-30T05:54:45.636Z"
-last_activity: 2026-05-30 -- Phase 2 planning complete
+last_updated: "2026-05-30T06:04:48.555Z"
+last_activity: 2026-05-30
 progress:
   total_phases: 8
   completed_phases: 1
   total_plans: 10
-  completed_plans: 6
+  completed_plans: 7
   percent: 13
 ---
 
@@ -20,16 +20,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-05-29)
 
 **Core value:** A meeting becomes a clean, searchable note entirely on the user's machine, through the agent they already trust — capture and transcription never depend on the cloud, and Yulu never makes the user reconfigure what their agent already provides.
-**Current focus:** Phase 2 — platform abstraction seams
+**Current focus:** Phase 2 — Platform-Abstraction Seams
 
 ## Current Position
 
-Phase: 2
-Plan: Not started
+Phase: 2 (Platform-Abstraction Seams) — EXECUTING
+Plan: 2 of 4
 Status: Ready to execute
-Last activity: 2026-05-30 -- Phase 2 planning complete
+Last activity: 2026-05-30
 
-Progress: [██████████] 100%
+Progress: [███████░░░] 70%
 
 ## Performance Metrics
 
@@ -57,6 +57,7 @@ Progress: [██████████] 100%
 | Phase 01 P04 | 7 | 2 tasks | 3 files |
 | Phase 01 P05 | 19 | 2 tasks | 6 files |
 | Phase 01 P06 | 7 | 2 tasks | 4 files |
+| Phase 02 P01 | 6 | 3 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -84,6 +85,9 @@ Recent decisions affecting current work:
 - [Phase ?]: [Phase 1]: [01-06] CI sole producer of signed+notarized binaries: sign_and_notarize.sh = ephemeral keychain + build_*.sh bottom-up sign + ditto + notarytool submit --wait (App Store Connect API key) + staple .app dirs before packaging (Pitfall 4); package uses --skip-build so staple survives; attest-build-provenance@v4 on the zip (BUILD-02/BUILD-04); keychain torn down if:always() (D-08)
 - [Phase ?]: [Phase 1]: [01-06] Makefile package target forwards $(PACKAGE_ARGS) (default empty) so CI passes --skip-build without changing plain make package TAG=...; CI shellcheck gate uses -P SCRIPTDIR to resolve the runtime $SCRIPT_DIR/lib/common.sh source (else SC1091 fails the gate)
 - [Phase ?]: [Phase 1]: [01-06] A4 (reusable-workflow OIDC permission inheritance) NOT verified — declared id-token/attestations: write on the called release-publish.yml job only; release-please.yml untouched (D-09). If first signed release fails at Attest with an OIDC error, add those two scopes to the caller publish job
+- [Phase ?]: [02-01] Signature-scoped D-09 gate (inspect.signature + dataclasses.fields, never module source): base.py DependencyManager docstring names Homebrew/apt as prose, so a whole-module scan would false-positive on brew — scoping to signatures honors D-09 intent AND stays GREEN against the frozen base
+- [Phase ?]: [02-01] MacOSDaemonManager.install renders ServiceSpec → launchd plist via stdlib plistlib.dump; all launchd key names + launchctl verbs confined to the macOS arm methods (D-09); status returns neutral running/stopped/unknown, never raw launchctl codes
+- [Phase ?]: [02-01] PathResolver runtime_dir() kept distinct from config_dir() (equal today) so Phase 5 DATA-02 runtime/content split diverges it without touching callers; this plan adds the seam only — read-side caller routing (plist direct-launch, status_agent path) lands in 02-03
 
 ### Pending Todos
 
@@ -111,6 +115,6 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-05-30T04:55:59.810Z
-Stopped at: Completed 01-05-PLAN.md (plan 5 of 6); resume at plan 6
+Last session: 2026-05-30T06:04:48.549Z
+Stopped at: Completed 02-01-PLAN.md (plan 1 of 4); resume at plan 2
 Resume file: None
