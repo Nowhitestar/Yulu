@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from .daemon_manager import MacOSDaemonManager
 from .path_resolver import MacOSPathResolver
 
-__all__ = ["MacOSPathResolver"]
+__all__ = ["MacOSDaemonManager", "MacOSPathResolver"]
