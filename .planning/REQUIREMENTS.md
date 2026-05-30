@@ -44,8 +44,8 @@ Requirements for this milestone. Each maps to exactly one roadmap phase.
 
 ### Data Folder & Cloud Sync (DATA)
 
-- [ ] **DATA-01**: User can configure the data folder (recordings/transcripts/summaries) location
-- [ ] **DATA-02**: Runtime/state (SQLite DBs, sockets, locks, PIDs) is physically separated from syncable content and never placed in a synced folder
+- [x] **DATA-01**: User can configure the data folder (recordings/transcripts/summaries) location
+- [x] **DATA-02**: Runtime/state (SQLite DBs, sockets, locks, PIDs) is physically separated from syncable content and never placed in a synced folder
 - [ ] **DATA-03**: When the data folder points at a detected cloud-sync root (iCloud / Google Drive…), Yulu detects it and warns about the relevant risks
 
 ### Capability Reuse (REUSE)
@@ -131,8 +131,8 @@ Each v1 requirement maps to exactly one phase. See `.planning/ROADMAP.md` for ph
 | TRANS-02 | Phase 4 | Complete |
 | REUSE-01 | Phase 5 | Pending |
 | REUSE-02 | Phase 5 | Pending |
-| DATA-01 | Phase 5 | Pending |
-| DATA-02 | Phase 5 | Pending |
+| DATA-01 | Phase 5 | Complete |
+| DATA-02 | Phase 5 | Complete |
 | DATA-03 | Phase 5 | Pending |
 | PROV-01 | Phase 6 | Pending |
 | PROV-02 | Phase 6 | Pending |

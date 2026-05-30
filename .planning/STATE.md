@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v0.5
 milestone_name: milestone
 status: executing
-last_updated: "2026-05-30T09:51:26.147Z"
-last_activity: 2026-05-30 -- Phase 5 planning complete
+last_updated: "2026-05-30T10:13:10.644Z"
+last_activity: 2026-05-30
 progress:
   total_phases: 8
   completed_phases: 4
   total_plans: 21
-  completed_plans: 17
+  completed_plans: 18
   percent: 50
 ---
 
@@ -20,16 +20,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-05-29)
 
 **Core value:** A meeting becomes a clean, searchable note entirely on the user's machine, through the agent they already trust — capture and transcription never depend on the cloud, and Yulu never makes the user reconfigure what their agent already provides.
-**Current focus:** Phase 5 — capability reuse + data folder / cloud sync safety
+**Current focus:** Phase 5 — Capability Reuse + Data-Folder / Cloud-Sync Safety
 
 ## Current Position
 
-Phase: 5
-Plan: Not started
+Phase: 5 (Capability Reuse + Data-Folder / Cloud-Sync Safety) — EXECUTING
+Plan: 2 of 4
 Status: Ready to execute
-Last activity: 2026-05-30 -- Phase 5 planning complete
+Last activity: 2026-05-30
 
-Progress: [██████████] 100%
+Progress: [█████████░] 86%
 
 ## Performance Metrics
 
@@ -71,6 +71,7 @@ Progress: [██████████] 100%
 | Phase 04 P02 | 5 | 2 tasks | 4 files |
 | Phase 04 P03 | 4min | 2 tasks | 4 files |
 | Phase 04 P04 | 3 | 2 tasks | 4 files |
+| Phase 05 P01 | 17 | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -126,6 +127,9 @@ Recent decisions affecting current work:
 - [Phase 04]: [04-03] Model-selector persists to one deterministic key transcription.local_model_path (list_models returns whisper model FILES .bin/.gguf/.safetensors, matching existing Local-model-path filter=bin row); empty detected_models -> disabled 'no models detected' select. Recurring trap re-hit: adding a new trpc query (detected_models) to a section crashes tests/web/routes/settings.test.tsx until its mock path is added (deviation Rule 1/3)
 - [Phase 04]: [04-04] Onboarding first-run gating uses BOTH localStorage (synchronous short-circuit, no-flash) + config.onboarding_dismissed (durable): dismissed = localFlag || cfg.onboarding_dismissed === true -> renders null (never forced, SET-03)
 - [Phase 04]: [04-04] Onboarding Skip hides immediately via local state then awaits config.update (skip-without-complete); a config-write failure can't re-show it because localStorage already gates it. Mounted self-gating in RootLayout (sibling of Pill), not a route
+- [Phase ?]: [05-01] runtime_dir() LOCKED machine-local (never reads audio.output_dir), stays ~/.config/yulu — NOT relocated (Pitfall 1: churn vs 38+ callers); data_dir() is the only configurable content root
+- [Phase ?]: [05-01] Runtime lock framed as SQLite-WAL corruption + file eviction, never 'sockets can't exist in a synced folder' (Pitfall 3: a socket CAN bind under iCloud, verified on-device)
+- [Phase ?]: [05-01] 3 content literals (search CORPUS_ROOT, voicemail VOICEMAIL_DIR_DEFAULT, record_audio output_dir fallback) route via _resolve_data_dir(); SEARCH_DB_PATH stays on runtime_dir(); helpers degrade to historical literal off-Darwin; assert_runtime_not_synced lazily imports cloud_detect (Plan 03 same-wave) and no-ops until it lands
 
 ### Pending Todos
 
@@ -153,6 +157,6 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-05-30T09:08:45.935Z
-Stopped at: Completed 04-03-PLAN.md (plan 3 of 4); resume at plan 4
+Last session: 2026-05-30T10:13:10.638Z
+Stopped at: Completed 05-01-PLAN.md (plan 1 of 4); resume at plan 2
 Resume file: None
