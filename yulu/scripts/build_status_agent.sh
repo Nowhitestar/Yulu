@@ -61,7 +61,16 @@ fi
 if [[ -z "$IDENTITY" ]]; then
     IDENTITY="-"
 fi
-codesign --force --deep --timestamp=none --sign "$IDENTITY" "$APP"
+# Sign bottom-up with the hardened runtime, a secure timestamp, and the
+# least-privilege entitlements (same rationale as build_audio_daemon.sh: no deep
+# recursive signing, real secure timestamp): inner Mach-O first, then the bundle.
+ENTITLEMENTS="$SCRIPT_DIR/StatusAgent.app.entitlements"
+codesign --force --options runtime --timestamp \
+    --entitlements "$ENTITLEMENTS" --sign "$IDENTITY" "$APP_BIN"
+codesign --force --options runtime --timestamp \
+    --entitlements "$ENTITLEMENTS" --sign "$IDENTITY" "$APP"
+codesign --verify --strict --verbose=2 "$APP"
+codesign --display --entitlements :- "$APP"
 
 echo "✅ Built and signed StatusAgent.app"
 echo "   version: $YULU_VERSION_RAW (bundle $YULU_BUNDLE_VERSION, build $YULU_BUILD_NUMBER)"

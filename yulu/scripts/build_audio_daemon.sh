@@ -76,8 +76,18 @@ if [[ -z "$IDENTITY" ]]; then
   IDENTITY="-"
 fi
 
-codesign --force --deep --timestamp=none --sign "$IDENTITY" "$APP"
-codesign --verify --deep --strict --verbose=2 "$APP"
+# Sign bottom-up with the hardened runtime, a secure timestamp, and the
+# least-privilege entitlements. We do NOT use deep recursive signing (it only
+# signs Mach-O files and re-signs nested code with the wrong flags), and we use
+# a real secure timestamp (an unsigned/absent timestamp makes notarization fail).
+#   1. inner Mach-O first ($APP_BIN), then 2. the bundle ($APP).
+ENTITLEMENTS="$SCRIPT_DIR/Yulu.app.entitlements"
+codesign --force --options runtime --timestamp \
+  --entitlements "$ENTITLEMENTS" --sign "$IDENTITY" "$APP_BIN"
+codesign --force --options runtime --timestamp \
+  --entitlements "$ENTITLEMENTS" --sign "$IDENTITY" "$APP"
+codesign --verify --strict --verbose=2 "$APP"
+codesign --display --entitlements :- "$APP"
 
 echo "✅ Built and signed Yulu.app"
 echo "   version: $YULU_VERSION_RAW (bundle $YULU_BUNDLE_VERSION, build $YULU_BUILD_NUMBER)"
