@@ -39,8 +39,8 @@ Requirements for this milestone. Each maps to exactly one roadmap phase.
 
 ### Transcription Modes (TRANS)
 
-- [ ] **TRANS-01**: User can set transcription mode to local (default), cloud-fallback, or cloud-priority
-- [ ] **TRANS-02**: Cloud transcription uses the user's own configured command (same trust model as `llm.command`); Yulu holds no cloud keys
+- [x] **TRANS-01**: User can set transcription mode to local (default), cloud-fallback, or cloud-priority
+- [x] **TRANS-02**: Cloud transcription uses the user's own configured command (same trust model as `llm.command`); Yulu holds no cloud keys
 
 ### Data Folder & Cloud Sync (DATA)
 
@@ -127,8 +127,8 @@ Each v1 requirement maps to exactly one phase. See `.planning/ROADMAP.md` for ph
 | SET-02 | Phase 4 | Complete |
 | SET-03 | Phase 4 | Pending |
 | SET-04 | Phase 4 | Complete |
-| TRANS-01 | Phase 4 | Pending |
-| TRANS-02 | Phase 4 | Pending |
+| TRANS-01 | Phase 4 | Complete |
+| TRANS-02 | Phase 4 | Complete |
 | REUSE-01 | Phase 5 | Pending |
 | REUSE-02 | Phase 5 | Pending |
 | DATA-01 | Phase 5 | Pending |
