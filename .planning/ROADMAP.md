@@ -213,7 +213,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 **Wave 1** *(parallel — file-disjoint: detect/plan ∥ recording-guard)*
 
 - [x] 07-01-PLAN.md — migrate/detect.py (v0.5.x detection) + migrate/plan.py (dry-run-able MigrationPlan naming the in-transit corrections) (MIG-01, D-01/D-04/D-05/D-07)
-- [ ] 07-02-PLAN.md — migrate/guard.py recording-guard: refuse daemon-stop while recording (audio_daemon arbiter) + clean DaemonManager unload, no pkill -9 (MIG-02, D-02/D-06)
+- [x] 07-02-PLAN.md — migrate/guard.py recording-guard: refuse daemon-stop while recording (audio_daemon arbiter) + clean DaemonManager unload, no pkill -9 (MIG-02, D-02/D-06)
 
 **Wave 2** *(blocked on 07-01 + 07-02 — composes detect/plan + guard)*
 
@@ -249,5 +249,5 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8
 | 4. Settings & Onboarding | 4/4 | Complete    | 2026-05-30 |
 | 5. Reuse + Data-Folder Safety | 4/4 | Complete    | 2026-05-30 |
 | 6. Agent-Orchestrated Provisioning | 4/4 | Complete    | 2026-05-30 |
-| 7. Seamless Auto-Migration | 1/3 | In Progress|  |
+| 7. Seamless Auto-Migration | 2/3 | In Progress|  |
 | 8. Multi-Agent Providers | 0/TBD | Not started | - |
