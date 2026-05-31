@@ -80,14 +80,24 @@ export const capabilitiesRouter = router({
       pyEnv(ctx.paths.scriptDir),
       SPAWN_TIMEOUT_MS,
     );
-    if (code !== 0) {
-      return { ...DEGRADED, error: `doctor.py exited with code ${code}` };
-    }
+    // Do NOT gate on `code`: doctor.py's exit code reflects OVERALL health
+    // (`_overall_ok` — e.g. a down daemon or a missing model → exit 1), NOT whether
+    // the host_capabilities section is valid. That section is additive and never-raises
+    // internally, so a non-zero exit must NOT blank it (SET-01). Parse stdout and extract
+    // the section regardless; only degrade when it is genuinely absent/unparseable.
+    // [Found on a real machine: doctor exits 1 on a minor health issue while still emitting
+    //  a perfectly valid host_capabilities section — the settings page must still show it.]
     let parsed: unknown;
     try {
       parsed = JSON.parse(stdout);
     } catch (e) {
-      return { ...DEGRADED, error: `doctor.py output was not valid JSON: ${String(e)}` };
+      return {
+        ...DEGRADED,
+        error:
+          code !== 0
+            ? `doctor.py exited ${code} with no parseable output: ${String(e)}`
+            : `doctor.py output was not valid JSON: ${String(e)}`,
+      };
     }
     const section = (parsed as { host_capabilities?: unknown })?.host_capabilities;
     if (section === undefined || section === null) {

@@ -78,6 +78,20 @@ describe("capabilitiesRouter.host_capabilities", () => {
     expect(r.capabilities).toEqual({});
   });
 
+  it("returns the section even when doctor EXITS NON-ZERO but emits a valid report (real-machine regression)", async () => {
+    // doctor.py --json exits 1 whenever `_overall_ok` is false (a down daemon, a missing
+    // model, etc.) — but the host_capabilities section is additive + never-raises and is
+    // perfectly valid. The settings page must STILL surface the capabilities; the exit code
+    // must not blank a valid report. (Caught on a real machine where mocked tests exited 0.)
+    mockSpawn(DOCTOR_JSON, 1, "a health check failed");
+    const caller = createCaller(capabilitiesRouter, makeCtx());
+    const r = await caller.host_capabilities();
+    expect(r.error).toBeUndefined();
+    expect(r.schema_version).toBe(1);
+    expect(r.capabilities.claude.status).toBe("usable");
+    expect(r.capabilities.models.status).toBe("usable");
+  });
+
   it("resolves a typed error when host_capabilities key is missing from doctor output", async () => {
     mockSpawn(JSON.stringify({ other: true }), 0);
     const caller = createCaller(capabilitiesRouter, makeCtx());
