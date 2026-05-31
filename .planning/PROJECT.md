@@ -76,13 +76,13 @@ A meeting said out loud becomes a clean, searchable note **entirely on the user'
 
 | Decision | Rationale | Outcome |
 |----------|-----------|---------|
-| Build the cross-platform abstraction layer **now** (macOS-only implementation) | Avoid deepening macOS lock-in; future Win/Linux; do the abstraction right while re-architecting | — Pending |
-| Install model = **agent-orchestrated provisioning** (not drag-to-`/Applications`) | Most agent-native and cross-platform-friendly; an OS bundle over-fits macOS | — Pending (spike to validate) |
-| Existing installs get **seamless auto-migration** | Protect current v0.5.x users | — Pending |
-| Cloud sync = **configurable data folder** (iCloud / Google Drive), not a custom backend | Local-first; Obsidian model; zero server burden | — Pending |
-| Transcription is **configurable**: local / cloud-fallback / cloud-priority | Local-first default, but user choice | — Pending |
-| **Multi-agent from v1** (Claude Code + Codex + OpenClaw) via a capability-provider abstraction | Yulu is agent-native, not single-vendor | — Pending |
-| **Decouple skill install** from core install | The agent must be able to install/update the skill independently | — Pending |
+| Build the cross-platform abstraction layer **now** (macOS-only implementation) | Avoid deepening macOS lock-in; future Win/Linux; do the abstraction right while re-architecting | ✓ Done — Phase 2 (`yulu_platform/` ABCs + macOS impls; Linux/Windows = NotImplementedError stubs) |
+| Install model = **agent-orchestrated provisioning** (not drag-to-`/Applications`) | Most agent-native and cross-platform-friendly; an OS bundle over-fits macOS | ✓ Done — Phase 6 (`provision/` named idempotent step registry, agent-drivable via `yulu provision`; spike resolved WHO-calls = dual, signed-zip `curl\|bash` stays PRIMARY fallback) |
+| Existing installs get **seamless auto-migration** | Protect current v0.5.x users | ✓ Done — Phase 7 (`yulu migrate` detect→plan→apply→verify, recording-guard, transactional `yulu rollback`, prune-on-success) |
+| Cloud sync = **configurable data folder** (iCloud / Google Drive), not a custom backend | Local-first; Obsidian model; zero server burden | ✓ Done — Phase 5 (configurable `data_dir`, runtime/content split + LOCK, cloud-root detect-and-warn) |
+| Transcription is **configurable**: local / cloud-fallback / cloud-priority | Local-first default, but user choice | ✓ Done — Phase 4 (mode radios + cloud-command field, Yulu holds NO cloud keys) |
+| **Multi-agent from v1** (Claude Code + Codex + OpenClaw) via a capability-provider abstraction | Yulu is agent-native, not single-vendor | ✓ Done — Phase 8 (Codex + OpenClaw providers, 3-agent doctor aggregation) |
+| **Decouple skill install** from core install | The agent must be able to install/update the skill independently | ✓ Done — Phase 6 (`yulu skill install [--agent]`, removed from `setup.sh` flow) |
 | **macOS floor stays 13+** — dual-arm audio capture (Core Audio taps on 14.4+ / ScreenCaptureKit on 13–14.3 behind one `if #available` seam) | Milestone goal is abstraction, not platform-dropping; raising the floor to 14.4 would strand existing 13–14.3 users. Taps arm kills the 14.4+ re-permission nag; SCK arm keeps compatibility | ✓ Decided 2026-05-30 (Phase 2) |
 
 ## Evolution
