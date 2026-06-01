@@ -62,8 +62,16 @@ setup_audio() {
         # (via build_audio_daemon.sh / build_status_agent.sh) — D-13 / BUILD-03.
         local build_script="$SCRIPT_DIR/build_audio_daemon.sh"
         if [[ -x "$build_script" ]]; then
-            "$build_script"
-            ok "Yulu.app 已使用固定 codesign identity 签名（dev 编译）"
+            # Gate the success message on the build's ACTUAL exit code (set -uo
+            # pipefail here does NOT abort on a failed command). A swallowed failure
+            # leaves Yulu.app linker-ad-hoc WITHOUT entitlements → mic/system capture
+            # fail at runtime while setup falsely reports "signed".
+            if "$build_script"; then
+                ok "Yulu.app 已编译并签名（dev）"
+            else
+                warn "Yulu.app 编译/签名失败 — 麦克风/系统音频捕获将不可用。"
+                warn "  常见原因：codesign 身份歧义。看上面的 codesign 报错。"
+            fi
         else
             warn "Yulu.app 的 build script 不存在或不可执行，跳过"
         fi
