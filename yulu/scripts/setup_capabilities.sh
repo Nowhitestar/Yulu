@@ -43,7 +43,7 @@ CONFIG_DIR="${CONFIG_DIR:-$HOME/.config/yulu}"
 # module's import name is `mlx_whisper` (underscore), not the pip name `mlx-whisper`.
 verify_mlx_whisper() {
     if "$PYTHON_BIN" -c "import importlib.util, sys; sys.exit(0 if importlib.util.find_spec('mlx_whisper') else 1)" 2>/dev/null; then
-        ok "mlx-whisper 可从系统 python3 导入（$PYTHON_BIN）"
+        ok "mlx-whisper 可从系统 python3 导入（${PYTHON_BIN}）"
     else
         warn "系统 python3 ($PYTHON_BIN) 无法导入 mlx-whisper。"
         warn "MLX 转录将不可用，直到它在该解释器中可用（安装/复用的决策属于 Phase 5）。"

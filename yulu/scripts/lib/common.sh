@@ -117,9 +117,13 @@ launch_path() {
     # De-dupe while preserving order (first occurrence wins).
     local -a seen=()
     local out="" p existing dup
-    for p in "${parts[@]}"; do
+    for p in ${parts[@]+"${parts[@]}"}; do
         dup=false
-        for existing in "${seen[@]}"; do
+        # `"${seen[@]}"` on an EMPTY array trips `set -u` ("unbound variable") on the
+        # bash that CI/macOS uses (and the first iteration always sees it empty). The
+        # `${arr[@]+"${arr[@]}"}` idiom expands to the elements only when set, nothing
+        # when empty — set-u-safe across bash versions. (tests/test_setup_decomposition.py)
+        for existing in ${seen[@]+"${seen[@]}"}; do
             [[ "$existing" == "$p" ]] && { dup=true; break; }
         done
         [[ "$dup" == true ]] && continue
@@ -156,7 +160,7 @@ install_plist() {
     local dest="$launch_agents_dir/$name"
 
     if [[ ! -f "$src" ]]; then
-        warn "$name: 模板不存在于 $src，跳过"
+        warn "$name: 模板不存在于 ${src}，跳过"
         return 1
     fi
 

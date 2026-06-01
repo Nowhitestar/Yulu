@@ -490,7 +490,7 @@ else:
 cfg_path.write_text(json.dumps(cfg, indent=2, ensure_ascii=False))
 PY
     if [[ "$engine" == "mlx" ]]; then
-        ok "转录引擎：MLX（$model）— 将在能力检查中验证可用性"
+        ok "转录引擎：MLX（${model}）— 将在能力检查中验证可用性"
     else
         ok "转录引擎：whisper.cpp（$(basename "$model")）— 将在模型步骤中下载"
     fi
@@ -684,7 +684,7 @@ install_yulu_cli() {
     local cli_dest="$LOCAL_BIN/yulu"
 
     if [[ ! -f "$cli_src" ]]; then
-        warn "未找到 yulu CLI 脚本（$cli_src），跳过"
+        warn "未找到 yulu CLI 脚本（${cli_src}），跳过"
         return
     fi
 
@@ -755,7 +755,7 @@ run_tests() {
     local detect_summary
     detect_summary=$(echo "$detect_result" | "$PYTHON_BIN" -c 'import json,sys; d=json.load(sys.stdin); print("active={} windows={}".format(d.get("active"), len(d.get("windows") or [])))' 2>/dev/null || true)
     if [[ -n "$detect_summary" ]]; then
-        verify_ok "检测器可运行（$detect_summary）"
+        verify_ok "检测器可运行（${detect_summary}）"
     else
         verify_warn "检测器异常: $detect_result"
     fi

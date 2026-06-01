@@ -37,7 +37,7 @@ setup_ui() {
 
     local ui_dir="$SCRIPT_DIR/yulu_ui"
     if [[ ! -d "$ui_dir" ]]; then
-        warn "yulu_ui/ 不存在于 $ui_dir，跳过"
+        warn "yulu_ui/ 不存在于 ${ui_dir}，跳过"
         return
     fi
 
@@ -86,7 +86,7 @@ setup_ui() {
     # exported PYTHON_BIN/NODE_BIN/SCRIPT_DIR/LAUNCH_AGENTS_DIR.
     local plist_src="$SCRIPT_DIR/com.yulu.ui.plist"
     if [[ ! -f "$plist_src" ]]; then
-        warn "com.yulu.ui.plist 不存在于 $plist_src，跳过 launchd 安装"
+        warn "com.yulu.ui.plist 不存在于 ${plist_src}，跳过 launchd 安装"
         return
     fi
 
