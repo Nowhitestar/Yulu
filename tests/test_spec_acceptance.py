@@ -386,8 +386,14 @@ def test_status_agent_plist_lsuielement_via_build():
 
 
 def test_setup_sh_installs_statusagent_plist():
-    text = (SCRIPTS / "setup.sh").read_text(encoding="utf-8")
-    assert "com.yulu.statusagent.plist" in text
+    # After the Phase-1 setup decomposition (D-12), setup.sh is a thin orchestrator
+    # and the per-plist install/load moved into setup_daemons.sh. Assert the
+    # statusagent plist is installed by that concern AND that the orchestrator
+    # sequences it.
+    daemons_text = (SCRIPTS / "setup_daemons.sh").read_text(encoding="utf-8")
+    assert "com.yulu.statusagent.plist" in daemons_text
+    setup_text = (SCRIPTS / "setup.sh").read_text(encoding="utf-8")
+    assert "setup_daemons.sh" in setup_text
 
 
 def test_config_example_has_status_agent_block():

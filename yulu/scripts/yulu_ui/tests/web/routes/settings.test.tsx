@@ -30,8 +30,19 @@ vi.mock("../../../web/src/trpc.js", () => {
     mutateAsync: async () => ({ daemonsNeedingRestart: [], daemonsNeedingSighup: [] }),
     isPending: false,
   });
+  // PathValue (InlineEditRow) calls trpc.useUtils().system.cloud.detect.fetch()
+  // on a folder pick. Without this the consolidated render crashes ([04-02]/[04-03]
+  // recurring trap). Default to not-cloud so the Storage section stays green.
+  const utils = {
+    system: {
+      cloud: {
+        detect: { fetch: async () => ({ is_cloud: false, engine: "", reason: "", dataless: false }) },
+      },
+    },
+  };
   return {
     trpc: {
+      useUtils: () => utils,
       config: {
         get: { useQuery: () => ({ data: cfg, isPending: false }) },
         update: { useMutation: noopMutation },
@@ -55,6 +66,14 @@ vi.mock("../../../web/src/trpc.js", () => {
       search: {
         reindex: { useMutation: noopMutation },
       },
+      capabilities: {
+        host_capabilities: {
+          useQuery: () => ({ data: { schema_version: 1, capabilities: {} }, refetch: () => {}, isError: false }),
+        },
+        detected_models: {
+          useQuery: () => ({ data: [], isPending: false }),
+        },
+      },
     },
     makeTrpcClient: () => ({}),
   };
@@ -77,8 +96,9 @@ function wrap(initial = "/settings") {
 }
 
 describe("Settings (consolidated)", () => {
-  it("renders all 6 section headings on one page", () => {
+  it("renders all 7 section headings on one page", () => {
     const { getByText } = wrap();
+    expect(getByText("Capabilities")).toBeInTheDocument();
     expect(getByText("Audio")).toBeInTheDocument();
     expect(getByText("Transcription")).toBeInTheDocument();
     expect(getByText("LLM")).toBeInTheDocument();
@@ -89,6 +109,7 @@ describe("Settings (consolidated)", () => {
 
   it("sections have correct anchor IDs", () => {
     const { container } = wrap();
+    expect(container.querySelector("#capabilities")).not.toBeNull();
     expect(container.querySelector("#audio")).not.toBeNull();
     expect(container.querySelector("#transcription")).not.toBeNull();
     expect(container.querySelector("#llm")).not.toBeNull();

@@ -1,12 +1,13 @@
 import { describe, it, expect } from "vitest";
 import { ConfigManager } from "../src/config.js";
-import { cpSync, mkdtempSync, rmSync, utimesSync, statSync } from "node:fs";
+import { cpSync, mkdtempSync, rmSync, utimesSync, statSync, readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SRC = join(HERE, "fixtures/config.json");
+const CONFIG_TS = join(HERE, "../src/config.ts");
 
 function makeCfg(): { path: string; mgr: ConfigManager; cleanup: () => void } {
   const dir = mkdtempSync(join(tmpdir(), "yulu_cfg_"));
@@ -52,6 +53,21 @@ describe("ConfigManager", () => {
     } finally { cleanup(); }
   });
 
+  it("classifies transcription.mode + transcription.cloud_command as sttdaemon restart (TRANS-01/02)", () => {
+    const { mgr, cleanup } = makeCfg();
+    try {
+      const rMode = mgr.update("transcription.mode", "cloud-fallback");
+      expect(rMode.daemonsNeedingRestart).toEqual(["sttdaemon"]);
+      expect(rMode.daemonsNeedingSighup).toEqual([]);
+      expect(mgr.read().transcription.mode).toBe("cloud-fallback");
+
+      const rCmd = mgr.update("transcription.cloud_command", ["my-cloud-stt", "--stdin"]);
+      expect(rCmd.daemonsNeedingRestart).toEqual(["sttdaemon"]);
+      expect(rCmd.daemonsNeedingSighup).toEqual([]);
+      expect(mgr.read().transcription.cloud_command).toEqual(["my-cloud-stt", "--stdin"]);
+    } finally { cleanup(); }
+  });
+
   it("rejects updates when on-disk mtime advanced (external write)", () => {
     const { path, mgr, cleanup } = makeCfg();
     try {
@@ -61,5 +77,13 @@ describe("ConfigManager", () => {
       expect(() => mgr.update("audio.silence_threshold", 0.05))
         .toThrow(/changed externally/);
     } finally { cleanup(); }
+  });
+});
+
+describe("cloud transcription holds NO keys (TRANS-02 / T-04-KEY guardrail)", () => {
+  it("config.ts declares no cloud API-key / token / secret field", () => {
+    const src = readFileSync(CONFIG_TS, "utf8");
+    // The cloud path is a COMMAND (transcription.cloud_command), never a held credential.
+    expect(/cloud_api_key|api[_-]?key|cloud[_-]?key|\btoken\b|\bsecret\b|password/i.test(src)).toBe(false);
   });
 });

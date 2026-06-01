@@ -146,7 +146,7 @@ def process_audio(audio_path_str: str) -> None:
             if merged is None:
                 print("❌ 无法获取任何转录，daemon 不可用且无 realtime 结果", file=sys.stderr)
                 sys.exit(2)
-        elif "channels" in response:
+        elif isinstance(response.get("channels"), dict):
             from stt_daemon.transcript_merge import merge_segments
             mic_payload = response["channels"].get("mic", {}) or {}
             sys_payload = response["channels"].get("sys", {}) or {}

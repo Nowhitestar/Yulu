@@ -50,6 +50,19 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 REALTIME_PID_PATH = CONFIG_DIR / ".realtime_transcribe.pid"
 
 
+# Phase 5 DATA-01 — the output_dir FALLBACK (when config has none) follows
+# data_dir() so an unconfigured install lands new recordings under the resolver
+# default (~/Movies/Yulu), not a repo-relative dir. Existing-file migration is
+# Phase 7 (D-08). Lazy + guarded resolver import (mirrors probes.probe_recording_dir).
+def _resolve_data_dir() -> Path:
+    try:
+        from yulu_platform.macos.path_resolver import MacOSPathResolver
+
+        return MacOSPathResolver().data_dir()
+    except Exception:
+        return Path.home() / "Movies" / "Yulu"
+
+
 def log(msg):
     ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     print(f"[{ts}] {msg}", flush=True)
@@ -65,7 +78,7 @@ def load_config():
     audio_cfg = cfg.get("audio", {})
     audio_cfg.setdefault("mic_device", ":0")
     audio_cfg.setdefault("system_audio_device", ":1")
-    audio_cfg.setdefault("output_dir", str(SCRIPT_DIR.parent.parent / "meeting-recordings"))
+    audio_cfg.setdefault("output_dir", str(_resolve_data_dir()))
     audio_cfg.setdefault("silence_threshold", 0.01)
     audio_cfg.setdefault("silence_duration_sec", 300)
     audio_cfg.setdefault("backend", "daemon")  # "daemon" or "sox"

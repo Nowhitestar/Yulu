@@ -135,18 +135,83 @@ function ToggleValue({ value, onCommit }: ToggleProps) {
   );
 }
 
+// A folder the user picked that cloud.detect flagged as a sync root, held
+// pending the opt-in confirm. DATA-03: detect-and-WARN before committing,
+// never block (D-03) — the user may use a cloud folder anyway.
+interface CloudWarning {
+  path: string;
+  reason: string;
+}
+
 function PathValue({ value, mode, filter, onCommit }: PathProps) {
   const pickFile = trpc.system.pickFile.useMutation();
   const openInFinder = trpc.system.openInFinder.useMutation();
+  const utils = trpc.useUtils();
+  const [pending, setPending] = useState<CloudWarning | null>(null);
+
   const choose = async () => {
     const res = await pickFile.mutateAsync({ mode, filter });
-    if (res.path) onCommit(res.path);
+    if (!res.path) return;
+    // Only folder picks can become a synced data-folder; file pickers
+    // (model selection etc.) are never cloud-warned.
+    if (mode !== "folder") { onCommit(res.path); return; }
+    // DATA-03: classify the chosen folder. A detection failure (route degrade,
+    // timeout, thrown) must NEVER block selection — fall through to commit.
+    let isCloud = false;
+    let reason = "";
+    try {
+      const det = await utils.system.cloud.detect.fetch({ path: res.path });
+      isCloud = det.is_cloud;
+      reason = det.reason;
+    } catch {
+      isCloud = false;
+    }
+    if (isCloud) {
+      setPending({ path: res.path, reason });
+    } else {
+      onCommit(res.path);
+    }
   };
+
+  const acceptCloud = () => {
+    if (!pending) return;
+    const p = pending.path;
+    setPending(null);
+    onCommit(p);
+  };
+  const cancelCloud = () => setPending(null);
+
   return (
     <div className="path-value">
       <span className="path-display" title={value}>{value || "(unset)"}</span>
       <button type="button" className="path-btn" onClick={choose} disabled={pickFile.isPending}>Choose…</button>
       {value && <button type="button" className="path-btn" onClick={() => openInFinder.mutate({ path: value, reveal: true })}>Reveal</button>}
+      {pending && <CloudWarn warning={pending} onAccept={acceptCloud} onCancel={cancelCloud} />}
+    </div>
+  );
+}
+
+// The honest cloud-root warning (RESEARCH "Detect a cloud root at folder-pick time").
+// Frames REAL harms — eviction of an in-use recording + DB-corruption-if-runtime-leaked.
+// Never claims physical impossibility: a Unix socket CAN bind under a sync folder
+// (verified on-device), so the rationale is corruption/eviction, not impossibility
+// (RESEARCH Pitfall 3).
+function CloudWarn({ warning, onAccept, onCancel }: { warning: CloudWarning; onAccept: () => void; onCancel: () => void }) {
+  const where = warning.reason ? `in ${warning.reason}` : "in a cloud-sync folder";
+  return (
+    <div className="cloud-warn" role="alertdialog" aria-label="Cloud folder warning">
+      <div className="cloud-warn-body">
+        <div className="cloud-warn-title">This folder is {where}.</div>
+        <ul className="cloud-warn-risks">
+          <li>macOS may <strong>evict</strong> (make &ldquo;dataless&rdquo;) a recording that hasn&rsquo;t been used recently — if that happens mid-write or before transcription, the file can be lost or corrupted.</li>
+          <li>Yulu keeps its databases and live files <strong>out</strong> of this folder, so only your recordings, transcripts, and summaries sync.</li>
+        </ul>
+        <div className="cloud-warn-note">You can use this folder anyway if you understand the trade-off.</div>
+      </div>
+      <div className="cloud-warn-actions">
+        <button type="button" className="path-btn cloud-warn-cancel" onClick={onCancel}>Cancel</button>
+        <button type="button" className="path-btn cloud-warn-accept" onClick={onAccept}>Use anyway</button>
+      </div>
     </div>
   );
 }

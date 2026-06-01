@@ -33,8 +33,14 @@ swift-build:
 		mkdir -p $(SWIFT_BUILD_DIR); \
 		for f in $(SWIFT_FILES); do \
 			stem="$$(basename "$$f" .swift)"; \
-			echo "swiftc $$f -> $(SWIFT_BUILD_DIR)/$$stem"; \
-			swiftc -o "$(SWIFT_BUILD_DIR)/$$stem" "$$f"; \
+			case "$$stem" in \
+				audio_daemon) \
+					FW="-framework Cocoa -framework ScreenCaptureKit -framework AVFoundation -framework CoreMedia -framework CoreAudio -framework AudioToolbox" ;; \
+				*) \
+					FW="" ;; \
+			esac; \
+			echo "swiftc $$f -> $(SWIFT_BUILD_DIR)/$$stem $$FW"; \
+			swiftc -o "$(SWIFT_BUILD_DIR)/$$stem" "$$f" $$FW; \
 		done; \
 	else \
 		echo "swiftc missing; skipping Swift build"; \
@@ -62,7 +68,7 @@ sync-skill-dry-run:
 
 package:
 	@if [ -z "$(TAG)" ]; then echo "Usage: make package TAG=vX.Y.Z"; exit 1; fi
-	bash packaging/scripts/package.sh "$(TAG)"
+	bash packaging/scripts/package.sh "$(TAG)" $(PACKAGE_ARGS)
 
 
 checksums:

@@ -116,20 +116,26 @@ if ! command -v python3 &>/dev/null; then
 fi
 ok "python3 $(python3 --version | awk '{print $2}')"
 
-# Xcode Command Line Tools are needed by setup for Swift and system tooling.
+# Xcode Command Line Tools (swiftc) are needed only by the --dev fork, which
+# compiles Yulu.app / StatusAgent.app from source (build_audio_daemon.sh +
+# build_status_agent.sh). A RELEASE install ships pre-built, signed, notarized +
+# stapled binaries and needs no compiler — so the Xcode pre-flight is gated on
+# --dev (BUILD-03 / Pitfall 6), mirroring the --dev-gated git check below.
 # `xcode-select -p` exits 2 if no developer dir is set.
-if ! xcode-select -p &>/dev/null; then
-    warn "Xcode Command Line Tools not installed."
-    echo "Triggering installation now — a macOS dialog will appear."
-    echo "Click 'Install', wait ~5 minutes, then re-run this command."
-    xcode-select --install || true
-    exit 1
-fi
-ok "Xcode Command Line Tools at $(xcode-select -p)"
+if ((${#TARGET_ARGS[@]} > 0)) && [[ "${TARGET_ARGS[0]}" == "--dev" ]]; then
+    if ! xcode-select -p &>/dev/null; then
+        warn "Xcode Command Line Tools not installed (required for --dev source builds)."
+        echo "Triggering installation now — a macOS dialog will appear."
+        echo "Click 'Install', wait ~5 minutes, then re-run this command."
+        xcode-select --install || true
+        exit 1
+    fi
+    ok "Xcode Command Line Tools at $(xcode-select -p)"
 
-if ((${#TARGET_ARGS[@]} > 0)) && [[ "${TARGET_ARGS[0]}" == "--dev" ]] && ! command -v git &>/dev/null; then
-    err "git is required for --dev installs. Install Xcode CLI Tools or git and retry."
-    exit 1
+    if ! command -v git &>/dev/null; then
+        err "git is required for --dev installs. Install Xcode CLI Tools or git and retry."
+        exit 1
+    fi
 fi
 
 # ─── Download helper ──────────────────────────────────────────────

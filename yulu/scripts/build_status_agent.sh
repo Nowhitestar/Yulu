@@ -48,20 +48,33 @@ plist_set_or_add CFBundleIconFile           string  Yulu
 plist_set_or_add LSUIElement                bool    true
 plist_set_or_add NSAppleEventsUsageDescription string "Yulu Status Agent opens the inbox in Terminal."
 
-# Code-signing identity selection (same logic as build_audio_daemon.sh)
+# Code-signing identity selection (same logic as build_audio_daemon.sh).
+# Auto-detect by the 40-char SHA-1 HASH (whitespace field 2), NOT the human name:
+# a name can match more than one cert (same identity in login + System keychains),
+# making `codesign --sign "<name>"` abort with "ambiguous", which under set -e
+# leaves the bundle linker-ad-hoc WITHOUT entitlements. The hash is unique.
 IDENTITY="${YULU_CODESIGN_IDENTITY:-}"
 if [[ -z "$IDENTITY" ]]; then
     IDENTITY="$(security find-identity -v -p codesigning 2>/dev/null \
-        | awk -F'"' '/Developer ID Application/ {print $2; exit}')"
+        | awk '/Developer ID Application/ {print $2; exit}')"
 fi
 if [[ -z "$IDENTITY" ]]; then
     IDENTITY="$(security find-identity -v -p codesigning 2>/dev/null \
-        | awk -F'"' '/Apple Development|Mac Developer/ {print $2; exit}')"
+        | awk '/Apple Development|Mac Developer/ {print $2; exit}')"
 fi
 if [[ -z "$IDENTITY" ]]; then
     IDENTITY="-"
 fi
-codesign --force --deep --timestamp=none --sign "$IDENTITY" "$APP"
+# Sign bottom-up with the hardened runtime, a secure timestamp, and the
+# least-privilege entitlements (same rationale as build_audio_daemon.sh: no deep
+# recursive signing, real secure timestamp): inner Mach-O first, then the bundle.
+ENTITLEMENTS="$SCRIPT_DIR/StatusAgent.app.entitlements"
+codesign --force --options runtime --timestamp \
+    --entitlements "$ENTITLEMENTS" --sign "$IDENTITY" "$APP_BIN"
+codesign --force --options runtime --timestamp \
+    --entitlements "$ENTITLEMENTS" --sign "$IDENTITY" "$APP"
+codesign --verify --strict --verbose=2 "$APP"
+codesign --display --entitlements :- "$APP"
 
 echo "✅ Built and signed StatusAgent.app"
 echo "   version: $YULU_VERSION_RAW (bundle $YULU_BUNDLE_VERSION, build $YULU_BUILD_NUMBER)"

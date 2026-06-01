@@ -57,6 +57,26 @@ def run(cmd: list[str], check: bool = False, timeout: int = 20) -> subprocess.Co
     return result
 
 
+def reset_capture_permission() -> None:
+    """Reset the stale capture grant through the PermissionModel seam.
+
+    Routes the TCC reset through ``MacOSPermissionModel().reset(...)`` so the
+    consent-database scope name lives inside the seam (D-09), not inline here.
+    The import is guarded so this script still loads off Darwin / if the seam
+    package is unavailable; a missing seam simply skips the reset.
+    """
+    try:
+        sys.path.insert(0, str(SCRIPT_DIR))
+        from yulu_platform.macos import MacOSPermissionModel
+    except Exception:
+        return
+    try:
+        MacOSPermissionModel().reset("system-audio-capture")
+    except Exception:
+        # Off-Darwin construction raises; an unavailable seam must not break repair.
+        pass
+
+
 def daemon_status(timeout: float = 3.0) -> dict:
     if not SOCKET_PATH.exists():
         return {"ok": False, "exists": False, "error": "socket not found"}
@@ -111,7 +131,7 @@ def main(argv: list[str] | None = None) -> int:
 
     data = plan(reset=args.reset)
     if args.reset:
-        run(["tccutil", "reset", "ScreenCapture", BUNDLE_ID], check=False)
+        reset_capture_permission()  # routes through MacOSPermissionModel.reset (D-09)
     restart_daemon()
     status = daemon_status()
     data["status_after_restart"] = status

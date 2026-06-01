@@ -26,7 +26,15 @@ jobs:
           for f in install.sh \
                    packaging/scripts/package.sh \
                    packaging/scripts/checksums.sh \
+                   packaging/scripts/sign_and_notarize.sh \
                    yulu/scripts/setup.sh \
+                   yulu/scripts/setup_deps.sh \
+                   yulu/scripts/setup_audio.sh \
+                   yulu/scripts/setup_models.sh \
+                   yulu/scripts/setup_capabilities.sh \
+                   yulu/scripts/setup_daemons.sh \
+                   yulu/scripts/setup_ui.sh \
+                   yulu/scripts/lib/common.sh \
                    yulu/scripts/uninstall.sh \
                    yulu/scripts/yulu \
                    yulu/scripts/build_audio_daemon.sh \
@@ -34,6 +42,31 @@ jobs:
             printf 'bash -n %s\n' "$f"
             bash -n "$f"
           done
+
+      - name: ShellCheck (decomposed setup + lib + build scripts)
+        run: |
+          set -euo pipefail
+          # macos-latest runners no longer ship shellcheck preinstalled (image
+          # change), so the step exited 127 "command not found". Install on demand.
+          command -v shellcheck >/dev/null 2>&1 || brew install shellcheck
+          shellcheck --version
+          # -x follows `source` directives (the setup_*.sh source lib/common.sh);
+          # -P SCRIPTDIR resolves the sourced lib/common.sh relative to each
+          # script's own directory (the source path is "$SCRIPT_DIR/lib/...",
+          # computed at runtime, so without SCRIPTDIR shellcheck emits SC1091 and
+          # exits non-zero). Together they let the concern scripts check cleanly.
+          shellcheck -x -P SCRIPTDIR \
+            yulu/scripts/setup.sh \
+            yulu/scripts/setup_deps.sh \
+            yulu/scripts/setup_audio.sh \
+            yulu/scripts/setup_models.sh \
+            yulu/scripts/setup_capabilities.sh \
+            yulu/scripts/setup_daemons.sh \
+            yulu/scripts/setup_ui.sh \
+            yulu/scripts/lib/common.sh \
+            yulu/scripts/build_audio_daemon.sh \
+            yulu/scripts/build_status_agent.sh \
+            packaging/scripts/sign_and_notarize.sh
 
       - name: Python syntax check
         run: |

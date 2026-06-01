@@ -15,7 +15,9 @@ on:
         type: string
 
 permissions:
-  contents: write
+  contents: write # existing — needed for `gh release`
+  id-token: write # OIDC token used to sign the build-provenance attestation
+  attestations: write # persist the attestation to the repo
 
 jobs:
   publish:
@@ -46,7 +48,15 @@ jobs:
           for f in install.sh \
                    packaging/scripts/package.sh \
                    packaging/scripts/checksums.sh \
+                   packaging/scripts/sign_and_notarize.sh \
                    yulu/scripts/setup.sh \
+                   yulu/scripts/setup_deps.sh \
+                   yulu/scripts/setup_audio.sh \
+                   yulu/scripts/setup_models.sh \
+                   yulu/scripts/setup_capabilities.sh \
+                   yulu/scripts/setup_daemons.sh \
+                   yulu/scripts/setup_ui.sh \
+                   yulu/scripts/lib/common.sh \
                    yulu/scripts/uninstall.sh \
                    yulu/scripts/yulu \
                    yulu/scripts/build_audio_daemon.sh \
@@ -73,14 +83,48 @@ jobs:
           python -m pip install pytest
           python -m pytest -q
 
+      # Sign + notarize + staple BEFORE packaging (Pitfall 4 ordering): the .app
+      # DIRECTORIES are stapled here so the ticket travels inside the zip that the
+      # next step builds. sign_and_notarize.sh also runs build_*.sh (bottom-up
+      # hardened-runtime signing), so the package step below uses --skip-build to
+      # avoid re-running the build and overwriting the stapled bundles.
+      # Secrets are passed by NAME only (D-08); the helper never echoes a value
+      # and uses no `set -x`. The keychain it creates is torn down in the
+      # always-run "Clean up signing keychain" step at the end of the job.
+      - name: Sign and notarize bundles
+        env:
+          YULU_CODESIGN_IDENTITY: ${{ secrets.YULU_CODESIGN_IDENTITY }}
+          YULU_CODESIGN_P12_BASE64: ${{ secrets.YULU_CODESIGN_P12_BASE64 }}
+          P12_PWD: ${{ secrets.P12_PWD }}
+          KEYCHAIN_PWD: ${{ secrets.KEYCHAIN_PWD }}
+          ASC_KEY_P8_BASE64: ${{ secrets.ASC_KEY_P8_BASE64 }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+        run: bash packaging/scripts/sign_and_notarize.sh
+
       - name: Package release assets
         run: |
           set -euo pipefail
-          make package TAG="$TAG"
+          # --skip-build: the bundles are already built, signed, notarized, and
+          # stapled by the previous step. Re-running build_*.sh here would strip
+          # the staple. --skip-build also skips check_clean_worktree, which is
+          # correct: signing/stapling intentionally mutates the allowlisted
+          # bundle bytes (Info.plist, Mach-O, _CodeSignature/CodeResources).
+          make package TAG="$TAG" PACKAGE_ARGS=--skip-build
           make checksums
           test -f "dist/yulu-macos-arm64-$TAG.zip"
           test -f dist/install.sh
           test -f dist/checksums.txt
+
+      # SLSA build-provenance attestation for the release zip (BUILD-04). Minted
+      # from this workflow's OIDC token; verifiable with `gh attestation verify
+      # <zip> --repo Nowhitestar/Yulu`. Requires id-token/attestations: write
+      # (declared on this job above). A4: confirm the reusable workflow inherits
+      # those permissions on a real run.
+      - name: Attest release zip provenance
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: dist/yulu-macos-arm64-${{ inputs.tag }}.zip
 
       - name: Prepare release notes
         run: |
@@ -141,3 +185,14 @@ jobs:
             fi
             gh release create "${CREATE_ARGS[@]}"
           fi
+
+      # Tear down the ephemeral signing keychain and remove the decoded cert/key,
+      # ALWAYS — even if an earlier step failed — so the imported Developer ID
+      # identity never lingers on a shared runner (D-08, Pattern 3, T-01-19).
+      # Each line is `|| true` so cleanup never masks the real job result.
+      - name: Clean up signing keychain
+        if: always()
+        run: |
+          security delete-keychain "$RUNNER_TEMP/yulu-signing.keychain-db" 2>/dev/null || true
+          rm -f "$RUNNER_TEMP/cert.p12" "$RUNNER_TEMP/asc_key.p8" \
+                "$RUNNER_TEMP"/*-notarize.zip 2>/dev/null || true

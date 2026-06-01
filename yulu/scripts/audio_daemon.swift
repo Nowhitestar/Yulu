@@ -10,6 +10,8 @@ import Cocoa
 import ScreenCaptureKit
 import AVFoundation
 import CoreMedia
+import CoreAudio
+import AudioToolbox
 
 let HOME = FileManager.default.homeDirectoryForCurrentUser
 let CONFIG_DIR = HOME.appendingPathComponent(".config/yulu")
@@ -493,10 +495,57 @@ class SysAudioOutput: NSObject, SCStreamOutput {
     }
 }
 
-// ─── 屏幕捕获管理器 ───────────────────────────────────
+// ─── 捕获后端协议 (CaptureBackend) ────────────────────
+//
+// PLAT-01 / D-02: the single platform seam for system-audio capture. It hides
+// BOTH the ScreenCaptureKit vocabulary (SCStreamConfiguration / SCContentFilter)
+// and the macOS-14.4 Core Audio process-tap vocabulary (CATapDescription) behind
+// "emit PCM frames + list sources." The frame sink stays exactly as today —
+// each conformer converts its native buffer to interleaved Int16 and pushes it
+// through `recorder.onSysAudio([Int16])`.
+//
+// D-09 (interface neutrality): NO SCStreamConfiguration / SCContentFilter /
+// CATapDescription / TCC token may appear in this protocol or in CaptureSource.
+// The arms own those internally. The 13–14.3 arm is ScreenCaptureKitBackend
+// (below); the 14.4+ ProcessTapBackend arm lands in 02-04 behind `if #available`.
+
+/// A capturable audio source (display / app / system). Neutral by design:
+/// SCK derives these from SCShareableContent displays; the tap arm will derive
+/// them from the process-object list. Hides both representations.
+struct CaptureSource {
+    let id: String
+    let name: String
+    let kind: String   // "display" | "app" | "system"
+}
+
+protocol CaptureBackend: AnyObject {
+    /// True once the backend has verified its capture permission (TCC handshake done).
+    var isReady: Bool { get }
+    /// Last capture error surfaced by the backend ("" when healthy).
+    var lastError: String { get }
+
+    /// Probe permission without leaving the OS recording indicator on (idle daemon).
+    func probePermission()
+
+    /// Begin emitting system-audio PCM to the sink. Blocks until actually capturing.
+    func startCapture()
+    /// Stop capturing; blocks until the OS-level capture indicator clears.
+    func stopCapture()
+
+    /// Capturable sources. SCK: SCShareableContent displays; taps: process list.
+    func sources() -> [CaptureSource]
+}
+
+// ─── 屏幕捕获管理器 (ScreenCaptureKit arm, macOS 13–14.3) ─────
+//
+// D-03: this is the EXISTING capture code, refactored in place to conform to
+// CaptureBackend — NOT rewritten. The planar-Float32 → interleaved-Int16
+// conversion (SysAudioOutput, above) and the start/stop/probe bodies are kept
+// verbatim; only the type name, conformance, and isReady/lastError/sources()
+// bridge are added.
 
 @available(macOS 12.3, *)
-class AudioCapture {
+final class ScreenCaptureKitBackend: CaptureBackend {
     let recorder: AudioRecorder
     let output: SysAudioOutput
     var stream: SCStream?
@@ -504,6 +553,33 @@ class AudioCapture {
     init(recorder: AudioRecorder) {
         self.recorder = recorder
         self.output = SysAudioOutput(recorder)
+    }
+
+    /// CaptureBackend.isReady — bridge the existing process-level SYS_READY global.
+    var isReady: Bool { SYS_READY }
+    /// CaptureBackend.lastError — bridge the existing process-level SYS_ERROR global.
+    var lastError: String { SYS_ERROR }
+
+    /// CaptureBackend.sources() — minimal source list from SCShareableContent
+    /// displays. Returns [] if the shareable content cannot be fetched in time;
+    /// callers treat an empty list as "no enumerable sources right now."
+    func sources() -> [CaptureSource] {
+        var result: [CaptureSource] = []
+        let sem = DispatchSemaphore(value: 0)
+        Task {
+            defer { sem.signal() }
+            if let content = try? await SCShareableContent.current {
+                for d in content.displays {
+                    result.append(CaptureSource(
+                        id: String(d.displayID),
+                        name: "Display \(d.displayID)",
+                        kind: "display"
+                    ))
+                }
+            }
+        }
+        _ = sem.wait(timeout: .now() + 2)
+        return result
     }
 
     /// Called once at daemon startup: open an SCStream just long enough to verify the
@@ -584,6 +660,336 @@ class AudioCapture {
     }
 }
 
+// ─── 进程 Tap 捕获 (Core Audio process-tap arm, macOS 14.4+) ─────
+//
+// PLAT-02 / D-01 / D-03: the 14.4+ system-audio arm. On 14.4+ the AppDelegate
+// selects this behind `if #available(macOS 14.4, *)`; 13–14.3 stays on
+// ScreenCaptureKitBackend (the `else`). The macOS FLOOR is NOT raised — this
+// arm is gated at 14.4 ONLY because the underlying Core Audio process-tap +
+// aggregate-device APIs are unreliable below it (symbols exist at 14.2, but the
+// AudioCap project pins stable behavior to 14.4). Do NOT lower the gate.
+//
+// Why a tap instead of ScreenCaptureKit: the tap requests the narrower
+// "System Audio Recording Only" TCC scope, so 14.4+ users escape the weekly
+// "Screen & System Audio Recording" re-permission nag (success criterion 3).
+//
+// Capture sequence (VERIFIED API names, 02-RESEARCH.md:342-405):
+//   CATapDescription(stereoGlobalTapButExcludeProcesses: [])  → whole-system tap
+//   → AudioHardwareCreateProcessTap → read the tap UID
+//   → AudioHardwareCreateAggregateDevice (TapList = [{SubTapUID: <uid>}])
+//   → AudioDeviceCreateIOProcIDWithBlock → AudioDeviceStart
+// The IO callback delivers Float32 frames; they are converted to interleaved
+// Int16 using the SAME clamp/interleave as SysAudioOutput (no re-derivation)
+// and pushed through recorder.onSysAudio([Int16]) — the identical frame sink
+// the SCK arm uses.
+//
+// Pitfall 3 (VERIFIED Apple bug, 02-RESEARCH.md:322-326): the tap can keep
+// firing the IO callback with correct frameCounts yet deliver all-zero samples
+// (silent recording while audio is audible), triggered by sample-rate
+// renegotiation, Bluetooth sleep/wake, or long uptime. This backend detects a
+// window of frameCount>0-yet-all-zero buffers and recovers by tearing the whole
+// tap+aggregate stack down and rebuilding it (it does NOT merely log). The
+// existing silence-monitor (startSilenceMonitor) only auto-stops when BOTH
+// channels are quiet, so a sys-only zero-out does not false-stop the recording.
+
+@available(macOS 14.4, *)
+final class ProcessTapBackend: CaptureBackend {
+    let recorder: AudioRecorder
+
+    private var tapID: AudioObjectID = 0
+    private var aggID: AudioObjectID = 0
+    private var ioProcID: AudioDeviceIOProcID?
+
+    private let lock = NSLock()
+    private var running = false
+    private var _lastError = ""
+
+    // ── Pitfall 3 zero-buffer detection state ──
+    // Count consecutive IO callbacks that carried real frames but were entirely
+    // silent. Once the run of all-zero callbacks crosses the threshold while the
+    // backend believes it is capturing, trigger a teardown+rebuild. Reset to 0 on
+    // any callback that carries non-zero audio.
+    private var zeroRunCallbacks = 0
+    private let zeroRunThreshold = 200   // ~callbacks; tap fires often, so a sustained
+                                         // run (not a momentary genuine-quiet blip) is
+                                         // what crosses this — distinguishes the bug
+                                         // from real silence (which the silence-monitor
+                                         // already owns).
+    private var rebuilding = false
+
+    init(recorder: AudioRecorder) {
+        self.recorder = recorder
+    }
+
+    /// CaptureBackend.isReady — bridge to the process-level SYS_READY global so
+    /// the socket "status"/"start" gating treats the tap exactly like the SCK arm.
+    var isReady: Bool { SYS_READY }
+    /// CaptureBackend.lastError — bridge the process-level SYS_ERROR global.
+    var lastError: String { SYS_ERROR }
+
+    /// CaptureBackend.sources() — the tap captures the whole system, so it
+    /// exposes a single neutral "system" source rather than a per-display list.
+    func sources() -> [CaptureSource] {
+        return [CaptureSource(id: "system", name: "System Audio", kind: "system")]
+    }
+
+    /// Probe permission without leaving a recording indicator on. Building and
+    /// immediately tearing down the tap forces the one-time
+    /// "System Audio Recording Only" TCC handshake (NSAudioCaptureUsageDescription
+    /// prompt) so SYS_READY is accurate while the daemon is idle.
+    func probePermission() {
+        let ok = buildTap(probe: true)
+        teardown()
+        if ok {
+            SYS_READY = true; SYS_ERROR = ""
+            log("🔊 Sys tap probe OK (idle until recording starts)")
+        } else {
+            SYS_READY = false; SYS_ERROR = _lastError
+            log("Sys tap probe failed: \(_lastError)")
+        }
+    }
+
+    /// Start capturing system audio via the process tap. Blocks until the
+    /// aggregate device's IO proc is started (or fails), matching the SCK arm's
+    /// synchronous start/stop contract.
+    func startCapture() {
+        if SYS_DISABLED {
+            log("🔇 SYS_DISABLED — mic-only recording mode")
+            SYS_READY = false
+            return
+        }
+        lock.lock()
+        let already = running
+        lock.unlock()
+        guard !already else { return }   // idempotent — already capturing
+
+        if buildTap(probe: false) {
+            lock.lock(); running = true; zeroRunCallbacks = 0; lock.unlock()
+            SYS_READY = true; SYS_ERROR = ""
+            log("🔊 Sys tap capture started")
+        } else {
+            SYS_READY = false; SYS_ERROR = _lastError
+            log("Sys tap capture failed: \(_lastError)")
+        }
+    }
+
+    /// Stop capturing; tears the whole tap+aggregate stack down. Blocks until the
+    /// OS-level device is stopped so the recording indicator clears synchronously.
+    func stopCapture() {
+        lock.lock(); running = false; lock.unlock()
+        teardown()
+        log("🔇 Sys tap idle")
+    }
+
+    // ── Tap construction (02-RESEARCH.md:342-405) ──
+    //
+    // Builds the global tap, the private aggregate device wrapping it, and the IO
+    // proc. Returns true once AudioDeviceStart succeeds. On any failure it records
+    // `_lastError`, tears down whatever was partially created, and returns false.
+    private func buildTap(probe: Bool) -> Bool {
+        // 1. Describe a whole-system tap (empty exclude list = all processes).
+        let desc = CATapDescription(stereoGlobalTapButExcludeProcesses: [])
+        desc.isPrivate = true            // don't expose the tap device system-wide
+        desc.muteBehavior = .unmuted     // passthrough: the user still hears the meeting
+        desc.name = "Yulu-SysTap"
+
+        // 2. Create the tap → an AudioObjectID.
+        var tap: AudioObjectID = 0
+        let tapErr = AudioHardwareCreateProcessTap(desc, &tap)
+        guard tapErr == noErr, tap != 0 else {
+            _lastError = "AudioHardwareCreateProcessTap failed (OSStatus \(tapErr))"
+            return false
+        }
+        tapID = tap
+
+        // 3. Read the tap's UID string (needed as the aggregate's SubTap UID).
+        guard let tapUID = readTapUID(tap) else {
+            _lastError = "tap UID read failed"
+            teardown()
+            return false
+        }
+
+        // 4. Build a PRIVATE aggregate device that contains the tap.
+        //    IsPrivate keeps it out of the user-visible device list (T-02-14).
+        let aggDict: [String: Any] = [
+            kAudioAggregateDeviceNameKey as String:         "Yulu-SysTap",
+            kAudioAggregateDeviceUIDKey as String:          UUID().uuidString,
+            kAudioAggregateDeviceIsPrivateKey as String:    true,
+            kAudioAggregateDeviceIsStackedKey as String:    false,
+            kAudioAggregateDeviceTapAutoStartKey as String: true,
+            kAudioAggregateDeviceTapListKey as String: [
+                [ kAudioSubTapUIDKey as String: tapUID ],
+            ],
+        ]
+        var agg: AudioObjectID = 0
+        let aggErr = AudioHardwareCreateAggregateDevice(aggDict as CFDictionary, &agg)
+        guard aggErr == noErr, agg != 0 else {
+            _lastError = "AudioHardwareCreateAggregateDevice failed (OSStatus \(aggErr))"
+            teardown()
+            return false
+        }
+        aggID = agg
+
+        // A bare permission probe only needs the tap+aggregate to have been
+        // accepted by the HAL (that is what forces the TCC handshake). Skip the
+        // IO proc so the probe never streams a single frame.
+        if probe { return true }
+
+        // 5. Install an IO proc that converts Float32 → interleaved Int16 and feeds
+        //    the existing sink. The block runs on a realtime CoreAudio thread.
+        var proc: AudioDeviceIOProcID?
+        let procErr = AudioDeviceCreateIOProcIDWithBlock(&proc, agg, nil) {
+            [weak self] (_, inInputData, _, _, _) in
+            guard let self = self else { return }
+            self.handleIO(inInputData)
+        }
+        guard procErr == noErr, let p = proc else {
+            _lastError = "AudioDeviceCreateIOProcIDWithBlock failed (OSStatus \(procErr))"
+            teardown()
+            return false
+        }
+        ioProcID = p
+
+        let startErr = AudioDeviceStart(agg, p)
+        guard startErr == noErr else {
+            _lastError = "AudioDeviceStart failed (OSStatus \(startErr))"
+            teardown()
+            return false
+        }
+        return true
+    }
+
+    /// Read kAudioTapPropertyUID off the tap object → its CFString UID.
+    private func readTapUID(_ tap: AudioObjectID) -> String? {
+        var addr = AudioObjectPropertyAddress(
+            mSelector: kAudioTapPropertyUID,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var uidCF: CFString = "" as CFString
+        var size = UInt32(MemoryLayout<CFString>.size)
+        let err = withUnsafeMutablePointer(to: &uidCF) { ptr -> OSStatus in
+            AudioObjectGetPropertyData(tap, &addr, 0, nil, &size, ptr)
+        }
+        guard err == noErr else { return nil }
+        return uidCF as String
+    }
+
+    // ── IO callback: Float32 AudioBufferList → interleaved Int16 → sink ──
+    private func handleIO(_ inInputData: UnsafePointer<AudioBufferList>) {
+        guard recorder.isRecording else { return }
+        let abl = UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: inInputData))
+        guard abl.count > 0 else { return }
+
+        // Gather Float32 samples across the buffer list. A tap aggregate may
+        // deliver either one interleaved buffer (mChannelsPerFrame > 1) or
+        // several mono buffers (non-interleaved). Normalize to interleaved
+        // stereo Float32 first, then reuse the SysAudioOutput clamp verbatim.
+        var stereoFloats: [Float] = []
+
+        if abl.count == 1 {
+            let buf = abl[0]
+            let channels = Int(buf.mNumberChannels)
+            let cnt = Int(buf.mDataByteSize) / MemoryLayout<Float>.size
+            guard cnt > 0, let data = buf.mData else { return }
+            let floats = [Float](UnsafeBufferPointer(
+                start: data.assumingMemoryBound(to: Float.self), count: cnt))
+            if channels >= 2 {
+                // already interleaved L/R/L/R…
+                stereoFloats = floats
+            } else {
+                // mono → duplicate into stereo
+                stereoFloats.reserveCapacity(cnt * 2)
+                for v in floats { stereoFloats.append(v); stereoFloats.append(v) }
+            }
+        } else {
+            // Non-interleaved: buffer 0 = L, buffer 1 = R (extra channels ignored).
+            let lBuf = abl[0]
+            let rBuf = abl[1]
+            let lCnt = Int(lBuf.mDataByteSize) / MemoryLayout<Float>.size
+            let rCnt = Int(rBuf.mDataByteSize) / MemoryLayout<Float>.size
+            let frames = min(lCnt, rCnt)
+            guard frames > 0, let lData = lBuf.mData, let rData = rBuf.mData else { return }
+            let lFloats = [Float](UnsafeBufferPointer(
+                start: lData.assumingMemoryBound(to: Float.self), count: lCnt))
+            let rFloats = [Float](UnsafeBufferPointer(
+                start: rData.assumingMemoryBound(to: Float.self), count: rCnt))
+            stereoFloats.reserveCapacity(frames * 2)
+            for i in 0..<frames {
+                stereoFloats.append(lFloats[i])
+                stereoFloats.append(rFloats[i])
+            }
+        }
+
+        guard !stereoFloats.isEmpty else { return }
+
+        // Pitfall 3: detect frameCount>0-yet-all-zero. `allSatisfy { $0 == 0 }`
+        // over a non-empty buffer means the tap claimed frames but delivered
+        // silence — count the run and recover if it persists.
+        let allZero = stereoFloats.allSatisfy { $0 == 0.0 }
+        if allZero {
+            lock.lock()
+            let isRunning = running
+            zeroRunCallbacks += 1
+            let tripped = isRunning && !rebuilding && zeroRunCallbacks >= zeroRunThreshold
+            if tripped { rebuilding = true }
+            lock.unlock()
+            if tripped {
+                log("⚠️ Sys tap delivered \(zeroRunCallbacks) all-zero buffers — teardown+rebuild (Pitfall 3)")
+                // Rebuild off the realtime IO thread.
+                DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                    self?.recoverFromZeroBuffers()
+                }
+            }
+            return   // don't push silence into the WAV
+        }
+
+        // Real audio → reset the zero run and convert using the SAME clamp as
+        // SysAudioOutput (do not re-derive it).
+        lock.lock(); zeroRunCallbacks = 0; lock.unlock()
+        let int16s = stereoFloats.map { Int16(max(-1.0, min(1.0, $0)) * Float(Int16.max)) }
+        recorder.onSysAudio(int16s)
+    }
+
+    /// Pitfall 3 recovery: full teardown then rebuild of the tap+aggregate stack.
+    private func recoverFromZeroBuffers() {
+        teardown()
+        lock.lock()
+        let shouldRestart = running
+        zeroRunCallbacks = 0
+        lock.unlock()
+        if shouldRestart, buildTap(probe: false) {
+            SYS_READY = true; SYS_ERROR = ""
+            log("🔊 Sys tap rebuilt after zero-buffer recovery")
+        } else if shouldRestart {
+            SYS_READY = false; SYS_ERROR = _lastError
+            log("Sys tap rebuild failed: \(_lastError)")
+        }
+        lock.lock(); rebuilding = false; lock.unlock()
+    }
+
+    /// Destroy the IO proc, aggregate device, and tap in the exact order from
+    /// 02-RESEARCH.md:399-403. Safe to call repeatedly (idempotent on zeroed ids)
+    /// and from both stopCapture() and the Pitfall-3 rebuild path.
+    private func teardown() {
+        if let proc = ioProcID {
+            if aggID != 0 {
+                AudioDeviceStop(aggID, proc)
+                AudioDeviceDestroyIOProcID(aggID, proc)
+            }
+            ioProcID = nil
+        }
+        if aggID != 0 {
+            AudioHardwareDestroyAggregateDevice(aggID)
+            aggID = 0
+        }
+        if tapID != 0 {
+            AudioHardwareDestroyProcessTap(tapID)
+            tapID = 0
+        }
+    }
+}
+
 // ─── Socket 服务器 ────────────────────────────────────
 
 class SocketServer {
@@ -591,7 +997,7 @@ class SocketServer {
     var sock: Int32 = -1
     /// Hooks the daemon uses to start/stop ScreenCaptureKit + microphone capture only
     /// while a recording is in flight, so the macOS menu-bar recording indicator
-    /// reflects reality. AppDelegate wires these to AudioCapture / MicCapture.
+    /// reflects reality. AppDelegate wires these to the CaptureBackend / MicCapture.
     var onRecordingStart: (() -> Void)?
     var onRecordingStop: (() -> Void)?
 
@@ -779,7 +1185,7 @@ class SocketServer {
 class AppDelegate: NSObject, NSApplicationDelegate {
     var recorder: AudioRecorder?
     var micCapture: MicCapture?
-    var audioCapture: AudioCapture?
+    var audioCapture: CaptureBackend?   // D-02 seam: SCK arm now, tap arm (02-04) drops in here
     var socketServer: SocketServer?
 
     func applicationDidFinishLaunching(_ n: Notification) {
@@ -804,7 +1210,22 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // briefly, then tears it down) so SYS_READY / MIC_READY are accurate without
         // leaving the macOS menu-bar "recording" indicator on while the daemon is idle.
         if #available(macOS 12.3, *) {
-            let ac = AudioCapture(recorder: rec); audioCapture = ac
+            // ── Capture-backend arm selection (PLAT-02 / D-01 / D-03) ──────
+            // On macOS 14.4+ use the Core Audio process tap (ProcessTapBackend):
+            // it requests the narrower "System Audio Recording Only" TCC scope,
+            // so 14.4+ users escape the recurring ScreenCaptureKit re-permission
+            // nag (success criterion 3). On 13–14.3 fall back to the
+            // ScreenCaptureKit arm. The macOS FLOOR stays 13+ — 14.4 gates ONLY
+            // the new tap arm, it does NOT raise the minimum OS (D-01). Do NOT
+            // lower this gate to 14.2: the tap symbols exist at 14.2 but the
+            // runtime is only reliable at 14.4 (02-RESEARCH.md:459-462).
+            let ac: CaptureBackend
+            if #available(macOS 14.4, *) {
+                ac = ProcessTapBackend(recorder: rec)
+            } else {
+                ac = ScreenCaptureKitBackend(recorder: rec)
+            }
+            audioCapture = ac
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) { ac.probePermission() }
         }
         let mic = MicCapture(recorder: rec); micCapture = mic

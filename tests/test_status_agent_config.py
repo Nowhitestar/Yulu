@@ -135,3 +135,55 @@ def test_format_hotkey_pretty():
     assert sac.format_hotkey({"key": "V", "modifiers": ["cmd", "shift"]}) == "⌘⇧V"
     assert sac.format_hotkey({"key": "F19", "modifiers": ["ctrl"]}) == "⌃F19"
     assert sac.format_hotkey({"key": "Space", "modifiers": ["alt"]}) == "⌥Space"
+
+
+# ─── Swift status_agent.swift static gate (D-07: config.json output_dir) ───────
+# Source-static asserts (no swiftc) proving the menu-bar Recent Recordings list
+# now resolves its base directory from config.json `audio.output_dir` instead of
+# the hardcoded ~/Movies/Yulu, which may survive ONLY as the fallback default.
+
+STATUS_AGENT_SWIFT = SCRIPTS / "status_agent.swift"
+
+
+def _swift_source() -> str:
+    return STATUS_AGENT_SWIFT.read_text(encoding="utf-8")
+
+
+def test_status_agent_swift_exists():
+    assert STATUS_AGENT_SWIFT.exists(), f"missing {STATUS_AGENT_SWIFT}"
+
+
+def test_status_agent_has_config_output_dir_reader():
+    src = _swift_source()
+    # The ported config.json reader must exist and key on `output_dir` (D-07).
+    assert "func loadRecordingDir()" in src, "loadRecordingDir() reader not added"
+    assert "output_dir" in src, "status_agent must read audio.output_dir from config.json"
+    assert 'json["audio"]' in src, "reader must descend into the config 'audio' block"
+
+
+def test_status_agent_recent_recordings_uses_config_dir():
+    src = _swift_source()
+    # loadRecentRecordings must source its base from loadRecordingDir(), not a
+    # hardcoded home/Movies path.
+    assert "let base = loadRecordingDir()" in src, (
+        "loadRecentRecordings must derive its base from loadRecordingDir()"
+    )
+    assert '"\\(base)/voicemails"' in src, "vmDir must be derived from the config base"
+
+
+def test_status_agent_movies_yulu_only_as_fallback():
+    src = _swift_source()
+    # The historical ~/Movies/Yulu literal is permitted, but ONLY inside
+    # loadRecordingDir() as the fallback default — never as the live vmDir/mvDir
+    # source in loadRecentRecordings. Assert the old hardcoded interpolation form
+    # ("\(home)/Movies/Yulu") is gone.
+    assert "\\(home)/Movies/Yulu" not in src, (
+        "status_agent still hardcodes \\(home)/Movies/Yulu as a recordings source; "
+        "it must read config.json output_dir with the literal only as fallback"
+    )
+    # The fallback default must live inside the reader.
+    reader_start = src.index("func loadRecordingDir()")
+    reader_body = src[reader_start : reader_start + 600]
+    assert "Movies/Yulu" in reader_body, (
+        "the ~/Movies/Yulu fallback default must live inside loadRecordingDir()"
+    )

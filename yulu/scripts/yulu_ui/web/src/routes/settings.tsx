@@ -8,6 +8,7 @@ import { useSettingsRestartTracker } from "../hooks/useSettingsRestartTracker.js
 import { SettingsPage } from "../components/SettingsPage.js";
 import { RestartBanner } from "../components/RestartBanner.js";
 import { AudioSection } from "../components/settings/AudioSection.js";
+import { CapabilitiesSection } from "../components/settings/CapabilitiesSection.js";
 import { TranscriptionSection } from "../components/settings/TranscriptionSection.js";
 import { LlmSection } from "../components/settings/LlmSection.js";
 import { HotkeySection } from "../components/settings/HotkeySection.js";
@@ -65,6 +66,7 @@ export function Settings() {
         <h1 className="settings-page-title">Settings</h1>
         <p className="settings-page-sub">所有 Yulu 运行参数集中在这里。修改需要重启的项会触发顶部 Restart banner。</p>
         <div className="settings-stack">
+          <CapabilitiesSection />
           <AudioSection tracker={tracker} />
           <TranscriptionSection tracker={tracker} />
           <LlmSection tracker={tracker} />

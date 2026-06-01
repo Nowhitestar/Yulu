@@ -9,6 +9,12 @@ vi.mock("../../web/src/trpc.js", () => ({
       pickFile: { useMutation: () => ({ mutateAsync: async () => ({ path: "/picked/dir" }), isPending: false }) },
       openInFinder: { useMutation: () => ({ mutate: vi.fn() }) },
     },
+    // PathValue calls useUtils().system.cloud.detect.fetch() on a folder pick (DATA-03);
+    // default not-cloud so the picker commits immediately (this suite covers the base flow,
+    // not the cloud-warn branch — see InlineEditRow.cloudwarn.test.tsx).
+    useUtils: () => ({
+      system: { cloud: { detect: { fetch: async () => ({ is_cloud: false, engine: "", reason: "", dataless: false }) } } },
+    }),
   },
 }));
 

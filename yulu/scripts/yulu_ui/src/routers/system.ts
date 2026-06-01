@@ -36,6 +36,60 @@ function runSpawn(cmd: string, args: string[]): Promise<{ stdout: string; stderr
   });
 }
 
+// ── cloud.detect: read-only cloud-sync-root detection (DATA-03) ──
+//
+// Mirrors capabilities.ts's safe python-spawn idiom: bare `python3` on PATH with
+// PYTHONPATH=scriptDir so `yulu_platform` is importable, and a SIGKILL timeout so a
+// hung subprocess can never block folder selection. Detection lives in Python (one-way
+// layer dependency yulu_platform -> UI); TS never re-derives the path-prefix rules.
+const PYTHON = "python3";
+const CLOUD_DETECT_TIMEOUT_MS = 10_000;
+
+// Read-only program: import Yulu's OWN is_cloud_root and print its CloudRootResult as
+// JSON. Security V5 / T-05-07: the candidate path is USER INPUT — it is read from
+// sys.argv[1] (a SEPARATE spawn argv element below), NEVER concatenated into this `-c`
+// body or any shell command. is_cloud_root() itself expanduser+resolves and bounds the
+// scan; it is metadata-only (os.stat, no open()) so detection never materializes a
+// dataless file.
+const CLOUD_DETECT_PY =
+  "import json,sys; from yulu_platform.macos.cloud_detect import is_cloud_root; " +
+  "r=is_cloud_root(sys.argv[1]); " +
+  "json.dump({'is_cloud':r.is_cloud,'engine':r.engine,'reason':r.reason,'dataless':r.dataless_sample}, sys.stdout)";
+
+function runSpawnEnv(
+  cmd: string,
+  args: string[],
+  env: NodeJS.ProcessEnv,
+  timeoutMs: number,
+): Promise<{ stdout: string; stderr: string; code: number }> {
+  return new Promise((resolve) => {
+    const proc = spawn(cmd, args, { env });
+    let stdout = "", stderr = "";
+    const timer = setTimeout(() => { proc.kill("SIGKILL"); }, timeoutMs);
+    proc.stdout.on("data", (b: Buffer) => { stdout += b.toString("utf8"); });
+    proc.stderr.on("data", (b: Buffer) => { stderr += b.toString("utf8"); });
+    proc.on("close", (code: number | null) => { clearTimeout(timer); resolve({ stdout, stderr, code: code ?? 1 }); });
+  });
+}
+
+// The detection result shape the UI binds to, with a typed degraded default so a
+// detection failure (spawn error / timeout / bad JSON / off-Darwin) can NEVER block the
+// folder picker (Plan 04 calls pickFile then cloud.detect on the chosen path).
+const cloudDetectSchema = z.object({
+  is_cloud: z.boolean(),
+  engine: z.string(),
+  reason: z.string(),
+  dataless: z.boolean(),
+});
+type CloudDetect = z.infer<typeof cloudDetectSchema>;
+
+const CLOUD_DETECT_DEGRADED: CloudDetect = {
+  is_cloud: false,
+  engine: "",
+  reason: "detection unavailable",
+  dataless: false,
+};
+
 export const systemRouter = router({
   version: publicProcedure.query(() => ({
     name: PKG.name,
@@ -116,5 +170,34 @@ export const systemRouter = router({
   logPaths: publicProcedure.query(({ ctx }) => {
     const names = ["audiodaemon", "sttdaemon", "agentqueue", "statusagent", "scheduler", "detector", "calendar", "ui"];
     return names.map((name) => ({ name, path: `${ctx.paths.configDir}/${name}.log` }));
+  }),
+
+  // DATA-03: classify a candidate data-folder against the macOS cloud-sync roots so the
+  // folder picker (Plan 04) can WARN before accepting it. READ-ONLY (os.stat only, no
+  // writes to the user's cloud). Spawns python3 read-only with the path passed as a
+  // SEPARATE argv element (Security V5 / T-05-07 — never shell-interpolated), parses the
+  // JSON result, and degrades to a typed not-cloud default on ANY failure so detection
+  // can never block folder selection.
+  cloud: router({
+    detect: publicProcedure
+      .input(z.object({ path: z.string().min(1) }))
+      .query(async ({ input, ctx }): Promise<CloudDetect> => {
+        const { stdout, code } = await runSpawnEnv(
+          PYTHON,
+          // input.path is the LAST argv element (read via sys.argv[1] in the python
+          // body) — it is NOT interpolated into CLOUD_DETECT_PY or a shell string.
+          ["-c", CLOUD_DETECT_PY, input.path],
+          { ...process.env, PYTHONPATH: ctx.paths.scriptDir },
+          CLOUD_DETECT_TIMEOUT_MS,
+        );
+        if (code !== 0) return CLOUD_DETECT_DEGRADED;
+        try {
+          const parsed = JSON.parse(stdout);
+          const result = cloudDetectSchema.safeParse(parsed);
+          return result.success ? result.data : CLOUD_DETECT_DEGRADED;
+        } catch {
+          return CLOUD_DETECT_DEGRADED;
+        }
+      }),
   }),
 });

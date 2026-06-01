@@ -20,7 +20,8 @@ swiftc -o "$BIN" audio_daemon.swift \
   -framework ScreenCaptureKit \
   -framework AVFoundation \
   -framework CoreMedia \
-  -framework CoreAudio
+  -framework CoreAudio \
+  -framework AudioToolbox
 
 mkdir -p "$APP/Contents/MacOS" "$RES_DIR"
 cp "$BIN" "$APP_BIN"
@@ -53,6 +54,10 @@ plist_set_or_add CFBundleIconFile        string  Yulu
 plist_set_or_add CFBundleIconName        string  Yulu
 plist_set_or_add NSMicrophoneUsageDescription   string  "Yulu records microphone audio for meeting notes."
 plist_set_or_add NSScreenCaptureUsageDescription string "Yulu captures system audio for meeting notes."
+# NSAudioCaptureUsageDescription drives the macOS 14.4+ Core Audio process-tap
+# prompt ("System Audio Recording Only" scope). Required for the tap arm
+# (Pitfall 4); the SCK arm uses NSScreenCaptureUsageDescription above.
+plist_set_or_add NSAudioCaptureUsageDescription string "Yulu captures system audio for meeting notes."
 
 # Code-signing identity selection.
 #
@@ -62,13 +67,22 @@ plist_set_or_add NSScreenCaptureUsageDescription string "Yulu captures system au
 #   3. First "Apple Development" / "Mac Developer" identity  — fine for local use.
 #   4. Ad-hoc ("-")             — last-resort fallback; no Gatekeeper trust.
 IDENTITY="${YULU_CODESIGN_IDENTITY:-}"
+# Auto-detect selects by the 40-char SHA-1 HASH (whitespace field 2), NOT the
+# human-readable name. A name like "Developer ID Application: NAME (TEAMID)" can
+# match MORE THAN ONE cert — e.g. the same identity present in both the login and
+# System keychains — and then `codesign --sign "<name>"` aborts with
+# "ambiguous (matches ... and ...)". With set -e that kills the whole build and the
+# app is left linker-ad-hoc WITHOUT the hardened-runtime entitlements, so mic/system
+# capture fail at runtime (kAUStartIO). The hash is unique, so signing never aborts
+# on a duplicated identity. (An explicit $YULU_CODESIGN_IDENTITY name is honored
+# as-is: CI imports exactly one identity into an ephemeral keychain, so it is unique.)
 if [[ -z "$IDENTITY" ]]; then
   IDENTITY="$(security find-identity -v -p codesigning 2>/dev/null \
-    | awk -F'"' '/Developer ID Application/ {print $2; exit}')"
+    | awk '/Developer ID Application/ {print $2; exit}')"
 fi
 if [[ -z "$IDENTITY" ]]; then
   IDENTITY="$(security find-identity -v -p codesigning 2>/dev/null \
-    | awk -F'"' '/Apple Development|Mac Developer/ {print $2; exit}')"
+    | awk '/Apple Development|Mac Developer/ {print $2; exit}')"
 fi
 if [[ -z "$IDENTITY" ]]; then
   echo "⚠️ No code-signing identity found; falling back to ad-hoc signing." >&2
@@ -76,8 +90,18 @@ if [[ -z "$IDENTITY" ]]; then
   IDENTITY="-"
 fi
 
-codesign --force --deep --timestamp=none --sign "$IDENTITY" "$APP"
-codesign --verify --deep --strict --verbose=2 "$APP"
+# Sign bottom-up with the hardened runtime, a secure timestamp, and the
+# least-privilege entitlements. We do NOT use deep recursive signing (it only
+# signs Mach-O files and re-signs nested code with the wrong flags), and we use
+# a real secure timestamp (an unsigned/absent timestamp makes notarization fail).
+#   1. inner Mach-O first ($APP_BIN), then 2. the bundle ($APP).
+ENTITLEMENTS="$SCRIPT_DIR/Yulu.app.entitlements"
+codesign --force --options runtime --timestamp \
+  --entitlements "$ENTITLEMENTS" --sign "$IDENTITY" "$APP_BIN"
+codesign --force --options runtime --timestamp \
+  --entitlements "$ENTITLEMENTS" --sign "$IDENTITY" "$APP"
+codesign --verify --strict --verbose=2 "$APP"
+codesign --display --entitlements :- "$APP"
 
 echo "✅ Built and signed Yulu.app"
 echo "   version: $YULU_VERSION_RAW (bundle $YULU_BUNDLE_VERSION, build $YULU_BUILD_NUMBER)"
