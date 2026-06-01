@@ -43,8 +43,15 @@ jobs:
     name: Publish assets for the cut release
     needs: release-please
     if: ${{ needs.release-please.outputs.release_created == 'true' }}
+    # The reusable release-publish.yml job requests id-token + attestations (for the
+    # SLSA build-provenance attestation). A reusable-workflow call cannot escalate
+    # beyond the permissions GRANTED here, and GitHub validates that at workflow
+    # startup — BEFORE the `if:` is evaluated — so granting only contents:write made
+    # every push to main fail with `startup_failure` (A4). Grant all three here.
     permissions:
       contents: write
+      id-token: write
+      attestations: write
     uses: ./.github/workflows/release-publish.yml
     with:
       tag: ${{ needs.release-please.outputs.tag_name }}
