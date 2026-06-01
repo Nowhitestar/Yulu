@@ -67,13 +67,22 @@ plist_set_or_add NSAudioCaptureUsageDescription string "Yulu captures system aud
 #   3. First "Apple Development" / "Mac Developer" identity  — fine for local use.
 #   4. Ad-hoc ("-")             — last-resort fallback; no Gatekeeper trust.
 IDENTITY="${YULU_CODESIGN_IDENTITY:-}"
+# Auto-detect selects by the 40-char SHA-1 HASH (whitespace field 2), NOT the
+# human-readable name. A name like "Developer ID Application: NAME (TEAMID)" can
+# match MORE THAN ONE cert — e.g. the same identity present in both the login and
+# System keychains — and then `codesign --sign "<name>"` aborts with
+# "ambiguous (matches ... and ...)". With set -e that kills the whole build and the
+# app is left linker-ad-hoc WITHOUT the hardened-runtime entitlements, so mic/system
+# capture fail at runtime (kAUStartIO). The hash is unique, so signing never aborts
+# on a duplicated identity. (An explicit $YULU_CODESIGN_IDENTITY name is honored
+# as-is: CI imports exactly one identity into an ephemeral keychain, so it is unique.)
 if [[ -z "$IDENTITY" ]]; then
   IDENTITY="$(security find-identity -v -p codesigning 2>/dev/null \
-    | awk -F'"' '/Developer ID Application/ {print $2; exit}')"
+    | awk '/Developer ID Application/ {print $2; exit}')"
 fi
 if [[ -z "$IDENTITY" ]]; then
   IDENTITY="$(security find-identity -v -p codesigning 2>/dev/null \
-    | awk -F'"' '/Apple Development|Mac Developer/ {print $2; exit}')"
+    | awk '/Apple Development|Mac Developer/ {print $2; exit}')"
 fi
 if [[ -z "$IDENTITY" ]]; then
   echo "⚠️ No code-signing identity found; falling back to ad-hoc signing." >&2
