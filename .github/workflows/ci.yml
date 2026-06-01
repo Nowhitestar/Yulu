@@ -46,6 +46,9 @@ jobs:
       - name: ShellCheck (decomposed setup + lib + build scripts)
         run: |
           set -euo pipefail
+          # macos-latest runners no longer ship shellcheck preinstalled (image
+          # change), so the step exited 127 "command not found". Install on demand.
+          command -v shellcheck >/dev/null 2>&1 || brew install shellcheck
           shellcheck --version
           # -x follows `source` directives (the setup_*.sh source lib/common.sh);
           # -P SCRIPTDIR resolves the sourced lib/common.sh relative to each
