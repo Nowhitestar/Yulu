@@ -32,7 +32,6 @@
     "local_model_path": "~/.config/yulu/models/ggml-large-v3.bin",
     "whisper_cli": "whisper-cli",
     "mlx": {
-      "python": "~/.config/yulu/venv-mlx-whisper/bin/python",
       "model": "mlx-community/whisper-large-v3-mlx"
     },
     "realtime": {

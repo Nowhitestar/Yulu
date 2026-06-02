@@ -62,6 +62,19 @@ def test_configure_sets_mlx_engine_for_final_and_realtime(tmp_path):
     assert trans["realtime"]["mlx_model"] == "mlx-community/whisper-large-v3-mlx"
 
 
+def test_configure_mlx_engine_does_not_resurrect_dead_python_marker(tmp_path):
+    # v0.6.0 removed the dedicated venv; migrate/detect.py treats a lingering
+    # transcription.mlx.python as a v0.5.x-stale signal. configure.py must NOT
+    # write it back, or every install would look un-migrated on each upgrade.
+    cfg = tmp_path / "config.json"
+    write_config(cfg)
+
+    set_engine("mlx", path=cfg)
+
+    mlx = json.loads(cfg.read_text(encoding="utf-8"))["transcription"]["mlx"]
+    assert "python" not in mlx
+
+
 def test_configure_sets_whisper_engine_command(tmp_path):
     cfg = tmp_path / "config.json"
     write_config(cfg)
