@@ -14,6 +14,7 @@ import { paths } from "./paths.js";
 import { mountWsMultiplexer } from "./ws.js";
 import { startInboxWatcher } from "./inboxWatcher.js";
 import { startLogTailer } from "./logTailer.js";
+import { startRealtimeTailer } from "./realtimeTailer.js";
 import { serveStaticFile } from "./staticFile.js";
 import { homedir } from "node:os";
 import type { AppContext } from "./trpc.js";
@@ -109,12 +110,19 @@ export async function startServer(): Promise<RunningServer> {
     pubsub: appPubSub,
   });
 
+  const realtimeTailer = startRealtimeTailer({
+    voicemailsDir: paths.voicemailsDir,
+    moviesDir: paths.moviesDir,
+    pubsub: appPubSub,
+  });
+
   await new Promise<void>((resolve) => http.listen(port, host, resolve));
   const addr = http.address() as { port: number };
   return {
     http,
     address: addr,
     close: () => new Promise<void>((resolve) => {
+      realtimeTailer.stop();
       logTailer.stop();
       inboxWatcher.stop();
       http.close(() => resolve());

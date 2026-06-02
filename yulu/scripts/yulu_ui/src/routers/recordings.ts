@@ -155,7 +155,8 @@ export const recordingsRouter = router({
       const type = dispatchType(input.stem);
       const dir = type === "voicemail" ? ctx.paths.voicemailsDir : ctx.paths.moviesDir;
       const suffixes = [".wav", ".transcript.txt", ".raw.transcript.txt", ".summary.md",
-                        ".summary.html", ".realtime.transcript.txt", ".realtime.json", ".title"];
+                        ".summary.html", ".realtime.transcript.txt", ".realtime.json",
+                        ".realtime.coverage.json", ".title"];
       let removed = 0;
       for (const s of suffixes) {
         const p = join(dir, `${input.stem}${s}`);
