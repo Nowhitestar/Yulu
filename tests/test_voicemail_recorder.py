@@ -425,6 +425,136 @@ def test_cmd_new_realtime_on_promotes_without_wholefile(isolated_paths, tmp_path
     assert wav_path.with_suffix(".transcript.txt").read_text(encoding="utf-8") == "live text"
 
 
+# ─── Promote-to-final coverage guard (fix/realtime-robustness) ────────────
+
+import wave as _wave
+
+
+def _write_wav_seconds(path: Path, seconds: float, rate: int = 16000) -> None:
+    """Write a real mono PCM WAV of the given duration so _wav_duration_sec
+    can read a true header (a bare touch() yields no readable duration)."""
+    n = int(seconds * rate)
+    with _wave.open(str(path), "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(rate)
+        wf.writeframes(b"\x00\x10" * n)
+
+
+def _write_coverage(wav: Path, covered_sec: float) -> None:
+    wav.with_suffix(".realtime.coverage.json").write_text(
+        json.dumps({"covered_ms": int(covered_sec * 1000)}), encoding="utf-8"
+    )
+
+
+def test_promote_falls_back_when_coverage_far_below_duration(isolated_paths, tmp_path, capsys):
+    """The real bug: a 1-hour recording whose realtime transcript only covered
+    ~1 minute must NOT be promoted — promote returns 2 so the caller does a
+    full whole-file transcribe instead of silently losing 59 minutes."""
+    queue, _ = isolated_paths
+    wav = tmp_path / "voicemail_20260528_120000.wav"
+    _write_wav_seconds(wav, seconds=3600.0)            # 1-hour recording
+    wav.with_suffix(".realtime.transcript.txt").write_text(
+        "[Me] only the first minute got transcribed\n", encoding="utf-8")
+    _write_coverage(wav, covered_sec=60.0)             # realtime saw ~1 min
+
+    rc = recorder._promote_realtime_transcript(wav, title=None)
+
+    assert rc == 2, "incomplete realtime must not be promoted"
+    assert not wav.with_suffix(".transcript.txt").exists()
+    assert json.loads(queue.read_text(encoding="utf-8")) == []
+    assert "too incomplete to promote" in capsys.readouterr().err
+
+
+def test_promote_succeeds_when_coverage_near_full(isolated_paths, tmp_path):
+    """A realtime transcript that covered (nearly) the whole recording IS
+    promoted — the fast path stays fast for the common case."""
+    queue, _ = isolated_paths
+    wav = tmp_path / "voicemail_20260528_120000.wav"
+    _write_wav_seconds(wav, seconds=120.0)             # 2-minute memo
+    wav.with_suffix(".realtime.transcript.txt").write_text(
+        "[Me] full memo body here\n", encoding="utf-8")
+    _write_coverage(wav, covered_sec=118.0)            # ~98% covered
+
+    rc = recorder._promote_realtime_transcript(wav, title=None)
+
+    assert rc == 0
+    assert wav.with_suffix(".transcript.txt").read_text(encoding="utf-8") == "full memo body here"
+    assert [e["prompt_slug"] for e in json.loads(queue.read_text(encoding="utf-8"))] == ["voicemail-todos"]
+
+
+def test_promote_succeeds_when_no_coverage_sidecar(isolated_paths, tmp_path):
+    """Back-compat: when there's no coverage sidecar (older transcriber), the
+    guard does NOT block — short memos keep the realtime fast path."""
+    queue, _ = isolated_paths
+    wav = tmp_path / "voicemail_20260528_120000.wav"
+    _write_wav_seconds(wav, seconds=30.0)
+    wav.with_suffix(".realtime.transcript.txt").write_text(
+        "[Me] quick note\n", encoding="utf-8")
+    # No .realtime.coverage.json written.
+
+    rc = recorder._promote_realtime_transcript(wav, title=None)
+
+    assert rc == 0
+    assert wav.with_suffix(".transcript.txt").read_text(encoding="utf-8") == "quick note"
+
+
+def test_promote_succeeds_when_wav_duration_unreadable(isolated_paths, tmp_path):
+    """If the WAV header can't be read (0-byte/partial), the guard cannot
+    measure and must NOT block promotion."""
+    queue, _ = isolated_paths
+    wav = tmp_path / "voicemail_20260528_120000.wav"
+    wav.touch()  # 0 bytes → unreadable duration
+    wav.with_suffix(".realtime.transcript.txt").write_text(
+        "[Me] body\n", encoding="utf-8")
+    _write_coverage(wav, covered_sec=5.0)
+
+    rc = recorder._promote_realtime_transcript(wav, title=None)
+
+    assert rc == 0
+    assert wav.with_suffix(".transcript.txt").read_text(encoding="utf-8") == "body"
+
+
+def test_cmd_new_incomplete_realtime_falls_back_to_wholefile(isolated_paths, tmp_path, monkeypatch, capsys):
+    """End-to-end: realtime is ON but only covered a sliver of a long
+    recording → cmd_new must fall back to the whole-file transcribe rather
+    than promoting the truncated realtime transcript."""
+    monkeypatch.setattr(recorder, "VOICEMAIL_DIR", tmp_path)
+    monkeypatch.setattr(recorder, "_realtime_enabled", lambda: True)
+    monkeypatch.setattr(recorder, "_poll_interval", 0.01)
+
+    wav_path = tmp_path / "voicemail_20260528_120000.wav"
+    _write_wav_seconds(wav_path, seconds=3600.0)
+
+    def fake_start_realtime(p):
+        Path(p).with_suffix(".realtime.transcript.txt").write_text(
+            "[Me] first minute only\n", encoding="utf-8")
+        # Coverage says only 1 minute of the hour was transcribed.
+        Path(p).with_suffix(".realtime.coverage.json").write_text(
+            json.dumps({"covered_ms": 60_000}), encoding="utf-8")
+    monkeypatch.setattr(recorder, "_start_realtime", fake_start_realtime)
+    monkeypatch.setattr(recorder, "_stop_realtime", lambda: None)
+    monkeypatch.setattr(recorder, "_socket_send", _make_cmd_new_socket(wav_path))
+
+    fake_response = {
+        "status": "ok",
+        "channels": {
+            "mic": {"text": "the full hour transcribed properly",
+                    "segments": [{"start": 0.0, "end": 1.0, "text": "x"}]},
+            "sys": {"skipped_silent": True, "text": "", "segments": []},
+        },
+    }
+    with patch.object(recorder, "_request_transcribe", return_value=fake_response) as m:
+        rc = recorder.cmd_new(title="LongMeeting")
+
+    assert rc == 0
+    # Whole-file transcribe WAS invoked (fallback path), and its text won.
+    assert m.called, "fallback whole-file transcribe must run for incomplete realtime"
+    assert wav_path.with_suffix(".transcript.txt").read_text(encoding="utf-8") == \
+        "the full hour transcribed properly"
+    assert "too incomplete to promote" in capsys.readouterr().err
+
+
 def test_cmd_new_realtime_off_uses_wholefile(isolated_paths, tmp_path, monkeypatch):
     monkeypatch.setattr(recorder, "VOICEMAIL_DIR", tmp_path)
     monkeypatch.setattr(recorder, "_realtime_enabled", lambda: False)
