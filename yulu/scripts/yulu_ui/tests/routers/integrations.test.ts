@@ -10,6 +10,10 @@ vi.mock("node:child_process", async (importOriginal) => {
 
 beforeEach(() => spawnMock.mockReset());
 
+function ctx(): AppContext {
+  return { paths: { scriptDir: "/fake/yulu/scripts" } } as unknown as AppContext;
+}
+
 function mockSpawn(stdout: string, exitCode = 0, stderr = "") {
   spawnMock.mockImplementation(() => {
     const handlers = new Map<string, (arg: unknown) => void>();
@@ -25,30 +29,40 @@ function mockSpawn(stdout: string, exitCode = 0, stderr = "") {
 }
 
 describe("integrationsRouter.test", () => {
-  it("spawns python3 -m yulu.calendar.detect --provider <p> --json", async () => {
-    mockSpawn(JSON.stringify({ ok: true }));
-    const caller = createCaller(integrationsRouter, {} as AppContext);
-    const r = await caller.test({ provider: "feishu" });
+  it("spawns check_meetings.py with the `json` positional (no --provider) and PYTHONPATH=scriptDir", async () => {
+    mockSpawn(JSON.stringify([]));
+    const caller = createCaller(integrationsRouter, ctx());
+    const r = await caller.test({ provider: "google" });
     expect(r.ok).toBe(true);
-    const args = spawnMock.mock.calls[0]![1] as string[];
-    expect(args).toContain("--provider");
-    expect(args).toContain("feishu");
-    expect(args).toContain("--json");
+
+    const call = spawnMock.mock.calls[0]!;
+    expect(call[0]).toBe("python3");
+    const args = call[1] as string[];
+    // Runs Yulu's own check_meetings.py in JSON mode — `json` is a positional command.
+    expect(args[0]).toBe("/fake/yulu/scripts/check_meetings.py");
+    expect(args).toContain("json");
+    // The dead `yulu.calendar.detect` module + the unsupported --provider flag are gone.
+    expect(args).not.toContain("--provider");
+    expect(args.join(" ")).not.toContain("yulu.calendar.detect");
+
+    // PYTHONPATH is derived from ctx.paths.scriptDir — never a hardcoded/personal path.
+    const opts = call[2] as { env?: Record<string, string> };
+    expect(opts.env?.PYTHONPATH).toBe("/fake/yulu/scripts");
   });
 
-  it("returns ok=false when python exits non-zero", async () => {
-    mockSpawn("", 1, "ModuleNotFoundError: yulu.calendar");
-    const caller = createCaller(integrationsRouter, {} as AppContext);
+  it("returns ok=false when check_meetings.py exits non-zero", async () => {
+    mockSpawn("", 1, "Config not found");
+    const caller = createCaller(integrationsRouter, ctx());
     const r = await caller.test({ provider: "google" });
     expect(r.ok).toBe(false);
-    expect(r.stderr).toContain("ModuleNotFoundError");
+    expect(r.stderr).toContain("Config not found");
   });
 
   it("includes stdout + stderr in the response", async () => {
-    mockSpawn("hello\n", 0, "warning: x\n");
-    const caller = createCaller(integrationsRouter, {} as AppContext);
+    mockSpawn("[]\n", 0, "warning: x\n");
+    const caller = createCaller(integrationsRouter, ctx());
     const r = await caller.test({ provider: "feishu" });
-    expect(r.stdout).toBe("hello\n");
+    expect(r.stdout).toBe("[]\n");
     expect(r.stderr).toBe("warning: x\n");
   });
 });

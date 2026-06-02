@@ -26,7 +26,7 @@ describe("searchRouter", () => {
     execFileMock.mockImplementation((...args: unknown[]) => {
       lastCb(args)?.(null, { stdout: JSON.stringify(FAKE_HITS), stderr: "" });
     });
-    const ctx = {} as AppContext;
+    const ctx = { paths: { scriptDir: "/fake/yulu/scripts" } } as unknown as AppContext;
     const caller = createCaller(searchRouter, ctx);
     const r = await caller.run({ query: "OKR" });
     expect(r.hits.length).toBe(1);

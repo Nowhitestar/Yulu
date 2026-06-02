@@ -1,10 +1,16 @@
 import { spawn } from "node:child_process";
+import { join } from "node:path";
 import { z } from "zod";
 import { router, publicProcedure } from "../trpc.js";
 
-function runSpawn(cmd: string, args: string[], timeoutMs: number): Promise<{ stdout: string; stderr: string; code: number }> {
+function runSpawn(
+  cmd: string,
+  args: string[],
+  env: NodeJS.ProcessEnv,
+  timeoutMs: number,
+): Promise<{ stdout: string; stderr: string; code: number }> {
   return new Promise((resolve) => {
-    const proc = spawn(cmd, args, { env: { ...process.env, PYTHONPATH: process.env.YULU_SCRIPT_DIR ?? "/Users/liaoyuxing/.yulu/yulu/scripts" } });
+    const proc = spawn(cmd, args, { env });
     let stdout = "", stderr = "";
     const timer = setTimeout(() => { proc.kill("SIGKILL"); }, timeoutMs);
     proc.stdout.on("data", (b: Buffer) => { stdout += b.toString("utf8"); });
@@ -14,12 +20,18 @@ function runSpawn(cmd: string, args: string[], timeoutMs: number): Promise<{ std
 }
 
 export const integrationsRouter = router({
+  // Test that calendar integration works by running Yulu's OWN check_meetings.py
+  // in `json` mode. It reads config.json, queries `gog` for the enabled Google
+  // calendars and prints the events as JSON — exactly the path the scheduler uses.
+  // PYTHONPATH points at scriptDir (no hardcoded/personal path) so check_meetings
+  // and its imports resolve. `json` is a POSITIONAL command, never a --provider flag.
   test: publicProcedure
     .input(z.object({ provider: z.enum(["feishu", "google"]) }))
-    .mutation(async ({ input }) => {
+    .mutation(async ({ ctx }) => {
       const { stdout, stderr, code } = await runSpawn(
         "python3",
-        ["-m", "yulu.calendar.detect", "--provider", input.provider, "--json"],
+        [join(ctx.paths.scriptDir, "check_meetings.py"), "json"],
+        { ...process.env, PYTHONPATH: ctx.paths.scriptDir },
         10_000,
       );
       return { ok: code === 0, stdout, stderr };

@@ -6,7 +6,7 @@ export const configRouter = router({
 
   update: publicProcedure
     .input(z.object({
-      key: z.string().regex(/^[a-z_]+(\.[a-z_]+)*$/i),
+      key: z.string().regex(/^[a-z0-9_]+(\.[a-z0-9_]+)*$/i),
       value: z.unknown(),
     }))
     .mutation(({ ctx, input }) => ctx.config.update(input.key, input.value)),
