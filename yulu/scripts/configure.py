@@ -8,6 +8,10 @@ from pathlib import Path
 CONFIG_PATH = Path.home() / ".config" / "yulu" / "config.json"
 DEFAULT_MLX_PYTHON = str(Path.home() / ".config/yulu/venv-mlx-whisper/bin/python")
 DEFAULT_MLX_MODEL = "mlx-community/whisper-large-v3-turbo"
+# Realtime/live captions always run a fast model so they keep up with
+# wall-clock audio, independent of which (possibly slower) model the user
+# picks for the final pass. large-v3 is too slow per-chunk for the live tail.
+DEFAULT_REALTIME_MLX_MODEL = "mlx-community/whisper-large-v3-turbo"
 DEFAULT_WHISPER_MODEL = str(Path.home() / ".config/yulu/models/ggml-large-v3.bin")
 FAST_MODE = "fast_summary"
 FULL_MODE = "full_transcribe"
@@ -73,7 +77,11 @@ def set_engine(engine, model=None, path=CONFIG_PATH):
         mlx["preprocess_audio"] = mlx.get("preprocess_audio", True)
         trans["final_engine"] = "mlx"
         realtime["engine"] = "mlx"
-        realtime["mlx_model"] = mlx["model"]
+        # Keep realtime on a fast model regardless of the final model choice.
+        # Only seed a default; respect an explicit user override if present.
+        realtime["mlx_model"] = realtime.get("mlx_model") or DEFAULT_REALTIME_MLX_MODEL
+        realtime.setdefault("chunk_sec", 15)
+        realtime.setdefault("chunk_max_sec", 30)
         save_config(cfg, path)
         print(f"final_engine=mlx")
         print(f"mlx.model={mlx['model']}")

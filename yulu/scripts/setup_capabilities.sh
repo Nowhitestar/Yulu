@@ -76,7 +76,23 @@ mlx = trans.setdefault("mlx", {})
 mlx.pop("python", None)   # normalize any stale venv path written by an older setup
 mlx["model"] = "$model"
 realtime["engine"] = "mlx"
-realtime["mlx_model"] = "$model"
+# Realtime/live captions stay on a FAST model so the live tail keeps up with
+# wall-clock audio (large-v3 is too slow per-chunk; the final pass still uses
+# mlx["model"]). Migration: older setups copied the large-v3 final model into
+# realtime.mlx_model, which made the live tail fall behind and truncate long
+# recordings. Rewrite that stale value to turbo. Respect a turbo-or-smaller
+# explicit override.
+TURBO = "mlx-community/whisper-large-v3-turbo"
+rt_model = realtime.get("mlx_model")
+# Rewrite when unset, when it mirrors the (slow) final model, or when it is a
+# non-turbo large-v3 model. A user who explicitly picked a smaller/turbo
+# realtime model keeps it.
+def _is_slow_large_v3(m):
+    return bool(m) and "large-v3" in m and "turbo" not in m
+if not rt_model or rt_model == mlx["model"] or _is_slow_large_v3(rt_model):
+    realtime["mlx_model"] = TURBO
+realtime.setdefault("chunk_sec", 15)
+realtime.setdefault("chunk_max_sec", 30)
 cfg_path.write_text(json.dumps(cfg, indent=2, ensure_ascii=False))
 PY
     ok "config.json 已设置 MLX 模型: $model"

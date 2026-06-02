@@ -22,9 +22,22 @@ class DaemonConfig:
     default_language: str = "zh"
     mlx_python: str = ""
     mlx_model: str = "mlx-community/whisper-large-v3-mlx"
+    # The realtime/live tail must keep up with wall-clock audio, so it runs a
+    # FASTER model than the final pass. large-v3 is far too slow to transcribe
+    # a chunk in real time on most machines; the turbo model is ~4-8x faster
+    # with a small accuracy cost that the final re-pass (large-v3) recovers.
+    # Read from transcription.realtime.mlx_model; defaults to turbo even when
+    # the final model is large-v3.
+    realtime_mlx_model: str = "mlx-community/whisper-large-v3-turbo"
     whisper_cli: str = "whisper-cli"
     whisper_model: str = ""
     live_chunk_max_per_session: int = 4
+    # Upper bound (seconds) on how much audio a single live_chunk transcribes.
+    # Without this, a tail loop that has fallen behind reads ALL accumulated
+    # audio in one chunk, which only makes it slower and can starve later
+    # chunks. Capping the read keeps each live_chunk bounded so the loop can
+    # catch up incrementally instead of producing one giant slow chunk.
+    live_chunk_max_sec: float = 30.0
     max_concurrent_connections: int = 100
 
     @classmethod
@@ -41,10 +54,18 @@ class DaemonConfig:
         sd = data.get("stt_daemon", {})
         trans = data.get("transcription", {})
         mlx = trans.get("mlx", {})
+        realtime = trans.get("realtime", {}) if isinstance(trans.get("realtime"), dict) else {}
         if mlx.get("python"):
             cfg.mlx_python = str(Path(mlx["python"]).expanduser())
         if mlx.get("model"):
             cfg.mlx_model = mlx["model"]
+        # Realtime model: honor transcription.realtime.mlx_model when present.
+        # Fall back to the default turbo model (NOT the final model) so the
+        # live tail stays fast even on configs that never set it.
+        if realtime.get("mlx_model"):
+            cfg.realtime_mlx_model = realtime["mlx_model"]
+        if realtime.get("chunk_max_sec"):
+            cfg.live_chunk_max_sec = float(realtime["chunk_max_sec"])
         if trans.get("whisper_cli"):
             cfg.whisper_cli = trans["whisper_cli"]
         if trans.get("local_model_path"):

@@ -40,6 +40,18 @@ class LiveSession:
     language: str
     chunk_sec: float = 10.0
     meeting_title: Optional[str] = None
+    # Engine used for the live chunks ONLY. Defaults to `engine` so existing
+    # callers/tests are unchanged; the daemon overrides this with the fast
+    # realtime backend (e.g. "mlx-realtime") so the live tail keeps up while
+    # the final-transcribe pass still uses the (slower, more accurate)
+    # `engine`. Kept distinct so stop_session's FINAL_TRANSCRIBE never picks
+    # the realtime model.
+    realtime_engine: Optional[str] = None
+    # Hard cap (seconds) on how much audio a single live chunk transcribes.
+    # When the tail loop falls behind, this stops it from reading the entire
+    # accumulated backlog in one giant (and even slower) chunk. None = unbounded
+    # (legacy behavior, used by tests that pre-date the cap).
+    chunk_max_sec: Optional[float] = None
     # Phase 3 — stride extraction from a single stereo WAV.
     # When stride_step > 1, mic_path == sys_path and we slice every
     # `stride_step` bytes starting at `<channel>_stride_offset`.
@@ -71,6 +83,10 @@ class TailState:
     stride_step: int = 1
     source_sample_rate_hz: int = SAMPLE_RATE_HZ
     wav_header_bytes: int = WAV_HEADER_BYTES
+    # Realtime robustness (this fix). Defaulted so older persisted .tail.json
+    # files (which lack these keys) still load via TailState(**data).
+    realtime_engine: Optional[str] = None
+    chunk_max_sec: Optional[float] = None
 
     def persist(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -143,6 +159,8 @@ class LiveSessionManager:
                 stride_step=spec.stride_step,
                 source_sample_rate_hz=spec.source_sample_rate_hz,
                 wav_header_bytes=spec.wav_header_bytes,
+                realtime_engine=spec.realtime_engine,
+                chunk_max_sec=spec.chunk_max_sec,
             )
             state.persist(existing_state_path)
         self._active[spec.sid] = _ActiveSession(spec=spec, state=state)
@@ -216,45 +234,95 @@ class LiveSessionManager:
     async def _tail_loop(self, sid: str) -> None:
         try:
             while sid in self._active:
-                await self._tail_iteration(sid)
+                dispatched = await self._tail_iteration(sid)
                 active = self._active.get(sid)
                 if active is None:
                     return
+                # Catch-up: if a chunk was dispatched and there's still a full
+                # chunk's worth of audio buffered, we've fallen behind — loop
+                # again immediately (no sleep) so we drain the backlog instead
+                # of letting it grow unbounded. Only idle-sleep once caught up.
+                if dispatched and self._has_pending_chunk(active):
+                    continue
                 await asyncio.sleep(active.spec.chunk_sec)
         except asyncio.CancelledError:
             raise
 
-    async def _tail_iteration(self, sid: str) -> None:
+    def _has_pending_chunk(self, active: _ActiveSession) -> bool:
+        """True when at least ``chunk_sec`` of un-consumed source audio is
+        already on disk for either channel — i.e. the tail loop is behind."""
+        min_seconds = active.spec.chunk_sec
+        if self._channel_has_pending(
+            Path(active.spec.mic_path), active.state.mic_offset_bytes,
+            min_seconds=min_seconds, stride_step=active.state.stride_step,
+            source_sample_rate_hz=active.state.source_sample_rate_hz,
+        ):
+            return True
+        if active.spec.sys_path and self._channel_has_pending(
+            Path(active.spec.sys_path), active.state.sys_offset_bytes,
+            min_seconds=min_seconds, stride_step=active.state.stride_step,
+            source_sample_rate_hz=active.state.source_sample_rate_hz,
+        ):
+            return True
+        return False
+
+    @staticmethod
+    def _channel_has_pending(
+        path: Path, offset: int, *, min_seconds: float,
+        stride_step: int, source_sample_rate_hz: int,
+    ) -> bool:
+        try:
+            current_size = path.stat().st_size
+        except FileNotFoundError:
+            return False
+        frame_bytes = stride_step if stride_step > 1 else SAMPLE_BYTES
+        min_source_bytes = int(min_seconds * source_sample_rate_hz * frame_bytes)
+        return (current_size - offset) >= min_source_bytes
+
+    async def _tail_iteration(self, sid: str) -> bool:
+        """Read + dispatch at most one chunk per channel. Returns True if any
+        chunk was dispatched (used by the tail loop to decide catch-up)."""
         active = self._active.get(sid)
         if active is None:
-            return
+            return False
+        max_seconds = active.state.chunk_max_sec
+        dispatched = False
         mic_chunk = self._read_pending(
             Path(active.spec.mic_path),
             active.state.mic_offset_bytes,
             min_seconds=active.spec.chunk_sec,
+            max_seconds=max_seconds,
             stride_offset=active.state.mic_stride_offset,
             stride_step=active.state.stride_step,
             source_sample_rate_hz=active.state.source_sample_rate_hz,
         )
         if mic_chunk is not None:
             chunk_path, new_offset, duration_ms = mic_chunk
-            await self._dispatch_chunk(active, source="mic", chunk_path=chunk_path, duration_ms=duration_ms)
+            # Advance the offset BEFORE awaiting the (possibly slow) transcribe
+            # so a slow chunk never causes the same bytes to be re-read on the
+            # next iteration. The realtime transcript is best-effort; the final
+            # pass re-transcribes the whole file for accuracy.
             active.state.mic_offset_bytes = new_offset
+            await self._dispatch_chunk(active, source="mic", chunk_path=chunk_path, duration_ms=duration_ms)
+            dispatched = True
         if active.spec.sys_path:
             sys_chunk = self._read_pending(
                 Path(active.spec.sys_path),
                 active.state.sys_offset_bytes,
                 min_seconds=active.spec.chunk_sec,
+                max_seconds=max_seconds,
                 stride_offset=active.state.sys_stride_offset,
                 stride_step=active.state.stride_step,
                 source_sample_rate_hz=active.state.source_sample_rate_hz,
             )
             if sys_chunk is not None:
                 chunk_path, new_offset, duration_ms = sys_chunk
-                await self._dispatch_chunk(active, source="system", chunk_path=chunk_path, duration_ms=duration_ms)
                 active.state.sys_offset_bytes = new_offset
+                await self._dispatch_chunk(active, source="system", chunk_path=chunk_path, duration_ms=duration_ms)
+                dispatched = True
         active.state.last_partial_at = _now_iso()
         await self.flush_state(sid, active=active)
+        return dispatched
 
     async def _dispatch_chunk(
         self,
@@ -267,10 +335,14 @@ class LiveSessionManager:
         seq = active.state.next_seq
         active.state.next_seq += 1
         started_ms = self._offset_to_ms(active.state, source, before_chunk=True, duration_ms=duration_ms)
+        # Live chunks run on the realtime (fast) engine when one is configured;
+        # the FINAL_TRANSCRIBE in stop_session deliberately still uses
+        # spec.engine so the final note gets the higher-accuracy model.
+        live_engine = active.spec.realtime_engine or active.spec.engine
         job = Job(
             job_id=str(uuid.uuid4()),
             kind=JobKind.LIVE_CHUNK,
-            engine=active.spec.engine,
+            engine=live_engine,
             language=active.spec.language,
             audio_path=str(chunk_path),
             initial_prompt=self.vocab_cache.inject_prompt(
@@ -328,6 +400,7 @@ class LiveSessionManager:
         offset: int,
         *,
         min_seconds: float,
+        max_seconds: Optional[float] = None,
         stride_offset: int = 0,
         stride_step: int = 1,
         source_sample_rate_hz: int = SAMPLE_RATE_HZ,
@@ -335,6 +408,13 @@ class LiveSessionManager:
         """Read >= min_seconds of audio after `offset`, write a temp WAV.
 
         Returns (chunk_wav_path, new_offset, duration_ms) or None if too little.
+
+        ``max_seconds`` caps how much audio a single chunk consumes. When the
+        tail loop has fallen behind (e.g. a slow model), the backlog can be
+        many minutes; without a cap we'd read it ALL into one giant chunk that
+        is even slower to transcribe and starves the rest of the recording.
+        Capping keeps each chunk bounded so the loop drains the backlog
+        incrementally. ``None`` = unbounded (legacy behavior).
 
         When ``stride_step > 1``, the source file is treated as interleaved
         samples (e.g. a stereo WAV) and only every ``stride_step``-th sample
@@ -357,6 +437,11 @@ class LiveSessionManager:
             min_source_bytes = int(min_seconds * source_bytes_per_second)
         if available < min_source_bytes:
             return None
+        # Cap the consumed window so a backlog doesn't become one mega-chunk.
+        if max_seconds is not None:
+            max_source_bytes = int(max_seconds * source_bytes_per_second)
+            if max_source_bytes >= min_source_bytes and available > max_source_bytes:
+                available = max_source_bytes
         if stride_step > 1:
             # Align to a whole-frame boundary so each output sample maps to a
             # complete interleaved frame of `stride_step` source bytes.
