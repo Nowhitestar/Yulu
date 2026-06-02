@@ -13,10 +13,12 @@ duplicate any Phase 1-3 primitives:
 
 from __future__ import annotations
 
+import json
 import re
 import signal
 import sys
 import time
+import wave
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -28,6 +30,17 @@ AGENT_QUEUE_PATH = Path.home() / ".config" / "yulu" / "agent-queue.json"
 PROMPTS_DB = Path.home() / ".config" / "yulu" / "prompts.sqlite"
 VOICEMAIL_DIR = VOICEMAIL_DIR_DEFAULT
 DEFAULT_SILENCE_SECONDS = 3
+
+# Promote-to-final coverage guard. A realtime transcript may only be promoted
+# as the final when it actually covered (nearly) the whole recording. If the
+# live tail hiccupped and only captured the first minute of an hour-long memo,
+# promoting it would silently discard 59 minutes — so we fall back to a full
+# whole-file transcription instead. "Covered" means: the max ended_ms the live
+# tail reported (written to <stem>.realtime.coverage.json by realtime_transcribe.py)
+# must be >= COVERAGE_MIN_RATIO of the WAV duration. A small absolute slack
+# (COVERAGE_SLACK_SEC) tolerates the trailing partial chunk + silence trim.
+COVERAGE_MIN_RATIO = 0.85
+COVERAGE_SLACK_SEC = 20.0
 
 
 def _request_transcribe(wav_path: Path) -> dict:
@@ -145,15 +158,72 @@ def _strip_speaker_tags(raw: str) -> str:
     return "\n".join(out)
 
 
+def _wav_duration_sec(wav_path: Path) -> Optional[float]:
+    """Duration of a PCM WAV in seconds, or None if unreadable. Best-effort:
+    a malformed/short header must never crash the promote decision."""
+    try:
+        with wave.open(str(wav_path), "rb") as wf:
+            rate = wf.getframerate()
+            frames = wf.getnframes()
+        if rate <= 0:
+            return None
+        return frames / float(rate)
+    except (wave.Error, OSError, EOFError):
+        return None
+
+
+def _realtime_covered_sec(wav_path: Path) -> Optional[float]:
+    """Audio-seconds the live tail reported transcribing, from the coverage
+    sidecar written by realtime_transcribe.py. None if absent/unreadable."""
+    cov_path = wav_path.with_suffix(".realtime.coverage.json")
+    if not cov_path.exists():
+        return None
+    try:
+        data = json.loads(cov_path.read_text(encoding="utf-8"))
+        covered_ms = data.get("covered_ms")
+        if isinstance(covered_ms, (int, float)) and covered_ms >= 0:
+            return float(covered_ms) / 1000.0
+    except (ValueError, OSError):
+        return None
+    return None
+
+
+def _realtime_coverage_ok(wav_path: Path) -> bool:
+    """True when the realtime transcript covered enough of the recording to be
+    safely promoted as the final. Conservative: when we CAN'T measure (no WAV
+    duration, or no coverage sidecar), we DO NOT block promotion — that
+    preserves the prior behavior for short memos where realtime is reliable and
+    the sidecar may be absent (older transcriber, or a fast path)."""
+    duration = _wav_duration_sec(wav_path)
+    if duration is None or duration <= 0:
+        return True  # cannot measure duration → don't block
+    covered = _realtime_covered_sec(wav_path)
+    if covered is None:
+        return True  # no coverage signal → don't block (back-compat)
+    threshold = min(duration * COVERAGE_MIN_RATIO, duration - COVERAGE_SLACK_SEC)
+    return covered >= threshold
+
+
 def _promote_realtime_transcript(wav_path: Path, *, title: Optional[str]) -> int:
     """Promote the live realtime transcript to the final transcript.
-    Returns 0 on success; 2 if the realtime transcript is missing or empty
-    (caller falls back to whole-file transcribe)."""
+    Returns 0 on success; 2 if the realtime transcript is missing, empty, or
+    covered materially less than the recording duration (caller falls back to
+    whole-file transcribe so the user never silently loses minutes of audio)."""
     rt_path = wav_path.with_suffix(".realtime.transcript.txt")
     if not rt_path.exists():
         return 2
     text = _strip_speaker_tags(rt_path.read_text(encoding="utf-8"))
     if not text:
+        return 2
+    if not _realtime_coverage_ok(wav_path):
+        covered = _realtime_covered_sec(wav_path)
+        duration = _wav_duration_sec(wav_path)
+        print(
+            f"⚠️ realtime transcript covered ~{covered:.0f}s of a "
+            f"~{duration:.0f}s recording — too incomplete to promote; "
+            f"falling back to whole-file transcribe",
+            file=sys.stderr,
+        )
         return 2
     return _finalize_transcript(wav_path, text, title=title)
 

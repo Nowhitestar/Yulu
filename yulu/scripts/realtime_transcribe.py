@@ -77,9 +77,24 @@ async def subscribe_loop(
     print(f"subscribed sid={sid}")
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    coverage_path = audio_path.with_suffix(".realtime.coverage.json")
     buffer: list[str] = []
+    # Track how many audio-seconds the live tail actually transcribed. The
+    # voicemail promote-to-final guard compares this against the WAV duration
+    # so a realtime transcript that only covered the first minute of an
+    # hour-long recording is NOT silently promoted as the final.
+    covered_ms = 0
+
+    def _write_coverage() -> None:
+        try:
+            coverage_path.write_text(
+                json.dumps({"covered_ms": covered_ms}), encoding="utf-8"
+            )
+        except OSError:
+            pass
 
     async def reader_loop() -> None:
+        nonlocal covered_ms
         while True:
             line = await reader.readline()
             if not line:
@@ -93,9 +108,13 @@ async def subscribe_loop(
                 source = msg.get("source", "")
                 tag = "Me" if source == "mic" else "Them"
                 text = (msg.get("text") or "").strip()
+                ended_ms = msg.get("ended_ms")
+                if isinstance(ended_ms, (int, float)) and ended_ms > covered_ms:
+                    covered_ms = int(ended_ms)
                 if text:
                     buffer.append(f"[{tag}] {text}")
                     output_path.write_text("\n".join(buffer), encoding="utf-8")
+                    _write_coverage()
             elif mtype == "final_ready":
                 return
 
