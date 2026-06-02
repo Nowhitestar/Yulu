@@ -12,6 +12,7 @@ from .config import DaemonConfig
 def _build_real_backends(config: DaemonConfig):
     from .backends.mlx import MlxWhisperBackend
     from .backends.whisper_cli import WhisperCliBackend
+    from .backends.cloud import CloudCommandBackend
 
     return {
         "mlx": MlxWhisperBackend(
@@ -22,6 +23,10 @@ def _build_real_backends(config: DaemonConfig):
             binary=config.whisper_cli,
             model_path=config.whisper_model,
         ),
+        # User's own cloud-transcription command (transcription.cloud_command).
+        # Empty by default → CloudCommandBackend stays not-ready and the runtime's
+        # mode dispatch simply never routes to it.
+        "cloud": CloudCommandBackend(command=config.cloud_command),
     }
 
 

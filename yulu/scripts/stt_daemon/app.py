@@ -43,7 +43,16 @@ class STTDaemonApp:
         self.config = config
         self.logger = JsonLogger(open_log_sink(config.log_path))
         self.vocab_cache = VocabCache(config.vocab_db_path, autoreload=True)
-        self.runtime = STTRuntime(backends=backends)
+        self.runtime = STTRuntime(
+            backends=backends,
+            # Final-transcription policy (BUG 3 + BUG 8). `mode` orders local vs.
+            # the user's cloud_command; `whisper_model_present` enables the
+            # mlx→whisper fallback only when a whisper.cpp model is configured.
+            mode=config.mode,
+            whisper_model_present=bool(config.whisper_model),
+            cloud_command_present=bool(config.cloud_command),
+            logger=self.logger,
+        )
         self.scheduler = STTScheduler(
             runtime=self.runtime,
             live_chunk_max_per_session=config.live_chunk_max_per_session,
