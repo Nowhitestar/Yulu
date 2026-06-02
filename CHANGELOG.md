@@ -4,6 +4,13 @@ All notable changes to Yulu are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.6.0](https://github.com/Nowhitestar/Yulu/compare/v0.5.2...v0.6.0) (2026-06-01)
+
+
+### Features
+
+* agent-native provisioning & cross-platform foundation (v0.5 milestone) ([#37](https://github.com/Nowhitestar/Yulu/issues/37)) ([b18164d](https://github.com/Nowhitestar/Yulu/commit/b18164d99ba1b323b826277cb42202497aebb972))
+
 ## [0.5.2](https://github.com/Nowhitestar/Yulu/compare/v0.5.1...v0.5.2) (2026-05-29)
 
 
