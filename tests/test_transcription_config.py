@@ -196,16 +196,21 @@ def test_transcribe_coverage_guard_blocks_truncated_realtime(tmp_path, monkeypat
     assert transcribe._realtime_coverage_ok(wav) is True
 
 
-def test_transcribe_client_reads_large_response(tmp_path):
+def test_transcribe_client_reads_large_response():
     """A full transcript of a long recording is ONE JSON line far larger than
     asyncio's default 64 KiB StreamReader limit. _send_once must read it instead of
     raising 'Separator is not found, and chunk exceed the limit' — which silently
     broke full (re)transcription of hour-long recordings. FAILS against pre-fix code."""
     import asyncio
+    import os
+    import tempfile
     from transcribe_client import _send_once
 
-    sock = tmp_path / "d.sock"
     big_text = "x" * (256 * 1024)  # 256 KiB, well over the 64 KiB default limit
+    # AF_UNIX paths are capped (~104 chars on macOS); pytest's tmp_path is too long,
+    # so bind the test socket under a short /tmp dir.
+    sock_dir = tempfile.mkdtemp(prefix="yl", dir="/tmp")
+    sock = Path(sock_dir) / "s"
 
     async def handle(reader, writer):
         await reader.readline()  # consume the request line
@@ -223,5 +228,12 @@ def test_transcribe_client_reads_large_response(tmp_path):
             server.close()
             await server.wait_closed()
 
-    resp = asyncio.run(run())
-    assert resp["text"] == big_text
+    try:
+        resp = asyncio.run(run())
+        assert resp["text"] == big_text
+    finally:
+        for cleanup in (lambda: os.unlink(sock), lambda: os.rmdir(sock_dir)):
+            try:
+                cleanup()
+            except OSError:
+                pass
