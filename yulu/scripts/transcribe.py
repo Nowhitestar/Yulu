@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import sys
+import wave
 from pathlib import Path
 from typing import Optional
 
@@ -25,6 +26,54 @@ AGENT_QUEUE_PATH = Path.home() / ".config" / "yulu" / "agent-queue.json"
 
 FAST_POST_RECORDING_MODE = "fast_summary"
 FULL_POST_RECORDING_MODE = "full_transcribe"
+
+# Coverage guard for reusing a realtime transcript as the final (fast_summary mode).
+# Mirrors voicemail/recorder.py's promote-to-final guard: if the live tail fell behind
+# or dropped on a long recording, its realtime transcript covers only part of the
+# audio — reusing that as the final would silently discard the rest (this is exactly
+# how a 1-hour meeting got truncated to ~1 minute), so we fall back to a full daemon
+# transcribe instead. Conservative: when coverage can't be measured (no WAV duration
+# or no sidecar) we DON'T block — preserving prior behavior for short recordings where
+# realtime is reliable and the sidecar may be absent.
+COVERAGE_MIN_RATIO = 0.85
+COVERAGE_SLACK_SEC = 20.0
+
+
+def _wav_duration_sec(wav_path: Path) -> Optional[float]:
+    try:
+        with wave.open(str(wav_path), "rb") as wf:
+            rate = wf.getframerate()
+            frames = wf.getnframes()
+        return frames / float(rate) if rate > 0 else None
+    except (wave.Error, OSError, EOFError):
+        return None
+
+
+def _realtime_covered_sec(wav_path: Path) -> Optional[float]:
+    cov_path = wav_path.with_suffix(".realtime.coverage.json")
+    if not cov_path.exists():
+        return None
+    try:
+        data = json.loads(cov_path.read_text(encoding="utf-8"))
+        covered_ms = data.get("covered_ms")
+        if isinstance(covered_ms, (int, float)) and covered_ms >= 0:
+            return float(covered_ms) / 1000.0
+    except (ValueError, OSError):
+        return None
+    return None
+
+
+def _realtime_coverage_ok(wav_path: Path) -> bool:
+    """True when a realtime transcript covered enough of the recording to be reused
+    as the final. False only when we can measure coverage AND it falls short."""
+    duration = _wav_duration_sec(wav_path)
+    if duration is None or duration <= 0:
+        return True
+    covered = _realtime_covered_sec(wav_path)
+    if covered is None:
+        return True
+    threshold = min(duration * COVERAGE_MIN_RATIO, duration - COVERAGE_SLACK_SEC)
+    return covered >= threshold
 
 
 def load_config() -> dict:
@@ -134,7 +183,15 @@ def process_audio(audio_path_str: str) -> None:
 
     if post_mode == FAST_POST_RECORDING_MODE:
         merged = read_realtime_transcript(realtime_path)
-        if merged:
+        if merged and not _realtime_coverage_ok(audio_path):
+            # The realtime transcript covered materially less than the recording
+            # (live tail fell behind / dropped on a long recording). Reusing a
+            # truncated transcript as the final would silently lose most of the
+            # recording — discard it and fall through to a full daemon transcribe.
+            print("⚠️ 实时转写覆盖不足（疑似直播掉线/落后），改走完整 daemon 转录",
+                  file=sys.stderr)
+            merged = None
+        elif merged:
             print(f"⚡ 使用实时转写结果: {realtime_path}")
         else:
             print("⚠️ 未找到可用实时转写，回退到完整 daemon 转录", file=sys.stderr)

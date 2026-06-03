@@ -111,10 +111,14 @@ async def subscribe_loop(
                 ended_ms = msg.get("ended_ms")
                 if isinstance(ended_ms, (int, float)) and ended_ms > covered_ms:
                     covered_ms = int(ended_ms)
+                    # M2: persist coverage whenever it advances, even for silent
+                    # (text-less) partials, so a recording that ends in silence does
+                    # not under-report how much audio the live tail actually covered
+                    # (which would trigger an unnecessary full-transcribe fallback).
+                    _write_coverage()
                 if text:
                     buffer.append(f"[{tag}] {text}")
                     output_path.write_text("\n".join(buffer), encoding="utf-8")
-                    _write_coverage()
             elif mtype == "final_ready":
                 return
 
