@@ -36,7 +36,12 @@ async def _send_once(
 ) -> dict:
     try:
         reader, writer = await asyncio.wait_for(
-            asyncio.open_unix_connection(str(socket_path)),
+            # Large StreamReader limit (asyncio default is 64 KiB). A full transcript
+            # of a long recording is ONE JSON line that easily exceeds 64 KiB, and the
+            # default limit makes reader.readline() raise "Separator is not found, and
+            # chunk exceed the limit" — which silently broke full (re)transcription of
+            # hour-long recordings. 64 MiB covers any realistic single-recording payload.
+            asyncio.open_unix_connection(str(socket_path), limit=2 ** 26),
             timeout=timeout,
         )
     except (FileNotFoundError, ConnectionRefusedError) as exc:

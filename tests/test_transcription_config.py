@@ -194,3 +194,34 @@ def test_transcribe_coverage_guard_blocks_truncated_realtime(tmp_path, monkeypat
     # Live tail covered nearly the whole recording → safe to reuse.
     cov.write_text(json.dumps({"covered_ms": 3_590_000}), encoding="utf-8")
     assert transcribe._realtime_coverage_ok(wav) is True
+
+
+def test_transcribe_client_reads_large_response(tmp_path):
+    """A full transcript of a long recording is ONE JSON line far larger than
+    asyncio's default 64 KiB StreamReader limit. _send_once must read it instead of
+    raising 'Separator is not found, and chunk exceed the limit' — which silently
+    broke full (re)transcription of hour-long recordings. FAILS against pre-fix code."""
+    import asyncio
+    from transcribe_client import _send_once
+
+    sock = tmp_path / "d.sock"
+    big_text = "x" * (256 * 1024)  # 256 KiB, well over the 64 KiB default limit
+
+    async def handle(reader, writer):
+        await reader.readline()  # consume the request line
+        writer.write((json.dumps({"text": big_text}) + "\n").encode())
+        await writer.drain()
+        writer.close()
+
+    async def run():
+        server = await asyncio.start_unix_server(handle, path=str(sock))
+        try:
+            return await _send_once(
+                sock, {"action": "ping"}, timeout=5.0, response_timeout=5.0
+            )
+        finally:
+            server.close()
+            await server.wait_closed()
+
+    resp = asyncio.run(run())
+    assert resp["text"] == big_text
