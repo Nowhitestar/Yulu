@@ -24,6 +24,15 @@ from pathlib import Path
 from typing import Optional
 
 from voicemail.repo import VOICEMAIL_DIR_DEFAULT
+# Realtime-coverage guard shared with the meeting path (transcribe.py). One backend,
+# two entry points → ONE reuse-vs-retranscribe decision. See realtime_coverage.py.
+from realtime_coverage import (
+    COVERAGE_MIN_RATIO,
+    COVERAGE_SLACK_SEC,
+    wav_duration_sec as _wav_duration_sec,
+    realtime_covered_sec as _realtime_covered_sec,
+    realtime_coverage_ok as _realtime_coverage_ok,
+)
 
 # Mirror Phase 2/3 constants for the live deployment
 AGENT_QUEUE_PATH = Path.home() / ".config" / "yulu" / "agent-queue.json"
@@ -39,8 +48,7 @@ DEFAULT_SILENCE_SECONDS = 3
 # tail reported (written to <stem>.realtime.coverage.json by realtime_transcribe.py)
 # must be >= COVERAGE_MIN_RATIO of the WAV duration. A small absolute slack
 # (COVERAGE_SLACK_SEC) tolerates the trailing partial chunk + silence trim.
-COVERAGE_MIN_RATIO = 0.85
-COVERAGE_SLACK_SEC = 20.0
+# COVERAGE_MIN_RATIO / COVERAGE_SLACK_SEC are imported from realtime_coverage.py above.
 
 
 def _request_transcribe(wav_path: Path) -> dict:
@@ -158,50 +166,8 @@ def _strip_speaker_tags(raw: str) -> str:
     return "\n".join(out)
 
 
-def _wav_duration_sec(wav_path: Path) -> Optional[float]:
-    """Duration of a PCM WAV in seconds, or None if unreadable. Best-effort:
-    a malformed/short header must never crash the promote decision."""
-    try:
-        with wave.open(str(wav_path), "rb") as wf:
-            rate = wf.getframerate()
-            frames = wf.getnframes()
-        if rate <= 0:
-            return None
-        return frames / float(rate)
-    except (wave.Error, OSError, EOFError):
-        return None
-
-
-def _realtime_covered_sec(wav_path: Path) -> Optional[float]:
-    """Audio-seconds the live tail reported transcribing, from the coverage
-    sidecar written by realtime_transcribe.py. None if absent/unreadable."""
-    cov_path = wav_path.with_suffix(".realtime.coverage.json")
-    if not cov_path.exists():
-        return None
-    try:
-        data = json.loads(cov_path.read_text(encoding="utf-8"))
-        covered_ms = data.get("covered_ms")
-        if isinstance(covered_ms, (int, float)) and covered_ms >= 0:
-            return float(covered_ms) / 1000.0
-    except (ValueError, OSError):
-        return None
-    return None
-
-
-def _realtime_coverage_ok(wav_path: Path) -> bool:
-    """True when the realtime transcript covered enough of the recording to be
-    safely promoted as the final. Conservative: when we CAN'T measure (no WAV
-    duration, or no coverage sidecar), we DO NOT block promotion — that
-    preserves the prior behavior for short memos where realtime is reliable and
-    the sidecar may be absent (older transcriber, or a fast path)."""
-    duration = _wav_duration_sec(wav_path)
-    if duration is None or duration <= 0:
-        return True  # cannot measure duration → don't block
-    covered = _realtime_covered_sec(wav_path)
-    if covered is None:
-        return True  # no coverage signal → don't block (back-compat)
-    threshold = min(duration * COVERAGE_MIN_RATIO, duration - COVERAGE_SLACK_SEC)
-    return covered >= threshold
+# _wav_duration_sec / _realtime_covered_sec / _realtime_coverage_ok now live in
+# realtime_coverage.py and are imported above as aliases (shared with transcribe.py).
 
 
 def _promote_realtime_transcript(wav_path: Path, *, title: Optional[str]) -> int:

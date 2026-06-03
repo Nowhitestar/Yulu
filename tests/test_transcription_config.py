@@ -177,10 +177,13 @@ def test_transcribe_coverage_guard_blocks_truncated_realtime(tmp_path, monkeypat
     while staying permissive when coverage is unmeasurable (back-compat). FAILS
     against the pre-fix code (the guard did not exist)."""
     import transcribe
+    import realtime_coverage
 
     wav = tmp_path / "rec.wav"
     wav.write_bytes(b"\x00")  # contents irrelevant; duration is monkeypatched
-    monkeypatch.setattr(transcribe, "_wav_duration_sec", lambda p: 3600.0)
+    # transcribe._realtime_coverage_ok IS realtime_coverage.realtime_coverage_ok (shared
+    # module, one source of truth), so patch the duration helper on the shared module.
+    monkeypatch.setattr(realtime_coverage, "wav_duration_sec", lambda p: 3600.0)
     cov = wav.with_suffix(".realtime.coverage.json")
 
     # No coverage sidecar → unmeasurable → don't block (preserve prior behavior).
