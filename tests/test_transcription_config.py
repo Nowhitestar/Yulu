@@ -1,4 +1,6 @@
 import json
+import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -96,3 +98,96 @@ def test_configure_sets_whisper_engine_command(tmp_path):
     assert trans["local_model_path"] == str(model)
     assert trans["realtime"]["engine"] == "whisper"
     assert "{{input}}" in trans["command"]
+
+
+def _run_shell_migration(tmp_path):
+    script = SCRIPTS / "setup_capabilities.sh"
+    return subprocess.run(
+        ["bash", "-c", f'source "{script}"; migrate_realtime_config'],
+        env={**os.environ, "CONFIG_DIR": str(tmp_path), "PYTHON_BIN": sys.executable},
+        capture_output=True,
+        text=True,
+    )
+
+
+def test_shell_migration_rewrites_stale_realtime_config(tmp_path):
+    """B1 regression: setup_capabilities.sh::migrate_realtime_config must actually
+    RUN on upgrade and rewrite an EXISTING config's stale large-v3 realtime model →
+    turbo, plus clamp chunk_sec <= chunk_max_sec. The migration used to be dead code
+    that nothing called, so upgraders silently kept the slow model and a chunk_sec
+    that disabled the backlog cap. This test FAILS against the pre-fix code (the
+    function did not exist → bash exits non-zero)."""
+    cfg = tmp_path / "config.json"
+    cfg.write_text(
+        json.dumps(
+            {
+                "transcription": {
+                    "final_engine": "mlx",
+                    "mlx": {"model": "mlx-community/whisper-large-v3-mlx"},
+                    "realtime": {
+                        "engine": "mlx",
+                        "mlx_model": "mlx-community/whisper-large-v3-mlx",
+                        "chunk_sec": 60,
+                    },
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    result = _run_shell_migration(tmp_path)
+    assert result.returncode == 0, result.stderr
+    rt = json.loads(cfg.read_text(encoding="utf-8"))["transcription"]["realtime"]
+    assert rt["mlx_model"] == "mlx-community/whisper-large-v3-turbo"
+    assert rt["chunk_sec"] == 15
+    assert rt["chunk_max_sec"] == 30
+
+
+def test_shell_migration_is_idempotent_and_nondestructive(tmp_path):
+    """A config already on turbo with sane chunk bounds must be left untouched —
+    the migration must never clobber a user's good realtime config."""
+    cfg = tmp_path / "config.json"
+    cfg.write_text(
+        json.dumps(
+            {
+                "transcription": {
+                    "final_engine": "mlx",
+                    "mlx": {"model": "mlx-community/whisper-large-v3-mlx"},
+                    "realtime": {
+                        "engine": "mlx",
+                        "mlx_model": "mlx-community/whisper-large-v3-turbo",
+                        "chunk_sec": 15,
+                        "chunk_max_sec": 30,
+                    },
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert _run_shell_migration(tmp_path).returncode == 0
+    rt = json.loads(cfg.read_text(encoding="utf-8"))["transcription"]["realtime"]
+    assert rt["mlx_model"] == "mlx-community/whisper-large-v3-turbo"
+    assert rt["chunk_sec"] == 15
+    assert rt["chunk_max_sec"] == 30
+
+
+def test_transcribe_coverage_guard_blocks_truncated_realtime(tmp_path, monkeypatch):
+    """transcribe._realtime_coverage_ok must reject a realtime transcript that covered
+    materially less than the recording, so fast_summary mode does NOT reuse a
+    truncated transcript as the final (the 1-hour-meeting-truncated-to-1-minute bug),
+    while staying permissive when coverage is unmeasurable (back-compat). FAILS
+    against the pre-fix code (the guard did not exist)."""
+    import transcribe
+
+    wav = tmp_path / "rec.wav"
+    wav.write_bytes(b"\x00")  # contents irrelevant; duration is monkeypatched
+    monkeypatch.setattr(transcribe, "_wav_duration_sec", lambda p: 3600.0)
+    cov = wav.with_suffix(".realtime.coverage.json")
+
+    # No coverage sidecar → unmeasurable → don't block (preserve prior behavior).
+    assert transcribe._realtime_coverage_ok(wav) is True
+    # Live tail only covered 60s of a 3600s recording → block (would lose ~59 min).
+    cov.write_text(json.dumps({"covered_ms": 60_000}), encoding="utf-8")
+    assert transcribe._realtime_coverage_ok(wav) is False
+    # Live tail covered nearly the whole recording → safe to reuse.
+    cov.write_text(json.dumps({"covered_ms": 3_590_000}), encoding="utf-8")
+    assert transcribe._realtime_coverage_ok(wav) is True
