@@ -16,6 +16,7 @@ vi.mock("../../web/src/ws.js", () => ({ useWsChannel: () => {} }));
 vi.mock("@tanstack/react-query", () => ({ useQueryClient: () => ({ invalidateQueries: vi.fn() }) }));
 vi.mock("../../web/src/components/AudioPlayer.js", () => ({ AudioPlayer: () => <div data-testid="audio" /> }));
 vi.mock("../../web/src/components/TranscriptView.js", () => ({ TranscriptView: ({ text }: { text: string }) => <div>{text}</div> }));
+vi.mock("../../web/src/components/MarkdownView.js", () => ({ MarkdownView: ({ text }: { text: string }) => <div data-testid="markdown">{text}</div> }));
 
 import { RecordingReader } from "../../web/src/routes/inbox/recordings.$stem";
 
@@ -45,5 +46,11 @@ describe("RecordingReader", () => {
     renderAt("voicemail_20260101_120000");
     expect(screen.getByRole("button", { name: /Re-transcribe/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Re-generate summary/i })).toBeInTheDocument();
+  });
+
+  it("renders the summary through MarkdownView, not a raw <pre>", () => {
+    getMock.mockReturnValue({ data: { stem: "voicemail_20260101_120000", type: "voicemail", title: null, mtimeMs: 1, transcript: "t", summary: "# Heading", realtime: null, hasRealtime: false, status: "idle" }, isPending: false });
+    renderAt("voicemail_20260101_120000");
+    expect(screen.getByTestId("markdown")).toHaveTextContent("# Heading");
   });
 });

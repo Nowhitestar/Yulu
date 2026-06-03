@@ -6,6 +6,7 @@ import { RefreshCw, Sparkles } from "lucide-react";
 import { trpc } from "../../trpc.js";
 import { AudioPlayer } from "../../components/AudioPlayer.js";
 import { TranscriptView } from "../../components/TranscriptView.js";
+import { MarkdownView } from "../../components/MarkdownView.js";
 import { EmptyState } from "../../components/EmptyState.js";
 import { ReprocessButton, type ReprocessButtonState } from "../../components/ReprocessButton.js";
 import { useWsChannel } from "../../ws.js";
@@ -203,7 +204,7 @@ export function RecordingReader() {
 
       <div className="reader-body" ref={bodyRef}>
         {tab === "summary" && (
-          data.summary ? <pre className="reader-md">{data.summary}</pre> : <EmptyState label="No summary yet." />
+          data.summary ? <MarkdownView text={data.summary} /> : <EmptyState label="No summary yet." />
         )}
         {tab === "transcript" && (
           data.transcript ? <TranscriptView text={data.transcript} /> : <EmptyState label="No transcript available." />
