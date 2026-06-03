@@ -438,9 +438,15 @@ class LiveSessionManager:
         if available < min_source_bytes:
             return None
         # Cap the consumed window so a backlog doesn't become one mega-chunk.
+        # Clamp the cap to at least min_source_bytes (one chunk_sec) so a
+        # misconfigured chunk_max_sec < chunk_sec can NEVER disable the cap and let
+        # the tail read an unbounded backlog — that is what made the live tail fall
+        # behind on long recordings and truncate them.
         if max_seconds is not None:
-            max_source_bytes = int(max_seconds * source_bytes_per_second)
-            if max_source_bytes >= min_source_bytes and available > max_source_bytes:
+            max_source_bytes = max(
+                int(max_seconds * source_bytes_per_second), min_source_bytes
+            )
+            if available > max_source_bytes:
                 available = max_source_bytes
         if stride_step > 1:
             # Align to a whole-frame boundary so each output sample maps to a

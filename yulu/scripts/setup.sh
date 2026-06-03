@@ -219,7 +219,8 @@ create_config() {
     },
     "realtime": {
       "engine": "whisper",
-      "chunk_sec": 60
+      "chunk_sec": 15,
+      "chunk_max_sec": 30
     }
   },
   "llm": {
