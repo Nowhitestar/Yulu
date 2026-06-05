@@ -5,6 +5,7 @@ import { trpc } from "../../trpc.js";
 import { useWsChannel } from "../../ws.js";
 import { MasterDetail } from "../../components/MasterDetail.js";
 import { FilterChips, type ChipDef } from "../../components/FilterChips.js";
+import { RecordingStatusBadge } from "../../components/RecordingStatusBadge.js";
 import "./recordings.css";
 
 export const handle = { breadcrumb: "Recordings", filters: null };
@@ -19,6 +20,7 @@ interface Row {
   stem: string;
   type: "voicemail" | "meeting";
   title: string | null;
+  tags: string[];
   recordedAt: string | null;
   mtimeMs: number;
   hasTranscript: boolean;
@@ -60,6 +62,12 @@ export function RecordingsList() {
   useWsChannel("recordings-changed", () => {
     qc?.invalidateQueries({ queryKey: [["recordings", "list"]] });
   });
+  // Refresh the list when a transcribe/summarize job changes state so a row's
+  // status badge updates promptly (e.g. flips to Failed) without waiting on a
+  // filesystem event.
+  useWsChannel("jobs", () => {
+    qc?.invalidateQueries({ queryKey: [["recordings", "list"]] });
+  });
 
   const rows = (data as Row[] | undefined) ?? [];
 
@@ -85,7 +93,7 @@ export function RecordingsList() {
             {r.firstWords && <div className="recording-row-words">{r.firstWords}</div>}
             <div className="recording-row-meta">
               <span>{fmtTs(r.recordedAt)}</span>
-              {r.status !== "idle" && <span className="recording-row-status">{r.status}…</span>}
+              <RecordingStatusBadge state={r.status} error={r.statusError} />
             </div>
           </NavLink>
         ))}

@@ -41,6 +41,27 @@ describe("RecordingsList", () => {
     expect(screen.getByText(/transcribing/i)).toBeInTheDocument();
   });
 
+  it("shows a Failed badge (not a forever-spinner) with the error in a tooltip", () => {
+    listMock.mockReturnValue({
+      data: [{ stem: "TeamSync_20260102_090000", type: "meeting", title: "TeamSync", recordedAt: "2026-01-02T09:00:00", mtimeMs: 2, hasTranscript: false, hasSummary: false, hasRealtime: false, firstWords: null, status: "failed", statusError: "engine crashed" }],
+      isPending: false,
+    });
+    render(<MemoryRouter><RecordingsList /></MemoryRouter>);
+    const badge = screen.getByTestId("recording-status");
+    expect(badge).toHaveTextContent(/failed/i);
+    expect(badge).toHaveAttribute("data-state", "failed");
+    expect(badge).toHaveAttribute("title", "engine crashed");
+  });
+
+  it("renders no status badge for an idle row", () => {
+    listMock.mockReturnValue({
+      data: [{ stem: "TeamSync_20260102_090000", type: "meeting", title: "TeamSync", recordedAt: "2026-01-02T09:00:00", mtimeMs: 2, hasTranscript: true, hasSummary: true, hasRealtime: false, firstWords: "hi", status: "idle" }],
+      isPending: false,
+    });
+    render(<MemoryRouter><RecordingsList /></MemoryRouter>);
+    expect(screen.queryByTestId("recording-status")).toBeNull();
+  });
+
   it("clicking the Voicemail chip re-queries with type: voicemail", () => {
     listMock.mockReturnValue({ data: rows(), isPending: false });
     render(<MemoryRouter><RecordingsList /></MemoryRouter>);
