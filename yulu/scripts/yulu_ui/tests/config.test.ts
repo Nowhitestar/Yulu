@@ -1,5 +1,6 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { ConfigManager } from "../src/config.js";
+import * as fs from "node:fs";
 import { cpSync, mkdtempSync, rmSync, utimesSync, statSync, readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
@@ -76,6 +77,19 @@ describe("ConfigManager", () => {
       utimesSync(path, future, future);
       expect(() => mgr.update("audio.silence_threshold", 0.05))
         .toThrow(/changed externally/);
+    } finally { cleanup(); }
+  });
+});
+
+describe("atomic write", () => {
+  it("update 原子写:落盘后不留 .tmp 残file,内容正确", () => {
+    const { mgr, path, cleanup } = makeCfg();
+    const dir = path.replace(/\/config\.json$/, "");
+    try {
+      mgr.update("audio.silence_threshold", 0.02);
+      const leftovers = fs.readdirSync(dir).filter((f) => f.includes(".tmp"));
+      expect(leftovers).toEqual([]);
+      expect(mgr.read().audio.silence_threshold).toBe(0.02);
     } finally { cleanup(); }
   });
 });

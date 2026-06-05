@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, statSync } from "node:fs";
+import { readFileSync, writeFileSync, renameSync, statSync } from "node:fs";
 import { z } from "zod";
 
 const HotkeySchema = z.object({
@@ -113,7 +113,9 @@ export class ConfigManager {
     const cfg = JSON.parse(readFileSync(this.path, "utf8"));
     setByDottedKey(cfg, dottedKey, value);
     ConfigSchema.parse(cfg);  // validate before write
-    writeFileSync(this.path, JSON.stringify(cfg, null, 2) + "\n");
+    const tmp = `${this.path}.tmp.${process.pid}`;
+    writeFileSync(tmp, JSON.stringify(cfg, null, 2) + "\n");
+    renameSync(tmp, this.path);   // POSIX 原子,等价 Python os.replace
     this.cached = null;       // invalidate; next read() re-parses
     return classify(dottedKey);
   }
