@@ -80,9 +80,9 @@ async def subscribe_loop(
     coverage_path = audio_path.with_suffix(".realtime.coverage.json")
     buffer: list[str] = []
     # Track how many audio-seconds the live tail actually transcribed. The
-    # voicemail promote-to-final guard compares this against the WAV duration
-    # so a realtime transcript that only covered the first minute of an
-    # hour-long recording is NOT silently promoted as the final.
+    # promote-to-final guard compares this against the WAV duration so a
+    # realtime transcript that only covered the first minute of an hour-long
+    # recording is NOT silently promoted as the final.
     covered_ms = 0
 
     def _write_coverage() -> None:

@@ -53,30 +53,24 @@ def parse_duration(spec: str) -> timedelta:
 
 
 def _types_to_kinds(type_: Optional[str], in_: Optional[str]) -> Optional[list[str]]:
-    """Combine --type {voicemail,meeting,all} and --in {summary,transcript,both}
-    into a `kinds` list. None means "all four"."""
-    from search.indexer import (
-        KIND_MEETING_SUMMARY, KIND_MEETING_TRANSCRIPT,
-        KIND_VOICEMAIL_SUMMARY, KIND_VOICEMAIL_TRANSCRIPT,
-    )
+    """Combine --type {meeting,all} and --in {summary,transcript,both} into a
+    `kinds` list. None means "all kinds". Every recording is a meeting now, so
+    `meeting` and `all` are equivalent."""
+    from search.indexer import KIND_MEETING_SUMMARY, KIND_MEETING_TRANSCRIPT
+
+    # --type is a no-op for kind selection (only meetings exist); --in narrows.
     base = {
-        ("meeting", "summary"):    [KIND_MEETING_SUMMARY],
-        ("meeting", "transcript"): [KIND_MEETING_TRANSCRIPT],
-        ("meeting", "both"):       [KIND_MEETING_SUMMARY, KIND_MEETING_TRANSCRIPT],
-        ("voicemail", "summary"):    [KIND_VOICEMAIL_SUMMARY],
-        ("voicemail", "transcript"): [KIND_VOICEMAIL_TRANSCRIPT],
-        ("voicemail", "both"):       [KIND_VOICEMAIL_SUMMARY, KIND_VOICEMAIL_TRANSCRIPT],
-        ("all", "summary"):    [KIND_MEETING_SUMMARY, KIND_VOICEMAIL_SUMMARY],
-        ("all", "transcript"): [KIND_MEETING_TRANSCRIPT, KIND_VOICEMAIL_TRANSCRIPT],
-        ("all", "both"):       None,   # all four → don't filter
+        "summary":    [KIND_MEETING_SUMMARY],
+        "transcript": [KIND_MEETING_TRANSCRIPT],
+        "both":       None,   # all kinds → don't filter
     }
     t = (type_ or "all").lower()
     i = (in_ or "both").lower()
-    if (t, i) not in base:
+    if t not in ("meeting", "all") or i not in base:
         raise argparse.ArgumentTypeError(
             f"invalid --type / --in combination: type={type_!r}, in={in_!r}"
         )
-    return base[(t, i)]
+    return base[i]
 
 
 # ── IPC client ─────────────────────────────────────────────────────────
@@ -276,14 +270,14 @@ def _do_reindex() -> int:
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="yulu search",
-        description="Search across voicemails, meetings, and summaries.",
+        description="Search across meetings and summaries.",
     )
     p.add_argument("query", nargs="?", default="",
                    help="Search term (e.g. 'OKR', '项目进度', '进度').")
     p.add_argument("--since", default=None,
                    help="Time window, e.g. 30m / 4h / 7d / 2w (default: all time).")
-    p.add_argument("--type", choices=["meeting", "voicemail", "all"], default="all",
-                   help="Restrict to a corpus type. Default: all.")
+    p.add_argument("--type", choices=["meeting", "all"], default="all",
+                   help="Restrict to a corpus type (only meetings exist). Default: all.")
     # 'in' is a Python keyword; argparse uses dest='in_' via add_argument.
     p.add_argument("--in", dest="in_",
                    choices=["summary", "transcript", "both"], default="both",

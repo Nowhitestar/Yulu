@@ -1,8 +1,8 @@
 """Phase B.2 tests: agent_queue_worker pushes summaries into search index.
 
 The hook must:
-  - call search.indexer.upsert_doc with the right kind (meeting_summary vs
-    voicemail_summary) after the summary file is written;
+  - call search.indexer.upsert_doc with kind=meeting_summary after the summary
+    file is written (every recording is a meeting now — no voicemail kind);
   - swallow exceptions from the indexer so the recording pipeline never
     breaks on a search-index failure.
 """
@@ -102,14 +102,17 @@ def test_hook_invoked_for_meeting_summary(tmp_path, monkeypatch):
     assert calls[0]["body_len"] > 0
 
 
-def test_hook_invoked_for_voicemail_summary(tmp_path, monkeypatch):
+def test_hook_indexes_a_migrated_memo_as_meeting(tmp_path, monkeypatch):
+    """A recording that still sits under a legacy voicemails/ directory (or a
+    migrated Memo_*) indexes as a MEETING — the worker no longer branches on
+    the directory to pick a voicemail kind."""
     prompts_db = _setup_prompts_db(tmp_path)
     voicemail_dir = tmp_path / "voicemails"
     voicemail_dir.mkdir()
-    audio = voicemail_dir / "voicemail_20260513_140012.wav"
+    audio = voicemail_dir / "Memo_20260513_140012.wav"
     audio.write_bytes(b"")
     transcript = audio.with_suffix(".transcript.txt")
-    transcript.write_text("voicemail body", encoding="utf-8")
+    transcript.write_text("memo body", encoding="utf-8")
     summary = audio.with_suffix(".summary.md")
     llm = _write_fake_llm(tmp_path, _valid_summary_text())
 
@@ -124,7 +127,7 @@ def test_hook_invoked_for_voicemail_summary(tmp_path, monkeypatch):
         {
             "type": "summary_request",
             "ts": "2026-05-13T14:00:12",
-            "title": "voicemail",
+            "title": "Memo",
             "audio_path": str(audio),
             "transcript_path": str(transcript),
             "summary_path": str(summary),
@@ -139,7 +142,7 @@ def test_hook_invoked_for_voicemail_summary(tmp_path, monkeypatch):
     )
     assert processed == 1
     assert len(calls) == 1
-    assert calls[0]["kind"] == search_indexer.KIND_VOICEMAIL_SUMMARY
+    assert calls[0]["kind"] == search_indexer.KIND_MEETING_SUMMARY
 
 
 def test_hook_failure_does_not_break_processing(tmp_path, monkeypatch):

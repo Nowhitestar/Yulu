@@ -3,9 +3,8 @@
 `search(query, ...)` is the single shared entry point used by both the
 `yulu search` CLI and the status_agent IPC server. It:
 
-  1. Runs a cheap mtime sweep over ~/Movies/Yulu/ (and voicemails/) to
-     pick up out-of-band file changes (writer-hook misses, manual edits,
-     deletions).
+  1. Runs a cheap mtime sweep over ~/Movies/Yulu/ to pick up out-of-band
+     file changes (writer-hook misses, manual edits, deletions).
   2. Routes the query to FTS5 trigram (queries ≥ 3 chars) or LIKE (1-2
      chars), per spec §6.2.
   3. Returns hits + telemetry so the CLI can show timing and the doctor
@@ -26,8 +25,6 @@ from search.indexer import (
     CORPUS_ROOT,
     KIND_MEETING_SUMMARY,
     KIND_MEETING_TRANSCRIPT,
-    KIND_VOICEMAIL_SUMMARY,
-    KIND_VOICEMAIL_TRANSCRIPT,
     SEARCH_DB_PATH,
     VALID_KINDS,
     _now_iso,
@@ -77,8 +74,8 @@ def _iter_indexable_files(roots: Iterable[Path]) -> Iterable[tuple[Path, str]]:
     for root in roots:
         if not root.exists():
             continue
-        is_voicemail_root = root.name == "voicemails"
-        # Depth 1 only: per spec §6.1, we walk root/ files and root/voicemails/.
+        # Depth 1 only: every recording is a meeting and lives in the single
+        # recordings root (the voicemails/ subdir was merged away).
         for entry in root.iterdir():
             if not entry.is_file():
                 continue
@@ -86,11 +83,9 @@ def _iter_indexable_files(roots: Iterable[Path]) -> Iterable[tuple[Path, str]]:
             if any(name.endswith(infix) for infix in _EXCLUDE_INFIXES):
                 continue
             if name.endswith(_INDEXABLE_TRANSCRIPT_SUFFIX):
-                kind = (KIND_VOICEMAIL_TRANSCRIPT if is_voicemail_root
-                        else KIND_MEETING_TRANSCRIPT)
+                kind = KIND_MEETING_TRANSCRIPT
             elif name.endswith(_INDEXABLE_SUMMARY_SUFFIX):
-                kind = (KIND_VOICEMAIL_SUMMARY if is_voicemail_root
-                        else KIND_MEETING_SUMMARY)
+                kind = KIND_MEETING_SUMMARY
             else:
                 continue
             if parse_stem(_stem_from_source_path(entry)) is None:
@@ -111,7 +106,7 @@ def sweep(
     if own_conn:
         conn = init_db()
     if roots is None:
-        roots = [CORPUS_ROOT, CORPUS_ROOT / "voicemails"]
+        roots = [CORPUS_ROOT]
 
     counts = {"scanned": 0, "added": 0, "updated": 0, "removed": 0}
     seen_paths: set[str] = set()

@@ -14,7 +14,6 @@ import pytest
 from search.indexer import (
     KIND_MEETING_SUMMARY,
     KIND_MEETING_TRANSCRIPT,
-    KIND_VOICEMAIL_TRANSCRIPT,
     init_db,
     upsert_doc,
 )
@@ -138,24 +137,23 @@ def test_like_search_filters_by_kind(tmp_path):
 
 # ── search() entry point ──────────────────────────────────────────────
 
-def _make_corpus_for_search(tmp_path: Path) -> Path:
-    """Set up a corpus dir + db. Returns the db path."""
+def _make_corpus_for_search(tmp_path: Path):
+    """Set up a single-root corpus dir + db. Returns (db, root)."""
     db = tmp_path / "search.sqlite"
     root = tmp_path / "Yulu"
-    voicemails = root / "voicemails"
     root.mkdir()
-    voicemails.mkdir()
     (root / "Plan_20260521_160000.summary.md").write_text(
         "本周关注 OKR 完成度", encoding="utf-8"
     )
-    (voicemails / "voicemail_20260513_140012.transcript.txt").write_text(
+    # A migrated memo — a meeting transcript at the root.
+    (root / "Memo_20260513_140012.transcript.txt").write_text(
         "记得明天找 Anthropic 团队", encoding="utf-8"
     )
-    return db, root, voicemails
+    return db, root
 
 
 def test_search_picks_fts_for_3char_query(tmp_path, monkeypatch):
-    db, root, voicemails = _make_corpus_for_search(tmp_path)
+    db, root = _make_corpus_for_search(tmp_path)
     from search import reader as reader_mod
     monkeypatch.setattr(reader_mod, "CORPUS_ROOT", root)
     hits, tel = search("OKR", db_path=db)
@@ -164,7 +162,7 @@ def test_search_picks_fts_for_3char_query(tmp_path, monkeypatch):
 
 
 def test_search_picks_like_for_2char_query(tmp_path, monkeypatch):
-    db, root, voicemails = _make_corpus_for_search(tmp_path)
+    db, root = _make_corpus_for_search(tmp_path)
     from search import reader as reader_mod
     monkeypatch.setattr(reader_mod, "CORPUS_ROOT", root)
     hits, tel = search("团队", db_path=db)
@@ -173,7 +171,7 @@ def test_search_picks_like_for_2char_query(tmp_path, monkeypatch):
 
 
 def test_search_validates_kinds(tmp_path, monkeypatch):
-    db, root, voicemails = _make_corpus_for_search(tmp_path)
+    db, root = _make_corpus_for_search(tmp_path)
     from search import reader as reader_mod
     monkeypatch.setattr(reader_mod, "CORPUS_ROOT", root)
     with pytest.raises(ValueError):
@@ -182,7 +180,7 @@ def test_search_validates_kinds(tmp_path, monkeypatch):
 
 def test_search_clamps_limit_to_max(tmp_path, monkeypatch):
     """limit > MAX_LIMIT should be clamped; the query must not blow up."""
-    db, root, voicemails = _make_corpus_for_search(tmp_path)
+    db, root = _make_corpus_for_search(tmp_path)
     from search import reader as reader_mod
     monkeypatch.setattr(reader_mod, "CORPUS_ROOT", root)
     hits, tel = search("OKR", limit=10_000, db_path=db)
@@ -192,7 +190,7 @@ def test_search_clamps_limit_to_max(tmp_path, monkeypatch):
 
 
 def test_search_returns_telemetry(tmp_path, monkeypatch):
-    db, root, voicemails = _make_corpus_for_search(tmp_path)
+    db, root = _make_corpus_for_search(tmp_path)
     from search import reader as reader_mod
     monkeypatch.setattr(reader_mod, "CORPUS_ROOT", root)
     hits, tel = search("OKR", db_path=db)
@@ -209,24 +207,24 @@ def test_search_empty_query_returns_empty(tmp_path):
 
 def test_search_composes_filters(tmp_path, monkeypatch):
     """Spec acceptance #8: kind + since filters compose."""
-    db, root, voicemails = _make_corpus_for_search(tmp_path)
+    db, root = _make_corpus_for_search(tmp_path)
     from search import reader as reader_mod
     monkeypatch.setattr(reader_mod, "CORPUS_ROOT", root)
     # Wide since (1000 days) — both files lie inside; restrict by kind.
     hits, tel = search(
         "Anthropic",
         since=timedelta(days=1000),
-        kinds=[KIND_VOICEMAIL_TRANSCRIPT],
+        kinds=[KIND_MEETING_TRANSCRIPT],
         db_path=db,
     )
     assert tel["hit_count"] == 1
-    assert hits[0].kind == KIND_VOICEMAIL_TRANSCRIPT
+    assert hits[0].kind == KIND_MEETING_TRANSCRIPT
 
 
 # ── reindex + doctor ──────────────────────────────────────────────────
 
 def test_reindex_rebuilds_from_scratch(tmp_path, monkeypatch):
-    db, root, voicemails = _make_corpus_for_search(tmp_path)
+    db, root = _make_corpus_for_search(tmp_path)
     from search import reader as reader_mod
     monkeypatch.setattr(reader_mod, "CORPUS_ROOT", root)
     # First run populates.
@@ -243,7 +241,7 @@ def test_reindex_rebuilds_from_scratch(tmp_path, monkeypatch):
 
 
 def test_doctor_returns_health_dict(tmp_path, monkeypatch):
-    db, root, voicemails = _make_corpus_for_search(tmp_path)
+    db, root = _make_corpus_for_search(tmp_path)
     from search import reader as reader_mod
     monkeypatch.setattr(reader_mod, "CORPUS_ROOT", root)
     search("OKR", db_path=db)  # populate
@@ -254,4 +252,4 @@ def test_doctor_returns_health_dict(tmp_path, monkeypatch):
     assert h["total_docs"] >= 1
     assert h["last_full_sweep_at"] is not None
     assert h["db_size_bytes"] > 0
-    assert "meeting_summary" in h["per_kind"] or "voicemail_transcript" in h["per_kind"]
+    assert "meeting_summary" in h["per_kind"] or "meeting_transcript" in h["per_kind"]

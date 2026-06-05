@@ -1,4 +1,4 @@
-"""Global search across voicemails, meetings, and summaries.
+"""Global search across meetings and summaries.
 
 Phase 6 package — SQLite FTS5 + trigram tokenizer index over
 ~/Movies/Yulu/. See docs/superpowers/specs/2026-05-25-global-search-design.md.
@@ -10,8 +10,6 @@ from search.indexer import (
     SCHEMA_VERSION,
     KIND_MEETING_SUMMARY,
     KIND_MEETING_TRANSCRIPT,
-    KIND_VOICEMAIL_SUMMARY,
-    KIND_VOICEMAIL_TRANSCRIPT,
     VALID_KINDS,
     StemInfo,
     init_db,
@@ -33,8 +31,6 @@ __all__ = [
     "SCHEMA_VERSION",
     "KIND_MEETING_SUMMARY",
     "KIND_MEETING_TRANSCRIPT",
-    "KIND_VOICEMAIL_SUMMARY",
-    "KIND_VOICEMAIL_TRANSCRIPT",
     "VALID_KINDS",
     "StemInfo",
     "init_db",
