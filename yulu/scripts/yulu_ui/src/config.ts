@@ -2,10 +2,6 @@ import { readFileSync, writeFileSync, renameSync, statSync } from "node:fs";
 import { z } from "zod";
 import { defFor, reloadFor } from "./settingsRegistry.js";
 
-const HotkeySchema = z.object({
-  key: z.string(),
-  modifiers: z.array(z.enum(["cmd", "shift", "alt", "ctrl"])),
-});
 const CalendarSchema = z.object({
   type: z.enum(["feishu", "google"]),
   enabled: z.boolean().optional(),
@@ -40,7 +36,6 @@ export const ConfigSchema = z.object({
   }).default({}),
   status_agent: z.object({
     enabled: z.boolean().optional(),
-    hotkey: HotkeySchema.optional(),
   }).default({}),
   calendars: z.array(CalendarSchema).default([]),
 }).passthrough();
