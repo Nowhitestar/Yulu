@@ -14,6 +14,5 @@ describe("paths", () => {
     expect(paths.sttDaemonSock).toBe(`${home}/.config/yulu/stt_daemon.sock`);
     expect(paths.statusAgentSock).toBe(`${home}/.config/yulu/status_agent.sock`);
     expect(paths.moviesDir).toBe(`${home}/Movies/Yulu`);
-    expect(paths.voicemailsDir).toBe(`${home}/Movies/Yulu/voicemails`);
   });
 });

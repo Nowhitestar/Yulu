@@ -25,7 +25,6 @@ const FILTER_CHIPS: ChipDef[] = [
   { id: "all",       label: "All" },
   { id: "summary",   label: "Summary" },
   { id: "cleanup",   label: "Cleanup" },
-  { id: "voicemail", label: "Voicemail" },
 ];
 
 export function Prompts() {

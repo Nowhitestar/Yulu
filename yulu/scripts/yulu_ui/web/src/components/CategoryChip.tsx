@@ -1,6 +1,6 @@
 import "./CategoryChip.css";
 
-export type Category = "summary" | "cleanup" | "voicemail";
+export type Category = "summary" | "cleanup";
 
 export interface CategoryChipProps { category: Category; }
 

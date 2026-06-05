@@ -38,7 +38,7 @@ export type AppChannels = {
   // Live captions while a recording is in progress. `active` flips false when
   // no .realtime.transcript.txt has grown recently (recording stopped). `text`
   // is the full realtime transcript so far; `stem` identifies the recording.
-  "live-transcript": { active: boolean; stem?: string; text?: string; kind?: "voicemail" | "meeting" };
+  "live-transcript": { active: boolean; stem?: string; text?: string };
 };
 
 export const appPubSub = new PubSub<AppChannels>();

@@ -23,7 +23,7 @@ describe("LiveTranscript", () => {
   it("shows captions when an active event arrives", () => {
     render(<LiveTranscript />);
     act(() => wsHandlers.get("live-transcript")?.({
-      active: true, stem: "voicemail_20260601_120000", kind: "voicemail",
+      active: true, stem: "Memo_20260601_120000",
       text: "[Me] hello there\n[Them] hi back\n",
     }));
     expect(screen.getByTestId("live-transcript")).toBeInTheDocument();

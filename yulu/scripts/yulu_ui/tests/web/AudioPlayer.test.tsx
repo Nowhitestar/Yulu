@@ -37,14 +37,14 @@ beforeEach(() => {
 
 describe("AudioPlayer", () => {
   it("creates a wavesurfer instance with the right src on mount", () => {
-    render(<AudioPlayer src="/files/voicemails/foo.wav" />);
+    render(<AudioPlayer src="/files/meetings/foo.wav" />);
     expect(createMock).toHaveBeenCalledTimes(1);
     const opts = (createMock.mock.calls[0] as unknown as [{ url: string }])[0];
-    expect(opts.url).toBe("/files/voicemails/foo.wav");
+    expect(opts.url).toBe("/files/meetings/foo.wav");
   });
 
   it("destroys the wavesurfer instance on unmount", () => {
-    const { unmount } = render(<AudioPlayer src="/files/voicemails/foo.wav" />);
+    const { unmount } = render(<AudioPlayer src="/files/meetings/foo.wav" />);
     unmount();
     expect(destroyMock).toHaveBeenCalledTimes(1);
   });

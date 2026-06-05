@@ -1,11 +1,10 @@
 import { watch, type FSWatcher, existsSync } from "node:fs";
 import type { PubSub, AppChannels } from "./pubsub.js";
 
-const RELEVANT_RE = /^(voicemail_)?[^.]+_\d{8}_\d{6}\.(wav|transcript\.txt|summary\.md|raw\.transcript\.txt|realtime\.transcript\.txt|summary\.html)$/;
+const RELEVANT_RE = /^[^.]+_\d{8}_\d{6}\.(wav|transcript\.txt|summary\.md|raw\.transcript\.txt|realtime\.transcript\.txt|summary\.html)$/;
 const DEBOUNCE_MS = 80;
 
 export interface InboxWatcherOptions {
-  voicemailsDir: string;
   moviesDir: string;
   pubsub: PubSub<AppChannels>;
 }
@@ -15,10 +14,10 @@ export interface InboxWatcher {
 }
 
 /**
- * Watch the two directories that hold user recordings and emit a
- * recordings-changed WS event whenever a relevant file appears or disappears.
- * Debounces bursts (typical: a recording lands as .wav + .transcript.txt
- * + .summary.md within milliseconds) so the UI doesn't get hammered.
+ * Watch the recordings directory and emit a recordings-changed WS event
+ * whenever a relevant file appears or disappears. Debounces bursts (typical:
+ * a recording lands as .wav + .transcript.txt + .summary.md within
+ * milliseconds) so the UI doesn't get hammered.
  */
 export function startInboxWatcher(opts: InboxWatcherOptions): InboxWatcher {
   const watchers: FSWatcher[] = [];
@@ -39,7 +38,7 @@ export function startInboxWatcher(opts: InboxWatcherOptions): InboxWatcher {
     pendingTimer = setTimeout(flush, DEBOUNCE_MS);
   };
 
-  for (const dir of [opts.voicemailsDir, opts.moviesDir]) {
+  for (const dir of [opts.moviesDir]) {
     if (!existsSync(dir)) continue;
     try {
       const w = watch(dir, { persistent: false }, onEvent);

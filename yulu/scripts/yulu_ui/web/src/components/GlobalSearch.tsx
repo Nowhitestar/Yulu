@@ -19,15 +19,13 @@ interface Hit {
 
 function kindClass(kind: string): string {
   if (kind.startsWith("meeting")) return "gs-kind-meeting";
-  if (kind.startsWith("voicemail")) return "gs-kind-voicemail";
   if (kind === "summary") return "gs-kind-summary";
   return "gs-kind-other";
 }
 
 function kindLabel(kind: string): string {
-  // Backend emits kinds like "voicemail_summary", "meeting_transcript".
-  // Show only the top-level type ("voicemail" / "meeting") in the badge.
-  if (kind.startsWith("voicemail")) return "voicemail";
+  // Backend emits kinds like "meeting_summary", "meeting_transcript".
+  // Show only the top-level type ("meeting") in the badge.
   if (kind.startsWith("meeting")) return "meeting";
   return kind;
 }

@@ -90,7 +90,6 @@
   font-size: 10px; padding: 1px 7px; border-radius: 3px;
   text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600;
 }
-.gs-kind-voicemail { background: color-mix(in oklch, var(--blue) 14%, transparent); color: var(--blue); }
 .gs-kind-meeting   { background: color-mix(in oklch, var(--purple) 14%, transparent); color: var(--purple); }
 .gs-kind-summary   { background: color-mix(in oklch, var(--green) 16%, transparent); color: var(--green); }
 .gs-kind-other     { background: var(--row-hover); color: var(--fg-2); }

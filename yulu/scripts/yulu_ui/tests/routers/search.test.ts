@@ -9,8 +9,8 @@ beforeEach(() => execFileMock.mockReset());
 
 const FAKE_HITS = {
   hits: [
-    { kind: "voicemail_summary", stem: "voicemail_20260526_100000",
-      meetingTitle: "voicemail", recordedAt: "2026-05-26T10:00:00",
+    { kind: "meeting_summary", stem: "Memo_20260526_100000",
+      meetingTitle: "Memo", recordedAt: "2026-05-26T10:00:00",
       sourcePath: "/x/y.md", score: 1.2, snippet: "[hit]OKR[/hit] meeting" }
   ],
   telemetry: { sweepMs: 12, queryMs: 4, fallbackUsed: false, hitCount: 1 }

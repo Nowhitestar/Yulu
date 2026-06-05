@@ -93,12 +93,12 @@ describe("Prompts page", () => {
     expect(rows[1]).not.toHaveTextContent("★");
   });
 
-  it("renders 4 filter chips (All/Summary/Cleanup/Voicemail) + New prompt button", () => {
+  it("renders 3 filter chips (All/Summary/Cleanup) + New prompt button", () => {
     mount();
     expect(screen.getByRole("button", { name: /^all$/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /^summary$/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /^cleanup$/i })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /^voicemail$/i })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^voicemail$/i })).toBeNull();
     expect(screen.getByRole("link", { name: /\+ new prompt/i })).toBeInTheDocument();
   });
 

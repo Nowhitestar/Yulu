@@ -70,7 +70,7 @@ export function RecordingReader() {
     setEditingTitle(false);
     const next = titleDraft.trim();
     if (next === (data?.title ?? "")) return;
-    patchGet({ title: next || (data?.type === "meeting" ? data?.title : null) });
+    patchGet({ title: next || data?.title || null });
     renameMut.mutate({ stem, title: next }, {
       onError: (err) => console.error("rename failed:", err.message),
       onSettled: invalidateBoth,
@@ -190,23 +190,18 @@ export function RecordingReader() {
   const parsedSeek = seekParam !== null ? parseFloat(seekParam) : NaN;
   const initialSeek = Number.isFinite(parsedSeek) ? parsedSeek : undefined;
 
-  const audioSrc = data.type === "voicemail"
-    ? `/files/voicemails/${data.stem}.wav`
-    : `/files/meetings/${data.stem}.wav`;
+  const audioSrc = `/files/meetings/${data.stem}.wav`;
 
   return (
     <div className="reader">
       <div className="reader-header">
         <div className="reader-titlerow">
-          <span className={`recording-badge ${data.type === "voicemail" ? "v" : "m"}`}>
-            {data.type === "voicemail" ? "Voicemail" : "Meeting"}
-          </span>
           {editingTitle ? (
             <input
               ref={titleInputRef}
               className="reader-title-input"
               value={titleDraft}
-              placeholder={data.type === "meeting" ? data.title ?? "Title" : "Add a title…"}
+              placeholder={data.title ?? "Title"}
               aria-label="Recording title"
               onChange={(e) => setTitleDraft(e.target.value)}
               onBlur={commitRename}

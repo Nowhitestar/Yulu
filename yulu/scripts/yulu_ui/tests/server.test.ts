@@ -36,7 +36,7 @@ beforeAll(async () => {
   }
 
   const moviesDir = join(root, "Movies", "Yulu");
-  mkdirSync(join(moviesDir, "voicemails"), { recursive: true });
+  mkdirSync(moviesDir, { recursive: true });
   process.env.HOME = root;
   process.env.YULU_UI_PORT = "0";
   const server = await startServer();

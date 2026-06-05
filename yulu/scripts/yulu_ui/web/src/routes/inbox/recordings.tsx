@@ -1,24 +1,16 @@
-import { useContext, useMemo, useState } from "react";
+import { useContext } from "react";
 import { NavLink, Outlet } from "react-router";
 import { QueryClientContext } from "@tanstack/react-query";
 import { trpc } from "../../trpc.js";
 import { useWsChannel } from "../../ws.js";
 import { MasterDetail } from "../../components/MasterDetail.js";
-import { FilterChips, type ChipDef } from "../../components/FilterChips.js";
 import { RecordingStatusBadge } from "../../components/RecordingStatusBadge.js";
 import "./recordings.css";
 
 export const handle = { breadcrumb: "Recordings", filters: null };
 
-const FILTER_CHIPS: ChipDef[] = [
-  { id: "all", label: "All" },
-  { id: "voicemail", label: "Voicemail" },
-  { id: "meeting", label: "Meeting" },
-];
-
 interface Row {
   stem: string;
-  type: "voicemail" | "meeting";
   title: string | null;
   tags: string[];
   recordedAt: string | null;
@@ -29,14 +21,6 @@ interface Row {
   firstWords: string | null;
   status: string;
   statusError?: string;
-}
-
-function deriveType(activeIds: string[]): "voicemail" | "meeting" | undefined {
-  if (activeIds.length === 1) {
-    if (activeIds[0] === "voicemail") return "voicemail";
-    if (activeIds[0] === "meeting") return "meeting";
-  }
-  return undefined; // [] or both → all
 }
 
 function fmtTs(iso: string | null): string {
@@ -51,10 +35,7 @@ function fmtTs(iso: string | null): string {
 }
 
 export function RecordingsList() {
-  const [activeIds, setActiveIds] = useState<string[]>([]);
-  const type = deriveType(activeIds);
-  const queryArg = useMemo(() => (type ? { type } : {}), [type]);
-  const { data, isPending } = trpc.recordings.list.useQuery(queryArg);
+  const { data, isPending } = trpc.recordings.list.useQuery({});
   // Read the client off context directly (non-throwing) so the component can
   // render in isolation under just <MemoryRouter> in unit tests.
   const qc = useContext(QueryClientContext);
@@ -73,9 +54,6 @@ export function RecordingsList() {
 
   const listSlot = (
     <>
-      <div className="recordings-filterbar">
-        <FilterChips chips={FILTER_CHIPS} activeIds={activeIds} onChange={setActiveIds} />
-      </div>
       <div className="recordings-list">
         {rows.map((r) => (
           <NavLink
@@ -85,9 +63,6 @@ export function RecordingsList() {
             className={({ isActive }) => "recording-row" + (isActive ? " active" : "")}
           >
             <div className="recording-row-top">
-              <span className={`recording-badge ${r.type === "voicemail" ? "v" : "m"}`}>
-                {r.type === "voicemail" ? "Voicemail" : "Meeting"}
-              </span>
               <span className="recording-row-title">{r.title ?? r.stem}</span>
             </div>
             {r.firstWords && <div className="recording-row-words">{r.firstWords}</div>}

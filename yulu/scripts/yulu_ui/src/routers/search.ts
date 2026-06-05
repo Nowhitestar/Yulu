@@ -5,7 +5,7 @@ import { router, publicProcedure } from "../trpc.js";
 
 const exec = promisify(execFile) as (cmd: string, args: string[], opts?: object) => Promise<{ stdout: string; stderr: string }>;
 
-const ALLOWED_KINDS = ["meeting_summary", "meeting_transcript", "voicemail_summary", "voicemail_transcript"] as const;
+const ALLOWED_KINDS = ["meeting_summary", "meeting_transcript"] as const;
 
 // PYTHONPATH points at the install's scriptDir (resolved by paths.ts) so `search.cli`
 // is importable. No hardcoded/personal fallback path — the script dir always comes

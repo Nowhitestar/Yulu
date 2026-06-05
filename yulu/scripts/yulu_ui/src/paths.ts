@@ -38,7 +38,6 @@ export const paths = {
   uiLog:            join(CONFIG_DIR, "ui.log"),
   uiPid:            join(CONFIG_DIR, "yulu_ui.pid"),
   moviesDir:        MOVIES_DIR,
-  voicemailsDir:    join(MOVIES_DIR, "voicemails"),
   scriptDir:        SCRIPT_DIR,
   transcribePy:     join(SCRIPT_DIR, "transcribe.py"),
   agentQueueJson:   join(CONFIG_DIR, "agent-queue.json"),
