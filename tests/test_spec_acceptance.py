@@ -148,11 +148,12 @@ def test_transcribe_no_summarize_or_fallback_def():
 def test_transcribe_is_thin():
     """Acceptance #8: transcribe.py is a thin orchestrator.
 
-    Limit bumped from 200 → 220 in Phase 6 to accommodate the search-index
-    push (one try/except block). Still well under the pre-refactor (~600 line)
+    Limit bumped 200 → 220 (Phase 6, search-index push) → 225 (realtime-robustness
+    fix: the fast_summary coverage guard that stops a truncated realtime transcript
+    from being reused as the final). Still well under the pre-refactor (~600 line)
     monolith; the orchestrator-ness invariant holds."""
     line_count = sum(1 for _ in (SCRIPTS / "transcribe.py").open(encoding="utf-8"))
-    assert line_count < 220, f"transcribe.py too long: {line_count} lines"
+    assert line_count < 225, f"transcribe.py too long: {line_count} lines"
 
 
 def test_prompts_seed_count(tmp_path):

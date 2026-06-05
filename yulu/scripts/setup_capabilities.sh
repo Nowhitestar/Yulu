@@ -76,10 +76,85 @@ mlx = trans.setdefault("mlx", {})
 mlx.pop("python", None)   # normalize any stale venv path written by an older setup
 mlx["model"] = "$model"
 realtime["engine"] = "mlx"
-realtime["mlx_model"] = "$model"
+# Realtime/live captions stay on a FAST model so the live tail keeps up with
+# wall-clock audio (large-v3 is too slow per-chunk; the final pass still uses
+# mlx["model"]). Migration: older setups copied the large-v3 final model into
+# realtime.mlx_model, which made the live tail fall behind and truncate long
+# recordings. Rewrite that stale value to turbo. Respect a turbo-or-smaller
+# explicit override.
+TURBO = "mlx-community/whisper-large-v3-turbo"
+rt_model = realtime.get("mlx_model")
+# Rewrite when unset, when it mirrors the (slow) final model, or when it is a
+# non-turbo large-v3 model. A user who explicitly picked a smaller/turbo
+# realtime model keeps it.
+def _is_slow_large_v3(m):
+    return bool(m) and "large-v3" in m and "turbo" not in m
+if not rt_model or rt_model == mlx["model"] or _is_slow_large_v3(rt_model):
+    realtime["mlx_model"] = TURBO
+realtime.setdefault("chunk_sec", 15)
+realtime.setdefault("chunk_max_sec", 30)
 cfg_path.write_text(json.dumps(cfg, indent=2, ensure_ascii=False))
 PY
     ok "config.json 已设置 MLX 模型: $model"
+}
+
+# B1/B2 migration: bring an EXISTING config's realtime block onto a FAST model with
+# bounded chunks. The logic used to live only in write_mlx_to_config, which was never
+# called (dead code), so upgraders kept a stale large-v3 realtime model (the live tail
+# falls behind wall-clock audio → long recordings get truncated) and a chunk_sec that
+# could exceed chunk_max_sec (silently disabling the backlog cap). Safe for every
+# engine: only rewrites a realtime block that already exists, never touches the final
+# model / final_engine, idempotent.
+migrate_realtime_config() {
+    [[ -f "$CONFIG_DIR/config.json" ]] || return 0
+    "$PYTHON_BIN" - <<PY
+import json
+from pathlib import Path
+
+cfg_path = Path("$CONFIG_DIR/config.json")
+try:
+    cfg = json.loads(cfg_path.read_text())
+except Exception:
+    raise SystemExit(0)
+trans = cfg.get("transcription")
+if not isinstance(trans, dict):
+    raise SystemExit(0)
+realtime = trans.get("realtime")
+if not isinstance(realtime, dict):
+    raise SystemExit(0)
+
+TURBO = "mlx-community/whisper-large-v3-turbo"
+mlx = trans.get("mlx")
+final_model = mlx.get("model", "") if isinstance(mlx, dict) else ""
+changed = False
+
+def is_slow_large_v3(m):
+    return bool(m) and "large-v3" in m and "turbo" not in m
+
+rt_model = realtime.get("mlx_model")
+# Rewrite a stale realtime model (unset, mirrors the slow final model, or a non-turbo
+# large-v3) to turbo. A user who explicitly picked a turbo/smaller model keeps it.
+if realtime.get("engine") == "mlx" or rt_model is not None:
+    if (not rt_model or rt_model == final_model or is_slow_large_v3(rt_model)) and realtime.get("mlx_model") != TURBO:
+        realtime["mlx_model"] = TURBO
+        changed = True
+
+# Bound chunk size: chunk_max_sec must exist, and chunk_sec must never exceed it
+# (otherwise the live tail reads an unbounded mega-chunk and falls behind).
+cmax = realtime.get("chunk_max_sec")
+if isinstance(cmax, bool) or not isinstance(cmax, (int, float)) or cmax <= 0:
+    cmax = 30
+    realtime["chunk_max_sec"] = cmax
+    changed = True
+csec = realtime.get("chunk_sec")
+if isinstance(csec, bool) or not isinstance(csec, (int, float)) or csec <= 0 or csec > cmax:
+    realtime["chunk_sec"] = 15 if cmax >= 15 else cmax
+    changed = True
+
+if changed:
+    cfg_path.write_text(json.dumps(cfg, indent=2, ensure_ascii=False))
+PY
+    ok "实时转写配置已校正（快速模型 + chunk 上限）"
 }
 
 setup_capabilities() {
@@ -105,6 +180,11 @@ setup_capabilities() {
         # interpreter the daemon will actually use, and WARN (advisory) if absent.
         verify_mlx_whisper
     fi
+
+    # B1: actually run the realtime-config migration (it used to be dead code inside
+    # write_mlx_to_config, which nothing called). Fixes existing upgraders whose
+    # realtime block still points at the slow large-v3 model or has chunk_sec > cap.
+    migrate_realtime_config
 }
 
 [[ "${BASH_SOURCE[0]}" == "${0}" ]] && setup_capabilities "$@"

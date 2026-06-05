@@ -2,6 +2,7 @@ import { Outlet } from "react-router";
 import { Sidebar } from "../components/Sidebar.js";
 import { TopBar } from "../components/TopBar.js";
 import { Pill } from "../components/Pill.js";
+import { LiveTranscript } from "../components/LiveTranscript.js";
 import { Onboarding } from "../components/Onboarding.js";
 import { ResizableSplit } from "../components/ResizableSplit.js";
 
@@ -24,6 +25,9 @@ export function RootLayout() {
         </div>
       </main>
       <Pill />
+      {/* Live captions while recording — self-hides when no recording is
+          active (server publishes {active:false}). */}
+      <LiveTranscript />
       {/* Self-gating: renders null once dismissed (config flag / localStorage),
           so mounting unconditionally is correct — never forced (SET-03). */}
       <Onboarding />

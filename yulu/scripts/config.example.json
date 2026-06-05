@@ -37,8 +37,10 @@
     },
     "realtime": {
       "engine": "mlx",
-      "mlx_model": "mlx-community/whisper-large-v3-mlx",
-      "chunk_sec": 60
+      "mlx_model": "mlx-community/whisper-large-v3-turbo",
+      "chunk_sec": 15,
+      "chunk_max_sec": 30,
+      "note": "Realtime/live captions run a FASTER model than the final pass so they keep up with wall-clock audio for arbitrarily-long recordings. mlx_model defaults to turbo (~4-8x faster than large-v3); the final transcript is re-done with transcription.mlx.model. chunk_sec = caption cadence; chunk_max_sec caps how much audio one live chunk transcribes so a backlog can't snowball into one slow mega-chunk."
     }
   },
   "stt_daemon": {

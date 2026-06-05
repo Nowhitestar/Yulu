@@ -18,6 +18,7 @@ from typing import Optional
 from transcribe_client import (
     request_final_transcribe, DaemonUnavailable, DaemonError,
 )
+from realtime_coverage import realtime_coverage_ok as _realtime_coverage_ok
 
 CONFIG_PATH = Path.home() / ".config" / "yulu" / "config.json"
 PROMPTS_DB = Path.home() / ".config" / "yulu" / "prompts.sqlite"
@@ -134,7 +135,11 @@ def process_audio(audio_path_str: str) -> None:
 
     if post_mode == FAST_POST_RECORDING_MODE:
         merged = read_realtime_transcript(realtime_path)
-        if merged:
+        if merged and not _realtime_coverage_ok(audio_path):
+            # Truncated realtime (live tail fell behind): full daemon transcribe, not reuse.
+            print("⚠️ 实时转写覆盖不足，改走完整 daemon 转录", file=sys.stderr)
+            merged = None
+        elif merged:
             print(f"⚡ 使用实时转写结果: {realtime_path}")
         else:
             print("⚠️ 未找到可用实时转写，回退到完整 daemon 转录", file=sys.stderr)

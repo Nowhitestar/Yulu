@@ -219,7 +219,8 @@ create_config() {
     },
     "realtime": {
       "engine": "whisper",
-      "chunk_sec": 60
+      "chunk_sec": 15,
+      "chunk_max_sec": 30
     }
   },
   "llm": {
@@ -481,7 +482,13 @@ if engine == "mlx":
     mlx.pop("python", None)  # D-03: no venv path; daemon uses plist __PYTHON__
     mlx["model"] = model
     realtime["engine"] = "mlx"
-    realtime["mlx_model"] = model
+    # Realtime/live captions run a FAST model so they keep up with wall-clock
+    # audio (large-v3 is too slow per-chunk and the live tail falls behind,
+    # truncating long recordings). The final transcript is still re-done with
+    # the large model above. Preserve any user-set value.
+    realtime.setdefault("mlx_model", "mlx-community/whisper-large-v3-turbo")
+    realtime.setdefault("chunk_sec", 15)
+    realtime.setdefault("chunk_max_sec", 30)
 else:
     trans["final_engine"] = "whisper"
     trans["local_model_path"] = model

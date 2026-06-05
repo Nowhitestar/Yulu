@@ -13,16 +13,29 @@ def _build_real_backends(config: DaemonConfig):
     from .backends.mlx import MlxWhisperBackend
     from .backends.whisper_cli import WhisperCliBackend
 
-    return {
-        "mlx": MlxWhisperBackend(
-            model=config.mlx_model,
-            language=config.default_language,
-        ),
+    final_mlx = MlxWhisperBackend(
+        model=config.mlx_model,
+        language=config.default_language,
+    )
+    backends = {
+        "mlx": final_mlx,
         "whisper": WhisperCliBackend(
             binary=config.whisper_cli,
             model_path=config.whisper_model,
         ),
     }
+    # Realtime/live tail engine. When the realtime model differs from the final
+    # model, register a SEPARATE backend (a second resident model) so the live
+    # tail runs the fast model while the final pass keeps large-v3. When they
+    # match, alias to the same instance to avoid loading two big models twice.
+    if config.realtime_mlx_model and config.realtime_mlx_model != config.mlx_model:
+        backends["mlx-realtime"] = MlxWhisperBackend(
+            model=config.realtime_mlx_model,
+            language=config.default_language,
+        )
+    else:
+        backends["mlx-realtime"] = final_mlx
+    return backends
 
 
 async def _run() -> int:

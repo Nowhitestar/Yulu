@@ -302,6 +302,17 @@ class STTDaemonApp:
                 cancelled_any = True
         return OkResponse(detail="cancelled" if cancelled_any else "not_found")
 
+    def _resolve_realtime_engine(self, engine: str) -> str:
+        """Pick the engine the LIVE tail should run. The live tail must keep up
+        with wall-clock audio, so it uses the fast realtime backend when one is
+        registered (e.g. "mlx" -> "mlx-realtime"). The FINAL pass still uses the
+        requested `engine`. Falls back to `engine` when no realtime variant
+        exists (e.g. whisper-cli, or a test app with only one backend)."""
+        candidate = f"{engine}-realtime"
+        if candidate in self.runtime.backends:
+            return candidate
+        return engine
+
     async def _on_subscribe_session(self, msg: SubscribeSessionRequest, writer):
         # Classify the mic WAV so a Phase-3 dual-track recording is read with
         # stride extraction (L=mic, R=sys interleaved Int16 at 48 kHz). Without
@@ -311,6 +322,9 @@ class STTDaemonApp:
             layout = classify(Path(msg.mic_path))
         except (FileNotFoundError, OSError, ValueError):
             layout = WavLayout.MONO
+
+        realtime_engine = self._resolve_realtime_engine(msg.engine)
+        chunk_max_sec = self.config.live_chunk_max_sec
 
         if layout is WavLayout.DUAL_TRACK:
             spec = LiveSession(
@@ -325,6 +339,8 @@ class STTDaemonApp:
                 stride_step=4,
                 source_sample_rate_hz=48000,
                 wav_header_bytes=82,
+                realtime_engine=realtime_engine,
+                chunk_max_sec=chunk_max_sec,
             )
         else:
             # MONO and LEGACY_STEREO both keep Phase-1 defaults (16 kHz / 44-byte
@@ -337,6 +353,8 @@ class STTDaemonApp:
                 engine=msg.engine,
                 language=msg.language,
                 chunk_sec=msg.chunk_sec,
+                realtime_engine=realtime_engine,
+                chunk_max_sec=chunk_max_sec,
             )
         await self.live_sessions.start_session(spec)
         self._subscribers.setdefault(msg.sid, []).append(writer)
