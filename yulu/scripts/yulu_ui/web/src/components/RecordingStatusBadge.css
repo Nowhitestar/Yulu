@@ -1,0 +1,25 @@
+.rec-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  padding: 0 7px;
+  border-radius: var(--radius-pill);
+  line-height: 1.6;
+  white-space: nowrap;
+}
+.rec-status-busy {
+  color: var(--accent-on, var(--accent));
+  background: var(--accent-soft);
+}
+.rec-status-failed {
+  color: var(--red);
+  background: color-mix(in oklch, var(--red) 14%, transparent);
+  cursor: help;
+}
+.rec-status-spin {
+  animation: rec-status-spin 0.9s linear infinite;
+}
+@keyframes rec-status-spin {
+  to { transform: rotate(360deg); }
+}

@@ -1,0 +1,51 @@
+.tag-editor {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.tag-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 11px;
+  line-height: 1.4;
+  padding: 2px 4px 2px 8px;
+  border-radius: var(--radius-pill);
+  background: var(--accent-soft);
+  color: var(--accent-on, var(--accent));
+}
+.tag-chip-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  color: inherit;
+  opacity: 0.6;
+}
+.tag-chip-remove:hover { opacity: 1; background: var(--glass-2); }
+
+.tag-add {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  border: 1px dashed var(--edge);
+  color: var(--fg-2);
+}
+.tag-add:hover { color: var(--fg); border-color: var(--fg-3); }
+
+.tag-input {
+  font-size: 11px;
+  padding: 2px 8px;
+  width: 90px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--accent);
+  background: var(--glass);
+  color: var(--fg);
+}
+.tag-input:focus { outline: none; }

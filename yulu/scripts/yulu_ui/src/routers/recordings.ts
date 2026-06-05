@@ -138,10 +138,20 @@ export const recordingsRouter = router({
         const mm = `${input.stem}.wav`.match(MTG_FILE_RE);
         title = mm ? mm[1]! : null;
       }
+      const transcript = read(".transcript.txt");
+      const raw = read(".raw.transcript.txt");
+      // `.transcript.txt` and `.raw.transcript.txt` are written identically by
+      // transcribe.py; `.transcript.txt` may LATER be overwritten by a cleanup
+      // prompt while `.raw` keeps the pre-cleanup snapshot. Only surface raw as
+      // a distinct view when it actually differs — otherwise it's a confusing
+      // duplicate.
+      const rawDiffers = raw !== null && transcript !== null && raw.trim() !== transcript.trim();
       return {
         stem: input.stem, type, title, recordedAt,
         wavPath: wav, sizeBytes: stat.size, mtimeMs: stat.mtimeMs,
-        transcript: read(".transcript.txt"),
+        transcript,
+        raw,
+        rawDiffers,
         summary: read(".summary.md"),
         realtime: type === "meeting" ? read(".realtime.transcript.txt") : null,
         hasRealtime: type === "meeting" && existsSync(join(dir, `${input.stem}.realtime.transcript.txt`)),

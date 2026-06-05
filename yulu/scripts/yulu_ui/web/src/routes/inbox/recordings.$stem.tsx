@@ -71,8 +71,13 @@ export function RecordingReader() {
   const bodyRef = useRef<HTMLDivElement>(null);
 
   const tabParam = params.get("tab");
-  const defaultTab: Tab = data?.summary ? "summary" : data?.transcript ? "transcript" : "raw";
-  const tab: Tab = override ?? (isTab(tabParam) ? tabParam : defaultTab);
+  // Raw is only a real, separate view when the preserved pre-cleanup snapshot
+  // differs from the (possibly cleaned) transcript. When identical we drop the
+  // duplicate tab — and coerce a stale ?tab=raw deep link back to transcript.
+  const showRaw = data?.rawDiffers === true;
+  const defaultTab: Tab = data?.summary ? "summary" : "transcript";
+  let tab: Tab = override ?? (isTab(tabParam) ? tabParam : defaultTab);
+  if (tab === "raw" && !showRaw) tab = "transcript";
 
   const snippet = (params.get("snippet") ?? "").replace(/\[\/?hit\]/g, "").trim();
 
@@ -191,15 +196,18 @@ export function RecordingReader() {
             Realtime
           </button>
         )}
-        <button
-          key="raw"
-          type="button"
-          aria-selected={tab === "raw"}
-          className={"reader-tab" + (tab === "raw" ? " active" : "")}
-          onClick={() => setTab("raw")}
-        >
-          Raw
-        </button>
+        {showRaw && (
+          <button
+            key="raw"
+            type="button"
+            aria-selected={tab === "raw"}
+            className={"reader-tab" + (tab === "raw" ? " active" : "")}
+            onClick={() => setTab("raw")}
+            title="Pre-cleanup transcript snapshot"
+          >
+            Raw
+          </button>
+        )}
       </div>
 
       <div className="reader-body" ref={bodyRef}>
@@ -212,8 +220,8 @@ export function RecordingReader() {
         {tab === "realtime" && (
           <pre className="reader-raw">{data.realtime ?? ""}</pre>
         )}
-        {tab === "raw" && (
-          <pre className="reader-raw">{data.transcript ?? ""}</pre>
+        {tab === "raw" && showRaw && (
+          <pre className="reader-raw">{data.raw ?? data.transcript ?? ""}</pre>
         )}
       </div>
     </div>
