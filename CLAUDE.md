@@ -60,7 +60,7 @@ Its mental model is **Obsidian-like**: Yulu is the local data + capture layer, t
 - `@tanstack/react-query` — all server state in the SPA
 - `react-router` v7 — SPA routing
 - `zod` — shared schema validation between server and client
-- `wavesurfer.js` — audio playback in meeting/voicemail views
+- `wavesurfer.js` — audio playback in meeting views
 ## Configuration
 - No `.env` files in the codebase; all runtime config via `~/.config/yulu/config.json`
 - `config.example.json` (`yulu/scripts/config.example.json`) is the authoritative schema reference
@@ -192,7 +192,7 @@ Its mental model is **Obsidian-like**: Yulu is the local data + capture layer, t
 | Component | Responsibility | File |
 |---|---|---|
 | `audio_daemon` (Swift) | ScreenCaptureKit system audio + AVFoundation mic capture; exposes start/stop/status/windows over Unix socket | `yulu/scripts/audio_daemon.swift`, `yulu/scripts/Yulu.app/` |
-| `status_agent` (Swift) | Menu-bar icon, recording indicator, global hotkey for voicemail | `yulu/scripts/status_agent.swift`, `yulu/scripts/StatusAgent.app/` |
+| `status_agent` (Swift) | Menu-bar icon, recording indicator, "Start Recording" item (records a meeting via `meeting_daemon.py`) | `yulu/scripts/status_agent.swift`, `yulu/scripts/StatusAgent.app/` |
 | `stt_daemon` | Resident MLX Whisper / whisper-cli; two-slot scheduler (interactive + background); vocab injection; live session streaming | `yulu/scripts/stt_daemon/` (ADR-001) |
 | `agent_queue_worker` | **Sole LLM dispatcher**: claims `summary_request` events from `agent-queue.json`, renders prompt snapshot, runs `llm.command`, writes `.summary.md`, updates `SummariesRepo` | `yulu/scripts/agent_queue_worker.py` (ADR-004) |
 | `meeting_detector` | Polls macOS window titles via `audio_daemon.sock` or `window_scanner`; detects meeting apps; prompts user to record | `yulu/scripts/meeting_detector.py` |
@@ -206,7 +206,7 @@ Its mental model is **Obsidian-like**: Yulu is the local data + capture layer, t
 | `vocab` module | SQLite `vocab.sqlite` CRUD; seeded from `vocab/seed.py`; `VocabCache` injected into `stt_daemon` at transcription time (ADR-002) | `yulu/scripts/vocab/` |
 | `prompts` module | SQLite `prompts.sqlite` prompt catalog; `SummariesRepo` provenance table; `PromptsCache` + `render()` helpers; seeded from `prompts/seed.py` (ADR-004) | `yulu/scripts/prompts/` |
 | `search` module | SQLite `search.sqlite` full-text index of transcripts and summaries; `indexer.upsert_doc()` called as write hook in `agent_queue_worker.py` | `yulu/scripts/search/` |
-| `voicemail` module | Voicemail-specific recorder, repo, CLI; reuses agent-queue pipeline for `voicemail-todos` prompt | `yulu/scripts/voicemail/` |
+| `migrate/voicemail_unify` | One-shot data migration merging legacy `voicemails/` recordings into the meetings store (`voicemail_*` → `Memo_*`); run from `setup.sh --upgrade` | `yulu/scripts/migrate/voicemail_unify.py` |
 | `window_scanner` (Swift) | Standalone binary to enumerate macOS window titles (Accessibility API); fallback for `meeting_detector` when `audio_daemon.sock` not available | `yulu/scripts/window_scanner.swift`, compiled to `yulu/scripts/window_scanner` |
 | `yulu` CLI | Bash dispatcher to all subcommands; symlinked to `~/.local/bin/yulu` | `yulu/scripts/yulu` |
 ## Data Flow
@@ -248,7 +248,7 @@ Its mental model is **Obsidian-like**: Yulu is the local data + capture layer, t
 | **Homebrew** | `setup.sh` (`brew install`), `com.yulu.*.plist` PATH entries (`/opt/homebrew/bin`) | macOS package manager; hardcoded in plist PATH |
 | **LaunchAgents directory** | `~/Library/LaunchAgents/` | macOS-specific location |
 | **`osascript`** | `meeting_detector.py` (`_osascript`) | macOS AppleScript bridge |
-| **`terminal-notifier`** | `agent_queue_worker.py` (`_maybe_voicemail_notify`) | macOS notification tool |
+| **`terminal-notifier`** | `agent_queue_worker.py` (`_maybe_summary_notify`) | macOS notification tool |
 | **`codesign` / Gatekeeper** | `build_audio_daemon.sh`, `setup.sh` (`xattr -dr com.apple.quarantine`) | macOS binary signing requirement |
 | **Apple Silicon (arm64)** | `setup.sh` (MLX default only for arm64), `mlx-whisper` | MLX Whisper requires Apple Silicon GPU |
 ## Architectural Constraints

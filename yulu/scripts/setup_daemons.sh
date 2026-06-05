@@ -56,7 +56,7 @@ setup_daemons() {
         ok "audiodaemon 已加载"
     fi
 
-    # Status agent: menu-bar item + global hotkey for voicemail capture.
+    # Status agent: menu-bar recording indicator + Start Recording item.
     if [[ -f "$plist_dir/com.yulu.statusagent.plist" ]]; then
         install_plist "$plist_dir/com.yulu.statusagent.plist" "com.yulu.statusagent.plist"
         launchctl load "$LAUNCH_AGENTS_DIR/com.yulu.statusagent.plist" 2>/dev/null || true

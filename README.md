@@ -21,7 +21,7 @@ Compared to Otter / Granola / Fireflies:
 - **Transcription is fully local** — MLX Whisper on Apple Silicon, or `whisper-cli` (whisper.cpp) with your own model file. Chinese works as well as English.
 - **The summary step is bring-your-own-agent.** Yulu writes a `summary_request` into a JSON queue; whichever agent you trust reads the transcript and the template, and writes back a polished `summary.md`. Nothing is hard-coded to one vendor.
 - **Half-duplex mixing** keeps remote speakers crisp: system audio leads while others speak, microphone takes over during system silence.
-- **Local web UI at `http://127.0.0.1:7777/`** — voicemails, meetings, search, settings, prompts, glossary, daemon health. See [docs/yulu_ui.md](docs/yulu_ui.md).
+- **Local web UI at `http://127.0.0.1:7777/`** — meetings, search, settings, prompts, glossary, daemon health. See [docs/yulu_ui.md](docs/yulu_ui.md).
 
 ## See it
 

@@ -99,10 +99,6 @@
   },
   "status_agent": {
     "enabled": true,
-    "hotkey": {
-      "key": "V",
-      "modifiers": ["cmd", "shift"]
-    },
-    "note": "Phase 5 menu-bar agent + global hotkey. Toggle voicemail capture from any app."
+    "note": "Menu-bar agent: recording indicator + a Start Recording item that records a meeting (mic + system audio). No global hotkey."
   }
 }

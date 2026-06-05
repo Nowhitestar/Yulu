@@ -9,7 +9,7 @@ exercise.
 ## Pre-requisites
 
 - `~/Movies/Yulu/` has at least one `.summary.md` and one
-  `voicemails/*.transcript.txt` already produced by Phase 4/5.
+  `*.transcript.txt` already produced by a recording.
 - `~/.config/yulu/search.sqlite` will be created on first run; or run
   `yulu search --reindex` once after install to pre-populate.
 
