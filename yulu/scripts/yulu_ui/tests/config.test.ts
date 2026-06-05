@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { ConfigManager } from "../src/config.js";
 import * as fs from "node:fs";
+import { ZodError } from "zod";
 import { cpSync, mkdtempSync, rmSync, utimesSync, statSync, readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
@@ -39,18 +40,18 @@ describe("ConfigManager", () => {
     } finally { cleanup(); }
   });
 
-  it("classifies SIGHUP-only changes (hotkey, glossary, llm.command)", () => {
+  it("classifies SIGHUP-only changes (glossary)", () => {
     const { mgr, cleanup } = makeCfg();
     try {
-      const r1 = mgr.update("status_agent.hotkey", { key: "F19", modifiers: ["alt"] });
-      expect(r1.daemonsNeedingSighup).toEqual(["statusagent"]);
-      expect(r1.daemonsNeedingRestart).toEqual([]);
-
+      // glossary → sighup sttdaemon (VocabCache reload)
       const r2 = mgr.update("transcription.glossary", ["NewTerm"]);
       expect(r2.daemonsNeedingSighup).toEqual(["sttdaemon"]);
+      expect(r2.daemonsNeedingRestart).toEqual([]);
 
+      // llm.command → none (registry corrected: agentqueue re-reads each tick)
       const r3 = mgr.update("llm.command", ["codex"]);
-      expect(r3.daemonsNeedingSighup).toEqual(["agentqueue"]);
+      expect(r3.daemonsNeedingSighup).toEqual([]);
+      expect(r3.daemonsNeedingRestart).toEqual([]);
     } finally { cleanup(); }
   });
 
@@ -90,6 +91,27 @@ describe("atomic write", () => {
       const leftovers = fs.readdirSync(dir).filter((f) => f.includes(".tmp"));
       expect(leftovers).toEqual([]);
       expect(mgr.read().audio.silence_threshold).toBe(0.02);
+    } finally { cleanup(); }
+  });
+});
+
+describe("registry-driven classify + per-field validation", () => {
+  it("language 改完返回 restart sttdaemon(注册表驱动)", () => {
+    const { mgr, cleanup } = makeCfg();
+    try {
+      expect(mgr.update("transcription.language", "en")).toEqual({ daemonsNeedingRestart: ["sttdaemon"], daemonsNeedingSighup: [] });
+    } finally { cleanup(); }
+  });
+  it("llm.command 改完无需动作", () => {
+    const { mgr, cleanup } = makeCfg();
+    try {
+      expect(mgr.update("llm.command", ["claude","--print"])).toEqual({ daemonsNeedingRestart: [], daemonsNeedingSighup: [] });
+    } finally { cleanup(); }
+  });
+  it("非法值被拒(注册表 Zod 校验)", () => {
+    const { mgr, cleanup } = makeCfg();
+    try {
+      expect(() => mgr.update("audio.silence_threshold", 5)).toThrow(ZodError);  // max 1
     } finally { cleanup(); }
   });
 });

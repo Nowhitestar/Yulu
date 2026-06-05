@@ -1,5 +1,6 @@
 import { readFileSync, writeFileSync, renameSync, statSync } from "node:fs";
 import { z } from "zod";
+import { defFor, reloadFor } from "./settingsRegistry.js";
 
 const HotkeySchema = z.object({
   key: z.string(),
@@ -46,38 +47,7 @@ export const ConfigSchema = z.object({
 
 export type YuluConfig = z.infer<typeof ConfigSchema>;
 
-/**
- * Spec §11 — config key → daemon impact.
- * "restart" means launchctl unload+load; "sighup" means kill -HUP <pid>.
- * Anything not listed has no daemon impact.
- */
-const RESTART_MAP: Record<string, string> = {
-  "audio.mic_device":                "restart:audiodaemon",
-  "audio.system_audio_device":       "restart:audiodaemon",
-  "audio.silence_threshold":         "restart:audiodaemon",
-  "audio.silence_duration_sec":      "restart:audiodaemon",
-  "audio.backend":                   "restart:audiodaemon",
-  // DATA-01: the audio daemon caches RECORDING_DIR = loadRecordingDir() at process
-  // start (audio_daemon.swift) and NO plist injects YULU_OUTPUT_DIR, so a data-folder
-  // change only takes effect after an audio-daemon RESTART — not a plist re-render and
-  // not a SIGHUP. Only the audio daemon caches output_dir; record_audio.py re-reads it
-  // each invocation and the status_agent menu reflects it (RESEARCH Pitfall 5 / Open-Q3).
-  "audio.output_dir":                "restart:audiodaemon",
-  "transcription.mode":              "restart:sttdaemon",
-  "transcription.cloud_command":     "restart:sttdaemon",
-  "transcription.final_engine":      "restart:sttdaemon",
-  "transcription.language":          "sighup:sttdaemon",
-  "transcription.glossary":          "sighup:sttdaemon",
-  "transcription.command":           "restart:sttdaemon",
-  "transcription.local_model_path":  "restart:sttdaemon",
-  "transcription.mlx":               "restart:sttdaemon",
-  "transcription.realtime_enabled":  "none",
-  "llm.enabled":                     "sighup:agentqueue",
-  "llm.command":                     "sighup:agentqueue",
-  "calendars":                       "restart:calendar,scheduler",
-  "status_agent.enabled":            "restart:statusagent",
-  "status_agent.hotkey":             "sighup:statusagent",
-};
+// RESTART_MAP removed — reload classification is now registry-driven via settingsRegistry.ts
 
 export interface UpdateResult {
   daemonsNeedingRestart: string[];
@@ -112,6 +82,8 @@ export class ConfigManager {
     }
     const cfg = JSON.parse(readFileSync(this.path, "utf8"));
     setByDottedKey(cfg, dottedKey, value);
+    const def = defFor(dottedKey);
+    if (def) def.validate.parse(value);   // 单项校验,非法抛 ZodError
     ConfigSchema.parse(cfg);  // validate before write
     const tmp = `${this.path}.tmp.${process.pid}`;
     writeFileSync(tmp, JSON.stringify(cfg, null, 2) + "\n");
@@ -135,21 +107,9 @@ function setByDottedKey(obj: Record<string, unknown>, dotted: string, value: unk
 }
 
 function classify(dottedKey: string): UpdateResult {
-  let best: string | null = null;
-  for (const k of Object.keys(RESTART_MAP)) {
-    if (dottedKey === k || dottedKey.startsWith(k + ".")) {
-      if (!best || k.length > best.length) best = k;
-    }
-  }
-  if (!best) return { daemonsNeedingRestart: [], daemonsNeedingSighup: [] };
-  const tag = RESTART_MAP[best];
-  if (tag === undefined || tag === "none") {
-    return { daemonsNeedingRestart: [], daemonsNeedingSighup: [] };
-  }
-  const [kind, names] = tag.split(":");
-  const daemons = names!.split(",");
+  const r = reloadFor(dottedKey);
   return {
-    daemonsNeedingRestart: kind === "restart" ? daemons : [],
-    daemonsNeedingSighup:  kind === "sighup"  ? daemons : [],
+    daemonsNeedingRestart: r.kind === "restart" ? r.daemons : [],
+    daemonsNeedingSighup:  r.kind === "sighup"  ? r.daemons : [],
   };
 }
