@@ -763,6 +763,13 @@ final class ProcessTapBackend: CaptureBackend {
         lock.unlock()
         guard !already else { return }   // idempotent — already capturing
 
+        // Defensive: a prior probe / failed build / stale recording may have left
+        // a half-open tap+aggregate (non-zero ids while running == false). Tear it
+        // down before rebuilding so a re-arm never stacks a second tap or inherits
+        // a poisoned one. teardown() is idempotent on zeroed ids, so this is a
+        // no-op in the common clean-start case.
+        teardown()
+
         if buildTap(probe: false) {
             lock.lock(); running = true; zeroRunCallbacks = 0; lock.unlock()
             SYS_READY = true; SYS_ERROR = ""
@@ -1000,6 +1007,14 @@ class SocketServer {
     /// reflects reality. AppDelegate wires these to the CaptureBackend / MicCapture.
     var onRecordingStart: (() -> Void)?
     var onRecordingStop: (() -> Void)?
+    /// Synchronously (re-)arm ONLY the system-audio backend, refreshing SYS_READY /
+    /// SYS_ERROR before the "start" readiness gate is evaluated. Needed because a
+    /// prior sys-disabled (voicemail / mic-only) recording leaves SYS_READY == false;
+    /// without re-arming, the gate would read that stale flag and bail with
+    /// sys_capture_not_ready even though the tap could be brought up cleanly.
+    /// AppDelegate wires this to CaptureBackend.startCapture(). Mic + the (now
+    /// idempotent) sys start still run in onRecordingStart after the reply.
+    var rearmSysCapture: (() -> Void)?
 
     // Serial queue that runs all request handlers off the accept thread. The
     // old design called handle() synchronously inside the accept loop, so a
@@ -1100,6 +1115,25 @@ class SocketServer {
             // cleanly (a sys-disabled recording followed by a normal one must NOT inherit
             // the previous flag).
             SYS_DISABLED = (json["sys_disabled"] as? Bool) ?? false
+            // Self-heal the stuck-not-ready state: when sys audio is needed but
+            // SYS_READY is currently false, the readiness gate below MUST NOT trust
+            // that stale flag. A previous sys-disabled (voicemail) recording left
+            // SYS_READY == false via startCapture()'s SYS_DISABLED branch, and the
+            // daemon never re-armed the tap on its own — so the gate would bail with
+            // sys_capture_not_ready even though a fresh arm succeeds (restarting the
+            // daemon "fixes" it for exactly this reason). Re-arm the tap HERE, before
+            // the gate, so SYS_READY / SYS_ERROR reflect a real, current arm attempt
+            // — not a poisoned leftover. The arm is idempotent (no-op if already
+            // capturing) and tears down any half-open tap first, so it never leaks or
+            // stacks taps. Guard on `!SYS_READY` so the healthy back-to-back-meeting
+            // path keeps its existing timing: the (possibly multi-second) SCK arm
+            // only runs pre-reply when we were genuinely stuck — which previously
+            // hard-failed anyway. Mic + a redundant, idempotent sys start still run
+            // in onRecordingStart after the reply, preserving the deferred-start
+            // design.
+            if !SYS_DISABLED && !SYS_READY {
+                self.rearmSysCapture?()
+            }
             // Per-request silence threshold: voicemail uses ~3s, meetings use the default.
             // Omitting the field MUST reset to DEFAULT_SILENCE_SEC so a previous short
             // threshold does not leak into the next recording.
@@ -1237,6 +1271,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         ss.onRecordingStart = { [weak self] in
             self?.audioCapture?.startCapture()
             self?.micCapture?.start()
+        }
+        // Pre-gate sys re-arm (self-heal): refresh SYS_READY/SYS_ERROR with a real
+        // arm attempt before the "start" readiness gate, so a stale false left by a
+        // prior voicemail can't suppress a meeting recording. Idempotent with the
+        // sys start in onRecordingStart above.
+        ss.rearmSysCapture = { [weak self] in
+            self?.audioCapture?.startCapture()
         }
         ss.onRecordingStop = { [weak self] in
             self?.audioCapture?.stopCapture()
