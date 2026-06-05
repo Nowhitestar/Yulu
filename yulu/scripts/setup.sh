@@ -708,6 +708,19 @@ install_yulu_cli() {
     fi
 }
 
+# ─── One-time data migration: voicemails → meetings (idempotent) ──────
+# The voicemail concept was removed; legacy `<data_dir>/voicemails/` recordings
+# are merged into the root meetings store and renamed voicemail_* → Memo_*. The
+# migrator is a no-op when there is no voicemails/ dir, so it is safe to run on
+# every upgrade. It also runs one search-index sweep so moved files re-index as
+# meetings and the stale voicemails/ rows are reconciled away.
+migrate_unify_voicemails() {
+    [[ -f "$SCRIPT_DIR/migrate/voicemail_unify.py" ]] || return 0
+    header "迁移：合并旧版 voicemail 录音到会议（voicemail_* → Memo_*）"
+    PYTHONPATH="$SCRIPT_DIR:${PYTHONPATH:-}" "$PYTHON_BIN" -m migrate.voicemail_unify \
+        --data-dir "$RECORDING_DIR" --apply || warn "voicemail 合并迁移返回非零（详见上方输出）"
+}
+
 # ─── Step 8: Test ────────────────────────────────────
 
 run_tests() {
@@ -932,6 +945,11 @@ confirm_calendar_plist
 # (the install_agent_skill function body is retained above for reference but is
 # intentionally NOT called in the main flow).
 install_yulu_cli
+# Upgrades only: merge any legacy voicemail recordings into the meetings store
+# (idempotent + safe to skip on fresh installs, which have no voicemails/ dir).
+if [[ "$UPGRADE_MODE" == true ]]; then
+    migrate_unify_voicemails
+fi
 run_tests
 show_summary
 

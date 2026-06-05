@@ -94,6 +94,9 @@ Commands:
                     Migrate an existing v0.5.x ~/.yulu install (detect->plan->apply
                     ->verify), transactional + no data loss; --dry-run prints the
                     planned corrections without applying anything
+  migrate unify-voicemails [--apply]
+                    Merge legacy voicemail recordings into the meetings store
+                    (voicemail_* -> Memo_*); dry-run by default, pass --apply to move
   rollback          Restore the prior state from the most-recent migration backup
   where            Print key paths
   help             Show this help
@@ -315,7 +318,15 @@ case "${1:-help}" in
     vocab)     shift; PYTHONPATH="$SCRIPT_DIR:${PYTHONPATH:-}" exec "${PYTHON:-python3}" -m vocab.cli "$@" ;;
     provision) shift; PYTHONPATH="$SCRIPT_DIR:${PYTHONPATH:-}" exec "${PYTHON:-python3}" -m provision.cli provision "$@" ;;
     skill)     shift; PYTHONPATH="$SCRIPT_DIR:${PYTHONPATH:-}" exec "${PYTHON:-python3}" -m provision.cli skill "$@" ;;
-    migrate)   shift; PYTHONPATH="$SCRIPT_DIR:${PYTHONPATH:-}" exec "${PYTHON:-python3}" -m migrate.cli migrate "$@" ;;
+    migrate)
+        shift
+        if [[ "${1:-}" == "unify-voicemails" ]]; then
+            shift
+            PYTHONPATH="$SCRIPT_DIR:${PYTHONPATH:-}" exec "${PYTHON:-python3}" -m migrate.voicemail_unify "$@"
+        else
+            PYTHONPATH="$SCRIPT_DIR:${PYTHONPATH:-}" exec "${PYTHON:-python3}" -m migrate.cli migrate "$@"
+        fi
+        ;;
     rollback)  shift; PYTHONPATH="$SCRIPT_DIR:${PYTHONPATH:-}" exec "${PYTHON:-python3}" -m migrate.cli rollback "$@" ;;
     stt)       shift; PYTHONPATH="$SCRIPT_DIR:${PYTHONPATH:-}" exec "${PYTHON:-python3}" -m stt_cli "$@" ;;
     prompts)   shift; PYTHONPATH="$SCRIPT_DIR:${PYTHONPATH:-}" exec "${PYTHON:-python3}" -m prompts.cli "$@" ;;
