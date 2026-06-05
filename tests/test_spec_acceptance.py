@@ -250,17 +250,17 @@ def test_meeting_daemon_acquires_recording_lock():
     assert "acquire_recording_lock" in text or "from recording_lock import" in text
 
 
-# ── Voicemail Inbox acceptance (spec 2026-05-23-voicemail-inbox-design.md) ──
+# ── Voicemail REMOVAL acceptance (voicemail unified into meetings) ──
+# The voicemail concept was removed entirely: no module, no prompts, no
+# category, no mic-only/sys-disabled path, no `yulu memo`. These assertions are
+# the inverse of the old voicemail-inbox acceptance suite.
 
-def test_voicemail_package_exists():
+def test_voicemail_package_is_gone():
     pkg = SCRIPTS / "voicemail"
-    assert (pkg / "__init__.py").exists()
-    assert (pkg / "repo.py").exists()
-    assert (pkg / "recorder.py").exists()
-    assert (pkg / "cli.py").exists()
+    assert not pkg.exists(), "the voicemail package must be deleted"
 
 
-def test_category_voicemail_seeds():
+def test_no_voicemail_prompts_seed():
     sys.path.insert(0, str(SCRIPTS))
     from prompts.db import PromptsRepo, open_db
     from prompts.seed import seed_from_current
@@ -269,55 +269,47 @@ def test_category_voicemail_seeds():
         repo = PromptsRepo(open_db(pathlib.Path(td) / "p.sqlite"))
         seed_from_current(repo)
         slugs = {p.slug for p in repo.list_prompts()}
-    assert "voicemail-todos" in slugs
-    assert "voicemail-clean" in slugs
+    assert not any(s.startswith("voicemail") for s in slugs)
 
 
-def test_prompts_db_check_constraint_includes_voicemail():
+def test_prompts_db_check_constraint_drops_voicemail():
     text = (SCRIPTS / "prompts" / "db.py").read_text(encoding="utf-8")
-    assert "CHECK(category IN ('summary', 'cleanup', 'voicemail'))" in text
+    # The live schema is the 2-value constraint.
+    assert "CHECK(category IN ('summary', 'cleanup'))" in text
+    assert "CHECK(category IN ('summary', 'cleanup', 'voicemail'))" not in text
+    # The down-migration that collapses the legacy 3-value constraint stays.
     assert "_migrate_category_check_constraint" in text
 
 
-def test_audio_daemon_accepts_silence_seconds_and_output_dir():
-    text = (SCRIPTS / "audio_daemon.swift").read_text(encoding="utf-8")
-    assert "silence_seconds" in text
-    assert "output_dir" in text
-
-
-def test_agent_queue_worker_has_voicemail_notify():
+def test_agent_queue_worker_has_generic_summary_notify():
     text = (SCRIPTS / "agent_queue_worker.py").read_text(encoding="utf-8")
-    assert "_maybe_voicemail_notify" in text
-    assert "voicemails" in text
+    assert "_maybe_summary_notify" in text
+    assert "_maybe_voicemail_notify" not in text
 
 
-def test_yulu_wrapper_dispatches_memo():
+def test_yulu_wrapper_memo_is_removed():
     text = (SCRIPTS / "yulu").read_text(encoding="utf-8")
-    assert "memo)" in text
-    assert "voicemail.cli" in text
+    # `yulu memo` no longer dispatches to the deleted voicemail.cli; it prints a
+    # one-line hint pointing at `yulu record start`.
+    assert "voicemail.cli" not in text
+    assert "record start" in text
 
 
-def test_voicemail_recorder_does_not_call_merge_segments():
-    """Acceptance #4: voicemail transcripts have NO speaker tags, so
-    voicemail.recorder MUST NOT invoke merge_segments. We allow the name to
-    appear in docstrings/comments (which document the negative invariant),
-    but it must never appear as a call or an import."""
-    text = (SCRIPTS / "voicemail" / "recorder.py").read_text(encoding="utf-8")
-    assert "merge_segments(" not in text
-    assert "import merge_segments" not in text
-    assert "from transcript_merge" not in text
+def test_yulu_wrapper_dispatches_unify_voicemails():
+    text = (SCRIPTS / "yulu").read_text(encoding="utf-8")
+    assert "unify-voicemails" in text
+    assert "migrate.voicemail_unify" in text
 
 
-def test_voicemail_recorder_sends_sys_disabled():
-    text = (SCRIPTS / "voicemail" / "recorder.py").read_text(encoding="utf-8")
-    assert "sys_disabled" in text
-    assert "silence_seconds" in text
+def test_voicemail_unify_migrator_exists():
+    assert (SCRIPTS / "migrate" / "voicemail_unify.py").exists()
 
 
-def test_voicemail_cli_default_dir_is_voicemails_subdir():
-    sys.path.insert(0, str(SCRIPTS))
-    from voicemail.repo import VOICEMAIL_DIR_DEFAULT
-    assert VOICEMAIL_DIR_DEFAULT.name == "voicemails"
+def test_status_agent_swift_has_no_hotkey_or_voicemail():
+    text = (SCRIPTS / "status_agent.swift").read_text(encoding="utf-8")
+    assert "voicemail" not in text.lower()
+    assert "RecordingLauncher" in text
+    assert "import Carbon" not in text
 
 
 # ── Status Agent acceptance (spec 2026-05-26-status-agent-design.md) ──
@@ -354,11 +346,13 @@ def test_status_agent_binary_has_required_strings():
     for needle in (
         b"Yulu Status Agent",          # log line + bundle name
         b"audio_daemon.sock",           # daemon client target
-        b"voicemail.cli",               # launcher subprocess
-        b"hotkey_registered",           # registrar success log
+        b"meeting_daemon.py",           # launcher subprocess (mic + system)
         b"status_agent.pid",            # pid file
     ):
         assert needle in blob, f"missing string: {needle!r}"
+    # The hotkey + voicemail launcher were removed entirely.
+    assert b"hotkey_registered" not in blob
+    assert b"voicemail.cli" not in blob
 
 
 def test_audio_daemon_silence_monitor_periodic():
@@ -398,10 +392,13 @@ def test_setup_sh_installs_statusagent_plist():
 
 
 def test_config_example_has_status_agent_block():
-    text = (SCRIPTS / "config.example.json").read_text(encoding="utf-8")
-    assert "status_agent" in text
-    # Confirm the default hotkey is there
-    assert '"V"' in text or "'V'" in text
+    import json
+    cfg = json.loads((SCRIPTS / "config.example.json").read_text(encoding="utf-8"))
+    block = cfg.get("status_agent")
+    assert block is not None
+    assert block.get("enabled") is True
+    # The global hotkey was removed entirely — no hotkey block in the example.
+    assert "hotkey" not in block
 
 
 # ── Phase 6 — Global Search ──────────────────────────────────────────
@@ -414,10 +411,10 @@ _sys_for_phase6.path.insert(0, str(SCRIPTS))
 
 
 def _phase6_seed_corpus(tmp_path):
-    """Reusable corpus fixture: meeting/voicemail × summary/transcript."""
+    """Reusable corpus fixture: meetings (incl. a migrated memo) × summary/
+    transcript. Every recording is a meeting now — no voicemail kind."""
     from search.indexer import (
         KIND_MEETING_SUMMARY, KIND_MEETING_TRANSCRIPT,
-        KIND_VOICEMAIL_SUMMARY, KIND_VOICEMAIL_TRANSCRIPT,
         init_db, upsert_doc,
     )
     db = tmp_path / "search.sqlite"
@@ -429,8 +426,8 @@ def _phase6_seed_corpus(tmp_path):
         ("AgentkeyProductWeekly_20260521_160008.transcript.txt",
          KIND_MEETING_TRANSCRIPT,
          "[00:00] 我们讨论 OKR 的落地阻塞"),
-        ("voicemail_20260513_140012.transcript.txt",
-         KIND_VOICEMAIL_TRANSCRIPT,
+        ("Memo_20260513_140012.transcript.txt",
+         KIND_MEETING_TRANSCRIPT,
          "记得明天找 Anthropic 团队同步 OKR"),
         ("Finance_20260518_140000.summary.md",
          KIND_MEETING_SUMMARY,
@@ -473,31 +470,30 @@ def test_phase6_3_sweep_picks_up_oob_changes(tmp_path):
     from search.indexer import init_db, KIND_MEETING_SUMMARY
     from search.reader import sweep
     root = tmp_path / "Yulu"
-    voicemails = root / "voicemails"
-    root.mkdir(); voicemails.mkdir()
+    root.mkdir()
     p = root / "Plan_20260521_160000.summary.md"
     p.write_text("v1", encoding="utf-8")
     db = tmp_path / "search.sqlite"
     conn = init_db(db)
-    sweep(conn=conn, roots=[root, voicemails])
+    sweep(conn=conn, roots=[root])
     p.write_text("v2", encoding="utf-8")
     future = time.time() + 5
     os.utime(p, (future, future))
-    counts = sweep(conn=conn, roots=[root, voicemails])
+    counts = sweep(conn=conn, roots=[root])
     assert counts["updated"] == 1
 
 
 def test_phase6_4_sweep_removes_deleted_files(tmp_path):
     from search.indexer import init_db
     from search.reader import sweep
-    root = tmp_path / "Yulu"; voicemails = root / "voicemails"
-    root.mkdir(); voicemails.mkdir()
+    root = tmp_path / "Yulu"
+    root.mkdir()
     p = root / "Plan_20260521_160000.summary.md"
     p.write_text("x", encoding="utf-8")
     conn = init_db(tmp_path / "search.sqlite")
-    sweep(conn=conn, roots=[root, voicemails])
+    sweep(conn=conn, roots=[root])
     p.unlink()
-    counts = sweep(conn=conn, roots=[root, voicemails])
+    counts = sweep(conn=conn, roots=[root])
     assert counts["removed"] == 1
 
 
@@ -505,7 +501,7 @@ def test_phase6_5_english_query_ranks_okr_docs(tmp_path):
     from search.reader import _fts_search
     _db, conn, _paths = _phase6_seed_corpus(tmp_path)
     hits = _fts_search("OKR", since=None, kinds=None, limit=10, conn=conn)
-    # 3 OKR docs (meeting summary + meeting transcript + voicemail).
+    # 3 OKR docs (meeting summary + meeting transcript + migrated memo).
     assert len(hits) == 3
 
 
@@ -562,11 +558,11 @@ def test_phase6_9_slug_tagged_summaries_are_separate_rows(tmp_path):
     assert rows[0]["source_path"] != rows[1]["source_path"]
 
 
-def test_phase6_10_stem_parser_tolerates_voicemail_literal():
+def test_phase6_10_stem_parser_handles_memo_literal():
     from search.indexer import parse_stem
-    info = parse_stem("voicemail_20260513_140012")
+    info = parse_stem("Memo_20260513_140012")
     assert info is not None
-    assert info.meeting_title == "voicemail"
+    assert info.meeting_title == "Memo"
 
 
 def test_phase6_11_stem_parser_skips_nonmatching():
@@ -575,40 +571,21 @@ def test_phase6_11_stem_parser_skips_nonmatching():
     assert parse_stem("manual-note") is None
 
 
-def test_phase6_12_index_failure_does_not_break_recording(tmp_path, monkeypatch):
-    """Voicemail recorder swallows search-index exceptions."""
-    from unittest.mock import patch
-    import voicemail.recorder as recorder
-    from prompts.db import PromptsRepo, open_db
-    from prompts.seed import seed_from_current
-    from search import indexer as search_indexer
-
-    queue = tmp_path / "queue.json"
-    queue.write_text("[]", encoding="utf-8")
-    prompts_db = tmp_path / "prompts.sqlite"
-    monkeypatch.setattr(recorder, "AGENT_QUEUE_PATH", queue)
-    monkeypatch.setattr(recorder, "PROMPTS_DB", prompts_db)
-    import queue_store
-    monkeypatch.setattr(queue_store, "QUEUE_PATH", queue)
-    monkeypatch.setattr(queue_store, "LOCK_PATH", tmp_path / "queue.lock")
-    seed_from_current(PromptsRepo(open_db(prompts_db)))
-
-    wav = tmp_path / "voicemail_20260523_201500.wav"
-    wav.touch()
-    fake_response = {
-        "status": "ok",
-        "channels": {
-            "mic": {"text": "x", "segments": [{"start": 0, "end": 1, "text": "x"}]},
-            "sys": {"skipped_silent": True, "text": "", "segments": []},
-        },
-    }
-    monkeypatch.setattr(
-        search_indexer, "upsert_doc",
-        lambda **_kw: (_ for _ in ()).throw(RuntimeError("boom")),
-    )
-    with patch.object(recorder, "_request_transcribe", return_value=fake_response):
-        rc = recorder._transcribe_and_enqueue(wav, title=None)
-    assert rc == 0
+def test_phase6_12_index_failure_does_not_break_pipeline():
+    """The search-index write hook in the sole LLM dispatcher
+    (agent_queue_worker) is wrapped in try/except so a search-index failure
+    can never break the recording → summary pipeline. (The runtime behaviour
+    is exercised end-to-end by
+    test_agent_queue_worker_search_hook::test_hook_failure_does_not_break_processing.)"""
+    text = (SCRIPTS / "agent_queue_worker.py").read_text(encoding="utf-8")
+    # The indexer import + upsert live inside a try/except that logs, not raises.
+    idx = text.index("from search import indexer as _search_indexer")
+    # The `try:` opens just before the indexer import…
+    assert "try:" in text[idx - 120 : idx]
+    # …and the matching except logs the failure rather than re-raising.
+    window = text[idx : idx + 700]
+    assert "except Exception" in window
+    assert "search index upsert failed" in window
 
 
 def test_phase6_13_ipc_path_matches_in_process(tmp_path, monkeypatch):
@@ -666,12 +643,12 @@ def test_phase6_15_doctor_flag_prints_health(tmp_path, monkeypatch, capsys):
 def test_phase6_16_reindex_rebuilds_from_scratch(tmp_path, monkeypatch):
     from search.reader import reindex, sweep
     from search.indexer import init_db
-    root = tmp_path / "Yulu"; voicemails = root / "voicemails"
-    root.mkdir(); voicemails.mkdir()
+    root = tmp_path / "Yulu"
+    root.mkdir()
     (root / "Plan_20260521_160000.summary.md").write_text("body", encoding="utf-8")
     db = tmp_path / "search.sqlite"
     conn = init_db(db)
-    sweep(conn=conn, roots=[root, voicemails])
+    sweep(conn=conn, roots=[root])
     n_before = conn.execute("SELECT COUNT(*) FROM docs").fetchone()[0]
     assert n_before == 1
     conn.close()
@@ -715,17 +692,17 @@ def test_phase6_18_sweep_under_250ms_for_38_files(tmp_path):
     import time
     from search.indexer import init_db
     from search.reader import sweep
-    root = tmp_path / "Yulu"; voicemails = root / "voicemails"
-    root.mkdir(); voicemails.mkdir()
+    root = tmp_path / "Yulu"
+    root.mkdir()
     for i in range(30):
         stem = f"Meeting{i:02d}_20260521_{160000 + i:06d}"
         (root / f"{stem}.transcript.txt").write_text(f"b{i}", encoding="utf-8")
     for i in range(8):
-        stem = f"voicemail_20260513_{140000 + i:06d}"
-        (voicemails / f"{stem}.transcript.txt").write_text(f"v{i}", encoding="utf-8")
+        stem = f"Memo_20260513_{140000 + i:06d}"
+        (root / f"{stem}.transcript.txt").write_text(f"v{i}", encoding="utf-8")
     conn = init_db(tmp_path / "search.sqlite")
     t0 = time.monotonic()
-    counts = sweep(conn=conn, roots=[root, voicemails])
+    counts = sweep(conn=conn, roots=[root])
     elapsed = (time.monotonic() - t0) * 1000
     assert counts["scanned"] == 38
     assert elapsed < 500, f"sweep too slow: {elapsed:.0f}ms"

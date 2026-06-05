@@ -53,7 +53,7 @@ File-on-disk artifacts preserved: default summary still writes to `<meeting>.sum
 
 ## Notes for future change
 
-- **New prompt categories** (e.g. `voicemail`, `chat`, `digest`) are additive enum extensions; the SQLite `CHECK` constraint needs updating but no schema migration required for existing rows.
+- **New prompt categories** (e.g. `chat`, `digest`) are additive enum extensions; the SQLite `CHECK` constraint needs updating but no schema migration required for existing rows.
 - **Per-prompt model selection** — add `preferred_model` column to `prompts`; worker honors it when set, falls back to global `llm.command`. SummariesRepo already records actual model used per row.
 - **Cross-meeting aggregator** — e.g. weekly digest. New category `digest` with prompts that ingest multiple transcripts; transcribe.py wouldn't be the enqueuer (a separate scheduler picks N transcripts and enqueues one digest event). The dispatcher code can stay unchanged.
 - **Live preview / chat** would need an immediate-dispatch path that bypasses the queue. The PromptsCache + render() helpers are reusable; the dispatcher becomes plural (sync + async LLM clients).

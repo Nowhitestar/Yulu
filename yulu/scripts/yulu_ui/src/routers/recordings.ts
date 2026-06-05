@@ -12,15 +12,10 @@ import {
   writeTagsSidecar,
 } from "../recordingMeta.js";
 
-export type RecordingType = "voicemail" | "meeting";
-
-const VOICEMAIL_RE = /^voicemail_\d{8}_\d{6}$/;
-const VM_FILE_RE = /^(voicemail_\d{8}_\d{6})\.wav$/;
-const MTG_FILE_RE = /^(.+?)_(\d{8})_(\d{6})\.wav$/;
-
-export function dispatchType(stem: string): RecordingType {
-  return VOICEMAIL_RE.test(stem) ? "voicemail" : "meeting";
-}
+// Every recording is a meeting now (voicemails were unified into meetings and
+// the separate voicemails/ directory was merged into the root). A recording is
+// any `<title>_YYYYMMDD_HHMMSS.wav` in the recordings root.
+const REC_FILE_RE = /^(.+?)_(\d{8})_(\d{6})\.wav$/;
 
 function isoFromStem(date: string, time: string): string {
   return `${date.slice(0, 4)}-${date.slice(4, 6)}-${date.slice(6, 8)}T${time.slice(0, 2)}:${time.slice(2, 4)}:${time.slice(4, 6)}`;
@@ -45,7 +40,6 @@ function firstWordsOf(path: string): string | null {
 
 interface Row {
   stem: string;
-  type: RecordingType;
   title: string | null;
   tags: string[];
   recordedAt: string | null;
@@ -61,55 +55,25 @@ interface Row {
 }
 
 /** Title shown to the user: the `<stem>.title` override sidecar if present,
- *  else the filename-derived title (which is null for voicemails). */
+ *  else the filename-derived title. */
 function resolveTitle(dir: string, stem: string, derived: string | null): string | null {
   return readTitleSidecar(join(dir, `${stem}.title`)) ?? derived;
 }
 
-function listVoicemails(dir: string, registry: JobRegistry): Row[] {
+function listRecordings(dir: string, registry: JobRegistry): Row[] {
   if (!existsSync(dir)) return [];
   const out: Row[] = [];
   for (const f of readdirSync(dir)) {
-    const m = f.match(VM_FILE_RE);
-    if (!m) continue;
-    const stem = m[1]!;
-    const wavPath = join(dir, f);
-    const stat = statSync(wavPath);
-    const transcriptPath = join(dir, `${stem}.transcript.txt`);
-    const hasTranscript = existsSync(transcriptPath);
-    const job = registry.get(stem);
-    const tm = stem.match(/_(\d{8})_(\d{6})$/);
-    out.push({
-      stem, type: "voicemail",
-      title: resolveTitle(dir, stem, null),
-      tags: readTagsSidecar(join(dir, `${stem}.tags.json`)),
-      recordedAt: tm ? isoFromStem(tm[1]!, tm[2]!) : null,
-      wavPath, sizeBytes: stat.size, mtimeMs: stat.mtimeMs,
-      hasTranscript,
-      hasSummary: existsSync(join(dir, `${stem}.summary.md`)),
-      hasRealtime: false,
-      firstWords: hasTranscript ? firstWordsOf(transcriptPath) : null,
-      status: job?.state ?? "idle", statusError: job?.error,
-    });
-  }
-  return out;
-}
-
-function listMeetings(dir: string, registry: JobRegistry): Row[] {
-  if (!existsSync(dir)) return [];
-  const out: Row[] = [];
-  for (const f of readdirSync(dir)) {
-    const m = f.match(MTG_FILE_RE);
+    const m = f.match(REC_FILE_RE);
     if (!m) continue;
     const [, title, date, time] = m;
-    if (title === "voicemail") continue;
     const stem = f.slice(0, -4);
     const wavPath = join(dir, f);
     const stat = statSync(wavPath);
     const transcriptPath = join(dir, `${stem}.transcript.txt`);
     const job = registry.get(stem);
     out.push({
-      stem, type: "meeting",
+      stem,
       title: resolveTitle(dir, stem, title!),
       tags: readTagsSidecar(join(dir, `${stem}.tags.json`)),
       recordedAt: isoFromStem(date!, time!),
@@ -129,12 +93,9 @@ export const recordingsRouter = router({
     .input(z.object({
       limit: z.number().int().positive().max(500).optional(),
       since: z.number().int().nonnegative().optional(),
-      type: z.enum(["voicemail", "meeting"]).optional(),
     }))
     .query(({ ctx, input }) => {
-      let rows: Row[] = [];
-      if (input.type !== "meeting") rows = rows.concat(listVoicemails(ctx.paths.voicemailsDir, ctx.jobs));
-      if (input.type !== "voicemail") rows = rows.concat(listMeetings(ctx.paths.moviesDir, ctx.jobs));
+      let rows: Row[] = listRecordings(ctx.paths.moviesDir, ctx.jobs);
       rows.sort((a, b) => b.mtimeMs - a.mtimeMs);
       if (input.since !== undefined) rows = rows.filter((r) => r.mtimeMs >= input.since!);
       if (input.limit !== undefined) rows = rows.slice(0, input.limit);
@@ -144,8 +105,7 @@ export const recordingsRouter = router({
   get: publicProcedure
     .input(z.object({ stem: z.string() }))
     .query(({ ctx, input }) => {
-      const type = dispatchType(input.stem);
-      const dir = type === "voicemail" ? ctx.paths.voicemailsDir : ctx.paths.moviesDir;
+      const dir = ctx.paths.moviesDir;
       const wav = join(dir, `${input.stem}.wav`);
       if (!existsSync(wav)) throw new TRPCError({ code: "NOT_FOUND", message: `recording not found: ${input.stem}` });
       const read = (suffix: string) => {
@@ -154,14 +114,11 @@ export const recordingsRouter = router({
       };
       const stat = statSync(wav);
       const job = ctx.jobs.get(input.stem);
-      let derivedTitle: string | null = null;
       let recordedAt: string | null = null;
       const tm = input.stem.match(/_(\d{8})_(\d{6})$/);
       if (tm) recordedAt = isoFromStem(tm[1]!, tm[2]!);
-      if (type === "meeting") {
-        const mm = `${input.stem}.wav`.match(MTG_FILE_RE);
-        derivedTitle = mm ? mm[1]! : null;
-      }
+      const mm = `${input.stem}.wav`.match(REC_FILE_RE);
+      const derivedTitle = mm ? mm[1]! : null;
       const title = resolveTitle(dir, input.stem, derivedTitle);
       const tags = readTagsSidecar(join(dir, `${input.stem}.tags.json`));
       const transcript = read(".transcript.txt");
@@ -173,14 +130,14 @@ export const recordingsRouter = router({
       // duplicate.
       const rawDiffers = raw !== null && transcript !== null && raw.trim() !== transcript.trim();
       return {
-        stem: input.stem, type, title, tags, recordedAt,
+        stem: input.stem, title, tags, recordedAt,
         wavPath: wav, sizeBytes: stat.size, mtimeMs: stat.mtimeMs,
         transcript,
         raw,
         rawDiffers,
         summary: read(".summary.md"),
-        realtime: type === "meeting" ? read(".realtime.transcript.txt") : null,
-        hasRealtime: type === "meeting" && existsSync(join(dir, `${input.stem}.realtime.transcript.txt`)),
+        realtime: read(".realtime.transcript.txt"),
+        hasRealtime: existsSync(join(dir, `${input.stem}.realtime.transcript.txt`)),
         status: job?.state ?? "idle", statusError: job?.error,
       };
     }),
@@ -188,15 +145,13 @@ export const recordingsRouter = router({
   rename: publicProcedure
     .input(z.object({ stem: z.string(), title: z.string().max(200) }))
     .mutation(({ ctx, input }) => {
-      const type = dispatchType(input.stem);
-      const dir = type === "voicemail" ? ctx.paths.voicemailsDir : ctx.paths.moviesDir;
+      const dir = ctx.paths.moviesDir;
       if (!existsSync(join(dir, `${input.stem}.wav`))) {
         throw new TRPCError({ code: "NOT_FOUND", message: `recording not found: ${input.stem}` });
       }
       // Persist as a `<stem>.title` sidecar rather than renaming the WAV — the
       // filename is load-bearing (audio URLs, search index, agent-queue paths,
-      // the YYYYMMDD_HHMMSS timestamp). voicemail/repo.py already reads this
-      // sidecar as title-override #1.
+      // the YYYYMMDD_HHMMSS timestamp).
       writeTitleSidecar(join(dir, `${input.stem}.title`), input.title);
       ctx.pubsub.publish("recordings-changed", { reason: "changed" });
       return { title: input.title.trim() || null };
@@ -205,8 +160,7 @@ export const recordingsRouter = router({
   setTags: publicProcedure
     .input(z.object({ stem: z.string(), tags: z.array(z.string()).max(50) }))
     .mutation(({ ctx, input }) => {
-      const type = dispatchType(input.stem);
-      const dir = type === "voicemail" ? ctx.paths.voicemailsDir : ctx.paths.moviesDir;
+      const dir = ctx.paths.moviesDir;
       if (!existsSync(join(dir, `${input.stem}.wav`))) {
         throw new TRPCError({ code: "NOT_FOUND", message: `recording not found: ${input.stem}` });
       }
@@ -218,8 +172,7 @@ export const recordingsRouter = router({
   delete: publicProcedure
     .input(z.object({ stem: z.string() }))
     .mutation(({ ctx, input }) => {
-      const type = dispatchType(input.stem);
-      const dir = type === "voicemail" ? ctx.paths.voicemailsDir : ctx.paths.moviesDir;
+      const dir = ctx.paths.moviesDir;
       // Every known sidecar a recording can spawn. `.tags.json`/`.title` are the
       // UI-editable ones; the rest are pipeline outputs.
       const suffixes = [".wav", ".transcript.txt", ".raw.transcript.txt",
@@ -250,8 +203,7 @@ export const recordingsRouter = router({
   transcribe: publicProcedure
     .input(z.object({ stem: z.string() }))
     .mutation(async ({ ctx, input }) => {
-      const type = dispatchType(input.stem);
-      const dir = type === "voicemail" ? ctx.paths.voicemailsDir : ctx.paths.moviesDir;
+      const dir = ctx.paths.moviesDir;
       const wavPath = join(dir, `${input.stem}.wav`);
       if (!existsSync(wavPath)) throw new TRPCError({ code: "NOT_FOUND", message: "WAV file missing" });
       if (ctx.jobs.get(input.stem)) throw new TRPCError({ code: "CONFLICT", message: "Job already running for this recording" });
@@ -262,8 +214,7 @@ export const recordingsRouter = router({
   summarize: publicProcedure
     .input(z.object({ stem: z.string() }))
     .mutation(async ({ ctx, input }) => {
-      const type = dispatchType(input.stem);
-      const dir = type === "voicemail" ? ctx.paths.voicemailsDir : ctx.paths.moviesDir;
+      const dir = ctx.paths.moviesDir;
       const transcriptPath = join(dir, `${input.stem}.transcript.txt`);
       if (!existsSync(transcriptPath)) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Transcript missing — run Re-transcribe first" });
       if (ctx.jobs.get(input.stem)) throw new TRPCError({ code: "CONFLICT", message: "Job already running for this recording" });

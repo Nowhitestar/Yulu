@@ -62,22 +62,22 @@ describe("RecordingReader", () => {
     expect(screen.getByRole("button", { name: /realtime/i })).toBeInTheDocument();
   });
 
-  it("hides Realtime tab when hasRealtime is false (voicemail)", () => {
-    getMock.mockReturnValue({ data: { stem: "voicemail_20260101_120000", type: "voicemail", title: null, mtimeMs: 1, transcript: "t", summary: "s", realtime: null, hasRealtime: false, status: "idle" }, isPending: false });
-    renderAt("voicemail_20260101_120000");
+  it("hides Realtime tab when hasRealtime is false", () => {
+    getMock.mockReturnValue({ data: { stem: "Memo_20260101_120000", title: "Memo", mtimeMs: 1, transcript: "t", summary: "s", realtime: null, hasRealtime: false, status: "idle" }, isPending: false });
+    renderAt("Memo_20260101_120000");
     expect(screen.queryByRole("button", { name: /realtime/i })).toBeNull();
   });
 
   it("renders Re-transcribe + Re-generate summary buttons", () => {
-    getMock.mockReturnValue({ data: { stem: "voicemail_20260101_120000", type: "voicemail", title: null, mtimeMs: 1, transcript: "t", summary: "s", realtime: null, hasRealtime: false, status: "idle" }, isPending: false });
-    renderAt("voicemail_20260101_120000");
+    getMock.mockReturnValue({ data: { stem: "Memo_20260101_120000", title: "Memo", mtimeMs: 1, transcript: "t", summary: "s", realtime: null, hasRealtime: false, status: "idle" }, isPending: false });
+    renderAt("Memo_20260101_120000");
     expect(screen.getByRole("button", { name: /Re-transcribe/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Re-generate summary/i })).toBeInTheDocument();
   });
 
   it("renders the summary through MarkdownView, not a raw <pre>", () => {
-    getMock.mockReturnValue({ data: { stem: "voicemail_20260101_120000", type: "voicemail", title: null, mtimeMs: 1, transcript: "t", summary: "# Heading", realtime: null, hasRealtime: false, status: "idle" }, isPending: false });
-    renderAt("voicemail_20260101_120000");
+    getMock.mockReturnValue({ data: { stem: "Memo_20260101_120000", title: "Memo", mtimeMs: 1, transcript: "t", summary: "# Heading", realtime: null, hasRealtime: false, status: "idle" }, isPending: false });
+    renderAt("Memo_20260101_120000");
     expect(screen.getByTestId("markdown")).toHaveTextContent("# Heading");
   });
 

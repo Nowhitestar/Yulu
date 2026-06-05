@@ -6,7 +6,6 @@ describe("CategoryChip", () => {
   it.each([
     ["summary", "summary"],
     ["cleanup", "cleanup"],
-    ["voicemail", "voicemail"],
   ] as const)("renders label '%s'", (category, expectedText) => {
     render(<CategoryChip category={category} />);
     expect(screen.getByText(expectedText)).toBeInTheDocument();

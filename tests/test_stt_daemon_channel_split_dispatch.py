@@ -195,7 +195,7 @@ def _write_dual_track_one_silent_channel(path: Path, silent: str):
 
 
 def test_dispatch_skips_silent_channel(tmp_path):
-    p = tmp_path / "voicemail.wav"
+    p = tmp_path / "memo.wav"
     _write_dual_track_one_silent_channel(p, silent="R")
     backend = _FakeBackend()
 

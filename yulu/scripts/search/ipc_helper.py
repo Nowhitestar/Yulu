@@ -20,10 +20,9 @@ from datetime import timedelta
 from typing import Any
 
 _VALID_KIND_ALIASES = {
-    "summary": ("meeting_summary", "voicemail_summary"),
-    "transcript": ("meeting_transcript", "voicemail_transcript"),
+    "summary": ("meeting_summary",),
+    "transcript": ("meeting_transcript",),
     "meeting": ("meeting_summary", "meeting_transcript"),
-    "voicemail": ("voicemail_summary", "voicemail_transcript"),
 }
 
 
@@ -33,8 +32,8 @@ def _expand_kinds(req: dict) -> list[str] | None:
     Precedence:
       - `kinds`: literal list of canonical kinds (already validated by
         reader).
-      - `in`:   shorthand like ["summary"] → both *_summary kinds.
-      - else:  None, meaning all four kinds.
+      - `in`:   shorthand like ["summary"] → the *_summary kind.
+      - else:  None, meaning all kinds.
     """
     explicit = req.get("kinds")
     if isinstance(explicit, list) and explicit:

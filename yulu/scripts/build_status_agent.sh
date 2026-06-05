@@ -17,8 +17,7 @@ YULU_BUILD_NUMBER="$(git -C "$REPO_DIR" rev-list --count HEAD 2>/dev/null || ech
 cd "$SCRIPT_DIR"
 
 swiftc -o "$BIN" status_agent.swift \
-  -framework Cocoa \
-  -framework Carbon
+  -framework Cocoa
 
 mkdir -p "$APP/Contents/MacOS" "$RES_DIR"
 cp "$BIN" "$APP_BIN"

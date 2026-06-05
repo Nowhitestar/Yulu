@@ -11,9 +11,9 @@ import type { PubSub, AppChannels } from "./pubsub.js";
  * While a recording is in progress, realtime_transcribe.py appends partials to
  * `<stem>.realtime.transcript.txt` next to the WAV. This watcher finds the
  * `.realtime.transcript.txt` that is *currently growing* (mtime within
- * ACTIVE_WINDOW_MS) across the voicemails + meetings dirs, reads its full text,
- * and publishes it on the `live-transcript` channel so the :7777 UI can show
- * captions during recording.
+ * ACTIVE_WINDOW_MS) in the recordings dir, reads its full text, and publishes
+ * it on the `live-transcript` channel so the :7777 UI can show captions during
+ * recording.
  *
  * It needs no cross-process signal: "recently modified realtime transcript" IS
  * the active-recording signal. When nothing has grown recently it publishes
@@ -30,7 +30,6 @@ const POLL_MS = 1_000;
 const MAX_TEXT_BYTES = 256 * 1024; // cap what we ship to the browser
 
 export interface RealtimeTailerOptions {
-  voicemailsDir: string;
   moviesDir: string;
   pubsub: PubSub<AppChannels>;
   /** Override "now" + the active window in tests. */
@@ -47,7 +46,6 @@ export interface RealtimeTailer {
 interface ActiveFile {
   path: string;
   stem: string;
-  kind: "voicemail" | "meeting";
 }
 
 function stemFromRealtime(filename: string): string {
@@ -63,15 +61,14 @@ export function startRealtimeTailer(opts: RealtimeTailerOptions): RealtimeTailer
   let lastKey = "";       // `${path}:${size}` — changes when the active file or its content changes
   let lastActive = false;
 
-  const dirs: Array<{ dir: string; kind: "voicemail" | "meeting" }> = [
-    { dir: opts.voicemailsDir, kind: "voicemail" },
-    { dir: opts.moviesDir, kind: "meeting" },
+  const dirs: Array<{ dir: string }> = [
+    { dir: opts.moviesDir },
   ];
 
   function findActiveFile(): ActiveFile | null {
     let best: (ActiveFile & { mtimeMs: number }) | null = null;
     const cutoff = now() - activeWindowMs;
-    for (const { dir, kind } of dirs) {
+    for (const { dir } of dirs) {
       if (!existsSync(dir)) continue;
       let names: string[];
       try { names = readdirSync(dir); } catch { continue; }
@@ -82,12 +79,12 @@ export function startRealtimeTailer(opts: RealtimeTailerOptions): RealtimeTailer
         try { mtimeMs = statSync(path).mtimeMs; } catch { continue; }
         if (mtimeMs < cutoff) continue; // not actively growing → not "live"
         if (!best || mtimeMs > best.mtimeMs) {
-          best = { path, stem: stemFromRealtime(name), kind, mtimeMs };
+          best = { path, stem: stemFromRealtime(name), mtimeMs };
         }
       }
     }
     if (!best) return null;
-    return { path: best.path, stem: best.stem, kind: best.kind };
+    return { path: best.path, stem: best.stem };
   }
 
   function readText(path: string): string {
@@ -132,7 +129,6 @@ export function startRealtimeTailer(opts: RealtimeTailerOptions): RealtimeTailer
     opts.pubsub.publish("live-transcript", {
       active: true,
       stem: active.stem,
-      kind: active.kind,
       text: readText(active.path),
     });
   }

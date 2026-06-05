@@ -1,15 +1,14 @@
 # Yulu Web UI
 
-A local web UI at `http://127.0.0.1:7777/` for browsing voicemails, meetings, settings,
+A local web UI at `http://127.0.0.1:7777/` for browsing meetings, settings,
 prompts, glossary, and daemon health. Runs as the `com.yulu.ui` LaunchAgent — auto-starts
 on login, restarts on crash.
 
 ## Pages
 
-- `/inbox/voicemails` `/inbox/voicemails/:stem` — voicemail list + audio waveform + transcript/summary/raw tabs
-- `/inbox/meetings` `/inbox/meetings/:stem` — meeting list + realtime tab
-- `/inbox/search` — full-text search across both with cross-page navigation
-- `/settings/{audio,transcription,llm,hotkey,integrations,storage}` — inline-edit settings with restart banner
+- `/inbox` `/inbox/:stem` — recordings (meetings) list + audio waveform + transcript/summary/raw/realtime tabs. (Legacy `/inbox/voicemails` and `/inbox/meetings` links redirect here.)
+- `/inbox/search` — full-text search across recordings with cross-page navigation
+- `/settings/{audio,transcription,llm,integrations,storage}` — inline-edit settings with restart banner
 - `/knowledge/prompts` `/knowledge/prompts/:id` `/knowledge/prompts/new` — prompt master-detail
 - `/knowledge/glossary` — vocabulary table with inline-edit + bulk delete
 - `/health/daemons` — 8 daemon status cards (auto-poll 5 s)

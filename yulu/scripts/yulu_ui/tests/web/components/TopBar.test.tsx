@@ -41,20 +41,20 @@ function Wrap({ children }: { children: ReactNode }) {
 
 describe("TopBar", () => {
   it("joins multi-level breadcrumb handles with ' / '", () => {
-    setMatches([{}, { breadcrumb: "Inbox" }, { breadcrumb: "Voicemails" }]);
+    setMatches([{}, { breadcrumb: "Inbox" }, { breadcrumb: "Recordings" }]);
     const { container } = render(<Wrap><TopBar /></Wrap>);
-    expect(container.querySelector(".topbar-breadcrumb")?.textContent).toBe("Inbox / Voicemails");
+    expect(container.querySelector(".topbar-breadcrumb")?.textContent).toBe("Inbox / Recordings");
   });
 
   it("resolves function breadcrumbs with route params", () => {
     mUseMatches.mockReturnValue([
       { id: "0", pathname: "/", params: {}, data: undefined, handle: { breadcrumb: "Inbox" } },
-      { id: "1", pathname: "/inbox/voicemails", params: {}, data: undefined, handle: { breadcrumb: "Voicemails" } },
-      { id: "2", pathname: "/inbox/voicemails/abc", params: { stem: "abc" }, data: undefined,
+      { id: "1", pathname: "/inbox", params: {}, data: undefined, handle: { breadcrumb: "Recordings" } },
+      { id: "2", pathname: "/inbox/abc", params: { stem: "abc" }, data: undefined,
         handle: { breadcrumb: (p: { stem?: string }) => p.stem ?? "?" } },
     ]);
     const { container } = render(<Wrap><TopBar /></Wrap>);
-    expect(container.querySelector(".topbar-breadcrumb")?.textContent).toBe("Inbox / Voicemails / abc");
+    expect(container.querySelector(".topbar-breadcrumb")?.textContent).toBe("Inbox / Recordings / abc");
   });
 
   it("does not render a placeholder dash when no segments", () => {

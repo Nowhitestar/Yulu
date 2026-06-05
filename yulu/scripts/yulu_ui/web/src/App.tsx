@@ -19,7 +19,10 @@ function RecordingRedirect() {
   const { stem } = useParams();
   const [sp] = useSearchParams();
   const qs = sp.toString();
-  return <Navigate to={`/inbox/${stem}${qs ? `?${qs}` : ""}`} replace />;
+  // Old voicemails were renamed voicemail_* → Memo_* by the unify migration, so
+  // rewrite a legacy deep-link stem to its new name instead of 404ing the reader.
+  const target = (stem ?? "").replace(/^voicemail_/, "Memo_");
+  return <Navigate to={`/inbox/${target}${qs ? `?${qs}` : ""}`} replace />;
 }
 
 const router = createBrowserRouter([

@@ -3,7 +3,7 @@ import { JobRegistry, type JobStatus } from "../src/jobStatus.js";
 
 function mkJob(overrides: Partial<JobStatus> = {}): JobStatus {
   return {
-    stem: "voicemail_20260101_120000",
+    stem: "Memo_20260101_120000",
     action: "transcribe",
     state: "transcribing",
     startedAt: 0,
@@ -29,8 +29,8 @@ describe("JobRegistry", () => {
   it("set() replaces an existing record for the same stem", () => {
     r.set(mkJob({ jobId: "j1", state: "transcribing" }));
     r.set(mkJob({ jobId: "j2", state: "summarizing" }));
-    expect(r.get("voicemail_20260101_120000")?.jobId).toBe("j2");
-    expect(r.get("voicemail_20260101_120000")?.state).toBe("summarizing");
+    expect(r.get("Memo_20260101_120000")?.jobId).toBe("j2");
+    expect(r.get("Memo_20260101_120000")?.state).toBe("summarizing");
   });
 
   it("clear() removes a stem", () => {

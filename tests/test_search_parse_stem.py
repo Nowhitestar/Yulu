@@ -18,10 +18,10 @@ def test_parse_stem_meeting_title():
     )
 
 
-def test_parse_stem_voicemail_literal():
-    info = parse_stem("voicemail_20260513_140012")
+def test_parse_stem_memo_literal():
+    info = parse_stem("Memo_20260513_140012")
     assert info is not None
-    assert info.meeting_title == "voicemail"
+    assert info.meeting_title == "Memo"
     assert info.recorded_at == "2026-05-13T14:00:12"
 
 
@@ -58,13 +58,13 @@ def test_parse_stem_rejects_impossible_date():
 
 
 def test_parse_stem_handles_six_digit_zero_padded():
-    info = parse_stem("voicemail_20260513_000000")
+    info = parse_stem("Memo_20260513_000000")
     assert info is not None
     assert info.recorded_at == "2026-05-13T00:00:00"
 
 
 def test_stem_info_is_frozen():
     """Dataclass is frozen so it can be hashed / put in sets."""
-    a = parse_stem("voicemail_20260513_140012")
-    b = parse_stem("voicemail_20260513_140012")
+    a = parse_stem("Memo_20260513_140012")
+    b = parse_stem("Memo_20260513_140012")
     assert {a, b} == {a}

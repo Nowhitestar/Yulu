@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { router, publicProcedure } from "../trpc.js";
 
-const CATEGORY = z.enum(["summary", "cleanup", "voicemail"]);
+const CATEGORY = z.enum(["summary", "cleanup"]);
 
 export const promptsRouter = router({
   list: publicProcedure

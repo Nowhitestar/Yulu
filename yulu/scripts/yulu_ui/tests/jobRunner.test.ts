@@ -44,30 +44,30 @@ describe("jobRunner.runTranscribe", () => {
 
   it("sets registry to 'transcribing' immediately and publishes start event", async () => {
     __setSpawnForTesting(() => fakeSpawn(0) as never);
-    const wavPath = join(root, "voicemail_test.wav");
+    const wavPath = join(root, "memo_test.wav");
     writeFileSync(wavPath, "");
-    const promise = runTranscribe({ stem: "voicemail_test", wavPath, transcribePy: "/fake", registry, pubsub });
-    expect(registry.get("voicemail_test")?.state).toBe("transcribing");
+    const promise = runTranscribe({ stem: "memo_test", wavPath, transcribePy: "/fake", registry, pubsub });
+    expect(registry.get("memo_test")?.state).toBe("transcribing");
     expect(events[0]?.state).toBe("transcribing");
     await promise;
   });
 
   it("clears registry and publishes 'done' on exit code 0", async () => {
     __setSpawnForTesting(() => fakeSpawn(0) as never);
-    const wavPath = join(root, "voicemail_test.wav");
+    const wavPath = join(root, "memo_test.wav");
     writeFileSync(wavPath, "");
-    await runTranscribe({ stem: "voicemail_test", wavPath, transcribePy: "/fake", registry, pubsub });
-    expect(registry.get("voicemail_test")).toBeUndefined();
+    await runTranscribe({ stem: "memo_test", wavPath, transcribePy: "/fake", registry, pubsub });
+    expect(registry.get("memo_test")).toBeUndefined();
     const last = events[events.length - 1];
     expect(last?.state).toBe("done");
   });
 
   it("marks registry 'failed' with stderr on non-zero exit", async () => {
     __setSpawnForTesting(() => fakeSpawn(2, "MLX OOM") as never);
-    const wavPath = join(root, "voicemail_test.wav");
+    const wavPath = join(root, "memo_test.wav");
     writeFileSync(wavPath, "");
-    await runTranscribe({ stem: "voicemail_test", wavPath, transcribePy: "/fake", registry, pubsub });
-    const rec = registry.get("voicemail_test");
+    await runTranscribe({ stem: "memo_test", wavPath, transcribePy: "/fake", registry, pubsub });
+    const rec = registry.get("memo_test");
     expect(rec?.state).toBe("failed");
     expect(rec?.error).toContain("MLX OOM");
     const last = events[events.length - 1];
@@ -77,9 +77,9 @@ describe("jobRunner.runTranscribe", () => {
 
   it("returns a jobId string", async () => {
     __setSpawnForTesting(() => fakeSpawn(0) as never);
-    const wavPath = join(root, "voicemail_test.wav");
+    const wavPath = join(root, "memo_test.wav");
     writeFileSync(wavPath, "");
-    const result = await runTranscribe({ stem: "voicemail_test", wavPath, transcribePy: "/fake", registry, pubsub });
+    const result = await runTranscribe({ stem: "memo_test", wavPath, transcribePy: "/fake", registry, pubsub });
     expect(typeof result.jobId).toBe("string");
     expect(result.jobId.length).toBeGreaterThan(0);
   });
@@ -103,29 +103,29 @@ describe("jobRunner.runSummarize (queue mode)", () => {
   it("appends an entry to agent-queue.json in queue mode", async () => {
     const queuePath = join(root, "agent-queue.json");
     writeFileSync(queuePath, "[]");
-    const transcriptPath = join(root, "voicemail_test.transcript.txt");
+    const transcriptPath = join(root, "memo_test.transcript.txt");
     writeFileSync(transcriptPath, "hello world");
     const result = await runSummarize({
-      stem: "voicemail_test", transcriptPath, summaryPath: join(root, "voicemail_test.summary.md"),
+      stem: "memo_test", transcriptPath, summaryPath: join(root, "memo_test.summary.md"),
       llmCommand: null, agentQueueJson: queuePath, registry, pubsub,
     });
     expect(result.mode).toBe("queue");
     const queue = JSON.parse(readFileSync(queuePath, "utf8"));
     expect(queue.length).toBe(1);
     expect(queue[0].type).toBe("summary_request");
-    expect(queue[0].stem).toBe("voicemail_test");
+    expect(queue[0].stem).toBe("memo_test");
   });
 
   it("returns mode='queue' and sets registry summarizing", async () => {
     const queuePath = join(root, "agent-queue.json");
     writeFileSync(queuePath, "[]");
-    const transcriptPath = join(root, "voicemail_test.transcript.txt");
+    const transcriptPath = join(root, "memo_test.transcript.txt");
     writeFileSync(transcriptPath, "hello world");
     const result = await runSummarize({
-      stem: "voicemail_test", transcriptPath, summaryPath: join(root, "voicemail_test.summary.md"),
+      stem: "memo_test", transcriptPath, summaryPath: join(root, "memo_test.summary.md"),
       llmCommand: null, agentQueueJson: queuePath, registry, pubsub,
     });
     expect(result.mode).toBe("queue");
-    expect(registry.get("voicemail_test")?.state).toBe("summarizing");
+    expect(registry.get("memo_test")?.state).toBe("summarizing");
   });
 });

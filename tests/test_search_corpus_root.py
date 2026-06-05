@@ -1,11 +1,11 @@
 """Phase 5 DATA-01: content-root literals route through PathResolver.data_dir().
 
-The three hardcoded ``~/Movies/Yulu`` literals (``search.indexer.CORPUS_ROOT``,
-``voicemail.repo.VOICEMAIL_DIR_DEFAULT``, and ``record_audio``'s output_dir
-fallback) must follow the configurable ``data_dir()`` — NOT a bare literal — so a
-configured data-folder moves new content. The runtime side (``SEARCH_DB_PATH``)
-must instead route through ``runtime_dir()`` and stay machine-local
-(``~/.config/yulu``): the runtime/content split must hold.
+The hardcoded ``~/Movies/Yulu`` literals (``search.indexer.CORPUS_ROOT`` and
+``record_audio``'s output_dir fallback) must follow the configurable
+``data_dir()`` — NOT a bare literal — so a configured data-folder moves new
+content. The runtime side (``SEARCH_DB_PATH``) must instead route through
+``runtime_dir()`` and stay machine-local (``~/.config/yulu``): the
+runtime/content split must hold.
 
 These module-level names are computed at import time. Rather than ``importlib.
 reload`` the shared modules under a temp config (which pollutes module-level
@@ -30,7 +30,6 @@ sys.path.insert(0, str(SCRIPTS))
 
 import record_audio  # noqa: E402
 from search import indexer  # noqa: E402
-from voicemail import repo  # noqa: E402
 
 _DARWIN = platform.system() == "Darwin"
 darwin_only = pytest.mark.skipif(not _DARWIN, reason="MacOSPathResolver requires Darwin")
@@ -69,19 +68,6 @@ def test_indexer_data_helper_follows_config(tmp_path, monkeypatch):
 
 
 @darwin_only
-def test_voicemail_default_follows_config(tmp_path, monkeypatch):
-    """voicemail.repo._resolve_data_dir()/'voicemails' == data_dir()/'voicemails'."""
-    from yulu_platform.macos.path_resolver import MacOSPathResolver
-
-    custom = tmp_path / "MyCloudFolder" / "Yulu"
-    _write_config(tmp_path, monkeypatch, custom)
-
-    resolved_default = repo._resolve_data_dir() / "voicemails"
-    assert resolved_default == MacOSPathResolver().data_dir() / "voicemails"
-    assert resolved_default == custom / "voicemails"
-
-
-@darwin_only
 def test_record_audio_fallback_follows_config(tmp_path, monkeypatch):
     """record_audio._resolve_data_dir() (the output_dir fallback) == data_dir(),
     not the old repo-relative meeting-recordings dir."""
@@ -103,11 +89,6 @@ def test_corpus_root_wired_to_data_helper():
     """CORPUS_ROOT is the data_dir() helper output (content), not an independent
     literal — they must agree under the ambient (default) config."""
     assert indexer.CORPUS_ROOT == indexer._resolve_data_dir()
-
-
-def test_voicemail_default_wired_to_data_helper():
-    """VOICEMAIL_DIR_DEFAULT is data_dir()/'voicemails' (content)."""
-    assert repo.VOICEMAIL_DIR_DEFAULT == repo._resolve_data_dir() / "voicemails"
 
 
 # --- The runtime/content split holds: SEARCH_DB_PATH is RUNTIME -----------------

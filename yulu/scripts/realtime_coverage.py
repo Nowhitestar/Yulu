@@ -11,10 +11,9 @@ callers fall back to a full whole-file daemon transcription instead.
 ``COVERAGE_MIN_RATIO`` of the WAV duration, with a small absolute slack
 (``COVERAGE_SLACK_SEC``) for the trailing partial chunk + silence trim.
 
-Single source of truth for BOTH paths — the meeting path (``transcribe.py``
-fast_summary) and the voicemail path (``voicemail/recorder.py`` promote-to-final).
-The transcription backend is one and the same; the two entry points differ only in
-how the recording is tagged, so the reuse-vs-retranscribe decision must be identical.
+Single source of truth for the meeting transcription path (``transcribe.py``
+fast_summary / promote-to-final). The reuse-vs-retranscribe decision must be
+identical wherever the realtime transcript is promoted.
 Depends only on the standard library (no import cycles)."""
 
 from __future__ import annotations

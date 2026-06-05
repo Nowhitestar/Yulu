@@ -61,13 +61,9 @@ CORPUS_ROOT = _resolve_data_dir()
 
 KIND_MEETING_SUMMARY = "meeting_summary"
 KIND_MEETING_TRANSCRIPT = "meeting_transcript"
-KIND_VOICEMAIL_SUMMARY = "voicemail_summary"
-KIND_VOICEMAIL_TRANSCRIPT = "voicemail_transcript"
 VALID_KINDS = frozenset({
     KIND_MEETING_SUMMARY,
     KIND_MEETING_TRANSCRIPT,
-    KIND_VOICEMAIL_SUMMARY,
-    KIND_VOICEMAIL_TRANSCRIPT,
 })
 
 

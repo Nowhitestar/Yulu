@@ -8,7 +8,6 @@ interface LiveMsg {
   active: boolean;
   stem?: string;
   text?: string;
-  kind?: "voicemail" | "meeting";
 }
 
 /**
@@ -23,7 +22,6 @@ export function LiveTranscript() {
   const [active, setActive] = useState(false);
   const [text, setText] = useState("");
   const [stem, setStem] = useState<string | undefined>();
-  const [kind, setKind] = useState<"voicemail" | "meeting" | undefined>();
   const [dismissedStem, setDismissedStem] = useState<string | null>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
 
@@ -34,7 +32,6 @@ export function LiveTranscript() {
     }
     setActive(true);
     setStem(msg.stem);
-    setKind(msg.kind);
     setText(msg.text ?? "");
   });
 
@@ -62,7 +59,6 @@ export function LiveTranscript() {
         </span>
         <span className="lt-title">
           Live transcript
-          {kind ? <span className="lt-kind">{kind === "voicemail" ? "Voicemail" : "Meeting"}</span> : null}
         </span>
         <button
           className="lt-close"

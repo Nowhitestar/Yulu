@@ -131,17 +131,14 @@ def _run_llm(prompt: str, llm_command: list[str], timeout_sec: int) -> str:
     return output + "\n"
 
 
-def _maybe_voicemail_notify(*, audio_path: Path, summary_path: Path,
-                             prompt_slug: str) -> None:
-    """Voicemail-only completion notification. Quiet for meetings.
+def _maybe_summary_notify(*, summary_path: Path, prompt_slug: str) -> None:
+    """Generic "summary ready" completion notification.
 
-    Fires only when:
-      - audio_path is under a 'voicemails' directory
-      - prompt_slug == 'voicemail-todos' (the default auto-run voicemail prompt)
+    Fires only for the default auto-run summary prompt (slug 'summary') so a
+    single notification lands per recording when its meeting note is ready;
+    other prompts (cleanup, opt-in summaries) stay quiet.
     """
-    if "voicemails" not in audio_path.parts:
-        return
-    if prompt_slug != "voicemail-todos":
+    if prompt_slug != "summary":
         return
     first_line = ""
     try:
@@ -157,7 +154,7 @@ def _maybe_voicemail_notify(*, audio_path: Path, summary_path: Path,
     try:
         subprocess.Popen([
             "terminal-notifier",
-            "-title", "Yulu Voicemail",
+            "-title", "Yulu",
             "-message", first_line,
             "-open", f"file://{summary_path}",
             "-sender", "com.yulu.audiodaemon",
@@ -323,17 +320,11 @@ def _handle_summary_request(
     # pick up anything we miss here.
     try:
         from search import indexer as _search_indexer
-        is_voicemail = "/voicemails/" in str(audio_path) if audio_path else False
-        if is_cleanup:
-            search_kind = (
-                _search_indexer.KIND_VOICEMAIL_TRANSCRIPT
-                if is_voicemail else _search_indexer.KIND_MEETING_TRANSCRIPT
-            )
-        else:
-            search_kind = (
-                _search_indexer.KIND_VOICEMAIL_SUMMARY
-                if is_voicemail else _search_indexer.KIND_MEETING_SUMMARY
-            )
+        # Every recording is a meeting now (voicemails were unified in).
+        search_kind = (
+            _search_indexer.KIND_MEETING_TRANSCRIPT
+            if is_cleanup else _search_indexer.KIND_MEETING_SUMMARY
+        )
         _search_indexer.upsert_doc(
             source_path=output_path, kind=search_kind, body=output,
         )
@@ -374,14 +365,12 @@ def _handle_summary_request(
         entry["html_path"] = html_path
     entry.pop("error", None)
 
-    # Voicemail completion notification (best-effort, post-persistence).
-    # Fires only for voicemails/* audio AND voicemail-todos slug.
-    if audio_path is not None:
-        _maybe_voicemail_notify(
-            audio_path=audio_path,
-            summary_path=Path(str(entry.get("summary_path", ""))),
-            prompt_slug=prompt_slug,
-        )
+    # Summary-ready notification (best-effort, post-persistence).
+    # Fires only for the default auto-run summary slug.
+    _maybe_summary_notify(
+        summary_path=Path(str(entry.get("summary_path", ""))),
+        prompt_slug=prompt_slug,
+    )
 
     return True
 

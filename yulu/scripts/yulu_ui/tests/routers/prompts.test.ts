@@ -8,7 +8,7 @@ CREATE TABLE prompts (
   id TEXT PRIMARY KEY,
   slug TEXT NOT NULL UNIQUE,
   name TEXT NOT NULL,
-  category TEXT NOT NULL CHECK(category IN ('summary','cleanup','voicemail')),
+  category TEXT NOT NULL CHECK(category IN ('summary','cleanup')),
   content TEXT NOT NULL,
   is_auto_run INTEGER NOT NULL DEFAULT 0,
   source TEXT NOT NULL DEFAULT 'manual',

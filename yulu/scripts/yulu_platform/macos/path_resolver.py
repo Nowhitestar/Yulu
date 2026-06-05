@@ -70,8 +70,8 @@ class MacOSPathResolver(PathResolver):
     #     + their ``-wal``/``-shm`` sidecars). It is NEVER sourced from user config —
     #     it does not read ``audio.output_dir`` — so a content-folder choice can never
     #     relocate runtime state into a synced folder.
-    #   • data_dir()     = CONFIGURABLE content (recordings/transcripts/summaries/
-    #     voicemails). Reads ``audio.output_dir``; this is the only thing the picker moves.
+    #   • data_dir()     = CONFIGURABLE content (recordings/transcripts/summaries).
+    #     Reads ``audio.output_dir``; this is the only thing the picker moves.
     #
     # Why the lock matters (D-01): a sync engine on the runtime dir CORRUPTS, it does
     # not merely inconvenience. SQLite explicitly does not support a cloud-synced live

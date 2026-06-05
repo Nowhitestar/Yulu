@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useConfirm } from "../hooks/useConfirm.js";
 import "./PromptReader.css";
 
-export type Category = "summary" | "cleanup" | "voicemail";
+export type Category = "summary" | "cleanup";
 
 export interface PromptData {
   id: string;
@@ -40,7 +40,7 @@ export interface PromptReaderProps {
   onDelete: () => void;
 }
 
-const CATEGORIES: Category[] = ["summary", "cleanup", "voicemail"];
+const CATEGORIES: Category[] = ["summary", "cleanup"];
 
 export function PromptReader({ prompt, onSave, onDelete }: PromptReaderProps) {
   const isCreate = prompt === null;

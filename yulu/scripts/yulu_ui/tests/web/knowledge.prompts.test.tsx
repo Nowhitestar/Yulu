@@ -14,7 +14,7 @@ import { PromptReaderRoute } from "../../web/src/routes/knowledge/prompts.$id.js
 const LIST_DATA = [
   { id: "id-1", slug: "default",  name: "Default Summary", category: "summary",   content: "x", is_auto_run: 1, source: "seed",   sort_order: 0, note: null, created_at: "", updated_at: "" },
   { id: "id-2", slug: "cleanup",  name: "Cleanup",          category: "cleanup",   content: "y", is_auto_run: 0, source: "seed",   sort_order: 1, note: null, created_at: "", updated_at: "" },
-  { id: "id-3", slug: "vm",       name: "Voicemail Summary", category: "voicemail", content: "z", is_auto_run: 0, source: "manual", sort_order: 2, note: null, created_at: "", updated_at: "" },
+  { id: "id-3", slug: "action-items", name: "Action Items", category: "summary", content: "z", is_auto_run: 0, source: "manual", sort_order: 2, note: null, created_at: "", updated_at: "" },
 ];
 
 const EXISTING_PROMPT = {
@@ -81,24 +81,24 @@ describe("Prompts page", () => {
     const names = rowNames();
     expect(names).toContain("Default Summary");
     expect(names).toContain("Cleanup");
-    expect(names).toContain("Voicemail Summary");
+    expect(names).toContain("Action Items");
     // Category chips inside rows: one per row
     const rows = screen.getAllByTestId("prompt-row");
     expect(rows).toHaveLength(3);
     expect(rows[0]?.querySelector('[data-category="summary"]')).not.toBeNull();
     expect(rows[1]?.querySelector('[data-category="cleanup"]')).not.toBeNull();
-    expect(rows[2]?.querySelector('[data-category="voicemail"]')).not.toBeNull();
+    expect(rows[2]?.querySelector('[data-category="summary"]')).not.toBeNull();
     // Autorun star on first row only
     expect(rows[0]).toHaveTextContent("★");
     expect(rows[1]).not.toHaveTextContent("★");
   });
 
-  it("renders 4 filter chips (All/Summary/Cleanup/Voicemail) + New prompt button", () => {
+  it("renders 3 filter chips (All/Summary/Cleanup) + New prompt button", () => {
     mount();
     expect(screen.getByRole("button", { name: /^all$/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /^summary$/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /^cleanup$/i })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /^voicemail$/i })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^voicemail$/i })).toBeNull();
     expect(screen.getByRole("link", { name: /\+ new prompt/i })).toBeInTheDocument();
   });
 
@@ -108,8 +108,8 @@ describe("Prompts page", () => {
     await user.click(screen.getByRole("button", { name: /^summary$/i }));
     const names = rowNames();
     expect(names).toContain("Default Summary");
+    expect(names).toContain("Action Items"); // also a summary-category prompt
     expect(names).not.toContain("Cleanup");
-    expect(names).not.toContain("Voicemail Summary");
   });
 
   it("index outlet renders empty state when no :id selected", () => {

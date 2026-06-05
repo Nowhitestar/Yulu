@@ -19,7 +19,6 @@ import pytest
 from search import cli as search_cli
 from search.indexer import (
     KIND_MEETING_SUMMARY, KIND_MEETING_TRANSCRIPT,
-    KIND_VOICEMAIL_SUMMARY, KIND_VOICEMAIL_TRANSCRIPT,
     init_db, upsert_doc,
 )
 
@@ -58,13 +57,21 @@ def test_types_meeting_summary():
     assert search_cli._types_to_kinds("meeting", "summary") == [KIND_MEETING_SUMMARY]
 
 
-def test_types_voicemail_transcript():
-    assert search_cli._types_to_kinds("voicemail", "transcript") == [KIND_VOICEMAIL_TRANSCRIPT]
+def test_types_meeting_transcript():
+    assert search_cli._types_to_kinds("meeting", "transcript") == [KIND_MEETING_TRANSCRIPT]
 
 
-def test_types_all_summary_lists_both_summaries():
-    res = search_cli._types_to_kinds("all", "summary")
-    assert set(res) == {KIND_MEETING_SUMMARY, KIND_VOICEMAIL_SUMMARY}
+def test_types_all_and_meeting_are_equivalent():
+    # Only meetings exist, so --type all and --type meeting select the same kinds.
+    assert (search_cli._types_to_kinds("all", "summary")
+            == search_cli._types_to_kinds("meeting", "summary")
+            == [KIND_MEETING_SUMMARY])
+
+
+def test_types_rejects_voicemail():
+    import argparse
+    with pytest.raises(argparse.ArgumentTypeError):
+        search_cli._types_to_kinds("voicemail", "transcript")
 
 
 # ── IPC server fixture (reused from Phase 5 status_agent tests) ────────
@@ -142,8 +149,7 @@ def test_cli_falls_back_to_in_process_when_agent_down(tmp_path, monkeypatch, cap
     # Seed a tiny corpus + isolated db.
     db = tmp_path / "search.sqlite"
     root = tmp_path / "Yulu"
-    voicemails = root / "voicemails"
-    root.mkdir(); voicemails.mkdir()
+    root.mkdir()
     (root / "Plan_20260521_160000.summary.md").write_text(
         "本周 OKR 完成度", encoding="utf-8"
     )

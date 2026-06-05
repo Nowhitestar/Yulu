@@ -3,9 +3,8 @@
  * `<stem>.wav` — keeping Yulu's local-first, "a recording is a set of files"
  * model. No SQLite migration, no Python coupling.
  *
- *   <stem>.title      — plain-text custom title (one line). Already an
- *                       established convention: voicemail/recorder.py writes it
- *                       and voicemail/repo.py reads it as title-override #1.
+ *   <stem>.title      — plain-text custom title (one line), read as the
+ *                       title-override before the filename-derived title.
  *   <stem>.tags.json  — JSON array of tag strings.
  *
  * Both are optional; absence means "no override / no tags".

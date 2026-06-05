@@ -1,11 +1,10 @@
-"""yulu status-agent CLI dispatch — install/enable/disable/status/set-hotkey."""
+"""yulu status-agent CLI dispatch — install/enable/disable/status/state/toggle."""
 
 from __future__ import annotations
 
 import json
 import sys
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 
@@ -23,43 +22,9 @@ def _stub_paths(tmp_path: Path, monkeypatch) -> Path:
     return cfg
 
 
-def test_set_hotkey_writes_config(tmp_path, monkeypatch):
-    cfg = _stub_paths(tmp_path, monkeypatch)
-    rc = sac.main(["set-hotkey", "ctrl+option+M"])
-    assert rc == 0
-    data = json.loads(cfg.read_text(encoding="utf-8"))
-    # 'option' is the user-facing alias for 'alt' on macOS keyboards.
-    # CLI must normalize 'option' → 'alt' before parsing.
-    assert data["status_agent"]["hotkey"]["key"] == "M"
-    assert "alt" in data["status_agent"]["hotkey"]["modifiers"]
-    assert "ctrl" in data["status_agent"]["hotkey"]["modifiers"]
-
-
-def test_set_hotkey_sends_sighup(tmp_path, monkeypatch):
-    _stub_paths(tmp_path, monkeypatch)
-    sent = {"v": False}
-
-    def fake_sighup():
-        sent["v"] = True
-        return True
-
-    monkeypatch.setattr(sac, "sighup_running_agent", fake_sighup)
-    rc = sac.main(["set-hotkey", "cmd+shift+M"])
-    assert rc == 0
-    assert sent["v"] is True
-
-
-def test_set_hotkey_rejects_invalid(tmp_path, monkeypatch, capsys):
-    _stub_paths(tmp_path, monkeypatch)
-    rc = sac.main(["set-hotkey", "hyper+V"])
-    assert rc == 1
-    err = capsys.readouterr().err
-    assert "unknown modifier" in err
-
-
 def test_enable_writes_enabled_true(tmp_path, monkeypatch):
     cfg = _stub_paths(tmp_path, monkeypatch)
-    sac.save({"enabled": False, "hotkey": {"key": "V", "modifiers": ["cmd", "shift"]}})
+    sac.save({"enabled": False})
     rc = sac.main(["enable"])
     assert rc == 0
     assert json.loads(cfg.read_text(encoding="utf-8"))["status_agent"]["enabled"] is True
@@ -67,7 +32,7 @@ def test_enable_writes_enabled_true(tmp_path, monkeypatch):
 
 def test_disable_writes_enabled_false_and_unloads(tmp_path, monkeypatch):
     cfg = _stub_paths(tmp_path, monkeypatch)
-    sac.save({"enabled": True, "hotkey": {"key": "V", "modifiers": ["cmd", "shift"]}})
+    sac.save({"enabled": True})
 
     unloaded = []
 
@@ -87,14 +52,15 @@ def test_disable_writes_enabled_false_and_unloads(tmp_path, monkeypatch):
     assert any("unload" in cmd for c in unloaded for cmd in c)
 
 
-def test_status_prints_current_binding(tmp_path, monkeypatch, capsys):
+def test_status_prints_enabled_state(tmp_path, monkeypatch, capsys):
     _stub_paths(tmp_path, monkeypatch)
-    sac.save({"enabled": True, "hotkey": {"key": "V", "modifiers": ["cmd", "shift"]}})
+    sac.save({"enabled": True})
     rc = sac.main(["status"])
     assert rc == 0
     out = capsys.readouterr().out
-    assert "⌘⇧V" in out
     assert "enabled" in out.lower()
+    # The hotkey line is gone entirely.
+    assert "hotkey" not in out.lower()
 
 
 def test_install_is_stub_when_app_bundle_missing(tmp_path, monkeypatch, capsys):
@@ -114,7 +80,8 @@ def test_help_when_no_subcommand(capsys):
     assert rc != 0
     out = capsys.readouterr().out + capsys.readouterr().err
     assert "install" in out
-    assert "set-hotkey" in out
+    # The removed hotkey subcommand must not reappear in help.
+    assert "set-hotkey" not in out
 
 
 # ─── IPC tests: spin up a tiny Unix-socket server in a thread that
@@ -175,14 +142,14 @@ def _start_fake_ipc_server(tmp_path: Path, monkeypatch, handler):
 def test_state_prints_current_state(tmp_path, monkeypatch, capsys):
     def handler(req):
         assert req["action"] == "status"
-        return {"ok": True, "state": "idle", "hotkey": "⌘⇧V"}
+        return {"ok": True, "state": "idle", "launcher_pid": 4242}
 
     _start_fake_ipc_server(tmp_path, monkeypatch, handler)
     rc = sac.main(["state"])
     assert rc == 0
     out = capsys.readouterr().out
     assert "state: idle" in out
-    assert "hotkey: ⌘⇧V" in out
+    assert "launcher pid: 4242" in out
 
 
 def test_toggle_prints_before_after(tmp_path, monkeypatch, capsys):

@@ -16,7 +16,7 @@ sys.path.insert(0, str(SCRIPTS))
 from search import indexer as search_indexer
 from search.indexer import (
     KIND_MEETING_SUMMARY,
-    KIND_VOICEMAIL_TRANSCRIPT,
+    KIND_MEETING_TRANSCRIPT,
     init_db,
     upsert_doc,
 )
@@ -28,8 +28,8 @@ def _seed(tmp_path: Path):
     conn = init_db(db)
     docs = [
         ("Plan_20260521_160000.summary.md", KIND_MEETING_SUMMARY, "本周 OKR 完成度"),
-        ("voicemail_20260513_140012.transcript.txt",
-         KIND_VOICEMAIL_TRANSCRIPT, "记得明天找 Anthropic 团队 OKR 同步"),
+        ("Memo_20260513_140012.transcript.txt",
+         KIND_MEETING_TRANSCRIPT, "记得明天找 Anthropic 团队 OKR 同步"),
     ]
     for fname, kind, body in docs:
         p = tmp_path / fname
@@ -88,7 +88,7 @@ def test_expand_kinds_explicit_wins():
 
 def test_expand_kinds_in_shorthand_summary():
     out = _expand_kinds({"in": ["summary"]})
-    assert set(out) == {"meeting_summary", "voicemail_summary"}
+    assert set(out) == {"meeting_summary"}
 
 
 def test_expand_kinds_in_shorthand_meeting():
@@ -109,10 +109,10 @@ def test_filters_compose(tmp_path, monkeypatch):
 
     resp = handle_request({
         "action": "search", "query": "OKR",
-        "kinds": [KIND_VOICEMAIL_TRANSCRIPT],
+        "kinds": [KIND_MEETING_TRANSCRIPT],
     })
     assert resp["ok"] is True
-    assert all(h["kind"] == KIND_VOICEMAIL_TRANSCRIPT for h in resp["hits"])
+    assert all(h["kind"] == KIND_MEETING_TRANSCRIPT for h in resp["hits"])
 
 
 def test_subprocess_round_trip(tmp_path, monkeypatch):

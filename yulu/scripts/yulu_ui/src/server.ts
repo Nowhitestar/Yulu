@@ -75,7 +75,6 @@ export async function startServer(): Promise<RunningServer> {
     onError: ({ error, path }) => console.error(`[trpc] ${path}: ${error.message}`),
   }));
 
-  app.get("/files/voicemails/*", (c) => streamAudio(c.req.raw, paths.voicemailsDir));
   app.get("/files/meetings/*",   (c) => streamAudio(c.req.raw, paths.moviesDir));
 
   // Looked up dynamically so tests can flip YULU_UI_DIST_WEB between cases.
@@ -84,7 +83,7 @@ export async function startServer(): Promise<RunningServer> {
   app.get("/assets/*", (c) => serveStaticFile(c.req.raw, join(distWebDir(), "assets")));
 
   // SPA fallback — return index.html for any unmatched GET path so React
-  // Router can handle client-side routing (e.g. /inbox/voicemails, /health/daemons).
+  // Router can handle client-side routing (e.g. /inbox, /health/daemons).
   // `app.notFound` catches everything not handled above, including deep
   // multi-segment paths where `app.get("*")` can be unreliable across Hono versions.
   app.notFound((c) => {
@@ -100,7 +99,6 @@ export async function startServer(): Promise<RunningServer> {
   mountWsMultiplexer(http, appPubSub);
 
   const inboxWatcher = startInboxWatcher({
-    voicemailsDir: paths.voicemailsDir,
     moviesDir: paths.moviesDir,
     pubsub: appPubSub,
   });
@@ -111,7 +109,6 @@ export async function startServer(): Promise<RunningServer> {
   });
 
   const realtimeTailer = startRealtimeTailer({
-    voicemailsDir: paths.voicemailsDir,
     moviesDir: paths.moviesDir,
     pubsub: appPubSub,
   });

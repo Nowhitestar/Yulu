@@ -9,9 +9,9 @@ vi.mock("../../web/src/trpc.js", () => ({
     recordings: {
       list: { useQuery: () => ({
         data: [
-          { stem: "vm1", type: "voicemail", title: null, recordedAt: null, mtimeMs: 3, hasTranscript: true, hasSummary: false, hasRealtime: false, firstWords: "a", status: "idle" },
-          { stem: "vm2", type: "voicemail", title: null, recordedAt: null, mtimeMs: 2, hasTranscript: true, hasSummary: false, hasRealtime: false, firstWords: "b", status: "idle" },
-          { stem: "vm3", type: "voicemail", title: null, recordedAt: null, mtimeMs: 1, hasTranscript: true, hasSummary: false, hasRealtime: false, firstWords: "c", status: "idle" },
+          { stem: "rec1", title: "Rec1", recordedAt: null, mtimeMs: 3, hasTranscript: true, hasSummary: false, hasRealtime: false, firstWords: "a", status: "idle" },
+          { stem: "rec2", title: "Rec2", recordedAt: null, mtimeMs: 2, hasTranscript: true, hasSummary: false, hasRealtime: false, firstWords: "b", status: "idle" },
+          { stem: "rec3", title: "Rec3", recordedAt: null, mtimeMs: 1, hasTranscript: true, hasSummary: false, hasRealtime: false, firstWords: "c", status: "idle" },
         ],
         isPending: false,
       }) },
@@ -30,7 +30,7 @@ vi.mock("../../web/src/ws.js", () => ({
 import { InboxLayout } from "../../web/src/routes/inbox/_layout.js";
 import { RecordingsList } from "../../web/src/routes/inbox/recordings.js";
 
-function mount(initialPath = "/inbox/vm2") {
+function mount(initialPath = "/inbox/rec2") {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={qc}>
@@ -50,7 +50,7 @@ function mount(initialPath = "/inbox/vm2") {
 
 describe("Inbox keyboard shortcuts", () => {
   it("'j' navigates to next stem", async () => {
-    mount("/inbox/vm1");
+    mount("/inbox/rec1");
     fireEvent.keyDown(window, { key: "j" });
     await waitFor(() => {
       // The active row in DOM should switch from vm1 to vm2 (via NavLink active)
@@ -60,7 +60,7 @@ describe("Inbox keyboard shortcuts", () => {
   });
 
   it("'k' navigates to previous stem", async () => {
-    mount("/inbox/vm2");
+    mount("/inbox/rec2");
     fireEvent.keyDown(window, { key: "k" });
     await waitFor(() => {
       const rows = screen.getAllByTestId("recording-row");
@@ -69,7 +69,7 @@ describe("Inbox keyboard shortcuts", () => {
   });
 
   it("'k' on first stem stays on first (no wrap)", async () => {
-    mount("/inbox/vm1");
+    mount("/inbox/rec1");
     fireEvent.keyDown(window, { key: "k" });
     await waitFor(() => {
       const rows = screen.getAllByTestId("recording-row");
