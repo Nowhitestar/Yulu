@@ -122,51 +122,6 @@ SEED_PROMPTS: list[dict] = [
             "- 不输出讨论摘要、TL;DR 等其它内容。\n"
         ),
     },
-    {
-        "slug": "voicemail-todos",
-        "name": "Voicemail Action Items",
-        "category": "voicemail",
-        "is_auto_run": True,
-        "sort_order": 100,
-        "content": (
-            "请基于以下语音备忘录，提取我提到的待办事项、想法、决定。\n"
-            "\n"
-            "备忘录主题：{{meeting_title}}\n"
-            "时间：{{date}}\n"
-            "\n"
-            "转录：\n"
-            "---\n"
-            "{{transcript}}\n"
-            "---\n"
-            "\n"
-            "要求：\n"
-            "1. 输出 Markdown，分两段：## 待办事项 / ## 想法记录。\n"
-            "2. 待办事项每条一行，列出具体动作；如果提到了截止日期或对象，标在行末。\n"
-            "3. 想法记录每条 1-2 句，保留原话风格。\n"
-            "4. 不要输出原始转录，不要解释。\n"
-        ),
-    },
-    {
-        "slug": "voicemail-clean",
-        "name": "Voicemail Cleanup",
-        "category": "voicemail",
-        "is_auto_run": False,
-        "sort_order": 110,
-        "content": (
-            "请清理以下语音备忘录的转录稿，输出可读版本。\n"
-            "\n"
-            "转录：\n"
-            "---\n"
-            "{{transcript}}\n"
-            "---\n"
-            "\n"
-            "要求：\n"
-            "- 修正标点和段落；\n"
-            "- 去除\"嗯/啊/那个\"等口水词；\n"
-            "- 不要改写观点或事实；\n"
-            "- 不要总结，只输出清理后的文本。\n"
-        ),
-    },
 ]
 
 

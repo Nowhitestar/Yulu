@@ -18,7 +18,6 @@ SCHEMA_VERSION = "1"
 class Category(str, Enum):
     SUMMARY = "summary"
     CLEANUP = "cleanup"
-    VOICEMAIL = "voicemail"
 
 
 class Source(str, Enum):
@@ -73,7 +72,7 @@ CREATE TABLE IF NOT EXISTS prompts (
     id TEXT PRIMARY KEY,
     slug TEXT NOT NULL UNIQUE,
     name TEXT NOT NULL,
-    category TEXT NOT NULL CHECK(category IN ('summary', 'cleanup', 'voicemail')),
+    category TEXT NOT NULL CHECK(category IN ('summary', 'cleanup')),
     content TEXT NOT NULL,
     is_auto_run INTEGER NOT NULL DEFAULT 0,
     source TEXT NOT NULL DEFAULT 'manual'
@@ -121,13 +120,21 @@ def _now_iso() -> str:
 
 
 def _migrate_category_check_constraint(conn: sqlite3.Connection) -> None:
-    """One-shot migration: if the `prompts.category` CHECK constraint
-    doesn't include 'voicemail', rebuild the table with the new constraint.
-    Idempotent — re-running is a no-op.
+    """One-shot DOWN-migration: collapse the legacy 3-value category CHECK
+    (summary / cleanup / voicemail) back to 2 values (summary / cleanup).
 
-    SQLite has no `ALTER TABLE ... DROP CONSTRAINT`, so we use the standard
-    rebuild dance (PRAGMA table_info won't show CHECK constraints — we
-    inspect sqlite_master.sql instead).
+    The 'voicemail' category was removed when voicemails were unified into
+    meetings. Any surviving 'voicemail' rows (the bundled voicemail-todos /
+    voicemail-clean seeds, or user/learned rows) are re-pointed FIRST so the
+    rebuilt CHECK doesn't reject them:
+      - slug contains 'clean'  → 'cleanup'
+      - everything else        → 'summary'
+    then the table is rebuilt with the narrowed constraint.
+
+    Idempotent — re-running is a no-op once the table already carries the
+    2-value constraint. SQLite has no `ALTER TABLE ... DROP CONSTRAINT`, so we
+    use the standard rebuild dance (PRAGMA table_info won't show CHECK
+    constraints — we inspect sqlite_master.sql instead).
     """
     row = conn.execute(
         "SELECT sql FROM sqlite_master WHERE type='table' AND name='prompts'"
@@ -135,15 +142,22 @@ def _migrate_category_check_constraint(conn: sqlite3.Connection) -> None:
     if row is None:
         return  # no prompts table yet — fresh DB will get the new schema
     table_sql = row[0] if isinstance(row, tuple) else row["sql"]
-    if "'voicemail'" in table_sql:
-        return  # already migrated
+    if "'voicemail'" not in table_sql:
+        return  # already on the 2-value constraint — no-op
     conn.executescript("""
         BEGIN;
+        -- Re-point legacy voicemail rows BEFORE the narrowed CHECK applies.
+        UPDATE prompts
+            SET category = CASE
+                WHEN instr(slug, 'clean') > 0 THEN 'cleanup'
+                ELSE 'summary'
+            END
+            WHERE category = 'voicemail';
         CREATE TABLE prompts_new (
             id TEXT PRIMARY KEY,
             slug TEXT NOT NULL UNIQUE,
             name TEXT NOT NULL,
-            category TEXT NOT NULL CHECK(category IN ('summary', 'cleanup', 'voicemail')),
+            category TEXT NOT NULL CHECK(category IN ('summary', 'cleanup')),
             content TEXT NOT NULL,
             is_auto_run INTEGER NOT NULL DEFAULT 0,
             source TEXT NOT NULL DEFAULT 'manual'
