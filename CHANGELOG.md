@@ -4,6 +4,20 @@ All notable changes to Yulu are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.7.0](https://github.com/Nowhitestar/Yulu/compare/v0.6.0...v0.7.0) (2026-06-05)
+
+
+### Features
+
+* **ui:** recordings reader — markdown summary, transcript dedup, rename/tags/delete, real status ([#44](https://github.com/Nowhitestar/Yulu/issues/44)) ([8aace30](https://github.com/Nowhitestar/Yulu/commit/8aace308188569a43054234ea6380348d51e366c))
+
+
+### Bug Fixes
+
+* **audio:** self-heal stuck sys-tap so meetings start after a voicemail ([#43](https://github.com/Nowhitestar/Yulu/issues/43)) ([9aff28f](https://github.com/Nowhitestar/Yulu/commit/9aff28f20b0c4d247a587c23a7e2c86859486adc))
+* make realtime transcription robust for arbitrarily-long recordings ([#42](https://github.com/Nowhitestar/Yulu/issues/42)) ([f05e641](https://github.com/Nowhitestar/Yulu/commit/f05e6418c4c963c526e6e494166eab49c126a4d1))
+* repair 10 fresh-user-facing bugs in the v0.6.0 release ([#41](https://github.com/Nowhitestar/Yulu/issues/41)) ([53fa35c](https://github.com/Nowhitestar/Yulu/commit/53fa35cbf725cbd68805ab196379f6b3ead27e5a))
+
 ## [0.6.0](https://github.com/Nowhitestar/Yulu/compare/v0.5.2...v0.6.0) (2026-06-01)
 
 
