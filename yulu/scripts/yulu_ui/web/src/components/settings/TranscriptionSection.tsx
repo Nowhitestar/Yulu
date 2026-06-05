@@ -33,7 +33,7 @@ export function TranscriptionSection({ tracker }: TranscriptionSectionProps) {
     mode?: "local" | "cloud-fallback" | "cloud-priority";
     cloud_command?: string[];
     realtime_enabled?: boolean;
-    final_engine?: "mlx" | "whisper-cli";
+    final_engine?: "mlx" | "whisper";
     language?: string;
     local_model_path?: string;
     mlx?: Record<string, unknown>;
@@ -135,7 +135,7 @@ export function TranscriptionSection({ tracker }: TranscriptionSectionProps) {
         label="Final engine"
         type="select"
         value={tr.final_engine ?? "mlx"}
-        options={[{ value: "mlx", label: "mlx" }, { value: "whisper-cli", label: "whisper-cli" }]}
+        options={[{ value: "mlx", label: "mlx" }, { value: "whisper", label: "whisper.cpp" }]}
         onCommit={commit("transcription.final_engine") as (v: string) => void}
         status={tracker.statusFor("transcription.final_engine")}
       />

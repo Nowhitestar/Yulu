@@ -6,7 +6,6 @@ import sys
 from pathlib import Path
 
 CONFIG_PATH = Path.home() / ".config" / "yulu" / "config.json"
-DEFAULT_MLX_PYTHON = str(Path.home() / ".config/yulu/venv-mlx-whisper/bin/python")
 DEFAULT_MLX_MODEL = "mlx-community/whisper-large-v3-turbo"
 # Realtime/live captions always run a fast model so they keep up with
 # wall-clock audio, independent of which (possibly slower) model the user
@@ -71,7 +70,10 @@ def set_engine(engine, model=None, path=CONFIG_PATH):
 
     if engine == "mlx":
         mlx = trans.setdefault("mlx", {})
-        mlx["python"] = mlx.get("python") or DEFAULT_MLX_PYTHON
+        # NB: do NOT write mlx["python"]. v0.6.0 removed the dedicated venv, and
+        # migrate/detect.py keys on a lingering transcription.mlx.python to flag a
+        # config as v0.5.x-stale — resurrecting it would make every install look
+        # un-migrated and re-trigger migration on each upgrade.
         mlx["model"] = model or mlx.get("model") or DEFAULT_MLX_MODEL
         mlx["final_model"] = model or mlx.get("final_model") or DEFAULT_MLX_MODEL
         mlx["preprocess_audio"] = mlx.get("preprocess_audio", True)
@@ -120,7 +122,6 @@ def status(path=CONFIG_PATH):
     print(f"post_recording_mode={mode}")
     print(f"final_engine={engine}")
     if engine == "mlx":
-        print(f"mlx.python={mlx.get('python') or DEFAULT_MLX_PYTHON}")
         print(f"mlx.model={mlx.get('model') or DEFAULT_MLX_MODEL}")
         print(f"mlx.final_model={mlx.get('final_model') or mlx.get('model') or DEFAULT_MLX_MODEL}")
         print(f"mlx.preprocess_audio={mlx.get('preprocess_audio', True)}")

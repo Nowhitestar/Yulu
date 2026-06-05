@@ -9,7 +9,6 @@ const CalendarSchema = z.object({
   type: z.enum(["feishu", "google"]),
   enabled: z.boolean().optional(),
   credentials_path: z.string().optional(),
-  account: z.string().optional(),
   app_id_env: z.string().optional(),
   app_secret_env: z.string().optional(),
   gog_account: z.string().optional(),
@@ -26,7 +25,7 @@ export const ConfigSchema = z.object({
     backend: z.string().optional(),
   }),
   transcription: z.object({
-    final_engine: z.enum(["mlx", "whisper-cli"]).optional(),
+    final_engine: z.enum(["mlx", "whisper"]).optional(),
     language: z.string().optional(),
     glossary: z.array(z.string()).optional(),
     local_model_path: z.string().optional(),

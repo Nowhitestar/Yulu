@@ -279,14 +279,53 @@ class MockSTTBackend:
         self.reset_count += 1
 
 
-class STTRuntime:
-    """Owns one or more STTBackend instances; tracks readiness + failure counts."""
+# Canonical engine keys the runtime knows how to chain. These match the keys
+# _build_real_backends() registers (stt_daemon/__main__.py).
+ENGINE_MLX = "mlx"
+ENGINE_WHISPER = "whisper"
+ENGINE_CLOUD = "cloud"
 
-    def __init__(self, backends: dict[str, STTBackend], reset_threshold: int = 3):
+
+class STTRuntime:
+    """Owns one or more STTBackend instances; tracks readiness + failure counts.
+
+    Beyond plain per-engine dispatch, the runtime applies two fresh-install
+    safety policies when transcribing:
+
+      * mlx → whisper fallback (BUG 3): the default engine is mlx but setup only
+        *advises* installing mlx_whisper. If the mlx backend fails (e.g.
+        ``mlx_whisper module is unavailable``) and a whisper.cpp model is
+        present, the request is automatically retried on the ``whisper`` engine.
+
+      * cloud transcription mode (BUG 8): ``transcription.mode`` orders local vs.
+        the user's ``cloud_command``. ``local`` (default) = current behavior;
+        ``cloud-fallback`` = local then cloud; ``cloud-priority`` = cloud then
+        local. Cloud is just another backend (``cloud``) spawning the user's own
+        command — Yulu holds no cloud keys.
+
+    All policy is opt-in via constructor kwargs; with the defaults
+    (``mode="local"`` and no whisper model / cloud command) behavior is exactly
+    the single-engine dispatch it has always been.
+    """
+
+    def __init__(
+        self,
+        backends: dict[str, STTBackend],
+        reset_threshold: int = 3,
+        *,
+        mode: str = "local",
+        whisper_model_present: bool = False,
+        cloud_command_present: bool = False,
+        logger=None,
+    ):
         if not backends:
             raise ValueError("at least one backend required")
         self.backends = backends
         self.reset_threshold = reset_threshold
+        self.mode = (mode or "local").strip().lower()
+        self.whisper_model_present = whisper_model_present
+        self.cloud_command_present = cloud_command_present
+        self._logger = logger
         self._failure_counts: dict[str, int] = {k: 0 for k in backends}
 
     def is_ready(self, engine: str) -> bool:
@@ -300,17 +339,61 @@ class STTRuntime:
             raise ValueError(f"unknown engine: {engine}")
         await self.backends[engine].warm_up()
 
-    async def transcribe(
+    def _log(self, event: str, **fields) -> None:
+        """Emit a structured line if a JsonLogger was provided, else stdlib log."""
+        log = self._logger
+        if log is not None and hasattr(log, "info"):
+            try:
+                log.info(event, **fields)
+                return
+            except TypeError:
+                pass
+        _log.info("%s %s", event, fields)
+
+    def _engine_chain(self, requested: str) -> list[str]:
+        """Build the ordered list of engines to try for one request.
+
+        Local part = the requested engine, with ``whisper`` appended when the
+        request is ``mlx`` and a whisper model is present (the mlx→whisper
+        fallback). The cloud engine is prepended or appended per ``mode``.
+        Unknown / unavailable engine keys are filtered out, but a chain is never
+        empty as long as the requested engine exists.
+        """
+        local: list[str] = [requested]
+        if (
+            requested == ENGINE_MLX
+            and self.whisper_model_present
+            and ENGINE_WHISPER in self.backends
+        ):
+            local.append(ENGINE_WHISPER)
+
+        cloud_usable = self.cloud_command_present and ENGINE_CLOUD in self.backends
+        if cloud_usable and self.mode == "cloud-priority":
+            chain = [ENGINE_CLOUD, *local]
+        elif cloud_usable and self.mode == "cloud-fallback":
+            chain = [*local, ENGINE_CLOUD]
+        else:
+            chain = local
+
+        # De-dup while preserving order; keep only engines we actually have.
+        seen: set[str] = set()
+        ordered: list[str] = []
+        for eng in chain:
+            if eng in self.backends and eng not in seen:
+                seen.add(eng)
+                ordered.append(eng)
+        return ordered
+
+    async def _transcribe_one(
         self,
         *,
+        engine: str,
         audio_path: str,
         language: str,
         initial_prompt: str,
         cancel_token: CancelToken,
-        engine: str,
     ) -> STTResult:
-        if engine not in self.backends:
-            raise ValueError(f"unknown engine: {engine}")
+        """Dispatch to a single backend with the per-engine self-reset bookkeeping."""
         backend = self.backends[engine]
         try:
             result = await backend.transcribe(
@@ -329,6 +412,58 @@ class STTRuntime:
                 backend.release()
                 self._failure_counts[engine] = 0
             raise
+
+    async def transcribe(
+        self,
+        *,
+        audio_path: str,
+        language: str,
+        initial_prompt: str,
+        cancel_token: CancelToken,
+        engine: str,
+    ) -> STTResult:
+        if engine not in self.backends:
+            raise ValueError(f"unknown engine: {engine}")
+
+        chain = self._engine_chain(engine)
+        last_exc: Optional[Exception] = None
+        for idx, eng in enumerate(chain):
+            try:
+                result = await self._transcribe_one(
+                    engine=eng,
+                    audio_path=audio_path,
+                    language=language,
+                    initial_prompt=initial_prompt,
+                    cancel_token=cancel_token,
+                )
+                if idx > 0:
+                    self._log(
+                        "stt_engine_fallback_succeeded",
+                        requested=engine,
+                        used=eng,
+                        tried=chain[:idx],
+                    )
+                return result
+            except (asyncio.CancelledError, ValueError):
+                # Cancellation and "unknown engine" are not fallback-worthy.
+                raise
+            except Exception as exc:  # noqa: BLE001 — any backend failure → try next
+                last_exc = exc
+                next_eng = chain[idx + 1] if idx + 1 < len(chain) else None
+                if next_eng is not None:
+                    self._log(
+                        "stt_engine_failed_falling_back",
+                        failed=eng,
+                        error=str(exc),
+                        next=next_eng,
+                    )
+                    continue
+                # Exhausted the chain — re-raise the last failure.
+                raise
+        # Unreachable (chain always has ≥1 entry), but keep the type checker happy.
+        if last_exc is not None:
+            raise last_exc
+        raise RuntimeError("no engine available to transcribe")
 
     async def shutdown(self) -> None:
         for backend in self.backends.values():

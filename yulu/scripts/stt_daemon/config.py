@@ -31,6 +31,13 @@ class DaemonConfig:
     realtime_mlx_model: str = "mlx-community/whisper-large-v3-turbo"
     whisper_cli: str = "whisper-cli"
     whisper_model: str = ""
+    # Final-transcription mode (transcription.mode): "local" keeps everything on
+    # this machine (default); "cloud-fallback" tries local then the user's
+    # cloud_command; "cloud-priority" tries cloud_command first then local.
+    mode: str = "local"
+    # The user's OWN cloud-transcription command array (transcription.cloud_command).
+    # Yulu holds no cloud keys — it just spawns this, mirroring the llm.command boundary.
+    cloud_command: list[str] = field(default_factory=list)
     live_chunk_max_per_session: int = 4
     # Upper bound (seconds) on how much audio a single live_chunk transcribes.
     # Without this, a tail loop that has fallen behind reads ALL accumulated
@@ -72,6 +79,11 @@ class DaemonConfig:
             cfg.whisper_model = str(Path(trans["local_model_path"]).expanduser())
         if trans.get("language"):
             cfg.default_language = trans["language"]
+        if trans.get("mode"):
+            cfg.mode = str(trans["mode"]).strip().lower()
+        cloud_cmd = trans.get("cloud_command")
+        if isinstance(cloud_cmd, list):
+            cfg.cloud_command = [str(part) for part in cloud_cmd]
         if sd.get("default_engine"):
             cfg.default_engine = sd["default_engine"]
         if sd.get("live_chunk_max_per_session"):

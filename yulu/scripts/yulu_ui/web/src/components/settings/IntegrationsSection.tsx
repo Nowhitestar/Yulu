@@ -64,8 +64,8 @@ export function IntegrationsSection({ tracker: _tracker }: IntegrationsSectionPr
           <InlineEditRow
             label="Account"
             type="text"
-            value={cal.account ?? ""}
-            onCommit={(v) => updateMut.mutateAsync({ key: `calendars.${idx}.account`, value: v })}
+            value={cal.gog_account ?? ""}
+            onCommit={(v) => updateMut.mutateAsync({ key: `calendars.${idx}.gog_account`, value: v })}
           />
           <div className="row">
             <div className="row-label">Test connection</div>
