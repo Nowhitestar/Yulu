@@ -4,6 +4,17 @@ All notable changes to Yulu are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.8.0](https://github.com/Nowhitestar/Yulu/compare/v0.7.0...v0.8.0) (2026-06-05)
+
+
+### ⚠ BREAKING CHANGES
+
+* voicemail is removed; every recording is a meeting. The Cmd+Shift+V mic-only hotkey, the voicemail-todos prompt, and the voicemails/ directory no longer exist. Existing voicemail_* recordings are renamed voicemail_* → Memo_* by an automatic migration on upgrade.
+
+### Features
+
+* remove voicemail entirely, unify into meeting ([#46](https://github.com/Nowhitestar/Yulu/issues/46)) ([5030f4c](https://github.com/Nowhitestar/Yulu/commit/5030f4c75b7cdfa05f9ec8b87ce05c716b14236e))
+
 ## [0.7.0](https://github.com/Nowhitestar/Yulu/compare/v0.6.0...v0.7.0) (2026-06-05)
 
 
