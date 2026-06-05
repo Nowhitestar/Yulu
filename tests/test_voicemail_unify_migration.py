@@ -189,6 +189,39 @@ def test_apply_plan_reports_skipped(tmp_path):
     assert result.moved_recordings == 0
 
 
+def test_rerun_completes_a_partially_moved_recording(tmp_path):
+    """Regression for the orphan-sidecar gap: if a prior apply moved the .wav to
+    root (Memo_*.wav) but stranded some siblings in voicemails/ (e.g. an I/O error
+    mid-move), a re-run must DISCOVER the recording via a stranded sibling — not only
+    by its now-absent .wav — and complete the move instead of abandoning them."""
+    data_dir = tmp_path / "Yulu"
+    vm_dir = data_dir / "voicemails"
+    vm_dir.mkdir(parents=True)
+    # Partial-failure layout: .wav already moved to root; two siblings stranded.
+    (data_dir / f"{NEW_STEM}.wav").write_bytes(b"already-moved-wav")
+    (vm_dir / f"{STEM}.transcript.txt").write_bytes(b"stranded-transcript")
+    (vm_dir / f"{STEM}.summary.md").write_bytes(b"stranded-summary")
+
+    plan = vu.build_plan(data_dir)
+    # Discovered via the stranded siblings (the .wav is gone) — no false collision
+    # against the already-moved Memo_*.wav (that name isn't a sibling here).
+    assert len(plan.moved_recordings) == 1
+    assert plan.moved_recordings[0].stem == STEM
+    assert {mv.src.name for mv in plan.moved_recordings[0].moves} == {
+        f"{STEM}.transcript.txt",
+        f"{STEM}.summary.md",
+    }
+
+    rc = vu.unify(data_dir, dry_run=False, do_sweep=False)
+    assert rc == 0
+    # Stranded siblings completed at root; the already-moved .wav left untouched.
+    assert (data_dir / f"{NEW_STEM}.transcript.txt").read_bytes() == b"stranded-transcript"
+    assert (data_dir / f"{NEW_STEM}.summary.md").read_bytes() == b"stranded-summary"
+    assert (data_dir / f"{NEW_STEM}.wav").read_bytes() == b"already-moved-wav"
+    assert not (vm_dir / f"{STEM}.transcript.txt").exists()
+    assert not (vm_dir / f"{STEM}.summary.md").exists()
+
+
 # ── cross-device (EXDEV) fallback ──────────────────────────────────────
 
 def test_exdev_fallback_copies_and_verifies(tmp_path, monkeypatch):

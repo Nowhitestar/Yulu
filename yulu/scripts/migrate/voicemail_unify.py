@@ -173,14 +173,21 @@ def build_plan(data_dir: Path) -> UnifyPlan:
     if not vm_dir.is_dir():
         return plan
 
-    # Identify recordings by their WAV; sort for a stable, oldest-first plan.
+    # Identify recordings by ANY ``<stem>.*`` entry, not just the ``.wav``. This
+    # makes a re-run self-healing after a partially-failed apply: if a recording's
+    # ``.wav`` already moved to root but some siblings were stranded in
+    # ``voicemails/`` (e.g. an I/O error mid-move), the recording is still discovered
+    # via a stranded sibling and the remaining moves complete. Dedupe stems; sort for
+    # a stable, oldest-first plan.
     stems: list[str] = []
+    seen: set[str] = set()
     try:
         for child in sorted(vm_dir.iterdir(), key=lambda p: p.name):
-            if child.is_file() and child.suffix == ".wav":
-                stem = child.stem
-                if _VOICEMAIL_STEM_RE.match(stem):
-                    stems.append(stem)
+            stem = child.name.split(".", 1)[0]
+            if stem in seen or not _VOICEMAIL_STEM_RE.match(stem):
+                continue
+            seen.add(stem)
+            stems.append(stem)
     except OSError:
         return plan
 
