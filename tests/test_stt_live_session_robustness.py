@@ -1,6 +1,6 @@
 """Realtime robustness regression tests (fix/realtime-robustness).
 
-These cover the three failure modes behind the 1-hour-voicemail bug where the
+These cover the three failure modes behind the 1-hour-recording bug where the
 live tail captured only ~1 chunk and the final ended up truncated:
 
 1. A SLOW per-chunk transcription must NOT stall or drop the tail loop — it

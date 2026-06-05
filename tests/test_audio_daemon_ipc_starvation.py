@@ -8,8 +8,8 @@ write side, a scanWindows call that took a while, the ScreenCaptureKit
 init path — froze the accept loop for the duration of that handler.
 While the loop was frozen, the kernel queued incoming connects against
 the listen backlog (5 slots). Sustained polling from status_agent
-(1Hz) plus voicemail.cli (during recordings) plus the occasional shell
-ping was enough to overrun the backlog within seconds, after which new
+(1Hz) plus the recording controller (during recordings) plus the
+occasional shell ping was enough to overrun the backlog within seconds, after which new
 clients got ECONNREFUSED and the system surfaced ``daemonDown``.
 
 The fix moves ``handle()`` onto a serial IPC dispatch queue so accept()
@@ -79,7 +79,7 @@ def _shutwr_status(timeout: float = 1.0) -> tuple[bool, float]:
     ok is True iff the daemon replied with a parseable JSON object
     containing ``recording``. This is the canonical framing used by
     every in-tree client (record_audio.py, meeting_daemon.py,
-    voicemail.recorder, status_agent.swift since #20).
+    status_agent.swift since #20).
     """
     start = time.monotonic()
     try:

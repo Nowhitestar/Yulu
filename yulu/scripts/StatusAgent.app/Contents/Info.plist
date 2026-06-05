@@ -13,14 +13,14 @@
 	<key>CFBundleName</key>
 	<string>Yulu Status Agent</string>
 	<key>CFBundleShortVersionString</key>
-	<string>0.5.0</string>
+	<string>0.7.0</string>
 	<key>CFBundleVersion</key>
-	<string>138</string>
+	<string>421</string>
 	<key>LSUIElement</key>
 	<true/>
 	<key>NSAppleEventsUsageDescription</key>
 	<string>Yulu Status Agent opens the inbox in Terminal.</string>
 	<key>YuluVersion</key>
-	<string>0.5.0-dev</string>
+	<string>0.7.0</string>
 </dict>
 </plist>
