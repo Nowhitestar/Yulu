@@ -392,10 +392,13 @@ def test_setup_sh_installs_statusagent_plist():
 
 
 def test_config_example_has_status_agent_block():
-    text = (SCRIPTS / "config.example.json").read_text(encoding="utf-8")
-    assert "status_agent" in text
-    # Confirm the default hotkey is there
-    assert '"V"' in text or "'V'" in text
+    import json
+    cfg = json.loads((SCRIPTS / "config.example.json").read_text(encoding="utf-8"))
+    block = cfg.get("status_agent")
+    assert block is not None
+    assert block.get("enabled") is True
+    # The global hotkey was removed entirely — no hotkey block in the example.
+    assert "hotkey" not in block
 
 
 # ── Phase 6 — Global Search ──────────────────────────────────────────
