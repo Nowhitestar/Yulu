@@ -82,7 +82,7 @@ Commands:
   transcription engine whisper [model-path]
                     Use whisper.cpp GGML model
   search "term" [--since 7d --type meeting --in summary --json --open]
-                    Search across voicemails, meetings, and summaries
+                    Search across meetings and summaries
   provision <step>|--all|--list
                     Run a named install step (deps|audio|models|capabilities|daemons|ui),
                     --all to resume-walk all six (skips already-done steps;
@@ -320,7 +320,7 @@ case "${1:-help}" in
     stt)       shift; PYTHONPATH="$SCRIPT_DIR:${PYTHONPATH:-}" exec "${PYTHON:-python3}" -m stt_cli "$@" ;;
     prompts)   shift; PYTHONPATH="$SCRIPT_DIR:${PYTHONPATH:-}" exec "${PYTHON:-python3}" -m prompts.cli "$@" ;;
     summaries) shift; PYTHONPATH="$SCRIPT_DIR:${PYTHONPATH:-}" exec "${PYTHON:-python3}" -m summaries_cli "$@" ;;
-    memo)      shift; PYTHONPATH="$SCRIPT_DIR:${PYTHONPATH:-}" exec "${PYTHON:-python3}" -m voicemail.cli "$@" ;;
+    memo)      err "'yulu memo' was removed — all recordings are meetings now. Use: yulu record start \"<title>\""; exit 1 ;;
     search)    shift; PYTHONPATH="$SCRIPT_DIR:${PYTHONPATH:-}" exec "${PYTHON:-python3}" -m search.cli "$@" ;;
     status-agent|statusagent) shift; PYTHONPATH="$SCRIPT_DIR:${PYTHONPATH:-}" exec "${PYTHON:-python3}" -m status_agent_config "$@" ;;
     where)     shift; cmd_where "$@" ;;

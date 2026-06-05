@@ -1,13 +1,10 @@
-"""Status-agent config block + hotkey parser."""
+"""Status-agent config block (enabled flag + plist install helpers)."""
 
 from __future__ import annotations
 
 import json
 import sys
 from pathlib import Path
-from unittest.mock import patch
-
-import pytest
 
 SCRIPTS = Path(__file__).resolve().parents[1] / "yulu" / "scripts"
 sys.path.insert(0, str(SCRIPTS))
@@ -26,36 +23,29 @@ def test_load_defaults_when_block_missing(tmp_path, monkeypatch):
     _stub_config(tmp_path, monkeypatch, {})
     block = sac.load()
     assert block["enabled"] is True
-    assert block["hotkey"]["key"] == "V"
-    assert block["hotkey"]["modifiers"] == ["cmd", "shift"]
+    # The hotkey/mic-only surface was removed — only `enabled` remains.
+    assert "hotkey" not in block
 
 
 def test_load_defaults_when_config_file_missing(tmp_path, monkeypatch):
     monkeypatch.setattr(sac, "CONFIG_PATH", tmp_path / "nonexistent.json")
     block = sac.load()
     assert block["enabled"] is True
-    assert block["hotkey"]["key"] == "V"
 
 
 def test_load_preserves_existing_block(tmp_path, monkeypatch):
     _stub_config(tmp_path, monkeypatch, {
-        "status_agent": {
-            "enabled": False,
-            "hotkey": {"key": "F19", "modifiers": ["ctrl"]}
-        }
+        "status_agent": {"enabled": False}
     })
     block = sac.load()
     assert block["enabled"] is False
-    assert block["hotkey"]["key"] == "F19"
-    assert block["hotkey"]["modifiers"] == ["ctrl"]
 
 
 def test_save_writes_block_under_status_agent_key(tmp_path, monkeypatch):
     cfg = _stub_config(tmp_path, monkeypatch, {"audio": {"backend": "daemon"}})
-    sac.save({"enabled": False, "hotkey": {"key": "M", "modifiers": ["cmd", "alt"]}})
+    sac.save({"enabled": False})
     data = json.loads(cfg.read_text(encoding="utf-8"))
     assert data["status_agent"]["enabled"] is False
-    assert data["status_agent"]["hotkey"]["key"] == "M"
     # Unrelated blocks preserved
     assert data["audio"]["backend"] == "daemon"
 
@@ -63,84 +53,26 @@ def test_save_writes_block_under_status_agent_key(tmp_path, monkeypatch):
 def test_save_creates_config_when_missing(tmp_path, monkeypatch):
     cfg = tmp_path / "fresh.json"
     monkeypatch.setattr(sac, "CONFIG_PATH", cfg)
-    sac.save({"enabled": True, "hotkey": {"key": "V", "modifiers": ["cmd", "shift"]}})
+    sac.save({"enabled": True})
     assert cfg.exists()
     assert json.loads(cfg.read_text(encoding="utf-8"))["status_agent"]["enabled"] is True
 
 
-def test_parse_hotkey_basic():
-    out = sac.parse_hotkey("cmd+shift+V")
-    assert out == {"key": "V", "modifiers": ["cmd", "shift"]}
+def test_no_hotkey_surface_remains():
+    """The global hotkey was deleted entirely — its parser/keycode helpers
+    must be gone so nothing reintroduces a Cmd+Shift+V binding."""
+    for attr in (
+        "keycode_for", "modifier_mask", "parse_hotkey",
+        "format_hotkey", "sighup_running_agent",
+    ):
+        assert not hasattr(sac, attr), f"{attr} should have been removed"
 
 
-def test_parse_hotkey_lowercases_modifiers_uppercases_key():
-    out = sac.parse_hotkey("CMD+ALT+m")
-    assert out["key"] == "M"
-    assert sorted(out["modifiers"]) == ["alt", "cmd"]
-
-
-def test_parse_hotkey_function_key():
-    out = sac.parse_hotkey("ctrl+F19")
-    assert out == {"key": "F19", "modifiers": ["ctrl"]}
-
-
-def test_parse_hotkey_space():
-    out = sac.parse_hotkey("alt+Space")
-    assert out == {"key": "Space", "modifiers": ["alt"]}
-
-
-def test_parse_hotkey_rejects_no_modifier():
-    with pytest.raises(ValueError, match="at least one modifier"):
-        sac.parse_hotkey("V")
-
-
-def test_parse_hotkey_rejects_unknown_modifier():
-    with pytest.raises(ValueError, match="unknown modifier"):
-        sac.parse_hotkey("hyper+V")
-
-
-def test_parse_hotkey_rejects_unmapped_key():
-    with pytest.raises(ValueError, match="unmapped key"):
-        sac.parse_hotkey("cmd+ßß")
-
-
-def test_parse_hotkey_rejects_empty():
-    with pytest.raises(ValueError):
-        sac.parse_hotkey("")
-    with pytest.raises(ValueError):
-        sac.parse_hotkey("+")
-
-
-def test_keycode_lookup():
-    assert sac.keycode_for("V") == 9
-    assert sac.keycode_for("A") == 0
-    assert sac.keycode_for("Space") == 49
-    assert sac.keycode_for("F1") == 122
-    assert sac.keycode_for("F19") == 80
-
-
-def test_modifier_mask_combines_correctly():
-    """Carbon modifier mask: cmdKey=0x100, shiftKey=0x200, optKey=0x800, controlKey=0x1000."""
-    assert sac.modifier_mask(["cmd"]) == 0x100
-    assert sac.modifier_mask(["shift"]) == 0x200
-    assert sac.modifier_mask(["alt"]) == 0x800
-    assert sac.modifier_mask(["ctrl"]) == 0x1000
-    assert sac.modifier_mask(["cmd", "shift"]) == 0x300
-    assert sac.modifier_mask(["alt", "ctrl", "cmd"]) == 0x1900
-    assert sac.modifier_mask([]) == 0
-
-
-def test_format_hotkey_pretty():
-    """Used for display in the menu and `yulu status-agent status` output."""
-    assert sac.format_hotkey({"key": "V", "modifiers": ["cmd", "shift"]}) == "⌘⇧V"
-    assert sac.format_hotkey({"key": "F19", "modifiers": ["ctrl"]}) == "⌃F19"
-    assert sac.format_hotkey({"key": "Space", "modifiers": ["alt"]}) == "⌥Space"
-
-
-# ─── Swift status_agent.swift static gate (D-07: config.json output_dir) ───────
-# Source-static asserts (no swiftc) proving the menu-bar Recent Recordings list
-# now resolves its base directory from config.json `audio.output_dir` instead of
-# the hardcoded ~/Movies/Yulu, which may survive ONLY as the fallback default.
+# ─── Swift status_agent.swift static gates ─────────────────────────────────────
+# Source-static asserts (no swiftc) over the menu-bar agent: it resolves the
+# recordings base directory from config.json `audio.output_dir` (D-07), scans a
+# single recordings root (the voicemails/ subdir was merged away), and no longer
+# registers a global hotkey or shells out to the voicemail module.
 
 STATUS_AGENT_SWIFT = SCRIPTS / "status_agent.swift"
 
@@ -168,22 +100,40 @@ def test_status_agent_recent_recordings_uses_config_dir():
     assert "let base = loadRecordingDir()" in src, (
         "loadRecentRecordings must derive its base from loadRecordingDir()"
     )
-    assert '"\\(base)/voicemails"' in src, "vmDir must be derived from the config base"
+
+
+def test_status_agent_scans_single_root_no_voicemails_subdir():
+    src = _swift_source()
+    # The historical second directory (~/Movies/Yulu/voicemails) is gone:
+    # recordings now live only in the root, so the agent must not reconstruct
+    # a voicemails/ subdir path.
+    assert "voicemails" not in src, (
+        "status_agent still references a voicemails/ subdir; recordings now "
+        "live in a single root directory"
+    )
 
 
 def test_status_agent_movies_yulu_only_as_fallback():
     src = _swift_source()
     # The historical ~/Movies/Yulu literal is permitted, but ONLY inside
-    # loadRecordingDir() as the fallback default — never as the live vmDir/mvDir
-    # source in loadRecentRecordings. Assert the old hardcoded interpolation form
-    # ("\(home)/Movies/Yulu") is gone.
+    # loadRecordingDir() as the fallback default — never as a live source.
     assert "\\(home)/Movies/Yulu" not in src, (
-        "status_agent still hardcodes \\(home)/Movies/Yulu as a recordings source; "
-        "it must read config.json output_dir with the literal only as fallback"
+        "status_agent still hardcodes \\(home)/Movies/Yulu as a recordings source"
     )
-    # The fallback default must live inside the reader.
     reader_start = src.index("func loadRecordingDir()")
     reader_body = src[reader_start : reader_start + 600]
     assert "Movies/Yulu" in reader_body, (
         "the ~/Movies/Yulu fallback default must live inside loadRecordingDir()"
     )
+
+
+def test_status_agent_has_no_hotkey_or_voicemail():
+    src = _swift_source()
+    # Decision #1: the global hotkey is deleted (no Carbon, no HotkeyRegistrar).
+    assert "import Carbon" not in src, "Carbon import should be gone (no hotkey)"
+    assert "HotkeyRegistrar" not in src, "HotkeyRegistrar should be removed"
+    assert "RegisterEventHotKey" not in src, "Carbon hotkey registration should be removed"
+    # The launcher now starts a meeting via meeting_daemon.py, not voicemail.cli.
+    assert "voicemail" not in src.lower(), "no voicemail references should remain"
+    assert "RecordingLauncher" in src, "launcher should be renamed RecordingLauncher"
+    assert "meeting_daemon.py" in src, "launcher should shell out to meeting_daemon.py"

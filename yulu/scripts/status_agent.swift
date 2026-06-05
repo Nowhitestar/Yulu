@@ -1,11 +1,11 @@
-// Yulu Status Agent — menu-bar item + global hotkey for voicemail capture.
+// Yulu Status Agent — menu-bar item + recording indicator.
 //
 // Built as a Cocoa app with LSUIElement=true so it lives only in the menu
-// bar (no Dock icon, no main window). All voicemail logic stays in
-// voicemail.recorder (Phase 4); this binary is a button that shells out.
+// bar (no Dock icon, no main window). The "Start Recording" menu item shells
+// out to `yulu record start` (mic + system audio); this binary is a button
+// plus a live recording-state indicator polled off the audio daemon.
 
 import Cocoa
-import Carbon
 
 let CONFIG_DIR = ("~/.config/yulu" as NSString).expandingTildeInPath
 let PID_FILE = "\(CONFIG_DIR)/status_agent.pid"
@@ -68,13 +68,6 @@ class MenuBuilder {
         menu.addItem(openInbox)
         menu.addItem(NSMenuItem.separator())
 
-        let hotkeyLabel = NSMenuItem(title: "Hotkey: (loading…)",
-                                      action: nil, keyEquivalent: "")
-        hotkeyLabel.isEnabled = false
-        hotkeyLabel.identifier = NSUserInterfaceItemIdentifier("hotkey_label")
-        menu.addItem(hotkeyLabel)
-        menu.addItem(NSMenuItem.separator())
-
         let quit = NSMenuItem(
             title: "Quit Yulu Status Agent",
             action: #selector(NSApplication.terminate(_:)),
@@ -87,7 +80,6 @@ class MenuBuilder {
 
 struct RecentRecording {
     let stem: String
-    let type: String   // "VM" or "MTG"
     let mtime: Date
 }
 
@@ -112,137 +104,28 @@ func loadRecordingDir() -> String {
         : raw
 }
 
-// Enumerate both recording directories directly off disk (no Python, no
-// dependency on the web server). Merge, sort newest-first, return top N.
+// Enumerate the recordings directory directly off disk (no Python, no
+// dependency on the web server). Sort newest-first, return top N. Every
+// recording now lives in the single root directory (the historical
+// ~/Movies/Yulu/memos subdirectory was merged into the root by the
+// recording-unify migration).
 func loadRecentRecordings(limit: Int = 5) -> [RecentRecording] {
     let base = loadRecordingDir()
-    let vmDir = "\(base)/voicemails"
-    let mvDir = base
     var out: [RecentRecording] = []
 
-    func scan(_ dir: String, type: String) {
+    func scan(_ dir: String) {
         guard let entries = try? FileManager.default.contentsOfDirectory(atPath: dir) else { return }
         for f in entries where f.hasSuffix(".wav") {
             let stem = String(f.dropLast(4))
-            if type == "MTG" && stem.hasPrefix("voicemail_") { continue }   // strays belong to vmDir
-            if type == "VM" && !stem.hasPrefix("voicemail_") { continue }
             let path = "\(dir)/\(f)"
             let attrs = try? FileManager.default.attributesOfItem(atPath: path)
             let mtime = (attrs?[.modificationDate] as? Date) ?? Date.distantPast
-            out.append(RecentRecording(stem: stem, type: type, mtime: mtime))
+            out.append(RecentRecording(stem: stem, mtime: mtime))
         }
     }
-    scan(vmDir, type: "VM")
-    scan(mvDir, type: "MTG")
+    scan(base)
     out.sort { $0.mtime > $1.mtime }
     return Array(out.prefix(limit))
-}
-
-// Carbon RegisterEventHotKey wrapper.
-//
-// We use Carbon (not NSEvent.addGlobalMonitorForEvents) because Carbon
-// doesn't require Input Monitoring permission — system-wide hotkeys with
-// modifier keys work out of the box. The API is legacy but stable on
-// macOS 14/15. RegisterEventHotKey contract: returns OSStatus, fills in
-// an EventHotKeyRef out-parameter, fires kEventHotKeyPressed events to
-// the application event target. We install one handler that fires our
-// toggle closure.
-
-class HotkeyRegistrar {
-    private var hotKeyRef: EventHotKeyRef?
-    private var handlerRef: EventHandlerRef?
-    private var onTrigger: (() -> Void)?
-
-    static let signature: OSType = 0x59556C75  // 'YuLu' fourcc
-
-    func register(keyCode: UInt32, modifierMask: UInt32, _ trigger: @escaping () -> Void) -> Bool {
-        unregister()
-        onTrigger = trigger
-
-        let hotKeyID = EventHotKeyID(signature: HotkeyRegistrar.signature, id: 1)
-        var spec = EventTypeSpec(eventClass: OSType(kEventClassKeyboard),
-                                  eventKind: UInt32(kEventHotKeyPressed))
-
-        // Install global handler if not yet installed
-        let handler: EventHandlerUPP = { (_, eventRef, userData) -> OSStatus in
-            guard let userData = userData else { return noErr }
-            let me = Unmanaged<HotkeyRegistrar>.fromOpaque(userData).takeUnretainedValue()
-            DispatchQueue.main.async { me.onTrigger?() }
-            return noErr
-        }
-        let selfPtr = Unmanaged.passUnretained(self).toOpaque()
-        let installStatus = InstallEventHandler(
-            GetApplicationEventTarget(),
-            handler, 1, &spec, selfPtr, &handlerRef
-        )
-        if installStatus != noErr {
-            log("⚠️ InstallEventHandler failed: \(installStatus)")
-            return false
-        }
-
-        let regStatus = RegisterEventHotKey(
-            keyCode, modifierMask, hotKeyID,
-            GetApplicationEventTarget(), 0, &hotKeyRef
-        )
-        if regStatus != noErr {
-            log("⚠️ RegisterEventHotKey failed: \(regStatus) (key conflict?)")
-            return false
-        }
-        log("hotkey_registered keyCode=\(keyCode) modifiers=0x\(String(modifierMask, radix: 16))")
-        return true
-    }
-
-    func unregister() {
-        if let ref = hotKeyRef {
-            UnregisterEventHotKey(ref)
-            hotKeyRef = nil
-        }
-        if let h = handlerRef {
-            RemoveEventHandler(h)
-            handlerRef = nil
-        }
-    }
-}
-
-// Read config (key + modifiers) by shelling to the Python helper.
-// Returns (keyCode, modifierMask, prettyLabel). Falls back to ⌘⇧V on error.
-func readHotkeyFromConfig() -> (keyCode: UInt32, modifierMask: UInt32, pretty: String) {
-    let scriptDir = ProcessInfo.processInfo.environment["YULU_SCRIPT_DIR"]
-        ?? "\((Bundle.main.bundlePath as NSString).deletingLastPathComponent)"
-    let task = Process()
-    task.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-    task.arguments = [
-        "PYTHONPATH=\(scriptDir)",
-        "python3", "-c",
-        """
-        import status_agent_config as sac
-        b = sac.load()
-        k = sac.keycode_for(b['hotkey']['key'])
-        m = sac.modifier_mask(b['hotkey']['modifiers'])
-        p = sac.format_hotkey(b['hotkey'])
-        print(f'{k}\\t{m}\\t{p}')
-        """
-    ]
-    let pipe = Pipe()
-    task.standardOutput = pipe
-    task.standardError = Pipe()
-    do {
-        try task.run()
-        task.waitUntilExit()
-    } catch {
-        return (9, 0x300, "⌘⇧V")  // fallback
-    }
-    guard let data = try? pipe.fileHandleForReading.readToEnd(),
-          let text = String(data: data, encoding: .utf8) else {
-        return (9, 0x300, "⌘⇧V")
-    }
-    let parts = text.trimmingCharacters(in: .whitespacesAndNewlines).split(separator: "\t")
-    guard parts.count == 3,
-          let kc = UInt32(parts[0]),
-          let mm = UInt32(parts[1]) else {
-        return (9, 0x300, "⌘⇧V")
-    }
-    return (kc, mm, String(parts[2]))
 }
 
 // Synchronous Unix-socket client. Mirrors record_audio.socket_send's
@@ -292,10 +175,10 @@ class DaemonClient {
         // EOF" but the newline path was empirically broken — server stayed
         // blocked on read() even after a properly terminated request. The
         // SHUT_WR path is the reliable framing used by every Python client
-        // in the tree (record_audio.py, meeting_daemon.py, voicemail.recorder),
-        // and it works regardless of which framing variant the server
-        // happens to support. This decouples our IPC reliability from any
-        // single server-side framing assumption.
+        // in the tree (record_audio.py, meeting_daemon.py), and it works
+        // regardless of which framing variant the server happens to support.
+        // This decouples our IPC reliability from any single server-side
+        // framing assumption.
         var line = json
         line.append(0x0A)
         _ = line.withUnsafeBytes { buf in
@@ -332,54 +215,87 @@ class IconStateMachine {
     }
 }
 
-// Spawn `voicemail.cli new` / `voicemail.cli stop` as detached subprocesses.
-// All recording lifecycle + transcribe + enqueue stays in the Phase 4
-// Python module — the status agent is just a button.
-class VoicemailLauncher {
-    static func launchNew() -> Int32? {
-        let scriptDir = ProcessInfo.processInfo.environment["YULU_SCRIPT_DIR"]
+// Spawn `meeting_daemon.py start` / `meeting_daemon.py stop` as detached
+// subprocesses — the same path `yulu record start` / `yulu record stop`
+// drive. The recording is always mic + system audio (no mic-only mode);
+// the status agent is just a button + indicator, all recording lifecycle +
+// transcribe + enqueue stays in the Python pipeline.
+class RecordingLauncher {
+    private static func scriptDir() -> String {
+        ProcessInfo.processInfo.environment["YULU_SCRIPT_DIR"]
             ?? "\((Bundle.main.bundlePath as NSString).deletingLastPathComponent)"
+    }
+
+    private static func launcherLog() -> FileHandle {
+        let logPath = (("~/.config/yulu/status_agent_launcher.log") as NSString).expandingTildeInPath
+        if !FileManager.default.fileExists(atPath: logPath) {
+            FileManager.default.createFile(atPath: logPath, contents: nil)
+        }
+        let logFH = FileHandle(forWritingAtPath: logPath) ?? FileHandle.nullDevice
+        _ = try? logFH.seekToEnd()
+        return logFH
+    }
+
+    // Title for a manually-started recording. There's no calendar context for
+    // a menu-bar/IPC start, so use the frontmost app's name as a sensible
+    // default ("Slack", "zoom.us", …), falling back to a generic "Recording".
+    static func defaultTitle() -> String {
+        if let name = NSWorkspace.shared.frontmostApplication?.localizedName,
+           !name.isEmpty {
+            return name
+        }
+        return "Recording"
+    }
+
+    // Start a meeting recording (mic + system). meeting_daemon.py start sends
+    // the daemon start RPC and returns immediately; the agent's poller then
+    // observes recording=true off the audio daemon and drives the indicator.
+    @discardableResult
+    static func launchStart(title: String) -> Int32? {
         let task = Process()
         task.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         task.arguments = [
-            "PYTHONPATH=\(scriptDir)",
-            "python3", "-m", "voicemail.cli", "new",
+            "PYTHONPATH=\(scriptDir())",
+            "python3", "meeting_daemon.py", "start", title,
         ]
-        // Detach from agent's stdio so the subprocess survives independently
+        task.currentDirectoryURL = URL(fileURLWithPath: scriptDir())
         task.standardInput = FileHandle.nullDevice
-        let logPath = (("~/.config/yulu/status_agent_launcher.log") as NSString).expandingTildeInPath
-        FileManager.default.createFile(atPath: logPath, contents: nil)
-        let logFH = FileHandle(forWritingAtPath: logPath) ?? FileHandle.nullDevice
-        _ = try? logFH.seekToEnd()
+        let logFH = launcherLog()
         task.standardOutput = logFH
         task.standardError = logFH
         do {
             try task.run()
             return task.processIdentifier
         } catch {
-            log("⚠️ failed to launch voicemail.cli new: \(error)")
+            log("⚠️ failed to launch meeting_daemon.py start: \(error)")
             return nil
         }
     }
 
-    static func sendStop() {
-        // `voicemail.cli stop` is the user-visible idempotent stop. The
-        // already-running `voicemail.cli new` subprocess detects the
-        // recording→idle transition in its poll loop and triggers
-        // _transcribe_and_enqueue itself; cmd_stop's role is just to send
-        // the daemon stop RPC.
-        let scriptDir = ProcessInfo.processInfo.environment["YULU_SCRIPT_DIR"]
-            ?? "\((Bundle.main.bundlePath as NSString).deletingLastPathComponent)"
+    // Stop the recording. meeting_daemon.py stop sends the daemon stop RPC and
+    // then runs the (potentially slow) transcribe + enqueue pipeline, so it's
+    // spawned detached and its PID returned to the caller — the agent tracks it
+    // as the "processing" launcher until it exits.
+    @discardableResult
+    static func launchStop() -> Int32? {
         let task = Process()
         task.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         task.arguments = [
-            "PYTHONPATH=\(scriptDir)",
-            "python3", "-m", "voicemail.cli", "stop",
+            "PYTHONPATH=\(scriptDir())",
+            "python3", "meeting_daemon.py", "stop",
         ]
-        task.standardOutput = FileHandle.nullDevice
-        task.standardError = FileHandle.nullDevice
-        try? task.run()
-        task.waitUntilExit()  // stop is fast (just one socket roundtrip)
+        task.currentDirectoryURL = URL(fileURLWithPath: scriptDir())
+        task.standardInput = FileHandle.nullDevice
+        let logFH = launcherLog()
+        task.standardOutput = logFH
+        task.standardError = logFH
+        do {
+            try task.run()
+            return task.processIdentifier
+        } catch {
+            log("⚠️ failed to launch meeting_daemon.py stop: \(error)")
+            return nil
+        }
     }
 }
 
@@ -493,7 +409,7 @@ class IPCServer {
     /// a fallback error envelope on any failure so the client always
     /// gets a valid response.
     private func searchResponse(obj: [String: Any], data: Data) -> [String: Any] {
-        // Same precedence rule as readHotkeyFromConfig: YULU_SCRIPT_DIR
+        // Precedence rule: YULU_SCRIPT_DIR
         // env wins so a launchd-installed bundle can point at a different
         // tree (e.g. a PR-branch worktree being smoke-tested) without a
         // rebuild. Falls back to bundle-relative for the production install.
@@ -567,9 +483,6 @@ class IPCServer {
             if let pid = app.launcherPid { resp["launcher_pid"] = Int(pid) }
         }
         _ = sem.wait(timeout: .now() + 2)
-        // Hotkey is read from config (file-backed, not main-thread-bound).
-        let (_, _, pretty) = readHotkeyFromConfig()
-        resp["hotkey"] = pretty
         return resp
     }
 
@@ -600,15 +513,10 @@ class IPCServer {
 class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var statusItem: NSStatusItem!
     var menu: NSMenu!
-    let hotkey = HotkeyRegistrar()
     var pollerTimer: Timer?
     var state: AgentState = .idle
     var daemonDownStreak: Int = 0
     var launcherPid: Int32?
-    // Must be retained — DispatchSource is silently cancelled when its
-    // sole reference goes out of scope. Storing as a class property keeps
-    // the SIGHUP handler alive for the agent's lifetime.
-    var sighupSource: DispatchSourceSignal?
     // IPC server exposing `status` / `toggle` / `open_inbox` on
     // ~/.config/yulu/status_agent.sock. Lets `yulu status-agent toggle`
     // and acceptance tests drive the agent without UI clicks.
@@ -626,54 +534,6 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu = MenuBuilder.build(target: self)
         menu.delegate = self
         statusItem.menu = menu
-
-        // Initial hotkey registration
-        registerHotkeyFromConfig()
-
-        // SIGHUP → re-read config + re-register hotkey.
-        //
-        // Phase 5 real-machine debug found the textbook signal(SIG_IGN) +
-        // DispatchSource(.main) pattern silently failing in this Cocoa
-        // app launched via `launchd → open -W → LaunchServices`. Root
-        // cause: SIGHUP was BLOCKED at the thread level (inherited from
-        // the launchd/LaunchServices spawn chain). A blocked signal is
-        // invisible to both signal() disposition AND to GCD's
-        // EVFILT_SIGNAL kqueue filter — which made the symptom look like
-        // a GCD/Cocoa runloop bug even though the signal simply never
-        // got delivered. (The agent "surviving" kill -HUP was misleading
-        // evidence: a blocked SIGHUP would also not terminate the
-        // process, with or without SIG_IGN.)
-        //
-        // Belt-and-braces:
-        //   1. Unblock SIGHUP via pthread_sigmask so the kernel actually
-        //      delivers it (the real fix).
-        //   2. SIG_IGN as a safety net so the default disposition can't
-        //      terminate us if the dispatch source somehow lags.
-        //   3. DispatchSource on a private background queue (not .main),
-        //      with the handler hopping to .main for UI/log work. Avoids
-        //      a separate class of edge cases where DispatchSourceSignal
-        //      bound to the main runloop fails to fire under some
-        //      LaunchServices-spawned bundles.
-        var sighupMask = sigset_t()
-        sigemptyset(&sighupMask)
-        sigaddset(&sighupMask, SIGHUP)
-        let unblockResult = pthread_sigmask(SIG_UNBLOCK, &sighupMask, nil)
-        signal(SIGHUP, SIG_IGN)
-        log("SIGHUP setup: pthread_sigmask(UNBLOCK)=\(unblockResult)")
-
-        let sighupQueue = DispatchQueue(label: "com.yulu.statusagent.sighup",
-                                         qos: .userInitiated)
-        let src = DispatchSource.makeSignalSource(signal: SIGHUP,
-                                                   queue: sighupQueue)
-        src.setEventHandler { [weak self] in
-            DispatchQueue.main.async {
-                log("SIGHUP received — re-registering hotkey")
-                self?.registerHotkeyFromConfig()
-            }
-        }
-        src.resume()
-        sighupSource = src
-        log("SIGHUP DispatchSource installed on private queue")
 
         // IPC server: start BEFORE the initial poll(). poll() does a
         // blocking read from audio_daemon — if audiodaemon's accept queue
@@ -717,21 +577,13 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         daemonDownStreak = 0
         let recording = (resp["recording"] as? Bool) ?? false
-        let file = (resp["file"] as? String) ?? ""
 
         if recording {
-            // Classify by filename stem prefix, not parent directory.
-            // voicemail.cli writes wavs to ~/Movies/Yulu/<stem>.wav with
-            // stem "voicemail_<ts>" — the subdirectory '/voicemails/' is
-            // only used by the *.transcript.txt / *.summary.md siblings,
-            // not the WAV itself. Checking for the stem prefix matches
-            // both layouts (wav at root, sidecars in subdir).
-            let stem = ((file as NSString).lastPathComponent as NSString).deletingPathExtension
-            if stem.hasPrefix("voicemail_") || file.contains("/voicemails/") {
-                applyState(.recording)
-            } else {
-                applyState(.meetingBusy)
-            }
+            // Any active recording — whether started from this menu, the
+            // `yulu record start` CLI, or a calendar auto-record — is a
+            // meeting (mic + system). The agent can stop any of them, so we
+            // surface a single clickable "recording" state.
+            applyState(.recording)
             return
         }
 
@@ -783,24 +635,6 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    private func registerHotkeyFromConfig() {
-        let (kc, mm, pretty) = readHotkeyFromConfig()
-        let ok = hotkey.register(keyCode: kc, modifierMask: mm) { [weak self] in
-            self?.onHotkeyToggle()
-        }
-        // Update the menu's hotkey label (use items.first since NSMenu has
-        // no item(withIdentifier:) API)
-        let wantId = NSUserInterfaceItemIdentifier("hotkey_label")
-        if let item = menu.items.first(where: { $0.identifier == wantId }) {
-            item.title = ok ? "Hotkey: \(pretty)" : "Hotkey: unavailable (\(pretty) — registration failed)"
-        }
-    }
-
-    @objc func onHotkeyToggle() {
-        log("hotkey → toggle")
-        onMenuToggle()
-    }
-
     func applicationWillTerminate(_ notification: Notification) {
         log("🔴 Yulu Status Agent terminating")
         ipcServer?.stop()
@@ -816,7 +650,7 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 else { continue }
             if i < recents.count {
                 let r = recents[i]
-                item.title = "[\(r.type)] \(r.stem)"
+                item.title = r.stem
                 item.target = self
                 item.action = #selector(onRecentClicked(_:))
                 item.representedObject = r.stem
@@ -831,31 +665,27 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
         log("toggle (state=\(state.rawValue))")
         switch state {
         case .idle:
-            if let pid = VoicemailLauncher.launchNew() {
-                launcherPid = pid
+            let title = RecordingLauncher.defaultTitle()
+            if RecordingLauncher.launchStart(title: title) != nil {
+                // meeting_daemon.py start returns immediately; the poller
+                // observes recording=true and drives the indicator. We don't
+                // track this PID — the stop launcher is the one that owns the
+                // (slow) transcribe pipeline and the "processing" state.
                 applyState(.recording)
             }
         case .recording:
-            VoicemailLauncher.sendStop()
-            // Poller will see recording=false; launcherPid still alive → processing
+            // Spawn the stop+transcribe pipeline detached and track its PID so
+            // the indicator shows "processing" until the transcript is written.
+            launcherPid = RecordingLauncher.launchStop()
         case .processing:
             log("ignoring click while processing")
         case .meetingBusy:
-            showMeetingBusyNotification()
+            // Unreachable from the poller (any recording is now surfaced as
+            // .recording), kept only for switch exhaustiveness.
+            applyState(.recording)
         case .daemonDown:
             showDaemonDownNotification()
         }
-    }
-
-    private func showMeetingBusyNotification() {
-        guard let resp = DaemonClient.send(["action": "status"]) else { return }
-        let file = (resp["file"] as? String) ?? "<unknown>"
-        let title = (file as NSString).lastPathComponent
-        log("meeting busy: \(title)")
-        let note = NSUserNotification()
-        note.title = "Yulu"
-        note.informativeText = "Recording in progress: \(title)"
-        NSUserNotificationCenter.default.deliver(note)
     }
 
     private func showDaemonDownNotification() {
