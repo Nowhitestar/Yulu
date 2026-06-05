@@ -114,6 +114,13 @@ describe("registry-driven classify + per-field validation", () => {
       expect(() => mgr.update("audio.silence_threshold", 5)).toThrow(ZodError);  // max 1
     } finally { cleanup(); }
   });
+  it("record 子路径(transcription.mlx.model)不被父级 z.record 误拒,reload 仍前缀匹配 sttdaemon", () => {
+    const { mgr, cleanup } = makeCfg();
+    try {
+      expect(() => mgr.update("transcription.mlx.model", "whisper-large-v3-mlx")).not.toThrow();
+      expect(mgr.update("transcription.mlx.final_model", "turbo")).toEqual({ daemonsNeedingRestart: ["sttdaemon"], daemonsNeedingSighup: [] });
+    } finally { cleanup(); }
+  });
 });
 
 describe("cloud transcription holds NO keys (TRANS-02 / T-04-KEY guardrail)", () => {

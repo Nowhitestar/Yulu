@@ -78,7 +78,9 @@ export class ConfigManager {
     const cfg = JSON.parse(readFileSync(this.path, "utf8"));
     setByDottedKey(cfg, dottedKey, value);
     const def = defFor(dottedKey);
-    if (def) def.validate.parse(value);   // 单项校验,非法抛 ZodError
+    // 校验只在精确路径做(reload 才前缀匹配);否则改 record 子字段(如 transcription.mlx.model)
+    // 会被父级 z.record schema 误拒。
+    if (def && def.path === dottedKey) def.validate.parse(value);
     ConfigSchema.parse(cfg);  // validate before write
     const tmp = `${this.path}.tmp.${process.pid}`;
     writeFileSync(tmp, JSON.stringify(cfg, null, 2) + "\n");
