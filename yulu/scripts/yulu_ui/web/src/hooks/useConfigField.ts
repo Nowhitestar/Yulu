@@ -2,6 +2,7 @@
 import { useCallback } from "react";
 import { trpc } from "../trpc.js";
 import { useUndoToast } from "../components/UndoToast.js";
+import { useDangerConfirm } from "../components/DangerConfirm.js";
 import { useIsRecording } from "./useIsRecording.js";
 import { useSettingsSchema, type SettingMeta } from "./useSettingsSchema.js";
 import type { SettingsRestartTracker } from "./useSettingsRestartTracker.js";
@@ -59,6 +60,7 @@ export function useConfigField(tracker: SettingsRestartTracker): ConfigFieldApi 
   const { data: cfg } = trpc.config.get.useQuery();
   const isRecording = useIsRecording();
   const { showUndo } = useUndoToast();
+  const { confirm } = useDangerConfirm();
 
   const updateMut = trpc.config.update.useMutation({
     onSuccess: (res: { daemonsNeedingRestart: string[] }, vars: { key: string }) => {
@@ -71,10 +73,10 @@ export function useConfigField(tracker: SettingsRestartTracker): ConfigFieldApi 
     return defFor(schema, key)?.reload.kind === "restart";
   }, [isRecording, schema]);
 
-  const commit = useCallback((key: string) => (value: unknown) => {
-    if (isBlocked(key)) return undefined;            // guard: drop the edit
+  // The actual persist + undo-toast, shared by the plain and danger-confirmed
+  // paths. Returns the mutation promise so callers can await it.
+  const doCommit = useCallback((key: string, value: unknown, def: SettingMeta | undefined) => {
     const prev = valueAt(cfg, key);
-    const def = defFor(schema, key);
     const p = updateMut.mutateAsync({ key, value });
     p.then(() => {
       showUndo({
@@ -83,7 +85,24 @@ export function useConfigField(tracker: SettingsRestartTracker): ConfigFieldApi 
       });
     }).catch(() => { /* surfaced elsewhere; no toast on failure */ });
     return p;
-  }, [isBlocked, cfg, schema, updateMut, showUndo]);
+  }, [cfg, updateMut, showUndo]);
+
+  const commit = useCallback((key: string) => (value: unknown) => {
+    if (isBlocked(key)) return undefined;            // guard: drop the edit
+    const def = defFor(schema, key);
+    // Danger-flagged fields (e.g. audio.output_dir, audio.backend,
+    // transcription.local_model_path / .mlx) ask for an explicit confirm before
+    // persisting — the same honest opt-in as the cloud-folder warning, but
+    // generic. A decline drops the edit silently (no commit, no toast). NON-danger
+    // fields keep the original synchronous path untouched (no regression).
+    if (def?.danger) {
+      return confirm(def.label ?? key).then((ok) => {
+        if (!ok) return undefined;
+        return doCommit(key, value, def);
+      });
+    }
+    return doCommit(key, value, def);
+  }, [isBlocked, schema, confirm, doCommit]);
 
   return { commit, isBlocked, isRecording };
 }

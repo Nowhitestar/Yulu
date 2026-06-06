@@ -44,4 +44,18 @@ describe("settingsRegistry", () => {
   it("未注册路径默认 none", () => {
     expect(reloadFor("nope.nope")).toEqual({ kind: "none" });
   });
+
+  it("危险项标 danger:true(改了影响录音/转写,commit 前要确认)", () => {
+    for (const p of ["audio.output_dir", "audio.backend", "transcription.local_model_path", "transcription.mlx"]) {
+      expect(defFor(p)?.danger).toBe(true);
+    }
+  });
+  it("非危险项不带 danger 标记(确认对话不该拦正常编辑)", () => {
+    for (const p of ["transcription.language", "llm.enabled", "meeting_detection.enabled", "output.channel"]) {
+      expect(defFor(p)?.danger).toBeFalsy();
+    }
+  });
+  it("danger 子字段经最长前缀继承(transcription.mlx.model → danger)", () => {
+    expect(defFor("transcription.mlx.model")?.danger).toBe(true);
+  });
 });

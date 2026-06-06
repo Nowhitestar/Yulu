@@ -8,6 +8,7 @@ import { RestartBanner } from "../components/RestartBanner.js";
 import { MasterDetail } from "../components/MasterDetail.js";
 import { SettingsCategoryList } from "../components/settings/SettingsCategoryList.js";
 import { UndoToastProvider } from "../components/UndoToast.js";
+import { DangerConfirmProvider } from "../components/DangerConfirm.js";
 import "./settings.css";
 
 type DaemonLabel = inferProcedureInput<AppRouter["daemons"]["restart"]>["name"];
@@ -59,16 +60,18 @@ export function SettingsLayout() {
 
   return (
     <UndoToastProvider>
-      <div className="settings-page">
-        {banner && <div className="settings-banner">{banner}</div>}
-        <div className="settings-masterdetail">
-          <MasterDetail
-            storageKey="yulu_ui.settings.width"
-            listSlot={<SettingsCategoryList />}
-            detailSlot={<Outlet context={outletContext} />}
-          />
+      <DangerConfirmProvider>
+        <div className="settings-page">
+          {banner && <div className="settings-banner">{banner}</div>}
+          <div className="settings-masterdetail">
+            <MasterDetail
+              storageKey="yulu_ui.settings.width"
+              listSlot={<SettingsCategoryList />}
+              detailSlot={<Outlet context={outletContext} />}
+            />
+          </div>
         </div>
-      </div>
+      </DangerConfirmProvider>
     </UndoToastProvider>
   );
 }

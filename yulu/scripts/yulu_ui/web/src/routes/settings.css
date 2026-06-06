@@ -166,3 +166,48 @@
   font-size: 12px;
   color: var(--fg-2);
 }
+
+/* P3-3 Danger confirm: a styled, blocking confirm shown before committing a
+   danger-flagged field. Mirrors the .cloud-warn alertdialog's honest framing but
+   is generic (sits in the shared commit path). Centered overlay so it reads as a
+   deliberate decision. */
+.danger-confirm-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.32);
+}
+.danger-confirm {
+  width: min(420px, calc(100vw - 32px));
+  padding: 16px 18px;
+  border-radius: var(--radius-outer, 12px);
+  background: var(--glass-1, var(--glass-2));
+  border: 1px solid var(--accent-soft);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
+}
+.danger-confirm-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg);
+  margin-bottom: 6px;
+}
+.danger-confirm-body {
+  font-size: 12px;
+  color: var(--fg-2);
+  line-height: 1.5;
+  margin-bottom: 14px;
+}
+.danger-confirm-field {
+  font-family: "SF Mono", ui-monospace, monospace;
+  color: var(--fg);
+}
+.danger-confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.danger-confirm-accept { background: var(--accent); color: white; }
+.danger-confirm-accept:hover { background: var(--accent); opacity: 0.9; color: white; }

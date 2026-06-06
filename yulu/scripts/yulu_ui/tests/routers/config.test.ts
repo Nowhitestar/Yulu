@@ -4,7 +4,7 @@ import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { ConfigManager } from "../../src/config.js";
-import { configRouter } from "../../src/routers/config.js";
+import { configRouter, type SettingMeta } from "../../src/routers/config.js";
 import { createCaller, type AppContext } from "../../src/trpc.js";
 import { SETTINGS } from "../../src/settingsRegistry.js";
 
@@ -90,6 +90,19 @@ describe("configRouter.schema", () => {
       const schema = await caller.schema();
       const roundTrip = JSON.parse(JSON.stringify(schema));
       expect(roundTrip).toEqual(schema);
+    } finally { cleanup(); }
+  });
+
+  it("serializes the danger flag so the SPA can gate risky fields (P3-3)", async () => {
+    const { ctx, cleanup } = makeCtx();
+    try {
+      const caller = createCaller(configRouter, ctx);
+      const schema = await caller.schema();
+      const outputDir = schema.find((m: SettingMeta) => m.path === "audio.output_dir")!;
+      expect(outputDir.danger).toBe(true);
+      // A non-danger field must NOT carry a truthy danger flag.
+      const lang = schema.find((m: SettingMeta) => m.path === "transcription.language")!;
+      expect(lang.danger).toBeFalsy();
     } finally { cleanup(); }
   });
 });
