@@ -29,6 +29,18 @@ describe("ConfigManager", () => {
     } finally { cleanup(); }
   });
 
+  it("read() tolerates a minimal/partial config (fills audio defaults, no throw)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "yulu_min_"));
+    const path = join(dir, "config.json");
+    fs.writeFileSync(path, JSON.stringify({ audio: { output_dir: "~/Movies/Yulu" }, transcription: {} }));
+    try {
+      const cfg = new ConfigManager(path).read();
+      expect(cfg.audio.silence_threshold).toBe(0.01);       // default
+      expect(cfg.audio.silence_duration_sec).toBe(300);     // default
+      expect(cfg.audio.output_dir).toBe("~/Movies/Yulu");
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
   it("update() writes + returns diff with restart targets", () => {
     const { mgr, cleanup } = makeCfg();
     try {
