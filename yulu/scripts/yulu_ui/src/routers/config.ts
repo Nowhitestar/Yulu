@@ -1,8 +1,19 @@
 import { z } from "zod";
 import { router, publicProcedure } from "../trpc.js";
+import { SETTINGS, type SettingDef } from "../settingsRegistry.js";
+
+// Serializable settings metadata: the registry entry minus the Zod `validate`
+// schema (which is not JSON-serializable and must never cross the wire).
+export type SettingMeta = Omit<SettingDef, "validate">;
 
 export const configRouter = router({
   get: publicProcedure.query(({ ctx }) => ctx.config.read()),
+
+  // Single source of truth for the SPA settings UI: the registry's metadata,
+  // stripped of the server-only Zod validators. The SPA renders categories and
+  // field rows from this — it never re-declares the schema.
+  schema: publicProcedure.query((): SettingMeta[] =>
+    SETTINGS.map(({ validate: _validate, ...meta }) => meta)),
 
   update: publicProcedure
     .input(z.object({

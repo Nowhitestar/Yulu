@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { ConfigManager } from "../../src/config.js";
 import { configRouter } from "../../src/routers/config.js";
 import { createCaller, type AppContext } from "../../src/trpc.js";
+import { SETTINGS } from "../../src/settingsRegistry.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -49,6 +50,46 @@ describe("configRouter", () => {
       const r = await caller.update({ key: "transcription.realtime_enabled", value: false });
       expect(r.daemonsNeedingRestart).toEqual([]);
       expect(r.daemonsNeedingSighup).toEqual([]);
+    } finally { cleanup(); }
+  });
+});
+
+describe("configRouter.schema", () => {
+  it("returns one serializable metadata entry per registered setting", async () => {
+    const { ctx, cleanup } = makeCtx();
+    try {
+      const caller = createCaller(configRouter, ctx);
+      const schema = await caller.schema();
+      expect(Array.isArray(schema)).toBe(true);
+      expect(schema.length).toBe(SETTINGS.length);
+      expect(schema.length).toBeGreaterThan(0);
+    } finally { cleanup(); }
+  });
+
+  it("strips the Zod validate field but keeps reload + path/category/label/type", async () => {
+    const { ctx, cleanup } = makeCtx();
+    try {
+      const caller = createCaller(configRouter, ctx);
+      const schema = await caller.schema();
+      for (const meta of schema) {
+        expect(meta).not.toHaveProperty("validate");
+        expect(typeof meta.path).toBe("string");
+        expect(typeof meta.category).toBe("string");
+        expect(typeof meta.label).toBe("string");
+        expect(typeof meta.type).toBe("string");
+        expect(meta.reload).toBeDefined();
+        expect(typeof meta.reload.kind).toBe("string");
+      }
+    } finally { cleanup(); }
+  });
+
+  it("is JSON-serializable (no functions / Zod objects leak through)", async () => {
+    const { ctx, cleanup } = makeCtx();
+    try {
+      const caller = createCaller(configRouter, ctx);
+      const schema = await caller.schema();
+      const roundTrip = JSON.parse(JSON.stringify(schema));
+      expect(roundTrip).toEqual(schema);
     } finally { cleanup(); }
   });
 });
