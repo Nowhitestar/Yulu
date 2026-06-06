@@ -15,6 +15,19 @@ export const configRouter = router({
   schema: publicProcedure.query((): SettingMeta[] =>
     SETTINGS.map(({ validate: _validate, ...meta }) => meta)),
 
+  // Secret-safe presence check for an env-var NAME (e.g. NOTION_API_KEY). The SPA
+  // shows "set" / "not set" beside an env-name field so the user can confirm
+  // their credential is exported — without Yulu ever reading or returning the
+  // value. Returns ONLY a boolean; the secret never crosses the wire.
+  envPresent: publicProcedure
+    .input(z.object({ name: z.string() }))
+    .query(({ input }): { present: boolean } => {
+      const name = input.name.trim();
+      if (!name) return { present: false };
+      const v = process.env[name];
+      return { present: typeof v === "string" && v.length > 0 };
+    }),
+
   update: publicProcedure
     .input(z.object({
       key: z.string().regex(/^[a-z0-9_]+(\.[a-z0-9_]+)*$/i),

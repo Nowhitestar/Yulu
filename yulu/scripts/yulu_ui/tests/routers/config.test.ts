@@ -94,6 +94,30 @@ describe("configRouter.schema", () => {
   });
 });
 
+describe("configRouter.envPresent (P2-4 secret-safe presence)", () => {
+  it("returns present=true for a set env var and never leaks the value", async () => {
+    const { ctx, cleanup } = makeCtx();
+    process.env.YULU_TEST_ENVPRESENT = "super-secret-value";
+    try {
+      const caller = createCaller(configRouter, ctx);
+      const r = await caller.envPresent({ name: "YULU_TEST_ENVPRESENT" });
+      expect(r).toEqual({ present: true });
+      // The shape is ONLY a boolean — the secret value must not appear anywhere.
+      expect(JSON.stringify(r)).not.toContain("super-secret-value");
+    } finally { delete process.env.YULU_TEST_ENVPRESENT; cleanup(); }
+  });
+  it("returns present=false for an unset or empty env var name", async () => {
+    const { ctx, cleanup } = makeCtx();
+    delete process.env.YULU_TEST_UNSET_ENV;
+    try {
+      const caller = createCaller(configRouter, ctx);
+      expect(await caller.envPresent({ name: "YULU_TEST_UNSET_ENV" })).toEqual({ present: false });
+      expect(await caller.envPresent({ name: "" })).toEqual({ present: false });
+      expect(await caller.envPresent({ name: "   " })).toEqual({ present: false });
+    } finally { cleanup(); }
+  });
+});
+
 describe("configRouter sighup dispatch", () => {
   it("sighup 类设置 → 服务端调 launchctl.sighup(com.yulu.<daemon>)", async () => {
     const { ctx, sighup } = ctxWith(() => ({ daemonsNeedingRestart: [], daemonsNeedingSighup: ["sttdaemon"] }));

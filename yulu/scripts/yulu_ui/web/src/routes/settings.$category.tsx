@@ -12,6 +12,7 @@ import { TranscriptionSection } from "../components/settings/TranscriptionSectio
 import { LlmSection } from "../components/settings/LlmSection.js";
 import { AutomationSection } from "../components/settings/AutomationSection.js";
 import { IntegrationsSection } from "../components/settings/IntegrationsSection.js";
+import { OutputSection } from "../components/settings/OutputSection.js";
 import { AdvancedSection } from "../components/settings/AdvancedSection.js";
 
 /**
@@ -39,7 +40,12 @@ const CATEGORY_SECTIONS: Record<string, (tracker: SettingsRestartTracker) => Rea
   transcription: (tracker) => <TranscriptionSection tracker={tracker} />,
   llm: (tracker) => <LlmSection tracker={tracker} />,
   automation: (tracker) => <AutomationSection tracker={tracker} />,
-  integrations: (tracker) => <IntegrationsSection tracker={tracker} />,
+  integrations: (tracker) => (
+    <>
+      <IntegrationsSection tracker={tracker} />
+      <OutputSection tracker={tracker} />
+    </>
+  ),
   advanced: (tracker) => <AdvancedSection tracker={tracker} />,
 };
 

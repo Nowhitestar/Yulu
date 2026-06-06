@@ -33,6 +33,14 @@ describe("settingsRegistry", () => {
       expect(reloadFor(p)).toEqual({ kind: "restart", daemons: ["detector"] });
     }
   });
+  it("output 6 项改完无需动作(agent_queue_worker 每 tick 读)", () => {
+    for (const p of ["output.channel", "output.zulip.stream", "output.zulip.topic", "output.notion.database_id", "output.notion.api_key_env", "output.telegram.chat_id"]) {
+      expect(reloadFor(p)).toEqual({ kind: "none" });
+    }
+  });
+  it("output.notion.api_key_env 是 env-name 类型(只填变量名,不存密钥)", () => {
+    expect(defFor("output.notion.api_key_env")?.type).toBe("env-name");
+  });
   it("未注册路径默认 none", () => {
     expect(reloadFor("nope.nope")).toEqual({ kind: "none" });
   });

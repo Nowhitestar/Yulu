@@ -149,6 +149,17 @@ describe("registry-driven classify + per-field validation", () => {
       expect(() => mgr.update("meeting_detection.interval_sec", 0)).toThrow(ZodError);
     } finally { cleanup(); }
   });
+  it("output.* 写入成功且 reload none;output.channel 非法枚举被拒(P2-4)", () => {
+    const { mgr, cleanup } = makeCfg();
+    try {
+      expect(mgr.update("output.channel", "notion")).toEqual({ daemonsNeedingRestart: [], daemonsNeedingSighup: [] });
+      expect(mgr.update("output.notion.api_key_env", "NOTION_API_KEY")).toEqual({ daemonsNeedingRestart: [], daemonsNeedingSighup: [] });
+      const out = (mgr.read() as { output?: { channel?: string; notion?: { api_key_env?: string } } }).output;
+      expect(out?.channel).toBe("notion");
+      expect(out?.notion?.api_key_env).toBe("NOTION_API_KEY");
+      expect(() => mgr.update("output.channel", "carrier-pigeon")).toThrow(ZodError);
+    } finally { cleanup(); }
+  });
 });
 
 describe("cloud transcription holds NO keys (TRANS-02 / T-04-KEY guardrail)", () => {

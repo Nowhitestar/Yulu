@@ -51,6 +51,7 @@ vi.mock("../../../web/src/trpc.js", () => {
       config: {
         get: { useQuery: () => ({ data: cfg, isPending: false }) },
         schema: { useQuery: () => ({ data: SCHEMA, isPending: false }) },
+        envPresent: { useQuery: () => ({ data: { present: false }, isPending: false }) },
         update: { useMutation: (opts?: { onSuccess?: (res: unknown, vars: unknown) => void }) => ({
           mutate: () => {},
           mutateAsync: async (vars: { key: string; value: unknown }) => {

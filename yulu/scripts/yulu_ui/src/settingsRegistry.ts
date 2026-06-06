@@ -58,6 +58,14 @@ export const SETTINGS: SettingDef[] = [
   { path: "meeting_detection.interval_sec",        category: "automation", label: "Poll interval (s)",  type: "number",  validate: z.number().min(1), reload: R.restart("detector") },
   { path: "meeting_detection.stable_sec",          category: "automation", label: "Stable window (s)",  type: "number",  validate: z.number().min(1), reload: R.restart("detector") },
   { path: "meeting_detection.prompt_cooldown_sec", category: "automation", label: "Prompt cooldown (s)", type: "number", validate: z.number().min(0), reload: R.restart("detector") },
+  // output channels: agent_queue_worker re-reads config each 30s tick, so no reload.
+  // api_key_env holds the NAME of an env var (never the secret) — type "env-name".
+  { path: "output.channel",            category: "integrations", label: "Output channel",        type: "select",   validate: z.enum(["file", "zulip", "notion", "telegram"]), reload: R.none },
+  { path: "output.zulip.stream",       category: "integrations", label: "Zulip stream",          type: "text",     validate: z.string(),               reload: R.none },
+  { path: "output.zulip.topic",        category: "integrations", label: "Zulip topic",           type: "text",     validate: z.string(),               reload: R.none },
+  { path: "output.notion.database_id", category: "integrations", label: "Notion database",       type: "text",     validate: z.string(),               reload: R.none },
+  { path: "output.notion.api_key_env", category: "integrations", label: "Notion API key env var", type: "env-name", validate: z.string(),               reload: R.none },
+  { path: "output.telegram.chat_id",   category: "integrations", label: "Telegram chat ID",      type: "text",     validate: z.string(),               reload: R.none },
   { path: "status_agent.enabled",        category: "general", label: "菜单栏 Agent", type: "toggle", validate: z.boolean(),               reload: R.restart("statusagent") },
 ];
 // 注意:status_agent.hotkey 不在表内 —— 随热键移除而删(B3)。
