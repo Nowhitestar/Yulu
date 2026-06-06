@@ -291,6 +291,58 @@ def probe_recording_dir() -> Capability:
         return report.absent(str(exc))
 
 
+def probe_diarization() -> Capability:
+    """Tri-state readiness of the Yulu-managed diarization stage (DIAR-04).
+
+    Diarization is **Yulu-managed** (not host-agent-reused), so provenance is always
+    ``yulu-managed`` — never ``agent-config`` (it is deliberately NOT a CapabilityProvider;
+    ARCHITECTURE Anti-Pattern 4). The tri-state mirrors :func:`probe_recording_dir`:
+
+    - ``usable``                 — BOTH ONNX models present AND ``sherpa_onnx`` importable by
+                                   the daemon interpreter (the daemon can actually diarize).
+    - ``present-but-unverified`` — models present, but ``sherpa_onnx`` not importable (provision
+                                   the wheel — the engine can't run yet).
+    - ``absent``                 — the diarization models are not on disk.
+
+    Path-bounded: the model check globs ONLY the fixed ``models/diarization`` root via
+    ``backends.diarize.models_present`` (no ``..``, no user path). Importability is probed with
+    the daemon's own interpreter (same honesty contract as ``probe_mlx_whisper``). Never raises —
+    degrades to ``absent(detail)`` on any error (T-03-04 / doctor never-raise contract).
+    """
+    try:
+        # models_present lives in stt_daemon.backends.diarize (single source of truth for the
+        # two ONNX files). Import guardedly so a probe is robust even if that module moves.
+        try:
+            import importlib
+
+            diar_mod = importlib.import_module("stt_daemon.backends.diarize")
+            present = bool(diar_mod.models_present())
+            seg, emb = diar_mod.resolve_model_paths()
+            model_dir = str(diar_mod.diarization_dir())
+        except Exception as exc:
+            return report.absent(f"diarization module unavailable: {exc}")
+
+        if not present:
+            return Capability(
+                Provenance.YULU_MANAGED, Status.ABSENT, "",
+                f"models missing under {model_dir} (run setup_models.sh with diarization enabled)",
+            )
+
+        ok, detail = probe_importable("sherpa_onnx")
+        if ok:
+            ver = detail or "?"
+            return Capability(
+                Provenance.YULU_MANAGED, Status.USABLE, model_dir,
+                f"sherpa-onnx {ver}; seg+emb ONNX present",
+            )
+        return Capability(
+            Provenance.YULU_MANAGED, Status.PRESENT_BUT_UNVERIFIED, model_dir,
+            f"models present but sherpa_onnx not importable: {detail}",
+        )
+    except Exception as exc:
+        return report.absent(str(exc))
+
+
 # ── Internal helpers ──
 
 
