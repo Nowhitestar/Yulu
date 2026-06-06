@@ -160,6 +160,8 @@ Explicitly excluded. Documented to prevent scope creep. Anti-features from resea
 
 Each v1 requirement maps to exactly one phase. See `.planning/ROADMAP.md` for phase goals and success criteria.
 
+### v0.5 (Phases 1–8 — shipped)
+
 | Requirement | Phase | Status |
 |-------------|-------|--------|
 | BUILD-01 | Phase 1 | Complete |
@@ -198,11 +200,49 @@ Each v1 requirement maps to exactly one phase. See `.planning/ROADMAP.md` for ph
 | AGENT-01 | Phase 8 | Complete |
 | AGENT-02 | Phase 8 | Complete |
 
+### v0.6 (Phases 9–15 — current milestone)
+
+| Requirement | Phase | Status |
+|-------------|-------|--------|
+| MERGE-01 | Phase 9 | Pending |
+| MERGE-02 | Phase 9 | Pending |
+| MERGE-03 | Phase 9 | Pending |
+| MERGE-04 | Phase 9 | Pending |
+| MERGE-05 | Phase 9 | Pending |
+| DIAR-01 | Phase 10 | Pending |
+| DIAR-02 | Phase 10 | Pending |
+| DIAR-03 | Phase 10 | Pending |
+| DIAR-04 | Phase 10 | Pending |
+| DIAR-05 | Phase 10 | Pending |
+| EVAL-01 | Phase 11 | Pending |
+| EVAL-02 | Phase 11 | Pending |
+| EVAL-03 | Phase 11 | Pending |
+| EVAL-04 | Phase 11 | Pending |
+| COUNT-01 | Phase 12 | Pending |
+| COUNT-02 | Phase 12 | Pending |
+| COUNT-03 | Phase 12 | Pending |
+| SPKUI-05 | Phase 13 | Pending |
+| SPKUI-06 | Phase 13 | Pending |
+| SPKUI-01 | Phase 14 | Pending |
+| SPKUI-02 | Phase 14 | Pending |
+| SPKUI-03 | Phase 14 | Pending |
+| SPKUI-04 | Phase 14 | Pending |
+| PORT-01 | Phase 15 | Pending |
+| PORT-02 | Phase 15 | Pending |
+| PORT-03 | Phase 15 | Pending |
+
 **Coverage:**
+
+*v0.5 (shipped):*
 - v1 requirements: 35 total (the enumerated checkbox list sums to 35; the original "33 total" prose was a miscount — all 10 categories are fully mapped)
 - Mapped to phases: 35 (BUILD 4 → P1 · PLAT 5 → P2 · DETECT 5 → P3 · SET 4 + TRANS 2 → P4 · REUSE 2 + DATA 3 → P5 · PROV 5 → P6 · MIG 3 → P7 · AGENT 2 → P8)
 - Unmapped: 0 ✓
 
+*v0.6 (current):*
+- v0.6 requirements: 26 total (DIAR 5 · MERGE 5 · COUNT 3 · EVAL 4 · SPKUI 6 · PORT 3)
+- Mapped to phases: 26 (MERGE 5 → P9 · DIAR 5 → P10 · EVAL 4 → P11 · COUNT 3 → P12 · SPKUI-05/06 2 → P13 · SPKUI-01/02/03/04 4 → P14 · PORT 3 → P15)
+- Unmapped: 0 ✓
+
 ---
 *Requirements defined: 2026-05-29 (v0.5)*
-*Last updated: 2026-06-06 — added v0.6 Speaker Diarization requirements (26 reqs / 6 categories; traceability filled by roadmapper)*
+*Last updated: 2026-06-06 — v0.6 roadmap created; traceability filled (26 reqs → Phases 9–15, 100% coverage)*

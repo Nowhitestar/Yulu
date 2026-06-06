@@ -1,8 +1,10 @@
-# Roadmap: Yulu — Agent-Native Provisioning & Cross-Platform Foundation
+# Roadmap: Yulu — v0.6 Speaker Diarization
 
 ## Overview
 
-This is a brownfield re-architecture milestone. Yulu already ships (8 launchd daemons, Swift `audio_daemon`, Hono+tRPC+React UI, SQLite, MLX/whisper.cpp, release-please). The milestone adds three new horizontal layers above the unchanged runtime — a **platform-abstraction layer** (macOS impl now, Linux/Windows stubbed), an **agent-capability layer** (detect-and-reuse what the host agent already has), and an **agent-orchestration surface** (the host agent provisions Yulu via named, idempotent steps) — while fixing a catalogue of pre-existing fragilities. The journey runs detection-first along a strict one-way layer dependency (`provision/` → `capabilities/` → `platform/` → existing runtime): unblock signed pre-built binaries (Phase 1), lay the platform seams (Phase 2), build the `HostCapabilityReport` spine every consumer binds to (Phase 3), surface it in the UI (Phase 4), reuse host capabilities and safely separate syncable content from machine-local runtime (Phase 5), compose it all as an agent-orchestrated step registry (Phase 6), migrate existing installs without data loss (Phase 7), and generalize to all three agents (Phase 8).
+This milestone adds local-first, cross-platform **speaker attribution** ("who-said-what") to Yulu meeting transcripts. It is **not** a greenfield subsystem — it is the **N-speaker generalization of the 2-speaker dual-track path Yulu already ships** (`stt_daemon/transcript_merge.py` already emits `[MM:SS 我] … / [MM:SS 对方] …` from *channels*). The job is to split the single far-end/system stream — where multiple remote people are mixed — into distinct voices, label them, and let the user name them, riding the existing **sidecar → prompt-var → UI** rails end-to-end. ASR stays MLX/whisper.cpp untouched. The engine is settled by spikes 001/002: **sherpa-onnx** (ONNX Runtime, no torch, ~33 MB models, CPU-fast, genuinely cross-platform), chosen over FunASR specifically because it satisfies the milestone's "must not hard-couple to macOS" mandate. Net new shipped-runtime dependency: one (`sherpa-onnx`); the eval harness lives in a dev/eval venv only.
+
+The build order front-loads the **highest-risk pure logic** and lands the **eval as a gate, not a tail**. The dominant risk is *quality, not throughput*: sherpa over-splits on Chinese (59→32→20, never near the true ~5), ~8–12% of ASR segments fall in a coverage gap, whisper hallucinates on silence, and overlap mis-attributes — every one of these cascades into a wrong-owner action item in the summary, so accuracy gets the weight. The journey: harden the pure `speaker_merge` core + `<stem>.speakers.json` sidecar on fixtures first (Phase 9, zero deps); stand up the resident `SherpaDiarizeBackend` + offline model provisioning + capability probe in parallel (Phase 10); build the DER/WDER eval harness that picks the default provider on evidence and sets honest UI copy (Phase 11, the gate); calibrate the speaker-count strategy against that eval (Phase 12); wire ASR→diarize→merge into the live pipeline and the agent-queue summary (Phase 13); render labels with rename/merge/correct + honest copy (Phase 14); and close the cross-platform/footprint/migration mandate (Phase 15). This respects the v0.5 one-way layering (`provision → capabilities → platform → runtime`) with zero back-edges.
 
 ## Phases
 
@@ -13,246 +15,133 @@ This is a brownfield re-architecture milestone. Yulu already ships (8 launchd da
 
 Decimal phases appear between their surrounding integers in numeric order.
 
-- [x] **Phase 1: Build Foundation — Setup Decomposition + Signed/Notarized Binaries** - Decompose `setup.sh`, ship Developer ID signed + notarized pre-built binaries, CI attestations, introduce platform ABCs (completed 2026-05-30)
-- [x] **Phase 2: Platform-Abstraction Seams** - `PathResolver`, `DaemonManager`, `PermissionModel`, `DependencyManager`, and the Swift `CaptureBackend` (SCK→Core-Audio-tap) behind neutral interfaces (completed 2026-05-30)
-- [x] **Phase 3: Host-Capability Detection Spine** - `doctor.py` produces the versioned, tri-state, provenance-labeled `HostCapabilityReport`; `CapabilityProvider` interface + ClaudeCode end-to-end (completed 2026-05-30)
-- [x] **Phase 4: Settings & Onboarding Surface** - tRPC capability endpoint, provenance-labeled settings, transcription-mode radios, model selector, skippable browser onboarding (completed 2026-05-30)
-- [x] **Phase 5: Capability Reuse + Data-Folder / Cloud-Sync Safety** - Detect-first reuse of host whisper/models/`claude`/`gog`; physically separate syncable content from local-only runtime; cloud-root detect-and-warn folder picker (completed 2026-05-30)
-- [x] **Phase 6: Agent-Orchestrated Provisioning + Decoupled Skill Install** - Named idempotent step registry, `yulu provision <step>`, attestation gate, resumable state, `yulu skill install --agent`; spike validates WHO calls provisioning (completed 2026-05-30)
-- [x] **Phase 7: Seamless Auto-Migration** - `yulu migrate` detect→plan→apply→verify with recording-guard, transactional rollback, and bounded backup lifecycle (completed 2026-05-30)
-- [x] **Phase 8: Multi-Agent Providers (Codex + OpenClaw)** - Generalize the proven ClaudeCode provider to complete the multi-agent-from-v1 lock (completed 2026-05-30)
+**Continuation note:** v0.5 shipped Phases 1–8 (see git history + PROJECT.md). v0.6 continues the numbering at **Phase 9**. The historical `phases/01–08` directories remain in place untouched.
+
+- [ ] **Phase 9: Speaker-Merge Core + `.speakers.json` Sidecar** - The pure, I/O-free overlap-assignment engine + sidecar data model, hardened on fixtures with no sherpa/daemon/SQLite
+- [ ] **Phase 10: Diarize Backend + Provisioning + Capability Probe** - Resident `SherpaDiarizeBackend` (warm_up/diarize/is_ready/release), offline ONNX model provisioning, tri-state `probe_diarization()`
+- [ ] **Phase 11: DER/WDER Evaluation Harness (the Gate)** - Labelled CN+EN corpus + torch-free DER/WDER/SER/count-error harness that picks the default provider on evidence and sets UI accuracy copy
+- [ ] **Phase 12: Speaker-Count Strategy (the Over-Split Fix)** - Calendar-attendee prior → CN-calibrated threshold → fail-toward-under-merge, verified against the eval
+- [ ] **Phase 13: Pipeline + Summary Integration** - Wire ASR→diarize→merge into `transcribe.py`; flow speaker-attributed transcript into the agent-queue summary via one additive prompt-var pair
+- [ ] **Phase 14: Speaker UI — Labels, Rename/Merge/Correct, Honest Copy** - Per-speaker blocks + color + click-to-seek; "You" auto-known; rename-all/merge/correct; export; labels-are-a-hint copy
+- [ ] **Phase 15: Portability, Footprint & Migration** - Cross-platform sherpa/ONNX verification behind the abstraction; per-meeting wall-clock + peak-RAM regression budget; seamless `yulu migrate` upgrade
 
 ## Phase Details
 
-### Phase 1: Build Foundation — Setup Decomposition + Signed/Notarized Binaries
+### Phase 9: Speaker-Merge Core + `.speakers.json` Sidecar
 
-**Goal**: Release installs ship trustworthy, pre-built signed binaries with no `swiftc`/Xcode on the user's machine, and the install flow is decomposed into per-concern, individually testable scripts — the shared prerequisite that unblocks agent provisioning.
-**Depends on**: Nothing (first phase)
-**Requirements**: BUILD-01, BUILD-02, BUILD-03, BUILD-04
+**Goal**: The milestone's highest-risk *logic* exists as a pure, dependency-free module — assigning each ASR segment a speaker by timestamp overlap, surviving coverage gaps, hallucination, and re-runs — plus the sidecar data model whose "renames survive re-diarize" property is locked at the file level. Buildable and hardenable on fixtures with no sherpa, no daemon, no SQLite.
+**Depends on**: Nothing (first phase of the milestone; parallelizable with Phase 10)
+**Requirements**: MERGE-01, MERGE-02, MERGE-03, MERGE-04, MERGE-05
 **Success Criteria** (what must be TRUE):
 
-  1. A user installs a release without Xcode/`swiftc` present and capture, transcription, and daemons all run from pre-built binaries
-  2. A notarized build passes `spctl -a -vvv` on a clean second machine (no Gatekeeper warning, no `xattr` quarantine-strip needed)
-  3. Each former `setup.sh` concern (audio / models / daemons / capabilities) runs as its own script under `set -uo pipefail`, and any single failing step is visible and re-runnable in isolation
-  4. A release asset's integrity verifies via `gh attestation verify` against Yulu's own CI
-  5. `platform/base.py` exposes the platform ABCs with `linux/` and `windows/` arms raising `NotImplementedError`**Plans**: 6 plans (3 waves)
+  1. Given canned ASR segments + diarization turns, `assign_speakers()` returns labelled segments + a `[MM:SS Speaker N]` rendered string, picking the max-overlap speaker — verifiable in a unit test with zero sherpa/daemon/SQLite
+  2. An ASR segment with no overlapping turn is never dropped: it is filled by same-speaker-bracket → nearest-within-window → explicit `UNKNOWN`, and never snapped across a speaker boundary
+  3. A whisper hallucination/repeat segment (duplicate text in a silent stretch) is VAD-gated/flagged and never laundered into a confident wrong-owner attribution; uncertain segments carry a confidence flag
+  4. Speaker data round-trips through `<stem>.speakers.json` (raw turns + assignments + editable `speaker_id`→`display_name` map); re-reading reproduces the same labels
+  5. Re-diarizing with a `prior_map` re-anchors fresh cluster indices to existing stable `speaker_id`s by overlap and never overwrites a user rename
 
-**Wave 1**
+**Plans**: TBD
 
-- [x] 01-01-PLAN.md — Python platform-seam ABCs (yulu_platform) + stub/shadow tests (SC-5)
-- [x] 01-02-PLAN.md — lib/common.sh shared helpers + extract deps/models/ui concerns (BUILD-01)
-- [x] 01-03-PLAN.md — entitlements + bottom-up hardened-runtime signing of both build_*.sh (BUILD-02 sign-side)
+### Phase 10: Diarize Backend + Provisioning + Capability Probe
 
-**Wave 2** *(blocked on Wave 1 completion)*
-
-- [x] 01-04-PLAN.md — extract audio (dev/release fork)/capabilities (no venv)/daemons concerns (BUILD-01, BUILD-03)
-
-**Wave 3** *(blocked on Wave 2 completion)*
-
-- [x] 01-05-PLAN.md — thin orchestrator + install.sh Xcode gate + decomposition/no-swiftc tests (BUILD-03)
-- [x] 01-06-PLAN.md — CI notarize+staple+attest + shellcheck/bash-n gates [checkpoint] (BUILD-02 notarize, BUILD-04)
-
-**Research**: standard pattern (skip research-phase) — Apple's signing/notarization workflow and the anti-patterns (`--deep`, `--timestamp=none`) are well-documented; execution, not research.
-**Prerequisite (external)**: ✓ Apple Developer ID available (confirmed 2026-05-29). Phase 1 planning should capture the exact "Developer ID Application" signing identity / Team ID and wire it via `YULU_CODESIGN_IDENTITY`.
-**Decision to log**: bundled-vs-host Python must be decided and recorded here (recommend host-provided — sidesteps the hardest notarization case and is the stable interpreter target for Phase 3 detection).
-
-### Phase 2: Platform-Abstraction Seams
-
-**Goal**: Every macOS-coupled concern (paths, daemon supervision, permissions, dependencies, audio capture) sits behind a neutral interface with a clean macOS implementation, so daemon stop leaves zero orphan processes and a future Linux/Windows arm is pure addition.
-**Depends on**: Phase 1
-**Requirements**: PLAT-01, PLAT-02, PLAT-03, PLAT-04, PLAT-05
+**Goal**: The engine plumbing exists and stays warm — a resident `SherpaDiarizeBackend` in `stt_daemon` that mirrors the STT backend lifecycle, dispatched on its own job kind (deliberately held OUT of the ASR fallback chain), fed by offline-by-default ONNX models provisioned through the existing idempotent `models` step, with a tri-state capability probe so the UI can show readiness. Parallelizable with Phase 9 (its output is only needed at integration).
+**Depends on**: Nothing for the merge logic (parallel with Phase 9); rides the v0.5 provision/capabilities/platform seams
+**Requirements**: DIAR-01, DIAR-02, DIAR-03, DIAR-04, DIAR-05
 **Success Criteria** (what must be TRUE):
 
-  1. No hardcoded `~/Movies/Yulu` / `~/.config/yulu` remains; `status_agent.swift` reads `config.json` and all daemons resolve locations through `PathResolver`
-  2. Stopping the audio daemon via `DaemonManager` leaves zero lingering processes (the `open -W` orphan is gone; the binary launches directly)
-  3. On macOS 14.4+, system audio is captured via Core Audio process taps with no weekly re-permission nag; on 13–14.3 the ScreenCaptureKit arm runs behind the same `if #available` seam (or the floor is explicitly raised — see PROJECT.md update)
-  4. The platform interfaces carry no leaked macOS vocabulary (no plist keys / `SCStreamConfiguration` / TCC scopes in signatures) — a reviewer confirms a systemd arm could implement the same methods
-  5. `PermissionModel` and `DependencyManager` expose macOS implementations with TCC calls gated behind a Darwin check
+  1. A `DiarizeBackend` Protocol (audio → speaker turns with timestamps) is config-selected, mirrors the STT lifecycle (`warm_up`/`is_ready`/`release`), and is NOT registered into the ASR runtime dict nor a `CapabilityProvider` subclass (the ASR fallback chain can never route to it)
+  2. The default backend is sherpa-onnx (pyannote-3.0 segmentation + 3D-Speaker cam++ embedding) running torch-free on CPU, returning speaker turns for a short real clip
+  3. Diarization models (seg ~5.7 MB + cam++ ~27 MB ONNX) provision via the existing `models` step and load from local file paths with zero network calls under a forced-offline test
+  4. `doctor.py` reports a tri-state `probe_diarization()` entry with provenance `yulu-managed` (usable / present-but-unverified / absent)
+  5. A `warm_up()` dummy pass amortizes the first-run cold-start so the first real meeting isn't JIT-penalized
 
-**Plans**: 4 plans (3 waves)
+**Plans**: TBD
 
-**Wave 1** *(parallel: Python seams ∥ Swift capture — no file overlap)*
+### Phase 11: DER/WDER Evaluation Harness (the Gate)
 
-- [x] 02-01-PLAN.md — MacOSPathResolver + MacOSDaemonManager + Wave-0 conformance/neutrality scaffold (PLAT-03, PLAT-04, D-04/D-06/D-09)
-- [x] 02-03-PLAN.md — Swift CaptureBackend protocol + SCK-arm wrap + status_agent config.json fix + direct-launch plist (PLAT-01, PLAT-03, PLAT-04, D-02/D-03/D-05/D-07)
-
-**Wave 2** *(blocked on 02-01: shares macos/__init__.py + the conformance test)*
-
-- [x] 02-02-PLAN.md — MacOSPermissionModel + MacOSDependencyManager (Darwin-gated) + route doctor/repair_permissions through the seams (PLAT-05, D-08)
-
-**Wave 3** *(blocked on 02-03: shares audio_daemon.swift; has the blocking human-verify)*
-
-- [x] 02-04-PLAN.md — Core Audio process-tap arm (14.4+) behind if #available + NSAudioCaptureUsageDescription/entitlement/frameworks + VM/clean-machine validation checkpoint (PLAT-02, D-01/D-03/D-05) [checkpoint]
-**Research**: needs deeper per-phase research (Core-Audio-taps migration) — the SCK→tap swap is HIGH-confidence on the API but must be tested on 14.2 and 13.x VMs to verify the version gate + fallback (the dev's machine never reproduces the failure).
-**PROJECT.md update needed**: the SCK→Core-Audio-taps swap raises the effective macOS floor 13→14.4 for the audio path — keeping the 13–14.3 SCK arm vs raising the floor is a **constraint decision** to record in PROJECT.md, not an eng choice.
-**Parallelization**: the Swift `CaptureBackend` seam (ARCH #10) is independent of the Python detection/provisioning stack and can proceed in parallel after Phase 1 — they meet only at the `record_audio.py ↔ CaptureBackend` boundary.
-
-### Phase 3: Host-Capability Detection Spine
-
-**Goal**: `doctor.py` produces a single versioned `HostCapabilityReport` that honestly reflects what the daemon can actually use, with per-capability provenance and tri-state status — the foundational dependency four downstream consumers bind to.
-**Depends on**: Phase 2 (reads `PathResolver`)
-**Requirements**: DETECT-01, DETECT-02, DETECT-03, DETECT-04, DETECT-05
+**Goal**: The product gate exists — a labelled CN+EN reference corpus and a torch-free metrics harness that converts "it runs" into a defensible number, picks the default provider (sherpa-onnx vs optional FunASR) on evidence, and sets the UI's accuracy copy from measurement rather than feel. It lands early/parallel (as soon as Phase 10 produces any labels) because hand-labelling is slow and every later tuning change must be measured against it.
+**Depends on**: Phase 10 (needs the backend to produce labels to score); runs alongside Phases 12–14
+**Requirements**: EVAL-01, EVAL-02, EVAL-03, EVAL-04
 **Success Criteria** (what must be TRUE):
 
-  1. Running `yulu doctor` emits a versioned `HostCapabilityReport` JSON with per-capability provenance (host-path / yulu-managed / agent-config / absent) and tri-state status (usable / present-but-unverified / absent)
-  2. A binary present only on the login-shell PATH (not launchd's minimal PATH) is correctly resolved, and a Python package is probed via the daemon's own interpreter — so "usable" means usable by the consumer, not by the dev's shell
-  3. The report covers `claude` CLI, `whisper-cli`, `mlx-whisper` importability, configured `llm.command` validity, model paths/sizes, and recording-dir writability
-  4. The `mlx_python` interpreter ambiguity is resolved so a green "usable" whisper actually transcribes (no silent first-recording failure)
-  5. A `CapabilityProvider` interface exists with a ClaudeCode implementation working end-to-end into the report
+  1. A reference corpus of 2–3 real CN+EN meetings is labelled to RTTM without anchoring bias (labels created from audio, not derived from a tool's own output)
+  2. The harness reports DER both with and without the 0.25s collar and both with and without overlap scored, plus a short-utterance-sensitive metric (WDER/SER) and speaker-count error, bucketed by language
+  3. The default-provider decision (sherpa-onnx vs FunASR) is recorded as an ADR whose justification is the measured numbers, not footprint/feel alone
+  4. The UI accuracy copy is set from the measured DER and frames labels as a correctable hint, not ground truth
+  5. The harness is re-runnable on the fixed corpus so accuracy is a tracked number every later phase can regress against
 
-**Plans**: 3 plans (3 waves)
+**Plans**: TBD
 
-**Wave 1**
+### Phase 12: Speaker-Count Strategy (the Over-Split Fix)
 
-- [x] 03-01-PLAN.md — capabilities/report.py versioned tri-state HostCapabilityReport schema + probes.py (login-shell PATH, daemon-interpreter import, llm.command validity, model scan, recording-dir writability) (DETECT-01/02/03/04, D-01..D-05/D-08)
-
-**Wave 2** *(blocked on 03-01: imports report.py types + probes)*
-
-- [x] 03-02-PLAN.md — capabilities/provider.py CapabilityProvider ABC + ClaudeCodeProvider end-to-end (agent-config provenance; designed so Phase 8 Codex/OpenClaw is pure addition) (DETECT-05, D-06)
-
-**Wave 3** *(blocked on 03-01 + 03-02: assembles the report in doctor)*
-
-- [x] 03-03-PLAN.md — doctor.py host_capabilities section (probes + default_providers aggregation) + §5d source-vs-runtime root fix (DETECT-01/03/05, D-05/D-07)
-**Research**: standard pattern (skip research-phase) — the report schema, login-shell PATH, and tri-state are well-specified across STACK/ARCHITECTURE/PITFALLS; schema design, not research.
-**Hard prerequisite (in-phase)**: resolve the `mlx_python` interpreter ambiguity (DETECT-04) before or within this phase — detection is meaningless without a defined "daemon interpreter" to probe. Tri-state must land here so a boolean never drives a "skip install" decision downstream.
-
-### Phase 4: Settings & Onboarding Surface
-
-**Goal**: The web UI becomes the first consumer of the capability report — surfacing each capability's provenance and letting the user configure transcription mode and model selection — and a skippable first-run walkthrough shows live permission status. This proves the report schema end-to-end.
-**Depends on**: Phase 3 (consumes the `HostCapabilityReport`)
-**Requirements**: SET-01, SET-02, SET-03, SET-04, TRANS-01, TRANS-02
+**Goal**: sherpa's known, measured weakness on Chinese (over-splitting 59→32→20, never near the true ~5) is mitigated by a deliberate count-strategy ladder whose failure mode is recoverable *under*-merge, not catastrophic over-split — using the calendar-attendee count Yulu already has as a free prior, then a CN-calibrated threshold, verified to not regress English. Must land before the eval can fairly judge the default.
+**Depends on**: Phase 10 (the `num_speakers` hook on the backend), Phase 11 (calibrated and verified against the eval); the calendar prior reuses the existing `gog` integration
+**Requirements**: COUNT-01, COUNT-02, COUNT-03
 **Success Criteria** (what must be TRUE):
 
-  1. The settings page loads the doctor report via a `host_capabilities` tRPC endpoint and shows each capability's provenance ("reused from your PATH" vs "Yulu-managed") with its resolved path
-  2. A user can set transcription mode to local (default), cloud-fallback, or cloud-priority, and the choice persists to config
-  3. Cloud transcription uses the user's own configured command (same trust model as `llm.command`); Yulu holds and asks for no cloud keys
-  4. A user can pick among the whisper models the report detected across host caches
-  5. A first-time user sees a skippable browser onboarding walkthrough that reflects live permission status, and can dismiss it without completing it
+  1. When a calendar event with an attendee count is available (via `gog`), that count is used as a prior before threshold-based auto-clustering
+  2. On a real CN meeting, the predicted speaker count lands near the true attendee count (no twenty-phantom-speaker rendering) under a CN-calibrated threshold that is not the library default
+  3. When clustering is uncertain, it fails toward UNDER-merge (two people sharing one label, user-recoverable by merge/split) rather than over-splitting into many phantom speakers
+  4. The chosen threshold is validated on both CN and EN buckets against the eval so fixing Chinese does not regress English
 
-**Plans**: 4 plans (2 waves)
+**Plans**: TBD
 
-**Wave 1**
+### Phase 13: Pipeline + Summary Integration
 
-- [x] 04-01-PLAN.md — capabilities tRPC router (shells doctor.py --json → host_capabilities) + additive list_models() Python helper for the model selector (SET-01, SET-04)
+**Goal**: The proven core is wired into the live flow — `transcribe.py` orchestrates ASR → diarize → `speaker_merge.assign` → persist `.transcript.txt` + `.speakers.json` → search upsert (degrading gracefully to today's plain transcript when diarization is absent/disabled) — and the speaker-attributed transcript reaches the agent-queue summary via one additive prompt-var pair so the agent attributes action items to owners, all without disturbing the `.transcript.txt` cleanup output.
+**Depends on**: Phase 9 (the merge core + sidecar), Phase 10 (the diarize backend), Phase 12 (a sane speaker count before labels reach users/the summary)
+**Requirements**: SPKUI-05, SPKUI-06
+**Success Criteria** (what must be TRUE):
 
-**Wave 2** *(blocked on 04-01: all three consume the capabilities router)*
+  1. On a recording with diarization enabled, `transcribe.py` writes a speaker-labelled `.transcript.txt` + a `.speakers.json` sidecar and upserts the labelled transcript into search; with diarization absent/disabled it degrades to today's plain transcript with no error
+  2. The agent-queue summary receives the speaker-attributed transcript through one additive prompt-var pair (`{{speaker_transcript}}`/`{{speaker_list}}`) with `""` defaults, so every existing prompt keeps working unchanged
+  3. A summary generated on a multi-speaker meeting attributes action items / decisions to the named owners; speaker-aware export carries the labels
+  4. Speaker labels never auto-rewrite the `.transcript.txt` cleanup output — the `.speakers.json` sidecar remains the source of truth and low-confidence attributions are passed downstream rather than laundered into confident ownership
 
-- [x] 04-02-PLAN.md — CapabilitiesSection (provenance label + resolved path + tri-state badge) slotted into settings (SET-01 consumer, SET-02, D-02)
-- [x] 04-03-PLAN.md — extend TranscriptionSection: mode radios local/cloud-fallback/cloud-priority + cloud COMMAND field (not a key) + detected-model selector (TRANS-01, TRANS-02, SET-04, D-03/D-04/D-05)
-- [x] 04-04-PLAN.md — skippable first-run Onboarding overlay reflecting live permission status, dismissable without completing (SET-03, D-06)
-**Research**: standard pattern (skip research-phase) — tRPC-over-`doctor.py --json` and the settings UI follow established codebase conventions.
+**Plans**: TBD
+
+### Phase 14: Speaker UI — Labels, Rename/Merge/Correct, Honest Copy
+
+**Goal**: The user-facing payoff — the transcript renders per-speaker blocks with color and click-to-seek on one canonical line format reconciled with the existing parser; "You" is auto-known from the mic channel; and because the engine *will* over-split, correction (rename-all + merge + single-segment reassign) is core, not polish — all persisted to the sidecar, surviving re-diarize, with copy that frames labels as correctable hints sourced from the eval's measured number.
+**Depends on**: Phase 9 (the sidecar data model), Phase 13 (the pipeline that produces stored labels), Phase 11 (the accuracy number that sources the honest copy)
+**Requirements**: SPKUI-01, SPKUI-02, SPKUI-03, SPKUI-04
+**Success Criteria** (what must be TRUE):
+
+  1. The transcript renders per-speaker blocks with color-coding and click-to-seek, on one canonical line format reconciled with the existing `TranscriptView` parser (the `[MM:SS 我]` vs `Speaker A:` mismatch is fixed)
+  2. The local user ("You"/我) is auto-labelled from the mic channel without the user being asked
+  3. A user can rename a speaker once, have it apply everywhere, persist to the sidecar `display_name`, and survive a re-diarize
+  4. A user can merge two speaker labels into one (the required recovery path for over-split) and correct a single segment's speaker
+  5. Low-confidence segments are visually marked and the UI copy frames labels as correctable hints (sourced from the eval), so trust survives the first visible error
+
+**Plans**: TBD
 **UI hint**: yes
 
-### Phase 5: Capability Reuse + Data-Folder / Cloud-Sync Safety
+### Phase 15: Portability, Footprint & Migration
 
-**Goal**: Yulu stops duplicating what the host already provides, and the data folder can point at a cloud-sync root safely — with machine-local runtime state physically isolated from syncable content so a sync engine can never corrupt a database or evict an in-use recording.
-**Depends on**: Phase 3 (consumes the report), Phase 2 (`DependencyManager`, `PathResolver`)
-**Requirements**: REUSE-01, REUSE-02, DATA-01, DATA-02, DATA-03
+**Goal**: The milestone's cross-platform mandate is closed and existing users are protected — sherpa-onnx wheels + ONNX models are verified behind the platform abstraction with no macOS coupling (macOS implemented, non-macOS verified/stubbed per the v0.5 pattern); the option-B per-meeting footprint is measured against a regression budget so diarization doesn't degrade the existing pipeline; and existing v0.5.x installs gain diarization on upgrade via the existing `yulu migrate` path with no data loss.
+**Depends on**: Phase 10 (the backend + provisioning to verify/measure/migrate), Phase 13 (the integrated pipeline whose footprint is measured)
+**Requirements**: PORT-01, PORT-02, PORT-03
 **Success Criteria** (what must be TRUE):
 
-  1. When a *usable* host whisper / model / `claude` / `gog` is detected, Yulu reuses it and skips installing its own (no unconditional `brew install whisper-cpp`, no duplicate MLX venv)
-  2. Runtime/state (SQLite DBs, sockets, locks, PIDs) lives in a machine-local location that is never placeable in a synced folder, physically separated from syncable content
-  3. A user can configure the data-folder (recordings/transcripts/summaries) location, and the change takes effect across daemons
-  4. When the chosen data folder is a detected cloud-sync root (iCloud / Google Drive…), Yulu detects it and warns about the relevant risks before accepting it
+  1. sherpa-onnx wheels + ONNX models resolve behind the platform abstraction with no macOS-specific code (macOS impl now; non-macOS verified/stubbed per the v0.5 pattern; Python 3.14 wheel resolution confirmed or an isolated venv used)
+  2. Per-meeting added wall-clock and peak RAM are measured on 20-min / 1h / long clips against an explicit regression budget, and diarization stays off the live/critical path (the realtime stream never stalls)
+  3. An existing v0.5.x install gains diarization through the existing `yulu migrate` path (the `models` step re-provisions sherpa + ONNX) with no data loss; recordings without a `.speakers.json` simply show no labels until re-diarized
 
-**Plans**: 4 plans (2 waves)
-
-**Wave 1** *(parallel — no file overlap)*
-
-- [x] 05-01-PLAN.md — DATA-02 runtime/content split + runtime LOCK (assert_runtime_not_synced) + route the 3 hardcoded content literals through data_dir() (DATA-02, DATA-01) [hard-prereq, lands first]
-- [x] 05-02-PLAN.md — reuse gating: add the gog probe + capability_status() helper, gate setup_deps.sh (whisper-cpp/gogcli) + setup_capabilities.sh (mlx) on the tri-state usable (REUSE-01, REUSE-02)
-- [x] 05-03-PLAN.md — cloud_detect.py (stdlib path-prefix + SF_DATALESS, NOT os.getxattr) + read-only cloud.detect tRPC route (DATA-03 detection primitive)
-
-**Wave 2** *(blocked on 05-01 + 05-03 — D-06 hard sequencing: the cloud picker ships only after the runtime split/lock)*
-
-- [x] 05-04-PLAN.md — wire the cloud-capable folder picker: audio.output_dir -> restart:audiodaemon propagation + cloud-warn-before-accept in the picker + live-cloud/live-restart human-verify checkpoint (DATA-01, DATA-03)
-**Research**: needs deeper per-phase research (cloud-sync data folder) — iCloud pinning robustness (`com.apple.fileprovider.pinned` vs File Provider API; Sequoia's 10-item Finder cap) and the content/runtime split for `vocab`/`prompts` SQLite need validation against real sync behavior.
-**Hard sequencing (in-phase)**: the content-vs-runtime separation (DATA-02) MUST land before the folder picker is wired to cloud roots (DATA-01/DATA-03) — users must never be able to put SQLite/sockets in a synced folder. Tri-state detection (Phase 3) gates the reuse-vs-install decision here.
-
-### Phase 6: Agent-Orchestrated Provisioning + Decoupled Skill Install
-
-**Goal**: Provisioning becomes a registry of named, idempotent, status-reporting steps the host agent can drive and re-run safely — composing layers 1–5 — with asset integrity verified before execution and skill install decoupled from core install. A spike resolves who drives the steps.
-**Depends on**: Phase 1 (signed binaries + attestation), Phase 2 (`DaemonManager`/`PathResolver`), Phase 3 (report), Phase 5 (reuse + deps)
-**Requirements**: PROV-01, PROV-02, PROV-03, PROV-04, PROV-05
-**Success Criteria** (what must be TRUE):
-
-  1. Provisioning is a registry of named steps each exposing `check`/`apply` → `StepResult`, invocable via `yulu provision <step>`, and re-running a completed step reports `skipped`/`ok` rather than re-doing destructive work
-  2. Provisioning verifies asset integrity (`gh attestation verify`) before execution; the verified signed-zip path remains a working non-negotiable fallback when `gh` is absent
-  3. After a provisioning run is killed mid-way, re-running resumes from a per-step state file (`.yulu-install.json`) without redoing completed steps or duplicating daemons
-  4. A tampered asset is rejected before any step executes
-  5. `yulu skill install [--agent]` installs/updates the agent skill independently of core install (idempotent), no longer coupled into `setup.sh`
-
-**Plans**: 4 plans (2 waves)
-
-**Wave 1** *(parallel — provision/ module spine; file-disjoint)*
-
-- [x] 06-01-PLAN.md — provision/registry.py: Step ABC + StepResult + ScriptStep wrapping the six setup_*.sh 1:1 (PROV-01, D-01/D-06/D-07)
-- [x] 06-02-PLAN.md — provision/state.py: resumable .yulu-install.json ledger (atomic write, kill-at-step-N, preserve installer source) (PROV-04, D-04/D-08)
-- [x] 06-03-PLAN.md — provision/attest.py: fail-closed gh-auth-ladder gate + checksum floor + tamper rejection [checkpoint] (PROV-03, D-03)
-
-**Wave 2** *(blocked on 06-01/02/03 — composes all three)*
-
-- [x] 06-04-PLAN.md — provision/cli.py resume-walk driver + skill.py + yulu dispatcher wiring + setup.sh skill decouple (PROV-01/PROV-05, D-02/D-05/D-08)
-**Research**: needs deeper per-phase research (the spike IS the research) — `/gsd-plan-phase --research-phase 6`. FEATURES.md flags agent-as-primary-provisioning-UX as LOW confidence; STACK.md flags `uv`/`uvx` as "EVALUATE in spike." Exit criteria are explicit: partial-failure/resume (kill-at-step-N) and tampered-asset rejection, not just the happy path.
-**Spike-gated open question**: WHO calls provisioning — host agent vs `curl|bash`. The step registry itself is BUILD NOW regardless (the decomposed `setup_*.sh` scripts from Phase 1 map 1:1 onto these steps); the spike decides only the *caller*. If the spike fails, the verified signed-zip path stays primary.
-
-### Phase 7: Seamless Auto-Migration
-
-**Goal**: An existing v0.5.x `~/.yulu` install upgrades to the new model with no data loss and no reconfiguration — guarding active recordings, staying transactional with rollback, and reclaiming backups only after verified success.
-**Depends on**: Phase 2 (`open -W`→direct-launch fix, `PathResolver`, `DaemonManager`), Phase 3 (tri-state report for capability re-detection)
-**Requirements**: MIG-01, MIG-02, MIG-03
-**Success Criteria** (what must be TRUE):
-
-  1. On upgrade, an existing v0.5.x `~/.yulu` install is detected and migrated through detect→plan→apply→verify with no data loss and no reconfiguration required from the user
-  2. Migration refuses to stop any daemon while a recording is active — no `pkill -9` truncation of an in-flight capture
-  3. Migration is transactional: `yulu rollback` restores the prior state, and the backup is pruned only after verification passes
-  4. The dead `mlx_python` field and hardcoded `~/Movies/Yulu` path are corrected in transit, and the new install carries a `schema_version` stamp
-
-**Plans**: 3 plans (2 waves)
-
-**Wave 1** *(parallel — file-disjoint: detect/plan ∥ recording-guard)*
-
-- [x] 07-01-PLAN.md — migrate/detect.py (v0.5.x detection) + migrate/plan.py (dry-run-able MigrationPlan naming the in-transit corrections) (MIG-01, D-01/D-04/D-05/D-07)
-- [x] 07-02-PLAN.md — migrate/guard.py recording-guard: refuse daemon-stop while recording (audio_daemon arbiter) + clean DaemonManager unload, no pkill -9 (MIG-02, D-02/D-06)
-
-**Wave 2** *(blocked on 07-01 + 07-02 — composes detect/plan + guard)*
-
-- [x] 07-03-PLAN.md — migrate/apply.py (transactional backup→guarded-stop→corrections→mark) + verify.py (post-doctor + prune-only-on-success) + rollback + yulu CLI wiring + real-upgrade/live-recording human-verify checkpoint (MIG-01/MIG-02/MIG-03, D-01/D-03/D-04/D-05)
-
-**Research**: standard pattern (skip research-phase) — the detect→plan→apply→verify pattern is fully specified and its hard dependencies (the `open -W` fix, the recording-guard) are known and land in Phase 2.
-**Hard dependencies**: the `open -W`→direct-launch fix (Phase 2) MUST precede migration — it removes the `pkill -9` truncation vector at its root.
-
-### Phase 8: Multi-Agent Providers (Codex + OpenClaw)
-
-**Goal**: The proven ClaudeCode capability-provider is generalized to Codex and OpenClaw, completing the multi-agent-from-v1 lock so Yulu is agent-native, not single-vendor.
-**Depends on**: Phase 3 (the `CapabilityProvider` interface already exists)
-**Requirements**: AGENT-01, AGENT-02
-**Success Criteria** (what must be TRUE):
-
-  1. A `CodexProvider` implements the capability-provider contract and contributes correctly-labeled `agent-config` capabilities to the report
-  2. An `OpenClawProvider` implements the same contract end-to-end
-  3. With all three agents present, `doctor.py` aggregates each agent's configured stack into one report without re-probing or schema breakage
-
-**Plans**: 1 plan (1 wave)
-
-**Wave 1**
-
-- [x] 08-01-PLAN.md — CodexProvider + OpenClawProvider (mirror ClaudeCodeProvider) + register in default_providers() + namespace mlx-whisper key to avoid the doctor-fold collision + Wave-0 contract/aggregation tests (AGENT-01, AGENT-02, D-01..D-05)
-
-**Research**: standard pattern (skip research-phase) — generalizes the reference implementation proven in Phase 3 against an already-locked interface.
+**Plans**: TBD
 
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8
+Phases execute in numeric order: 9 → 10 → 11 → 12 → 13 → 14 → 15
+
+Parallelism (for `/gsd-plan-phase` ordering, not separate execution lanes): Phases 9 and 10 are independent (pure logic vs backend) and can be planned/built concurrently; Phase 11 (eval) runs alongside 12–14 because it is slow to build and gates the default; Phases 13 and 14 are independent once the sidecar (9) and pipeline (13) land — but 14 consumes 13's stored labels, so 13 precedes 14 in execution order.
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Build Foundation | 6/6 | Complete    | 2026-05-30 |
-| 2. Platform-Abstraction Seams | 4/4 | Complete    | 2026-05-30 |
-| 3. Detection Spine | 3/3 | Complete    | 2026-05-30 |
-| 4. Settings & Onboarding | 4/4 | Complete    | 2026-05-30 |
-| 5. Reuse + Data-Folder Safety | 4/4 | Complete    | 2026-05-30 |
-| 6. Agent-Orchestrated Provisioning | 4/4 | Complete    | 2026-05-30 |
-| 7. Seamless Auto-Migration | 3/3 | Complete    | 2026-05-30 |
-| 8. Multi-Agent Providers | 1/1 | Complete    | 2026-05-30 |
+| 9. Speaker-Merge Core + Sidecar | 0/? | Not started | - |
+| 10. Diarize Backend + Provisioning | 0/? | Not started | - |
+| 11. DER/WDER Eval Harness | 0/? | Not started | - |
+| 12. Speaker-Count Strategy | 0/? | Not started | - |
+| 13. Pipeline + Summary Integration | 0/? | Not started | - |
+| 14. Speaker UI | 0/? | Not started | - |
+| 15. Portability, Footprint & Migration | 0/? | Not started | - |
