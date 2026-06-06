@@ -9,11 +9,11 @@ Grounded in spikes 001/002 and `.planning/research/SUMMARY.md`. Each maps to exa
 
 ### Diarization Engine & Provisioning (DIAR)
 
-- [ ] **DIAR-01**: A `DiarizeBackend` Protocol (audio → speaker turns w/ timestamps), config-selected, mirrors the STT backend lifecycle (`warm_up`/`is_ready`/`release`); NOT added to the ASR fallback dict and NOT a `CapabilityProvider` subclass (diarization is Yulu-managed, not agent-reused)
-- [ ] **DIAR-02**: Default backend is **sherpa-onnx** (ONNX Runtime, no torch): pyannote-3.0 segmentation + 3D-Speaker cam++ embedding
-- [ ] **DIAR-03**: Diarization models (seg ~5.7 MB + cam++ ~27 MB ONNX) provision via the existing idempotent `models` step and load **offline by default**
-- [ ] **DIAR-04**: `doctor.py` gains a tri-state `probe_diarization()` (provenance `yulu-managed`) in the `HostCapabilityReport`
-- [ ] **DIAR-05**: A `warm_up()` dummy pass amortizes first-run cold-start before the first real meeting
+- [x] **DIAR-01**: A `DiarizeBackend` Protocol (audio → speaker turns w/ timestamps), config-selected, mirrors the STT backend lifecycle (`warm_up`/`is_ready`/`release`); NOT added to the ASR fallback dict and NOT a `CapabilityProvider` subclass (diarization is Yulu-managed, not agent-reused)
+- [x] **DIAR-02**: Default backend is **sherpa-onnx** (ONNX Runtime, no torch): pyannote-3.0 segmentation + 3D-Speaker cam++ embedding
+- [x] **DIAR-03**: Diarization models (seg ~5.7 MB + cam++ ~27 MB ONNX) provision via the existing idempotent `models` step and load **offline by default**
+- [x] **DIAR-04**: `doctor.py` gains a tri-state `probe_diarization()` (provenance `yulu-managed`) in the `HostCapabilityReport`
+- [x] **DIAR-05**: A `warm_up()` dummy pass amortizes first-run cold-start before the first real meeting
 
 ### Speaker–Transcript Merge (MERGE)
 
@@ -209,11 +209,11 @@ Each v1 requirement maps to exactly one phase. See `.planning/ROADMAP.md` for ph
 | MERGE-03 | Phase 9 | Pending |
 | MERGE-04 | Phase 9 | Pending |
 | MERGE-05 | Phase 9 | Pending |
-| DIAR-01 | Phase 10 | Pending |
-| DIAR-02 | Phase 10 | Pending |
-| DIAR-03 | Phase 10 | Pending |
-| DIAR-04 | Phase 10 | Pending |
-| DIAR-05 | Phase 10 | Pending |
+| DIAR-01 | Phase 10 | Complete |
+| DIAR-02 | Phase 10 | Complete |
+| DIAR-03 | Phase 10 | Complete |
+| DIAR-04 | Phase 10 | Complete |
+| DIAR-05 | Phase 10 | Complete |
 | EVAL-01 | Phase 11 | Pending |
 | EVAL-02 | Phase 11 | Pending |
 | EVAL-03 | Phase 11 | Pending |

@@ -18,7 +18,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 **Continuation note:** v0.5 shipped Phases 1–8 (see git history + PROJECT.md). v0.6 continues the numbering at **Phase 9**. The historical `phases/01–08` directories remain in place untouched.
 
 - [x] **Phase 9: Speaker-Merge Core + `.speakers.json` Sidecar** - The pure, I/O-free overlap-assignment engine + sidecar data model, hardened on fixtures with no sherpa/daemon/SQLite ✓ (verified 2026-06-06: 5/5 criteria, 32 tests)
-- [ ] **Phase 10: Diarize Backend + Provisioning + Capability Probe** - Resident `SherpaDiarizeBackend` (warm_up/diarize/is_ready/release), offline ONNX model provisioning, tri-state `probe_diarization()`
+- [x] **Phase 10: Diarize Backend + Provisioning + Capability Probe** - Resident `SherpaDiarizeBackend` (warm_up/diarize/is_ready/release), offline ONNX model provisioning, tri-state `probe_diarization()` (completed 2026-06-06)
 - [ ] **Phase 11: DER/WDER Evaluation Harness (the Gate)** - Labelled CN+EN corpus + torch-free DER/WDER/SER/count-error harness that picks the default provider on evidence and sets UI accuracy copy
 - [ ] **Phase 12: Speaker-Count Strategy (the Over-Split Fix)** - Calendar-attendee prior → CN-calibrated threshold → fail-toward-under-merge, verified against the eval
 - [ ] **Phase 13: Pipeline + Summary Integration** - Wire ASR→diarize→merge into `transcribe.py`; flow speaker-attributed transcript into the agent-queue summary via one additive prompt-var pair
@@ -140,7 +140,7 @@ Parallelism (for `/gsd-plan-phase` ordering, not separate execution lanes): Phas
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 9. Speaker-Merge Core + Sidecar | 1/1 | ✅ Complete | 5/5 criteria, 32 tests |
-| 10. Diarize Backend + Provisioning | 0/? | Not started | - |
+| 10. Diarize Backend + Provisioning | 1/1 | ✅ Complete | 5/5 criteria, +31 tests (904 pass) |
 | 11. DER/WDER Eval Harness | 0/? | Not started | - |
 | 12. Speaker-Count Strategy | 0/? | Not started | - |
 | 13. Pipeline + Summary Integration | 0/? | Not started | - |

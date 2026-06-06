@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v0.6
 milestone_name: Speaker Diarization
-status: planning
-last_updated: "2026-06-06T10:32:00.000Z"
-last_activity: 2026-06-06
+status: executing
+last_updated: "2026-06-06T04:06:12.313Z"
+last_activity: 2026-06-06 — Phase 9 complete (verified passed); starting Phase 10
 progress:
   total_phases: 7
-  completed_phases: 1
-  total_plans: 1
-  completed_plans: 1
-  percent: 14
+  completed_phases: 2
+  total_plans: 2
+  completed_plans: 2
+  percent: 29
 ---
 
 # Project State
@@ -24,22 +24,23 @@ See: .planning/PROJECT.md (updated 2026-06-06)
 
 ## Current Position
 
-Phase: 10 — Diarize Backend + Provisioning + Capability Probe (next)
+Phase: 11 — DER/WDER Evaluation Harness (next)
 Plan: —
-Status: AUTONOMOUS run 9→13 in progress. ✅ Phase 9 complete+verified (speaker_merge.py + sidecar, 5/5 criteria, 32 tests, commits b57cf9c/babe8f2/ea75fc0). Execution order 10→11→12→13, then `--only 15`; **14 last (gated on UI redesign)**.
-Last activity: 2026-06-06 — Phase 9 complete (verified passed); starting Phase 10
+Status: AUTONOMOUS run 9→13 in progress. ✅ Phase 9 + ✅ Phase 10 complete. Execution order 11→12→13, then `--only 15`; **14 last (gated on UI redesign)**.
+Last activity: 2026-06-06 — Phase 10 complete (built); starting Phase 11
 
 ## Autonomous Run Log (v0.6, 9→13)
 
 - ✅ **Phase 9** Speaker-Merge Core + Sidecar — built (gsd-executor) + independently verified (gsd-verifier) PASSED 5/5; full test suite 873 passed/1 pre-existing skip; UI gate respected (zero `yulu_ui/**`).
-- ⏳ **Phase 10** Diarize Backend — next.
+- ✅ **Phase 10** Diarize Backend + Provisioning + Capability Probe — built (gsd-executor) 5/5 criteria; **904 passed / 1 pre-existing skip** (+31 new tests, zero regressions); 6 commits 5d3f867/a2bbdea/5399ed7/6128172/c47dc27/a763476; UI gate respected (zero `yulu_ui/**`); real offline integration smoke green (60s clip → 15 turns/3 speakers, dead proxies). **Open: sherpa cp314 wheel resolution into Yulu's 3.14 runtime venv (Phase 15/PORT-01) — built+tested on the 3.10 spike venv only.**
+- ⏳ **Phase 11** DER/WDER Eval Harness — next.
 - Mechanism note: each phase = delegated builder agent (writes code+tests+commits+GSD artifacts) → independent verifier agent → STATE/ROADMAP update. Resume point if compacted: read this log + run next ⏳ phase.
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 29
+- Total plans completed: 30
 - Average duration: — min
 - Total execution time: 0.0 hours
 
@@ -91,6 +92,7 @@ Last activity: 2026-06-06 — Phase 9 complete (verified passed); starting Phase
 | Phase 07 P02 | 10min | 2 tasks tasks | 2 files files |
 | Phase 07 P03 | 38 | 3 tasks | 7 files |
 | Phase 08 P01 | 14 | 2 tasks | 2 files |
+| Phase 10 P10 | 30 | 6 tasks | 11 files |
 
 ## Accumulated Context
 
