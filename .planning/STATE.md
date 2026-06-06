@@ -1,17 +1,16 @@
 ---
 gsd_state_version: 1.0
-milestone: v0.5
-milestone_name: milestone
-status: milestone_complete
-last_updated: 2026-05-30T15:49:51.797Z
-last_activity: 2026-05-30
+milestone: v0.6
+milestone_name: Speaker Diarization
+status: planning
+last_updated: "2026-06-06T02:09:47.857Z"
+last_activity: 2026-06-06
 progress:
-  total_phases: 8
-  completed_phases: 8
-  total_plans: 29
-  completed_plans: 29
-  percent: 100
-stopped_at: Milestone complete (Phase 8 was final phase)
+  total_phases: 0
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
+  percent: 0
 ---
 
 # Project State
@@ -25,12 +24,10 @@ See: .planning/PROJECT.md (updated 2026-05-29)
 
 ## Current Position
 
-Phase: 8
-Plan: Not started
-Status: Milestone complete
-Last activity: 2026-05-30
-
-Progress: [██████████] 100%
+Phase: Not started (defining requirements)
+Plan: —
+Status: Defining requirements
+Last activity: 2026-06-06 — Milestone v0.6 started
 
 ## Performance Metrics
 

@@ -25,24 +25,24 @@ A meeting said out loud becomes a clean, searchable note **entirely on the user'
 - ✓ SQLite-backed vocab, prompt library, and full-text transcript/summary search — existing (ADR-002/004)
 - ✓ Voicemail capture reusing the agent-queue pipeline — existing
 - ✓ `curl install.sh | bash` → `~/.yulu` installer + release-please / GitHub Releases pipeline (Conventional Commits) — existing
+- ✓ **Milestone v0.5 — Agent-Native Provisioning & Cross-Platform Foundation** (8 phases, completed 2026-05-30): platform-abstraction layer (`CaptureBackend`/`DaemonManager`/path/permission/dependency ABCs, macOS impls), `HostCapabilityReport` detection spine + `CapabilityProvider` abstraction, detect-and-reuse of host whisper/models/`claude`/`gog`, agent-orchestrated provisioning step registry, signed+notarized pre-built binaries, seamless `yulu migrate`, multi-agent providers (Claude Code + Codex + OpenClaw)
 
 ### Active
 
 <!-- Current milestone scope. Hypotheses until shipped and validated. -->
 
-**Current milestone: Agent-Native Provisioning & Cross-Platform Foundation**
+**Current milestone: v0.6 — Speaker Diarization**
 
-- [ ] Cross-platform abstraction layer — `CaptureBackend`, `DaemonManager`, path resolution, permission model, and dependency-install behind platform-agnostic interfaces (macOS implementation only this milestone; Win/Linux stubbed)
-- [ ] Agent-orchestrated provisioning — the host coding agent installs/provisions Yulu and reuses its own configured capabilities, rather than a macOS-specific installer (leading direction; validate the riskiest path via spike)
-- [ ] Host-capability detection + reuse — detect already-configured whisper / `claude` CLI / models / `gog` and reuse them instead of duplicating, across Claude Code + Codex + OpenClaw via an "agent capability provider" abstraction
-- [ ] Decouple skill install from core install — standalone, idempotent, agent-invokable (`yulu skill install [--agent]`); removed from the monolithic setup flow
-- [ ] `doctor.py` host-capability probes — `claude`, `whisper-cli`, `mlx-whisper` importability, configured `llm.command` validity, model paths/sizes, recording-dir writability
-- [ ] Web UI settings — surface + configure capabilities: data-folder location, transcription mode, model selection, and which host capabilities are reused (local vs cloud)
-- [ ] Web UI onboarding guidance — first-run setup walkthrough in the browser
-- [ ] Configurable data-folder location — enables folder-based cloud sync (point the folder at iCloud / Google Drive; sync is the OS's job, not Yulu's — the Obsidian model)
-- [ ] Configurable transcription mode — local-Whisper-first by default, user-selectable **cloud fallback** or **cloud priority**
-- [ ] Seamless auto-migration — existing `~/.yulu` (v0.5.x) installs auto-migrate config/data/reused-capabilities to the new model on upgrade
-- [ ] Prerequisite refactors — decompose the 1,342-line `setup.sh`; ship pre-compiled, signed (ideally notarized) binaries so release installs no longer need `swiftc`/Xcode
+**Goal:** Add local-first, cross-platform speaker attribution ("who-said-what") to Yulu meeting transcripts, keeping MLX/whisper.cpp for ASR. Validated by spikes 001/002 (`.planning/spikes/`): option B (ASR + standalone diarization merged by timestamp overlap) works; the cam++ approach via **sherpa-onnx** (ONNX, ~33 MB models, no torch, CPU-fast, cross-platform) is the default provider, not FunASR.
+
+- [ ] `diarization` capability provider behind the existing `CapabilityProvider` abstraction — **sherpa-onnx default**; FunASR (MPS) optional macOS high-accuracy path, gated on the eval
+- [ ] Diarization pipeline — post-process the STT transcript (ASR stays MLX/whisper.cpp), produce per-utterance speaker labels; respect the `provision→capabilities→platform` one-way layering; do NOT hard-couple to macOS
+- [ ] Speaker–transcript merge module — assign each ASR segment a speaker by timestamp overlap; coverage-gap fallback (~10 % of segments fall outside diarization); handle whisper hallucination/repeat artifacts
+- [ ] Model provisioning — bundle/download seg (5.7 MB) + cam++ (27 MB) ONNX at setup; offline by default; no torch dependency
+- [ ] DER evaluation harness — label 2–3 real CN+EN meetings, measure DER for sherpa-onnx (and FunASR); pick the default provider on evidence; set UI accuracy expectations
+- [ ] Speaker-count strategy — sherpa over-splits on CN (59→32→20 as threshold rises); supplied-count / calibration / segmentation-estimate to land near the true count
+- [ ] Web UI — show speaker labels on the transcript; let users rename / merge / correct speakers
+- [ ] Cross-platform validation — confirm sherpa-onnx wheels + ONNX models work behind the abstraction on the non-macOS targets (impl macOS now; others stubbed/verified per v0.5 pattern)
 
 ### Out of Scope
 
@@ -103,4 +103,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-05-29 after initialization*
+*Last updated: 2026-06-06 — started milestone v0.6 Speaker Diarization (informed by spikes 001/002)*
