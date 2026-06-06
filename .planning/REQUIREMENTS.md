@@ -1,11 +1,59 @@
-# Requirements: Yulu — Agent-Native Provisioning & Cross-Platform Foundation
+# Requirements: Yulu — v0.6 Speaker Diarization
 
-**Defined:** 2026-05-29
+**Defined:** 2026-05-29 (v0.5) · 2026-06-06 (v0.6)
 **Core Value:** A meeting becomes a clean, searchable note entirely on the user's machine, through the agent they already trust — capture and transcription never depend on the cloud, and Yulu never makes the user reconfigure what their agent already provides.
 
-## v1 Requirements
+## v0.6 Requirements — Speaker Diarization (current milestone)
 
-Requirements for this milestone. Each maps to exactly one roadmap phase.
+Grounded in spikes 001/002 and `.planning/research/SUMMARY.md`. Each maps to exactly one roadmap phase (Traceability filled by the roadmapper). **Reframe:** Yulu already emits a 2-speaker transcript (mic=我 / system=对方 via `transcript_merge.py`); v0.6 generalizes that to N voice-clustered speakers, mainly by splitting the far-end/system stream.
+
+### Diarization Engine & Provisioning (DIAR)
+
+- [ ] **DIAR-01**: A `DiarizeBackend` Protocol (audio → speaker turns w/ timestamps), config-selected, mirrors the STT backend lifecycle (`warm_up`/`is_ready`/`release`); NOT added to the ASR fallback dict and NOT a `CapabilityProvider` subclass (diarization is Yulu-managed, not agent-reused)
+- [ ] **DIAR-02**: Default backend is **sherpa-onnx** (ONNX Runtime, no torch): pyannote-3.0 segmentation + 3D-Speaker cam++ embedding
+- [ ] **DIAR-03**: Diarization models (seg ~5.7 MB + cam++ ~27 MB ONNX) provision via the existing idempotent `models` step and load **offline by default**
+- [ ] **DIAR-04**: `doctor.py` gains a tri-state `probe_diarization()` (provenance `yulu-managed`) in the `HostCapabilityReport`
+- [ ] **DIAR-05**: A `warm_up()` dummy pass amortizes first-run cold-start before the first real meeting
+
+### Speaker–Transcript Merge (MERGE)
+
+- [ ] **MERGE-01**: A pure, I/O-free `speaker_merge` module assigns each ASR segment a speaker by max timestamp-overlap, fixture-testable without sherpa/daemon/SQLite
+- [ ] **MERGE-02**: A coverage-gap fallback handles the ~10 % of ASR segments with no overlapping diarization turn (nearest/previous speaker; never snap across a speaker boundary)
+- [ ] **MERGE-03**: Merge VAD-gates + filters whisper hallucination/repeat so a fake line is never laundered into a confident wrong-owner attribution; uncertain segments carry a confidence flag downstream
+- [ ] **MERGE-04**: Speaker data persists in a `<stem>.speakers.json` sidecar (turns + assignments + editable `speaker_id`→`display_name`), travelling with `data_dir`; runtime SQLite is never source-of-truth and never synced
+- [ ] **MERGE-05**: Re-diarize is idempotent — it re-anchors volatile cluster indices to existing stable `speaker_id`s by overlap and never clobbers user renames
+
+### Speaker Count (COUNT)
+
+- [ ] **COUNT-01**: Speaker-count strategy uses the calendar-attendee count (via existing `gog`) as a prior when available, before threshold-based auto-clustering
+- [ ] **COUNT-02**: A CN-calibrated clustering threshold mitigates sherpa's over-split on Chinese meetings (spike 002: 59→32→20, never reaching the true ~5)
+- [ ] **COUNT-03**: When uncertain, clustering fails toward UNDER-merge (user-recoverable) rather than over-split
+
+### Evaluation (EVAL)
+
+- [ ] **EVAL-01**: A reference corpus of 2–3 real CN+EN meetings is labelled (RTTM) without anchoring bias (labels not derived from a tool's own output)
+- [ ] **EVAL-02**: A DER/WDER harness (torch-free `pyannote.metrics`, dev/eval venv only) reports DER with explicit collar + overlap-scoring policy plus a short-utterance-sensitive metric
+- [ ] **EVAL-03**: The eval result is the GATE that picks the default provider (sherpa-onnx vs optional FunASR) on evidence
+- [ ] **EVAL-04**: UI accuracy copy is set from the measured DER (labels presented as a correctable hint, not ground truth)
+
+### Speaker UI & Summary (SPKUI)
+
+- [ ] **SPKUI-01**: Transcript renders per-speaker blocks with color-coding + click-to-seek, on one canonical line format reconciled with the existing `TranscriptView` parser
+- [ ] **SPKUI-02**: The local user ("You"/我) is auto-known from the mic channel without manual labelling
+- [ ] **SPKUI-03**: User can rename a speaker once, apply everywhere, and persist (sidecar `display_name`), surviving re-diarize
+- [ ] **SPKUI-04**: User can merge two speaker labels and correct a single segment's speaker
+- [ ] **SPKUI-05**: Speaker-attributed transcript flows into the agent-queue summary (one additive prompt-var pair) so the agent attributes action items to owners; speaker-aware export
+- [ ] **SPKUI-06**: Speaker labels never auto-rewrite the `.transcript.txt` cleanup output (sidecar is source of truth)
+
+### Portability & Footprint (PORT)
+
+- [ ] **PORT-01**: sherpa-onnx wheels + ONNX models verified behind the platform abstraction with no macOS coupling (macOS impl now; non-macOS verified/stubbed per v0.5 pattern; Python 3.14 wheel resolution confirmed or isolated venv used)
+- [ ] **PORT-02**: Added per-meeting wall-clock + peak RAM measured (20-min / 1h / long) against a regression budget so diarization doesn't degrade the existing pipeline
+- [ ] **PORT-03**: Existing installs gain diarization on upgrade via the existing `yulu migrate` path with no data loss
+
+## Shipped — v0.5 (Agent-Native Provisioning & Cross-Platform Foundation)
+
+Shipped 2026-05-30 (8 phases, all complete). Kept for traceability; see git history + PROJECT.md.
 
 ### Build & Signing (BUILD)
 
@@ -102,6 +150,11 @@ Explicitly excluded. Documented to prevent scope creep. Anti-features from resea
 | A second Yulu-specific venv when the host already has one | Directly contradicts the reuse goal |
 | Custom CRDT / sync-conflict engine | Folder sync is the OS's job; no conflict engine |
 | Actual Windows/Linux implementations (this milestone) | Architecture is abstracted now; implementations deferred to a future milestone |
+| **Cross-meeting speaker persistence / voiceprint enrollment** (v0.6) | That is speaker *identification*, not diarization — heavier + biometric-privacy-laden; v0.6 stays anonymous per-meeting + manual labels |
+| **Cloud voiceprint / speaker-ID services** (v0.6) | Speaker embeddings are biometric; must stay on-device, never leak via cloud-sync or the agent→cloud-LLM boundary |
+| **Live / streaming diarization** (v0.6) | Post-process only this milestone; real-time is a later concern |
+| **Word-level speaker boundaries** (v0.6) | Segment-level is sufficient; word-level adds cost without product value now |
+| **Per-speaker isolated audio export / team speaker directory** (v0.6) | Out of scope for a local-first single-user app this milestone |
 
 ## Traceability
 
@@ -151,5 +204,5 @@ Each v1 requirement maps to exactly one phase. See `.planning/ROADMAP.md` for ph
 - Unmapped: 0 ✓
 
 ---
-*Requirements defined: 2026-05-29*
-*Last updated: 2026-05-29 after roadmap traceability mapping*
+*Requirements defined: 2026-05-29 (v0.5)*
+*Last updated: 2026-06-06 — added v0.6 Speaker Diarization requirements (26 reqs / 6 categories; traceability filled by roadmapper)*
