@@ -1,380 +1,497 @@
 # Pitfalls Research
 
-**Domain:** Agent-native, local-first, cross-platform meeting-recorder provisioning & configuration (Yulu — "Agent-Native Provisioning & Cross-Platform Foundation" milestone)
-**Researched:** 2026-05-29
-**Confidence:** HIGH (macOS signing/notarization, iCloud eviction, SQLite-on-sync, capture migration, launchd portability all verified against official/canonical sources); MEDIUM (the abstraction-shape and agent-provisioning failure modes are design risks, not yet-observed bugs)
+**Domain:** Speaker diarization in a local-first, single-user, agent-native macOS meeting recorder (Yulu v0.6) — engine settled (sherpa-onnx cam++, option B: ASR + standalone diarization merged by timestamp overlap)
+**Researched:** 2026-06-06
+**Confidence:** HIGH (engine behavior grounded in spikes 001/002 on real Yulu meetings; methodology + failure-mode claims corroborated by pyannote.metrics docs, AssemblyAI/Deepgram/Recall.ai engineering write-ups, and 2025–2026 arXiv work on Whisper hallucination, CDER/SER, and segment-level reassignment)
 
-> **Scope discipline.** This file does NOT repeat `.planning/codebase/CONCERNS.md` (which catalogues the *existing* fragilities: `--timestamp=none`, `pkill -9`, dead `mlx_python` field, `set -e` without `pipefail`, uncleaned backups, `open -W`, hardcoded paths, capability duplication). It catalogues the **new mistakes this milestone is at risk of introducing** while *fixing* those concerns — the second-order traps of building the abstraction layer, agent provisioning, host-capability reuse, cloud-sync data folder, and seamless migration. Each pitfall cites the CONCERNS item it extends.
+> **Scope note for the roadmapper.** This milestone's engine question is *settled* (spike 002). These pitfalls are deliberately **product / quality / eval / integration** failures — the things that make a *mechanically working* diarizer ship a bad meeting note. Phases are referenced by **function**, not number, because the v0.6 roadmap isn't drawn yet. The natural phase decomposition (from spike 002's "what /gsd-plan-phase should cover") is:
 >
-> **Phase references** use deliverable-topic names (the roadmap may renumber): **P1** Setup decomposition + signing/packaging; **P2** Abstraction seams (`CaptureBackend`/`DaemonManager`/paths/permissions); **P3** Host-capability detection + `doctor.py`; **P4** Agent-orchestrated provisioning (spike → impl); **P5** Data-folder location + cloud-sync + transcription mode; **P6** Seamless auto-migration; **P7** Web-UI settings + onboarding.
+> - **P-ENGINE** — `diarization` capability provider (sherpa-onnx behind the `CapabilityProvider` abstraction; FunASR optional)
+> - **P-COUNT** — speaker-count strategy (the over-split fix)
+> - **P-MERGE** — speaker↔transcript merge + coverage-gap fallback + hallucination handling
+> - **P-PROVISION** — model bundling/download, offline-by-default
+> - **P-EVAL** — DER/quality harness on labelled CN+EN meetings (the gate that picks the default + sets UI copy)
+> - **P-UI** — speaker labels in the transcript: rename / merge / correct
+> - **P-XPLAT** — cross-platform validation behind the abstraction
+> - **P-PERF** — latency/footprint regression guard on the existing pipeline
+>
+> Several pitfalls are owned **jointly by P-EVAL and a build phase**: P-EVAL is where you *detect and quantify* the failure; the build phase is where you *prevent or mitigate* it. That split is called out per-pitfall.
+>
+> A prior-milestone (v0.5) PITFALLS.md is preserved at `.planning/research/archive-v0.5/PITFALLS.md`.
+
+---
 
 ## Critical Pitfalls
 
-### Pitfall 1: Speculative cross-platform abstraction that ossifies around macOS concepts
+### Pitfall 1: The eval harness is the product gate — building it last (or weakly) ships unmeasured accuracy
 
 **What goes wrong:**
-The "platform-agnostic" `CaptureBackend` / `DaemonManager` / path / permission interfaces get designed *while only the macOS arm is built and exercised*, so they silently leak macOS specifics and freeze the wrong shape. Concretely: `CaptureBackend` grows a `windows: [Window]` source list (a ScreenCaptureKit/AppKit concept — Linux PipeWire and Windows WASAPI-loopback don't enumerate windows for *audio*); `DaemonManager` exposes plist-shaped fields (`KeepAlive` dict, `ThrottleInterval`, `StartInterval`, label strings) that don't translate to systemd `Restart=`/`[Timer]` or Windows Task Scheduler triggers; `check_permissions()` returns a TCC-shaped enum that has no Linux/Windows analog. When Win/Linux is finally scoped (next milestone), the interface needs breaking changes anyway — so the abstraction cost was paid for zero benefit, and worse, it added an indirection layer that obscures the macOS code that actually runs.
+Diarization gets integrated, "looks coherent" by eyeball (exactly as both spikes admit — "0.765–0.843 is inter-tool agreement, not correctness"), and ships. There is no number anyone can defend. The moment a user sees Speaker 3's words under Speaker 1, the team has no baseline to say whether that's a 2%-of-utterances tail or a 25% disaster, no way to compare sherpa vs FunASR on evidence (the whole point of keeping FunASR as a fallback), and no principled UI copy ("labels are a hint" vs "labels are reliable").
 
 **Why it happens:**
-You cannot validate an abstraction with one implementation — there's nothing to vary against, so the "interface" is just the macOS implementation with the method names rearranged. The locked decision ("build the abstraction now, macOS-only impl") is correct strategically but creates exactly this trap: the team optimizes for "looks cross-platform" rather than "is honest about what's macOS-specific."
+Eval feels like "testing" — assumed to be cheap and deferrable to the end. In diarization it is the *opposite*: the harness is what converts "it runs" into "it works," it's the only way to make the sherpa-vs-FunASR default decision the milestone explicitly defers to evidence, and it's slow to build because reference labels must be created by hand (Pitfall 4). It is a **first-class deliverable**, not a QA afterthought — spike 002 lists it as *required*.
 
 **How to avoid:**
-- Model the seams on **proven cross-platform shapes**, not on the current code. STACK.md already did the homework: `CaptureBackend` = "**PCM frames out + flat source list**" (the `cpal` boundary — CoreAudio/WASAPI/ALSA all produce this), NOT "windows." `DaemonManager` = `install/load/unload/status/restart` over a **neutral service spec** (the `service-manager-rs` shape: program path, args, env, run-at-load, keep-alive-bool), NOT plist keys.
-- Keep macOS specifics on the **macOS side of the seam**, not in the interface: window enumeration stays an internal detail of the macOS capture impl (it's used by `meeting_detector`, which is itself macOS-coupled via Accessibility — keep that coupling explicit, don't launder it through `CaptureBackend`); plist templating stays inside `MacOSDaemonManager`.
-- **Write the stub arm as a thrown `NotImplementedError`, not a "TODO impl."** A stub that raises forces the interface to be expressible without the real backend; a half-written PipeWire stub invites copying macOS assumptions into it.
-- Apply the **"two consumers" test** to every interface method: would a *systemd* implementation and a *launchd* implementation both implement this method the same way? If only launchd can, it doesn't belong in the interface.
-- Prefer a **capability-flag + thin dispatch** over a deep class hierarchy: `if platform.system() == "Darwin"` at the top of the install path is honest and greppable; a 4-level abstract base class for one concrete subclass is the over-engineering.
+- Treat **P-EVAL as a gating phase that lands early/parallel**, not a closing chore. Build it right after P-ENGINE can produce *any* labels, so every subsequent change (count strategy, merge, fallback) is measured against it.
+- Report **multiple metrics, not just DER** (see Pitfall 4): DER with and without collar, **WDER** (word-level — the metric that actually matches "wrong speaker on these words"), and a **speaker-count error** (predicted vs true). DER alone hides the failures users feel.
+- Make the harness **re-runnable in CI-ish fashion** on a fixed labelled corpus so accuracy is a tracked number, not a memory.
+- The default-provider decision (sherpa vs FunASR) is an **output of this harness**, recorded as an ADR — not a guess.
 
 **Warning signs:**
-- The interface vocabulary contains `window`, `plist`, `launchctl`, `tccutil`, `LaunchAgents`, `KeepAlive`, `Movies` — macOS nouns in a "portable" type.
-- The non-macOS stub is more than `raise NotImplementedError(...)` (i.e., someone started "implementing" against assumptions).
-- A method on the interface is only ever called from macOS-guarded code.
-- The abstraction has exactly one concrete implementation and a > 50-line abstract base.
-- PR review can't answer "how would the systemd version implement `status()`?" without inventing semantics.
+"It looks right on the demo clip." No DER number in any doc. Provider choice argued on footprint/feel alone. UI copy promising accuracy with no measurement behind it.
 
-**Phase to address:** P2 (define seams). Add an explicit "abstraction honesty review" gate to P2's exit criteria: for each interface, document the hypothetical systemd/WASAPI implementation in 2-3 sentences; if you can't, the interface is wrong.
+**Phase to address:** **P-EVAL (owner).** Lands before/parallel with P-MERGE and P-COUNT so they can be tuned against it.
 
 ---
 
-### Pitfall 2: macOS notarization fails on nested Python `.so`/dylibs and `--deep` re-breaks it
+### Pitfall 2: Speaker-count over-split — sherpa auto-clustering invents speakers on Chinese meetings
 
 **What goes wrong:**
-The milestone replaces `--timestamp=none` ad-hoc signing (CONCERNS 2c) with real Developer ID signing + notarization — but the first attempt signs the `.app` bundle top-level (or with `--deep`) and `notarytool` rejects it, OR notarization "succeeds" but the app still won't launch on a clean machine because a nested Mach-O (a bundled Python interpreter, or a `.so`/`.dylib` from `mlx` / `numpy` / `sox` if Python is bundled into `Yulu.app`) is unsigned or signed without the hardened runtime. `codesign --deep` (currently in `build_audio_daemon.sh`/`build_status_agent.sh`) is the specific trap: Apple explicitly documents it as wrong — it re-signs nested code with the *outer* identity and *drops per-binary options*, so a previously-correctly-signed dylib gets clobbered and notarization breaks.
+This is the milestone's known, measured engine weakness. Spike 002: sherpa-onnx auto speaker-count **over-splits on Chinese meetings — 59→32→20 speakers as the clustering threshold rises 0.5→0.7, never landing near the true ~5.** A 5-person product weekly renders as a transcript with twenty "speakers," most of them fragments of the same person. The note is unusable: no coherent who-said-what, summaries attribute one person's decisions across a dozen phantom labels, and the rename UI (Pitfall 11) is overwhelmed before the user even starts.
 
 **Why it happens:**
-Signing is order-sensitive and counterintuitive: you must sign **inner-out (bottom-up)** — every nested Mach-O first, each with `--options runtime --timestamp`, then the bundle last — but `--deep` *looks* like the convenient "sign everything" button and is what the current build scripts already use. The Swift binaries today have *no* embedded third-party dylibs, so signing has been trivial; the moment Python or a model runtime gets bundled (or even if `mlx`'s `.so` files end up inside the app), the bottom-up requirement bites and the failure mode is opaque ("app is damaged" / silent crash on other machines, never on the dev's own notarized-by-default machine).
+Agglomerative clustering of speaker embeddings is acutely sensitive to its stopping threshold, and that threshold does not transfer across languages/acoustics. Mandarin's phonetics, plus the short turns and backchannels typical of CN meetings (Pitfall 7), inflate intra-speaker embedding variance, so the clusterer keeps splitting. FunASR clustered the same clip cleanly to 5 — proving the *embedding/segmentation* path is fine and the failure is specifically in **count estimation/stopping**, the most brittle single knob in the whole pipeline.
 
 **How to avoid:**
-- **Never `--deep`.** Replace it in both `build_*.sh`. Enumerate nested Mach-O (`find Yulu.app -type f -perm +111` + `file | grep Mach-O`) and sign each with `codesign --options runtime --timestamp --sign "Developer ID Application: …"`, innermost first, bundle last.
-- Decide *now* whether Python is **bundled** or **host-provided**. This milestone's whole thesis is "reuse the host's capabilities" — so the daemon's Python interpreter and `mlx-whisper` should be **host/system-resolved, NOT bundled into the signed `.app`**. That sidesteps the hardest notarization case entirely (you only sign the Swift binaries). If anything Python *is* bundled, you need `com.apple.security.cs.disable-library-validation` (load non-Apple-signed dylibs) and possibly `com.apple.security.cs.allow-unsigned-executable-memory` (interpreters JIT) — flag this as a scope expansion.
-- **Staple the `.app`/installer, not bare binaries** — `notarytool` tickets can't staple to a lone Mach-O; staple the bundle, and verify with `spctl -a -vvv Yulu.app` + `stapler validate`.
-- Test on a **second machine** (or a fresh user account with quarantine intact) before every release — the dev's own machine never reproduces Gatekeeper because locally-built code is implicitly trusted.
+- **Do not ship raw auto-count.** Implement a deliberate **speaker-count strategy** (spike 002 item 5) with a fallback ladder:
+  1. **User-supplied count** when known (calendar attendee count is a free prior — Yulu already has Google Calendar integration; meeting events often carry attendee lists). Offer a simple "how many speakers?" control in the UI.
+  2. **Segmentation-model estimate / calibrated threshold** tuned *specifically on Chinese* against the P-EVAL corpus — not the library default.
+  3. **Constrained clustering** (cap the max speakers, or bias toward fewer) so the failure mode is *under*-merge (two people sharing a label — recoverable by user split) rather than *over*-split into 20.
+- **Calibrate, then verify on the eval set.** The threshold that fixes CN must not wreck EN — sweep it and pick on DER + count-error across *both* language buckets (Pitfall 6).
+- Keep **FunASR as the gated high-accuracy fallback** precisely because it wins on count — if calibration can't get sherpa close enough, the milestone already planned this escape hatch.
 
 **Warning signs:**
-- `--deep` still present anywhere in build scripts.
-- `notarytool submit` returns `Invalid` with a log mentioning "not signed with a valid Developer ID" or "does not include a secure timestamp" on a *nested* path.
-- App launches on dev machine, "is damaged and can't be opened" on a clean machine.
-- The build bundles a Python `.so` but the entitlements plist has no `disable-library-validation`.
-- `codesign -dvvv` on a nested dylib shows a different TeamIdentifier than the bundle.
+Predicted speaker count >> attendee count. Many one- or two-utterance "speakers." Count climbs as you *loosen* the threshold (the documented sherpa signature). Different counts on CN vs EN clips with the same settings.
 
-**Phase to address:** P1 (signing/packaging is a prerequisite refactor). Make "notarized build verified on a clean machine via `spctl`" a hard P1 exit gate — this also unblocks shipping pre-compiled binaries so `swiftc`/Xcode stops being an install dep (CONCERNS 1d).
+**Phase to address:** **P-COUNT (owner)**, calibrated and verified against **P-EVAL**. The calendar-attendee prior touches **P-UI** (entry point) but the strategy lives in P-COUNT.
 
 ---
 
-### Pitfall 3: Raising the macOS floor 13 → 14.4 for Core Audio taps, assuming "Sonoma users are fine"
+### Pitfall 3: Coverage gap — ~10% of ASR segments fall outside diarization, and the fallback is silently wrong
 
 **What goes wrong:**
-The plan migrates system-audio capture from ScreenCaptureKit (12.3+) to Core Audio process taps to escape Sequoia's weekly screen-recording re-permission nag (STACK.md) — but `AudioHardwareCreateProcessTap`/`CATapDescription` require macOS **14.4 specifically**, not "Sonoma." A user on 14.0–14.3 (Sonoma, but pre-14.4) gets a daemon that imports a symbol that doesn't exist → silent capture failure or crash on launch, *after* they've upgraded Yulu. The team reasons "we require Sonoma, Sonoma users are covered" and ships, breaking the slice of users on 14.0–14.3 and **all** users still on macOS 13 (Ventura) — who were perfectly happy on the SCK path.
+Spike 002 measured it directly: **~8–12% of ASR segments fall outside diarization coverage.** Option B merges two independently-timestamped streams (Whisper ASR segments vs sherpa diarization turns); they don't tile the same timeline. Some ASR text lands in a gap with *no* speaker turn under it. If the merge module has no fallback, those segments render unlabeled (ugly, "Unknown" everywhere). If it has a *naive* fallback ("assign to previous speaker"), it confidently mislabels ~10% of the transcript — and mislabels are worse than blanks because they're invisible and propagate into the summary (Pitfall 14).
 
 **Why it happens:**
-"macOS 14" and "macOS 14.4" get conflated. Hardware compatibility is a red herring that masks the real cut: dropping to a 14.4 *floor* removes **no additional Macs** beyond what Sonoma already dropped (Sonoma already requires 2018+ Intel / iMac Pro 2017 / Apple Silicon — verified), so "who breaks" is invisible in a hardware-compat table. The breakage is purely by **minor OS version** and by **users who haven't taken the 14.4 point update** — a population that's real and silent.
+Two engines, two VAD/segmentation regimes, two timestamp clocks. ASR keeps low-energy/edge speech that the diarization VAD dropped; diarization boundaries don't align to ASR sentence boundaries. The gap is *structural to option B*, not a bug — spike 002 calls a coverage-gap fallback **required**, item 3.
 
 **How to avoid:**
-- **Keep both capture backends behind the `CaptureBackend` seam** (Pitfall 1's seam earns its keep here): Core Audio taps on 14.4+, ScreenCaptureKit on 13.0–14.3. Gate at runtime on `ProcessInfo.processInfo.operatingSystemVersion` (check `>= 14.4`), not at compile time only.
-- **Weak-link the tap symbols** and check availability with `@available(macOS 14.4, *)` / `if #available`; never hard-link a symbol that may be absent at the floor.
-- Make `doctor.py` and onboarding **report which audio backend is active and why** ("taps unavailable: macOS 14.2 < 14.4, using ScreenCaptureKit") so a user on 14.2 isn't mystified.
-- If the team *wants* to drop SCK entirely to simplify, that's a **product decision to abandon macOS 13–14.3 users** — surface it explicitly in PROJECT.md constraints (current floor is "macOS 13+"), don't let it sneak in as an implementation detail.
-- Migration (P6) must **detect the running OS and not switch a 14.2 user to taps**; the upgrade must be safe on the *user's* OS, not the dev's.
+- Build the **merge as an explicit stage** (spike 002 item 2/3), not an inline join. Assign each ASR segment a speaker by **timestamp-overlap**, choosing the speaker with **maximum temporal overlap** (not just "the one that started first").
+- For gap segments, use a **principled, conservative fallback**, in order: (a) extend the **temporally-nearest** diarization turn if within a small window; (b) if the gap is short and bracketed by the *same* speaker on both sides, fill with that speaker; (c) otherwise mark **explicitly low-confidence / "Unknown"** rather than guessing across a speaker change.
+- **Carry a per-segment confidence/source flag** (matched-overlap vs nearest vs gap-fill vs unknown). This is the hook the UI uses to *visually mark* uncertain attributions (Pitfall 11) and the harness uses to measure them.
+- **Never silently snap a gap segment across a speaker boundary** — that's the high-cost mislabel.
 
 **Warning signs:**
-- Code references `AudioHardwareCreateProcessTap` without an `if #available(macOS 14.4, *)` guard.
-- `Package.swift` / build sets deployment target to `14.0` (not `14.4`) but uses tap APIs.
-- The plan says "require Sonoma" anywhere (Sonoma ≠ 14.4).
-- No SCK fallback arm exists, yet PROJECT.md still says "macOS 13+."
-- QA only tests on the dev's machine (latest macOS), never on a 14.2 or 13.x VM.
+Unlabeled segments in output. A merge function with no "no overlap found" branch. Fallback that always picks "previous speaker." No confidence/source field on merged segments. Coverage % not measured per meeting.
 
-**Phase to address:** P2 (the `CaptureBackend` seam must accommodate the dual-arm + version gate before the tap migration lands). The actual tap migration can be a sub-task of P2 or a fast-follow; the *seam and version gate* are the P2 deliverable. Decision on whether to keep the 13.x SCK arm is a PROJECT.md constraint update, not an eng choice.
+**Phase to address:** **P-MERGE (owner).** Confidence surfacing is consumed by **P-UI**; coverage % is tracked by **P-EVAL**.
 
 ---
 
-### Pitfall 4: launchd semantics baked into the `DaemonManager` interface (the `open -W` quirk, `KeepAlive`, login-shell PATH)
+### Pitfall 4: DER methodology gotchas — wrong collar/overlap/metric makes the eval lie
 
 **What goes wrong:**
-The `DaemonManager` abstraction faithfully reproduces launchd's quirks as if they were universal, hard-coding three macOS-isms into the "portable" surface:
-1. **The `open -W` parent/child split** (CONCERNS 8b): the audiodaemon plist runs `/usr/bin/open -W Yulu.app`, so `launchctl unload` kills `open` but not the `Yulu.app` child, forcing the `pkill -f audio_daemon` workaround. If `DaemonManager.unload()` is defined as "unload the unit," the abstraction inherits the lie that unload stops the process — systemd's `stop` *does* kill the cgroup, so a `DaemonManager` whose contract is "unload ≠ stop" mis-models every other platform and perpetuates the `pkill` hack.
-2. **`KeepAlive` semantics**: launchd `KeepAlive` is a *dict* (restart on crash, on path-existence, on network) with throttle; systemd is `Restart=on-failure` + `RestartSec=`; Task Scheduler has no real equivalent. Exposing `keep_alive` as a launchd-shaped dict leaks.
-3. **Login-shell PATH**: the `nvm`-rooted Node path baked into plists at install time (CONCERNS 6b) and the minimal GUI/launchd PATH (STACK.md, CONCERNS) get encoded as "set these env vars in the unit," which is a macOS-launchd remedy for a macOS-launchd problem.
+The team builds an eval harness (good) but reports a single DER computed with defaults, and that number is misleading. Three classic traps:
+- **Collar:** research convention removes a **250ms collar each side of every turn boundary (500ms total)** to forgive annotation slop. With a generous collar, boundary errors and short turns vanish from the score — DER looks great while the user still sees wrong labels at turn changes. With **no collar ("Full" DER)** the same system scores far worse. **Leaderboards routinely mix these settings**, so a quoted DER is meaningless without its protocol.
+- **Overlap scoring:** many DER setups **ignore overlap regions** (or `skip_overlap=True`); since real meetings have substantial overlap (Pitfall 5), ignoring it deletes exactly the hardest cases from the score. A diarizer that simply never predicts overlap can post a flattering DER.
+- **Wrong metric for the symptom:** **DER is time-weighted at the frame level.** A speaker confusion during a brief hesitation barely moves DER but can corrupt several *important words* — which is what the user reads. **WDER** (word-level) and **CDER/SER** (utterance-level, each segment counts once) capture short-utterance errors that DER hides. A system can have low DER and high SER.
+
+Two more harness-specific traps the question flags:
+- **Reference-label creation bias:** the person who builds the ground truth often labels *from the system's own output* (correcting it) rather than from scratch — this anchors the reference to the system and inflates the score. Boundary placement during annotation also subtly matches whatever the tool produced.
+- **Tiny test sets:** 2–3 meetings (what spike 002 proposes as the *minimum*) give a high-variance number; one bad meeting swings the average. Fine as a *gate*, dangerous as a *headline accuracy claim*.
 
 **Why it happens:**
-launchd is the only supervisor the codebase has ever known, so its peculiarities feel like "how daemons work." The `open -W` design (chosen so `Yulu.app` gets a real GUI session for ScreenCaptureKit/TCC) is itself a macOS-specific workaround that the abstraction would canonize.
+DER is "the standard metric," so people report it without its parameters and assume comparability. The defaults (collar, skip-overlap) optimize for clean academic comparison, not for "did the meeting note attribute words correctly." Hand-labelling is tedious, so people shortcut by correcting the tool's output (the bias). And labelling is expensive, so the set stays tiny.
 
 **How to avoid:**
-- Define `DaemonManager` contracts in **outcome terms, not launchd terms**: `stop()` means "the process is no longer running" (the macOS impl is responsible for the `pkill` cleanup *internally* until the `open -W` design is fixed). Don't expose `load`/`unload` as the public verbs if their macOS meaning ("registered but maybe still running") doesn't generalize — prefer `start`/`stop`/`restart`/`status` and let macOS map them onto launchctl + pkill.
-- **Fix the `open -W` design as part of this milestone** (CONCERNS 8b): launch `Yulu.app/Contents/MacOS/audio_daemon` directly with `LSUIElement=true`, so `launchctl bootout` cleanly kills it and `stop()` needs no `pkill`. This removes a data-loss vector (two daemons writing one WAV) *and* makes the macOS impl's `stop()` honest, which keeps the interface honest.
-- Model keep-alive as a **boolean + restart policy enum** (`never` / `on-failure` / `always`), translated per-platform; never surface a plist dict.
-- Resolve PATH via the **login-shell** at *runtime in the daemon* (`$SHELL -lic 'echo $PATH'`, STACK.md Pattern), not by baking a versioned `nvm` path into the unit at install time (CONCERNS 6b). The neutral service spec carries "inherit login PATH," not a frozen string. This is also what makes host-capability reuse (Pitfall 5) work from inside a daemon.
-- Use **`launchctl bootstrap`/`bootout`** (the modern API) rather than deprecated `load`/`unload`; the abstraction should not enshrine the deprecated verbs.
+- **Pin and document the protocol** explicitly: report DER **both** with the 0.25s collar **and** Full (no collar), and **both** with overlap scored and skipped. State it next to every number.
+- **Lead with WDER** for the product decision — it's the metric that maps to "wrong speaker on these words," which is what users feel. Add **CDER or SER** so short-utterance/backchannel errors (Pitfall 7) aren't hidden by time-weighting.
+- Use a **standard scorer** (e.g. pyannote.metrics / `dscore`/`spyder`-style) rather than a hand-rolled DER, which is easy to get subtly wrong.
+- **Label references blind to the system output** (annotate from audio, ideally a second engine or person), to avoid anchoring bias.
+- **Bucket results CN vs EN vs code-switch (Pitfall 6) and by meeting** — never a single pooled average over a tiny set. Treat the number as a *gate threshold*, and state the small-N caveat wherever the number is quoted.
 
 **Warning signs:**
-- `DaemonManager` interface has a method named `unload` whose doc says "may not stop the process."
-- `keep_alive` parameter type is a dict/JSON rather than an enum/bool.
-- The macOS impl still shells `pkill -f` *after* `bootout` (means `open -W` not yet fixed).
-- A versioned `nvm` path string appears in any generated unit/plist.
-- `launchctl load`/`unload` (deprecated) used instead of `bootstrap`/`bootout`.
+A DER quoted with no collar/overlap stated. Only DER, never WDER/SER. Hand-written scoring code. References produced by editing the tool's output. One pooled number across 2–3 clips presented as "accuracy." Suspiciously low DER on overlap-heavy meetings (overlap silently skipped).
 
-**Phase to address:** P2 (DaemonManager seam) — and fold the `open -W` → direct-launch fix (CONCERNS 8b) into P2 so the macOS `stop()` is genuinely clean. The login-shell PATH resolution overlaps P3 (capability detection needs the same mechanism).
+**Phase to address:** **P-EVAL (owner).** This pitfall *is* the methodology of the gate.
 
 ---
 
-### Pitfall 5: Host-capability detection false positives — finding a binary/model that exists but the daemon can't actually use
+### Pitfall 5: Overlapping / crosstalk speech mis-attribution — the dominant real-meeting error
 
 **What goes wrong:**
-`doctor.py` is extended to "detect already-configured whisper/claude/models" (the milestone's core thesis) and reports `claude: ✓`, `whisper-cli: ✓`, `mlx-whisper: ✓`, `model: found` — but each is a **false positive**:
-- `claude` resolves on the *user's login shell* PATH but not on the *daemon's* PATH (CONCERNS 6b / STACK.md), so `agent_queue_worker` (running under launchd's minimal PATH) can't invoke it — green doctor, broken summaries.
-- `mlx-whisper` is importable from the *system python3* the dev tested with, but the **daemon runs under a different interpreter** — this is *exactly the live `mlx_python` dead-field bug* (CONCERNS 4a/6e): the field is read but the daemon imports against `__PYTHON__`. If detection probes the wrong interpreter, it confidently reports a capability the daemon will fail to import.
-- A `whisper-cli` is found but it's a **different/incompatible build** (a `whisper.cpp` fork, wrong arch, or a `whisper` PyPI package that is OpenAI-whisper, not whisper.cpp) — version string present, behavior incompatible.
-- A model file *exists* at a path but is a **different quantization/format** than the chosen backend expects (a GGML `.bin` found while the MLX backend needs an HF-cached `mlx-community/whisper-*`), or is **truncated/corrupt** (partial HF download), or is **dataless** (evicted by iCloud — see Pitfall 7).
-
-The result: the "reuse host capability" decision fires on a phantom, Yulu *skips* installing/duplicating the thing it actually needed, and the failure surfaces only at the first real recording — silently (the pipeline is best-effort, CONCERNS / ARCHITECTURE error handling).
+When two people talk at once (interruptions, "yeah"-while-someone-talks, two-people-laughing-then-one-continues), single-stream diarization assigns the overlap to **one** speaker (or the wrong one). Documented impact: **WDER jumps from 2.68% with two speakers to 11.65% with three** as overlap density rises. In a meeting note the cost is asymmetric and severe — if an interjection that contains a *commitment* ("I'll own that") is attributed to the wrong person, the **action item, the summary line, and the decision log all inherit the misattribution** (this cascade is Pitfall 14).
 
 **Why it happens:**
-"Detection" is treated as "does the name resolve?" (`shutil.which`, `command -v`, a glob hit) rather than "can the *specific runtime that will use this* actually use it?" The live `mlx_python` bug proves the team already conflates "installed somewhere" with "usable by the daemon." Reuse-vs-duplicate is a higher-stakes decision than mere reporting, so a false positive is worse than no detection — it suppresses the fallback.
+Yulu captures a **mono mixdown** — system audio + mic merged into one track. There's no spatial/channel separation to pull overlapping voices apart, and the cam++ embedding path assumes one dominant speaker per segment. Overlap is the single hardest case for *any* mono diarizer; it's not a sherpa-specific defect. (Clean-room note: a future separate-mic/channel capture would help, but that's out of scope this milestone.)
 
 **How to avoid:**
-- **Probe through the consumer, not the shell.** For Python importability, run the probe **with the daemon's actual interpreter** (`<daemon_python> -c "import mlx_whisper, sys; print(mlx_whisper.__version__)"`), resolved the *same way the plist resolves `__PYTHON__`*. First fix the `mlx_python` ambiguity (STACK.md: pick (a) venv-as-daemon-interpreter or (b) require it in the daemon's interpreter) so there's a single, known "daemon Python" to probe.
-- For binaries the daemon invokes (`claude`, `whisper-cli`, `llm.command`), resolve via the **login-shell PATH + known install dirs**, then verify **the daemon can reach it** by checking against the daemon's actual PATH/env — and **prove it runs**, not just `--version`: a tiny smoke invocation (`whisper-cli --help`, `claude --version`, `echo hi | <llm.command>` dry-run) catches wrong-build/incompatible cases.
-- **Validate semantics, not just presence**: for models, check format matches the selected backend (MLX wants HF-cache `models--mlx-community--whisper-*`; whisper.cpp wants a GGML `.bin`), check size against expected (a 3GB large-v3 that's 40MB is a partial download), and check the file is **materialized** (not a 0-byte iCloud placeholder — `st_size` vs `NSURLUbiquitousItemDownloadingStatus`).
-- **Distinguish "found and verified" from "found, unverified" in the report** (three states: `usable` / `present-but-unverified` / `absent`), and **only `usable` may trigger reuse-instead-of-install.** A `present-but-unverified` must fall back to install/duplicate, not skip.
-- Make the **settings UI show provenance** (what's being reused, from where, and verified-status) so a user can see "Yulu is reusing your `~/.local/bin/claude`" and catch a wrong choice.
+- **Set expectations honestly in the UI** (Pitfall 12): labels are a *hint*; overlap regions are where they're least reliable. This is a product decision the milestone already framed ("treat speaker labels as a helpful hint").
+- **Detect and mark overlap** where possible (the segmentation model emits overlap/uncertainty) and **flag those segments low-confidence** rather than rendering a clean wrong label. Borrow the human-transcription convention of a visible `[overlap]` / uncertain marker.
+- **Measure overlap explicitly** in P-EVAL (don't skip overlap in scoring — Pitfall 4) and **report DER on overlap-heavy meetings separately** so the known weak spot is quantified, not buried.
+- **Don't over-invest** in overlap-resolution algorithms this milestone — mono overlap is a research-grade problem; the pragmatic win is *honest marking* + measurement, not a separation pipeline.
 
 **Warning signs:**
-- Detection code uses `shutil.which(...)` / `command -v` with no interpreter- or env-scoped re-check.
-- The import probe runs under whatever Python `doctor.py` happens to use, not the daemon's.
-- Detection records a boolean (`found: true`) rather than a tri-state with a verification method.
-- `doctor` is green but the first recording's summary/transcription fails.
-- Reuse decision has no fallback path when verification is skipped.
-- The `mlx_python` field is still read-but-unused (means the "which interpreter" question is unresolved — detection has no stable target).
+Action items attributed to the wrong person in summaries. Interjections ("right," "exactly") absorbed into the dominant speaker's turn. WDER on 3+ speaker clips far above 2-speaker clips. Overlap silently excluded from the eval.
 
-**Phase to address:** P3 (host-capability detection + `doctor.py`). **Hard prerequisite:** resolve the `mlx_python` interpreter ambiguity (CONCERNS 4a/6e) *before or within* P3 — detection is meaningless without a defined "daemon interpreter" to probe. Reuse-vs-install decision logic belongs in P3/P4 boundary and must consume the tri-state, not a boolean.
+**Phase to address:** Detection/marking in **P-MERGE** + **P-ENGINE** (use the segmentation model's overlap signal); honest framing in **P-UI**; quantification in **P-EVAL**.
 
 ---
 
-### Pitfall 6: Agent-orchestrated provisioning amplifies the `curl|bash` trust problem and skips integrity verification
+### Pitfall 6: CN vs EN vs code-switch accuracy divergence — tuned for one, broken for the other
 
 **What goes wrong:**
-The milestone moves install from `curl|bash` to "the host coding agent provisions Yulu step-by-step." This is sold as more agent-native — but it **amplifies** the existing trust gap (CONCERNS 2b): now an *autonomous agent* is fetching and executing install steps, and the human-in-the-loop "do I trust this curl pipe?" moment is gone. Specific failure modes:
-- The agent fetches `install.sh`/`release_installer.py` over the same unauthenticated `raw.githubusercontent.com` path (CONCERNS 2b), with only `py_compile` (syntax, not integrity) as a check — so a compromised release or MITM now executes *without* a human even glancing at it.
-- Provisioning is **non-idempotent / not partial-failure-safe**: the agent runs step 3 of 7, hits a permission prompt or a network blip, and re-runs from scratch — re-downloading models, re-creating the venv, re-registering launchd units, possibly stacking duplicate daemons or corrupting half-written config. The current `setup.sh` is one linear `set -e` (no `pipefail`) flow (CONCERNS 2a/6c) — splitting it into agent-invoked steps without making each **idempotent and individually retryable** turns one fragile script into seven.
-- The agent **assumes its own environment** (its PATH, its Python, its `claude`) is what the *daemons* will have — re-introducing Pitfall 5's PATH/interpreter mismatch at install time.
+The team tunes the clustering threshold and merge windows on Chinese meetings (where the over-split pain is loudest — Pitfall 2), ships it, and English or **CN/EN code-switched** meetings regress — different optimal threshold, different count behavior, different segment durations. Or the reverse: tuned on English defaults, CN over-splits in production. Code-switching is worst: a single speaker who switches CN↔EN mid-sentence can shift their own embedding enough to be **split into two speakers**, and ASR/diarization timestamp drift is often larger at language-switch points (compounding Pitfall 3's coverage gap).
 
 **Why it happens:**
-"Let the agent do it" feels like it removes risk (the agent is careful!) when it actually removes the *human verification checkpoint* and adds an actor that will confidently retry destructive steps. Idempotency is the hardest property to retrofit and the easiest to skip in a spike.
+Speaker embeddings and clustering thresholds are **not language-invariant**; cam++ has language-dependent behavior, and the over-split is explicitly a *Chinese* phenomenon per spike 002. Yulu's real user base is bilingual — the milestone explicitly requires labelling **CN + EN** meetings — so single-language tuning is a guaranteed gap.
 
 **How to avoid:**
-- **Verify provenance before executing anything** (STACK.md): the agent already has `gh`; require `gh attestation verify <asset> -o <org>` (GitHub Artifact Attestations / keyless Sigstore) on the release zip before any step runs, degrading to a published SHA-256 `checksums.txt` when `gh` is absent. This is strictly better than today's `py_compile` and is the *native* agent integrity story — the agent cryptographically confirms Yulu's own CI built the asset.
-- **Design every provisioning step to be idempotent and resumable**: each `yulu provision <step>` checks "is this already done correctly?" and is safe to re-run. Record progress in a state file (`.yulu-install.json` with per-step status) so a retry resumes, not restarts. Model on `setup.sh --upgrade`'s existing idempotency intent but make it per-step and machine-readable.
-- **Partial-failure recovery is a first-class requirement, not a nice-to-have**: a failed step must leave the system either rolled-back or safely resumable, never half-applied. Daemon registration especially must be "register-or-replace," never "register-again" (guard against duplicate launchd labels → the WAV-write conflict).
-- **Keep the verified signed-zip + decomposed `setup_*.sh` as the non-negotiable fallback** (STACK.md, PROJECT.md treats provisioning as "validate via spike"). The spike's job is to *prove* the agent path is at least as safe as the zip path; if it isn't, the zip path stays primary and the agent only invokes the top-level orchestrator + `yulu skill install`.
-- **The agent must provision the daemon's environment, not assume its own.** Resolve and record the daemon's interpreter/PATH explicitly (ties to Pitfall 5); don't let "the agent could import mlx_whisper" imply "the daemon can."
+- **Eval corpus must contain CN, EN, and at least one code-switch meeting** (spike 002 item 6 calls for CN + EN; add code-switch since it's a Yulu reality). **Bucket every metric by language** — never a single pooled number (ties back to Pitfall 4).
+- **Pick parameters that are robust across buckets**, not optimal on one. If no single setting works, consider a **language-aware** path (Yulu/Whisper already detects language) — but only if the eval proves the gap is large enough to justify the complexity (YAGNI otherwise).
+- **Validate the chosen default on both** before locking it; record the per-bucket DER/WDER in the provider-choice ADR.
 
 **Warning signs:**
-- Provisioning fetches over `http`/`raw.githubusercontent.com` with no signature/attestation check.
-- A provisioning step has no "already done?" guard (re-running re-downloads or re-registers).
-- No per-step state file; failure recovery = "run the whole thing again."
-- Daemon registration uses `load` without first `bootout`-ing an existing label (duplicate-daemon risk).
-- The spike demonstrates the happy path only; no test kills a step midway and resumes.
-- Trust model relies on "the agent is trustworthy" rather than "the artifact is verified."
+Tuning notes mention only one language. A single pooled DER. Code-switch meetings split one person into two. EN regresses after a CN tuning pass (or vice-versa). No code-switch clip in the test set.
 
-**Phase to address:** P4 (agent-orchestrated provisioning). The **spike must explicitly test partial-failure/resume and provenance verification**, not just the happy path — make "kill at step N, resume cleanly" and "reject a tampered asset" spike exit criteria. Idempotent step decomposition depends on P1 (setup decomposition); attestation depends on P1's CI changes.
+**Phase to address:** **P-EVAL (owner — corpus + buckets)**; parameter robustness in **P-COUNT**; optional language-aware path in **P-ENGINE**.
 
 ---
 
-### Pitfall 7: Pointing the data folder at iCloud/Google Drive corrupts SQLite and evicts recordings
+### Pitfall 7: Short-utterance / backchannel misattribution ("嗯", "对", "OK", "right")
 
 **What goes wrong:**
-The "configurable data folder → point it at iCloud/Google Drive" feature (Obsidian model, locked decision) ships, and users put `~/.config/yulu` *and/or* the recordings dir inside a synced folder. Several distinct data-loss/corruption modes fire:
-- **SQLite corruption.** `vocab.sqlite`, `prompts.sqlite`, `search.sqlite` (and their `-wal`/`-shm` sidecars) live inside the synced folder. SQLite's own docs name "**syncing the file via Dropbox/iCloud**" as a corruption cause: the sync client copies the `.sqlite` without its `-wal` (or copies them at different instants), and a DB separated from its WAL loses committed transactions or corrupts. Worse, two machines syncing the same DB = two writers on one file = the classic multi-process WAL corruption (and SQLite had a WAL-reset corruption bug through 3.51.2, fixed 3.51.3 — a synced multi-writer setup is precisely its trigger).
-- **iCloud eviction of recordings.** With "Optimize Mac Storage" on, iCloud **evicts** infrequently-accessed files to dataless **placeholders**. A daemon doing a `pread` on an evicted WAV/transcript **blocks in the kernel** until iCloud re-downloads — so transcription/summary stalls or times out, and on a metered/offline connection, *fails*. Recordings are large and infrequently re-read → prime eviction candidates.
-- **Lock/socket/PID files in a synced dir.** `audio_daemon.sock`, `stt_daemon.sock`, `.agent-queue.lock`, PID files (all in `~/.config/yulu`, ARCHITECTURE) are **machine-local runtime artifacts** — syncing a Unix socket or an `fcntl` lock across machines is meaningless and actively harmful (a stale PID/lock from machine A appears on machine B; sync churn on the lock file).
-- **Partial sync / streaming.** Google Drive "streaming" mode (File Provider, `~/Library/CloudStorage/GoogleDrive-<acct>`) presents files that aren't materialized; a mid-sync `agent-queue.json` may be read half-written despite Yulu's atomic `os.replace` (the replace is atomic *locally*; the sync layer re-uploads/downloads on its own schedule and can present an intermediate state on another machine).
+Brief turns — backchannels ("嗯", "对", "mm-hmm", "yeah"), one-word confirmations — are **too short to embed reliably** and get dropped, marked Unknown, or **glued onto the previous speaker's turn**. In a meeting this both clutters (phantom micro-speakers if over-split) and corrupts meaning: a "对" (agreement) attributed to the wrong person changes who-agreed-to-what. These are also the segments where the coverage gap (Pitfall 3) and overlap (Pitfall 5) bite hardest, because backchannels frequently occur *during* another speaker's turn.
 
 **Why it happens:**
-"Sync is the OS's job" (the Obsidian framing) is true for **plain content files** but catastrophically false for **databases, locks, sockets, and large infrequently-read media**. Obsidian itself warns against syncing its workspace/cache via cloud and stores notes as individual Markdown files for exactly this reason. The team adopts the *slogan* without adopting the *constraint* that makes it safe.
+Speaker embeddings need ~0.5–1s of voiced speech to be discriminative; research finds **best results around a 0.5s minimum-segment floor** — below that, accuracy on the small segment drops sharply. A min-duration floor *helps* over-segmentation robustness but *trades away* accuracy on exactly these short turns — a genuine tension, not a free fix. And **time-weighted DER barely registers these errors** (each is a fraction of a second), so they're invisible unless you measure at the utterance level (Pitfall 4's SER/CDER).
 
 **How to avoid:**
-- **Separate "syncable" from "machine-local" data physically.** Only **portable content** (the `.md`/`.html` summaries, maybe the WAV/transcript artifacts if the user accepts the tradeoff) goes in the user-chosen (possibly synced) folder. **SQLite DBs, sockets, locks, PID files, logs, caches stay in a fixed local dir** (`~/.config/yulu` or an XDG state dir) that is **never** the synced folder. Make `audio.output_dir` (content) independently configurable from the runtime/state dir (local-only) — and **forbid** the runtime dir from being set to a known cloud root.
-- **Detect-and-warn at folder selection** (P5/P7 UI + `doctor.py`): if the chosen data folder resolves under `~/Library/Mobile Documents/com~apple~CloudDocs`, `~/Library/CloudStorage/*`, Dropbox, etc. (STACK.md's cloud-root detection), warn explicitly — and **refuse** to place SQLite/sockets there.
-- If SQLite *must* live in a synced dir (it shouldn't): set **`PRAGMA journal_mode=DELETE`** (not WAL) to avoid the separated-WAL failure, accept the concurrency cost, and document single-machine-at-a-time only. Better: keep DBs local and treat them as **rebuildable caches** — `search.sqlite` is already a derived FTS index (re-indexable from summaries); `vocab`/`prompts` are seedable. Design them as local + reconstructable rather than synced + authoritative.
-- **Prevent eviction of in-use media**: if recordings live in iCloud, **pin** the active/recent recordings (`com.apple.fileprovider.pinned` xattr — but note Sequoia's Finder pin caps at 10 items; programmatic pinning via the File Provider API is the robust route) so a `pread` during transcription doesn't block on a re-download. Or keep recordings local and only sync the *summaries*.
-- **Never sync the runtime dir.** Document and enforce that sockets/locks/PIDs are local. This is a non-negotiable invariant.
+- **Choose the min-segment / merge policy deliberately** (~0.5s is the documented sweet spot) and treat it as a tuned parameter against the eval, not a default.
+- For sub-threshold segments, **prefer "low-confidence / Unknown" over a confident guess** when they sit at a speaker boundary; only glue to a neighbor when both neighbors are the *same* speaker (consistent with the Pitfall 3 fallback ladder).
+- **Measure with SER/CDER**, not just DER, so backchannel misattribution is actually visible in the number that gates the release.
+- **UI: render very short attributed turns subtly** (or fold consecutive same-speaker turns) so a wrong micro-label is less load-bearing visually.
 
 **Warning signs:**
-- `vocab.sqlite`/`prompts.sqlite`/`search.sqlite` or `*.sock`/`*.lock`/`*.pid` resolve to a path under a cloud-storage root.
-- "database disk image is malformed" / "database is locked" errors after the user enabled sync or used two Macs.
-- Transcription/summary intermittently hangs for tens of seconds then succeeds (iCloud re-download) — or fails offline.
-- A `-wal`/`-shm` file exists in a synced folder without its base DB recently synced.
-- Two machines both running Yulu against the same synced data dir.
-- WAV present as a 0-byte/dataless placeholder when the daemon tries to read it.
+"对/嗯/OK" lines attributed to the wrong speaker. Backchannels swallowed into a monologue. DER fine but SER poor. Min-segment value set to a library default no one chose.
 
-**Phase to address:** P5 (data-folder location + cloud-sync). The **physical separation of content vs. runtime/state dir** is the core P5 design decision and must precede letting users pick a synced folder. Cloud-root detection + warning lands in P5 (`doctor.py`) and surfaces in P7 (settings UI). Treating `search.sqlite` as a rebuildable local cache may need a small P5 refactor.
+**Phase to address:** **P-MERGE (owner — min-segment + fallback policy)**; visibility in **P-EVAL** (SER); rendering in **P-UI**.
 
 ---
 
-### Pitfall 8: Seamless migration truncates active recordings and never reclaims backup disk
+### Pitfall 8: Whisper.cpp hallucination / repeat on silence pollutes the labelled transcript
 
 **What goes wrong:**
-The "seamless auto-migration of existing v0.5.x `~/.yulu` installs" deliverable runs on `yulu update` and:
-- Inherits the **`pkill -9` during upgrade** (CONCERNS 2d): the migration stops daemons with `pkill -9 -f audio_daemon` (needed today because of the `open -W` child-orphan, CONCERNS 8b) **while a recording is active**, truncating the WAV at an OS buffer boundary; the relaunched daemon may then pick up a half-written file that fails transcription. Migration is *more* likely to hit this than a normal update because it touches more state and runs longer.
-- Inherits **uncleaned backups** (CONCERNS 2e): each migration creates a `~/.yulu.backup-XXXXXX` full copy (hundreds of MB) that is never deleted — so the *migration* (a one-time, larger operation) leaves the largest orphaned backup yet, and repeated update-migrations stack them.
-- **Migrates the wrong assumptions**: copies the old `config.json` forward including the **dead `mlx_python` field** and old hardcoded paths (`~/Movies/Yulu` baked into `status_agent.swift`, CONCERNS 1e/6d), so the "migrated" install carries the same latent bugs — or, worse, the migration "helpfully" moves the data folder and breaks the menu-bar recordings list (which reads `~/Movies/Yulu` directly, ignoring config).
-- **No rollback on partial migration failure**: migration is multi-step (config transform + capability re-detection + daemon re-registration + possible data-folder move); a failure midway leaves a half-migrated install with no clean revert, and the never-deleted backup is the *only* recovery — but there's no `yulu rollback` to use it.
+Whisper (incl. whisper.cpp / large-v3) **hallucinates on silence and non-speech** — looping a phrase, or inserting filler like "so", "thank you", subtitle-credit boilerplate ("字幕by…"), with **as much as 55% of non-speech audio transcribed as "so"** in one study and repeated-phrase loops a known signature. In Yulu's pipeline these phantom segments are *real ASR segments with timestamps*, so the merge stage will dutifully **assign them a speaker** — producing confident, attributed nonsense in the meeting note. Silences at the **start/end** of a recording are the classic trigger; meetings have plenty (dead air before people join, after they leave, long pauses).
 
 **Why it happens:**
-"Seamless" is interpreted as "automatic and invisible," which pressures the team to *not* prompt, *not* check recording state, and *not* pause — the opposite of what data safety needs. The existing `pkill -9` and uncleaned-backup behaviors are pre-existing (CONCERNS) and get inherited by default unless the milestone explicitly fixes them.
+On near-silent input Whisper's audio embeddings are near-zero and the model — trained on speech — "fills in" the closest match, looping the most recent phrase. Spike 002 explicitly flags "handling whisper hallucination/repeat artefacts" as a merge-module responsibility (item 3). Diarization VAD often *correctly* finds no speaker there (contributing to the Pitfall 3 coverage gap) — so a hallucinated ASR segment in a silent stretch is *both* a fake transcript line *and* a coverage-gap segment, the worst combination.
 
 **How to avoid:**
-- **Guard on recording state before stopping anything** (CONCERNS 2d fix): query `audio_daemon.sock` `{"action":"status"}`; if recording is active, **refuse or defer** migration (or drain + graceful-stop first) — analogous to `dev_install.py`'s existing `recording` guard. Never `pkill -9` an active recorder.
-- **Fix `open -W` → direct-launch first** (Pitfall 4 / CONCERNS 8b) so migration can `bootout` cleanly and never needs `pkill -9` at all — removing the truncation vector at its root.
-- **Implement backup lifecycle as part of migration** (CONCERNS 2e): after a *verified* successful migration, delete backups older than the last 1–2; add `yulu cleanup-backups`. A migration that creates a backup is incomplete until it also defines when that backup dies.
-- **Make migration transactional with explicit rollback**: snapshot → migrate steps with per-step state (reuse Pitfall 6's resumable state file) → verify (`doctor` green, daemons up, a smoke transcription) → only then commit and prune backup. On failure, `yulu rollback` restores from the backup automatically. "Seamless" = *reliable and reversible*, not *silent and irreversible*.
-- **Migrate data, fix bugs**: the migration is the moment to **drop the dead `mlx_python` field**, **rewrite hardcoded `~/Movies/Yulu`** to honor `audio.output_dir`, and **stamp the new config schema version** — don't copy known-bad config forward verbatim. If the data folder moves, update `status_agent.swift`'s source-of-truth (read config, not hardcoded path) in the same change.
-- **Idempotent + version-stamped**: record a `schema_version` / `migrated_at`; re-running migration on an already-migrated install is a no-op, not a re-transform.
+- **VAD-gate ASR segments before merging** — drop/flag ASR text in regions the diarization VAD (or a dedicated VAD) marks as non-speech. "Use a VAD to remove non-speech segments" is the documented near-foolproof mitigation.
+- **Detect repeat/loop artifacts**: flag segments that are exact/near-duplicate consecutive text, or known boilerplate ("so" alone, subtitle credits, "thank you for watching"), as suspect.
+- **Treat a hallucination-flagged segment as no-speaker, not previous-speaker** — don't let the Pitfall 3 fallback launder hallucinated text into a confident attribution.
+- **Measure it:** include start/end-silence and a long-pause clip in the eval corpus; check the output has no looped/boilerplate lines.
 
 **Warning signs:**
-- Migration path contains `pkill -9` with no preceding recording-state check.
-- No `schema_version` in config; migration can't tell migrated from un-migrated (re-runs re-transform).
-- `~/.yulu.backup-*` dirs accumulate after updates (no cleanup ran).
-- Migrated `config.json` still contains `mlx_python`; `status_agent.swift` still reads `~/Movies/Yulu` literally.
-- No `yulu rollback`; the only recovery from a bad migration is manual.
-- "Seamless" implemented as "no prompts, no checks."
+Repeated identical lines in transcripts. "so" / "字幕"/ "thank you for watching" appearing in silent stretches. Attributed text in regions with no diarization coverage. Hallucinations clustering at recording start/end.
 
-**Phase to address:** P6 (seamless auto-migration). **Hard dependencies:** the `pkill -9` recording-state guard and the `open -W` → direct-launch fix (CONCERNS 2d, 8b) must land in P2/P6 *before* migration ships; backup lifecycle (CONCERNS 2e) is part of P6. The resumable-state-file mechanism is shared with P4 (Pitfall 6).
+**Phase to address:** **P-MERGE (owner — VAD-gate + artifact filter)**, with a VAD dependency possibly shared from **P-ENGINE**'s segmentation model. Verified in **P-EVAL**.
+
+---
+
+### Pitfall 9: Label instability across re-runs and across meetings — renames get clobbered
+
+**What goes wrong:**
+Two related, both painful:
+- **Cross-meeting:** diarization labels are **per-recording only** — "Speaker 2" in today's standup is a *different person* than "Speaker 2" yesterday. Users naturally expect their named teammates to persist; they don't. This is intrinsic to diarization (it's clustering, not identification — a *different technology*).
+- **Within/across re-runs + user edits:** if a user **renames "Speaker 2 → Alice"** and then the meeting is **re-transcribed/re-diarized** (settings change, model upgrade, coverage-gap re-merge), the new run produces *fresh anonymous labels* with no stable mapping — **clobbering the user's rename.** Clustering is also non-deterministic enough that label *indices* can permute between runs even on the same audio, so "Speaker 1/2/3" aren't stable identifiers to key edits on.
+
+**Why it happens:**
+Diarization assigns **arbitrary cluster indices** with no inherent identity; nothing ties cluster #2 in run A to cluster #2 in run B, let alone to a human. Persisting identity across recordings requires **speaker *identification* / voiceprint enrollment** — a separate, heavier capability (Pitfall 10) and a privacy decision (Pitfall 13). Teams conflate "diarization" with "speaker ID" and assume persistence comes for free; it doesn't.
+
+**How to avoid:**
+- **Store user renames keyed to a stable per-meeting speaker record**, not to the volatile "Speaker N" index. Re-runs must **re-attach existing user labels** by best-effort mapping (embedding similarity or overlap with the prior segmentation) and **never silently overwrite** a user's name. If mapping is uncertain, *preserve the old name and flag*, don't clobber.
+- **Set expectations in copy:** "Speaker names are per-meeting" (Pitfall 12) — so users aren't surprised that yesterday's Alice is today's Speaker 2.
+- **Decide cross-meeting persistence as an explicit, scoped choice.** Either (a) **out of scope** for v0.6 (honest, simple — diarization-only, names per meeting), or (b) a **deliberate later feature** built on opt-in voiceprint enrollment (Pitfall 10 + 13). Do **not** half-build it (e.g. naive name-matching by index) — that produces *confident wrong* persistence.
+- **Make re-diarization explicit and non-destructive:** treat it like a re-index that proposes new labels and merges in old names, with the user's edits as source of truth.
+
+**Warning signs:**
+User renames vanish after a re-transcribe. The same person is "Speaker 1" in one meeting and "Speaker 3" in another with no warning. Edits keyed to "Speaker N". Re-running the same audio permutes labels. Bug reports: "it forgot the names I set."
+
+**Phase to address:** **P-UI (owner — rename persistence model + re-attach-don't-clobber)**; expectations copy in **P-UI**; the cross-meeting-persistence scope decision is a **roadmap/PROJECT decision** (in or out for v0.6).
+
+---
+
+### Pitfall 10: Mis-scoping diarization as speaker *identification* — building the wrong (heavy, privacy-laden) thing
+
+**What goes wrong:**
+Driven by the very natural "but I want it to know it's Alice" desire (Pitfall 9), the team starts building **voiceprint enrollment / persistent speaker recognition** — capturing per-person voice samples, storing embeddings in a database, matching new audio against enrolled identities. This is **scope creep into a different, heavier capability** than the milestone signed up for ("who-said-what" within a meeting), it drags in real **privacy obligations** (biometric voiceprints — Pitfall 13), and it's a known accuracy rabbit hole (enrollment quality, drift, cross-condition robustness).
+
+**Why it happens:**
+The line between **diarization** (cluster turns within one recording, anonymous labels) and **speaker identification** (match to a known, enrolled person) is genuinely blurry in users' minds and in marketing copy. The pull from Pitfall 9 ("names should persist") leads straight here. It feels like "just a bit more."
+
+**How to avoid:**
+- **Name the boundary explicitly in PROJECT/REQUIREMENTS:** v0.6 ships **diarization** (anonymous, per-meeting), **not** speaker identification/enrollment. The milestone's own scope ("who-said-what", "rename/merge/correct") is diarization + manual labels — keep it there.
+- If persistent identity is wanted, **defer to a future milestone** with its own privacy design and opt-in enrollment UX (Pitfall 13). Manual rename + per-meeting labels is the v0.6 answer to "who is this."
+- **Reuse, don't build, where the abstraction allows:** identity belongs behind a future capability provider, not bolted into the v0.6 merge stage.
+
+**Warning signs:**
+A "voiceprints" / "enrolled speakers" table appearing in the schema. Cross-meeting matching code in v0.6. Storing per-person embeddings persistently. Requirements drifting from "rename" to "auto-recognize."
+
+**Phase to address:** **Roadmap / PROJECT scope guard** (keep it out of v0.6); revisited only as a future milestone.
+
+---
+
+## Moderate Pitfalls
+
+### Pitfall 11: The correction UI is an afterthought — no merge/split, only rename
+
+**What goes wrong:**
+The UI shows speaker labels and lets users **rename** ("Speaker 2 → Alice") but can't **merge** (over-split produced Speaker 2 and Speaker 7 that are the same person — the *direct* consequence of Pitfall 2) or **split/reassign** (a turn or word range attributed wrong — consequence of Pitfalls 3/5/7). Given that this engine's known failure is over-splitting, a rename-only UI leaves users manually renaming twenty fragments to the same name — exhausting and lossy. Spike 002 explicitly says labels must be **"editable/mergeable"** (item 7), not just editable.
+
+**Why it happens:**
+"Show the labels" reads as the feature; correction tooling looks like polish. But because the engine *will* mislabel (especially over-split), correction is **core to making the output usable**, not optional.
+
+**How to avoid:**
+- Ship **rename + merge + reassign** as the v0.6 correction set. Merge is the highest-value op given over-split. Reassign-a-range handles overlap/coverage-gap errors.
+- **Visually mark low-confidence attributions** (using the per-segment confidence/source flag from Pitfall 3) so users know *where* to look — don't make them re-read everything.
+- **Persist corrections robustly** against re-runs (Pitfall 9).
+- Consider a **"merge all into N"** or count-correction affordance tied to the speaker-count strategy (Pitfall 2) as the fast path out of over-split.
+
+**Warning signs:**
+Rename-only UI. No way to combine two labels. Users renaming many fragments to one name. No visual cue for uncertain segments. Corrections lost on re-transcribe.
+
+**Phase to address:** **P-UI (owner)**, consuming the confidence flag from **P-MERGE** and the count strategy from **P-COUNT**.
+
+---
+
+### Pitfall 12: Over-promising accuracy in copy — labels presented as fact, not hint
+
+**What goes wrong:**
+The UI presents speaker labels with the same visual authority as the transcript text, implying they're as reliable as the words. Given measured ~15–20% arguable attributions (spike 002) plus overlap/short-utterance/coverage-gap tails, users trust labels they shouldn't — and lose trust in the whole feature when they catch an obvious error, because nothing told them to expect any.
+
+**Why it happens:**
+Diarization output *looks* authoritative (clean "Alice:" prefixes). Teams ship the happy-path framing. Spike 002 explicitly says to **"treat speaker labels as a helpful hint"** and **"set the accuracy expectation in the UI copy"** (caveats + item 6) — easy to skip.
+
+**How to avoid:**
+- **Frame labels as assistive, correctable hints** in copy and visual treatment; surface a calibrated expectation from the **actual eval number** (P-EVAL), not marketing.
+- **Visually distinguish low-confidence** attributions (Pitfall 11) so the UI's own design communicates uncertainty.
+- Make correction obviously available (Pitfall 11) — "we expect you'll fix some of these" is the honest, trust-preserving stance.
+
+**Warning signs:**
+Copy claims "accurate speaker identification." No uncertainty in the UI. Accuracy expectation set before the eval ran. User trust cratering on first visible error.
+
+**Phase to address:** **P-UI (owner)**, sourced from **P-EVAL**.
+
+---
+
+### Pitfall 13: Speaker-identity / voiceprint privacy in a local-first app
+
+**What goes wrong:**
+Diarization produces **speaker embeddings** (voice fingerprints) and per-speaker audio segmentation. If any of this is persisted, exported, synced, or sent to a cloud LLM carelessly, Yulu — whose entire value prop is "audio never leaves the laptop unless you opt in" — leaks **biometric voiceprint data**, the most sensitive class. Concrete leak paths in *this* architecture: (a) embeddings written into a synced `data_dir` (Phase 5 cloud-folder sync); (b) per-speaker audio/labels handed to the agent over the `agent-queue.json` boundary and thence to a cloud LLM under cloud-fallback/cloud-priority transcription mode; (c) a future enrollment DB (Pitfall 10).
+
+**Why it happens:**
+Embeddings feel like "just numbers," and the existing pipeline already passes transcripts to the agent — adding speaker data to that flow is frictionless and easy to do without a privacy review. The local-first guarantee is a *promise*, and diarization quietly introduces a new, more sensitive data type the promise must now cover.
+
+**How to avoid:**
+- **Default: embeddings are ephemeral.** Compute, cluster, label, **discard** — don't persist voiceprints unless a future opt-in enrollment feature (Pitfall 10) requires it, and then with explicit consent + local-only storage.
+- **Decide deliberately what crosses the agent boundary.** Speaker *labels* in the transcript are fine; raw embeddings/voiceprints should **not** be shipped to a cloud LLM. Honor the existing local-by-default / opt-in-cloud contract for any speaker-derived data exactly as for audio.
+- **Keep any persisted speaker data out of the synced content split** unless intended — respect Phase 5's runtime-vs-syncable separation; voiceprints (if ever stored) lean toward local-only.
+- **Models stay offline** (Pitfall 15 / spike 001's offline lesson) — no phone-home for diarization.
+- **Document the data flow** so the privacy promise demonstrably still holds with diarization added.
+
+**Warning signs:**
+A persistent embeddings/voiceprint store with no consent flow. Speaker embeddings in `data_dir` (synced). Raw voice features in the agent-queue payload to a cloud LLM. No statement of where speaker data lives and whether it syncs.
+
+**Phase to address:** **P-PROVISION + P-ENGINE** (ephemeral-by-default, offline models, no phone-home); boundary/sync decisions touch **P-MERGE** (agent-queue payload) and the **PROJECT privacy contract**.
+
+---
+
+### Pitfall 14: Misattribution cascades into summaries, action items, and decisions
+
+**What goes wrong:**
+A diarization error isn't a cosmetic transcript blemish — it **propagates through every downstream stage**. The transcript feeds the agent (`agent-queue.json` → summary prompt). A wrong speaker on a sentence containing a commitment becomes a **wrong-owner action item**; a decision gets **logged under the wrong person**; the summary's "Alice proposed X" is just false. Because Yulu's whole point is turning speech into a *clean note*, a confidently-wrong label is *more* damaging than no label — it manufactures false structured facts the user may act on. (This is the through-line that makes Pitfalls 3/5/7/8 matter.)
+
+**Why it happens:**
+Speaker labels become *input* to the LLM, which treats them as ground truth and amplifies them into structured claims (owners, decisions). The error surface moves from "a word looks off" to "an action item is assigned to the wrong colleague."
+
+**How to avoid:**
+- **Pass uncertainty downstream, don't hide it.** When attributions are low-confidence (the Pitfall 3 flag), either omit speaker attribution for those lines in the agent payload or mark them uncertain so the agent doesn't confidently assign ownership.
+- **Prefer "Unknown" to a wrong guess** specifically for segments that will drive action-item/decision extraction.
+- **Eval the user-visible outcome, not just DER:** spot-check that summaries/action items on the eval meetings don't carry obvious misattributions — a qualitative gate alongside the quantitative one (P-EVAL).
+- This is the **core argument** for getting Pitfalls 3, 5, 7, 8 right: their blast radius is the summary, not the transcript.
+
+**Warning signs:**
+Action items assigned to the wrong person in generated notes. Decisions logged under the wrong speaker. Confident attributions on segments the merge flagged uncertain. No uncertainty signal in the agent-queue payload.
+
+**Phase to address:** **P-MERGE** (confidence in the payload) + **P-EVAL** (outcome-level spot-check); the agent prompt contract is a **P-UI / pipeline** concern.
+
+---
+
+### Pitfall 15: Offline breakage — diarization that phones home dies the moment the user is offline
+
+**What goes wrong:**
+Diarization (model download path, or a library that checks a remote registry) reaches the network at runtime, so the first offline meeting **fails or hangs**. This directly violates Yulu's local-first guarantee. Spike 001 hit this *hard* with FunASR/modelscope: **`disable_update=True` was NOT enough** — it still called `modelscope.cn`, got connection-refused, retried 5×, and failed with "model not registered." Even on the chosen sherpa-onnx path, the lesson stands: **verify true offline operation**, don't assume it.
+
+**Why it happens:**
+ML libraries default to "check for updates / resolve from a hub," and that path is often *not* fully short-circuited by the obvious flag (the spike proved it for modelscope). The dev machine is always online, so the failure never reproduces locally — it surfaces only on a user's plane/cafe/airgapped run.
+
+**How to avoid:**
+- **Bundle/provision models at setup** (spike 002 item 4: seg 5.7 MB + cam++ 27 MB ONNX, offline by default) and **load from explicit local file paths** — sherpa-onnx's advantage here is "clean local files," no hub resolution.
+- **Test under forced offline** (dead proxy / network namespace, exactly as spike 001 did) and assert **zero network calls** during diarization.
+- For the **FunASR fallback path specifically**, the milestone must carry the **modelscope `snapshot_download` cache short-circuit patch** (or a pinned fixed version / vendored copy) or that path breaks offline — spike 001 calls this **must-fix**.
+
+**Warning signs:**
+Any HTTP during a diarization run. Reliance on `disable_update`-style flags without an offline test. Models resolved by name/alias rather than absolute local path. First-offline-meeting failures in the field.
+
+**Phase to address:** **P-PROVISION (owner — bundle + local-path load + offline test)**; FunASR-path patch in P-PROVISION if that fallback ships.
+
+---
+
+### Pitfall 16: Latency / footprint regression in the existing pipeline
+
+**What goes wrong:**
+Adding a diarization stage degrades the experience users already have: post-recording note appears noticeably later (extra processing after ASR), memory balloons, or the resident daemon set grows. The footprint surprises are real and measured: spike 001's **full FunASR pipeline peaked ~8 GB unified memory** and **1.13 GB venv** — unacceptable; sherpa-onnx is the answer (61s install / 131 MB venv, **RTF ~0.17 on CPU**, ~33 MB models), but its actual *option-B* footprint **wasn't measured** (spike measured the merge timing on a 20-min clip only). On Yulu's many-daemon launchd runtime, a heavy or always-resident diarizer competes with the existing `stt_daemon` model (~2 GB) and the rest of the 8-agent set.
+
+**Why it happens:**
+Diarization is "just a post-process," so its cost is assumed negligible — but model load (warm-up), per-meeting compute (cluster is O(segments²) — spike 001), and memory residency add up. **First sherpa/MPS run is ~2× slower** (shader/graph JIT — spike 001) so an uninstrumented first meeting feels sluggish. Clustering is O(n²) in segments — fine for hundreds (real meetings) but a long, dense recording could spike (spike 001 caveat).
+
+**How to avoid:**
+- **Measure the option-B path explicitly** (spike 002: "validate on 1h+"; spike 001 open item: "measure diarization-only footprint") — install size, peak RAM, added wall-clock per meeting, on 20-min / 1h / long clips. Set a **regression budget** vs current behavior.
+- **Warm up** the diarization model (spike 001) so the first real meeting isn't penalized by JIT; decide resident-vs-on-demand deliberately given the existing daemon memory pressure.
+- **Guard the O(n²) tail:** cap or chunk on pathologically long/dense recordings so a 4-hour meeting can't blow up clustering.
+- **Prefer sherpa-onnx CPU/ONNX** (the milestone default) precisely to avoid the FunASR torch/MPS footprint; keep diarization off the critical path of *live* transcription (it's a post-process — don't let it stall the realtime stream).
+
+**Warning signs:**
+Note appears much later after recording stops. RAM/footprint jump after enabling diarization. First-meeting-after-boot sluggish (no warm-up). Long meetings hang in clustering. Footprint never measured for the actual option-B path.
+
+**Phase to address:** **P-PERF (owner)** + **P-ENGINE** (warm-up, resident-vs-on-demand). Budget tracked alongside **P-EVAL**.
 
 ---
 
 ## Technical Debt Patterns
 
-Shortcuts that seem reasonable but create long-term problems.
-
 | Shortcut | Immediate Benefit | Long-term Cost | When Acceptable |
 |----------|-------------------|----------------|-----------------|
-| Build the abstraction interface as "current macOS code, renamed" | Ships fast; "looks cross-platform" | Interface ossifies wrong; needs breaking changes when Win/Linux arrives; indirection hides the only real impl | **Never** — model on `cpal`/`service-manager-rs` shapes instead (Pitfall 1) |
-| Capability detection = `shutil.which` / `command -v` boolean | One-liner, "works on my machine" | False positives suppress the install fallback; daemon fails silently at first recording (Pitfall 5) | Only for a *report-only* field that **never** drives reuse-vs-install |
-| Keep `--deep` signing, just add a Developer ID | Minimal change to build scripts | Notarization breaks on any nested dylib; opaque "app is damaged" for end users (Pitfall 2) | **Never** — Apple-documented anti-pattern |
-| Agent provisioning happy-path only in the spike | Spike "succeeds" quickly | Partial-failure/duplicate-daemon/MITM modes ship to users; one fragile script becomes seven (Pitfall 6) | Only if spike is explicitly labeled "happy-path feasibility" and resume/verify is a *named follow-up* before GA |
-| Put everything (DBs, sockets, content) in one user-configurable folder | Simple single setting; matches "Obsidian" slogan | SQLite corruption + socket-sync nonsense + recording eviction (Pitfall 7) | **Never** for DBs/sockets/locks; content-only is the acceptable form |
-| Inherit `pkill -9` + uncleaned backups into migration | No new code; reuses existing flow | Active-recording truncation; unbounded disk growth; no rollback (Pitfall 8) | **Never** — migration is the moment to fix these (CONCERNS 2d/2e) |
-| Bundle Python + mlx into the signed `.app` | "Self-contained," no host Python dep | Hardest notarization case (sign every `.so`, library-validation entitlements); fights the "reuse host capabilities" thesis | Only if host-provided Python is proven infeasible — contradicts the milestone goal |
-| Hard-code `14.0` deployment target with tap APIs | Compiles on the dev's latest macOS | 14.0–14.3 users crash on a missing symbol; silent (Pitfall 3) | **Never** — gate `if #available(macOS 14.4, *)` + keep SCK arm |
+| Ship raw sherpa auto-count | One less knob to build | Over-split → unusable CN notes (Pitfall 2); twenty phantom speakers | **Never** — the milestone's known failure; count strategy is mandatory |
+| Eyeball accuracy, skip the DER harness | Faster to "done" | Unmeasured quality; can't pick sherpa vs FunASR on evidence; UI copy is a guess (Pitfall 1) | **Never** — spike 002 lists eval as *required* |
+| Naive "previous speaker" coverage-gap fallback | One-line merge | ~10% confident mislabels feeding summaries (Pitfalls 3, 14) | **Never** for boundary gaps; OK only when both neighbors are the same speaker |
+| Report DER only, with defaults | Single clean number | Hides overlap + short-utterance errors users feel; non-comparable (Pitfall 4) | Internal smoke only — never as the ship gate |
+| Label references by correcting the tool's output | Faster annotation | Anchoring bias inflates the score (Pitfall 4) | Only if cross-checked blind on a subset |
+| Rename-only correction UI | Less UI work | Users hand-rename over-split fragments; no recovery from mislabels (Pitfall 11) | Acceptable **only** if count strategy makes over-split rare *and* eval proves it — risky; prefer shipping merge |
+| Persist voiceprint embeddings "for later" | Future-proofs identity | Biometric data at rest violating local-first (Pitfall 13); scope creep (Pitfall 10) | **Never** without explicit opt-in enrollment design + consent |
+| Tune only on Chinese meetings | Fixes the loudest pain fast | EN / code-switch regress silently (Pitfall 6) | **Never** — eval must bucket CN/EN/code-switch |
+| Always-resident diarization daemon | Lower per-meeting latency | Competes with stt_daemon (~2GB) on the 8-daemon runtime (Pitfall 16) | Only after footprint is measured and budgeted |
+| Trust `disable_update`-style flags for offline | Looks done | Dies on first offline meeting (Pitfall 15 — spike 001 proved the flag insufficient) | **Never** without a forced-offline test asserting zero network calls |
 
 ## Integration Gotchas
 
-Common mistakes when connecting to external services.
-
 | Integration | Common Mistake | Correct Approach |
 |-------------|----------------|------------------|
-| **iCloud Drive (data folder)** | Assume files are always materialized; let "Optimize Storage" evict in-use recordings → `pread` blocks/fails | Pin active recordings (`com.apple.fileprovider.pinned` / File Provider API; note 10-item Finder cap); keep DBs/sockets out; or sync summaries only (Pitfall 7) |
-| **Google Drive (File Provider)** | Hard-code `~/Google Drive`; assume streamed files are local | Glob `~/Library/CloudStorage/GoogleDrive-<acct>` (STACK.md); never put SQLite/sockets there; expect non-materialized files |
-| **SQLite × any folder sync** | Sync `.sqlite` (WAL mode) across machines / sync without `-wal` sidecar | Keep DBs local + rebuildable; if unavoidable, `journal_mode=DELETE`, single-machine; require SQLite ≥ 3.51.3 (WAL-reset corruption fix) |
-| **launchd (`DaemonManager`)** | Treat `unload` as "process stopped"; bake `nvm` versioned PATH into plists; use deprecated `load`/`unload` | `stop()` = process gone (macOS impl owns cleanup); resolve login-shell PATH at runtime; use `bootstrap`/`bootout`; fix `open -W` → direct launch (Pitfall 4) |
-| **Apple notarization (`notarytool`)** | `--deep` sign; staple a bare binary; test only on dev machine | Sign bottom-up `--options runtime --timestamp`; staple the `.app`/installer; verify `spctl` on a clean machine (Pitfall 2) |
-| **GitHub Releases (agent provisioning)** | Agent fetches over `raw.githubusercontent.com`, `py_compile` as the only check | `gh attestation verify -o <org>` (Sigstore) before executing; SHA-256 `checksums.txt` fallback (Pitfall 6) |
-| **Host `claude`/`whisper-cli`/`llm.command`** | `--version` succeeds → assume usable by the daemon | Probe with the *daemon's* PATH/interpreter; smoke-run, not just version; tri-state (usable/unverified/absent) (Pitfall 5) |
-| **`gog` (Google Calendar CLI)** | Assume Homebrew/`steipete tap` distribution exists everywhere (CONCERNS 1f) | Detect+reuse host `gog`; treat its macOS-only Homebrew distribution as a platform-coupling fact behind the dependency-install seam |
+| `stt_daemon` / MLX Whisper (ASR source) | Merging raw ASR segments incl. hallucinated/looped lines | VAD-gate + artifact-filter ASR segments before merge (Pitfall 8); keep ASR on MLX/whisper.cpp (spike: cleaner than FunASR's ASR) |
+| `agent-queue.json` boundary → cloud LLM | Shipping confident speaker labels + (worse) embeddings to a cloud agent | Pass labels with uncertainty; never ship voiceprints to cloud; honor opt-in-cloud contract (Pitfalls 13, 14) |
+| Phase 5 `data_dir` cloud sync | Writing speaker embeddings into the synced content split | Keep ephemeral/local-only voiceprints out of synced content (Pitfall 13); respect runtime-vs-syncable split |
+| `CapabilityProvider` abstraction | Hard-coupling sherpa specifics into the pipeline | Diarization is a provider behind the abstraction (sherpa default, FunASR optional); pipeline depends on the Protocol, not sherpa (spike 002 item 1) |
+| STT backend Protocol (`warm_up`/`transcribe`/`is_ready`/`release`) | Reinventing a lifecycle for the diarizer | Reuse the existing Protocol shape (spike 002 item 2); warm-up does a dummy diarization (Pitfall 16) |
+| Google Calendar (`gog`) integration | Ignoring a free speaker-count prior | Use attendee count as a count hint for the over-split fix (Pitfall 2) |
+| Model provisioning (setup) | Resolving models by hub name at runtime | Bundle/download ONNX at setup, load from local paths, offline by default (Pitfalls 13, 15) |
+| FunASR fallback (if shipped) | Assuming offline works with `disable_update` | Carry the modelscope `snapshot_download` cache patch / pinned fix (spike 001 must-fix) |
+| launchd daemon set | Adding an always-on heavy diarizer without budget | Measure footprint; choose resident-vs-on-demand against existing daemon memory pressure (Pitfall 16) |
+| Cross-platform (P-XPLAT) | Verifying only on the dev's macOS | Confirm sherpa-onnx wheels + ONNX models behind the abstraction on non-macOS targets (spike 002 item 8; v0.5 stub-and-verify pattern) |
 
 ## Performance Traps
 
-Patterns that work at small scale but fail as usage grows.
-
 | Trap | Symptoms | Prevention | When It Breaks |
 |------|----------|------------|----------------|
-| Recordings in iCloud get evicted → transcription blocks on re-download | Summary pipeline stalls 10–60s or times out; worse offline/metered | Pin active media; keep recordings local, sync summaries only | After a few weeks of accumulated recordings (eviction targets infrequently-read files) |
-| `search.sqlite` synced + re-indexed on two machines | FTS index corruption; "database disk image is malformed" | Treat as local rebuildable cache; never sync | First time a user opens Yulu on a second synced Mac |
-| `agent-queue.json` never pruned (CONCERNS 7c) — and now possibly in a synced dir | File grows unbounded; sync re-uploads the whole file on every append | Prune `done` entries; keep queue local (it's runtime state, not content) | Hundreds of meetings; or immediately under sync (every append = full re-sync) |
-| Backup dirs accumulate (CONCERNS 2e), amplified by per-update migration | `~/` fills with `~/.yulu.backup-*` copies | Backup lifecycle in migration; `yulu cleanup-backups` | Every `yulu update`; faster with migrations |
-| Capability re-detection on every daemon start (login-shell PATH probe is a subprocess) | Slow daemon startup; `$SHELL -lic` spawned repeatedly | Cache resolved PATH/capabilities in state file; re-probe on `doctor`/explicit refresh, not every boot | Many daemons (8) each probing on every launchd respawn |
+| O(n²) clustering on long/dense recordings | Clustering hangs; note never appears | Cap/chunk segment count; bound the cluster step | Thousands of speech segments (multi-hour dense meeting); fine at hundreds (spike 001) |
+| Cold-start JIT on first run | First meeting after boot sluggish | `warm_up()` with a dummy diarization (spike 001) | Every first run post-boot until warmed |
+| Unmeasured option-B footprint | RAM jump / install bloat discovered in field | Measure diarization-only path (spike open item) before ship | Whenever real footprint ≠ assumed |
+| Diarization on the live/critical path | Realtime transcript stalls | Keep diarization a post-process; don't block the realtime stream | Any meeting if merge runs inline with live STT |
+| Resident diarizer + stt_daemon memory contention | Swapping / slowdowns on 16 GB machines | Budget memory; on-demand load if resident cost too high | Concurrent heavy daemons on low-RAM Macs |
 
-## Security Mistakes
-
-Domain-specific security issues beyond general web security.
+## Security / Privacy Mistakes
 
 | Mistake | Risk | Prevention |
 |---------|------|------------|
-| Agent auto-executes unverified install assets (amplified `curl|bash`, CONCERNS 2b) | MITM / compromised release runs code with no human checkpoint, autonomously | `gh attestation verify` (Sigstore provenance) before any execution; SHA-256 fallback (Pitfall 6) |
-| Transcripts/summaries land in a cloud-synced folder by default | Private meeting content silently leaves the machine — violates the "audio + transcripts stay local by default" constraint | Local-by-default; cloud sync strictly opt-in + explicit per PROJECT.md; warn loudly at folder selection |
-| `agent-queue.json` (transcript snapshots) world-readable + unpruned (CONCERNS 7c), now possibly synced | Meeting content accumulates indefinitely and may sync off-machine | Keep queue local; prune `done` entries; 0600 perms; never place in synced dir |
-| Disabling library validation broadly to make a bundled Python load | Weakens the hardened runtime; any injected dylib loads | Prefer host-provided Python (no bundling); if bundling, scope entitlements minimally and document (Pitfall 2) |
-| Migration copies OAuth creds / tokens into a new (possibly synced) data dir | Google Calendar credentials leave the machine | Keep credentials in Keychain (CONCERNS 7a); migration must not relocate secrets into the content folder |
+| Persisting speaker embeddings (voiceprints) by default | Biometric data at rest; local-first promise broken | Ephemeral by default; persist only with opt-in enrollment + consent, local-only (Pitfalls 10, 13) |
+| Voiceprints/audio in synced `data_dir` | Biometric data leaves the laptop via cloud folder sync | Keep speaker-derived data out of synced content unless intended (Pitfall 13) |
+| Shipping embeddings/voice features to a cloud LLM via agent-queue | Sensitive voice biometrics sent off-device | Send labels (not voiceprints); honor opt-in-cloud contract (Pitfalls 13, 14) |
+| Diarization phones home at runtime | Metadata leak + offline breakage | Offline-by-default, local-path model load, forced-offline test (Pitfall 15) |
+| No documented speaker-data flow | Privacy promise unverifiable after a new sensitive data type is added | Document where speaker data lives, whether it persists, whether it syncs (Pitfall 13) |
 
 ## UX Pitfalls
 
-Common user experience mistakes in this domain.
-
 | Pitfall | User Impact | Better Approach |
 |---------|-------------|-----------------|
-| "Seamless" migration = silent + irreversible | User can't tell it ran, can't undo a bad one, loses an active recording | Reliable + reversible: recording-state guard, progress, `yulu rollback` (Pitfall 8) |
-| Green `doctor` while recording silently fails (capability false positive) | User trusts the health check, loses meeting summaries with no error | Tri-state detection + smoke-runs + surfaced provenance in settings (Pitfall 5) |
-| User on macOS 14.2 silently gets no audio after upgrade (tap floor) | Recorder appears dead, no explanation | Report active backend + reason ("14.2 < 14.4 → using SCK"); keep SCK arm (Pitfall 3) |
-| User points data folder at iCloud, recordings vanish/stall | Looks like data loss; transcription hangs | Detect cloud root, warn, separate DBs/sockets out, pin media (Pitfall 7) |
-| Onboarding asks the user to configure what the agent already has | Friction; duplicates models/runtimes the host already provides (the milestone's whole anti-thesis) | First-run reuses detected host capabilities by default; settings show what's reused vs. installed |
-| Settings UI shows "whisper: configured" with no path/source | User can't tell which whisper/model is in use or fix a wrong choice | Show provenance: which binary, which model dir, verified status |
+| Twenty "speakers" for a 5-person meeting | Note unusable; correction overwhelming | Speaker-count strategy so failure is under-merge, not over-split (Pitfall 2) |
+| Rename-only, no merge/split | Hand-renaming many fragments; can't fix mislabels | Rename + merge + reassign; mark low-confidence segments (Pitfall 11) |
+| Labels look as authoritative as the words | Misplaced trust → trust collapse on first error | Frame as correctable hints; show uncertainty; set expectation from eval (Pitfall 12) |
+| Renames clobbered on re-transcribe | "It forgot the names I set" | Persist edits keyed to stable records; re-attach, don't overwrite (Pitfall 9) |
+| Surprise that yesterday's "Alice" is today's "Speaker 2" | Confusion; perceived bug | Copy: names are per-meeting; scope cross-meeting persistence explicitly (Pitfalls 9, 10) |
+| Confident wrong action-item owners in summary | User acts on false attribution | Pass uncertainty downstream; prefer Unknown over wrong guess (Pitfall 14) |
 
 ## "Looks Done But Isn't" Checklist
 
-Things that appear complete but are missing critical pieces.
-
-- [ ] **Cross-platform abstraction:** Often missing the *honesty test* — verify each interface method by writing the 2-3-sentence systemd/WASAPI implementation; if you can't, it's leaking macOS (Pitfall 1).
-- [ ] **Signed/notarized build:** Often missing clean-machine verification — verify `spctl -a -vvv` and launch on a *second* Mac with quarantine intact, not the dev's machine (Pitfall 2).
-- [ ] **Tap migration:** Often missing the version gate + SCK fallback — verify `if #available(macOS 14.4, *)` and test on a 14.2 and a 13.x VM (Pitfall 3).
-- [ ] **DaemonManager.stop():** Often missing the actual process kill — verify `stop()` leaves *zero* `audio_daemon` processes (no orphaned `open -W` child) (Pitfall 4).
-- [ ] **Capability detection:** Often missing consumer-scoped verification — verify the probe runs under the *daemon's* interpreter/PATH and includes a smoke-run, not just `--version` (Pitfall 5).
-- [ ] **Agent provisioning:** Often missing resume + provenance — verify a killed-at-step-N run resumes cleanly and a tampered asset is rejected (Pitfall 6).
-- [ ] **Data folder:** Often missing the content/runtime split — verify SQLite/sockets/locks are *never* placeable in the synced folder, and a cloud-root selection warns (Pitfall 7).
-- [ ] **Seamless migration:** Often missing the recording guard, backup cleanup, and rollback — verify migration refuses during an active recording, prunes old backups, and `yulu rollback` works (Pitfall 8).
-- [ ] **`mlx_python` resolution:** Often still read-but-unused — verify the daemon's interpreter is defined and detection probes *it* (CONCERNS 4a/6e; blocks Pitfall 5).
-- [ ] **Skill decoupling:** Often still inside `setup.sh` — verify `yulu skill install [--agent]` runs standalone and idempotently, removed from the core flow (CONCERNS 3a).
+- [ ] **Speaker count:** Often missing the over-split fix — verify predicted count ≈ attendee count on a real CN meeting (not just EN), with a strategy beyond raw auto (Pitfall 2)
+- [ ] **Eval harness:** Often missing WDER/SER + collar/overlap protocol — verify multiple metrics on a CN+EN(+code-switch) labelled corpus, protocol documented, references not anchored to tool output (Pitfalls 1, 4, 6)
+- [ ] **Coverage gap:** Often missing a principled fallback — verify gap segments aren't snapped across speaker boundaries and carry a confidence flag (Pitfall 3)
+- [ ] **Whisper hallucination:** Often missing VAD-gate/artifact-filter — verify silent start/end and long-pause clips produce no looped/boilerplate attributed lines (Pitfall 8)
+- [ ] **Rename persistence:** Often missing re-run safety — verify a rename survives a re-transcribe and isn't clobbered (Pitfall 9)
+- [ ] **Correction UI:** Often missing merge/split — verify users can merge two labels and reassign a range, not just rename (Pitfall 11)
+- [ ] **Offline:** Often missing a real offline test — verify zero network calls during diarization under forced-offline (Pitfall 15)
+- [ ] **Footprint:** Often missing option-B measurement — verify peak RAM + install size + added per-meeting latency against a budget on 20-min/1h clips (Pitfall 16)
+- [ ] **Privacy:** Often missing a data-flow statement — verify embeddings are ephemeral and nothing voice-biometric syncs or hits the cloud LLM (Pitfall 13)
+- [ ] **Downstream:** Often missing uncertainty propagation — verify summaries/action items on eval meetings have no obvious misattribution (Pitfall 14)
+- [ ] **Cross-platform:** Often missing non-macOS verification — verify sherpa-onnx wheels + ONNX load behind the abstraction on a non-macOS target (P-XPLAT)
+- [ ] **Code-switch:** Often missing — verify a CN↔EN speaker isn't split into two (Pitfall 6)
 
 ## Recovery Strategies
 
-When pitfalls occur despite prevention, how to recover.
-
 | Pitfall | Recovery Cost | Recovery Steps |
 |---------|---------------|----------------|
-| Abstraction ossified wrong (Pitfall 1) | MEDIUM | Caught early (one impl) it's a cheap rename; caught after Win/Linux work it's a breaking interface change — re-model on `cpal`/`service-manager-rs`, migrate the macOS impl behind the corrected seam |
-| Notarization broken by nested dylib / `--deep` (Pitfall 2) | LOW–MEDIUM | Strip `--deep`, re-sign bottom-up, re-submit `notarytool`; if Python was bundled, switch to host-provided Python (also fixes the thesis) |
-| Shipped tap build that crashes 14.2 users (Pitfall 3) | HIGH (already in users' hands) | Hotfix release adding the `#available` gate + SCK fallback; the silent-failure population must be reached via update — costly, hence prevent in P2 |
-| Duplicate daemons writing one WAV (Pitfall 4/6) | MEDIUM | `bootout` all labels, `pkill` stragglers, fix `open -W` → direct launch, re-register once; audit for corrupted WAVs from the conflict window |
-| Capability false positive in production (Pitfall 5) | LOW | Add smoke-run verification, re-run `doctor`, flip the reuse decision to install-fallback; corrupt/partial models: delete + re-fetch |
-| Tampered/failed agent provisioning (Pitfall 6) | MEDIUM | Resume from per-step state file or roll back via backup; add attestation gate; re-run from last good step |
-| SQLite corruption from sync (Pitfall 7) | HIGH for authoritative DBs, LOW for caches | `search.sqlite`: delete + re-index from summaries (it's derived). `vocab`/`prompts`: restore from backup or re-seed. Then move DBs out of the synced dir permanently |
-| Migration truncated an active recording (Pitfall 8) | HIGH (data lost) | The truncated WAV may be partially salvageable via `ffmpeg` re-mux; the un-truncated audio is gone — hence the recording-state guard is mandatory, not best-effort |
-| Backups filled the disk (Pitfall 8 / CONCERNS 2e) | LOW | `yulu cleanup-backups`; keep last 1–2; add the lifecycle so it doesn't recur |
+| Over-split shipped (Pitfall 2) | MEDIUM | Add count strategy (user-hint/calendar/calibrated threshold); re-diarize affected meetings; ensure renames survive re-run |
+| No eval, accuracy disputed (Pitfall 1) | MEDIUM | Build harness retroactively; label a corpus; produce DER/WDER; reset UI copy to measured reality |
+| Confident mislabels in summaries (Pitfall 14) | HIGH | Add uncertainty propagation; regenerate notes; user trust may already be damaged — costliest to undo |
+| Renames clobbered (Pitfall 9) | MEDIUM | Add stable-key persistence + re-attach mapping; user re-enters lost names once |
+| Offline breakage in field (Pitfall 15) | LOW–MEDIUM | Bundle models + local-path load (+ modelscope patch if FunASR); ship a point fix; add forced-offline test |
+| Voiceprints persisted/leaked (Pitfall 13) | HIGH | Purge stored embeddings; remove from sync/cloud paths; disclose; redesign as opt-in — reputational + possibly irreversible |
+| Footprint regression (Pitfall 16) | MEDIUM | Switch resident→on-demand; cap O(n²); add warm-up; set budget retroactively |
+| Rename-only UI (Pitfall 11) | LOW–MEDIUM | Add merge/reassign in a follow-up; meanwhile users tolerate manual renaming |
 
 ## Pitfall-to-Phase Mapping
 
-How roadmap phases should address these pitfalls. (Phase topics; roadmap may renumber.)
-
 | Pitfall | Prevention Phase | Verification |
 |---------|------------------|--------------|
-| 1. Speculative abstraction ossifies | **P2** (seams) | "Honesty review": each interface method has a credible systemd/WASAPI impl sketch; stub arms only `raise NotImplementedError`; no macOS nouns in interface types |
-| 2. Notarization / `--deep` / nested dylibs | **P1** (signing/packaging) | `spctl -a -vvv` passes + app launches on a clean second machine; no `--deep` in build scripts; decision logged on bundled-vs-host Python |
-| 3. macOS 14.4 tap floor breakage | **P2** (CaptureBackend dual-arm + version gate); PROJECT.md constraint update | Runs on 14.2 and 13.x VMs (SCK fallback); `#available(macOS 14.4, *)` guards all tap symbols; backend+reason reported |
-| 4. launchd semantics in DaemonManager | **P2** (DaemonManager) + fold in CONCERNS 8b fix | `stop()` leaves zero processes; `bootstrap`/`bootout` (not `load`/`unload`); no versioned `nvm` path in units; `keep_alive` is enum/bool |
-| 5. Capability false positives | **P3** (detection/doctor); reuse-decision at P3/P4 | Probe uses daemon's interpreter/PATH; smoke-run present; tri-state report; only `usable` triggers reuse; `mlx_python` ambiguity resolved first |
-| 6. Agent provisioning trust + idempotency | **P4** (provisioning spike → impl); depends on P1 | Spike proves: kill-at-step-N resumes; tampered asset rejected (`gh attestation verify`); duplicate-daemon guard; zip path remains fallback |
-| 7. Cloud-sync corruption/eviction | **P5** (data folder) + P7 (settings UI surfacing) | SQLite/sockets/locks never placeable in synced folder; cloud-root selection warns; recordings pinned or summaries-only; DBs rebuildable-local |
-| 8. Migration data loss + backups | **P6** (migration); depends on P2/P6 fixes for 2d/8b/2e | Migration refuses during active recording; prunes old backups; `yulu rollback` restores; config schema-versioned; dead `mlx_python`/hardcoded paths fixed in transit |
-
-**Cross-phase dependencies (ordering implications):**
-- **P1 before P4** — agent provisioning's idempotent steps + attestation depend on setup decomposition (CONCERNS 2a) and CI signing (CONCERNS 2c).
-- **`open -W` → direct-launch fix (CONCERNS 8b) before P6** — clean `stop()` removes the `pkill -9` truncation vector that migration would otherwise inherit (Pitfalls 4 & 8).
-- **`mlx_python` interpreter resolution (CONCERNS 4a/6e) before/within P3** — detection is meaningless without a defined "daemon interpreter" to probe (Pitfall 5).
-- **P5 content/runtime separation before exposing folder picker** — must not let users select a synced folder for DBs/sockets (Pitfall 7).
-- **P3 tri-state detection before P4 reuse-vs-install decision** — a boolean can't safely drive "skip install" (Pitfalls 5 & 6).
+| 1. Eval is the gate | **P-EVAL** | A documented DER+WDER+count-error number exists on a CN+EN corpus before ship; provider choice is an ADR output |
+| 2. Speaker-count over-split | **P-COUNT** (verify in P-EVAL) | Predicted count ≈ attendee count on a real CN meeting; strategy beyond raw auto present |
+| 3. Coverage gap | **P-MERGE** (track in P-EVAL) | Gap segments carry a confidence flag and are never snapped across a speaker boundary; coverage % measured |
+| 4. DER methodology | **P-EVAL** | DER reported with/without collar, with/without overlap; WDER+SER present; standard scorer; references labelled blind |
+| 5. Overlap/crosstalk | **P-MERGE + P-ENGINE** (frame in P-UI, quantify in P-EVAL) | Overlap scored (not skipped); overlap-heavy DER reported separately; overlap segments marked |
+| 6. CN/EN/code-switch divergence | **P-EVAL** (corpus) + **P-COUNT** (params) | Metrics bucketed by language; chosen params validated on all buckets incl. code-switch |
+| 7. Short-utterance misattribution | **P-MERGE** (verify via SER in P-EVAL) | Min-segment policy chosen deliberately (~0.5s); SER reported; backchannels not glued across boundaries |
+| 8. Whisper hallucination | **P-MERGE** (VAD-gate) | Silent/long-pause clips yield no looped/boilerplate attributed lines |
+| 9. Label instability / clobbered renames | **P-UI** (scope decision = roadmap) | Rename survives a re-transcribe; per-meeting-names expectation in copy |
+| 10. Mis-scoped as speaker-ID | **Roadmap / PROJECT scope guard** | No voiceprint-enrollment/cross-meeting-match code in v0.6 |
+| 11. Correction UI afterthought | **P-UI** | Merge + reassign shipped, not just rename; low-confidence segments visually marked |
+| 12. Over-promising accuracy | **P-UI** (from P-EVAL) | Copy frames labels as correctable hints; expectation matches the eval number |
+| 13. Voiceprint privacy | **P-PROVISION + P-ENGINE** (boundary in P-MERGE) | Embeddings ephemeral by default; nothing voice-biometric syncs or hits cloud LLM; data flow documented |
+| 14. Misattribution cascade | **P-MERGE** (payload) + **P-EVAL** (outcome) | Uncertainty passed downstream; eval meetings' summaries free of obvious misattribution |
+| 15. Offline breakage | **P-PROVISION** | Zero network calls during diarization under forced-offline; models load from local paths |
+| 16. Latency/footprint regression | **P-PERF + P-ENGINE** | Option-B footprint + added latency measured against a budget; warm-up present; O(n²) bounded |
 
 ## Sources
 
-- sqlite.org/howtocorrupt.html + sqlite.org/wal.html — "syncing the file via Dropbox/iCloud" named as a corruption cause; WAL must travel with the DB; multi-process WAL checkpoint corruption; WAL-reset bug fixed in 3.51.3 (2026-03-13) — HIGH
-- eclecticlight.co (Sonoma/Sequoia iCloud series: 2023-10-25, 2023-11-21, 2024-03-11, 2024-09-30) — "Optimize Mac Storage" eviction → dataless placeholders; `pread` on a dataless file blocks in the kernel; Sequoia pinning via `com.apple.fileprovider.pinned` xattr (10-item Finder cap) — HIGH
-- support.apple.com/en-us/105113 + everymac.com macOS 14 compat — Sonoma requires 2018+ Intel / iMac Pro 2017 / Apple Silicon; raising floor 13→14.4 drops no *additional* hardware — the cut is by minor version (taps need 14.4) — HIGH
-- developer.apple.com/documentation/security/notarizing-macos-software + Apple Developer forums + pyinstaller#4629 — never `--deep`; sign nested Mach-O bottom-up with `--options runtime --timestamp`; staple the bundle not bare binaries; `disable-library-validation`/`allow-unsigned-executable-memory` for bundled Python — HIGH (via STACK.md verification)
-- github.com/insidegui/AudioCap + developer.apple.com Core Audio taps docs — `AudioHardwareCreateProcessTap`/`CATapDescription` require macOS 14.4+, `NSAudioCaptureUsageDescription`, no screen-recording TCC — HIGH (via STACK.md)
-- github.com/chipsenkbeil/service-manager-rs (v0.10) + github.com/RustAudio/cpal (0.17.3) — proven cross-platform abstraction shapes (install/start/stop/status; PCM-frames + source list) — HIGH (as design reference)
-- docs.github.com artifact attestations + `gh attestation verify` — keyless Sigstore provenance for release assets; agent-friendly integrity — HIGH (via STACK.md)
-- .planning/codebase/CONCERNS.md (2026-05-29) — existing fragilities this file extends: 2a/2b/2c/2d/2e, 1d/1e/1f, 3a, 4a, 6b/6c/6d/6e, 7a/7c, 8b — AUTHORITATIVE (project map)
-- .planning/codebase/ARCHITECTURE.md (2026-05-29) — daemon inventory, IPC paths, `~/.config/yulu` runtime artifacts, atomic-write patterns — AUTHORITATIVE
-- .planning/research/STACK.md (2026-05-29) — chosen tooling and its documented traps (signing, taps, login-shell PATH, cloud roots, attestation) — AUTHORITATIVE (sibling research)
+- Spike 002 — `.planning/spikes/002-option-b-diarization-merge/REPORT.md` (sherpa over-split 59→32→20 on CN; ~8–12% coverage gap; 0.765–0.843 inter-tool agreement = not correctness; eval required; editable/mergeable UI; hallucination handling as merge responsibility) — **HIGH**, primary, measured on real Yulu meetings
+- Spike 001 — `.planning/spikes/001-funasr-camplus-diarization/REPORT.md` (FunASR clean count=5; offline broke despite `disable_update`, modelscope cache patch must-fix; ~8 GB peak full-pipeline; warm-up ~2× first run; O(n²) clustering caveat; ground-truth DER still needed) — **HIGH**, primary
+- `.planning/PROJECT.md` — milestone scope, constraints (local-first, opt-in cloud, cross-platform, agent boundary), Phase 5 data-folder sync, calendar integration — **HIGH**
+- pyannote.metrics docs + "How to evaluate Speaker Diarization performance" (pyannote.ai) — collar (250ms/side = 500ms), DER vs JER, `skip_overlap`, leaderboards mix protocols — https://www.pyannote.ai/blog/how-to-evaluate-speaker-diarization-performance , https://pyannote.github.io/pyannote-metrics/reference.html — **HIGH** (official toolkit + maintainer)
+- Recall.ai, AssemblyAI, Deepgram engineering write-ups — diarization labels are per-recording (not persistent); diarization ≠ speaker identification; short utterances → Unknown/previous-speaker; WDER 2.68%→11.65% (2→3 speakers); crosstalk cascade into action items/decisions — https://www.recall.ai/blog/speaker-diarization , https://www.assemblyai.com/blog/speaker-diarization-speaker-labels-for-mono-channel-files , https://www.assemblyai.com/blog/what-is-speaker-diarization-and-how-does-it-work , https://deepgram.com/learn/working-with-timestamps-utterances-and-speaker-diarization-in-deepgram — **MEDIUM–HIGH** (multiple vendor engineering sources agree)
+- Circleback "How AI Meeting Notes Actually Work" + GoTranscript crosstalk-attribution guide — misattribution cascade into summaries; `[OVERLAP]`/`[UNKNOWN]` marking convention — https://circleback.ai/blog/how-ai-meeting-notes-work , https://gotranscript.com/en/blog/edit-crosstalk-in-transcripts-overlapping-speakers-attribution-rules — **MEDIUM**
+- Whisper hallucination corpus: "Whisper Hallucination on Silence" (DEV), "Investigation of Whisper ASR Hallucinations Induced by Non-Speech Audio" (arXiv 2501.11378), "Calm-Whisper" (arXiv 2505.12969) — silence triggers looped phrases; ~55% of non-speech → "so"; VAD-gating is the documented mitigation — https://dev.to/nareshipme/whisper-hallucination-on-silence-why-your-transcript-loops-the-same-phrase-2pg4 , https://arxiv.org/abs/2501.11378 , https://arxiv.org/abs/2505.12969 — **HIGH** (peer-reviewed + reproduced)
+- Short-segment / metric work: CDER/SER vs DER for short utterances; ~0.5s minimum-segment sweet spot; "Once more Diarization: segment-level speaker reassignment" (arXiv 2406.03155) — https://www.emergentmind.com/topics/segment-error-rate-ser , https://arxiv.org/pdf/2406.03155 — **MEDIUM–HIGH**
+- SDBench (arXiv 2507.16136), "State of Speaker Diarization 2026" (Picovoice) — benchmark-protocol consistency, collar/overlap/VAD confounds — https://arxiv.org/pdf/2507.16136 , https://picovoice.ai/blog/state-of-speaker-diarization/ — **MEDIUM**
 
 ---
-*Pitfalls research for: agent-native cross-platform meeting-recorder provisioning & configuration foundation (Yulu)*
-*Researched: 2026-05-29*
+*Pitfalls research for: speaker diarization in a local-first agent-native meeting recorder (Yulu v0.6)*
+*Researched: 2026-06-06*
