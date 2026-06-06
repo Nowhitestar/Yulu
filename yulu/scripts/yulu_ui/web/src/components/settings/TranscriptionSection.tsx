@@ -1,7 +1,6 @@
 import { Link } from "react-router";
 import { trpc } from "../../trpc.js";
 import { InlineEditRow } from "../InlineEditRow.js";
-import { CommandEditor } from "../CommandEditor.js";
 import type { SettingsRestartTracker } from "../../hooks/useSettingsRestartTracker.js";
 
 const TRANSCRIPTION_MODES = [
@@ -31,7 +30,6 @@ export function TranscriptionSection({ tracker }: TranscriptionSectionProps) {
 
   const tr = cfg.transcription as {
     mode?: "local" | "cloud-fallback" | "cloud-priority";
-    cloud_command?: string[];
     realtime_enabled?: boolean;
     final_engine?: "mlx" | "whisper";
     language?: string;
@@ -76,22 +74,6 @@ export function TranscriptionSection({ tracker }: TranscriptionSectionProps) {
           </div>
         </div>
         <div className="row-status">{tracker.statusFor("transcription.mode") === "saved" ? "✓" : tracker.statusFor("transcription.mode") === "restart" ? "⟳" : null}</div>
-      </div>
-
-      {/* TRANS-02 (D-04): cloud transcription is the user's OWN command — the llm.command trust model.
-          Yulu holds and asks for no cloud credentials. This is a command array, never a credential field. */}
-      <div className="row">
-        <div className="row-label">
-          <div>Cloud transcription command</div>
-          <div className="row-help">Your own cloud transcription command — spawned with the audio. Yulu holds no cloud keys.</div>
-        </div>
-        <div className="row-value">
-          <CommandEditor
-            value={tr.cloud_command ?? []}
-            onChange={(next) => updateMut.mutateAsync({ key: "transcription.cloud_command", value: next })}
-          />
-        </div>
-        <div className="row-status" />
       </div>
 
       {/* SET-04 (D-05): pick among the whisper models Phase 3 detected; persists the chosen .bin path. */}

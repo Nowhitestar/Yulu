@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { render, within } from "@testing-library/react";
+import { render, within, waitFor } from "@testing-library/react";
 import { createMemoryRouter, RouterProvider, Navigate, Outlet } from "react-router";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
@@ -12,6 +12,12 @@ const SCHEMA = [
   { path: "llm.enabled",              category: "llm",           label: "启用 LLM",  type: "toggle", reload: { kind: "none" } },
   { path: "status_agent.enabled",     category: "general",       label: "菜单栏 Agent", type: "toggle", reload: { kind: "restart", daemons: ["statusagent"] } },
 ];
+
+// Shared spy so tests can assert config.update was called on a field edit.
+// vi.hoisted keeps it available inside the hoisted vi.mock factory below.
+const { configUpdateSpy } = vi.hoisted(() => ({
+  configUpdateSpy: vi.fn(async (_vars: { key: string; value: unknown }) => ({ daemonsNeedingRestart: [], daemonsNeedingSighup: [] })),
+}));
 
 // Stub trpc so each query returns minimal data and mutations no-op.
 vi.mock("../../../web/src/trpc.js", () => {
@@ -36,7 +42,15 @@ vi.mock("../../../web/src/trpc.js", () => {
       config: {
         get: { useQuery: () => ({ data: cfg, isPending: false }) },
         schema: { useQuery: () => ({ data: SCHEMA, isPending: false }) },
-        update: { useMutation: noopMutation },
+        update: { useMutation: (opts?: { onSuccess?: (res: unknown, vars: unknown) => void }) => ({
+          mutate: () => {},
+          mutateAsync: async (vars: { key: string; value: unknown }) => {
+            const res = await configUpdateSpy(vars);
+            opts?.onSuccess?.(res, vars);
+            return res;
+          },
+          isPending: false,
+        }) },
       },
       daemons: { restart: { useMutation: noopMutation } },
       system: {
@@ -187,5 +201,66 @@ describe("Settings (3-column MasterDetail)", () => {
   it("shows a P2 placeholder for the automation category (no fields yet)", () => {
     const { getByText } = wrap("/settings/automation");
     expect(getByText(/P2/)).toBeInTheDocument();
+  });
+});
+
+describe("Settings category detail content (re-homed widgets)", () => {
+  it("general: capabilities (read-only) + theme + status agent", () => {
+    const { container, getByText } = wrap("/settings/general");
+    const detail = within(container.querySelector(".masterdetail-detail") as HTMLElement);
+    expect(detail.getByText("Capabilities")).toBeInTheDocument();
+    // ThemeToggle (UI theme control) is re-homed here.
+    expect(container.querySelector('[role="group"][aria-label="Theme"]')).not.toBeNull();
+    expect(getByText("Status agent enabled")).toBeInTheDocument();
+  });
+
+  it("audio: audio rows + storage dbStats/logs", () => {
+    const { container } = wrap("/settings/audio");
+    const detail = within(container.querySelector(".masterdetail-detail") as HTMLElement);
+    expect(detail.getByText("Audio")).toBeInTheDocument();
+    expect(detail.getByText("Microphone device")).toBeInTheDocument();
+    // StorageSection is re-homed under audio (its "Storage" heading + Databases group).
+    expect(detail.getByText("Storage")).toBeInTheDocument();
+    expect(detail.getByText("Databases")).toBeInTheDocument();
+  });
+
+  it("transcription: the full transcription section", () => {
+    const { container } = wrap("/settings/transcription");
+    const detail = within(container.querySelector(".masterdetail-detail") as HTMLElement);
+    expect(detail.getByText("Transcription")).toBeInTheDocument();
+    expect(detail.getByText("Transcription mode")).toBeInTheDocument();
+  });
+
+  it("llm: enabled toggle + a Test command button", () => {
+    const { container, getByRole } = wrap("/settings/llm");
+    const detail = within(container.querySelector(".masterdetail-detail") as HTMLElement);
+    expect(detail.getByText("LLM")).toBeInTheDocument();
+    expect(getByRole("button", { name: "Test command" })).toBeInTheDocument();
+  });
+
+  it("integrations: the integrations section", () => {
+    const { container } = wrap("/settings/integrations");
+    const detail = within(container.querySelector(".masterdetail-detail") as HTMLElement);
+    expect(detail.getByText("Integrations")).toBeInTheDocument();
+  });
+
+  it("advanced: the advanced-flagged cloud transcription command", () => {
+    const { container } = wrap("/settings/advanced");
+    const detail = within(container.querySelector(".masterdetail-detail") as HTMLElement);
+    // Exact match to hit the label, not the longer help paragraph that also
+    // mentions "cloud transcription command".
+    expect(detail.getByText("Cloud transcription command")).toBeInTheDocument();
+  });
+
+  it("commits a field edit through trpc.config.update", async () => {
+    configUpdateSpy.mockClear();
+    const { getByText } = wrap("/settings/llm");
+    // The LLM "Enabled" toggle commits llm.enabled on click.
+    const enabledLabel = getByText("Enabled");
+    const row = enabledLabel.closest(".row")!;
+    const sw = within(row as HTMLElement).getByRole("switch");
+    sw.click();
+    await waitFor(() => expect(configUpdateSpy).toHaveBeenCalled());
+    expect(configUpdateSpy).toHaveBeenCalledWith(expect.objectContaining({ key: "llm.enabled" }));
   });
 });

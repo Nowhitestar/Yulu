@@ -87,19 +87,14 @@ describe("TranscriptionSection — mode radios (TRANS-01)", () => {
   });
 });
 
-describe("TranscriptionSection — cloud command, not key (TRANS-02)", () => {
-  it("Test 2 — a command field is present; editing it persists transcription.cloud_command; no password/key/token/secret input", async () => {
+describe("TranscriptionSection — cloud command moved to Advanced (TRANS-02)", () => {
+  // The cloud transcription command (transcription.cloud_command) is registry
+  // category "advanced", so it now lives in AdvancedSection — see
+  // tests/web/AdvancedSection.test.tsx for its behaviour. Here we just assert it
+  // is NOT duplicated in the transcription section.
+  it("Test 2 — does not render the cloud transcription command here", () => {
     mount();
-    // The cloud command uses the CommandEditor (array-of-strings, "+ Add arg"), the llm.command trust model.
-    const addArgButtons = screen.getAllByRole("button", { name: /\+ add arg/i });
-    expect(addArgButtons.length).toBeGreaterThanOrEqual(1);
-
-    const user = userEvent.setup();
-    // Adding an arg fires onChange → config.update for transcription.cloud_command
-    await user.click(addArgButtons[addArgButtons.length - 1]!);
-    await vi.waitFor(() =>
-      expect(updateMutate.mock.calls.some((c) => c[0]?.key === "transcription.cloud_command")).toBe(true),
-    );
+    expect(screen.queryByText(/cloud transcription command/i)).toBeNull();
   });
 
   it("Test 4 — no element labelled/placeholdered as api key / token / secret / password (T-04-KEY)", () => {
