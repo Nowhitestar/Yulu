@@ -45,7 +45,7 @@ import importlib
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Protocol
+from typing import Optional, Protocol, runtime_checkable
 
 from ..runtime import CancelToken
 
@@ -144,6 +144,7 @@ class SpeakerTurn:
 # ── The Protocol (the swappable provider seam) ────────────────────────────────
 
 
+@runtime_checkable
 class DiarizeBackend(Protocol):
     """Audio → speaker turns. Mirrors the STT lifecycle trio verbatim, but returns turns.
 
