@@ -9,6 +9,15 @@ export interface IntegrationsSectionProps {
   tracker: SettingsRestartTracker;
 }
 
+type CalendarType = "feishu" | "google";
+interface CalendarEntry {
+  type: CalendarType;
+  enabled?: boolean;
+  credentials_path?: string;
+  gog_account?: string;
+  [k: string]: unknown;
+}
+
 export function IntegrationsSection({ tracker }: IntegrationsSectionProps) {
   const { data: cfg } = trpc.config.get.useQuery();
   const { commit, isBlocked } = useConfigField(tracker);
@@ -20,7 +29,25 @@ export function IntegrationsSection({ tracker }: IntegrationsSectionProps) {
 
   if (!cfg) return null;
 
-  const calendars = cfg.calendars ?? [];
+  const calendars = (cfg.calendars ?? []) as CalendarEntry[];
+  // calendars is restart-class (calendar + scheduler); adding/removing while
+  // recording would interrupt capture, so the whole-array edit is guarded.
+  const calBlocked = isBlocked("calendars");
+  const hasType = (t: CalendarType) => calendars.some((c) => c.type === t);
+
+  // Append a fresh provider (disabled by default — the user fills in creds, then
+  // toggles it on). The whole array is replaced via config.update("calendars",…)
+  // since calendars has no per-index registry entry (setByDottedKey writes the
+  // array wholesale).
+  const addCalendar = (type: CalendarType) => {
+    if (calBlocked || hasType(type)) return;
+    commit("calendars")([...calendars, { type, enabled: false }]);
+  };
+
+  const removeCalendar = (idx: number) => {
+    if (calBlocked) return;
+    commit("calendars")(calendars.filter((_, i) => i !== idx));
+  };
 
   const runTest = async (provider: "feishu" | "google") => {
     setPopFor(provider);
@@ -46,8 +73,19 @@ export function IntegrationsSection({ tracker }: IntegrationsSectionProps) {
         <div className="integrations-empty">No calendar providers configured.</div>
       )}
       {calendars.map((cal, idx) => (
-        <div key={cal.type} className="integration-card">
-          <div className="integration-header">{cal.type}</div>
+        <div key={`${cal.type}-${idx}`} className="integration-card">
+          <div className="integration-header">
+            <span>{cal.type}</span>
+            <button
+              type="button"
+              className="cmd-remove"
+              aria-label={`Remove ${cal.type} calendar`}
+              disabled={calBlocked}
+              onClick={() => removeCalendar(idx)}
+            >
+              Remove
+            </button>
+          </div>
           <InlineEditRow
             label="Enabled"
             type="toggle"
@@ -88,6 +126,37 @@ export function IntegrationsSection({ tracker }: IntegrationsSectionProps) {
           )}
         </div>
       ))}
+
+      {/* P2-5: add a calendar provider. Each appends a disabled entry to the
+          calendars array; a provider already present is offered no add (avoids
+          duplicate entries). The whole array commit restarts calendar+scheduler,
+          so it's guarded while recording. */}
+      <div className="row">
+        <div className="row-label">
+          <div>Add calendar</div>
+          <div className="row-help">Add a provider, then fill in its credentials and enable it.</div>
+        </div>
+        <div className="row-value">
+          <button
+            type="button"
+            className="cmd-add"
+            disabled={calBlocked || hasType("feishu")}
+            onClick={() => addCalendar("feishu")}
+          >
+            + Feishu
+          </button>{" "}
+          <button
+            type="button"
+            className="cmd-add"
+            disabled={calBlocked || hasType("google")}
+            onClick={() => addCalendar("google")}
+          >
+            + Google
+          </button>
+          {calBlocked && <span className="value-disabled-note">录音中不可改</span>}
+        </div>
+        <div className="row-status" />
+      </div>
     </section>
   );
 }
