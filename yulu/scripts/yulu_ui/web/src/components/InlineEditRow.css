@@ -31,13 +31,24 @@
 .status-restart { color: var(--accent); animation: spin 1.4s linear infinite; display: inline-block; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .status-typing { color: var(--fg-3); }
+/* Resting state for text/number/select rows. Styled to read as an input
+   (border + field bg) so it's obvious the value is editable in place, not
+   read-only. Click swaps it for the real <input>/<select> below. */
 .value-display {
-  cursor: pointer;
-  padding: 2px 6px;
-  border-radius: 4px;
+  cursor: text;
+  display: inline-flex;
+  align-items: center;
+  min-width: 120px;
+  min-height: 26px;
+  padding: 3px 8px;
+  border-radius: var(--radius-inner);
+  border: 1px solid var(--edge);
+  background: var(--glass-2);
+  color: var(--fg);
   font-size: 13px;
+  transition: border-color 120ms;
 }
-.value-display:hover { background: var(--glass-2); }
+.value-display:hover { border-color: var(--accent); }
 .value-input {
   padding: 4px 8px;
   border-radius: var(--radius-inner);
