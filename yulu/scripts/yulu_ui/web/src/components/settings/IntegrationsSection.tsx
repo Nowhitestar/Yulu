@@ -2,15 +2,16 @@ import { useState } from "react";
 import { trpc } from "../../trpc.js";
 import { InlineEditRow } from "../InlineEditRow.js";
 import { TestPopover } from "../TestPopover.js";
+import { useConfigField } from "../../hooks/useConfigField.js";
 import type { SettingsRestartTracker } from "../../hooks/useSettingsRestartTracker.js";
 
 export interface IntegrationsSectionProps {
   tracker: SettingsRestartTracker;
 }
 
-export function IntegrationsSection({ tracker: _tracker }: IntegrationsSectionProps) {
+export function IntegrationsSection({ tracker }: IntegrationsSectionProps) {
   const { data: cfg } = trpc.config.get.useQuery();
-  const updateMut = trpc.config.update.useMutation();
+  const { commit, isBlocked } = useConfigField(tracker);
   const testMut = trpc.integrations.test.useMutation();
   const [popFor, setPopFor] = useState<string | null>(null);
   const [popState, setPopState] = useState<"pending" | "ok" | "failed">("pending");
@@ -51,7 +52,8 @@ export function IntegrationsSection({ tracker: _tracker }: IntegrationsSectionPr
             label="Enabled"
             type="toggle"
             value={cal.enabled ?? false}
-            onCommit={(v) => updateMut.mutateAsync({ key: `calendars.${idx}.enabled`, value: v })}
+            onCommit={commit(`calendars.${idx}.enabled`)}
+            disabled={isBlocked(`calendars.${idx}.enabled`)}
           />
           <InlineEditRow
             label="Credentials path"
@@ -59,13 +61,15 @@ export function IntegrationsSection({ tracker: _tracker }: IntegrationsSectionPr
             mode="file"
             filter="json"
             value={cal.credentials_path ?? ""}
-            onCommit={(v) => updateMut.mutateAsync({ key: `calendars.${idx}.credentials_path`, value: v })}
+            onCommit={commit(`calendars.${idx}.credentials_path`) as (v: string) => void}
+            disabled={isBlocked(`calendars.${idx}.credentials_path`)}
           />
           <InlineEditRow
             label="Account"
             type="text"
             value={cal.gog_account ?? ""}
-            onCommit={(v) => updateMut.mutateAsync({ key: `calendars.${idx}.gog_account`, value: v })}
+            onCommit={commit(`calendars.${idx}.gog_account`) as (v: string) => void}
+            disabled={isBlocked(`calendars.${idx}.gog_account`)}
           />
           <div className="row">
             <div className="row-label">Test connection</div>

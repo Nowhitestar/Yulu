@@ -9,13 +9,39 @@ import { MemoryRouter } from "react-router";
 const updateMutate = vi.fn(async (_vars: { key: string; value: unknown }) => ({ daemonsNeedingRestart: ["sttdaemon"], daemonsNeedingSighup: [] }));
 let configReturn: { data: unknown; isPending: boolean } = { data: undefined, isPending: false };
 let modelsReturn: { data: unknown; isPending: boolean } = { data: [], isPending: false };
+let recordingState: string = "idle";
+
+// Transcription fields are restart-class (sttdaemon); useConfigField reads this
+// to decide the recording-guard + undo. realtime_enabled is reload:none.
+const SCHEMA = [
+  { path: "transcription.mode",             category: "transcription", label: "转写模式", type: "select", reload: { kind: "restart", daemons: ["sttdaemon"] } },
+  { path: "transcription.language",         category: "transcription", label: "语言",     type: "text",   reload: { kind: "restart", daemons: ["sttdaemon"] } },
+  { path: "transcription.final_engine",     category: "transcription", label: "最终引擎", type: "select", reload: { kind: "restart", daemons: ["sttdaemon"] } },
+  { path: "transcription.local_model_path", category: "transcription", label: "本地模型", type: "path",   reload: { kind: "restart", daemons: ["sttdaemon"] } },
+  { path: "transcription.mlx",              category: "transcription", label: "MLX 参数", type: "text",   reload: { kind: "restart", daemons: ["sttdaemon"] } },
+  { path: "transcription.realtime_enabled", category: "transcription", label: "实时字幕", type: "toggle", reload: { kind: "none" } },
+];
+
+// useConfigField pulls in useIsRecording (→ ws.js). Stub ws so it's a no-op.
+vi.mock("../../web/src/ws.js", () => ({
+  WsProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  useWsChannel: () => {},
+}));
 
 vi.mock("../../web/src/trpc.js", () => ({
   trpc: {
     config: {
       get: { useQuery: () => configReturn },
-      update: { useMutation: () => ({ mutateAsync: updateMutate }) },
+      schema: { useQuery: () => ({ data: SCHEMA, isPending: false }) },
+      update: { useMutation: (opts?: { onSuccess?: (r: unknown, v: unknown) => void }) => ({
+        mutateAsync: async (vars: { key: string; value: unknown }) => {
+          const res = await updateMutate(vars);
+          opts?.onSuccess?.(res, vars);
+          return res;
+        },
+      }) },
     },
+    recording: { state: { useQuery: () => ({ data: { state: recordingState } }) } },
     capabilities: {
       detected_models: { useQuery: () => modelsReturn },
     },
@@ -55,6 +81,7 @@ function baseConfig(overrides: Record<string, unknown> = {}) {
 
 beforeEach(() => {
   updateMutate.mockClear();
+  recordingState = "idle";
   configReturn = { data: baseConfig(), isPending: false };
   modelsReturn = { data: [], isPending: false };
 });
@@ -84,6 +111,16 @@ describe("TranscriptionSection — mode radios (TRANS-01)", () => {
     await vi.waitFor(() =>
       expect(updateMutate).toHaveBeenCalledWith({ key: "transcription.mode", value: "cloud-fallback" }),
     );
+  });
+
+  it("recording-guard — while recording, the restart-class mode radios are disabled and edits are dropped", async () => {
+    recordingState = "recording";
+    mount();
+    const fallbackRadio = screen.getByRole("radio", { name: /cloud-fallback/i }) as HTMLInputElement;
+    expect(fallbackRadio.disabled).toBe(true);
+    const user = userEvent.setup();
+    await user.click(fallbackRadio).catch(() => {});
+    expect(updateMutate).not.toHaveBeenCalled();
   });
 });
 

@@ -8,6 +8,14 @@ interface BaseProps {
   label: string;
   help?: string;
   status?: RowStatus;
+  /**
+   * Locks the field: the value renders read-only with a short note and edits
+   * are suppressed. Used by the recording-guard for restart-class settings —
+   * changing them mid-recording would interrupt the capture.
+   */
+  disabled?: boolean;
+  /** Note shown beside a disabled field (defaults to "录音中不可改"). */
+  disabledNote?: string;
 }
 
 type TextProps = BaseProps & { type: "text"; value: string; onCommit: (v: string) => void };
@@ -40,14 +48,38 @@ function statusGlyph(status: RowStatus | undefined) {
 }
 
 function renderValue(props: InlineEditRowProps): React.ReactNode {
+  // Recording-guard: restart-class fields render locked while a recording is in
+  // flight (readonly is never gated — it has no commit path).
+  if (props.disabled && (props.type === "text" || props.type === "number" || props.type === "select" || props.type === "toggle")) {
+    return <DisabledValue display={displayText(props)} note={props.disabledNote} />;
+  }
   switch (props.type) {
     case "text":     return <TextValue {...props} />;
     case "number":   return <NumberValue {...props} />;
     case "select":   return <SelectValue {...props} />;
     case "toggle":   return <ToggleValue {...props} />;
-    case "path":     return <PathValue {...props} />;
+    case "path":     return <PathValue {...props} disabled={props.disabled} />;
     case "readonly": return <ReadonlyValue {...props} />;
   }
+}
+
+// Read-only rendering of a guarded field's current value.
+function displayText(props: TextProps | NumberProps | SelectProps | ToggleProps): string {
+  switch (props.type) {
+    case "text":   return props.value;
+    case "number": return String(props.value);
+    case "select": return props.options.find((o) => o.value === props.value)?.label ?? props.value;
+    case "toggle": return props.value ? "On" : "Off";
+  }
+}
+
+function DisabledValue({ display, note }: { display: string; note?: string }) {
+  return (
+    <span className="value-disabled" title={note ?? "录音中不可修改"}>
+      <span className="value-disabled-text">{display}</span>
+      <span className="value-disabled-note">{note ?? "录音中不可改"}</span>
+    </span>
+  );
 }
 
 function TextValue({ value, onCommit }: TextProps) {
@@ -143,7 +175,7 @@ interface CloudWarning {
   reason: string;
 }
 
-function PathValue({ value, mode, filter, onCommit }: PathProps) {
+function PathValue({ value, mode, filter, onCommit, disabled, disabledNote }: PathProps) {
   const pickFile = trpc.system.pickFile.useMutation();
   const openInFinder = trpc.system.openInFinder.useMutation();
   const utils = trpc.useUtils();
@@ -184,8 +216,9 @@ function PathValue({ value, mode, filter, onCommit }: PathProps) {
   return (
     <div className="path-value">
       <span className="path-display" title={value}>{value || "(unset)"}</span>
-      <button type="button" className="path-btn" onClick={choose} disabled={pickFile.isPending}>Choose…</button>
+      {!disabled && <button type="button" className="path-btn" onClick={choose} disabled={pickFile.isPending}>Choose…</button>}
       {value && <button type="button" className="path-btn" onClick={() => openInFinder.mutate({ path: value, reveal: true })}>Reveal</button>}
+      {disabled && <span className="value-disabled-note">{disabledNote ?? "录音中不可改"}</span>}
       {pending && <CloudWarn warning={pending} onAccept={acceptCloud} onCancel={cancelCloud} />}
     </div>
   );

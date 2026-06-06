@@ -1,5 +1,5 @@
-import { describe, it, expect, vi } from "vitest";
-import { render, within, waitFor } from "@testing-library/react";
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { render, within, waitFor, fireEvent } from "@testing-library/react";
 import { createMemoryRouter, RouterProvider, Navigate, Outlet } from "react-router";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
@@ -15,8 +15,17 @@ const SCHEMA = [
 
 // Shared spy so tests can assert config.update was called on a field edit.
 // vi.hoisted keeps it available inside the hoisted vi.mock factory below.
-const { configUpdateSpy } = vi.hoisted(() => ({
+const { configUpdateSpy, recording } = vi.hoisted(() => ({
   configUpdateSpy: vi.fn(async (_vars: { key: string; value: unknown }) => ({ daemonsNeedingRestart: [], daemonsNeedingSighup: [] })),
+  recording: { state: "idle" as string },
+}));
+
+// useConfigField → useIsRecording subscribes to the recording WS channel. Stub
+// ws.js to a passthrough provider + no-op channel (we drive recording state via
+// the trpc.recording.state mock below).
+vi.mock("../../../web/src/ws.js", () => ({
+  WsProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  useWsChannel: () => {},
 }));
 
 // Stub trpc so each query returns minimal data and mutations no-op.
@@ -53,6 +62,7 @@ vi.mock("../../../web/src/trpc.js", () => {
         }) },
       },
       daemons: { restart: { useMutation: noopMutation } },
+      recording: { state: { useQuery: () => ({ data: { state: recording.state } }) } },
       system: {
         audioDevices: { useQuery: () => ({ data: { input: [], output: [] }, isPending: false }) },
         dbStats: { useQuery: () => ({ data: [], isPending: false }) },
@@ -262,5 +272,45 @@ describe("Settings category detail content (re-homed widgets)", () => {
     sw.click();
     await waitFor(() => expect(configUpdateSpy).toHaveBeenCalled());
     expect(configUpdateSpy).toHaveBeenCalledWith(expect.objectContaining({ key: "llm.enabled" }));
+  });
+});
+
+describe("Settings — recording-guard + undo (Task 5)", () => {
+  beforeEach(() => {
+    recording.state = "idle";
+    configUpdateSpy.mockClear();
+  });
+
+  it("while recording, a restart-class field is locked (disabled, not editable)", () => {
+    recording.state = "recording";
+    // status_agent.enabled is restart-class (statusagent) and lives in general.
+    const { getByText, queryByRole } = wrap("/settings/general");
+    const row = getByText("Status agent enabled").closest(".row")!;
+    // The interactive switch is replaced by a read-only display + a 录音中 note.
+    expect(within(row as HTMLElement).queryByRole("switch")).toBeNull();
+    expect(within(row as HTMLElement).getByText(/录音中/)).toBeInTheDocument();
+    // No restart-class commit can be made from this row.
+    expect(queryByRole("switch", { name: /status agent/i })).toBeNull();
+  });
+
+  it("a non-restart field stays editable while recording", () => {
+    recording.state = "recording";
+    const { getByText } = wrap("/settings/llm");
+    // llm.enabled is reload:none → not guarded.
+    const row = getByText("Enabled").closest(".row")!;
+    expect(within(row as HTMLElement).getByRole("switch")).toBeInTheDocument();
+  });
+
+  it("a successful save shows an undo toast whose 撤销 re-commits the previous value", async () => {
+    const { getByText, getByTestId } = wrap("/settings/llm");
+    // cfg.llm.enabled starts false; toggling commits true.
+    const row = getByText("Enabled").closest(".row")!;
+    within(row as HTMLElement).getByRole("switch").click();
+    await waitFor(() => expect(configUpdateSpy).toHaveBeenCalledWith(expect.objectContaining({ key: "llm.enabled", value: true })));
+    // The undo toast appears; clicking 撤销 re-commits the OLD value (false).
+    const toast = await waitFor(() => getByTestId("undo-toast"));
+    configUpdateSpy.mockClear();
+    fireEvent.click(within(toast).getByText("撤销"));
+    await waitFor(() => expect(configUpdateSpy).toHaveBeenCalledWith(expect.objectContaining({ key: "llm.enabled", value: false })));
   });
 });

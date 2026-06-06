@@ -3,6 +3,7 @@ import { trpc } from "../../trpc.js";
 import { InlineEditRow } from "../InlineEditRow.js";
 import { CommandEditor } from "../CommandEditor.js";
 import { TestPopover } from "../TestPopover.js";
+import { useConfigField } from "../../hooks/useConfigField.js";
 import type { SettingsRestartTracker } from "../../hooks/useSettingsRestartTracker.js";
 
 export interface LlmSectionProps {
@@ -11,11 +12,7 @@ export interface LlmSectionProps {
 
 export function LlmSection({ tracker }: LlmSectionProps) {
   const { data: cfg } = trpc.config.get.useQuery();
-  const updateMut = trpc.config.update.useMutation({
-    onSuccess: (res: { daemonsNeedingRestart: string[] }, vars: { key: string }) => {
-      tracker.record(vars.key, res.daemonsNeedingRestart);
-    },
-  });
+  const { commit } = useConfigField(tracker);
   const testMut = trpc.llm.test.useMutation();
 
   const [popState, setPopState] = useState<"pending" | "ok" | "failed" | null>(null);
@@ -49,7 +46,7 @@ export function LlmSection({ tracker }: LlmSectionProps) {
         label="Enabled"
         type="toggle"
         value={llm.enabled ?? false}
-        onCommit={(v) => updateMut.mutateAsync({ key: "llm.enabled", value: v })}
+        onCommit={commit("llm.enabled")}
         status={tracker.statusFor("llm.enabled")}
       />
       <div className="row">
@@ -60,7 +57,7 @@ export function LlmSection({ tracker }: LlmSectionProps) {
         <div className="row-value">
           <CommandEditor
             value={llm.command ?? []}
-            onChange={(next) => updateMut.mutateAsync({ key: "llm.command", value: next })}
+            onChange={(next) => commit("llm.command")(next)}
           />
         </div>
         <div className="row-status" />

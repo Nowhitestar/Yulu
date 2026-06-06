@@ -6,13 +6,33 @@ import { MemoryRouter } from "react-router";
 
 const updateMutate = vi.fn(async (_vars: { key: string; value: unknown }) => ({ daemonsNeedingRestart: ["sttdaemon"], daemonsNeedingSighup: [] }));
 let configReturn: { data: unknown; isPending: boolean } = { data: undefined, isPending: false };
+let recordingState: string = "idle";
+
+// transcription.cloud_command is restart-class; useConfigField looks it up here.
+const SCHEMA = [
+  { path: "transcription.cloud_command", category: "advanced", label: "云转写命令", type: "command", reload: { kind: "restart", daemons: ["sttdaemon"] } },
+];
+
+// useConfigField pulls in useIsRecording (→ ws.js). Stub ws so it's a no-op.
+vi.mock("../../web/src/ws.js", () => ({
+  WsProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  useWsChannel: () => {},
+}));
 
 vi.mock("../../web/src/trpc.js", () => ({
   trpc: {
     config: {
       get: { useQuery: () => configReturn },
-      update: { useMutation: () => ({ mutateAsync: updateMutate }) },
+      schema: { useQuery: () => ({ data: SCHEMA, isPending: false }) },
+      update: { useMutation: (opts?: { onSuccess?: (r: unknown, v: unknown) => void }) => ({
+        mutateAsync: async (vars: { key: string; value: unknown }) => {
+          const res = await updateMutate(vars);
+          opts?.onSuccess?.(res, vars);
+          return res;
+        },
+      }) },
     },
+    recording: { state: { useQuery: () => ({ data: { state: recordingState } }) } },
   },
 }));
 
@@ -22,6 +42,7 @@ const tracker = { record: vi.fn(), statusFor: () => null, clear: vi.fn(), pendin
 
 beforeEach(() => {
   updateMutate.mockClear();
+  recordingState = "idle";
   configReturn = { data: { transcription: { cloud_command: [] } }, isPending: false };
 });
 
@@ -49,6 +70,18 @@ describe("AdvancedSection — cloud transcription command (TRANS-02, re-homed)",
     await vi.waitFor(() =>
       expect(updateMutate.mock.calls.some((c) => c[0]?.key === "transcription.cloud_command")).toBe(true),
     );
+  });
+
+  it("locks the restart-class command while recording (no CommandEditor, shows a note)", () => {
+    recordingState = "recording";
+    render(
+      <MemoryRouter>
+        <AdvancedSection tracker={tracker} />
+      </MemoryRouter>,
+    );
+    // The editable CommandEditor ("+ add arg") is gone; a 录音中 note is shown.
+    expect(screen.queryByRole("button", { name: /\+ add arg/i })).toBeNull();
+    expect(screen.getByText(/录音中/)).toBeInTheDocument();
   });
 
   it("exposes no api key / token / secret / password field (T-04-KEY)", () => {

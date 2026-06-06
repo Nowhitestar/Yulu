@@ -1,6 +1,7 @@
 import { trpc } from "../../trpc.js";
 import { InlineEditRow } from "../InlineEditRow.js";
 import { ThemeToggle } from "../ThemeToggle.js";
+import { useConfigField } from "../../hooks/useConfigField.js";
 import type { SettingsRestartTracker } from "../../hooks/useSettingsRestartTracker.js";
 
 export interface HotkeySectionProps {
@@ -9,11 +10,7 @@ export interface HotkeySectionProps {
 
 export function HotkeySection({ tracker }: HotkeySectionProps) {
   const { data: cfg } = trpc.config.get.useQuery();
-  const updateMut = trpc.config.update.useMutation({
-    onSuccess: (res: { daemonsNeedingRestart: string[] }, vars: { key: string }) => {
-      tracker.record(vars.key, res.daemonsNeedingRestart);
-    },
-  });
+  const { commit, isBlocked } = useConfigField(tracker);
 
   if (!cfg) return null;
 
@@ -27,7 +24,8 @@ export function HotkeySection({ tracker }: HotkeySectionProps) {
         label="Status agent enabled"
         type="toggle"
         value={statusAgent.enabled ?? false}
-        onCommit={(v) => updateMut.mutateAsync({ key: "status_agent.enabled", value: v })}
+        onCommit={commit("status_agent.enabled")}
+        disabled={isBlocked("status_agent.enabled")}
         status={tracker.statusFor("status_agent.enabled")}
       />
       <div className="row">

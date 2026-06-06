@@ -1,5 +1,6 @@
 import { trpc } from "../../trpc.js";
 import { CommandEditor } from "../CommandEditor.js";
+import { useConfigField } from "../../hooks/useConfigField.js";
 import type { SettingsRestartTracker } from "../../hooks/useSettingsRestartTracker.js";
 
 export interface AdvancedSectionProps {
@@ -15,15 +16,12 @@ export interface AdvancedSectionProps {
  */
 export function AdvancedSection({ tracker }: AdvancedSectionProps) {
   const { data: cfg } = trpc.config.get.useQuery();
-  const updateMut = trpc.config.update.useMutation({
-    onSuccess: (res: { daemonsNeedingRestart: string[] }, vars: { key: string }) => {
-      tracker.record(vars.key, res.daemonsNeedingRestart);
-    },
-  });
+  const { commit, isBlocked } = useConfigField(tracker);
 
   if (!cfg) return null;
 
   const tr = cfg.transcription as { cloud_command?: string[] };
+  const blocked = isBlocked("transcription.cloud_command");
 
   return (
     <section id="advanced" className="settings-section">
@@ -39,10 +37,17 @@ export function AdvancedSection({ tracker }: AdvancedSectionProps) {
           <div className="row-help">Your own cloud transcription command — spawned with the audio. Yulu holds no cloud keys.</div>
         </div>
         <div className="row-value">
-          <CommandEditor
-            value={tr.cloud_command ?? []}
-            onChange={(next) => updateMut.mutateAsync({ key: "transcription.cloud_command", value: next })}
-          />
+          {blocked ? (
+            <span className="value-disabled">
+              <span className="value-disabled-text">{(tr.cloud_command ?? []).join(" ") || "(unset)"}</span>
+              <span className="value-disabled-note">录音中不可改</span>
+            </span>
+          ) : (
+            <CommandEditor
+              value={tr.cloud_command ?? []}
+              onChange={(next) => commit("transcription.cloud_command")(next)}
+            />
+          )}
         </div>
         <div className="row-status" />
       </div>

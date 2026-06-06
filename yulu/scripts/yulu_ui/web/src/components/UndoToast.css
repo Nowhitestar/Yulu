@@ -1,0 +1,35 @@
+/* web/src/components/UndoToast.css
+   Transient "已保存 · 撤销" toast, bottom-center of the settings pane. Reuses the
+   app's glass/edge/accent tokens — no new design language. */
+.undo-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 24px;
+  transform: translateX(-50%);
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border-radius: var(--radius-pill);
+  background: var(--glass-3);
+  color: var(--fg);
+  font-size: 12.5px;
+  box-shadow: var(--shadow), var(--edge-shadow);
+  backdrop-filter: var(--blur-glass);
+  animation: undo-toast-in 140ms ease-out;
+}
+@keyframes undo-toast-in {
+  from { opacity: 0; transform: translate(-50%, 6px); }
+  to   { opacity: 1; transform: translate(-50%, 0); }
+}
+.undo-toast-msg { color: var(--fg-2); }
+.undo-toast-sep { color: var(--fg-3); }
+.undo-toast-btn {
+  color: var(--accent);
+  font-size: 12.5px;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: var(--radius-inner);
+}
+.undo-toast-btn:hover { background: var(--accent-soft); }

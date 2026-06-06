@@ -1,6 +1,7 @@
 import { Link } from "react-router";
 import { trpc } from "../../trpc.js";
 import { InlineEditRow } from "../InlineEditRow.js";
+import { useConfigField } from "../../hooks/useConfigField.js";
 import type { SettingsRestartTracker } from "../../hooks/useSettingsRestartTracker.js";
 
 const TRANSCRIPTION_MODES = [
@@ -17,14 +18,7 @@ export function TranscriptionSection({ tracker }: TranscriptionSectionProps) {
   const { data: cfg } = trpc.config.get.useQuery();
   // SET-04: the model selector lists whisper models Phase 3 detected across host caches.
   const { data: models } = trpc.capabilities.detected_models.useQuery();
-
-  const updateMut = trpc.config.update.useMutation({
-    onSuccess: (res: { daemonsNeedingRestart: string[] }, vars: { key: string }) => {
-      tracker.record(vars.key, res.daemonsNeedingRestart);
-    },
-  });
-
-  const commit = (key: string) => (value: unknown) => updateMut.mutateAsync({ key, value });
+  const { commit, isBlocked } = useConfigField(tracker);
 
   if (!cfg) return null;
 
@@ -66,11 +60,13 @@ export function TranscriptionSection({ tracker }: TranscriptionSectionProps) {
                   name="transcription-mode"
                   value={m.value}
                   checked={mode === m.value}
+                  disabled={isBlocked("transcription.mode")}
                   onChange={() => commit("transcription.mode")(m.value)}
                 />{" "}
                 {m.label}
               </label>
             ))}
+            {isBlocked("transcription.mode") && <span className="value-disabled-note">录音中不可改</span>}
           </div>
         </div>
         <div className="row-status">{tracker.statusFor("transcription.mode") === "saved" ? "✓" : tracker.statusFor("transcription.mode") === "restart" ? "⟳" : null}</div>
@@ -86,7 +82,7 @@ export function TranscriptionSection({ tracker }: TranscriptionSectionProps) {
           <select
             aria-label="Detected model"
             className="value-input"
-            disabled={modelOptions.length === 0}
+            disabled={modelOptions.length === 0 || isBlocked("transcription.local_model_path")}
             value={tr.local_model_path ?? ""}
             onChange={(e) => commit("transcription.local_model_path")(e.target.value)}
           >
@@ -119,6 +115,7 @@ export function TranscriptionSection({ tracker }: TranscriptionSectionProps) {
         value={tr.final_engine ?? "mlx"}
         options={[{ value: "mlx", label: "mlx" }, { value: "whisper", label: "whisper.cpp" }]}
         onCommit={commit("transcription.final_engine") as (v: string) => void}
+        disabled={isBlocked("transcription.final_engine")}
         status={tracker.statusFor("transcription.final_engine")}
       />
       <InlineEditRow
@@ -132,6 +129,7 @@ export function TranscriptionSection({ tracker }: TranscriptionSectionProps) {
           { value: "auto", label: "auto" },
         ]}
         onCommit={commit("transcription.language") as (v: string) => void}
+        disabled={isBlocked("transcription.language")}
         status={tracker.statusFor("transcription.language")}
       />
       <InlineEditRow
@@ -141,6 +139,7 @@ export function TranscriptionSection({ tracker }: TranscriptionSectionProps) {
         filter="bin"
         value={tr.local_model_path ?? ""}
         onCommit={commit("transcription.local_model_path") as (v: string) => void}
+        disabled={isBlocked("transcription.local_model_path")}
         status={tracker.statusFor("transcription.local_model_path")}
       />
       <InlineEditRow
@@ -148,6 +147,7 @@ export function TranscriptionSection({ tracker }: TranscriptionSectionProps) {
         type="text"
         value={mlx.model ?? ""}
         onCommit={commit("transcription.mlx.model") as (v: string) => void}
+        disabled={isBlocked("transcription.mlx.model")}
         status={tracker.statusFor("transcription.mlx.model")}
       />
       <InlineEditRow
@@ -155,6 +155,7 @@ export function TranscriptionSection({ tracker }: TranscriptionSectionProps) {
         type="text"
         value={mlx.final_model ?? ""}
         onCommit={commit("transcription.mlx.final_model") as (v: string) => void}
+        disabled={isBlocked("transcription.mlx.final_model")}
         status={tracker.statusFor("transcription.mlx.final_model")}
       />
       <InlineEditRow
@@ -162,6 +163,7 @@ export function TranscriptionSection({ tracker }: TranscriptionSectionProps) {
         type="toggle"
         value={mlx.preprocess_audio ?? false}
         onCommit={commit("transcription.mlx.preprocess_audio") as (v: boolean) => void}
+        disabled={isBlocked("transcription.mlx.preprocess_audio")}
         status={tracker.statusFor("transcription.mlx.preprocess_audio")}
       />
       <InlineEditRow
@@ -172,6 +174,7 @@ export function TranscriptionSection({ tracker }: TranscriptionSectionProps) {
         step={1}
         value={mlx.passthrough_max_sec ?? 0}
         onCommit={commit("transcription.mlx.passthrough_max_sec") as (v: number) => void}
+        disabled={isBlocked("transcription.mlx.passthrough_max_sec")}
         status={tracker.statusFor("transcription.mlx.passthrough_max_sec")}
       />
       <InlineEditRow
@@ -181,6 +184,7 @@ export function TranscriptionSection({ tracker }: TranscriptionSectionProps) {
         step={1}
         value={mlx.passthrough_max_bytes ?? 0}
         onCommit={commit("transcription.mlx.passthrough_max_bytes") as (v: number) => void}
+        disabled={isBlocked("transcription.mlx.passthrough_max_bytes")}
         status={tracker.statusFor("transcription.mlx.passthrough_max_bytes")}
       />
       <div style={{ marginTop: 16 }}>

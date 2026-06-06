@@ -1,17 +1,18 @@
 import { trpc } from "../../trpc.js";
 import { InlineEditRow } from "../InlineEditRow.js";
 import { DbStatsRow } from "../DbStatsRow.js";
+import { useConfigField } from "../../hooks/useConfigField.js";
 import type { SettingsRestartTracker } from "../../hooks/useSettingsRestartTracker.js";
 
 export interface StorageSectionProps {
   tracker: SettingsRestartTracker;
 }
 
-export function StorageSection({ tracker: _tracker }: StorageSectionProps) {
+export function StorageSection({ tracker }: StorageSectionProps) {
   const { data: cfg } = trpc.config.get.useQuery();
   const { data: dbStats } = trpc.system.dbStats.useQuery();
   const { data: logPaths } = trpc.system.logPaths.useQuery();
-  const updateMut = trpc.config.update.useMutation();
+  const { commit, isBlocked } = useConfigField(tracker);
   const reindexMut = trpc.search.reindex.useMutation();
 
   if (!cfg) return null;
@@ -25,7 +26,8 @@ export function StorageSection({ tracker: _tracker }: StorageSectionProps) {
         type="path"
         mode="folder"
         value={cfg.audio.output_dir}
-        onCommit={(v) => updateMut.mutateAsync({ key: "audio.output_dir", value: v })}
+        onCommit={commit("audio.output_dir") as (v: string) => void}
+        disabled={isBlocked("audio.output_dir")}
       />
 
       <div className="storage-section">Databases</div>

@@ -49,6 +49,26 @@
   transition: border-color 120ms;
 }
 .value-display:hover { border-color: var(--accent); }
+
+/* Recording-guard: a restart-class field locked while recording. Reads as
+   muted, non-interactive, with a short "录音中不可改" note. */
+.value-disabled {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 26px;
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+.value-disabled-text { font-size: 13px; color: var(--fg-2); }
+.value-disabled-note {
+  font-size: 10.5px;
+  color: var(--fg-3);
+  padding: 1px 6px;
+  border-radius: 8px;
+  background: var(--row-hover);
+  white-space: nowrap;
+}
 .value-input {
   padding: 4px 8px;
   border-radius: var(--radius-inner);
