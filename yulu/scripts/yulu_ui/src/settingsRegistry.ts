@@ -58,6 +58,14 @@ export const SETTINGS: SettingDef[] = [
   { path: "meeting_detection.interval_sec",        category: "automation", label: "Poll interval (s)",  type: "number",  validate: z.number().min(1), reload: R.restart("detector") },
   { path: "meeting_detection.stable_sec",          category: "automation", label: "Stable window (s)",  type: "number",  validate: z.number().min(1), reload: R.restart("detector") },
   { path: "meeting_detection.prompt_cooldown_sec", category: "automation", label: "Prompt cooldown (s)", type: "number", validate: z.number().min(0), reload: R.restart("detector") },
+  // The large keyword/app match arrays — advanced, edited as string-array chips
+  // behind the automation "Advanced" disclosure (P3-2). All restart-class
+  // (detector reads them at startup).
+  { path: "meeting_detection.window_keywords",        category: "automation", label: "Window title keywords",     type: "command", validate: z.array(z.string()), reload: R.restart("detector"), advanced: true },
+  { path: "meeting_detection.app_name_hints",         category: "automation", label: "App name hints",           type: "command", validate: z.array(z.string()), reload: R.restart("detector"), advanced: true },
+  { path: "meeting_detection.target_app_names",       category: "automation", label: "Target app names",         type: "command", validate: z.array(z.string()), reload: R.restart("detector"), advanced: true },
+  { path: "meeting_detection.dedicated_meeting_apps", category: "automation", label: "Dedicated meeting apps",    type: "command", validate: z.array(z.string()), reload: R.restart("detector"), advanced: true },
+  { path: "meeting_detection.ignore_window_keywords", category: "automation", label: "Ignore window keywords",    type: "command", validate: z.array(z.string()), reload: R.restart("detector"), advanced: true },
   // output channels: agent_queue_worker re-reads config each 30s tick, so no reload.
   // api_key_env holds the NAME of an env var (never the secret) — type "env-name".
   { path: "output.channel",            category: "integrations", label: "Output channel",        type: "select",   validate: z.enum(["file", "zulip", "notion", "telegram"]), reload: R.none },

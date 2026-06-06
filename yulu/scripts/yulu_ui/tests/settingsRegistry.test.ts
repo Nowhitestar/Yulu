@@ -33,6 +33,16 @@ describe("settingsRegistry", () => {
       expect(reloadFor(p)).toEqual({ kind: "restart", daemons: ["detector"] });
     }
   });
+  it("meeting_detection 5 个大数组是 command 类型、restart detector、标 advanced(P3-2)", () => {
+    for (const p of ["meeting_detection.window_keywords", "meeting_detection.app_name_hints", "meeting_detection.target_app_names", "meeting_detection.dedicated_meeting_apps", "meeting_detection.ignore_window_keywords"]) {
+      const def = defFor(p);
+      expect(def?.type).toBe("command");
+      expect(def?.advanced).toBe(true);
+      expect(reloadFor(p)).toEqual({ kind: "restart", daemons: ["detector"] });
+      expect(def?.validate.safeParse(["Zoom", "Meet"]).success).toBe(true);
+      expect(def?.validate.safeParse("not-an-array").success).toBe(false);
+    }
+  });
   it("output 6 项改完无需动作(agent_queue_worker 每 tick 读)", () => {
     for (const p of ["output.channel", "output.zulip.stream", "output.zulip.topic", "output.notion.database_id", "output.notion.api_key_env", "output.telegram.chat_id"]) {
       expect(reloadFor(p)).toEqual({ kind: "none" });

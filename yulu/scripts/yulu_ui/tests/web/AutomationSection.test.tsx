@@ -9,12 +9,17 @@ let configReturn: { data: unknown; isPending: boolean } = { data: undefined, isP
 let recordingState: string = "idle";
 
 // All meeting_detection fields are restart-class (detector); useConfigField reads
-// this to drive the recording-guard + undo.
+// this to drive the recording-guard + undo. The 5 array fields are advanced.
 const SCHEMA = [
   { path: "meeting_detection.enabled",             category: "automation", label: "Meeting detection",  type: "toggle", reload: { kind: "restart", daemons: ["detector"] } },
   { path: "meeting_detection.interval_sec",        category: "automation", label: "Poll interval (s)",  type: "number", reload: { kind: "restart", daemons: ["detector"] } },
   { path: "meeting_detection.stable_sec",          category: "automation", label: "Stable window (s)",  type: "number", reload: { kind: "restart", daemons: ["detector"] } },
   { path: "meeting_detection.prompt_cooldown_sec", category: "automation", label: "Prompt cooldown (s)", type: "number", reload: { kind: "restart", daemons: ["detector"] } },
+  { path: "meeting_detection.window_keywords",        category: "automation", label: "Window title keywords",  type: "command", reload: { kind: "restart", daemons: ["detector"] }, advanced: true },
+  { path: "meeting_detection.app_name_hints",         category: "automation", label: "App name hints",        type: "command", reload: { kind: "restart", daemons: ["detector"] }, advanced: true },
+  { path: "meeting_detection.target_app_names",       category: "automation", label: "Target app names",      type: "command", reload: { kind: "restart", daemons: ["detector"] }, advanced: true },
+  { path: "meeting_detection.dedicated_meeting_apps", category: "automation", label: "Dedicated meeting apps", type: "command", reload: { kind: "restart", daemons: ["detector"] }, advanced: true },
+  { path: "meeting_detection.ignore_window_keywords", category: "automation", label: "Ignore window keywords", type: "command", reload: { kind: "restart", daemons: ["detector"] }, advanced: true },
 ];
 
 vi.mock("../../web/src/ws.js", () => ({
@@ -44,7 +49,11 @@ import { AutomationSection } from "../../web/src/components/settings/AutomationS
 const tracker = { record: vi.fn(), statusFor: () => null, clear: vi.fn(), pending: {} } as never;
 
 function baseConfig(overrides: Record<string, unknown> = {}) {
-  return { meeting_detection: { enabled: true, interval_sec: 10, stable_sec: 15, prompt_cooldown_sec: 1800, ...overrides } };
+  return { meeting_detection: {
+    enabled: true, interval_sec: 10, stable_sec: 15, prompt_cooldown_sec: 1800,
+    window_keywords: ["Zoom Meeting"], app_name_hints: ["Zoom"], target_app_names: ["Zoom"],
+    dedicated_meeting_apps: ["Zoom"], ignore_window_keywords: ["Calendar"],
+    ...overrides } };
 }
 
 beforeEach(() => {
@@ -111,5 +120,59 @@ describe("AutomationSection — meeting detection (P2-3)", () => {
     expect(within(row as HTMLElement).queryByRole("switch")).toBeNull();
     expect(within(row as HTMLElement).getByText(/录音中/)).toBeInTheDocument();
     expect(updateMutate).not.toHaveBeenCalled();
+  });
+});
+
+describe("AutomationSection — advanced match arrays disclosure (P3-2)", () => {
+  it("hides the array editors behind a collapsed-by-default Advanced disclosure", () => {
+    mount();
+    const disclosure = document.querySelector("details.adv-disclosure") as HTMLDetailsElement;
+    expect(disclosure).not.toBeNull();
+    // Collapsed by default.
+    expect(disclosure.open).toBe(false);
+    // The "change with care" note is on the summary.
+    expect(screen.getByText(/change with care/i)).toBeInTheDocument();
+    // The array field labels are in the DOM (details keeps children mounted) but
+    // the summary itself is the only thing visible until expanded.
+    expect(screen.getByText("Window title keywords")).toBeInTheDocument();
+  });
+
+  it("expands to reveal the five array editors", async () => {
+    mount();
+    const disclosure = document.querySelector("details.adv-disclosure") as HTMLDetailsElement;
+    const user = userEvent.setup();
+    await user.click(screen.getByText(/Advanced/));
+    expect(disclosure.open).toBe(true);
+    for (const label of ["Window title keywords", "App name hints", "Target app names", "Dedicated meeting apps", "Ignore window keywords"]) {
+      expect(screen.getByText(label)).toBeInTheDocument();
+    }
+    // Each array renders as a CommandEditor (its "+ Add arg" affordance).
+    expect(screen.getAllByRole("button", { name: /\+ add arg/i }).length).toBe(5);
+  });
+
+  it("editing an array commits the full new array for that key", async () => {
+    mount();
+    const user = userEvent.setup();
+    await user.click(screen.getByText(/Advanced/));
+    // The window_keywords editor: find its add-arg button (first array block).
+    const kwLabel = screen.getByText("Window title keywords");
+    const block = kwLabel.closest(".array-field")!;
+    const addArg = within(block as HTMLElement).getByRole("button", { name: /\+ add arg/i });
+    await user.click(addArg);
+    await vi.waitFor(() =>
+      expect(updateMutate.mock.calls.some((c) => c[0]?.key === "meeting_detection.window_keywords")).toBe(true),
+    );
+    // The committed value is an array (CommandEditor appended one empty arg).
+    const call = updateMutate.mock.calls.find((c) => c[0]?.key === "meeting_detection.window_keywords")!;
+    expect(Array.isArray(call[0]!.value)).toBe(true);
+  });
+
+  it("locks the array editors while recording (no + Add arg, shows a note)", () => {
+    recordingState = "recording";
+    mount();
+    // The arrays are restart-class — while recording they render read-only.
+    expect(screen.queryByRole("button", { name: /\+ add arg/i })).toBeNull();
+    // At least one 录音中 note is shown for the locked arrays.
+    expect(screen.getAllByText(/录音中/).length).toBeGreaterThan(0);
   });
 });

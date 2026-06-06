@@ -62,6 +62,14 @@ describe("AdvancedSection — cloud transcription command (TRANS-02, re-homed)",
     expect(screen.getAllByRole("button", { name: /\+ add arg/i }).length).toBeGreaterThanOrEqual(1);
   });
 
+  it("wraps the knobs in a collapsed-by-default Advanced disclosure (P3-2)", () => {
+    mount();
+    const disclosure = document.querySelector("details.adv-disclosure") as HTMLDetailsElement;
+    expect(disclosure).not.toBeNull();
+    expect(disclosure.open).toBe(false);
+    expect(screen.getByText(/change with care/i)).toBeInTheDocument();
+  });
+
   it("editing the command persists transcription.cloud_command", async () => {
     mount();
     const addArg = screen.getAllByRole("button", { name: /\+ add arg/i });

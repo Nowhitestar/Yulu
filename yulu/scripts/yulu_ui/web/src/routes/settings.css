@@ -167,6 +167,68 @@
   color: var(--fg-2);
 }
 
+/* P3-2 Advanced disclosure: a collapsible <details> wrapping advanced/power-user
+   knobs, collapsed by default with a quiet "change with care" note. */
+.adv-disclosure {
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-inner);
+  background: var(--glass-2);
+  margin-top: 8px;
+}
+.adv-disclosure[open] { background: transparent; }
+.adv-summary {
+  list-style: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg);
+  user-select: none;
+}
+.adv-summary::-webkit-details-marker { display: none; }
+.adv-summary::before {
+  content: "▸";
+  font-size: 10px;
+  color: var(--fg-3);
+  transition: transform 120ms;
+}
+.adv-disclosure[open] .adv-summary::before { transform: rotate(90deg); }
+.adv-summary-note {
+  font-size: 10.5px;
+  font-weight: 400;
+  color: var(--fg-3);
+  padding: 1px 6px;
+  border-radius: 8px;
+  background: var(--row-hover);
+}
+.adv-body { padding: 4px 8px 10px; }
+
+/* P3-2 array editor (meeting_detection match arrays). Wraps CommandEditor with a
+   label + help; the read-only locked variant reuses .value-disabled. */
+.array-field { padding: 8px 4px; }
+.array-field + .array-field { border-top: 1px solid var(--edge); }
+.array-field-label {
+  font-size: 13px;
+  color: var(--fg);
+  margin-bottom: 2px;
+}
+.array-field-help {
+  font-size: 11px;
+  color: var(--fg-3);
+  margin-bottom: 6px;
+}
+.array-field-note {
+  font-size: 10.5px;
+  color: var(--fg-3);
+  padding: 1px 6px;
+  border-radius: 8px;
+  background: var(--row-hover);
+  white-space: nowrap;
+}
+
 /* P3-3 Danger confirm: a styled, blocking confirm shown before committing a
    danger-flagged field. Mirrors the .cloud-warn alertdialog's honest framing but
    is generic (sits in the shared commit path). Centered overlay so it reads as a
