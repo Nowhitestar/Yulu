@@ -6,6 +6,7 @@ import type { SettingsOutletContext } from "./settings.js";
 import type { SettingsRestartTracker } from "../hooks/useSettingsRestartTracker.js";
 import { CapabilitiesSection } from "../components/settings/CapabilitiesSection.js";
 import { HotkeySection } from "../components/settings/HotkeySection.js";
+import { AboutSection } from "../components/settings/AboutSection.js";
 import { AudioSection } from "../components/settings/AudioSection.js";
 import { StorageSection } from "../components/settings/StorageSection.js";
 import { TranscriptionSection } from "../components/settings/TranscriptionSection.js";
@@ -29,6 +30,7 @@ const CATEGORY_SECTIONS: Record<string, (tracker: SettingsRestartTracker) => Rea
     <>
       <CapabilitiesSection />
       <HotkeySection tracker={tracker} />
+      <AboutSection />
     </>
   ),
   audio: (tracker) => (

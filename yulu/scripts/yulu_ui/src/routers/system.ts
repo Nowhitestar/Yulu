@@ -90,6 +90,21 @@ const CLOUD_DETECT_DEGRADED: CloudDetect = {
   dataless: false,
 };
 
+// P3-1 (About block): format the install source the way version.py's
+// format_version does — "release <version>" / "dev <branch>" — or null when the
+// install file is absent/malformed (e.g. a plain dev checkout).
+function formatInstallSource(install: unknown): string | null {
+  if (install == null || typeof install !== "object") return null;
+  const i = install as Record<string, unknown>;
+  if (i.source === "release" && typeof i.version === "string" && i.version) {
+    return `release ${i.version}`;
+  }
+  if (i.source === "dev" && typeof i.branch === "string" && i.branch) {
+    return `dev ${i.branch}`;
+  }
+  return null;
+}
+
 export const systemRouter = router({
   version: publicProcedure.query(() => ({
     name: PKG.name,
@@ -97,6 +112,26 @@ export const systemRouter = router({
     node: process.version,
     uptimeSec: Math.floor(process.uptime()),
   })),
+
+  // The PRODUCT version (repo-root VERSION file), not the yulu_ui package
+  // version above. Read-only; never throws — a missing/unreadable VERSION
+  // degrades to "unknown" and a missing install file → installSource: null, so
+  // the About block always renders.
+  yuluVersion: publicProcedure.query(({ ctx }): { version: string; installSource: string | null } => {
+    let version = "unknown";
+    try {
+      const raw = readFileSync(ctx.paths.versionFile, "utf8").trim();
+      if (raw) version = raw;
+    } catch { /* missing/unreadable → "unknown" */ }
+
+    let installSource: string | null = null;
+    try {
+      const parsed = JSON.parse(readFileSync(ctx.paths.installJson, "utf8"));
+      installSource = formatInstallSource(parsed);
+    } catch { /* absent/malformed → null */ }
+
+    return { version, installSource };
+  }),
 
   pickFile: publicProcedure
     .input(z.object({

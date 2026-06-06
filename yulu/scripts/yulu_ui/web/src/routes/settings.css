@@ -156,3 +156,13 @@
   background: var(--row-hover);
   color: var(--fg-3);
 }
+
+/* ── P3 ──────────────────────────────────────────────────────────────── */
+
+/* P3-1 About block: read-only version value. Monospace, quiet — clearly not an
+   editable field (no border/field-bg like .value-display). */
+.about-value {
+  font-family: "SF Mono", ui-monospace, monospace;
+  font-size: 12px;
+  color: var(--fg-2);
+}

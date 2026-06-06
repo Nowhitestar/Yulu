@@ -68,6 +68,7 @@ vi.mock("../../../web/src/trpc.js", () => {
         audioDevices: { useQuery: () => ({ data: { input: [], output: [] }, isPending: false }) },
         dbStats: { useQuery: () => ({ data: [], isPending: false }) },
         logPaths: { useQuery: () => ({ data: [], isPending: false }) },
+        yuluVersion: { useQuery: () => ({ data: { version: "0.8.0", installSource: "release v0.8.0" }, isPending: false }) },
         pickFile: { useMutation: noopMutation },
         openInFinder: { useMutation: noopMutation },
       },
@@ -218,13 +219,16 @@ describe("Settings (3-column MasterDetail)", () => {
 });
 
 describe("Settings category detail content (re-homed widgets)", () => {
-  it("general: capabilities (read-only) + theme + status agent", () => {
+  it("general: capabilities (read-only) + theme + status agent + about", () => {
     const { container, getByText } = wrap("/settings/general");
     const detail = within(container.querySelector(".masterdetail-detail") as HTMLElement);
     expect(detail.getByText("Capabilities")).toBeInTheDocument();
     // ThemeToggle (UI theme control) is re-homed here.
     expect(container.querySelector('[role="group"][aria-label="Theme"]')).not.toBeNull();
     expect(getByText("Status agent enabled")).toBeInTheDocument();
+    // P3-1: the read-only About block (version + install source) lives in general.
+    expect(detail.getByText("About")).toBeInTheDocument();
+    expect(detail.getByText("0.8.0")).toBeInTheDocument();
   });
 
   it("audio: audio rows + storage dbStats/logs", () => {
