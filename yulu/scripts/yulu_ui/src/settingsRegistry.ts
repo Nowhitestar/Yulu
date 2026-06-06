@@ -53,6 +53,11 @@ export const SETTINGS: SettingDef[] = [
   { path: "llm.enabled",                 category: "llm", label: "启用 LLM",       type: "toggle",  validate: z.boolean(),                 reload: R.none },   // B3 修正:旧为 sighup
   { path: "llm.command",                 category: "llm", label: "LLM 后端",       type: "preset",  validate: z.array(z.string()).nullable(), reload: R.none }, // B3 修正:旧为 sighup
   { path: "calendars",                   category: "integrations", label: "日历",   type: "text",    validate: z.array(z.unknown()),        reload: R.restart("calendar", "scheduler") },
+  // meeting_detection: the detector daemon reads config at startup, so changes restart it.
+  { path: "meeting_detection.enabled",             category: "automation", label: "Meeting detection",  type: "toggle",  validate: z.boolean(),       reload: R.restart("detector") },
+  { path: "meeting_detection.interval_sec",        category: "automation", label: "Poll interval (s)",  type: "number",  validate: z.number().min(1), reload: R.restart("detector") },
+  { path: "meeting_detection.stable_sec",          category: "automation", label: "Stable window (s)",  type: "number",  validate: z.number().min(1), reload: R.restart("detector") },
+  { path: "meeting_detection.prompt_cooldown_sec", category: "automation", label: "Prompt cooldown (s)", type: "number", validate: z.number().min(0), reload: R.restart("detector") },
   { path: "status_agent.enabled",        category: "general", label: "菜单栏 Agent", type: "toggle", validate: z.boolean(),               reload: R.restart("statusagent") },
 ];
 // 注意:status_agent.hotkey 不在表内 —— 随热键移除而删(B3)。

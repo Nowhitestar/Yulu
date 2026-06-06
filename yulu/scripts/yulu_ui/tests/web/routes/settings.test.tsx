@@ -208,9 +208,11 @@ describe("Settings (3-column MasterDetail)", () => {
     expect(el.props.to).toBe("/settings/general");
   });
 
-  it("shows a P2 placeholder for the automation category (no fields yet)", () => {
-    const { getByText } = wrap("/settings/automation");
-    expect(getByText(/P2/)).toBeInTheDocument();
+  it("renders the automation (meeting detection) section", () => {
+    const { container } = wrap("/settings/automation");
+    const detail = within(container.querySelector(".masterdetail-detail") as HTMLElement);
+    expect(detail.getByText("Automation")).toBeInTheDocument();
+    expect(detail.getByText("Meeting detection")).toBeInTheDocument();
   });
 });
 

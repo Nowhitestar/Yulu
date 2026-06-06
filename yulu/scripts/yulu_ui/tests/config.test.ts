@@ -141,6 +141,14 @@ describe("registry-driven classify + per-field validation", () => {
       expect(() => mgr.update("transcription.post_recording_mode", "bogus")).toThrow(ZodError);
     } finally { cleanup(); }
   });
+  it("meeting_detection.enabled 改完 restart detector;interval_sec<1 被拒(P2-3)", () => {
+    const { mgr, cleanup } = makeCfg();
+    try {
+      expect(mgr.update("meeting_detection.enabled", false)).toEqual({ daemonsNeedingRestart: ["detector"], daemonsNeedingSighup: [] });
+      expect((mgr.read() as { meeting_detection?: { enabled?: boolean } }).meeting_detection?.enabled).toBe(false);
+      expect(() => mgr.update("meeting_detection.interval_sec", 0)).toThrow(ZodError);
+    } finally { cleanup(); }
+  });
 });
 
 describe("cloud transcription holds NO keys (TRANS-02 / T-04-KEY guardrail)", () => {

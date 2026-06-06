@@ -28,6 +28,11 @@ describe("settingsRegistry", () => {
     expect(def?.validate.safeParse("full_transcribe").success).toBe(true);
     expect(def?.validate.safeParse("nonsense").success).toBe(false);
   });
+  it("meeting_detection 4 项改完都要 restart detector", () => {
+    for (const p of ["meeting_detection.enabled", "meeting_detection.interval_sec", "meeting_detection.stable_sec", "meeting_detection.prompt_cooldown_sec"]) {
+      expect(reloadFor(p)).toEqual({ kind: "restart", daemons: ["detector"] });
+    }
+  });
   it("未注册路径默认 none", () => {
     expect(reloadFor("nope.nope")).toEqual({ kind: "none" });
   });

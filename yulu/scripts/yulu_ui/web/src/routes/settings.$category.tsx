@@ -10,6 +10,7 @@ import { AudioSection } from "../components/settings/AudioSection.js";
 import { StorageSection } from "../components/settings/StorageSection.js";
 import { TranscriptionSection } from "../components/settings/TranscriptionSection.js";
 import { LlmSection } from "../components/settings/LlmSection.js";
+import { AutomationSection } from "../components/settings/AutomationSection.js";
 import { IntegrationsSection } from "../components/settings/IntegrationsSection.js";
 import { AdvancedSection } from "../components/settings/AdvancedSection.js";
 
@@ -20,7 +21,7 @@ import { AdvancedSection } from "../components/settings/AdvancedSection.js";
  * all that behaviour intact while the registry-driven categories decide *where*
  * each block lives (P1 category→content map). The generic InlineEditRow rows are
  * rendered inside these sections; their input type/label/help already match the
- * registry. `automation` has no fields yet (P2) and renders an empty state.
+ * registry.
  */
 const CATEGORY_SECTIONS: Record<string, (tracker: SettingsRestartTracker) => ReactNode> = {
   general: (tracker) => (
@@ -37,6 +38,7 @@ const CATEGORY_SECTIONS: Record<string, (tracker: SettingsRestartTracker) => Rea
   ),
   transcription: (tracker) => <TranscriptionSection tracker={tracker} />,
   llm: (tracker) => <LlmSection tracker={tracker} />,
+  automation: (tracker) => <AutomationSection tracker={tracker} />,
   integrations: (tracker) => <IntegrationsSection tracker={tracker} />,
   advanced: (tracker) => <AdvancedSection tracker={tracker} />,
 };
