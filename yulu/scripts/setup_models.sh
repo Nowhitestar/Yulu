@@ -57,10 +57,91 @@ PY
     ok "config.json 已指向该模型"
 }
 
-setup_models() {
-    local mode="${1:-release}"   # release|dev — accepted for orchestrator parity
-    : "$mode"                    # model download is mode-agnostic
+# ── Diarization ONNX models (v0.6) ───────────────────────────────────────────
+#
+# Two plain ONNX files, cached under $MODEL_DIR/diarization/, used by the resident
+# SherpaDiarizeBackend (stt_daemon/backends/diarize.py). Offline-by-default: once on
+# disk they are loaded by absolute path with ZERO network calls. Idempotent: an
+# already-present file is detected and skipped. URLs mirror backends/diarize.py
+# (SEG_MODEL_URL / EMB_MODEL_URL) — the single source of truth.
+#
+# Provisioning is GATED on diarization being enabled in config (transcription.diarization.enabled);
+# when disabled, the download is skipped entirely so non-diarization installs pull nothing extra.
+DIAR_DIR="${DIAR_DIR:-$MODEL_DIR/diarization}"
+DIAR_SEG_FILE="$DIAR_DIR/segmentation.onnx"
+DIAR_EMB_FILE="$DIAR_DIR/campplus.onnx"
+DIAR_SEG_URL="https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-segmentation-models/sherpa-onnx-pyannote-segmentation-3-0.tar.bz2"
+DIAR_EMB_URL="https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/3dspeaker_speech_campplus_sv_zh-cn_16k-common.onnx"
 
+diarization_enabled() {
+    # Read-only: true iff transcription.diarization.enabled is truthy in config.json.
+    "$PYTHON_BIN" - <<PY 2>/dev/null
+import json, sys
+from pathlib import Path
+cfg_path = Path("$CONFIG_DIR/config.json")
+try:
+    cfg = json.loads(cfg_path.read_text())
+except Exception:
+    sys.exit(1)
+diar = cfg.get("transcription", {}).get("diarization", {})
+sys.exit(0 if (isinstance(diar, dict) and diar.get("enabled")) else 1)
+PY
+}
+
+setup_diarization_models() {
+    # Idempotent download of the seg + cam++ ONNX. Skips files that already exist.
+    if ! diarization_enabled; then
+        ok "未启用说话人分离，跳过 diarization 模型下载"
+        return 0
+    fi
+    header "下载说话人分离 (diarization) ONNX 模型"
+    mkdir -p "$DIAR_DIR"
+
+    # cam++ embedding — a plain .onnx (~27 MB), direct download.
+    if [[ -f "$DIAR_EMB_FILE" ]]; then
+        ok "cam++ embedding 模型已存在: $DIAR_EMB_FILE"
+    else
+        info "下载 cam++ embedding (~27 MB)..."
+        if curl -L --fail --progress-bar "$DIAR_EMB_URL" -o "$DIAR_EMB_FILE.partial"; then
+            mv "$DIAR_EMB_FILE.partial" "$DIAR_EMB_FILE"
+            ok "cam++ embedding 已保存: $DIAR_EMB_FILE"
+        else
+            rm -f "$DIAR_EMB_FILE.partial"
+            warn "cam++ 模型下载失败。手动下载：curl -L $DIAR_EMB_URL -o $DIAR_EMB_FILE"
+        fi
+    fi
+
+    # pyannote segmentation — shipped inside a .tar.bz2; extract model.onnx -> segmentation.onnx.
+    if [[ -f "$DIAR_SEG_FILE" ]]; then
+        ok "segmentation 模型已存在: $DIAR_SEG_FILE"
+    else
+        info "下载 pyannote segmentation (~5.7 MB)..."
+        local tarball="$DIAR_DIR/seg.tar.bz2"
+        if curl -L --fail --progress-bar "$DIAR_SEG_URL" -o "$tarball.partial"; then
+            mv "$tarball.partial" "$tarball"
+            # Extract the single model.onnx from the archive into DIAR_DIR.
+            if tar -xjf "$tarball" -C "$DIAR_DIR" 2>/dev/null; then
+                local extracted
+                extracted="$(find "$DIAR_DIR" -name model.onnx -path '*pyannote*' 2>/dev/null | head -1)"
+                if [[ -n "$extracted" && -f "$extracted" ]]; then
+                    mv "$extracted" "$DIAR_SEG_FILE"
+                    ok "segmentation 已保存: $DIAR_SEG_FILE"
+                    # Clean the extracted tree + tarball (keep only the .onnx we need).
+                    rm -rf "$DIAR_DIR"/sherpa-onnx-pyannote-segmentation-3-0 "$tarball"
+                else
+                    warn "未能在归档中找到 model.onnx；请手动解压 $tarball"
+                fi
+            else
+                warn "解压 segmentation 归档失败：$tarball"
+            fi
+        else
+            rm -f "$tarball.partial"
+            warn "segmentation 模型下载失败。手动下载：curl -L $DIAR_SEG_URL -o $tarball && tar -xjf $tarball -C $DIAR_DIR"
+        fi
+    fi
+}
+
+setup_whisper_model() {
     header "下载 whisper.cpp 模型"
 
     mkdir -p "$MODEL_DIR"
@@ -114,6 +195,17 @@ PY
         warn "  curl -L $url -o $target"
         warn "下载完成后运行：yulu transcription engine whisper $target"
     fi
+}
+
+setup_models() {
+    local mode="${1:-release}"   # release|dev — accepted for orchestrator parity
+    : "$mode"                    # model download is mode-agnostic
+
+    # The whisper model concern (unchanged) followed by the additive diarization
+    # concern. Each is independently idempotent; diarization is gated on config so a
+    # non-diarization install pulls nothing extra.
+    setup_whisper_model
+    setup_diarization_models
 }
 
 [[ "${BASH_SOURCE[0]}" == "${0}" ]] && setup_models "$@"

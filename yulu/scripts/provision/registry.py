@@ -190,12 +190,9 @@ def _audio_ready() -> bool:
     return binary.is_file() and (binary.stat().st_mode & 0o111) != 0
 
 
-def _model_present() -> bool:
-    """models: the configured local whisper model file exists, OR the engine is
-    mlx (whose weights are fetched lazily on first transcription, so no on-disk
-    file gates the step)."""
-    cfg = _load_config()
-    trans = cfg.get("transcription", {}) if isinstance(cfg, dict) else {}
+def _whisper_model_present(trans: dict) -> bool:
+    """The whisper half of the `models` step: configured local model exists, OR engine is
+    mlx (weights fetched lazily on first transcription, so no on-disk file gates it)."""
     engine = str(trans.get("engine", "")).lower()
     if engine == "mlx":
         return True
@@ -203,6 +200,43 @@ def _model_present() -> bool:
     if model_path:
         return Path(str(model_path)).expanduser().is_file()
     return False
+
+
+def _diarization_models_present(trans: dict) -> bool:
+    """The diarization half of the `models` step (v0.6).
+
+    Satisfied when diarization is DISABLED (nothing to provision) OR both ONNX files exist.
+    Delegates the file check to ``stt_daemon.backends.diarize.models_present`` (the single
+    source of truth for the model-file contract). Tolerant: any import/error → treat as
+    "not present" so the step runs (the download is idempotent). Never raises.
+    """
+    diar = trans.get("diarization", {}) if isinstance(trans.get("diarization"), dict) else {}
+    if not diar.get("enabled"):
+        return True  # diarization off → no diarization files required
+    try:
+        import sys as _sys
+
+        if str(SCRIPTS_DIR) not in _sys.path:
+            _sys.path.insert(0, str(SCRIPTS_DIR))
+        from stt_daemon.backends.diarize import models_present
+
+        return models_present(
+            seg_path=diar.get("seg_model") or None,
+            emb_path=diar.get("emb_model") or None,
+        )
+    except Exception:
+        return False
+
+
+def _model_present() -> bool:
+    """models: BOTH the whisper-model concern AND the diarization-model concern are satisfied.
+
+    The diarization half short-circuits to True when diarization is disabled, so this stays a
+    no-op for installs that never turn diarization on (the step count remains six — diarization
+    extends the existing `models` step rather than adding a seventh)."""
+    cfg = _load_config()
+    trans = cfg.get("transcription", {}) if isinstance(cfg, dict) else {}
+    return _whisper_model_present(trans) and _diarization_models_present(trans)
 
 
 def _mlx_importable() -> bool:
