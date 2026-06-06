@@ -239,6 +239,7 @@ def _host_capabilities(config_dir: Path, runtime_root: Path) -> dict[str, Any]:
         sys.path.insert(0, str(Path(__file__).resolve().parent))
         from capabilities.probes import (
             probe_command,
+            probe_diarization,
             probe_llm_command,
             probe_mlx_whisper,
             probe_recording_dir,
@@ -256,6 +257,10 @@ def _host_capabilities(config_dir: Path, runtime_root: Path) -> dict[str, Any]:
         report.capabilities["llm_command"] = probe_llm_command(config_dir / "config.json")
         report.capabilities["models"] = scan_models()
         report.capabilities["recording_dir"] = probe_recording_dir()
+        # diarization (v0.6, DIAR-04) — a Yulu-managed tri-state entry (usable /
+        # present-but-unverified / absent). NOT an agent-config reframe: diarization is
+        # provisioned + owned by Yulu, surfaced here so the UI can show readiness.
+        report.capabilities["diarization"] = probe_diarization()
         # gog (Google Calendar CLI from steipete/tap/gogcli) — a host CLI with host-path
         # provenance, NOT an agent-config reframe (D-06 provider neutrality stays intact).
         # Added so REUSE-01's wording (whisper / model / claude / gog) is fully covered and
