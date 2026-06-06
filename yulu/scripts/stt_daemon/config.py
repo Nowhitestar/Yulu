@@ -47,6 +47,20 @@ class DaemonConfig:
     live_chunk_max_sec: float = 30.0
     max_concurrent_connections: int = 100
 
+    # ── Diarization (v0.6, transcription.diarization.*) ──────────────────────
+    # Config-SELECTED sibling stage (DIAR-01). The diarize backend is built OFF the ASR
+    # `backends` dict (see __main__._build_diarize_backend) so the ASR fallback chain can
+    # never route to it. `diarize_enabled=False` by default → the backend is simply not
+    # constructed and today's pipeline is unchanged.
+    diarize_enabled: bool = False
+    diarize_provider: str = "sherpa-onnx"
+    # Empty → resolve canonical paths under <models_dir>/diarization (backends.diarize).
+    diarize_seg_model: str = ""
+    diarize_emb_model: str = ""
+    # None / <=0 → auto threshold-based clustering (count strategy is Phase 12).
+    diarize_num_speakers: Optional[int] = None
+    diarize_threshold: float = 0.5
+
     @classmethod
     def from_user_config(cls, path: Optional[Path] = None) -> "DaemonConfig":
         if path is None:
@@ -88,4 +102,24 @@ class DaemonConfig:
             cfg.default_engine = sd["default_engine"]
         if sd.get("live_chunk_max_per_session"):
             cfg.live_chunk_max_per_session = int(sd["live_chunk_max_per_session"])
+        # Diarization (transcription.diarization.*) — all optional, all defaulted.
+        diar = trans.get("diarization", {}) if isinstance(trans.get("diarization"), dict) else {}
+        if "enabled" in diar:
+            cfg.diarize_enabled = bool(diar["enabled"])
+        if diar.get("provider"):
+            cfg.diarize_provider = str(diar["provider"]).strip().lower()
+        if diar.get("seg_model"):
+            cfg.diarize_seg_model = str(Path(diar["seg_model"]).expanduser())
+        if diar.get("emb_model"):
+            cfg.diarize_emb_model = str(Path(diar["emb_model"]).expanduser())
+        if diar.get("num_speakers") is not None:
+            try:
+                cfg.diarize_num_speakers = int(diar["num_speakers"])
+            except (TypeError, ValueError):
+                cfg.diarize_num_speakers = None
+        if diar.get("threshold") is not None:
+            try:
+                cfg.diarize_threshold = float(diar["threshold"])
+            except (TypeError, ValueError):
+                pass
         return cfg
