@@ -1,5 +1,18 @@
 /* web/src/routes/settings.css */
 
+/* Page shell (moved here from the now-deleted SettingsPage component). The
+   banner sticks above the 3-column MasterDetail, which fills the rest. */
+.settings-page {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+.settings-banner {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+}
+
 /* The settings page now hosts the app's 3-column MasterDetail. The banner sits
    above it; the MasterDetail fills the remaining height. */
 .settings-masterdetail {
@@ -12,28 +25,33 @@
   min-width: 0;
 }
 
-/* Detail pane (category content) */
+/* Detail pane (category content). Mirrors the inbox reader's calm aesthetic —
+   comfortable padding, a quiet page heading, fg-3 sub — using shared tokens so
+   it sits in the app's existing detail-pane family rather than a new look. */
 .settings-detail {
   max-width: 760px;
-  padding: 8px 4px 80px 4px;
+  padding: 10px 16px 80px 16px;
 }
 .settings-detail-head {
-  margin-bottom: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 22px;
 }
 .settings-detail-title {
-  font-size: 20px;
+  font-size: 16px;
   font-weight: 600;
   color: var(--fg);
-  margin: 0 0 4px 0;
+  margin: 0;
 }
 .settings-detail-sub {
-  color: var(--fg-2);
-  font-size: 12.5px;
+  color: var(--fg-3);
+  font-size: 11.5px;
   margin: 0;
 }
 .settings-detail-empty {
   padding: 40px 4px;
-  color: var(--fg-2);
+  color: var(--fg-3);
   font-size: 13px;
 }
 /* Spacing between re-homed rich section blocks within a category detail. */
@@ -44,11 +62,11 @@
   scroll-margin-top: 60px;
 }
 .settings-section-h {
-  font-size: 18px;
+  font-size: 14px;
   font-weight: 600;
   color: var(--fg);
-  margin: 0 0 4px 0;
-  padding-top: 14px;
+  margin: 0 0 3px 0;
+  padding-top: 16px;
   border-top: 1px solid var(--edge);
 }
 .settings-section:first-child .settings-section-h {
@@ -56,9 +74,9 @@
   border-top: 0;
 }
 .settings-section-sub {
-  color: var(--fg-2);
-  font-size: 12.5px;
-  margin: 0 0 16px 0;
+  color: var(--fg-3);
+  font-size: 11.5px;
+  margin: 0 0 14px 0;
 }
 
 /* Integrations section */
