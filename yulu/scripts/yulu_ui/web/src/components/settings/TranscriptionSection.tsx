@@ -24,6 +24,7 @@ export function TranscriptionSection({ tracker }: TranscriptionSectionProps) {
 
   const tr = cfg.transcription as {
     mode?: "local" | "cloud-fallback" | "cloud-priority";
+    post_recording_mode?: "fast_summary" | "full_transcribe";
     realtime_enabled?: boolean;
     final_engine?: "mlx" | "whisper";
     language?: string;
@@ -108,6 +109,21 @@ export function TranscriptionSection({ tracker }: TranscriptionSectionProps) {
         value={tr.realtime_enabled ?? true}
         onCommit={commit("transcription.realtime_enabled") as (v: boolean) => void}
         status={tracker.statusFor("transcription.realtime_enabled")}
+      />
+      {/* P2-1: what happens when a recording stops — a quick summary, or a full re-transcribe.
+          transcribe.py reads this each run, so no daemon reload is needed (reload:none). */}
+      <InlineEditRow
+        label="Post-recording"
+        help="fast_summary: summarize from the live transcript. full_transcribe: re-transcribe the whole recording first."
+        type="select"
+        value={tr.post_recording_mode ?? "fast_summary"}
+        options={[
+          { value: "fast_summary", label: "fast_summary" },
+          { value: "full_transcribe", label: "full_transcribe" },
+        ]}
+        onCommit={commit("transcription.post_recording_mode") as (v: string) => void}
+        disabled={isBlocked("transcription.post_recording_mode")}
+        status={tracker.statusFor("transcription.post_recording_mode")}
       />
       <InlineEditRow
         label="Final engine"

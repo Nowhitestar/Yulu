@@ -20,6 +20,14 @@ describe("settingsRegistry", () => {
   it("llm.command 改完无需动作(读取即生效)", () => {
     expect(reloadFor("llm.command")).toEqual({ kind: "none" });
   });
+  it("post_recording_mode 是 select,枚举校验,reload none(transcribe.py 每次读)", () => {
+    const def = defFor("transcription.post_recording_mode");
+    expect(def?.type).toBe("select");
+    expect(reloadFor("transcription.post_recording_mode")).toEqual({ kind: "none" });
+    expect(def?.validate.safeParse("fast_summary").success).toBe(true);
+    expect(def?.validate.safeParse("full_transcribe").success).toBe(true);
+    expect(def?.validate.safeParse("nonsense").success).toBe(false);
+  });
   it("未注册路径默认 none", () => {
     expect(reloadFor("nope.nope")).toEqual({ kind: "none" });
   });

@@ -20,6 +20,7 @@ const SCHEMA = [
   { path: "transcription.local_model_path", category: "transcription", label: "本地模型", type: "path",   reload: { kind: "restart", daemons: ["sttdaemon"] } },
   { path: "transcription.mlx",              category: "transcription", label: "MLX 参数", type: "text",   reload: { kind: "restart", daemons: ["sttdaemon"] } },
   { path: "transcription.realtime_enabled", category: "transcription", label: "实时字幕", type: "toggle", reload: { kind: "none" } },
+  { path: "transcription.post_recording_mode", category: "transcription", label: "Post-recording", type: "select", reload: { kind: "none" } },
 ];
 
 // useConfigField pulls in useIsRecording (→ ws.js). Stub ws so it's a no-op.
@@ -180,6 +181,32 @@ describe("TranscriptionSection — model selector from detected_models (SET-04)"
     expect(screen.getByText(/no models detected/i)).toBeInTheDocument();
     const select = screen.getByLabelText(/detected model/i) as HTMLSelectElement;
     expect(select.disabled).toBe(true);
+  });
+});
+
+describe("TranscriptionSection — post-recording mode (P2-1)", () => {
+  it("renders a Post-recording select defaulting to fast_summary and persists full_transcribe on change", async () => {
+    mount();
+    const labelEl = screen.getByText("Post-recording");
+    const row = labelEl.closest(".row")!;
+    // Defaults to fast_summary (unset in baseConfig), shown as the read-at-rest display.
+    expect(within(row as HTMLElement).getByText("fast_summary")).toBeInTheDocument();
+
+    const user = userEvent.setup();
+    // Reveal the <select> (InlineEditRow shows a display span until clicked).
+    await user.click(within(row as HTMLElement).getByText("fast_summary"));
+    const select = within(row as HTMLElement).getByRole("combobox") as HTMLSelectElement;
+    await user.selectOptions(select, "full_transcribe");
+    await vi.waitFor(() =>
+      expect(updateMutate).toHaveBeenCalledWith({ key: "transcription.post_recording_mode", value: "full_transcribe" }),
+    );
+  });
+
+  it("reflects an explicit full_transcribe value from config", () => {
+    configReturn = { data: baseConfig({ post_recording_mode: "full_transcribe" }), isPending: false };
+    mount();
+    const row = screen.getByText("Post-recording").closest(".row")!;
+    expect(within(row as HTMLElement).getByText("full_transcribe")).toBeInTheDocument();
   });
 });
 

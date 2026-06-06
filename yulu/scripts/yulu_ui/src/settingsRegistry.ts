@@ -41,6 +41,8 @@ export const SETTINGS: SettingDef[] = [
   { path: "audio.silence_duration_sec",  category: "audio", label: "静音时长(秒)", type: "number", validate: z.number().min(0).max(30),   reload: R.restart("audiodaemon") },
   { path: "audio.backend",               category: "audio", label: "音频后端",     type: "select",  validate: z.enum(["daemon"]),          reload: R.restart("audiodaemon") },
   { path: "transcription.mode",          category: "transcription", label: "转写模式", type: "select", validate: z.string(),               reload: R.restart("sttdaemon") },
+  { path: "transcription.post_recording_mode", category: "transcription", label: "Post-recording", type: "select", validate: z.enum(["fast_summary", "full_transcribe"]), reload: R.none }, // transcribe.py 每次跑读取,无需重载
+
   { path: "transcription.language",      category: "transcription", label: "语言",   type: "text",   validate: z.string().min(2).max(20),  reload: R.restart("sttdaemon") },   // B3 修正:旧为 sighup
   { path: "transcription.final_engine",  category: "transcription", label: "最终引擎", type: "select", validate: z.enum(["mlx", "whisper"]), reload: R.restart("sttdaemon") },
   { path: "transcription.local_model_path", category: "transcription", label: "本地模型", type: "path", validate: z.string(),             reload: R.restart("sttdaemon") },

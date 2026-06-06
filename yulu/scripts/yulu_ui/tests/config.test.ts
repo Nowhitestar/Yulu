@@ -133,6 +133,14 @@ describe("registry-driven classify + per-field validation", () => {
       expect(mgr.update("transcription.mlx.final_model", "turbo")).toEqual({ daemonsNeedingRestart: ["sttdaemon"], daemonsNeedingSighup: [] });
     } finally { cleanup(); }
   });
+  it("post_recording_mode:合法枚举值写入成功且 reload none;非法值被拒(P2-1)", () => {
+    const { mgr, cleanup } = makeCfg();
+    try {
+      expect(mgr.update("transcription.post_recording_mode", "full_transcribe")).toEqual({ daemonsNeedingRestart: [], daemonsNeedingSighup: [] });
+      expect(mgr.read().transcription.post_recording_mode).toBe("full_transcribe");
+      expect(() => mgr.update("transcription.post_recording_mode", "bogus")).toThrow(ZodError);
+    } finally { cleanup(); }
+  });
 });
 
 describe("cloud transcription holds NO keys (TRANS-02 / T-04-KEY guardrail)", () => {
