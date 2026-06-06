@@ -22,7 +22,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [ ] **Phase 11: DER/WDER Evaluation Harness (the Gate)** - Labelled CN+EN corpus + torch-free DER/WDER/SER/count-error harness that picks the default provider on evidence and sets UI accuracy copy
 - [ ] **Phase 12: Speaker-Count Strategy (the Over-Split Fix)** - Calendar-attendee prior → CN-calibrated threshold → fail-toward-under-merge, verified against the eval
 - [ ] **Phase 13: Pipeline + Summary Integration** - Wire ASR→diarize→merge into `transcribe.py`; flow speaker-attributed transcript into the agent-queue summary via one additive prompt-var pair
-- [ ] **Phase 14: Speaker UI — Labels, Rename/Merge/Correct, Honest Copy** - Per-speaker blocks + color + click-to-seek; "You" auto-known; rename-all/merge/correct; export; labels-are-a-hint copy
+- [ ] **Phase 14: Speaker UI — Labels, Rename/Merge/Correct, Honest Copy** — ⚠ **GATED on in-flight web-UI redesign; execute LAST** (see STATE.md Blockers) - Per-speaker blocks + color + click-to-seek; "You" auto-known; rename-all/merge/correct; export; labels-are-a-hint copy
 - [ ] **Phase 15: Portability, Footprint & Migration** - Cross-platform sherpa/ONNX verification behind the abstraction; per-meeting wall-clock + peak-RAM regression budget; seamless `yulu migrate` upgrade
 
 ## Phase Details
@@ -104,6 +104,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 **Goal**: The user-facing payoff — the transcript renders per-speaker blocks with color and click-to-seek on one canonical line format reconciled with the existing parser; "You" is auto-known from the mic channel; and because the engine *will* over-split, correction (rename-all + merge + single-segment reassign) is core, not polish — all persisted to the sidecar, surviving re-diarize, with copy that frames labels as correctable hints sourced from the eval's measured number.
 **Depends on**: Phase 9 (the sidecar data model), Phase 13 (the pipeline that produces stored labels), Phase 11 (the accuracy number that sources the honest copy)
+**⚠ GATED — execute LAST (after Phase 15)**: The web UI is being redesigned across multiple in-flight branches (`feat/recordings-ui` rewrites the very `TranscriptView.tsx`/`recordings.$stem.tsx` this phase touches; `feat/settings-ui-p1`, `feat/settings-registry`, `feat/remove-voicemail`). Per user directive (2026-06-06): do NOT plan or execute this phase until those land and the reader/transcript components stabilize. When unblocked, plan against the POST-redesign components and re-validate the success criteria below (the `[MM:SS 我]` vs `Speaker A:` parser mismatch, wavesurfer Regions, inline-rename pattern) against the new UI — the criteria as written reference pre-redesign code. Do not touch any `yulu_ui/web/**` file for this milestone before the gate clears.
 **Requirements**: SPKUI-01, SPKUI-02, SPKUI-03, SPKUI-04
 **Success Criteria** (what must be TRUE):
 

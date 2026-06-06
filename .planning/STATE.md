@@ -20,14 +20,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-06-06)
 
 **Core value:** A meeting becomes a clean, searchable note entirely on the user's machine, through the agent they already trust — capture and transcription never depend on the cloud, and Yulu never makes the user reconfigure what their agent already provides.
-**Current focus:** v0.6 Speaker Diarization — roadmap created (Phases 9–15); ready to plan Phase 9
+**Current focus:** v0.6 Speaker Diarization — roadmap created (Phases 9–15); **backend-first, Phase 14 UI gated** on in-flight web-UI redesign (see Blockers). Ready to plan Phase 9.
 
 ## Current Position
 
 Phase: 9 — Speaker-Merge Core + `.speakers.json` Sidecar (not started)
 Plan: —
-Status: Roadmap created — ready for `/gsd-plan-phase 9`
-Last activity: 2026-06-06 — v0.6 roadmap created (7 phases, 9–15; 26/26 reqs mapped)
+Status: Roadmap created — ready for `/gsd-plan-phase 9`. Execution order 9→10→11→12→13→15, **14 last (gated on UI redesign)**.
+Last activity: 2026-06-06 — v0.6 roadmap created (7 phases, 9–15; 26/26 reqs mapped); Phase 14 gated on web-UI redesign per user
 
 ## Performance Metrics
 
@@ -120,12 +120,13 @@ None yet.
 
 [Issues that affect future work]
 
+- **⚠ Phase 14 (Speaker UI) GATED — web UI redesign in flight (user directive 2026-06-06).** The entire web UI is being reworked across multiple active branches: `feat/recordings-ui` (recordings reader — `TranscriptView.tsx` / `recordings.$stem.tsx`, the exact files Phase 14 touches), `feat/settings-ui-p1` (settings 3-col MasterDetail), `feat/settings-registry`, `feat/remove-voicemail`. **Directive: backend-first; HOLD Phase 14 until these land and the reader/transcript components stabilize.** Execution order = 9 → 10 → 11 → 12 → 13 → 15, then **14 LAST**. When planning Phase 14: (a) target the POST-redesign components, NOT current files; (b) RE-VALIDATE the research's current-UI assumptions (`TranscriptView`'s `Speaker [A-Z]:` parser regex, `AudioPlayer` wavesurfer Regions, the inline-rename/optimistic-patch pattern) — they were captured against pre-redesign code that is being rewritten. Phases 9–13 & 15 are UI-safe and proceed now. Do NOT edit any `yulu_ui/web/**` file from this milestone until the gate clears.
 - **Research flags (deeper per-phase research recommended via `/gsd-plan-phase --research-phase`):**
   - **Phase 12 (Speaker-count strategy):** the highest-leverage *unsolved* accuracy lever — CN-calibration thresholds + constrained-clustering knobs are unproven for Yulu; needs sherpa-onnx config research + empirical sweeps.
   - **Phase 11 (Eval harness):** DER methodology is trap-dense (collar/overlap/WDER/SER/anchoring/tiny-N); worth a focused pass on pyannote.metrics protocol + reference-labelling discipline.
   - **Phase 15 (Cross-platform/footprint):** the option-B footprint was NEVER measured (spike only timed the 20-min merge); needs a measurement plan + non-macOS wheel verification.
 - **Phase 10 venv co-location:** Yulu's venv is Python 3.14; sherpa-onnx publishes cp314 wheels but resolution is unverified — verify in Phase 10; isolate into a small dedicated venv if it conflicts (the provision step already isolates envs).
-- **Standard-pattern phases (skip research-phase — in-codebase precedent exists):** Phase 9 (merge core — `transcript_merge.py` is a literal template), Phase 10 (backend/provision — mirrors STT backend Protocol + v0.5 `models` step), Phase 13 (pipeline/summary — mirrors the dual-track `{{my_transcript}}` addition exactly), Phase 14 (UI — reuses inline-rename + optimistic-patch + wavesurfer Regions patterns).
+- **Standard-pattern phases (skip research-phase — in-codebase precedent exists):** Phase 9 (merge core — `transcript_merge.py` is a literal template), Phase 10 (backend/provision — mirrors STT backend Protocol + v0.5 `models` step), Phase 13 (pipeline/summary — mirrors the dual-track `{{my_transcript}}` addition exactly). **Phase 14 (UI) is NO LONGER a skip-research phase** — the inline-rename/optimistic-patch/wavesurfer-Regions precedent is being rewritten by the UI redesign; re-derive against the post-redesign components when the gate clears.
 - **Privacy guard (cross-cutting):** speaker embeddings are biometric voiceprints — ephemeral by default, never written into synced `data_dir`, never shipped to a cloud LLM via the agent-queue boundary. v0.6 stays anonymous per-meeting + manual labels (cross-meeting voiceprint enrollment is explicitly Out of Scope).
 
 ## Deferred Items
