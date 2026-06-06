@@ -12,7 +12,9 @@ import { Prompts,    handle as promptsHandle    } from "./routes/knowledge/promp
 import { PromptsIndex } from "./routes/knowledge/prompts.index.js";
 import { PromptReaderRoute, handle as promptReaderHandle } from "./routes/knowledge/prompts.$id.js";
 import { Glossary,   handle as glossaryHandle   } from "./routes/knowledge/glossary.js";
-import { Settings as SettingsPageRoute, handle as settingsHandle } from "./routes/settings.js";
+import { SettingsLayout, handle as settingsHandle } from "./routes/settings.js";
+import { SettingsCategory } from "./routes/settings.$category.js";
+import { categoryLabel } from "./components/settings/categories.js";
 import { Health, handle as healthHandle } from "./routes/health.js";
 
 function RecordingRedirect() {
@@ -60,13 +62,22 @@ const router = createBrowserRouter([
         ],
       },
       { path: "knowledge/glossary",   Component: Glossary,             handle: glossaryHandle },
-      { path: "settings",               Component: SettingsPageRoute,     handle: settingsHandle },
-      { path: "settings/audio",         element: <Navigate to="/settings#audio"         replace /> },
-      { path: "settings/transcription", element: <Navigate to="/settings#transcription" replace /> },
-      { path: "settings/llm",           element: <Navigate to="/settings#llm"           replace /> },
-      { path: "settings/hotkey",        element: <Navigate to="/settings#hotkey"        replace /> },
-      { path: "settings/integrations",  element: <Navigate to="/settings#integrations"  replace /> },
-      { path: "settings/storage",       element: <Navigate to="/settings#storage"       replace /> },
+      {
+        path: "settings",
+        Component: SettingsLayout,
+        handle: settingsHandle,
+        children: [
+          { index: true, element: <Navigate to="/settings/general" replace /> },
+          {
+            path: ":category",
+            Component: SettingsCategory,
+            handle: { breadcrumb: (p: Record<string, string | undefined>) => categoryLabel(p.category ?? ""), filters: null },
+          },
+        ],
+      },
+      // Legacy deep-links: hotkey now lives under general, storage under audio.
+      { path: "settings/hotkey",        element: <Navigate to="/settings/general" replace /> },
+      { path: "settings/storage",       element: <Navigate to="/settings/audio"   replace /> },
       { path: "health",                 Component: Health,                handle: healthHandle },
       { path: "health/daemons",         element: <Navigate to="/health#daemons" replace /> },
       { path: "health/logs",            element: <Navigate to="/health#logs"    replace /> },

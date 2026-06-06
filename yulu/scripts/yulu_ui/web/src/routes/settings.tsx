@@ -1,19 +1,12 @@
 // web/src/routes/settings.tsx
-import { useEffect } from "react";
-import { useLocation } from "react-router";
+import { Outlet } from "react-router";
 import type { inferProcedureInput } from "@trpc/server";
 import type { AppRouter } from "../../../src/routers/_app.js";
 import { trpc } from "../trpc.js";
-import { useSettingsRestartTracker } from "../hooks/useSettingsRestartTracker.js";
-import { SettingsPage } from "../components/SettingsPage.js";
+import { useSettingsRestartTracker, type SettingsRestartTracker } from "../hooks/useSettingsRestartTracker.js";
 import { RestartBanner } from "../components/RestartBanner.js";
-import { AudioSection } from "../components/settings/AudioSection.js";
-import { CapabilitiesSection } from "../components/settings/CapabilitiesSection.js";
-import { TranscriptionSection } from "../components/settings/TranscriptionSection.js";
-import { LlmSection } from "../components/settings/LlmSection.js";
-import { HotkeySection } from "../components/settings/HotkeySection.js";
-import { IntegrationsSection } from "../components/settings/IntegrationsSection.js";
-import { StorageSection } from "../components/settings/StorageSection.js";
+import { MasterDetail } from "../components/MasterDetail.js";
+import { SettingsCategoryList } from "../components/settings/SettingsCategoryList.js";
 import "./settings.css";
 
 type DaemonLabel = inferProcedureInput<AppRouter["daemons"]["restart"]>["name"];
@@ -31,8 +24,18 @@ const DAEMON_LABEL: Record<string, DaemonLabel> = {
 
 export const handle = { breadcrumb: "Settings", filters: null };
 
-export function Settings() {
-  const location = useLocation();
+/** Context handed to the category detail (`<Outlet/>`): the shared restart tracker. */
+export interface SettingsOutletContext {
+  tracker: SettingsRestartTracker;
+}
+
+/**
+ * SettingsLayout — the settings page shell. Renders the app's 3-column
+ * MasterDetail: a category NavList (master) + the category detail (`<Outlet/>`).
+ * Owns the restart tracker and the RestartBanner so restart-class edits made in
+ * any category surface one consolidated banner here.
+ */
+export function SettingsLayout() {
   const tracker = useSettingsRestartTracker();
   const restartMut = trpc.daemons.restart.useMutation({
     onSuccess: (_res: unknown, vars: { name: string }) => {
@@ -40,15 +43,6 @@ export function Settings() {
       tracker.clearDaemon(short);
     },
   });
-
-  useEffect(() => {
-    if (!location.hash) return;
-    const id = location.hash.slice(1);
-    requestAnimationFrame(() => {
-      const el = document.getElementById(id);
-      if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
-    });
-  }, [location.hash]);
 
   const banner = tracker.daemons.size > 0 ? (
     <RestartBanner
@@ -58,23 +52,20 @@ export function Settings() {
         for (const name of tracker.daemons.keys()) restartMut.mutateAsync({ name: (DAEMON_LABEL[name] ?? name) as DaemonLabel });
       }}
     />
-  ) : undefined;
+  ) : null;
+
+  const outletContext: SettingsOutletContext = { tracker };
 
   return (
-    <SettingsPage banner={banner}>
-      <div className="settings-inner">
-        <h1 className="settings-page-title">Settings</h1>
-        <p className="settings-page-sub">所有 Yulu 运行参数集中在这里。修改需要重启的项会触发顶部 Restart banner。</p>
-        <div className="settings-stack">
-          <CapabilitiesSection />
-          <AudioSection tracker={tracker} />
-          <TranscriptionSection tracker={tracker} />
-          <LlmSection tracker={tracker} />
-          <HotkeySection tracker={tracker} />
-          <IntegrationsSection tracker={tracker} />
-          <StorageSection tracker={tracker} />
-        </div>
+    <div className="settings-page">
+      {banner && <div className="settings-banner">{banner}</div>}
+      <div className="settings-masterdetail">
+        <MasterDetail
+          storageKey="yulu_ui.settings.width"
+          listSlot={<SettingsCategoryList />}
+          detailSlot={<Outlet context={outletContext} />}
+        />
       </div>
-    </SettingsPage>
+    </div>
   );
 }

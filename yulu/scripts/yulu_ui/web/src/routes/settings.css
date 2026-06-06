@@ -1,24 +1,44 @@
 /* web/src/routes/settings.css */
-.settings-inner {
-  max-width: 820px;
-  margin: 0 auto;
-  padding: 8px 0 80px 0;
+
+/* The settings page now hosts the app's 3-column MasterDetail. The banner sits
+   above it; the MasterDetail fills the remaining height. */
+.settings-masterdetail {
+  flex: 1;
+  min-height: 0;
+  display: flex;
 }
-.settings-page-title {
-  font-size: 24px;
+.settings-masterdetail .masterdetail {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Detail pane (category content) */
+.settings-detail {
+  max-width: 760px;
+  padding: 8px 4px 80px 4px;
+}
+.settings-detail-head {
+  margin-bottom: 20px;
+}
+.settings-detail-title {
+  font-size: 20px;
   font-weight: 600;
   color: var(--fg);
-  margin: 0 0 6px 0;
+  margin: 0 0 4px 0;
 }
-.settings-page-sub {
+.settings-detail-sub {
+  color: var(--fg-2);
+  font-size: 12.5px;
+  margin: 0;
+}
+.settings-detail-empty {
+  padding: 40px 4px;
   color: var(--fg-2);
   font-size: 13px;
-  margin: 0 0 32px 0;
 }
-.settings-stack {
-  display: flex;
-  flex-direction: column;
-  gap: 40px;
+/* Spacing between re-homed rich section blocks within a category detail. */
+.settings-detail .settings-section + .settings-section {
+  margin-top: 36px;
 }
 .settings-section {
   scroll-margin-top: 60px;
