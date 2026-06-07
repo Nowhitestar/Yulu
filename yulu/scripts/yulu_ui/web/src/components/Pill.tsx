@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { Mic } from "lucide-react";
 import { trpc } from "../trpc.js";
 import { useWsChannel } from "../ws.js";
+import { useT } from "../i18n/LanguageProvider.js";
 import "./Pill.css";
 
 export type PillState = "idle" | "recording" | "processing" | "meetingBusy" | "daemonDown";
@@ -15,6 +16,7 @@ interface RecordingMsg {
 }
 
 export function Pill() {
+  const t = useT();
   const initial = trpc.recording.state.useQuery();
   const [state, setState] = useState<PillState>("idle");
   const [elapsed, setElapsed] = useState(0);
@@ -48,20 +50,20 @@ export function Pill() {
   switch (state) {
     case "idle":
       return (
-        <button className="pill pill-idle" onClick={() => toggle.mutate()} aria-label="Record">
+        <button className="pill pill-idle" onClick={() => toggle.mutate()} aria-label={t("pill.recordAria")}>
           <span className="pill-mic"><Mic size={12} strokeWidth={1.75} /></span>
-          <span className="pill-label">Record</span>
+          <span className="pill-label">{t("pill.record")}</span>
           <span className="pill-hotkey">{hotkey}</span>
         </button>
       );
 
     case "recording":
       return (
-        <div className="pill pill-recording" role="status" aria-label="Recording">
+        <div className="pill pill-recording" role="status" aria-label={t("pill.recordingAria")}>
           <span className="pill-dot pulse" />
           <span className="pill-time">{formatElapsed(elapsed)}</span>
           <Meter level={level} />
-          <button className="pill-stop" onClick={() => toggle.mutate()} aria-label="Stop recording">■</button>
+          <button className="pill-stop" onClick={() => toggle.mutate()} aria-label={t("pill.stopAria")}>■</button>
         </div>
       );
 
@@ -69,15 +71,15 @@ export function Pill() {
       return (
         <div className="pill pill-processing" role="status">
           <span className="pill-spinner" />
-          <span>Transcribing... {formatElapsed(elapsed)}</span>
+          <span>{t("pill.transcribing", { time: formatElapsed(elapsed) })}</span>
         </div>
       );
 
     case "meetingBusy":
       return (
-        <div className="pill pill-meeting" role="status" title={`Meeting in progress`}>
+        <div className="pill pill-meeting" role="status" title={t("pill.meeting")}>
           <span className="pill-dot" />
-          <span>Meeting in progress</span>
+          <span>{t("pill.meeting")}</span>
         </div>
       );
 
@@ -85,7 +87,7 @@ export function Pill() {
       return (
         <a className="pill pill-down" href="/health/daemons" role="alert">
           <span className="pill-warn">⚠</span>
-          <span>Audio daemon down</span>
+          <span>{t("pill.daemonDown")}</span>
         </a>
       );
   }

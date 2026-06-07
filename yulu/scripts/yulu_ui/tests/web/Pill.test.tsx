@@ -30,11 +30,11 @@ beforeEach(() => {
 
 describe("Pill state machine", () => {
   const cases: { state: PillState; mustContain: RegExp }[] = [
-    { state: "idle",        mustContain: /record/i },
+    { state: "idle",        mustContain: /录制/ },
     { state: "recording",   mustContain: /:[0-9]{2}/ },
-    { state: "processing",  mustContain: /transcrib/i },
-    { state: "meetingBusy", mustContain: /meeting/i },
-    { state: "daemonDown",  mustContain: /audio daemon/i },
+    { state: "processing",  mustContain: /转写/ },
+    { state: "meetingBusy", mustContain: /会议/ },
+    { state: "daemonDown",  mustContain: /音频守护/ },
   ];
 
   it.each(cases)("renders the right markup for state: $state", ({ state, mustContain }) => {
@@ -45,7 +45,7 @@ describe("Pill state machine", () => {
 
   it("clicking the idle pill fires recording.toggle", async () => {
     render(<Pill />);
-    const btn = screen.getByRole("button", { name: /record/i });
+    const btn = screen.getByRole("button", { name: /录制/ });
     btn.click();
     expect(toggleMock).toHaveBeenCalledTimes(1);
   });
@@ -59,6 +59,6 @@ describe("Pill state machine", () => {
   it("flips to daemonDown when audiodaemon WS event reports non-running", () => {
     render(<Pill />);
     act(() => wsHandlers.get("daemons")?.({ name: "com.yulu.audiodaemon", status: "stopped", pid: 0 }));
-    expect(screen.getByText(/audio daemon/i)).toBeInTheDocument();
+    expect(screen.getByText(/音频守护/)).toBeInTheDocument();
   });
 });

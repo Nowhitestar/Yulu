@@ -30,8 +30,8 @@ describe("LiveTranscript", () => {
     expect(screen.getByText("hello there")).toBeInTheDocument();
     expect(screen.getByText("hi back")).toBeInTheDocument();
     // Speaker tags are relabeled for readability.
-    expect(screen.getByText("You")).toBeInTheDocument();
-    expect(screen.getByText("Them")).toBeInTheDocument();
+    expect(screen.getByText("你")).toBeInTheDocument();
+    expect(screen.getByText("对方")).toBeInTheDocument();
   });
 
   it("updates text as the recording grows", () => {
@@ -53,7 +53,7 @@ describe("LiveTranscript", () => {
   it("dismiss button hides the panel for the current recording", () => {
     const { container } = render(<LiveTranscript />);
     act(() => wsHandlers.get("live-transcript")?.({ active: true, stem: "s1", text: "[Me] hi\n" }));
-    const close = screen.getByRole("button", { name: /hide live transcript/i });
+    const close = screen.getByRole("button", { name: /隐藏实时转写/ });
     act(() => close.click());
     expect(container.querySelector(".live-transcript")).toBeNull();
   });
@@ -61,7 +61,7 @@ describe("LiveTranscript", () => {
   it("reappears for a NEW recording after being dismissed", () => {
     const { container } = render(<LiveTranscript />);
     act(() => wsHandlers.get("live-transcript")?.({ active: true, stem: "s1", text: "[Me] a\n" }));
-    act(() => screen.getByRole("button", { name: /hide live transcript/i }).click());
+    act(() => screen.getByRole("button", { name: /隐藏实时转写/ }).click());
     expect(container.querySelector(".live-transcript")).toBeNull();
     // A different recording starts → panel must come back.
     act(() => wsHandlers.get("live-transcript")?.({ active: true, stem: "s2", text: "[Me] b\n" }));
@@ -72,7 +72,7 @@ describe("LiveTranscript", () => {
   it("shows a Listening… placeholder when active but no text yet", () => {
     render(<LiveTranscript />);
     act(() => wsHandlers.get("live-transcript")?.({ active: true, stem: "s1", text: "" }));
-    expect(screen.getByText(/listening/i)).toBeInTheDocument();
+    expect(screen.getByText(/聆听/)).toBeInTheDocument();
   });
 });
 
