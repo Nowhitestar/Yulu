@@ -9,14 +9,16 @@ import {
   type UpdateInput,
 } from "../../components/PromptReader.js";
 import { EmptyState } from "../../components/EmptyState.js";
+import { useT } from "../../i18n/LanguageProvider.js";
 
-export const handle = { breadcrumb: "Reader", filters: null };
+export const handle = { breadcrumb: "breadcrumb.reader", filters: null };
 
 export function PromptReaderRoute() {
   const { id = "" } = useParams();
   const isCreate = id === "new";
   const navigate = useNavigate();
   const qc = useQueryClient();
+  const t = useT();
   const { data, isPending } = trpc.prompts.get.useQuery(
     { id },
     { enabled: !isCreate },
@@ -26,8 +28,8 @@ export function PromptReaderRoute() {
   const createMut = trpc.prompts.create.useMutation();
   const deleteMut = trpc.prompts.delete.useMutation();
 
-  if (!isCreate && isPending) return <EmptyState label="Loading…" />;
-  if (!isCreate && !data) return <EmptyState label={`Prompt "${id}" not found.`} />;
+  if (!isCreate && isPending) return <EmptyState label={t("common.loading")} />;
+  if (!isCreate && !data) return <EmptyState label={t("prompts.notFound", { id })} />;
 
   const prompt = isCreate ? null : (data as PromptData);
 

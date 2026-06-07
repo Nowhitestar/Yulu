@@ -92,6 +92,7 @@
 }
 .gs-kind-meeting   { background: color-mix(in oklch, var(--purple) 14%, transparent); color: var(--purple); }
 .gs-kind-summary   { background: color-mix(in oklch, var(--green) 16%, transparent); color: var(--green); }
+.gs-kind-setting   { background: var(--accent-soft); color: var(--accent); }
 .gs-kind-other     { background: var(--row-hover); color: var(--fg-2); }
 .gs-result-title   { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .gs-result-meta    { color: var(--fg-2); font-size: 11.5px; font-family: ui-monospace, monospace; }

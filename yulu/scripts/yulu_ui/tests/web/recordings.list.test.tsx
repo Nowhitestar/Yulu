@@ -38,7 +38,7 @@ describe("RecordingsList", () => {
   it("shows a status chip on a transcribing row", () => {
     listMock.mockReturnValue({ data: rows(), isPending: false });
     render(<MemoryRouter><RecordingsList /></MemoryRouter>);
-    expect(screen.getByText(/transcribing/i)).toBeInTheDocument();
+    expect(screen.getByText(/转写中/i)).toBeInTheDocument();
   });
 
   it("shows a Failed badge (not a forever-spinner) with the error in a tooltip", () => {
@@ -48,7 +48,7 @@ describe("RecordingsList", () => {
     });
     render(<MemoryRouter><RecordingsList /></MemoryRouter>);
     const badge = screen.getByTestId("recording-status");
-    expect(badge).toHaveTextContent(/failed/i);
+    expect(badge).toHaveTextContent(/失败/);
     expect(badge).toHaveAttribute("data-state", "failed");
     expect(badge).toHaveAttribute("title", "engine crashed");
   });

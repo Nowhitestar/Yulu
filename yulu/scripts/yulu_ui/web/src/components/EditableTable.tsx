@@ -1,5 +1,6 @@
 // web/src/components/EditableTable.tsx
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useT } from "../i18n/LanguageProvider.js";
 import "./EditableTable.css";
 
 export interface ColumnDef<Row> {
@@ -21,6 +22,7 @@ export interface EditableTableProps<Row extends { id: string | number }> {
 
 export function EditableTable<Row extends { id: string | number }>(props: EditableTableProps<Row>) {
   const { columns, rows, onCellCommit, selectable = false, onBulkDelete, emptyLabel } = props;
+  const t = useT();
   const [selected, setSelected] = useState<Set<Row["id"]>>(new Set());
 
   const allSelected = rows.length > 0 && rows.every((r) => selected.has(r.id));
@@ -41,7 +43,11 @@ export function EditableTable<Row extends { id: string | number }>(props: Editab
 
   const runBulkDelete = () => {
     if (!onBulkDelete || selectedCount === 0) return;
-    const ok = window.confirm(`Delete ${selectedCount} ${selectedCount === 1 ? "item" : "items"}?`);
+    const ok = window.confirm(
+      selectedCount === 1
+        ? t("table.deleteConfirm.one", { n: selectedCount })
+        : t("table.deleteConfirm.other", { n: selectedCount }),
+    );
     if (!ok) return;
     onBulkDelete(orderedIds);
     setSelected(new Set());
@@ -52,7 +58,7 @@ export function EditableTable<Row extends { id: string | number }>(props: Editab
       <div className="etable-row etable-header">
         {selectable && (
           <div className="etable-cell etable-cell-check">
-            <input type="checkbox" checked={allSelected} onChange={toggleAll} aria-label="Select all" />
+            <input type="checkbox" checked={allSelected} onChange={toggleAll} aria-label={t("table.selectAll")} />
           </div>
         )}
         {columns.map((c) => (
@@ -70,7 +76,7 @@ export function EditableTable<Row extends { id: string | number }>(props: Editab
                 type="checkbox"
                 checked={selected.has(row.id)}
                 onChange={() => toggleRow(row.id)}
-                aria-label={`Select row ${row.id}`}
+                aria-label={t("table.selectRow", { id: String(row.id) })}
               />
             </div>
           )}
@@ -87,11 +93,11 @@ export function EditableTable<Row extends { id: string | number }>(props: Editab
       ))}
       {selectable && selectedCount > 0 && (
         <div className="etable-bulkbar" role="status">
-          <span>{selectedCount} selected</span>
+          <span>{t("table.selected", { n: selectedCount })}</span>
           {onBulkDelete && (
-            <button type="button" className="etable-bulk-delete" onClick={runBulkDelete}>Delete</button>
+            <button type="button" className="etable-bulk-delete" onClick={runBulkDelete}>{t("table.delete")}</button>
           )}
-          <button type="button" className="etable-bulk-clear" onClick={() => setSelected(new Set())}>Clear</button>
+          <button type="button" className="etable-bulk-clear" onClick={() => setSelected(new Set())}>{t("table.clear")}</button>
         </div>
       )}
     </div>

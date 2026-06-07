@@ -3,6 +3,7 @@ import { useMatches } from "react-router";
 import type { ReactNode } from "react";
 import { ThemeToggle } from "./ThemeToggle.js";
 import { GlobalSearch } from "./GlobalSearch.js";
+import { useT } from "../i18n/LanguageProvider.js";
 import "./TopBar.css";
 
 type CrumbValue =
@@ -17,18 +18,22 @@ interface RouteHandle {
 
 export function TopBar() {
   const matches = useMatches();
+  const t = useT();
   const deepest = matches[matches.length - 1];
   const deepestHandle = (deepest?.handle ?? {}) as RouteHandle;
 
+  // Breadcrumb values are i18n keys (or functions returning a key); resolve each
+  // through t(). A non-key literal (e.g. a recording stem) falls back to itself
+  // since translate() returns the raw key when it isn't in the dictionary.
   const segments: string[] = [];
   for (const m of matches) {
     const h = (m.handle ?? {}) as RouteHandle;
     if (h.breadcrumb == null) continue;
     if (typeof h.breadcrumb === "string") {
-      segments.push(h.breadcrumb);
+      segments.push(t(h.breadcrumb));
     } else if (typeof h.breadcrumb === "function") {
       const v = h.breadcrumb(m.params as Record<string, string | undefined>);
-      if (v) segments.push(v);
+      if (v) segments.push(t(v));
     }
   }
 

@@ -75,7 +75,7 @@ describe("InlineEditRow", () => {
     const onCommit = vi.fn();
     render(<InlineEditRow label="L" type="path" value="/old/dir" mode="folder" onCommit={onCommit} />);
     const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: /choose/i }));
+    await user.click(screen.getByRole("button", { name: /选择/ }));
     // mutateAsync resolves to { path: "/picked/dir" }
     await vi.waitFor(() => expect(onCommit).toHaveBeenCalledWith("/picked/dir"));
   });

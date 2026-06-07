@@ -13,14 +13,16 @@ const CalendarSchema = z.object({
 });
 
 export const ConfigSchema = z.object({
+  // Defaults so a minimal/partial config.json (e.g. only audio.output_dir) still
+  // parses — otherwise config.get 500s and the whole settings page breaks.
   audio: z.object({
     mic_device: z.string().optional(),
     system_audio_device: z.string().nullable().optional(),
-    output_dir: z.string(),
-    silence_threshold: z.number(),
-    silence_duration_sec: z.number(),
+    output_dir: z.string().default("~/Movies/Yulu"),
+    silence_threshold: z.number().default(0.01),
+    silence_duration_sec: z.number().default(300),
     backend: z.string().optional(),
-  }),
+  }).default({}),
   transcription: z.object({
     final_engine: z.enum(["mlx", "whisper"]).optional(),
     language: z.string().optional(),

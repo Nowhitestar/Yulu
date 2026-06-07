@@ -11,6 +11,7 @@ import { TagEditor } from "../../components/TagEditor.js";
 import { EmptyState } from "../../components/EmptyState.js";
 import { ReprocessButton, type ReprocessButtonState } from "../../components/ReprocessButton.js";
 import { useConfirm } from "../../hooks/useConfirm.js";
+import { useT } from "../../i18n/LanguageProvider.js";
 import { useWsChannel } from "../../ws.js";
 import "./recordings.reader.css";
 
@@ -18,7 +19,10 @@ const GET_KEY = [["recordings", "get"]] as const;
 const LIST_KEY = [["recordings", "list"]] as const;
 
 export const handle = {
-  breadcrumb: (params: { stem?: string }) => params.stem ?? "Recording",
+  // Returns the stem (a literal filename) when present, else the i18n key for
+  // "Recording". TopBar resolves both through t(): a real key localizes; a stem
+  // falls back to itself since it isn't in the dictionary.
+  breadcrumb: (params: { stem?: string }) => params.stem ?? "breadcrumb.recording",
   filters: null,
 };
 
@@ -33,6 +37,7 @@ export function RecordingReader() {
   const [params, setParams] = useSearchParams();
   const navigate = useNavigate();
   const confirm = useConfirm();
+  const t = useT();
   const { data, isPending } = trpc.recordings.get.useQuery({ stem }, { enabled: stem.length > 0 });
 
   const qc = useQueryClient();
@@ -87,7 +92,7 @@ export function RecordingReader() {
 
   const handleDelete = () => {
     const label = data?.title ?? stem;
-    if (!confirm(`Delete "${label}" and all of its files? This cannot be undone.`)) return;
+    if (!confirm(t("reader.delete.confirm", { label }))) return;
     deleteMut.mutate({ stem }, {
       onError: (err) => console.error("delete failed:", err.message),
       onSuccess: () => {
@@ -176,8 +181,8 @@ export function RecordingReader() {
     }
   }, [snippet, tab, data]);
 
-  if (isPending) return <EmptyState label="Loading…" />;
-  if (!data) return <EmptyState label={`Recording "${stem}" not found.`} />;
+  if (isPending) return <EmptyState label={t("common.loading")} />;
+  if (!data) return <EmptyState label={t("reader.notFound", { stem })} />;
 
   const setTab = (t: Tab) => {
     setOverride(t);
@@ -201,8 +206,8 @@ export function RecordingReader() {
               ref={titleInputRef}
               className="reader-title-input"
               value={titleDraft}
-              placeholder={data.title ?? "Title"}
-              aria-label="Recording title"
+              placeholder={data.title ?? t("reader.title.placeholder")}
+              aria-label={t("reader.title.aria")}
               onChange={(e) => setTitleDraft(e.target.value)}
               onBlur={commitRename}
               onKeyDown={(e) => {
@@ -215,7 +220,7 @@ export function RecordingReader() {
               type="button"
               className="reader-title reader-title-edit"
               onClick={startRename}
-              title="Rename"
+              title={t("reader.title.rename")}
             >
               <span>{data.title ?? data.stem}</span>
               <Pencil size={12} strokeWidth={1.75} className="reader-title-pencil" />
@@ -230,33 +235,33 @@ export function RecordingReader() {
 
       <div className="reader-actions">
         <ReprocessButton
-          label="Re-transcribe"
+          label={t("reader.action.retranscribe")}
           icon={<RefreshCw size={14} strokeWidth={1.75} />}
           state={deriveButtonState("transcribe")}
           error={data?.statusError}
           onClick={handleTranscribe}
           disabled={!data?.wavPath}
-          disabledReason={!data?.wavPath ? "Original WAV file missing" : undefined}
+          disabledReason={!data?.wavPath ? t("reader.disabled.wavMissing") : undefined}
         />
         <ReprocessButton
-          label="Re-generate summary"
+          label={t("reader.action.regenerate")}
           icon={<Sparkles size={14} strokeWidth={1.75} />}
           state={deriveButtonState("summarize")}
           error={data?.statusError}
           onClick={handleSummarize}
           disabled={!data?.transcript}
-          disabledReason={!data?.transcript ? "Transcript required first — click Re-transcribe" : undefined}
+          disabledReason={!data?.transcript ? t("reader.disabled.transcriptFirst") : undefined}
         />
         <button
           type="button"
           className="reader-delete"
           onClick={handleDelete}
           disabled={deleteMut.isPending}
-          aria-label="Delete recording"
-          title="Delete this recording and all of its files"
+          aria-label={t("reader.delete.aria")}
+          title={t("reader.delete.title")}
         >
           <Trash2 size={14} strokeWidth={1.75} />
-          <span>Delete</span>
+          <span>{t("reader.action.delete")}</span>
         </button>
       </div>
 
@@ -270,7 +275,7 @@ export function RecordingReader() {
           className={"reader-tab" + (tab === "summary" ? " active" : "")}
           onClick={() => setTab("summary")}
         >
-          Summary
+          {t("reader.tab.summary")}
         </button>
         <button
           key="transcript"
@@ -279,7 +284,7 @@ export function RecordingReader() {
           className={"reader-tab" + (tab === "transcript" ? " active" : "")}
           onClick={() => setTab("transcript")}
         >
-          Transcript
+          {t("reader.tab.transcript")}
         </button>
         {data.hasRealtime && (
           <button
@@ -289,7 +294,7 @@ export function RecordingReader() {
             className={"reader-tab" + (tab === "realtime" ? " active" : "")}
             onClick={() => setTab("realtime")}
           >
-            Realtime
+            {t("reader.tab.realtime")}
           </button>
         )}
         {showRaw && (
@@ -299,19 +304,19 @@ export function RecordingReader() {
             aria-selected={tab === "raw"}
             className={"reader-tab" + (tab === "raw" ? " active" : "")}
             onClick={() => setTab("raw")}
-            title="Pre-cleanup transcript snapshot"
+            title={t("reader.tab.raw.title")}
           >
-            Raw
+            {t("reader.tab.raw")}
           </button>
         )}
       </div>
 
       <div className="reader-body" ref={bodyRef}>
         {tab === "summary" && (
-          data.summary ? <MarkdownView text={data.summary} /> : <EmptyState label="No summary yet." />
+          data.summary ? <MarkdownView text={data.summary} /> : <EmptyState label={t("reader.empty.summary")} />
         )}
         {tab === "transcript" && (
-          data.transcript ? <TranscriptView text={data.transcript} /> : <EmptyState label="No transcript available." />
+          data.transcript ? <TranscriptView text={data.transcript} /> : <EmptyState label={t("reader.empty.transcript")} />
         )}
         {tab === "realtime" && (
           <pre className="reader-raw">{data.realtime ?? ""}</pre>

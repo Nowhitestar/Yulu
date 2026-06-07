@@ -13,7 +13,7 @@ import { PromptReaderRoute } from "../../web/src/routes/knowledge/prompts.$id.js
 // ---------- shared mock state ----------
 const LIST_DATA = [
   { id: "id-1", slug: "default",  name: "Default Summary", category: "summary",   content: "x", is_auto_run: 1, source: "seed",   sort_order: 0, note: null, created_at: "", updated_at: "" },
-  { id: "id-2", slug: "cleanup",  name: "Cleanup",          category: "cleanup",   content: "y", is_auto_run: 0, source: "seed",   sort_order: 1, note: null, created_at: "", updated_at: "" },
+  { id: "id-2", slug: "cleanup",  name: "清理",          category: "cleanup",   content: "y", is_auto_run: 0, source: "seed",   sort_order: 1, note: null, created_at: "", updated_at: "" },
   { id: "id-3", slug: "action-items", name: "Action Items", category: "summary", content: "z", is_auto_run: 0, source: "manual", sort_order: 2, note: null, created_at: "", updated_at: "" },
 ];
 
@@ -80,7 +80,7 @@ describe("Prompts page", () => {
     mount();
     const names = rowNames();
     expect(names).toContain("Default Summary");
-    expect(names).toContain("Cleanup");
+    expect(names).toContain("清理");
     expect(names).toContain("Action Items");
     // Category chips inside rows: one per row
     const rows = screen.getAllByTestId("prompt-row");
@@ -95,26 +95,26 @@ describe("Prompts page", () => {
 
   it("renders 3 filter chips (All/Summary/Cleanup) + New prompt button", () => {
     mount();
-    expect(screen.getByRole("button", { name: /^all$/i })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /^summary$/i })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /^cleanup$/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^全部$/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^摘要$/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^清理$/i })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^voicemail$/i })).toBeNull();
-    expect(screen.getByRole("link", { name: /\+ new prompt/i })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /\+ 新建提示词/ })).toBeInTheDocument();
   });
 
   it("clicking Summary filter shows only summary prompts", async () => {
     mount();
     const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: /^summary$/i }));
+    await user.click(screen.getByRole("button", { name: /^摘要$/i }));
     const names = rowNames();
     expect(names).toContain("Default Summary");
     expect(names).toContain("Action Items"); // also a summary-category prompt
-    expect(names).not.toContain("Cleanup");
+    expect(names).not.toContain("清理");
   });
 
   it("index outlet renders empty state when no :id selected", () => {
     mount();
-    expect(screen.getByText(/select a prompt/i)).toBeInTheDocument();
+    expect(screen.getByText(/选择一条提示词/)).toBeInTheDocument();
   });
 });
 
@@ -139,10 +139,10 @@ describe("Prompts reader route", () => {
       </QueryClientProvider>,
     );
     const user = userEvent.setup();
-    const name = screen.getByLabelText(/^name$/i);
+    const name = screen.getByLabelText(/^名称$/i);
     await user.clear(name);
     await user.type(name, "Renamed");
-    await user.click(screen.getByRole("button", { name: /^save$/i }));
+    await user.click(screen.getByRole("button", { name: /^保存$/i }));
     await vi.waitFor(() =>
       expect(updateMutate).toHaveBeenCalledWith({ id: "id-1", name: "Renamed" }),
     );
@@ -162,10 +162,10 @@ describe("Prompts reader route", () => {
       </QueryClientProvider>,
     );
     const user = userEvent.setup();
-    await user.type(screen.getByLabelText(/^name$/i), "X");
+    await user.type(screen.getByLabelText(/^名称$/i), "X");
     await user.type(screen.getByLabelText(/^slug$/i), "x-slug");
-    await user.type(screen.getByLabelText(/^content$/i), "body");
-    await user.click(screen.getByRole("button", { name: /^save$/i }));
+    await user.type(screen.getByLabelText(/^内容$/i), "body");
+    await user.click(screen.getByRole("button", { name: /^保存$/i }));
     await vi.waitFor(() => expect(createMutate).toHaveBeenCalled());
     await vi.waitFor(
       () => expect(screen.getByTestId("navigated-to-new")).toBeInTheDocument(),

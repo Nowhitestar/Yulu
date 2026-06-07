@@ -61,7 +61,7 @@ describe("integrationsRouter.test", () => {
   it("includes stdout + stderr in the response", async () => {
     mockSpawn("[]\n", 0, "warning: x\n");
     const caller = createCaller(integrationsRouter, ctx());
-    const r = await caller.test({ provider: "feishu" });
+    const r = await caller.test({ provider: "google" });
     expect(r.stdout).toBe("[]\n");
     expect(r.stderr).toBe("warning: x\n");
   });

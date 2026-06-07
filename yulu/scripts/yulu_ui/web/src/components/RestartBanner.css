@@ -10,16 +10,12 @@
 }
 .restart-banner-dot { color: var(--accent); font-size: 14px; line-height: 1.2; }
 .restart-banner-body { flex: 1; min-width: 0; }
-.restart-banner-title { font-size: 13px; color: var(--fg); margin-bottom: 4px; }
-.restart-banner-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 3px; }
-.restart-banner-list li {
-  display: flex;
-  align-items: center;
-  gap: 10px;
+.restart-banner-title { font-size: 13px; color: var(--fg); margin-bottom: 2px; }
+.restart-banner-daemons {
   font-size: 11px;
+  color: var(--fg-2);
+  font-family: "SF Mono", ui-monospace, monospace;
 }
-.restart-banner-daemon { color: var(--accent); font-weight: 500; }
-.restart-banner-keys { color: var(--fg-2); font-family: "SF Mono", ui-monospace, monospace; flex: 1; }
 .restart-banner-btn {
   padding: 3px 10px;
   font-size: 11px;
@@ -34,4 +30,4 @@
   align-self: center;
 }
 .restart-banner-btn.primary:hover { opacity: 0.9; }
-.restart-banner-btn.small { font-size: 10px; padding: 2px 8px; }
+.restart-banner-dismiss { align-self: center; color: var(--fg-2); }

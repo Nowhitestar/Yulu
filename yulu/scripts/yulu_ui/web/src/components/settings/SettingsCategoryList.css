@@ -1,0 +1,19 @@
+/* web/src/components/settings/SettingsCategoryList.css
+   Master column for the settings MasterDetail. Mirrors .recording-row styling
+   (borderless, hover=row-hover, active=accent-soft) using existing tokens. */
+.settings-category-list {
+  display: flex;
+  flex-direction: column;
+}
+.settings-category-row {
+  /* .recording-row already gives padding/radius/color; tighten vertical rhythm. */
+}
+.settings-category-desc {
+  font-size: 12px;
+  color: var(--fg-2);
+  line-height: 1.4;
+  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

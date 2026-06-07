@@ -1,8 +1,32 @@
 import { z } from "zod";
 import { router, publicProcedure } from "../trpc.js";
+import { SETTINGS, type SettingDef } from "../settingsRegistry.js";
+
+// Serializable settings metadata: the registry entry minus the Zod `validate`
+// schema (which is not JSON-serializable and must never cross the wire).
+export type SettingMeta = Omit<SettingDef, "validate">;
 
 export const configRouter = router({
   get: publicProcedure.query(({ ctx }) => ctx.config.read()),
+
+  // Single source of truth for the SPA settings UI: the registry's metadata,
+  // stripped of the server-only Zod validators. The SPA renders categories and
+  // field rows from this — it never re-declares the schema.
+  schema: publicProcedure.query((): SettingMeta[] =>
+    SETTINGS.map(({ validate: _validate, ...meta }) => meta)),
+
+  // Secret-safe presence check for an env-var NAME (e.g. NOTION_API_KEY). The SPA
+  // shows "set" / "not set" beside an env-name field so the user can confirm
+  // their credential is exported — without Yulu ever reading or returning the
+  // value. Returns ONLY a boolean; the secret never crosses the wire.
+  envPresent: publicProcedure
+    .input(z.object({ name: z.string() }))
+    .query(({ input }): { present: boolean } => {
+      const name = input.name.trim();
+      if (!name) return { present: false };
+      const v = process.env[name];
+      return { present: typeof v === "string" && v.length > 0 };
+    }),
 
   update: publicProcedure
     .input(z.object({

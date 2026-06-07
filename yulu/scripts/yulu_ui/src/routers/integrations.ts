@@ -25,8 +25,11 @@ export const integrationsRouter = router({
   // calendars and prints the events as JSON — exactly the path the scheduler uses.
   // PYTHONPATH points at scriptDir (no hardcoded/personal path) so check_meetings
   // and its imports resolve. `json` is a POSITIONAL command, never a --provider flag.
+  // Google is the only supported calendar provider (Feishu was a dead stub,
+  // removed in P4a-4). The provider is accepted for forward-compat but the test
+  // path is provider-agnostic (it runs Yulu's own check_meetings.py).
   test: publicProcedure
-    .input(z.object({ provider: z.enum(["feishu", "google"]) }))
+    .input(z.object({ provider: z.enum(["google"]) }))
     .mutation(async ({ ctx }) => {
       const { stdout, stderr, code } = await runSpawn(
         "python3",

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { trpc } from "../trpc.js";
+import { useT, type TFunc } from "../i18n/LanguageProvider.js";
 import "./InlineEditRow.css";
 
 export type RowStatus = "saved" | "restart" | "typing" | null;
@@ -8,6 +9,14 @@ interface BaseProps {
   label: string;
   help?: string;
   status?: RowStatus;
+  /**
+   * Locks the field: the value renders read-only with a short note and edits
+   * are suppressed. Used by the recording-guard for restart-class settings —
+   * changing them mid-recording would interrupt the capture.
+   */
+  disabled?: boolean;
+  /** Note shown beside a disabled field (defaults to "录音中不可改"). */
+  disabledNote?: string;
 }
 
 type TextProps = BaseProps & { type: "text"; value: string; onCommit: (v: string) => void };
@@ -20,13 +29,14 @@ type ReadonlyProps = BaseProps & { type: "readonly"; value: string; revealInFind
 export type InlineEditRowProps = TextProps | NumberProps | SelectProps | ToggleProps | PathProps | ReadonlyProps;
 
 export function InlineEditRow(props: InlineEditRowProps) {
+  const t = useT();
   return (
     <div className="row">
       <div className="row-label">
         <div>{props.label}</div>
         {props.help && <div className="row-help">{props.help}</div>}
       </div>
-      <div className="row-value">{renderValue(props)}</div>
+      <div className="row-value">{renderValue(props, t)}</div>
       <div className="row-status" data-testid="row-status">{statusGlyph(props.status)}</div>
     </div>
   );
@@ -39,15 +49,39 @@ function statusGlyph(status: RowStatus | undefined) {
   return null;
 }
 
-function renderValue(props: InlineEditRowProps): React.ReactNode {
+function renderValue(props: InlineEditRowProps, t: TFunc): React.ReactNode {
+  // Recording-guard: restart-class fields render locked while a recording is in
+  // flight (readonly is never gated — it has no commit path).
+  if (props.disabled && (props.type === "text" || props.type === "number" || props.type === "select" || props.type === "toggle")) {
+    return <DisabledValue display={displayText(props, t)} note={props.disabledNote ?? t("settings.locked.recording")} />;
+  }
   switch (props.type) {
     case "text":     return <TextValue {...props} />;
     case "number":   return <NumberValue {...props} />;
     case "select":   return <SelectValue {...props} />;
     case "toggle":   return <ToggleValue {...props} />;
-    case "path":     return <PathValue {...props} />;
+    case "path":     return <PathValue {...props} disabled={props.disabled} />;
     case "readonly": return <ReadonlyValue {...props} />;
   }
+}
+
+// Read-only rendering of a guarded field's current value.
+function displayText(props: TextProps | NumberProps | SelectProps | ToggleProps, t: TFunc): string {
+  switch (props.type) {
+    case "text":   return props.value;
+    case "number": return String(props.value);
+    case "select": return props.options.find((o) => o.value === props.value)?.label ?? props.value;
+    case "toggle": return props.value ? t("value.on") : t("value.off");
+  }
+}
+
+function DisabledValue({ display, note }: { display: string; note?: string }) {
+  return (
+    <span className="value-disabled" title={note}>
+      <span className="value-disabled-text">{display}</span>
+      <span className="value-disabled-note">{note}</span>
+    </span>
+  );
 }
 
 function TextValue({ value, onCommit }: TextProps) {
@@ -143,10 +177,11 @@ interface CloudWarning {
   reason: string;
 }
 
-function PathValue({ value, mode, filter, onCommit }: PathProps) {
+function PathValue({ value, mode, filter, onCommit, disabled, disabledNote }: PathProps) {
   const pickFile = trpc.system.pickFile.useMutation();
   const openInFinder = trpc.system.openInFinder.useMutation();
   const utils = trpc.useUtils();
+  const t = useT();
   const [pending, setPending] = useState<CloudWarning | null>(null);
 
   const choose = async () => {
@@ -183,9 +218,10 @@ function PathValue({ value, mode, filter, onCommit }: PathProps) {
 
   return (
     <div className="path-value">
-      <span className="path-display" title={value}>{value || "(unset)"}</span>
-      <button type="button" className="path-btn" onClick={choose} disabled={pickFile.isPending}>Choose…</button>
-      {value && <button type="button" className="path-btn" onClick={() => openInFinder.mutate({ path: value, reveal: true })}>Reveal</button>}
+      <span className="path-display" title={value}>{value || t("path.unset")}</span>
+      {!disabled && <button type="button" className="path-btn" onClick={choose} disabled={pickFile.isPending}>{t("path.choose")}</button>}
+      {value && <button type="button" className="path-btn" onClick={() => openInFinder.mutate({ path: value, reveal: true })}>{t("path.reveal")}</button>}
+      {disabled && <span className="value-disabled-note">{disabledNote ?? t("settings.locked.recording")}</span>}
       {pending && <CloudWarn warning={pending} onAccept={acceptCloud} onCancel={cancelCloud} />}
     </div>
   );
@@ -197,20 +233,21 @@ function PathValue({ value, mode, filter, onCommit }: PathProps) {
 // (verified on-device), so the rationale is corruption/eviction, not impossibility
 // (RESEARCH Pitfall 3).
 function CloudWarn({ warning, onAccept, onCancel }: { warning: CloudWarning; onAccept: () => void; onCancel: () => void }) {
-  const where = warning.reason ? `in ${warning.reason}` : "in a cloud-sync folder";
+  const t = useT();
+  const where = warning.reason ? t("cloudWarn.where.in", { reason: warning.reason }) : t("cloudWarn.where.generic");
   return (
-    <div className="cloud-warn" role="alertdialog" aria-label="Cloud folder warning">
+    <div className="cloud-warn" role="alertdialog" aria-label={t("cloudWarn.aria")}>
       <div className="cloud-warn-body">
-        <div className="cloud-warn-title">This folder is {where}.</div>
+        <div className="cloud-warn-title">{t("cloudWarn.title", { where })}</div>
         <ul className="cloud-warn-risks">
-          <li>macOS may <strong>evict</strong> (make &ldquo;dataless&rdquo;) a recording that hasn&rsquo;t been used recently — if that happens mid-write or before transcription, the file can be lost or corrupted.</li>
-          <li>Yulu keeps its databases and live files <strong>out</strong> of this folder, so only your recordings, transcripts, and summaries sync.</li>
+          <li>{t("cloudWarn.risk.evict")}</li>
+          <li>{t("cloudWarn.risk.dbs")}</li>
         </ul>
-        <div className="cloud-warn-note">You can use this folder anyway if you understand the trade-off.</div>
+        <div className="cloud-warn-note">{t("cloudWarn.note")}</div>
       </div>
       <div className="cloud-warn-actions">
-        <button type="button" className="path-btn cloud-warn-cancel" onClick={onCancel}>Cancel</button>
-        <button type="button" className="path-btn cloud-warn-accept" onClick={onAccept}>Use anyway</button>
+        <button type="button" className="path-btn cloud-warn-cancel" onClick={onCancel}>{t("cloudWarn.cancel")}</button>
+        <button type="button" className="path-btn cloud-warn-accept" onClick={onAccept}>{t("cloudWarn.useAnyway")}</button>
       </div>
     </div>
   );

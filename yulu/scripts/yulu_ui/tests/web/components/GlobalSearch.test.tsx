@@ -21,7 +21,7 @@ function wrap(ui: React.ReactNode) {
 describe("GlobalSearch", () => {
   it("renders a search input with placeholder Search and a kbd hint", () => {
     const { getByPlaceholderText, container } = wrap(<GlobalSearch />);
-    expect(getByPlaceholderText("Search")).toBeInTheDocument();
+    expect(getByPlaceholderText("搜索")).toBeInTheDocument();
     expect(container.querySelector(".gs-kbd")?.textContent).toMatch(/⌘K|Ctrl-K/);
   });
 
@@ -32,14 +32,14 @@ describe("GlobalSearch", () => {
 
   it("opens a popover when the user types", () => {
     const { getByPlaceholderText, container } = wrap(<GlobalSearch />);
-    const input = getByPlaceholderText("Search");
+    const input = getByPlaceholderText("搜索");
     fireEvent.change(input, { target: { value: "test" } });
     expect(container.querySelector(".gs-popover")).not.toBeNull();
   });
 
   it("closes the popover on Escape", () => {
     const { getByPlaceholderText, container } = wrap(<GlobalSearch />);
-    const input = getByPlaceholderText("Search");
+    const input = getByPlaceholderText("搜索");
     fireEvent.change(input, { target: { value: "test" } });
     fireEvent.keyDown(input, { key: "Escape" });
     expect(container.querySelector(".gs-popover")).toBeNull();
@@ -47,7 +47,7 @@ describe("GlobalSearch", () => {
 
   it("⌘K (or Ctrl+K) focuses the input from anywhere on the page", () => {
     const { getByPlaceholderText } = wrap(<GlobalSearch />);
-    const input = getByPlaceholderText("Search");
+    const input = getByPlaceholderText("搜索");
     fireEvent.keyDown(window, { key: "k", metaKey: true });
     expect(document.activeElement).toBe(input);
   });
@@ -63,8 +63,8 @@ describe("GlobalSearch", () => {
     const { container } = wrap(<GlobalSearch />);
     fireEvent.change(container.querySelector("input")!, { target: { value: "hi" } });
     const footer = container.querySelector(".gs-footer");
-    expect(footer?.textContent).toMatch(/navigate/);
-    expect(footer?.textContent).toMatch(/open/);
-    expect(footer?.textContent).toMatch(/close/);
+    expect(footer?.textContent).toMatch(/切换/);
+    expect(footer?.textContent).toMatch(/打开/);
+    expect(footer?.textContent).toMatch(/关闭/);
   });
 });

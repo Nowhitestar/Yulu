@@ -35,7 +35,7 @@ import { RecordingsList } from "../../web/src/routes/inbox/recordings.js";
 import { RecordingReader } from "../../web/src/routes/inbox/recordings.$stem.js";
 import { Prompts }    from "../../web/src/routes/knowledge/prompts.js";
 import { Glossary }   from "../../web/src/routes/knowledge/glossary.js";
-import { Settings }  from "../../web/src/routes/settings.js";
+import { SettingsLayout } from "../../web/src/routes/settings.js";
 import { Health }    from "../../web/src/routes/health.js";
 
 const ROUTES: { name: string; Component: React.ComponentType }[] = [
@@ -43,7 +43,7 @@ const ROUTES: { name: string; Component: React.ComponentType }[] = [
   { name: "inbox/:stem",            Component: RecordingReader },
   { name: "knowledge/prompts",      Component: Prompts },
   { name: "knowledge/glossary",     Component: Glossary },
-  { name: "settings",               Component: Settings },
+  { name: "settings",               Component: SettingsLayout },
   { name: "health",                 Component: Health },
 ];
 

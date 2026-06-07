@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { useCallback, useRef } from "react";
 import { usePersistedSize } from "../hooks/usePersistedSize.js";
+import { useT } from "../i18n/LanguageProvider.js";
 import "./ResizableSplit.css";
 
 export interface ResizableSplitProps {
@@ -22,6 +23,7 @@ export function ResizableSplit({
   storageKey, side, min, max, defaultWidth, children,
 }: ResizableSplitProps) {
   const [width, setWidth] = usePersistedSize(storageKey, defaultWidth);
+  const t = useT();
 
   const widthRef = useRef(width);
   widthRef.current = width;
@@ -62,7 +64,7 @@ export function ResizableSplit({
         data-side={side}
         role="separator"
         aria-orientation="vertical"
-        aria-label="Resize panel"
+        aria-label={t("split.resizeAria")}
         onMouseDown={onMouseDown}
         onDoubleClick={onDoubleClick}
       />

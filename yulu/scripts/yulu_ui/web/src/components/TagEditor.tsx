@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { X, Plus } from "lucide-react";
+import { useT } from "../i18n/LanguageProvider.js";
 import "./TagEditor.css";
 
 export interface TagEditorProps {
@@ -14,6 +15,7 @@ export interface TagEditorProps {
  * matches what the server's parseTags() will persist.
  */
 export function TagEditor({ tags, onChange, disabled }: TagEditorProps) {
+  const t = useT();
   const [adding, setAdding] = useState(false);
   const [draft, setDraft] = useState("");
   const ref = useRef<HTMLInputElement>(null);
@@ -40,15 +42,15 @@ export function TagEditor({ tags, onChange, disabled }: TagEditorProps) {
 
   return (
     <div className="tag-editor" data-testid="tag-editor">
-      {tags.map((t) => (
-        <span key={t} className="tag-chip">
-          {t}
+      {tags.map((tagName) => (
+        <span key={tagName} className="tag-chip">
+          {tagName}
           {!disabled && (
             <button
               type="button"
               className="tag-chip-remove"
-              aria-label={`Remove tag ${t}`}
-              onClick={() => remove(t)}
+              aria-label={t("tag.removeAria", { tag: tagName })}
+              onClick={() => remove(tagName)}
             >
               <X size={11} strokeWidth={2.25} />
             </button>
@@ -61,7 +63,7 @@ export function TagEditor({ tags, onChange, disabled }: TagEditorProps) {
             ref={ref}
             className="tag-input"
             value={draft}
-            placeholder="tag…"
+            placeholder={t("tag.placeholder")}
             onChange={(e) => setDraft(e.target.value)}
             onBlur={commit}
             onKeyDown={(e) => {
@@ -73,11 +75,11 @@ export function TagEditor({ tags, onChange, disabled }: TagEditorProps) {
           <button
             type="button"
             className="tag-add"
-            aria-label="Add tag"
+            aria-label={t("tag.addAria")}
             onClick={() => setAdding(true)}
           >
             <Plus size={12} strokeWidth={2} />
-            {tags.length === 0 && <span>Add tag</span>}
+            {tags.length === 0 && <span>{t("tag.add")}</span>}
           </button>
         )
       )}

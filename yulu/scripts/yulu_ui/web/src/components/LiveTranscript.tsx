@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Radio, X } from "lucide-react";
 import { useWsChannel } from "../ws.js";
+import { useT } from "../i18n/LanguageProvider.js";
 import "./LiveTranscript.css";
 
 interface LiveMsg {
@@ -24,6 +25,7 @@ export function LiveTranscript() {
   const [stem, setStem] = useState<string | undefined>();
   const [dismissedStem, setDismissedStem] = useState<string | null>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
+  const t = useT();
 
   useWsChannel("live-transcript", (msg: LiveMsg) => {
     if (!msg.active) {
@@ -52,18 +54,18 @@ export function LiveTranscript() {
   const lines = formatLines(text);
 
   return (
-    <section className="live-transcript" role="status" aria-label="Live transcript" data-testid="live-transcript">
+    <section className="live-transcript" role="status" aria-label={t("live.aria")} data-testid="live-transcript">
       <header className="lt-head">
         <span className="lt-dot" aria-hidden="true">
           <Radio size={12} strokeWidth={2} />
         </span>
         <span className="lt-title">
-          Live transcript
+          {t("live.title")}
         </span>
         <button
           className="lt-close"
           type="button"
-          aria-label="Hide live transcript"
+          aria-label={t("live.hideAria")}
           onClick={() => setDismissedStem(stem ?? null)}
         >
           <X size={13} strokeWidth={2} />
@@ -71,11 +73,11 @@ export function LiveTranscript() {
       </header>
       <div className="lt-body" ref={bodyRef}>
         {lines.length === 0 ? (
-          <p className="lt-waiting">Listening…</p>
+          <p className="lt-waiting">{t("live.waiting")}</p>
         ) : (
           lines.map((line, i) => (
             <p className="lt-line" key={i}>
-              {line.tag ? <span className={`lt-tag lt-tag-${line.tag}`}>{line.tag === "Me" ? "You" : "Them"}</span> : null}
+              {line.tag ? <span className={`lt-tag lt-tag-${line.tag}`}>{line.tag === "Me" ? t("live.tag.you") : t("live.tag.them")}</span> : null}
               <span className="lt-text">{line.text}</span>
             </p>
           ))

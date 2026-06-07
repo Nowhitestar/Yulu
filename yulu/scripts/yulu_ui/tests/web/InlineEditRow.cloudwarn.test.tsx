@@ -49,9 +49,9 @@ describe("InlineEditRow folder picker — DATA-03 cloud-warn (detect-and-warn, n
     const onCommit = vi.fn();
     renderFolderRow(onCommit);
     const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: /choose/i }));
+    await user.click(screen.getByRole("button", { name: /选择/ }));
     // The warning appears and names the real harm (eviction); commit is deferred.
-    await screen.findByText(/evict/i);
+    await screen.findByText(/逐出/);
     expect(screen.getByRole("alertdialog")).toBeInTheDocument();
     expect(onCommit).not.toHaveBeenCalled();
   });
@@ -61,9 +61,9 @@ describe("InlineEditRow folder picker — DATA-03 cloud-warn (detect-and-warn, n
     const onCommit = vi.fn();
     renderFolderRow(onCommit);
     const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: /choose/i }));
-    await screen.findByText(/evict/i);
-    await user.click(screen.getByRole("button", { name: /use anyway/i }));
+    await user.click(screen.getByRole("button", { name: /选择/ }));
+    await screen.findByText(/逐出/);
+    await user.click(screen.getByRole("button", { name: /仍然使用/ }));
     expect(onCommit).toHaveBeenCalledWith(PICKED_PATH);
   });
 
@@ -72,9 +72,9 @@ describe("InlineEditRow folder picker — DATA-03 cloud-warn (detect-and-warn, n
     const onCommit = vi.fn();
     renderFolderRow(onCommit);
     const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: /choose/i }));
-    await screen.findByText(/evict/i);
-    await user.click(screen.getByRole("button", { name: /cancel/i }));
+    await user.click(screen.getByRole("button", { name: /选择/ }));
+    await screen.findByText(/逐出/);
+    await user.click(screen.getByRole("button", { name: /取消/i }));
     expect(onCommit).not.toHaveBeenCalled();
     // The warning is dismissed.
     expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
@@ -85,7 +85,7 @@ describe("InlineEditRow folder picker — DATA-03 cloud-warn (detect-and-warn, n
     const onCommit = vi.fn();
     renderFolderRow(onCommit);
     const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: /choose/i }));
+    await user.click(screen.getByRole("button", { name: /选择/ }));
     await waitFor(() => expect(onCommit).toHaveBeenCalledWith(PICKED_PATH));
     expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
   });
@@ -95,7 +95,7 @@ describe("InlineEditRow folder picker — DATA-03 cloud-warn (detect-and-warn, n
     const onCommit = vi.fn();
     renderFolderRow(onCommit);
     const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: /choose/i }));
+    await user.click(screen.getByRole("button", { name: /选择/ }));
     await waitFor(() => expect(onCommit).toHaveBeenCalledWith(PICKED_PATH));
     expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
   });
@@ -106,7 +106,7 @@ describe("InlineEditRow folder picker — DATA-03 cloud-warn (detect-and-warn, n
     const onCommit = vi.fn();
     renderFolderRow(onCommit, "file");
     const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: /choose/i }));
+    await user.click(screen.getByRole("button", { name: /选择/ }));
     await waitFor(() => expect(onCommit).toHaveBeenCalledWith(PICKED_PATH));
     expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
   });

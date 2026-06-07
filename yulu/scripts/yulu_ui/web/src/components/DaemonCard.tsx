@@ -2,6 +2,7 @@
 import type { JSX } from "react";
 import { Link } from "react-router";
 import { Circle, Pause, AlertCircle } from "lucide-react";
+import { useT } from "../i18n/LanguageProvider.js";
 import "./DaemonCard.css";
 
 export interface DaemonHealth {
@@ -26,13 +27,14 @@ const STATUS_GLYPH: Record<DaemonHealth["status"], JSX.Element> = {
   crashed: <AlertCircle size={11} strokeWidth={2} />,
 };
 
-const STATUS_LABEL: Record<DaemonHealth["status"], string> = {
-  running: "running",
-  stopped: "stopped",
-  crashed: "crashed",
+const STATUS_KEY: Record<DaemonHealth["status"], string> = {
+  running: "health.daemon.status.running",
+  stopped: "health.daemon.status.stopped",
+  crashed: "health.daemon.status.crashed",
 };
 
 export function DaemonCard({ daemon, onRestart, onStop, restartPending, stopPending }: DaemonCardProps) {
+  const t = useT();
   const shortName = daemon.name.replace(/^com\.yulu\./, "");
   return (
     <div className="daemon-card" data-status={daemon.status}>
@@ -40,12 +42,12 @@ export function DaemonCard({ daemon, onRestart, onStop, restartPending, stopPend
         <div className="daemon-card-name">{shortName}</div>
         <span className="status-pill" data-status={daemon.status}>
           <span className="status-pill-glyph">{STATUS_GLYPH[daemon.status]}</span>
-          <span className="status-pill-label">{STATUS_LABEL[daemon.status]}</span>
+          <span className="status-pill-label">{t(STATUS_KEY[daemon.status])}</span>
         </span>
       </div>
       <div className="daemon-card-meta">
         <div className="daemon-card-pid">PID {daemon.pid || "—"}</div>
-        <div className="daemon-card-lastlog" title={daemon.lastLog}>{daemon.lastLog || "(no log entries yet)"}</div>
+        <div className="daemon-card-lastlog" title={daemon.lastLog}>{daemon.lastLog || t("health.daemon.noLog")}</div>
       </div>
       <div className="daemon-card-actions">
         <button
@@ -54,7 +56,7 @@ export function DaemonCard({ daemon, onRestart, onStop, restartPending, stopPend
           onClick={() => onRestart(daemon.name)}
           disabled={restartPending}
         >
-          Restart
+          {t("health.daemon.restart")}
         </button>
         <button
           type="button"
@@ -62,10 +64,10 @@ export function DaemonCard({ daemon, onRestart, onStop, restartPending, stopPend
           onClick={() => onStop(daemon.name)}
           disabled={stopPending || daemon.status === "stopped"}
         >
-          Stop
+          {t("health.daemon.stop")}
         </button>
         <Link to={`/health/logs?name=${encodeURIComponent(daemon.name)}`} className="daemon-card-btn link">
-          View logs →
+          {t("health.daemon.viewLogs")}
         </Link>
       </div>
     </div>

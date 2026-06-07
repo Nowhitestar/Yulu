@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { useEffect, useState } from "react";
 import { Loader2, Check, AlertCircle } from "lucide-react";
+import { useT } from "../i18n/LanguageProvider.js";
 import "./ReprocessButton.css";
 
 export type ReprocessButtonState = "idle" | "running" | "done" | "failed";
@@ -28,6 +29,7 @@ const DONE_HOLD_MS = 2000;
 export function ReprocessButton({
   label, icon, state, error, onClick, disabled, disabledReason,
 }: ReprocessButtonProps) {
+  const t = useT();
   const [visualState, setVisualState] = useState<ReprocessButtonState>(state);
 
   useEffect(() => {
@@ -60,19 +62,19 @@ export function ReprocessButton({
       content = (
         <>
           <Loader2 size={14} strokeWidth={1.75} className="rpb-spin" />
-          <span>Running…</span>
+          <span>{t("reprocess.running")}</span>
         </>
       );
-      aria = "Running";
+      aria = t("reprocess.running");
       break;
     case "done":
       content = (
         <>
           <Check size={14} strokeWidth={2} />
-          <span>Done</span>
+          <span>{t("reprocess.done")}</span>
         </>
       );
-      aria = "Done";
+      aria = t("reprocess.done");
       break;
     case "failed":
       content = (

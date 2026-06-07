@@ -29,6 +29,18 @@ describe("ConfigManager", () => {
     } finally { cleanup(); }
   });
 
+  it("read() tolerates a minimal/partial config (fills audio defaults, no throw)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "yulu_min_"));
+    const path = join(dir, "config.json");
+    fs.writeFileSync(path, JSON.stringify({ audio: { output_dir: "~/Movies/Yulu" }, transcription: {} }));
+    try {
+      const cfg = new ConfigManager(path).read();
+      expect(cfg.audio.silence_threshold).toBe(0.01);       // default
+      expect(cfg.audio.silence_duration_sec).toBe(300);     // default
+      expect(cfg.audio.output_dir).toBe("~/Movies/Yulu");
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
   it("update() writes + returns diff with restart targets", () => {
     const { mgr, cleanup } = makeCfg();
     try {
@@ -119,6 +131,33 @@ describe("registry-driven classify + per-field validation", () => {
     try {
       expect(() => mgr.update("transcription.mlx.model", "whisper-large-v3-mlx")).not.toThrow();
       expect(mgr.update("transcription.mlx.final_model", "turbo")).toEqual({ daemonsNeedingRestart: ["sttdaemon"], daemonsNeedingSighup: [] });
+    } finally { cleanup(); }
+  });
+  it("post_recording_mode:合法枚举值写入成功且 reload none;非法值被拒(P2-1)", () => {
+    const { mgr, cleanup } = makeCfg();
+    try {
+      expect(mgr.update("transcription.post_recording_mode", "full_transcribe")).toEqual({ daemonsNeedingRestart: [], daemonsNeedingSighup: [] });
+      expect(mgr.read().transcription.post_recording_mode).toBe("full_transcribe");
+      expect(() => mgr.update("transcription.post_recording_mode", "bogus")).toThrow(ZodError);
+    } finally { cleanup(); }
+  });
+  it("meeting_detection.enabled 改完 restart detector;interval_sec<1 被拒(P2-3)", () => {
+    const { mgr, cleanup } = makeCfg();
+    try {
+      expect(mgr.update("meeting_detection.enabled", false)).toEqual({ daemonsNeedingRestart: ["detector"], daemonsNeedingSighup: [] });
+      expect((mgr.read() as { meeting_detection?: { enabled?: boolean } }).meeting_detection?.enabled).toBe(false);
+      expect(() => mgr.update("meeting_detection.interval_sec", 0)).toThrow(ZodError);
+    } finally { cleanup(); }
+  });
+  it("output.* 写入成功且 reload none;output.channel 非法枚举被拒(P2-4)", () => {
+    const { mgr, cleanup } = makeCfg();
+    try {
+      expect(mgr.update("output.channel", "notion")).toEqual({ daemonsNeedingRestart: [], daemonsNeedingSighup: [] });
+      expect(mgr.update("output.notion.api_key_env", "NOTION_API_KEY")).toEqual({ daemonsNeedingRestart: [], daemonsNeedingSighup: [] });
+      const out = (mgr.read() as { output?: { channel?: string; notion?: { api_key_env?: string } } }).output;
+      expect(out?.channel).toBe("notion");
+      expect(out?.notion?.api_key_env).toBe("NOTION_API_KEY");
+      expect(() => mgr.update("output.channel", "carrier-pigeon")).toThrow(ZodError);
     } finally { cleanup(); }
   });
 });

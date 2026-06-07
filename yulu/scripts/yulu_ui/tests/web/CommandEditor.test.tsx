@@ -27,7 +27,7 @@ describe("CommandEditor", () => {
     const onChange = vi.fn();
     render(<CommandEditor value={["claude"]} onChange={onChange} />);
     const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: /add arg/i }));
+    await user.click(screen.getByRole("button", { name: /添加参数/ }));
     expect(onChange).toHaveBeenCalledWith(["claude", ""]);
   });
 
@@ -35,7 +35,7 @@ describe("CommandEditor", () => {
     const onChange = vi.fn();
     render(<CommandEditor value={["claude", "--print", "--model"]} onChange={onChange} />);
     const user = userEvent.setup();
-    const removeButtons = screen.getAllByRole("button", { name: /remove/i });
+    const removeButtons = screen.getAllByRole("button", { name: /移除/ });
     await user.click(removeButtons[1]!);
     expect(onChange).toHaveBeenCalledWith(["claude", "--model"]);
   });

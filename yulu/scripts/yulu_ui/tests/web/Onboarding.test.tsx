@@ -90,7 +90,7 @@ describe("Onboarding (SET-03 — skippable first-run walkthrough)", () => {
 
     // The capability names the walkthrough reflects appear (label + line both
     // mention them, so assert at least one match each).
-    expect(screen.getAllByText(/recording/i).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText(/录音/).length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText(/whisper/i).length).toBeGreaterThanOrEqual(1);
   });
 
@@ -102,7 +102,7 @@ describe("Onboarding (SET-03 — skippable first-run walkthrough)", () => {
 
     expect(screen.getByRole("dialog")).toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: /skip/i }));
+    await user.click(screen.getByRole("button", { name: /跳过/ }));
 
     // Persists the dismissal flag through the config router (SET-03 / D-06).
     await vi.waitFor(() =>
@@ -145,6 +145,6 @@ describe("Onboarding (SET-03 — skippable first-run walkthrough)", () => {
     // Still renders the overlay (so the user can skip), with "couldn't check"
     // placeholders for each capability instead of implying a failure.
     expect(screen.getByRole("dialog")).toBeInTheDocument();
-    expect(screen.getAllByText(/couldn'?t check/i).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText(/无法检查/).length).toBeGreaterThanOrEqual(1);
   });
 });

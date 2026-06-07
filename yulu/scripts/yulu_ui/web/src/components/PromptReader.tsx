@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useConfirm } from "../hooks/useConfirm.js";
+import { useT } from "../i18n/LanguageProvider.js";
 import "./PromptReader.css";
 
 export type Category = "summary" | "cleanup";
@@ -43,6 +44,7 @@ export interface PromptReaderProps {
 const CATEGORIES: Category[] = ["summary", "cleanup"];
 
 export function PromptReader({ prompt, onSave, onDelete }: PromptReaderProps) {
+  const t = useT();
   const isCreate = prompt === null;
   const [name, setName] = useState("");
   const [slug, setSlug] = useState("");
@@ -83,33 +85,33 @@ export function PromptReader({ prompt, onSave, onDelete }: PromptReaderProps) {
 
   const onSaveClick = () => { if (pendingDiff) onSave(pendingDiff); };
   const onDeleteClick = () => {
-    if (confirm(`Delete prompt "${prompt?.name ?? ""}"?`)) onDelete();
+    if (confirm(t("promptReader.deleteConfirm", { name: prompt?.name ?? "" }))) onDelete();
   };
 
   return (
     <div className="preader">
       <div className="preader-field">
-        <label className="preader-label" htmlFor="prompt-name">Name</label>
+        <label className="preader-label" htmlFor="prompt-name">{t("promptReader.name")}</label>
         <input id="prompt-name" className="preader-input" value={name} onChange={(e) => setName(e.target.value)} />
       </div>
       <div className="preader-field">
-        <label className="preader-label" htmlFor="prompt-slug">Slug</label>
+        <label className="preader-label" htmlFor="prompt-slug">{t("promptReader.slug")}</label>
         <input id="prompt-slug" className="preader-input" value={slug} onChange={(e) => setSlug(e.target.value)} />
       </div>
       <div className="preader-field">
-        <label className="preader-label" htmlFor="prompt-category">Category</label>
+        <label className="preader-label" htmlFor="prompt-category">{t("promptReader.category")}</label>
         <select id="prompt-category" className="preader-input" value={category} onChange={(e) => setCategory(e.target.value as Category)}>
-          {CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+          {CATEGORIES.map((c) => <option key={c} value={c}>{t(`category.${c}`)}</option>)}
         </select>
       </div>
       <div className="preader-field">
-        <label className="preader-label">Autorun</label>
+        <label className="preader-label">{t("promptReader.autorun")}</label>
         <button type="button" role="switch" aria-checked={isAutoRun} className={"preader-toggle" + (isAutoRun ? " on" : "")} onClick={() => setIsAutoRun(!isAutoRun)}>
           <span className="preader-toggle-knob" />
         </button>
       </div>
       <div className="preader-field preader-field-content">
-        <label className="preader-label" htmlFor="prompt-content">Content</label>
+        <label className="preader-label" htmlFor="prompt-content">{t("promptReader.content")}</label>
         <textarea
           id="prompt-content"
           className="preader-textarea"
@@ -119,9 +121,9 @@ export function PromptReader({ prompt, onSave, onDelete }: PromptReaderProps) {
         />
       </div>
       <div className="preader-actions">
-        <button type="button" className="preader-btn primary" disabled={!canSave} onClick={onSaveClick}>Save</button>
+        <button type="button" className="preader-btn primary" disabled={!canSave} onClick={onSaveClick}>{t("promptReader.save")}</button>
         {!isCreate && (
-          <button type="button" className="preader-btn danger" onClick={onDeleteClick}>Delete</button>
+          <button type="button" className="preader-btn danger" onClick={onDeleteClick}>{t("promptReader.delete")}</button>
         )}
       </div>
     </div>

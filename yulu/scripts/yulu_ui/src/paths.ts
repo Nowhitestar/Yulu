@@ -25,6 +25,10 @@ function locateScriptDir(): string {
 }
 
 const SCRIPT_DIR = locateScriptDir();
+// Repo root holds the single-source-of-truth VERSION file and (on a release
+// install) .yulu-install.json. scriptDir is yulu/scripts, so the root is two
+// levels up — the same anchor version.py uses (REPO_DIR = parents[2]).
+const REPO_ROOT = resolve(SCRIPT_DIR, "..", "..");
 
 export const paths = {
   configDir:        CONFIG_DIR,
@@ -41,4 +45,6 @@ export const paths = {
   scriptDir:        SCRIPT_DIR,
   transcribePy:     join(SCRIPT_DIR, "transcribe.py"),
   agentQueueJson:   join(CONFIG_DIR, "agent-queue.json"),
+  versionFile:      join(REPO_ROOT, "VERSION"),
+  installJson:      join(REPO_ROOT, ".yulu-install.json"),
 } as const;

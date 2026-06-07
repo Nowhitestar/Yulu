@@ -97,8 +97,8 @@ describe("EditableTable", () => {
     const user = userEvent.setup();
     const checkboxes = screen.getAllByRole("checkbox");
     await user.click(checkboxes[1]!);   // first row (after header)
-    expect(screen.getByText(/1 selected/i)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /^delete$/i })).toBeInTheDocument();
+    expect(screen.getByText("已选 1 项")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "删除" })).toBeInTheDocument();
   });
 
   it("selectable: header checkbox toggles all rows", async () => {
@@ -106,9 +106,9 @@ describe("EditableTable", () => {
     const user = userEvent.setup();
     const [headerCb] = screen.getAllByRole("checkbox");
     await user.click(headerCb!);
-    expect(screen.getByText(/2 selected/i)).toBeInTheDocument();
+    expect(screen.getByText("已选 2 项")).toBeInTheDocument();
     await user.click(headerCb!);
-    expect(screen.queryByText(/selected/i)).toBeNull();
+    expect(screen.queryByText(/已选/)).toBeNull();
   });
 
   it("selectable: clicking Delete fires onBulkDelete with selected ids (after confirm=true)", async () => {
@@ -119,7 +119,7 @@ describe("EditableTable", () => {
     const checkboxes = screen.getAllByRole("checkbox");
     await user.click(checkboxes[1]!);   // row id=1
     await user.click(checkboxes[2]!);   // row id=2
-    await user.click(screen.getByRole("button", { name: /^delete$/i }));
+    await user.click(screen.getByRole("button", { name: "删除" }));
     expect(onBulkDelete).toHaveBeenCalledWith([1, 2]);
   });
 
@@ -130,7 +130,7 @@ describe("EditableTable", () => {
     const user = userEvent.setup();
     const [, firstRow] = screen.getAllByRole("checkbox");
     await user.click(firstRow!);
-    await user.click(screen.getByRole("button", { name: /^delete$/i }));
+    await user.click(screen.getByRole("button", { name: "删除" }));
     expect(onBulkDelete).not.toHaveBeenCalled();
   });
 });

@@ -59,20 +59,20 @@ describe("RecordingReader", () => {
   it("shows Realtime tab when hasRealtime is true (meeting)", () => {
     getMock.mockReturnValue({ data: { stem: "TeamSync_20260102_090000", type: "meeting", title: "TeamSync", mtimeMs: 1, transcript: "t", summary: "s", realtime: "r", hasRealtime: true, status: "idle" }, isPending: false });
     renderAt("TeamSync_20260102_090000");
-    expect(screen.getByRole("button", { name: /realtime/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /实时/i })).toBeInTheDocument();
   });
 
   it("hides Realtime tab when hasRealtime is false", () => {
     getMock.mockReturnValue({ data: { stem: "Memo_20260101_120000", title: "Memo", mtimeMs: 1, transcript: "t", summary: "s", realtime: null, hasRealtime: false, status: "idle" }, isPending: false });
     renderAt("Memo_20260101_120000");
-    expect(screen.queryByRole("button", { name: /realtime/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /实时/i })).toBeNull();
   });
 
   it("renders Re-transcribe + Re-generate summary buttons", () => {
     getMock.mockReturnValue({ data: { stem: "Memo_20260101_120000", title: "Memo", mtimeMs: 1, transcript: "t", summary: "s", realtime: null, hasRealtime: false, status: "idle" }, isPending: false });
     renderAt("Memo_20260101_120000");
-    expect(screen.getByRole("button", { name: /Re-transcribe/i })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Re-generate summary/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /重新转写/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /重新生成摘要/i })).toBeInTheDocument();
   });
 
   it("renders the summary through MarkdownView, not a raw <pre>", () => {
@@ -87,7 +87,7 @@ describe("RecordingReader", () => {
     getMock.mockReturnValue({ data: baseData, isPending: false });
     renderAt(baseData.stem);
     fireEvent.click(screen.getByRole("button", { name: /TeamSync/ }));
-    const input = screen.getByLabelText("Recording title") as HTMLInputElement;
+    const input = screen.getByLabelText("录音标题") as HTMLInputElement;
     fireEvent.change(input, { target: { value: "Q3 Planning" } });
     fireEvent.keyDown(input, { key: "Enter" });
     expect(renameMutate).toHaveBeenCalledWith(
@@ -100,7 +100,7 @@ describe("RecordingReader", () => {
     getMock.mockReturnValue({ data: baseData, isPending: false });
     renderAt(baseData.stem);
     fireEvent.click(screen.getByRole("button", { name: /TeamSync/ }));
-    const input = screen.getByLabelText("Recording title");
+    const input = screen.getByLabelText("录音标题");
     fireEvent.change(input, { target: { value: "nope" } });
     fireEvent.keyDown(input, { key: "Escape" });
     expect(renameMutate).not.toHaveBeenCalled();
@@ -110,8 +110,8 @@ describe("RecordingReader", () => {
     getMock.mockReturnValue({ data: { ...baseData, tags: ["work"] }, isPending: false });
     renderAt(baseData.stem);
     expect(screen.getByText("work")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: /add tag/i }));
-    const input = screen.getByPlaceholderText("tag…");
+    fireEvent.click(screen.getByRole("button", { name: /添加标签/i }));
+    const input = screen.getByPlaceholderText("标签…");
     fireEvent.change(input, { target: { value: "client" } });
     fireEvent.keyDown(input, { key: "Enter" });
     expect(setTagsMutate).toHaveBeenCalledWith(
@@ -124,7 +124,7 @@ describe("RecordingReader", () => {
     getMock.mockReturnValue({ data: baseData, isPending: false });
     deleteMutate.mockImplementation((_args: unknown, opts: { onSuccess?: () => void }) => opts.onSuccess?.());
     renderAt(baseData.stem);
-    fireEvent.click(screen.getByRole("button", { name: /delete recording/i }));
+    fireEvent.click(screen.getByRole("button", { name: /删除录音/i }));
     expect(confirmMock).toHaveBeenCalled();
     expect(deleteMutate).toHaveBeenCalledWith({ stem: baseData.stem }, expect.anything());
     expect(navigateMock).toHaveBeenCalledWith("/inbox", { replace: true });
@@ -134,7 +134,7 @@ describe("RecordingReader", () => {
     confirmMock.mockReturnValue(false);
     getMock.mockReturnValue({ data: baseData, isPending: false });
     renderAt(baseData.stem);
-    fireEvent.click(screen.getByRole("button", { name: /delete recording/i }));
+    fireEvent.click(screen.getByRole("button", { name: /删除录音/i }));
     expect(deleteMutate).not.toHaveBeenCalled();
   });
 });

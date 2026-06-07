@@ -21,7 +21,7 @@ describe("ReprocessButton", () => {
   it("shows 'Running…' text and is disabled in running state", () => {
     const onClick = vi.fn();
     render(<ReprocessButton label="Re-transcribe" icon={<span />} state="running" onClick={onClick} />);
-    expect(screen.getByText(/running/i)).toBeInTheDocument();
+    expect(screen.getByText("运行中…")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button"));
     expect(onClick).not.toHaveBeenCalled();
   });
@@ -29,9 +29,9 @@ describe("ReprocessButton", () => {
   it("shows Done text in done state and auto-transitions back after 2s", () => {
     const { rerender } = render(<ReprocessButton label="Re-transcribe" icon={<span />} state="running" onClick={() => {}} />);
     rerender(<ReprocessButton label="Re-transcribe" icon={<span />} state="done" onClick={() => {}} />);
-    expect(screen.getByText(/done/i)).toBeInTheDocument();
+    expect(screen.getByText("完成")).toBeInTheDocument();
     act(() => { vi.advanceTimersByTime(2000); });
-    expect(screen.queryByText(/done/i)).toBeNull();
+    expect(screen.queryByText("完成")).toBeNull();
   });
 
   it("renders error tooltip in failed state", () => {

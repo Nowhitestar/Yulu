@@ -59,7 +59,7 @@ describe("AudioPlayer", () => {
     render(<AudioPlayer src="/x.wav" />);
     act(() => { handlers.get("ready")?.(); });
     const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: /play/i }));
+    await user.click(screen.getByRole("button", { name: /播放/ }));
     expect(playMock).toHaveBeenCalled();
   });
 
