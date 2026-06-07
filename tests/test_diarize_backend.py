@@ -216,6 +216,100 @@ def test_diarize_honors_cancel(fake_sherpa):
 
 
 # ════════════════════════════════════════════════════════════════════════════
+# Phase-12 carry-forward fix — per-call override must NOT bleed into auto mode
+# ════════════════════════════════════════════════════════════════════════════
+
+
+def _fake_np_sf(monkeypatch):
+    """Install minimal numpy + soundfile fakes so diarize()'s lazy in-thread imports work."""
+    fake_np = types.ModuleType("numpy")
+    fake_np.zeros = lambda n, dtype=None: [0.0] * int(n)
+    fake_np.linspace = lambda a, b, n, endpoint=True: list(range(int(n)))
+    fake_np.arange = lambda n: list(range(int(n)))
+    fake_np.interp = lambda x, xp, fp: [0.0] * len(x)
+    fake_sf = types.ModuleType("soundfile")
+    fake_sf.read = lambda path, dtype=None, always_2d=None: ([0.0] * (2 * 16000), 16000)
+    monkeypatch.setitem(sys.modules, "numpy", fake_np)
+    monkeypatch.setitem(sys.modules, "soundfile", fake_sf)
+
+
+def test_override_does_not_mutate_default_pipeline(fake_sherpa, monkeypatch):
+    """THE carry-forward regression: a per-call num_speakers override must NOT replace self._sd.
+
+    Before the fix, ``diarize(num_speakers=N)`` reassigned ``self._sd`` to a forced-count pipeline,
+    so the NEXT auto call reused the forced pipeline (the override bled into auto mode). After the
+    fix, the override is served from a count-keyed cache and the resident default is untouched.
+    """
+    _fake_np_sf(monkeypatch)
+    b = SherpaDiarizeBackend(seg_model=fake_sherpa["seg"], emb_model=fake_sherpa["emb"])
+    _run(b.warm_up())
+    default_sd = b._sd
+    assert default_sd is not None
+
+    # A forced-count override call.
+    _run(b.diarize(audio_path="x.wav", num_speakers=3, cancel_token=CancelToken()))
+
+    # The resident default pipeline object is the SAME instance — never reassigned/mutated.
+    assert b._sd is default_sd
+    # The override built a SECOND, distinct pipeline (the auto default + the count=3 override).
+    assert len(_FakeSD.instances) == 2
+
+
+def test_auto_call_after_override_uses_auto_config(fake_sherpa, monkeypatch):
+    """After an override, an auto diarize must run the AUTO (num_clusters=-1) pipeline, not the override."""
+    _fake_np_sf(monkeypatch)
+    b = SherpaDiarizeBackend(seg_model=fake_sherpa["seg"], emb_model=fake_sherpa["emb"])
+    _run(b.warm_up())
+
+    _run(b.diarize(audio_path="x.wav", num_speakers=3, cancel_token=CancelToken()))
+    _run(b.diarize(audio_path="x.wav", num_speakers=None, cancel_token=CancelToken()))
+
+    # The auto call reused the resident default pipeline (no new instance built for it).
+    # Instances: [default(auto), override(count=3)] — exactly 2; the 2nd auto call hit the cache.
+    assert len(_FakeSD.instances) == 2
+    # The default pipeline was configured with auto clustering (num_clusters == -1).
+    default_cfg = b._sd.config
+    assert default_cfg.clustering.num_clusters == -1
+
+
+def test_override_pipeline_cached_and_reused(fake_sherpa, monkeypatch):
+    """Two override calls with the SAME count reuse one cached pipeline (no rebuild churn)."""
+    _fake_np_sf(monkeypatch)
+    b = SherpaDiarizeBackend(seg_model=fake_sherpa["seg"], emb_model=fake_sherpa["emb"])
+    _run(b.warm_up())
+
+    _run(b.diarize(audio_path="x.wav", num_speakers=3, cancel_token=CancelToken()))
+    _run(b.diarize(audio_path="x.wav", num_speakers=3, cancel_token=CancelToken()))
+    # default(auto) + ONE count=3 pipeline (reused on the 2nd call) = 2 total.
+    assert len(_FakeSD.instances) == 2
+
+
+def test_per_call_threshold_builds_distinct_auto_pipeline(fake_sherpa, monkeypatch):
+    """A per-call threshold override (auto mode) builds its own cached pipeline, keyed by threshold."""
+    _fake_np_sf(monkeypatch)
+    b = SherpaDiarizeBackend(seg_model=fake_sherpa["seg"], emb_model=fake_sherpa["emb"])
+    _run(b.warm_up())  # default auto pipeline at threshold 0.5
+
+    _run(b.diarize(audio_path="x.wav", num_speakers=None, threshold=0.7,
+                   cancel_token=CancelToken()))
+    # default(thr 0.5) + a distinct auto pipeline at thr 0.7 = 2.
+    assert len(_FakeSD.instances) == 2
+    # The default at 0.5 is untouched.
+    assert b._sd.config.clustering.threshold == 0.5
+
+
+def test_release_clears_pipeline_cache(fake_sherpa, monkeypatch):
+    _fake_np_sf(monkeypatch)
+    b = SherpaDiarizeBackend(seg_model=fake_sherpa["seg"], emb_model=fake_sherpa["emb"])
+    _run(b.warm_up())
+    _run(b.diarize(audio_path="x.wav", num_speakers=3, cancel_token=CancelToken()))
+    assert len(b._pipelines) == 2
+    b.release()
+    assert b._pipelines == {}
+    assert b._sd is None
+
+
+# ════════════════════════════════════════════════════════════════════════════
 # Criterion 1 — config selection + NOT in the ASR fallback dict
 # ════════════════════════════════════════════════════════════════════════════
 
