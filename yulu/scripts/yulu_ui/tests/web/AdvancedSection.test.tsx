@@ -58,8 +58,8 @@ describe("AdvancedSection — cloud transcription command (TRANS-02, re-homed)",
   it("renders the cloud transcription command as a CommandEditor (array, not a key)", () => {
     mount();
     // Exact match for the label (the help text also contains the phrase).
-    expect(screen.getByText("Cloud transcription command")).toBeInTheDocument();
-    expect(screen.getAllByRole("button", { name: /\+ add arg/i }).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText("云转写命令")).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: /\+ 添加参数/i }).length).toBeGreaterThanOrEqual(1);
   });
 
   it("wraps the knobs in a collapsed-by-default Advanced disclosure (P3-2)", () => {
@@ -67,12 +67,12 @@ describe("AdvancedSection — cloud transcription command (TRANS-02, re-homed)",
     const disclosure = document.querySelector("details.adv-disclosure") as HTMLDetailsElement;
     expect(disclosure).not.toBeNull();
     expect(disclosure.open).toBe(false);
-    expect(screen.getByText(/change with care/i)).toBeInTheDocument();
+    expect(screen.getByText(/谨慎更改/i)).toBeInTheDocument();
   });
 
   it("editing the command persists transcription.cloud_command", async () => {
     mount();
-    const addArg = screen.getAllByRole("button", { name: /\+ add arg/i });
+    const addArg = screen.getAllByRole("button", { name: /\+ 添加参数/i });
     const user = userEvent.setup();
     await user.click(addArg[addArg.length - 1]!);
     await vi.waitFor(() =>
@@ -88,7 +88,7 @@ describe("AdvancedSection — cloud transcription command (TRANS-02, re-homed)",
       </MemoryRouter>,
     );
     // The editable CommandEditor ("+ add arg") is gone; a 录音中 note is shown.
-    expect(screen.queryByRole("button", { name: /\+ add arg/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /\+ 添加参数/i })).toBeNull();
     expect(screen.getByText(/录音中/)).toBeInTheDocument();
   });
 

@@ -119,9 +119,9 @@ describe("OutputSection — notion api_key_env is NAME-only, never a secret (P2-
 
   it("renders the env-var NAME in a text input (not a password field) and a database row", () => {
     mount();
-    expect(screen.getByText("Notion database")).toBeInTheDocument();
-    expect(screen.getByText("Notion API key env var")).toBeInTheDocument();
-    const input = screen.getByLabelText("Environment variable name") as HTMLInputElement;
+    expect(screen.getByText("Notion 数据库")).toBeInTheDocument();
+    expect(screen.getByText("Notion API 密钥环境变量")).toBeInTheDocument();
+    const input = screen.getByLabelText("环境变量名") as HTMLInputElement;
     expect(input.type).toBe("text");
     expect(input.value).toBe("NOTION_API_KEY");
   });
@@ -142,7 +142,7 @@ describe("OutputSection — notion api_key_env is NAME-only, never a secret (P2-
   it("shows a read-only 'set' presence hint when the env var is present (value never shown)", () => {
     envPresentReturn = { data: { present: true } };
     mount();
-    expect(screen.getByTestId("env-presence")).toHaveTextContent("set");
+    expect(screen.getByTestId("env-presence")).toHaveTextContent("已设置");
     // Only the boolean-derived label — no secret value anywhere in the DOM.
     expect(screen.queryByText(/super-secret|sk-|secret-value/i)).toBeNull();
   });
@@ -150,12 +150,12 @@ describe("OutputSection — notion api_key_env is NAME-only, never a secret (P2-
   it("shows 'not set' when the env var is absent", () => {
     envPresentReturn = { data: { present: false } };
     mount();
-    expect(screen.getByTestId("env-presence")).toHaveTextContent("not set");
+    expect(screen.getByTestId("env-presence")).toHaveTextContent("未设置");
   });
 
   it("commits the env-var NAME (trimmed) on edit", async () => {
     mount();
-    const input = screen.getByLabelText("Environment variable name") as HTMLInputElement;
+    const input = screen.getByLabelText("环境变量名") as HTMLInputElement;
     const user = userEvent.setup();
     await user.clear(input);
     await user.type(input, "MY_NOTION_KEY");
@@ -180,15 +180,15 @@ describe("OutputSection — file channel needs no extra setup", () => {
     configReturn = configWith({ channel: "file" });
     mount();
     // P4a-5: a friendly callout instead of an empty void.
-    expect(screen.getByText(/saved next to the recording/i)).toBeInTheDocument();
-    expect(screen.queryByText("Zulip stream")).toBeNull();
-    expect(screen.queryByText("Notion database")).toBeNull();
+    expect(screen.getByText(/录音旁边/)).toBeInTheDocument();
+    expect(screen.queryByText("Zulip 频道")).toBeNull();
+    expect(screen.queryByText("Notion 数据库")).toBeNull();
     expect(screen.queryByText("Telegram chat ID")).toBeNull();
   });
 
   it("non-file channels do NOT show the file note", () => {
     configReturn = configWith({ channel: "zulip", zulip: { stream: "s", topic: "t" } });
     mount();
-    expect(screen.queryByText(/saved next to the recording/i)).toBeNull();
+    expect(screen.queryByText(/录音旁边/)).toBeNull();
   });
 });

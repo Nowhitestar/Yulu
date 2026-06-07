@@ -13,7 +13,7 @@ import { PromptReaderRoute } from "../../web/src/routes/knowledge/prompts.$id.js
 // ---------- shared mock state ----------
 const LIST_DATA = [
   { id: "id-1", slug: "default",  name: "Default Summary", category: "summary",   content: "x", is_auto_run: 1, source: "seed",   sort_order: 0, note: null, created_at: "", updated_at: "" },
-  { id: "id-2", slug: "cleanup",  name: "Cleanup",          category: "cleanup",   content: "y", is_auto_run: 0, source: "seed",   sort_order: 1, note: null, created_at: "", updated_at: "" },
+  { id: "id-2", slug: "cleanup",  name: "清理",          category: "cleanup",   content: "y", is_auto_run: 0, source: "seed",   sort_order: 1, note: null, created_at: "", updated_at: "" },
   { id: "id-3", slug: "action-items", name: "Action Items", category: "summary", content: "z", is_auto_run: 0, source: "manual", sort_order: 2, note: null, created_at: "", updated_at: "" },
 ];
 
@@ -80,7 +80,7 @@ describe("Prompts page", () => {
     mount();
     const names = rowNames();
     expect(names).toContain("Default Summary");
-    expect(names).toContain("Cleanup");
+    expect(names).toContain("清理");
     expect(names).toContain("Action Items");
     // Category chips inside rows: one per row
     const rows = screen.getAllByTestId("prompt-row");
@@ -109,7 +109,7 @@ describe("Prompts page", () => {
     const names = rowNames();
     expect(names).toContain("Default Summary");
     expect(names).toContain("Action Items"); // also a summary-category prompt
-    expect(names).not.toContain("Cleanup");
+    expect(names).not.toContain("清理");
   });
 
   it("index outlet renders empty state when no :id selected", () => {

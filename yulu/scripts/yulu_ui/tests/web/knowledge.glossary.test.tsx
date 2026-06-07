@@ -46,10 +46,10 @@ function mount() {
 describe("Glossary page", () => {
   it("renders 3 rows + 4 column headers (Term/Pinyin/Notes/Last edited)", () => {
     mount();
-    expect(screen.getByText("Term")).toBeInTheDocument();
-    expect(screen.getByText("Pinyin")).toBeInTheDocument();
-    expect(screen.getByText("Notes")).toBeInTheDocument();
-    expect(screen.getByText("Last edited")).toBeInTheDocument();
+    expect(screen.getByText("术语")).toBeInTheDocument();
+    expect(screen.getByText("拼音")).toBeInTheDocument();
+    expect(screen.getByText("备注")).toBeInTheDocument();
+    expect(screen.getByText("最后编辑")).toBeInTheDocument();
     expect(screen.getByText("AgentKey")).toBeInTheDocument();
     expect(screen.getByText("OpenClaw")).toBeInTheDocument();
     expect(screen.getByText("Yulu")).toBeInTheDocument();

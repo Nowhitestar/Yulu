@@ -73,16 +73,16 @@ function mount() {
 describe("AutomationSection — meeting detection (P2-3)", () => {
   it("renders all four meeting_detection fields with their current values", () => {
     mount();
-    expect(screen.getByText("Automation")).toBeInTheDocument();
-    expect(screen.getByText("Meeting detection")).toBeInTheDocument();
-    expect(screen.getByText("Poll interval (s)")).toBeInTheDocument();
-    expect(screen.getByText("Stable window (s)")).toBeInTheDocument();
-    expect(screen.getByText("Prompt cooldown (s)")).toBeInTheDocument();
+    expect(screen.getByText("自动化")).toBeInTheDocument();
+    expect(screen.getByText("会议检测")).toBeInTheDocument();
+    expect(screen.getByText("轮询间隔（秒）")).toBeInTheDocument();
+    expect(screen.getByText("稳定窗口（秒）")).toBeInTheDocument();
+    expect(screen.getByText("提示冷却（秒）")).toBeInTheDocument();
   });
 
   it("toggling Meeting detection commits meeting_detection.enabled", async () => {
     mount();
-    const row = screen.getByText("Meeting detection").closest(".row")!;
+    const row = screen.getByText("会议检测").closest(".row")!;
     const sw = within(row as HTMLElement).getByRole("switch");
     const user = userEvent.setup();
     await user.click(sw);
@@ -93,7 +93,7 @@ describe("AutomationSection — meeting detection (P2-3)", () => {
 
   it("editing Poll interval commits meeting_detection.interval_sec as a number", async () => {
     mount();
-    const row = screen.getByText("Poll interval (s)").closest(".row")!;
+    const row = screen.getByText("轮询间隔（秒）").closest(".row")!;
     const user = userEvent.setup();
     await user.click(within(row as HTMLElement).getByText("10"));
     const input = within(row as HTMLElement).getByRole("spinbutton") as HTMLInputElement;
@@ -108,14 +108,14 @@ describe("AutomationSection — meeting detection (P2-3)", () => {
   it("falls back to defaults when meeting_detection is absent (no crash)", () => {
     configReturn = { data: {}, isPending: false };
     expect(() => mount()).not.toThrow();
-    const row = screen.getByText("Poll interval (s)").closest(".row")!;
+    const row = screen.getByText("轮询间隔（秒）").closest(".row")!;
     expect(within(row as HTMLElement).getByText("10")).toBeInTheDocument();
   });
 
   it("recording-guard — while recording, the restart-class fields lock and edits are dropped", async () => {
     recordingState = "recording";
     mount();
-    const row = screen.getByText("Meeting detection").closest(".row")!;
+    const row = screen.getByText("会议检测").closest(".row")!;
     // The interactive switch is replaced by a read-only display + a 录音中 note.
     expect(within(row as HTMLElement).queryByRole("switch")).toBeNull();
     expect(within(row as HTMLElement).getByText(/录音中/)).toBeInTheDocument();
@@ -131,33 +131,33 @@ describe("AutomationSection — advanced match arrays disclosure (P3-2)", () => 
     // Collapsed by default.
     expect(disclosure.open).toBe(false);
     // The "change with care" note is on the summary.
-    expect(screen.getByText(/change with care/i)).toBeInTheDocument();
+    expect(screen.getByText(/谨慎更改/i)).toBeInTheDocument();
     // The array field labels are in the DOM (details keeps children mounted) but
     // the summary itself is the only thing visible until expanded.
-    expect(screen.getByText("Window title keywords")).toBeInTheDocument();
+    expect(screen.getByText("窗口标题关键词")).toBeInTheDocument();
   });
 
   it("expands to reveal the five array editors", async () => {
     mount();
     const disclosure = document.querySelector("details.adv-disclosure") as HTMLDetailsElement;
     const user = userEvent.setup();
-    await user.click(screen.getByText(/Advanced/));
+    await user.click(screen.getByText(/高级/));
     expect(disclosure.open).toBe(true);
     for (const label of ["Window title keywords", "App name hints", "Target app names", "Dedicated meeting apps", "Ignore window keywords"]) {
       expect(screen.getByText(label)).toBeInTheDocument();
     }
     // Each array renders as a CommandEditor (its "+ Add arg" affordance).
-    expect(screen.getAllByRole("button", { name: /\+ add arg/i }).length).toBe(5);
+    expect(screen.getAllByRole("button", { name: /\+ 添加参数/i }).length).toBe(5);
   });
 
   it("editing an array commits the full new array for that key", async () => {
     mount();
     const user = userEvent.setup();
-    await user.click(screen.getByText(/Advanced/));
+    await user.click(screen.getByText(/高级/));
     // The window_keywords editor: find its add-arg button (first array block).
-    const kwLabel = screen.getByText("Window title keywords");
+    const kwLabel = screen.getByText("窗口标题关键词");
     const block = kwLabel.closest(".array-field")!;
-    const addArg = within(block as HTMLElement).getByRole("button", { name: /\+ add arg/i });
+    const addArg = within(block as HTMLElement).getByRole("button", { name: /\+ 添加参数/i });
     await user.click(addArg);
     await vi.waitFor(() =>
       expect(updateMutate.mock.calls.some((c) => c[0]?.key === "meeting_detection.window_keywords")).toBe(true),
@@ -171,7 +171,7 @@ describe("AutomationSection — advanced match arrays disclosure (P3-2)", () => 
     recordingState = "recording";
     mount();
     // The arrays are restart-class — while recording they render read-only.
-    expect(screen.queryByRole("button", { name: /\+ add arg/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /\+ 添加参数/i })).toBeNull();
     // At least one 录音中 note is shown for the locked arrays.
     expect(screen.getAllByText(/录音中/).length).toBeGreaterThan(0);
   });

@@ -31,25 +31,25 @@ beforeEach(() => navigateMock.mockClear());
 describe("GlobalSearch — settings scope", () => {
   it("a query matching a setting label yields a setting hit", async () => {
     const { getByPlaceholderText, container } = render(<GlobalSearch />);
-    fireEvent.change(getByPlaceholderText("Search"), { target: { value: "麦克风" } });
+    fireEvent.change(getByPlaceholderText("搜索"), { target: { value: "麦克风" } });
     const badge = await waitFor(() => {
       const el = container.querySelector(".gs-kind-setting");
       expect(el).not.toBeNull();
       return el!;
     });
-    expect(badge.textContent).toBe("setting");
+    expect(badge.textContent).toBe("设置");
   });
 
   it("a query matching a category label yields that category's hit", async () => {
     const { getByPlaceholderText, container } = render(<GlobalSearch />);
     // "转写" is the Chinese label for the transcription category.
-    fireEvent.change(getByPlaceholderText("Search"), { target: { value: "转写" } });
+    fireEvent.change(getByPlaceholderText("搜索"), { target: { value: "转写" } });
     await waitFor(() => expect(container.querySelector(".gs-kind-setting")).not.toBeNull());
   });
 
   it("clicking a setting hit navigates to /settings/:category", async () => {
     const { getByPlaceholderText, container } = render(<GlobalSearch />);
-    fireEvent.change(getByPlaceholderText("Search"), { target: { value: "麦克风" } });
+    fireEvent.change(getByPlaceholderText("搜索"), { target: { value: "麦克风" } });
     const target = await waitFor(() => {
       const row = container.querySelector(".gs-result") as HTMLElement | null;
       expect(row).not.toBeNull();
@@ -61,7 +61,7 @@ describe("GlobalSearch — settings scope", () => {
 
   it("a non-matching query produces no setting hits", async () => {
     const { getByPlaceholderText, container } = render(<GlobalSearch />);
-    fireEvent.change(getByPlaceholderText("Search"), { target: { value: "zzzznotathing" } });
+    fireEvent.change(getByPlaceholderText("搜索"), { target: { value: "zzzznotathing" } });
     // Give the debounce time to settle; still no setting badge.
     await new Promise((r) => setTimeout(r, 250));
     expect(container.querySelector(".gs-kind-setting")).toBeNull();

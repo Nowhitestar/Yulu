@@ -71,8 +71,8 @@ describe("RecordingReader", () => {
   it("renders Re-transcribe + Re-generate summary buttons", () => {
     getMock.mockReturnValue({ data: { stem: "Memo_20260101_120000", title: "Memo", mtimeMs: 1, transcript: "t", summary: "s", realtime: null, hasRealtime: false, status: "idle" }, isPending: false });
     renderAt("Memo_20260101_120000");
-    expect(screen.getByRole("button", { name: /Re-transcribe/i })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Re-generate summary/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /重新转写/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /重新生成摘要/i })).toBeInTheDocument();
   });
 
   it("renders the summary through MarkdownView, not a raw <pre>", () => {
@@ -87,7 +87,7 @@ describe("RecordingReader", () => {
     getMock.mockReturnValue({ data: baseData, isPending: false });
     renderAt(baseData.stem);
     fireEvent.click(screen.getByRole("button", { name: /TeamSync/ }));
-    const input = screen.getByLabelText("Recording title") as HTMLInputElement;
+    const input = screen.getByLabelText("录音标题") as HTMLInputElement;
     fireEvent.change(input, { target: { value: "Q3 Planning" } });
     fireEvent.keyDown(input, { key: "Enter" });
     expect(renameMutate).toHaveBeenCalledWith(
@@ -100,7 +100,7 @@ describe("RecordingReader", () => {
     getMock.mockReturnValue({ data: baseData, isPending: false });
     renderAt(baseData.stem);
     fireEvent.click(screen.getByRole("button", { name: /TeamSync/ }));
-    const input = screen.getByLabelText("Recording title");
+    const input = screen.getByLabelText("录音标题");
     fireEvent.change(input, { target: { value: "nope" } });
     fireEvent.keyDown(input, { key: "Escape" });
     expect(renameMutate).not.toHaveBeenCalled();
@@ -111,7 +111,7 @@ describe("RecordingReader", () => {
     renderAt(baseData.stem);
     expect(screen.getByText("work")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /add tag/i }));
-    const input = screen.getByPlaceholderText("tag…");
+    const input = screen.getByPlaceholderText("标签…");
     fireEvent.change(input, { target: { value: "client" } });
     fireEvent.keyDown(input, { key: "Enter" });
     expect(setTagsMutate).toHaveBeenCalledWith(

@@ -24,7 +24,7 @@ describe("PromptReader — existing prompt", () => {
     render(<PromptReader prompt={EXISTING} onSave={vi.fn()} onDelete={vi.fn()} />);
     expect((screen.getByLabelText(/^name$/i) as HTMLInputElement).value).toBe("Default Summary");
     expect((screen.getByLabelText(/^slug$/i) as HTMLInputElement).value).toBe("default");
-    expect((screen.getByLabelText(/^category$/i) as HTMLSelectElement).value).toBe("summary");
+    expect((screen.getByLabelText(/^category$/i) as HTMLSelectElement).value).toBe("摘要");
     expect(screen.getByRole("switch")).toHaveAttribute("aria-checked", "true");
     expect((screen.getByLabelText(/^content$/i) as HTMLTextAreaElement).value).toBe("Summarize this meeting.");
   });
