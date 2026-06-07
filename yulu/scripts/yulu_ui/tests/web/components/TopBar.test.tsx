@@ -73,6 +73,6 @@ describe("TopBar", () => {
   it("renders the ThemeToggle in TopBar", () => {
     setMatches([{ breadcrumb: "Inbox" }]);
     const { container } = render(<Wrap><TopBar /></Wrap>);
-    expect(container.querySelector('[role="group"][aria-label="Theme"]')).not.toBeNull();
+    expect(container.querySelector('[role="group"][aria-label="主题"]')).not.toBeNull();
   });
 });

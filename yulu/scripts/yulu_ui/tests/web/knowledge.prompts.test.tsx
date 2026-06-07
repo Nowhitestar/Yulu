@@ -114,7 +114,7 @@ describe("Prompts page", () => {
 
   it("index outlet renders empty state when no :id selected", () => {
     mount();
-    expect(screen.getByText(/select a prompt/i)).toBeInTheDocument();
+    expect(screen.getByText(/选择一条提示词/)).toBeInTheDocument();
   });
 });
 

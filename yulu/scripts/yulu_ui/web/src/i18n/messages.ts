@@ -360,6 +360,14 @@ export const en: Messages = {
   "test.ok": "✓ ok",
   "test.failed": "✗ failed",
   "test.closeAria": "Close",
+  "player.play": "Play",
+  "player.pause": "Pause",
+  "split.resizeAria": "Resize panel",
+  "prompts.selectHint": "Select a prompt to edit.",
+  "theme.aria": "Theme",
+  "theme.auto": "Auto",
+  "theme.light": "Light",
+  "theme.dark": "Dark",
 
   // ---- CloudWarn (InlineEditRow) ----
   "cloudWarn.aria": "Cloud folder warning",
@@ -790,6 +798,14 @@ export const zh: Messages = {
   "test.ok": "✓ 成功",
   "test.failed": "✗ 失败",
   "test.closeAria": "关闭",
+  "player.play": "播放",
+  "player.pause": "暂停",
+  "split.resizeAria": "调整面板大小",
+  "prompts.selectHint": "选择一条提示词进行编辑。",
+  "theme.aria": "主题",
+  "theme.auto": "自动",
+  "theme.light": "浅色",
+  "theme.dark": "深色",
 
   // ---- CloudWarn (InlineEditRow) ----
   "cloudWarn.aria": "云同步文件夹警告",

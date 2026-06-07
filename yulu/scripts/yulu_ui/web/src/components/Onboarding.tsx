@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { trpc } from "../trpc.js";
+import { useT } from "../i18n/LanguageProvider.js";
 import "../onboarding.css";
 
 // localStorage hint so a returning user never flashes the overlay before the
@@ -31,34 +32,16 @@ interface Capability {
   detail: string;
 }
 
-// The few capabilities the first-run walkthrough reflects, with friendly copy.
-// `key` matches the host_capabilities report name; the line shown depends on
-// whether the report says the capability is usable/present/absent.
-const WALKTHROUGH: { key: string; label: string; ok: string; missing: string }[] = [
-  {
-    key: "recording_dir",
-    label: "Recording folder",
-    ok: "Recording folder ready — your meetings stay on this machine.",
-    missing: "Recording folder not set up yet — Yulu will help in setup.",
-  },
-  {
-    key: "claude",
-    label: "Coding agent (Claude)",
-    ok: "Your coding agent is detected — Yulu reuses it to write notes.",
-    missing: "Coding agent not detected — install it, then Yulu will use it.",
-  },
-  {
-    key: "whisper_cli",
-    label: "Whisper transcription",
-    ok: "Whisper is ready — transcription runs on-device, no cloud.",
-    missing: "Whisper not detected — Yulu will help set up transcription.",
-  },
-  {
-    key: "models",
-    label: "Transcription model",
-    ok: "A transcription model is available on this machine.",
-    missing: "No transcription model yet — Yulu will fetch one in setup.",
-  },
+// The few capabilities the first-run walkthrough reflects. `key` matches the
+// host_capabilities report name; `i18n` is the message-key stem whose
+// `.label/.ok/.missing` copy is resolved at render time (keys live in
+// messages.ts). The two differ (recording_dir vs recordingDir, whisper_cli vs
+// whisper) so the report-name and the copy-name are kept as separate fields.
+const WALKTHROUGH: { key: string; i18n: string }[] = [
+  { key: "recording_dir", i18n: "recordingDir" },
+  { key: "claude", i18n: "claude" },
+  { key: "whisper_cli", i18n: "whisper" },
+  { key: "models", i18n: "models" },
 ];
 
 type StatusKind = "usable" | "present" | "absent" | "unknown";
@@ -89,6 +72,7 @@ function statusKind(cap: Capability | undefined, degraded: boolean): StatusKind 
  * shape renders "couldn't check" placeholders instead of crashing.
  */
 export function Onboarding() {
+  const t = useT();
   // Read the localStorage hint synchronously on first render so a returning
   // user never sees a flash before the config query resolves (Test 4).
   const [dismissedLocal, setDismissedLocal] = useState<boolean>(() => readLocalDismissed());
@@ -125,18 +109,18 @@ export function Onboarding() {
 
   return (
     <div className="onboarding-scrim">
-      <div className="onboarding-card" role="dialog" aria-modal="true" aria-label="Welcome to Yulu">
+      <div className="onboarding-card" role="dialog" aria-modal="true" aria-label={t("onboarding.aria")}>
         <div className="onboarding-head">
           <div>
-            <h2 className="onboarding-title">Welcome to Yulu</h2>
-            <p className="onboarding-sub">Here&apos;s what Yulu can see on your machine.</p>
+            <h2 className="onboarding-title">{t("onboarding.title")}</h2>
+            <p className="onboarding-sub">{t("onboarding.sub")}</p>
           </div>
           <button
             type="button"
             className="onboarding-skip"
             onClick={() => { void handleSkip(); }}
           >
-            Skip
+            {t("onboarding.skip")}
           </button>
         </div>
 
@@ -145,15 +129,15 @@ export function Onboarding() {
             const kind = statusKind(caps[item.key], degraded);
             const line =
               kind === "unknown"
-                ? "Couldn't check this right now — you can do it in setup."
+                ? t("onboarding.unknown")
                 : kind === "absent"
-                  ? item.missing
-                  : item.ok;
+                  ? t(`onboarding.${item.i18n}.missing`)
+                  : t(`onboarding.${item.i18n}.ok`);
             return (
               <li className="onboarding-item" key={item.key}>
                 <span className="onboarding-dot" data-status={kind} aria-hidden="true" />
                 <span className="onboarding-item-body">
-                  <span className="onboarding-item-label">{item.label}</span>
+                  <span className="onboarding-item-label">{t(`onboarding.${item.i18n}.label`)}</span>
                   <span className="onboarding-item-line">{line}</span>
                 </span>
               </li>
@@ -167,7 +151,7 @@ export function Onboarding() {
             className="onboarding-done"
             onClick={() => { void handleSkip(); }}
           >
-            Got it
+            {t("onboarding.done")}
           </button>
         </div>
       </div>

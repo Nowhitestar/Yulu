@@ -24,7 +24,7 @@ describe("AudioPlayer", () => {
 
   it("disables Play button when not ready", () => {
     render(<AudioPlayer src="a.wav" />);
-    const btn = screen.getByRole("button", { name: /play|pause/i });
+    const btn = screen.getByRole("button", { name: /播放|暂停/ });
     expect(btn).toBeDisabled();
   });
 
@@ -35,7 +35,7 @@ describe("AudioPlayer", () => {
     act(() => {
       readyCall![1]!();
     });
-    const btn = screen.getByRole("button", { name: /play|pause/i });
+    const btn = screen.getByRole("button", { name: /播放|暂停/ });
     expect(btn).not.toBeDisabled();
   });
 
@@ -50,8 +50,8 @@ describe("AudioPlayer", () => {
       playA![1]!();
     });
     rerender(<AudioPlayer src="b.wav" />);
-    const btn = screen.getByRole("button", { name: /play|pause/i });
-    expect(btn.getAttribute("aria-label")).toBe("Play");
+    const btn = screen.getByRole("button", { name: /播放|暂停/ });
+    expect(btn.getAttribute("aria-label")).toBe("播放");
   });
 
   it("destroys the wavesurfer instance on src change", () => {
@@ -68,7 +68,7 @@ describe("AudioPlayer", () => {
       readyA![1]!();
     });
     rerender(<AudioPlayer src="b.wav" />);
-    const btn = screen.getByRole("button", { name: /play|pause/i });
+    const btn = screen.getByRole("button", { name: /播放|暂停/ });
     expect(btn).toBeDisabled();
   });
 });

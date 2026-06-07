@@ -17,17 +17,17 @@ function mount() {
 describe("ThemeToggle", () => {
   it("renders three segments: Auto, Light, Dark", () => {
     mount();
-    expect(screen.getByRole("button", { name: /auto/i })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /light/i })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /dark/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /自动/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /浅色/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /深色/ })).toBeInTheDocument();
   });
 
   it("marks the active choice with aria-pressed", async () => {
     mount();
     const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: /light/i }));
-    expect(screen.getByRole("button", { name: /light/i })).toHaveAttribute("aria-pressed", "true");
-    expect(screen.getByRole("button", { name: /dark/i })).toHaveAttribute("aria-pressed", "false");
+    await user.click(screen.getByRole("button", { name: /浅色/ }));
+    expect(screen.getByRole("button", { name: /浅色/ })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: /深色/ })).toHaveAttribute("aria-pressed", "false");
     expect(localStorage.getItem("yulu_theme")).toBe("light");
   });
 
@@ -35,7 +35,7 @@ describe("ThemeToggle", () => {
     localStorage.setItem("yulu_theme", "dark");
     mount();
     const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: /auto/i }));
+    await user.click(screen.getByRole("button", { name: /自动/ }));
     expect(localStorage.getItem("yulu_theme")).toBeNull();
   });
 });

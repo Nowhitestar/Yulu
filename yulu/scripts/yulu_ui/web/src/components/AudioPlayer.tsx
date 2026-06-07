@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import WaveSurfer from "wavesurfer.js";
 import { Play, Pause } from "lucide-react";
+import { useT } from "../i18n/LanguageProvider.js";
 import "./AudioPlayer.css";
 
 export interface AudioPlayerProps {
@@ -10,6 +11,7 @@ export interface AudioPlayerProps {
 }
 
 export function AudioPlayer({ src, initialSeek, onSeek }: AudioPlayerProps) {
+  const t = useT();
   const containerRef = useRef<HTMLDivElement>(null);
   const wsRef = useRef<ReturnType<typeof WaveSurfer.create> | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -76,7 +78,7 @@ export function AudioPlayer({ src, initialSeek, onSeek }: AudioPlayerProps) {
         className="audioplayer-play"
         onClick={toggle}
         disabled={!ready}
-        aria-label={isPlaying ? "Pause" : "Play"}
+        aria-label={isPlaying ? t("player.pause") : t("player.play")}
       >
         {isPlaying ? <Pause size={14} strokeWidth={1.75} /> : <Play size={14} strokeWidth={1.75} />}
       </button>
