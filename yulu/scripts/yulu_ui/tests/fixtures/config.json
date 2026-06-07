@@ -17,8 +17,7 @@
     "command": ["claude", "--print"]
   },
   "status_agent": {
-    "enabled": true,
-    "hotkey": { "key": "V", "modifiers": ["cmd", "shift"] }
+    "enabled": true
   },
   "calendars": []
 }

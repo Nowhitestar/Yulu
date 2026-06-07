@@ -22,7 +22,7 @@ vi.mock("../../../web/src/trpc.js", () => {
       mlx: { model: "", final_model: "", preprocess_audio: false, passthrough_max_sec: 0, passthrough_max_bytes: 0 },
     },
     llm: { enabled: false, command: [] },
-    status_agent: { enabled: false, hotkey: { key: "V", modifiers: ["cmd", "shift"] } },
+    status_agent: { enabled: false },
     calendars: [],
   };
   const noopMutation = () => ({

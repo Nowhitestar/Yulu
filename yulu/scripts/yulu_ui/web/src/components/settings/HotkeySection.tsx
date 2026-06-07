@@ -1,6 +1,5 @@
 import { trpc } from "../../trpc.js";
 import { InlineEditRow } from "../InlineEditRow.js";
-import { HotkeyCapture, type HotkeyValue } from "../HotkeyCapture.js";
 import { ThemeToggle } from "../ThemeToggle.js";
 import type { SettingsRestartTracker } from "../../hooks/useSettingsRestartTracker.js";
 
@@ -19,7 +18,6 @@ export function HotkeySection({ tracker }: HotkeySectionProps) {
   if (!cfg) return null;
 
   const statusAgent = cfg.status_agent;
-  const hotkey: HotkeyValue = statusAgent?.hotkey ?? { key: "V", modifiers: ["cmd", "shift"] };
 
   return (
     <section id="hotkey" className="settings-section">
@@ -32,16 +30,6 @@ export function HotkeySection({ tracker }: HotkeySectionProps) {
         onCommit={(v) => updateMut.mutateAsync({ key: "status_agent.enabled", value: v })}
         status={tracker.statusFor("status_agent.enabled")}
       />
-      <div className="row">
-        <div className="row-label">Hotkey</div>
-        <div className="row-value">
-          <HotkeyCapture
-            value={hotkey}
-            onCommit={(v) => updateMut.mutateAsync({ key: "status_agent.hotkey", value: v })}
-          />
-        </div>
-        <div className="row-status" />
-      </div>
       <div className="row">
         <div className="row-label">UI theme</div>
         <div className="row-value"><ThemeToggle /></div>
