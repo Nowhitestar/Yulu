@@ -251,6 +251,27 @@ def _handle_summary_request(
         if sys_path.exists():
             their_transcript = sys_path.read_text(encoding="utf-8")
 
+    # Phase 13 (diarization): read the <stem>.speakers.json sidecar if it exists and expose the
+    # speaker-attributed transcript + a compact roster via ONE additive prompt-var pair. The
+    # sidecar is the source-of-truth (criterion 4): the labelled transcript is rendered FROM it
+    # (resolving renames/merges) rather than re-deriving labels. Absent sidecar → both "" so every
+    # existing prompt renders EXACTLY unchanged (the same backward-compat property the dual-track
+    # vars rely on). DATA only — no UI (criterion 3: export carries labels via these vars).
+    speaker_transcript = ""
+    speaker_list = ""
+    if audio_path is not None:
+        speakers_path = audio_path.with_suffix(".speakers.json")
+        if speakers_path.exists():
+            try:
+                from stt_daemon import speaker_merge as _sm
+                _doc = _sm.read_sidecar(speakers_path)
+                speaker_transcript = _sm.render_from_sidecar(_doc)
+                speaker_list = _sm.speaker_roster(_doc)
+            except Exception as exc:
+                _log(f"speakers sidecar read failed for {speakers_path}: {exc}")
+                speaker_transcript = ""
+                speaker_list = ""
+
     # Single-pass substitution via a throwaway Prompt-shaped object so we
     # share the PromptsCache.render() codepath (and test coverage).
     from prompts.db import Prompt, Category, Source
@@ -274,6 +295,8 @@ def _handle_summary_request(
         date=date,
         my_transcript=my_transcript,
         their_transcript=their_transcript,
+        speaker_transcript=speaker_transcript,
+        speaker_list=speaker_list,
     )
 
     # cleanup slug writes back to transcript_path

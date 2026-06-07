@@ -698,6 +698,47 @@ def prior_map_from_sidecar(doc: dict) -> dict[int, str]:
     return prior
 
 
+def speaker_roster(doc: dict) -> str:
+    """Compact human roster of the meeting's speakers for the ``{{speaker_list}}`` prompt var.
+
+    Built from the sidecar ``speakers`` map: each surviving (non-merged-away) speaker's resolved
+    ``display_name``, deduped, in segment-appearance order so the most-heard speakers come first.
+    Merged-away ids (``merged_into`` set) are skipped — their segments already resolve to the
+    surviving label. ``UNKNOWN`` is included only if it actually labelled a segment, so the agent
+    knows some speech is unattributed (criterion 4: uncertainty surfaced, not hidden).
+
+    Example: ``"Lewis, Speaker 2, Unknown"``. Empty string when there are no speakers.
+    """
+    speakers = doc.get("speakers", {}) or {}
+    segments = doc.get("segments", []) or []
+
+    ordered_ids: list[str] = []
+    seen: set[str] = set()
+    for seg in segments:
+        sid = seg.get("speaker_id")
+        if sid and sid not in seen:
+            seen.add(sid)
+            ordered_ids.append(sid)
+    # Append any map-only ids (no segment) after the appearance-ordered ones.
+    for sid in speakers:
+        if sid not in seen:
+            seen.add(sid)
+            ordered_ids.append(sid)
+
+    names: list[str] = []
+    seen_names: set[str] = set()
+    for sid in ordered_ids:
+        entry = speakers.get(sid)
+        # Skip speakers that were merged away (their label resolves to the survivor).
+        if isinstance(entry, dict) and entry.get("merged_into"):
+            continue
+        name = _resolve_display_name(sid, speakers)
+        if name and name not in seen_names:
+            seen_names.add(name)
+            names.append(name)
+    return ", ".join(names)
+
+
 def apply_rename(doc: dict, speaker_id: str, display_name: str) -> dict:
     """Set a speaker's ``display_name`` and mark it ``renamed: true`` (used by the UI later; here
     so tests can prove a rename survives re-diarize). Returns the mutated doc."""
