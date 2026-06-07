@@ -23,6 +23,12 @@ from realtime_coverage import realtime_coverage_ok as _realtime_coverage_ok
 CONFIG_PATH = Path.home() / ".config" / "yulu" / "config.json"
 PROMPTS_DB = Path.home() / ".config" / "yulu" / "prompts.sqlite"
 AGENT_QUEUE_PATH = Path.home() / ".config" / "yulu" / "agent-queue.json"
+# v0.6 diarization (Phase 13): the calendar-attendee prior is read from these two files that the
+# recording pipeline already maintains — the recording state (carries the linked `meeting_id`) and
+# the day's schedule (carries each meeting's `attendees`). Both are read-only here; module-level so
+# tests can point them at fixtures (mirrors CONFIG_PATH / PROMPTS_DB / AGENT_QUEUE_PATH).
+STATE_PATH = Path.home() / ".config" / "yulu" / ".state.json"
+SCHEDULE_PATH = Path.home() / ".config" / "yulu" / "schedule.json"
 
 FAST_POST_RECORDING_MODE = "fast_summary"
 FULL_POST_RECORDING_MODE = "full_transcribe"
@@ -69,6 +75,81 @@ def read_realtime_transcript(path: Path) -> Optional[str]:
         if isinstance(parsed, (list, dict)):
             return None
     return text
+
+
+def _load_json_file(path: Path):
+    """Best-effort JSON read; returns None on any error (missing / malformed)."""
+    try:
+        if not path.exists():
+            return None
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def _resolve_attendee_count(
+    audio_path: Path,
+    *,
+    meeting_title: str = "",
+    state_path: Optional[Path] = None,
+    schedule_path: Optional[Path] = None,
+) -> Optional[int]:
+    """Resolve the calendar-attendee speaker-count prior for a recording (Phase-12 free prior).
+
+    The attendee count was already captured into ``schedule.json`` at calendar-scan time, so this
+    needs NO network / no ``gog`` call at transcribe time. Linkage strategy (first hit wins):
+
+      1. ``meeting_id`` — read the recording state (``.state.json``) for the linked calendar event
+         id and look it up in ``schedule.json`` ``meetings`` by ``id``.
+      2. ``meeting_title`` — fall back to matching the recording's title against a meeting's
+         ``title`` (manual / re-transcribe recordings whose state has moved on).
+
+    Returns ``len(attendees)`` when a linked meeting carries a non-empty attendee list, else
+    ``None`` (→ the strategy ladder uses auto threshold clustering). NEVER raises — any missing
+    file, malformed JSON, or absent link degrades to ``None`` (no prior), which is exactly the
+    graceful default Phase 12 expects.
+    """
+    state_path = Path(state_path) if state_path is not None else STATE_PATH
+    schedule_path = Path(schedule_path) if schedule_path is not None else SCHEDULE_PATH
+
+    schedule = _load_json_file(schedule_path)
+    if not isinstance(schedule, dict):
+        return None
+    meetings = schedule.get("meetings")
+    if not isinstance(meetings, list) or not meetings:
+        return None
+
+    def _count(meeting) -> Optional[int]:
+        if not isinstance(meeting, dict):
+            return None
+        attendees = meeting.get("attendees")
+        if isinstance(attendees, list) and attendees:
+            return len(attendees)
+        return None
+
+    # (1) meeting_id from the recording state.
+    state = _load_json_file(state_path)
+    meeting_id = ""
+    if isinstance(state, dict):
+        meeting_id = str(state.get("meeting_id") or "").strip()
+    if meeting_id:
+        for m in meetings:
+            if isinstance(m, dict) and str(m.get("id") or "") == meeting_id:
+                n = _count(m)
+                if n is not None:
+                    return n
+                break  # linked but no usable attendee list → fall through to title match
+
+    # (2) title match (recording title derived from the stem).
+    title = (meeting_title or "").strip()
+    if title:
+        for m in meetings:
+            if isinstance(m, dict) and str(m.get("title") or "").strip() == title:
+                n = _count(m)
+                if n is not None:
+                    return n
+
+    return None
 
 
 def _request_final_transcribe_raw(audio_path: Path, trans_cfg: dict, meeting_title: str) -> dict:
