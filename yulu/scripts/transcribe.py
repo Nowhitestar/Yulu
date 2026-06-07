@@ -191,6 +191,178 @@ def _enqueue_summary_request(*, prompt, audio_path, transcript_path,
     )
 
 
+def _diarization_enabled(trans_cfg: dict) -> bool:
+    """True iff ``transcription.diarization.enabled`` is set. Default OFF → today's pipeline."""
+    diar = trans_cfg.get("diarization", {})
+    return bool(diar.get("enabled")) if isinstance(diar, dict) else False
+
+
+def _diarize_via_daemon(
+    audio_path: Path, *, num_speakers, threshold, language,
+) -> Optional[list]:
+    """Ask the daemon to diarize → list of turn dicts, or ``None`` on ANY failure.
+
+    Wraps :func:`transcribe_client.request_diarize`. The live runtime (Python 3.14) may not have
+    sherpa installed yet (Phase 15/PORT-01), so a missing backend / missing sherpa comes back as a
+    ``DaemonError`` and a dead daemon as ``DaemonUnavailable`` — BOTH are swallowed to ``None`` so
+    the caller degrades to today's plain transcript. Never raises.
+    """
+    try:
+        from transcribe_client import request_diarize, DaemonUnavailable, DaemonError
+        resp = request_diarize(
+            wav=str(audio_path), num_speakers=num_speakers,
+            threshold=threshold, language=language,
+        )
+        return resp.get("turns", []) or []
+    except (DaemonUnavailable, DaemonError) as exc:
+        print(f"⚠️ 说话人分离不可用，使用普通转录: {exc}", file=sys.stderr)
+        return None
+    except Exception as exc:  # defensive: never let diarize break the pipeline
+        print(f"⚠️ 说话人分离失败，使用普通转录: {exc}", file=sys.stderr)
+        return None
+
+
+def _run_diarize_stage(
+    *,
+    audio_path: Path,
+    transcript_path: Path,
+    asr_segments: list,
+    trans_cfg: dict,
+    meeting_title: str,
+) -> bool:
+    """ASR → diarize → speaker_merge → persist labelled transcript + ``.speakers.json`` + reindex.
+
+    Runs ONLY when ``transcription.diarization.enabled``. Returns True when speaker labels were
+    written, False when the stage degraded (and today's plain transcript is left untouched).
+
+    Graceful degrade (criterion 1) — returns False, leaves the plain transcript, writes NO sidecar,
+    NEVER raises — on any of: diarization disabled, no timestamped ASR segments, the daemon/backend
+    unavailable (incl. sherpa not installed on the 3.14 runtime), or zero turns.
+
+    Re-diarize safety (criterion 1): when a prior ``.speakers.json`` exists, its ``prior_map`` +
+    raw turns re-anchor the fresh cluster indices to the existing stable ``speaker_id``s, so user
+    renames carried in the sidecar survive. Source-of-truth / no-laundering (criterion 4): the
+    sidecar is written verbatim from ``assign_speakers`` (which already flags low-confidence /
+    UNKNOWN / hallucination segments) and the labelled ``.transcript.txt`` is the diarize output,
+    NOT a cleanup rewrite — the cleanup prompt still overwrites ``.transcript.txt`` later.
+    """
+    if not _diarization_enabled(trans_cfg):
+        return False
+    if not asr_segments:
+        print("⚠️ 无带时间戳的转录片段，跳过说话人分离", file=sys.stderr)
+        return False
+
+    from stt_daemon import speaker_merge as sm
+
+    language = trans_cfg.get("language", "zh")
+    diar_cfg = trans_cfg.get("diarization", {}) if isinstance(trans_cfg.get("diarization"), dict) else {}
+    config_num_speakers = diar_cfg.get("num_speakers")
+    config_threshold = diar_cfg.get("threshold")
+
+    # Phase-12 count strategy: calendar-attendee prior → two-pass reconcile (auto first, then force
+    # the prior ONLY when auto disagrees → no EN regression). See speaker_count.py for the recipe.
+    from stt_daemon.speaker_count import resolve_speaker_count, reconcile_count
+    attendee_count = _resolve_attendee_count(audio_path, meeting_title=meeting_title)
+    initial = resolve_speaker_count(
+        attendee_count=attendee_count, language=language,
+        config_num_speakers=config_num_speakers, config_threshold=config_threshold,
+    )
+
+    if initial.source == "config":
+        # Operator pin → one forced pass, done.
+        turns = _diarize_via_daemon(
+            audio_path, num_speakers=initial.num_clusters,
+            threshold=initial.threshold, language=language)
+    else:
+        # Auto first, then reconcile against the calendar prior.
+        turns = _diarize_via_daemon(
+            audio_path, num_speakers=None, threshold=initial.threshold, language=language)
+        if turns is None:
+            return False  # backend unavailable → degrade
+        auto_count = len({_turn_idx(t) for t in turns})
+        final = reconcile_count(
+            auto_count=auto_count, attendee_count=attendee_count,
+            language=language, config_threshold=config_threshold)
+        if final.num_clusters is not None and final.num_clusters != auto_count:
+            forced = _diarize_via_daemon(
+                audio_path, num_speakers=final.num_clusters,
+                threshold=final.threshold, language=language)
+            if forced is not None:
+                turns = forced
+
+    if turns is None:
+        return False
+    if not turns:
+        print("⚠️ 说话人分离未返回任何分段，使用普通转录", file=sys.stderr)
+        return False
+
+    # Re-diarize: recover prior map + turns from an existing sidecar so renames survive.
+    prior_map = None
+    prior_speakers = None
+    prior_turns = None
+    sidecar_path = sm.speakers_sidecar_path(audio_path)
+    if sidecar_path.exists():
+        try:
+            prior_doc = sm.read_sidecar(sidecar_path)
+            prior_map = sm.prior_map_from_sidecar(prior_doc)
+            prior_speakers = prior_doc.get("speakers") or None
+            prior_turns = prior_doc.get("turns") or None
+        except Exception as exc:
+            print(f"⚠️ 读取既有说话人 sidecar 失败，按全新分离处理: {exc}", file=sys.stderr)
+            prior_map = prior_speakers = prior_turns = None
+
+    # When we have prior turns, re-anchor fresh cluster indices to stable ids by overlap
+    # (the overlap-based re-anchor; ARCHITECTURE §3). assign_speakers also honors prior_map.
+    if prior_map and prior_turns:
+        try:
+            prior_map = sm.reanchor_by_overlap(
+                new_turns=turns, prior_turns=prior_turns, prior_map=prior_map)
+        except Exception as exc:
+            print(f"⚠️ 说话人重锚定失败，沿用既有映射: {exc}", file=sys.stderr)
+
+    result = sm.assign_speakers(
+        asr_segments=asr_segments, turns=turns,
+        prior_map=prior_map, prior_speakers=prior_speakers,
+    )
+    if not result.segments:
+        print("⚠️ 说话人分离未产生标注片段，使用普通转录", file=sys.stderr)
+        return False
+
+    # Persist: labelled transcript (diarize output, NOT a cleanup rewrite) + sidecar (source-of-
+    # truth). The cleanup prompt may still overwrite .transcript.txt later; .speakers.json endures.
+    labelled = result.transcript
+    transcript_path.write_text(labelled, encoding="utf-8")
+    doc = sm.build_sidecar(
+        result=result, turns=turns,
+        provider=str(diar_cfg.get("provider") or "sherpa-onnx"),
+        num_speakers_supplied=(initial.num_clusters if initial.source == "config" else attendee_count),
+    )
+    sm.write_sidecar(sidecar_path, doc)
+    print(f"✅ 说话人标注 transcript 已保存: {transcript_path}")
+    print(f"✅ 说话人 sidecar 已保存: {sidecar_path}")
+
+    # Re-index the labelled transcript so speaker labels are searchable.
+    try:
+        from search import indexer as _idx
+        _idx.upsert_doc(source_path=transcript_path,
+                        kind=_idx.KIND_MEETING_TRANSCRIPT, body=labelled)
+    except Exception as exc:
+        print(f"⚠️ search index upsert failed for {transcript_path}: {exc}", file=sys.stderr)
+
+    return True
+
+
+def _turn_idx(turn) -> int:
+    """Cluster index from a turn dict (accepts ``speaker_idx`` / ``speaker`` / ``spk``)."""
+    if isinstance(turn, dict):
+        for k in ("speaker_idx", "speaker", "spk"):
+            v = turn.get(k)
+            if v is not None:
+                return int(v)
+        return 0
+    return int(getattr(turn, "speaker_idx", 0))
+
+
 def process_audio(audio_path_str: str) -> None:
     config = load_config()
     trans_cfg = config.get("transcription", {})
@@ -213,6 +385,10 @@ def process_audio(audio_path_str: str) -> None:
     merged: Optional[str] = None
     mic_text: Optional[str] = None
     sys_text: Optional[str] = None
+    # Timestamped ASR segments retained for the diarize stage (Phase 13). Empty when only
+    # merged text is available (realtime reuse / text-only daemon reply) → diarize is skipped
+    # because the overlap merge needs per-segment timings.
+    asr_segments: list[dict] = []
 
     if post_mode == FAST_POST_RECORDING_MODE:
         merged = read_realtime_transcript(realtime_path)
@@ -238,12 +414,15 @@ def process_audio(audio_path_str: str) -> None:
             sys_payload = response["channels"].get("sys", {}) or {}
             mic_text = mic_payload.get("text", "") or ""
             sys_text = sys_payload.get("text", "") or ""
-            merged = merge_segments(
-                mic=mic_payload.get("segments", []) or [],
-                sys=sys_payload.get("segments", []) or [],
-            )
+            mic_segs = mic_payload.get("segments", []) or []
+            sys_segs = sys_payload.get("segments", []) or []
+            merged = merge_segments(mic=mic_segs, sys=sys_segs)
+            # For diarization, both channels are mixed back into one timeline: the diarizer runs
+            # over the whole WAV and re-splits voices by acoustics, so feed it every segment.
+            asr_segments = [dict(s) for s in mic_segs] + [dict(s) for s in sys_segs]
         else:
             merged = response.get("text", "") or ""
+            asr_segments = [dict(s) for s in (response.get("segments", []) or [])]
 
     # 2. Persist transcripts. `.transcript.txt` may be overwritten later by a
     # cleanup prompt; `.raw.transcript.txt` preserves the pre-cleanup snapshot.
@@ -264,6 +443,18 @@ def process_audio(audio_path_str: str) -> None:
         audio_path.with_suffix(".mic.transcript.txt").write_text(mic_text, encoding="utf-8")
     if sys_text is not None:
         audio_path.with_suffix(".sys.transcript.txt").write_text(sys_text, encoding="utf-8")
+
+    # 2b. Diarization (Phase 13, opt-in). Overwrites `.transcript.txt` with the speaker-labelled
+    # version + writes `.speakers.json` (source-of-truth) + re-indexes, ONLY on success. Any
+    # failure (disabled, no segments, backend/sherpa unavailable, zero turns) leaves the plain
+    # transcript above untouched — graceful degrade, never raises (criterion 1).
+    _run_diarize_stage(
+        audio_path=audio_path,
+        transcript_path=transcript_path,
+        asr_segments=asr_segments,
+        trans_cfg=trans_cfg,
+        meeting_title=meeting_title,
+    )
 
     # 3. Enqueue auto-run prompts (unchanged from Phase 2).
     from prompts.cache import PromptsCache
