@@ -4,6 +4,14 @@ All notable changes to Yulu are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.9.0](https://github.com/Nowhitestar/Yulu/compare/v0.8.0...v0.9.0) (2026-06-07)
+
+
+### Features
+
+* **settings:** 3-column MasterDetail settings UI + full section editing + app-wide i18n (P1–P4) ([#50](https://github.com/Nowhitestar/Yulu/issues/50)) ([98c6e31](https://github.com/Nowhitestar/Yulu/commit/98c6e312855a179eca0a153afa437d86bd305d91))
+* **settings:** declarative registry + config-write correctness (P0) ([#49](https://github.com/Nowhitestar/Yulu/issues/49)) ([f1b53c9](https://github.com/Nowhitestar/Yulu/commit/f1b53c9333833168dbbc88fd5dbc516c9bf3b165))
+
 ## [0.8.0](https://github.com/Nowhitestar/Yulu/compare/v0.7.0...v0.8.0) (2026-06-05)
 
 
