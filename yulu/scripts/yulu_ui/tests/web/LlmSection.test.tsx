@@ -8,6 +8,11 @@ const updateMutate = vi.fn(async (_vars: { key: string; value: unknown }) => ({ 
 let configReturn: { data: unknown; isPending: boolean } = { data: undefined, isPending: false };
 let recordingState: string = "idle";
 
+// Prompts subsection (P4a-2) holders.
+let promptsReturn: { data: unknown; isPending: boolean } = { data: [], isPending: false };
+const promptsUpdate = vi.fn(async (_vars: { id: string; isAutoRun?: boolean }) => ({ updated: 1 }));
+const promptsListInvalidate = vi.fn();
+
 // llm.command is reload:none in the registry (agentqueue re-reads each tick).
 const SCHEMA = [
   { path: "llm.enabled", category: "llm", label: "启用 LLM", type: "toggle", reload: { kind: "none" } },
@@ -21,6 +26,7 @@ vi.mock("../../web/src/ws.js", () => ({
 
 vi.mock("../../web/src/trpc.js", () => ({
   trpc: {
+    useUtils: () => ({ prompts: { list: { invalidate: promptsListInvalidate } } }),
     config: {
       get: { useQuery: () => configReturn },
       schema: { useQuery: () => ({ data: SCHEMA, isPending: false }) },
@@ -34,6 +40,13 @@ vi.mock("../../web/src/trpc.js", () => ({
     },
     recording: { state: { useQuery: () => ({ data: { state: recordingState } }) } },
     llm: { test: { useMutation: () => ({ mutateAsync: async () => ({ ok: true, stdout: "", stderr: "" }) }) } },
+    prompts: {
+      list: { useQuery: () => promptsReturn },
+      update: { useMutation: (opts?: { onSuccess?: () => void }) => ({
+        isPending: false,
+        mutate: (vars: { id: string; isAutoRun?: boolean }) => { promptsUpdate(vars); opts?.onSuccess?.(); },
+      }) },
+    },
   },
 }));
 
@@ -47,8 +60,11 @@ function configWith(command: string[] | null) {
 
 beforeEach(() => {
   updateMutate.mockClear();
+  promptsUpdate.mockClear();
+  promptsListInvalidate.mockClear();
   recordingState = "idle";
   configReturn = configWith(null);
+  promptsReturn = { data: [], isPending: false };
 });
 
 function mount() {
@@ -135,5 +151,65 @@ describe("LlmSection — backend preset picker (P2-2)", () => {
       return /api[\s_-]?key|token|secret|password/i.test(`${ph} ${aria}`);
     });
     expect(offenders).toEqual([]);
+  });
+});
+
+describe("LlmSection — auto-run templates subsection (P4a-2)", () => {
+  it("lists only is_auto_run prompts with a category badge and a Manage link", () => {
+    promptsReturn = {
+      data: [
+        { id: "p1", name: "Meeting summary", category: "summary", is_auto_run: 1 },
+        { id: "p2", name: "Filler cleanup", category: "cleanup", is_auto_run: 1 },
+        { id: "p3", name: "Action items (manual)", category: "summary", is_auto_run: 0 },
+      ],
+      isPending: false,
+    };
+    mount();
+    expect(screen.getByText("Auto-run templates")).toBeInTheDocument();
+    expect(screen.getByText("Meeting summary")).toBeInTheDocument();
+    expect(screen.getByText("Filler cleanup")).toBeInTheDocument();
+    // The non-auto-run prompt is not listed here.
+    expect(screen.queryByText("Action items (manual)")).toBeNull();
+    // Category badges render.
+    const rows = screen.getAllByTestId("autorun-row");
+    expect(rows).toHaveLength(2);
+    expect(within(rows[0]!).getByText("summary")).toBeInTheDocument();
+    expect(within(rows[1]!).getByText("cleanup")).toBeInTheDocument();
+    // Manage link points at the Prompts page.
+    const link = screen.getByRole("link", { name: /manage all templates/i }) as HTMLAnchorElement;
+    expect(link.getAttribute("href")).toBe("/knowledge/prompts");
+  });
+
+  it("toggling a template off flips is_auto_run via the prompts tRPC and invalidates the list", async () => {
+    promptsReturn = {
+      data: [{ id: "p1", name: "Meeting summary", category: "summary", is_auto_run: 1 }],
+      isPending: false,
+    };
+    mount();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("switch", { name: /auto-run meeting summary/i }));
+    expect(promptsUpdate).toHaveBeenCalledWith({ id: "p1", isAutoRun: false });
+    // The list is refreshed so the row reflects the new state.
+    expect(promptsListInvalidate).toHaveBeenCalled();
+  });
+
+  it("shows an empty state when no template is auto-run", () => {
+    promptsReturn = {
+      data: [{ id: "p3", name: "Action items", category: "summary", is_auto_run: 0 }],
+      isPending: false,
+    };
+    mount();
+    expect(screen.getByText(/no auto-run templates/i)).toBeInTheDocument();
+    expect(screen.queryByTestId("autorun-row")).toBeNull();
+  });
+
+  it("does NOT rebuild prompt CRUD (no create/edit/delete controls here)", () => {
+    promptsReturn = {
+      data: [{ id: "p1", name: "Meeting summary", category: "summary", is_auto_run: 1 }],
+      isPending: false,
+    };
+    mount();
+    expect(screen.queryByRole("button", { name: /new prompt|add prompt|delete|save/i })).toBeNull();
+    expect(screen.queryByRole("textbox", { name: /prompt (name|content)/i })).toBeNull();
   });
 });

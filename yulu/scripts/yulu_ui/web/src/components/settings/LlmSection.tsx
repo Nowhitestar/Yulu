@@ -1,10 +1,14 @@
 import { useState } from "react";
+import { Link } from "react-router";
 import { trpc } from "../../trpc.js";
 import { InlineEditRow } from "../InlineEditRow.js";
 import { CommandEditor } from "../CommandEditor.js";
 import { TestPopover } from "../TestPopover.js";
+import { CategoryChip } from "../CategoryChip.js";
+import type { Category } from "../CategoryChip.js";
 import { useConfigField } from "../../hooks/useConfigField.js";
 import type { SettingsRestartTracker } from "../../hooks/useSettingsRestartTracker.js";
+import "./LlmSection.css";
 
 export interface LlmSectionProps {
   tracker: SettingsRestartTracker;
@@ -43,6 +47,69 @@ function presetOf(command: string[] | null | undefined): PresetId {
   if (arraysEqual(command, PRESET_COMMAND.claude)) return "claude";
   if (arraysEqual(command, PRESET_COMMAND.codex)) return "codex";
   return "custom";
+}
+
+interface PromptRow {
+  id: string;
+  name: string;
+  category: Category;
+  is_auto_run: number;
+}
+
+/**
+ * AutoRunTemplates — the summaries that fire automatically when a recording is
+ * transcribed (P4a-2). Lists the prompts flagged is_auto_run, each with a toggle
+ * that flips is_auto_run via the EXISTING prompts tRPC (so this reuses the Prompts
+ * page's list/update — no new prompt CRUD). Multi-fire is intentional (a cleanup
+ * pass can run before a summary), so this is NOT a single-active picker. Full
+ * authoring lives on the Prompts page via the "Manage all templates" link.
+ */
+function AutoRunTemplates() {
+  const utils = trpc.useUtils();
+  const { data, isPending } = trpc.prompts.list.useQuery({});
+  const updateMut = trpc.prompts.update.useMutation({
+    onSuccess: () => { utils.prompts.list.invalidate(); },
+  });
+
+  const rows = ((data as PromptRow[] | undefined) ?? []).filter((p) => p.is_auto_run === 1);
+
+  return (
+    <div className="autorun-templates">
+      <div className="autorun-templates-head">
+        <div>
+          <div className="autorun-templates-title">Auto-run templates</div>
+          <div className="row-help">These run automatically when a recording is transcribed.</div>
+        </div>
+        <Link to="/knowledge/prompts" className="autorun-manage-link">Manage all templates →</Link>
+      </div>
+
+      {isPending ? (
+        <div className="autorun-empty">Loading…</div>
+      ) : rows.length === 0 ? (
+        <div className="autorun-empty">No auto-run templates. Add one from the Prompts page.</div>
+      ) : (
+        <ul className="autorun-list">
+          {rows.map((p) => (
+            <li key={p.id} className="autorun-row" data-testid="autorun-row">
+              <span className="autorun-row-name">{p.name}</span>
+              <CategoryChip category={p.category} />
+              <button
+                type="button"
+                role="switch"
+                aria-checked={p.is_auto_run === 1}
+                aria-label={`Auto-run ${p.name}`}
+                className={"toggle on"}
+                disabled={updateMut.isPending}
+                onClick={() => updateMut.mutate({ id: p.id, isAutoRun: false })}
+              >
+                <span className="toggle-knob" />
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
 }
 
 export function LlmSection({ tracker }: LlmSectionProps) {
@@ -148,6 +215,9 @@ export function LlmSection({ tracker }: LlmSectionProps) {
         <div className="row-status" />
       </div>
       {popState && <TestPopover state={popState} stdout={popStdout} stderr={popStderr} onClose={() => setPopState(null)} />}
+
+      {/* P4a-2: which summary templates fire automatically on transcribe. */}
+      <AutoRunTemplates />
     </section>
   );
 }

@@ -44,6 +44,7 @@ vi.mock("../../../web/src/trpc.js", () => {
   });
   const utils = {
     system: { cloud: { detect: { fetch: async () => ({ is_cloud: false, engine: "", reason: "", dataless: false }) } } },
+    prompts: { list: { invalidate: () => {} } },
   };
   return {
     trpc: {
@@ -74,6 +75,10 @@ vi.mock("../../../web/src/trpc.js", () => {
       },
       integrations: { test: { useMutation: noopMutation } },
       llm: { test: { useMutation: noopMutation } },
+      prompts: {
+        list: { useQuery: () => ({ data: [], isPending: false }) },
+        update: { useMutation: noopMutation },
+      },
       search: { reindex: { useMutation: noopMutation } },
       capabilities: {
         host_capabilities: { useQuery: () => ({ data: { schema_version: 1, capabilities: {} }, refetch: () => {}, isError: false }) },
