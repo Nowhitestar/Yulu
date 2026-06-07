@@ -1,0 +1,24 @@
+# Dev/eval-only Python dependencies for the Phase-11 diarization eval harness.
+#
+# ⚠ NEVER install these into Yulu's runtime venv (~/.config/yulu/venv-mlx-whisper/).
+#    They are a dev/CI/measurement tool only. The shipped pipeline imports NOTHING from
+#    yulu/scripts/eval/ — the metric math (eval/metrics.py + eval/rttm.py) is pure stdlib and
+#    needs zero installs; this file exists solely for the OPTIONAL pyannote.metrics cross-check.
+#
+# Install into a throwaway eval venv:
+#     python3 -m venv ~/funasr-spike/venv-eval
+#     ~/funasr-spike/venv-eval/bin/pip install -r yulu/scripts/eval/requirements-eval.txt
+#
+# Then cross-check the hand-rolled DER against the canonical scorer:
+#     ~/funasr-spike/venv-eval/bin/python -m eval.harness \
+#         --corpus /tmp/yulu-eval --from-rttm /tmp/yulu-eval/hyp_sherpa_auto --cross-check
+
+# Canonical DER/JER scorer (optimal Hungarian mapping) — TORCH-FREE.
+# torch lives only in the sibling pyannote.audio, which we deliberately do NOT install.
+pyannote.metrics==4.1
+
+# NOTE: running a diarization *provider* through the harness (--provider sherpa|funasr) needs the
+# engine's own venv, NOT this file:
+#   * sherpa-onnx  → the spike venv that has `sherpa-onnx`, `soundfile`, `numpy` (e.g. ~/funasr-spike/venv-sherpa).
+#   * funasr       → the spike venv that has `funasr` (torch-heavy; comparison-only, never shipped).
+# The harness imports those lazily and only under --provider, so neither is required here.
