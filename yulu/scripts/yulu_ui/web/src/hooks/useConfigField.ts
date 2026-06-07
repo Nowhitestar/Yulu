@@ -33,6 +33,19 @@ function valueAt(cfg: unknown, key: string): unknown {
   return cur;
 }
 
+export interface CommitOptions {
+  /**
+   * Suppress recording this key's restart requirement in the tracker (so the
+   * RestartBanner does NOT trip for this commit). Used for whole-array edits
+   * whose *content* doesn't actually need a daemon restart — e.g. appending a
+   * DISABLED calendar provider, or removing/editing a disabled entry (P4a-4).
+   * Enabling an entry uses the normal (un-suppressed) path so it still trips
+   * the banner. The server-side write/validation is identical either way; this
+   * only affects the client-side restart hint.
+   */
+  suppressRestart?: boolean;
+}
+
 export interface ConfigFieldApi {
   /**
    * Section-facing commit, same shape sections already used
@@ -41,8 +54,10 @@ export interface ConfigFieldApi {
    *    `disabled`, so this is defense-in-depth);
    *  - successful saves record the restart need in the tracker and pop an undo
    *    toast that re-commits the previous value.
+   * An optional `opts.suppressRestart` skips the restart-tracking for content
+   * edits that don't truly need a restart (see CommitOptions).
    */
-  commit: (key: string) => (value: unknown) => Promise<unknown> | undefined;
+  commit: (key: string, opts?: CommitOptions) => (value: unknown) => Promise<unknown> | undefined;
   /** True when this key must not be edited right now (restart-class + recording). */
   isBlocked: (key: string) => boolean;
   /** True while a recording/processing is in flight. */
@@ -62,11 +77,10 @@ export function useConfigField(tracker: SettingsRestartTracker): ConfigFieldApi 
   const { showUndo } = useUndoToast();
   const { confirm } = useDangerConfirm();
 
-  const updateMut = trpc.config.update.useMutation({
-    onSuccess: (res: { daemonsNeedingRestart: string[] }, vars: { key: string }) => {
-      tracker.record(vars.key, res.daemonsNeedingRestart);
-    },
-  });
+  // Restart-tracking happens in doCommit (so it can be suppressed per-commit),
+  // not in a fixed onSuccess — otherwise every calendars array edit would trip
+  // the banner regardless of content (P4a-4).
+  const updateMut = trpc.config.update.useMutation();
 
   const isBlocked = useCallback((key: string): boolean => {
     if (!isRecording) return false;
@@ -74,22 +88,30 @@ export function useConfigField(tracker: SettingsRestartTracker): ConfigFieldApi 
   }, [isRecording, schema]);
 
   // The actual persist + undo-toast, shared by the plain and danger-confirmed
-  // paths. Returns the mutation promise so callers can await it.
-  const doCommit = useCallback((key: string, value: unknown, def: SettingMeta | undefined) => {
+  // paths. Returns the mutation promise so callers can await it. Records the
+  // restart need on success unless `suppressRestart` is set.
+  const doCommit = useCallback((key: string, value: unknown, def: SettingMeta | undefined, suppressRestart: boolean) => {
     const prev = valueAt(cfg, key);
     const p = updateMut.mutateAsync({ key, value });
-    p.then(() => {
+    p.then((res: { daemonsNeedingRestart: string[] }) => {
+      if (!suppressRestart) tracker.record(key, res.daemonsNeedingRestart);
       showUndo({
         label: def?.label ?? key,
-        onUndo: () => { updateMut.mutateAsync({ key, value: prev }); },
+        // The undo re-commit mirrors this commit's suppression so undoing an
+        // add/remove doesn't surprise the user with a restart banner.
+        onUndo: () => {
+          const up = updateMut.mutateAsync({ key, value: prev });
+          if (!suppressRestart) up.then((r: { daemonsNeedingRestart: string[] }) => tracker.record(key, r.daemonsNeedingRestart)).catch(() => {});
+        },
       });
     }).catch(() => { /* surfaced elsewhere; no toast on failure */ });
     return p;
-  }, [cfg, updateMut, showUndo]);
+  }, [cfg, updateMut, showUndo, tracker]);
 
-  const commit = useCallback((key: string) => (value: unknown) => {
+  const commit = useCallback((key: string, opts?: CommitOptions) => (value: unknown) => {
     if (isBlocked(key)) return undefined;            // guard: drop the edit
     const def = defFor(schema, key);
+    const suppressRestart = opts?.suppressRestart ?? false;
     // Danger-flagged fields (e.g. audio.output_dir, audio.backend,
     // transcription.local_model_path / .mlx) ask for an explicit confirm before
     // persisting — the same honest opt-in as the cloud-folder warning, but
@@ -98,10 +120,10 @@ export function useConfigField(tracker: SettingsRestartTracker): ConfigFieldApi 
     if (def?.danger) {
       return confirm(def.label ?? key).then((ok) => {
         if (!ok) return undefined;
-        return doCommit(key, value, def);
+        return doCommit(key, value, def, suppressRestart);
       });
     }
-    return doCommit(key, value, def);
+    return doCommit(key, value, def, suppressRestart);
   }, [isBlocked, schema, confirm, doCommit]);
 
   return { commit, isBlocked, isRecording };
