@@ -49,10 +49,10 @@ export function SettingsLayout() {
   const banner = tracker.daemons.size > 0 ? (
     <RestartBanner
       daemons={Array.from(tracker.daemons, ([name, keys]) => ({ name, keys: Array.from(keys) }))}
-      onRestart={(name) => { restartMut.mutateAsync({ name: (DAEMON_LABEL[name] ?? name) as DaemonLabel }); }}
       onRestartAll={() => {
         for (const name of tracker.daemons.keys()) restartMut.mutateAsync({ name: (DAEMON_LABEL[name] ?? name) as DaemonLabel });
       }}
+      onDismiss={() => tracker.clearAll()}
     />
   ) : null;
 
