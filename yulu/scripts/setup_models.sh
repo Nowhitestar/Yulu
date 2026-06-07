@@ -57,16 +57,27 @@ PY
     ok "config.json 已指向该模型"
 }
 
-# ── Diarization ONNX models (v0.6) ───────────────────────────────────────────
+# ── Diarization engine + ONNX models (v0.6) ──────────────────────────────────
 #
-# Two plain ONNX files, cached under $MODEL_DIR/diarization/, used by the resident
-# SherpaDiarizeBackend (stt_daemon/backends/diarize.py). Offline-by-default: once on
-# disk they are loaded by absolute path with ZERO network calls. Idempotent: an
-# already-present file is detected and skipped. URLs mirror backends/diarize.py
-# (SEG_MODEL_URL / EMB_MODEL_URL) — the single source of truth.
+# Two concerns, both GATED on diarization being enabled in config
+# (transcription.diarization.enabled) so a non-diarization install pulls NOTHING extra:
 #
-# Provisioning is GATED on diarization being enabled in config (transcription.diarization.enabled);
-# when disabled, the download is skipped entirely so non-diarization installs pull nothing extra.
+#   1. The sherpa-onnx ENGINE (PORT-01). Installed into the SAME interpreter the
+#      stt_daemon runs as ($PYTHON_BIN == the plist __PYTHON__ == system python3).
+#      Empirically resolved on Yulu's Python 3.14 runtime: the cp314 wheel installs,
+#      imports, and diarizes (see .planning/phases/15-.../15-SUMMARY.md) — so sherpa
+#      CO-LOCATES in the daemon interpreter, no isolated venv (mirrors the mlx-whisper
+#      "importable from the daemon interpreter" contract; there is deliberately no
+#      Yulu-managed venv since v0.5 D-02). onnxruntime-only, torch-free, cross-platform
+#      (cp37–cp314 macOS/Linux/Windows wheels) so this step has NO macOS coupling.
+#
+#   2. The two plain ONNX MODELS, cached under $MODEL_DIR/diarization/, loaded by the
+#      resident SherpaDiarizeBackend by absolute path. Offline-by-default: once on disk
+#      they load with ZERO network calls. URLs mirror backends/diarize.py
+#      (SEG_MODEL_URL / EMB_MODEL_URL) — the single source of truth.
+#
+# Both halves are independently idempotent: an already-importable sherpa-onnx and an
+# already-present .onnx file are each detected and skipped.
 DIAR_DIR="${DIAR_DIR:-$MODEL_DIR/diarization}"
 DIAR_SEG_FILE="$DIAR_DIR/segmentation.onnx"
 DIAR_EMB_FILE="$DIAR_DIR/campplus.onnx"
@@ -88,13 +99,50 @@ sys.exit(0 if (isinstance(diar, dict) and diar.get("enabled")) else 1)
 PY
 }
 
-setup_diarization_models() {
-    # Idempotent download of the seg + cam++ ONNX. Skips files that already exist.
-    if ! diarization_enabled; then
-        ok "未启用说话人分离，跳过 diarization 模型下载"
+diarization_engine_present() {
+    # Read-only: true iff sherpa_onnx is importable from the daemon interpreter ($PYTHON_BIN).
+    # Same honesty contract as verify_mlx_whisper — probe the interpreter the daemon ACTUALLY
+    # uses (the plist __PYTHON__), so a "present" answer means the daemon can really diarize.
+    "$PYTHON_BIN" -c "import importlib.util, sys; sys.exit(0 if importlib.util.find_spec('sherpa_onnx') else 1)" 2>/dev/null
+}
+
+install_diarization_engine() {
+    # PORT-01: install the sherpa-onnx engine into the daemon interpreter. Idempotent:
+    # skips when already importable. CO-LOCATES (no isolated venv) because the cp314 wheel
+    # is verified working on Yulu's Python 3.14 runtime. Cross-platform wheel (onnxruntime-
+    # only) → no macOS coupling. A failed install WARNS but does not abort: the models can
+    # still download, the probe will report present-but-unverified, and the pipeline degrades
+    # gracefully to plain transcripts until the engine is available (diarize_pipeline.py).
+    if diarization_engine_present; then
+        ok "sherpa-onnx 已可从守护进程解释器导入（${PYTHON_BIN}）"
         return 0
     fi
-    header "下载说话人分离 (diarization) ONNX 模型"
+    info "安装 sherpa-onnx 说话人分离引擎到 ${PYTHON_BIN}（onnxruntime，无 torch，跨平台）..."
+    if "$PYTHON_BIN" -m pip install --upgrade sherpa-onnx >/dev/null 2>&1; then
+        if diarization_engine_present; then
+            ok "sherpa-onnx 引擎已安装"
+        else
+            warn "sherpa-onnx 安装后仍无法导入（${PYTHON_BIN}）。说话人分离将不可用，普通转录不受影响。"
+        fi
+    else
+        warn "sherpa-onnx 安装失败（${PYTHON_BIN}）。手动安装：${PYTHON_BIN} -m pip install sherpa-onnx"
+        warn "说话人分离将不可用，直到引擎可导入；普通转录不受影响。"
+    fi
+}
+
+setup_diarization_models() {
+    # Idempotent: install the sherpa engine (PORT-01) + download the seg + cam++ ONNX.
+    # Skips the engine when already importable and any file that already exists.
+    if ! diarization_enabled; then
+        ok "未启用说话人分离，跳过 diarization 引擎与模型"
+        return 0
+    fi
+    header "配置说话人分离 (diarization)：引擎 + ONNX 模型"
+
+    # 1. The engine first (so a freshly-provisioned model dir is immediately usable).
+    install_diarization_engine
+
+    # 2. The two ONNX model files.
     mkdir -p "$DIAR_DIR"
 
     # cam++ embedding — a plain .onnx (~27 MB), direct download.

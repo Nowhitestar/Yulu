@@ -202,17 +202,38 @@ def _whisper_model_present(trans: dict) -> bool:
     return False
 
 
-def _diarization_models_present(trans: dict) -> bool:
-    """The diarization half of the `models` step (v0.6).
+def _diarization_engine_importable() -> bool:
+    """True iff ``sherpa_onnx`` is importable from THIS interpreter (the daemon's python3).
 
-    Satisfied when diarization is DISABLED (nothing to provision) OR both ONNX files exist.
-    Delegates the file check to ``stt_daemon.backends.diarize.models_present`` (the single
-    source of truth for the model-file contract). Tolerant: any import/error → treat as
-    "not present" so the step runs (the download is idempotent). Never raises.
+    PORT-01: the engine co-locates in the daemon interpreter (no isolated venv), so the
+    ``models`` step's ``check()`` must treat "engine importable" as part of "diarization
+    provisioned" — otherwise a re-run with models-on-disk-but-engine-missing would
+    short-circuit to skipped and never install sherpa. Probed without importing the heavy
+    module. Never raises (degrade → False → the idempotent install step runs)."""
+    try:
+        import importlib.util
+
+        return importlib.util.find_spec("sherpa_onnx") is not None
+    except Exception:
+        return False
+
+
+def _diarization_models_present(trans: dict) -> bool:
+    """The diarization half of the `models` step (v0.6): ENGINE + both ONNX files.
+
+    Satisfied when diarization is DISABLED (nothing to provision) OR (the sherpa-onnx engine
+    is importable AND both ONNX files exist). The file check delegates to
+    ``stt_daemon.backends.diarize.models_present`` (the single source of truth for the
+    model-file contract); the engine check (PORT-01) mirrors the ``setup_models.sh``
+    ``diarization_engine_present`` probe so ``check()`` and the script agree on "done".
+    Tolerant: any import/error → treat as "not present" so the step runs (both halves are
+    idempotent). Never raises.
     """
     diar = trans.get("diarization", {}) if isinstance(trans.get("diarization"), dict) else {}
     if not diar.get("enabled"):
-        return True  # diarization off → no diarization files required
+        return True  # diarization off → no diarization engine/files required
+    if not _diarization_engine_importable():
+        return False  # engine missing → the models step must run to install it
     try:
         import sys as _sys
 
