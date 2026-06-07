@@ -150,10 +150,13 @@ def test_transcribe_is_thin():
 
     Limit bumped 200 → 220 (Phase 6, search-index push) → 225 (realtime-robustness
     fix: the fast_summary coverage guard that stops a truncated realtime transcript
-    from being reused as the final). Still well under the pre-refactor (~600 line)
-    monolith; the orchestrator-ness invariant holds."""
+    from being reused as the final) → 240 (v0.6 Phase 13, diarization wiring: capture
+    timestamped ASR segments + one thin call to
+    stt_daemon.diarize_pipeline.run_diarize_stage; the HEAVY diarize logic lives in that
+    module, NOT here — the orchestrator only gained the wiring). Still well under the
+    pre-refactor (~600 line) monolith; the orchestrator-ness invariant holds."""
     line_count = sum(1 for _ in (SCRIPTS / "transcribe.py").open(encoding="utf-8"))
-    assert line_count < 225, f"transcribe.py too long: {line_count} lines"
+    assert line_count < 240, f"transcribe.py too long: {line_count} lines"
 
 
 def test_prompts_seed_count(tmp_path):
