@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useSearchParams } from "react-router";
 import { trpc } from "../../trpc.js";
 import { LogTail } from "../LogTail.js";
+import { useT } from "../../i18n/LanguageProvider.js";
 import "./LogsSection.css";
 
 const YULU_DAEMONS = [
@@ -19,6 +20,7 @@ type DaemonName = typeof YULU_DAEMONS[number];
 
 export function LogsSection() {
   const [params, setParams] = useSearchParams();
+  const t = useT();
   // Local override mirrors search.tsx pattern — controlled select reflects
   // changes immediately even if the router debounces or rejects
   // setSearchParams (e.g. jsdom in tests). URL is still updated for sharing.
@@ -42,7 +44,7 @@ export function LogsSection() {
     <div className="logs-section">
       <div className="logs-toolbar">
         <select
-          aria-label="Daemon"
+          aria-label={t("health.logs.daemon.aria")}
           className="logs-select"
           data-testid="logs-daemon"
           value={fullName}
@@ -53,10 +55,10 @@ export function LogsSection() {
           ))}
         </select>
         <button type="button" className="logs-btn" onClick={() => setPaused((p) => !p)}>
-          {paused ? "Resume" : "Pause auto-scroll"}
+          {paused ? t("health.logs.resume") : t("health.logs.pause")}
         </button>
         <button type="button" className="logs-btn" onClick={() => setResetKey((k) => k + 1)}>
-          Clear scrollback
+          {t("health.logs.clear")}
         </button>
       </div>
       <LogTail

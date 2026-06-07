@@ -4,6 +4,7 @@ import { useLocation, useNavigate } from "react-router";
 import { HealthSummary } from "../components/health/HealthSummary.js";
 import { DaemonsSection } from "../components/health/DaemonsSection.js";
 import { LogsSection } from "../components/health/LogsSection.js";
+import { useT } from "../i18n/LanguageProvider.js";
 import "./health.css";
 
 export const handle = { breadcrumb: "breadcrumb.health", filters: null };
@@ -19,6 +20,7 @@ function tabFromHash(hash: string): Tab {
 export function Health() {
   const location = useLocation();
   const navigate = useNavigate();
+  const t = useT();
   const [tab, setTab] = useState<Tab>(() => tabFromHash(location.hash));
 
   useEffect(() => {
@@ -43,7 +45,7 @@ export function Health() {
           onClick={() => switchTab("daemons")}
           data-testid="tab-daemons"
         >
-          Daemons
+          {t("health.tab.daemons")}
         </button>
         <button
           type="button"
@@ -53,7 +55,7 @@ export function Health() {
           onClick={() => switchTab("logs")}
           data-testid="tab-logs"
         >
-          Logs
+          {t("health.tab.logs")}
         </button>
       </div>
       <div className="health-tabpanel" role="tabpanel">

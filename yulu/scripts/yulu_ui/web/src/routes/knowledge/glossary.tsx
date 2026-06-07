@@ -2,6 +2,7 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { trpc } from "../../trpc.js";
 import { EditableTable, type ColumnDef } from "../../components/EditableTable.js";
+import { useT } from "../../i18n/LanguageProvider.js";
 import "./glossary.css";
 
 export const handle = { breadcrumb: "breadcrumb.glossary", filters: null };
@@ -14,13 +15,6 @@ interface VocabRow {
   created_at: string;
   updated_at: string;
 }
-
-const COLUMNS: ColumnDef<VocabRow>[] = [
-  { key: "term",       label: "Term",        editable: true,  width: "200px" },
-  { key: "pinyin",     label: "Pinyin",      editable: true,  width: "140px" },
-  { key: "notes",      label: "Notes",       editable: true },
-  { key: "updated_at", label: "Last edited", editable: false, width: "150px", format: (v) => formatDate(String(v ?? "")) },
-];
 
 function formatDate(iso: string): string {
   if (!iso) return "";
@@ -36,6 +30,14 @@ function formatDate(iso: string): string {
 export function Glossary() {
   const { data } = trpc.glossary.list.useQuery();
   const qc = useQueryClient();
+  const t = useT();
+
+  const COLUMNS: ColumnDef<VocabRow>[] = [
+    { key: "term",       label: t("glossary.col.term"),       editable: true,  width: "200px" },
+    { key: "pinyin",     label: t("glossary.col.pinyin"),     editable: true,  width: "140px" },
+    { key: "notes",      label: t("glossary.col.notes"),      editable: true },
+    { key: "updated_at", label: t("glossary.col.lastEdited"), editable: false, width: "150px", format: (v) => formatDate(String(v ?? "")) },
+  ];
 
   const addMut = trpc.glossary.add.useMutation({
     onSuccess: () => qc.invalidateQueries({ queryKey: [["glossary", "list"]] }),
@@ -61,7 +63,7 @@ export function Glossary() {
   return (
     <div className="glossary-page">
       <div className="glossary-header">
-        <button type="button" className="glossary-add-btn" onClick={() => addMut.mutateAsync({ term: "" })}>+ Add term</button>
+        <button type="button" className="glossary-add-btn" onClick={() => addMut.mutateAsync({ term: "" })}>{t("glossary.add")}</button>
       </div>
       <EditableTable
         columns={COLUMNS}
@@ -69,7 +71,7 @@ export function Glossary() {
         onCellCommit={onCellCommit}
         selectable
         onBulkDelete={onBulkDelete}
-        emptyLabel="No terms yet. Click + Add term to create one."
+        emptyLabel={t("glossary.empty")}
       />
     </div>
   );

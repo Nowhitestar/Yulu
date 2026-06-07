@@ -1,3 +1,4 @@
+import { useT } from "../i18n/LanguageProvider.js";
 import "./CategoryChip.css";
 
 export type Category = "summary" | "cleanup";
@@ -5,5 +6,6 @@ export type Category = "summary" | "cleanup";
 export interface CategoryChipProps { category: Category; }
 
 export function CategoryChip({ category }: CategoryChipProps) {
-  return <span className="category-chip" data-category={category}>{category}</span>;
+  const t = useT();
+  return <span className="category-chip" data-category={category}>{t(`category.${category}`)}</span>;
 }
