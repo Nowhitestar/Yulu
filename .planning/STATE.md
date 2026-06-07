@@ -7,10 +7,10 @@ last_updated: "2026-06-06T04:06:12.313Z"
 last_activity: 2026-06-06 — Phase 9 complete (verified passed); starting Phase 10
 progress:
   total_phases: 7
-  completed_phases: 2
-  total_plans: 2
-  completed_plans: 2
-  percent: 29
+  completed_phases: 3
+  total_plans: 3
+  completed_plans: 3
+  percent: 43
 ---
 
 # Project State
@@ -24,16 +24,17 @@ See: .planning/PROJECT.md (updated 2026-06-06)
 
 ## Current Position
 
-Phase: 11 — DER/WDER Evaluation Harness (next)
+Phase: 12 — Speaker-Count Strategy (next)
 Plan: —
-Status: AUTONOMOUS run 9→13 in progress. ✅ Phase 9 + ✅ Phase 10 complete. Execution order 11→12→13, then `--only 15`; **14 last (gated on UI redesign)**.
-Last activity: 2026-06-06 — Phase 10 complete (built); starting Phase 11
+Status: AUTONOMOUS run 9→13 in progress. ✅ Phase 9 + ✅ Phase 10 + ✅ Phase 11 complete (all verified). Execution order 12→13, then `--only 15`; **14 last (gated on UI redesign)**.
+Last activity: 2026-06-07 — Phase 11 complete (verified 5/5; suite 940/1); starting Phase 12
 
 ## Autonomous Run Log (v0.6, 9→13)
 
 - ✅ **Phase 9** Speaker-Merge Core + Sidecar — built (gsd-executor) + independently verified (gsd-verifier) PASSED 5/5; full test suite 873 passed/1 pre-existing skip; UI gate respected (zero `yulu_ui/**`).
 - ✅ **Phase 10** Diarize Backend + Provisioning + Capability Probe — built (gsd-executor) 5/5 criteria; **904 passed / 1 pre-existing skip** (+31 new tests, zero regressions); 6 commits 5d3f867/a2bbdea/5399ed7/6128172/c47dc27/a763476; UI gate respected (zero `yulu_ui/**`); real offline integration smoke green (60s clip → 15 turns/3 speakers, dead proxies). **Open: sherpa cp314 wheel resolution into Yulu's 3.14 runtime venv (Phase 15/PORT-01) — built+tested on the 3.10 spike venv only.**
-- ⏳ **Phase 11** DER/WDER Eval Harness — next.
+- ✅ **Phase 11** DER/WDER Eval Harness — built (general-purpose; resumed after transient rate-limit) + verified (gsd-verifier) PASSED 5/5; **940 passed/1 skip** (+36 tests, zero regressions); commits for eval harness + ADR-005 (default=sherpa-onnx). **Gate output:** EN DER **0.007** (excellent) / CN DER **0.682** (auto, poor) — pyannote-cross-checked; the CN gap is the **count-knob (Phase 12 target), not embeddings**. Eval deps (pyannote.metrics) dev-venv only. UI-copy string backend-side (`eval/ui_copy.py`). Deferred: human-labelled real CN+EN gold corpus.
+- ⏳ **Phase 12** Speaker-Count Strategy (the Over-Split Fix) — next. Target: drive CN auto-DER down from 0.682 via calendar-attendee prior (gog) → CN-calibrated threshold → fail-toward-under-merge; verify against the Phase-11 harness. Also address Phase-10 carry-forward: count-keyed cache so `diarize(num_speakers=)` override doesn't bleed into auto mode.
 - Mechanism note: each phase = delegated builder agent (writes code+tests+commits+GSD artifacts) → independent verifier agent → STATE/ROADMAP update. Resume point if compacted: read this log + run next ⏳ phase.
 
 ## Performance Metrics
