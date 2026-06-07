@@ -197,16 +197,28 @@ class SherpaDiarizeBackend:
         self.min_duration_on = min_duration_on
         self.min_duration_off = min_duration_off
         self._sherpa = None        # the sherpa_onnx module (lazy)
-        self._sd = None            # the OfflineSpeakerDiarization instance (resident)
+        self._sd = None            # the resident DEFAULT OfflineSpeakerDiarization (never mutated)
+        # Count-keyed pipeline cache (Phase-12 carry-forward fix): maps a normalized
+        # ``(num_clusters, threshold)`` key → its OfflineSpeakerDiarization, so a per-call override
+        # is served by its own cached pipeline and can NEVER bleed into the default/auto pipeline.
+        self._pipelines: dict[tuple[int, float], object] = {}
+        self._default_key: Optional[tuple[int, float]] = None
         self._ready = False
         self._lock = asyncio.Lock()
 
     def is_ready(self) -> bool:
         return self._ready
 
-    def _build_config(self, sherpa_onnx, num_speakers: Optional[int]):
-        """Build an ``OfflineSpeakerDiarizationConfig`` (lifted from the spike, verified)."""
+    def _build_config(self, sherpa_onnx, num_speakers: Optional[int],
+                      threshold: Optional[float] = None):
+        """Build an ``OfflineSpeakerDiarizationConfig`` (lifted from the spike, verified).
+
+        ``num_speakers`` None / <=0 ⇒ ``-1`` (auto threshold clustering). ``threshold`` overrides
+        the configured default when supplied (the per-call calibrated threshold); sherpa ignores it
+        when ``num_clusters > 0``.
+        """
         n = num_speakers if (num_speakers and num_speakers > 0) else -1  # -1 = auto
+        thr = threshold if (threshold and threshold > 0) else self.threshold
         return sherpa_onnx.OfflineSpeakerDiarizationConfig(
             segmentation=sherpa_onnx.OfflineSpeakerSegmentationModelConfig(
                 pyannote=sherpa_onnx.OfflineSpeakerSegmentationPyannoteModelConfig(
@@ -215,19 +227,23 @@ class SherpaDiarizeBackend:
             ),
             embedding=sherpa_onnx.SpeakerEmbeddingExtractorConfig(model=self.emb_model),
             clustering=sherpa_onnx.FastClusteringConfig(
-                num_clusters=n, threshold=self.threshold
+                num_clusters=n, threshold=thr
             ),
             min_duration_on=self.min_duration_on,
             min_duration_off=self.min_duration_off,
         )
 
     async def warm_up(self) -> None:
-        """Load the module + build the resident pipeline + pay the cold-start (criterion 5).
+        """Load the module + build the resident DEFAULT pipeline + pay the cold-start (criterion 5).
 
-        Lazy-imports ``sherpa_onnx`` (so this module imports without it). Building the
+        Lazy-imports ``sherpa_onnx`` (so this module imports without it). Building the default
         ``OfflineSpeakerDiarization`` instance loads both ONNX models; the 1s silent dummy
         ``process()`` initializes the ORT graph so the first real diarize isn't JIT-penalized.
         Guarded by a lock + ``_ready`` flag exactly like ``MlxWhisperBackend.warm_up``.
+
+        The default pipeline is keyed and stashed in ``self._pipelines`` under the configured
+        ``(num_speakers, threshold)`` so a later per-call override NEVER mutates it (the Phase-10
+        carry-forward fix — see ``diarize``).
         """
         async with self._lock:
             if self._ready:
@@ -239,9 +255,11 @@ class SherpaDiarizeBackend:
             if sherpa_onnx is None:
                 raise RuntimeError("sherpa_onnx module is unavailable")
 
+            default_key = self._config_key(self.num_speakers, self.threshold)
+
             def _load_and_prime():
                 sd = sherpa_onnx.OfflineSpeakerDiarization(
-                    self._build_config(sherpa_onnx, self.num_speakers)
+                    self._build_config(sherpa_onnx, self.num_speakers, self.threshold)
                 )
                 # Dummy pass on 1s of silence → primes the ORT graph (returns 0 turns).
                 try:
@@ -254,7 +272,10 @@ class SherpaDiarizeBackend:
                     pass
                 return sd
 
-            self._sd = await asyncio.to_thread(_load_and_prime)
+            sd = await asyncio.to_thread(_load_and_prime)
+            self._sd = sd                       # the resident DEFAULT pipeline (never mutated)
+            self._default_key = default_key
+            self._pipelines = {default_key: sd}  # count-keyed cache (default seeded here)
             self._sherpa = sherpa_onnx
             self._ready = True
 
@@ -262,39 +283,69 @@ class SherpaDiarizeBackend:
         self._sd = None
         self._sherpa = None
         self._ready = False
+        self._pipelines = {}
+        self._default_key = None
+
+    @staticmethod
+    def _config_key(num_speakers: Optional[int], threshold: float) -> tuple[int, float]:
+        """Normalized cache key for a (count, threshold) pipeline.
+
+        ``num_speakers`` None / <=0 all collapse to the same ``-1`` (auto) bucket; threshold is
+        rounded so float jitter can't fragment the cache. Auto pipelines are keyed by threshold
+        (different auto thresholds are genuinely different pipelines); count pipelines ignore
+        threshold (sherpa ignores ``threshold`` when ``num_clusters > 0``) → keyed to ``0.0``.
+        """
+        n = int(num_speakers) if (num_speakers and num_speakers > 0) else -1
+        thr = 0.0 if n > 0 else round(float(threshold), 4)
+        return (n, thr)
 
     async def diarize(
         self,
         *,
         audio_path: str,
         num_speakers: Optional[int] = None,
+        threshold: Optional[float] = None,
         cancel_token: CancelToken,
     ) -> list[SpeakerTurn]:
         """Run diarization on ``audio_path`` → speaker turns (seconds + cluster index).
 
-        ``num_speakers`` (per-call) overrides the configured default when > 0; otherwise auto
-        threshold-based clustering is used. Reads audio with ``soundfile``, downmixes to mono,
-        resamples to ``sd.sample_rate`` (16 kHz) if needed — no network, all local files.
+        Per-call ``num_speakers`` (> 0) forces that many clusters for THIS call only; per-call
+        ``threshold`` (> 0) overrides the auto-mode threshold for THIS call only. Both come from
+        :func:`stt_daemon.speaker_count.resolve_speaker_count` (the calendar-prior strategy).
+
+        Carry-forward fix (Phase-12): an override builds (or reuses) a pipeline from a **count-keyed
+        cache** (``self._pipelines``) and NEVER reassigns/mutates the resident default ``self._sd``.
+        So a count-override call followed by an auto call is served by two distinct cached pipelines
+        — the override can no longer bleed into auto mode. Reads audio with ``soundfile``, downmixes
+        to mono, resamples to ``sd.sample_rate`` (16 kHz) if needed — no network, all local files.
         """
         cancel_token.check()
 
-        # Per-call num_speakers override → rebuild the pipeline only if it differs.
-        override = num_speakers if (num_speakers and num_speakers > 0) else None
-        if override is not None and override != self.num_speakers:
-            if not self._ready:
-                await self.warm_up()
-            sherpa_onnx = self._sherpa
-            self._sd = await asyncio.to_thread(
-                lambda: sherpa_onnx.OfflineSpeakerDiarization(
-                    self._build_config(sherpa_onnx, override)
-                )
-            )
-        elif not self._ready:
+        if not self._ready:
             await self.warm_up()
 
-        if self._sd is None:
+        # Resolve the EFFECTIVE (count, threshold) for this call: per-call override else configured.
+        eff_n = num_speakers if (num_speakers and num_speakers > 0) else self.num_speakers
+        eff_thr = threshold if (threshold and threshold > 0) else self.threshold
+        key = self._config_key(eff_n, eff_thr)
+
+        # Serve from the count-keyed cache; build (and cache) a new pipeline on a miss. The default
+        # pipeline (self._sd) is in the cache under self._default_key and is never overwritten.
+        sd = self._pipelines.get(key)
+        if sd is None:
+            sherpa_onnx = self._sherpa
+            if sherpa_onnx is None:
+                raise RuntimeError("diarization pipeline not loaded")
+            eff_n_norm = eff_n if (eff_n and eff_n > 0) else None
+            sd = await asyncio.to_thread(
+                lambda: sherpa_onnx.OfflineSpeakerDiarization(
+                    self._build_config(sherpa_onnx, eff_n_norm, eff_thr)
+                )
+            )
+            self._pipelines[key] = sd
+
+        if sd is None:
             raise RuntimeError("diarization pipeline not loaded")
-        sd = self._sd
 
         def _run() -> list[SpeakerTurn]:
             import numpy as np
