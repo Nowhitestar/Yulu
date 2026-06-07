@@ -6,7 +6,7 @@ import { DaemonsSection } from "../components/health/DaemonsSection.js";
 import { LogsSection } from "../components/health/LogsSection.js";
 import "./health.css";
 
-export const handle = { breadcrumb: "Health", filters: null };
+export const handle = { breadcrumb: "breadcrumb.health", filters: null };
 
 type Tab = "daemons" | "logs";
 const VALID_TABS: Tab[] = ["daemons", "logs"];

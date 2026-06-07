@@ -6,7 +6,8 @@ import { Search as SearchIcon } from "lucide-react";
 import { trpc } from "../trpc.js";
 import { useDebounced } from "../hooks/useDebounced.js";
 import { useSettingsSchema } from "../hooks/useSettingsSchema.js";
-import { categoryLabel } from "./settings/categories.js";
+import { categoryLabelKey } from "./settings/categories.js";
+import { useT, type TFunc } from "../i18n/LanguageProvider.js";
 import "./GlobalSearch.css";
 
 interface Hit {
@@ -38,12 +39,13 @@ type Item = ({ t: "hit" } & Hit) | ({ t: "setting" } & SettingHit);
 function buildSettingHits(
   query: string,
   schema: ReadonlyArray<{ path: string; category: string; label: string }> | undefined,
+  t: TFunc,
 ): SettingHit[] {
   const q = query.trim().toLowerCase();
   if (!q || !schema) return [];
   const byCategory = new Map<string, SettingHit>();
   for (const s of schema) {
-    const catLabel = categoryLabel(s.category);
+    const catLabel = t(categoryLabelKey(s.category));
     const matches =
       s.label.toLowerCase().includes(q) ||
       s.category.toLowerCase().includes(q) ||
@@ -63,10 +65,12 @@ function kindClass(kind: string): string {
   return "gs-kind-other";
 }
 
-function kindLabel(kind: string): string {
+function kindLabel(kind: string, t: TFunc): string {
   // Backend emits kinds like "meeting_summary", "meeting_transcript".
   // Show only the top-level type ("meeting") in the badge.
-  if (kind.startsWith("meeting")) return "meeting";
+  if (kind.startsWith("meeting")) return t("search.kind.meeting");
+  if (kind === "summary") return t("search.kind.summary");
+  if (kind === "setting") return t("search.kind.setting");
   return kind;
 }
 
@@ -124,6 +128,7 @@ export function GlobalSearch() {
   const inputRef = useRef<HTMLInputElement>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
   const navigate = useNavigate();
+  const t = useT();
 
   const debouncedQ = useDebounced(q, 200);
   const { data, isFetching } = trpc.search.run.useQuery(
@@ -137,10 +142,10 @@ export function GlobalSearch() {
   // navigational), then the backend recording/summary hits. Keyboard nav runs
   // over the combined list.
   const items = useMemo<Item[]>(() => {
-    const settingItems: Item[] = buildSettingHits(debouncedQ, schema).map((s) => ({ t: "setting", ...s }));
+    const settingItems: Item[] = buildSettingHits(debouncedQ, schema, t).map((s) => ({ t: "setting", ...s }));
     const hitItems: Item[] = hits.map((h) => ({ t: "hit", ...h }));
     return [...settingItems, ...hitItems];
-  }, [debouncedQ, schema, hits]);
+  }, [debouncedQ, schema, hits, t]);
 
   // ⌘K / Ctrl+K global focus
   useEffect(() => {
@@ -207,7 +212,7 @@ export function GlobalSearch() {
           ref={inputRef}
           className="gs-input"
           type="search"
-          placeholder="Search"
+          placeholder={t("search.placeholder")}
           value={q}
           onChange={(e) => {
             setQ(e.target.value);
@@ -226,7 +231,7 @@ export function GlobalSearch() {
       {open && q.length > 0 && (
         <div ref={popoverRef} id="gs-popover" className="gs-popover" role="listbox">
           {items.length === 0 && !isFetching && (
-            <div className="gs-empty">No matches</div>
+            <div className="gs-empty">{t("search.empty")}</div>
           )}
           {items.map((item, i) => (
             <button
@@ -243,14 +248,14 @@ export function GlobalSearch() {
             >
               {item.t === "setting" ? (
                 <div className="gs-result-line1">
-                  <span className={`gs-kind ${kindClass("setting")}`}>setting</span>
+                  <span className={`gs-kind ${kindClass("setting")}`}>{t("search.kind.setting")}</span>
                   <span className="gs-result-title">{item.label}</span>
-                  <span className="gs-result-meta">设置</span>
+                  <span className="gs-result-meta">{t("search.result.settingMeta")}</span>
                 </div>
               ) : (
                 <>
                   <div className="gs-result-line1">
-                    <span className={`gs-kind ${kindClass(item.kind)}`}>{kindLabel(item.kind)}</span>
+                    <span className={`gs-kind ${kindClass(item.kind)}`}>{kindLabel(item.kind, t)}</span>
                     <span className="gs-result-title">{hitTitle(item)}</span>
                     <span className="gs-result-meta">{hitTimestamp(item)}</span>
                   </div>
@@ -260,11 +265,13 @@ export function GlobalSearch() {
             </button>
           ))}
           <div className="gs-footer">
-            <span><kbd>↑↓</kbd> navigate</span>
-            <span><kbd>↵</kbd> open</span>
-            <span><kbd>esc</kbd> close</span>
+            <span><kbd>↑↓</kbd> {t("search.footer.navigate")}</span>
+            <span><kbd>↵</kbd> {t("search.footer.open")}</span>
+            <span><kbd>esc</kbd> {t("search.footer.close")}</span>
             <span className="gs-footer-count">
-              {items.length} result{items.length === 1 ? "" : "s"}
+              {items.length === 1
+                ? t("search.footer.count.one", { n: items.length })
+                : t("search.footer.count.other", { n: items.length })}
             </span>
           </div>
         </div>

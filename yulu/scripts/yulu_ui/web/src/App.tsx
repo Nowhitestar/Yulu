@@ -3,6 +3,7 @@ import { createBrowserRouter, RouterProvider, Navigate, useParams, useSearchPara
 import { useState } from "react";
 import { trpc, makeTrpcClient } from "./trpc.js";
 import { ThemeProvider } from "./theme.js";
+import { LanguageProvider } from "./i18n/LanguageProvider.js";
 import { WsProvider } from "./ws.js";
 import { RootLayout } from "./routes/root.js";
 import { InboxLayout, handle as inboxLayoutHandle } from "./routes/inbox/_layout.js";
@@ -14,7 +15,7 @@ import { PromptReaderRoute, handle as promptReaderHandle } from "./routes/knowle
 import { Glossary,   handle as glossaryHandle   } from "./routes/knowledge/glossary.js";
 import { SettingsLayout, handle as settingsHandle } from "./routes/settings.js";
 import { SettingsCategory } from "./routes/settings.$category.js";
-import { categoryLabel } from "./components/settings/categories.js";
+import { categoryLabelKey } from "./components/settings/categories.js";
 import { Health, handle as healthHandle } from "./routes/health.js";
 
 function RecordingRedirect() {
@@ -71,7 +72,7 @@ const router = createBrowserRouter([
           {
             path: ":category",
             Component: SettingsCategory,
-            handle: { breadcrumb: (p: Record<string, string | undefined>) => categoryLabel(p.category ?? ""), filters: null },
+            handle: { breadcrumb: (p: Record<string, string | undefined>) => categoryLabelKey(p.category ?? ""), filters: null },
           },
         ],
       },
@@ -93,13 +94,15 @@ export function App() {
 
   return (
     <ThemeProvider>
-      <trpc.Provider client={tc} queryClient={qc}>
-        <QueryClientProvider client={qc}>
-          <WsProvider>
-            <RouterProvider router={router} />
-          </WsProvider>
-        </QueryClientProvider>
-      </trpc.Provider>
+      <LanguageProvider>
+        <trpc.Provider client={tc} queryClient={qc}>
+          <QueryClientProvider client={qc}>
+            <WsProvider>
+              <RouterProvider router={router} />
+            </WsProvider>
+          </QueryClientProvider>
+        </trpc.Provider>
+      </LanguageProvider>
     </ThemeProvider>
   );
 }

@@ -18,7 +18,10 @@ const GET_KEY = [["recordings", "get"]] as const;
 const LIST_KEY = [["recordings", "list"]] as const;
 
 export const handle = {
-  breadcrumb: (params: { stem?: string }) => params.stem ?? "Recording",
+  // Returns the stem (a literal filename) when present, else the i18n key for
+  // "Recording". TopBar resolves both through t(): a real key localizes; a stem
+  // falls back to itself since it isn't in the dictionary.
+  breadcrumb: (params: { stem?: string }) => params.stem ?? "breadcrumb.recording",
   filters: null,
 };
 

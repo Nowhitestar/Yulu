@@ -2,6 +2,7 @@
 import type { ReactNode } from "react";
 import { useParams, useOutletContext } from "react-router";
 import { categoryMeta } from "../components/settings/categories.js";
+import { useT } from "../i18n/LanguageProvider.js";
 import type { SettingsOutletContext } from "./settings.js";
 import type { SettingsRestartTracker } from "../hooks/useSettingsRestartTracker.js";
 import { CapabilitiesSection } from "../components/settings/CapabilitiesSection.js";
@@ -60,12 +61,13 @@ const CATEGORY_SECTIONS: Record<string, (tracker: SettingsRestartTracker) => Rea
 export function SettingsCategory() {
   const { category } = useParams();
   const { tracker } = useOutletContext<SettingsOutletContext>();
+  const t = useT();
   const meta = categoryMeta(category ?? "");
 
   if (!meta) {
     return (
       <div className="settings-detail">
-        <div className="settings-detail-empty">未知设置分类。</div>
+        <div className="settings-detail-empty">{t("settings.detail.unknownCategory")}</div>
       </div>
     );
   }
@@ -75,13 +77,13 @@ export function SettingsCategory() {
   return (
     <div className="settings-detail">
       <div className="settings-detail-head">
-        <h1 className="settings-detail-title">{meta.label}</h1>
-        <p className="settings-detail-sub">{meta.description}</p>
+        <h1 className="settings-detail-title">{t(meta.labelKey)}</h1>
+        <p className="settings-detail-sub">{t(meta.descKey)}</p>
       </div>
       {renderSections ? (
         renderSections(tracker)
       ) : (
-        <div className="settings-detail-empty">更多自动化设置即将到来 (P2)。</div>
+        <div className="settings-detail-empty">{t("settings.detail.automationComingSoon")}</div>
       )}
     </div>
   );

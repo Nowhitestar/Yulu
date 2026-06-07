@@ -4,7 +4,7 @@ import { trpc } from "../../trpc.js";
 import { EditableTable, type ColumnDef } from "../../components/EditableTable.js";
 import "./glossary.css";
 
-export const handle = { breadcrumb: "Glossary", filters: null };
+export const handle = { breadcrumb: "breadcrumb.glossary", filters: null };
 
 interface VocabRow {
   id: number;

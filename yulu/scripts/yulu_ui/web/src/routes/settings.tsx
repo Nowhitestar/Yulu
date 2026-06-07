@@ -24,7 +24,7 @@ const DAEMON_LABEL: Record<string, DaemonLabel> = {
   calendar: "com.yulu.calendar",
 };
 
-export const handle = { breadcrumb: "Settings", filters: null };
+export const handle = { breadcrumb: "breadcrumb.settings", filters: null };
 
 /** Context handed to the category detail (`<Outlet/>`): the shared restart tracker. */
 export interface SettingsOutletContext {

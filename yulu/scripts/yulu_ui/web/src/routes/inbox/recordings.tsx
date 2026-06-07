@@ -7,7 +7,7 @@ import { MasterDetail } from "../../components/MasterDetail.js";
 import { RecordingStatusBadge } from "../../components/RecordingStatusBadge.js";
 import "./recordings.css";
 
-export const handle = { breadcrumb: "Recordings", filters: null };
+export const handle = { breadcrumb: "breadcrumb.recordings", filters: null };
 
 interface Row {
   stem: string;
