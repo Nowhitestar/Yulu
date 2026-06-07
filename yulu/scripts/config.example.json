@@ -40,6 +40,15 @@
       "chunk_sec": 15,
       "chunk_max_sec": 30,
       "note": "Realtime/live captions run a FASTER model than the final pass so they keep up with wall-clock audio for arbitrarily-long recordings. mlx_model defaults to turbo (~4-8x faster than large-v3); the final transcript is re-done with transcription.mlx.model. chunk_sec = caption cadence; chunk_max_sec caps how much audio one live chunk transcribes so a backlog can't snowball into one slow mega-chunk."
+    },
+    "diarization": {
+      "enabled": false,
+      "provider": "sherpa-onnx",
+      "seg_model": "",
+      "emb_model": "",
+      "num_speakers": null,
+      "threshold": 0.5,
+      "note": "Speaker attribution ('who said what'), v0.6. OFF by default — set enabled=true to provision (setup/yulu migrate then pip-install the cross-platform sherpa-onnx engine into the daemon interpreter + download ~33 MB of ONNX models, both idempotent & offline-by-default). Runs POST-recording, OFF the realtime critical path: the live caption stream never waits on diarization, and a missing engine/model degrades to today's plain transcript with no error. provider=sherpa-onnx is the only backend today. seg_model/emb_model: leave \"\" to use the managed ~/.config/yulu/models/diarization/{segmentation,campplus}.onnx, or an absolute ~/path to override. num_speakers: null = auto-cluster (a calendar-attendee count, when available, is used as a free prior); set an integer to force a known headcount (the reliable lever for Chinese, where auto over-splits). threshold (auto mode only, ignored when num_speakers is set): higher = more speakers; 0.5 is EN-calibrated; uncertain clustering fails toward recoverable under-merge (two people one label, fixable in the UI) rather than many phantom speakers."
     }
   },
   "stt_daemon": {
