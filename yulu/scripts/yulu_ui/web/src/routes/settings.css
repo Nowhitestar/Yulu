@@ -94,12 +94,24 @@
   box-shadow: var(--edge-shadow);
 }
 .integration-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
   font-size: 13px;
   font-weight: 500;
   color: var(--accent);
   margin-bottom: 8px;
-  text-transform: capitalize;
 }
+
+/* Per-calendar connection status pill (Connected / Not authenticated). */
+.conn-status {
+  margin-left: 10px;
+  font-size: 11px;
+  color: var(--fg-2);
+}
+.conn-status--ok { color: var(--green, #2e7d32); }
+.conn-status--bad { color: var(--red, #c62828); }
 
 /* Storage section sub-headings */
 .storage-section {

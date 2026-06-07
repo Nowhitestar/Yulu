@@ -7,6 +7,7 @@ import { MemoryRouter } from "react-router";
 const updateMutate = vi.fn(async (_vars: { key: string; value: unknown }) => ({ daemonsNeedingRestart: ["calendar", "scheduler"], daemonsNeedingSighup: [] }));
 let configReturn: { data: unknown; isPending: boolean } = { data: undefined, isPending: false };
 let recordingState: string = "idle";
+let testResult: { ok: boolean; stdout: string; stderr: string } = { ok: true, stdout: "[]", stderr: "" };
 
 // calendars is restart-class (calendar + scheduler) — drives the recording-guard.
 const SCHEMA = [
@@ -23,16 +24,12 @@ vi.mock("../../web/src/trpc.js", () => ({
     config: {
       get: { useQuery: () => configReturn },
       schema: { useQuery: () => ({ data: SCHEMA, isPending: false }) },
-      update: { useMutation: (opts?: { onSuccess?: (r: unknown, v: unknown) => void }) => ({
-        mutateAsync: async (vars: { key: string; value: unknown }) => {
-          const res = await updateMutate(vars);
-          opts?.onSuccess?.(res, vars);
-          return res;
-        },
+      update: { useMutation: () => ({
+        mutateAsync: async (vars: { key: string; value: unknown }) => updateMutate(vars),
       }) },
     },
     recording: { state: { useQuery: () => ({ data: { state: recordingState } }) } },
-    integrations: { test: { useMutation: () => ({ mutateAsync: async () => ({ ok: true, stdout: "", stderr: "" }) }) } },
+    integrations: { test: { useMutation: () => ({ mutateAsync: async () => testResult }) } },
     system: {
       pickFile: { useMutation: () => ({ mutateAsync: async () => ({ path: "" }), isPending: false }) },
       openInFinder: { useMutation: () => ({ mutate: vi.fn() }) },
@@ -45,7 +42,10 @@ vi.mock("../../web/src/trpc.js", () => ({
 
 import { IntegrationsSection } from "../../web/src/components/settings/IntegrationsSection.js";
 
-const tracker = { record: vi.fn(), statusFor: () => null, clear: vi.fn(), pending: {} } as never;
+// A tracker whose record spy lets us assert whether a commit tripped the restart
+// banner (record called) or was suppressed (record NOT called) — P4a-4.
+const record = vi.fn();
+const tracker = { record, statusFor: () => null, clearAll: vi.fn(), daemons: new Map() } as never;
 
 function configWith(calendars: unknown[]) {
   return { data: { calendars }, isPending: false };
@@ -53,7 +53,9 @@ function configWith(calendars: unknown[]) {
 
 beforeEach(() => {
   updateMutate.mockClear();
+  record.mockClear();
   recordingState = "idle";
+  testResult = { ok: true, stdout: "[]", stderr: "" };
   configReturn = configWith([]);
 });
 
@@ -65,78 +67,162 @@ function mount() {
   );
 }
 
-describe("IntegrationsSection — calendar add/remove (P2-5)", () => {
-  it("empty: shows Add Feishu / Add Google and the empty state", () => {
+describe("IntegrationsSection — Feishu removed (P4a-4)", () => {
+  it("offers no + Feishu button (Feishu is a dead stub)", () => {
     mount();
-    expect(screen.getByText("No calendar providers configured.")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "+ Feishu" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /feishu/i })).toBeNull();
+    // Only the Google add button remains.
     expect(screen.getByRole("button", { name: "+ Google" })).toBeInTheDocument();
   });
 
-  it("adding Feishu appends {type:'feishu', enabled:false} via config.update('calendars', …)", async () => {
+  it("never renders the word Feishu anywhere", () => {
+    configReturn = configWith([{ type: "google", enabled: false, gog_account: "me@example.com" }]);
+    const { container } = mount();
+    expect(container.textContent).not.toMatch(/feishu/i);
+  });
+});
+
+describe("IntegrationsSection — Google calendar via gog (P4a-4)", () => {
+  it("empty: shows a 'No calendar connected.' state and the + Google button", () => {
     mount();
+    expect(screen.getByText("No calendar connected.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "+ Google" })).toBeInTheDocument();
+  });
+
+  it("reframes the entry header as 'Google Calendar (via gog)' with an account + watch list", () => {
+    configReturn = configWith([{ type: "google", enabled: true, gog_account: "me@example.com", watch_calendars: ["primary", "work"] }]);
+    const { container } = mount();
+    const card = container.querySelector(".integration-card") as HTMLElement;
+    // The header inside the card reads "Google Calendar (via gog)" (the section
+    // subtitle uses the same words, so scope to the card).
+    expect(within(card).getByText("Google Calendar (via gog)")).toBeInTheDocument();
+    expect(within(card).getByText("Account")).toBeInTheDocument();
+    expect(within(card).getByText("Calendars to watch")).toBeInTheDocument();
+    // watch_calendars rendered as editable chips.
+    const inputs = screen.getAllByRole("textbox") as HTMLInputElement[];
+    expect(inputs.some((i) => i.value === "primary")).toBe(true);
+    expect(inputs.some((i) => i.value === "work")).toBe(true);
+  });
+
+  it("watch_calendars defaults to ['primary'] when unset", () => {
+    configReturn = configWith([{ type: "google", enabled: false, gog_account: "me@example.com" }]);
+    mount();
+    const inputs = screen.getAllByRole("textbox") as HTMLInputElement[];
+    expect(inputs.some((i) => i.value === "primary")).toBe(true);
+  });
+
+  it("editing the gog_account commits calendars.<idx>.gog_account", async () => {
+    configReturn = configWith([{ type: "google", enabled: false, gog_account: "me@example.com" }]);
+    mount();
+    const row = screen.getByText("Account").closest(".row")! as HTMLElement;
     const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: "+ Feishu" }));
+    // Click the value display (InlineEditRow text shows a display span until clicked).
+    await user.click(within(row).getByText("me@example.com"));
+    const input = within(row).getByRole("textbox") as HTMLInputElement;
+    await user.clear(input);
+    await user.type(input, "new@example.com");
+    input.blur();
     await vi.waitFor(() =>
-      expect(updateMutate).toHaveBeenCalledWith({ key: "calendars", value: [{ type: "feishu", enabled: false }] }),
+      expect(updateMutate).toHaveBeenCalledWith({ key: "calendars.0.gog_account", value: "new@example.com" }),
     );
   });
 
-  it("adding Google to an existing Feishu appends without dropping Feishu", async () => {
-    configReturn = configWith([{ type: "feishu", enabled: true, app_id_env: "FEISHU_APP_ID" }]);
+  it("Check connection → Connected when the gog test passes", async () => {
+    testResult = { ok: true, stdout: "[]", stderr: "" };
+    configReturn = configWith([{ type: "google", enabled: true, gog_account: "me@example.com" }]);
+    mount();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: /check connection/i }));
+    await vi.waitFor(() => expect(screen.getByText("Connected")).toBeInTheDocument());
+  });
+
+  it("Check connection → Not authenticated when the gog test fails", async () => {
+    testResult = { ok: false, stdout: "", stderr: "未配置 gog_account" };
+    configReturn = configWith([{ type: "google", enabled: false, gog_account: "" }]);
+    mount();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: /check connection/i }));
+    await vi.waitFor(() => expect(screen.getByText("Not authenticated")).toBeInTheDocument());
+  });
+});
+
+describe("IntegrationsSection — add/remove + restart suppression (P4a-4)", () => {
+  it("adding Google appends a DISABLED entry with watch_calendars:['primary'] and does NOT trip the restart banner", async () => {
     mount();
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: "+ Google" }));
     await vi.waitFor(() =>
       expect(updateMutate).toHaveBeenCalledWith({
         key: "calendars",
-        value: [
-          { type: "feishu", enabled: true, app_id_env: "FEISHU_APP_ID" },
-          { type: "google", enabled: false },
-        ],
+        value: [{ type: "google", enabled: false, watch_calendars: ["primary"] }],
       }),
     );
+    // Appending a disabled entry needs no restart → tracker.record NOT called.
+    expect(record).not.toHaveBeenCalled();
   });
 
-  it("an already-present provider's Add button is disabled (no duplicates)", () => {
-    configReturn = configWith([{ type: "feishu", enabled: false }]);
-    mount();
-    expect((screen.getByRole("button", { name: "+ Feishu" }) as HTMLButtonElement).disabled).toBe(true);
-    expect((screen.getByRole("button", { name: "+ Google" }) as HTMLButtonElement).disabled).toBe(false);
-  });
-
-  it("removing an entry commits the array without that entry", async () => {
-    configReturn = configWith([
-      { type: "feishu", enabled: true },
-      { type: "google", enabled: false, gog_account: "me@example.com" },
-    ]);
-    mount();
-    const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: "Remove feishu calendar" }));
-    await vi.waitFor(() =>
-      expect(updateMutate).toHaveBeenCalledWith({
-        key: "calendars",
-        value: [{ type: "google", enabled: false, gog_account: "me@example.com" }],
-      }),
-    );
-  });
-
-  it("removing the only entry commits an empty array", async () => {
+  it("an already-present Google provider's Add button is disabled (no duplicates)", () => {
     configReturn = configWith([{ type: "google", enabled: false }]);
     mount();
+    expect((screen.getByRole("button", { name: "+ Google" }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("enabling a calendar trips the restart banner (record called with the daemons)", async () => {
+    configReturn = configWith([{ type: "google", enabled: false, gog_account: "me@example.com" }]);
+    mount();
     const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: "Remove google calendar" }));
+    const row = screen.getByText("Enabled").closest(".row")!;
+    await user.click(within(row as HTMLElement).getByRole("switch"));
+    await vi.waitFor(() =>
+      expect(updateMutate).toHaveBeenCalledWith({ key: "calendars.0.enabled", value: true }),
+    );
+    await vi.waitFor(() =>
+      expect(record).toHaveBeenCalledWith("calendars.0.enabled", ["calendar", "scheduler"]),
+    );
+  });
+
+  it("disabling an enabled calendar does NOT trip the restart banner", async () => {
+    configReturn = configWith([{ type: "google", enabled: true, gog_account: "me@example.com" }]);
+    mount();
+    const user = userEvent.setup();
+    const row = screen.getByText("Enabled").closest(".row")!;
+    await user.click(within(row as HTMLElement).getByRole("switch"));
+    await vi.waitFor(() =>
+      expect(updateMutate).toHaveBeenCalledWith({ key: "calendars.0.enabled", value: false }),
+    );
+    expect(record).not.toHaveBeenCalled();
+  });
+
+  it("removing a DISABLED entry commits the array and does NOT trip restart", async () => {
+    configReturn = configWith([{ type: "google", enabled: false, gog_account: "me@example.com" }]);
+    mount();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Remove Google calendar" }));
     await vi.waitFor(() =>
       expect(updateMutate).toHaveBeenCalledWith({ key: "calendars", value: [] }),
+    );
+    expect(record).not.toHaveBeenCalled();
+  });
+
+  it("removing an ENABLED entry trips restart (the daemon must stop watching it)", async () => {
+    configReturn = configWith([{ type: "google", enabled: true, gog_account: "me@example.com" }]);
+    mount();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Remove Google calendar" }));
+    await vi.waitFor(() =>
+      expect(updateMutate).toHaveBeenCalledWith({ key: "calendars", value: [] }),
+    );
+    await vi.waitFor(() =>
+      expect(record).toHaveBeenCalledWith("calendars", ["calendar", "scheduler"]),
     );
   });
 
   it("recording-guard: while recording, Add/Remove are disabled and commit no array edit", async () => {
     recordingState = "recording";
-    configReturn = configWith([{ type: "feishu", enabled: true }]);
+    configReturn = configWith([{ type: "google", enabled: true }]);
     mount();
     const add = screen.getByRole("button", { name: "+ Google" }) as HTMLButtonElement;
-    const remove = screen.getByRole("button", { name: "Remove feishu calendar" }) as HTMLButtonElement;
+    const remove = screen.getByRole("button", { name: "Remove Google calendar" }) as HTMLButtonElement;
     expect(add.disabled).toBe(true);
     expect(remove.disabled).toBe(true);
     const user = userEvent.setup();
