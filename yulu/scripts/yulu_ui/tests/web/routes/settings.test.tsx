@@ -92,23 +92,27 @@ vi.mock("../../../web/src/trpc.js", () => {
 import { useMatches } from "react-router";
 import { SettingsLayout, handle as settingsHandle } from "../../../web/src/routes/settings.js";
 import { SettingsCategory } from "../../../web/src/routes/settings.$category.js";
-import { categoryLabel } from "../../../web/src/components/settings/categories.js";
+import { categoryLabelKey } from "../../../web/src/components/settings/categories.js";
 import { CATEGORIES } from "../../../web/src/components/settings/categories.js";
+import { translate } from "../../../web/src/i18n/LanguageProvider.js";
 import { ThemeProvider } from "../../../web/src/theme.js";
 
 // Minimal breadcrumb probe that mirrors TopBar's breadcrumb computation (read
-// each match's handle.breadcrumb, resolve string|fn, join with " / "). This
-// exercises the route-handle wiring without pulling in TopBar's GlobalSearch.
+// each match's handle.breadcrumb, resolve string|fn to an i18n key, run it
+// through translate(), join with " / "). Breadcrumb values are now i18n keys
+// (or functions returning a key), so we resolve them at the default language
+// (zh) just like TopBar resolves them via t(). This exercises the route-handle
+// wiring without pulling in TopBar's GlobalSearch.
 function BreadcrumbProbe() {
   const matches = useMatches();
   const segments: string[] = [];
   for (const m of matches) {
     const bc = (m.handle as { breadcrumb?: unknown } | undefined)?.breadcrumb;
     if (bc == null) continue;
-    if (typeof bc === "string") segments.push(bc);
+    if (typeof bc === "string") segments.push(translate("zh", bc));
     else if (typeof bc === "function") {
-      const v = (bc as (p: Record<string, string | undefined>) => string | null)(m.params as Record<string, string | undefined>);
-      if (v) segments.push(v);
+      const key = (bc as (p: Record<string, string | undefined>) => string | null)(m.params as Record<string, string | undefined>);
+      if (key) segments.push(translate("zh", key));
     }
   }
   return <div className="topbar-breadcrumb">{segments.join(" / ")}</div>;
@@ -140,7 +144,7 @@ function routesTree() {
             {
               path: ":category",
               Component: SettingsCategory,
-              handle: { breadcrumb: (p: Record<string, string | undefined>) => categoryLabel(p.category ?? ""), filters: null },
+              handle: { breadcrumb: (p: Record<string, string | undefined>) => categoryLabelKey(p.category ?? ""), filters: null },
             },
           ],
         },
@@ -191,9 +195,9 @@ describe("Settings (3-column MasterDetail)", () => {
     expect(scoped.getByText("集成")).toBeInTheDocument();
   });
 
-  it("renders the breadcrumb as 'Settings / <category>'", () => {
+  it("renders the breadcrumb as '设置 / <category>'", () => {
     const { container } = wrap("/settings/audio");
-    expect(container.querySelector(".topbar-breadcrumb")?.textContent).toBe("Settings / 音频与存储");
+    expect(container.querySelector(".topbar-breadcrumb")?.textContent).toBe("设置 / 音频与存储");
   });
 
   it("marks the active category nav for the current route", () => {

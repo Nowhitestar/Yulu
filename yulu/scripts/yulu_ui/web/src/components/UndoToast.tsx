@@ -1,5 +1,6 @@
 // web/src/components/UndoToast.tsx
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
+import { useT } from "../i18n/LanguageProvider.js";
 import "./UndoToast.css";
 
 const TOAST_MS = 6000;
@@ -32,6 +33,7 @@ export function useUndoToast(): UndoToastApi {
  * section's commit (routed through useConfigField) surfaces here uniformly.
  */
 export function UndoToastProvider({ children }: { children: ReactNode }) {
+  const t = useT();
   const [req, setReq] = useState<UndoRequest | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -58,9 +60,9 @@ export function UndoToastProvider({ children }: { children: ReactNode }) {
       {children}
       {req && (
         <div className="undo-toast" role="status" data-testid="undo-toast">
-          <span className="undo-toast-msg">已保存</span>
+          <span className="undo-toast-msg">{t("undo.saved")}</span>
           <span className="undo-toast-sep">·</span>
-          <button type="button" className="undo-toast-btn" onClick={onUndo}>撤销</button>
+          <button type="button" className="undo-toast-btn" onClick={onUndo}>{t("undo.action")}</button>
         </div>
       )}
     </UndoToastContext.Provider>

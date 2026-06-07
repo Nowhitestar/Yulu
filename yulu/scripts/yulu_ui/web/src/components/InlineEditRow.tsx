@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { trpc } from "../trpc.js";
+import { useT, type TFunc } from "../i18n/LanguageProvider.js";
 import "./InlineEditRow.css";
 
 export type RowStatus = "saved" | "restart" | "typing" | null;
@@ -28,13 +29,14 @@ type ReadonlyProps = BaseProps & { type: "readonly"; value: string; revealInFind
 export type InlineEditRowProps = TextProps | NumberProps | SelectProps | ToggleProps | PathProps | ReadonlyProps;
 
 export function InlineEditRow(props: InlineEditRowProps) {
+  const t = useT();
   return (
     <div className="row">
       <div className="row-label">
         <div>{props.label}</div>
         {props.help && <div className="row-help">{props.help}</div>}
       </div>
-      <div className="row-value">{renderValue(props)}</div>
+      <div className="row-value">{renderValue(props, t)}</div>
       <div className="row-status" data-testid="row-status">{statusGlyph(props.status)}</div>
     </div>
   );
@@ -47,11 +49,11 @@ function statusGlyph(status: RowStatus | undefined) {
   return null;
 }
 
-function renderValue(props: InlineEditRowProps): React.ReactNode {
+function renderValue(props: InlineEditRowProps, t: TFunc): React.ReactNode {
   // Recording-guard: restart-class fields render locked while a recording is in
   // flight (readonly is never gated — it has no commit path).
   if (props.disabled && (props.type === "text" || props.type === "number" || props.type === "select" || props.type === "toggle")) {
-    return <DisabledValue display={displayText(props)} note={props.disabledNote} />;
+    return <DisabledValue display={displayText(props, t)} note={props.disabledNote ?? t("settings.locked.recording")} />;
   }
   switch (props.type) {
     case "text":     return <TextValue {...props} />;
@@ -64,20 +66,20 @@ function renderValue(props: InlineEditRowProps): React.ReactNode {
 }
 
 // Read-only rendering of a guarded field's current value.
-function displayText(props: TextProps | NumberProps | SelectProps | ToggleProps): string {
+function displayText(props: TextProps | NumberProps | SelectProps | ToggleProps, t: TFunc): string {
   switch (props.type) {
     case "text":   return props.value;
     case "number": return String(props.value);
     case "select": return props.options.find((o) => o.value === props.value)?.label ?? props.value;
-    case "toggle": return props.value ? "On" : "Off";
+    case "toggle": return props.value ? t("value.on") : t("value.off");
   }
 }
 
 function DisabledValue({ display, note }: { display: string; note?: string }) {
   return (
-    <span className="value-disabled" title={note ?? "录音中不可修改"}>
+    <span className="value-disabled" title={note}>
       <span className="value-disabled-text">{display}</span>
-      <span className="value-disabled-note">{note ?? "录音中不可改"}</span>
+      <span className="value-disabled-note">{note}</span>
     </span>
   );
 }

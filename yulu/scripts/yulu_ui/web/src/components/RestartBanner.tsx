@@ -1,3 +1,4 @@
+import { useT } from "../i18n/LanguageProvider.js";
 import "./RestartBanner.css";
 
 export interface RestartBannerProps {
@@ -16,24 +17,25 @@ export interface RestartBannerProps {
  * daemon names are shown for transparency, but there are no per-daemon buttons.
  */
 export function RestartBanner({ daemons, onRestartAll, onDismiss }: RestartBannerProps) {
+  const t = useT();
   const names = daemons.map((d) => d.name);
   return (
     <div className="restart-banner" role="status">
       <div className="restart-banner-dot">●</div>
       <div className="restart-banner-body">
-        <div className="restart-banner-title">Some changes need a daemon restart to take effect.</div>
+        <div className="restart-banner-title">{t("restartBanner.title")}</div>
         <div className="restart-banner-daemons">{names.join(", ")}</div>
       </div>
       <button type="button" className="restart-banner-btn primary" onClick={onRestartAll}>
-        Restart now
+        {t("restartBanner.restartNow")}
       </button>
       <button
         type="button"
         className="restart-banner-btn restart-banner-dismiss"
         onClick={onDismiss}
-        aria-label="Dismiss"
+        aria-label={t("restartBanner.dismiss")}
       >
-        Dismiss
+        {t("restartBanner.dismiss")}
       </button>
     </div>
   );

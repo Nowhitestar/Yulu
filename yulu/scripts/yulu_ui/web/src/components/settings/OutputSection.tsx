@@ -1,6 +1,7 @@
 import { trpc } from "../../trpc.js";
 import { InlineEditRow } from "../InlineEditRow.js";
 import { useConfigField } from "../../hooks/useConfigField.js";
+import { useT } from "../../i18n/LanguageProvider.js";
 import type { SettingsRestartTracker } from "../../hooks/useSettingsRestartTracker.js";
 import "./OutputSection.css";
 
@@ -34,6 +35,7 @@ function EnvNameRow({
   name: string;
   onCommit: (v: string) => void;
 }) {
+  const t = useT();
   // Only query presence once a non-empty name exists.
   const presence = trpc.config.envPresent.useQuery(
     { name },
@@ -44,8 +46,8 @@ function EnvNameRow({
     name.trim().length === 0
       ? null
       : presence.data?.present
-        ? <span className="env-present env-present--ok" data-testid="env-presence">set</span>
-        : <span className="env-present env-present--missing" data-testid="env-presence">not set</span>;
+        ? <span className="env-present env-present--ok" data-testid="env-presence">{t("settings.output.env.present")}</span>
+        : <span className="env-present env-present--missing" data-testid="env-presence">{t("settings.output.env.missing")}</span>;
 
   return (
     <div className="row">
@@ -67,13 +69,14 @@ function EnvNameRow({
 // hint can sit beside it. autocomplete=off so browsers never treat it as a
 // credential field.
 function EnvNameInput({ value, onCommit }: { value: string; onCommit: (v: string) => void }) {
+  const t = useT();
   return (
     <input
       className="value-input"
       type="text"
       autoComplete="off"
       spellCheck={false}
-      aria-label="Environment variable name"
+      aria-label={t("settings.output.env.aria")}
       defaultValue={value}
       onBlur={(e) => { if (e.target.value !== value) onCommit(e.target.value.trim()); }}
       onKeyDown={(e) => {
@@ -94,6 +97,7 @@ function EnvNameInput({ value, onCommit }: { value: string; onCommit: (v: string
 export function OutputSection({ tracker }: OutputSectionProps) {
   const { data: cfg } = trpc.config.get.useQuery();
   const { commit } = useConfigField(tracker);
+  const t = useT();
 
   if (!cfg) return null;
 
@@ -110,20 +114,20 @@ export function OutputSection({ tracker }: OutputSectionProps) {
 
   return (
     <section id="output" className="settings-section">
-      <h2 className="settings-section-h">Output</h2>
-      <p className="settings-section-sub">Where a finished summary is delivered</p>
+      <h2 className="settings-section-h">{t("settings.output.heading")}</h2>
+      <p className="settings-section-sub">{t("settings.output.sub")}</p>
 
       {/* P4a-5: a prominent, always-visible channel picker (not click-to-edit) so
           the section reads as a real, configurable choice. The chosen channel's
           fields appear below it. */}
       <div className="row output-channel-row">
         <div className="row-label">
-          <div>Output channel</div>
-          <div className="row-help">file writes the note to disk. zulip / notion / telegram post it to that service.</div>
+          <div>{t("settings.output.channel.label")}</div>
+          <div className="row-help">{t("settings.output.channel.help")}</div>
         </div>
         <div className="row-value">
           <select
-            aria-label="Output channel"
+            aria-label={t("settings.output.channel.aria")}
             className="value-input output-channel-select"
             value={channel}
             onChange={(e) => commit("output.channel")(e.target.value)}
@@ -138,21 +142,21 @@ export function OutputSection({ tracker }: OutputSectionProps) {
 
       {channel === "file" && (
         <div className="output-file-note">
-          Summary is saved next to the recording — no extra setup.
+          {t("settings.output.file.note")}
         </div>
       )}
 
       {channel === "zulip" && (
         <>
           <InlineEditRow
-            label="Zulip stream"
+            label={t("settings.output.zulip.stream")}
             type="text"
             value={zulip.stream ?? ""}
             onCommit={commit("output.zulip.stream") as (v: string) => void}
             status={tracker.statusFor("output.zulip.stream")}
           />
           <InlineEditRow
-            label="Zulip topic"
+            label={t("settings.output.zulip.topic")}
             type="text"
             value={zulip.topic ?? ""}
             onCommit={commit("output.zulip.topic") as (v: string) => void}
@@ -164,16 +168,16 @@ export function OutputSection({ tracker }: OutputSectionProps) {
       {channel === "notion" && (
         <>
           <InlineEditRow
-            label="Notion database"
-            help="The target Notion database ID."
+            label={t("settings.output.notion.database")}
+            help={t("settings.output.notion.database.help")}
             type="text"
             value={notion.database_id ?? ""}
             onCommit={commit("output.notion.database_id") as (v: string) => void}
             status={tracker.statusFor("output.notion.database_id")}
           />
           <EnvNameRow
-            label="Notion API key env var"
-            help="Name of the env var holding your Notion API key (e.g. NOTION_API_KEY). Yulu reads the name, never the secret — export the value in your shell."
+            label={t("settings.output.notion.apiKey")}
+            help={t("settings.output.notion.apiKey.help")}
             name={notion.api_key_env ?? ""}
             onCommit={commit("output.notion.api_key_env") as (v: string) => void}
           />
@@ -182,7 +186,7 @@ export function OutputSection({ tracker }: OutputSectionProps) {
 
       {channel === "telegram" && (
         <InlineEditRow
-          label="Telegram chat ID"
+          label={t("settings.output.telegram.chatId")}
           type="text"
           value={telegram.chat_id ?? ""}
           onCommit={commit("output.telegram.chat_id") as (v: string) => void}

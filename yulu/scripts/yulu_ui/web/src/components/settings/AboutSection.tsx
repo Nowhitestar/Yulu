@@ -1,4 +1,5 @@
 import { trpc } from "../../trpc.js";
+import { useT } from "../../i18n/LanguageProvider.js";
 
 /**
  * AboutSection — the General "About" block (P3-1). Read-only: shows Yulu's
@@ -10,23 +11,24 @@ import { trpc } from "../../trpc.js";
  */
 export function AboutSection() {
   const { data } = trpc.system.yuluVersion.useQuery();
+  const t = useT();
   const version = data?.version ?? "—";
   const installSource = data?.installSource ?? null;
 
   return (
     <section id="about" className="settings-section">
-      <h2 className="settings-section-h">About</h2>
-      <p className="settings-section-sub">Yulu version and install source</p>
+      <h2 className="settings-section-h">{t("settings.about.heading")}</h2>
+      <p className="settings-section-sub">{t("settings.about.sub")}</p>
 
       <div className="row">
-        <div className="row-label">Version</div>
+        <div className="row-label">{t("settings.about.version")}</div>
         <div className="row-value"><span className="about-value">{version}</span></div>
         <div className="row-status" />
       </div>
 
       {installSource && (
         <div className="row">
-          <div className="row-label">Install source</div>
+          <div className="row-label">{t("settings.about.installSource")}</div>
           <div className="row-value"><span className="about-value">{installSource}</span></div>
           <div className="row-status" />
         </div>

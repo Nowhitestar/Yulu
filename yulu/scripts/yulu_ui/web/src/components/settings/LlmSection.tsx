@@ -7,6 +7,7 @@ import { TestPopover } from "../TestPopover.js";
 import { CategoryChip } from "../CategoryChip.js";
 import type { Category } from "../CategoryChip.js";
 import { useConfigField } from "../../hooks/useConfigField.js";
+import { useT } from "../../i18n/LanguageProvider.js";
 import type { SettingsRestartTracker } from "../../hooks/useSettingsRestartTracker.js";
 import "./LlmSection.css";
 
@@ -24,11 +25,11 @@ const PRESET_COMMAND: Record<Exclude<PresetId, "custom" | "agent-queue">, string
   codex: ["python3", "codex_llm.py"],
 };
 
-const PRESET_OPTIONS: Array<{ value: PresetId; label: string }> = [
-  { value: "agent-queue", label: "Agent-queue (your coding agent)" },
-  { value: "claude", label: "Claude CLI" },
-  { value: "codex", label: "Codex" },
-  { value: "custom", label: "Custom command…" },
+const PRESET_OPTIONS: Array<{ value: PresetId; labelKey: string }> = [
+  { value: "agent-queue", labelKey: "settings.llm.preset.agentQueue" },
+  { value: "claude", labelKey: "settings.llm.preset.claude" },
+  { value: "codex", labelKey: "settings.llm.preset.codex" },
+  { value: "custom", labelKey: "settings.llm.preset.custom" },
 ];
 
 function arraysEqual(a: string[], b: string[]): boolean {
@@ -66,6 +67,7 @@ interface PromptRow {
  */
 function AutoRunTemplates() {
   const utils = trpc.useUtils();
+  const t = useT();
   const { data, isPending } = trpc.prompts.list.useQuery({});
   const updateMut = trpc.prompts.update.useMutation({
     onSuccess: () => { utils.prompts.list.invalidate(); },
@@ -77,16 +79,16 @@ function AutoRunTemplates() {
     <div className="autorun-templates">
       <div className="autorun-templates-head">
         <div>
-          <div className="autorun-templates-title">Auto-run templates</div>
-          <div className="row-help">These run automatically when a recording is transcribed.</div>
+          <div className="autorun-templates-title">{t("settings.llm.autorun.title")}</div>
+          <div className="row-help">{t("settings.llm.autorun.help")}</div>
         </div>
-        <Link to="/knowledge/prompts" className="autorun-manage-link">Manage all templates →</Link>
+        <Link to="/knowledge/prompts" className="autorun-manage-link">{t("settings.llm.autorun.manage")}</Link>
       </div>
 
       {isPending ? (
-        <div className="autorun-empty">Loading…</div>
+        <div className="autorun-empty">{t("common.loading")}</div>
       ) : rows.length === 0 ? (
-        <div className="autorun-empty">No auto-run templates. Add one from the Prompts page.</div>
+        <div className="autorun-empty">{t("settings.llm.autorun.empty")}</div>
       ) : (
         <ul className="autorun-list">
           {rows.map((p) => (
@@ -97,7 +99,7 @@ function AutoRunTemplates() {
                 type="button"
                 role="switch"
                 aria-checked={p.is_auto_run === 1}
-                aria-label={`Auto-run ${p.name}`}
+                aria-label={t("settings.llm.autorun.toggleAria", { name: p.name })}
                 className={"toggle on"}
                 disabled={updateMut.isPending}
                 onClick={() => updateMut.mutate({ id: p.id, isAutoRun: false })}
@@ -116,6 +118,7 @@ export function LlmSection({ tracker }: LlmSectionProps) {
   const { data: cfg } = trpc.config.get.useQuery();
   const { commit } = useConfigField(tracker);
   const testMut = trpc.llm.test.useMutation();
+  const t = useT();
 
   const [popState, setPopState] = useState<"pending" | "ok" | "failed" | null>(null);
   const [popStdout, setPopStdout] = useState("");
@@ -161,10 +164,10 @@ export function LlmSection({ tracker }: LlmSectionProps) {
 
   return (
     <section id="llm" className="settings-section">
-      <h2 className="settings-section-h">LLM</h2>
-      <p className="settings-section-sub">Summary generation method</p>
+      <h2 className="settings-section-h">{t("settings.llm.heading")}</h2>
+      <p className="settings-section-sub">{t("settings.llm.sub")}</p>
       <InlineEditRow
-        label="Enabled"
+        label={t("settings.llm.enabled.label")}
         type="toggle"
         value={llm.enabled ?? false}
         onCommit={commit("llm.enabled")}
@@ -175,18 +178,18 @@ export function LlmSection({ tracker }: LlmSectionProps) {
           write a known command; Custom reveals the editor for anything else. */}
       <div className="row">
         <div className="row-label">
-          <div>Backend</div>
-          <div className="row-help">Agent-queue hands summaries to your own coding agent. Claude / Codex run a known command. Custom = your own command.</div>
+          <div>{t("settings.llm.backend.label")}</div>
+          <div className="row-help">{t("settings.llm.backend.help")}</div>
         </div>
         <div className="row-value">
           <select
-            aria-label="LLM backend"
+            aria-label={t("settings.llm.backend.aria")}
             className="value-input"
             value={selected}
             onChange={(e) => onPresetChange(e.target.value as PresetId)}
           >
             {PRESET_OPTIONS.map((o) => (
-              <option key={o.value} value={o.value}>{o.label}</option>
+              <option key={o.value} value={o.value}>{t(o.labelKey)}</option>
             ))}
           </select>
         </div>
@@ -195,8 +198,8 @@ export function LlmSection({ tracker }: LlmSectionProps) {
       {selected === "custom" && (
         <div className="row">
           <div className="row-label">
-            <div>Command</div>
-            <div className="row-help">Spawned with stdin = your turn text</div>
+            <div>{t("settings.llm.command.label")}</div>
+            <div className="row-help">{t("settings.llm.command.help")}</div>
           </div>
           <div className="row-value">
             <CommandEditor
@@ -208,9 +211,9 @@ export function LlmSection({ tracker }: LlmSectionProps) {
         </div>
       )}
       <div className="row">
-        <div className="row-label">Test</div>
+        <div className="row-label">{t("settings.llm.test.label")}</div>
         <div className="row-value">
-          <button type="button" className="cmd-add" onClick={runTest}>Test command</button>
+          <button type="button" className="cmd-add" onClick={runTest}>{t("settings.llm.test.button")}</button>
         </div>
         <div className="row-status" />
       </div>

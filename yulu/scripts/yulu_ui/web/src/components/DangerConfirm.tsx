@@ -1,5 +1,6 @@
 // web/src/components/DangerConfirm.tsx
 import { createContext, useCallback, useContext, useRef, useState, type ReactNode } from "react";
+import { useT } from "../i18n/LanguageProvider.js";
 
 /**
  * The async danger-confirm gate (P3-3). A field flagged `danger` in the registry
@@ -38,6 +39,7 @@ interface PendingConfirm {
  * danger-flagged commit (routed through useConfigField) surfaces here uniformly.
  */
 export function DangerConfirmProvider({ children }: { children: ReactNode }) {
+  const t = useT();
   const [pending, setPending] = useState<PendingConfirm | null>(null);
   // Hold the live resolver in a ref so settle() always closes over the latest
   // one (setState is async; a captured `pending` could be stale).
@@ -69,17 +71,16 @@ export function DangerConfirmProvider({ children }: { children: ReactNode }) {
           <div
             className="danger-confirm"
             role="alertdialog"
-            aria-label="Confirm a risky change"
+            aria-label={t("danger.aria")}
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="danger-confirm-title">Apply this change?</div>
+            <div className="danger-confirm-title">{t("danger.title")}</div>
             <div className="danger-confirm-body">
-              Changing <span className="danger-confirm-field">{pending.label}</span> affects
-              recording or transcription. Apply it?
+              {t("danger.body.pre")}<span className="danger-confirm-field">{pending.label}</span>{t("danger.body.post")}
             </div>
             <div className="danger-confirm-actions">
-              <button type="button" className="path-btn" onClick={() => settle(false)}>Cancel</button>
-              <button type="button" className="path-btn danger-confirm-accept" onClick={() => settle(true)}>Apply</button>
+              <button type="button" className="path-btn" onClick={() => settle(false)}>{t("danger.cancel")}</button>
+              <button type="button" className="path-btn danger-confirm-accept" onClick={() => settle(true)}>{t("danger.apply")}</button>
             </div>
           </div>
         </div>

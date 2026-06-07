@@ -3,21 +3,22 @@ import { InlineEditRow } from "../InlineEditRow.js";
 import { AdvancedDisclosure } from "./AdvancedDisclosure.js";
 import { ArrayField } from "./ArrayField.js";
 import { useConfigField } from "../../hooks/useConfigField.js";
+import { useT } from "../../i18n/LanguageProvider.js";
 import type { SettingsRestartTracker } from "../../hooks/useSettingsRestartTracker.js";
 
 export interface AutomationSectionProps {
   tracker: SettingsRestartTracker;
 }
 
-// The advanced match arrays — registry key → label/help. The detector matches a
-// foreground window against these; they're power-user knobs, hidden behind the
-// Advanced disclosure (P3-2).
-const MATCH_ARRAYS: Array<{ key: string; label: string; help: string }> = [
-  { key: "meeting_detection.window_keywords",        label: "Window title keywords",  help: "A window whose title contains any of these is treated as a meeting." },
-  { key: "meeting_detection.app_name_hints",         label: "App name hints",         help: "App names that hint a meeting is in progress." },
-  { key: "meeting_detection.target_app_names",       label: "Target app names",       help: "Apps whose windows are scanned for meetings." },
-  { key: "meeting_detection.dedicated_meeting_apps", label: "Dedicated meeting apps", help: "Apps that are always a meeting when frontmost (e.g. Zoom)." },
-  { key: "meeting_detection.ignore_window_keywords", label: "Ignore window keywords", help: "Windows whose title contains any of these are never a meeting." },
+// The advanced match arrays — registry key → i18n key roots for label/help. The
+// detector matches a foreground window against these; they're power-user knobs,
+// hidden behind the Advanced disclosure (P3-2).
+const MATCH_ARRAYS: Array<{ key: string; labelKey: string; helpKey: string }> = [
+  { key: "meeting_detection.window_keywords",        labelKey: "settings.automation.match.windowKeywords.label",  helpKey: "settings.automation.match.windowKeywords.help" },
+  { key: "meeting_detection.app_name_hints",         labelKey: "settings.automation.match.appHints.label",        helpKey: "settings.automation.match.appHints.help" },
+  { key: "meeting_detection.target_app_names",       labelKey: "settings.automation.match.targetApps.label",      helpKey: "settings.automation.match.targetApps.help" },
+  { key: "meeting_detection.dedicated_meeting_apps", labelKey: "settings.automation.match.dedicatedApps.label",   helpKey: "settings.automation.match.dedicatedApps.help" },
+  { key: "meeting_detection.ignore_window_keywords", labelKey: "settings.automation.match.ignoreKeywords.label",  helpKey: "settings.automation.match.ignoreKeywords.help" },
 ];
 
 /**
@@ -31,6 +32,7 @@ const MATCH_ARRAYS: Array<{ key: string; label: string; help: string }> = [
 export function AutomationSection({ tracker }: AutomationSectionProps) {
   const { data: cfg } = trpc.config.get.useQuery();
   const { commit, isBlocked } = useConfigField(tracker);
+  const t = useT();
 
   if (!cfg) return null;
 
@@ -44,12 +46,12 @@ export function AutomationSection({ tracker }: AutomationSectionProps) {
 
   return (
     <section id="automation" className="settings-section">
-      <h2 className="settings-section-h">Automation</h2>
-      <p className="settings-section-sub">Meeting detection and auto-record prompts</p>
+      <h2 className="settings-section-h">{t("settings.automation.heading")}</h2>
+      <p className="settings-section-sub">{t("settings.automation.sub")}</p>
 
       <InlineEditRow
-        label="Meeting detection"
-        help="Watch for meeting windows and offer to record. Off = never auto-prompt."
+        label={t("settings.automation.enabled.label")}
+        help={t("settings.automation.enabled.help")}
         type="toggle"
         value={md.enabled ?? false}
         onCommit={commit("meeting_detection.enabled") as (v: boolean) => void}
@@ -57,8 +59,8 @@ export function AutomationSection({ tracker }: AutomationSectionProps) {
         status={tracker.statusFor("meeting_detection.enabled")}
       />
       <InlineEditRow
-        label="Poll interval (s)"
-        help="How often to check the foreground window for a meeting."
+        label={t("settings.automation.interval.label")}
+        help={t("settings.automation.interval.help")}
         type="number"
         min={1}
         step={1}
@@ -68,8 +70,8 @@ export function AutomationSection({ tracker }: AutomationSectionProps) {
         status={tracker.statusFor("meeting_detection.interval_sec")}
       />
       <InlineEditRow
-        label="Stable window (s)"
-        help="A meeting window must persist this long before prompting (debounce)."
+        label={t("settings.automation.stable.label")}
+        help={t("settings.automation.stable.help")}
         type="number"
         min={1}
         step={1}
@@ -79,8 +81,8 @@ export function AutomationSection({ tracker }: AutomationSectionProps) {
         status={tracker.statusFor("meeting_detection.stable_sec")}
       />
       <InlineEditRow
-        label="Prompt cooldown (s)"
-        help="Wait at least this long before prompting again after a dismissal."
+        label={t("settings.automation.cooldown.label")}
+        help={t("settings.automation.cooldown.help")}
         type="number"
         min={0}
         step={1}
@@ -90,12 +92,12 @@ export function AutomationSection({ tracker }: AutomationSectionProps) {
         status={tracker.statusFor("meeting_detection.prompt_cooldown_sec")}
       />
 
-      <AdvancedDisclosure title="Advanced — match rules" note="change with care">
-        {MATCH_ARRAYS.map(({ key, label, help }) => (
+      <AdvancedDisclosure title={t("settings.automation.match.heading")} note={t("settings.automation.match.note")}>
+        {MATCH_ARRAYS.map(({ key, labelKey, helpKey }) => (
           <ArrayField
             key={key}
-            label={label}
-            help={help}
+            label={t(labelKey)}
+            help={t(helpKey)}
             value={Array.isArray(md[key]) ? (md[key] as string[]) : []}
             onChange={(next) => commit(key)(next)}
             blocked={isBlocked(key)}

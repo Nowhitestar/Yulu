@@ -22,8 +22,8 @@ vi.mock("../../web/src/trpc.js", () => ({
 
 import {
   CapabilitiesSection,
-  provenanceLabel,
-  statusLabel,
+  provenanceKey,
+  statusKey,
 } from "../../web/src/components/settings/CapabilitiesSection.js";
 
 beforeEach(() => {
@@ -64,22 +64,22 @@ function fullReport() {
   };
 }
 
-describe("provenanceLabel (D-02 copy, locked)", () => {
-  it("maps host-path and agent-config to 'reused from your PATH'", () => {
-    expect(provenanceLabel("host-path")).toBe("reused from your PATH");
-    expect(provenanceLabel("agent-config")).toBe("reused from your PATH");
+describe("provenanceKey (D-02 copy, locked)", () => {
+  it("maps host-path and agent-config to the shared 'reused from your PATH' key", () => {
+    expect(provenanceKey("host-path")).toBe("settings.capabilities.provenance.hostPath");
+    expect(provenanceKey("agent-config")).toBe("settings.capabilities.provenance.hostPath");
   });
-  it("maps yulu-managed to 'Yulu-managed' and absent to 'not found'", () => {
-    expect(provenanceLabel("yulu-managed")).toBe("Yulu-managed");
-    expect(provenanceLabel("absent")).toBe("not found");
+  it("maps yulu-managed and absent to their own keys", () => {
+    expect(provenanceKey("yulu-managed")).toBe("settings.capabilities.provenance.yuluManaged");
+    expect(provenanceKey("absent")).toBe("settings.capabilities.provenance.absent");
   });
 });
 
-describe("statusLabel (tri-state)", () => {
-  it("maps each tri-state to a distinct human label", () => {
-    const usable = statusLabel("usable");
-    const unverified = statusLabel("present-but-unverified");
-    const absent = statusLabel("absent");
+describe("statusKey (tri-state)", () => {
+  it("maps each tri-state to a distinct i18n key", () => {
+    const usable = statusKey("usable");
+    const unverified = statusKey("present-but-unverified");
+    const absent = statusKey("absent");
     expect(usable).not.toBe(unverified);
     expect(unverified).not.toBe(absent);
     expect(usable).not.toBe(absent);
@@ -90,10 +90,10 @@ describe("CapabilitiesSection", () => {
   it("Test 1 — renders the D-02 provenance label for each provenance kind", () => {
     queryReturn = { data: fullReport(), refetch: refetchMock, isError: false };
     render(<CapabilitiesSection />);
-    // host-path + agent-config both render "reused from your PATH"
-    expect(screen.getAllByText("reused from your PATH").length).toBeGreaterThanOrEqual(2);
-    expect(screen.getByText("Yulu-managed")).toBeInTheDocument();
-    expect(screen.getByText("not found")).toBeInTheDocument();
+    // Default language is zh. host-path + agent-config both render 复用自你的 PATH.
+    expect(screen.getAllByText("复用自你的 PATH").length).toBeGreaterThanOrEqual(2);
+    expect(screen.getByText("Yulu 托管")).toBeInTheDocument();
+    expect(screen.getByText("未找到")).toBeInTheDocument();
   });
 
   it("Test 2 — renders each non-absent capability's resolved_path", () => {
@@ -119,14 +119,14 @@ describe("CapabilitiesSection", () => {
       isError: false,
     };
     expect(() => render(<CapabilitiesSection />)).not.toThrow();
-    expect(screen.getByText(/couldn't read capabilities/i)).toBeInTheDocument();
+    expect(screen.getByText(/无法读取主机能力/)).toBeInTheDocument();
   });
 
   it("Test 5 — Refresh button invokes the query's refetch", async () => {
     queryReturn = { data: fullReport(), refetch: refetchMock, isError: false };
     render(<CapabilitiesSection />);
     const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: /refresh/i }));
+    await user.click(screen.getByRole("button", { name: "刷新" }));
     expect(refetchMock).toHaveBeenCalled();
   });
 

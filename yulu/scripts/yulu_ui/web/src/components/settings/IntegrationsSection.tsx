@@ -4,6 +4,7 @@ import { InlineEditRow } from "../InlineEditRow.js";
 import { CommandEditor } from "../CommandEditor.js";
 import { TestPopover } from "../TestPopover.js";
 import { useConfigField } from "../../hooks/useConfigField.js";
+import { useT } from "../../i18n/LanguageProvider.js";
 import type { SettingsRestartTracker } from "../../hooks/useSettingsRestartTracker.js";
 
 export interface IntegrationsSectionProps {
@@ -28,6 +29,7 @@ export function IntegrationsSection({ tracker }: IntegrationsSectionProps) {
   const { data: cfg } = trpc.config.get.useQuery();
   const { commit, isBlocked } = useConfigField(tracker);
   const testMut = trpc.integrations.test.useMutation();
+  const t = useT();
   const [popFor, setPopFor] = useState<number | null>(null);
   const [popState, setPopState] = useState<"pending" | "ok" | "failed">("pending");
   const [popStdout, setPopStdout] = useState("");
@@ -99,37 +101,37 @@ export function IntegrationsSection({ tracker }: IntegrationsSectionProps) {
 
   return (
     <section id="integrations" className="settings-section">
-      <h2 className="settings-section-h">Integrations</h2>
-      <p className="settings-section-sub">Google Calendar (via gog)</p>
+      <h2 className="settings-section-h">{t("settings.integrations.heading")}</h2>
+      <p className="settings-section-sub">{t("settings.integrations.sub")}</p>
       {calendars.length === 0 && (
-        <div className="integrations-empty">No calendar connected.</div>
+        <div className="integrations-empty">{t("settings.integrations.empty")}</div>
       )}
       {calendars.map((cal, idx) => {
         const enabled = cal.enabled === true;
         return (
           <div key={`${cal.type}-${idx}`} className="integration-card">
             <div className="integration-header">
-              <span>Google Calendar (via gog)</span>
+              <span>{t("settings.integrations.google.title")}</span>
               <button
                 type="button"
                 className="cmd-remove"
-                aria-label="Remove Google calendar"
+                aria-label={t("settings.integrations.removeAria")}
                 disabled={calBlocked}
                 onClick={() => removeCalendar(idx)}
               >
-                Remove
+                {t("settings.integrations.remove")}
               </button>
             </div>
             <InlineEditRow
-              label="Enabled"
+              label={t("settings.integrations.enabled.label")}
               type="toggle"
               value={cal.enabled ?? false}
               onCommit={setEnabled(idx)}
               disabled={isBlocked(`calendars.${idx}.enabled`)}
             />
             <InlineEditRow
-              label="Account"
-              help="The Google account email you authenticated with `gog auth add`."
+              label={t("settings.integrations.account.label")}
+              help={t("settings.integrations.account.help")}
               type="text"
               value={cal.gog_account ?? ""}
               onCommit={commitField(idx, "gog_account", enabled) as (v: string) => void}
@@ -139,14 +141,14 @@ export function IntegrationsSection({ tracker }: IntegrationsSectionProps) {
                 ["primary"] when unset, so the user sees the effective value. */}
             <div className="row">
               <div className="row-label">
-                <div>Calendars to watch</div>
-                <div className="row-help">Calendar ids to watch (default: primary).</div>
+                <div>{t("settings.integrations.watch.label")}</div>
+                <div className="row-help">{t("settings.integrations.watch.help")}</div>
               </div>
               <div className="row-value">
                 {isBlocked(`calendars.${idx}.watch_calendars`) ? (
                   <span className="value-disabled">
                     <span className="value-disabled-text">{(cal.watch_calendars ?? ["primary"]).join(", ")}</span>
-                    <span className="value-disabled-note">录音中不可改</span>
+                    <span className="value-disabled-note">{t("settings.locked.recording")}</span>
                   </span>
                 ) : (
                   <CommandEditor
@@ -159,14 +161,14 @@ export function IntegrationsSection({ tracker }: IntegrationsSectionProps) {
             </div>
             <div className="row">
               <div className="row-label">
-                <div>Connection</div>
-                <div className="row-help">Checks `gog` can read this account&apos;s calendars.</div>
+                <div>{t("settings.integrations.connection.label")}</div>
+                <div className="row-help">{t("settings.integrations.connection.help")}</div>
               </div>
               <div className="row-value">
-                <button type="button" className="cmd-add" onClick={() => runTest(idx)}>Check connection</button>
-                {connFor === idx && connState === "ok" && <span className="conn-status conn-status--ok">Connected</span>}
-                {connFor === idx && connState === "failed" && <span className="conn-status conn-status--bad">Not authenticated</span>}
-                {connFor === idx && connState === "pending" && <span className="conn-status">Checking…</span>}
+                <button type="button" className="cmd-add" onClick={() => runTest(idx)}>{t("settings.integrations.connection.check")}</button>
+                {connFor === idx && connState === "ok" && <span className="conn-status conn-status--ok">{t("settings.integrations.connection.connected")}</span>}
+                {connFor === idx && connState === "failed" && <span className="conn-status conn-status--bad">{t("settings.integrations.connection.notAuth")}</span>}
+                {connFor === idx && connState === "pending" && <span className="conn-status">{t("settings.integrations.connection.checking")}</span>}
               </div>
               <div className="row-status" />
             </div>
@@ -187,8 +189,8 @@ export function IntegrationsSection({ tracker }: IntegrationsSectionProps) {
           restart (suppressed in addCalendar). Guarded while recording. */}
       <div className="row">
         <div className="row-label">
-          <div>Add calendar</div>
-          <div className="row-help">Connect Google Calendar, then fill in your account and enable it.</div>
+          <div>{t("settings.integrations.add.label")}</div>
+          <div className="row-help">{t("settings.integrations.add.help")}</div>
         </div>
         <div className="row-value">
           <button
@@ -197,9 +199,9 @@ export function IntegrationsSection({ tracker }: IntegrationsSectionProps) {
             disabled={calBlocked || hasType("google")}
             onClick={() => addCalendar("google")}
           >
-            + Google
+            {t("settings.integrations.add.google")}
           </button>
-          {calBlocked && <span className="value-disabled-note">录音中不可改</span>}
+          {calBlocked && <span className="value-disabled-note">{t("settings.locked.recording")}</span>}
         </div>
         <div className="row-status" />
       </div>

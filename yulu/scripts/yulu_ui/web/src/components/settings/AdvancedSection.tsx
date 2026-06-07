@@ -2,6 +2,7 @@ import { trpc } from "../../trpc.js";
 import { CommandEditor } from "../CommandEditor.js";
 import { AdvancedDisclosure } from "./AdvancedDisclosure.js";
 import { useConfigField } from "../../hooks/useConfigField.js";
+import { useT } from "../../i18n/LanguageProvider.js";
 import type { SettingsRestartTracker } from "../../hooks/useSettingsRestartTracker.js";
 
 export interface AdvancedSectionProps {
@@ -19,6 +20,7 @@ export interface AdvancedSectionProps {
 export function AdvancedSection({ tracker }: AdvancedSectionProps) {
   const { data: cfg } = trpc.config.get.useQuery();
   const { commit, isBlocked } = useConfigField(tracker);
+  const t = useT();
 
   if (!cfg) return null;
 
@@ -27,23 +29,23 @@ export function AdvancedSection({ tracker }: AdvancedSectionProps) {
 
   return (
     <section id="advanced" className="settings-section">
-      <h2 className="settings-section-h">Advanced</h2>
-      <p className="settings-section-sub">Cloud transcription command and other power-user knobs</p>
+      <h2 className="settings-section-h">{t("settings.advanced.heading")}</h2>
+      <p className="settings-section-sub">{t("settings.advanced.sub")}</p>
 
-      <AdvancedDisclosure title="Advanced — change with care" note="power-user knobs">
+      <AdvancedDisclosure title={t("settings.advanced.disclosure.title")} note={t("settings.advanced.disclosure.note")}>
         {/* TRANS-02 (D-04): cloud transcription is the user's OWN command — the
             llm.command trust model. Yulu holds and asks for no cloud credentials.
             This is a command array, never a credential field. */}
         <div className="row">
           <div className="row-label">
-            <div>Cloud transcription command</div>
-            <div className="row-help">Your own cloud transcription command — spawned with the audio. Yulu holds no cloud keys.</div>
+            <div>{t("settings.advanced.cloudCommand.label")}</div>
+            <div className="row-help">{t("settings.advanced.cloudCommand.help")}</div>
           </div>
           <div className="row-value">
             {blocked ? (
               <span className="value-disabled">
-                <span className="value-disabled-text">{(tr.cloud_command ?? []).join(" ") || "(unset)"}</span>
-                <span className="value-disabled-note">录音中不可改</span>
+                <span className="value-disabled-text">{(tr.cloud_command ?? []).join(" ") || t("value.unset")}</span>
+                <span className="value-disabled-note">{t("settings.locked.recording")}</span>
               </span>
             ) : (
               <CommandEditor

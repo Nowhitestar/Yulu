@@ -3,6 +3,7 @@ import { trpc } from "../../trpc.js";
 import { InlineEditRow } from "../InlineEditRow.js";
 import { AdvancedDisclosure } from "./AdvancedDisclosure.js";
 import { useConfigField } from "../../hooks/useConfigField.js";
+import { useT } from "../../i18n/LanguageProvider.js";
 import type { SettingsRestartTracker } from "../../hooks/useSettingsRestartTracker.js";
 
 const TRANSCRIPTION_MODES = [
@@ -28,6 +29,7 @@ export function TranscriptionSection({ tracker }: TranscriptionSectionProps) {
   // SET-04: the model selector lists whisper models Phase 3 detected across host caches.
   const { data: models } = trpc.capabilities.detected_models.useQuery();
   const { commit, isBlocked } = useConfigField(tracker);
+  const t = useT();
 
   if (!cfg) return null;
 
@@ -50,19 +52,19 @@ export function TranscriptionSection({ tracker }: TranscriptionSectionProps) {
 
   return (
     <section id="transcription" className="settings-section">
-      <h2 className="settings-section-h">Transcription</h2>
-      <p className="settings-section-sub">Choose the transcription engine and model</p>
+      <h2 className="settings-section-h">{t("settings.transcription.heading")}</h2>
+      <p className="settings-section-sub">{t("settings.transcription.sub")}</p>
 
       {/* P4a-1: engine selector — MLX (Apple Silicon, in-process) vs whisper.cpp
           (whisper-cli + a local .bin). Picks transcription.final_engine and gates
           which model fields show below. */}
       <div className="row">
         <div className="row-label">
-          <div>Engine</div>
-          <div className="row-help">MLX runs on Apple Silicon. Whisper.cpp runs the whisper-cli binary against a local model file.</div>
+          <div>{t("settings.transcription.engine.label")}</div>
+          <div className="row-help">{t("settings.transcription.engine.help")}</div>
         </div>
         <div className="row-value">
-          <div role="radiogroup" aria-label="Transcription engine">
+          <div role="radiogroup" aria-label={t("settings.transcription.engine.aria")}>
             {ENGINES.map((e) => (
               <label key={e.value} style={{ marginRight: 16 }}>
                 <input
@@ -76,7 +78,7 @@ export function TranscriptionSection({ tracker }: TranscriptionSectionProps) {
                 {e.label}
               </label>
             ))}
-            {isBlocked("transcription.final_engine") && <span className="value-disabled-note">录音中不可改</span>}
+            {isBlocked("transcription.final_engine") && <span className="value-disabled-note">{t("settings.locked.recording")}</span>}
           </div>
         </div>
         <div className="row-status">{tracker.statusFor("transcription.final_engine") === "restart" ? "⟳" : null}</div>
@@ -87,8 +89,8 @@ export function TranscriptionSection({ tracker }: TranscriptionSectionProps) {
       {engine === "mlx" && (
         <>
           <InlineEditRow
-            label="MLX model"
-            help="HuggingFace repo id (e.g. mlx-community/whisper-large-v3-mlx). Downloaded from HuggingFace on first use."
+            label={t("settings.transcription.mlxModel.label")}
+            help={t("settings.transcription.mlxModel.help")}
             type="text"
             value={mlx.model ?? ""}
             onCommit={commit("transcription.mlx.model") as (v: string) => void}
@@ -96,8 +98,8 @@ export function TranscriptionSection({ tracker }: TranscriptionSectionProps) {
             status={tracker.statusFor("transcription.mlx.model")}
           />
           <InlineEditRow
-            label="Realtime model"
-            help="Faster model for live captions; default turbo (mlx-community/whisper-large-v3-turbo)."
+            label={t("settings.transcription.realtimeModel.label")}
+            help={t("settings.transcription.realtimeModel.help")}
             type="text"
             value={realtime.mlx_model ?? ""}
             onCommit={commit("transcription.realtime.mlx_model") as (v: string) => void}
@@ -114,22 +116,22 @@ export function TranscriptionSection({ tracker }: TranscriptionSectionProps) {
           {/* SET-04 (D-05): pick among the whisper models Phase 3 detected; persists the chosen .bin path. */}
           <div className="row">
             <div className="row-label">
-              <div>Detected model</div>
-              <div className="row-help">Whisper models found across your host caches. Choosing one sets the local model path.</div>
+              <div>{t("settings.transcription.detectedModel.label")}</div>
+              <div className="row-help">{t("settings.transcription.detectedModel.help")}</div>
             </div>
             <div className="row-value">
               <select
-                aria-label="Detected model"
+                aria-label={t("settings.transcription.detectedModel.label")}
                 className="value-input"
                 disabled={modelOptions.length === 0 || isBlocked("transcription.local_model_path")}
                 value={tr.local_model_path ?? ""}
                 onChange={(e) => commit("transcription.local_model_path")(e.target.value)}
               >
                 {modelOptions.length === 0 ? (
-                  <option value="">no models detected</option>
+                  <option value="">{t("settings.transcription.detectedModel.none")}</option>
                 ) : (
                   <>
-                    <option value="">(choose a model)</option>
+                    <option value="">{t("settings.transcription.detectedModel.choose")}</option>
                     {modelOptions.map((o) => (
                       <option key={o.value} value={o.value}>{o.label}</option>
                     ))}
@@ -140,8 +142,8 @@ export function TranscriptionSection({ tracker }: TranscriptionSectionProps) {
             <div className="row-status" />
           </div>
           <InlineEditRow
-            label="Local model path"
-            help="Path to a whisper.cpp .bin model file."
+            label={t("settings.transcription.localModelPath.label")}
+            help={t("settings.transcription.localModelPath.help")}
             type="path"
             mode="file"
             filter="bin"
@@ -155,7 +157,7 @@ export function TranscriptionSection({ tracker }: TranscriptionSectionProps) {
 
       {/* Always-relevant fields, regardless of engine. */}
       <InlineEditRow
-        label="Language"
+        label={t("settings.transcription.language.label")}
         type="select"
         value={tr.language ?? "auto"}
         options={[
@@ -171,8 +173,8 @@ export function TranscriptionSection({ tracker }: TranscriptionSectionProps) {
       {/* P2-1: what happens when a recording stops — a quick summary, or a full re-transcribe.
           transcribe.py reads this each run, so no daemon reload is needed (reload:none). */}
       <InlineEditRow
-        label="Post-recording"
-        help="fast_summary: summarize from the live transcript. full_transcribe: re-transcribe the whole recording first."
+        label={t("settings.transcription.postRecording.label")}
+        help={t("settings.transcription.postRecording.help")}
         type="select"
         value={tr.post_recording_mode ?? "fast_summary"}
         options={[
@@ -184,8 +186,8 @@ export function TranscriptionSection({ tracker }: TranscriptionSectionProps) {
         status={tracker.statusFor("transcription.post_recording_mode")}
       />
       <InlineEditRow
-        label="Realtime transcription"
-        help="Transcribe live while recording. Off = transcribe after the recording stops."
+        label={t("settings.transcription.realtime.label")}
+        help={t("settings.transcription.realtime.help")}
         type="toggle"
         value={tr.realtime_enabled ?? true}
         onCommit={commit("transcription.realtime_enabled") as (v: boolean) => void}
@@ -194,15 +196,15 @@ export function TranscriptionSection({ tracker }: TranscriptionSectionProps) {
 
       {/* Advanced — the transcription mode (local / cloud-*) and, on the whisper
           engine, the whisper-cli binary path. Collapsed by default (P4a-1). */}
-      <AdvancedDisclosure title="Advanced — change with care" note="power-user knobs">
+      <AdvancedDisclosure title={t("settings.advanced.disclosure.title")} note={t("settings.advanced.disclosure.note")}>
         {/* TRANS-01 (D-03): transcription mode — local (default) / cloud-fallback / cloud-priority. */}
         <div className="row">
           <div className="row-label">
-            <div>Transcription mode</div>
-            <div className="row-help">local keeps transcription on this machine (default). Cloud modes use your own command in Advanced settings.</div>
+            <div>{t("settings.transcription.mode.label")}</div>
+            <div className="row-help">{t("settings.transcription.mode.help")}</div>
           </div>
           <div className="row-value">
-            <div role="radiogroup" aria-label="Transcription mode">
+            <div role="radiogroup" aria-label={t("settings.transcription.mode.aria")}>
               {TRANSCRIPTION_MODES.map((m) => (
                 <label key={m.value} style={{ marginRight: 16 }}>
                   <input
@@ -216,7 +218,7 @@ export function TranscriptionSection({ tracker }: TranscriptionSectionProps) {
                   {m.label}
                 </label>
               ))}
-              {isBlocked("transcription.mode") && <span className="value-disabled-note">录音中不可改</span>}
+              {isBlocked("transcription.mode") && <span className="value-disabled-note">{t("settings.locked.recording")}</span>}
             </div>
           </div>
           <div className="row-status">{tracker.statusFor("transcription.mode") === "restart" ? "⟳" : null}</div>
@@ -224,8 +226,8 @@ export function TranscriptionSection({ tracker }: TranscriptionSectionProps) {
 
         {engine === "whisper" && (
           <InlineEditRow
-            label="whisper.cpp CLI"
-            help="The whisper-cli binary (name on PATH or absolute path). Only used by the Whisper.cpp engine."
+            label={t("settings.transcription.whisperCli.label")}
+            help={t("settings.transcription.whisperCli.help")}
             type="text"
             value={tr.whisper_cli ?? ""}
             onCommit={commit("transcription.whisper_cli") as (v: string) => void}
@@ -236,7 +238,7 @@ export function TranscriptionSection({ tracker }: TranscriptionSectionProps) {
       </AdvancedDisclosure>
 
       <div style={{ marginTop: 16 }}>
-        <Link to="/knowledge/glossary">Manage glossary →</Link>
+        <Link to="/knowledge/glossary">{t("settings.transcription.manageGlossary")}</Link>
       </div>
     </section>
   );
