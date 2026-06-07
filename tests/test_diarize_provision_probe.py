@@ -40,28 +40,52 @@ def test_registry_still_six_steps_no_new_diarize_step():
     ]
 
 
+def _engine_present(monkeypatch, present: bool) -> None:
+    """Pin the PORT-01 engine-importable gate so the model-file logic is tested in isolation.
+
+    The CI interpreter does NOT have sherpa-onnx installed, so without this the engine half of
+    ``_diarization_models_present`` would dominate. These model-file tests pin it True; the
+    dedicated engine-gate tests below exercise the gate itself.
+    """
+    monkeypatch.setattr(registry_mod, "_diarization_engine_importable", lambda: present)
+
+
 def test_diarization_half_true_when_disabled():
     # No diarization key, or enabled:false → the diarization half is satisfied (nothing to fetch).
+    # Disabled short-circuits BEFORE the engine gate (no engine needed when off).
     assert registry_mod._diarization_models_present({}) is True
     assert registry_mod._diarization_models_present({"diarization": {"enabled": False}}) is True
 
 
-def test_diarization_half_false_when_enabled_and_models_absent():
+def test_diarization_half_false_when_enabled_and_models_absent(monkeypatch):
+    _engine_present(monkeypatch, True)  # isolate: engine present, models absent
     trans = {"diarization": {"enabled": True,
                              "seg_model": "/nope/seg.onnx", "emb_model": "/nope/emb.onnx"}}
     assert registry_mod._diarization_models_present(trans) is False
 
 
-def test_diarization_half_true_when_enabled_and_both_present(tmp_path):
+def test_diarization_half_true_when_enabled_and_both_present(monkeypatch, tmp_path):
+    _engine_present(monkeypatch, True)  # isolate the model-file half
     seg = tmp_path / "seg.onnx"; seg.write_bytes(b"s")
     emb = tmp_path / "emb.onnx"; emb.write_bytes(b"e")
     trans = {"diarization": {"enabled": True, "seg_model": str(seg), "emb_model": str(emb)}}
     assert registry_mod._diarization_models_present(trans) is True
 
 
+def test_diarization_half_false_when_engine_missing_even_if_models_present(monkeypatch, tmp_path):
+    """PORT-01: with both ONNX present but the sherpa engine NOT importable, the diarization
+    half is UNSATISFIED so the models step re-runs and installs the engine (criterion 3 / 1)."""
+    _engine_present(monkeypatch, False)
+    seg = tmp_path / "seg.onnx"; seg.write_bytes(b"s")
+    emb = tmp_path / "emb.onnx"; emb.write_bytes(b"e")
+    trans = {"diarization": {"enabled": True, "seg_model": str(seg), "emb_model": str(emb)}}
+    assert registry_mod._diarization_models_present(trans) is False
+
+
 def test_model_present_combines_whisper_and_diarization(monkeypatch, tmp_path):
     """_model_present() = whisper-half AND diarization-half. With mlx (whisper-half True) and
     diarization enabled but absent, the WHOLE step is unsatisfied → the step will (re)run."""
+    _engine_present(monkeypatch, True)  # isolate the model-file half (engine present)
     seg = tmp_path / "seg.onnx"  # intentionally absent
     cfg = {"transcription": {"engine": "mlx",
                              "diarization": {"enabled": True,
@@ -81,6 +105,42 @@ def test_model_present_mlx_only_no_diarization_is_true(monkeypatch):
     monkeypatch.setattr(registry_mod, "_load_config",
                         lambda: {"transcription": {"engine": "mlx"}})
     assert registry_mod._model_present() is True
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# PORT-01 — the sherpa-onnx engine-importable gate (co-locate in daemon interpreter)
+# ════════════════════════════════════════════════════════════════════════════
+
+
+def test_engine_importable_reflects_find_spec(monkeypatch):
+    """_diarization_engine_importable() is True iff importlib can find sherpa_onnx; it never
+    imports the heavy module and never raises."""
+    import importlib.util as _ilu
+
+    monkeypatch.setattr(_ilu, "find_spec", lambda name: object() if name == "sherpa_onnx" else None)
+    assert registry_mod._diarization_engine_importable() is True
+
+    monkeypatch.setattr(_ilu, "find_spec", lambda name: None)
+    assert registry_mod._diarization_engine_importable() is False
+
+
+def test_engine_importable_never_raises(monkeypatch):
+    import importlib.util as _ilu
+
+    def _boom(name):
+        raise RuntimeError("import system on fire")
+
+    monkeypatch.setattr(_ilu, "find_spec", _boom)
+    assert registry_mod._diarization_engine_importable() is False  # degrades, never raises
+
+
+def test_enabled_diarization_unsatisfied_when_engine_missing_drives_models_step(monkeypatch):
+    """End-to-end at the step gate: diarization enabled + engine missing ⇒ the models step's
+    check() is False, so a re-run on an upgrade will (re)install the engine (PORT-01/PORT-03)."""
+    monkeypatch.setattr(registry_mod, "_diarization_engine_importable", lambda: False)
+    cfg = {"transcription": {"engine": "mlx", "diarization": {"enabled": True}}}
+    monkeypatch.setattr(registry_mod, "_load_config", lambda: cfg)
+    assert registry_mod._model_present() is False
 
 
 def test_models_step_apply_skips_when_check_true(monkeypatch):
