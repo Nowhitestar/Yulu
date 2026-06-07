@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v0.6
 milestone_name: Speaker Diarization
 status: executing
-last_updated: "2026-06-06T04:06:12.313Z"
-last_activity: 2026-06-06 — Phase 9 complete (verified passed); starting Phase 10
+last_updated: "2026-06-07T09:30:00.000Z"
+last_activity: 2026-06-07 — Phase 12 complete (4/4 criteria); starting Phase 13
 progress:
   total_phases: 7
-  completed_phases: 3
-  total_plans: 3
-  completed_plans: 3
-  percent: 43
+  completed_phases: 4
+  total_plans: 4
+  completed_plans: 4
+  percent: 57
 ---
 
 # Project State
@@ -24,17 +24,18 @@ See: .planning/PROJECT.md (updated 2026-06-06)
 
 ## Current Position
 
-Phase: 12 — Speaker-Count Strategy (next)
+Phase: 13 — Pipeline + Summary Integration (next)
 Plan: —
-Status: AUTONOMOUS run 9→13 in progress. ✅ Phase 9 + ✅ Phase 10 + ✅ Phase 11 complete (all verified). Execution order 12→13, then `--only 15`; **14 last (gated on UI redesign)**.
-Last activity: 2026-06-07 — Phase 11 complete (verified 5/5; suite 940/1); starting Phase 12
+Status: AUTONOMOUS run 9→13 in progress. ✅ Phase 9 + ✅ Phase 10 + ✅ Phase 11 + ✅ Phase 12 complete. Execution order 13, then `--only 15`; **14 last (gated on UI redesign)**.
+Last activity: 2026-06-07 — Phase 12 complete (4/4 criteria; suite 961/1 non-integration + 3 integration; CN DER 0.682→0.505, EN held 0.007); starting Phase 13
 
 ## Autonomous Run Log (v0.6, 9→13)
 
 - ✅ **Phase 9** Speaker-Merge Core + Sidecar — built (gsd-executor) + independently verified (gsd-verifier) PASSED 5/5; full test suite 873 passed/1 pre-existing skip; UI gate respected (zero `yulu_ui/**`).
 - ✅ **Phase 10** Diarize Backend + Provisioning + Capability Probe — built (gsd-executor) 5/5 criteria; **904 passed / 1 pre-existing skip** (+31 new tests, zero regressions); 6 commits 5d3f867/a2bbdea/5399ed7/6128172/c47dc27/a763476; UI gate respected (zero `yulu_ui/**`); real offline integration smoke green (60s clip → 15 turns/3 speakers, dead proxies). **Open: sherpa cp314 wheel resolution into Yulu's 3.14 runtime venv (Phase 15/PORT-01) — built+tested on the 3.10 spike venv only.**
 - ✅ **Phase 11** DER/WDER Eval Harness — built (general-purpose; resumed after transient rate-limit) + verified (gsd-verifier) PASSED 5/5; **940 passed/1 skip** (+36 tests, zero regressions); commits for eval harness + ADR-005 (default=sherpa-onnx). **Gate output:** EN DER **0.007** (excellent) / CN DER **0.682** (auto, poor) — pyannote-cross-checked; the CN gap is the **count-knob (Phase 12 target), not embeddings**. Eval deps (pyannote.metrics) dev-venv only. UI-copy string backend-side (`eval/ui_copy.py`). Deferred: human-labelled real CN+EN gold corpus.
-- ⏳ **Phase 12** Speaker-Count Strategy (the Over-Split Fix) — next. Target: drive CN auto-DER down from 0.682 via calendar-attendee prior (gog) → CN-calibrated threshold → fail-toward-under-merge; verify against the Phase-11 harness. Also address Phase-10 carry-forward: count-keyed cache so `diarize(num_speakers=)` override doesn't bleed into auto mode.
+- ✅ **Phase 12** Speaker-Count Strategy (the Over-Split Fix) — built 4/4 criteria. New pure `stt_daemon/speaker_count.py` (`resolve_speaker_count` + two-pass `reconcile_count`): calendar-attendee count (via `gog`/`check_meetings.py` `attendees`, linked by `meeting_id`) is the free prior; clamped to `[2, MAX_AUTO_SPEAKERS=8]` (fail-toward-under-merge); auto threshold calibrated to 0.5 (EN-optimal). **CN DER 0.682→0.505 (count -2→+0) / EN held 0.007** via auto-first-then-reconcile (force prior ONLY when auto disagrees → no EN regression); pyannote-cross-checked (CN 0.505 exact). **Carry-forward FIXED:** count-keyed pipeline cache in `diarize.py` — per-call `num_speakers`/`threshold` override served from cache, resident default never reassigned, can't bleed into auto. **Honest finding:** the no-count CN-calibrated *threshold* is INERT on the constructed CN clip (cam++ can't separate similar TTS Mandarin voices across the whole 0.2–0.8 sweep) — the **supplied count is the reliable CN lever**, Phase-13 feeds it. +27 tests; suite **961 passed/1 skip (non-integration) + 3 integration**, zero regressions. UI gate respected (zero `yulu_ui/**`); no runtime-venv mutation (spike venv only). Calendar-prior interface for Phase 13 documented in `speaker_count.py` + 12-SUMMARY.
+- ⏳ **Phase 13** Pipeline + Summary Integration — next. Wire ASR→diarize→`speaker_merge.assign`→persist `.transcript.txt`+`.speakers.json`→search upsert; feed the speaker-attributed transcript to agent-queue via one additive prompt-var pair. **Consume Phase-12 strategy:** compute `attendee_count` from the recording's linked calendar event and run the documented `resolve_speaker_count`+`reconcile_count` two-pass flow against the live diarize backend.
 - Mechanism note: each phase = delegated builder agent (writes code+tests+commits+GSD artifacts) → independent verifier agent → STATE/ROADMAP update. Resume point if compacted: read this log + run next ⏳ phase.
 
 ## Performance Metrics
