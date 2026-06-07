@@ -1,0 +1,187 @@
+{
+  "corpus_dir": "/tmp/yulu-eval",
+  "provider": "from-rttm",
+  "num_speakers_forced": null,
+  "threshold": 0.5,
+  "per_recording": [
+    {
+      "der": {
+        "collar0.25_overlap": {
+          "der": 0.6824,
+          "missed": 0,
+          "false_alarm": 0.894,
+          "confusion": 14.644,
+          "total_reference": 22.771,
+          "collar": 0.25,
+          "score_overlap": true
+        },
+        "collar0.25_nooverlap": {
+          "der": 0.6824,
+          "missed": 0,
+          "false_alarm": 0.894,
+          "confusion": 14.644,
+          "total_reference": 22.771,
+          "collar": 0.25,
+          "score_overlap": false
+        },
+        "full_overlap": {
+          "der": 0.738,
+          "missed": 0.013,
+          "false_alarm": 2.269,
+          "confusion": 15.631,
+          "total_reference": 24.271,
+          "collar": 0.0,
+          "score_overlap": true
+        },
+        "full_nooverlap": {
+          "der": 0.738,
+          "missed": 0.013,
+          "false_alarm": 2.269,
+          "confusion": 15.631,
+          "total_reference": 24.271,
+          "collar": 0.0,
+          "score_overlap": false
+        }
+      },
+      "count": {
+        "predicted": 1,
+        "truth": 3,
+        "error": -2,
+        "abs_error": 2
+      },
+      "mapping": {
+        "spk-0": "spk-1"
+      },
+      "wder": {
+        "wder": 0.6535,
+        "wrong": 66,
+        "total": 101
+      },
+      "ser": {
+        "ser": 0.6667,
+        "wrong": 4,
+        "total": 6
+      },
+      "name": "constructed_cn_3spk",
+      "language": "cn",
+      "ref_speakers": 3,
+      "hyp_speakers": 1,
+      "cross_check": {
+        "pyannote_der_collar0.25": 0.6824,
+        "pyannote_der_full": 0.738
+      }
+    },
+    {
+      "der": {
+        "collar0.25_overlap": {
+          "der": 0.0074,
+          "missed": 0,
+          "false_alarm": 0.15,
+          "confusion": 0.0,
+          "total_reference": 20.162,
+          "collar": 0.25,
+          "score_overlap": true
+        },
+        "collar0.25_nooverlap": {
+          "der": 0.0074,
+          "missed": 0,
+          "false_alarm": 0.15,
+          "confusion": 0.0,
+          "total_reference": 20.162,
+          "collar": 0.25,
+          "score_overlap": false
+        },
+        "full_overlap": {
+          "der": 0.0384,
+          "missed": 0.112,
+          "false_alarm": 0.574,
+          "confusion": 0.145,
+          "total_reference": 21.662,
+          "collar": 0.0,
+          "score_overlap": true
+        },
+        "full_nooverlap": {
+          "der": 0.0384,
+          "missed": 0.112,
+          "false_alarm": 0.574,
+          "confusion": 0.145,
+          "total_reference": 21.662,
+          "collar": 0.0,
+          "score_overlap": false
+        }
+      },
+      "count": {
+        "predicted": 3,
+        "truth": 3,
+        "error": 0,
+        "abs_error": 0
+      },
+      "mapping": {
+        "spk-0": "spk-1",
+        "spk-1": "spk-2",
+        "spk-2": "spk-0"
+      },
+      "wder": {
+        "wder": 0.0,
+        "wrong": 0,
+        "total": 67
+      },
+      "ser": {
+        "ser": 0.0,
+        "wrong": 0,
+        "total": 6
+      },
+      "name": "constructed_en_3spk",
+      "language": "en",
+      "ref_speakers": 3,
+      "hyp_speakers": 3,
+      "cross_check": {
+        "pyannote_der_collar0.25": 0.0206,
+        "pyannote_der_full": 0.0508
+      }
+    }
+  ],
+  "aggregate": {
+    "overall": {
+      "n": 2,
+      "der": {
+        "collar0.25_overlap": 0.3449,
+        "collar0.25_nooverlap": 0.3449,
+        "full_overlap": 0.3882,
+        "full_nooverlap": 0.3882
+      },
+      "count_error_mean": -1.0,
+      "count_abs_error_mean": 1.0,
+      "wder": 0.3929,
+      "ser": 0.3333
+    },
+    "by_language": {
+      "cn": {
+        "n": 1,
+        "der": {
+          "collar0.25_overlap": 0.6824,
+          "collar0.25_nooverlap": 0.6824,
+          "full_overlap": 0.738,
+          "full_nooverlap": 0.738
+        },
+        "count_error_mean": -2.0,
+        "count_abs_error_mean": 2.0,
+        "wder": 0.6535,
+        "ser": 0.6667
+      },
+      "en": {
+        "n": 1,
+        "der": {
+          "collar0.25_overlap": 0.0074,
+          "collar0.25_nooverlap": 0.0074,
+          "full_overlap": 0.0384,
+          "full_nooverlap": 0.0384
+        },
+        "count_error_mean": 0.0,
+        "count_abs_error_mean": 0.0,
+        "wder": 0.0,
+        "ser": 0.0
+      }
+    }
+  }
+}

@@ -1,0 +1,180 @@
+{
+  "corpus_dir": "/tmp/yulu-eval",
+  "provider": "sherpa",
+  "num_speakers_forced": 3,
+  "threshold": 0.5,
+  "per_recording": [
+    {
+      "der": {
+        "collar0.25_overlap": {
+          "der": 0.5051,
+          "missed": 0,
+          "false_alarm": 0.894,
+          "confusion": 10.607,
+          "total_reference": 22.771,
+          "collar": 0.25,
+          "score_overlap": true
+        },
+        "collar0.25_nooverlap": {
+          "der": 0.5051,
+          "missed": 0,
+          "false_alarm": 0.894,
+          "confusion": 10.607,
+          "total_reference": 22.771,
+          "collar": 0.25,
+          "score_overlap": false
+        },
+        "full_overlap": {
+          "der": 0.5619,
+          "missed": 0.013,
+          "false_alarm": 2.269,
+          "confusion": 11.357,
+          "total_reference": 24.271,
+          "collar": 0.0,
+          "score_overlap": true
+        },
+        "full_nooverlap": {
+          "der": 0.5619,
+          "missed": 0.013,
+          "false_alarm": 2.269,
+          "confusion": 11.357,
+          "total_reference": 24.271,
+          "collar": 0.0,
+          "score_overlap": false
+        }
+      },
+      "count": {
+        "predicted": 3,
+        "truth": 3,
+        "error": 0,
+        "abs_error": 0
+      },
+      "mapping": {
+        "spk-0": "spk-1",
+        "spk-1": "spk-0",
+        "spk-2": "spk-2"
+      },
+      "wder": {
+        "wder": 0.495,
+        "wrong": 50,
+        "total": 101
+      },
+      "ser": {
+        "ser": 0.5,
+        "wrong": 3,
+        "total": 6
+      },
+      "name": "constructed_cn_3spk",
+      "language": "cn",
+      "ref_speakers": 3,
+      "hyp_speakers": 3
+    },
+    {
+      "der": {
+        "collar0.25_overlap": {
+          "der": 0.318,
+          "missed": 0,
+          "false_alarm": 0.45,
+          "confusion": 5.962,
+          "total_reference": 20.162,
+          "collar": 0.25,
+          "score_overlap": true
+        },
+        "collar0.25_nooverlap": {
+          "der": 0.318,
+          "missed": 0,
+          "false_alarm": 0.45,
+          "confusion": 5.962,
+          "total_reference": 20.162,
+          "collar": 0.25,
+          "score_overlap": false
+        },
+        "full_overlap": {
+          "der": 0.3656,
+          "missed": 0.039,
+          "false_alarm": 1.277,
+          "confusion": 6.603,
+          "total_reference": 21.662,
+          "collar": 0.0,
+          "score_overlap": true
+        },
+        "full_nooverlap": {
+          "der": 0.3656,
+          "missed": 0.039,
+          "false_alarm": 1.277,
+          "confusion": 6.603,
+          "total_reference": 21.662,
+          "collar": 0.0,
+          "score_overlap": false
+        }
+      },
+      "count": {
+        "predicted": 2,
+        "truth": 3,
+        "error": -1,
+        "abs_error": 1
+      },
+      "mapping": {
+        "spk-0": "spk-1",
+        "spk-1": "spk-2"
+      },
+      "wder": {
+        "wder": 0.3284,
+        "wrong": 22,
+        "total": 67
+      },
+      "ser": {
+        "ser": 0.3333,
+        "wrong": 2,
+        "total": 6
+      },
+      "name": "constructed_en_3spk",
+      "language": "en",
+      "ref_speakers": 3,
+      "hyp_speakers": 2
+    }
+  ],
+  "aggregate": {
+    "overall": {
+      "n": 2,
+      "der": {
+        "collar0.25_overlap": 0.4115,
+        "collar0.25_nooverlap": 0.4115,
+        "full_overlap": 0.4637,
+        "full_nooverlap": 0.4637
+      },
+      "count_error_mean": -0.5,
+      "count_abs_error_mean": 0.5,
+      "wder": 0.4286,
+      "ser": 0.4167
+    },
+    "by_language": {
+      "cn": {
+        "n": 1,
+        "der": {
+          "collar0.25_overlap": 0.5051,
+          "collar0.25_nooverlap": 0.5051,
+          "full_overlap": 0.5619,
+          "full_nooverlap": 0.5619
+        },
+        "count_error_mean": 0.0,
+        "count_abs_error_mean": 0.0,
+        "wder": 0.495,
+        "ser": 0.5
+      },
+      "en": {
+        "n": 1,
+        "der": {
+          "collar0.25_overlap": 0.318,
+          "collar0.25_nooverlap": 0.318,
+          "full_overlap": 0.3656,
+          "full_nooverlap": 0.3656
+        },
+        "count_error_mean": -1.0,
+        "count_abs_error_mean": 1.0,
+        "wder": 0.3284,
+        "ser": 0.3333
+      }
+    }
+  }
+}

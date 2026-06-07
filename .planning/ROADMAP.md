@@ -19,7 +19,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 - [x] **Phase 9: Speaker-Merge Core + `.speakers.json` Sidecar** - The pure, I/O-free overlap-assignment engine + sidecar data model, hardened on fixtures with no sherpa/daemon/SQLite ✓ (verified 2026-06-06: 5/5 criteria, 32 tests)
 - [x] **Phase 10: Diarize Backend + Provisioning + Capability Probe** - Resident `SherpaDiarizeBackend` (warm_up/diarize/is_ready/release), offline ONNX model provisioning, tri-state `probe_diarization()` (completed 2026-06-06)
-- [ ] **Phase 11: DER/WDER Evaluation Harness (the Gate)** - Labelled CN+EN corpus + torch-free DER/WDER/SER/count-error harness that picks the default provider on evidence and sets UI accuracy copy
+- [x] **Phase 11: DER/WDER Evaluation Harness (the Gate)** - Labelled CN+EN corpus + torch-free DER/WDER/SER/count-error harness that picks the default provider on evidence and sets UI accuracy copy ✓ (completed 2026-06-07: 5/5 criteria, 36 tests; default=sherpa-onnx ADR-005; measured EN DER 0.007 / CN DER 0.682 auto, pyannote-cross-checked)
 - [ ] **Phase 12: Speaker-Count Strategy (the Over-Split Fix)** - Calendar-attendee prior → CN-calibrated threshold → fail-toward-under-merge, verified against the eval
 - [ ] **Phase 13: Pipeline + Summary Integration** - Wire ASR→diarize→merge into `transcribe.py`; flow speaker-attributed transcript into the agent-queue summary via one additive prompt-var pair
 - [ ] **Phase 14: Speaker UI — Labels, Rename/Merge/Correct, Honest Copy** — ⚠ **GATED on in-flight web-UI redesign; execute LAST** (see STATE.md Blockers) - Per-speaker blocks + color + click-to-seek; "You" auto-known; rename-all/merge/correct; export; labels-are-a-hint copy
@@ -141,7 +141,7 @@ Parallelism (for `/gsd-plan-phase` ordering, not separate execution lanes): Phas
 |-------|----------------|--------|-----------|
 | 9. Speaker-Merge Core + Sidecar | 1/1 | ✅ Complete | 5/5 criteria, 32 tests |
 | 10. Diarize Backend + Provisioning | 1/1 | ✅ Complete | 5/5 criteria, +31 tests (904 pass) |
-| 11. DER/WDER Eval Harness | 0/? | Not started | - |
+| 11. DER/WDER Eval Harness | 1/1 | ✅ Complete | 5/5 criteria, 36 tests; ADR-005 sherpa-onnx; EN DER 0.007 / CN DER 0.682 (auto), pyannote-cross-checked |
 | 12. Speaker-Count Strategy | 0/? | Not started | - |
 | 13. Pipeline + Summary Integration | 0/? | Not started | - |
 | 14. Speaker UI | 0/? | Not started | - |
