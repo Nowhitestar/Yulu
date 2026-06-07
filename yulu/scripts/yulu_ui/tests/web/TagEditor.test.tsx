@@ -12,8 +12,8 @@ describe("TagEditor", () => {
   it("adds a tag on Enter", () => {
     const onChange = vi.fn();
     render(<TagEditor tags={["work"]} onChange={onChange} />);
-    fireEvent.click(screen.getByRole("button", { name: /add tag/i }));
-    const input = screen.getByPlaceholderText("tag…");
+    fireEvent.click(screen.getByRole("button", { name: "添加标签" }));
+    const input = screen.getByPlaceholderText("标签…");
     fireEvent.change(input, { target: { value: "client" } });
     fireEvent.keyDown(input, { key: "Enter" });
     expect(onChange).toHaveBeenCalledWith(["work", "client"]);
@@ -22,8 +22,8 @@ describe("TagEditor", () => {
   it("splits a comma-separated entry into multiple tags", () => {
     const onChange = vi.fn();
     render(<TagEditor tags={[]} onChange={onChange} />);
-    fireEvent.click(screen.getByRole("button", { name: /add tag/i }));
-    const input = screen.getByPlaceholderText("tag…");
+    fireEvent.click(screen.getByRole("button", { name: "添加标签" }));
+    const input = screen.getByPlaceholderText("标签…");
     fireEvent.change(input, { target: { value: "a, b ,c" } });
     fireEvent.keyDown(input, { key: "Enter" });
     expect(onChange).toHaveBeenCalledWith(["a", "b", "c"]);
@@ -32,8 +32,8 @@ describe("TagEditor", () => {
   it("does not add a case-insensitive duplicate", () => {
     const onChange = vi.fn();
     render(<TagEditor tags={["Work"]} onChange={onChange} />);
-    fireEvent.click(screen.getByRole("button", { name: /add tag/i }));
-    const input = screen.getByPlaceholderText("tag…");
+    fireEvent.click(screen.getByRole("button", { name: "添加标签" }));
+    const input = screen.getByPlaceholderText("标签…");
     fireEvent.change(input, { target: { value: "work" } });
     fireEvent.keyDown(input, { key: "Enter" });
     expect(onChange).not.toHaveBeenCalled();
@@ -42,7 +42,7 @@ describe("TagEditor", () => {
   it("removes a tag via its ✕ button", () => {
     const onChange = vi.fn();
     render(<TagEditor tags={["work", "urgent"]} onChange={onChange} />);
-    fireEvent.click(screen.getByRole("button", { name: /remove tag work/i }));
+    fireEvent.click(screen.getByRole("button", { name: "移除标签 work" }));
     expect(onChange).toHaveBeenCalledWith(["urgent"]);
   });
 

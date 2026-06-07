@@ -4,8 +4,8 @@ import { CategoryChip } from "../../web/src/components/CategoryChip.js";
 
 describe("CategoryChip", () => {
   it.each([
-    ["summary", "summary"],
-    ["cleanup", "cleanup"],
+    ["summary", "摘要"],
+    ["cleanup", "清理"],
   ] as const)("renders label '%s'", (category, expectedText) => {
     render(<CategoryChip category={category} />);
     expect(screen.getByText(expectedText)).toBeInTheDocument();

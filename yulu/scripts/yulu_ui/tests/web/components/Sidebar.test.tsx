@@ -26,22 +26,22 @@ describe("Sidebar", () => {
 
   it("shows Inbox section with a single Recordings entry, no Voicemails/Meetings/Search", () => {
     const { getByText, queryByText } = wrap(<Sidebar />);
-    expect(getByText("Recordings")).toBeInTheDocument();
+    expect(getByText("录音")).toBeInTheDocument();
     expect(queryByText("Voicemails")).toBeNull();
     expect(queryByText("Meetings")).toBeNull();
     expect(queryByText("Search")).toBeNull();
-    expect(getByText("Recordings").closest("a")?.getAttribute("href")).toBe("/inbox");
+    expect(getByText("录音").closest("a")?.getAttribute("href")).toBe("/inbox");
   });
 
   it("shows Knowledge section with Prompts + Glossary", () => {
     const { getByText } = wrap(<Sidebar />);
-    expect(getByText("Prompts")).toBeInTheDocument();
-    expect(getByText("Glossary")).toBeInTheDocument();
+    expect(getByText("提示词")).toBeInTheDocument();
+    expect(getByText("术语表")).toBeInTheDocument();
   });
 
   it("renders an icon (svg) on each top-nav item", () => {
     const { getByText } = wrap(<Sidebar />);
-    for (const label of ["Recordings", "Prompts", "Glossary"]) {
+    for (const label of ["录音", "提示词", "术语表"]) {
       const link = getByText(label).closest("a");
       expect(link?.querySelector("svg")).not.toBeNull();
     }
@@ -50,22 +50,22 @@ describe("Sidebar", () => {
   it("does NOT render Settings or Health as nav sections (they are bottom-only)", () => {
     const { container } = wrap(<Sidebar />);
     const headings = Array.from(container.querySelectorAll(".sidebar-heading")).map((el) => el.textContent);
-    expect(headings).toEqual(["INBOX", "KNOWLEDGE"]);
+    expect(headings).toEqual(["收件箱", "知识库"]);
   });
 
   it("renders Settings link in the bottom region", () => {
     const { container, getByText } = wrap(<Sidebar />);
     const bottom = container.querySelector('[data-testid="sidebar-bottom"]');
     expect(bottom).not.toBeNull();
-    expect(bottom?.textContent).toContain("Settings");
-    expect(getByText("Settings").closest("a")?.getAttribute("href")).toBe("/settings");
+    expect(bottom?.textContent).toContain("设置");
+    expect(getByText("设置").closest("a")?.getAttribute("href")).toBe("/settings");
   });
 
   it("renders Health link in the bottom region with a health-state dot", () => {
     const { container, getByText } = wrap(<Sidebar />);
     const bottom = container.querySelector('[data-testid="sidebar-bottom"]');
-    expect(bottom?.textContent).toContain("Health");
-    expect(getByText("Health").closest("a")?.getAttribute("href")).toBe("/health");
+    expect(bottom?.textContent).toContain("健康状态");
+    expect(getByText("健康状态").closest("a")?.getAttribute("href")).toBe("/health");
     expect(container.querySelector('[data-testid="health-dot"]')).not.toBeNull();
   });
 

@@ -23,7 +23,7 @@ beforeEach(() => {
 describe("AboutSection — read-only version (P3-1)", () => {
   it("renders the Yulu product version and install source", () => {
     render(<AboutSection />);
-    expect(screen.getByText("About")).toBeInTheDocument();
+    expect(screen.getByText("关于")).toBeInTheDocument();
     expect(screen.getByText("0.8.0")).toBeInTheDocument();
     expect(screen.getByText("release v0.8.0")).toBeInTheDocument();
   });
@@ -32,7 +32,7 @@ describe("AboutSection — read-only version (P3-1)", () => {
     versionReturn = { data: { version: "0.8.0", installSource: null }, isPending: false };
     render(<AboutSection />);
     expect(screen.getByText("0.8.0")).toBeInTheDocument();
-    expect(screen.queryByText("Install source")).toBeNull();
+    expect(screen.queryByText("安装来源")).toBeNull();
   });
 
   it("is strictly read-only — no input, button, switch, or select", () => {
@@ -46,6 +46,6 @@ describe("AboutSection — read-only version (P3-1)", () => {
   it("shows a placeholder while the version query is loading (no crash)", () => {
     versionReturn = { data: undefined, isPending: true };
     expect(() => render(<AboutSection />)).not.toThrow();
-    expect(screen.getByText("About")).toBeInTheDocument();
+    expect(screen.getByText("关于")).toBeInTheDocument();
   });
 });

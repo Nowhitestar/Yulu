@@ -36,7 +36,7 @@ describe("DaemonCard", () => {
     const pill = container.querySelector(".status-pill");
     expect(pill).not.toBeNull();
     expect(pill).toHaveAttribute("data-status", "running");
-    expect(pill?.textContent).toMatch(/running/);
+    expect(pill?.textContent).toMatch(/运行中/);
   });
 
   it("shows alert-circle icon for crashed status", () => {
@@ -59,7 +59,7 @@ describe("DaemonCard", () => {
     const onRestart = vi.fn();
     mount(RUNNING, { onRestart });
     const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: /^restart$/i }));
+    await user.click(screen.getByRole("button", { name: "重启" }));
     expect(onRestart).toHaveBeenCalledWith("com.yulu.audiodaemon");
   });
 
@@ -67,13 +67,13 @@ describe("DaemonCard", () => {
     const onStop = vi.fn();
     mount(RUNNING, { onStop });
     const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: /^stop$/i }));
+    await user.click(screen.getByRole("button", { name: "停止" }));
     expect(onStop).toHaveBeenCalledWith("com.yulu.audiodaemon");
   });
 
   it("View logs → links to /health/logs?name=<full-name>", () => {
     mount(RUNNING);
-    const link = screen.getByRole("link", { name: /view logs/i });
+    const link = screen.getByRole("link", { name: /查看日志/ });
     expect(link).toHaveAttribute("href", "/health/logs?name=com.yulu.audiodaemon");
   });
 });

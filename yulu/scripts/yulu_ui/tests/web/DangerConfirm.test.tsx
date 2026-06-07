@@ -43,7 +43,7 @@ describe("DangerConfirm (P3-3)", () => {
     mount((v) => { resolved = v; });
     fireEvent.click(screen.getByText("trigger"));
     await waitFor(() => screen.getByRole("alertdialog"));
-    fireEvent.click(screen.getByRole("button", { name: /apply/i }));
+    fireEvent.click(screen.getByRole("button", { name: "应用" }));
     await waitFor(() => expect(resolved).toBe(true));
     expect(screen.queryByRole("alertdialog")).toBeNull();
   });
@@ -53,7 +53,7 @@ describe("DangerConfirm (P3-3)", () => {
     mount((v) => { resolved = v; });
     fireEvent.click(screen.getByText("trigger"));
     await waitFor(() => screen.getByRole("alertdialog"));
-    fireEvent.click(screen.getByRole("button", { name: /cancel/i }));
+    fireEvent.click(screen.getByRole("button", { name: "取消" }));
     await waitFor(() => expect(resolved).toBe(false));
     expect(screen.queryByRole("alertdialog")).toBeNull();
   });
