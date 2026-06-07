@@ -48,7 +48,7 @@ describe("RecordingsList", () => {
     });
     render(<MemoryRouter><RecordingsList /></MemoryRouter>);
     const badge = screen.getByTestId("recording-status");
-    expect(badge).toHaveTextContent(/failed/i);
+    expect(badge).toHaveTextContent(/失败/);
     expect(badge).toHaveAttribute("data-state", "failed");
     expect(badge).toHaveAttribute("title", "engine crashed");
   });

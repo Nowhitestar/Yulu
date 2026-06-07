@@ -68,7 +68,7 @@ describe("Glossary page", () => {
   it("+ Add term fires glossary.add with empty term", async () => {
     mount();
     const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: /\+ add term/i }));
+    await user.click(screen.getByRole("button", { name: /\+ 添加术语/i }));
     await vi.waitFor(() => expect(addMutate).toHaveBeenCalledWith({ term: "" }));
   });
 
@@ -79,7 +79,7 @@ describe("Glossary page", () => {
     const checkboxes = screen.getAllByRole("checkbox");
     await user.click(checkboxes[1]!);
     await user.click(checkboxes[2]!);
-    await user.click(screen.getByRole("button", { name: /^delete$/i }));
+    await user.click(screen.getByRole("button", { name: /^删除$/i }));
     await vi.waitFor(() => expect(deleteMutate).toHaveBeenCalledTimes(2));
     expect(deleteMutate).toHaveBeenNthCalledWith(1, { id: 1 });
     expect(deleteMutate).toHaveBeenNthCalledWith(2, { id: 2 });

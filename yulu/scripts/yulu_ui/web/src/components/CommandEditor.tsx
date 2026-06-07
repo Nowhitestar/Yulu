@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { useT } from "../i18n/LanguageProvider.js";
 import "./CommandEditor.css";
 
 export interface CommandEditorProps {
@@ -7,6 +8,7 @@ export interface CommandEditorProps {
 }
 
 export function CommandEditor({ value, onChange }: CommandEditorProps) {
+  const t = useT();
   const [draft, setDraft] = useState(value);
   useEffect(() => { setDraft(value); }, [value]);
 
@@ -64,10 +66,10 @@ export function CommandEditor({ value, onChange }: CommandEditorProps) {
             onChange={(e) => updateAt(i, e.target.value)}
             onBlur={() => onBlurAt(i)}
           />
-          <button type="button" className="cmd-remove" onClick={() => removeAt(i)} aria-label={`Remove arg ${i}`}>×</button>
+          <button type="button" className="cmd-remove" onClick={() => removeAt(i)} aria-label={t("cmd.removeAria", { i })}>×</button>
         </div>
       ))}
-      <button type="button" className="cmd-add" onClick={add}>+ Add arg</button>
+      <button type="button" className="cmd-add" onClick={add}>{t("cmd.add")}</button>
     </div>
   );
 }

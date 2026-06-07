@@ -181,6 +181,7 @@ function PathValue({ value, mode, filter, onCommit, disabled, disabledNote }: Pa
   const pickFile = trpc.system.pickFile.useMutation();
   const openInFinder = trpc.system.openInFinder.useMutation();
   const utils = trpc.useUtils();
+  const t = useT();
   const [pending, setPending] = useState<CloudWarning | null>(null);
 
   const choose = async () => {
@@ -217,10 +218,10 @@ function PathValue({ value, mode, filter, onCommit, disabled, disabledNote }: Pa
 
   return (
     <div className="path-value">
-      <span className="path-display" title={value}>{value || "(unset)"}</span>
-      {!disabled && <button type="button" className="path-btn" onClick={choose} disabled={pickFile.isPending}>Choose…</button>}
-      {value && <button type="button" className="path-btn" onClick={() => openInFinder.mutate({ path: value, reveal: true })}>Reveal</button>}
-      {disabled && <span className="value-disabled-note">{disabledNote ?? "录音中不可改"}</span>}
+      <span className="path-display" title={value}>{value || t("path.unset")}</span>
+      {!disabled && <button type="button" className="path-btn" onClick={choose} disabled={pickFile.isPending}>{t("path.choose")}</button>}
+      {value && <button type="button" className="path-btn" onClick={() => openInFinder.mutate({ path: value, reveal: true })}>{t("path.reveal")}</button>}
+      {disabled && <span className="value-disabled-note">{disabledNote ?? t("settings.locked.recording")}</span>}
       {pending && <CloudWarn warning={pending} onAccept={acceptCloud} onCancel={cancelCloud} />}
     </div>
   );
@@ -232,20 +233,21 @@ function PathValue({ value, mode, filter, onCommit, disabled, disabledNote }: Pa
 // (verified on-device), so the rationale is corruption/eviction, not impossibility
 // (RESEARCH Pitfall 3).
 function CloudWarn({ warning, onAccept, onCancel }: { warning: CloudWarning; onAccept: () => void; onCancel: () => void }) {
-  const where = warning.reason ? `in ${warning.reason}` : "in a cloud-sync folder";
+  const t = useT();
+  const where = warning.reason ? t("cloudWarn.where.in", { reason: warning.reason }) : t("cloudWarn.where.generic");
   return (
-    <div className="cloud-warn" role="alertdialog" aria-label="Cloud folder warning">
+    <div className="cloud-warn" role="alertdialog" aria-label={t("cloudWarn.aria")}>
       <div className="cloud-warn-body">
-        <div className="cloud-warn-title">This folder is {where}.</div>
+        <div className="cloud-warn-title">{t("cloudWarn.title", { where })}</div>
         <ul className="cloud-warn-risks">
-          <li>macOS may <strong>evict</strong> (make &ldquo;dataless&rdquo;) a recording that hasn&rsquo;t been used recently — if that happens mid-write or before transcription, the file can be lost or corrupted.</li>
-          <li>Yulu keeps its databases and live files <strong>out</strong> of this folder, so only your recordings, transcripts, and summaries sync.</li>
+          <li>{t("cloudWarn.risk.evict")}</li>
+          <li>{t("cloudWarn.risk.dbs")}</li>
         </ul>
-        <div className="cloud-warn-note">You can use this folder anyway if you understand the trade-off.</div>
+        <div className="cloud-warn-note">{t("cloudWarn.note")}</div>
       </div>
       <div className="cloud-warn-actions">
-        <button type="button" className="path-btn cloud-warn-cancel" onClick={onCancel}>Cancel</button>
-        <button type="button" className="path-btn cloud-warn-accept" onClick={onAccept}>Use anyway</button>
+        <button type="button" className="path-btn cloud-warn-cancel" onClick={onCancel}>{t("cloudWarn.cancel")}</button>
+        <button type="button" className="path-btn cloud-warn-accept" onClick={onAccept}>{t("cloudWarn.useAnyway")}</button>
       </div>
     </div>
   );

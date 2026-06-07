@@ -82,7 +82,7 @@ describe("useConfigField — danger-confirm gate (P3-3)", () => {
     await waitFor(() => screen.getByRole("alertdialog"));
     expect(updateMutate).not.toHaveBeenCalled();
     // Accept → the edit persists with the new value.
-    fireEvent.click(screen.getByRole("button", { name: /apply/i }));
+    fireEvent.click(screen.getByRole("button", { name: /应用/i }));
     await waitFor(() => expect(updateMutate).toHaveBeenCalledWith({ key: "audio.output_dir", value: "/new" }));
     expect(showUndo).toHaveBeenCalled();
   });
@@ -91,7 +91,7 @@ describe("useConfigField — danger-confirm gate (P3-3)", () => {
     mount();
     fireEvent.click(screen.getByText("danger"));
     await waitFor(() => screen.getByRole("alertdialog"));
-    fireEvent.click(screen.getByRole("button", { name: /cancel/i }));
+    fireEvent.click(screen.getByRole("button", { name: /取消/i }));
     // Give any (incorrect) async commit a chance to fire, then assert it didn't.
     await act(async () => { await Promise.resolve(); });
     expect(updateMutate).not.toHaveBeenCalled();

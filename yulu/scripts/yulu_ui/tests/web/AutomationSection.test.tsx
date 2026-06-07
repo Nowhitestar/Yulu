@@ -15,11 +15,11 @@ const SCHEMA = [
   { path: "meeting_detection.interval_sec",        category: "automation", label: "Poll interval (s)",  type: "number", reload: { kind: "restart", daemons: ["detector"] } },
   { path: "meeting_detection.stable_sec",          category: "automation", label: "Stable window (s)",  type: "number", reload: { kind: "restart", daemons: ["detector"] } },
   { path: "meeting_detection.prompt_cooldown_sec", category: "automation", label: "Prompt cooldown (s)", type: "number", reload: { kind: "restart", daemons: ["detector"] } },
-  { path: "meeting_detection.window_keywords",        category: "automation", label: "Window title keywords",  type: "command", reload: { kind: "restart", daemons: ["detector"] }, advanced: true },
-  { path: "meeting_detection.app_name_hints",         category: "automation", label: "App name hints",        type: "command", reload: { kind: "restart", daemons: ["detector"] }, advanced: true },
-  { path: "meeting_detection.target_app_names",       category: "automation", label: "Target app names",      type: "command", reload: { kind: "restart", daemons: ["detector"] }, advanced: true },
-  { path: "meeting_detection.dedicated_meeting_apps", category: "automation", label: "Dedicated meeting apps", type: "command", reload: { kind: "restart", daemons: ["detector"] }, advanced: true },
-  { path: "meeting_detection.ignore_window_keywords", category: "automation", label: "Ignore window keywords", type: "command", reload: { kind: "restart", daemons: ["detector"] }, advanced: true },
+  { path: "meeting_detection.window_keywords",        category: "automation", label: "窗口标题关键词",  type: "command", reload: { kind: "restart", daemons: ["detector"] }, advanced: true },
+  { path: "meeting_detection.app_name_hints",         category: "automation", label: "应用名提示",        type: "command", reload: { kind: "restart", daemons: ["detector"] }, advanced: true },
+  { path: "meeting_detection.target_app_names",       category: "automation", label: "目标应用名",      type: "command", reload: { kind: "restart", daemons: ["detector"] }, advanced: true },
+  { path: "meeting_detection.dedicated_meeting_apps", category: "automation", label: "专用会议应用", type: "command", reload: { kind: "restart", daemons: ["detector"] }, advanced: true },
+  { path: "meeting_detection.ignore_window_keywords", category: "automation", label: "忽略的窗口关键词", type: "command", reload: { kind: "restart", daemons: ["detector"] }, advanced: true },
 ];
 
 vi.mock("../../web/src/ws.js", () => ({
@@ -143,7 +143,7 @@ describe("AutomationSection — advanced match arrays disclosure (P3-2)", () => 
     const user = userEvent.setup();
     await user.click(screen.getByText(/高级/));
     expect(disclosure.open).toBe(true);
-    for (const label of ["Window title keywords", "App name hints", "Target app names", "Dedicated meeting apps", "Ignore window keywords"]) {
+    for (const label of ["窗口标题关键词", "应用名提示", "目标应用名", "专用会议应用", "忽略的窗口关键词"]) {
       expect(screen.getByText(label)).toBeInTheDocument();
     }
     // Each array renders as a CommandEditor (its "+ Add arg" affordance).

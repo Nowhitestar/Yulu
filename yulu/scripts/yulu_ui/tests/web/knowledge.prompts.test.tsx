@@ -95,17 +95,17 @@ describe("Prompts page", () => {
 
   it("renders 3 filter chips (All/Summary/Cleanup) + New prompt button", () => {
     mount();
-    expect(screen.getByRole("button", { name: /^all$/i })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /^summary$/i })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /^cleanup$/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^全部$/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^摘要$/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^清理$/i })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^voicemail$/i })).toBeNull();
-    expect(screen.getByRole("link", { name: /\+ new prompt/i })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /\+ 新建提示词/ })).toBeInTheDocument();
   });
 
   it("clicking Summary filter shows only summary prompts", async () => {
     mount();
     const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: /^summary$/i }));
+    await user.click(screen.getByRole("button", { name: /^摘要$/i }));
     const names = rowNames();
     expect(names).toContain("Default Summary");
     expect(names).toContain("Action Items"); // also a summary-category prompt
@@ -139,10 +139,10 @@ describe("Prompts reader route", () => {
       </QueryClientProvider>,
     );
     const user = userEvent.setup();
-    const name = screen.getByLabelText(/^name$/i);
+    const name = screen.getByLabelText(/^名称$/i);
     await user.clear(name);
     await user.type(name, "Renamed");
-    await user.click(screen.getByRole("button", { name: /^save$/i }));
+    await user.click(screen.getByRole("button", { name: /^保存$/i }));
     await vi.waitFor(() =>
       expect(updateMutate).toHaveBeenCalledWith({ id: "id-1", name: "Renamed" }),
     );
@@ -162,10 +162,10 @@ describe("Prompts reader route", () => {
       </QueryClientProvider>,
     );
     const user = userEvent.setup();
-    await user.type(screen.getByLabelText(/^name$/i), "X");
+    await user.type(screen.getByLabelText(/^名称$/i), "X");
     await user.type(screen.getByLabelText(/^slug$/i), "x-slug");
-    await user.type(screen.getByLabelText(/^content$/i), "body");
-    await user.click(screen.getByRole("button", { name: /^save$/i }));
+    await user.type(screen.getByLabelText(/^内容$/i), "body");
+    await user.click(screen.getByRole("button", { name: /^保存$/i }));
     await vi.waitFor(() => expect(createMutate).toHaveBeenCalled());
     await vi.waitFor(
       () => expect(screen.getByTestId("navigated-to-new")).toBeInTheDocument(),

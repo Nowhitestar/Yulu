@@ -48,7 +48,7 @@ describe("TagEditor", () => {
 
   it("hides editing affordances when disabled", () => {
     render(<TagEditor tags={["work"]} onChange={() => {}} disabled />);
-    expect(screen.queryByRole("button", { name: /add tag/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /添加标签/i })).toBeNull();
     expect(screen.queryByRole("button", { name: /remove tag/i })).toBeNull();
   });
 });

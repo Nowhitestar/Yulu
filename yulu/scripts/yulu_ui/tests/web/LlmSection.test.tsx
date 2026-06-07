@@ -83,7 +83,7 @@ describe("LlmSection — backend preset picker (P2-2)", () => {
     const picker = screen.getByLabelText(translate("zh", "settings.llm.backend.aria")) as HTMLSelectElement;
     expect(picker.value).toBe("agent-queue");
     // No raw command editor while a preset is selected.
-    expect(screen.queryByRole("button", { name: /\+ add arg/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /\+ 添加参数/ })).toBeNull();
   });
 
   it("selecting Claude commits llm.command = ['claude','--print']", async () => {
@@ -122,7 +122,7 @@ describe("LlmSection — backend preset picker (P2-2)", () => {
     mount();
     const picker = screen.getByLabelText(translate("zh", "settings.llm.backend.aria")) as HTMLSelectElement;
     expect(picker.value).toBe("custom");
-    expect(screen.getAllByRole("button", { name: /\+ add arg/i }).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByRole("button", { name: /\+ 添加参数/ }).length).toBeGreaterThanOrEqual(1);
   });
 
   it("choosing Custom from agent-queue reveals the editor and seeds an empty array", async () => {
@@ -134,7 +134,7 @@ describe("LlmSection — backend preset picker (P2-2)", () => {
     await vi.waitFor(() =>
       expect(updateMutate).toHaveBeenCalledWith({ key: "llm.command", value: [] }),
     );
-    expect(screen.getAllByRole("button", { name: /\+ add arg/i }).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByRole("button", { name: /\+ 添加参数/ }).length).toBeGreaterThanOrEqual(1);
   });
 
   it("keeps the Enabled toggle and the Test command button", () => {
