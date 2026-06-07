@@ -51,6 +51,7 @@ vi.mock("../../web/src/trpc.js", () => ({
 }));
 
 import { LlmSection } from "../../web/src/components/settings/LlmSection.js";
+import { translate } from "../../web/src/i18n/LanguageProvider.js";
 
 const tracker = { record: vi.fn(), statusFor: () => null, clear: vi.fn(), pending: {} } as never;
 
@@ -79,7 +80,7 @@ describe("LlmSection — backend preset picker (P2-2)", () => {
   it("null command selects Agent-queue and hides the CommandEditor", () => {
     configReturn = configWith(null);
     mount();
-    const picker = screen.getByLabelText("LLM backend") as HTMLSelectElement;
+    const picker = screen.getByLabelText(translate("zh", "settings.llm.backend.aria")) as HTMLSelectElement;
     expect(picker.value).toBe("agent-queue");
     // No raw command editor while a preset is selected.
     expect(screen.queryByRole("button", { name: /\+ add arg/i })).toBeNull();
@@ -87,7 +88,7 @@ describe("LlmSection — backend preset picker (P2-2)", () => {
 
   it("selecting Claude commits llm.command = ['claude','--print']", async () => {
     mount();
-    const picker = screen.getByLabelText("LLM backend");
+    const picker = screen.getByLabelText(translate("zh", "settings.llm.backend.aria"));
     const user = userEvent.setup();
     await user.selectOptions(picker, "claude");
     await vi.waitFor(() =>
@@ -98,7 +99,7 @@ describe("LlmSection — backend preset picker (P2-2)", () => {
   it("selecting Codex commits llm.command = ['python3','codex_llm.py']", async () => {
     mount();
     const user = userEvent.setup();
-    await user.selectOptions(screen.getByLabelText("LLM backend"), "codex");
+    await user.selectOptions(screen.getByLabelText(translate("zh", "settings.llm.backend.aria")), "codex");
     await vi.waitFor(() =>
       expect(updateMutate).toHaveBeenCalledWith({ key: "llm.command", value: ["python3", "codex_llm.py"] }),
     );
@@ -107,7 +108,7 @@ describe("LlmSection — backend preset picker (P2-2)", () => {
   it("selecting Agent-queue commits llm.command = null", async () => {
     configReturn = configWith(["claude", "--print"]);
     mount();
-    const picker = screen.getByLabelText("LLM backend") as HTMLSelectElement;
+    const picker = screen.getByLabelText(translate("zh", "settings.llm.backend.aria")) as HTMLSelectElement;
     expect(picker.value).toBe("claude");
     const user = userEvent.setup();
     await user.selectOptions(picker, "agent-queue");
@@ -119,7 +120,7 @@ describe("LlmSection — backend preset picker (P2-2)", () => {
   it("a value matching no preset (e.g. ['my-llm']) selects Custom and shows the CommandEditor", () => {
     configReturn = configWith(["my-llm", "--flag"]);
     mount();
-    const picker = screen.getByLabelText("LLM backend") as HTMLSelectElement;
+    const picker = screen.getByLabelText(translate("zh", "settings.llm.backend.aria")) as HTMLSelectElement;
     expect(picker.value).toBe("custom");
     expect(screen.getAllByRole("button", { name: /\+ add arg/i }).length).toBeGreaterThanOrEqual(1);
   });
@@ -128,7 +129,7 @@ describe("LlmSection — backend preset picker (P2-2)", () => {
     configReturn = configWith(null);
     mount();
     const user = userEvent.setup();
-    await user.selectOptions(screen.getByLabelText("LLM backend"), "custom");
+    await user.selectOptions(screen.getByLabelText(translate("zh", "settings.llm.backend.aria")), "custom");
     // Seeds [] so the editor has an array to grow.
     await vi.waitFor(() =>
       expect(updateMutate).toHaveBeenCalledWith({ key: "llm.command", value: [] }),
@@ -138,8 +139,8 @@ describe("LlmSection — backend preset picker (P2-2)", () => {
 
   it("keeps the Enabled toggle and the Test command button", () => {
     mount();
-    expect(screen.getByText("Enabled")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Test command" })).toBeInTheDocument();
+    expect(screen.getByText(translate("zh", "settings.llm.enabled.label"))).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: translate("zh", "settings.llm.test.button") })).toBeInTheDocument();
   });
 
   it("exposes no api key / token / secret / password field (T-04-KEY)", () => {
@@ -165,7 +166,7 @@ describe("LlmSection — auto-run templates subsection (P4a-2)", () => {
       isPending: false,
     };
     mount();
-    expect(screen.getByText("Auto-run templates")).toBeInTheDocument();
+    expect(screen.getByText(translate("zh", "settings.llm.autorun.title"))).toBeInTheDocument();
     expect(screen.getByText("Meeting summary")).toBeInTheDocument();
     expect(screen.getByText("Filler cleanup")).toBeInTheDocument();
     // The non-auto-run prompt is not listed here.
@@ -173,10 +174,10 @@ describe("LlmSection — auto-run templates subsection (P4a-2)", () => {
     // Category badges render.
     const rows = screen.getAllByTestId("autorun-row");
     expect(rows).toHaveLength(2);
-    expect(within(rows[0]!).getByText("summary")).toBeInTheDocument();
-    expect(within(rows[1]!).getByText("cleanup")).toBeInTheDocument();
+    expect(within(rows[0]!).getByText(translate("zh", "category.summary"))).toBeInTheDocument();
+    expect(within(rows[1]!).getByText(translate("zh", "category.cleanup"))).toBeInTheDocument();
     // Manage link points at the Prompts page.
-    const link = screen.getByRole("link", { name: /manage all templates/i }) as HTMLAnchorElement;
+    const link = screen.getByRole("link", { name: translate("zh", "settings.llm.autorun.manage") }) as HTMLAnchorElement;
     expect(link.getAttribute("href")).toBe("/knowledge/prompts");
   });
 
@@ -187,7 +188,7 @@ describe("LlmSection — auto-run templates subsection (P4a-2)", () => {
     };
     mount();
     const user = userEvent.setup();
-    await user.click(screen.getByRole("switch", { name: /auto-run meeting summary/i }));
+    await user.click(screen.getByRole("switch", { name: translate("zh", "settings.llm.autorun.toggleAria", { name: "Meeting summary" }) }));
     expect(promptsUpdate).toHaveBeenCalledWith({ id: "p1", isAutoRun: false });
     // The list is refreshed so the row reflects the new state.
     expect(promptsListInvalidate).toHaveBeenCalled();
@@ -199,7 +200,7 @@ describe("LlmSection — auto-run templates subsection (P4a-2)", () => {
       isPending: false,
     };
     mount();
-    expect(screen.getByText(/no auto-run templates/i)).toBeInTheDocument();
+    expect(screen.getByText(translate("zh", "settings.llm.autorun.empty"))).toBeInTheDocument();
     expect(screen.queryByTestId("autorun-row")).toBeNull();
   });
 

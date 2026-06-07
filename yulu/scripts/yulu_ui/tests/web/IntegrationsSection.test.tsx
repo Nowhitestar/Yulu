@@ -41,6 +41,7 @@ vi.mock("../../web/src/trpc.js", () => ({
 }));
 
 import { IntegrationsSection } from "../../web/src/components/settings/IntegrationsSection.js";
+import { translate } from "../../web/src/i18n/LanguageProvider.js";
 
 // A tracker whose record spy lets us assert whether a commit tripped the restart
 // banner (record called) or was suppressed (record NOT called) — P4a-4.
@@ -85,7 +86,7 @@ describe("IntegrationsSection — Feishu removed (P4a-4)", () => {
 describe("IntegrationsSection — Google calendar via gog (P4a-4)", () => {
   it("empty: shows a 'No calendar connected.' state and the + Google button", () => {
     mount();
-    expect(screen.getByText("No calendar connected.")).toBeInTheDocument();
+    expect(screen.getByText(translate("zh", "settings.integrations.empty"))).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "+ Google" })).toBeInTheDocument();
   });
 
@@ -95,9 +96,9 @@ describe("IntegrationsSection — Google calendar via gog (P4a-4)", () => {
     const card = container.querySelector(".integration-card") as HTMLElement;
     // The header inside the card reads "Google Calendar (via gog)" (the section
     // subtitle uses the same words, so scope to the card).
-    expect(within(card).getByText("Google Calendar (via gog)")).toBeInTheDocument();
-    expect(within(card).getByText("Account")).toBeInTheDocument();
-    expect(within(card).getByText("Calendars to watch")).toBeInTheDocument();
+    expect(within(card).getByText(translate("zh", "settings.integrations.google.title"))).toBeInTheDocument();
+    expect(within(card).getByText(translate("zh", "settings.integrations.account.label"))).toBeInTheDocument();
+    expect(within(card).getByText(translate("zh", "settings.integrations.watch.label"))).toBeInTheDocument();
     // watch_calendars rendered as editable chips.
     const inputs = screen.getAllByRole("textbox") as HTMLInputElement[];
     expect(inputs.some((i) => i.value === "primary")).toBe(true);
@@ -114,7 +115,7 @@ describe("IntegrationsSection — Google calendar via gog (P4a-4)", () => {
   it("editing the gog_account commits calendars.<idx>.gog_account", async () => {
     configReturn = configWith([{ type: "google", enabled: false, gog_account: "me@example.com" }]);
     mount();
-    const row = screen.getByText("Account").closest(".row")! as HTMLElement;
+    const row = screen.getByText(translate("zh", "settings.integrations.account.label")).closest(".row")! as HTMLElement;
     const user = userEvent.setup();
     // Click the value display (InlineEditRow text shows a display span until clicked).
     await user.click(within(row).getByText("me@example.com"));
@@ -132,8 +133,8 @@ describe("IntegrationsSection — Google calendar via gog (P4a-4)", () => {
     configReturn = configWith([{ type: "google", enabled: true, gog_account: "me@example.com" }]);
     mount();
     const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: /check connection/i }));
-    await vi.waitFor(() => expect(screen.getByText("Connected")).toBeInTheDocument());
+    await user.click(screen.getByRole("button", { name: translate("zh", "settings.integrations.connection.check") }));
+    await vi.waitFor(() => expect(screen.getByText(translate("zh", "settings.integrations.connection.connected"))).toBeInTheDocument());
   });
 
   it("Check connection → Not authenticated when the gog test fails", async () => {
@@ -141,8 +142,8 @@ describe("IntegrationsSection — Google calendar via gog (P4a-4)", () => {
     configReturn = configWith([{ type: "google", enabled: false, gog_account: "" }]);
     mount();
     const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: /check connection/i }));
-    await vi.waitFor(() => expect(screen.getByText("Not authenticated")).toBeInTheDocument());
+    await user.click(screen.getByRole("button", { name: translate("zh", "settings.integrations.connection.check") }));
+    await vi.waitFor(() => expect(screen.getByText(translate("zh", "settings.integrations.connection.notAuth"))).toBeInTheDocument());
   });
 });
 
@@ -171,7 +172,7 @@ describe("IntegrationsSection — add/remove + restart suppression (P4a-4)", () 
     configReturn = configWith([{ type: "google", enabled: false, gog_account: "me@example.com" }]);
     mount();
     const user = userEvent.setup();
-    const row = screen.getByText("Enabled").closest(".row")!;
+    const row = screen.getByText(translate("zh", "settings.integrations.enabled.label")).closest(".row")!;
     await user.click(within(row as HTMLElement).getByRole("switch"));
     await vi.waitFor(() =>
       expect(updateMutate).toHaveBeenCalledWith({ key: "calendars.0.enabled", value: true }),
@@ -185,7 +186,7 @@ describe("IntegrationsSection — add/remove + restart suppression (P4a-4)", () 
     configReturn = configWith([{ type: "google", enabled: true, gog_account: "me@example.com" }]);
     mount();
     const user = userEvent.setup();
-    const row = screen.getByText("Enabled").closest(".row")!;
+    const row = screen.getByText(translate("zh", "settings.integrations.enabled.label")).closest(".row")!;
     await user.click(within(row as HTMLElement).getByRole("switch"));
     await vi.waitFor(() =>
       expect(updateMutate).toHaveBeenCalledWith({ key: "calendars.0.enabled", value: false }),
@@ -197,7 +198,7 @@ describe("IntegrationsSection — add/remove + restart suppression (P4a-4)", () 
     configReturn = configWith([{ type: "google", enabled: false, gog_account: "me@example.com" }]);
     mount();
     const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: "Remove Google calendar" }));
+    await user.click(screen.getByRole("button", { name: translate("zh", "settings.integrations.removeAria") }));
     await vi.waitFor(() =>
       expect(updateMutate).toHaveBeenCalledWith({ key: "calendars", value: [] }),
     );
@@ -208,7 +209,7 @@ describe("IntegrationsSection — add/remove + restart suppression (P4a-4)", () 
     configReturn = configWith([{ type: "google", enabled: true, gog_account: "me@example.com" }]);
     mount();
     const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: "Remove Google calendar" }));
+    await user.click(screen.getByRole("button", { name: translate("zh", "settings.integrations.removeAria") }));
     await vi.waitFor(() =>
       expect(updateMutate).toHaveBeenCalledWith({ key: "calendars", value: [] }),
     );
@@ -222,7 +223,7 @@ describe("IntegrationsSection — add/remove + restart suppression (P4a-4)", () 
     configReturn = configWith([{ type: "google", enabled: true }]);
     mount();
     const add = screen.getByRole("button", { name: "+ Google" }) as HTMLButtonElement;
-    const remove = screen.getByRole("button", { name: "Remove Google calendar" }) as HTMLButtonElement;
+    const remove = screen.getByRole("button", { name: translate("zh", "settings.integrations.removeAria") }) as HTMLButtonElement;
     expect(add.disabled).toBe(true);
     expect(remove.disabled).toBe(true);
     const user = userEvent.setup();

@@ -94,7 +94,7 @@ import { SettingsLayout, handle as settingsHandle } from "../../../web/src/route
 import { SettingsCategory } from "../../../web/src/routes/settings.$category.js";
 import { categoryLabelKey } from "../../../web/src/components/settings/categories.js";
 import { CATEGORIES } from "../../../web/src/components/settings/categories.js";
-import { translate } from "../../../web/src/i18n/LanguageProvider.js";
+import { translate, LanguageProvider } from "../../../web/src/i18n/LanguageProvider.js";
 import { ThemeProvider } from "../../../web/src/theme.js";
 
 // Minimal breadcrumb probe that mirrors TopBar's breadcrumb computation (read
@@ -158,9 +158,11 @@ function wrap(initial = "/settings/general") {
   const router = createMemoryRouter(routesTree(), { initialEntries: [initial] });
   const result = render(
     <ThemeProvider>
-      <QueryClientProvider client={qc}>
-        <RouterProvider router={router} />
-      </QueryClientProvider>
+      <LanguageProvider>
+        <QueryClientProvider client={qc}>
+          <RouterProvider router={router} />
+        </QueryClientProvider>
+      </LanguageProvider>
     </ThemeProvider>
   );
   return { ...result, router };
@@ -222,8 +224,10 @@ describe("Settings (3-column MasterDetail)", () => {
   it("renders the automation (meeting detection) section", () => {
     const { container } = wrap("/settings/automation");
     const detail = within(container.querySelector(".masterdetail-detail") as HTMLElement);
-    expect(detail.getByText("Automation")).toBeInTheDocument();
-    expect(detail.getByText("Meeting detection")).toBeInTheDocument();
+    // The section <h2> heading (distinct from the detail's <h1> title, which the
+    // category label also renders as "自动化").
+    expect(container.querySelector("h2.settings-section-h")?.textContent).toBe(translate("zh", "settings.automation.heading"));
+    expect(detail.getByText(translate("zh", "settings.automation.enabled.label"))).toBeInTheDocument();
   });
 });
 
@@ -231,43 +235,47 @@ describe("Settings category detail content (re-homed widgets)", () => {
   it("general: capabilities (read-only) + theme + status agent + about", () => {
     const { container, getByText } = wrap("/settings/general");
     const detail = within(container.querySelector(".masterdetail-detail") as HTMLElement);
-    expect(detail.getByText("Host capabilities")).toBeInTheDocument();
+    expect(detail.getByText(translate("zh", "settings.capabilities.heading"))).toBeInTheDocument();
     // ThemeToggle (UI theme control) is re-homed here.
     expect(container.querySelector('[role="group"][aria-label="Theme"]')).not.toBeNull();
-    expect(getByText("Status agent enabled")).toBeInTheDocument();
+    expect(getByText(translate("zh", "settings.hotkey.statusAgent.label"))).toBeInTheDocument();
     // P3-1: the read-only About block (version + install source) lives in general.
-    expect(detail.getByText("About")).toBeInTheDocument();
+    expect(detail.getByText(translate("zh", "settings.about.heading"))).toBeInTheDocument();
     expect(detail.getByText("0.8.0")).toBeInTheDocument();
   });
 
   it("audio: audio rows + storage dbStats/logs", () => {
     const { container } = wrap("/settings/audio");
     const detail = within(container.querySelector(".masterdetail-detail") as HTMLElement);
-    expect(detail.getByText("Audio")).toBeInTheDocument();
-    expect(detail.getByText("Microphone device")).toBeInTheDocument();
+    expect(detail.getByText(translate("zh", "settings.audio.heading"))).toBeInTheDocument();
+    expect(detail.getByText(translate("zh", "settings.audio.micDevice.label"))).toBeInTheDocument();
     // StorageSection is re-homed under audio (its "Storage" heading + Databases group).
-    expect(detail.getByText("Storage")).toBeInTheDocument();
-    expect(detail.getByText("Databases")).toBeInTheDocument();
+    expect(detail.getByText(translate("zh", "settings.storage.heading"))).toBeInTheDocument();
+    expect(detail.getByText(translate("zh", "settings.storage.databases"))).toBeInTheDocument();
   });
 
   it("transcription: the full transcription section", () => {
     const { container } = wrap("/settings/transcription");
     const detail = within(container.querySelector(".masterdetail-detail") as HTMLElement);
-    expect(detail.getByText("Transcription")).toBeInTheDocument();
-    expect(detail.getByText("Transcription mode")).toBeInTheDocument();
+    // Section <h2> heading is distinct from the detail <h1> title (the category
+    // label also renders "转写").
+    expect(container.querySelector("h2.settings-section-h")?.textContent).toBe(translate("zh", "settings.transcription.heading"));
+    expect(detail.getByText(translate("zh", "settings.transcription.mode.label"))).toBeInTheDocument();
   });
 
   it("llm: enabled toggle + a Test command button", () => {
     const { container, getByRole } = wrap("/settings/llm");
     const detail = within(container.querySelector(".masterdetail-detail") as HTMLElement);
-    expect(detail.getByText("LLM")).toBeInTheDocument();
-    expect(getByRole("button", { name: "Test command" })).toBeInTheDocument();
+    expect(detail.getByText(translate("zh", "settings.llm.heading"))).toBeInTheDocument();
+    expect(getByRole("button", { name: translate("zh", "settings.llm.test.button") })).toBeInTheDocument();
   });
 
   it("integrations: the integrations section", () => {
     const { container } = wrap("/settings/integrations");
     const detail = within(container.querySelector(".masterdetail-detail") as HTMLElement);
-    expect(detail.getByText("Integrations")).toBeInTheDocument();
+    // Section <h2> heading is distinct from the detail <h1> title (the category
+    // label also renders "集成").
+    expect(container.querySelector("h2.settings-section-h")?.textContent).toBe(translate("zh", "settings.integrations.heading"));
   });
 
   it("advanced: the advanced-flagged cloud transcription command", () => {
@@ -275,14 +283,14 @@ describe("Settings category detail content (re-homed widgets)", () => {
     const detail = within(container.querySelector(".masterdetail-detail") as HTMLElement);
     // Exact match to hit the label, not the longer help paragraph that also
     // mentions "cloud transcription command".
-    expect(detail.getByText("Cloud transcription command")).toBeInTheDocument();
+    expect(detail.getByText(translate("zh", "settings.advanced.cloudCommand.label"))).toBeInTheDocument();
   });
 
   it("commits a field edit through trpc.config.update", async () => {
     configUpdateSpy.mockClear();
     const { getByText } = wrap("/settings/llm");
     // The LLM "Enabled" toggle commits llm.enabled on click.
-    const enabledLabel = getByText("Enabled");
+    const enabledLabel = getByText(translate("zh", "settings.llm.enabled.label"));
     const row = enabledLabel.closest(".row")!;
     const sw = within(row as HTMLElement).getByRole("switch");
     sw.click();
@@ -301,7 +309,7 @@ describe("Settings — recording-guard + undo (Task 5)", () => {
     recording.state = "recording";
     // status_agent.enabled is restart-class (statusagent) and lives in general.
     const { getByText, queryByRole } = wrap("/settings/general");
-    const row = getByText("Status agent enabled").closest(".row")!;
+    const row = getByText(translate("zh", "settings.hotkey.statusAgent.label")).closest(".row")!;
     // The interactive switch is replaced by a read-only display + a 录音中 note.
     expect(within(row as HTMLElement).queryByRole("switch")).toBeNull();
     expect(within(row as HTMLElement).getByText(/录音中/)).toBeInTheDocument();
@@ -313,14 +321,14 @@ describe("Settings — recording-guard + undo (Task 5)", () => {
     recording.state = "recording";
     const { getByText } = wrap("/settings/llm");
     // llm.enabled is reload:none → not guarded.
-    const row = getByText("Enabled").closest(".row")!;
+    const row = getByText(translate("zh", "settings.llm.enabled.label")).closest(".row")!;
     expect(within(row as HTMLElement).getByRole("switch")).toBeInTheDocument();
   });
 
   it("a successful save shows an undo toast whose 撤销 re-commits the previous value", async () => {
     const { getByText, getByTestId } = wrap("/settings/llm");
     // cfg.llm.enabled starts false; toggling commits true.
-    const row = getByText("Enabled").closest(".row")!;
+    const row = getByText(translate("zh", "settings.llm.enabled.label")).closest(".row")!;
     within(row as HTMLElement).getByRole("switch").click();
     await waitFor(() => expect(configUpdateSpy).toHaveBeenCalledWith(expect.objectContaining({ key: "llm.enabled", value: true })));
     // The undo toast appears; clicking 撤销 re-commits the OLD value (false).

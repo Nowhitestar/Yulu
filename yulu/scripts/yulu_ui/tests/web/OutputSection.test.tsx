@@ -44,6 +44,7 @@ vi.mock("../../web/src/trpc.js", () => ({
 }));
 
 import { OutputSection } from "../../web/src/components/settings/OutputSection.js";
+import { translate } from "../../web/src/i18n/LanguageProvider.js";
 
 const tracker = { record: vi.fn(), statusFor: () => null, clear: vi.fn(), pending: {} } as never;
 
@@ -70,16 +71,16 @@ function mount() {
 describe("OutputSection — channel selector (P2-4, P4a-5)", () => {
   it("renders the Output section with an always-visible channel selector defaulting to file", () => {
     mount();
-    expect(screen.getByText("Output")).toBeInTheDocument();
+    expect(screen.getByText(translate("zh", "settings.output.heading"))).toBeInTheDocument();
     // P4a-5: the channel picker is a prominent, always-visible <select> (not
     // click-to-reveal), so the combobox is queryable without first clicking.
-    const select = screen.getByLabelText("Output channel") as HTMLSelectElement;
+    const select = screen.getByLabelText(translate("zh", "settings.output.channel.aria")) as HTMLSelectElement;
     expect(select.value).toBe("file");
   });
 
   it("selecting zulip commits output.channel and reveals zulip stream/topic", async () => {
     mount();
-    const select = screen.getByLabelText("Output channel") as HTMLSelectElement;
+    const select = screen.getByLabelText(translate("zh", "settings.output.channel.aria")) as HTMLSelectElement;
     const user = userEvent.setup();
     await user.selectOptions(select, "zulip");
     await vi.waitFor(() =>
@@ -90,9 +91,9 @@ describe("OutputSection — channel selector (P2-4, P4a-5)", () => {
   it("zulip channel shows stream + topic text rows and commits them", async () => {
     configReturn = configWith({ channel: "zulip", zulip: { stream: "meetings", topic: "纪要" } });
     mount();
-    expect(screen.getByText("Zulip stream")).toBeInTheDocument();
-    expect(screen.getByText("Zulip topic")).toBeInTheDocument();
-    const row = screen.getByText("Zulip stream").closest(".row")!;
+    expect(screen.getByText(translate("zh", "settings.output.zulip.stream"))).toBeInTheDocument();
+    expect(screen.getByText(translate("zh", "settings.output.zulip.topic"))).toBeInTheDocument();
+    const row = screen.getByText(translate("zh", "settings.output.zulip.stream")).closest(".row")!;
     const user = userEvent.setup();
     await user.click(within(row as HTMLElement).getByText("meetings"));
     const input = within(row as HTMLElement).getByRole("textbox") as HTMLInputElement;

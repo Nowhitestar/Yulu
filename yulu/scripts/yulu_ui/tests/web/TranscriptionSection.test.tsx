@@ -61,6 +61,7 @@ vi.mock("../../web/src/trpc.js", () => ({
 }));
 
 import { TranscriptionSection } from "../../web/src/components/settings/TranscriptionSection.js";
+import { translate } from "../../web/src/i18n/LanguageProvider.js";
 
 const tracker = {
   record: vi.fn(),
@@ -130,17 +131,17 @@ describe("TranscriptionSection — MLX engine fields (P4a-1)", () => {
   it("MLX engine shows MLX model + Realtime model, and NOT the whisper.cpp local-model fields", () => {
     configReturn = { data: baseConfig({ final_engine: "mlx" }), isPending: false };
     mount();
-    expect(screen.getByText("MLX model")).toBeInTheDocument();
-    expect(screen.getByText("Realtime model")).toBeInTheDocument();
+    expect(screen.getByText(translate("zh", "settings.transcription.mlxModel.label"))).toBeInTheDocument();
+    expect(screen.getByText(translate("zh", "settings.transcription.realtimeModel.label"))).toBeInTheDocument();
     // whisper.cpp-only fields are hidden on the MLX engine.
-    expect(screen.queryByText("Local model path")).toBeNull();
-    expect(screen.queryByLabelText(/detected model/i)).toBeNull();
+    expect(screen.queryByText(translate("zh", "settings.transcription.localModelPath.label"))).toBeNull();
+    expect(screen.queryByLabelText(translate("zh", "settings.transcription.detectedModel.label"))).toBeNull();
   });
 
   it("editing the MLX model commits transcription.mlx.model", async () => {
     configReturn = { data: baseConfig({ final_engine: "mlx", mlx: { model: "old-model" } }), isPending: false };
     mount();
-    const row = screen.getByText("MLX model").closest(".row")!;
+    const row = screen.getByText(translate("zh", "settings.transcription.mlxModel.label")).closest(".row")!;
     const user = userEvent.setup();
     await user.click(within(row as HTMLElement).getByText("old-model"));
     const input = within(row as HTMLElement).getByRole("textbox") as HTMLInputElement;
@@ -155,7 +156,7 @@ describe("TranscriptionSection — MLX engine fields (P4a-1)", () => {
   it("editing the Realtime model commits transcription.realtime.mlx_model", async () => {
     configReturn = { data: baseConfig({ final_engine: "mlx", realtime: { mlx_model: "turbo-old" } }), isPending: false };
     mount();
-    const row = screen.getByText("Realtime model").closest(".row")!;
+    const row = screen.getByText(translate("zh", "settings.transcription.realtimeModel.label")).closest(".row")!;
     const user = userEvent.setup();
     await user.click(within(row as HTMLElement).getByText("turbo-old"));
     const input = within(row as HTMLElement).getByRole("textbox") as HTMLInputElement;
@@ -175,11 +176,11 @@ describe("TranscriptionSection — Whisper.cpp engine fields (P4a-1, SET-04)", (
 
   it("whisper.cpp engine shows the Detected-model dropdown + Local model path, and NOT the MLX fields", () => {
     mount();
-    expect(screen.getByLabelText(/detected model/i)).toBeInTheDocument();
-    expect(screen.getByText("Local model path")).toBeInTheDocument();
+    expect(screen.getByLabelText(translate("zh", "settings.transcription.detectedModel.label"))).toBeInTheDocument();
+    expect(screen.getByText(translate("zh", "settings.transcription.localModelPath.label"))).toBeInTheDocument();
     // MLX-only fields are hidden on the whisper engine.
-    expect(screen.queryByText("MLX model")).toBeNull();
-    expect(screen.queryByText("Realtime model")).toBeNull();
+    expect(screen.queryByText(translate("zh", "settings.transcription.mlxModel.label"))).toBeNull();
+    expect(screen.queryByText(translate("zh", "settings.transcription.realtimeModel.label"))).toBeNull();
   });
 
   it("Test 3a — lists detected models by name and persists the chosen model path to local_model_path", async () => {
@@ -191,7 +192,7 @@ describe("TranscriptionSection — Whisper.cpp engine fields (P4a-1, SET-04)", (
       isPending: false,
     };
     mount();
-    const select = screen.getByLabelText(/detected model/i) as HTMLSelectElement;
+    const select = screen.getByLabelText(translate("zh", "settings.transcription.detectedModel.label")) as HTMLSelectElement;
     expect(within(select).getByRole("option", { name: "ggml-large-v3.bin" })).toBeInTheDocument();
     expect(within(select).getByRole("option", { name: "ggml-base.bin" })).toBeInTheDocument();
 
@@ -208,8 +209,8 @@ describe("TranscriptionSection — Whisper.cpp engine fields (P4a-1, SET-04)", (
   it("Test 3b — empty detected_models shows a 'no models detected' state and does not crash", () => {
     modelsReturn = { data: [], isPending: false };
     expect(() => mount()).not.toThrow();
-    expect(screen.getByText(/no models detected/i)).toBeInTheDocument();
-    const select = screen.getByLabelText(/detected model/i) as HTMLSelectElement;
+    expect(screen.getByText(translate("zh", "settings.transcription.detectedModel.none"))).toBeInTheDocument();
+    const select = screen.getByLabelText(translate("zh", "settings.transcription.detectedModel.label")) as HTMLSelectElement;
     expect(select.disabled).toBe(true);
   });
 
@@ -290,14 +291,14 @@ describe("TranscriptionSection — cloud command stays in Advanced section (TRAN
 describe("TranscriptionSection — always-relevant rows (D-07 extend, not replace)", () => {
   it("keeps the language / post-recording / realtime rows on both engines", () => {
     mount();
-    expect(screen.getByText("Language")).toBeInTheDocument();
-    expect(screen.getByText("Post-recording")).toBeInTheDocument();
-    expect(screen.getByText("Realtime transcription")).toBeInTheDocument();
+    expect(screen.getByText(translate("zh", "settings.transcription.language.label"))).toBeInTheDocument();
+    expect(screen.getByText(translate("zh", "settings.transcription.postRecording.label"))).toBeInTheDocument();
+    expect(screen.getByText(translate("zh", "settings.transcription.realtime.label"))).toBeInTheDocument();
   });
 
   it("renders a Post-recording select defaulting to fast_summary and persists full_transcribe on change", async () => {
     mount();
-    const row = screen.getByText("Post-recording").closest(".row")!;
+    const row = screen.getByText(translate("zh", "settings.transcription.postRecording.label")).closest(".row")!;
     expect(within(row as HTMLElement).getByText("fast_summary")).toBeInTheDocument();
     const user = userEvent.setup();
     await user.click(within(row as HTMLElement).getByText("fast_summary"));
