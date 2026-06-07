@@ -1,0 +1,16 @@
+/* OutputSection — a prominent channel picker + a friendly "file" callout so the
+   section reads as a real, configurable choice (P4a-5). Reuses existing tokens. */
+.output-channel-select {
+  font-weight: 500;
+  min-width: 160px;
+}
+
+/* The file-channel reassurance: a soft callout, not an empty void. */
+.output-file-note {
+  margin: 4px 0 8px;
+  padding: 10px 12px;
+  background: var(--accent-soft);
+  border-radius: var(--radius-inner);
+  color: var(--fg-2);
+  font-size: 12px;
+}

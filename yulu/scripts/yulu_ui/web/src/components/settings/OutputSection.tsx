@@ -2,6 +2,7 @@ import { trpc } from "../../trpc.js";
 import { InlineEditRow } from "../InlineEditRow.js";
 import { useConfigField } from "../../hooks/useConfigField.js";
 import type { SettingsRestartTracker } from "../../hooks/useSettingsRestartTracker.js";
+import "./OutputSection.css";
 
 export interface OutputSectionProps {
   tracker: SettingsRestartTracker;
@@ -112,18 +113,33 @@ export function OutputSection({ tracker }: OutputSectionProps) {
       <h2 className="settings-section-h">Output</h2>
       <p className="settings-section-sub">Where a finished summary is delivered</p>
 
-      <InlineEditRow
-        label="Output channel"
-        help="file writes the note to disk. zulip / notion / telegram post it to that service."
-        type="select"
-        value={channel}
-        options={CHANNELS.map((c) => ({ value: c.value, label: c.label }))}
-        onCommit={commit("output.channel") as (v: string) => void}
-        status={tracker.statusFor("output.channel")}
-      />
+      {/* P4a-5: a prominent, always-visible channel picker (not click-to-edit) so
+          the section reads as a real, configurable choice. The chosen channel's
+          fields appear below it. */}
+      <div className="row output-channel-row">
+        <div className="row-label">
+          <div>Output channel</div>
+          <div className="row-help">file writes the note to disk. zulip / notion / telegram post it to that service.</div>
+        </div>
+        <div className="row-value">
+          <select
+            aria-label="Output channel"
+            className="value-input output-channel-select"
+            value={channel}
+            onChange={(e) => commit("output.channel")(e.target.value)}
+          >
+            {CHANNELS.map((c) => (
+              <option key={c.value} value={c.value}>{c.label}</option>
+            ))}
+          </select>
+        </div>
+        <div className="row-status">{tracker.statusFor("output.channel") === "saved" ? "✓" : null}</div>
+      </div>
 
       {channel === "file" && (
-        <p className="settings-section-sub">The summary is written next to the recording. No further setup needed.</p>
+        <div className="output-file-note">
+          Summary is saved next to the recording — no extra setup.
+        </div>
       )}
 
       {channel === "zulip" && (

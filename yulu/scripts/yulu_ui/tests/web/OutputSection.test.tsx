@@ -67,20 +67,21 @@ function mount() {
   );
 }
 
-describe("OutputSection — channel selector (P2-4)", () => {
-  it("renders the Output section with a channel selector defaulting to file", () => {
+describe("OutputSection — channel selector (P2-4, P4a-5)", () => {
+  it("renders the Output section with an always-visible channel selector defaulting to file", () => {
     mount();
     expect(screen.getByText("Output")).toBeInTheDocument();
-    const row = screen.getByText("Output channel").closest(".row")!;
-    expect(within(row as HTMLElement).getByText("file")).toBeInTheDocument();
+    // P4a-5: the channel picker is a prominent, always-visible <select> (not
+    // click-to-reveal), so the combobox is queryable without first clicking.
+    const select = screen.getByLabelText("Output channel") as HTMLSelectElement;
+    expect(select.value).toBe("file");
   });
 
   it("selecting zulip commits output.channel and reveals zulip stream/topic", async () => {
     mount();
-    const row = screen.getByText("Output channel").closest(".row")!;
+    const select = screen.getByLabelText("Output channel") as HTMLSelectElement;
     const user = userEvent.setup();
-    await user.click(within(row as HTMLElement).getByText("file"));
-    await user.selectOptions(within(row as HTMLElement).getByRole("combobox"), "zulip");
+    await user.selectOptions(select, "zulip");
     await vi.waitFor(() =>
       expect(updateMutate).toHaveBeenCalledWith({ key: "output.channel", value: "zulip" }),
     );
@@ -174,11 +175,19 @@ describe("OutputSection — notion api_key_env is NAME-only, never a secret (P2-
 });
 
 describe("OutputSection — file channel needs no extra setup", () => {
-  it("file channel shows no zulip/notion/telegram fields", () => {
+  it("file channel shows a clear 'saved next to the recording' note and no other channel fields", () => {
     configReturn = configWith({ channel: "file" });
     mount();
+    // P4a-5: a friendly callout instead of an empty void.
+    expect(screen.getByText(/saved next to the recording/i)).toBeInTheDocument();
     expect(screen.queryByText("Zulip stream")).toBeNull();
     expect(screen.queryByText("Notion database")).toBeNull();
     expect(screen.queryByText("Telegram chat ID")).toBeNull();
+  });
+
+  it("non-file channels do NOT show the file note", () => {
+    configReturn = configWith({ channel: "zulip", zulip: { stream: "s", topic: "t" } });
+    mount();
+    expect(screen.queryByText(/saved next to the recording/i)).toBeNull();
   });
 });
