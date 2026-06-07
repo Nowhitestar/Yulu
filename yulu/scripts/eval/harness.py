@@ -119,11 +119,19 @@ def run_provider_sherpa(
     emb_model: str,
     num_speakers: Optional[int] = None,
     threshold: float = 0.5,
+    use_strategy: bool = False,
+    attendee_count: Optional[int] = None,
 ) -> Timeline:
     """Run the Phase-10 ``SherpaDiarizeBackend`` on one item → a hypothesis ``Timeline``.
 
     Imports the real backend (proving the harness scores *the same engine Yulu ships*, not a
     re-implementation). Only reached under ``--provider sherpa``; needs sherpa-onnx + models.
+
+    When ``use_strategy`` is set, the Phase-12 ``speaker_count.resolve_speaker_count`` ladder picks
+    the per-call ``num_clusters`` / ``threshold`` from the (optional) calendar ``attendee_count`` +
+    the item's language — so the harness measures the SHIPPED strategy, not a hand-picked count.
+    ``--attendee-count auto`` (the CLI default for ``--use-strategy``) uses each item's true speaker
+    count as the calendar prior, simulating "the calendar told us how many people are invited."
     """
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # yulu/scripts on path
     from stt_daemon.backends.diarize import SherpaDiarizeBackend  # lazy heavy import
@@ -131,16 +139,61 @@ def run_provider_sherpa(
 
     if item.wav_path is None:
         raise FileNotFoundError(f"no audio for {item.name} — cannot run a provider")
+
     backend = SherpaDiarizeBackend(
         seg_model=seg_model, emb_model=emb_model,
         num_speakers=num_speakers, threshold=threshold,
     )
+
+    if use_strategy:
+        from stt_daemon.speaker_count import resolve_speaker_count, reconcile_count  # pure, lazy
+
+        prior = attendee_count if attendee_count is not None else item.reference.num_speakers()
+        initial = resolve_speaker_count(
+            attendee_count=prior, language=item.language,
+            config_num_speakers=num_speakers,  # an explicit --num-speakers still wins
+            config_threshold=threshold,
+        )
+
+        async def _go_strategy():
+            await backend.warm_up()
+            if initial.source == "config":
+                # Operator pin → one forced pass, no reconcile.
+                turns = await backend.diarize(
+                    audio_path=str(item.wav_path), num_speakers=initial.num_clusters,
+                    threshold=initial.threshold, cancel_token=CancelToken(),
+                )
+            else:
+                # Pass 1: auto. Pass 2: force the prior ONLY if auto disagrees (criterion 4).
+                turns = await backend.diarize(
+                    audio_path=str(item.wav_path), num_speakers=None,
+                    threshold=initial.threshold, cancel_token=CancelToken(),
+                )
+                auto_count = len({t.speaker_idx for t in turns})
+                final = reconcile_count(
+                    auto_count=auto_count, attendee_count=prior,
+                    language=item.language, config_threshold=threshold,
+                )
+                if final.num_clusters is not None and final.num_clusters != auto_count:
+                    turns = await backend.diarize(
+                        audio_path=str(item.wav_path), num_speakers=final.num_clusters,
+                        threshold=final.threshold, cancel_token=CancelToken(),
+                    )
+            backend.release()
+            return turns
+
+        turns = asyncio.run(_go_strategy())
+        return Timeline(
+            (Turn(t.start, t.end, f"spk-{t.speaker_idx}") for t in turns),
+            file_id=item.name,
+        )
 
     async def _go():
         await backend.warm_up()
         turns = await backend.diarize(
             audio_path=str(item.wav_path),
             num_speakers=num_speakers,
+            threshold=threshold,
             cancel_token=CancelToken(),
         )
         backend.release()
@@ -319,6 +372,13 @@ def main(argv: Optional[list[str]] = None) -> int:
     ap.add_argument("--num-speakers", type=int, default=None,
                     help="force the speaker count (default: auto threshold clustering)")
     ap.add_argument("--threshold", type=float, default=0.5, help="sherpa auto-clustering threshold")
+    ap.add_argument("--use-strategy", action="store_true",
+                    help="pick num_clusters/threshold via the Phase-12 speaker_count strategy "
+                         "(calendar-attendee prior + calibrated threshold), not a hand-picked count")
+    ap.add_argument("--attendee-count", default=None,
+                    help="calendar attendee count for --use-strategy; an integer, or 'auto' (use "
+                         "each item's true speaker count as the prior). Default under --use-strategy "
+                         "is 'auto'.")
     ap.add_argument("--cross-check", action="store_true",
                     help="also score with pyannote.metrics (eval venv only)")
     ap.add_argument("--json", type=Path, help="write the full report JSON here")
@@ -345,9 +405,13 @@ def main(argv: Optional[list[str]] = None) -> int:
         elif args.provider == "sherpa":
             if not (args.seg_model and args.emb_model):
                 ap.error("--provider sherpa needs --seg-model and --emb-model")
+            attendee: Optional[int] = None
+            if args.use_strategy and args.attendee_count not in (None, "auto"):
+                attendee = int(args.attendee_count)
             hyp = run_provider_sherpa(
                 item, seg_model=args.seg_model, emb_model=args.emb_model,
                 num_speakers=args.num_speakers, threshold=args.threshold,
+                use_strategy=args.use_strategy, attendee_count=attendee,
             )
             if hyp_dir:
                 write_rttm(hyp_dir / f"{item.name}.rttm", hyp, file_id=item.name)
