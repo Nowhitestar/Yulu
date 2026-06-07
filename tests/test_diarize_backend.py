@@ -107,7 +107,15 @@ def fake_sherpa(monkeypatch, tmp_path):
     seg.write_bytes(b"seg")
     emb.write_bytes(b"emb")
     monkeypatch.setitem(sys.modules, "sherpa_onnx", _make_fake_sherpa())
-    # numpy/soundfile are imported lazily inside the backend; provide minimal fakes for diarize().
+    # warm_up()'s dummy pass does `import numpy as np; sd.process(np.zeros(sample_rate))`.
+    # CI's bare .venv-ci has no numpy, so inject a minimal fake (matches the diarize fixture)
+    # — this also makes the dummy-pass assertion deterministic across local (real numpy) and CI.
+    fake_np = types.ModuleType("numpy")
+    fake_np.zeros = lambda n, dtype=None: [0.0] * int(n)
+    fake_np.linspace = lambda a, b, n, endpoint=True: list(range(int(n)))
+    fake_np.arange = lambda n: list(range(int(n)))
+    fake_np.interp = lambda x, xp, fp: [0.0] * len(x)
+    monkeypatch.setitem(sys.modules, "numpy", fake_np)
     return {"seg": str(seg), "emb": str(emb)}
 
 
