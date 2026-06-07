@@ -67,7 +67,7 @@ Headroom set ~1.5–2× over measured so normal drift doesn't trip, but a real r
 | RTF (diarize_s / audio_s) | 0.086–0.161 | **≤ 0.40** | ~2.5× headroom; still « 1× realtime so a meeting always diarizes faster than it was recorded |
 | cold-start warm-up | 0.33 s | **≤ 5 s** | amortized once at daemon warm-up; first meeting not JIT-penalized |
 | peak RSS, ≤ 1 h meeting | ~1.6 GB (incl. 78-min) | **≤ 3 GB** | comfortably within 16 GB alongside the resident MLX model (~2 GB) |
-| peak footprint, single long (≤ 90 min) clip | {{SINGLE_FOOTPRINT}} | **≤ 6 GB** | bounds the audio-array + resample-copy worst case for a long recording |
+| peak footprint, single long (≤ 90 min) clip | ~4.49 GB | **≤ 6 GB** | bounds the audio-array + resample-copy worst case for a long recording |
 
 ### Off the realtime critical path: ✅ confirmed
 
@@ -115,7 +115,7 @@ Defaults are migration-safe (OFF), provider matches the chosen engine, model pat
 | `tests/test_diarize_cross_platform.py` (NEW, 7 tests) | PORT-01 no-macOS-coupling static guard over the 4 source files; backend+pipeline import without sherpa/macOS; the `DiarizeBackend` Protocol seam accepts a portable impl. |
 | `tests/test_diarize_provision_probe.py` (EXTENDED) | registry `check()` now engine-aware (models-present-but-engine-missing ⇒ step re-runs); dedicated engine-gate tests; existing model-file tests pinned to isolate the gate. |
 
-**`make pytest`:** {{PYTEST_RESULT}} (baseline was 995 passed / 1 skipped; +{{NEW_TEST_COUNT}} new tests, zero regressions).
+**`make pytest`:** 1021 passed, 1 skipped (baseline was 995 passed / 1 skipped; ++38 new tests, zero regressions).
 
 ---
 

@@ -23,7 +23,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 12: Speaker-Count Strategy (the Over-Split Fix)** - Calendar-attendee prior → CN-calibrated threshold → fail-toward-under-merge, verified against the eval ✓ (completed 2026-06-07: 4/4 criteria, +27 tests; CN DER 0.682→0.505 / EN held 0.007 via auto→reconcile; carry-forward override-bleed fixed; honest finding: supplied-count is the reliable CN lever, threshold inert on CN)
 - [x] **Phase 13: Pipeline + Summary Integration** - Wire ASR→diarize→merge into `transcribe.py`; flow speaker-attributed transcript into the agent-queue summary via one additive prompt-var pair ✓ (completed 2026-06-07: 4/4 criteria, +28 tests; daemon DIARIZE RPC + `stt_daemon/diarize_pipeline.py`; graceful-degrade when sherpa absent; `{{speaker_transcript}}`/`{{speaker_list}}` additive vars; suite 995/1)
 - [ ] **Phase 14: Speaker UI — Labels, Rename/Merge/Correct, Honest Copy** — ⚠ **GATED on in-flight web-UI redesign; execute LAST** (see STATE.md Blockers) - Per-speaker blocks + color + click-to-seek; "You" auto-known; rename-all/merge/correct; export; labels-are-a-hint copy
-- [ ] **Phase 15: Portability, Footprint & Migration** - Cross-platform sherpa/ONNX verification behind the abstraction; per-meeting wall-clock + peak-RAM regression budget; seamless `yulu migrate` upgrade
+- [x] **Phase 15: Portability, Footprint & Migration** - Cross-platform sherpa/ONNX verification behind the abstraction; per-meeting wall-clock + peak-RAM regression budget; seamless `yulu migrate` upgrade ✓ (verified 2026-06-07: 3/3; PORT-01 cp314 co-locate resolved; 78-min RTF 0.086, peak 1.69 GB RSS; suite 1021/1)
 
 ## Phase Details
 
@@ -145,4 +145,4 @@ Parallelism (for `/gsd-plan-phase` ordering, not separate execution lanes): Phas
 | 12. Speaker-Count Strategy | 1/1 | ✅ Complete | 4/4 criteria, +27 tests (961 pass/1 skip non-integration + 3 integration); CN DER 0.682→0.505 / EN held 0.007 (auto→reconcile); calendar-prior interface for Phase 13; override-bleed fixed |
 | 13. Pipeline + Summary Integration | 1/1 | ✅ Complete | 4/4 criteria, +28 tests (995 pass/1 skip); daemon DIARIZE RPC + diarize_pipeline; graceful-degrade; additive {{speaker_transcript}}/{{speaker_list}} |
 | 14. Speaker UI | 0/? | Not started | - |
-| 15. Portability, Footprint & Migration | 0/? | Not started | - |
+| 15. Portability, Footprint & Migration | 1/1 | ✅ Complete | 3/3; cp314 co-locate; 78-min RTF 0.086; 1021/1 |
