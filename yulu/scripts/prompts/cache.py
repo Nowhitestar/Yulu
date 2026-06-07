@@ -58,9 +58,11 @@ class PromptsCache:
       auto_run(category: str | Category) -> list[Prompt]
         # filtered to is_auto_run=True, sorted by sort_order asc then slug
       render(prompt, *, transcript, meeting_title, date,
-             my_transcript="", their_transcript="") -> str
+             my_transcript="", their_transcript="",
+             speaker_transcript="", speaker_list="") -> str
         # single-pass literal substitution of {{transcript}}/{{meeting_title}}/
-        # {{date}}/{{my_transcript}}/{{their_transcript}}.
+        # {{date}}/{{my_transcript}}/{{their_transcript}}/
+        # {{speaker_transcript}}/{{speaker_list}}.
         # The speaker-aware vars default to "" so legacy prompts/callers
         # that don't pass them keep rendering unchanged.
     """
@@ -148,22 +150,28 @@ class PromptsCache:
 
     def render(self, prompt: Prompt, *,
                transcript: str, meeting_title: str, date: str,
-               my_transcript: str = "", their_transcript: str = "") -> str:
+               my_transcript: str = "", their_transcript: str = "",
+               speaker_transcript: str = "", speaker_list: str = "") -> str:
         """Single-pass literal substitution of the supported template vars.
 
         Supported placeholders:
-          {{transcript}}       — merged transcript (mic + sys)
-          {{my_transcript}}    — mic-side only (speaker = "我")
-          {{their_transcript}} — sys-side only (speaker = "对方")
-          {{meeting_title}}    — meeting title
-          {{date}}             — YYYY-MM-DD meeting date
+          {{transcript}}         — merged transcript (mic + sys)
+          {{my_transcript}}      — mic-side only (speaker = "我")
+          {{their_transcript}}   — sys-side only (speaker = "对方")
+          {{speaker_transcript}} — diarized transcript with [MM:SS <speaker>] labels (v0.6)
+          {{speaker_list}}       — compact roster of detected/named speakers (v0.6)
+          {{meeting_title}}      — meeting title
+          {{date}}               — YYYY-MM-DD meeting date
 
-        my_transcript / their_transcript default to "" so legacy callers
-        and legacy prompts (mono / pre-Phase-3) keep rendering unchanged.
+        my_transcript / their_transcript / speaker_transcript / speaker_list all
+        default to "" so legacy callers and legacy prompts (mono / pre-Phase-3 /
+        pre-diarization) keep rendering EXACTLY unchanged — the additive-var contract.
         """
         return (prompt.content
                 .replace("{{transcript}}", transcript)
                 .replace("{{my_transcript}}", my_transcript)
                 .replace("{{their_transcript}}", their_transcript)
+                .replace("{{speaker_transcript}}", speaker_transcript)
+                .replace("{{speaker_list}}", speaker_list)
                 .replace("{{meeting_title}}", meeting_title)
                 .replace("{{date}}", date))
