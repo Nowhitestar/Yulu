@@ -17,6 +17,7 @@ from .protocol import (
     WarmUpRequest,
     VocabReloadRequest, VocabReloadedResponse,
     TranscribeRequest, TranscribeResponse,
+    DiarizeRequest, DiarizeResponse,
     CancelRequest,
     SubscribeSessionRequest, UnsubscribeSessionRequest,
 )
@@ -73,6 +74,11 @@ class STTDaemonApp:
         # when to exit cleanly without needing a parent-task cancellation
         # ping from the signal handler.
         self.stopped_event = asyncio.Event()
+        # v0.6 diarization (Phase 13): the config-selected diarize backend, attached by
+        # __main__._run (None when disabled / unknown provider). Defaulted here so a daemon
+        # constructed without it — e.g. tests, or diarize_enabled=False — never AttributeErrors
+        # in _on_diarize. Held OFF the ASR runtime dict (ARCHITECTURE Anti-Pattern 1).
+        self.diarize_backend = None
 
     async def start(self) -> None:
         self.vocab_cache.load()
@@ -102,6 +108,7 @@ class STTDaemonApp:
         cs.register(WarmUpRequest, self._on_warm_up)
         cs.register(VocabReloadRequest, self._on_vocab_reload)
         cs.register(TranscribeRequest, self._on_transcribe)
+        cs.register(DiarizeRequest, self._on_diarize)
         cs.register(CancelRequest, self._on_cancel)
         cs.register(SubscribeSessionRequest, self._on_subscribe_session)
         cs.register(UnsubscribeSessionRequest, self._on_unsubscribe_session)
@@ -299,6 +306,62 @@ class STTDaemonApp:
         )
         fut = await self.scheduler.submit(job)
         return await fut
+
+    async def _on_diarize(self, msg: DiarizeRequest, writer):
+        """Run the diarize backend on one audio file → DiarizeResponse with speaker turns.
+
+        SIBLING-stage dispatch (ARCHITECTURE §1 / Anti-Pattern 1): the diarize backend is held on
+        the app OFF the ASR runtime dict and invoked DIRECTLY here (it owns its own asyncio lock +
+        count-keyed pipeline cache), never through STTRuntime's ASR fallback chain. Graceful degrade
+        is the whole point of this handler — the live runtime (Python 3.14) may not have sherpa
+        installed yet (Phase 15/PORT-01), so:
+          * no backend configured (diarize disabled / unknown provider) → ENGINE_UNAVAILABLE;
+          * sherpa missing / model load failure / any backend error → INTERNAL ErrorEvent.
+        Either way the daemon stays up and transcribe.py degrades to today's plain transcript.
+        """
+        import time as _time
+
+        if not Path(msg.audio_path).exists():
+            return ErrorEvent(
+                job_id=msg.job_id,
+                code=ErrorCode.AUDIO_NOT_FOUND,
+                message=f"audio not found: {msg.audio_path}",
+            )
+        backend = self.diarize_backend
+        if backend is None:
+            return ErrorEvent(
+                job_id=msg.job_id,
+                code=ErrorCode.ENGINE_UNAVAILABLE,
+                message="diarization not configured",
+            )
+
+        from .runtime import CancelToken
+
+        t0 = _time.monotonic()
+        try:
+            if not backend.is_ready():
+                await backend.warm_up()
+            turns = await backend.diarize(
+                audio_path=msg.audio_path,
+                num_speakers=msg.num_speakers,
+                threshold=msg.threshold,
+                cancel_token=CancelToken(),
+            )
+        except Exception as exc:
+            # sherpa-missing, model-not-found, ORT failure, etc. all land here — surfaced as a
+            # clean error so the client degrades, never a crashed connection.
+            self.logger.warn("diarize_failed", job_id=msg.job_id, err=str(exc))
+            return ErrorEvent(job_id=msg.job_id, code=ErrorCode.INTERNAL, message=str(exc))
+
+        turn_dicts = [t.to_dict() for t in turns]
+        detected = len({t.speaker_idx for t in turns})
+        return DiarizeResponse(
+            job_id=msg.job_id,
+            status="ok",
+            turns=turn_dicts,
+            num_speakers_detected=detected,
+            duration_ms=int((_time.monotonic() - t0) * 1000),
+        )
 
     async def _on_cancel(self, msg: CancelRequest, writer):
         # Dual-track transcribe (Phase 3) submits two scheduler Jobs keyed

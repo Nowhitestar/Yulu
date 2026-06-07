@@ -13,6 +13,10 @@ class JobKind(str, Enum):
     FINAL_TRANSCRIBE = "final_transcribe"
     LIVE_CHUNK = "live_chunk"
     FILE_TRANSCRIBE = "file_transcribe"
+    # v0.6 diarization (Phase 13). A SIBLING stage, not an ASR engine — it runs on the
+    # background slot (never contends with interactive dictation) and is dispatched to the
+    # app's diarize_backend, NOT through STTRuntime's ASR fallback chain.
+    DIARIZE = "diarize"
 
     @property
     def priority(self) -> int:
@@ -21,6 +25,7 @@ class JobKind(str, Enum):
             JobKind.FINAL_TRANSCRIBE: 1,
             JobKind.LIVE_CHUNK: 2,
             JobKind.FILE_TRANSCRIBE: 3,
+            JobKind.DIARIZE: 4,
         }[self]
 
     @property
@@ -48,6 +53,8 @@ class MessageType(str, Enum):
     VOCAB_RELOADED = "vocab_reloaded"
     TRANSCRIBE = "transcribe"
     TRANSCRIBE_RESULT = "transcribe_result"
+    DIARIZE = "diarize"
+    DIARIZE_RESULT = "diarize_result"
     CANCEL = "cancel"
     SUBSCRIBE_SESSION = "subscribe_session"
     UNSUBSCRIBE_SESSION = "unsubscribe_session"
@@ -127,6 +134,36 @@ class TranscribeResponse:
 
 
 @dataclass
+class DiarizeRequest:
+    """Ask the daemon to diarize one audio file (v0.6, Phase 13).
+
+    A SIBLING of TranscribeRequest, routed to the app's diarize_backend (NOT the ASR runtime).
+    ``num_speakers`` / ``threshold`` carry the Phase-12 count-strategy decision for THIS call
+    (None / <=0 → auto threshold clustering). ``language`` is advisory (provenance/logging only).
+    """
+
+    job_id: str
+    audio_path: str
+    num_speakers: Optional[int] = None
+    threshold: Optional[float] = None
+    language: Optional[str] = None
+    timeout_sec: int = 7200
+
+
+@dataclass
+class DiarizeResponse:
+    """Diarization result: raw speaker turns (each ``{start, end, speaker_idx, speaker}``) feeding
+    ``speaker_merge.assign_speakers`` verbatim. ``status`` is ``"ok"`` / ``"error"``."""
+
+    job_id: str
+    status: str
+    turns: list[dict]
+    num_speakers_detected: int
+    duration_ms: int
+    error: Optional[str] = None
+
+
+@dataclass
 class CancelRequest:
     job_id: str
 
@@ -184,6 +221,7 @@ Message = Union[
     WarmUpRequest,
     VocabReloadRequest, VocabReloadedResponse,
     TranscribeRequest, TranscribeResponse,
+    DiarizeRequest, DiarizeResponse,
     CancelRequest,
     SubscribeSessionRequest, UnsubscribeSessionRequest,
     PartialEvent, FinalReadyEvent,
@@ -199,6 +237,8 @@ _TYPE_TO_CLS: dict[str, type] = {
     "vocab_reloaded": VocabReloadedResponse,
     "transcribe": TranscribeRequest,
     "transcribe_result": TranscribeResponse,
+    "diarize": DiarizeRequest,
+    "diarize_result": DiarizeResponse,
     "cancel": CancelRequest,
     "subscribe_session": SubscribeSessionRequest,
     "unsubscribe_session": UnsubscribeSessionRequest,

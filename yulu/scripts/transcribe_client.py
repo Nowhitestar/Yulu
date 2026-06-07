@@ -175,3 +175,49 @@ def request_final_transcribe(
         channel_split=channel_split,
         socket_path=socket_path,
     )
+
+
+def request_diarize(
+    *,
+    wav: str,
+    num_speakers: Optional[int] = None,
+    threshold: Optional[float] = None,
+    language: Optional[str] = None,
+    timeout_sec: int = 7200,
+    socket_path: Optional[Path] = None,
+    connect_timeout_sec: float = 5.0,
+    response_timeout_sec: float = 7200.0,
+) -> dict[str, Any]:
+    """Ask the running stt_daemon to diarize one audio file (v0.6, Phase 13).
+
+    Mirrors :func:`request_final_transcribe` but speaks the ``diarize`` message and returns the
+    daemon's ``diarize_result`` payload (a dict with ``turns``: ``[{start, end, speaker_idx,
+    speaker}]``). ``num_speakers`` / ``threshold`` carry the Phase-12 count-strategy decision for
+    THIS call (None / <=0 ⇒ auto threshold clustering).
+
+    Raises:
+        DaemonUnavailable: the daemon socket can't be reached (degrade to no-diarization).
+        DaemonError: the daemon returned an error event — e.g. ``diarization not configured`` when
+            no backend is built, or sherpa missing (the live-runtime Python-3.14 case). Callers in
+            ``transcribe.py`` catch BOTH and fall back to today's plain transcript.
+    """
+    socket_path = Path(socket_path or DEFAULT_SOCKET)
+    request = {
+        "type": "diarize",
+        "job_id": str(uuid.uuid4()),
+        "audio_path": str(Path(wav).resolve()),
+        "num_speakers": num_speakers,
+        "threshold": threshold,
+        "language": language,
+        "timeout_sec": timeout_sec,
+    }
+    response = _run_with_retry(
+        socket_path, request,
+        connect_timeout_sec=connect_timeout_sec,
+        response_timeout_sec=response_timeout_sec,
+    )
+    if response.get("type") == "error":
+        raise DaemonError(response.get("message", "daemon error"))
+    if response.get("type") != "diarize_result":
+        raise DaemonError(f"unexpected response: {response.get('type')}")
+    return response
