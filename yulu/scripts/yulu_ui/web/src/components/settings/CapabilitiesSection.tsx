@@ -61,8 +61,8 @@ export function CapabilitiesSection() {
     <section id="capabilities" className="settings-section">
       <div className="cap-head">
         <div>
-          <h2 className="settings-section-h">Capabilities</h2>
-          <p className="settings-section-sub">What Yulu detected on this machine</p>
+          <h2 className="settings-section-h">Host capabilities</h2>
+          <p className="settings-section-sub">What your machine supports for recording and transcription.</p>
         </div>
         <button type="button" className="path-btn" onClick={() => { refetch(); }}>
           Refresh
@@ -71,10 +71,10 @@ export function CapabilitiesSection() {
 
       {failed ? (
         <div className="cap-error">
-          Couldn&apos;t read capabilities right now — try Refresh.
+          Couldn&apos;t read capabilities — Refresh to try again.
         </div>
       ) : caps.length === 0 ? (
-        <div className="cap-error">No capabilities detected yet — try Refresh.</div>
+        <div className="cap-error">No capabilities detected yet — Refresh to try again.</div>
       ) : (
         caps.map(([name, cap]) => (
           <div className="row" key={name}>

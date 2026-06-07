@@ -222,7 +222,7 @@ describe("Settings category detail content (re-homed widgets)", () => {
   it("general: capabilities (read-only) + theme + status agent + about", () => {
     const { container, getByText } = wrap("/settings/general");
     const detail = within(container.querySelector(".masterdetail-detail") as HTMLElement);
-    expect(detail.getByText("Capabilities")).toBeInTheDocument();
+    expect(detail.getByText("Host capabilities")).toBeInTheDocument();
     // ThemeToggle (UI theme control) is re-homed here.
     expect(container.querySelector('[role="group"][aria-label="Theme"]')).not.toBeNull();
     expect(getByText("Status agent enabled")).toBeInTheDocument();
