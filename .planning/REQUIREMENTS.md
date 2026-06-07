@@ -42,8 +42,8 @@ Grounded in spikes 001/002 and `.planning/research/SUMMARY.md`. Each maps to exa
 - [ ] **SPKUI-02**: The local user ("You"/我) is auto-known from the mic channel without manual labelling
 - [ ] **SPKUI-03**: User can rename a speaker once, apply everywhere, and persist (sidecar `display_name`), surviving re-diarize
 - [ ] **SPKUI-04**: User can merge two speaker labels and correct a single segment's speaker
-- [ ] **SPKUI-05**: Speaker-attributed transcript flows into the agent-queue summary (one additive prompt-var pair) so the agent attributes action items to owners; speaker-aware export
-- [ ] **SPKUI-06**: Speaker labels never auto-rewrite the `.transcript.txt` cleanup output (sidecar is source of truth)
+- [x] **SPKUI-05**: Speaker-attributed transcript flows into the agent-queue summary (one additive prompt-var pair) so the agent attributes action items to owners; speaker-aware export
+- [x] **SPKUI-06**: Speaker labels never auto-rewrite the `.transcript.txt` cleanup output (sidecar is source of truth)
 
 ### Portability & Footprint (PORT)
 
@@ -221,8 +221,8 @@ Each v1 requirement maps to exactly one phase. See `.planning/ROADMAP.md` for ph
 | COUNT-01 | Phase 12 | Pending |
 | COUNT-02 | Phase 12 | Pending |
 | COUNT-03 | Phase 12 | Pending |
-| SPKUI-05 | Phase 13 | Pending |
-| SPKUI-06 | Phase 13 | Pending |
+| SPKUI-05 | Phase 13 | Complete |
+| SPKUI-06 | Phase 13 | Complete |
 | SPKUI-01 | Phase 14 | Pending |
 | SPKUI-02 | Phase 14 | Pending |
 | SPKUI-03 | Phase 14 | Pending |
