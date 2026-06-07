@@ -26,6 +26,7 @@ if str(SCRIPTS) not in sys.path:
 import transcribe  # noqa: E402
 import queue_store  # noqa: E402
 from stt_daemon import speaker_merge as sm  # noqa: E402
+from stt_daemon import diarize_pipeline as dp  # noqa: E402
 
 
 def _write_mono(path: Path):
@@ -49,8 +50,8 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setattr(queue_store, "QUEUE_PATH", queue, raising=False)
     monkeypatch.setattr(queue_store, "LOCK_PATH", fake_home / "queue.lock", raising=False)
     # Point the calendar-prior at empty fixtures (→ None → auto mode) unless a test overrides.
-    monkeypatch.setattr(transcribe, "STATE_PATH", tmp_path / "none.state.json", raising=False)
-    monkeypatch.setattr(transcribe, "SCHEDULE_PATH", tmp_path / "none.schedule.json", raising=False)
+    monkeypatch.setattr(dp, "STATE_PATH", tmp_path / "none.state.json", raising=False)
+    monkeypatch.setattr(dp, "SCHEDULE_PATH", tmp_path / "none.schedule.json", raising=False)
 
     from prompts.db import PromptsRepo, open_db
     from prompts.seed import seed_from_current
@@ -93,7 +94,7 @@ def test_diarize_enabled_writes_labelled_transcript_and_sidecar(env, monkeypatch
     _config(fake_home, diarize_enabled=True)
     monkeypatch.setattr(transcribe, "_request_final_transcribe_raw",
                         lambda *a, **k: _mono_response(_ASR))
-    monkeypatch.setattr(transcribe, "_diarize_via_daemon",
+    monkeypatch.setattr(dp, "diarize_via_daemon",
                         lambda *a, **k: list(_TURNS))
 
     upserts = []
@@ -137,7 +138,7 @@ def test_diarize_disabled_leaves_plain_transcript(env, monkeypatch):
     monkeypatch.setattr(transcribe, "_request_final_transcribe_raw",
                         lambda *a, **k: _mono_response(_ASR))
     # If diarize were attempted this would explode — proving it is NOT called when disabled.
-    monkeypatch.setattr(transcribe, "_diarize_via_daemon",
+    monkeypatch.setattr(dp, "diarize_via_daemon",
                         lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not diarize")))
 
     audio = tmp_path / "Team_20260601_100000.wav"
@@ -159,7 +160,7 @@ def test_diarize_backend_unavailable_degrades(env, monkeypatch):
                         lambda *a, **k: _mono_response(_ASR))
     # Simulate the live Python-3.14 case: sherpa not installed → request_diarize raised →
     # _diarize_via_daemon returns None.
-    monkeypatch.setattr(transcribe, "_diarize_via_daemon", lambda *a, **k: None)
+    monkeypatch.setattr(dp, "diarize_via_daemon", lambda *a, **k: None)
 
     audio = tmp_path / "Team_20260601_100000.wav"
     _write_mono(audio)
@@ -176,7 +177,7 @@ def test_diarize_zero_turns_degrades(env, monkeypatch):
     _config(fake_home, diarize_enabled=True)
     monkeypatch.setattr(transcribe, "_request_final_transcribe_raw",
                         lambda *a, **k: _mono_response(_ASR))
-    monkeypatch.setattr(transcribe, "_diarize_via_daemon", lambda *a, **k: [])
+    monkeypatch.setattr(dp, "diarize_via_daemon", lambda *a, **k: [])
 
     audio = tmp_path / "Team_20260601_100000.wav"
     _write_mono(audio)
@@ -194,7 +195,7 @@ def test_diarize_skipped_when_no_timestamped_segments(env, monkeypatch):
     monkeypatch.setattr(transcribe, "_request_final_transcribe_raw",
                         lambda *a, **k: {"status": "ok", "layout": "mono",
                                          "text": "plain text only", "segments": []})
-    monkeypatch.setattr(transcribe, "_diarize_via_daemon",
+    monkeypatch.setattr(dp, "diarize_via_daemon",
                         lambda *a, **k: (_ for _ in ()).throw(AssertionError("no segments → skip")))
 
     audio = tmp_path / "Team_20260601_100000.wav"
@@ -216,7 +217,7 @@ def test_rediarize_preserves_rename(env, monkeypatch):
     _write_mono(audio)
 
     # First diarize: clusters 0,1.
-    monkeypatch.setattr(transcribe, "_diarize_via_daemon", lambda *a, **k: list(_TURNS))
+    monkeypatch.setattr(dp, "diarize_via_daemon", lambda *a, **k: list(_TURNS))
     transcribe.process_audio(str(audio))
 
     # User renames spk-1 → "Lewis" in the sidecar (what the Phase-14 UI mutation will do).
@@ -232,7 +233,7 @@ def test_rediarize_preserves_rename(env, monkeypatch):
         {"start": 0.0, "end": 2.0, "speaker_idx": 1, "speaker": 1},
         {"start": 2.0, "end": 4.0, "speaker_idx": 0, "speaker": 0},
     ]
-    monkeypatch.setattr(transcribe, "_diarize_via_daemon", lambda *a, **k: list(renumbered))
+    monkeypatch.setattr(dp, "diarize_via_daemon", lambda *a, **k: list(renumbered))
     transcribe.process_audio(str(audio))
 
     doc2 = json.loads(sidecar_path.read_text(encoding="utf-8"))
@@ -261,7 +262,7 @@ def test_low_confidence_segment_not_laundered(env, monkeypatch):
     turns = [{"start": 0.0, "end": 2.0, "speaker_idx": 0, "speaker": 0}]
     monkeypatch.setattr(transcribe, "_request_final_transcribe_raw",
                         lambda *a, **k: _mono_response(asr))
-    monkeypatch.setattr(transcribe, "_diarize_via_daemon", lambda *a, **k: list(turns))
+    monkeypatch.setattr(dp, "diarize_via_daemon", lambda *a, **k: list(turns))
 
     audio = tmp_path / "Team_20260601_100000.wav"
     _write_mono(audio)
