@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync, statSync, existsSync, unlinkSync } from "node:fs";
+import { readdirSync, readFileSync, statSync, existsSync, unlinkSync, renameSync, writeFileSync } from "node:fs";
 import { join, resolve, relative, isAbsolute } from "node:path";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
@@ -52,6 +52,213 @@ interface Row {
   firstWords: string | null;
   status: string;
   statusError?: string;
+}
+
+interface SpeakerEntry {
+  display_name?: string;
+  renamed?: boolean;
+  merged_into?: string | null;
+  [key: string]: unknown;
+}
+
+interface SpeakerSegment {
+  start?: number;
+  end?: number;
+  text?: string;
+  speaker_id?: string;
+  display_name?: string;
+  source?: string;
+  confident?: boolean;
+  [key: string]: unknown;
+}
+
+interface SpeakerSidecar {
+  schema_version?: number;
+  provider?: string;
+  model?: string | null;
+  num_speakers_detected?: number;
+  num_speakers_supplied?: number | null;
+  turns?: unknown[];
+  segments?: SpeakerSegment[];
+  speakers?: Record<string, SpeakerEntry>;
+  [key: string]: unknown;
+}
+
+const UNKNOWN_SPEAKER_ID = "unknown";
+const UNKNOWN_DISPLAY_NAME = "Unknown";
+
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
+function speakersSidecarPath(dir: string, stem: string): string {
+  return join(dir, `${stem}.speakers.json`);
+}
+
+function normalizeSpeakerSidecar(raw: unknown): SpeakerSidecar | null {
+  if (!isRecord(raw)) return null;
+  const doc = raw as SpeakerSidecar;
+  doc.segments = Array.isArray(doc.segments)
+    ? doc.segments.filter(isRecord).map((s) => s as SpeakerSegment)
+    : [];
+  const speakers: Record<string, SpeakerEntry> = {};
+  if (isRecord(doc.speakers)) {
+    for (const [id, entry] of Object.entries(doc.speakers)) {
+      speakers[id] = isRecord(entry)
+        ? { ...(entry as SpeakerEntry) }
+        : { display_name: id, renamed: false, merged_into: null };
+    }
+  }
+  doc.speakers = speakers;
+  updateSegmentDisplayNames(doc);
+  return doc;
+}
+
+function readSpeakerSidecar(dir: string, stem: string): SpeakerSidecar | null {
+  try {
+    const raw = JSON.parse(readFileSync(speakersSidecarPath(dir, stem), "utf8")) as unknown;
+    return normalizeSpeakerSidecar(raw);
+  } catch {
+    return null;
+  }
+}
+
+function requireRecording(dir: string, stem: string): void {
+  if (!existsSync(join(dir, `${stem}.wav`))) {
+    throw new TRPCError({ code: "NOT_FOUND", message: `recording not found: ${stem}` });
+  }
+}
+
+function requireSpeakerSidecar(dir: string, stem: string): SpeakerSidecar {
+  requireRecording(dir, stem);
+  const doc = readSpeakerSidecar(dir, stem);
+  if (!doc) {
+    throw new TRPCError({ code: "PRECONDITION_FAILED", message: "speaker data missing" });
+  }
+  return doc;
+}
+
+function defaultSpeakerName(id: string): string {
+  if (id === UNKNOWN_SPEAKER_ID) return UNKNOWN_DISPLAY_NAME;
+  const m = id.match(/^spk-(\d+)$/);
+  if (m?.[1]) return `Speaker ${Number(m[1]) + 1}`;
+  return id;
+}
+
+function speakerIdsIn(doc: SpeakerSidecar): string[] {
+  const ids = new Set<string>(Object.keys(doc.speakers ?? {}));
+  for (const seg of doc.segments ?? []) {
+    if (typeof seg.speaker_id === "string" && seg.speaker_id) ids.add(seg.speaker_id);
+  }
+  return [...ids];
+}
+
+function speakerExists(doc: SpeakerSidecar, speakerId: string): boolean {
+  return speakerIdsIn(doc).includes(speakerId);
+}
+
+function resolveSpeakerId(doc: SpeakerSidecar, speakerId: string): string {
+  const speakers = doc.speakers ?? {};
+  let cur = speakerId;
+  const seen = new Set<string>();
+  while (cur && !seen.has(cur)) {
+    seen.add(cur);
+    const next = speakers[cur]?.merged_into;
+    if (typeof next !== "string" || !next) break;
+    cur = next;
+  }
+  return cur;
+}
+
+function ensureSpeaker(doc: SpeakerSidecar, speakerId: string): SpeakerEntry {
+  doc.speakers ??= {};
+  doc.speakers[speakerId] ??= {
+    display_name: defaultSpeakerName(speakerId),
+    renamed: false,
+    merged_into: null,
+  };
+  return doc.speakers[speakerId]!;
+}
+
+function speakerDisplayName(doc: SpeakerSidecar, speakerId: string): string {
+  const resolved = resolveSpeakerId(doc, speakerId);
+  const entry = doc.speakers?.[resolved];
+  return typeof entry?.display_name === "string" && entry.display_name.trim()
+    ? entry.display_name
+    : defaultSpeakerName(resolved);
+}
+
+function updateSegmentDisplayNames(doc: SpeakerSidecar): void {
+  for (const seg of doc.segments ?? []) {
+    const sid = typeof seg.speaker_id === "string" && seg.speaker_id ? seg.speaker_id : UNKNOWN_SPEAKER_ID;
+    seg.speaker_id = resolveSpeakerId(doc, sid);
+    seg.display_name = speakerDisplayName(doc, seg.speaker_id);
+  }
+}
+
+function formatTimestamp(seconds: unknown): string {
+  const total = Math.max(0, Math.floor(typeof seconds === "number" && Number.isFinite(seconds) ? seconds : 0));
+  return `${String(Math.floor(total / 60)).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`;
+}
+
+function transcriptRowsFromSidecar(doc: SpeakerSidecar): Array<{ timestamp: string; name: string; text: string }> {
+  return [...(doc.segments ?? [])]
+    .filter((seg) => typeof seg.text === "string" && seg.text.trim())
+    .sort((a, b) => (Number(a.start ?? 0) - Number(b.start ?? 0)))
+    .map((seg) => {
+    const name = speakerDisplayName(doc, seg.speaker_id ?? UNKNOWN_SPEAKER_ID);
+    return {
+      timestamp: formatTimestamp(seg.start),
+      name,
+      text: String(seg.text ?? "").trim(),
+    };
+  });
+}
+
+function renderTranscriptFromRows(rows: Array<{ timestamp: string; name: string; text: string }>): string {
+  return rows.map((row) => `[${row.timestamp} ${row.name}] ${row.text}`).join("\n");
+}
+
+function renderTranscriptFromSidecar(doc: SpeakerSidecar): string {
+  return renderTranscriptFromRows(transcriptRowsFromSidecar(doc));
+}
+
+const TAGGED_TRANSCRIPT_LINE_RE = /^\[(\d{2}:\d{2}(?::\d{2})?)\s+(.+?)\]\s*(.*)$/;
+
+function renderTranscriptPreservingBodies(doc: SpeakerSidecar, existingText: string | null): string {
+  const nextRows = transcriptRowsFromSidecar(doc);
+  if (!existingText) return renderTranscriptFromRows(nextRows);
+
+  const existingLines = existingText.split(/\r?\n/).filter((line) => line.trim().length > 0);
+  const parsed = existingLines.map((line) => line.match(TAGGED_TRANSCRIPT_LINE_RE));
+  const canRetag = parsed.length === nextRows.length && parsed.every((match, index) => {
+    const timestamp = match?.[1];
+    return timestamp !== undefined && timestamp === nextRows[index]?.timestamp;
+  });
+  if (!canRetag) {
+    return existingText;
+  }
+
+  return nextRows.map((row, index) => {
+    const body = parsed[index]?.[3] ?? row.text;
+    return `[${row.timestamp} ${row.name}] ${body}`;
+  }).join("\n");
+}
+
+function writeTextAtomic(path: string, body: string): void {
+  const tmp = `${path}.tmp.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}`;
+  writeFileSync(tmp, body, "utf8");
+  renameSync(tmp, path);
+}
+
+function writeSpeakerSidecar(dir: string, stem: string, doc: SpeakerSidecar): SpeakerSidecar {
+  updateSegmentDisplayNames(doc);
+  const path = speakersSidecarPath(dir, stem);
+  writeTextAtomic(path, JSON.stringify(doc, null, 2));
+  const transcriptPath = join(dir, `${stem}.transcript.txt`);
+  const existingTranscript = existsSync(transcriptPath) ? readFileSync(transcriptPath, "utf8") : null;
+  writeTextAtomic(transcriptPath, renderTranscriptPreservingBodies(doc, existingTranscript));
+  return doc;
 }
 
 /** Title shown to the user: the `<stem>.title` override sidecar if present,
@@ -138,6 +345,7 @@ export const recordingsRouter = router({
         summary: read(".summary.md"),
         realtime: read(".realtime.transcript.txt"),
         hasRealtime: existsSync(join(dir, `${input.stem}.realtime.transcript.txt`)),
+        speakerData: readSpeakerSidecar(dir, input.stem),
         status: job?.state ?? "idle", statusError: job?.error,
       };
     }),
@@ -169,6 +377,92 @@ export const recordingsRouter = router({
       return { tags: saved };
     }),
 
+  renameSpeaker: publicProcedure
+    .input(z.object({
+      stem: z.string(),
+      speakerId: z.string().min(1),
+      displayName: z.string().max(80),
+    }))
+    .mutation(({ ctx, input }) => {
+      const dir = ctx.paths.moviesDir;
+      const doc = requireSpeakerSidecar(dir, input.stem);
+      const speakerId = resolveSpeakerId(doc, input.speakerId);
+      if (!speakerExists(doc, speakerId)) {
+        throw new TRPCError({ code: "NOT_FOUND", message: `speaker not found: ${input.speakerId}` });
+      }
+      const displayName = input.displayName.trim();
+      if (!displayName) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "speaker name cannot be empty" });
+      }
+      const entry = ensureSpeaker(doc, speakerId);
+      entry.display_name = displayName;
+      entry.renamed = true;
+      const speakerData = writeSpeakerSidecar(dir, input.stem, doc);
+      ctx.pubsub.publish("recordings-changed", { reason: "changed" });
+      return { speakerData };
+    }),
+
+  mergeSpeakers: publicProcedure
+    .input(z.object({
+      stem: z.string(),
+      fromSpeakerId: z.string().min(1),
+      toSpeakerId: z.string().min(1),
+    }))
+    .mutation(({ ctx, input }) => {
+      const dir = ctx.paths.moviesDir;
+      const doc = requireSpeakerSidecar(dir, input.stem);
+      const fromId = resolveSpeakerId(doc, input.fromSpeakerId);
+      const toId = resolveSpeakerId(doc, input.toSpeakerId);
+      if (fromId === toId) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "choose two different speakers" });
+      }
+      if (!speakerExists(doc, fromId) || !speakerExists(doc, toId)) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "speaker not found" });
+      }
+      ensureSpeaker(doc, fromId);
+      ensureSpeaker(doc, toId);
+      const aliases = speakerIdsIn(doc).filter((id) => resolveSpeakerId(doc, id) === fromId);
+      for (const alias of aliases) {
+        ensureSpeaker(doc, alias).merged_into = toId;
+      }
+      for (const seg of doc.segments ?? []) {
+        const sid = typeof seg.speaker_id === "string" ? seg.speaker_id : UNKNOWN_SPEAKER_ID;
+        if (aliases.includes(sid) || resolveSpeakerId(doc, sid) === fromId) {
+          seg.speaker_id = toId;
+          seg.source = "manual";
+          seg.confident = true;
+        }
+      }
+      const speakerData = writeSpeakerSidecar(dir, input.stem, doc);
+      ctx.pubsub.publish("recordings-changed", { reason: "changed" });
+      return { speakerData };
+    }),
+
+  assignSegmentSpeaker: publicProcedure
+    .input(z.object({
+      stem: z.string(),
+      segmentIndex: z.number().int().nonnegative(),
+      speakerId: z.string().min(1),
+    }))
+    .mutation(({ ctx, input }) => {
+      const dir = ctx.paths.moviesDir;
+      const doc = requireSpeakerSidecar(dir, input.stem);
+      const segment = doc.segments?.[input.segmentIndex];
+      if (!segment) {
+        throw new TRPCError({ code: "NOT_FOUND", message: `segment not found: ${input.segmentIndex}` });
+      }
+      const speakerId = resolveSpeakerId(doc, input.speakerId);
+      if (!speakerExists(doc, speakerId)) {
+        throw new TRPCError({ code: "NOT_FOUND", message: `speaker not found: ${input.speakerId}` });
+      }
+      segment.speaker_id = speakerId;
+      segment.source = "manual";
+      segment.confident = true;
+      const speakerData = writeSpeakerSidecar(dir, input.stem, doc);
+      ctx.pubsub.publish("recordings-changed", { reason: "changed" });
+      return { speakerData };
+    }),
+
   delete: publicProcedure
     .input(z.object({ stem: z.string() }))
     .mutation(({ ctx, input }) => {
@@ -177,6 +471,7 @@ export const recordingsRouter = router({
       // UI-editable ones; the rest are pipeline outputs.
       const suffixes = [".wav", ".transcript.txt", ".raw.transcript.txt",
                         ".realtime.transcript.txt", ".realtime.coverage.json", ".realtime.json",
+                        ".speakers.json",
                         ".summary.md", ".summary.html",
                         ".mic.transcript.txt", ".sys.transcript.txt",
                         ".title", ".tags.json"];

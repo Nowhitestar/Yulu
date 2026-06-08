@@ -6,6 +6,7 @@ import { CommandEditor } from "../CommandEditor.js";
 import { TestPopover } from "../TestPopover.js";
 import { CategoryChip } from "../CategoryChip.js";
 import type { Category } from "../CategoryChip.js";
+import { CapabilityBadge, CapabilityStatusValue, type Capability } from "./CapabilitiesSection.js";
 import { useConfigField } from "../../hooks/useConfigField.js";
 import { useT } from "../../i18n/LanguageProvider.js";
 import type { SettingsRestartTracker } from "../../hooks/useSettingsRestartTracker.js";
@@ -50,6 +51,20 @@ function presetOf(command: string[] | null | undefined): PresetId {
   return "custom";
 }
 
+function capForPreset(selected: PresetId, caps: Record<string, Capability>, t: (key: string) => string): Capability | undefined {
+  if (selected === "agent-queue") {
+    return {
+      provenance: "yulu-managed",
+      status: "usable",
+      resolved_path: "~/.config/yulu/agent-queue.json",
+      detail: t("settings.llm.capability.agentQueue"),
+    };
+  }
+  if (selected === "claude") return caps.llm_command ?? caps.claude_cli ?? caps.claude;
+  if (selected === "codex") return caps.llm_command ?? caps.codex_cli;
+  return caps.llm_command;
+}
+
 interface PromptRow {
   id: string;
   name: string;
@@ -68,7 +83,7 @@ interface PromptRow {
 function AutoRunTemplates() {
   const utils = trpc.useUtils();
   const t = useT();
-  const { data, isPending } = trpc.prompts.list.useQuery({});
+  const { data, isPending, isError } = trpc.prompts.list.useQuery({});
   const updateMut = trpc.prompts.update.useMutation({
     onSuccess: () => { utils.prompts.list.invalidate(); },
   });
@@ -87,6 +102,8 @@ function AutoRunTemplates() {
 
       {isPending ? (
         <div className="autorun-empty">{t("common.loading")}</div>
+      ) : isError ? (
+        <div className="autorun-empty">{t("settings.llm.autorun.error")}</div>
       ) : rows.length === 0 ? (
         <div className="autorun-empty">{t("settings.llm.autorun.empty")}</div>
       ) : (
@@ -116,6 +133,7 @@ function AutoRunTemplates() {
 
 export function LlmSection({ tracker }: LlmSectionProps) {
   const { data: cfg } = trpc.config.get.useQuery();
+  const hostCapabilitiesQuery = trpc.capabilities.host_capabilities.useQuery();
   const { commit } = useConfigField(tracker);
   const testMut = trpc.llm.test.useMutation();
   const t = useT();
@@ -133,6 +151,9 @@ export function LlmSection({ tracker }: LlmSectionProps) {
   const command = (llm.command ?? null) as string[] | null;
   const derived = presetOf(command);
   const selected: PresetId = forceCustom ? "custom" : derived;
+  const caps = (hostCapabilitiesQuery.data?.capabilities ?? {}) as Record<string, Capability>;
+  const capabilitiesLoading = hostCapabilitiesQuery.isPending && !hostCapabilitiesQuery.data;
+  const backendCap = capForPreset(selected, caps, t);
 
   const onPresetChange = (next: PresetId) => {
     if (next === "custom") {
@@ -176,7 +197,7 @@ export function LlmSection({ tracker }: LlmSectionProps) {
       {/* P2-2: pick a backend preset instead of hand-editing the raw command.
           Agent-queue = null (the agent watches the queue itself); Claude / Codex
           write a known command; Custom reveals the editor for anything else. */}
-      <div className="row">
+      <div className="row row--capability">
         <div className="row-label">
           <div>{t("settings.llm.backend.label")}</div>
           <div className="row-help">{t("settings.llm.backend.help")}</div>
@@ -194,6 +215,18 @@ export function LlmSection({ tracker }: LlmSectionProps) {
           </select>
         </div>
         <div className="row-status">{tracker.statusFor("llm.command") === "saved" ? "✓" : null}</div>
+      </div>
+      <div className="row">
+        <div className="row-label">
+          <div>{t("settings.llm.capability.label")}</div>
+          <div className="row-help">{t("settings.llm.capability.help")}</div>
+        </div>
+        <div className="row-value">
+          {capabilitiesLoading ? <div className="cap-detail">{t("settings.capabilities.loading")}</div> : <CapabilityStatusValue cap={backendCap} />}
+        </div>
+        <div className="row-status">
+          {capabilitiesLoading ? null : <CapabilityBadge status={backendCap?.status ?? "absent"} detail={backendCap?.detail} />}
+        </div>
       </div>
       {selected === "custom" && (
         <div className="row">

@@ -76,12 +76,20 @@ def load_config():
         except Exception:
             pass
     audio_cfg = cfg.get("audio", {})
-    audio_cfg.setdefault("mic_device", ":0")
-    audio_cfg.setdefault("system_audio_device", ":1")
+    audio_cfg.setdefault("backend", "daemon")  # "daemon" or "sox"
+    if audio_cfg.get("backend") == "sox":
+        if not isinstance(audio_cfg.get("mic_device"), str) or not audio_cfg.get("mic_device"):
+            audio_cfg["mic_device"] = ":0"
+        if not isinstance(audio_cfg.get("system_audio_device"), str) or not audio_cfg.get("system_audio_device"):
+            audio_cfg["system_audio_device"] = ":1"
+    else:
+        if not isinstance(audio_cfg.get("mic_device"), str):
+            audio_cfg["mic_device"] = ""
+        if "system_audio_device" not in audio_cfg:
+            audio_cfg["system_audio_device"] = None
     audio_cfg.setdefault("output_dir", str(_resolve_data_dir()))
     audio_cfg.setdefault("silence_threshold", 0.01)
     audio_cfg.setdefault("silence_duration_sec", 300)
-    audio_cfg.setdefault("backend", "daemon")  # "daemon" or "sox"
     # NOTE: realtime transcription is governed by transcription.realtime_enabled
     # (see realtime_enabled()); the old audio.realtime_transcribe default was
     # vestigial — nothing consumed it — so it is no longer injected here.
@@ -255,7 +263,17 @@ def _raise_if_daemon_recording(lock_handle):
 def daemon_start(title, lock_handle=None):
     cfg = load_config()
     _raise_if_daemon_recording(lock_handle)
-    resp = socket_send({"action": "start", "title": title})
+    payload = {"action": "start", "title": title}
+    mic_device = cfg.get("mic_device")
+    if isinstance(mic_device, str) and mic_device.strip() and not mic_device.strip().startswith(":"):
+        payload["mic_device"] = mic_device.strip()
+    silence_seconds = cfg.get("silence_duration_sec")
+    if isinstance(silence_seconds, (int, float)) and silence_seconds > 0:
+        payload["silence_seconds"] = silence_seconds
+    silence_threshold = cfg.get("silence_threshold")
+    if isinstance(silence_threshold, (int, float)) and 0 <= silence_threshold <= 1:
+        payload["silence_threshold"] = silence_threshold
+    resp = socket_send(payload)
     if resp and resp.get("status") == "recording":
         path = resp.get("file")
         if lock_handle is not None:

@@ -136,6 +136,12 @@
   color: var(--fg-2);
   font-size: 12.5px;
 }
+#capabilities .row {
+  grid-template-columns: 240px minmax(0, 1fr) max-content;
+}
+.row--capability {
+  grid-template-columns: 240px minmax(0, 1fr) max-content;
+}
 .cap-path {
   font-family: "SF Mono", ui-monospace, monospace;
   font-size: 11px;
@@ -148,6 +154,18 @@
 .cap-path--empty {
   color: var(--fg-3);
 }
+.cap-detail {
+  margin-top: 4px;
+  color: var(--fg-3);
+  font-size: 11px;
+  line-height: 1.35;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cap-detail--error {
+  color: #b94a48;
+}
 .cap-badge {
   display: inline-flex;
   align-items: center;
@@ -155,6 +173,8 @@
   border-radius: 10px;
   font-size: 10px;
   font-weight: 500;
+  line-height: 1.2;
+  white-space: nowrap;
 }
 .cap-badge[data-status="usable"] {
   background: rgba(186, 230, 126, 0.18);
@@ -167,6 +187,31 @@
 .cap-badge[data-status="absent"] {
   background: var(--row-hover);
   color: var(--fg-3);
+}
+#capabilities .row-status,
+.row--capability .row-status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+}
+.cap-verify-btn {
+  border: 1px solid var(--edge);
+  background: transparent;
+  color: var(--fg-2);
+  border-radius: 10px;
+  padding: 2px 8px;
+  font-size: 10px;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+.cap-verify-btn:hover {
+  background: var(--glass-3);
+  color: var(--fg);
+}
+.cap-verify-btn:disabled {
+  opacity: 0.5;
+  cursor: wait;
 }
 
 /* ── P3 ──────────────────────────────────────────────────────────────── */

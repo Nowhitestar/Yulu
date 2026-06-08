@@ -6,10 +6,11 @@ import { MemoryRouter } from "react-router";
 
 const updateMutate = vi.fn(async (_vars: { key: string; value: unknown }) => ({ daemonsNeedingRestart: [], daemonsNeedingSighup: [] }));
 let configReturn: { data: unknown; isPending: boolean } = { data: undefined, isPending: false };
+let capsReturn: { data: unknown; isPending: boolean } = { data: undefined, isPending: false };
 let recordingState: string = "idle";
 
 // Prompts subsection (P4a-2) holders.
-let promptsReturn: { data: unknown; isPending: boolean } = { data: [], isPending: false };
+let promptsReturn: { data: unknown; isPending: boolean; isError?: boolean } = { data: [], isPending: false };
 const promptsUpdate = vi.fn(async (_vars: { id: string; isAutoRun?: boolean }) => ({ updated: 1 }));
 const promptsListInvalidate = vi.fn();
 
@@ -39,6 +40,9 @@ vi.mock("../../web/src/trpc.js", () => ({
       }) },
     },
     recording: { state: { useQuery: () => ({ data: { state: recordingState } }) } },
+    capabilities: {
+      host_capabilities: { useQuery: () => capsReturn },
+    },
     llm: { test: { useMutation: () => ({ mutateAsync: async () => ({ ok: true, stdout: "", stderr: "" }) }) } },
     prompts: {
       list: { useQuery: () => promptsReturn },
@@ -65,6 +69,32 @@ beforeEach(() => {
   promptsListInvalidate.mockClear();
   recordingState = "idle";
   configReturn = configWith(null);
+  capsReturn = {
+    data: {
+      schema_version: 1,
+      capabilities: {
+        llm_command: {
+          provenance: "agent-config",
+          status: "usable",
+          resolved_path: "/opt/homebrew/bin/python3",
+          detail: "llm.command=python3",
+        },
+        claude_cli: {
+          provenance: "agent-config",
+          status: "usable",
+          resolved_path: "/opt/homebrew/bin/claude",
+          detail: "claude 1.2.3",
+        },
+        codex_cli: {
+          provenance: "agent-config",
+          status: "usable",
+          resolved_path: "/opt/homebrew/bin/codex",
+          detail: "codex 1.2.3",
+        },
+      },
+    },
+    isPending: false,
+  };
   promptsReturn = { data: [], isPending: false };
 });
 
@@ -84,6 +114,20 @@ describe("LlmSection — backend preset picker (P2-2)", () => {
     expect(picker.value).toBe("agent-queue");
     // No raw command editor while a preset is selected.
     expect(screen.queryByRole("button", { name: /\+ 添加参数/ })).toBeNull();
+  });
+
+  it("Agent-queue mode explains that no llm.command runtime is required", () => {
+    configReturn = configWith(null);
+    mount();
+    expect(screen.getByText(translate("zh", "settings.llm.capability.label"))).toBeInTheDocument();
+    expect(screen.getByText(translate("zh", "settings.llm.capability.agentQueue"))).toBeInTheDocument();
+  });
+
+  it("Codex preset shows the resolved llm.command capability", () => {
+    configReturn = configWith(["python3", "codex_llm.py"]);
+    mount();
+    expect(screen.getByText("/opt/homebrew/bin/python3")).toBeInTheDocument();
+    expect(screen.getByText("llm.command=python3")).toBeInTheDocument();
   });
 
   it("selecting Claude commits llm.command = ['claude','--print']", async () => {
@@ -202,6 +246,13 @@ describe("LlmSection — auto-run templates subsection (P4a-2)", () => {
     mount();
     expect(screen.getByText(translate("zh", "settings.llm.autorun.empty"))).toBeInTheDocument();
     expect(screen.queryByTestId("autorun-row")).toBeNull();
+  });
+
+  it("shows an error state instead of loading forever when prompt templates fail to load", () => {
+    promptsReturn = { data: undefined, isPending: false, isError: true };
+    mount();
+    expect(screen.getByText(translate("zh", "settings.llm.autorun.error"))).toBeInTheDocument();
+    expect(screen.queryByText(translate("zh", "common.loading"))).toBeNull();
   });
 
   it("does NOT rebuild prompt CRUD (no create/edit/delete controls here)", () => {

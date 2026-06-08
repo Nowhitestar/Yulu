@@ -1,11 +1,12 @@
 // web/src/routes/inbox/recordings.$stem.tsx
 import { useEffect, useRef, useState } from "react";
+import type { CSSProperties } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router";
 import { useQueryClient } from "@tanstack/react-query";
-import { RefreshCw, Sparkles, Pencil, Trash2 } from "lucide-react";
+import { RefreshCw, Sparkles, Pencil, Trash2, Users, GitMerge } from "lucide-react";
 import { trpc } from "../../trpc.js";
 import { AudioPlayer } from "../../components/AudioPlayer.js";
-import { TranscriptView } from "../../components/TranscriptView.js";
+import { TranscriptView, type SpeakerData } from "../../components/TranscriptView.js";
 import { MarkdownView } from "../../components/MarkdownView.js";
 import { TagEditor } from "../../components/TagEditor.js";
 import { EmptyState } from "../../components/EmptyState.js";
@@ -17,6 +18,14 @@ import "./recordings.reader.css";
 
 const GET_KEY = [["recordings", "get"]] as const;
 const LIST_KEY = [["recordings", "list"]] as const;
+const SPEAKER_COLORS = [
+  "var(--blue)",
+  "var(--green)",
+  "var(--purple)",
+  "var(--accent)",
+  "var(--red)",
+  "#5CCFE6",
+];
 
 export const handle = {
   // Returns the stem (a literal filename) when present, else the i18n key for
@@ -30,6 +39,169 @@ type Tab = "transcript" | "summary" | "realtime" | "raw";
 
 function isTab(v: string | null): v is Tab {
   return v === "transcript" || v === "summary" || v === "realtime" || v === "raw";
+}
+
+interface SpeakerRow {
+  id: string;
+  name: string;
+  count: number;
+  color: string;
+}
+
+function SpeakerPanel({
+  speakerData,
+  onRename,
+  onMerge,
+}: {
+  speakerData?: SpeakerData | null;
+  onRename: (speakerId: string, displayName: string) => void;
+  onMerge: (fromSpeakerId: string, toSpeakerId: string) => void;
+}) {
+  const t = useT();
+  const rows = speakerRows(speakerData);
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const [mergeTargets, setMergeTargets] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    const next: Record<string, string> = {};
+    for (const row of rows) next[row.id] = row.name;
+    setDrafts(next);
+  }, [speakerData]);
+
+  if (!speakerData || rows.length === 0) return null;
+
+  const lowConfidenceCount = (speakerData.segments ?? []).filter((seg) => seg.confident === false).length;
+  const provider = typeof (speakerData as { provider?: unknown }).provider === "string"
+    ? String((speakerData as { provider?: string }).provider)
+    : "diarization";
+  const detected = typeof (speakerData as { num_speakers_detected?: unknown }).num_speakers_detected === "number"
+    ? Number((speakerData as { num_speakers_detected?: number }).num_speakers_detected)
+    : rows.length;
+
+  const commitName = (row: SpeakerRow) => {
+    const next = (drafts[row.id] ?? row.name).trim();
+    if (!next || next === row.name) {
+      setDrafts((prev) => ({ ...prev, [row.id]: row.name }));
+      return;
+    }
+    onRename(row.id, next);
+  };
+
+  return (
+    <div className="speaker-panel">
+      <div className="speaker-panel-head">
+        <div className="speaker-panel-title">
+          <Users size={14} strokeWidth={1.75} />
+          <span>{t("reader.speakers.heading")}</span>
+        </div>
+        <div className="speaker-panel-meta">
+          <span>{t("reader.speakers.meta", { provider, n: detected })}</span>
+          {lowConfidenceCount > 0 && (
+            <span>{t("reader.speakers.lowConfidence", { n: lowConfidenceCount })}</span>
+          )}
+        </div>
+      </div>
+      <div className="speaker-panel-list">
+        {rows.map((row) => {
+          const targetRows = rows.filter((candidate) => candidate.id !== row.id);
+          const savedTarget = mergeTargets[row.id];
+          const mergeTarget = targetRows.some((candidate) => candidate.id === savedTarget)
+            ? savedTarget!
+            : targetRows[0]?.id ?? "";
+          return (
+            <div
+              key={row.id}
+              className="speaker-row"
+              style={{ "--speaker-color": row.color } as CSSProperties}
+            >
+              <span className="speaker-row-swatch" />
+              <input
+                className="speaker-row-name"
+                value={drafts[row.id] ?? row.name}
+                aria-label={t("reader.speakers.name.aria", { name: row.name })}
+                onChange={(e) => setDrafts((prev) => ({ ...prev, [row.id]: e.target.value }))}
+                onBlur={() => commitName(row)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") e.currentTarget.blur();
+                  if (e.key === "Escape") {
+                    setDrafts((prev) => ({ ...prev, [row.id]: row.name }));
+                    e.currentTarget.blur();
+                  }
+                }}
+              />
+              <span className="speaker-row-count">{t("reader.speakers.count", { n: row.count })}</span>
+              {rows.length > 1 && (
+                <div className="speaker-row-merge">
+                  <select
+                    value={mergeTarget}
+                    aria-label={t("reader.speakers.mergeTarget.aria", { name: row.name })}
+                    onChange={(e) => setMergeTargets((prev) => ({ ...prev, [row.id]: e.target.value }))}
+                  >
+                    {targetRows.map((candidate) => (
+                      <option key={candidate.id} value={candidate.id}>{candidate.name}</option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    className="speaker-row-merge-btn"
+                    disabled={!mergeTarget}
+                    onClick={() => onMerge(row.id, mergeTarget)}
+                    aria-label={t("reader.speakers.merge.aria", { from: row.name })}
+                    title={t("reader.speakers.merge.aria", { from: row.name })}
+                  >
+                    <GitMerge size={13} strokeWidth={1.75} />
+                  </button>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function speakerRows(speakerData?: SpeakerData | null): SpeakerRow[] {
+  if (!speakerData) return [];
+  const counts = new Map<string, number>();
+  for (const seg of speakerData.segments ?? []) {
+    const id = resolveSpeakerId(speakerData, seg.speaker_id || "unknown");
+    counts.set(id, (counts.get(id) ?? 0) + 1);
+  }
+  const ids = new Set<string>(Object.keys(speakerData.speakers ?? {}).map((id) => resolveSpeakerId(speakerData, id)));
+  for (const id of counts.keys()) ids.add(id);
+  return [...ids]
+    .sort((a, b) => a.localeCompare(b))
+    .filter((id) => id && !(speakerData.speakers?.[id]?.merged_into))
+    .map((id, index) => ({
+      id,
+      name: speakerDisplayName(speakerData, id),
+      count: counts.get(id) ?? 0,
+      color: SPEAKER_COLORS[index % SPEAKER_COLORS.length]!,
+    }))
+    .filter((row) => row.count > 0);
+}
+
+function resolveSpeakerId(speakerData: SpeakerData, speakerId: string): string {
+  let cur = speakerId;
+  const seen = new Set<string>();
+  while (cur && !seen.has(cur)) {
+    seen.add(cur);
+    const next = speakerData.speakers?.[cur]?.merged_into;
+    if (!next) break;
+    cur = next;
+  }
+  return cur;
+}
+
+function speakerDisplayName(speakerData: SpeakerData, speakerId: string): string {
+  const resolved = resolveSpeakerId(speakerData, speakerId);
+  const name = speakerData.speakers?.[resolved]?.display_name;
+  if (name && name.trim()) return name;
+  if (resolved === "unknown") return "Unknown";
+  const m = resolved.match(/^spk-(\d+)$/);
+  if (m?.[1]) return `Speaker ${Number(m[1]) + 1}`;
+  return resolved;
 }
 
 export function RecordingReader() {
@@ -48,6 +220,9 @@ export function RecordingReader() {
   const renameMut = trpc.recordings.rename.useMutation();
   const setTagsMut = trpc.recordings.setTags.useMutation();
   const deleteMut = trpc.recordings.delete.useMutation();
+  const renameSpeakerMut = trpc.recordings.renameSpeaker.useMutation();
+  const mergeSpeakersMut = trpc.recordings.mergeSpeakers.useMutation();
+  const assignSegmentSpeakerMut = trpc.recordings.assignSegmentSpeaker.useMutation();
 
   // Optimistically patch the cached `get` result for this stem so the UI
   // reflects the edit immediately; invalidate on settle to reconcile with disk.
@@ -86,6 +261,30 @@ export function RecordingReader() {
     patchGet({ tags });
     setTagsMut.mutate({ stem, tags }, {
       onError: (err) => console.error("setTags failed:", err.message),
+      onSettled: invalidateBoth,
+    });
+  };
+
+  const handleRenameSpeaker = (speakerId: string, displayName: string) => {
+    renameSpeakerMut.mutate({ stem, speakerId, displayName }, {
+      onSuccess: (res) => patchGet({ speakerData: res.speakerData }),
+      onError: (err) => console.error("renameSpeaker failed:", err.message),
+      onSettled: invalidateBoth,
+    });
+  };
+
+  const handleMergeSpeakers = (fromSpeakerId: string, toSpeakerId: string) => {
+    mergeSpeakersMut.mutate({ stem, fromSpeakerId, toSpeakerId }, {
+      onSuccess: (res) => patchGet({ speakerData: res.speakerData }),
+      onError: (err) => console.error("mergeSpeakers failed:", err.message),
+      onSettled: invalidateBoth,
+    });
+  };
+
+  const handleAssignSegmentSpeaker = (segmentIndex: number, speakerId: string) => {
+    assignSegmentSpeakerMut.mutate({ stem, segmentIndex, speakerId }, {
+      onSuccess: (res) => patchGet({ speakerData: res.speakerData }),
+      onError: (err) => console.error("assignSegmentSpeaker failed:", err.message),
       onSettled: invalidateBoth,
     });
   };
@@ -196,6 +395,11 @@ export function RecordingReader() {
   const initialSeek = Number.isFinite(parsedSeek) ? parsedSeek : undefined;
 
   const audioSrc = `/files/meetings/${data.stem}.wav`;
+  const handleSeek = (time: number) => {
+    const next = new URLSearchParams(params);
+    next.set("seek", Math.max(0, time).toFixed(2));
+    setParams(next, { replace: true });
+  };
 
   return (
     <div className="reader">
@@ -267,6 +471,12 @@ export function RecordingReader() {
 
       <AudioPlayer src={audioSrc} initialSeek={initialSeek} />
 
+      <SpeakerPanel
+        speakerData={data.speakerData}
+        onRename={handleRenameSpeaker}
+        onMerge={handleMergeSpeakers}
+      />
+
       <div className="reader-tabs" role="tablist">
         <button
           key="summary"
@@ -316,7 +526,16 @@ export function RecordingReader() {
           data.summary ? <MarkdownView text={data.summary} /> : <EmptyState label={t("reader.empty.summary")} />
         )}
         {tab === "transcript" && (
-          data.transcript ? <TranscriptView text={data.transcript} /> : <EmptyState label={t("reader.empty.transcript")} />
+          data.transcript
+            ? (
+              <TranscriptView
+                text={data.transcript}
+                speakerData={data.speakerData}
+                onSeek={handleSeek}
+                onAssignSpeaker={handleAssignSegmentSpeaker}
+              />
+            )
+            : <EmptyState label={t("reader.empty.transcript")} />
         )}
         {tab === "realtime" && (
           <pre className="reader-raw">{data.realtime ?? ""}</pre>

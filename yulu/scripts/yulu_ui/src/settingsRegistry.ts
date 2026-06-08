@@ -38,7 +38,7 @@ export const SETTINGS: SettingDef[] = [
   { path: "audio.system_audio_device",   category: "audio", label: "系统音设备",   type: "select",  validate: z.string().nullable(),       reload: R.restart("audiodaemon") },
   { path: "audio.output_dir",            category: "audio", label: "录音输出目录", type: "path",    validate: z.string().min(1),           reload: R.restart("audiodaemon"), danger: true }, // 改录音落盘位置:影响正在/后续录音
   { path: "audio.silence_threshold",     category: "audio", label: "静音阈值",     type: "number",  validate: z.number().min(0).max(1),    reload: R.restart("audiodaemon") },
-  { path: "audio.silence_duration_sec",  category: "audio", label: "静音时长(秒)", type: "number", validate: z.number().min(0).max(30),   reload: R.restart("audiodaemon") },
+  { path: "audio.silence_duration_sec",  category: "audio", label: "静音时长(秒)", type: "number", validate: z.number().min(1).max(3600),   reload: R.restart("audiodaemon") },
   { path: "audio.backend",               category: "audio", label: "音频后端",     type: "select",  validate: z.enum(["daemon"]),          reload: R.restart("audiodaemon"), danger: true }, // 切换采集后端:可能中断录音
   // transcription.mode is now behind an Advanced disclosure in the transcription
   // section (P4a-1); it stays a registry field (restart sttdaemon) but is flagged
@@ -62,6 +62,12 @@ export const SETTINGS: SettingDef[] = [
   { path: "transcription.whisper_cli",   category: "transcription", label: "whisper.cpp CLI", type: "text", validate: z.string().min(1),   reload: R.restart("sttdaemon"), advanced: true },
   { path: "transcription.cloud_command", category: "advanced", label: "云转写命令", type: "command", validate: z.array(z.string()),       reload: R.restart("sttdaemon") },
   { path: "transcription.realtime_enabled", category: "transcription", label: "实时字幕", type: "toggle", validate: z.boolean(),          reload: R.none },
+  { path: "transcription.diarization.enabled", category: "transcription", label: "说话人分离", type: "toggle", validate: z.boolean(),     reload: R.restart("sttdaemon") },
+  { path: "transcription.diarization.provider", category: "transcription", label: "说话人分离 Provider", type: "select", validate: z.enum(["sherpa-onnx"]), reload: R.restart("sttdaemon"), advanced: true },
+  { path: "transcription.diarization.num_speakers", category: "transcription", label: "说话人数", type: "number", validate: z.number().int().min(1).max(8).nullable(), reload: R.restart("sttdaemon") },
+  { path: "transcription.diarization.threshold", category: "transcription", label: "聚类阈值", type: "number", validate: z.number().min(0).max(1), reload: R.restart("sttdaemon") },
+  { path: "transcription.diarization.seg_model", category: "transcription", label: "Diarization segmentation model", type: "text", validate: z.string(), reload: R.restart("sttdaemon"), danger: true, advanced: true },
+  { path: "transcription.diarization.emb_model", category: "transcription", label: "Diarization embedding model", type: "text", validate: z.string(), reload: R.restart("sttdaemon"), danger: true, advanced: true },
   { path: "transcription.glossary",      category: "transcription", label: "术语表",   type: "text",   validate: z.array(z.string()),        reload: R.sighup("sttdaemon") },  // 术语表走 VocabCache SIGHUP(正确)
   { path: "llm.enabled",                 category: "llm", label: "启用 LLM",       type: "toggle",  validate: z.boolean(),                 reload: R.none },   // B3 修正:旧为 sighup
   { path: "llm.command",                 category: "llm", label: "LLM 后端",       type: "preset",  validate: z.array(z.string()).nullable(), reload: R.none }, // B3 修正:旧为 sighup
@@ -87,7 +93,7 @@ export const SETTINGS: SettingDef[] = [
   { path: "output.notion.database_id", category: "integrations", label: "Notion database",       type: "text",     validate: z.string(),               reload: R.none },
   { path: "output.notion.api_key_env", category: "integrations", label: "Notion API key env var", type: "env-name", validate: z.string(),               reload: R.none },
   { path: "output.telegram.chat_id",   category: "integrations", label: "Telegram chat ID",      type: "text",     validate: z.string(),               reload: R.none },
-  { path: "status_agent.enabled",        category: "general", label: "菜单栏 Agent", type: "toggle", validate: z.boolean(),               reload: R.restart("statusagent") },
+  { path: "status_agent.enabled",        category: "general", label: "菜单栏 Agent", type: "toggle", validate: z.boolean(),               reload: R.none },
 ];
 // 注意:status_agent.hotkey 不在表内 —— 随热键移除而删(B3)。
 

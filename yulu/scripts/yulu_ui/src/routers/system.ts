@@ -136,7 +136,7 @@ export const systemRouter = router({
   pickFile: publicProcedure
     .input(z.object({
       mode: z.enum(["file", "folder"]),
-      filter: z.enum(["wav", "bin", "json", "pem"]).optional(),
+      filter: z.enum(["wav", "bin", "json", "pem", "onnx"]).optional(),
     }))
     .mutation(async ({ input }) => {
       let script: string;

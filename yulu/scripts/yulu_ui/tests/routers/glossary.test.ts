@@ -37,6 +37,20 @@ describe("glossaryRouter", () => {
     } finally { cleanup(); }
   });
 
+  it("list() initializes an empty vocab table in a fresh DB", async () => {
+    const { db } = makeTmpDb("");
+    const ctx = {
+      db: { vocab: db, prompts: null, search: null },
+      launchctl: { sighup: vi.fn() },
+    } as unknown as AppContext;
+    try {
+      const caller = createCaller(glossaryRouter, ctx);
+      expect(await caller.list()).toEqual([]);
+      const r = db.prepare("SELECT COUNT(*) AS n FROM vocab").get() as { n: number };
+      expect(r.n).toBe(0);
+    } finally { db.close(); }
+  });
+
   it("add() inserts + SIGHUPs sttdaemon", async () => {
     const { ctx, sighup, cleanup } = makeCtx();
     try {

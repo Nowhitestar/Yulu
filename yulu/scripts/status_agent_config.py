@@ -1,8 +1,8 @@
 """yulu status-agent — config block + launchd plist install helpers.
 
-The status agent reads its ``enabled`` flag from ~/.config/yulu/config.json's
-status_agent block on startup. This module owns the config schema and the
-install/enable/disable/IPC commands behind ``yulu status-agent``.
+The ``enabled`` flag is the user's launch preference. This module owns the
+config schema and applies enable/disable via launchctl; the Swift menu-bar app
+itself does not gate startup on config.json.
 
 The menu-bar "Start Recording" item records a meeting (mic + system audio);
 there is no global hotkey or mic-only mode.

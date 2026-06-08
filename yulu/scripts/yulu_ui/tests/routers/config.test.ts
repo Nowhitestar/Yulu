@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { mkdtempSync, cpSync, rmSync } from "node:fs";
+import { mkdtempSync, cpSync, rmSync, writeFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -15,13 +15,17 @@ function makeCtx() {
   const path = join(dir, "config.json");
   cpSync(join(HERE, "../fixtures/config.json"), path);
   const sighup = vi.fn().mockResolvedValue(undefined);
-  const ctx = { config: new ConfigManager(path), launchctl: { sighup } } as unknown as AppContext;
-  return { ctx, sighup, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
+  const start = vi.fn().mockResolvedValue(undefined);
+  const stop = vi.fn().mockResolvedValue(undefined);
+  const ctx = { config: new ConfigManager(path), launchctl: { sighup, start, stop } } as unknown as AppContext;
+  return { ctx, sighup, start, stop, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
 function ctxWith(update: any) {
   const sighup = vi.fn().mockResolvedValue(undefined);
-  return { ctx: { config: { update }, launchctl: { sighup } }, sighup };
+  const start = vi.fn().mockResolvedValue(undefined);
+  const stop = vi.fn().mockResolvedValue(undefined);
+  return { ctx: { config: { update }, launchctl: { sighup, start, stop } }, sighup, start, stop };
 }
 
 describe("configRouter", () => {
@@ -32,6 +36,20 @@ describe("configRouter", () => {
       const cfg = await caller.get();
       expect(cfg.audio.silence_threshold).toBe(0.01);
     } finally { cleanup(); }
+  });
+
+  it("get() fills effective defaults for thin transcription config", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "yulu_cfgrouter_thin_"));
+    const path = join(dir, "config.json");
+    writeFileSync(path, JSON.stringify({ audio: { output_dir: "~/Movies/Yulu" }, transcription: { final_engine: "mlx" } }));
+    const ctx = { config: new ConfigManager(path), launchctl: {} } as unknown as AppContext;
+    try {
+      const caller = createCaller(configRouter, ctx);
+      const cfg = await caller.get();
+      expect(cfg.transcription.mlx.model).toBe("mlx-community/whisper-large-v3-mlx");
+      expect(cfg.transcription.realtime.mlx_model).toBe("mlx-community/whisper-large-v3-turbo");
+      expect(cfg.transcription.diarization.provider).toBe("sherpa-onnx");
+    } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 
   it("update() returns restart targets", async () => {
@@ -50,6 +68,19 @@ describe("configRouter", () => {
       const r = await caller.update({ key: "transcription.realtime_enabled", value: false });
       expect(r.daemonsNeedingRestart).toEqual([]);
       expect(r.daemonsNeedingSighup).toEqual([]);
+    } finally { cleanup(); }
+  });
+
+  it("update(status_agent.enabled) applies launchctl start/stop immediately", async () => {
+    const { ctx, start, stop, cleanup } = makeCtx();
+    try {
+      const caller = createCaller(configRouter, ctx);
+      const off = await caller.update({ key: "status_agent.enabled", value: false });
+      expect(off.daemonsNeedingRestart).toEqual([]);
+      expect(stop).toHaveBeenCalledWith("com.yulu.statusagent");
+      const on = await caller.update({ key: "status_agent.enabled", value: true });
+      expect(on.daemonsNeedingRestart).toEqual([]);
+      expect(start).toHaveBeenCalledWith("com.yulu.statusagent");
     } finally { cleanup(); }
   });
 });

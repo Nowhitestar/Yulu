@@ -83,6 +83,60 @@ DIAR_SEG_FILE="$DIAR_DIR/segmentation.onnx"
 DIAR_EMB_FILE="$DIAR_DIR/campplus.onnx"
 DIAR_SEG_URL="https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-segmentation-models/sherpa-onnx-pyannote-segmentation-3-0.tar.bz2"
 DIAR_EMB_URL="https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/3dspeaker_speech_campplus_sv_zh-cn_16k-common.onnx"
+DIAR_SEG_HF_URL="https://huggingface.co/csukuangfj/sherpa-onnx-pyannote-segmentation-3-0/resolve/main/model.onnx"
+DIAR_EMB_HF_URL="https://huggingface.co/csukuangfj/speaker-embedding-models/resolve/main/3dspeaker_speech_campplus_sv_zh-cn_16k-common.onnx"
+
+download_with_retry() {
+    local url="$1"
+    local out="$2"
+    curl -L --fail --retry 5 --retry-delay 2 --retry-all-errors --connect-timeout 30 --progress-bar "$url" -o "$out"
+}
+
+download_diar_embedding() {
+    # Prefer the official sherpa-onnx GitHub release. Some networks reliably fail
+    # on release-assets.githubusercontent.com, so fall back to the maintainer's
+    # Hugging Face mirror for the same ONNX file.
+    if download_with_retry "$DIAR_EMB_URL" "$DIAR_EMB_FILE.partial"; then
+        mv "$DIAR_EMB_FILE.partial" "$DIAR_EMB_FILE"
+        return 0
+    fi
+    rm -f "$DIAR_EMB_FILE.partial"
+    info "GitHub release 下载失败，改用 Hugging Face 镜像..."
+    if download_with_retry "$DIAR_EMB_HF_URL" "$DIAR_EMB_FILE.partial"; then
+        mv "$DIAR_EMB_FILE.partial" "$DIAR_EMB_FILE"
+        return 0
+    fi
+    rm -f "$DIAR_EMB_FILE.partial"
+    return 1
+}
+
+download_diar_segmentation() {
+    # GitHub release ships a tarball; the Hugging Face mirror exposes model.onnx
+    # directly. Keep the same final local filename either way.
+    local tarball="$DIAR_DIR/seg.tar.bz2"
+    if download_with_retry "$DIAR_SEG_URL" "$tarball.partial"; then
+        mv "$tarball.partial" "$tarball"
+        if tar -xjf "$tarball" -C "$DIAR_DIR" 2>/dev/null; then
+            local extracted
+            extracted="$(find "$DIAR_DIR" -name model.onnx -path '*pyannote*' 2>/dev/null | head -1)"
+            if [[ -n "$extracted" && -f "$extracted" ]]; then
+                mv "$extracted" "$DIAR_SEG_FILE"
+                rm -rf "$DIAR_DIR"/sherpa-onnx-pyannote-segmentation-3-0 "$tarball"
+                return 0
+            fi
+            warn "未能在 GitHub 归档中找到 model.onnx，改用 Hugging Face 镜像..."
+        else
+            warn "解压 GitHub segmentation 归档失败，改用 Hugging Face 镜像..."
+        fi
+    fi
+    rm -f "$tarball" "$tarball.partial"
+    if download_with_retry "$DIAR_SEG_HF_URL" "$DIAR_SEG_FILE.partial"; then
+        mv "$DIAR_SEG_FILE.partial" "$DIAR_SEG_FILE"
+        return 0
+    fi
+    rm -f "$DIAR_SEG_FILE.partial"
+    return 1
+}
 
 diarization_enabled() {
     # Read-only: true iff transcription.diarization.enabled is truthy in config.json.
@@ -118,14 +172,15 @@ install_diarization_engine() {
         return 0
     fi
     info "安装 sherpa-onnx 说话人分离引擎到 ${PYTHON_BIN}（onnxruntime，无 torch，跨平台）..."
-    if "$PYTHON_BIN" -m pip install --upgrade sherpa-onnx >/dev/null 2>&1; then
+    if "$PYTHON_BIN" -m pip install --upgrade sherpa-onnx >/dev/null 2>&1 ||
+       "$PYTHON_BIN" -m pip install --user --break-system-packages --upgrade sherpa-onnx >/dev/null 2>&1; then
         if diarization_engine_present; then
             ok "sherpa-onnx 引擎已安装"
         else
             warn "sherpa-onnx 安装后仍无法导入（${PYTHON_BIN}）。说话人分离将不可用，普通转录不受影响。"
         fi
     else
-        warn "sherpa-onnx 安装失败（${PYTHON_BIN}）。手动安装：${PYTHON_BIN} -m pip install sherpa-onnx"
+        warn "sherpa-onnx 安装失败（${PYTHON_BIN}）。手动安装：${PYTHON_BIN} -m pip install --user --break-system-packages sherpa-onnx"
         warn "说话人分离将不可用，直到引擎可导入；普通转录不受影响。"
     fi
 }
@@ -146,45 +201,26 @@ setup_diarization_models() {
     mkdir -p "$DIAR_DIR"
 
     # cam++ embedding — a plain .onnx (~27 MB), direct download.
-    if [[ -f "$DIAR_EMB_FILE" ]]; then
+    if [[ -s "$DIAR_EMB_FILE" ]]; then
         ok "cam++ embedding 模型已存在: $DIAR_EMB_FILE"
     else
         info "下载 cam++ embedding (~27 MB)..."
-        if curl -L --fail --progress-bar "$DIAR_EMB_URL" -o "$DIAR_EMB_FILE.partial"; then
-            mv "$DIAR_EMB_FILE.partial" "$DIAR_EMB_FILE"
+        if download_diar_embedding; then
             ok "cam++ embedding 已保存: $DIAR_EMB_FILE"
         else
-            rm -f "$DIAR_EMB_FILE.partial"
-            warn "cam++ 模型下载失败。手动下载：curl -L $DIAR_EMB_URL -o $DIAR_EMB_FILE"
+            warn "cam++ 模型下载失败。手动下载：curl -L $DIAR_EMB_HF_URL -o $DIAR_EMB_FILE"
         fi
     fi
 
     # pyannote segmentation — shipped inside a .tar.bz2; extract model.onnx -> segmentation.onnx.
-    if [[ -f "$DIAR_SEG_FILE" ]]; then
+    if [[ -s "$DIAR_SEG_FILE" ]]; then
         ok "segmentation 模型已存在: $DIAR_SEG_FILE"
     else
         info "下载 pyannote segmentation (~5.7 MB)..."
-        local tarball="$DIAR_DIR/seg.tar.bz2"
-        if curl -L --fail --progress-bar "$DIAR_SEG_URL" -o "$tarball.partial"; then
-            mv "$tarball.partial" "$tarball"
-            # Extract the single model.onnx from the archive into DIAR_DIR.
-            if tar -xjf "$tarball" -C "$DIAR_DIR" 2>/dev/null; then
-                local extracted
-                extracted="$(find "$DIAR_DIR" -name model.onnx -path '*pyannote*' 2>/dev/null | head -1)"
-                if [[ -n "$extracted" && -f "$extracted" ]]; then
-                    mv "$extracted" "$DIAR_SEG_FILE"
-                    ok "segmentation 已保存: $DIAR_SEG_FILE"
-                    # Clean the extracted tree + tarball (keep only the .onnx we need).
-                    rm -rf "$DIAR_DIR"/sherpa-onnx-pyannote-segmentation-3-0 "$tarball"
-                else
-                    warn "未能在归档中找到 model.onnx；请手动解压 $tarball"
-                fi
-            else
-                warn "解压 segmentation 归档失败：$tarball"
-            fi
+        if download_diar_segmentation; then
+            ok "segmentation 已保存: $DIAR_SEG_FILE"
         else
-            rm -f "$tarball.partial"
-            warn "segmentation 模型下载失败。手动下载：curl -L $DIAR_SEG_URL -o $tarball && tar -xjf $tarball -C $DIAR_DIR"
+            warn "segmentation 模型下载失败。手动下载：curl -L $DIAR_SEG_HF_URL -o $DIAR_SEG_FILE"
         fi
     fi
 }
@@ -233,7 +269,7 @@ PY
 
     url="https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-${model_name}.bin"
     info "下载 ggml-${model_name}.bin（这一步可能要几分钟到十几分钟，取决于网络）..."
-    if curl -L --fail --progress-bar "$url" -o "$target.partial"; then
+    if download_with_retry "$url" "$target.partial"; then
         mv "$target.partial" "$target"
         ok "模型已保存: $target"
         write_model_to_config "$target"

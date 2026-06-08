@@ -66,7 +66,7 @@ def _cmd_status(args: argparse.Namespace) -> int:
 
 def _cmd_warm_up(args: argparse.Namespace) -> int:
     payload = asyncio.run(_request_response(
-        Path(args.socket), {"type": "warm_up", "engine": args.engine}
+        Path(args.socket), {"type": "warm_up", "engine": args.engine}, timeout=args.timeout
     ))
     if payload is None:
         print("daemon not reachable", file=sys.stderr)
@@ -119,6 +119,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     pw = sub.add_parser("warm-up")
     pw.add_argument("--engine", default="mlx")
+    pw.add_argument("--timeout", type=float, default=60.0)
 
     pl = sub.add_parser("logs")
     pl.add_argument("--tail", type=int, default=50)

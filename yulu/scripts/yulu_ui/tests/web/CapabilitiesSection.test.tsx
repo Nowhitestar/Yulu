@@ -6,6 +6,7 @@ import userEvent from "@testing-library/user-event";
 // A single mutable holder the trpc mock reads from, so each test can drive a
 // different host_capabilities payload / query state (DbStatsRow + glossary mock pattern).
 const refetchMock = vi.fn();
+const verifyMutateAsyncMock = vi.fn();
 let queryReturn: { data: unknown; refetch: typeof refetchMock; isError: boolean; isPending?: boolean } = {
   data: undefined,
   refetch: refetchMock,
@@ -16,6 +17,7 @@ vi.mock("../../web/src/trpc.js", () => ({
   trpc: {
     capabilities: {
       host_capabilities: { useQuery: () => queryReturn },
+      verify: { useMutation: () => ({ mutateAsync: verifyMutateAsyncMock, isPending: false }) },
     },
   },
 }));
@@ -28,6 +30,8 @@ import {
 
 beforeEach(() => {
   refetchMock.mockClear();
+  verifyMutateAsyncMock.mockReset();
+  verifyMutateAsyncMock.mockResolvedValue({ ok: true, detail: "verified", status: "usable" });
   queryReturn = { data: undefined, refetch: refetchMock, isError: false };
 });
 
@@ -42,7 +46,7 @@ function fullReport() {
         resolved_path: "/opt/homebrew/bin/claude",
         detail: "claude 1.2.3",
       },
-      "agent-mlx": {
+      "agent_mlx_whisper": {
         provenance: "agent-config",
         status: "present-but-unverified",
         resolved_path: "/Users/me/.config/yulu/agent-mlx",
@@ -87,6 +91,13 @@ describe("statusKey (tri-state)", () => {
 });
 
 describe("CapabilitiesSection", () => {
+  it("shows loading copy while host capability probing is still pending", () => {
+    queryReturn = { data: undefined, refetch: refetchMock, isError: false, isPending: true };
+    render(<CapabilitiesSection />);
+    expect(screen.getByText("正在检测主机能力...")).toBeInTheDocument();
+    expect(screen.queryByText(/尚未检测到任何能力/)).toBeNull();
+  });
+
   it("Test 1 — renders the D-02 provenance label for each provenance kind", () => {
     queryReturn = { data: fullReport(), refetch: refetchMock, isError: false };
     render(<CapabilitiesSection />);
@@ -112,6 +123,13 @@ describe("CapabilitiesSection", () => {
     expect(container.querySelector('.cap-badge[data-status="absent"]')).not.toBeNull();
   });
 
+  it("renders capability detail so missing/unverified rows explain why", () => {
+    queryReturn = { data: fullReport(), refetch: refetchMock, isError: false };
+    render(<CapabilitiesSection />);
+    expect(screen.getByText("not found on PATH")).toBeInTheDocument();
+    expect(screen.getByText("claude 1.2.3")).toBeInTheDocument();
+  });
+
   it("Test 4 — degrades to a friendly message on the typed error shape (no crash)", () => {
     queryReturn = {
       data: { schema_version: 1, capabilities: {}, error: "doctor.py exited with code 1" },
@@ -127,6 +145,17 @@ describe("CapabilitiesSection", () => {
     render(<CapabilitiesSection />);
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: "刷新" }));
+    expect(refetchMock).toHaveBeenCalled();
+  });
+
+  it("renders a Verify action for runtime-verifiable unverified capabilities", async () => {
+    queryReturn = { data: fullReport(), refetch: refetchMock, isError: false };
+    render(<CapabilitiesSection />);
+    const user = userEvent.setup();
+
+    await user.click(screen.getAllByRole("button", { name: "验证" })[0]!);
+
+    expect(verifyMutateAsyncMock).toHaveBeenCalledWith({ capability: "agent_mlx_whisper" });
     expect(refetchMock).toHaveBeenCalled();
   });
 

@@ -198,8 +198,8 @@ create_config() {
   ],
   "audio": {
     "backend": "daemon",
-    "mic_device": ":0",
-    "system_audio_device": ":1",
+    "mic_device": "",
+    "system_audio_device": null,
     "output_dir": "$RECORDING_DIR",
     "format": "wav",
     "silence_threshold": 0.01,
@@ -349,7 +349,7 @@ PY
 # ─── Step 4.5: Transcription engine selection (writes the CHOICE to config) ──
 # The orchestrator owns the interactive engine/model choice and records it in
 # config.json. The heavy lifting then happens in the sequenced concern scripts:
-#   - setup_capabilities.sh VERIFIES mlx-whisper importability (D-05, no install),
+#   - setup_capabilities.sh REUSES or repairs mlx-whisper in the daemon interpreter,
 #   - setup_models.sh DOWNLOADS the GGML model + writes the whisper-cli command.
 # So this function only sets final_engine + the chosen model; it does NOT create a
 # venv (D-02 removed that) and does NOT download (setup_models.sh owns the download).
@@ -927,7 +927,7 @@ configure_summary_mode
 # 4) Models: download the chosen GGML model + write the whisper-cli command.
 "$SCRIPT_DIR/setup_models.sh" "$MODE"
 
-# 5) Capabilities: verify mlx-whisper importability (no venv, no install — D-02/D-05).
+# 5) Capabilities: verify/reuse/repair mlx-whisper in the daemon interpreter (no Yulu venv — D-02/D-05).
 "$SCRIPT_DIR/setup_capabilities.sh" "$MODE"
 
 # 6) Calendar opt-in (orchestrator owns the prompt + OAuth), then daemons.

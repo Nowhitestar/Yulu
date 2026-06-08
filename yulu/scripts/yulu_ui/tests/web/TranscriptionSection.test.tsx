@@ -9,6 +9,7 @@ import { MemoryRouter } from "react-router";
 const updateMutate = vi.fn(async (_vars: { key: string; value: unknown }) => ({ daemonsNeedingRestart: ["sttdaemon"], daemonsNeedingSighup: [] }));
 let configReturn: { data: unknown; isPending: boolean } = { data: undefined, isPending: false };
 let modelsReturn: { data: unknown; isPending: boolean } = { data: [], isPending: false };
+let capsReturn: { data: unknown; isPending: boolean } = { data: undefined, isPending: false };
 let recordingState: string = "idle";
 
 // Transcription fields are restart-class (sttdaemon); useConfigField reads this
@@ -22,6 +23,12 @@ const SCHEMA = [
   { path: "transcription.realtime.mlx_model",  category: "transcription", label: "实时字幕模型", type: "text", reload: { kind: "restart", daemons: ["sttdaemon"] } },
   { path: "transcription.whisper_cli",         category: "transcription", label: "whisper.cpp CLI", type: "text", reload: { kind: "restart", daemons: ["sttdaemon"] }, advanced: true },
   { path: "transcription.realtime_enabled",    category: "transcription", label: "实时字幕", type: "toggle", reload: { kind: "none" } },
+  { path: "transcription.diarization.enabled", category: "transcription", label: "说话人分离", type: "toggle", reload: { kind: "restart", daemons: ["sttdaemon"] } },
+  { path: "transcription.diarization.provider", category: "transcription", label: "说话人 Provider", type: "select", reload: { kind: "restart", daemons: ["sttdaemon"] }, advanced: true },
+  { path: "transcription.diarization.num_speakers", category: "transcription", label: "说话人数", type: "number", reload: { kind: "restart", daemons: ["sttdaemon"] } },
+  { path: "transcription.diarization.threshold", category: "transcription", label: "聚类阈值", type: "number", reload: { kind: "restart", daemons: ["sttdaemon"] } },
+  { path: "transcription.diarization.seg_model", category: "transcription", label: "分段模型", type: "text", reload: { kind: "restart", daemons: ["sttdaemon"] }, advanced: true },
+  { path: "transcription.diarization.emb_model", category: "transcription", label: "嵌入模型", type: "text", reload: { kind: "restart", daemons: ["sttdaemon"] }, advanced: true },
   { path: "transcription.post_recording_mode", category: "transcription", label: "Post-recording", type: "select", reload: { kind: "none" } },
 ];
 
@@ -47,6 +54,7 @@ vi.mock("../../web/src/trpc.js", () => ({
     recording: { state: { useQuery: () => ({ data: { state: recordingState } }) } },
     capabilities: {
       detected_models: { useQuery: () => modelsReturn },
+      host_capabilities: { useQuery: () => capsReturn },
     },
     system: {
       pickFile: { useMutation: () => ({ mutateAsync: async () => ({ path: "/picked/dir" }), isPending: false }) },
@@ -80,6 +88,7 @@ function baseConfig(overrides: Record<string, unknown> = {}) {
       whisper_cli: "whisper-cli",
       mlx: { model: "mlx-community/whisper-large-v3-mlx" },
       realtime: { mlx_model: "mlx-community/whisper-large-v3-turbo" },
+      diarization: { enabled: false, provider: "sherpa-onnx", num_speakers: null, threshold: 0.5, seg_model: "", emb_model: "" },
       ...overrides,
     },
   };
@@ -90,6 +99,38 @@ beforeEach(() => {
   recordingState = "idle";
   configReturn = { data: baseConfig(), isPending: false };
   modelsReturn = { data: [], isPending: false };
+  capsReturn = {
+    data: {
+      schema_version: 1,
+      capabilities: {
+        mlx_whisper: {
+          provenance: "host-path",
+          status: "usable",
+          resolved_path: "/opt/homebrew/bin/python3",
+          detail: "runtime warm-up verified",
+        },
+        whisper_cli: {
+          provenance: "host-path",
+          status: "usable",
+          resolved_path: "/opt/homebrew/bin/whisper-cli",
+          detail: "whisper-cli",
+        },
+        models: {
+          provenance: "yulu-managed",
+          status: "usable",
+          resolved_path: "/Users/me/.config/yulu/models",
+          detail: "2 models",
+        },
+        diarization: {
+          provenance: "yulu-managed",
+          status: "absent",
+          resolved_path: "",
+          detail: "models missing",
+        },
+      },
+    },
+    isPending: false,
+  };
 });
 
 function mount() {
@@ -136,6 +177,20 @@ describe("TranscriptionSection — MLX engine fields (P4a-1)", () => {
     // whisper.cpp-only fields are hidden on the MLX engine.
     expect(screen.queryByText(translate("zh", "settings.transcription.localModelPath.label"))).toBeNull();
     expect(screen.queryByLabelText(translate("zh", "settings.transcription.detectedModel.label"))).toBeNull();
+  });
+
+  it("thin config still displays the effective default MLX model ids", () => {
+    configReturn = { data: baseConfig({ final_engine: "mlx", mlx: {}, realtime: {} }), isPending: false };
+    mount();
+    expect(screen.getByText("mlx-community/whisper-large-v3-mlx")).toBeInTheDocument();
+    expect(screen.getByText("mlx-community/whisper-large-v3-turbo")).toBeInTheDocument();
+  });
+
+  it("shows the selected engine runtime status from host capabilities", () => {
+    configReturn = { data: baseConfig({ final_engine: "mlx" }), isPending: false };
+    mount();
+    expect(screen.getByText(translate("zh", "settings.transcription.capability.label"))).toBeInTheDocument();
+    expect(screen.getByText("runtime warm-up verified")).toBeInTheDocument();
   });
 
   it("editing the MLX model commits transcription.mlx.model", async () => {
@@ -307,5 +362,49 @@ describe("TranscriptionSection — always-relevant rows (D-07 extend, not replac
     await vi.waitFor(() =>
       expect(updateMutate).toHaveBeenCalledWith({ key: "transcription.post_recording_mode", value: "full_transcribe" }),
     );
+  });
+});
+
+describe("TranscriptionSection — speaker diarization settings (Phase 14)", () => {
+  it("renders diarization rows and persists enabled / speaker count / threshold", async () => {
+    mount();
+    const user = userEvent.setup();
+
+    const enabledRow = screen.getByText(translate("zh", "settings.transcription.diarization.enabled.label")).closest(".row")!;
+    await user.click(within(enabledRow as HTMLElement).getByRole("switch"));
+    await vi.waitFor(() =>
+      expect(updateMutate).toHaveBeenCalledWith({ key: "transcription.diarization.enabled", value: true }),
+    );
+
+    const countRow = screen.getByText(translate("zh", "settings.transcription.diarization.numSpeakers.label")).closest(".row")!;
+    expect(within(countRow as HTMLElement).getByText(translate("zh", "settings.transcription.diarization.numSpeakers.auto"))).toBeInTheDocument();
+    await user.click(within(countRow as HTMLElement).getByText(translate("zh", "settings.transcription.diarization.numSpeakers.auto")));
+    await user.selectOptions(within(countRow as HTMLElement).getByRole("combobox"), "3");
+    await vi.waitFor(() =>
+      expect(updateMutate).toHaveBeenCalledWith({ key: "transcription.diarization.num_speakers", value: 3 }),
+    );
+
+    const thresholdRow = screen.getByText(translate("zh", "settings.transcription.diarization.threshold.label")).closest(".row")!;
+    await user.click(within(thresholdRow as HTMLElement).getByText("0.5"));
+    const input = within(thresholdRow as HTMLElement).getByRole("spinbutton") as HTMLInputElement;
+    await user.clear(input);
+    await user.type(input, "0.7");
+    input.blur();
+    await vi.waitFor(() =>
+      expect(updateMutate).toHaveBeenCalledWith({ key: "transcription.diarization.threshold", value: 0.7 }),
+    );
+  });
+
+  it("shows diarization runtime capability detail next to the settings", () => {
+    mount();
+    expect(screen.getByText(translate("zh", "settings.transcription.diarization.capability.label"))).toBeInTheDocument();
+    expect(screen.getByText("models missing")).toBeInTheDocument();
+  });
+
+  it("keeps provider and ONNX model overrides in Advanced", () => {
+    mount();
+    expect(screen.getByText(translate("zh", "settings.transcription.diarization.provider.label"))).toBeInTheDocument();
+    expect(screen.getByText(translate("zh", "settings.transcription.diarization.segModel.label"))).toBeInTheDocument();
+    expect(screen.getByText(translate("zh", "settings.transcription.diarization.embModel.label"))).toBeInTheDocument();
   });
 });

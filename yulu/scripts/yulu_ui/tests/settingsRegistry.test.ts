@@ -20,6 +20,14 @@ describe("settingsRegistry", () => {
   it("llm.command 改完无需动作(读取即生效)", () => {
     expect(reloadFor("llm.command")).toEqual({ kind: "none" });
   });
+  it("status_agent.enabled 保存后由 config router 直接 start/stop,不走重启横幅", () => {
+    expect(reloadFor("status_agent.enabled")).toEqual({ kind: "none" });
+  });
+  it("silence_duration_sec 默认 300 秒在可配置范围内", () => {
+    const def = defFor("audio.silence_duration_sec");
+    expect(def?.validate.safeParse(300).success).toBe(true);
+    expect(def?.validate.safeParse(3601).success).toBe(false);
+  });
   it("post_recording_mode 是 select,枚举校验,reload none(transcribe.py 每次读)", () => {
     const def = defFor("transcription.post_recording_mode");
     expect(def?.type).toBe("select");
@@ -27,6 +35,20 @@ describe("settingsRegistry", () => {
     expect(def?.validate.safeParse("fast_summary").success).toBe(true);
     expect(def?.validate.safeParse("full_transcribe").success).toBe(true);
     expect(def?.validate.safeParse("nonsense").success).toBe(false);
+  });
+  it("diarization 设置映射到 sttdaemon restart,且 num_speakers 支持 auto(null)", () => {
+    expect(reloadFor("transcription.diarization.enabled")).toEqual({ kind: "restart", daemons: ["sttdaemon"] });
+    expect(reloadFor("transcription.diarization.provider")).toEqual({ kind: "restart", daemons: ["sttdaemon"] });
+    expect(defFor("transcription.diarization.provider")?.validate.safeParse("sherpa-onnx").success).toBe(true);
+    expect(defFor("transcription.diarization.provider")?.validate.safeParse("other").success).toBe(false);
+    const count = defFor("transcription.diarization.num_speakers");
+    expect(count?.validate.safeParse(null).success).toBe(true);
+    expect(count?.validate.safeParse(3).success).toBe(true);
+    expect(count?.validate.safeParse(0).success).toBe(false);
+    expect(count?.validate.safeParse(9).success).toBe(false);
+    const threshold = defFor("transcription.diarization.threshold");
+    expect(threshold?.validate.safeParse(0.5).success).toBe(true);
+    expect(threshold?.validate.safeParse(2).success).toBe(false);
   });
   it("meeting_detection 4 项改完都要 restart detector", () => {
     for (const p of ["meeting_detection.enabled", "meeting_detection.interval_sec", "meeting_detection.stable_sec", "meeting_detection.prompt_cooldown_sec"]) {
@@ -56,7 +78,7 @@ describe("settingsRegistry", () => {
   });
 
   it("危险项标 danger:true(改了影响录音/转写,commit 前要确认)", () => {
-    for (const p of ["audio.output_dir", "audio.backend", "transcription.local_model_path", "transcription.mlx"]) {
+    for (const p of ["audio.output_dir", "audio.backend", "transcription.local_model_path", "transcription.mlx", "transcription.diarization.seg_model", "transcription.diarization.emb_model"]) {
       expect(defFor(p)?.danger).toBe(true);
     }
   });

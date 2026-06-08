@@ -33,6 +33,7 @@ import os
 import shlex
 import shutil
 import subprocess
+from functools import lru_cache
 from pathlib import Path
 
 from . import report
@@ -117,6 +118,36 @@ def probe_importable(module: str, python_bin: str | None = None) -> tuple[bool, 
     return False, first_line
 
 
+def probe_module_spec(module: str, python_bin: str | None = None) -> tuple[bool, str]:
+    """Probe whether ``module`` is installed without importing it.
+
+    Some MLX packages initialize GPU state during import. A headless settings/doctor process can
+    fail that import even though the package is present and may work inside the daemon's GUI-user
+    launchd context. This lighter probe distinguishes "package is not installed" from "installed
+    but full runtime usability still needs verification." Never raises.
+    """
+    py = python_bin or daemon_python()
+    code = (
+        "import importlib.util, sys; "
+        f"spec = importlib.util.find_spec({module!r}); "
+        "print(getattr(spec, 'origin', '') or ''); "
+        "sys.exit(0 if spec else 1)"
+    )
+    try:
+        result = subprocess.run(
+            [py, "-c", code],
+            capture_output=True,
+            text=True,
+            timeout=_SUBPROCESS_TIMEOUT,
+        )
+    except Exception as exc:
+        return False, str(exc)
+    detail = (result.stdout or result.stderr or "").strip()
+    if result.returncode == 0:
+        return True, detail
+    return False, detail or f"{module} not installed"
+
+
 # ── Capability-returning probes (each never raises) ──
 
 
@@ -138,19 +169,46 @@ def probe_command(binary: str, version_args: tuple[str, ...] = ("--version",)) -
         return report.absent(str(exc))
 
 
+@lru_cache(maxsize=1)
 def probe_mlx_whisper() -> Capability:
-    """Probe mlx-whisper importability against the daemon interpreter (D-03/D-04).
+    """Probe mlx-whisper against the daemon interpreter (D-03/D-04).
 
     Importable → ``Capability(HOST_PATH, USABLE, daemon_python(), "mlx_whisper <ver>")``;
-    not → ``Capability(ABSENT, ABSENT, "", stderr)``. ``host-path`` provenance reflects
-    "found on the host the daemon runs as." Never raises.
+    package not installed → ``Capability(ABSENT, ABSENT, "", detail)``. When the package is
+    installed but a full import fails (for example a missing dependency, or a headless/no-Metal
+    probe context), return ``present-but-unverified`` rather than pretending it is usable or
+    completely absent. Provisioning still treats only ``usable`` as a skip gate. Never raises.
     """
     try:
+        present, origin = probe_module_spec("mlx_whisper")
+        if not present:
+            return Capability(Provenance.ABSENT, Status.ABSENT, "", origin)
+        yaml_present, yaml_origin = probe_module_spec("yaml")
+        if not yaml_present:
+            return Capability(
+                Provenance.HOST_PATH,
+                Status.PRESENT_BUT_UNVERIFIED,
+                daemon_python(),
+                f"installed at {origin}; dependency yaml missing: {yaml_origin}",
+            )
+        if os.environ.get("YULU_DEEP_CAPABILITY_PROBES") != "1":
+            return Capability(
+                Provenance.HOST_PATH,
+                Status.PRESENT_BUT_UNVERIFIED,
+                daemon_python(),
+                f"installed at {origin}; dependency yaml at {yaml_origin}; runtime warm-up not run",
+            )
         ok, detail = probe_importable("mlx_whisper")
         if ok:
             ver = detail or "?"
             return Capability(Provenance.HOST_PATH, Status.USABLE, daemon_python(), f"mlx_whisper {ver}")
-        return Capability(Provenance.ABSENT, Status.ABSENT, "", detail)
+        installed_at = f"installed at {origin}; " if origin else ""
+        return Capability(
+            Provenance.HOST_PATH,
+            Status.PRESENT_BUT_UNVERIFIED,
+            daemon_python(),
+            f"{installed_at}import failed: {detail}",
+        )
     except Exception as exc:
         return report.absent(str(exc))
 

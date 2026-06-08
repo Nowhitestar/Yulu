@@ -6,8 +6,12 @@ interface ToggleReply { ok: boolean; state_before?: string; state_after?: string
 
 export const recordingRouter = router({
   state: publicProcedure.query(async ({ ctx }) => {
-    const r = await ipcSend<StatusReply>(ctx.paths.statusAgentSock, { action: "status" });
-    return { state: r.state ?? "unknown", hotkey: r.hotkey ?? "?", launcherPid: r.launcher_pid };
+    try {
+      const r = await ipcSend<StatusReply>(ctx.paths.statusAgentSock, { action: "status" });
+      return { state: r.state ?? "unknown", hotkey: r.hotkey ?? "?", launcherPid: r.launcher_pid };
+    } catch {
+      return { state: "idle", hotkey: "?", launcherPid: undefined };
+    }
   }),
 
   toggle: publicProcedure.mutation(async ({ ctx }) => {

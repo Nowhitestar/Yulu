@@ -10,7 +10,7 @@ const SCHEMA = [
   { path: "audio.output_dir",         category: "audio",         label: "录音输出目录", type: "path", reload: { kind: "restart", daemons: ["audiodaemon"] } },
   { path: "transcription.language",   category: "transcription", label: "语言",      type: "text",   reload: { kind: "restart", daemons: ["sttdaemon"] } },
   { path: "llm.enabled",              category: "llm",           label: "启用 LLM",  type: "toggle", reload: { kind: "none" } },
-  { path: "status_agent.enabled",     category: "general",       label: "菜单栏 Agent", type: "toggle", reload: { kind: "restart", daemons: ["statusagent"] } },
+  { path: "status_agent.enabled",     category: "general",       label: "菜单栏 Agent", type: "toggle", reload: { kind: "none" } },
 ];
 
 // Shared spy so tests can assert config.update was called on a field edit.
@@ -31,7 +31,7 @@ vi.mock("../../../web/src/ws.js", () => ({
 // Stub trpc so each query returns minimal data and mutations no-op.
 vi.mock("../../../web/src/trpc.js", () => {
   const cfg = {
-    audio: { mic_device: ":0", system_audio_device: ":1", output_dir: "/tmp", silence_threshold: 0.01, silence_duration_sec: 300, backend: "daemon" },
+    audio: { mic_device: "BuiltInMic", system_audio_device: ":1", output_dir: "/tmp", silence_threshold: 0.01, silence_duration_sec: 300, backend: "daemon" },
     transcription: { realtime_enabled: true, final_engine: "mlx", language: "auto", local_model_path: "", mlx: { model: "", final_model: "", preprocess_audio: false, passthrough_max_sec: 0, passthrough_max_bytes: 0 } },
     llm: { enabled: false, command: [] },
     status_agent: { enabled: false },
@@ -66,7 +66,13 @@ vi.mock("../../../web/src/trpc.js", () => {
       daemons: { restart: { useMutation: noopMutation } },
       recording: { state: { useQuery: () => ({ data: { state: recording.state } }) } },
       system: {
-        audioDevices: { useQuery: () => ({ data: { input: [], output: [] }, isPending: false }) },
+        audioDevices: { useQuery: () => ({ data: {
+          input: [
+            { uid: "BuiltInMic", name: "MacBook Pro Microphone" },
+            { uid: "StudioMic", name: "Studio Mic" },
+          ],
+          output: [],
+        }, isPending: false }) },
         dbStats: { useQuery: () => ({ data: [], isPending: false }) },
         logPaths: { useQuery: () => ({ data: [], isPending: false }) },
         yuluVersion: { useQuery: () => ({ data: { version: "0.8.0", installSource: "release v0.8.0" }, isPending: false }) },
@@ -83,6 +89,7 @@ vi.mock("../../../web/src/trpc.js", () => {
       capabilities: {
         host_capabilities: { useQuery: () => ({ data: { schema_version: 1, capabilities: {} }, refetch: () => {}, isError: false }) },
         detected_models: { useQuery: () => ({ data: [], isPending: false }) },
+        verify: { useMutation: noopMutation },
       },
     },
     makeTrpcClient: () => ({}),
@@ -254,6 +261,19 @@ describe("Settings category detail content (re-homed widgets)", () => {
     expect(detail.getByText(translate("zh", "settings.storage.databases"))).toBeInTheDocument();
   });
 
+  it("audio: mic device selection commits audio.mic_device", async () => {
+    configUpdateSpy.mockClear();
+    const { container } = wrap("/settings/audio");
+    const audio = within(container.querySelector("#audio") as HTMLElement);
+    const row = audio.getByText(translate("zh", "settings.audio.micDevice.label")).closest(".row") as HTMLElement;
+    fireEvent.click(within(row).getByText("MacBook Pro Microphone"));
+    fireEvent.change(within(row).getByRole("combobox"), { target: { value: "StudioMic" } });
+    await waitFor(() => expect(configUpdateSpy).toHaveBeenCalledWith(expect.objectContaining({
+      key: "audio.mic_device",
+      value: "StudioMic",
+    })));
+  });
+
   it("transcription: the full transcription section", () => {
     const { container } = wrap("/settings/transcription");
     const detail = within(container.querySelector(".masterdetail-detail") as HTMLElement);
@@ -307,14 +327,12 @@ describe("Settings — recording-guard + undo (Task 5)", () => {
 
   it("while recording, a restart-class field is locked (disabled, not editable)", () => {
     recording.state = "recording";
-    // status_agent.enabled is restart-class (statusagent) and lives in general.
-    const { getByText, queryByRole } = wrap("/settings/general");
-    const row = getByText(translate("zh", "settings.hotkey.statusAgent.label")).closest(".row")!;
-    // The interactive switch is replaced by a read-only display + a 录音中 note.
-    expect(within(row as HTMLElement).queryByRole("switch")).toBeNull();
+    const { container } = wrap("/settings/audio");
+    const audio = container.querySelector("#audio") as HTMLElement;
+    const row = within(audio).getByText(translate("zh", "settings.audio.outputDir.label")).closest(".row")!;
+    // The path picker is replaced by read-only display + a 录音中 note.
+    expect(within(row as HTMLElement).queryByRole("button", { name: translate("zh", "path.choose") })).toBeNull();
     expect(within(row as HTMLElement).getByText(/录音中/)).toBeInTheDocument();
-    // No restart-class commit can be made from this row.
-    expect(queryByRole("switch", { name: /status agent/i })).toBeNull();
   });
 
   it("a non-restart field stays editable while recording", () => {

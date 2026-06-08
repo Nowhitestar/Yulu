@@ -35,6 +35,15 @@ export const configRouter = router({
     }))
     .mutation(async ({ ctx, input }) => {
       const result = ctx.config.update(input.key, input.value);
+      if (input.key === "status_agent.enabled" && typeof input.value === "boolean") {
+        try {
+          if (input.value) await ctx.launchctl.start("com.yulu.statusagent");
+          else await ctx.launchctl.stop("com.yulu.statusagent");
+        } catch {
+          // Persist the user's preference even if launchctl cannot act right now
+          // (for example in preview mode, or when the plist is not installed).
+        }
+      }
       // 服务端即时下发 SIGHUP(便宜、不打断录音);restart 仍由前端 banner 用户触发
       for (const d of result.daemonsNeedingSighup) {
         try { await ctx.launchctl.sighup("com.yulu." + d); } catch { /* daemon 可能没起 */ }

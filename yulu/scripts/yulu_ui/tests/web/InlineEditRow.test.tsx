@@ -30,6 +30,16 @@ describe("InlineEditRow", () => {
     expect(onCommit).toHaveBeenCalledWith("xyz");
   });
 
+  it("text variant: shows an explicit unset placeholder for empty values", async () => {
+    const onCommit = vi.fn();
+    render(<InlineEditRow label="L" type="text" value="" onCommit={onCommit} />);
+    const user = userEvent.setup();
+    await user.click(screen.getByText("(未设置)"));
+    const input = screen.getByRole("textbox");
+    await user.type(input, "mlx-community/whisper-large-v3-mlx{Enter}");
+    expect(onCommit).toHaveBeenCalledWith("mlx-community/whisper-large-v3-mlx");
+  });
+
   it("text variant: blur commits", async () => {
     const onCommit = vi.fn();
     render(<InlineEditRow label="L" type="text" value="abc" onCommit={onCommit} />);
@@ -61,6 +71,12 @@ describe("InlineEditRow", () => {
     const select = screen.getByRole("combobox");
     await user.selectOptions(select, "b");
     expect(onCommit).toHaveBeenCalledWith("b");
+  });
+
+  it("select variant: shows an explicit unset placeholder when the current value has no label", () => {
+    const onCommit = vi.fn();
+    render(<InlineEditRow label="L" type="select" value="" options={[{value:"a",label:"A"}]} onCommit={onCommit} />);
+    expect(screen.getByText("(未设置)")).toBeInTheDocument();
   });
 
   it("toggle variant: commits immediately on click", async () => {

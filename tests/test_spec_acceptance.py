@@ -370,6 +370,21 @@ def test_audio_daemon_silence_monitor_periodic():
     assert "startSilenceMonitor()" in body, "silence monitor not re-armed in mixAndWrite"
 
 
+def test_audio_daemon_silence_threshold_is_request_configured():
+    text = (SCRIPTS / "audio_daemon.swift").read_text(encoding="utf-8")
+    assert "silenceThreshold = DEFAULT_SILENCE_THRESHOLD" in text
+    assert 'json["silence_threshold"]' in text
+    assert "rms > silenceThreshold" in text
+
+
+def test_audio_daemon_mic_device_is_request_configured():
+    text = (SCRIPTS / "audio_daemon.swift").read_text(encoding="utf-8")
+    assert "selectedDeviceUID" in text
+    assert 'json["mic_device"]' in text
+    assert "configureInputDevice" in text
+    assert "kAudioOutputUnitProperty_CurrentDevice" in text
+
+
 def test_yulu_wrapper_dispatches_status_agent():
     text = (SCRIPTS / "yulu").read_text(encoding="utf-8")
     assert "status-agent)" in text or "status-agent|statusagent" in text

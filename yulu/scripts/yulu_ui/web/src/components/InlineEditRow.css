@@ -49,6 +49,7 @@
   transition: border-color 120ms;
 }
 .value-display:hover { border-color: var(--accent); }
+.value-display--empty { color: var(--fg-3); }
 
 /* Recording-guard: a restart-class field locked while recording. Reads as
    muted, non-interactive, with a short "录音中不可改" note. */

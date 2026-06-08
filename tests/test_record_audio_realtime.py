@@ -55,3 +55,17 @@ def test_load_config_no_longer_injects_legacy_realtime_key(tmp_path, monkeypatch
     _write_cfg(tmp_path, monkeypatch, {"audio": {"mic_device": ":0"}})
     audio_cfg = record_audio.load_config()
     assert "realtime_transcribe" not in audio_cfg
+
+
+def test_load_config_defaults_native_devices_empty_for_daemon(tmp_path, monkeypatch):
+    _write_cfg(tmp_path, monkeypatch, {"audio": {"backend": "daemon"}})
+    audio_cfg = record_audio.load_config()
+    assert audio_cfg["mic_device"] == ""
+    assert audio_cfg["system_audio_device"] is None
+
+
+def test_load_config_preserves_legacy_device_defaults_for_sox(tmp_path, monkeypatch):
+    _write_cfg(tmp_path, monkeypatch, {"audio": {"backend": "sox"}})
+    audio_cfg = record_audio.load_config()
+    assert audio_cfg["mic_device"] == ":0"
+    assert audio_cfg["system_audio_device"] == ":1"

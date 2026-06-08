@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { trpc } from "../../trpc.js";
 import { useT } from "../../i18n/LanguageProvider.js";
 
@@ -35,11 +36,47 @@ export function statusKey(status: string): string {
   }
 }
 
-interface Capability {
+export interface Capability {
   provenance: string;
   status: string;
   resolved_path: string;
   detail: string;
+}
+
+function canVerifyCapability(name: string, cap: Capability): boolean {
+  if (cap.status !== "present-but-unverified") return false;
+  return name === "diarization" || name === "mlx_whisper" || name.endsWith("_mlx_whisper");
+}
+
+export function CapabilityBadge({ status, detail }: { status: string; detail?: string }) {
+  const t = useT();
+  return (
+    <span className="cap-badge" data-status={status} title={detail || undefined}>
+      {t(statusKey(status))}
+    </span>
+  );
+}
+
+export function CapabilityStatusValue({ cap }: { cap?: Capability }) {
+  const t = useT();
+  if (!cap) {
+    return (
+      <>
+        <span className="cap-path cap-path--empty">—</span>
+        <div className="cap-detail">{t("settings.capabilities.none")}</div>
+      </>
+    );
+  }
+  return (
+    <>
+      {cap.resolved_path ? (
+        <span className="cap-path">{cap.resolved_path}</span>
+      ) : (
+        <span className="cap-path cap-path--empty">—</span>
+      )}
+      {cap.detail ? <div className="cap-detail">{cap.detail}</div> : null}
+    </>
+  );
 }
 
 /**
@@ -55,11 +92,30 @@ interface Capability {
  * so this section shows a friendly line instead of blanking or crashing (SET-01).
  */
 export function CapabilitiesSection() {
-  const { data, refetch, isError } = trpc.capabilities.host_capabilities.useQuery();
+  const { data, refetch, isError, isPending } = trpc.capabilities.host_capabilities.useQuery();
+  const verifyMut = trpc.capabilities.verify.useMutation();
   const t = useT();
+  const [verifying, setVerifying] = useState<string | null>(null);
+  const [verifyErrors, setVerifyErrors] = useState<Record<string, string>>({});
 
   const caps = Object.entries((data?.capabilities ?? {}) as Record<string, Capability>);
   const failed = isError || Boolean(data?.error);
+
+  const verifyCapability = async (name: string) => {
+    setVerifying(name);
+    setVerifyErrors((prev) => ({ ...prev, [name]: "" }));
+    try {
+      const res = await verifyMut.mutateAsync({ capability: name });
+      if (!res.ok) {
+        setVerifyErrors((prev) => ({ ...prev, [name]: res.detail || t("settings.capabilities.verifyFailed") }));
+      }
+      await refetch();
+    } catch (e) {
+      setVerifyErrors((prev) => ({ ...prev, [name]: (e as Error).message }));
+    } finally {
+      setVerifying(null);
+    }
+  };
 
   return (
     <section id="capabilities" className="settings-section">
@@ -73,7 +129,9 @@ export function CapabilitiesSection() {
         </button>
       </div>
 
-      {failed ? (
+      {isPending && !data ? (
+        <div className="cap-error">{t("settings.capabilities.loading")}</div>
+      ) : failed ? (
         <div className="cap-error">
           {t("settings.capabilities.error")}
         </div>
@@ -87,16 +145,21 @@ export function CapabilitiesSection() {
               <div className="row-help">{t(provenanceKey(cap.provenance))}</div>
             </div>
             <div className="row-value">
-              {cap.resolved_path ? (
-                <span className="cap-path">{cap.resolved_path}</span>
-              ) : (
-                <span className="cap-path cap-path--empty">—</span>
-              )}
+              <CapabilityStatusValue cap={cap} />
+              {verifyErrors[name] ? <div className="cap-detail cap-detail--error">{verifyErrors[name]}</div> : null}
             </div>
             <div className="row-status">
-              <span className="cap-badge" data-status={cap.status}>
-                {t(statusKey(cap.status))}
-              </span>
+              <CapabilityBadge status={cap.status} detail={cap.detail} />
+              {canVerifyCapability(name, cap) ? (
+                <button
+                  type="button"
+                  className="cap-verify-btn"
+                  disabled={verifying !== null}
+                  onClick={() => { void verifyCapability(name); }}
+                >
+                  {verifying === name ? t("settings.capabilities.verifying") : t("settings.capabilities.verify")}
+                </button>
+              ) : null}
             </div>
           </div>
         ))

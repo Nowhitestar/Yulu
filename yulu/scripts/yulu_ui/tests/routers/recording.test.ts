@@ -19,6 +19,13 @@ describe("recordingRouter", () => {
     expect(r.hotkey).toBe("⌘⇧V");
   });
 
+  it("state() degrades to idle when status_agent.sock is unavailable", async () => {
+    const ctx = { paths: { statusAgentSock: "/tmp/yulu-missing-status-agent.sock" } } as unknown as AppContext;
+    const caller = createCaller(recordingRouter, ctx);
+    const r = await caller.state();
+    expect(r).toEqual({ state: "idle", hotkey: "?", launcherPid: undefined });
+  });
+
   it("toggle() returns state_before/state_after", async () => {
     fake = await startFakeSocket((req) => {
       expect(req).toEqual({ action: "toggle" });

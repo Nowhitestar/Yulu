@@ -28,18 +28,15 @@ function mockSpawn(stdout: string, exitCode = 0, stderr = "") {
 }
 
 function makeCtx() {
-  return { paths: { scriptDir: "/fake/yulu/scripts" } } as unknown as AppContext;
+  return { paths: { scriptDir: "/fake/yulu/scripts", configDir: "/fake/home/.config/yulu" } } as unknown as AppContext;
 }
 
-// A valid doctor `--json` payload (only the host_capabilities slice the router reads).
-const DOCTOR_JSON = JSON.stringify({
-  some_other_section: { ok: true },
-  host_capabilities: {
-    schema_version: 1,
-    capabilities: {
-      claude: { provenance: "host-path", status: "usable", resolved_path: "/usr/local/bin/claude", detail: "" },
-      models: { provenance: "yulu-managed", status: "usable", resolved_path: "/root", detail: "2 models, 3072 bytes" },
-    },
+// A valid host_capabilities payload from the focused collector the settings UI uses.
+const HOST_CAPABILITIES_JSON = JSON.stringify({
+  schema_version: 1,
+  capabilities: {
+    claude: { provenance: "host-path", status: "usable", resolved_path: "/usr/local/bin/claude", detail: "" },
+    models: { provenance: "yulu-managed", status: "usable", resolved_path: "/root", detail: "2 models, 3072 bytes" },
   },
 });
 
@@ -49,8 +46,8 @@ const MODELS_JSON = JSON.stringify([
 ]);
 
 describe("capabilitiesRouter.host_capabilities", () => {
-  it("returns the host_capabilities section from doctor --json (happy path)", async () => {
-    mockSpawn(DOCTOR_JSON);
+  it("returns the host_capabilities section from the focused collector (happy path)", async () => {
+    mockSpawn(HOST_CAPABILITIES_JSON);
     const caller = createCaller(capabilitiesRouter, makeCtx());
     const r = await caller.host_capabilities();
 
@@ -58,15 +55,15 @@ describe("capabilitiesRouter.host_capabilities", () => {
     expect(r.capabilities.claude.status).toBe("usable");
     expect(r.error).toBeUndefined();
 
-    // It spawned the python interpreter running doctor.py --json.
+    // It spawned the python interpreter running Yulu's host-capability collector only.
     expect(spawnMock).toHaveBeenCalledTimes(1);
     const [, args] = spawnMock.mock.calls[0]!;
     const joined = (args as string[]).join(" ");
-    expect(joined).toContain("doctor.py");
-    expect(joined).toContain("--json");
+    expect(joined).toContain("_host_capabilities");
+    expect(joined).toContain("/fake/home/.config/yulu");
   });
 
-  it("resolves a TYPED error (never throws) when doctor exits non-zero / emits non-JSON", async () => {
+  it("resolves a TYPED error (never throws) when the collector exits non-zero / emits non-JSON", async () => {
     mockSpawn("not json at all", 1, "boom");
     const caller = createCaller(capabilitiesRouter, makeCtx());
 
@@ -78,12 +75,10 @@ describe("capabilitiesRouter.host_capabilities", () => {
     expect(r.capabilities).toEqual({});
   });
 
-  it("returns the section even when doctor EXITS NON-ZERO but emits a valid report (real-machine regression)", async () => {
-    // doctor.py --json exits 1 whenever `_overall_ok` is false (a down daemon, a missing
-    // model, etc.) — but the host_capabilities section is additive + never-raises and is
-    // perfectly valid. The settings page must STILL surface the capabilities; the exit code
-    // must not blank a valid report. (Caught on a real machine where mocked tests exited 0.)
-    mockSpawn(DOCTOR_JSON, 1, "a health check failed");
+  it("returns the section even when the collector EXITS NON-ZERO but emits a valid report", async () => {
+    // The Python collector may degrade internally while still emitting the typed report.
+    // The settings page must surface that report; the exit code alone must not blank it.
+    mockSpawn(HOST_CAPABILITIES_JSON, 1, "a health check failed");
     const caller = createCaller(capabilitiesRouter, makeCtx());
     const r = await caller.host_capabilities();
     expect(r.error).toBeUndefined();
@@ -92,7 +87,7 @@ describe("capabilitiesRouter.host_capabilities", () => {
     expect(r.capabilities.models.status).toBe("usable");
   });
 
-  it("resolves a typed error when host_capabilities key is missing from doctor output", async () => {
+  it("resolves a typed error when the collector output has the wrong shape", async () => {
     mockSpawn(JSON.stringify({ other: true }), 0);
     const caller = createCaller(capabilitiesRouter, makeCtx());
     const r = await caller.host_capabilities();
@@ -119,22 +114,50 @@ describe("capabilitiesRouter.detected_models", () => {
   });
 });
 
+describe("capabilitiesRouter.verify", () => {
+  it("verifies MLX through the fixed stt daemon warm-up path", async () => {
+    mockSpawn("warmed mlx\n");
+    const caller = createCaller(capabilitiesRouter, makeCtx());
+    const result = await caller.verify({ capability: "agent_mlx_whisper" });
+
+    expect(result.ok).toBe(true);
+    expect(result.capability).toBe("mlx_whisper");
+    expect(result.status).toBe("usable");
+    expect(result.detail).toContain("warmed mlx");
+
+    const [, args] = spawnMock.mock.calls[0]!;
+    const joined = (args as string[]).join(" ");
+    expect(joined).toContain("warm-up");
+    expect(joined).toContain("stt_daemon.sock");
+  });
+
+  it("returns a typed failed verification result instead of throwing", async () => {
+    mockSpawn("", 1, "daemon not reachable");
+    const caller = createCaller(capabilitiesRouter, makeCtx());
+    const result = await caller.verify({ capability: "mlx_whisper" });
+
+    expect(result.ok).toBe(false);
+    expect(result.status).toBe("present-but-unverified");
+    expect(result.detail).toContain("daemon not reachable");
+  });
+});
+
 describe("capabilitiesRouter trust boundary (TRANS-02 / T-04-EX)", () => {
-  it("only ever spawns python running doctor.py / list_models — NEVER a user-configured command", async () => {
-    mockSpawn(DOCTOR_JSON);
+  it("only ever spawns python running host_capabilities / list_models — NEVER a user-configured command", async () => {
+    mockSpawn(HOST_CAPABILITIES_JSON);
     const caller = createCaller(capabilitiesRouter, makeCtx());
     await caller.host_capabilities();
     mockSpawn(MODELS_JSON);
     await caller.detected_models();
 
     // Every spawned program is the python interpreter; every argv references Yulu's own
-    // detection code (doctor.py or capabilities.list_models) — never config.llm.command /
+    // detection code (_host_capabilities or capabilities.list_models) — never config.llm.command /
     // config.transcription.cloud_command values.
     for (const call of spawnMock.mock.calls) {
       const cmd = call[0] as string;
       const args = (call[1] as string[]).join(" ");
       expect(cmd).toMatch(/python3?$/);
-      expect(args).toMatch(/doctor\.py|list_models|capabilities/);
+      expect(args).toMatch(/_host_capabilities|list_models|capabilities/);
     }
   });
 });

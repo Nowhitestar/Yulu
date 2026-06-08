@@ -1,14 +1,27 @@
 import { z } from "zod";
 import { router, publicProcedure } from "../trpc.js";
 
+const VOCAB_SCHEMA = `
+CREATE TABLE IF NOT EXISTS vocab (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  term TEXT NOT NULL UNIQUE,
+  pinyin TEXT,
+  notes TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+`;
+
 export const glossaryRouter = router({
-  list: publicProcedure.query(({ ctx }) =>
-    ctx.db.vocab.prepare("SELECT * FROM vocab ORDER BY term").all()
-  ),
+  list: publicProcedure.query(({ ctx }) => {
+    ensureVocabTable(ctx.db.vocab);
+    return ctx.db.vocab.prepare("SELECT * FROM vocab ORDER BY term").all();
+  }),
 
   add: publicProcedure
     .input(z.object({ term: z.string().min(1).max(200), pinyin: z.string().optional(), notes: z.string().optional() }))
     .mutation(async ({ ctx, input }) => {
+      ensureVocabTable(ctx.db.vocab);
       const now = new Date().toISOString().replace(/\.\d+Z$/, "Z");
       ctx.db.vocab.prepare(
         "INSERT INTO vocab (term, pinyin, notes, created_at, updated_at) VALUES (?, ?, ?, ?, ?)"
@@ -21,6 +34,7 @@ export const glossaryRouter = router({
     .input(z.object({ id: z.number().int(), term: z.string().optional(),
                       pinyin: z.string().nullable().optional(), notes: z.string().nullable().optional() }))
     .mutation(async ({ ctx, input }) => {
+      ensureVocabTable(ctx.db.vocab);
       const fields: string[] = []; const values: unknown[] = [];
       if (input.term !== undefined)   { fields.push("term = ?");   values.push(input.term); }
       if (input.pinyin !== undefined) { fields.push("pinyin = ?"); values.push(input.pinyin); }
@@ -36,11 +50,16 @@ export const glossaryRouter = router({
   delete: publicProcedure
     .input(z.object({ id: z.number().int() }))
     .mutation(async ({ ctx, input }) => {
+      ensureVocabTable(ctx.db.vocab);
       const r = ctx.db.vocab.prepare("DELETE FROM vocab WHERE id = ?").run(input.id);
       await hupStt(ctx);
       return { deleted: r.changes };
     }),
 });
+
+function ensureVocabTable(db: { exec: (sql: string) => unknown }): void {
+  db.exec(VOCAB_SCHEMA);
+}
 
 async function hupStt(ctx: { launchctl: { sighup: (l: string) => Promise<void> } }): Promise<void> {
   try { await ctx.launchctl.sighup("com.yulu.sttdaemon"); } catch { /* daemon may be down */ }

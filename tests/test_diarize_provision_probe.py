@@ -157,6 +157,40 @@ def test_models_step_apply_skips_when_check_true(monkeypatch):
 
 
 # ════════════════════════════════════════════════════════════════════════════
+# MLX provisioning gate — the capabilities step must repair present-unverified MLX
+# ════════════════════════════════════════════════════════════════════════════
+
+
+def test_mlx_not_required_satisfies_capabilities_step(monkeypatch):
+    monkeypatch.setattr(
+        registry_mod,
+        "_load_config",
+        lambda: {"transcription": {"final_engine": "whisper", "realtime": {"engine": "whisper"}}},
+    )
+    assert registry_mod._mlx_importable() is True
+
+
+def test_mlx_required_and_unverified_does_not_satisfy_capabilities_step(monkeypatch):
+    monkeypatch.setattr(
+        registry_mod,
+        "_load_config",
+        lambda: {"transcription": {"final_engine": "mlx", "realtime": {"engine": "mlx"}}},
+    )
+    monkeypatch.setattr(probes, "probe_module_spec", lambda mod: (mod == "mlx_whisper", "x"))
+    assert registry_mod._mlx_importable() is False
+
+
+def test_mlx_required_and_prereqs_present_satisfies_capabilities_step(monkeypatch):
+    monkeypatch.setattr(
+        registry_mod,
+        "_load_config",
+        lambda: {"stt_daemon": {"default_engine": "mlx"}},
+    )
+    monkeypatch.setattr(probes, "probe_module_spec", lambda mod: (mod in {"mlx_whisper", "yaml"}, "x"))
+    assert registry_mod._mlx_importable() is True
+
+
+# ════════════════════════════════════════════════════════════════════════════
 # probe_diarization tri-state (criterion 4) — always yulu-managed
 # ════════════════════════════════════════════════════════════════════════════
 

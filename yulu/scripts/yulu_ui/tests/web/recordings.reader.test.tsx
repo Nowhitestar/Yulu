@@ -6,6 +6,9 @@ const getMock = vi.fn();
 const renameMutate = vi.fn();
 const setTagsMutate = vi.fn();
 const deleteMutate = vi.fn();
+const renameSpeakerMutate = vi.fn();
+const mergeSpeakersMutate = vi.fn();
+const assignSegmentSpeakerMutate = vi.fn();
 const navigateMock = vi.fn();
 const confirmMock = vi.fn(() => true);
 
@@ -18,6 +21,9 @@ vi.mock("../../web/src/trpc.js", () => ({
       rename: { useMutation: () => ({ mutate: renameMutate, isPending: false }) },
       setTags: { useMutation: () => ({ mutate: setTagsMutate, isPending: false }) },
       delete: { useMutation: () => ({ mutate: deleteMutate, isPending: false }) },
+      renameSpeaker: { useMutation: () => ({ mutate: renameSpeakerMutate, isPending: false }) },
+      mergeSpeakers: { useMutation: () => ({ mutate: mergeSpeakersMutate, isPending: false }) },
+      assignSegmentSpeaker: { useMutation: () => ({ mutate: assignSegmentSpeakerMutate, isPending: false }) },
     },
   },
 }));
@@ -52,6 +58,7 @@ function renderAt(stem: string) {
 
 beforeEach(() => {
   renameMutate.mockClear(); setTagsMutate.mockClear(); deleteMutate.mockClear();
+  renameSpeakerMutate.mockClear(); mergeSpeakersMutate.mockClear(); assignSegmentSpeakerMutate.mockClear();
   navigateMock.mockClear(); confirmMock.mockClear(); confirmMock.mockReturnValue(true);
 });
 
@@ -116,6 +123,36 @@ describe("RecordingReader", () => {
     fireEvent.keyDown(input, { key: "Enter" });
     expect(setTagsMutate).toHaveBeenCalledWith(
       { stem: baseData.stem, tags: ["work", "client"] },
+      expect.anything(),
+    );
+  });
+
+  it("renames a speaker from the speaker panel", () => {
+    getMock.mockReturnValue({
+      data: {
+        ...baseData,
+        speakerData: {
+          provider: "sherpa-onnx",
+          num_speakers_detected: 2,
+          segments: [
+            { start: 0, end: 1, text: "hello", speaker_id: "spk-0", display_name: "Speaker 1", confident: true },
+            { start: 2, end: 3, text: "world", speaker_id: "spk-1", display_name: "Speaker 2", confident: false },
+          ],
+          speakers: {
+            "spk-0": { display_name: "Speaker 1", merged_into: null },
+            "spk-1": { display_name: "Speaker 2", merged_into: null },
+          },
+        },
+      },
+      isPending: false,
+    });
+    renderAt(baseData.stem);
+    expect(screen.getByText("说话人")).toBeInTheDocument();
+    const input = screen.getByLabelText("Speaker 1 的说话人名称");
+    fireEvent.change(input, { target: { value: "Lewis" } });
+    fireEvent.blur(input);
+    expect(renameSpeakerMutate).toHaveBeenCalledWith(
+      { stem: baseData.stem, speakerId: "spk-0", displayName: "Lewis" },
       expect.anything(),
     );
   });

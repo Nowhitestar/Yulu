@@ -13,6 +13,7 @@ from vocab import VocabRepo, Scope, open_db
 from stt_daemon.app import STTDaemonApp
 from stt_daemon.config import DaemonConfig
 from stt_daemon.runtime import MockSTTBackend
+import stt_cli
 from stt_cli import main as stt_main
 
 
@@ -106,3 +107,22 @@ def test_warm_up_returns_ok(tmp_path, capsys):
         stop()
     assert code == 0
     assert "warmed" in out.lower() or "ok" in out.lower()
+
+
+def test_warm_up_uses_long_default_timeout(monkeypatch, capsys):
+    seen = {}
+
+    async def _fake_request(socket_path, payload, timeout=5.0):
+        seen["payload"] = payload
+        seen["timeout"] = timeout
+        return {"type": "ok", "detail": "warmed mlx"}
+
+    monkeypatch.setattr(stt_cli, "_request_response", _fake_request)
+
+    code = stt_cli.main(["warm-up", "--engine", "mlx"])
+    out = capsys.readouterr().out
+
+    assert code == 0
+    assert seen["payload"] == {"type": "warm_up", "engine": "mlx"}
+    assert seen["timeout"] == 60.0
+    assert "warmed mlx" in out

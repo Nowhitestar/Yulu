@@ -182,8 +182,16 @@ def test_daemon_start_proceeds_when_daemon_idle(monkeypatch, tmp_path):
     importlib.reload(record_audio)
 
     lock = tmp_path / ".recording.lock"
+    calls = []
+
+    monkeypatch.setattr(record_audio, "load_config", lambda: {
+        "mic_device": "StudioMicUID",
+        "silence_duration_sec": 123,
+        "silence_threshold": 0.07,
+    })
 
     def fake_socket_send(cmd):
+        calls.append(cmd)
         action = cmd.get("action")
         if action == "status":
             return {"recording": False, "file": "", "sysReady": True, "micReady": True}
@@ -199,8 +207,36 @@ def test_daemon_start_proceeds_when_daemon_idle(monkeypatch, tmp_path):
         ok = record_audio.daemon_start("FreshMeeting", lock_handle=lock_handle)
 
     assert ok is True
+    start_cmd = next(c for c in calls if c.get("action") == "start")
+    assert start_cmd["mic_device"] == "StudioMicUID"
+    assert start_cmd["silence_seconds"] == 123
+    assert start_cmd["silence_threshold"] == 0.07
     # Metadata for the new recording got written.
     import json
     meta = json.loads(lock.read_text(encoding="utf-8"))
     assert meta["title"] == "FreshMeeting"
     assert meta["path"] == "/tmp/new.wav"
+
+
+def test_daemon_start_omits_legacy_sox_mic_device_for_native_daemon(monkeypatch):
+    import importlib
+    sys.path.insert(0, str(SCRIPTS))
+    import record_audio
+    importlib.reload(record_audio)
+
+    calls = []
+    monkeypatch.setattr(record_audio, "load_config", lambda: {
+        "mic_device": ":0",
+        "silence_duration_sec": 300,
+        "silence_threshold": 0.01,
+    })
+    monkeypatch.setattr(record_audio, "socket_send", lambda cmd: calls.append(cmd) or (
+        {"recording": False, "file": "", "sysReady": True, "micReady": True}
+        if cmd.get("action") == "status"
+        else {"status": "recording", "file": "/tmp/native.wav"}
+    ))
+    monkeypatch.setattr(record_audio, "start_realtime_transcriber", lambda *a, **k: None)
+
+    assert record_audio.daemon_start("NativeMeeting") is True
+    start_cmd = next(c for c in calls if c.get("action") == "start")
+    assert "mic_device" not in start_cmd

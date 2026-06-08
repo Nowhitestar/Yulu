@@ -260,14 +260,48 @@ def _model_present() -> bool:
     return _whisper_model_present(trans) and _diarization_models_present(trans)
 
 
-def _mlx_importable() -> bool:
-    """capabilities: mlx-whisper is importable (advisory/lenient — capabilities is
-    a verify-not-install concern). Probe via importlib without importing the heavy
-    module."""
-    try:
-        import importlib.util
+def _mlx_required(cfg: dict) -> bool:
+    """True iff config selects MLX for final, realtime, or the daemon default.
 
-        return importlib.util.find_spec("mlx_whisper") is not None
+    A missing config means this concern is not yet knowable; return False so a standalone
+    registry smoke does not try to repair Python packages before setup_config has created the
+    user's real config.json.
+    """
+    if not cfg:
+        return False
+    trans = cfg.get("transcription", {}) if isinstance(cfg, dict) else {}
+    realtime = trans.get("realtime", {}) if isinstance(trans.get("realtime"), dict) else {}
+    stt = cfg.get("stt_daemon", {}) if isinstance(cfg.get("stt_daemon"), dict) else {}
+    engines = {
+        str(trans.get("final_engine") or trans.get("engine") or "").strip().lower(),
+        str(realtime.get("engine") or "").strip().lower(),
+        str(stt.get("default_engine") or "").strip().lower(),
+    }
+    return "mlx" in engines
+
+
+def _mlx_importable() -> bool:
+    """capabilities: selected MLX is truly usable, not merely installed.
+
+    The wrapped ``setup_capabilities.sh`` now repairs mlx-whisper in the daemon interpreter
+    when MLX is configured. ``check()`` uses the same lightweight prerequisite contract as
+    that script: the package plus its common YAML dependency must be discoverable from the
+    daemon interpreter. Full MLX/Metal warm-up is intentionally not run during provisioning's
+    read-only check.
+    """
+    cfg = _load_config()
+    if not _mlx_required(cfg):
+        return True
+    try:
+        import sys as _sys
+
+        if str(SCRIPTS_DIR) not in _sys.path:
+            _sys.path.insert(0, str(SCRIPTS_DIR))
+        from capabilities.probes import probe_module_spec
+
+        mlx_present, _ = probe_module_spec("mlx_whisper")
+        yaml_present, _ = probe_module_spec("yaml")
+        return mlx_present and yaml_present
     except Exception:
         return False
 

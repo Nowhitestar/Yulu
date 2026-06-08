@@ -5,22 +5,23 @@
 # write_mlx_to_config 710-733). This is where D-01/D-02/D-03/D-05 land.
 #
 # What changed vs the monolith:
-#   D-02  No more venv. The monolith created a dedicated mlx virtualenv under
-#         ~/.config/yulu/ and pip-installed mlx-whisper into it. That whole body
-#         is REMOVED. (We do NOT delete an existing user's virtualenv —
-#         orphaned-virtualenv cleanup is a Phase 7 migration concern; we just stop
-#         creating a new one.)
+#   D-02  No more Yulu-specific venv. The monolith created a dedicated mlx virtualenv
+#         under ~/.config/yulu/ and pip-installed mlx-whisper into it. That whole body
+#         is REMOVED. (We do NOT delete an existing user's virtualenv — orphaned-virtualenv
+#         cleanup is a Phase 7 migration concern; we just stop creating a second runtime.)
 #   D-01  The daemon interpreter is the host system python3 that the launchd plist
-#         launches via the __PYTHON__ token (set by setup_daemons.sh / lib/common.sh).
-#         This script points config at that interpreter; it does not bundle one.
+#         launches via the __PYTHON__ token (set by setup_daemons.sh / lib/common.sh). When
+#         MLX is the configured engine, this script installs/repairs mlx-whisper in THAT
+#         interpreter instead of a private venv, then verifies it.
 #   D-03  write_mlx_to_config no longer writes a venv path into
 #         transcription.mlx.python. The dead field is dropped. stt_daemon/config.py
 #         reads mlx.python only `if mlx.get("python")`, so an absent field is
 #         harmlessly ignored (mlx_python defaults to "").
-#   D-05  Phase 1's contract is VERIFY mlx-whisper importability from the system
-#         interpreter and WARN if absent — NOT install it. The install-vs-reuse
-#         decision is Phase 5 (REUSE-02). The check is advisory: a missing
-#         mlx-whisper does NOT fail the install.
+#   D-05  Reuse first, repair second. A usable host mlx-whisper is reused unchanged; if MLX is
+#         configured but the package is absent/present-unverified, install/upgrade
+#         mlx-whisper + PyYAML in the daemon interpreter. Failures warn and leave the
+#         whisper.cpp path available, but the setup step no longer silently declares success
+#         while the selected MLX service is missing.
 #
 # Standalone-or-sourced (RESEARCH Pattern 5), non-interactive (Pitfall 5),
 # idempotent (verify + config-transform are safe to re-run). $PYTHON_BIN /
@@ -37,17 +38,73 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PYTHON_BIN="${PYTHON_BIN:-$(command -v python3 || echo /usr/bin/python3)}"
 CONFIG_DIR="${CONFIG_DIR:-$HOME/.config/yulu}"
 
-# Verify (not install) that mlx-whisper is importable from the daemon interpreter.
-# D-05: advisory only — warn if absent, never fail the install. The install/reuse
-# decision is Phase 5 (REUSE-02). Uses the inline-python3-from-bash idiom; the
-# module's import name is `mlx_whisper` (underscore), not the pip name `mlx-whisper`.
+# Read-only: true iff config.json selects MLX for final, realtime, or the stt daemon default.
+# Missing/corrupt config returns false so standalone hermetic tests do not try network installs.
+mlx_required() {
+    "$PYTHON_BIN" - <<PY 2>/dev/null
+import json, sys
+from pathlib import Path
+cfg_path = Path("$CONFIG_DIR/config.json")
+try:
+    cfg = json.loads(cfg_path.read_text())
+except Exception:
+    sys.exit(1)
+trans = cfg.get("transcription", {}) if isinstance(cfg, dict) else {}
+realtime = trans.get("realtime", {}) if isinstance(trans.get("realtime"), dict) else {}
+stt = cfg.get("stt_daemon", {}) if isinstance(cfg.get("stt_daemon"), dict) else {}
+final_engine = str(trans.get("final_engine") or trans.get("engine") or "").strip().lower()
+realtime_engine = str(realtime.get("engine") or "").strip().lower()
+default_engine = str(stt.get("default_engine") or "").strip().lower()
+sys.exit(0 if "mlx" in {final_engine, realtime_engine, default_engine} else 1)
+PY
+}
+
+mlx_whisper_present() {
+    "$PYTHON_BIN" -c "import importlib.util, sys; sys.exit(0 if importlib.util.find_spec('mlx_whisper') else 1)" 2>/dev/null
+}
+
+mlx_whisper_prereqs_present() {
+    "$PYTHON_BIN" -c "import importlib.util, sys; sys.exit(0 if importlib.util.find_spec('mlx_whisper') and importlib.util.find_spec('yaml') else 1)" 2>/dev/null
+}
+
+# Verify that the MLX package prerequisites are discoverable from the daemon interpreter.
+# Full MLX import can initialize Metal and should be verified by the actual daemon warm-up,
+# not by the installer/settings process.
 verify_mlx_whisper() {
-    if "$PYTHON_BIN" -c "import importlib.util, sys; sys.exit(0 if importlib.util.find_spec('mlx_whisper') else 1)" 2>/dev/null; then
-        ok "mlx-whisper 可从系统 python3 导入（${PYTHON_BIN}）"
+    if mlx_whisper_prereqs_present; then
+        ok "mlx-whisper 与 PyYAML 已可从系统 python3 发现（${PYTHON_BIN}）"
     else
-        warn "系统 python3 ($PYTHON_BIN) 无法导入 mlx-whisper。"
-        warn "MLX 转录将不可用，直到它在该解释器中可用（安装/复用的决策属于 Phase 5）。"
+        warn "系统 python3 ($PYTHON_BIN) 缺少 mlx-whisper 或 PyYAML。"
+        warn "MLX 转录将不可用，直到这些依赖在该解释器中可用。"
         warn "whisper.cpp 路径不受影响。"
+    fi
+}
+
+install_mlx_whisper() {
+    if mlx_whisper_prereqs_present; then
+        ok "mlx-whisper 与 PyYAML 已在守护进程解释器中可发现（${PYTHON_BIN}）"
+        return 0
+    fi
+    if [[ "$(uname -m)" != "arm64" ]]; then
+        warn "当前机器不是 Apple Silicon，跳过自动安装 mlx-whisper；可改用 whisper.cpp。"
+        verify_mlx_whisper
+        return 0
+    fi
+
+    info "安装/修复 mlx-whisper 到守护进程解释器 ${PYTHON_BIN}..."
+    if "$PYTHON_BIN" -m pip install --upgrade mlx-whisper PyYAML >/dev/null 2>&1 \
+        || "$PYTHON_BIN" -m pip install --user --upgrade mlx-whisper PyYAML >/dev/null 2>&1; then
+        if mlx_whisper_prereqs_present; then
+            ok "mlx-whisper 与 PyYAML 已安装"
+            warn "请用 yulu stt warm-up --engine mlx 在实际守护进程环境中验证。"
+        elif mlx_whisper_present; then
+            warn "mlx-whisper 包已存在，但 PyYAML 或其他依赖仍缺失。"
+        else
+            warn "pip 返回成功，但仍未发现 mlx_whisper 模块。"
+        fi
+    else
+        warn "mlx-whisper 安装失败（${PYTHON_BIN}）。手动安装：${PYTHON_BIN} -m pip install --user mlx-whisper PyYAML"
+        warn "MLX 转录将不可用；可暂时切到 whisper.cpp。"
     fi
 }
 
@@ -168,16 +225,14 @@ setup_capabilities() {
     fi
 
     # REUSE-02 / D-04: gate on the Phase-3 tri-state. ONLY status == "usable" is a
-    # reuse-and-skip (Pitfall 4 — present-but-unverified and absent BOTH fall through
-    # to the advisory verify; never a boolean collapse). D-02/D-05: this gate changes
-    # only the MESSAGE — there is NO venv creation and NO pip install on either branch
-    # (the install/reuse decision for MLX is "reuse-or-advise", a second Yulu-specific
-    # venv is Out-of-Scope). A doctor error degrades to `absent` → the advisory warn.
+    # reuse-and-skip (Pitfall 4 — present-but-unverified and absent BOTH fall through).
+    # D-02/D-05: still no Yulu-specific venv; repairs install into the same interpreter
+    # the daemon runs.
     if [[ "$(capability_status mlx_whisper)" == "usable" ]]; then
         ok "检测到可用的 mlx-whisper（复用主机的），无需 Yulu 自行提供"
+    elif mlx_required; then
+        install_mlx_whisper
     else
-        # NO venv, NO pip install — just verify importability from the system
-        # interpreter the daemon will actually use, and WARN (advisory) if absent.
         verify_mlx_whisper
     fi
 

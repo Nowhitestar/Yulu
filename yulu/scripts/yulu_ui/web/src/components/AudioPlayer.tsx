@@ -64,6 +64,15 @@ export function AudioPlayer({ src, initialSeek, onSeek }: AudioPlayerProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [src]);
 
+  useEffect(() => {
+    if (!ready || typeof initialSeek !== "number" || initialSeek < 0) return;
+    const ws = wsRef.current;
+    if (!ws) return;
+    const target = duration > 0 ? Math.min(initialSeek, duration) : initialSeek;
+    ws.setTime(target);
+    setCurrentTime(target);
+  }, [duration, initialSeek, ready]);
+
   const toggle = () => {
     const ws = wsRef.current;
     if (!ws || !ready) return;

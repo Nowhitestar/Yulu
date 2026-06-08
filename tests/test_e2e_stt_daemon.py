@@ -31,7 +31,7 @@ def _mlx_available() -> bool:
     try:
         importlib.import_module("mlx_whisper")
         return True
-    except ImportError:
+    except (ImportError, RuntimeError):
         return False
 
 

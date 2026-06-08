@@ -12,6 +12,9 @@ const CalendarSchema = z.object({
   watch_calendars: z.array(z.string()).optional(),
 });
 
+const DEFAULT_MLX_MODEL = "mlx-community/whisper-large-v3-mlx";
+const DEFAULT_REALTIME_MLX_MODEL = "mlx-community/whisper-large-v3-turbo";
+
 export const ConfigSchema = z.object({
   // Defaults so a minimal/partial config.json (e.g. only audio.output_dir) still
   // parses — otherwise config.get 500s and the whole settings page breaks.
@@ -24,13 +27,32 @@ export const ConfigSchema = z.object({
     backend: z.string().optional(),
   }).default({}),
   transcription: z.object({
-    final_engine: z.enum(["mlx", "whisper"]).optional(),
-    language: z.string().optional(),
+    mode: z.enum(["local", "cloud-fallback", "cloud-priority"]).default("local"),
+    post_recording_mode: z.enum(["fast_summary", "full_transcribe"]).default("fast_summary"),
+    final_engine: z.enum(["mlx", "whisper"]).default("mlx"),
+    language: z.string().default("zh"),
     glossary: z.array(z.string()).optional(),
-    local_model_path: z.string().optional(),
-    mlx: z.record(z.unknown()).optional(),
+    local_model_path: z.string().default("~/.config/yulu/models/ggml-large-v3.bin"),
+    whisper_cli: z.string().default("whisper-cli"),
+    mlx: z.object({
+      model: z.string().default(DEFAULT_MLX_MODEL),
+    }).passthrough().default({}),
+    realtime: z.object({
+      engine: z.enum(["mlx", "whisper"]).default("mlx"),
+      mlx_model: z.string().default(DEFAULT_REALTIME_MLX_MODEL),
+      chunk_sec: z.number().default(15),
+      chunk_max_sec: z.number().default(30),
+    }).passthrough().default({}),
+    diarization: z.object({
+      enabled: z.boolean().default(false),
+      provider: z.string().default("sherpa-onnx"),
+      seg_model: z.string().default(""),
+      emb_model: z.string().default(""),
+      num_speakers: z.number().nullable().default(null),
+      threshold: z.number().default(0.5),
+    }).passthrough().default({}),
     command: z.array(z.string()).optional(),
-    realtime_enabled: z.boolean().optional(),
+    realtime_enabled: z.boolean().default(true),
   }).passthrough(),
   llm: z.object({
     enabled: z.boolean().optional(),

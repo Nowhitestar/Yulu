@@ -66,6 +66,20 @@ describe("recordings router", () => {
     expect(r.title).toBe("Memo");
   });
 
+  it("get includes speaker sidecar data when present", async () => {
+    const stem = "TeamSync_20260102_090000";
+    writeFileSync(join(mvDir, `${stem}.wav`), "");
+    writeFileSync(join(mvDir, `${stem}.speakers.json`), JSON.stringify({
+      schema_version: 1,
+      provider: "sherpa-onnx",
+      segments: [{ start: 0, end: 1, text: "hello", speaker_id: "spk-0", display_name: "Speaker 1", confident: true }],
+      speakers: { "spk-0": { display_name: "Speaker 1", renamed: false, merged_into: null } },
+    }));
+    const r = await createCaller(recordingsRouter, mkCtx({ moviesDir: mvDir })).get({ stem });
+    expect(r.speakerData.provider).toBe("sherpa-onnx");
+    expect(r.speakerData.segments[0].display_name).toBe("Speaker 1");
+  });
+
   it("transcribe throws NOT_FOUND when WAV missing", async () => {
     const caller = createCaller(recordingsRouter, mkCtx({ moviesDir: mvDir }));
     await expect(caller.transcribe({ stem: "Memo_20260101_120000" })).rejects.toThrow(/WAV file missing/);
@@ -141,13 +155,77 @@ describe("recordings router", () => {
     expect((await caller.get({ stem: "Memo_20260101_120000" })).tags).toEqual([]);
   });
 
+  // ---- speaker sidecar edits -----------------------------------------------
+
+  it("renameSpeaker updates the sidecar and re-renders the transcript", async () => {
+    const stem = "TeamSync_20260102_090000";
+    writeFileSync(join(mvDir, `${stem}.wav`), "");
+    writeSpeakerFixture(mvDir, stem);
+    const caller = createCaller(recordingsRouter, mkCtx({ moviesDir: mvDir }));
+    await caller.renameSpeaker({ stem, speakerId: "spk-0", displayName: "Lewis" });
+    const doc = JSON.parse(readFileSync(join(mvDir, `${stem}.speakers.json`), "utf8"));
+    expect(doc.speakers["spk-0"].display_name).toBe("Lewis");
+    expect(doc.speakers["spk-0"].renamed).toBe(true);
+    expect(readFileSync(join(mvDir, `${stem}.transcript.txt`), "utf8")).toContain("[00:00 Lewis] hello");
+  });
+
+  it("renameSpeaker preserves cleaned tagged transcript bodies", async () => {
+    const stem = "TeamSync_20260102_090000";
+    writeFileSync(join(mvDir, `${stem}.wav`), "");
+    writeSpeakerFixture(mvDir, stem);
+    writeFileSync(
+      join(mvDir, `${stem}.transcript.txt`),
+      "[00:00 Speaker 1] cleaned hello\n[00:02 Speaker 2] cleaned world",
+    );
+    const caller = createCaller(recordingsRouter, mkCtx({ moviesDir: mvDir }));
+    await caller.renameSpeaker({ stem, speakerId: "spk-0", displayName: "Lewis" });
+    expect(readFileSync(join(mvDir, `${stem}.transcript.txt`), "utf8")).toBe(
+      "[00:00 Lewis] cleaned hello\n[00:02 Speaker 2] cleaned world",
+    );
+  });
+
+  it("renameSpeaker does not overwrite an untagged cleaned transcript", async () => {
+    const stem = "TeamSync_20260102_090000";
+    writeFileSync(join(mvDir, `${stem}.wav`), "");
+    writeSpeakerFixture(mvDir, stem);
+    writeFileSync(join(mvDir, `${stem}.transcript.txt`), "cleaned paragraph\n\nwith structure");
+    const caller = createCaller(recordingsRouter, mkCtx({ moviesDir: mvDir }));
+    await caller.renameSpeaker({ stem, speakerId: "spk-0", displayName: "Lewis" });
+    expect(readFileSync(join(mvDir, `${stem}.transcript.txt`), "utf8")).toBe("cleaned paragraph\n\nwith structure");
+    const doc = JSON.parse(readFileSync(join(mvDir, `${stem}.speakers.json`), "utf8"));
+    expect(doc.speakers["spk-0"].display_name).toBe("Lewis");
+  });
+
+  it("mergeSpeakers rewrites affected segments to the surviving speaker", async () => {
+    const stem = "TeamSync_20260102_090000";
+    writeFileSync(join(mvDir, `${stem}.wav`), "");
+    writeSpeakerFixture(mvDir, stem);
+    const caller = createCaller(recordingsRouter, mkCtx({ moviesDir: mvDir }));
+    await caller.mergeSpeakers({ stem, fromSpeakerId: "spk-1", toSpeakerId: "spk-0" });
+    const doc = JSON.parse(readFileSync(join(mvDir, `${stem}.speakers.json`), "utf8"));
+    expect(doc.speakers["spk-1"].merged_into).toBe("spk-0");
+    expect(doc.segments.map((s: { speaker_id: string }) => s.speaker_id)).toEqual(["spk-0", "spk-0"]);
+    expect(readFileSync(join(mvDir, `${stem}.transcript.txt`), "utf8")).not.toContain("Speaker 2");
+  });
+
+  it("assignSegmentSpeaker marks one segment as a manual correction", async () => {
+    const stem = "TeamSync_20260102_090000";
+    writeFileSync(join(mvDir, `${stem}.wav`), "");
+    writeSpeakerFixture(mvDir, stem);
+    const caller = createCaller(recordingsRouter, mkCtx({ moviesDir: mvDir }));
+    await caller.assignSegmentSpeaker({ stem, segmentIndex: 1, speakerId: "spk-0" });
+    const doc = JSON.parse(readFileSync(join(mvDir, `${stem}.speakers.json`), "utf8"));
+    expect(doc.segments[1]).toMatchObject({ speaker_id: "spk-0", source: "manual", confident: true });
+    expect(readFileSync(join(mvDir, `${stem}.transcript.txt`), "utf8")).toContain("[00:02 Speaker 1] world");
+  });
+
   // ---- delete (sidecar sweep) -----------------------------------------------
 
-  it("delete removes the wav plus all known sidecars (incl. mic/sys/chunk/tags/title)", async () => {
+  it("delete removes the wav plus all known sidecars (incl. speakers/mic/sys/chunk/tags/title)", async () => {
     const stem = "TeamSync_20260102_090000";
     const files = [
       ".wav", ".transcript.txt", ".raw.transcript.txt", ".realtime.transcript.txt",
-      ".realtime.coverage.json", ".summary.md", ".summary.html",
+      ".realtime.coverage.json", ".summary.md", ".summary.html", ".speakers.json",
       ".mic.transcript.txt", ".sys.transcript.txt", ".title", ".tags.json",
       ".chunk-0.wav", ".chunk-1.wav",
     ];
@@ -170,3 +248,19 @@ describe("recordings router", () => {
     expect(seen).toContain("removed");
   });
 });
+
+function writeSpeakerFixture(dir: string, stem: string) {
+  writeFileSync(join(dir, `${stem}.speakers.json`), JSON.stringify({
+    schema_version: 1,
+    provider: "sherpa-onnx",
+    num_speakers_detected: 2,
+    segments: [
+      { start: 0, end: 1, text: "hello", speaker_id: "spk-0", display_name: "Speaker 1", source: "overlap", confident: true },
+      { start: 2, end: 3, text: "world", speaker_id: "spk-1", display_name: "Speaker 2", source: "nearest", confident: false },
+    ],
+    speakers: {
+      "spk-0": { display_name: "Speaker 1", renamed: false, merged_into: null },
+      "spk-1": { display_name: "Speaker 2", renamed: false, merged_into: null },
+    },
+  }));
+}

@@ -20,7 +20,7 @@ let STATE_PATH = CONFIG_DIR.appendingPathComponent(".state.json")
 let PID_PATH = CONFIG_DIR.appendingPathComponent(".audio_daemon.pid")
 let LOG_PATH = CONFIG_DIR.appendingPathComponent("audio_daemon.log")
 let QUEUE_PATH = CONFIG_DIR.appendingPathComponent("agent-queue.json")
-let SILENCE_THRESHOLD: Float = 0.01
+let DEFAULT_SILENCE_THRESHOLD: Float = 0.01
 let DEFAULT_SILENCE_SEC: TimeInterval = 300
 let SAMPLE_RATE: UInt32 = 48000
 
@@ -233,6 +233,7 @@ class AudioRecorder {
     var lastSysAudioTime: Date?
     var silenceTask: DispatchWorkItem?
     var silenceSeconds = DEFAULT_SILENCE_SEC
+    var silenceThreshold = DEFAULT_SILENCE_THRESHOLD
     var outputDir: URL = RECORDING_DIR
     var onStopRequest: (() -> Void)?
 
@@ -276,7 +277,7 @@ class AudioRecorder {
         sysBuf.append(contentsOf: samples)
         bufLock.unlock()
         let rms = calcRMS(samples)
-        if rms > SILENCE_THRESHOLD { lastSysAudioTime = Date() }
+        if rms > silenceThreshold { lastSysAudioTime = Date() }
         mixAndWrite()
     }
 
@@ -287,7 +288,7 @@ class AudioRecorder {
         micBuf.append(contentsOf: ints)
         bufLock.unlock()
         let rms = calcRMS(ints)
-        if rms > SILENCE_THRESHOLD { lastMicAudioTime = Date() }
+        if rms > silenceThreshold { lastMicAudioTime = Date() }
         mixAndWrite()
     }
 
@@ -406,8 +407,73 @@ class AudioRecorder {
 class MicCapture {
     let recorder: AudioRecorder
     var engine: AVAudioEngine?
+    var selectedDeviceUID: String?
 
     init(recorder: AudioRecorder) { self.recorder = recorder }
+
+    private func audioDeviceID(forUID uid: String) -> AudioDeviceID? {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDevices,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var size: UInt32 = 0
+        guard AudioObjectGetPropertyDataSize(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size) == noErr else {
+            return nil
+        }
+        let count = Int(size) / MemoryLayout<AudioDeviceID>.size
+        var devices = [AudioDeviceID](repeating: 0, count: count)
+        guard AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size, &devices) == noErr else {
+            return nil
+        }
+        for device in devices {
+            var uidAddress = AudioObjectPropertyAddress(
+                mSelector: kAudioDevicePropertyDeviceUID,
+                mScope: kAudioObjectPropertyScopeGlobal,
+                mElement: kAudioObjectPropertyElementMain
+            )
+            var uidSize = UInt32(MemoryLayout<CFString?>.size)
+            let uidPtr = UnsafeMutablePointer<CFString?>.allocate(capacity: 1)
+            uidPtr.initialize(to: nil)
+            defer {
+                uidPtr.deinitialize(count: 1)
+                uidPtr.deallocate()
+            }
+            if AudioObjectGetPropertyData(device, &uidAddress, 0, nil, &uidSize, uidPtr) == noErr,
+               let cfUID = uidPtr.pointee,
+               (cfUID as String) == uid {
+                return device
+            }
+        }
+        return nil
+    }
+
+    private func configureInputDevice(_ input: AVAudioInputNode) {
+        guard let uid = selectedDeviceUID?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !uid.isEmpty else { return }
+        guard let deviceID = audioDeviceID(forUID: uid) else {
+            log("🎤 Mic device UID not found, using default input: \(uid)")
+            return
+        }
+        guard let audioUnit = input.audioUnit else {
+            log("🎤 Mic input audio unit unavailable, using default input")
+            return
+        }
+        var selectedID = deviceID
+        let status = AudioUnitSetProperty(
+            audioUnit,
+            kAudioOutputUnitProperty_CurrentDevice,
+            kAudioUnitScope_Global,
+            0,
+            &selectedID,
+            UInt32(MemoryLayout<AudioDeviceID>.size)
+        )
+        if status == noErr {
+            log("🎤 Mic input device selected: \(uid)")
+        } else {
+            log("🎤 Mic input device selection failed (\(status)), using default input: \(uid)")
+        }
+    }
 
     /// Called once at daemon startup: just enough to verify TCC permission, then stop.
     /// Avoids displaying the macOS microphone-in-use indicator while the daemon is idle.
@@ -426,6 +492,7 @@ class MicCapture {
     func start() {
         let engine = AVAudioEngine()
         let input = engine.inputNode
+        configureInputDevice(input)
         let fmt = input.outputFormat(forBus: 0)
 
         input.installTap(onBus: 0, bufferSize: 4096, format: fmt) { [weak self] buf, _ in
@@ -1015,6 +1082,7 @@ class SocketServer {
     /// AppDelegate wires this to CaptureBackend.startCapture(). Mic + the (now
     /// idempotent) sys start still run in onRecordingStart after the reply.
     var rearmSysCapture: (() -> Void)?
+    var configureMicDevice: ((String?) -> Void)?
 
     // Serial queue that runs all request handlers off the accept thread. The
     // old design called handle() synchronously inside the accept loop, so a
@@ -1143,6 +1211,18 @@ class SocketServer {
                 recorder.silenceSeconds = s
             } else {
                 recorder.silenceSeconds = DEFAULT_SILENCE_SEC
+            }
+            if let t = json["silence_threshold"] as? NSNumber {
+                let value = t.floatValue
+                recorder.silenceThreshold = (value >= 0 && value <= 1) ? value : DEFAULT_SILENCE_THRESHOLD
+            } else {
+                recorder.silenceThreshold = DEFAULT_SILENCE_THRESHOLD
+            }
+            if let uid = json["mic_device"] as? String {
+                let trimmed = uid.trimmingCharacters(in: .whitespacesAndNewlines)
+                configureMicDevice?(trimmed.isEmpty ? nil : trimmed)
+            } else {
+                configureMicDevice?(nil)
             }
             // Per-request output directory: voicemails land in ~/yulu/voicemails,
             // meetings use the default RECORDING_DIR. Omitting the field resets
@@ -1278,6 +1358,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // sys start in onRecordingStart above.
         ss.rearmSysCapture = { [weak self] in
             self?.audioCapture?.startCapture()
+        }
+        ss.configureMicDevice = { [weak self] uid in
+            self?.micCapture?.selectedDeviceUID = uid
         }
         ss.onRecordingStop = { [weak self] in
             self?.audioCapture?.stopCapture()

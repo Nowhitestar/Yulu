@@ -17,13 +17,15 @@ interface BaseProps {
   disabled?: boolean;
   /** Note shown beside a disabled field (defaults to "录音中不可改"). */
   disabledNote?: string;
+  /** Replacement display for an intentionally empty value. */
+  emptyLabel?: string;
 }
 
 type TextProps = BaseProps & { type: "text"; value: string; onCommit: (v: string) => void };
 type NumberProps = BaseProps & { type: "number"; value: number; min?: number; max?: number; step?: number; onCommit: (v: number) => void };
 type SelectProps = BaseProps & { type: "select"; value: string; options: Array<{ value: string; label: string }>; onCommit: (v: string) => void };
 type ToggleProps = BaseProps & { type: "toggle"; value: boolean; onCommit: (v: boolean) => void };
-type PathProps = BaseProps & { type: "path"; value: string; mode: "file" | "folder"; filter?: "wav" | "bin" | "json" | "pem"; onCommit: (v: string) => void };
+type PathProps = BaseProps & { type: "path"; value: string; mode: "file" | "folder"; filter?: "wav" | "bin" | "json" | "pem" | "onnx"; onCommit: (v: string) => void };
 type ReadonlyProps = BaseProps & { type: "readonly"; value: string; revealInFinder?: boolean };
 
 export type InlineEditRowProps = TextProps | NumberProps | SelectProps | ToggleProps | PathProps | ReadonlyProps;
@@ -68,11 +70,15 @@ function renderValue(props: InlineEditRowProps, t: TFunc): React.ReactNode {
 // Read-only rendering of a guarded field's current value.
 function displayText(props: TextProps | NumberProps | SelectProps | ToggleProps, t: TFunc): string {
   switch (props.type) {
-    case "text":   return props.value;
+    case "text":   return displayOrUnset(props.value, t, props.emptyLabel);
     case "number": return String(props.value);
-    case "select": return props.options.find((o) => o.value === props.value)?.label ?? props.value;
+    case "select": return displayOrUnset(props.options.find((o) => o.value === props.value)?.label ?? props.value, t, props.emptyLabel);
     case "toggle": return props.value ? t("value.on") : t("value.off");
   }
+}
+
+function displayOrUnset(value: string, t: TFunc, emptyLabel?: string): string {
+  return value.trim().length > 0 ? value : (emptyLabel ?? t("path.unset"));
 }
 
 function DisabledValue({ display, note }: { display: string; note?: string }) {
@@ -84,14 +90,22 @@ function DisabledValue({ display, note }: { display: string; note?: string }) {
   );
 }
 
-function TextValue({ value, onCommit }: TextProps) {
+function TextValue({ value, onCommit, emptyLabel }: TextProps) {
+  const t = useT();
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value);
   const ref = useRef<HTMLInputElement>(null);
   useEffect(() => { if (editing) ref.current?.focus(); }, [editing]);
   useEffect(() => { setDraft(value); }, [value]);
 
-  if (!editing) return <span className="value-display" onClick={() => setEditing(true)}>{value}</span>;
+  if (!editing) {
+    const isEmpty = value.trim().length === 0;
+    return (
+      <span className={"value-display" + (isEmpty ? " value-display--empty" : "")} onClick={() => setEditing(true)}>
+        {displayOrUnset(value, t, emptyLabel)}
+      </span>
+    );
+  }
   const commit = () => { setEditing(false); if (draft !== value) onCommit(draft); };
   return (
     <input
@@ -134,13 +148,19 @@ function NumberValue({ value, onCommit, min, max, step }: NumberProps) {
   );
 }
 
-function SelectValue({ value, options, onCommit }: SelectProps) {
+function SelectValue({ value, options, onCommit, emptyLabel }: SelectProps) {
+  const t = useT();
   const [editing, setEditing] = useState(false);
   const ref = useRef<HTMLSelectElement>(null);
   useEffect(() => { if (editing) ref.current?.focus(); }, [editing]);
   if (!editing) {
-    const label = options.find((o) => o.value === value)?.label ?? value;
-    return <span className="value-display" onClick={() => setEditing(true)}>{label}</span>;
+    const rawLabel = options.find((o) => o.value === value)?.label ?? value;
+    const isEmpty = rawLabel.trim().length === 0;
+    return (
+      <span className={"value-display" + (isEmpty ? " value-display--empty" : "")} onClick={() => setEditing(true)}>
+        {displayOrUnset(rawLabel, t, emptyLabel)}
+      </span>
+    );
   }
   return (
     <select
@@ -177,7 +197,7 @@ interface CloudWarning {
   reason: string;
 }
 
-function PathValue({ value, mode, filter, onCommit, disabled, disabledNote }: PathProps) {
+function PathValue({ value, mode, filter, onCommit, disabled, disabledNote, emptyLabel }: PathProps) {
   const pickFile = trpc.system.pickFile.useMutation();
   const openInFinder = trpc.system.openInFinder.useMutation();
   const utils = trpc.useUtils();
@@ -218,7 +238,7 @@ function PathValue({ value, mode, filter, onCommit, disabled, disabledNote }: Pa
 
   return (
     <div className="path-value">
-      <span className="path-display" title={value}>{value || t("path.unset")}</span>
+      <span className="path-display" title={value || emptyLabel}>{value || emptyLabel || t("path.unset")}</span>
       {!disabled && <button type="button" className="path-btn" onClick={choose} disabled={pickFile.isPending}>{t("path.choose")}</button>}
       {value && <button type="button" className="path-btn" onClick={() => openInFinder.mutate({ path: value, reveal: true })}>{t("path.reveal")}</button>}
       {disabled && <span className="value-disabled-note">{disabledNote ?? t("settings.locked.recording")}</span>}

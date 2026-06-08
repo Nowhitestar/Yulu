@@ -67,6 +67,32 @@ exec {real_py} "$@"
     path.chmod(path.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
 
 
+def _write_fake_python_external_managed(path: Path, marker: Path, log: Path) -> None:
+    """A fake interpreter where system pip is blocked but --user fallback succeeds."""
+    import sys as _sys
+    real_py = _sys.executable
+    script = f"""#!/usr/bin/env bash
+echo "ARGS: $*" >> {log}
+case "$*" in
+  *"-m pip install"*"--user"*"--break-system-packages"*"sherpa-onnx"*)
+    : > {marker}
+    exit 0
+    ;;
+  *"-m pip install"*"sherpa-onnx"*)
+    exit 1
+    ;;
+esac
+case "$*" in
+  *"find_spec('sherpa_onnx')"*)
+    [[ -f {marker} ]] && exit 0 || exit 1
+    ;;
+esac
+exec {real_py} "$@"
+"""
+    path.write_text(script)
+    path.chmod(path.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+
+
 def _run_engine_install(tmp_path: Path, fake_py: Path) -> subprocess.CompletedProcess:
     """Source setup_models.sh and call install_diarization_engine with the fake interpreter."""
     home = tmp_path / "home"
@@ -97,6 +123,20 @@ def test_engine_install_runs_pip_when_absent(tmp_path):
     calls = log.read_text() if log.exists() else ""
     assert calls.count("-m pip install") == 1, f"expected exactly one install:\n{calls}"
     assert marker.exists()  # sherpa is now "installed"
+
+
+def test_engine_install_falls_back_to_user_install_for_externally_managed_python(tmp_path):
+    marker = tmp_path / "sherpa_installed"
+    log = tmp_path / "py_calls.log"
+    fake = tmp_path / "fake_python3"
+    _write_fake_python_external_managed(fake, marker, log)
+
+    result = _run_engine_install(tmp_path, fake)
+    assert result.returncode == 0, result.stderr + result.stdout
+    calls = log.read_text() if log.exists() else ""
+    assert calls.count("-m pip install") == 2, calls
+    assert "--user --break-system-packages" in calls
+    assert marker.exists()
 
 
 def test_engine_install_is_idempotent_skips_when_present(tmp_path):
@@ -229,12 +269,12 @@ def test_migration_provisions_diarization_idempotently_no_data_loss(tmp_path):
     fake = tmp_path / "fake_python3"
     _write_fake_python(fake, marker, log, install_succeeds=True)
 
-    # A curl stub that "downloads" by writing the requested -o target (so a 2nd run sees it present).
+    # A curl stub that "downloads" by writing a non-empty requested -o target (so a 2nd run sees it present).
     curl_stub = (
         "#!/usr/bin/env bash\n"
         'args=("$@")\n'
         'for ((i=0;i<${#args[@]};i++)); do\n'
-        '  if [[ "${args[$i]}" == "-o" ]]; then : > "${args[$((i+1))]}"; fi\n'
+        '  if [[ "${args[$i]}" == "-o" ]]; then printf model > "${args[$((i+1))]}"; fi\n'
         'done\n'
         "exit 0\n"
     )
@@ -265,3 +305,68 @@ def test_migration_provisions_diarization_idempotently_no_data_loss(tmp_path):
     # (c) The recording with no sidecar stays unlabelled (no sidecar invented for it).
     assert not (rec / "m2.speakers.json").exists()
 
+
+def test_zero_byte_diarization_model_is_not_treated_as_present(tmp_path):
+    marker = tmp_path / "sherpa_installed"
+    marker.write_text("")
+    log = tmp_path / "py_calls.log"
+    fake = tmp_path / "fake_python3"
+    _write_fake_python(fake, marker, log, install_succeeds=True)
+
+    curl_stub = (
+        "#!/usr/bin/env bash\n"
+        'args=("$@")\n'
+        'for ((i=0;i<${#args[@]};i++)); do\n'
+        '  if [[ "${args[$i]}" == "-o" ]]; then printf model > "${args[$((i+1))]}"; fi\n'
+        'done\n'
+        "exit 0\n"
+    )
+    env, _rec = _diar_env_with_user_data(tmp_path, fake, curl_stub)
+    diar_dir = Path(env["DIAR_DIR"]); diar_dir.mkdir(parents=True, exist_ok=True)
+    (diar_dir / "segmentation.onnx").write_bytes(b"seg")
+    (diar_dir / "campplus.onnx").write_bytes(b"")
+
+    snippet = f'set -uo pipefail; . "{SETUP_MODELS}"; setup_diarization_models'
+    result = subprocess.run(["bash", "-c", snippet], cwd=str(SCRIPTS),
+                            env=env, capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert (diar_dir / "campplus.onnx").stat().st_size > 0
+
+
+def test_diarization_models_fall_back_to_huggingface_when_github_release_download_fails(tmp_path):
+    marker = tmp_path / "sherpa_installed"
+    marker.write_text("")
+    log = tmp_path / "py_calls.log"
+    fake = tmp_path / "fake_python3"
+    _write_fake_python(fake, marker, log, install_succeeds=True)
+
+    curl_log = tmp_path / "curl_calls.log"
+    curl_stub = f"""#!/usr/bin/env bash
+args=("$@")
+url=""
+out=""
+for ((i=0;i<${{#args[@]}};i++)); do
+  if [[ "${{args[$i]}}" == http* ]]; then url="${{args[$i]}}"; fi
+  if [[ "${{args[$i]}}" == "-o" ]]; then out="${{args[$((i+1))]}}"; fi
+done
+echo "$url" >> {curl_log}
+if [[ "$url" == *github.com* ]]; then
+  exit 22
+fi
+printf hf-model > "$out"
+exit 0
+"""
+    env, _rec = _diar_env_with_user_data(tmp_path, fake, curl_stub)
+    diar_dir = Path(env["DIAR_DIR"]); diar_dir.mkdir(parents=True, exist_ok=True)
+
+    snippet = f'set -uo pipefail; . "{SETUP_MODELS}"; setup_diarization_models'
+    result = subprocess.run(["bash", "-c", snippet], cwd=str(SCRIPTS),
+                            env=env, capture_output=True, text=True, check=False)
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert (diar_dir / "campplus.onnx").read_bytes() == b"hf-model"
+    assert (diar_dir / "segmentation.onnx").read_bytes() == b"hf-model"
+    calls = curl_log.read_text()
+    assert "github.com/k2-fsa/sherpa-onnx" in calls
+    assert "huggingface.co/csukuangfj/speaker-embedding-models" in calls
+    assert "huggingface.co/csukuangfj/sherpa-onnx-pyannote-segmentation-3-0" in calls
