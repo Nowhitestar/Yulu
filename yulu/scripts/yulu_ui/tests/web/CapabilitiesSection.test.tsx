@@ -40,7 +40,13 @@ beforeEach(() => {
 });
 
 // A report with all four provenance kinds and all three tri-state statuses.
-function fullReport() {
+function fullReport(): { schema_version: number; capabilities: Record<string, {
+  provenance: string;
+  status: string;
+  resolved_path: string;
+  detail: string;
+  remediation?: { action: "verify" | "provision" | "manual"; subject: string; reason: string };
+}> } {
   return {
     schema_version: 1,
     capabilities: {
@@ -55,18 +61,33 @@ function fullReport() {
         status: "present-but-unverified",
         resolved_path: "/Users/me/.config/yulu/agent-mlx",
         detail: "",
+        remediation: {
+          action: "verify",
+          subject: "mlx_whisper",
+          reason: "runtime warm-up not run",
+        },
       },
       "models": {
         provenance: "yulu-managed",
         status: "absent",
         resolved_path: "",
         detail: "model files missing",
+        remediation: {
+          action: "provision",
+          subject: "models",
+          reason: "model files missing",
+        },
       },
       "whisper-cli": {
         provenance: "absent",
         status: "absent",
         resolved_path: "",
         detail: "not found on PATH",
+        remediation: {
+          action: "manual",
+          subject: "whisper_cli",
+          reason: "not found on PATH",
+        },
       },
     },
   };
@@ -131,6 +152,25 @@ describe("CapabilitiesSection", () => {
     render(<CapabilitiesSection />);
     expect(screen.getByText("not found on PATH")).toBeInTheDocument();
     expect(screen.getByText("claude 1.2.3")).toBeInTheDocument();
+  });
+
+  it("renders what is missing, why it is missing, and how to fix it", () => {
+    queryReturn = { data: fullReport(), refetch: refetchMock, isError: false };
+    render(<CapabilitiesSection />);
+
+    expect(screen.getByText(/缺什么：本地 Whisper 模型 · 为什么：model files missing · 怎么补齐：点击“下载\/修复”/)).toBeInTheDocument();
+  });
+
+  it("explains manual missing resources without showing a fake Download/Repair button", () => {
+    const report = fullReport();
+    report.capabilities = {
+      "whisper-cli": report.capabilities["whisper-cli"]!,
+    };
+    queryReturn = { data: report, refetch: refetchMock, isError: false };
+    render(<CapabilitiesSection />);
+
+    expect(screen.getByText(/缺什么：whisper-cli · 为什么：not found on PATH · 怎么补齐：安装或配置后点击“刷新”/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "下载/修复" })).toBeNull();
   });
 
   it("Test 4 — degrades to a friendly message on the typed error shape (no crash)", () => {

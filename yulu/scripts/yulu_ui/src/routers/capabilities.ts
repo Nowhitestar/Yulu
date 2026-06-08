@@ -10,11 +10,18 @@ import { router, publicProcedure } from "../trpc.js";
 // renderable object — either the real Phase 3 report section or a degraded `{error, schema_version,
 // capabilities: {}}`. It NEVER throws, so a doctor failure can never blank the settings page (SET-01).
 
+const remediationSchema = z.object({
+  action: z.enum(["verify", "provision", "manual"]),
+  subject: z.string(),
+  reason: z.string(),
+});
+
 const capabilitySchema = z.object({
   provenance: z.string(),
   status: z.string(),
   resolved_path: z.string(),
   detail: z.string(),
+  remediation: remediationSchema.optional(),
 });
 
 // `.passthrough()` + `.partial()` keeps us forward-compatible with the frozen Phase 3 report
@@ -121,6 +128,35 @@ function provisionTarget(name: string): ProvisionTarget | null {
   return null;
 }
 
+function remediationSubject(name: string): string {
+  const target = provisionTarget(name);
+  if (target) return target;
+  if (name === "whisper-cli") return "whisper_cli";
+  return name;
+}
+
+function remediationForCapability(name: string, cap: Capability): Capability["remediation"] {
+  if (cap.status === "usable") return undefined;
+  const reason = cap.detail || "capability is not ready";
+  const canonical = canonicalCapability(name);
+  if (cap.status === "present-but-unverified" && canonical) {
+    return { action: "verify", subject: remediationSubject(name), reason };
+  }
+  if (provisionTarget(name)) {
+    return { action: "provision", subject: remediationSubject(name), reason };
+  }
+  return { action: "manual", subject: remediationSubject(name), reason };
+}
+
+function overlayRemediation(report: HostCapabilities): HostCapabilities {
+  const capabilities: Record<string, Capability> = {};
+  for (const [name, cap] of Object.entries(report.capabilities)) {
+    const remediation = remediationForCapability(name, cap);
+    capabilities[name] = remediation ? { ...cap, remediation } : { ...cap, remediation: undefined };
+  }
+  return { ...report, capabilities };
+}
+
 function provisionScript(scriptDir: string, target: ProvisionTarget): string {
   return join(scriptDir, target === "mlx_whisper" ? "setup_capabilities.sh" : "setup_models.sh");
 }
@@ -210,7 +246,7 @@ export const capabilitiesRouter = router({
     if (!result.success) {
       return { ...DEGRADED, error: `host_capabilities shape mismatch: ${result.error.message}` };
     }
-    return overlayVerifiedCapabilities(result.data, ctx.paths.configDir);
+    return overlayRemediation(overlayVerifiedCapabilities(result.data, ctx.paths.configDir));
   }),
 
   verify: publicProcedure

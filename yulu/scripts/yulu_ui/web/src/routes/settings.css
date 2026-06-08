@@ -166,6 +166,9 @@
 .cap-detail--error {
   color: #b94a48;
 }
+.cap-remediation {
+  color: var(--fg-2);
+}
 .cap-badge {
   display: inline-flex;
   align-items: center;

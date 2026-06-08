@@ -36,7 +36,8 @@ const HOST_CAPABILITIES_JSON = JSON.stringify({
   schema_version: 1,
   capabilities: {
     claude: { provenance: "host-path", status: "usable", resolved_path: "/usr/local/bin/claude", detail: "" },
-    models: { provenance: "yulu-managed", status: "usable", resolved_path: "/root", detail: "2 models, 3072 bytes" },
+    models: { provenance: "yulu-managed", status: "absent", resolved_path: "", detail: "no whisper models found" },
+    whisper_cli: { provenance: "absent", status: "absent", resolved_path: "", detail: "whisper-cli not on login PATH" },
   },
 });
 
@@ -84,7 +85,25 @@ describe("capabilitiesRouter.host_capabilities", () => {
     expect(r.error).toBeUndefined();
     expect(r.schema_version).toBe(1);
     expect(r.capabilities.claude.status).toBe("usable");
-    expect(r.capabilities.models.status).toBe("usable");
+    expect(r.capabilities.models.status).toBe("absent");
+  });
+
+  it("adds stable remediation metadata for missing provisionable and manual capabilities", async () => {
+    mockSpawn(HOST_CAPABILITIES_JSON);
+    const caller = createCaller(capabilitiesRouter, makeCtx());
+    const r = await caller.host_capabilities();
+
+    expect(r.capabilities.models.remediation).toEqual({
+      action: "provision",
+      subject: "models",
+      reason: "no whisper models found",
+    });
+    expect(r.capabilities.whisper_cli.remediation).toEqual({
+      action: "manual",
+      subject: "whisper_cli",
+      reason: "whisper-cli not on login PATH",
+    });
+    expect(r.capabilities.claude.remediation).toBeUndefined();
   });
 
   it("resolves a typed error when the collector output has the wrong shape", async () => {

@@ -41,17 +41,60 @@ export interface Capability {
   status: string;
   resolved_path: string;
   detail: string;
+  remediation?: {
+    action: "verify" | "provision" | "manual";
+    subject: string;
+    reason: string;
+  };
 }
+type CapabilityRemediation = NonNullable<Capability["remediation"]>;
 
 function canVerifyCapability(name: string, cap: Capability): boolean {
+  if (cap.remediation?.action) return cap.remediation.action === "verify";
   if (cap.status !== "present-but-unverified") return false;
   return name === "diarization" || name === "mlx_whisper" || name.endsWith("_mlx_whisper");
 }
 
 function canProvisionCapability(name: string, cap: Capability): boolean {
+  if (cap.remediation?.action) return cap.remediation.action === "provision";
   if (cap.status === "usable") return false;
   if (canVerifyCapability(name, cap)) return false;
   return name === "models" || name === "diarization" || name === "mlx_whisper" || name.endsWith("_mlx_whisper");
+}
+
+function translatedOr(t: (key: string) => string, key: string, fallback: string): string {
+  const value = t(key);
+  return value === key ? fallback : value;
+}
+
+function subjectLabel(t: (key: string) => string, subject: string, fallback: string): string {
+  return translatedOr(t, `settings.capabilities.subject.${subject}`, fallback);
+}
+
+function remediationFix(t: (key: string) => string, action: CapabilityRemediation["action"]): string {
+  switch (action) {
+    case "verify":
+      return t("settings.capabilities.fix.verify");
+    case "provision":
+      return t("settings.capabilities.fix.provision");
+    case "manual":
+      return t("settings.capabilities.fix.manual");
+  }
+  return "";
+}
+
+function CapabilityRemediationLine({ name, cap }: { name: string; cap: Capability }) {
+  const t = useT();
+  const remediation = cap.remediation;
+  if (!remediation) return null;
+  const missing = subjectLabel(t, remediation.subject, name);
+  const reason = remediation.reason || cap.detail || t("settings.capabilities.reason.unknown");
+  const fix = remediationFix(t, remediation.action);
+  return (
+    <div className="cap-detail cap-remediation" data-action={remediation.action}>
+      {`${t("settings.capabilities.missingPrefix")}：${missing} · ${t("settings.capabilities.whyPrefix")}：${reason} · ${t("settings.capabilities.fixPrefix")}：${fix}`}
+    </div>
+  );
 }
 
 export function CapabilityBadge({ status, detail }: { status: string; detail?: string }) {
@@ -170,6 +213,7 @@ export function CapabilitiesSection() {
             </div>
             <div className="row-value">
               <CapabilityStatusValue cap={cap} />
+              <CapabilityRemediationLine name={name} cap={cap} />
               {verifyErrors[name] ? <div className="cap-detail cap-detail--error">{verifyErrors[name]}</div> : null}
             </div>
             <div className="row-status">
