@@ -7,6 +7,7 @@ import userEvent from "@testing-library/user-event";
 // different host_capabilities payload / query state (DbStatsRow + glossary mock pattern).
 const refetchMock = vi.fn();
 const verifyMutateAsyncMock = vi.fn();
+const provisionMutateAsyncMock = vi.fn();
 let queryReturn: { data: unknown; refetch: typeof refetchMock; isError: boolean; isPending?: boolean } = {
   data: undefined,
   refetch: refetchMock,
@@ -18,6 +19,7 @@ vi.mock("../../web/src/trpc.js", () => ({
     capabilities: {
       host_capabilities: { useQuery: () => queryReturn },
       verify: { useMutation: () => ({ mutateAsync: verifyMutateAsyncMock, isPending: false }) },
+      provision: { useMutation: () => ({ mutateAsync: provisionMutateAsyncMock, isPending: false }) },
     },
   },
 }));
@@ -32,6 +34,8 @@ beforeEach(() => {
   refetchMock.mockClear();
   verifyMutateAsyncMock.mockReset();
   verifyMutateAsyncMock.mockResolvedValue({ ok: true, detail: "verified", status: "usable" });
+  provisionMutateAsyncMock.mockReset();
+  provisionMutateAsyncMock.mockResolvedValue({ ok: true, detail: "provisioned", status: "usable" });
   queryReturn = { data: undefined, refetch: refetchMock, isError: false };
 });
 
@@ -54,9 +58,9 @@ function fullReport() {
       },
       "models": {
         provenance: "yulu-managed",
-        status: "present-but-unverified",
-        resolved_path: "/Users/me/.config/yulu/models",
-        detail: "2 models",
+        status: "absent",
+        resolved_path: "",
+        detail: "model files missing",
       },
       "whisper-cli": {
         provenance: "absent",
@@ -111,7 +115,6 @@ describe("CapabilitiesSection", () => {
     queryReturn = { data: fullReport(), refetch: refetchMock, isError: false };
     render(<CapabilitiesSection />);
     expect(screen.getByText("/opt/homebrew/bin/claude")).toBeInTheDocument();
-    expect(screen.getByText("/Users/me/.config/yulu/models")).toBeInTheDocument();
     expect(screen.getByText("/Users/me/.config/yulu/agent-mlx")).toBeInTheDocument();
   });
 
@@ -156,6 +159,17 @@ describe("CapabilitiesSection", () => {
     await user.click(screen.getAllByRole("button", { name: "验证" })[0]!);
 
     expect(verifyMutateAsyncMock).toHaveBeenCalledWith({ capability: "agent_mlx_whisper" });
+    expect(refetchMock).toHaveBeenCalled();
+  });
+
+  it("renders a Download/Repair action for provisionable missing resources", async () => {
+    queryReturn = { data: fullReport(), refetch: refetchMock, isError: false };
+    render(<CapabilitiesSection />);
+    const user = userEvent.setup();
+
+    await user.click(screen.getByRole("button", { name: "下载/修复" }));
+
+    expect(provisionMutateAsyncMock).toHaveBeenCalledWith({ capability: "models" });
     expect(refetchMock).toHaveBeenCalled();
   });
 

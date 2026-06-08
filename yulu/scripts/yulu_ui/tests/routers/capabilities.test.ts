@@ -142,6 +142,47 @@ describe("capabilitiesRouter.verify", () => {
   });
 });
 
+describe("capabilitiesRouter.provision", () => {
+  it("provisions diarization by running Yulu's fixed setup_models script", async () => {
+    mockSpawn("models ready\n");
+    const caller = createCaller(capabilitiesRouter, makeCtx());
+    const result = await caller.provision({ capability: "diarization" });
+
+    expect(result.ok).toBe(true);
+    expect(result.capability).toBe("diarization");
+    expect(result.status).toBe("usable");
+    expect(result.detail).toContain("models ready");
+
+    const [cmd, args, options] = spawnMock.mock.calls[0]!;
+    expect(cmd).toBe("bash");
+    expect((args as string[]).join(" ")).toContain("/fake/yulu/scripts/setup_models.sh release");
+    expect((options as { env: NodeJS.ProcessEnv }).env.CONFIG_DIR).toBe("/fake/home/.config/yulu");
+    expect((options as { env: NodeJS.ProcessEnv }).env.MODEL_DIR).toBe("/fake/home/.config/yulu/models");
+  });
+
+  it("provisions MLX by running Yulu's fixed setup_capabilities script", async () => {
+    mockSpawn("mlx ready\n");
+    const caller = createCaller(capabilitiesRouter, makeCtx());
+    const result = await caller.provision({ capability: "agent_mlx_whisper" });
+
+    expect(result.ok).toBe(true);
+    expect(result.capability).toBe("mlx_whisper");
+    const [cmd, args] = spawnMock.mock.calls[0]!;
+    expect(cmd).toBe("bash");
+    expect((args as string[]).join(" ")).toContain("/fake/yulu/scripts/setup_capabilities.sh release");
+  });
+
+  it("returns a typed failed result for unsupported capabilities without spawning", async () => {
+    const caller = createCaller(capabilitiesRouter, makeCtx());
+    const result = await caller.provision({ capability: "claude" });
+
+    expect(result.ok).toBe(false);
+    expect(result.status).toBe("absent");
+    expect(result.detail).toContain("not available");
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+});
+
 describe("capabilitiesRouter trust boundary (TRANS-02 / T-04-EX)", () => {
   it("only ever spawns python running host_capabilities / list_models — NEVER a user-configured command", async () => {
     mockSpawn(HOST_CAPABILITIES_JSON);

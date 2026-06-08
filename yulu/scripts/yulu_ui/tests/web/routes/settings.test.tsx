@@ -90,6 +90,7 @@ vi.mock("../../../web/src/trpc.js", () => {
         host_capabilities: { useQuery: () => ({ data: { schema_version: 1, capabilities: {} }, refetch: () => {}, isError: false }) },
         detected_models: { useQuery: () => ({ data: [], isPending: false }) },
         verify: { useMutation: noopMutation },
+        provision: { useMutation: noopMutation },
       },
     },
     makeTrpcClient: () => ({}),

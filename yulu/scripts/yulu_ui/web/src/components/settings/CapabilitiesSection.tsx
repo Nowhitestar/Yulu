@@ -48,6 +48,12 @@ function canVerifyCapability(name: string, cap: Capability): boolean {
   return name === "diarization" || name === "mlx_whisper" || name.endsWith("_mlx_whisper");
 }
 
+function canProvisionCapability(name: string, cap: Capability): boolean {
+  if (cap.status === "usable") return false;
+  if (canVerifyCapability(name, cap)) return false;
+  return name === "models" || name === "diarization" || name === "mlx_whisper" || name.endsWith("_mlx_whisper");
+}
+
 export function CapabilityBadge({ status, detail }: { status: string; detail?: string }) {
   const t = useT();
   return (
@@ -94,8 +100,10 @@ export function CapabilityStatusValue({ cap }: { cap?: Capability }) {
 export function CapabilitiesSection() {
   const { data, refetch, isError, isPending } = trpc.capabilities.host_capabilities.useQuery();
   const verifyMut = trpc.capabilities.verify.useMutation();
+  const provisionMut = trpc.capabilities.provision.useMutation();
   const t = useT();
   const [verifying, setVerifying] = useState<string | null>(null);
+  const [provisioning, setProvisioning] = useState<string | null>(null);
   const [verifyErrors, setVerifyErrors] = useState<Record<string, string>>({});
 
   const caps = Object.entries((data?.capabilities ?? {}) as Record<string, Capability>);
@@ -114,6 +122,22 @@ export function CapabilitiesSection() {
       setVerifyErrors((prev) => ({ ...prev, [name]: (e as Error).message }));
     } finally {
       setVerifying(null);
+    }
+  };
+
+  const provisionCapability = async (name: string) => {
+    setProvisioning(name);
+    setVerifyErrors((prev) => ({ ...prev, [name]: "" }));
+    try {
+      const res = await provisionMut.mutateAsync({ capability: name });
+      if (!res.ok) {
+        setVerifyErrors((prev) => ({ ...prev, [name]: res.detail || t("settings.capabilities.provisionFailed") }));
+      }
+      await refetch();
+    } catch (e) {
+      setVerifyErrors((prev) => ({ ...prev, [name]: (e as Error).message }));
+    } finally {
+      setProvisioning(null);
     }
   };
 
@@ -154,10 +178,20 @@ export function CapabilitiesSection() {
                 <button
                   type="button"
                   className="cap-verify-btn"
-                  disabled={verifying !== null}
+                  disabled={verifying !== null || provisioning !== null}
                   onClick={() => { void verifyCapability(name); }}
                 >
                   {verifying === name ? t("settings.capabilities.verifying") : t("settings.capabilities.verify")}
+                </button>
+              ) : null}
+              {canProvisionCapability(name, cap) ? (
+                <button
+                  type="button"
+                  className="cap-verify-btn"
+                  disabled={verifying !== null || provisioning !== null}
+                  onClick={() => { void provisionCapability(name); }}
+                >
+                  {provisioning === name ? t("settings.capabilities.provisioning") : t("settings.capabilities.provision")}
                 </button>
               ) : null}
             </div>

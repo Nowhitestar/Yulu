@@ -46,6 +46,7 @@ const verifyResultSchema = z.object({
   verified_at: z.string().optional(),
 });
 type VerifyResult = z.infer<typeof verifyResultSchema>;
+type ProvisionTarget = "mlx_whisper" | "models" | "diarization";
 
 type VerificationCacheEntry = {
   status: "usable";
@@ -56,6 +57,7 @@ type VerificationCacheEntry = {
 // doctor probes are subprocess-heavy; cap the wait so a hung/slow doctor never blocks or blanks
 // the UI (T-04-DOS). On timeout we SIGKILL the child and the caller falls through to the typed error.
 const SPAWN_TIMEOUT_MS = 10_000;
+const PROVISION_TIMEOUT_MS = 20 * 60 * 1000;
 
 // Resolve python3 the way the other python-shelling routers do (integrations.ts / search.ts):
 // bare `python3` on PATH, with PYTHONPATH pointed at scriptDir so `capabilities` is importable.
@@ -110,6 +112,26 @@ function canonicalCapability(name: string): "mlx_whisper" | "diarization" | null
   if (name === "mlx_whisper" || name.endsWith("_mlx_whisper")) return "mlx_whisper";
   if (name === "diarization") return "diarization";
   return null;
+}
+
+function provisionTarget(name: string): ProvisionTarget | null {
+  const canonical = canonicalCapability(name);
+  if (canonical) return canonical;
+  if (name === "models") return "models";
+  return null;
+}
+
+function provisionScript(scriptDir: string, target: ProvisionTarget): string {
+  return join(scriptDir, target === "mlx_whisper" ? "setup_capabilities.sh" : "setup_models.sh");
+}
+
+function provisionEnv(scriptDir: string, configDir: string): NodeJS.ProcessEnv {
+  return {
+    ...pyEnv(scriptDir),
+    CONFIG_DIR: configDir,
+    MODEL_DIR: join(configDir, "models"),
+    PYTHON_BIN: PYTHON,
+  };
 }
 
 function verificationCachePath(configDir: string): string {
@@ -237,6 +259,36 @@ export const capabilitiesRouter = router({
         status: "usable",
         detail: cache[canonical].detail,
         verified_at: verifiedAt,
+      });
+    }),
+
+  provision: publicProcedure
+    .input(z.object({ capability: z.string() }))
+    .mutation(async ({ ctx, input }): Promise<VerifyResult> => {
+      const target = provisionTarget(input.capability);
+      if (!target) {
+        return {
+          capability: input.capability,
+          ok: false,
+          status: "absent",
+          detail: "provisioning is not available for this capability",
+        };
+      }
+
+      const script = provisionScript(ctx.paths.scriptDir, target);
+      const { stdout, stderr, code } = await runSpawn(
+        "bash",
+        [script, "release"],
+        provisionEnv(ctx.paths.scriptDir, ctx.paths.configDir),
+        PROVISION_TIMEOUT_MS,
+      );
+      const detail = (stdout || stderr || `provisioning exited ${code}`).trim();
+      return verifyResultSchema.parse({
+        capability: target,
+        ok: code === 0,
+        status: code === 0 ? "usable" : "absent",
+        detail,
+        verified_at: code === 0 ? new Date().toISOString() : undefined,
       });
     }),
 
