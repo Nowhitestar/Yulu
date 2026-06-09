@@ -1,7 +1,6 @@
 import { useState } from "react";
 import { trpc } from "../../trpc.js";
 import { InlineEditRow } from "../InlineEditRow.js";
-import { CommandEditor } from "../CommandEditor.js";
 import { TestPopover } from "../TestPopover.js";
 import { useConfigField } from "../../hooks/useConfigField.js";
 import { useT } from "../../i18n/LanguageProvider.js";
@@ -24,6 +23,95 @@ interface CalendarEntry {
 }
 
 type ConnState = "ok" | "failed" | "pending" | null;
+
+interface CalendarOption {
+  id: string;
+  summary: string;
+  primary: boolean;
+}
+
+function selectedWatchCalendars(cal: CalendarEntry): string[] {
+  const current = cal.watch_calendars;
+  return current && current.length > 0 ? current : ["primary"];
+}
+
+function CalendarWatchSelector({
+  idx,
+  cal,
+  enabled,
+  blocked,
+  commitWatchCalendars,
+}: {
+  idx: number;
+  cal: CalendarEntry;
+  enabled: boolean;
+  blocked: boolean;
+  commitWatchCalendars: (idx: number, enabled: boolean, next: string[]) => void;
+}) {
+  const t = useT();
+  const account = (cal.gog_account ?? "").trim();
+  const selected = new Set(selectedWatchCalendars(cal));
+  const calendarsQuery = trpc.integrations.calendarList.useQuery(
+    { account },
+    { enabled: account.length > 0 },
+  );
+
+  if (blocked) {
+    return (
+      <span className="value-disabled">
+        <span className="value-disabled-text">{selectedWatchCalendars(cal).join(", ")}</span>
+        <span className="value-disabled-note">{t("settings.locked.recording")}</span>
+      </span>
+    );
+  }
+
+  if (!account) {
+    return <span className="value-disabled-note">{t("settings.integrations.watch.accountRequired")}</span>;
+  }
+
+  if (calendarsQuery.isPending && !calendarsQuery.data) {
+    return <span className="conn-status">{t("settings.integrations.watch.loading")}</span>;
+  }
+
+  const result = calendarsQuery.data;
+  if (!result?.ok) {
+    return <span className="conn-status conn-status--bad">{result?.stderr || t("settings.integrations.watch.listFailed")}</span>;
+  }
+
+  const calendars = result.calendars as CalendarOption[];
+  if (calendars.length === 0) {
+    return <span className="conn-status">{t("settings.integrations.watch.none")}</span>;
+  }
+
+  const toggleCalendar = (id: string, checked: boolean) => {
+    const next = new Set(selected);
+    if (checked) next.add(id);
+    else next.delete(id);
+    const ordered = calendars.map((c) => c.id).filter((calendarId) => next.has(calendarId));
+    for (const calendarId of next) {
+      if (!ordered.includes(calendarId)) ordered.push(calendarId);
+    }
+    commitWatchCalendars(idx, enabled, ordered);
+  };
+
+  return (
+    <div className="calendar-checklist">
+      {calendars.map((calendar) => (
+        <label key={calendar.id} className="calendar-check">
+          <input
+            type="checkbox"
+            checked={selected.has(calendar.id)}
+            onChange={(event) => toggleCalendar(calendar.id, event.currentTarget.checked)}
+          />
+          <span className="calendar-check-main">
+            <span className="calendar-check-title">{calendar.summary}</span>
+            <span className="calendar-check-id">{calendar.id}</span>
+          </span>
+        </label>
+      ))}
+    </div>
+  );
+}
 
 export function IntegrationsSection({ tracker }: IntegrationsSectionProps) {
   const { data: cfg } = trpc.config.get.useQuery();
@@ -78,6 +166,10 @@ export function IntegrationsSection({ tracker }: IntegrationsSectionProps) {
   // enabled (the daemon is watching it); edits to a disabled entry are inert.
   const commitField = (idx: number, key: string, enabled: boolean) =>
     commit(`calendars.${idx}.${key}`, { suppressRestart: !enabled });
+
+  const commitWatchCalendars = (idx: number, enabled: boolean, next: string[]) => {
+    commitField(idx, "watch_calendars", enabled)(next);
+  };
 
   const runTest = async (idx: number) => {
     setPopFor(idx);
@@ -137,25 +229,21 @@ export function IntegrationsSection({ tracker }: IntegrationsSectionProps) {
               onCommit={commitField(idx, "gog_account", enabled) as (v: string) => void}
               disabled={isBlocked(`calendars.${idx}.gog_account`)}
             />
-            {/* watch_calendars as a chip list (CommandEditor-style). Defaults to
-                ["primary"] when unset, so the user sees the effective value. */}
+            {/* watch_calendars comes from gog's calendar list; users select ids by checkbox.
+                Defaults to ["primary"] when unset, so the effective value is visible. */}
             <div className="row">
               <div className="row-label">
                 <div>{t("settings.integrations.watch.label")}</div>
                 <div className="row-help">{t("settings.integrations.watch.help")}</div>
               </div>
               <div className="row-value">
-                {isBlocked(`calendars.${idx}.watch_calendars`) ? (
-                  <span className="value-disabled">
-                    <span className="value-disabled-text">{(cal.watch_calendars ?? ["primary"]).join(", ")}</span>
-                    <span className="value-disabled-note">{t("settings.locked.recording")}</span>
-                  </span>
-                ) : (
-                  <CommandEditor
-                    value={cal.watch_calendars ?? ["primary"]}
-                    onChange={(next) => commitField(idx, "watch_calendars", enabled)(next)}
-                  />
-                )}
+                <CalendarWatchSelector
+                  idx={idx}
+                  cal={cal}
+                  enabled={enabled}
+                  blocked={isBlocked(`calendars.${idx}.watch_calendars`)}
+                  commitWatchCalendars={commitWatchCalendars}
+                />
               </div>
               <div className="row-status" />
             </div>

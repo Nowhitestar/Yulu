@@ -66,3 +66,55 @@ describe("integrationsRouter.test", () => {
     expect(r.stderr).toBe("warning: x\n");
   });
 });
+
+describe("integrationsRouter.calendarList", () => {
+  it("lists Google calendars through fixed gog calendar calendars JSON argv", async () => {
+    mockSpawn(JSON.stringify({
+      items: [
+        { id: "me@example.com", summary: "Primary", primary: true, selected: true },
+        { id: "work@example.com", summary: "Work", selected: false },
+      ],
+    }));
+    const caller = createCaller(integrationsRouter, ctx());
+    const r = await caller.calendarList({ account: "me@example.com" });
+
+    expect(r.ok).toBe(true);
+    expect(r.calendars).toEqual([
+      { id: "primary", summary: "Primary", primary: true },
+      { id: "work@example.com", summary: "Work", primary: false },
+    ]);
+
+    const call = spawnMock.mock.calls[0]!;
+    expect(call[0]).toBe("gog");
+    expect(call[1]).toEqual([
+      "--json",
+      "--results-only",
+      "--no-input",
+      "--account",
+      "me@example.com",
+      "calendar",
+      "calendars",
+      "--all",
+    ]);
+  });
+
+  it("does not spawn gog when account is empty", async () => {
+    const caller = createCaller(integrationsRouter, ctx());
+    const r = await caller.calendarList({ account: "" });
+
+    expect(r.ok).toBe(false);
+    expect(r.calendars).toEqual([]);
+    expect(r.stderr).toContain("account");
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it("returns ok=false with stderr when gog calendar listing fails", async () => {
+    mockSpawn("", 1, "not authenticated");
+    const caller = createCaller(integrationsRouter, ctx());
+    const r = await caller.calendarList({ account: "me@example.com" });
+
+    expect(r.ok).toBe(false);
+    expect(r.calendars).toEqual([]);
+    expect(r.stderr).toContain("not authenticated");
+  });
+});

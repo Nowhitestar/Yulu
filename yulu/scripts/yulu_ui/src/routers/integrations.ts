@@ -19,6 +19,47 @@ function runSpawn(
   });
 }
 
+const calendarListItemSchema = z.object({
+  id: z.string(),
+  summary: z.string().optional(),
+  primary: z.boolean().optional(),
+});
+
+const calendarOptionSchema = z.object({
+  id: z.string(),
+  summary: z.string(),
+  primary: z.boolean(),
+});
+type CalendarOption = z.infer<typeof calendarOptionSchema>;
+
+function calendarItemsFromJson(value: unknown): unknown[] {
+  if (Array.isArray(value)) return value;
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    if (Array.isArray(record.items)) return record.items;
+    if (Array.isArray(record.calendars)) return record.calendars;
+    if (Array.isArray(record.result)) return record.result;
+  }
+  return [];
+}
+
+function parseCalendarList(stdout: string): CalendarOption[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stdout);
+  } catch {
+    return [];
+  }
+  return calendarItemsFromJson(parsed)
+    .map((item) => calendarListItemSchema.safeParse(item))
+    .filter((result): result is z.SafeParseSuccess<z.infer<typeof calendarListItemSchema>> => result.success)
+    .map(({ data }) => ({
+      id: data.primary === true ? "primary" : data.id,
+      summary: data.summary || data.id,
+      primary: data.primary === true,
+    }));
+}
+
 export const integrationsRouter = router({
   // Test that calendar integration works by running Yulu's OWN check_meetings.py
   // in `json` mode. It reads config.json, queries `gog` for the enabled Google
@@ -38,5 +79,29 @@ export const integrationsRouter = router({
         10_000,
       );
       return { ok: code === 0, stdout, stderr };
+    }),
+
+  calendarList: publicProcedure
+    .input(z.object({ account: z.string() }))
+    .query(async ({ input }) => {
+      const account = input.account.trim();
+      if (!account) {
+        return { ok: false, calendars: [] as CalendarOption[], stderr: "account is required" };
+      }
+
+      const { stdout, stderr, code } = await runSpawn(
+        "gog",
+        ["--json", "--results-only", "--no-input", "--account", account, "calendar", "calendars", "--all"],
+        process.env,
+        10_000,
+      );
+      if (code !== 0) {
+        return { ok: false, calendars: [] as CalendarOption[], stderr: stderr || stdout || `gog exited ${code}` };
+      }
+      return {
+        ok: true,
+        calendars: parseCalendarList(stdout),
+        stderr,
+      };
     }),
 });

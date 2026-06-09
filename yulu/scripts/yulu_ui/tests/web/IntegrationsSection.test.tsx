@@ -8,6 +8,10 @@ const updateMutate = vi.fn(async (_vars: { key: string; value: unknown }) => ({ 
 let configReturn: { data: unknown; isPending: boolean } = { data: undefined, isPending: false };
 let recordingState: string = "idle";
 let testResult: { ok: boolean; stdout: string; stderr: string } = { ok: true, stdout: "[]", stderr: "" };
+let calendarListReturn: {
+  data: { ok: boolean; calendars: Array<{ id: string; summary: string; primary: boolean }>; stderr?: string };
+  isPending: boolean;
+} = { data: { ok: true, calendars: [] }, isPending: false };
 
 // calendars is restart-class (calendar + scheduler) — drives the recording-guard.
 const SCHEMA = [
@@ -29,7 +33,10 @@ vi.mock("../../web/src/trpc.js", () => ({
       }) },
     },
     recording: { state: { useQuery: () => ({ data: { state: recordingState } }) } },
-    integrations: { test: { useMutation: () => ({ mutateAsync: async () => testResult }) } },
+    integrations: {
+      test: { useMutation: () => ({ mutateAsync: async () => testResult }) },
+      calendarList: { useQuery: () => calendarListReturn },
+    },
     system: {
       pickFile: { useMutation: () => ({ mutateAsync: async () => ({ path: "" }), isPending: false }) },
       openInFinder: { useMutation: () => ({ mutate: vi.fn() }) },
@@ -57,6 +64,16 @@ beforeEach(() => {
   record.mockClear();
   recordingState = "idle";
   testResult = { ok: true, stdout: "[]", stderr: "" };
+  calendarListReturn = {
+    data: {
+      ok: true,
+      calendars: [
+        { id: "primary", summary: "Primary", primary: true },
+        { id: "work@example.com", summary: "Work", primary: false },
+      ],
+    },
+    isPending: false,
+  };
   configReturn = configWith([]);
 });
 
@@ -99,17 +116,39 @@ describe("IntegrationsSection — Google calendar via gog (P4a-4)", () => {
     expect(within(card).getByText(translate("zh", "settings.integrations.google.title"))).toBeInTheDocument();
     expect(within(card).getByText(translate("zh", "settings.integrations.account.label"))).toBeInTheDocument();
     expect(within(card).getByText(translate("zh", "settings.integrations.watch.label"))).toBeInTheDocument();
-    // watch_calendars rendered as editable chips.
-    const inputs = screen.getAllByRole("textbox") as HTMLInputElement[];
-    expect(inputs.some((i) => i.value === "primary")).toBe(true);
-    expect(inputs.some((i) => i.value === "work")).toBe(true);
+    // watch_calendars renders from the discovered calendar list, not free-text chips.
+    expect(within(card).getByRole("checkbox", { name: "Primary primary" })).toBeChecked();
+    expect(within(card).getByRole("checkbox", { name: "Work work@example.com" })).not.toBeChecked();
   });
 
   it("watch_calendars defaults to ['primary'] when unset", () => {
     configReturn = configWith([{ type: "google", enabled: false, gog_account: "me@example.com" }]);
     mount();
-    const inputs = screen.getAllByRole("textbox") as HTMLInputElement[];
-    expect(inputs.some((i) => i.value === "primary")).toBe(true);
+    expect(screen.getByRole("checkbox", { name: "Primary primary" })).toBeChecked();
+  });
+
+  it("loads calendars automatically and commits selected checkbox ids", async () => {
+    configReturn = configWith([{ type: "google", enabled: false, gog_account: "me@example.com", watch_calendars: ["primary"] }]);
+    mount();
+    const user = userEvent.setup();
+
+    await user.click(screen.getByRole("checkbox", { name: "Work work@example.com" }));
+
+    await vi.waitFor(() =>
+      expect(updateMutate).toHaveBeenCalledWith({
+        key: "calendars.0.watch_calendars",
+        value: ["primary", "work@example.com"],
+      }),
+    );
+  });
+
+  it("shows a calendar-list error instead of a free-text watch editor when gog cannot list calendars", () => {
+    calendarListReturn = { data: { ok: false, calendars: [], stderr: "not authenticated" }, isPending: false };
+    configReturn = configWith([{ type: "google", enabled: false, gog_account: "me@example.com", watch_calendars: ["primary"] }]);
+    mount();
+
+    expect(screen.getByText("not authenticated")).toBeInTheDocument();
+    expect(screen.queryByRole("textbox", { name: "" })).toBeNull();
   });
 
   it("editing the gog_account commits calendars.<idx>.gog_account", async () => {

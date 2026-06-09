@@ -112,6 +112,39 @@
 }
 .conn-status--ok { color: var(--green, #2e7d32); }
 .conn-status--bad { color: var(--red, #c62828); }
+.calendar-checklist {
+  display: grid;
+  gap: 6px;
+  width: 100%;
+}
+.calendar-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--fg);
+}
+.calendar-check input {
+  flex: 0 0 auto;
+}
+.calendar-check-main {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+.calendar-check-title {
+  color: var(--fg);
+}
+.calendar-check-id {
+  color: var(--fg-3);
+  font-family: "SF Mono", ui-monospace, monospace;
+  font-size: 10.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 /* Storage section sub-headings */
 .storage-section {
