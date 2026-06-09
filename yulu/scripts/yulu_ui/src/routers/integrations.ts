@@ -10,14 +10,33 @@ function runSpawn(
   timeoutMs: number,
 ): Promise<{ stdout: string; stderr: string; code: number }> {
   return new Promise((resolve) => {
-    const proc = spawn(cmd, args, { env });
     let stdout = "", stderr = "";
+    let settled = false;
+    const finish = (result: { stdout: string; stderr: string; code: number }) => {
+      if (settled) return;
+      settled = true;
+      resolve(result);
+    };
+    const proc = spawn(cmd, args, { env });
     const timer = setTimeout(() => { proc.kill("SIGKILL"); }, timeoutMs);
     proc.stdout.on("data", (b: Buffer) => { stdout += b.toString("utf8"); });
     proc.stderr.on("data", (b: Buffer) => { stderr += b.toString("utf8"); });
-    proc.on("close", (code: number | null) => { clearTimeout(timer); resolve({ stdout, stderr, code: code ?? 1 }); });
+    proc.on("error", (err: Error) => { clearTimeout(timer); finish({ stdout, stderr: stderr || err.message, code: 1 }); });
+    proc.on("close", (code: number | null) => { clearTimeout(timer); finish({ stdout, stderr, code: code ?? 1 }); });
   });
 }
+
+const accountListItemSchema = z.object({
+  email: z.string().min(1),
+  services: z.array(z.string()).optional(),
+  scopes: z.array(z.string()).optional(),
+});
+
+const googleAccountSchema = z.object({
+  email: z.string(),
+  services: z.array(z.string()),
+});
+type GoogleAccount = z.infer<typeof googleAccountSchema>;
 
 const calendarListItemSchema = z.object({
   id: z.string(),
@@ -31,6 +50,45 @@ const calendarOptionSchema = z.object({
   primary: z.boolean(),
 });
 type CalendarOption = z.infer<typeof calendarOptionSchema>;
+
+function accountItemsFromJson(value: unknown): unknown[] {
+  if (Array.isArray(value)) return value;
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    if (Array.isArray(record.items)) return record.items;
+    if (Array.isArray(record.accounts)) return record.accounts;
+    if (Array.isArray(record.result)) return record.result;
+  }
+  return [];
+}
+
+function hasCalendarAccess(services: string[], scopes: string[]): boolean {
+  if (services.includes("calendar")) return true;
+  if (scopes.some((scope) => scope.includes("/auth/calendar"))) return true;
+  return services.length === 0 && scopes.length === 0;
+}
+
+function parseAccountList(stdout: string): GoogleAccount[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stdout);
+  } catch {
+    return [];
+  }
+  const seen = new Set<string>();
+  const accounts: GoogleAccount[] = [];
+  for (const item of accountItemsFromJson(parsed)) {
+    const result = accountListItemSchema.safeParse(item);
+    if (!result.success) continue;
+    const services = result.data.services ?? [];
+    const scopes = result.data.scopes ?? [];
+    if (!hasCalendarAccess(services, scopes)) continue;
+    if (seen.has(result.data.email)) continue;
+    seen.add(result.data.email);
+    accounts.push({ email: result.data.email, services });
+  }
+  return accounts;
+}
 
 function calendarItemsFromJson(value: unknown): unknown[] {
   if (Array.isArray(value)) return value;
@@ -61,6 +119,23 @@ function parseCalendarList(stdout: string): CalendarOption[] {
 }
 
 export const integrationsRouter = router({
+  accountList: publicProcedure.query(async () => {
+    const { stdout, stderr, code } = await runSpawn(
+      "gog",
+      ["auth", "list", "--json", "--results-only", "--no-input"],
+      process.env,
+      10_000,
+    );
+    if (code !== 0) {
+      return { ok: false, accounts: [] as GoogleAccount[], stderr: stderr || stdout || `gog exited ${code}` };
+    }
+    return {
+      ok: true,
+      accounts: parseAccountList(stdout),
+      stderr,
+    };
+  }),
+
   // Test that calendar integration works by running Yulu's OWN check_meetings.py
   // in `json` mode. It reads config.json, queries `gog` for the enabled Google
   // calendars and prints the events as JSON — exactly the path the scheduler uses.

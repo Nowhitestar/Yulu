@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { trpc } from "../../trpc.js";
 import { InlineEditRow } from "../InlineEditRow.js";
 import { TestPopover } from "../TestPopover.js";
@@ -30,9 +30,85 @@ interface CalendarOption {
   primary: boolean;
 }
 
+interface GoogleAccount {
+  email: string;
+  services: string[];
+}
+
 function selectedWatchCalendars(cal: CalendarEntry): string[] {
   const current = cal.watch_calendars;
   return current && current.length > 0 ? current : ["primary"];
+}
+
+function CalendarAccountRow({
+  idx,
+  cal,
+  enabled,
+  blocked,
+  accounts,
+  commitAccount,
+}: {
+  idx: number;
+  cal: CalendarEntry;
+  enabled: boolean;
+  blocked: boolean;
+  accounts: GoogleAccount[];
+  commitAccount: (idx: number, enabled: boolean, next: string) => void;
+}) {
+  const t = useT();
+  const current = (cal.gog_account ?? "").trim();
+
+  if (accounts.length === 0) {
+    return (
+      <InlineEditRow
+        label={t("settings.integrations.account.label")}
+        help={t("settings.integrations.account.help")}
+        type="text"
+        value={cal.gog_account ?? ""}
+        onCommit={(next) => commitAccount(idx, enabled, next)}
+        disabled={blocked}
+      />
+    );
+  }
+
+  const options = current && !accounts.some((account) => account.email === current)
+    ? [{ email: current, services: [] }, ...accounts]
+    : accounts;
+
+  return (
+    <div className="row">
+      <div className="row-label">
+        <div>{t("settings.integrations.account.label")}</div>
+        <div className="row-help">{t("settings.integrations.account.help")}</div>
+      </div>
+      <div className="row-value">
+        {blocked ? (
+          <span className="value-disabled">
+            <span className="value-disabled-text">{current || t("settings.value.unset")}</span>
+            <span className="value-disabled-note">{t("settings.locked.recording")}</span>
+          </span>
+        ) : accounts.length === 1 ? (
+          <span className="account-current">
+            <span className="value-display">{current || accounts[0]!.email}</span>
+            <span className="conn-status conn-status--ok">{t("settings.integrations.account.auto")}</span>
+          </span>
+        ) : (
+          <select
+            aria-label={t("settings.integrations.account.label")}
+            className="value-input account-select"
+            value={current}
+            onChange={(event) => commitAccount(idx, enabled, event.currentTarget.value)}
+          >
+            <option value="">{t("settings.integrations.account.choose")}</option>
+            {options.map((account) => (
+              <option key={account.email} value={account.email}>{account.email}</option>
+            ))}
+          </select>
+        )}
+      </div>
+      <div className="row-status" />
+    </div>
+  );
 }
 
 function CalendarWatchSelector({
@@ -115,6 +191,7 @@ function CalendarWatchSelector({
 
 export function IntegrationsSection({ tracker }: IntegrationsSectionProps) {
   const { data: cfg } = trpc.config.get.useQuery();
+  const accountListQuery = trpc.integrations.accountList.useQuery();
   const { commit, isBlocked } = useConfigField(tracker);
   const testMut = trpc.integrations.test.useMutation();
   const t = useT();
@@ -125,10 +202,31 @@ export function IntegrationsSection({ tracker }: IntegrationsSectionProps) {
   // Per-entry connection status, shown as Connected / Not authenticated.
   const [connFor, setConnFor] = useState<number | null>(null);
   const [connState, setConnState] = useState<ConnState>(null);
+  const autoFilledAccountRef = useRef<Set<string>>(new Set());
+
+  const calendars = (cfg?.calendars ?? []) as CalendarEntry[];
+  const discoveredAccounts = useMemo(() => {
+    const result = accountListQuery.data;
+    if (!result?.ok) return [];
+    return result.accounts as GoogleAccount[];
+  }, [accountListQuery.data]);
+  const singleDiscoveredAccount = discoveredAccounts.length === 1 ? discoveredAccounts[0]!.email : "";
+
+  useEffect(() => {
+    if (!singleDiscoveredAccount) return;
+    calendars.forEach((cal, idx) => {
+      if (cal.type !== "google") return;
+      if ((cal.gog_account ?? "").trim()) return;
+      const key = `${idx}:${singleDiscoveredAccount}`;
+      if (autoFilledAccountRef.current.has(key)) return;
+      autoFilledAccountRef.current.add(key);
+      const enabled = cal.enabled === true;
+      commit(`calendars.${idx}.gog_account`, { suppressRestart: !enabled })(singleDiscoveredAccount);
+    });
+  }, [calendars, commit, singleDiscoveredAccount]);
 
   if (!cfg) return null;
 
-  const calendars = (cfg.calendars ?? []) as CalendarEntry[];
   // calendars is restart-class (calendar + scheduler): changing a *watched*
   // (enabled) calendar interrupts the daemon, so those edits are guarded while
   // recording. Adding/removing/editing a DISABLED entry doesn't touch the
@@ -171,6 +269,10 @@ export function IntegrationsSection({ tracker }: IntegrationsSectionProps) {
     commitField(idx, "watch_calendars", enabled)(next);
   };
 
+  const commitAccount = (idx: number, enabled: boolean, next: string) => {
+    commitField(idx, "gog_account", enabled)(next);
+  };
+
   const runTest = async (idx: number) => {
     setPopFor(idx);
     setConnFor(idx);
@@ -200,6 +302,9 @@ export function IntegrationsSection({ tracker }: IntegrationsSectionProps) {
       )}
       {calendars.map((cal, idx) => {
         const enabled = cal.enabled === true;
+        const effectiveCal = singleDiscoveredAccount && !(cal.gog_account ?? "").trim()
+          ? { ...cal, gog_account: singleDiscoveredAccount }
+          : cal;
         return (
           <div key={`${cal.type}-${idx}`} className="integration-card">
             <div className="integration-header">
@@ -221,13 +326,13 @@ export function IntegrationsSection({ tracker }: IntegrationsSectionProps) {
               onCommit={setEnabled(idx)}
               disabled={isBlocked(`calendars.${idx}.enabled`)}
             />
-            <InlineEditRow
-              label={t("settings.integrations.account.label")}
-              help={t("settings.integrations.account.help")}
-              type="text"
-              value={cal.gog_account ?? ""}
-              onCommit={commitField(idx, "gog_account", enabled) as (v: string) => void}
-              disabled={isBlocked(`calendars.${idx}.gog_account`)}
+            <CalendarAccountRow
+              idx={idx}
+              cal={effectiveCal}
+              enabled={enabled}
+              blocked={isBlocked(`calendars.${idx}.gog_account`)}
+              accounts={discoveredAccounts}
+              commitAccount={commitAccount}
             />
             {/* watch_calendars comes from gog's calendar list; users select ids by checkbox.
                 Defaults to ["primary"] when unset, so the effective value is visible. */}
@@ -239,7 +344,7 @@ export function IntegrationsSection({ tracker }: IntegrationsSectionProps) {
               <div className="row-value">
                 <CalendarWatchSelector
                   idx={idx}
-                  cal={cal}
+                  cal={effectiveCal}
                   enabled={enabled}
                   blocked={isBlocked(`calendars.${idx}.watch_calendars`)}
                   commitWatchCalendars={commitWatchCalendars}

@@ -118,3 +118,34 @@ describe("integrationsRouter.calendarList", () => {
     expect(r.stderr).toContain("not authenticated");
   });
 });
+
+describe("integrationsRouter.accountList", () => {
+  it("lists gog-authenticated Google accounts through fixed auth list JSON argv", async () => {
+    mockSpawn(JSON.stringify([
+      { email: "me@example.com", services: ["calendar"] },
+      { email: "other@example.com", services: ["gmail", "calendar"] },
+    ]));
+    const caller = createCaller(integrationsRouter, ctx());
+    const r = await caller.accountList();
+
+    expect(r.ok).toBe(true);
+    expect(r.accounts).toEqual([
+      { email: "me@example.com", services: ["calendar"] },
+      { email: "other@example.com", services: ["gmail", "calendar"] },
+    ]);
+
+    const call = spawnMock.mock.calls[0]!;
+    expect(call[0]).toBe("gog");
+    expect(call[1]).toEqual(["auth", "list", "--json", "--results-only", "--no-input"]);
+  });
+
+  it("returns ok=false with stderr when gog account listing fails", async () => {
+    mockSpawn("", 1, "keyring unavailable");
+    const caller = createCaller(integrationsRouter, ctx());
+    const r = await caller.accountList();
+
+    expect(r.ok).toBe(false);
+    expect(r.accounts).toEqual([]);
+    expect(r.stderr).toContain("keyring unavailable");
+  });
+});

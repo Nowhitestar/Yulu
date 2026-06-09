@@ -79,7 +79,11 @@ vi.mock("../../../web/src/trpc.js", () => {
         pickFile: { useMutation: noopMutation },
         openInFinder: { useMutation: noopMutation },
       },
-      integrations: { test: { useMutation: noopMutation } },
+      integrations: {
+        test: { useMutation: noopMutation },
+        accountList: { useQuery: () => ({ data: { ok: true, accounts: [] }, isPending: false }) },
+        calendarList: { useQuery: () => ({ data: { ok: true, calendars: [] }, isPending: false }) },
+      },
       llm: { test: { useMutation: noopMutation } },
       prompts: {
         list: { useQuery: () => ({ data: [], isPending: false }) },

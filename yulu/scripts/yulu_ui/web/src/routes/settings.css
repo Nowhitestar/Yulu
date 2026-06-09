@@ -112,6 +112,14 @@
 }
 .conn-status--ok { color: var(--green, #2e7d32); }
 .conn-status--bad { color: var(--red, #c62828); }
+.account-current {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+}
+.account-select {
+  max-width: min(100%, 360px);
+}
 .calendar-checklist {
   display: grid;
   gap: 6px;

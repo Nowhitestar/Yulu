@@ -12,6 +12,10 @@ let calendarListReturn: {
   data: { ok: boolean; calendars: Array<{ id: string; summary: string; primary: boolean }>; stderr?: string };
   isPending: boolean;
 } = { data: { ok: true, calendars: [] }, isPending: false };
+let accountListReturn: {
+  data: { ok: boolean; accounts: Array<{ email: string; services: string[] }>; stderr?: string };
+  isPending: boolean;
+} = { data: { ok: true, accounts: [] }, isPending: false };
 
 // calendars is restart-class (calendar + scheduler) — drives the recording-guard.
 const SCHEMA = [
@@ -35,6 +39,7 @@ vi.mock("../../web/src/trpc.js", () => ({
     recording: { state: { useQuery: () => ({ data: { state: recordingState } }) } },
     integrations: {
       test: { useMutation: () => ({ mutateAsync: async () => testResult }) },
+      accountList: { useQuery: () => accountListReturn },
       calendarList: { useQuery: () => calendarListReturn },
     },
     system: {
@@ -74,6 +79,7 @@ beforeEach(() => {
     },
     isPending: false,
   };
+  accountListReturn = { data: { ok: true, accounts: [] }, isPending: false };
   configReturn = configWith([]);
 });
 
@@ -164,6 +170,47 @@ describe("IntegrationsSection — Google calendar via gog (P4a-4)", () => {
     input.blur();
     await vi.waitFor(() =>
       expect(updateMutate).toHaveBeenCalledWith({ key: "calendars.0.gog_account", value: "new@example.com" }),
+    );
+  });
+
+  it("auto-fills gog_account when exactly one gog account is discovered", async () => {
+    accountListReturn = {
+      data: { ok: true, accounts: [{ email: "me@example.com", services: ["calendar"] }] },
+      isPending: false,
+    };
+    configReturn = configWith([{ type: "google", enabled: false, gog_account: "" }]);
+    mount();
+
+    await vi.waitFor(() =>
+      expect(updateMutate).toHaveBeenCalledWith({ key: "calendars.0.gog_account", value: "me@example.com" }),
+    );
+    expect(screen.queryByText(translate("zh", "settings.integrations.watch.accountRequired"))).toBeNull();
+    expect(screen.getByRole("checkbox", { name: "Primary primary" })).toBeChecked();
+    expect(record).not.toHaveBeenCalled();
+  });
+
+  it("lets the user choose gog_account when multiple gog accounts are discovered", async () => {
+    accountListReturn = {
+      data: {
+        ok: true,
+        accounts: [
+          { email: "me@example.com", services: ["calendar"] },
+          { email: "other@example.com", services: ["calendar"] },
+        ],
+      },
+      isPending: false,
+    };
+    configReturn = configWith([{ type: "google", enabled: false, gog_account: "" }]);
+    mount();
+    const user = userEvent.setup();
+
+    await user.selectOptions(
+      screen.getByRole("combobox", { name: translate("zh", "settings.integrations.account.label") }),
+      "other@example.com",
+    );
+
+    await vi.waitFor(() =>
+      expect(updateMutate).toHaveBeenCalledWith({ key: "calendars.0.gog_account", value: "other@example.com" }),
     );
   });
 
