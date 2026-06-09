@@ -8,8 +8,16 @@ export interface TestPopoverProps {
   onClose: () => void;
 }
 
+function visibleOutput(value: string | undefined): string {
+  const trimmed = (value ?? "").trim();
+  const compact = trimmed.replace(/\\[rn]/g, "").trim();
+  return compact === "[]" ? "" : (value ?? "");
+}
+
 export function TestPopover({ state, stdout, stderr, onClose }: TestPopoverProps) {
   const t = useT();
+  const visibleStdout = visibleOutput(stdout);
+  const visibleStderr = visibleOutput(stderr);
   return (
     <div className="testpop" role="dialog">
       <div className="testpop-header">
@@ -20,8 +28,8 @@ export function TestPopover({ state, stdout, stderr, onClose }: TestPopoverProps
         </span>
         <button type="button" className="testpop-close" onClick={onClose} aria-label={t("test.closeAria")}>×</button>
       </div>
-      {stdout && <pre className="testpop-out">{stdout}</pre>}
-      {stderr && <pre className="testpop-err">{stderr}</pre>}
+      {visibleStdout && <pre className="testpop-out">{visibleStdout}</pre>}
+      {visibleStderr && <pre className="testpop-err">{visibleStderr}</pre>}
     </div>
   );
 }

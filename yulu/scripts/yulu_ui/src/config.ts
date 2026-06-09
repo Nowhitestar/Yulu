@@ -59,7 +59,7 @@ export const ConfigSchema = z.object({
     command: z.array(z.string()).optional(),
   }).default({}),
   status_agent: z.object({
-    enabled: z.boolean().optional(),
+    enabled: z.boolean().default(true),
   }).default({}),
   calendars: z.array(CalendarSchema).default([]),
 }).passthrough();

@@ -182,6 +182,7 @@ def test_daemon_start_proceeds_when_daemon_idle(monkeypatch, tmp_path):
     importlib.reload(record_audio)
 
     lock = tmp_path / ".recording.lock"
+    monkeypatch.setattr(record_audio, "STATE_PATH", tmp_path / ".state.json")
     calls = []
 
     monkeypatch.setattr(record_audio, "load_config", lambda: {
@@ -218,13 +219,14 @@ def test_daemon_start_proceeds_when_daemon_idle(monkeypatch, tmp_path):
     assert meta["path"] == "/tmp/new.wav"
 
 
-def test_daemon_start_omits_legacy_sox_mic_device_for_native_daemon(monkeypatch):
+def test_daemon_start_omits_legacy_sox_mic_device_for_native_daemon(monkeypatch, tmp_path):
     import importlib
     sys.path.insert(0, str(SCRIPTS))
     import record_audio
     importlib.reload(record_audio)
 
     calls = []
+    monkeypatch.setattr(record_audio, "STATE_PATH", tmp_path / ".state.json")
     monkeypatch.setattr(record_audio, "load_config", lambda: {
         "mic_device": ":0",
         "silence_duration_sec": 300,

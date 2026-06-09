@@ -121,6 +121,15 @@ def test_assign_formats_minutes_and_seconds():
     assert result.transcript == "[02:05 Speaker 1] two minutes in"
 
 
+def test_assign_accepts_mlx_start_ms_segments():
+    asr = [{"start_ms": 125_000, "end_ms": 126_000, "text": "mlx timed"}]
+    turns = [{"start": 120.0, "end": 130.0, "speaker": 0}]
+    result = assign_speakers(asr_segments=asr, turns=turns)
+    assert result.segments[0].start == 125.0
+    assert result.segments[0].end == 126.0
+    assert result.transcript == "[02:05 Speaker 1] mlx timed"
+
+
 def test_assign_empty_input_returns_empty():
     result = assign_speakers(asr_segments=[], turns=[])
     assert result.transcript == ""

@@ -207,7 +207,7 @@ func normalizeToDBFS(_ samples: [Int16], targetDB: Float = -20) -> [Int16] {
 
 func writeState(recording: Bool, title: String = "", path: String = "") {
     let df = ISO8601DateFormatter()
-    let d: [String: Any] = [
+    var d: [String: Any] = [
         "version": 2,
         "recording": recording,
         "status": recording ? "recording" : "idle",
@@ -218,9 +218,40 @@ func writeState(recording: Bool, title: String = "", path: String = "") {
         "started_at": recording ? df.string(from: Date()) : "",
         "updated_at": df.string(from: Date()),
     ]
+    if recording, let prior = readStateDict(), (prior["recording"] as? Bool) == true {
+        var segments = (prior["segments"] as? [String]) ?? []
+        if let oldPath = (prior["audio_path"] as? String) ?? (prior["file_path"] as? String),
+           !oldPath.isEmpty && !segments.contains(oldPath) {
+            segments.append(oldPath)
+        }
+        if !path.isEmpty && !segments.contains(path) {
+            segments.append(path)
+        }
+        d["segments"] = segments
+        d["resume_count"] = prior["resume_count"] ?? 0
+        d["meeting_id"] = prior["meeting_id"] ?? ""
+    }
     if let data = try? JSONSerialization.data(withJSONObject: d, options: .prettyPrinted) {
         try? data.write(to: STATE_PATH, options: [.atomic])
     }
+}
+
+func readStateDict() -> [String: Any]? {
+    guard let data = try? Data(contentsOf: STATE_PATH),
+          let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+        return nil
+    }
+    return obj
+}
+
+func interruptedRecordingTitle() -> String? {
+    guard let state = readStateDict(),
+          (state["recording"] as? Bool) == true,
+          (state["backend"] as? String ?? "daemon") == "daemon" else {
+        return nil
+    }
+    let title = (state["title"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+    return title.isEmpty ? "meeting" : title
 }
 
 // ─── 音频数据管理器 + 源分离立体声 (L=mic, R=sys) ───
@@ -1304,8 +1335,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ n: Notification) {
         try? FileManager.default.createDirectory(at: CONFIG_DIR, withIntermediateDirectories: true)
-        FileManager.default.createFile(atPath: LOG_PATH.path, contents: nil)
+        if !FileManager.default.fileExists(atPath: LOG_PATH.path) {
+            FileManager.default.createFile(atPath: LOG_PATH.path, contents: nil)
+        }
         logFile = try? FileHandle(forWritingTo: LOG_PATH)
+        _ = try? logFile?.seekToEnd()
         try? "\(ProcessInfo.processInfo.processIdentifier)".write(to: PID_PATH, atomically: true, encoding: .utf8)
         log("🎧 Audio Daemon (pid=\(ProcessInfo.processInfo.processIdentifier))")
 
@@ -1367,6 +1401,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             self?.micCapture?.stop()
         }
         ss.start()
+        if let title = interruptedRecordingTitle(), let p = rec.start(title: title) {
+            log("⚠️ Resuming interrupted recording: \(p)")
+            ss.onRecordingStart?()
+        }
         log("Ready")
     }
 

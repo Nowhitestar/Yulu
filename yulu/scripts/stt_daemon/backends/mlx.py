@@ -54,12 +54,25 @@ class MlxWhisperBackend:
         language: str,
         initial_prompt: str,
         cancel_token: CancelToken,
+        options: Optional[dict] = None,
     ) -> STTResult:
         cancel_token.check()
         if not self._ready:
             await self.warm_up()
         if self._module is None:
             raise RuntimeError("mlx_whisper module not loaded")
+
+        opts = options or {}
+        condition_on_previous_text = bool(
+            opts.get("condition_on_previous", self.condition_on_previous_text)
+        )
+        word_timestamps = bool(opts.get("word_timestamps", self.word_timestamps))
+        hallucination_silence_threshold = float(
+            opts.get(
+                "hallucination_silence_threshold",
+                self.hallucination_silence_threshold,
+            )
+        )
 
         def _run() -> dict:
             return self._module.transcribe(
@@ -69,9 +82,9 @@ class MlxWhisperBackend:
                 task="transcribe",
                 verbose=False,
                 initial_prompt=initial_prompt or None,
-                condition_on_previous_text=self.condition_on_previous_text,
-                word_timestamps=self.word_timestamps,
-                hallucination_silence_threshold=self.hallucination_silence_threshold,
+                condition_on_previous_text=condition_on_previous_text,
+                word_timestamps=word_timestamps,
+                hallucination_silence_threshold=hallucination_silence_threshold,
             )
 
         result = await asyncio.to_thread(_run)

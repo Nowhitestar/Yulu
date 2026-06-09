@@ -15,6 +15,13 @@ describe("TestPopover", () => {
     expect(screen.getByText("Hello world!")).toBeInTheDocument();
   });
 
+  it("hides empty JSON-array stdout when state='ok'", () => {
+    const { container } = render(<TestPopover state="ok" stdout={"[]\n"} stderr="" onClose={vi.fn()} />);
+    expect(screen.getByText("✓ 成功")).toBeInTheDocument();
+    expect(container.querySelector(".testpop-out")).toBeNull();
+    expect(screen.queryByText("[]")).toBeNull();
+  });
+
   it("renders failed status with stderr when state='failed'", () => {
     render(<TestPopover state="failed" stdout="" stderr="boom" onClose={vi.fn()} />);
     expect(screen.getByText("✗ 失败")).toBeInTheDocument();

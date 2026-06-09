@@ -58,6 +58,7 @@ class CloudCommandBackend:
         language: str,
         initial_prompt: str,
         cancel_token: CancelToken,
+        options: Optional[dict] = None,
     ) -> STTResult:
         cancel_token.check()
         if not self.command:

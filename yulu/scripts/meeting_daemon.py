@@ -353,6 +353,7 @@ def _start_recording(title, meeting_id=""):
             set_recording_started(
                 title, audio_path,
                 meeting_id=meeting_id, backend="daemon", path=STATE_PATH,
+                extra={"segments": [audio_path]},
             )
             print(f"✅ 录制中: {audio_path}")
 
@@ -503,7 +504,14 @@ def _stop_and_process():
 
     # 1. 停录制
     record = SCRIPT_DIR / "record_audio.py"
-    subprocess.run([sys.executable, str(record), "stop"], capture_output=True)
+    stop_result = subprocess.run(
+        [sys.executable, str(record), "stop"],
+        capture_output=True, text=True,
+    )
+    for line in stop_result.stdout.splitlines():
+        if line.startswith("FINAL_RECORDING_PATH="):
+            audio_path = line.split("=", 1)[1].strip() or audio_path
+            break
 
     notify = SCRIPT_DIR / "notify.py"
     subprocess.Popen([sys.executable, str(notify), "notify_stop", title],

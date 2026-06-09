@@ -19,6 +19,7 @@ from transcribe_client import (
     request_final_transcribe, DaemonUnavailable, DaemonError,
 )
 from realtime_coverage import realtime_coverage_ok as _realtime_coverage_ok
+from audio_clean import select_transcription_audio
 
 CONFIG_PATH = Path.home() / ".config" / "yulu" / "config.json"
 PROMPTS_DB = Path.home() / ".config" / "yulu" / "prompts.sqlite"
@@ -118,27 +119,29 @@ def process_audio(audio_path_str: str) -> None:
     if not audio_path.exists():
         print(f"Audio file not found: {audio_path}", file=sys.stderr)
         sys.exit(1)
+    transcribe_audio_path = select_transcription_audio(audio_path, trans_cfg)
 
     meeting_title = audio_path.stem.rsplit("_", 1)[0].replace("_", " ")
     print(f"📁 处理: {audio_path.name}（标题: {meeting_title}）")
+    if transcribe_audio_path != audio_path:
+        print(f"🎧 使用去回声音频转写: {transcribe_audio_path.name}")
 
     raw_path = audio_path.with_suffix(".raw.transcript.txt")
     transcript_path = audio_path.with_suffix(".transcript.txt")
     realtime_path = audio_path.with_suffix(".realtime.transcript.txt")
     post_mode = normalize_post_recording_mode(trans_cfg.get("post_recording_mode"))
 
-    # 1. Acquire transcripts. Fast mode prefers realtime mono; otherwise hit
-    # the daemon with channel_split=True so dual-track WAVs come back split.
     merged: Optional[str] = None
     mic_text: Optional[str] = None
     sys_text: Optional[str] = None
-    # Timestamped ASR segments retained for the diarize stage (Phase 13); empty → diarize skipped.
     asr_segments: list[dict] = []
 
     if post_mode == FAST_POST_RECORDING_MODE:
         merged = read_realtime_transcript(realtime_path)
-        if merged and not _realtime_coverage_ok(audio_path):
-            # Truncated realtime (live tail fell behind): full daemon transcribe, not reuse.
+        if transcribe_audio_path != audio_path:
+            print("⚠️ 双轨录音使用去回声完整转录，跳过实时转写复用", file=sys.stderr)
+            merged = None
+        elif merged and not _realtime_coverage_ok(audio_path):
             print("⚠️ 实时转写覆盖不足，改走完整 daemon 转录", file=sys.stderr)
             merged = None
         elif merged:
@@ -147,7 +150,7 @@ def process_audio(audio_path_str: str) -> None:
             print("⚠️ 未找到可用实时转写，回退到完整 daemon 转录", file=sys.stderr)
 
     if merged is None:
-        response = _request_final_transcribe(audio_path, trans_cfg, meeting_title)
+        response = _request_final_transcribe(transcribe_audio_path, trans_cfg, meeting_title)
         if response is None:
             merged = read_realtime_transcript(realtime_path)
             if merged is None:
@@ -162,14 +165,11 @@ def process_audio(audio_path_str: str) -> None:
             mic_segs = mic_payload.get("segments", []) or []
             sys_segs = sys_payload.get("segments", []) or []
             merged = merge_segments(mic=mic_segs, sys=sys_segs)
-            # Diarizer re-splits the whole WAV by acoustics → feed it every segment.
             asr_segments = [dict(s) for s in mic_segs + sys_segs]
         else:
             merged = response.get("text", "") or ""
             asr_segments = [dict(s) for s in (response.get("segments", []) or [])]
 
-    # 2. Persist transcripts. `.transcript.txt` may be overwritten later by a
-    # cleanup prompt; `.raw.transcript.txt` preserves the pre-cleanup snapshot.
     raw_path.write_text(merged, encoding="utf-8")
     transcript_path.write_text(merged, encoding="utf-8")
     print(f"✅ 原始转录已保存: {raw_path}")

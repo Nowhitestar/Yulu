@@ -41,6 +41,16 @@ describe("ConfigManager", () => {
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 
+  it("read() defaults status_agent.enabled to true when the block is missing", () => {
+    const dir = mkdtempSync(join(tmpdir(), "yulu_status_agent_default_"));
+    const path = join(dir, "config.json");
+    fs.writeFileSync(path, JSON.stringify({ audio: { output_dir: "~/Movies/Yulu" }, transcription: {} }));
+    try {
+      const cfg = new ConfigManager(path).read();
+      expect(cfg.status_agent.enabled).toBe(true);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
   it("update() writes + returns diff with restart targets", () => {
     const { mgr, cleanup } = makeCfg();
     try {

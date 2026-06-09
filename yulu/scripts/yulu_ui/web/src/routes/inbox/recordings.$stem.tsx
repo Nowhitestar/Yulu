@@ -394,7 +394,7 @@ export function RecordingReader() {
   const parsedSeek = seekParam !== null ? parseFloat(seekParam) : NaN;
   const initialSeek = Number.isFinite(parsedSeek) ? parsedSeek : undefined;
 
-  const audioSrc = `/files/meetings/${data.stem}.wav`;
+  const audioSrc = `/files/meetings/${data.audioFile ?? `${data.stem}.wav`}`;
   const handleSeek = (time: number) => {
     const next = new URLSearchParams(params);
     next.set("seek", Math.max(0, time).toFixed(2));

@@ -39,6 +39,7 @@ class WhisperCliBackend:
         language: str,
         initial_prompt: str,
         cancel_token: CancelToken,
+        options: Optional[dict] = None,
     ) -> STTResult:
         cancel_token.check()
         await self.warm_up()

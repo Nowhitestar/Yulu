@@ -19,13 +19,23 @@ def _fmt_timestamp(seconds: float) -> str:
     return f"{s // 60:02d}:{s % 60:02d}"
 
 
+def _segment_seconds(seg: dict, key: str, *, default: float = 0.0) -> float:
+    value = seg.get(key)
+    if value is not None:
+        return float(value)
+    ms_value = seg.get(f"{key}_ms")
+    if ms_value is not None:
+        return float(ms_value) / 1000.0
+    return default
+
+
 def _tag(segments: Iterable[dict], speaker: str, channel_priority: int) -> list[tuple]:
     out: list[tuple] = []
     for seg in segments or []:
         text = (seg.get("text") or "").strip()
         if not text:
             continue
-        start = float(seg.get("start", 0.0))
+        start = _segment_seconds(seg, "start")
         out.append((start, channel_priority, _fmt_timestamp(start), speaker, text))
     return out
 

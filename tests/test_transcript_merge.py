@@ -57,6 +57,16 @@ def test_merge_formats_minutes_and_seconds():
     assert out == f"[02:05 {SPEAKER_MIC}] two minutes in"
 
 
+def test_merge_accepts_mlx_start_ms_segments():
+    mic = [{"start_ms": 125_000, "end_ms": 126_000, "text": "mlx timed"}]
+    sys_ = [{"start_ms": 5_000, "end_ms": 6_000, "text": "system first"}]
+    out = merge_segments(mic=mic, sys=sys_)
+    assert out == (
+        f"[00:05 {SPEAKER_SYS}] system first\n"
+        f"[02:05 {SPEAKER_MIC}] mlx timed"
+    )
+
+
 def test_merge_strips_whitespace_in_segment_text():
     mic = [{"start": 0.0, "end": 1.0, "text": "  hello  "}]
     out = merge_segments(mic=mic, sys=[])

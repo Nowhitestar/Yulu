@@ -6,7 +6,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "yulu" / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-from agent_queue_worker import _is_valid_summary, process_queue_once
+from agent_queue_worker import _is_valid_summary, _load_llm_command, process_queue_once
 from prompts import PromptsRepo, Category, open_db
 
 
@@ -167,3 +167,15 @@ def test_no_llm_command_leaves_request_pending(tmp_path):
     assert processed == 0
     queue = json.loads(queue_path.read_text(encoding="utf-8"))
     assert "status" not in queue[0]
+
+
+def test_load_llm_command_resolves_bundled_codex_shim(tmp_path):
+    cfg = tmp_path / "config.json"
+    cfg.write_text(
+        json.dumps({"llm": {"command": ["python3", "codex_llm.py"]}}),
+        encoding="utf-8",
+    )
+
+    cmd = _load_llm_command(cfg)
+
+    assert cmd == ["python3", str(SCRIPTS / "codex_llm.py")]

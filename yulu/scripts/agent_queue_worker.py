@@ -27,6 +27,7 @@ LOG_PATH = Path.home() / ".config" / "yulu" / "agent_queue_worker.log"
 PID_PATH = Path.home() / ".config" / "yulu" / "agent_queue_worker.pid"
 WORKER_NAME = "yulu-agent-queue-worker"
 PROMPTS_DB = Path.home() / ".config" / "yulu" / "prompts.sqlite"
+SCRIPT_DIR = Path(__file__).resolve().parent
 
 # Set by SIGHUP; checked between events in process_queue_once.
 _RELOAD_PROMPTS = False
@@ -67,10 +68,25 @@ def _load_llm_command(config_path: Path = CONFIG_PATH) -> list[str]:
         return []
     cmd = llm_cfg.get("command") or []
     if isinstance(cmd, str):
-        return shlex.split(cmd)
+        return _resolve_bundled_script_args(shlex.split(cmd))
     if isinstance(cmd, list):
-        return [str(x) for x in cmd if str(x)]
+        return _resolve_bundled_script_args([str(x) for x in cmd if str(x)])
     return []
+
+
+def _resolve_bundled_script_args(cmd: list[str]) -> list[str]:
+    """Resolve Yulu-bundled helper scripts so launchd's cwd cannot break them."""
+    resolved: list[str] = []
+    for part in cmd:
+        if "/" in part:
+            resolved.append(part)
+            continue
+        candidate = SCRIPT_DIR / part
+        if candidate.exists() and candidate.is_file():
+            resolved.append(str(candidate))
+        else:
+            resolved.append(part)
+    return resolved
 
 
 def _looks_like_agent_event_json(text: str) -> bool:

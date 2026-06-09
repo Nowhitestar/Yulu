@@ -107,7 +107,7 @@ class TranscribeRequest:
     meeting_title: Optional[str] = None
     session_id: Optional[str] = None
     word_timestamps: bool = False
-    condition_on_previous: bool = True
+    condition_on_previous: bool = False
     hallucination_silence_threshold: float = 2.0
     timeout_sec: int = 7200
     channel_split: bool = False

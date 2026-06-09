@@ -1,4 +1,6 @@
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import { router, publicProcedure } from "../trpc.js";
 
 function runSpawnWithStdin(cmd: string, args: string[], stdin: string, timeoutMs: number): Promise<{ stdout: string; stderr: string; code: number }> {
@@ -14,6 +16,14 @@ function runSpawnWithStdin(cmd: string, args: string[], stdin: string, timeoutMs
   });
 }
 
+function resolveBundledScriptArgs(command: string[], scriptDir: string): string[] {
+  return command.map((part) => {
+    if (part.includes("/")) return part;
+    const candidate = join(scriptDir, part);
+    return existsSync(candidate) ? candidate : part;
+  });
+}
+
 export const llmRouter = router({
   test: publicProcedure.mutation(async ({ ctx }) => {
     const cfg = ctx.config.read();
@@ -24,7 +34,7 @@ export const llmRouter = router({
     if (command.length === 0) {
       return { ok: false, stdout: "", stderr: "llm.command is empty" };
     }
-    const [cmd, ...args] = command;
+    const [cmd, ...args] = resolveBundledScriptArgs(command, ctx.paths.scriptDir);
     const { stdout, stderr, code } = await runSpawnWithStdin(cmd!, args, "hello, world\n", 30_000);
     return { ok: code === 0, stdout, stderr };
   }),

@@ -172,6 +172,7 @@ class STTScheduler:
                     initial_prompt=queued.job.initial_prompt,
                     cancel_token=queued.cancel_token,
                     engine=queued.job.engine,
+                    options=queued.job.options,
                 )
                 if not queued.future.done():
                     queued.future.set_result(result)

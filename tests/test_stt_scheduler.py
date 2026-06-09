@@ -103,6 +103,36 @@ def test_cancel_drops_queued_job(tmp_path):
     asyncio.run(go())
 
 
+def test_scheduler_passes_job_options_to_runtime(tmp_path):
+    class OptionBackend(MockSTTBackend):
+        def __init__(self):
+            super().__init__(canned_text="ok")
+            self.last_options = None
+
+        async def transcribe(self, *, options=None, **kwargs):
+            self.last_options = options
+            return await super().transcribe(**kwargs)
+
+    async def go():
+        backend = OptionBackend()
+        scheduler = STTScheduler(runtime=STTRuntime(backends={"mlx": backend}))
+        await scheduler.start()
+        job = Job(
+            job_id=str(uuid.uuid4()),
+            kind=JobKind.FINAL_TRANSCRIBE,
+            engine="mlx",
+            language="zh",
+            audio_path="/tmp/x.wav",
+            options={"condition_on_previous": False},
+        )
+        fut = await scheduler.submit(job)
+        await fut
+        await scheduler.stop()
+        return backend.last_options
+
+    assert asyncio.run(go()) == {"condition_on_previous": False}
+
+
 def test_session_stop_cancels_remaining_live_chunks(tmp_path):
     async def go():
         runtime, backend = _make_runtime()

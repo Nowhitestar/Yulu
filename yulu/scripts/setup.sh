@@ -230,6 +230,9 @@ create_config() {
   "output": {
     "channel": "file"
   },
+  "status_agent": {
+    "enabled": true
+  },
   "meeting_detection": {
     "enabled": true,
     "interval_sec": 10,

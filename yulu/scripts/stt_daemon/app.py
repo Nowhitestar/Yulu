@@ -303,6 +303,11 @@ class STTDaemonApp:
             initial_prompt=initial_prompt,
             session_id=msg.session_id,
             meeting_title=msg.meeting_title,
+            options={
+                "word_timestamps": msg.word_timestamps,
+                "condition_on_previous": msg.condition_on_previous,
+                "hallucination_silence_threshold": msg.hallucination_silence_threshold,
+            },
         )
         fut = await self.scheduler.submit(job)
         return await fut

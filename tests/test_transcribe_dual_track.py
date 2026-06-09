@@ -13,7 +13,6 @@ SCRIPTS = Path(__file__).resolve().parents[1] / "yulu" / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
 import transcribe
-import queue_store
 
 
 def _write_dual_track(path: Path):
@@ -30,12 +29,9 @@ def _write_dual_track(path: Path):
 @pytest.fixture
 def isolated_paths(tmp_path, monkeypatch):
     queue = tmp_path / "queue.json"
-    lock = tmp_path / "queue.lock"
     prompts = tmp_path / "prompts.sqlite"
     monkeypatch.setattr(transcribe, "AGENT_QUEUE_PATH", queue)
     monkeypatch.setattr(transcribe, "PROMPTS_DB", prompts)
-    monkeypatch.setattr(queue_store, "QUEUE_PATH", queue)
-    monkeypatch.setattr(queue_store, "LOCK_PATH", lock)
 
     # Seed prompts so cache.auto_run returns real entries
     from prompts.db import PromptsRepo, open_db
@@ -51,7 +47,7 @@ def test_dual_track_writes_three_transcripts_and_enqueues_two(isolated_paths, tm
     _write_dual_track(wav)
 
     # Stub config so process_audio doesn't try to read ~/.config/yulu/config.json.
-    monkeypatch.setattr(transcribe, "load_config", lambda: {"transcription": {"language": "zh"}})
+    monkeypatch.setattr(transcribe, "load_config", lambda: {"transcription": {"language": "zh", "echo_cancel_dual_track": False}})
 
     # Fake the daemon response — return dual-track shape with both channels
     fake_response = {

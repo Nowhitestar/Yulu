@@ -38,7 +38,10 @@ function makeCtx() {
   const dir = mkdtempSync(join(tmpdir(), "yulu_llm_"));
   const path = join(dir, "config.json");
   cpSync(join(HERE, "../fixtures/config.json"), path);
-  return { config: new ConfigManager(path) } as unknown as AppContext;
+  return {
+    config: new ConfigManager(path),
+    paths: { scriptDir: join(HERE, "../../../") },
+  } as unknown as AppContext;
 }
 
 describe("llmRouter.test", () => {
@@ -73,5 +76,18 @@ describe("llmRouter.test", () => {
     expect(r.ok).toBe(false);
     expect(r.stderr).toContain("llm.command is empty");
     expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it("resolves bundled codex_llm.py before spawning", async () => {
+    mockSpawn("Hi there\n");
+    const ctx = makeCtx();
+    ctx.config.update("llm.command", ["python3", "codex_llm.py"]);
+    const caller = createCaller(llmRouter, ctx);
+
+    const r = await caller.test();
+
+    expect(r.ok).toBe(true);
+    expect(spawnMock.mock.calls[0]![0]).toBe("python3");
+    expect(spawnMock.mock.calls[0]![1]).toEqual([join(HERE, "../../../codex_llm.py")]);
   });
 });

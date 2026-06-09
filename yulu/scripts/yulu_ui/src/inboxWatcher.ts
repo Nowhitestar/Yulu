@@ -1,7 +1,7 @@
 import { watch, type FSWatcher, existsSync } from "node:fs";
 import type { PubSub, AppChannels } from "./pubsub.js";
 
-const RELEVANT_RE = /^[^.]+_\d{8}_\d{6}\.(wav|transcript\.txt|summary\.md|raw\.transcript\.txt|realtime\.transcript\.txt|summary\.html)$/;
+const RELEVANT_RE = /^[^.]+_\d{8}_\d{6}\.(wav|clean\.wav|transcript\.txt|summary\.md|raw\.transcript\.txt|realtime\.transcript\.txt|summary\.html)$/;
 const DEBOUNCE_MS = 80;
 
 export interface InboxWatcherOptions {

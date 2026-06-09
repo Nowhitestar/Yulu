@@ -222,6 +222,7 @@ class STTBackend(Protocol):
         language: str,
         initial_prompt: str,
         cancel_token: CancelToken,
+        options: Optional[dict] = None,
     ) -> STTResult: ...
     def is_ready(self) -> bool: ...
     def release(self) -> None: ...
@@ -254,6 +255,7 @@ class MockSTTBackend:
         language: str,
         initial_prompt: str,
         cancel_token: CancelToken,
+        options: Optional[dict] = None,
     ) -> STTResult:
         self.calls += 1
         self.last_initial_prompt = initial_prompt
@@ -392,6 +394,7 @@ class STTRuntime:
         language: str,
         initial_prompt: str,
         cancel_token: CancelToken,
+        options: Optional[dict] = None,
     ) -> STTResult:
         """Dispatch to a single backend with the per-engine self-reset bookkeeping."""
         backend = self.backends[engine]
@@ -401,6 +404,7 @@ class STTRuntime:
                 language=language,
                 initial_prompt=initial_prompt,
                 cancel_token=cancel_token,
+                options=options,
             )
             self._failure_counts[engine] = 0
             return result
@@ -421,6 +425,7 @@ class STTRuntime:
         initial_prompt: str,
         cancel_token: CancelToken,
         engine: str,
+        options: Optional[dict] = None,
     ) -> STTResult:
         if engine not in self.backends:
             raise ValueError(f"unknown engine: {engine}")
@@ -435,6 +440,7 @@ class STTRuntime:
                     language=language,
                     initial_prompt=initial_prompt,
                     cancel_token=cancel_token,
+                    options=options,
                 )
                 if idx > 0:
                     self._log(

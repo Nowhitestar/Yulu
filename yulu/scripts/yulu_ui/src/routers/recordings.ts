@@ -320,6 +320,8 @@ export const recordingsRouter = router({
         return existsSync(p) ? readFileSync(p, "utf8") : null;
       };
       const stat = statSync(wav);
+      const cleanFile = `${input.stem}.clean.wav`;
+      const audioFile = existsSync(join(dir, cleanFile)) ? cleanFile : `${input.stem}.wav`;
       const job = ctx.jobs.get(input.stem);
       let recordedAt: string | null = null;
       const tm = input.stem.match(/_(\d{8})_(\d{6})$/);
@@ -338,7 +340,7 @@ export const recordingsRouter = router({
       const rawDiffers = raw !== null && transcript !== null && raw.trim() !== transcript.trim();
       return {
         stem: input.stem, title, tags, recordedAt,
-        wavPath: wav, sizeBytes: stat.size, mtimeMs: stat.mtimeMs,
+        wavPath: wav, audioFile, sizeBytes: stat.size, mtimeMs: stat.mtimeMs,
         transcript,
         raw,
         rawDiffers,
@@ -469,7 +471,7 @@ export const recordingsRouter = router({
       const dir = ctx.paths.moviesDir;
       // Every known sidecar a recording can spawn. `.tags.json`/`.title` are the
       // UI-editable ones; the rest are pipeline outputs.
-      const suffixes = [".wav", ".transcript.txt", ".raw.transcript.txt",
+      const suffixes = [".wav", ".clean.wav", ".transcript.txt", ".raw.transcript.txt",
                         ".realtime.transcript.txt", ".realtime.coverage.json", ".realtime.json",
                         ".speakers.json",
                         ".summary.md", ".summary.html",

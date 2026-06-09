@@ -77,6 +77,38 @@ def test_mlx_backend_segment_format(monkeypatch):
     assert result.segments[1]["end_ms"] == 5000
 
 
+def test_mlx_backend_honors_request_options(monkeypatch):
+    fake = _stub_module(text="raw text")
+    monkeypatch.setitem(sys.modules, "mlx_whisper", fake)
+    backend = MlxWhisperBackend(
+        model="dummy",
+        language="zh",
+        condition_on_previous_text=True,
+        word_timestamps=False,
+        hallucination_silence_threshold=2.0,
+    )
+
+    async def go():
+        await backend.warm_up()
+        return await backend.transcribe(
+            audio_path="/tmp/x.wav",
+            language="zh",
+            initial_prompt="",
+            cancel_token=CancelToken(),
+            options={
+                "condition_on_previous": False,
+                "word_timestamps": True,
+                "hallucination_silence_threshold": 1.0,
+            },
+        )
+    asyncio.run(go())
+
+    call_kwargs = fake.transcribe.call_args.kwargs
+    assert call_kwargs["condition_on_previous_text"] is False
+    assert call_kwargs["word_timestamps"] is True
+    assert call_kwargs["hallucination_silence_threshold"] == 1.0
+
+
 def test_mlx_backend_propagates_cancel_pre_call(monkeypatch):
     fake = _stub_module()
     monkeypatch.setitem(sys.modules, "mlx_whisper", fake)

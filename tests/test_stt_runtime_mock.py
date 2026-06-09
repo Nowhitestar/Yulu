@@ -68,6 +68,31 @@ def test_runtime_routes_by_engine():
     assert whisper_ready is False  # only warmed mlx
 
 
+def test_runtime_passes_request_options_to_backend():
+    class OptionBackend(MockSTTBackend):
+        def __init__(self):
+            super().__init__(canned_text="ok")
+            self.last_options = None
+
+        async def transcribe(self, *, options=None, **kwargs):
+            self.last_options = options
+            return await super().transcribe(**kwargs)
+
+    async def go():
+        backend = OptionBackend()
+        runtime = STTRuntime(backends={"mlx": backend})
+        result = await runtime.transcribe(
+            audio_path="/x", language="zh", initial_prompt="",
+            cancel_token=CancelToken(), engine="mlx",
+            options={"condition_on_previous": False},
+        )
+        return result.text, backend.last_options
+
+    text, options = asyncio.run(go())
+    assert text == "ok"
+    assert options == {"condition_on_previous": False}
+
+
 def test_runtime_self_reset_after_three_failures():
     async def go():
         flaky = MockSTTBackend(canned_text="ok", raise_first_n=3)

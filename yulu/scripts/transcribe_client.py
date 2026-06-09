@@ -99,7 +99,7 @@ def transcribe_file(
     session_id: Optional[str] = None,
     kind: str = "final_transcribe",
     word_timestamps: bool = False,
-    condition_on_previous: bool = True,
+    condition_on_previous: bool = False,
     hallucination_silence_threshold: float = 2.0,
     timeout_sec: int = 7200,
     socket_path: Optional[Path] = None,

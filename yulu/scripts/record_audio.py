@@ -18,6 +18,7 @@ import struct
 import subprocess
 import sys
 import time
+import wave
 from datetime import datetime
 from pathlib import Path
 
@@ -235,6 +236,119 @@ def detect_daemon_crash(resp=None):
 
 # ─── 后端: audio_daemon ──────────────────────────────
 
+def _unique_existing(paths):
+    out = []
+    seen = set()
+    for raw in paths:
+        if not raw:
+            continue
+        p = str(raw)
+        if p in seen:
+            continue
+        seen.add(p)
+        out.append(p)
+    return out
+
+
+def _recording_segments(state):
+    raw = state.get("segments")
+    segments = list(raw) if isinstance(raw, list) else []
+    cur = state.get("audio_path") or state.get("file_path")
+    return _unique_existing([*segments, cur])
+
+
+def _daemon_start_payload(title, cfg):
+    payload = {"action": "start", "title": title}
+    mic_device = cfg.get("mic_device")
+    if isinstance(mic_device, str) and mic_device.strip() and not mic_device.strip().startswith(":"):
+        payload["mic_device"] = mic_device.strip()
+    silence_seconds = cfg.get("silence_duration_sec")
+    if isinstance(silence_seconds, (int, float)) and silence_seconds > 0:
+        payload["silence_seconds"] = silence_seconds
+    silence_threshold = cfg.get("silence_threshold")
+    if isinstance(silence_threshold, (int, float)) and 0 <= silence_threshold <= 1:
+        payload["silence_threshold"] = silence_threshold
+    return payload
+
+
+def _record_resumed_segment(state, new_path):
+    title = state.get("title", "")
+    segments = _unique_existing([*_recording_segments(state), new_path])
+    next_state = {
+        **state,
+        "recording": True,
+        "status": "recording",
+        "file_path": new_path,
+        "audio_path": new_path,
+        "segments": segments,
+        "resume_count": int(state.get("resume_count") or 0) + 1,
+        "last_resumed_at": datetime.now().isoformat(timespec="seconds"),
+    }
+    write_state(next_state)
+    notify("recording_resumed", title=title, path=new_path, message="录制中断后已自动续录。")
+
+
+def resume_interrupted_recording(resp):
+    state = read_state()
+    if not is_recording_active(state) or state.get("backend") == "sox":
+        return None
+    if resp and resp.get("recording") is True:
+        return None
+    title = state.get("title") or "未命名会议"
+    old_path = state.get("audio_path") or state.get("file_path") or ""
+    log(f"⚠️ 检测到 daemon 重启导致录制中断，正在续录: {title} → {old_path}")
+    stop_realtime_transcriber(wait=False)
+    start_resp = socket_send(_daemon_start_payload(title, load_config()))
+    if not (start_resp and start_resp.get("status") == "recording" and start_resp.get("file")):
+        set_recording_stopped(
+            status="interrupted",
+            path=STATE_PATH,
+            extra={
+                "title": title,
+                "audio_path": old_path,
+                "file_path": old_path,
+                "segments": _recording_segments(state),
+                "interrupted_at": datetime.now().isoformat(timespec="seconds"),
+            },
+        )
+        notify("recording_interrupted", title=title, path=old_path, message="录制中断，续录失败。")
+        return None
+    new_path = start_resp.get("file")
+    _record_resumed_segment(state, new_path)
+    start_realtime_transcriber(new_path, title)
+    log(f"✅ 已续录: {new_path}")
+    return {"recording": True, "file": new_path, "resumed": True}
+
+
+def _combine_segments_to_first_wav(paths):
+    segments = [Path(p) for p in _unique_existing(paths) if Path(p).exists()]
+    if not segments:
+        return ""
+    if len(segments) == 1:
+        return str(segments[0])
+    first = segments[0]
+    tmp = first.with_suffix(f".merge-{os.getpid()}.wav")
+    params = None
+    with wave.open(str(tmp), "wb") as out:
+        for seg in segments:
+            with wave.open(str(seg), "rb") as src:
+                if params is None:
+                    params = src.getparams()
+                    out.setparams(params)
+                elif src.getparams()[:3] != params[:3]:
+                    raise ValueError(f"segment format mismatch: {seg}")
+                out.writeframes(src.readframes(src.getnframes()))
+    os.replace(tmp, first)
+    for idx, seg in enumerate(segments[1:], start=2):
+        archived = seg.with_suffix(f".part{idx}.wav")
+        try:
+            if archived.exists():
+                archived.unlink()
+            seg.rename(archived)
+        except OSError:
+            pass
+    return str(first)
+
 def _raise_if_daemon_recording(lock_handle):
     """Defer to the audio_daemon as the canonical "is recording" arbiter.
 
@@ -263,19 +377,11 @@ def _raise_if_daemon_recording(lock_handle):
 def daemon_start(title, lock_handle=None):
     cfg = load_config()
     _raise_if_daemon_recording(lock_handle)
-    payload = {"action": "start", "title": title}
-    mic_device = cfg.get("mic_device")
-    if isinstance(mic_device, str) and mic_device.strip() and not mic_device.strip().startswith(":"):
-        payload["mic_device"] = mic_device.strip()
-    silence_seconds = cfg.get("silence_duration_sec")
-    if isinstance(silence_seconds, (int, float)) and silence_seconds > 0:
-        payload["silence_seconds"] = silence_seconds
-    silence_threshold = cfg.get("silence_threshold")
-    if isinstance(silence_threshold, (int, float)) and 0 <= silence_threshold <= 1:
-        payload["silence_threshold"] = silence_threshold
-    resp = socket_send(payload)
+    resp = socket_send(_daemon_start_payload(title, cfg))
     if resp and resp.get("status") == "recording":
         path = resp.get("file")
+        if path:
+            set_recording_started(title, path, backend="daemon", path=STATE_PATH, extra={"segments": [path]})
         if lock_handle is not None:
             record_lock(
                 lock_handle,
@@ -338,15 +444,27 @@ def emergency_stop_daemon(rec=None):
 
 
 def daemon_stop():
-    rec = recording_info(read_state())
+    state = read_state()
+    rec = recording_info(state)
     resp = socket_send({"action": "stop"})
     if resp and resp.get("status") == "stopped":
         # Do not let realtime transcription keep the UI stuck for minutes.
         stop_realtime_transcriber(wait=True, graceful=False)
         dur = resp.get("duration", 0)
         path = resp.get("file", "")
-        log(f"⏹ Recording stopped: {dur}s → {path}")
-        return {"path": path, "duration": dur}
+        segments = _unique_existing([*_recording_segments(state), path])
+        final_path = _combine_segments_to_first_wav(segments) if len(segments) > 1 else path
+        set_recording_stopped(
+            path=STATE_PATH,
+            extra={
+                "audio_path": final_path,
+                "file_path": final_path,
+                "segments": segments,
+                "stopped_at": datetime.now().isoformat(timespec="seconds"),
+            },
+        )
+        log(f"⏹ Recording stopped: {dur}s → {final_path or path}")
+        return {"path": final_path or path, "duration": dur, "segments": segments}
 
     # Socket failure while state says daemon recording: stop quickly and keep file.
     stop_realtime_transcriber(wait=True, graceful=False)
@@ -360,6 +478,9 @@ def daemon_stop():
 
 def daemon_status():
     resp = socket_send({"action": "status"})
+    resumed = resume_interrupted_recording(resp)
+    if resumed:
+        return resumed
     detect_daemon_crash(resp)
     return resp or {"recording": False}
 
@@ -495,11 +616,13 @@ def main():
         elif cmd == "stop":
             rec = recording_info(read_state())
             if rec.get("backend") == "sox":
-                sox_stop()
+                result = sox_stop()
             else:
                 result = daemon_stop()
                 if not result:
-                    sox_stop()
+                    result = sox_stop()
+            if result and result.get("path"):
+                print(f"FINAL_RECORDING_PATH={result.get('path')}")
         elif cmd == "status":
             result = daemon_status()
             print(json.dumps(result, indent=2, ensure_ascii=False))
@@ -521,7 +644,9 @@ def main():
                 )
                 sys.exit(2)
         elif cmd == "stop":
-            sox_stop()
+            result = sox_stop()
+            if result and result.get("path"):
+                print(f"FINAL_RECORDING_PATH={result.get('path')}")
         elif cmd == "status":
             result = sox_status()
             print(json.dumps(result, indent=2, ensure_ascii=False))

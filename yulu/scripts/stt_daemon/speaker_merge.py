@@ -158,6 +158,25 @@ def _midpoint(start: float, end: float) -> float:
     return (start + end) / 2.0
 
 
+def _segment_seconds(seg: dict, key: str, *, default: float = 0.0) -> float:
+    value = seg.get(key)
+    if value is not None:
+        return float(value)
+    ms_value = seg.get(f"{key}_ms")
+    if ms_value is not None:
+        return float(ms_value) / 1000.0
+    return default
+
+
+def _segment_start(seg: dict) -> float:
+    return _segment_seconds(seg, "start")
+
+
+def _segment_end(seg: dict) -> float:
+    start = _segment_start(seg)
+    return _segment_seconds(seg, "end", default=start)
+
+
 def _normalize_turns(turns: Iterable) -> list[SpeakerTurn]:
     out = [SpeakerTurn.from_dict(t) for t in (turns or [])]
     out.sort(key=lambda t: (t.start, t.end))
@@ -169,8 +188,8 @@ def _normalize_turns(turns: Iterable) -> list[SpeakerTurn]:
 
 def _best_overlap_turn(seg: dict, turns: list[SpeakerTurn]) -> tuple[Optional[SpeakerTurn], float]:
     """Return (turn-with-max-overlap, overlap-seconds). ``(None, 0.0)`` if no turn overlaps."""
-    seg_start = float(seg.get("start", 0.0))
-    seg_end = float(seg.get("end", seg_start))
+    seg_start = _segment_start(seg)
+    seg_end = _segment_end(seg)
     best: Optional[SpeakerTurn] = None
     best_ov = 0.0
     for t in turns:
@@ -188,8 +207,8 @@ def _nearest_turn_within_window(
     we refuse to guess across a long silence."""
     if not turns:
         return None
-    seg_start = float(seg.get("start", 0.0))
-    seg_end = float(seg.get("end", seg_start))
+    seg_start = _segment_start(seg)
+    seg_end = _segment_end(seg)
     seg_mid = _midpoint(seg_start, seg_end)
     best: Optional[SpeakerTurn] = None
     best_gap = float("inf")
@@ -262,7 +281,7 @@ def assign_speakers(
 
     # 2. Sort ASR segments by start (stable). Keep originals; we read start/end/text.
     indexed = sorted(
-        ((float(s.get("start", 0.0)), i, s) for i, s in enumerate(asr_segments or [])),
+        ((_segment_start(s), i, s) for i, s in enumerate(asr_segments or [])),
         key=lambda r: (r[0], r[1]),
     )
     ordered = [s for _, _, s in indexed]
@@ -309,9 +328,10 @@ def assign_speakers(
                     "merged_into": None,
                 }
             display_name = _resolve_display_name(speaker_id, speakers)
+        start = _segment_start(seg)
         segments.append(LabelledSegment(
-            start=float(seg.get("start", 0.0)),
-            end=float(seg.get("end", float(seg.get("start", 0.0)))),
+            start=start,
+            end=_segment_seconds(seg, "end", default=start),
             text=_norm_text(seg.get("text", "")),
             speaker_id=speaker_id,
             display_name=display_name,
