@@ -36,6 +36,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 * **diarize:** count-keyed pipeline cache so per-call override can't bleed into auto ([d2a6214](https://github.com/Nowhitestar/Yulu/commit/d2a6214e89ab94e7932a740b9aa6ccc68018293c))
 * **diarize:** install soundfile with sherpa runtime ([5abfced](https://github.com/Nowhitestar/Yulu/commit/5abfced7e7337b8a8c70f53ff5a202efb59e6008))
 * **recording:** resume interrupted captures and clean playback ([501d12f](https://github.com/Nowhitestar/Yulu/commit/501d12f365b47449586a10c1ec8820ff556098a0))
+* **release:** grant tag publish workflow attestation permissions
 * **ui:** improve mobile responsive layouts ([c7286f5](https://github.com/Nowhitestar/Yulu/commit/c7286f55e5b9356a7a4dc1fd70721376a1c42e23))
 
 ## [0.9.0](https://github.com/Nowhitestar/Yulu/compare/v0.8.0...v0.9.0) (2026-06-07)
