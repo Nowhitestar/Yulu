@@ -123,3 +123,29 @@
   font-family: ui-monospace, monospace;
 }
 .gs-footer-count { margin-left: auto; }
+
+@media (max-width: 760px) {
+  .gs-root,
+  .gs-input-wrap {
+    width: 100%;
+  }
+
+  .gs-kbd {
+    display: none;
+  }
+
+  .gs-popover {
+    left: 0;
+    right: 0;
+    width: min(100%, calc(100vw - 32px));
+  }
+
+  .gs-footer {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .gs-footer-count {
+    margin-left: 0;
+  }
+}

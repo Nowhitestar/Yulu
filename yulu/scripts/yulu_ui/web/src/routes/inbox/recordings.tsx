@@ -78,6 +78,7 @@ export function RecordingsList() {
 
   return (
     <MasterDetail
+      className="masterdetail--mobile-detail-focus"
       storageKey="yulu_ui.inbox.recordings.width"
       listPending={isPending}
       listSlot={listSlot}

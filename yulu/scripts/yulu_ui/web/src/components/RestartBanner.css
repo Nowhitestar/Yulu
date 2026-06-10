@@ -31,3 +31,15 @@
 }
 .restart-banner-btn.primary:hover { opacity: 0.9; }
 .restart-banner-dismiss { align-self: center; color: var(--fg-2); }
+
+@media (max-width: 760px) {
+  .restart-banner {
+    flex-wrap: wrap;
+    margin: 4px 0 8px;
+    padding: 10px;
+  }
+
+  .restart-banner-btn.primary {
+    align-self: flex-start;
+  }
+}

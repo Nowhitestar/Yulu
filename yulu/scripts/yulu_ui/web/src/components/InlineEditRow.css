@@ -162,3 +162,38 @@
 }
 .cloud-warn-accept { background: var(--accent); color: white; }
 .cloud-warn-accept:hover { background: var(--accent); opacity: 0.9; color: white; }
+
+@media (max-width: 760px) {
+  .row {
+    grid-template-columns: minmax(0, 1fr);
+    align-items: flex-start;
+    gap: 8px;
+    padding: 10px 8px;
+  }
+
+  .row-value {
+    width: 100%;
+    flex-wrap: wrap;
+    align-items: flex-start;
+  }
+
+  .row-status {
+    width: 100%;
+    text-align: left;
+  }
+
+  .value-display,
+  .value-input {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .path-value {
+    width: 100%;
+  }
+
+  .path-display {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+}

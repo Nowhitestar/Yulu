@@ -9,6 +9,7 @@ export interface MasterDetailProps {
   listPending?: boolean;
   /** localStorage key for the master-list width. */
   storageKey?: string;
+  className?: string;
 }
 
 export function MasterDetail({
@@ -16,9 +17,10 @@ export function MasterDetail({
   detailSlot,
   listPending = false,
   storageKey = "yulu_ui.master.list.width",
+  className,
 }: MasterDetailProps) {
   return (
-    <div className="masterdetail">
+    <div className={`masterdetail${className ? ` ${className}` : ""}`}>
       <ResizableSplit
         storageKey={storageKey}
         side="right"

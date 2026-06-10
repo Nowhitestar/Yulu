@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router";
 import { useQueryClient } from "@tanstack/react-query";
-import { RefreshCw, Sparkles, Pencil, Trash2, Users, GitMerge } from "lucide-react";
+import { ChevronLeft, RefreshCw, Sparkles, Pencil, Trash2, Users, GitMerge } from "lucide-react";
 import { trpc } from "../../trpc.js";
 import { AudioPlayer } from "../../components/AudioPlayer.js";
 import { TranscriptView, type SpeakerData } from "../../components/TranscriptView.js";
@@ -405,6 +405,10 @@ export function RecordingReader() {
   return (
     <div className="reader">
       <div className="reader-header">
+        <button type="button" className="reader-mobile-back" onClick={() => navigate("/inbox")}>
+          <ChevronLeft size={14} strokeWidth={1.8} />
+          <span>{t("nav.recordings")}</span>
+        </button>
         <div className="reader-titlerow">
           {editingTitle ? (
             <input

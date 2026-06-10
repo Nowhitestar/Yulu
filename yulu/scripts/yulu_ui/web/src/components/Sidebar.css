@@ -97,3 +97,59 @@
 .sidebar-health-dot.health-warn { background: var(--accent); box-shadow: 0 0 5px color-mix(in oklch, var(--accent) 60%, transparent); }
 .sidebar-health-dot.health-crit { background: var(--red);    box-shadow: 0 0 5px color-mix(in oklch, var(--red) 60%, transparent); }
 .sidebar-health-dot.health-loading { background: var(--fg-3); }
+
+@media (max-width: 760px) {
+  .sidebar {
+    height: 100%;
+    flex-direction: row;
+    align-items: stretch;
+    gap: 4px;
+    padding: 6px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    border-radius: 14px;
+  }
+
+  .sidebar-brand,
+  .sidebar-heading,
+  .sidebar-spacer {
+    display: none;
+  }
+
+  .sidebar-section,
+  .sidebar-bottom {
+    flex-direction: row;
+    gap: 4px;
+    border: 0;
+    padding: 0;
+  }
+
+  .sidebar-item,
+  .sidebar-bottom-item {
+    position: relative;
+    flex: 0 0 auto;
+    min-width: 58px;
+    height: 42px;
+    flex-direction: column;
+    justify-content: center;
+    gap: 2px;
+    padding: 5px 8px;
+    font-size: 10.5px;
+    white-space: nowrap;
+  }
+
+  .sidebar-item svg,
+  .sidebar-bottom-item svg {
+    width: 16px;
+    height: 16px;
+  }
+
+  .sidebar-health-dot {
+    position: absolute;
+    top: 7px;
+    right: 10px;
+    margin-left: 0;
+    width: 6px;
+    height: 6px;
+  }
+}

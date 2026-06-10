@@ -83,3 +83,24 @@
   color: var(--red);
 }
 .preader-btn.danger:hover { background: var(--red); color: var(--wp-1); }
+
+@media (max-width: 760px) {
+  .preader {
+    padding: 8px 6px 96px;
+  }
+
+  .preader-field {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 6px;
+  }
+
+  .preader-input,
+  .preader-textarea {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .preader-actions {
+    flex-wrap: wrap;
+  }
+}

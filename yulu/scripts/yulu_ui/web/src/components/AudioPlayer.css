@@ -33,3 +33,20 @@
   font-size: 11px;
   color: var(--fg-2);
 }
+
+@media (max-width: 760px) {
+  .audioplayer {
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 8px 10px;
+  }
+
+  .audioplayer-wave {
+    flex: 1 1 calc(100% - 88px);
+  }
+
+  .audioplayer-time {
+    width: 100%;
+    padding-left: 40px;
+  }
+}

@@ -21,3 +21,19 @@
   border-bottom-color: var(--accent);
   font-weight: 500;
 }
+
+@media (max-width: 760px) {
+  .health-page {
+    padding: 2px 2px 96px;
+  }
+
+  .health-tabs {
+    overflow-x: auto;
+    margin-bottom: 12px;
+  }
+
+  .health-tab {
+    flex: 1 0 auto;
+    padding: 8px 12px;
+  }
+}

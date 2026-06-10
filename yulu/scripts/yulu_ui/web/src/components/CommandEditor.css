@@ -43,3 +43,17 @@
   border-radius: var(--radius-inner);
 }
 .cmd-add:hover { background: var(--glass-3); }
+
+@media (max-width: 760px) {
+  .cmd-editor {
+    max-width: none;
+  }
+
+  .cmd-row {
+    align-items: flex-start;
+  }
+
+  .cmd-input {
+    min-width: 0;
+  }
+}

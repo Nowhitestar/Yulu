@@ -20,3 +20,14 @@
 }
 .recording-row-meta { font-size: 11px; color: var(--fg-2); font-family: ui-monospace, monospace; margin-top: 4px; display: flex; gap: 8px; align-items: center; }
 .recording-row-status { color: var(--accent-on, var(--accent)); background: var(--accent-soft); padding: 0 6px; border-radius: 8px; text-transform: capitalize; }
+
+@media (max-width: 760px) {
+  .recording-row {
+    padding: 9px 8px;
+  }
+
+  .recording-row-meta {
+    flex-wrap: wrap;
+    gap: 4px 8px;
+  }
+}

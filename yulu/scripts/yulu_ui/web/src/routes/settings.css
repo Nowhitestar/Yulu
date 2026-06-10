@@ -374,3 +374,109 @@
 }
 .danger-confirm-accept { background: var(--accent); color: white; }
 .danger-confirm-accept:hover { background: var(--accent); opacity: 0.9; color: white; }
+
+@media (max-width: 760px) {
+  .settings-page,
+  .settings-masterdetail {
+    min-height: 0;
+  }
+
+  .settings-detail {
+    max-width: none;
+    width: 100%;
+    padding: 8px 8px 96px;
+  }
+
+  .settings-detail-head {
+    margin-bottom: 16px;
+  }
+
+  .settings-detail .settings-section + .settings-section {
+    margin-top: 28px;
+  }
+
+  .settings-section-h {
+    padding-top: 12px;
+  }
+
+  .cap-head,
+  .integration-header,
+  .autorun-templates-head {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .row,
+  #capabilities .row,
+  .row--capability,
+  .output-channel-row {
+    grid-template-columns: minmax(0, 1fr);
+    align-items: flex-start;
+    gap: 8px;
+    padding: 10px 8px;
+  }
+
+  .row-value {
+    width: 100%;
+    flex-wrap: wrap;
+    align-items: flex-start;
+  }
+
+  .row-status,
+  #capabilities .row-status,
+  .row--capability .row-status {
+    width: 100%;
+    justify-content: flex-start;
+    text-align: left;
+  }
+
+  .value-display,
+  .value-input,
+  .account-select,
+  .cmd-editor {
+    width: 100%;
+    min-width: 0;
+    max-width: none;
+  }
+
+  .path-value {
+    width: 100%;
+  }
+
+  .path-btn {
+    flex: 0 0 auto;
+  }
+
+  .cap-path,
+  .cap-detail,
+  .calendar-check-id,
+  .restart-banner-daemons {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .calendar-check {
+    align-items: flex-start;
+  }
+
+  .calendar-check-main {
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .array-field-note,
+  .value-disabled-note,
+  .autorun-manage-link {
+    white-space: normal;
+  }
+
+  .danger-confirm {
+    width: calc(100vw - 24px);
+  }
+
+  .danger-confirm-actions,
+  .cloud-warn-actions {
+    flex-wrap: wrap;
+  }
+}

@@ -1,6 +1,6 @@
 // web/src/routes/knowledge/prompts.tsx
 import { useState, useMemo } from "react";
-import { NavLink, Outlet, Link } from "react-router";
+import { NavLink, Outlet, Link, useParams } from "react-router";
 import { FileText } from "lucide-react";
 import { trpc } from "../../trpc.js";
 import { MasterDetail } from "../../components/MasterDetail.js";
@@ -24,6 +24,7 @@ interface Row {
 
 export function Prompts() {
   const { data, isPending } = trpc.prompts.list.useQuery({});
+  const { id } = useParams();
   const t = useT();
 
   const FILTER_CHIPS: ChipDef[] = [
@@ -60,6 +61,7 @@ export function Prompts() {
 
   return (
     <MasterDetail
+      className={id ? "masterdetail--mobile-detail-focus" : undefined}
       storageKey="yulu_ui.knowledge.prompts.width"
       listPending={isPending}
       listSlot={

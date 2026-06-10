@@ -17,3 +17,24 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+@media (max-width: 760px) {
+  .settings-category-list {
+    flex-direction: row;
+    gap: 6px;
+    min-width: max-content;
+  }
+
+  .settings-category-row {
+    flex: 0 0 148px;
+    margin-bottom: 0;
+    padding: 8px 10px;
+  }
+
+  .settings-category-desc {
+    white-space: normal;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+  }
+}

@@ -28,3 +28,14 @@
   cursor: pointer;
 }
 .logs-btn:hover { color: var(--fg); background: var(--glass-3); }
+
+@media (max-width: 760px) {
+  .logs-toolbar {
+    flex-wrap: wrap;
+  }
+
+  .logs-select {
+    width: 100%;
+    min-width: 0;
+  }
+}

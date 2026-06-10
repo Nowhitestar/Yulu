@@ -90,3 +90,17 @@
   font-size: 11px;
 }
 .etable-bulk-clear:hover { color: var(--fg); }
+
+@media (max-width: 760px) {
+  .etable {
+    overflow-x: auto;
+  }
+
+  .etable-row {
+    min-width: 520px;
+  }
+
+  .etable-bulkbar {
+    flex-wrap: wrap;
+  }
+}

@@ -85,3 +85,20 @@
 .daemon-card-btn.stop:hover { background: rgba(255, 123, 114, 0.18); }
 .daemon-card-btn.link { color: var(--fg-3); margin-left: auto; }
 .daemon-card-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+@media (max-width: 760px) {
+  .daemon-card-header,
+  .daemon-card-actions {
+    flex-wrap: wrap;
+  }
+
+  .daemon-card-name,
+  .daemon-card-lastlog {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .daemon-card-btn.link {
+    margin-left: 0;
+  }
+}

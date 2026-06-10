@@ -16,3 +16,15 @@
   background: var(--accent-soft);
   color: var(--accent);
 }
+
+@media (max-width: 760px) {
+  .filterchips {
+    width: 100%;
+    overflow-x: auto;
+    margin-bottom: 0;
+  }
+
+  .filterchip {
+    flex: 0 0 auto;
+  }
+}

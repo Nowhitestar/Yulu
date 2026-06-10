@@ -10,6 +10,9 @@
   flex-direction: column;
   gap: 6px;
 }
+.reader-mobile-back {
+  display: none;
+}
 .reader-titlerow {
   display: flex;
   align-items: center;
@@ -228,6 +231,61 @@
 }
 
 @media (max-width: 720px) {
+  .reader {
+    gap: 12px;
+    padding: 8px 6px 96px;
+  }
+
+  .reader-mobile-back {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    align-self: flex-start;
+    padding: 3px 8px 3px 4px;
+    border-radius: var(--radius-inner);
+    color: var(--fg-2);
+    font-size: 12px;
+  }
+
+  .reader-mobile-back:hover {
+    color: var(--fg);
+    background: var(--row-hover);
+  }
+
+  .reader-title-edit {
+    max-width: 100%;
+  }
+
+  .reader-title-edit span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .reader-title-input {
+    min-width: 0;
+    width: 100%;
+  }
+
+  .reader-actions {
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .reader-delete {
+    margin-left: 0;
+  }
+
+  .reader-tabs {
+    width: 100%;
+    overflow-x: auto;
+  }
+
+  .reader-tab {
+    flex: 1 0 auto;
+    text-align: center;
+  }
+
   .speaker-panel-head {
     align-items: flex-start;
     flex-direction: column;

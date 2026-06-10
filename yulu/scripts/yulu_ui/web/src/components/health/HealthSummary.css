@@ -25,3 +25,20 @@
 .health-counter .dot.dot-ok   { background: var(--green); }
 .health-counter .dot.dot-warn { background: var(--fg-2); }
 .health-counter .dot.dot-crit { background: var(--red); }
+
+@media (max-width: 760px) {
+  .health-summary {
+    align-items: flex-start;
+    flex-wrap: wrap;
+    gap: 10px;
+    padding: 12px;
+    margin-bottom: 14px;
+  }
+
+  .health-summary-counters {
+    width: 100%;
+    margin-left: 0;
+    flex-wrap: wrap;
+    gap: 10px 14px;
+  }
+}

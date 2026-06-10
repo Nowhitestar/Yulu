@@ -53,3 +53,15 @@
   color: var(--accent);
   font-size: 11px;
 }
+
+@media (max-width: 760px) {
+  .prompt-filterbar {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .prompt-new-btn {
+    align-self: stretch;
+    text-align: center;
+  }
+}

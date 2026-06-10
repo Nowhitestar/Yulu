@@ -65,6 +65,7 @@ export function SettingsLayout() {
           {banner && <div className="settings-banner">{banner}</div>}
           <div className="settings-masterdetail">
             <MasterDetail
+              className="masterdetail--settings-mobile-tabs"
               storageKey="yulu_ui.settings.width"
               listSlot={<SettingsCategoryList />}
               detailSlot={<Outlet context={outletContext} />}

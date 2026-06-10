@@ -17,3 +17,13 @@
   font-weight: 500;
 }
 .glossary-add-btn:hover { background: var(--glass-3); }
+
+@media (max-width: 760px) {
+  .glossary-page {
+    min-height: 0;
+  }
+
+  .glossary-header {
+    padding: 8px 6px;
+  }
+}
