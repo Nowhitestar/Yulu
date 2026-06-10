@@ -321,7 +321,9 @@ export const recordingsRouter = router({
       };
       const stat = statSync(wav);
       const cleanFile = `${input.stem}.clean.wav`;
-      const audioFile = existsSync(join(dir, cleanFile)) ? cleanFile : `${input.stem}.wav`;
+      const cleanPath = join(dir, cleanFile);
+      const audioFile = existsSync(cleanPath) ? cleanFile : `${input.stem}.wav`;
+      const audioStat = statSync(join(dir, audioFile));
       const job = ctx.jobs.get(input.stem);
       let recordedAt: string | null = null;
       const tm = input.stem.match(/_(\d{8})_(\d{6})$/);
@@ -340,7 +342,7 @@ export const recordingsRouter = router({
       const rawDiffers = raw !== null && transcript !== null && raw.trim() !== transcript.trim();
       return {
         stem: input.stem, title, tags, recordedAt,
-        wavPath: wav, audioFile, sizeBytes: stat.size, mtimeMs: stat.mtimeMs,
+        wavPath: wav, audioFile, audioMtimeMs: audioStat.mtimeMs, sizeBytes: stat.size, mtimeMs: stat.mtimeMs,
         transcript,
         raw,
         rawDiffers,

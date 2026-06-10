@@ -28,18 +28,23 @@ def _read_mono(path: Path) -> list[int]:
     return [v[0] for v in struct.iter_unpack("<h", raw)]
 
 
-def test_clean_dual_track_prefers_system_when_system_is_active(tmp_path):
+def test_clean_dual_track_uses_original_meeting_half_duplex_fade(tmp_path):
     wav = tmp_path / "Meeting_20260609_120000.wav"
     out = tmp_path / "Meeting_20260609_120000.clean.wav"
-    _write_dual_track(wav, [(300, 4000)] * 960 + [(5000, 0)] * 960)
+    active = [(300, 4000)] * 4800
+    silent = [(5000, 0)] * 96000
+    _write_dual_track(wav, active + silent)
 
-    clean_dual_track_to_mono(wav, out, frame_ms=10)
+    clean_dual_track_to_mono(wav, out)
 
     samples = _read_mono(out)
-    assert len(samples) == 1920
-    assert sum(abs(v) for v in samples[:960]) > sum(abs(v) for v in samples[960:])
-    assert max(samples[:960]) > 3000
-    assert max(samples[960:]) > 3000
+    assert len(samples) == len(active) + len(silent)
+    assert max(samples[:4800]) <= 4100
+    assert max(samples[:4800]) >= 3900
+    # Do not hard-switch to the mic at the first silent frame; old meeting
+    # capture fades the microphone in over roughly one second.
+    assert abs(samples[4800]) < 300
+    assert max(samples[-4800:]) >= 4900
 
 
 def test_select_transcription_audio_generates_clean_file_for_dual_track(tmp_path):

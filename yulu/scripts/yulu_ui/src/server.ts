@@ -146,6 +146,7 @@ function streamAudio(req: Request, baseDir: string): Response {
         "Content-Length": String(stat.size),
         "Content-Type": "audio/wav",
         "Accept-Ranges": "bytes",
+        "Cache-Control": "no-cache",
       },
     });
   }
@@ -160,6 +161,7 @@ function streamAudio(req: Request, baseDir: string): Response {
       "Accept-Ranges":  "bytes",
       "Content-Length": String(end - start + 1),
       "Content-Type":   "audio/wav",
+      "Cache-Control":  "no-cache",
     },
   });
 }
