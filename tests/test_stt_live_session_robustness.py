@@ -265,11 +265,16 @@ class _RecordingBackend(MockSTTBackend):
         self.tag = tag
         self.audio_paths: list[str] = []
 
-    async def transcribe(self, *, audio_path, language, initial_prompt, cancel_token):
+    async def transcribe(
+        self, *, audio_path, language, initial_prompt, cancel_token, options=None
+    ):
         self.audio_paths.append(audio_path)
         return await super().transcribe(
-            audio_path=audio_path, language=language,
-            initial_prompt=initial_prompt, cancel_token=cancel_token,
+            audio_path=audio_path,
+            language=language,
+            initial_prompt=initial_prompt,
+            cancel_token=cancel_token,
+            options=options,
         )
 
 

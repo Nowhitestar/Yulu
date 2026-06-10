@@ -71,13 +71,16 @@ class _CapturingBackend(MockSTTBackend):
         super().__init__(canned_text="ok", delay_sec=0.0)
         self.captured: list[str] = []
 
-    async def transcribe(self, *, audio_path, language, initial_prompt, cancel_token):
+    async def transcribe(
+        self, *, audio_path, language, initial_prompt, cancel_token, options=None
+    ):
         self.captured.append(audio_path)
         return await super().transcribe(
             audio_path=audio_path,
             language=language,
             initial_prompt=initial_prompt,
             cancel_token=cancel_token,
+            options=options,
         )
 
 
