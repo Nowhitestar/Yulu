@@ -246,3 +246,19 @@ def test_tap_feeds_existing_sink():
     assert src.count("Int16(max(-1.0, min(1.0, $0)) * Float(Int16.max))") >= 2, (
         "the tap must reuse the SysAudioOutput Int16 clamp verbatim (no re-derivation)"
     )
+
+
+def test_dual_source_recording_writes_common_frames_not_zero_padded_max():
+    src = _source()
+    match = re.search(r"private func mixAndWrite\(\)\s*\{(.*?)\n    \}", src, re.DOTALL)
+    assert match is not None, "mixAndWrite function not found"
+    body = match.group(1)
+    assert "min(sysFrames, micFrames)" in body, (
+        "dual-source recording must write only common mic/sys frames"
+    )
+    assert "max(sysFrames, micFrames)" not in body, (
+        "max(sysFrames, micFrames) zero-pads async callbacks and stretches the WAV timeline"
+    )
+    assert "let micOnly = SYS_DISABLED" in body, (
+        "mic-only recordings must remain explicitly gated by SYS_DISABLED"
+    )

@@ -358,33 +358,27 @@ class AudioRecorder {
         guard let w = writer else { return }
         bufLock.lock()
 
-        // Drive output frame count by whichever side has more buffered;
-        // zero-pad the shorter side. This preserves recording continuity
-        // when one source is silent (no sys = mic-only voicemail; no mic
-        // = sys-only, currently rare but a future capture mode).
         let sysFrames = sysBuf.count / 2
         let micFrames = micBuf.count
-        let outFrames = max(sysFrames, micFrames)
+        let micOnly = SYS_DISABLED
+        // In normal meeting recordings the mic and system callbacks arrive on
+        // independent queues. Driving output by the longer buffer turns
+        // each early callback into a zero-padded chunk, stretching the timeline
+        // into audible sys-only/mic-only stutter. Only true mic-only recordings
+        // may be driven by mic frames; dual-source recordings write common
+        // frames and leave the short side buffered for the next callback.
+        let outFrames = micOnly ? micFrames : min(sysFrames, micFrames)
         guard outFrames >= 512 else { bufLock.unlock(); return }  // wait for ~10 ms
 
-        // Take outFrames mono mic samples (zero-pad if short).
-        let micChunk: [Int16]
-        if micBuf.count >= outFrames {
-            micChunk = Array(micBuf.prefix(outFrames))
-            micBuf.removeFirst(outFrames)
-        } else {
-            micChunk = micBuf + [Int16](repeating: 0, count: outFrames - micBuf.count)
-            micBuf.removeAll()
-        }
+        let micChunk = Array(micBuf.prefix(outFrames))
+        micBuf.removeFirst(outFrames)
 
-        // Take outFrames stereo sys samples (zero-pad if short).
         let sysChunk: [Int16]
-        if sysBuf.count >= outFrames * 2 {
+        if micOnly {
+            sysChunk = [Int16](repeating: 0, count: outFrames * 2)
+        } else {
             sysChunk = Array(sysBuf.prefix(outFrames * 2))
             sysBuf.removeFirst(outFrames * 2)
-        } else {
-            sysChunk = sysBuf + [Int16](repeating: 0, count: outFrames * 2 - sysBuf.count)
-            sysBuf.removeAll()
         }
         bufLock.unlock()
 
@@ -1214,25 +1208,6 @@ class SocketServer {
             // cleanly (a sys-disabled recording followed by a normal one must NOT inherit
             // the previous flag).
             SYS_DISABLED = (json["sys_disabled"] as? Bool) ?? false
-            // Self-heal the stuck-not-ready state: when sys audio is needed but
-            // SYS_READY is currently false, the readiness gate below MUST NOT trust
-            // that stale flag. A previous sys-disabled (voicemail) recording left
-            // SYS_READY == false via startCapture()'s SYS_DISABLED branch, and the
-            // daemon never re-armed the tap on its own — so the gate would bail with
-            // sys_capture_not_ready even though a fresh arm succeeds (restarting the
-            // daemon "fixes" it for exactly this reason). Re-arm the tap HERE, before
-            // the gate, so SYS_READY / SYS_ERROR reflect a real, current arm attempt
-            // — not a poisoned leftover. The arm is idempotent (no-op if already
-            // capturing) and tears down any half-open tap first, so it never leaks or
-            // stacks taps. Guard on `!SYS_READY` so the healthy back-to-back-meeting
-            // path keeps its existing timing: the (possibly multi-second) SCK arm
-            // only runs pre-reply when we were genuinely stuck — which previously
-            // hard-failed anyway. Mic + a redundant, idempotent sys start still run
-            // in onRecordingStart after the reply, preserving the deferred-start
-            // design.
-            if !SYS_DISABLED && !SYS_READY {
-                self.rearmSysCapture?()
-            }
             // Per-request silence threshold: voicemail uses ~3s, meetings use the default.
             // Omitting the field MUST reset to DEFAULT_SILENCE_SEC so a previous short
             // threshold does not leak into the next recording.
@@ -1264,24 +1239,24 @@ class SocketServer {
             } else {
                 recorder.outputDir = RECORDING_DIR
             }
+            // Start the OS capture sources before creating the WAV/replying. The
+            // previous deferred-start design returned "recording" while ProcessTap
+            // and AVAudioEngine were still starting, so the first seconds after
+            // a user pressed record could be missing from the file.
+            onRecordingStart?()
             if !SYS_READY && !SYS_DISABLED {
+                onRecordingStop?()
                 resp = ["error":"sys_capture_not_ready", "sysReady": SYS_READY, "sysError": SYS_ERROR, "micReady": MIC_READY, "micError": MIC_ERROR]
             } else if !MIC_READY {
+                onRecordingStop?()
                 resp = ["error":"mic_capture_not_ready", "sysReady": SYS_READY, "sysError": SYS_ERROR, "micReady": MIC_READY, "micError": MIC_ERROR]
             } else if let p = recorder.start(title: json["title"] as? String ?? "meeting") {
                 resp = ["status":"recording", "file":p]
-                send(c, resp)
-                // Starting ScreenCaptureKit + AVAudioEngine can take several seconds.
-                // Do it after replying so short-lived clients (record_audio.py uses a
-                // 5s socket timeout) do not close the socket first and kill us with
-                // SIGPIPE. The recorder is already marked active; audio starts flowing
-                // as soon as these hooks finish.
-                DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-                    self?.onRecordingStart?()
-                }
-                return
             }
-            else { resp = ["error":"start_failed"] }
+            else {
+                onRecordingStop?()
+                resp = ["error":"start_failed"]
+            }
         case "stop":
             let wasRecording = recorder.isRecording
             let (p, d) = recorder.stop()

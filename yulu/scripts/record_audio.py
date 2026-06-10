@@ -103,7 +103,7 @@ def socket_send(cmd):
         return None
     try:
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        sock.settimeout(5)
+        sock.settimeout(15)
         sock.connect(str(SOCKET_PATH))
         sock.sendall(json.dumps(cmd).encode())
         sock.shutdown(socket.SHUT_WR)
