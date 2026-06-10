@@ -154,7 +154,29 @@ def test_probe_command_missing_returns_clean_absent(monkeypatch):
     assert cap.resolved_path == ""
 
 
-def test_probe_mlx_whisper_importable_is_usable(monkeypatch):
+def test_probe_mlx_whisper_present_is_unverified_without_deep_probe(monkeypatch):
+    probes.probe_mlx_whisper.cache_clear()
+    monkeypatch.delenv("YULU_DEEP_CAPABILITY_PROBES", raising=False)
+    monkeypatch.setattr(probes, "probe_module_spec", lambda m, python_bin=None: (True, f"/site/{m}"))
+    monkeypatch.setattr(probes, "daemon_python", lambda: "/daemon/python3")
+    cap = probes.probe_mlx_whisper()
+    assert cap.status == Status.PRESENT_BUT_UNVERIFIED
+    assert cap.provenance == Provenance.HOST_PATH
+    assert cap.resolved_path == "/daemon/python3"
+    assert "runtime warm-up not run" in cap.detail
+
+
+def test_probe_mlx_whisper_missing_is_absent(monkeypatch):
+    probes.probe_mlx_whisper.cache_clear()
+    monkeypatch.setattr(probes, "probe_module_spec", lambda m, python_bin=None: (False, "ModuleNotFoundError"))
+    cap = probes.probe_mlx_whisper()
+    assert cap.status == Status.ABSENT
+
+
+def test_probe_mlx_whisper_deep_importable_is_usable(monkeypatch):
+    probes.probe_mlx_whisper.cache_clear()
+    monkeypatch.setenv("YULU_DEEP_CAPABILITY_PROBES", "1")
+    monkeypatch.setattr(probes, "probe_module_spec", lambda m, python_bin=None: (True, f"/site/{m}"))
     monkeypatch.setattr(probes, "probe_importable", lambda m, python_bin=None: (True, "0.4.0"))
     monkeypatch.setattr(probes, "daemon_python", lambda: "/daemon/python3")
     cap = probes.probe_mlx_whisper()
@@ -162,12 +184,6 @@ def test_probe_mlx_whisper_importable_is_usable(monkeypatch):
     assert cap.provenance == Provenance.HOST_PATH
     assert cap.resolved_path == "/daemon/python3"
     assert "0.4.0" in cap.detail
-
-
-def test_probe_mlx_whisper_missing_is_absent(monkeypatch):
-    monkeypatch.setattr(probes, "probe_importable", lambda m, python_bin=None: (False, "ModuleNotFoundError"))
-    cap = probes.probe_mlx_whisper()
-    assert cap.status == Status.ABSENT
 
 
 # ── probe_llm_command(): RESOLVED-NOT-EXECUTED (T-03-01) ──

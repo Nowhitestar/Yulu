@@ -154,33 +154,37 @@ PY
 }
 
 diarization_engine_present() {
-    # Read-only: true iff sherpa_onnx is importable from the daemon interpreter ($PYTHON_BIN).
+    # Read-only: true iff the full diarization runtime is discoverable from the daemon
+    # interpreter ($PYTHON_BIN). The backend imports both modules when it actually
+    # diarizes, so treating sherpa_onnx alone as "installed" leaves a broken runtime.
     # Same honesty contract as verify_mlx_whisper — probe the interpreter the daemon ACTUALLY
     # uses (the plist __PYTHON__), so a "present" answer means the daemon can really diarize.
-    "$PYTHON_BIN" -c "import importlib.util, sys; sys.exit(0 if importlib.util.find_spec('sherpa_onnx') else 1)" 2>/dev/null
+    "$PYTHON_BIN" -c "import importlib.util, sys; sys.exit(0 if importlib.util.find_spec('sherpa_onnx') and importlib.util.find_spec('soundfile') else 1)" 2>/dev/null
 }
 
 install_diarization_engine() {
     # PORT-01: install the sherpa-onnx engine into the daemon interpreter. Idempotent:
     # skips when already importable. CO-LOCATES (no isolated venv) because the cp314 wheel
-    # is verified working on Yulu's Python 3.14 runtime. Cross-platform wheel (onnxruntime-
-    # only) → no macOS coupling. A failed install WARNS but does not abort: the models can
-    # still download, the probe will report present-but-unverified, and the pipeline degrades
-    # gracefully to plain transcripts until the engine is available (diarize_pipeline.py).
+    # is verified working on Yulu's Python 3.14 runtime. soundfile is required by
+    # SherpaDiarizeBackend.diarize() to read WAV input. Cross-platform wheels
+    # (onnxruntime/libsndfile, no torch) → no macOS coupling. A failed install WARNS but
+    # does not abort: the models can still download, the probe will report
+    # present-but-unverified, and the pipeline degrades gracefully to plain transcripts until
+    # the engine is available (diarize_pipeline.py).
     if diarization_engine_present; then
         ok "sherpa-onnx 已可从守护进程解释器导入（${PYTHON_BIN}）"
         return 0
     fi
-    info "安装 sherpa-onnx 说话人分离引擎到 ${PYTHON_BIN}（onnxruntime，无 torch，跨平台）..."
-    if "$PYTHON_BIN" -m pip install --upgrade sherpa-onnx >/dev/null 2>&1 ||
-       "$PYTHON_BIN" -m pip install --user --break-system-packages --upgrade sherpa-onnx >/dev/null 2>&1; then
+    info "安装 sherpa-onnx 说话人分离引擎到 ${PYTHON_BIN}（onnxruntime + soundfile，无 torch，跨平台）..."
+    if "$PYTHON_BIN" -m pip install --upgrade sherpa-onnx soundfile >/dev/null 2>&1 ||
+       "$PYTHON_BIN" -m pip install --user --break-system-packages --upgrade sherpa-onnx soundfile >/dev/null 2>&1; then
         if diarization_engine_present; then
             ok "sherpa-onnx 引擎已安装"
         else
             warn "sherpa-onnx 安装后仍无法导入（${PYTHON_BIN}）。说话人分离将不可用，普通转录不受影响。"
         fi
     else
-        warn "sherpa-onnx 安装失败（${PYTHON_BIN}）。手动安装：${PYTHON_BIN} -m pip install --user --break-system-packages sherpa-onnx"
+        warn "sherpa-onnx 安装失败（${PYTHON_BIN}）。手动安装：${PYTHON_BIN} -m pip install --user --break-system-packages sherpa-onnx soundfile"
         warn "说话人分离将不可用，直到引擎可导入；普通转录不受影响。"
     fi
 }

@@ -5,7 +5,7 @@ The Python-3.14 probe (15-SUMMARY) resolved that the sherpa-onnx cp314 wheel ins
 (no isolated venv). setup_models.sh's diarization step therefore:
 
   * is GATED on transcription.diarization.enabled (a non-diarization install pulls nothing extra);
-  * installs sherpa-onnx into ``$PYTHON_BIN`` (the daemon interpreter == plist ``__PYTHON__``);
+  * installs sherpa-onnx + soundfile into ``$PYTHON_BIN`` (the daemon interpreter == plist ``__PYTHON__``);
   * is IDEMPOTENT: when sherpa-onnx is already importable, it SKIPS the pip install entirely;
   * never aborts the install on a pip failure (WARN-only) so plain transcription is unaffected.
 
@@ -31,9 +31,9 @@ def _write_fake_python(path: Path, marker: Path, log: Path, *, install_succeeds:
     """A fake ``python3`` that emulates just the two calls the engine step makes.
 
     1. ``python3 -c "import importlib.util...find_spec('sherpa_onnx')..."`` (the import probe):
-       exit 0 iff the marker file exists (sherpa "installed"), else exit 1.
-    2. ``python3 -m pip install --upgrade sherpa-onnx`` (the install): create the marker (so a
-       subsequent probe reports importable) and exit 0, OR exit 1 when install_succeeds is False.
+       exit 0 iff the marker file exists (sherpa + soundfile "installed"), else exit 1.
+    2. ``python3 -m pip install --upgrade sherpa-onnx soundfile`` (the install): create the marker
+       (so a subsequent probe reports importable) and exit 0, OR exit 1 when install_succeeds is False.
 
     Every call is appended to ``log`` so the test can assert how many installs ran.
     """
@@ -42,9 +42,9 @@ def _write_fake_python(path: Path, marker: Path, log: Path, *, install_succeeds:
     real_py = _sys.executable
     script = f"""#!/usr/bin/env bash
 echo "ARGS: $*" >> {log}
-# (2) the pip install branch — argv contains: -m pip install ... sherpa-onnx
+# (2) the pip install branch — argv contains: -m pip install ... sherpa-onnx soundfile
 case "$*" in
-  *"-m pip install"*"sherpa-onnx"*)
+  *"-m pip install"*"sherpa-onnx"*"soundfile"*)
     if [[ "{succeed}" == "1" ]]; then
       : > {marker}      # mark sherpa as now-importable
       exit 0
@@ -53,9 +53,9 @@ case "$*" in
     fi
     ;;
 esac
-# (1) the import probe branch — argv contains find_spec('sherpa_onnx')
+# (1) the import probe branch — argv contains find_spec('sherpa_onnx') and find_spec('soundfile')
 case "$*" in
-  *"find_spec('sherpa_onnx')"*)
+  *"find_spec('sherpa_onnx')"*"find_spec('soundfile')"*)
     [[ -f {marker} ]] && exit 0 || exit 1
     ;;
 esac
@@ -74,16 +74,16 @@ def _write_fake_python_external_managed(path: Path, marker: Path, log: Path) -> 
     script = f"""#!/usr/bin/env bash
 echo "ARGS: $*" >> {log}
 case "$*" in
-  *"-m pip install"*"--user"*"--break-system-packages"*"sherpa-onnx"*)
+  *"-m pip install"*"--user"*"--break-system-packages"*"sherpa-onnx"*"soundfile"*)
     : > {marker}
     exit 0
     ;;
-  *"-m pip install"*"sherpa-onnx"*)
+  *"-m pip install"*"sherpa-onnx"*"soundfile"*)
     exit 1
     ;;
 esac
 case "$*" in
-  *"find_spec('sherpa_onnx')"*)
+  *"find_spec('sherpa_onnx')"*"find_spec('soundfile')"*)
     [[ -f {marker} ]] && exit 0 || exit 1
     ;;
 esac
@@ -122,6 +122,7 @@ def test_engine_install_runs_pip_when_absent(tmp_path):
     assert result.returncode == 0, result.stderr + result.stdout
     calls = log.read_text() if log.exists() else ""
     assert calls.count("-m pip install") == 1, f"expected exactly one install:\n{calls}"
+    assert "sherpa-onnx soundfile" in calls
     assert marker.exists()  # sherpa is now "installed"
 
 
@@ -136,6 +137,7 @@ def test_engine_install_falls_back_to_user_install_for_externally_managed_python
     calls = log.read_text() if log.exists() else ""
     assert calls.count("-m pip install") == 2, calls
     assert "--user --break-system-packages" in calls
+    assert "sherpa-onnx soundfile" in calls
     assert marker.exists()
 
 
