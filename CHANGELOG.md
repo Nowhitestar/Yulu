@@ -4,6 +4,40 @@ All notable changes to Yulu are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.10.0](https://github.com/Nowhitestar/Yulu/compare/v0.9.0...v0.10.0) (2026-06-10)
+
+
+### Features
+
+* **config:** transcription.diarization.* block in config.example.json ([3db009a](https://github.com/Nowhitestar/Yulu/commit/3db009a738d292fe00a948192ecbda38814d2948))
+* **diarize:** calendar-attendee prior resolution in transcribe.py ([a0c9cd9](https://github.com/Nowhitestar/Yulu/commit/a0c9cd98125e324b880afc3c8a82e0c16636adb2))
+* **diarize:** config-selected diarize backend construction held off the ASR dict ([d2f3dd5](https://github.com/Nowhitestar/Yulu/commit/d2f3dd5aafc52f11943996f976686d8e29a73f73))
+* **diarize:** daemon DIARIZE RPC + request_diarize client ([7c31b3e](https://github.com/Nowhitestar/Yulu/commit/7c31b3eda16b8cbaa6f71187973c04fa571ff4d8))
+* **diarize:** pure N-speaker merge core + .speakers.json sidecar ([3c0f067](https://github.com/Nowhitestar/Yulu/commit/3c0f06770594487cdb7f4f32b7a8e8a4d90c7383))
+* **diarize:** SherpaDiarizeBackend + DiarizeBackend protocol + model resolution ([681c48c](https://github.com/Nowhitestar/Yulu/commit/681c48c5459c388cd7b8bf6b18cebe9ffd0c5a40))
+* **diarize:** speaker-count strategy -- calendar prior + reconcile (over-split fix) ([73a91ab](https://github.com/Nowhitestar/Yulu/commit/73a91ab5f364172604ac180f53633dc8f5e41006))
+* **diarize:** tri-state yulu-managed probe_diarization() folded into doctor ([33f5f6e](https://github.com/Nowhitestar/Yulu/commit/33f5f6e0b563dd7799c751782b1037baa38a8d3b))
+* **diarize:** wire ASR->diarize->merge into transcribe.py pipeline ([1347e1d](https://github.com/Nowhitestar/Yulu/commit/1347e1daef7b3d903e266d17ea132952ff98021a))
+* **eval:** torch-free DER/WDER/SER harness + constructed-corpus + RTTM + UI-copy ([92b9049](https://github.com/Nowhitestar/Yulu/commit/92b9049de22fdad4598fd8bf8c0d93ae4bd0fac8))
+* **prompts:** {{speaker_transcript}}/{{speaker_list}} summary prompt vars ([7ee94d5](https://github.com/Nowhitestar/Yulu/commit/7ee94d56c1c8a689b9d8dd7df9806c581ed95384))
+* **provision:** co-locate sherpa-onnx on the daemon interpreter (cp314 verified) + engine-aware models check ([44c04d4](https://github.com/Nowhitestar/Yulu/commit/44c04d4bc0c37aa0ce2e946e09850b91846c30b6))
+* **provision:** idempotent diarization ONNX model provisioning in the models step ([b1d1032](https://github.com/Nowhitestar/Yulu/commit/b1d10320f88828b994d3531e1109a4afce3ba5b6))
+* **settings:** add resource provisioning actions ([886d2b1](https://github.com/Nowhitestar/Yulu/commit/886d2b1d9f83354363cb2c492319dd23bd0765e3))
+* **settings:** auto-detect gog accounts ([0930499](https://github.com/Nowhitestar/Yulu/commit/0930499959987b260f034a8f6b555f57fd78a5f8))
+* **settings:** explain missing capabilities ([38da715](https://github.com/Nowhitestar/Yulu/commit/38da7153147e6edbfa8fb805e07a6a847da1c22c))
+* **settings:** select watched calendars from gog ([a81d924](https://github.com/Nowhitestar/Yulu/commit/a81d924ac32c7d54c074d00fbf58da983a3660bc))
+* harden phase14 settings and diarization readiness ([950b22c](https://github.com/Nowhitestar/Yulu/commit/950b22c24add42b02bcb0703f4cdbacca1abd7f6))
+
+
+### Bug Fixes
+
+* **audio:** keep dual-track capture on a continuous timeline ([73be113](https://github.com/Nowhitestar/Yulu/commit/73be113e4f87b95fc5a8f63ee701be484b5bdb50))
+* **audio:** restore meeting half-duplex playback mix ([dba4723](https://github.com/Nowhitestar/Yulu/commit/dba47235a57b536b3fb605110e4b4730c4136e76))
+* **diarize:** count-keyed pipeline cache so per-call override can't bleed into auto ([d2a6214](https://github.com/Nowhitestar/Yulu/commit/d2a6214e89ab94e7932a740b9aa6ccc68018293c))
+* **diarize:** install soundfile with sherpa runtime ([5abfced](https://github.com/Nowhitestar/Yulu/commit/5abfced7e7337b8a8c70f53ff5a202efb59e6008))
+* **recording:** resume interrupted captures and clean playback ([501d12f](https://github.com/Nowhitestar/Yulu/commit/501d12f365b47449586a10c1ec8820ff556098a0))
+* **ui:** improve mobile responsive layouts ([c7286f5](https://github.com/Nowhitestar/Yulu/commit/c7286f55e5b9356a7a4dc1fd70721376a1c42e23))
+
 ## [0.9.0](https://github.com/Nowhitestar/Yulu/compare/v0.8.0...v0.9.0) (2026-06-07)
 
 
