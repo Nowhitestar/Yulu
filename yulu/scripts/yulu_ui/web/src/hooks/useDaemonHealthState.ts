@@ -4,7 +4,7 @@ export type DaemonHealthState = "ok" | "warn" | "crit" | "loading";
 
 interface DaemonStatus {
   name: string;
-  status: "running" | "stopped" | "crashed" | "unknown" | string;
+  status: "running" | "idle" | "stopped" | "crashed" | "unknown" | string;
 }
 
 /**
@@ -14,14 +14,14 @@ interface DaemonStatus {
  * - undefined or empty → loading
  * - any crashed → crit (overrides everything)
  * - any stopped or unknown → warn
- * - all running → ok
+ * - all running/idle → ok
  */
 export function computeHealthState(
   daemons: ReadonlyArray<DaemonStatus> | undefined,
 ): DaemonHealthState {
   if (!daemons || daemons.length === 0) return "loading";
   if (daemons.some((d) => d.status === "crashed")) return "crit";
-  if (daemons.some((d) => d.status !== "running")) return "warn";
+  if (daemons.some((d) => d.status !== "running" && d.status !== "idle")) return "warn";
   return "ok";
 }
 

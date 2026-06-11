@@ -48,6 +48,9 @@
 }
 .reader-title-input:focus { outline: none; }
 .reader-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   font-size: 11px;
   color: var(--fg-3);
 }

@@ -16,6 +16,14 @@ describe("computeHealthState", () => {
       ]),
     ).toBe("ok");
   });
+  it("returns 'ok' when a loaded on-demand daemon is idle", () => {
+    expect(
+      computeHealthState([
+        { name: "a", status: "running" },
+        { name: "b", status: "idle" },
+      ]),
+    ).toBe("ok");
+  });
   it("returns 'warn' when one is stopped but none crashed", () => {
     expect(
       computeHealthState([

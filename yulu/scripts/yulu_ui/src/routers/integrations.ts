@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { join } from "node:path";
 import { z } from "zod";
 import { router, publicProcedure } from "../trpc.js";
+import { envWithFallbackPath, resolveExecutable } from "../executables.js";
 
 function runSpawn(
   cmd: string,
@@ -17,7 +18,8 @@ function runSpawn(
       settled = true;
       resolve(result);
     };
-    const proc = spawn(cmd, args, { env });
+    const spawnEnv = envWithFallbackPath(env);
+    const proc = spawn(resolveExecutable(cmd, spawnEnv), args, { env: spawnEnv });
     const timer = setTimeout(() => { proc.kill("SIGKILL"); }, timeoutMs);
     proc.stdout.on("data", (b: Buffer) => { stdout += b.toString("utf8"); });
     proc.stderr.on("data", (b: Buffer) => { stderr += b.toString("utf8"); });

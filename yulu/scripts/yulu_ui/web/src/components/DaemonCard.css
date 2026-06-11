@@ -34,6 +34,10 @@
   background: rgba(186, 230, 126, 0.18);
   color: var(--green);
 }
+.status-pill[data-status="idle"] {
+  background: color-mix(in oklch, var(--blue) 14%, transparent);
+  color: var(--blue);
+}
 .status-pill[data-status="stopped"] {
   background: var(--row-hover);
   color: var(--fg-3);

@@ -100,6 +100,17 @@ describe("recordings router", () => {
     expect((await createCaller(recordingsRouter, ctx).list({}))[0].status).toBe("transcribing");
   });
 
+  it("marks a non-WAV recording file as recording_failed", async () => {
+    const stem = "GoogleChrome_20260611_160424";
+    writeFileSync(join(mvDir, `${stem}.wav`), JSON.stringify({ type: "recording_crashed" }));
+    const caller = createCaller(recordingsRouter, mkCtx({ moviesDir: mvDir }));
+    const row = (await caller.list({}))[0];
+    const detail = await caller.get({ stem });
+    expect(row.status).toBe("recording_failed");
+    expect(row.statusError).toMatch(/valid WAV/);
+    expect(detail.status).toBe("recording_failed");
+  });
+
   // ---- transcript vs raw de-duplication -------------------------------------
 
   it("get marks rawDiffers=false when raw equals transcript", async () => {

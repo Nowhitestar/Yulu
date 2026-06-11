@@ -1,12 +1,25 @@
-import { describe, it, expect, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { beforeEach, describe, it, expect, vi } from "vitest";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 
 const listMock = vi.fn();
+const renameMutate = vi.fn();
+const deleteMutate = vi.fn();
+const transcribeMutate = vi.fn();
+const summarizeMutate = vi.fn();
 vi.mock("../../web/src/trpc.js", () => ({
-  trpc: { recordings: { list: { useQuery: (...a: unknown[]) => listMock(...a) } } },
+  trpc: {
+    recordings: {
+      list: { useQuery: (...a: unknown[]) => listMock(...a) },
+      rename: { useMutation: () => ({ mutate: renameMutate }) },
+      delete: { useMutation: () => ({ mutate: deleteMutate }) },
+      transcribe: { useMutation: () => ({ mutate: transcribeMutate }) },
+      summarize: { useMutation: () => ({ mutate: summarizeMutate }) },
+    },
+  },
 }));
 vi.mock("../../web/src/ws.js", () => ({ useWsChannel: () => {} }));
+vi.mock("../../web/src/hooks/useConfirm.js", () => ({ useConfirm: () => vi.fn(() => true) }));
 
 import { RecordingsList } from "../../web/src/routes/inbox/recordings";
 
@@ -18,6 +31,13 @@ function rows() {
 }
 
 describe("RecordingsList", () => {
+  beforeEach(() => {
+    renameMutate.mockClear();
+    deleteMutate.mockClear();
+    transcribeMutate.mockClear();
+    summarizeMutate.mockClear();
+  });
+
   it("renders one row per recording (title + first words, no type badge)", () => {
     listMock.mockReturnValue({ data: rows(), isPending: false });
     render(<MemoryRouter><RecordingsList /></MemoryRouter>);
@@ -60,5 +80,17 @@ describe("RecordingsList", () => {
     });
     render(<MemoryRouter><RecordingsList /></MemoryRouter>);
     expect(screen.queryByTestId("recording-status")).toBeNull();
+  });
+
+  it("opens a row context menu with actions based on available outputs", () => {
+    listMock.mockReturnValue({ data: rows(), isPending: false });
+    render(<MemoryRouter><RecordingsList /></MemoryRouter>);
+    fireEvent.contextMenu(screen.getByText("TeamSync"));
+    expect(screen.getByRole("menuitem", { name: /重命名/i })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("menuitem", { name: /重新转写/i }));
+    expect(transcribeMutate).toHaveBeenCalledWith({ stem: "TeamSync_20260102_090000" });
+
+    fireEvent.contextMenu(screen.getByText("Memo"));
+    expect(screen.queryByRole("menuitem", { name: /重新生成摘要/i })).toBeNull();
   });
 });

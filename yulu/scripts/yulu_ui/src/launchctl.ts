@@ -31,16 +31,26 @@ export class LaunchctlClient {
   }
 
   /**
-   * Parse `launchctl list <label>` output (single line: PID\tEXIT\tLABEL).
+   * Parse `launchctl list` output. The label-specific form returns a
+   * property-list-ish block on modern macOS, while the table form is stable:
+   * PID\tEXIT\tLABEL, with PID "-" for loaded on-demand jobs.
    * Returns null when service is not loaded.
    */
   async status(label: string): Promise<DaemonStatus | null> {
     try {
-      const { stdout } = await exec("launchctl", ["list", label]);
-      const line = stdout.trim().split("\n")[0] ?? "";
-      const [pidStr, exitStr, lbl] = line.split("\t");
-      if (!pidStr || !exitStr || !lbl) return null;
-      return { pid: Number(pidStr) || 0, exitStatus: Number(exitStr) || 0, label: lbl };
+      const { stdout } = await exec("launchctl", ["list"]);
+      for (const raw of stdout.split(/\r?\n/)) {
+        const line = raw.trim();
+        if (!line || line.startsWith("PID")) continue;
+        const [pidStr, exitStr, lbl] = line.split(/\s+/);
+        if (lbl !== label) continue;
+        return {
+          pid: pidStr === "-" ? 0 : Number(pidStr) || 0,
+          exitStatus: Number(exitStr) || 0,
+          label: lbl,
+        };
+      }
+      return null;
     } catch {
       return null;
     }

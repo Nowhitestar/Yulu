@@ -34,6 +34,28 @@ describe("daemonsRouter", () => {
     expect(stt.status).toBe("stopped");
   });
 
+  it("health() reports the StartInterval agentqueue as idle when loaded without a pid", async () => {
+    const ctx = makeCtx();
+    (ctx.launchctl as unknown as { status: ReturnType<typeof vi.fn> }).status.mockImplementation(async (label: string) =>
+      label === "com.yulu.agentqueue"
+        ? { pid: 0, exitStatus: 0, label }
+        : null,
+    );
+    const r = (await createCaller(daemonsRouter, ctx).health()) as Array<{ name: string; status: string }>;
+    expect(r.find((d) => d.name === "com.yulu.agentqueue")!.status).toBe("idle");
+  });
+
+  it("health() treats a daemon with a pid as running even when launchctl has a stale non-zero status", async () => {
+    const ctx = makeCtx();
+    (ctx.launchctl as unknown as { status: ReturnType<typeof vi.fn> }).status.mockImplementation(async (label: string) =>
+      label === "com.yulu.audiodaemon"
+        ? { pid: 4242, exitStatus: 1, label }
+        : null,
+    );
+    const r = (await createCaller(daemonsRouter, ctx).health()) as Array<{ name: string; status: string }>;
+    expect(r.find((d) => d.name === "com.yulu.audiodaemon")!.status).toBe("running");
+  });
+
   it("restart() calls launchctl + publishes daemons event", async () => {
     const ctx = makeCtx();
     const caller = createCaller(daemonsRouter, ctx);

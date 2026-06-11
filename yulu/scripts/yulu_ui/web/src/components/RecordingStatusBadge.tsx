@@ -2,7 +2,15 @@ import { Loader2, AlertTriangle } from "lucide-react";
 import { useT } from "../i18n/LanguageProvider.js";
 import "./RecordingStatusBadge.css";
 
-export type RecordingJobState = "idle" | "transcribing" | "summarizing" | "failed" | string;
+export type RecordingJobState =
+  | "idle"
+  | "transcribing"
+  | "summarizing"
+  | "failed"
+  | "recording_failed"
+  | "transcription_failed"
+  | "summary_failed"
+  | string;
 
 export interface RecordingStatusBadgeProps {
   state: RecordingJobState;
@@ -16,6 +24,9 @@ const LABEL_KEYS: Record<string, string> = {
   transcribing: "status.transcribing",
   summarizing: "status.summarizing",
   failed: "status.failed",
+  recording_failed: "status.recording_failed",
+  transcription_failed: "status.transcription_failed",
+  summary_failed: "status.summary_failed",
 };
 
 /**
@@ -26,7 +37,7 @@ const LABEL_KEYS: Record<string, string> = {
 export function RecordingStatusBadge({ state, error, compact }: RecordingStatusBadgeProps) {
   const t = useT();
   if (state === "idle" || !(state in LABEL_KEYS)) return null;
-  const failed = state === "failed";
+  const failed = state === "failed" || state.endsWith("_failed");
   return (
     <span
       className={`rec-status rec-status-${failed ? "failed" : "busy"}`}

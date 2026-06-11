@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync, statSync, existsSync, unlinkSync, renameSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, openSync, readFileSync, readSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { join, resolve, relative, isAbsolute } from "node:path";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
@@ -36,6 +36,50 @@ function firstWordsOf(path: string): string | null {
   } catch {
     return null;
   }
+}
+
+interface RecordingStatus {
+  status: string;
+  statusError?: string;
+}
+
+function wavHealthError(path: string): string | null {
+  try {
+    const stat = statSync(path);
+    if (stat.size < 12) return "Recording file is incomplete.";
+    const fd = openSync(path, "r");
+    try {
+      const header = Buffer.alloc(12);
+      const bytes = readSync(fd, header, 0, header.length, 0);
+      if (bytes < 12) return "Recording file is incomplete.";
+      if (
+        header.subarray(0, 4).toString("ascii") !== "RIFF" ||
+        header.subarray(8, 12).toString("ascii") !== "WAVE"
+      ) {
+        return "Recording file is not a valid WAV. The recorder likely crashed before stop completed.";
+      }
+      return null;
+    } finally {
+      closeSync(fd);
+    }
+  } catch (exc) {
+    return `Recording file cannot be inspected: ${(exc as Error).message}`;
+  }
+}
+
+function recordingStatus(stem: string, wavPath: string, registry: JobRegistry): RecordingStatus {
+  const job = registry.get(stem);
+  if (job?.state === "failed") {
+    return {
+      status: job.action === "summarize" ? "summary_failed" : "transcription_failed",
+      statusError: job.error,
+    };
+  }
+  if (job) return { status: job.state, statusError: job.error };
+
+  const wavError = wavHealthError(wavPath);
+  if (wavError) return { status: "recording_failed", statusError: wavError };
+  return { status: "idle" };
 }
 
 interface Row {
@@ -278,7 +322,7 @@ function listRecordings(dir: string, registry: JobRegistry): Row[] {
     const wavPath = join(dir, f);
     const stat = statSync(wavPath);
     const transcriptPath = join(dir, `${stem}.transcript.txt`);
-    const job = registry.get(stem);
+    const currentStatus = recordingStatus(stem, wavPath, registry);
     out.push({
       stem,
       title: resolveTitle(dir, stem, title!),
@@ -289,7 +333,7 @@ function listRecordings(dir: string, registry: JobRegistry): Row[] {
       hasSummary: existsSync(join(dir, `${stem}.summary.md`)),
       hasRealtime: existsSync(join(dir, `${stem}.realtime.transcript.txt`)),
       firstWords: firstWordsOf(transcriptPath),
-      status: job?.state ?? "idle", statusError: job?.error,
+      status: currentStatus.status, statusError: currentStatus.statusError,
     });
   }
   return out;
@@ -324,7 +368,6 @@ export const recordingsRouter = router({
       const cleanPath = join(dir, cleanFile);
       const audioFile = existsSync(cleanPath) ? cleanFile : `${input.stem}.wav`;
       const audioStat = statSync(join(dir, audioFile));
-      const job = ctx.jobs.get(input.stem);
       let recordedAt: string | null = null;
       const tm = input.stem.match(/_(\d{8})_(\d{6})$/);
       if (tm) recordedAt = isoFromStem(tm[1]!, tm[2]!);
@@ -332,6 +375,7 @@ export const recordingsRouter = router({
       const derivedTitle = mm ? mm[1]! : null;
       const title = resolveTitle(dir, input.stem, derivedTitle);
       const tags = readTagsSidecar(join(dir, `${input.stem}.tags.json`));
+      const currentStatus = recordingStatus(input.stem, wav, ctx.jobs);
       const transcript = read(".transcript.txt");
       const raw = read(".raw.transcript.txt");
       // `.transcript.txt` and `.raw.transcript.txt` are written identically by
@@ -350,7 +394,7 @@ export const recordingsRouter = router({
         realtime: read(".realtime.transcript.txt"),
         hasRealtime: existsSync(join(dir, `${input.stem}.realtime.transcript.txt`)),
         speakerData: readSpeakerSidecar(dir, input.stem),
-        status: job?.state ?? "idle", statusError: job?.error,
+        status: currentStatus.status, statusError: currentStatus.statusError,
       };
     }),
 

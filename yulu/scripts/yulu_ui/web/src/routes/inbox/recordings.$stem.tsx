@@ -11,6 +11,7 @@ import { MarkdownView } from "../../components/MarkdownView.js";
 import { TagEditor } from "../../components/TagEditor.js";
 import { EmptyState } from "../../components/EmptyState.js";
 import { ReprocessButton, type ReprocessButtonState } from "../../components/ReprocessButton.js";
+import { RecordingStatusBadge } from "../../components/RecordingStatusBadge.js";
 import { useConfirm } from "../../hooks/useConfirm.js";
 import { useT } from "../../i18n/LanguageProvider.js";
 import { useWsChannel } from "../../ws.js";
@@ -312,8 +313,9 @@ export function RecordingReader() {
   function deriveButtonState(action: "transcribe" | "summarize"): ReprocessButtonState {
     const status = data?.status ?? "idle";
     const targetRunning = action === "transcribe" ? "transcribing" : "summarizing";
+    const targetFailed = action === "transcribe" ? "transcription_failed" : "summary_failed";
     if (status === targetRunning) return "running";
-    if (status === "failed" && lastAction === action) return "failed";
+    if ((status === targetFailed || status === "failed") && lastAction === action) return "failed";
     if (status === "idle" && lastAction === action) return "done";
     return "idle";
   }
@@ -438,6 +440,7 @@ export function RecordingReader() {
         </div>
         <div className="reader-meta">
           <span>{new Date(data.mtimeMs).toLocaleString()}</span>
+          <RecordingStatusBadge state={data.status} error={data.statusError} />
         </div>
         <TagEditor tags={data.tags ?? []} onChange={handleTagsChange} />
       </div>

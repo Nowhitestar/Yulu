@@ -16,10 +16,20 @@ export const YULU_DAEMONS = [
 
 type YuluDaemon = typeof YULU_DAEMONS[number];
 const DaemonName = z.enum(YULU_DAEMONS);
+const ON_DEMAND_DAEMONS = new Set<YuluDaemon>(["com.yulu.agentqueue"]);
+type HealthStatus = "stopped" | "crashed" | "running" | "idle";
+type LaunchStatus = { pid: number; exitStatus: number; label: string } | null;
 
 function logPath(name: YuluDaemon, configDir: string): string {
   const short = name.replace(/^com\.yulu\./, "");
   return join(configDir, `${short === "ui" ? "ui" : short}.log`);
+}
+
+function classifyStatus(name: YuluDaemon, s: LaunchStatus): HealthStatus {
+  if (!s) return "stopped";
+  if (s.pid > 0) return "running";
+  if (s.exitStatus !== 0) return "crashed";
+  return ON_DEMAND_DAEMONS.has(name) ? "idle" : "stopped";
 }
 
 export const daemonsRouter = router({
@@ -38,7 +48,7 @@ export const daemonsRouter = router({
       }
       out.push({
         name,
-        status: (!s || s.pid === 0 ? "stopped" : s.exitStatus !== 0 ? "crashed" : "running") as "stopped" | "crashed" | "running",
+        status: classifyStatus(name, s),
         pid: s?.pid ?? 0,
         exitStatus: s?.exitStatus ?? 0,
         lastLog,

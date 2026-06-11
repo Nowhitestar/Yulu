@@ -35,11 +35,19 @@ describe("LaunchctlClient", () => {
     expect(execFileMock.mock.calls[1]![1]).toEqual(["load", "/Users/x/Library/LaunchAgents/com.yulu.audiodaemon.plist"]);
   });
 
-  it("status() parses 'pid 0 label' format", async () => {
-    ok("12345\t0\tcom.yulu.audiodaemon\n");
+  it("status() parses the launchctl list table", async () => {
+    ok("PID\tStatus\tLabel\n12345\t0\tcom.yulu.audiodaemon\n-\t0\tcom.yulu.agentqueue\n");
     const c = new LaunchctlClient("/Users/x/Library/LaunchAgents");
     const s = await c.status("com.yulu.audiodaemon");
     expect(s).toEqual({ pid: 12345, exitStatus: 0, label: "com.yulu.audiodaemon" });
+    expect(execFileMock.mock.calls[0]![1]).toEqual(["list"]);
+  });
+
+  it("status() treats '-' PID as loaded without a running process", async () => {
+    ok("PID\tStatus\tLabel\n-\t0\tcom.yulu.agentqueue\n");
+    const c = new LaunchctlClient("/Users/x/Library/LaunchAgents");
+    const s = await c.status("com.yulu.agentqueue");
+    expect(s).toEqual({ pid: 0, exitStatus: 0, label: "com.yulu.agentqueue" });
   });
 
   it("status() returns null when not loaded", async () => {

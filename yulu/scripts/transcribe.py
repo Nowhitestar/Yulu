@@ -103,7 +103,7 @@ def _enqueue_summary_request(*, prompt, audio_path, transcript_path,
     if prompt.category.value == "summary":
         extras["html_path_hint"] = str(output_path.with_suffix(".html"))
     append_event(
-        "summary_request", path=queue_path, title=meeting_title,
+        "summary_request", queue_path=queue_path, title=meeting_title,
         audio_path=str(audio_path), transcript_path=str(transcript_path),
         summary_path=str(output_path),
         prompt_id=prompt.id, prompt_slug=prompt.slug, prompt_name=prompt.name,

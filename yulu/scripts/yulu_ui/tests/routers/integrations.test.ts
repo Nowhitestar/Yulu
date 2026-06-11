@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { integrationsRouter } from "../../src/routers/integrations.js";
 import { createCaller, type AppContext } from "../../src/trpc.js";
+import { basename } from "node:path";
 
 const spawnMock = vi.hoisted(() => vi.fn());
 vi.mock("node:child_process", async (importOriginal) => {
@@ -36,7 +37,7 @@ describe("integrationsRouter.test", () => {
     expect(r.ok).toBe(true);
 
     const call = spawnMock.mock.calls[0]!;
-    expect(call[0]).toBe("python3");
+    expect(basename(String(call[0]))).toBe("python3");
     const args = call[1] as string[];
     // Runs Yulu's own check_meetings.py in JSON mode — `json` is a positional command.
     expect(args[0]).toBe("/fake/yulu/scripts/check_meetings.py");
@@ -85,7 +86,7 @@ describe("integrationsRouter.calendarList", () => {
     ]);
 
     const call = spawnMock.mock.calls[0]!;
-    expect(call[0]).toBe("gog");
+    expect(basename(String(call[0]))).toBe("gog");
     expect(call[1]).toEqual([
       "--json",
       "--results-only",
@@ -135,7 +136,7 @@ describe("integrationsRouter.accountList", () => {
     ]);
 
     const call = spawnMock.mock.calls[0]!;
-    expect(call[0]).toBe("gog");
+    expect(basename(String(call[0]))).toBe("gog");
     expect(call[1]).toEqual(["auth", "list", "--json", "--results-only", "--no-input"]);
   });
 

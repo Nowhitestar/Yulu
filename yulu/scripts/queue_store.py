@@ -71,14 +71,14 @@ def locked_queue(path: Path = QUEUE_PATH, lock_path: Path = LOCK_PATH) -> Iterat
             fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
 
 
-def append_event(event_type: str, path: Path = QUEUE_PATH, **fields: Any) -> dict[str, Any]:
+def append_event(event_type: str, queue_path: Path = QUEUE_PATH, **fields: Any) -> dict[str, Any]:
     entry = {
         "id": fields.pop("id", str(uuid.uuid4())),
         "type": event_type,
         "ts": fields.pop("ts", _now()),
         **fields,
     }
-    with locked_queue(path=path) as queue:
+    with locked_queue(path=queue_path) as queue:
         queue.append(entry)
     return entry
 

@@ -23,6 +23,7 @@
 .health-counter { display: flex; align-items: center; gap: 6px; color: var(--fg); }
 .health-counter .dot { width: 8px; height: 8px; border-radius: 50%; }
 .health-counter .dot.dot-ok   { background: var(--green); }
+.health-counter .dot.dot-idle { background: var(--blue); }
 .health-counter .dot.dot-warn { background: var(--fg-2); }
 .health-counter .dot.dot-crit { background: var(--red); }
 

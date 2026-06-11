@@ -18,6 +18,7 @@ export function HealthSummary() {
   const { data } = trpc.daemons.health.useQuery(undefined, { refetchInterval: 5_000 });
   const daemons = (data as DaemonHealth[] | undefined) ?? [];
   const running = daemons.filter((d) => d.status === "running").length;
+  const idle = daemons.filter((d) => d.status === "idle").length;
   const stopped = daemons.filter((d) => d.status === "stopped").length;
   const crashed = daemons.filter((d) => d.status === "crashed").length;
 
@@ -32,6 +33,7 @@ export function HealthSummary() {
       </div>
       <div className="health-summary-counters">
         <div className="health-counter"><span className="dot dot-ok" />{t("health.counter.running", { n: running })}</div>
+        <div className="health-counter"><span className="dot dot-idle" />{t("health.counter.idle", { n: idle })}</div>
         <div className="health-counter"><span className="dot dot-warn" />{t("health.counter.stopped", { n: stopped })}</div>
         <div className="health-counter"><span className="dot dot-crit" />{t("health.counter.crashed", { n: crashed })}</div>
       </div>

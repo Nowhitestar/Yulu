@@ -1,13 +1,13 @@
 // web/src/components/DaemonCard.tsx
 import type { JSX } from "react";
 import { Link } from "react-router";
-import { Circle, Pause, AlertCircle } from "lucide-react";
+import { Circle, Pause, AlertCircle, Clock3 } from "lucide-react";
 import { useT } from "../i18n/LanguageProvider.js";
 import "./DaemonCard.css";
 
 export interface DaemonHealth {
   name: string;
-  status: "running" | "stopped" | "crashed";
+  status: "running" | "idle" | "stopped" | "crashed";
   pid: number;
   exitStatus: number;
   lastLog: string;
@@ -23,12 +23,14 @@ export interface DaemonCardProps {
 
 const STATUS_GLYPH: Record<DaemonHealth["status"], JSX.Element> = {
   running: <Circle size={9} strokeWidth={3} fill="currentColor" />,
+  idle: <Clock3 size={11} strokeWidth={2} />,
   stopped: <Pause size={11} strokeWidth={2} />,
   crashed: <AlertCircle size={11} strokeWidth={2} />,
 };
 
 const STATUS_KEY: Record<DaemonHealth["status"], string> = {
   running: "health.daemon.status.running",
+  idle: "health.daemon.status.idle",
   stopped: "health.daemon.status.stopped",
   crashed: "health.daemon.status.crashed",
 };

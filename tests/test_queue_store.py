@@ -14,7 +14,7 @@ def test_append_claim_and_update_summary_request(tmp_path):
 
     entry = append_event(
         "summary_request",
-        path=queue_path,
+        queue_path=queue_path,
         title="Queue Meeting",
         transcript_path="/tmp/t.txt",
         summary_path="/tmp/s.md",
@@ -35,7 +35,7 @@ def test_invalid_queue_is_replaced_with_valid_json(tmp_path):
     queue_path = tmp_path / "agent-queue.json"
     queue_path.write_text("{not-json", encoding="utf-8")
 
-    append_event("transcribing", path=queue_path, title="Recovered")
+    append_event("transcribing", queue_path=queue_path, title="Recovered")
 
     queue = json.loads(queue_path.read_text(encoding="utf-8"))
     assert len(queue) == 1
@@ -51,14 +51,14 @@ def test_legacy_and_new_summary_request_shapes_coexist(tmp_path):
 
     # Legacy shape (pre-spec; missing prompt_* fields)
     append_event(
-        "summary_request", path=queue_path,
+        "summary_request", queue_path=queue_path,
         title="Old Meeting",
         transcript_path="/tmp/t.txt",
         summary_path="/tmp/s.md",
     )
     # New shape (post-spec; full snapshot)
     append_event(
-        "summary_request", path=queue_path,
+        "summary_request", queue_path=queue_path,
         title="New Meeting",
         audio_path="/tmp/a.wav",
         transcript_path="/tmp/t.txt",
@@ -78,3 +78,16 @@ def test_legacy_and_new_summary_request_shapes_coexist(tmp_path):
     assert new["prompt_id"] == "pid-1"
     assert new["prompt_content_snapshot"] == "please summarize {{transcript}}"
     assert new["html_path_hint"] == "/tmp/s.html"
+
+
+def test_append_event_keeps_path_as_event_field(tmp_path):
+    queue_path = tmp_path / "agent-queue.json"
+    audio_path = tmp_path / "meeting.wav"
+    audio_path.write_bytes(b"RIFF\x00\x00\x00\x00WAVE")
+
+    append_event("recording_crashed", queue_path=queue_path, path=str(audio_path), title="Meeting")
+
+    assert audio_path.read_bytes() == b"RIFF\x00\x00\x00\x00WAVE"
+    queue = load_queue(queue_path)
+    assert queue[0]["type"] == "recording_crashed"
+    assert queue[0]["path"] == str(audio_path)
