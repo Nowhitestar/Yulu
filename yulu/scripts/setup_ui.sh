@@ -3,8 +3,8 @@
 # setup_ui.sh — yulu_ui build + LaunchAgent install concern (extracted from
 # setup.sh::install_yulu_ui 1022-1111).
 #
-# Standalone-or-sourced (RESEARCH Pattern 5). Idempotent: the lockfile-sha
-# marker skips `npm ci` when package-lock.json hasn't changed.
+# Standalone-or-sourced (RESEARCH Pattern 5). Idempotent: the lockfile/runtime
+# marker skips `npm ci` only when package-lock.json and installed deps are valid.
 #
 # KEY CHANGE vs the monolith: the §8c inline-duplicated install_plist
 # (setup.sh 1079-1088 — whose own comment admitted it existed only "so we don't
@@ -59,6 +59,19 @@ compatible_node_bin() {
     return 1
 }
 
+ui_node_modules_ready() {
+    local ui_dir="$1"
+    (
+        cd "$ui_dir" && "$NODE_BIN" -e "
+            require.resolve('hono');
+            require.resolve('@trpc/server');
+            require.resolve('@trpc/server/adapters/fetch');
+            require.resolve('vite');
+            require.resolve('esbuild');
+        "
+    ) >/dev/null 2>&1
+}
+
 setup_ui() {
     local mode="${1:-release}"   # release|dev — accepted for orchestrator parity
     : "$mode"                    # ui build is mode-agnostic
@@ -99,19 +112,23 @@ setup_ui() {
     fi
     ok "Node $("$NODE_BIN" -v) 满足 yulu_ui 要求"
 
-    # Idempotency marker: skip npm ci when package-lock.json hasn't changed.
+    # Idempotency marker: skip npm ci only when the lockfile, Node ABI, and a
+    # small module-resolution probe all agree that node_modules is usable.
     local lock="$ui_dir/package-lock.json"
     local marker="$ui_dir/node_modules/.yulu-built-from"
     local lock_sha=""
     if [[ -f "$lock" ]]; then
         lock_sha="$(shasum -a 256 "$lock" | cut -d' ' -f1)"
     fi
-    if [[ -f "$marker" ]] && [[ "$(cat "$marker" 2>/dev/null)" == "$lock_sha" ]]; then
-        info "npm ci 已是最新（lockfile sha 未变），跳过依赖安装"
+    local node_runtime_key
+    node_runtime_key="$("$NODE_BIN" -p "process.platform + ':' + process.arch + ':modules' + process.versions.modules" 2>/dev/null || "$NODE_BIN" -v)"
+    local marker_value="${lock_sha}:${node_runtime_key}"
+    if [[ -f "$marker" ]] && [[ "$(cat "$marker" 2>/dev/null)" == "$marker_value" ]] && ui_node_modules_ready "$ui_dir"; then
+        info "npm ci 已是最新（lockfile / Node ABI / 依赖完整性均通过），跳过依赖安装"
     else
         info "运行 npm ci (这一步可能需要 30-60 秒)..."
         ( cd "$ui_dir" && "$npm_bin" ci ) || { err "npm ci 失败"; return 1; }
-        printf '%s' "$lock_sha" > "$marker"
+        printf '%s' "$marker_value" > "$marker"
         ok "依赖已安装"
     fi
 
