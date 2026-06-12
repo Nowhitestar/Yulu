@@ -4,6 +4,13 @@ All notable changes to Yulu are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.10.4](https://github.com/Nowhitestar/Yulu/compare/v0.10.3...v0.10.4) (2026-06-12)
+
+
+### Bug Fixes
+
+* **setup:** preserve macOS recording permissions during normal upgrades
+
 ## [0.10.3](https://github.com/Nowhitestar/Yulu/compare/v0.10.2...v0.10.3) (2026-06-12)
 
 

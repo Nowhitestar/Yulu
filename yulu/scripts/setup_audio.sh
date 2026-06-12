@@ -17,10 +17,9 @@
 # It is kept ONLY behind the explicit dev guard (ad-hoc-signed dev builds still
 # benefit from it).
 #
-# Kept (Runtime State Inventory): the TCC reset + re-prompt walkthrough. The
-# signing-identity change (Apple Development → Developer ID) + newly-enabled
-# hardened runtime can invalidate existing Microphone/ScreenCapture grants; this
-# reset path is what re-prompts. The whole walkthrough is Darwin-gated.
+# Kept (Runtime State Inventory): the TCC re-prompt walkthrough. Fresh installs
+# and explicit repair runs can reset TCC, but normal upgrades preserve existing
+# Microphone/ScreenCapture grants so updates do not break a working recorder.
 #
 # Standalone invocation is non-interactive (Pitfall 5). State that the monolith
 # carried as shared globals (UPGRADE_MODE / SCRIPT_DIR / LAUNCH_AGENTS_DIR) is
@@ -37,6 +36,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 UPGRADE_MODE="${UPGRADE_MODE:-false}"
 LAUNCH_AGENTS_DIR="${LAUNCH_AGENTS_DIR:-$HOME/Library/LaunchAgents}"
 CONFIG_DIR="${CONFIG_DIR:-$HOME/.config/yulu}"
+YULU_FORCE_TCC_RESET="${YULU_FORCE_TCC_RESET:-false}"
 
 setup_audio() {
     local mode="${1:-release}"   # release|dev — orchestrator resolves & passes
@@ -112,11 +112,9 @@ setup_audio() {
         return 0
     fi
 
-    # On upgrade, if TCC is already granted and the daemon answers status, skip the
-    # interactive permission walkthrough — but ALWAYS restart the daemon so it
-    # actually picks up the freshly built binary. (`launchctl unload` of an
-    # `open -W Yulu.app` job doesn't kill the LSUIElement child process, so the
-    # old binary keeps running unless we pkill it explicitly.)
+    # On upgrade, preserve TCC by default. We still restart the daemon so it picks
+    # up the new binary, but we only reset permissions on fresh install or an
+    # explicit YULU_FORCE_TCC_RESET=true repair run.
     if [[ "$UPGRADE_MODE" == true ]]; then
         local existing
         existing=$(echo '{"action":"status"}' | nc -w 2 -U "$CONFIG_DIR/audio_daemon.sock" 2>/dev/null || true)
@@ -133,6 +131,26 @@ setup_audio() {
             ok "麦克风 + 屏幕录制权限已就绪；daemon 已重载"
             return 0
         fi
+        if [[ "$YULU_FORCE_TCC_RESET" != true ]]; then
+            info "升级模式：保留现有 TCC 权限，只重载 daemon..."
+            pkill -f "Yulu.app/Contents/MacOS/audio_daemon" 2>/dev/null || true
+            sleep 2
+            if ! pgrep -f "Yulu.app/Contents/MacOS/audio_daemon" >/dev/null 2>&1; then
+                open "$SCRIPT_DIR/Yulu.app"
+                sleep 3
+            fi
+            local after_restart
+            after_restart=$(echo '{"action":"status"}' | nc -w 2 -U "$CONFIG_DIR/audio_daemon.sock" 2>/dev/null || true)
+            if echo "$after_restart" | grep -q '"sysReady":true' && echo "$after_restart" | grep -q '"micReady":true'; then
+                ok "麦克风 + 屏幕录制权限已就绪；daemon 已重载"
+            else
+                warn "Yulu 尚未 ready: $after_restart"
+                warn "升级不会自动重置录音权限；需要重新授权时再运行："
+                warn "  YULU_FORCE_TCC_RESET=true bash '$SCRIPT_DIR/setup_audio.sh' '$mode'"
+            fi
+            return 0
+        fi
+        warn "YULU_FORCE_TCC_RESET=true，将重置录音权限并重新请求授权。"
     fi
 
     echo
