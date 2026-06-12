@@ -47,6 +47,36 @@ def test_resolve_by_title_when_no_meeting_id(tmp_path):
     assert n == 4
 
 
+def test_resolve_by_normalized_title_when_recording_stem_is_compact(tmp_path):
+    state = tmp_path / ".state.json"
+    schedule = tmp_path / "schedule.json"
+    _write(state, {"meeting_id": "", "title": ""})
+    _write(schedule, {"meetings": [
+        {
+            "id": "ev-9",
+            "title": "30 min with Yuxing / Ciel Wei",
+            "attendees": ["Yuxing", "Ciel Wei"],
+        },
+    ]})
+    audio = tmp_path / "30minwithYuxingCielWei_20260601_100000.wav"
+    n = dp.resolve_attendee_count(
+        audio, meeting_title="30minwithYuxingCielWei", state_path=state, schedule_path=schedule)
+    assert n == 2
+
+
+def test_single_calendar_attendee_counts_as_one_on_one(tmp_path):
+    state = tmp_path / ".state.json"
+    schedule = tmp_path / "schedule.json"
+    _write(state, {"meeting_id": "", "title": ""})
+    _write(schedule, {"meetings": [
+        {"id": "ev-9", "title": "Chainbase x Herring Global", "attendees": ["Herring Global"]},
+    ]})
+    audio = tmp_path / "ChainbasexHerringGlobal_20260601_100000.wav"
+    n = dp.resolve_attendee_count(
+        audio, meeting_title="ChainbasexHerringGlobal", state_path=state, schedule_path=schedule)
+    assert n == 2
+
+
 def test_meeting_id_linked_but_no_attendees_falls_through_to_title(tmp_path):
     state = tmp_path / ".state.json"
     schedule = tmp_path / "schedule.json"

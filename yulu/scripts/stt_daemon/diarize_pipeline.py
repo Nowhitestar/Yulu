@@ -49,6 +49,11 @@ def _load_json_file(path: Path):
         return None
 
 
+def _normalized_title(value: str) -> str:
+    """Title key for calendar fallback matching: ignore spaces, punctuation, and case."""
+    return "".join(ch.lower() for ch in str(value or "") if ch.isalnum())
+
+
 def resolve_attendee_count(
     audio_path: Path,
     *,
@@ -66,10 +71,10 @@ def resolve_attendee_count(
       2. ``meeting_title`` — fall back to matching the recording's title against a meeting's
          ``title`` (manual / re-transcribe recordings whose state has moved on).
 
-    Returns ``len(attendees)`` when a linked meeting carries a non-empty attendee list, else
-    ``None`` (→ the strategy ladder uses auto threshold clustering). NEVER raises — any missing
-    file, malformed JSON, or absent link degrades to ``None`` (no prior), which is exactly the
-    graceful default Phase 12 expects.
+    Returns a speaker-count prior when a linked meeting carries a non-empty attendee list (a single
+    listed attendee counts as a one-on-one), else ``None`` (→ the strategy ladder uses auto
+    threshold clustering). NEVER raises — any missing file, malformed JSON, or absent link degrades
+    to ``None`` (no prior), which is exactly the graceful default Phase 12 expects.
     """
     state_path = Path(state_path) if state_path is not None else STATE_PATH
     schedule_path = Path(schedule_path) if schedule_path is not None else SCHEDULE_PATH
@@ -85,8 +90,12 @@ def resolve_attendee_count(
         if not isinstance(meeting, dict):
             return None
         attendees = meeting.get("attendees")
-        if isinstance(attendees, list) and attendees:
-            return len(attendees)
+        if isinstance(attendees, list):
+            names = [str(a).strip() for a in attendees if str(a).strip()]
+            if names:
+                # Google events often list only the invited guest, not the organizer/current user.
+                # For a scheduled one-on-one, the useful diarization prior is still two speakers.
+                return max(len(names), 2)
         return None
 
     # (1) meeting_id from the recording state.
@@ -110,6 +119,16 @@ def resolve_attendee_count(
                 n = _count(m)
                 if n is not None:
                     return n
+        title_key = _normalized_title(title)
+        if title_key:
+            for m in meetings:
+                if (
+                    isinstance(m, dict)
+                    and _normalized_title(str(m.get("title") or "")) == title_key
+                ):
+                    n = _count(m)
+                    if n is not None:
+                        return n
 
     return None
 
