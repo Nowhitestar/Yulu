@@ -82,21 +82,18 @@ from typing import Optional
 # ── Calibrated constants (derived empirically — see 12-SUMMARY.md DER table) ─────
 #
 # CALIBRATED_THRESHOLD: the auto-clustering threshold used when NO count is supplied.
-#   Swept 0.2–0.8 against the eval corpus (yulu/scripts/eval). EN has a clean optimum at 0.5
-#   (3/3 speakers, DER 0.007); below it over-splits (4 spk), above it under-merges (2→1). CN is
-#   FLAT across the whole range on the constructed corpus (always collapses to 1 speaker — the
-#   failure there is cam++ confusing similar TTS Mandarin voices + under-segmentation, NOT the
-#   threshold), so no auto threshold helps CN; 0.5 is therefore the calibrated default for BOTH
-#   buckets — it is provably EN-optimal and does not regress, and it is the right *no-count* CN
-#   value because nothing better exists without a supplied count. (Honest finding: the reliable CN
-#   lever is the supplied count, not the threshold — see CN_THRESHOLD below.)
-CALIBRATED_THRESHOLD = 0.5
+#   In sherpa's FastClustering path, lower thresholds are more sensitive and can over-split real
+#   Yulu meetings into many phantom speakers. A local real-meeting scan produced
+#   20→12→7→6→4 speakers at thresholds 0.2→0.3→0.4→0.5→0.6, so 0.6 is the conservative default:
+#   fewer false speakers while avoiding the more aggressive 0.7/0.8 merge setting. The reliable
+#   Chinese lever is still a supplied count when available; this default only tunes the no-count
+#   auto path.
+CALIBRATED_THRESHOLD = 0.6
 
 # CN_THRESHOLD: reserved language-specific override seam. Set EQUAL to the calibrated default today
-#   because the eval shows no CN threshold beats it (the CN gap is embedding/segmentation, not the
-#   knob). Kept as a distinct, language-keyed constant so a future real-CN gold corpus can lower it
-#   here in ONE place if it ever proves a CN-specific value helps — without touching callers.
-CN_THRESHOLD = 0.5
+#   because the available real-world sample supports the same less-sensitive auto default. Kept as a
+#   distinct, language-keyed constant so a future real-CN gold corpus can tune it in one place.
+CN_THRESHOLD = 0.6
 
 # MAX_AUTO_SPEAKERS: the conservative ceiling that enforces fail-toward-under-merge (criterion 3).
 #   A supplied attendee count is clamped to this so a 30-person invite (most of whom never speak)
@@ -159,8 +156,7 @@ class SpeakerCountStrategy:
 def calibrated_threshold(language: Optional[str]) -> float:
     """The auto-mode clustering threshold for ``language`` (criterion 2).
 
-    Language-keyed so a future CN-specific value lives in one place; today CN == default because the
-    eval proves no CN threshold beats the EN-optimal 0.5 on the constructed corpus.
+    Language-keyed so a future CN-specific value lives in one place; today CN == default.
     """
     if _is_chinese(language):
         return CN_THRESHOLD

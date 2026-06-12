@@ -12,19 +12,58 @@ import tempfile
 from pathlib import Path
 
 
-def find_codex() -> str:
-    """Find Codex even when launchd starts us with a minimal PATH."""
+KNOWN_CODEX_PATHS = (
+    "/opt/homebrew/bin/codex",
+    "/usr/local/bin/codex",
+    "/Applications/Codex.app/Contents/Resources/codex",
+)
+
+
+def _codex_works(path: str) -> bool:
+    """Return True when the candidate can launch the real Codex binary."""
+    if not path:
+        return False
+    try:
+        result = subprocess.run(
+            [path, "--version"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        return result.returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+def _candidate_paths() -> list[str]:
+    candidates: list[str] = []
     override = os.environ.get("YULU_CODEX_BIN", "").strip()
     if override:
-        return override
+        candidates.append(override)
+
     found = shutil.which("codex")
     if found:
-        return found
+        candidates.append(found)
+
+    candidates.extend(KNOWN_CODEX_PATHS)
+
     home = Path(os.environ.get("HOME", str(Path.home()))).expanduser()
-    candidates = sorted(home.glob(".nvm/versions/node/*/bin/codex"), reverse=True)
+    candidates.extend(str(p) for p in sorted(home.glob(".nvm/versions/node/*/bin/codex"), reverse=True))
+
+    seen: set[str] = set()
+    unique: list[str] = []
     for candidate in candidates:
-        if candidate.exists() and os.access(candidate, os.X_OK):
-            return str(candidate)
+        if candidate and candidate not in seen:
+            seen.add(candidate)
+            unique.append(candidate)
+    return unique
+
+
+def find_codex() -> str:
+    """Find a working Codex entry point even when launchd has a stale PATH."""
+    for candidate in _candidate_paths():
+        if _codex_works(candidate):
+            return candidate
     return "codex"
 
 

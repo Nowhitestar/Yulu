@@ -25,9 +25,39 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # State via env/arg, NOT monolith globals (Pitfall 5). Exported so the hoisted
 # install_plist (which reads them from the environment) sees the same values.
 export PYTHON_BIN="${PYTHON_BIN:-$(command -v python3 || echo /usr/bin/python3)}"
-export NODE_BIN="${NODE_BIN:-$(command -v node || echo /usr/local/bin/node)}"
+export NODE_BIN="${NODE_BIN:-$(command -v node || true)}"
 export LAUNCH_AGENTS_DIR="${LAUNCH_AGENTS_DIR:-$HOME/Library/LaunchAgents}"
 export SCRIPT_DIR
+
+compatible_node_bin() {
+    local candidate
+    local node_major
+    local candidates=()
+    if [[ -n "${NODE_BIN:-}" ]]; then
+        candidates+=("$NODE_BIN")
+    fi
+    if command -v node >/dev/null 2>&1; then
+        candidates+=("$(command -v node)")
+    fi
+    candidates+=(
+        "$HOME"/.nvm/versions/node/v20*/bin/node
+        "$HOME"/.nvm/versions/node/v22*/bin/node
+        /opt/homebrew/opt/node@20/bin/node
+        /opt/homebrew/opt/node@22/bin/node
+        /usr/local/opt/node@20/bin/node
+        /usr/local/opt/node@22/bin/node
+    )
+
+    for candidate in "${candidates[@]}"; do
+        [[ -x "$candidate" ]] || continue
+        node_major="$("$candidate" -v 2>/dev/null | sed -E 's/^v([0-9]+).*/\1/')"
+        if [[ -n "$node_major" && "$node_major" -ge 20 && "$node_major" -le 22 ]]; then
+            printf '%s\n' "$candidate"
+            return 0
+        fi
+    done
+    return 1
+}
 
 setup_ui() {
     local mode="${1:-release}"   # release|dev — accepted for orchestrator parity
@@ -41,19 +71,33 @@ setup_ui() {
         return
     fi
 
-    if ! command -v node >/dev/null 2>&1; then
-        warn "未检测到 node；yulu_ui 是可选组件，跳过安装。"
-        warn "  以后想装：brew install node && bash $SCRIPT_DIR/setup_ui.sh"
+    local resolved_node
+    if ! resolved_node="$(compatible_node_bin)"; then
+        warn "未检测到兼容的 Node；yulu_ui 是可选组件，跳过安装。"
+        warn "  需要 Node 20 或 22；当前默认 node: $(node -v 2>/dev/null || echo 'not found')"
+        warn "  以后想装：brew install node@22 && NODE_BIN=\$(brew --prefix node@22)/bin/node bash $SCRIPT_DIR/setup_ui.sh"
         return
     fi
+    export NODE_BIN="$resolved_node"
+    local node_dir
+    node_dir="$(dirname "$NODE_BIN")"
+    local npm_bin="${NPM_BIN:-$node_dir/npm}"
+    if [[ ! -x "$npm_bin" ]]; then
+        npm_bin="$(command -v npm || true)"
+    fi
+    if [[ -z "$npm_bin" || ! -x "$npm_bin" ]]; then
+        warn "未检测到 npm；yulu_ui 是可选组件，跳过安装。"
+        return
+    fi
+    export PATH="$node_dir:$PATH"
 
     local node_major
-    node_major="$(node -v 2>/dev/null | sed -E 's/^v([0-9]+).*/\1/')"
-    if [[ -z "$node_major" || "$node_major" -lt 20 ]]; then
-        warn "node 版本过低（$(node -v 2>/dev/null || echo 'unknown')），yulu_ui 需要 Node 20+。跳过。"
+    node_major="$("$NODE_BIN" -v 2>/dev/null | sed -E 's/^v([0-9]+).*/\1/')"
+    if [[ -z "$node_major" || "$node_major" -lt 20 || "$node_major" -gt 22 ]]; then
+        warn "node 版本不兼容（$("$NODE_BIN" -v 2>/dev/null || echo 'unknown')），yulu_ui 需要 Node 20 或 22。跳过。"
         return
     fi
-    ok "Node $(node -v) 满足 yulu_ui 要求"
+    ok "Node $("$NODE_BIN" -v) 满足 yulu_ui 要求"
 
     # Idempotency marker: skip npm ci when package-lock.json hasn't changed.
     local lock="$ui_dir/package-lock.json"
@@ -66,13 +110,13 @@ setup_ui() {
         info "npm ci 已是最新（lockfile sha 未变），跳过依赖安装"
     else
         info "运行 npm ci (这一步可能需要 30-60 秒)..."
-        ( cd "$ui_dir" && npm ci ) || { err "npm ci 失败"; return 1; }
+        ( cd "$ui_dir" && "$npm_bin" ci ) || { err "npm ci 失败"; return 1; }
         printf '%s' "$lock_sha" > "$marker"
         ok "依赖已安装"
     fi
 
     info "运行 npm run build..."
-    ( cd "$ui_dir" && npm run build ) || { err "npm run build 失败"; return 1; }
+    ( cd "$ui_dir" && "$npm_bin" run build ) || { err "npm run build 失败"; return 1; }
     ok "yulu_ui dist/ 已生成"
 
     if [[ ! -s "$ui_dir/dist/server.js" || ! -s "$ui_dir/dist/web/index.html" ]]; then

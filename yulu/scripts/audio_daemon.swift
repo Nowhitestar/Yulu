@@ -267,6 +267,7 @@ class AudioRecorder {
     var silenceThreshold = DEFAULT_SILENCE_THRESHOLD
     var outputDir: URL = RECORDING_DIR
     var onStopRequest: (() -> Void)?
+    var sysGapMicFallbackLogged = false
 
     // Streaming buffers
     var sysBuf: [Int16] = []
@@ -282,6 +283,7 @@ class AudioRecorder {
         writer = w; isRecording = true; startTime = Date()
         lastMicAudioTime = Date(); lastSysAudioTime = Date()
         sysBuf = []; micBuf = []
+        sysGapMicFallbackLogged = false
         writeState(recording: true, title: title, path: url.path)
         log("🎙 \(fn)")
         startSilenceMonitor()
@@ -306,6 +308,7 @@ class AudioRecorder {
         guard isRecording else { return }
         bufLock.lock()
         sysBuf.append(contentsOf: samples)
+        sysGapMicFallbackLogged = false
         bufLock.unlock()
         let rms = calcRMS(samples)
         if rms > silenceThreshold { lastSysAudioTime = Date() }
@@ -361,27 +364,37 @@ class AudioRecorder {
         let sysFrames = sysBuf.count / 2
         let micFrames = micBuf.count
         let micOnly = SYS_DISABLED
+        // If the process tap is stuck delivering all-zero buffers, sysBuf never
+        // receives frames. Keep preserving the mic track instead of letting it
+        // pile up in memory until a force-kill leaves only an 82-byte WAV header.
+        let forceMicOnly = !micOnly && sysFrames == 0 && micFrames >= Int(SAMPLE_RATE)
         // In normal meeting recordings the mic and system callbacks arrive on
         // independent queues. Driving output by the longer buffer turns
         // each early callback into a zero-padded chunk, stretching the timeline
         // into audible sys-only/mic-only stutter. Only true mic-only recordings
-        // may be driven by mic frames; dual-source recordings write common
-        // frames and leave the short side buffered for the next callback.
-        let outFrames = micOnly ? micFrames : min(sysFrames, micFrames)
+        // and sys-gap fallback recordings may be driven by mic frames; ordinary
+        // dual-source recordings write common frames and leave the short side
+        // buffered for the next callback.
+        let outFrames = (micOnly || forceMicOnly) ? micFrames : min(sysFrames, micFrames)
         guard outFrames >= 512 else { bufLock.unlock(); return }  // wait for ~10 ms
 
         let micChunk = Array(micBuf.prefix(outFrames))
         micBuf.removeFirst(outFrames)
 
         let sysChunk: [Int16]
-        if micOnly {
+        if micOnly || forceMicOnly {
             sysChunk = [Int16](repeating: 0, count: outFrames * 2)
         } else {
             sysChunk = Array(sysBuf.prefix(outFrames * 2))
             sysBuf.removeFirst(outFrames * 2)
         }
+        let shouldLogFallback = forceMicOnly && !sysGapMicFallbackLogged
+        if forceMicOnly { sysGapMicFallbackLogged = true }
         bufLock.unlock()
 
+        if shouldLogFallback {
+            log("⚠️ Sys audio unavailable; preserving mic-only audio until system audio resumes")
+        }
         let out = channelInterleave(sysStereo: sysChunk, micMono: micChunk)
         w.append(Data(bytes: out, count: out.count * 2))
 
@@ -793,6 +806,7 @@ final class ProcessTapBackend: CaptureBackend {
     private var ioProcID: AudioDeviceIOProcID?
 
     private let lock = NSLock()
+    private let lifecycleLock = NSLock()
     private var running = false
     private var _lastError = ""
 
@@ -830,8 +844,10 @@ final class ProcessTapBackend: CaptureBackend {
     /// "System Audio Recording Only" TCC handshake (NSAudioCaptureUsageDescription
     /// prompt) so SYS_READY is accurate while the daemon is idle.
     func probePermission() {
+        lifecycleLock.lock()
         let ok = buildTap(probe: true)
         teardown()
+        lifecycleLock.unlock()
         if ok {
             SYS_READY = true; SYS_ERROR = ""
             log("🔊 Sys tap probe OK (idle until recording starts)")
@@ -860,13 +876,16 @@ final class ProcessTapBackend: CaptureBackend {
         // down before rebuilding so a re-arm never stacks a second tap or inherits
         // a poisoned one. teardown() is idempotent on zeroed ids, so this is a
         // no-op in the common clean-start case.
+        lifecycleLock.lock()
         teardown()
 
         if buildTap(probe: false) {
+            lifecycleLock.unlock()
             lock.lock(); running = true; zeroRunCallbacks = 0; lock.unlock()
             SYS_READY = true; SYS_ERROR = ""
             log("🔊 Sys tap capture started")
         } else {
+            lifecycleLock.unlock()
             SYS_READY = false; SYS_ERROR = _lastError
             log("Sys tap capture failed: \(_lastError)")
         }
@@ -876,7 +895,9 @@ final class ProcessTapBackend: CaptureBackend {
     /// OS-level device is stopped so the recording indicator clears synchronously.
     func stopCapture() {
         lock.lock(); running = false; lock.unlock()
+        lifecycleLock.lock()
         teardown()
+        lifecycleLock.unlock()
         log("🔇 Sys tap idle")
     }
 
@@ -1052,6 +1073,8 @@ final class ProcessTapBackend: CaptureBackend {
 
     /// Pitfall 3 recovery: full teardown then rebuild of the tap+aggregate stack.
     private func recoverFromZeroBuffers() {
+        lifecycleLock.lock()
+        defer { lifecycleLock.unlock() }
         teardown()
         lock.lock()
         let shouldRestart = running

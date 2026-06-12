@@ -57,7 +57,7 @@ def test_diarization_default_threshold_and_num_speakers():
     diar = _diar()
     assert diar["num_speakers"] is None          # auto-cluster by default (calendar prior when present)
     assert isinstance(diar["threshold"], (int, float))
-    assert diar["threshold"] == 0.5              # EN-calibrated default (Phase 12)
+    assert diar["threshold"] == 0.6              # less-sensitive default to reduce over-splitting
 
 
 def test_diarization_model_paths_blank_by_default():

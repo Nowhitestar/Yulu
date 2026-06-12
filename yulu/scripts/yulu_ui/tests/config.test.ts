@@ -38,6 +38,7 @@ describe("ConfigManager", () => {
       expect(cfg.audio.silence_threshold).toBe(0.01);       // default
       expect(cfg.audio.silence_duration_sec).toBe(300);     // default
       expect(cfg.audio.output_dir).toBe("~/Movies/Yulu");
+      expect(cfg.transcription.diarization.threshold).toBe(0.6);
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 

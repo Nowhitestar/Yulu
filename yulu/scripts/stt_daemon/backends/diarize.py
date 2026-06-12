@@ -176,8 +176,8 @@ class SherpaDiarizeBackend:
     (criterion 5 — the first recording is not JIT-penalized).
     """
 
-    #: Default auto-clustering threshold (spike used 0.5; calibration is Phase 12's job).
-    DEFAULT_THRESHOLD = 0.5
+    #: Default auto-clustering threshold. Higher values merge more aggressively in sherpa auto mode.
+    DEFAULT_THRESHOLD = 0.6
 
     def __init__(
         self,

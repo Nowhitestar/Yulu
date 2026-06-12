@@ -291,7 +291,7 @@ export function TranscriptionSection({ tracker }: TranscriptionSectionProps) {
         min={0}
         max={1}
         step={0.05}
-        value={diar.threshold ?? 0.5}
+        value={diar.threshold ?? 0.6}
         onCommit={commit("transcription.diarization.threshold") as (v: number) => void}
         disabled={isBlocked("transcription.diarization.threshold")}
         status={tracker.statusFor("transcription.diarization.threshold")}

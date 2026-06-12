@@ -1,6 +1,7 @@
 import { spawn as defaultSpawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync, watch as fsWatch, type FSWatcher } from "node:fs";
 import { randomUUID } from "node:crypto";
+import { join } from "node:path";
 import type { JobRegistry } from "./jobStatus.js";
 import type { PubSub, AppChannels } from "./pubsub.js";
 
@@ -54,17 +55,18 @@ export interface RunSummarizeArgs {
   summaryPath: string;
   llmCommand: string[] | null;
   agentQueueJson: string;
+  scriptDir?: string;
   registry: JobRegistry;
   pubsub: PubSub<AppChannels>;
 }
 
 export async function runSummarize(args: RunSummarizeArgs): Promise<{ jobId: string; mode: "queue" | "direct" }> {
-  const { stem, transcriptPath, summaryPath, llmCommand, agentQueueJson, registry, pubsub } = args;
+  const { stem, transcriptPath, summaryPath, llmCommand, agentQueueJson, scriptDir, registry, pubsub } = args;
   const jobId = randomUUID();
   if (llmCommand === null) {
     return runSummarizeQueueMode({ stem, jobId, transcriptPath, summaryPath, agentQueueJson, registry, pubsub });
   }
-  return runSummarizeDirectMode({ stem, jobId, transcriptPath, summaryPath, llmCommand, registry, pubsub });
+  return runSummarizeDirectMode({ stem, jobId, transcriptPath, summaryPath, llmCommand, scriptDir, registry, pubsub });
 }
 
 async function runSummarizeQueueMode(args: {
@@ -139,14 +141,14 @@ function watchForQueueCompletion(args: {
 
 async function runSummarizeDirectMode(args: {
   stem: string; jobId: string; transcriptPath: string; summaryPath: string;
-  llmCommand: string[]; registry: JobRegistry; pubsub: PubSub<AppChannels>;
+  llmCommand: string[]; scriptDir?: string; registry: JobRegistry; pubsub: PubSub<AppChannels>;
 }): Promise<{ jobId: string; mode: "direct" }> {
-  const { stem, jobId, transcriptPath, summaryPath, llmCommand, registry, pubsub } = args;
+  const { stem, jobId, transcriptPath, summaryPath, llmCommand, scriptDir, registry, pubsub } = args;
   registry.set({ stem, action: "summarize", state: "summarizing", startedAt: Date.now(), jobId });
   pubsub.publish("jobs", { stem, jobId, state: "summarizing" });
 
   return new Promise((resolve) => {
-    const [cmd, ...rest] = llmCommand;
+    const [cmd, ...rest] = resolveBundledScriptArgs(llmCommand, scriptDir);
     const proc = spawnImpl(cmd!, rest, { stdio: ["pipe", "pipe", "pipe"] });
     let stdout = "";
     let stderr = "";
@@ -173,7 +175,7 @@ async function runSummarizeDirectMode(args: {
 
     try {
       const transcript = readFileSync(transcriptPath, "utf8");
-      proc.stdin.write(transcript);
+      proc.stdin.write(buildSummaryPrompt(transcript));
       proc.stdin.end();
     } catch (exc) {
       proc.stdin.end();
@@ -182,4 +184,28 @@ async function runSummarizeDirectMode(args: {
       pubsub.publish("jobs", { stem, jobId, state: "failed", error });
     }
   });
+}
+
+function resolveBundledScriptArgs(command: string[], scriptDir?: string): string[] {
+  if (!scriptDir) return command;
+  return command.map((part) => {
+    if (!part || part.includes("/")) return part;
+    const candidate = join(scriptDir, part);
+    return existsSync(candidate) ? candidate : part;
+  });
+}
+
+function buildSummaryPrompt(transcript: string): string {
+  return [
+    "请根据下面的会议转录生成中文会议摘要。",
+    "",
+    "要求：",
+    "- 提炼关键结论和上下文。",
+    "- 列出明确行动项；没有行动项就写“无”。",
+    "- 标出风险、分歧或待确认事项；没有就写“无”。",
+    "- 不要编造转录中没有的信息。",
+    "",
+    "会议转录：",
+    transcript,
+  ].join("\n");
 }

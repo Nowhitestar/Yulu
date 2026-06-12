@@ -296,14 +296,14 @@ def test_per_call_threshold_builds_distinct_auto_pipeline(fake_sherpa, monkeypat
     """A per-call threshold override (auto mode) builds its own cached pipeline, keyed by threshold."""
     _fake_np_sf(monkeypatch)
     b = SherpaDiarizeBackend(seg_model=fake_sherpa["seg"], emb_model=fake_sherpa["emb"])
-    _run(b.warm_up())  # default auto pipeline at threshold 0.5
+    _run(b.warm_up())  # default auto pipeline at threshold 0.6
 
     _run(b.diarize(audio_path="x.wav", num_speakers=None, threshold=0.7,
                    cancel_token=CancelToken()))
-    # default(thr 0.5) + a distinct auto pipeline at thr 0.7 = 2.
+    # default(thr 0.6) + a distinct auto pipeline at thr 0.7 = 2.
     assert len(_FakeSD.instances) == 2
-    # The default at 0.5 is untouched.
-    assert b._sd.config.clustering.threshold == 0.5
+    # The default at 0.6 is untouched.
+    assert b._sd.config.clustering.threshold == 0.6
 
 
 def test_release_clears_pipeline_cache(fake_sherpa, monkeypatch):

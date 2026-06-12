@@ -20,6 +20,24 @@ function mkCtx(opts: { moviesDir: string }): AppContext {
   } as unknown as AppContext;
 }
 
+function wavHeaderOnly(): Buffer {
+  const header = Buffer.alloc(44);
+  header.write("RIFF", 0, "ascii");
+  header.writeUInt32LE(36, 4);
+  header.write("WAVE", 8, "ascii");
+  header.write("fmt ", 12, "ascii");
+  header.writeUInt32LE(16, 16);
+  header.writeUInt16LE(1, 20);
+  header.writeUInt16LE(2, 22);
+  header.writeUInt32LE(48000, 24);
+  header.writeUInt32LE(48000 * 2 * 2, 28);
+  header.writeUInt16LE(4, 32);
+  header.writeUInt16LE(16, 34);
+  header.write("data", 36, "ascii");
+  header.writeUInt32LE(0, 40);
+  return header;
+}
+
 describe("recordings router", () => {
   let root: string; let mvDir: string;
   beforeEach(() => {
@@ -108,6 +126,17 @@ describe("recordings router", () => {
     const detail = await caller.get({ stem });
     expect(row.status).toBe("recording_failed");
     expect(row.statusError).toMatch(/valid WAV/);
+    expect(detail.status).toBe("recording_failed");
+  });
+
+  it("marks a WAV header with no frames as recording_failed", async () => {
+    const stem = "Codex_20260612_100342";
+    writeFileSync(join(mvDir, `${stem}.wav`), wavHeaderOnly());
+    const caller = createCaller(recordingsRouter, mkCtx({ moviesDir: mvDir }));
+    const row = (await caller.list({}))[0];
+    const detail = await caller.get({ stem });
+    expect(row.status).toBe("recording_failed");
+    expect(row.statusError).toMatch(/no audio frames/);
     expect(detail.status).toBe("recording_failed");
   });
 

@@ -59,7 +59,7 @@ class DaemonConfig:
     diarize_emb_model: str = ""
     # None / <=0 → auto threshold-based clustering (count strategy is Phase 12).
     diarize_num_speakers: Optional[int] = None
-    diarize_threshold: float = 0.5
+    diarize_threshold: float = 0.6
 
     @classmethod
     def from_user_config(cls, path: Optional[Path] = None) -> "DaemonConfig":

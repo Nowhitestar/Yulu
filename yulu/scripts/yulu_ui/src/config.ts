@@ -49,7 +49,7 @@ export const ConfigSchema = z.object({
       seg_model: z.string().default(""),
       emb_model: z.string().default(""),
       num_speakers: z.number().nullable().default(null),
-      threshold: z.number().default(0.5),
+      threshold: z.number().default(0.6),
     }).passthrough().default({}),
     command: z.array(z.string()).optional(),
     realtime_enabled: z.boolean().default(true),

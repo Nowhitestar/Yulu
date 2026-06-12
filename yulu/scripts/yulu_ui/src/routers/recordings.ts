@@ -58,7 +58,19 @@ function wavHealthError(path: string): string | null {
       ) {
         return "Recording file is not a valid WAV. The recorder likely crashed before stop completed.";
       }
-      return null;
+      let offset = 12;
+      const chunkHeader = Buffer.alloc(8);
+      while (offset + chunkHeader.length <= stat.size) {
+        const chunkBytes = readSync(fd, chunkHeader, 0, chunkHeader.length, offset);
+        if (chunkBytes < chunkHeader.length) break;
+        const chunkId = chunkHeader.subarray(0, 4).toString("ascii");
+        const chunkSize = chunkHeader.readUInt32LE(4);
+        if (chunkId === "data") {
+          return chunkSize > 0 ? null : "Recording file contains no audio frames.";
+        }
+        offset += chunkHeader.length + chunkSize + (chunkSize % 2);
+      }
+      return "Recording file has no audio data chunk.";
     } finally {
       closeSync(fd);
     }
@@ -564,7 +576,16 @@ export const recordingsRouter = router({
       const summaryPath = join(dir, `${input.stem}.summary.md`);
       const cfg = ctx.config.read();
       const llmCommand = (cfg.llm?.command ?? null) as string[] | null;
-      void runSummarize({ stem: input.stem, transcriptPath, summaryPath, llmCommand, agentQueueJson: ctx.paths.agentQueueJson, registry: ctx.jobs, pubsub: ctx.pubsub });
+      void runSummarize({
+        stem: input.stem,
+        transcriptPath,
+        summaryPath,
+        llmCommand,
+        agentQueueJson: ctx.paths.agentQueueJson,
+        scriptDir: ctx.paths.scriptDir,
+        registry: ctx.jobs,
+        pubsub: ctx.pubsub,
+      });
       return { ok: true as const };
     }),
 });

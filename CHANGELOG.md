@@ -4,6 +4,16 @@ All notable changes to Yulu are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.10.2](https://github.com/Nowhitestar/Yulu/compare/v0.10.1...v0.10.2) (2026-06-12)
+
+
+### Bug Fixes
+
+* **audio:** preserve mic audio when the system audio tap stalls and serialize tap recovery
+* **diarize:** reduce auto speaker over-splitting with a less-sensitive clustering default
+* **recordings:** flag header-only WAV files as recording failures
+* **summary:** skip broken Codex wrappers and send direct summaries an explicit summary prompt
+
 ## [0.10.1](https://github.com/Nowhitestar/Yulu/compare/v0.10.0...v0.10.1) (2026-06-11)
 
 
