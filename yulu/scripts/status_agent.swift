@@ -480,7 +480,9 @@ class IPCServer {
             defer { sem.signal() }
             guard let app = self?.app else { return }
             resp["state"] = app.state.rawValue
-            if let pid = app.launcherPid { resp["launcher_pid"] = Int(pid) }
+            let pids = app.activeLauncherPids()
+            if let pid = pids.first { resp["launcher_pid"] = Int(pid) }
+            if !pids.isEmpty { resp["launcher_pids"] = pids.map { Int($0) } }
         }
         _ = sem.wait(timeout: .now() + 2)
         return resp
@@ -516,7 +518,7 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var pollerTimer: Timer?
     var state: AgentState = .idle
     var daemonDownStreak: Int = 0
-    var launcherPid: Int32?
+    var launcherPids: [Int32] = []
     // IPC server exposing `status` / `toggle` / `open_inbox` on
     // ~/.config/yulu/status_agent.sock. Lets `yulu status-agent toggle`
     // and acceptance tests drive the agent without UI clicks.
@@ -587,13 +589,21 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
             return
         }
 
-        // Not recording. Are we waiting for a launcher to finish (processing)?
-        if let pid = launcherPid, kill(pid, 0) == 0 {
+        // Not recording. A previous stop may still be transcribing/enqueueing,
+        // but that must not block the next start: audio_daemon is the source of
+        // truth for whether the capture lane is busy.
+        if !activeLauncherPids().isEmpty {
             applyState(.processing)
             return
         }
-        if launcherPid != nil { launcherPid = nil }
         applyState(.idle)
+    }
+
+    @discardableResult
+    func activeLauncherPids() -> [Int32] {
+        let active = launcherPids.filter { kill($0, 0) == 0 }
+        if active.count != launcherPids.count { launcherPids = active }
+        return active
     }
 
     private func applyState(_ new: AgentState) {
@@ -627,11 +637,11 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
             switch new {
             case .idle:        item.title = "Start Recording"
             case .recording:   item.title = "● Recording — click to stop"
-            case .processing:  item.title = "⋯ Transcribing…"
+            case .processing:  item.title = "Start Recording (transcribing previous)"
             case .meetingBusy: item.title = "Meeting in progress"
             case .daemonDown:  item.title = "Audio daemon not running"
             }
-            item.isEnabled = (new == .idle || new == .recording)
+            item.isEnabled = (new == .idle || new == .recording || new == .processing)
         }
     }
 
@@ -665,26 +675,33 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
         log("toggle (state=\(state.rawValue))")
         switch state {
         case .idle:
-            let title = RecordingLauncher.defaultTitle()
-            if RecordingLauncher.launchStart(title: title) != nil {
-                // meeting_daemon.py start returns immediately; the poller
-                // observes recording=true and drives the indicator. We don't
-                // track this PID — the stop launcher is the one that owns the
-                // (slow) transcribe pipeline and the "processing" state.
-                applyState(.recording)
-            }
+            startRecordingFromMenu()
         case .recording:
             // Spawn the stop+transcribe pipeline detached and track its PID so
             // the indicator shows "processing" until the transcript is written.
-            launcherPid = RecordingLauncher.launchStop()
+            if let pid = RecordingLauncher.launchStop() {
+                launcherPids.append(pid)
+                applyState(.processing)
+            }
         case .processing:
-            log("ignoring click while processing")
+            log("starting next recording while previous processing continues")
+            startRecordingFromMenu()
         case .meetingBusy:
             // Unreachable from the poller (any recording is now surfaced as
             // .recording), kept only for switch exhaustiveness.
             applyState(.recording)
         case .daemonDown:
             showDaemonDownNotification()
+        }
+    }
+
+    private func startRecordingFromMenu() {
+        let title = RecordingLauncher.defaultTitle()
+        if RecordingLauncher.launchStart(title: title) != nil {
+            // meeting_daemon.py start returns immediately; the poller observes
+            // recording=true and drives the indicator. Stop launchers remain in
+            // launcherPids so prior transcription can finish in the background.
+            applyState(.recording)
         }
     }
 

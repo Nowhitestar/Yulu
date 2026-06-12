@@ -540,6 +540,7 @@ def _stop_and_process():
     transcript_path = None
     summary_path = None
     summary_pending_agent = False
+    summary_queued = False
     for line in result.stdout.split("\n"):
         if line.startswith("Transcript saved:"):
             transcript_path = line.split("Transcript saved:", 1)[1].strip()
@@ -547,6 +548,8 @@ def _stop_and_process():
             summary_path = line.split("Summary saved:", 1)[1].strip()
         if line.startswith("Summary status:") and "draft_agent_pending" in line:
             summary_pending_agent = True
+        if "enqueued" in line and "LLM jobs" in line:
+            summary_queued = True
 
     try:
         notify("transcript", title=title, path=transcript_path or "")
@@ -554,6 +557,16 @@ def _stop_and_process():
         pass
 
     if not summary_path:
+        if transcript_path or summary_queued:
+            set_recording_stopped(path=STATE_PATH)
+            try:
+                data = load_schedule()
+                save_schedule(data)
+            except Exception:
+                pass
+            print("⏳ 摘要任务已进入队列，agent_queue_worker 会继续生成最终摘要")
+            print(f"✅ 完成: {transcript_path or audio_path}")
+            return
         print("❌ 找不到 summary 路径", file=sys.stderr)
         return
 

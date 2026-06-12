@@ -23,6 +23,7 @@ let QUEUE_PATH = CONFIG_DIR.appendingPathComponent("agent-queue.json")
 let DEFAULT_SILENCE_THRESHOLD: Float = 0.01
 let DEFAULT_SILENCE_SEC: TimeInterval = 300
 let SAMPLE_RATE: UInt32 = 48000
+let DEFAULT_MIC_GAIN: Float = 2.4
 
 var SYS_READY = false
 /// When true, SCStream / ScreenCaptureKit is intentionally not started
@@ -268,6 +269,7 @@ class AudioRecorder {
     var outputDir: URL = RECORDING_DIR
     var onStopRequest: (() -> Void)?
     var sysGapMicFallbackLogged = false
+    var micGain: Float = DEFAULT_MIC_GAIN
 
     // Streaming buffers
     var sysBuf: [Int16] = []
@@ -317,7 +319,7 @@ class AudioRecorder {
 
     func onMicAudio(_ samples: [Float]) {
         guard isRecording else { return }
-        let ints = samples.map { Int16(max(-1.0, min(1.0, $0)) * Float(Int16.max)) }
+        let ints = samples.map { Int16(max(-1.0, min(1.0, $0 * micGain)) * Float(Int16.max)) }
         bufLock.lock()
         micBuf.append(contentsOf: ints)
         bufLock.unlock()
@@ -537,11 +539,30 @@ class MicCapture {
             guard let self = self, self.recorder.isRecording else { return }
             guard let chData = buf.floatChannelData else { return }
             let len = Int(buf.frameLength)
-            let samples = Array(UnsafeBufferPointer(start: chData[0], count: len))
+            let channels = max(1, Int(buf.format.channelCount))
+            let samples: [Float]
+            if channels == 1 {
+                samples = Array(UnsafeBufferPointer(start: chData[0], count: len))
+            } else {
+                var mixed = [Float](repeating: 0, count: len)
+                for channel in 0..<channels {
+                    let channelSamples = UnsafeBufferPointer(start: chData[channel], count: len)
+                    for i in 0..<len {
+                        mixed[i] += channelSamples[i]
+                    }
+                }
+                let divisor = Float(channels)
+                samples = mixed.map { $0 / divisor }
+            }
             self.recorder.onMicAudio(samples)
         }
 
-        do { try engine.start(); self.engine = engine; MIC_READY = true; MIC_ERROR = ""; log("🎤 Mic capture started") }
+        do {
+            try engine.start()
+            self.engine = engine
+            MIC_READY = true; MIC_ERROR = ""
+            log("🎤 Mic capture started (channels=\(fmt.channelCount), gain=\(recorder.micGain)x)")
+        }
         catch { MIC_READY = false; MIC_ERROR = "\(error)"; log("Mic start failed: \(error)") }
     }
 

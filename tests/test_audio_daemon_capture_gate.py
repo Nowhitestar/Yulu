@@ -107,6 +107,14 @@ def test_sysaudio_conversion_kept_verbatim():
     )
 
 
+def test_mic_capture_downmixes_channels_and_applies_gain():
+    src = _source()
+    assert "let DEFAULT_MIC_GAIN: Float" in src
+    assert "var micGain: Float = DEFAULT_MIC_GAIN" in src
+    assert "for channel in 0..<channels" in src
+    assert "$0 * micGain" in src
+
+
 def test_protocol_block_has_no_sck_or_tap_vocabulary():
     # D-09 (success criterion 4): the protocol signature must not leak the
     # ScreenCaptureKit or Core-Audio-tap vocabulary. Scoped to the protocol block.

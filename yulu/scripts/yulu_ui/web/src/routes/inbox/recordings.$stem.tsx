@@ -27,6 +27,7 @@ const SPEAKER_COLORS = [
   "var(--red)",
   "#5CCFE6",
 ];
+const AUDIO_MOUNT_DELAY_MS = 250;
 
 export const handle = {
   // Returns the stem (a literal filename) when present, else the i18n key for
@@ -40,6 +41,11 @@ type Tab = "transcript" | "summary" | "realtime" | "raw";
 
 function isTab(v: string | null): v is Tab {
   return v === "transcript" || v === "summary" || v === "realtime" || v === "raw";
+}
+
+function audioSrcFor(data: { stem: string; audioFile?: string | null; audioMtimeMs?: number | null }): string {
+  const audioVersion = typeof data.audioMtimeMs === "number" ? `?v=${Math.trunc(data.audioMtimeMs)}` : "";
+  return `/files/meetings/${data.audioFile ?? `${data.stem}.wav`}${audioVersion}`;
 }
 
 interface SpeakerRow {
@@ -215,6 +221,8 @@ export function RecordingReader() {
 
   const qc = useQueryClient();
   const [lastAction, setLastAction] = useState<"transcribe" | "summarize" | null>(null);
+  const targetAudioSrc = data ? audioSrcFor(data) : null;
+  const [mountedAudioSrc, setMountedAudioSrc] = useState<string | null>(null);
 
   const transcribeMut = trpc.recordings.transcribe.useMutation();
   const summarizeMut = trpc.recordings.summarize.useMutation();
@@ -310,6 +318,13 @@ export function RecordingReader() {
     }
   });
 
+  useEffect(() => {
+    setMountedAudioSrc(null);
+    if (!targetAudioSrc) return;
+    const timer = window.setTimeout(() => setMountedAudioSrc(targetAudioSrc), AUDIO_MOUNT_DELAY_MS);
+    return () => window.clearTimeout(timer);
+  }, [targetAudioSrc]);
+
   function deriveButtonState(action: "transcribe" | "summarize"): ReprocessButtonState {
     const status = data?.status ?? "idle";
     const targetRunning = action === "transcribe" ? "transcribing" : "summarizing";
@@ -396,8 +411,7 @@ export function RecordingReader() {
   const parsedSeek = seekParam !== null ? parseFloat(seekParam) : NaN;
   const initialSeek = Number.isFinite(parsedSeek) ? parsedSeek : undefined;
 
-  const audioVersion = typeof data.audioMtimeMs === "number" ? `?v=${Math.trunc(data.audioMtimeMs)}` : "";
-  const audioSrc = `/files/meetings/${data.audioFile ?? `${data.stem}.wav`}${audioVersion}`;
+  const audioSrc = audioSrcFor(data);
   const handleSeek = (time: number) => {
     const next = new URLSearchParams(params);
     next.set("seek", Math.max(0, time).toFixed(2));
@@ -477,7 +491,15 @@ export function RecordingReader() {
         </button>
       </div>
 
-      <AudioPlayer src={audioSrc} initialSeek={initialSeek} />
+      {mountedAudioSrc === audioSrc ? (
+        <AudioPlayer src={audioSrc} initialSeek={initialSeek} />
+      ) : (
+        <div className="audioplayer audioplayer-deferred" aria-hidden="true">
+          <button type="button" className="audioplayer-play" disabled />
+          <div className="audioplayer-wave" />
+          <div className="audioplayer-time">0:00 / 0:00</div>
+        </div>
+      )}
 
       <SpeakerPanel
         speakerData={data.speakerData}

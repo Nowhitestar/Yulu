@@ -173,10 +173,11 @@ def _copy_runtime_items(source_root: Path, runtime_root: Path) -> None:
 
 
 def _compile_helpers(script_dir: Path) -> None:
-    build_script = script_dir / "build_audio_daemon.sh"
-    if build_script.exists():
-        os.chmod(build_script, 0o755)
-        _run([str(build_script)], timeout=120, check=True)
+    for name in ("build_audio_daemon.sh", "build_status_agent.sh"):
+        build_script = script_dir / name
+        if build_script.exists():
+            os.chmod(build_script, 0o755)
+            _run([str(build_script)], timeout=120, check=True)
     swift_targets = [
         (script_dir / "window_scanner.swift", script_dir / "window_scanner"),
         (script_dir / "recorder_status.swift", script_dir / "recorder_status"),

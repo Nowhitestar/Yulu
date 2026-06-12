@@ -27,11 +27,25 @@
   flex: 1;
   min-width: 0;
 }
+.audioplayer-deferred .audioplayer-wave {
+  height: 24px;
+  border-radius: 6px;
+  background:
+    linear-gradient(90deg, transparent, color-mix(in oklch, var(--fg-2) 12%, transparent), transparent),
+    repeating-linear-gradient(90deg, color-mix(in oklch, var(--fg-2) 18%, transparent) 0 2px, transparent 2px 7px);
+  background-size: 120px 100%, auto;
+  animation: audioplayer-deferred-sheen 1.1s linear infinite;
+}
 .audioplayer-time {
   font-family: "SF Mono", ui-monospace, monospace;
   font-variant-numeric: tabular-nums;
   font-size: 11px;
   color: var(--fg-2);
+}
+
+@keyframes audioplayer-deferred-sheen {
+  from { background-position: -120px 0, 0 0; }
+  to { background-position: calc(100% + 120px) 0, 0 0; }
 }
 
 @media (max-width: 760px) {

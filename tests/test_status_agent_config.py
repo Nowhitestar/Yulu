@@ -137,3 +137,12 @@ def test_status_agent_has_no_hotkey_or_voicemail():
     assert "voicemail" not in src.lower(), "no voicemail references should remain"
     assert "RecordingLauncher" in src, "launcher should be renamed RecordingLauncher"
     assert "meeting_daemon.py" in src, "launcher should shell out to meeting_daemon.py"
+
+
+def test_status_agent_processing_allows_next_recording():
+    src = _swift_source()
+    assert "Start Recording (transcribing previous)" in src
+    assert "new == .idle || new == .recording || new == .processing" in src
+    assert "case .processing:" in src
+    assert "startRecordingFromMenu()" in src
+    assert "starting next recording while previous processing continues" in src

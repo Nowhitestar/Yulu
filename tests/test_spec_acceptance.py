@@ -253,6 +253,13 @@ def test_meeting_daemon_acquires_recording_lock():
     assert "acquire_recording_lock" in text or "from recording_lock import" in text
 
 
+def test_meeting_daemon_accepts_async_summary_queue():
+    text = (SCRIPTS / "meeting_daemon.py").read_text(encoding="utf-8")
+    assert "summary_queued = False" in text
+    assert '"enqueued" in line and "LLM jobs" in line' in text
+    assert "摘要任务已进入队列" in text
+
+
 # ── Voicemail REMOVAL acceptance (voicemail unified into meetings) ──
 # The voicemail concept was removed entirely: no module, no prompts, no
 # category, no mic-only/sys-disabled path, no `yulu memo`. These assertions are

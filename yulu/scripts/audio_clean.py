@@ -12,6 +12,9 @@ from stt_daemon.wav_inspect import WavLayout, classify
 
 SYS_ACTIVE_THRESHOLD = 0.001
 DEFAULT_FRAME_MS = 30
+MIC_PLAYBACK_GAIN = 2.4
+SYS_ACTIVE_MIC_BLEND = 0.22
+SYS_ACTIVE_SYS_GAIN = 0.92
 
 
 def _rms(samples: list[int]) -> float:
@@ -26,13 +29,12 @@ def _clamp_i16(value: float) -> int:
 
 
 def clean_dual_track_to_mono(src: Path, dst: Path, *, frame_ms: int = DEFAULT_FRAME_MS) -> Path:
-    """Write a mono WAV using Yulu's original meeting half-duplex mix.
+    """Write a mono WAV using a playback-friendly dual-track mix.
 
     Dual-track files are stored as L=mic and R=system. Playing both directly can
     sound echoey because the microphone track often contains leaked speaker
-    audio. The pre-voicemail meeting recorder avoided that by preferring system
-    audio while it was active, then fading back to the microphone during system
-    silence. Keep that behavior here for user-facing playback and final STT.
+    audio. Prefer system audio while it is active, but keep a small boosted mic
+    bed so the local speaker does not disappear or sound buried during overlap.
     """
     with wave.open(str(src), "rb") as w:
         if w.getnchannels() != 2 or w.getsampwidth() != 2:
@@ -58,7 +60,11 @@ def clean_dual_track_to_mono(src: Path, dst: Path, *, frame_ms: int = DEFAULT_FR
         for i in range(start, end):
             sys_sample = sys[i] / 32767.0
             mic_sample = (mic[i] / 32767.0) if i < len(mic) else 0.0
-            mixed = sys_ratio * sys_sample + fade_pos * mic_sample
+            mic_sample = max(-0.99, min(0.99, mic_sample * MIC_PLAYBACK_GAIN))
+            if sys_ratio > 0:
+                mixed = SYS_ACTIVE_SYS_GAIN * sys_sample + SYS_ACTIVE_MIC_BLEND * mic_sample
+            else:
+                mixed = mic_sample
             out += struct.pack("<h", _clamp_i16(mixed * 32767.0))
 
     dst.parent.mkdir(parents=True, exist_ok=True)
