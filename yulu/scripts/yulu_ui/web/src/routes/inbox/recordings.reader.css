@@ -102,8 +102,28 @@
 }
 .reader-actions {
   display: flex;
+  align-items: center;
   gap: 8px;
   margin-bottom: 10px;
+}
+.reader-speaker-select {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 4px 8px;
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-pill);
+  color: var(--fg-2);
+  font-size: 12px;
+  background: var(--bg);
+}
+.reader-speaker-select select {
+  border: 0;
+  padding: 0 2px;
+  color: var(--fg);
+  background: transparent;
+  font: inherit;
 }
 .reader-delete {
   display: inline-flex;

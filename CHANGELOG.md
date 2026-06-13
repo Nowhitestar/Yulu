@@ -4,6 +4,22 @@ All notable changes to Yulu are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.10.6](https://github.com/Nowhitestar/Yulu/compare/v0.10.5...v0.10.6) (2026-06-13)
+
+
+### Features
+
+* **recordings:** allow one-off speaker count overrides when re-transcribing
+* **release:** publish a macOS pkg installer alongside the runtime zip
+
+
+### Bug Fixes
+
+* **recording:** start realtime transcription for menu/manual recordings
+* **recording:** stop realtime subscribers promptly when recordings end
+* **status:** build and package the recorder floating-window helper
+* **settings:** clarify realtime transcription versus post-recording processing
+
 ## [0.10.5](https://github.com/Nowhitestar/Yulu/compare/v0.10.4...v0.10.5) (2026-06-12)
 
 

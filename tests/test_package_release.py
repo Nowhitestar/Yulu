@@ -21,6 +21,7 @@ def make_project(tmp_path: Path, version: str = "0.5.0-dev", git_marker: str | N
     write_file(project / "install.sh", "#!/usr/bin/env bash\necho install\n")
     write_file(project / "README.md", "# Yulu\n")
     write_file(project / "README.zh-CN.md", "# Yulu\n")
+    write_file(project / "AGENTS.md", "agent instructions\n")
     write_file(project / "CHANGELOG.md", "# Changelog\n")
     write_file(project / "docs" / "configuration.md", "config\n")
     write_file(project / "docs" / "superpowers" / "plan.md", "dev docs\n")
@@ -30,8 +31,15 @@ def make_project(tmp_path: Path, version: str = "0.5.0-dev", git_marker: str | N
     write_file(project / "yulu" / "scripts" / "yulu", "#!/usr/bin/env bash\n")
     write_file(project / "yulu" / "scripts" / "release_installer.py", "print('installer')\n")
     write_file(project / "yulu" / "scripts" / "Yulu.app" / "Contents" / "MacOS" / "audio_daemon", "binary\n")
+    write_file(project / "yulu" / "scripts" / "recorder_status", "binary\n")
     write_file(project / "tests" / "test_dev_only.py", "def test_dev_only(): pass\n")
     write_file(project / ".github" / "workflows" / "ci.yml", "name: ci\n")
+    write_file(project / ".agents" / "local.md", "agent state\n")
+    write_file(project / ".codex" / "local.md", "codex state\n")
+    write_file(project / ".gstack" / "browse-audit.jsonl", "{}\n")
+    write_file(project / ".mcp" / "zulipchat" / "zulipchat.duckdb", "state\n")
+    write_file(project / ".planning" / "STATE.md", "planning\n")
+    write_file(project / "yulu" / "scripts" / "yulu_ui" / "node_modules" / "left-pad" / "index.js", "module.exports = 1\n")
     write_file(project / "dist" / "old.zip", "old\n")
     write_file(project / ".ci-build" / "artifact", "build\n")
     write_file(project / ".DS_Store", "finder\n")
@@ -53,6 +61,7 @@ def make_project(tmp_path: Path, version: str = "0.5.0-dev", git_marker: str | N
     scripts = project / "packaging" / "scripts"
     scripts.mkdir(parents=True)
     shutil.copy2(ROOT / "packaging" / "scripts" / "package.sh", scripts / "package.sh")
+    shutil.copy2(ROOT / "packaging" / "scripts" / "package_pkg.sh", scripts / "package_pkg.sh")
     shutil.copy2(ROOT / "packaging" / "scripts" / "checksums.sh", scripts / "checksums.sh")
     return project
 
@@ -62,6 +71,66 @@ def run(cmd: list[str], cwd: Path, env: dict[str, str] | None = None) -> subproc
     if env:
         child_env.update(env)
     return subprocess.run(cmd, cwd=cwd, env=child_env, capture_output=True, text=True, check=False)
+
+
+def write_fake_pkg_tools(bin_dir: Path) -> None:
+    pkgbuild = bin_dir / "pkgbuild"
+    write_file(
+        pkgbuild,
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        "root=''\n"
+        "out=''\n"
+        "while [[ $# -gt 0 ]]; do\n"
+        "  case \"$1\" in\n"
+        "    --root) root=\"$2\"; shift 2 ;;\n"
+        "    --identifier|--version|--install-location|--sign) shift 2 ;;\n"
+        "    *) out=\"$1\"; shift ;;\n"
+        "  esac\n"
+        "done\n"
+        "if [[ -z \"$root\" || -z \"$out\" ]]; then\n"
+        "  echo 'bad pkgbuild args' >&2\n"
+        "  exit 2\n"
+        "fi\n"
+        "find \"$root\" -print | LC_ALL=C sort > \"$out.manifest\"\n"
+        "if [[ -n \"${YULU_FAKE_PKG_MANIFEST:-}\" ]]; then\n"
+        "  cp \"$out.manifest\" \"$YULU_FAKE_PKG_MANIFEST\"\n"
+        "fi\n"
+        "printf 'pkg\\n' > \"$out\"\n",
+    )
+    pkgbuild.chmod(0o755)
+
+    pkgutil = bin_dir / "pkgutil"
+    write_file(
+        pkgutil,
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        "case \"$1\" in\n"
+        "  --expand)\n"
+        "    mkdir -p \"$3\"\n"
+        "    printf '<pkg-info><payload numberOfFiles=\"0\" installKBytes=\"0\"/></pkg-info>\\n' > \"$3/PackageInfo\"\n"
+        "    printf 'bom\\n' > \"$3/Bom\"\n"
+        "    printf 'payload\\n' > \"$3/Payload\"\n"
+        "    ;;\n"
+        "  --flatten)\n"
+        "    printf 'pkg\\n' > \"$3\"\n"
+        "    ;;\n"
+        "  *)\n"
+        "    echo \"unsupported fake pkgutil args: $*\" >&2\n"
+        "    exit 2\n"
+        "    ;;\n"
+        "esac\n",
+    )
+    pkgutil.chmod(0o755)
+
+    mkbom = bin_dir / "mkbom"
+    write_file(
+        mkbom,
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        "printf 'bom\\n' > \"$2\"\n",
+    )
+    mkbom.chmod(0o755)
 
 
 def test_package_writes_expected_zip_with_runtime_layout(tmp_path):
@@ -91,6 +160,7 @@ def test_package_writes_expected_zip_with_runtime_layout(tmp_path):
     assert "yulu/yulu/scripts/setup.sh" in names
     assert "yulu/yulu/scripts/yulu" in names
     assert "yulu/yulu/scripts/release_installer.py" in names
+    assert "yulu/yulu/scripts/recorder_status" in names
     assert "yulu/.git" not in names
     assert not any(name.startswith("yulu/.git/") for name in names)
     assert not any(name.startswith("yulu/.github/") for name in names)
@@ -100,6 +170,14 @@ def test_package_writes_expected_zip_with_runtime_layout(tmp_path):
     assert not any(name.startswith("yulu/docs/superpowers/") for name in names)
     excluded = {
         "yulu/.DS_Store",
+        "yulu/._README.md",
+        "yulu/AGENTS.md",
+        "yulu/.agents/local.md",
+        "yulu/.codex/local.md",
+        "yulu/.gstack/browse-audit.jsonl",
+        "yulu/.mcp/zulipchat/zulipchat.duckdb",
+        "yulu/.planning/STATE.md",
+        "yulu/yulu/scripts/yulu_ui/node_modules/left-pad/index.js",
         "yulu/.venv/pyvenv.cfg",
         "yulu/.pytest_cache/README.md",
         "yulu/debug.log",
@@ -126,6 +204,30 @@ def test_package_requires_matching_tag(tmp_path):
     assert "must match VERSION" in result.stderr
 
 
+def test_package_pkg_builds_installer_payload_from_runtime_zip(tmp_path):
+    project = make_project(tmp_path)
+    dist = tmp_path / "dist"
+    tag = "v0.5.0-dev"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    write_fake_pkg_tools(bin_dir)
+    manifest_path = dist / f"yulu-macos-arm64-{tag}.pkg.manifest"
+
+    result = run(
+        ["bash", "packaging/scripts/package_pkg.sh", tag, "--dist", str(dist), "--skip-build"],
+        cwd=project,
+        env={"PATH": f"{bin_dir}:{os.environ['PATH']}", "YULU_FAKE_PKG_MANIFEST": str(manifest_path)},
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    pkg_path = dist / f"yulu-macos-arm64-{tag}.pkg"
+    assert pkg_path.exists()
+    manifest = manifest_path.read_text(encoding="utf-8").splitlines()
+    assert any(row.endswith("/Applications/Yulu.app/Contents/MacOS/audio_daemon") for row in manifest)
+    assert any(row.endswith("/Library/Application Support/Yulu/runtime/VERSION") for row in manifest)
+    assert any(row.endswith("/Library/Application Support/Yulu/runtime/yulu/scripts/setup.sh") for row in manifest)
+
+
 def test_checksums_include_zip_and_install_asset(tmp_path):
     project = make_project(tmp_path)
     dist = tmp_path / "dist"
@@ -137,14 +239,16 @@ def test_checksums_include_zip_and_install_asset(tmp_path):
         env={"TAG": tag},
     )
     assert package_result.returncode == 0, package_result.stderr + package_result.stdout
+    write_file(dist / f"yulu-macos-arm64-{tag}.pkg", "pkg\n")
 
     checksum_result = run(["bash", "packaging/scripts/checksums.sh", str(dist)], cwd=project)
 
     assert checksum_result.returncode == 0, checksum_result.stderr + checksum_result.stdout
     rows = (dist / "checksums.txt").read_text(encoding="utf-8").splitlines()
     assert any(row.endswith(f"  yulu-macos-arm64-{tag}.zip") for row in rows)
+    assert any(row.endswith(f"  yulu-macos-arm64-{tag}.pkg") for row in rows)
     assert any(row.endswith("  install.sh") for row in rows)
-    assert len(rows) == 2
+    assert len(rows) == 3
 
 
 def test_checksums_fail_when_no_artifacts(tmp_path):
@@ -155,7 +259,7 @@ def test_checksums_fail_when_no_artifacts(tmp_path):
     result = run(["bash", "packaging/scripts/checksums.sh", str(dist)], cwd=project)
 
     assert result.returncode != 0
-    assert "No release artifacts found" in result.stderr
+    assert "expected dist/*.zip, dist/*.pkg, and/or dist/install.sh" in result.stderr
     assert not (dist / "checksums.txt").exists()
 
 

@@ -84,6 +84,21 @@ describe("jobRunner.runTranscribe", () => {
     expect(typeof result.jobId).toBe("string");
     expect(result.jobId.length).toBeGreaterThan(0);
   });
+
+  it("passes a per-run diarization speaker count to transcribe.py", async () => {
+    let capturedArgs: string[] = [];
+    __setSpawnForTesting((_cmd, args) => {
+      capturedArgs = args;
+      return fakeSpawn(0) as never;
+    });
+    const wavPath = join(root, "memo_test.wav");
+    writeFileSync(wavPath, "");
+    await runTranscribe({
+      stem: "memo_test", wavPath, transcribePy: "/fake",
+      diarizationNumSpeakers: 3, registry, pubsub,
+    });
+    expect(capturedArgs).toEqual(["/fake", wavPath, "--diarization-num-speakers", "3"]);
+  });
 });
 
 describe("jobRunner.runSummarize (queue mode)", () => {

@@ -5,6 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 APP="$SCRIPT_DIR/StatusAgent.app"
 BIN="$SCRIPT_DIR/status_agent"
+RECORDER_BIN="$SCRIPT_DIR/recorder_status"
 APP_BIN="$APP/Contents/MacOS/status_agent"
 RES_DIR="$APP/Contents/Resources"
 INFO="$APP/Contents/Info.plist"
@@ -18,10 +19,13 @@ cd "$SCRIPT_DIR"
 
 swiftc -o "$BIN" status_agent.swift \
   -framework Cocoa
+swiftc -o "$RECORDER_BIN" recorder_status.swift \
+  -framework Cocoa
 
 mkdir -p "$APP/Contents/MacOS" "$RES_DIR"
 cp "$BIN" "$APP_BIN"
 chmod +x "$APP_BIN"
+chmod +x "$RECORDER_BIN"
 
 if [[ -d "$ICONS_DIR" ]]; then
     cp "$ICONS_DIR"/*.png "$RES_DIR/" 2>/dev/null || true
@@ -70,6 +74,8 @@ fi
 ENTITLEMENTS="$SCRIPT_DIR/StatusAgent.app.entitlements"
 codesign --force --options runtime --timestamp \
     --entitlements "$ENTITLEMENTS" --sign "$IDENTITY" "$APP_BIN"
+codesign --force --options runtime --timestamp \
+    --entitlements "$ENTITLEMENTS" --sign "$IDENTITY" "$RECORDER_BIN"
 codesign --force --options runtime --timestamp \
     --entitlements "$ENTITLEMENTS" --sign "$IDENTITY" "$APP"
 codesign --verify --strict --verbose=2 "$APP"

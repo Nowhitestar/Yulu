@@ -129,6 +129,27 @@ def test_diarize_enabled_writes_labelled_transcript_and_sidecar(env, monkeypatch
     assert "[00:00" not in raw
 
 
+def test_per_run_speaker_count_override_forces_diarization(env, monkeypatch):
+    fake_home, tmp_path = env
+    _config(fake_home, diarize_enabled=False)
+    monkeypatch.setattr(transcribe, "_request_final_transcribe_raw",
+                        lambda *a, **k: _mono_response(_ASR))
+
+    seen_counts = []
+    def fake_diarize(*_args, **kwargs):
+        seen_counts.append(kwargs.get("num_speakers"))
+        return list(_TURNS)
+
+    monkeypatch.setattr(dp, "diarize_via_daemon", fake_diarize)
+
+    audio = tmp_path / "Team_20260601_100000.wav"
+    _write_mono(audio)
+    transcribe.process_audio(str(audio), diarization_num_speakers=2)
+
+    assert seen_counts == [2]
+    assert sm.speakers_sidecar_path(audio).exists()
+
+
 # ── Criterion 1: disabled degrades cleanly ────────────────────────────────────
 
 

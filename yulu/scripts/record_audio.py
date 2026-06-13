@@ -183,7 +183,8 @@ def stop_realtime_transcriber(wait=True, graceful=False):
                 time.sleep(0.5)
             return not alive()
 
-        if wait and wait_until_dead(180 if graceful else 20):
+        if not alive():
+            REALTIME_PID_PATH.unlink(missing_ok=True)
             return
 
         # realtime_transcribe.py is launched with start_new_session=True and can be
@@ -196,7 +197,7 @@ def stop_realtime_transcriber(wait=True, graceful=False):
         except Exception:
             os.kill(pid, signal.SIGTERM)
 
-        if wait and not wait_until_dead(20):
+        if wait and not wait_until_dead(180 if graceful else 20):
             try:
                 os.killpg(pid, signal.SIGKILL)
             except Exception:

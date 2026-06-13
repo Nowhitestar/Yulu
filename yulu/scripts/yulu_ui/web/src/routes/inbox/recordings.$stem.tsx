@@ -28,6 +28,7 @@ const SPEAKER_COLORS = [
   "#5CCFE6",
 ];
 const AUDIO_MOUNT_DELAY_MS = 250;
+const RETRANSCRIBE_SPEAKER_OPTIONS = ["auto", "1", "2", "3", "4", "5", "6", "7", "8"] as const;
 
 export const handle = {
   // Returns the stem (a literal filename) when present, else the i18n key for
@@ -221,6 +222,8 @@ export function RecordingReader() {
 
   const qc = useQueryClient();
   const [lastAction, setLastAction] = useState<"transcribe" | "summarize" | null>(null);
+  const [retranscribeSpeakerCount, setRetranscribeSpeakerCount] =
+    useState<(typeof RETRANSCRIBE_SPEAKER_OPTIONS)[number]>("auto");
   const targetAudioSrc = data ? audioSrcFor(data) : null;
   const [mountedAudioSrc, setMountedAudioSrc] = useState<string | null>(null);
 
@@ -337,7 +340,9 @@ export function RecordingReader() {
 
   const handleTranscribe = () => {
     setLastAction("transcribe");
-    transcribeMut.mutate({ stem }, {
+    const diarizationNumSpeakers =
+      retranscribeSpeakerCount === "auto" ? null : Number(retranscribeSpeakerCount);
+    transcribeMut.mutate({ stem, diarizationNumSpeakers }, {
       onError: (err) => console.error("transcribe failed:", err.message),
     });
   };
@@ -460,6 +465,19 @@ export function RecordingReader() {
       </div>
 
       <div className="reader-actions">
+        <label className="reader-speaker-select" title={t("reader.retranscribeSpeakers.title")}>
+          <span>{t("reader.retranscribeSpeakers.label")}</span>
+          <select
+            value={retranscribeSpeakerCount}
+            onChange={(e) => setRetranscribeSpeakerCount(e.target.value as (typeof RETRANSCRIBE_SPEAKER_OPTIONS)[number])}
+          >
+            {RETRANSCRIBE_SPEAKER_OPTIONS.map((value) => (
+              <option key={value} value={value}>
+                {value === "auto" ? t("reader.retranscribeSpeakers.auto") : value}
+              </option>
+            ))}
+          </select>
+        </label>
         <ReprocessButton
           label={t("reader.action.retranscribe")}
           icon={<RefreshCw size={14} strokeWidth={1.75} />}

@@ -40,9 +40,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 SCRIPTS_DIR="$REPO_DIR/yulu/scripts"
 
-# The two bundles that ship signed + notarized + stapled in the release zip.
-# (window_scanner / recorder_status are dev-compiled and not in the release
-# asset — RESEARCH Assumption A2; only these two need notarization.)
+# The two bundles ship signed + notarized + stapled in the release zip.
+# build_status_agent.sh also signs the standalone recorder_status helper that
+# meeting_daemon.py launches for the floating recording window.
 YULU_APP="$SCRIPTS_DIR/Yulu.app"
 STATUS_APP="$SCRIPTS_DIR/StatusAgent.app"
 

@@ -355,6 +355,11 @@ def _start_recording(title, meeting_id=""):
                 meeting_id=meeting_id, backend="daemon", path=STATE_PATH,
                 extra={"segments": [audio_path]},
             )
+            try:
+                from record_audio import start_realtime_transcriber
+                start_realtime_transcriber(audio_path, title)
+            except Exception as exc:
+                print(f"⚠️ 实时转写启动失败: {exc}", file=sys.stderr)
             print(f"✅ 录制中: {audio_path}")
 
             # 启动状态浮窗
@@ -463,11 +468,19 @@ def _launch_status_window(title):
     if not status_bin.exists():
         print("⚠️ recorder_status 未编译，跳过浮窗")
         return
-    proc = subprocess.Popen(
-        [str(status_bin), title, str(STATE_PATH)],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
+    log_path = CONFIG_DIR / "recorder_status.log"
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    log_file = log_path.open("ab")
+    proc = subprocess.Popen([str(status_bin), title, str(STATE_PATH)],
+                            stdout=log_file, stderr=log_file)
+    log_file.close()
+    try:
+        exited = proc.wait(timeout=0.4)
+    except subprocess.TimeoutExpired:
+        exited = None
+    if exited is not None:
+        print(f"⚠️ 状态浮窗启动后立即退出(code={exited})，详见 {log_path}", file=sys.stderr)
+        return
     state = load_state()
     state["_status_pid"] = proc.pid
     save_state(state)

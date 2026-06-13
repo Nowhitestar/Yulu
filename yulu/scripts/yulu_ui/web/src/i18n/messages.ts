@@ -285,10 +285,12 @@ export const en: Messages = {
   "settings.transcription.localModelPath.label": "Local model path",
   "settings.transcription.localModelPath.help": "Path to a whisper.cpp .bin model file.",
   "settings.transcription.language.label": "Language",
-  "settings.transcription.postRecording.label": "Post-recording",
-  "settings.transcription.postRecording.help": "fast_summary: summarize from the live transcript. full_transcribe: re-transcribe the whole recording first.",
+  "settings.transcription.postRecording.label": "After recording stops",
+  "settings.transcription.postRecording.help": "fast_summary tries the live transcript first, then falls back to a full transcription if it is missing, partial, or clean dual-track audio is required. full_transcribe always transcribes the finished recording first.",
+  "settings.transcription.postRecording.fast": "Fast summary",
+  "settings.transcription.postRecording.full": "Full transcription first",
   "settings.transcription.realtime.label": "Realtime transcription",
-  "settings.transcription.realtime.help": "Transcribe live while recording. Off = transcribe after the recording stops.",
+  "settings.transcription.realtime.help": "Create a live transcript while recording and show the Realtime tab in meeting details. Off = transcribe only after the recording stops.",
   "settings.transcription.diarization.enabled.label": "Speaker diarization",
   "settings.transcription.diarization.enabled.help": "Label who spoke after the recording finishes. Off keeps the plain transcript path.",
   "settings.transcription.diarization.capability.label": "Diarization runtime",
@@ -456,6 +458,9 @@ export const en: Messages = {
   // ---- ReprocessButton ----
   "reprocess.running": "Running…",
   "reprocess.done": "Done",
+  "reader.retranscribeSpeakers.label": "Speakers",
+  "reader.retranscribeSpeakers.auto": "Auto",
+  "reader.retranscribeSpeakers.title": "Speaker count for this re-transcription only",
 
   // ---- DbStatsRow ----
   "db.rows.unknown": "— rows",
@@ -796,10 +801,12 @@ export const zh: Messages = {
   "settings.transcription.localModelPath.label": "本地模型路径",
   "settings.transcription.localModelPath.help": "whisper.cpp 的 .bin 模型文件路径。",
   "settings.transcription.language.label": "语言",
-  "settings.transcription.postRecording.label": "录音结束后",
-  "settings.transcription.postRecording.help": "fast_summary：基于实时转写生成摘要。full_transcribe：先重新转写整段录音。",
+  "settings.transcription.postRecording.label": "停止后处理",
+  "settings.transcription.postRecording.help": "fast_summary 会优先复用实时转写；如果实时稿缺失、覆盖不足或需要双轨清理，会自动完整转写。full_transcribe 始终先完整转写再摘要。",
+  "settings.transcription.postRecording.fast": "快速摘要",
+  "settings.transcription.postRecording.full": "先完整转写",
   "settings.transcription.realtime.label": "实时转写",
-  "settings.transcription.realtime.help": "录音时实时转写。关闭则在录音结束后转写。",
+  "settings.transcription.realtime.help": "录音过程中生成实时稿，并在详情页显示“实时”标签。关闭后只在停录后转写。",
   "settings.transcription.diarization.enabled.label": "说话人分离",
   "settings.transcription.diarization.enabled.help": "录音结束后标注每段是谁说的。关闭时保持普通转写路径。",
   "settings.transcription.diarization.capability.label": "说话人分离运行时",
@@ -967,6 +974,9 @@ export const zh: Messages = {
   // ---- ReprocessButton ----
   "reprocess.running": "运行中…",
   "reprocess.done": "完成",
+  "reader.retranscribeSpeakers.label": "说话人数",
+  "reader.retranscribeSpeakers.auto": "自动",
+  "reader.retranscribeSpeakers.title": "仅用于本次重新转写",
 
   // ---- DbStatsRow ----
   "db.rows.unknown": "— 行",
