@@ -17,7 +17,6 @@ const SCHEMA = [
   { path: "output.zulip.topic",        category: "integrations", label: "Zulip topic",            type: "text",     reload: { kind: "none" } },
   { path: "output.notion.database_id", category: "integrations", label: "Notion database",        type: "text",     reload: { kind: "none" } },
   { path: "output.notion.api_key_env", category: "integrations", label: "Notion API key env var", type: "env-name", reload: { kind: "none" } },
-  { path: "output.telegram.chat_id",   category: "integrations", label: "Telegram chat ID",       type: "text",     reload: { kind: "none" } },
 ];
 
 vi.mock("../../web/src/ws.js", () => ({
@@ -105,10 +104,13 @@ describe("OutputSection — channel selector (P2-4, P4a-5)", () => {
     );
   });
 
-  it("telegram channel shows the chat ID row", () => {
+  it("does not expose Telegram as an output channel", () => {
     configReturn = configWith({ channel: "telegram", telegram: { chat_id: "123" } });
     mount();
-    expect(screen.getByText("Telegram chat ID")).toBeInTheDocument();
+    const select = screen.getByLabelText(translate("zh", "settings.output.channel.aria")) as HTMLSelectElement;
+    expect(Array.from(select.options).map((option) => option.value)).toEqual(["file", "zulip", "notion"]);
+    expect(select.value).toBe("file");
+    expect(screen.queryByText("Telegram chat ID")).toBeNull();
   });
 });
 

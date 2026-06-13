@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router";
 import { useQueryClient } from "@tanstack/react-query";
-import { ChevronLeft, RefreshCw, Sparkles, Pencil, Trash2, Users, GitMerge } from "lucide-react";
+import { ChevronLeft, RefreshCw, Sparkles, Pencil, Trash2, Users, GitMerge, Send } from "lucide-react";
 import { trpc } from "../../trpc.js";
 import { AudioPlayer } from "../../components/AudioPlayer.js";
 import { TranscriptView, type SpeakerData } from "../../components/TranscriptView.js";
@@ -38,6 +38,12 @@ export const handle = {
 };
 
 type Tab = "transcript" | "summary" | "realtime" | "raw";
+type SummaryChannel = "notion" | "zulip";
+interface EnabledSummaryTarget {
+  channel: SummaryChannel;
+  label: string;
+  destination: string;
+}
 
 function isTab(v: string | null): v is Tab {
   return v === "transcript" || v === "summary" || v === "realtime" || v === "raw";
@@ -229,6 +235,7 @@ export function RecordingReader() {
   const renameMut = trpc.recordings.rename.useMutation();
   const setTagsMut = trpc.recordings.setTags.useMutation();
   const deleteMut = trpc.recordings.delete.useMutation();
+  const sendSummaryMut = trpc.recordings.sendSummary.useMutation();
   const renameSpeakerMut = trpc.recordings.renameSpeaker.useMutation();
   const mergeSpeakersMut = trpc.recordings.mergeSpeakers.useMutation();
   const assignSegmentSpeakerMut = trpc.recordings.assignSegmentSpeaker.useMutation();
@@ -348,6 +355,14 @@ export function RecordingReader() {
     });
   };
 
+  const handleSendSummary = (target: EnabledSummaryTarget) => {
+    if (!confirm(t("reader.send.confirm", { label: target.label, destination: target.destination }))) return;
+    sendSummaryMut.mutate({ stem, channel: target.channel }, {
+      onError: (err) => console.error("sendSummary failed:", err.message),
+      onSettled: invalidateBoth,
+    });
+  };
+
   // Local override lets clicks switch tabs even if the router's navigation
   // is debounced (or rejected in jsdom test environment). URL is still
   // updated via setSearchParams for shareable deep links.
@@ -412,6 +427,9 @@ export function RecordingReader() {
   const initialSeek = Number.isFinite(parsedSeek) ? parsedSeek : undefined;
 
   const audioSrc = audioSrcFor(data);
+  const summaryTargets = data.summary
+    ? ((data.enabledSummaryTargets ?? []) as EnabledSummaryTarget[])
+    : [];
   const handleSeek = (time: number) => {
     const next = new URLSearchParams(params);
     next.set("seek", Math.max(0, time).toFixed(2));
@@ -478,6 +496,20 @@ export function RecordingReader() {
           disabled={!data?.transcript}
           disabledReason={!data?.transcript ? t("reader.disabled.transcriptFirst") : undefined}
         />
+        {summaryTargets.map((target) => (
+          <button
+            key={target.channel}
+            type="button"
+            className="reader-send"
+            onClick={() => handleSendSummary(target)}
+            disabled={sendSummaryMut.isPending}
+            aria-label={t("reader.action.sendTo", { label: target.label })}
+            title={t("reader.action.sendTo", { label: target.label })}
+          >
+            <Send size={14} strokeWidth={1.75} />
+            <span>{t("reader.action.sendTo", { label: target.label })}</span>
+          </button>
+        ))}
         <button
           type="button"
           className="reader-delete"

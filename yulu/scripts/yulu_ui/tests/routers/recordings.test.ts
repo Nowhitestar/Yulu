@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdtempSync, writeFileSync, rmSync, mkdirSync, existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,17 +7,38 @@ import { createCaller, type AppContext } from "../../src/trpc.js";
 import { JobRegistry } from "../../src/jobStatus.js";
 import { PubSub, type AppChannels } from "../../src/pubsub.js";
 
+const spawnMock = vi.hoisted(() => vi.fn());
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  return { ...actual, spawn: spawnMock };
+});
+
 function mkCtx(opts: { moviesDir: string }): AppContext {
   return {
     paths: {
       moviesDir: opts.moviesDir,
       transcribePy: "/fake/transcribe.py",
       agentQueueJson: join(opts.moviesDir, "agent-queue.json"),
+      scriptDir: "/fake/yulu/scripts",
     },
     jobs: new JobRegistry(),
     pubsub: new PubSub<AppChannels>(),
-    config: { read: () => ({ llm: {} }) },
+    config: { read: () => ({ llm: {}, connectors: {}, output: {} }) },
   } as unknown as AppContext;
+}
+
+function mockSpawn(stdout: string, exitCode = 0, stderr = "") {
+  spawnMock.mockImplementation(() => {
+    const handlers = new Map<string, (arg: unknown) => void>();
+    const proc = {
+      stdout: { on: (e: string, cb: (b: Buffer) => void) => { if (e === "data" && stdout) cb(Buffer.from(stdout)); } },
+      stderr: { on: (e: string, cb: (b: Buffer) => void) => { if (e === "data" && stderr) cb(Buffer.from(stderr)); } },
+      on: (e: string, cb: (arg: unknown) => void) => { handlers.set(e, cb); },
+      kill: () => {},
+    };
+    setImmediate(() => handlers.get("close")?.(exitCode));
+    return proc;
+  });
 }
 
 function wavHeaderOnly(): Buffer {
@@ -41,6 +62,7 @@ function wavHeaderOnly(): Buffer {
 describe("recordings router", () => {
   let root: string; let mvDir: string;
   beforeEach(() => {
+    spawnMock.mockReset();
     root = mkdtempSync(join(tmpdir(), "rec_"));
     mvDir = join(root, "movies");
     mkdirSync(mvDir);
@@ -294,6 +316,76 @@ describe("recordings router", () => {
     ctx.pubsub.subscribe("recordings-changed", (m: { reason: string }) => seen.push(m.reason));
     await createCaller(recordingsRouter, ctx).delete({ stem: "Memo_20260101_120000" });
     expect(seen).toContain("removed");
+  });
+
+  it("sendSummary spawns send_summary.py with an explicit enabled connector channel", async () => {
+    const stem = "TeamSync_20260102_090000";
+    writeFileSync(join(mvDir, `${stem}.wav`), "");
+    writeFileSync(join(mvDir, `${stem}.summary.md`), "summary");
+    const ctx = mkCtx({ moviesDir: mvDir });
+    ctx.config = { read: () => ({
+      connectors: { notion: { send_summary: true } },
+      output: { notion: { destination_id: "db", destination_type: "database", destination_label: "Team Notes" } },
+    }) } as unknown as AppContext["config"];
+    mockSpawn("sent");
+
+    const r = await createCaller(recordingsRouter, ctx).sendSummary({ stem, channel: "notion" });
+
+    expect(r.ok).toBe(true);
+    const call = spawnMock.mock.calls[0]!;
+    expect(call[0]).toBe("python3");
+    expect(call[1]).toEqual([
+      "/fake/yulu/scripts/send_summary.py",
+      "--channel",
+      "notion",
+      join(mvDir, `${stem}.summary.md`),
+    ]);
+  });
+
+  it("get exposes enabled summary targets using selected destination labels", async () => {
+    const stem = "TeamSync_20260102_090000";
+    writeFileSync(join(mvDir, `${stem}.wav`), "");
+    writeFileSync(join(mvDir, `${stem}.summary.md`), "summary");
+    const ctx = mkCtx({ moviesDir: mvDir });
+    ctx.config = { read: () => ({
+      connectors: { notion: { send_summary: true }, zulip: { send_summary: true } },
+      output: {
+        notion: { destination_id: "db", destination_type: "database", destination_label: "Team Notes" },
+        zulip: { stream_id: "2", stream: "team", topic: "纪要" },
+      },
+    }) } as unknown as AppContext["config"];
+
+    const r = await createCaller(recordingsRouter, ctx).get({ stem });
+
+    expect(r.enabledSummaryTargets).toEqual([
+      { channel: "notion", label: "Notion", destination: "Team Notes" },
+      { channel: "zulip", label: "Zulip", destination: "team / 纪要" },
+    ]);
+  });
+
+  it("get ignores legacy Telegram summary targets", async () => {
+    const stem = "TeamSync_20260102_090000";
+    writeFileSync(join(mvDir, `${stem}.wav`), "");
+    writeFileSync(join(mvDir, `${stem}.summary.md`), "summary");
+    const ctx = mkCtx({ moviesDir: mvDir });
+    ctx.config = { read: () => ({
+      connectors: { telegram: { send_summary: true } },
+      output: { telegram: { chat_id: "123" } },
+    }) } as unknown as AppContext["config"];
+
+    const r = await createCaller(recordingsRouter, ctx).get({ stem });
+
+    expect(r.enabledSummaryTargets).toEqual([]);
+  });
+
+  it("sendSummary rejects a disabled connector channel", async () => {
+    const stem = "TeamSync_20260102_090000";
+    writeFileSync(join(mvDir, `${stem}.wav`), "");
+    writeFileSync(join(mvDir, `${stem}.summary.md`), "summary");
+    const caller = createCaller(recordingsRouter, mkCtx({ moviesDir: mvDir }));
+
+    await expect(caller.sendSummary({ stem, channel: "notion" })).rejects.toThrow(/not enabled/i);
+    expect(spawnMock).not.toHaveBeenCalled();
   });
 });
 

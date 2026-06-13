@@ -1,4 +1,5 @@
 import { closeSync, existsSync, openSync, readFileSync, readSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { spawn } from "node:child_process";
 import { join, resolve, relative, isAbsolute } from "node:path";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
@@ -16,6 +17,13 @@ import {
 // the separate voicemails/ directory was merged into the root). A recording is
 // any `<title>_YYYYMMDD_HHMMSS.wav` in the recordings root.
 const REC_FILE_RE = /^(.+?)_(\d{8})_(\d{6})\.wav$/;
+const SUMMARY_CHANNELS = ["notion", "zulip"] as const;
+const SummaryChannelSchema = z.enum(SUMMARY_CHANNELS);
+type SummaryChannel = (typeof SUMMARY_CHANNELS)[number];
+const SUMMARY_CHANNEL_LABELS: Record<SummaryChannel, string> = {
+  notion: "Notion",
+  zulip: "Zulip",
+};
 
 function isoFromStem(date: string, time: string): string {
   return `${date.slice(0, 4)}-${date.slice(4, 6)}-${date.slice(6, 8)}T${time.slice(0, 2)}:${time.slice(2, 4)}:${time.slice(4, 6)}`;
@@ -92,6 +100,72 @@ function recordingStatus(stem: string, wavPath: string, registry: JobRegistry): 
   const wavError = wavHealthError(wavPath);
   if (wavError) return { status: "recording_failed", statusError: wavError };
   return { status: "idle" };
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+function nestedRecord(root: Record<string, unknown>, key: string): Record<string, unknown> {
+  return asRecord(root[key]);
+}
+
+function stringValue(record: Record<string, unknown>, key: string): string {
+  const value = record[key];
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function connectorEnabled(config: unknown, channel: SummaryChannel): boolean {
+  const root = asRecord(config);
+  const connector = nestedRecord(nestedRecord(root, "connectors"), channel);
+  return connector.send_summary === true;
+}
+
+function summaryDestination(config: unknown, channel: SummaryChannel): string {
+  const output = nestedRecord(asRecord(config), "output");
+  if (channel === "notion") {
+    const notion = nestedRecord(output, "notion");
+    return stringValue(notion, "destination_label")
+      || stringValue(notion, "destination_id")
+      || stringValue(notion, "database_id");
+  }
+  if (channel === "zulip") {
+    const zulip = nestedRecord(output, "zulip");
+    return [stringValue(zulip, "stream"), stringValue(zulip, "topic")].filter(Boolean).join(" / ");
+  }
+  return "";
+}
+
+function enabledSummaryTargets(config: unknown) {
+  return SUMMARY_CHANNELS
+    .filter((channel) => connectorEnabled(config, channel))
+    .map((channel) => ({
+      channel,
+      label: SUMMARY_CHANNEL_LABELS[channel],
+      destination: summaryDestination(config, channel) || "未设置",
+    }));
+}
+
+function sendSummaryProcess(scriptDir: string, summaryPath: string, channel: SummaryChannel): Promise<{ code: number | null; stdout: string; stderr: string }> {
+  return new Promise((resolvePromise, rejectPromise) => {
+    const child = spawn("python3", [
+      join(scriptDir, "send_summary.py"),
+      "--channel",
+      channel,
+      summaryPath,
+    ], {
+      cwd: scriptDir,
+      env: { ...process.env, PYTHONPATH: scriptDir },
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout?.on("data", (chunk: Buffer) => { stdout += chunk.toString("utf8"); });
+    child.stderr?.on("data", (chunk: Buffer) => { stderr += chunk.toString("utf8"); });
+    child.on("error", rejectPromise);
+    child.on("close", (code) => resolvePromise({ code, stdout, stderr }));
+  });
 }
 
 interface Row {
@@ -407,6 +481,7 @@ export const recordingsRouter = router({
         hasRealtime: existsSync(join(dir, `${input.stem}.realtime.transcript.txt`)),
         speakerData: readSpeakerSidecar(dir, input.stem),
         status: currentStatus.status, statusError: currentStatus.statusError,
+        enabledSummaryTargets: enabledSummaryTargets(ctx.config.read()),
       };
     }),
 
@@ -587,5 +662,31 @@ export const recordingsRouter = router({
         pubsub: ctx.pubsub,
       });
       return { ok: true as const };
+    }),
+
+  sendSummary: publicProcedure
+    .input(z.object({ stem: z.string(), channel: SummaryChannelSchema }))
+    .mutation(async ({ ctx, input }) => {
+      const dir = ctx.paths.moviesDir;
+      requireRecording(dir, input.stem);
+      const summaryPath = join(dir, `${input.stem}.summary.md`);
+      if (!existsSync(summaryPath)) {
+        throw new TRPCError({ code: "PRECONDITION_FAILED", message: "summary missing" });
+      }
+      const cfg = ctx.config.read();
+      if (!connectorEnabled(cfg, input.channel)) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: `${input.channel} summary target is not enabled` });
+      }
+      if (!summaryDestination(cfg, input.channel)) {
+        throw new TRPCError({ code: "PRECONDITION_FAILED", message: `${input.channel} destination is not configured` });
+      }
+      const result = await sendSummaryProcess(ctx.paths.scriptDir, summaryPath, input.channel);
+      if (result.code !== 0) {
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: result.stderr.trim() || result.stdout.trim() || `send_summary.py exited ${result.code}`,
+        });
+      }
+      return { ok: true as const, stdout: result.stdout, stderr: result.stderr };
     }),
 });

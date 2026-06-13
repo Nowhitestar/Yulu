@@ -164,9 +164,23 @@ describe("registry-driven classify + per-field validation", () => {
     const { mgr, cleanup } = makeCfg();
     try {
       expect(mgr.update("output.channel", "notion")).toEqual({ daemonsNeedingRestart: [], daemonsNeedingSighup: [] });
+      expect(mgr.update("output.notion.destination_id", "page-1")).toEqual({ daemonsNeedingRestart: [], daemonsNeedingSighup: [] });
+      expect(mgr.update("output.notion.destination_type", "page")).toEqual({ daemonsNeedingRestart: [], daemonsNeedingSighup: [] });
+      expect(mgr.update("output.notion.destination_label", "Weekly Memo")).toEqual({ daemonsNeedingRestart: [], daemonsNeedingSighup: [] });
+      expect(mgr.update("output.zulip.stream_id", "2")).toEqual({ daemonsNeedingRestart: [], daemonsNeedingSighup: [] });
       expect(mgr.update("output.notion.api_key_env", "NOTION_API_KEY")).toEqual({ daemonsNeedingRestart: [], daemonsNeedingSighup: [] });
-      const out = (mgr.read() as { output?: { channel?: string; notion?: { api_key_env?: string } } }).output;
+      const out = (mgr.read() as {
+        output?: {
+          channel?: string;
+          notion?: { destination_id?: string; destination_type?: string; destination_label?: string; api_key_env?: string };
+          zulip?: { stream_id?: string };
+        };
+      }).output;
       expect(out?.channel).toBe("notion");
+      expect(out?.notion?.destination_id).toBe("page-1");
+      expect(out?.notion?.destination_type).toBe("page");
+      expect(out?.notion?.destination_label).toBe("Weekly Memo");
+      expect(out?.zulip?.stream_id).toBe("2");
       expect(out?.notion?.api_key_env).toBe("NOTION_API_KEY");
       expect(() => mgr.update("output.channel", "carrier-pigeon")).toThrow(ZodError);
     } finally { cleanup(); }
@@ -174,8 +188,16 @@ describe("registry-driven classify + per-field validation", () => {
 });
 
 describe("cloud transcription holds NO keys (TRANS-02 / T-04-KEY guardrail)", () => {
-  it("config.ts declares no cloud API-key / token / secret field", () => {
-    const src = readFileSync(CONFIG_TS, "utf8");
+  it("config.ts declares no held cloud API-key / token / secret field", () => {
+    let src = readFileSync(CONFIG_TS, "utf8");
+    for (const allowedEnvNameRef of [
+      "api_key_env",
+      "app_secret_env",
+      "FEISHU_APP_SECRET",
+      "NOTION_API_KEY",
+    ]) {
+      src = src.replaceAll(allowedEnvNameRef, "");
+    }
     // The cloud path is a COMMAND (transcription.cloud_command), never a held credential.
     expect(/cloud_api_key|api[_-]?key|cloud[_-]?key|\btoken\b|\bsecret\b|password/i.test(src)).toBe(false);
   });

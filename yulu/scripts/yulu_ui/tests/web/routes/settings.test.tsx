@@ -36,6 +36,8 @@ vi.mock("../../../web/src/trpc.js", () => {
     llm: { enabled: false, command: [] },
     status_agent: { enabled: false },
     calendars: [],
+    connectors: { notion: { send_summary: false }, zulip: { send_summary: false } },
+    output: { notion: { database_id: "", api_key_env: "NOTION_API_KEY" }, zulip: { stream: "", topic: "" } },
   };
   const noopMutation = () => ({
     mutate: () => {},
@@ -80,9 +82,16 @@ vi.mock("../../../web/src/trpc.js", () => {
         openInFinder: { useMutation: noopMutation },
       },
       integrations: {
+        connectorStatus: { useQuery: () => ({ data: { schema_version: 1, connectors: {} }, isPending: false }) },
         test: { useMutation: noopMutation },
         accountList: { useQuery: () => ({ data: { ok: true, accounts: [] }, isPending: false }) },
         calendarList: { useQuery: () => ({ data: { ok: true, calendars: [] }, isPending: false }) },
+        outputDestinations: {
+          useQuery: (input: { channel: string }) => ({
+            data: { ok: false, channel: input.channel, identity: null, destinations: [], error: "not connected" },
+            isPending: false,
+          }),
+        },
       },
       llm: { test: { useMutation: noopMutation } },
       prompts: {
@@ -206,7 +215,7 @@ describe("Settings (3-column MasterDetail)", () => {
     expect(scoped.getByText("通用")).toBeInTheDocument();
     expect(scoped.getByText("音频与存储")).toBeInTheDocument();
     expect(scoped.getByText("转写")).toBeInTheDocument();
-    expect(scoped.getByText("集成")).toBeInTheDocument();
+    expect(scoped.getByText("AI 集成")).toBeInTheDocument();
   });
 
   it("renders the breadcrumb as '设置 / <category>'", () => {
@@ -298,9 +307,12 @@ describe("Settings category detail content (re-homed widgets)", () => {
   it("integrations: the integrations section", () => {
     const { container } = wrap("/settings/integrations");
     const detail = within(container.querySelector(".masterdetail-detail") as HTMLElement);
-    // Section <h2> heading is distinct from the detail <h1> title (the category
-    // label also renders "集成").
+    expect(container.querySelector(".settings-detail-head")).toBeNull();
     expect(container.querySelector("h2.settings-section-h")?.textContent).toBe(translate("zh", "settings.integrations.heading"));
+    expect(detail.getByText(translate("zh", "settings.integrations.calendar.heading"))).toBeInTheDocument();
+    expect(detail.getByText(translate("zh", "settings.integrations.output.heading"))).toBeInTheDocument();
+    expect(container.querySelector("#output")).toBeNull();
+    expect(container.querySelector(".output-channel-row")).toBeNull();
   });
 
   it("advanced: the advanced-flagged cloud transcription command", () => {

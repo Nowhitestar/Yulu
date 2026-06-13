@@ -105,6 +105,22 @@
   gap: 8px;
   margin-bottom: 10px;
 }
+.reader-send {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  padding: 5px 12px;
+  border-radius: var(--radius-pill);
+  color: var(--fg-2);
+  border: 1px solid var(--edge);
+}
+.reader-send:hover:not(:disabled) {
+  color: var(--accent-on, var(--accent));
+  border-color: color-mix(in oklch, var(--accent) 35%, var(--edge));
+  background: var(--accent-soft);
+}
+.reader-send:disabled { opacity: 0.5; cursor: default; }
 .reader-delete {
   display: inline-flex;
   align-items: center;
