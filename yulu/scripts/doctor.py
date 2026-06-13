@@ -48,6 +48,25 @@ def _git_info(root: Path) -> dict[str, Any]:
     }
 
 
+def _install_info(root: Path) -> dict[str, Any]:
+    install_path = root / ".yulu-install.json"
+    info: dict[str, Any] = {"present": install_path.exists(), "path": str(install_path)}
+    if not install_path.exists():
+        return info
+    try:
+        data = json.loads(install_path.read_text(encoding="utf-8"))
+        if isinstance(data, dict):
+            info.update({
+                "schema": data.get("schema"),
+                "source": data.get("source"),
+                "version": data.get("version"),
+                "asset": data.get("asset"),
+            })
+    except Exception as exc:
+        info["error"] = str(exc)
+    return info
+
+
 def _dependency_manager() -> Any:
     """Return a MacOSDependencyManager on Darwin, else None (guarded import).
 
@@ -404,6 +423,7 @@ def collect_report(
     return {
         "source_root": str(source_root),
         "source_git": _git_info(source_root),
+        "source_install": _install_info(source_root),
         "runtime_root": str(runtime_root),
         "runtime_exists": runtime_root.exists(),
         "legacy_root": str(legacy_root),
@@ -436,7 +456,7 @@ def _overall_ok(report: dict[str, Any]) -> bool:
         return False
     if report.get("legacy_processes"):
         return False
-    if not report.get("source_git", {}).get("is_repo"):
+    if not report.get("source_git", {}).get("is_repo") and not report.get("source_install", {}).get("present"):
         return False
     return True
 
@@ -446,12 +466,20 @@ def print_human(report: dict[str, Any]) -> None:
         return "✓" if ok else "!"
 
     git = report["source_git"]
+    install = report.get("source_install", {})
     print("Yulu doctor")
-    print(f"{mark(git.get('is_repo', False))} source: {report['source_root']}")
+    print(f"{mark(git.get('is_repo', False) or install.get('present', False))} source: {report['source_root']}")
     if git.get("is_repo"):
         dirty = "dirty" if git.get("dirty") else "clean"
         print(f"  branch={git.get('branch')} head={git.get('head')} {dirty}")
         print(f"  remote={git.get('remote')}")
+    elif install.get("present"):
+        version = install.get("version") or "unknown"
+        source = install.get("source") or "unknown"
+        asset = install.get("asset") or "unknown"
+        print(f"  install={source} version={version} asset={asset}")
+        if install.get("error"):
+            print(f"  install metadata error: {install['error']}")
     print(f"{mark(report['runtime_exists'])} runtime: {report['runtime_root']}")
     print(f"{mark(not report['legacy_processes'])} legacy root: {report['legacy_root']} exists={report['legacy_root_exists']} legacy_processes={len(report['legacy_processes'])}")
     print(f"{mark(report['config_exists'])} config: {report['config_dir']} queue_entries={report['queue_entries']}")

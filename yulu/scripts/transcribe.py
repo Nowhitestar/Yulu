@@ -111,9 +111,15 @@ def _enqueue_summary_request(*, prompt, audio_path, transcript_path,
     )
 
 
-def process_audio(audio_path_str: str) -> None:
+def process_audio(audio_path_str: str, diarization_num_speakers: Optional[int] = None) -> None:
     config = load_config()
-    trans_cfg = config.get("transcription", {})
+    trans_cfg = dict(config.get("transcription", {}) or {})
+    if diarization_num_speakers is not None:
+        diar_cfg = dict(trans_cfg.get("diarization", {}) or {})
+        diar_cfg["enabled"] = True
+        diar_cfg["num_speakers"] = diarization_num_speakers
+        trans_cfg["diarization"] = diar_cfg
+        print(f"👥 本次重转写使用说话人数: {diarization_num_speakers}")
 
     audio_path = Path(audio_path_str)
     if not audio_path.exists():
@@ -229,8 +235,25 @@ def process_audio(audio_path_str: str) -> None:
     print(f"📤 enqueued {queued} LLM jobs; agent_queue_worker will process them")
 
 
+def _parse_cli(argv):
+    if len(argv) < 2:
+        raise ValueError("Usage: transcribe.py <audio_file_path> [--diarization-num-speakers 1..8]")
+    count = None
+    if len(argv) > 2:
+        if len(argv) != 4 or argv[2] != "--diarization-num-speakers":
+            raise ValueError("Usage: transcribe.py <audio_file_path> [--diarization-num-speakers 1..8]")
+        try:
+            count = int(argv[3])
+        except ValueError as exc:
+            raise ValueError("--diarization-num-speakers must be an integer") from exc
+        if count < 1 or count > 8:
+            raise ValueError("--diarization-num-speakers must be between 1 and 8")
+    return argv[1], count
+
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        print("Usage: transcribe.py <audio_file_path>", file=sys.stderr)
+    try:
+        audio_arg, speaker_count = _parse_cli(sys.argv)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
         sys.exit(1)
-    process_audio(sys.argv[1])
+    process_audio(audio_arg, diarization_num_speakers=speaker_count)

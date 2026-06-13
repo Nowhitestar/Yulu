@@ -53,7 +53,8 @@ setup_audio() {
     # and `yulu update` self-heal regardless of which release_installer extracted.
     local _bin
     for _bin in "$SCRIPT_DIR/Yulu.app/Contents/MacOS/audio_daemon" \
-                "$SCRIPT_DIR/StatusAgent.app/Contents/MacOS/status_agent"; do
+                "$SCRIPT_DIR/StatusAgent.app/Contents/MacOS/status_agent" \
+                "$SCRIPT_DIR/recorder_status"; do
         [[ -f "$_bin" ]] && chmod +x "$_bin"
     done
 

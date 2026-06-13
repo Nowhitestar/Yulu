@@ -354,9 +354,9 @@ describe("TranscriptionSection — always-relevant rows (D-07 extend, not replac
   it("renders a Post-recording select defaulting to fast_summary and persists full_transcribe on change", async () => {
     mount();
     const row = screen.getByText(translate("zh", "settings.transcription.postRecording.label")).closest(".row")!;
-    expect(within(row as HTMLElement).getByText("fast_summary")).toBeInTheDocument();
+    expect(within(row as HTMLElement).getByText(translate("zh", "settings.transcription.postRecording.fast"))).toBeInTheDocument();
     const user = userEvent.setup();
-    await user.click(within(row as HTMLElement).getByText("fast_summary"));
+    await user.click(within(row as HTMLElement).getByText(translate("zh", "settings.transcription.postRecording.fast")));
     const select = within(row as HTMLElement).getByRole("combobox") as HTMLSelectElement;
     await user.selectOptions(select, "full_transcribe");
     await vi.waitFor(() =>

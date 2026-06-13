@@ -631,13 +631,23 @@ export const recordingsRouter = router({
     }),
 
   transcribe: publicProcedure
-    .input(z.object({ stem: z.string() }))
+    .input(z.object({
+      stem: z.string(),
+      diarizationNumSpeakers: z.number().int().min(1).max(8).nullable().optional(),
+    }))
     .mutation(async ({ ctx, input }) => {
       const dir = ctx.paths.moviesDir;
       const wavPath = join(dir, `${input.stem}.wav`);
       if (!existsSync(wavPath)) throw new TRPCError({ code: "NOT_FOUND", message: "WAV file missing" });
       if (ctx.jobs.get(input.stem)) throw new TRPCError({ code: "CONFLICT", message: "Job already running for this recording" });
-      void runTranscribe({ stem: input.stem, wavPath, transcribePy: ctx.paths.transcribePy, registry: ctx.jobs, pubsub: ctx.pubsub });
+      void runTranscribe({
+        stem: input.stem,
+        wavPath,
+        transcribePy: ctx.paths.transcribePy,
+        diarizationNumSpeakers: input.diarizationNumSpeakers ?? null,
+        registry: ctx.jobs,
+        pubsub: ctx.pubsub,
+      });
       return { ok: true as const };
     }),
 

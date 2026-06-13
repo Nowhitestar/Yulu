@@ -152,11 +152,12 @@ def test_transcribe_is_thin():
     fix: the fast_summary coverage guard that stops a truncated realtime transcript
     from being reused as the final) → 240 (v0.6 Phase 13, diarization wiring: capture
     timestamped ASR segments + one thin call to
-    stt_daemon.diarize_pipeline.run_diarize_stage; the HEAVY diarize logic lives in that
+    stt_daemon.diarize_pipeline.run_diarize_stage) → 260 (per-run speaker-count CLI
+    override for UI re-transcribe; the HEAVY diarize logic lives in that
     module, NOT here — the orchestrator only gained the wiring). Still well under the
     pre-refactor (~600 line) monolith; the orchestrator-ness invariant holds."""
     line_count = sum(1 for _ in (SCRIPTS / "transcribe.py").open(encoding="utf-8"))
-    assert line_count < 240, f"transcribe.py too long: {line_count} lines"
+    assert line_count < 260, f"transcribe.py too long: {line_count} lines"
 
 
 def test_prompts_seed_count(tmp_path):
@@ -251,6 +252,9 @@ def test_record_audio_acquires_recording_lock():
 def test_meeting_daemon_acquires_recording_lock():
     text = (SCRIPTS / "meeting_daemon.py").read_text(encoding="utf-8")
     assert "acquire_recording_lock" in text or "from recording_lock import" in text
+    assert "start_realtime_transcriber(audio_path, title)" in text
+    assert "recorder_status.log" in text
+    assert "wait(timeout=0.4)" in text
 
 
 def test_meeting_daemon_accepts_async_summary_queue():
@@ -341,6 +345,13 @@ def test_status_agent_build_script_exists():
     assert p.exists()
     import os
     assert os.access(p, os.X_OK), "build_status_agent.sh must be executable"
+
+
+def test_status_agent_build_script_builds_recorder_status():
+    text = (SCRIPTS / "build_status_agent.sh").read_text(encoding="utf-8")
+    assert "recorder_status.swift" in text
+    assert "recorder_status" in text
+    assert "codesign" in text
 
 
 def test_status_agent_app_bundle_exists():

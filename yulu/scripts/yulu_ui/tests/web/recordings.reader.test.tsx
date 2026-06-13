@@ -3,6 +3,7 @@ import { render, screen, fireEvent } from "@testing-library/react";
 import { MemoryRouter, Routes, Route } from "react-router";
 
 const getMock = vi.fn();
+const transcribeMutate = vi.fn();
 const renameMutate = vi.fn();
 const setTagsMutate = vi.fn();
 const deleteMutate = vi.fn();
@@ -17,7 +18,7 @@ vi.mock("../../web/src/trpc.js", () => ({
   trpc: {
     recordings: {
       get: { useQuery: (...a: unknown[]) => getMock(...a) },
-      transcribe: { useMutation: () => ({ mutate: vi.fn() }) },
+      transcribe: { useMutation: () => ({ mutate: transcribeMutate }) },
       summarize: { useMutation: () => ({ mutate: vi.fn() }) },
       rename: { useMutation: () => ({ mutate: renameMutate, isPending: false }) },
       setTags: { useMutation: () => ({ mutate: setTagsMutate, isPending: false }) },
@@ -59,6 +60,7 @@ function renderAt(stem: string) {
 }
 
 beforeEach(() => {
+  transcribeMutate.mockClear();
   renameMutate.mockClear(); setTagsMutate.mockClear(); deleteMutate.mockClear();
   renameSpeakerMutate.mockClear(); mergeSpeakersMutate.mockClear(); assignSegmentSpeakerMutate.mockClear(); sendSummaryMutate.mockClear();
   navigateMock.mockClear(); confirmMock.mockClear(); confirmMock.mockReturnValue(true);
@@ -115,6 +117,17 @@ describe("RecordingReader", () => {
     renderAt(baseData.stem);
 
     expect(screen.queryByRole("button", { name: "发送到 Notion" })).toBeNull();
+  });
+
+  it("passes a speaker-count override when re-transcribing from the reader", () => {
+    getMock.mockReturnValue({ data: { ...baseData, wavPath: "/tmp/TeamSync.wav" }, isPending: false });
+    renderAt(baseData.stem);
+    fireEvent.change(screen.getByRole("combobox", { name: /说话人数/i }), { target: { value: "3" } });
+    fireEvent.click(screen.getByRole("button", { name: /重新转写/i }));
+    expect(transcribeMutate).toHaveBeenCalledWith(
+      { stem: baseData.stem, diarizationNumSpeakers: 3 },
+      expect.anything(),
+    );
   });
 
   it("renders the summary through MarkdownView, not a raw <pre>", () => {

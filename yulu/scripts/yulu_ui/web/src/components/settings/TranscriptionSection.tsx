@@ -241,8 +241,8 @@ export function TranscriptionSection({ tracker }: TranscriptionSectionProps) {
         type="select"
         value={tr.post_recording_mode ?? "fast_summary"}
         options={[
-          { value: "fast_summary", label: "fast_summary" },
-          { value: "full_transcribe", label: "full_transcribe" },
+          { value: "fast_summary", label: t("settings.transcription.postRecording.fast") },
+          { value: "full_transcribe", label: t("settings.transcription.postRecording.full") },
         ]}
         onCommit={commit("transcription.post_recording_mode") as (v: string) => void}
         disabled={isBlocked("transcription.post_recording_mode")}

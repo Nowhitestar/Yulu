@@ -20,19 +20,24 @@ export interface RunTranscribeArgs {
   stem: string;
   wavPath: string;
   transcribePy: string;
+  diarizationNumSpeakers?: number | null;
   pythonBin?: string;
   registry: JobRegistry;
   pubsub: PubSub<AppChannels>;
 }
 
 export async function runTranscribe(args: RunTranscribeArgs): Promise<{ jobId: string }> {
-  const { stem, wavPath, transcribePy, pythonBin = "python3", registry, pubsub } = args;
+  const { stem, wavPath, transcribePy, diarizationNumSpeakers, pythonBin = "python3", registry, pubsub } = args;
   const jobId = randomUUID();
   registry.set({ stem, action: "transcribe", state: "transcribing", startedAt: Date.now(), jobId });
   pubsub.publish("jobs", { stem, jobId, state: "transcribing" });
 
   return new Promise((resolve) => {
-    const proc = spawnImpl(pythonBin, [transcribePy, wavPath], { stdio: ["ignore", "pipe", "pipe"] });
+    const procArgs = [transcribePy, wavPath];
+    if (typeof diarizationNumSpeakers === "number") {
+      procArgs.push("--diarization-num-speakers", String(diarizationNumSpeakers));
+    }
+    const proc = spawnImpl(pythonBin, procArgs, { stdio: ["ignore", "pipe", "pipe"] });
     let stderr = "";
     proc.stderr.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
     proc.on("exit", (code: number | null) => {

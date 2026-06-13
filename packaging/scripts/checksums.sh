@@ -17,11 +17,11 @@ cleanup() {
 }
 trap cleanup EXIT
 
-find "$DIST" -maxdepth 1 \( -name '*.zip' -o -name 'install.sh' \) -type f -print \
+find "$DIST" -maxdepth 1 \( -name '*.zip' -o -name '*.pkg' -o -name 'install.sh' \) -type f -print \
     | LC_ALL=C sort > "$ARTIFACTS"
 
 if [[ ! -s "$ARTIFACTS" ]]; then
-    echo "No release artifacts found in $DIST (expected dist/*.zip and/or dist/install.sh)." >&2
+    echo "No release artifacts found in $DIST (expected dist/*.zip, dist/*.pkg, and/or dist/install.sh)." >&2
     exit 1
 fi
 

@@ -182,6 +182,11 @@ def test_release_fork_invokes_no_swiftc(tmp_path):
     )
 
 
+def test_release_fork_self_heals_recorder_status_exec_bit():
+    text = (SCRIPTS / "setup_audio.sh").read_text(encoding="utf-8")
+    assert '"$SCRIPT_DIR/recorder_status"' in text
+
+
 # ─── 2. install.sh Xcode pre-flight is --dev-gated ─────────────────────────────
 
 def _executable_lines(text: str) -> list[str]:
