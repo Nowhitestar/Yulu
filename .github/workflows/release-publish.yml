@@ -4,7 +4,7 @@ name: Release publish (reusable)
 #   - release-please.yml (automatic, on Release PR merge)
 #   - release.yml        (manual escape hatch, on `v*.*.*` tag push)
 # It checks out the tag, re-runs the test suite, packages the assets, and
-# creates/updates the GitHub Release with the zip + checksums + install.sh.
+# creates/updates the GitHub Release with the pkg installer.
 
 on:
   workflow_call:
@@ -48,6 +48,7 @@ jobs:
           for f in install.sh \
                    packaging/scripts/package.sh \
                    packaging/scripts/package_pkg.sh \
+                   packaging/scripts/pkg_postinstall.sh \
                    packaging/scripts/checksums.sh \
                    packaging/scripts/sign_and_notarize.sh \
                    yulu/scripts/setup.sh \
@@ -85,7 +86,7 @@ jobs:
           python -m pytest -q
 
       # Sign + notarize + staple BEFORE packaging (Pitfall 4 ordering): the .app
-      # DIRECTORIES are stapled here so the ticket travels inside the zip that the
+      # DIRECTORIES are stapled here so the ticket travels inside the pkg that the
       # next step builds. sign_and_notarize.sh also runs build_*.sh (bottom-up
       # hardened-runtime signing), so the package step below uses --skip-build to
       # avoid re-running the build and overwriting the stapled bundles.
@@ -113,22 +114,13 @@ jobs:
           # bundle bytes (Info.plist, Mach-O, _CodeSignature/CodeResources).
           make package TAG="$TAG" PACKAGE_ARGS=--skip-build
           make package-pkg TAG="$TAG" PACKAGE_PKG_ARGS="--runtime-zip dist/yulu-macos-arm64-$TAG.zip"
-          make checksums
-          test -f "dist/yulu-macos-arm64-$TAG.zip"
           test -f "dist/yulu-macos-arm64-$TAG.pkg"
-          test -f dist/install.sh
-          test -f dist/checksums.txt
 
-      # SLSA build-provenance attestation for the release zip (BUILD-04). Minted
+      # SLSA build-provenance attestation for the release pkg (BUILD-04). Minted
       # from this workflow's OIDC token; verifiable with `gh attestation verify
-      # <zip> --repo Nowhitestar/Yulu`. Requires id-token/attestations: write
+      # <pkg> --repo Nowhitestar/Yulu`. Requires id-token/attestations: write
       # (declared on this job above). A4: confirm the reusable workflow inherits
       # those permissions on a real run.
-      - name: Attest release zip provenance
-        uses: actions/attest-build-provenance@v4
-        with:
-          subject-path: dist/yulu-macos-arm64-${{ inputs.tag }}.zip
-
       - name: Attest release pkg provenance
         uses: actions/attest-build-provenance@v4
         with:
@@ -164,10 +156,7 @@ jobs:
         run: |
           set -euo pipefail
           ASSETS=(
-            "dist/yulu-macos-arm64-$TAG.zip"
             "dist/yulu-macos-arm64-$TAG.pkg"
-            "dist/install.sh"
-            "dist/checksums.txt"
           )
           if gh release view "$TAG" >/dev/null 2>&1; then
             EDIT_ARGS=(

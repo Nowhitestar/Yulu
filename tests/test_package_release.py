@@ -62,6 +62,7 @@ def make_project(tmp_path: Path, version: str = "0.5.0-dev", git_marker: str | N
     scripts.mkdir(parents=True)
     shutil.copy2(ROOT / "packaging" / "scripts" / "package.sh", scripts / "package.sh")
     shutil.copy2(ROOT / "packaging" / "scripts" / "package_pkg.sh", scripts / "package_pkg.sh")
+    shutil.copy2(ROOT / "packaging" / "scripts" / "pkg_postinstall.sh", scripts / "pkg_postinstall.sh")
     shutil.copy2(ROOT / "packaging" / "scripts" / "checksums.sh", scripts / "checksums.sh")
     return project
 
@@ -84,7 +85,7 @@ def write_fake_pkg_tools(bin_dir: Path) -> None:
         "while [[ $# -gt 0 ]]; do\n"
         "  case \"$1\" in\n"
         "    --root) root=\"$2\"; shift 2 ;;\n"
-        "    --identifier|--version|--install-location|--sign) shift 2 ;;\n"
+        "    --scripts|--identifier|--version|--install-location|--sign) shift 2 ;;\n"
         "    *) out=\"$1\"; shift ;;\n"
         "  esac\n"
         "done\n"
@@ -226,6 +227,17 @@ def test_package_pkg_builds_installer_payload_from_runtime_zip(tmp_path):
     assert any(row.endswith("/Applications/Yulu.app/Contents/MacOS/audio_daemon") for row in manifest)
     assert any(row.endswith("/Library/Application Support/Yulu/runtime/VERSION") for row in manifest)
     assert any(row.endswith("/Library/Application Support/Yulu/runtime/yulu/scripts/setup.sh") for row in manifest)
+
+
+def test_release_publish_uploads_only_pkg_asset():
+    workflow = (ROOT / ".github" / "workflows" / "release-publish.yml").read_text(encoding="utf-8")
+    release_block = workflow.split("Create or update GitHub Release", 1)[1]
+    assets_block = release_block.split(")", 1)[0]
+
+    assert '"dist/yulu-macos-arm64-$TAG.pkg"' in assets_block
+    assert '"dist/yulu-macos-arm64-$TAG.zip"' not in assets_block
+    assert '"dist/install.sh"' not in assets_block
+    assert '"dist/checksums.txt"' not in assets_block
 
 
 def test_checksums_include_zip_and_install_asset(tmp_path):

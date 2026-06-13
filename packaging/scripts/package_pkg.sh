@@ -19,6 +19,7 @@ PKG_SIGN_IDENTITY="${YULU_PKG_SIGN_IDENTITY:-}"
 RUNTIME_PREFIX="${YULU_PKG_RUNTIME_PREFIX:-Library/Application Support/Yulu/runtime}"
 VISIBLE_APP_PREFIX="${YULU_PKG_VISIBLE_APP_PREFIX:-Applications/Yulu.app}"
 VISIBLE_APP_SOURCE="${YULU_PKG_VISIBLE_APP_SOURCE:-yulu/scripts/Yulu.app}"
+PKG_SCRIPTS_SRC="${YULU_PKG_SCRIPTS_SRC:-$SCRIPT_DIR/pkg_postinstall.sh}"
 
 if [[ $# -gt 0 && "$1" != --* ]]; then
     TAG="$1"
@@ -101,6 +102,10 @@ require_command perl
 if [[ -n "$PKG_SIGN_IDENTITY" ]]; then
     require_command productsign
 fi
+if [[ ! -f "$PKG_SCRIPTS_SRC" ]]; then
+    echo "Package postinstall script not found: $PKG_SCRIPTS_SRC" >&2
+    exit 1
+fi
 
 DIST_ABS="$(mkdir -p "$DIST" && cd "$DIST" && pwd)"
 PKG_PATH="$DIST_ABS/yulu-macos-arm64-$TAG.pkg"
@@ -128,7 +133,8 @@ fi
 
 EXTRACTED="$STAGE/extracted"
 PAYLOAD="$STAGE/payload"
-mkdir -p "$EXTRACTED" "$PAYLOAD"
+SCRIPTS="$STAGE/scripts"
+mkdir -p "$EXTRACTED" "$PAYLOAD" "$SCRIPTS"
 unzip -q "$RUNTIME_ZIP" -d "$EXTRACTED"
 
 RUNTIME_SRC="$EXTRACTED/yulu"
@@ -154,9 +160,12 @@ cp -R "$APP_SRC" "$APP_DEST"
 # carry extended metadata. They are not part of Yulu's runtime contract.
 xattr -cr "$PAYLOAD" 2>/dev/null || true
 find "$PAYLOAD" -name '._*' -type f -exec rm -f {} +
+cp "$PKG_SCRIPTS_SRC" "$SCRIPTS/postinstall"
+chmod 0755 "$SCRIPTS/postinstall"
 
 PKGBUILD_ARGS=(
     --root "$PAYLOAD"
+    --scripts "$SCRIPTS"
     --identifier "$PKG_IDENTIFIER"
     --version "$VERSION"
     --install-location "/"

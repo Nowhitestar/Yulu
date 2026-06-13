@@ -98,14 +98,13 @@ def test_normalize_version_tag_rejects_invalid_semver_boundaries(version):
         normalize_version_tag(version)
 
 
-def test_select_release_asset_finds_zip_and_checksums():
+def test_select_release_asset_finds_pkg():
     release = {
         "tag_name": "v0.5.0",
         "assets": [
-            {"name": "checksums.txt", "browser_download_url": "https://example/checksums.txt"},
             {
-                "name": "yulu-macos-arm64-v0.5.0.zip",
-                "browser_download_url": "https://example/yulu.zip",
+                "name": "yulu-macos-arm64-v0.5.0.pkg",
+                "browser_download_url": "https://example/yulu.pkg",
             },
         ],
     }
@@ -114,45 +113,26 @@ def test_select_release_asset_finds_zip_and_checksums():
 
     assert selected == ReleaseAsset(
         tag="v0.5.0",
-        asset_name="yulu-macos-arm64-v0.5.0.zip",
-        asset_url="https://example/yulu.zip",
-        checksums_url="https://example/checksums.txt",
+        asset_name="yulu-macos-arm64-v0.5.0.pkg",
+        asset_url="https://example/yulu.pkg",
     )
 
 
-def test_select_release_asset_errors_when_zip_missing():
+def test_select_release_asset_errors_when_pkg_missing():
     with pytest.raises(InstallError, match="does not provide"):
         select_release_asset({"tag_name": "v0.5.0", "assets": []})
 
 
 @pytest.mark.parametrize("url", [None, ""])
-def test_select_release_asset_errors_when_zip_url_missing_or_empty(url):
+def test_select_release_asset_errors_when_pkg_url_missing_or_empty(url):
     release = {
         "tag_name": "v0.5.0",
         "assets": [
-            {"name": "checksums.txt", "browser_download_url": "https://example/checksums.txt"},
-            {"name": "yulu-macos-arm64-v0.5.0.zip", "browser_download_url": url},
+            {"name": "yulu-macos-arm64-v0.5.0.pkg", "browser_download_url": url},
         ],
     }
 
     with pytest.raises(InstallError, match="download URL"):
-        select_release_asset(release)
-
-
-@pytest.mark.parametrize("url", [None, ""])
-def test_select_release_asset_errors_when_checksum_url_missing_or_empty(url):
-    release = {
-        "tag_name": "v0.5.0",
-        "assets": [
-            {"name": "checksums.txt", "browser_download_url": url},
-            {
-                "name": "yulu-macos-arm64-v0.5.0.zip",
-                "browser_download_url": "https://example/yulu.zip",
-            },
-        ],
-    }
-
-    with pytest.raises(InstallError, match="checksums.txt download URL"):
         select_release_asset(release)
 
 
@@ -175,8 +155,7 @@ def test_resolve_release_from_payload_returns_selected_asset():
     payload = {
         "tag_name": "v0.5.0",
         "assets": [
-            {"name": "checksums.txt", "browser_download_url": "https://example/checksums.txt"},
-            {"name": "yulu-macos-arm64-v0.5.0.zip", "browser_download_url": "https://example/yulu.zip"},
+            {"name": "yulu-macos-arm64-v0.5.0.pkg", "browser_download_url": "https://example/yulu.pkg"},
         ],
     }
     asset = resolve_release_from_payload(payload)
@@ -187,8 +166,7 @@ def test_install_release_target_fetches_payload_and_installs_selected_asset(tmp_
     payload = {
         "tag_name": "v0.5.0",
         "assets": [
-            {"name": "checksums.txt", "browser_download_url": "https://example/checksums.txt"},
-            {"name": "yulu-macos-arm64-v0.5.0.zip", "browser_download_url": "https://example/yulu.zip"},
+            {"name": "yulu-macos-arm64-v0.5.0.pkg", "browser_download_url": "https://example/yulu.pkg"},
         ],
     }
     calls = []
@@ -197,11 +175,11 @@ def test_install_release_target_fetches_payload_and_installs_selected_asset(tmp_
         calls.append(("fetch", url))
         return payload
 
-    def fake_install_release_from_urls(**kwargs):
+    def fake_install_release_pkg_from_url(**kwargs):
         calls.append(("install", kwargs))
 
     monkeypatch.setattr(release_installer, "fetch_json", fake_fetch_json)
-    monkeypatch.setattr(release_installer, "install_release_from_urls", fake_install_release_from_urls)
+    monkeypatch.setattr(release_installer, "install_release_pkg_from_url", fake_install_release_pkg_from_url)
 
     install_release_target(ReleaseTarget(kind="version", tag="v0.5.0"), tmp_path / "install", run_setup_flag=False)
 
@@ -211,9 +189,8 @@ def test_install_release_target_fetches_payload_and_installs_selected_asset(tmp_
     )
     assert calls[1][1] == {
         "tag": "v0.5.0",
-        "asset_name": "yulu-macos-arm64-v0.5.0.zip",
-        "asset_url": "https://example/yulu.zip",
-        "checksums_url": "https://example/checksums.txt",
+        "asset_name": "yulu-macos-arm64-v0.5.0.pkg",
+        "asset_url": "https://example/yulu.pkg",
         "install_dir": tmp_path / "install",
         "run_setup": False,
     }
@@ -269,10 +246,9 @@ def test_main_reports_asset_download_errors_cleanly(tmp_path, monkeypatch, capsy
     payload = {
         "tag_name": "v0.5.0",
         "assets": [
-            {"name": "checksums.txt", "browser_download_url": "https://example.invalid/checksums.txt"},
             {
-                "name": "yulu-macos-arm64-v0.5.0.zip",
-                "browser_download_url": "https://example.invalid/yulu.zip",
+                "name": "yulu-macos-arm64-v0.5.0.pkg",
+                "browser_download_url": "https://example.invalid/yulu.pkg",
             },
         ],
     }
