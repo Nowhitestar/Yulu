@@ -83,6 +83,7 @@ vi.mock("../../../web/src/trpc.js", () => {
       },
       integrations: {
         connectorStatus: { useQuery: () => ({ data: { schema_version: 1, connectors: {} }, isPending: false }) },
+        notionMcpStartAuth: { useMutation: noopMutation },
         test: { useMutation: noopMutation },
         accountList: { useQuery: () => ({ data: { ok: true, accounts: [] }, isPending: false }) },
         calendarList: { useQuery: () => ({ data: { ok: true, calendars: [] }, isPending: false }) },
