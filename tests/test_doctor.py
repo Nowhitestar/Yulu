@@ -49,6 +49,30 @@ def test_main_prints_json_report(capsys):
     assert data["legacy_root_exists"] is False
 
 
+def test_release_runtime_without_git_is_healthy_source(tmp_path, capsys):
+    doctor = load_doctor()
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    (runtime / ".yulu-install.json").write_text(
+        json.dumps({"schema": 1, "source": "release", "version": "v9.9.9", "asset": "yulu.zip"}),
+        encoding="utf-8",
+    )
+
+    code = doctor.main([
+        "--json",
+        "--source-root", str(runtime),
+        "--runtime-root", str(runtime),
+        "--legacy-root", str(tmp_path / "missing-legacy"),
+        "--config-dir", str(tmp_path / "missing-config"),
+    ])
+
+    assert code == 0
+    data = json.loads(capsys.readouterr().out)
+    assert data["source_git"]["is_repo"] is False
+    assert data["source_install"]["present"] is True
+    assert data["source_install"]["version"] == "v9.9.9"
+
+
 def test_stt_daemon_section_present_when_config_empty(tmp_path):
     doctor = load_doctor()
     report = doctor.collect_report(
