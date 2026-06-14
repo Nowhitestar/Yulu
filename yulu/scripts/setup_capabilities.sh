@@ -80,6 +80,10 @@ verify_mlx_whisper() {
     fi
 }
 
+runtime_repairs_skipped() {
+    [[ "${YULU_SKIP_RUNTIME_REPAIRS:-}" == "1" || "${YULU_PKG_POSTINSTALL:-}" == "1" ]]
+}
+
 install_mlx_whisper() {
     if mlx_whisper_prereqs_present; then
         ok "mlx-whisper 与 PyYAML 已在守护进程解释器中可发现（${PYTHON_BIN}）"
@@ -231,7 +235,12 @@ setup_capabilities() {
     if [[ "$(capability_status mlx_whisper)" == "usable" ]]; then
         ok "检测到可用的 mlx-whisper（复用主机的），无需 Yulu 自行提供"
     elif mlx_required; then
-        install_mlx_whisper
+        if runtime_repairs_skipped; then
+            warn "安装器模式：跳过自动 pip 修复；需要 MLX 时可稍后运行 yulu update 或手动安装依赖。"
+            verify_mlx_whisper
+        else
+            install_mlx_whisper
+        fi
     else
         verify_mlx_whisper
     fi

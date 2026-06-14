@@ -2,6 +2,9 @@
 set -euo pipefail
 
 RUNTIME_ROOT="/Library/Application Support/Yulu/runtime"
+VISIBLE_APP="/Applications/Yulu.app"
+VISIBLE_APP_RUNTIME_PATH="yulu/scripts/Yulu.app"
+INSTALLER_PATH="/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/local/sbin:/usr/bin:/bin:/usr/sbin:/sbin"
 
 log() {
     printf 'Yulu pkg: %s\n' "$1"
@@ -35,6 +38,25 @@ gid="$(id -g "$console_user")"
 
 [[ -f "$RUNTIME_ROOT/VERSION" ]] || fail "runtime payload missing VERSION at $RUNTIME_ROOT"
 [[ -f "$RUNTIME_ROOT/yulu/scripts/setup.sh" ]] || fail "runtime payload missing setup.sh"
+
+ensure_runtime_audio_app() {
+    local runtime_app="$RUNTIME_ROOT/$VISIBLE_APP_RUNTIME_PATH"
+    if [[ -d "$runtime_app" ]]; then
+        return 0
+    fi
+    if [[ ! -d "$VISIBLE_APP" ]]; then
+        fail "runtime payload missing Yulu.app and visible app is not installed at $VISIBLE_APP"
+    fi
+    log "restoring runtime Yulu.app from $VISIBLE_APP"
+    mkdir -p "$(dirname "$runtime_app")"
+    if command -v ditto >/dev/null 2>&1; then
+        ditto "$VISIBLE_APP" "$runtime_app"
+    else
+        cp -R "$VISIBLE_APP" "$runtime_app"
+    fi
+}
+
+ensure_runtime_audio_app
 
 backup=""
 if [[ -e "$install_dir" || -L "$install_dir" ]]; then
@@ -85,6 +107,9 @@ chown "$uid:$gid" "$install_dir/.yulu-install.json"
 log "running setup upgrade as $console_user"
 launchctl asuser "$uid" sudo -u "$console_user" env \
     HOME="$user_home" USER="$console_user" LOGNAME="$console_user" \
+    PATH="$INSTALLER_PATH" \
+    YULU_PKG_POSTINSTALL=1 \
+    YULU_SKIP_RUNTIME_REPAIRS=1 \
     bash "$install_dir/yulu/scripts/setup.sh" --upgrade < /dev/null
 
 if [[ -n "$backup" && -e "$backup" ]]; then

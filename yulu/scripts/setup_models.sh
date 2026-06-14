@@ -92,6 +92,10 @@ download_with_retry() {
     curl -L --fail --retry 5 --retry-delay 2 --retry-all-errors --connect-timeout 30 --progress-bar "$url" -o "$out"
 }
 
+runtime_repairs_skipped() {
+    [[ "${YULU_SKIP_RUNTIME_REPAIRS:-}" == "1" || "${YULU_PKG_POSTINSTALL:-}" == "1" ]]
+}
+
 download_diar_embedding() {
     # Prefer the official sherpa-onnx GitHub release. Some networks reliably fail
     # on release-assets.githubusercontent.com, so fall back to the maintainer's
@@ -199,7 +203,11 @@ setup_diarization_models() {
     header "配置说话人分离 (diarization)：引擎 + ONNX 模型"
 
     # 1. The engine first (so a freshly-provisioned model dir is immediately usable).
-    install_diarization_engine
+    if runtime_repairs_skipped; then
+        warn "安装器模式：跳过 sherpa-onnx 自动安装；需要说话人分离时可稍后运行 yulu update。"
+    else
+        install_diarization_engine
+    fi
 
     # 2. The two ONNX model files.
     mkdir -p "$DIAR_DIR"
@@ -258,6 +266,11 @@ PY
     if [[ -f "$target" ]]; then
         ok "模型已存在: $target"
         write_model_to_config "$target"
+        return
+    fi
+
+    if runtime_repairs_skipped; then
+        warn "安装器模式：跳过 whisper.cpp 大模型下载；需要 whisper.cpp 时可稍后运行 yulu update。"
         return
     fi
 
