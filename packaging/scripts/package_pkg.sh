@@ -155,6 +155,7 @@ if [[ ! -d "$APP_SRC" ]]; then
 fi
 mkdir -p "$(dirname "$APP_DEST")"
 cp -R "$APP_SRC" "$APP_DEST"
+rm -rf "$APP_SRC"
 
 # pkgbuild can preserve macOS AppleDouble sidecar records when copied trees
 # carry extended metadata. They are not part of Yulu's runtime contract.

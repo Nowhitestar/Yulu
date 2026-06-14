@@ -227,6 +227,56 @@ def test_package_pkg_builds_installer_payload_from_runtime_zip(tmp_path):
     assert any(row.endswith("/Applications/Yulu.app/Contents/MacOS/audio_daemon") for row in manifest)
     assert any(row.endswith("/Library/Application Support/Yulu/runtime/VERSION") for row in manifest)
     assert any(row.endswith("/Library/Application Support/Yulu/runtime/yulu/scripts/setup.sh") for row in manifest)
+    assert not any(
+        row.endswith("/Library/Application Support/Yulu/runtime/yulu/scripts/Yulu.app/Contents/MacOS/audio_daemon")
+        for row in manifest
+    )
+
+
+def test_pkg_postinstall_restores_runtime_app_and_uses_installer_env():
+    script = (ROOT / "packaging" / "scripts" / "pkg_postinstall.sh").read_text(encoding="utf-8")
+
+    assert "ensure_runtime_audio_app" in script
+    assert "restoring runtime Yulu.app from $VISIBLE_APP" in script
+    assert "PATH=\"$INSTALLER_PATH\"" in script
+    assert "YULU_PKG_POSTINSTALL=1" in script
+    assert "YULU_SKIP_RUNTIME_REPAIRS=1" in script
+
+
+def test_setup_capabilities_pkg_context_does_not_run_pip(tmp_path):
+    project = make_project(tmp_path)
+    script = ROOT / "yulu" / "scripts" / "setup_capabilities.sh"
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    write_file(config_dir / "config.json", '{"transcription":{"final_engine":"mlx"}}\n')
+    calls = tmp_path / "python-calls.log"
+    fake_python = tmp_path / "python3"
+    write_file(
+        fake_python,
+        "#!/usr/bin/env bash\n"
+        f"printf '%s\\n' \"$*\" >> {calls}\n"
+        "case \"$*\" in\n"
+        "  *'-m pip install'*) exit 99 ;;\n"
+        "  *'doctor.py --json'*) printf '%s\\n' '{\"host_capabilities\":{\"capabilities\":{}}}'; exit 0 ;;\n"
+        "  -) exit 0 ;;\n"
+        "  *) exit 1 ;;\n"
+        "esac\n",
+    )
+    fake_python.chmod(0o755)
+
+    result = run(
+        ["bash", str(script), "release"],
+        cwd=project,
+        env={
+            "PYTHON_BIN": str(fake_python),
+            "CONFIG_DIR": str(config_dir),
+            "YULU_PKG_POSTINSTALL": "1",
+            "YULU_SKIP_RUNTIME_REPAIRS": "1",
+        },
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert "-m pip install" not in calls.read_text(encoding="utf-8")
 
 
 def test_release_publish_uploads_only_pkg_asset():
