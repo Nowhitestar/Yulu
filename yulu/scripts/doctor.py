@@ -304,6 +304,30 @@ def _host_capabilities(config_dir: Path, runtime_root: Path) -> dict[str, Any]:
         return {"error": str(exc), "schema_version": 1, "capabilities": {}}
 
 
+def _connector_capabilities(config_dir: Path, runtime_root: Path) -> dict[str, Any]:
+    """Assemble reusable calendar/output connector probes.
+
+    Mirrors ``_host_capabilities``: read-only, lazy-imported, and never-raise. The report is
+    separate from host runtime capabilities because connectors carry user-facing actions such as
+    ``calendar.read`` and ``summary.send``.
+    """
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from connectors.provider import default_providers
+        from connectors.report import ConnectorReport
+
+        report = ConnectorReport()
+        for provider in default_providers():
+            try:
+                for connector_id, connector in provider.connectors().items():
+                    report.connectors[connector_id] = connector
+            except Exception:
+                continue
+        return report.to_dict()
+    except Exception as exc:
+        return {"error": str(exc), "schema_version": 1, "connectors": {}}
+
+
 def check_yulu_ui(
     script_dir: Path,
     config_dir: Path,
@@ -381,7 +405,7 @@ def collect_report(
         _check_command("python3", ["--version"]),
         _check_command("ffmpeg", ["-version"]),
         _check_command("ffprobe", ["-version"]),
-        _check_command("swiftc", ["--version"]),
+        _check_command("swiftc"),
         _check_command("codex", ["--version"]),
         _check_command("gh", ["--version"]),
     ]
@@ -417,6 +441,7 @@ def collect_report(
         # installed UI dist honestly. When source_root == runtime_root (dev), behavior is unchanged.
         "yulu_ui": check_yulu_ui(runtime_root / "yulu" / "scripts", config_dir),
         "host_capabilities": _host_capabilities(config_dir, runtime_root),
+        "connector_capabilities": _connector_capabilities(config_dir, runtime_root),
         "processes": processes,
         "legacy_processes": legacy_processes,
         "runtime_processes": runtime_processes,

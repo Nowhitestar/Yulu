@@ -13,6 +13,26 @@
       "watch_calendars": ["primary"]
     }
   ],
+  "connectors": {
+    "gog": {
+      "read_calendar": false,
+      "note": "When true, Yulu may reuse the host gog connector for calendar reads."
+    },
+    "feishu": {
+      "read_calendar": false,
+      "app_id_env": "FEISHU_APP_ID",
+      "app_secret_env": "FEISHU_APP_SECRET",
+      "note": "Connector switches are safe config only; credentials stay in env vars or the host agent/plugin."
+    },
+    "notion": {
+      "send_summary": false,
+      "note": "When true, the meeting detail page can manually send summaries to the Notion destination selected in Settings > AI integrations."
+    },
+    "zulip": {
+      "send_summary": false,
+      "note": "When true, the meeting detail page can manually send summaries to the Zulip channel selected in Settings > AI integrations."
+    }
+  },
   "audio": {
     "backend": "daemon",
     "mic_device": "",
@@ -62,15 +82,18 @@
   "output": {
     "channel": "file",
     "zulip": {
-      "stream": "meetings",
-      "topic": "会议纪要"
+      "stream_id": "",
+      "stream": "",
+      "topic": "会议纪要",
+      "note": "Selected in AI integrations. zuliprc can be provided for compatibility, but the UI prefers reusing the connected Zulip plugin/account."
     },
     "notion": {
+      "destination_id": "",
+      "destination_type": "database",
+      "destination_label": "",
       "api_key_env": "NOTION_API_KEY",
-      "database_id": "your-database-id"
-    },
-    "telegram": {
-      "chat_id": ""
+      "database_id": "",
+      "note": "Selected in AI integrations. database_id/api_key_env are compatibility fallbacks and are not shown in the main UI."
     }
   },
   "meeting_detection": {

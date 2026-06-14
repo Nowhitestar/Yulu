@@ -10,6 +10,7 @@ const deleteMutate = vi.fn();
 const renameSpeakerMutate = vi.fn();
 const mergeSpeakersMutate = vi.fn();
 const assignSegmentSpeakerMutate = vi.fn();
+const sendSummaryMutate = vi.fn();
 const navigateMock = vi.fn();
 const confirmMock = vi.fn(() => true);
 
@@ -22,6 +23,7 @@ vi.mock("../../web/src/trpc.js", () => ({
       rename: { useMutation: () => ({ mutate: renameMutate, isPending: false }) },
       setTags: { useMutation: () => ({ mutate: setTagsMutate, isPending: false }) },
       delete: { useMutation: () => ({ mutate: deleteMutate, isPending: false }) },
+      sendSummary: { useMutation: () => ({ mutate: sendSummaryMutate, isPending: false }) },
       renameSpeaker: { useMutation: () => ({ mutate: renameSpeakerMutate, isPending: false }) },
       mergeSpeakers: { useMutation: () => ({ mutate: mergeSpeakersMutate, isPending: false }) },
       assignSegmentSpeaker: { useMutation: () => ({ mutate: assignSegmentSpeakerMutate, isPending: false }) },
@@ -60,7 +62,7 @@ function renderAt(stem: string) {
 beforeEach(() => {
   transcribeMutate.mockClear();
   renameMutate.mockClear(); setTagsMutate.mockClear(); deleteMutate.mockClear();
-  renameSpeakerMutate.mockClear(); mergeSpeakersMutate.mockClear(); assignSegmentSpeakerMutate.mockClear();
+  renameSpeakerMutate.mockClear(); mergeSpeakersMutate.mockClear(); assignSegmentSpeakerMutate.mockClear(); sendSummaryMutate.mockClear();
   navigateMock.mockClear(); confirmMock.mockClear(); confirmMock.mockReturnValue(true);
 });
 
@@ -82,6 +84,39 @@ describe("RecordingReader", () => {
     renderAt("Memo_20260101_120000");
     expect(screen.getByRole("button", { name: /重新转写/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /重新生成摘要/i })).toBeInTheDocument();
+  });
+
+  it("renders manual enabled connector send buttons and confirms destination before sending", () => {
+    getMock.mockReturnValue({
+      data: {
+        ...baseData,
+        enabledSummaryTargets: [
+          { channel: "notion", label: "Notion", destination: "db-1" },
+          { channel: "zulip", label: "Zulip", destination: "meetings / 纪要" },
+        ],
+      },
+      isPending: false,
+    });
+    renderAt(baseData.stem);
+
+    fireEvent.click(screen.getByRole("button", { name: "发送到 Notion" }));
+
+    expect(confirmMock).toHaveBeenCalledWith("发送摘要到 Notion：db-1？");
+    expect(sendSummaryMutate).toHaveBeenCalledWith(
+      { stem: baseData.stem, channel: "notion" },
+      expect.anything(),
+    );
+    expect(screen.getByRole("button", { name: "发送到 Zulip" })).toBeInTheDocument();
+  });
+
+  it("does not render manual send buttons when no summary exists", () => {
+    getMock.mockReturnValue({
+      data: { ...baseData, summary: null, enabledSummaryTargets: [{ channel: "notion", label: "Notion", destination: "db-1" }] },
+      isPending: false,
+    });
+    renderAt(baseData.stem);
+
+    expect(screen.queryByRole("button", { name: "发送到 Notion" })).toBeNull();
   });
 
   it("passes a speaker-count override when re-transcribing from the reader", () => {

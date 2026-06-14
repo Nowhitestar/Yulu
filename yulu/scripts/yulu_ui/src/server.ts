@@ -19,6 +19,7 @@ import { serveStaticFile } from "./staticFile.js";
 import { homedir } from "node:os";
 import type { AppContext } from "./trpc.js";
 import { JobRegistry } from "./jobStatus.js";
+import { exchangeCodeForTokens } from "./notionMcpOAuth.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -28,28 +29,31 @@ export interface RunningServer {
   close: () => Promise<void>;
 }
 
-export async function startServer(): Promise<RunningServer> {
+type RuntimePaths = typeof paths;
+
+export async function startServer(pathOverrides: Partial<RuntimePaths> = {}): Promise<RunningServer> {
   const port = Number(process.env.YULU_UI_PORT ?? 7777);
   const host = "127.0.0.1";
   const launchAgents = join(homedir(), "Library", "LaunchAgents");
+  const runtimePaths = { ...paths, ...pathOverrides } as RuntimePaths;
 
   // Lazy DB getters so /healthz works even when the SQLite files aren't present yet
   let _prompts: ReturnType<typeof openDb> | null = null;
   let _vocab: ReturnType<typeof openDb> | null = null;
   let _search: ReturnType<typeof openDb> | null = null;
   const dbProxy: AppContext["db"] = {
-    get prompts() { return (_prompts ??= openDb(paths.promptsDb)); },
-    get vocab()   { return (_vocab ??= openDb(paths.vocabDb)); },
-    get search()  { return (_search ??= openDb(paths.searchDb)); },
+    get prompts() { return (_prompts ??= openDb(runtimePaths.promptsDb)); },
+    get vocab()   { return (_vocab ??= openDb(runtimePaths.vocabDb)); },
+    get search()  { return (_search ??= openDb(runtimePaths.searchDb)); },
   };
 
   const jobRegistry = new JobRegistry();
 
   const ctx: AppContext = {
-    config:    new ConfigManager(paths.configFile),
+    config:    new ConfigManager(runtimePaths.configFile),
     launchctl: new LaunchctlClient(launchAgents),
     pubsub:    appPubSub,
-    paths,
+    paths:     runtimePaths,
     jobs:      jobRegistry,
     db:        dbProxy,
   };
@@ -67,6 +71,19 @@ export async function startServer(): Promise<RunningServer> {
 
   app.get("/healthz", (c) => c.json({ status: "ok", uptime: process.uptime() }));
 
+  app.get("/integrations/notion/callback", async (c) => {
+    try {
+      await exchangeCodeForTokens({
+        configDir: runtimePaths.configDir,
+        callbackUrl: c.req.url,
+      });
+      return c.html("<!doctype html><html><body><h1>Notion connected</h1><p>You can close this window and return to Yulu.</p></body></html>");
+    } catch (exc) {
+      const message = (exc as Error).message;
+      return c.html(`<!doctype html><html><body><h1>Notion connection failed</h1><p>${escapeHtml(message)}</p></body></html>`, 400);
+    }
+  });
+
   app.all("/trpc/*", (c) => fetchRequestHandler({
     endpoint: "/trpc",
     req: c.req.raw,
@@ -75,7 +92,7 @@ export async function startServer(): Promise<RunningServer> {
     onError: ({ error, path }) => console.error(`[trpc] ${path}: ${error.message}`),
   }));
 
-  app.get("/files/meetings/*",   (c) => streamAudio(c.req.raw, paths.moviesDir));
+  app.get("/files/meetings/*",   (c) => streamAudio(c.req.raw, runtimePaths.moviesDir));
 
   // Looked up dynamically so tests can flip YULU_UI_DIST_WEB between cases.
   const distWebDir = () => process.env.YULU_UI_DIST_WEB ?? join(__dirname, "../dist/web");
@@ -99,17 +116,17 @@ export async function startServer(): Promise<RunningServer> {
   mountWsMultiplexer(http, appPubSub);
 
   const inboxWatcher = startInboxWatcher({
-    moviesDir: paths.moviesDir,
+    moviesDir: runtimePaths.moviesDir,
     pubsub: appPubSub,
   });
 
   const logTailer = startLogTailer({
-    configDir: paths.configDir,
+    configDir: runtimePaths.configDir,
     pubsub: appPubSub,
   });
 
   const realtimeTailer = startRealtimeTailer({
-    moviesDir: paths.moviesDir,
+    moviesDir: runtimePaths.moviesDir,
     pubsub: appPubSub,
   });
 
@@ -206,6 +223,15 @@ async function bridgeNodeToFetch(
     res.statusCode = 500;
     res.end((e as Error).message);
   }
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }
 
 // CLI entry

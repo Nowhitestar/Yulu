@@ -58,10 +58,10 @@ function renderValue(props: InlineEditRowProps, t: TFunc): React.ReactNode {
     return <DisabledValue display={displayText(props, t)} note={props.disabledNote ?? t("settings.locked.recording")} />;
   }
   switch (props.type) {
-    case "text":     return <TextValue {...props} />;
+    case "text":     return <TextValue {...props} ariaLabel={props.label} />;
     case "number":   return <NumberValue {...props} />;
     case "select":   return <SelectValue {...props} />;
-    case "toggle":   return <ToggleValue {...props} />;
+    case "toggle":   return <ToggleValue {...props} ariaLabel={props.label} />;
     case "path":     return <PathValue {...props} disabled={props.disabled} />;
     case "readonly": return <ReadonlyValue {...props} />;
   }
@@ -90,7 +90,7 @@ function DisabledValue({ display, note }: { display: string; note?: string }) {
   );
 }
 
-function TextValue({ value, onCommit, emptyLabel }: TextProps) {
+function TextValue({ value, onCommit, emptyLabel, ariaLabel }: TextProps & { ariaLabel?: string }) {
   const t = useT();
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value);
@@ -112,6 +112,7 @@ function TextValue({ value, onCommit, emptyLabel }: TextProps) {
       ref={ref}
       className="value-input"
       type="text"
+      aria-label={ariaLabel}
       value={draft}
       onChange={(e) => setDraft(e.target.value)}
       onBlur={commit}
@@ -175,11 +176,12 @@ function SelectValue({ value, options, onCommit, emptyLabel }: SelectProps) {
   );
 }
 
-function ToggleValue({ value, onCommit }: ToggleProps) {
+function ToggleValue({ value, onCommit, ariaLabel }: ToggleProps & { ariaLabel?: string }) {
   return (
     <button
       type="button"
       role="switch"
+      aria-label={ariaLabel}
       aria-checked={value}
       className={"toggle" + (value ? " on" : "")}
       onClick={() => onCommit(!value)}

@@ -65,10 +65,25 @@ describe("settingsRegistry", () => {
       expect(def?.validate.safeParse("not-an-array").success).toBe(false);
     }
   });
-  it("output 6 项改完无需动作(agent_queue_worker 每 tick 读)", () => {
-    for (const p of ["output.channel", "output.zulip.stream", "output.zulip.topic", "output.notion.database_id", "output.notion.api_key_env", "output.telegram.chat_id"]) {
+  it("output 9 项改完无需动作(agent_queue_worker 每 tick 读)", () => {
+    for (const p of [
+      "output.channel",
+      "output.notion.destination_id",
+      "output.notion.destination_type",
+      "output.notion.destination_label",
+      "output.zulip.stream_id",
+      "output.zulip.stream",
+      "output.zulip.topic",
+      "output.notion.database_id",
+      "output.notion.api_key_env",
+    ]) {
       expect(reloadFor(p)).toEqual({ kind: "none" });
     }
+  });
+  it("does not register Telegram output settings", () => {
+    expect(defFor("connectors.telegram.send_summary")).toBeUndefined();
+    expect(defFor("output.telegram.chat_id")).toBeUndefined();
+    expect(defFor("output.channel")?.validate.safeParse("telegram").success).toBe(false);
   });
   it("output.notion.api_key_env 是 env-name 类型(只填变量名,不存密钥)", () => {
     expect(defFor("output.notion.api_key_env")?.type).toBe("env-name");

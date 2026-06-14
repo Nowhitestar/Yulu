@@ -69,7 +69,7 @@ class ReleaseAsset:
     tag: str
     asset_name: str
     asset_url: str
-    checksums_url: str
+    checksums_url: str | None = None
 
 
 @dataclass(frozen=True)
@@ -115,26 +115,19 @@ def select_release_asset(release: dict) -> ReleaseAsset:
     tag = str(release.get("tag_name") or "")
     if not tag:
         raise InstallError("GitHub release response did not include tag_name")
-    expected_zip = f"yulu-macos-arm64-{tag}.zip"
+    expected_pkg = f"yulu-macos-arm64-{tag}.pkg"
     assets = release.get("assets") or []
     by_name = {str(asset.get("name")): asset for asset in assets}
-    zip_asset = by_name.get(expected_zip)
-    checksum_asset = by_name.get("checksums.txt")
-    if zip_asset is None:
-        raise InstallError(f"Release {tag} does not provide {expected_zip}. It may predate asset-based installs.")
-    if checksum_asset is None:
-        raise InstallError(f"Release {tag} does not provide checksums.txt.")
-    zip_url = str(zip_asset.get("browser_download_url") or "").strip()
-    checksums_url = str(checksum_asset.get("browser_download_url") or "").strip()
-    if not zip_url:
-        raise InstallError(f"Release {tag} asset {expected_zip} did not include a download URL.")
-    if not checksums_url:
-        raise InstallError(f"Release {tag} asset checksums.txt did not include a checksums.txt download URL.")
+    pkg_asset = by_name.get(expected_pkg)
+    if pkg_asset is None:
+        raise InstallError(f"Release {tag} does not provide {expected_pkg}. It may predate pkg-based installs.")
+    pkg_url = str(pkg_asset.get("browser_download_url") or "").strip()
+    if not pkg_url:
+        raise InstallError(f"Release {tag} asset {expected_pkg} did not include a download URL.")
     return ReleaseAsset(
         tag=tag,
-        asset_name=expected_zip,
-        asset_url=zip_url,
-        checksums_url=checksums_url,
+        asset_name=expected_pkg,
+        asset_url=pkg_url,
     )
 
 
@@ -522,17 +515,50 @@ def install_release_from_urls(
             raise
 
 
+def install_release_pkg_from_url(
+    *,
+    tag: str,
+    asset_name: str,
+    asset_url: str,
+    install_dir: Path,
+    run_setup: bool = True,
+) -> None:
+    if not sys.platform == "darwin":
+        raise InstallError("The pkg installer is macOS-only. Use --dev on non-macOS systems.")
+    install_dir.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="yulu-pkg-install-", dir=str(install_dir.parent)) as tmp:
+        pkg_path = Path(tmp) / asset_name
+        download_to_path(asset_url, pkg_path)
+        run(["installer", "-pkg", str(pkg_path), "-target", "/"])
+
+    if run_setup and not install_dir.exists():
+        raise InstallError(f"pkg install completed but {install_dir} does not exist")
+    if run_setup and install_dir.exists():
+        validate_runtime_layout(install_dir, tag)
+
+
 def install_release_target(target: ReleaseTarget, install_dir: Path, run_setup_flag: bool = True) -> None:
     payload = fetch_json(github_release_api_url(target))
     asset = resolve_release_from_payload(payload)
-    install_release_from_urls(
-        tag=asset.tag,
-        asset_name=asset.asset_name,
-        asset_url=asset.asset_url,
-        checksums_url=asset.checksums_url,
-        install_dir=install_dir,
-        run_setup=run_setup_flag,
-    )
+    if asset.asset_name.endswith(".pkg"):
+        install_release_pkg_from_url(
+            tag=asset.tag,
+            asset_name=asset.asset_name,
+            asset_url=asset.asset_url,
+            install_dir=install_dir,
+            run_setup=run_setup_flag,
+        )
+    else:
+        if not asset.checksums_url:
+            raise InstallError(f"Release {asset.tag} asset {asset.asset_name} is missing checksums.txt")
+        install_release_from_urls(
+            tag=asset.tag,
+            asset_name=asset.asset_name,
+            asset_url=asset.asset_url,
+            checksums_url=asset.checksums_url,
+            install_dir=install_dir,
+            run_setup=run_setup_flag,
+        )
 
 
 def build_main_parser() -> argparse.ArgumentParser:

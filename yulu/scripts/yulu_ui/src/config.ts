@@ -12,6 +12,46 @@ const CalendarSchema = z.object({
   watch_calendars: z.array(z.string()).optional(),
 });
 
+const ConnectorsSchema = z.object({
+  gog: z.object({
+    read_calendar: z.boolean().default(false),
+  }).passthrough().default({}),
+  feishu: z.object({
+    read_calendar: z.boolean().default(false),
+    app_id_env: z.string().default("FEISHU_APP_ID"),
+    app_secret_env: z.string().default("FEISHU_APP_SECRET"),
+  }).passthrough().default({}),
+  notion: z.object({
+    send_summary: z.boolean().default(false),
+    database_id: z.string().default(""),
+    api_key_env: z.string().default("NOTION_API_KEY"),
+  }).passthrough().default({}),
+  zulip: z.object({
+    send_summary: z.boolean().default(false),
+    stream: z.string().default("meetings"),
+    topic: z.string().default("会议纪要"),
+  }).passthrough().default({}),
+}).passthrough().default({});
+
+const OutputSchema = z.object({
+  // Keep legacy "telegram" readable so older config.json files do not break the UI.
+  // New writes are blocked by settingsRegistry and the visible settings UI.
+  channel: z.enum(["file", "zulip", "notion", "telegram"]).default("file"),
+  notion: z.object({
+    destination_id: z.string().default(""),
+    destination_type: z.string().default("database"),
+    destination_label: z.string().default(""),
+    database_id: z.string().default(""),
+    api_key_env: z.string().default("NOTION_API_KEY"),
+  }).passthrough().default({}),
+  zulip: z.object({
+    stream_id: z.string().default(""),
+    stream: z.string().default("meetings"),
+    topic: z.string().default("会议纪要"),
+    zuliprc: z.string().default("~/.zuliprc"),
+  }).passthrough().default({}),
+}).passthrough().default({});
+
 const DEFAULT_MLX_MODEL = "mlx-community/whisper-large-v3-mlx";
 const DEFAULT_REALTIME_MLX_MODEL = "mlx-community/whisper-large-v3-turbo";
 
@@ -62,6 +102,8 @@ export const ConfigSchema = z.object({
     enabled: z.boolean().default(true),
   }).default({}),
   calendars: z.array(CalendarSchema).default([]),
+  connectors: ConnectorsSchema,
+  output: OutputSchema,
 }).passthrough();
 
 export type YuluConfig = z.infer<typeof ConfigSchema>;

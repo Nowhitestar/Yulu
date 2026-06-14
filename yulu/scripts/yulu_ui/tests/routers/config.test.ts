@@ -49,6 +49,9 @@ describe("configRouter", () => {
       expect(cfg.transcription.mlx.model).toBe("mlx-community/whisper-large-v3-mlx");
       expect(cfg.transcription.realtime.mlx_model).toBe("mlx-community/whisper-large-v3-turbo");
       expect(cfg.transcription.diarization.provider).toBe("sherpa-onnx");
+      expect(cfg.connectors.notion.send_summary).toBe(false);
+      expect(cfg.connectors.zulip.send_summary).toBe(false);
+      expect(cfg.connectors.feishu.read_calendar).toBe(false);
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 
@@ -67,6 +70,26 @@ describe("configRouter", () => {
       const caller = createCaller(configRouter, ctx);
       const r = await caller.update({ key: "transcription.realtime_enabled", value: false });
       expect(r.daemonsNeedingRestart).toEqual([]);
+      expect(r.daemonsNeedingSighup).toEqual([]);
+    } finally { cleanup(); }
+  });
+
+  it("update(connectors.notion.send_summary) needs no daemon restart", async () => {
+    const { ctx, cleanup } = makeCtx();
+    try {
+      const caller = createCaller(configRouter, ctx);
+      const r = await caller.update({ key: "connectors.notion.send_summary", value: true });
+      expect(r.daemonsNeedingRestart).toEqual([]);
+      expect(r.daemonsNeedingSighup).toEqual([]);
+    } finally { cleanup(); }
+  });
+
+  it("update(connectors.feishu.read_calendar) restarts calendar scheduler services", async () => {
+    const { ctx, cleanup } = makeCtx();
+    try {
+      const caller = createCaller(configRouter, ctx);
+      const r = await caller.update({ key: "connectors.feishu.read_calendar", value: true });
+      expect(r.daemonsNeedingRestart).toEqual(["calendar", "scheduler"]);
       expect(r.daemonsNeedingSighup).toEqual([]);
     } finally { cleanup(); }
   });

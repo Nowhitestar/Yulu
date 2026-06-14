@@ -29,6 +29,7 @@ from yulu_platform.base import DependencyManager
 # The package manager binary this seam wraps. Confined to this module body.
 _BREW = "brew"
 _NOT_AVAILABLE_MSG = "Homebrew not available; cannot install dependencies"
+_BREW_DETECT_TIMEOUT_SECONDS = 5
 
 
 class MacOSDependencyManager(DependencyManager):
@@ -39,13 +40,15 @@ class MacOSDependencyManager(DependencyManager):
             raise RuntimeError("MacOSDependencyManager requires macOS")
 
     def is_available(self, name: str) -> bool:
-        """True if ``name`` is installed (``brew list`` or on PATH); False otherwise.
+        """True if ``name`` is installed (on PATH or ``brew list``); False otherwise.
 
-        Tries ``brew list <name>`` first, then falls back to ``shutil.which`` for
-        plain binaries. When brew is absent the fallback still answers — and if
-        neither path finds it, returns ``False`` rather than raising (threat T-02-07:
-        no raw brew stderr surfaced).
+        Checks ``shutil.which`` first for plain binaries. Only if PATH misses does
+        it try ``brew list <name>`` with a short timeout. If neither path finds it,
+        returns ``False`` rather than raising (threat T-02-07: no raw brew stderr
+        surfaced).
         """
+        if shutil.which(name):
+            return True
         if shutil.which(_BREW):
             try:
                 result = subprocess.run(
@@ -53,14 +56,15 @@ class MacOSDependencyManager(DependencyManager):
                     capture_output=True,
                     text=True,
                     check=False,
+                    timeout=_BREW_DETECT_TIMEOUT_SECONDS,
                 )
-            except OSError:
+            except (OSError, subprocess.TimeoutExpired):
                 result = None
             if result is not None and result.returncode == 0:
                 return True
         # Fallback: a brew-managed formula often also exposes a same-named binary,
         # and some deps are plain binaries not tracked by brew.
-        return shutil.which(name) is not None
+        return False
 
     def install(self, name: str) -> None:
         """``brew install <name>`` (list-form). Raises if Homebrew is absent.

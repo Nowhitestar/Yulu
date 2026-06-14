@@ -32,6 +32,36 @@ def test_collect_report_identifies_source_runtime_and_legacy_paths():
     assert any(check["name"] == "python3" for check in report["checks"])
 
 
+def test_collect_report_does_not_run_swiftc_version(tmp_path, monkeypatch):
+    doctor = load_doctor()
+    calls = []
+
+    def fake_check_command(name, args=None):
+        calls.append((name, args))
+        return {"name": name, "ok": True, "path": f"/usr/bin/{name}"}
+
+    monkeypatch.setattr(doctor, "_yulu_processes", lambda: [])
+    monkeypatch.setattr(doctor, "_git_info", lambda root: {"is_repo": True})
+    monkeypatch.setattr(doctor, "_install_info", lambda root: {"present": False})
+    monkeypatch.setattr(doctor, "_check_command", fake_check_command)
+    monkeypatch.setattr(doctor, "_socket_status", lambda path: {"exists": False})
+    monkeypatch.setattr(doctor, "check_stt_daemon", lambda config_dir: {"ok": False})
+    monkeypatch.setattr(doctor, "check_search_index", lambda config_dir: {"ok": False})
+    monkeypatch.setattr(doctor, "check_yulu_ui", lambda script_dir, config_dir: {"ok": False})
+    monkeypatch.setattr(doctor, "_host_capabilities", lambda config_dir, runtime_root: {"schema_version": 1, "capabilities": {}})
+    monkeypatch.setattr(doctor, "_connector_capabilities", lambda config_dir, runtime_root: {"schema_version": 1, "connectors": {}})
+
+    doctor.collect_report(
+        source_root=ROOT,
+        runtime_root=tmp_path,
+        legacy_root=tmp_path / "missing-legacy",
+        config_dir=tmp_path / "cfg",
+    )
+
+    assert ("swiftc", None) in calls
+    assert all(not (name == "swiftc" and args) for name, args in calls)
+
+
 def test_main_prints_json_report(capsys):
     doctor = load_doctor()
 

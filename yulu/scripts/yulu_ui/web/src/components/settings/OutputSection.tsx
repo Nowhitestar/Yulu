@@ -13,7 +13,6 @@ const CHANNELS = [
   { value: "file", label: "file" },
   { value: "zulip", label: "zulip" },
   { value: "notion", label: "notion" },
-  { value: "telegram", label: "telegram" },
 ] as const;
 
 /**
@@ -89,7 +88,7 @@ function EnvNameInput({ value, onCommit }: { value: string; onCommit: (v: string
 
 /**
  * OutputSection — where a finished summary is delivered (P2-4). The channel
- * selector picks file / zulip / notion / telegram; the matching channel's fields
+ * selector picks file / zulip / notion; the matching channel's fields
  * appear below. All fields are reload:none (agent_queue_worker re-reads each
  * tick). Secrets are NEVER held here — Notion's API key is referenced by env-var
  * NAME only (see EnvNameRow).
@@ -105,12 +104,10 @@ export function OutputSection({ tracker }: OutputSectionProps) {
     channel?: "file" | "zulip" | "notion" | "telegram";
     zulip?: { stream?: string; topic?: string };
     notion?: { database_id?: string; api_key_env?: string };
-    telegram?: { chat_id?: string };
   };
-  const channel = output.channel ?? "file";
+  const channel = output.channel === "telegram" ? "file" : (output.channel ?? "file");
   const zulip = output.zulip ?? {};
   const notion = output.notion ?? {};
-  const telegram = output.telegram ?? {};
 
   return (
     <section id="output" className="settings-section">
@@ -184,15 +181,6 @@ export function OutputSection({ tracker }: OutputSectionProps) {
         </>
       )}
 
-      {channel === "telegram" && (
-        <InlineEditRow
-          label={t("settings.output.telegram.chatId")}
-          type="text"
-          value={telegram.chat_id ?? ""}
-          onCommit={commit("output.telegram.chat_id") as (v: string) => void}
-          status={tracker.statusFor("output.telegram.chat_id")}
-        />
-      )}
     </section>
   );
 }

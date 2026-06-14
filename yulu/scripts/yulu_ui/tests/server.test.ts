@@ -1,11 +1,12 @@
 import { describe, it, expect, afterAll, beforeAll } from "vitest";
-import { mkdtempSync, mkdirSync, cpSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, cpSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { request as httpRequest } from "node:http";
 import Database from "better-sqlite3";
 import { startServer, type RunningServer } from "../src/server.js";
+import { notionMcpPendingPath, notionMcpTokenPath } from "../src/notionMcpOAuth.js";
 
 function rawHttp(port: number, path: string, hostHeader: string): Promise<{ status: number; body: string }> {
   return new Promise((resolve, reject) => {
@@ -39,7 +40,15 @@ beforeAll(async () => {
   mkdirSync(moviesDir, { recursive: true });
   process.env.HOME = root;
   process.env.YULU_UI_PORT = "0";
-  const server = await startServer();
+  const server = await startServer({
+    configDir,
+    configFile: join(configDir, "config.json"),
+    promptsDb: join(configDir, "prompts.sqlite"),
+    vocabDb: join(configDir, "vocab.sqlite"),
+    searchDb: join(configDir, "search.sqlite"),
+    moviesDir,
+    agentQueueJson: join(configDir, "agent-queue.json"),
+  });
   const port = server.address.port;
   const baseUrl = `http://127.0.0.1:${port}`;
   env = { root, cleanup: () => rmSync(root, { recursive: true, force: true }), server, baseUrl };
@@ -112,6 +121,37 @@ describe("server", () => {
       expect(r.status, `path ${p}`).toBe(200);
       expect(r.headers.get("content-type")).toMatch(/text\/html/);
       expect(await r.text()).toContain("SPA");
+    }
+  });
+
+  it("handles Notion MCP OAuth callback without exposing token values", async () => {
+    const configDir = join(env.root, ".config", "yulu");
+    writeFileSync(notionMcpPendingPath(configDir), JSON.stringify({
+      state: "state-123",
+      codeVerifier: "verifier",
+      clientId: "client",
+      redirectUri: `${env.baseUrl}/integrations/notion/callback`,
+      tokenEndpoint: "https://auth.notion.test/token",
+      authorizationEndpoint: "https://auth.notion.test/authorize",
+      createdAt: Date.now(),
+      expiresAt: Date.now() + 60_000,
+    }));
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ access_token: "access-secret", refresh_token: "refresh-secret", token_type: "Bearer" }),
+      text: async () => "",
+    })) as unknown as typeof fetch;
+    try {
+      const r = await rawHttp(env.server.address.port, "/integrations/notion/callback?code=abc&state=state-123", `127.0.0.1:${env.server.address.port}`);
+
+      expect(r.status, r.body).toBe(200);
+      expect(r.body).toContain("Notion connected");
+      expect(r.body).not.toContain("access-secret");
+      expect(existsSync(notionMcpTokenPath(configDir))).toBe(true);
+    } finally {
+      globalThis.fetch = originalFetch;
     }
   });
 });

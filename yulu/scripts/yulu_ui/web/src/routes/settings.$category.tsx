@@ -14,7 +14,6 @@ import { TranscriptionSection } from "../components/settings/TranscriptionSectio
 import { LlmSection } from "../components/settings/LlmSection.js";
 import { AutomationSection } from "../components/settings/AutomationSection.js";
 import { IntegrationsSection } from "../components/settings/IntegrationsSection.js";
-import { OutputSection } from "../components/settings/OutputSection.js";
 import { AdvancedSection } from "../components/settings/AdvancedSection.js";
 
 /**
@@ -43,20 +42,15 @@ const CATEGORY_SECTIONS: Record<string, (tracker: SettingsRestartTracker) => Rea
   transcription: (tracker) => <TranscriptionSection tracker={tracker} />,
   llm: (tracker) => <LlmSection tracker={tracker} />,
   automation: (tracker) => <AutomationSection tracker={tracker} />,
-  integrations: (tracker) => (
-    <>
-      <IntegrationsSection tracker={tracker} />
-      <OutputSection tracker={tracker} />
-    </>
-  ),
+  integrations: (tracker) => <IntegrationsSection tracker={tracker} />,
   advanced: (tracker) => <AdvancedSection tracker={tracker} />,
 };
 
 /**
  * SettingsCategory — the detail pane of the settings MasterDetail. Reads the
- * `:category` route param, renders that category's heading, then its re-homed
- * section(s). Shares the restart tracker via Outlet context so restart-class
- * edits surface in the layout's RestartBanner.
+ * `:category` route param, then renders that category's re-homed section(s).
+ * The sections own their headings, so desktop and mobile do not show duplicated
+ * "detail title + section title" labels.
  */
 export function SettingsCategory() {
   const { category } = useParams();
@@ -76,10 +70,6 @@ export function SettingsCategory() {
 
   return (
     <div className="settings-detail">
-      <div className="settings-detail-head">
-        <h1 className="settings-detail-title">{t(meta.labelKey)}</h1>
-        <p className="settings-detail-sub">{t(meta.descKey)}</p>
-      </div>
       {renderSections ? (
         renderSections(tracker)
       ) : (
