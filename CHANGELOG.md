@@ -4,6 +4,13 @@ All notable changes to Yulu are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.11.0](https://github.com/Nowhitestar/Yulu/compare/v0.10.7...v0.11.0) (2026-06-14)
+
+
+### Features
+
+* add AI connector integrations ([f200a37](https://github.com/Nowhitestar/Yulu/commit/f200a37e59d09b22f1c91d205ad53baa94f6144d))
+
 ## [0.10.7](https://github.com/Nowhitestar/Yulu/compare/v0.10.6...v0.10.7) (2026-06-13)
 
 
