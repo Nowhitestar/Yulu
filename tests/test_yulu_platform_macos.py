@@ -277,6 +277,52 @@ def test_dependency_manager_conformance():
     assert isinstance(result, bool)  # absent formula → False, never an exception
 
 
+def test_dependency_manager_is_available_brew_timeout_falls_back(monkeypatch):
+    """A slow Homebrew read must not hang doctor.py; fall back to PATH lookup."""
+    from yulu_platform.macos import dependency_manager as dm
+
+    calls = []
+
+    def fake_which(name):
+        return "/opt/homebrew/bin/brew" if name == dm._BREW else None
+
+    def fake_run(cmd, **kwargs):
+        calls.append((cmd, kwargs))
+        raise dm.subprocess.TimeoutExpired(cmd, kwargs["timeout"])
+
+    monkeypatch.setattr(dm.shutil, "which", fake_which)
+    monkeypatch.setattr(dm.subprocess, "run", fake_run)
+
+    assert dm.MacOSDependencyManager().is_available("swiftc") is False
+    assert calls == [
+        (
+            [dm._BREW, "list", "swiftc"],
+            {
+                "capture_output": True,
+                "text": True,
+                "check": False,
+                "timeout": dm._BREW_DETECT_TIMEOUT_SECONDS,
+            },
+        )
+    ]
+
+
+def test_dependency_manager_is_available_path_hit_skips_brew(monkeypatch):
+    """PATH-visible tools should not pay a Homebrew probe."""
+    from yulu_platform.macos import dependency_manager as dm
+
+    def fake_which(name):
+        return f"/usr/bin/{name}" if name == "swiftc" else "/opt/homebrew/bin/brew"
+
+    def fail_run(*args, **kwargs):
+        raise AssertionError("brew list should not run when PATH already finds the tool")
+
+    monkeypatch.setattr(dm.shutil, "which", fake_which)
+    monkeypatch.setattr(dm.subprocess, "run", fail_run)
+
+    assert dm.MacOSDependencyManager().is_available("swiftc") is True
+
+
 # --- Task 2: read-side callers route through the seams (source-static gate) ---
 # These assertions run on every OS (not Darwin-gated) — they read the caller
 # source text and prove the inline TCC/brew coupling has moved behind the seam,

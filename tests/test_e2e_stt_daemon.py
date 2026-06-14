@@ -10,6 +10,7 @@ Requires:
 import asyncio
 import importlib
 import json
+import os
 import sys
 import tempfile
 import uuid
@@ -25,6 +26,7 @@ FIXTURE = ROOT / "tests" / "fixtures" / "audio" / "tiny_10s.wav"
 
 
 pytestmark = pytest.mark.e2e
+RUN_E2E = os.environ.get("YULU_RUN_E2E") == "1"
 
 
 def _mlx_available() -> bool:
@@ -35,7 +37,8 @@ def _mlx_available() -> bool:
         return False
 
 
-@pytest.mark.skipif(not _mlx_available(), reason="mlx_whisper not installed")
+@pytest.mark.skipif(not RUN_E2E, reason="set YULU_RUN_E2E=1 to run real MLX e2e tests")
+@pytest.mark.skipif(RUN_E2E and not _mlx_available(), reason="mlx_whisper not installed")
 @pytest.mark.skipif(not FIXTURE.exists(), reason="fixture audio missing — add tests/fixtures/audio/tiny_10s.wav")
 def test_real_mlx_round_trip(tmp_path):
     from vocab import VocabRepo, Scope, open_db

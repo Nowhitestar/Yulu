@@ -405,7 +405,7 @@ def collect_report(
         _check_command("python3", ["--version"]),
         _check_command("ffmpeg", ["-version"]),
         _check_command("ffprobe", ["-version"]),
-        _check_command("swiftc", ["--version"]),
+        _check_command("swiftc"),
         _check_command("codex", ["--version"]),
         _check_command("gh", ["--version"]),
     ]
