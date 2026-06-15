@@ -2,6 +2,10 @@
 
 PYTHON ?= python3
 SWIFT_BUILD_DIR ?= .ci-build
+YULU_TEST_TMP_ROOT ?= $(shell if [ -d /private/tmp ]; then echo /private/tmp; else echo /tmp; fi)
+YULU_TEST_HOME ?= $(YULU_TEST_TMP_ROOT)/yulu-test-home
+YULU_TEST_TMPDIR ?= $(YULU_TEST_TMP_ROOT)/yulu-pytest-tmp
+YULU_TEST_SOCKET_DIR ?= $(YULU_TEST_TMP_ROOT)/yulu-test-sockets
 
 PY_FILES := $(wildcard yulu/scripts/*.py)
 SWIFT_FILES := yulu/scripts/audio_daemon.swift yulu/scripts/window_scanner.swift yulu/scripts/recorder_status.swift
@@ -24,7 +28,8 @@ py-compile:
 
 
 pytest:
-	$(PYTHON) -m pytest tests -q
+	@mkdir -p "$(YULU_TEST_HOME)" "$(YULU_TEST_TMPDIR)" "$(YULU_TEST_SOCKET_DIR)"
+	HOME="$(YULU_TEST_HOME)" TMPDIR="$(YULU_TEST_TMPDIR)" YULU_TEST_SOCKET_DIR="$(YULU_TEST_SOCKET_DIR)" $(PYTHON) -m pytest tests -q
 
 
 swift-build:

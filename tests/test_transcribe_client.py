@@ -1,7 +1,6 @@
 import asyncio
 import json
 import sys
-import tempfile
 import threading
 import time
 import uuid
@@ -18,13 +17,14 @@ from stt_daemon.app import STTDaemonApp
 from stt_daemon.config import DaemonConfig
 from stt_daemon.runtime import MockSTTBackend
 from transcribe_client import transcribe_file, DaemonUnavailable
+from socket_helpers import short_socket_dir
 
 
 def _spawn_cfg(tmp_path, text="ok output"):
     """Build a DaemonConfig + backends; AF_UNIX-safe socket path."""
     db = tmp_path / "vocab.sqlite"
     VocabRepo(open_db(db))
-    sock_dir = Path(tempfile.mkdtemp(dir="/tmp"))
+    sock_dir = short_socket_dir()
     cfg = DaemonConfig(
         socket_path=sock_dir / "stt.sock",
         vocab_db_path=db,
@@ -93,7 +93,7 @@ def test_transcribe_file_daemon_unavailable(tmp_path):
     audio = tmp_path / "x.wav"
     audio.write_bytes(b"R")
     # Use /tmp to stay within AF_UNIX 104-byte path limit on macOS.
-    missing_sock = Path(tempfile.mkdtemp(dir="/tmp")) / "missing.sock"
+    missing_sock = short_socket_dir(require_bind=False) / "missing.sock"
     with pytest.raises(DaemonUnavailable):
         transcribe_file(
             audio_path=str(audio),

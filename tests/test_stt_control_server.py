@@ -1,7 +1,6 @@
 import asyncio
 import json
 import sys
-import tempfile
 import uuid
 from pathlib import Path
 
@@ -13,11 +12,12 @@ from vocab import VocabRepo, Scope, open_db
 from stt_daemon.app import STTDaemonApp
 from stt_daemon.config import DaemonConfig
 from stt_daemon.runtime import MockSTTBackend
+from socket_helpers import short_socket_dir
 
 
 def _short_sock_dir():
     """Return a short socket dir under /tmp to stay within macOS AF_UNIX 104-char limit."""
-    return Path(tempfile.mkdtemp(dir="/tmp"))
+    return short_socket_dir()
 
 
 def _build_app(tmp_path):
