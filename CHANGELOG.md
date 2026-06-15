@@ -4,6 +4,15 @@ All notable changes to Yulu are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.11.3](https://github.com/Nowhitestar/Yulu/compare/v0.11.2...v0.11.3) (2026-06-15)
+
+
+### Bug Fixes
+
+* harden dual-track post processing ([6df4d62](https://github.com/Nowhitestar/Yulu/commit/6df4d628e65e7b1c73d61ea7f1e7303a75d59ae3))
+* play original recording audio by default ([d549fd8](https://github.com/Nowhitestar/Yulu/commit/d549fd8be221085ea22efd0e1547a34f369b5c1d))
+* suppress delayed dual-track playback echo ([5747b3c](https://github.com/Nowhitestar/Yulu/commit/5747b3ca5e7e0f7974d351b06a3ab4847409f80e))
+
 ## [0.11.2](https://github.com/Nowhitestar/Yulu/compare/v0.11.1...v0.11.2) (2026-06-15)
 
 
