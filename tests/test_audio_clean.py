@@ -41,9 +41,8 @@ def test_clean_dual_track_keeps_boosted_mic_in_playback_mix(tmp_path):
     assert len(samples) == len(active) + len(silent)
     assert max(samples[:4800]) <= 4100
     assert max(samples[:4800]) >= 3700
-    # Keep a small mic bed even while system audio is active, then let mic-only
-    # sections come through at an audible boosted level.
-    assert samples[4800] >= 2500
+    # Let mic-only sections come through at an audible boosted level once
+    # system playback is no longer active.
     assert max(samples[-4800:]) >= 11000
 
 
@@ -58,20 +57,20 @@ def test_clean_dual_track_suppresses_mic_leak_when_system_audio_is_active(tmp_pa
     clean_dual_track_to_mono(wav, out)
 
     samples = _read_mono(out)
-    assert max(samples) <= 4000
+    assert max(samples) <= 3770
 
 
-def test_clean_dual_track_keeps_local_overlap_when_mic_is_dominant(tmp_path):
+def test_clean_dual_track_prefers_no_echo_over_local_overlap(tmp_path):
     wav = tmp_path / "Meeting_20260609_120000.wav"
     out = tmp_path / "Meeting_20260609_120000.clean.wav"
-    # A much stronger mic frame during system audio is likely local speech
-    # overlapping the remote speaker, so keep some mic contribution.
+    # While system audio is active, even a loud mic track may be speaker leak
+    # from playback. Favor no echo over preserving overlapping local speech.
     _write_dual_track(wav, [(9000, 4000)] * 4800)
 
     clean_dual_track_to_mono(wav, out)
 
     samples = _read_mono(out)
-    assert max(samples) >= 6500
+    assert max(samples) <= 3770
 
 
 def test_select_transcription_audio_generates_clean_file_for_dual_track(tmp_path):

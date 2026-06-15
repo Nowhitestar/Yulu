@@ -28,6 +28,21 @@ class _FakeBackend:
         return STTResult(text=f"chunk{n}", segments=[{"start": 0.0, "end": 1.0, "text": f"chunk{n}"}])
 
 
+class _InspectBackend(_FakeBackend):
+    def __init__(self):
+        super().__init__()
+        self.durations: list[float] = []
+
+    def transcribe(self, *, audio_path: str, language: str, initial_prompt: str = "") -> STTResult:
+        self.calls.append((audio_path, initial_prompt))
+        with wave.open(audio_path, "rb") as w:
+            self.durations.append(w.getnframes() / w.getframerate())
+        return STTResult(
+            text="voice",
+            segments=[{"start_ms": 0, "end_ms": 500, "text": "voice"}],
+        )
+
+
 def _write_mono(path: Path):
     with wave.open(str(path), "wb") as w:
         w.setnchannels(1); w.setsampwidth(2); w.setframerate(48000)
@@ -194,6 +209,29 @@ def _write_dual_track_one_silent_channel(path: Path, silent: str):
     path.write_bytes(bytes(body))
 
 
+def _write_dual_track_noise_then_voice(
+    path: Path,
+    *,
+    noise_frames: int,
+    voice_frames: int,
+    sample_rate: int = 1000,
+):
+    pcm = bytearray()
+    for _ in range(noise_frames):
+        noise = (300).to_bytes(2, "little", signed=True)
+        pcm += noise + noise
+    for _ in range(voice_frames):
+        voice = (4000).to_bytes(2, "little", signed=True)
+        pcm += voice + voice
+    body = bytearray()
+    body += b"RIFF" + struct.pack("<I", 0) + b"WAVE"
+    body += b"fmt " + struct.pack("<I", 16) + struct.pack("<HHIIHH", 1, 2, sample_rate, sample_rate * 4, 4, 16)
+    body += b"LIST" + struct.pack("<I", 30) + b"INFO" + b"ICMT" + struct.pack("<I", 18) + b"Yulu DualTrack v1\x00"
+    body += b"data" + struct.pack("<I", len(pcm)) + pcm
+    body[4:8] = struct.pack("<I", len(body) - 8)
+    path.write_bytes(bytes(body))
+
+
 def test_dispatch_skips_silent_channel(tmp_path):
     p = tmp_path / "memo.wav"
     _write_dual_track_one_silent_channel(p, silent="R")
@@ -210,3 +248,34 @@ def test_dispatch_skips_silent_channel(tmp_path):
     assert "text" not in resp.channels["sys"] or resp.channels["sys"]["text"] == ""
     # Only mic was dispatched
     assert len(backend.calls) == 1
+
+
+def test_dispatch_trims_leading_low_noise_and_restores_offsets(tmp_path):
+    p = tmp_path / "trim.wav"
+    _write_dual_track_noise_then_voice(p, noise_frames=1000, voice_frames=1000)
+    backend = _InspectBackend()
+
+    resp = dispatch_transcribe(
+        wav_path=p, channel_split=True, backend=backend,
+        language="zh", initial_prompt="",
+    )
+
+    assert len(backend.calls) == 2
+    assert all(1.0 <= duration <= 1.4 for duration in backend.durations)
+    assert resp.channels["mic"]["segments"][0]["start_ms"] == 700
+    assert resp.channels["sys"]["segments"][0]["start_ms"] == 700
+
+
+def test_dispatch_skips_low_noise_only_channels(tmp_path):
+    p = tmp_path / "noise.wav"
+    _write_dual_track_noise_then_voice(p, noise_frames=2000, voice_frames=0)
+    backend = _FakeBackend()
+
+    resp = dispatch_transcribe(
+        wav_path=p, channel_split=True, backend=backend,
+        language="zh", initial_prompt="",
+    )
+
+    assert resp.channels["mic"].get("skipped_silent") is True
+    assert resp.channels["sys"].get("skipped_silent") is True
+    assert backend.calls == []

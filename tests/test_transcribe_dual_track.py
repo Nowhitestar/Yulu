@@ -85,6 +85,106 @@ def test_dual_track_writes_three_transcripts_and_enqueues_two(isolated_paths, tm
     assert slugs == ["summary", "transcript-cleanup"]
 
 
+def test_dual_track_uses_original_file_for_channel_split_transcribe(isolated_paths, tmp_path, monkeypatch):
+    queue, prompts = isolated_paths
+    wav = tmp_path / "TestMeeting_20260522_120000.wav"
+    _write_dual_track(wav)
+    seen_paths: list[Path] = []
+
+    monkeypatch.setattr(transcribe, "load_config", lambda: {"transcription": {"language": "zh"}})
+
+    def fake_request(audio_path, trans_cfg, meeting_title):
+        seen_paths.append(audio_path)
+        return {
+            "status": "ok",
+            "layout": "dual_track",
+            "channels": {
+                "mic": {"text": "你好", "segments": [{"start": 0.0, "end": 1.0, "text": "你好"}]},
+                "sys": {"text": "hi", "segments": [{"start": 0.5, "end": 1.5, "text": "hi"}]},
+            },
+        }
+
+    with patch.object(transcribe, "_request_final_transcribe", side_effect=fake_request):
+        transcribe.process_audio(str(wav))
+
+    assert wav.with_suffix(".clean.wav").exists()
+    assert seen_paths == [wav]
+
+
+def test_dual_track_filters_obvious_non_meeting_hallucination(isolated_paths, tmp_path, monkeypatch):
+    queue, prompts = isolated_paths
+    wav = tmp_path / "TestMeeting_20260522_120000.wav"
+    _write_dual_track(wav)
+
+    monkeypatch.setattr(transcribe, "load_config", lambda: {"transcription": {"language": "zh", "echo_cancel_dual_track": False}})
+
+    fake_response = {
+        "status": "ok",
+        "layout": "dual_track",
+        "channels": {
+            "mic": {
+                "text": "请不吝点赞 订阅 转发 打赏支持明镜与点点栏目Can you hear me, Danny?Can you hear me, Danny?你好",
+                "segments": [
+                    {"start": 0.0, "end": 1.0, "text": "请不吝点赞 订阅 转发 打赏支持明镜与点点栏目"},
+                    {"start": 1.0, "end": 2.0, "text": "Can you hear me, Danny?"},
+                    {"start": 4.0, "end": 5.0, "text": "Can you hear me, Danny?"},
+                    {"start": 6.0, "end": 7.0, "text": "ぜひぜひぜひぜぜぜぜぜぜぜぜぜぜぜぜぜぜぜ"},
+                    {"start": 7.0, "end": 8.0, "text": "你好"},
+                ],
+            },
+            "sys": {"text": "", "segments": []},
+        },
+    }
+    with patch.object(transcribe, "_request_final_transcribe_raw", return_value=fake_response):
+        transcribe.process_audio(str(wav))
+
+    raw = wav.with_suffix(".raw.transcript.txt").read_text(encoding="utf-8")
+    mic = wav.with_suffix(".mic.transcript.txt").read_text(encoding="utf-8")
+    assert "请不吝点赞" not in raw
+    assert "请不吝点赞" not in mic
+    assert "ぜひ" not in raw
+    assert raw.count("Can you hear me, Danny?") == 1
+    assert "[00:07 我] 你好" in raw
+    assert mic == "Can you hear me, Danny? 你好"
+
+
+def test_dual_track_suppresses_overlapping_mic_speaker_leakage(isolated_paths, tmp_path, monkeypatch):
+    queue, prompts = isolated_paths
+    wav = tmp_path / "TestMeeting_20260522_120000.wav"
+    _write_dual_track(wav)
+
+    monkeypatch.setattr(transcribe, "load_config", lambda: {"transcription": {"language": "zh", "echo_cancel_dual_track": False}})
+
+    fake_response = {
+        "status": "ok",
+        "layout": "dual_track",
+        "channels": {
+            "mic": {
+                "text": "介绍一下我们公司Lattice Trading 你是在新加坡吗",
+                "segments": [
+                    {"start": 0.0, "end": 2.0, "text": "介绍一下我们公司Lattice Trading"},
+                    {"start": 3.0, "end": 4.0, "text": "你是在新加坡吗"},
+                ],
+            },
+            "sys": {
+                "text": "介绍一下我们公司Lattice Trading",
+                "segments": [
+                    {"start": 0.2, "end": 2.1, "text": "介绍一下我们公司Lattice Trading"},
+                ],
+            },
+        },
+    }
+    with patch.object(transcribe, "_request_final_transcribe_raw", return_value=fake_response):
+        transcribe.process_audio(str(wav))
+
+    raw = wav.with_suffix(".raw.transcript.txt").read_text(encoding="utf-8")
+    mic = wav.with_suffix(".mic.transcript.txt").read_text(encoding="utf-8")
+    assert "[00:00 我] 介绍一下我们公司Lattice Trading" not in raw
+    assert "[00:00 对方] 介绍一下我们公司Lattice Trading" in raw
+    assert "[00:03 我] 你是在新加坡吗" in raw
+    assert mic == "你是在新加坡吗"
+
+
 def test_legacy_mono_falls_back_to_single_transcript(isolated_paths, tmp_path, monkeypatch):
     queue, prompts = isolated_paths
     wav = tmp_path / "OldMono_20260101_120000.wav"

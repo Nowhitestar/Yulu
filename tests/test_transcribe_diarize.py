@@ -24,7 +24,6 @@ if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
 import transcribe  # noqa: E402
-import queue_store  # noqa: E402
 from stt_daemon import speaker_merge as sm  # noqa: E402
 from stt_daemon import diarize_pipeline as dp  # noqa: E402
 
@@ -37,6 +36,17 @@ def _write_mono(path: Path):
         w.writeframes(b"\x00\x00" * 100)
 
 
+def _write_dual_track(path: Path):
+    pcm = b"\x00\x00\x00\x00" * 100
+    body = bytearray()
+    body += b"RIFF" + struct.pack("<I", 0) + b"WAVE"
+    body += b"fmt " + struct.pack("<I", 16) + struct.pack("<HHIIHH", 1, 2, 48000, 192000, 4, 16)
+    body += b"LIST" + struct.pack("<I", 30) + b"INFO" + b"ICMT" + struct.pack("<I", 18) + b"Yulu DualTrack v1\x00"
+    body += b"data" + struct.pack("<I", len(pcm)) + pcm
+    body[4:8] = struct.pack("<I", len(body) - 8)
+    path.write_bytes(bytes(body))
+
+
 @pytest.fixture
 def env(tmp_path, monkeypatch):
     """Isolated config / queue / prompts; diarize-friendly mono recording."""
@@ -47,8 +57,6 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setattr(transcribe, "CONFIG_PATH", fake_home / "config.json")
     monkeypatch.setattr(transcribe, "AGENT_QUEUE_PATH", queue, raising=False)
     monkeypatch.setattr(transcribe, "PROMPTS_DB", prompts, raising=False)
-    monkeypatch.setattr(queue_store, "QUEUE_PATH", queue, raising=False)
-    monkeypatch.setattr(queue_store, "LOCK_PATH", fake_home / "queue.lock", raising=False)
     # Point the calendar-prior at empty fixtures (→ None → auto mode) unless a test overrides.
     monkeypatch.setattr(dp, "STATE_PATH", tmp_path / "none.state.json", raising=False)
     monkeypatch.setattr(dp, "SCHEDULE_PATH", tmp_path / "none.schedule.json", raising=False)
@@ -84,6 +92,23 @@ _TURNS = [
 def _mono_response(segments):
     return {"status": "ok", "layout": "mono",
             "text": " ".join(s["text"] for s in segments), "segments": segments}
+
+
+def _dual_track_response():
+    return {
+        "status": "ok",
+        "layout": "dual_track",
+        "channels": {
+            "mic": {
+                "text": "你好",
+                "segments": [{"start": 0.0, "end": 1.0, "text": "你好"}],
+            },
+            "sys": {
+                "text": "收到",
+                "segments": [{"start": 1.0, "end": 2.0, "text": "收到"}],
+            },
+        },
+    }
 
 
 # ── Criterion 1: enabled writes both files + upserts labelled body ─────────────
@@ -148,6 +173,51 @@ def test_per_run_speaker_count_override_forces_diarization(env, monkeypatch):
 
     assert seen_counts == [2]
     assert sm.speakers_sidecar_path(audio).exists()
+
+
+def test_dual_track_without_count_prior_uses_channel_sidecar(env, monkeypatch):
+    fake_home, tmp_path = env
+    _config(fake_home, diarize_enabled=True)
+    monkeypatch.setattr(transcribe, "_request_final_transcribe_raw",
+                        lambda *a, **k: _dual_track_response())
+    monkeypatch.setattr(dp, "diarize_via_daemon",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not diarize")))
+
+    audio = tmp_path / "Team_20260601_100000.wav"
+    _write_dual_track(audio)
+    transcribe.process_audio(str(audio))
+
+    transcript = audio.with_suffix(".transcript.txt").read_text(encoding="utf-8")
+    assert "[00:00 我] 你好" in transcript
+    assert "[00:01 对方] 收到" in transcript
+
+    doc = json.loads(sm.speakers_sidecar_path(audio).read_text(encoding="utf-8"))
+    assert doc["provider"] == "channel-split"
+    assert doc["num_speakers_detected"] == 2
+    assert doc["speakers"]["spk-0"]["display_name"] == "我"
+    assert doc["speakers"]["spk-1"]["display_name"] == "对方"
+
+
+def test_dual_track_with_count_prior_still_runs_diarization(env, monkeypatch):
+    fake_home, tmp_path = env
+    _config(fake_home, diarize_enabled=False)
+    monkeypatch.setattr(transcribe, "_request_final_transcribe_raw",
+                        lambda *a, **k: _dual_track_response())
+
+    seen_counts = []
+    def fake_diarize(*_args, **kwargs):
+        seen_counts.append(kwargs.get("num_speakers"))
+        return list(_TURNS)
+
+    monkeypatch.setattr(dp, "diarize_via_daemon", fake_diarize)
+
+    audio = tmp_path / "Team_20260601_100000.wav"
+    _write_dual_track(audio)
+    transcribe.process_audio(str(audio), diarization_num_speakers=2)
+
+    assert seen_counts == [2]
+    transcript = audio.with_suffix(".transcript.txt").read_text(encoding="utf-8")
+    assert "[00:00 Speaker 1]" in transcript
 
 
 # ── Criterion 1: disabled degrades cleanly ────────────────────────────────────

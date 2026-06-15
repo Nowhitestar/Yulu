@@ -25,7 +25,7 @@ from .live_session import LiveSession, LiveSessionManager
 from .runtime import (
     STTRuntime, STTBackend,
     _extract_channel, _downmix_stereo_to_mono,
-    _channel_rms_dbfs, EMPTY_CHANNEL_DBFS_THRESHOLD,
+    _prepare_channel_for_transcribe, _shift_segments,
 )
 from .scheduler import STTScheduler, Job
 from .vocab_cache import VocabCache
@@ -201,6 +201,8 @@ class STTDaemonApp:
             # the two NamedTemporaryFile() calls cannot leak the first file.
             tmp_mic: Optional[Path] = None
             tmp_sys: Optional[Path] = None
+            tmp_mic_trim: Optional[Path] = None
+            tmp_sys_trim: Optional[Path] = None
             mic_channel: dict = {}
             sys_channel: dict = {}
             language_used = msg.language
@@ -209,21 +211,24 @@ class STTDaemonApp:
             try:
                 tmp_mic = Path(tempfile.NamedTemporaryFile(suffix=".mic.wav", delete=False).name)
                 tmp_sys = Path(tempfile.NamedTemporaryFile(suffix=".sys.wav", delete=False).name)
+                tmp_mic_trim = Path(tempfile.NamedTemporaryFile(suffix=".mic.trim.wav", delete=False).name)
+                tmp_sys_trim = Path(tempfile.NamedTemporaryFile(suffix=".sys.trim.wav", delete=False).name)
                 _extract_channel(Path(msg.audio_path), channel=0, out_path=tmp_mic)
                 _extract_channel(Path(msg.audio_path), channel=1, out_path=tmp_sys)
 
-                mic_dbfs = _channel_rms_dbfs(tmp_mic)
-                sys_dbfs = _channel_rms_dbfs(tmp_sys)
+                mic_audio, mic_offset_ms = _prepare_channel_for_transcribe(tmp_mic, tmp_mic_trim)
+                sys_audio, sys_offset_ms = _prepare_channel_for_transcribe(tmp_sys, tmp_sys_trim)
 
-                if mic_dbfs > EMPTY_CHANNEL_DBFS_THRESHOLD:
-                    mic_r = await self._run_one_job(msg, str(tmp_mic), initial_prompt,
+                if mic_audio is not None:
+                    mic_r = await self._run_one_job(msg, str(mic_audio), initial_prompt,
                                                      job_id_suffix=":mic")
                     mic_clean, mic_n = self.vocab_cache.apply_replacements(mic_r.text)
+                    mic_segments = _shift_segments(mic_r.segments, mic_offset_ms)
                     mic_channel = {
                         "text": mic_clean,
                         "raw_text": mic_r.raw_text,
-                        "segments": mic_r.segments,
-                        "duration_ms": mic_r.duration_ms,
+                        "segments": mic_segments,
+                        "duration_ms": mic_r.duration_ms + mic_offset_ms,
                     }
                     language_used = mic_r.language or language_used
                     total_duration_ms += mic_r.duration_ms
@@ -231,15 +236,16 @@ class STTDaemonApp:
                 else:
                     mic_channel = {"skipped_silent": True, "text": "", "segments": []}
 
-                if sys_dbfs > EMPTY_CHANNEL_DBFS_THRESHOLD:
-                    sys_r = await self._run_one_job(msg, str(tmp_sys), initial_prompt,
+                if sys_audio is not None:
+                    sys_r = await self._run_one_job(msg, str(sys_audio), initial_prompt,
                                                      job_id_suffix=":sys")
                     sys_clean, sys_n = self.vocab_cache.apply_replacements(sys_r.text)
+                    sys_segments = _shift_segments(sys_r.segments, sys_offset_ms)
                     sys_channel = {
                         "text": sys_clean,
                         "raw_text": sys_r.raw_text,
-                        "segments": sys_r.segments,
-                        "duration_ms": sys_r.duration_ms,
+                        "segments": sys_segments,
+                        "duration_ms": sys_r.duration_ms + sys_offset_ms,
                     }
                     if language_used == msg.language:
                         language_used = sys_r.language or language_used
@@ -252,6 +258,10 @@ class STTDaemonApp:
                     tmp_mic.unlink(missing_ok=True)
                 if tmp_sys is not None:
                     tmp_sys.unlink(missing_ok=True)
+                if tmp_mic_trim is not None:
+                    tmp_mic_trim.unlink(missing_ok=True)
+                if tmp_sys_trim is not None:
+                    tmp_sys_trim.unlink(missing_ok=True)
 
             return TranscribeResponse(
                 job_id=msg.job_id, status="ok",

@@ -71,6 +71,10 @@ def _extract_channel(stereo_path: Path, channel: int, out_path: Path) -> None:
 
 
 EMPTY_CHANNEL_DBFS_THRESHOLD = -50.0  # below this → treat as silent
+CHANNEL_VOICE_DBFS_THRESHOLD = -38.0
+CHANNEL_VOICE_PEAK_THRESHOLD = 2000
+CHANNEL_VOICE_FRAME_MS = 500
+CHANNEL_VOICE_PAD_MS = 300
 
 
 def _channel_rms_dbfs(mono_wav: Path) -> float:
@@ -89,6 +93,88 @@ def _channel_rms_dbfs(mono_wav: Path) -> float:
         total += (v / max_amp) ** 2
     rms = math.sqrt(total / n)
     return 20.0 * math.log10(rms) if rms > 0 else -math.inf
+
+
+def _frame_dbfs_and_peak(raw: bytes) -> tuple[float, int]:
+    n = len(raw) // 2
+    if n <= 0:
+        return -math.inf, 0
+    total = 0.0
+    peak = 0
+    for i in range(0, len(raw), 2):
+        v = int.from_bytes(raw[i : i + 2], "little", signed=True)
+        peak = max(peak, abs(v))
+        total += v * v
+    rms = math.sqrt(total / n) / 32767.0
+    return (20.0 * math.log10(rms) if rms > 0 else -math.inf), peak
+
+
+def _voice_span_bytes(raw: bytes, sample_rate: int) -> Optional[tuple[int, int]]:
+    frame_samples = max(1, int(sample_rate * CHANNEL_VOICE_FRAME_MS / 1000))
+    frame_bytes = frame_samples * 2
+    active: list[tuple[int, int]] = []
+    for start in range(0, len(raw), frame_bytes):
+        end = min(start + frame_bytes, len(raw))
+        dbfs, peak = _frame_dbfs_and_peak(raw[start:end])
+        if dbfs >= CHANNEL_VOICE_DBFS_THRESHOLD or peak >= CHANNEL_VOICE_PEAK_THRESHOLD:
+            active.append((start, end))
+    if not active:
+        return None
+    pad = max(0, int(sample_rate * CHANNEL_VOICE_PAD_MS / 1000)) * 2
+    start = max(0, active[0][0] - pad)
+    end = min(len(raw), active[-1][1] + pad)
+    return start, end
+
+
+def _prepare_channel_for_transcribe(mono_wav: Path, trimmed_wav: Path) -> tuple[Optional[Path], int]:
+    """Return a voice-trimmed mono WAV path plus its timeline offset.
+
+    Dual-track channels can contain long leading/trailing stretches of silence
+    or low-level room noise. Whisper often hallucinates repeated words when
+    asked to transcribe those stretches, so trim only the outer low-energy span
+    before ASR and shift segment timestamps back afterward.
+    """
+    with wave.open(str(mono_wav), "rb") as src:
+        if src.getnchannels() != 1 or src.getsampwidth() != 2:
+            return mono_wav, 0
+        params = src.getparams()
+        raw = src.readframes(src.getnframes())
+
+    span = _voice_span_bytes(raw, params.framerate)
+    if span is None:
+        return None, 0
+
+    start, end = span
+    if start == 0 and end == len(raw):
+        return mono_wav, 0
+
+    with wave.open(str(trimmed_wav), "wb") as dst:
+        dst.setnchannels(1)
+        dst.setsampwidth(params.sampwidth)
+        dst.setframerate(params.framerate)
+        dst.writeframes(raw[start:end])
+
+    offset_ms = int(round((start // params.sampwidth) * 1000 / params.framerate))
+    return trimmed_wav, offset_ms
+
+
+def _shift_segments(segments: list[dict], offset_ms: int) -> list[dict]:
+    if not offset_ms:
+        return segments
+    shifted: list[dict] = []
+    offset_sec = offset_ms / 1000.0
+    for seg in segments:
+        item = dict(seg)
+        if "start_ms" in item:
+            item["start_ms"] = int(item["start_ms"]) + offset_ms
+        if "end_ms" in item:
+            item["end_ms"] = int(item["end_ms"]) + offset_ms
+        if "start" in item:
+            item["start"] = float(item["start"]) + offset_sec
+        if "end" in item:
+            item["end"] = float(item["end"]) + offset_sec
+        shifted.append(item)
+    return shifted
 
 
 def _downmix_stereo_to_mono(stereo_path: Path, out_path: Path) -> None:
@@ -163,26 +249,30 @@ def dispatch_transcribe(
     # NamedTemporaryFile() calls cannot leak the first file.
     tmp_mic: Optional[Path] = None
     tmp_sys: Optional[Path] = None
+    tmp_mic_trim: Optional[Path] = None
+    tmp_sys_trim: Optional[Path] = None
     try:
         tmp_mic = Path(tempfile.NamedTemporaryFile(suffix=".mic.wav", delete=False).name)
         tmp_sys = Path(tempfile.NamedTemporaryFile(suffix=".sys.wav", delete=False).name)
+        tmp_mic_trim = Path(tempfile.NamedTemporaryFile(suffix=".mic.trim.wav", delete=False).name)
+        tmp_sys_trim = Path(tempfile.NamedTemporaryFile(suffix=".sys.trim.wav", delete=False).name)
         _extract_channel(wav_path, channel=0, out_path=tmp_mic)
         _extract_channel(wav_path, channel=1, out_path=tmp_sys)
 
-        mic_dbfs = _channel_rms_dbfs(tmp_mic)
-        sys_dbfs = _channel_rms_dbfs(tmp_sys)
+        mic_audio, mic_offset_ms = _prepare_channel_for_transcribe(tmp_mic, tmp_mic_trim)
+        sys_audio, sys_offset_ms = _prepare_channel_for_transcribe(tmp_sys, tmp_sys_trim)
 
-        if mic_dbfs > EMPTY_CHANNEL_DBFS_THRESHOLD:
-            r = backend.transcribe(audio_path=str(tmp_mic),
+        if mic_audio is not None:
+            r = backend.transcribe(audio_path=str(mic_audio),
                                    language=language, initial_prompt=initial_prompt)
-            mic_entry = {"text": r.text, "segments": r.segments}
+            mic_entry = {"text": r.text, "segments": _shift_segments(r.segments, mic_offset_ms)}
         else:
             mic_entry = {"skipped_silent": True, "text": "", "segments": []}
 
-        if sys_dbfs > EMPTY_CHANNEL_DBFS_THRESHOLD:
-            r = backend.transcribe(audio_path=str(tmp_sys),
+        if sys_audio is not None:
+            r = backend.transcribe(audio_path=str(sys_audio),
                                    language=language, initial_prompt=initial_prompt)
-            sys_entry = {"text": r.text, "segments": r.segments}
+            sys_entry = {"text": r.text, "segments": _shift_segments(r.segments, sys_offset_ms)}
         else:
             sys_entry = {"skipped_silent": True, "text": "", "segments": []}
 
@@ -195,6 +285,10 @@ def dispatch_transcribe(
             tmp_mic.unlink(missing_ok=True)
         if tmp_sys is not None:
             tmp_sys.unlink(missing_ok=True)
+        if tmp_mic_trim is not None:
+            tmp_mic_trim.unlink(missing_ok=True)
+        if tmp_sys_trim is not None:
+            tmp_sys_trim.unlink(missing_ok=True)
 
 
 class CancelToken:

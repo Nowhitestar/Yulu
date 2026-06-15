@@ -232,6 +232,83 @@ def _load_prior(audio_path: Path):
         return None, None, None
 
 
+def _segment_seconds(seg: dict, key: str, *, default: float = 0.0) -> float:
+    value = seg.get(key)
+    if value is not None:
+        return float(value)
+    ms_value = seg.get(f"{key}_ms")
+    if ms_value is not None:
+        return float(ms_value) / 1000.0
+    return default
+
+
+def _fmt_timestamp(seconds: float) -> str:
+    s = max(0, int(seconds))
+    return f"{s // 60:02d}:{s % 60:02d}"
+
+
+def _write_channel_split_sidecar(
+    *,
+    audio_path: Path,
+    transcript_path: Path,
+    asr_segments: list,
+) -> bool:
+    """Persist a two-speaker sidecar from dual-track channel labels.
+
+    When ASR already came from L=mic / R=system channel split, those channel
+    labels are a more reliable fallback than unconstrained sherpa auto
+    clustering. This keeps the UI's sidecar in sync with the transcript instead
+    of leaving a stale multi-speaker auto sidecar next to channel-labelled text.
+    """
+    from . import speaker_merge as sm
+
+    speakers = {
+        "spk-0": {"display_name": "我", "renamed": False, "merged_into": None},
+        "spk-1": {"display_name": "对方", "renamed": False, "merged_into": None},
+    }
+    labelled: list[sm.LabelledSegment] = []
+    turns: list[dict] = []
+    for seg in asr_segments:
+        text = (seg.get("text") or "").strip()
+        channel = seg.get("channel")
+        if not text or channel not in {"mic", "sys"}:
+            continue
+        idx = 0 if channel == "mic" else 1
+        sid = f"spk-{idx}"
+        start = _segment_seconds(seg, "start")
+        end = _segment_seconds(seg, "end", default=start)
+        name = speakers[sid]["display_name"]
+        labelled.append(sm.LabelledSegment(
+            start=start,
+            end=end,
+            text=text,
+            speaker_id=sid,
+            display_name=name,
+            source="channel",
+            confident=True,
+        ))
+        turns.append({"start": start, "end": end, "speaker_idx": idx})
+
+    if not labelled:
+        return False
+
+    labelled.sort(key=lambda s: (s.start, 0 if s.speaker_id == "spk-0" else 1))
+    transcript = "\n".join(
+        f"[{_fmt_timestamp(seg.start)} {seg.display_name}] {seg.text}"
+        for seg in labelled
+    )
+    transcript_path.write_text(transcript, encoding="utf-8")
+    doc = sm.build_sidecar(
+        result=sm.MergeResult(segments=labelled, transcript=transcript, speakers=speakers),
+        turns=turns,
+        provider="channel-split",
+        num_speakers_supplied=None,
+    )
+    sm.write_sidecar(sm.speakers_sidecar_path(audio_path), doc)
+    print(f"✅ 双轨通道 speaker sidecar 已保存: {sm.speakers_sidecar_path(audio_path)}")
+    return True
+
+
 def run_diarize_stage(
     *,
     audio_path: Path,
@@ -239,6 +316,7 @@ def run_diarize_stage(
     asr_segments: list,
     trans_cfg: dict,
     meeting_title: str,
+    channel_split_segments: bool = False,
 ) -> bool:
     """ASR → diarize → speaker_merge → persist labelled transcript + ``.speakers.json`` + reindex.
 
@@ -257,6 +335,17 @@ def run_diarize_stage(
 
     language = trans_cfg.get("language", "zh")
     diar_cfg = trans_cfg.get("diarization", {}) if isinstance(trans_cfg.get("diarization"), dict) else {}
+    supplied = (diar_cfg.get("num_speakers")
+                if diar_cfg.get("num_speakers")
+                else resolve_attendee_count(audio_path, meeting_title=meeting_title))
+
+    if channel_split_segments and supplied is None:
+        print("⚠️ 双轨转写已有通道标签，缺少人数 prior，跳过自动说话人分离", file=sys.stderr)
+        return _write_channel_split_sidecar(
+            audio_path=audio_path,
+            transcript_path=transcript_path,
+            asr_segments=asr_segments,
+        )
 
     turns = _resolve_turns(
         audio_path, trans_cfg=trans_cfg, meeting_title=meeting_title,
@@ -288,9 +377,6 @@ def run_diarize_stage(
     # truth). attendee_count is recomputed cheaply for sidecar provenance.
     labelled = result.transcript
     transcript_path.write_text(labelled, encoding="utf-8")
-    supplied = (diar_cfg.get("num_speakers")
-                if diar_cfg.get("num_speakers")
-                else resolve_attendee_count(audio_path, meeting_title=meeting_title))
     doc = sm.build_sidecar(
         result=result, turns=turns,
         provider=str(diar_cfg.get("provider") or "sherpa-onnx"),

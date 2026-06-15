@@ -13,10 +13,8 @@ from stt_daemon.wav_inspect import WavLayout, classify
 SYS_ACTIVE_THRESHOLD = 0.001
 DEFAULT_FRAME_MS = 30
 MIC_PLAYBACK_GAIN = 2.4
-SYS_ACTIVE_MIC_BLEND = 0.22
 SYS_ACTIVE_LEAK_MIC_BLEND = 0.02
 SYS_ACTIVE_SYS_GAIN = 0.94
-LOCAL_OVERLAP_MIC_RATIO = 1.35
 
 
 def _rms(samples: list[int]) -> float:
@@ -35,8 +33,8 @@ def clean_dual_track_to_mono(src: Path, dst: Path, *, frame_ms: int = DEFAULT_FR
 
     Dual-track files are stored as L=mic and R=system. Playing both directly can
     sound echoey because the microphone track often contains leaked speaker
-    audio. Prefer system audio while it is active, and only keep meaningful mic
-    signal when it is likely to be local speech overlapping the remote speaker.
+    audio. Prefer system audio while it is active; otherwise the delayed speaker
+    leak in the mic track turns into an audible echo when mixed back in.
     """
     with wave.open(str(src), "rb") as w:
         if w.getnchannels() != 2 or w.getsampwidth() != 2:
@@ -64,11 +62,9 @@ def clean_dual_track_to_mono(src: Path, dst: Path, *, frame_ms: int = DEFAULT_FR
             fade_pos = min(1.0, fade_pos + ((end - start) / sr))
         sys_ratio = 1.0 - fade_pos
         if sys_active:
-            mic_blend = SYS_ACTIVE_LEAK_MIC_BLEND
-            if mic_rms > sys_rms * LOCAL_OVERLAP_MIC_RATIO:
-                mic_blend = SYS_ACTIVE_MIC_BLEND
+            mic_blend = 0.0
         else:
-            mic_blend = SYS_ACTIVE_MIC_BLEND + (1.0 - SYS_ACTIVE_MIC_BLEND) * fade_pos
+            mic_blend = SYS_ACTIVE_LEAK_MIC_BLEND + (1.0 - SYS_ACTIVE_LEAK_MIC_BLEND) * fade_pos
         for i in range(start, end):
             sys_sample = sys[i] / 32767.0
             mic_sample = (mic[i] / 32767.0) if i < len(mic) else 0.0
