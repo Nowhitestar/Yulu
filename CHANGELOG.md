@@ -4,6 +4,12 @@ All notable changes to Yulu are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+
+* **install:** add agent-readable install/uninstall plan JSON and run PKG upgrades through the provision ledger. Existing installs do not require manual migration; agents can inspect install plans with `release_installer.py install --plan --json` and uninstall plans with `yulu uninstall --dry-run --json`.
+
 ## [0.11.1](https://github.com/Nowhitestar/Yulu/compare/v0.11.0...v0.11.1) (2026-06-14)
 
 

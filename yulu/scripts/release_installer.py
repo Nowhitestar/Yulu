@@ -82,6 +82,10 @@ class InstallMetadata:
     commit: str | None = None
 
 
+def target_to_dict(target: ReleaseTarget) -> dict[str, str | None]:
+    return {"kind": target.kind, "tag": target.tag}
+
+
 def normalize_version_tag(value: str) -> str:
     version = value.strip()
     if not SEMVER_RE.match(version):
@@ -561,11 +565,65 @@ def install_release_target(target: ReleaseTarget, install_dir: Path, run_setup_f
         )
 
 
+def build_install_plan(command: str, target: ReleaseTarget, install_dir: Path, run_setup_flag: bool) -> dict:
+    actions: list[dict[str, object]] = []
+    if target.kind == "dev":
+        actions.extend(
+            [
+                {"name": "sync_dev_checkout", "source": REPO_URL, "branch": "main"},
+                {"name": "run_setup", "enabled": run_setup_flag, "mode": "dev"},
+                {"name": "write_install_metadata", "source": "dev"},
+            ]
+        )
+    else:
+        actions.extend(
+            [
+                {"name": "resolve_github_release", "target": target_to_dict(target)},
+                {"name": "download_pkg_asset"},
+                {"name": "run_macos_installer", "target": "/"},
+                {"name": "validate_runtime_layout", "enabled": run_setup_flag},
+            ]
+        )
+    return {
+        "schema": 1,
+        "command": command,
+        "target": target_to_dict(target),
+        "install_dir": str(install_dir.expanduser()),
+        "run_setup": run_setup_flag,
+        "dry_run": True,
+        "actions": actions,
+    }
+
+
+def print_plan(plan: dict, as_json: bool) -> None:
+    if as_json:
+        print(json.dumps(plan, indent=2, ensure_ascii=False))
+        return
+    print("Yulu install plan")
+    print(f"  command:     {plan['command']}")
+    target = plan["target"]
+    print(f"  target:      {target['kind']}{' ' + target['tag'] if target.get('tag') else ''}")
+    print(f"  install_dir: {plan['install_dir']}")
+    print(f"  run_setup:   {str(plan['run_setup']).lower()}")
+    for action in plan["actions"]:
+        print(f"  - {action['name']}")
+
+
+def print_json_result(ok: bool, payload: dict, error: str | None = None) -> None:
+    result = {"schema": 1, "ok": ok, **payload}
+    if error:
+        result["error"] = error
+    print(json.dumps(result, indent=2, ensure_ascii=False))
+
+
 def build_main_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Install or update Yulu from release assets")
     parser.add_argument("command", choices=["install", "update"])
     parser.add_argument("--install-dir", default=os.path.expanduser("~/.yulu"))
     parser.add_argument("--no-setup", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--json", action="store_true", help="print machine-readable result JSON")
+    parser.add_argument("--plan", action="store_true", help="print the install/update plan and exit without changing files")
+    parser.add_argument("--dry-run", action="store_true", help="alias for --plan")
     group = parser.add_mutually_exclusive_group()
     group.add_argument("--latest", action="store_true")
     group.add_argument("--version")
@@ -585,13 +643,37 @@ def main(argv: list[str] | None = None) -> int:
         target_argv.append("--dev")
     try:
         target = parse_target_args(target_argv)
+        install_dir = Path(args.install_dir)
+        if args.plan or args.dry_run:
+            print_plan(build_install_plan(args.command, target, install_dir, not args.no_setup), args.json)
+            return 0
         if target.kind == "dev":
-            install_dev_channel(Path(args.install_dir), run_setup_flag=not args.no_setup)
+            install_dev_channel(install_dir, run_setup_flag=not args.no_setup)
         else:
-            install_release_target(target, Path(args.install_dir), run_setup_flag=not args.no_setup)
+            install_release_target(target, install_dir, run_setup_flag=not args.no_setup)
     except (InstallError, ValueError) as exc:
+        if args.json:
+            print_json_result(
+                False,
+                {
+                    "command": args.command,
+                    "install_dir": str(Path(args.install_dir).expanduser()),
+                },
+                str(exc),
+            )
+            return 1
         print(f"Yulu install failed: {exc}", file=sys.stderr)
         return 1
+    if args.json:
+        print_json_result(
+            True,
+            {
+                "command": args.command,
+                "target": target_to_dict(target),
+                "install_dir": str(install_dir.expanduser()),
+                "run_setup": not args.no_setup,
+            },
+        )
     return 0
 
 
