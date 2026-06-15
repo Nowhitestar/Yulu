@@ -1,6 +1,8 @@
 import importlib.util
 import json
+import os
 from pathlib import Path
+import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
 DOCTOR = ROOT / "yulu" / "scripts" / "doctor.py"
@@ -75,6 +77,33 @@ def test_main_prints_json_report(capsys):
 
     assert code in (0, 1)
     data = json.loads(capsys.readouterr().out)
+    assert data["source_root"] == str(ROOT)
+    assert data["legacy_root_exists"] is False
+
+
+def test_yulu_wrapper_passes_doctor_args(tmp_path):
+    env = os.environ.copy()
+    env["HOME"] = str(tmp_path / "home")
+    result = subprocess.run(
+        [
+            "bash",
+            str(ROOT / "yulu" / "scripts" / "yulu"),
+            "doctor",
+            "--json",
+            "--source-root", str(ROOT),
+            "--runtime-root", str(ROOT),
+            "--legacy-root", str(tmp_path / "missing-legacy"),
+            "--config-dir", str(tmp_path / "missing-config"),
+        ],
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode in (0, 1), result.stderr + result.stdout
+    data = json.loads(result.stdout)
     assert data["source_root"] == str(ROOT)
     assert data["legacy_root_exists"] is False
 

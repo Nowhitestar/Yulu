@@ -878,6 +878,47 @@ show_summary() {
 # six concern scripts passing $MODE + decisions via env. swiftc is reached ONLY via
 # setup_audio.sh's dev branch (D-13 / BUILD-03).
 
+run_provision() {
+    PYTHONPATH="$SCRIPT_DIR:${PYTHONPATH:-}" "$PYTHON_BIN" -m provision.cli provision "$@" \
+        --mode "$MODE" \
+        --ledger "$REPO_DIR/.yulu-install.json"
+}
+
+run_setup_deps() {
+    if ! confirm_deps_install; then
+        return 0
+    fi
+    if [[ "${YULU_USE_PROVISION:-}" == "1" ]]; then
+        header "运行可恢复 provision 步骤"
+        info "使用 .yulu-install.json 记录每个安装步骤，便于 Agent 续跑/诊断。"
+        run_provision deps
+    else
+        "$SCRIPT_DIR/setup_deps.sh" "$MODE"
+    fi
+}
+
+run_setup_concerns() {
+    if [[ "${YULU_USE_PROVISION:-}" == "1" ]]; then
+        run_provision --all
+        return
+    fi
+
+    # 3) Audio: dev/release fork lives INSIDE setup_audio.sh (swiftc only on dev).
+    "$SCRIPT_DIR/setup_audio.sh" "$MODE"
+
+    # 4) Models: download the chosen GGML model + write the whisper-cli command.
+    "$SCRIPT_DIR/setup_models.sh" "$MODE"
+
+    # 5) Capabilities: verify/reuse/repair mlx-whisper in the daemon interpreter (no Yulu venv — D-02/D-05).
+    "$SCRIPT_DIR/setup_capabilities.sh" "$MODE"
+
+    # 6) Daemons.
+    "$SCRIPT_DIR/setup_daemons.sh" "$MODE"
+
+    # 7) UI: build yulu_ui + install its LaunchAgent.
+    "$SCRIPT_DIR/setup_ui.sh" "$MODE"
+}
+
 if [[ "$UPGRADE_MODE" == true ]]; then
     echo -e "${BLUE}"
     echo "  ╔══════════════════════════════════════════╗"
@@ -913,33 +954,19 @@ check_repo_layout
 check_system
 
 # ── Interactive prompts resolved up-front; decisions passed DOWN via env/args ──
-# 1) Deps (orchestrator confirms, setup_deps.sh installs non-interactively).
-if confirm_deps_install; then
-    "$SCRIPT_DIR/setup_deps.sh" "$MODE"
-fi
+run_setup_deps || exit 1
 
-# 2) Config + transcription/summary choices (orchestrator-owned, write to config).
+# Config + transcription/summary choices (orchestrator-owned, write to config).
 create_config
 configure_post_recording_mode
 configure_transcription_engine
 configure_summary_mode
 
-# 3) Audio: dev/release fork lives INSIDE setup_audio.sh (swiftc only on dev).
-"$SCRIPT_DIR/setup_audio.sh" "$MODE"
-
-# 4) Models: download the chosen GGML model + write the whisper-cli command.
-"$SCRIPT_DIR/setup_models.sh" "$MODE"
-
-# 5) Capabilities: verify/reuse/repair mlx-whisper in the daemon interpreter (no Yulu venv — D-02/D-05).
-"$SCRIPT_DIR/setup_capabilities.sh" "$MODE"
-
-# 6) Calendar opt-in (orchestrator owns the prompt + OAuth), then daemons.
+# Calendar opt-in stays in the orchestrator because it may need OAuth/user input.
 setup_calendar
 confirm_calendar_plist
-"$SCRIPT_DIR/setup_daemons.sh" "$MODE"
 
-# 7) UI: build yulu_ui + install its LaunchAgent.
-"$SCRIPT_DIR/setup_ui.sh" "$MODE"
+run_setup_concerns || exit 1
 
 # ── Orchestrator-resident tail (NOT in the D-11 six-concern set) ─────
 # install_yulu_cli / run_tests / show_summary stay here. Agent-skill registration

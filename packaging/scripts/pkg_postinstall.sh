@@ -104,11 +104,12 @@ payload = {
 PY
 chown "$uid:$gid" "$install_dir/.yulu-install.json"
 
-log "running setup upgrade as $console_user"
+log "running setup/provision upgrade as $console_user"
 launchctl asuser "$uid" sudo -u "$console_user" env \
     HOME="$user_home" USER="$console_user" LOGNAME="$console_user" \
     PATH="$INSTALLER_PATH" \
     YULU_PKG_POSTINSTALL=1 \
+    YULU_USE_PROVISION=1 \
     YULU_SKIP_RUNTIME_REPAIRS=1 \
     bash "$install_dir/yulu/scripts/setup.sh" --upgrade < /dev/null
 

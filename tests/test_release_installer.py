@@ -281,6 +281,71 @@ def test_main_installs_release_target(tmp_path, monkeypatch):
     assert calls == [(ReleaseTarget(kind="version", tag="v0.5.0"), tmp_path / "install", False)]
 
 
+def test_main_plan_json_does_not_install(tmp_path, monkeypatch, capsys):
+    def fail_install_release_target(*args, **kwargs):
+        raise AssertionError("plan mode must not install")
+
+    monkeypatch.setattr(release_installer, "install_release_target", fail_install_release_target)
+
+    exit_code = main([
+        "install",
+        "--version", "0.5.0",
+        "--install-dir", str(tmp_path / "install"),
+        "--plan",
+        "--json",
+    ])
+
+    assert exit_code == 0
+    data = json.loads(capsys.readouterr().out)
+    assert data["dry_run"] is True
+    assert data["target"] == {"kind": "version", "tag": "v0.5.0"}
+    assert data["install_dir"] == str(tmp_path / "install")
+    assert [action["name"] for action in data["actions"]] == [
+        "resolve_github_release",
+        "download_pkg_asset",
+        "run_macos_installer",
+        "validate_runtime_layout",
+    ]
+
+
+def test_main_success_json_reports_target(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(release_installer, "install_release_target", lambda *a, **k: None)
+
+    exit_code = main([
+        "update",
+        "--latest",
+        "--install-dir", str(tmp_path / "install"),
+        "--json",
+    ])
+
+    assert exit_code == 0
+    data = json.loads(capsys.readouterr().out)
+    assert data["ok"] is True
+    assert data["command"] == "update"
+    assert data["target"] == {"kind": "latest", "tag": None}
+
+
+def test_main_error_json_is_machine_readable(tmp_path, monkeypatch, capsys):
+    def fail_install_release_target(*args, **kwargs):
+        raise InstallError("no release")
+
+    monkeypatch.setattr(release_installer, "install_release_target", fail_install_release_target)
+
+    exit_code = main([
+        "install",
+        "--latest",
+        "--install-dir", str(tmp_path / "install"),
+        "--json",
+    ])
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    data = json.loads(captured.out)
+    assert data["ok"] is False
+    assert data["error"] == "no release"
+    assert captured.err == ""
+
+
 def test_main_installs_dev_channel(tmp_path, monkeypatch):
     calls = []
 

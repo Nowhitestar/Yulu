@@ -245,7 +245,7 @@ cmd_logs() {
 }
 
 cmd_doctor() {
-    python3 "$SCRIPT_DIR/doctor.py"
+    python3 "$SCRIPT_DIR/doctor.py" "$@"
 }
 
 cmd_record() {

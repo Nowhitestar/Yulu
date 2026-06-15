@@ -240,7 +240,9 @@ def test_pkg_postinstall_restores_runtime_app_and_uses_installer_env():
     assert "restoring runtime Yulu.app from $VISIBLE_APP" in script
     assert "PATH=\"$INSTALLER_PATH\"" in script
     assert "YULU_PKG_POSTINSTALL=1" in script
+    assert "YULU_USE_PROVISION=1" in script
     assert "YULU_SKIP_RUNTIME_REPAIRS=1" in script
+    assert "setup/provision upgrade" in script
 
 
 def test_setup_capabilities_pkg_context_does_not_run_pip(tmp_path):
@@ -277,6 +279,14 @@ def test_setup_capabilities_pkg_context_does_not_run_pip(tmp_path):
 
     assert result.returncode == 0, result.stderr + result.stdout
     assert "-m pip install" not in calls.read_text(encoding="utf-8")
+
+
+def test_setup_uses_provision_when_requested():
+    script = (ROOT / "yulu" / "scripts" / "setup.sh").read_text(encoding="utf-8")
+
+    assert 'YULU_USE_PROVISION:-}" == "1"' in script
+    assert '"$PYTHON_BIN" -m provision.cli provision "$@"' in script
+    assert '--ledger "$REPO_DIR/.yulu-install.json"' in script
 
 
 def test_release_publish_uploads_only_pkg_asset():
