@@ -278,6 +278,44 @@ class _RecordingBackend(MockSTTBackend):
         )
 
 
+def test_live_chunks_use_internal_temp_files_and_are_cleaned(tmp_path):
+    """Realtime chunks are implementation details, not recording sidecars.
+
+    They should not appear next to the user-facing WAV, and they should be
+    removed once the live chunk has been transcribed.
+    """
+    wav = tmp_path / "rec.wav"
+    _write_wav(wav, seconds=0.0)
+    backend = _RecordingBackend("partial")
+    backend, scheduler, mgr = _build(tmp_path, backend=backend)
+
+    async def go():
+        await scheduler.start()
+        sid = "tmp-chunks"
+        await mgr.start_session(LiveSession(
+            sid=sid, mic_path=str(wav), sys_path=None,
+            engine="mlx", language="zh", chunk_sec=1.0,
+        ))
+        t = mgr._tail_tasks.pop(sid, None)
+        if t is not None:
+            t.cancel()
+            try:
+                await t
+            except asyncio.CancelledError:
+                pass
+        _append_pcm(wav, seconds=2.0)
+        await mgr.poll_once(sid)
+        await mgr.stop_session(sid, reason="cancelled")
+        await scheduler.stop()
+
+    asyncio.run(go())
+    assert backend.audio_paths, "expected a live chunk to be transcribed"
+    chunk_path = Path(backend.audio_paths[0])
+    assert chunk_path.parent == wav.with_suffix(".realtime")
+    assert not list(wav.parent.glob("rec.chunk-*.wav"))
+    assert not chunk_path.exists()
+
+
 def _build_app(tmp_path, backends) -> STTDaemonApp:
     cfg = DaemonConfig(
         socket_path=tmp_path / "stt.sock",

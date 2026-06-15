@@ -295,6 +295,8 @@ class LiveSessionManager:
             stride_offset=active.state.mic_stride_offset,
             stride_step=active.state.stride_step,
             source_sample_rate_hz=active.state.source_sample_rate_hz,
+            chunk_dir=Path(active.spec.mic_path).with_suffix(".realtime"),
+            chunk_stem=active.spec.sid,
         )
         if mic_chunk is not None:
             chunk_path, new_offset, duration_ms = mic_chunk
@@ -314,6 +316,8 @@ class LiveSessionManager:
                 stride_offset=active.state.sys_stride_offset,
                 stride_step=active.state.stride_step,
                 source_sample_rate_hz=active.state.source_sample_rate_hz,
+                chunk_dir=Path(active.spec.mic_path).with_suffix(".realtime"),
+                chunk_stem=active.spec.sid,
             )
             if sys_chunk is not None:
                 chunk_path, new_offset, duration_ms = sys_chunk
@@ -352,28 +356,34 @@ class LiveSessionManager:
         )
         fut = await self.scheduler.submit(job)
         try:
-            result: STTResult = await fut
-        except asyncio.CancelledError:
-            # Re-raise if the enclosing task itself was cancelled; otherwise the
-            # future was just dropped (e.g. scheduler stopped) — swallow it.
-            task = asyncio.current_task()
-            if task is not None and task.cancelling() > 0:
-                raise
-            return
-        except Exception:
-            return
-        text, _ = self.vocab_cache.apply_replacements(result.text)
-        event = PartialEvent(
-            sid=active.spec.sid,
-            seq=seq,
-            source=source,
-            started_ms=started_ms,
-            ended_ms=started_ms + duration_ms,
-            text=text,
-        )
-        out = self.on_partial(event)
-        if asyncio.iscoroutine(out):
-            await out
+            try:
+                result: STTResult = await fut
+            except asyncio.CancelledError:
+                # Re-raise if the enclosing task itself was cancelled; otherwise the
+                # future was just dropped (e.g. scheduler stopped) — swallow it.
+                task = asyncio.current_task()
+                if task is not None and task.cancelling() > 0:
+                    raise
+                return
+            except Exception:
+                return
+            text, _ = self.vocab_cache.apply_replacements(result.text)
+            event = PartialEvent(
+                sid=active.spec.sid,
+                seq=seq,
+                source=source,
+                started_ms=started_ms,
+                ended_ms=started_ms + duration_ms,
+                text=text,
+            )
+            out = self.on_partial(event)
+            if asyncio.iscoroutine(out):
+                await out
+        finally:
+            try:
+                chunk_path.unlink()
+            except FileNotFoundError:
+                pass
 
     def _offset_to_ms(self, state: TailState, source: str, *, before_chunk: bool, duration_ms: int) -> int:
         offset = state.mic_offset_bytes if source == "mic" else state.sys_offset_bytes
@@ -404,6 +414,8 @@ class LiveSessionManager:
         stride_offset: int = 0,
         stride_step: int = 1,
         source_sample_rate_hz: int = SAMPLE_RATE_HZ,
+        chunk_dir: Optional[Path] = None,
+        chunk_stem: Optional[str] = None,
     ) -> Optional[tuple[Path, int, int]]:
         """Read >= min_seconds of audio after `offset`, write a temp WAV.
 
@@ -437,6 +449,9 @@ class LiveSessionManager:
             min_source_bytes = int(min_seconds * source_bytes_per_second)
         if available < min_source_bytes:
             return None
+        chunk_parent = Path(chunk_dir) if chunk_dir is not None else path.parent
+        chunk_parent.mkdir(parents=True, exist_ok=True)
+        chunk_name_stem = chunk_stem or path.stem
         # Cap the consumed window so a backlog doesn't become one mega-chunk.
         # Clamp the cap to at least min_source_bytes (one chunk_sec) so a
         # misconfigured chunk_max_sec < chunk_sec can NEVER disable the cap and let
@@ -455,8 +470,8 @@ class LiveSessionManager:
             if consume < min_source_bytes:
                 return None
             new_offset = offset + consume
-            chunk_path = path.with_name(
-                f"{path.stem}.chunk-{offset}-{new_offset}-s{stride_offset}.wav"
+            chunk_path = chunk_parent / (
+                f"{chunk_name_stem}.chunk-{offset}-{new_offset}-s{stride_offset}.wav"
             )
             _read_with_stride(
                 path=path,
@@ -475,8 +490,8 @@ class LiveSessionManager:
             pcm = f.read(available)
         if len(pcm) < SAMPLE_BYTES:
             return None
-        chunk_path = path.with_name(
-            f"{path.stem}.chunk-{offset}-{offset + len(pcm)}.wav"
+        chunk_path = chunk_parent / (
+            f"{chunk_name_stem}.chunk-{offset}-{offset + len(pcm)}.wav"
         )
         _write_wav_chunk(chunk_path, pcm, framerate=source_sample_rate_hz)
         duration_ms = int(len(pcm) / source_bytes_per_second * 1000)

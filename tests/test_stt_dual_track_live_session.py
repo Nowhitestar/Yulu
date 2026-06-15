@@ -70,11 +70,13 @@ class _CapturingBackend(MockSTTBackend):
     def __init__(self):
         super().__init__(canned_text="ok", delay_sec=0.0)
         self.captured: list[str] = []
+        self.captured_chunks: list[tuple[str, tuple[int, int, int, bytes]]] = []
 
     async def transcribe(
         self, *, audio_path, language, initial_prompt, cancel_token, options=None
     ):
         self.captured.append(audio_path)
+        self.captured_chunks.append((audio_path, _read_chunk_wav(Path(audio_path))))
         return await super().transcribe(
             audio_path=audio_path,
             language=language,
@@ -164,9 +166,10 @@ def test_subscribe_dual_track_dispatches_per_channel_mono_chunks_at_source_rate(
     expected_mic = b"".join(raw[i : i + 2] for i in range(0, len(raw), FRAME_BYTES))
     expected_sys = b"".join(raw[i + 2 : i + 4] for i in range(0, len(raw), FRAME_BYTES))
 
-    chunks = [(p, _read_chunk_wav(Path(p))) for p in backend.captured]
+    chunks = backend.captured_chunks
     by_source: dict[str, tuple[int, int, int, bytes]] = {}
     for path, info in chunks:
+        assert Path(path).parent == wav_path.with_suffix(".realtime")
         # Chunk filenames embed the stride_offset (s0 = mic, s2 = sys).
         if ".chunk-" in path and "-s0.wav" in path:
             by_source["mic"] = info
@@ -188,6 +191,8 @@ def test_subscribe_dual_track_dispatches_per_channel_mono_chunks_at_source_rate(
             f"{label}: stride-extracted PCM mismatch — len(got)={len(pcm)}, "
             f"len(expected)={len(expected)}"
         )
+    assert not list(wav_path.parent.glob("rec.chunk-*.wav"))
+    assert not list(wav_path.with_suffix(".realtime").glob("*.chunk-*.wav"))
 
 
 def test_subscribe_mono_wav_keeps_phase1_defaults(tmp_path):
