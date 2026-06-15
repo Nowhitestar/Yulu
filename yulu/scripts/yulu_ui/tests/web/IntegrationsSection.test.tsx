@@ -91,6 +91,7 @@ vi.mock("../../web/src/trpc.js", () => ({
       openInFinder: { useMutation: () => ({ mutate: vi.fn() }) },
     },
     useUtils: () => ({
+      config: { get: { setData: vi.fn(), invalidate: vi.fn() } },
       system: { cloud: { detect: { fetch: async () => ({ is_cloud: false, engine: "", reason: "", dataless: false }) } } },
     }),
   },

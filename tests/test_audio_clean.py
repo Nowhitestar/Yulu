@@ -47,6 +47,33 @@ def test_clean_dual_track_keeps_boosted_mic_in_playback_mix(tmp_path):
     assert max(samples[-4800:]) >= 11000
 
 
+def test_clean_dual_track_suppresses_mic_leak_when_system_audio_is_active(tmp_path):
+    wav = tmp_path / "Meeting_20260609_120000.wav"
+    out = tmp_path / "Meeting_20260609_120000.clean.wav"
+    # Speaker playback leaks into the mic at a lower level than the direct
+    # system channel. The clean mix should stay close to system-only audio,
+    # not add the delayed mic leak as an audible echo.
+    _write_dual_track(wav, [(2500, 4000)] * 4800)
+
+    clean_dual_track_to_mono(wav, out)
+
+    samples = _read_mono(out)
+    assert max(samples) <= 4000
+
+
+def test_clean_dual_track_keeps_local_overlap_when_mic_is_dominant(tmp_path):
+    wav = tmp_path / "Meeting_20260609_120000.wav"
+    out = tmp_path / "Meeting_20260609_120000.clean.wav"
+    # A much stronger mic frame during system audio is likely local speech
+    # overlapping the remote speaker, so keep some mic contribution.
+    _write_dual_track(wav, [(9000, 4000)] * 4800)
+
+    clean_dual_track_to_mono(wav, out)
+
+    samples = _read_mono(out)
+    assert max(samples) >= 6500
+
+
 def test_select_transcription_audio_generates_clean_file_for_dual_track(tmp_path):
     wav = tmp_path / "Meeting_20260609_120000.wav"
     _write_dual_track(wav, [(300, 4000)] * 960)

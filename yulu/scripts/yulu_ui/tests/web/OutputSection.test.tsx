@@ -39,6 +39,9 @@ vi.mock("../../web/src/trpc.js", () => ({
       }) },
     },
     recording: { state: { useQuery: () => ({ data: { state: recordingState } }) } },
+    useUtils: () => ({
+      config: { get: { setData: vi.fn(), invalidate: vi.fn() } },
+    }),
   },
 }));
 

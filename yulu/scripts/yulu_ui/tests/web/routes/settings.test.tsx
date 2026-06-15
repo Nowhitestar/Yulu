@@ -45,6 +45,7 @@ vi.mock("../../../web/src/trpc.js", () => {
     isPending: false,
   });
   const utils = {
+    config: { get: { setData: () => {}, invalidate: () => {} } },
     system: { cloud: { detect: { fetch: async () => ({ is_cloud: false, engine: "", reason: "", dataless: false }) } } },
     prompts: { list: { invalidate: () => {} } },
   };

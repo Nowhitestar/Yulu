@@ -63,6 +63,7 @@ vi.mock("../../web/src/trpc.js", () => ({
     // InlineEditRow.PathValue calls useUtils().system.cloud.detect.fetch() (DATA-03).
     // The local-model picker is file-mode (never cloud-warned), but the hook must exist.
     useUtils: () => ({
+      config: { get: { setData: vi.fn(), invalidate: vi.fn() } },
       system: { cloud: { detect: { fetch: async () => ({ is_cloud: false, engine: "", reason: "", dataless: false }) } } },
     }),
   },

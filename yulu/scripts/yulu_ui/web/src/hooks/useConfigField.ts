@@ -33,6 +33,29 @@ function valueAt(cfg: unknown, key: string): unknown {
   return cur;
 }
 
+/** Return a shallow-cloned config snapshot with a dotted path patched. */
+function setValueAt<T>(cfg: T, key: string, value: unknown): T {
+  if (cfg == null || typeof cfg !== "object") return cfg;
+  const parts = key.split(".");
+  const root = Array.isArray(cfg) ? [...cfg] : { ...(cfg as Record<string, unknown>) };
+  let out: Record<string, unknown> = root as Record<string, unknown>;
+  let src: unknown = cfg;
+  for (let i = 0; i < parts.length - 1; i += 1) {
+    const part = parts[i]!;
+    const srcChild = src != null && typeof src === "object"
+      ? (src as Record<string, unknown>)[part]
+      : undefined;
+    const next = srcChild != null && typeof srcChild === "object"
+      ? (Array.isArray(srcChild) ? [...srcChild] : { ...(srcChild as Record<string, unknown>) })
+      : {};
+    out[part] = next;
+    out = next as Record<string, unknown>;
+    src = srcChild;
+  }
+  out[parts[parts.length - 1]!] = value;
+  return root as T;
+}
+
 export interface CommitOptions {
   /**
    * Suppress recording this key's restart requirement in the tracker (so the
@@ -76,6 +99,7 @@ export function useConfigField(tracker: SettingsRestartTracker): ConfigFieldApi 
   const isRecording = useIsRecording();
   const { showUndo } = useUndoToast();
   const { confirm } = useDangerConfirm();
+  const utils = trpc.useUtils();
 
   // Restart-tracking happens in doCommit (so it can be suppressed per-commit),
   // not in a fixed onSuccess — otherwise every calendars array edit would trip
@@ -94,6 +118,8 @@ export function useConfigField(tracker: SettingsRestartTracker): ConfigFieldApi 
     const prev = valueAt(cfg, key);
     const p = updateMut.mutateAsync({ key, value });
     p.then((res: { daemonsNeedingRestart: string[] }) => {
+      utils.config.get.setData(undefined, (old) => setValueAt(old, key, value));
+      void utils.config.get.invalidate();
       if (!suppressRestart) tracker.record(key, res.daemonsNeedingRestart);
       showUndo({
         label: def?.label ?? key,
@@ -101,12 +127,16 @@ export function useConfigField(tracker: SettingsRestartTracker): ConfigFieldApi 
         // add/remove doesn't surprise the user with a restart banner.
         onUndo: () => {
           const up = updateMut.mutateAsync({ key, value: prev });
-          if (!suppressRestart) up.then((r: { daemonsNeedingRestart: string[] }) => tracker.record(key, r.daemonsNeedingRestart)).catch(() => {});
+          up.then((r: { daemonsNeedingRestart: string[] }) => {
+            utils.config.get.setData(undefined, (old) => setValueAt(old, key, prev));
+            void utils.config.get.invalidate();
+            if (!suppressRestart) tracker.record(key, r.daemonsNeedingRestart);
+          }).catch(() => {});
         },
       });
     }).catch(() => { /* surfaced elsewhere; no toast on failure */ });
     return p;
-  }, [cfg, updateMut, showUndo, tracker]);
+  }, [cfg, updateMut, showUndo, tracker, utils]);
 
   const commit = useCallback((key: string, opts?: CommitOptions) => (value: unknown) => {
     if (isBlocked(key)) return undefined;            // guard: drop the edit

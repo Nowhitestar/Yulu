@@ -7,6 +7,8 @@ import { render, screen, waitFor, fireEvent, act } from "@testing-library/react"
 
 const updateMutate = vi.fn(async (_vars: { key: string; value: unknown }) => ({ daemonsNeedingRestart: [], daemonsNeedingSighup: [] }));
 const showUndo = vi.fn();
+const configSetData = vi.fn();
+const configInvalidate = vi.fn();
 
 // audio.output_dir is danger + restart-class; transcription.language is a plain
 // restart field; llm.enabled is reload:none. useConfigField looks all of these up.
@@ -41,6 +43,9 @@ vi.mock("../../web/src/trpc.js", () => ({
       }) },
     },
     recording: { state: { useQuery: () => ({ data: { state: recordingState } }) } },
+    useUtils: () => ({
+      config: { get: { setData: configSetData, invalidate: configInvalidate } },
+    }),
   },
 }));
 
@@ -71,6 +76,8 @@ function mount() {
 beforeEach(() => {
   updateMutate.mockClear();
   showUndo.mockClear();
+  configSetData.mockClear();
+  configInvalidate.mockClear();
   recordingState = "idle";
 });
 
@@ -105,5 +112,17 @@ describe("useConfigField — danger-confirm gate (P3-3)", () => {
     await waitFor(() => expect(updateMutate).toHaveBeenCalledWith({ key: "llm.enabled", value: true }));
     expect(screen.queryByRole("alertdialog")).toBeNull();
     expect(showUndo).toHaveBeenCalled();
+  });
+
+  it("patches the config.get cache after a successful commit", async () => {
+    mount();
+    fireEvent.click(screen.getByText("plain"));
+    await waitFor(() => expect(configSetData).toHaveBeenCalled());
+    const updater = configSetData.mock.calls[0]![1] as (old: unknown) => unknown;
+    expect(updater({ llm: { enabled: false }, output: { channel: "file" } })).toEqual({
+      llm: { enabled: true },
+      output: { channel: "file" },
+    });
+    expect(configInvalidate).toHaveBeenCalled();
   });
 });
