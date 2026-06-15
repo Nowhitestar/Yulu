@@ -89,20 +89,20 @@ def test_help_when_no_subcommand(capsys):
 # request → line-delimited JSON response). Verifies CLI exit codes, output,
 # and graceful failure when the agent isn't running.
 
-import os
 import socket as _socket
 import threading
-import uuid
+
+from socket_helpers import cleanup_socket_path, short_socket_path
 
 
 def _start_fake_ipc_server(tmp_path: Path, monkeypatch, handler):
     """Bind an AF_UNIX socket and accept one request, dispatch through
     `handler(req: dict) -> dict`, write the reply, then close.
 
-    NOTE: AF_UNIX paths are capped at 104 bytes on macOS / 108 on Linux, and
-    pytest's tmp_path under /private/var/folders/... easily exceeds that.
-    We use /tmp/<uuid>.sock instead — short, unique, and cleaned up at teardown."""
-    sock_path = Path(f"/tmp/yulu_test_{uuid.uuid4().hex[:12]}.sock")
+    NOTE: AF_UNIX paths are capped at 104 bytes on macOS / 108 on Linux.
+    Use the shared short socket helper so Codex sandbox runs do not bind
+    directly under /tmp."""
+    sock_path = short_socket_path()
     monkeypatch.setattr(sac, "IPC_SOCKET_PATH", sock_path)
     srv = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
     srv.bind(str(sock_path))
@@ -129,10 +129,7 @@ def _start_fake_ipc_server(tmp_path: Path, monkeypatch, handler):
             pass
         finally:
             srv.close()
-            try:
-                os.unlink(sock_path)
-            except OSError:
-                pass
+            cleanup_socket_path(sock_path)
 
     t = threading.Thread(target=serve, daemon=True)
     t.start()
@@ -183,7 +180,7 @@ def test_toggle_reports_unreachable_when_agent_down(tmp_path, monkeypatch, capsy
     monkeypatch.setattr(
         sac,
         "IPC_SOCKET_PATH",
-        Path(f"/tmp/yulu_test_missing_{uuid.uuid4().hex[:8]}.sock"),
+        short_socket_path("missing.sock", require_bind=False),
     )
     rc = sac.main(["toggle"])
     assert rc == 1

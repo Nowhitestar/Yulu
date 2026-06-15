@@ -1,7 +1,6 @@
 import asyncio
 import json
 import sys
-import tempfile
 import threading
 from pathlib import Path
 
@@ -15,6 +14,7 @@ from stt_daemon.config import DaemonConfig
 from stt_daemon.runtime import MockSTTBackend
 import stt_cli
 from stt_cli import main as stt_main
+from socket_helpers import short_socket_dir
 
 
 def _spawn(tmp_path):
@@ -26,7 +26,7 @@ def _spawn(tmp_path):
     """
     db = tmp_path / "vocab.sqlite"
     VocabRepo(open_db(db))
-    sock_dir = Path(tempfile.mkdtemp(dir="/tmp"))
+    sock_dir = short_socket_dir()
     cfg = DaemonConfig(
         socket_path=sock_dir / "stt.sock",
         vocab_db_path=db,

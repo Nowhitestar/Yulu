@@ -14,7 +14,6 @@ The backend is a tiny fake (mirrors test_diarize_backend's style) so no sherpa /
 
 import asyncio
 import sys
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -33,6 +32,7 @@ from stt_daemon.app import STTDaemonApp  # noqa: E402
 from stt_daemon.config import DaemonConfig  # noqa: E402
 from stt_daemon.runtime import MockSTTBackend  # noqa: E402
 from stt_daemon.backends.diarize import SpeakerTurn  # noqa: E402
+from socket_helpers import short_socket_dir  # noqa: E402
 
 
 def _run(coro):
@@ -72,7 +72,7 @@ class _FakeDiarizeBackend:
 
 
 def _short_sock_dir():
-    return Path(tempfile.mkdtemp(dir="/tmp"))
+    return short_socket_dir()
 
 
 def _build_app(tmp_path):

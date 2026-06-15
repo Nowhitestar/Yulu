@@ -6,7 +6,6 @@ import socket as _socket
 import subprocess
 import sys
 import threading
-import uuid
 from datetime import timedelta
 from pathlib import Path
 
@@ -15,6 +14,7 @@ SCRIPTS = ROOT / "yulu" / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
 import pytest
+from socket_helpers import cleanup_socket_path, short_socket_path
 
 from search import cli as search_cli
 from search.indexer import (
@@ -77,8 +77,8 @@ def test_types_rejects_voicemail():
 # ── IPC server fixture (reused from Phase 5 status_agent tests) ────────
 
 def _start_fake_ipc_server(monkeypatch, handler):
-    """Bind /tmp/<uuid>.sock; accept one request and return handler(req)."""
-    sock_path = Path(f"/tmp/yulu_test_{uuid.uuid4().hex[:12]}.sock")
+    """Bind a short AF_UNIX socket; accept one request and return handler(req)."""
+    sock_path = short_socket_path()
     monkeypatch.setattr(search_cli, "IPC_SOCKET_PATH", sock_path)
     srv = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
     srv.bind(str(sock_path))
@@ -105,10 +105,7 @@ def _start_fake_ipc_server(monkeypatch, handler):
             pass
         finally:
             srv.close()
-            try:
-                os.unlink(sock_path)
-            except OSError:
-                pass
+            cleanup_socket_path(sock_path)
 
     t = threading.Thread(target=serve, daemon=True)
     t.start()
@@ -144,7 +141,7 @@ def test_cli_falls_back_to_in_process_when_agent_down(tmp_path, monkeypatch, cap
     # Force IPC to fail by pointing at a non-existent socket.
     monkeypatch.setattr(
         search_cli, "IPC_SOCKET_PATH",
-        Path(f"/tmp/nonexistent_{uuid.uuid4().hex[:8]}.sock"),
+        short_socket_path("missing.sock", require_bind=False),
     )
     # Seed a tiny corpus + isolated db.
     db = tmp_path / "search.sqlite"

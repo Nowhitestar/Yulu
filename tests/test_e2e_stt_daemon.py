@@ -12,7 +12,6 @@ import importlib
 import json
 import os
 import sys
-import tempfile
 import uuid
 from pathlib import Path
 
@@ -21,6 +20,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "yulu" / "scripts"
 sys.path.insert(0, str(SCRIPTS))
+from socket_helpers import short_socket_dir
 
 FIXTURE = ROOT / "tests" / "fixtures" / "audio" / "tiny_10s.wav"
 
@@ -51,7 +51,7 @@ def test_real_mlx_round_trip(tmp_path):
     # AF_UNIX path-length limit on macOS: allocate the socket in a short /tmp/
     # dir (pytest's tmp_path is under /private/var/folders/... which exceeds the
     # 104-byte limit).
-    sock_dir = Path(tempfile.mkdtemp(dir="/tmp"))
+    sock_dir = short_socket_dir()
     cfg = DaemonConfig(
         socket_path=sock_dir / "stt.sock",
         vocab_db_path=db,

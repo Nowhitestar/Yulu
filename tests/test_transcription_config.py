@@ -4,6 +4,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from socket_helpers import cleanup_socket_path, short_socket_path
+
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "yulu" / "scripts"
 sys.path.insert(0, str(SCRIPTS))
@@ -215,15 +217,12 @@ def test_transcribe_client_reads_large_response():
     raising 'Separator is not found, and chunk exceed the limit' — which silently
     broke full (re)transcription of hour-long recordings. FAILS against pre-fix code."""
     import asyncio
-    import os
-    import tempfile
     from transcribe_client import _send_once
 
     big_text = "x" * (256 * 1024)  # 256 KiB, well over the 64 KiB default limit
     # AF_UNIX paths are capped (~104 chars on macOS); pytest's tmp_path is too long,
-    # so bind the test socket under a short /tmp dir.
-    sock_dir = tempfile.mkdtemp(prefix="yl", dir="/tmp")
-    sock = Path(sock_dir) / "s"
+    # so bind the test socket under the shared short socket directory.
+    sock = short_socket_path("s")
 
     async def handle(reader, writer):
         await reader.readline()  # consume the request line
@@ -245,8 +244,4 @@ def test_transcribe_client_reads_large_response():
         resp = asyncio.run(run())
         assert resp["text"] == big_text
     finally:
-        for cleanup in (lambda: os.unlink(sock), lambda: os.rmdir(sock_dir)):
-            try:
-                cleanup()
-            except OSError:
-                pass
+        cleanup_socket_path(sock)
