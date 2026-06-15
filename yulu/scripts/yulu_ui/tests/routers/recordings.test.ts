@@ -97,12 +97,12 @@ describe("recordings router", () => {
     expect(r.title).toBe("TeamSync");
   });
 
-  it("get keeps original audio for playback when clean audio is present", async () => {
+  it("get prefers clean audio for playback when present", async () => {
     const stem = "TeamSync_20260102_090000";
     writeFileSync(join(mvDir, `${stem}.wav`), "");
     writeFileSync(join(mvDir, `${stem}.clean.wav`), "");
     const r = await createCaller(recordingsRouter, mkCtx({ moviesDir: mvDir })).get({ stem });
-    expect(r.audioFile).toBe(`${stem}.wav`);
+    expect(r.audioFile).toBe(`${stem}.clean.wav`);
   });
 
   it("get reads a migrated Memo_* recording", async () => {

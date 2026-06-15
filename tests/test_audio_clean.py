@@ -73,6 +73,24 @@ def test_clean_dual_track_prefers_no_echo_over_local_overlap(tmp_path):
     assert max(samples) <= 3770
 
 
+def test_clean_dual_track_holds_mic_after_system_audio_to_suppress_delayed_leak(tmp_path):
+    wav = tmp_path / "Meeting_20260609_120000.wav"
+    out = tmp_path / "Meeting_20260609_120000.clean.wav"
+    active = [(0, 4000)] * 5760
+    delayed_leak = [(3000, 0)] * 23040
+    quiet = [(0, 0)] * 16800
+    local_after_hold = [(5000, 0)] * 9600
+    _write_dual_track(wav, active + delayed_leak + quiet + local_after_hold)
+
+    clean_dual_track_to_mono(wav, out)
+
+    samples = _read_mono(out)
+    leak_start = len(active)
+    leak_end = leak_start + len(delayed_leak)
+    assert max(abs(s) for s in samples[leak_start:leak_end]) <= 100
+    assert max(abs(s) for s in samples[-len(local_after_hold):]) >= 1000
+
+
 def test_select_transcription_audio_generates_clean_file_for_dual_track(tmp_path):
     wav = tmp_path / "Meeting_20260609_120000.wav"
     _write_dual_track(wav, [(300, 4000)] * 960)

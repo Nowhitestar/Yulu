@@ -450,8 +450,10 @@ export const recordingsRouter = router({
         return existsSync(p) ? readFileSync(p, "utf8") : null;
       };
       const stat = statSync(wav);
-      const audioFile = `${input.stem}.wav`;
-      const audioStat = statSync(wav);
+      const cleanFile = `${input.stem}.clean.wav`;
+      const cleanPath = join(dir, cleanFile);
+      const audioFile = existsSync(cleanPath) ? cleanFile : `${input.stem}.wav`;
+      const audioStat = statSync(join(dir, audioFile));
       let recordedAt: string | null = null;
       const tm = input.stem.match(/_(\d{8})_(\d{6})$/);
       if (tm) recordedAt = isoFromStem(tm[1]!, tm[2]!);

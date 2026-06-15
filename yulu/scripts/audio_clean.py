@@ -15,6 +15,7 @@ DEFAULT_FRAME_MS = 30
 MIC_PLAYBACK_GAIN = 2.4
 SYS_ACTIVE_LEAK_MIC_BLEND = 0.02
 SYS_ACTIVE_SYS_GAIN = 0.94
+SYS_LEAK_SUPPRESSION_HOLD_SEC = 0.7
 
 
 def _rms(samples: list[int]) -> float:
@@ -46,7 +47,7 @@ def clean_dual_track_to_mono(src: Path, dst: Path, *, frame_ms: int = DEFAULT_FR
     mic = [p[0] for p in pairs]
     sys = [p[1] for p in pairs]
     frame = max(1, int(sr * frame_ms / 1000))
-    fade_pos = 0.0
+    sys_silent_sec = SYS_LEAK_SUPPRESSION_HOLD_SEC
 
     out = bytearray()
     for start in range(0, len(sys), frame):
@@ -57,11 +58,12 @@ def clean_dual_track_to_mono(src: Path, dst: Path, *, frame_ms: int = DEFAULT_FR
         mic_rms = _rms(mic_frame)
         sys_active = sys_rms > SYS_ACTIVE_THRESHOLD
         if sys_active:
-            fade_pos = 0.0
+            sys_silent_sec = 0.0
         else:
-            fade_pos = min(1.0, fade_pos + ((end - start) / sr))
+            sys_silent_sec += (end - start) / sr
+        fade_pos = min(1.0, max(0.0, sys_silent_sec - SYS_LEAK_SUPPRESSION_HOLD_SEC))
         sys_ratio = 1.0 - fade_pos
-        if sys_active:
+        if sys_active or sys_silent_sec <= SYS_LEAK_SUPPRESSION_HOLD_SEC:
             mic_blend = 0.0
         else:
             mic_blend = SYS_ACTIVE_LEAK_MIC_BLEND + (1.0 - SYS_ACTIVE_LEAK_MIC_BLEND) * fade_pos
