@@ -4,6 +4,15 @@ All notable changes to Yulu are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.11.2](https://github.com/Nowhitestar/Yulu/compare/v0.11.1...v0.11.2) (2026-06-15)
+
+
+### Bug Fixes
+
+* improve echo cleanup and settings refresh ([11ee3b7](https://github.com/Nowhitestar/Yulu/commit/11ee3b7e6e8feaab548e1e4058e464e72f822a40))
+* **install:** add agent-native install and uninstall plans ([#61](https://github.com/Nowhitestar/Yulu/issues/61)) ([c4fb18a](https://github.com/Nowhitestar/Yulu/commit/c4fb18a64e95212a2366cdf6c4cae199daed22c5))
+* keep realtime chunks out of recordings ([33f1ce5](https://github.com/Nowhitestar/Yulu/commit/33f1ce5c3a5f30247c81d07ac0515be8026760b4))
+
 ## [Unreleased]
 
 ### Changed
