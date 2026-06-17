@@ -97,6 +97,26 @@ describe("recordings router", () => {
     expect(r.title).toBe("TeamSync");
   });
 
+  it("summarize can use realtime transcript when final transcript is missing", async () => {
+    const stem = "TeamSync_20260102_090000";
+    const wavPath = join(mvDir, `${stem}.wav`);
+    const realtimePath = join(mvDir, `${stem}.realtime.transcript.txt`);
+    writeFileSync(wavPath, "");
+    writeFileSync(realtimePath, "live text");
+    const ctx = mkCtx({ moviesDir: mvDir });
+    const caller = createCaller(recordingsRouter, ctx);
+
+    await caller.summarize({ stem });
+
+    const queue = JSON.parse(readFileSync(ctx.paths.agentQueueJson, "utf8"));
+    expect(queue).toHaveLength(1);
+    expect(queue[0].type).toBe("summary_request");
+    expect(queue[0].stem).toBe(stem);
+    expect(queue[0].title).toBe("TeamSync");
+    expect(queue[0].transcriptPath).toBe(realtimePath);
+    expect(queue[0].audio_path).toBe(wavPath);
+  });
+
   it("get prefers clean audio for playback when present", async () => {
     const stem = "TeamSync_20260102_090000";
     writeFileSync(join(mvDir, `${stem}.wav`), "");
