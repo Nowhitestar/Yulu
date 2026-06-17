@@ -224,10 +224,11 @@ export function RecordingReader() {
   const navigate = useNavigate();
   const confirm = useConfirm();
   const t = useT();
-  const { data, isPending } = trpc.recordings.get.useQuery({ stem }, { enabled: stem.length > 0 });
+  const { data, error, isPending } = trpc.recordings.get.useQuery({ stem }, { enabled: stem.length > 0 });
 
   const qc = useQueryClient();
   const [lastAction, setLastAction] = useState<"transcribe" | "summarize" | null>(null);
+  const [actionError, setActionError] = useState<{ action: "transcribe" | "summarize"; message: string } | null>(null);
   const [retranscribeSpeakerCount, setRetranscribeSpeakerCount] =
     useState<(typeof RETRANSCRIBE_SPEAKER_OPTIONS)[number]>("auto");
   const targetAudioSrc = data ? audioSrcFor(data) : null;
@@ -322,9 +323,10 @@ export function RecordingReader() {
 
   useWsChannel("jobs", (msg) => {
     if (msg.stem !== stem) return;
+    qc.invalidateQueries({ queryKey: [["recordings", "get"]] });
+    qc.invalidateQueries({ queryKey: [["recordings", "list"]] });
     if (msg.state === "done" || msg.state === "failed") {
-      qc.invalidateQueries({ queryKey: [["recordings", "get"]] });
-      qc.invalidateQueries({ queryKey: [["recordings", "list"]] });
+      setActionError(null);
     }
   });
 
@@ -339,24 +341,33 @@ export function RecordingReader() {
     const status = data?.status ?? "idle";
     const targetRunning = action === "transcribe" ? "transcribing" : "summarizing";
     const targetFailed = action === "transcribe" ? "transcription_failed" : "summary_failed";
+    if (actionError?.action === action) return "failed";
     if (status === targetRunning) return "running";
     if ((status === targetFailed || status === "failed") && lastAction === action) return "failed";
     if (status === "idle" && lastAction === action) return "done";
     return "idle";
   }
 
+  function buttonError(action: "transcribe" | "summarize"): string | undefined {
+    return actionError?.action === action ? actionError.message : data?.statusError;
+  }
+
   const handleTranscribe = () => {
     setLastAction("transcribe");
+    setActionError(null);
     const diarizationNumSpeakers =
       retranscribeSpeakerCount === "auto" ? null : Number(retranscribeSpeakerCount);
     transcribeMut.mutate({ stem, diarizationNumSpeakers }, {
-      onError: (err) => console.error("transcribe failed:", err.message),
+      onError: (err) => setActionError({ action: "transcribe", message: err.message }),
+      onSettled: invalidateBoth,
     });
   };
   const handleSummarize = () => {
     setLastAction("summarize");
+    setActionError(null);
     summarizeMut.mutate({ stem }, {
-      onError: (err) => console.error("summarize failed:", err.message),
+      onError: (err) => setActionError({ action: "summarize", message: err.message }),
+      onSettled: invalidateBoth,
     });
   };
 
@@ -418,6 +429,7 @@ export function RecordingReader() {
   }, [snippet, tab, data]);
 
   if (isPending) return <EmptyState label={t("common.loading")} />;
+  if (error) return <EmptyState label={t("reader.loadFailed", { message: error.message })} />;
   if (!data) return <EmptyState label={t("reader.notFound", { stem })} />;
 
   const setTab = (t: Tab) => {
@@ -500,7 +512,7 @@ export function RecordingReader() {
           label={t("reader.action.retranscribe")}
           icon={<RefreshCw size={14} strokeWidth={1.75} />}
           state={deriveButtonState("transcribe")}
-          error={data?.statusError}
+          error={buttonError("transcribe")}
           onClick={handleTranscribe}
           disabled={!data?.wavPath}
           disabledReason={!data?.wavPath ? t("reader.disabled.wavMissing") : undefined}
@@ -509,10 +521,10 @@ export function RecordingReader() {
           label={t("reader.action.regenerate")}
           icon={<Sparkles size={14} strokeWidth={1.75} />}
           state={deriveButtonState("summarize")}
-          error={data?.statusError}
+          error={buttonError("summarize")}
           onClick={handleSummarize}
-          disabled={!data?.transcript}
-          disabledReason={!data?.transcript ? t("reader.disabled.transcriptFirst") : undefined}
+          disabled={!(data?.transcript || data?.realtime)}
+          disabledReason={!(data?.transcript || data?.realtime) ? t("reader.disabled.transcriptFirst") : undefined}
         />
         {summaryTargets.map((target) => (
           <button

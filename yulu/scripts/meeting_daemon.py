@@ -461,6 +461,27 @@ def cmd_stop():
     _stop_and_process()
 
 
+def _active_recording_info():
+    rec = recording_info(load_state())
+    if rec:
+        return rec
+    try:
+        from record_audio import socket_send
+        resp = socket_send({"action": "status"})
+    except Exception:
+        resp = None
+    if not (resp and resp.get("recording") is True):
+        return {}
+    audio_path = resp.get("file") or ""
+    title = Path(audio_path).stem if audio_path else "meeting"
+    return {
+        "title": title,
+        "audio_path": audio_path,
+        "file_path": audio_path,
+        "backend": "daemon",
+    }
+
+
 def _launch_status_window(title):
     """启动状态浮窗（先杀掉旧的）。"""
     _kill_status_window()
@@ -507,7 +528,7 @@ def _stop_and_process():
     # 先关状态浮窗
     _kill_status_window()
 
-    rec = recording_info(load_state())
+    rec = _active_recording_info()
     if not rec:
         print("没有正在进行的录制", file=sys.stderr)
         return

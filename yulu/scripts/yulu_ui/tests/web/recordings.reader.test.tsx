@@ -1,9 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { MemoryRouter, Routes, Route } from "react-router";
 
 const getMock = vi.fn();
 const transcribeMutate = vi.fn();
+const summarizeMutate = vi.fn();
 const renameMutate = vi.fn();
 const setTagsMutate = vi.fn();
 const deleteMutate = vi.fn();
@@ -19,7 +20,7 @@ vi.mock("../../web/src/trpc.js", () => ({
     recordings: {
       get: { useQuery: (...a: unknown[]) => getMock(...a) },
       transcribe: { useMutation: () => ({ mutate: transcribeMutate }) },
-      summarize: { useMutation: () => ({ mutate: vi.fn() }) },
+      summarize: { useMutation: () => ({ mutate: summarizeMutate }) },
       rename: { useMutation: () => ({ mutate: renameMutate, isPending: false }) },
       setTags: { useMutation: () => ({ mutate: setTagsMutate, isPending: false }) },
       delete: { useMutation: () => ({ mutate: deleteMutate, isPending: false }) },
@@ -61,6 +62,7 @@ function renderAt(stem: string) {
 
 beforeEach(() => {
   transcribeMutate.mockClear();
+  summarizeMutate.mockClear();
   renameMutate.mockClear(); setTagsMutate.mockClear(); deleteMutate.mockClear();
   renameSpeakerMutate.mockClear(); mergeSpeakersMutate.mockClear(); assignSegmentSpeakerMutate.mockClear(); sendSummaryMutate.mockClear();
   navigateMock.mockClear(); confirmMock.mockClear(); confirmMock.mockReturnValue(true);
@@ -84,6 +86,13 @@ describe("RecordingReader", () => {
     renderAt("Memo_20260101_120000");
     expect(screen.getByRole("button", { name: /重新转写/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /重新生成摘要/i })).toBeInTheDocument();
+  });
+
+  it("shows load errors instead of pretending every recording is missing", () => {
+    getMock.mockReturnValue({ data: undefined, error: new Error("connect ECONNREFUSED 127.0.0.1:7777"), isPending: false });
+    renderAt("TeamSync_20260102_090000");
+    expect(screen.getByText(/无法载入录音/)).toBeInTheDocument();
+    expect(screen.queryByText(/未找到录音/)).toBeNull();
   });
 
   it("renders manual enabled connector send buttons and confirms destination before sending", () => {
@@ -128,6 +137,31 @@ describe("RecordingReader", () => {
       { stem: baseData.stem, diarizationNumSpeakers: 3 },
       expect.anything(),
     );
+  });
+
+  it("allows regenerating summary from realtime-only recordings", () => {
+    getMock.mockReturnValue({
+      data: { ...baseData, transcript: null, summary: null, realtime: "live text", hasRealtime: true },
+      isPending: false,
+    });
+    renderAt(baseData.stem);
+    fireEvent.click(screen.getByRole("button", { name: /重新生成摘要/i }));
+    expect(summarizeMutate).toHaveBeenCalledWith(
+      { stem: baseData.stem },
+      expect.anything(),
+    );
+  });
+
+  it("surfaces reprocess mutation errors on the button", async () => {
+    getMock.mockReturnValue({ data: baseData, isPending: false });
+    summarizeMutate.mockImplementation((_args: unknown, opts: { onError?: (err: Error) => void }) => {
+      opts.onError?.(new Error("Job already running for this recording"));
+    });
+    renderAt(baseData.stem);
+    fireEvent.click(screen.getByRole("button", { name: /重新生成摘要/i }));
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /Job already running/ })).toBeInTheDocument();
+    });
   });
 
   it("renders the summary through MarkdownView, not a raw <pre>", () => {

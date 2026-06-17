@@ -58,6 +58,8 @@ export interface RunSummarizeArgs {
   stem: string;
   transcriptPath: string;
   summaryPath: string;
+  audioPath?: string;
+  title?: string | null;
   llmCommand: string[] | null;
   agentQueueJson: string;
   scriptDir?: string;
@@ -66,19 +68,20 @@ export interface RunSummarizeArgs {
 }
 
 export async function runSummarize(args: RunSummarizeArgs): Promise<{ jobId: string; mode: "queue" | "direct" }> {
-  const { stem, transcriptPath, summaryPath, llmCommand, agentQueueJson, scriptDir, registry, pubsub } = args;
+  const { stem, transcriptPath, summaryPath, audioPath, title, llmCommand, agentQueueJson, scriptDir, registry, pubsub } = args;
   const jobId = randomUUID();
   if (llmCommand === null) {
-    return runSummarizeQueueMode({ stem, jobId, transcriptPath, summaryPath, agentQueueJson, registry, pubsub });
+    return runSummarizeQueueMode({ stem, jobId, transcriptPath, summaryPath, audioPath, title, agentQueueJson, registry, pubsub });
   }
   return runSummarizeDirectMode({ stem, jobId, transcriptPath, summaryPath, llmCommand, scriptDir, registry, pubsub });
 }
 
 async function runSummarizeQueueMode(args: {
   stem: string; jobId: string; transcriptPath: string; summaryPath: string;
+  audioPath?: string; title?: string | null;
   agentQueueJson: string; registry: JobRegistry; pubsub: PubSub<AppChannels>;
 }): Promise<{ jobId: string; mode: "queue" }> {
-  const { stem, jobId, transcriptPath, summaryPath, agentQueueJson, registry, pubsub } = args;
+  const { stem, jobId, transcriptPath, summaryPath, audioPath, title, agentQueueJson, registry, pubsub } = args;
   const queueEntryId = randomUUID();
   registry.set({ stem, action: "summarize", state: "summarizing", startedAt: Date.now(), jobId, queueEntryId });
   pubsub.publish("jobs", { stem, jobId, state: "summarizing" });
@@ -91,6 +94,8 @@ async function runSummarizeQueueMode(args: {
     id: queueEntryId,
     type: "summary_request",
     stem,
+    title: title ?? stem,
+    audio_path: audioPath,
     transcriptPath,
     summaryPath,
     requestedAt: Date.now(),

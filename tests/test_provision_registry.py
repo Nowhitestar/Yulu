@@ -228,7 +228,8 @@ def test_scriptstep_drives_real_bash_hermetically_and_second_apply_skips(tmp_pat
     shim = _make_shim_dir(tmp_path)
     env = _hermetic_env(tmp_path, shim)
     # Drive the registry's real subprocess against the hermetic environment.
-    monkeypatch.setattr(os, "environ", env)
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
 
     # A probe we control: first run "not done", then flip to "done".
     state = {"done": False}

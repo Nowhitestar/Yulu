@@ -656,15 +656,23 @@ export const recordingsRouter = router({
     .mutation(async ({ ctx, input }) => {
       const dir = ctx.paths.moviesDir;
       const transcriptPath = join(dir, `${input.stem}.transcript.txt`);
-      if (!existsSync(transcriptPath)) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Transcript missing — run Re-transcribe first" });
+      const realtimePath = join(dir, `${input.stem}.realtime.transcript.txt`);
+      const sourcePath = existsSync(transcriptPath) ? transcriptPath : realtimePath;
+      if (!existsSync(sourcePath)) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Transcript missing — run Re-transcribe first" });
       if (ctx.jobs.get(input.stem)) throw new TRPCError({ code: "CONFLICT", message: "Job already running for this recording" });
       const summaryPath = join(dir, `${input.stem}.summary.md`);
+      const wavPath = join(dir, `${input.stem}.wav`);
+      const mm = `${input.stem}.wav`.match(REC_FILE_RE);
+      const derivedTitle = mm ? mm[1]! : null;
+      const title = resolveTitle(dir, input.stem, derivedTitle);
       const cfg = ctx.config.read();
       const llmCommand = (cfg.llm?.command ?? null) as string[] | null;
       void runSummarize({
         stem: input.stem,
-        transcriptPath,
+        transcriptPath: sourcePath,
         summaryPath,
+        audioPath: existsSync(wavPath) ? wavPath : undefined,
+        title,
         llmCommand,
         agentQueueJson: ctx.paths.agentQueueJson,
         scriptDir: ctx.paths.scriptDir,
