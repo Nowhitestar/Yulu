@@ -48,14 +48,19 @@ class STTScheduler:
         self._counter = itertools.count()
         self._interactive_queue: list[_Queued] = []
         self._background_queue: list[_Queued] = []
-        self._interactive_event = asyncio.Event()
-        self._background_event = asyncio.Event()
+        self._interactive_event: Optional[asyncio.Event] = None
+        self._background_event: Optional[asyncio.Event] = None
         self._all_jobs: dict[str, _Queued] = {}
         self._workers: list[asyncio.Task] = []
-        self._stopped = False
+        self._stopped = True
 
     async def start(self) -> None:
+        if self._workers:
+            return
         self._loop = asyncio.get_running_loop()
+        self._stopped = False
+        self._interactive_event = asyncio.Event()
+        self._background_event = asyncio.Event()
         self._workers.append(
             asyncio.create_task(self._slot_worker("interactive", self._interactive_queue, self._interactive_event))
         )
@@ -65,15 +70,20 @@ class STTScheduler:
 
     async def stop(self) -> None:
         self._stopped = True
-        self._interactive_event.set()
-        self._background_event.set()
+        if self._interactive_event is not None:
+            self._interactive_event.set()
+        if self._background_event is not None:
+            self._background_event.set()
         for w in self._workers:
             w.cancel()
         await asyncio.gather(*self._workers, return_exceptions=True)
         self._workers.clear()
+        self._interactive_event = None
+        self._background_event = None
+        self._loop = None
 
     async def submit(self, job: Job) -> asyncio.Future:
-        if self._loop is None:
+        if self._loop is None or self._interactive_event is None or self._background_event is None:
             raise RuntimeError("scheduler not started")
         fut: asyncio.Future = self._loop.create_future()
         tok = CancelToken()
