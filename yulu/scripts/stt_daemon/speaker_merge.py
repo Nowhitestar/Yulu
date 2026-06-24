@@ -70,6 +70,17 @@ def _default_display_name(idx: int) -> str:
     return f"Speaker {idx + 1}"
 
 
+def _clean_speaker_hints(names: Optional[Iterable[str]]) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for raw in names or []:
+        name = str(raw).strip()
+        if name and name not in seen:
+            seen.add(name)
+            out.append(name)
+    return out
+
+
 # ── Data model ───────────────────────────────────────────────────────────────
 
 
@@ -254,6 +265,7 @@ def assign_speakers(
     turns: Iterable,
     prior_map: Optional[dict[int, str]] = None,
     prior_speakers: Optional[dict[str, dict]] = None,
+    speaker_hints: Optional[Iterable[str]] = None,
     nearest_window: float = DEFAULT_NEAREST_WINDOW_S,
     collapse_repeats: bool = True,
 ) -> MergeResult:
@@ -267,6 +279,8 @@ def assign_speakers(
                       indices are re-anchored to existing ids by overlap (idempotent re-diarize).
         prior_speakers: optional prior ``speakers`` map (``{speaker_id -> {display_name, renamed,
                       merged_into}}``). User renames carried here are NEVER overwritten.
+        speaker_hints: optional calendar-attendee names. They seed default display names by cluster
+                      order, but remain editable hints (``renamed`` stays False).
         nearest_window: max seconds a no-overlap segment may borrow the nearest turn's speaker.
         collapse_repeats: collapse consecutive identical same-speaker segments (whisper repeat).
 
@@ -277,7 +291,8 @@ def assign_speakers(
     norm_turns = _normalize_turns(turns)
 
     # 1. Re-anchor volatile cluster indices → stable speaker_ids (idempotency).
-    idx_to_id, speakers = _build_speaker_map(norm_turns, prior_map, prior_speakers)
+    idx_to_id, speakers = _build_speaker_map(
+        norm_turns, prior_map, prior_speakers, speaker_hints=speaker_hints)
 
     # 2. Sort ASR segments by start (stable). Keep originals; we read start/end/text.
     indexed = sorted(
@@ -451,6 +466,8 @@ def _build_speaker_map(
     turns: list[SpeakerTurn],
     prior_map: Optional[dict[int, str]],
     prior_speakers: Optional[dict[str, dict]],
+    *,
+    speaker_hints: Optional[Iterable[str]] = None,
 ) -> tuple[dict[int, str], dict[str, dict]]:
     """Return ``(idx_to_id, speakers)``.
 
@@ -462,6 +479,7 @@ def _build_speaker_map(
     A genuinely new cluster gets a fresh ``spk-N``. User renames are carried verbatim and NEVER
     overwritten.
     """
+    hints = _clean_speaker_hints(speaker_hints)
     speakers: dict[str, dict] = {}
     if prior_speakers:
         # Deep-ish copy so we never mutate the caller's dict.
@@ -480,6 +498,7 @@ def _build_speaker_map(
                 "renamed": False,
                 "merged_into": None,
             })
+        _apply_speaker_hints(speakers, idx_to_id, hints)
         return idx_to_id, speakers
 
     # Re-anchor. Build, for each PRIOR speaker_id, the set of time spans it owned previously.
@@ -513,7 +532,25 @@ def _build_speaker_map(
                 "renamed": False,
                 "merged_into": None,
             })
+    _apply_speaker_hints(speakers, idx_to_id, hints)
     return idx_to_id, speakers
+
+
+def _apply_speaker_hints(speakers: dict[str, dict], idx_to_id: dict[int, str], hints: list[str]) -> None:
+    """Seed editable display names from calendar attendees without overriding user renames."""
+    if not hints:
+        return
+    for idx, sid in sorted(idx_to_id.items()):
+        if idx >= len(hints):
+            continue
+        entry = speakers.get(sid)
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("renamed") or entry.get("merged_into"):
+            continue
+        entry["display_name"] = hints[idx]
+        entry["name_source"] = "calendar_attendee"
+        entry["name_confidence"] = "candidate"
 
 
 def _allocate_speaker_id(speakers: dict[str, dict], hint_idx: int) -> str:
@@ -617,6 +654,7 @@ def build_sidecar(
     provider: str = "sherpa-onnx",
     model: Optional[str] = None,
     num_speakers_supplied: Optional[int] = None,
+    speaker_hints: Optional[Iterable[str]] = None,
 ) -> dict:
     """Assemble the ``<stem>.speakers.json`` document from a MergeResult + the raw turns.
 
@@ -624,7 +662,7 @@ def build_sidecar(
     """
     norm_turns = _normalize_turns(turns)
     detected = len({t.speaker_idx for t in norm_turns})
-    return {
+    doc = {
         "schema_version": SCHEMA_VERSION,
         "provider": provider,
         "model": model,
@@ -634,6 +672,13 @@ def build_sidecar(
         "segments": [s.to_dict() for s in result.segments],
         "speakers": result.speakers,
     }
+    hints = _clean_speaker_hints(speaker_hints)
+    if hints:
+        doc["speaker_hints"] = {
+            "source": "calendar_attendees",
+            "names": hints,
+        }
+    return doc
 
 
 def write_sidecar(path: str | os.PathLike, doc: dict) -> Path:

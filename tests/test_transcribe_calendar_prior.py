@@ -34,6 +34,24 @@ def test_resolve_by_meeting_id(tmp_path):
     assert n == 3
 
 
+def test_resolve_attendee_names_by_meeting_id_dedupes_and_accepts_dicts(tmp_path):
+    state = tmp_path / ".state.json"
+    schedule = tmp_path / "schedule.json"
+    _write(state, {"meeting_id": "ev-42", "title": "Weekly Sync"})
+    _write(schedule, {"meetings": [
+        {"id": "ev-42", "title": "Weekly Sync", "attendees": [
+            {"displayName": "Lewis"},
+            {"email": "ciel@example.com"},
+            "Lewis",
+            "  ",
+        ]},
+    ]})
+    audio = tmp_path / "Weekly_Sync_20260601_100000.wav"
+    names = dp.resolve_attendee_names(
+        audio, meeting_title="Weekly Sync", state_path=state, schedule_path=schedule)
+    assert names == ["Lewis", "ciel@example.com"]
+
+
 def test_resolve_by_title_when_no_meeting_id(tmp_path):
     state = tmp_path / ".state.json"
     schedule = tmp_path / "schedule.json"
