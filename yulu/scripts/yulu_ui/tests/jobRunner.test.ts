@@ -132,6 +132,31 @@ describe("jobRunner.runSummarize (queue mode)", () => {
     expect(queue[0].stem).toBe("memo_test");
   });
 
+  it("includes the selected summary prompt snapshot in queue mode", async () => {
+    const queuePath = join(root, "agent-queue.json");
+    writeFileSync(queuePath, "[]");
+    const transcriptPath = join(root, "memo_test.transcript.txt");
+    writeFileSync(transcriptPath, "hello world");
+    await runSummarize({
+      stem: "memo_test",
+      transcriptPath,
+      summaryPath: join(root, "memo_test.summary.md"),
+      prompt: { id: "p1", slug: "decisions", name: "Decisions", content: "Summarize {{transcript}}" },
+      llmCommand: null,
+      agentQueueJson: queuePath,
+      registry,
+      pubsub,
+    });
+    const queue = JSON.parse(readFileSync(queuePath, "utf8"));
+    expect(queue[0]).toMatchObject({
+      prompt_id: "p1",
+      prompt_slug: "decisions",
+      prompt_name: "Decisions",
+      prompt_content_snapshot: "Summarize {{transcript}}",
+      transcript_path: transcriptPath,
+    });
+  });
+
   it("returns mode='queue' and sets registry summarizing", async () => {
     const queuePath = join(root, "agent-queue.json");
     writeFileSync(queuePath, "[]");
@@ -213,5 +238,32 @@ describe("jobRunner.runSummarize (direct mode)", () => {
     expect(stdin).toContain("请根据下面的会议转录生成中文会议摘要");
     expect(stdin).toContain("会议转录：");
     expect(stdin).toContain("hello world");
+  });
+
+  it("renders the selected summary prompt before sending direct-mode stdin", async () => {
+    const transcriptPath = join(root, "memo_test.transcript.txt");
+    const summaryPath = join(root, "memo_test.summary.md");
+    writeFileSync(transcriptPath, "hello world");
+
+    let stdin = "";
+    __setSpawnForTesting(() => {
+      const proc = fakeSpawn(0, "", "summary ok");
+      proc.stdin.write = (chunk: string | Buffer) => { stdin += chunk.toString(); };
+      return proc as never;
+    });
+
+    await runSummarize({
+      stem: "memo_test",
+      title: "Team Sync",
+      transcriptPath,
+      summaryPath,
+      prompt: { id: "p1", slug: "decisions", name: "Decisions", content: "Title: {{meeting_title}}\nBody: {{transcript}}" },
+      llmCommand: ["codex"],
+      agentQueueJson: join(root, "agent-queue.json"),
+      registry,
+      pubsub,
+    });
+
+    expect(stdin).toBe("Title: Team Sync\nBody: hello world");
   });
 });

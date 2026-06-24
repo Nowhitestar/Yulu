@@ -36,8 +36,9 @@ button.transcript-time:hover {
   grid-template-columns: 44px minmax(72px, max-content) 14px minmax(0, 1fr) minmax(98px, max-content);
   align-items: baseline;
   gap: 8px;
-  padding: 4px 0 4px 8px;
+  padding: 5px 8px;
   border-left: 2px solid var(--speaker-color, var(--edge));
+  border-radius: 0 12px 12px 0;
 }
 .transcript-speaker-line .transcript-time,
 .transcript-speaker-line .speaker {
@@ -74,11 +75,11 @@ button.transcript-time:hover {
   max-width: 140px;
   min-width: 98px;
   border: 1px solid var(--edge);
-  border-radius: 6px;
-  padding: 2px 6px;
+  border-radius: 10px;
+  padding: 3px 7px;
   font-size: 11px;
   color: var(--fg-2);
-  background: var(--glass);
+  background: var(--field-bg);
 }
 .transcript-speaker-select:focus {
   outline: 2px solid var(--accent-soft);

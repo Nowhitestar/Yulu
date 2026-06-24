@@ -12,6 +12,8 @@ describe("ThemeProvider + useTheme", () => {
   beforeEach(() => {
     localStorage.clear();
     document.documentElement.removeAttribute("data-theme");
+    document.documentElement.removeAttribute("data-theme-family");
+    document.documentElement.removeAttribute("data-theme-preset");
   });
 
   it("defaults to auto + resolves to dark when matchMedia matches dark", () => {
@@ -37,11 +39,39 @@ describe("ThemeProvider + useTheme", () => {
     expect(document.documentElement.getAttribute("data-theme")).toBe("light");
   });
 
-  it("set('auto') clears localStorage", () => {
+  it("setPreset('ayu') persists as a family and mode controls light/dark", () => {
+    const { result } = renderHook(() => useTheme(), { wrapper });
+    act(() => result.current.setPreset("ayu"));
+    act(() => result.current.set("dark"));
+    expect(localStorage.getItem("yulu_theme_family")).toBe("ayu");
+    expect(result.current.preset).toBe("ayu");
+    expect(result.current.resolved).toBe("dark");
+    expect(document.documentElement.getAttribute("data-theme")).toBe("dark");
+    expect(document.documentElement.getAttribute("data-theme-family")).toBe("ayu");
+    expect(document.documentElement.getAttribute("data-theme-preset")).toBe("ayu-dark");
+  });
+
+  it("custom theme persists and writes CSS variables", () => {
+    const { result } = renderHook(() => useTheme(), { wrapper });
+    act(() => result.current.setPreset("custom"));
+    act(() => result.current.set("dark"));
+    act(() => result.current.setCustomTheme({
+      ...result.current.customTheme,
+      dark: {
+        ...result.current.customTheme.dark,
+        accent: "#123456",
+      },
+    }));
+    expect(localStorage.getItem("yulu_custom_theme_v2")).toContain("#123456");
+    expect(result.current.resolved).toBe("dark");
+    expect(document.documentElement.style.getPropertyValue("--accent")).toBe("#123456");
+  });
+
+  it("set('auto') persists auto mode for config-backed theme state", () => {
     localStorage.setItem("yulu_theme", "dark");
     const { result } = renderHook(() => useTheme(), { wrapper });
     act(() => result.current.set("auto"));
-    expect(localStorage.getItem("yulu_theme")).toBeNull();
+    expect(localStorage.getItem("yulu_theme_mode")).toBe("auto");
     expect(result.current.choice).toBe("auto");
   });
 

@@ -1,11 +1,15 @@
 .filterchips {
   display: inline-flex;
-  gap: 10px;
+  gap: 6px;
   margin-bottom: 12px;
+  padding: 4px;
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-pill);
+  background: var(--row-hover);
 }
 .filterchip {
-  padding: 4px 10px;
-  border-radius: var(--radius-inner);
+  padding: 5px 11px;
+  border-radius: var(--radius-pill);
   font-size: 11px;
   color: var(--fg-2);
   background: var(--row-hover);
@@ -13,8 +17,9 @@
 }
 .filterchip:hover { color: var(--fg); }
 .filterchip.active {
-  background: var(--accent-soft);
-  color: var(--accent);
+  background: var(--glass-3);
+  color: var(--fg);
+  box-shadow: inset 0 1px 0 var(--edge-top);
 }
 
 @media (max-width: 760px) {

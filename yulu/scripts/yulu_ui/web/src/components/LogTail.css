@@ -3,15 +3,17 @@
   flex-direction: column;
   flex: 1;
   min-height: 0;
-  background: var(--wp-1);
+  background: var(--surface-solid);
+  border: 1px solid var(--edge);
   border-radius: var(--radius-panel);
   overflow: hidden;
+  box-shadow: var(--edge-shadow);
 }
 .logtail-pre {
   flex: 1;
   overflow-y: auto;
   margin: 0;
-  padding: 8px 12px;
+  padding: 12px 14px;
   font-family: "SF Mono", ui-monospace, monospace;
   font-size: 11px;
   line-height: 1.5;

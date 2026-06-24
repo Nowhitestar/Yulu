@@ -33,6 +33,17 @@
       "note": "When true, the meeting detail page can manually send summaries to the Zulip channel selected in Settings > AI integrations."
     }
   },
+  "ui": {
+    "theme": {
+      "family": "default",
+      "mode": "auto",
+      "custom": {
+        "light": {},
+        "dark": {}
+      },
+      "note": "Theme is config-backed. family is one of default/ayu/paper/custom; mode is auto/light/dark. Ayu and Paper are families, not separate light/dark themes."
+    }
+  },
   "audio": {
     "backend": "daemon",
     "mic_device": "",

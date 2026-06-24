@@ -4,6 +4,7 @@
   gap: 12px;
   padding: 10px 14px;
   background: var(--accent-soft);
+  border: 1px solid color-mix(in oklch, var(--accent) 24%, var(--edge));
   border-radius: var(--radius-panel);
   margin: 6px 12px;
   box-shadow: var(--edge-shadow);
@@ -17,16 +18,16 @@
   font-family: "SF Mono", ui-monospace, monospace;
 }
 .restart-banner-btn {
-  padding: 3px 10px;
+  padding: 5px 11px;
   font-size: 11px;
-  border-radius: var(--radius-inner);
+  border-radius: var(--radius-pill);
   background: var(--glass-3);
   color: var(--fg);
 }
 .restart-banner-btn:hover { background: var(--glass-2); }
 .restart-banner-btn.primary {
   background: var(--accent);
-  color: var(--wp-1);
+  color: white;
   align-self: center;
 }
 .restart-banner-btn.primary:hover { opacity: 0.9; }

@@ -1,23 +1,30 @@
 .health-summary {
-  background: var(--glass-2);
+  background: var(--glass-3);
   border: 1px solid var(--edge);
-  border-radius: 10px;
+  border-radius: 16px;
   padding: 16px 20px;
   display: flex;
   align-items: center;
   gap: 16px;
   margin-bottom: 22px;
+  box-shadow: var(--shadow-card);
+  backdrop-filter: var(--blur-pill);
+  -webkit-backdrop-filter: var(--blur-pill);
 }
 .health-summary-pulse {
-  width: 40px; height: 40px; border-radius: 50%;
-  display: grid; place-items: center;
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  box-shadow: inset 0 1px 0 var(--edge-top);
 }
 .health-summary.state-ok    .health-summary-pulse { background: color-mix(in oklch, var(--green) 16%, transparent);  color: var(--green); }
 .health-summary.state-warn  .health-summary-pulse { background: color-mix(in oklch, var(--accent) 18%, transparent); color: var(--accent); }
 .health-summary.state-crit  .health-summary-pulse { background: color-mix(in oklch, var(--red) 16%, transparent);    color: var(--red); }
 .health-summary.state-loading .health-summary-pulse { background: var(--row-hover);  color: var(--fg-2); }
 .health-summary-text { font-size: 14px; color: var(--fg); }
-.health-summary-text b { display: block; }
+.health-summary-text b { display: block; font-weight: 700; }
 .health-summary-text small { display: block; color: var(--fg-2); font-size: 11.5px; margin-top: 3px; }
 .health-summary-counters { display: flex; gap: 18px; margin-left: auto; font-size: 12px; }
 .health-counter { display: flex; align-items: center; gap: 6px; color: var(--fg); }
@@ -34,6 +41,7 @@
     gap: 10px;
     padding: 12px;
     margin-bottom: 14px;
+    border-radius: 20px;
   }
 
   .health-summary-counters {

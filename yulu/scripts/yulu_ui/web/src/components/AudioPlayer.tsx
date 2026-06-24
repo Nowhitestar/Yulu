@@ -34,10 +34,10 @@ export function AudioPlayer({ src, initialSeek, onSeek }: AudioPlayerProps) {
       waveColor: "rgba(139, 146, 160, 0.55)",
       progressColor: "var(--accent)",
       cursorColor: "var(--accent)",
-      barWidth: 2,
-      barRadius: 2,
-      barGap: 1,
-      height: 48,
+      barWidth: 4,
+      barRadius: 999,
+      barGap: 2,
+      height: 40,
       normalize: true,
     });
     wsRef.current = ws;
@@ -91,7 +91,10 @@ export function AudioPlayer({ src, initialSeek, onSeek }: AudioPlayerProps) {
       >
         {isPlaying ? <Pause size={14} strokeWidth={1.75} /> : <Play size={14} strokeWidth={1.75} />}
       </button>
-      <div ref={containerRef} className="audioplayer-wave" />
+      <div className="audioplayer-wave-shell">
+        <div ref={containerRef} className="audioplayer-wave" />
+        {!ready && <div className="audioplayer-wave-fallback" aria-hidden="true" />}
+      </div>
       <div className="audioplayer-time">
         {formatTime(currentTime)} / {formatTime(duration)}
       </div>

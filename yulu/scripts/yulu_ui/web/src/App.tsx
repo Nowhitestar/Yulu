@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createBrowserRouter, RouterProvider, Navigate, useParams, useSearchParams } from "react-router";
 import { useState } from "react";
 import { trpc, makeTrpcClient } from "./trpc.js";
-import { ThemeProvider } from "./theme.js";
+import { ThemeConfigSync, ThemeProvider } from "./theme.js";
 import { LanguageProvider } from "./i18n/LanguageProvider.js";
 import { WsProvider } from "./ws.js";
 import { RootLayout } from "./routes/root.js";
@@ -93,16 +93,17 @@ export function App() {
   const [tc] = useState(() => makeTrpcClient());
 
   return (
-    <ThemeProvider>
-      <LanguageProvider>
-        <trpc.Provider client={tc} queryClient={qc}>
-          <QueryClientProvider client={qc}>
+    <trpc.Provider client={tc} queryClient={qc}>
+      <QueryClientProvider client={qc}>
+        <ThemeProvider>
+          <ThemeConfigSync />
+          <LanguageProvider>
             <WsProvider>
               <RouterProvider router={router} />
             </WsProvider>
-          </QueryClientProvider>
-        </trpc.Provider>
-      </LanguageProvider>
-    </ThemeProvider>
+          </LanguageProvider>
+        </ThemeProvider>
+      </QueryClientProvider>
+    </trpc.Provider>
   );
 }

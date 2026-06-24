@@ -7,8 +7,8 @@
 }
 .placeholder-label {
   font-size: 9px;
-  font-weight: 600;
-  letter-spacing: 0.10em;
+  font-weight: 700;
+  letter-spacing: 0.08em;
   color: var(--fg-3);
 }
 .placeholder-backend {
@@ -16,6 +16,7 @@
   font-size: 11px;
   color: var(--fg-2);
   padding: 6px 10px;
-  background: var(--row-hover);
-  border-radius: var(--radius-inner);
+  background: var(--field-bg);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-pill);
 }

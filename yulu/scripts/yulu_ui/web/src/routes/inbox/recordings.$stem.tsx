@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router";
 import { useQueryClient } from "@tanstack/react-query";
-import { ChevronLeft, RefreshCw, Sparkles, Pencil, Trash2, Users, GitMerge, Send } from "lucide-react";
+import { Activity, ChevronLeft, Code, Cpu, FileText, HardDrive, RefreshCw, ShieldCheck, Sparkles, Pencil, Trash2, Users, GitMerge, WifiOff } from "lucide-react";
 import { trpc } from "../../trpc.js";
 import { AudioPlayer } from "../../components/AudioPlayer.js";
 import { TranscriptView, type SpeakerData } from "../../components/TranscriptView.js";
@@ -12,6 +12,7 @@ import { TagEditor } from "../../components/TagEditor.js";
 import { EmptyState } from "../../components/EmptyState.js";
 import { ReprocessButton, type ReprocessButtonState } from "../../components/ReprocessButton.js";
 import { RecordingStatusBadge } from "../../components/RecordingStatusBadge.js";
+import { SharePopover, type ShareHistoryEntry, type ShareTarget, type SummaryChannel } from "../../components/SharePopover.js";
 import { useConfirm } from "../../hooks/useConfirm.js";
 import { useT } from "../../i18n/LanguageProvider.js";
 import { useWsChannel } from "../../ws.js";
@@ -31,19 +32,82 @@ const AUDIO_MOUNT_DELAY_MS = 250;
 const RETRANSCRIBE_SPEAKER_OPTIONS = ["auto", "1", "2", "3", "4", "5", "6", "7", "8"] as const;
 
 export const handle = {
-  // Returns the stem (a literal filename) when present, else the i18n key for
-  // "Recording". TopBar resolves both through t(): a real key localizes; a stem
-  // falls back to itself since it isn't in the dictionary.
-  breadcrumb: (params: { stem?: string }) => params.stem ?? "breadcrumb.recording",
+  breadcrumb: "breadcrumb.reader",
   filters: null,
 };
 
 type Tab = "transcript" | "summary" | "realtime" | "raw";
-type SummaryChannel = "notion" | "zulip";
-interface EnabledSummaryTarget {
-  channel: SummaryChannel;
+interface TranscriptionModelOption {
+  id: string;
+  engine: "mlx" | "whisper";
+  model: string;
   label: string;
-  destination: string;
+  active: boolean;
+}
+interface SummaryTemplateOption {
+  id: string;
+  slug: string;
+  name: string;
+  isAutoRun: boolean;
+}
+interface SummaryPromptRow {
+  id: string;
+  slug: string;
+  name: string;
+  is_auto_run?: number;
+}
+interface DetectedModel {
+  name: string;
+  path: string;
+}
+
+function mergeTranscriptionModelOptions(
+  baseOptions: TranscriptionModelOption[],
+  detectedModels: DetectedModel[] | undefined,
+): TranscriptionModelOption[] {
+  const options = [...baseOptions];
+  const seen = new Set(options.map((option) => option.id));
+  for (const model of detectedModels ?? []) {
+    const id = `whisper:${model.path}`;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    options.push({
+      id,
+      engine: "whisper",
+      model: model.path,
+      label: `whisper.cpp · ${model.name}`,
+      active: false,
+    });
+  }
+  return options;
+}
+
+function mergeSummaryTemplateOptions(
+  recordingOptions: SummaryTemplateOption[],
+  promptRows: SummaryPromptRow[] | undefined,
+): SummaryTemplateOption[] {
+  const options = [...recordingOptions];
+  const seen = new Set(options.map((option) => option.id));
+  for (const prompt of promptRows ?? []) {
+    if (!prompt.id || seen.has(prompt.id)) continue;
+    seen.add(prompt.id);
+    options.push({
+      id: prompt.id,
+      slug: prompt.slug,
+      name: prompt.name,
+      isAutoRun: Number(prompt.is_auto_run ?? 0) === 1,
+    });
+  }
+  return options;
+}
+
+function defaultSummaryTemplateIdFor(
+  options: SummaryTemplateOption[],
+  configuredDefault: unknown,
+): string {
+  const configured = typeof configuredDefault === "string" ? configuredDefault : "";
+  if (configured && options.some((option) => option.id === configured)) return configured;
+  return options.find((option) => option.slug === "summary")?.id ?? options[0]?.id ?? "";
 }
 
 function isTab(v: string | null): v is Tab {
@@ -53,6 +117,23 @@ function isTab(v: string | null): v is Tab {
 function audioSrcFor(data: { stem: string; audioFile?: string | null; audioMtimeMs?: number | null }): string {
   const audioVersion = typeof data.audioMtimeMs === "number" ? `?v=${Math.trunc(data.audioMtimeMs)}` : "";
   return `/files/meetings/${data.audioFile ?? `${data.stem}.wav`}${audioVersion}`;
+}
+
+function formatBytes(bytes: number | null | undefined): string {
+  if (!bytes || bytes <= 0) return "0 MB";
+  const mb = bytes / (1024 * 1024);
+  if (mb < 1024) return `${mb.toFixed(mb >= 10 ? 0 : 1)} MB`;
+  return `${(mb / 1024).toFixed(1)} GB`;
+}
+
+function formatShareTime(value: string): string {
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return value;
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  const hh = String(d.getHours()).padStart(2, "0");
+  const min = String(d.getMinutes()).padStart(2, "0");
+  return `${mm}-${dd} ${hh}:${min}`;
 }
 
 interface SpeakerRow {
@@ -225,12 +306,17 @@ export function RecordingReader() {
   const confirm = useConfirm();
   const t = useT();
   const { data, error, isPending } = trpc.recordings.get.useQuery({ stem }, { enabled: stem.length > 0 });
+  const { data: detectedModels } = trpc.capabilities.detected_models.useQuery();
+  const { data: summaryPrompts } = trpc.prompts.list.useQuery({ category: "summary" });
 
   const qc = useQueryClient();
   const [lastAction, setLastAction] = useState<"transcribe" | "summarize" | null>(null);
   const [actionError, setActionError] = useState<{ action: "transcribe" | "summarize"; message: string } | null>(null);
   const [retranscribeSpeakerCount, setRetranscribeSpeakerCount] =
     useState<(typeof RETRANSCRIBE_SPEAKER_OPTIONS)[number]>("auto");
+  const [transcriptionModelId, setTranscriptionModelId] = useState("");
+  const [summaryTemplateId, setSummaryTemplateId] = useState("");
+  const [pendingShareChannel, setPendingShareChannel] = useState<SummaryChannel | null>(null);
   const targetAudioSrc = data ? audioSrcFor(data) : null;
   const [mountedAudioSrc, setMountedAudioSrc] = useState<string | null>(null);
 
@@ -254,6 +340,7 @@ export function RecordingReader() {
   const invalidateBoth = () => {
     qc.invalidateQueries({ queryKey: GET_KEY });
     qc.invalidateQueries({ queryKey: LIST_KEY });
+    qc.invalidateQueries({ queryKey: [["recordings", "shareTargets"]] });
   };
 
   // ---- Rename (inline title edit) ----
@@ -337,6 +424,26 @@ export function RecordingReader() {
     return () => window.clearTimeout(timer);
   }, [targetAudioSrc]);
 
+  useEffect(() => {
+    if (!data) return;
+    const modelOptions = mergeTranscriptionModelOptions(
+      (data.transcriptionModelOptions ?? []) as TranscriptionModelOption[],
+      detectedModels as DetectedModel[] | undefined,
+    );
+    const activeModel = modelOptions.find((option) => option.active) ?? modelOptions[0];
+    setTranscriptionModelId((current) =>
+      modelOptions.some((option) => option.id === current) ? current : activeModel?.id ?? ""
+    );
+    const templateOptions = mergeSummaryTemplateOptions(
+      (data.summaryTemplateOptions ?? []) as SummaryTemplateOption[],
+      summaryPrompts as SummaryPromptRow[] | undefined,
+    );
+    const defaultTemplateId = defaultSummaryTemplateIdFor(templateOptions, data.defaultSummaryTemplateId);
+    setSummaryTemplateId((current) =>
+      templateOptions.some((option) => option.id === current) ? current : defaultTemplateId
+    );
+  }, [data?.stem, data?.defaultSummaryTemplateId, data?.transcriptionModelOptions, detectedModels, summaryPrompts]);
+
   function deriveButtonState(action: "transcribe" | "summarize"): ReprocessButtonState {
     const status = data?.status ?? "idle";
     const targetRunning = action === "transcribe" ? "transcribing" : "summarizing";
@@ -357,7 +464,18 @@ export function RecordingReader() {
     setActionError(null);
     const diarizationNumSpeakers =
       retranscribeSpeakerCount === "auto" ? null : Number(retranscribeSpeakerCount);
-    transcribeMut.mutate({ stem, diarizationNumSpeakers }, {
+    const modelOptions = mergeTranscriptionModelOptions(
+      (data?.transcriptionModelOptions ?? []) as TranscriptionModelOption[],
+      detectedModels as DetectedModel[] | undefined,
+    );
+    const selectedModel = modelOptions.find((option) => option.id === transcriptionModelId);
+    transcribeMut.mutate({
+      stem,
+      diarizationNumSpeakers,
+      ...(selectedModel ? {
+        transcriptionModel: { engine: selectedModel.engine, model: selectedModel.model },
+      } : {}),
+    }, {
       onError: (err) => setActionError({ action: "transcribe", message: err.message }),
       onSettled: invalidateBoth,
     });
@@ -365,17 +483,26 @@ export function RecordingReader() {
   const handleSummarize = () => {
     setLastAction("summarize");
     setActionError(null);
-    summarizeMut.mutate({ stem }, {
+    const templateOptions = mergeSummaryTemplateOptions(
+      (data?.summaryTemplateOptions ?? []) as SummaryTemplateOption[],
+      summaryPrompts as SummaryPromptRow[] | undefined,
+    );
+    const promptId = summaryTemplateId || defaultSummaryTemplateIdFor(templateOptions, data?.defaultSummaryTemplateId);
+    summarizeMut.mutate({ stem, promptId: promptId || null }, {
       onError: (err) => setActionError({ action: "summarize", message: err.message }),
       onSettled: invalidateBoth,
     });
   };
 
-  const handleSendSummary = (target: EnabledSummaryTarget) => {
+  const handleSendSummary = (target: ShareTarget) => {
     if (!confirm(t("reader.send.confirm", { label: target.label, destination: target.destination }))) return;
+    setPendingShareChannel(target.channel);
     sendSummaryMut.mutate({ stem, channel: target.channel }, {
       onError: (err) => console.error("sendSummary failed:", err.message),
-      onSettled: invalidateBoth,
+      onSettled: () => {
+        setPendingShareChannel(null);
+        invalidateBoth();
+      },
     });
   };
 
@@ -444,9 +571,28 @@ export function RecordingReader() {
   const initialSeek = Number.isFinite(parsedSeek) ? parsedSeek : undefined;
 
   const audioSrc = audioSrcFor(data);
-  const summaryTargets = data.summary
-    ? ((data.enabledSummaryTargets ?? []) as EnabledSummaryTarget[])
-    : [];
+  const shareTargets = (data.shareTargets ?? []) as ShareTarget[];
+  const legacyTargets = ((data.enabledSummaryTargets ?? []) as Array<{
+    channel: SummaryChannel;
+    label: string;
+    destination?: string | null;
+  }>).map((target) => ({
+    ...target,
+    destination: target.destination ?? "",
+    enabled: Boolean(data.summary),
+    disabledReason: data.summary ? null : "Needs AI Summary",
+    lastShare: null,
+  }));
+  const summaryTargets = shareTargets.length > 0 ? shareTargets : legacyTargets;
+  const shareHistory = (data.shareHistory ?? []) as ShareHistoryEntry[];
+  const modelOptions = mergeTranscriptionModelOptions(
+    (data.transcriptionModelOptions ?? []) as TranscriptionModelOption[],
+    detectedModels as DetectedModel[] | undefined,
+  );
+  const summaryTemplateOptions = mergeSummaryTemplateOptions(
+    (data.summaryTemplateOptions ?? []) as SummaryTemplateOption[],
+    summaryPrompts as SummaryPromptRow[] | undefined,
+  );
   const handleSeek = (time: number) => {
     const next = new URLSearchParams(params);
     next.set("seek", Math.max(0, time).toFixed(2));
@@ -455,187 +601,268 @@ export function RecordingReader() {
 
   return (
     <div className="reader">
-      <div className="reader-header">
-        <button type="button" className="reader-mobile-back" onClick={() => navigate("/inbox")}>
-          <ChevronLeft size={14} strokeWidth={1.8} />
-          <span>{t("nav.recordings")}</span>
-        </button>
-        <div className="reader-titlerow">
-          {editingTitle ? (
-            <input
-              ref={titleInputRef}
-              className="reader-title-input"
-              value={titleDraft}
-              placeholder={data.title ?? t("reader.title.placeholder")}
-              aria-label={t("reader.title.aria")}
-              onChange={(e) => setTitleDraft(e.target.value)}
-              onBlur={commitRename}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") { e.preventDefault(); commitRename(); }
-                else if (e.key === "Escape") { e.preventDefault(); setEditingTitle(false); }
-              }}
-            />
-          ) : (
+      <div className="reader-workspace">
+        <div className="reader-header">
+          <button type="button" className="reader-mobile-back" onClick={() => navigate("/inbox")}>
+            <ChevronLeft size={14} strokeWidth={1.8} />
+            <span>{t("nav.recordings")}</span>
+          </button>
+          <div className="reader-titlerow">
+            {editingTitle ? (
+              <input
+                ref={titleInputRef}
+                className="reader-title-input"
+                value={titleDraft}
+                placeholder={data.title ?? t("reader.title.placeholder")}
+                aria-label={t("reader.title.aria")}
+                onChange={(e) => setTitleDraft(e.target.value)}
+                onBlur={commitRename}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") { e.preventDefault(); commitRename(); }
+                  else if (e.key === "Escape") { e.preventDefault(); setEditingTitle(false); }
+                }}
+              />
+            ) : (
+              <button
+                type="button"
+                className="reader-title reader-title-edit"
+                onClick={startRename}
+                title={t("reader.title.rename")}
+              >
+                <span>{data.title ?? data.stem}</span>
+                <Pencil size={12} strokeWidth={1.75} className="reader-title-pencil" />
+              </button>
+            )}
+          </div>
+          <div className="reader-meta">
+            <span>{new Date(data.mtimeMs).toLocaleDateString()}</span>
+            <span>•</span>
+            <RecordingStatusBadge state={data.status} error={data.statusError} />
+            <TagEditor tags={data.tags ?? []} onChange={handleTagsChange} />
+          </div>
+          <div className="reader-header-actions">
             <button
               type="button"
-              className="reader-title reader-title-edit"
-              onClick={startRename}
-              title={t("reader.title.rename")}
+              className="reader-header-icon reader-header-delete"
+              onClick={handleDelete}
+              disabled={deleteMut.isPending}
+              aria-label={t("reader.delete.aria")}
+              title={t("reader.delete.title")}
             >
-              <span>{data.title ?? data.stem}</span>
-              <Pencil size={12} strokeWidth={1.75} className="reader-title-pencil" />
+              <Trash2 size={15} strokeWidth={1.75} />
+            </button>
+          </div>
+
+          <div className="reader-actions">
+          {modelOptions.length > 0 && (
+            <label className="reader-action-select reader-action-select--model" title={t("reader.transcriptionModel.title")}>
+              <span>{t("reader.transcriptionModel.label")}</span>
+              <select
+                value={transcriptionModelId}
+                aria-label={t("reader.transcriptionModel.aria")}
+                onChange={(e) => setTranscriptionModelId(e.target.value)}
+              >
+                {modelOptions.map((option) => (
+                  <option key={option.id} value={option.id}>{option.label}</option>
+                ))}
+              </select>
+            </label>
+          )}
+          <label className="reader-speaker-select" title={t("reader.retranscribeSpeakers.title")}>
+            <span>{t("reader.retranscribeSpeakers.label")}</span>
+            <select
+              value={retranscribeSpeakerCount}
+              onChange={(e) => setRetranscribeSpeakerCount(e.target.value as (typeof RETRANSCRIBE_SPEAKER_OPTIONS)[number])}
+            >
+              {RETRANSCRIBE_SPEAKER_OPTIONS.map((value) => (
+                <option key={value} value={value}>
+                  {value === "auto" ? t("reader.retranscribeSpeakers.auto") : value}
+                </option>
+              ))}
+            </select>
+          </label>
+          <ReprocessButton
+            label={t("reader.action.retranscribe")}
+            icon={<RefreshCw size={14} strokeWidth={1.75} />}
+            state={deriveButtonState("transcribe")}
+            error={buttonError("transcribe")}
+            onClick={handleTranscribe}
+            disabled={!data?.wavPath}
+            disabledReason={!data?.wavPath ? t("reader.disabled.wavMissing") : undefined}
+          />
+          {summaryTemplateOptions.length > 0 && (
+            <label className="reader-action-select reader-action-select--summary" title={t("reader.summaryTemplate.title")}>
+              <span>{t("reader.summaryTemplate.label")}</span>
+              <select
+                value={summaryTemplateId}
+                aria-label={t("reader.summaryTemplate.aria")}
+                onChange={(e) => setSummaryTemplateId(e.target.value)}
+              >
+                {summaryTemplateOptions.map((option) => (
+                  <option key={option.id} value={option.id}>
+                    {option.isAutoRun ? `${option.name} · ${t("reader.summaryTemplate.autorun")}` : option.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+          <ReprocessButton
+            label={t("reader.action.regenerate")}
+            icon={<Sparkles size={14} strokeWidth={1.75} />}
+            state={deriveButtonState("summarize")}
+            error={buttonError("summarize")}
+            onClick={handleSummarize}
+            disabled={!(data?.transcript || data?.realtime)}
+            disabledReason={!(data?.transcript || data?.realtime) ? t("reader.disabled.transcriptFirst") : undefined}
+          />
+          <SharePopover
+            targets={summaryTargets}
+            history={shareHistory}
+            pendingChannel={pendingShareChannel}
+            onSend={(channel) => {
+              const target = summaryTargets.find((item) => item.channel === channel);
+              if (target) handleSendSummary(target);
+            }}
+          />
+          </div>
+
+          {mountedAudioSrc === audioSrc ? (
+            <AudioPlayer src={audioSrc} initialSeek={initialSeek} />
+          ) : (
+            <div className="audioplayer audioplayer-deferred" aria-hidden="true">
+              <button type="button" className="audioplayer-play" disabled />
+              <div className="audioplayer-wave" />
+              <div className="audioplayer-time">0:00 / 0:00</div>
+            </div>
+          )}
+
+          <div className="reader-tabs" role="tablist">
+          <button
+            key="summary"
+            type="button"
+            aria-selected={tab === "summary"}
+            className={"reader-tab" + (tab === "summary" ? " active" : "")}
+            onClick={() => setTab("summary")}
+          >
+            <Sparkles size={14} strokeWidth={1.75} />
+            {t("reader.tab.summary")}
+          </button>
+          <button
+            key="transcript"
+            type="button"
+            aria-selected={tab === "transcript"}
+            className={"reader-tab" + (tab === "transcript" ? " active" : "")}
+            onClick={() => setTab("transcript")}
+          >
+            <FileText size={14} strokeWidth={1.75} />
+            {t("reader.tab.transcript")}
+          </button>
+          {data.hasRealtime && (
+            <button
+              key="realtime"
+              type="button"
+              aria-selected={tab === "realtime"}
+              className={"reader-tab" + (tab === "realtime" ? " active" : "")}
+              onClick={() => setTab("realtime")}
+            >
+              <Activity size={14} strokeWidth={1.75} />
+              {t("reader.tab.realtime")}
             </button>
           )}
+          {showRaw && (
+            <button
+              key="raw"
+              type="button"
+              aria-selected={tab === "raw"}
+              className={"reader-tab" + (tab === "raw" ? " active" : "")}
+              onClick={() => setTab("raw")}
+              title={t("reader.tab.raw.title")}
+            >
+              <Code size={14} strokeWidth={1.75} />
+              {t("reader.tab.raw")}
+            </button>
+          )}
+          </div>
         </div>
-        <div className="reader-meta">
-          <span>{new Date(data.mtimeMs).toLocaleString()}</span>
-          <RecordingStatusBadge state={data.status} error={data.statusError} />
-        </div>
-        <TagEditor tags={data.tags ?? []} onChange={handleTagsChange} />
-      </div>
 
-      <div className="reader-actions">
-        <label className="reader-speaker-select" title={t("reader.retranscribeSpeakers.title")}>
-          <span>{t("reader.retranscribeSpeakers.label")}</span>
-          <select
-            value={retranscribeSpeakerCount}
-            onChange={(e) => setRetranscribeSpeakerCount(e.target.value as (typeof RETRANSCRIBE_SPEAKER_OPTIONS)[number])}
-          >
-            {RETRANSCRIBE_SPEAKER_OPTIONS.map((value) => (
-              <option key={value} value={value}>
-                {value === "auto" ? t("reader.retranscribeSpeakers.auto") : value}
-              </option>
-            ))}
-          </select>
-        </label>
-        <ReprocessButton
-          label={t("reader.action.retranscribe")}
-          icon={<RefreshCw size={14} strokeWidth={1.75} />}
-          state={deriveButtonState("transcribe")}
-          error={buttonError("transcribe")}
-          onClick={handleTranscribe}
-          disabled={!data?.wavPath}
-          disabledReason={!data?.wavPath ? t("reader.disabled.wavMissing") : undefined}
+        <div className="reader-body" ref={bodyRef}>
+          {tab === "summary" && (
+            data.summary ? <MarkdownView text={data.summary} /> : <EmptyState label={t("reader.empty.summary")} />
+          )}
+          {tab === "transcript" && (
+            data.transcript
+              ? (
+                <TranscriptView
+                  text={data.transcript}
+                  speakerData={data.speakerData}
+                  onSeek={handleSeek}
+                  onAssignSpeaker={handleAssignSegmentSpeaker}
+                />
+              )
+              : <EmptyState label={t("reader.empty.transcript")} />
+          )}
+          {tab === "realtime" && (
+            <pre className="reader-raw">{data.realtime ?? ""}</pre>
+          )}
+          {tab === "raw" && showRaw && (
+            <pre className="reader-raw">{data.raw ?? data.transcript ?? ""}</pre>
+          )}
+        </div>
+
+        <SpeakerPanel
+          speakerData={data.speakerData}
+          onRename={handleRenameSpeaker}
+          onMerge={handleMergeSpeakers}
         />
-        <ReprocessButton
-          label={t("reader.action.regenerate")}
-          icon={<Sparkles size={14} strokeWidth={1.75} />}
-          state={deriveButtonState("summarize")}
-          error={buttonError("summarize")}
-          onClick={handleSummarize}
-          disabled={!(data?.transcript || data?.realtime)}
-          disabledReason={!(data?.transcript || data?.realtime) ? t("reader.disabled.transcriptFirst") : undefined}
-        />
-        {summaryTargets.map((target) => (
-          <button
-            key={target.channel}
-            type="button"
-            className="reader-send"
-            onClick={() => handleSendSummary(target)}
-            disabled={sendSummaryMut.isPending}
-            aria-label={t("reader.action.sendTo", { label: target.label })}
-            title={t("reader.action.sendTo", { label: target.label })}
-          >
-            <Send size={14} strokeWidth={1.75} />
-            <span>{t("reader.action.sendTo", { label: target.label })}</span>
-          </button>
-        ))}
-        <button
-          type="button"
-          className="reader-delete"
-          onClick={handleDelete}
-          disabled={deleteMut.isPending}
-          aria-label={t("reader.delete.aria")}
-          title={t("reader.delete.title")}
-        >
-          <Trash2 size={14} strokeWidth={1.75} />
-          <span>{t("reader.action.delete")}</span>
-        </button>
       </div>
 
-      {mountedAudioSrc === audioSrc ? (
-        <AudioPlayer src={audioSrc} initialSeek={initialSeek} />
-      ) : (
-        <div className="audioplayer audioplayer-deferred" aria-hidden="true">
-          <button type="button" className="audioplayer-play" disabled />
-          <div className="audioplayer-wave" />
-          <div className="audioplayer-time">0:00 / 0:00</div>
+      <aside className="reader-inspector" aria-label={t("reader.inspector.aria")}>
+        <div className="reader-inspector-heading">{t("reader.inspector.heading")}</div>
+        <div className="reader-inspector-card reader-inspector-card--stack">
+          <div className="reader-inspector-item reader-inspector-card--privacy">
+            <ShieldCheck size={16} strokeWidth={1.8} />
+            <div>
+              <strong>{t("reader.inspector.privacy")}</strong>
+              <span>{t("reader.inspector.privacy.sub")}</span>
+            </div>
+          </div>
+          <div className="reader-inspector-item reader-inspector-card--network">
+            <WifiOff size={16} strokeWidth={1.8} />
+            <div>
+              <strong>{t("reader.inspector.network")}</strong>
+              <span>{t("reader.inspector.network.sub")}</span>
+            </div>
+          </div>
         </div>
-      )}
-
-      <SpeakerPanel
-        speakerData={data.speakerData}
-        onRename={handleRenameSpeaker}
-        onMerge={handleMergeSpeakers}
-      />
-
-      <div className="reader-tabs" role="tablist">
-        <button
-          key="summary"
-          type="button"
-          aria-selected={tab === "summary"}
-          className={"reader-tab" + (tab === "summary" ? " active" : "")}
-          onClick={() => setTab("summary")}
-        >
-          {t("reader.tab.summary")}
-        </button>
-        <button
-          key="transcript"
-          type="button"
-          aria-selected={tab === "transcript"}
-          className={"reader-tab" + (tab === "transcript" ? " active" : "")}
-          onClick={() => setTab("transcript")}
-        >
-          {t("reader.tab.transcript")}
-        </button>
-        {data.hasRealtime && (
-          <button
-            key="realtime"
-            type="button"
-            aria-selected={tab === "realtime"}
-            className={"reader-tab" + (tab === "realtime" ? " active" : "")}
-            onClick={() => setTab("realtime")}
-          >
-            {t("reader.tab.realtime")}
-          </button>
-        )}
-        {showRaw && (
-          <button
-            key="raw"
-            type="button"
-            aria-selected={tab === "raw"}
-            className={"reader-tab" + (tab === "raw" ? " active" : "")}
-            onClick={() => setTab("raw")}
-            title={t("reader.tab.raw.title")}
-          >
-            {t("reader.tab.raw")}
-          </button>
-        )}
-      </div>
-
-      <div className="reader-body" ref={bodyRef}>
-        {tab === "summary" && (
-          data.summary ? <MarkdownView text={data.summary} /> : <EmptyState label={t("reader.empty.summary")} />
-        )}
-        {tab === "transcript" && (
-          data.transcript
-            ? (
-              <TranscriptView
-                text={data.transcript}
-                speakerData={data.speakerData}
-                onSeek={handleSeek}
-                onAssignSpeaker={handleAssignSegmentSpeaker}
-              />
-            )
-            : <EmptyState label={t("reader.empty.transcript")} />
-        )}
-        {tab === "realtime" && (
-          <pre className="reader-raw">{data.realtime ?? ""}</pre>
-        )}
-        {tab === "raw" && showRaw && (
-          <pre className="reader-raw">{data.raw ?? data.transcript ?? ""}</pre>
-        )}
-      </div>
+        <div className="reader-inspector-card reader-inspector-card--metrics">
+          <div className="reader-inspector-item">
+            <Cpu size={16} strokeWidth={1.8} />
+            <div>
+              <strong>{t("reader.inspector.engine")}</strong>
+              <span>{data.status === "idle" ? t("reader.inspector.ready") : data.status}</span>
+            </div>
+          </div>
+          <div className="reader-inspector-item reader-inspector-card--storage">
+            <HardDrive size={16} strokeWidth={1.8} />
+            <div>
+              <strong>{t("reader.inspector.storage")}</strong>
+              <span>{formatBytes(data.sizeBytes)}</span>
+              <span className="reader-storage-meter" aria-hidden="true" />
+            </div>
+          </div>
+        </div>
+        <div className="reader-inspector-history">
+          <div className="reader-inspector-title">{t("share.history")}</div>
+          {shareHistory.length === 0 ? (
+            <div className="reader-inspector-empty">{t("share.history.empty")}</div>
+          ) : shareHistory.slice(0, 4).map((entry) => (
+            <div key={entry.id} className={`reader-inspector-share reader-inspector-share--${entry.status}`}>
+              <span>{entry.label}</span>
+              <time>{formatShareTime(entry.sentAt)}</time>
+            </div>
+          ))}
+        </div>
+      </aside>
     </div>
   );
 }

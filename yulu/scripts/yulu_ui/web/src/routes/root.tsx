@@ -1,30 +1,21 @@
 import { Outlet } from "react-router";
 import { Sidebar } from "../components/Sidebar.js";
 import { TopBar } from "../components/TopBar.js";
-import { Pill } from "../components/Pill.js";
 import { LiveTranscript } from "../components/LiveTranscript.js";
 import { Onboarding } from "../components/Onboarding.js";
-import { ResizableSplit } from "../components/ResizableSplit.js";
 
 export function RootLayout() {
   return (
     <div className="root-shell">
-      <ResizableSplit
-        storageKey="yulu_ui.sidebar.width"
-        side="right"
-        min={150}
-        max={360}
-        defaultWidth={220}
-      >
+      <div className="root-sidebar-pane">
         <Sidebar />
-      </ResizableSplit>
+      </div>
       <main className="root-main">
         <TopBar />
         <div className="root-body">
           <Outlet />
         </div>
       </main>
-      <Pill />
       {/* Live captions while recording — self-hides when no recording is
           active (server publishes {active:false}). */}
       <LiveTranscript />

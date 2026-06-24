@@ -18,10 +18,12 @@
 }
 .emptystate-cta {
   margin-top: 8px;
-  padding: 6px 14px;
-  border-radius: var(--radius-inner);
+  padding: 7px 14px;
+  border-radius: var(--radius-pill);
   background: var(--accent-soft);
-  color: var(--accent);
+  color: var(--accent-on, var(--accent));
   font-size: 11px;
+  font-weight: 650;
+  border: 1px solid color-mix(in oklch, var(--accent) 22%, var(--edge));
 }
 .emptystate-cta:hover { background: var(--glass-3); }

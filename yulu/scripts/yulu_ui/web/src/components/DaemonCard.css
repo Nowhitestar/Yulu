@@ -4,9 +4,12 @@
   flex-direction: column;
   gap: 8px;
   padding: 12px 14px;
-  background: var(--glass);
-  border-radius: var(--radius-panel);
-  box-shadow: var(--edge-shadow);
+  background: var(--glass-3);
+  border: 1px solid var(--edge);
+  border-radius: 16px;
+  box-shadow: var(--shadow-card);
+  backdrop-filter: var(--blur-pill);
+  -webkit-backdrop-filter: var(--blur-pill);
   min-width: 0;
 }
 .daemon-card-header {
@@ -17,7 +20,7 @@
 }
 .daemon-card-name {
   font-size: 13px;
-  font-weight: 500;
+  font-weight: 700;
   color: var(--fg);
   font-family: "SF Mono", ui-monospace, monospace;
 }
@@ -26,9 +29,10 @@
   align-items: center;
   gap: 4px;
   padding: 2px 8px;
-  border-radius: 10px;
+  border-radius: 999px;
   font-size: 10px;
-  font-weight: 500;
+  font-weight: 700;
+  box-shadow: inset 0 1px 0 var(--edge-top);
 }
 .status-pill[data-status="running"] {
   background: rgba(186, 230, 126, 0.18);
@@ -73,13 +77,13 @@
   border-top: 1px solid var(--edge);
 }
 .daemon-card-btn {
-  padding: 3px 10px;
+  padding: 5px 10px;
   font-size: 11px;
-  border-radius: var(--radius-inner);
+  border-radius: 10px;
   text-decoration: none;
-  background: var(--row-hover);
+  background: var(--glass);
   color: var(--fg-2);
-  border: none;
+  border: 1px solid var(--edge);
   cursor: pointer;
 }
 .daemon-card-btn:hover { color: var(--fg); background: var(--glass-3); }

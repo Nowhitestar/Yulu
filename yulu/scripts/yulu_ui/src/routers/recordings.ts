@@ -1,10 +1,12 @@
 import { closeSync, existsSync, openSync, readFileSync, readSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { join, resolve, relative, isAbsolute } from "node:path";
+import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { router, publicProcedure } from "../trpc.js";
 import { runTranscribe, runSummarize } from "../jobRunner.js";
+import type { SummaryPromptSnapshot } from "../jobRunner.js";
 import type { JobRegistry } from "../jobStatus.js";
 import {
   readTitleSidecar,
@@ -24,6 +26,56 @@ const SUMMARY_CHANNEL_LABELS: Record<SummaryChannel, string> = {
   notion: "Notion",
   zulip: "Zulip",
 };
+const DEFAULT_MLX_MODEL = "mlx-community/whisper-large-v3-mlx";
+const DEFAULT_WHISPER_MODEL = "~/.config/yulu/models/ggml-large-v3.bin";
+const KNOWN_MLX_MODELS = [
+  DEFAULT_MLX_MODEL,
+  "mlx-community/whisper-large-v3-turbo",
+] as const;
+const TranscriptionEngineSchema = z.enum(["mlx", "whisper"]);
+const TranscriptionModelSchema = z.object({
+  engine: TranscriptionEngineSchema,
+  model: z.string().min(1).optional(),
+});
+
+type TranscriptionEngine = z.infer<typeof TranscriptionEngineSchema>;
+type TranscriptionModelInput = z.infer<typeof TranscriptionModelSchema>;
+
+interface TranscriptionModelOption {
+  id: string;
+  engine: TranscriptionEngine;
+  model: string;
+  label: string;
+  active: boolean;
+}
+
+interface SummaryTemplateOption {
+  id: string;
+  slug: string;
+  name: string;
+  isAutoRun: boolean;
+}
+
+interface ShareHistoryEntry {
+  id: string;
+  channel: SummaryChannel;
+  label: string;
+  destination: string;
+  sentAt: string;
+  status: "success" | "failed";
+  message?: string;
+  stdout?: string;
+  stderr?: string;
+}
+
+interface ShareTarget {
+  channel: SummaryChannel;
+  label: string;
+  destination: string;
+  enabled: boolean;
+  disabledReason: string | null;
+  lastShare: ShareHistoryEntry | null;
+}
 
 function isoFromStem(date: string, time: string): string {
   return `${date.slice(0, 4)}-${date.slice(4, 6)}-${date.slice(6, 8)}T${time.slice(0, 2)}:${time.slice(2, 4)}:${time.slice(4, 6)}`;
@@ -43,6 +95,54 @@ function firstWordsOf(path: string): string | null {
     return raw.length <= 80 ? raw : raw.slice(0, 80) + "…";
   } catch {
     return null;
+  }
+}
+
+function wavDurationSeconds(path: string): number | null {
+  let fd: number | null = null;
+  try {
+    const stat = statSync(path);
+    if (stat.size < 44) return null;
+    fd = openSync(path, "r");
+    const header = Buffer.alloc(12);
+    if (readSync(fd, header, 0, header.length, 0) < header.length) return null;
+    if (
+      header.subarray(0, 4).toString("ascii") !== "RIFF" ||
+      header.subarray(8, 12).toString("ascii") !== "WAVE"
+    ) {
+      return null;
+    }
+
+    let offset = 12;
+    let byteRate = 0;
+    let dataBytes: number | null = null;
+    const chunkHeader = Buffer.alloc(8);
+    while (offset + 8 <= stat.size) {
+      if (readSync(fd, chunkHeader, 0, chunkHeader.length, offset) < chunkHeader.length) break;
+      const chunkId = chunkHeader.subarray(0, 4).toString("ascii");
+      const chunkSize = chunkHeader.readUInt32LE(4);
+      offset += 8;
+
+      if (chunkId === "fmt " && chunkSize >= 12) {
+        const fmt = Buffer.alloc(Math.min(chunkSize, 16));
+        if (readSync(fd, fmt, 0, fmt.length, offset) >= 12) {
+          byteRate = fmt.readUInt32LE(8);
+          if (byteRate > 0 && dataBytes !== null) break;
+        }
+      } else if (chunkId === "data") {
+        dataBytes = chunkSize;
+        if (byteRate > 0) break;
+      }
+
+      offset += chunkSize + (chunkSize % 2);
+    }
+
+    if (!byteRate || dataBytes === null) return null;
+    return dataBytes / byteRate;
+  } catch {
+    return null;
+  } finally {
+    if (fd !== null) closeSync(fd);
   }
 }
 
@@ -138,6 +238,82 @@ function summaryDestination(config: unknown, channel: SummaryChannel): string {
   return "";
 }
 
+function shareHistoryPath(dir: string, stem: string): string {
+  return join(dir, `${stem}.shares.json`);
+}
+
+function normalizeShareHistoryEntry(value: unknown): ShareHistoryEntry | null {
+  if (!isRecord(value)) return null;
+  const channel = value.channel === "notion" || value.channel === "zulip" ? value.channel : null;
+  const status = value.status === "success" || value.status === "failed" ? value.status : null;
+  if (!channel || !status || typeof value.sentAt !== "string") return null;
+  return {
+    id: typeof value.id === "string" ? value.id : `${value.sentAt}-${channel}`,
+    channel,
+    label: typeof value.label === "string" ? value.label : SUMMARY_CHANNEL_LABELS[channel],
+    destination: typeof value.destination === "string" ? value.destination : "",
+    sentAt: value.sentAt,
+    status,
+    message: typeof value.message === "string" ? value.message : undefined,
+    stdout: typeof value.stdout === "string" ? value.stdout : undefined,
+    stderr: typeof value.stderr === "string" ? value.stderr : undefined,
+  };
+}
+
+function readShareHistory(path: string): ShareHistoryEntry[] {
+  try {
+    const raw = JSON.parse(readFileSync(path, "utf8"));
+    if (!Array.isArray(raw)) return [];
+    return raw
+      .map(normalizeShareHistoryEntry)
+      .filter((entry): entry is ShareHistoryEntry => entry !== null)
+      .sort((a, b) => b.sentAt.localeCompare(a.sentAt));
+  } catch {
+    return [];
+  }
+}
+
+function writeShareHistory(path: string, entries: ShareHistoryEntry[]): ShareHistoryEntry[] {
+  const normalized = entries
+    .map(normalizeShareHistoryEntry)
+    .filter((entry): entry is ShareHistoryEntry => entry !== null)
+    .sort((a, b) => b.sentAt.localeCompare(a.sentAt))
+    .slice(0, 50);
+  writeTextAtomic(path, JSON.stringify(normalized, null, 2) + "\n");
+  return normalized;
+}
+
+function appendShareHistory(dir: string, stem: string, entry: Omit<ShareHistoryEntry, "id" | "sentAt">): ShareHistoryEntry {
+  const path = shareHistoryPath(dir, stem);
+  const next: ShareHistoryEntry = {
+    id: randomUUID(),
+    sentAt: new Date().toISOString().replace(/\.\d+Z$/, "Z"),
+    ...entry,
+  };
+  writeShareHistory(path, [next, ...readShareHistory(path)]);
+  return next;
+}
+
+function shareTargets(config: unknown, opts: { hasSummary: boolean; history: ShareHistoryEntry[] }): ShareTarget[] {
+  return SUMMARY_CHANNELS.map((channel) => {
+    const label = SUMMARY_CHANNEL_LABELS[channel];
+    const destination = summaryDestination(config, channel);
+    const isEnabled = connectorEnabled(config, channel);
+    let disabledReason: string | null = null;
+    if (!opts.hasSummary) disabledReason = "Needs AI Summary";
+    else if (!isEnabled) disabledReason = "Connector disabled";
+    else if (!destination) disabledReason = "Destination missing";
+    return {
+      channel,
+      label,
+      destination: destination || "未设置",
+      enabled: disabledReason === null,
+      disabledReason,
+      lastShare: opts.history.find((entry) => entry.channel === channel) ?? null,
+    };
+  });
+}
+
 function enabledSummaryTargets(config: unknown) {
   return SUMMARY_CHANNELS
     .filter((channel) => connectorEnabled(config, channel))
@@ -146,6 +322,137 @@ function enabledSummaryTargets(config: unknown) {
       label: SUMMARY_CHANNEL_LABELS[channel],
       destination: summaryDestination(config, channel) || "未设置",
     }));
+}
+
+function optionId(engine: TranscriptionEngine, model: string): string {
+  return `${engine}:${model}`;
+}
+
+function shortModelName(model: string): string {
+  const trimmed = model.trim();
+  if (!trimmed) return "(unset)";
+  return trimmed.split("/").pop() || trimmed;
+}
+
+function transcriptionModelOptions(config: unknown): TranscriptionModelOption[] {
+  const root = asRecord(config);
+  const trans = nestedRecord(root, "transcription");
+  const engine = (trans.final_engine === "whisper" ? "whisper" : "mlx") as TranscriptionEngine;
+  const mlx = nestedRecord(trans, "mlx");
+  const currentMlxModel = stringValue(mlx, "model") || DEFAULT_MLX_MODEL;
+  const currentWhisperModel = stringValue(trans, "local_model_path") || DEFAULT_WHISPER_MODEL;
+  const options: TranscriptionModelOption[] = [];
+  const add = (candidateEngine: TranscriptionEngine, model: string, label: string) => {
+    const id = optionId(candidateEngine, model);
+    if (options.some((item) => item.id === id)) return;
+    options.push({
+      id,
+      engine: candidateEngine,
+      model,
+      label,
+      active: candidateEngine === engine && model === (engine === "mlx" ? currentMlxModel : currentWhisperModel),
+    });
+  };
+  add("mlx", currentMlxModel, `MLX · ${shortModelName(currentMlxModel)}`);
+  for (const model of KNOWN_MLX_MODELS) add("mlx", model, `MLX · ${shortModelName(model)}`);
+  add("whisper", currentWhisperModel, `whisper.cpp · ${shortModelName(currentWhisperModel)}`);
+  return options;
+}
+
+function summaryTemplateOptions(db: unknown): SummaryTemplateOption[] {
+  if (!db) return [];
+  try {
+    const rows = (db as {
+      prepare: (sql: string) => { all: (...args: unknown[]) => unknown[] };
+    }).prepare(
+      "SELECT id, slug, name, is_auto_run FROM prompts WHERE category = ? ORDER BY sort_order, name"
+    ).all("summary") as Array<Record<string, unknown>>;
+    return rows
+      .filter((row) => typeof row.id === "string" && typeof row.slug === "string" && typeof row.name === "string")
+      .map((row) => ({
+        id: String(row.id),
+        slug: String(row.slug),
+        name: String(row.name),
+        isAutoRun: Number(row.is_auto_run ?? 0) === 1,
+      }));
+  } catch {
+    return [];
+  }
+}
+
+function defaultSummaryTemplateId(options: SummaryTemplateOption[]): string | null {
+  return options.find((item) => item.slug === "summary")?.id ?? options[0]?.id ?? null;
+}
+
+function summaryPromptSnapshot(
+  db: unknown,
+  promptId: string | null | undefined,
+): SummaryPromptSnapshot | null {
+  if (!db) return null;
+  try {
+    const promptDb = db as {
+      prepare: (sql: string) => { get: (...args: unknown[]) => unknown };
+    };
+    const row = promptId
+      ? promptDb.prepare("SELECT id, slug, name, content FROM prompts WHERE id = ? AND category = ?").get(promptId, "summary")
+      : (
+          promptDb.prepare("SELECT id, slug, name, content FROM prompts WHERE slug = ? AND category = ?").get("summary", "summary")
+          ?? promptDb.prepare("SELECT id, slug, name, content FROM prompts WHERE category = ? ORDER BY sort_order, name LIMIT 1").get("summary")
+        );
+    if (!isRecord(row)) return null;
+    if (
+      typeof row.id !== "string" ||
+      typeof row.slug !== "string" ||
+      typeof row.name !== "string" ||
+      typeof row.content !== "string"
+    ) return null;
+    return {
+      id: row.id,
+      slug: row.slug,
+      name: row.name,
+      content: row.content,
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function applyTranscriptionModel(ctx: {
+  config: { read: () => unknown; update?: (key: string, value: unknown) => unknown };
+  launchctl?: { restart: (label: string) => Promise<void> };
+}, selection: TranscriptionModelInput | null | undefined): Promise<void> {
+  if (!selection) return;
+  const cfg = ctx.config.read();
+  const root = asRecord(cfg);
+  const trans = nestedRecord(root, "transcription");
+  const currentEngine = (trans.final_engine === "whisper" ? "whisper" : "mlx") as TranscriptionEngine;
+  const mlx = nestedRecord(trans, "mlx");
+  const currentMlxModel = stringValue(mlx, "model") || DEFAULT_MLX_MODEL;
+  const currentWhisperModel = stringValue(trans, "local_model_path") || DEFAULT_WHISPER_MODEL;
+  const selectedModel = (selection.model || "").trim();
+  const changed =
+    selection.engine !== currentEngine ||
+    (selection.engine === "mlx" && selectedModel && selectedModel !== currentMlxModel) ||
+    (selection.engine === "whisper" && selectedModel && selectedModel !== currentWhisperModel);
+  if (!changed) return;
+  if (!ctx.config.update) {
+    throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "config update is unavailable" });
+  }
+  ctx.config.update("transcription.final_engine", selection.engine);
+  if (selection.engine === "mlx" && selectedModel) {
+    ctx.config.update("transcription.mlx.model", selectedModel);
+  }
+  if (selection.engine === "whisper" && selectedModel) {
+    ctx.config.update("transcription.local_model_path", selectedModel);
+  }
+  try {
+    await ctx.launchctl?.restart("com.yulu.sttdaemon");
+  } catch (exc) {
+    throw new TRPCError({
+      code: "INTERNAL_SERVER_ERROR",
+      message: `stt daemon restart failed: ${(exc as Error).message}`,
+    });
+  }
 }
 
 function sendSummaryProcess(scriptDir: string, summaryPath: string, channel: SummaryChannel): Promise<{ code: number | null; stdout: string; stderr: string }> {
@@ -175,6 +482,7 @@ interface Row {
   recordedAt: string | null;
   wavPath: string;
   sizeBytes: number;
+  durationSeconds: number | null;
   mtimeMs: number;
   hasTranscript: boolean;
   hasSummary: boolean;
@@ -182,6 +490,7 @@ interface Row {
   firstWords: string | null;
   status: string;
   statusError?: string;
+  lastShare: ShareHistoryEntry | null;
 }
 
 interface SpeakerEntry {
@@ -405,22 +714,25 @@ function listRecordings(dir: string, registry: JobRegistry): Row[] {
     if (!m) continue;
     const [, title, date, time] = m;
     const stem = f.slice(0, -4);
-    const wavPath = join(dir, f);
-    const stat = statSync(wavPath);
-    const transcriptPath = join(dir, `${stem}.transcript.txt`);
-    const currentStatus = recordingStatus(stem, wavPath, registry);
-    out.push({
-      stem,
-      title: resolveTitle(dir, stem, title!),
+      const wavPath = join(dir, f);
+      const stat = statSync(wavPath);
+      const transcriptPath = join(dir, `${stem}.transcript.txt`);
+      const currentStatus = recordingStatus(stem, wavPath, registry);
+      const shareHistory = readShareHistory(shareHistoryPath(dir, stem));
+      out.push({
+        stem,
+        title: resolveTitle(dir, stem, title!),
       tags: readTagsSidecar(join(dir, `${stem}.tags.json`)),
       recordedAt: isoFromStem(date!, time!),
       wavPath, sizeBytes: stat.size, mtimeMs: stat.mtimeMs,
+      durationSeconds: wavDurationSeconds(wavPath),
       hasTranscript: existsSync(transcriptPath),
       hasSummary: existsSync(join(dir, `${stem}.summary.md`)),
       hasRealtime: existsSync(join(dir, `${stem}.realtime.transcript.txt`)),
-      firstWords: firstWordsOf(transcriptPath),
-      status: currentStatus.status, statusError: currentStatus.statusError,
-    });
+        firstWords: firstWordsOf(transcriptPath),
+        status: currentStatus.status, statusError: currentStatus.statusError,
+        lastShare: shareHistory[0] ?? null,
+      });
   }
   return out;
 }
@@ -464,6 +776,8 @@ export const recordingsRouter = router({
       const currentStatus = recordingStatus(input.stem, wav, ctx.jobs);
       const transcript = read(".transcript.txt");
       const raw = read(".raw.transcript.txt");
+      const shareHistory = readShareHistory(shareHistoryPath(dir, input.stem));
+      const hasSummary = existsSync(join(dir, `${input.stem}.summary.md`));
       // `.transcript.txt` and `.raw.transcript.txt` are written identically by
       // transcribe.py; `.transcript.txt` may LATER be overwritten by a cleanup
       // prompt while `.raw` keeps the pre-cleanup snapshot. Only surface raw as
@@ -482,6 +796,26 @@ export const recordingsRouter = router({
         speakerData: readSpeakerSidecar(dir, input.stem),
         status: currentStatus.status, statusError: currentStatus.statusError,
         enabledSummaryTargets: enabledSummaryTargets(ctx.config.read()),
+        shareTargets: shareTargets(ctx.config.read(), { hasSummary, history: shareHistory }),
+        shareHistory,
+        transcriptionModelOptions: transcriptionModelOptions(ctx.config.read()),
+        summaryTemplateOptions: summaryTemplateOptions(ctx.db?.prompts),
+        defaultSummaryTemplateId: defaultSummaryTemplateId(summaryTemplateOptions(ctx.db?.prompts)),
+      };
+    }),
+
+  shareTargets: publicProcedure
+    .input(z.object({ stem: z.string() }))
+    .query(({ ctx, input }) => {
+      const dir = ctx.paths.moviesDir;
+      requireRecording(dir, input.stem);
+      const history = readShareHistory(shareHistoryPath(dir, input.stem));
+      return {
+        targets: shareTargets(ctx.config.read(), {
+          hasSummary: existsSync(join(dir, `${input.stem}.summary.md`)),
+          history,
+        }),
+        history,
       };
     }),
 
@@ -609,7 +943,7 @@ export const recordingsRouter = router({
                         ".speakers.json",
                         ".summary.md", ".summary.html",
                         ".mic.transcript.txt", ".sys.transcript.txt",
-                        ".title", ".tags.json"];
+                        ".title", ".tags.json", ".shares.json"];
       const targets = new Set(suffixes.map((s) => join(dir, `${input.stem}${s}`)));
       // `<stem>.chunk-*` split-recording fragments (glob — no fixed count).
       // Read the dir and match by prefix instead of trusting a wildcard path.
@@ -634,12 +968,14 @@ export const recordingsRouter = router({
     .input(z.object({
       stem: z.string(),
       diarizationNumSpeakers: z.number().int().min(1).max(8).nullable().optional(),
+      transcriptionModel: TranscriptionModelSchema.nullable().optional(),
     }))
     .mutation(async ({ ctx, input }) => {
       const dir = ctx.paths.moviesDir;
       const wavPath = join(dir, `${input.stem}.wav`);
       if (!existsSync(wavPath)) throw new TRPCError({ code: "NOT_FOUND", message: "WAV file missing" });
       if (ctx.jobs.get(input.stem)) throw new TRPCError({ code: "CONFLICT", message: "Job already running for this recording" });
+      await applyTranscriptionModel(ctx, input.transcriptionModel ?? null);
       void runTranscribe({
         stem: input.stem,
         wavPath,
@@ -652,7 +988,7 @@ export const recordingsRouter = router({
     }),
 
   summarize: publicProcedure
-    .input(z.object({ stem: z.string() }))
+    .input(z.object({ stem: z.string(), promptId: z.string().nullable().optional() }))
     .mutation(async ({ ctx, input }) => {
       const dir = ctx.paths.moviesDir;
       const transcriptPath = join(dir, `${input.stem}.transcript.txt`);
@@ -667,12 +1003,17 @@ export const recordingsRouter = router({
       const title = resolveTitle(dir, input.stem, derivedTitle);
       const cfg = ctx.config.read();
       const llmCommand = (cfg.llm?.command ?? null) as string[] | null;
+      const prompt = summaryPromptSnapshot(ctx.db?.prompts, input.promptId ?? null);
+      if (input.promptId && !prompt) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "summary template not found" });
+      }
       void runSummarize({
         stem: input.stem,
         transcriptPath: sourcePath,
         summaryPath,
         audioPath: existsSync(wavPath) ? wavPath : undefined,
         title,
+        prompt,
         llmCommand,
         agentQueueJson: ctx.paths.agentQueueJson,
         scriptDir: ctx.paths.scriptDir,
@@ -688,23 +1029,52 @@ export const recordingsRouter = router({
       const dir = ctx.paths.moviesDir;
       requireRecording(dir, input.stem);
       const summaryPath = join(dir, `${input.stem}.summary.md`);
+      const cfg = ctx.config.read();
+      const label = SUMMARY_CHANNEL_LABELS[input.channel];
+      const destination = summaryDestination(cfg, input.channel);
+      const recordFailure = (message: string, detail?: { stdout?: string; stderr?: string }) => {
+        appendShareHistory(dir, input.stem, {
+          channel: input.channel,
+          label,
+          destination: destination || "未设置",
+          status: "failed",
+          message,
+          stdout: detail?.stdout,
+          stderr: detail?.stderr,
+        });
+      };
       if (!existsSync(summaryPath)) {
+        recordFailure("summary missing");
         throw new TRPCError({ code: "PRECONDITION_FAILED", message: "summary missing" });
       }
-      const cfg = ctx.config.read();
       if (!connectorEnabled(cfg, input.channel)) {
+        recordFailure(`${input.channel} summary target is not enabled`);
         throw new TRPCError({ code: "BAD_REQUEST", message: `${input.channel} summary target is not enabled` });
       }
-      if (!summaryDestination(cfg, input.channel)) {
+      if (!destination) {
+        recordFailure(`${input.channel} destination is not configured`);
         throw new TRPCError({ code: "PRECONDITION_FAILED", message: `${input.channel} destination is not configured` });
       }
       const result = await sendSummaryProcess(ctx.paths.scriptDir, summaryPath, input.channel);
       if (result.code !== 0) {
+        recordFailure(
+          result.stderr.trim() || result.stdout.trim() || `send_summary.py exited ${result.code}`,
+          { stdout: result.stdout, stderr: result.stderr },
+        );
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",
           message: result.stderr.trim() || result.stdout.trim() || `send_summary.py exited ${result.code}`,
         });
       }
+      appendShareHistory(dir, input.stem, {
+        channel: input.channel,
+        label,
+        destination,
+        status: "success",
+        stdout: result.stdout,
+        stderr: result.stderr,
+      });
+      ctx.pubsub.publish("recordings-changed", { reason: "changed" });
       return { ok: true as const, stdout: result.stdout, stderr: result.stderr };
     }),
 });

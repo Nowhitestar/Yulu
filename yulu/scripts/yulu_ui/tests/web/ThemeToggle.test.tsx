@@ -8,6 +8,8 @@ import { ThemeToggle } from "../../web/src/components/ThemeToggle.js";
 beforeEach(() => {
   localStorage.clear();
   document.documentElement.removeAttribute("data-theme");
+  document.documentElement.removeAttribute("data-theme-family");
+  document.documentElement.removeAttribute("data-theme-preset");
 });
 
 function mount() {
@@ -28,14 +30,14 @@ describe("ThemeToggle", () => {
     await user.click(screen.getByRole("button", { name: /浅色/ }));
     expect(screen.getByRole("button", { name: /浅色/ })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByRole("button", { name: /深色/ })).toHaveAttribute("aria-pressed", "false");
-    expect(localStorage.getItem("yulu_theme")).toBe("light");
+    expect(localStorage.getItem("yulu_theme_mode")).toBe("light");
   });
 
-  it("Auto clears localStorage", async () => {
-    localStorage.setItem("yulu_theme", "dark");
+  it("persists Auto as the selected theme mode", async () => {
+    localStorage.setItem("yulu_theme_mode", "dark");
     mount();
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: /自动/ }));
-    expect(localStorage.getItem("yulu_theme")).toBeNull();
+    expect(localStorage.getItem("yulu_theme_mode")).toBe("auto");
   });
 });

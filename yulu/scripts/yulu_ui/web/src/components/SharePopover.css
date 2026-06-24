@@ -1,0 +1,232 @@
+.share-popover-root {
+  position: relative;
+  display: inline-flex;
+}
+
+.share-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 5px 12px;
+  border: 1px solid var(--edge-card);
+  border-radius: var(--radius-control);
+  color: var(--fg-2);
+  background: var(--glass);
+  box-shadow: inset 0 1px 0 var(--edge-top);
+  font-size: 12px;
+}
+
+.share-trigger:hover:not(:disabled) {
+  color: var(--accent-on, var(--accent));
+  border-color: color-mix(in oklch, var(--accent) 35%, var(--edge));
+  background: var(--accent-soft);
+}
+
+.share-trigger:disabled {
+  opacity: 0.48;
+  cursor: default;
+}
+
+.share-popover {
+  position: fixed;
+  z-index: 90;
+  width: min(320px, calc(100vw - 28px));
+}
+
+.share-panel {
+  padding: 16px;
+  border: 1px solid var(--edge-card);
+  border-radius: var(--radius-panel);
+  background: var(--glass);
+  backdrop-filter: var(--blur-glass);
+  -webkit-backdrop-filter: var(--blur-glass);
+  box-shadow: 0 18px 44px -20px rgba(0, 0, 0, 0.28), var(--edge-shadow);
+}
+
+.share-panel-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 0 12px;
+  color: var(--fg-2);
+}
+
+.share-panel-title {
+  color: var(--fg);
+  font-size: 13px;
+  font-weight: 750;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.share-format {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 7px;
+  border-radius: 999px;
+  background: color-mix(in oklch, var(--fg) 5%, transparent);
+  color: var(--fg-2);
+  font-size: 10px;
+  font-weight: 650;
+}
+
+.share-panel-sub {
+  margin-top: 2px;
+  color: var(--fg-3);
+  font-size: 11px;
+}
+
+.share-targets {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.share-target {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr) max-content;
+  align-items: center;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--edge-card);
+  border-radius: var(--radius-inner);
+  color: var(--fg);
+  background: var(--glass-3);
+  text-align: left;
+  box-shadow: var(--shadow-card);
+}
+
+.share-target:hover:not(:disabled) {
+  background: var(--glass-paper);
+  border-color: color-mix(in oklch, var(--accent) 28%, var(--edge));
+}
+
+.share-target:disabled {
+  cursor: default;
+}
+
+.share-target:disabled .share-target-main,
+.share-target:disabled .share-target-mark {
+  opacity: 0.58;
+}
+
+.share-target-mark {
+  width: 32px;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 12px;
+  background: var(--accent-soft);
+  color: var(--accent-on, var(--accent));
+}
+
+.share-target-mark--zulip {
+  background: color-mix(in oklch, var(--purple) 16%, transparent);
+  color: var(--purple);
+}
+
+.share-target-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.share-target-label {
+  font-size: 12.5px;
+  font-weight: 700;
+}
+
+.share-target-destination,
+.share-target-last {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg-3);
+  font-size: 10.5px;
+}
+
+.share-target-last--success {
+  color: var(--green);
+}
+
+.share-target-last--failed {
+  color: var(--red);
+}
+
+.share-target-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  justify-content: flex-end;
+  max-width: 122px;
+  color: var(--fg-2);
+  font-size: 10.5px;
+  line-height: 1.25;
+  text-align: right;
+}
+
+.share-history {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--edge);
+}
+
+.share-history-title {
+  margin-bottom: 6px;
+  color: var(--fg-3);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.share-history-empty {
+  color: var(--fg-3);
+  font-size: 11px;
+}
+
+.share-history-row {
+  display: grid;
+  grid-template-columns: 14px minmax(60px, max-content) minmax(64px, max-content) minmax(0, 1fr);
+  align-items: center;
+  gap: 6px;
+  min-height: 24px;
+  color: var(--fg-2);
+  font-size: 11px;
+}
+
+.share-history-row svg {
+  color: var(--green);
+}
+
+.share-history-row:has(em) svg {
+  color: var(--red);
+}
+
+.share-history-row em {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--red);
+  font-style: normal;
+}
+
+@media (max-width: 760px) {
+  .share-popover {
+    position: fixed;
+    left: 12px;
+    right: 12px;
+    top: auto;
+    bottom: calc(82px + env(safe-area-inset-bottom));
+    width: auto;
+  }
+}

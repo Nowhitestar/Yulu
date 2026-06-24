@@ -1,41 +1,93 @@
 /* web/src/components/TopBar.css */
 .topbar {
+  position: relative;
   display: flex;
   align-items: center;
-  padding: 10px 14px;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  gap: 16px;
+  height: 64px;
+  min-height: 64px;
+  flex-shrink: 0;
+}
+.topbar-breadcrumb {
+  flex: 0 1 252px;
+  min-width: 206px;
+  max-width: 330px;
+  height: 64px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 18px;
+  border: 1px solid var(--edge-card);
+  border-radius: var(--radius-panel);
   background: var(--glass);
   backdrop-filter: var(--blur-glass);
   -webkit-backdrop-filter: var(--blur-glass);
-  border-radius: var(--radius-panel);
-  box-shadow: var(--edge-shadow);
-  gap: 14px;
-  min-height: 38px;
-}
-.topbar-breadcrumb {
+  box-shadow: var(--shadow);
   font-size: 13px;
-  font-weight: 500;
+  font-weight: 650;
   color: var(--fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .topbar-breadcrumb:empty { display: none; }
-.topbar-filters { display: flex; gap: 8px; align-items: center; }
+.topbar-filters { display: flex; gap: 8px; align-items: center; min-width: 0; }
 .topbar-spacer { flex: 1; }
-.topbar-search { flex-shrink: 0; }
-.topbar-theme   { flex-shrink: 0; }
+.topbar-search {
+  position: static;
+  transform: none;
+  flex: 1 1 420px;
+  width: auto;
+  max-width: 576px;
+  min-width: 260px;
+  height: 64px;
+}
+.topbar-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 64px;
+  padding: 0 8px;
+  border: 1px solid var(--edge-card);
+  border-radius: var(--radius-panel);
+  background: var(--glass);
+  backdrop-filter: var(--blur-glass);
+  -webkit-backdrop-filter: var(--blur-glass);
+  box-shadow: var(--shadow);
+  flex-shrink: 0;
+}
+.topbar-icon-button {
+  width: 34px;
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-control);
+  color: var(--fg-2);
+}
+.topbar-icon-button:hover {
+  color: var(--fg);
+  background: var(--row-hover);
+}
+.topbar-theme,
+.topbar-record { flex-shrink: 0; }
 
 @media (max-width: 760px) {
   .topbar {
     flex-wrap: wrap;
     gap: 8px;
-    padding: 8px 10px;
+    padding: 0;
+    height: auto;
     min-height: 0;
   }
 
   .topbar-breadcrumb {
     min-width: 0;
     flex: 1 1 auto;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    height: 48px;
   }
 
   .topbar-spacer {
@@ -52,6 +104,18 @@
   .topbar-search {
     order: 4;
     width: 100%;
+    min-width: 0;
+    max-width: none;
+    height: 48px;
+    position: static;
+    transform: none;
     flex: 1 1 100%;
+  }
+
+  .topbar-controls {
+    order: 2;
+    margin-left: auto;
+    height: 48px;
+    border-radius: 16px;
   }
 }

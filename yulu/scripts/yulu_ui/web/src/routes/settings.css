@@ -29,8 +29,8 @@
    comfortable padding, a quiet page heading, fg-3 sub — using shared tokens so
    it sits in the app's existing detail-pane family rather than a new look. */
 .settings-detail {
-  max-width: 760px;
-  padding: 10px 16px 80px 16px;
+  max-width: 896px;
+  padding: 24px 32px 90px;
 }
 .settings-detail-head {
   display: flex;
@@ -39,8 +39,8 @@
   margin-bottom: 22px;
 }
 .settings-detail-title {
-  font-size: 16px;
-  font-weight: 600;
+  font-size: 20px;
+  font-weight: 700;
   color: var(--fg);
   margin: 0;
 }
@@ -56,18 +56,25 @@
 }
 /* Spacing between re-homed rich section blocks within a category detail. */
 .settings-detail .settings-section + .settings-section {
-  margin-top: 36px;
+  margin-top: 28px;
 }
 .settings-section {
   scroll-margin-top: 60px;
+  padding: 18px;
+  border: 1px solid var(--edge-card);
+  border-radius: var(--radius-panel);
+  background: var(--glass-paper);
+  box-shadow: var(--shadow-paper);
+  backdrop-filter: blur(40px) saturate(200%);
+  -webkit-backdrop-filter: blur(40px) saturate(200%);
 }
 .settings-section-h {
   font-size: 14px;
-  font-weight: 600;
+  font-weight: 700;
   color: var(--fg);
   margin: 0 0 3px 0;
-  padding-top: 16px;
-  border-top: 1px solid var(--edge);
+  padding-top: 0;
+  border-top: 0;
 }
 .settings-section:first-child .settings-section-h {
   padding-top: 0;
@@ -118,7 +125,7 @@
   text-align: center;
   color: var(--fg-2);
   font-size: 12px;
-  border: 1px dashed var(--edge);
+  border: 1px dashed var(--edge-card);
   border-radius: var(--radius-inner);
   background: var(--glass-2);
 }
@@ -126,8 +133,9 @@
   margin-bottom: 16px;
   padding: 14px;
   background: var(--glass);
-  border-radius: var(--radius-panel);
-  box-shadow: var(--edge-shadow);
+  border: 1px solid var(--edge-card);
+  border-radius: var(--radius-inner);
+  box-shadow: var(--shadow-card);
 }
 .integration-header {
   display: flex;
@@ -144,10 +152,10 @@
   min-width: 0;
   margin-bottom: 10px;
   padding: 12px;
-  border: 1px solid var(--edge);
-  border-radius: var(--radius-panel);
-  background: var(--glass);
-  box-shadow: var(--edge-shadow);
+  border: 1px solid var(--edge-card);
+  border-radius: var(--radius-inner);
+  background: var(--glass-3);
+  box-shadow: var(--shadow-card);
 }
 .calendar-provider-card[data-status="usable"],
 .output-provider-card[data-status="usable"] {
@@ -188,7 +196,7 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border-radius: 8px;
+  border-radius: 10px;
   color: var(--accent);
   background: var(--accent-soft);
 }
@@ -396,11 +404,11 @@
   overflow: hidden;
   padding: 12px;
   border: 1px solid var(--edge);
-  border-radius: var(--radius-panel);
+  border-radius: 14px;
   background:
     linear-gradient(135deg, rgba(255, 255, 255, 0.05), transparent 46%),
     var(--glass);
-  box-shadow: var(--edge-shadow);
+  box-shadow: var(--shadow-card);
 }
 .connector-card::before {
   content: "";

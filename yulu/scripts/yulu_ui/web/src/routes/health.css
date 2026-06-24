@@ -1,25 +1,39 @@
-.health-page { padding: 4px 8px; }
+.health-page {
+  min-height: 100%;
+  padding: 16px;
+  border: 1px solid var(--edge-card);
+  border-radius: var(--radius-panel);
+  background: var(--glass);
+  backdrop-filter: var(--blur-glass);
+  -webkit-backdrop-filter: var(--blur-glass);
+  box-shadow: var(--shadow);
+}
 .health-tabs {
-  display: flex;
-  gap: 0;
-  border-bottom: 1px solid var(--edge);
+  display: inline-flex;
+  gap: 4px;
+  padding: 4px;
+  border: 0;
+  border-radius: var(--radius-inner);
+  background: color-mix(in oklch, var(--fg) 5%, transparent);
   margin-bottom: 18px;
+  box-shadow: none;
 }
 .health-tab {
-  padding: 9px 16px;
-  font-size: 13px;
+  min-height: 30px;
+  padding: 6px 16px;
+  font-size: 12px;
   color: var(--fg-2);
   cursor: pointer;
   background: transparent;
   border: 0;
-  border-bottom: 2px solid transparent;
-  margin-bottom: -1px;
+  border-radius: var(--radius-control);
 }
 .health-tab:hover { color: var(--fg); }
 .health-tab.active {
-  color: var(--accent-on, var(--accent));
-  border-bottom-color: var(--accent);
-  font-weight: 500;
+  color: var(--fg);
+  background: var(--glass-paper);
+  font-weight: 650;
+  box-shadow: var(--shadow-card);
 }
 
 @media (max-width: 760px) {
@@ -28,6 +42,7 @@
   }
 
   .health-tabs {
+    width: 100%;
     overflow-x: auto;
     margin-bottom: 12px;
   }

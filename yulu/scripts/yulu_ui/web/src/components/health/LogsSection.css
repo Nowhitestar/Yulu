@@ -11,20 +11,20 @@
 }
 .logs-select {
   padding: 6px 10px;
-  border-radius: var(--radius-inner);
-  background: var(--glass);
+  border-radius: var(--radius-pill);
+  background: var(--field-bg);
   color: var(--fg);
   font-size: 12px;
   font-family: "SF Mono", ui-monospace, monospace;
-  border: none;
+  border: 1px solid var(--edge);
 }
 .logs-btn {
-  padding: 5px 12px;
-  border-radius: var(--radius-inner);
-  background: var(--row-hover);
+  padding: 6px 12px;
+  border-radius: var(--radius-pill);
+  background: var(--glass);
   color: var(--fg-2);
   font-size: 11px;
-  border: none;
+  border: 1px solid var(--edge);
   cursor: pointer;
 }
 .logs-btn:hover { color: var(--fg); background: var(--glass-3); }

@@ -1,5 +1,6 @@
 // web/src/routes/knowledge/glossary.tsx
 import { useQueryClient } from "@tanstack/react-query";
+import { useMemo, useState } from "react";
 import { trpc } from "../../trpc.js";
 import { EditableTable, type ColumnDef } from "../../components/EditableTable.js";
 import { useT } from "../../i18n/LanguageProvider.js";
@@ -31,6 +32,9 @@ export function Glossary() {
   const { data } = trpc.glossary.list.useQuery();
   const qc = useQueryClient();
   const t = useT();
+  const [draftOpen, setDraftOpen] = useState(false);
+  const [draft, setDraft] = useState({ term: "", pinyin: "", notes: "" });
+  const [query, setQuery] = useState("");
 
   const COLUMNS: ColumnDef<VocabRow>[] = [
     { key: "term",       label: t("glossary.col.term"),       editable: true,  width: "200px" },
@@ -47,7 +51,26 @@ export function Glossary() {
   });
   const deleteMut = trpc.glossary.delete.useMutation();
 
-  const rows = (data as VocabRow[] | undefined) ?? [];
+  const rows = useMemo(() => {
+    const rawRows = (data as VocabRow[] | undefined) ?? [];
+    const q = query.trim().toLowerCase();
+    if (!q) return rawRows;
+    return rawRows.filter((row) =>
+      [row.term, row.pinyin, row.notes].some((value) => String(value ?? "").toLowerCase().includes(q))
+    );
+  }, [data, query]);
+
+  const saveDraft = async () => {
+    const term = draft.term.trim();
+    if (!term) return;
+    await addMut.mutateAsync({
+      term,
+      pinyin: draft.pinyin.trim() || undefined,
+      notes: draft.notes.trim() || undefined,
+    });
+    setDraft({ term: "", pinyin: "", notes: "" });
+    setDraftOpen(false);
+  };
 
   const onCellCommit = (id: number | string, key: string, value: string) => {
     updateMut.mutateAsync({ id: Number(id), [key]: value } as { id: number; [k: string]: unknown });
@@ -63,8 +86,41 @@ export function Glossary() {
   return (
     <div className="glossary-page">
       <div className="glossary-header">
-        <button type="button" className="glossary-add-btn" onClick={() => addMut.mutateAsync({ term: "" })}>{t("glossary.add")}</button>
+        <input
+          className="glossary-search"
+          type="search"
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          placeholder={t("glossary.search")}
+        />
+        <button type="button" className="glossary-add-btn" onClick={() => setDraftOpen(true)}>{t("glossary.add")}</button>
       </div>
+      {draftOpen && (
+        <div className="glossary-draft-row">
+          <input
+            autoFocus
+            value={draft.term}
+            onChange={(event) => setDraft((prev) => ({ ...prev, term: event.target.value }))}
+            placeholder={t("glossary.col.term")}
+          />
+          <input
+            value={draft.pinyin}
+            onChange={(event) => setDraft((prev) => ({ ...prev, pinyin: event.target.value }))}
+            placeholder={t("glossary.col.pinyin")}
+          />
+          <input
+            value={draft.notes}
+            onChange={(event) => setDraft((prev) => ({ ...prev, notes: event.target.value }))}
+            placeholder={t("glossary.col.notes")}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") void saveDraft();
+              if (event.key === "Escape") setDraftOpen(false);
+            }}
+          />
+          <button type="button" className="glossary-save-btn" disabled={!draft.term.trim()} onClick={() => void saveDraft()}>{t("glossary.save")}</button>
+          <button type="button" className="glossary-cancel-btn" onClick={() => setDraftOpen(false)}>{t("glossary.cancel")}</button>
+        </div>
+      )}
       <EditableTable
         columns={COLUMNS}
         rows={rows}

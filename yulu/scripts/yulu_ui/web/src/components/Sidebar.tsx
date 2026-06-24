@@ -2,25 +2,33 @@
 import { NavLink } from "react-router";
 import { Settings as SettingsIcon, HeartPulse, Mic, FileText, BookOpen } from "lucide-react";
 import type { ReactNode } from "react";
+import type { CSSProperties } from "react";
 import { Logo } from "./Logo.js";
 import { useDaemonHealthState } from "../hooks/useDaemonHealthState.js";
 import { useT } from "../i18n/LanguageProvider.js";
 import "./Sidebar.css";
 
-interface NavItem { to: string; labelKey: string; icon: ReactNode; }
+interface NavItem { to: string; labelKey: string; icon: ReactNode; showHealth?: boolean; depth?: number; }
 
 const TOP_SECTIONS: { headingKey: string; items: NavItem[] }[] = [
   {
     headingKey: "nav.section.inbox",
     items: [
-      { to: "/inbox", labelKey: "nav.recordings", icon: <Mic size={15} strokeWidth={1.8} /> },
+      { to: "/inbox", labelKey: "nav.recordings", icon: <Mic size={15} strokeWidth={1.8} />, depth: 1 },
     ],
   },
   {
     headingKey: "nav.section.knowledge",
     items: [
-      { to: "/knowledge/prompts",  labelKey: "nav.prompts",  icon: <FileText size={15} strokeWidth={1.8} /> },
-      { to: "/knowledge/glossary", labelKey: "nav.glossary", icon: <BookOpen size={15} strokeWidth={1.8} /> },
+      { to: "/knowledge/prompts",  labelKey: "nav.prompts",  icon: <FileText size={15} strokeWidth={1.8} />, depth: 1 },
+      { to: "/knowledge/glossary", labelKey: "nav.glossary", icon: <BookOpen size={15} strokeWidth={1.8} />, depth: 1 },
+    ],
+  },
+  {
+    headingKey: "nav.section.system",
+    items: [
+      { to: "/settings", labelKey: "nav.settings", icon: <SettingsIcon size={15} strokeWidth={1.8} />, depth: 1 },
+      { to: "/health", labelKey: "nav.health", icon: <HeartPulse size={15} strokeWidth={1.8} />, showHealth: true, depth: 1 },
     ],
   },
 ];
@@ -42,10 +50,20 @@ export function Sidebar() {
             <NavLink
               key={it.to}
               to={it.to}
+              data-depth={it.depth ?? 0}
+              style={{ "--sidebar-indent": `${(it.depth ?? 0) * 12}px` } as CSSProperties}
               className={({ isActive }) => "sidebar-item" + (isActive ? " active" : "")}
             >
               {it.icon}
               <span className="sidebar-item-label">{t(it.labelKey)}</span>
+              {it.showHealth && (
+                <span
+                  className={`sidebar-health-dot health-${health}`}
+                  data-testid="health-dot"
+                  data-state={health}
+                  aria-label={t("nav.health.aria", { state: health })}
+                />
+              )}
             </NavLink>
           ))}
         </div>
@@ -54,26 +72,13 @@ export function Sidebar() {
       <div className="sidebar-spacer" />
 
       <div className="sidebar-bottom" data-testid="sidebar-bottom">
-        <NavLink
-          to="/settings"
-          className={({ isActive }) => "sidebar-bottom-item" + (isActive ? " active" : "")}
-        >
-          <SettingsIcon size={16} strokeWidth={1.75} />
-          <span>{t("nav.settings")}</span>
-        </NavLink>
-        <NavLink
-          to="/health"
-          className={({ isActive }) => "sidebar-bottom-item" + (isActive ? " active" : "")}
-        >
-          <HeartPulse size={16} strokeWidth={1.75} />
-          <span>{t("nav.health")}</span>
-          <span
-            className={`sidebar-health-dot health-${health}`}
-            data-testid="health-dot"
-            data-state={health}
-            aria-label={t("nav.health.aria", { state: health })}
-          />
-        </NavLink>
+        <div className="sidebar-engine-card">
+          <span className={`sidebar-engine-dot health-${health}`} />
+          <div>
+            <strong>{t("sidebar.localEngine")}</strong>
+            <span>{t("sidebar.localEngine.sub")}</span>
+          </div>
+        </div>
       </div>
     </aside>
   );

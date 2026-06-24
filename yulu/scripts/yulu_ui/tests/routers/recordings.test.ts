@@ -14,6 +14,32 @@ vi.mock("node:child_process", async (importOriginal) => {
 });
 
 function mkCtx(opts: { moviesDir: string }): AppContext {
+  const configState = {
+    transcription: {
+      final_engine: "mlx",
+      local_model_path: "~/.config/yulu/models/ggml-large-v3.bin",
+      mlx: { model: "mlx-community/whisper-large-v3-mlx" },
+    },
+    llm: {},
+    connectors: {},
+    output: {},
+  };
+  const promptRows: Array<Record<string, unknown>> = [];
+  const promptsDb = {
+    prepare: (sql: string) => ({
+      all: (..._args: unknown[]) => {
+        if (sql.includes("FROM prompts")) return promptRows;
+        return [];
+      },
+      get: (...args: unknown[]) => {
+        if (!sql.includes("FROM prompts")) return undefined;
+        if (sql.includes("id = ?")) return promptRows.find((row) => row.id === args[0] && row.category === args[1]);
+        if (sql.includes("slug = ?")) return promptRows.find((row) => row.slug === args[0] && row.category === args[1]);
+        return promptRows.find((row) => row.category === args[0]);
+      },
+    }),
+    __rows: promptRows,
+  };
   return {
     paths: {
       moviesDir: opts.moviesDir,
@@ -23,7 +49,22 @@ function mkCtx(opts: { moviesDir: string }): AppContext {
     },
     jobs: new JobRegistry(),
     pubsub: new PubSub<AppChannels>(),
-    config: { read: () => ({ llm: {}, connectors: {}, output: {} }) },
+    config: {
+      read: () => configState,
+      update: (key: string, value: unknown) => {
+        const parts = key.split(".");
+        let cursor = configState as Record<string, unknown>;
+        for (let i = 0; i < parts.length - 1; i++) {
+          const part = parts[i]!;
+          cursor[part] = (cursor[part] ?? {}) as Record<string, unknown>;
+          cursor = cursor[part] as Record<string, unknown>;
+        }
+        cursor[parts[parts.length - 1]!] = value;
+        return { daemonsNeedingRestart: ["sttdaemon"], daemonsNeedingSighup: [] };
+      },
+    },
+    launchctl: { restart: vi.fn(), status: vi.fn(), start: vi.fn(), stop: vi.fn(), sighup: vi.fn() },
+    db: { prompts: promptsDb },
   } as unknown as AppContext;
 }
 
@@ -59,6 +100,26 @@ function wavHeaderOnly(): Buffer {
   return header;
 }
 
+function wavWithDuration(seconds: number): Buffer {
+  const byteRate = 48000 * 2 * 2;
+  const dataBytes = Math.round(seconds * byteRate);
+  const header = Buffer.alloc(44);
+  header.write("RIFF", 0, "ascii");
+  header.writeUInt32LE(36 + dataBytes, 4);
+  header.write("WAVE", 8, "ascii");
+  header.write("fmt ", 12, "ascii");
+  header.writeUInt32LE(16, 16);
+  header.writeUInt16LE(1, 20);
+  header.writeUInt16LE(2, 22);
+  header.writeUInt32LE(48000, 24);
+  header.writeUInt32LE(byteRate, 28);
+  header.writeUInt16LE(4, 32);
+  header.writeUInt16LE(16, 34);
+  header.write("data", 36, "ascii");
+  header.writeUInt32LE(dataBytes, 40);
+  return Buffer.concat([header, Buffer.alloc(dataBytes)]);
+}
+
 describe("recordings router", () => {
   let root: string; let mvDir: string;
   beforeEach(() => {
@@ -88,6 +149,13 @@ describe("recordings router", () => {
     expect(rows[0].stem).toBe("Memo_20260101_120000");
   });
 
+  it("list includes WAV duration for compact recording rows", async () => {
+    writeFileSync(join(mvDir, "TeamSync_20260102_090000.wav"), wavWithDuration(125));
+    const caller = createCaller(recordingsRouter, mkCtx({ moviesDir: mvDir }));
+    const rows = await caller.list({});
+    expect(rows[0].durationSeconds).toBe(125);
+  });
+
   it("get reads a recording from the root and includes realtime", async () => {
     writeFileSync(join(mvDir, "TeamSync_20260102_090000.wav"), "");
     writeFileSync(join(mvDir, "TeamSync_20260102_090000.realtime.transcript.txt"), "live text");
@@ -95,6 +163,30 @@ describe("recordings router", () => {
     const r = await caller.get({ stem: "TeamSync_20260102_090000" });
     expect(r.realtime).toBe("live text");
     expect(r.title).toBe("TeamSync");
+  });
+
+  it("get includes transcription model and summary template choices", async () => {
+    const stem = "TeamSync_20260102_090000";
+    writeFileSync(join(mvDir, `${stem}.wav`), "");
+    const ctx = mkCtx({ moviesDir: mvDir });
+    (ctx.db.prompts as unknown as { __rows: Array<Record<string, unknown>> }).__rows.push({
+      id: "p1",
+      slug: "summary",
+      name: "Standard Summary",
+      category: "summary",
+      content: "Use {{transcript}}",
+      is_auto_run: 1,
+    });
+
+    const r = await createCaller(recordingsRouter, ctx).get({ stem });
+
+    expect(r.transcriptionModelOptions.some((option: { label: string; active: boolean }) =>
+      option.label.includes("MLX") && option.active
+    )).toBe(true);
+    expect(r.summaryTemplateOptions).toEqual([
+      { id: "p1", slug: "summary", name: "Standard Summary", isAutoRun: true },
+    ]);
+    expect(r.defaultSummaryTemplateId).toBe("p1");
   });
 
   it("summarize can use realtime transcript when final transcript is missing", async () => {
@@ -115,6 +207,47 @@ describe("recordings router", () => {
     expect(queue[0].title).toBe("TeamSync");
     expect(queue[0].transcriptPath).toBe(realtimePath);
     expect(queue[0].audio_path).toBe(wavPath);
+  });
+
+  it("summarize enqueues the selected summary template snapshot", async () => {
+    const stem = "TeamSync_20260102_090000";
+    writeFileSync(join(mvDir, `${stem}.wav`), "");
+    writeFileSync(join(mvDir, `${stem}.transcript.txt`), "final text");
+    const ctx = mkCtx({ moviesDir: mvDir });
+    (ctx.db.prompts as unknown as { __rows: Array<Record<string, unknown>> }).__rows.push({
+      id: "p-decision",
+      slug: "decisions",
+      name: "Decision Memo",
+      category: "summary",
+      content: "Decisions from {{transcript}}",
+      is_auto_run: 0,
+    });
+
+    await createCaller(recordingsRouter, ctx).summarize({ stem, promptId: "p-decision" });
+
+    const queue = JSON.parse(readFileSync(ctx.paths.agentQueueJson, "utf8"));
+    expect(queue[0]).toMatchObject({
+      prompt_id: "p-decision",
+      prompt_slug: "decisions",
+      prompt_name: "Decision Memo",
+      prompt_content_snapshot: "Decisions from {{transcript}}",
+    });
+  });
+
+  it("transcribe applies a selected transcription model and restarts sttdaemon", async () => {
+    const stem = "TeamSync_20260102_090000";
+    writeFileSync(join(mvDir, `${stem}.wav`), "");
+    mockSpawn("", 0);
+    const ctx = mkCtx({ moviesDir: mvDir });
+
+    await createCaller(recordingsRouter, ctx).transcribe({
+      stem,
+      transcriptionModel: { engine: "whisper", model: "/models/ggml-medium.bin" },
+    });
+
+    expect(ctx.config.read().transcription.final_engine).toBe("whisper");
+    expect(ctx.config.read().transcription.local_model_path).toBe("/models/ggml-medium.bin");
+    expect(ctx.launchctl.restart).toHaveBeenCalledWith("com.yulu.sttdaemon");
   });
 
   it("get prefers clean audio for playback when present", async () => {

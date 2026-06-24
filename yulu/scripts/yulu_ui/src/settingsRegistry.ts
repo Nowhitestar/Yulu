@@ -32,8 +32,15 @@ const R = {
   sighup: (...d: Daemon[]): ReloadAction => ({ kind: "sighup", daemons: d }),
 };
 
+const ThemeSettingSchema = z.object({
+  family: z.enum(["default", "ayu", "paper", "custom"]).default("default"),
+  mode: z.enum(["auto", "light", "dark"]).default("auto"),
+  custom: z.unknown().optional(),
+}).passthrough();
+
 // 仅当前已暴露的设置(P2 再补缺失项)。reload 已修正(B3)。
 export const SETTINGS: SettingDef[] = [
+  { path: "ui.theme",                    category: "general", label: "Theme", type: "preset", validate: ThemeSettingSchema, reload: R.none },
   { path: "audio.mic_device",            category: "audio", label: "麦克风设备",   type: "select",  validate: z.string(),                  reload: R.restart("audiodaemon") },
   { path: "audio.system_audio_device",   category: "audio", label: "系统音设备",   type: "select",  validate: z.string().nullable(),       reload: R.restart("audiodaemon") },
   { path: "audio.output_dir",            category: "audio", label: "录音输出目录", type: "path",    validate: z.string().min(1),           reload: R.restart("audiodaemon"), danger: true }, // 改录音落盘位置:影响正在/后续录音

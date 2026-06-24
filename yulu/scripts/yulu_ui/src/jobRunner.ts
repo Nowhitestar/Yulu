@@ -60,6 +60,7 @@ export interface RunSummarizeArgs {
   summaryPath: string;
   audioPath?: string;
   title?: string | null;
+  prompt?: SummaryPromptSnapshot | null;
   llmCommand: string[] | null;
   agentQueueJson: string;
   scriptDir?: string;
@@ -67,21 +68,28 @@ export interface RunSummarizeArgs {
   pubsub: PubSub<AppChannels>;
 }
 
+export interface SummaryPromptSnapshot {
+  id: string;
+  slug: string;
+  name: string;
+  content: string;
+}
+
 export async function runSummarize(args: RunSummarizeArgs): Promise<{ jobId: string; mode: "queue" | "direct" }> {
-  const { stem, transcriptPath, summaryPath, audioPath, title, llmCommand, agentQueueJson, scriptDir, registry, pubsub } = args;
+  const { stem, transcriptPath, summaryPath, audioPath, title, prompt, llmCommand, agentQueueJson, scriptDir, registry, pubsub } = args;
   const jobId = randomUUID();
   if (llmCommand === null) {
-    return runSummarizeQueueMode({ stem, jobId, transcriptPath, summaryPath, audioPath, title, agentQueueJson, registry, pubsub });
+    return runSummarizeQueueMode({ stem, jobId, transcriptPath, summaryPath, audioPath, title, prompt, agentQueueJson, registry, pubsub });
   }
-  return runSummarizeDirectMode({ stem, jobId, transcriptPath, summaryPath, llmCommand, scriptDir, registry, pubsub });
+  return runSummarizeDirectMode({ stem, jobId, transcriptPath, summaryPath, title, prompt, llmCommand, scriptDir, registry, pubsub });
 }
 
 async function runSummarizeQueueMode(args: {
   stem: string; jobId: string; transcriptPath: string; summaryPath: string;
-  audioPath?: string; title?: string | null;
+  audioPath?: string; title?: string | null; prompt?: SummaryPromptSnapshot | null;
   agentQueueJson: string; registry: JobRegistry; pubsub: PubSub<AppChannels>;
 }): Promise<{ jobId: string; mode: "queue" }> {
-  const { stem, jobId, transcriptPath, summaryPath, audioPath, title, agentQueueJson, registry, pubsub } = args;
+  const { stem, jobId, transcriptPath, summaryPath, audioPath, title, prompt, agentQueueJson, registry, pubsub } = args;
   const queueEntryId = randomUUID();
   registry.set({ stem, action: "summarize", state: "summarizing", startedAt: Date.now(), jobId, queueEntryId });
   pubsub.publish("jobs", { stem, jobId, state: "summarizing" });
@@ -96,8 +104,15 @@ async function runSummarizeQueueMode(args: {
     stem,
     title: title ?? stem,
     audio_path: audioPath,
+    transcript_path: transcriptPath,
+    summary_path: summaryPath,
     transcriptPath,
     summaryPath,
+    html_path_hint: summaryPath.replace(/\.md$/, ".html"),
+    prompt_id: prompt?.id,
+    prompt_slug: prompt?.slug,
+    prompt_name: prompt?.name,
+    prompt_content_snapshot: prompt?.content,
     requestedAt: Date.now(),
   });
   writeFileSync(agentQueueJson, JSON.stringify(queue, null, 2));
@@ -151,9 +166,10 @@ function watchForQueueCompletion(args: {
 
 async function runSummarizeDirectMode(args: {
   stem: string; jobId: string; transcriptPath: string; summaryPath: string;
+  title?: string | null; prompt?: SummaryPromptSnapshot | null;
   llmCommand: string[]; scriptDir?: string; registry: JobRegistry; pubsub: PubSub<AppChannels>;
 }): Promise<{ jobId: string; mode: "direct" }> {
-  const { stem, jobId, transcriptPath, summaryPath, llmCommand, scriptDir, registry, pubsub } = args;
+  const { stem, jobId, transcriptPath, summaryPath, title, prompt, llmCommand, scriptDir, registry, pubsub } = args;
   registry.set({ stem, action: "summarize", state: "summarizing", startedAt: Date.now(), jobId });
   pubsub.publish("jobs", { stem, jobId, state: "summarizing" });
 
@@ -185,7 +201,7 @@ async function runSummarizeDirectMode(args: {
 
     try {
       const transcript = readFileSync(transcriptPath, "utf8");
-      proc.stdin.write(buildSummaryPrompt(transcript));
+      proc.stdin.write(buildSummaryPrompt(transcript, { title: title ?? stem, prompt }));
       proc.stdin.end();
     } catch (exc) {
       proc.stdin.end();
@@ -205,7 +221,21 @@ function resolveBundledScriptArgs(command: string[], scriptDir?: string): string
   });
 }
 
-function buildSummaryPrompt(transcript: string): string {
+function buildSummaryPrompt(
+  transcript: string,
+  opts: { title?: string | null; prompt?: SummaryPromptSnapshot | null } = {},
+): string {
+  if (opts.prompt?.content) {
+    const date = new Date().toISOString().slice(0, 10);
+    return opts.prompt.content
+      .replaceAll("{{transcript}}", transcript)
+      .replaceAll("{{my_transcript}}", "")
+      .replaceAll("{{their_transcript}}", "")
+      .replaceAll("{{speaker_transcript}}", "")
+      .replaceAll("{{speaker_list}}", "")
+      .replaceAll("{{meeting_title}}", opts.title ?? "")
+      .replaceAll("{{date}}", date);
+  }
   return [
     "请根据下面的会议转录生成中文会议摘要。",
     "",

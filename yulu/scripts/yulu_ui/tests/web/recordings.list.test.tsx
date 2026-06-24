@@ -7,14 +7,18 @@ const renameMutate = vi.fn();
 const deleteMutate = vi.fn();
 const transcribeMutate = vi.fn();
 const summarizeMutate = vi.fn();
+const sendSummaryMutate = vi.fn();
+const shareTargetsMock = vi.fn(() => ({ data: { targets: [], history: [] } }));
 vi.mock("../../web/src/trpc.js", () => ({
   trpc: {
     recordings: {
       list: { useQuery: (...a: unknown[]) => listMock(...a) },
+      shareTargets: { useQuery: () => shareTargetsMock() },
       rename: { useMutation: () => ({ mutate: renameMutate }) },
       delete: { useMutation: () => ({ mutate: deleteMutate }) },
       transcribe: { useMutation: () => ({ mutate: transcribeMutate }) },
       summarize: { useMutation: () => ({ mutate: summarizeMutate }) },
+      sendSummary: { useMutation: () => ({ mutate: sendSummaryMutate }) },
     },
   },
 }));
@@ -25,8 +29,8 @@ import { RecordingsList } from "../../web/src/routes/inbox/recordings";
 
 function rows() {
   return [
-    { stem: "TeamSync_20260102_090000", title: "TeamSync", recordedAt: "2026-01-02T09:00:00", mtimeMs: 2, hasTranscript: true, hasSummary: true, hasRealtime: true, firstWords: "we discussed", status: "idle" },
-    { stem: "Memo_20260101_120000", title: "Memo", recordedAt: "2026-01-01T12:00:00", mtimeMs: 1, hasTranscript: true, hasSummary: false, hasRealtime: false, firstWords: "quick note", status: "transcribing" },
+    { stem: "TeamSync_20260102_090000", title: "TeamSync", tags: ["Design"], recordedAt: "2026-01-02T09:00:00", durationSeconds: 2720, mtimeMs: 2, hasTranscript: true, hasSummary: true, hasRealtime: true, firstWords: "we discussed", status: "idle" },
+    { stem: "Memo_20260101_120000", title: "Memo", tags: [], recordedAt: "2026-01-01T12:00:00", durationSeconds: 42, mtimeMs: 1, hasTranscript: true, hasSummary: false, hasRealtime: false, firstWords: "quick note", status: "transcribing" },
   ];
 }
 
@@ -36,14 +40,25 @@ describe("RecordingsList", () => {
     deleteMutate.mockClear();
     transcribeMutate.mockClear();
     summarizeMutate.mockClear();
+    sendSummaryMutate.mockClear();
+    shareTargetsMock.mockClear();
+    shareTargetsMock.mockReturnValue({ data: { targets: [], history: [] } });
   });
 
-  it("renders one row per recording (title + first words, no type badge)", () => {
+  it("renders compact recording rows without transcript previews", () => {
     listMock.mockReturnValue({ data: rows(), isPending: false });
     render(<MemoryRouter><RecordingsList /></MemoryRouter>);
     expect(screen.getByText("TeamSync")).toBeInTheDocument();
-    expect(screen.getByText(/quick note/)).toBeInTheDocument();
     expect(screen.getByText("Memo")).toBeInTheDocument();
+    expect(screen.queryByText(/quick note/)).toBeNull();
+    expect(screen.queryByText(/we discussed/)).toBeNull();
+    expect(screen.getByText("45:20")).toBeInTheDocument();
+    expect(screen.getByText("0:42")).toBeInTheDocument();
+    expect(screen.getByText("Design")).toBeInTheDocument();
+    expect(screen.getByLabelText("添加标签")).toBeInTheDocument();
+    expect(screen.getAllByLabelText("Transcript ready")).toHaveLength(2);
+    expect(screen.getByLabelText("Summary ready")).toBeInTheDocument();
+    expect(screen.getByLabelText("Realtime transcript ready")).toBeInTheDocument();
     // The Voicemail/Meeting type badge is gone.
     expect(screen.queryByText(/voicemail/i)).toBeNull();
   });
@@ -58,24 +73,23 @@ describe("RecordingsList", () => {
   it("shows a status chip on a transcribing row", () => {
     listMock.mockReturnValue({ data: rows(), isPending: false });
     render(<MemoryRouter><RecordingsList /></MemoryRouter>);
-    expect(screen.getByText(/转写中/i)).toBeInTheDocument();
+    expect(screen.getByTestId("recording-status")).toHaveAttribute("data-state", "transcribing");
   });
 
   it("shows a Failed badge (not a forever-spinner) with the error in a tooltip", () => {
     listMock.mockReturnValue({
-      data: [{ stem: "TeamSync_20260102_090000", title: "TeamSync", recordedAt: "2026-01-02T09:00:00", mtimeMs: 2, hasTranscript: false, hasSummary: false, hasRealtime: false, firstWords: null, status: "failed", statusError: "engine crashed" }],
+      data: [{ stem: "TeamSync_20260102_090000", title: "TeamSync", tags: [], recordedAt: "2026-01-02T09:00:00", durationSeconds: null, mtimeMs: 2, hasTranscript: false, hasSummary: false, hasRealtime: false, firstWords: null, status: "failed", statusError: "engine crashed" }],
       isPending: false,
     });
     render(<MemoryRouter><RecordingsList /></MemoryRouter>);
     const badge = screen.getByTestId("recording-status");
-    expect(badge).toHaveTextContent(/失败/);
     expect(badge).toHaveAttribute("data-state", "failed");
     expect(badge).toHaveAttribute("title", "engine crashed");
   });
 
   it("renders no status badge for an idle row", () => {
     listMock.mockReturnValue({
-      data: [{ stem: "TeamSync_20260102_090000", title: "TeamSync", recordedAt: "2026-01-02T09:00:00", mtimeMs: 2, hasTranscript: true, hasSummary: true, hasRealtime: false, firstWords: "hi", status: "idle" }],
+      data: [{ stem: "TeamSync_20260102_090000", title: "TeamSync", tags: [], recordedAt: "2026-01-02T09:00:00", durationSeconds: null, mtimeMs: 2, hasTranscript: true, hasSummary: true, hasRealtime: false, firstWords: "hi", status: "idle" }],
       isPending: false,
     });
     render(<MemoryRouter><RecordingsList /></MemoryRouter>);

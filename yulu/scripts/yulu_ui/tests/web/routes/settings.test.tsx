@@ -259,8 +259,10 @@ describe("Settings category detail content (re-homed widgets)", () => {
     const { container, getByText } = wrap("/settings/general");
     const detail = within(container.querySelector(".masterdetail-detail") as HTMLElement);
     expect(detail.getByText(translate("zh", "settings.capabilities.heading"))).toBeInTheDocument();
-    // ThemeToggle (UI theme control) is re-homed here.
+    // Theme controls are re-homed here.
     expect(container.querySelector('[role="group"][aria-label="主题"]')).not.toBeNull();
+    expect(container.querySelector('[role="group"][aria-label="主题明暗模式"]')).not.toBeNull();
+    expect(container.querySelector('[role="group"][aria-label="主题家族"]')).not.toBeNull();
     expect(getByText(translate("zh", "settings.hotkey.statusAgent.label"))).toBeInTheDocument();
     // P3-1: the read-only About block (version + install source) lives in general.
     expect(detail.getByText(translate("zh", "settings.about.heading"))).toBeInTheDocument();

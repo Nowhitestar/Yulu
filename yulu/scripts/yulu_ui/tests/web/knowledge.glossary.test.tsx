@@ -65,11 +65,14 @@ describe("Glossary page", () => {
     await vi.waitFor(() => expect(updateMutate).toHaveBeenCalledWith({ id: 1, term: "AgentKey2" }));
   });
 
-  it("+ Add term fires glossary.add with empty term", async () => {
+  it("+ Add term opens a draft row and saves glossary.add", async () => {
     mount();
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: /\+ 添加术语/i }));
-    await vi.waitFor(() => expect(addMutate).toHaveBeenCalledWith({ term: "" }));
+    const termInput = screen.getByPlaceholderText("术语");
+    await user.type(termInput, "Liquid Glass");
+    await user.click(screen.getByRole("button", { name: /^保存$/i }));
+    await vi.waitFor(() => expect(addMutate).toHaveBeenCalledWith({ term: "Liquid Glass", pinyin: undefined, notes: undefined }));
   });
 
   it("bulk delete: select 2 rows + Delete + confirm → loops glossary.delete", async () => {
