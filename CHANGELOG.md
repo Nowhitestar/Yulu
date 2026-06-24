@@ -4,6 +4,13 @@ All notable changes to Yulu are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.12.0](https://github.com/Nowhitestar/Yulu/compare/v0.11.4...v0.12.0) (2026-06-24)
+
+
+### Features
+
+* **ui:** add liquid glass redesign ([ca9bb04](https://github.com/Nowhitestar/Yulu/commit/ca9bb0444ec0615b65ac4a872e4768cd5cbe7908))
+
 ## [0.11.4](https://github.com/Nowhitestar/Yulu/compare/v0.11.3...v0.11.4) (2026-06-17)
 
 
