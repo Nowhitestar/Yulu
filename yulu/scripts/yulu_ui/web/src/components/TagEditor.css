@@ -14,6 +14,7 @@
   border-radius: var(--radius-pill);
   background: var(--accent-soft);
   color: var(--accent-on, var(--accent));
+  border: 1px solid color-mix(in oklch, var(--accent) 20%, var(--edge));
 }
 .tag-chip-remove {
   display: inline-flex;
@@ -32,7 +33,7 @@
   align-items: center;
   gap: 3px;
   font-size: 11px;
-  padding: 2px 8px;
+  padding: 3px 8px;
   border-radius: var(--radius-pill);
   border: 1px dashed var(--edge);
   color: var(--fg-2);
@@ -45,7 +46,7 @@
   width: 90px;
   border-radius: var(--radius-pill);
   border: 1px solid var(--accent);
-  background: var(--glass);
+  background: var(--field-bg);
   color: var(--fg);
 }
 .tag-input:focus { outline: none; }

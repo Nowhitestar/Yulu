@@ -52,6 +52,29 @@ const OutputSchema = z.object({
   }).passthrough().default({}),
 }).passthrough().default({});
 
+const ThemeTokenSchema = z.object({
+  wallpaper: z.string().optional(),
+  surface: z.string().optional(),
+  surfaceStrong: z.string().optional(),
+  edge: z.string().optional(),
+  text: z.string().optional(),
+  muted: z.string().optional(),
+  accent: z.string().optional(),
+  blue: z.string().optional(),
+  green: z.string().optional(),
+  red: z.string().optional(),
+  purple: z.string().optional(),
+}).passthrough().default({});
+
+const ThemeSchema = z.object({
+  family: z.enum(["default", "ayu", "paper", "custom"]).default("default"),
+  mode: z.enum(["auto", "light", "dark"]).default("auto"),
+  custom: z.object({
+    light: ThemeTokenSchema,
+    dark: ThemeTokenSchema,
+  }).passthrough().default({}),
+}).passthrough().default({});
+
 const DEFAULT_MLX_MODEL = "mlx-community/whisper-large-v3-mlx";
 const DEFAULT_REALTIME_MLX_MODEL = "mlx-community/whisper-large-v3-turbo";
 
@@ -104,6 +127,9 @@ export const ConfigSchema = z.object({
   calendars: z.array(CalendarSchema).default([]),
   connectors: ConnectorsSchema,
   output: OutputSchema,
+  ui: z.object({
+    theme: ThemeSchema,
+  }).passthrough().default({}),
 }).passthrough();
 
 export type YuluConfig = z.infer<typeof ConfigSchema>;

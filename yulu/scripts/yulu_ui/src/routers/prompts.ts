@@ -43,6 +43,7 @@ export const promptsRouter = router({
     .input(z.object({
       id: z.string(),
       name: z.string().optional(),
+      slug: z.string().regex(/^[a-z][a-z0-9-]{0,62}[a-z0-9]?$/).optional(),
       category: CATEGORY.optional(),
       content: z.string().optional(),
       isAutoRun: z.boolean().optional(),
@@ -51,6 +52,7 @@ export const promptsRouter = router({
       const fields: string[] = [];
       const values: unknown[] = [];
       if (input.name !== undefined)      { fields.push("name = ?");        values.push(input.name); }
+      if (input.slug !== undefined)      { fields.push("slug = ?");        values.push(input.slug); }
       if (input.category !== undefined)  { fields.push("category = ?");    values.push(input.category); }
       if (input.content !== undefined)   { fields.push("content = ?");     values.push(input.content); }
       if (input.isAutoRun !== undefined) { fields.push("is_auto_run = ?"); values.push(input.isAutoRun ? 1 : 0); }

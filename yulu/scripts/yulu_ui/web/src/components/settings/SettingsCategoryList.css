@@ -4,9 +4,19 @@
 .settings-category-list {
   display: flex;
   flex-direction: column;
+  gap: 4px;
+  padding: 8px;
 }
 .settings-category-row {
-  /* .recording-row already gives padding/radius/color; tighten vertical rhythm. */
+  min-height: 68px;
+  margin-bottom: 0;
+  border-radius: 12px;
+  padding: 11px 12px;
+}
+.settings-category-row.active {
+  background: var(--glass-3);
+  border-color: color-mix(in oklch, var(--accent) 42%, var(--edge));
+  box-shadow: var(--shadow-card);
 }
 .settings-category-desc {
   font-size: 12px;

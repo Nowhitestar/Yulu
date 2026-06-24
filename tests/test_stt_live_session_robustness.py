@@ -50,9 +50,32 @@ def _write_wav(path: Path, seconds: float, rate: int = SAMPLE_RATE_HZ) -> None:
 
 
 def _append_pcm(path: Path, seconds: float, rate: int = SAMPLE_RATE_HZ) -> None:
+    _append_pcm_value(path, seconds, value=0x1000, rate=rate)
+
+
+def _append_pcm_value(path: Path, seconds: float, *, value: int, rate: int = SAMPLE_RATE_HZ) -> None:
     n = int(rate * seconds)
+    sample = int(value).to_bytes(SAMPLE_BYTES, "little", signed=True)
     with open(path, "ab") as f:
-        f.write(b"\x00\x10" * n)
+        f.write(sample * n)
+
+
+class _OptionsBackend(MockSTTBackend):
+    def __init__(self, canned_text: str = "partial", delay_sec: float = 0.0):
+        super().__init__(canned_text=canned_text, delay_sec=delay_sec)
+        self.last_options = None
+
+    async def transcribe(
+        self, *, audio_path, language, initial_prompt, cancel_token, options=None
+    ):
+        self.last_options = options
+        return await super().transcribe(
+            audio_path=audio_path,
+            language=language,
+            initial_prompt=initial_prompt,
+            cancel_token=cancel_token,
+            options=options,
+        )
 
 
 def _build(tmp_path, *, backend=None):
@@ -151,6 +174,77 @@ def test_offset_advances_before_await_so_no_double_read(tmp_path):
     off1, off2, calls = asyncio.run(go())
     assert off1 == off2, "offset moved without new audio (double-read risk)"
     assert calls == 1, f"re-transcribed the same bytes: {calls} calls"
+
+
+def test_silent_live_chunk_emits_empty_partial_without_backend_call(tmp_path):
+    """Silence should advance realtime coverage but not be sent to Whisper."""
+    wav = tmp_path / "rec.wav"
+    _write_wav(wav, seconds=0.0)
+    backend = MockSTTBackend(canned_text="hallucinated")
+    backend, scheduler, mgr = _build(tmp_path, backend=backend)
+    received: list[PartialEvent] = []
+    mgr.on_partial = lambda evt: received.append(evt)
+
+    async def go():
+        await scheduler.start()
+        sid = "silent"
+        await mgr.start_session(LiveSession(
+            sid=sid, mic_path=str(wav), sys_path=None,
+            engine="mlx", language="zh", chunk_sec=0.05,
+        ))
+        t = mgr._tail_tasks.pop(sid, None)
+        if t is not None:
+            t.cancel()
+            try:
+                await t
+            except asyncio.CancelledError:
+                pass
+        _append_pcm_value(wav, seconds=0.2, value=0)
+        await mgr.poll_once(sid)
+        await mgr.stop_session(sid, reason="cancelled")
+        await scheduler.stop()
+
+    asyncio.run(go())
+    assert backend.calls == 0, "silent live chunk should not reach the STT backend"
+    assert len(received) == 1
+    assert received[0].text == ""
+    assert received[0].ended_ms > received[0].started_ms
+
+
+def test_voiced_live_chunk_still_dispatches_with_realtime_options(tmp_path):
+    wav = tmp_path / "rec.wav"
+    _write_wav(wav, seconds=0.0)
+    backend = _OptionsBackend(canned_text="spoken")
+    backend, scheduler, mgr = _build(tmp_path, backend=backend)
+    received: list[PartialEvent] = []
+    mgr.on_partial = lambda evt: received.append(evt)
+
+    async def go():
+        await scheduler.start()
+        sid = "voiced"
+        await mgr.start_session(LiveSession(
+            sid=sid, mic_path=str(wav), sys_path=None,
+            engine="mlx", language="zh", chunk_sec=0.05,
+        ))
+        t = mgr._tail_tasks.pop(sid, None)
+        if t is not None:
+            t.cancel()
+            try:
+                await t
+            except asyncio.CancelledError:
+                pass
+        _append_pcm(wav, seconds=0.2)
+        await mgr.poll_once(sid)
+        await mgr.stop_session(sid, reason="cancelled")
+        await scheduler.stop()
+
+    asyncio.run(go())
+    assert backend.calls == 1
+    assert received and received[0].text == "spoken"
+    assert backend.last_options == {
+        "condition_on_previous": False,
+        "hallucination_silence_threshold": 1.5,
+    }
 
 
 def test_backlog_is_consumed_in_bounded_chunks(tmp_path):

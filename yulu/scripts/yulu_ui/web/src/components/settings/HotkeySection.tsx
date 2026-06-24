@@ -1,5 +1,6 @@
 import { trpc } from "../../trpc.js";
 import { InlineEditRow } from "../InlineEditRow.js";
+import { ThemePresetPicker } from "../ThemePresetPicker.js";
 import { ThemeToggle } from "../ThemeToggle.js";
 import { LanguageToggle } from "../LanguageToggle.js";
 import { useConfigField } from "../../hooks/useConfigField.js";
@@ -37,8 +38,13 @@ export function HotkeySection({ tracker }: HotkeySectionProps) {
         <div className="row-status" />
       </div>
       <div className="row">
-        <div className="row-label">{t("settings.hotkey.theme.label")}</div>
+        <div className="row-label">{t("settings.hotkey.themeMode.label")}</div>
         <div className="row-value"><ThemeToggle /></div>
+        <div className="row-status" />
+      </div>
+      <div className="row row--wide">
+        <div className="row-label">{t("settings.hotkey.theme.label")}</div>
+        <div className="row-value"><ThemePresetPicker /></div>
         <div className="row-status" />
       </div>
       <InlineEditRow

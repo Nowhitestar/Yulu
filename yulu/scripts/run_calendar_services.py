@@ -42,6 +42,7 @@ WEBHOOK_PORT = 8899
 # 要 watch 的日历列表（从 config.json 加载）
 CALENDARS_TO_WATCH = []
 GOG_ACCOUNT = ""
+GOG_CREDENTIALS_CACHE = None
 
 LOCK = threading.Lock()
 LAST_SYNC = 0
@@ -95,6 +96,10 @@ def _get_gog_credentials():
     if env_id and env_secret and env_token:
         return env_id, env_secret, env_token
 
+    global GOG_CREDENTIALS_CACHE
+    if GOG_CREDENTIALS_CACHE:
+        return GOG_CREDENTIALS_CACHE
+
     client_id = ""
     client_secret = ""
     refresh_token = ""
@@ -106,13 +111,15 @@ def _get_gog_credentials():
         r = subprocess.run(
             ["security", "find-generic-password", "-s", "gogcli",
              "-a", f"token:default:{GOG_ACCOUNT}", "-w"],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True, text=True, timeout=60,
         )
         if r.returncode == 0:
             data = json.loads(r.stdout)
             refresh_token = data.get("refresh_token", "")
             client_id = data.get("client_id", "")
             client_secret = data.get("client_secret", "")
+    except subprocess.TimeoutExpired:
+        log("⚠️ 读取 gog Keychain 凭证超时，请在弹窗中选择“始终允许”")
     except Exception:
         pass
 
@@ -124,7 +131,8 @@ def _get_gog_credentials():
         client_secret = client_secret or creds.get("client_secret", "")
 
     if client_id and client_secret and refresh_token:
-        return client_id, client_secret, refresh_token
+        GOG_CREDENTIALS_CACHE = (client_id, client_secret, refresh_token)
+        return GOG_CREDENTIALS_CACHE
 
     return "", "", ""
 

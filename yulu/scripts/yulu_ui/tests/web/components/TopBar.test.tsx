@@ -12,6 +12,9 @@ vi.mock("react-router", async () => {
   const actual = await vi.importActual<typeof import("react-router")>("react-router");
   return { ...actual, useMatches: vi.fn() };
 });
+vi.mock("../../../web/src/components/Pill.js", () => ({
+  Pill: () => <button type="button">Record</button>,
+}));
 
 const mUseMatches = useMatches as unknown as ReturnType<typeof vi.fn>;
 

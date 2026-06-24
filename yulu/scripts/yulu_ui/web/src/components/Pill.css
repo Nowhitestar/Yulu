@@ -12,6 +12,7 @@
   background: var(--glass);
   backdrop-filter: var(--blur-pill);
   -webkit-backdrop-filter: var(--blur-pill);
+  border: 1px solid var(--edge);
   box-shadow: var(--edge-shadow), var(--shadow);
   font-size: 13px;
   color: var(--fg);
@@ -43,7 +44,7 @@
 .pill-meter .cell.on { background: var(--accent); }
 .pill-stop {
   width: 22px; height: 22px;
-  border-radius: 6px;
+  border-radius: 999px;
   background: var(--row-hover);
   color: var(--fg);
 }
@@ -65,3 +66,52 @@
   box-shadow: var(--edge-shadow), 0 0 0 1px var(--red);
 }
 .pill-warn { font-size: 14px; }
+
+.topbar-record .pill {
+  position: static;
+  right: auto;
+  bottom: auto;
+  min-height: 40px;
+  height: 40px;
+  padding: 0 16px;
+  gap: 8px;
+  border: 0;
+  border-radius: 12px;
+  background: var(--accent);
+  color: white;
+  box-shadow: 0 6px 18px color-mix(in oklch, var(--accent) 22%, transparent), inset 0 1px 0 rgba(255, 255, 255, 0.32);
+  font-size: 13px;
+  font-weight: 760;
+}
+.topbar-record .pill:hover {
+  background: color-mix(in oklch, var(--accent) 90%, black 10%);
+}
+.topbar-record .pill-hotkey {
+  display: none;
+}
+.topbar-record .pill-mic,
+.topbar-record .pill-time,
+.topbar-record .pill-label {
+  color: white;
+}
+.topbar-record .pill-meter .cell {
+  background: rgba(255, 255, 255, 0.28);
+}
+.topbar-record .pill-meter .cell.on {
+  background: white;
+}
+
+@media (max-width: 760px) {
+  body > .pill,
+  .pill {
+    right: 16px;
+    bottom: calc(78px + env(safe-area-inset-bottom));
+    padding: 7px 12px;
+  }
+
+  .topbar-record .pill {
+    min-height: 34px;
+    padding: 0 12px;
+    font-size: 12px;
+  }
+}

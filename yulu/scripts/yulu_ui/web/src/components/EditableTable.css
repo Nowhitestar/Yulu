@@ -3,18 +3,25 @@
   display: flex;
   flex-direction: column;
   gap: 0;
+  overflow: hidden;
+  border: 1px solid var(--edge);
+  border-radius: 16px;
+  background: var(--glass-3);
+  box-shadow: var(--shadow-card);
+  backdrop-filter: var(--blur-pill);
+  -webkit-backdrop-filter: var(--blur-pill);
 }
 .etable-row {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 6px 10px;
+  padding: 8px 12px;
   border-bottom: 1px solid var(--edge);
   font-size: 13px;
 }
 .etable-row:last-child { border-bottom: none; }
 .etable-header {
-  background: var(--row-hover);
+  background: color-mix(in oklch, var(--glass) 64%, transparent);
   font-size: 10px;
   font-weight: 600;
   text-transform: uppercase;
@@ -33,16 +40,16 @@
 }
 .etable-cell-editable {
   cursor: text;
-  padding: 2px 4px;
-  border-radius: 4px;
+  padding: 3px 6px;
+  border-radius: 8px;
 }
 .etable-cell-editable:hover { background: var(--row-hover); }
 .etable-cell-placeholder { color: var(--fg-3); }
 .etable-input {
   width: 100%;
-  padding: 2px 6px;
-  border-radius: 4px;
-  background: var(--glass-2);
+  padding: 4px 8px;
+  border-radius: 8px;
+  background: var(--field-bg);
   color: var(--fg);
   font-size: 13px;
   border: none;
@@ -68,7 +75,7 @@
   align-items: center;
   gap: 12px;
   padding: 10px 14px;
-  background: var(--accent-soft);
+  background: var(--glass-2);
   border-top: 1px solid var(--edge);
   font-size: 12px;
   color: var(--fg);
@@ -76,7 +83,7 @@
 .etable-bulkbar > span:first-child { flex: 1; }
 .etable-bulk-delete {
   padding: 4px 12px;
-  border-radius: var(--radius-inner);
+  border-radius: 10px;
   background: var(--red);
   color: var(--wp-1);
   font-size: 11px;
@@ -84,7 +91,7 @@
 .etable-bulk-delete:hover { opacity: 0.9; }
 .etable-bulk-clear {
   padding: 4px 12px;
-  border-radius: var(--radius-inner);
+  border-radius: 10px;
   background: var(--row-hover);
   color: var(--fg-2);
   font-size: 11px;

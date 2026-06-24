@@ -12,12 +12,11 @@ the listen backlog (5 slots). Sustained polling from status_agent
 occasional shell ping was enough to overrun the backlog within seconds, after which new
 clients got ECONNREFUSED and the system surfaced ``daemonDown``.
 
-The fix moves ``handle()`` onto a serial IPC dispatch queue so accept()
-returns immediately after ``prepareClient(c)``. A slow handler still
-blocks subsequent handlers (the queue is serial), but the accept thread
-keeps draining the kernel backlog. Combined with the larger backlog
-(64) and per-fd SO_RCVTIMEO (5s), a stuck client now degrades latency
-gracefully instead of taking the whole daemon offline.
+The fix reads requests off the accept thread, routes control actions
+through a serial IPC queue, and isolates ``windows`` scans on a separate
+queue. Combined with the larger backlog (64) and per-fd SO_RCVTIMEO
+(5s), a stuck client now degrades its own request instead of taking the
+whole daemon offline.
 
 These tests codify two regressions:
 
@@ -55,6 +54,42 @@ import pytest
 pytestmark = pytest.mark.integration
 
 SOCKET_PATH = Path.home() / ".config" / "yulu" / "audio_daemon.sock"
+DAEMON_SOURCE = (
+    Path(__file__).resolve().parents[1] / "yulu" / "scripts" / "audio_daemon.swift"
+)
+
+
+def _swift_function(source: str, signature: str) -> str:
+    start = source.index(signature)
+    next_func = source.find("\n    private func ", start + len(signature))
+    if next_func == -1:
+        return source[start:]
+    return source[start:next_func]
+
+
+def test_windows_scan_isolated_from_control_ipc_queue():
+    """Accessibility window scans must not block status/stop IPC."""
+    source = DAEMON_SOURCE.read_text()
+
+    assert 'DispatchQueue(label: "yulu.audio-daemon.ipc.read", attributes: .concurrent)' in source
+    assert 'DispatchQueue(label: "yulu.audio-daemon.ipc.control")' in source
+    assert 'DispatchQueue(label: "yulu.audio-daemon.window-scan")' in source
+    assert 'if request.action == "windows"' in source
+    assert "handleWindows(c)" in source
+
+    handle_parsed = _swift_function(source, "private func handleParsed")
+    assert 'case "windows"' not in handle_parsed
+    assert "scanWindows()" not in handle_parsed
+
+
+def test_window_scan_requests_fail_fast_when_previous_scan_is_stuck():
+    """Repeated detector polls must not queue unbounded sockets."""
+    source = DAEMON_SOURCE.read_text()
+    handle_windows = _swift_function(source, "private func handleWindows")
+
+    assert "windowScanInFlight" in handle_windows
+    assert '"window_scan_busy"' in handle_windows
+    assert "windowScanQueue.async" in handle_windows
 
 
 def _daemon_alive() -> bool:
@@ -98,10 +133,6 @@ def _shutwr_status(timeout: float = 1.0) -> tuple[bool, float]:
         return False, time.monotonic() - start
 
 
-@pytest.mark.skipif(
-    not _daemon_alive(),
-    reason="audio_daemon not running on ~/.config/yulu/audio_daemon.sock",
-)
 def test_burst_polls_do_not_starve_socket():
     """50 SHUT_WR status requests in a tight loop must finish inside 5s.
 
@@ -110,6 +141,9 @@ def test_burst_polls_do_not_starve_socket():
     sustained polling this manifests as a per-request stall of seconds.
     With the fix, the whole batch completes in milliseconds.
     """
+    if not _daemon_alive():
+        pytest.skip("audio_daemon not running on ~/.config/yulu/audio_daemon.sock")
+
     num_requests = 50
     total_budget = 5.0
 
@@ -137,10 +171,6 @@ def test_burst_polls_do_not_starve_socket():
     )
 
 
-@pytest.mark.skipif(
-    not _daemon_alive(),
-    reason="audio_daemon not running on ~/.config/yulu/audio_daemon.sock",
-)
 def test_slow_client_does_not_refuse_others():
     """One stuck client must not cause the kernel to refuse new connects.
 
@@ -162,6 +192,9 @@ def test_slow_client_does_not_refuse_others():
     SO_RCVTIMEO. What's forbidden is connection refusal or no response
     at all, which is what the pre-fix daemon produced.
     """
+    if not _daemon_alive():
+        pytest.skip("audio_daemon not running on ~/.config/yulu/audio_daemon.sock")
+
     parallel_count = 30
     stuck_lifetime = 5.0  # let SO_RCVTIMEO close it for us
     # Generous budget: stuck handler holds the queue for ~5s, then 30

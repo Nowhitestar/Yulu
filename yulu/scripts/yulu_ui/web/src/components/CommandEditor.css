@@ -9,7 +9,7 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 3px 4px;
+  padding: 4px;
   border-radius: var(--radius-inner);
   cursor: move;
 }
@@ -17,13 +17,13 @@
 .cmd-grip { color: var(--fg-3); font-size: 11px; cursor: grab; }
 .cmd-input {
   flex: 1;
-  padding: 4px 10px;
-  border-radius: var(--radius-inner);
-  background: var(--glass-2);
+  padding: 6px 10px;
+  border-radius: 12px;
+  background: var(--field-bg);
   color: var(--fg);
   font-family: "SF Mono", ui-monospace, monospace;
   font-size: 12px;
-  border: none;
+  border: 1px solid var(--edge);
 }
 .cmd-remove {
   width: 20px;
@@ -38,9 +38,10 @@
   margin-top: 4px;
   padding: 4px 10px;
   font-size: 11px;
-  color: var(--accent);
+  color: var(--accent-on, var(--accent));
   background: var(--accent-soft);
-  border-radius: var(--radius-inner);
+  border: 1px solid color-mix(in oklch, var(--accent) 22%, var(--edge));
+  border-radius: var(--radius-pill);
 }
 .cmd-add:hover { background: var(--glass-3); }
 

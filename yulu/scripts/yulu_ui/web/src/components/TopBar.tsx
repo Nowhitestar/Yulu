@@ -1,8 +1,10 @@
 // web/src/components/TopBar.tsx
 import { useMatches } from "react-router";
 import type { ReactNode } from "react";
+import { SlidersHorizontal } from "lucide-react";
 import { ThemeToggle } from "./ThemeToggle.js";
 import { GlobalSearch } from "./GlobalSearch.js";
+import { Pill } from "./Pill.js";
 import { useT } from "../i18n/LanguageProvider.js";
 import "./TopBar.css";
 
@@ -49,8 +51,17 @@ export function TopBar() {
       <div className="topbar-search" data-testid="topbar-search">
         <GlobalSearch />
       </div>
-      <div className="topbar-theme">
-        <ThemeToggle />
+      <div className="topbar-spacer" />
+      <div className="topbar-controls">
+        <button type="button" className="topbar-icon-button" aria-label={t("nav.settings")}>
+          <SlidersHorizontal size={15} strokeWidth={1.85} />
+        </button>
+        <div className="topbar-theme">
+          <ThemeToggle />
+        </div>
+        <div className="topbar-record">
+          <Pill />
+        </div>
       </div>
     </div>
   );

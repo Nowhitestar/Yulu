@@ -1153,13 +1153,16 @@ class SocketServer {
     var rearmSysCapture: (() -> Void)?
     var configureMicDevice: ((String?) -> Void)?
 
-    // Serial queue that runs all request handlers off the accept thread. The
-    // old design called handle() synchronously inside the accept loop, so a
-    // single slow request (status_agent without SHUT_WR, scanWindows, etc.)
-    // would block every subsequent connect until the listen backlog overflowed
-    // and the kernel started dropping clients. Serializing keeps recorder
-    // state mutations one-at-a-time without freezing the listener.
-    private let ipcQueue = DispatchQueue(label: "yulu.audio-daemon.ipc")
+    // Read requests off the accept thread, then route control actions through a
+    // serial queue so recorder mutations stay one-at-a-time. Window scans are
+    // intentionally isolated below because macOS Accessibility calls can block
+    // for long periods and must not starve status/stop requests during a
+    // recording.
+    private let requestQueue = DispatchQueue(label: "yulu.audio-daemon.ipc.read", attributes: .concurrent)
+    private let ipcQueue = DispatchQueue(label: "yulu.audio-daemon.ipc.control")
+    private let windowScanQueue = DispatchQueue(label: "yulu.audio-daemon.window-scan")
+    private let windowScanLock = NSLock()
+    private var windowScanInFlight = false
 
     // Cap individual request payloads so a runaway/malicious client cannot
     // grow the read buffer without bound. Real requests are <200 bytes.
@@ -1193,9 +1196,9 @@ class SocketServer {
                 let c = Darwin.accept(self.sock, nil, nil)
                 if c >= 0 {
                     self.prepareClient(c)
-                    self.ipcQueue.async { [weak self] in
-                        self?.handle(c)
-                        close(c)
+                    self.requestQueue.async { [weak self] in
+                        guard let self = self else { close(c); return }
+                        self.dispatchClient(c)
                     }
                 } else if errno == EINTR {
                     continue
@@ -1221,7 +1224,22 @@ class SocketServer {
         _ = setsockopt(c, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size))
     }
 
-    private func handle(_ c: Int32) {
+    private func dispatchClient(_ c: Int32) {
+        guard let request = readRequest(c) else {
+            close(c)
+            return
+        }
+        if request.action == "windows" {
+            handleWindows(c)
+            return
+        }
+        ipcQueue.async { [weak self] in
+            defer { close(c) }
+            self?.handleParsed(c, action: request.action, json: request.json)
+        }
+    }
+
+    private func readRequest(_ c: Int32) -> (action: String, json: [String: Any])? {
         // Framing: every in-tree client (Python record_audio /
         // meeting_daemon / voicemail.recorder, Swift status_agent's
         // DaemonClient since #20) writes the request then `shutdown(SHUT_WR)`
@@ -1242,11 +1260,40 @@ class SocketServer {
             data.append(buf, count: n)
         }
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let action = json["action"] as? String else { send(c, ["error":"invalid"]); return }
+              let action = json["action"] as? String else { send(c, ["error":"invalid"]); return nil }
+        return (action: action, json: json)
+    }
+
+    private func handleWindows(_ c: Int32) {
+        windowScanLock.lock()
+        if windowScanInFlight {
+            windowScanLock.unlock()
+            send(c, ["windows": [], "busy": true, "warning": "window_scan_busy"])
+            close(c)
+            return
+        }
+        windowScanInFlight = true
+        windowScanLock.unlock()
+
+        windowScanQueue.async { [weak self] in
+            guard let self = self else { close(c); return }
+            defer {
+                self.finishWindowScan()
+                close(c)
+            }
+            self.send(c, self.scanWindows())
+        }
+    }
+
+    private func finishWindowScan() {
+        windowScanLock.lock()
+        windowScanInFlight = false
+        windowScanLock.unlock()
+    }
+
+    private func handleParsed(_ c: Int32, action: String, json: [String: Any]) {
         var resp: [String: Any]
         switch action {
-        case "windows":
-            resp = self.scanWindows()
         case "start":
             // Reset SYS_DISABLED per-request so each "start" reflects the caller's intent
             // cleanly (a sys-disabled recording followed by a normal one must NOT inherit

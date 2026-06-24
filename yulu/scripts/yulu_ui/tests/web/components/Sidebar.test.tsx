@@ -39,32 +39,27 @@ describe("Sidebar", () => {
     expect(getByText("术语表")).toBeInTheDocument();
   });
 
-  it("renders an icon (svg) on each top-nav item", () => {
+  it("renders an icon (svg) on each nav item", () => {
     const { getByText } = wrap(<Sidebar />);
-    for (const label of ["录音", "提示词", "术语表"]) {
+    for (const label of ["录音", "提示词", "术语表", "设置", "健康状态"]) {
       const link = getByText(label).closest("a");
       expect(link?.querySelector("svg")).not.toBeNull();
     }
   });
 
-  it("does NOT render Settings or Health as nav sections (they are bottom-only)", () => {
+  it("renders Settings and Health in a System nav section", () => {
     const { container } = wrap(<Sidebar />);
     const headings = Array.from(container.querySelectorAll(".sidebar-heading")).map((el) => el.textContent);
-    expect(headings).toEqual(["收件箱", "知识库"]);
+    expect(headings).toEqual(["收件箱", "知识库", "系统"]);
   });
 
-  it("renders Settings link in the bottom region", () => {
-    const { container, getByText } = wrap(<Sidebar />);
-    const bottom = container.querySelector('[data-testid="sidebar-bottom"]');
-    expect(bottom).not.toBeNull();
-    expect(bottom?.textContent).toContain("设置");
+  it("renders Settings link in the System section", () => {
+    const { getByText } = wrap(<Sidebar />);
     expect(getByText("设置").closest("a")?.getAttribute("href")).toBe("/settings");
   });
 
-  it("renders Health link in the bottom region with a health-state dot", () => {
+  it("renders Health link in the System section with a health-state dot", () => {
     const { container, getByText } = wrap(<Sidebar />);
-    const bottom = container.querySelector('[data-testid="sidebar-bottom"]');
-    expect(bottom?.textContent).toContain("健康状态");
     expect(getByText("健康状态").closest("a")?.getAttribute("href")).toBe("/health");
     expect(container.querySelector('[data-testid="health-dot"]')).not.toBeNull();
   });

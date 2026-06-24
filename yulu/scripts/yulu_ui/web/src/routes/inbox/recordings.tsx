@@ -1,12 +1,13 @@
 import { useContext, useEffect, useState } from "react";
-import type { MouseEvent } from "react";
+import type { CSSProperties, MouseEvent } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router";
 import { QueryClientContext } from "@tanstack/react-query";
-import { Pencil, RefreshCw, Sparkles, Trash2 } from "lucide-react";
+import { Activity, Clock, FileText, Pencil, Plus, RefreshCw, Share2, Sparkles, Trash2 } from "lucide-react";
 import { trpc } from "../../trpc.js";
 import { useWsChannel } from "../../ws.js";
 import { MasterDetail } from "../../components/MasterDetail.js";
 import { RecordingStatusBadge } from "../../components/RecordingStatusBadge.js";
+import { SharePanel, SharePopover, type ShareHistoryEntry, type ShareTarget, type SummaryChannel } from "../../components/SharePopover.js";
 import { useConfirm } from "../../hooks/useConfirm.js";
 import { useT } from "../../i18n/LanguageProvider.js";
 import "./recordings.css";
@@ -18,6 +19,7 @@ interface Row {
   title: string | null;
   tags: string[];
   recordedAt: string | null;
+  durationSeconds: number | null;
   mtimeMs: number;
   hasTranscript: boolean;
   hasSummary: boolean;
@@ -25,6 +27,9 @@ interface Row {
   firstWords: string | null;
   status: string;
   statusError?: string;
+  lastShare?: ShareHistoryEntry | null;
+  depth?: number;
+  indentLevel?: number;
 }
 
 function fmtTs(iso: string | null): string {
@@ -38,6 +43,129 @@ function fmtTs(iso: string | null): string {
   return `${mm}-${dd} ${hh}:${min}`;
 }
 
+function fmtDuration(seconds: number | null | undefined): string {
+  if (typeof seconds !== "number" || !Number.isFinite(seconds) || seconds < 0) return "--:--";
+  const total = Math.round(seconds);
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  if (h > 0) return `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+  return `${m}:${String(s).padStart(2, "0")}`;
+}
+
+function rowDepth(row: Row): number {
+  const raw = row.indentLevel ?? row.depth ?? 0;
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return 0;
+  return Math.max(0, Math.min(4, Math.trunc(n)));
+}
+
+const LOADING_TARGETS: ShareTarget[] = [
+  { channel: "notion", label: "Notion", destination: "", enabled: false, disabledReason: "Loading", lastShare: null },
+  { channel: "zulip", label: "Zulip", destination: "", enabled: false, disabledReason: "Loading", lastShare: null },
+];
+
+function RecordingRowShare({ row, onSettled }: { row: Row; onSettled: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [pendingChannel, setPendingChannel] = useState<SummaryChannel | null>(null);
+  const confirm = useConfirm();
+  const t = useT();
+  const { data } = trpc.recordings.shareTargets.useQuery({ stem: row.stem }, { enabled: open });
+  const sendMut = trpc.recordings.sendSummary.useMutation({
+    onSettled: () => {
+      setPendingChannel(null);
+      onSettled();
+    },
+  });
+  const targets = ((data?.targets as ShareTarget[] | undefined) ?? LOADING_TARGETS);
+  const history = ((data?.history as ShareHistoryEntry[] | undefined) ?? (row.lastShare ? [row.lastShare] : []));
+
+  const send = (channel: SummaryChannel) => {
+    const target = targets.find((item) => item.channel === channel);
+    if (!target || !target.enabled) return;
+    if (!confirm(t("reader.send.confirm", { label: target.label, destination: target.destination }))) return;
+    setPendingChannel(channel);
+    sendMut.mutate({ stem: row.stem, channel });
+  };
+
+  return (
+    <SharePopover
+      className="recording-row-share"
+      align="left"
+      targets={targets}
+      history={history}
+      pendingChannel={pendingChannel}
+      onSend={send}
+      onOpenChange={setOpen}
+    >
+      <Share2 size={14} strokeWidth={1.8} />
+    </SharePopover>
+  );
+}
+
+function RecordingShareMenu({
+  row,
+  x,
+  y,
+  onClose,
+  onSettled,
+}: {
+  row: Row;
+  x: number;
+  y: number;
+  onClose: () => void;
+  onSettled: () => void;
+}) {
+  const [pendingChannel, setPendingChannel] = useState<SummaryChannel | null>(null);
+  const confirm = useConfirm();
+  const t = useT();
+  const { data } = trpc.recordings.shareTargets.useQuery({ stem: row.stem });
+  const sendMut = trpc.recordings.sendSummary.useMutation({
+    onSettled: () => {
+      setPendingChannel(null);
+      onSettled();
+    },
+  });
+
+  useEffect(() => {
+    const close = () => onClose();
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") close();
+    };
+    window.addEventListener("click", close);
+    window.addEventListener("scroll", close, true);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("click", close);
+      window.removeEventListener("scroll", close, true);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [onClose]);
+
+  const targets = ((data?.targets as ShareTarget[] | undefined) ?? LOADING_TARGETS);
+  const history = ((data?.history as ShareHistoryEntry[] | undefined) ?? (row.lastShare ? [row.lastShare] : []));
+  const send = (channel: SummaryChannel) => {
+    const target = targets.find((item) => item.channel === channel);
+    if (!target || !target.enabled) return;
+    if (!confirm(t("reader.send.confirm", { label: target.label, destination: target.destination }))) return;
+    setPendingChannel(channel);
+    sendMut.mutate({ stem: row.stem, channel });
+  };
+
+  return (
+    <div
+      className="recording-share-panel"
+      style={{
+        left: Math.min(x, Math.max(8, window.innerWidth - 380)),
+        top: Math.min(y, Math.max(8, window.innerHeight - 340)),
+      }}
+      onClick={(event) => event.stopPropagation()}
+    >
+      <SharePanel targets={targets} history={history} pendingChannel={pendingChannel} onSend={send} />
+    </div>
+  );
+}
+
 export function RecordingsList() {
   const { data, isPending } = trpc.recordings.list.useQuery({});
   const t = useT();
@@ -48,10 +176,12 @@ export function RecordingsList() {
   // render in isolation under just <MemoryRouter> in unit tests.
   const qc = useContext(QueryClientContext);
   const [menu, setMenu] = useState<{ row: Row; x: number; y: number } | null>(null);
+  const [shareMenu, setShareMenu] = useState<{ row: Row; x: number; y: number } | null>(null);
 
   const invalidate = () => {
     qc?.invalidateQueries({ queryKey: [["recordings", "list"]] });
     qc?.invalidateQueries({ queryKey: [["recordings", "get"]] });
+    qc?.invalidateQueries({ queryKey: [["recordings", "shareTargets"]] });
   };
   const renameMut = trpc.recordings.rename.useMutation({ onSettled: invalidate });
   const deleteMut = trpc.recordings.delete.useMutation({ onSettled: invalidate });
@@ -124,25 +254,62 @@ export function RecordingsList() {
 
   const listSlot = (
     <>
+      <div className="recordings-list-head">
+        <h2>{t("breadcrumb.inbox")}</h2>
+        <button type="button" aria-label={t("common.more")}>•••</button>
+      </div>
       <div className="recordings-list">
-        {rows.map((r) => (
-          <NavLink
+        {rows.map((r) => {
+          const depth = rowDepth(r);
+          const tags = r.tags ?? [];
+          return (
+          <div
             key={r.stem}
-            to={`/inbox/${r.stem}`}
-            data-testid="recording-row"
-            className={({ isActive }) => "recording-row" + (isActive ? " active" : "")}
+            className="recording-row-wrap"
+            data-depth={depth}
+            style={{ "--recording-indent": `${depth * 14}px` } as CSSProperties}
             onContextMenu={(event) => openMenu(event, r)}
           >
-            <div className="recording-row-top">
-              <span className="recording-row-title">{r.title ?? r.stem}</span>
-            </div>
-            {r.firstWords && <div className="recording-row-words">{r.firstWords}</div>}
-            <div className="recording-row-meta">
-              <span>{fmtTs(r.recordedAt)}</span>
-              <RecordingStatusBadge state={r.status} error={r.statusError} />
-            </div>
-          </NavLink>
-        ))}
+            <NavLink
+              to={`/inbox/${r.stem}`}
+              data-testid="recording-row"
+              className={({ isActive }) => "recording-row" + (isActive ? " active" : "")}
+            >
+              <div className="recording-row-top">
+                <span className="recording-row-title">{r.title ?? r.stem}</span>
+              </div>
+              <div className="recording-row-time">
+                <span className="recording-row-time-part">
+                  <Clock size={12} strokeWidth={1.9} />
+                  {fmtDuration(r.durationSeconds)}
+                </span>
+                <span aria-hidden="true">•</span>
+                <span>{fmtTs(r.recordedAt)}</span>
+              </div>
+              <div className="recording-row-footer">
+                <div className="recording-row-tags">
+                  {tags.length > 0 ? (
+                    tags.map((tag) => (
+                      <span key={tag} className="recording-row-tag">{tag}</span>
+                    ))
+                  ) : (
+                    <span className="recording-row-add-tag" role="img" aria-label={t("tag.addAria")} title={t("tag.add")}>
+                      <Plus size={12} strokeWidth={2.1} />
+                    </span>
+                  )}
+                </div>
+                <div className="recording-row-icons" aria-label="Recording outputs">
+                  {r.hasTranscript && <FileText className="recording-row-output" size={13} strokeWidth={1.9} aria-label="Transcript ready" />}
+                  {r.hasSummary && <Sparkles className="recording-row-output" size={13} strokeWidth={1.9} aria-label="Summary ready" />}
+                  {r.hasRealtime && <Activity className="recording-row-output recording-row-output-live" size={13} strokeWidth={1.9} aria-label="Realtime transcript ready" />}
+                  <RecordingStatusBadge state={r.status} error={r.statusError} compact />
+                </div>
+              </div>
+            </NavLink>
+            <RecordingRowShare row={r} onSettled={invalidate} />
+          </div>
+          );
+        })}
       </div>
       {menu && (
         <div className="recording-context-menu" role="menu" style={menuStyle}>
@@ -172,18 +339,38 @@ export function RecordingsList() {
               <span>{t("reader.context.regenerate")}</span>
             </button>
           )}
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              setShareMenu({ row: menu.row, x: menu.x, y: menu.y });
+              closeMenu();
+            }}
+          >
+            <Share2 size={13} strokeWidth={1.8} />
+            <span>{t("reader.context.share")}</span>
+          </button>
           <button type="button" role="menuitem" className="danger" onClick={() => deleteRow(menu.row)}>
             <Trash2 size={13} strokeWidth={1.8} />
             <span>{t("reader.context.delete")}</span>
           </button>
         </div>
       )}
+      {shareMenu && (
+        <RecordingShareMenu
+          row={shareMenu.row}
+          x={shareMenu.x}
+          y={shareMenu.y}
+          onClose={() => setShareMenu(null)}
+          onSettled={invalidate}
+        />
+      )}
     </>
   );
 
   return (
     <MasterDetail
-      className="masterdetail--mobile-detail-focus"
+      className="masterdetail--mobile-detail-focus masterdetail--inbox"
       storageKey="yulu_ui.inbox.recordings.width"
       listPending={isPending}
       listSlot={listSlot}

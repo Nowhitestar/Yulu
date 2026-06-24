@@ -21,6 +21,8 @@
   padding: 20px 22px;
   background: var(--glass-2);
   backdrop-filter: var(--blur-glass);
+  -webkit-backdrop-filter: var(--blur-glass);
+  border: 1px solid var(--edge);
   border-radius: var(--radius-panel);
   box-shadow: var(--edge-shadow), var(--shadow);
   color: var(--fg);
@@ -37,7 +39,7 @@
 .onboarding-title {
   margin: 0;
   font-size: 16px;
-  font-weight: 600;
+  font-weight: 700;
   color: var(--fg);
 }
 
@@ -54,7 +56,8 @@
   font-size: 12px;
   color: var(--fg-2);
   background: var(--glass);
-  border-radius: var(--radius-inner);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-pill);
 }
 .onboarding-skip:hover {
   color: var(--fg);
@@ -97,7 +100,7 @@
 
 .onboarding-item-label {
   font-size: 13px;
-  font-weight: 500;
+  font-weight: 650;
   color: var(--fg);
 }
 
@@ -116,10 +119,10 @@
   height: 30px;
   padding: 0 16px;
   font-size: 13px;
-  font-weight: 500;
-  color: var(--accent-on);
+  font-weight: 650;
+  color: white;
   background: var(--accent);
-  border-radius: var(--radius-inner);
+  border-radius: var(--radius-pill);
 }
 .onboarding-done:hover {
   filter: brightness(1.05);

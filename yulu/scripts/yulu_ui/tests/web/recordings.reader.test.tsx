@@ -12,6 +12,7 @@ const renameSpeakerMutate = vi.fn();
 const mergeSpeakersMutate = vi.fn();
 const assignSegmentSpeakerMutate = vi.fn();
 const sendSummaryMutate = vi.fn();
+const promptListMock = vi.fn();
 const navigateMock = vi.fn();
 const confirmMock = vi.fn(() => true);
 
@@ -28,6 +29,12 @@ vi.mock("../../web/src/trpc.js", () => ({
       renameSpeaker: { useMutation: () => ({ mutate: renameSpeakerMutate, isPending: false }) },
       mergeSpeakers: { useMutation: () => ({ mutate: mergeSpeakersMutate, isPending: false }) },
       assignSegmentSpeaker: { useMutation: () => ({ mutate: assignSegmentSpeakerMutate, isPending: false }) },
+    },
+    capabilities: {
+      detected_models: { useQuery: () => ({ data: [] }) },
+    },
+    prompts: {
+      list: { useQuery: (...a: unknown[]) => promptListMock(...a) },
     },
   },
 }));
@@ -63,6 +70,8 @@ function renderAt(stem: string) {
 beforeEach(() => {
   transcribeMutate.mockClear();
   summarizeMutate.mockClear();
+  promptListMock.mockReset();
+  promptListMock.mockReturnValue({ data: [] });
   renameMutate.mockClear(); setTagsMutate.mockClear(); deleteMutate.mockClear();
   renameSpeakerMutate.mockClear(); mergeSpeakersMutate.mockClear(); assignSegmentSpeakerMutate.mockClear(); sendSummaryMutate.mockClear();
   navigateMock.mockClear(); confirmMock.mockClear(); confirmMock.mockReturnValue(true);
@@ -95,37 +104,45 @@ describe("RecordingReader", () => {
     expect(screen.queryByText(/未找到录音/)).toBeNull();
   });
 
-  it("renders manual enabled connector send buttons and confirms destination before sending", () => {
+  it("renders the Share menu and confirms destination before sending", () => {
     getMock.mockReturnValue({
       data: {
         ...baseData,
-        enabledSummaryTargets: [
-          { channel: "notion", label: "Notion", destination: "db-1" },
-          { channel: "zulip", label: "Zulip", destination: "meetings / 纪要" },
+        shareTargets: [
+          { channel: "notion", label: "Notion", destination: "db-1", enabled: true, disabledReason: null, lastShare: null },
+          { channel: "zulip", label: "Zulip", destination: "meetings / 纪要", enabled: true, disabledReason: null, lastShare: null },
         ],
+        shareHistory: [],
       },
       isPending: false,
     });
     renderAt(baseData.stem);
 
-    fireEvent.click(screen.getByRole("button", { name: "发送到 Notion" }));
+    fireEvent.click(screen.getByRole("button", { name: /分享/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Notion/ }));
 
     expect(confirmMock).toHaveBeenCalledWith("发送摘要到 Notion：db-1？");
     expect(sendSummaryMutate).toHaveBeenCalledWith(
       { stem: baseData.stem, channel: "notion" },
       expect.anything(),
     );
-    expect(screen.getByRole("button", { name: "发送到 Zulip" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Zulip/ })).toBeInTheDocument();
   });
 
-  it("does not render manual send buttons when no summary exists", () => {
+  it("keeps the Share menu disabled when no summary exists", () => {
     getMock.mockReturnValue({
-      data: { ...baseData, summary: null, enabledSummaryTargets: [{ channel: "notion", label: "Notion", destination: "db-1" }] },
+      data: {
+        ...baseData,
+        summary: null,
+        shareTargets: [{ channel: "notion", label: "Notion", destination: "db-1", enabled: false, disabledReason: "Needs AI Summary", lastShare: null }],
+        shareHistory: [],
+      },
       isPending: false,
     });
     renderAt(baseData.stem);
 
-    expect(screen.queryByRole("button", { name: "发送到 Notion" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /分享/ }));
+    expect(screen.getByRole("button", { name: /Notion/ })).toBeDisabled();
   });
 
   it("passes a speaker-count override when re-transcribing from the reader", () => {
@@ -139,6 +156,53 @@ describe("RecordingReader", () => {
     );
   });
 
+  it("passes the selected transcription model when re-transcribing", () => {
+    getMock.mockReturnValue({
+      data: {
+        ...baseData,
+        wavPath: "/tmp/TeamSync.wav",
+        transcriptionModelOptions: [
+          { id: "mlx:large", engine: "mlx", model: "mlx-community/whisper-large-v3-mlx", label: "MLX · large-v3", active: true },
+          { id: "whisper:/models/medium.bin", engine: "whisper", model: "/models/medium.bin", label: "whisper.cpp · medium", active: false },
+        ],
+      },
+      isPending: false,
+    });
+    renderAt(baseData.stem);
+    fireEvent.change(screen.getByRole("combobox", { name: /转写模型/i }), { target: { value: "whisper:/models/medium.bin" } });
+    fireEvent.click(screen.getByRole("button", { name: /重新转写/i }));
+    expect(transcribeMutate).toHaveBeenCalledWith(
+      {
+        stem: baseData.stem,
+        diarizationNumSpeakers: null,
+        transcriptionModel: { engine: "whisper", model: "/models/medium.bin" },
+      },
+      expect.anything(),
+    );
+  });
+
+  it("passes the selected summary template when regenerating summary", () => {
+    promptListMock.mockReturnValue({
+      data: [
+        { id: "p-summary", slug: "summary", name: "标准摘要", is_auto_run: 1 },
+        { id: "p-decision", slug: "decisions", name: "决策摘要", is_auto_run: 0 },
+      ],
+    });
+    getMock.mockReturnValue({
+      data: {
+        ...baseData,
+      },
+      isPending: false,
+    });
+    renderAt(baseData.stem);
+    fireEvent.change(screen.getByRole("combobox", { name: /摘要模板/i }), { target: { value: "p-decision" } });
+    fireEvent.click(screen.getByRole("button", { name: /重新生成摘要/i }));
+    expect(summarizeMutate).toHaveBeenCalledWith(
+      { stem: baseData.stem, promptId: "p-decision" },
+      expect.anything(),
+    );
+  });
+
   it("allows regenerating summary from realtime-only recordings", () => {
     getMock.mockReturnValue({
       data: { ...baseData, transcript: null, summary: null, realtime: "live text", hasRealtime: true },
@@ -147,7 +211,7 @@ describe("RecordingReader", () => {
     renderAt(baseData.stem);
     fireEvent.click(screen.getByRole("button", { name: /重新生成摘要/i }));
     expect(summarizeMutate).toHaveBeenCalledWith(
-      { stem: baseData.stem },
+      { stem: baseData.stem, promptId: null },
       expect.anything(),
     );
   });

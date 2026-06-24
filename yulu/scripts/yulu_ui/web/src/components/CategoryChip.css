@@ -1,9 +1,9 @@
 .category-chip {
   display: inline-block;
-  padding: 1px 7px;
-  border-radius: 4px;
+  padding: 2px 7px;
+  border-radius: 999px;
   font-size: 10px;
-  font-weight: 500;
+  font-weight: 700;
   text-transform: lowercase;
   letter-spacing: 0.02em;
 }

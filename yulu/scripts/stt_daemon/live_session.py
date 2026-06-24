@@ -5,7 +5,10 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import math
+import sys
 import uuid
+from array import array
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -23,6 +26,9 @@ SAMPLE_BYTES = 2  # int16 mono
 DUAL_TRACK_HEADER_BYTES = 82
 DUAL_TRACK_SAMPLE_RATE_HZ = 48000
 DUAL_TRACK_FRAME_BYTES = 4  # stereo Int16 → L_lo L_hi R_lo R_hi
+LIVE_VOICE_DBFS_THRESHOLD = -42.0
+LIVE_VOICE_PEAK_THRESHOLD = 1200
+LIVE_VOICE_FRAME_MS = 500
 
 PartialCallback = Callable[[PartialEvent], Optional[Awaitable[None]]]
 
@@ -339,6 +345,26 @@ class LiveSessionManager:
         seq = active.state.next_seq
         active.state.next_seq += 1
         started_ms = self._offset_to_ms(active.state, source, before_chunk=True, duration_ms=duration_ms)
+        if not _chunk_has_voice(chunk_path):
+            event = PartialEvent(
+                sid=active.spec.sid,
+                seq=seq,
+                source=source,
+                started_ms=started_ms,
+                ended_ms=started_ms + duration_ms,
+                text="",
+            )
+            try:
+                out = self.on_partial(event)
+                if asyncio.iscoroutine(out):
+                    await out
+            finally:
+                try:
+                    chunk_path.unlink()
+                except FileNotFoundError:
+                    pass
+            return
+
         # Live chunks run on the realtime (fast) engine when one is configured;
         # the FINAL_TRANSCRIBE in stop_session deliberately still uses
         # spec.engine so the final note gets the higher-accuracy model.
@@ -353,6 +379,10 @@ class LiveSessionManager:
                 meeting_title=active.spec.meeting_title or "",
             ),
             session_id=active.spec.sid,
+            options={
+                "condition_on_previous": False,
+                "hallucination_silence_threshold": 1.5,
+            },
         )
         fut = await self.scheduler.submit(job)
         try:
@@ -505,6 +535,44 @@ def _write_wav_chunk(path: Path, pcm_bytes: bytes, *, framerate: int = SAMPLE_RA
         wf.setsampwidth(SAMPLE_BYTES)
         wf.setframerate(framerate)
         wf.writeframes(pcm_bytes)
+
+
+def _chunk_has_voice(path: Path) -> bool:
+    """Conservative realtime gate: skip chunks that are only silence/room tone."""
+    import wave
+
+    try:
+        with wave.open(str(path), "rb") as wf:
+            if wf.getnchannels() != 1 or wf.getsampwidth() != SAMPLE_BYTES:
+                return True
+            frame_samples = max(1, int(wf.getframerate() * LIVE_VOICE_FRAME_MS / 1000))
+            while True:
+                raw = wf.readframes(frame_samples)
+                if not raw:
+                    return False
+                if _pcm_frame_has_voice(raw):
+                    return True
+    except (EOFError, OSError, wave.Error):
+        return True
+
+
+def _pcm_frame_has_voice(raw: bytes) -> bool:
+    if len(raw) < SAMPLE_BYTES:
+        return False
+    usable = len(raw) - (len(raw) % SAMPLE_BYTES)
+    samples = array("h")
+    samples.frombytes(raw[:usable])
+    if sys.byteorder != "little":
+        samples.byteswap()
+    if not samples:
+        return False
+    peak = max(abs(v) for v in samples)
+    if peak >= LIVE_VOICE_PEAK_THRESHOLD:
+        return True
+    square_sum = sum(float(v) * float(v) for v in samples)
+    rms = math.sqrt(square_sum / len(samples)) / 32767.0
+    dbfs = 20.0 * math.log10(rms) if rms > 0 else -math.inf
+    return dbfs >= LIVE_VOICE_DBFS_THRESHOLD
 
 
 def _read_with_stride(
