@@ -3,7 +3,7 @@ import { z } from "zod";
 import { defFor, reloadFor } from "./settingsRegistry.js";
 
 const CalendarSchema = z.object({
-  type: z.enum(["feishu", "google"]),
+  type: z.enum(["macos", "system", "feishu", "google"]),
   enabled: z.boolean().optional(),
   credentials_path: z.string().optional(),
   app_id_env: z.string().optional(),
@@ -119,7 +119,10 @@ export const ConfigSchema = z.object({
   }).passthrough(),
   llm: z.object({
     enabled: z.boolean().optional(),
-    command: z.array(z.string()).optional(),
+    command: z.array(z.string()).nullable().optional(),
+    agent: z.object({
+      provider: z.enum(["auto", "codex", "claude", "claude-code", "gemini", "grok", "custom"]).default("auto"),
+    }).passthrough().default({}),
   }).default({}),
   status_agent: z.object({
     enabled: z.boolean().default(true),

@@ -11,7 +11,7 @@ export interface IntegrationsSectionProps {
   tracker: SettingsRestartTracker;
 }
 
-type CalendarType = "google";
+type CalendarType = "macos" | "system" | "google";
 interface CalendarEntry {
   type: CalendarType;
   enabled?: boolean;
@@ -76,6 +76,7 @@ const OUTPUT_CONNECTORS: Array<{ id: OutputChannel; label: string; icon: typeof 
 ];
 
 function selectedWatchCalendars(cal: CalendarEntry): string[] {
+  if (cal.type === "macos" || cal.type === "system") return cal.watch_calendars ?? [];
   const current = cal.watch_calendars;
   return current && current.length > 0 ? current : ["primary"];
 }
@@ -644,13 +645,27 @@ export function IntegrationsSection({ tracker }: IntegrationsSectionProps) {
 
   const calBlocked = isBlocked("calendars");
   const hasType = (type: CalendarType) => calendars.some((cal) => cal.type === type);
+  const hasSystemCalendar = calendars.some((cal) => cal.type === "macos" || cal.type === "system");
   const gogConnector = connectorById.get("gog") ?? fallbackConnector("gog", t("settings.integrations.google.title"), "calendar.read");
+  const systemCalendarConnector: ConnectorEntry = {
+    connector_id: "macos-calendar",
+    display_name: t("settings.integrations.macos.title"),
+    provenance: "yulu-managed",
+    status: "usable",
+    resolved_path: "macOS Calendar",
+    detail: t("settings.integrations.macos.detail"),
+    actions: ["calendar.read"],
+    config_prefix: "calendars",
+  };
 
   const addCalendar = (type: CalendarType) => {
-    if (calBlocked || hasType(type)) return;
-    commit("calendars", { suppressRestart: true })([
+    if (calBlocked || hasType(type) || (type === "macos" && hasSystemCalendar)) return;
+    const entry = type === "macos"
+      ? { type, enabled: true, watch_calendars: [] }
+      : { type, enabled: false, watch_calendars: ["primary"] };
+    commit("calendars", { suppressRestart: type !== "macos" })([
       ...calendars,
-      { type, enabled: false, watch_calendars: ["primary"] },
+      entry,
     ]);
   };
 
@@ -676,6 +691,7 @@ export function IntegrationsSection({ tracker }: IntegrationsSectionProps) {
   };
 
   const runTest = async (idx: number) => {
+    const provider = calendars[idx]?.type === "macos" || calendars[idx]?.type === "system" ? "macos" : "google";
     setPopFor(idx);
     setConnFor(idx);
     setPopState("pending");
@@ -683,7 +699,7 @@ export function IntegrationsSection({ tracker }: IntegrationsSectionProps) {
     setPopStdout("");
     setPopStderr("");
     try {
-      const res = await testMut.mutateAsync({ provider: "google" });
+      const res = await testMut.mutateAsync({ provider });
       setPopState(res.ok ? "ok" : "failed");
       setConnState(res.ok ? "ok" : "failed");
       setPopStdout(res.stdout);
@@ -706,6 +722,14 @@ export function IntegrationsSection({ tracker }: IntegrationsSectionProps) {
             <h3>{t("settings.integrations.calendar.heading")}</h3>
             <p>{t("settings.integrations.calendar.sub")}</p>
           </div>
+          <div className="integration-head-actions">
+            <button type="button" className="cmd-add" disabled={calBlocked || hasSystemCalendar} onClick={() => addCalendar("macos")}>
+              {t("settings.integrations.add.macos")}
+            </button>
+            <button type="button" className="cmd-add" disabled={calBlocked || hasType("google")} onClick={() => addCalendar("google")}>
+              + Google
+            </button>
+          </div>
         </div>
 
         {calendars.length === 0 && (
@@ -714,27 +738,30 @@ export function IntegrationsSection({ tracker }: IntegrationsSectionProps) {
 
         {calendars.map((cal, idx) => {
           const enabled = cal.enabled === true;
+          const isSystemCalendar = cal.type === "macos" || cal.type === "system";
+          const providerConnector = isSystemCalendar ? systemCalendarConnector : gogConnector;
+          const providerTitle = isSystemCalendar ? t("settings.integrations.macos.title") : t("settings.integrations.google.title");
           const effectiveCal = singleDiscoveredAccount && !(cal.gog_account ?? "").trim()
             ? { ...cal, gog_account: singleDiscoveredAccount }
             : cal;
           return (
-            <article key={`${cal.type}-${idx}`} className="integration-card calendar-provider-card" data-status={gogConnector.status}>
+            <article key={`${cal.type}-${idx}`} className="integration-card calendar-provider-card" data-status={providerConnector.status}>
               <div className="provider-card-head integration-header">
                 <div className="provider-title-block">
                   <span className="provider-mark" aria-hidden="true">
                     <CalendarDays size={15} strokeWidth={2} />
                   </span>
                   <div className="provider-title-main">
-                    <div className="provider-name">{t("settings.integrations.google.title")}</div>
-                    <ProviderMeta connector={gogConnector} />
+                    <div className="provider-name">{providerTitle}</div>
+                    <ProviderMeta connector={providerConnector} />
                   </div>
                 </div>
                 <div className="provider-card-actions">
-                  <span className={`provider-state provider-state--${connectorTone(gogConnector.status)}`}>
-                    <ConnectorStatusIcon status={gogConnector.status} />
-                    {gogConnector.status === "usable"
+                  <span className={`provider-state provider-state--${connectorTone(providerConnector.status)}`}>
+                    <ConnectorStatusIcon status={providerConnector.status} />
+                    {providerConnector.status === "usable"
                       ? t("settings.integrations.connection.connected")
-                      : t(connectorStatusKey(gogConnector.status))}
+                      : t(connectorStatusKey(providerConnector.status))}
                   </span>
                   <button
                     type="button"
@@ -755,30 +782,43 @@ export function IntegrationsSection({ tracker }: IntegrationsSectionProps) {
                 onCommit={setEnabled(idx)}
                 disabled={isBlocked(`calendars.${idx}.enabled`)}
               />
-              <CalendarAccountRow
-                idx={idx}
-                cal={effectiveCal}
-                enabled={enabled}
-                blocked={isBlocked(`calendars.${idx}.gog_account`)}
-                accounts={discoveredAccounts}
-                commitAccount={commitAccount}
-              />
-              <div className="row">
-                <div className="row-label">
-                  <div>{t("settings.integrations.watch.label")}</div>
-                  <div className="row-help">{t("settings.integrations.watch.help")}</div>
+              {isSystemCalendar ? (
+                <div className="row">
+                  <div className="row-label">
+                    <div>{t("settings.integrations.macos.source.label")}</div>
+                    <div className="row-help">{t("settings.integrations.macos.source.help")}</div>
+                  </div>
+                  <div className="row-value">{t("settings.integrations.macos.source.value")}</div>
+                  <div className="row-status" />
                 </div>
-                <div className="row-value">
-                  <CalendarWatchSelector
+              ) : (
+                <>
+                  <CalendarAccountRow
                     idx={idx}
                     cal={effectiveCal}
                     enabled={enabled}
-                    blocked={isBlocked(`calendars.${idx}.watch_calendars`)}
-                    commitWatchCalendars={commitWatchCalendars}
+                    blocked={isBlocked(`calendars.${idx}.gog_account`)}
+                    accounts={discoveredAccounts}
+                    commitAccount={commitAccount}
                   />
-                </div>
-                <div className="row-status" />
-              </div>
+                  <div className="row">
+                    <div className="row-label">
+                      <div>{t("settings.integrations.watch.label")}</div>
+                      <div className="row-help">{t("settings.integrations.watch.help")}</div>
+                    </div>
+                    <div className="row-value">
+                      <CalendarWatchSelector
+                        idx={idx}
+                        cal={effectiveCal}
+                        enabled={enabled}
+                        blocked={isBlocked(`calendars.${idx}.watch_calendars`)}
+                        commitWatchCalendars={commitWatchCalendars}
+                      />
+                    </div>
+                    <div className="row-status" />
+                  </div>
+                </>
+              )}
               <div className="row">
                 <div className="row-label">
                   <div>{t("settings.integrations.connection.label")}</div>
@@ -803,26 +843,6 @@ export function IntegrationsSection({ tracker }: IntegrationsSectionProps) {
             </article>
           );
         })}
-
-        <div className="row calendar-add-row">
-          <div className="row-label">
-            <div>{t("settings.integrations.add.label")}</div>
-            <div className="row-help">{t("settings.integrations.add.help")}</div>
-          </div>
-          <div className="row-value">
-            <button
-              type="button"
-              className="cmd-add"
-              disabled={calBlocked || hasType("google")}
-              onClick={() => addCalendar("google")}
-            >
-              {t("settings.integrations.add.google")}
-            </button>
-            {calBlocked && <span className="value-disabled-note">{t("settings.locked.recording")}</span>}
-          </div>
-          <div className="row-status" />
-        </div>
-
         {calendarConnectors.map((connector) => (
           <CalendarConnectorCard
             key={connector.connector_id}

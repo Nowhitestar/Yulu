@@ -11,6 +11,7 @@ import { recordingRouter }  from "./recording.js";
 import { systemRouter }     from "./system.js";
 import { integrationsRouter } from "./integrations.js";
 import { llmRouter }          from "./llm.js";
+import { askRouter }          from "./ask.js";
 
 export const appRouter = router({
   recordings:   recordingsRouter,
@@ -25,6 +26,7 @@ export const appRouter = router({
   system:       systemRouter,
   integrations: integrationsRouter,
   llm:          llmRouter,
+  ask:          askRouter,
 });
 
 export type AppRouter = typeof appRouter;

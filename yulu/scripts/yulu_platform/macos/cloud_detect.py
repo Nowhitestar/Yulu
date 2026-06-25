@@ -40,10 +40,11 @@ first 64 entries (T-05-10) and uses ``follow_symlinks=False`` so a symlinked ent
 cannot redirect the ``stat`` outside the resolved path (T-05-09).
 
 Pure stdlib (``os``, ``stat``, ``dataclasses``, ``pathlib``) with NO Darwin gate at
-import time: ``stat.SF_DATALESS`` is a constant exposed cross-platform in the stdlib
-``stat`` module; off-Darwin ``st_flags`` simply won't carry the bit, which is the
-correct answer (not-dataless). Every public function NEVER raises — it degrades to
-a safe not-cloud value, mirroring the ``capabilities.probes`` never-raise idiom.
+import time: some Python builds expose ``stat.SF_DATALESS`` and some do not, so
+the module installs the documented macOS bit value when missing. Off-Darwin
+``st_flags`` simply won't carry the bit, which is the correct answer
+(not-dataless). Every public function NEVER raises — it degrades to a safe
+not-cloud value, mirroring the ``capabilities.probes`` never-raise idiom.
 """
 
 from __future__ import annotations
@@ -52,6 +53,10 @@ import os
 import stat
 from dataclasses import dataclass
 from pathlib import Path
+
+# macOS File Provider dataless bit. Some Python builds omit the stdlib constant.
+if not hasattr(stat, "SF_DATALESS"):
+    stat.SF_DATALESS = 0x40000000  # type: ignore[attr-defined]
 
 # iCloud Drive is NOT under CloudStorage — it has its own root. [VERIFIED on-device]
 _ICLOUD_ROOT = "Library/Mobile Documents/com~apple~CloudDocs"

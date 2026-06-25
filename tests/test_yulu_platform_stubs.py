@@ -27,13 +27,20 @@ def test_base_is_abstract():
 
 def test_all_base_abcs_are_abstract():
     from yulu_platform.base import (
+        AudioCaptureController,
         DaemonManager,
         DependencyManager,
         PathResolver,
         PermissionModel,
     )
 
-    for abc_cls in (DaemonManager, PathResolver, PermissionModel, DependencyManager):
+    for abc_cls in (
+        DaemonManager,
+        AudioCaptureController,
+        PathResolver,
+        PermissionModel,
+        DependencyManager,
+    ):
         with pytest.raises(TypeError):
             abc_cls()
 
@@ -43,6 +50,13 @@ def test_linux_daemon_manager_is_stub():
 
     with pytest.raises(NotImplementedError):
         LinuxDaemonManager().load("com.yulu.sttdaemon")
+
+
+def test_linux_audio_capture_controller_is_stub():
+    from yulu_platform.linux import LinuxAudioCaptureController
+
+    with pytest.raises(NotImplementedError):
+        LinuxAudioCaptureController().status()
 
 
 def test_linux_path_resolver_is_stub():
@@ -71,6 +85,13 @@ def test_windows_daemon_manager_is_stub():
 
     with pytest.raises(NotImplementedError):
         WindowsDaemonManager().load("com.yulu.sttdaemon")
+
+
+def test_windows_audio_capture_controller_is_stub():
+    from yulu_platform.windows import WindowsAudioCaptureController
+
+    with pytest.raises(NotImplementedError):
+        WindowsAudioCaptureController().status()
 
 
 def test_service_spec_is_importable_and_frozen():

@@ -9,6 +9,7 @@ succeeds, but every call fails loud. That asymmetry is what the stub tests asser
 from __future__ import annotations
 
 from yulu_platform.base import (
+    AudioCaptureController,
     DaemonManager,
     DependencyManager,
     PathResolver,
@@ -31,6 +32,20 @@ class LinuxDaemonManager(DaemonManager):
 
     def status(self, name: str) -> str:
         raise NotImplementedError(_MSG.format(seam="daemon management"))
+
+
+class LinuxAudioCaptureController(AudioCaptureController):
+    def start(self, payload: dict) -> dict | None:
+        raise NotImplementedError(_MSG.format(seam="audio capture"))
+
+    def stop(self) -> dict | None:
+        raise NotImplementedError(_MSG.format(seam="audio capture"))
+
+    def status(self) -> dict | None:
+        raise NotImplementedError(_MSG.format(seam="audio capture"))
+
+    def windows(self) -> dict | None:
+        raise NotImplementedError(_MSG.format(seam="audio capture"))
 
 
 class LinuxPathResolver(PathResolver):

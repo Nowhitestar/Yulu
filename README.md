@@ -258,6 +258,7 @@ A few decisions are load-bearing and worth understanding before contributing:
 - **The LLM is a plug-in, not a dependency.** `transcribe.py` runs all the way to a usable Markdown summary even if no agent ever shows up — `fallback_summary()` uses regex bucketing on the transcript so you never see "TODO: agent will fill this in".
 - **State lives in JSON files, not RAM.** `agent-queue.json`, `schedule.json`, recordings on disk. Queue writes are locked and atomic; a power outage mid-meeting loses the audio after the last flush, nothing else.
 - **One-binary security boundary.** Only `Yulu.app` holds the TCC permissions. The Python side talks to it through a Unix socket and cannot bypass macOS privacy on its own.
+- **Cross-platform work is a boundary project.** macOS remains the shipped capture arm, while service, path, permission, dependency, agent-provider, and connector seams keep platform and cloud choices explicit. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
 ## Background
 

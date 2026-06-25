@@ -123,11 +123,11 @@ describe("LlmSection — backend preset picker (P2-2)", () => {
     expect(screen.getByText(translate("zh", "settings.llm.capability.agentQueue"))).toBeInTheDocument();
   });
 
-  it("Codex preset shows the resolved llm.command capability", () => {
-    configReturn = configWith(["python3", "codex_llm.py"]);
+  it("Codex preset shows the resolved Codex CLI capability", () => {
+    configReturn = configWith(["codex", "exec", "--sandbox", "read-only", "--skip-git-repo-check"]);
     mount();
-    expect(screen.getByText("/opt/homebrew/bin/python3")).toBeInTheDocument();
-    expect(screen.getByText("llm.command=python3")).toBeInTheDocument();
+    expect(screen.getByText("/opt/homebrew/bin/codex")).toBeInTheDocument();
+    expect(screen.getByText("codex 1.2.3")).toBeInTheDocument();
   });
 
   it("selecting Claude commits llm.command = ['claude','--print']", async () => {
@@ -140,12 +140,15 @@ describe("LlmSection — backend preset picker (P2-2)", () => {
     );
   });
 
-  it("selecting Codex commits llm.command = ['python3','codex_llm.py']", async () => {
+  it("selecting Codex commits the read-only codex exec command", async () => {
     mount();
     const user = userEvent.setup();
     await user.selectOptions(screen.getByLabelText(translate("zh", "settings.llm.backend.aria")), "codex");
     await vi.waitFor(() =>
-      expect(updateMutate).toHaveBeenCalledWith({ key: "llm.command", value: ["python3", "codex_llm.py"] }),
+      expect(updateMutate).toHaveBeenCalledWith({
+        key: "llm.command",
+        value: ["codex", "exec", "--sandbox", "read-only", "--skip-git-repo-check"],
+      }),
     );
   });
 

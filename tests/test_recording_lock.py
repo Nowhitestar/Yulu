@@ -11,7 +11,7 @@ import pytest
 SCRIPTS = Path(__file__).resolve().parents[1] / "yulu" / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-from recording_lock import acquire, record, RecordingBusy
+from recording_lock import acquire, record, read_meta, RecordingBusy
 
 
 def test_acquire_releases_when_context_exits(tmp_path):
@@ -38,7 +38,16 @@ with acquire(lock_path={str(lock)!r}, timeout=0.1) as h:
 """)
     proc = subprocess.Popen([sys.executable, str(sidecar)])
     try:
-        time.sleep(0.3)  # give sidecar time to acquire
+        deadline = time.monotonic() + 3.0
+        while time.monotonic() < deadline:
+            if proc.poll() is not None:
+                raise AssertionError(f"sidecar exited before acquiring lock: {proc.returncode}")
+            if read_meta(lock).get("title") == "other":
+                break
+            time.sleep(0.05)
+        else:
+            raise AssertionError("sidecar did not acquire lock in time")
+
         with pytest.raises(RecordingBusy) as exc_info:
             with acquire(lock_path=lock, timeout=0.5):
                 pass
@@ -242,3 +251,50 @@ def test_daemon_start_omits_legacy_sox_mic_device_for_native_daemon(monkeypatch,
     assert record_audio.daemon_start("NativeMeeting") is True
     start_cmd = next(c for c in calls if c.get("action") == "start")
     assert "mic_device" not in start_cmd
+
+
+def test_daemon_start_routes_through_capture_controller(monkeypatch, tmp_path):
+    import importlib
+    sys.path.insert(0, str(SCRIPTS))
+    import record_audio
+    importlib.reload(record_audio)
+
+    class FakeCaptureController:
+        def __init__(self):
+            self.calls = []
+
+        def status(self):
+            self.calls.append(("status", None))
+            return {"recording": False, "file": "", "sysReady": True, "micReady": True}
+
+        def start(self, payload):
+            self.calls.append(("start", payload))
+            return {"status": "recording", "file": "/tmp/seam.wav"}
+
+    ctrl = FakeCaptureController()
+
+    monkeypatch.setattr(record_audio, "STATE_PATH", tmp_path / ".state.json")
+    monkeypatch.setattr(record_audio, "_capture_controller", lambda: ctrl)
+    monkeypatch.setattr(record_audio, "load_config", lambda: {
+        "mic_device": "StudioMicUID",
+        "silence_duration_sec": 75,
+        "silence_threshold": 0.04,
+    })
+    monkeypatch.setattr(record_audio, "start_realtime_transcriber", lambda *a, **k: None)
+    monkeypatch.setattr(record_audio, "socket_send", lambda cmd: (_ for _ in ()).throw(AssertionError("socket_send bypassed seam")))
+
+    assert record_audio.daemon_start("SeamMeeting") is True
+
+    assert ctrl.calls == [
+        ("status", None),
+        (
+            "start",
+            {
+                "action": "start",
+                "title": "SeamMeeting",
+                "mic_device": "StudioMicUID",
+                "silence_seconds": 75,
+                "silence_threshold": 0.04,
+            },
+        ),
+    ]

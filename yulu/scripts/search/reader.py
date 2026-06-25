@@ -33,6 +33,7 @@ from search.indexer import (
     parse_stem,
     upsert_doc,
 )
+from search.roots import content_roots, root_registry_report
 
 log = logging.getLogger(__name__)
 
@@ -106,7 +107,7 @@ def sweep(
     if own_conn:
         conn = init_db()
     if roots is None:
-        roots = [CORPUS_ROOT]
+        roots = content_roots(fallback_root=CORPUS_ROOT)
 
     counts = {"scanned": 0, "added": 0, "updated": 0, "removed": 0}
     seen_paths: set[str] = set()
@@ -359,6 +360,7 @@ def doctor(db_path: Path = SEARCH_DB_PATH) -> dict:
             "db_size_bytes": size_bytes,
             "integrity_ok": integrity == "ok",
             "db_path": str(db_path),
+            "root_registry": root_registry_report(fallback_root=CORPUS_ROOT),
         }
     finally:
         conn.close()

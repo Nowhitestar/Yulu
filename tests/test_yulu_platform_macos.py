@@ -34,6 +34,19 @@ def test_daemon_manager_conformance():
     assert mgr.status("com.yulu.nonexistent.xyz") in {"running", "stopped", "unknown"}
 
 
+def test_audio_capture_controller_conformance(tmp_path):
+    from yulu_platform.macos import MacOSAudioCaptureController
+
+    assert issubclass(MacOSAudioCaptureController, base.AudioCaptureController)
+    calls = []
+    ctrl = MacOSAudioCaptureController(
+        tmp_path / "audio_daemon.sock",
+        socket_send=lambda command: calls.append(command) or {"ok": True},
+    )
+    assert ctrl.status() == {"ok": True}
+    assert calls == [{"action": "status"}]
+
+
 def test_daemon_manager_install_writes_plist(tmp_path, monkeypatch):
     from yulu_platform.macos import MacOSDaemonManager
 

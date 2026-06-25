@@ -169,7 +169,7 @@ def test_no_llm_command_leaves_request_pending(tmp_path):
     assert "status" not in queue[0]
 
 
-def test_load_llm_command_resolves_bundled_codex_shim(tmp_path):
+def test_load_llm_command_upgrades_legacy_codex_shim(tmp_path):
     cfg = tmp_path / "config.json"
     cfg.write_text(
         json.dumps({"llm": {"command": ["python3", "codex_llm.py"]}}),
@@ -178,4 +178,4 @@ def test_load_llm_command_resolves_bundled_codex_shim(tmp_path):
 
     cmd = _load_llm_command(cfg)
 
-    assert cmd == ["python3", str(SCRIPTS / "codex_llm.py")]
+    assert cmd == ["codex", "exec", "--sandbox", "read-only", "--skip-git-repo-check"]

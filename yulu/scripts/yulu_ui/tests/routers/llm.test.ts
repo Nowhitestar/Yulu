@@ -51,7 +51,7 @@ describe("llmRouter.test", () => {
     const r = await caller.test();
     expect(r.ok).toBe(true);
     expect(r.stdout).toBe("Hi there\n");
-    expect(spawnMock.mock.calls[0]![0]).toBe("claude");
+    expect(String(spawnMock.mock.calls[0]![0])).toContain("claude");
     expect(spawnMock.mock.calls[0]![1]).toEqual(["--print"]);
     // Verify stdin write happened (read from mock instance)
     const procInstance = spawnMock.mock.results[0]!.value as { __stdinWrites: string[] };
@@ -74,11 +74,11 @@ describe("llmRouter.test", () => {
     const caller = createCaller(llmRouter, ctx);
     const r = await caller.test();
     expect(r.ok).toBe(false);
-    expect(r.stderr).toContain("llm.command is empty");
+    expect(r.stderr).toContain("llm.command is not configured");
     expect(spawnMock).not.toHaveBeenCalled();
   });
 
-  it("resolves bundled codex_llm.py before spawning", async () => {
+  it("upgrades the legacy codex_llm.py shim before spawning", async () => {
     mockSpawn("Hi there\n");
     const ctx = makeCtx();
     ctx.config.update("llm.command", ["python3", "codex_llm.py"]);
@@ -87,7 +87,7 @@ describe("llmRouter.test", () => {
     const r = await caller.test();
 
     expect(r.ok).toBe(true);
-    expect(spawnMock.mock.calls[0]![0]).toBe("python3");
-    expect(spawnMock.mock.calls[0]![1]).toEqual([join(HERE, "../../../codex_llm.py")]);
+    expect(String(spawnMock.mock.calls[0]![0])).toContain("codex");
+    expect(spawnMock.mock.calls[0]![1]).toEqual(["exec", "--sandbox", "read-only", "--skip-git-repo-check"]);
   });
 });

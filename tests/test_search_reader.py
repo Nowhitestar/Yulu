@@ -253,3 +253,4 @@ def test_doctor_returns_health_dict(tmp_path, monkeypatch):
     assert h["last_full_sweep_at"] is not None
     assert h["db_size_bytes"] > 0
     assert "meeting_summary" in h["per_kind"] or "meeting_transcript" in h["per_kind"]
+    assert h["root_registry"]["roots"][0]["path"] == str(root)

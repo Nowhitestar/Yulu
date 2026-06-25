@@ -1,28 +1,6 @@
-import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
-import { join } from "node:path";
 import { router, publicProcedure } from "../trpc.js";
-
-function runSpawnWithStdin(cmd: string, args: string[], stdin: string, timeoutMs: number): Promise<{ stdout: string; stderr: string; code: number }> {
-  return new Promise((resolve) => {
-    const proc = spawn(cmd, args);
-    let stdout = "", stderr = "";
-    const timer = setTimeout(() => { proc.kill("SIGKILL"); }, timeoutMs);
-    proc.stdin.write(stdin);
-    proc.stdin.end();
-    proc.stdout.on("data", (b: Buffer) => { stdout += b.toString("utf8"); });
-    proc.stderr.on("data", (b: Buffer) => { stderr += b.toString("utf8"); });
-    proc.on("close", (code: number | null) => { clearTimeout(timer); resolve({ stdout, stderr, code: code ?? 1 }); });
-  });
-}
-
-function resolveBundledScriptArgs(command: string[], scriptDir: string): string[] {
-  return command.map((part) => {
-    if (part.includes("/")) return part;
-    const candidate = join(scriptDir, part);
-    return existsSync(candidate) ? candidate : part;
-  });
-}
+import { runLlmCommand } from "../llmCommand.js";
+import { normalizeLegacyAgentCommand } from "../agentRuntime.js";
 
 export const llmRouter = router({
   test: publicProcedure.mutation(async ({ ctx }) => {
@@ -30,12 +8,12 @@ export const llmRouter = router({
     if (!cfg.llm?.enabled) {
       return { ok: false, stdout: "", stderr: "llm.enabled is false in config" };
     }
-    const command = cfg.llm?.command ?? [];
-    if (command.length === 0) {
-      return { ok: false, stdout: "", stderr: "llm.command is empty" };
+    const command = cfg.llm?.command ?? null;
+    if (!Array.isArray(command) || command.length === 0) {
+      return { ok: false, stdout: "", stderr: "llm.command is not configured; Ask Yulu will auto-detect the local Agent CLI" };
     }
-    const [cmd, ...args] = resolveBundledScriptArgs(command, ctx.paths.scriptDir);
-    const { stdout, stderr, code } = await runSpawnWithStdin(cmd!, args, "hello, world\n", 30_000);
+    const normalized = normalizeLegacyAgentCommand(command.map(String));
+    const { stdout, stderr, code } = await runLlmCommand(normalized, ctx.paths.scriptDir, "hello, world\n", 30_000);
     return { ok: code === 0, stdout, stderr };
   }),
 });

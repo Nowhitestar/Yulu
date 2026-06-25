@@ -20,6 +20,7 @@ vi.mock("react-router", async (orig) => {
 vi.mock("../../../web/src/trpc.js", () => ({
   trpc: {
     search: { run: { useQuery: () => ({ data: { hits: [] }, isFetching: false }) } },
+    ask: { ask: { useMutation: () => ({ mutateAsync: vi.fn(), isPending: false }) } },
     config: { schema: { useQuery: () => ({ data: SCHEMA, isPending: false }) } },
   },
 }));

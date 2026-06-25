@@ -1,16 +1,17 @@
 {
   "calendars": [
     {
-      "type": "feishu",
-      "enabled": false,
-      "app_id_env": "FEISHU_APP_ID",
-      "app_secret_env": "FEISHU_APP_SECRET"
+      "type": "macos",
+      "enabled": true,
+      "watch_calendars": [],
+      "note": "Default native scheduler provider. Reuses calendars already connected to macOS Calendar, including Google, without asking Yulu for separate Google OAuth."
     },
     {
       "type": "google",
       "enabled": false,
       "gog_account": "your.email@example.com",
-      "watch_calendars": ["primary"]
+      "watch_calendars": ["primary"],
+      "note": "Legacy native scheduler provider. Yulu owns scheduling; AI calendar context should come from the selected Agent's MCP connectors when available."
     }
   ],
   "connectors": {
@@ -88,7 +89,11 @@
   },
   "llm": {
     "enabled": true,
-    "command": null
+    "command": null,
+    "agent": {
+      "provider": "auto",
+      "note": "Ask Yulu live chat auto-detects Codex or Claude Code when command is null. Set command to any Agent CLI wrapper for Gemini, Grok, or custom runtimes."
+    }
   },
   "output": {
     "channel": "file",

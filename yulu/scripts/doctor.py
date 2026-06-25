@@ -328,6 +328,17 @@ def _connector_capabilities(config_dir: Path, runtime_root: Path) -> dict[str, A
         return {"error": str(exc), "schema_version": 1, "connectors": {}}
 
 
+def _privacy_opt_in(config_dir: Path) -> dict[str, Any]:
+    """Report local-first defaults and explicit cloud/external-service opt-ins."""
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from privacy_opt_in import load_config, privacy_opt_in_report
+
+        return privacy_opt_in_report(load_config(config_dir / "config.json"))
+    except Exception as exc:
+        return {"schema_version": 1, "ok": False, "error": str(exc)}
+
+
 def check_yulu_ui(
     script_dir: Path,
     config_dir: Path,
@@ -442,6 +453,7 @@ def collect_report(
         "yulu_ui": check_yulu_ui(runtime_root / "yulu" / "scripts", config_dir),
         "host_capabilities": _host_capabilities(config_dir, runtime_root),
         "connector_capabilities": _connector_capabilities(config_dir, runtime_root),
+        "privacy_opt_in": _privacy_opt_in(config_dir),
         "processes": processes,
         "legacy_processes": legacy_processes,
         "runtime_processes": runtime_processes,

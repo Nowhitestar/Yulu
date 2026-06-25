@@ -31,9 +31,19 @@ from transcribe_text import (
     transcript_text_from_segments,
 )
 
-CONFIG_PATH = Path.home() / ".config" / "yulu" / "config.json"
-PROMPTS_DB = Path.home() / ".config" / "yulu" / "prompts.sqlite"
-AGENT_QUEUE_PATH = Path.home() / ".config" / "yulu" / "agent-queue.json"
+def _resolve_runtime_dir() -> Path:
+    try:
+        from yulu_platform.macos.path_resolver import MacOSPathResolver
+
+        return MacOSPathResolver().runtime_dir()
+    except Exception:
+        return Path.home() / ".config" / "yulu"
+
+
+RUNTIME_DIR = _resolve_runtime_dir()
+CONFIG_PATH = RUNTIME_DIR / "config.json"
+PROMPTS_DB = RUNTIME_DIR / "prompts.sqlite"
+AGENT_QUEUE_PATH = RUNTIME_DIR / "agent-queue.json"
 
 def load_config() -> dict:
     if not CONFIG_PATH.exists():

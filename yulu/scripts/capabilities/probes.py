@@ -431,10 +431,16 @@ def _load_llm_command(config_path: Path | None = None) -> list[str]:
         return []
     cmd = llm_cfg.get("command") or []
     if isinstance(cmd, str):
-        return shlex.split(cmd)
+        return _normalize_legacy_agent_command(shlex.split(cmd))
     if isinstance(cmd, list):
-        return [str(x) for x in cmd if str(x)]
+        return _normalize_legacy_agent_command([str(x) for x in cmd if str(x)])
     return []
+
+
+def _normalize_legacy_agent_command(cmd: list[str]) -> list[str]:
+    if any(Path(part).name == "codex_llm.py" for part in cmd):
+        return ["codex", "exec", "--sandbox", "read-only", "--skip-git-repo-check"]
+    return cmd
 
 
 def _safe_version(path: str, version_args: tuple[str, ...]) -> str:

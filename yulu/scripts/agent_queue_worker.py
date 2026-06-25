@@ -28,6 +28,7 @@ PID_PATH = Path.home() / ".config" / "yulu" / "agent_queue_worker.pid"
 WORKER_NAME = "yulu-agent-queue-worker"
 PROMPTS_DB = Path.home() / ".config" / "yulu" / "prompts.sqlite"
 SCRIPT_DIR = Path(__file__).resolve().parent
+CODEX_AGENT_COMMAND = ["codex", "exec", "--sandbox", "read-only", "--skip-git-repo-check"]
 
 # Set by SIGHUP; checked between events in process_queue_once.
 _RELOAD_PROMPTS = False
@@ -68,10 +69,17 @@ def _load_llm_command(config_path: Path = CONFIG_PATH) -> list[str]:
         return []
     cmd = llm_cfg.get("command") or []
     if isinstance(cmd, str):
-        return _resolve_bundled_script_args(shlex.split(cmd))
+        return _normalize_legacy_agent_command(_resolve_bundled_script_args(shlex.split(cmd)))
     if isinstance(cmd, list):
-        return _resolve_bundled_script_args([str(x) for x in cmd if str(x)])
+        return _normalize_legacy_agent_command(_resolve_bundled_script_args([str(x) for x in cmd if str(x)]))
     return []
+
+
+def _normalize_legacy_agent_command(cmd: list[str]) -> list[str]:
+    """Upgrade the old Python Codex shim to the native Codex CLI boundary."""
+    if any(Path(part).name == "codex_llm.py" for part in cmd):
+        return list(CODEX_AGENT_COMMAND)
+    return cmd
 
 
 def _resolve_bundled_script_args(cmd: list[str]) -> list[str]:

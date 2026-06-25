@@ -56,6 +56,28 @@ class DaemonManager(ABC):
     def status(self, name: str) -> str: ...
 
 
+class AudioCaptureController(ABC):
+    """Control native audio capture behind a platform-neutral contract.
+
+    This seam owns the user-level capture verbs Yulu needs regardless of OS:
+    start, stop, status, and window/capture-source discovery. Concrete arms may
+    translate those calls to a Unix socket, a local helper process, or another
+    platform API, but callers do not name that transport.
+    """
+
+    @abstractmethod
+    def start(self, payload: dict) -> dict | None: ...
+
+    @abstractmethod
+    def stop(self) -> dict | None: ...
+
+    @abstractmethod
+    def status(self) -> dict | None: ...
+
+    @abstractmethod
+    def windows(self) -> dict | None: ...
+
+
 class PathResolver(ABC):
     """Resolve platform-appropriate base directories (PLAT-04).
 

@@ -145,6 +145,25 @@ def test_stt_daemon_section_present_when_config_empty(tmp_path):
     assert sd["socket_present"] is False
     assert sd["daemon_reachable"] is False
     assert sd["vocab_db_present"] is False
+    assert report["privacy_opt_in"]["transcription"]["mode"] == "local"
+
+
+def test_privacy_opt_in_section_flags_cloud_without_command(tmp_path):
+    doctor = load_doctor()
+    (tmp_path / "config.json").write_text(
+        '{"transcription": {"mode": "cloud-priority", "cloud_command": []}}',
+        encoding="utf-8",
+    )
+
+    report = doctor.collect_report(
+        source_root=ROOT,
+        runtime_root=ROOT,
+        legacy_root=ROOT / "missing-legacy",
+        config_dir=tmp_path,
+    )
+
+    assert report["privacy_opt_in"]["ok"] is False
+    assert report["privacy_opt_in"]["transcription"]["cloud_opt_in"] is True
 
 
 def test_search_index_section_absent_db_reports_missing(tmp_path):

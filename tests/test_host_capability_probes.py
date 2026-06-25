@@ -233,6 +233,19 @@ def test_probe_llm_command_resolves_but_never_executes(monkeypatch, tmp_path):
         assert argv != ["claude", "--print"], "llm.command must NEVER be executed"
 
 
+def test_probe_llm_command_upgrades_legacy_codex_shim(monkeypatch, tmp_path):
+    cfg = tmp_path / "config.json"
+    cfg.write_text(json.dumps({"llm": {"enabled": True, "command": ["python3", "codex_llm.py"]}}))
+    monkeypatch.setattr(probes, "resolve_on_login_path", lambda b, shell=None: f"/usr/local/bin/{b}")
+
+    cap = probes.probe_llm_command(config_path=cfg)
+
+    assert cap.provenance == Provenance.AGENT_CONFIG
+    assert cap.status == Status.USABLE
+    assert cap.resolved_path == "/usr/local/bin/codex"
+    assert cap.detail == "llm.command=codex"
+
+
 def test_probe_llm_command_head_not_on_path_is_absent(monkeypatch, tmp_path):
     cfg = tmp_path / "config.json"
     cfg.write_text(json.dumps({"llm": {"enabled": True, "command": ["nope-binary"]}}))

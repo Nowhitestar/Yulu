@@ -16,14 +16,13 @@ export interface LlmSectionProps {
   tracker: SettingsRestartTracker;
 }
 
-// The known LLM backends. `null` is agent-queue mode (no llm.command — the host
-// coding agent watches agent-queue.json directly); the others are concrete
-// commands. "custom" has no fixed value — it reveals the raw CommandEditor.
+// The known Agent backends. `null` is agent-queue mode for durable summaries and
+// lets Ask Yulu auto-detect the local Agent CLI for live chat.
 type PresetId = "agent-queue" | "claude" | "codex" | "custom";
 
 const PRESET_COMMAND: Record<Exclude<PresetId, "custom" | "agent-queue">, string[]> = {
   claude: ["claude", "--print"],
-  codex: ["python3", "codex_llm.py"],
+  codex: ["codex", "exec", "--sandbox", "read-only", "--skip-git-repo-check"],
 };
 
 const PRESET_OPTIONS: Array<{ value: PresetId; labelKey: string }> = [
@@ -41,7 +40,7 @@ function arraysEqual(a: string[], b: string[]): boolean {
  * Identify which preset the current `llm.command` value represents:
  *  - null / missing → agent-queue mode
  *  - exactly ["claude","--print"] → Claude
- *  - exactly ["python3","codex_llm.py"] → Codex
+ *  - exactly ["codex","exec",...] → Codex
  *  - any other array → a custom command
  */
 function presetOf(command: string[] | null | undefined): PresetId {
@@ -60,8 +59,8 @@ function capForPreset(selected: PresetId, caps: Record<string, Capability>, t: (
       detail: t("settings.llm.capability.agentQueue"),
     };
   }
-  if (selected === "claude") return caps.llm_command ?? caps.claude_cli ?? caps.claude;
-  if (selected === "codex") return caps.llm_command ?? caps.codex_cli;
+  if (selected === "claude") return caps.claude_cli ?? caps.claude ?? caps.llm_command;
+  if (selected === "codex") return caps.codex_cli ?? caps.llm_command;
   return caps.llm_command;
 }
 
@@ -194,9 +193,8 @@ export function LlmSection({ tracker }: LlmSectionProps) {
         onCommit={commit("llm.enabled")}
         status={tracker.statusFor("llm.enabled")}
       />
-      {/* P2-2: pick a backend preset instead of hand-editing the raw command.
-          Agent-queue = null (the agent watches the queue itself); Claude / Codex
-          write a known command; Custom reveals the editor for anything else. */}
+      {/* P2-2: pick an Agent preset instead of hand-editing the raw command.
+          Agent-queue = null; live Ask auto-detects an Agent CLI. */}
       <div className="row row--capability">
         <div className="row-label">
           <div>{t("settings.llm.backend.label")}</div>
