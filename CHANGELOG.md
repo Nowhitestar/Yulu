@@ -4,6 +4,13 @@ All notable changes to Yulu are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.13.0](https://github.com/Nowhitestar/Yulu/compare/v0.12.0...v0.13.0) (2026-06-26)
+
+
+### Features
+
+* **agent-console:** ship agent-native workspace ([0420ef3](https://github.com/Nowhitestar/Yulu/commit/0420ef328707f56435ca433b84835e22da35665b))
+
 ## [0.12.0](https://github.com/Nowhitestar/Yulu/compare/v0.11.4...v0.12.0) (2026-06-24)
 
 
