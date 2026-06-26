@@ -13,6 +13,8 @@
 
     <key>EnvironmentVariables</key>
     <dict>
+        <key>PATH</key>
+        <string>__PATH__</string>
         <key>YULU_UI_PORT</key>
         <string>7777</string>
         <key>NODE_ENV</key>

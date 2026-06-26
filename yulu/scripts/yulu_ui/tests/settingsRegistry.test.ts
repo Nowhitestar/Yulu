@@ -88,6 +88,22 @@ describe("settingsRegistry", () => {
   it("output.notion.api_key_env 是 env-name 类型(只填变量名,不存密钥)", () => {
     expect(defFor("output.notion.api_key_env")?.type).toBe("env-name");
   });
+  it("Agent Console 迁移后,旧 AI runtime/LLM/output/calendar 设置仅保留为隐藏兼容项", () => {
+    for (const p of [
+      "llm.enabled",
+      "llm.command",
+      "llm.agent.provider",
+      "calendars",
+      "connectors.notion.send_summary",
+      "connectors.zulip.send_summary",
+      "connectors.gog.read_calendar",
+      "output.channel",
+      "output.notion.destination_id",
+      "output.zulip.stream",
+    ]) {
+      expect(defFor(p)?.hidden).toBe(true);
+    }
+  });
   it("未注册路径默认 none", () => {
     expect(reloadFor("nope.nope")).toEqual({ kind: "none" });
   });

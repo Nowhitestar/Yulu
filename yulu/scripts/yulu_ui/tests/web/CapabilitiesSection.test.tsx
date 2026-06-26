@@ -50,11 +50,22 @@ function fullReport(): { schema_version: number; capabilities: Record<string, {
   return {
     schema_version: 1,
     capabilities: {
-      "claude": {
+      "audio_daemon": {
         provenance: "host-path",
         status: "usable",
-        resolved_path: "/opt/homebrew/bin/claude",
-        detail: "claude 1.2.3",
+        resolved_path: "/opt/yulu/audio_daemon",
+        detail: "audio daemon",
+      },
+      "mlx_whisper": {
+        provenance: "yulu-managed",
+        status: "present-but-unverified",
+        resolved_path: "/Users/me/.config/yulu/mlx",
+        detail: "",
+        remediation: {
+          action: "verify",
+          subject: "mlx_whisper",
+          reason: "runtime warm-up not run",
+        },
       },
       "agent_mlx_whisper": {
         provenance: "agent-config",
@@ -78,7 +89,7 @@ function fullReport(): { schema_version: number; capabilities: Record<string, {
           reason: "model files missing",
         },
       },
-      "whisper-cli": {
+      "whisper_cli": {
         provenance: "absent",
         status: "absent",
         resolved_path: "",
@@ -123,20 +134,21 @@ describe("CapabilitiesSection", () => {
     expect(screen.queryByText(/尚未检测到任何能力/)).toBeNull();
   });
 
-  it("Test 1 — renders the D-02 provenance label for each provenance kind", () => {
+  it("Test 1 — renders settings-owned provenance labels and filters Agent-managed rows", () => {
     queryReturn = { data: fullReport(), refetch: refetchMock, isError: false };
     render(<CapabilitiesSection />);
-    // Default language is zh. host-path + agent-config both render 复用自你的 PATH.
-    expect(screen.getAllByText("复用自你的 PATH").length).toBeGreaterThanOrEqual(2);
-    expect(screen.getByText("Yulu 托管")).toBeInTheDocument();
+    // Default language is zh. Agent-managed rows are filtered out of Settings.
+    expect(screen.getAllByText("复用自你的 PATH").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText("Yulu 托管").length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText("未找到")).toBeInTheDocument();
+    expect(screen.queryByText("/Users/me/.config/yulu/agent-mlx")).toBeNull();
   });
 
   it("Test 2 — renders each non-absent capability's resolved_path", () => {
     queryReturn = { data: fullReport(), refetch: refetchMock, isError: false };
     render(<CapabilitiesSection />);
-    expect(screen.getByText("/opt/homebrew/bin/claude")).toBeInTheDocument();
-    expect(screen.getByText("/Users/me/.config/yulu/agent-mlx")).toBeInTheDocument();
+    expect(screen.getByText("/opt/yulu/audio_daemon")).toBeInTheDocument();
+    expect(screen.getByText("/Users/me/.config/yulu/mlx")).toBeInTheDocument();
   });
 
   it("Test 3 — renders three distinct tri-state status badges", () => {
@@ -151,7 +163,7 @@ describe("CapabilitiesSection", () => {
     queryReturn = { data: fullReport(), refetch: refetchMock, isError: false };
     render(<CapabilitiesSection />);
     expect(screen.getByText("not found on PATH")).toBeInTheDocument();
-    expect(screen.getByText("claude 1.2.3")).toBeInTheDocument();
+    expect(screen.getByText("audio daemon")).toBeInTheDocument();
   });
 
   it("renders what is missing, why it is missing, and how to fix it", () => {
@@ -164,7 +176,7 @@ describe("CapabilitiesSection", () => {
   it("explains manual missing resources without showing a fake Download/Repair button", () => {
     const report = fullReport();
     report.capabilities = {
-      "whisper-cli": report.capabilities["whisper-cli"]!,
+      "whisper_cli": report.capabilities["whisper_cli"]!,
     };
     queryReturn = { data: report, refetch: refetchMock, isError: false };
     render(<CapabilitiesSection />);
@@ -198,7 +210,7 @@ describe("CapabilitiesSection", () => {
 
     await user.click(screen.getAllByRole("button", { name: "验证" })[0]!);
 
-    expect(verifyMutateAsyncMock).toHaveBeenCalledWith({ capability: "agent_mlx_whisper" });
+    expect(verifyMutateAsyncMock).toHaveBeenCalledWith({ capability: "mlx_whisper" });
     expect(refetchMock).toHaveBeenCalled();
   });
 
@@ -215,7 +227,7 @@ describe("CapabilitiesSection", () => {
 
   it("renders report strings as escaped text — no dangerouslySetInnerHTML (T-04-XSS)", () => {
     const report = fullReport();
-    report.capabilities["claude"]!.resolved_path = "/x/<img src=x onerror=alert(1)>";
+    report.capabilities["audio_daemon"]!.resolved_path = "/x/<img src=x onerror=alert(1)>";
     queryReturn = { data: report, refetch: refetchMock, isError: false };
     const { container } = render(<CapabilitiesSection />);
     // The payload must appear as literal text, never as a live <img> element.

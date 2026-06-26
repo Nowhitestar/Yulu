@@ -28,13 +28,21 @@ class MlxWhisperBackend:
         self.hallucination_silence_threshold = hallucination_silence_threshold
         self._module = None
         self._ready = False
-        self._lock = asyncio.Lock()
+        self._lock: Optional[asyncio.Lock] = None
+        self._lock_loop: Optional[asyncio.AbstractEventLoop] = None
 
     def is_ready(self) -> bool:
         return self._ready
 
+    def _warm_up_lock(self) -> asyncio.Lock:
+        loop = asyncio.get_running_loop()
+        if self._lock is None or self._lock_loop is not loop:
+            self._lock = asyncio.Lock()
+            self._lock_loop = loop
+        return self._lock
+
     async def warm_up(self) -> None:
-        async with self._lock:
+        async with self._warm_up_lock():
             if self._ready:
                 return
             module = await asyncio.to_thread(importlib.import_module, "mlx_whisper")

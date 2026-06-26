@@ -25,6 +25,8 @@ from capabilities import provider as provider_mod  # noqa: E402
 from capabilities.provider import (  # noqa: E402
     CapabilityProvider,
     ClaudeCodeProvider,
+    CodexProvider,
+    OpenClawProvider,
     default_providers,
 )
 from capabilities.report import (  # noqa: E402
@@ -151,3 +153,53 @@ def test_default_providers_includes_claude_code():
     assert any(isinstance(p, ClaudeCodeProvider) for p in providers)
     # Every registered entry is a provider (so doctor can iterate uniformly in Plan 03).
     assert all(isinstance(p, CapabilityProvider) for p in providers)
+
+
+def test_default_providers_cover_v1_agent_targets():
+    providers = default_providers()
+    names = {p.agent_name for p in providers}
+    assert {"claude-code", "codex", "openclaw"} <= names
+    assert any(isinstance(p, CodexProvider) for p in providers)
+    assert any(isinstance(p, OpenClawProvider) for p in providers)
+
+
+def test_codex_and_openclaw_providers_relabel_without_key_collision(monkeypatch):
+    def fake_probe_command(name, *args, **kwargs):
+        return Capability(Provenance.HOST_PATH, Status.USABLE, f"/usr/local/bin/{name}", f"{name} 1.2.3")
+
+    monkeypatch.setattr(provider_mod, "probe_command", fake_probe_command)
+    monkeypatch.setattr(
+        provider_mod,
+        "probe_mlx_whisper",
+        lambda *a, **k: Capability(Provenance.HOST_PATH, Status.USABLE, "/py", "mlx_whisper 1"),
+    )
+
+    codex_caps = CodexProvider().capabilities()
+    openclaw_caps = OpenClawProvider().capabilities()
+
+    assert codex_caps["codex_cli"].provenance is Provenance.AGENT_CONFIG
+    assert codex_caps["codex_cli"].resolved_path == "/usr/local/bin/codex"
+    assert codex_caps["codex_mlx_whisper"].provenance is Provenance.AGENT_CONFIG
+
+    assert openclaw_caps["openclaw_cli"].provenance is Provenance.AGENT_CONFIG
+    assert openclaw_caps["openclaw_cli"].resolved_path == "/usr/local/bin/openclaw"
+    assert openclaw_caps["openclaw_mlx_whisper"].provenance is Provenance.AGENT_CONFIG
+
+    combined_keys = set(codex_caps) | set(openclaw_caps)
+    assert {"codex_mlx_whisper", "openclaw_mlx_whisper"} <= combined_keys
+    assert "agent_mlx_whisper" not in combined_keys
+
+
+def test_codex_provider_absent_cli_degrades_not_crashes(monkeypatch):
+    monkeypatch.setattr(provider_mod, "probe_command", lambda *a, **k: provider_mod.report.absent("codex missing"))
+    monkeypatch.setattr(
+        provider_mod,
+        "probe_mlx_whisper",
+        lambda *a, **k: provider_mod.report.absent("mlx_whisper missing"),
+    )
+
+    caps = CodexProvider().capabilities()
+
+    assert caps["codex_cli"].provenance is Provenance.ABSENT
+    assert caps["codex_cli"].status is Status.ABSENT
+    assert caps["codex_mlx_whisper"].provenance is Provenance.ABSENT

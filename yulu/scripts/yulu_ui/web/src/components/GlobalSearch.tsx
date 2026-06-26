@@ -2,11 +2,11 @@
 import type React from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router";
-import { Search as SearchIcon } from "lucide-react";
+import { Search as SearchIcon, X } from "lucide-react";
 import { trpc } from "../trpc.js";
 import { useDebounced } from "../hooks/useDebounced.js";
 import { useSettingsSchema } from "../hooks/useSettingsSchema.js";
-import { categoryLabelKey } from "./settings/categories.js";
+import { categoryLabelKey, categoryMeta } from "./settings/categories.js";
 import { useT, type TFunc } from "../i18n/LanguageProvider.js";
 import "./GlobalSearch.css";
 
@@ -20,9 +20,6 @@ interface Hit {
   snippet: string;
 }
 
-// A client-side "jump to this setting's category" hit. Synthesised from the
-// registry (config.schema) when the query matches a setting's label or its
-// category — the backend search index has no notion of settings.
 interface SettingHit {
   kind: "setting";
   category: string;
@@ -31,11 +28,6 @@ interface SettingHit {
 
 type Item = ({ t: "hit" } & Hit) | ({ t: "setting" } & SettingHit);
 
-/**
- * Build setting hits for a query by matching the registry's labels + categories
- * (case-insensitive substring). One hit per matching category (deduped), so the
- * result jumps straight to /settings/:category. Capped to keep the popover tight.
- */
 function buildSettingHits(
   query: string,
   schema: ReadonlyArray<{ path: string; category: string; label: string }> | undefined,
@@ -45,6 +37,7 @@ function buildSettingHits(
   if (!q || !schema) return [];
   const byCategory = new Map<string, SettingHit>();
   for (const s of schema) {
+    if (!categoryMeta(s.category)) continue;
     const catLabel = t(categoryLabelKey(s.category));
     const matches =
       s.label.toLowerCase().includes(q) ||
@@ -66,12 +59,48 @@ function kindClass(kind: string): string {
 }
 
 function kindLabel(kind: string, t: TFunc): string {
-  // Backend emits kinds like "meeting_summary", "meeting_transcript".
-  // Show only the top-level type ("meeting") in the badge.
   if (kind.startsWith("meeting")) return t("search.kind.meeting");
   if (kind === "summary") return t("search.kind.summary");
   if (kind === "setting") return t("search.kind.setting");
   return kind;
+}
+
+function hitTitle(h: Hit): string {
+  return h.meetingTitle || h.stem;
+}
+
+function formatTimestamp(recordedAt: string): string {
+  if (!recordedAt) return "";
+  const d = new Date(recordedAt);
+  if (Number.isNaN(d.valueOf())) return recordedAt;
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  const hh = String(d.getHours()).padStart(2, "0");
+  const min = String(d.getMinutes()).padStart(2, "0");
+  return `${mm}-${dd} ${hh}:${min}`;
+}
+
+function hitTab(kind: string): "summary" | "transcript" | null {
+  if (kind.endsWith("_summary") || kind === "summary") return "summary";
+  if (kind.endsWith("_transcript") || kind === "transcript") return "transcript";
+  return null;
+}
+
+function firstHitText(snippet: string): string {
+  const m = snippet.match(/\[hit\]([\s\S]*?)\[\/hit\]/);
+  const marked = m?.[1]?.trim();
+  if (marked) return marked;
+  return snippet.replace(/\[\/?hit\]/g, "").trim().slice(0, 80);
+}
+
+function hitTargetUrl(h: Hit): string {
+  const params = new URLSearchParams();
+  const tab = hitTab(h.kind);
+  const marker = firstHitText(h.snippet);
+  if (tab) params.set("tab", tab);
+  if (marker) params.set("snippet", marker);
+  const qs = params.toString();
+  return `/inbox/${h.stem}${qs ? `?${qs}` : ""}`;
 }
 
 function itemTargetUrl(item: Item): string {
@@ -82,30 +111,6 @@ function itemKey(item: Item, i: number): string {
   return item.t === "setting" ? `setting-${item.category}-${i}` : `${item.kind}-${item.stem}-${i}`;
 }
 
-function hitTitle(h: Hit): string {
-  return h.meetingTitle || h.stem;
-}
-
-function hitTimestamp(h: Hit): string {
-  if (!h.recordedAt) return "";
-  const d = new Date(h.recordedAt);
-  if (Number.isNaN(d.valueOf())) return h.recordedAt;
-  const mm = String(d.getMonth() + 1).padStart(2, "0");
-  const dd = String(d.getDate()).padStart(2, "0");
-  const hh = String(d.getHours()).padStart(2, "0");
-  const min = String(d.getMinutes()).padStart(2, "0");
-  return `${mm}-${dd} ${hh}:${min}`;
-}
-
-function hitTargetUrl(h: Hit): string {
-  const cleanSnip = h.snippet.replace(/\[\/?hit\]/g, "").trim().slice(0, 80);
-  const snip = encodeURIComponent(cleanSnip);
-  return `/inbox/${h.stem}?snippet=${snip}`;
-}
-
-/**
- * Snippet rendered with <mark> on each [hit]...[/hit] span.
- */
 function renderSnippet(snippet: string): React.ReactNode[] {
   const out: React.ReactNode[] = [];
   const re = /\[hit\](.*?)\[\/hit\]/g;
@@ -137,31 +142,29 @@ export function GlobalSearch() {
   );
   const { data: schema } = useSettingsSchema();
   const hits: Hit[] = (data?.hits as Hit[] | undefined) ?? [];
+  const shouldShowPopover = open && q.length > 0;
 
-  // Settings hits are synthesised client-side and listed first (they're exact,
-  // navigational), then the backend recording/summary hits. Keyboard nav runs
-  // over the combined list.
   const items = useMemo<Item[]>(() => {
     const settingItems: Item[] = buildSettingHits(debouncedQ, schema, t).map((s) => ({ t: "setting", ...s }));
     const hitItems: Item[] = hits.map((h) => ({ t: "hit", ...h }));
     return [...settingItems, ...hitItems];
   }, [debouncedQ, schema, hits, t]);
 
-  // ⌘K / Ctrl+K global focus
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      const cmdK = (e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k";
+      const key = e.key.toLowerCase();
+      const cmdK = (e.metaKey || e.ctrlKey) && (key === "k" || e.code === "KeyK");
       if (cmdK) {
         e.preventDefault();
+        setOpen(true);
         inputRef.current?.focus();
         inputRef.current?.select();
       }
     };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
   }, []);
 
-  // Click-outside close
   useEffect(() => {
     if (!open) return;
     const onDown = (e: MouseEvent) => {
@@ -201,7 +204,7 @@ export function GlobalSearch() {
         }
       }
     },
-    [open, items, focused, navigate],
+    [focused, items, navigate, open],
   );
 
   return (
@@ -225,45 +228,61 @@ export function GlobalSearch() {
           aria-expanded={open}
           aria-controls="gs-popover"
         />
+        {q && (
+          <button
+            type="button"
+            className="gs-clear"
+            aria-label={t("search.clear")}
+            onClick={() => {
+              setQ("");
+              setOpen(false);
+              inputRef.current?.focus();
+            }}
+          >
+            <X size={14} strokeWidth={2.3} />
+          </button>
+        )}
         <span className="gs-kbd" aria-hidden="true">⌘K</span>
       </div>
 
-      {open && q.length > 0 && (
-        <div ref={popoverRef} id="gs-popover" className="gs-popover" role="listbox">
-          {items.length === 0 && !isFetching && (
-            <div className="gs-empty">{t("search.empty")}</div>
-          )}
-          {items.map((item, i) => (
-            <button
-              key={itemKey(item, i)}
-              type="button"
-              role="option"
-              aria-selected={i === focused}
-              className={"gs-result" + (i === focused ? " focus" : "")}
-              onMouseEnter={() => setFocused(i)}
-              onClick={() => {
-                navigate(itemTargetUrl(item));
-                setOpen(false);
-              }}
-            >
-              {item.t === "setting" ? (
-                <div className="gs-result-line1">
-                  <span className={`gs-kind ${kindClass("setting")}`}>{t("search.kind.setting")}</span>
-                  <span className="gs-result-title">{item.label}</span>
-                  <span className="gs-result-meta">{t("search.result.settingMeta")}</span>
-                </div>
-              ) : (
-                <>
+      {shouldShowPopover && (
+        <div ref={popoverRef} id="gs-popover" className="gs-popover gs-popover-search">
+          <div role="listbox">
+            {items.length === 0 && !isFetching && (
+              <div className="gs-empty">{t("search.empty")}</div>
+            )}
+            {items.map((item, i) => (
+              <button
+                key={itemKey(item, i)}
+                type="button"
+                role="option"
+                aria-selected={i === focused}
+                className={"gs-result" + (i === focused ? " focus" : "")}
+                onMouseEnter={() => setFocused(i)}
+                onClick={() => {
+                  navigate(itemTargetUrl(item));
+                  setOpen(false);
+                }}
+              >
+                {item.t === "setting" ? (
                   <div className="gs-result-line1">
-                    <span className={`gs-kind ${kindClass(item.kind)}`}>{kindLabel(item.kind, t)}</span>
-                    <span className="gs-result-title">{hitTitle(item)}</span>
-                    <span className="gs-result-meta">{hitTimestamp(item)}</span>
+                    <span className={`gs-kind ${kindClass("setting")}`}>{t("search.kind.setting")}</span>
+                    <span className="gs-result-title">{item.label}</span>
+                    <span className="gs-result-meta">{t("search.result.settingMeta")}</span>
                   </div>
-                  <div className="gs-result-snippet">{renderSnippet(item.snippet)}</div>
-                </>
-              )}
-            </button>
-          ))}
+                ) : (
+                  <>
+                    <div className="gs-result-line1">
+                      <span className={`gs-kind ${kindClass(item.kind)}`}>{kindLabel(item.kind, t)}</span>
+                      <span className="gs-result-title">{hitTitle(item)}</span>
+                      <span className="gs-result-meta">{formatTimestamp(item.recordedAt)}</span>
+                    </div>
+                    <div className="gs-result-snippet">{renderSnippet(item.snippet)}</div>
+                  </>
+                )}
+              </button>
+            ))}
+          </div>
           <div className="gs-footer">
             <span><kbd>↑↓</kbd> {t("search.footer.navigate")}</span>
             <span><kbd>↵</kbd> {t("search.footer.open")}</span>

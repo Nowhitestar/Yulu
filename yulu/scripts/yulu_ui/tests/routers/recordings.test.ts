@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { mkdtempSync, writeFileSync, rmSync, mkdirSync, existsSync, readFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, writeFileSync, rmSync, mkdirSync, existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { recordingsRouter } from "../../src/routers/recordings.js";
@@ -13,6 +13,8 @@ vi.mock("node:child_process", async (importOriginal) => {
   return { ...actual, spawn: spawnMock };
 });
 
+let lastSpawnStdin = "";
+
 function mkCtx(opts: { moviesDir: string }): AppContext {
   const configState = {
     transcription: {
@@ -20,9 +22,10 @@ function mkCtx(opts: { moviesDir: string }): AppContext {
       local_model_path: "~/.config/yulu/models/ggml-large-v3.bin",
       mlx: { model: "mlx-community/whisper-large-v3-mlx" },
     },
-    llm: {},
+    llm: { enabled: true, command: null, agent: { provider: "custom" } },
     connectors: {},
     output: {},
+    agent_console: { plugins: { added: ["summary"] } },
   };
   const promptRows: Array<Record<string, unknown>> = [];
   const promptsDb = {
@@ -43,6 +46,7 @@ function mkCtx(opts: { moviesDir: string }): AppContext {
   return {
     paths: {
       moviesDir: opts.moviesDir,
+      configDir: join(opts.moviesDir, "config"),
       transcribePy: "/fake/transcribe.py",
       agentQueueJson: join(opts.moviesDir, "agent-queue.json"),
       scriptDir: "/fake/yulu/scripts",
@@ -72,6 +76,10 @@ function mockSpawn(stdout: string, exitCode = 0, stderr = "") {
   spawnMock.mockImplementation(() => {
     const handlers = new Map<string, (arg: unknown) => void>();
     const proc = {
+      stdin: {
+        write: (chunk: Buffer | string) => { lastSpawnStdin += chunk.toString(); },
+        end: () => {},
+      },
       stdout: { on: (e: string, cb: (b: Buffer) => void) => { if (e === "data" && stdout) cb(Buffer.from(stdout)); } },
       stderr: { on: (e: string, cb: (b: Buffer) => void) => { if (e === "data" && stderr) cb(Buffer.from(stderr)); } },
       on: (e: string, cb: (arg: unknown) => void) => { handlers.set(e, cb); },
@@ -122,13 +130,27 @@ function wavWithDuration(seconds: number): Buffer {
 
 describe("recordings router", () => {
   let root: string; let mvDir: string;
+  let oldPath: string | undefined;
+  let oldCodexRoots: string | undefined;
+  let oldRootsOnly: string | undefined;
   beforeEach(() => {
     spawnMock.mockReset();
+    lastSpawnStdin = "";
+    oldPath = process.env.PATH;
+    oldCodexRoots = process.env.YULU_CODEX_PLUGIN_ROOTS;
+    oldRootsOnly = process.env.YULU_AGENT_PLUGIN_ROOTS_ONLY;
     root = mkdtempSync(join(tmpdir(), "rec_"));
     mvDir = join(root, "movies");
     mkdirSync(mvDir);
   });
-  afterEach(() => rmSync(root, { recursive: true, force: true }));
+  afterEach(() => {
+    process.env.PATH = oldPath;
+    if (oldCodexRoots === undefined) delete process.env.YULU_CODEX_PLUGIN_ROOTS;
+    else process.env.YULU_CODEX_PLUGIN_ROOTS = oldCodexRoots;
+    if (oldRootsOnly === undefined) delete process.env.YULU_AGENT_PLUGIN_ROOTS_ONLY;
+    else process.env.YULU_AGENT_PLUGIN_ROOTS_ONLY = oldRootsOnly;
+    rmSync(root, { recursive: true, force: true });
+  });
 
   it("list returns every recording in the root, sorted by mtime desc", async () => {
     writeFileSync(join(mvDir, "Memo_20260101_120000.wav"), "");
@@ -471,48 +493,104 @@ describe("recordings router", () => {
     expect(seen).toContain("removed");
   });
 
-  it("sendSummary spawns send_summary.py with an explicit enabled connector channel", async () => {
+  it("sendSummary routes through the selected Agent CLI when the Console plugin is configured", async () => {
     const stem = "TeamSync_20260102_090000";
     writeFileSync(join(mvDir, `${stem}.wav`), "");
     writeFileSync(join(mvDir, `${stem}.summary.md`), "summary");
     const ctx = mkCtx({ moviesDir: mvDir });
+    const fakeCodex = join(root, "bin", "codex");
+    const pluginRoot = join(root, "codex-plugins");
+    mkdirSync(join(root, "bin"));
+    mkdirSync(join(pluginRoot, "notion"), { recursive: true });
+    writeFileSync(fakeCodex, "#!/bin/sh\nexit 0\n");
+    chmodSync(fakeCodex, 0o755);
+    process.env.PATH = `${join(root, "bin")}:${oldPath ?? ""}`;
+    process.env.YULU_CODEX_PLUGIN_ROOTS = pluginRoot;
+    process.env.YULU_AGENT_PLUGIN_ROOTS_ONLY = "1";
     ctx.config = { read: () => ({
-      connectors: { notion: { send_summary: true } },
-      output: { notion: { destination_id: "db", destination_type: "database", destination_label: "Team Notes" } },
+      llm: { enabled: true, command: [fakeCodex], agent: { provider: "codex" } },
+      agent_console: {
+        plugins: { added: ["summary", "notion"] },
+        destinations: { codex: { notion: { target: "Product Notes" } } },
+      },
     }) } as unknown as AppContext["config"];
-    mockSpawn("sent");
+    const nativeSessionId = "019f0000-0000-7000-8000-000000000002";
+    mockSpawn(
+      `${JSON.stringify({ type: "session", session_id: nativeSessionId })}\n` +
+      `${JSON.stringify({ type: "message", text: "sent" })}\n`,
+    );
 
     const r = await createCaller(recordingsRouter, ctx).sendSummary({ stem, channel: "notion" });
 
     expect(r.ok).toBe(true);
     const call = spawnMock.mock.calls[0]!;
-    expect(call[0]).toBe("python3");
-    expect(call[1]).toEqual([
-      "/fake/yulu/scripts/send_summary.py",
-      "--channel",
-      "notion",
-      join(mvDir, `${stem}.summary.md`),
-    ]);
+    expect(call[0]).toBe(fakeCodex);
+    expect(call[2].cwd).toBe("/fake/yulu/scripts");
+    expect(lastSpawnStdin).toContain("Destination: Product Notes");
+    const history = JSON.parse(readFileSync(join(mvDir, `${stem}.shares.json`), "utf8"));
+    expect(history[0]).toMatchObject({ channel: "notion", status: "success", destination: "Product Notes" });
+    const sessions = JSON.parse(readFileSync(join(ctx.paths.configDir, "agent-sessions.json"), "utf8"));
+    expect(sessions.sessions[0]).toMatchObject({
+      purpose: "background",
+      nativeSessionId,
+    });
   });
 
-  it("get exposes enabled summary targets using selected destination labels", async () => {
+  it("get exposes Agent Console share targets for added plugins only", async () => {
     const stem = "TeamSync_20260102_090000";
     writeFileSync(join(mvDir, `${stem}.wav`), "");
     writeFileSync(join(mvDir, `${stem}.summary.md`), "summary");
     const ctx = mkCtx({ moviesDir: mvDir });
+    const fakeCodex = join(root, "bin", "codex");
+    const pluginRoot = join(root, "codex-plugins");
+    mkdirSync(join(root, "bin"));
+    mkdirSync(join(pluginRoot, "notion"), { recursive: true });
+    writeFileSync(fakeCodex, "#!/bin/sh\nexit 0\n");
+    chmodSync(fakeCodex, 0o755);
+    process.env.PATH = `${join(root, "bin")}:${oldPath ?? ""}`;
+    process.env.YULU_CODEX_PLUGIN_ROOTS = pluginRoot;
+    process.env.YULU_AGENT_PLUGIN_ROOTS_ONLY = "1";
     ctx.config = { read: () => ({
-      connectors: { notion: { send_summary: true }, zulip: { send_summary: true } },
-      output: {
-        notion: { destination_id: "db", destination_type: "database", destination_label: "Team Notes" },
-        zulip: { stream_id: "2", stream: "team", topic: "纪要" },
-      },
+      llm: { enabled: true, command: [fakeCodex], agent: { provider: "codex" } },
+      agent_console: { plugins: { added: ["summary", "notion"] } },
     }) } as unknown as AppContext["config"];
 
     const r = await createCaller(recordingsRouter, ctx).get({ stem });
 
-    expect(r.enabledSummaryTargets).toEqual([
-      { channel: "notion", label: "Notion", destination: "Team Notes" },
-      { channel: "zulip", label: "Zulip", destination: "team / 纪要" },
+    expect(r.enabledSummaryTargets).toEqual([]);
+    expect(r.shareTargets).toEqual([
+      expect.objectContaining({ channel: "notion", label: "Notion", destination: "Yulu Meeting", enabled: true }),
+    ]);
+  });
+
+  it("keeps configured Zulip disabled until a stream and topic are selected in Agent Console", async () => {
+    const stem = "TeamSync_20260102_090000";
+    writeFileSync(join(mvDir, `${stem}.wav`), "");
+    writeFileSync(join(mvDir, `${stem}.summary.md`), "summary");
+    const ctx = mkCtx({ moviesDir: mvDir });
+    const fakeCodex = join(root, "bin", "codex");
+    const pluginRoot = join(root, "codex-plugins");
+    mkdirSync(join(root, "bin"));
+    mkdirSync(join(pluginRoot, "zulip"), { recursive: true });
+    writeFileSync(fakeCodex, "#!/bin/sh\nexit 0\n");
+    chmodSync(fakeCodex, 0o755);
+    process.env.PATH = `${join(root, "bin")}:${oldPath ?? ""}`;
+    process.env.YULU_CODEX_PLUGIN_ROOTS = pluginRoot;
+    process.env.YULU_AGENT_PLUGIN_ROOTS_ONLY = "1";
+    ctx.config = { read: () => ({
+      llm: { enabled: true, command: [fakeCodex], agent: { provider: "codex" } },
+      agent_console: { plugins: { added: ["summary", "zulip"] } },
+    }) } as unknown as AppContext["config"];
+
+    const r = await createCaller(recordingsRouter, ctx).get({ stem });
+
+    expect(r.shareTargets).toEqual([
+      expect.objectContaining({
+        channel: "zulip",
+        destination: "选择 Channel 和 Topic",
+        enabled: false,
+        disabledReason: "请选择 Zulip Channel 和 Topic",
+      }),
     ]);
   });
 
@@ -531,13 +609,35 @@ describe("recordings router", () => {
     expect(r.enabledSummaryTargets).toEqual([]);
   });
 
-  it("sendSummary rejects a disabled connector channel", async () => {
+  it("sendSummary rejects a plugin that was not added in Agent Console", async () => {
     const stem = "TeamSync_20260102_090000";
     writeFileSync(join(mvDir, `${stem}.wav`), "");
     writeFileSync(join(mvDir, `${stem}.summary.md`), "summary");
     const caller = createCaller(recordingsRouter, mkCtx({ moviesDir: mvDir }));
 
-    await expect(caller.sendSummary({ stem, channel: "notion" })).rejects.toThrow(/not enabled/i);
+    await expect(caller.sendSummary({ stem, channel: "notion" })).rejects.toThrow(/not added/i);
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it("sendSummary rejects an added plugin that the selected Agent has not configured", async () => {
+    const stem = "TeamSync_20260102_090000";
+    writeFileSync(join(mvDir, `${stem}.wav`), "");
+    writeFileSync(join(mvDir, `${stem}.summary.md`), "summary");
+    const fakeCodex = join(root, "bin", "codex");
+    mkdirSync(join(root, "bin"));
+    writeFileSync(fakeCodex, "#!/bin/sh\nexit 0\n");
+    chmodSync(fakeCodex, 0o755);
+    process.env.PATH = `${join(root, "bin")}:${oldPath ?? ""}`;
+    process.env.YULU_CODEX_PLUGIN_ROOTS = join(root, "empty-plugins");
+    process.env.YULU_AGENT_PLUGIN_ROOTS_ONLY = "1";
+    const ctx = mkCtx({ moviesDir: mvDir });
+    ctx.config = { read: () => ({
+      llm: { enabled: true, command: [fakeCodex], agent: { provider: "codex" } },
+      agent_console: { plugins: { added: ["summary", "notion"] } },
+    }) } as unknown as AppContext["config"];
+    const caller = createCaller(recordingsRouter, ctx);
+
+    await expect(caller.sendSummary({ stem, channel: "notion" })).rejects.toThrow(/尚未配置|not configured/i);
     expect(spawnMock).not.toHaveBeenCalled();
   });
 });

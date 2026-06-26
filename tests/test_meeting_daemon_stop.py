@@ -39,3 +39,30 @@ def test_stop_uses_daemon_status_when_state_is_idle(monkeypatch, tmp_path):
     meeting_daemon._stop_and_process()
 
     assert any(len(args) > 2 and Path(args[1]).name == "record_audio.py" and args[2] == "stop" for args in calls)
+
+
+def test_start_recording_uses_capture_controller(monkeypatch):
+    import meeting_daemon
+    import record_audio
+
+    class FakeCaptureController:
+        def __init__(self):
+            self.calls = []
+
+        def status(self):
+            self.calls.append(("status", None))
+            return {"recording": False}
+
+        def start(self, payload):
+            self.calls.append(("start", payload))
+            return {"status": "recording", "file": "/tmp/meeting.wav"}
+
+    ctrl = FakeCaptureController()
+    monkeypatch.setattr(record_audio, "_capture_controller", lambda: ctrl)
+    monkeypatch.setattr(record_audio, "socket_send", lambda cmd: (_ for _ in ()).throw(AssertionError("socket_send bypassed seam")))
+
+    assert meeting_daemon._daemon_start_recording("Team Sync") == "/tmp/meeting.wav"
+    assert ctrl.calls == [
+        ("status", None),
+        ("start", {"title": "Team Sync"}),
+    ]

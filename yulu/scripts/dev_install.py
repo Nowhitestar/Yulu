@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import plistlib
 import shutil
 import socket
 import subprocess
@@ -38,11 +39,12 @@ LAUNCHAGENTS = [
     "com.yulu.agentqueue.plist",
     "com.yulu.calendar.plist",
     "com.yulu.sttdaemon.plist",
+    "com.yulu.ui.plist",
 ]
 
 
-def _run(cmd: list[str], *, timeout: int = 30, check: bool = False) -> subprocess.CompletedProcess[str]:
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+def _run(cmd: list[str], *, timeout: int = 30, check: bool = False, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, cwd=cwd)
     if check and result.returncode != 0:
         raise RuntimeError(f"command failed ({result.returncode}): {' '.join(cmd)}\n{result.stderr or result.stdout}")
     return result
@@ -83,26 +85,87 @@ def preferred_python() -> str:
     return shutil.which("python3") or "/usr/bin/python3"
 
 
-def _launch_path() -> str:
+def _existing_ui_node() -> str | None:
+    plist_path = LAUNCH_AGENTS_DIR / "com.yulu.ui.plist"
+    try:
+        data = plistlib.loads(plist_path.read_bytes())
+        argv = data.get("ProgramArguments") or []
+        node = argv[0] if argv else None
+        return str(node) if node and Path(str(node)).exists() else None
+    except Exception:
+        return None
+
+
+def _node_candidates() -> list[str]:
+    candidates: list[str] = []
+    existing = _existing_ui_node()
+    if existing:
+        candidates.append(existing)
+    found = shutil.which("node")
+    if found:
+        candidates.append(found)
+    nvm = Path.home() / ".nvm/versions/node"
+    if nvm.exists():
+        for candidate in sorted(nvm.glob("*/bin/node"), reverse=True):
+            if candidate.exists():
+                candidates.append(str(candidate))
+    for candidate in ("/opt/homebrew/bin/node", "/usr/local/bin/node"):
+        if Path(candidate).exists():
+            candidates.append(candidate)
+    out: list[str] = []
+    for candidate in candidates:
+        if candidate not in out:
+            out.append(candidate)
+    return out
+
+
+def _node_can_load_ui_native_modules(node_bin: str, ui_dir: Path | None) -> bool:
+    if ui_dir is None or not (ui_dir / "node_modules/better-sqlite3").exists():
+        return True
+    result = _run(
+        [node_bin, "-e", "const Database=require('better-sqlite3'); const db=new Database(':memory:'); db.close();"],
+        timeout=10,
+        check=False,
+        cwd=ui_dir,
+    )
+    return result.returncode == 0
+
+
+def preferred_node(script_dir: Path | None = None) -> str:
+    ui_dir = script_dir / "yulu_ui" if script_dir is not None else SOURCE_ROOT / "yulu/scripts/yulu_ui"
+    for candidate in _node_candidates():
+        if _node_can_load_ui_native_modules(candidate, ui_dir):
+            return candidate
+    candidates = _node_candidates()
+    return candidates[0] if candidates else "/usr/local/bin/node"
+
+
+def _launch_path(node_bin: str | None = None) -> str:
     parts = [
         str(Path.home() / ".local/bin"),
         "/opt/homebrew/bin",
         "/usr/local/bin",
         "/usr/bin",
         "/bin",
+        "/usr/sbin",
+        "/sbin",
     ]
-    nvm = Path.home() / ".nvm/versions/node"
-    if nvm.exists():
-        for candidate in sorted(nvm.glob("*/bin"), reverse=True):
-            parts.insert(1, str(candidate))
-            break
+    if node_bin:
+        parts.insert(1, str(Path(node_bin).parent))
+    else:
+        nvm = Path.home() / ".nvm/versions/node"
+        if nvm.exists():
+            for candidate in sorted(nvm.glob("*/bin"), reverse=True):
+                parts.insert(1, str(candidate))
+                break
     return ":".join(dict.fromkeys(parts))
 
 
-def render_plist(source: Path, *, script_dir: Path, python_bin: str, home: Path, launch_path: str) -> str:
+def render_plist(source: Path, *, script_dir: Path, python_bin: str, home: Path, launch_path: str, node_bin: str | None = None) -> str:
     text = Path(source).read_text(encoding="utf-8")
     replacements = {
         "__PYTHON__": python_bin,
+        "__NODE_BIN__": node_bin or preferred_node(script_dir),
         "__HOME__": str(home),
         "__SCRIPT_DIR__": str(script_dir),
         "__PATH__": launch_path,
@@ -208,14 +271,15 @@ def _kill_legacy_processes(legacy_root: Path) -> None:
 
 def _install_launchagents(script_dir: Path, *, python_bin: str) -> None:
     LAUNCH_AGENTS_DIR.mkdir(parents=True, exist_ok=True)
-    launch_path = _launch_path()
+    node_bin = preferred_node(script_dir)
+    launch_path = _launch_path(node_bin)
     for name in LAUNCHAGENTS:
         src = script_dir / name
         if not src.exists():
             continue
         dest = LAUNCH_AGENTS_DIR / name
         _unload(dest)
-        rendered = render_plist(src, script_dir=script_dir, python_bin=python_bin, home=Path.home(), launch_path=launch_path)
+        rendered = render_plist(src, script_dir=script_dir, python_bin=python_bin, node_bin=node_bin, home=Path.home(), launch_path=launch_path)
         dest.write_text(rendered, encoding="utf-8")
         _load(dest)
 

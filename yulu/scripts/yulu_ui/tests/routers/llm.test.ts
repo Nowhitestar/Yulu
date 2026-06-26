@@ -40,7 +40,7 @@ function makeCtx() {
   cpSync(join(HERE, "../fixtures/config.json"), path);
   return {
     config: new ConfigManager(path),
-    paths: { scriptDir: join(HERE, "../../../") },
+    paths: { scriptDir: join(HERE, "../../../"), agentQueueJson: join(dir, "agent-queue.json") },
   } as unknown as AppContext;
 }
 
@@ -51,7 +51,7 @@ describe("llmRouter.test", () => {
     const r = await caller.test();
     expect(r.ok).toBe(true);
     expect(r.stdout).toBe("Hi there\n");
-    expect(spawnMock.mock.calls[0]![0]).toBe("claude");
+    expect(String(spawnMock.mock.calls[0]![0])).toContain("claude");
     expect(spawnMock.mock.calls[0]![1]).toEqual(["--print"]);
     // Verify stdin write happened (read from mock instance)
     const procInstance = spawnMock.mock.results[0]!.value as { __stdinWrites: string[] };
@@ -78,7 +78,18 @@ describe("llmRouter.test", () => {
     expect(spawnMock).not.toHaveBeenCalled();
   });
 
-  it("resolves bundled codex_llm.py before spawning", async () => {
+  it("treats null llm.command as agent queue mode without spawning", async () => {
+    const ctx = makeCtx();
+    ctx.config.update("llm.command", null);
+    const caller = createCaller(llmRouter, ctx);
+    const r = await caller.test();
+    expect(r.ok).toBe(true);
+    expect(r.stdout).toContain("Agent queue mode");
+    expect(r.stdout).toContain("agent-queue.json");
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it("upgrades the legacy codex_llm.py shim before spawning", async () => {
     mockSpawn("Hi there\n");
     const ctx = makeCtx();
     ctx.config.update("llm.command", ["python3", "codex_llm.py"]);
@@ -87,7 +98,7 @@ describe("llmRouter.test", () => {
     const r = await caller.test();
 
     expect(r.ok).toBe(true);
-    expect(spawnMock.mock.calls[0]![0]).toBe("python3");
-    expect(spawnMock.mock.calls[0]![1]).toEqual([join(HERE, "../../../codex_llm.py")]);
+    expect(String(spawnMock.mock.calls[0]![0])).toContain("codex");
+    expect(spawnMock.mock.calls[0]![1]).toEqual(["exec", "--sandbox", "read-only", "--skip-git-repo-check"]);
   });
 });

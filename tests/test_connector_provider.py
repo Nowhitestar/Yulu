@@ -61,6 +61,17 @@ def test_gog_connector_reports_calendar_read_action(monkeypatch):
     assert gog.config_prefix == "calendars"
 
 
+def test_feishu_connector_is_not_marked_usable_until_calendar_fetch_exists(monkeypatch):
+    monkeypatch.setattr(connector_mod, "probe_agent_plugin", lambda *a, **k: _usable("/agent/plugins/feishu", "plugin found"))
+    monkeypatch.setattr(connector_mod, "probe_command", lambda *a, **k: connector_mod.report.absent("not on PATH"))
+
+    feishu = FeishuConnectorProvider().connectors()["feishu"]
+
+    assert feishu.provenance is Provenance.HOST_PATH
+    assert feishu.status is Status.PRESENT_BUT_UNVERIFIED
+    assert "not implemented yet" in feishu.detail
+
+
 def test_agent_plugin_presence_is_reported_as_agent_config(monkeypatch, tmp_path):
     plugin_root = tmp_path / "plugins"
     (plugin_root / "notion" / "0.1.0").mkdir(parents=True)

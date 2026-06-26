@@ -115,26 +115,32 @@ echo '{"action":"status"}' | nc -w 2 -U ~/.config/yulu/audio_daemon.sock
 
 ```json
 {
+  "id": "8f2d...",
   "type": "summary_request",
   "ts": "2026-05-08T14:32:11",
   "title": "Yulu product weekly",
+  "audio_path": "/.../meeting-recordings/Yulu_20260508_143000.wav",
   "transcript_path": "/.../meeting-recordings/Yulu_20260508_143000.transcript.txt",
   "summary_path": "/.../meeting-recordings/Yulu_20260508_143000.summary.md",
-  "template_path": "/.../yulu/scripts/summary_template.md"
+  "prompt_id": "summary",
+  "prompt_slug": "summary",
+  "prompt_name": "Meeting Summary",
+  "prompt_content_snapshot": "Write a concise meeting note...",
+  "html_path_hint": "/.../meeting-recordings/Yulu_20260508_143000.summary.html"
 }
 ```
 
 处理步骤：
 
 1. 读 `transcript_path`。这是 UTF-8 纯文本，通常带时间戳。
-2. 读 `template_path`。模板 frontmatter 和正文会说明摘要结构、语言、写法。
-3. 按模板生成会议纪要，覆盖写入 `summary_path`。Yulu 可能已经写了 fallback draft，可以覆盖。
+2. 使用 `prompt_content_snapshot` 作为本次摘要的提示词快照；不要重新读旧模板路径，也不要假设 prompt catalog 当前内容和入队时一致。
+3. 按提示词生成会议纪要，覆盖写入 `summary_path`。Yulu 可能已经写了 fallback draft，可以覆盖。
 4. 如已有 `.summary.md`，同时生成/刷新同 stem 的 `.summary.html`：
    ```bash
    python3 ~/.yulu/yulu/scripts/html_artifact.py /path/to/meeting.summary.md /path/to/meeting.transcript.txt
    ```
    HTML 是后续加工优先的 workbench，模板来自 `~/Documents/LBrain/Templates/html-artifacts/meeting-summary.html`：正文区域可编辑，内嵌 `#artifact-data` JSON，工具条可复制 Markdown/JSON/简版、保存当前 HTML、打印/PDF。
-5. 更新 queue：删除已处理 entry，或把该 entry 改为 `"type": "summary_done"`。优先删除，避免其他消费者重复处理。
+5. 更新 queue：保留 entry，把 `status` 改为 `"done"`，并写入 `processed_by` / `processed_at`；失败时写 `status: "error"` 和 `error`。不要删除 entry，也不要改成旧的完成事件类型，UI/worker 需要靠状态做可观测和重试。
 6. 用 Python 或 `jq` 处理 JSON，别用 shell 字符串拼接。
 
 Lewis 偏好：Yulu 摘要尽量交给本地 worker 及时处理；如果需要委托 LLM，优先考虑 Codex CLI，而不是 Claude CLI。

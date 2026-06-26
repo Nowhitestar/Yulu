@@ -154,6 +154,42 @@ def test_diarize_enabled_writes_labelled_transcript_and_sidecar(env, monkeypatch
     assert "[00:00" not in raw
 
 
+def test_diarize_uses_calendar_attendee_names_as_speaker_hints(env, monkeypatch):
+    fake_home, tmp_path = env
+    _config(fake_home, diarize_enabled=True)
+    monkeypatch.setattr(transcribe, "_request_final_transcribe_raw",
+                        lambda *a, **k: _mono_response(_ASR))
+    monkeypatch.setattr(dp, "diarize_via_daemon",
+                        lambda *a, **k: list(_TURNS))
+
+    state = tmp_path / ".state.json"
+    schedule = tmp_path / "schedule.json"
+    state.write_text(json.dumps({"meeting_id": "ev-team"}), encoding="utf-8")
+    schedule.write_text(json.dumps({"meetings": [{
+        "id": "ev-team",
+        "title": "Team",
+        "attendees": ["Lewis", "Ciel"],
+    }]}, ensure_ascii=False), encoding="utf-8")
+    monkeypatch.setattr(dp, "STATE_PATH", state, raising=False)
+    monkeypatch.setattr(dp, "SCHEDULE_PATH", schedule, raising=False)
+
+    audio = tmp_path / "Team_20260601_100000.wav"
+    _write_mono(audio)
+    transcribe.process_audio(str(audio))
+
+    transcript = audio.with_suffix(".transcript.txt").read_text(encoding="utf-8")
+    assert "[00:00 Lewis]" in transcript
+    assert "[00:02 Ciel]" in transcript
+
+    doc = json.loads(sm.speakers_sidecar_path(audio).read_text(encoding="utf-8"))
+    assert doc["speaker_hints"] == {
+        "source": "calendar_attendees",
+        "names": ["Lewis", "Ciel"],
+    }
+    assert doc["speakers"]["spk-0"]["name_source"] == "calendar_attendee"
+    assert doc["speakers"]["spk-0"]["name_confidence"] == "candidate"
+
+
 def test_per_run_speaker_count_override_forces_diarization(env, monkeypatch):
     fake_home, tmp_path = env
     _config(fake_home, diarize_enabled=False)

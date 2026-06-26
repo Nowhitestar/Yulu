@@ -75,7 +75,7 @@ function rowNames(): string[] {
   });
 }
 
-describe("Prompts page", () => {
+describe("Templates page", () => {
   it("renders 3 prompt rows with names + category chips + autorun star", () => {
     mount();
     const names = rowNames();
@@ -93,13 +93,13 @@ describe("Prompts page", () => {
     expect(rows[1]).not.toHaveTextContent("★");
   });
 
-  it("renders 3 filter chips (All/Summary/Cleanup) + New prompt button", () => {
+  it("renders 3 filter chips (All/Summary/Cleanup) + New template button", () => {
     mount();
     expect(screen.getByRole("button", { name: /^全部$/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /^摘要$/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /^清理$/i })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^voicemail$/i })).toBeNull();
-    expect(screen.getByRole("link", { name: /\+ 新建提示词/ })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /\+ 新建模板/ })).toBeInTheDocument();
   });
 
   it("clicking Summary filter shows only summary prompts", async () => {
@@ -114,7 +114,7 @@ describe("Prompts page", () => {
 
   it("index outlet renders empty state when no :id selected", () => {
     mount();
-    expect(screen.getByText(/选择一条提示词/)).toBeInTheDocument();
+    expect(screen.getByText(/选择一个模板/)).toBeInTheDocument();
   });
 });
 

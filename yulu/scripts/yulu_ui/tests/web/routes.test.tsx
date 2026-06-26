@@ -10,9 +10,19 @@ import { WsProvider } from "../../web/src/ws.js";
 vi.mock("../../web/src/trpc.js", () => {
   const noop = () => ({ data: undefined, isPending: false });
   const okMutation = () => ({ mutate: () => {}, isPending: false });
+  const utils = new Proxy({}, {
+    get() {
+      return new Proxy({}, {
+        get() {
+          return { invalidate: () => Promise.resolve(), fetch: () => Promise.resolve(undefined) };
+        },
+      });
+    },
+  });
   return {
     trpc: new Proxy({}, {
-      get() {
+      get(_target, prop) {
+        if (prop === "useUtils") return () => utils;
         return new Proxy({}, {
           get() {
             return { useQuery: noop, useMutation: okMutation };
@@ -37,8 +47,10 @@ import { Prompts }    from "../../web/src/routes/knowledge/prompts.js";
 import { Glossary }   from "../../web/src/routes/knowledge/glossary.js";
 import { SettingsLayout } from "../../web/src/routes/settings.js";
 import { Health }    from "../../web/src/routes/health.js";
+import { AgentConsole } from "../../web/src/routes/agent-console.js";
 
 const ROUTES: { name: string; Component: React.ComponentType }[] = [
+  { name: "agent-console",          Component: AgentConsole },
   { name: "inbox",                  Component: RecordingsList },
   { name: "inbox/:stem",            Component: RecordingReader },
   { name: "knowledge/prompts",      Component: Prompts },
@@ -64,7 +76,7 @@ describe("placeholder routes smoke", () => {
     ).not.toThrow();
   });
 
-  it("has exactly 6 routes", () => {
-    expect(ROUTES).toHaveLength(6);
+  it("has exactly 7 routes", () => {
+    expect(ROUTES).toHaveLength(7);
   });
 });

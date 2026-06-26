@@ -4,6 +4,9 @@ import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import type { JobRegistry } from "./jobStatus.js";
 import type { PubSub, AppChannels } from "./pubsub.js";
+import { appendAgentSessionMessage, getAgentSession, updateAgentSessionNativeSession } from "./agentSessionStore.js";
+import { runAgentCliCommand } from "./agentCliRunner.js";
+import type { AgentRuntime } from "./agentRuntime.js";
 
 type SpawnFn = (cmd: string, args: string[], opts?: { stdio?: unknown }) => ChildProcessWithoutNullStreams;
 
@@ -62,8 +65,10 @@ export interface RunSummarizeArgs {
   title?: string | null;
   prompt?: SummaryPromptSnapshot | null;
   llmCommand: string[] | null;
+  agentRuntime?: AgentRuntime;
   agentQueueJson: string;
   scriptDir?: string;
+  agentSession?: { configDir: string; sessionId: string };
   registry: JobRegistry;
   pubsub: PubSub<AppChannels>;
 }
@@ -76,12 +81,12 @@ export interface SummaryPromptSnapshot {
 }
 
 export async function runSummarize(args: RunSummarizeArgs): Promise<{ jobId: string; mode: "queue" | "direct" }> {
-  const { stem, transcriptPath, summaryPath, audioPath, title, prompt, llmCommand, agentQueueJson, scriptDir, registry, pubsub } = args;
+  const { stem, transcriptPath, summaryPath, audioPath, title, prompt, llmCommand, agentRuntime, agentQueueJson, scriptDir, agentSession, registry, pubsub } = args;
   const jobId = randomUUID();
   if (llmCommand === null) {
     return runSummarizeQueueMode({ stem, jobId, transcriptPath, summaryPath, audioPath, title, prompt, agentQueueJson, registry, pubsub });
   }
-  return runSummarizeDirectMode({ stem, jobId, transcriptPath, summaryPath, title, prompt, llmCommand, scriptDir, registry, pubsub });
+  return runSummarizeDirectMode({ stem, jobId, transcriptPath, summaryPath, title, prompt, llmCommand, agentRuntime, scriptDir, agentSession, registry, pubsub });
 }
 
 async function runSummarizeQueueMode(args: {
@@ -166,12 +171,87 @@ function watchForQueueCompletion(args: {
 
 async function runSummarizeDirectMode(args: {
   stem: string; jobId: string; transcriptPath: string; summaryPath: string;
-  title?: string | null; prompt?: SummaryPromptSnapshot | null;
-  llmCommand: string[]; scriptDir?: string; registry: JobRegistry; pubsub: PubSub<AppChannels>;
+  title?: string | null; prompt?: SummaryPromptSnapshot | null; llmCommand: string[]; agentRuntime?: AgentRuntime; scriptDir?: string;
+  agentSession?: { configDir: string; sessionId: string };
+  registry: JobRegistry; pubsub: PubSub<AppChannels>;
 }): Promise<{ jobId: string; mode: "direct" }> {
-  const { stem, jobId, transcriptPath, summaryPath, title, prompt, llmCommand, scriptDir, registry, pubsub } = args;
+  const { stem, jobId, transcriptPath, summaryPath, title, prompt, llmCommand, agentRuntime, scriptDir, agentSession, registry, pubsub } = args;
   registry.set({ stem, action: "summarize", state: "summarizing", startedAt: Date.now(), jobId });
   pubsub.publish("jobs", { stem, jobId, state: "summarizing" });
+
+  const complete = (state: "done" | "failed", error?: string) => {
+    if (state === "done") {
+      registry.clear(stem);
+    } else {
+      registry.set({ stem, action: "summarize", state: "failed", startedAt: Date.now(), jobId, error });
+    }
+    pubsub.publish("jobs", { stem, jobId, state, error });
+  };
+
+  let renderedPrompt: string;
+  try {
+    const transcript = readFileSync(transcriptPath, "utf8");
+    const taskTitle = title ?? stem;
+    renderedPrompt = buildSummaryPrompt(transcript, { title: taskTitle, prompt });
+    if (agentSession) {
+      appendAgentSessionMessage(agentSession.configDir, agentSession.sessionId, {
+        role: "user",
+        text: `根据模板生成会议摘要: ${taskTitle}`,
+      });
+    }
+  } catch (exc) {
+    const error = `failed to read transcript: ${(exc as Error).message}`;
+    complete("failed", error);
+    return { jobId, mode: "direct" };
+  }
+
+  if (agentRuntime && agentSession) {
+    void runAgentCliCommand({
+      runtime: agentRuntime,
+      scriptDir: scriptDir ?? process.cwd(),
+      prompt: renderedPrompt,
+      timeoutMs: QUEUE_TIMEOUT_MS * 3,
+      nativeSessionId: getAgentSession(agentSession.configDir, agentSession.sessionId)?.nativeSessionId,
+      yuluSessionId: agentSession.sessionId,
+      configDir: agentSession.configDir,
+    }).then((result) => {
+      if (result.nativeSessionId) {
+        updateAgentSessionNativeSession(agentSession.configDir, agentSession.sessionId, {
+          nativeSessionId: result.nativeSessionId,
+          runtimeLabel: agentRuntime.label,
+        });
+      }
+      if (result.code === 0 && result.stdout.length > 0) {
+        try {
+          writeFileSync(summaryPath, result.stdout);
+          appendAgentSessionMessage(agentSession.configDir, agentSession.sessionId, {
+            role: "assistant",
+            text: result.stdout,
+          });
+          complete("done");
+        } catch (exc) {
+          complete("failed", `failed to write summary: ${(exc as Error).message}`);
+        }
+      } else {
+        const error = (result.stderr || `summary command exited with code ${result.code}`).slice(0, 200);
+        appendAgentSessionMessage(agentSession.configDir, agentSession.sessionId, {
+          role: "assistant",
+          text: "",
+          error,
+        });
+        complete("failed", error);
+      }
+    }).catch((exc) => {
+      const error = (exc as Error).message;
+      appendAgentSessionMessage(agentSession.configDir, agentSession.sessionId, {
+        role: "assistant",
+        text: "",
+        error,
+      });
+      complete("failed", error);
+    });
+    return { jobId, mode: "direct" };
+  }
 
   return new Promise((resolve) => {
     const [cmd, ...rest] = resolveBundledScriptArgs(llmCommand, scriptDir);
@@ -184,31 +264,32 @@ async function runSummarizeDirectMode(args: {
       if (code === 0 && stdout.length > 0) {
         try {
           writeFileSync(summaryPath, stdout);
-          registry.clear(stem);
-          pubsub.publish("jobs", { stem, jobId, state: "done" });
+          if (agentSession) {
+            appendAgentSessionMessage(agentSession.configDir, agentSession.sessionId, {
+              role: "assistant",
+              text: stdout,
+            });
+          }
+          complete("done");
         } catch (exc) {
-          const error = `failed to write summary: ${(exc as Error).message}`;
-          registry.set({ stem, action: "summarize", state: "failed", startedAt: Date.now(), jobId, error });
-          pubsub.publish("jobs", { stem, jobId, state: "failed", error });
+          complete("failed", `failed to write summary: ${(exc as Error).message}`);
         }
       } else {
         const error = (stderr || `summary command exited with code ${code}`).slice(0, 200);
-        registry.set({ stem, action: "summarize", state: "failed", startedAt: Date.now(), jobId, error });
-        pubsub.publish("jobs", { stem, jobId, state: "failed", error });
+        if (agentSession) {
+          appendAgentSessionMessage(agentSession.configDir, agentSession.sessionId, {
+            role: "assistant",
+            text: "",
+            error,
+          });
+        }
+        complete("failed", error);
       }
       resolve({ jobId, mode: "direct" });
     });
 
-    try {
-      const transcript = readFileSync(transcriptPath, "utf8");
-      proc.stdin.write(buildSummaryPrompt(transcript, { title: title ?? stem, prompt }));
-      proc.stdin.end();
-    } catch (exc) {
-      proc.stdin.end();
-      const error = `failed to read transcript: ${(exc as Error).message}`;
-      registry.set({ stem, action: "summarize", state: "failed", startedAt: Date.now(), jobId, error });
-      pubsub.publish("jobs", { stem, jobId, state: "failed", error });
-    }
+    proc.stdin.write(renderedPrompt);
+    proc.stdin.end();
   });
 }
 

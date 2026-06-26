@@ -48,6 +48,7 @@
 }
 .sidebar-item {
   --sidebar-indent: 0px;
+  position: relative;
   display: flex;
   align-items: center;
   gap: 11px;
@@ -61,6 +62,12 @@
   transition: background 120ms, color 120ms, transform 120ms, border-color 120ms, box-shadow 120ms;
 }
 .sidebar-item svg { flex-shrink: 0; opacity: 0.86; }
+.sidebar-item-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .sidebar-item:hover {
   background: var(--row-hover);
   color: var(--fg);
@@ -128,6 +135,103 @@
 .sidebar-health-dot.health-crit { background: var(--red);    box-shadow: 0 0 5px color-mix(in oklch, var(--red) 60%, transparent); }
 .sidebar-health-dot.health-loading { background: var(--fg-3); }
 
+@media (min-width: 761px) and (max-width: 1499px) {
+  .root-shell.agent-console-shell .root-sidebar-pane {
+    position: relative;
+    z-index: 30;
+    overflow: visible;
+  }
+
+  .root-shell.agent-console-shell .sidebar {
+    position: absolute;
+    inset: 0 auto 0 0;
+    width: 72px;
+  }
+
+  .root-shell.agent-console-shell .root-sidebar-pane:hover .sidebar,
+  .root-shell.agent-console-shell .sidebar:hover {
+    width: 256px;
+  }
+
+  .root-shell.agent-console-shell .sidebar-brand {
+    justify-content: center;
+    padding: 18px 10px 14px;
+  }
+
+  .root-shell.agent-console-shell .sidebar-brand-text,
+  .root-shell.agent-console-shell .sidebar-heading,
+  .root-shell.agent-console-shell .sidebar-item-label {
+    display: none;
+  }
+
+  .root-shell.agent-console-shell .root-sidebar-pane:hover .sidebar-brand {
+    justify-content: flex-start;
+    padding: 24px;
+  }
+
+  .root-shell.agent-console-shell .root-sidebar-pane:hover .sidebar-brand-text,
+  .root-shell.agent-console-shell .root-sidebar-pane:hover .sidebar-heading,
+  .root-shell.agent-console-shell .root-sidebar-pane:hover .sidebar-item-label,
+  .root-shell.agent-console-shell .sidebar:hover .sidebar-brand-text,
+  .root-shell.agent-console-shell .sidebar:hover .sidebar-heading,
+  .root-shell.agent-console-shell .sidebar:hover .sidebar-item-label {
+    display: inline;
+  }
+
+  .root-shell.agent-console-shell .sidebar-section {
+    padding: 8px 8px 0;
+  }
+
+  .root-shell.agent-console-shell .sidebar-section + .sidebar-section {
+    padding-top: 18px;
+  }
+
+  .root-shell.agent-console-shell .sidebar-item {
+    --sidebar-indent: 0px !important;
+    justify-content: center;
+    min-height: 42px;
+    padding: 9px;
+    border-radius: 14px;
+  }
+
+  .root-shell.agent-console-shell .root-sidebar-pane:hover .sidebar-section,
+  .root-shell.agent-console-shell .sidebar:hover .sidebar-section {
+    padding: 8px 12px 0;
+  }
+
+  .root-shell.agent-console-shell .root-sidebar-pane:hover .sidebar-item,
+  .root-shell.agent-console-shell .sidebar:hover .sidebar-item {
+    justify-content: flex-start;
+    gap: 11px;
+    padding: 8px 12px;
+  }
+
+  .root-shell.agent-console-shell .sidebar-health-dot {
+    position: absolute;
+    left: 50%;
+    right: auto;
+    top: auto;
+    bottom: 5px;
+    transform: translateX(-50%);
+    margin-left: 0;
+    width: 6px;
+    height: 6px;
+  }
+
+  .root-shell.agent-console-shell .sidebar-bottom {
+    display: none;
+  }
+
+  .root-shell.agent-console-shell .root-sidebar-pane:hover .sidebar-health-dot,
+  .root-shell.agent-console-shell .sidebar:hover .sidebar-health-dot {
+    position: static;
+    transform: none;
+    margin-left: auto;
+    width: 7px;
+    height: 7px;
+  }
+}
+
 @media (max-width: 760px) {
     .sidebar {
     height: 100%;
@@ -154,17 +258,21 @@
     padding: 0;
   }
 
+  .sidebar-section + .sidebar-section {
+    padding-top: 0;
+  }
+
   .sidebar-item,
   .sidebar-bottom-item {
     --sidebar-indent: 0px;
     position: relative;
     flex: 0 0 auto;
-    min-width: 58px;
+    min-width: 52px;
     height: 42px;
     flex-direction: column;
     justify-content: center;
     gap: 2px;
-    padding: 5px 8px;
+    padding: 5px 6px;
     border-radius: 14px;
     font-size: 10.5px;
     white-space: nowrap;

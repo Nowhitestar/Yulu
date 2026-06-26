@@ -3,7 +3,7 @@ import { z } from "zod";
 import { defFor, reloadFor } from "./settingsRegistry.js";
 
 const CalendarSchema = z.object({
-  type: z.enum(["feishu", "google"]),
+  type: z.enum(["macos", "system", "feishu", "google"]),
   enabled: z.boolean().optional(),
   credentials_path: z.string().optional(),
   app_id_env: z.string().optional(),
@@ -75,6 +75,21 @@ const ThemeSchema = z.object({
   }).passthrough().default({}),
 }).passthrough().default({});
 
+const AgentConsoleSchema = z.object({
+  plugins: z.object({
+    added: z.array(z.enum(["summary", "notion", "zulip", "calendar"])).default(["summary"]),
+  }).passthrough().default({}),
+  destinations: z.record(z.object({
+    notion: z.object({
+      target: z.string().default("Yulu Meeting"),
+    }).passthrough().default({}),
+    zulip: z.object({
+      stream: z.string().default(""),
+      topic: z.string().default(""),
+    }).passthrough().default({}),
+  }).passthrough()).default({}),
+}).passthrough().default({});
+
 const DEFAULT_MLX_MODEL = "mlx-community/whisper-large-v3-mlx";
 const DEFAULT_REALTIME_MLX_MODEL = "mlx-community/whisper-large-v3-turbo";
 
@@ -119,7 +134,10 @@ export const ConfigSchema = z.object({
   }).passthrough(),
   llm: z.object({
     enabled: z.boolean().optional(),
-    command: z.array(z.string()).optional(),
+    command: z.array(z.string()).nullable().optional(),
+    agent: z.object({
+      provider: z.enum(["auto", "codex", "claude", "claude-code", "hermes", "openclaw", "gemini", "grok", "custom"]).default("auto"),
+    }).passthrough().default({}),
   }).default({}),
   status_agent: z.object({
     enabled: z.boolean().default(true),
@@ -127,6 +145,7 @@ export const ConfigSchema = z.object({
   calendars: z.array(CalendarSchema).default([]),
   connectors: ConnectorsSchema,
   output: OutputSchema,
+  agent_console: AgentConsoleSchema,
   ui: z.object({
     theme: ThemeSchema,
   }).passthrough().default({}),

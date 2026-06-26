@@ -1,12 +1,14 @@
-import { Outlet } from "react-router";
+import { Outlet, useLocation } from "react-router";
 import { Sidebar } from "../components/Sidebar.js";
 import { TopBar } from "../components/TopBar.js";
 import { LiveTranscript } from "../components/LiveTranscript.js";
 import { Onboarding } from "../components/Onboarding.js";
 
 export function RootLayout() {
+  const location = useLocation();
+  const isAgentConsole = location.pathname.startsWith("/agent-console");
   return (
-    <div className="root-shell">
+    <div className={`root-shell${isAgentConsole ? " agent-console-shell" : ""}`}>
       <div className="root-sidebar-pane">
         <Sidebar />
       </div>

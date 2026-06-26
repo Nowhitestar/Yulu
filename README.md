@@ -1,7 +1,7 @@
 <div align="center">
   <img src="assets/logo.svg" width="120" alt="Yulu logo" />
   <h1>Yulu</h1>
-  <p><b>Listen quietly. Capture everything.</b></p>
+  <p><b>Local meetings. Agent-native notes.</b></p>
   <a href="https://github.com/Nowhitestar/Yulu/stargazers"><img src="https://img.shields.io/github/stars/Nowhitestar/Yulu?style=flat-square" alt="Stars"></a>
   <a href="https://github.com/Nowhitestar/Yulu/releases"><img src="https://img.shields.io/github/v/tag/Nowhitestar/Yulu?label=version&style=flat-square" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg?style=flat-square" alt="License"></a>
@@ -13,41 +13,36 @@
 
 Yulu (语录, *yǔ lù*) is the Chinese word for "recorded sayings" — the genre that gave us *The Analects of Confucius* 2,500 years ago. It is the oldest answer to a problem we still have today: someone said something important in a room, and nobody wrote it down well enough to remember it.
 
-Yulu is a native macOS meeting recorder that listens to your meetings, transcribes them locally with MLX Whisper or `whisper.cpp`, and hands the transcript to any coding agent (Claude Code, Codex, OpenClaw…) to produce a clean meeting note. No virtual audio device. No cloud transcription. No account. The audio never leaves your laptop unless you tell it to.
+Yulu is a local-first, agent-first meeting recorder for macOS. It captures meetings natively, transcribes them locally with MLX Whisper or `whisper.cpp`, then lets the agent you already use (Codex CLI, Claude Code, Hermes, OpenClaw…) handle the AI work: asking across meetings, summarizing with templates, and sending notes to Notion or Zulip through that agent's own connectors.
+
+No virtual audio device. No cloud transcription. No account. Audio and transcripts stay on your laptop unless you explicitly send a note somewhere.
 
 Compared to Otter / Granola / Fireflies:
 
 - **System audio is captured natively** through `ScreenCaptureKit`, not through BlackHole or a multi-output device.
 - **Transcription is fully local** — MLX Whisper on Apple Silicon, or `whisper-cli` (whisper.cpp) with your own model file. Chinese works as well as English.
-- **The summary step is bring-your-own-agent.** Yulu writes a `summary_request` into a JSON queue; whichever agent you trust reads the transcript and the template, and writes back a polished `summary.md`. Nothing is hard-coded to one vendor.
+- **Agent Console is the main workspace.** Start recording, watch the last three days of meeting tasks, ask across local meeting history, and switch the underlying agent from one place.
+- **The AI layer is bring-your-own-agent.** Yulu writes work into a local queue or starts an agent session; the selected agent reads transcripts, templates, terminology, memory, and connector context, then writes back the result. Nothing is hard-coded to one vendor.
+- **Connector capability follows the agent.** Notion, Zulip, and calendar context are shown as agent capabilities. Yulu stores the local filter and destination choices, while configuration still belongs to the selected agent.
 - **Half-duplex mixing** keeps remote speakers crisp: system audio leads while others speak, microphone takes over during system silence.
-- **Local web UI at `http://127.0.0.1:7777/`** — meetings, search, settings, prompts, glossary, daemon health. See [docs/yulu_ui.md](docs/yulu_ui.md).
+- **Local web UI at `http://127.0.0.1:7777/agent-console`** — Agent Console, recordings, templates, glossary, settings, and daemon health. See [docs/yulu_ui.md](docs/yulu_ui.md).
 
 ## See it
+
+<p align="center">
+  <img src="assets/demos/agent-console-desktop.png" alt="Yulu Agent Console on desktop" />
+</p>
 
 <table>
 <tr>
   <td align="center" width="50%">
-    <img src="assets/demos/demo-status-window.png" alt="Floating recording status window" />
-    <br><b>Recording status</b>
-    <br><sub>A small floating window with a manual stop button</sub>
+    <img src="assets/demos/agent-console-mobile.png" alt="Yulu Agent Console on a narrow screen" />
+    <br><b>Agent Console adapts to smaller screens</b>
+    <br><sub>Recording, Ask Meeting, sessions, and capability panels collapse without changing the model.</sub>
   </td>
   <td align="center" width="50%">
-    <img src="assets/demos/demo-summary.png" alt="Generated meeting summary" />
-    <br><b>Final summary</b>
-    <br><sub>TL;DR · Discussion Points · Action Items · Decisions</sub>
-  </td>
-</tr>
-<tr>
-  <td align="center" width="50%">
-    <img src="assets/demos/demo-prompt.png" alt="Prompt before recording" />
-    <br><b>Prompt before recording</b>
-    <br><sub>Yulu always asks before it starts listening</sub>
-  </td>
-  <td align="center" width="50%">
-    <img src="assets/demos/demo-transcript.png" alt="Local transcription with whisper" />
-    <br><b>Local transcription</b>
-    <br><sub>MLX Whisper or whisper-cli runs offline; Chinese / English / mixed</sub>
+    <b>What lives in the console</b>
+    <br><sub>Recent meeting tasks keep their state for three days. Ask Meeting creates persistent agent sessions. The capability panel shows the selected agent, summary templates, Notion, Zulip, calendar context, and local daemon health.</sub>
   </td>
 </tr>
 </table>
@@ -84,7 +79,7 @@ The installer:
 6. Builds and signs `Yulu.app`; walks you through Microphone + Screen & System Audio Recording permissions.
 7. Lets you choose the transcription profile: MLX `large-v3`, MLX `large-v3-turbo`, or a `whisper.cpp` GGML model.
 8. Lets you choose the stop-time pipeline: realtime transcript → polish → summary, or full final transcription → summary.
-9. Lets you choose how summaries are finalized: agent queue, Claude CLI, Codex CLI, custom command, or local fallback only.
+9. Lets you choose the default agent provider for AI work: Codex CLI, Claude Code, Hermes, OpenClaw, a custom command, or local fallback only.
 10. (Optional) configures Google Calendar via `gog`.
 11. Installs LaunchAgents for background services.
 12. Installs the `yulu` CLI to `~/.local/bin/yulu`.
@@ -172,6 +167,14 @@ The skill is a thin contract — it tells the agent what verbs Yulu exposes (sta
 ## How it works
 
 ```text
+Agent Console
+          ↓
+ selected agent provider + capability filter
+          ↓
+ Codex CLI / Claude Code / Hermes / OpenClaw sessions
+          ↓
+ Ask Meeting history · Summary jobs · Notion/Zulip sends
+
 Google Calendar / Window Detector
           ↓
  schedule.json  ──►  scheduler_daemon.py
@@ -186,7 +189,7 @@ WAV  ──►  realtime_transcribe.py / transcribe.py  ──►  MLX Whisper o
           ↓
  transcript.txt  +  summary_request  ──►  agent-queue.json
           ↓
- Any agent (Claude Code / Codex / OpenClaw…)  ──►  summary.md
+ selected agent session  ──►  summary.md / connector send
 ```
 
 Six numbers worth knowing:
@@ -236,7 +239,22 @@ Path: `~/.config/yulu/config.json`
     "language": "zh"
   },
   "llm": {
-    "enabled": true
+    "enabled": true,
+    "command": null,
+    "agent": {
+      "provider": "auto"
+    }
+  },
+  "agent_console": {
+    "plugins": {
+      "added": ["summary", "notion", "zulip", "calendar"]
+    },
+    "destinations": {
+      "codex": {
+        "notion": { "target": "Yulu Meeting" },
+        "zulip": { "stream": "product", "topic": "meeting-notes" }
+      }
+    }
   }
 }
 ```
@@ -244,7 +262,10 @@ Path: `~/.config/yulu/config.json`
 - `audio.backend = "daemon"` is the default. `mic_device` / `system_audio_device` only apply to the legacy SoX fallback.
 - `transcription.post_recording_mode = "fast_summary"` uses the realtime transcript generated during the meeting, then polishes and summarizes it. Use `yulu transcription mode full` when you want a slower full-audio final transcription before summarization.
 - `transcription.final_engine = "mlx"` is best on Apple Silicon. Use `mlx-community/whisper-large-v3-mlx` for highest quality, `mlx-community/whisper-large-v3-turbo` for speed. Use `final_engine = "whisper"` with `local_model_path` for the simpler non-MLX route.
-- Leave `llm.command` empty to delegate summarization to your agent through `agent-queue.json`. To call an external LLM directly, set `llm.command` to any CLI that accepts a prompt on stdin and writes Markdown to stdout (e.g. `["claude", "--print", "--model", "claude-opus-4-7"]`). Set `llm.enabled=false` only when the local fallback summary should be final.
+- `llm.agent.provider = "auto"` chooses the first available agent CLI in this order: Codex, Claude Code, Hermes, OpenClaw. Set it explicitly when you want Yulu to follow one provider.
+- Leave `llm.command` empty for the native provider path. To call a custom agent/LLM wrapper directly, set `llm.command` to any CLI that accepts a prompt on stdin and writes Markdown to stdout.
+- `agent_console.plugins.added` is a Yulu-side filter. A plugin appears in the console only after it is added there; its configured/unconfigured state still comes from the selected agent.
+- `agent_console.destinations` stores per-agent send targets such as the Notion page/database label and Zulip stream/topic. The connector credentials remain in the agent/plugin, not in Yulu.
 
 Full config reference: [`docs/configuration.md`](docs/configuration.md).
 Manual commands and troubleshooting: [`docs/operations.md`](docs/operations.md).
@@ -255,9 +276,10 @@ A few decisions are load-bearing and worth understanding before contributing:
 
 - **No virtual audio device.** ScreenCaptureKit was added in macOS 13 specifically so apps could capture system audio without driver hacks. Yulu refuses to fall back to BlackHole even when it would be easier — the install friction is the whole point.
 - **Recording always asks first.** Detection is best-effort, but consent is not. Every recording goes through `notify.py` with a real prompt.
-- **The LLM is a plug-in, not a dependency.** `transcribe.py` runs all the way to a usable Markdown summary even if no agent ever shows up — `fallback_summary()` uses regex bucketing on the transcript so you never see "TODO: agent will fill this in".
+- **The agent is the intelligence layer.** Yulu owns local capture, transcription, storage, and task state. The selected agent owns LLM reasoning and connector access. Yulu should not make you configure Notion, Zulip, or calendar twice.
 - **State lives in JSON files, not RAM.** `agent-queue.json`, `schedule.json`, recordings on disk. Queue writes are locked and atomic; a power outage mid-meeting loses the audio after the last flush, nothing else.
 - **One-binary security boundary.** Only `Yulu.app` holds the TCC permissions. The Python side talks to it through a Unix socket and cannot bypass macOS privacy on its own.
+- **Cross-platform work is a boundary project.** macOS remains the shipped capture arm, while service, path, permission, dependency, agent-provider, and connector seams keep platform and cloud choices explicit. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
 ## Background
 

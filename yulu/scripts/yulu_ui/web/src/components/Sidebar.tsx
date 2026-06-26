@@ -1,6 +1,6 @@
 // web/src/components/Sidebar.tsx
 import { NavLink } from "react-router";
-import { Settings as SettingsIcon, HeartPulse, Mic, FileText, BookOpen } from "lucide-react";
+import { Settings as SettingsIcon, HeartPulse, Mic, FileText, BookOpen, Bot } from "lucide-react";
 import type { ReactNode } from "react";
 import type { CSSProperties } from "react";
 import { Logo } from "./Logo.js";
@@ -12,14 +12,10 @@ interface NavItem { to: string; labelKey: string; icon: ReactNode; showHealth?: 
 
 const TOP_SECTIONS: { headingKey: string; items: NavItem[] }[] = [
   {
-    headingKey: "nav.section.inbox",
+    headingKey: "nav.section.workspace",
     items: [
+      { to: "/agent-console", labelKey: "nav.agentConsole", icon: <Bot size={15} strokeWidth={1.8} />, depth: 1 },
       { to: "/inbox", labelKey: "nav.recordings", icon: <Mic size={15} strokeWidth={1.8} />, depth: 1 },
-    ],
-  },
-  {
-    headingKey: "nav.section.knowledge",
-    items: [
       { to: "/knowledge/prompts",  labelKey: "nav.prompts",  icon: <FileText size={15} strokeWidth={1.8} />, depth: 1 },
       { to: "/knowledge/glossary", labelKey: "nav.glossary", icon: <BookOpen size={15} strokeWidth={1.8} />, depth: 1 },
     ],

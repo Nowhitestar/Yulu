@@ -16,7 +16,11 @@ export const recordingRouter = router({
 
   toggle: publicProcedure.mutation(async ({ ctx }) => {
     const r = await ipcSend<ToggleReply>(ctx.paths.statusAgentSock, { action: "toggle" });
-    return { stateBefore: r.state_before ?? "?", stateAfter: r.state_after ?? "?" };
+    const stateAfter = r.state_after ?? "?";
+    if (stateAfter === "idle" || stateAfter === "recording" || stateAfter === "processing" || stateAfter === "meetingBusy" || stateAfter === "daemonDown") {
+      ctx.pubsub.publish("recording", { state: stateAfter });
+    }
+    return { stateBefore: r.state_before ?? "?", stateAfter };
   }),
 
   openInbox: publicProcedure.mutation(async ({ ctx }) => {

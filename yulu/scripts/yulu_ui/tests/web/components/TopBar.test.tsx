@@ -1,7 +1,7 @@
 // tests/web/components/TopBar.test.tsx
 import type { ReactNode } from "react";
 import { describe, it, expect, vi } from "vitest";
-import { render } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import { MemoryRouter, useMatches } from "react-router";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { TopBar } from "../../../web/src/components/TopBar.js";
@@ -77,5 +77,11 @@ describe("TopBar", () => {
     setMatches([{ breadcrumb: "Inbox" }]);
     const { container } = render(<Wrap><TopBar /></Wrap>);
     expect(container.querySelector('[role="group"][aria-label="主题"]')).not.toBeNull();
+  });
+
+  it("links the settings icon to Settings", () => {
+    setMatches([{ breadcrumb: "Inbox" }]);
+    render(<Wrap><TopBar /></Wrap>);
+    expect(screen.getByLabelText("设置")).toHaveAttribute("href", "/settings");
   });
 });

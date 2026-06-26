@@ -24,6 +24,7 @@ export interface SettingDef {
   reload: ReloadAction;
   danger?: boolean;
   advanced?: boolean;
+  hidden?: boolean;
 }
 
 const R = {
@@ -76,13 +77,14 @@ export const SETTINGS: SettingDef[] = [
   { path: "transcription.diarization.seg_model", category: "transcription", label: "Diarization segmentation model", type: "text", validate: z.string(), reload: R.restart("sttdaemon"), danger: true, advanced: true },
   { path: "transcription.diarization.emb_model", category: "transcription", label: "Diarization embedding model", type: "text", validate: z.string(), reload: R.restart("sttdaemon"), danger: true, advanced: true },
   { path: "transcription.glossary",      category: "transcription", label: "术语表",   type: "text",   validate: z.array(z.string()),        reload: R.sighup("sttdaemon") },  // 术语表走 VocabCache SIGHUP(正确)
-  { path: "llm.enabled",                 category: "llm", label: "启用 LLM",       type: "toggle",  validate: z.boolean(),                 reload: R.none },   // B3 修正:旧为 sighup
-  { path: "llm.command",                 category: "llm", label: "LLM 后端",       type: "preset",  validate: z.array(z.string()).nullable(), reload: R.none }, // B3 修正:旧为 sighup
-  { path: "calendars",                   category: "integrations", label: "日历",   type: "text",    validate: z.array(z.unknown()),        reload: R.restart("calendar", "scheduler") },
-  { path: "connectors.gog.read_calendar", category: "integrations", label: "Read Google calendars", type: "toggle", validate: z.boolean(), reload: R.restart("calendar", "scheduler") },
-  { path: "connectors.feishu.read_calendar", category: "integrations", label: "Read Feishu calendars", type: "toggle", validate: z.boolean(), reload: R.restart("calendar", "scheduler") },
-  { path: "connectors.notion.send_summary", category: "integrations", label: "Send summaries to Notion", type: "toggle", validate: z.boolean(), reload: R.none },
-  { path: "connectors.zulip.send_summary", category: "integrations", label: "Send summaries to Zulip", type: "toggle", validate: z.boolean(), reload: R.none },
+  { path: "llm.enabled",                 category: "llm", label: "启用 LLM",       type: "toggle",  validate: z.boolean(),                 reload: R.none, hidden: true },
+  { path: "llm.command",                 category: "llm", label: "LLM 后端",       type: "preset",  validate: z.array(z.string()).nullable(), reload: R.none, hidden: true },
+  { path: "llm.agent.provider",          category: "llm", label: "Agent provider", type: "select",  validate: z.enum(["auto", "codex", "claude", "claude-code", "hermes", "openclaw"]), reload: R.none, hidden: true },
+  { path: "calendars",                   category: "integrations", label: "日历",   type: "text",    validate: z.array(z.unknown()),        reload: R.restart("calendar", "scheduler"), hidden: true },
+  { path: "connectors.gog.read_calendar", category: "integrations", label: "Read Google calendars", type: "toggle", validate: z.boolean(), reload: R.restart("calendar", "scheduler"), hidden: true },
+  { path: "connectors.feishu.read_calendar", category: "integrations", label: "Read Feishu calendars", type: "toggle", validate: z.boolean(), reload: R.restart("calendar", "scheduler"), hidden: true },
+  { path: "connectors.notion.send_summary", category: "integrations", label: "Send summaries to Notion", type: "toggle", validate: z.boolean(), reload: R.none, hidden: true },
+  { path: "connectors.zulip.send_summary", category: "integrations", label: "Send summaries to Zulip", type: "toggle", validate: z.boolean(), reload: R.none, hidden: true },
   // meeting_detection: the detector daemon reads config at startup, so changes restart it.
   { path: "meeting_detection.enabled",             category: "automation", label: "Meeting detection",  type: "toggle",  validate: z.boolean(),       reload: R.restart("detector") },
   { path: "meeting_detection.interval_sec",        category: "automation", label: "Poll interval (s)",  type: "number",  validate: z.number().min(1), reload: R.restart("detector") },
@@ -98,15 +100,15 @@ export const SETTINGS: SettingDef[] = [
   { path: "meeting_detection.ignore_window_keywords", category: "automation", label: "Ignore window keywords",    type: "command", validate: z.array(z.string()), reload: R.restart("detector"), advanced: true },
   // output channels: agent_queue_worker re-reads config each 30s tick, so no reload.
   // api_key_env holds the NAME of an env var (never the secret) — type "env-name".
-  { path: "output.channel",            category: "integrations", label: "Output channel",        type: "select",   validate: z.enum(["file", "zulip", "notion"]), reload: R.none },
-  { path: "output.notion.destination_id", category: "integrations", label: "Notion destination", type: "text", validate: z.string(), reload: R.none },
-  { path: "output.notion.destination_type", category: "integrations", label: "Notion destination type", type: "text", validate: z.string(), reload: R.none },
-  { path: "output.notion.destination_label", category: "integrations", label: "Notion destination label", type: "text", validate: z.string(), reload: R.none },
-  { path: "output.zulip.stream_id",     category: "integrations", label: "Zulip stream ID",       type: "text",     validate: z.string(),               reload: R.none },
-  { path: "output.zulip.stream",       category: "integrations", label: "Zulip stream",          type: "text",     validate: z.string(),               reload: R.none },
-  { path: "output.zulip.topic",        category: "integrations", label: "Zulip topic",           type: "text",     validate: z.string(),               reload: R.none },
-  { path: "output.notion.database_id", category: "integrations", label: "Notion database",       type: "text",     validate: z.string(),               reload: R.none },
-  { path: "output.notion.api_key_env", category: "integrations", label: "Notion API key env var", type: "env-name", validate: z.string(),               reload: R.none },
+  { path: "output.channel",            category: "integrations", label: "Output channel",        type: "select",   validate: z.enum(["file", "zulip", "notion"]), reload: R.none, hidden: true },
+  { path: "output.notion.destination_id", category: "integrations", label: "Notion destination", type: "text", validate: z.string(), reload: R.none, hidden: true },
+  { path: "output.notion.destination_type", category: "integrations", label: "Notion destination type", type: "text", validate: z.string(), reload: R.none, hidden: true },
+  { path: "output.notion.destination_label", category: "integrations", label: "Notion destination label", type: "text", validate: z.string(), reload: R.none, hidden: true },
+  { path: "output.zulip.stream_id",     category: "integrations", label: "Zulip stream ID",       type: "text",     validate: z.string(),               reload: R.none, hidden: true },
+  { path: "output.zulip.stream",       category: "integrations", label: "Zulip stream",          type: "text",     validate: z.string(),               reload: R.none, hidden: true },
+  { path: "output.zulip.topic",        category: "integrations", label: "Zulip topic",           type: "text",     validate: z.string(),               reload: R.none, hidden: true },
+  { path: "output.notion.database_id", category: "integrations", label: "Notion database",       type: "text",     validate: z.string(),               reload: R.none, hidden: true },
+  { path: "output.notion.api_key_env", category: "integrations", label: "Notion API key env var", type: "env-name", validate: z.string(),               reload: R.none, hidden: true },
   { path: "status_agent.enabled",        category: "general", label: "菜单栏 Agent", type: "toggle", validate: z.boolean(),               reload: R.none },
 ];
 // 注意:status_agent.hotkey 不在表内 —— 随热键移除而删(B3)。

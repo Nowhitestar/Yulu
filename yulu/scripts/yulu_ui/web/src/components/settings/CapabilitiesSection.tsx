@@ -97,6 +97,22 @@ function CapabilityRemediationLine({ name, cap }: { name: string; cap: Capabilit
   );
 }
 
+function isConsoleManagedCapability(name: string): boolean {
+  return (
+    name === "llm_command" ||
+    name === "agent_mlx_whisper" ||
+    name === "claude" ||
+    name === "codex" ||
+    name === "hermes" ||
+    name === "openclaw" ||
+    name === "claude_cli" ||
+    name === "codex_cli" ||
+    name === "hermes_cli" ||
+    name === "openclaw_cli" ||
+    (name.endsWith("_mlx_whisper") && name !== "mlx_whisper")
+  );
+}
+
 export function CapabilityBadge({ status, detail }: { status: string; detail?: string }) {
   const t = useT();
   return (
@@ -149,7 +165,8 @@ export function CapabilitiesSection() {
   const [provisioning, setProvisioning] = useState<string | null>(null);
   const [verifyErrors, setVerifyErrors] = useState<Record<string, string>>({});
 
-  const caps = Object.entries((data?.capabilities ?? {}) as Record<string, Capability>);
+  const caps = Object.entries((data?.capabilities ?? {}) as Record<string, Capability>)
+    .filter(([name]) => !isConsoleManagedCapability(name));
   const failed = isError || Boolean(data?.error);
 
   const verifyCapability = async (name: string) => {

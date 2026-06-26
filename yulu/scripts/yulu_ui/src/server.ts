@@ -20,6 +20,8 @@ import { homedir } from "node:os";
 import type { AppContext } from "./trpc.js";
 import { JobRegistry } from "./jobStatus.js";
 import { exchangeCodeForTokens } from "./notionMcpOAuth.js";
+import { resolveAgentRuntime } from "./agentRuntime.js";
+import { ensureBackgroundAgentSession } from "./agentSessionStore.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -57,6 +59,22 @@ export async function startServer(pathOverrides: Partial<RuntimePaths> = {}): Pr
     jobs:      jobRegistry,
     db:        dbProxy,
   };
+
+  try {
+    const config = ctx.config.read();
+    const runtime = resolveAgentRuntime(config, {
+      scriptDir: runtimePaths.scriptDir,
+      moviesDir: runtimePaths.moviesDir,
+    });
+    if (runtime.provider !== "none") {
+      ensureBackgroundAgentSession(runtimePaths.configDir, {
+        agent: runtime.provider,
+        runtimeLabel: runtime.label,
+      });
+    }
+  } catch (exc) {
+    console.warn(`[yulu_ui] background Agent session not initialized: ${(exc as Error).message}`);
+  }
 
   const app = new Hono();
 

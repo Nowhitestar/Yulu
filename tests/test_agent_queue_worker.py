@@ -169,7 +169,7 @@ def test_no_llm_command_leaves_request_pending(tmp_path):
     assert "status" not in queue[0]
 
 
-def test_load_llm_command_resolves_bundled_codex_shim(tmp_path):
+def test_load_llm_command_upgrades_legacy_codex_shim(tmp_path):
     cfg = tmp_path / "config.json"
     cfg.write_text(
         json.dumps({"llm": {"command": ["python3", "codex_llm.py"]}}),
@@ -178,4 +178,34 @@ def test_load_llm_command_resolves_bundled_codex_shim(tmp_path):
 
     cmd = _load_llm_command(cfg)
 
-    assert cmd == ["python3", str(SCRIPTS / "codex_llm.py")]
+    assert cmd == ["codex", "exec", "--sandbox", "read-only", "--skip-git-repo-check"]
+
+
+def test_load_llm_command_uses_selected_codex_agent_when_command_is_null(monkeypatch, tmp_path):
+    cfg = tmp_path / "config.json"
+    cfg.write_text(
+        json.dumps({"llm": {"enabled": True, "command": None, "agent": {"provider": "codex"}}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("agent_queue_worker.shutil.which", lambda name: f"/usr/local/bin/{name}" if name == "codex" else None)
+
+    cmd = _load_llm_command(cfg)
+
+    assert cmd == ["codex", "exec", "--sandbox", "read-only", "--skip-git-repo-check"]
+
+
+def test_load_llm_command_uses_selected_claude_agent_with_recording_dir(monkeypatch, tmp_path):
+    cfg = tmp_path / "config.json"
+    movies_dir = tmp_path / "meetings"
+    cfg.write_text(
+        json.dumps({
+            "audio": {"output_dir": str(movies_dir)},
+            "llm": {"enabled": True, "command": None, "agent": {"provider": "claude"}},
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("agent_queue_worker.shutil.which", lambda name: f"/usr/local/bin/{name}" if name == "claude" else None)
+
+    cmd = _load_llm_command(cfg)
+
+    assert cmd == ["claude", "--print", "--add-dir", str(movies_dir)]

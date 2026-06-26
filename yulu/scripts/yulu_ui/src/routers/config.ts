@@ -13,7 +13,7 @@ export const configRouter = router({
   // stripped of the server-only Zod validators. The SPA renders categories and
   // field rows from this — it never re-declares the schema.
   schema: publicProcedure.query((): SettingMeta[] =>
-    SETTINGS.map(({ validate: _validate, ...meta }) => meta)),
+    SETTINGS.filter((setting) => !setting.hidden).map(({ validate: _validate, ...meta }) => meta)),
 
   // Secret-safe presence check for an env-var NAME (e.g. NOTION_API_KEY). The SPA
   // shows "set" / "not set" beside an env-name field so the user can confirm

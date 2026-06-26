@@ -385,11 +385,11 @@ def _start_recording(title, meeting_id=""):
 
 
 def _daemon_start_recording(title, lock_handle=None):
-    """Send a start RPC to the audio_daemon directly and return the recorded
+    """Start capture through the platform controller and return the recorded
     file path on success, or ``None`` on failure.
 
     Imported lazily from ``record_audio`` so that the audio_daemon socket
-    helpers stay co-located with the rest of the daemon-talking code while
+    adapter stays co-located with the rest of the daemon-talking code while
     keeping ``meeting_daemon`` free to call them inside the recording-lock
     critical section without the child-process flock contention that a
     ``subprocess.run(record_audio.py start)`` would introduce.
@@ -400,10 +400,10 @@ def _daemon_start_recording(title, lock_handle=None):
     docstring for why). Lets the caller's existing ``except RecordingBusy``
     surface the live recording's metadata.
     """
-    from record_audio import _raise_if_daemon_recording, socket_send
+    from record_audio import _capture_controller, _raise_if_daemon_recording
 
     _raise_if_daemon_recording(lock_handle)
-    resp = socket_send({"action": "start", "title": title})
+    resp = _capture_controller().start({"title": title})
     if not resp or resp.get("status") != "recording":
         print(f"⚠️ daemon failed to start: {resp}", file=sys.stderr)
         return None
@@ -466,8 +466,8 @@ def _active_recording_info():
     if rec:
         return rec
     try:
-        from record_audio import socket_send
-        resp = socket_send({"action": "status"})
+        from record_audio import _capture_controller
+        resp = _capture_controller().status()
     except Exception:
         resp = None
     if not (resp and resp.get("recording") is True):

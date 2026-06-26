@@ -507,17 +507,13 @@ def main():
 
     log("⚡ Yulu Calendar Services 启动")
     log(f"    webhook port: {WEBHOOK_PORT}")
-    if GOG_ACCOUNT:
+    google_push_enabled = bool(GOG_ACCOUNT and CALENDARS_TO_WATCH)
+    if google_push_enabled:
         log(f"    gog account: {GOG_ACCOUNT}")
         log(f"    watch calendars: {[c['label'] for c in CALENDARS_TO_WATCH]}")
     else:
-        log("⚠️ 未配置 gog_account，日历推送功能不可用")
-        log("   请在 config.json 中设置 calendar.google.gog_account")
-
-    # 后台线程运行 webhook 服务器
-    webhook_thread = threading.Thread(target=run_webhook_server, daemon=True)
-    webhook_thread.start()
-    time.sleep(0.5)  # 确保 webhook 就绪
+        log("📅 未启用 Google push，使用 Native Scheduler polling 模式")
+        log("   check_meetings.py 会读取 macOS/system/google 等已启用 provider")
 
     # 兜底轮询线程：每 5 分钟同步一次，防推送丢失/watch 过期/新建会议延迟
     def poll_loop():
@@ -525,12 +521,23 @@ def main():
             time.sleep(POLL_INTERVAL_SEC)
             log("⏰ 兜底轮询：同步日历...")
             sync_calendar_to_schedule()
-    polling_thread = threading.Thread(target=poll_loop, daemon=True)
-    polling_thread.start()
 
-    # 主线程运行 tunnel + watch 注册
     try:
-        run_tunnel_and_register()
+        sync_calendar_to_schedule()
+        polling_thread = threading.Thread(target=poll_loop, daemon=True)
+        polling_thread.start()
+
+        if google_push_enabled:
+            # 后台线程运行 webhook 服务器
+            webhook_thread = threading.Thread(target=run_webhook_server, daemon=True)
+            webhook_thread.start()
+            time.sleep(0.5)  # 确保 webhook 就绪
+
+            # 主线程运行 tunnel + watch 注册
+            run_tunnel_and_register()
+        else:
+            while True:
+                time.sleep(3600)
     finally:
         try:
             PID_PATH.unlink(missing_ok=True)

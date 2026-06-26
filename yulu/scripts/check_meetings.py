@@ -32,15 +32,21 @@ def fetch_meetings(start, end, config=None):
     """获取指定时间范围内的会议。"""
     if config is None:
         config = load_config()
-    
+
+    calendars = config.get("calendars", [])
+    if not calendars and sys.platform == "darwin":
+        calendars = [{"type": "macos", "enabled": True}]
+
     all_meetings = []
-    for cal in config.get("calendars", []):
+    for cal in calendars:
         if not cal.get("enabled", False):
             continue
         if cal["type"] == "feishu":
             all_meetings.extend(_fetch_feishu(cal, start, end))
         elif cal["type"] == "google":
             all_meetings.extend(_fetch_google(cal, start, end))
+        elif cal["type"] in ("macos", "system"):
+            all_meetings.extend(_fetch_macos_calendar(cal, start, end))
     
     all_meetings.sort(key=lambda m: m["start"])
     return all_meetings
@@ -133,6 +139,106 @@ def _fetch_google(config, start, end):
             "attendees": attendees,
             "description": ev.get("description", ""),
             "source": "google",
+        })
+
+    return meetings
+
+
+MACOS_CALENDAR_JXA = r"""
+function env(name) {
+  const value = $.NSProcessInfo.processInfo.environment.objectForKey(name);
+  return value ? String(value) : "";
+}
+
+const start = new Date(Number(env("YULU_CALENDAR_START_MS")));
+const end = new Date(Number(env("YULU_CALENDAR_END_MS")));
+const wantedRaw = env("YULU_CALENDAR_NAMES_JSON") || "[]";
+let wanted = [];
+try { wanted = JSON.parse(wantedRaw); } catch (_) { wanted = []; }
+const wantedSet = new Set(wanted.map(String).filter(Boolean));
+
+const Calendar = Application("Calendar");
+const out = [];
+for (const cal of Calendar.calendars()) {
+  const calName = String(cal.name());
+  if (wantedSet.size > 0 && !wantedSet.has(calName)) continue;
+  for (const ev of cal.events()) {
+    const startDate = ev.startDate();
+    const endDate = ev.endDate();
+    if (!startDate || !endDate) continue;
+    if (endDate < start || startDate > end) continue;
+    let link = "";
+    let notes = "";
+    try { link = String(ev.url() || ""); } catch (_) {}
+    try { notes = String(ev.description() || ""); } catch (_) {}
+    out.push({
+      id: String(ev.uid ? ev.uid() : `${calName}:${ev.summary()}:${startDate.toISOString()}`),
+      title: String(ev.summary() || "(无标题)"),
+      start: startDate.toISOString(),
+      end: endDate.toISOString(),
+      link,
+      attendees: [],
+      description: notes,
+      calendar: calName,
+      source: "macos",
+    });
+  }
+}
+JSON.stringify(out);
+"""
+
+
+def _fetch_macos_calendar(config, start, end):
+    """
+    通过 macOS 系统 Calendar 读取会议列表。
+
+    这条路径复用用户已经接入系统日历的 Google/Exchange/iCloud 账号，不要求
+    Yulu 另做 Google OAuth。系统会由 macOS 统一弹出 Calendar 权限。
+    """
+    if sys.platform != "darwin":
+        return []
+
+    watch = config.get("watch_calendars") or config.get("calendar_names") or []
+    if not isinstance(watch, list):
+        watch = []
+
+    env = {
+        **os.environ,
+        "YULU_CALENDAR_START_MS": str(int(start.timestamp() * 1000)),
+        "YULU_CALENDAR_END_MS": str(int(end.timestamp() * 1000)),
+        "YULU_CALENDAR_NAMES_JSON": json.dumps(watch, ensure_ascii=False),
+    }
+    try:
+        r = subprocess.run(
+            ["osascript", "-l", "JavaScript", "-e", MACOS_CALENDAR_JXA],
+            capture_output=True, text=True, timeout=30, env=env,
+        )
+        if r.returncode != 0:
+            print(f"⚠️ macOS Calendar error: {r.stderr.strip()}", file=sys.stderr)
+            return []
+        data = json.loads(r.stdout)
+    except Exception as e:
+        print(f"⚠️ macOS Calendar 获取失败: {e}", file=sys.stderr)
+        return []
+
+    meetings = []
+    for ev in data if isinstance(data, list) else []:
+        if not isinstance(ev, dict):
+            continue
+        start_raw = ev.get("start")
+        end_raw = ev.get("end")
+        if not start_raw or not end_raw:
+            continue
+        meetings.append({
+            "id": str(ev.get("id", "")),
+            "title": str(ev.get("title") or "(无标题)"),
+            "start": str(start_raw),
+            "end": str(end_raw),
+            "link": str(ev.get("link", "")),
+            "attendees": [str(a) for a in ev.get("attendees", []) if a],
+            "description": str(ev.get("description", "")),
+            "calendar": str(ev.get("calendar", "")),
+            "source": "macos",
         })
 
     return meetings

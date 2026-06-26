@@ -93,6 +93,41 @@ def test_assign_three_speakers_default_names_are_one_based():
     assert set(result.speakers) == {"spk-0", "spk-1", "spk-2"}
 
 
+def test_assign_uses_calendar_speaker_hints_as_editable_default_names():
+    asr = [
+        {"start": 0.0, "end": 1.0, "text": "a"},
+        {"start": 2.0, "end": 3.0, "text": "b"},
+    ]
+    turns = [
+        {"start": 0.0, "end": 1.5, "speaker": 0},
+        {"start": 1.5, "end": 3.5, "speaker": 1},
+    ]
+    result = assign_speakers(asr_segments=asr, turns=turns, speaker_hints=["Lewis", "Ciel"])
+
+    assert [s.display_name for s in result.segments] == ["Lewis", "Ciel"]
+    assert result.speakers["spk-0"]["renamed"] is False
+    assert result.speakers["spk-0"]["name_source"] == "calendar_attendee"
+    assert result.speakers["spk-0"]["name_confidence"] == "candidate"
+
+
+def test_calendar_speaker_hints_do_not_override_user_renames():
+    asr = [{"start": 0.0, "end": 1.0, "text": "a"}]
+    turns = [{"start": 0.0, "end": 1.5, "speaker": 0}]
+    prior = {"spk-0": {"display_name": "Yuxing", "renamed": True, "merged_into": None}}
+
+    result = assign_speakers(
+        asr_segments=asr,
+        turns=turns,
+        prior_map={0: "spk-0"},
+        prior_speakers=prior,
+        speaker_hints=["Lewis"],
+    )
+
+    assert result.segments[0].display_name == "Yuxing"
+    assert result.speakers["spk-0"]["display_name"] == "Yuxing"
+    assert result.speakers["spk-0"]["renamed"] is True
+
+
 def test_assign_accepts_speaker_idx_and_spk_aliases():
     asr = [{"start": 0.0, "end": 1.0, "text": "x"}, {"start": 2.0, "end": 3.0, "text": "y"}]
     turns = [
@@ -343,6 +378,19 @@ def test_sidecar_build_has_schema_turns_segments_speakers():
     assert len(doc["turns"]) == 2
     assert len(doc["segments"]) == 2
     assert set(doc["speakers"]) == {"spk-0", "spk-1"}
+
+
+def test_sidecar_build_records_calendar_speaker_hints():
+    asr = [{"start": 0.0, "end": 1.0, "text": "hi"}]
+    turns = [{"start": 0.0, "end": 1.5, "speaker": 0}]
+    result = assign_speakers(asr_segments=asr, turns=turns, speaker_hints=["Lewis"])
+
+    doc = build_sidecar(result=result, turns=turns, speaker_hints=["Lewis"])
+
+    assert doc["speaker_hints"] == {
+        "source": "calendar_attendees",
+        "names": ["Lewis"],
+    }
 
 
 def test_sidecar_roundtrip_reproduces_labels(tmp_path):

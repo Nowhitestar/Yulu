@@ -73,7 +73,7 @@ class STTDaemonApp:
         # Set when stop() completes; __main__'s _run awaits this to know
         # when to exit cleanly without needing a parent-task cancellation
         # ping from the signal handler.
-        self.stopped_event = asyncio.Event()
+        self.stopped_event: Optional[asyncio.Event] = None
         # v0.6 diarization (Phase 13): the config-selected diarize backend, attached by
         # __main__._run (None when disabled / unknown provider). Defaulted here so a daemon
         # constructed without it — e.g. tests, or diarize_enabled=False — never AttributeErrors
@@ -81,6 +81,7 @@ class STTDaemonApp:
         self.diarize_backend = None
 
     async def start(self) -> None:
+        self.stopped_event = asyncio.Event()
         self.vocab_cache.load()
         await self.scheduler.start()
         self._register_handlers()
@@ -93,6 +94,8 @@ class STTDaemonApp:
                           recovered_sessions=recovered)
 
     async def stop(self) -> None:
+        if self.stopped_event is None:
+            self.stopped_event = asyncio.Event()
         if self.stopped_event.is_set():
             return  # idempotent — signal handler + outer cleanup both reach here
         await self.control_server.stop()

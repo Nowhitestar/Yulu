@@ -1,16 +1,17 @@
 {
   "calendars": [
     {
-      "type": "feishu",
-      "enabled": false,
-      "app_id_env": "FEISHU_APP_ID",
-      "app_secret_env": "FEISHU_APP_SECRET"
+      "type": "macos",
+      "enabled": true,
+      "watch_calendars": [],
+      "note": "Default native scheduler provider. Reuses calendars already connected to macOS Calendar, including Google, without asking Yulu for separate Google OAuth."
     },
     {
       "type": "google",
       "enabled": false,
       "gog_account": "your.email@example.com",
-      "watch_calendars": ["primary"]
+      "watch_calendars": ["primary"],
+      "note": "Legacy native scheduler provider. Yulu owns scheduling; AI calendar context should come from the selected Agent's MCP connectors when available."
     }
   ],
   "connectors": {
@@ -26,11 +27,11 @@
     },
     "notion": {
       "send_summary": false,
-      "note": "When true, the meeting detail page can manually send summaries to the Notion destination selected in Settings > AI integrations."
+      "note": "Legacy compatibility flag. Agent Console prefers the selected Agent's Notion connector plus agent_console.destinations."
     },
     "zulip": {
       "send_summary": false,
-      "note": "When true, the meeting detail page can manually send summaries to the Zulip channel selected in Settings > AI integrations."
+      "note": "Legacy compatibility flag. Agent Console prefers the selected Agent's Zulip connector plus agent_console.destinations."
     }
   },
   "ui": {
@@ -88,7 +89,28 @@
   },
   "llm": {
     "enabled": true,
-    "command": null
+    "command": null,
+    "agent": {
+      "provider": "auto",
+      "note": "Agent Console auto-detects Codex, Claude Code, Hermes, or OpenClaw when command is null. Set command to any Agent CLI wrapper for Gemini, Grok, or custom runtimes."
+    }
+  },
+  "agent_console": {
+    "plugins": {
+      "added": ["summary"],
+      "note": "Yulu-side filter for capabilities shown in Agent Console. Summary is always available; add notion/zulip/calendar from the console when you want them visible."
+    },
+    "destinations": {
+      "codex": {
+        "notion": {
+          "target": "Yulu Meeting"
+        },
+        "zulip": {
+          "stream": "",
+          "topic": ""
+        }
+      }
+    }
   },
   "output": {
     "channel": "file",
@@ -96,7 +118,7 @@
       "stream_id": "",
       "stream": "",
       "topic": "会议纪要",
-      "note": "Selected in AI integrations. zuliprc can be provided for compatibility, but the UI prefers reusing the connected Zulip plugin/account."
+      "note": "Legacy output fallback. Agent Console uses per-agent destinations and the selected Agent's Zulip plugin/account."
     },
     "notion": {
       "destination_id": "",
@@ -104,7 +126,7 @@
       "destination_label": "",
       "api_key_env": "NOTION_API_KEY",
       "database_id": "",
-      "note": "Selected in AI integrations. database_id/api_key_env are compatibility fallbacks and are not shown in the main UI."
+      "note": "Legacy output fallback. Agent Console uses per-agent destinations and the selected Agent's Notion plugin/account."
     }
   },
   "meeting_detection": {

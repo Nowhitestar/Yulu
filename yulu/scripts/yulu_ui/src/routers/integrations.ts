@@ -229,7 +229,7 @@ export const integrationsRouter = router({
   // removed in P4a-4). The provider is accepted for forward-compat but the test
   // path is provider-agnostic (it runs Yulu's own check_meetings.py).
   test: publicProcedure
-    .input(z.object({ provider: z.enum(["google"]) }))
+    .input(z.object({ provider: z.enum(["google", "macos"]) }))
     .mutation(async ({ ctx }) => {
       const { stdout, stderr, code } = await runSpawn(
         "python3",

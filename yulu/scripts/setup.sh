@@ -190,6 +190,11 @@ create_config() {
 {
   "calendars": [
     {
+      "type": "macos",
+      "enabled": true,
+      "watch_calendars": []
+    },
+    {
       "type": "google",
       "enabled": false,
       "gog_account": "",
@@ -225,7 +230,10 @@ create_config() {
   },
   "llm": {
     "enabled": true,
-    "command": null
+    "command": null,
+    "agent": {
+      "provider": "auto"
+    }
   },
   "output": {
     "channel": "file"
@@ -266,7 +274,7 @@ configure_summary_mode() {
     echo "  请选择 Yulu 转录完成后如何生成最终会议纪要："
     echo "    1) Agent 队列（推荐）：写入 agent-queue.json，由你信任的 Coding Agent 处理"
     echo "    2) Claude CLI：直接调用 claude --print"
-    echo "    3) Codex CLI：通过 Yulu 的 codex_llm.py shim 调用 codex exec"
+    echo "    3) Codex CLI：直接调用 codex exec（read-only sandbox）"
     echo "    4) 自定义命令：任何读取 stdin、输出 Markdown 的命令"
     echo "    5) 只保留本地规则草稿：不排队、不调用 LLM"
     echo
@@ -286,7 +294,7 @@ configure_summary_mode() {
         3)
             mode="codex"
             if ! command -v codex >/dev/null 2>&1; then
-                warn "当前 PATH 未找到 codex；codex_llm.py 会继续尝试从 PATH / nvm 路径查找。"
+                warn "当前 PATH 未找到 codex；安装后请确保 launchd PATH 能找到它。"
             fi
             ;;
         4)
@@ -329,7 +337,7 @@ elif mode == "claude":
     llm["command"] = ["claude", "--print"]
 elif mode == "codex":
     llm["enabled"] = True
-    llm["command"] = [os.environ["PYTHON_BIN"], str(Path(os.environ["SCRIPT_DIR"]) / "codex_llm.py")]
+    llm["command"] = ["codex", "exec", "--sandbox", "read-only", "--skip-git-repo-check"]
 elif mode == "custom":
     llm["enabled"] = True
     llm["command"] = shlex.split(os.environ.get("CUSTOM_LLM_CMD", ""))
@@ -343,7 +351,7 @@ PY
     case "$mode" in
         queue) ok "摘要方式：Agent 队列（llm.command=null）" ;;
         claude) ok "摘要方式：Claude CLI" ;;
-        codex) ok "摘要方式：Codex CLI shim" ;;
+        codex) ok "摘要方式：Codex CLI" ;;
         custom) ok "摘要方式：自定义命令" ;;
         fallback) ok "摘要方式：只保留本地规则草稿" ;;
     esac
@@ -617,9 +625,9 @@ confirm_calendar_plist() {
     # On upgrade, setup_daemons.sh inherits the prior decision; no prompt needed.
     [[ "$UPGRADE_MODE" == true ]] && return 0
 
-    prompt "安装日历推送服务（需要 Google 日历）？[y/N]"
+    prompt "安装日历同步服务（Native Scheduler，用于提醒/自动录制）？[Y/n]"
     read -r ans
-    if [[ "$ans" =~ ^[yY] ]]; then
+    if [[ ! "$ans" =~ ^[nN] ]]; then
         YULU_INSTALL_CALENDAR=1
         export YULU_INSTALL_CALENDAR
     fi

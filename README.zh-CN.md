@@ -1,7 +1,7 @@
 <div align="center">
   <img src="assets/logo.svg" width="120" alt="Yulu logo" />
   <h1>Yulu</h1>
-  <p><b>会议在说，它在听。</b></p>
+  <p><b>本地会议，Agent 原生纪要。</b></p>
   <a href="https://github.com/Nowhitestar/Yulu/stargazers"><img src="https://img.shields.io/github/stars/Nowhitestar/Yulu?style=flat-square" alt="Stars"></a>
   <a href="https://github.com/Nowhitestar/Yulu/releases"><img src="https://img.shields.io/github/v/tag/Nowhitestar/Yulu?label=version&style=flat-square" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg?style=flat-square" alt="License"></a>
@@ -13,40 +13,36 @@
 
 Yulu（语录，*yǔ lù*）出自《论语》《传习录》《朱子语类》——中文里"把发言原原本本记下来"的最古老体裁。两千五百年前孔子的弟子做的事，今天我们还在重复：开了一个重要的会，事后才发现没有人写下来。
 
-Yulu 是一个 macOS 原生的会议录制和会议纪要工具。它本地录音，用 MLX Whisper 或 `whisper.cpp` 本地转录，再把转录交给你信任的 coding agent（Claude Code、Codex、OpenClaw…）整理成一份干净的会议纪要。**不需要虚拟声卡，不需要云端转录，不需要注册账号**——音频从录到摘都不离开你这台电脑，除非你自己愿意。
+Yulu 是一个本地优先、Agent 优先的 macOS 会议记录工具。它原生录制会议，用 MLX Whisper 或 `whisper.cpp` 本地转录，再让你已经在用的 Agent（Codex CLI、Claude Code、Hermes、OpenClaw…）接管 AI 工作：问本地会议、按模板总结、处理术语和记忆、通过 Agent 自己的 connector 发送到 Notion 或 Zulip。
+
+**不需要虚拟声卡，不需要云端转录，不需要注册账号**。音频和转录默认只留在这台电脑上，除非你主动发送纪要。
 
 跟 Otter / Granola / Fireflies 比：
 
 - **系统音频原生录制**：用 macOS 13+ 的 `ScreenCaptureKit`，**不需要 BlackHole 或多输出设备**。
 - **转录完全本地**：Apple Silicon 可用 MLX Whisper，也可用 `whisper-cli`（whisper.cpp）和自己的模型文件，中文质量不输英文。
-- **纪要环节是 BYOA**（Bring Your Own Agent）：Yulu 把 `summary_request` 写到 JSON 队列，你信任的 agent 读完转录和模板后写回 `summary.md`。**没有任何一家厂商被硬编码进流程**。
+- **Agent Console 是默认工作台**：开始录制、最近三天任务状态、问会议、底层 Agent 切换、当前能力都在一个界面里完成。
+- **AI 层是 BYOA**（Bring Your Own Agent）：Yulu 写入本地队列或启动 agent session；选中的 Agent 读取转录、模板、术语、记忆和 connector 上下文，再写回结果。**没有任何一家厂商被硬编码进流程**。
+- **连接能力跟着 Agent 走**：Notion、Zulip、日历上下文显示为当前 Agent 的能力。Yulu 只保存本地过滤和目标选择，真实配置仍属于 Agent。
 - **半双工混音**：对方说话时优先录系统音频，系统静音时切到麦克风，远端发言始终清晰。
+- **本地 Web UI 在 `http://127.0.0.1:7777/agent-console`**：Agent Console、录音、模板、术语表、设置、健康状态都在这里。参见 [docs/yulu_ui.md](docs/yulu_ui.md)。
 
 ## 看一眼
+
+<p align="center">
+  <img src="assets/demos/agent-console-desktop.png" alt="Yulu Agent Console 桌面版" />
+</p>
 
 <table>
 <tr>
   <td align="center" width="50%">
-    <img src="assets/demos/demo-status-window.png" alt="录制状态浮窗" />
-    <br><b>录制状态</b>
-    <br><sub>右侧浮窗，带手动停止按钮</sub>
+    <img src="assets/demos/agent-console-mobile.png" alt="Yulu Agent Console 窄屏布局" />
+    <br><b>Agent Console 适配窄屏</b>
+    <br><sub>录制、问会议、session 历史、能力面板会在窄屏下自然折叠。</sub>
   </td>
   <td align="center" width="50%">
-    <img src="assets/demos/demo-summary.png" alt="生成的会议纪要" />
-    <br><b>最终纪要</b>
-    <br><sub>TL;DR · 议题讨论 · Action Items · 决策</sub>
-  </td>
-</tr>
-<tr>
-  <td align="center" width="50%">
-    <img src="assets/demos/demo-prompt.png" alt="录制前确认" />
-    <br><b>录制前必问</b>
-    <br><sub>Yulu 永远先问你"开始录吗"</sub>
-  </td>
-  <td align="center" width="50%">
-    <img src="assets/demos/demo-transcript.png" alt="本地转录" />
-    <br><b>本地转录</b>
-    <br><sub>MLX Whisper 或 whisper-cli 离线运行；中英混排都能出</sub>
+    <b>Console 里有什么</b>
+    <br><sub>最近三天任务保留完整状态；问会议会创建可恢复的 Agent session；当前能力展示底层 Agent、总结模板、Notion、Zulip、日历上下文和本地 daemon 健康状态。</sub>
   </td>
 </tr>
 </table>
@@ -83,7 +79,7 @@ curl -fsSL https://raw.githubusercontent.com/Nowhitestar/Yulu/main/install.sh | 
 6. 编译并签名 `Yulu.app`，引导授权"麦克风"和"屏幕与系统音频录制"。
 7. 让你选择转录方案：MLX `large-v3`、MLX `large-v3-turbo`，或 `whisper.cpp` GGML 模型。
 8. 让你选择停止后的处理模式：实时转录 → polish → summary，或完整重转录 → summary。
-9. 引导选择纪要生成方式：agent 队列、Claude CLI、Codex CLI、自定义命令，或只保留本地规则草稿。
+9. 引导选择默认 Agent provider：Codex CLI、Claude Code、Hermes、OpenClaw、自定义命令，或只保留本地规则草稿。
 10. （可选）通过 `gog` 配置 Google Calendar。
 11. 安装 4 个 LaunchAgent 后台服务。
 12. 把 `yulu` CLI 装到 `~/.local/bin/yulu`。
@@ -171,6 +167,14 @@ skill 只是一份契约——告诉 agent Yulu 暴露了哪些动词（开始/�
 ## 工作原理
 
 ```text
+Agent Console
+          ↓
+ 当前 Agent provider + 能力过滤
+          ↓
+ Codex CLI / Claude Code / Hermes / OpenClaw sessions
+          ↓
+ 问会议历史 · 摘要任务 · Notion/Zulip 发送
+
 Google 日历 / 窗口检测器
           ↓
  schedule.json  ──►  scheduler_daemon.py
@@ -185,7 +189,7 @@ WAV  ──►  realtime_transcribe.py / transcribe.py  ──►  MLX Whisper �
           ↓
  transcript.txt  +  summary_request  ──►  agent-queue.json
           ↓
- 任意 agent (Claude Code / Codex / OpenClaw…)  ──►  summary.md
+ 当前 Agent session  ──►  summary.md / connector 发送
 ```
 
 几个值得记住的数字：
@@ -235,7 +239,22 @@ WAV  ──►  realtime_transcribe.py / transcribe.py  ──►  MLX Whisper �
     "language": "zh"
   },
   "llm": {
-    "enabled": true
+    "enabled": true,
+    "command": null,
+    "agent": {
+      "provider": "auto"
+    }
+  },
+  "agent_console": {
+    "plugins": {
+      "added": ["summary", "notion", "zulip", "calendar"]
+    },
+    "destinations": {
+      "codex": {
+        "notion": { "target": "Yulu Meeting" },
+        "zulip": { "stream": "product", "topic": "meeting-notes" }
+      }
+    }
   }
 }
 ```
@@ -243,7 +262,10 @@ WAV  ──►  realtime_transcribe.py / transcribe.py  ──►  MLX Whisper �
 - `audio.backend = "daemon"` 是默认值。`mic_device` / `system_audio_device` 只用于旧版 SoX fallback 路径。
 - `transcription.post_recording_mode = "fast_summary"` 会使用会议中生成的实时转录，停止后只做 polish 和 summary。需要更稳质量时运行 `yulu transcription mode full`，停止后会对整段音频重新完整转录。
 - `transcription.final_engine = "mlx"` 适合 Apple Silicon。`mlx-community/whisper-large-v3-mlx` 质量最好，`mlx-community/whisper-large-v3-turbo` 更快。非 MLX 路线用 `final_engine = "whisper"` 和 `local_model_path`。
-- `llm.command` 留空就把摘要环节交给 `agent-queue.json`。要直接调外部 LLM，把 `llm.command` 设成任意接受 stdin prompt、输出 Markdown 的 CLI（例如 `["claude", "--print", "--model", "claude-opus-4-7"]`）。只有当你希望本地规则摘要就是最终版时，才设置 `llm.enabled=false`。
+- `llm.agent.provider = "auto"` 会按 Codex、Claude Code、Hermes、OpenClaw 的顺序选择可用 CLI。想固定底层 Agent 时可以显式设置。
+- `llm.command` 留空走原生 provider 路径；要接自定义 Agent/LLM wrapper 时，把它设成任意接受 stdin prompt、输出 Markdown 的 CLI。
+- `agent_console.plugins.added` 是 Yulu 侧过滤层。只有在 Console 里添加过的能力才显示；是否已配置仍由当前 Agent 的插件状态决定。
+- `agent_console.destinations` 保存每个 Agent 的发送目标，比如 Notion 页面/数据库名称、Zulip stream/topic。connector 的凭据仍留在 Agent/plugin 里，不进 Yulu 配置。
 
 完整配置参考：[`docs/configuration.md`](docs/configuration.md)。
 手动命令和排障：[`docs/operations.md`](docs/operations.md)。
@@ -254,7 +276,7 @@ WAV  ──►  realtime_transcribe.py / transcribe.py  ──►  MLX Whisper �
 
 - **不依赖虚拟声卡**。`ScreenCaptureKit` 是 macOS 13 专门为"系统音频不需要驱动 hack"加的 API；Yulu 拒绝回退到 BlackHole——装一次的麻烦才是这个项目存在的理由。
 - **录音永远先问**。检测可以错，知情同意不能错。每一次录制都走 `notify.py` 真的弹一次窗。
-- **LLM 是插件不是依赖**。`transcribe.py` 即使没有任何 agent 也能跑出一份可读的 Markdown 摘要——`fallback_summary()` 用正则把转录分桶成"决策 / 待办 / 阻塞 / 议题"，不会留 "TODO: agent will fill this in" 这种占位。
+- **Agent 是智能层**。Yulu 负责本地捕获、转录、存储和任务状态；选中的 Agent 负责 LLM 推理和 connector 访问。Yulu 不应该让你把 Notion、Zulip、日历再配置一遍。
 - **状态写在文件里，不在内存里**。`agent-queue.json`、`schedule.json`、本地录音都是磁盘对象；队列写入带锁并原子替换。会议中突然断电，最多丢上次 flush 之后的几秒音频，其它都还在。
 - **TCC 权限只挂在一个 binary 上**。整个系统里只有 `Yulu.app` 持有麦克风和屏幕录制权限；Python 代码只能通过 Unix socket 跟它说话，绕不开 macOS 的隐私墙。
 

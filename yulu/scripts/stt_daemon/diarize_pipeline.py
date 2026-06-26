@@ -54,27 +54,49 @@ def _normalized_title(value: str) -> str:
     return "".join(ch.lower() for ch in str(value or "") if ch.isalnum())
 
 
-def resolve_attendee_count(
+def _attendee_names(meeting) -> list[str]:
+    if not isinstance(meeting, dict):
+        return []
+    attendees = meeting.get("attendees")
+    if not isinstance(attendees, list):
+        return []
+
+    out: list[str] = []
+    seen: set[str] = set()
+    for attendee in attendees:
+        if isinstance(attendee, dict):
+            raw = (
+                attendee.get("displayName")
+                or attendee.get("display_name")
+                or attendee.get("name")
+                or attendee.get("email")
+                or ""
+            )
+        else:
+            raw = attendee
+        name = str(raw).strip()
+        if name and name not in seen:
+            seen.add(name)
+            out.append(name)
+    return out
+
+
+def _resolve_attendee_meeting(
     audio_path: Path,
     *,
     meeting_title: str = "",
     state_path: Optional[Path] = None,
     schedule_path: Optional[Path] = None,
-) -> Optional[int]:
-    """Resolve the calendar-attendee speaker-count prior for a recording (Phase-12 free prior).
+) -> Optional[dict]:
+    """Resolve the linked schedule meeting that has usable attendee names.
 
-    The attendee count was already captured into ``schedule.json`` at calendar-scan time, so this
+    The attendee list was already captured into ``schedule.json`` at calendar-scan time, so this
     needs NO network / no ``gog`` call at transcribe time. Linkage strategy (first hit wins):
 
       1. ``meeting_id`` — read the recording state (``.state.json``) for the linked calendar event
          id and look it up in ``schedule.json`` ``meetings`` by ``id``.
       2. ``meeting_title`` — fall back to matching the recording's title against a meeting's
          ``title`` (manual / re-transcribe recordings whose state has moved on).
-
-    Returns a speaker-count prior when a linked meeting carries a non-empty attendee list (a single
-    listed attendee counts as a one-on-one), else ``None`` (→ the strategy ladder uses auto
-    threshold clustering). NEVER raises — any missing file, malformed JSON, or absent link degrades
-    to ``None`` (no prior), which is exactly the graceful default Phase 12 expects.
     """
     state_path = Path(state_path) if state_path is not None else STATE_PATH
     schedule_path = Path(schedule_path) if schedule_path is not None else SCHEDULE_PATH
@@ -86,17 +108,8 @@ def resolve_attendee_count(
     if not isinstance(meetings, list) or not meetings:
         return None
 
-    def _count(meeting) -> Optional[int]:
-        if not isinstance(meeting, dict):
-            return None
-        attendees = meeting.get("attendees")
-        if isinstance(attendees, list):
-            names = [str(a).strip() for a in attendees if str(a).strip()]
-            if names:
-                # Google events often list only the invited guest, not the organizer/current user.
-                # For a scheduled one-on-one, the useful diarization prior is still two speakers.
-                return max(len(names), 2)
-        return None
+    def _has_names(meeting) -> bool:
+        return bool(_attendee_names(meeting))
 
     # (1) meeting_id from the recording state.
     state = _load_json_file(state_path)
@@ -106,9 +119,8 @@ def resolve_attendee_count(
     if meeting_id:
         for m in meetings:
             if isinstance(m, dict) and str(m.get("id") or "") == meeting_id:
-                n = _count(m)
-                if n is not None:
-                    return n
+                if _has_names(m):
+                    return m
                 break  # linked but no usable attendee list → fall through to title match
 
     # (2) title match (recording title derived from the stem).
@@ -116,9 +128,8 @@ def resolve_attendee_count(
     if title:
         for m in meetings:
             if isinstance(m, dict) and str(m.get("title") or "").strip() == title:
-                n = _count(m)
-                if n is not None:
-                    return n
+                if _has_names(m):
+                    return m
         title_key = _normalized_title(title)
         if title_key:
             for m in meetings:
@@ -126,11 +137,48 @@ def resolve_attendee_count(
                     isinstance(m, dict)
                     and _normalized_title(str(m.get("title") or "")) == title_key
                 ):
-                    n = _count(m)
-                    if n is not None:
-                        return n
+                    if _has_names(m):
+                        return m
 
     return None
+
+
+def resolve_attendee_names(
+    audio_path: Path,
+    *,
+    meeting_title: str = "",
+    state_path: Optional[Path] = None,
+    schedule_path: Optional[Path] = None,
+) -> list[str]:
+    """Resolve calendar attendee names for speaker-label hints.
+
+    These are candidate labels, not biometric identity proof: diarization separates clusters, while
+    the calendar supplies the expected roster. User renames in the sidecar remain authoritative.
+    """
+    meeting = _resolve_attendee_meeting(
+        audio_path, meeting_title=meeting_title,
+        state_path=state_path, schedule_path=schedule_path,
+    )
+    return _attendee_names(meeting)
+
+
+def resolve_attendee_count(
+    audio_path: Path,
+    *,
+    meeting_title: str = "",
+    state_path: Optional[Path] = None,
+    schedule_path: Optional[Path] = None,
+) -> Optional[int]:
+    """Resolve the calendar-attendee speaker-count prior for a recording (Phase-12 free prior)."""
+    names = resolve_attendee_names(
+        audio_path, meeting_title=meeting_title,
+        state_path=state_path, schedule_path=schedule_path,
+    )
+    if not names:
+        return None
+    # Google events often list only the invited guest, not the organizer/current user. For a
+    # scheduled one-on-one, the useful diarization prior is still two speakers.
+    return max(len(names), 2)
 
 
 def _turn_idx(turn) -> int:
@@ -252,6 +300,7 @@ def _write_channel_split_sidecar(
     audio_path: Path,
     transcript_path: Path,
     asr_segments: list,
+    speaker_hints: Optional[list[str]] = None,
 ) -> bool:
     """Persist a two-speaker sidecar from dual-track channel labels.
 
@@ -303,6 +352,7 @@ def _write_channel_split_sidecar(
         turns=turns,
         provider="channel-split",
         num_speakers_supplied=None,
+        speaker_hints=speaker_hints,
     )
     sm.write_sidecar(sm.speakers_sidecar_path(audio_path), doc)
     print(f"✅ 双轨通道 speaker sidecar 已保存: {sm.speakers_sidecar_path(audio_path)}")
@@ -335,6 +385,7 @@ def run_diarize_stage(
 
     language = trans_cfg.get("language", "zh")
     diar_cfg = trans_cfg.get("diarization", {}) if isinstance(trans_cfg.get("diarization"), dict) else {}
+    speaker_hints = resolve_attendee_names(audio_path, meeting_title=meeting_title)
     supplied = (diar_cfg.get("num_speakers")
                 if diar_cfg.get("num_speakers")
                 else resolve_attendee_count(audio_path, meeting_title=meeting_title))
@@ -345,6 +396,7 @@ def run_diarize_stage(
             audio_path=audio_path,
             transcript_path=transcript_path,
             asr_segments=asr_segments,
+            speaker_hints=speaker_hints,
         )
 
     turns = _resolve_turns(
@@ -368,6 +420,7 @@ def run_diarize_stage(
     result = sm.assign_speakers(
         asr_segments=asr_segments, turns=turns,
         prior_map=prior_map, prior_speakers=prior_speakers,
+        speaker_hints=speaker_hints,
     )
     if not result.segments:
         print("⚠️ 说话人分离未产生标注片段，使用普通转录", file=sys.stderr)
@@ -381,6 +434,7 @@ def run_diarize_stage(
         result=result, turns=turns,
         provider=str(diar_cfg.get("provider") or "sherpa-onnx"),
         num_speakers_supplied=supplied,
+        speaker_hints=speaker_hints,
     )
     sm.write_sidecar(sm.speakers_sidecar_path(audio_path), doc)
     print(f"✅ 说话人标注 transcript 已保存: {transcript_path}")

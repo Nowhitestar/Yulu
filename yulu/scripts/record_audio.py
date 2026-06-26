@@ -120,6 +120,32 @@ def socket_send(cmd):
         return None
 
 
+class _FallbackCaptureController:
+    """Small local fallback used when the platform adapter cannot load."""
+
+    def status(self):
+        return socket_send({"action": "status"})
+
+    def start(self, payload):
+        return socket_send({**payload, "action": "start"})
+
+    def stop(self):
+        return socket_send({"action": "stop"})
+
+    def windows(self):
+        return socket_send({"action": "windows"})
+
+
+def _capture_controller():
+    """Return the platform capture controller for the daemon backend."""
+    try:
+        from yulu_platform.macos import MacOSAudioCaptureController
+
+        return MacOSAudioCaptureController(SOCKET_PATH, socket_send=socket_send)
+    except Exception:
+        return _FallbackCaptureController()
+
+
 def read_state():
     return load_recording_state(STATE_PATH)
 
@@ -299,7 +325,7 @@ def resume_interrupted_recording(resp):
     old_path = state.get("audio_path") or state.get("file_path") or ""
     log(f"⚠️ 检测到 daemon 重启导致录制中断，正在续录: {title} → {old_path}")
     stop_realtime_transcriber(wait=False)
-    start_resp = socket_send(_daemon_start_payload(title, load_config()))
+    start_resp = _capture_controller().start(_daemon_start_payload(title, load_config()))
     if not (start_resp and start_resp.get("status") == "recording" and start_resp.get("file")):
         set_recording_stopped(
             status="interrupted",
@@ -360,7 +386,7 @@ def _raise_if_daemon_recording(lock_handle):
     holder's metadata (read from the lock file, which now persists past the
     holder's release per the new lock semantics).
     """
-    status = socket_send({"action": "status"})
+    status = _capture_controller().status()
     if not (status and status.get("recording") is True):
         return
     info = {}
@@ -378,7 +404,7 @@ def _raise_if_daemon_recording(lock_handle):
 def daemon_start(title, lock_handle=None):
     cfg = load_config()
     _raise_if_daemon_recording(lock_handle)
-    resp = socket_send(_daemon_start_payload(title, cfg))
+    resp = _capture_controller().start(_daemon_start_payload(title, cfg))
     if resp and resp.get("status") == "recording":
         path = resp.get("file")
         if path:
@@ -447,7 +473,7 @@ def emergency_stop_daemon(rec=None):
 def daemon_stop():
     state = read_state()
     rec = recording_info(state)
-    resp = socket_send({"action": "stop"})
+    resp = _capture_controller().stop()
     if resp and resp.get("status") == "stopped":
         # Do not let realtime transcription keep the UI stuck for minutes.
         stop_realtime_transcriber(wait=True, graceful=False)
@@ -478,7 +504,7 @@ def daemon_stop():
 
 
 def daemon_status():
-    resp = socket_send({"action": "status"})
+    resp = _capture_controller().status()
     resumed = resume_interrupted_recording(resp)
     if resumed:
         return resumed
@@ -488,7 +514,7 @@ def daemon_status():
 
 def daemon_ensure_running():
     """如果 daemon 没在运行，尝试启动它。"""
-    resp = socket_send({"action": "status"})
+    resp = _capture_controller().status()
     if resp is not None:
         return True
     detect_daemon_crash(resp)
@@ -505,7 +531,7 @@ def daemon_ensure_running():
             log("🚀 启动 Yulu...")
             subprocess.Popen(["open", str(app)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             time.sleep(3)
-            resp = socket_send({"action": "status"})
+            resp = _capture_controller().status()
             if resp is not None:
                 log("✅ Yulu 已启动")
                 return True

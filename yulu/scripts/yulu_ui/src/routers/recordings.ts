@@ -1,5 +1,4 @@
 import { closeSync, existsSync, openSync, readFileSync, readSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
-import { spawn } from "node:child_process";
 import { join, resolve, relative, isAbsolute } from "node:path";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
@@ -14,6 +13,10 @@ import {
   readTagsSidecar,
   writeTagsSidecar,
 } from "../recordingMeta.js";
+import { resolveAgentRuntime } from "../agentRuntime.js";
+import { agentDestinationHint, agentPluginOverview, normalizeConsoleAgent } from "../agentPlugins.js";
+import { ensureBackgroundAgentSession } from "../agentSessionStore.js";
+import { runAgentShareSummary } from "../agentActions.js";
 
 // Every recording is a meeting now (voicemails were unified into meetings and
 // the separate voicemails/ directory was merged into the root). A recording is
@@ -217,27 +220,6 @@ function stringValue(record: Record<string, unknown>, key: string): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
-function connectorEnabled(config: unknown, channel: SummaryChannel): boolean {
-  const root = asRecord(config);
-  const connector = nestedRecord(nestedRecord(root, "connectors"), channel);
-  return connector.send_summary === true;
-}
-
-function summaryDestination(config: unknown, channel: SummaryChannel): string {
-  const output = nestedRecord(asRecord(config), "output");
-  if (channel === "notion") {
-    const notion = nestedRecord(output, "notion");
-    return stringValue(notion, "destination_label")
-      || stringValue(notion, "destination_id")
-      || stringValue(notion, "database_id");
-  }
-  if (channel === "zulip") {
-    const zulip = nestedRecord(output, "zulip");
-    return [stringValue(zulip, "stream"), stringValue(zulip, "topic")].filter(Boolean).join(" / ");
-  }
-  return "";
-}
-
 function shareHistoryPath(dir: string, stem: string): string {
   return join(dir, `${stem}.shares.json`);
 }
@@ -294,34 +276,41 @@ function appendShareHistory(dir: string, stem: string, entry: Omit<ShareHistoryE
   return next;
 }
 
-function shareTargets(config: unknown, opts: { hasSummary: boolean; history: ShareHistoryEntry[] }): ShareTarget[] {
-  return SUMMARY_CHANNELS.map((channel) => {
+function shareTargets(config: unknown, opts: {
+  hasSummary: boolean;
+  history: ShareHistoryEntry[];
+  scriptDir: string;
+  moviesDir: string;
+}): ShareTarget[] {
+  const runtime = resolveAgentRuntime(config, {
+    scriptDir: opts.scriptDir,
+    moviesDir: opts.moviesDir,
+  });
+  const agent = normalizeConsoleAgent(runtime.provider);
+  const plugins = agentPluginOverview(config, {
+    agent: runtime.provider,
+    agentReady: !runtime.disabledReason,
+  }).current;
+  return plugins
+    .filter((plugin) => plugin.id === "notion" || plugin.id === "zulip")
+    .map((plugin) => {
+      const channel = plugin.id as SummaryChannel;
     const label = SUMMARY_CHANNEL_LABELS[channel];
-    const destination = summaryDestination(config, channel);
-    const isEnabled = connectorEnabled(config, channel);
+    const destination = plugin.destination?.value || agentDestinationHint(config, agent, channel, "");
     let disabledReason: string | null = null;
     if (!opts.hasSummary) disabledReason = "Needs AI Summary";
-    else if (!isEnabled) disabledReason = "Connector disabled";
-    else if (!destination) disabledReason = "Destination missing";
+    else if (runtime.disabledReason) disabledReason = runtime.disabledReason;
+    else if (plugin.status !== "configured") disabledReason = plugin.detail || `${label} Agent plugin is not configured`;
+    else if (plugin.destination && !plugin.destination.configured) disabledReason = plugin.destination.missingReason || "Destination missing";
     return {
       channel,
       label,
-      destination: destination || "未设置",
+      destination,
       enabled: disabledReason === null,
       disabledReason,
       lastShare: opts.history.find((entry) => entry.channel === channel) ?? null,
     };
   });
-}
-
-function enabledSummaryTargets(config: unknown) {
-  return SUMMARY_CHANNELS
-    .filter((channel) => connectorEnabled(config, channel))
-    .map((channel) => ({
-      channel,
-      label: SUMMARY_CHANNEL_LABELS[channel],
-      destination: summaryDestination(config, channel) || "未设置",
-    }));
 }
 
 function optionId(engine: TranscriptionEngine, model: string): string {
@@ -453,26 +442,6 @@ async function applyTranscriptionModel(ctx: {
       message: `stt daemon restart failed: ${(exc as Error).message}`,
     });
   }
-}
-
-function sendSummaryProcess(scriptDir: string, summaryPath: string, channel: SummaryChannel): Promise<{ code: number | null; stdout: string; stderr: string }> {
-  return new Promise((resolvePromise, rejectPromise) => {
-    const child = spawn("python3", [
-      join(scriptDir, "send_summary.py"),
-      "--channel",
-      channel,
-      summaryPath,
-    ], {
-      cwd: scriptDir,
-      env: { ...process.env, PYTHONPATH: scriptDir },
-    });
-    let stdout = "";
-    let stderr = "";
-    child.stdout?.on("data", (chunk: Buffer) => { stdout += chunk.toString("utf8"); });
-    child.stderr?.on("data", (chunk: Buffer) => { stderr += chunk.toString("utf8"); });
-    child.on("error", rejectPromise);
-    child.on("close", (code) => resolvePromise({ code, stdout, stderr }));
-  });
 }
 
 interface Row {
@@ -795,8 +764,13 @@ export const recordingsRouter = router({
         hasRealtime: existsSync(join(dir, `${input.stem}.realtime.transcript.txt`)),
         speakerData: readSpeakerSidecar(dir, input.stem),
         status: currentStatus.status, statusError: currentStatus.statusError,
-        enabledSummaryTargets: enabledSummaryTargets(ctx.config.read()),
-        shareTargets: shareTargets(ctx.config.read(), { hasSummary, history: shareHistory }),
+        enabledSummaryTargets: [],
+        shareTargets: shareTargets(ctx.config.read(), {
+          hasSummary,
+          history: shareHistory,
+          scriptDir: ctx.paths.scriptDir,
+          moviesDir: ctx.paths.moviesDir,
+        }),
         shareHistory,
         transcriptionModelOptions: transcriptionModelOptions(ctx.config.read()),
         summaryTemplateOptions: summaryTemplateOptions(ctx.db?.prompts),
@@ -814,6 +788,8 @@ export const recordingsRouter = router({
         targets: shareTargets(ctx.config.read(), {
           hasSummary: existsSync(join(dir, `${input.stem}.summary.md`)),
           history,
+          scriptDir: ctx.paths.scriptDir,
+          moviesDir: ctx.paths.moviesDir,
         }),
         history,
       };
@@ -1002,7 +978,17 @@ export const recordingsRouter = router({
       const derivedTitle = mm ? mm[1]! : null;
       const title = resolveTitle(dir, input.stem, derivedTitle);
       const cfg = ctx.config.read();
-      const llmCommand = (cfg.llm?.command ?? null) as string[] | null;
+      const runtime = resolveAgentRuntime(cfg, {
+        scriptDir: ctx.paths.scriptDir,
+        moviesDir: ctx.paths.moviesDir,
+      });
+      const llmCommand = runtime.disabledReason ? null : runtime.command;
+      const backgroundSession = !runtime.disabledReason && runtime.provider !== "none"
+        ? ensureBackgroundAgentSession(ctx.paths.configDir, {
+            agent: runtime.provider,
+            runtimeLabel: runtime.label,
+          })
+        : null;
       const prompt = summaryPromptSnapshot(ctx.db?.prompts, input.promptId ?? null);
       if (input.promptId && !prompt) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "summary template not found" });
@@ -1015,8 +1001,10 @@ export const recordingsRouter = router({
         title,
         prompt,
         llmCommand,
+        agentRuntime: runtime.disabledReason ? undefined : runtime,
         agentQueueJson: ctx.paths.agentQueueJson,
         scriptDir: ctx.paths.scriptDir,
+        agentSession: backgroundSession ? { configDir: ctx.paths.configDir, sessionId: backgroundSession.id } : undefined,
         registry: ctx.jobs,
         pubsub: ctx.pubsub,
       });
@@ -1031,12 +1019,18 @@ export const recordingsRouter = router({
       const summaryPath = join(dir, `${input.stem}.summary.md`);
       const cfg = ctx.config.read();
       const label = SUMMARY_CHANNEL_LABELS[input.channel];
-      const destination = summaryDestination(cfg, input.channel);
+      const runtime = resolveAgentRuntime(cfg, {
+        scriptDir: ctx.paths.scriptDir,
+        moviesDir: ctx.paths.moviesDir,
+      });
+      const agent = normalizeConsoleAgent(runtime.provider);
+      const title = resolveTitle(dir, input.stem, `${input.stem}.wav`.match(REC_FILE_RE)?.[1] ?? input.stem) ?? input.stem;
+      const destination = agentDestinationHint(cfg, agent, input.channel, title);
       const recordFailure = (message: string, detail?: { stdout?: string; stderr?: string }) => {
         appendShareHistory(dir, input.stem, {
           channel: input.channel,
           label,
-          destination: destination || "未设置",
+          destination,
           status: "failed",
           message,
           stdout: detail?.stdout,
@@ -1047,23 +1041,42 @@ export const recordingsRouter = router({
         recordFailure("summary missing");
         throw new TRPCError({ code: "PRECONDITION_FAILED", message: "summary missing" });
       }
-      if (!connectorEnabled(cfg, input.channel)) {
-        recordFailure(`${input.channel} summary target is not enabled`);
-        throw new TRPCError({ code: "BAD_REQUEST", message: `${input.channel} summary target is not enabled` });
+      const target = shareTargets(cfg, {
+        hasSummary: true,
+        history: readShareHistory(shareHistoryPath(dir, input.stem)),
+        scriptDir: ctx.paths.scriptDir,
+        moviesDir: ctx.paths.moviesDir,
+      }).find((item) => item.channel === input.channel);
+      if (!target) {
+        const message = `${label} is not added in Agent Console`;
+        recordFailure(message);
+        throw new TRPCError({ code: "PRECONDITION_FAILED", message });
       }
-      if (!destination) {
-        recordFailure(`${input.channel} destination is not configured`);
-        throw new TRPCError({ code: "PRECONDITION_FAILED", message: `${input.channel} destination is not configured` });
+      if (runtime.disabledReason) {
+        recordFailure(runtime.disabledReason);
+        throw new TRPCError({ code: "PRECONDITION_FAILED", message: runtime.disabledReason });
       }
-      const result = await sendSummaryProcess(ctx.paths.scriptDir, summaryPath, input.channel);
-      if (result.code !== 0) {
-        recordFailure(
-          result.stderr.trim() || result.stdout.trim() || `send_summary.py exited ${result.code}`,
-          { stdout: result.stdout, stderr: result.stderr },
-        );
+      if (!target.enabled) {
+        const message = target.disabledReason || `${label} Agent plugin is not configured`;
+        recordFailure(message);
+        throw new TRPCError({ code: "PRECONDITION_FAILED", message });
+      }
+      let result: { stdout: string; stderr: string; sessionId: string };
+      try {
+        result = await runAgentShareSummary({
+          configDir: ctx.paths.configDir,
+          scriptDir: ctx.paths.scriptDir,
+          runtime,
+          channel: input.channel,
+          summaryPath,
+          title,
+          destinationHint: destination,
+        });
+      } catch (exc) {
+        recordFailure((exc as Error).message);
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",
-          message: result.stderr.trim() || result.stdout.trim() || `send_summary.py exited ${result.code}`,
+          message: (exc as Error).message,
         });
       }
       appendShareHistory(dir, input.stem, {

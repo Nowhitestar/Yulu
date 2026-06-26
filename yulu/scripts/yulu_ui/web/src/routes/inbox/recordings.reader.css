@@ -1,7 +1,7 @@
 /* web/src/routes/inbox/recordings.reader.css */
 .reader {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 240px;
+  grid-template-columns: minmax(0, 1fr);
   gap: 0;
   height: 100%;
   min-height: 0;
