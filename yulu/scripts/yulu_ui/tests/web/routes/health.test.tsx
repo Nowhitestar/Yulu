@@ -26,6 +26,24 @@ vi.mock("../../../web/src/trpc.js", () => {
         health:  { useQuery: () => ({ data: HEALTH, isPending: false }) },
         restart: { useMutation: noopMutation },
         stop:    { useMutation: noopMutation },
+        start:   { useMutation: noopMutation },
+      },
+      doctor: {
+        run: { useQuery: () => ({ data: { ok: true, report: { checks: [] }, search: { ok: true, report: {} } }, isPending: false, refetch: vi.fn() }) },
+      },
+      queue: {
+        list: { useQuery: () => ({ data: { path: "/x/agent-queue.json", entries: [], stats: {}, total: 0 }, isPending: false, refetch: vi.fn() }) },
+        retry: { useMutation: noopMutation },
+        cancel: { useMutation: noopMutation },
+        clearStale: { useMutation: noopMutation },
+      },
+      scheduler: {
+        overview: { useQuery: () => ({
+          data: { schedulePath: "/x/schedule.json", events: [], meetings: [], schedulerStatus: { pid: 1, exitStatus: 0 }, calendarStatus: null },
+          isPending: false,
+          refetch: vi.fn(),
+        }) },
+        reload: { useMutation: noopMutation },
       },
       logs: {
         tail: { useQuery: ({ name }: { name: string }) => ({
@@ -63,15 +81,18 @@ describe("Health (consolidated)", () => {
     expect(getByTestId("health-summary")).toBeInTheDocument();
   });
 
-  it("renders Daemons + Logs tabs", () => {
+  it("renders control-surface tabs", () => {
     const { getByTestId } = wrap();
+    expect(getByTestId("tab-doctor")).toBeInTheDocument();
+    expect(getByTestId("tab-queue")).toBeInTheDocument();
+    expect(getByTestId("tab-scheduler")).toBeInTheDocument();
     expect(getByTestId("tab-daemons")).toBeInTheDocument();
     expect(getByTestId("tab-logs")).toBeInTheDocument();
   });
 
-  it("defaults to Daemons tab", () => {
+  it("defaults to Doctor tab", () => {
     const { getByTestId } = wrap();
-    expect(getByTestId("tab-daemons").getAttribute("aria-selected")).toBe("true");
+    expect(getByTestId("tab-doctor").getAttribute("aria-selected")).toBe("true");
     expect(getByTestId("tab-logs").getAttribute("aria-selected")).toBe("false");
   });
 

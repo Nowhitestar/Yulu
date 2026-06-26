@@ -2,7 +2,7 @@
 the CapabilityProvider seam (Phase 8 generalizes the provider to Codex/OpenClaw)."""
 
 from .report import HostCapabilityReport, Capability, Provenance, Status
-from .provider import CapabilityProvider, ClaudeCodeProvider, default_providers
+from .provider import CapabilityProvider, ClaudeCodeProvider, CodexProvider, OpenClawProvider, default_providers
 
 __all__ = [
     "HostCapabilityReport",
@@ -11,5 +11,7 @@ __all__ = [
     "Status",
     "CapabilityProvider",
     "ClaudeCodeProvider",
+    "CodexProvider",
+    "OpenClawProvider",
     "default_providers",
 ]

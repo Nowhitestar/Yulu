@@ -2,10 +2,11 @@ import { existsSync, readFileSync } from "node:fs";
 import { join, resolve, relative, isAbsolute } from "node:path";
 import { z } from "zod";
 import { router, publicProcedure } from "../trpc.js";
-import { runLlmCommand } from "../llmCommand.js";
 import { runSearchCli, type SearchHit } from "./search.js";
-import { notionMcpCredentialStatus } from "../notionMcpOAuth.js";
 import { commandPreview, resolveAgentRuntime, type AgentRuntime } from "../agentRuntime.js";
+import { agentPluginOverview, type AgentPluginState } from "../agentPlugins.js";
+import { getAgentSession, updateAgentSessionNativeSession } from "../agentSessionStore.js";
+import { runAgentCliCommand } from "../agentCliRunner.js";
 
 const MAX_QUESTION_CHARS = 2_000;
 const DEFAULT_SOURCE_COUNT = 8;
@@ -16,6 +17,7 @@ const MAX_SEARCH_QUERY_COUNT = 8;
 const LLM_TIMEOUT_MS = 120_000;
 
 interface AskSource {
+  ref?: number;
   kind: string;
   stem: string;
   title: string;
@@ -33,6 +35,13 @@ interface ConnectorOutputContext {
   destination: string;
   connected: boolean;
   contextStatus: string;
+}
+
+interface RemoteConnectorSource {
+  channel: "notion" | "zulip" | "calendar";
+  label: string;
+  detail: string;
+  connected: boolean;
 }
 
 interface CalendarContext {
@@ -74,19 +83,6 @@ function asRecord(value: unknown): Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
     ? value as Record<string, unknown>
     : {};
-}
-
-function nestedRecord(root: Record<string, unknown>, key: string): Record<string, unknown> {
-  return asRecord(root[key]);
-}
-
-function stringValue(record: Record<string, unknown>, key: string): string {
-  const value = record[key];
-  return typeof value === "string" ? value.trim() : "";
-}
-
-function boolValue(record: Record<string, unknown>, key: string): boolean {
-  return record[key] === true;
 }
 
 function isInside(parent: string, child: string): boolean {
@@ -211,6 +207,7 @@ function buildSources(hits: SearchHit[], moviesDir: string): AskSource[] {
     if (seen.has(key)) continue;
     seen.add(key);
     out.push({
+      ref: out.length + 1,
       kind: hit.kind,
       stem: hit.stem,
       title: hit.meetingTitle || hit.stem,
@@ -223,6 +220,32 @@ function buildSources(hits: SearchHit[], moviesDir: string): AskSource[] {
     if (out.length >= MAX_SOURCE_COUNT) break;
   }
   return out;
+}
+
+function shouldUseMeetingSearch(question: string): boolean {
+  const compact = question
+    .normalize("NFKC")
+    .toLowerCase()
+    .replace(/[\s?？!.。！,，]/g, "");
+  if (!compact) return false;
+  return !(
+    /^(你是谁|你是誰|你是谁呀|你是干嘛的|你能做什么|你可以做什么|介绍一下你自己|whoareyou|whatareyou|whatcanyoudo)$/.test(compact) ||
+    /^(hi|hello|hey|你好|在吗|在不在)$/.test(compact)
+  );
+}
+
+function emptySearch(question: string) {
+  return {
+    ok: true,
+    hits: [] as SearchHit[],
+    elapsedMs: 0,
+    fallbackUsed: false,
+    telemetry: {
+      plannedQueries: [] as string[],
+      perQuery: [{ query: question, hitCount: 0, skipped: "general_agent_question" }],
+      mergedHitCount: 0,
+    },
+  };
 }
 
 function mergeSearchHits(results: Array<{ query: string; hits: SearchHit[] }>, maxHits: number): SearchHit[] {
@@ -277,74 +300,19 @@ async function retrieveMeetingContext(
   };
 }
 
-function outputDestination(config: unknown, channel: "notion" | "zulip"): string {
-  const output = nestedRecord(asRecord(config), "output");
-  if (channel === "notion") {
-    const notion = nestedRecord(output, "notion");
-    return stringValue(notion, "destination_label")
-      || stringValue(notion, "destination_id")
-      || stringValue(notion, "database_id");
-  }
-  const zulip = nestedRecord(output, "zulip");
-  return [stringValue(zulip, "stream"), stringValue(zulip, "topic")].filter(Boolean).join(" / ");
-}
-
-function expandHome(path: string): string {
-  if (path === "~") return process.env.HOME || path;
-  if (path.startsWith("~/")) return join(process.env.HOME || "", path.slice(2));
-  return path;
-}
-
-function connectorEnabled(config: unknown, channel: "notion" | "zulip"): boolean {
-  const connectors = nestedRecord(asRecord(config), "connectors");
-  return boolValue(nestedRecord(connectors, channel), "send_summary");
-}
-
-function outputContext(config: unknown, configDir: string, channel: "notion" | "zulip"): ConnectorOutputContext {
-  const enabled = connectorEnabled(config, channel);
-  const destination = outputDestination(config, channel) || "未设置";
-  if (channel === "notion") {
-    const status = notionMcpCredentialStatus(configDir);
-    return {
-      channel,
-      label: "Notion",
-      enabled,
-      destination,
-      connected: status.connected,
-      contextStatus: status.connected ? "OAuth token stored; remote reads belong to the Agent MCP runtime" : status.detail,
-    };
-  }
-
-  const output = nestedRecord(asRecord(config), "output");
-  const zulip = nestedRecord(output, "zulip");
-  const zuliprc = stringValue(zulip, "zuliprc") || "~/.zuliprc";
-  const hasZuliprc = existsSync(expandHome(zuliprc));
+function outputContext(plugin: AgentPluginState): ConnectorOutputContext {
+  const channel = plugin.id === "zulip" ? "zulip" : "notion";
   return {
     channel,
-    label: "Zulip",
-    enabled,
-    destination,
-    connected: hasZuliprc,
-    contextStatus: hasZuliprc ? `${zuliprc} found; remote reads belong to the Agent MCP runtime` : `${zuliprc} not found`,
+    label: plugin.label,
+    enabled: plugin.added,
+    destination: plugin.destination?.value || "由当前 Agent 插件提供",
+    connected: plugin.status === "configured",
+    contextStatus: plugin.detail,
   };
 }
 
-function calendarContext(config: unknown, configDir: string): CalendarContext {
-  const root = asRecord(config);
-  const calendarsRaw = Array.isArray(root.calendars) ? root.calendars : [];
-  const calendars = calendarsRaw.map((item) => {
-    const cal = asRecord(item);
-    const watch = Array.isArray(cal.watch_calendars)
-      ? cal.watch_calendars.map(String).filter(Boolean)
-      : [];
-    return {
-      type: String(cal.type ?? ""),
-      enabled: cal.enabled === true,
-      account: stringValue(cal, "gog_account"),
-      watchCalendars: watch,
-    };
-  });
-
+function calendarContext(configDir: string, plugin: AgentPluginState | undefined): CalendarContext {
   const schedule = asRecord(readJson(join(configDir, "schedule.json")));
   const meetingsRaw = Array.isArray(schedule.meetings) ? schedule.meetings : [];
   const upcomingMeetings = meetingsRaw
@@ -361,35 +329,37 @@ function calendarContext(config: unknown, configDir: string): CalendarContext {
     .sort((a, b) => a.start.localeCompare(b.start))
     .slice(0, 12);
 
-  const enabledSystem = calendars.find((cal) => (cal.type === "macos" || cal.type === "system") && cal.enabled);
-  const enabledGoogle = calendars.find((cal) => cal.type === "google" && cal.enabled);
-  const provider = enabledSystem
-    ? "macOS system Calendar"
-    : enabledGoogle
-      ? "gog legacy provider"
-      : "native scheduler pending provider configuration";
-  const status = enabledSystem
-    ? "watching macOS system Calendar for native scheduling"
-    : enabledGoogle
-      ? `watching ${enabledGoogle.watchCalendars.length || 1} Google calendar(s) for native scheduling`
-      : "native scheduler is required by default, but no calendar provider is enabled";
+  const connected = plugin?.added === true && plugin.status === "configured";
+  const provider = plugin?.agent ? `${plugin.agent} Agent plugin` : "selected Agent plugin";
+  const status = plugin?.added === true
+    ? plugin.detail
+    : "calendar plugin is not added in Agent Console";
 
   return {
-    configured: calendars.length,
-    enabled: calendars.filter((cal) => cal.enabled).length,
+    configured: plugin?.added ? 1 : 0,
+    enabled: connected ? 1 : 0,
     schedulerRequired: true,
     schedulerMode: "native",
     schedulerProvider: provider,
     schedulerStatus: status,
-    calendars,
+    calendars: plugin ? [{
+      type: "agent",
+      enabled: connected,
+      account: plugin.agent ?? "",
+      watchCalendars: plugin.resolvedPath ? [plugin.resolvedPath] : [],
+    }] : [],
     upcomingMeetings,
   };
 }
 
-function connectorContext(config: unknown, configDir: string): ConnectorContext {
+function connectorContext(config: unknown, configDir: string, runtime: AgentRuntime): ConnectorContext {
+  const plugins = agentPluginOverview(config, { agent: runtime.provider, agentReady: !runtime.disabledReason });
+  const current = plugins.current;
   return {
-    calendar: calendarContext(config, configDir),
-    outputs: [outputContext(config, configDir, "notion"), outputContext(config, configDir, "zulip")],
+    calendar: calendarContext(configDir, current.find((plugin) => plugin.id === "calendar")),
+    outputs: current
+      .filter((plugin) => plugin.id === "notion" || plugin.id === "zulip")
+      .map((plugin) => outputContext(plugin)),
   };
 }
 
@@ -428,6 +398,50 @@ function connectorContextBlock(context: ConnectorContext): string {
     ),
   ];
   return lines.join("\n");
+}
+
+function questionMentions(question: string, terms: string[]): boolean {
+  const q = question.normalize("NFKC").toLowerCase();
+  return terms.some((term) => q.includes(term));
+}
+
+function remoteSourcesForQuestion(question: string, context: ConnectorContext): RemoteConnectorSource[] {
+  const out: RemoteConnectorSource[] = [];
+  const pushOutput = (channel: "notion" | "zulip", terms: string[]) => {
+    if (!questionMentions(question, terms)) return;
+    const output = context.outputs.find((item) => item.channel === channel);
+    if (!output || !output.connected) return;
+    out.push({
+      channel,
+      label: output.label,
+      detail: `${output.label} 由当前 Agent connector 提供；Yulu 没有建立本地远端索引`,
+      connected: true,
+    });
+  };
+  pushOutput("notion", ["notion", "诺션"]);
+  pushOutput("zulip", ["zulip", "channel", "stream", "topic", "话题", "频道"]);
+  if (
+    questionMentions(question, ["calendar", "google calendar", "日历", "日程", "schedule", "会议邀请"]) &&
+    context.calendar.enabled > 0
+  ) {
+    out.push({
+      channel: "calendar",
+      label: "Calendar",
+      detail: "日历上下文由当前 Agent connector 提供；录制提醒仍由 Yulu 本地 Scheduler 执行",
+      connected: true,
+    });
+  }
+  return out;
+}
+
+function localSourcesForAnswer(answer: string, sources: AskSource[]): AskSource[] {
+  const refs = new Set<number>();
+  for (const match of answer.matchAll(/\[(\d{1,2})\]/g)) {
+    const ref = Number(match[1]);
+    if (Number.isInteger(ref) && ref >= 1 && ref <= sources.length) refs.add(ref);
+  }
+  if (refs.size === 0) return [];
+  return sources.filter((source, index) => refs.has(source.ref ?? index + 1));
 }
 
 function agentContext(runtime: AgentRuntime): AskAgentContext {
@@ -470,6 +484,8 @@ function buildPrompt(
     "- 如果你的 Agent 已配置 Google Calendar、Notion、Zulip 等 MCP connector，可以只读查询它们补充上下文。",
     "- 不要创建、编辑、发送或删除远端内容；这次是只读问答。",
     "- 不要声称 Yulu UI 已经直接检索了远端 Notion/Zulip/Google；远端上下文只可能来自当前 Agent。",
+    "- 如果使用下方本地会议资料，必须在相关句子后用 [1]、[2] 这样的编号标注对应 Source；没有使用本地资料时不要添加编号引用。",
+    "- 如果使用 Agent connector 读取了 Notion/Zulip/Calendar，只在回答末尾写“远端上下文：Notion/Zulip/Calendar”，不要把远端资料伪装成本地 Source 编号。",
     "- 如果证据不足，直接说还没有足够会议资料，并指出你能看到的相关来源。",
     "- 回答要紧凑，优先给结论，再列关键证据。",
     "",
@@ -489,7 +505,7 @@ function buildPrompt(
 
 function fallbackAnswer(question: string, sources: AskSource[], reason: string): string {
   const sourceLines = sources.slice(0, 5).map((source, idx) =>
-    `${idx + 1}. ${source.title}${source.recordedAt ? ` (${source.recordedAt})` : ""}: ${source.snippet}`,
+    `[${idx + 1}] ${source.title}${source.recordedAt ? ` (${source.recordedAt})` : ""}: ${source.snippet}`,
   );
   if (sources.length === 0) {
     return `暂时不能生成自然语言回答：${reason}\n\n我也没有在本地会议索引里找到和“${question}”直接相关的结果。`;
@@ -507,27 +523,34 @@ export const askRouter = router({
     .input(z.object({
       question: z.string().trim().min(1).max(MAX_QUESTION_CHARS),
       limit: z.number().int().positive().max(MAX_SOURCE_COUNT).optional(),
+      sessionId: z.string().min(1).optional(),
     }))
     .mutation(async ({ input, ctx }) => {
       const startedAt = Date.now();
       const config = ctx.config.read();
-      const search = await retrieveMeetingContext(
-        input.question,
-        input.limit ?? DEFAULT_SOURCE_COUNT,
-        ctx.paths.scriptDir,
-      );
+      const searchMeetings = shouldUseMeetingSearch(input.question);
+      const search = searchMeetings
+        ? await retrieveMeetingContext(
+          input.question,
+          input.limit ?? DEFAULT_SOURCE_COUNT,
+          ctx.paths.scriptDir,
+        )
+        : emptySearch(input.question);
       const sources = buildSources(search.hits, ctx.paths.moviesDir);
-      const connectors = connectorContext(config, ctx.paths.configDir);
       const runtime = resolveAgentRuntime(config, {
         scriptDir: ctx.paths.scriptDir,
         moviesDir: ctx.paths.moviesDir,
       });
+      const connectors = connectorContext(config, ctx.paths.configDir, runtime);
+      const remoteSources = remoteSourcesForQuestion(input.question, connectors);
       const agent = agentContext(runtime);
       if (runtime.disabledReason) {
+        const answer = fallbackAnswer(input.question, sources, runtime.disabledReason);
         return {
           ok: true,
-          answer: fallbackAnswer(input.question, sources, runtime.disabledReason),
-          sources,
+          answer,
+          sources: localSourcesForAnswer(answer, sources),
+          remoteSources,
           connectorContext: connectors,
           agentRuntime: agent,
           usedFallback: true,
@@ -539,14 +562,31 @@ export const askRouter = router({
       }
 
       const prompt = buildPrompt(input.question, sources, connectors, agent);
-      const result = await runLlmCommand(runtime.command, ctx.paths.scriptDir, prompt, LLM_TIMEOUT_MS, runtime.cwd);
+      const session = input.sessionId ? getAgentSession(ctx.paths.configDir, input.sessionId) : null;
+      const result = await runAgentCliCommand({
+        runtime,
+        scriptDir: ctx.paths.scriptDir,
+        prompt,
+        timeoutMs: LLM_TIMEOUT_MS,
+        nativeSessionId: session?.nativeSessionId,
+        yuluSessionId: session?.id,
+        configDir: session ? ctx.paths.configDir : undefined,
+      });
+      if (session && result.nativeSessionId && result.nativeSessionId !== session.nativeSessionId) {
+        updateAgentSessionNativeSession(ctx.paths.configDir, session.id, {
+          nativeSessionId: result.nativeSessionId,
+          runtimeLabel: runtime.label,
+        });
+      }
       const answer = result.stdout.trim();
       if (result.code !== 0 || !answer) {
         const err = (result.stderr || result.stdout || `llm.command exited ${result.code}`).trim();
+        const fallback = fallbackAnswer(input.question, sources, err || "llm.command produced empty output");
         return {
           ok: true,
-          answer: fallbackAnswer(input.question, sources, err || "llm.command produced empty output"),
-          sources,
+          answer: fallback,
+          sources: localSourcesForAnswer(fallback, sources),
+          remoteSources,
           connectorContext: connectors,
           agentRuntime: agent,
           usedFallback: true,
@@ -560,7 +600,8 @@ export const askRouter = router({
       return {
         ok: true,
         answer,
-        sources,
+        sources: localSourcesForAnswer(answer, sources),
+        remoteSources,
         connectorContext: connectors,
         agentRuntime: agent,
         usedFallback: false,

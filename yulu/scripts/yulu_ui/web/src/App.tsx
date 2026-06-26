@@ -17,6 +17,7 @@ import { SettingsLayout, handle as settingsHandle } from "./routes/settings.js";
 import { SettingsCategory } from "./routes/settings.$category.js";
 import { categoryLabelKey } from "./components/settings/categories.js";
 import { Health, handle as healthHandle } from "./routes/health.js";
+import { AgentConsole, handle as agentConsoleHandle } from "./routes/agent-console.js";
 
 function RecordingRedirect() {
   const { stem } = useParams();
@@ -33,7 +34,8 @@ const router = createBrowserRouter([
     path: "/",
     Component: RootLayout,
     children: [
-      { index: true, element: <Navigate to="/inbox" replace /> },
+      { index: true, element: <Navigate to="/agent-console" replace /> },
+      { path: "agent-console", Component: AgentConsole, handle: agentConsoleHandle },
       {
         path: "inbox",
         Component: InboxLayout,
@@ -69,6 +71,8 @@ const router = createBrowserRouter([
         handle: settingsHandle,
         children: [
           { index: true, element: <Navigate to="/settings/general" replace /> },
+          { path: "llm", element: <Navigate to="/agent-console" replace /> },
+          { path: "integrations", element: <Navigate to="/agent-console" replace /> },
           {
             path: ":category",
             Component: SettingsCategory,
@@ -80,6 +84,9 @@ const router = createBrowserRouter([
       { path: "settings/hotkey",        element: <Navigate to="/settings/general" replace /> },
       { path: "settings/storage",       element: <Navigate to="/settings/audio"   replace /> },
       { path: "health",                 Component: Health,                handle: healthHandle },
+      { path: "health/doctor",          element: <Navigate to="/health#doctor" replace /> },
+      { path: "health/queue",           element: <Navigate to="/health#queue" replace /> },
+      { path: "health/scheduler",       element: <Navigate to="/health#scheduler" replace /> },
       { path: "health/daemons",         element: <Navigate to="/health#daemons" replace /> },
       { path: "health/logs",            element: <Navigate to="/health#logs"    replace /> },
     ],

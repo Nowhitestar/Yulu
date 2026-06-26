@@ -12,6 +12,7 @@ import argparse
 import json
 import os
 import shlex
+import shutil
 import signal
 import subprocess
 import sys
@@ -67,12 +68,29 @@ def _load_llm_command(config_path: Path = CONFIG_PATH) -> list[str]:
     llm_cfg = cfg.get("llm", {}) if isinstance(cfg, dict) else {}
     if not llm_cfg.get("enabled", True):
         return []
-    cmd = llm_cfg.get("command") or []
+    cmd = llm_cfg.get("command")
     if isinstance(cmd, str):
         return _normalize_legacy_agent_command(_resolve_bundled_script_args(shlex.split(cmd)))
-    if isinstance(cmd, list):
+    if isinstance(cmd, list) and cmd:
         return _normalize_legacy_agent_command(_resolve_bundled_script_args([str(x) for x in cmd if str(x)]))
+    agent_cfg = llm_cfg.get("agent", {}) if isinstance(llm_cfg, dict) else {}
+    provider = str(agent_cfg.get("provider", "auto") if isinstance(agent_cfg, dict) else "auto").strip().lower()
+    movies_dir = _recording_dir_from_config(cfg)
+    if provider in ("auto", "codex") and shutil.which("codex"):
+        return list(CODEX_AGENT_COMMAND)
+    if provider in ("auto", "claude", "claude-code") and shutil.which("claude"):
+        return ["claude", "--print", "--add-dir", str(movies_dir)]
     return []
+
+
+def _recording_dir_from_config(cfg: Any) -> Path:
+    if isinstance(cfg, dict):
+        audio = cfg.get("audio", {})
+        if isinstance(audio, dict):
+            out = audio.get("output_dir")
+            if isinstance(out, str) and out.strip():
+                return Path(out).expanduser()
+    return Path.home() / "Movies" / "Yulu"
 
 
 def _normalize_legacy_agent_command(cmd: list[str]) -> list[str]:

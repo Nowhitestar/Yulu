@@ -115,7 +115,10 @@ describe("configRouter.schema", () => {
       const caller = createCaller(configRouter, ctx);
       const schema = await caller.schema();
       expect(Array.isArray(schema)).toBe(true);
-      expect(schema.length).toBe(SETTINGS.length);
+      expect(schema.length).toBe(SETTINGS.filter((setting) => !setting.hidden).length);
+      expect(schema.some((setting: { path: string }) => setting.path === "llm.command")).toBe(false);
+      expect(schema.some((setting: { path: string }) => setting.path === "output.channel")).toBe(false);
+      expect(schema.some((setting: { path: string }) => setting.path === "calendars")).toBe(false);
       expect(schema.length).toBeGreaterThan(0);
     } finally { cleanup(); }
   });

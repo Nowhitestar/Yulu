@@ -24,8 +24,10 @@ describe("Sidebar", () => {
     expect(getByText("Yulu")).toBeInTheDocument();
   });
 
-  it("shows Inbox section with a single Recordings entry, no Voicemails/Meetings/Search", () => {
+  it("keeps recordings under the workspace section, no Voicemails/Meetings/Search", () => {
     const { getByText, queryByText } = wrap(<Sidebar />);
+    expect(getByText("Agent Console")).toBeInTheDocument();
+    expect(getByText("Agent Console").closest("a")?.getAttribute("href")).toBe("/agent-console");
     expect(getByText("录音")).toBeInTheDocument();
     expect(queryByText("Voicemails")).toBeNull();
     expect(queryByText("Meetings")).toBeNull();
@@ -33,15 +35,15 @@ describe("Sidebar", () => {
     expect(getByText("录音").closest("a")?.getAttribute("href")).toBe("/inbox");
   });
 
-  it("shows Knowledge section with Prompts + Glossary", () => {
+  it("shows templates and glossary in the workspace section", () => {
     const { getByText } = wrap(<Sidebar />);
-    expect(getByText("提示词")).toBeInTheDocument();
+    expect(getByText("模板")).toBeInTheDocument();
     expect(getByText("术语表")).toBeInTheDocument();
   });
 
   it("renders an icon (svg) on each nav item", () => {
     const { getByText } = wrap(<Sidebar />);
-    for (const label of ["录音", "提示词", "术语表", "设置", "健康状态"]) {
+    for (const label of ["Agent Console", "录音", "模板", "术语表", "设置", "健康状态"]) {
       const link = getByText(label).closest("a");
       expect(link?.querySelector("svg")).not.toBeNull();
     }
@@ -50,7 +52,9 @@ describe("Sidebar", () => {
   it("renders Settings and Health in a System nav section", () => {
     const { container } = wrap(<Sidebar />);
     const headings = Array.from(container.querySelectorAll(".sidebar-heading")).map((el) => el.textContent);
-    expect(headings).toEqual(["收件箱", "知识库", "系统"]);
+    expect(headings).toEqual(["工作台", "系统"]);
+    expect(container.textContent).not.toContain("收件箱");
+    expect(container.textContent).not.toContain("知识库");
   });
 
   it("renders Settings link in the System section", () => {

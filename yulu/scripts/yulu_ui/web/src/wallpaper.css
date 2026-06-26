@@ -59,6 +59,22 @@ a { color: inherit; text-decoration: none; }
   color: var(--fg);
 }
 
+@media (min-width: 761px) and (max-width: 1499px) {
+  .root-shell.agent-console-shell {
+    padding: 12px;
+  }
+
+  .root-shell.agent-console-shell .root-sidebar-pane {
+    flex-basis: 72px;
+    width: 72px;
+    margin-left: 0;
+  }
+
+  .root-shell.agent-console-shell .root-main {
+    margin-left: 8px;
+  }
+}
+
 @media (max-width: 760px) {
   html, body, #root {
     overflow: hidden;

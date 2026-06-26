@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router";
 import { useQueryClient } from "@tanstack/react-query";
-import { Activity, ChevronLeft, Code, Cpu, FileText, HardDrive, RefreshCw, ShieldCheck, Sparkles, Pencil, Trash2, Users, GitMerge, WifiOff } from "lucide-react";
+import { Activity, ChevronLeft, Code, FileText, RefreshCw, Sparkles, Pencil, Trash2, Users, GitMerge } from "lucide-react";
 import { trpc } from "../../trpc.js";
 import { AudioPlayer } from "../../components/AudioPlayer.js";
 import { TranscriptView, type SpeakerData } from "../../components/TranscriptView.js";
@@ -117,23 +117,6 @@ function isTab(v: string | null): v is Tab {
 function audioSrcFor(data: { stem: string; audioFile?: string | null; audioMtimeMs?: number | null }): string {
   const audioVersion = typeof data.audioMtimeMs === "number" ? `?v=${Math.trunc(data.audioMtimeMs)}` : "";
   return `/files/meetings/${data.audioFile ?? `${data.stem}.wav`}${audioVersion}`;
-}
-
-function formatBytes(bytes: number | null | undefined): string {
-  if (!bytes || bytes <= 0) return "0 MB";
-  const mb = bytes / (1024 * 1024);
-  if (mb < 1024) return `${mb.toFixed(mb >= 10 ? 0 : 1)} MB`;
-  return `${(mb / 1024).toFixed(1)} GB`;
-}
-
-function formatShareTime(value: string): string {
-  const d = new Date(value);
-  if (Number.isNaN(d.getTime())) return value;
-  const mm = String(d.getMonth() + 1).padStart(2, "0");
-  const dd = String(d.getDate()).padStart(2, "0");
-  const hh = String(d.getHours()).padStart(2, "0");
-  const min = String(d.getMinutes()).padStart(2, "0");
-  return `${mm}-${dd} ${hh}:${min}`;
 }
 
 interface SpeakerRow {
@@ -572,18 +555,7 @@ export function RecordingReader() {
 
   const audioSrc = audioSrcFor(data);
   const shareTargets = (data.shareTargets ?? []) as ShareTarget[];
-  const legacyTargets = ((data.enabledSummaryTargets ?? []) as Array<{
-    channel: SummaryChannel;
-    label: string;
-    destination?: string | null;
-  }>).map((target) => ({
-    ...target,
-    destination: target.destination ?? "",
-    enabled: Boolean(data.summary),
-    disabledReason: data.summary ? null : "Needs AI Summary",
-    lastShare: null,
-  }));
-  const summaryTargets = shareTargets.length > 0 ? shareTargets : legacyTargets;
+  const summaryTargets = shareTargets;
   const shareHistory = (data.shareHistory ?? []) as ShareHistoryEntry[];
   const modelOptions = mergeTranscriptionModelOptions(
     (data.transcriptionModelOptions ?? []) as TranscriptionModelOption[],
@@ -816,53 +788,6 @@ export function RecordingReader() {
         />
       </div>
 
-      <aside className="reader-inspector" aria-label={t("reader.inspector.aria")}>
-        <div className="reader-inspector-heading">{t("reader.inspector.heading")}</div>
-        <div className="reader-inspector-card reader-inspector-card--stack">
-          <div className="reader-inspector-item reader-inspector-card--privacy">
-            <ShieldCheck size={16} strokeWidth={1.8} />
-            <div>
-              <strong>{t("reader.inspector.privacy")}</strong>
-              <span>{t("reader.inspector.privacy.sub")}</span>
-            </div>
-          </div>
-          <div className="reader-inspector-item reader-inspector-card--network">
-            <WifiOff size={16} strokeWidth={1.8} />
-            <div>
-              <strong>{t("reader.inspector.network")}</strong>
-              <span>{t("reader.inspector.network.sub")}</span>
-            </div>
-          </div>
-        </div>
-        <div className="reader-inspector-card reader-inspector-card--metrics">
-          <div className="reader-inspector-item">
-            <Cpu size={16} strokeWidth={1.8} />
-            <div>
-              <strong>{t("reader.inspector.engine")}</strong>
-              <span>{data.status === "idle" ? t("reader.inspector.ready") : data.status}</span>
-            </div>
-          </div>
-          <div className="reader-inspector-item reader-inspector-card--storage">
-            <HardDrive size={16} strokeWidth={1.8} />
-            <div>
-              <strong>{t("reader.inspector.storage")}</strong>
-              <span>{formatBytes(data.sizeBytes)}</span>
-              <span className="reader-storage-meter" aria-hidden="true" />
-            </div>
-          </div>
-        </div>
-        <div className="reader-inspector-history">
-          <div className="reader-inspector-title">{t("share.history")}</div>
-          {shareHistory.length === 0 ? (
-            <div className="reader-inspector-empty">{t("share.history.empty")}</div>
-          ) : shareHistory.slice(0, 4).map((entry) => (
-            <div key={entry.id} className={`reader-inspector-share reader-inspector-share--${entry.status}`}>
-              <span>{entry.label}</span>
-              <time>{formatShareTime(entry.sentAt)}</time>
-            </div>
-          ))}
-        </div>
-      </aside>
     </div>
   );
 }

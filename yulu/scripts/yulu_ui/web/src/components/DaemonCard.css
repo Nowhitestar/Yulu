@@ -77,6 +77,9 @@
   border-top: 1px solid var(--edge);
 }
 .daemon-card-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   padding: 5px 10px;
   font-size: 11px;
   border-radius: 10px;

@@ -4,9 +4,13 @@ import { envWithFallbackPath, resolveExecutable } from "./executables.js";
 
 export type AgentRuntimeSource = "configured-command" | "auto-detected" | "disabled" | "missing";
 export const CODEX_AGENT_COMMAND = ["codex", "exec", "--sandbox", "read-only", "--skip-git-repo-check"] as const;
+export const CLAUDE_AGENT_COMMAND = ["claude", "--print"] as const;
+export const HERMES_AGENT_COMMAND = ["hermes", "chat", "-Q", "--source", "yulu"] as const;
+export const OPENCLAW_AGENT_COMMAND = ["openclaw", "agent", "--json"] as const;
+export type AgentRuntimeProvider = "custom" | "codex" | "claude" | "hermes" | "openclaw" | "none";
 
 export interface AgentRuntime {
-  provider: "custom" | "codex" | "claude" | "none";
+  provider: AgentRuntimeProvider;
   label: string;
   source: AgentRuntimeSource;
   command: string[];
@@ -71,9 +75,20 @@ function labelForCommand(command: string[]): string {
   const first = command[0] ?? "Custom Agent";
   if (first.includes("claude")) return "Claude Code";
   if (first.includes("codex")) return "Codex";
+  if (first.includes("hermes")) return "Hermes";
+  if (first.includes("openclaw")) return "OpenClaw";
   if (first.includes("gemini")) return "Gemini CLI";
   if (first.includes("grok")) return "Grok CLI";
   return first;
+}
+
+function providerForCommand(command: string[]): Exclude<AgentRuntimeProvider, "none"> {
+  const first = command[0] ?? "";
+  if (first.includes("codex")) return "codex";
+  if (first.includes("claude")) return "claude";
+  if (first.includes("hermes")) return "hermes";
+  if (first.includes("openclaw")) return "openclaw";
+  return "custom";
 }
 
 function noRuntime(cwd: string, source: AgentRuntimeSource, reason: string): AgentRuntime {
@@ -96,7 +111,7 @@ export function resolveAgentRuntime(config: unknown, opts: { scriptDir: string; 
   const explicit = configuredCommand(config);
   if (explicit) {
     return {
-      provider: explicit[0]?.includes("codex") ? "codex" : explicit[0]?.includes("claude") ? "claude" : "custom",
+      provider: providerForCommand(explicit),
       label: labelForCommand(explicit),
       source: "configured-command",
       command: explicit,
@@ -108,6 +123,8 @@ export function resolveAgentRuntime(config: unknown, opts: { scriptDir: string; 
   const provider = configuredProvider(config);
   const wantsCodex = provider === "auto" || provider === "codex";
   const wantsClaude = provider === "auto" || provider === "claude" || provider === "claude-code";
+  const wantsHermes = provider === "auto" || provider === "hermes";
+  const wantsOpenClaw = provider === "auto" || provider === "openclaw";
 
   if (wantsCodex && executableExists("codex")) {
     return {
@@ -125,13 +142,35 @@ export function resolveAgentRuntime(config: unknown, opts: { scriptDir: string; 
       provider: "claude",
       label: "Claude Code",
       source: "auto-detected",
-      command: ["claude", "--print", "--add-dir", opts.moviesDir],
+      command: [...CLAUDE_AGENT_COMMAND, "--add-dir", opts.moviesDir],
       cwd: opts.moviesDir,
       disabledReason: null,
     };
   }
 
-  const requested = provider === "auto" ? "Codex or Claude Code" : provider;
+  if (wantsHermes && executableExists("hermes")) {
+    return {
+      provider: "hermes",
+      label: "Hermes",
+      source: "auto-detected",
+      command: [...HERMES_AGENT_COMMAND],
+      cwd: opts.moviesDir,
+      disabledReason: null,
+    };
+  }
+
+  if (wantsOpenClaw && executableExists("openclaw")) {
+    return {
+      provider: "openclaw",
+      label: "OpenClaw",
+      source: "auto-detected",
+      command: [...OPENCLAW_AGENT_COMMAND],
+      cwd: opts.moviesDir,
+      disabledReason: null,
+    };
+  }
+
+  const requested = provider === "auto" ? "Codex, Claude Code, Hermes, or OpenClaw" : provider;
   return noRuntime(opts.moviesDir, "missing", `${requested} CLI is not available on PATH`);
 }
 

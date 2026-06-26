@@ -95,6 +95,21 @@ vi.mock("../../../web/src/trpc.js", () => {
           }),
         },
       },
+      agentConsole: {
+        overview: {
+          useQuery: () => ({
+            data: {
+              agents: [{ name: "Codex CLI", connected: true }],
+              plugins: {
+                current: [
+                  { id: "calendar", label: "日历", added: true, status: "configured", statusLabel: "已配置", detail: "/agent/plugins/calendar", resolvedPath: "/agent/plugins/calendar" },
+                ],
+              },
+            },
+            isPending: false,
+          }),
+        },
+      },
       llm: { test: { useMutation: noopMutation } },
       prompts: {
         list: { useQuery: () => ({ data: [], isPending: false }) },
@@ -164,6 +179,8 @@ function routesTree() {
           handle: settingsHandle,
           children: [
             { index: true, element: <Navigate to="/settings/general" replace /> },
+            { path: "llm", element: <Navigate to="/agent-console" replace /> },
+            { path: "integrations", element: <Navigate to="/agent-console" replace /> },
             {
               path: ":category",
               Component: SettingsCategory,
@@ -217,7 +234,8 @@ describe("Settings (3-column MasterDetail)", () => {
     expect(scoped.getByText("通用")).toBeInTheDocument();
     expect(scoped.getByText("音频与存储")).toBeInTheDocument();
     expect(scoped.getByText("转写")).toBeInTheDocument();
-    expect(scoped.getByText("AI 集成")).toBeInTheDocument();
+    expect(scoped.queryByText("AI 集成")).toBeNull();
+    expect(scoped.queryByText("Agent Console")).toBeNull();
   });
 
   it("renders the breadcrumb as '设置 / <category>'", () => {
@@ -301,22 +319,20 @@ describe("Settings category detail content (re-homed widgets)", () => {
     expect(detail.getByText(translate("zh", "settings.transcription.mode.label"))).toBeInTheDocument();
   });
 
-  it("llm: enabled toggle + a Test command button", () => {
-    const { container, getByRole } = wrap("/settings/llm");
-    const detail = within(container.querySelector(".masterdetail-detail") as HTMLElement);
-    expect(detail.getByText(translate("zh", "settings.llm.heading"))).toBeInTheDocument();
-    expect(getByRole("button", { name: translate("zh", "settings.llm.test.button") })).toBeInTheDocument();
+  it("llm: legacy settings route redirects to Agent Console instead of rendering settings UI", () => {
+    const tree = routesTree();
+    const settingsRoute = tree[0]!.children!.find((c) => c.path === "settings")!;
+    const llmRoute = settingsRoute.children!.find((c) => c.path === "llm")!;
+    const el = llmRoute.element as React.ReactElement<{ to: string }>;
+    expect(el.props.to).toBe("/agent-console");
   });
 
-  it("integrations: the integrations section", () => {
-    const { container } = wrap("/settings/integrations");
-    const detail = within(container.querySelector(".masterdetail-detail") as HTMLElement);
-    expect(container.querySelector(".settings-detail-head")).toBeNull();
-    expect(container.querySelector("h2.settings-section-h")?.textContent).toBe(translate("zh", "settings.integrations.heading"));
-    expect(detail.getByText(translate("zh", "settings.integrations.calendar.heading"))).toBeInTheDocument();
-    expect(detail.getByText(translate("zh", "settings.integrations.output.heading"))).toBeInTheDocument();
-    expect(container.querySelector("#output")).toBeNull();
-    expect(container.querySelector(".output-channel-row")).toBeNull();
+  it("integrations: legacy settings route redirects to Agent Console instead of rendering AI integration UI", () => {
+    const tree = routesTree();
+    const settingsRoute = tree[0]!.children!.find((c) => c.path === "settings")!;
+    const integrationsRoute = settingsRoute.children!.find((c) => c.path === "integrations")!;
+    const el = integrationsRoute.element as React.ReactElement<{ to: string }>;
+    expect(el.props.to).toBe("/agent-console");
   });
 
   it("advanced: the advanced-flagged cloud transcription command", () => {
@@ -329,14 +345,15 @@ describe("Settings category detail content (re-homed widgets)", () => {
 
   it("commits a field edit through trpc.config.update", async () => {
     configUpdateSpy.mockClear();
-    const { getByText } = wrap("/settings/llm");
-    // The LLM "Enabled" toggle commits llm.enabled on click.
-    const enabledLabel = getByText(translate("zh", "settings.llm.enabled.label"));
-    const row = enabledLabel.closest(".row")!;
-    const sw = within(row as HTMLElement).getByRole("switch");
-    sw.click();
-    await waitFor(() => expect(configUpdateSpy).toHaveBeenCalled());
-    expect(configUpdateSpy).toHaveBeenCalledWith(expect.objectContaining({ key: "llm.enabled" }));
+    const { container } = wrap("/settings/transcription");
+    const row = within(container.querySelector("#transcription") as HTMLElement)
+      .getByText(translate("zh", "settings.transcription.realtime.label"))
+      .closest(".row")!;
+    within(row as HTMLElement).getByRole("switch").click();
+    await waitFor(() => expect(configUpdateSpy).toHaveBeenCalledWith(expect.objectContaining({
+      key: "transcription.realtime_enabled",
+      value: false,
+    })));
   });
 });
 
@@ -358,22 +375,19 @@ describe("Settings — recording-guard + undo (Task 5)", () => {
 
   it("a non-restart field stays editable while recording", () => {
     recording.state = "recording";
-    const { getByText } = wrap("/settings/llm");
-    // llm.enabled is reload:none → not guarded.
-    const row = getByText(translate("zh", "settings.llm.enabled.label")).closest(".row")!;
+    const { getByText } = wrap("/settings/transcription");
+    const row = getByText(translate("zh", "settings.transcription.realtime.label")).closest(".row")!;
     expect(within(row as HTMLElement).getByRole("switch")).toBeInTheDocument();
   });
 
   it("a successful save shows an undo toast whose 撤销 re-commits the previous value", async () => {
-    const { getByText, getByTestId } = wrap("/settings/llm");
-    // cfg.llm.enabled starts false; toggling commits true.
-    const row = getByText(translate("zh", "settings.llm.enabled.label")).closest(".row")!;
+    const { getByText, getByTestId } = wrap("/settings/transcription");
+    const row = getByText(translate("zh", "settings.transcription.realtime.label")).closest(".row")!;
     within(row as HTMLElement).getByRole("switch").click();
-    await waitFor(() => expect(configUpdateSpy).toHaveBeenCalledWith(expect.objectContaining({ key: "llm.enabled", value: true })));
-    // The undo toast appears; clicking 撤销 re-commits the OLD value (false).
+    await waitFor(() => expect(configUpdateSpy).toHaveBeenCalledWith(expect.objectContaining({ key: "transcription.realtime_enabled", value: false })));
     const toast = await waitFor(() => getByTestId("undo-toast"));
     configUpdateSpy.mockClear();
     fireEvent.click(within(toast).getByText("撤销"));
-    await waitFor(() => expect(configUpdateSpy).toHaveBeenCalledWith(expect.objectContaining({ key: "llm.enabled", value: false })));
+    await waitFor(() => expect(configUpdateSpy).toHaveBeenCalledWith(expect.objectContaining({ key: "transcription.realtime_enabled", value: true })));
   });
 });

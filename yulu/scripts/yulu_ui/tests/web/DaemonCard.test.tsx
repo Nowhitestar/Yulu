@@ -13,13 +13,14 @@ const RUNNING: DaemonHealth = {
   lastLog: "Listening on /Users/x/.config/yulu/audio_daemon.sock",
 };
 
-function mount(daemon: DaemonHealth, opts: Partial<{ onRestart: (n: string) => void; onStop: (n: string) => void }> = {}) {
+function mount(daemon: DaemonHealth, opts: Partial<{ onRestart: (n: string) => void; onStop: (n: string) => void; onStart: (n: string) => void }> = {}) {
   return render(
     <MemoryRouter>
       <DaemonCard
         daemon={daemon}
         onRestart={opts.onRestart ?? (() => {})}
         onStop={opts.onStop ?? (() => {})}
+        onStart={opts.onStart}
       />
     </MemoryRouter>
   );
@@ -69,6 +70,14 @@ describe("DaemonCard", () => {
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: "停止" }));
     expect(onStop).toHaveBeenCalledWith("com.yulu.audiodaemon");
+  });
+
+  it("Start button appears for stopped daemons and fires onStart", async () => {
+    const onStart = vi.fn();
+    mount({ ...RUNNING, status: "stopped", pid: 0 }, { onStart });
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: /启动/ }));
+    expect(onStart).toHaveBeenCalledWith("com.yulu.audiodaemon");
   });
 
   it("View logs → links to /health/logs?name=<full-name>", () => {

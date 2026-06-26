@@ -1,7 +1,7 @@
 // web/src/components/DaemonCard.tsx
 import type { JSX } from "react";
 import { Link } from "react-router";
-import { Circle, Pause, AlertCircle, Clock3 } from "lucide-react";
+import { Circle, Pause, AlertCircle, Clock3, Play } from "lucide-react";
 import { useT } from "../i18n/LanguageProvider.js";
 import "./DaemonCard.css";
 
@@ -17,8 +17,10 @@ export interface DaemonCardProps {
   daemon: DaemonHealth;
   onRestart: (name: string) => void;
   onStop: (name: string) => void;
+  onStart?: (name: string) => void;
   restartPending?: boolean;
   stopPending?: boolean;
+  startPending?: boolean;
 }
 
 const STATUS_GLYPH: Record<DaemonHealth["status"], JSX.Element> = {
@@ -35,7 +37,7 @@ const STATUS_KEY: Record<DaemonHealth["status"], string> = {
   crashed: "health.daemon.status.crashed",
 };
 
-export function DaemonCard({ daemon, onRestart, onStop, restartPending, stopPending }: DaemonCardProps) {
+export function DaemonCard({ daemon, onRestart, onStop, onStart, restartPending, stopPending, startPending }: DaemonCardProps) {
   const t = useT();
   const shortName = daemon.name.replace(/^com\.yulu\./, "");
   return (
@@ -52,6 +54,17 @@ export function DaemonCard({ daemon, onRestart, onStop, restartPending, stopPend
         <div className="daemon-card-lastlog" title={daemon.lastLog}>{daemon.lastLog || t("health.daemon.noLog")}</div>
       </div>
       <div className="daemon-card-actions">
+        {daemon.status === "stopped" && onStart && (
+          <button
+            type="button"
+            className="daemon-card-btn restart"
+            onClick={() => onStart(daemon.name)}
+            disabled={startPending}
+          >
+            <Play size={12} strokeWidth={2} />
+            {t("health.daemon.start")}
+          </button>
+        )}
         <button
           type="button"
           className="daemon-card-btn restart"

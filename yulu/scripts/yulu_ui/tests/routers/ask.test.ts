@@ -4,9 +4,14 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { askRouter } from "../../src/routers/ask.js";
 import { createCaller, type AppContext } from "../../src/trpc.js";
+import { createAgentSession, updateAgentSessionNativeSession } from "../../src/agentSessionStore.js";
 
 const execFileMock = vi.hoisted(() => vi.fn());
 const spawnMock = vi.hoisted(() => vi.fn());
+const oldEnv = {
+  claudeRoots: process.env.YULU_CLAUDE_PLUGIN_ROOTS,
+  rootsOnly: process.env.YULU_AGENT_PLUGIN_ROOTS_ONLY,
+};
 
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
@@ -57,6 +62,7 @@ function makeCtx(opts: {
 }): AppContext {
   const config = opts.config ?? {
     llm: { enabled: true, command: ["claude", "--print"] },
+    agent_console: { plugins: { added: ["summary", "notion", "zulip", "calendar"] } },
     connectors: { notion: { send_summary: true }, zulip: { send_summary: true } },
     output: {
       notion: { destination_label: "Team Notes" },
@@ -76,6 +82,11 @@ function makeCtx(opts: {
   } as unknown as AppContext;
 }
 
+function restoreEnv(key: string, value: string | undefined) {
+  if (value === undefined) delete process.env[key];
+  else process.env[key] = value;
+}
+
 describe("askRouter", () => {
   let root: string;
   let moviesDir: string;
@@ -89,13 +100,24 @@ describe("askRouter", () => {
     configDir = join(root, "config");
     mkdirSync(moviesDir);
     mkdirSync(configDir);
+    process.env.YULU_AGENT_PLUGIN_ROOTS_ONLY = "1";
+    delete process.env.YULU_CLAUDE_PLUGIN_ROOTS;
   });
 
-  afterEach(() => rmSync(root, { recursive: true, force: true }));
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+    restoreEnv("YULU_CLAUDE_PLUGIN_ROOTS", oldEnv.claudeRoots);
+    restoreEnv("YULU_AGENT_PLUGIN_ROOTS_ONLY", oldEnv.rootsOnly);
+  });
 
   it("retrieves meeting context, connector context, and asks the configured Agent command", async () => {
     const stem = "ProductWeekly_20260624_090000";
     const sourcePath = join(moviesDir, `${stem}.summary.md`);
+    const pluginRoot = join(root, "claude-plugins");
+    mkdirSync(join(pluginRoot, "notion"), { recursive: true });
+    mkdirSync(join(pluginRoot, "zulip"), { recursive: true });
+    mkdirSync(join(pluginRoot, "calendar"), { recursive: true });
+    process.env.YULU_CLAUDE_PLUGIN_ROOTS = pluginRoot;
     writeFileSync(sourcePath, "会议提到 OKR 需要重新定义，Notion 用于沉淀结论。");
     writeFileSync(join(configDir, "schedule.json"), JSON.stringify({
       meetings: [{ id: "m1", title: "Product Weekly", start: "2026-06-24T09:00:00", end: "2026-06-24T10:00:00" }],
@@ -113,7 +135,7 @@ describe("askRouter", () => {
       }],
       telemetry: { hit_count: 1 },
     });
-    mockLlm("OKR 要重新定义，并写入 Team Notes。\n");
+    mockLlm("OKR 要重新定义，并写入 Team Notes。[1]\n");
 
     const result = await createCaller(askRouter, makeCtx({ moviesDir, configDir })).ask({ question: "OKR 怎么处理？" });
 
@@ -123,8 +145,8 @@ describe("askRouter", () => {
     expect(result.sources[0].url).toBe(`/inbox/${stem}?tab=summary&snippet=OKR`);
     expect(result.connectorContext.calendar.upcomingMeetings[0].title).toBe("Product Weekly");
     expect(result.connectorContext.outputs).toEqual([
-      expect.objectContaining({ channel: "notion", label: "Notion", enabled: true, destination: "Team Notes" }),
-      expect.objectContaining({ channel: "zulip", label: "Zulip", enabled: true, destination: "team / 纪要" }),
+      expect.objectContaining({ channel: "notion", label: "Notion", enabled: true, connected: true, destination: "Yulu Meeting" }),
+      expect.objectContaining({ channel: "zulip", label: "Zulip", enabled: true, connected: true, destination: "选择 Channel 和 Topic" }),
     ]);
     expect(result.agentRuntime).toEqual(expect.objectContaining({
       label: "Claude Code",
@@ -140,8 +162,8 @@ describe("askRouter", () => {
     expect(prompt).toContain("Agent CLI");
     expect(prompt).toContain("remote_connector_query: delegate to Agent MCP connectors");
     expect(prompt).toContain("scheduler_boundary: Yulu owns native calendar scheduling");
-    expect(prompt).toContain("notion: enabled");
-    expect(prompt).toContain("destination=Team Notes");
+    expect(prompt).toContain("notion: enabled connected=yes");
+    expect(prompt).toContain("destination=Yulu Meeting");
   });
 
   it("expands natural-language questions into salient search terms", async () => {
@@ -164,7 +186,7 @@ describe("askRouter", () => {
         telemetry: { hit_count: 1 },
       },
     });
-    mockLlm("你和 Bruce 主要围绕 AgentKey 增长、KYC 和后续方案推进。\n");
+    mockLlm("你和 Bruce 主要围绕 AgentKey 增长、KYC 和后续方案推进。[1]\n");
 
     const result = await createCaller(askRouter, makeCtx({ moviesDir, configDir })).ask({
       question: "bruce 和我主要聊了什么",
@@ -176,6 +198,43 @@ describe("askRouter", () => {
     expect(result.sources[0].title).toBe("AgentkeyProductWeekly");
     expect(result.search.telemetry.plannedQueries).toContain("bruce");
     expect(result.answer).toContain("Bruce");
+  });
+
+  it("resumes the provider-native Codex session for a persisted Ask session", async () => {
+    const session = createAgentSession(configDir, { agent: "codex", title: "Ask native" });
+    updateAgentSessionNativeSession(configDir, session.id, {
+      nativeSessionId: "019f0000-0000-7000-8000-000000000001",
+      runtimeLabel: "Codex",
+    });
+    mockSearch({ hits: [], telemetry: {} });
+    mockLlm(JSON.stringify({ type: "message", text: "继续同一个 Codex session。" }) + "\n");
+    const ctx = makeCtx({
+      moviesDir,
+      configDir,
+      config: {
+        llm: {
+          enabled: true,
+          command: ["codex", "exec", "--sandbox", "read-only", "--skip-git-repo-check"],
+          agent: { provider: "codex" },
+        },
+        agent_console: { plugins: { added: ["summary"] } },
+      },
+    });
+
+    const result = await createCaller(askRouter, ctx).ask({
+      question: "继续刚才的问题",
+      sessionId: session.id,
+    });
+
+    expect(result.answer).toBe("继续同一个 Codex session。");
+    expect(String(spawnMock.mock.calls[0]![0])).toContain("codex");
+    expect(spawnMock.mock.calls[0]![1]).toEqual(expect.arrayContaining([
+      "exec",
+      "--json",
+      "resume",
+      "019f0000-0000-7000-8000-000000000001",
+      "-",
+    ]));
   });
 
   it("returns a source-backed fallback when no Agent runtime is configured or available", async () => {
@@ -219,6 +278,42 @@ describe("askRouter", () => {
     expect(result.answer).toContain("model unavailable");
   });
 
+  it("skips local meeting citations for general identity questions", async () => {
+    mockSearch({
+      hits: [{
+        kind: "meeting_summary",
+        stem: "Memo_20260624_100000",
+        meeting_title: "Memo",
+        snippet: "[hit]你是谁[/hit]",
+      }],
+      telemetry: {},
+    });
+    mockLlm("我是 Yulu 里的会议助手。");
+
+    const result = await createCaller(askRouter, makeCtx({ moviesDir, configDir })).ask({ question: "你是谁？" });
+
+    expect(execFileMock).not.toHaveBeenCalled();
+    expect(result.sources).toEqual([]);
+    expect(result.answer).toContain("会议助手");
+  });
+
+  it("marks Notion as remote Agent context instead of a local citation", async () => {
+    const pluginRoot = join(root, "claude-plugins");
+    mkdirSync(join(pluginRoot, "notion"), { recursive: true });
+    process.env.YULU_CLAUDE_PLUGIN_ROOTS = pluginRoot;
+    mockSearch({ ok: true, hits: [], telemetry: { hit_count: 0 } });
+    mockLlm("Notion 里可以继续查项目资料。\n\n远端上下文：Notion");
+
+    const result = await createCaller(askRouter, makeCtx({ moviesDir, configDir })).ask({
+      question: "Notion 里有什么？",
+    });
+
+    expect(result.sources).toEqual([]);
+    expect(result.remoteSources).toEqual([
+      expect.objectContaining({ channel: "notion", label: "Notion", connected: true }),
+    ]);
+  });
+
   it("does not read source files outside the recordings root", async () => {
     const outsidePath = join(root, "outside.md");
     writeFileSync(outsidePath, "secret text");
@@ -232,7 +327,7 @@ describe("askRouter", () => {
       }],
       telemetry: {},
     });
-    mockLlm("safe answer");
+    mockLlm("safe answer [1]");
 
     const result = await createCaller(askRouter, makeCtx({ moviesDir, configDir })).ask({ question: "safe?" });
     const proc = spawnMock.mock.results[0]!.value as { __stdinWrites: string[] };

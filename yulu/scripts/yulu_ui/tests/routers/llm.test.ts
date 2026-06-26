@@ -40,7 +40,7 @@ function makeCtx() {
   cpSync(join(HERE, "../fixtures/config.json"), path);
   return {
     config: new ConfigManager(path),
-    paths: { scriptDir: join(HERE, "../../../") },
+    paths: { scriptDir: join(HERE, "../../../"), agentQueueJson: join(dir, "agent-queue.json") },
   } as unknown as AppContext;
 }
 
@@ -74,7 +74,18 @@ describe("llmRouter.test", () => {
     const caller = createCaller(llmRouter, ctx);
     const r = await caller.test();
     expect(r.ok).toBe(false);
-    expect(r.stderr).toContain("llm.command is not configured");
+    expect(r.stderr).toContain("llm.command is empty");
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it("treats null llm.command as agent queue mode without spawning", async () => {
+    const ctx = makeCtx();
+    ctx.config.update("llm.command", null);
+    const caller = createCaller(llmRouter, ctx);
+    const r = await caller.test();
+    expect(r.ok).toBe(true);
+    expect(r.stdout).toContain("Agent queue mode");
+    expect(r.stdout).toContain("agent-queue.json");
     expect(spawnMock).not.toHaveBeenCalled();
   });
 

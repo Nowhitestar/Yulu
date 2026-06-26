@@ -60,6 +60,13 @@ describe("GlobalSearch — settings scope", () => {
     await waitFor(() => expect(navigateMock).toHaveBeenCalledWith("/settings/audio"));
   });
 
+  it("does not surface removed LLM settings even if the backend schema still contains them", async () => {
+    const { getByPlaceholderText, container } = render(<GlobalSearch />);
+    fireEvent.change(getByPlaceholderText("搜索"), { target: { value: "启用 LLM" } });
+    await new Promise((r) => setTimeout(r, 250));
+    expect(container.querySelector(".gs-kind-setting")).toBeNull();
+  });
+
   it("a non-matching query produces no setting hits", async () => {
     const { getByPlaceholderText, container } = render(<GlobalSearch />);
     fireEvent.change(getByPlaceholderText("搜索"), { target: { value: "zzzznotathing" } });

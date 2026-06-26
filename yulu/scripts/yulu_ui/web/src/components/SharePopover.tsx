@@ -75,7 +75,9 @@ export function SharePanel({ targets, history = [], pendingChannel, onSend }: Sh
       </div>
 
       <div className="share-targets">
-        {targets.map((target) => {
+        {targets.length === 0 ? (
+          <div className="share-target-empty">{t("share.targets.empty")}</div>
+        ) : targets.map((target) => {
           const pending = pendingChannel === target.channel;
           return (
             <button

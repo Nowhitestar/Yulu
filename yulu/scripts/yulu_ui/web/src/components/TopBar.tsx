@@ -1,5 +1,5 @@
 // web/src/components/TopBar.tsx
-import { useMatches } from "react-router";
+import { Link, useMatches } from "react-router";
 import type { ReactNode } from "react";
 import { SlidersHorizontal } from "lucide-react";
 import { ThemeToggle } from "./ThemeToggle.js";
@@ -53,9 +53,9 @@ export function TopBar() {
       </div>
       <div className="topbar-spacer" />
       <div className="topbar-controls">
-        <button type="button" className="topbar-icon-button" aria-label={t("nav.settings")}>
+        <Link to="/settings" className="topbar-icon-button" aria-label={t("nav.settings")}>
           <SlidersHorizontal size={15} strokeWidth={1.85} />
-        </button>
+        </Link>
         <div className="topbar-theme">
           <ThemeToggle />
         </div>

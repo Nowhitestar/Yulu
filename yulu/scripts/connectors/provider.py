@@ -95,6 +95,13 @@ class FeishuConnectorProvider(ConnectorProvider):
             ],
             "feishu connector not found",
         )
+        if cap.status is not Status.ABSENT:
+            cap = Capability(
+                cap.provenance,
+                Status.PRESENT_BUT_UNVERIFIED,
+                cap.resolved_path,
+                f"{cap.detail}; Feishu calendar fetch is not implemented yet",
+            )
         return {self.connector_id: _connector(self.connector_id, self.display_name, self.actions, self.config_prefix, cap)}
 
 

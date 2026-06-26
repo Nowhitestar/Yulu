@@ -89,6 +89,8 @@ launch_path() {
         "/usr/local/bin"
         "/usr/bin"
         "/bin"
+        "/usr/sbin"
+        "/sbin"
     )
 
     # Optionally insert the highest-sorted ~/.nvm/versions/node/*/bin (glob,

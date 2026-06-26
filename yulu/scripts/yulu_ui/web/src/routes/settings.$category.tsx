@@ -11,9 +11,7 @@ import { AboutSection } from "../components/settings/AboutSection.js";
 import { AudioSection } from "../components/settings/AudioSection.js";
 import { StorageSection } from "../components/settings/StorageSection.js";
 import { TranscriptionSection } from "../components/settings/TranscriptionSection.js";
-import { LlmSection } from "../components/settings/LlmSection.js";
 import { AutomationSection } from "../components/settings/AutomationSection.js";
-import { IntegrationsSection } from "../components/settings/IntegrationsSection.js";
 import { AdvancedSection } from "../components/settings/AdvancedSection.js";
 
 /**
@@ -40,9 +38,7 @@ const CATEGORY_SECTIONS: Record<string, (tracker: SettingsRestartTracker) => Rea
     </>
   ),
   transcription: (tracker) => <TranscriptionSection tracker={tracker} />,
-  llm: (tracker) => <LlmSection tracker={tracker} />,
   automation: (tracker) => <AutomationSection tracker={tracker} />,
-  integrations: (tracker) => <IntegrationsSection tracker={tracker} />,
   advanced: (tracker) => <AdvancedSection tracker={tracker} />,
 };
 

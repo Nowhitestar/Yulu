@@ -2,6 +2,9 @@
 import { useEffect, useState } from "react";
 import { useLocation, useNavigate } from "react-router";
 import { HealthSummary } from "../components/health/HealthSummary.js";
+import { DoctorSection } from "../components/health/DoctorSection.js";
+import { AgentQueueSection } from "../components/health/AgentQueueSection.js";
+import { SchedulerSection } from "../components/health/SchedulerSection.js";
 import { DaemonsSection } from "../components/health/DaemonsSection.js";
 import { LogsSection } from "../components/health/LogsSection.js";
 import { useT } from "../i18n/LanguageProvider.js";
@@ -9,12 +12,12 @@ import "./health.css";
 
 export const handle = { breadcrumb: "breadcrumb.health", filters: null };
 
-type Tab = "daemons" | "logs";
-const VALID_TABS: Tab[] = ["daemons", "logs"];
+type Tab = "doctor" | "queue" | "scheduler" | "daemons" | "logs";
+const VALID_TABS: Tab[] = ["doctor", "queue", "scheduler", "daemons", "logs"];
 
 function tabFromHash(hash: string): Tab {
   const h = hash.replace(/^#/, "");
-  return VALID_TABS.includes(h as Tab) ? (h as Tab) : "daemons";
+  return VALID_TABS.includes(h as Tab) ? (h as Tab) : "doctor";
 }
 
 export function Health() {
@@ -37,29 +40,26 @@ export function Health() {
     <div className="health-page">
       <HealthSummary />
       <div className="health-tabs" role="tablist">
-        <button
-          type="button"
-          role="tab"
-          aria-selected={tab === "daemons"}
-          className={"health-tab" + (tab === "daemons" ? " active" : "")}
-          onClick={() => switchTab("daemons")}
-          data-testid="tab-daemons"
-        >
-          {t("health.tab.daemons")}
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={tab === "logs"}
-          className={"health-tab" + (tab === "logs" ? " active" : "")}
-          onClick={() => switchTab("logs")}
-          data-testid="tab-logs"
-        >
-          {t("health.tab.logs")}
-        </button>
+        {VALID_TABS.map((item) => (
+          <button
+            key={item}
+            type="button"
+            role="tab"
+            aria-selected={tab === item}
+            className={"health-tab" + (tab === item ? " active" : "")}
+            onClick={() => switchTab(item)}
+            data-testid={`tab-${item}`}
+          >
+            {t(`health.tab.${item}`)}
+          </button>
+        ))}
       </div>
       <div className="health-tabpanel" role="tabpanel">
-        {tab === "daemons" ? <DaemonsSection /> : <LogsSection />}
+        {tab === "doctor" && <DoctorSection />}
+        {tab === "queue" && <AgentQueueSection />}
+        {tab === "scheduler" && <SchedulerSection />}
+        {tab === "daemons" && <DaemonsSection />}
+        {tab === "logs" && <LogsSection />}
       </div>
     </div>
   );

@@ -1,7 +1,12 @@
 import { accessSync, constants } from "node:fs";
+import { homedir } from "node:os";
 import { delimiter, isAbsolute, join } from "node:path";
 
 const FALLBACK_PATHS = [
+  join(homedir(), ".local", "bin"),
+  join(homedir(), ".npm-global", "bin"),
+  join(homedir(), ".nvm", "current", "bin"),
+  "/opt/homebrew/opt/node/bin",
   "/opt/homebrew/bin",
   "/usr/local/bin",
   "/usr/bin",

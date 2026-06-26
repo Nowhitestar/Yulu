@@ -10,6 +10,7 @@ export function DaemonsSection() {
 
   const restartMut = trpc.daemons.restart.useMutation({ onSuccess: invalidate });
   const stopMut    = trpc.daemons.stop.useMutation({ onSuccess: invalidate });
+  const startMut   = trpc.daemons.start.useMutation({ onSuccess: invalidate });
 
   const daemons = (data as DaemonHealth[] | undefined) ?? [];
 
@@ -21,8 +22,10 @@ export function DaemonsSection() {
           daemon={d}
           onRestart={(n) => restartMut.mutateAsync({ name: n as never })}
           onStop={(n) => stopMut.mutateAsync({ name: n as never })}
+          onStart={(n) => startMut.mutateAsync({ name: n as never })}
           restartPending={restartMut.isPending}
           stopPending={stopMut.isPending}
+          startPending={startMut.isPending}
         />
       ))}
     </div>

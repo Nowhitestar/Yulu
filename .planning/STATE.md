@@ -4,7 +4,7 @@ milestone: v0.5
 milestone_name: milestone
 status: milestone_complete
 last_updated: 2026-05-30T15:49:51.797Z
-last_activity: 2026-05-30
+last_activity: 2026-06-26
 progress:
   total_phases: 8
   completed_phases: 8
@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-05-29)
 Phase: 8
 Plan: Not started
 Status: Milestone complete
-Last activity: 2026-05-30
+Last activity: 2026-06-26 - Completed quick task 260626-001: Agent Console chat and capability polish
 
 Progress: [██████████] 100%
 
@@ -191,6 +191,23 @@ None yet.
 - **Decision to log (Phase 1):** bundled-vs-host Python — affects signing scope and is the stable interpreter target for Phase 3 detection.
 - **Spike-gated (Phase 6):** WHO calls provisioning (host agent vs `curl|bash`); step registry is BUILD NOW regardless. Exit criteria: kill-at-step-N resume + tampered-asset rejection.
 - **Migration (Phase 7) — from 01-04:** `setup_capabilities.sh` stops CREATING the mlx virtualenv (D-02) but intentionally does NOT delete an existing user's. Add an upgrade migration to remove the stale `~/.config/yulu/venv-mlx-whisper` (and normalize any lingering `transcription.mlx.python` config value) so old installs don't orphan a dead venv.
+
+### Quick Tasks Completed
+
+| # | Description | Date | Commit | Directory |
+|---|-------------|------|--------|-----------|
+| 260625-001 | AI Native contract calibration | 2026-06-25 | working-tree | [260625-001-ai-native-contract-calibration](./quick/260625-001-ai-native-contract-calibration/) |
+| 260625-002 | AI Native control surfaces | 2026-06-25 | working-tree | [260625-002-ai-native-control-surfaces](./quick/260625-002-ai-native-control-surfaces/) |
+| 260625-003 | Agent Console default workspace | 2026-06-25 | working-tree | [260625-003-agent-console-default-workspace](./quick/260625-003-agent-console-default-workspace/) |
+| 260625-004 | Agent Console agent-scoped plugins | 2026-06-25 | working-tree | [260625-004-agent-console-agent-scoped-plugins](./quick/260625-004-agent-console-agent-scoped-plugins/) |
+| 260625-005 | Agent Console sessions and capability boundary | 2026-06-25 | working-tree | [260625-005-agent-console-sessions-capability-boundary](./quick/260625-005-agent-console-sessions-capability-boundary/) |
+| 260625-006 | Agent CLI session migration | 2026-06-25 | working-tree | [260625-006-agent-cli-session-migration](./quick/260625-006-agent-cli-session-migration/) |
+| 260625-007 | Provider-native Codex session resume | 2026-06-25 | working-tree | [260625-007-provider-native-agent-sessions](./quick/260625-007-provider-native-agent-sessions/) |
+| 260625-008 | Agent session CLI and settings polish | 2026-06-25 | working-tree | [260625-008-agent-session-cli-settings-polish](./quick/260625-008-agent-session-cli-settings-polish/) |
+| 260625-009 | Agent Console destinations and citations | 2026-06-25 | working-tree | [260625-009-agent-console-destinations-citations](./quick/260625-009-agent-console-destinations-citations/) |
+| 260625-010 | Agent Console UI prune, Zulip detection, and sidebar workbench | 2026-06-25 | working-tree | [260625-010-agent-console-ui-prune-zulip-sidebar](./quick/260625-010-agent-console-ui-prune-zulip-sidebar/) |
+| 260625-011 | Agent Console calendar and destination migration | 2026-06-25 | working-tree | [260625-011-agent-console-calendar-destinations](./quick/260625-011-agent-console-calendar-destinations/) |
+| 260626-001 | Agent Console chat and capability polish | 2026-06-26 | working-tree | [260626-001-agent-console-chat-capability-polish](./quick/260626-001-agent-console-chat-capability-polish/) |
 
 ## Deferred Items
 
