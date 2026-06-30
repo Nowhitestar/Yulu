@@ -4,6 +4,13 @@ All notable changes to Yulu are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.14.0](https://github.com/Nowhitestar/Yulu/compare/v0.13.0...v0.14.0) (2026-06-30)
+
+
+### Features
+
+* **stt:** support Hermes transcription provider ([a3c7c32](https://github.com/Nowhitestar/Yulu/commit/a3c7c32210efb3f1c371e7396dd172ae6d98691e))
+
 ## [0.13.0](https://github.com/Nowhitestar/Yulu/compare/v0.12.0...v0.13.0) (2026-06-26)
 
 
