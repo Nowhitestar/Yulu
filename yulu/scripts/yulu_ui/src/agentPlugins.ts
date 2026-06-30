@@ -181,6 +181,10 @@ function expandHome(path: string): string {
   return path;
 }
 
+function hermesHome(): string {
+  return process.env.YULU_HERMES_HOME ? expandHome(process.env.YULU_HERMES_HOME) : join(homedir(), ".hermes");
+}
+
 function splitEnvRoots(value: string | undefined): string[] {
   if (!value) return [];
   return value.split(":").map((item) => item.trim()).filter(Boolean).map(expandHome);
@@ -198,7 +202,7 @@ function agentPluginRoots(agent: ConsoleAgentId): string[] {
   } else if (agent === "claude") {
     roots.push(expandHome("~/.claude/plugins"), expandHome("~/.config/claude/plugins"));
   } else if (agent === "hermes") {
-    roots.push(expandHome("~/.hermes/plugins"), expandHome("~/.config/hermes/plugins"));
+    roots.push(join(hermesHome(), "plugins"), expandHome("~/.config/hermes/plugins"));
   } else {
     roots.push(expandHome("~/.openclaw/plugins"), expandHome("~/.config/openclaw/plugins"));
   }
@@ -212,7 +216,19 @@ function findPluginPath(agent: ConsoleAgentId, plugin: AgentPluginId): string {
     const found = walkForAlias(root, aliases);
     if (found) return found;
   }
+  if (agent === "hermes") return findHermesMcpTokenPath(aliases);
   if (agent === "codex") return findCodexMcpPluginPath(plugin, aliases);
+  return "";
+}
+
+function findHermesMcpTokenPath(aliases: string[]): string {
+  const tokenRoot = join(hermesHome(), "mcp-tokens");
+  for (const alias of aliases) {
+    for (const name of [`${alias}.json`, `${alias}.client.json`]) {
+      const candidate = join(tokenRoot, name);
+      if (existsSync(candidate)) return candidate;
+    }
+  }
   return "";
 }
 

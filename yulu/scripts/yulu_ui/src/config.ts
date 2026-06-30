@@ -107,7 +107,7 @@ export const ConfigSchema = z.object({
   transcription: z.object({
     mode: z.enum(["local", "cloud-fallback", "cloud-priority"]).default("local"),
     post_recording_mode: z.enum(["fast_summary", "full_transcribe"]).default("fast_summary"),
-    final_engine: z.enum(["mlx", "whisper"]).default("mlx"),
+    final_engine: z.enum(["mlx", "whisper", "hermes"]).default("mlx"),
     language: z.string().default("zh"),
     glossary: z.array(z.string()).optional(),
     local_model_path: z.string().default("~/.config/yulu/models/ggml-large-v3.bin"),
@@ -115,8 +115,13 @@ export const ConfigSchema = z.object({
     mlx: z.object({
       model: z.string().default(DEFAULT_MLX_MODEL),
     }).passthrough().default({}),
+    hermes: z.object({
+      agent_dir: z.string().default("~/.hermes/hermes-agent"),
+      model: z.string().nullable().optional(),
+      diarize: z.boolean().default(true),
+    }).passthrough().default({}),
     realtime: z.object({
-      engine: z.enum(["mlx", "whisper"]).default("mlx"),
+      engine: z.enum(["mlx", "whisper", "hermes"]).default("mlx"),
       mlx_model: z.string().default(DEFAULT_REALTIME_MLX_MODEL),
       chunk_sec: z.number().default(15),
       chunk_max_sec: z.number().default(30),

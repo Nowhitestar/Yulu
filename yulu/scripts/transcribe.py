@@ -76,6 +76,15 @@ def _request_final_transcribe(audio_path: Path, trans_cfg: dict, meeting_title: 
     return resp
 
 
+def _provider_diarization_requested(trans_cfg: dict) -> bool:
+    if str(trans_cfg.get("final_engine") or "").strip().lower() != "hermes":
+        return False
+    hermes = trans_cfg.get("hermes", {}) if isinstance(trans_cfg.get("hermes"), dict) else {}
+    return str(hermes.get("diarize", True)).strip().lower() not in {
+        "0", "false", "no", "off"
+    }
+
+
 def _enqueue_summary_request(*, prompt, audio_path, transcript_path,
                              meeting_title, output_path, queue_path) -> None:
     """Append a summary_request event; summary prompts also carry html_path_hint."""
@@ -123,10 +132,14 @@ def process_audio(audio_path_str: str, diarization_num_speakers: Optional[int] =
     sys_text: Optional[str] = None
     asr_segments: list[dict] = []
     used_channel_split = False
+    engine_used = str(trans_cfg.get("final_engine", "mlx") or "mlx")
 
     if post_mode == FAST_POST_RECORDING_MODE:
         merged = read_realtime_transcript(realtime_path)
-        if clean_audio_path != audio_path:
+        if _provider_diarization_requested(trans_cfg):
+            print("⚠️ Hermes provider diarization 需要整段 final pass，跳过实时转写复用", file=sys.stderr)
+            merged = None
+        elif clean_audio_path != audio_path:
             print("⚠️ 双轨录音使用原始双轨完整转录，跳过实时转写复用", file=sys.stderr)
             merged = None
         elif merged and not _realtime_coverage_ok(audio_path):
@@ -144,7 +157,9 @@ def process_audio(audio_path_str: str, diarization_num_speakers: Optional[int] =
             if merged is None:
                 print("❌ 无法获取任何转录，daemon 不可用且无 realtime 结果", file=sys.stderr)
                 sys.exit(2)
-        elif isinstance(response.get("channels"), dict):
+        else:
+            engine_used = str(response.get("engine_used") or engine_used)
+        if response is not None and isinstance(response.get("channels"), dict):
             used_channel_split = True
             from stt_daemon.transcript_merge import merge_segments
             mic_payload = response["channels"].get("mic", {}) or {}
@@ -160,7 +175,7 @@ def process_audio(audio_path_str: str, diarization_num_speakers: Optional[int] =
             ] + [
                 {**dict(s), "channel": "sys"} for s in sys_segs
             ]
-        else:
+        elif response is not None:
             merged = strip_obvious_hallucination_text(response.get("text", "") or "")
             asr_segments = filter_obvious_hallucination_segments(
                 response.get("segments", []) or []
@@ -187,15 +202,23 @@ def process_audio(audio_path_str: str, diarization_num_speakers: Optional[int] =
     # 2b. Diarization (Phase 13, opt-in). Heavy logic lives in stt_daemon.diarize_pipeline so this
     # orchestrator stays thin; on success it rewrites `.transcript.txt` labelled + writes the
     # `.speakers.json` source-of-truth + re-indexes, else degrades silently (never raises).
-    from stt_daemon.diarize_pipeline import run_diarize_stage
-    run_diarize_stage(
+    from stt_daemon.diarize_pipeline import run_diarize_stage, run_provider_speaker_stage
+    provider_speakers_written = run_provider_speaker_stage(
         audio_path=audio_path,
         transcript_path=transcript_path,
         asr_segments=asr_segments,
-        trans_cfg=trans_cfg,
         meeting_title=meeting_title,
-        channel_split_segments=used_channel_split,
+        provider=engine_used,
     )
+    if not provider_speakers_written:
+        run_diarize_stage(
+            audio_path=audio_path,
+            transcript_path=transcript_path,
+            asr_segments=asr_segments,
+            trans_cfg=trans_cfg,
+            meeting_title=meeting_title,
+            channel_split_segments=used_channel_split,
+        )
 
     # 3. Enqueue auto-run prompts (unchanged from Phase 2).
     from prompts.cache import PromptsCache

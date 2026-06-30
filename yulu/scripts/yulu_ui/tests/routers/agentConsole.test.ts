@@ -67,6 +67,7 @@ describe("agentConsoleRouter", () => {
     path: process.env.PATH,
     codexRoots: process.env.YULU_CODEX_PLUGIN_ROOTS,
     claudeRoots: process.env.YULU_CLAUDE_PLUGIN_ROOTS,
+    hermesHome: process.env.YULU_HERMES_HOME,
     rootsOnly: process.env.YULU_AGENT_PLUGIN_ROOTS_ONLY,
     codexConfig: process.env.YULU_CODEX_CONFIG_PATH,
   };
@@ -75,6 +76,7 @@ describe("agentConsoleRouter", () => {
     restoreEnv("PATH", oldEnv.path);
     restoreEnv("YULU_CODEX_PLUGIN_ROOTS", oldEnv.codexRoots);
     restoreEnv("YULU_CLAUDE_PLUGIN_ROOTS", oldEnv.claudeRoots);
+    restoreEnv("YULU_HERMES_HOME", oldEnv.hermesHome);
     restoreEnv("YULU_AGENT_PLUGIN_ROOTS_ONLY", oldEnv.rootsOnly);
     restoreEnv("YULU_CODEX_CONFIG_PATH", oldEnv.codexConfig);
   });
@@ -255,6 +257,35 @@ describe("agentConsoleRouter", () => {
     expect(result.plugins.current.find((plugin: { id: string }) => plugin.id === "zulip")).toMatchObject({
       status: "configured",
       resolvedPath: `${codexConfig}#mcp_servers.zulipchat`,
+    });
+  });
+
+  it("detects Hermes OAuth MCP connectors from mcp-tokens", async () => {
+    const root = mkdtempSync(join(tmpdir(), "agent-console-"));
+    roots.push(root);
+    const moviesDir = join(root, "movies");
+    const binDir = join(root, "bin");
+    const hermesHome = join(root, "hermes-home");
+    const tokenDir = join(hermesHome, "mcp-tokens");
+    mkdirSync(moviesDir);
+    mkdirSync(binDir);
+    mkdirSync(tokenDir, { recursive: true });
+    writeFileSync(join(binDir, "hermes"), "#!/bin/sh\nexit 0\n");
+    chmodSync(join(binDir, "hermes"), 0o755);
+    writeFileSync(join(tokenDir, "notion.json"), "{}\n");
+    process.env.PATH = `${binDir}:${oldEnv.path ?? ""}`;
+    process.env.YULU_AGENT_PLUGIN_ROOTS_ONLY = "1";
+    process.env.YULU_HERMES_HOME = hermesHome;
+
+    const configState = {
+      llm: { enabled: true, command: null, agent: { provider: "hermes" } },
+      agent_console: { plugins: { added: ["summary", "notion"] } },
+    };
+    const result = await createCaller(agentConsoleRouter, makeCtx(moviesDir, configState)).overview();
+
+    expect(result.plugins.current.find((plugin: { id: string }) => plugin.id === "notion")).toMatchObject({
+      status: "configured",
+      resolvedPath: join(tokenDir, "notion.json"),
     });
   });
 

@@ -222,6 +222,11 @@ create_config() {
     "mlx": {
       "model": "mlx-community/whisper-large-v3-mlx"
     },
+    "hermes": {
+      "agent_dir": "~/.hermes/hermes-agent",
+      "model": null,
+      "diarize": true
+    },
     "realtime": {
       "engine": "whisper",
       "chunk_sec": 15,

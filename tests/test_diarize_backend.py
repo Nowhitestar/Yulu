@@ -364,11 +364,11 @@ def test_diarize_backend_is_not_in_asr_runtime_dict():
     assert "diarize" not in backends
     assert not any("diar" in k.lower() for k in backends)
     # Only ASR engine keys are present.
-    assert set(backends) <= {"mlx", "whisper", "cloud", "mlx-realtime"}
+    assert set(backends) <= {"mlx", "whisper", "cloud", "mlx-realtime", "hermes"}
 
     runtime = STTRuntime(backends=backends)
     # The runtime's engine chain for any known ASR engine never includes a diarize engine.
-    for eng in ("mlx", "whisper", "cloud"):
+    for eng in ("mlx", "whisper", "cloud", "hermes"):
         if eng in backends:
             chain = runtime._engine_chain(eng)
             assert all("diar" not in c.lower() for c in chain)

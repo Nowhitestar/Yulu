@@ -81,6 +81,8 @@ Commands:
                     Use mlx-whisper, e.g. mlx-community/whisper-large-v3-mlx
   transcription engine whisper [model-path]
                     Use whisper.cpp GGML model
+  transcription engine hermes [agent-dir]
+                    Use Hermes' configured STT provider
   search "term" [--since 7d --type meeting --in summary --json --open]
                     Search across meetings and summaries
   provision <step>|--all|--list

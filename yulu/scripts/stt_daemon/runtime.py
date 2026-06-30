@@ -380,6 +380,7 @@ class MockSTTBackend:
 ENGINE_MLX = "mlx"
 ENGINE_WHISPER = "whisper"
 ENGINE_CLOUD = "cloud"
+ENGINE_HERMES = "hermes"
 
 
 class STTRuntime:

@@ -37,6 +37,12 @@ from typing import Optional
 # module-level so tests can point them at fixtures.
 STATE_PATH = Path.home() / ".config" / "yulu" / ".state.json"
 SCHEDULE_PATH = Path.home() / ".config" / "yulu" / "schedule.json"
+PROVIDER_SEGMENT_GAP_S = 1.25
+PROVIDER_MAX_SEGMENT_SPAN_S = 15.0
+PROVIDER_MAX_SEGMENT_CHARS = 160
+SENTENCE_END_CHARS = "。！？!?；;\n"
+NO_SPACE_BEFORE = "，。！？；：、,.!?;:%)]}）】》"
+NO_SPACE_AFTER = "([{（【《"
 
 
 def _load_json_file(path: Path):
@@ -356,6 +362,181 @@ def _write_channel_split_sidecar(
     )
     sm.write_sidecar(sm.speakers_sidecar_path(audio_path), doc)
     print(f"✅ 双轨通道 speaker sidecar 已保存: {sm.speakers_sidecar_path(audio_path)}")
+    return True
+
+
+def _provider_turns_from_segments(asr_segments: list) -> list[dict]:
+    """Convert provider diarized ASR segments to speaker turns.
+
+    This is for providers such as Hermes/Grok that return transcription and speaker labels in one
+    response. It avoids routing back through Yulu's local diarization backend.
+    """
+    turns: list[dict] = []
+    speaker_ids: dict[str, int] = {}
+    for seg in asr_segments:
+        if not isinstance(seg, dict):
+            continue
+        text = (seg.get("text") or "").strip()
+        if not text:
+            continue
+        raw_speaker = None
+        for key in ("speaker_idx", "speaker", "spk", "speaker_label", "speaker_id"):
+            value = seg.get(key)
+            if value is not None and value != "":
+                raw_speaker = value
+                break
+        if raw_speaker is None:
+            continue
+        try:
+            speaker_idx = int(raw_speaker)
+        except (TypeError, ValueError):
+            speaker_idx = speaker_ids.setdefault(str(raw_speaker), len(speaker_ids))
+        start = _segment_seconds(seg, "start")
+        end = _segment_seconds(seg, "end", default=start)
+        turns.append({"start": start, "end": end, "speaker_idx": speaker_idx})
+    return turns
+
+
+def _provider_speaker_key(seg: dict):
+    for key in ("speaker_idx", "speaker", "spk", "speaker_label", "speaker_id"):
+        value = seg.get(key)
+        if value is not None and value != "":
+            return str(value)
+    return None
+
+
+def _is_cjk(ch: str) -> bool:
+    return "\u3400" <= ch <= "\u9fff" or "\uf900" <= ch <= "\ufaff"
+
+
+def _join_provider_text(left: str, right: str) -> str:
+    left = left.strip()
+    right = right.strip()
+    if not left:
+        return right
+    if not right:
+        return left
+    if left[-1] in NO_SPACE_AFTER or right[0] in NO_SPACE_BEFORE:
+        return left + right
+    if _is_cjk(left[-1]) or _is_cjk(right[0]):
+        return left + right
+    return left + " " + right
+
+
+def _coalesce_provider_segments(asr_segments: list) -> list[dict]:
+    """Merge provider word/char segments into readable utterance chunks."""
+    # ponytail: heuristic merge; split on speaker/channel/gap/punctuation, add language-aware
+    # sentence segmentation only if provider output keeps being too chunky.
+    out: list[dict] = []
+    current: Optional[dict] = None
+    current_key = None
+
+    indexed = sorted(
+        ((_segment_seconds(s, "start"), i, s) for i, s in enumerate(asr_segments or [])
+         if isinstance(s, dict) and str(s.get("text") or "").strip()),
+        key=lambda r: (r[0], r[1]),
+    )
+    for _, _, seg in indexed:
+        start = _segment_seconds(seg, "start")
+        end = _segment_seconds(seg, "end", default=start)
+        speaker_key = _provider_speaker_key(seg)
+        key = (speaker_key, seg.get("channel"))
+        text = str(seg.get("text") or "").strip()
+
+        if current is None:
+            current = dict(seg)
+            current["start"] = start
+            current["end"] = end
+            current["text"] = text
+            current_key = key
+            continue
+
+        current_start = _segment_seconds(current, "start")
+        current_end = _segment_seconds(current, "end", default=current_start)
+        merged_text = _join_provider_text(str(current.get("text") or ""), text)
+        can_merge = (
+            key == current_key
+            and start - current_end <= PROVIDER_SEGMENT_GAP_S
+            and not str(current.get("text") or "").rstrip().endswith(tuple(SENTENCE_END_CHARS))
+            and max(end, current_end) - current_start <= PROVIDER_MAX_SEGMENT_SPAN_S
+            and len(merged_text) <= PROVIDER_MAX_SEGMENT_CHARS
+        )
+
+        if can_merge:
+            current["end"] = max(end, current_end)
+            current["end_ms"] = int(round(float(current["end"]) * 1000))
+            current["text"] = merged_text
+            continue
+
+        out.append(current)
+        current = dict(seg)
+        current["start"] = start
+        current["end"] = end
+        current["text"] = text
+        current_key = key
+
+    if current is not None:
+        out.append(current)
+    return out
+
+
+def run_provider_speaker_stage(
+    *,
+    audio_path: Path,
+    transcript_path: Path,
+    asr_segments: list,
+    meeting_title: str,
+    provider: str = "provider",
+) -> bool:
+    """Persist speaker labels when the STT provider already returned diarized segments."""
+    if not asr_segments:
+        return False
+    provider_segments = _coalesce_provider_segments(asr_segments)
+    turns = _provider_turns_from_segments(provider_segments)
+    if not turns:
+        return False
+
+    from . import speaker_merge as sm
+
+    speaker_hints = resolve_attendee_names(audio_path, meeting_title=meeting_title)
+    prior_map, prior_speakers, prior_turns = _load_prior(audio_path)
+    if prior_map and prior_turns:
+        try:
+            prior_map = sm.reanchor_by_overlap(
+                new_turns=turns, prior_turns=prior_turns, prior_map=prior_map)
+        except Exception as exc:
+            print(f"⚠️ provider 说话人重锚定失败，沿用既有映射: {exc}", file=sys.stderr)
+
+    result = sm.assign_speakers(
+        asr_segments=provider_segments,
+        turns=turns,
+        prior_map=prior_map,
+        prior_speakers=prior_speakers,
+        speaker_hints=speaker_hints,
+    )
+    if not result.segments:
+        return False
+
+    labelled = result.transcript
+    transcript_path.write_text(labelled, encoding="utf-8")
+    doc = sm.build_sidecar(
+        result=result,
+        turns=turns,
+        provider=provider,
+        num_speakers_supplied=None,
+        speaker_hints=speaker_hints,
+    )
+    sm.write_sidecar(sm.speakers_sidecar_path(audio_path), doc)
+    print(f"✅ provider 说话人标注 transcript 已保存: {transcript_path}")
+    print(f"✅ provider 说话人 sidecar 已保存: {sm.speakers_sidecar_path(audio_path)}")
+
+    try:
+        from search import indexer as _idx
+        _idx.upsert_doc(source_path=transcript_path,
+                        kind=_idx.KIND_MEETING_TRANSCRIPT, body=labelled)
+    except Exception as exc:
+        print(f"⚠️ search index upsert failed for {transcript_path}: {exc}", file=sys.stderr)
+
     return True
 
 

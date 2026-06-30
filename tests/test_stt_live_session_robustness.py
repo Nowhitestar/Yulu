@@ -242,6 +242,7 @@ def test_voiced_live_chunk_still_dispatches_with_realtime_options(tmp_path):
     assert backend.calls == 1
     assert received and received[0].text == "spoken"
     assert backend.last_options == {
+        "job_kind": "live_chunk",
         "condition_on_previous": False,
         "hallucination_silence_threshold": 1.5,
     }

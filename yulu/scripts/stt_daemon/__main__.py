@@ -13,6 +13,7 @@ def _build_real_backends(config: DaemonConfig):
     from .backends.mlx import MlxWhisperBackend
     from .backends.whisper_cli import WhisperCliBackend
     from .backends.cloud import CloudCommandBackend
+    from .backends.hermes import HermesSTTBackend
 
     final_mlx = MlxWhisperBackend(
         model=config.mlx_model,
@@ -28,6 +29,11 @@ def _build_real_backends(config: DaemonConfig):
         # Empty by default → CloudCommandBackend stays not-ready and the runtime's
         # mode dispatch simply never routes to it.
         "cloud": CloudCommandBackend(command=config.cloud_command),
+        "hermes": HermesSTTBackend(
+            agent_dir=config.hermes_agent_dir,
+            model=config.hermes_model,
+            diarize=config.hermes_diarize,
+        ),
     }
     # Realtime/live tail engine. When the realtime model differs from the final
     # model, register a SEPARATE backend (a second resident model) so the live

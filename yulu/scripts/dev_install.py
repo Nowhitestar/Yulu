@@ -235,6 +235,12 @@ def _copy_runtime_items(source_root: Path, runtime_root: Path) -> None:
             shutil.copy2(src, dst)
 
 
+def _build_ui_dist(source_root: Path) -> None:
+    ui_dir = source_root / "yulu/scripts/yulu_ui"
+    if (ui_dir / "package.json").exists():
+        _run(["npm", "run", "build"], timeout=180, check=True, cwd=ui_dir)
+
+
 def _compile_helpers(script_dir: Path) -> None:
     for name in ("build_audio_daemon.sh", "build_status_agent.sh"):
         build_script = script_dir / name
@@ -301,6 +307,7 @@ def apply(source_root: Path, runtime_root: Path, config_dir: Path, legacy_root: 
     data["apply"] = True
     if data["recording"]:
         raise RuntimeError("Refusing to install while Yulu is recording")
+    _build_ui_dist(source_root)
     _copy_runtime_items(source_root, runtime_root)
     script_dir = runtime_root / "yulu/scripts"
     _compile_helpers(script_dir)

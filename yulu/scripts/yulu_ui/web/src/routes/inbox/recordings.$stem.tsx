@@ -39,7 +39,7 @@ export const handle = {
 type Tab = "transcript" | "summary" | "realtime" | "raw";
 interface TranscriptionModelOption {
   id: string;
-  engine: "mlx" | "whisper";
+  engine: "mlx" | "whisper" | "hermes";
   model: string;
   label: string;
   active: boolean;

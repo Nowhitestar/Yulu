@@ -153,11 +153,11 @@ def test_transcribe_is_thin():
     from being reused as the final) → 240 (v0.6 Phase 13, diarization wiring: capture
     timestamped ASR segments + one thin call to
     stt_daemon.diarize_pipeline.run_diarize_stage) → 260 (per-run speaker-count CLI
-    override for UI re-transcribe; the HEAVY diarize logic lives in that
-    module, NOT here — the orchestrator only gained the wiring). Still well under the
+    override for UI re-transcribe; → 280 (Hermes STT manifest wiring; the HEAVY
+    diarize logic lives in that module, NOT here — the orchestrator only gained the wiring). Still well under the
     pre-refactor (~600 line) monolith; the orchestrator-ness invariant holds."""
     line_count = sum(1 for _ in (SCRIPTS / "transcribe.py").open(encoding="utf-8"))
-    assert line_count < 260, f"transcribe.py too long: {line_count} lines"
+    assert line_count < 280, f"transcribe.py too long: {line_count} lines"
 
 
 def test_prompts_seed_count(tmp_path):
