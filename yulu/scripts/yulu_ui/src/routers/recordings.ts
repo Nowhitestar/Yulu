@@ -31,11 +31,12 @@ const SUMMARY_CHANNEL_LABELS: Record<SummaryChannel, string> = {
 };
 const DEFAULT_MLX_MODEL = "mlx-community/whisper-large-v3-mlx";
 const DEFAULT_WHISPER_MODEL = "~/.config/yulu/models/ggml-large-v3.bin";
+const DEFAULT_HERMES_MODEL = "default-provider";
 const KNOWN_MLX_MODELS = [
   DEFAULT_MLX_MODEL,
   "mlx-community/whisper-large-v3-turbo",
 ] as const;
-const TranscriptionEngineSchema = z.enum(["mlx", "whisper"]);
+const TranscriptionEngineSchema = z.enum(["mlx", "whisper", "hermes"]);
 const TranscriptionModelSchema = z.object({
   engine: TranscriptionEngineSchema,
   model: z.string().min(1).optional(),
@@ -326,11 +327,22 @@ function shortModelName(model: string): string {
 function transcriptionModelOptions(config: unknown): TranscriptionModelOption[] {
   const root = asRecord(config);
   const trans = nestedRecord(root, "transcription");
-  const engine = (trans.final_engine === "whisper" ? "whisper" : "mlx") as TranscriptionEngine;
+  const engine = (
+    trans.final_engine === "whisper" || trans.final_engine === "hermes"
+      ? trans.final_engine
+      : "mlx"
+  ) as TranscriptionEngine;
   const mlx = nestedRecord(trans, "mlx");
+  const hermes = nestedRecord(trans, "hermes");
   const currentMlxModel = stringValue(mlx, "model") || DEFAULT_MLX_MODEL;
   const currentWhisperModel = stringValue(trans, "local_model_path") || DEFAULT_WHISPER_MODEL;
+  const currentHermesModel = stringValue(hermes, "model") || DEFAULT_HERMES_MODEL;
   const options: TranscriptionModelOption[] = [];
+  const activeModel = (candidateEngine: TranscriptionEngine) => {
+    if (candidateEngine === "mlx") return currentMlxModel;
+    if (candidateEngine === "whisper") return currentWhisperModel;
+    return currentHermesModel;
+  };
   const add = (candidateEngine: TranscriptionEngine, model: string, label: string) => {
     const id = optionId(candidateEngine, model);
     if (options.some((item) => item.id === id)) return;
@@ -339,12 +351,13 @@ function transcriptionModelOptions(config: unknown): TranscriptionModelOption[] 
       engine: candidateEngine,
       model,
       label,
-      active: candidateEngine === engine && model === (engine === "mlx" ? currentMlxModel : currentWhisperModel),
+      active: candidateEngine === engine && model === activeModel(candidateEngine),
     });
   };
   add("mlx", currentMlxModel, `MLX · ${shortModelName(currentMlxModel)}`);
   for (const model of KNOWN_MLX_MODELS) add("mlx", model, `MLX · ${shortModelName(model)}`);
   add("whisper", currentWhisperModel, `whisper.cpp · ${shortModelName(currentWhisperModel)}`);
+  add("hermes", currentHermesModel, "Hermes · default provider");
   return options;
 }
 
@@ -414,15 +427,22 @@ async function applyTranscriptionModel(ctx: {
   const cfg = ctx.config.read();
   const root = asRecord(cfg);
   const trans = nestedRecord(root, "transcription");
-  const currentEngine = (trans.final_engine === "whisper" ? "whisper" : "mlx") as TranscriptionEngine;
+  const currentEngine = (
+    trans.final_engine === "whisper" || trans.final_engine === "hermes"
+      ? trans.final_engine
+      : "mlx"
+  ) as TranscriptionEngine;
   const mlx = nestedRecord(trans, "mlx");
+  const hermes = nestedRecord(trans, "hermes");
   const currentMlxModel = stringValue(mlx, "model") || DEFAULT_MLX_MODEL;
   const currentWhisperModel = stringValue(trans, "local_model_path") || DEFAULT_WHISPER_MODEL;
+  const currentHermesModel = stringValue(hermes, "model") || DEFAULT_HERMES_MODEL;
   const selectedModel = (selection.model || "").trim();
   const changed =
     selection.engine !== currentEngine ||
     (selection.engine === "mlx" && selectedModel && selectedModel !== currentMlxModel) ||
-    (selection.engine === "whisper" && selectedModel && selectedModel !== currentWhisperModel);
+    (selection.engine === "whisper" && selectedModel && selectedModel !== currentWhisperModel) ||
+    (selection.engine === "hermes" && selectedModel && selectedModel !== currentHermesModel);
   if (!changed) return;
   if (!ctx.config.update) {
     throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "config update is unavailable" });
@@ -433,6 +453,9 @@ async function applyTranscriptionModel(ctx: {
   }
   if (selection.engine === "whisper" && selectedModel) {
     ctx.config.update("transcription.local_model_path", selectedModel);
+  }
+  if (selection.engine === "hermes" && selectedModel && selectedModel !== DEFAULT_HERMES_MODEL) {
+    ctx.config.update("transcription.hermes.model", selectedModel);
   }
   try {
     await ctx.launchctl?.restart("com.yulu.sttdaemon");

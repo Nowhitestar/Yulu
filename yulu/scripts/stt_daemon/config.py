@@ -31,6 +31,9 @@ class DaemonConfig:
     realtime_mlx_model: str = "mlx-community/whisper-large-v3-turbo"
     whisper_cli: str = "whisper-cli"
     whisper_model: str = ""
+    hermes_agent_dir: str = "~/.hermes/hermes-agent"
+    hermes_model: Optional[str] = None
+    hermes_diarize: bool = True
     # Final-transcription mode (transcription.mode): "local" keeps everything on
     # this machine (default); "cloud-fallback" tries local then the user's
     # cloud_command; "cloud-priority" tries cloud_command first then local.
@@ -91,6 +94,15 @@ class DaemonConfig:
             cfg.whisper_cli = trans["whisper_cli"]
         if trans.get("local_model_path"):
             cfg.whisper_model = str(Path(trans["local_model_path"]).expanduser())
+        hermes = trans.get("hermes", {}) if isinstance(trans.get("hermes"), dict) else {}
+        if hermes.get("agent_dir"):
+            cfg.hermes_agent_dir = str(Path(hermes["agent_dir"]).expanduser())
+        if hermes.get("model"):
+            cfg.hermes_model = str(hermes["model"])
+        if "diarize" in hermes:
+            cfg.hermes_diarize = str(hermes.get("diarize")).strip().lower() not in {
+                "0", "false", "no", "off"
+            }
         if trans.get("language"):
             cfg.default_language = trans["language"]
         if trans.get("mode"):

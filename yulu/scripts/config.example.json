@@ -66,6 +66,12 @@
     "mlx": {
       "model": "mlx-community/whisper-large-v3-mlx"
     },
+    "hermes": {
+      "agent_dir": "~/.hermes/hermes-agent",
+      "model": null,
+      "diarize": true,
+      "note": "Set final_engine=realtime.engine to \"hermes\" to delegate STT to Hermes' configured/default provider. If Hermes is configured for Grok/xAI, Yulu sends the audio to that provider through Hermes' credentials/config and preserves returned speaker diarization. This path never calls Yulu STT from Hermes."
+    },
     "realtime": {
       "engine": "mlx",
       "mlx_model": "mlx-community/whisper-large-v3-turbo",

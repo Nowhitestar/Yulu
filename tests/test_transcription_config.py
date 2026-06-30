@@ -115,6 +115,20 @@ def test_configure_sets_whisper_engine_command(tmp_path):
     assert "{{input}}" in trans["command"]
 
 
+def test_configure_sets_hermes_engine_for_final_and_realtime(tmp_path):
+    cfg = tmp_path / "config.json"
+    write_config(cfg)
+    agent_dir = tmp_path / "hermes-agent"
+
+    set_engine("hermes", str(agent_dir), path=cfg)
+
+    trans = json.loads(cfg.read_text(encoding="utf-8"))["transcription"]
+    assert trans["final_engine"] == "hermes"
+    assert trans["realtime"]["engine"] == "hermes"
+    assert trans["hermes"]["agent_dir"] == str(agent_dir)
+    assert trans["hermes"]["diarize"] is True
+
+
 def _run_shell_migration(tmp_path):
     script = SCRIPTS / "setup_capabilities.sh"
     return subprocess.run(

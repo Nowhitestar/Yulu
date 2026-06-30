@@ -380,6 +380,7 @@ class LiveSessionManager:
             ),
             session_id=active.spec.sid,
             options={
+                "job_kind": JobKind.LIVE_CHUNK.value,
                 "condition_on_previous": False,
                 "hallucination_silence_threshold": 1.5,
             },

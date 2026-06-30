@@ -55,13 +55,14 @@ export const SETTINGS: SettingDef[] = [
   { path: "transcription.post_recording_mode", category: "transcription", label: "Post-recording", type: "select", validate: z.enum(["fast_summary", "full_transcribe"]), reload: R.none }, // transcribe.py 每次跑读取,无需重载
 
   { path: "transcription.language",      category: "transcription", label: "语言",   type: "text",   validate: z.string().min(2).max(20),  reload: R.restart("sttdaemon") },   // B3 修正:旧为 sighup
-  { path: "transcription.final_engine",  category: "transcription", label: "最终引擎", type: "select", validate: z.enum(["mlx", "whisper"]), reload: R.restart("sttdaemon") },
+  { path: "transcription.final_engine",  category: "transcription", label: "最终引擎", type: "select", validate: z.enum(["mlx", "whisper", "hermes"]), reload: R.restart("sttdaemon") },
   { path: "transcription.local_model_path", category: "transcription", label: "本地模型", type: "path", validate: z.string(),             reload: R.restart("sttdaemon"), danger: true }, // 换模型路径:影响转写,误改即转写失败
   // transcription.mlx is a record; its only daemon-read sub-key is .model
   // (stt_daemon/config.py reads transcription.mlx.model). The other historical
   // mlx.* keys (preprocess_audio/passthrough_max_*/final_model) are NOT read by
   // any daemon and were removed from the UI (P4a-1).
   { path: "transcription.mlx",           category: "transcription", label: "MLX 参数", type: "text", validate: z.record(z.unknown()),      reload: R.restart("sttdaemon"), danger: true }, // MLX 引擎参数:误改影响转写质量/可用性
+  { path: "transcription.hermes",        category: "transcription", label: "Hermes 参数", type: "text", validate: z.record(z.unknown()),   reload: R.restart("sttdaemon"), danger: true },
   // Realtime/live-caption model (transcription.realtime.mlx_model) — a faster
   // model than the final pass. Read at daemon startup, so restart-class.
   { path: "transcription.realtime.mlx_model", category: "transcription", label: "实时字幕模型", type: "text", validate: z.string(),         reload: R.restart("sttdaemon") },

@@ -12,6 +12,7 @@ DEFAULT_MLX_MODEL = "mlx-community/whisper-large-v3-turbo"
 # picks for the final pass. large-v3 is too slow per-chunk for the live tail.
 DEFAULT_REALTIME_MLX_MODEL = "mlx-community/whisper-large-v3-turbo"
 DEFAULT_WHISPER_MODEL = str(Path.home() / ".config/yulu/models/ggml-large-v3.bin")
+DEFAULT_HERMES_AGENT_DIR = str(Path.home() / ".hermes/hermes-agent")
 FAST_MODE = "fast_summary"
 FULL_MODE = "full_transcribe"
 
@@ -109,7 +110,18 @@ def set_engine(engine, model=None, path=CONFIG_PATH):
         print(f"local_model_path={model_path}")
         return
 
-    raise SystemExit("engine must be mlx or whisper")
+    if engine == "hermes":
+        hermes = trans.setdefault("hermes", {})
+        hermes["agent_dir"] = str(Path(model or hermes.get("agent_dir") or DEFAULT_HERMES_AGENT_DIR).expanduser())
+        hermes["diarize"] = hermes.get("diarize", True)
+        trans["final_engine"] = "hermes"
+        realtime["engine"] = "hermes"
+        save_config(cfg, path)
+        print("final_engine=hermes")
+        print(f"hermes.agent_dir={hermes['agent_dir']}")
+        return
+
+    raise SystemExit("engine must be mlx, whisper, or hermes")
 
 
 def status(path=CONFIG_PATH):
@@ -125,6 +137,10 @@ def status(path=CONFIG_PATH):
         print(f"mlx.model={mlx.get('model') or DEFAULT_MLX_MODEL}")
         print(f"mlx.final_model={mlx.get('final_model') or mlx.get('model') or DEFAULT_MLX_MODEL}")
         print(f"mlx.preprocess_audio={mlx.get('preprocess_audio', True)}")
+    elif engine == "hermes":
+        hermes = trans.get("hermes", {}) if isinstance(trans.get("hermes", {}), dict) else {}
+        print(f"hermes.agent_dir={hermes.get('agent_dir') or DEFAULT_HERMES_AGENT_DIR}")
+        print(f"hermes.diarize={hermes.get('diarize', True)}")
     else:
         print(f"whisper_cli={trans.get('whisper_cli') or 'whisper-cli'}")
         print(f"local_model_path={trans.get('local_model_path') or DEFAULT_WHISPER_MODEL}")
@@ -139,7 +155,8 @@ def usage():
         "  configure.py transcription status\n"
         "  configure.py transcription mode fast|full\n"
         "  configure.py transcription engine mlx [mlx-model]\n"
-        "  configure.py transcription engine whisper [ggml-model-path]",
+        "  configure.py transcription engine whisper [ggml-model-path]\n"
+        "  configure.py transcription engine hermes [hermes-agent-dir]",
         file=sys.stderr,
     )
     raise SystemExit(2)

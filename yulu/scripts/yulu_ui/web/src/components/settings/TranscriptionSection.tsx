@@ -14,11 +14,12 @@ const TRANSCRIPTION_MODES = [
 ] as const;
 
 // The final-transcription engine. MLX runs Apple-Silicon MLX Whisper in-process;
-// whisper.cpp runs the whisper-cli binary against a local .bin model. The choice
-// gates which model fields are relevant (P4a-1).
+// whisper.cpp runs the whisper-cli binary against a local .bin model; Hermes
+// delegates to the user's configured Hermes STT provider.
 const ENGINES = [
   { value: "mlx", label: "MLX" },
   { value: "whisper", label: "Whisper.cpp" },
+  { value: "hermes", label: "Hermes" },
 ] as const;
 
 const DIARIZATION_PROVIDERS = [
@@ -71,7 +72,7 @@ export function TranscriptionSection({ tracker }: TranscriptionSectionProps) {
     mode?: "local" | "cloud-fallback" | "cloud-priority";
     post_recording_mode?: "fast_summary" | "full_transcribe";
     realtime_enabled?: boolean;
-    final_engine?: "mlx" | "whisper";
+    final_engine?: "mlx" | "whisper" | "hermes";
     language?: string;
     local_model_path?: string;
     whisper_cli?: string;
@@ -83,7 +84,7 @@ export function TranscriptionSection({ tracker }: TranscriptionSectionProps) {
   const engine = tr.final_engine ?? "mlx";
   const caps = (hostCapabilitiesQuery.data?.capabilities ?? {}) as Record<string, Capability>;
   const capabilitiesLoading = hostCapabilitiesQuery.isPending && !hostCapabilitiesQuery.data;
-  const engineCap = engine === "mlx" ? caps.mlx_whisper : caps.whisper_cli;
+  const engineCap = engine === "mlx" ? caps.mlx_whisper : engine === "whisper" ? caps.whisper_cli : undefined;
   const whisperModelCap = caps.models;
   const diarizationCap = caps.diarization;
   const modelOptions = (models ?? []).map((m) => ({ value: m.path, label: m.name }));
@@ -103,8 +104,7 @@ export function TranscriptionSection({ tracker }: TranscriptionSectionProps) {
       <h2 className="settings-section-h">{t("settings.transcription.heading")}</h2>
       <p className="settings-section-sub">{t("settings.transcription.sub")}</p>
 
-      {/* P4a-1: engine selector — MLX (Apple Silicon, in-process) vs whisper.cpp
-          (whisper-cli + a local .bin). Picks transcription.final_engine and gates
+      {/* P4a-1: engine selector. Picks transcription.final_engine and gates
           which model fields show below. */}
       <div className="row">
         <div className="row-label">
@@ -132,12 +132,14 @@ export function TranscriptionSection({ tracker }: TranscriptionSectionProps) {
         <div className="row-status">{tracker.statusFor("transcription.final_engine") === "restart" ? "⟳" : null}</div>
       </div>
 
-      <CapabilityRow
-        label={t("settings.transcription.capability.label")}
-        help={t("settings.transcription.capability.help")}
-        cap={engineCap}
-        loading={capabilitiesLoading}
-      />
+      {engine !== "hermes" ? (
+        <CapabilityRow
+          label={t("settings.transcription.capability.label")}
+          help={t("settings.transcription.capability.help")}
+          cap={engineCap}
+          loading={capabilitiesLoading}
+        />
+      ) : null}
       {engine === "whisper" ? (
         <CapabilityRow
           label={t("settings.transcription.modelCapability.label")}

@@ -317,6 +317,7 @@ class STTDaemonApp:
             session_id=msg.session_id,
             meeting_title=msg.meeting_title,
             options={
+                "job_kind": msg.kind.value,
                 "word_timestamps": msg.word_timestamps,
                 "condition_on_previous": msg.condition_on_previous,
                 "hallucination_silence_threshold": msg.hallucination_silence_threshold,

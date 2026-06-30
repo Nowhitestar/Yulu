@@ -64,3 +64,26 @@ def test_preferred_node_uses_an_existing_binary_when_available():
     if any(Path(p).exists() for p in ("/opt/homebrew/bin/node", "/usr/local/bin/node")) or (Path.home() / ".nvm/versions/node").exists():
         assert preferred.exists()
     assert preferred.name == "node"
+
+
+def test_apply_builds_ui_dist_before_copying_runtime(tmp_path, monkeypatch):
+    dev_install = load_dev_install()
+    calls = []
+
+    monkeypatch.setattr(dev_install, "plan", lambda *args: {"recording": False})
+    monkeypatch.setattr(dev_install, "_build_ui_dist", lambda source_root: calls.append("build"))
+    monkeypatch.setattr(dev_install, "_copy_runtime_items", lambda source_root, runtime_root: calls.append("copy"))
+    monkeypatch.setattr(dev_install, "_compile_helpers", lambda script_dir: calls.append("compile"))
+    monkeypatch.setattr(dev_install, "_kill_legacy_processes", lambda legacy_root: calls.append("kill"))
+    monkeypatch.setattr(dev_install, "_install_launchagents", lambda script_dir, *, python_bin: calls.append("launchagents"))
+    monkeypatch.setattr(dev_install, "_install_cli", lambda script_dir: calls.append("cli"))
+
+    dev_install.apply(
+        tmp_path / "source",
+        tmp_path / "runtime",
+        tmp_path / "config",
+        tmp_path / "legacy",
+        "/usr/bin/python3",
+    )
+
+    assert calls[:2] == ["build", "copy"]
