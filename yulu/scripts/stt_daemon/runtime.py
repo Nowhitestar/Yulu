@@ -465,6 +465,8 @@ class STTRuntime:
             and ENGINE_WHISPER in self.backends
         ):
             local.append(ENGINE_WHISPER)
+        if requested == ENGINE_HERMES and ENGINE_MLX in self.backends:
+            local.append(ENGINE_MLX)
 
         cloud_usable = self.cloud_command_present and ENGINE_CLOUD in self.backends
         if cloud_usable and self.mode == "cloud-priority":
