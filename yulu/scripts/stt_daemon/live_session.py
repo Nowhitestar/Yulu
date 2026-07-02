@@ -46,6 +46,7 @@ class LiveSession:
     language: str
     chunk_sec: float = 10.0
     meeting_title: Optional[str] = None
+    context_prompt: str = ""
     # Engine used for the live chunks ONLY. Defaults to `engine` so existing
     # callers/tests are unchanged; the daemon overrides this with the fast
     # realtime backend (e.g. "mlx-realtime") so the live tail keeps up while
@@ -193,6 +194,7 @@ class LiveSessionManager:
                 language=active.spec.language,
                 audio_path=active.spec.mic_path,
                 initial_prompt=self.vocab_cache.inject_prompt(
+                    base_prompt=active.spec.context_prompt,
                     meeting_title=active.spec.meeting_title or "",
                 ),
                 session_id=sid,
@@ -376,6 +378,7 @@ class LiveSessionManager:
             language=active.spec.language,
             audio_path=str(chunk_path),
             initial_prompt=self.vocab_cache.inject_prompt(
+                base_prompt=active.spec.context_prompt,
                 meeting_title=active.spec.meeting_title or "",
             ),
             session_id=active.spec.sid,

@@ -106,6 +106,7 @@ def transcribe_file(
     connect_timeout_sec: float = 5.0,
     response_timeout_sec: float = 7200.0,
     channel_split: bool = False,
+    context_prompt: str = "",
 ) -> dict[str, Any]:
     """Synchronously transcribe one audio file via the running stt_daemon.
 
@@ -137,6 +138,8 @@ def transcribe_file(
         "timeout_sec": timeout_sec,
         "channel_split": channel_split,
     }
+    if context_prompt:
+        request["context_prompt"] = context_prompt
     response = _run_with_retry(
         socket_path, request,
         connect_timeout_sec=connect_timeout_sec,
@@ -158,6 +161,7 @@ def request_final_transcribe(
     channel_split: bool = False,
     session_id: Optional[str] = None,
     socket_path: Optional[Path] = None,
+    context_prompt: str = "",
 ) -> dict[str, Any]:
     """Thin wrapper around :func:`transcribe_file` for post-recording callers.
 
@@ -174,6 +178,7 @@ def request_final_transcribe(
         kind="final_transcribe",
         channel_split=channel_split,
         socket_path=socket_path,
+        context_prompt=context_prompt,
     )
 
 

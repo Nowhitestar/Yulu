@@ -157,8 +157,13 @@ def test_diarize_enabled_writes_labelled_transcript_and_sidecar(env, monkeypatch
 def test_diarize_uses_calendar_attendee_names_as_speaker_hints(env, monkeypatch):
     fake_home, tmp_path = env
     _config(fake_home, diarize_enabled=True)
-    monkeypatch.setattr(transcribe, "_request_final_transcribe_raw",
-                        lambda *a, **k: _mono_response(_ASR))
+    seen_contexts = []
+
+    def fake_transcribe(*_args, **kwargs):
+        seen_contexts.append(kwargs.get("context_prompt", ""))
+        return _mono_response(_ASR)
+
+    monkeypatch.setattr(transcribe, "_request_final_transcribe_raw", fake_transcribe)
     monkeypatch.setattr(dp, "diarize_via_daemon",
                         lambda *a, **k: list(_TURNS))
 
@@ -180,6 +185,7 @@ def test_diarize_uses_calendar_attendee_names_as_speaker_hints(env, monkeypatch)
     transcript = audio.with_suffix(".transcript.txt").read_text(encoding="utf-8")
     assert "[00:00 Lewis]" in transcript
     assert "[00:02 Ciel]" in transcript
+    assert seen_contexts == ["参会者姓名：Lewis, Ciel。"]
 
     doc = json.loads(sm.speakers_sidecar_path(audio).read_text(encoding="utf-8"))
     assert doc["speaker_hints"] == {

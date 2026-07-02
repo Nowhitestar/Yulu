@@ -111,6 +111,7 @@ class TranscribeRequest:
     hallucination_silence_threshold: float = 2.0
     timeout_sec: int = 7200
     channel_split: bool = False
+    context_prompt: str = ""
 
 
 @dataclass
@@ -176,6 +177,8 @@ class SubscribeSessionRequest:
     engine: str = "mlx"
     language: str = "zh"
     chunk_sec: int = 10
+    meeting_title: Optional[str] = None
+    context_prompt: str = ""
 
 
 @dataclass

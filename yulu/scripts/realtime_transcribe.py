@@ -54,6 +54,8 @@ async def subscribe_loop(
     engine: str,
     language: str,
     chunk_sec: float,
+    title: str = "",
+    context_prompt: str = "",
     stop_event: asyncio.Event,
 ) -> None:
     """Open a long-lived subscribe_session connection and accumulate partials."""
@@ -66,6 +68,8 @@ async def subscribe_loop(
         "engine": engine,
         "language": language,
         "chunk_sec": chunk_sec,
+        "meeting_title": title,
+        "context_prompt": context_prompt,
     }
     writer.write((json.dumps(sub) + "\n").encode())
     await writer.drain()
@@ -170,6 +174,12 @@ async def _async_main(audio_path: Path, title: str) -> int:
             pass
 
     print(f"realtime_transcribe: title={title!r} audio={audio_path} engine={engine} chunk_sec={chunk_sec}")
+    context_prompt = ""
+    try:
+        from stt_daemon.diarize_pipeline import attendee_context_prompt, resolve_attendee_names
+        context_prompt = attendee_context_prompt(resolve_attendee_names(audio_path, meeting_title=title))
+    except Exception as exc:
+        print(f"calendar attendee prompt failed: {exc}", file=sys.stderr)
     try:
         await subscribe_loop(
             audio_path=audio_path,
@@ -179,6 +189,8 @@ async def _async_main(audio_path: Path, title: str) -> int:
             engine=engine,
             language=language,
             chunk_sec=chunk_sec,
+            title=title,
+            context_prompt=context_prompt,
             stop_event=stop_event,
         )
     except (ConnectionRefusedError, FileNotFoundError) as exc:

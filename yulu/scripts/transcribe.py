@@ -53,7 +53,7 @@ def load_config() -> dict:
         return json.load(f)
 
 
-def _request_final_transcribe_raw(audio_path: Path, trans_cfg: dict, meeting_title: str) -> dict:
+def _request_final_transcribe_raw(audio_path: Path, trans_cfg: dict, meeting_title: str, context_prompt: str = "") -> dict:
     """Channel-aware transcribe RPC; returns raw daemon payload or error envelope."""
     try:
         return request_final_transcribe(
@@ -61,15 +61,16 @@ def _request_final_transcribe_raw(audio_path: Path, trans_cfg: dict, meeting_tit
             language=trans_cfg.get("language", "zh"),
             engine=trans_cfg.get("final_engine", "mlx"),
             channel_split=True,
+            context_prompt=context_prompt,
         )
     except (DaemonUnavailable, DaemonError) as exc:
         print(f"⚠️ stt_daemon error: {exc}", file=sys.stderr)
         return {"status": "error", "error": str(exc)}
 
 
-def _request_final_transcribe(audio_path: Path, trans_cfg: dict, meeting_title: str) -> Optional[dict]:
+def _request_final_transcribe(audio_path: Path, trans_cfg: dict, meeting_title: str, context_prompt: str = "") -> Optional[dict]:
     """Returns the daemon's response dict if status=ok, else None."""
-    resp = _request_final_transcribe_raw(audio_path, trans_cfg, meeting_title)
+    resp = _request_final_transcribe_raw(audio_path, trans_cfg, meeting_title, context_prompt=context_prompt)
     if resp.get("status") != "ok":
         print(f"⚠️ daemon transcribe failed: {resp.get('error')}", file=sys.stderr)
         return None
@@ -121,6 +122,12 @@ def process_audio(audio_path_str: str, diarization_num_speakers: Optional[int] =
     print(f"📁 处理: {audio_path.name}（标题: {meeting_title}）")
     if clean_audio_path != audio_path:
         print(f"🎧 已生成去回声播放音频: {clean_audio_path.name}")
+    attendee_prompt = ""
+    try:
+        from stt_daemon.diarize_pipeline import attendee_context_prompt, resolve_attendee_names
+        attendee_prompt = attendee_context_prompt(resolve_attendee_names(audio_path, meeting_title=meeting_title))
+    except Exception as exc:
+        print(f"⚠️ calendar attendee prompt failed: {exc}", file=sys.stderr)
 
     raw_path = audio_path.with_suffix(".raw.transcript.txt")
     transcript_path = audio_path.with_suffix(".transcript.txt")
@@ -151,7 +158,7 @@ def process_audio(audio_path_str: str, diarization_num_speakers: Optional[int] =
             print("⚠️ 未找到可用实时转写，回退到完整 daemon 转录", file=sys.stderr)
 
     if merged is None:
-        response = _request_final_transcribe(audio_path, trans_cfg, meeting_title)
+        response = _request_final_transcribe(audio_path, trans_cfg, meeting_title, context_prompt=attendee_prompt)
         if response is None:
             merged = read_realtime_transcript(realtime_path)
             if merged is None:
