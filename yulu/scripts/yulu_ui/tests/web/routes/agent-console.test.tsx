@@ -23,6 +23,25 @@ let mockSessions: Array<Record<string, unknown>> = [];
 let mockSelectedSession: Record<string, unknown> | null = null;
 let mockZulipConfigured = false;
 let mockCalendars: Array<Record<string, unknown>> = [];
+let mockTasks: Array<Record<string, unknown>> = [];
+
+function taskFixture(overrides: Record<string, unknown> = {}) {
+  const stages = overrides.stages as Record<string, unknown> | undefined;
+  return {
+    id: "ProductSync_20260625_093000",
+    stem: "ProductSync_20260625_093000",
+    title: "Product Sync",
+    recordedAt: "2026-06-25T09:30:00",
+    dayLabel: "today",
+    stages: { record: "done", transcribe: "done", summarize: "done", send: "idle", ...stages },
+    dest: null,
+    error: "",
+    hasTranscript: true,
+    hasSummary: true,
+    hasRealtime: false,
+    ...overrides,
+  };
+}
 
 vi.mock("react-router", async (orig) => {
   const actual = await orig<typeof import("react-router")>();
@@ -69,21 +88,7 @@ vi.mock("../../../web/src/trpc.js", () => {
                 available: [],
                 all: [],
               },
-              tasks: [
-                {
-                  id: "ProductSync_20260625_093000",
-                  stem: "ProductSync_20260625_093000",
-                  title: "Product Sync",
-                  recordedAt: "2026-06-25T09:30:00",
-                  dayLabel: "today",
-                  stages: { record: "done", transcribe: "done", summarize: "done", send: "idle" },
-                  dest: null,
-                  error: "",
-                  hasTranscript: true,
-                  hasSummary: true,
-                  hasRealtime: false,
-                },
-              ],
+              tasks: mockTasks,
             },
             isPending: false,
             refetch: vi.fn(() => Promise.resolve({ data: null })),
@@ -231,6 +236,7 @@ beforeEach(() => {
   mockSelectedSession = null;
   mockZulipConfigured = false;
   mockCalendars = [{ type: "google", enabled: true, gog_account: "yulu@example.com", watch_calendars: ["primary"] }];
+  mockTasks = [taskFixture()];
   askMutateAsync.mockResolvedValue({
     answer: "OK",
     sources: [],
@@ -268,18 +274,22 @@ beforeEach(() => {
 });
 
 describe("AgentConsole", () => {
-  it("renders the three primary work areas", () => {
-    const { getByText } = wrap();
+  it("renders the primary work areas and opens capabilities on demand", () => {
+    const { getByText, queryByText } = wrap();
     expect(getByText("最近三天")).toBeInTheDocument();
     expect(getByText("问会议")).toBeInTheDocument();
+    expect(queryByText("底层 Agent")).not.toBeInTheDocument();
+    fireEvent.click(getByText("能力"));
     expect(getByText("底层 Agent")).toBeInTheDocument();
   });
 
-  it("surfaces the voice input entrypoints from Agent Console", () => {
-    const { container, getByText } = wrap();
+  it("keeps voice input available without duplicating it in the mode bar", () => {
+    const { container, getByText, queryByText } = wrap();
     const modebar = container.querySelector(".agent-console-modebar") as HTMLElement;
-    expect(within(modebar).getByText("语音输入").closest("a")).toHaveAttribute("href", "/voice-input");
-    expect(getByText("查看入口").closest("a")).toHaveAttribute("href", "/voice-input");
+    expect(within(modebar).queryByText("语音输入")).not.toBeInTheDocument();
+    fireEvent.click(getByText("能力"));
+    expect(getByText("打开").closest("a")).toHaveAttribute("href", "/voice-input");
+    expect(queryByText("查看入口")).not.toBeInTheDocument();
     expect(getByText("配置快捷键").closest("a")).toHaveAttribute("href", "/settings/voice");
   });
 
@@ -298,6 +308,39 @@ describe("AgentConsole", () => {
     );
   });
 
+  it("shows transcribe progress in the same task action slot immediately after click", () => {
+    mockTasks = [taskFixture({
+      stages: { transcribe: "idle", summarize: "idle", send: "idle" },
+      hasTranscript: false,
+      hasSummary: false,
+    })];
+    const { getByRole, getByText, queryByRole } = wrap();
+    fireEvent.click(getByRole("button", { name: "生成转写" }));
+
+    expect(transcribeMutate).toHaveBeenCalledWith(
+      { stem: "ProductSync_20260625_093000" },
+      expect.objectContaining({ onError: expect.any(Function), onSettled: expect.any(Function) }),
+    );
+    expect(getByText("生成转写中")).toBeInTheDocument();
+    expect(queryByRole("button", { name: "生成转写" })).toBeNull();
+  });
+
+  it("shows summary progress in the same task action slot immediately after click", () => {
+    mockTasks = [taskFixture({
+      stages: { transcribe: "done", summarize: "idle", send: "idle" },
+      hasSummary: false,
+    })];
+    const { getByRole, getByText, queryByRole } = wrap();
+    fireEvent.click(getByRole("button", { name: "生成摘要" }));
+
+    expect(summarizeMutate).toHaveBeenCalledWith(
+      { stem: "ProductSync_20260625_093000", promptId: "p1" },
+      expect.objectContaining({ onError: expect.any(Function), onSettled: expect.any(Function) }),
+    );
+    expect(getByText("生成摘要中")).toBeInTheDocument();
+    expect(queryByRole("button", { name: "生成摘要" })).toBeNull();
+  });
+
   it("routes unconfigured send channels to Agent plugin configuration", () => {
     const { getAllByText } = wrap();
     const zulipButton = getAllByText("Zulip")[0];
@@ -312,6 +355,7 @@ describe("AgentConsole", () => {
 
   it("keeps Hermes and OpenClaw visible and connectable", () => {
     const { getByText } = wrap();
+    fireEvent.click(getByText("能力"));
     expect(getByText("Hermes")).toBeInTheDocument();
     expect(getByText("OpenClaw")).toBeInTheDocument();
     expect(getByText("Hermes").closest("button")).not.toBeDisabled();
@@ -319,6 +363,7 @@ describe("AgentConsole", () => {
 
   it("runs Agent detection with visible feedback", async () => {
     const { getByText, findByText } = wrap();
+    fireEvent.click(getByText("能力"));
     fireEvent.click(getByText("探测"));
     expect(detectRefetch).toHaveBeenCalled();
     expect(await findByText("已找到 4/4 个 Agent CLI")).toBeInTheDocument();
@@ -326,6 +371,7 @@ describe("AgentConsole", () => {
 
   it("saves Notion send destination from Current Capabilities", () => {
     const { getByPlaceholderText, getByText } = wrap();
+    fireEvent.click(getByText("能力"));
     const row = getByText("Yulu Meeting").closest(".agent-cap-row") as HTMLElement;
     fireEvent.click(within(row).getByText("更改"));
     const input = getByPlaceholderText("Yulu Meeting") as HTMLInputElement;
@@ -341,6 +387,7 @@ describe("AgentConsole", () => {
   it("saves Zulip send destination from Agent connector candidates", () => {
     mockZulipConfigured = true;
     const { getByLabelText, getByText } = wrap();
+    fireEvent.click(getByText("能力"));
     const row = getByText("meetings / weekly").closest(".agent-cap-row") as HTMLElement;
     fireEvent.click(within(row).getByText("更改"));
     fireEvent.change(getByLabelText("Zulip 候选目标"), { target: { value: "zulip:product:launch" } });
@@ -354,6 +401,7 @@ describe("AgentConsole", () => {
 
   it("updates scheduler calendar subscriptions from the Console calendar modal", () => {
     const { getByText } = wrap();
+    fireEvent.click(getByText("能力"));
     const row = getByText("账户与订阅日历").closest(".agent-cap-row") as HTMLElement;
     fireEvent.click(within(row).getByText("更改"));
     const primaryRow = getByText("Primary").closest("label") as HTMLLabelElement;
@@ -368,6 +416,7 @@ describe("AgentConsole", () => {
 
   it("opens summary capability in the same change modal pattern", () => {
     const { getByText, getByLabelText } = wrap();
+    fireEvent.click(getByText("能力"));
     const row = getByText("会议纪要").closest(".agent-cap-row") as HTMLElement;
     fireEvent.click(within(row).getByText("更改"));
     expect(getByLabelText("总结配置")).toBeInTheDocument();

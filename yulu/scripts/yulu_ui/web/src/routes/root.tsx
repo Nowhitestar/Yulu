@@ -1,7 +1,6 @@
 import { Outlet, useLocation } from "react-router";
 import { Sidebar } from "../components/Sidebar.js";
 import { TopBar } from "../components/TopBar.js";
-import { Onboarding } from "../components/Onboarding.js";
 
 export function RootLayout() {
   const location = useLocation();
@@ -17,9 +16,6 @@ export function RootLayout() {
           <Outlet />
         </div>
       </main>
-      {/* Self-gating: renders null once dismissed (config flag / localStorage),
-          so mounting unconditionally is correct — never forced (SET-03). */}
-      <Onboarding />
     </div>
   );
 }

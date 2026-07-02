@@ -738,25 +738,6 @@ export const en: Messages = {
   "meeting.current.aria": "Record current meeting: {title}",
   "meeting.current.select.aria": "Current meeting recording action",
 
-  // ---- Onboarding ----
-  "onboarding.aria": "Welcome to Yulu",
-  "onboarding.title": "Welcome to Yulu",
-  "onboarding.sub": "Here's what Yulu can see on your machine.",
-  "onboarding.skip": "Skip",
-  "onboarding.done": "Got it",
-  "onboarding.unknown": "Couldn't check this right now — you can do it in setup.",
-  "onboarding.recordingDir.label": "Recording folder",
-  "onboarding.recordingDir.ok": "Recording folder ready — your meetings stay on this machine.",
-  "onboarding.recordingDir.missing": "Recording folder not set up yet — Yulu will help in setup.",
-  "onboarding.claude.label": "Coding agent (Claude)",
-  "onboarding.claude.ok": "Your coding agent is detected — Yulu reuses it to write notes.",
-  "onboarding.claude.missing": "Coding agent not detected — install it, then Yulu will use it.",
-  "onboarding.whisper.label": "Whisper transcription",
-  "onboarding.whisper.ok": "Whisper is ready — transcription runs on-device, no cloud.",
-  "onboarding.whisper.missing": "Whisper not detected — Yulu will help set up transcription.",
-  "onboarding.models.label": "Transcription model",
-  "onboarding.models.ok": "A transcription model is available on this machine.",
-  "onboarding.models.missing": "No transcription model yet — Yulu will fetch one in setup.",
 };
 
 export const zh: Messages = {
@@ -1474,31 +1455,12 @@ export const zh: Messages = {
   "pill.transcribing": "转写中… {time}",
   "pill.meeting": "会议进行中",
   "pill.daemonDown": "音频守护进程已停止",
-  "meeting.current.record": "开始录制",
+  "meeting.current.record": "录制",
   "meeting.current.recordJoin": "录制并加入",
   "meeting.current.pending": "启动中",
   "meeting.current.aria": "录制当前会议：{title}",
   "meeting.current.select.aria": "当前会议录制动作",
 
-  // ---- Onboarding ----
-  "onboarding.aria": "欢迎使用 Yulu",
-  "onboarding.title": "欢迎使用 Yulu",
-  "onboarding.sub": "以下是 Yulu 在你设备上能看到的内容。",
-  "onboarding.skip": "跳过",
-  "onboarding.done": "知道了",
-  "onboarding.unknown": "暂时无法检查 —— 你可以在设置中完成。",
-  "onboarding.recordingDir.label": "录音文件夹",
-  "onboarding.recordingDir.ok": "录音文件夹已就绪 —— 你的会议都保留在本机。",
-  "onboarding.recordingDir.missing": "录音文件夹尚未设置 —— Yulu 会在设置中协助。",
-  "onboarding.claude.label": "编码 Agent（Claude）",
-  "onboarding.claude.ok": "已检测到你的编码 Agent —— Yulu 复用它来撰写笔记。",
-  "onboarding.claude.missing": "未检测到编码 Agent —— 安装后 Yulu 即可使用。",
-  "onboarding.whisper.label": "Whisper 转写",
-  "onboarding.whisper.ok": "Whisper 已就绪 —— 转写在本机运行，不上云。",
-  "onboarding.whisper.missing": "未检测到 Whisper —— Yulu 会协助设置转写。",
-  "onboarding.models.label": "转写模型",
-  "onboarding.models.ok": "本机已有可用的转写模型。",
-  "onboarding.models.missing": "尚无转写模型 —— Yulu 会在设置中获取一个。",
 };
 
 export const MESSAGES: Record<Lang, Messages> = { zh, en };

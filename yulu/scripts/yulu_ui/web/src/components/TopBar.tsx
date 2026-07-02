@@ -63,9 +63,8 @@ export function TopBar() {
         <div className="topbar-theme">
           <ThemeToggle />
         </div>
-        <CurrentMeetingAction />
         <div className="topbar-record">
-          <Pill />
+          <CurrentMeetingAction fallback={<Pill />} />
         </div>
       </div>
     </div>

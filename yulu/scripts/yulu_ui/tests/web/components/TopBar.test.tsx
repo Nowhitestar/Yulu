@@ -16,7 +16,7 @@ vi.mock("../../../web/src/components/Pill.js", () => ({
   Pill: () => <button type="button">Record</button>,
 }));
 vi.mock("../../../web/src/components/CurrentMeetingAction.js", () => ({
-  CurrentMeetingAction: () => null,
+  CurrentMeetingAction: ({ fallback }: { fallback?: ReactNode }) => <>{fallback}</>,
 }));
 
 const mUseMatches = useMatches as unknown as ReturnType<typeof vi.fn>;
@@ -80,6 +80,12 @@ describe("TopBar", () => {
     setMatches([{ breadcrumb: "Inbox" }]);
     const { container } = render(<Wrap><TopBar /></Wrap>);
     expect(container.querySelector('[role="group"][aria-label="主题"]')).not.toBeNull();
+  });
+
+  it("renders a single recording slot fallback", () => {
+    setMatches([{ breadcrumb: "Inbox" }]);
+    render(<Wrap><TopBar /></Wrap>);
+    expect(screen.getAllByRole("button", { name: "Record" })).toHaveLength(1);
   });
 
   it("links the settings icon to Settings", () => {

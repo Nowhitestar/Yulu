@@ -18,7 +18,6 @@ import {
   ListChecks,
   Loader2,
   MessageSquare,
-  Mic,
   MoreHorizontal,
   Pencil,
   Pin,
@@ -42,6 +41,7 @@ import "./agent-console.css";
 export const handle = { breadcrumb: "breadcrumb.agentConsole", filters: null };
 
 type StageState = "idle" | "waiting" | "running" | "done" | "failed";
+type OptimisticTaskStage = "transcribe" | "summarize";
 type SendDest = "notion" | "zulip" | null;
 type ConsoleMode = "ask" | "run";
 type AgentId = "codex" | "claude" | "hermes" | "openclaw";
@@ -270,6 +270,7 @@ export function AgentConsole() {
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [detectMessage, setDetectMessage] = useState<string>("点击后重新扫描本机 CLI 路径");
   const [notice, setNotice] = useState<string | null>(null);
+  const [optimisticTaskStages, setOptimisticTaskStages] = useState<Record<string, { stage: OptimisticTaskStage; startedAt: number }>>({});
 
   const overview = trpc.agentConsole.overview.useQuery(undefined, { refetchInterval: 5000 });
   const detectAgents = trpc.agentConsole.detectAgents.useQuery(undefined, { enabled: false });
@@ -317,9 +318,42 @@ export function AgentConsole() {
   const plugins = (overview.data?.plugins as AgentPluginOverview | undefined) ?? { agent: null, current: [], available: [], all: [] };
   const requestedSessionId = searchParams.get("session");
 
+  const visibleTasks = useMemo(() => {
+    return tasks.map((task) => {
+      const optimistic = optimisticTaskStages[task.stem];
+      if (!optimistic) return task;
+      const serverStage = task.stages[optimistic.stage];
+      if (serverStage !== "idle" && serverStage !== "failed") return task;
+      return {
+        ...task,
+        stages: { ...task.stages, [optimistic.stage]: "running" as StageState },
+      };
+    });
+  }, [optimisticTaskStages, tasks]);
+
   useEffect(() => {
     if (!summaryPromptId && prompts.length > 0) setSummaryPromptId(firstAvailablePrompt(prompts));
   }, [prompts, summaryPromptId]);
+
+  useEffect(() => {
+    setOptimisticTaskStages((current) => {
+      const next = { ...current };
+      let changed = false;
+      const now = Date.now();
+      for (const task of tasks) {
+        const optimistic = next[task.stem];
+        if (!optimistic) continue;
+        const serverStage = task.stages[optimistic.stage];
+        const serverCaughtUp = serverStage === "waiting" || serverStage === "running" || serverStage === "done";
+        const expired = now - optimistic.startedAt > 20_000;
+        if (serverCaughtUp || expired) {
+          delete next[task.stem];
+          changed = true;
+        }
+      }
+      return changed ? next : current;
+    });
+  }, [tasks]);
 
   const activeAgent = useMemo(() => {
     const agents = (overview.data?.agents as ConsoleAgent[] | undefined) ?? [];
@@ -332,14 +366,35 @@ export function AgentConsole() {
     void utils.queue.list.invalidate();
   };
 
+  const setOptimisticTaskStage = (stem: string, stage: OptimisticTaskStage) => {
+    setOptimisticTaskStages((current) => ({ ...current, [stem]: { stage, startedAt: Date.now() } }));
+  };
+
+  const clearOptimisticTaskStage = (stem: string) => {
+    setOptimisticTaskStages((current) => {
+      if (!current[stem]) return current;
+      const next = { ...current };
+      delete next[stem];
+      return next;
+    });
+  };
+
   const runTranscribe = (task: AgentTask) => {
     if (!task.stem) return;
-    transcribe.mutate({ stem: task.stem }, { onSettled: invalidateAfterAction });
+    setOptimisticTaskStage(task.stem, "transcribe");
+    transcribe.mutate({ stem: task.stem }, {
+      onError: () => clearOptimisticTaskStage(task.stem),
+      onSettled: invalidateAfterAction,
+    });
   };
 
   const runSummarize = (task: AgentTask) => {
     if (!task.stem) return;
-    summarize.mutate({ stem: task.stem, promptId: summaryPromptId }, { onSettled: invalidateAfterAction });
+    setOptimisticTaskStage(task.stem, "summarize");
+    summarize.mutate({ stem: task.stem, promptId: summaryPromptId }, {
+      onError: () => clearOptimisticTaskStage(task.stem),
+      onSettled: invalidateAfterAction,
+    });
   };
 
   const runSend = (task: AgentTask, channel: "notion" | "zulip") => {
@@ -382,9 +437,8 @@ export function AgentConsole() {
     <div className={`agent-console-page${floating ? " voice-chat-popover" : ""}`}>
       {!floating && <aside className="agent-console-rail agent-console-rail-left" aria-label="最近三天待处理">
         <TaskRail
-          tasks={tasks}
+          tasks={visibleTasks}
           isLoading={overview.isPending}
-          isRecording={overview.data?.recording?.state === "recording"}
           actionPending={toggleRecording.isPending || transcribe.isPending || summarize.isPending || sendSummary.isPending}
           onToggleRecording={() => toggleRecording.mutate()}
           onOpenAll={() => navigate("/inbox")}
@@ -408,10 +462,6 @@ export function AgentConsole() {
             <Play size={15} strokeWidth={1.9} />
             跑任务
           </button>
-          <Link to="/voice-input" className="agent-console-mode-link">
-            <Keyboard size={15} strokeWidth={1.9} />
-            语音输入
-          </Link>
           <button type="button" className="agent-inspector-toggle" onClick={() => setInspectorOpen(true)}>
             <ListChecks size={15} strokeWidth={1.9} />
             能力
@@ -443,8 +493,8 @@ export function AgentConsole() {
         )}
       </main>
 
-      {!floating && inspectorOpen && <button type="button" className="agent-inspector-scrim" aria-label="关闭能力面板" onClick={() => setInspectorOpen(false)} />}
-      {!floating && <aside className={`agent-console-rail agent-console-rail-right${inspectorOpen ? " open" : ""}`} aria-label="Agent 能力">
+      {!floating && inspectorOpen && <div className="agent-inspector-scrim" aria-hidden="true" onClick={() => setInspectorOpen(false)} />}
+      {!floating && inspectorOpen && <aside className="agent-console-rail agent-console-rail-right open" aria-label="Agent 能力">
         <div className="agent-rail-drawer-head">
           <span>Agent 能力</span>
           <button type="button" onClick={() => setInspectorOpen(false)} aria-label="关闭能力面板"><X size={14} strokeWidth={2} /></button>
@@ -522,7 +572,6 @@ function VoiceInputPanel() {
         </div>
       </div>
       <div className="agent-voice-input-actions">
-        <Link to="/voice-input" className="agent-action primary compact">查看入口</Link>
         <Link to="/settings/voice" className="agent-action secondary compact">配置快捷键</Link>
       </div>
     </section>
@@ -532,7 +581,6 @@ function VoiceInputPanel() {
 function TaskRail({
   tasks,
   isLoading,
-  isRecording,
   actionPending,
   onToggleRecording,
   onOpenAll,
@@ -546,7 +594,6 @@ function TaskRail({
 }: {
   tasks: AgentTask[];
   isLoading: boolean;
-  isRecording: boolean;
   actionPending: boolean;
   onToggleRecording: () => void;
   onOpenAll: () => void;
@@ -567,15 +614,6 @@ function TaskRail({
         </div>
         <button type="button" className="agent-link-btn" onClick={onOpenAll}>全部</button>
       </div>
-      <button
-        type="button"
-        className={"agent-record-button" + (isRecording ? " recording" : "")}
-        disabled={actionPending}
-        onClick={onToggleRecording}
-      >
-        {isRecording ? <Square size={16} strokeWidth={2} /> : <Mic size={16} strokeWidth={2} />}
-        {isRecording ? "停止录制" : "开始录制"}
-      </button>
       <div className="agent-task-list">
         {tasks.length === 0 && !isLoading && (
           <div className="agent-empty">最近三天没有待处理会议。</div>
