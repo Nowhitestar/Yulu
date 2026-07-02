@@ -412,6 +412,7 @@ class AudioRecorder {
         }
         let out = channelInterleave(sysStereo: sysChunk, micMono: micChunk)
         w.append(Data(bytes: out, count: out.count * 2))
+        startSilenceMonitor()
 
     }
 

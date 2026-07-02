@@ -354,7 +354,8 @@ class MockSTTBackend:
     ) -> STTResult:
         self.calls += 1
         self.last_initial_prompt = initial_prompt
-        self.last_options = dict(options or {})
+        if options is not None:
+            self.last_options = dict(options)
         cancel_token.check()
         if self.calls <= self.raise_first_n:
             raise RuntimeError(f"mock failure {self.calls}")
