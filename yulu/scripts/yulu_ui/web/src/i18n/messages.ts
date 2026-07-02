@@ -30,6 +30,7 @@ export const en: Messages = {
   "nav.section.workspace": "Workspace",
   "nav.section.system": "System",
   "nav.agentConsole": "Agent Console",
+  "nav.voiceInput": "Voice Input",
   "nav.recordings": "Recordings",
   "nav.prompts": "Templates",
   "nav.glossary": "Glossary",
@@ -92,6 +93,7 @@ export const en: Messages = {
 
   // ---- Breadcrumbs (route handles) ----
   "breadcrumb.agentConsole": "Agent Console",
+  "breadcrumb.voiceInput": "Voice Input",
   "breadcrumb.inbox": "Recordings",
   "breadcrumb.recordings": "Recordings",
   "breadcrumb.recording": "Recording",
@@ -100,6 +102,31 @@ export const en: Messages = {
   "breadcrumb.glossary": "Glossary",
   "breadcrumb.settings": "Settings",
   "breadcrumb.health": "Health",
+
+  // ---- Voice input ----
+  "voiceInput.title": "Voice Input",
+  "voiceInput.sub": "Global dictation runs through Status Agent, STT, templates, and glossary.",
+  "voiceInput.status.ready": "Ready",
+  "voiceInput.status.check": "Check Status Agent",
+  "voiceInput.status.recording": "Listening",
+  "voiceInput.status.processing": "Processing",
+  "voiceInput.action.dictate": "Dictation",
+  "voiceInput.action.translate": "Translate",
+  "voiceInput.action.voice_chat": "Ask Agent",
+  "voiceInput.button.dictate": "Start Dictation",
+  "voiceInput.button.translate": "Translate",
+  "voiceInput.button.voice_chat": "Ask Agent",
+  "voiceInput.button.stop": "Stop",
+  "voiceInput.link.prompts": "Templates",
+  "voiceInput.link.glossary": "Glossary",
+  "voiceInput.link.voiceChat": "Ask Agent",
+  "voiceInput.link.settings": "Voice settings",
+  "voiceInput.history.title": "History",
+  "voiceInput.history.empty": "No dictation or translation history yet.",
+  "voiceInput.history.dictate": "Dictation",
+  "voiceInput.history.translate": "Translation",
+  "voiceInput.history.copy": "Copy",
+  "voiceInput.history.copied": "Copied",
 
   // ---- Recordings reader (recordings.$stem.tsx) ----
   "reader.title.placeholder": "Title",
@@ -178,6 +205,7 @@ export const en: Messages = {
   "prompts.filter.all": "All",
   "prompts.filter.summary": "Summary",
   "prompts.filter.cleanup": "Cleanup",
+  "prompts.filter.voice": "Voice input",
   "prompts.new": "+ New template",
   "prompts.autorun.aria": "Autorun",
   "prompts.empty": "No templates yet. Click + New template to add one.",
@@ -288,6 +316,8 @@ export const en: Messages = {
   "settings.category.audio.desc": "Recording source, output folder & databases",
   "settings.category.transcription.label": "Transcription",
   "settings.category.transcription.desc": "Whisper / MLX engine & mode",
+  "settings.category.voice.label": "Voice Input",
+  "settings.category.voice.desc": "Dictation shortcuts, templates & glossary",
   "settings.category.automation.label": "Automation",
   "settings.category.automation.desc": "Meeting detection & auto-recording",
   "settings.category.integrations.label": "AI integrations",
@@ -313,6 +343,25 @@ export const en: Messages = {
   "settings.hotkey.theme.label": "UI theme",
   "settings.hotkey.uiPort.label": "UI port",
   "settings.hotkey.uiPort.help": "Edit com.yulu.ui.plist and `yulu restart yulu_ui` to change",
+
+  // ---- Settings: Voice input section ----
+  "settings.voice.heading": "Voice Input",
+  "settings.voice.sub": "Global dictation, translation, and Ask Agent",
+  "settings.voice.hotkey.dictate": "Dictation shortcut",
+  "settings.voice.hotkey.translate": "Translation shortcut",
+  "settings.voice.hotkey.voice_chat": "Ask Agent shortcut",
+  "settings.voice.hotkey.help": "Key and modifiers from status_agent.hotkeys",
+  "settings.voice.hotkey.capture": "Press the new shortcut",
+  "settings.voice.hotkey.reconfigure": "Reconfigure",
+  "settings.voice.hotkey.unsupported": "That key is not supported yet",
+  "settings.voice.key": "Key",
+  "settings.voice.modifiers": "Modifiers",
+  "settings.voice.engine": "Dictation engine",
+  "settings.voice.prompt.dictate": "Dictation template",
+  "settings.voice.prompt.translate": "Translation template",
+  "settings.voice.targetLanguage": "Translation target",
+  "settings.voice.glossary": "Glossary",
+  "settings.voice.openGlossary": "Open glossary",
 
   // ---- Settings: Capabilities section ----
   "settings.capabilities.heading": "Host capabilities",
@@ -673,6 +722,7 @@ export const en: Messages = {
   // ---- CategoryChip ----
   "category.summary": "summary",
   "category.cleanup": "cleanup",
+  "category.voice": "voice input",
 
   // ---- Pill (record control) ----
   "pill.record": "Record",
@@ -682,14 +732,11 @@ export const en: Messages = {
   "pill.transcribing": "Transcribing… {time}",
   "pill.meeting": "Meeting in progress",
   "pill.daemonDown": "Audio daemon down",
-
-  // ---- LiveTranscript ----
-  "live.aria": "Live transcript",
-  "live.title": "Live transcript",
-  "live.hideAria": "Hide live transcript",
-  "live.waiting": "Listening…",
-  "live.tag.you": "You",
-  "live.tag.them": "Them",
+  "meeting.current.record": "Record",
+  "meeting.current.recordJoin": "Record and join",
+  "meeting.current.pending": "Starting",
+  "meeting.current.aria": "Record current meeting: {title}",
+  "meeting.current.select.aria": "Current meeting recording action",
 
   // ---- Onboarding ----
   "onboarding.aria": "Welcome to Yulu",
@@ -727,6 +774,7 @@ export const zh: Messages = {
   "nav.section.workspace": "工作台",
   "nav.section.system": "系统",
   "nav.agentConsole": "Agent Console",
+  "nav.voiceInput": "语音输入",
   "nav.recordings": "录音",
   "nav.prompts": "模板",
   "nav.glossary": "术语表",
@@ -789,6 +837,7 @@ export const zh: Messages = {
 
   // ---- Breadcrumbs (route handles) ----
   "breadcrumb.agentConsole": "Agent Console",
+  "breadcrumb.voiceInput": "语音输入",
   "breadcrumb.inbox": "录音",
   "breadcrumb.recordings": "录音",
   "breadcrumb.recording": "录音",
@@ -797,6 +846,31 @@ export const zh: Messages = {
   "breadcrumb.glossary": "术语表",
   "breadcrumb.settings": "设置",
   "breadcrumb.health": "健康状态",
+
+  // ---- Voice input ----
+  "voiceInput.title": "语音输入",
+  "voiceInput.sub": "全局听写通过 Status Agent、STT、模板和术语表运行。",
+  "voiceInput.status.ready": "已就绪",
+  "voiceInput.status.check": "检查 Status Agent",
+  "voiceInput.status.recording": "听写中",
+  "voiceInput.status.processing": "处理中",
+  "voiceInput.action.dictate": "听写",
+  "voiceInput.action.translate": "翻译",
+  "voiceInput.action.voice_chat": "问 Agent",
+  "voiceInput.button.dictate": "开始听写",
+  "voiceInput.button.translate": "翻译",
+  "voiceInput.button.voice_chat": "问 Agent",
+  "voiceInput.button.stop": "停止",
+  "voiceInput.link.prompts": "模板",
+  "voiceInput.link.glossary": "术语表",
+  "voiceInput.link.voiceChat": "问 Agent",
+  "voiceInput.link.settings": "配置语音输入",
+  "voiceInput.history.title": "历史记录",
+  "voiceInput.history.empty": "还没有听写或翻译历史。",
+  "voiceInput.history.dictate": "听写",
+  "voiceInput.history.translate": "翻译",
+  "voiceInput.history.copy": "复制",
+  "voiceInput.history.copied": "已复制",
 
   // ---- Recordings reader (recordings.$stem.tsx) ----
   "reader.title.placeholder": "标题",
@@ -875,6 +949,7 @@ export const zh: Messages = {
   "prompts.filter.all": "全部",
   "prompts.filter.summary": "摘要",
   "prompts.filter.cleanup": "清理",
+  "prompts.filter.voice": "语音输入",
   "prompts.new": "+ 新建模板",
   "prompts.autorun.aria": "自动运行",
   "prompts.empty": "暂无模板。点击“+ 新建模板”添加一个。",
@@ -985,6 +1060,8 @@ export const zh: Messages = {
   "settings.category.audio.desc": "录音源、输出目录与数据库",
   "settings.category.transcription.label": "转写",
   "settings.category.transcription.desc": "Whisper / MLX 引擎与模式",
+  "settings.category.voice.label": "语音输入",
+  "settings.category.voice.desc": "听写快捷键、模板与术语表",
   "settings.category.automation.label": "自动化",
   "settings.category.automation.desc": "会议检测与自动录制",
   "settings.category.integrations.label": "AI 集成",
@@ -1008,6 +1085,25 @@ export const zh: Messages = {
   "settings.hotkey.theme.label": "界面主题",
   "settings.hotkey.uiPort.label": "界面端口",
   "settings.hotkey.uiPort.help": "修改 com.yulu.ui.plist 并执行 `yulu restart yulu_ui` 以更改",
+
+  // ---- Settings: Voice input section ----
+  "settings.voice.heading": "语音输入",
+  "settings.voice.sub": "全局听写、翻译和问 Agent",
+  "settings.voice.hotkey.dictate": "听写快捷键",
+  "settings.voice.hotkey.translate": "翻译快捷键",
+  "settings.voice.hotkey.voice_chat": "问 Agent 快捷键",
+  "settings.voice.hotkey.help": "来自 status_agent.hotkeys 的 key 和 modifiers",
+  "settings.voice.hotkey.capture": "请按下新的快捷键",
+  "settings.voice.hotkey.reconfigure": "重新配置",
+  "settings.voice.hotkey.unsupported": "暂不支持这个按键",
+  "settings.voice.key": "按键",
+  "settings.voice.modifiers": "修饰键",
+  "settings.voice.engine": "听写引擎",
+  "settings.voice.prompt.dictate": "听写模板",
+  "settings.voice.prompt.translate": "翻译模板",
+  "settings.voice.targetLanguage": "翻译目标语言",
+  "settings.voice.glossary": "术语表",
+  "settings.voice.openGlossary": "打开术语表",
 
   // ---- Settings: Capabilities section ----
   "settings.capabilities.heading": "主机能力",
@@ -1368,6 +1464,7 @@ export const zh: Messages = {
   // ---- CategoryChip ----
   "category.summary": "摘要",
   "category.cleanup": "清理",
+  "category.voice": "语音输入",
 
   // ---- Pill (record control) ----
   "pill.record": "录制",
@@ -1377,14 +1474,11 @@ export const zh: Messages = {
   "pill.transcribing": "转写中… {time}",
   "pill.meeting": "会议进行中",
   "pill.daemonDown": "音频守护进程已停止",
-
-  // ---- LiveTranscript ----
-  "live.aria": "实时转写",
-  "live.title": "实时转写",
-  "live.hideAria": "隐藏实时转写",
-  "live.waiting": "聆听中…",
-  "live.tag.you": "你",
-  "live.tag.them": "对方",
+  "meeting.current.record": "开始录制",
+  "meeting.current.recordJoin": "录制并加入",
+  "meeting.current.pending": "启动中",
+  "meeting.current.aria": "录制当前会议：{title}",
+  "meeting.current.select.aria": "当前会议录制动作",
 
   // ---- Onboarding ----
   "onboarding.aria": "欢迎使用 Yulu",

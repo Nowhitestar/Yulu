@@ -90,6 +90,31 @@ const AgentConsoleSchema = z.object({
   }).passthrough()).default({}),
 }).passthrough().default({});
 
+const DictationSchema = z.object({
+  engine: z.enum(["auto", "mlx", "whisper", "hermes"]).default("auto"),
+  prompt_slug: z.string().default("dictation-cleanup"),
+  translate_prompt_slug: z.string().default("dictation-translate"),
+  target_language: z.string().default("English"),
+  timeout_sec: z.number().default(3),
+  deadline_sec: z.number().default(3),
+  context_limit: z.number().default(240),
+}).passthrough().default({});
+
+const StatusAgentHotkeySchema = z.object({
+  key: z.string().default(""),
+  modifiers: z.array(z.enum(["cmd", "shift", "alt", "ctrl"])).default([]),
+  target_language: z.string().optional(),
+}).passthrough();
+
+const StatusAgentSchema = z.object({
+  enabled: z.boolean().default(true),
+  hotkeys: z.object({
+    dictate: StatusAgentHotkeySchema.default({ key: "Space", modifiers: ["ctrl", "alt"] }),
+    translate: StatusAgentHotkeySchema.default({ key: "T", modifiers: ["ctrl", "alt"], target_language: "English" }),
+    voice_chat: StatusAgentHotkeySchema.default({ key: "A", modifiers: ["ctrl", "alt"] }),
+  }).passthrough().default({}),
+}).passthrough().default({});
+
 const DEFAULT_MLX_MODEL = "mlx-community/whisper-large-v3-mlx";
 const DEFAULT_REALTIME_MLX_MODEL = "mlx-community/whisper-large-v3-turbo";
 
@@ -126,6 +151,7 @@ export const ConfigSchema = z.object({
       chunk_sec: z.number().default(15),
       chunk_max_sec: z.number().default(30),
     }).passthrough().default({}),
+    dictation: DictationSchema,
     diarization: z.object({
       enabled: z.boolean().default(false),
       provider: z.string().default("sherpa-onnx"),
@@ -144,9 +170,7 @@ export const ConfigSchema = z.object({
       provider: z.enum(["auto", "codex", "claude", "claude-code", "hermes", "openclaw", "gemini", "grok", "custom"]).default("auto"),
     }).passthrough().default({}),
   }).default({}),
-  status_agent: z.object({
-    enabled: z.boolean().default(true),
-  }).default({}),
+  status_agent: StatusAgentSchema,
   calendars: z.array(CalendarSchema).default([]),
   connectors: ConnectorsSchema,
   output: OutputSchema,

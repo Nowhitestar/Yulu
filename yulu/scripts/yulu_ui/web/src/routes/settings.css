@@ -86,6 +86,50 @@
   margin: 0 0 14px 0;
 }
 
+.voice-hotkey-display {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: min(280px, 100%);
+}
+
+.voice-hotkey-display kbd {
+  display: inline-flex;
+  align-items: center;
+  min-width: 116px;
+  min-height: 28px;
+  padding: 3px 10px;
+  border: 1px solid var(--edge);
+  border-radius: 12px;
+  background: var(--field-bg);
+  color: var(--fg);
+  font-family: "SF Mono", ui-monospace, monospace;
+  font-size: 12px;
+}
+
+.voice-hotkey-capture {
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--edge-card);
+  border-radius: var(--radius-control);
+  background: var(--glass-2);
+  color: var(--fg-2);
+  cursor: pointer;
+}
+
+.voice-hotkey-capture:hover:not(:disabled) {
+  color: var(--fg);
+  background: var(--row-hover);
+}
+
+.voice-hotkey-capture:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 /* Integrations section */
 .ai-integrations {
   display: flex;

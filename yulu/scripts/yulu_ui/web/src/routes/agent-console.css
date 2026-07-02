@@ -8,6 +8,11 @@
   overflow: hidden;
 }
 
+.agent-console-page.voice-chat-popover {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0;
+}
+
 .agent-console-rail,
 .agent-console-center {
   min-height: 0;
@@ -42,6 +47,10 @@
   flex-direction: column;
   position: relative;
   overflow: hidden;
+}
+
+.agent-console-page.voice-chat-popover .agent-console-center {
+  border-radius: 0;
 }
 
 .agent-rail-head,
@@ -344,7 +353,8 @@
   background: color-mix(in oklch, var(--fg) 5%, transparent);
 }
 
-.agent-console-modebar button {
+.agent-console-modebar button,
+.agent-console-mode-link {
   min-height: 32px;
   display: inline-flex;
   align-items: center;
@@ -354,6 +364,11 @@
   color: var(--fg-2);
   font-size: 12px;
   font-weight: 700;
+}
+
+.agent-console-mode-link:hover {
+  color: var(--fg);
+  background: color-mix(in oklch, var(--fg) 6%, transparent);
 }
 
 .agent-console-modebar button.active {
@@ -993,6 +1008,34 @@
   background: color-mix(in oklch, var(--fg) 5%, transparent);
   color: var(--fg-2);
   font-size: 11px;
+}
+
+.agent-voice-input-copy {
+  display: grid;
+  gap: 6px;
+}
+
+.agent-voice-input-copy div {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 28px;
+  padding: 5px 7px;
+  border-radius: var(--radius-control);
+  background: color-mix(in oklch, var(--fg) 4%, transparent);
+  color: var(--fg-2);
+  font-size: 12px;
+}
+
+.agent-voice-input-copy svg {
+  color: var(--accent-on, var(--accent));
+  flex-shrink: 0;
+}
+
+.agent-voice-input-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 7px;
 }
 
 .agent-mini-list {

@@ -11,12 +11,15 @@ const SCHEMA = [
   { path: "transcription.language",   category: "transcription", label: "语言",      type: "text",   reload: { kind: "restart", daemons: ["sttdaemon"] } },
   { path: "llm.enabled",              category: "llm",           label: "启用 LLM",  type: "toggle", reload: { kind: "none" } },
   { path: "status_agent.enabled",     category: "general",       label: "菜单栏 Agent", type: "toggle", reload: { kind: "none" } },
+  { path: "status_agent.hotkeys",     category: "voice",         label: "语音输入快捷键", type: "text", reload: { kind: "sighup", daemons: ["statusagent"] } },
+  { path: "transcription.dictation",  category: "voice",         label: "语音输入模板", type: "text", reload: { kind: "none" } },
 ];
 
 // Shared spy so tests can assert config.update was called on a field edit.
 // vi.hoisted keeps it available inside the hoisted vi.mock factory below.
-const { configUpdateSpy, recording } = vi.hoisted(() => ({
+const { configUpdateSpy, promptsListSpy, recording } = vi.hoisted(() => ({
   configUpdateSpy: vi.fn(async (_vars: { key: string; value: unknown }) => ({ daemonsNeedingRestart: [], daemonsNeedingSighup: [] })),
+  promptsListSpy: vi.fn(),
   recording: { state: "idle" as string },
 }));
 
@@ -32,9 +35,23 @@ vi.mock("../../../web/src/ws.js", () => ({
 vi.mock("../../../web/src/trpc.js", () => {
   const cfg = {
     audio: { mic_device: "BuiltInMic", system_audio_device: ":1", output_dir: "/tmp", silence_threshold: 0.01, silence_duration_sec: 300, backend: "daemon" },
-    transcription: { realtime_enabled: true, final_engine: "mlx", language: "auto", local_model_path: "", mlx: { model: "", final_model: "", preprocess_audio: false, passthrough_max_sec: 0, passthrough_max_bytes: 0 } },
+    transcription: {
+      realtime_enabled: true,
+      final_engine: "mlx",
+      language: "auto",
+      local_model_path: "",
+      mlx: { model: "", final_model: "", preprocess_audio: false, passthrough_max_sec: 0, passthrough_max_bytes: 0 },
+      dictation: { engine: "auto", prompt_slug: "dictation-cleanup", translate_prompt_slug: "dictation-translate", target_language: "English" },
+    },
     llm: { enabled: false, command: [] },
-    status_agent: { enabled: false },
+    status_agent: {
+      enabled: false,
+      hotkeys: {
+        dictate: { key: "Space", modifiers: ["ctrl", "alt"] },
+        translate: { key: "T", modifiers: ["ctrl", "alt"] },
+        voice_chat: { key: "A", modifiers: ["ctrl", "alt"] },
+      },
+    },
     calendars: [],
     connectors: { notion: { send_summary: false }, zulip: { send_summary: false } },
     output: { notion: { database_id: "", api_key_env: "NOTION_API_KEY" }, zulip: { stream: "", topic: "" } },
@@ -112,7 +129,14 @@ vi.mock("../../../web/src/trpc.js", () => {
       },
       llm: { test: { useMutation: noopMutation } },
       prompts: {
-        list: { useQuery: () => ({ data: [], isPending: false }) },
+        list: { useQuery: (input: unknown) => {
+          promptsListSpy(input);
+          return { data: [
+            { slug: "dictation-cleanup", name: "Dictation Cleanup" },
+            { slug: "dictation-tight", name: "Tight Dictation" },
+            { slug: "dictation-translate", name: "Dictation Translate" },
+          ], isPending: false };
+        } },
         update: { useMutation: noopMutation },
       },
       search: { reindex: { useMutation: noopMutation } },
@@ -317,6 +341,68 @@ describe("Settings category detail content (re-homed widgets)", () => {
     // label also renders "转写").
     expect(container.querySelector("h2.settings-section-h")?.textContent).toBe(translate("zh", "settings.transcription.heading"));
     expect(detail.getByText(translate("zh", "settings.transcription.mode.label"))).toBeInTheDocument();
+  });
+
+  it("voice: hotkey capture commits key and modifiers from the pressed shortcut", async () => {
+    configUpdateSpy.mockClear();
+    const { container } = wrap("/settings/voice");
+    const voice = within(container.querySelector("#voice-input") as HTMLElement);
+    fireEvent.click(voice.getByLabelText("听写快捷键 重新配置"));
+    await waitFor(() => expect(voice.getByText("请按下新的快捷键")).toBeInTheDocument());
+    fireEvent.keyDown(window, { key: "F1", ctrlKey: true, altKey: true });
+    await waitFor(() => expect(configUpdateSpy).toHaveBeenCalledWith(expect.objectContaining({
+      key: "status_agent.hotkeys.dictate.key",
+      value: "F1",
+    })));
+    await waitFor(() => expect(configUpdateSpy).toHaveBeenCalledWith(expect.objectContaining({
+      key: "status_agent.hotkeys.dictate.modifiers",
+      value: ["ctrl", "alt"],
+    })));
+  });
+
+  it("voice: dictation template selector commits the selected prompt slug", async () => {
+    configUpdateSpy.mockClear();
+    promptsListSpy.mockClear();
+    const { container } = wrap("/settings/voice");
+    expect(promptsListSpy).toHaveBeenCalledWith({ category: "voice" });
+    const voice = within(container.querySelector("#voice-input") as HTMLElement);
+    const row = voice.getByText(translate("zh", "settings.voice.prompt.dictate")).closest(".row") as HTMLElement;
+    fireEvent.click(within(row).getByText("Dictation Cleanup"));
+    fireEvent.change(within(row).getByRole("combobox"), { target: { value: "dictation-tight" } });
+    await waitFor(() => expect(configUpdateSpy).toHaveBeenCalledWith(expect.objectContaining({
+      key: "transcription.dictation.prompt_slug",
+      value: "dictation-tight",
+    })));
+  });
+
+  it("voice: translation template selector commits the selected prompt slug", async () => {
+    configUpdateSpy.mockClear();
+    promptsListSpy.mockClear();
+    const { container } = wrap("/settings/voice");
+    expect(promptsListSpy).toHaveBeenCalledWith({ category: "voice" });
+    const voice = within(container.querySelector("#voice-input") as HTMLElement);
+    const row = voice.getByText(translate("zh", "settings.voice.prompt.translate")).closest(".row") as HTMLElement;
+    fireEvent.click(within(row).getByText("Dictation Translate"));
+    fireEvent.change(within(row).getByRole("combobox"), { target: { value: "dictation-tight" } });
+    await waitFor(() => expect(configUpdateSpy).toHaveBeenCalledWith(expect.objectContaining({
+      key: "transcription.dictation.translate_prompt_slug",
+      value: "dictation-tight",
+    })));
+  });
+
+  it("voice: translation target language commits the dotted config path", async () => {
+    configUpdateSpy.mockClear();
+    const { container } = wrap("/settings/voice");
+    const voice = within(container.querySelector("#voice-input") as HTMLElement);
+    const row = voice.getByText(translate("zh", "settings.voice.targetLanguage")).closest(".row") as HTMLElement;
+    fireEvent.click(within(row).getByText("English"));
+    const input = within(row).getByLabelText(translate("zh", "settings.voice.targetLanguage"));
+    fireEvent.change(input, { target: { value: "Japanese" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() => expect(configUpdateSpy).toHaveBeenCalledWith(expect.objectContaining({
+      key: "transcription.dictation.target_language",
+      value: "Japanese",
+    })));
   });
 
   it("llm: legacy settings route redirects to Agent Console instead of rendering settings UI", () => {

@@ -10,7 +10,7 @@ function makeCtx() {
   return {
     dir,
     ctx: {
-      paths: { configDir: dir },
+      paths: { configDir: dir, scriptDir: dir },
       launchctl: {
         status: vi.fn(async (label: string) => label === "com.yulu.scheduler"
           ? { pid: 42, exitStatus: 0, label }
@@ -41,5 +41,28 @@ describe("schedulerRouter", () => {
     const r = await createCaller(schedulerRouter, ctx).reload();
     expect(r.ok).toBe(false);
     expect(r.error).toContain("pid file");
+  });
+
+  it("returns the current meeting and persists the primary action", async () => {
+    const { dir, ctx } = makeCtx();
+    const now = Date.now();
+    writeFileSync(join(dir, "schedule.json"), JSON.stringify({
+      events: [],
+      meetings: [{
+        id: "m-current",
+        title: "Ops Weekly",
+        start: new Date(now - 5 * 60_000).toISOString(),
+        duration_min: 30,
+        link: "https://meet.example/current",
+      }],
+    }), "utf8");
+
+    const caller = createCaller(schedulerRouter, ctx);
+    await caller.setPrimaryAction({ action: "record_join" });
+    const r = await caller.current();
+
+    expect(r.primaryAction).toBe("record_join");
+    expect(r.meeting.id).toBe("m-current");
+    expect(r.meeting.link).toBe("https://meet.example/current");
   });
 });

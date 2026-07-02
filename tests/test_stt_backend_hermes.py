@@ -73,6 +73,43 @@ def transcribe_audio(file_path, model=None):
     ]
 
 
+def test_hermes_backend_passes_initial_prompt_when_tool_accepts_it(tmp_path):
+    _clear_fake_hermes_modules()
+    audio = tmp_path / "clip.wav"
+    audio.write_bytes(b"RIFF")
+    _write_tools_package(
+        tmp_path,
+        """
+def _load_stt_config():
+    return {"provider": "local"}
+
+def _get_provider(config):
+    return config["provider"]
+
+def transcribe_audio(file_path, model=None, initial_prompt=""):
+    return {
+        "success": True,
+        "provider": "local",
+        "transcript": initial_prompt,
+    }
+""",
+    )
+
+    backend = HermesSTTBackend(agent_dir=str(tmp_path), diarize=False)
+
+    async def go():
+        return await backend.transcribe(
+            audio_path=str(audio),
+            language="zh",
+            initial_prompt="使用术语表：AgentKey",
+            cancel_token=CancelToken(),
+        )
+
+    result = asyncio.run(go())
+
+    assert result.text == "使用术语表：AgentKey"
+
+
 def test_hermes_backend_uses_xai_stt_diarization_without_yulu_stt(tmp_path, monkeypatch):
     _clear_fake_hermes_modules()
     audio = tmp_path / "clip.wav"
@@ -128,9 +165,9 @@ def hermes_xai_user_agent():
         return await backend.transcribe(
             audio_path=str(audio),
             language="zh",
-            initial_prompt="",
+            initial_prompt="使用术语表：AgentKey",
             cancel_token=CancelToken(),
-            options={"job_kind": "final_transcribe"},
+            options={"job_kind": "final_transcribe", "timeout_sec": 3},
         )
 
     result = asyncio.run(go())
@@ -139,8 +176,13 @@ def hermes_xai_user_agent():
         {
             "url": "https://xai.test/v1/stt",
             "headers": {"Authorization": "Bearer test-key", "User-Agent": "HermesTest"},
-            "data": {"language": "zh", "format": "true", "diarize": "true"},
-            "timeout": 120,
+            "data": {
+                "language": "zh",
+                "format": "true",
+                "prompt": "使用术语表：AgentKey",
+                "diarize": "true",
+            },
+            "timeout": 3.0,
         }
     ]
     assert result.text == "你好 世界"
@@ -161,3 +203,16 @@ def hermes_xai_user_agent():
 
     asyncio.run(live_chunk())
     assert calls[-1]["data"] == {"language": "zh", "format": "true"}
+
+    async def fractional_timeout():
+        return await backend.transcribe(
+            audio_path=str(audio),
+            language="zh",
+            initial_prompt="cleanup prompt",
+            cancel_token=CancelToken(),
+            options={"job_kind": "dictation", "timeout_sec": 0.55},
+        )
+
+    asyncio.run(fractional_timeout())
+    assert calls[-1]["timeout"] == 0.55
+    assert calls[-1]["data"] == {"language": "zh", "prompt": "cleanup prompt"}

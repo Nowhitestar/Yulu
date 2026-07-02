@@ -621,6 +621,12 @@ def main():
     cfg = load_config()
     backend = cfg.get("backend", "daemon")
 
+    if cmd == "restart-realtime":
+        audio_path = sys.argv[2] if len(sys.argv) > 2 else ""
+        title = sys.argv[3] if len(sys.argv) > 3 else Path(audio_path).stem
+        start_realtime_transcriber(audio_path, title)
+        return
+
     if backend == "daemon":
         if cmd == "start":
             title = sys.argv[2] if len(sys.argv) > 2 else "未命名会议"

@@ -12,6 +12,9 @@
   list                                     显示当前调度
   remove <meeting_id>                      移除某场会议
   start <title>                            手动开始录制并注册状态浮窗/超时询问
+  start_meeting <meeting_id> [--join]      精准开始当前/指定会议录制，可同时加入会议
+  current_meeting                          输出当前正在进行的会议和弹窗主动作偏好
+  prompt_action <get|set> [record|record_join]  读取/保存弹窗主动作偏好
   ask_record <title> <meeting_id>          会议开始时弹窗询问是否录制（由调度器 fire）
   auto_stop                                录制超时弹窗询问是否停止（由调度器 fire）
   stop                                     立即停止录制并生成纪要
@@ -27,6 +30,7 @@ import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
 
+import meeting_actions
 from state_store import (
     load_state as load_recording_state,
     recording_info,
@@ -300,21 +304,92 @@ def cmd_ask_record(args):
     title = args[0]
     meeting_id = args[1] if len(args) > 1 else ""
 
-    notify = SCRIPT_DIR / "notify.py"
-    result = subprocess.run(
-        [sys.executable, str(notify), "ask_record", title],
-        capture_output=True, text=True,
-    )
-    choice = result.stdout.strip()
-    print(f"User choice: {choice}")
+    meeting = meeting_actions.meeting_by_id(meeting_id) or {
+        "id": meeting_id,
+        "title": title,
+        "link": "",
+    }
+    choice, primary_action = _ask_record_choice(title, meeting)
+    meeting_actions.save_primary_action(primary_action)
+    print(f"User choice: {choice}, primary_action={primary_action}")
 
     # 移除本条 ask_record 事件，防止调度器重载后重复触发
     _remove_ask_record_event(meeting_id)
 
-    if choice == "开始录制":
-        _start_recording(title, meeting_id)
+    if choice in ("record", "record_join"):
+        started = _start_recording(title, meeting_id)
+        if started and choice == "record_join":
+            meeting_actions.open_meeting_link(meeting)
     else:
         print("用户跳过录制")
+
+
+def _ask_record_choice(title, meeting):
+    primary_action = meeting_actions.load_primary_action()
+    prompt = SCRIPT_DIR / "meeting_prompt"
+    link = str((meeting or {}).get("link") or "")
+    if prompt.exists():
+        try:
+            result = subprocess.run(
+                [str(prompt), title, link, primary_action],
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode == 0:
+                raw = result.stdout.strip()
+                payload = json.loads(raw) if raw else {}
+                choice = payload.get("choice", "")
+                saved = payload.get("primary_action", primary_action)
+                if saved not in meeting_actions.PRIMARY_ACTIONS:
+                    saved = primary_action
+                if choice in {"record", "record_join", "ignore"}:
+                    return choice, saved
+            if result.stderr.strip():
+                print(f"⚠️ meeting_prompt failed: {result.stderr.strip()}", file=sys.stderr)
+        except Exception as exc:
+            print(f"⚠️ meeting_prompt unavailable: {exc}", file=sys.stderr)
+
+    notify = SCRIPT_DIR / "notify.py"
+    result = subprocess.run(
+        [sys.executable, str(notify), "ask_record", title],
+        capture_output=True,
+        text=True,
+    )
+    choice = result.stdout.strip()
+    return ("record" if choice == "开始录制" else "ignore"), primary_action
+
+
+def cmd_start_meeting(args):
+    if not args:
+        print("Usage: meeting_daemon.py start_meeting <meeting_id> [--join]", file=sys.stderr)
+        sys.exit(1)
+    meeting_id = args[0]
+    should_join = "--join" in args[1:]
+    meeting = meeting_actions.meeting_by_id(meeting_id)
+    if not meeting:
+        print(f"meeting not found: {meeting_id}", file=sys.stderr)
+        sys.exit(1)
+    title = str(meeting.get("title") or "未命名会议")
+    started = _start_recording(title, meeting_id)
+    if started and should_join:
+        meeting_actions.open_meeting_link(meeting)
+
+
+def cmd_current_meeting():
+    print(json.dumps(meeting_actions.current_payload(), ensure_ascii=False))
+
+
+def cmd_prompt_action(args):
+    if not args or args[0] == "get":
+        print(meeting_actions.load_primary_action())
+        return
+    if args[0] != "set" or len(args) < 2:
+        print("Usage: meeting_daemon.py prompt_action <get|set> [record|record_join]", file=sys.stderr)
+        sys.exit(1)
+    if args[1] not in meeting_actions.PRIMARY_ACTIONS:
+        print(f"invalid primary action: {args[1]}", file=sys.stderr)
+        sys.exit(2)
+    print(meeting_actions.save_primary_action(args[1]))
 
 
 def _remove_ask_record_event(meeting_id):
@@ -341,7 +416,7 @@ def _start_recording(title, meeting_id=""):
                     f"❌ 录制启动失败: daemon 未返回有效路径 (title={title!r})",
                     file=sys.stderr,
                 )
-                return
+                return False
 
             record_lock(
                 lock_handle,
@@ -376,12 +451,14 @@ def _start_recording(title, meeting_id=""):
                 "title": title,
             })
             print(f"📅 已注册超时停止询问 @ {end_at.strftime('%H:%M')}")
+            return True
     except RecordingBusy as exc:
         print(
             f"⚠️ recording lock busy: meeting_id={meeting_id} "
             f"title={title!r} holder={exc.info}",
             file=sys.stderr,
         )
+        return False
 
 
 def _daemon_start_recording(title, lock_handle=None):
@@ -643,6 +720,9 @@ def main():
     handlers = {
         "schedule": lambda: cmd_schedule(),
         "start": lambda: _start_recording(args[0] if args else "未命名会议"),
+        "start_meeting": lambda: cmd_start_meeting(args),
+        "current_meeting": lambda: cmd_current_meeting(),
+        "prompt_action": lambda: cmd_prompt_action(args),
         "add": lambda: cmd_add(args),
         "test": lambda: cmd_test(args),
         "list": lambda: cmd_list(),

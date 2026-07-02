@@ -1,4 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { LaunchctlClient } from "../src/launchctl.js";
 
 const execFileMock = vi.hoisted(() => vi.fn());
@@ -54,5 +57,21 @@ describe("LaunchctlClient", () => {
     fail(3, "Could not find service");
     const c = new LaunchctlClient("/Users/x/Library/LaunchAgents");
     expect(await c.status("com.yulu.missing")).toBeNull();
+  });
+
+  it("sighup(statusagent) signals the app pid file instead of launchctl wrapper pid", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "yulu_statusagent_pid_"));
+    const pidFile = join(dir, "status_agent.pid");
+    writeFileSync(pidFile, "24680\n");
+    const kill = vi.spyOn(process, "kill").mockImplementation(() => true);
+    try {
+      const c = new LaunchctlClient("/Users/x/Library/LaunchAgents", pidFile);
+      await c.sighup("com.yulu.statusagent");
+      expect(kill).toHaveBeenCalledWith(24680, "SIGHUP");
+      expect(execFileMock).not.toHaveBeenCalled();
+    } finally {
+      kill.mockRestore();
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

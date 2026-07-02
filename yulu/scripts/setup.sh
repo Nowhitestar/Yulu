@@ -227,6 +227,16 @@ create_config() {
       "model": null,
       "diarize": true
     },
+    "dictation": {
+      "engine": "auto",
+      "language": "zh",
+      "prompt_slug": "dictation-cleanup",
+      "translate_prompt_slug": "dictation-translate",
+      "target_language": "English",
+      "context_limit": 240,
+      "deadline_sec": 3,
+      "timeout_sec": 3
+    },
     "realtime": {
       "engine": "whisper",
       "chunk_sec": 15,

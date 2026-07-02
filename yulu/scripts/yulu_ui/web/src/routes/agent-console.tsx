@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate } from "react-router";
+import { Link, useLocation, useNavigate, useSearchParams } from "react-router";
 import {
   AlertCircle,
   Archive,
@@ -13,6 +13,8 @@ import {
   Database,
   FileText,
   HardDrive,
+  Keyboard,
+  Languages,
   ListChecks,
   Loader2,
   MessageSquare,
@@ -256,6 +258,9 @@ function asConfigRecord(config: unknown): Record<string, unknown> {
 
 export function AgentConsole() {
   const navigate = useNavigate();
+  const location = useLocation();
+  const [searchParams] = useSearchParams();
+  const floating = location.pathname === "/voice-chat";
   const utils = trpc.useUtils();
   const [mode, setMode] = useState<ConsoleMode>("ask");
   const [summaryPromptId, setSummaryPromptId] = useState<string | null>(null);
@@ -310,6 +315,7 @@ export function AgentConsole() {
   const tasks = (overview.data?.tasks as AgentTask[] | undefined) ?? [];
   const prompts = ((promptsQuery.data as SummaryPrompt[] | undefined) ?? []);
   const plugins = (overview.data?.plugins as AgentPluginOverview | undefined) ?? { agent: null, current: [], available: [], all: [] };
+  const requestedSessionId = searchParams.get("session");
 
   useEffect(() => {
     if (!summaryPromptId && prompts.length > 0) setSummaryPromptId(firstAvailablePrompt(prompts));
@@ -373,8 +379,8 @@ export function AgentConsole() {
   };
 
   return (
-    <div className="agent-console-page">
-      <aside className="agent-console-rail agent-console-rail-left" aria-label="最近三天待处理">
+    <div className={`agent-console-page${floating ? " voice-chat-popover" : ""}`}>
+      {!floating && <aside className="agent-console-rail agent-console-rail-left" aria-label="最近三天待处理">
         <TaskRail
           tasks={tasks}
           isLoading={overview.isPending}
@@ -390,10 +396,10 @@ export function AgentConsole() {
           onConfigurePlugin={runConfigurePlugin}
           onConfigureDestination={setDestinationPlugin}
         />
-      </aside>
+      </aside>}
 
       <main className="agent-console-center">
-        <div className="agent-console-modebar" role="tablist" aria-label="Agent Console mode">
+        {!floating && <div className="agent-console-modebar" role="tablist" aria-label="Agent Console mode">
           <button type="button" className={mode === "ask" ? "active" : ""} onClick={() => setMode("ask")}>
             <MessageSquare size={15} strokeWidth={1.9} />
             问会议
@@ -402,11 +408,15 @@ export function AgentConsole() {
             <Play size={15} strokeWidth={1.9} />
             跑任务
           </button>
+          <Link to="/voice-input" className="agent-console-mode-link">
+            <Keyboard size={15} strokeWidth={1.9} />
+            语音输入
+          </Link>
           <button type="button" className="agent-inspector-toggle" onClick={() => setInspectorOpen(true)}>
             <ListChecks size={15} strokeWidth={1.9} />
             能力
           </button>
-        </div>
+        </div>}
         {notice && (
           <div className="agent-console-notice">
             <AlertCircle size={14} strokeWidth={2} />
@@ -414,8 +424,13 @@ export function AgentConsole() {
             <button type="button" onClick={() => setNotice(null)} aria-label="关闭"><X size={13} strokeWidth={2} /></button>
           </div>
         )}
-        {mode === "ask" ? (
-          <AskMeetings agentId={activeAgent?.id ?? "agent"} agentName={activeAgent?.name ?? "Agent"} />
+        {floating || mode === "ask" ? (
+          <AskMeetings
+            agentId={activeAgent?.id ?? "agent"}
+            agentName={activeAgent?.name ?? "Agent"}
+            initialSessionId={requestedSessionId}
+            floating={floating}
+          />
         ) : (
           <RunTasks
             queue={queueQuery.data}
@@ -428,12 +443,13 @@ export function AgentConsole() {
         )}
       </main>
 
-      {inspectorOpen && <button type="button" className="agent-inspector-scrim" aria-label="关闭能力面板" onClick={() => setInspectorOpen(false)} />}
-      <aside className={`agent-console-rail agent-console-rail-right${inspectorOpen ? " open" : ""}`} aria-label="Agent 能力">
+      {!floating && inspectorOpen && <button type="button" className="agent-inspector-scrim" aria-label="关闭能力面板" onClick={() => setInspectorOpen(false)} />}
+      {!floating && <aside className={`agent-console-rail agent-console-rail-right${inspectorOpen ? " open" : ""}`} aria-label="Agent 能力">
         <div className="agent-rail-drawer-head">
           <span>Agent 能力</span>
           <button type="button" onClick={() => setInspectorOpen(false)} aria-label="关闭能力面板"><X size={14} strokeWidth={2} /></button>
         </div>
+        <VoiceInputPanel />
         <AgentSelector
           agents={(overview.data?.agents as ConsoleAgent[] | undefined) ?? []}
           detecting={detectAgents.isFetching}
@@ -453,7 +469,7 @@ export function AgentConsole() {
           onConfigureDestination={setDestinationPlugin}
         />
         <LocalStatus daemons={daemonsQuery.data} queue={queueQuery.data} onDetails={() => navigate("/health")} />
-      </aside>
+      </aside>}
 
       {calendarOpen && (
         <CalendarConfigModal
@@ -481,6 +497,35 @@ export function AgentConsole() {
         />
       )}
     </div>
+  );
+}
+
+function VoiceInputPanel() {
+  return (
+    <section className="agent-panel agent-voice-input-panel">
+      <div className="agent-panel-head">
+        <span>语音输入</span>
+        <Link to="/voice-input" className="agent-link-btn">打开</Link>
+      </div>
+      <div className="agent-voice-input-copy">
+        <div>
+          <Keyboard size={14} strokeWidth={1.9} />
+          <span>听写</span>
+        </div>
+        <div>
+          <Languages size={14} strokeWidth={1.9} />
+          <span>翻译</span>
+        </div>
+        <div>
+          <Bot size={14} strokeWidth={1.9} />
+          <span>问 Agent</span>
+        </div>
+      </div>
+      <div className="agent-voice-input-actions">
+        <Link to="/voice-input" className="agent-action primary compact">查看入口</Link>
+        <Link to="/settings/voice" className="agent-action secondary compact">配置快捷键</Link>
+      </div>
+    </section>
   );
 }
 
@@ -770,7 +815,17 @@ const ASK_STARTERS = [
   "哪些会议提到了 Zulip？",
 ];
 
-function AskMeetings({ agentId, agentName }: { agentId: string; agentName: string }) {
+function AskMeetings({
+  agentId,
+  agentName,
+  initialSessionId,
+  floating,
+}: {
+  agentId: string;
+  agentName: string;
+  initialSessionId: string | null;
+  floating: boolean;
+}) {
   const navigate = useNavigate();
   const utils = trpc.useUtils();
   const ask = trpc.ask.ask.useMutation();
@@ -788,7 +843,7 @@ function AskMeetings({ agentId, agentName }: { agentId: string; agentName: strin
   const scrollRef = useRef<HTMLDivElement>(null);
   const sessionQuery = trpc.agentSessions.get.useQuery(
     { id: selectedSessionId ?? "__none__" },
-    { enabled: selectedSessionId !== null },
+    { enabled: selectedSessionId !== null, refetchInterval: floating ? 1000 : false },
   );
 
   const sessions = (sessionsQuery.data?.sessions as AgentSessionSummary[] | undefined) ?? [];
@@ -800,10 +855,17 @@ function AskMeetings({ agentId, agentName }: { agentId: string; agentName: strin
     : draftSession ? "尚未创建 session" : "默认读取所有本地记录";
 
   useEffect(() => {
+    if (initialSessionId) return;
     setSelectedSessionId(null);
     setMessages([]);
     setDraftSession(true);
-  }, [agentId]);
+  }, [agentId, initialSessionId]);
+
+  useEffect(() => {
+    if (!initialSessionId) return;
+    setSelectedSessionId(initialSessionId);
+    setDraftSession(false);
+  }, [initialSessionId]);
 
   useEffect(() => {
     if (draftSession || selectedSessionId || sessions.length === 0) return;

@@ -23,8 +23,9 @@ def test_load_defaults_when_block_missing(tmp_path, monkeypatch):
     _stub_config(tmp_path, monkeypatch, {})
     block = sac.load()
     assert block["enabled"] is True
-    # The hotkey/mic-only surface was removed — only `enabled` remains.
-    assert "hotkey" not in block
+    assert block["hotkeys"]["dictate"]["key"] == "Space"
+    assert block["hotkeys"]["translate"]["target_language"] == "English"
+    assert block["hotkeys"]["voice_chat"]["key"] == "A"
 
 
 def test_load_defaults_when_config_file_missing(tmp_path, monkeypatch):
@@ -58,21 +59,33 @@ def test_save_creates_config_when_missing(tmp_path, monkeypatch):
     assert json.loads(cfg.read_text(encoding="utf-8"))["status_agent"]["enabled"] is True
 
 
-def test_no_hotkey_surface_remains():
-    """The global hotkey was deleted entirely — its parser/keycode helpers
-    must be gone so nothing reintroduces a Cmd+Shift+V binding."""
-    for attr in (
-        "keycode_for", "modifier_mask", "parse_hotkey",
-        "format_hotkey", "sighup_running_agent",
-    ):
-        assert not hasattr(sac, attr), f"{attr} should have been removed"
+def test_status_agent_hotkeys_shape(tmp_path, monkeypatch):
+    _stub_config(tmp_path, monkeypatch, {})
+    hotkeys = sac.status_agent_hotkeys()
+    assert [item["action"] for item in hotkeys] == ["dictate", "translate", "voice_chat"]
+    assert hotkeys[0]["keyCode"] == 49
+    assert hotkeys[0]["modifierMask"] == 0x1800
+    assert hotkeys[1]["targetLanguage"] == "English"
+
+
+def test_status_agent_translate_hotkey_uses_dictation_target_language(tmp_path, monkeypatch):
+    _stub_config(tmp_path, monkeypatch, {
+        "transcription": {"dictation": {"target_language": "Japanese"}},
+        "status_agent": {
+            "hotkeys": {
+                "translate": {"key": "T", "modifiers": ["ctrl", "alt"], "target_language": "English"}
+            }
+        },
+    })
+    hotkeys = sac.status_agent_hotkeys()
+    assert hotkeys[1]["targetLanguage"] == "Japanese"
 
 
 # ─── Swift status_agent.swift static gates ─────────────────────────────────────
 # Source-static asserts (no swiftc) over the menu-bar agent: it resolves the
 # recordings base directory from config.json `audio.output_dir` (D-07), scans a
-# single recordings root (the voicemails/ subdir was merged away), and no longer
-# registers a global hotkey or shells out to the voicemail module.
+# single recordings root (the voicemails/ subdir was merged away), and shells
+# out to the current recording/dictation modules.
 
 STATUS_AGENT_SWIFT = SCRIPTS / "status_agent.swift"
 
@@ -127,22 +140,134 @@ def test_status_agent_movies_yulu_only_as_fallback():
     )
 
 
-def test_status_agent_has_no_hotkey_or_voicemail():
+def test_status_agent_has_hotkeys_no_voicemail():
     src = _swift_source()
-    # Decision #1: the global hotkey is deleted (no Carbon, no HotkeyRegistrar).
-    assert "import Carbon" not in src, "Carbon import should be gone (no hotkey)"
-    assert "HotkeyRegistrar" not in src, "HotkeyRegistrar should be removed"
-    assert "RegisterEventHotKey" not in src, "Carbon hotkey registration should be removed"
+    assert "import Carbon" in src
+    assert "HotkeyRegistrar" in src
+    assert "RegisterEventHotKey" in src
+    assert "GetEventParameter" in src
+    assert "kEventParamDirectObject" in src
+    assert "hotKeyID.id == me.id" in src
+    assert "eventNotHandledErr" in src
+    assert "readHotkeysFromConfig" in src
+    assert "launchDictateTranslateToggle" in src
     # The launcher now starts a meeting via meeting_daemon.py, not voicemail.cli.
     assert "voicemail" not in src.lower(), "no voicemail references should remain"
     assert "RecordingLauncher" in src, "launcher should be renamed RecordingLauncher"
     assert "meeting_daemon.py" in src, "launcher should shell out to meeting_daemon.py"
 
 
+def test_status_agent_has_dictation_menu_entry():
+    src = _swift_source()
+    assert '"Start Dictation"' in src
+    assert '"Stop Dictation"' in src
+    assert "launchDictateToggle" in src
+    assert "launchWarmDictation" in src
+    assert '"dictate.py", "warm"' in src
+    assert "--translate-to" in src
+    assert 'launchWarmDictation(targetLanguage: dictationTargetLanguage(fallback: "English"))' in src
+    assert '"dictate.py", "toggle"' in src
+    assert "dictationTargetLanguage(fallback:" in src
+    assert '"dictate_toggle"' in src
+    assert '"dictate_translate"' in src
+    assert "dictateToggleResponse" in src
+    assert "dictateTranslateResponse" in src
+    assert "--target-bundle-id" in src
+    assert "currentInputTargetApplication()" in src
+    assert "isUsableInputTarget" in src
+    assert "com.apple.loginwindow" in src
+    assert "NSWorkspace.shared.frontmostApplication" in src
+    assert "NSWorkspace.shared.runningApplications.first" in src
+    assert "launchd agents can report loginwindow as frontmost" in src
+    assert ".nonactivatingPanel" in src
+    assert "capturePasteTarget(for: target)" in src
+    assert "capturedPasteTarget = pasteTarget" in src
+    assert '"--deadline-sec", "6"' not in src
+    assert '"--timeout-sec", "6"' not in src
+    assert 'file.hasPrefix("\\(CONFIG_DIR)/dictation/")' in src
+    assert "dictation recording active; ignoring meeting stop" in src
+
+
+def test_status_agent_has_agent_console_entry():
+    src = _swift_source()
+    assert '"Open Agent Console"' in src
+    assert '"open_agent_console"' in src
+    assert "onOpenAgentConsole" in src
+    assert "http://127.0.0.1:7777/agent-console" in src
+
+
+def test_status_agent_has_voice_chat_entry():
+    src = _swift_source()
+    assert '"Ask Agent by Voice"' in src
+    assert '"voice_chat"' in src
+    assert '"open_voice_chat"' in src
+    assert "WKWebView" in src
+    assert "http://127.0.0.1:7777/voice-chat" in src
+    assert "launchVoiceChatToggle" in src
+    assert '"dictate.py", "ask-toggle"' in src
+    assert "voiceChatResponse" in src
+    assert "openVoiceChatResponse" in src
+    assert "voiceChatWindowStatus" in src
+    assert '"voice_chat_window_visible"' in src
+    assert '"Stop Voice Chat"' in src
+    assert "voice chat recording active; ignoring dictation" in src
+    assert "voice chat recording active; ignoring translate dictation" in src
+
+
+def test_status_agent_has_paste_clipboard_ipc():
+    src = _swift_source()
+    assert '"paste_clipboard"' in src
+    assert "pasteClipboardResponse" in src
+    assert "pasteClipboard(text:" in src
+    assert "insertTextWithAccessibility" in src
+    assert "runningTextTarget" in src
+    assert "NSWorkspace.OpenConfiguration" in src
+    assert "activateIgnoringOtherApps" in src
+    assert "config.activates = true" in src
+    assert "isFrontTextTarget" in src
+    assert "waitForFrontTextTarget" in src
+    assert "Thread.sleep(forTimeInterval: 0.05)" in src
+    assert '"error": "target_not_front"' in src
+    assert '"error": "paste_timeout"' in src
+    assert '"front_app_name": NSWorkspace.shared.frontmostApplication?.localizedName ?? ""' in src
+    assert "findWritableTextElement" in src
+    assert "isWritableTextElement" in src
+    assert "setAXTimeout" in src
+    assert "AXUIElementSetMessagingTimeout" in src
+    assert "depth: 3, budget: 16" in src
+    assert "kAXFocusedWindowAttribute" in src
+    assert "kAXMainWindowAttribute" in src
+    assert "AXUIElementCreateApplication" in src
+    assert "focusedSource = \"target\"" in src
+    assert '"focused_value_unavailable:' in src
+    assert "NSPasteboard.general.setString(text, forType: .string)" in src
+    assert "\\(focusedSource)_\\(direct.1)" in src
+    assert "accessibility_not_trusted" in src
+    assert "accessibility_error" in src
+    assert '"method": "accessibility"' in src
+    assert 'return "keystroke"' in src
+    assert "AXUIElementCreateSystemWide" in src
+    assert "kAXSelectedTextRangeAttribute" in src
+    assert "AXUIElementSetAttributeValue" in src
+    assert "sendPasteKeystroke" in src
+    assert "CGEvent(keyboardEventSource:" in src
+    assert "postToPid(target.processIdentifier)" in src
+    assert '"target_keystroke"' in src
+    assert ".maskCommand" in src
+    assert ".cghidEventTap" in src
+    assert '"verified": false' in src
+    assert "CapturedPasteTarget" in src
+    assert "capturedPasteTargetMatches" in src
+    assert '"method": "captured_accessibility"' in src
+    assert "shouldAvoidAccessibilityInsert" in src
+    assert "com.openai.codex" in src
+
+
 def test_status_agent_processing_allows_next_recording():
     src = _swift_source()
     assert "Start Recording (transcribing previous)" in src
-    assert "new == .idle || new == .recording || new == .processing" in src
+    assert "new == .idle || (new == .recording && !activeRecordingIsDictation) || new == .processing" in src
     assert "case .processing:" in src
     assert "startRecordingFromMenu()" in src
     assert "starting next recording while previous processing continues" in src
+    assert "waitpid(pid, &status, WNOHANG)" in src

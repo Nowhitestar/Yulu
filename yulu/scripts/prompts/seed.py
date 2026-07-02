@@ -65,6 +65,32 @@ SEED_PROMPTS: list[dict] = [
         ),
     },
     {
+        "slug": "dictation-cleanup",
+        "name": "Dictation Cleanup",
+        "category": "voice",
+        "is_auto_run": False,
+        "sort_order": 5,
+        "content": (
+            "语音输入模式。输出可直接粘贴到当前光标处的正文："
+            "保留原意，补齐必要标点，去掉口头停顿词，不要摘要，"
+            "不要解释，不要寒暄。保留已经识别出的词，尤其是名称、数字、"
+            "术语和近音词；不要擅自改成另一个近音词。优先使用术语表里的专有名词写法。"
+        ),
+    },
+    {
+        "slug": "dictation-translate",
+        "name": "Dictation Translate",
+        "category": "voice",
+        "is_auto_run": False,
+        "sort_order": 6,
+        "content": (
+            "语音翻译输入模式。将语音内容翻译成{{target_language}}，"
+            "输出可直接粘贴到当前光标处的正文。保留原意和语气，"
+            "补齐必要标点，不要摘要，不要解释，不要寒暄。"
+            "优先使用术语表里的专有名词写法。"
+        ),
+    },
+    {
         "slug": "action-items",
         "name": "Action Items & Decisions",
         "category": "summary",
@@ -139,8 +165,8 @@ def seed_from_current(repo: PromptsRepo) -> dict[str, int]:
     Returns {inserted: N, updated: N}. Idempotent:
       - slug not in repo → INSERT with source=SEED → counts toward inserted
       - slug in repo with source=SEED and identical content → skip (no count)
-      - slug in repo with source=SEED but drifted content → UPDATE in place
-        (preserve id) → counts toward updated
+      - slug in repo with source=SEED but drifted seed-owned fields → UPDATE
+        in place (preserve id) → counts toward updated
       - slug in repo with source=MANUAL → leave alone entirely (no count)
 
     After insert/update, writes meta.seeded_at = _now_iso().
@@ -162,9 +188,21 @@ def seed_from_current(repo: PromptsRepo) -> dict[str, int]:
             )
             inserted += 1
         elif existing.source == Source.SEED:
-            # Only update if content has drifted from snapshot
-            if existing.content != spec["content"]:
-                repo.edit(spec["slug"], content=spec["content"])
+            if (
+                existing.name != spec["name"]
+                or existing.category.value != spec["category"]
+                or existing.content != spec["content"]
+                or existing.is_auto_run != spec["is_auto_run"]
+                or existing.sort_order != spec["sort_order"]
+            ):
+                repo.edit(
+                    spec["slug"],
+                    name=spec["name"],
+                    category=Category(spec["category"]),
+                    content=spec["content"],
+                    is_auto_run=spec["is_auto_run"],
+                    sort_order=spec["sort_order"],
+                )
                 updated += 1
             # else: identical — skip, no count
         # else: source=MANUAL or LEARNED — leave alone

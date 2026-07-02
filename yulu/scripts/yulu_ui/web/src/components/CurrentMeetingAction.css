@@ -1,0 +1,66 @@
+.current-meeting-action {
+  display: inline-flex;
+  align-items: center;
+  height: 34px;
+  min-width: 0;
+  border: 1px solid var(--edge-card);
+  border-radius: var(--radius-control);
+  background: var(--surface-solid, var(--glass));
+  overflow: hidden;
+}
+
+.current-meeting-select {
+  height: 32px;
+  width: 156px;
+  max-width: 38vw;
+  border: 0;
+  border-right: 1px solid var(--edge-card);
+  border-radius: 0;
+  background: transparent;
+  color: var(--fg-2);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 650;
+  padding: 0 8px;
+  outline: none;
+}
+
+.current-meeting-button {
+  height: 32px;
+  min-width: 112px;
+  border: 0;
+  border-radius: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 11px;
+  background: var(--accent);
+  color: #fff;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 750;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.current-meeting-button:disabled {
+  opacity: 0.62;
+  cursor: default;
+}
+
+@media (max-width: 760px) {
+  .current-meeting-select {
+    display: none;
+  }
+
+  .current-meeting-button {
+    width: 34px;
+    min-width: 34px;
+    padding: 0;
+  }
+
+  .current-meeting-button span {
+    display: none;
+  }
+}

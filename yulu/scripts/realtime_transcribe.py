@@ -13,6 +13,7 @@ unsubscribe_session and exiting cleanly.
 from __future__ import annotations
 
 import asyncio
+import argparse
 import json
 import signal
 import sys
@@ -54,6 +55,7 @@ async def subscribe_loop(
     engine: str,
     language: str,
     chunk_sec: float,
+    unsubscribe_reason: str,
     stop_event: asyncio.Event,
 ) -> None:
     """Open a long-lived subscribe_session connection and accumulate partials."""
@@ -131,7 +133,7 @@ async def subscribe_loop(
         p.cancel()
 
     if stop_event.is_set():
-        unsub = {"type": "unsubscribe_session", "sid": sid, "reason": "stopped"}
+        unsub = {"type": "unsubscribe_session", "sid": sid, "reason": unsubscribe_reason}
         try:
             writer.write((json.dumps(unsub) + "\n").encode())
             await writer.drain()
@@ -145,7 +147,13 @@ async def subscribe_loop(
         pass
 
 
-async def _async_main(audio_path: Path, title: str) -> int:
+async def _async_main(
+    audio_path: Path,
+    title: str,
+    *,
+    chunk_sec_override: Optional[float] = None,
+    unsubscribe_reason: str = "stopped",
+) -> int:
     socket_path = DEFAULT_SOCKET
     if not socket_path.exists():
         print(f"stt_daemon socket not found at {socket_path}", file=sys.stderr)
@@ -153,6 +161,8 @@ async def _async_main(audio_path: Path, title: str) -> int:
 
     cfg = _load_config()
     engine, language, chunk_sec = _resolve_engine_lang(cfg)
+    if chunk_sec_override is not None and chunk_sec_override > 0:
+        chunk_sec = chunk_sec_override
     sid = f"rt-{uuid.uuid4().hex[:12]}"
     output_path = audio_path.with_suffix(".realtime.transcript.txt")
 
@@ -179,6 +189,7 @@ async def _async_main(audio_path: Path, title: str) -> int:
             engine=engine,
             language=language,
             chunk_sec=chunk_sec,
+            unsubscribe_reason=unsubscribe_reason,
             stop_event=stop_event,
         )
     except (ConnectionRefusedError, FileNotFoundError) as exc:
@@ -189,17 +200,25 @@ async def _async_main(audio_path: Path, title: str) -> int:
 
 
 def main(argv: Optional[list[str]] = None) -> int:
-    if argv is None:
-        argv = sys.argv[1:]
-    if len(argv) < 1:
-        print("Usage: realtime_transcribe.py <audio.wav> [title]", file=sys.stderr)
-        return 1
-    audio_path = Path(argv[0]).expanduser().resolve()
-    title = argv[1] if len(argv) > 1 else audio_path.stem
+    parser = argparse.ArgumentParser(description="Subscribe to stt_daemon realtime transcription.")
+    parser.add_argument("audio_path")
+    parser.add_argument("title", nargs="?", default="")
+    parser.add_argument("--chunk-sec", type=float, default=None)
+    parser.add_argument("--unsubscribe-reason", default="stopped")
+    args = parser.parse_args(argv)
+    audio_path = Path(args.audio_path).expanduser().resolve()
+    title = args.title or audio_path.stem
     if not audio_path.parent.exists():
         print(f"audio parent dir missing: {audio_path.parent}", file=sys.stderr)
         return 1
-    return asyncio.run(_async_main(audio_path, title))
+    return asyncio.run(
+        _async_main(
+            audio_path,
+            title,
+            chunk_sec_override=args.chunk_sec,
+            unsubscribe_reason=args.unsubscribe_reason,
+        )
+    )
 
 
 if __name__ == "__main__":

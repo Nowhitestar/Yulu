@@ -1,4 +1,4 @@
-"""yulu status-agent CLI dispatch — install/enable/disable/status/state/toggle."""
+"""yulu status-agent CLI dispatch — install/enable/disable/status/state/toggle/dictate."""
 
 from __future__ import annotations
 
@@ -84,6 +84,16 @@ def test_help_when_no_subcommand(capsys):
     assert "set-hotkey" not in out
 
 
+def test_hotkeys_json_prints_status_agent_specs(tmp_path, monkeypatch, capsys):
+    _stub_paths(tmp_path, monkeypatch)
+    rc = sac.main(["hotkeys", "--json"])
+    assert rc == 0
+    items = json.loads(capsys.readouterr().out)
+    assert [item["action"] for item in items] == ["dictate", "translate", "voice_chat"]
+    assert items[0]["keyCode"] == 49
+    assert items[1]["targetLanguage"] == "English"
+
+
 # ─── IPC tests: spin up a tiny Unix-socket server in a thread that
 # mirrors the StatusAgent.swift IPCServer contract (line-delimited JSON
 # request → line-delimited JSON response). Verifies CLI exit codes, output,
@@ -139,14 +149,24 @@ def _start_fake_ipc_server(tmp_path: Path, monkeypatch, handler):
 def test_state_prints_current_state(tmp_path, monkeypatch, capsys):
     def handler(req):
         assert req["action"] == "status"
-        return {"ok": True, "state": "idle", "launcher_pid": 4242}
+        return {
+            "ok": True,
+            "state": "idle",
+            "dictation_active": True,
+            "launcher_pid": 4242,
+            "voice_chat_window_visible": True,
+            "voice_chat_window_url": "http://127.0.0.1:7777/voice-chat?session=s1",
+        }
 
     _start_fake_ipc_server(tmp_path, monkeypatch, handler)
     rc = sac.main(["state"])
     assert rc == 0
     out = capsys.readouterr().out
     assert "state: idle" in out
+    assert "dictation active: True" in out
     assert "launcher pid: 4242" in out
+    assert "voice chat window visible: True" in out
+    assert "voice chat window url: http://127.0.0.1:7777/voice-chat?session=s1" in out
 
 
 def test_toggle_prints_before_after(tmp_path, monkeypatch, capsys):
@@ -161,6 +181,42 @@ def test_toggle_prints_before_after(tmp_path, monkeypatch, capsys):
     assert "idle → recording" in out
 
 
+def test_dictate_prints_before_after(tmp_path, monkeypatch, capsys):
+    def handler(req):
+        assert req["action"] == "dictate_toggle"
+        return {"ok": True, "state_before": "idle", "state_after": "recording"}
+
+    _start_fake_ipc_server(tmp_path, monkeypatch, handler)
+    rc = sac.main(["dictate"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "dictation: idle → recording" in out
+
+
+def test_translate_prints_before_after(tmp_path, monkeypatch, capsys):
+    def handler(req):
+        assert req == {"action": "dictate_translate", "target_language": "Japanese"}
+        return {"ok": True, "state_before": "idle", "state_after": "recording"}
+
+    _start_fake_ipc_server(tmp_path, monkeypatch, handler)
+    rc = sac.main(["translate", "--target-language", "Japanese"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "translate: idle → recording" in out
+
+
+def test_voice_chat_prints_before_after(tmp_path, monkeypatch, capsys):
+    def handler(req):
+        assert req["action"] == "voice_chat"
+        return {"ok": True, "state_before": "idle", "state_after": "processing"}
+
+    _start_fake_ipc_server(tmp_path, monkeypatch, handler)
+    rc = sac.main(["voice-chat"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "voice chat: idle → processing" in out
+
+
 def test_open_inbox_prints_ok(tmp_path, monkeypatch, capsys):
     def handler(req):
         assert req["action"] == "open_inbox"
@@ -171,6 +227,79 @@ def test_open_inbox_prints_ok(tmp_path, monkeypatch, capsys):
     assert rc == 0
     out = capsys.readouterr().out
     assert "open_inbox" in out
+
+
+def test_open_agent_console_prints_ok(tmp_path, monkeypatch, capsys):
+    def handler(req):
+        assert req["action"] == "open_agent_console"
+        return {"ok": True}
+
+    _start_fake_ipc_server(tmp_path, monkeypatch, handler)
+    rc = sac.main(["open-agent-console"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "open_agent_console" in out
+
+
+def test_open_voice_chat_prints_window_status(tmp_path, monkeypatch, capsys):
+    def handler(req):
+        assert req == {
+            "action": "open_voice_chat",
+            "url": "http://127.0.0.1:7777/voice-chat?session=s1",
+        }
+        return {
+            "ok": True,
+            "voice_chat_window_visible": True,
+            "voice_chat_window_url": "http://127.0.0.1:7777/voice-chat?session=s1",
+        }
+
+    _start_fake_ipc_server(tmp_path, monkeypatch, handler)
+    rc = sac.main(["open-voice-chat", "--url", "http://127.0.0.1:7777/voice-chat?session=s1"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "open_voice_chat" in out
+    assert "voice chat window visible: True" in out
+    assert "voice chat window url: http://127.0.0.1:7777/voice-chat?session=s1" in out
+
+
+def test_paste_smoke_sends_text_and_prints_json(tmp_path, monkeypatch, capsys):
+    sleeps = []
+    monkeypatch.setattr(sac.time, "sleep", lambda sec: sleeps.append(sec))
+
+    def handler(req):
+        assert req == {
+            "action": "paste_clipboard",
+            "text": "hello",
+            "target_bundle_id": "com.apple.TextEdit",
+            "target_app_name": "TextEdit",
+        }
+        return {"ok": True, "method": "accessibility"}
+
+    _start_fake_ipc_server(tmp_path, monkeypatch, handler)
+    rc = sac.main([
+        "paste-smoke",
+        "--text", "hello",
+        "--target-bundle-id", "com.apple.TextEdit",
+        "--target-app-name", "TextEdit",
+        "--delay-sec", "1.25",
+        "--json",
+    ])
+    assert rc == 0
+    assert sleeps == [1.25]
+    assert json.loads(capsys.readouterr().out)["method"] == "accessibility"
+
+
+def test_paste_smoke_reports_accessibility_error(tmp_path, monkeypatch, capsys):
+    def handler(req):
+        assert req["action"] == "paste_clipboard"
+        return {"ok": False, "error": "paste_failed", "accessibility_error": "focused_value_unavailable:-25205"}
+
+    _start_fake_ipc_server(tmp_path, monkeypatch, handler)
+    rc = sac.main(["paste-smoke"])
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "paste_failed" in err
+    assert "focused_value_unavailable" in err
 
 
 def test_toggle_reports_unreachable_when_agent_down(tmp_path, monkeypatch, capsys):

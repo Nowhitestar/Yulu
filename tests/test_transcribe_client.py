@@ -134,3 +134,41 @@ def test_transcribe_file_retries_once_on_eof(tmp_path, monkeypatch):
     finally:
         stop.set()
         t.join(timeout=5.0)
+
+
+def test_transcribe_file_sends_dictation_options(tmp_path, monkeypatch):
+    observed = {}
+    import transcribe_client as tc
+
+    async def fake_send_once(socket_path, request, *, timeout, response_timeout):
+        observed.update(request)
+        return {
+            "type": "transcribe_result",
+            "job_id": request["job_id"],
+            "status": "ok",
+            "engine_used": request["engine"],
+            "language_used": request["language"],
+            "text": "ok",
+            "raw_text": "ok",
+            "segments": [],
+            "vocab_prompt_terms_count": 0,
+            "vocab_replacements_count": 0,
+            "duration_ms": 0,
+        }
+
+    monkeypatch.setattr(tc, "_send_once", fake_send_once)
+    audio = tmp_path / "x.wav"
+    audio.write_bytes(b"RIFF")
+
+    result = transcribe_file(
+        audio_path=str(audio),
+        engine="mlx",
+        language="zh",
+        socket_path=tmp_path / "stt.sock",
+        dictation_mode="translate",
+        target_language="English",
+    )
+
+    assert result["status"] == "ok"
+    assert observed["dictation_mode"] == "translate"
+    assert observed["target_language"] == "English"

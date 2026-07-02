@@ -199,11 +199,11 @@ vi.mock("../../../web/src/trpc.js", () => {
 
 import { AgentConsole } from "../../../web/src/routes/agent-console.js";
 
-function wrap() {
+function wrap(initialEntries = ["/agent-console"]) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={qc}>
-      <MemoryRouter>
+      <MemoryRouter initialEntries={initialEntries}>
         <AgentConsole />
       </MemoryRouter>
     </QueryClientProvider>,
@@ -273,6 +273,14 @@ describe("AgentConsole", () => {
     expect(getByText("最近三天")).toBeInTheDocument();
     expect(getByText("问会议")).toBeInTheDocument();
     expect(getByText("底层 Agent")).toBeInTheDocument();
+  });
+
+  it("surfaces the voice input entrypoints from Agent Console", () => {
+    const { container, getByText } = wrap();
+    const modebar = container.querySelector(".agent-console-modebar") as HTMLElement;
+    expect(within(modebar).getByText("语音输入").closest("a")).toHaveAttribute("href", "/voice-input");
+    expect(getByText("查看入口").closest("a")).toHaveAttribute("href", "/voice-input");
+    expect(getByText("配置快捷键").closest("a")).toHaveAttribute("href", "/settings/voice");
   });
 
   it("shows recent task cards and can send a ready summary", () => {
@@ -439,6 +447,33 @@ describe("AgentConsole", () => {
     fireEvent.click(within(sessionPanel).getByText("Bruce 忙什么"));
     expect(await findByText("重点")).toBeInTheDocument();
     expect(container.querySelector(".agent-message-text strong")).toHaveTextContent("重点");
+  });
+
+  it("opens a floating voice chat directly on the URL session", async () => {
+    mockSessions = [{
+      id: "session-1",
+      agent: "codex",
+      title: "Bruce 忙什么",
+      updatedAt: "2026-06-25T10:00:00.000Z",
+      messageCount: 2,
+    }];
+    mockSelectedSession = {
+      id: "session-1",
+      agent: "codex",
+      title: "Bruce 忙什么",
+      updatedAt: "2026-06-25T10:00:00.000Z",
+      messages: [
+        { role: "user", text: "Bruce 最近忙什么？" },
+        { role: "assistant", text: "**重点**：订阅和 KYC。", sources: [] },
+      ],
+    };
+
+    const { findByText, queryByText, container } = wrap(["/voice-chat?session=session-1"]);
+
+    expect(container.querySelector(".agent-console-modebar")).toBeNull();
+    expect(await findByText("重点")).toBeInTheDocument();
+    expect(queryByText("尚未创建 session")).toBeNull();
+    expect(container.querySelector(".agent-session-item.active")).toHaveTextContent("Bruce 忙什么");
   });
 
   it("filters persisted Agent session history", async () => {

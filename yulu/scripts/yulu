@@ -20,6 +20,7 @@
 #   yulu logs [name]          Tail logs (default: audio_daemon)
 #   yulu record start "title" Manual recording start
 #   yulu record stop          Manual recording stop
+#   yulu dictate ...          Experimental low-latency voice input
 #   yulu repair-permissions   Reset/open Screen & System Audio Recording permission helper
 #   yulu transcription ...    Switch transcription engine and post-recording mode
 #   yulu where                Print key paths (repo / config / recordings / launchagents)
@@ -72,6 +73,19 @@ Commands:
   logs [daemon]    Tail logs. Daemon = audio_daemon (default), scheduler, detector, calendar, agentqueue, realtime_transcribe, ui
   record start "title"   Manually start a recording
   record stop            Manually stop the current recording
+  dictate start|stop|once|toggle|ask
+                    Experimental low-latency voice input. Mic-only recording,
+                    STT dictation job, prompt/vocab context, clipboard, optional paste
+                    Use --translate-to "English" for prompt-based quick translation
+                    Use ask to send a voice question into Agent Console chat
+  status-agent dictate
+                    Toggle dictation through the running menu-bar agent IPC
+  status-agent open-agent-console
+                    Open Agent Console Ask/chat surface through the menu-bar agent IPC
+  status-agent voice-chat
+                    Record a voice question and send it into Agent Console chat
+  status-agent hotkeys
+                    Print configured global shortcuts for dictation, translation, and voice chat
   repair-permissions     Open/reset Screen & System Audio Recording permission helper
   transcription status   Show transcription engine + post-recording mode
   transcription mode fast|full
@@ -315,6 +329,7 @@ case "${1:-help}" in
     doctor)    shift; cmd_doctor "$@" ;;
     logs)      shift; cmd_logs "$@" ;;
     record)    shift; cmd_record "$@" ;;
+    dictate)   shift; PYTHONPATH="$SCRIPT_DIR:${PYTHONPATH:-}" exec "${PYTHON:-python3}" "$SCRIPT_DIR/dictate.py" "$@" ;;
     repair-permissions|repair_permissions) shift; cmd_repair_permissions "$@" ;;
     transcription|transcribe) shift; cmd_transcription "$@" ;;
     vocab)     shift; PYTHONPATH="$SCRIPT_DIR:${PYTHONPATH:-}" exec "${PYTHON:-python3}" -m vocab.cli "$@" ;;

@@ -15,6 +15,9 @@ vi.mock("react-router", async () => {
 vi.mock("../../../web/src/components/Pill.js", () => ({
   Pill: () => <button type="button">Record</button>,
 }));
+vi.mock("../../../web/src/components/CurrentMeetingAction.js", () => ({
+  CurrentMeetingAction: () => null,
+}));
 
 const mUseMatches = useMatches as unknown as ReturnType<typeof vi.fn>;
 
@@ -83,5 +86,11 @@ describe("TopBar", () => {
     setMatches([{ breadcrumb: "Inbox" }]);
     render(<Wrap><TopBar /></Wrap>);
     expect(screen.getByLabelText("设置")).toHaveAttribute("href", "/settings");
+  });
+
+  it("links the voice input icon to Voice Input", () => {
+    setMatches([{ breadcrumb: "Inbox" }]);
+    render(<Wrap><TopBar /></Wrap>);
+    expect(screen.getByLabelText("语音输入")).toHaveAttribute("href", "/voice-input");
   });
 });

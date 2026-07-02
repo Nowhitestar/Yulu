@@ -337,6 +337,7 @@ class MockSTTBackend:
         self.calls = 0
         self.reset_count = 0
         self.last_initial_prompt: Optional[str] = None
+        self.last_options: Optional[dict] = None
         self._ready = False
 
     async def warm_up(self) -> None:
@@ -353,6 +354,7 @@ class MockSTTBackend:
     ) -> STTResult:
         self.calls += 1
         self.last_initial_prompt = initial_prompt
+        self.last_options = dict(options or {})
         cancel_token.check()
         if self.calls <= self.raise_first_n:
             raise RuntimeError(f"mock failure {self.calls}")

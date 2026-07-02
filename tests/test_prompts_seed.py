@@ -1,4 +1,5 @@
 import sys
+import sqlite3
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -14,13 +15,18 @@ from prompts.seed import (
 def test_seed_constants_complete():
     slugs = {p["slug"] for p in SEED_PROMPTS}
     assert {"summary", "transcript-cleanup", "action-items"} <= slugs
-    # The voicemail category was removed — every seed is summary or cleanup.
+    # The voicemail category was removed; dictation prompts live under voice.
     assert not any(p["slug"].startswith("voicemail") for p in SEED_PROMPTS)
     for p in SEED_PROMPTS:
-        assert p["category"] in ("summary", "cleanup")
+        assert p["category"] in ("summary", "cleanup", "voice")
         # Legacy single-track prompts must include {{transcript}};
         # dual-track prompts use {{my_transcript}}/{{their_transcript}} instead.
-        if p["slug"] == "action-items-by-speaker":
+        if p["slug"] in {"dictation-cleanup", "dictation-translate"}:
+            assert "{{transcript}}" not in p["content"]
+            assert "语音" in p["content"]
+            if p["slug"] == "dictation-translate":
+                assert "{{target_language}}" in p["content"]
+        elif p["slug"] == "action-items-by-speaker":
             assert "{{my_transcript}}" in p["content"]
             assert "{{their_transcript}}" in p["content"]
         else:
@@ -67,8 +73,40 @@ def test_seed_from_current_inserts(tmp_path):
     assert n["updated"] == 0
     assert repo.by_slug("summary") is not None
     assert repo.by_slug("transcript-cleanup").category == Category.CLEANUP
+    assert repo.by_slug("dictation-cleanup").category == Category.VOICE
+    assert repo.by_slug("dictation-translate").category == Category.VOICE
     assert all(p.source == Source.SEED for p in repo.list_prompts())
     assert repo.get_meta("seeded_at") is not None
+
+
+def test_open_db_migrates_existing_dictation_prompts_to_voice(tmp_path):
+    db_path = tmp_path / "p.sqlite"
+    conn = sqlite3.connect(db_path)
+    conn.executescript("""
+        CREATE TABLE prompts (
+            id TEXT PRIMARY KEY,
+            slug TEXT NOT NULL UNIQUE,
+            name TEXT NOT NULL,
+            category TEXT NOT NULL CHECK(category IN ('summary', 'cleanup')),
+            content TEXT NOT NULL,
+            is_auto_run INTEGER NOT NULL DEFAULT 0,
+            source TEXT NOT NULL DEFAULT 'manual'
+                CHECK(source IN ('seed', 'manual', 'learned')),
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            note TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        INSERT INTO prompts VALUES
+            ('p1', 'dictation-cleanup', 'Dictation Cleanup', 'cleanup', 'body', 0, 'seed', 5, NULL, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'),
+            ('p2', 'dictation-translate', 'Dictation Translate', 'cleanup', 'body', 0, 'seed', 6, NULL, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');
+    """)
+    conn.close()
+
+    repo = PromptsRepo(open_db(db_path))
+
+    assert repo.by_slug("dictation-cleanup").category == Category.VOICE
+    assert repo.by_slug("dictation-translate").category == Category.VOICE
 
 
 def test_seed_from_current_idempotent(tmp_path):

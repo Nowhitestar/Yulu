@@ -15,6 +15,8 @@ const LIST_DATA = [
   { id: "id-1", slug: "default",  name: "Default Summary", category: "summary",   content: "x", is_auto_run: 1, source: "seed",   sort_order: 0, note: null, created_at: "", updated_at: "" },
   { id: "id-2", slug: "cleanup",  name: "清理",          category: "cleanup",   content: "y", is_auto_run: 0, source: "seed",   sort_order: 1, note: null, created_at: "", updated_at: "" },
   { id: "id-3", slug: "action-items", name: "Action Items", category: "summary", content: "z", is_auto_run: 0, source: "manual", sort_order: 2, note: null, created_at: "", updated_at: "" },
+  { id: "id-4", slug: "dictation-cleanup", name: "Dictation Cleanup", category: "voice", content: "d", is_auto_run: 0, source: "seed", sort_order: 3, note: null, created_at: "", updated_at: "" },
+  { id: "id-5", slug: "dictation-translate", name: "Dictation Translate", category: "voice", content: "t", is_auto_run: 0, source: "seed", sort_order: 4, note: null, created_at: "", updated_at: "" },
 ];
 
 const EXISTING_PROMPT = {
@@ -76,28 +78,32 @@ function rowNames(): string[] {
 }
 
 describe("Templates page", () => {
-  it("renders 3 prompt rows with names + category chips + autorun star", () => {
+  it("renders prompt rows with names + category chips + autorun star", () => {
     mount();
     const names = rowNames();
     expect(names).toContain("Default Summary");
     expect(names).toContain("清理");
     expect(names).toContain("Action Items");
+    expect(names).toContain("Dictation Cleanup");
+    expect(names).toContain("Dictation Translate");
     // Category chips inside rows: one per row
     const rows = screen.getAllByTestId("prompt-row");
-    expect(rows).toHaveLength(3);
+    expect(rows).toHaveLength(5);
     expect(rows[0]?.querySelector('[data-category="summary"]')).not.toBeNull();
     expect(rows[1]?.querySelector('[data-category="cleanup"]')).not.toBeNull();
     expect(rows[2]?.querySelector('[data-category="summary"]')).not.toBeNull();
+    expect(rows[3]?.querySelector('[data-category="voice"]')).not.toBeNull();
     // Autorun star on first row only
     expect(rows[0]).toHaveTextContent("★");
     expect(rows[1]).not.toHaveTextContent("★");
   });
 
-  it("renders 3 filter chips (All/Summary/Cleanup) + New template button", () => {
+  it("renders 4 filter chips (All/Summary/Cleanup/Voice input) + New template button", () => {
     mount();
     expect(screen.getByRole("button", { name: /^全部$/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /^摘要$/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /^清理$/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^语音输入$/i })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^voicemail$/i })).toBeNull();
     expect(screen.getByRole("link", { name: /\+ 新建模板/ })).toBeInTheDocument();
   });
@@ -110,6 +116,16 @@ describe("Templates page", () => {
     expect(names).toContain("Default Summary");
     expect(names).toContain("Action Items"); // also a summary-category prompt
     expect(names).not.toContain("清理");
+    expect(names).not.toContain("Dictation Cleanup");
+    expect(names).not.toContain("Dictation Translate");
+  });
+
+  it("clicking Voice input filter shows only voice prompts", async () => {
+    mount();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: /^语音输入$/i }));
+    const names = rowNames();
+    expect(names).toEqual(["Dictation Cleanup", "Dictation Translate"]);
   });
 
   it("index outlet renders empty state when no :id selected", () => {
