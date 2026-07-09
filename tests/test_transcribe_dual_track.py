@@ -93,7 +93,7 @@ def test_dual_track_uses_original_file_for_channel_split_transcribe(isolated_pat
 
     monkeypatch.setattr(transcribe, "load_config", lambda: {"transcription": {"language": "zh"}})
 
-    def fake_request(audio_path, trans_cfg, meeting_title):
+    def fake_request(audio_path, trans_cfg, meeting_title, **_kwargs):
         seen_paths.append(audio_path)
         return {
             "status": "ok",
