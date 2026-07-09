@@ -9,3 +9,4 @@
 }
 .category-chip[data-category="summary"]   { background: rgba(92, 207, 230, 0.18); color: var(--blue); }
 .category-chip[data-category="cleanup"]   { background: rgba(186, 230, 126, 0.18); color: var(--green); }
+.category-chip[data-category="voice"]     { background: color-mix(in oklch, var(--purple) 16%, transparent); color: var(--purple); }

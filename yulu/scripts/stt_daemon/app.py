@@ -149,6 +149,7 @@ class STTDaemonApp:
             )
         self.vocab_cache.maybe_reload()
         initial_prompt = self.vocab_cache.inject_prompt(
+            base_prompt=msg.context_prompt,
             meeting_title=msg.meeting_title or "",
         )
 
@@ -310,7 +311,12 @@ class STTDaemonApp:
         job = Job(
             job_id=msg.job_id + job_id_suffix,
             kind=msg.kind,
-            engine=msg.engine,
+            engine=self._resolve_job_engine(
+                msg.kind,
+                msg.engine,
+                dictation_mode=msg.dictation_mode,
+                target_language=msg.target_language,
+            ),
             language=msg.language,
             audio_path=audio_path,
             initial_prompt=initial_prompt,
@@ -321,10 +327,17 @@ class STTDaemonApp:
                 "word_timestamps": msg.word_timestamps,
                 "condition_on_previous": msg.condition_on_previous,
                 "hallucination_silence_threshold": msg.hallucination_silence_threshold,
+                "timeout_sec": msg.timeout_sec,
+                "dictation_mode": msg.dictation_mode,
+                "target_language": msg.target_language,
             },
         )
         fut = await self.scheduler.submit(job)
-        return await fut
+        try:
+            return await asyncio.wait_for(asyncio.shield(fut), timeout=msg.timeout_sec)
+        except asyncio.TimeoutError as exc:
+            await self.scheduler.cancel(job.job_id)
+            raise TimeoutError(f"transcribe timed out after {msg.timeout_sec}s") from exc
 
     async def _on_diarize(self, msg: DiarizeRequest, writer):
         """Run the diarize backend on one audio file → DiarizeResponse with speaker turns.
@@ -402,6 +415,25 @@ class STTDaemonApp:
         candidate = f"{engine}-realtime"
         if candidate in self.runtime.backends:
             return candidate
+        return engine
+
+    def _resolve_job_engine(
+        self,
+        kind: JobKind,
+        engine: str,
+        *,
+        dictation_mode: str = "",
+        target_language: str = "",
+    ) -> str:
+        if kind is JobKind.DICTATION:
+            target = (target_language or "").strip().lower().replace("_", "-")
+            if (
+                engine == "mlx"
+                and (dictation_mode or "").strip().lower() == "translate"
+                and target in {"", "en", "eng", "english", "en-us", "en-gb"}
+            ):
+                return engine
+            return self._resolve_realtime_engine(engine)
         return engine
 
     async def _on_subscribe_session(self, msg: SubscribeSessionRequest, writer):

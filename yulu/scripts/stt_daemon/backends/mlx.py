@@ -9,6 +9,13 @@ from typing import Optional
 from ..runtime import CancelToken, STTResult
 
 
+def _wants_english_translation(options: dict) -> bool:
+    if str(options.get("dictation_mode") or "").strip().lower() != "translate":
+        return False
+    target = str(options.get("target_language") or "").strip().lower().replace("_", "-")
+    return target in {"", "en", "eng", "english", "en-us", "en-gb"}
+
+
 class MlxWhisperBackend:
     """Wraps mlx_whisper.transcribe(). Model stays loaded after first call."""
 
@@ -48,6 +55,10 @@ class MlxWhisperBackend:
             module = await asyncio.to_thread(importlib.import_module, "mlx_whisper")
             if module is None:
                 raise RuntimeError("mlx_whisper module is unavailable")
+            if getattr(module, "__path__", None) is not None:
+                transcribe_module = await asyncio.to_thread(importlib.import_module, "mlx_whisper.transcribe")
+                mx = await asyncio.to_thread(importlib.import_module, "mlx.core")
+                await asyncio.to_thread(transcribe_module.ModelHolder.get_model, self.model, mx.float16)
             self._module = module
             self._ready = True
 
@@ -81,13 +92,14 @@ class MlxWhisperBackend:
                 self.hallucination_silence_threshold,
             )
         )
+        task = "translate" if _wants_english_translation(opts) else "transcribe"
 
         def _run() -> dict:
             return self._module.transcribe(
                 audio_path,
                 path_or_hf_repo=self.model,
                 language=language,
-                task="transcribe",
+                task=task,
                 verbose=False,
                 initial_prompt=initial_prompt or None,
                 condition_on_previous_text=condition_on_previous_text,

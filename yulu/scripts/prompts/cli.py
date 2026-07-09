@@ -60,7 +60,7 @@ def _print_table(rows: list[dict]) -> None:
 # ── subcommand handlers ─────────────────────────────────────────────
 
 def _cmd_list(args: argparse.Namespace, repo: PromptsRepo) -> int:
-    """list [--category {summary,cleanup}] [--auto-run] [--json]
+    """list [--category {summary,cleanup,voice}] [--auto-run] [--json]
 
     --auto-run filters to is_auto_run=True only.
     With no flags: all prompts, all categories, sorted by sort_order asc + slug asc.
@@ -77,7 +77,7 @@ def _cmd_list(args: argparse.Namespace, repo: PromptsRepo) -> int:
 
 
 def _cmd_add(args: argparse.Namespace, repo: PromptsRepo) -> int:
-    """add <slug> --name <name> --category {summary,cleanup}
+    """add <slug> --name <name> --category {summary,cleanup,voice}
         (--content <text> | --from-file <path>)
         [--auto-run] [--sort-order N] [--note <text>]
 
@@ -270,7 +270,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     # list
     pl = sub.add_parser("list")
-    pl.add_argument("--category", choices=["summary", "cleanup"])
+    pl.add_argument("--category", choices=["summary", "cleanup", "voice"])
     pl.add_argument("--auto-run", dest="auto_run", action="store_true",
                     help="filter to auto-run prompts only")
     pl.add_argument("--json", action="store_true")
@@ -279,7 +279,7 @@ def _build_parser() -> argparse.ArgumentParser:
     pa = sub.add_parser("add")
     pa.add_argument("slug")
     pa.add_argument("--name", required=True)
-    pa.add_argument("--category", choices=["summary", "cleanup"], required=True)
+    pa.add_argument("--category", choices=["summary", "cleanup", "voice"], required=True)
     content_group = pa.add_mutually_exclusive_group(required=True)
     content_group.add_argument("--content")
     content_group.add_argument("--from-file", dest="from_file")
@@ -294,7 +294,7 @@ def _build_parser() -> argparse.ArgumentParser:
     content_edit_group = pe.add_mutually_exclusive_group()
     content_edit_group.add_argument("--content")
     content_edit_group.add_argument("--from-file", dest="from_file")
-    pe.add_argument("--category", choices=["summary", "cleanup"])
+    pe.add_argument("--category", choices=["summary", "cleanup", "voice"])
     pe.add_argument("--sort-order", dest="sort_order", type=int)
     pe.add_argument("--note")
     auto_run_group = pe.add_mutually_exclusive_group()

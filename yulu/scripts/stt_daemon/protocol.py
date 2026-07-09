@@ -109,8 +109,11 @@ class TranscribeRequest:
     word_timestamps: bool = False
     condition_on_previous: bool = False
     hallucination_silence_threshold: float = 2.0
-    timeout_sec: int = 7200
+    timeout_sec: float = 7200.0
     channel_split: bool = False
+    context_prompt: str = ""
+    dictation_mode: str = ""
+    target_language: str = ""
 
 
 @dataclass
@@ -147,7 +150,7 @@ class DiarizeRequest:
     num_speakers: Optional[int] = None
     threshold: Optional[float] = None
     language: Optional[str] = None
-    timeout_sec: int = 7200
+    timeout_sec: float = 7200.0
 
 
 @dataclass

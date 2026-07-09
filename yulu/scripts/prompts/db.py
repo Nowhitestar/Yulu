@@ -18,6 +18,7 @@ SCHEMA_VERSION = "1"
 class Category(str, Enum):
     SUMMARY = "summary"
     CLEANUP = "cleanup"
+    VOICE = "voice"
 
 
 class Source(str, Enum):
@@ -72,7 +73,7 @@ CREATE TABLE IF NOT EXISTS prompts (
     id TEXT PRIMARY KEY,
     slug TEXT NOT NULL UNIQUE,
     name TEXT NOT NULL,
-    category TEXT NOT NULL CHECK(category IN ('summary', 'cleanup')),
+    category TEXT NOT NULL CHECK(category IN ('summary', 'cleanup', 'voice')),
     content TEXT NOT NULL,
     is_auto_run INTEGER NOT NULL DEFAULT 0,
     source TEXT NOT NULL DEFAULT 'manual'
@@ -120,21 +121,12 @@ def _now_iso() -> str:
 
 
 def _migrate_category_check_constraint(conn: sqlite3.Connection) -> None:
-    """One-shot DOWN-migration: collapse the legacy 3-value category CHECK
-    (summary / cleanup / voicemail) back to 2 values (summary / cleanup).
+    """Ensure the prompts category CHECK allows summary / cleanup / voice.
 
-    The 'voicemail' category was removed when voicemails were unified into
-    meetings. Any surviving 'voicemail' rows (the bundled voicemail-todos /
-    voicemail-clean seeds, or user/learned rows) are re-pointed FIRST so the
-    rebuilt CHECK doesn't reject them:
-      - slug contains 'clean'  → 'cleanup'
-      - everything else        → 'summary'
-    then the table is rebuilt with the narrowed constraint.
-
-    Idempotent — re-running is a no-op once the table already carries the
-    2-value constraint. SQLite has no `ALTER TABLE ... DROP CONSTRAINT`, so we
-    use the standard rebuild dance (PRAGMA table_info won't show CHECK
-    constraints — we inspect sqlite_master.sql instead).
+    SQLite cannot alter CHECK constraints in place, so existing prompt tables
+    are rebuilt when they still carry the older category set. During the rebuild
+    we also keep the removed voicemail category mapped into meeting categories
+    and move bundled dictation prompt slugs into the voice category.
     """
     row = conn.execute(
         "SELECT sql FROM sqlite_master WHERE type='table' AND name='prompts'"
@@ -142,11 +134,10 @@ def _migrate_category_check_constraint(conn: sqlite3.Connection) -> None:
     if row is None:
         return  # no prompts table yet — fresh DB will get the new schema
     table_sql = row[0] if isinstance(row, tuple) else row["sql"]
-    if "'voicemail'" not in table_sql:
-        return  # already on the 2-value constraint — no-op
+    if "'voice'" in table_sql and "'voicemail'" not in table_sql:
+        return
     conn.executescript("""
         BEGIN;
-        -- Re-point legacy voicemail rows BEFORE the narrowed CHECK applies.
         UPDATE prompts
             SET category = CASE
                 WHEN instr(slug, 'clean') > 0 THEN 'cleanup'
@@ -157,7 +148,7 @@ def _migrate_category_check_constraint(conn: sqlite3.Connection) -> None:
             id TEXT PRIMARY KEY,
             slug TEXT NOT NULL UNIQUE,
             name TEXT NOT NULL,
-            category TEXT NOT NULL CHECK(category IN ('summary', 'cleanup')),
+            category TEXT NOT NULL CHECK(category IN ('summary', 'cleanup', 'voice')),
             content TEXT NOT NULL,
             is_auto_run INTEGER NOT NULL DEFAULT 0,
             source TEXT NOT NULL DEFAULT 'manual'
@@ -167,7 +158,26 @@ def _migrate_category_check_constraint(conn: sqlite3.Connection) -> None:
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         );
-        INSERT INTO prompts_new SELECT * FROM prompts;
+        INSERT INTO prompts_new(
+            id, slug, name, category, content, is_auto_run, source,
+            sort_order, note, created_at, updated_at
+        )
+        SELECT
+            id,
+            slug,
+            name,
+            CASE
+                WHEN slug IN ('dictation-cleanup', 'dictation-translate') THEN 'voice'
+                ELSE category
+            END,
+            content,
+            is_auto_run,
+            source,
+            sort_order,
+            note,
+            created_at,
+            updated_at
+        FROM prompts;
         DROP TABLE prompts;
         ALTER TABLE prompts_new RENAME TO prompts;
         CREATE INDEX IF NOT EXISTS idx_prompts_category_autorun

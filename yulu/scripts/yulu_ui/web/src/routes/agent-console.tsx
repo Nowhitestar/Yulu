@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate } from "react-router";
+import { Link, useLocation, useNavigate, useSearchParams } from "react-router";
 import {
   AlertCircle,
   Archive,
@@ -13,10 +13,11 @@ import {
   Database,
   FileText,
   HardDrive,
+  Keyboard,
+  Languages,
   ListChecks,
   Loader2,
   MessageSquare,
-  Mic,
   MoreHorizontal,
   Pencil,
   Pin,
@@ -40,6 +41,7 @@ import "./agent-console.css";
 export const handle = { breadcrumb: "breadcrumb.agentConsole", filters: null };
 
 type StageState = "idle" | "waiting" | "running" | "done" | "failed";
+type OptimisticTaskStage = "transcribe" | "summarize";
 type SendDest = "notion" | "zulip" | null;
 type ConsoleMode = "ask" | "run";
 type AgentId = "codex" | "claude" | "hermes" | "openclaw";
@@ -256,6 +258,9 @@ function asConfigRecord(config: unknown): Record<string, unknown> {
 
 export function AgentConsole() {
   const navigate = useNavigate();
+  const location = useLocation();
+  const [searchParams] = useSearchParams();
+  const floating = location.pathname === "/voice-chat";
   const utils = trpc.useUtils();
   const [mode, setMode] = useState<ConsoleMode>("ask");
   const [summaryPromptId, setSummaryPromptId] = useState<string | null>(null);
@@ -265,6 +270,7 @@ export function AgentConsole() {
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [detectMessage, setDetectMessage] = useState<string>("点击后重新扫描本机 CLI 路径");
   const [notice, setNotice] = useState<string | null>(null);
+  const [optimisticTaskStages, setOptimisticTaskStages] = useState<Record<string, { stage: OptimisticTaskStage; startedAt: number }>>({});
 
   const overview = trpc.agentConsole.overview.useQuery(undefined, { refetchInterval: 5000 });
   const detectAgents = trpc.agentConsole.detectAgents.useQuery(undefined, { enabled: false });
@@ -310,10 +316,44 @@ export function AgentConsole() {
   const tasks = (overview.data?.tasks as AgentTask[] | undefined) ?? [];
   const prompts = ((promptsQuery.data as SummaryPrompt[] | undefined) ?? []);
   const plugins = (overview.data?.plugins as AgentPluginOverview | undefined) ?? { agent: null, current: [], available: [], all: [] };
+  const requestedSessionId = searchParams.get("session");
+
+  const visibleTasks = useMemo(() => {
+    return tasks.map((task) => {
+      const optimistic = optimisticTaskStages[task.stem];
+      if (!optimistic) return task;
+      const serverStage = task.stages[optimistic.stage];
+      if (serverStage !== "idle" && serverStage !== "failed") return task;
+      return {
+        ...task,
+        stages: { ...task.stages, [optimistic.stage]: "running" as StageState },
+      };
+    });
+  }, [optimisticTaskStages, tasks]);
 
   useEffect(() => {
     if (!summaryPromptId && prompts.length > 0) setSummaryPromptId(firstAvailablePrompt(prompts));
   }, [prompts, summaryPromptId]);
+
+  useEffect(() => {
+    setOptimisticTaskStages((current) => {
+      const next = { ...current };
+      let changed = false;
+      const now = Date.now();
+      for (const task of tasks) {
+        const optimistic = next[task.stem];
+        if (!optimistic) continue;
+        const serverStage = task.stages[optimistic.stage];
+        const serverCaughtUp = serverStage === "waiting" || serverStage === "running" || serverStage === "done";
+        const expired = now - optimistic.startedAt > 20_000;
+        if (serverCaughtUp || expired) {
+          delete next[task.stem];
+          changed = true;
+        }
+      }
+      return changed ? next : current;
+    });
+  }, [tasks]);
 
   const activeAgent = useMemo(() => {
     const agents = (overview.data?.agents as ConsoleAgent[] | undefined) ?? [];
@@ -326,14 +366,35 @@ export function AgentConsole() {
     void utils.queue.list.invalidate();
   };
 
+  const setOptimisticTaskStage = (stem: string, stage: OptimisticTaskStage) => {
+    setOptimisticTaskStages((current) => ({ ...current, [stem]: { stage, startedAt: Date.now() } }));
+  };
+
+  const clearOptimisticTaskStage = (stem: string) => {
+    setOptimisticTaskStages((current) => {
+      if (!current[stem]) return current;
+      const next = { ...current };
+      delete next[stem];
+      return next;
+    });
+  };
+
   const runTranscribe = (task: AgentTask) => {
     if (!task.stem) return;
-    transcribe.mutate({ stem: task.stem }, { onSettled: invalidateAfterAction });
+    setOptimisticTaskStage(task.stem, "transcribe");
+    transcribe.mutate({ stem: task.stem }, {
+      onError: () => clearOptimisticTaskStage(task.stem),
+      onSettled: invalidateAfterAction,
+    });
   };
 
   const runSummarize = (task: AgentTask) => {
     if (!task.stem) return;
-    summarize.mutate({ stem: task.stem, promptId: summaryPromptId }, { onSettled: invalidateAfterAction });
+    setOptimisticTaskStage(task.stem, "summarize");
+    summarize.mutate({ stem: task.stem, promptId: summaryPromptId }, {
+      onError: () => clearOptimisticTaskStage(task.stem),
+      onSettled: invalidateAfterAction,
+    });
   };
 
   const runSend = (task: AgentTask, channel: "notion" | "zulip") => {
@@ -373,12 +434,11 @@ export function AgentConsole() {
   };
 
   return (
-    <div className="agent-console-page">
-      <aside className="agent-console-rail agent-console-rail-left" aria-label="最近三天待处理">
+    <div className={`agent-console-page${floating ? " voice-chat-popover" : ""}`}>
+      {!floating && <aside className="agent-console-rail agent-console-rail-left" aria-label="最近三天待处理">
         <TaskRail
-          tasks={tasks}
+          tasks={visibleTasks}
           isLoading={overview.isPending}
-          isRecording={overview.data?.recording?.state === "recording"}
           actionPending={toggleRecording.isPending || transcribe.isPending || summarize.isPending || sendSummary.isPending}
           onToggleRecording={() => toggleRecording.mutate()}
           onOpenAll={() => navigate("/inbox")}
@@ -390,10 +450,10 @@ export function AgentConsole() {
           onConfigurePlugin={runConfigurePlugin}
           onConfigureDestination={setDestinationPlugin}
         />
-      </aside>
+      </aside>}
 
       <main className="agent-console-center">
-        <div className="agent-console-modebar" role="tablist" aria-label="Agent Console mode">
+        {!floating && <div className="agent-console-modebar" role="tablist" aria-label="Agent Console mode">
           <button type="button" className={mode === "ask" ? "active" : ""} onClick={() => setMode("ask")}>
             <MessageSquare size={15} strokeWidth={1.9} />
             问会议
@@ -406,7 +466,7 @@ export function AgentConsole() {
             <ListChecks size={15} strokeWidth={1.9} />
             能力
           </button>
-        </div>
+        </div>}
         {notice && (
           <div className="agent-console-notice">
             <AlertCircle size={14} strokeWidth={2} />
@@ -414,8 +474,13 @@ export function AgentConsole() {
             <button type="button" onClick={() => setNotice(null)} aria-label="关闭"><X size={13} strokeWidth={2} /></button>
           </div>
         )}
-        {mode === "ask" ? (
-          <AskMeetings agentId={activeAgent?.id ?? "agent"} agentName={activeAgent?.name ?? "Agent"} />
+        {floating || mode === "ask" ? (
+          <AskMeetings
+            agentId={activeAgent?.id ?? "agent"}
+            agentName={activeAgent?.name ?? "Agent"}
+            initialSessionId={requestedSessionId}
+            floating={floating}
+          />
         ) : (
           <RunTasks
             queue={queueQuery.data}
@@ -428,12 +493,13 @@ export function AgentConsole() {
         )}
       </main>
 
-      {inspectorOpen && <button type="button" className="agent-inspector-scrim" aria-label="关闭能力面板" onClick={() => setInspectorOpen(false)} />}
-      <aside className={`agent-console-rail agent-console-rail-right${inspectorOpen ? " open" : ""}`} aria-label="Agent 能力">
+      {!floating && inspectorOpen && <div className="agent-inspector-scrim" aria-hidden="true" onClick={() => setInspectorOpen(false)} />}
+      {!floating && inspectorOpen && <aside className="agent-console-rail agent-console-rail-right open" aria-label="Agent 能力">
         <div className="agent-rail-drawer-head">
           <span>Agent 能力</span>
           <button type="button" onClick={() => setInspectorOpen(false)} aria-label="关闭能力面板"><X size={14} strokeWidth={2} /></button>
         </div>
+        <VoiceInputPanel />
         <AgentSelector
           agents={(overview.data?.agents as ConsoleAgent[] | undefined) ?? []}
           detecting={detectAgents.isFetching}
@@ -453,7 +519,7 @@ export function AgentConsole() {
           onConfigureDestination={setDestinationPlugin}
         />
         <LocalStatus daemons={daemonsQuery.data} queue={queueQuery.data} onDetails={() => navigate("/health")} />
-      </aside>
+      </aside>}
 
       {calendarOpen && (
         <CalendarConfigModal
@@ -484,10 +550,37 @@ export function AgentConsole() {
   );
 }
 
+function VoiceInputPanel() {
+  return (
+    <section className="agent-panel agent-voice-input-panel">
+      <div className="agent-panel-head">
+        <span>语音输入</span>
+        <Link to="/voice-input" className="agent-link-btn">打开</Link>
+      </div>
+      <div className="agent-voice-input-copy">
+        <div>
+          <Keyboard size={14} strokeWidth={1.9} />
+          <span>听写</span>
+        </div>
+        <div>
+          <Languages size={14} strokeWidth={1.9} />
+          <span>翻译</span>
+        </div>
+        <div>
+          <Bot size={14} strokeWidth={1.9} />
+          <span>问 Agent</span>
+        </div>
+      </div>
+      <div className="agent-voice-input-actions">
+        <Link to="/settings/voice" className="agent-action secondary compact">配置快捷键</Link>
+      </div>
+    </section>
+  );
+}
+
 function TaskRail({
   tasks,
   isLoading,
-  isRecording,
   actionPending,
   onToggleRecording,
   onOpenAll,
@@ -501,7 +594,6 @@ function TaskRail({
 }: {
   tasks: AgentTask[];
   isLoading: boolean;
-  isRecording: boolean;
   actionPending: boolean;
   onToggleRecording: () => void;
   onOpenAll: () => void;
@@ -522,15 +614,6 @@ function TaskRail({
         </div>
         <button type="button" className="agent-link-btn" onClick={onOpenAll}>全部</button>
       </div>
-      <button
-        type="button"
-        className={"agent-record-button" + (isRecording ? " recording" : "")}
-        disabled={actionPending}
-        onClick={onToggleRecording}
-      >
-        {isRecording ? <Square size={16} strokeWidth={2} /> : <Mic size={16} strokeWidth={2} />}
-        {isRecording ? "停止录制" : "开始录制"}
-      </button>
       <div className="agent-task-list">
         {tasks.length === 0 && !isLoading && (
           <div className="agent-empty">最近三天没有待处理会议。</div>
@@ -770,7 +853,17 @@ const ASK_STARTERS = [
   "哪些会议提到了 Zulip？",
 ];
 
-function AskMeetings({ agentId, agentName }: { agentId: string; agentName: string }) {
+function AskMeetings({
+  agentId,
+  agentName,
+  initialSessionId,
+  floating,
+}: {
+  agentId: string;
+  agentName: string;
+  initialSessionId: string | null;
+  floating: boolean;
+}) {
   const navigate = useNavigate();
   const utils = trpc.useUtils();
   const ask = trpc.ask.ask.useMutation();
@@ -788,7 +881,7 @@ function AskMeetings({ agentId, agentName }: { agentId: string; agentName: strin
   const scrollRef = useRef<HTMLDivElement>(null);
   const sessionQuery = trpc.agentSessions.get.useQuery(
     { id: selectedSessionId ?? "__none__" },
-    { enabled: selectedSessionId !== null },
+    { enabled: selectedSessionId !== null, refetchInterval: floating ? 1000 : false },
   );
 
   const sessions = (sessionsQuery.data?.sessions as AgentSessionSummary[] | undefined) ?? [];
@@ -800,10 +893,17 @@ function AskMeetings({ agentId, agentName }: { agentId: string; agentName: strin
     : draftSession ? "尚未创建 session" : "默认读取所有本地记录";
 
   useEffect(() => {
+    if (initialSessionId) return;
     setSelectedSessionId(null);
     setMessages([]);
     setDraftSession(true);
-  }, [agentId]);
+  }, [agentId, initialSessionId]);
+
+  useEffect(() => {
+    if (!initialSessionId) return;
+    setSelectedSessionId(initialSessionId);
+    setDraftSession(false);
+  }, [initialSessionId]);
 
   useEffect(() => {
     if (draftSession || selectedSessionId || sessions.length === 0) return;

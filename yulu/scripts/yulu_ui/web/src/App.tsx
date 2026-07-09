@@ -18,6 +18,7 @@ import { SettingsCategory } from "./routes/settings.$category.js";
 import { categoryLabelKey } from "./components/settings/categories.js";
 import { Health, handle as healthHandle } from "./routes/health.js";
 import { AgentConsole, handle as agentConsoleHandle } from "./routes/agent-console.js";
+import { VoiceInput, handle as voiceInputHandle } from "./routes/voice-input.js";
 
 function RecordingRedirect() {
   const { stem } = useParams();
@@ -36,6 +37,8 @@ const router = createBrowserRouter([
     children: [
       { index: true, element: <Navigate to="/agent-console" replace /> },
       { path: "agent-console", Component: AgentConsole, handle: agentConsoleHandle },
+      { path: "voice-chat", Component: AgentConsole, handle: agentConsoleHandle },
+      { path: "voice-input", Component: VoiceInput, handle: voiceInputHandle },
       {
         path: "inbox",
         Component: InboxLayout,

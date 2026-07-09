@@ -6,6 +6,7 @@ REPO_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 APP="$SCRIPT_DIR/StatusAgent.app"
 BIN="$SCRIPT_DIR/status_agent"
 RECORDER_BIN="$SCRIPT_DIR/recorder_status"
+MEETING_PROMPT_BIN="$SCRIPT_DIR/meeting_prompt"
 APP_BIN="$APP/Contents/MacOS/status_agent"
 RES_DIR="$APP/Contents/Resources"
 INFO="$APP/Contents/Info.plist"
@@ -18,14 +19,17 @@ YULU_BUILD_NUMBER="$(git -C "$REPO_DIR" rev-list --count HEAD 2>/dev/null || ech
 cd "$SCRIPT_DIR"
 
 swiftc -o "$BIN" status_agent.swift \
-  -framework Cocoa
+  -framework Cocoa -framework Carbon -framework WebKit
 swiftc -o "$RECORDER_BIN" recorder_status.swift \
+  -framework Cocoa
+swiftc -o "$MEETING_PROMPT_BIN" meeting_prompt.swift \
   -framework Cocoa
 
 mkdir -p "$APP/Contents/MacOS" "$RES_DIR"
 cp "$BIN" "$APP_BIN"
 chmod +x "$APP_BIN"
 chmod +x "$RECORDER_BIN"
+chmod +x "$MEETING_PROMPT_BIN"
 
 if [[ -d "$ICONS_DIR" ]]; then
     cp "$ICONS_DIR"/*.png "$RES_DIR/" 2>/dev/null || true
@@ -76,6 +80,8 @@ codesign --force --options runtime --timestamp \
     --entitlements "$ENTITLEMENTS" --sign "$IDENTITY" "$APP_BIN"
 codesign --force --options runtime --timestamp \
     --entitlements "$ENTITLEMENTS" --sign "$IDENTITY" "$RECORDER_BIN"
+codesign --force --options runtime --timestamp \
+    --entitlements "$ENTITLEMENTS" --sign "$IDENTITY" "$MEETING_PROMPT_BIN"
 codesign --force --options runtime --timestamp \
     --entitlements "$ENTITLEMENTS" --sign "$IDENTITY" "$APP"
 codesign --verify --strict --verbose=2 "$APP"

@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { router, publicProcedure } from "../trpc.js";
 
-const CATEGORY = z.enum(["summary", "cleanup"]);
+const CATEGORY = z.enum(["summary", "cleanup", "voice"]);
 
 export const promptsRouter = router({
   list: publicProcedure
@@ -57,6 +57,7 @@ export const promptsRouter = router({
       if (input.content !== undefined)   { fields.push("content = ?");     values.push(input.content); }
       if (input.isAutoRun !== undefined) { fields.push("is_auto_run = ?"); values.push(input.isAutoRun ? 1 : 0); }
       if (fields.length === 0) return { updated: 0 };
+      fields.push("source = ?"); values.push("manual");
       fields.push("updated_at = ?"); values.push(new Date().toISOString().replace(/\.\d+Z$/, "Z"));
       values.push(input.id);
       const r = ctx.db.prompts.prepare(`UPDATE prompts SET ${fields.join(", ")} WHERE id = ?`).run(...values);

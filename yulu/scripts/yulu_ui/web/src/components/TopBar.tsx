@@ -1,9 +1,10 @@
 // web/src/components/TopBar.tsx
 import { Link, useMatches } from "react-router";
 import type { ReactNode } from "react";
-import { SlidersHorizontal } from "lucide-react";
+import { AudioLines, SlidersHorizontal } from "lucide-react";
 import { ThemeToggle } from "./ThemeToggle.js";
 import { GlobalSearch } from "./GlobalSearch.js";
+import { CurrentMeetingAction } from "./CurrentMeetingAction.js";
 import { Pill } from "./Pill.js";
 import { useT } from "../i18n/LanguageProvider.js";
 import "./TopBar.css";
@@ -53,6 +54,9 @@ export function TopBar() {
       </div>
       <div className="topbar-spacer" />
       <div className="topbar-controls">
+        <Link to="/voice-input" className="topbar-icon-button" aria-label={t("nav.voiceInput")}>
+          <AudioLines size={15} strokeWidth={1.85} />
+        </Link>
         <Link to="/settings" className="topbar-icon-button" aria-label={t("nav.settings")}>
           <SlidersHorizontal size={15} strokeWidth={1.85} />
         </Link>
@@ -60,7 +64,7 @@ export function TopBar() {
           <ThemeToggle />
         </div>
         <div className="topbar-record">
-          <Pill />
+          <CurrentMeetingAction fallback={<Pill />} />
         </div>
       </div>
     </div>

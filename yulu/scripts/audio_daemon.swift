@@ -263,7 +263,7 @@ class AudioRecorder {
     var startTime: Date?
     var lastMicAudioTime: Date?
     var lastSysAudioTime: Date?
-    var silenceTask: DispatchWorkItem?
+    var silenceTimer: DispatchSourceTimer?
     var silenceSeconds = DEFAULT_SILENCE_SEC
     var silenceThreshold = DEFAULT_SILENCE_THRESHOLD
     var outputDir: URL = RECORDING_DIR
@@ -282,10 +282,12 @@ class AudioRecorder {
         let url = outputDir.appendingPathComponent(fn)
         try? FileManager.default.createDirectory(at: outputDir, withIntermediateDirectories: true)
         guard let w = WavWriter(url: url) else { return nil }
+        bufLock.lock()
         writer = w; isRecording = true; startTime = Date()
         lastMicAudioTime = Date(); lastSysAudioTime = Date()
         sysBuf = []; micBuf = []
         sysGapMicFallbackLogged = false
+        bufLock.unlock()
         writeState(recording: true, title: title, path: url.path)
         log("🎙 \(fn)")
         startSilenceMonitor()
@@ -294,8 +296,11 @@ class AudioRecorder {
 
     @discardableResult
     func stop() -> (path: String?, duration: Int) {
+        bufLock.lock()
         isRecording = false
-        silenceTask?.cancel()
+        bufLock.unlock()
+        silenceTimer?.cancel()
+        silenceTimer = nil
         let dur = startTime.map { Int(Date().timeIntervalSince($0)) } ?? 0
         // Write remaining audio
         flushBuffers()
@@ -313,7 +318,11 @@ class AudioRecorder {
         sysGapMicFallbackLogged = false
         bufLock.unlock()
         let rms = calcRMS(samples)
-        if rms > silenceThreshold { lastSysAudioTime = Date() }
+        if rms > silenceThreshold {
+            bufLock.lock()
+            lastSysAudioTime = Date()
+            bufLock.unlock()
+        }
         mixAndWrite()
     }
 
@@ -324,7 +333,11 @@ class AudioRecorder {
         micBuf.append(contentsOf: ints)
         bufLock.unlock()
         let rms = calcRMS(ints)
-        if rms > silenceThreshold { lastMicAudioTime = Date() }
+        if rms > silenceThreshold {
+            bufLock.lock()
+            lastMicAudioTime = Date()
+            bufLock.unlock()
+        }
         mixAndWrite()
     }
 
@@ -399,13 +412,8 @@ class AudioRecorder {
         }
         let out = channelInterleave(sysStereo: sysChunk, micMono: micChunk)
         w.append(Data(bytes: out, count: out.count * 2))
-
-        // Re-arm the silence monitor on every audio event. Phase-3 design
-        // was one-shot at +silenceSeconds; under voicemail's 3-second threshold
-        // any speaker feedback during the window made the check pass once and
-        // never run again. With this re-arm, silence-stop means "no audio for
-        // the last N seconds" — which is what users expect.
         startSilenceMonitor()
+
     }
 
     private func flushBuffers() {
@@ -427,20 +435,31 @@ class AudioRecorder {
         w.append(Data(bytes: out, count: out.count * 2))
     }
 
+    func silenceExpired(now: Date = Date()) -> Bool {
+        bufLock.lock()
+        let recording = isRecording
+        let micLast = lastMicAudioTime
+        let sysLast = lastSysAudioTime
+        let seconds = silenceSeconds
+        bufLock.unlock()
+        guard recording else { return false }
+        let micQuiet = (micLast.map { now.timeIntervalSince($0) } ?? .infinity) >= seconds
+        let sysQuiet = (sysLast.map { now.timeIntervalSince($0) } ?? .infinity) >= seconds
+        return micQuiet && sysQuiet
+    }
+
     private func startSilenceMonitor() {
-        silenceTask?.cancel()
-        let task = DispatchWorkItem { [weak self] in
-            guard let self = self, self.isRecording else { return }
-            let now = Date()
-            let micQuiet = (self.lastMicAudioTime.map { now.timeIntervalSince($0) } ?? .infinity) >= self.silenceSeconds
-            let sysQuiet = (self.lastSysAudioTime.map { now.timeIntervalSince($0) } ?? .infinity) >= self.silenceSeconds
-            if micQuiet && sysQuiet {
-                log("🔇 silence \(Int(self.silenceSeconds))s (both channels) — auto stop")
-                self.onStopRequest?()
-            }
+        silenceTimer?.cancel()
+        let timer = DispatchSource.makeTimerSource(queue: .main)
+        // ponytail: one timer checks timestamps; per-buffer cancel/reschedule crashed in AVAudio callbacks.
+        timer.schedule(deadline: .now() + 1, repeating: 1)
+        timer.setEventHandler { [weak self] in
+            guard let self = self, self.silenceExpired() else { return }
+            log("🔇 silence \(Int(self.silenceSeconds))s (both channels) — auto stop")
+            self.onStopRequest?()
         }
-        silenceTask = task
-        DispatchQueue.main.asyncAfter(deadline: .now() + silenceSeconds, execute: task)
+        silenceTimer = timer
+        timer.resume()
     }
 }
 
@@ -1483,6 +1502,23 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 }
 
 // ─── 入口 ──────────────────────────────────────────────
+
+if CommandLine.arguments.contains("--self-test") {
+    let recorder = AudioRecorder()
+    recorder.silenceSeconds = 1
+    recorder.bufLock.lock()
+    recorder.isRecording = true
+    recorder.lastMicAudioTime = Date(timeIntervalSinceNow: -2)
+    recorder.lastSysAudioTime = Date(timeIntervalSinceNow: -2)
+    recorder.bufLock.unlock()
+    assert(recorder.silenceExpired())
+    recorder.bufLock.lock()
+    recorder.lastMicAudioTime = Date()
+    recorder.bufLock.unlock()
+    assert(!recorder.silenceExpired())
+    print("audio_daemon self-test ok")
+    exit(0)
+}
 
 let app = NSApplication.shared
 Darwin.signal(SIGPIPE, SIG_IGN)

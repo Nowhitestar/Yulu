@@ -106,6 +106,28 @@ describe("configRouter", () => {
       expect(start).toHaveBeenCalledWith("com.yulu.statusagent");
     } finally { cleanup(); }
   });
+
+  it("update(status_agent.hotkeys.*) sighups StatusAgent", async () => {
+    const { ctx, sighup, cleanup } = makeCtx();
+    try {
+      const caller = createCaller(configRouter, ctx);
+      const r = await caller.update({ key: "status_agent.hotkeys.dictate.key", value: "F1" });
+      expect(r.daemonsNeedingRestart).toEqual([]);
+      expect(r.daemonsNeedingSighup).toEqual(["statusagent"]);
+      expect(sighup).toHaveBeenCalledWith("com.yulu.statusagent");
+    } finally { cleanup(); }
+  });
+
+  it("update(transcription.dictation.*) persists without daemon reload", async () => {
+    const { ctx, cleanup } = makeCtx();
+    try {
+      const caller = createCaller(configRouter, ctx);
+      const r = await caller.update({ key: "transcription.dictation.prompt_slug", value: "dictation-tight" });
+      expect(r.daemonsNeedingRestart).toEqual([]);
+      expect(r.daemonsNeedingSighup).toEqual([]);
+      expect((await caller.get()).transcription.dictation.prompt_slug).toBe("dictation-tight");
+    } finally { cleanup(); }
+  });
 });
 
 describe("configRouter.schema", () => {

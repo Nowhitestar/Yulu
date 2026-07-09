@@ -1,5 +1,5 @@
 import { describe, it, expect, afterAll, beforeAll } from "vitest";
-import { mkdtempSync, mkdirSync, cpSync, rmSync, writeFileSync, existsSync } from "node:fs";
+import { mkdtempSync, mkdirSync, cpSync, rmSync, writeFileSync, existsSync, readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -108,6 +108,64 @@ describe("server", () => {
     const r = await fetch(`${env.baseUrl}/some/unknown/path`);
     expect(r.status).toBe(503);
     expect(await r.text()).toMatch(/UI not built/);
+  });
+
+  it("/api/voice-chat/ask creates and continues a chat session", async () => {
+    const configDir = join(env.root, ".config", "yulu");
+    const config = JSON.parse(readFileSync(join(configDir, "config.json"), "utf8"));
+    config.llm = { enabled: false, command: null };
+    writeFileSync(join(configDir, "config.json"), JSON.stringify(config, null, 2));
+
+    const r = await fetch(`${env.baseUrl}/api/voice-chat/ask`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ question: "hello agent" }),
+    });
+    expect(r.status).toBe(200);
+    const body = await r.json() as { ok: boolean; sessionId: string; url: string };
+    expect(body.ok).toBe(true);
+    expect(body.sessionId).toBeTruthy();
+    expect(body.url).toBe(`/voice-chat?session=${encodeURIComponent(body.sessionId)}`);
+
+    const next = await fetch(`${env.baseUrl}/api/voice-chat/ask`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ question: "second turn", sessionId: body.sessionId }),
+    });
+    expect(next.status).toBe(200);
+    const nextBody = await next.json() as { ok: boolean; sessionId: string; url: string };
+    expect(nextBody.ok).toBe(true);
+    expect(nextBody.sessionId).toBe(body.sessionId);
+    expect(nextBody.url).toBe(body.url);
+
+    const store = JSON.parse(readFileSync(join(configDir, "agent-sessions.json"), "utf8"));
+    const session = store.sessions.find((item: { id: string }) => item.id === body.sessionId);
+    expect(session.messages.map((m: { role: string }) => m.role)).toEqual(["user", "assistant", "user", "assistant"]);
+  });
+
+  it("/api/voice-chat/ask can return immediately and answer in the background", async () => {
+    const configDir = join(env.root, ".config", "yulu");
+    const r = await fetch(`${env.baseUrl}/api/voice-chat/ask`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ question: "deferred hello", defer: true }),
+    });
+    expect(r.status).toBe(200);
+    const body = await r.json() as { ok: boolean; deferred: boolean; sessionId: string; answer: string; url: string };
+    expect(body.ok).toBe(true);
+    expect(body.deferred).toBe(true);
+    expect(body.answer).toBe("");
+    expect(body.url).toBe(`/voice-chat?session=${encodeURIComponent(body.sessionId)}`);
+
+    let roles: string[] = [];
+    for (let i = 0; i < 20; i++) {
+      const store = JSON.parse(readFileSync(join(configDir, "agent-sessions.json"), "utf8"));
+      const session = store.sessions.find((item: { id: string }) => item.id === body.sessionId);
+      roles = session?.messages.map((m: { role: string }) => m.role) ?? [];
+      if (roles.length >= 2) break;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    expect(roles).toEqual(["user", "assistant"]);
   });
 
   it("falls back to index.html for deep multi-segment SPA paths", async () => {

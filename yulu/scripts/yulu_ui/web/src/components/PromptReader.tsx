@@ -3,7 +3,7 @@ import { useConfirm } from "../hooks/useConfirm.js";
 import { useT } from "../i18n/LanguageProvider.js";
 import "./PromptReader.css";
 
-export type Category = "summary" | "cleanup";
+export type Category = "summary" | "cleanup" | "voice";
 
 export interface PromptData {
   id: string;
@@ -41,7 +41,7 @@ export interface PromptReaderProps {
   onDelete: () => void;
 }
 
-const CATEGORIES: Category[] = ["summary", "cleanup"];
+const CATEGORIES: Category[] = ["summary", "cleanup", "voice"];
 
 export function PromptReader({ prompt, onSave, onDelete }: PromptReaderProps) {
   const t = useT();

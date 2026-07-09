@@ -43,7 +43,9 @@ def test_transcribe_request_roundtrip():
         word_timestamps=False,
         condition_on_previous=True,
         hallucination_silence_threshold=2.0,
-        timeout_sec=7200,
+        timeout_sec=1.55,
+        dictation_mode="translate",
+        target_language="English",
     )
     encoded = encode(req)
     parsed = json.loads(encoded)
@@ -53,6 +55,9 @@ def test_transcribe_request_roundtrip():
     assert isinstance(back, TranscribeRequest)
     assert back.job_id == "abc"
     assert back.kind == JobKind.FINAL_TRANSCRIBE
+    assert back.timeout_sec == 1.55
+    assert back.dictation_mode == "translate"
+    assert back.target_language == "English"
 
 
 def test_error_event_includes_code():

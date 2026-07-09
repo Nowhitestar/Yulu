@@ -39,6 +39,7 @@ LAUNCHAGENTS = [
     "com.yulu.agentqueue.plist",
     "com.yulu.calendar.plist",
     "com.yulu.sttdaemon.plist",
+    "com.yulu.statusagent.plist",
     "com.yulu.ui.plist",
 ]
 
@@ -273,6 +274,7 @@ def _kill_legacy_processes(legacy_root: Path) -> None:
         _run(["pkill", "-f", str(legacy_root)], timeout=10, check=False)
     # launchctl unload of `open -W Yulu.app` does not always kill the app child.
     _run(["pkill", "-f", "Yulu.app/Contents/MacOS/audio_daemon"], timeout=10, check=False)
+    _run(["pkill", "-f", "StatusAgent.app/Contents/MacOS/status_agent"], timeout=10, check=False)
 
 
 def _install_launchagents(script_dir: Path, *, python_bin: str) -> None:
@@ -302,6 +304,20 @@ def _install_cli(script_dir: Path) -> None:
     dest.symlink_to(cli)
 
 
+def _seed_prompt_defaults(script_dir: Path, *, python_bin: str) -> None:
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(script_dir)
+    result = subprocess.run(
+        [python_bin, "-m", "prompts.cli", "seed", "--from-current"],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        env=env,
+    )
+    if result.returncode != 0:
+        print(f"warning: prompts seed failed: {(result.stderr or result.stdout).strip()}", file=sys.stderr)
+
+
 def apply(source_root: Path, runtime_root: Path, config_dir: Path, legacy_root: Path, python_bin: str) -> dict:
     data = plan(source_root, runtime_root, config_dir, legacy_root)
     data["apply"] = True
@@ -314,6 +330,7 @@ def apply(source_root: Path, runtime_root: Path, config_dir: Path, legacy_root: 
     _kill_legacy_processes(legacy_root)
     _install_launchagents(script_dir, python_bin=python_bin)
     _install_cli(script_dir)
+    _seed_prompt_defaults(script_dir, python_bin=python_bin)
     return data
 
 
