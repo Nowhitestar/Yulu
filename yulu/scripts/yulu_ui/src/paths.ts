@@ -45,6 +45,7 @@ export const paths = {
   scriptDir:        SCRIPT_DIR,
   transcribePy:     join(SCRIPT_DIR, "transcribe.py"),
   agentQueueJson:   join(CONFIG_DIR, "agent-queue.json"),
+  mcpTokenJson:     join(CONFIG_DIR, "mcp-token.json"),
   versionFile:      join(REPO_ROOT, "VERSION"),
   installJson:      join(REPO_ROOT, ".yulu-install.json"),
 } as const;

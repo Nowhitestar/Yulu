@@ -140,6 +140,7 @@ Stops services, removes LaunchAgents and the CLI, and asks before deleting recor
 | `yulu transcription mode fast\|full` | Switch between realtime transcript → polish → summary and full final transcription → summary |
 | `yulu transcription engine mlx <model>` | Use MLX Whisper, e.g. `mlx-community/whisper-large-v3-mlx` |
 | `yulu transcription engine whisper <path>` | Use a local whisper.cpp GGML model |
+| `yulu mcp status` / `install` / `remove` / `rotate-token` / `test` | Manage the local HTTP MCP registration for Codex, Claude Code, OpenClaw, and Hermes |
 | `yulu where` | Print all the relevant paths on disk |
 | `yulu uninstall` | See above |
 
@@ -163,6 +164,8 @@ npx skills add . -g -a claude-code -y
 ```
 
 The skill is a thin contract — it tells the agent what verbs Yulu exposes (start, stop, status, summary fulfillment) and how to find past meetings on disk. Yulu's macOS app, launchd services, and local transcription dependencies still come from `setup.sh`. Installing the skill alone does not capture audio.
+
+Yulu also exposes a local token-protected MCP endpoint at `http://127.0.0.1:7777/mcp`. Install/update registers it with detected local agents automatically; run `yulu mcp status` or `yulu mcp test` to inspect it.
 
 ## How it works
 

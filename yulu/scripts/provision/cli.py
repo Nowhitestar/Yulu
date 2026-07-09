@@ -58,7 +58,7 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-from . import attest, skill
+from . import attest, mcp, skill
 from .registry import REGISTRY, step_by_name
 from .state import default_ledger_path, is_done, mark
 
@@ -197,6 +197,10 @@ def _build_parser() -> argparse.ArgumentParser:
         help="override the repo root containing skills/yulu/ (default: resolved)",
     )
 
+    # mcp ...
+    pm = sub.add_parser("mcp", help="install/remove the Yulu HTTP MCP server in local agents")
+    pm.add_argument("mcp_args", nargs=argparse.REMAINDER)
+
     return p
 
 
@@ -226,6 +230,10 @@ def _cmd_skill(args: argparse.Namespace) -> int:
     return 1
 
 
+def _cmd_mcp(args: argparse.Namespace) -> int:
+    return mcp.main(args.mcp_args)
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     if argv is None:
         argv = sys.argv[1:]
@@ -235,6 +243,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         return _cmd_provision(args)
     if args.cmd == "skill":
         return _cmd_skill(args)
+    if args.cmd == "mcp":
+        return _cmd_mcp(args)
     return 1
 
 

@@ -998,6 +998,8 @@ run_setup_concerns || exit 1
 # (the install_agent_skill function body is retained above for reference but is
 # intentionally NOT called in the main flow).
 install_yulu_cli
+PYTHONPATH="$SCRIPT_DIR:${PYTHONPATH:-}" "$PYTHON_BIN" -m provision.cli mcp install --detected-only --non-fatal \
+    || warn "Yulu MCP registration failed (core install is still usable)"
 # Upgrades only: merge any legacy voicemail recordings into the meetings store
 # (idempotent + safe to skip on fresh installs, which have no voicemails/ dir).
 if [[ "$UPGRADE_MODE" == true ]]; then
