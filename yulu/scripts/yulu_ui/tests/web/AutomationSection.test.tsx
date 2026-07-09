@@ -162,12 +162,14 @@ describe("AutomationSection — advanced match arrays disclosure (P3-2)", () => 
     const block = kwLabel.closest(".array-field")!;
     const addArg = within(block as HTMLElement).getByRole("button", { name: /\+ 添加参数/i });
     await user.click(addArg);
+    const inputs = within(block as HTMLElement).getAllByRole("textbox");
+    await user.type(inputs[inputs.length - 1]!, "Google Meet");
+    await user.tab();
     await vi.waitFor(() =>
       expect(updateMutate.mock.calls.some((c) => c[0]?.key === "meeting_detection.window_keywords")).toBe(true),
     );
-    // The committed value is an array (CommandEditor appended one empty arg).
     const call = updateMutate.mock.calls.find((c) => c[0]?.key === "meeting_detection.window_keywords")!;
-    expect(Array.isArray(call[0]!.value)).toBe(true);
+    expect(call[0]!.value).toEqual(["Zoom Meeting", "Google Meet"]);
   });
 
   it("locks the array editors while recording (no + Add arg, shows a note)", () => {

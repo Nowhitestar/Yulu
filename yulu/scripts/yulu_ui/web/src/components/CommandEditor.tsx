@@ -9,19 +9,40 @@ export interface CommandEditorProps {
 
 export function CommandEditor({ value, onChange }: CommandEditorProps) {
   const t = useT();
-  const [draft, setDraft] = useState(value);
-  useEffect(() => { setDraft(value); }, [value]);
+  const [draft, setDraft] = useState(() => cleanArgs(value));
+  const [dirty, setDirty] = useState(false);
+  useEffect(() => {
+    const cleanValue = cleanArgs(value);
+    if (sameArgs(cleanValue, draft)) {
+      if (dirty) setDirty(false);
+      return;
+    }
+    if (!dirty) setDraft(cleanValue);
+  }, [value, draft, dirty]);
 
-  const commit = (next: string[]) => { setDraft(next); onChange(next); };
+  const commit = (next: string[]) => {
+    const clean = cleanArgs(next);
+    setDirty(true);
+    setDraft(clean);
+    onChange(clean);
+  };
 
   const updateAt = (i: number, v: string) => {
     const next = draft.slice();
     next[i] = v;
+    setDirty(true);
     setDraft(next);
   };
 
   const onBlurAt = (i: number) => {
-    if (draft[i] !== value[i]) onChange(draft);
+    const cleanValue = cleanArgs(value);
+    const clean = cleanArgs(draft);
+    if (sameArgs(clean, cleanValue)) {
+      setDirty(false);
+      setDraft(cleanValue);
+      return;
+    }
+    commit(clean);
   };
 
   const removeAt = (i: number) => {
@@ -30,7 +51,7 @@ export function CommandEditor({ value, onChange }: CommandEditorProps) {
     commit(next);
   };
 
-  const add = () => commit([...draft, ""]);
+  const add = () => { setDirty(true); setDraft([...draft, ""]); };
 
   const onDragStart = (i: number) => (e: React.DragEvent) => {
     e.dataTransfer.setData("text/plain", String(i));
@@ -65,6 +86,10 @@ export function CommandEditor({ value, onChange }: CommandEditorProps) {
             value={arg}
             onChange={(e) => updateAt(i, e.target.value)}
             onBlur={() => onBlurAt(i)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") e.currentTarget.blur();
+              if (e.key === "Escape") { setDirty(false); setDraft(cleanArgs(value)); }
+            }}
           />
           <button type="button" className="cmd-remove" onClick={() => removeAt(i)} aria-label={t("cmd.removeAria", { i })}>×</button>
         </div>
@@ -72,4 +97,12 @@ export function CommandEditor({ value, onChange }: CommandEditorProps) {
       <button type="button" className="cmd-add" onClick={add}>{t("cmd.add")}</button>
     </div>
   );
+}
+
+function sameArgs(a: string[], b: string[]) {
+  return a.length === b.length && a.every((v, i) => v === b[i]);
+}
+
+function cleanArgs(args: string[]) {
+  return args.filter((arg) => arg.trim().length > 0);
 }

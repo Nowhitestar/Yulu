@@ -12,6 +12,14 @@ describe("CommandEditor", () => {
     expect((inputs[1] as HTMLInputElement).value).toBe("--print");
   });
 
+  it("does not render blank args from stale config", () => {
+    render(<CommandEditor value={["claude", "", "   ", "--print"]} onChange={() => {}} />);
+    const inputs = screen.getAllByRole("textbox");
+    expect(inputs).toHaveLength(2);
+    expect((inputs[0] as HTMLInputElement).value).toBe("claude");
+    expect((inputs[1] as HTMLInputElement).value).toBe("--print");
+  });
+
   it("typing into an input + blur emits onChange with new array", async () => {
     const onChange = vi.fn();
     render(<CommandEditor value={["claude", "--print"]} onChange={onChange} />);
@@ -23,12 +31,37 @@ describe("CommandEditor", () => {
     expect(onChange).toHaveBeenLastCalledWith(["claude", "--quiet"]);
   });
 
-  it("'+ Add arg' appends an empty string", async () => {
+  it("'+ Add arg' opens a draft input without committing an empty string", async () => {
     const onChange = vi.fn();
     render(<CommandEditor value={["claude"]} onChange={onChange} />);
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: /添加参数/ }));
-    expect(onChange).toHaveBeenCalledWith(["claude", ""]);
+    expect(screen.getAllByRole("textbox")).toHaveLength(2);
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("keeps a newly-added draft while the parent value is still stale", async () => {
+    const { rerender } = render(<CommandEditor value={["Zoom"]} onChange={() => {}} />);
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: /添加参数/ }));
+    const added = screen.getAllByRole("textbox")[1] as HTMLInputElement;
+    await user.type(added, "Meet");
+    rerender(<CommandEditor value={["Zoom"]} onChange={() => {}} />);
+
+    expect(screen.getAllByRole("textbox")).toHaveLength(2);
+    expect((screen.getAllByRole("textbox")[1] as HTMLInputElement).value).toBe("Meet");
+  });
+
+  it("typing into a newly-added input + blur emits the cleaned array", async () => {
+    const onChange = vi.fn();
+    render(<CommandEditor value={["claude"]} onChange={onChange} />);
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: /添加参数/ }));
+    const added = screen.getAllByRole("textbox")[1] as HTMLInputElement;
+    await user.type(added, "codex");
+    await user.tab();
+
+    expect(onChange).toHaveBeenLastCalledWith(["claude", "codex"]);
   });
 
   it("× button removes the arg", async () => {
