@@ -314,6 +314,19 @@ def _handle_summary_request(
                 speaker_transcript = ""
                 speaker_list = ""
 
+    speaker_vars = ("{{speaker_list}}", "{{speaker_transcript}}", "{{best_transcript}}")
+    if (speaker_transcript or speaker_list) and not any(v in snapshot for v in speaker_vars):
+        snapshot = (
+            "说话人候选：{{speaker_list}}\n"
+            "涉及人名、负责人、说话人时，优先使用说话人候选和转录标签；"
+            "不要把候选名单外的人名强行写成负责人。\n"
+            "带说话人标签的转录：\n"
+            "---\n"
+            "{{speaker_transcript}}\n"
+            "---\n\n"
+            f"{snapshot}"
+        )
+
     # Single-pass substitution via a throwaway Prompt-shaped object so we
     # share the PromptsCache.render() codepath (and test coverage).
     from prompts.db import Prompt, Category, Source

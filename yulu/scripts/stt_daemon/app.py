@@ -457,6 +457,8 @@ class STTDaemonApp:
                 engine=msg.engine,
                 language=msg.language,
                 chunk_sec=msg.chunk_sec,
+                meeting_title=msg.meeting_title,
+                context_prompt=msg.context_prompt,
                 mic_stride_offset=0,
                 sys_stride_offset=2,
                 stride_step=4,
@@ -476,6 +478,8 @@ class STTDaemonApp:
                 engine=msg.engine,
                 language=msg.language,
                 chunk_sec=msg.chunk_sec,
+                meeting_title=msg.meeting_title,
+                context_prompt=msg.context_prompt,
                 realtime_engine=realtime_engine,
                 chunk_max_sec=chunk_max_sec,
             )

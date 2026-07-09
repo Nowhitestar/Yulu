@@ -160,6 +160,7 @@ class PromptsCache:
           {{their_transcript}}   — sys-side only (speaker = "对方")
           {{speaker_transcript}} — diarized transcript with [MM:SS <speaker>] labels (v0.6)
           {{speaker_list}}       — compact roster of detected/named speakers (v0.6)
+          {{best_transcript}}    — speaker_transcript when present, else transcript
           {{meeting_title}}      — meeting title
           {{date}}               — YYYY-MM-DD meeting date
 
@@ -167,11 +168,13 @@ class PromptsCache:
         default to "" so legacy callers and legacy prompts (mono / pre-Phase-3 /
         pre-diarization) keep rendering EXACTLY unchanged — the additive-var contract.
         """
+        best_transcript = speaker_transcript or transcript
         return (prompt.content
                 .replace("{{transcript}}", transcript)
                 .replace("{{my_transcript}}", my_transcript)
                 .replace("{{their_transcript}}", their_transcript)
                 .replace("{{speaker_transcript}}", speaker_transcript)
                 .replace("{{speaker_list}}", speaker_list)
+                .replace("{{best_transcript}}", best_transcript)
                 .replace("{{meeting_title}}", meeting_title)
                 .replace("{{date}}", date))

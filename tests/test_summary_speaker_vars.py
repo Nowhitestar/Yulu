@@ -27,6 +27,7 @@ from agent_queue_worker import process_queue_once  # noqa: E402
 from prompts import PromptsRepo, Category, open_db  # noqa: E402
 from prompts.cache import PromptsCache  # noqa: E402
 from prompts.db import Prompt, Source  # noqa: E402
+from prompts.seed import SEED_PROMPTS, seed_from_current  # noqa: E402
 from stt_daemon import speaker_merge as sm  # noqa: E402
 
 
@@ -48,6 +49,23 @@ def test_render_substitutes_speaker_vars(tmp_path):
     assert "[00:00 Lewis] hi" in out
 
 
+def test_render_best_transcript_prefers_speaker_transcript(tmp_path):
+    cache = PromptsCache(tmp_path / "x.sqlite")
+    p = _prompt("BODY:\n{{best_transcript}}")
+    with_speakers = cache.render(
+        p,
+        transcript="plain body",
+        meeting_title="M",
+        date="D",
+        speaker_transcript="[00:00 Lewis] hi",
+        speaker_list="Lewis",
+    )
+    without_speakers = cache.render(p, transcript="plain body", meeting_title="M", date="D")
+    assert "Lewis" in with_speakers
+    assert "plain body" not in with_speakers
+    assert "BODY:\nplain body" == without_speakers
+
+
 def test_legacy_prompt_unchanged_with_and_without_new_vars(tmp_path):
     cache = PromptsCache(tmp_path / "x.sqlite")
     legacy = _prompt("summarize: {{transcript}} ({{meeting_title}} {{date}})")
@@ -57,6 +75,13 @@ def test_legacy_prompt_unchanged_with_and_without_new_vars(tmp_path):
     assert without == with_new == "summarize: BODY (M D)"
     # No stray placeholders leaked.
     assert "{{speaker" not in with_new
+
+
+def test_seed_summary_prompts_use_speaker_aware_context():
+    by_slug = {p["slug"]: p["content"] for p in SEED_PROMPTS}
+    assert "{{speaker_list}}" in by_slug["summary"]
+    assert "{{best_transcript}}" in by_slug["summary"]
+    assert "{{best_transcript}}" in by_slug["transcript-cleanup"]
 
 
 # ── speaker_roster resolution ─────────────────────────────────────────────────
@@ -150,6 +175,64 @@ def test_worker_passes_speaker_vars_from_sidecar(tmp_path):
     assert "Roster=Lewis" in sent              # roster with the renamed owner
     assert "Lewis]" in sent                    # labelled transcript carried the rename
     assert "{{speaker" not in sent             # vars fully substituted
+
+
+def test_worker_adds_speaker_context_for_legacy_prompt_from_sidecar(tmp_path):
+    db = _setup_prompt(tmp_path, "BODY:{{transcript}}")
+    audio = tmp_path / "Team_20260601_100000.wav"
+    audio.write_bytes(b"RIFF")
+    transcript = audio.with_suffix(".transcript.txt")
+    transcript.write_text("plain merged transcript", encoding="utf-8")
+    _make_sidecar(audio)
+
+    capture = tmp_path / "captured_prompt.txt"
+    llm = _capturing_llm(tmp_path, capture)
+    summary = audio.with_suffix(".summary.md")
+    queue_path = tmp_path / "agent-queue.json"
+    queue_path.write_text(json.dumps([{
+        "type": "summary_request", "title": "Team", "prompt_slug": "summary",
+        "audio_path": str(audio),
+        "transcript_path": str(transcript), "summary_path": str(summary),
+    }], ensure_ascii=False), encoding="utf-8")
+
+    processed = process_queue_once(queue_path=queue_path,
+                                   llm_command=[sys.executable, str(llm)],
+                                   timeout_sec=10, prompts_db=db)
+    assert processed == 1
+    sent = capture.read_text(encoding="utf-8")
+    assert "说话人候选：Lewis" in sent
+    assert "[00:00 Lewis]" in sent
+    assert "BODY:plain merged transcript" in sent
+
+
+def test_default_seed_summary_uses_speaker_sidecar(tmp_path):
+    db = tmp_path / "prompts.sqlite"
+    seed_from_current(PromptsRepo(open_db(db)))
+    audio = tmp_path / "Team_20260601_100000.wav"
+    audio.write_bytes(b"RIFF")
+    transcript = audio.with_suffix(".transcript.txt")
+    transcript.write_text("plain merged transcript", encoding="utf-8")
+    _make_sidecar(audio)
+
+    capture = tmp_path / "captured_prompt.txt"
+    llm = _capturing_llm(tmp_path, capture)
+    summary = audio.with_suffix(".summary.md")
+    queue_path = tmp_path / "agent-queue.json"
+    queue_path.write_text(json.dumps([{
+        "type": "summary_request", "title": "Team", "prompt_slug": "summary",
+        "audio_path": str(audio),
+        "transcript_path": str(transcript), "summary_path": str(summary),
+    }], ensure_ascii=False), encoding="utf-8")
+
+    processed = process_queue_once(queue_path=queue_path,
+                                   llm_command=[sys.executable, str(llm)],
+                                   timeout_sec=10, prompts_db=db)
+    assert processed == 1
+    sent = capture.read_text(encoding="utf-8")
+    assert "说话人候选：Lewis" in sent
+    assert "[00:00 Lewis]" in sent
+    assert "plain merged transcript" not in sent
+    assert "{{best_transcript}}" not in sent
 
 
 def test_worker_absent_sidecar_blanks_vars(tmp_path):

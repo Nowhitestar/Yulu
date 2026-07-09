@@ -44,6 +44,7 @@ def test_transcribe_request_roundtrip():
         condition_on_previous=True,
         hallucination_silence_threshold=2.0,
         timeout_sec=1.55,
+        context_prompt="参会者姓名：Lewis, Ciel。",
         dictation_mode="translate",
         target_language="English",
     )
@@ -55,9 +56,32 @@ def test_transcribe_request_roundtrip():
     assert isinstance(back, TranscribeRequest)
     assert back.job_id == "abc"
     assert back.kind == JobKind.FINAL_TRANSCRIBE
+    assert back.context_prompt == "参会者姓名：Lewis, Ciel。"
     assert back.timeout_sec == 1.55
     assert back.dictation_mode == "translate"
     assert back.target_language == "English"
+
+
+def test_subscribe_session_context_roundtrip():
+    req = SubscribeSessionRequest(
+        sid="rt-1",
+        mic_path="/tmp/rec.wav",
+        sys_path=None,
+        engine="mlx",
+        language="zh",
+        chunk_sec=10,
+        meeting_title="Team",
+        context_prompt="参会者姓名：Lewis, Ciel。",
+    )
+    encoded = encode(req)
+    parsed = json.loads(encoded)
+    assert parsed["type"] == "subscribe_session"
+    assert parsed["meeting_title"] == "Team"
+    assert parsed["context_prompt"] == "参会者姓名：Lewis, Ciel。"
+    back = decode(encoded)
+    assert isinstance(back, SubscribeSessionRequest)
+    assert back.meeting_title == "Team"
+    assert back.context_prompt == "参会者姓名：Lewis, Ciel。"
 
 
 def test_error_event_includes_code():
