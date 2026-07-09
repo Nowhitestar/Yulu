@@ -48,6 +48,7 @@ beforeAll(async () => {
     searchDb: join(configDir, "search.sqlite"),
     moviesDir,
     agentQueueJson: join(configDir, "agent-queue.json"),
+    mcpTokenJson: join(configDir, "mcp-token.json"),
   });
   const port = server.address.port;
   const baseUrl = `http://127.0.0.1:${port}`;
@@ -73,6 +74,78 @@ describe("server", () => {
   it("rejects non-localhost via Host header guard", async () => {
     const r = await rawHttp(env.server.address.port, "/healthz", "evil.com:7777");
     expect(r.status).toBe(403);
+  });
+
+  it("/mcp requires the Yulu bearer token", async () => {
+    const r = await fetch(`${env.baseUrl}/mcp`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Accept": "application/json, text/event-stream" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+    });
+    expect(r.status).toBe(401);
+  });
+
+  it("/mcp rejects a wrong bearer token", async () => {
+    const configDir = join(env.root, ".config", "yulu");
+    writeFileSync(join(configDir, "mcp-token.json"), JSON.stringify({ token: "test-token" }));
+    const r = await fetch(`${env.baseUrl}/mcp`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Accept": "application/json, text/event-stream",
+        "Authorization": "Bearer wrong-token",
+      },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+    });
+    expect(r.status).toBe(401);
+  });
+
+  it("/mcp initializes with the correct token", async () => {
+    const configDir = join(env.root, ".config", "yulu");
+    writeFileSync(join(configDir, "mcp-token.json"), JSON.stringify({ token: "test-token" }));
+    const body = await mcpPost("initialize", {
+      protocolVersion: "2025-06-18",
+      capabilities: {},
+      clientInfo: { name: "test", version: "1.0" },
+    }) as { result?: { serverInfo?: { name?: string } } };
+    expect(body.result?.serverInfo?.name).toBe("yulu");
+  });
+
+  it("/mcp lists Yulu tools without destructive delete tools", async () => {
+    const configDir = join(env.root, ".config", "yulu");
+    writeFileSync(join(configDir, "mcp-token.json"), JSON.stringify({ token: "test-token" }));
+    const body = await mcpPost("tools/list") as { result?: { tools?: Array<{ name: string }> } };
+    const names = body.result?.tools?.map((tool) => tool.name) ?? [];
+    expect(names).toContain("recording_get");
+    expect(names).toContain("recording_summarize");
+    expect(names).not.toContain("recording_delete");
+  });
+
+  it("/mcp exposes recording text without WAV bytes", async () => {
+    const configDir = join(env.root, ".config", "yulu");
+    const moviesDir = join(env.root, "Movies", "Yulu");
+    writeFileSync(join(configDir, "mcp-token.json"), JSON.stringify({ token: "test-token" }));
+    writeFileSync(join(moviesDir, "McpRec_20260101_120000.wav"), Buffer.alloc(44));
+    writeFileSync(join(moviesDir, "McpRec_20260101_120000.transcript.txt"), "hello transcript");
+    writeFileSync(join(moviesDir, "McpRec_20260101_120000.summary.md"), "# hello summary");
+
+    const call = await mcpPost("tools/call", { name: "recording_get", arguments: { stem: "McpRec_20260101_120000" } }) as {
+      result?: { content?: Array<{ text?: string }> };
+    };
+    const recording = JSON.parse(call.result?.content?.[0]?.text ?? "{}");
+    expect(recording.transcript).toBe("hello transcript");
+    expect(recording.summary).toBe("# hello summary");
+    expect(recording.wavPath).toBeUndefined();
+
+    const list = await mcpPost("tools/call", { name: "recordings_list", arguments: { limit: 5 } }) as {
+      result?: { content?: Array<{ text?: string }> };
+    };
+    expect(JSON.parse(list.result?.content?.[0]?.text ?? "[]").some((row: { stem?: string }) => row.stem === "McpRec_20260101_120000")).toBe(true);
+
+    const summary = await mcpPost("resources/read", { uri: "yulu://recordings/McpRec_20260101_120000/summary" }) as {
+      result?: { contents?: Array<{ text?: string }> };
+    };
+    expect(summary.result?.contents?.[0]?.text).toBe("# hello summary");
   });
 
   it("serves /assets/* from dist/web/assets with the right Content-Type", async () => {
@@ -213,3 +286,22 @@ describe("server", () => {
     }
   });
 });
+
+function parseMcpResponse(text: string): unknown {
+  const dataLine = text.split("\n").find((line) => line.startsWith("data: "));
+  return JSON.parse(dataLine ? dataLine.slice(6) : text);
+}
+
+async function mcpPost(method: string, params?: unknown): Promise<unknown> {
+  const r = await fetch(`${env.baseUrl}/mcp`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Accept": "application/json, text/event-stream",
+      "Authorization": "Bearer test-token",
+    },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
+  });
+  expect(r.status).toBe(200);
+  return parseMcpResponse(await r.text());
+}

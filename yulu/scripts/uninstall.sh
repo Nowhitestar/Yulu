@@ -323,6 +323,10 @@ else
     info "Keeping agent skills. Remove later: npx skills remove yulu -g"
 fi
 
+header "Agent MCP cleanup"
+PYTHONPATH="$SCRIPT_DIR:${PYTHONPATH:-}" "${PYTHON:-python3}" -m provision.cli mcp remove --detected-only --non-fatal \
+    || warn "Yulu MCP cleanup failed (continuing uninstall)"
+
 # ─── 5. Optional: ~/.config/yulu ─────────────────────────────────
 
 header "Config + whisper models"

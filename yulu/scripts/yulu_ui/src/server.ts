@@ -22,6 +22,7 @@ import { exchangeCodeForTokens } from "./notionMcpOAuth.js";
 import { resolveAgentRuntime } from "./agentRuntime.js";
 import { ensureBackgroundAgentSession } from "./agentSessionStore.js";
 import { createCaller } from "./trpc.js";
+import { handleMcpRequest, isMcpRequest } from "./mcp.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -208,7 +209,16 @@ export async function startServer(pathOverrides: Partial<RuntimePaths> = {}): Pr
     return serveStaticFile(c.req.raw, distWebDir(), "index.html");
   });
 
-  const http = createServer((req, res) => bridgeNodeToFetch(req, res, (r) => Promise.resolve(app.fetch(r))));
+  const http = createServer((req, res) => {
+    if (isMcpRequest(req)) {
+      void handleMcpRequest(req, res, ctx).catch((exc) => {
+        if (!res.headersSent) res.writeHead(500);
+        res.end((exc as Error).message);
+      });
+      return;
+    }
+    void bridgeNodeToFetch(req, res, (r) => Promise.resolve(app.fetch(r)));
+  });
   mountWsMultiplexer(http, appPubSub);
 
   const inboxWatcher = startInboxWatcher({

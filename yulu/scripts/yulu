@@ -106,6 +106,8 @@ Commands:
   skill install [--agent <name>]
                     Install/refresh the Yulu agent skill (decoupled from install,
                     idempotent), e.g. --agent claude-code --agent codex
+  mcp status|install|remove|rotate-token|test
+                    Manage Yulu HTTP MCP registration in detected local agents
   migrate [--dry-run]
                     Migrate an existing v0.5.x ~/.yulu install (detect->plan->apply
                     ->verify), transactional + no data loss; --dry-run prints the
@@ -335,6 +337,7 @@ case "${1:-help}" in
     vocab)     shift; PYTHONPATH="$SCRIPT_DIR:${PYTHONPATH:-}" exec "${PYTHON:-python3}" -m vocab.cli "$@" ;;
     provision) shift; PYTHONPATH="$SCRIPT_DIR:${PYTHONPATH:-}" exec "${PYTHON:-python3}" -m provision.cli provision "$@" ;;
     skill)     shift; PYTHONPATH="$SCRIPT_DIR:${PYTHONPATH:-}" exec "${PYTHON:-python3}" -m provision.cli skill "$@" ;;
+    mcp)       shift; PYTHONPATH="$SCRIPT_DIR:${PYTHONPATH:-}" exec "${PYTHON:-python3}" -m provision.cli mcp "$@" ;;
     migrate)
         shift
         if [[ "${1:-}" == "unify-voicemails" ]]; then

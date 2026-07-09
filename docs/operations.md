@@ -32,6 +32,11 @@ yulu transcription mode full   # full final transcription -> polish -> summary
 yulu transcription engine mlx mlx-community/whisper-large-v3-mlx
 yulu transcription engine whisper ~/.config/yulu/models/ggml-large-v3.bin
 
+# Local MCP registration for detected agents
+yulu mcp status
+yulu mcp install --detected-only --non-fatal
+yulu mcp test
+
 # Calendar queries
 python3 yulu/scripts/check_meetings.py today
 python3 yulu/scripts/check_meetings.py upcoming

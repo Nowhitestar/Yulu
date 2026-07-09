@@ -54,6 +54,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+* **mcp:** add token-protected Yulu HTTP MCP registration via `yulu mcp ...`; install/update now registers detected local agents non-fatally, and uninstall cleans up the Yulu MCP entry.
 * **install:** add agent-readable install/uninstall plan JSON and run PKG upgrades through the provision ledger. Existing installs do not require manual migration; agents can inspect install plans with `release_installer.py install --plan --json` and uninstall plans with `yulu uninstall --dry-run --json`.
 
 ## [0.11.1](https://github.com/Nowhitestar/Yulu/compare/v0.11.0...v0.11.1) (2026-06-14)
