@@ -4,6 +4,13 @@ All notable changes to Yulu are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.16.0](https://github.com/Nowhitestar/Yulu/compare/v0.15.0...v0.16.0) (2026-07-09)
+
+
+### Features
+
+* add Yulu HTTP MCP server ([2e6f450](https://github.com/Nowhitestar/Yulu/commit/2e6f450cdfb6947f940952738a68027243b969b1))
+
 ## [0.15.0](https://github.com/Nowhitestar/Yulu/compare/v0.14.0...v0.15.0) (2026-07-09)
 
 
