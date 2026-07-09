@@ -258,87 +258,148 @@ func interruptedRecordingTitle() -> String? {
 // ─── 音频数据管理器 + 源分离立体声 (L=mic, R=sys) ───
 
 class AudioRecorder {
-    var writer: WavWriter?
-    var isRecording = false
-    var startTime: Date?
-    var lastMicAudioTime: Date?
-    var lastSysAudioTime: Date?
-    var silenceTimer: DispatchSourceTimer?
-    var silenceSeconds = DEFAULT_SILENCE_SEC
-    var silenceThreshold = DEFAULT_SILENCE_THRESHOLD
-    var outputDir: URL = RECORDING_DIR
+    private let recorderQueue = DispatchQueue(label: "com.yulu.audioRecorder")
+    private let recorderQueueKey = DispatchSpecificKey<Bool>()
+
+    private var writer: WavWriter?
+    private var isRecordingState = false
+    private var startTime: Date?
+    private var lastMicAudioTime: Date?
+    private var lastSysAudioTime: Date?
+    private var silenceTimer: DispatchSourceTimer?
+    private var silenceSecondsState = DEFAULT_SILENCE_SEC
+    private var silenceThresholdState = DEFAULT_SILENCE_THRESHOLD
+    private var outputDirState: URL = RECORDING_DIR
     var onStopRequest: (() -> Void)?
-    var sysGapMicFallbackLogged = false
-    var micGain: Float = DEFAULT_MIC_GAIN
+    private var sysGapMicFallbackLogged = false
+    private var micGainState: Float = DEFAULT_MIC_GAIN
+    private var autoStopRequested = false
 
     // Streaming buffers
-    var sysBuf: [Int16] = []
-    var micBuf: [Int16] = []
-    let bufLock = NSLock()
+    private var sysBuf: [Int16] = []
+    private var micBuf: [Int16] = []
+
+    init() {
+        recorderQueue.setSpecific(key: recorderQueueKey, value: true)
+    }
+
+    private func onRecorderQueue() -> Bool {
+        DispatchQueue.getSpecific(key: recorderQueueKey) == true
+    }
+
+    private func syncState<T>(_ body: () -> T) -> T {
+        if onRecorderQueue() {
+            return body()
+        }
+        return recorderQueue.sync(execute: body)
+    }
+
+    var isRecording: Bool {
+        syncState { isRecordingState }
+    }
+
+    var currentFilePath: String {
+        syncState { writer?.url.path ?? "" }
+    }
+
+    var micGain: Float {
+        syncState { micGainState }
+    }
+
+    func configure(silenceSeconds: TimeInterval, silenceThreshold: Float, outputDir: URL) {
+        syncState {
+            silenceSecondsState = silenceSeconds
+            silenceThresholdState = silenceThreshold
+            outputDirState = outputDir
+        }
+    }
 
     func start(title: String) -> String? {
-        let df = DateFormatter(); df.dateFormat = "yyyyMMdd_HHmmss"
-        let fn = "\(title.components(separatedBy: .alphanumerics.inverted).joined())_\(df.string(from: Date())).wav"
-        let url = outputDir.appendingPathComponent(fn)
-        try? FileManager.default.createDirectory(at: outputDir, withIntermediateDirectories: true)
-        guard let w = WavWriter(url: url) else { return nil }
-        bufLock.lock()
-        writer = w; isRecording = true; startTime = Date()
-        lastMicAudioTime = Date(); lastSysAudioTime = Date()
-        sysBuf = []; micBuf = []
-        sysGapMicFallbackLogged = false
-        bufLock.unlock()
-        writeState(recording: true, title: title, path: url.path)
-        log("🎙 \(fn)")
-        startSilenceMonitor()
-        return url.path
+        return syncState {
+            if isRecordingState {
+                return writer?.url.path
+            }
+
+            let df = DateFormatter(); df.dateFormat = "yyyyMMdd_HHmmss"
+            let fn = "\(title.components(separatedBy: .alphanumerics.inverted).joined())_\(df.string(from: Date())).wav"
+            let url = outputDirState.appendingPathComponent(fn)
+            try? FileManager.default.createDirectory(at: outputDirState, withIntermediateDirectories: true)
+            guard let w = WavWriter(url: url) else { return nil }
+            writer = w
+            isRecordingState = true
+            startTime = Date()
+            lastMicAudioTime = Date()
+            lastSysAudioTime = Date()
+            sysBuf = []
+            micBuf = []
+            sysGapMicFallbackLogged = false
+            autoStopRequested = false
+            writeState(recording: true, title: title, path: url.path)
+            log("🎙 \(fn)")
+            startSilenceMonitorOnQueue()
+            return url.path
+        }
     }
 
     @discardableResult
     func stop() -> (path: String?, duration: Int) {
-        bufLock.lock()
-        isRecording = false
-        bufLock.unlock()
-        silenceTimer?.cancel()
-        silenceTimer = nil
-        let dur = startTime.map { Int(Date().timeIntervalSince($0)) } ?? 0
-        // Write remaining audio
-        flushBuffers()
-        let p = writer?.url.path
-        writer?.finalize(); writer = nil
-        writeState(recording: false)
-        log("⏹ \(dur)s")
-        return (p, dur)
+        return syncState {
+            isRecordingState = false
+            stopSilenceMonitorOnQueue()
+            let dur = startTime.map { Int(Date().timeIntervalSince($0)) } ?? 0
+            flushBuffersOnQueue()
+            let p = writer?.url.path
+            writer?.finalize()
+            writer = nil
+            startTime = nil
+            lastMicAudioTime = nil
+            lastSysAudioTime = nil
+            sysBuf = []
+            micBuf = []
+            writeState(recording: false)
+            log("⏹ \(dur)s")
+            return (p, dur)
+        }
     }
 
     func onSysAudio(_ samples: [Int16]) {
-        guard isRecording else { return }
-        bufLock.lock()
-        sysBuf.append(contentsOf: samples)
-        sysGapMicFallbackLogged = false
-        bufLock.unlock()
-        let rms = calcRMS(samples)
-        if rms > silenceThreshold {
-            bufLock.lock()
-            lastSysAudioTime = Date()
-            bufLock.unlock()
+        recorderQueue.async { [weak self] in
+            guard let self = self, self.isRecordingState else { return }
+            self.sysBuf.append(contentsOf: samples)
+            self.sysGapMicFallbackLogged = false
+            if self.calcRMS(samples) > self.silenceThresholdState {
+                self.lastSysAudioTime = Date()
+            }
+            self.mixAndWriteOnQueue()
         }
-        mixAndWrite()
     }
 
     func onMicAudio(_ samples: [Float]) {
-        guard isRecording else { return }
-        let ints = samples.map { Int16(max(-1.0, min(1.0, $0 * micGain)) * Float(Int16.max)) }
-        bufLock.lock()
-        micBuf.append(contentsOf: ints)
-        bufLock.unlock()
-        let rms = calcRMS(ints)
-        if rms > silenceThreshold {
-            bufLock.lock()
-            lastMicAudioTime = Date()
-            bufLock.unlock()
+        recorderQueue.async { [weak self] in
+            guard let self = self, self.isRecordingState else { return }
+            let gain = self.micGainState
+            let ints = samples.map { Int16(max(-1.0, min(1.0, $0 * gain)) * Float(Int16.max)) }
+            self.micBuf.append(contentsOf: ints)
+            if self.calcRMS(ints) > self.silenceThresholdState {
+                self.lastMicAudioTime = Date()
+            }
+            self.mixAndWriteOnQueue()
         }
-        mixAndWrite()
+    }
+
+    func silenceExpired(now: Date = Date()) -> Bool {
+        return syncState {
+            silenceExpiredOnQueue(now: now)
+        }
+    }
+
+    func _selfTestSetSilenceState(recording: Bool, micLast: Date?, sysLast: Date?, silenceSeconds: TimeInterval = DEFAULT_SILENCE_SEC) {
+        syncState {
+            isRecordingState = recording
+            lastMicAudioTime = micLast
+            lastSysAudioTime = sysLast
+            silenceSecondsState = silenceSeconds
+        }
     }
 
     private func calcRMS(_ s: [Int16]) -> Float {
@@ -372,9 +433,8 @@ class AudioRecorder {
 
     /// 流式 source-separated: 从 sysBuf/micBuf 取等量数据,
     /// 写出 L=mic / R=sys downmix(L+R/2) 的立体声 PCM.
-    private func mixAndWrite() {
+    private func mixAndWriteOnQueue() {
         guard let w = writer else { return }
-        bufLock.lock()
 
         let sysFrames = sysBuf.count / 2
         let micFrames = micBuf.count
@@ -391,7 +451,7 @@ class AudioRecorder {
         // dual-source recordings write common frames and leave the short side
         // buffered for the next callback.
         let outFrames = (micOnly || forceMicOnly) ? micFrames : min(sysFrames, micFrames)
-        guard outFrames >= 512 else { bufLock.unlock(); return }  // wait for ~10 ms
+        guard outFrames >= 512 else { return }  // wait for ~10 ms
 
         let micChunk = Array(micBuf.prefix(outFrames))
         micBuf.removeFirst(outFrames)
@@ -405,61 +465,61 @@ class AudioRecorder {
         }
         let shouldLogFallback = forceMicOnly && !sysGapMicFallbackLogged
         if forceMicOnly { sysGapMicFallbackLogged = true }
-        bufLock.unlock()
 
         if shouldLogFallback {
             log("⚠️ Sys audio unavailable; preserving mic-only audio until system audio resumes")
         }
         let out = channelInterleave(sysStereo: sysChunk, micMono: micChunk)
         w.append(Data(bytes: out, count: out.count * 2))
-        startSilenceMonitor()
-
     }
 
-    private func flushBuffers() {
+    private func flushBuffersOnQueue() {
         guard let w = writer else { return }
-        bufLock.lock()
         let sysFrames = sysBuf.count / 2
         let micFrames = micBuf.count
         let outFrames = max(sysFrames, micFrames)
-        if outFrames == 0 { bufLock.unlock(); return }
+        if outFrames == 0 { return }
 
         let micChunk: [Int16] = micBuf + [Int16](repeating: 0, count: max(0, outFrames - micFrames))
         let sysChunk: [Int16] = sysBuf + [Int16](repeating: 0, count: max(0, outFrames * 2 - sysBuf.count))
         micBuf.removeAll()
         sysBuf.removeAll()
-        bufLock.unlock()
 
         let out = channelInterleave(sysStereo: Array(sysChunk.prefix(outFrames * 2)),
                                      micMono:   Array(micChunk.prefix(outFrames)))
         w.append(Data(bytes: out, count: out.count * 2))
     }
 
-    func silenceExpired(now: Date = Date()) -> Bool {
-        bufLock.lock()
-        let recording = isRecording
-        let micLast = lastMicAudioTime
-        let sysLast = lastSysAudioTime
-        let seconds = silenceSeconds
-        bufLock.unlock()
-        guard recording else { return false }
-        let micQuiet = (micLast.map { now.timeIntervalSince($0) } ?? .infinity) >= seconds
-        let sysQuiet = (sysLast.map { now.timeIntervalSince($0) } ?? .infinity) >= seconds
+    private func silenceExpiredOnQueue(now: Date = Date()) -> Bool {
+        guard isRecordingState else { return false }
+        let seconds = silenceSecondsState
+        let micQuiet = (lastMicAudioTime.map { now.timeIntervalSince($0) } ?? .infinity) >= seconds
+        let sysQuiet = (lastSysAudioTime.map { now.timeIntervalSince($0) } ?? .infinity) >= seconds
         return micQuiet && sysQuiet
     }
 
-    private func startSilenceMonitor() {
-        silenceTimer?.cancel()
-        let timer = DispatchSource.makeTimerSource(queue: .main)
-        // ponytail: one timer checks timestamps; per-buffer cancel/reschedule crashed in AVAudio callbacks.
+    private func startSilenceMonitorOnQueue() {
+        guard silenceTimer == nil else { return }
+        let timer = DispatchSource.makeTimerSource(queue: recorderQueue)
         timer.schedule(deadline: .now() + 1, repeating: 1)
         timer.setEventHandler { [weak self] in
-            guard let self = self, self.silenceExpired() else { return }
-            log("🔇 silence \(Int(self.silenceSeconds))s (both channels) — auto stop")
-            self.onStopRequest?()
+            guard let self = self, self.silenceExpiredOnQueue() else { return }
+            guard !self.autoStopRequested else { return }
+            self.autoStopRequested = true
+            log("🔇 silence \(Int(self.silenceSecondsState))s (both channels) — auto stop")
+            DispatchQueue.main.async { [weak self] in
+                self?.onStopRequest?()
+            }
         }
         silenceTimer = timer
         timer.resume()
+    }
+
+    private func stopSilenceMonitorOnQueue() {
+        silenceTimer?.setEventHandler {}
+        silenceTimer?.cancel()
+        silenceTimer = nil
+        autoStopRequested = false
     }
 }
 
@@ -555,7 +615,7 @@ class MicCapture {
         let fmt = input.outputFormat(forBus: 0)
 
         input.installTap(onBus: 0, bufferSize: 4096, format: fmt) { [weak self] buf, _ in
-            guard let self = self, self.recorder.isRecording else { return }
+            guard let self = self else { return }
             guard let chData = buf.floatChannelData else { return }
             let len = Int(buf.frameLength)
             let channels = max(1, Int(buf.format.channelCount))
@@ -596,7 +656,7 @@ class SysAudioOutput: NSObject, SCStreamOutput {
     init(_ r: AudioRecorder) { recorder = r }
 
     func stream(_ s: SCStream, didOutputSampleBuffer buf: CMSampleBuffer, of type: SCStreamOutputType) {
-        guard type == .audio, recorder.isRecording else { return }
+        guard type == .audio else { return }
         let asbd = buf.formatDescription.flatMap { CMAudioFormatDescriptionGetStreamBasicDescription($0)?.pointee }
         let flags = asbd?.mFormatFlags ?? 0
         let channels = Int(asbd?.mChannelsPerFrame ?? 2)
@@ -1037,7 +1097,6 @@ final class ProcessTapBackend: CaptureBackend {
 
     // ── IO callback: Float32 AudioBufferList → interleaved Int16 → sink ──
     private func handleIO(_ inInputData: UnsafePointer<AudioBufferList>) {
-        guard recorder.isRecording else { return }
         let abl = UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: inInputData))
         guard abl.count > 0 else { return }
 
@@ -1090,12 +1149,17 @@ final class ProcessTapBackend: CaptureBackend {
         if allZero {
             lock.lock()
             let isRunning = running
-            zeroRunCallbacks += 1
-            let tripped = isRunning && !rebuilding && zeroRunCallbacks >= zeroRunThreshold
+            if isRunning {
+                zeroRunCallbacks += 1
+            } else {
+                zeroRunCallbacks = 0
+            }
+            let currentZeroRun = zeroRunCallbacks
+            let tripped = isRunning && !rebuilding && currentZeroRun >= zeroRunThreshold
             if tripped { rebuilding = true }
             lock.unlock()
             if tripped {
-                log("⚠️ Sys tap delivered \(zeroRunCallbacks) all-zero buffers — teardown+rebuild (Pitfall 3)")
+                log("⚠️ Sys tap delivered \(currentZeroRun) all-zero buffers — teardown+rebuild (Pitfall 3)")
                 // Rebuild off the realtime IO thread.
                 DispatchQueue.global(qos: .userInitiated).async { [weak self] in
                     self?.recoverFromZeroBuffers()
@@ -1321,18 +1385,20 @@ class SocketServer {
             // Per-request silence threshold: voicemail uses ~3s, meetings use the default.
             // Omitting the field MUST reset to DEFAULT_SILENCE_SEC so a previous short
             // threshold does not leak into the next recording.
+            let silenceSeconds: TimeInterval
             if let s = json["silence_seconds"] as? Int, s > 0 {
-                recorder.silenceSeconds = Double(s)
+                silenceSeconds = Double(s)
             } else if let s = json["silence_seconds"] as? Double, s > 0 {
-                recorder.silenceSeconds = s
+                silenceSeconds = s
             } else {
-                recorder.silenceSeconds = DEFAULT_SILENCE_SEC
+                silenceSeconds = DEFAULT_SILENCE_SEC
             }
+            let silenceThreshold: Float
             if let t = json["silence_threshold"] as? NSNumber {
                 let value = t.floatValue
-                recorder.silenceThreshold = (value >= 0 && value <= 1) ? value : DEFAULT_SILENCE_THRESHOLD
+                silenceThreshold = (value >= 0 && value <= 1) ? value : DEFAULT_SILENCE_THRESHOLD
             } else {
-                recorder.silenceThreshold = DEFAULT_SILENCE_THRESHOLD
+                silenceThreshold = DEFAULT_SILENCE_THRESHOLD
             }
             if let uid = json["mic_device"] as? String {
                 let trimmed = uid.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1344,11 +1410,13 @@ class SocketServer {
             // meetings use the default RECORDING_DIR. Omitting the field resets
             // to RECORDING_DIR so a previous voicemail does not leak into the
             // next meeting recording.
+            let outputDir: URL
             if let dir = json["output_dir"] as? String, !dir.isEmpty {
-                recorder.outputDir = URL(fileURLWithPath: dir)
+                outputDir = URL(fileURLWithPath: dir)
             } else {
-                recorder.outputDir = RECORDING_DIR
+                outputDir = RECORDING_DIR
             }
+            recorder.configure(silenceSeconds: silenceSeconds, silenceThreshold: silenceThreshold, outputDir: outputDir)
             // Start the OS capture sources before creating the WAV/replying. The
             // previous deferred-start design returned "recording" while ProcessTap
             // and AVAudioEngine were still starting, so the first seconds after
@@ -1376,7 +1444,7 @@ class SocketServer {
             if wasRecording { onRecordingStop?() }
             resp = ["status":"stopped", "file": p ?? "", "duration": d]
         case "status":
-            resp = ["recording": recorder.isRecording, "file": recorder.writer?.url.path ?? "", "sysReady": SYS_READY, "sysError": SYS_ERROR, "micReady": MIC_READY, "micError": MIC_ERROR]
+            resp = ["recording": recorder.isRecording, "file": recorder.currentFilePath, "sysReady": SYS_READY, "sysError": SYS_ERROR, "micReady": MIC_READY, "micError": MIC_ERROR]
         case "quit": resp = ["status":"bye"]; send(c, resp)
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { NSApp.terminate(nil) }; return
         default: resp = ["error":"unknown: \(action)"]
@@ -1505,16 +1573,19 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
 if CommandLine.arguments.contains("--self-test") {
     let recorder = AudioRecorder()
-    recorder.silenceSeconds = 1
-    recorder.bufLock.lock()
-    recorder.isRecording = true
-    recorder.lastMicAudioTime = Date(timeIntervalSinceNow: -2)
-    recorder.lastSysAudioTime = Date(timeIntervalSinceNow: -2)
-    recorder.bufLock.unlock()
+    recorder._selfTestSetSilenceState(
+        recording: true,
+        micLast: Date(timeIntervalSinceNow: -2),
+        sysLast: Date(timeIntervalSinceNow: -2),
+        silenceSeconds: 1
+    )
     assert(recorder.silenceExpired())
-    recorder.bufLock.lock()
-    recorder.lastMicAudioTime = Date()
-    recorder.bufLock.unlock()
+    recorder._selfTestSetSilenceState(
+        recording: true,
+        micLast: Date(),
+        sysLast: Date(timeIntervalSinceNow: -2),
+        silenceSeconds: 1
+    )
     assert(!recorder.silenceExpired())
     print("audio_daemon self-test ok")
     exit(0)

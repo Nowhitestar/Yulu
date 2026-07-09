@@ -376,23 +376,26 @@ def test_status_agent_binary_has_required_strings():
     assert b"voicemail.cli" not in blob
 
 
-def test_audio_daemon_silence_monitor_periodic():
-    """Acceptance #9: silence_monitor re-armed on every mixAndWrite event."""
+def test_audio_daemon_silence_monitor_is_lifecycle_owned():
+    """Acceptance #9: silence_monitor is owned by recording lifecycle."""
     text = (SCRIPTS / "audio_daemon.swift").read_text(encoding="utf-8")
-    # The re-arm call must appear inside mixAndWrite (search for the function
-    # then check the next ~40 lines contain another startSilenceMonitor() call)
-    import re
-    match = re.search(r"private func mixAndWrite\(\)\s*\{(.*?)\n    \}", text, re.DOTALL)
-    assert match is not None, "mixAndWrite function not found"
-    body = match.group(1)
-    assert "startSilenceMonitor()" in body, "silence monitor not re-armed in mixAndWrite"
+    assert 'DispatchQueue(label: "com.yulu.audioRecorder")' in text
+    assert "DispatchSource.makeTimerSource(queue: recorderQueue)" in text
+    assert "startSilenceMonitorOnQueue()" in text
+    start = text.index("private func mixAndWriteOnQueue()")
+    end = text.index("private func flushBuffersOnQueue()", start)
+    body = text[start:end]
+    assert "startSilenceMonitor" not in body, (
+        "audio callback path must not recreate/cancel DispatchSourceTimer"
+    )
 
 
 def test_audio_daemon_silence_threshold_is_request_configured():
     text = (SCRIPTS / "audio_daemon.swift").read_text(encoding="utf-8")
-    assert "silenceThreshold = DEFAULT_SILENCE_THRESHOLD" in text
+    assert "let silenceThreshold: Float" in text
+    assert "silenceThresholdState = silenceThreshold" in text
     assert 'json["silence_threshold"]' in text
-    assert "rms > silenceThreshold" in text
+    assert "self.calcRMS(samples) > self.silenceThresholdState" in text
 
 
 def test_audio_daemon_mic_device_is_request_configured():
