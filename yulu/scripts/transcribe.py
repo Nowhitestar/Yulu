@@ -25,7 +25,9 @@ from transcribe_text import (
     FULL_POST_RECORDING_MODE,
     filter_obvious_hallucination_segments,
     normalize_post_recording_mode,
+    provider_diarization_requested as _provider_diarization_requested,
     read_realtime_transcript,
+    reusable_realtime_transcript,
     strip_obvious_hallucination_text,
     suppress_mic_leakage_segments,
     transcript_text_from_segments,
@@ -75,15 +77,6 @@ def _request_final_transcribe(audio_path: Path, trans_cfg: dict, meeting_title: 
         print(f"⚠️ daemon transcribe failed: {resp.get('error')}", file=sys.stderr)
         return None
     return resp
-
-
-def _provider_diarization_requested(trans_cfg: dict) -> bool:
-    if str(trans_cfg.get("final_engine") or "").strip().lower() != "hermes":
-        return False
-    hermes = trans_cfg.get("hermes", {}) if isinstance(trans_cfg.get("hermes"), dict) else {}
-    return str(hermes.get("diarize", True)).strip().lower() not in {
-        "0", "false", "no", "off"
-    }
 
 
 def _enqueue_summary_request(*, prompt, audio_path, transcript_path,
@@ -140,19 +133,17 @@ def process_audio(audio_path_str: str, diarization_num_speakers: Optional[int] =
     asr_segments: list[dict] = []
     used_channel_split = False
     engine_used = str(trans_cfg.get("final_engine", "mlx") or "mlx")
+    transcript_source = "final_transcribe"
 
     if post_mode == FAST_POST_RECORDING_MODE:
-        merged = read_realtime_transcript(realtime_path)
-        if _provider_diarization_requested(trans_cfg):
+        merged, realtime_reason = reusable_realtime_transcript(audio_path, trans_cfg)
+        if realtime_reason == "provider_diarization":
             print("⚠️ Hermes provider diarization 需要整段 final pass，跳过实时转写复用", file=sys.stderr)
-            merged = None
-        elif clean_audio_path != audio_path:
-            print("⚠️ 双轨录音使用原始双轨完整转录，跳过实时转写复用", file=sys.stderr)
-            merged = None
-        elif merged and not _realtime_coverage_ok(audio_path):
+        elif realtime_reason == "coverage":
             print("⚠️ 实时转写覆盖不足，改走完整 daemon 转录", file=sys.stderr)
-            merged = None
         elif merged:
+            transcript_source = "realtime"
+            engine_used = "realtime"
             print(f"⚡ 使用实时转写结果: {realtime_path}")
         else:
             print("⚠️ 未找到可用实时转写，回退到完整 daemon 转录", file=sys.stderr)
@@ -164,6 +155,7 @@ def process_audio(audio_path_str: str, diarization_num_speakers: Optional[int] =
             if merged is None:
                 print("❌ 无法获取任何转录，daemon 不可用且无 realtime 结果", file=sys.stderr)
                 sys.exit(2)
+            transcript_source = "realtime_fallback"
         else:
             engine_used = str(response.get("engine_used") or engine_used)
         if response is not None and isinstance(response.get("channels"), dict):
@@ -192,6 +184,8 @@ def process_audio(audio_path_str: str, diarization_num_speakers: Optional[int] =
     transcript_path.write_text(merged, encoding="utf-8")
     print(f"✅ 原始转录已保存: {raw_path}")
     print(f"✅ 初始 transcript 已保存: {transcript_path}")
+    print(f"Transcript saved: {transcript_path}")
+    print(f"Transcript source: {transcript_source}")
 
     try:  # best-effort search-index push; reader sweep covers misses
         from search import indexer as _idx

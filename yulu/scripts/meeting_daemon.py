@@ -66,6 +66,38 @@ def load_config():
         return json.load(f)
 
 
+def _post_recording_plan(audio_path: str) -> dict:
+    plan = {
+        "event": "transcribing",
+        "message": "📝 转录 + 摘要...",
+        "error": "转录失败",
+    }
+    if not audio_path:
+        return plan
+    try:
+        from transcribe_text import (
+            FAST_POST_RECORDING_MODE,
+            normalize_post_recording_mode,
+            reusable_realtime_transcript,
+        )
+
+        cfg = json.loads(CONFIG_PATH.read_text(encoding="utf-8")) if CONFIG_PATH.exists() else {}
+        trans_cfg = dict(cfg.get("transcription", {}) or {})
+        post_mode = normalize_post_recording_mode(trans_cfg.get("post_recording_mode"))
+        if post_mode != FAST_POST_RECORDING_MODE:
+            return plan
+        realtime_text, _reason = reusable_realtime_transcript(Path(audio_path), trans_cfg)
+        if realtime_text:
+            return {
+                "event": "summarizing",
+                "message": "📝 生成摘要（复用实时转写）...",
+                "error": "摘要处理失败",
+            }
+    except Exception:
+        return plan
+    return plan
+
+
 def load_schedule():
     if not SCHEDULE_PATH.exists():
         return {"events": [], "meetings": []}
@@ -628,22 +660,24 @@ def _stop_and_process():
     subprocess.Popen([sys.executable, str(notify), "notify_stop", title],
                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-    # 2. 通知 agent 开始转录
+    process_plan = _post_recording_plan(audio_path)
+
+    # 2. 通知 agent 开始处理
     try:
         from agent_notify import notify
-        notify("transcribing", title=title)
+        notify(process_plan["event"], title=title)
     except Exception:
         pass
 
-    # 3. 转录 + 摘要
-    print("📝 转录 + 摘要...")
+    # 3. 转录/复用实时稿 + 摘要
+    print(process_plan["message"])
     transcribe = SCRIPT_DIR / "transcribe.py"
     result = subprocess.run(
         [sys.executable, str(transcribe), audio_path],
         capture_output=True, text=True,
     )
     if result.returncode != 0:
-        print(f"❌ 转录失败:\n{result.stderr}", file=sys.stderr)
+        print(f"❌ {process_plan['error']}:\n{result.stderr}", file=sys.stderr)
         return
     print(result.stdout)
 

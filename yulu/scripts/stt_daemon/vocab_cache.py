@@ -35,6 +35,7 @@ class VocabCache:
         self.autoreload = autoreload
         self._lock = threading.RLock()
         self._prompt_terms: list[str] = []
+        self._prompt_hints: list[str] = []
         self._replace_rules: list[tuple[str, str, re.Pattern[str]]] = []
         self._mtime: float = 0.0
 
@@ -56,6 +57,7 @@ class VocabCache:
         with self._lock:
             if not self.db_path.exists():
                 self._prompt_terms = []
+                self._prompt_hints = []
                 self._replace_rules = []
                 self._mtime = 0.0
                 return
@@ -74,6 +76,10 @@ class VocabCache:
             # Sort longest-first to prevent prefix shadowing in regex pass
             replace_words.sort(key=lambda w: len(w.term), reverse=True)
             self._prompt_terms = [w.term for w in prompt_words]
+            self._prompt_hints = [
+                w.term if w.term == w.canonical else f"{w.term} => {w.canonical}"
+                for w in prompt_words
+            ]
             self._replace_rules = [
                 (w.term, w.canonical, _compile_rule(w.term)) for w in replace_words
             ]
@@ -111,7 +117,7 @@ class VocabCache:
     def inject_prompt(self, base_prompt: str = "", meeting_title: str = "") -> str:
         """Build the initial_prompt fed to the speech engine."""
         with self._lock:
-            terms = list(self._prompt_terms)
+            terms = list(self._prompt_hints)
         parts = []
         if base_prompt:
             parts.append(base_prompt.strip())
@@ -130,4 +136,16 @@ class VocabCache:
         for term, canonical, pattern in rules:
             out, n = pattern.subn(canonical, out)
             total += n
+        return out, total
+
+    def apply_replacements_to_segments(self, segments: list[dict]) -> tuple[list[dict], int]:
+        """Apply the same canonical replacements to each segment text."""
+        out: list[dict] = []
+        total = 0
+        for seg in segments or []:
+            item = dict(seg)
+            text, n = self.apply_replacements(str(item.get("text") or ""))
+            item["text"] = text
+            total += n
+            out.append(item)
         return out, total

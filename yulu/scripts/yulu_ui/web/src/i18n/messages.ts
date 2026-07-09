@@ -167,6 +167,11 @@ export const en: Messages = {
   "share.last.failed": "Failed",
   "reader.disabled.wavMissing": "Original WAV file missing",
   "reader.disabled.transcriptFirst": "Transcript required first — click Re-transcribe",
+  "reader.copySummary": "Copy Markdown",
+  "reader.copySummary.done": "Copied",
+  "reader.copySummary.aria": "Copy summary Markdown",
+  "reader.copySummary.title": "Copy summary as Markdown",
+  "reader.copySummary.prompt": "Copy Markdown:",
   "reader.tab.summary": "Summary",
   "reader.tab.transcript": "Transcript",
   "reader.tab.realtime": "Realtime",
@@ -213,7 +218,8 @@ export const en: Messages = {
 
   // ---- Glossary (knowledge/glossary.tsx) ----
   "glossary.col.term": "Term",
-  "glossary.col.pinyin": "Pinyin",
+  "glossary.col.canonical": "Canonical",
+  "glossary.col.scope": "Scope",
   "glossary.col.notes": "Notes",
   "glossary.col.lastEdited": "Last edited",
   "glossary.add": "+ Add term",
@@ -221,6 +227,9 @@ export const en: Messages = {
   "glossary.save": "Save",
   "glossary.cancel": "Cancel",
   "glossary.empty": "No terms yet. Click + Add term to create one.",
+  "glossary.scope.both": "Prompt + replace",
+  "glossary.scope.prompt": "Prompt only",
+  "glossary.scope.replace": "Replace only",
 
   // ---- Health (routes/health.tsx + components/health/*) ----
   "health.tab.doctor": "Doctor",
@@ -450,7 +459,7 @@ export const en: Messages = {
   "settings.transcription.localModelPath.help": "Path to a whisper.cpp .bin model file.",
   "settings.transcription.language.label": "Language",
   "settings.transcription.postRecording.label": "After recording stops",
-  "settings.transcription.postRecording.help": "fast_summary tries the live transcript first, then falls back to a full transcription if it is missing, partial, or clean dual-track audio is required. full_transcribe always transcribes the finished recording first.",
+  "settings.transcription.postRecording.help": "fast_summary reuses a complete live transcript and goes straight to summary; it only falls back to full transcription when the live transcript is missing, partial, or provider diarization needs the finished recording. full_transcribe always transcribes the finished recording first.",
   "settings.transcription.postRecording.fast": "Fast summary",
   "settings.transcription.postRecording.full": "Full transcription first",
   "settings.transcription.realtime.label": "Realtime transcription",
@@ -892,6 +901,11 @@ export const zh: Messages = {
   "share.last.failed": "失败",
   "reader.disabled.wavMissing": "原始 WAV 文件缺失",
   "reader.disabled.transcriptFirst": "需先有转写文本 —— 点击“重新转写”",
+  "reader.copySummary": "复制 Markdown",
+  "reader.copySummary.done": "已复制",
+  "reader.copySummary.aria": "复制摘要 Markdown",
+  "reader.copySummary.title": "以 Markdown 复制摘要",
+  "reader.copySummary.prompt": "复制 Markdown：",
   "reader.tab.summary": "摘要",
   "reader.tab.transcript": "转写",
   "reader.tab.realtime": "实时",
@@ -937,8 +951,9 @@ export const zh: Messages = {
   "prompts.notFound": "未找到模板“{id}”。",
 
   // ---- Glossary (knowledge/glossary.tsx) ----
-  "glossary.col.term": "术语",
-  "glossary.col.pinyin": "拼音",
+  "glossary.col.term": "术语/别名",
+  "glossary.col.canonical": "标准写法",
+  "glossary.col.scope": "作用",
   "glossary.col.notes": "备注",
   "glossary.col.lastEdited": "最后编辑",
   "glossary.add": "+ 添加术语",
@@ -946,6 +961,9 @@ export const zh: Messages = {
   "glossary.save": "保存",
   "glossary.cancel": "取消",
   "glossary.empty": "暂无术语。点击“+ 添加术语”创建一个。",
+  "glossary.scope.both": "提示 + 纠错",
+  "glossary.scope.prompt": "仅提示",
+  "glossary.scope.replace": "仅纠错",
 
   // ---- Health (routes/health.tsx + components/health/*) ----
   "health.tab.doctor": "Doctor",
@@ -1173,7 +1191,7 @@ export const zh: Messages = {
   "settings.transcription.localModelPath.help": "whisper.cpp 的 .bin 模型文件路径。",
   "settings.transcription.language.label": "语言",
   "settings.transcription.postRecording.label": "停止后处理",
-  "settings.transcription.postRecording.help": "fast_summary 会优先复用实时转写；如果实时稿缺失、覆盖不足或需要双轨清理，会自动完整转写。full_transcribe 始终先完整转写再摘要。",
+  "settings.transcription.postRecording.help": "fast_summary 会复用完整实时转写并直接生成摘要；只有实时稿缺失、覆盖不足，或 provider 说话人分离需要整段录音时，才会完整转写。full_transcribe 始终先完整转写再摘要。",
   "settings.transcription.postRecording.fast": "快速摘要",
   "settings.transcription.postRecording.full": "先完整转写",
   "settings.transcription.realtime.label": "实时转写",

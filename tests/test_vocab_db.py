@@ -1,4 +1,5 @@
 import sys
+import sqlite3
 import uuid
 from pathlib import Path
 
@@ -18,6 +19,33 @@ def test_open_db_creates_schema(tmp_path):
     assert "meta" in tables
     schema_version = conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
     assert schema_version[0] == "1"
+
+
+def test_open_db_migrates_legacy_vocab_rows(tmp_path):
+    db_path = tmp_path / "vocab.sqlite"
+    conn = sqlite3.connect(str(db_path))
+    conn.executescript(
+        """
+        CREATE TABLE vocab (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            term TEXT NOT NULL UNIQUE,
+            pinyin TEXT,
+            notes TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        INSERT INTO vocab (term, pinyin, notes, created_at, updated_at)
+        VALUES ('阿尔法学院', NULL, NULL, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    repo = VocabRepo(open_db(db_path))
+    words = repo.list_words()
+    assert [(w.term, w.canonical, w.scope) for w in words] == [
+        ("阿尔法学院", "阿尔法学院", Scope.BOTH)
+    ]
 
 
 def test_add_and_fetch_row(tmp_path):

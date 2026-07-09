@@ -1026,6 +1026,7 @@ export const recordingsRouter = router({
         llmCommand,
         agentRuntime: runtime.disabledReason ? undefined : runtime,
         agentQueueJson: ctx.paths.agentQueueJson,
+        vocabDb: ctx.paths.vocabDb,
         scriptDir: ctx.paths.scriptDir,
         agentSession: backgroundSession ? { configDir: ctx.paths.configDir, sessionId: backgroundSession.id } : undefined,
         registry: ctx.jobs,

@@ -41,6 +41,39 @@ def test_stop_uses_daemon_status_when_state_is_idle(monkeypatch, tmp_path):
     assert any(len(args) > 2 and Path(args[1]).name == "record_audio.py" and args[2] == "stop" for args in calls)
 
 
+def test_post_recording_plan_summarizes_when_realtime_is_reusable(monkeypatch, tmp_path):
+    import json
+    import meeting_daemon
+
+    cfg = tmp_path / "config.json"
+    cfg.write_text(json.dumps({"transcription": {"post_recording_mode": "fast_summary"}}), encoding="utf-8")
+    monkeypatch.setattr(meeting_daemon, "CONFIG_PATH", cfg)
+
+    wav = tmp_path / "TeamSync_20260102_090000.wav"
+    wav.write_bytes(b"RIFFxxxxWAVE")
+    wav.with_suffix(".realtime.transcript.txt").write_text("live transcript", encoding="utf-8")
+
+    plan = meeting_daemon._post_recording_plan(str(wav))
+
+    assert plan["event"] == "summarizing"
+    assert "复用实时转写" in plan["message"]
+
+
+def test_post_recording_plan_transcribes_in_full_mode(monkeypatch, tmp_path):
+    import json
+    import meeting_daemon
+
+    cfg = tmp_path / "config.json"
+    cfg.write_text(json.dumps({"transcription": {"post_recording_mode": "full_transcribe"}}), encoding="utf-8")
+    monkeypatch.setattr(meeting_daemon, "CONFIG_PATH", cfg)
+
+    wav = tmp_path / "TeamSync_20260102_090000.wav"
+    wav.write_bytes(b"RIFFxxxxWAVE")
+    wav.with_suffix(".realtime.transcript.txt").write_text("live transcript", encoding="utf-8")
+
+    assert meeting_daemon._post_recording_plan(str(wav))["event"] == "transcribing"
+
+
 def test_start_recording_uses_capture_controller(monkeypatch):
     import meeting_daemon
     import record_audio

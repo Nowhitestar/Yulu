@@ -184,7 +184,7 @@ export const systemRouter = router({
   dbStats: publicProcedure.query(({ ctx }) => {
     const entries: Array<{ name: "prompts" | "vocab" | "search"; mainTable: string; path: string }> = [
       { name: "prompts", mainTable: "prompts", path: ctx.paths.promptsDb },
-      { name: "vocab",   mainTable: "vocab",   path: ctx.paths.vocabDb },
+      { name: "vocab",   mainTable: "custom_words", path: ctx.paths.vocabDb },
       { name: "search",  mainTable: "docs",    path: ctx.paths.searchDb },
     ];
     return entries.map(({ name, mainTable, path }) => {

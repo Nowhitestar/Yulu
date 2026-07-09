@@ -7,6 +7,7 @@ import type { PubSub, AppChannels } from "./pubsub.js";
 import { appendAgentSessionMessage, getAgentSession, updateAgentSessionNativeSession } from "./agentSessionStore.js";
 import { runAgentCliCommand } from "./agentCliRunner.js";
 import type { AgentRuntime } from "./agentRuntime.js";
+import { openDb } from "./db.js";
 
 type SpawnFn = (cmd: string, args: string[], opts?: { stdio?: unknown }) => ChildProcessWithoutNullStreams;
 
@@ -67,6 +68,7 @@ export interface RunSummarizeArgs {
   llmCommand: string[] | null;
   agentRuntime?: AgentRuntime;
   agentQueueJson: string;
+  vocabDb?: string;
   scriptDir?: string;
   agentSession?: { configDir: string; sessionId: string };
   registry: JobRegistry;
@@ -81,12 +83,12 @@ export interface SummaryPromptSnapshot {
 }
 
 export async function runSummarize(args: RunSummarizeArgs): Promise<{ jobId: string; mode: "queue" | "direct" }> {
-  const { stem, transcriptPath, summaryPath, audioPath, title, prompt, llmCommand, agentRuntime, agentQueueJson, scriptDir, agentSession, registry, pubsub } = args;
+  const { stem, transcriptPath, summaryPath, audioPath, title, prompt, llmCommand, agentRuntime, agentQueueJson, vocabDb, scriptDir, agentSession, registry, pubsub } = args;
   const jobId = randomUUID();
   if (llmCommand === null) {
     return runSummarizeQueueMode({ stem, jobId, transcriptPath, summaryPath, audioPath, title, prompt, agentQueueJson, registry, pubsub });
   }
-  return runSummarizeDirectMode({ stem, jobId, transcriptPath, summaryPath, title, prompt, llmCommand, agentRuntime, scriptDir, agentSession, registry, pubsub });
+  return runSummarizeDirectMode({ stem, jobId, transcriptPath, summaryPath, title, prompt, llmCommand, agentRuntime, vocabDb, scriptDir, agentSession, registry, pubsub });
 }
 
 async function runSummarizeQueueMode(args: {
@@ -172,10 +174,11 @@ function watchForQueueCompletion(args: {
 async function runSummarizeDirectMode(args: {
   stem: string; jobId: string; transcriptPath: string; summaryPath: string;
   title?: string | null; prompt?: SummaryPromptSnapshot | null; llmCommand: string[]; agentRuntime?: AgentRuntime; scriptDir?: string;
+  vocabDb?: string;
   agentSession?: { configDir: string; sessionId: string };
   registry: JobRegistry; pubsub: PubSub<AppChannels>;
 }): Promise<{ jobId: string; mode: "direct" }> {
-  const { stem, jobId, transcriptPath, summaryPath, title, prompt, llmCommand, agentRuntime, scriptDir, agentSession, registry, pubsub } = args;
+  const { stem, jobId, transcriptPath, summaryPath, title, prompt, llmCommand, agentRuntime, vocabDb, scriptDir, agentSession, registry, pubsub } = args;
   registry.set({ stem, action: "summarize", state: "summarizing", startedAt: Date.now(), jobId });
   pubsub.publish("jobs", { stem, jobId, state: "summarizing" });
 
@@ -192,7 +195,7 @@ async function runSummarizeDirectMode(args: {
   try {
     const transcript = readFileSync(transcriptPath, "utf8");
     const taskTitle = title ?? stem;
-    renderedPrompt = buildSummaryPrompt(transcript, { title: taskTitle, prompt });
+    renderedPrompt = buildSummaryPrompt(transcript, { title: taskTitle, prompt, glossaryContext: buildGlossaryPromptContext(vocabDb) });
     if (agentSession) {
       appendAgentSessionMessage(agentSession.configDir, agentSession.sessionId, {
         role: "user",
@@ -304,11 +307,12 @@ function resolveBundledScriptArgs(command: string[], scriptDir?: string): string
 
 function buildSummaryPrompt(
   transcript: string,
-  opts: { title?: string | null; prompt?: SummaryPromptSnapshot | null } = {},
+  opts: { title?: string | null; prompt?: SummaryPromptSnapshot | null; glossaryContext?: string } = {},
 ): string {
+  const glossaryContext = opts.glossaryContext ?? "";
   if (opts.prompt?.content) {
     const date = new Date().toISOString().slice(0, 10);
-    return opts.prompt.content
+    return glossaryContext + opts.prompt.content
       .replaceAll("{{transcript}}", transcript)
       .replaceAll("{{my_transcript}}", "")
       .replaceAll("{{their_transcript}}", "")
@@ -318,6 +322,7 @@ function buildSummaryPrompt(
       .replaceAll("{{date}}", date);
   }
   return [
+    glossaryContext,
     "请根据下面的会议转录生成中文会议摘要。",
     "",
     "要求：",
@@ -329,4 +334,33 @@ function buildSummaryPrompt(
     "会议转录：",
     transcript,
   ].join("\n");
+}
+
+function buildGlossaryPromptContext(vocabDb?: string): string {
+  if (!vocabDb || !existsSync(vocabDb)) return "";
+  try {
+    const db = openDb(vocabDb);
+    try {
+      const rows = db.prepare(`
+        SELECT term, canonical
+        FROM custom_words
+        WHERE enabled = 1 AND scope IN ('prompt', 'both')
+        ORDER BY length(term) DESC, term ASC
+        LIMIT 120
+      `).all() as Array<{ term: string; canonical: string }>;
+      const hints = rows
+        .map((row) => row.term === row.canonical ? row.term : `${row.term} => ${row.canonical}`)
+        .filter(Boolean);
+      if (hints.length === 0) return "";
+      return [
+        `术语表：${hints.join("，")}。`,
+        "摘要/清理时，如果转录里出现同音、近形、大小写或别名写法，输出请统一改为术语表里的 canonical 写法；不要发明术语表外的新专名。",
+        "",
+      ].join("\n");
+    } finally {
+      db.close();
+    }
+  } catch {
+    return "";
+  }
 }

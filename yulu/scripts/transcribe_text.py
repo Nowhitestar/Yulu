@@ -8,6 +8,8 @@ import re
 from pathlib import Path
 from typing import Optional
 
+from realtime_coverage import realtime_coverage_ok
+
 
 FAST_POST_RECORDING_MODE = "fast_summary"
 FULL_POST_RECORDING_MODE = "full_transcribe"
@@ -156,3 +158,23 @@ def read_realtime_transcript(path: Path) -> Optional[str]:
         if isinstance(parsed, (list, dict)):
             return None
     return text
+
+
+def provider_diarization_requested(trans_cfg: dict) -> bool:
+    if str(trans_cfg.get("final_engine") or "").strip().lower() != "hermes":
+        return False
+    hermes = trans_cfg.get("hermes", {}) if isinstance(trans_cfg.get("hermes"), dict) else {}
+    return str(hermes.get("diarize", True)).strip().lower() not in {
+        "0", "false", "no", "off"
+    }
+
+
+def reusable_realtime_transcript(audio_path: Path, trans_cfg: dict) -> tuple[Optional[str], str]:
+    text = read_realtime_transcript(audio_path.with_suffix(".realtime.transcript.txt"))
+    if not text:
+        return None, "missing"
+    if provider_diarization_requested(trans_cfg):
+        return None, "provider_diarization"
+    if not realtime_coverage_ok(audio_path):
+        return None, "coverage"
+    return text, "ok"

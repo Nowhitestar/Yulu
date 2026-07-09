@@ -210,3 +210,24 @@ def test_legacy_mono_falls_back_to_single_transcript(isolated_paths, tmp_path, m
     assert raw == "legacy text"
     assert not wav.with_suffix(".mic.transcript.txt").exists()
     assert not wav.with_suffix(".sys.transcript.txt").exists()
+
+
+def test_fast_summary_reuses_realtime_for_dual_track(isolated_paths, tmp_path, monkeypatch):
+    queue, prompts = isolated_paths
+    wav = tmp_path / "FastMeeting_20260522_120000.wav"
+    _write_dual_track(wav)
+    wav.with_suffix(".realtime.transcript.txt").write_text("live transcript", encoding="utf-8")
+
+    monkeypatch.setattr(
+        transcribe,
+        "load_config",
+        lambda: {"transcription": {"language": "zh", "post_recording_mode": "fast_summary"}},
+    )
+
+    with patch.object(transcribe, "_request_final_transcribe_raw", side_effect=AssertionError("final STT should not run")):
+        transcribe.process_audio(str(wav))
+
+    assert wav.with_suffix(".transcript.txt").read_text(encoding="utf-8") == "live transcript"
+    assert wav.with_suffix(".raw.transcript.txt").read_text(encoding="utf-8") == "live transcript"
+    events = json.loads(queue.read_text())
+    assert sorted(e["prompt_slug"] for e in events) == ["summary", "transcript-cleanup"]
