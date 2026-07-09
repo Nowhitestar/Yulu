@@ -169,13 +169,14 @@ class STTDaemonApp:
             if layout is WavLayout.MONO:
                 result = await self._run_one_job(msg, msg.audio_path, initial_prompt)
                 cleaned, n_replace = self.vocab_cache.apply_replacements(result.text)
+                cleaned_segments, n_seg_replace = self.vocab_cache.apply_replacements_to_segments(result.segments)
                 return TranscribeResponse(
                     job_id=msg.job_id, status="ok",
                     engine_used=msg.engine,
                     language_used=result.language or msg.language,
-                    text=cleaned, raw_text=result.raw_text, segments=result.segments,
+                    text=cleaned, raw_text=result.raw_text, segments=cleaned_segments,
                     vocab_prompt_terms_count=initial_prompt.count(",") + (1 if initial_prompt else 0),
-                    vocab_replacements_count=n_replace,
+                    vocab_replacements_count=n_replace + n_seg_replace,
                     duration_ms=result.duration_ms,
                     layout=layout.value,
                 )
@@ -190,13 +191,14 @@ class STTDaemonApp:
                 finally:
                     tmp_path.unlink(missing_ok=True)
                 cleaned, n_replace = self.vocab_cache.apply_replacements(result.text)
+                cleaned_segments, n_seg_replace = self.vocab_cache.apply_replacements_to_segments(result.segments)
                 return TranscribeResponse(
                     job_id=msg.job_id, status="ok",
                     engine_used=msg.engine,
                     language_used=result.language or msg.language,
-                    text=cleaned, raw_text=result.raw_text, segments=result.segments,
+                    text=cleaned, raw_text=result.raw_text, segments=cleaned_segments,
                     vocab_prompt_terms_count=initial_prompt.count(",") + (1 if initial_prompt else 0),
-                    vocab_replacements_count=n_replace,
+                    vocab_replacements_count=n_replace + n_seg_replace,
                     duration_ms=result.duration_ms,
                     layout=layout.value,
                 )
@@ -227,7 +229,9 @@ class STTDaemonApp:
                     mic_r = await self._run_one_job(msg, str(mic_audio), initial_prompt,
                                                      job_id_suffix=":mic")
                     mic_clean, mic_n = self.vocab_cache.apply_replacements(mic_r.text)
-                    mic_segments = _shift_segments(mic_r.segments, mic_offset_ms)
+                    mic_segments, mic_seg_n = self.vocab_cache.apply_replacements_to_segments(
+                        _shift_segments(mic_r.segments, mic_offset_ms)
+                    )
                     mic_channel = {
                         "text": mic_clean,
                         "raw_text": mic_r.raw_text,
@@ -236,7 +240,7 @@ class STTDaemonApp:
                     }
                     language_used = mic_r.language or language_used
                     total_duration_ms += mic_r.duration_ms
-                    total_replacements += mic_n
+                    total_replacements += mic_n + mic_seg_n
                 else:
                     mic_channel = {"skipped_silent": True, "text": "", "segments": []}
 
@@ -244,7 +248,9 @@ class STTDaemonApp:
                     sys_r = await self._run_one_job(msg, str(sys_audio), initial_prompt,
                                                      job_id_suffix=":sys")
                     sys_clean, sys_n = self.vocab_cache.apply_replacements(sys_r.text)
-                    sys_segments = _shift_segments(sys_r.segments, sys_offset_ms)
+                    sys_segments, sys_seg_n = self.vocab_cache.apply_replacements_to_segments(
+                        _shift_segments(sys_r.segments, sys_offset_ms)
+                    )
                     sys_channel = {
                         "text": sys_clean,
                         "raw_text": sys_r.raw_text,
@@ -254,7 +260,7 @@ class STTDaemonApp:
                     if language_used == msg.language:
                         language_used = sys_r.language or language_used
                     total_duration_ms += sys_r.duration_ms
-                    total_replacements += sys_n
+                    total_replacements += sys_n + sys_seg_n
                 else:
                     sys_channel = {"skipped_silent": True, "text": "", "segments": []}
             finally:
@@ -457,6 +463,8 @@ class STTDaemonApp:
                 engine=msg.engine,
                 language=msg.language,
                 chunk_sec=msg.chunk_sec,
+                meeting_title=msg.meeting_title,
+                context_prompt=msg.context_prompt,
                 mic_stride_offset=0,
                 sys_stride_offset=2,
                 stride_step=4,
@@ -476,6 +484,8 @@ class STTDaemonApp:
                 engine=msg.engine,
                 language=msg.language,
                 chunk_sec=msg.chunk_sec,
+                meeting_title=msg.meeting_title,
+                context_prompt=msg.context_prompt,
                 realtime_engine=realtime_engine,
                 chunk_max_sec=chunk_max_sec,
             )

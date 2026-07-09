@@ -168,6 +168,17 @@ def resolve_attendee_names(
     return _attendee_names(meeting)
 
 
+def attendee_context_prompt(names: list[str]) -> str:
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    for raw in names:
+        name = str(raw).strip()
+        if name and name not in seen:
+            seen.add(name)
+            cleaned.append(name)
+    return f"参会者姓名：{', '.join(cleaned)}。" if cleaned else ""
+
+
 def resolve_attendee_count(
     audio_path: Path,
     *,

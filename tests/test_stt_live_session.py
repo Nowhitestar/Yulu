@@ -97,6 +97,53 @@ def test_manager_emits_partial_when_audio_grows(tmp_path):
     assert any(evt.source == "mic" for evt in received), f"no mic partial emitted: {received}"
 
 
+def test_live_chunk_uses_context_prompt(tmp_path):
+    wav_path = tmp_path / "rec.wav"
+    _write_wav(wav_path, seconds=1.0)
+    backend, runtime, scheduler, cache = _build_minimal_app(tmp_path)
+
+    async def go():
+        await scheduler.start()
+        mgr = LiveSessionManager(scheduler=scheduler, vocab_cache=cache, sessions_dir=tmp_path / "sessions", on_partial=lambda evt: None)
+        sid = "context-live"
+        await mgr.start_session(LiveSession(
+            sid=sid, mic_path=str(wav_path), sys_path=None, engine="mlx", language="zh",
+            chunk_sec=0.5, meeting_title="Team", context_prompt="参会者姓名：Lewis, Ciel。",
+        ))
+        _append_pcm(wav_path, seconds=0.6)
+        await mgr.poll_once(sid)
+        await asyncio.sleep(0.1)
+        await mgr.stop_session(sid, reason="none")
+        await scheduler.stop()
+
+    asyncio.run(go())
+    assert "参会者姓名：Lewis, Ciel。" in (backend.last_initial_prompt or "")
+    assert "会议标题：Team。" in (backend.last_initial_prompt or "")
+
+
+def test_final_pass_uses_context_prompt(tmp_path):
+    wav_path = tmp_path / "rec.wav"
+    _write_wav(wav_path, seconds=1.0)
+    backend, runtime, scheduler, cache = _build_minimal_app(tmp_path)
+
+    async def go():
+        await scheduler.start()
+        mgr = LiveSessionManager(scheduler=scheduler, vocab_cache=cache, sessions_dir=tmp_path / "sessions", on_partial=lambda evt: None)
+        sid = "context-final"
+        await mgr.start_session(LiveSession(
+            sid=sid, mic_path=str(wav_path), sys_path=None, engine="mlx", language="zh",
+            chunk_sec=10, meeting_title="Team", context_prompt="参会者姓名：Lewis, Ciel。",
+        ))
+        fut = await mgr.stop_session(sid, reason="stopped")
+        if fut is not None:
+            await fut
+        await scheduler.stop()
+
+    asyncio.run(go())
+    assert "参会者姓名：Lewis, Ciel。" in (backend.last_initial_prompt or "")
+    assert "会议标题：Team。" in (backend.last_initial_prompt or "")
+
+
 def test_manager_persists_offset_across_restart(tmp_path):
     wav_path = tmp_path / "rec.wav"
     _write_wav(wav_path, seconds=1.0)

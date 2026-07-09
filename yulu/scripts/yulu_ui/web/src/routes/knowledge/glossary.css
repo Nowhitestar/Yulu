@@ -48,7 +48,7 @@
 .glossary-add-btn:hover { background: var(--glass-3); }
 .glossary-draft-row {
   display: grid;
-  grid-template-columns: minmax(150px, 1fr) minmax(110px, 0.6fr) minmax(180px, 1.4fr) max-content max-content;
+  grid-template-columns: minmax(150px, 1fr) minmax(150px, 1fr) minmax(96px, 0.5fr) minmax(180px, 1.4fr) max-content max-content;
   gap: 8px;
   align-items: center;
   margin: 0 0 12px;
@@ -58,7 +58,8 @@
   background: var(--glass-3);
   box-shadow: var(--shadow-card);
 }
-.glossary-draft-row input {
+.glossary-draft-row input,
+.glossary-draft-row select {
   min-width: 0;
   min-height: 32px;
   padding: 6px 10px;
@@ -69,6 +70,10 @@
   font: inherit;
 }
 .glossary-draft-row input:focus {
+  outline: none;
+  border-color: color-mix(in oklch, var(--accent) 42%, var(--edge));
+}
+.glossary-draft-row select:focus {
   outline: none;
   border-color: color-mix(in oklch, var(--accent) 42%, var(--edge));
 }

@@ -179,6 +179,8 @@ class SubscribeSessionRequest:
     engine: str = "mlx"
     language: str = "zh"
     chunk_sec: int = 10
+    meeting_title: Optional[str] = None
+    context_prompt: str = ""
 
 
 @dataclass

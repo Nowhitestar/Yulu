@@ -41,6 +41,16 @@ def test_inject_prompt_appends_terms(tmp_path):
     assert "github" in prompt
 
 
+def test_inject_prompt_includes_alias_mapping(tmp_path):
+    db = tmp_path / "vocab.sqlite"
+    repo = VocabRepo(open_db(db))
+    repo.add(term="阿法学院", canonical="阿尔法学院", scope=Scope.BOTH)
+    cache = VocabCache(db)
+    cache.load()
+    prompt = cache.inject_prompt()
+    assert "阿法学院 => 阿尔法学院" in prompt
+
+
 def test_apply_replacements_substitutes_longest_first(tmp_path):
     db = tmp_path / "vocab.sqlite"
     repo = VocabRepo(open_db(db))
@@ -64,6 +74,19 @@ def test_replacement_is_case_insensitive_and_word_bounded(tmp_path):
     out, _ = cache.apply_replacements("GITHUB is great, also Githubgist is not.")
     assert "GitHub is great" in out
     assert "Githubgist" in out  # word boundary prevents partial match
+
+
+def test_apply_replacements_updates_segment_text(tmp_path):
+    db = tmp_path / "vocab.sqlite"
+    repo = VocabRepo(open_db(db))
+    repo.add(term="阿发学院", canonical="阿尔法学院", scope=Scope.BOTH)
+    cache = VocabCache(db)
+    cache.load()
+    segments, count = cache.apply_replacements_to_segments([
+        {"start": 0.0, "end": 1.0, "text": "今天讨论阿发学院 community"},
+    ])
+    assert count == 1
+    assert segments[0]["text"] == "今天讨论阿尔法学院 community"
 
 
 def test_reload_picks_up_changes(tmp_path):

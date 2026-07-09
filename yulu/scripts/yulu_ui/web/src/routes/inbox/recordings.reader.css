@@ -296,6 +296,32 @@
   word-wrap: break-word;
   margin: 0;
 }
+.reader-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.reader-summary-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+.reader-copy-summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 0 12px;
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-control);
+  color: var(--fg-2);
+  background: var(--glass);
+  font-size: 12px;
+  font-weight: 650;
+}
+.reader-copy-summary:hover {
+  color: var(--fg);
+  background: var(--row-hover);
+}
 .reader-raw {
   font-family: "SF Mono", ui-monospace, monospace;
   font-size: 11px;

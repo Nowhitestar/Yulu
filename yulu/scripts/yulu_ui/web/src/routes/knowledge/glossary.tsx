@@ -9,9 +9,10 @@ import "./glossary.css";
 export const handle = { breadcrumb: "breadcrumb.glossary", filters: null };
 
 interface VocabRow {
-  id: number;
+  id: string;
   term: string;
-  pinyin: string | null;
+  canonical: string;
+  scope: string;
   notes: string | null;
   created_at: string;
   updated_at: string;
@@ -28,17 +29,24 @@ function formatDate(iso: string): string {
   return `${d.getFullYear()}-${mm}-${dd} ${hh}:${mi}`;
 }
 
+function formatScope(scope: unknown, t: (key: string) => string): string {
+  if (scope === "prompt") return t("glossary.scope.prompt");
+  if (scope === "replace") return t("glossary.scope.replace");
+  return t("glossary.scope.both");
+}
+
 export function Glossary() {
   const { data } = trpc.glossary.list.useQuery();
   const qc = useQueryClient();
   const t = useT();
   const [draftOpen, setDraftOpen] = useState(false);
-  const [draft, setDraft] = useState({ term: "", pinyin: "", notes: "" });
+  const [draft, setDraft] = useState({ term: "", canonical: "", scope: "both", notes: "" });
   const [query, setQuery] = useState("");
 
   const COLUMNS: ColumnDef<VocabRow>[] = [
     { key: "term",       label: t("glossary.col.term"),       editable: true,  width: "200px" },
-    { key: "pinyin",     label: t("glossary.col.pinyin"),     editable: true,  width: "140px" },
+    { key: "canonical",  label: t("glossary.col.canonical"),  editable: true,  width: "200px" },
+    { key: "scope",      label: t("glossary.col.scope"),      editable: false, width: "120px", format: (v) => formatScope(v, t) },
     { key: "notes",      label: t("glossary.col.notes"),      editable: true },
     { key: "updated_at", label: t("glossary.col.lastEdited"), editable: false, width: "150px", format: (v) => formatDate(String(v ?? "")) },
   ];
@@ -56,7 +64,7 @@ export function Glossary() {
     const q = query.trim().toLowerCase();
     if (!q) return rawRows;
     return rawRows.filter((row) =>
-      [row.term, row.pinyin, row.notes].some((value) => String(value ?? "").toLowerCase().includes(q))
+      [row.term, row.canonical, row.scope, row.notes].some((value) => String(value ?? "").toLowerCase().includes(q))
     );
   }, [data, query]);
 
@@ -65,20 +73,21 @@ export function Glossary() {
     if (!term) return;
     await addMut.mutateAsync({
       term,
-      pinyin: draft.pinyin.trim() || undefined,
+      canonical: draft.canonical.trim() || term,
+      scope: draft.scope as "prompt" | "replace" | "both",
       notes: draft.notes.trim() || undefined,
     });
-    setDraft({ term: "", pinyin: "", notes: "" });
+    setDraft({ term: "", canonical: "", scope: "both", notes: "" });
     setDraftOpen(false);
   };
 
   const onCellCommit = (id: number | string, key: string, value: string) => {
-    updateMut.mutateAsync({ id: Number(id), [key]: value } as { id: number; [k: string]: unknown });
+    updateMut.mutateAsync({ id: String(id), [key]: value } as { id: string; [k: string]: unknown });
   };
 
   const onBulkDelete = async (ids: Array<number | string>) => {
     for (const id of ids) {
-      await deleteMut.mutateAsync({ id: Number(id) });
+      await deleteMut.mutateAsync({ id: String(id) });
     }
     qc.invalidateQueries({ queryKey: [["glossary", "list"]] });
   };
@@ -104,10 +113,19 @@ export function Glossary() {
             placeholder={t("glossary.col.term")}
           />
           <input
-            value={draft.pinyin}
-            onChange={(event) => setDraft((prev) => ({ ...prev, pinyin: event.target.value }))}
-            placeholder={t("glossary.col.pinyin")}
+            value={draft.canonical}
+            onChange={(event) => setDraft((prev) => ({ ...prev, canonical: event.target.value }))}
+            placeholder={t("glossary.col.canonical")}
           />
+          <select
+            value={draft.scope}
+            onChange={(event) => setDraft((prev) => ({ ...prev, scope: event.target.value }))}
+            aria-label={t("glossary.col.scope")}
+          >
+            <option value="both">{t("glossary.scope.both")}</option>
+            <option value="prompt">{t("glossary.scope.prompt")}</option>
+            <option value="replace">{t("glossary.scope.replace")}</option>
+          </select>
           <input
             value={draft.notes}
             onChange={(event) => setDraft((prev) => ({ ...prev, notes: event.target.value }))}

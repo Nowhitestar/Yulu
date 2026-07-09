@@ -4,17 +4,20 @@ import { glossaryRouter } from "../../src/routers/glossary.js";
 import { createCaller, type AppContext } from "../../src/trpc.js";
 
 const VOCAB_SCHEMA = `
-CREATE TABLE vocab (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  term TEXT NOT NULL UNIQUE,
-  pinyin TEXT,
-  notes TEXT,
+CREATE TABLE custom_words (
+  id TEXT PRIMARY KEY,
+  term TEXT NOT NULL,
+  canonical TEXT NOT NULL,
+  scope TEXT NOT NULL,
+  source TEXT NOT NULL,
+  enabled INTEGER NOT NULL,
+  note TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
-INSERT INTO vocab (term, pinyin, notes, created_at, updated_at) VALUES
- ('AgentKey', NULL, 'product', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'),
- ('OpenClaw', NULL, NULL, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');
+INSERT INTO custom_words (id, term, canonical, scope, source, enabled, note, created_at, updated_at) VALUES
+ ('w1', 'AgentKey', 'AgentKey', 'both', 'manual', 1, 'product', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'),
+ ('w2', 'OpenClaw', 'OpenClaw', 'both', 'manual', 1, NULL, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');
 `;
 
 function makeCtx() {
@@ -46,7 +49,7 @@ describe("glossaryRouter", () => {
     try {
       const caller = createCaller(glossaryRouter, ctx);
       expect(await caller.list()).toEqual([]);
-      const r = db.prepare("SELECT COUNT(*) AS n FROM vocab").get() as { n: number };
+      const r = db.prepare("SELECT COUNT(*) AS n FROM custom_words").get() as { n: number };
       expect(r.n).toBe(0);
     } finally { db.close(); }
   });
@@ -56,9 +59,36 @@ describe("glossaryRouter", () => {
     try {
       const caller = createCaller(glossaryRouter, ctx);
       await caller.add({ term: "NewTerm" });
-      const r = ctx.db.vocab.prepare("SELECT COUNT(*) AS n FROM vocab").get() as { n: number };
+      const r = ctx.db.vocab.prepare("SELECT COUNT(*) AS n FROM custom_words").get() as { n: number };
       expect(r.n).toBe(3);
+      const row = ctx.db.vocab.prepare("SELECT canonical, scope FROM custom_words WHERE term = ?").get("NewTerm") as { canonical: string; scope: string };
+      expect(row).toEqual({ canonical: "NewTerm", scope: "both" });
       expect(sighup).toHaveBeenCalledWith("com.yulu.sttdaemon");
     } finally { cleanup(); }
+  });
+
+  it("migrates legacy vocab rows into custom_words", async () => {
+    const { db } = makeTmpDb(`
+      CREATE TABLE vocab (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        term TEXT NOT NULL UNIQUE,
+        pinyin TEXT,
+        notes TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      INSERT INTO vocab (term, pinyin, notes, created_at, updated_at)
+      VALUES ('阿尔法学院', NULL, NULL, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');
+    `);
+    const ctx = {
+      db: { vocab: db, prompts: null, search: null },
+      launchctl: { sighup: vi.fn() },
+    } as unknown as AppContext;
+    try {
+      const caller = createCaller(glossaryRouter, ctx);
+      const rows = await caller.list() as Array<{ term: string; canonical: string; scope: string }>;
+      expect(rows).toMatchObject([{ term: "阿尔法学院", canonical: "阿尔法学院", scope: "both" }]);
+      expect(db.prepare("SELECT COUNT(*) AS n FROM custom_words").get()).toEqual({ n: 1 });
+    } finally { db.close(); }
   });
 });
