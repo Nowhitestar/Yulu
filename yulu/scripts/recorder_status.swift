@@ -176,6 +176,7 @@ class AppDel: NSObject, NSApplicationDelegate {
     }
 
     @objc func check() {
+        if stopping { return }
         guard !statePath.isEmpty, FileManager.default.fileExists(atPath: statePath),
               let d = try? Data(contentsOf: URL(fileURLWithPath: statePath)),
               let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { return }
