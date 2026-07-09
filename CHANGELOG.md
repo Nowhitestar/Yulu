@@ -4,6 +4,20 @@ All notable changes to Yulu are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.15.0](https://github.com/Nowhitestar/Yulu/compare/v0.14.0...v0.15.0) (2026-07-09)
+
+
+### Features
+
+* add voice input workflow and streamline agent console ([f20c585](https://github.com/Nowhitestar/Yulu/commit/f20c585d31d32b8365f4b504e8afa09f3f14f46a))
+
+
+### Bug Fixes
+
+* **stt:** use calendar attendees for speaker names ([51d095e](https://github.com/Nowhitestar/Yulu/commit/51d095ed7adb4947925b060c5370c878e6e6ce14))
+* **transcription:** reuse live transcripts and glossary for summaries ([c7e7738](https://github.com/Nowhitestar/Yulu/commit/c7e7738bede80fa13290bb124ac2db78305f83f7))
+* **ui:** keep recorder window in saving state after stop ([a98ed47](https://github.com/Nowhitestar/Yulu/commit/a98ed47f86220769a2446064015e16d8090826d9))
+
 ## [0.14.0](https://github.com/Nowhitestar/Yulu/compare/v0.13.0...v0.14.0) (2026-06-30)
 
 
