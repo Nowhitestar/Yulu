@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sqlite3
 import shlex
 import shutil
 import signal
@@ -28,6 +29,7 @@ LOG_PATH = Path.home() / ".config" / "yulu" / "agent_queue_worker.log"
 PID_PATH = Path.home() / ".config" / "yulu" / "agent_queue_worker.pid"
 WORKER_NAME = "yulu-agent-queue-worker"
 PROMPTS_DB = Path.home() / ".config" / "yulu" / "prompts.sqlite"
+VOCAB_DB = Path.home() / ".config" / "yulu" / "vocab.sqlite"
 SCRIPT_DIR = Path(__file__).resolve().parent
 CODEX_AGENT_COMMAND = ["codex", "exec", "--sandbox", "read-only", "--skip-git-repo-check"]
 
@@ -134,6 +136,7 @@ def _looks_like_agent_event_json(text: str) -> bool:
         "summary_ready",
         "summary_request",
         "transcribing",
+        "summarizing",
         "realtime_transcribing",
         "realtime_transcript_ready",
         "realtime_transcript_error",
@@ -205,6 +208,48 @@ def _maybe_summary_notify(*, summary_path: Path, prompt_slug: str) -> None:
         pass
 
 
+def _glossary_prompt_context(vocab_db: Path = VOCAB_DB, *, limit: int = 120) -> str:
+    if not vocab_db.exists():
+        return ""
+    try:
+        from vocab import open_db as _open_vocab_db
+        conn0 = _open_vocab_db(vocab_db)
+        conn0.close()
+    except Exception as exc:
+        _log(f"failed to migrate glossary context: {exc}")
+    try:
+        conn = sqlite3.connect(str(vocab_db))
+        try:
+            rows = conn.execute(
+                """
+                SELECT term, canonical
+                FROM custom_words
+                WHERE enabled = 1 AND scope IN ('prompt', 'both')
+                ORDER BY length(term) DESC, term ASC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        finally:
+            conn.close()
+    except sqlite3.Error as exc:
+        _log(f"failed to read glossary context: {exc}")
+        return ""
+    hints = [
+        term if term == canonical else f"{term} => {canonical}"
+        for term, canonical in rows
+        if str(term or "").strip() and str(canonical or "").strip()
+    ]
+    if not hints:
+        return ""
+    return (
+        "术语表："
+        + "，".join(hints)
+        + "。\n摘要/清理时，如果转录里出现同音、近形、大小写或别名写法，"
+        "输出请统一改为术语表里的 canonical 写法；不要发明术语表外的新专名。\n\n"
+    )
+
+
 def _handle_summary_request(
     entry: dict[str, Any],
     llm_command: list[str],
@@ -212,6 +257,7 @@ def _handle_summary_request(
     *,
     cache,  # PromptsCache
     prompts_db: Path = PROMPTS_DB,
+    vocab_db: Path = VOCAB_DB,
 ) -> bool:
     """Single LLM dispatch for one summary_request event.
 
@@ -268,6 +314,10 @@ def _handle_summary_request(
         prompt_id = prompt_id or default.id
         prompt_slug = prompt_slug or default.slug
         prompt_name = prompt_name or default.name
+
+    glossary_context = _glossary_prompt_context(vocab_db)
+    if glossary_context:
+        snapshot = glossary_context + str(snapshot)
 
     # Transcript must exist; fail early for a clear error message.
     if not transcript_path.exists():

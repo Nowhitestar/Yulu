@@ -123,6 +123,7 @@ def test_invalid_agent_event_json_marks_error_and_does_not_overwrite_existing_su
 def test_summary_guardrail_rejects_short_output_and_agent_queue_json():
     assert not _is_valid_summary("## TL;DR\n短")
     assert not _is_valid_summary('[{"type":"realtime_transcript_error"}]')
+    assert not _is_valid_summary('[{"type":"summarizing"}]')
     assert _is_valid_summary(valid_summary_text())
 
 

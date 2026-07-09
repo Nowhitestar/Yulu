@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router";
 import { useQueryClient } from "@tanstack/react-query";
-import { Activity, ChevronLeft, Code, FileText, RefreshCw, Sparkles, Pencil, Trash2, Users, GitMerge } from "lucide-react";
+import { Activity, Check, ChevronLeft, Code, Copy, FileText, RefreshCw, Sparkles, Pencil, Trash2, Users, GitMerge } from "lucide-react";
 import { trpc } from "../../trpc.js";
 import { AudioPlayer } from "../../components/AudioPlayer.js";
 import { TranscriptView, type SpeakerData } from "../../components/TranscriptView.js";
@@ -302,6 +302,8 @@ export function RecordingReader() {
   const [pendingShareChannel, setPendingShareChannel] = useState<SummaryChannel | null>(null);
   const targetAudioSrc = data ? audioSrcFor(data) : null;
   const [mountedAudioSrc, setMountedAudioSrc] = useState<string | null>(null);
+  const [copiedSummary, setCopiedSummary] = useState(false);
+  const copyResetRef = useRef<number | null>(null);
 
   const transcribeMut = trpc.recordings.transcribe.useMutation();
   const summarizeMut = trpc.recordings.summarize.useMutation();
@@ -489,11 +491,32 @@ export function RecordingReader() {
     });
   };
 
+  const handleCopySummary = async () => {
+    const summary = data?.summary ?? "";
+    if (!summary) return;
+    try {
+      if (!navigator.clipboard?.writeText) throw new Error("clipboard unavailable");
+      await navigator.clipboard.writeText(summary);
+      setCopiedSummary(true);
+      if (copyResetRef.current !== null) window.clearTimeout(copyResetRef.current);
+      copyResetRef.current = window.setTimeout(() => {
+        setCopiedSummary(false);
+        copyResetRef.current = null;
+      }, 1500);
+    } catch {
+      window.prompt(t("reader.copySummary.prompt"), summary);
+    }
+  };
+
   // Local override lets clicks switch tabs even if the router's navigation
   // is debounced (or rejected in jsdom test environment). URL is still
   // updated via setSearchParams for shareable deep links.
   const [override, setOverride] = useState<Tab | null>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => () => {
+    if (copyResetRef.current !== null) window.clearTimeout(copyResetRef.current);
+  }, []);
 
   const tabParam = params.get("tab");
   // Raw is only a real, separate view when the preserved pre-cleanup snapshot
@@ -759,7 +782,23 @@ export function RecordingReader() {
 
         <div className="reader-body" ref={bodyRef}>
           {tab === "summary" && (
-            data.summary ? <MarkdownView text={data.summary} /> : <EmptyState label={t("reader.empty.summary")} />
+            data.summary ? (
+              <div className="reader-summary">
+                <div className="reader-summary-actions">
+                  <button
+                    type="button"
+                    className="reader-copy-summary"
+                    onClick={handleCopySummary}
+                    aria-label={t("reader.copySummary.aria")}
+                    title={t("reader.copySummary.title")}
+                  >
+                    {copiedSummary ? <Check size={14} strokeWidth={2} /> : <Copy size={14} strokeWidth={1.75} />}
+                    <span>{copiedSummary ? t("reader.copySummary.done") : t("reader.copySummary")}</span>
+                  </button>
+                </div>
+                <MarkdownView text={data.summary} />
+              </div>
+            ) : <EmptyState label={t("reader.empty.summary")} />
           )}
           {tab === "transcript" && (
             data.transcript

@@ -131,6 +131,7 @@ def test_transcribe_applies_vocab(tmp_path):
     assert payload["status"] == "ok"
     # MockSTTBackend returns "HELLO github world"; cache should rewrite to GitHub
     assert "GitHub" in payload["text"]
+    assert "GitHub" in payload["segments"][0]["text"]
     # initial_prompt should contain Kubernetes (the only prompt term we added)
     assert payload["vocab_prompt_terms_count"] >= 1
 

@@ -3,6 +3,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { EventEmitter } from "node:events";
+import Database from "better-sqlite3";
 import { JobRegistry } from "../src/jobStatus.js";
 import { PubSub, type AppChannels } from "../src/pubsub.js";
 import { runTranscribe, runSummarize, __setSpawnForTesting } from "../src/jobRunner.js";
@@ -265,5 +266,47 @@ describe("jobRunner.runSummarize (direct mode)", () => {
     });
 
     expect(stdin).toBe("Title: Team Sync\nBody: hello world");
+  });
+
+  it("injects glossary canonical context into direct-mode summary prompts", async () => {
+    const transcriptPath = join(root, "memo_test.transcript.txt");
+    const summaryPath = join(root, "memo_test.summary.md");
+    const vocabDb = join(root, "vocab.sqlite");
+    writeFileSync(transcriptPath, "今天聊了阿发学院 community");
+    const db = new Database(vocabDb);
+    db.exec(`
+      CREATE TABLE custom_words (
+        id TEXT PRIMARY KEY,
+        term TEXT NOT NULL,
+        canonical TEXT NOT NULL,
+        scope TEXT NOT NULL,
+        enabled INTEGER NOT NULL
+      );
+      INSERT INTO custom_words VALUES ('w1', '阿发学院', '阿尔法学院', 'both', 1);
+    `);
+    db.close();
+
+    let stdin = "";
+    __setSpawnForTesting(() => {
+      const proc = fakeSpawn(0, "", "summary ok");
+      proc.stdin.write = (chunk: string | Buffer) => { stdin += chunk.toString(); };
+      return proc as never;
+    });
+
+    await runSummarize({
+      stem: "memo_test",
+      transcriptPath,
+      summaryPath,
+      prompt: { id: "p1", slug: "summary", name: "Summary", content: "Body: {{transcript}}" },
+      llmCommand: ["codex"],
+      agentQueueJson: join(root, "agent-queue.json"),
+      vocabDb,
+      registry,
+      pubsub,
+    });
+
+    expect(stdin).toContain("阿发学院 => 阿尔法学院");
+    expect(stdin).toContain("canonical 写法");
+    expect(stdin).toContain("Body: 今天聊了阿发学院 community");
   });
 });

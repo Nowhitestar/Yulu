@@ -5,6 +5,7 @@ agent（闪电）在心跳中读取并推送到 Telegram。
 用法：
   from agent_notify import notify
   notify("transcribing", title="项目周会")
+  notify("summarizing", title="项目周会")
   notify("transcript", title="项目周会", path="/path/to/transcript.txt")
   notify("summary_ready", title="项目周会", path="/path/to/summary.md")
 """

@@ -14,6 +14,7 @@ sys.path.insert(0, str(SCRIPTS))
 import pytest
 from prompts import PromptsRepo, SummariesRepo, Category, SummaryStatus, open_db
 from prompts.cache import PromptsCache
+from vocab import VocabRepo, Scope, open_db as open_vocab_db
 import agent_queue_worker as worker
 
 
@@ -178,6 +179,30 @@ def test_template_variables_all_substituted(tmp_path):
     assert "title=May Meeting" in payload
     assert "body content" in payload
     assert "{{" not in payload
+
+
+def test_summary_prompt_includes_glossary_canonical_context(tmp_path):
+    ctx = _setup(tmp_path)
+    ctx["transcript"].write_text("今天聊了阿发学院 community", encoding="utf-8")
+    vocab_db = tmp_path / "vocab.sqlite"
+    repo = VocabRepo(open_vocab_db(vocab_db))
+    repo.add(term="阿发学院", canonical="阿尔法学院", scope=Scope.BOTH)
+    capture_file = tmp_path / "captured-glossary-prompt.txt"
+    capture_llm = [str(_capture_llm(
+        tmp_path,
+        capture_file,
+        output="## Summary\n\n阿尔法学院相关讨论已经整理完成。\n\n* action item one\n* action item two",
+    ))]
+    cache = PromptsCache(ctx["prompts_db"]); cache.load()
+    entry = _new_summary_event(ctx)
+    worker._handle_summary_request(
+        entry, capture_llm, timeout_sec=30, cache=cache,
+        prompts_db=ctx["prompts_db"], vocab_db=vocab_db,
+    )
+    payload = capture_file.read_text(encoding="utf-8")
+    assert "阿发学院 => 阿尔法学院" in payload
+    assert "canonical 写法" in payload
+    assert "今天聊了阿发学院 community" in payload
 
 
 def test_cleanup_slug_writes_to_transcript_path(tmp_path):

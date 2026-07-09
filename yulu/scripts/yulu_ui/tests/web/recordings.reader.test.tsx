@@ -15,6 +15,7 @@ const sendSummaryMutate = vi.fn();
 const promptListMock = vi.fn();
 const navigateMock = vi.fn();
 const confirmMock = vi.fn(() => true);
+const clipboardWriteText = vi.fn(() => Promise.resolve());
 
 vi.mock("../../web/src/trpc.js", () => ({
   trpc: {
@@ -68,6 +69,11 @@ function renderAt(stem: string) {
 }
 
 beforeEach(() => {
+  Object.defineProperty(navigator, "clipboard", {
+    value: { writeText: clipboardWriteText },
+    configurable: true,
+  });
+  clipboardWriteText.mockClear();
   transcribeMutate.mockClear();
   summarizeMutate.mockClear();
   promptListMock.mockReset();
@@ -232,6 +238,14 @@ describe("RecordingReader", () => {
     getMock.mockReturnValue({ data: { stem: "Memo_20260101_120000", title: "Memo", mtimeMs: 1, transcript: "t", summary: "# Heading", realtime: null, hasRealtime: false, status: "idle" }, isPending: false });
     renderAt("Memo_20260101_120000");
     expect(screen.getByTestId("markdown")).toHaveTextContent("# Heading");
+  });
+
+  it("copies the raw summary Markdown", async () => {
+    const summary = "# Heading\n\n- keep\n- markdown";
+    getMock.mockReturnValue({ data: { ...baseData, summary }, isPending: false });
+    renderAt(baseData.stem);
+    fireEvent.click(screen.getByRole("button", { name: /复制摘要 Markdown/i }));
+    await waitFor(() => expect(clipboardWriteText).toHaveBeenCalledWith(summary));
   });
 
   // ---- Feature 5: rename / tags / delete ----

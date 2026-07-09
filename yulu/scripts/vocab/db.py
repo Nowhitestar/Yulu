@@ -79,8 +79,52 @@ def open_db(path: Path) -> sqlite3.Connection:
         "INSERT OR IGNORE INTO meta(key, value) VALUES ('schema_version', ?)",
         (SCHEMA_VERSION,),
     )
+    _migrate_legacy_vocab(conn)
     conn.commit()
     return conn
+
+
+def _migrate_legacy_vocab(conn: sqlite3.Connection) -> None:
+    table = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='vocab'"
+    ).fetchone()
+    if table is None:
+        return
+    try:
+        rows = conn.execute(
+            "SELECT term, pinyin, notes, created_at, updated_at FROM vocab"
+        ).fetchall()
+    except sqlite3.Error:
+        return
+    for row in rows:
+        term = str(row["term"] or "").strip()
+        if not term:
+            continue
+        exists = conn.execute(
+            "SELECT 1 FROM custom_words WHERE term=? AND canonical=? LIMIT 1",
+            (term, term),
+        ).fetchone()
+        if exists:
+            continue
+        note_parts = []
+        if row["notes"]:
+            note_parts.append(str(row["notes"]))
+        if row["pinyin"]:
+            note_parts.append(f"pinyin: {row['pinyin']}")
+        conn.execute(
+            """
+            INSERT INTO custom_words(id, term, canonical, scope, source, enabled, note, created_at, updated_at)
+            VALUES (?, ?, ?, 'both', 'manual', 1, ?, ?, ?)
+            """,
+            (
+                str(uuid.uuid4()),
+                term,
+                term,
+                "\n".join(note_parts) or None,
+                row["created_at"] or _now_iso(),
+                row["updated_at"] or _now_iso(),
+            ),
+        )
 
 
 def _row_to_word(row: sqlite3.Row) -> CustomWord:
