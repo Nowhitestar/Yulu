@@ -13,12 +13,12 @@ export interface AutomationSectionProps {
 // The advanced match arrays — registry key → i18n key roots for label/help. The
 // detector matches a foreground window against these; they're power-user knobs,
 // hidden behind the Advanced disclosure (P3-2).
-const MATCH_ARRAYS: Array<{ key: string; labelKey: string; helpKey: string }> = [
-  { key: "meeting_detection.window_keywords",        labelKey: "settings.automation.match.windowKeywords.label",  helpKey: "settings.automation.match.windowKeywords.help" },
-  { key: "meeting_detection.app_name_hints",         labelKey: "settings.automation.match.appHints.label",        helpKey: "settings.automation.match.appHints.help" },
-  { key: "meeting_detection.target_app_names",       labelKey: "settings.automation.match.targetApps.label",      helpKey: "settings.automation.match.targetApps.help" },
-  { key: "meeting_detection.dedicated_meeting_apps", labelKey: "settings.automation.match.dedicatedApps.label",   helpKey: "settings.automation.match.dedicatedApps.help" },
-  { key: "meeting_detection.ignore_window_keywords", labelKey: "settings.automation.match.ignoreKeywords.label",  helpKey: "settings.automation.match.ignoreKeywords.help" },
+const MATCH_ARRAYS: Array<{ key: string; field: string; labelKey: string; helpKey: string }> = [
+  { key: "meeting_detection.window_keywords",        field: "window_keywords",        labelKey: "settings.automation.match.windowKeywords.label",  helpKey: "settings.automation.match.windowKeywords.help" },
+  { key: "meeting_detection.app_name_hints",         field: "app_name_hints",         labelKey: "settings.automation.match.appHints.label",        helpKey: "settings.automation.match.appHints.help" },
+  { key: "meeting_detection.target_app_names",       field: "target_app_names",       labelKey: "settings.automation.match.targetApps.label",      helpKey: "settings.automation.match.targetApps.help" },
+  { key: "meeting_detection.dedicated_meeting_apps", field: "dedicated_meeting_apps", labelKey: "settings.automation.match.dedicatedApps.label",   helpKey: "settings.automation.match.dedicatedApps.help" },
+  { key: "meeting_detection.ignore_window_keywords", field: "ignore_window_keywords", labelKey: "settings.automation.match.ignoreKeywords.label",  helpKey: "settings.automation.match.ignoreKeywords.help" },
 ];
 
 /**
@@ -93,12 +93,12 @@ export function AutomationSection({ tracker }: AutomationSectionProps) {
       />
 
       <AdvancedDisclosure title={t("settings.automation.match.heading")} note={t("settings.automation.match.note")}>
-        {MATCH_ARRAYS.map(({ key, labelKey, helpKey }) => (
+        {MATCH_ARRAYS.map(({ key, field, labelKey, helpKey }) => (
           <ArrayField
             key={key}
             label={t(labelKey)}
             help={t(helpKey)}
-            value={Array.isArray(md[key]) ? (md[key] as string[]) : []}
+            value={Array.isArray(md[field]) ? (md[field] as string[]) : []}
             onChange={(next) => commit(key)(next)}
             blocked={isBlocked(key)}
           />

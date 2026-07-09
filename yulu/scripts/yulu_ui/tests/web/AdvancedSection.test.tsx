@@ -78,6 +78,9 @@ describe("AdvancedSection — cloud transcription command (TRANS-02, re-homed)",
     const addArg = screen.getAllByRole("button", { name: /\+ 添加参数/i });
     const user = userEvent.setup();
     await user.click(addArg[addArg.length - 1]!);
+    const added = screen.getAllByRole("textbox").at(-1) as HTMLInputElement;
+    await user.type(added, "whisper-cli");
+    await user.tab();
     await vi.waitFor(() =>
       expect(updateMutate.mock.calls.some((c) => c[0]?.key === "transcription.cloud_command")).toBe(true),
     );
