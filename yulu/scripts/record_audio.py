@@ -350,10 +350,12 @@ def resume_interrupted_recording(resp):
 def _combine_segments_to_first_wav(paths):
     segments = [Path(p) for p in _unique_existing(paths) if Path(p).exists()]
     if not segments:
-        return ""
+        return "", []
     if len(segments) == 1:
-        return str(segments[0])
+        only = str(segments[0])
+        return only, [only]
     first = segments[0]
+    stored_segments = [str(first)]
     tmp = first.with_suffix(f".merge-{os.getpid()}.wav")
     params = None
     with wave.open(str(tmp), "wb") as out:
@@ -372,9 +374,11 @@ def _combine_segments_to_first_wav(paths):
             if archived.exists():
                 archived.unlink()
             seg.rename(archived)
+            stored_segments.append(str(archived))
         except OSError:
+            stored_segments.append(str(seg))
             pass
-    return str(first)
+    return str(first), stored_segments
 
 def _raise_if_daemon_recording(lock_handle):
     """Defer to the audio_daemon as the canonical "is recording" arbiter.
@@ -480,18 +484,22 @@ def daemon_stop():
         dur = resp.get("duration", 0)
         path = resp.get("file", "")
         segments = _unique_existing([*_recording_segments(state), path])
-        final_path = _combine_segments_to_first_wav(segments) if len(segments) > 1 else path
+        if len(segments) > 1:
+            final_path, stored_segments = _combine_segments_to_first_wav(segments)
+        else:
+            final_path = path
+            stored_segments = segments
         set_recording_stopped(
             path=STATE_PATH,
             extra={
                 "audio_path": final_path,
                 "file_path": final_path,
-                "segments": segments,
+                "segments": stored_segments,
                 "stopped_at": datetime.now().isoformat(timespec="seconds"),
             },
         )
         log(f"⏹ Recording stopped: {dur}s → {final_path or path}")
-        return {"path": final_path or path, "duration": dur, "segments": segments}
+        return {"path": final_path or path, "duration": dur, "segments": stored_segments}
 
     # Socket failure while state says daemon recording: stop quickly and keep file.
     stop_realtime_transcriber(wait=True, graceful=False)

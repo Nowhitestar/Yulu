@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ### Bug Fixes
 
 * **settings:** preserve draft values when editing automation match arrays.
+* **audio:** serialize recorder state and preserve resumed segment paths.
 
 ## [0.16.0](https://github.com/Nowhitestar/Yulu/compare/v0.15.0...v0.16.0) (2026-07-09)
 

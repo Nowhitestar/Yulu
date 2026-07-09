@@ -110,9 +110,17 @@ def test_sysaudio_conversion_kept_verbatim():
 def test_mic_capture_downmixes_channels_and_applies_gain():
     src = _source()
     assert "let DEFAULT_MIC_GAIN: Float" in src
-    assert "var micGain: Float = DEFAULT_MIC_GAIN" in src
+    assert "private var micGainState: Float = DEFAULT_MIC_GAIN" in src
     assert "for channel in 0..<channels" in src
-    assert "$0 * micGain" in src
+    assert "let gain = self.micGainState" in src
+    assert "$0 * gain" in src
+
+
+def test_audio_callbacks_do_not_sync_read_recorder_state():
+    src = _source()
+    assert "guard let self = self, self.recorder.isRecording else" not in src
+    assert "guard type == .audio, recorder.isRecording else" not in src
+    assert "guard recorder.isRecording else" not in src
 
 
 def test_protocol_block_has_no_sck_or_tap_vocabulary():
@@ -258,9 +266,9 @@ def test_tap_feeds_existing_sink():
 
 def test_dual_source_recording_writes_common_frames_not_zero_padded_max():
     src = _source()
-    match = re.search(r"private func mixAndWrite\(\)\s*\{(.*?)\n    \}", src, re.DOTALL)
-    assert match is not None, "mixAndWrite function not found"
-    body = match.group(1)
+    start = src.index("private func mixAndWriteOnQueue()")
+    end = src.index("private func flushBuffersOnQueue()", start)
+    body = src[start:end]
     assert "min(sysFrames, micFrames)" in body, (
         "dual-source recording must write only common mic/sys frames"
     )

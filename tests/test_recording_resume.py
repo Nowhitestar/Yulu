@@ -82,4 +82,9 @@ def test_daemon_stop_merges_resume_segments_back_to_first_wav(tmp_path, monkeypa
     with wave.open(str(first), "rb") as w:
         assert w.getnframes() == 10
     assert not second.exists()
-    assert second.with_suffix(".part2.wav").exists()
+    archived = second.with_suffix(".part2.wav")
+    assert archived.exists()
+    assert result["segments"] == [str(first), str(archived)]
+    state = json.loads(state_path.read_text())
+    assert state["audio_path"] == str(first)
+    assert state["segments"] == [str(first), str(archived)]
