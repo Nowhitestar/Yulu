@@ -31,6 +31,7 @@ export function Prompts() {
     { id: "all",       label: t("prompts.filter.all") },
     { id: "summary",   label: t("prompts.filter.summary") },
     { id: "cleanup",   label: t("prompts.filter.cleanup") },
+    { id: "voice",     label: t("prompts.filter.voice") },
   ];
 
   const [activeFilters, setActiveFilters] = useState<string[]>([]);

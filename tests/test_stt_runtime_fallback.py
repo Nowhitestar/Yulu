@@ -82,6 +82,18 @@ def test_healthy_mlx_does_not_fall_back():
     assert whisper.calls == 0
 
 
+def test_hermes_failure_falls_back_to_mlx():
+    hermes = MockSTTBackend(canned_text="from-hermes", raise_first_n=1)
+    mlx = MockSTTBackend(canned_text="from-mlx")
+    runtime = STTRuntime(backends={"hermes": hermes, "mlx": mlx})
+
+    result = _transcribe(runtime, "hermes")
+
+    assert result.text == "from-mlx"
+    assert hermes.calls == 1
+    assert mlx.calls == 1
+
+
 # ── BUG 8: transcription.mode dispatch (local / cloud-fallback / cloud-priority) ──
 
 def _runtime_with_cloud(*, mode, mlx_fails=0, cloud_fails=0,

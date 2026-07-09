@@ -8,7 +8,7 @@ CREATE TABLE prompts (
   id TEXT PRIMARY KEY,
   slug TEXT NOT NULL UNIQUE,
   name TEXT NOT NULL,
-  category TEXT NOT NULL CHECK(category IN ('summary','cleanup')),
+  category TEXT NOT NULL CHECK(category IN ('summary','cleanup','voice')),
   content TEXT NOT NULL,
   is_auto_run INTEGER NOT NULL DEFAULT 0,
   source TEXT NOT NULL DEFAULT 'manual',
@@ -19,7 +19,8 @@ CREATE TABLE prompts (
 );
 INSERT INTO prompts VALUES
  ('id-1','default','Default Summary','summary','Summarize the meeting.',1,'seed',0,NULL,'2026-01-01T00:00:00Z','2026-01-01T00:00:00Z'),
- ('id-2','cleanup','Cleanup','cleanup','Clean noise.',0,'seed',1,NULL,'2026-01-01T00:00:00Z','2026-01-01T00:00:00Z');
+ ('id-2','cleanup','Cleanup','cleanup','Clean noise.',0,'seed',1,NULL,'2026-01-01T00:00:00Z','2026-01-01T00:00:00Z'),
+ ('id-3','dictation-cleanup','Dictation Cleanup','voice','Clean dictation.',0,'seed',2,NULL,'2026-01-01T00:00:00Z','2026-01-01T00:00:00Z');
 `;
 
 function makeCtx() {
@@ -38,17 +39,27 @@ describe("promptsRouter", () => {
     try {
       const caller = createCaller(promptsRouter, ctx);
       const rows = (await caller.list({})) as Array<{ slug: string }>;
-      expect(rows.map((r) => r.slug)).toEqual(["default", "cleanup"]);
+      expect(rows.map((r) => r.slug)).toEqual(["default", "cleanup", "dictation-cleanup"]);
     } finally { cleanup(); }
   });
 
-  it("update() writes + SIGHUPs agentqueue", async () => {
+  it("list() can filter voice prompts", async () => {
+    const { ctx, cleanup } = makeCtx();
+    try {
+      const caller = createCaller(promptsRouter, ctx);
+      const rows = (await caller.list({ category: "voice" })) as Array<{ slug: string }>;
+      expect(rows.map((r) => r.slug)).toEqual(["dictation-cleanup"]);
+    } finally { cleanup(); }
+  });
+
+  it("update() writes, marks edited seeds manual, and SIGHUPs agentqueue", async () => {
     const { ctx, sighup, cleanup } = makeCtx();
     try {
       const caller = createCaller(promptsRouter, ctx);
       await caller.update({ id: "id-1", content: "New body." });
-      const row = ctx.db.prompts.prepare("SELECT content FROM prompts WHERE id=?").get("id-1") as { content: string };
+      const row = ctx.db.prompts.prepare("SELECT content, source FROM prompts WHERE id=?").get("id-1") as { content: string; source: string };
       expect(row.content).toBe("New body.");
+      expect(row.source).toBe("manual");
       expect(sighup).toHaveBeenCalledWith("com.yulu.agentqueue");
     } finally { cleanup(); }
   });

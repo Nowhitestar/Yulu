@@ -43,8 +43,10 @@ def test_transcribe_request_roundtrip():
         word_timestamps=False,
         condition_on_previous=True,
         hallucination_silence_threshold=2.0,
-        timeout_sec=7200,
+        timeout_sec=1.55,
         context_prompt="参会者姓名：Lewis, Ciel。",
+        dictation_mode="translate",
+        target_language="English",
     )
     encoded = encode(req)
     parsed = json.loads(encoded)
@@ -55,6 +57,9 @@ def test_transcribe_request_roundtrip():
     assert back.job_id == "abc"
     assert back.kind == JobKind.FINAL_TRANSCRIBE
     assert back.context_prompt == "参会者姓名：Lewis, Ciel。"
+    assert back.timeout_sec == 1.55
+    assert back.dictation_mode == "translate"
+    assert back.target_language == "English"
 
 
 def test_subscribe_session_context_roundtrip():

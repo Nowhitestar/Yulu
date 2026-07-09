@@ -14,7 +14,6 @@ import { paths } from "./paths.js";
 import { mountWsMultiplexer } from "./ws.js";
 import { startInboxWatcher } from "./inboxWatcher.js";
 import { startLogTailer } from "./logTailer.js";
-import { startRealtimeTailer } from "./realtimeTailer.js";
 import { serveStaticFile } from "./staticFile.js";
 import { homedir } from "node:os";
 import type { AppContext } from "./trpc.js";
@@ -22,6 +21,7 @@ import { JobRegistry } from "./jobStatus.js";
 import { exchangeCodeForTokens } from "./notionMcpOAuth.js";
 import { resolveAgentRuntime } from "./agentRuntime.js";
 import { ensureBackgroundAgentSession } from "./agentSessionStore.js";
+import { createCaller } from "./trpc.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -102,6 +102,84 @@ export async function startServer(pathOverrides: Partial<RuntimePaths> = {}): Pr
     }
   });
 
+  app.post("/api/voice-chat/ask", async (c) => {
+    let body: unknown;
+    try {
+      body = await c.req.json();
+    } catch {
+      return c.json({ ok: false, error: "invalid_json" }, 400);
+    }
+    const input = typeof body === "object" && body !== null ? body as Record<string, unknown> : {};
+    const question = String(input.question ?? "").trim();
+    if (!question) return c.json({ ok: false, error: "question_required" }, 400);
+
+    const config = ctx.config.read();
+    const runtime = resolveAgentRuntime(config, {
+      scriptDir: runtimePaths.scriptDir,
+      moviesDir: runtimePaths.moviesDir,
+    });
+    const caller = createCaller(appRouter, ctx);
+    const agent = runtime.provider === "none" ? "agent" : runtime.provider;
+    const existingSessionId = typeof input.sessionId === "string" && input.sessionId.trim()
+      ? input.sessionId.trim()
+      : "";
+    const defer = input.defer === true;
+    const session = existingSessionId
+      ? await caller.agentSessions.get({ id: existingSessionId })
+      : await caller.agentSessions.create({ agent, title: question.slice(0, 48) });
+    const sessionId = String(session?.id ?? existingSessionId);
+    if (!sessionId) return c.json({ ok: false, error: "session_unavailable" }, 500);
+
+    await caller.agentSessions.append({ sessionId, message: { role: "user", text: question } });
+    const answerAndAppend = async () => {
+      try {
+        const answer = await caller.ask.ask({ question, limit: 10, sessionId });
+        const assistantMessage = {
+          role: "assistant" as const,
+          text: String(answer.answer ?? ""),
+          sources: answer.sources,
+          remoteSources: answer.remoteSources,
+          ...(answer.llmStatus === "error" && answer.llmError ? { error: String(answer.llmError) } : {}),
+        };
+        await caller.agentSessions.append({ sessionId, message: assistantMessage });
+        return {
+          answer: assistantMessage.text,
+          llmStatus: answer.llmStatus,
+          usedFallback: answer.usedFallback,
+        };
+      } catch (exc) {
+        await caller.agentSessions.append({
+          sessionId,
+          message: { role: "assistant", text: "", error: (exc as Error).message },
+        });
+        throw exc;
+      }
+    };
+    if (defer) {
+      void answerAndAppend().catch((exc) => {
+        console.error(`[voice-chat] deferred answer failed: ${(exc as Error).message}`);
+      });
+      return c.json({
+        ok: true,
+        deferred: true,
+        sessionId,
+        question,
+        answer: "",
+        url: `/voice-chat?session=${encodeURIComponent(sessionId)}`,
+      });
+    }
+    const answer = await answerAndAppend();
+    return c.json({
+      ok: true,
+      sessionId,
+      question,
+      answer: answer.answer,
+      url: `/voice-chat?session=${encodeURIComponent(sessionId)}`,
+      llmStatus: answer.llmStatus,
+      usedFallback: answer.usedFallback,
+    });
+  });
+
   app.all("/trpc/*", (c) => fetchRequestHandler({
     endpoint: "/trpc",
     req: c.req.raw,
@@ -143,18 +221,12 @@ export async function startServer(pathOverrides: Partial<RuntimePaths> = {}): Pr
     pubsub: appPubSub,
   });
 
-  const realtimeTailer = startRealtimeTailer({
-    moviesDir: runtimePaths.moviesDir,
-    pubsub: appPubSub,
-  });
-
   await new Promise<void>((resolve) => http.listen(port, host, resolve));
   const addr = http.address() as { port: number };
   return {
     http,
     address: addr,
     close: () => new Promise<void>((resolve) => {
-      realtimeTailer.stop();
       logTailer.stop();
       inboxWatcher.stop();
       http.close(() => resolve());

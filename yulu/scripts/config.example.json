@@ -72,6 +72,19 @@
       "diarize": true,
       "note": "Set final_engine=realtime.engine to \"hermes\" to delegate STT to Hermes' configured/default provider. If Hermes is configured for Grok/xAI, Yulu sends the audio to that provider through Hermes' credentials/config and preserves returned speaker diarization. This path never calls Yulu STT from Hermes."
     },
+    "dictation": {
+      "engine": "auto",
+      "language": "zh",
+      "prompt_slug": "dictation-cleanup",
+      "translate_prompt_slug": "dictation-translate",
+      "target_language": "English",
+      "context_limit": 240,
+      "deadline_sec": 8,
+      "timeout_sec": 8,
+      "translate_deadline_sec": 30,
+      "translate_timeout_sec": 30,
+      "note": "Experimental low-latency voice input (`yulu dictate`). Use auto to inherit realtime.engine/final_engine, or set hermes/mlx/whisper explicitly. STT receives audio plus glossary hints only; selected prompts are reserved for post-STT processing such as translation. Hermes translation uses the translate_* budget because it may need a second postprocess call."
+    },
     "realtime": {
       "engine": "mlx",
       "mlx_model": "mlx-community/whisper-large-v3-turbo",
@@ -170,6 +183,11 @@
   },
   "status_agent": {
     "enabled": true,
-    "note": "Menu-bar agent: recording indicator + a Start Recording item that records a meeting (mic + system audio). No global hotkey."
+    "hotkeys": {
+      "dictate": {"key": "Space", "modifiers": ["ctrl", "alt"]},
+      "translate": {"key": "T", "modifiers": ["ctrl", "alt"], "target_language": "English"},
+      "voice_chat": {"key": "A", "modifiers": ["ctrl", "alt"]}
+    },
+    "note": "Menu-bar agent: recording indicator + menu items + global hotkeys. Hotkey key names use Carbon virtual keys; modifiers are cmd/shift/alt/ctrl."
   }
 }

@@ -1,5 +1,6 @@
 import asyncio
 import sys
+from types import SimpleNamespace
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -29,6 +30,35 @@ def test_mlx_backend_lazy_loads_module(monkeypatch):
     monkeypatch.setitem(sys.modules, "mlx_whisper", None)  # importing should fail
     backend = MlxWhisperBackend(model="dummy-model", language="zh")
     assert backend.is_ready() is False  # not loaded yet
+
+
+def test_mlx_backend_warm_up_preloads_model(monkeypatch):
+    calls = []
+    fake_pkg = SimpleNamespace(__path__=["fake"])
+    fake_mx = SimpleNamespace(float16="float16")
+
+    class FakeHolder:
+        @staticmethod
+        def get_model(model, dtype):
+            calls.append((model, dtype))
+            return object()
+
+    fake_transcribe_module = SimpleNamespace(ModelHolder=FakeHolder)
+
+    def fake_import(name):
+        return {
+            "mlx_whisper": fake_pkg,
+            "mlx_whisper.transcribe": fake_transcribe_module,
+            "mlx.core": fake_mx,
+        }[name]
+
+    monkeypatch.setattr("stt_daemon.backends.mlx.importlib.import_module", fake_import)
+    backend = MlxWhisperBackend(model="dummy-model", language="zh")
+
+    asyncio.run(backend.warm_up())
+
+    assert calls == [("dummy-model", "float16")]
+    assert backend.is_ready() is True
 
 
 def test_mlx_backend_uses_initial_prompt(monkeypatch):
@@ -107,6 +137,46 @@ def test_mlx_backend_honors_request_options(monkeypatch):
     assert call_kwargs["condition_on_previous_text"] is False
     assert call_kwargs["word_timestamps"] is True
     assert call_kwargs["hallucination_silence_threshold"] == 1.0
+
+
+def test_mlx_backend_uses_translate_task_for_english_dictation(monkeypatch):
+    fake = _stub_module(text="translated text")
+    monkeypatch.setitem(sys.modules, "mlx_whisper", fake)
+    backend = MlxWhisperBackend(model="dummy", language="zh")
+
+    async def go():
+        await backend.warm_up()
+        await backend.transcribe(
+            audio_path="/tmp/x.wav",
+            language="zh",
+            initial_prompt="",
+            cancel_token=CancelToken(),
+            options={"dictation_mode": "translate", "target_language": "English"},
+        )
+
+    asyncio.run(go())
+
+    assert fake.transcribe.call_args.kwargs["task"] == "translate"
+
+
+def test_mlx_backend_keeps_transcribe_task_for_non_english_target(monkeypatch):
+    fake = _stub_module(text="raw text")
+    monkeypatch.setitem(sys.modules, "mlx_whisper", fake)
+    backend = MlxWhisperBackend(model="dummy", language="zh")
+
+    async def go():
+        await backend.warm_up()
+        await backend.transcribe(
+            audio_path="/tmp/x.wav",
+            language="zh",
+            initial_prompt="",
+            cancel_token=CancelToken(),
+            options={"dictation_mode": "translate", "target_language": "Japanese"},
+        )
+
+    asyncio.run(go())
+
+    assert fake.transcribe.call_args.kwargs["task"] == "transcribe"
 
 
 def test_mlx_backend_propagates_cancel_pre_call(monkeypatch):

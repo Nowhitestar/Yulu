@@ -288,10 +288,10 @@ def test_no_voicemail_prompts_seed():
 
 def test_prompts_db_check_constraint_drops_voicemail():
     text = (SCRIPTS / "prompts" / "db.py").read_text(encoding="utf-8")
-    # The live schema is the 2-value constraint.
-    assert "CHECK(category IN ('summary', 'cleanup'))" in text
+    # The live schema keeps meeting prompts separate from voice-input prompts.
+    assert "CHECK(category IN ('summary', 'cleanup', 'voice'))" in text
     assert "CHECK(category IN ('summary', 'cleanup', 'voicemail'))" not in text
-    # The down-migration that collapses the legacy 3-value constraint stays.
+    # The migration that collapses legacy voicemail rows stays.
     assert "_migrate_category_check_constraint" in text
 
 
@@ -319,11 +319,12 @@ def test_voicemail_unify_migrator_exists():
     assert (SCRIPTS / "migrate" / "voicemail_unify.py").exists()
 
 
-def test_status_agent_swift_has_no_hotkey_or_voicemail():
+def test_status_agent_swift_has_hotkeys_no_voicemail():
     text = (SCRIPTS / "status_agent.swift").read_text(encoding="utf-8")
     assert "voicemail" not in text.lower()
     assert "RecordingLauncher" in text
-    assert "import Carbon" not in text
+    assert "import Carbon" in text
+    assert "RegisterEventHotKey" in text
 
 
 # ── Status Agent acceptance (spec 2026-05-26-status-agent-design.md) ──
@@ -371,8 +372,7 @@ def test_status_agent_binary_has_required_strings():
         b"status_agent.pid",            # pid file
     ):
         assert needle in blob, f"missing string: {needle!r}"
-    # The hotkey + voicemail launcher were removed entirely.
-    assert b"hotkey_registered" not in blob
+    assert b"hotkey_registered" in blob
     assert b"voicemail.cli" not in blob
 
 
@@ -433,8 +433,9 @@ def test_config_example_has_status_agent_block():
     block = cfg.get("status_agent")
     assert block is not None
     assert block.get("enabled") is True
-    # The global hotkey was removed entirely — no hotkey block in the example.
-    assert "hotkey" not in block
+    assert block["hotkeys"]["dictate"]["key"] == "Space"
+    assert block["hotkeys"]["translate"]["target_language"] == "English"
+    assert block["hotkeys"]["voice_chat"]["key"] == "A"
 
 
 # ── Phase 6 — Global Search ──────────────────────────────────────────

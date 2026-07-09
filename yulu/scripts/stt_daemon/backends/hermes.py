@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+import inspect
 import os
 import sys
 from pathlib import Path
@@ -211,15 +212,22 @@ class HermesSTTBackend:
         cancel_token: CancelToken,
         options: Optional[dict] = None,
     ) -> STTResult:
-        del initial_prompt
         cancel_token.check()
         if not self.is_ready():
             await self.warm_up()
         request_diarize = self.diarize and (options or {}).get("job_kind") == "final_transcribe"
+        request_format = (options or {}).get("job_kind") != "dictation"
+        request_timeout = max(0.2, float((options or {}).get("timeout_sec") or 120.0))
         async with self._lock:
             cancel_token.check()
             result = await asyncio.to_thread(
-                self._transcribe_sync, audio_path, language, request_diarize
+                self._transcribe_sync,
+                audio_path,
+                language,
+                request_diarize,
+                request_format,
+                initial_prompt,
+                request_timeout,
             )
             cancel_token.check()
         return self._to_stt_result(result, language)
@@ -240,20 +248,44 @@ class HermesSTTBackend:
             return str(get_provider(stt_config) or "").strip().lower()
         return str(stt_config.get("provider") or "").strip().lower()
 
-    def _transcribe_sync(self, audio_path: str, language: str, request_diarize: bool) -> dict:
+    def _transcribe_sync(
+        self,
+        audio_path: str,
+        language: str,
+        request_diarize: bool,
+        request_format: bool,
+        initial_prompt: str,
+        request_timeout: float,
+    ) -> dict:
         module = self._load_module()
         stt_config = self._stt_config()
         provider = self._provider(stt_config)
         if provider == "xai":
             payload = self._transcribe_xai_json(
-                audio_path, language, stt_config, diarize=request_diarize
+                audio_path,
+                language,
+                stt_config,
+                diarize=request_diarize,
+                initial_prompt=initial_prompt,
+                format_text=request_format,
+                request_timeout=request_timeout,
             )
             return {"provider": "xai", "payload": payload}
 
         transcribe_audio = getattr(module, "transcribe_audio", None)
         if not callable(transcribe_audio):
             raise RuntimeError("Hermes transcription tool is unavailable")
-        result = transcribe_audio(audio_path, model=self.model)
+        kwargs: dict[str, Any] = {"model": self.model}
+        if initial_prompt:
+            try:
+                params = inspect.signature(transcribe_audio).parameters
+            except (TypeError, ValueError):
+                params = {}
+            if "initial_prompt" in params:
+                kwargs["initial_prompt"] = initial_prompt
+            elif "prompt" in params:
+                kwargs["prompt"] = initial_prompt
+        result = transcribe_audio(audio_path, **kwargs)
         if not isinstance(result, dict):
             raise RuntimeError("Hermes transcription returned a non-dict result")
         if not result.get("success", True):
@@ -267,6 +299,9 @@ class HermesSTTBackend:
         stt_config: dict,
         *,
         diarize: bool,
+        initial_prompt: str,
+        format_text: bool,
+        request_timeout: float,
     ) -> dict:
         module = self._load_module()
         xai_config = stt_config.get("xai", {}) if isinstance(stt_config.get("xai"), dict) else {}
@@ -302,8 +337,11 @@ class HermesSTTBackend:
 
         data = {
             "language": request_language,
-            "format": "true",
         }
+        if format_text:
+            data["format"] = "true"
+        if initial_prompt.strip():
+            data["prompt"] = initial_prompt.strip()
         if diarize:
             data["diarize"] = "true"
         model = self.model or xai_config.get("model")
@@ -320,7 +358,7 @@ class HermesSTTBackend:
                 },
                 files=files,
                 data=data,
-                timeout=120,
+                timeout=request_timeout,
             )
         response.raise_for_status()
         payload = response.json()

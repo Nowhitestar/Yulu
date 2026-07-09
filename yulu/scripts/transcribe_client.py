@@ -101,12 +101,14 @@ def transcribe_file(
     word_timestamps: bool = False,
     condition_on_previous: bool = False,
     hallucination_silence_threshold: float = 2.0,
-    timeout_sec: int = 7200,
+    timeout_sec: float = 7200.0,
     socket_path: Optional[Path] = None,
     connect_timeout_sec: float = 5.0,
     response_timeout_sec: float = 7200.0,
     channel_split: bool = False,
     context_prompt: str = "",
+    dictation_mode: str = "",
+    target_language: str = "",
 ) -> dict[str, Any]:
     """Synchronously transcribe one audio file via the running stt_daemon.
 
@@ -140,6 +142,10 @@ def transcribe_file(
     }
     if context_prompt:
         request["context_prompt"] = context_prompt
+    if dictation_mode:
+        request["dictation_mode"] = dictation_mode
+    if target_language:
+        request["target_language"] = target_language
     response = _run_with_retry(
         socket_path, request,
         connect_timeout_sec=connect_timeout_sec,
@@ -188,7 +194,7 @@ def request_diarize(
     num_speakers: Optional[int] = None,
     threshold: Optional[float] = None,
     language: Optional[str] = None,
-    timeout_sec: int = 7200,
+    timeout_sec: float = 7200.0,
     socket_path: Optional[Path] = None,
     connect_timeout_sec: float = 5.0,
     response_timeout_sec: float = 7200.0,

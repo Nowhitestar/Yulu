@@ -337,6 +337,7 @@ class MockSTTBackend:
         self.calls = 0
         self.reset_count = 0
         self.last_initial_prompt: Optional[str] = None
+        self.last_options: Optional[dict] = None
         self._ready = False
 
     async def warm_up(self) -> None:
@@ -353,6 +354,8 @@ class MockSTTBackend:
     ) -> STTResult:
         self.calls += 1
         self.last_initial_prompt = initial_prompt
+        if options is not None:
+            self.last_options = dict(options)
         cancel_token.check()
         if self.calls <= self.raise_first_n:
             raise RuntimeError(f"mock failure {self.calls}")
@@ -463,6 +466,8 @@ class STTRuntime:
             and ENGINE_WHISPER in self.backends
         ):
             local.append(ENGINE_WHISPER)
+        if requested == ENGINE_HERMES and ENGINE_MLX in self.backends:
+            local.append(ENGINE_MLX)
 
         cloud_usable = self.cloud_command_present and ENGINE_CLOUD in self.backends
         if cloud_usable and self.mode == "cloud-priority":

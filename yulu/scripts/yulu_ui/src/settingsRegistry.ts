@@ -12,7 +12,7 @@ export type ReloadAction =
 
 export type SettingCategory =
   | "transcription" | "audio" | "llm"
-  | "automation" | "integrations" | "general" | "advanced";
+  | "automation" | "integrations" | "general" | "voice" | "advanced";
 
 export interface SettingDef {
   path: string;
@@ -37,6 +37,19 @@ const ThemeSettingSchema = z.object({
   family: z.enum(["default", "ayu", "paper", "custom"]).default("default"),
   mode: z.enum(["auto", "light", "dark"]).default("auto"),
   custom: z.unknown().optional(),
+}).passthrough();
+
+const HotkeysSchema = z.record(z.object({
+  key: z.string(),
+  modifiers: z.array(z.enum(["cmd", "shift", "alt", "ctrl"])),
+  target_language: z.string().optional(),
+}).passthrough());
+
+const DictationSchema = z.object({
+  engine: z.enum(["auto", "mlx", "whisper", "hermes"]).optional(),
+  prompt_slug: z.string().optional(),
+  translate_prompt_slug: z.string().optional(),
+  target_language: z.string().optional(),
 }).passthrough();
 
 // 仅当前已暴露的设置(P2 再补缺失项)。reload 已修正(B3)。
@@ -111,8 +124,9 @@ export const SETTINGS: SettingDef[] = [
   { path: "output.notion.database_id", category: "integrations", label: "Notion database",       type: "text",     validate: z.string(),               reload: R.none, hidden: true },
   { path: "output.notion.api_key_env", category: "integrations", label: "Notion API key env var", type: "env-name", validate: z.string(),               reload: R.none, hidden: true },
   { path: "status_agent.enabled",        category: "general", label: "菜单栏 Agent", type: "toggle", validate: z.boolean(),               reload: R.none },
+  { path: "status_agent.hotkeys",        category: "voice", label: "语音输入快捷键", type: "text", validate: HotkeysSchema,              reload: R.sighup("statusagent") },
+  { path: "transcription.dictation",     category: "voice", label: "语音输入模板", type: "text", validate: DictationSchema,             reload: R.none },
 ];
-// 注意:status_agent.hotkey 不在表内 —— 随热键移除而删(B3)。
 
 export function defFor(path: string): SettingDef | undefined {
   let best: SettingDef | undefined;

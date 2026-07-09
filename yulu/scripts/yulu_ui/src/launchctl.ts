@@ -1,5 +1,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 
 const exec = promisify(execFile) as (cmd: string, args: string[], opts?: object) => Promise<{ stdout: string; stderr: string }>;
@@ -11,7 +13,10 @@ export interface DaemonStatus {
 }
 
 export class LaunchctlClient {
-  constructor(private readonly launchAgentsDir: string) {}
+  constructor(
+    private readonly launchAgentsDir: string,
+    private readonly statusAgentPidFile = join(homedir(), ".config", "yulu", "status_agent.pid"),
+  ) {}
 
   private plist(label: string): string {
     return join(this.launchAgentsDir, label + ".plist");
@@ -57,8 +62,24 @@ export class LaunchctlClient {
   }
 
   async sighup(label: string): Promise<void> {
+    if (label === "com.yulu.statusagent") {
+      const pid = this.statusAgentPid();
+      if (pid) {
+        process.kill(pid, "SIGHUP");
+        return;
+      }
+    }
     const s = await this.status(label);
     if (!s || s.pid === 0) throw new Error(`Cannot sighup — ${label} not running`);
     process.kill(s.pid, "SIGHUP");
+  }
+
+  private statusAgentPid(): number | null {
+    try {
+      const pid = Number(readFileSync(this.statusAgentPidFile, "utf8").trim());
+      return Number.isInteger(pid) && pid > 0 ? pid : null;
+    } catch {
+      return null;
+    }
   }
 }

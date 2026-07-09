@@ -48,6 +48,7 @@ import { Glossary }   from "../../web/src/routes/knowledge/glossary.js";
 import { SettingsLayout } from "../../web/src/routes/settings.js";
 import { Health }    from "../../web/src/routes/health.js";
 import { AgentConsole } from "../../web/src/routes/agent-console.js";
+import { VoiceInput } from "../../web/src/routes/voice-input.js";
 
 const ROUTES: { name: string; Component: React.ComponentType }[] = [
   { name: "agent-console",          Component: AgentConsole },
@@ -57,6 +58,7 @@ const ROUTES: { name: string; Component: React.ComponentType }[] = [
   { name: "knowledge/glossary",     Component: Glossary },
   { name: "settings",               Component: SettingsLayout },
   { name: "health",                 Component: Health },
+  { name: "voice-input",            Component: VoiceInput },
 ];
 
 describe("placeholder routes smoke", () => {
@@ -76,7 +78,7 @@ describe("placeholder routes smoke", () => {
     ).not.toThrow();
   });
 
-  it("has exactly 7 routes", () => {
-    expect(ROUTES).toHaveLength(7);
+  it("has exactly 8 routes", () => {
+    expect(ROUTES).toHaveLength(8);
   });
 });
