@@ -1503,11 +1503,23 @@ def test_process_audio_reuses_realtime_transcript(monkeypatch, tmp_path):
     assert copied == ["hello realtime from sidecar"]
 
 
-def test_process_audio_falls_back_when_realtime_coverage_is_short(monkeypatch, tmp_path):
+@pytest.mark.parametrize(
+    ("seconds", "covered_ms", "realtime_text"),
+    [
+        (60.0, 1_000, "[Me] partial only"),
+        (120.0, 120_000, "[Me] ok"),
+    ],
+    ids=["coverage-short", "text-sparse"],
+)
+def test_process_audio_falls_back_when_realtime_is_untrustworthy(
+    monkeypatch, tmp_path, seconds, covered_ms, realtime_text
+):
     audio = tmp_path / "dictation.wav"
-    _write_silent_wav(audio, seconds=60.0)
-    audio.with_suffix(".realtime.transcript.txt").write_text("[Me] partial only", encoding="utf-8")
-    audio.with_suffix(".realtime.coverage.json").write_text('{"covered_ms": 1000}', encoding="utf-8")
+    _write_silent_wav(audio, seconds=seconds)
+    audio.with_suffix(".realtime.transcript.txt").write_text(realtime_text, encoding="utf-8")
+    audio.with_suffix(".realtime.coverage.json").write_text(
+        json.dumps({"covered_ms": covered_ms}), encoding="utf-8"
+    )
 
     monkeypatch.setattr(dictate, "render_context_prompt", lambda **kwargs: "context")
     monkeypatch.setattr(

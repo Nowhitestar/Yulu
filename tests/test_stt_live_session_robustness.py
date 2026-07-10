@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import sys
 import wave
 from pathlib import Path
@@ -34,6 +35,8 @@ from stt_daemon.protocol import JobKind, PartialEvent, SubscribeSessionRequest
 from stt_daemon.runtime import MockSTTBackend, STTRuntime, CancelToken
 from stt_daemon.scheduler import STTScheduler
 from stt_daemon.vocab_cache import VocabCache
+import stt_daemon.live_session as live_session_module
+import realtime_coverage
 
 
 SAMPLE_RATE_HZ = 16000
@@ -58,6 +61,55 @@ def _append_pcm_value(path: Path, seconds: float, *, value: int, rate: int = SAM
     sample = int(value).to_bytes(SAMPLE_BYTES, "little", signed=True)
     with open(path, "ab") as f:
         f.write(sample * n)
+
+
+def _speech_like_pcm(
+    *, amplitude: int, frequency_hz: int = 200, seconds: float = 0.2,
+    rate: int = SAMPLE_RATE_HZ,
+) -> bytes:
+    sample_count = int(rate * seconds)
+    return b"".join(
+        int(
+            amplitude
+            * (0.675 + 0.325 * math.sin(2 * math.pi * 7 * i / rate))
+            * (
+                0.55 * math.sin(2 * math.pi * frequency_hz * i / rate)
+                + 0.30 * math.sin(2 * math.pi * frequency_hz * 2 * i / rate)
+                + 0.15 * math.sin(2 * math.pi * frequency_hz * 3 * i / rate)
+            )
+        ).to_bytes(
+            SAMPLE_BYTES, "little", signed=True
+        )
+        for i in range(sample_count)
+    )
+
+
+def _steady_tone_pcm(
+    *, amplitude: int, frequency_hz: int, seconds: float = 0.2,
+    rate: int = SAMPLE_RATE_HZ,
+) -> bytes:
+    sample_count = int(rate * seconds)
+    return b"".join(
+        int(amplitude * math.sin(2 * math.pi * frequency_hz * i / rate)).to_bytes(
+            SAMPLE_BYTES, "little", signed=True
+        )
+        for i in range(sample_count)
+    )
+
+
+def _modulated_tone_pcm(
+    *, amplitude: int, frequency_hz: int, seconds: float = 0.2,
+    rate: int = SAMPLE_RATE_HZ,
+) -> bytes:
+    sample_count = int(rate * seconds)
+    return b"".join(
+        int(
+            amplitude
+            * (0.675 + 0.325 * math.sin(2 * math.pi * 7 * i / rate))
+            * math.sin(2 * math.pi * frequency_hz * i / rate)
+        ).to_bytes(SAMPLE_BYTES, "little", signed=True)
+        for i in range(sample_count)
+    )
 
 
 class _OptionsBackend(MockSTTBackend):
@@ -209,6 +261,127 @@ def test_silent_live_chunk_emits_empty_partial_without_backend_call(tmp_path):
     assert len(received) == 1
     assert received[0].text == ""
     assert received[0].ended_ms > received[0].started_ms
+
+
+def test_quiet_speech_level_live_chunk_reaches_backend(tmp_path):
+    """The affected mic track peaked below the old hard gate despite containing
+    clear speech. A quiet but usable frame must still reach STT."""
+    wav = tmp_path / "quiet.wav"
+    _write_wav(wav, seconds=0.0)
+    backend = MockSTTBackend(canned_text="quiet speech")
+    backend, scheduler, mgr = _build(tmp_path, backend=backend)
+
+    async def go():
+        await scheduler.start()
+        sid = "quiet"
+        await mgr.start_session(LiveSession(
+            sid=sid, mic_path=str(wav), sys_path=None,
+            engine="mlx", language="zh", chunk_sec=0.05,
+        ))
+        task = mgr._tail_tasks.pop(sid, None)
+        if task is not None:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+        # Roughly -50 dBFS, matching the strongest 500 ms windows in the
+        # recovered regression sample. The old -42 dBFS gate rejected it.
+        with wav.open("ab") as f:
+            f.write(_speech_like_pcm(amplitude=220))
+        await mgr.poll_once(sid)
+        await mgr.stop_session(sid, reason="cancelled")
+        await scheduler.stop()
+
+    asyncio.run(go())
+    assert backend.calls == 1
+
+
+def test_live_voice_gate_keeps_threshold_boundary_strict():
+    below = _speech_like_pcm(amplitude=160)
+    above = _speech_like_pcm(amplitude=190)
+
+    assert live_session_module._pcm_frame_has_voice(below) is False
+    assert live_session_module._pcm_frame_has_voice(above) is True
+    quiet_low_voice_48k = _speech_like_pcm(
+        amplitude=220, frequency_hz=80, rate=48_000
+    )
+    assert live_session_module._pcm_frame_has_voice(
+        quiet_low_voice_48k, sample_rate_hz=48_000
+    ) is True
+
+
+def test_live_voice_gate_rejects_low_level_dc_and_high_frequency_noise():
+    dc = int(100).to_bytes(SAMPLE_BYTES, "little", signed=True) * 1000
+    alternating = b"".join(
+        value.to_bytes(SAMPLE_BYTES, "little", signed=True)
+        for value in ([100, -100] * 500)
+    )
+
+    assert live_session_module._pcm_frame_has_voice(dc) is False
+    assert live_session_module._pcm_frame_has_voice(alternating) is False
+
+
+def test_live_voice_gate_rejects_stationary_low_frequency_tones():
+    for rate in (16_000, 48_000):
+        for frequency_hz in (50, 58, 60, 198, 200, 202):
+            tone = _steady_tone_pcm(
+                amplitude=100,
+                frequency_hz=frequency_hz,
+                rate=rate,
+            )
+            assert live_session_module._pcm_frame_has_voice(
+                tone, sample_rate_hz=rate
+            ) is False
+
+
+def test_live_voice_gate_rejects_amplitude_modulated_single_tones():
+    for rate in (16_000, 48_000):
+        for frequency_hz in (50, 60, 200):
+            tone = _modulated_tone_pcm(
+                amplitude=140,
+                frequency_hz=frequency_hz,
+                rate=rate,
+            )
+            assert live_session_module._pcm_frame_has_voice(
+                tone, sample_rate_hz=rate
+            ) is False
+
+
+def test_long_recording_rejects_near_empty_realtime_transcript(tmp_path, monkeypatch):
+    """Processing the whole timeline is not enough: 10 minutes of coverage with
+    only one two-character utterance must fall back to the final pass."""
+    wav = tmp_path / "meeting.wav"
+    wav.write_bytes(b"\x00")
+    wav.with_suffix(".realtime.coverage.json").write_text(
+        json.dumps({"covered_ms": 617_700}), encoding="utf-8"
+    )
+    transcript = wav.with_suffix(".realtime.transcript.txt")
+    transcript.write_text("[Them] はい", encoding="utf-8")
+    monkeypatch.setattr(realtime_coverage, "wav_duration_sec", lambda _path: 629.2)
+
+    assert realtime_coverage.realtime_coverage_ok(wav) is False
+
+    transcript.write_text("[Them] 系统音频" * 8, encoding="utf-8")
+    assert realtime_coverage.realtime_coverage_ok(wav) is False
+
+    transcript.write_text(
+        "[Them] 请不吝点赞订阅转发打赏支持明镜与点点栏目啊",
+        encoding="utf-8",
+    )
+    assert realtime_coverage.realtime_coverage_ok(wav) is False
+
+    transcript.write_text(
+        "[Me] 今天讨论项目进度确认接口修复方案并安排后续验收同时记录风险和负责人",
+        encoding="utf-8",
+    )
+    assert realtime_coverage.realtime_coverage_ok(wav) is True
+
+    monkeypatch.setattr(realtime_coverage, "wav_duration_sec", lambda _path: 120.0)
+    transcript.write_text("[Me] abc", encoding="utf-8")
+    assert realtime_coverage.realtime_coverage_ok(wav) is False
+    transcript.write_text("[Me] abcd", encoding="utf-8")
+    assert realtime_coverage.realtime_coverage_ok(wav) is True
 
 
 def test_voiced_live_chunk_still_dispatches_with_realtime_options(tmp_path):

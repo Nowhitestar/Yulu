@@ -4,18 +4,19 @@ from __future__ import annotations
 
 from difflib import SequenceMatcher
 import json
-import re
 from pathlib import Path
 from typing import Optional
 
-from realtime_coverage import realtime_coverage_ok
+from realtime_coverage import (
+    is_repetitive_hallucination as _is_repetitive_hallucination,
+    realtime_coverage_ok,
+    repeat_key as _repeat_key,
+    strip_obvious_hallucination_text,
+)
 
 
 FAST_POST_RECORDING_MODE = "fast_summary"
 FULL_POST_RECORDING_MODE = "full_transcribe"
-OBVIOUS_HALLUCINATION_RE = re.compile(
-    r"请不吝点赞\s*订阅\s*转发\s*打赏支持明镜与点点栏目"
-)
 
 
 def normalize_post_recording_mode(value) -> str:
@@ -30,11 +31,6 @@ def normalize_post_recording_mode(value) -> str:
     }
     allowed = {FAST_POST_RECORDING_MODE, FULL_POST_RECORDING_MODE}
     return aliases.get(raw, raw if raw in allowed else FAST_POST_RECORDING_MODE)
-
-
-def strip_obvious_hallucination_text(text: str) -> str:
-    cleaned = OBVIOUS_HALLUCINATION_RE.sub("", text or "")
-    return cleaned.strip(" \t\r\n，。,.")
 
 
 def _segment_start_seconds(seg: dict) -> float:
@@ -55,29 +51,6 @@ def _segment_end_seconds(seg: dict) -> float:
     if ms_value is not None:
         return float(ms_value) / 1000.0
     return _segment_start_seconds(seg)
-
-
-def _repeat_key(text: str) -> str:
-    return "".join(str(text or "").lower().split())
-
-
-def _is_repetitive_hallucination(text: str) -> bool:
-    key = _repeat_key(text)
-    if len(key) < 16:
-        return False
-    counts: dict[str, int] = {}
-    for ch in key:
-        counts[ch] = counts.get(ch, 0) + 1
-    if counts and max(counts.values()) / len(key) >= 0.45 and len(counts) <= 10:
-        return True
-    tokens = re.findall(r"[a-z]+|[\u3040-\u30ff]+", key)
-    if len(tokens) >= 8:
-        token_counts: dict[str, int] = {}
-        for token in tokens:
-            token_counts[token] = token_counts.get(token, 0) + 1
-        if max(token_counts.values()) / len(tokens) >= 0.6:
-            return True
-    return False
 
 
 def filter_obvious_hallucination_segments(segments: list[dict]) -> list[dict]:
@@ -154,10 +127,11 @@ def read_realtime_transcript(path: Path) -> Optional[str]:
         try:
             parsed = json.loads(text)
         except ValueError:
-            return text
+            parsed = None
         if isinstance(parsed, (list, dict)):
             return None
-    return text
+    cleaned = strip_obvious_hallucination_text(text)
+    return cleaned or None
 
 
 def provider_diarization_requested(trans_cfg: dict) -> bool:

@@ -38,6 +38,17 @@ def test_realtime_transcript_rejects_agent_event_json(tmp_path):
     assert read_realtime_transcript(transcript) is None
 
 
+def test_realtime_transcript_strips_known_hallucination_lines(tmp_path):
+    transcript = tmp_path / "meeting.realtime.transcript.txt"
+    transcript.write_text(
+        "[Me] valid meeting content\n"
+        "[Them] 请不吝点赞订阅转发打赏支持明镜与点点栏目",
+        encoding="utf-8",
+    )
+
+    assert read_realtime_transcript(transcript) == "[Me] valid meeting content"
+
+
 def test_configure_sets_fast_and_full_modes(tmp_path):
     cfg = tmp_path / "config.json"
     write_config(cfg)

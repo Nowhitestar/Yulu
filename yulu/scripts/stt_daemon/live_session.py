@@ -26,9 +26,20 @@ SAMPLE_BYTES = 2  # int16 mono
 DUAL_TRACK_HEADER_BYTES = 82
 DUAL_TRACK_SAMPLE_RATE_HZ = 48000
 DUAL_TRACK_FRAME_BYTES = 4  # stereo Int16 → L_lo L_hi R_lo R_hi
-LIVE_VOICE_DBFS_THRESHOLD = -42.0
+# Built-in and Bluetooth microphones can be much quieter than system audio.
+# The affected recording contained intelligible speech around -50 dBFS, which
+# the old -42 dBFS gate classified as silence for the entire recording.
+LIVE_VOICE_DBFS_THRESHOLD = -55.0
 LIVE_VOICE_PEAK_THRESHOLD = 1200
 LIVE_VOICE_FRAME_MS = 500
+LIVE_VOICE_MIN_ZERO_CROSSINGS_PER_SECOND = 80.0
+LIVE_VOICE_MAX_ZERO_CROSSINGS_PER_SECOND = 6400.0
+LIVE_VOICE_MIN_ACTIVE_SPECTRAL_PROBES = 2
+LIVE_VOICE_SPECTRAL_POWER_RATIO = 0.03
+LIVE_VOICE_MIN_SPECTRAL_CLUSTER_GAP_HZ = 40
+LIVE_VOICE_SPECTRAL_PROBES_HZ = tuple(range(40, 401, 10)) + (
+    500, 600, 800, 1000, 1200, 1600, 2000, 2600, 3200,
+)
 
 PartialCallback = Callable[[PartialEvent], Optional[Awaitable[None]]]
 
@@ -549,18 +560,19 @@ def _chunk_has_voice(path: Path) -> bool:
         with wave.open(str(path), "rb") as wf:
             if wf.getnchannels() != 1 or wf.getsampwidth() != SAMPLE_BYTES:
                 return True
+            sample_rate_hz = wf.getframerate()
             frame_samples = max(1, int(wf.getframerate() * LIVE_VOICE_FRAME_MS / 1000))
             while True:
                 raw = wf.readframes(frame_samples)
                 if not raw:
                     return False
-                if _pcm_frame_has_voice(raw):
+                if _pcm_frame_has_voice(raw, sample_rate_hz=sample_rate_hz):
                     return True
     except (EOFError, OSError, wave.Error):
         return True
 
 
-def _pcm_frame_has_voice(raw: bytes) -> bool:
+def _pcm_frame_has_voice(raw: bytes, *, sample_rate_hz: int = SAMPLE_RATE_HZ) -> bool:
     if len(raw) < SAMPLE_BYTES:
         return False
     usable = len(raw) - (len(raw) % SAMPLE_BYTES)
@@ -573,10 +585,68 @@ def _pcm_frame_has_voice(raw: bytes) -> bool:
     peak = max(abs(v) for v in samples)
     if peak >= LIVE_VOICE_PEAK_THRESHOLD:
         return True
-    square_sum = sum(float(v) * float(v) for v in samples)
-    rms = math.sqrt(square_sum / len(samples)) / 32767.0
+    mean = sum(samples) / len(samples)
+    centered = [float(v) - mean for v in samples]
+    square_sum = sum(v * v for v in centered)
+    rms = math.sqrt(square_sum / len(centered)) / 32767.0
     dbfs = 20.0 * math.log10(rms) if rms > 0 else -math.inf
-    return dbfs >= LIVE_VOICE_DBFS_THRESHOLD
+    if dbfs < LIVE_VOICE_DBFS_THRESHOLD:
+        return False
+    crossings = sum(
+        1
+        for previous, current in zip(centered, centered[1:])
+        if (previous < 0 <= current) or (previous > 0 >= current)
+    )
+    crossings_per_second = crossings * sample_rate_hz / max(1, len(centered) - 1)
+    if not (
+        LIVE_VOICE_MIN_ZERO_CROSSINGS_PER_SECOND
+        <= crossings_per_second
+        <= LIVE_VOICE_MAX_ZERO_CROSSINGS_PER_SECOND
+    ):
+        return False
+    downsample_step = max(1, int(round(sample_rate_hz / 8000.0)))
+    spectral_samples = centered[::downsample_step]
+    spectral_rate_hz = sample_rate_hz / downsample_step
+    window_denominator = max(1, len(spectral_samples) - 1)
+    spectral_samples = [
+        sample * (0.5 - 0.5 * math.cos(2.0 * math.pi * index / window_denominator))
+        for index, sample in enumerate(spectral_samples)
+    ]
+    powers = [
+        (frequency_hz, _goertzel_power(spectral_samples, spectral_rate_hz, frequency_hz))
+        for frequency_hz in LIVE_VOICE_SPECTRAL_PROBES_HZ
+        if frequency_hz < spectral_rate_hz / 2
+    ]
+    maximum_power = max((power for _, power in powers), default=0.0)
+    if maximum_power <= 0:
+        return False
+    active_floor = maximum_power * LIVE_VOICE_SPECTRAL_POWER_RATIO
+    active_frequencies = [
+        frequency_hz for frequency_hz, power in powers if power >= active_floor
+    ]
+    clusters = 0
+    previous_frequency = -LIVE_VOICE_MIN_SPECTRAL_CLUSTER_GAP_HZ
+    for frequency_hz in active_frequencies:
+        if frequency_hz - previous_frequency >= LIVE_VOICE_MIN_SPECTRAL_CLUSTER_GAP_HZ:
+            clusters += 1
+        previous_frequency = frequency_hz
+    return clusters >= LIVE_VOICE_MIN_ACTIVE_SPECTRAL_PROBES
+
+
+def _goertzel_power(samples: list[float], sample_rate_hz: float, frequency_hz: float) -> float:
+    coefficient = 2.0 * math.cos(2.0 * math.pi * frequency_hz / sample_rate_hz)
+    previous = 0.0
+    previous_previous = 0.0
+    for sample in samples:
+        current = sample + coefficient * previous - previous_previous
+        previous_previous = previous
+        previous = current
+    return max(
+        0.0,
+        previous * previous
+        + previous_previous * previous_previous
+        - coefficient * previous * previous_previous,
+    )
 
 
 def _read_with_stride(

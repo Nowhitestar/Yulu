@@ -251,6 +251,22 @@ def test_pitfall3_zero_buffer_detection_and_rebuild():
     assert "buildTap" in src, "tap (re)build entry point buildTap is missing"
 
 
+def test_pitfall3_zero_buffer_recovery_is_bounded_and_generation_scoped():
+    # Real system silence also arrives as all-zero buffers. Recovery may retry
+    # after real audio returns, but it must remain bounded and a delayed task
+    # must not tear down the next recording's tap.
+    src = _source()
+    assert "ZeroBufferRecoveryPolicy" in src
+    assert "maxAttempts: 3" in src
+    assert "captureGeneration" in src
+    assert "recoverFromZeroBuffers(generation:" in src
+
+    start = src.index("private func recoverFromZeroBuffers(generation:")
+    end = src.index("private func teardown()", start)
+    body = src[start:end]
+    assert body.index("captureGeneration == generation") < body.index("teardown()")
+
+
 def test_tap_feeds_existing_sink():
     # The tap must push into the SAME frame sink as the SCK arm and reuse the
     # exact SysAudioOutput Int16 clamp (no re-derivation).

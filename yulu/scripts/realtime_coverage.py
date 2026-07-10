@@ -19,12 +19,55 @@ Depends only on the standard library (no import cycles)."""
 from __future__ import annotations
 
 import json
+import math
+import re
 import wave
 from pathlib import Path
 from typing import Optional
 
 COVERAGE_MIN_RATIO = 0.85
 COVERAGE_SLACK_SEC = 20.0
+QUALITY_CHECK_MIN_DURATION_SEC = 120.0
+MIN_INFORMATION_UNITS_PER_MINUTE = 2.0
+_SOURCE_TAG_RE = re.compile(r"\[(?:Me|Them)\]", re.IGNORECASE)
+OBVIOUS_HALLUCINATION_RE = re.compile(
+    r"请不吝点赞\s*订阅\s*转发\s*打赏支持明镜与点点栏目"
+)
+_EMPTY_SOURCE_LINE_RE = re.compile(r"(?mi)^\s*\[(?:Me|Them)\]\s*$")
+
+
+def strip_obvious_hallucination_text(text: str) -> str:
+    cleaned = OBVIOUS_HALLUCINATION_RE.sub("", text or "")
+    cleaned = _EMPTY_SOURCE_LINE_RE.sub("", cleaned)
+    return cleaned.strip(" \t\r\n，。,.")
+
+
+def repeat_key(text: str) -> str:
+    return "".join(str(text or "").lower().split())
+
+
+def is_repetitive_hallucination(text: str) -> bool:
+    raw = str(text or "").lower()
+    key = repeat_key(raw)
+    if len(key) < 16:
+        return False
+    counts: dict[str, int] = {}
+    for char in key:
+        counts[char] = counts.get(char, 0) + 1
+    if counts and max(counts.values()) / len(key) >= 0.45 and len(counts) <= 10:
+        return True
+    for unit_size in range(1, min(24, len(key) // 4) + 1):
+        repeats, remainder = divmod(len(key), unit_size)
+        if remainder == 0 and repeats >= 4 and key == key[:unit_size] * repeats:
+            return True
+    tokens = re.findall(r"[a-z]+|[\u3040-\u30ff]+", raw)
+    if len(tokens) >= 8:
+        token_counts: dict[str, int] = {}
+        for token in tokens:
+            token_counts[token] = token_counts.get(token, 0) + 1
+        if max(token_counts.values()) / len(tokens) >= 0.6:
+            return True
+    return False
 
 
 def wav_duration_sec(wav_path: Path) -> Optional[float]:
@@ -57,6 +100,32 @@ def realtime_covered_sec(wav_path: Path) -> Optional[float]:
     return None
 
 
+def _realtime_transcript_quality_ok(wav_path: Path, duration: float) -> bool:
+    """Reject implausibly sparse live text for a long recording.
+
+    Coverage only proves that the live tail processed the timeline. Silence-gated
+    chunks also advance it, so a 10-minute recording can otherwise be promoted
+    with only one short utterance. Missing sidecars and short recordings preserve
+    the previous permissive behavior.
+    """
+    transcript_path = wav_path.with_suffix(".realtime.transcript.txt")
+    if duration < QUALITY_CHECK_MIN_DURATION_SEC or not transcript_path.exists():
+        return True
+    try:
+        text = transcript_path.read_text(encoding="utf-8")
+    except OSError:
+        return True
+    text = strip_obvious_hallucination_text(_SOURCE_TAG_RE.sub("", text))
+    if is_repetitive_hallucination(text):
+        return False
+    information_units = sum(char.isalnum() for char in text)
+    minimum_units = max(
+        4,
+        math.ceil(duration / 60.0 * MIN_INFORMATION_UNITS_PER_MINUTE),
+    )
+    return information_units >= minimum_units
+
+
 def realtime_coverage_ok(wav_path: Path) -> bool:
     """True when a realtime transcript covered enough of the recording to be reused
     as the final. Conservative: when coverage CAN'T be measured (no WAV duration, or
@@ -69,4 +138,4 @@ def realtime_coverage_ok(wav_path: Path) -> bool:
     if covered is None:
         return True
     threshold = min(duration * COVERAGE_MIN_RATIO, duration - COVERAGE_SLACK_SEC)
-    return covered >= threshold
+    return covered >= threshold and _realtime_transcript_quality_ok(wav_path, duration)
