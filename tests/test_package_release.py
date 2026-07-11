@@ -343,6 +343,9 @@ def test_release_publish_uploads_zip_installer_and_checksums_without_pkg():
     assert (ROOT / "docs" / "release-notes" / "v0.18.0.md").is_file()
     assert "timeout-minutes: 30" in workflow
     assert 'node-version: "24"' in workflow
+    assert "Checkout release commit" in workflow
+    assert "ref: ${{ github.sha }}" in workflow
+    assert "ref: ${{ inputs.tag }}" not in workflow
     for command in ("npm ci", "npm run typecheck", "npm test", "npm run build"):
         assert command in workflow
     assert "(cd dist && shasum -a 256 -c checksums.txt)" in workflow

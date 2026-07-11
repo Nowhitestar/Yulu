@@ -30,11 +30,15 @@ jobs:
     env:
       TAG: ${{ inputs.tag }}
     steps:
-      - name: Checkout tag
+      # A draft GitHub Release records tag_name before GitHub creates the tag
+      # ref. The caller SHA is the release merge commit on the automatic path
+      # and the tagged commit on the manual path, so it is the stable source for
+      # both without publishing the draft early just to make a ref exist.
+      - name: Checkout release commit
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          ref: ${{ inputs.tag }}
+          ref: ${{ github.sha }}
 
       - name: Verify tag matches VERSION
         run: |
