@@ -4,6 +4,13 @@ All notable changes to Yulu are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.17.0](https://github.com/Nowhitestar/Yulu/compare/v0.16.1...v0.17.0) (2026-07-11)
+
+
+### Features
+
+* **ui:** apply Yulu brand system and streamline workflows ([#85](https://github.com/Nowhitestar/Yulu/issues/85)) ([5a07539](https://github.com/Nowhitestar/Yulu/commit/5a07539a83506beb2e1f91f0f23bd904b3f0b23e))
+
 ## [0.16.1](https://github.com/Nowhitestar/Yulu/compare/v0.16.0...v0.16.1) (2026-07-09)
 
 
