@@ -4,6 +4,13 @@ All notable changes to Yulu are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.18.1](https://github.com/Nowhitestar/Yulu/compare/v0.18.0...v0.18.1) (2026-07-11)
+
+
+### Bug Fixes
+
+* **installer:** align runtime dependency checks ([#91](https://github.com/Nowhitestar/Yulu/issues/91)) ([a8a7a7d](https://github.com/Nowhitestar/Yulu/commit/a8a7a7db04d6dc427ad5575051f301c306c2f4bc))
+
 ## [0.18.0](https://github.com/Nowhitestar/Yulu/compare/v0.17.0...v0.18.0) (2026-07-11)
 
 
