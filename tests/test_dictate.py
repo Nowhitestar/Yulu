@@ -1280,6 +1280,17 @@ def test_transcribe_dictation_extracts_stereo_mic_channel(monkeypatch, tmp_path)
         wav.setframerate(16000)
         wav.writeframes(bytes(frames))
 
+    def fake_run(cmd, **_kwargs):
+        out = Path(cmd[-1])
+        with wave.open(str(out), "wb") as wav:
+            wav.setnchannels(1)
+            wav.setsampwidth(2)
+            wav.setframerate(16000)
+            wav.writeframes(b"".join(int(sample).to_bytes(2, "little", signed=True) for sample in left))
+        return subprocess.CompletedProcess(cmd, 0)
+
+    monkeypatch.setattr(dictate.subprocess, "run", fake_run)
+
     observed = {}
 
     def fake_host_request(path, payload, *, timeout_sec):
