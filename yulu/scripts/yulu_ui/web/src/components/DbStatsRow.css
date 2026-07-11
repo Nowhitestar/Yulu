@@ -8,7 +8,7 @@
 }
 .dbstats-row:hover { background: var(--row-hover); }
 .dbstats-name { font-size: 13px; color: var(--fg); }
-.dbstats-path { font-family: "SF Mono", ui-monospace, monospace; font-size: 11px; color: var(--fg-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dbstats-path { font-family: var(--font-mono); font-size: 11px; color: var(--fg-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dbstats-meta { display: flex; gap: 12px; font-size: 11px; color: var(--fg-2); font-variant-numeric: tabular-nums; }
 .dbstats-action {
   padding: 3px 10px;

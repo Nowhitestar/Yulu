@@ -1,8 +1,8 @@
 // web/src/routes/knowledge/glossary.tsx
 import { useQueryClient } from "@tanstack/react-query";
-import { useMemo, useState } from "react";
+import { Plus, X } from "lucide-react";
+import { useMemo, useState, type FormEvent } from "react";
 import { trpc } from "../../trpc.js";
-import { EditableTable, type ColumnDef } from "../../components/EditableTable.js";
 import { useT } from "../../i18n/LanguageProvider.js";
 import "./glossary.css";
 
@@ -12,141 +12,131 @@ interface VocabRow {
   id: string;
   term: string;
   canonical: string;
-  scope: string;
-  notes: string | null;
-  created_at: string;
-  updated_at: string;
 }
 
-function formatDate(iso: string): string {
-  if (!iso) return "";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  const mm = String(d.getMonth() + 1).padStart(2, "0");
-  const dd = String(d.getDate()).padStart(2, "0");
-  const hh = String(d.getHours()).padStart(2, "0");
-  const mi = String(d.getMinutes()).padStart(2, "0");
-  return `${d.getFullYear()}-${mm}-${dd} ${hh}:${mi}`;
-}
-
-function formatScope(scope: unknown, t: (key: string) => string): string {
-  if (scope === "prompt") return t("glossary.scope.prompt");
-  if (scope === "replace") return t("glossary.scope.replace");
-  return t("glossary.scope.both");
+interface TermGroup {
+  term: string;
+  ids: string[];
 }
 
 export function Glossary() {
-  const { data } = trpc.glossary.list.useQuery();
+  const { data, isPending } = trpc.glossary.list.useQuery();
   const qc = useQueryClient();
   const t = useT();
-  const [draftOpen, setDraftOpen] = useState(false);
-  const [draft, setDraft] = useState({ term: "", canonical: "", scope: "both", notes: "" });
-  const [query, setQuery] = useState("");
+  const [term, setTerm] = useState("");
+  const [deletingTerm, setDeletingTerm] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
-  const COLUMNS: ColumnDef<VocabRow>[] = [
-    { key: "term",       label: t("glossary.col.term"),       editable: true,  width: "200px" },
-    { key: "canonical",  label: t("glossary.col.canonical"),  editable: true,  width: "200px" },
-    { key: "scope",      label: t("glossary.col.scope"),      editable: false, width: "120px", format: (v) => formatScope(v, t) },
-    { key: "notes",      label: t("glossary.col.notes"),      editable: true },
-    { key: "updated_at", label: t("glossary.col.lastEdited"), editable: false, width: "150px", format: (v) => formatDate(String(v ?? "")) },
-  ];
+  const termGroups = useMemo<TermGroup[]>(() => {
+    const groups = new Map<string, TermGroup>();
+    for (const row of ((data as VocabRow[] | undefined) ?? [])) {
+      const canonical = String(row.canonical || row.term).trim();
+      if (!canonical) continue;
+      const key = canonical.toLocaleLowerCase();
+      const existing = groups.get(key);
+      if (existing) existing.ids.push(String(row.id));
+      else groups.set(key, { term: canonical, ids: [String(row.id)] });
+    }
+    return [...groups.values()].sort((a, b) =>
+      a.term.localeCompare(b.term, undefined, { numeric: true, sensitivity: "base" })
+    );
+  }, [data]);
 
   const addMut = trpc.glossary.add.useMutation({
     onSuccess: () => qc.invalidateQueries({ queryKey: [["glossary", "list"]] }),
   });
-  const updateMut = trpc.glossary.update.useMutation({
-    onSuccess: () => qc.invalidateQueries({ queryKey: [["glossary", "list"]] }),
-  });
-  const deleteMut = trpc.glossary.delete.useMutation();
+  const deleteMut = trpc.glossary.deleteMany.useMutation();
 
-  const rows = useMemo(() => {
-    const rawRows = (data as VocabRow[] | undefined) ?? [];
-    const q = query.trim().toLowerCase();
-    if (!q) return rawRows;
-    return rawRows.filter((row) =>
-      [row.term, row.canonical, row.scope, row.notes].some((value) => String(value ?? "").toLowerCase().includes(q))
-    );
-  }, [data, query]);
-
-  const saveDraft = async () => {
-    const term = draft.term.trim();
-    if (!term) return;
-    await addMut.mutateAsync({
-      term,
-      canonical: draft.canonical.trim() || term,
-      scope: draft.scope as "prompt" | "replace" | "both",
-      notes: draft.notes.trim() || undefined,
-    });
-    setDraft({ term: "", canonical: "", scope: "both", notes: "" });
-    setDraftOpen(false);
-  };
-
-  const onCellCommit = (id: number | string, key: string, value: string) => {
-    updateMut.mutateAsync({ id: String(id), [key]: value } as { id: string; [k: string]: unknown });
-  };
-
-  const onBulkDelete = async (ids: Array<number | string>) => {
-    for (const id of ids) {
-      await deleteMut.mutateAsync({ id: String(id) });
+  const addTerm = async (event: FormEvent) => {
+    event.preventDefault();
+    const next = term.trim();
+    if (!next || addMut.isPending) return;
+    if (termGroups.some((group) => group.term.localeCompare(next, undefined, { sensitivity: "base" }) === 0)) {
+      setError(t("glossary.duplicate"));
+      return;
     }
-    qc.invalidateQueries({ queryKey: [["glossary", "list"]] });
+    setError(null);
+    try {
+      await addMut.mutateAsync({
+        term: next,
+        canonical: next,
+        scope: "both",
+        notes: undefined,
+      });
+      setTerm("");
+    } catch {
+      setError(t("glossary.addError"));
+    }
+  };
+
+  const deleteTerm = async (group: TermGroup) => {
+    if (deletingTerm) return;
+    setDeletingTerm(group.term);
+    setError(null);
+    try {
+      await deleteMut.mutateAsync({ ids: group.ids });
+    } catch {
+      setError(t("glossary.deleteError"));
+    } finally {
+      await qc.invalidateQueries({ queryKey: [["glossary", "list"]] });
+      setDeletingTerm(null);
+    }
   };
 
   return (
     <div className="glossary-page">
-      <div className="glossary-header">
-        <input
-          className="glossary-search"
-          type="search"
-          value={query}
-          onChange={(event) => setQuery(event.target.value)}
-          placeholder={t("glossary.search")}
-        />
-        <button type="button" className="glossary-add-btn" onClick={() => setDraftOpen(true)}>{t("glossary.add")}</button>
-      </div>
-      {draftOpen && (
-        <div className="glossary-draft-row">
+      <div className="glossary-content">
+        <header className="glossary-intro">
+          <div>
+            <h1>{t("glossary.title")}</h1>
+            <p>{t("glossary.description")}</p>
+          </div>
+          <span className="glossary-count">{t("glossary.count", { n: termGroups.length })}</span>
+        </header>
+
+        <form className="glossary-add" onSubmit={(event) => void addTerm(event)}>
+          <Plus size={17} strokeWidth={1.9} aria-hidden="true" />
           <input
-            autoFocus
-            value={draft.term}
-            onChange={(event) => setDraft((prev) => ({ ...prev, term: event.target.value }))}
-            placeholder={t("glossary.col.term")}
-          />
-          <input
-            value={draft.canonical}
-            onChange={(event) => setDraft((prev) => ({ ...prev, canonical: event.target.value }))}
-            placeholder={t("glossary.col.canonical")}
-          />
-          <select
-            value={draft.scope}
-            onChange={(event) => setDraft((prev) => ({ ...prev, scope: event.target.value }))}
-            aria-label={t("glossary.col.scope")}
-          >
-            <option value="both">{t("glossary.scope.both")}</option>
-            <option value="prompt">{t("glossary.scope.prompt")}</option>
-            <option value="replace">{t("glossary.scope.replace")}</option>
-          </select>
-          <input
-            value={draft.notes}
-            onChange={(event) => setDraft((prev) => ({ ...prev, notes: event.target.value }))}
-            placeholder={t("glossary.col.notes")}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") void saveDraft();
-              if (event.key === "Escape") setDraftOpen(false);
+            autoComplete="off"
+            value={term}
+            onChange={(event) => {
+              setTerm(event.target.value);
+              if (error) setError(null);
             }}
+            placeholder={t("glossary.input")}
+            aria-label={t("glossary.input")}
           />
-          <button type="button" className="glossary-save-btn" disabled={!draft.term.trim()} onClick={() => void saveDraft()}>{t("glossary.save")}</button>
-          <button type="button" className="glossary-cancel-btn" onClick={() => setDraftOpen(false)}>{t("glossary.cancel")}</button>
+          <button type="submit" disabled={!term.trim() || addMut.isPending}>
+            {t("glossary.add")}
+          </button>
+        </form>
+
+        {error && <div className="glossary-error" role="alert">{error}</div>}
+
+        <div className="glossary-terms" aria-live="polite" aria-busy={isPending}>
+          {termGroups.map((group) => (
+            <span
+              key={group.term.toLocaleLowerCase()}
+              className={`glossary-term${deletingTerm === group.term ? " deleting" : ""}`}
+              data-testid={`glossary-term-${group.ids[0]}`}
+            >
+              <span>{group.term}</span>
+              <button
+                type="button"
+                aria-label={t("glossary.delete", { term: group.term })}
+                title={t("glossary.delete", { term: group.term })}
+                disabled={deletingTerm !== null}
+                onClick={() => void deleteTerm(group)}
+              >
+                <X size={13} strokeWidth={2.2} aria-hidden="true" />
+              </button>
+            </span>
+          ))}
+          {!isPending && termGroups.length === 0 && (
+            <div className="glossary-empty">{t("glossary.empty")}</div>
+          )}
         </div>
-      )}
-      <EditableTable
-        columns={COLUMNS}
-        rows={rows}
-        onCellCommit={onCellCommit}
-        selectable
-        onBulkDelete={onBulkDelete}
-        emptyLabel={t("glossary.empty")}
-      />
+      </div>
     </div>
   );
 }

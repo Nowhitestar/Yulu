@@ -80,7 +80,7 @@
   animation: audioplayer-deferred-sheen 1.1s linear infinite;
 }
 .audioplayer-time {
-  font-family: "SF Mono", ui-monospace, monospace;
+  font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
   font-size: 11px;
   color: var(--fg-2);

@@ -27,8 +27,10 @@
   backdrop-filter: var(--blur-glass);
   -webkit-backdrop-filter: var(--blur-glass);
   box-shadow: var(--shadow);
-  font-size: 13px;
-  font-weight: 650;
+  font-family: var(--font-heading);
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
   color: var(--fg);
   text-align: center;
   overflow: hidden;

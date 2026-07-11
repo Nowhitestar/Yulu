@@ -19,14 +19,30 @@
 .sidebar-brand {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 24px;
+  gap: 12px;
+  padding: 21px 20px 20px;
   border-bottom: 0;
 }
 .sidebar-brand-text {
-  font-size: 16px;
-  font-weight: 760;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
   color: var(--fg);
+}
+.sidebar-brand-wordmark {
+  font-family: var(--font-heading);
+  font-size: 20px;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: -0.035em;
+}
+.sidebar-brand-hanzi {
+  font-family: var(--font-han);
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1;
+  color: var(--accent-on, var(--accent));
 }
 
 .sidebar-section {
@@ -39,9 +55,10 @@
   padding-top: 24px;
 }
 .sidebar-heading {
+  font-family: var(--font-mono);
   font-size: 10px;
-  font-weight: 820;
-  letter-spacing: 0.055em;
+  font-weight: 600;
+  letter-spacing: 0.14em;
   color: color-mix(in oklch, var(--fg) 64%, transparent);
   padding: 0 12px 4px;
   text-transform: uppercase;
@@ -170,9 +187,12 @@
   }
 
   .root-shell.agent-console-shell .root-sidebar-pane:hover .sidebar-brand-text,
+  .root-shell.agent-console-shell .sidebar:hover .sidebar-brand-text {
+    display: flex;
+  }
+
   .root-shell.agent-console-shell .root-sidebar-pane:hover .sidebar-heading,
   .root-shell.agent-console-shell .root-sidebar-pane:hover .sidebar-item-label,
-  .root-shell.agent-console-shell .sidebar:hover .sidebar-brand-text,
   .root-shell.agent-console-shell .sidebar:hover .sidebar-heading,
   .root-shell.agent-console-shell .sidebar:hover .sidebar-item-label {
     display: inline;

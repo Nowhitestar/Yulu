@@ -161,6 +161,18 @@ describe("server", () => {
     expect(await r.text()).toContain("color:red");
   });
 
+  it("serves the built favicon instead of the SPA fallback", async () => {
+    const distWeb = join(env.root, "dist/web");
+    mkdirSync(distWeb, { recursive: true });
+    writeFileSync(join(distWeb, "favicon.svg"), '<svg xmlns="http://www.w3.org/2000/svg"></svg>');
+    process.env.YULU_UI_DIST_WEB = distWeb;
+
+    const r = await fetch(`${env.baseUrl}/favicon.svg`);
+    expect(r.status).toBe(200);
+    expect(r.headers.get("content-type")).toBe("image/svg+xml");
+    expect(await r.text()).toContain("<svg");
+  });
+
   it("falls back to index.html for unknown SPA paths", async () => {
     // Ensure index.html exists
     const distWeb = join(env.root, "dist/web");

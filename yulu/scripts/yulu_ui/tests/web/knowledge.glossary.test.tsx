@@ -7,72 +7,60 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Glossary } from "../../web/src/routes/knowledge/glossary.js";
 
 const ROWS = [
-  { id: "1", term: "AgentKey", canonical: "AgentKey", scope: "both", notes: "product", created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-02T03:04:05Z" },
-  { id: "2", term: "OpenClaw", canonical: "OpenClaw", scope: "both", notes: "", created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-03T00:00:00Z" },
-  { id: "3", term: "Yulu", canonical: "Yulu", scope: "prompt", notes: "the app", created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-04T00:00:00Z" },
+  { id: "1", term: "AgentKey", canonical: "AgentKey", scope: "both" },
+  { id: "2", term: "Agency", canonical: "AgentKey", scope: "both" },
+  { id: "3", term: "OpenClaw", canonical: "OpenClaw", scope: "both" },
+  { id: "4", term: "Yulu", canonical: "Yulu", scope: "prompt" },
 ];
 
-const updateMutate = vi.fn(async () => ({ updated: 1 }));
-const addMutate    = vi.fn(async () => ({ ok: true }));
+const addMutate = vi.fn(async () => ({ ok: true }));
 const deleteMutate = vi.fn(async () => ({ deleted: 1 }));
 
 vi.mock("../../web/src/trpc.js", () => ({
   trpc: {
     glossary: {
-      list:   { useQuery: () => ({ data: ROWS, isPending: false }) },
-      add:    { useMutation: () => ({ mutateAsync: addMutate }) },
-      update: { useMutation: () => ({ mutateAsync: updateMutate }) },
-      delete: { useMutation: () => ({ mutateAsync: deleteMutate }) },
+      list: { useQuery: () => ({ data: ROWS, isPending: false }) },
+      add: { useMutation: () => ({ mutateAsync: addMutate, isPending: false }) },
+      deleteMany: { useMutation: () => ({ mutateAsync: deleteMutate, isPending: false }) },
     },
   },
 }));
-vi.mock("../../web/src/ws.js", () => ({
-  WsProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-  useWsChannel: () => {},
-  nextBackoff: (n: number) => n,
-}));
 
 beforeEach(() => {
-  updateMutate.mockClear(); addMutate.mockClear(); deleteMutate.mockClear();
-  vi.restoreAllMocks();
+  addMutate.mockReset();
+  addMutate.mockResolvedValue({ ok: true });
+  deleteMutate.mockReset();
+  deleteMutate.mockResolvedValue({ deleted: 1 });
 });
 
 function mount() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  const router = createMemoryRouter([{ path: "/knowledge/glossary", Component: Glossary }], { initialEntries: ["/knowledge/glossary"] });
-  return render(<QueryClientProvider client={qc}><RouterProvider router={router} /></QueryClientProvider>);
+  const router = createMemoryRouter(
+    [{ path: "/knowledge/glossary", Component: Glossary }],
+    { initialEntries: ["/knowledge/glossary"] },
+  );
+  return render(
+    <QueryClientProvider client={qc}>
+      <RouterProvider router={router} />
+    </QueryClientProvider>,
+  );
 }
 
 describe("Glossary page", () => {
-  it("renders rows + canonical glossary headers", () => {
+  it("renders one tag per canonical proper noun", () => {
     mount();
-    expect(screen.getByText("术语/别名")).toBeInTheDocument();
-    expect(screen.getByText("标准写法")).toBeInTheDocument();
-    expect(screen.getByText("作用")).toBeInTheDocument();
-    expect(screen.getByText("备注")).toBeInTheDocument();
-    expect(screen.getByText("最后编辑")).toBeInTheDocument();
-    expect(screen.getByTestId("cell-1-term")).toHaveTextContent("AgentKey");
-    expect(screen.getByTestId("cell-2-term")).toHaveTextContent("OpenClaw");
-    expect(screen.getByTestId("cell-3-term")).toHaveTextContent("Yulu");
+    expect(screen.getByRole("heading", { name: "专有名词" })).toBeInTheDocument();
+    expect(screen.getByText("3 个词")).toBeInTheDocument();
+    expect(screen.getAllByText("AgentKey")).toHaveLength(1);
+    expect(screen.queryByText("Agency")).not.toBeInTheDocument();
+    expect(screen.getByText("OpenClaw")).toBeInTheDocument();
+    expect(screen.getByText("Yulu")).toBeInTheDocument();
   });
 
-  it("click cell + edit + Enter fires glossary.update", async () => {
+  it("adds a term with prompt and correction semantics on Enter", async () => {
     mount();
     const user = userEvent.setup();
-    await user.click(screen.getByTestId("cell-1-term"));
-    const input = screen.getByRole("textbox");
-    await user.clear(input);
-    await user.type(input, "AgentKey2{Enter}");
-    await vi.waitFor(() => expect(updateMutate).toHaveBeenCalledWith({ id: "1", term: "AgentKey2" }));
-  });
-
-  it("+ Add term opens a draft row and saves glossary.add", async () => {
-    mount();
-    const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: /\+ 添加术语/i }));
-    const termInput = screen.getByPlaceholderText("术语/别名");
-    await user.type(termInput, "Liquid Glass");
-    await user.click(screen.getByRole("button", { name: /^保存$/i }));
+    await user.type(screen.getByLabelText("输入专有名词，按回车添加"), "Liquid Glass{Enter}");
     await vi.waitFor(() => expect(addMutate).toHaveBeenCalledWith({
       term: "Liquid Glass",
       canonical: "Liquid Glass",
@@ -81,16 +69,36 @@ describe("Glossary page", () => {
     }));
   });
 
-  it("bulk delete: select 2 rows + Delete + confirm → loops glossary.delete", async () => {
-    vi.spyOn(window, "confirm").mockReturnValue(true);
+  it("deletes every hidden alias row behind a canonical tag without confirmation", async () => {
     mount();
     const user = userEvent.setup();
-    const checkboxes = screen.getAllByRole("checkbox");
-    await user.click(checkboxes[1]!);
-    await user.click(checkboxes[2]!);
-    await user.click(screen.getByRole("button", { name: /^删除$/i }));
-    await vi.waitFor(() => expect(deleteMutate).toHaveBeenCalledTimes(2));
-    expect(deleteMutate).toHaveBeenNthCalledWith(1, { id: "1" });
-    expect(deleteMutate).toHaveBeenNthCalledWith(2, { id: "2" });
+    await user.click(screen.getByRole("button", { name: "删除 AgentKey" }));
+    await vi.waitFor(() => expect(deleteMutate).toHaveBeenCalledWith({ ids: ["1", "2"] }));
+  });
+
+  it("does not add a duplicate term", async () => {
+    mount();
+    const user = userEvent.setup();
+    await user.type(screen.getByLabelText("输入专有名词，按回车添加"), "agentkey{Enter}");
+    expect(await screen.findByRole("alert")).toHaveTextContent("这个词已经在术语表里了。");
+    expect(addMutate).not.toHaveBeenCalled();
+  });
+
+  it("shows a recoverable error when adding fails", async () => {
+    addMutate.mockRejectedValueOnce(new Error("offline"));
+    mount();
+    const user = userEvent.setup();
+    await user.type(screen.getByLabelText("输入专有名词，按回车添加"), "New term{Enter}");
+    expect(await screen.findByRole("alert")).toHaveTextContent("添加失败，请重试。");
+    expect(screen.getByLabelText("输入专有名词，按回车添加")).toHaveValue("New term");
+  });
+
+  it("keeps the tag visible and shows an error when deleting fails", async () => {
+    deleteMutate.mockRejectedValueOnce(new Error("offline"));
+    mount();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "删除 AgentKey" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("删除失败，请重试。");
+    expect(screen.getByText("AgentKey")).toBeInTheDocument();
   });
 });

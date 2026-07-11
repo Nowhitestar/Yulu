@@ -103,6 +103,16 @@ describe("RecordingReader", () => {
     expect(screen.getByRole("button", { name: /重新生成摘要/i })).toBeInTheDocument();
   });
 
+  it("keeps selectors in the header and only processing actions in the action bar", () => {
+    getMock.mockReturnValue({ data: { ...baseData }, isPending: false });
+    const { container } = renderAt("TeamSync_20260102_090000");
+
+    expect(container.querySelectorAll(".reader-header-actions select")).toHaveLength(1);
+    expect(container.querySelectorAll(".reader-actions select")).toHaveLength(0);
+    expect(container.querySelectorAll(".reader-actions .rpb")).toHaveLength(2);
+    expect(container.querySelector(".reader-header-actions .reader-header-share")).toBeInTheDocument();
+  });
+
   it("shows load errors instead of pretending every recording is missing", () => {
     getMock.mockReturnValue({ data: undefined, error: new Error("connect ECONNREFUSED 127.0.0.1:7777"), isPending: false });
     renderAt("TeamSync_20260102_090000");

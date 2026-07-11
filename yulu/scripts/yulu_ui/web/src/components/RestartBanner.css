@@ -15,7 +15,7 @@
 .restart-banner-daemons {
   font-size: 11px;
   color: var(--fg-2);
-  font-family: "SF Mono", ui-monospace, monospace;
+  font-family: var(--font-mono);
 }
 .restart-banner-btn {
   padding: 5px 11px;

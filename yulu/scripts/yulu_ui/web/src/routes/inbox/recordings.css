@@ -10,8 +10,10 @@
 .recordings-list-head h2 {
   margin: 0;
   color: var(--fg);
-  font-size: 15px;
-  font-weight: 820;
+  font-family: var(--font-heading);
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
 }
 .recordings-list-head button {
   width: 28px;
@@ -203,9 +205,9 @@
   padding: 6px;
   border: 1px solid var(--edge-card);
   border-radius: var(--radius-inner);
-  background: var(--glass);
-  backdrop-filter: var(--blur-glass);
-  -webkit-backdrop-filter: var(--blur-glass);
+  background: var(--wp-1);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
   box-shadow: 0 16px 36px -18px rgba(0, 0, 0, 0.22), var(--edge-shadow);
 }
 .recording-context-menu button {

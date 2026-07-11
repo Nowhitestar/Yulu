@@ -14,9 +14,11 @@
   gap: 3px;
 }
 .control-toolbar-title h2 {
+  font-family: var(--font-heading);
+  letter-spacing: -0.02em;
   margin: 0;
   font-size: 16px;
-  font-weight: 700;
+  font-weight: 600;
 }
 .control-toolbar-title p {
   margin: 0;

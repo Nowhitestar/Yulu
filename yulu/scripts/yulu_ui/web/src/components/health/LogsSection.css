@@ -15,7 +15,7 @@
   background: var(--field-bg);
   color: var(--fg);
   font-size: 12px;
-  font-family: "SF Mono", ui-monospace, monospace;
+  font-family: var(--font-mono);
   border: 1px solid var(--edge);
 }
 .logs-btn {

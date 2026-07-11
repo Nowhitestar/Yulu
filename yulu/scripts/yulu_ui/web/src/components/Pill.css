@@ -24,7 +24,7 @@
 .pill-idle:hover { background: var(--glass-2); cursor: pointer; }
 .pill-mic { font-size: 14px; }
 .pill-hotkey {
-  font-family: "SF Mono", ui-monospace, monospace;
+  font-family: var(--font-mono);
   font-size: 11px;
   color: var(--fg-3);
 }
@@ -35,7 +35,7 @@
 .pill-dot.pulse { animation: pillPulse 1s ease-in-out infinite; }
 @keyframes pillPulse { 0%,100% { opacity: 1; } 50% { opacity: 0.45; } }
 .pill-time {
-  font-family: "SF Mono", ui-monospace, monospace;
+  font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
   font-size: 13px;
 }

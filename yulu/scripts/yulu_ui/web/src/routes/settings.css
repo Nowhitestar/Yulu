@@ -39,8 +39,10 @@
   margin-bottom: 22px;
 }
 .settings-detail-title {
+  font-family: var(--font-heading);
   font-size: 20px;
-  font-weight: 700;
+  font-weight: 600;
+  letter-spacing: -0.02em;
   color: var(--fg);
   margin: 0;
 }
@@ -69,8 +71,9 @@
   -webkit-backdrop-filter: blur(40px) saturate(200%);
 }
 .settings-section-h {
+  font-family: var(--font-heading);
   font-size: 14px;
-  font-weight: 700;
+  font-weight: 600;
   color: var(--fg);
   margin: 0 0 3px 0;
   padding-top: 0;
@@ -103,7 +106,7 @@
   border-radius: 12px;
   background: var(--field-bg);
   color: var(--fg);
-  font-family: "SF Mono", ui-monospace, monospace;
+  font-family: var(--font-mono);
   font-size: 12px;
 }
 
@@ -280,7 +283,7 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--fg-3);
-  font-family: "SF Mono", ui-monospace, monospace;
+  font-family: var(--font-mono);
   font-size: 10.5px;
 }
 .provider-state {
@@ -526,7 +529,7 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--fg-3);
-  font-family: "SF Mono", ui-monospace, monospace;
+  font-family: var(--font-mono);
   font-size: 10.5px;
 }
 .connector-state {
@@ -646,7 +649,7 @@
 }
 .calendar-check-id {
   color: var(--fg-3);
-  font-family: "SF Mono", ui-monospace, monospace;
+  font-family: var(--font-mono);
   font-size: 10.5px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -683,7 +686,7 @@
   grid-template-columns: 240px minmax(0, 1fr) max-content;
 }
 .cap-path {
-  font-family: "SF Mono", ui-monospace, monospace;
+  font-family: var(--font-mono);
   font-size: 11px;
   color: var(--fg-2);
   overflow: hidden;
@@ -762,7 +765,7 @@
 /* P3-1 About block: read-only version value. Monospace, quiet — clearly not an
    editable field (no border/field-bg like .value-display). */
 .about-value {
-  font-family: "SF Mono", ui-monospace, monospace;
+  font-family: var(--font-mono);
   font-size: 12px;
   color: var(--fg-2);
 }
@@ -863,7 +866,7 @@
   margin-bottom: 14px;
 }
 .danger-confirm-field {
-  font-family: "SF Mono", ui-monospace, monospace;
+  font-family: var(--font-mono);
   color: var(--fg);
 }
 .danger-confirm-actions {

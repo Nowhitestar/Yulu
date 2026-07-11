@@ -194,6 +194,7 @@ export async function startServer(pathOverrides: Partial<RuntimePaths> = {}): Pr
   // Looked up dynamically so tests can flip YULU_UI_DIST_WEB between cases.
   const distWebDir = () => process.env.YULU_UI_DIST_WEB ?? join(__dirname, "../dist/web");
 
+  app.get("/favicon.svg", (c) => serveStaticFile(c.req.raw, distWebDir(), "favicon.svg"));
   app.get("/assets/*", (c) => serveStaticFile(c.req.raw, join(distWebDir(), "assets")));
 
   // SPA fallback — return index.html for any unmatched GET path so React

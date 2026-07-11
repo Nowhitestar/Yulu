@@ -216,6 +216,7 @@ function wrap(initialEntries = ["/agent-console"]) {
 }
 
 beforeEach(() => {
+  localStorage.removeItem("yulu_ui.agent.history_height");
   navigateMock.mockClear();
   transcribeMutate.mockClear();
   summarizeMutate.mockClear();
@@ -275,12 +276,29 @@ beforeEach(() => {
 
 describe("AgentConsole", () => {
   it("renders the primary work areas and opens capabilities on demand", () => {
-    const { getByText, queryByText } = wrap();
+    const { container, getByText, queryByText } = wrap();
     expect(getByText("最近三天")).toBeInTheDocument();
+    expect(container.querySelector(".agent-session-history")).toBeInTheDocument();
+    expect(container.querySelector(".agent-session-recent")).toBeInTheDocument();
+    expect(container.querySelector(".agent-session-resizer")).toHaveAttribute("role", "separator");
+    expect(container.querySelector(".agent-console-rail-left")).toBeNull();
     expect(getByText("问会议")).toBeInTheDocument();
     expect(queryByText("底层 Agent")).not.toBeInTheDocument();
     fireEvent.click(getByText("能力"));
     expect(getByText("底层 Agent")).toBeInTheDocument();
+  });
+
+  it("supports keyboard resizing for the history and recent-meetings split", () => {
+    const { container } = wrap();
+    const separator = container.querySelector(".agent-session-resizer") as HTMLElement;
+    const history = container.querySelector(".agent-session-history") as HTMLElement;
+    expect(separator).toHaveAttribute("tabindex", "0");
+    expect(separator).toHaveAttribute("aria-valuenow", "300");
+    expect(history).toHaveStyle({ height: "300px" });
+
+    fireEvent.keyDown(separator, { key: "ArrowDown" });
+    expect(separator).toHaveAttribute("aria-valuenow", "320");
+    expect(history).toHaveStyle({ height: "320px" });
   });
 
   it("keeps voice input available without duplicating it in the mode bar", () => {

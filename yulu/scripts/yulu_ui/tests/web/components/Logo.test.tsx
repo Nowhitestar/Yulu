@@ -11,16 +11,11 @@ describe("Logo", () => {
     expect(svg?.getAttribute("aria-label")).toBe("Yulu");
   });
 
-  it("contains the 语 glyph", () => {
+  it("renders the liquid-glass silhouette and quotation beads", () => {
     const { container } = render(<Logo />);
-    expect(container.textContent).toContain("语");
-  });
-
-  it("includes a cinnabar dot (circle with fill #A23B2B)", () => {
-    const { container } = render(<Logo />);
-    const circle = container.querySelector("circle");
-    expect(circle).not.toBeNull();
-    expect(circle?.getAttribute("fill")).toBe("#A23B2B");
+    expect(container.querySelector('[data-testid="logo-silhouette"]')).not.toBeNull();
+    expect(container.querySelectorAll('[data-testid="logo-quotes"] path')).toHaveLength(2);
+    expect(container.querySelector("text")).toBeNull();
   });
 
   it("accepts a custom size prop", () => {
@@ -28,5 +23,11 @@ describe("Logo", () => {
     const svg = container.querySelector("svg");
     expect(svg?.getAttribute("width")).toBe("48");
     expect(svg?.getAttribute("height")).toBe("48");
+  });
+
+  it("uses unique gradient ids when multiple logos render", () => {
+    const { container } = render(<><Logo /><Logo /></>);
+    const ids = [...container.querySelectorAll("linearGradient, radialGradient")].map((node) => node.id);
+    expect(new Set(ids).size).toBe(ids.length);
   });
 });

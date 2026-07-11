@@ -7,7 +7,7 @@
   margin: 0 0 8px 0;
 }
 .transcript-time {
-  font-family: "SF Mono", ui-monospace, monospace;
+  font-family: var(--font-mono);
   font-size: 10.5px;
   color: var(--fg-3);
   margin-right: 6px;
@@ -20,7 +20,7 @@ button.transcript-time:hover {
   color: var(--accent-on, var(--accent));
 }
 .transcript .speaker {
-  font-family: "SF Mono", ui-monospace, monospace;
+  font-family: var(--font-mono);
   font-size: 11px;
   color: var(--fg-3);
   margin-right: 4px;

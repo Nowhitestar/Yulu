@@ -22,7 +22,7 @@
   font-size: 13px;
   font-weight: 700;
   color: var(--fg);
-  font-family: "SF Mono", ui-monospace, monospace;
+  font-family: var(--font-mono);
 }
 .status-pill {
   display: inline-flex;
@@ -60,12 +60,12 @@
 .daemon-card-pid {
   font-size: 10px;
   color: var(--fg-3);
-  font-family: "SF Mono", ui-monospace, monospace;
+  font-family: var(--font-mono);
 }
 .daemon-card-lastlog {
   font-size: 11px;
   color: var(--fg-2);
-  font-family: "SF Mono", ui-monospace, monospace;
+  font-family: var(--font-mono);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
