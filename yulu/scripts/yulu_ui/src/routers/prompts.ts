@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { TRPCError } from "@trpc/server";
 import { router, publicProcedure } from "../trpc.js";
 
 const CATEGORY = z.enum(["summary", "cleanup", "voice"]);
@@ -28,6 +29,12 @@ export const promptsRouter = router({
       isAutoRun: z.boolean().optional(),
     }))
     .mutation(async ({ ctx, input }) => {
+      if (input.isAutoRun === true && input.category !== "summary") {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Automatic recording processing is available only for summary templates",
+        });
+      }
       const now = new Date().toISOString().replace(/\.\d+Z$/, "Z");
       const id = `id-${Date.now().toString(36)}`;
       ctx.db.prompts.prepare(
@@ -35,7 +42,6 @@ export const promptsRouter = router({
          VALUES (?, ?, ?, ?, ?, ?, 'manual', 0, ?, ?)`
       ).run(id, input.slug, input.name, input.category, input.content,
             input.isAutoRun ? 1 : 0, now, now);
-      await tryHup(ctx);
       return { id };
     }),
 
@@ -49,19 +55,36 @@ export const promptsRouter = router({
       isAutoRun: z.boolean().optional(),
     }))
     .mutation(async ({ ctx, input }) => {
+      const existing = ctx.db.prompts.prepare(
+        "SELECT category, is_auto_run FROM prompts WHERE id = ?",
+      ).get(input.id) as { category: string; is_auto_run: number } | undefined;
+      if (!existing) return { updated: 0 };
+      const effectiveCategory = input.category ?? existing.category;
+      if (input.isAutoRun === true && effectiveCategory !== "summary") {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Automatic recording processing is available only for summary templates",
+        });
+      }
       const fields: string[] = [];
       const values: unknown[] = [];
       if (input.name !== undefined)      { fields.push("name = ?");        values.push(input.name); }
       if (input.slug !== undefined)      { fields.push("slug = ?");        values.push(input.slug); }
       if (input.category !== undefined)  { fields.push("category = ?");    values.push(input.category); }
       if (input.content !== undefined)   { fields.push("content = ?");     values.push(input.content); }
-      if (input.isAutoRun !== undefined) { fields.push("is_auto_run = ?"); values.push(input.isAutoRun ? 1 : 0); }
+      if (
+        input.isAutoRun !== undefined ||
+        effectiveCategory !== "summary" ||
+        (input.category === "summary" && existing.category !== "summary")
+      ) {
+        fields.push("is_auto_run = ?");
+        values.push(effectiveCategory === "summary" && input.isAutoRun === true ? 1 : 0);
+      }
       if (fields.length === 0) return { updated: 0 };
       fields.push("source = ?"); values.push("manual");
       fields.push("updated_at = ?"); values.push(new Date().toISOString().replace(/\.\d+Z$/, "Z"));
       values.push(input.id);
       const r = ctx.db.prompts.prepare(`UPDATE prompts SET ${fields.join(", ")} WHERE id = ?`).run(...values);
-      await tryHup(ctx);
       return { updated: r.changes };
     }),
 
@@ -69,12 +92,6 @@ export const promptsRouter = router({
     .input(z.object({ id: z.string() }))
     .mutation(async ({ ctx, input }) => {
       const r = ctx.db.prompts.prepare("DELETE FROM prompts WHERE id = ?").run(input.id);
-      await tryHup(ctx);
       return { deleted: r.changes };
     }),
 });
-
-async function tryHup(ctx: { launchctl: { sighup: (l: string) => Promise<void> } }): Promise<void> {
-  try { await ctx.launchctl.sighup("com.yulu.agentqueue"); }
-  catch { /* worker may be down; the change is persisted */ }
-}

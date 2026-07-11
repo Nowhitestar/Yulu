@@ -9,7 +9,7 @@ sys.path.insert(0, str(SCRIPTS))
 
 import pytest
 from prompts import PromptsRepo, Category, open_db
-from prompts.cache import PromptsCache, resolve_meeting_date
+from prompts.cache import PromptsCache
 
 
 # ── render ─────────────────────────────────────────────────────────
@@ -36,12 +36,12 @@ def test_auto_run_filters_by_category(tmp_path):
     repo = PromptsRepo(open_db(db))
     repo.add(slug="s1", name="S1", category=Category.SUMMARY, content="x", is_auto_run=True)
     repo.add(slug="s2", name="S2", category=Category.SUMMARY, content="x", is_auto_run=False)
-    repo.add(slug="c1", name="C1", category=Category.CLEANUP, content="x", is_auto_run=True)
+    repo.add(slug="c1", name="C1", category=Category.CLEANUP, content="x")
     cache = PromptsCache(db); cache.load()
     s = [p.slug for p in cache.auto_run("summary")]
     c = [p.slug for p in cache.auto_run("cleanup")]
     assert s == ["s1"]
-    assert c == ["c1"]
+    assert c == []
 
 
 def test_by_slug_and_by_id(tmp_path):
@@ -77,38 +77,6 @@ def test_maybe_reload_uses_max_wal_mtime(tmp_path):
     repo.add(slug="b", name="B", category=Category.SUMMARY, content="x", is_auto_run=True)
     assert cache.maybe_reload() is True
     assert len(cache.auto_run("summary")) == initial + 1
-
-
-# ── resolve_meeting_date ───────────────────────────────────────────
-
-def test_resolve_meeting_date_from_filename_suffix(tmp_path):
-    p = tmp_path / "AgentkeyWeekly_20260519_160002.wav"
-    p.write_bytes(b"")
-    assert resolve_meeting_date(p) == "2026-05-19"
-
-
-def test_resolve_meeting_date_falls_back_to_mtime(tmp_path):
-    p = tmp_path / "no-suffix.wav"
-    p.write_bytes(b"")
-    # mtime should be today; just assert it's a valid ISO YYYY-MM-DD shape
-    d = resolve_meeting_date(p)
-    assert len(d) == 10 and d[4] == "-" and d[7] == "-"
-
-
-def test_resolve_meeting_date_missing_file_falls_back_to_today(tmp_path):
-    p = tmp_path / "nonexistent.wav"
-    from datetime import datetime
-    expected = datetime.now().strftime("%Y-%m-%d")
-    assert resolve_meeting_date(p) == expected
-
-
-def test_resolve_meeting_date_unparseable_suffix(tmp_path):
-    # Looks like the pattern but invalid date numbers
-    p = tmp_path / "Weird_20269999_999999.wav"
-    p.write_bytes(b"")
-    # Should fall back to mtime, not raise
-    d = resolve_meeting_date(p)
-    assert len(d) == 10
 
 
 # ── speaker-aware template variables (Phase 3) ─────────────────────

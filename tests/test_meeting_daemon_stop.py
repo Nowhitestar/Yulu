@@ -1,25 +1,47 @@
+import json
+import stat
 import sys
+from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
+from urllib.error import HTTPError, URLError
 
 SCRIPTS = Path(__file__).resolve().parents[1] / "yulu" / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
 
-def test_stop_uses_daemon_status_when_state_is_idle(monkeypatch, tmp_path):
+class _Response:
+    def __init__(self, status=202):
+        self.status = status
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, _exc_type, _exc, _tb):
+        return False
+
+    def read(self):
+        return b'{"ok":true}'
+
+    def getcode(self):
+        return self.status
+
+
+def _prepare_stop(monkeypatch, tmp_path, *, returncode=0, final_path=None):
     import meeting_daemon
-    import record_audio
 
     wav = tmp_path / "TeamSync_20260102_090000.wav"
     wav.write_bytes(b"RIFFxxxxWAVE")
+    final_path = wav if final_path is None else final_path
     calls = []
 
     monkeypatch.setattr(meeting_daemon, "_kill_status_window", lambda: None)
-    monkeypatch.setattr(meeting_daemon, "load_state", lambda: {"recording": False})
-    def fake_socket_send(cmd):
-        return {"recording": True, "file": str(wav)} if cmd.get("action") == "status" else None
-
-    monkeypatch.setattr(record_audio, "socket_send", fake_socket_send)
+    monkeypatch.setattr(meeting_daemon, "_active_recording_info", lambda: {
+        "title": "Team Sync",
+        "audio_path": str(wav),
+        "file_path": str(wav),
+        "backend": "daemon",
+    })
     monkeypatch.setattr(meeting_daemon, "set_recording_stopped", lambda **_kw: {})
     monkeypatch.setattr(meeting_daemon, "load_schedule", lambda: {"events": [], "meetings": []})
     monkeypatch.setattr(meeting_daemon, "save_schedule", lambda _data: None)
@@ -27,51 +49,162 @@ def test_stop_uses_daemon_status_when_state_is_idle(monkeypatch, tmp_path):
 
     def fake_run(args, capture_output=False, text=False):
         calls.append(args)
-        script = Path(args[1]).name if len(args) > 1 else ""
-        if script == "record_audio.py":
-            return SimpleNamespace(returncode=0, stdout=f"FINAL_RECORDING_PATH={wav}\n", stderr="")
-        if script == "transcribe.py":
-            return SimpleNamespace(returncode=0, stdout="Transcript saved: x\nSummary status: draft_agent_pending\n", stderr="")
-        return SimpleNamespace(returncode=0, stdout="", stderr="")
+        stdout = f"FINAL_RECORDING_PATH={final_path}\n" if final_path else ""
+        return SimpleNamespace(returncode=returncode, stdout=stdout, stderr="stop failed" if returncode else "")
 
     monkeypatch.setattr(meeting_daemon.subprocess, "run", fake_run)
+    monkeypatch.setattr(meeting_daemon, "MCP_TOKEN_PATH", tmp_path / "mcp-token.json")
+    monkeypatch.setattr(meeting_daemon, "RECORDING_EVENTS_DIR", tmp_path / "recording-events")
+    monkeypatch.setattr(meeting_daemon, "CONFIG_PATH", tmp_path / "config.json")
+    return meeting_daemon, wav, calls
+
+
+def test_stop_posts_completion_to_host_and_never_runs_legacy_pipeline(monkeypatch, tmp_path):
+    meeting_daemon, wav, calls = _prepare_stop(monkeypatch, tmp_path)
+    meeting_daemon.MCP_TOKEN_PATH.write_text(json.dumps({"token": "secret"}), encoding="utf-8")
+    meeting_daemon.CONFIG_PATH.write_text(
+        json.dumps({"agent_pipeline": {"auto_send_notion": True}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("YULU_UI_PORT", "8123")
+    seen = {}
+
+    def fake_urlopen(request, timeout):
+        seen.update({
+            "url": request.full_url,
+            "authorization": request.get_header("Authorization"),
+            "content_type": request.get_header("Content-type"),
+            "payload": json.loads(request.data.decode("utf-8")),
+            "timeout": timeout,
+        })
+        return _Response()
+
+    monkeypatch.setattr(meeting_daemon, "urlopen", fake_urlopen)
 
     meeting_daemon._stop_and_process()
 
-    assert any(len(args) > 2 and Path(args[1]).name == "record_audio.py" and args[2] == "stop" for args in calls)
+    assert [Path(args[1]).name for args in calls] == ["record_audio.py"]
+    assert calls[0][2] == "stop"
+    assert seen == {
+        "url": "http://127.0.0.1:8123/api/recordings/completed",
+        "authorization": "Bearer secret",
+        "content_type": "application/json",
+        "payload": {
+            "audioPath": str(wav.resolve()),
+            "title": "Team Sync",
+            "sendToNotion": True,
+        },
+        "timeout": 5.0,
+    }
+    assert not meeting_daemon.RECORDING_EVENTS_DIR.exists()
 
 
-def test_post_recording_plan_summarizes_when_realtime_is_reusable(monkeypatch, tmp_path):
-    import json
+def test_stop_spools_completion_atomically_when_host_is_unavailable(monkeypatch, tmp_path):
+    meeting_daemon, wav, calls = _prepare_stop(monkeypatch, tmp_path)
+    meeting_daemon.MCP_TOKEN_PATH.write_text(json.dumps({"token": "secret"}), encoding="utf-8")
+    meeting_daemon.CONFIG_PATH.write_text(
+        json.dumps({"agent_pipeline": {"auto_send_notion": True}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        meeting_daemon,
+        "urlopen",
+        lambda *_a, **_kw: (_ for _ in ()).throw(URLError("host unavailable")),
+    )
+
+    meeting_daemon._stop_and_process()
+
+    assert [Path(args[1]).name for args in calls] == ["record_audio.py"]
+    events = list(meeting_daemon.RECORDING_EVENTS_DIR.glob("*.json"))
+    assert len(events) == 1
+    assert json.loads(events[0].read_text(encoding="utf-8")) == {
+        "audioPath": str(wav.resolve()),
+        "title": "Team Sync",
+        "sendToNotion": True,
+    }
+    assert not list(meeting_daemon.RECORDING_EVENTS_DIR.glob("*.tmp"))
+    assert not list(meeting_daemon.RECORDING_EVENTS_DIR.glob(".*.tmp"))
+    assert stat.S_IMODE(meeting_daemon.RECORDING_EVENTS_DIR.stat().st_mode) == 0o700
+    assert stat.S_IMODE(events[0].stat().st_mode) == 0o600
+
+
+def test_policy_disabled_completion_is_permanently_acknowledged_without_spooling(monkeypatch, tmp_path):
+    meeting_daemon, wav, _calls = _prepare_stop(monkeypatch, tmp_path)
+    meeting_daemon.MCP_TOKEN_PATH.write_text(json.dumps({"token": "secret"}), encoding="utf-8")
+    meeting_daemon.CONFIG_PATH.write_text(
+        json.dumps({"agent_pipeline": {"enabled": True, "auto_process_recordings": True}}),
+        encoding="utf-8",
+    )
+    body = BytesIO(json.dumps({
+        "ok": False,
+        "error": "recording_pipeline_policy_disabled",
+        "permanent": True,
+    }).encode("utf-8"))
+    monkeypatch.setattr(
+        meeting_daemon,
+        "urlopen",
+        lambda request, timeout: (_ for _ in ()).throw(
+            HTTPError(request.full_url, 409, "Conflict", {}, body)
+        ),
+    )
+
+    assert meeting_daemon._dispatch_recording_completed(str(wav), "Team Sync") is None
+    assert not meeting_daemon.RECORDING_EVENTS_DIR.exists()
+
+
+def test_capture_edge_keeps_recording_without_dispatch_when_auto_processing_is_disabled(monkeypatch, tmp_path):
+    meeting_daemon, wav, _calls = _prepare_stop(monkeypatch, tmp_path)
+    meeting_daemon.CONFIG_PATH.write_text(
+        json.dumps({"agent_pipeline": {"enabled": True, "auto_process_recordings": False}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        meeting_daemon,
+        "urlopen",
+        lambda *_a, **_kw: (_ for _ in ()).throw(AssertionError("must not post")),
+    )
+
+    assert meeting_daemon._dispatch_recording_completed(str(wav), "Team Sync") is None
+    assert wav.exists()
+    assert not meeting_daemon.RECORDING_EVENTS_DIR.exists()
+
+
+def test_auto_send_notion_uses_agent_pipeline_consent(monkeypatch, tmp_path):
     import meeting_daemon
 
     cfg = tmp_path / "config.json"
-    cfg.write_text(json.dumps({"transcription": {"post_recording_mode": "fast_summary"}}), encoding="utf-8")
     monkeypatch.setattr(meeting_daemon, "CONFIG_PATH", cfg)
+    cfg.write_text(json.dumps({
+        "agent_pipeline": {"auto_send_notion": False},
+    }), encoding="utf-8")
+    assert meeting_daemon._recording_completed_payload("/tmp/a.wav", "A")["sendToNotion"] is False
 
-    wav = tmp_path / "TeamSync_20260102_090000.wav"
-    wav.write_bytes(b"RIFFxxxxWAVE")
-    wav.with_suffix(".realtime.transcript.txt").write_text("live transcript", encoding="utf-8")
+    cfg.write_text(json.dumps({"agent_pipeline": {"auto_send_notion": True}}), encoding="utf-8")
+    assert meeting_daemon._recording_completed_payload("/tmp/a.wav", "A")["sendToNotion"] is True
 
-    plan = meeting_daemon._post_recording_plan(str(wav))
-
-    assert plan["event"] == "summarizing"
-    assert "复用实时转写" in plan["message"]
+    cfg.write_text("{}", encoding="utf-8")
+    assert meeting_daemon._recording_completed_payload("/tmp/a.wav", "A")["sendToNotion"] is False
 
 
-def test_post_recording_plan_transcribes_in_full_mode(monkeypatch, tmp_path):
-    import json
-    import meeting_daemon
+def test_stop_failure_or_missing_file_does_not_dispatch(monkeypatch, tmp_path):
+    meeting_daemon, _wav, calls = _prepare_stop(monkeypatch, tmp_path, returncode=2)
+    monkeypatch.setattr(
+        meeting_daemon,
+        "_dispatch_recording_completed",
+        lambda *_a: (_ for _ in ()).throw(AssertionError("must not dispatch")),
+    )
+    meeting_daemon._stop_and_process()
+    assert [Path(args[1]).name for args in calls] == ["record_audio.py"]
 
-    cfg = tmp_path / "config.json"
-    cfg.write_text(json.dumps({"transcription": {"post_recording_mode": "full_transcribe"}}), encoding="utf-8")
-    monkeypatch.setattr(meeting_daemon, "CONFIG_PATH", cfg)
-
-    wav = tmp_path / "TeamSync_20260102_090000.wav"
-    wav.write_bytes(b"RIFFxxxxWAVE")
-    wav.with_suffix(".realtime.transcript.txt").write_text("live transcript", encoding="utf-8")
-
-    assert meeting_daemon._post_recording_plan(str(wav))["event"] == "transcribing"
+    missing = tmp_path / "missing.wav"
+    meeting_daemon, _wav, calls = _prepare_stop(monkeypatch, tmp_path, final_path=missing)
+    monkeypatch.setattr(
+        meeting_daemon,
+        "_dispatch_recording_completed",
+        lambda *_a: (_ for _ in ()).throw(AssertionError("must not dispatch")),
+    )
+    meeting_daemon._stop_and_process()
+    assert [Path(args[1]).name for args in calls] == ["record_audio.py"]
 
 
 def test_start_recording_uses_capture_controller(monkeypatch):

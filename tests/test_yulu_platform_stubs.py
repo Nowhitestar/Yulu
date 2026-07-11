@@ -49,7 +49,7 @@ def test_linux_daemon_manager_is_stub():
     from yulu_platform.linux import LinuxDaemonManager
 
     with pytest.raises(NotImplementedError):
-        LinuxDaemonManager().load("com.yulu.sttdaemon")
+        LinuxDaemonManager().load("com.yulu.audiodaemon")
 
 
 def test_linux_audio_capture_controller_is_stub():
@@ -84,7 +84,7 @@ def test_windows_daemon_manager_is_stub():
     from yulu_platform.windows import WindowsDaemonManager
 
     with pytest.raises(NotImplementedError):
-        WindowsDaemonManager().load("com.yulu.sttdaemon")
+        WindowsDaemonManager().load("com.yulu.audiodaemon")
 
 
 def test_windows_audio_capture_controller_is_stub():
@@ -99,7 +99,7 @@ def test_service_spec_is_importable_and_frozen():
 
     from yulu_platform.base import ServiceSpec
 
-    spec = ServiceSpec(name="com.yulu.sttdaemon", program=["python3", "-m", "stt_daemon"])
+    spec = ServiceSpec(name="com.yulu.testjob", program=["python3", "-m", "example_service"])
     assert spec.keep_alive is True
     with pytest.raises(FrozenInstanceError):
         spec.name = "mutated"  # frozen dataclass — assignment must fail

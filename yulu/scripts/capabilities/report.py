@@ -4,11 +4,10 @@ every downstream consumer binds to (DETECT-01, D-01/D-08).
 The report is a ``schema_version``-stamped dataclass. Each capability entry carries:
 
 - ``provenance`` — WHERE the capability comes from: ``host-path`` (found on the host the
-  daemon runs as), ``yulu-managed`` (provisioned/owned by Yulu), ``agent-config`` (configured
+  Host runs as), ``yulu-managed`` (owned by Yulu), ``agent-config`` (configured
   by the host coding agent, e.g. its llm.command), or ``absent``.
 - ``status`` — a TRI-STATE (``usable`` | ``present-but-unverified`` | ``absent``), **never a
-  boolean**. A boolean must never drive a "skip install" decision (D-08); Phase 5 reuse gates
-  on the three distinct states.
+  boolean**.
 - ``resolved_path`` — the concrete path when known, ``""`` when absent.
 - ``detail`` — free-form (a version string, or a short error first-line).
 
@@ -65,8 +64,7 @@ class HostCapabilityReport:
     """Versioned snapshot of what the daemon can use.
 
     ``schema_version`` is present on every serialized report (start at 1). ``capabilities``
-    maps a capability name (``claude``, ``whisper-cli``, ``mlx-whisper``, ``llm.command``,
-    ``models``, ``recording-dir``, …) to its :class:`Capability`.
+    maps an Agent or deterministic Host capability name to its :class:`Capability`.
     """
 
     schema_version: int = 1

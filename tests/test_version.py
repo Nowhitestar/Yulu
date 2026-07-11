@@ -62,3 +62,22 @@ def test_format_version_includes_install_metadata():
     }
 
     assert format_version(info) == "Yulu 0.5.0 (abc1234, release v0.5.0)"
+
+
+def test_format_version_includes_dev_snapshot_metadata():
+    info = {
+        "version": "0.17.0",
+        "valid_semver": True,
+        "git_commit": None,
+        "git_tag": None,
+        "git_dirty": None,
+        "install": {
+            "source": "dev",
+            "branch": "codex/hermes-agent-pipeline",
+            "commit": "7b33f3a",
+            "dirty": True,
+        },
+    }
+    assert format_version(info) == (
+        "Yulu 0.17.0 (dev codex/hermes-agent-pipeline@7b33f3a, dirty snapshot)"
+    )

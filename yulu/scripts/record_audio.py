@@ -37,18 +37,11 @@ from recording_lock import (
     RecordingBusy,
 )
 
-try:
-    from agent_notify import notify
-except Exception:
-    def notify(*args, **kwargs):
-        pass
-
 CONFIG_DIR = Path.home() / ".config" / "yulu"
 CONFIG_PATH = CONFIG_DIR / "config.json"
 SOCKET_PATH = CONFIG_DIR / "audio_daemon.sock"
 STATE_PATH = CONFIG_DIR / ".state.json"
 SCRIPT_DIR = Path(__file__).resolve().parent
-REALTIME_PID_PATH = CONFIG_DIR / ".realtime_transcribe.pid"
 
 
 # Phase 5 DATA-01 — the output_dir FALLBACK (when config has none) follows
@@ -91,9 +84,8 @@ def load_config():
     audio_cfg.setdefault("output_dir", str(_resolve_data_dir()))
     audio_cfg.setdefault("silence_threshold", 0.01)
     audio_cfg.setdefault("silence_duration_sec", 300)
-    # NOTE: realtime transcription is governed by transcription.realtime_enabled
-    # (see realtime_enabled()); the old audio.realtime_transcribe default was
-    # vestigial — nothing consumed it — so it is no longer injected here.
+    # The old realtime-transcription config default was vestigial, so capture no
+    # longer injects it.
     return audio_cfg
 
 
@@ -154,89 +146,6 @@ def write_state(state):
     save_recording_state(state, STATE_PATH)
 
 
-def realtime_enabled():
-    try:
-        cfg = json.loads(CONFIG_PATH.read_text()) if CONFIG_PATH.exists() else {}
-    except Exception:
-        cfg = {}
-    trans_cfg = cfg.get("transcription", {})
-    if "realtime_enabled" in trans_cfg:
-        return bool(trans_cfg.get("realtime_enabled"))
-    # Legacy fallback: pre-Phase-K configs used audio.realtime_transcribe.
-    # Honored for backward compat; new installs use transcription.realtime_enabled
-    # (seeded true by setup.sh). Defaults true when neither key is present.
-    return bool(cfg.get("audio", {}).get("realtime_transcribe", True))
-
-
-def start_realtime_transcriber(audio_path, title):
-    if not realtime_enabled() or not audio_path:
-        return
-    script = SCRIPT_DIR / "realtime_transcribe.py"
-    if not script.exists():
-        return
-    stop_realtime_transcriber(wait=False)
-    log_path = CONFIG_DIR / "realtime_transcribe.log"
-    with log_path.open("ab") as log_file:
-        proc = subprocess.Popen(
-            [sys.executable, str(script), str(audio_path), title],
-            stdout=log_file,
-            stderr=log_file,
-            start_new_session=True,
-        )
-    REALTIME_PID_PATH.write_text(str(proc.pid))
-    log(f"📝 实时转写已启动: pid={proc.pid}")
-
-
-def stop_realtime_transcriber(wait=True, graceful=False):
-    if not REALTIME_PID_PATH.exists():
-        return
-    try:
-        pid = int(REALTIME_PID_PATH.read_text().strip())
-
-        def alive():
-            try:
-                os.kill(pid, 0)
-                return True
-            except ProcessLookupError:
-                return False
-
-        def wait_until_dead(seconds):
-            deadline = time.time() + seconds
-            while time.time() < deadline:
-                if not alive():
-                    REALTIME_PID_PATH.unlink(missing_ok=True)
-                    return True
-                time.sleep(0.5)
-            return not alive()
-
-        if not alive():
-            REALTIME_PID_PATH.unlink(missing_ok=True)
-            return
-
-        # realtime_transcribe.py is launched with start_new_session=True and can be
-        # blocked inside an mlx-whisper child process. Its SIGTERM handler only
-        # sets a flag, so a plain os.kill(pid, SIGTERM) can leave the process
-        # group alive and keep appending to the realtime transcript after the
-        # recording has stopped. Kill the whole process group, then escalate.
-        try:
-            os.killpg(pid, signal.SIGTERM)
-        except Exception:
-            os.kill(pid, signal.SIGTERM)
-
-        if wait and not wait_until_dead(180 if graceful else 20):
-            try:
-                os.killpg(pid, signal.SIGKILL)
-            except Exception:
-                try:
-                    os.kill(pid, signal.SIGKILL)
-                except Exception:
-                    pass
-            wait_until_dead(5)
-    except Exception:
-        pass
-    REALTIME_PID_PATH.unlink(missing_ok=True)
-
-
 def detect_daemon_crash(resp=None):
     """Detect a stale 'recording=true' state when the daemon/socket is gone.
 
@@ -255,8 +164,6 @@ def detect_daemon_crash(resp=None):
     title = rec.get("title", "")
     path = rec.get("audio_path") or rec.get("file_path", "")
     log(f"⚠️ 检测到 Yulu 异常退出，录音状态残留: {title} → {path}")
-    stop_realtime_transcriber(wait=True)
-    notify("recording_crashed", title=title, path=path, message="Yulu 异常退出，已保留可恢复的部分录音文件。")
     set_recording_stopped(status="crashed", path=STATE_PATH, extra={"crashed_at": datetime.now().isoformat()})
     return True
 
@@ -312,7 +219,6 @@ def _record_resumed_segment(state, new_path):
         "last_resumed_at": datetime.now().isoformat(timespec="seconds"),
     }
     write_state(next_state)
-    notify("recording_resumed", title=title, path=new_path, message="录制中断后已自动续录。")
 
 
 def resume_interrupted_recording(resp):
@@ -324,7 +230,6 @@ def resume_interrupted_recording(resp):
     title = state.get("title") or "未命名会议"
     old_path = state.get("audio_path") or state.get("file_path") or ""
     log(f"⚠️ 检测到 daemon 重启导致录制中断，正在续录: {title} → {old_path}")
-    stop_realtime_transcriber(wait=False)
     start_resp = _capture_controller().start(_daemon_start_payload(title, load_config()))
     if not (start_resp and start_resp.get("status") == "recording" and start_resp.get("file")):
         set_recording_stopped(
@@ -338,11 +243,9 @@ def resume_interrupted_recording(resp):
                 "interrupted_at": datetime.now().isoformat(timespec="seconds"),
             },
         )
-        notify("recording_interrupted", title=title, path=old_path, message="录制中断，续录失败。")
         return None
     new_path = start_resp.get("file")
     _record_resumed_segment(state, new_path)
-    start_realtime_transcriber(new_path, title)
     log(f"✅ 已续录: {new_path}")
     return {"recording": True, "file": new_path, "resumed": True}
 
@@ -421,7 +324,6 @@ def daemon_start(title, lock_handle=None):
                 started_at=datetime.now().isoformat(),
             )
         log(f"🎙 Recording started: {path}")
-        start_realtime_transcriber(path, title)
         return True
     log(f"❌ Start failed: {resp}")
     return False
@@ -479,8 +381,6 @@ def daemon_stop():
     rec = recording_info(state)
     resp = _capture_controller().stop()
     if resp and resp.get("status") == "stopped":
-        # Do not let realtime transcription keep the UI stuck for minutes.
-        stop_realtime_transcriber(wait=True, graceful=False)
         dur = resp.get("duration", 0)
         path = resp.get("file", "")
         segments = _unique_existing([*_recording_segments(state), path])
@@ -502,7 +402,6 @@ def daemon_stop():
         return {"path": final_path or path, "duration": dur, "segments": stored_segments}
 
     # Socket failure while state says daemon recording: stop quickly and keep file.
-    stop_realtime_transcriber(wait=True, graceful=False)
     detect_daemon_crash(resp)
     result = emergency_stop_daemon(rec)
     if result:
@@ -589,7 +488,6 @@ def sox_start(title, lock_handle=None):
             path=str(output),
             started_at=datetime.now().isoformat(),
         )
-    start_realtime_transcriber(output, title)
     return True
 
 
@@ -605,7 +503,6 @@ def sox_stop():
             pass
 
     set_recording_stopped(path=STATE_PATH)
-    stop_realtime_transcriber(wait=True, graceful=True)
 
     log("⏹ 录制已停止")
     return {"path": "", "duration": 0}
@@ -628,12 +525,6 @@ def main():
     cmd = sys.argv[1]
     cfg = load_config()
     backend = cfg.get("backend", "daemon")
-
-    if cmd == "restart-realtime":
-        audio_path = sys.argv[2] if len(sys.argv) > 2 else ""
-        title = sys.argv[3] if len(sys.argv) > 3 else Path(audio_path).stem
-        start_realtime_transcriber(audio_path, title)
-        return
 
     if backend == "daemon":
         if cmd == "start":

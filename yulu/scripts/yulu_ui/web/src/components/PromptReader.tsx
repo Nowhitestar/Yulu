@@ -51,6 +51,7 @@ export function PromptReader({ prompt, onSave, onDelete }: PromptReaderProps) {
   const [category, setCategory] = useState<Category>("summary");
   const [content, setContent] = useState("");
   const [isAutoRun, setIsAutoRun] = useState(false);
+  const autoRunAvailable = category === "summary";
 
   useEffect(() => {
     if (prompt) {
@@ -58,7 +59,7 @@ export function PromptReader({ prompt, onSave, onDelete }: PromptReaderProps) {
       setSlug(prompt.slug);
       setCategory(prompt.category);
       setContent(prompt.content);
-      setIsAutoRun(prompt.is_auto_run === 1);
+      setIsAutoRun(prompt.category === "summary" && prompt.is_auto_run === 1);
     } else {
       setName(""); setSlug(""); setCategory("summary"); setContent(""); setIsAutoRun(false);
     }
@@ -100,15 +101,35 @@ export function PromptReader({ prompt, onSave, onDelete }: PromptReaderProps) {
       </div>
       <div className="preader-field">
         <label className="preader-label" htmlFor="prompt-category">{t("promptReader.category")}</label>
-        <select id="prompt-category" className="preader-input" value={category} onChange={(e) => setCategory(e.target.value as Category)}>
+        <select
+          id="prompt-category"
+          className="preader-input"
+          value={category}
+          onChange={(e) => {
+            const next = e.target.value as Category;
+            setCategory(next);
+            if (next !== "summary") setIsAutoRun(false);
+          }}
+        >
           {CATEGORIES.map((c) => <option key={c} value={c}>{t(`category.${c}`)}</option>)}
         </select>
       </div>
       <div className="preader-field">
         <label className="preader-label">{t("promptReader.autorun")}</label>
-        <button type="button" role="switch" aria-checked={isAutoRun} className={"preader-toggle" + (isAutoRun ? " on" : "")} onClick={() => setIsAutoRun(!isAutoRun)}>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={isAutoRun}
+          aria-describedby="prompt-autorun-help"
+          disabled={!autoRunAvailable}
+          className={"preader-toggle" + (isAutoRun ? " on" : "")}
+          onClick={() => setIsAutoRun(!isAutoRun)}
+        >
           <span className="preader-toggle-knob" />
         </button>
+        <span id="prompt-autorun-help" className="preader-help">
+          {t(autoRunAvailable ? "promptReader.autorunHelp" : "promptReader.autorunSummaryOnly")}
+        </span>
       </div>
       <div className="preader-field preader-field-content">
         <label className="preader-label" htmlFor="prompt-content">{t("promptReader.content")}</label>

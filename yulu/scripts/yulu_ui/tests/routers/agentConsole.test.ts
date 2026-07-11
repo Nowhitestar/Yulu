@@ -4,7 +4,6 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { agentConsoleRouter } from "../../src/routers/agentConsole.js";
 import { createCaller, type AppContext } from "../../src/trpc.js";
-import { JobRegistry } from "../../src/jobStatus.js";
 
 function wavHeader(): Buffer {
   const header = Buffer.alloc(44);
@@ -24,7 +23,11 @@ function wavHeader(): Buffer {
   return header;
 }
 
-function makeCtx(moviesDir: string, configState: Record<string, unknown>, jobs = new JobRegistry()): AppContext {
+function makeCtx(
+  moviesDir: string,
+  configState: Record<string, unknown>,
+  latestForRecording: (stem: string) => unknown = () => null,
+): AppContext {
   return {
     paths: {
       moviesDir,
@@ -32,7 +35,7 @@ function makeCtx(moviesDir: string, configState: Record<string, unknown>, jobs =
       scriptDir: "/fake/yulu/scripts",
       statusAgentSock: join(moviesDir, "missing-status.sock"),
     },
-    jobs,
+    host: { latestForRecording },
     config: {
       read: () => configState,
       update: vi.fn((key: string, value: unknown) => {
@@ -81,25 +84,20 @@ describe("agentConsoleRouter", () => {
     restoreEnv("YULU_CODEX_CONFIG_PATH", oldEnv.codexConfig);
   });
 
-  it("treats existing summaries as ready to share even when an old job says transcribing", async () => {
+  it("treats existing summaries as ready even when the latest Host task is still running", async () => {
     const root = mkdtempSync(join(tmpdir(), "agent-console-"));
     roots.push(root);
     const moviesDir = join(root, "movies");
     mkdirSync(moviesDir);
     const stem = "AgentkeyProductWeekly_20260625_160011";
-    const jobs = new JobRegistry();
     writeFileSync(join(moviesDir, `${stem}.wav`), wavHeader());
     writeFileSync(join(moviesDir, `${stem}.transcript.txt`), "transcript");
     writeFileSync(join(moviesDir, `${stem}.summary.md`), "summary");
-    jobs.set({
-      stem,
-      action: "transcribe",
-      state: "transcribing",
-      startedAt: Date.now(),
-      jobId: "stale-job",
-    });
-
-    const result = await createCaller(agentConsoleRouter, makeCtx(moviesDir, { llm: { agent: { provider: "auto" } } }, jobs)).overview();
+    const result = await createCaller(agentConsoleRouter, makeCtx(
+      moviesDir,
+      { llm: { agent: { provider: "auto" } } },
+      () => ({ state: "running", phase: "transcribing", sendToNotion: false, error: null }),
+    )).overview();
 
     expect(result.tasks[0]).toMatchObject({
       stem,
@@ -117,11 +115,12 @@ describe("agentConsoleRouter", () => {
     writeFileSync(join(moviesDir, `${stem}.wav`), wavHeader());
     writeFileSync(join(moviesDir, `${stem}.transcript.txt`), "transcript");
     writeFileSync(join(moviesDir, `${stem}.summary.md`), "summary");
-    writeFileSync(join(moviesDir, `${stem}.shares.json`), JSON.stringify([
-      { id: "s1", channel: "notion", label: "Notion", destination: "DB", sentAt: "2026-06-25T10:00:00", status: "success" },
-    ]));
 
-    const result = await createCaller(agentConsoleRouter, makeCtx(moviesDir, { llm: { agent: { provider: "auto" } } })).overview();
+    const result = await createCaller(agentConsoleRouter, makeCtx(
+      moviesDir,
+      { llm: { agent: { provider: "auto" } } },
+      () => ({ state: "completed", phase: "completed", sendToNotion: true, error: null }),
+    )).overview();
 
     expect(result.tasks).toHaveLength(1);
     expect(result.tasks[0]).toMatchObject({
@@ -289,25 +288,25 @@ describe("agentConsoleRouter", () => {
     });
   });
 
-  it("adds and removes Console plugin filters without touching legacy integration config", async () => {
+  it("adds and removes Console plugin filters without touching calendar connector config", async () => {
     const root = mkdtempSync(join(tmpdir(), "agent-console-"));
     roots.push(root);
     const moviesDir = join(root, "movies");
     mkdirSync(moviesDir);
     const configState = {
       llm: { enabled: true, command: ["codex"], agent: { provider: "codex" } },
-      connectors: { zulip: { send_summary: true } },
+      connectors: { gog: { read_calendar: true } },
       agent_console: { plugins: { added: ["summary"] } },
     };
     const caller = createCaller(agentConsoleRouter, makeCtx(moviesDir, configState));
 
     await caller.addPlugin({ plugin: "zulip" });
     expect(configState.agent_console.plugins.added).toEqual(["summary", "zulip"]);
-    expect(configState.connectors.zulip.send_summary).toBe(true);
+    expect(configState.connectors.gog.read_calendar).toBe(true);
 
     await caller.removePlugin({ plugin: "zulip" });
     expect(configState.agent_console.plugins.added).toEqual(["summary"]);
-    expect(configState.connectors.zulip.send_summary).toBe(true);
+    expect(configState.connectors.gog.read_calendar).toBe(true);
   });
 
   it("stores send destinations under the selected Agent", async () => {
@@ -332,6 +331,7 @@ describe("agentConsoleRouter", () => {
         },
       },
     });
+    expect(configState).toMatchObject({ agent_pipeline: { notion_destination: "Product Notes" } });
     const result = await caller.overview();
     expect(result.plugins.current.find((plugin: { id: string }) => plugin.id === "notion")).toMatchObject({
       destination: expect.objectContaining({ value: "Product Notes", configured: true }),
@@ -341,14 +341,13 @@ describe("agentConsoleRouter", () => {
     });
   });
 
-  it("merges saved, legacy, and Agent-discovered destination options per selected Agent", async () => {
+  it("merges saved and Agent-discovered destination options per selected Agent", async () => {
     const root = mkdtempSync(join(tmpdir(), "agent-console-"));
     roots.push(root);
     const moviesDir = join(root, "movies");
     mkdirSync(moviesDir);
     const configState = {
       llm: { enabled: true, command: null, agent: { provider: "codex" } },
-      output: { zulip: { stream: "legacy", topic: "notes" } },
       agent_console: {
         plugins: { added: ["summary", "zulip"] },
         destinations: { codex: { zulip: { stream: "saved", topic: "weekly" } } },
@@ -367,7 +366,6 @@ describe("agentConsoleRouter", () => {
 
     expect(result.options).toEqual(expect.arrayContaining([
       expect.objectContaining({ label: "saved / weekly", source: "saved" }),
-      expect.objectContaining({ label: "legacy / notes", source: "legacy" }),
       expect.objectContaining({ label: "product / launch", source: "agent" }),
     ]));
   });

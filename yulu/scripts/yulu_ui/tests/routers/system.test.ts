@@ -149,13 +149,13 @@ describe("system.dbStats", () => {
 });
 
 describe("system.logPaths", () => {
-  it("returns the 8 known yulu daemon log paths under configDir", async () => {
+  it("returns the 7 current yulu daemon log paths under configDir", async () => {
     const ctx = { paths: { configDir: "/x/.config/yulu" } } as unknown as AppContext;
     const caller = createCaller(systemRouter, ctx);
     const r = await caller.logPaths();
-    expect(r).toHaveLength(8);
+    expect(r).toHaveLength(6);
     expect(r.map((p: { name: string }) => p.name).sort()).toEqual(
-      ["agentqueue","audiodaemon","calendar","detector","scheduler","statusagent","sttdaemon","ui"]
+      ["audiodaemon","calendar","detector","scheduler","statusagent","ui"]
     );
     expect(r.every((p: { path: string }) => p.path.startsWith("/x/.config/yulu/"))).toBe(true);
     expect(r.every((p: { path: string }) => p.path.endsWith(".log"))).toBe(true);

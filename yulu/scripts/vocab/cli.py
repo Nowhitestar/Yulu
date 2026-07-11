@@ -5,8 +5,6 @@ from __future__ import annotations
 import argparse
 import csv
 import json
-import os
-import signal
 import sys
 from dataclasses import asdict
 from pathlib import Path
@@ -17,19 +15,6 @@ from .seed import seed_from_current, restore_defaults
 
 
 DEFAULT_DB = Path.home() / ".config" / "yulu" / "vocab.sqlite"
-DAEMON_PID = Path.home() / ".config" / "yulu" / "stt_daemon.pid"
-
-
-def _sighup_daemon() -> None:
-    """Best-effort SIGHUP to the running stt_daemon to reload vocab cache."""
-    try:
-        if not DAEMON_PID.exists():
-            return
-        pid = int(DAEMON_PID.read_text().strip())
-        os.kill(pid, signal.SIGHUP)
-    except (OSError, ValueError):
-        # daemon not running or stale pid -- next daemon start will read fresh
-        pass
 
 
 def _word_to_dict(w) -> dict:
@@ -165,12 +150,6 @@ def _cmd_import(args: argparse.Namespace, repo: VocabRepo) -> int:
     return 0
 
 
-def _cmd_reload(args: argparse.Namespace, repo: VocabRepo) -> int:
-    _sighup_daemon()
-    print("SIGHUP sent (best-effort)")
-    return 0
-
-
 def _load_config_replacements() -> Optional[dict[str, str]]:
     config = Path.home() / ".config" / "yulu" / "config.json"
     if not config.exists():
@@ -224,8 +203,6 @@ def _build_parser() -> argparse.ArgumentParser:
     pi = sub.add_parser("import")
     pi.add_argument("file")
 
-    sub.add_parser("reload")
-
     return p
 
 
@@ -269,16 +246,12 @@ def main(argv: Optional[list[str]] = None) -> int:
         "seed": _cmd_seed,
         "export": _cmd_export,
         "import": _cmd_import,
-        "reload": _cmd_reload,
     }
     try:
         code = handlers[args.cmd](args, repo)
     finally:
         repo.conn.close()
 
-    # mutations SIGHUP daemon to refresh cache
-    if args.cmd in {"add", "edit", "remove", "seed", "import"}:
-        _sighup_daemon()
     return code
 
 

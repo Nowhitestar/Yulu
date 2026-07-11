@@ -71,7 +71,7 @@ def _ledger_path(args: argparse.Namespace) -> Path:
     return default_ledger_path()
 
 
-def _run_step(name: str, mode: str, ledger: Path) -> int:
+def _run_step(name: str, mode: str, ledger: Path, *, force: bool = False) -> int:
     """Run a single named step with the running-before-apply / result-after
     ledger contract. Returns 0 on ok|skipped, 1 on error/unknown."""
     try:
@@ -84,7 +84,7 @@ def _run_step(name: str, mode: str, ledger: Path) -> int:
     # (resume re-runs exactly it). ``apply`` itself short-circuits to "skipped"
     # when ``check()`` is already satisfied (registry idempotency).
     mark(ledger, name, "running")
-    result = step.apply(mode)
+    result = step.apply(mode, force=True) if force else step.apply(mode)
     mark(ledger, name, result.status, result.detail)
     _print_result(result)
     return 0 if result.status in ("ok", "skipped") else 1
@@ -128,11 +128,11 @@ def _run_all(args: argparse.Namespace) -> int:
     # ── RESUME WALK ──
     had_error = False
     for step in REGISTRY:
-        if is_done(ledger, step.name):
+        if not args.force and is_done(ledger, step.name):
             print(f"[skipped] {step.name} — already ok (resume)")
             continue
         mark(ledger, step.name, "running")  # durable BEFORE mutation
-        result = step.apply(mode)
+        result = step.apply(mode, force=True) if args.force else step.apply(mode)
         mark(ledger, step.name, result.status, result.detail)
         _print_result(result)
         if result.status == "error":
@@ -157,7 +157,7 @@ def _build_parser() -> argparse.ArgumentParser:
     pp.add_argument(
         "step",
         nargs="?",
-        help="a single step to run (deps|audio|models|capabilities|daemons|ui)",
+        help="a single step to run (deps|audio|daemons|ui)",
     )
     pp.add_argument("--all", action="store_true", help="resume-walk all steps in order")
     pp.add_argument("--list", action="store_true", help="list the step names and exit")
@@ -178,6 +178,11 @@ def _build_parser() -> argparse.ArgumentParser:
     pp.add_argument(
         "--ledger",
         help="path to the .yulu-install.json ledger (default: the installed tree)",
+    )
+    pp.add_argument(
+        "--force",
+        action="store_true",
+        help="run the selected step(s) even when probes or the resume ledger report them done",
     )
 
     # skill install [--agent ...]
@@ -212,7 +217,7 @@ def _cmd_provision(args: argparse.Namespace) -> int:
     if args.all:
         return _run_all(args)
     if args.step:
-        return _run_step(args.step, args.mode, _ledger_path(args))
+        return _run_step(args.step, args.mode, _ledger_path(args), force=args.force)
     # Nothing chosen → show the valid steps (and a hint).
     names = ", ".join(s.name for s in REGISTRY)
     print(

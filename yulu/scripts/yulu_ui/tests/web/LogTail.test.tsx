@@ -31,7 +31,7 @@ describe("LogTail", () => {
 
   it("WS event with NON-matching name is ignored", () => {
     render(<LogTail daemonShortName="audiodaemon" daemonLabel="com.yulu.audiodaemon" initialLines={["one"]} paused={false} onClear={() => {}} />);
-    act(() => wsHandlers.get("logs")?.({ name: "sttdaemon", line: "noise", ts: 123 }));
+    act(() => wsHandlers.get("logs")?.({ name: "statusagent", line: "noise", ts: 123 }));
     expect(screen.getByTestId("logtail-pre").textContent).not.toContain("noise");
   });
 

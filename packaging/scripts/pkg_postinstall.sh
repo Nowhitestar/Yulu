@@ -65,6 +65,8 @@ if [[ -e "$install_dir" || -L "$install_dir" ]]; then
     mv "$install_dir" "$backup"
 fi
 
+# Invoked indirectly by the EXIT trap below.
+# shellcheck disable=SC2329
 rollback() {
     local status=$?
     if [[ $status -ne 0 && -n "$backup" && -e "$backup" ]]; then
@@ -107,7 +109,7 @@ chown "$uid:$gid" "$install_dir/.yulu-install.json"
 log "running setup/provision upgrade as $console_user"
 launchctl asuser "$uid" sudo -u "$console_user" env \
     HOME="$user_home" USER="$console_user" LOGNAME="$console_user" \
-    PATH="$INSTALLER_PATH" \
+    PATH="$user_home/.local/bin:$user_home/.hermes/bin:$INSTALLER_PATH" \
     YULU_PKG_POSTINSTALL=1 \
     YULU_USE_PROVISION=1 \
     YULU_SKIP_RUNTIME_REPAIRS=1 \

@@ -7,7 +7,10 @@
 #      UI password prompt (Pattern 3).
 #   2. Builds + bottom-up hardened-runtime signs both .app bundles by running
 #      the existing build_*.sh (they read $YULU_CODESIGN_IDENTITY).
-#   3. For each bundle: `ditto -c -k --keepParent` to a throwaway zip (notarytool
+#   3. Builds an exact preliminary runtime zip, hashes every file outside the two
+#      signed app bundles into Yulu.app/Contents/Resources/runtime-manifest.json,
+#      then re-signs Yulu.app so that manifest is an offline publisher boundary.
+#   4. For each bundle: `ditto -c -k --keepParent` to a throwaway zip (notarytool
 #      rejects a bare .app), `xcrun notarytool submit --wait` with App Store
 #      Connect API-key auth, then `xcrun stapler staple` + `stapler validate`
 #      the .app DIRECTORY (Pattern 2 / Pitfall 4).
@@ -63,10 +66,20 @@ require_env ASC_KEY_P8_BASE64
 require_env ASC_KEY_ID
 require_env ASC_ISSUER_ID
 : "${RUNNER_TEMP:?RUNNER_TEMP must be set (GitHub Actions provides it)}"
+: "${TAG:?TAG must be set to the release tag}"
 
 KEYCHAIN="$RUNNER_TEMP/yulu-signing.keychain-db"
 CERT_P12="$RUNNER_TEMP/cert.p12"
 ASC_KEY_P8="$RUNNER_TEMP/asc_key.p8"
+RUNTIME_MANIFEST="$YULU_APP/Contents/Resources/runtime-manifest.json"
+MANIFEST_TMP=""
+
+cleanup_manifest_tmp() {
+  if [[ -n "$MANIFEST_TMP" && -d "$MANIFEST_TMP" ]]; then
+    rm -rf "$MANIFEST_TMP"
+  fi
+}
+trap cleanup_manifest_tmp EXIT
 
 # --- Keychain import (Pattern 3) -------------------------------------------
 # Decode the cert from the secret to a file (never echoed) and import it into a
@@ -90,8 +103,38 @@ security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user
 # with -o runtime + --entitlements + --timestamp. They are the single source of
 # signing truth; we only orchestrate keychain + notarization around them.
 echo "Building + signing Yulu.app and StatusAgent.app (bottom-up, hardened runtime)"
+rm -f "$RUNTIME_MANIFEST"
 bash "$SCRIPTS_DIR/build_audio_daemon.sh"
 bash "$SCRIPTS_DIR/build_status_agent.sh"
+
+# --- Signed runtime manifest ------------------------------------------------
+# A zip has no native whole-archive Apple signature. Build the exact payload once
+# before notarization, hash every file outside the two app bundles, place that
+# manifest inside Yulu.app's signed Resources, and re-sign the outer bundle. The
+# final package step repeats the same deterministic copy/exclude rules; its
+# post-package verifier rejects any missing, modified, or additional runtime file.
+MANIFEST_TMP="$(mktemp -d "$RUNNER_TEMP/yulu-manifest.XXXXXX")"
+bash "$REPO_DIR/packaging/scripts/package.sh" "$TAG" \
+  --dist "$MANIFEST_TMP" --skip-build >/dev/null
+PRELIMINARY_ZIP="$MANIFEST_TMP/yulu-macos-arm64-$TAG.zip"
+PYTHONPATH="$SCRIPTS_DIR" python3 - "$PRELIMINARY_ZIP" "$RUNTIME_MANIFEST" <<'PY'
+import sys
+from pathlib import Path
+
+from release_installer import build_runtime_manifest_from_zip, write_runtime_manifest
+
+archive = Path(sys.argv[1])
+destination = Path(sys.argv[2])
+write_runtime_manifest(destination, build_runtime_manifest_from_zip(archive))
+print(f"Wrote signed runtime manifest: {destination}")
+PY
+
+# The build script signed Yulu.app before the manifest existed. Re-sign only the
+# outer bundle now; the inner Mach-O remains signed with the same identity.
+codesign --force --options runtime --timestamp \
+  --entitlements "$SCRIPTS_DIR/Yulu.app.entitlements" \
+  --sign "$YULU_CODESIGN_IDENTITY" "$YULU_APP"
+codesign --verify --deep --strict --verbose=2 "$YULU_APP"
 
 # --- Notarize + staple (Pattern 2 / Pitfall 4) -----------------------------
 # Decode the App Store Connect API key once (never echoed).

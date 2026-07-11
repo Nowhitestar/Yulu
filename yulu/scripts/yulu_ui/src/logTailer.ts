@@ -3,7 +3,7 @@ import { join } from "node:path";
 import type { PubSub, AppChannels } from "./pubsub.js";
 
 const DAEMON_SHORT_NAMES = [
-  "audiodaemon", "sttdaemon", "agentqueue", "statusagent",
+  "audiodaemon", "statusagent",
   "scheduler", "detector", "calendar", "ui",
 ] as const;
 

@@ -43,7 +43,10 @@ import "./agent-console.css";
 export const handle = { breadcrumb: "breadcrumb.agentConsole", filters: null };
 
 type StageState = "idle" | "waiting" | "running" | "done" | "failed";
-type OptimisticTaskStage = "transcribe" | "summarize";
+interface OptimisticTaskAction {
+  sendToNotion: boolean;
+  startedAt: number;
+}
 type SendDest = "notion" | "zulip" | null;
 type ConsoleMode = "ask" | "run";
 type AgentId = "codex" | "claude" | "hermes" | "openclaw";
@@ -66,7 +69,34 @@ interface AgentTask {
   error?: string;
   hasTranscript: boolean;
   hasSummary: boolean;
-  hasRealtime: boolean;
+}
+
+type DurableAgentTaskState =
+  | "queued"
+  | "awaiting_agent"
+  | "awaiting_policy"
+  | "running"
+  | "artifacts_committed"
+  | "sending"
+  | "delivery_reported"
+  | "delivery_unverified"
+  | "completed"
+  | "failed"
+  | "cancelled";
+
+interface DurableAgentTask {
+  id: string;
+  recordingStem: string;
+  title: string;
+  trigger: "automatic" | "manual";
+  state: DurableAgentTaskState;
+  phase: string;
+  sendToNotion: boolean;
+  agentProvider: string;
+  attempt: number;
+  error: string | null;
+  createdAt: string;
+  updatedAt: string;
 }
 
 interface ConsoleAgent {
@@ -155,7 +185,7 @@ interface DestinationOption {
   id: string;
   label: string;
   value: string;
-  source: "agent" | "saved" | "legacy" | "default";
+  source: "agent" | "saved" | "default";
   kind?: string;
   target?: string;
   stream?: string;
@@ -272,25 +302,18 @@ export function AgentConsole() {
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [detectMessage, setDetectMessage] = useState<string>("点击后重新扫描本机 CLI 路径");
   const [notice, setNotice] = useState<string | null>(null);
-  const [optimisticTaskStages, setOptimisticTaskStages] = useState<Record<string, { stage: OptimisticTaskStage; startedAt: number }>>({});
+  const [optimisticTaskActions, setOptimisticTaskActions] = useState<Record<string, OptimisticTaskAction>>({});
 
   const overview = trpc.agentConsole.overview.useQuery(undefined, { refetchInterval: 5000 });
   const detectAgents = trpc.agentConsole.detectAgents.useQuery(undefined, { enabled: false });
   const promptsQuery = trpc.prompts.list.useQuery({ category: "summary" });
-  const daemonsQuery = trpc.daemons.health.useQuery(undefined, { refetchInterval: 5000 });
-  const queueQuery = trpc.queue.list.useQuery(undefined, { refetchInterval: 5000 });
+  const agentTasksQuery = trpc.agentTasks.list.useQuery({ limit: 100 }, { refetchInterval: 5000 });
   const schedulerQuery = trpc.scheduler.overview.useQuery(undefined, { refetchInterval: 15_000 });
 
   const toggleRecording = trpc.recording.toggle.useMutation({
     onSettled: () => void utils.agentConsole.overview.invalidate(),
   });
-  const transcribe = trpc.recordings.transcribe.useMutation({
-    onSettled: () => void utils.agentConsole.overview.invalidate(),
-  });
-  const summarize = trpc.recordings.summarize.useMutation({
-    onSettled: () => void utils.agentConsole.overview.invalidate(),
-  });
-  const sendSummary = trpc.recordings.sendSummary.useMutation({
+  const reprocess = trpc.recordings.reprocess.useMutation({
     onSettled: () => void utils.agentConsole.overview.invalidate(),
   });
   const addPlugin = trpc.agentConsole.addPlugin.useMutation({
@@ -311,51 +334,56 @@ export function AgentConsole() {
     onSettled: () => void utils.agentConsole.overview.invalidate(),
   });
 
-  useWsChannel("recordings-changed", () => void utils.agentConsole.overview.invalidate());
-  useWsChannel("jobs", () => void utils.agentConsole.overview.invalidate());
+  useWsChannel("recordings-changed", () => {
+    void utils.agentConsole.overview.invalidate();
+    void utils.agentTasks.list.invalidate();
+  });
+  useWsChannel("jobs", () => {
+    void utils.agentConsole.overview.invalidate();
+    void utils.agentTasks.list.invalidate();
+  });
   useWsChannel("recording", () => void utils.agentConsole.overview.invalidate());
 
   const tasks = (overview.data?.tasks as AgentTask[] | undefined) ?? [];
   const prompts = ((promptsQuery.data as SummaryPrompt[] | undefined) ?? []);
   const plugins = (overview.data?.plugins as AgentPluginOverview | undefined) ?? { agent: null, current: [], available: [], all: [] };
   const requestedSessionId = searchParams.get("session");
-
-  const visibleTasks = useMemo(() => {
-    return tasks.map((task) => {
-      const optimistic = optimisticTaskStages[task.stem];
-      if (!optimistic) return task;
-      const serverStage = task.stages[optimistic.stage];
-      if (serverStage !== "idle" && serverStage !== "failed") return task;
-      return {
-        ...task,
-        stages: { ...task.stages, [optimistic.stage]: "running" as StageState },
-      };
-    });
-  }, [optimisticTaskStages, tasks]);
+  const latestAgentTaskByStem = useMemo(() => {
+    const latest = new Map<string, DurableAgentTask>();
+    for (const task of (agentTasksQuery.data ?? []) as DurableAgentTask[]) {
+      if (!latest.has(task.recordingStem)) latest.set(task.recordingStem, task);
+    }
+    return latest;
+  }, [agentTasksQuery.data]);
 
   useEffect(() => {
     if (!summaryPromptId && prompts.length > 0) setSummaryPromptId(firstAvailablePrompt(prompts));
   }, [prompts, summaryPromptId]);
 
   useEffect(() => {
-    setOptimisticTaskStages((current) => {
+    setOptimisticTaskActions((current) => {
       const next = { ...current };
       let changed = false;
       const now = Date.now();
-      for (const task of tasks) {
-        const optimistic = next[task.stem];
+      for (const [stem, optimistic] of Object.entries(current)) {
         if (!optimistic) continue;
-        const serverStage = task.stages[optimistic.stage];
-        const serverCaughtUp = serverStage === "waiting" || serverStage === "running" || serverStage === "done";
+        const serverTask = latestAgentTaskByStem.get(stem);
+        const serverTimestamp = Date.parse(serverTask?.updatedAt ?? "");
+        const serverCaughtUp = Boolean(
+          serverTask &&
+          serverTask.sendToNotion === optimistic.sendToNotion &&
+          Number.isFinite(serverTimestamp) &&
+          serverTimestamp >= optimistic.startedAt - 1_000,
+        );
         const expired = now - optimistic.startedAt > 20_000;
         if (serverCaughtUp || expired) {
-          delete next[task.stem];
+          delete next[stem];
           changed = true;
         }
       }
       return changed ? next : current;
     });
-  }, [tasks]);
+  }, [latestAgentTaskByStem]);
 
   const activeAgent = useMemo(() => {
     const agents = (overview.data?.agents as ConsoleAgent[] | undefined) ?? [];
@@ -365,15 +393,11 @@ export function AgentConsole() {
   const invalidateAfterAction = () => {
     void utils.agentConsole.overview.invalidate();
     void utils.recordings.list.invalidate();
-    void utils.queue.list.invalidate();
+    void utils.agentTasks.list.invalidate();
   };
 
-  const setOptimisticTaskStage = (stem: string, stage: OptimisticTaskStage) => {
-    setOptimisticTaskStages((current) => ({ ...current, [stem]: { stage, startedAt: Date.now() } }));
-  };
-
-  const clearOptimisticTaskStage = (stem: string) => {
-    setOptimisticTaskStages((current) => {
+  const clearOptimisticTaskAction = (stem: string) => {
+    setOptimisticTaskActions((current) => {
       if (!current[stem]) return current;
       const next = { ...current };
       delete next[stem];
@@ -381,28 +405,17 @@ export function AgentConsole() {
     });
   };
 
-  const runTranscribe = (task: AgentTask) => {
+  const runProcess = (task: AgentTask, sendToNotion: boolean) => {
     if (!task.stem) return;
-    setOptimisticTaskStage(task.stem, "transcribe");
-    transcribe.mutate({ stem: task.stem }, {
-      onError: () => clearOptimisticTaskStage(task.stem),
-      onSettled: invalidateAfterAction,
-    });
-  };
-
-  const runSummarize = (task: AgentTask) => {
-    if (!task.stem) return;
-    setOptimisticTaskStage(task.stem, "summarize");
-    summarize.mutate({ stem: task.stem, promptId: summaryPromptId }, {
-      onError: () => clearOptimisticTaskStage(task.stem),
-      onSettled: invalidateAfterAction,
-    });
-  };
-
-  const runSend = (task: AgentTask, channel: "notion" | "zulip") => {
-    if (!task.stem) return;
-    sendSummary.mutate({ stem: task.stem, channel }, {
-      onError: (err) => setNotice(err.message),
+    setOptimisticTaskActions((current) => ({
+      ...current,
+      [task.stem]: { sendToNotion, startedAt: Date.now() },
+    }));
+    reprocess.mutate({ stem: task.stem, promptId: summaryPromptId, sendToNotion }, {
+      onError: (error) => {
+        clearOptimisticTaskAction(task.stem);
+        setNotice(error.message);
+      },
       onSettled: invalidateAfterAction,
     });
   };
@@ -436,18 +449,15 @@ export function AgentConsole() {
   };
 
   const taskRail: TaskRailProps = {
-    tasks: visibleTasks,
+    tasks,
+    agentTasks: latestAgentTaskByStem,
+    optimisticActions: optimisticTaskActions,
     isLoading: overview.isPending,
-    actionPending: toggleRecording.isPending || transcribe.isPending || summarize.isPending || sendSummary.isPending,
+    actionPending: toggleRecording.isPending || reprocess.isPending,
     onToggleRecording: () => toggleRecording.mutate(),
     onOpenAll: () => navigate("/inbox"),
     onOpenTask: (task) => { if (task.stem) navigate(`/inbox/${task.stem}`); },
-    onTranscribe: runTranscribe,
-    onSummarize: runSummarize,
-    onSend: runSend,
-    sharePlugins: plugins.current.filter((plugin) => plugin.id === "notion" || plugin.id === "zulip"),
-    onConfigurePlugin: runConfigurePlugin,
-    onConfigureDestination: setDestinationPlugin,
+    onProcess: runProcess,
   };
 
   return (
@@ -484,11 +494,11 @@ export function AgentConsole() {
           />
         ) : (
           <RunTasks
-            queue={queueQuery.data}
+            agentTasks={agentTasksQuery.data}
             scheduler={schedulerQuery.data}
-            queueLoading={queueQuery.isPending}
+            tasksLoading={agentTasksQuery.isPending}
             schedulerLoading={schedulerQuery.isPending}
-            onOpenQueue={() => navigate("/health#queue")}
+            onOpenTasks={() => navigate("/health#queue")}
             onOpenScheduler={() => navigate("/health#scheduler")}
           />
         )}
@@ -519,7 +529,7 @@ export function AgentConsole() {
           onConfigure={runConfigurePlugin}
           onConfigureDestination={setDestinationPlugin}
         />
-        <LocalStatus daemons={daemonsQuery.data} queue={queueQuery.data} onDetails={() => navigate("/health")} />
+        <LocalStatus agentTasks={agentTasksQuery.data} onDetails={() => navigate("/health")} />
       </aside>}
 
       {calendarOpen && (
@@ -581,32 +591,26 @@ function VoiceInputPanel() {
 
 interface TaskRailProps {
   tasks: AgentTask[];
+  agentTasks: ReadonlyMap<string, DurableAgentTask>;
+  optimisticActions: Record<string, OptimisticTaskAction>;
   isLoading: boolean;
   actionPending: boolean;
   onToggleRecording: () => void;
   onOpenAll: () => void;
   onOpenTask: (task: AgentTask) => void;
-  onTranscribe: (task: AgentTask) => void;
-  onSummarize: (task: AgentTask) => void;
-  onSend: (task: AgentTask, channel: "notion" | "zulip") => void;
-  sharePlugins: AgentPluginState[];
-  onConfigurePlugin: (plugin: AgentPluginId) => void;
-  onConfigureDestination: (plugin: AgentPluginState) => void;
+  onProcess: (task: AgentTask, sendToNotion: boolean) => void;
 }
 
 function TaskRail({
   tasks,
+  agentTasks,
+  optimisticActions,
   isLoading,
   actionPending,
   onToggleRecording,
   onOpenAll,
   onOpenTask,
-  onTranscribe,
-  onSummarize,
-  onSend,
-  sharePlugins,
-  onConfigurePlugin,
-  onConfigureDestination,
+  onProcess,
 }: TaskRailProps) {
   return (
     <>
@@ -626,14 +630,11 @@ function TaskRail({
             key={task.id}
             task={task}
             disabled={actionPending}
+            agentTask={agentTasks.get(task.stem)}
+            optimisticAction={optimisticActions[task.stem]}
             onOpen={() => onOpenTask(task)}
             onStopRecording={onToggleRecording}
-            onTranscribe={() => onTranscribe(task)}
-            onSummarize={() => onSummarize(task)}
-            onSend={(channel) => onSend(task, channel)}
-            sharePlugins={sharePlugins}
-            onConfigurePlugin={onConfigurePlugin}
-            onConfigureDestination={onConfigureDestination}
+            onProcess={(sendToNotion) => onProcess(task, sendToNotion)}
           />
         ))}
       </div>
@@ -644,28 +645,23 @@ function TaskRail({
 function TaskCard({
   task,
   disabled,
+  agentTask,
+  optimisticAction,
   onOpen,
   onStopRecording,
-  onTranscribe,
-  onSummarize,
-  onSend,
-  sharePlugins,
-  onConfigurePlugin,
-  onConfigureDestination,
+  onProcess,
 }: {
   task: AgentTask;
   disabled: boolean;
+  agentTask?: DurableAgentTask;
+  optimisticAction?: OptimisticTaskAction;
   onOpen: () => void;
   onStopRecording: () => void;
-  onTranscribe: () => void;
-  onSummarize: () => void;
-  onSend: (channel: "notion" | "zulip") => void;
-  sharePlugins: AgentPluginState[];
-  onConfigurePlugin: (plugin: AgentPluginId) => void;
-  onConfigureDestination: (plugin: AgentPluginState) => void;
+  onProcess: (sendToNotion: boolean) => void;
 }) {
-  const failed = Object.values(task.stages).includes("failed");
-  const complete = task.stages.send === "done";
+  const failed = agentTask?.state === "failed" || agentTask?.state === "delivery_unverified";
+  const complete = agentTask?.state === "completed";
+  const error = agentTask?.error || task.error;
   return (
     <div className={"agent-task-card" + (failed ? " failed" : complete ? " complete" : "")}>
       <div className="agent-task-head">
@@ -673,23 +669,19 @@ function TaskCard({
         {complete && <span className="agent-task-done"><CheckCircle2 size={13} strokeWidth={2} />已完成</span>}
       </div>
       <div className="agent-task-meta">{dayLabelText(task.dayLabel)} · {formatTime(task.recordedAt)}</div>
-      {task.error && (
+      {error && (
         <div className="agent-task-error">
           <AlertCircle size={13} strokeWidth={2} />
-          <span>{task.error}</span>
+          <span>{error}</span>
         </div>
       )}
       <TaskAction
         task={task}
+        agentTask={agentTask}
+        optimisticAction={optimisticAction}
         disabled={disabled}
-        onOpen={onOpen}
         onStopRecording={onStopRecording}
-        onTranscribe={onTranscribe}
-        onSummarize={onSummarize}
-        onSend={onSend}
-        sharePlugins={sharePlugins}
-        onConfigurePlugin={onConfigurePlugin}
-        onConfigureDestination={onConfigureDestination}
+        onProcess={onProcess}
       />
     </div>
   );
@@ -706,95 +698,67 @@ function RunningState({ label }: { label: string }) {
 
 function TaskAction({
   task,
+  agentTask,
+  optimisticAction,
   disabled,
-  onOpen,
   onStopRecording,
-  onTranscribe,
-  onSummarize,
-  onSend,
-  sharePlugins,
-  onConfigurePlugin,
-  onConfigureDestination,
+  onProcess,
 }: {
   task: AgentTask;
+  agentTask?: DurableAgentTask;
+  optimisticAction?: OptimisticTaskAction;
   disabled: boolean;
-  onOpen: () => void;
   onStopRecording: () => void;
-  onTranscribe: () => void;
-  onSummarize: () => void;
-  onSend: (channel: "notion" | "zulip") => void;
-  sharePlugins: AgentPluginState[];
-  onConfigurePlugin: (plugin: AgentPluginId) => void;
-  onConfigureDestination: (plugin: AgentPluginState) => void;
+  onProcess: (sendToNotion: boolean) => void;
 }) {
   if (task.stages.record === "running") {
     return (
       <RecordingBar startedAt={task.recordedAt} disabled={disabled} onStop={onStopRecording} />
     );
   }
-  if (task.stages.transcribe === "running") return <RunningState label="生成转写中" />;
-  if (task.stages.transcribe === "idle" || task.stages.transcribe === "failed") {
-    return (
-      <button type="button" className="agent-action primary" disabled={disabled} onClick={onTranscribe}>
-        <FileText size={14} strokeWidth={2} />
-        {task.stages.transcribe === "failed" ? "重试转写" : "生成转写"}
-      </button>
-    );
+  if (optimisticAction) {
+    return <RunningState label={optimisticAction.sendToNotion ? "Hermes 处理并发送 Notion 中" : "Hermes 处理中"} />;
   }
-  if (task.stages.summarize === "running") return <RunningState label="生成摘要中" />;
-  if (task.stages.summarize === "idle" || task.stages.summarize === "failed") {
-    return (
-      <button type="button" className="agent-action primary" disabled={disabled} onClick={onSummarize}>
-        {task.stages.summarize === "failed" ? <RefreshCw size={14} strokeWidth={2} /> : <Zap size={14} strokeWidth={2} />}
-        {task.stages.summarize === "failed" ? "重试摘要" : "生成摘要"}
-      </button>
-    );
+  if (agentTask && isActiveDurableTask(agentTask)) {
+    return <RunningState label={durableTaskLabel(agentTask)} />;
   }
-  if (task.stages.send === "running") return <RunningState label={`发送到 ${task.dest === "zulip" ? "Zulip" : "Notion"} 中`} />;
-  if (task.stages.send === "done") {
-    return (
-      <button type="button" className="agent-action success" onClick={onOpen}>
-        <CheckCircle2 size={14} strokeWidth={2} />
-        已发送到 {task.dest === "zulip" ? "Zulip" : "Notion"} · 打开
-      </button>
-    );
-  }
-  const sendPlugins = sharePlugins.filter((plugin) => plugin.id === "notion" || plugin.id === "zulip");
-  if (sendPlugins.length === 0) {
-    return <div className="agent-task-running">先在当前能力里添加 Notion 或 Zulip</div>;
-  }
+  if (!agentTask && task.stages.transcribe === "running") return <RunningState label="Hermes 转写中" />;
+  if (!agentTask && task.stages.summarize === "running") return <RunningState label="Hermes 生成摘要中" />;
+  if (!agentTask && task.stages.send === "running") return <RunningState label="正在发送到 Notion" />;
   return (
-    <div className="agent-send-row">
-      {sendPlugins.map((plugin) => {
-        const configured = plugin.status === "configured";
-        const destinationReady = plugin.destination?.configured ?? true;
-        const channel = plugin.id as "notion" | "zulip";
-        const readyToSend = configured && destinationReady;
-        const label = !configured
-          ? plugin.label
-          : !destinationReady
-            ? "选择路径"
-            : plugin.id === "notion" ? "发送 Notion" : plugin.label;
-        return (
-          <button
-            key={plugin.id}
-            type="button"
-            className={"agent-action " + (readyToSend ? "primary" : "secondary")}
-            disabled={disabled}
-            onClick={() => {
-              if (!configured) onConfigurePlugin(plugin.id);
-              else if (!destinationReady) onConfigureDestination(plugin);
-              else onSend(channel);
-            }}
-            title={!configured ? plugin.detail : plugin.destination?.missingReason || plugin.destination?.value || plugin.detail}
-          >
-            <Send size={14} strokeWidth={2} />
-            {label}
-          </button>
-        );
-      })}
-    </div>
+    <>
+      {agentTask && <div className="agent-task-state" data-state={agentTask.state}>{durableTaskLabel(agentTask)}</div>}
+      <div className="agent-task-actions">
+        <button type="button" className="agent-action primary" disabled={disabled} onClick={() => onProcess(false)}>
+          <Sparkles size={14} strokeWidth={2} />
+          让 Hermes 处理
+        </button>
+        <button type="button" className="agent-action secondary" disabled={disabled} onClick={() => onProcess(true)}>
+          <Send size={14} strokeWidth={2} />
+          处理并发送 Notion
+        </button>
+      </div>
+    </>
   );
+}
+
+function isActiveDurableTask(task: DurableAgentTask): boolean {
+  if (task.state === "awaiting_policy" && task.trigger === "automatic") return false;
+  return ["queued", "awaiting_agent", "awaiting_policy", "running", "artifacts_committed", "sending", "delivery_reported", "delivery_unverified"].includes(task.state);
+}
+
+function durableTaskLabel(task: DurableAgentTask): string {
+  if (task.state === "queued") return "已排队等待 Hermes";
+  if (task.state === "awaiting_agent") return "等待 Hermes";
+  if (task.state === "awaiting_policy") return "Agent 自动处理已暂停";
+  if (task.state === "failed") return "Hermes 处理失败";
+  if (task.state === "delivery_unverified") return "请核实 Notion 发送结果";
+  if (task.state === "cancelled") return "Hermes 任务已取消";
+  if (task.state === "completed") return task.sendToNotion ? "已发送到 Notion" : "Hermes 已处理";
+  if (task.phase === "transcribing") return "Hermes 转写中";
+  if (task.phase === "summarizing") return "Hermes 生成摘要中";
+  if (task.sendToNotion && (task.state === "sending" || task.state === "delivery_reported")) return "正在发送到 Notion";
+  return "Hermes 处理中";
 }
 
 const WAVE_BARS = [12, 18, 24, 16, 22, 14, 20, 13];
@@ -1389,49 +1353,50 @@ function Composer({
 }
 
 function RunTasks({
-  queue,
+  agentTasks,
   scheduler,
-  queueLoading,
+  tasksLoading,
   schedulerLoading,
-  onOpenQueue,
+  onOpenTasks,
   onOpenScheduler,
 }: {
-  queue: unknown;
+  agentTasks: unknown;
   scheduler: unknown;
-  queueLoading: boolean;
+  tasksLoading: boolean;
   schedulerLoading: boolean;
-  onOpenQueue: () => void;
+  onOpenTasks: () => void;
   onOpenScheduler: () => void;
 }) {
-  const queueRecord = asConfigRecord(queue);
+  const tasks = Array.isArray(agentTasks) ? agentTasks as DurableAgentTask[] : [];
   const schedulerRecord = asConfigRecord(scheduler);
-  const entries = Array.isArray(queueRecord.entries) ? queueRecord.entries as Array<Record<string, unknown>> : [];
   const events = Array.isArray(schedulerRecord.events) ? schedulerRecord.events as Array<Record<string, unknown>> : [];
   const meetings = Array.isArray(schedulerRecord.meetings) ? schedulerRecord.meetings as Array<Record<string, unknown>> : [];
-  const stats = asConfigRecord(queueRecord.stats);
+  const waiting = tasks.filter((task) => ["queued", "awaiting_agent", "awaiting_policy"].includes(task.state)).length;
+  const running = tasks.filter((task) => ["running", "artifacts_committed", "sending", "delivery_reported"].includes(task.state)).length;
+  const failed = tasks.filter((task) => task.state === "failed" || task.state === "delivery_unverified").length;
   return (
     <section className="agent-run-panel">
       <div className="agent-run-card">
         <div className="agent-run-head">
           <div>
-            <h2>Agent 队列</h2>
-            <p>{queueLoading ? "同步队列中" : `${Number(queueRecord.total ?? entries.length)} 个任务`}</p>
+            <h2>Agent 任务</h2>
+            <p>{tasksLoading ? "同步任务中" : `最近 ${tasks.length} 个任务`}</p>
           </div>
-          <button type="button" className="agent-action secondary compact" onClick={onOpenQueue}>管理</button>
+          <button type="button" className="agent-action secondary compact" onClick={onOpenTasks}>管理</button>
         </div>
         <div className="agent-stat-row">
-          <span>等待 {Number(stats.pending ?? 0)}</span>
-          <span>运行 {Number(stats.processing ?? 0)}</span>
-          <span>失败 {Number(stats.error ?? 0)}</span>
+          <span>等待 {waiting}</span>
+          <span>运行 {running}</span>
+          <span>失败 {failed}</span>
         </div>
         <div className="agent-mini-list">
-          {entries.slice(0, 4).map((entry) => (
-            <div key={String(entry.id)} className="agent-mini-row">
-              <span>{String(entry.title || entry.promptName || entry.type || "Agent task")}</span>
-              <em>{String(entry.status || "pending")}</em>
+          {tasks.slice(0, 4).map((task) => (
+            <div key={task.id} className="agent-mini-row">
+              <span>{task.title || task.recordingStem || "Agent task"}</span>
+              <em>{task.state}</em>
             </div>
           ))}
-          {entries.length === 0 && <div className="agent-mini-empty">当前没有 Agent 任务。</div>}
+          {tasks.length === 0 && <div className="agent-mini-empty">当前没有 Agent 任务。</div>}
         </div>
       </div>
 
@@ -1845,21 +1810,18 @@ function DestinationConfigModal({
   );
 }
 
-function LocalStatus({ daemons, queue, onDetails }: { daemons: unknown; queue: unknown; onDetails: () => void }) {
-  const rows = Array.isArray(daemons) ? daemons as Array<Record<string, unknown>> : [];
-  const queueRecord = asConfigRecord(queue);
-  const stt = rows.find((row) => row.name === "com.yulu.sttdaemon");
-  const agentQueue = rows.find((row) => row.name === "com.yulu.agentqueue");
+function LocalStatus({ agentTasks, onDetails }: { agentTasks: unknown; onDetails: () => void }) {
+  const tasks = Array.isArray(agentTasks) ? agentTasks as DurableAgentTask[] : [];
+  const activeTasks = tasks.filter((task) => !["completed", "failed", "cancelled", "delivery_unverified"].includes(task.state));
   return (
     <section className="agent-panel agent-local-status">
       <div className="agent-panel-head">
         <span>本地状态</span>
         <button type="button" className="agent-link-btn" onClick={onDetails}>详情</button>
       </div>
-      <StatusRow icon={<Cpu size={16} strokeWidth={1.9} />} title="STT" sub="Whisper · 本地" state={String(stt?.status ?? "unknown")} />
-      <StatusRow icon={<ListChecks size={16} strokeWidth={1.9} />} title="Agent Queue" sub={`${Number(queueRecord.total ?? 0)} 个任务`} state={String(agentQueue?.status ?? "unknown")} />
+      <StatusRow icon={<ListChecks size={16} strokeWidth={1.9} />} title="Agent Tasks" sub={`${activeTasks.length} 个进行中`} state={activeTasks.length > 0 ? "running" : "idle"} />
       <StatusRow icon={<HardDrive size={16} strokeWidth={1.9} />} title="Storage" sub="本地记录目录" state="本机" />
-      <StatusRow icon={<ShieldCheck size={16} strokeWidth={1.9} />} title="Privacy" sub="音频与转写默认不离开电脑" state="本地" />
+      <StatusRow icon={<ShieldCheck size={16} strokeWidth={1.9} />} title="Privacy" sub="音频处理遵循当前 Agent 的隐私配置" state="Agent" />
     </section>
   );
 }

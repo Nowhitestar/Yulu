@@ -2,10 +2,6 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { integrationsRouter } from "../../src/routers/integrations.js";
 import { createCaller, type AppContext } from "../../src/trpc.js";
 import { basename } from "node:path";
-import { mkdtempSync, rmSync, existsSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { notionMcpPendingPath } from "../../src/notionMcpOAuth.js";
 
 const spawnMock = vi.hoisted(() => vi.fn());
 vi.mock("node:child_process", async (importOriginal) => {
@@ -17,10 +13,6 @@ beforeEach(() => spawnMock.mockReset());
 
 function ctx(): AppContext {
   return { paths: { scriptDir: "/fake/yulu/scripts", configDir: "/fake/yulu/config" } } as unknown as AppContext;
-}
-
-function ctxWithConfigDir(configDir: string): AppContext {
-  return { paths: { scriptDir: "/fake/yulu/scripts", configDir } } as unknown as AppContext;
 }
 
 function mockSpawn(stdout: string, exitCode = 0, stderr = "") {
@@ -156,124 +148,5 @@ describe("integrationsRouter.accountList", () => {
     expect(r.ok).toBe(false);
     expect(r.accounts).toEqual([]);
     expect(r.stderr).toContain("keyring unavailable");
-  });
-});
-
-describe("integrationsRouter.connectorStatus", () => {
-  it("returns connector_capabilities from Yulu's fixed Python collector", async () => {
-    mockSpawn(JSON.stringify({
-      schema_version: 1,
-      connectors: {
-        notion: {
-          connector_id: "notion",
-          display_name: "Notion",
-          provenance: "agent-config",
-          status: "usable",
-          resolved_path: "/agent/plugins/notion",
-          detail: "agent plugin detected",
-          actions: ["summary.send"],
-          config_prefix: "connectors.notion",
-        },
-      },
-    }));
-    const caller = createCaller(integrationsRouter, ctx());
-
-    const r = await caller.connectorStatus();
-
-    expect(r.connectors.notion.status).toBe("usable");
-    expect(r.connectors.notion.actions).toEqual(["summary.send"]);
-    const call = spawnMock.mock.calls[0]!;
-    expect(basename(String(call[0]))).toBe("python3");
-    const args = call[1] as string[];
-    expect(args[0]).toBe("-c");
-    expect(args.join(" ")).toContain("_connector_capabilities");
-    const opts = call[2] as { env?: Record<string, string> };
-    expect(opts.env?.PYTHONPATH).toBe("/fake/yulu/scripts");
-  });
-
-  it("degrades to an empty connector report when collector output is invalid", async () => {
-    mockSpawn("not json", 1, "boom");
-    const caller = createCaller(integrationsRouter, ctx());
-
-    const r = await caller.connectorStatus();
-
-    expect(r.schema_version).toBe(1);
-    expect(r.connectors).toEqual({});
-    expect(r.error).toContain("no parseable output");
-  });
-});
-
-describe("integrationsRouter.outputDestinations", () => {
-  it("lists Notion identity and destinations through the connector destination module", async () => {
-    mockSpawn(JSON.stringify({
-      ok: true,
-      channel: "notion",
-      identity: { label: "Ada Lovelace", detail: "ada@example.com" },
-      destinations: [
-        { id: "db-1", type: "database", label: "Team Notes", detail: "https://notion.so/db-1" },
-      ],
-    }));
-    const caller = createCaller(integrationsRouter, ctx());
-
-    const r = await caller.outputDestinations({ channel: "notion" });
-
-    expect(r.ok).toBe(true);
-    expect(r.identity).toEqual({ label: "Ada Lovelace", detail: "ada@example.com" });
-    expect(r.destinations).toEqual([
-      { id: "db-1", type: "database", label: "Team Notes", detail: "https://notion.so/db-1" },
-    ]);
-    const call = spawnMock.mock.calls[0]!;
-    expect(basename(String(call[0]))).toBe("python3");
-    expect(call[1]).toEqual(["-m", "connectors.destinations", "notion"]);
-    const opts = call[2] as { env?: Record<string, string> };
-    expect(opts.env?.PYTHONPATH).toBe("/fake/yulu/scripts");
-  });
-
-  it("degrades to ok=false when destination output is invalid", async () => {
-    mockSpawn("not json", 1, "boom");
-    const caller = createCaller(integrationsRouter, ctx());
-
-    const r = await caller.outputDestinations({ channel: "zulip" });
-
-    expect(r.ok).toBe(false);
-    expect(r.destinations).toEqual([]);
-    expect(r.error).toContain("destination probe exited");
-  });
-});
-
-describe("integrationsRouter.notionMcpStartAuth", () => {
-  it("returns a Notion MCP authorization URL and persists pending OAuth state", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "notion_mcp_router_"));
-    vi.stubGlobal("fetch", async (url: string | URL | Request) => {
-      if (String(url).endsWith("/.well-known/oauth-protected-resource")) {
-        return { ok: true, status: 200, json: async () => ({ authorization_servers: ["https://auth.notion.test"] }), text: async () => "" };
-      }
-      if (String(url).endsWith("/.well-known/oauth-authorization-server")) {
-        return {
-          ok: true,
-          status: 200,
-          json: async () => ({
-            authorization_endpoint: "https://auth.notion.test/authorize",
-            token_endpoint: "https://auth.notion.test/token",
-            registration_endpoint: "https://auth.notion.test/register",
-          }),
-          text: async () => "",
-        };
-      }
-      return { ok: true, status: 200, json: async () => ({ client_id: "client-123" }), text: async () => "" };
-    });
-    try {
-      const caller = createCaller(integrationsRouter, ctxWithConfigDir(dir));
-      const r = await caller.notionMcpStartAuth();
-
-      const authUrl = new URL(r.authUrl);
-      expect(authUrl.origin + authUrl.pathname).toBe("https://auth.notion.test/authorize");
-      expect(authUrl.searchParams.get("client_id")).toBe("client-123");
-      expect(authUrl.searchParams.get("redirect_uri")).toBe("http://127.0.0.1:7777/integrations/notion/callback");
-      expect(existsSync(notionMcpPendingPath(dir))).toBe(true);
-    } finally {
-      vi.unstubAllGlobals();
-      rmSync(dir, { recursive: true, force: true });
-    }
   });
 });

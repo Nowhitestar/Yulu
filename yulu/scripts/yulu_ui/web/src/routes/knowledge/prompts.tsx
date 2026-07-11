@@ -54,7 +54,7 @@ export function Prompts() {
         <span className="prompt-row-title">{p.name}</span>
         <span className="prompt-row-meta">
           <CategoryChip category={p.category} />
-          {p.is_auto_run === 1 && <span className="prompt-row-star" aria-label={t("prompts.autorun.aria")}>★</span>}
+          {p.category === "summary" && p.is_auto_run === 1 && <span className="prompt-row-star" aria-label={t("prompts.autorun.aria")}>★</span>}
         </span>
       </NavLink>
     ))

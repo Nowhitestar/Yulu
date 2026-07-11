@@ -1,12 +1,6 @@
-import { useState } from "react";
 import { trpc } from "../../trpc.js";
 import { useT } from "../../i18n/LanguageProvider.js";
 
-// Provenance copy is locked by D-02. host-path and agent-config both read as
-// "reused from your PATH" (the host coding agent already provides the tool);
-// yulu-managed reads "Yulu-managed"; absent reads "not found". Returns an i18n
-// key resolved by the caller through t(); an unknown provenance falls back to
-// the raw string (translate() returns the key itself when it isn't a real key).
 export function provenanceKey(provenance: string): string {
   switch (provenance) {
     case "host-path":
@@ -21,8 +15,6 @@ export function provenanceKey(provenance: string): string {
   }
 }
 
-// Tri-state badge text (Phase 3 status: usable / present-but-unverified / absent).
-// Never a boolean — three distinct human labels. Returns an i18n key (see above).
 export function statusKey(status: string): string {
   switch (status) {
     case "usable":
@@ -41,76 +33,29 @@ export interface Capability {
   status: string;
   resolved_path: string;
   detail: string;
-  remediation?: {
-    action: "verify" | "provision" | "manual";
-    subject: string;
-    reason: string;
-  };
-}
-type CapabilityRemediation = NonNullable<Capability["remediation"]>;
-
-function canVerifyCapability(name: string, cap: Capability): boolean {
-  if (cap.remediation?.action) return cap.remediation.action === "verify";
-  if (cap.status !== "present-but-unverified") return false;
-  return name === "diarization" || name === "mlx_whisper" || name.endsWith("_mlx_whisper");
-}
-
-function canProvisionCapability(name: string, cap: Capability): boolean {
-  if (cap.remediation?.action) return cap.remediation.action === "provision";
-  if (cap.status === "usable") return false;
-  if (canVerifyCapability(name, cap)) return false;
-  return name === "models" || name === "diarization" || name === "mlx_whisper" || name.endsWith("_mlx_whisper");
-}
-
-function translatedOr(t: (key: string) => string, key: string, fallback: string): string {
-  const value = t(key);
-  return value === key ? fallback : value;
-}
-
-function subjectLabel(t: (key: string) => string, subject: string, fallback: string): string {
-  return translatedOr(t, `settings.capabilities.subject.${subject}`, fallback);
-}
-
-function remediationFix(t: (key: string) => string, action: CapabilityRemediation["action"]): string {
-  switch (action) {
-    case "verify":
-      return t("settings.capabilities.fix.verify");
-    case "provision":
-      return t("settings.capabilities.fix.provision");
-    case "manual":
-      return t("settings.capabilities.fix.manual");
-  }
-  return "";
-}
-
-function CapabilityRemediationLine({ name, cap }: { name: string; cap: Capability }) {
-  const t = useT();
-  const remediation = cap.remediation;
-  if (!remediation) return null;
-  const missing = subjectLabel(t, remediation.subject, name);
-  const reason = remediation.reason || cap.detail || t("settings.capabilities.reason.unknown");
-  const fix = remediationFix(t, remediation.action);
-  return (
-    <div className="cap-detail cap-remediation" data-action={remediation.action}>
-      {`${t("settings.capabilities.missingPrefix")}：${missing} · ${t("settings.capabilities.whyPrefix")}：${reason} · ${t("settings.capabilities.fixPrefix")}：${fix}`}
-    </div>
-  );
 }
 
 function isConsoleManagedCapability(name: string): boolean {
-  return (
-    name === "llm_command" ||
-    name === "agent_mlx_whisper" ||
-    name === "claude" ||
-    name === "codex" ||
-    name === "hermes" ||
-    name === "openclaw" ||
-    name === "claude_cli" ||
-    name === "codex_cli" ||
-    name === "hermes_cli" ||
-    name === "openclaw_cli" ||
-    (name.endsWith("_mlx_whisper") && name !== "mlx_whisper")
-  );
+  return [
+    "llm_command",
+    "claude",
+    "codex",
+    "hermes",
+    "openclaw",
+    "claude_cli",
+    "codex_cli",
+    "hermes_cli",
+    "openclaw_cli",
+  ].includes(name);
+}
+
+function isRetiredLocalTranscriptionCapability(name: string): boolean {
+  return name === "models"
+    || name === "diarization"
+    || name === "mlx_whisper"
+    || name === "whisper_cli"
+    || name === "whisper-cli"
+    || name.endsWith("_mlx_whisper");
 }
 
 export function CapabilityBadge({ status, detail }: { status: string; detail?: string }) {
@@ -144,62 +89,12 @@ export function CapabilityStatusValue({ cap }: { cap?: Capability }) {
   );
 }
 
-/**
- * CapabilitiesSection — the first UI consumer of the Phase 3 host capability
- * report (SET-01 consumer / SET-02 / D-02 / D-07). For each detected capability
- * it shows a friendly provenance label, the resolved path, and a tri-state
- * status badge. A manual "Refresh" re-runs the (subprocess-heavy) doctor query;
- * there is no aggressive polling (D-01).
- *
- * The report is treated as display-only: all strings render as JSX text
- * children, so React escapes them — never dangerouslySetInnerHTML (T-04-XSS).
- * A doctor failure resolves a typed `{ error, capabilities: {} }` shape upstream,
- * so this section shows a friendly line instead of blanking or crashing (SET-01).
- */
 export function CapabilitiesSection() {
   const { data, refetch, isError, isPending } = trpc.capabilities.host_capabilities.useQuery();
-  const verifyMut = trpc.capabilities.verify.useMutation();
-  const provisionMut = trpc.capabilities.provision.useMutation();
   const t = useT();
-  const [verifying, setVerifying] = useState<string | null>(null);
-  const [provisioning, setProvisioning] = useState<string | null>(null);
-  const [verifyErrors, setVerifyErrors] = useState<Record<string, string>>({});
-
-  const caps = Object.entries((data?.capabilities ?? {}) as Record<string, Capability>)
-    .filter(([name]) => !isConsoleManagedCapability(name));
+  const capabilities = Object.entries((data?.capabilities ?? {}) as Record<string, Capability>)
+    .filter(([name]) => !isConsoleManagedCapability(name) && !isRetiredLocalTranscriptionCapability(name));
   const failed = isError || Boolean(data?.error);
-
-  const verifyCapability = async (name: string) => {
-    setVerifying(name);
-    setVerifyErrors((prev) => ({ ...prev, [name]: "" }));
-    try {
-      const res = await verifyMut.mutateAsync({ capability: name });
-      if (!res.ok) {
-        setVerifyErrors((prev) => ({ ...prev, [name]: res.detail || t("settings.capabilities.verifyFailed") }));
-      }
-      await refetch();
-    } catch (e) {
-      setVerifyErrors((prev) => ({ ...prev, [name]: (e as Error).message }));
-    } finally {
-      setVerifying(null);
-    }
-  };
-
-  const provisionCapability = async (name: string) => {
-    setProvisioning(name);
-    setVerifyErrors((prev) => ({ ...prev, [name]: "" }));
-    try {
-      const res = await provisionMut.mutateAsync({ capability: name });
-      if (!res.ok) {
-        setVerifyErrors((prev) => ({ ...prev, [name]: res.detail || t("settings.capabilities.provisionFailed") }));
-      }
-      await refetch();
-    } catch (e) {
-      setVerifyErrors((prev) => ({ ...prev, [name]: (e as Error).message }));
-    } finally {
-      setProvisioning(null);
-    }
-  };
 
   return (
     <section id="capabilities" className="settings-section">
@@ -216,46 +111,18 @@ export function CapabilitiesSection() {
       {isPending && !data ? (
         <div className="cap-error">{t("settings.capabilities.loading")}</div>
       ) : failed ? (
-        <div className="cap-error">
-          {t("settings.capabilities.error")}
-        </div>
-      ) : caps.length === 0 ? (
+        <div className="cap-error">{t("settings.capabilities.error")}</div>
+      ) : capabilities.length === 0 ? (
         <div className="cap-error">{t("settings.capabilities.none")}</div>
       ) : (
-        caps.map(([name, cap]) => (
+        capabilities.map(([name, capability]) => (
           <div className="row" key={name}>
             <div className="row-label">
               {name}
-              <div className="row-help">{t(provenanceKey(cap.provenance))}</div>
+              <div className="row-help">{t(provenanceKey(capability.provenance))}</div>
             </div>
-            <div className="row-value">
-              <CapabilityStatusValue cap={cap} />
-              <CapabilityRemediationLine name={name} cap={cap} />
-              {verifyErrors[name] ? <div className="cap-detail cap-detail--error">{verifyErrors[name]}</div> : null}
-            </div>
-            <div className="row-status">
-              <CapabilityBadge status={cap.status} detail={cap.detail} />
-              {canVerifyCapability(name, cap) ? (
-                <button
-                  type="button"
-                  className="cap-verify-btn"
-                  disabled={verifying !== null || provisioning !== null}
-                  onClick={() => { void verifyCapability(name); }}
-                >
-                  {verifying === name ? t("settings.capabilities.verifying") : t("settings.capabilities.verify")}
-                </button>
-              ) : null}
-              {canProvisionCapability(name, cap) ? (
-                <button
-                  type="button"
-                  className="cap-verify-btn"
-                  disabled={verifying !== null || provisioning !== null}
-                  onClick={() => { void provisionCapability(name); }}
-                >
-                  {provisioning === name ? t("settings.capabilities.provisioning") : t("settings.capabilities.provision")}
-                </button>
-              ) : null}
-            </div>
+            <div className="row-value"><CapabilityStatusValue cap={capability} /></div>
+            <div className="row-status"><CapabilityBadge status={capability.status} detail={capability.detail} /></div>
           </div>
         ))
       )}

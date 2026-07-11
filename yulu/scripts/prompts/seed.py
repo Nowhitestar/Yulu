@@ -1,10 +1,8 @@
-"""Frozen seed snapshots for the Prompt Library.
+"""Bundled instruction templates for the Prompt Library.
 
-These are intentionally frozen copies of the prompts that used to live as
-SUMMARY_PROMPT constants in transcribe.py + agent_queue_worker.py and the
-inline cleanup prompt in transcribe.py::refine_transcript. The same PR that
-adds this module deletes those constants. After that, this file is the
-canonical migration history.
+Summary prompts contain instructions and safe metadata placeholders only.
+The Host never interpolates raw transcript text into an Agent prompt; Hermes
+reads it through the lease-scoped Yulu MCP operation instead.
 """
 
 from __future__ import annotations
@@ -22,11 +20,11 @@ SEED_PROMPTS: list[dict] = [
         "is_auto_run": True,
         "sort_order": 10,
         "content": (
-            "请基于以下会议转录生成最终版结构化会议纪要。\n"
+            "请基于本任务通过 task-scoped MCP `recording_task_transcript_read` "
+            "读取的完整会议转录，生成最终版结构化会议纪要。\n"
             "\n"
             "会议主题：{{meeting_title}}\n"
             "会议日期：{{date}}\n"
-            "说话人候选：{{speaker_list}}\n"
             "\n"
             "要求：\n"
             "1. 输出中文 Markdown。\n"
@@ -34,21 +32,16 @@ SEED_PROMPTS: list[dict] = [
             "Action Items（含负责人/截止日期）、Open Questions / Blockers、"
             "Decisions Made。\n"
             "3. 按议题分类讨论要点，每个议题下列出关键发言和结论。\n"
-            "4. 涉及人名、负责人、说话人时，优先使用说话人候选和转录标签；"
-            "不要把候选名单外的人名强行写成负责人。\n"
+            "4. 涉及人名、负责人、说话人时，只使用转录中已有的标签和证据；"
+            "不要强行推断身份或负责人。\n"
             "5. 不要输出解释、寒暄或代码块，只输出纪要正文。\n"
-            "\n"
-            "会议转录：\n"
-            "---\n"
-            "{{best_transcript}}\n"
-            "---\n"
         ),
     },
     {
         "slug": "transcript-cleanup",
         "name": "Transcript Cleanup",
         "category": "cleanup",
-        "is_auto_run": True,
+        "is_auto_run": False,
         "sort_order": 0,
         "content": (
             "请清理以下会议转录，输出 cleaned transcript，不要摘要，不要增删事实。\n"
@@ -102,7 +95,8 @@ SEED_PROMPTS: list[dict] = [
         "is_auto_run": False,
         "sort_order": 20,
         "content": (
-            "请基于以下会议转录提取 Action Items 与 Decisions。\n"
+            "请基于本任务通过 task-scoped MCP `recording_task_transcript_read` "
+            "读取的完整会议转录，提取 Action Items 与 Decisions。\n"
             "\n"
             "会议主题：{{meeting_title}}\n"
             "会议日期：{{date}}\n"
@@ -116,11 +110,6 @@ SEED_PROMPTS: list[dict] = [
             "   - `## Decisions` —— 每条一行 `- <决定> (背景: <一句>)`\n"
             "3. 不输出讨论摘要、TL;DR 等其它内容。\n"
             "4. 如果转录中没有明确的 action 或 decision，对应章节写 `- 无`。\n"
-            "\n"
-            "会议转录：\n"
-            "---\n"
-            "{{transcript}}\n"
-            "---\n"
         ),
     },
     {
@@ -130,22 +119,15 @@ SEED_PROMPTS: list[dict] = [
         "is_auto_run": False,
         "sort_order": 30,
         "content": (
-            "请基于以下双轨会议转录，按发言人输出 Action Items。\n"
+            "请基于本任务通过 task-scoped MCP `recording_task_transcript_read` "
+            "读取的完整会议转录，按发言人输出 Action Items。\n"
             "\n"
             "会议主题：{{meeting_title}}\n"
             "会议日期：{{date}}\n"
             "\n"
-            "我说过的话（mic 通道）：\n"
-            "---\n"
-            "{{my_transcript}}\n"
-            "---\n"
-            "\n"
-            "对方说过的话（sys 通道）：\n"
-            "---\n"
-            "{{their_transcript}}\n"
-            "---\n"
-            "\n"
             "要求：\n"
+            "- 仅在转录明确包含 mic/sys 或说话人标签时按双方归属；"
+            "无法确认归属时不要猜测。\n"
             "- 输出中文 Markdown，包含两个章节：`## 我承诺的事` / `## 对方承诺的事`。\n"
             "- 每条 Action Item 一行 `- [ ] <内容> (截止: <日期>)`；"
             "截止日期仅在对话中明确提到时填写，否则写 `截止: 未指定`。\n"

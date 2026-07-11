@@ -7,7 +7,7 @@ import struct
 import wave
 from pathlib import Path
 
-from stt_daemon.wav_inspect import WavLayout, classify
+from wav_inspect import WavLayout, classify
 
 
 SYS_ACTIVE_THRESHOLD = 0.001

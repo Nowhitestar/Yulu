@@ -24,6 +24,7 @@ sys.path.insert(0, str(ROOT / "yulu" / "scripts"))
 from capabilities import provider as provider_mod  # noqa: E402
 from capabilities.provider import (  # noqa: E402
     CapabilityProvider,
+    HermesProvider,
     ClaudeCodeProvider,
     CodexProvider,
     OpenClawProvider,
@@ -87,15 +88,9 @@ def test_present_claude_is_relabeled_agent_config(monkeypatch):
 def test_all_contributed_values_are_capabilities(monkeypatch):
     usable = Capability(Provenance.HOST_PATH, Status.USABLE, "/x/claude", "v1")
     monkeypatch.setattr(provider_mod, "probe_command", lambda *a, **k: usable)
-    monkeypatch.setattr(
-        provider_mod,
-        "probe_mlx_whisper",
-        lambda *a, **k: Capability(Provenance.HOST_PATH, Status.USABLE, "/py", "mlx_whisper 1"),
-    )
-
     caps = ClaudeCodeProvider().capabilities()
 
-    assert caps  # contributes >1 real entry
+    assert caps
     assert all(isinstance(c, Capability) for c in caps.values())
 
 
@@ -105,12 +100,6 @@ def test_absent_claude_degrades_not_crashes(monkeypatch):
     monkeypatch.setattr(
         provider_mod, "probe_command", lambda *a, **k: provider_mod.report.absent("claude not on login PATH")
     )
-    monkeypatch.setattr(
-        provider_mod,
-        "probe_mlx_whisper",
-        lambda *a, **k: provider_mod.report.absent("mlx_whisper missing"),
-    )
-
     caps = ClaudeCodeProvider().capabilities()
 
     assert "claude_cli" in caps
@@ -158,48 +147,31 @@ def test_default_providers_includes_claude_code():
 def test_default_providers_cover_v1_agent_targets():
     providers = default_providers()
     names = {p.agent_name for p in providers}
-    assert {"claude-code", "codex", "openclaw"} <= names
+    assert {"hermes", "claude-code", "codex", "openclaw"} <= names
+    assert any(isinstance(p, HermesProvider) for p in providers)
     assert any(isinstance(p, CodexProvider) for p in providers)
     assert any(isinstance(p, OpenClawProvider) for p in providers)
 
 
-def test_codex_and_openclaw_providers_relabel_without_key_collision(monkeypatch):
+def test_codex_and_openclaw_providers_relabel_cli_entries(monkeypatch):
     def fake_probe_command(name, *args, **kwargs):
         return Capability(Provenance.HOST_PATH, Status.USABLE, f"/usr/local/bin/{name}", f"{name} 1.2.3")
 
     monkeypatch.setattr(provider_mod, "probe_command", fake_probe_command)
-    monkeypatch.setattr(
-        provider_mod,
-        "probe_mlx_whisper",
-        lambda *a, **k: Capability(Provenance.HOST_PATH, Status.USABLE, "/py", "mlx_whisper 1"),
-    )
-
     codex_caps = CodexProvider().capabilities()
     openclaw_caps = OpenClawProvider().capabilities()
 
     assert codex_caps["codex_cli"].provenance is Provenance.AGENT_CONFIG
     assert codex_caps["codex_cli"].resolved_path == "/usr/local/bin/codex"
-    assert codex_caps["codex_mlx_whisper"].provenance is Provenance.AGENT_CONFIG
-
     assert openclaw_caps["openclaw_cli"].provenance is Provenance.AGENT_CONFIG
     assert openclaw_caps["openclaw_cli"].resolved_path == "/usr/local/bin/openclaw"
-    assert openclaw_caps["openclaw_mlx_whisper"].provenance is Provenance.AGENT_CONFIG
-
-    combined_keys = set(codex_caps) | set(openclaw_caps)
-    assert {"codex_mlx_whisper", "openclaw_mlx_whisper"} <= combined_keys
-    assert "agent_mlx_whisper" not in combined_keys
+    assert set(codex_caps) == {"codex_cli"}
+    assert set(openclaw_caps) == {"openclaw_cli"}
 
 
 def test_codex_provider_absent_cli_degrades_not_crashes(monkeypatch):
     monkeypatch.setattr(provider_mod, "probe_command", lambda *a, **k: provider_mod.report.absent("codex missing"))
-    monkeypatch.setattr(
-        provider_mod,
-        "probe_mlx_whisper",
-        lambda *a, **k: provider_mod.report.absent("mlx_whisper missing"),
-    )
-
     caps = CodexProvider().capabilities()
 
     assert caps["codex_cli"].provenance is Provenance.ABSENT
     assert caps["codex_cli"].status is Status.ABSENT
-    assert caps["codex_mlx_whisper"].provenance is Provenance.ABSENT

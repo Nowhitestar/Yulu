@@ -65,6 +65,16 @@ def test_edit_toggles_auto_run(tmp_path, capsys):
     assert json.loads(out)[0]["is_auto_run"] is False
 
 
+def test_non_summary_prompt_cannot_enable_auto_run(tmp_path, capsys):
+    db = tmp_path / "p.sqlite"
+    code, _, err = _run([
+        "add", "cleanup", "--name", "Cleanup", "--category", "cleanup",
+        "--content", "clean", "--auto-run",
+    ], db_path=db, capsys=capsys)
+    assert code == 1
+    assert "only for summary prompts" in err
+
+
 def test_remove_unknown_returns_error(tmp_path, capsys):
     db = tmp_path / "p.sqlite"
     code, _, err = _run(["remove", "ghost"], db_path=db, capsys=capsys)

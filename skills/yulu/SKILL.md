@@ -1,247 +1,220 @@
 ---
 name: yulu
-description: Control Yulu（语录）, Lewis 的本地优先 macOS 会议录音工具。用于开始/停止会议录音、查看录音状态、查找历史转录、处理 ~/.config/yulu/agent-queue.json 里的 summary_request 并生成/重生成会议纪要。
-version: 1.0.0
+description: Control Yulu（语录）, an Agent-native macOS meeting recorder. Use it to start or stop native recording, inspect durable recording tasks, search or read meeting artifacts, and diagnose the local Host/Hermes pipeline.
+version: 2.0.0
 source: ~/.yulu/skills/yulu/SKILL.md
 metadata:
   hermes:
-    tags: [yulu, meeting, recorder, transcription, summary, macos, local-first]
+    tags: [yulu, meeting, recorder, transcription, summary, macos, agent-native]
 ---
 
-# Yulu — 雷子的控制面
+# Yulu
 
-Yulu 是本地优先的 macOS 会议记录器：ScreenCaptureKit + AVFoundation 录音，whisper.cpp 本地转录，摘要请求写入 `~/.config/yulu/agent-queue.json`。没有云端账号，也不需要虚拟声卡。
+Yulu 是 macOS 原生会议记录器和可信本地控制面：
 
-这个 skill 是给 Hermes/雷子用的适配版。原始 skill 位于 `~/.yulu/skills/yulu/SKILL.md`。
+- `Yulu.app` 负责 ScreenCaptureKit 系统音频、AVFoundation 麦克风和 macOS 权限；
+- Yulu Host 负责持久化任务、幂等、租约、恢复、产物原子提交和审计；
+- Hermes 负责录音转写、会议纪要和经任务明确授权的 Notion 投递；
+- Agent Console 选中的通用 Agent 负责交互式对话和它自己的连接器。
+
+Yulu 不再运行自己的语音模型、总结 worker、对话引擎或 connector runtime。不要寻找或恢复旧的 STT daemon、JSON Agent 队列或 Yulu-owned Notion 路径。
 
 ## 什么时候用
 
-用户说这些事时加载本 skill：
+用户提出以下请求时加载本 skill：
 
-- 开始录音 / 记录这个会议 / start recording / record this meeting
-- 停止录音 / 结束会议 / stop recording / wrap it up
-- Yulu 现在是否在录 / 录音状态 / recording status
-- 总结刚才会议 / 重生成某个会议摘要 / process Yulu queue
-- 找某次会议 transcript / 昨天会议讲了什么
-- 把某次会议纪要发到配置好的渠道
+- 开始、停止或查看会议录音状态；
+- 查找某次历史会议、转录或纪要；
+- 查看录音处理进度，判断失败发生在录音、Hermes、产物提交还是 Notion 投递；
+- 重跑某次录音的 Agent 处理流程；
+- 查看或管理 Yulu 的提示词、术语表和本地搜索；
+- 验证 Yulu Host、MCP、Hermes 或 macOS 录音权限。
 
-不要把它用于泛用音频录制。Yulu 面向会议，文件写在项目下的 `meeting-recordings/`。
+Yulu 面向会议和语音输入，不是通用音频编辑器。
 
-## 路径约定
+## 优先使用 MCP
 
-默认安装路径：
+Yulu Host 提供 loopback-only、bearer-authenticated MCP。优先调用已注册的 MCP 工具，不要读取或打印 `~/.config/yulu/mcp-token.json`，也不要直接编辑 `host.sqlite`。
 
-- Hermes skill/source copy: `~/.yulu/yulu/`
-- 录音控制脚本：`~/.yulu/yulu/scripts/record_audio.py`
-- 摘要模板：通常在 `~/.yulu/yulu/scripts/summary_template.md`
-- 当前 launchd/实际运行进程可能仍来自 OpenClaw 旧路径：`~/.openclaw/workspace/meeting-assistant/yulu/scripts/`。排障时先用 `ps aux | grep yulu` 确认真实脚本路径；修复 `record_audio.py` / `transcribe.py` 这类运行脚本时要同步两边，或确认 launchd 已切到新路径。
-- daemon socket: `~/.config/yulu/audio_daemon.sock`
-- agent queue: `~/.config/yulu/agent-queue.json`
+主要工具：
 
-如果默认路径不存在，定位方式：
+| 工具 | 用途 |
+|---|---|
+| `recording_status` | 查看原生录音状态和输入权限 |
+| `recording_start` | 以可选标题开始原生录音 |
+| `recording_stop` | 停止录音并进入同一条持久化处理链 |
+| `recordings_list` | 列出历史录音 |
+| `recording_get` | 读取一条录音的 metadata、转录、纪要及关联任务状态 |
+| `recording_task_get` | 查看持久化任务、阶段和审计事件 |
+| `recording_search` | 搜索本地转录和纪要 |
+| `recording_rename` | 重命名一条录音 |
+| `recording_set_tags` | 更新录音标签 |
+| `prompts_list` / `prompt_*` | 读取或管理本地总结、清理和语音提示词 |
+| `glossary_list` / `glossary_*` | 读取或管理本地术语上下文 |
+| `health_check` | 查看原生录音、Host、Hermes 和相关运行态健康 |
 
-```bash
-command -v yulu || find ~ -maxdepth 6 -name 'meeting_daemon.py' -path '*/yulu/scripts/*' -print -quit 2>/dev/null
-```
+以下工具属于 Host 启动的 Hermes 租约任务，不是普通交互动作：
 
-## 开发 / 发布流（Yulu 不只是 skill）
+| 工具 | 租约内用途 |
+|---|---|
+| `recording_task_progress` | 报告当前 Hermes 任务的语义阶段 |
+| `recording_task_transcript_read` | 仅通过 Host 读取当前租约任务的转录，不暴露文件路径 |
+| `recording_task_summary_stage` | 通过 Host 提交当前任务的最终 Markdown 纪要 |
+| `recording_artifact_commit` | 原子提交当前任务由 Host 管理的转录和纪要 |
+| `recording_begin_notion_delivery` | 在产物提交后申请一次明确授权的 Notion 投递 |
+| `recording_committed_summary_read` | 在独立投递阶段仅读取 Host 校验过的已提交纪要 |
+| `recording_commit_notion_delivery` | 报告实际 Notion 页面 URL 或 ID |
 
-当用户问 Yulu 的开发、发布、dogfood、GitHub 同步、第三方 code CLI 协作，先把 Yulu 当成完整应用仓库处理，而不是只改 skill。
+只有当前租约持有者可以调用这些写工具。普通 Agent 不应伪造 task ID、lease 或完成状态。
 
-当前约定：
-
-- Git 源仓库：`~/.yulu`，remote `https://github.com/Nowhitestar/Yulu.git`。
-- 源码脚本：`~/.yulu/yulu/scripts/`。
-- 旧运行态/launchd 可能仍来自：`~/.openclaw/workspace/meeting-assistant/yulu/scripts/`；迁移前必须用 doctor 检查真实进程来源。
-- 运行配置/状态：`~/.config/yulu/`，不进 Git。
-- 会议产物：`~/Movies/Yulu/`，不进 Git。
-- Skill 源头在 Yulu repo：`~/.yulu/skills/yulu/SKILL.md`，同步到 Hermes 和 l-skills。
-
-Repo hygiene workflow：
-
-```bash
-cd ~/.yulu
-make doctor              # 只读检查 source/runtime/legacy process/socket/tools
-make test                # py_compile + pytest + Swift build
-make dev-install-dry-run # 不改运行态；录音中会拒绝
-make dev-install         # 真实迁移/reload launchd 到当前 repo runtime
-make sync-skill-dry-run  # 预览 skill 同步
-make sync-skill          # 同步到 ~/.hermes 和 ~/Documents/Codebase/l-skills
-```
-
-当前 hygiene branch：`chore/yulu-repo-hygiene`，PR `https://github.com/Nowhitestar/Yulu/pull/15`。已加入 Makefile、doctor、dev_install、repair_permissions、sync_skill、queue_store/state_store、HTML artifact、测试、CI 和开发文档。`make dev-install` 可执行真实迁移：录音中拒绝安装，编译 helper，渲染并 reload LaunchAgents，停止旧 OpenClaw 进程，把运行态切到 `~/.yulu/yulu/scripts/`。迁移后用 `make doctor` 验证 legacy_processes=0；若 `sysReady=false`，先跑 `yulu repair-permissions`，必要时再跑 `yulu repair-permissions --reset` 并在系统设置里手动启用 Yulu。
-
-第三方 code CLI 协作规则：每次只给一个窄任务，写 `.agent/tasks/<slug>.md`，一个 agent 一个 branch/worktree，要求跑 `make test` 和必要 smoke test；雷子负责审 diff，检查是否误提交 config、录音、transcript、日志、密钥。
-
-## 动作
+## 常用工作流
 
 ### 开始录音
 
-```bash
-python3 ~/.yulu/yulu/scripts/record_audio.py start "<meeting title>"
-```
+1. 用户给了标题时，调用 `recording_start`。
+2. 没有标题但上下文足够时，使用简短可识别的标题。
+3. 上下文不足时问一次，或使用带时间的临时标题。
 
-如果用户没给标题：
-- 能明显推断就用合理标题
-- 否则问一次，或用 `Quick recording <YYYY-MM-DD HH:MM>`
+CLI 回退：
+
+```bash
+yulu record start "<meeting title>"
+```
 
 ### 停止录音
 
-```bash
-python3 ~/.yulu/yulu/scripts/record_audio.py stop
-```
-
-停止后，Yulu 会本地转录，并向 `~/.config/yulu/agent-queue.json` 写入 `summary_request`。随后应该尽快处理队列，不要依赖外部 agent 长久在线。
-
-### 查看状态
+调用 `recording_stop`，或：
 
 ```bash
-echo '{"action":"status"}' | nc -w 2 -U ~/.config/yulu/audio_daemon.sock
+yulu record stop
 ```
 
-返回 JSON，通常包含：
+停止只代表原生捕获结束。完成录音会提交给 Host，Host 持久化任务后再由 Hermes 转写和总结。不要告诉用户“纪要已完成”，除非关联任务达到 `completed` 且转录、纪要产物都已由 Host 提交。
 
-- `recording`
-- `sysReady`
-- `micReady`
-- 当前文件路径
-- elapsed time
+### 查看处理进度
 
-如果 socket 不存在，说明 Yulu daemon 没跑。让用户打开 `Yulu.app`，或运行 Yulu 的 setup。
+先用 `recording_get` 找关联任务，再用 `recording_task_get` 看状态和阶段；完整审计事件可在 Yulu UI 的任务详情中查看。常见状态：
 
-## 处理 summary_request
-
-`~/.config/yulu/agent-queue.json` 是 JSON 数组。Yulu 会为需要最终摘要的会议写一条：
-
-```json
-{
-  "id": "8f2d...",
-  "type": "summary_request",
-  "ts": "2026-05-08T14:32:11",
-  "title": "Yulu product weekly",
-  "audio_path": "/.../meeting-recordings/Yulu_20260508_143000.wav",
-  "transcript_path": "/.../meeting-recordings/Yulu_20260508_143000.transcript.txt",
-  "summary_path": "/.../meeting-recordings/Yulu_20260508_143000.summary.md",
-  "prompt_id": "summary",
-  "prompt_slug": "summary",
-  "prompt_name": "Meeting Summary",
-  "prompt_content_snapshot": "Write a concise meeting note...",
-  "html_path_hint": "/.../meeting-recordings/Yulu_20260508_143000.summary.html"
-}
-```
-
-处理步骤：
-
-1. 读 `transcript_path`。这是 UTF-8 纯文本，通常带时间戳。
-2. 使用 `prompt_content_snapshot` 作为本次摘要的提示词快照；不要重新读旧模板路径，也不要假设 prompt catalog 当前内容和入队时一致。
-3. 按提示词生成会议纪要，覆盖写入 `summary_path`。Yulu 可能已经写了 fallback draft，可以覆盖。
-4. 如已有 `.summary.md`，同时生成/刷新同 stem 的 `.summary.html`：
-   ```bash
-   python3 ~/.yulu/yulu/scripts/html_artifact.py /path/to/meeting.summary.md /path/to/meeting.transcript.txt
-   ```
-   HTML 是后续加工优先的 workbench，模板来自 `~/Documents/LBrain/Templates/html-artifacts/meeting-summary.html`：正文区域可编辑，内嵌 `#artifact-data` JSON，工具条可复制 Markdown/JSON/简版、保存当前 HTML、打印/PDF。
-5. 更新 queue：保留 entry，把 `status` 改为 `"done"`，并写入 `processed_by` / `processed_at`；失败时写 `status: "error"` 和 `error`。不要删除 entry，也不要改成旧的完成事件类型，UI/worker 需要靠状态做可观测和重试。
-6. 用 Python 或 `jq` 处理 JSON，别用 shell 字符串拼接。
-
-Lewis 偏好：Yulu 摘要尽量交给本地 worker 及时处理；如果需要委托 LLM，优先考虑 Codex CLI，而不是 Claude CLI。
-
-## HTML artifact / workbench
-
-Yulu 纪要现在默认保留两种产物：
-
-- `.summary.md`：适合纯文本发送、兼容旧流程。
-- `.summary.html`：适合 Lewis 后续加工。它是单文件 HTML 工作台，包含：
-  - 可编辑内容区（`contenteditable="true"`）
-  - `script#artifact-data[type="application/json"]` 结构化数据（title / tldr / action_items / decisions / open_questions / topics / paths）
-  - 工具条：复制 Markdown、复制 JSON、复制 Telegram 版、保存当前 HTML、打印/PDF
-
-实现文件：`scripts/html_artifact.py`。它是 Yulu 薄适配层，优先读取 LBrain 模板 `~/Documents/LBrain/Templates/html-artifacts/meeting-summary.html`，并复用支撑脚本 `~/Documents/LBrain/System/html-artifacts/render_artifact.py`。`transcribe.py` 写完 `.summary.md` 后会自动调用 `write_meeting_summary_html(...)` 生成 `.summary.html`，并在 `summary_ready` 事件里附带 `html_path`。`agent_queue_worker.py` 处理 `summary_request` 覆盖 `.summary.md` 前必须校验：不能是 agent-queue JSON，长度不能过短，至少包含 `## TL;DR` / `## Discussion Points` / `## Action Items`；覆盖后也要刷新 `.summary.html`。修 `transcribe.py` / `html_artifact.py` / `agent_queue_worker.py` 时要同步到源码 repo 和当前真实运行态；改通用模板时优先改 LBrain Templates。
-
-## 查找历史会议
-
-录音文件通常在 `<repo>/meeting-recordings/`。同一次会议会共享 stem：
-
-`<SanitizedTitle>_<YYYYMMDD>_<HHMMSS>`
-
-常见文件：
-
-| Suffix | 内容 |
+| 状态 | 含义 |
 |---|---|
-| `.wav` | 录音音频 |
-| `.transcript.txt` | 最终 transcript |
-| `.realtime.transcript.txt` | 录制时流式 partial transcript，可能没有 |
-| `.summary.md` | Markdown 会议纪要 |
-| `.summary.html` | 可编辑 HTML 工作台：内嵌 JSON data island，支持复制 Markdown/JSON/Telegram 版、保存当前 HTML、打印/PDF |
+| `queued` | 已持久化，等待领取 |
+| `awaiting_agent` | Hermes 不可用，录音仍安全保存 |
+| `running` | 当前租约正在转写或总结 |
+| `artifacts_committed` | 转录和纪要已成对提交 |
+| `sending` | Host 已授权 Hermes 联系 Notion |
+| `delivery_reported` | Hermes 已报告 Notion 页面 URL 或 ID |
+| `completed` | 所需产物和可选投递审计全部通过 |
+| `failed` | 确定性处理或校验失败 |
+| `delivery_unverified` | 外部投递结果不确定，必须先人工核对 |
 
-回答“某次会议说了什么”时，必须读取 transcript 或 summary，不要只凭文件名推断。
+`delivery_unverified` 不等于“发送失败”。不要反复触发投递；先在目标 Notion 中按稳定标记 `yulu-<task-id>` 核对。
 
-## 已知排障点
+### 查找历史会议
 
-- 如果 `sysReady=false` 且 `sysError` 是 `no display` 或 TCC 拒绝，先跑 `yulu repair-permissions`；它会重启 audio daemon 并打开 Screen & System Audio Recording 设置页。若需要清掉旧授权状态，再跑 `yulu repair-permissions --reset`，然后在系统设置里手动启用 Yulu。
-- 如果 `.transcript.txt` 或 `.summary.md` 里只有类似 `[{"type":"transcript"...}]` / `summary_ready` / `realtime_transcript_error` 的 JSON 数组，这是 LLM shim/Codex 或 realtime 转写错误事件被误当正文。应检查 `transcribe.py` 的 `_looks_like_agent_event_json`，把所有 agent-queue event type 加进拒绝名单；遇到这种输出必须拒绝并保留原 transcript / fallback summary，不能覆盖成 JSON。
-- 如果录音停止后 `realtime_transcribe.py` 还在跑，通常是它卡在 `mlx-whisper` 子进程里；`record_audio.py` 需要 kill 整个 process group（`start_new_session=True` 对应 `os.killpg`），否则 fast_summary 会读到不完整 realtime transcript。
-- 如果浮窗卡死、点不了停止，但 wav 文件仍在增长：常见根因是 Swift `audio_daemon` 进程活着但 Unix socket accept/read 不响应。排障顺序：`record_audio.py status`/`nc` 验证 socket；检查 `.state.json` 和 wav mtime/size；若 socket 失联，先保留 wav，kill `recorder_status`、`realtime_transcribe.py` process group、卡住的 `mlx_whisper`、`Yulu.app/Contents/MacOS/audio_daemon`，再把 state 标成 stopped/crashed。修复点：`recorder_status.swift` 的 socket read/write 必须设置 1s `SO_RCVTIMEO`/`SO_SNDTIMEO`，避免 UI 主线程阻塞；`record_audio.py stop` 应有 `emergency_stop_daemon()` 兜底，daemon 不响应时终止 daemon 并保留录音路径；`audio_daemon.swift` 的 accept loop 不要用会失效的 weak self 静默退出，失败要 log errno。
-- `fast_summary` 速度快但依赖实时转写完成度；长会议里 realtime chunk 可能明显落后或坏掉，质量优先时切到完整 final transcript 或等待 realtime ready。
-- Realtime transcript 里出现大量 “请保留英文专有名词...” 或重复术语，是 whisper initial_prompt 在静音/弱语音段幻觉泄漏；优先降低 realtime prompt 强度、关 `condition_on_previous_text` 或对 prompt 泄漏行做过滤。 / fallback summary，不能覆盖成 JSON。
-- 如果录音停止后 `realtime_transcribe.py` 还在跑，通常是它卡在 `mlx-whisper` 子进程里；`record_audio.py` 需要 kill 整个 process group（`start_new_session=True` 对应 `os.killpg`），否则 fast_summary 会读到不完整 realtime transcript。
-- 如果浮窗卡死、点不了停止，但 wav 文件仍在增长：常见根因是 Swift `audio_daemon` 进程活着但 Unix socket accept/read 不响应。排障顺序：`record_audio.py status`/`nc` 验证 socket；检查 `.state.json` 和 wav mtime/size；若 socket 失联，先保留 wav，kill `recorder_status`、`realtime_transcribe.py` process group、卡住的 `mlx_whisper`、`Yulu.app/Contents/MacOS/audio_daemon`，再把 state 标成 stopped/crashed。修复点：`recorder_status.swift` 的 socket read/write 必须设置 1s `SO_RCVTIMEO`/`SO_SNDTIMEO`，避免 UI 主线程阻塞；`record_audio.py stop` 应有 `emergency_stop_daemon()` 兜底，daemon 不响应时终止 daemon 并保留录音路径；`audio_daemon.swift` 的 accept loop 不要用会失效的 weak self 静默退出，失败要 log errno。
-- `fast_summary` 速度快但依赖实时转写完成度；长会议里 realtime chunk 可能明显落后或坏掉，质量优先时切到完整 final transcript 或等待 realtime ready。
-- Realtime transcript 里出现大量 “请保留英文专有名词...” 或重复术语，是 whisper initial_prompt 在静音/弱语音段幻觉泄漏；优先降低 realtime prompt 强度、关 `condition_on_previous_text` 或对 prompt 泄漏行做过滤。
+优先使用 `recording_search`、`recordings_list` 和 `recording_get`。回答“某次会议说了什么”时必须读取转录或纪要，不要只根据标题、文件名或任务状态推断。
 
-## 重跑坏掉的 transcript / summary
+录音内容默认位于 `~/Movies/Yulu/`，同一 stem 常见产物是：
 
-当用户说“重跑这次录制”或 transcript/summary 已经坏掉时，按这个 workflow：
+- `<stem>.wav`
+- `<stem>.transcript.txt`
+- `<stem>.summary.md`
 
-1. 先确认录音文件健康：
-   ```bash
-   ffprobe -hide_banner -v error -show_format -show_streams /path/to/meeting.wav
-   ffmpeg -hide_banner -nostats -i /path/to/meeting.wav -af volumedetect -f null - 2>&1 | tail -20
-   ```
-2. 不要直接用 48k stereo 大 wav 跑 full MLX；长会议可能卡很久。先转 16k mono：
-   ```bash
-   mkdir -p ~/Movies/Yulu/rerun-<name>
-   ffmpeg -hide_banner -y -i /path/to/meeting.wav -ac 1 -ar 16000 \
-     -af 'loudnorm=I=-16:LRA=11:TP=-1.5' ~/Movies/Yulu/rerun-<name>/meeting_16k.wav
-   ```
-3. 先抽 60 秒 smoke test，确认模型、音频和语种正常：
-   ```bash
-   ffmpeg -hide_banner -y -i ~/Movies/Yulu/rerun-<name>/meeting_16k.wav -t 60 ~/Movies/Yulu/rerun-<name>/test60.wav
-   ~/.config/yulu/venv-mlx-whisper/bin/python - <<'PY'
-   import mlx_whisper
-   res=mlx_whisper.transcribe('/path/to/test60.wav', path_or_hf_repo='mlx-community/whisper-large-v3-turbo', language='zh', task='transcribe', verbose=False, condition_on_previous_text=False)
-   print((res.get('text') or '')[:500])
-   PY
-   ```
-4. 用 `mlx-community/whisper-large-v3-turbo` 重跑完整 16k wav，通常几十分钟音频约 2 分钟内完成。设置：`language='zh'`, `condition_on_previous_text=False`, `hallucination_silence_threshold=1.5`。保留 segments 时间戳，写回原 stem 的 `.raw.transcript.txt` 和 `.transcript.txt`。
-5. 写回前过滤明显幻觉行：prompt 泄漏（“请保留英文专有名词...”）、“请不吝点赞...”、单词/双字重复循环（如 “比想比想...”）。不要过度清洗真实口语。
-6. 基于新 transcript 重写 `.summary.md`，并在摘要里注明“Yulu 重新转录”。
-7. 如果中途杀掉重跑进程，确认 `~/.config/yulu/config.json` 已恢复，避免临时 `post_recording_mode=full_transcribe` / `cleanup.enabled=false` 残留。
+### 重跑录音处理
 
-## 暂时没有的能力
+从录音详情页使用统一的 Hermes 重处理动作。不要手工覆盖最终 sidecar、手工插入 SQLite 任务，或恢复旧的独立“转写/总结/发送”命令。重处理会创建新的显式 attempt；自动完成事件本身仍保持幂等。
 
-如果用户问这些，直接说明还没有，并给最近替代方案：
+### Notion 投递
 
-- “总结我这个月所有会议”——目前没有聚合索引，只能遍历 `meeting-recordings/`，大档案会慢。
-- “下个会前 5 分钟叫醒我”——Yulu scheduler 由 launchd 内部处理，agent 没有重触发接口。
-- “剪掉录音前 30 秒”——Yulu 暂未暴露音频编辑接口。
+录音任务只有在创建时记录 `sendToNotion=true`，或用户在统一重处理动作中明确选择发送，才允许投递。合法顺序是：
 
-## 隐私底线
+1. Hermes 的音频阶段完成转写，Host 把转录限定在当前任务内；
+2. 独立 artifact session 调用 `recording_task_transcript_read`，按任务快照的总结指令生成纪要；
+3. 该 session 调用 `recording_task_summary_stage`，再调用 `recording_artifact_commit`；
+4. 如获授权，Host 启动全新的 delivery session；它先调用 `recording_begin_notion_delivery` 和 `recording_committed_summary_read`；
+5. 若 begin 返回 Host 已验证的页面，直接更新该页面，禁止再次搜索或创建；只有新投递才允许用稳定 key 精确搜索一次，并在结果明确为空时创建；
+6. delivery session 用 Hermes 自己的 Notion connector 写页面并携带稳定 key；
+7. delivery session 用页面 URL 或 ID 调用 `recording_commit_notion_delivery`。
 
-Yulu 是 local-first。处理时遵守：
+不要把普通 Agent Console 对话中的 Notion 请求和录音任务投递混为一条路径，也不要让 Yulu 保存 Notion 凭据。
 
-- 不上传 `.wav`、`.transcript.txt`、会议 metadata 到云端，除非用户本轮明确要求用云模型总结。
-- 不把 transcript 原文大段贴进聊天，除非用户明确要求查看原文。
-- 不把摘要写到 `summary_path` 和配置好的发送目的地之外。
-- 需要引用 transcript 问澄清时，只引用最小必要片段，并标注。
+## Hermes 租约任务规则
 
-## 验证
+当 Host 启动本 skill 处理已领取的录音任务时：
 
-安装/适配后应能：
+1. 只处理 Host 提供的 task ID 和 lease；不要用文件工具读取任务目录或最终 sidecar。
+2. artifact session 调用 `recording_task_transcript_read` 获取当前任务转录。
+3. 使用任务附带的总结指令生成最终 Markdown，并调用 `recording_task_summary_stage` 提交给 Host。
+4. 调用 `recording_artifact_commit`，让 Host 校验并原子提交转录与纪要。
+5. 未授权 Notion 时立即停止外部动作。
+6. 已授权时必须进入全新的 delivery session；严格走 begin → `recording_committed_summary_read` → Hermes connector → commit 顺序。该 session 不得请求或接触原始转录。
+7. 最后报告简短状态；文字报告不能替代 Host 工具提交。
+
+如果 Hermes 无法完成，保留明确错误供 Host 记录。不要切换到 Yulu 内部模型或另一个通用 Agent 作为隐式 fallback。
+
+## 本地路径
+
+| 路径 | 内容 |
+|---|---|
+| `~/.yulu/` | 已安装 Yulu runtime |
+| `~/.config/yulu/config.json` | 非密钥配置 |
+| `~/.config/yulu/host.sqlite` | 任务、租约、事件、产物和投递审计 |
+| `~/.config/yulu/agent-tasks/` | Host 私有任务工作区；Agent 不要直接读写 |
+| `~/.config/yulu/recording-events/` | Host 不可用时的录音完成事件 |
+| `~/.config/yulu/audio_daemon.sock` | 原生录音控制 socket |
+| `~/.config/yulu/mcp-token.json` | 本地 bearer token；不要输出 |
+| `~/Movies/Yulu/` | 录音及 Host 提交的转录、纪要 |
+
+Host 暂时不可用时，录音完成事件会原子暂存并在恢复后重放；同一个自动完成事件不会重复创建任务。
+
+## 排障顺序
+
+把不同边界分开检查：
+
+1. **原生录音**：`recording_status` 或 `yulu status`；检查 `sysReady`、`micReady` 和 socket。
+2. **本地 Host**：`curl -fsS http://127.0.0.1:7777/healthz` 和 `yulu logs ui`。
+3. **持久化任务**：`recording_task_get` 或 `yulu doctor --json` 的 `host_tasks`。
+4. **Hermes**：doctor 中的 Agent capability，以及 Yulu LaunchAgent 能看到的稳定 Hermes PATH。
+5. **产物**：任务必须有两条 Host artifact 记录和两个最终 sidecar。
+6. **Notion**：检查任务 opt-in、delivery record、页面 URL/ID 和稳定标记。
+
+常用命令：
 
 ```bash
-test -f ~/.yulu/yulu/scripts/record_audio.py
-test -f ~/.config/yulu/agent-queue.json || true
-echo '{"action":"status"}' | nc -w 2 -U ~/.config/yulu/audio_daemon.sock
+yulu status
+yulu doctor --json
+yulu mcp status
+yulu mcp test
+yulu logs ui
+yulu repair-permissions
 ```
 
-Hermes 侧验证：`skills_list(category="leizi")` 能看到 `yulu`。
+若 `sysReady=false` 或 `micReady=false`，使用 `yulu repair-permissions`，并在系统设置中为 `Yulu.app` 启用“麦克风”和“屏幕与系统音频录制”。
+
+## 隐私和安全
+
+- 不读取、复制或展示 MCP token、Host SQLite 内部 lease、Agent 凭据或 connector 凭据。
+- 不把录音或转录贴到聊天里，除非用户明确要求且只使用必要片段。
+- 自动处理会把音频交给 Hermes；是否离开本机取决于 Hermes 的 provider 配置，不要把它描述为无条件本地转写。
+- Notion 是单任务明确授权的副作用；其它 connector 动作遵循当前通用 Agent 自己的授权模型。
+- 不把 `host.sqlite`、token、task workspace、socket 或 event spool 放到云同步目录。
+
+## 开发和安装
+
+本 skill 只是 Agent 契约，不能单独安装原生录音和 Host。安装或刷新运行态：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Nowhitestar/Yulu/main/install.sh | bash
+yulu skill install --agent codex
+yulu mcp status
+yulu mcp test
+```
+
+开发 checkout 修改后，先同步到真实运行态再验收：
+
+```bash
+make dev-install
+python3 yulu/scripts/doctor.py --json
+curl -fsS http://127.0.0.1:7777/healthz
+```
+
+不要仅凭源码测试推断已安装 runtime 已更新。当前架构详情见 `docs/ARCHITECTURE.md`、`docs/operations.md` 和 `yulu/spec/adr/005-agent-native-durable-recording-pipeline.md`。

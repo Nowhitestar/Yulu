@@ -4,14 +4,18 @@ import type { LaunchctlClient } from "./launchctl.js";
 import type { PubSub, AppChannels } from "./pubsub.js";
 import type { Database as DbType } from "better-sqlite3";
 import type { paths as pathsType } from "./paths.js";
-import type { JobRegistry } from "./jobStatus.js";
+import type { HostStore } from "./hostStore.js";
+import type { ArtifactStore } from "./artifactStore.js";
+import type { RecordingPipeline } from "./recordingPipeline.js";
 
 export interface AppContext {
   config: ConfigManager;
   launchctl: LaunchctlClient;
   pubsub: PubSub<AppChannels>;
   paths: typeof pathsType;
-  jobs: JobRegistry;
+  host: HostStore;
+  artifacts: ArtifactStore;
+  recordingPipeline: RecordingPipeline;
   db: {
     prompts: DbType;
     vocab: DbType;

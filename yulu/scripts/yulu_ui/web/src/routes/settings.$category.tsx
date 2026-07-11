@@ -13,12 +13,11 @@ import { StorageSection } from "../components/settings/StorageSection.js";
 import { TranscriptionSection } from "../components/settings/TranscriptionSection.js";
 import { VoiceInputSection } from "../components/settings/VoiceInputSection.js";
 import { AutomationSection } from "../components/settings/AutomationSection.js";
-import { AdvancedSection } from "../components/settings/AdvancedSection.js";
 
 /**
  * Maps a settings category to the rich section components that render its
- * fields. The sections own the per-field queries (audio devices, detected
- * models), test buttons, capability report, and DB stats — re-homing here keeps
+ * fields. The sections own the per-field queries, capability report, and DB
+ * stats — re-homing here keeps
  * all that behaviour intact while the registry-driven categories decide *where*
  * each block lives (P1 category→content map). The generic InlineEditRow rows are
  * rendered inside these sections; their input type/label/help already match the
@@ -41,7 +40,6 @@ const CATEGORY_SECTIONS: Record<string, (tracker: SettingsRestartTracker) => Rea
   transcription: (tracker) => <TranscriptionSection tracker={tracker} />,
   voice: (tracker) => <VoiceInputSection tracker={tracker} />,
   automation: (tracker) => <AutomationSection tracker={tracker} />,
-  advanced: (tracker) => <AdvancedSection tracker={tracker} />,
 };
 
 /**

@@ -12,7 +12,7 @@ git log -1 --format='%ae'
 
 Please include:
 
-1. The component (audio daemon, transcription, calendar adapter, summary path, install script).
+1. The component (native capture, local Host/MCP, Hermes task boundary, calendar adapter, or installer).
 2. A minimal reproduction or proof of concept.
 3. Whether the issue requires local user access, network access, or remote unauthenticated access.
 4. Any disclosure timeline you would like.
@@ -23,8 +23,8 @@ I'll acknowledge within 7 days and aim to ship a fix within 30 days for high-sev
 
 In scope:
 
-- Code execution, privilege escalation, or sandbox escape from the bundled Swift / Python / shell components.
-- Mishandling of credentials (Google OAuth tokens, Telegram tokens, Notion keys) by Yulu code.
+- Code execution, privilege escalation, or sandbox escape from the bundled Swift, TypeScript, Python, or shell components.
+- Mishandling of the Yulu MCP bearer token, Google calendar credentials, or Agent-owned connector credentials by Yulu code.
 - Audio capture without the consent prompt firing first.
 - Leakage of recordings, transcripts, or summaries to unintended sinks.
 
@@ -39,16 +39,27 @@ Out of scope (please do not report):
 These are not vulnerabilities in Yulu, but they are the failure modes I see most often:
 
 - **Never paste `client_secret*.json` or refresh tokens into chat or commits.** If you have, revoke the OAuth client in Google Cloud Console and generate a new one. Removing the file from git history is not enough — assume it was scraped.
-- **Keep `~/.config/yulu/` out of cloud-synced folders** (iCloud Drive, Dropbox, Google Drive, OneDrive). Recordings, transcripts, and the agent queue are local-by-design.
-- **Audit `agent-queue.json` periodically.** It is the only place where transcript paths are passed to an external agent. If you no longer trust that agent, clear the file.
+- **Keep `~/.config/yulu/` out of cloud-synced folders** (iCloud Drive, Dropbox, Google Drive, OneDrive). It contains the Host database, task workspaces, completion-event spool, and local MCP token.
+- **Protect `~/.config/yulu/mcp-token.json`.** It must remain mode `0600`. Run `yulu mcp rotate-token` if it is exposed.
+- **Review uncertain external deliveries explicitly.** A task in `delivery_unverified` must be reconciled in Yulu; do not blindly retry a Notion write whose outcome is unknown.
 
 ## Verifying releases
 
-When GitHub Releases ship a signed `Yulu.app`, verify the signature before installing:
+Official releases contain a checksum-verified runtime zip with signed, notarized,
+and stapled app bundles. After downloading the zip and `checksums.txt`, verify the
+actual release asset before installing:
 
 ```bash
-codesign -dv --verbose=4 Yulu.app
-spctl -a -t exec -vv Yulu.app
+(cd <download-directory> && shasum -a 256 -c checksums.txt)
+gh attestation verify yulu-macos-arm64-vX.Y.Z.zip --repo Nowhitestar/Yulu
+unzip yulu-macos-arm64-vX.Y.Z.zip -d /tmp/yulu-release-check
+codesign --verify --deep --strict /tmp/yulu-release-check/yulu/yulu/scripts/Yulu.app
+codesign -dv --verbose=4 /tmp/yulu-release-check/yulu/yulu/scripts/Yulu.app
+xcrun stapler validate /tmp/yulu-release-check/yulu/yulu/scripts/Yulu.app
 ```
 
-The expected Developer ID identity will be listed in the release notes. If `spctl` reports `rejected`, do not run the binary — open an issue instead.
+The signature must be a Developer ID Application identity with Team ID
+`WMU9678ZQL`. Repeat the checks for `StatusAgent.app`. If verification fails, do
+not run the asset; report it through the security channel above. The installer
+also verifies the full non-bundle runtime against the manifest covered by
+`Yulu.app`'s signature before it executes any packaged script.

@@ -8,7 +8,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 const SCHEMA = [
   { path: "audio.mic_device",         category: "audio",         label: "麦克风设备", type: "select", reload: { kind: "restart", daemons: ["audiodaemon"] } },
   { path: "audio.output_dir",         category: "audio",         label: "录音输出目录", type: "path", reload: { kind: "restart", daemons: ["audiodaemon"] } },
-  { path: "transcription.language",   category: "transcription", label: "语言",      type: "text",   reload: { kind: "restart", daemons: ["sttdaemon"] } },
+  { path: "transcription.language",   category: "transcription", label: "语言",      type: "select", reload: { kind: "none" } },
   { path: "llm.enabled",              category: "llm",           label: "启用 LLM",  type: "toggle", reload: { kind: "none" } },
   { path: "status_agent.enabled",     category: "general",       label: "菜单栏 Agent", type: "toggle", reload: { kind: "none" } },
   { path: "status_agent.hotkeys",     category: "voice",         label: "语音输入快捷键", type: "text", reload: { kind: "sighup", daemons: ["statusagent"] } },
@@ -36,12 +36,8 @@ vi.mock("../../../web/src/trpc.js", () => {
   const cfg = {
     audio: { mic_device: "BuiltInMic", system_audio_device: ":1", output_dir: "/tmp", silence_threshold: 0.01, silence_duration_sec: 300, backend: "daemon" },
     transcription: {
-      realtime_enabled: true,
-      final_engine: "mlx",
       language: "auto",
-      local_model_path: "",
-      mlx: { model: "", final_model: "", preprocess_audio: false, passthrough_max_sec: 0, passthrough_max_bytes: 0 },
-      dictation: { engine: "auto", prompt_slug: "dictation-cleanup", translate_prompt_slug: "dictation-translate", target_language: "English" },
+      dictation: { prompt_slug: "dictation-cleanup", translate_prompt_slug: "dictation-translate", target_language: "English" },
     },
     llm: { enabled: false, command: [] },
     status_agent: {
@@ -53,8 +49,7 @@ vi.mock("../../../web/src/trpc.js", () => {
       },
     },
     calendars: [],
-    connectors: { notion: { send_summary: false }, zulip: { send_summary: false } },
-    output: { notion: { database_id: "", api_key_env: "NOTION_API_KEY" }, zulip: { stream: "", topic: "" } },
+    agent_pipeline: { auto_send_notion: false },
   };
   const noopMutation = () => ({
     mutate: () => {},
@@ -100,17 +95,9 @@ vi.mock("../../../web/src/trpc.js", () => {
         openInFinder: { useMutation: noopMutation },
       },
       integrations: {
-        connectorStatus: { useQuery: () => ({ data: { schema_version: 1, connectors: {} }, isPending: false }) },
-        notionMcpStartAuth: { useMutation: noopMutation },
         test: { useMutation: noopMutation },
         accountList: { useQuery: () => ({ data: { ok: true, accounts: [] }, isPending: false }) },
         calendarList: { useQuery: () => ({ data: { ok: true, calendars: [] }, isPending: false }) },
-        outputDestinations: {
-          useQuery: (input: { channel: string }) => ({
-            data: { ok: false, channel: input.channel, identity: null, destinations: [], error: "not connected" },
-            isPending: false,
-          }),
-        },
       },
       agentConsole: {
         overview: {
@@ -127,6 +114,9 @@ vi.mock("../../../web/src/trpc.js", () => {
           }),
         },
       },
+      agentTasks: {
+        transcriptionHealth: { useQuery: () => ({ data: { available: true, provider: "hermes", reason: null }, isPending: false }) },
+      },
       llm: { test: { useMutation: noopMutation } },
       prompts: {
         list: { useQuery: (input: unknown) => {
@@ -142,9 +132,6 @@ vi.mock("../../../web/src/trpc.js", () => {
       search: { reindex: { useMutation: noopMutation } },
       capabilities: {
         host_capabilities: { useQuery: () => ({ data: { schema_version: 1, capabilities: {} }, refetch: () => {}, isError: false }) },
-        detected_models: { useQuery: () => ({ data: [], isPending: false }) },
-        verify: { useMutation: noopMutation },
-        provision: { useMutation: noopMutation },
       },
     },
     makeTrpcClient: () => ({}),
@@ -334,13 +321,15 @@ describe("Settings category detail content (re-homed widgets)", () => {
     })));
   });
 
-  it("transcription: the full transcription section", () => {
+  it("transcription: shows Agent-owned execution and product inputs", () => {
     const { container } = wrap("/settings/transcription");
     const detail = within(container.querySelector(".masterdetail-detail") as HTMLElement);
     // Section <h2> heading is distinct from the detail <h1> title (the category
     // label also renders "转写").
     expect(container.querySelector("h2.settings-section-h")?.textContent).toBe(translate("zh", "settings.transcription.heading"));
-    expect(detail.getByText(translate("zh", "settings.transcription.mode.label"))).toBeInTheDocument();
+    expect(detail.getByText("Hermes")).toBeInTheDocument();
+    expect(detail.getByText(translate("zh", "settings.transcription.language.label"))).toBeInTheDocument();
+    expect(detail.queryByText(/MLX|Whisper|实时转写|说话人分离/)).toBeNull();
   });
 
   it("voice: hotkey capture commits key and modifiers from the pressed shortcut", async () => {
@@ -421,24 +410,21 @@ describe("Settings category detail content (re-homed widgets)", () => {
     expect(el.props.to).toBe("/agent-console");
   });
 
-  it("advanced: the advanced-flagged cloud transcription command", () => {
-    const { container } = wrap("/settings/advanced");
-    const detail = within(container.querySelector(".masterdetail-detail") as HTMLElement);
-    // Exact match to hit the label, not the longer help paragraph that also
-    // mentions "cloud transcription command".
-    expect(detail.getByText(translate("zh", "settings.advanced.cloudCommand.label"))).toBeInTheDocument();
+  it("does not list the retired local transcription Advanced category", () => {
+    expect(CATEGORIES.map((category) => String(category.id))).not.toContain("advanced");
   });
 
   it("commits a field edit through trpc.config.update", async () => {
     configUpdateSpy.mockClear();
     const { container } = wrap("/settings/transcription");
     const row = within(container.querySelector("#transcription") as HTMLElement)
-      .getByText(translate("zh", "settings.transcription.realtime.label"))
+      .getByText(translate("zh", "settings.transcription.language.label"))
       .closest(".row")!;
-    within(row as HTMLElement).getByRole("switch").click();
+    fireEvent.click(within(row as HTMLElement).getByText("auto"));
+    fireEvent.change(within(row as HTMLElement).getByRole("combobox"), { target: { value: "zh" } });
     await waitFor(() => expect(configUpdateSpy).toHaveBeenCalledWith(expect.objectContaining({
-      key: "transcription.realtime_enabled",
-      value: false,
+      key: "transcription.language",
+      value: "zh",
     })));
   });
 });
@@ -462,18 +448,20 @@ describe("Settings — recording-guard + undo (Task 5)", () => {
   it("a non-restart field stays editable while recording", () => {
     recording.state = "recording";
     const { getByText } = wrap("/settings/transcription");
-    const row = getByText(translate("zh", "settings.transcription.realtime.label")).closest(".row")!;
-    expect(within(row as HTMLElement).getByRole("switch")).toBeInTheDocument();
+    const row = getByText(translate("zh", "settings.transcription.language.label")).closest(".row")!;
+    expect(within(row as HTMLElement).getByText("auto")).toBeInTheDocument();
+    expect(within(row as HTMLElement).queryByText(/录音中不可改/)).toBeNull();
   });
 
   it("a successful save shows an undo toast whose 撤销 re-commits the previous value", async () => {
     const { getByText, getByTestId } = wrap("/settings/transcription");
-    const row = getByText(translate("zh", "settings.transcription.realtime.label")).closest(".row")!;
-    within(row as HTMLElement).getByRole("switch").click();
-    await waitFor(() => expect(configUpdateSpy).toHaveBeenCalledWith(expect.objectContaining({ key: "transcription.realtime_enabled", value: false })));
+    const row = getByText(translate("zh", "settings.transcription.language.label")).closest(".row")!;
+    fireEvent.click(within(row as HTMLElement).getByText("auto"));
+    fireEvent.change(within(row as HTMLElement).getByRole("combobox"), { target: { value: "zh" } });
+    await waitFor(() => expect(configUpdateSpy).toHaveBeenCalledWith(expect.objectContaining({ key: "transcription.language", value: "zh" })));
     const toast = await waitFor(() => getByTestId("undo-toast"));
     configUpdateSpy.mockClear();
     fireEvent.click(within(toast).getByText("撤销"));
-    await waitFor(() => expect(configUpdateSpy).toHaveBeenCalledWith(expect.objectContaining({ key: "transcription.realtime_enabled", value: true })));
+    await waitFor(() => expect(configUpdateSpy).toHaveBeenCalledWith(expect.objectContaining({ key: "transcription.language", value: "auto" })));
   });
 });

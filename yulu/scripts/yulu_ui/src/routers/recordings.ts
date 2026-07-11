@@ -1,58 +1,25 @@
 import { closeSync, existsSync, openSync, readFileSync, readSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { join, resolve, relative, isAbsolute } from "node:path";
-import { randomUUID } from "node:crypto";
 import { z } from "zod";
+import { STANDARD_SUMMARY_INSTRUCTIONS } from "../promptInstructions.js";
 import { TRPCError } from "@trpc/server";
 import { router, publicProcedure } from "../trpc.js";
-import { runTranscribe, runSummarize } from "../jobRunner.js";
-import type { SummaryPromptSnapshot } from "../jobRunner.js";
-import type { JobRegistry } from "../jobStatus.js";
+import {
+  publicAgentTask,
+  RecordingTaskDeletionBlockedError,
+  type HostStore,
+} from "../hostStore.js";
 import {
   readTitleSidecar,
   writeTitleSidecar,
   readTagsSidecar,
   writeTagsSidecar,
 } from "../recordingMeta.js";
-import { resolveAgentRuntime } from "../agentRuntime.js";
-import { agentDestinationHint, agentPluginOverview, normalizeConsoleAgent } from "../agentPlugins.js";
-import { ensureBackgroundAgentSession } from "../agentSessionStore.js";
-import { runAgentShareSummary } from "../agentActions.js";
 
 // Every recording is a meeting now (voicemails were unified into meetings and
 // the separate voicemails/ directory was merged into the root). A recording is
 // any `<title>_YYYYMMDD_HHMMSS.wav` in the recordings root.
 const REC_FILE_RE = /^(.+?)_(\d{8})_(\d{6})\.wav$/;
-const SUMMARY_CHANNELS = ["notion", "zulip"] as const;
-const SummaryChannelSchema = z.enum(SUMMARY_CHANNELS);
-type SummaryChannel = (typeof SUMMARY_CHANNELS)[number];
-const SUMMARY_CHANNEL_LABELS: Record<SummaryChannel, string> = {
-  notion: "Notion",
-  zulip: "Zulip",
-};
-const DEFAULT_MLX_MODEL = "mlx-community/whisper-large-v3-mlx";
-const DEFAULT_WHISPER_MODEL = "~/.config/yulu/models/ggml-large-v3.bin";
-const DEFAULT_HERMES_MODEL = "default-provider";
-const KNOWN_MLX_MODELS = [
-  DEFAULT_MLX_MODEL,
-  "mlx-community/whisper-large-v3-turbo",
-] as const;
-const TranscriptionEngineSchema = z.enum(["mlx", "whisper", "hermes"]);
-const TranscriptionModelSchema = z.object({
-  engine: TranscriptionEngineSchema,
-  model: z.string().min(1).optional(),
-});
-
-type TranscriptionEngine = z.infer<typeof TranscriptionEngineSchema>;
-type TranscriptionModelInput = z.infer<typeof TranscriptionModelSchema>;
-
-interface TranscriptionModelOption {
-  id: string;
-  engine: TranscriptionEngine;
-  model: string;
-  label: string;
-  active: boolean;
-}
-
 interface SummaryTemplateOption {
   id: string;
   slug: string;
@@ -60,25 +27,11 @@ interface SummaryTemplateOption {
   isAutoRun: boolean;
 }
 
-interface ShareHistoryEntry {
+interface SummaryPromptSnapshot {
   id: string;
-  channel: SummaryChannel;
-  label: string;
-  destination: string;
-  sentAt: string;
-  status: "success" | "failed";
-  message?: string;
-  stdout?: string;
-  stderr?: string;
-}
-
-interface ShareTarget {
-  channel: SummaryChannel;
-  label: string;
-  destination: string;
-  enabled: boolean;
-  disabledReason: string | null;
-  lastShare: ShareHistoryEntry | null;
+  slug: string;
+  name: string;
+  content: string;
 }
 
 function isoFromStem(date: string, time: string): string {
@@ -191,174 +144,21 @@ function wavHealthError(path: string): string | null {
   }
 }
 
-function recordingStatus(stem: string, wavPath: string, registry: JobRegistry): RecordingStatus {
-  const job = registry.get(stem);
-  if (job?.state === "failed") {
-    return {
-      status: job.action === "summarize" ? "summary_failed" : "transcription_failed",
-      statusError: job.error,
-    };
+function recordingStatus(stem: string, wavPath: string, host?: HostStore): RecordingStatus {
+  const task = host?.latestForRecording(stem);
+  if (task && task.state !== "completed" && task.state !== "cancelled") {
+    if (task.state === "queued") return { status: "agent_queued" };
+    if (task.state === "awaiting_agent") return { status: "awaiting_agent", statusError: task.error ?? undefined };
+    if (task.state === "awaiting_policy") return { status: "awaiting_policy", statusError: task.error ?? undefined };
+    if (task.state === "failed") return { status: "agent_failed", statusError: task.error ?? undefined };
+    if (task.state === "delivery_unverified") return { status: "delivery_unverified", statusError: task.error ?? undefined };
+    if (task.state === "sending" || task.state === "delivery_reported") return { status: "sending_notion" };
+    if (task.phase === "transcribing") return { status: "transcribing" };
+    return { status: "summarizing" };
   }
-  if (job) return { status: job.state, statusError: job.error };
-
   const wavError = wavHealthError(wavPath);
   if (wavError) return { status: "recording_failed", statusError: wavError };
   return { status: "idle" };
-}
-
-function asRecord(value: unknown): Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : {};
-}
-
-function nestedRecord(root: Record<string, unknown>, key: string): Record<string, unknown> {
-  return asRecord(root[key]);
-}
-
-function stringValue(record: Record<string, unknown>, key: string): string {
-  const value = record[key];
-  return typeof value === "string" ? value.trim() : "";
-}
-
-function shareHistoryPath(dir: string, stem: string): string {
-  return join(dir, `${stem}.shares.json`);
-}
-
-function normalizeShareHistoryEntry(value: unknown): ShareHistoryEntry | null {
-  if (!isRecord(value)) return null;
-  const channel = value.channel === "notion" || value.channel === "zulip" ? value.channel : null;
-  const status = value.status === "success" || value.status === "failed" ? value.status : null;
-  if (!channel || !status || typeof value.sentAt !== "string") return null;
-  return {
-    id: typeof value.id === "string" ? value.id : `${value.sentAt}-${channel}`,
-    channel,
-    label: typeof value.label === "string" ? value.label : SUMMARY_CHANNEL_LABELS[channel],
-    destination: typeof value.destination === "string" ? value.destination : "",
-    sentAt: value.sentAt,
-    status,
-    message: typeof value.message === "string" ? value.message : undefined,
-    stdout: typeof value.stdout === "string" ? value.stdout : undefined,
-    stderr: typeof value.stderr === "string" ? value.stderr : undefined,
-  };
-}
-
-function readShareHistory(path: string): ShareHistoryEntry[] {
-  try {
-    const raw = JSON.parse(readFileSync(path, "utf8"));
-    if (!Array.isArray(raw)) return [];
-    return raw
-      .map(normalizeShareHistoryEntry)
-      .filter((entry): entry is ShareHistoryEntry => entry !== null)
-      .sort((a, b) => b.sentAt.localeCompare(a.sentAt));
-  } catch {
-    return [];
-  }
-}
-
-function writeShareHistory(path: string, entries: ShareHistoryEntry[]): ShareHistoryEntry[] {
-  const normalized = entries
-    .map(normalizeShareHistoryEntry)
-    .filter((entry): entry is ShareHistoryEntry => entry !== null)
-    .sort((a, b) => b.sentAt.localeCompare(a.sentAt))
-    .slice(0, 50);
-  writeTextAtomic(path, JSON.stringify(normalized, null, 2) + "\n");
-  return normalized;
-}
-
-function appendShareHistory(dir: string, stem: string, entry: Omit<ShareHistoryEntry, "id" | "sentAt">): ShareHistoryEntry {
-  const path = shareHistoryPath(dir, stem);
-  const next: ShareHistoryEntry = {
-    id: randomUUID(),
-    sentAt: new Date().toISOString().replace(/\.\d+Z$/, "Z"),
-    ...entry,
-  };
-  writeShareHistory(path, [next, ...readShareHistory(path)]);
-  return next;
-}
-
-function shareTargets(config: unknown, opts: {
-  hasSummary: boolean;
-  history: ShareHistoryEntry[];
-  scriptDir: string;
-  moviesDir: string;
-}): ShareTarget[] {
-  const runtime = resolveAgentRuntime(config, {
-    scriptDir: opts.scriptDir,
-    moviesDir: opts.moviesDir,
-  });
-  const agent = normalizeConsoleAgent(runtime.provider);
-  const plugins = agentPluginOverview(config, {
-    agent: runtime.provider,
-    agentReady: !runtime.disabledReason,
-  }).current;
-  return plugins
-    .filter((plugin) => plugin.id === "notion" || plugin.id === "zulip")
-    .map((plugin) => {
-      const channel = plugin.id as SummaryChannel;
-    const label = SUMMARY_CHANNEL_LABELS[channel];
-    const destination = plugin.destination?.value || agentDestinationHint(config, agent, channel, "");
-    let disabledReason: string | null = null;
-    if (!opts.hasSummary) disabledReason = "Needs AI Summary";
-    else if (runtime.disabledReason) disabledReason = runtime.disabledReason;
-    else if (plugin.status !== "configured") disabledReason = plugin.detail || `${label} Agent plugin is not configured`;
-    else if (plugin.destination && !plugin.destination.configured) disabledReason = plugin.destination.missingReason || "Destination missing";
-    return {
-      channel,
-      label,
-      destination,
-      enabled: disabledReason === null,
-      disabledReason,
-      lastShare: opts.history.find((entry) => entry.channel === channel) ?? null,
-    };
-  });
-}
-
-function optionId(engine: TranscriptionEngine, model: string): string {
-  return `${engine}:${model}`;
-}
-
-function shortModelName(model: string): string {
-  const trimmed = model.trim();
-  if (!trimmed) return "(unset)";
-  return trimmed.split("/").pop() || trimmed;
-}
-
-function transcriptionModelOptions(config: unknown): TranscriptionModelOption[] {
-  const root = asRecord(config);
-  const trans = nestedRecord(root, "transcription");
-  const engine = (
-    trans.final_engine === "whisper" || trans.final_engine === "hermes"
-      ? trans.final_engine
-      : "mlx"
-  ) as TranscriptionEngine;
-  const mlx = nestedRecord(trans, "mlx");
-  const hermes = nestedRecord(trans, "hermes");
-  const currentMlxModel = stringValue(mlx, "model") || DEFAULT_MLX_MODEL;
-  const currentWhisperModel = stringValue(trans, "local_model_path") || DEFAULT_WHISPER_MODEL;
-  const currentHermesModel = stringValue(hermes, "model") || DEFAULT_HERMES_MODEL;
-  const options: TranscriptionModelOption[] = [];
-  const activeModel = (candidateEngine: TranscriptionEngine) => {
-    if (candidateEngine === "mlx") return currentMlxModel;
-    if (candidateEngine === "whisper") return currentWhisperModel;
-    return currentHermesModel;
-  };
-  const add = (candidateEngine: TranscriptionEngine, model: string, label: string) => {
-    const id = optionId(candidateEngine, model);
-    if (options.some((item) => item.id === id)) return;
-    options.push({
-      id,
-      engine: candidateEngine,
-      model,
-      label,
-      active: candidateEngine === engine && model === activeModel(candidateEngine),
-    });
-  };
-  add("mlx", currentMlxModel, `MLX · ${shortModelName(currentMlxModel)}`);
-  for (const model of KNOWN_MLX_MODELS) add("mlx", model, `MLX · ${shortModelName(model)}`);
-  add("whisper", currentWhisperModel, `whisper.cpp · ${shortModelName(currentWhisperModel)}`);
-  add("hermes", currentHermesModel, "Hermes · default provider");
-  return options;
 }
 
 function summaryTemplateOptions(db: unknown): SummaryTemplateOption[] {
@@ -419,54 +219,6 @@ function summaryPromptSnapshot(
   }
 }
 
-async function applyTranscriptionModel(ctx: {
-  config: { read: () => unknown; update?: (key: string, value: unknown) => unknown };
-  launchctl?: { restart: (label: string) => Promise<void> };
-}, selection: TranscriptionModelInput | null | undefined): Promise<void> {
-  if (!selection) return;
-  const cfg = ctx.config.read();
-  const root = asRecord(cfg);
-  const trans = nestedRecord(root, "transcription");
-  const currentEngine = (
-    trans.final_engine === "whisper" || trans.final_engine === "hermes"
-      ? trans.final_engine
-      : "mlx"
-  ) as TranscriptionEngine;
-  const mlx = nestedRecord(trans, "mlx");
-  const hermes = nestedRecord(trans, "hermes");
-  const currentMlxModel = stringValue(mlx, "model") || DEFAULT_MLX_MODEL;
-  const currentWhisperModel = stringValue(trans, "local_model_path") || DEFAULT_WHISPER_MODEL;
-  const currentHermesModel = stringValue(hermes, "model") || DEFAULT_HERMES_MODEL;
-  const selectedModel = (selection.model || "").trim();
-  const changed =
-    selection.engine !== currentEngine ||
-    (selection.engine === "mlx" && selectedModel && selectedModel !== currentMlxModel) ||
-    (selection.engine === "whisper" && selectedModel && selectedModel !== currentWhisperModel) ||
-    (selection.engine === "hermes" && selectedModel && selectedModel !== currentHermesModel);
-  if (!changed) return;
-  if (!ctx.config.update) {
-    throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "config update is unavailable" });
-  }
-  ctx.config.update("transcription.final_engine", selection.engine);
-  if (selection.engine === "mlx" && selectedModel) {
-    ctx.config.update("transcription.mlx.model", selectedModel);
-  }
-  if (selection.engine === "whisper" && selectedModel) {
-    ctx.config.update("transcription.local_model_path", selectedModel);
-  }
-  if (selection.engine === "hermes" && selectedModel && selectedModel !== DEFAULT_HERMES_MODEL) {
-    ctx.config.update("transcription.hermes.model", selectedModel);
-  }
-  try {
-    await ctx.launchctl?.restart("com.yulu.sttdaemon");
-  } catch (exc) {
-    throw new TRPCError({
-      code: "INTERNAL_SERVER_ERROR",
-      message: `stt daemon restart failed: ${(exc as Error).message}`,
-    });
-  }
-}
-
 interface Row {
   stem: string;
   title: string | null;
@@ -482,7 +234,6 @@ interface Row {
   firstWords: string | null;
   status: string;
   statusError?: string;
-  lastShare: ShareHistoryEntry | null;
 }
 
 interface SpeakerEntry {
@@ -698,7 +449,7 @@ function resolveTitle(dir: string, stem: string, derived: string | null): string
   return readTitleSidecar(join(dir, `${stem}.title`)) ?? derived;
 }
 
-function listRecordings(dir: string, registry: JobRegistry): Row[] {
+function listRecordings(dir: string, host?: HostStore): Row[] {
   if (!existsSync(dir)) return [];
   const out: Row[] = [];
   for (const f of readdirSync(dir)) {
@@ -709,8 +460,7 @@ function listRecordings(dir: string, registry: JobRegistry): Row[] {
       const wavPath = join(dir, f);
       const stat = statSync(wavPath);
       const transcriptPath = join(dir, `${stem}.transcript.txt`);
-      const currentStatus = recordingStatus(stem, wavPath, registry);
-      const shareHistory = readShareHistory(shareHistoryPath(dir, stem));
+      const currentStatus = recordingStatus(stem, wavPath, host);
       out.push({
         stem,
         title: resolveTitle(dir, stem, title!),
@@ -723,7 +473,6 @@ function listRecordings(dir: string, registry: JobRegistry): Row[] {
       hasRealtime: existsSync(join(dir, `${stem}.realtime.transcript.txt`)),
         firstWords: firstWordsOf(transcriptPath),
         status: currentStatus.status, statusError: currentStatus.statusError,
-        lastShare: shareHistory[0] ?? null,
       });
   }
   return out;
@@ -736,7 +485,7 @@ export const recordingsRouter = router({
       since: z.number().int().nonnegative().optional(),
     }))
     .query(({ ctx, input }) => {
-      let rows: Row[] = listRecordings(ctx.paths.moviesDir, ctx.jobs);
+      let rows: Row[] = listRecordings(ctx.paths.moviesDir, ctx.host);
       rows.sort((a, b) => b.mtimeMs - a.mtimeMs);
       if (input.since !== undefined) rows = rows.filter((r) => r.mtimeMs >= input.since!);
       if (input.limit !== undefined) rows = rows.slice(0, input.limit);
@@ -765,14 +514,14 @@ export const recordingsRouter = router({
       const derivedTitle = mm ? mm[1]! : null;
       const title = resolveTitle(dir, input.stem, derivedTitle);
       const tags = readTagsSidecar(join(dir, `${input.stem}.tags.json`));
-      const currentStatus = recordingStatus(input.stem, wav, ctx.jobs);
+      const currentStatus = recordingStatus(input.stem, wav, ctx.host);
+      const agentTask = ctx.host?.latestForRecording(input.stem) ?? null;
+      const notionDelivery = agentTask ? ctx.host?.getNotionDelivery(agentTask.id) ?? null : null;
       const transcript = read(".transcript.txt");
       const raw = read(".raw.transcript.txt");
-      const shareHistory = readShareHistory(shareHistoryPath(dir, input.stem));
-      const hasSummary = existsSync(join(dir, `${input.stem}.summary.md`));
-      // `.transcript.txt` and `.raw.transcript.txt` are written identically by
-      // transcribe.py; `.transcript.txt` may LATER be overwritten by a cleanup
-      // prompt while `.raw` keeps the pre-cleanup snapshot. Only surface raw as
+      // Older Yulu releases wrote identical `.transcript.txt` and
+      // `.raw.transcript.txt` files; the primary transcript may later differ.
+      // Only surface raw as
       // a distinct view when it actually differs — otherwise it's a confusing
       // duplicate.
       const rawDiffers = raw !== null && transcript !== null && raw.trim() !== transcript.trim();
@@ -787,34 +536,10 @@ export const recordingsRouter = router({
         hasRealtime: existsSync(join(dir, `${input.stem}.realtime.transcript.txt`)),
         speakerData: readSpeakerSidecar(dir, input.stem),
         status: currentStatus.status, statusError: currentStatus.statusError,
-        enabledSummaryTargets: [],
-        shareTargets: shareTargets(ctx.config.read(), {
-          hasSummary,
-          history: shareHistory,
-          scriptDir: ctx.paths.scriptDir,
-          moviesDir: ctx.paths.moviesDir,
-        }),
-        shareHistory,
-        transcriptionModelOptions: transcriptionModelOptions(ctx.config.read()),
+        agentTask: agentTask ? publicAgentTask(agentTask) : null,
+        notionDelivery,
         summaryTemplateOptions: summaryTemplateOptions(ctx.db?.prompts),
         defaultSummaryTemplateId: defaultSummaryTemplateId(summaryTemplateOptions(ctx.db?.prompts)),
-      };
-    }),
-
-  shareTargets: publicProcedure
-    .input(z.object({ stem: z.string() }))
-    .query(({ ctx, input }) => {
-      const dir = ctx.paths.moviesDir;
-      requireRecording(dir, input.stem);
-      const history = readShareHistory(shareHistoryPath(dir, input.stem));
-      return {
-        targets: shareTargets(ctx.config.read(), {
-          hasSummary: existsSync(join(dir, `${input.stem}.summary.md`)),
-          history,
-          scriptDir: ctx.paths.scriptDir,
-          moviesDir: ctx.paths.moviesDir,
-        }),
-        history,
       };
     }),
 
@@ -935,6 +660,16 @@ export const recordingsRouter = router({
     .input(z.object({ stem: z.string() }))
     .mutation(({ ctx, input }) => {
       const dir = ctx.paths.moviesDir;
+      let taskIds: string[];
+      try {
+        taskIds = ctx.host.prepareRecordingDeletion(input.stem);
+      } catch (error) {
+        if (error instanceof RecordingTaskDeletionBlockedError) {
+          throw new TRPCError({ code: "CONFLICT", message: error.message });
+        }
+        throw error;
+      }
+      for (const taskId of taskIds) ctx.artifacts.cleanupWorkspace(taskId);
       // Every known sidecar a recording can spawn. `.tags.json`/`.title` are the
       // UI-editable ones; the rest are pipeline outputs.
       const suffixes = [".wav", ".clean.wav", ".transcript.txt", ".raw.transcript.txt",
@@ -959,159 +694,41 @@ export const recordingsRouter = router({
         if (!isInside(dir, p)) continue;
         if (existsSync(p)) { unlinkSync(p); removed++; }
       }
+      try {
+        ctx.host.purgeRecordingTasks(input.stem);
+      } catch (error) {
+        if (error instanceof RecordingTaskDeletionBlockedError) {
+          throw new TRPCError({ code: "CONFLICT", message: error.message });
+        }
+        throw error;
+      }
       ctx.pubsub.publish("recordings-changed", { reason: "removed" });
       return { removed };
     }),
 
-  transcribe: publicProcedure
+  reprocess: publicProcedure
     .input(z.object({
       stem: z.string(),
-      diarizationNumSpeakers: z.number().int().min(1).max(8).nullable().optional(),
-      transcriptionModel: TranscriptionModelSchema.nullable().optional(),
+      promptId: z.string().nullable().optional(),
+      sendToNotion: z.boolean().optional(),
     }))
     .mutation(async ({ ctx, input }) => {
       const dir = ctx.paths.moviesDir;
       const wavPath = join(dir, `${input.stem}.wav`);
       if (!existsSync(wavPath)) throw new TRPCError({ code: "NOT_FOUND", message: "WAV file missing" });
-      if (ctx.jobs.get(input.stem)) throw new TRPCError({ code: "CONFLICT", message: "Job already running for this recording" });
-      await applyTranscriptionModel(ctx, input.transcriptionModel ?? null);
-      void runTranscribe({
-        stem: input.stem,
-        wavPath,
-        transcribePy: ctx.paths.transcribePy,
-        diarizationNumSpeakers: input.diarizationNumSpeakers ?? null,
-        registry: ctx.jobs,
-        pubsub: ctx.pubsub,
-      });
-      return { ok: true as const };
-    }),
-
-  summarize: publicProcedure
-    .input(z.object({ stem: z.string(), promptId: z.string().nullable().optional() }))
-    .mutation(async ({ ctx, input }) => {
-      const dir = ctx.paths.moviesDir;
-      const transcriptPath = join(dir, `${input.stem}.transcript.txt`);
-      const realtimePath = join(dir, `${input.stem}.realtime.transcript.txt`);
-      const sourcePath = existsSync(transcriptPath) ? transcriptPath : realtimePath;
-      if (!existsSync(sourcePath)) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Transcript missing — run Re-transcribe first" });
-      if (ctx.jobs.get(input.stem)) throw new TRPCError({ code: "CONFLICT", message: "Job already running for this recording" });
-      const summaryPath = join(dir, `${input.stem}.summary.md`);
-      const wavPath = join(dir, `${input.stem}.wav`);
       const mm = `${input.stem}.wav`.match(REC_FILE_RE);
       const derivedTitle = mm ? mm[1]! : null;
       const title = resolveTitle(dir, input.stem, derivedTitle);
-      const cfg = ctx.config.read();
-      const runtime = resolveAgentRuntime(cfg, {
-        scriptDir: ctx.paths.scriptDir,
-        moviesDir: ctx.paths.moviesDir,
-      });
-      const llmCommand = runtime.disabledReason ? null : runtime.command;
-      const backgroundSession = !runtime.disabledReason && runtime.provider !== "none"
-        ? ensureBackgroundAgentSession(ctx.paths.configDir, {
-            agent: runtime.provider,
-            runtimeLabel: runtime.label,
-          })
-        : null;
       const prompt = summaryPromptSnapshot(ctx.db?.prompts, input.promptId ?? null);
       if (input.promptId && !prompt) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "summary template not found" });
       }
-      void runSummarize({
-        stem: input.stem,
-        transcriptPath: sourcePath,
-        summaryPath,
-        audioPath: existsSync(wavPath) ? wavPath : undefined,
-        title,
-        prompt,
-        llmCommand,
-        agentRuntime: runtime.disabledReason ? undefined : runtime,
-        agentQueueJson: ctx.paths.agentQueueJson,
-        vocabDb: ctx.paths.vocabDb,
-        scriptDir: ctx.paths.scriptDir,
-        agentSession: backgroundSession ? { configDir: ctx.paths.configDir, sessionId: backgroundSession.id } : undefined,
-        registry: ctx.jobs,
-        pubsub: ctx.pubsub,
+      const result = ctx.recordingPipeline.enqueueReprocess({
+        audioPath: wavPath,
+        title: title ?? input.stem,
+        sendToNotion: input.sendToNotion === true,
+        instructions: prompt?.content ?? STANDARD_SUMMARY_INSTRUCTIONS,
       });
-      return { ok: true as const };
-    }),
-
-  sendSummary: publicProcedure
-    .input(z.object({ stem: z.string(), channel: SummaryChannelSchema }))
-    .mutation(async ({ ctx, input }) => {
-      const dir = ctx.paths.moviesDir;
-      requireRecording(dir, input.stem);
-      const summaryPath = join(dir, `${input.stem}.summary.md`);
-      const cfg = ctx.config.read();
-      const label = SUMMARY_CHANNEL_LABELS[input.channel];
-      const runtime = resolveAgentRuntime(cfg, {
-        scriptDir: ctx.paths.scriptDir,
-        moviesDir: ctx.paths.moviesDir,
-      });
-      const agent = normalizeConsoleAgent(runtime.provider);
-      const title = resolveTitle(dir, input.stem, `${input.stem}.wav`.match(REC_FILE_RE)?.[1] ?? input.stem) ?? input.stem;
-      const destination = agentDestinationHint(cfg, agent, input.channel, title);
-      const recordFailure = (message: string, detail?: { stdout?: string; stderr?: string }) => {
-        appendShareHistory(dir, input.stem, {
-          channel: input.channel,
-          label,
-          destination,
-          status: "failed",
-          message,
-          stdout: detail?.stdout,
-          stderr: detail?.stderr,
-        });
-      };
-      if (!existsSync(summaryPath)) {
-        recordFailure("summary missing");
-        throw new TRPCError({ code: "PRECONDITION_FAILED", message: "summary missing" });
-      }
-      const target = shareTargets(cfg, {
-        hasSummary: true,
-        history: readShareHistory(shareHistoryPath(dir, input.stem)),
-        scriptDir: ctx.paths.scriptDir,
-        moviesDir: ctx.paths.moviesDir,
-      }).find((item) => item.channel === input.channel);
-      if (!target) {
-        const message = `${label} is not added in Agent Console`;
-        recordFailure(message);
-        throw new TRPCError({ code: "PRECONDITION_FAILED", message });
-      }
-      if (runtime.disabledReason) {
-        recordFailure(runtime.disabledReason);
-        throw new TRPCError({ code: "PRECONDITION_FAILED", message: runtime.disabledReason });
-      }
-      if (!target.enabled) {
-        const message = target.disabledReason || `${label} Agent plugin is not configured`;
-        recordFailure(message);
-        throw new TRPCError({ code: "PRECONDITION_FAILED", message });
-      }
-      let result: { stdout: string; stderr: string; sessionId: string };
-      try {
-        result = await runAgentShareSummary({
-          configDir: ctx.paths.configDir,
-          scriptDir: ctx.paths.scriptDir,
-          runtime,
-          channel: input.channel,
-          summaryPath,
-          title,
-          destinationHint: destination,
-        });
-      } catch (exc) {
-        recordFailure((exc as Error).message);
-        throw new TRPCError({
-          code: "INTERNAL_SERVER_ERROR",
-          message: (exc as Error).message,
-        });
-      }
-      appendShareHistory(dir, input.stem, {
-        channel: input.channel,
-        label,
-        destination,
-        status: "success",
-        stdout: result.stdout,
-        stderr: result.stderr,
-      });
-      ctx.pubsub.publish("recordings-changed", { reason: "changed" });
-      return { ok: true as const, stdout: result.stdout, stderr: result.stderr };
+      return { ok: true as const, taskId: result.task.id, created: result.created };
     }),
 });

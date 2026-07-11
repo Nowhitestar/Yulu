@@ -5,8 +5,6 @@ import { router, publicProcedure } from "../trpc.js";
 
 export const YULU_DAEMONS = [
   "com.yulu.audiodaemon",
-  "com.yulu.sttdaemon",
-  "com.yulu.agentqueue",
   "com.yulu.statusagent",
   "com.yulu.scheduler",
   "com.yulu.detector",
@@ -16,7 +14,6 @@ export const YULU_DAEMONS = [
 
 type YuluDaemon = typeof YULU_DAEMONS[number];
 const DaemonName = z.enum(YULU_DAEMONS);
-const ON_DEMAND_DAEMONS = new Set<YuluDaemon>(["com.yulu.agentqueue"]);
 type HealthStatus = "stopped" | "crashed" | "running" | "idle";
 type LaunchStatus = { pid: number; exitStatus: number; label: string } | null;
 
@@ -29,7 +26,7 @@ function classifyStatus(name: YuluDaemon, s: LaunchStatus): HealthStatus {
   if (!s) return "stopped";
   if (s.pid > 0) return "running";
   if (s.exitStatus !== 0) return "crashed";
-  return ON_DEMAND_DAEMONS.has(name) ? "idle" : "stopped";
+  return "stopped";
 }
 
 export const daemonsRouter = router({

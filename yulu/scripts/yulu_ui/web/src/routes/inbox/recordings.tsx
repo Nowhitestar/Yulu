@@ -2,12 +2,11 @@ import { useContext, useEffect, useState } from "react";
 import type { CSSProperties, MouseEvent } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router";
 import { QueryClientContext } from "@tanstack/react-query";
-import { Activity, Clock, FileText, Pencil, Plus, RefreshCw, Share2, Sparkles, Trash2 } from "lucide-react";
+import { Clock, FileText, Pencil, Plus, Send, Sparkles, Trash2 } from "lucide-react";
 import { trpc } from "../../trpc.js";
 import { useWsChannel } from "../../ws.js";
 import { MasterDetail } from "../../components/MasterDetail.js";
 import { RecordingStatusBadge } from "../../components/RecordingStatusBadge.js";
-import { SharePanel, SharePopover, type ShareHistoryEntry, type ShareTarget, type SummaryChannel } from "../../components/SharePopover.js";
 import { useConfirm } from "../../hooks/useConfirm.js";
 import { useT } from "../../i18n/LanguageProvider.js";
 import "./recordings.css";
@@ -23,11 +22,9 @@ interface Row {
   mtimeMs: number;
   hasTranscript: boolean;
   hasSummary: boolean;
-  hasRealtime: boolean;
   firstWords: string | null;
   status: string;
   statusError?: string;
-  lastShare?: ShareHistoryEntry | null;
   depth?: number;
   indentLevel?: number;
 }
@@ -60,122 +57,6 @@ function rowDepth(row: Row): number {
   return Math.max(0, Math.min(4, Math.trunc(n)));
 }
 
-const LOADING_TARGETS: ShareTarget[] = [
-  { channel: "notion", label: "Notion", destination: "", enabled: false, disabledReason: "Loading", lastShare: null },
-  { channel: "zulip", label: "Zulip", destination: "", enabled: false, disabledReason: "Loading", lastShare: null },
-];
-
-function RecordingRowShare({
-  row,
-  open,
-  onOpenChange,
-  onSettled,
-}: {
-  row: Row;
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  onSettled: () => void;
-}) {
-  const [pendingChannel, setPendingChannel] = useState<SummaryChannel | null>(null);
-  const confirm = useConfirm();
-  const t = useT();
-  const { data } = trpc.recordings.shareTargets.useQuery({ stem: row.stem }, { enabled: open });
-  const sendMut = trpc.recordings.sendSummary.useMutation({
-    onSettled: () => {
-      setPendingChannel(null);
-      onSettled();
-    },
-  });
-  const targets = ((data?.targets as ShareTarget[] | undefined) ?? LOADING_TARGETS);
-  const history = ((data?.history as ShareHistoryEntry[] | undefined) ?? (row.lastShare ? [row.lastShare] : []));
-
-  const send = (channel: SummaryChannel) => {
-    const target = targets.find((item) => item.channel === channel);
-    if (!target || !target.enabled) return;
-    if (!confirm(t("reader.send.confirm", { label: target.label, destination: target.destination }))) return;
-    setPendingChannel(channel);
-    sendMut.mutate({ stem: row.stem, channel });
-  };
-
-  return (
-    <SharePopover
-      className="recording-row-share"
-      align="left"
-      targets={targets}
-      history={history}
-      pendingChannel={pendingChannel}
-      onSend={send}
-      open={open}
-      onOpenChange={onOpenChange}
-    >
-      <Share2 size={14} strokeWidth={1.8} />
-    </SharePopover>
-  );
-}
-
-function RecordingShareMenu({
-  row,
-  x,
-  y,
-  onClose,
-  onSettled,
-}: {
-  row: Row;
-  x: number;
-  y: number;
-  onClose: () => void;
-  onSettled: () => void;
-}) {
-  const [pendingChannel, setPendingChannel] = useState<SummaryChannel | null>(null);
-  const confirm = useConfirm();
-  const t = useT();
-  const { data } = trpc.recordings.shareTargets.useQuery({ stem: row.stem });
-  const sendMut = trpc.recordings.sendSummary.useMutation({
-    onSettled: () => {
-      setPendingChannel(null);
-      onSettled();
-    },
-  });
-
-  useEffect(() => {
-    const close = () => onClose();
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") close();
-    };
-    window.addEventListener("click", close);
-    window.addEventListener("scroll", close, true);
-    window.addEventListener("keydown", onKey);
-    return () => {
-      window.removeEventListener("click", close);
-      window.removeEventListener("scroll", close, true);
-      window.removeEventListener("keydown", onKey);
-    };
-  }, [onClose]);
-
-  const targets = ((data?.targets as ShareTarget[] | undefined) ?? LOADING_TARGETS);
-  const history = ((data?.history as ShareHistoryEntry[] | undefined) ?? (row.lastShare ? [row.lastShare] : []));
-  const send = (channel: SummaryChannel) => {
-    const target = targets.find((item) => item.channel === channel);
-    if (!target || !target.enabled) return;
-    if (!confirm(t("reader.send.confirm", { label: target.label, destination: target.destination }))) return;
-    setPendingChannel(channel);
-    sendMut.mutate({ stem: row.stem, channel });
-  };
-
-  return (
-    <div
-      className="recording-share-panel"
-      style={{
-        left: Math.min(x, Math.max(8, window.innerWidth - 380)),
-        top: Math.min(y, Math.max(8, window.innerHeight - 340)),
-      }}
-      onClick={(event) => event.stopPropagation()}
-    >
-      <SharePanel targets={targets} history={history} pendingChannel={pendingChannel} onSend={send} />
-    </div>
-  );
-}
-
 export function RecordingsList() {
   const { data, isPending } = trpc.recordings.list.useQuery({});
   const t = useT();
@@ -186,23 +67,19 @@ export function RecordingsList() {
   // render in isolation under just <MemoryRouter> in unit tests.
   const qc = useContext(QueryClientContext);
   const [menu, setMenu] = useState<{ row: Row; x: number; y: number } | null>(null);
-  const [shareMenu, setShareMenu] = useState<{ row: Row; x: number; y: number } | null>(null);
-  const [openShareStem, setOpenShareStem] = useState<string | null>(null);
 
   const invalidate = () => {
     qc?.invalidateQueries({ queryKey: [["recordings", "list"]] });
     qc?.invalidateQueries({ queryKey: [["recordings", "get"]] });
-    qc?.invalidateQueries({ queryKey: [["recordings", "shareTargets"]] });
   };
   const renameMut = trpc.recordings.rename.useMutation({ onSettled: invalidate });
   const deleteMut = trpc.recordings.delete.useMutation({ onSettled: invalidate });
-  const transcribeMut = trpc.recordings.transcribe.useMutation({ onSettled: invalidate });
-  const summarizeMut = trpc.recordings.summarize.useMutation({ onSettled: invalidate });
+  const reprocessMut = trpc.recordings.reprocess.useMutation({ onSettled: invalidate });
 
   useWsChannel("recordings-changed", () => {
     invalidate();
   });
-  // Refresh the list when a transcribe/summarize job changes state so a row's
+  // Refresh the list when a durable Agent task changes state so a row's
   // status badge updates promptly (e.g. flips to Failed) without waiting on a
   // filesystem event.
   useWsChannel("jobs", () => {
@@ -230,13 +107,19 @@ export function RecordingsList() {
   const openMenu = (event: MouseEvent, row: Row) => {
     event.preventDefault();
     event.stopPropagation();
-    setOpenShareStem(null);
-    setShareMenu(null);
     setMenu({ row, x: event.clientX, y: event.clientY });
   };
 
   const closeMenu = () => setMenu(null);
-  const isBusy = (row: Row) => row.status === "transcribing" || row.status === "summarizing";
+  const isBusy = (row: Row) => [
+    "agent_queued",
+    "awaiting_agent",
+    "awaiting_policy",
+    "transcribing",
+    "summarizing",
+    "sending_notion",
+  ].includes(row.status);
+  const isDeleteBlocked = (row: Row) => isBusy(row) || row.status === "delivery_unverified";
 
   const renameRow = (row: Row) => {
     closeMenu();
@@ -314,23 +197,10 @@ export function RecordingsList() {
                 <div className="recording-row-icons" aria-label="Recording outputs">
                   {r.hasTranscript && <FileText className="recording-row-output" size={13} strokeWidth={1.9} aria-label="Transcript ready" />}
                   {r.hasSummary && <Sparkles className="recording-row-output" size={13} strokeWidth={1.9} aria-label="Summary ready" />}
-                  {r.hasRealtime && <Activity className="recording-row-output recording-row-output-live" size={13} strokeWidth={1.9} aria-label="Realtime transcript ready" />}
                   <RecordingStatusBadge state={r.status} error={r.statusError} compact />
                 </div>
               </div>
             </NavLink>
-            <RecordingRowShare
-              row={r}
-              open={openShareStem === r.stem}
-              onOpenChange={(open) => {
-                setOpenShareStem(open ? r.stem : null);
-                if (open) {
-                  setMenu(null);
-                  setShareMenu(null);
-                }
-              }}
-              onSettled={invalidate}
-            />
           </div>
           );
         })}
@@ -341,54 +211,41 @@ export function RecordingsList() {
             <Pencil size={13} strokeWidth={1.8} />
             <span>{t("reader.context.rename")}</span>
           </button>
-          {menu.row.hasTranscript && (
-            <button
-              type="button"
-              role="menuitem"
-              disabled={isBusy(menu.row)}
-              onClick={() => { closeMenu(); transcribeMut.mutate({ stem: menu.row.stem }); }}
-            >
-              <RefreshCw size={13} strokeWidth={1.8} />
-              <span>{t("reader.context.retranscribe")}</span>
-            </button>
-          )}
-          {menu.row.hasSummary && (
-            <button
-              type="button"
-              role="menuitem"
-              disabled={isBusy(menu.row)}
-              onClick={() => { closeMenu(); summarizeMut.mutate({ stem: menu.row.stem }); }}
-            >
-              <Sparkles size={13} strokeWidth={1.8} />
-              <span>{t("reader.context.regenerate")}</span>
-            </button>
-          )}
           <button
             type="button"
             role="menuitem"
+            disabled={isBusy(menu.row)}
             onClick={() => {
-              setOpenShareStem(null);
-              setShareMenu({ row: menu.row, x: menu.x, y: menu.y });
               closeMenu();
+              reprocessMut.mutate({ stem: menu.row.stem, sendToNotion: false });
             }}
           >
-            <Share2 size={13} strokeWidth={1.8} />
-            <span>{t("reader.context.share")}</span>
+            <Sparkles size={13} strokeWidth={1.8} />
+            <span>{t("reader.action.process")}</span>
           </button>
-          <button type="button" role="menuitem" className="danger" onClick={() => deleteRow(menu.row)}>
+          <button
+            type="button"
+            role="menuitem"
+            disabled={isBusy(menu.row)}
+            onClick={() => {
+              closeMenu();
+              reprocessMut.mutate({ stem: menu.row.stem, sendToNotion: true });
+            }}
+          >
+            <Send size={13} strokeWidth={1.8} />
+            <span>{t("reader.action.processAndSendNotion")}</span>
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            className="danger"
+            disabled={isDeleteBlocked(menu.row)}
+            onClick={() => deleteRow(menu.row)}
+          >
             <Trash2 size={13} strokeWidth={1.8} />
             <span>{t("reader.context.delete")}</span>
           </button>
         </div>
-      )}
-      {shareMenu && (
-        <RecordingShareMenu
-          row={shareMenu.row}
-          x={shareMenu.x}
-          y={shareMenu.y}
-          onClose={() => setShareMenu(null)}
-          onSettled={invalidate}
-        />
       )}
     </>
   );

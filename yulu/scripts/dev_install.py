@@ -16,6 +16,7 @@ import shutil
 import socket
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 SOURCE_ROOT = Path(__file__).resolve().parents[2]
@@ -26,6 +27,7 @@ LAUNCH_AGENTS_DIR = Path.home() / "Library/LaunchAgents"
 LOCAL_BIN = Path.home() / ".local/bin"
 
 RUNTIME_ITEMS = [
+    "VERSION",
     "install.sh",
     "skills/yulu/SKILL.md",
     "yulu/SKILL.md",
@@ -36,16 +38,26 @@ LAUNCHAGENTS = [
     "com.yulu.audiodaemon.plist",
     "com.yulu.scheduler.plist",
     "com.yulu.detector.plist",
-    "com.yulu.agentqueue.plist",
     "com.yulu.calendar.plist",
-    "com.yulu.sttdaemon.plist",
     "com.yulu.statusagent.plist",
     "com.yulu.ui.plist",
 ]
 
+OBSOLETE_LAUNCHAGENTS = [
+    "com.yulu.agentqueue.plist",
+    "com.yulu.sttdaemon.plist",
+]
 
-def _run(cmd: list[str], *, timeout: int = 30, check: bool = False, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, cwd=cwd)
+
+def _run(
+    cmd: list[str],
+    *,
+    timeout: int = 30,
+    check: bool = False,
+    cwd: Path | None = None,
+    env: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, cwd=cwd, env=env)
     if check and result.returncode != 0:
         raise RuntimeError(f"command failed ({result.returncode}): {' '.join(cmd)}\n{result.stderr or result.stdout}")
     return result
@@ -110,7 +122,16 @@ def _node_candidates() -> list[str]:
         for candidate in sorted(nvm.glob("*/bin/node"), reverse=True):
             if candidate.exists():
                 candidates.append(str(candidate))
-    for candidate in ("/opt/homebrew/bin/node", "/usr/local/bin/node"):
+    for candidate in (
+        "/opt/homebrew/opt/node@20/bin/node",
+        "/opt/homebrew/opt/node@22/bin/node",
+        "/opt/homebrew/opt/node@24/bin/node",
+        "/usr/local/opt/node@20/bin/node",
+        "/usr/local/opt/node@22/bin/node",
+        "/usr/local/opt/node@24/bin/node",
+        "/opt/homebrew/bin/node",
+        "/usr/local/bin/node",
+    ):
         if Path(candidate).exists():
             candidates.append(candidate)
     out: list[str] = []
@@ -132,13 +153,27 @@ def _node_can_load_ui_native_modules(node_bin: str, ui_dir: Path | None) -> bool
     return result.returncode == 0
 
 
+def _compatible_node_major(node_bin: str) -> bool:
+    result = _run(
+        [node_bin, "-p", "Number(process.versions.node.split('.')[0])"],
+        timeout=10,
+        check=False,
+    )
+    if result.returncode != 0:
+        return False
+    try:
+        major = int(result.stdout.strip())
+    except ValueError:
+        return False
+    return 20 <= major <= 24
+
+
 def preferred_node(script_dir: Path | None = None) -> str:
     ui_dir = script_dir / "yulu_ui" if script_dir is not None else SOURCE_ROOT / "yulu/scripts/yulu_ui"
     for candidate in _node_candidates():
-        if _node_can_load_ui_native_modules(candidate, ui_dir):
+        if _compatible_node_major(candidate) and _node_can_load_ui_native_modules(candidate, ui_dir):
             return candidate
-    candidates = _node_candidates()
-    return candidates[0] if candidates else "/usr/local/bin/node"
+    raise RuntimeError("Yulu Host requires Node.js 20, 22, or 24 with compatible native modules")
 
 
 def _launch_path(node_bin: str | None = None) -> str:
@@ -236,10 +271,39 @@ def _copy_runtime_items(source_root: Path, runtime_root: Path) -> None:
             shutil.copy2(src, dst)
 
 
+def _write_dev_install_metadata(source_root: Path, runtime_root: Path) -> None:
+    def git_value(*args: str) -> str:
+        result = _run(["git", "-C", str(source_root), *args], timeout=10, check=False)
+        return result.stdout.strip() if result.returncode == 0 else ""
+
+    branch = git_value("branch", "--show-current") or "detached"
+    commit = git_value("rev-parse", "--short", "HEAD") or "unknown"
+    dirty = bool(git_value("status", "--porcelain"))
+    payload = {
+        "schema": 1,
+        "source": "dev",
+        "installed_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+        "branch": branch,
+        "commit": commit,
+        "dirty": dirty,
+    }
+    path = runtime_root / ".yulu-install.json"
+    tmp = path.with_suffix(f".{os.getpid()}.tmp")
+    tmp.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    os.replace(tmp, path)
+
+
 def _build_ui_dist(source_root: Path) -> None:
     ui_dir = source_root / "yulu/scripts/yulu_ui"
     if (ui_dir / "package.json").exists():
-        _run(["npm", "run", "build"], timeout=180, check=True, cwd=ui_dir)
+        node_bin = preferred_node(source_root / "yulu/scripts")
+        path = _launch_path(node_bin)
+        npm_bin = shutil.which("npm", path=path)
+        if not npm_bin:
+            raise RuntimeError(f"npm is required to build yulu_ui with {node_bin}")
+        env = os.environ.copy()
+        env["PATH"] = path
+        _run([npm_bin, "run", "build"], timeout=180, check=True, cwd=ui_dir, env=env)
 
 
 def _compile_helpers(script_dir: Path) -> None:
@@ -269,6 +333,50 @@ def _load(dest: Path) -> None:
     _run(["launchctl", "load", str(dest)], timeout=15, check=False)
 
 
+def _cleanup_obsolete_stt_state(config_dir: Path = DEFAULT_CONFIG_DIR) -> None:
+    """Remove stale IPC/PID markers only after the old LaunchAgent is unloaded."""
+    for path in (
+        config_dir / "stt_daemon.sock",
+        config_dir / "stt_daemon.pid",
+        config_dir / "dictation" / "realtime.pid",
+    ):
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def _retire_obsolete_launchagents(
+    config_dir: Path = DEFAULT_CONFIG_DIR,
+    launch_agents_dir: Path = LAUNCH_AGENTS_DIR,
+) -> None:
+    """Boot out retired jobs by label, even when their plist already vanished."""
+    domain = f"gui/{os.getuid()}"
+    labels: list[str] = []
+    for name in OBSOLETE_LAUNCHAGENTS:
+        label = name.removesuffix(".plist")
+        labels.append(label)
+        dest = launch_agents_dir / name
+        _run(["launchctl", "bootout", f"{domain}/{label}"], timeout=15, check=False)
+        # Compatibility fallback for older launchctl behavior and installs
+        # whose on-disk plist still exists.
+        _unload(dest)
+        _run(["launchctl", "remove", label], timeout=15, check=False)
+        dest.unlink(missing_ok=True)
+
+    for pattern in ("agent_queue_worker.py", "stt_daemon"):
+        _run(["pkill", "-f", pattern], timeout=10, check=False)
+
+    still_loaded = []
+    for label in labels:
+        result = _run(["launchctl", "print", f"{domain}/{label}"], timeout=10, check=False)
+        if result.returncode == 0:
+            still_loaded.append(label)
+    if still_loaded:
+        raise RuntimeError(f"retired LaunchAgents are still loaded: {', '.join(still_loaded)}")
+    _cleanup_obsolete_stt_state(config_dir)
+
+
 def _kill_legacy_processes(legacy_root: Path) -> None:
     if legacy_root.exists():
         _run(["pkill", "-f", str(legacy_root)], timeout=10, check=False)
@@ -281,6 +389,7 @@ def _install_launchagents(script_dir: Path, *, python_bin: str) -> None:
     LAUNCH_AGENTS_DIR.mkdir(parents=True, exist_ok=True)
     node_bin = preferred_node(script_dir)
     launch_path = _launch_path(node_bin)
+    _retire_obsolete_launchagents()
     for name in LAUNCHAGENTS:
         src = script_dir / name
         if not src.exists():
@@ -318,11 +427,43 @@ def _seed_prompt_defaults(script_dir: Path, *, python_bin: str) -> None:
         print(f"warning: prompts seed failed: {(result.stderr or result.stdout).strip()}", file=sys.stderr)
 
 
+def _install_mcp_registration(script_dir: Path, *, python_bin: str) -> None:
+    """Require Hermes phase MCPs; register other detected Agents best-effort."""
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(script_dir)
+    required = subprocess.run(
+        [python_bin, "-m", "provision.cli", "mcp", "install", "--agent", "hermes"],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env=env,
+    )
+    if required.returncode != 0:
+        detail = (required.stderr or required.stdout).strip()
+        raise RuntimeError(f"Hermes and its Yulu phase MCP registrations are required: {detail}")
+    optional = subprocess.run(
+        [
+            python_bin, "-m", "provision.cli", "mcp", "install",
+            "--agent", "codex", "--agent", "claude", "--agent", "openclaw",
+            "--detected-only", "--non-fatal",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env=env,
+    )
+    if optional.returncode != 0:
+        print(f"warning: optional Agent MCP registration failed: {(optional.stderr or optional.stdout).strip()}", file=sys.stderr)
+
+
 def apply(source_root: Path, runtime_root: Path, config_dir: Path, legacy_root: Path, python_bin: str) -> dict:
     data = plan(source_root, runtime_root, config_dir, legacy_root)
     data["apply"] = True
     if data["recording"]:
         raise RuntimeError("Refusing to install while Yulu is recording")
+    # Fail before copying/reloading the runtime when the product's required
+    # recording Agent boundary cannot be configured.
+    _install_mcp_registration(source_root / "yulu/scripts", python_bin=python_bin)
     _build_ui_dist(source_root)
     _copy_runtime_items(source_root, runtime_root)
     script_dir = runtime_root / "yulu/scripts"
@@ -331,6 +472,7 @@ def apply(source_root: Path, runtime_root: Path, config_dir: Path, legacy_root: 
     _install_launchagents(script_dir, python_bin=python_bin)
     _install_cli(script_dir)
     _seed_prompt_defaults(script_dir, python_bin=python_bin)
+    _write_dev_install_metadata(source_root, runtime_root)
     return data
 
 

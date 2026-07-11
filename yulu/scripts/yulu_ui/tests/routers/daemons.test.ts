@@ -19,30 +19,21 @@ function makeCtx() {
 }
 
 describe("daemonsRouter", () => {
-  it("knows the 8 yulu daemons (7 existing + yulu_ui)", () => {
-    expect(YULU_DAEMONS).toHaveLength(8);
+  it("knows the 6 current yulu daemons", () => {
+    expect(YULU_DAEMONS).toHaveLength(6);
     expect(YULU_DAEMONS).toContain("com.yulu.ui");
+    expect(YULU_DAEMONS).not.toContain("com.yulu.agentqueue");
+    expect(YULU_DAEMONS).not.toContain("com.yulu.sttdaemon");
   });
 
   it("health() reports running vs stopped per launchctl", async () => {
     const caller = createCaller(daemonsRouter, makeCtx());
     const r = (await caller.health()) as Array<{ name: string; status: string; pid: number }>;
     const audio = r.find((d) => d.name === "com.yulu.audiodaemon")!;
-    const stt   = r.find((d) => d.name === "com.yulu.sttdaemon")!;
+    const statusAgent = r.find((d) => d.name === "com.yulu.statusagent")!;
     expect(audio.status).toBe("running");
     expect(audio.pid).toBe(1001);
-    expect(stt.status).toBe("stopped");
-  });
-
-  it("health() reports the StartInterval agentqueue as idle when loaded without a pid", async () => {
-    const ctx = makeCtx();
-    (ctx.launchctl as unknown as { status: ReturnType<typeof vi.fn> }).status.mockImplementation(async (label: string) =>
-      label === "com.yulu.agentqueue"
-        ? { pid: 0, exitStatus: 0, label }
-        : null,
-    );
-    const r = (await createCaller(daemonsRouter, ctx).health()) as Array<{ name: string; status: string }>;
-    expect(r.find((d) => d.name === "com.yulu.agentqueue")!.status).toBe("idle");
+    expect(statusAgent.status).toBe("stopped");
   });
 
   it("health() treats a daemon with a pid as running even when launchctl has a stale non-zero status", async () => {

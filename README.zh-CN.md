@@ -13,17 +13,17 @@
 
 Yulu（语录，*yǔ lù*）出自《论语》《传习录》《朱子语类》——中文里"把发言原原本本记下来"的最古老体裁。两千五百年前孔子的弟子做的事，今天我们还在重复：开了一个重要的会，事后才发现没有人写下来。
 
-Yulu 是一个本地优先、Agent 优先的 macOS 会议记录工具。它原生录制会议，用 MLX Whisper 或 `whisper.cpp` 本地转录，再让你已经在用的 Agent（Codex CLI、Claude Code、Hermes、OpenClaw…）接管 AI 工作：问本地会议、按模板总结、处理术语和记忆、通过 Agent 自己的 connector 发送到 Notion 或 Zulip。
+Yulu 是一个围绕本地 Agent 设计的 macOS 会议记录工具。它原生录制会议，把每次录音持久化为可恢复、可审计的本地任务，再把转写、总结和经明确授权的 Notion 投递交给 Hermes。Agent Console 可以另选 Codex CLI、Claude Code、Hermes、OpenClaw 或自定义 Agent 来处理对话及其自己的连接器。
 
-**不需要虚拟声卡，不需要云端转录，不需要注册账号**。音频和转录默认只留在这台电脑上，除非你主动发送纪要。
+**不需要虚拟声卡，也不需要 Yulu 账号**。录音文件和任务状态留在本机；自动处理会把音频交给 Hermes，是否使用外部服务取决于 Hermes 自己的配置。Yulu 不代替 Hermes 保存连接器凭据，也不会把「Agent 说完成了」当作任务完成的证据。
 
 跟 Otter / Granola / Fireflies 比：
 
 - **系统音频原生录制**：用 macOS 13+ 的 `ScreenCaptureKit`，**不需要 BlackHole 或多输出设备**。
-- **转录完全本地**：Apple Silicon 可用 MLX Whisper，也可用 `whisper-cli`（whisper.cpp）和自己的模型文件，中文质量不输英文。
+- **智能能力归 Agent**：Hermes 负责录音转写、总结和明确授权的 Notion 投递；Yulu 不再维护另一套模型、STT 或 connector runtime。
 - **Agent Console 是默认工作台**：开始录制、最近三天任务状态、问会议、底层 Agent 切换、当前能力都在一个界面里完成。
-- **AI 层是 BYOA**（Bring Your Own Agent）：Yulu 写入本地队列或启动 agent session；选中的 Agent 读取转录、模板、术语、记忆和 connector 上下文，再写回结果。**没有任何一家厂商被硬编码进流程**。
-- **连接能力跟着 Agent 走**：Notion、Zulip、日历上下文显示为当前 Agent 的能力。Yulu 只保存本地过滤和目标选择，真实配置仍属于 Agent。
+- **任务状态真正持久化**：Host 用 SQLite 保存任务、租约、事件、产物哈希和投递结果；进程重启后可以恢复，也能区分录音、Agent、产物提交和外部投递分别在哪里失败。
+- **连接能力跟着 Agent 走**：录音产物发送到 Notion 时使用 Hermes 自己的 connector；其它交互式连接器动作由 Agent Console 当前选中的 Agent 负责。凭据始终留在 Agent 侧。
 - **半双工混音**：对方说话时优先录系统音频，系统静音时切到麦克风，远端发言始终清晰。
 - **本地 Web UI 在 `http://127.0.0.1:7777/agent-console`**：Agent Console、录音、模板、术语表、设置、健康状态都在这里。参见 [docs/yulu_ui.md](docs/yulu_ui.md)。
 
@@ -42,12 +42,16 @@ Yulu 是一个本地优先、Agent 优先的 macOS 会议记录工具。它原�
   </td>
   <td align="center" width="50%">
     <b>Console 里有什么</b>
-    <br><sub>最近三天任务保留完整状态；问会议会创建可恢复的 Agent session；当前能力展示底层 Agent、总结模板、Notion、Zulip、日历上下文和本地 daemon 健康状态。</sub>
+    <br><sub>最近三天任务保留完整状态；问会议会创建可恢复的 Agent session；当前能力展示通用 Agent、Hermes 录音处理、模板、连接器提示和本地 Host 健康状态。</sub>
   </td>
 </tr>
 </table>
 
 ## 快速安装
+
+正式 Release 目前要求 Apple Silicon（arm64）和 macOS 13 或更高版本；installer
+会在下载 arm64 资产前拒绝 Intel-only Mac。
+同时需要 Python 3.10 或更高版本；安装器会在下载资产前明确检查。
 
 默认安装最新稳定版：
 
@@ -58,7 +62,7 @@ curl -fsSL https://raw.githubusercontent.com/Nowhitestar/Yulu/main/install.sh | 
 安装指定版本：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Nowhitestar/Yulu/main/install.sh | bash -s -- --version v0.5.0
+curl -fsSL https://raw.githubusercontent.com/Nowhitestar/Yulu/main/install.sh | bash -s -- --version <tag>
 ```
 
 开发通道：
@@ -73,18 +77,17 @@ curl -fsSL https://raw.githubusercontent.com/Nowhitestar/Yulu/main/install.sh | 
 
 1. 检查 macOS 13+、Xcode CLI Tools、Homebrew、Python 3。
 2. 把选定的 Yulu runtime 安装到 `~/.yulu/`（路径固定，别移走）。
-3. 安装 Homebrew 包：`sox`、`ffmpeg`、`whisper-cpp`、`terminal-notifier`、`gogcli`、`cloudflared`。
+3. 安装本地 Host 与音频/通知所需的 Homebrew 包，包括兼容的 `node@24`（已有 Node 20/22/24 时复用）、`sox`、`ffmpeg` 和 `terminal-notifier`。
 4. 写用户级配置到 `~/.config/yulu/config.json`，建录音目录 `~/Movies/Yulu/`。
 5. 编译窗口扫描器，引导授权"辅助功能"。
 6. 编译并签名 `Yulu.app`，引导授权"麦克风"和"屏幕与系统音频录制"。
-7. 让你选择转录方案：MLX `large-v3`、MLX `large-v3-turbo`，或 `whisper.cpp` GGML 模型。
-8. 让你选择停止后的处理模式：实时转录 → polish → summary，或完整重转录 → summary。
-9. 引导选择默认 Agent provider：Codex CLI、Claude Code、Hermes、OpenClaw、自定义命令，或只保留本地规则草稿。
-10. （可选）通过 `gog` 配置 Google Calendar。
-11. 安装 4 个 LaunchAgent 后台服务。
-12. 把 `yulu` CLI 装到 `~/.local/bin/yulu`。
-13. （可选）把 Yulu 注册为 **agent skill**，让 Claude Code / OpenClaw / Codex 等用自然语言驱动 Yulu。
-14. 跑一遍冒烟测试。
+7. 不安装 Yulu 自己的语音模型；自动录音处理和语音输入要求 LaunchAgent 的 PATH 中已有可用 Hermes CLI。
+8. 引导选择 Agent Console 的通用 Agent provider；这不会改变录音任务固定使用 Hermes 的边界。
+9. （可选）通过 `gog` 配置 Yulu 自己的日历调度。
+10. 安装本地 Host、原生录音、菜单栏、调度和检测等 LaunchAgent。
+11. 把 `yulu` CLI 装到 `~/.local/bin/yulu`，并注册带 bearer token 的本地 MCP。
+12. （可选）安装 **Yulu agent skill**，让支持的 Agent 用自然语言驱动 Yulu。
+13. 跑一遍安装与原生录音冒烟测试；再用 `yulu doctor --json` 验证 Hermes 管线依赖。
 
 装完之后**确保 `~/.local/bin` 在 PATH 里**（一般 zsh 默认没加）：
 
@@ -103,7 +106,7 @@ yulu update
 升级到指定版本：
 
 ```bash
-yulu update --version v0.5.0
+yulu update --version <tag>
 ```
 
 升级到开发通道：
@@ -112,7 +115,17 @@ yulu update --version v0.5.0
 yulu update --dev
 ```
 
-稳定版和指定版本升级会把 GitHub Release assets 下载到 `~/.yulu/`；`--dev` 则从 `main` 安装或更新。之后都会跑幂等升级流程；不重弹 TCC、不重做 OAuth、不重下 whisper 模型，已配置过的步骤全部跳过。
+稳定版和指定版本升级会校验 GitHub Release 的 `checksums.txt`，再以用户权限原子替换 `~/.yulu/` 中的 runtime zip；zip 内的 app bundle 已签名、公证并 stapled。`package-pkg` 目前只用于本地诊断：仓库尚未配置 Developer ID Installer 证书，因此正式 Release 不发布未签名 pkg。`--dev` 则从 `main` 安装或更新。之后都会跑幂等升级流程；已有 TCC 授权和录音会保留。
+
+升级旧 runtime 时，Yulu 会归档旧推理/connector 配置与遗留队列，但不会自动重放历史 Agent 任务；仍需处理的录音可在当前 UI 中手动 reprocess。已退役服务会被卸载，避免两条处理链同时运行。
+
+如果当前安装是 v0.17.x，其内置 updater 只认识旧 pkg 资产。请先执行一次下面的 bridge 命令切换到 zip updater：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Nowhitestar/Yulu/main/install.sh | bash
+```
+
+从 v0.18 开始，内置 helper 已支持 zip release。为了保持版本 pin 和供应链边界，`yulu update` 不会自动下载并执行 `main` 上可变的 installer；未来若再次变更资产格式，会提供新的显式 bridge。
 
 `--version` 只影响这一次操作；下一次直接跑 `yulu update` 会回到最新稳定版。
 
@@ -130,16 +143,16 @@ yulu uninstall
 |---|---|
 | `yulu setup` | 重新跑安装脚本（fresh install） |
 | `yulu update [--version vX.Y.Z \| --dev]` | 用最新稳定版 release assets、指定版本或开发通道升级 |
-| `yulu start` / `stop` / `restart` | 控制四个 LaunchAgent |
+| `yulu start` / `stop` / `restart` | 控制已安装的 Yulu LaunchAgent |
 | `yulu version` | 输出 Yulu 版本、git commit、tag 和 dirty 状态 |
-| `yulu status` | 服务健康、daemon socket、最近录音 |
-| `yulu doctor` | 检查配置、daemon、模型、队列、日历健康 |
+| `yulu status` | 查看服务、原生录音 socket、最近录音和 Host 健康 |
+| `yulu doctor [--json]` | 只读检查原生录音、Host 任务、Hermes 和日历健康 |
 | `yulu logs [name]` | tail 日志（默认 `audio_daemon`） |
-| `yulu record start "<title>"` / `yulu record stop` | 手动录音，停止后走同一条停止 → 转录 → 摘要流程 |
-| `yulu transcription status` | 查看转录引擎和停止后处理模式 |
-| `yulu transcription mode fast\|full` | 在实时转录 → polish → summary 和完整重转录 → summary 之间切换 |
-| `yulu transcription engine mlx <model>` | 使用 MLX Whisper，例如 `mlx-community/whisper-large-v3-mlx` |
-| `yulu transcription engine whisper <path>` | 使用本地 whisper.cpp GGML 模型 |
+| `yulu record start "<title>"` / `yulu record stop` | 手动录音；停止后把完成事件交给持久化 Host 管线 |
+| `yulu dictate start\|stop\|once\|toggle\|ask` | 原生麦克风录音，由 Hermes 转写；`ask` 会继续进入 Agent Console |
+| `yulu search "<query>"` | 搜索本地转录与纪要 |
+| `yulu mcp status\|install\|remove\|rotate-token\|test` | 管理带认证的本地 MCP 注册 |
+| `yulu skill install [--agent <name>]` | 安装或刷新面向 Agent 的 Yulu skill |
 | `yulu where` | 列出所有相关磁盘路径 |
 | `yulu uninstall` | 见上 |
 
@@ -151,10 +164,14 @@ yulu uninstall
 - "停止录制并出个纪要"
 - "上周二的 standup 我们聊了什么？"
 
-`setup.sh` 会问要不要装，并让你选择目标 agent。日后想装或重装：
+核心 `setup.sh` 不会注册 Agent skill。安装完成后请按目标 Agent 独立安装或刷新：
 
 ```bash
-# 装到全局，目标 agent 自己选
+# 推荐：使用 Yulu CLI
+yulu skill install --agent claude-code
+yulu skill install --agent codex
+
+# 或直接使用 skills CLI 装到全局
 npx skills add Nowhitestar/Yulu -g -a claude-code -y
 npx skills add Nowhitestar/Yulu -g -a codex -y
 
@@ -162,20 +179,20 @@ npx skills add Nowhitestar/Yulu -g -a codex -y
 npx skills add . -g -a claude-code -y
 ```
 
-skill 只是一份契约——告诉 agent Yulu 暴露了哪些动词（开始/停止/状态/纪要生成），以及历史会议在磁盘哪里。Yulu 的 macOS app、launchd 服务、本地转录依赖还是要靠 `setup.sh` 装。**单装 skill 不会录音**。
+skill 只是一份契约——告诉 Agent Yulu 通过 MCP 暴露了哪些录音、历史、搜索和任务动词。Yulu 的 macOS app、本地 Host、LaunchAgent 和 Hermes 能力仍要靠 `setup.sh` 安装并验证。**单装 skill 不会录音，也不会创建可用的转写管线**。
 
 ## 工作原理
 
 ```text
 Agent Console
           ↓
- 当前 Agent provider + 能力过滤
+ 通用 Agent provider
           ↓
  Codex CLI / Claude Code / Hermes / OpenClaw sessions
           ↓
- 问会议历史 · 摘要任务 · Notion/Zulip 发送
+ 问会议历史 · 交互式对话 · 该 Agent 自己的连接器
 
-Google 日历 / 窗口检测器
+日历 / 窗口检测器 / 菜单栏 / CLI / MCP
           ↓
  schedule.json  ──►  scheduler_daemon.py
           ↓
@@ -185,20 +202,22 @@ Google 日历 / 窗口检测器
           ↓
  ScreenCaptureKit (系统音频) + AVFoundation (麦克风)
           ↓
-WAV  ──►  realtime_transcribe.py / transcribe.py  ──►  MLX Whisper 或 whisper-cli
+ 本地 WAV  ──►  带认证的本地 Host
           ↓
- transcript.txt  +  summary_request  ──►  agent-queue.json
+ host.sqlite 持久化任务 + 租约 + 审计事件
           ↓
- 当前 Agent session  ──►  summary.md / connector 发送
+ Hermes 转写 + 总结  ──►  Host 原子提交 transcript.txt + summary.md
+          ↓（任务明确授权时）
+ Hermes Notion connector  ──►  Host 记录页面 URL / ID
 ```
 
 几个值得记住的数字：
 - WAV：16-bit 立体声 48 kHz。
 - ScreenCaptureKit Float32 planar → 交错立体声 Int16。
 - 半双工 crossfade 触发阈值：默认 `silence_threshold=0.01`。
-- 默认质量方案：Apple Silicon 用 MLX `mlx-community/whisper-large-v3-mlx`；非 MLX 质量方案是 whisper.cpp `ggml-large-v3.bin`。
 - Bundle id：`com.yulu.audiodaemon`（Apple Developer 证书签名，无证书则回退到 ad-hoc）。
-- Agent 队列：`~/.config/yulu/agent-queue.json`。
+- Host 状态库：`~/.config/yulu/host.sqlite`。
+- Host 临时不可用时，完成事件原子暂存在 `~/.config/yulu/recording-events/`，恢复后重放且不会重复创建同一个自动任务。
 
 ## macOS 权限
 
@@ -218,54 +237,43 @@ WAV  ──►  realtime_transcribe.py / transcribe.py  ──►  MLX Whisper �
 {
   "audio": {
     "backend": "daemon",
+    "output_dir": "~/Movies/Yulu",
     "silence_threshold": 0.01,
     "silence_duration_sec": 300,
     "half_duplex": true
   },
   "transcription": {
-    "post_recording_mode": "fast_summary",
-    "final_engine": "mlx",
-    "mlx": {
-      "python": "~/.config/yulu/venv-mlx-whisper/bin/python",
-      "model": "mlx-community/whisper-large-v3-mlx"
-    },
-    "realtime": {
-      "engine": "mlx",
-      "mlx_model": "mlx-community/whisper-large-v3-mlx",
-      "chunk_sec": 60
-    },
-    "whisper_cli": "whisper-cli",
-    "local_model_path": "~/.config/yulu/models/ggml-large-v3.bin",
     "language": "zh"
+  },
+  "agent_pipeline": {
+    "enabled": true,
+    "auto_process_recordings": true,
+    "auto_send_notion": false,
+    "notion_destination": "Yulu Meeting",
+    "hermes_serve_port": 0,
+    "transcription_chunk_sec": 1200
   },
   "llm": {
     "enabled": true,
     "command": null,
     "agent": {
-      "provider": "auto"
+      "provider": "hermes"
     }
   },
   "agent_console": {
     "plugins": {
-      "added": ["summary", "notion", "zulip", "calendar"]
-    },
-    "destinations": {
-      "codex": {
-        "notion": { "target": "Yulu Meeting" },
-        "zulip": { "stream": "product", "topic": "meeting-notes" }
-      }
+      "added": ["summary"]
     }
   }
 }
 ```
 
-- `audio.backend = "daemon"` 是默认值。`mic_device` / `system_audio_device` 只用于旧版 SoX fallback 路径。
-- `transcription.post_recording_mode = "fast_summary"` 会使用会议中生成的实时转录，停止后只做 polish 和 summary。需要更稳质量时运行 `yulu transcription mode full`，停止后会对整段音频重新完整转录。
-- `transcription.final_engine = "mlx"` 适合 Apple Silicon。`mlx-community/whisper-large-v3-mlx` 质量最好，`mlx-community/whisper-large-v3-turbo` 更快。非 MLX 路线用 `final_engine = "whisper"` 和 `local_model_path`。
-- `llm.agent.provider = "auto"` 会按 Codex、Claude Code、Hermes、OpenClaw 的顺序选择可用 CLI。想固定底层 Agent 时可以显式设置。
-- `llm.command` 留空走原生 provider 路径；要接自定义 Agent/LLM wrapper 时，把它设成任意接受 stdin prompt、输出 Markdown 的 CLI。
-- `agent_console.plugins.added` 是 Yulu 侧过滤层。只有在 Console 里添加过的能力才显示；是否已配置仍由当前 Agent 的插件状态决定。
-- `agent_console.destinations` 保存每个 Agent 的发送目标，比如 Notion 页面/数据库名称、Zulip stream/topic。connector 的凭据仍留在 Agent/plugin 里，不进 Yulu 配置。
+- `audio.backend = "daemon"` 是受支持的原生录音路径；`output_dir` 同时是 Host 接受完成录音的安全边界。
+- `agent_pipeline` 只控制持久化任务、自动处理和 Notion 授权，不选择模型或保存 connector 凭据。
+- `auto_send_notion = true` 是真实外部副作用授权。每个录音任务都会限制 Hermes 的工具集；未授权任务没有 Notion 或其它 connector 的可调用能力。Hermes 只有在转录和纪要一起提交后，才能向 Host 申请投递。
+- `transcription` 只保留语言和听写交互上下文；Yulu 不再配置或运行语音模型。
+- `llm.agent.provider` / `llm.command` 选择 Agent Console 的通用 Agent。无论这里选什么，录音处理和语音输入仍固定使用 Hermes。
+- `agent_console.plugins.added` 只是能力展示过滤。连接器凭据、OAuth 和实际配置属于 Agent，不进入 Yulu 配置。
 
 完整配置参考：[`docs/configuration.md`](docs/configuration.md)。
 手动命令和排障：[`docs/operations.md`](docs/operations.md)。
@@ -276,15 +284,16 @@ WAV  ──►  realtime_transcribe.py / transcribe.py  ──►  MLX Whisper �
 
 - **不依赖虚拟声卡**。`ScreenCaptureKit` 是 macOS 13 专门为"系统音频不需要驱动 hack"加的 API；Yulu 拒绝回退到 BlackHole——装一次的麻烦才是这个项目存在的理由。
 - **录音永远先问**。检测可以错，知情同意不能错。每一次录制都走 `notify.py` 真的弹一次窗。
-- **Agent 是智能层**。Yulu 负责本地捕获、转录、存储和任务状态；选中的 Agent 负责 LLM 推理和 connector 访问。Yulu 不应该让你把 Notion、Zulip、日历再配置一遍。
-- **状态写在文件里，不在内存里**。`agent-queue.json`、`schedule.json`、本地录音都是磁盘对象；队列写入带锁并原子替换。会议中突然断电，最多丢上次 flush 之后的几秒音频，其它都还在。
+- **Agent 是智能层**。Yulu 负责本地捕获、权限、持久化任务、租约、产物提交和审计；Hermes 负责录音转写、总结和明确授权的 Notion 投递；通用 Agent 负责对话和自己的连接器。Yulu 不重复实现这些能力。
+- **完成必须有可验证证据**。任务状态、事件、产物哈希和投递结果写入 `host.sqlite`；Agent 文本声称“已完成”不等于 Host 完成。外部投递结果不确定时进入 `delivery_unverified`，不会盲目重试。
+- **产物成对提交**。Hermes 先在任务私有目录生成 `transcript.txt` 和 `summary.md`，Host 校验后一起原子写回录音目录；只出现其中一个不算成功。
 - **TCC 权限只挂在一个 binary 上**。整个系统里只有 `Yulu.app` 持有麦克风和屏幕录制权限；Python 代码只能通过 Unix socket 跟它说话，绕不开 macOS 的隐私墙。
 
 ## 故事
 
 我每周开很多会——内部 review、客户电话、需要回头听一遍的演讲录音。Granola 不录系统音频；Otter 必须联网而且中文很差；每一篇"装个 BlackHole 就好"的教程，最后都让我有两个输出设备、连不上蓝牙耳机、电话另一头的朋友一脸困惑。
 
-于是自己写。第一版是 200 行 sox 加上一句祈祷。你现在看到的这版用 `ScreenCaptureKit`、内联做半双工混音、让本地的 Claude Code agent 把会议纪要写完——这些事情发生在我开下一个会的时候。**Yulu**（语录）这个名字就是承诺：每一段对话，都该落到一个你以后愿意再读一遍的地方。
+于是自己写。第一版是 200 行 sox 加上一句祈祷。你现在看到的这版用 `ScreenCaptureKit`、内联做半双工混音，再把录音交给已经在使用的 Hermes 完成转写和纪要——这些事情发生在我开下一个会的时候。**Yulu**（语录）这个名字就是承诺：每一段对话，都该落到一个你以后愿意再读一遍的地方。
 
 ## 项目结构
 
@@ -314,16 +323,20 @@ Yulu/
         ├── audio_daemon.swift            # ScreenCaptureKit + AVFoundation
         ├── build_audio_daemon.sh         # 编译并签名 Yulu.app
         ├── record_audio.py               # 录音控制
-        ├── meeting_daemon.py             # 工作流调度
+        ├── meeting_daemon.py             # 录音工作流 + Host 完成事件交付/暂存
         ├── scheduler_daemon.py           # 基于日历的调度器
         ├── meeting_detector.py           # 基于窗口的会议检测器
         ├── window_scanner.swift          # 辅助功能窗口扫描
         ├── recorder_status.swift         # 录制状态浮窗
-        ├── transcribe.py                 # MLX / whisper 转录 + 写 agent 队列
-        ├── agent_notify.py               # agent 队列辅助
+        ├── dictate.py                    # 麦克风录音 + 带认证的 Hermes 转写入口
         ├── notify.py                     # macOS 通知和弹窗
-        ├── send_summary.py               # 实验性的 Telegram / Notion / Zulip 适配器
-        ├── summary_template.md           # 默认会议纪要模板
+        ├── prompts/                      # 本地提示词目录和上下文
+        ├── yulu_ui/                      # TypeScript Host、持久化管线和 Web UI
+        │   └── src/
+        │       ├── hostStore.ts          # 任务、租约、事件和投递状态
+        │       ├── recordingPipeline.ts  # Hermes 录音任务协调器
+        │       ├── agentGateway.ts       # Hermes 会话和工具调用审计
+        │       └── artifactStore.ts      # 成对校验并原子提交产物
         └── com.yulu.*.plist              # LaunchAgent 定义
 ```
 
@@ -333,11 +346,13 @@ Yulu/
 |---|---|
 | `~/.yulu/` | 从 release assets 或开发通道安装的运行时 |
 | `~/.config/yulu/config.json` | 用户配置 |
-| `~/.config/yulu/models/ggml-*.bin` | 下载的 whisper.cpp 模型 |
 | `~/.config/yulu/audio_daemon.sock` | daemon 暴露的 Unix socket |
-| `~/.config/yulu/agent-queue.json` | 给 agent 的待办事件队列 |
+| `~/.config/yulu/host.sqlite` | 持久化任务、租约、事件、产物和投递审计 |
+| `~/.config/yulu/agent-tasks/` | Hermes 的任务私有 staging 目录 |
+| `~/.config/yulu/recording-events/` | Host 暂时不可用时的录音完成事件 |
+| `~/.config/yulu/mcp-token.json` | 本地 Host / MCP bearer token，必须保密 |
 | `~/Movies/Yulu/` | 你的会议录音 + 转录 + 纪要 |
-| `~/Library/LaunchAgents/com.yulu.*.plist` | 后台服务（4 个 LaunchAgent） |
+| `~/Library/LaunchAgents/com.yulu.*.plist` | 已安装的后台服务 |
 | `~/.local/bin/yulu` | CLI symlink |
 
 ## 支持
@@ -350,4 +365,4 @@ Yulu/
 
 MIT。详见 [LICENSE](LICENSE)。
 
-`whisper.cpp`、`ScreenCaptureKit`、`AVFoundation`、`terminal-notifier`、`cloudflared`、`gog` 各自保留原 license。
+Hermes、`ScreenCaptureKit`、`AVFoundation`、`terminal-notifier`、`cloudflared`、`gog` 各自保留原 license。

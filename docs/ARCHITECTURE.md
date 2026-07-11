@@ -1,142 +1,305 @@
-# Yulu Architecture Notes
+# Yulu Architecture
 
-Yulu is a local-first macOS meeting recorder and agent workbench.
+Yulu is a macOS-native recording product with a durable local Host and
+Agent-owned intelligence. The current runtime decision is recorded in
+[`ADR-005`](../yulu/spec/adr/005-agent-native-durable-recording-pipeline.md).
 
-## Layers
+## Responsibility boundary
 
-1. Capture/control
-   - `record_audio.py`
-   - Swift `audio_daemon.swift`
-   - Swift `recorder_status.swift`
-   - launchd plists
+Yulu owns only the capabilities that require a trusted product boundary:
 
-2. Transcription
-   - realtime transcript path for fast feedback
-   - final transcript path for quality recovery
-   - raw transcript and cleaned transcript are separate files
+- native system-audio and microphone capture;
+- macOS permission visibility and repair;
+- recording path validation;
+- durable tasks, idempotency, leases, recovery, and audit events;
+- task-scoped staging, pair validation, atomic target replacement, and
+  transactional artifact records;
+- explicit authorization and recording of external delivery outcomes;
+- local MCP authentication and access control.
 
-3. Summary worker
-   - `agent-queue.json` is the transparent event log
-   - `queue_store.py` performs locked, atomic writes
-   - `agent_queue_worker.py` claims `summary_request` events and writes final summaries
-   - summary guardrails reject agent-event JSON and too-short/invalid outputs
+Hermes owns speech recognition, summary generation, and Notion delivery for the
+recording pipeline. The Agent selected in Agent Console owns interactive
+conversation and its own connectors. Yulu does not contain an AI, chat, or
+connector execution engine.
 
-4. Artifact workbench
-   - `.summary.md` remains the portable text artifact
-   - `.summary.html` is the editable workbench with embedded `artifact-data`
-   - `html_artifact.py` adapts Yulu summary/transcript data to the artifact renderer
+## Runtime components
 
-5. Agent interface
-   - `skills/yulu/SKILL.md` documents the control surface for Hermes/雷子
-   - `sync_skill.py` publishes the skill into local Hermes and l-skills backup
-
-## Local-first boundaries
-
-Yulu should not upload recordings, transcripts, or meeting metadata unless the user explicitly opts into a cloud workflow for a specific task.
-
-## Current migration note
-
-Lewis's machine still has an old OpenClaw runtime path. `doctor.py` reports any process using that path so migration can be done deliberately.
-
-## Cross-platform foundation
-
-Yulu remains macOS-first in the shipped product. The cross-platform work is a
-boundary project: keep today's macOS behavior intact while moving OS-specific
-decisions behind explicit seams.
-
-Current source-of-truth seams:
-
-| Concern | Neutral contract | macOS arm today | Linux/Windows today |
-|---|---|---|---|
-| Audio capture control | `yulu_platform.base.AudioCaptureController` | `MacOSAudioCaptureController` translates start/stop/status/windows to `audio_daemon.sock` | Instantiable stubs that raise `NotImplementedError` |
-| Service supervision | `yulu_platform.base.DaemonManager` + `ServiceSpec` | `MacOSDaemonManager` renders launchd plists and wraps `launchctl` | Instantiable stubs that raise `NotImplementedError` |
-| Base paths | `PathResolver.config_dir/data_dir/runtime_dir` | `MacOSPathResolver` keeps runtime machine-local and makes data configurable | Instantiable stubs |
-| Permissions | `PermissionModel.check(capability)` | `MacOSPermissionModel` reports microphone and system-audio capture from daemon status, with reset-only TCC support | Instantiable stubs |
-| Dependencies | `DependencyManager.is_available/install` | `MacOSDependencyManager` wraps Homebrew without bootstrapping Homebrew itself | Instantiable stubs |
-| Host agent capabilities | `capabilities.provider.CapabilityProvider` | Claude Code, Codex, and OpenClaw providers relabel host findings as `agent-config` | Agent contract is OS-neutral |
-| External connectors | `connectors.provider.ConnectorProvider` | Google Calendar, Feishu, Notion, and Zulip discovery | Connector contract is OS-neutral |
-
-The native capture implementation is still intentionally platform-specific:
-`audio_daemon.swift` owns ScreenCaptureKit, AVFoundation, TCC-gated capture, and
-the `audio_daemon.sock` control protocol. Future platform arms should implement
-the same user-level capture contract:
-
-| Contract | Required behavior | Current implementation |
+| Layer | Current owner | Contract |
 |---|---|---|
-| Capture control | start, stop, status, and window/capture-source discovery over a stable local IPC boundary | `record_audio.py` / `meeting_daemon.py` -> `MacOSAudioCaptureController` -> `audio_daemon.sock` -> `audio_daemon.swift` |
-| Capture output | write local WAV artifacts plus the sidecars needed by transcription, playback, and cleanup | `~/Movies/Yulu` by default via `audio.output_dir` |
-| Permission reporting | report whether required capture capabilities are usable; never silently grant permissions | `MacOSPermissionModel` + daemon status |
-| Service lifecycle | install, load, unload, and report long-running service state | `DaemonManager` seam |
+| Native capture | `Yulu.app`, `audio_daemon.swift` | Capture through ScreenCaptureKit and AVFoundation; expose start/stop/status over `audio_daemon.sock` |
+| Capture edge | `record_audio.py`, `meeting_daemon.py`, dictation/status adapters | Control native capture; submit a completed-recording event; atomically spool when Host is unavailable |
+| Local Host | `yulu_ui/src/server.ts` | Loopback HTTP, tRPC, WebSocket, static UI, and authenticated MCP |
+| Durable store | `hostStore.ts` | Persist tasks, events, leases, artifact records, and Notion delivery records in `host.sqlite` |
+| Pipeline coordinator | `recordingPipeline.ts` | Validate input, enqueue/claim tasks, dispatch Hermes, enforce state transitions, and recover failures |
+| Recording gateway | `agentGateway.ts` | Start a loopback Hermes service for audio, run the Hermes recording workflow, and audit its tool calls |
+| Artifact boundary | `artifactStore.ts` | Validate task staging files and atomically commit transcript plus summary with hashes and provenance |
+| General Agent runtime | `agentRuntime.ts`, Agent Console | Resolve Codex, Claude Code, Hermes, OpenClaw, or a configured command for conversation |
+| Local context | prompt, glossary, search SQLite databases | Supply instructions and discoverable local data; never execute AI work |
 
-Non-goals for this milestone:
+The Host is part of the UI service, but “Host” refers to the trusted local
+control plane, not just the browser interface.
 
-- Do not rewrite capture in Python or replace ScreenCaptureKit on macOS.
-- Do not make Linux or Windows capture usable before their service, path, and
-  permission arms exist.
-- Do not expose launchd, TCC, Homebrew, or ScreenCaptureKit names in neutral
-  method signatures.
+## Recording flow
 
-## macOS coupling inventory
+```mermaid
+flowchart TD
+    A["Calendar, window, menu, CLI, or MCP action"] --> B["Yulu.app native capture"]
+    B --> C["Local WAV"]
+    C --> D["Python capture-completion adapter"]
+    D -->|"Bearer-authenticated loopback request"| E["Yulu Host"]
+    D -->|"Host unavailable"| F["Atomic completion-event spool"]
+    F --> E
+    E --> G["Durable task, idempotency key, lease"]
+    G --> H["Hermes speech recognition"]
+    H --> I["Hermes summary workflow"]
+    I --> J["Task-scoped transcript and summary staging"]
+    J --> K["Host atomic artifact commit and audit"]
+    K -->|"Explicit Notion authorization"| L["Hermes Notion connector"]
+    L --> M["Host delivery result record"]
+    K --> N["Completed task"]
+    M --> N
+```
 
-The inventory below is the migration checklist for reducing hard-coded macOS
-coupling. "Keep" means it is an intentional macOS arm detail; "move" means new
-callers should route through a neutral seam before more product code depends on
-it.
+### Capture completion
 
-| Coupling | Current owner | Migration policy | First safe task |
-|---|---|---|---|
-| ScreenCaptureKit system audio | `audio_daemon.swift` | Keep inside a native capture arm | Document the capture IPC contract before adding another arm |
-| AVFoundation microphone capture | `audio_daemon.swift` | Keep inside a native capture arm | Keep Python callers behind `audio_daemon.sock` |
-| TCC scopes and reset commands | `MacOSPermissionModel`, `setup.sh` | Move new permission checks through `PermissionModel` | Route repair/doctor permission reads through the seam where practical |
-| launchd plist keys and `launchctl` verbs | plists, `setup.sh`, `dev_install.py`, `doctor.py`, `MacOSDaemonManager` | Move new service-management logic through `DaemonManager`; keep static plists until installer migration | Use `ServiceSpec` for any new daemon install path |
-| `~/Library/LaunchAgents` | plists/setup/dev tools | Move new computed paths through the macOS daemon arm | Avoid adding new direct LaunchAgents path literals |
-| `~/.config/yulu` runtime state | many scripts | Keep as machine-local runtime via `PathResolver.runtime_dir()` | New runtime state must use the resolver or an existing config helper |
-| `~/Movies/Yulu` content root | audio daemon, record/search/UI paths | Move new content-root reads through `PathResolver.data_dir()` | Do not point runtime DBs, sockets, locks, or caches at this root |
-| Homebrew and formula names | `setup.sh`, doctor/dependency checks | Move new dependency checks through `DependencyManager` | Do not add new package-manager calls outside the macOS arm |
-| `terminal-notifier`, `osascript`, Accessibility window scanner | notification and meeting detection paths | Keep as macOS integration details behind user-visible workflows | Do not make product logic depend on their raw output shape |
-| `cloudflared`/`gog` calendar integration | calendar services and connector provider | Treat as opt-in connector capability | Keep credentials outside `config.json`; store env var names only |
+`meeting_daemon.py` stops native capture and submits:
 
-## Privacy and cloud opt-in boundary
+```json
+{
+  "audioPath": "/absolute/path/to/Meeting_YYYYMMDD_HHMMSS.wav",
+  "title": "Meeting",
+  "sendToNotion": false
+}
+```
 
-Default behavior is local-only:
+The request goes to `POST /api/recordings/completed` on loopback with the local
+bearer token. If the Host cannot be reached, the same payload is written with an
+atomic rename under `~/.config/yulu/recording-events/`. The Host registers its
+watcher before the startup scan and periodically rescans as a lost-event and
+transient-failure fallback before replaying valid events.
 
-| Data or action | Default | Opt-in path |
-|---|---|---|
-| Raw audio, clean mixes, transcripts, summaries | Stored on local disk only | User chooses a different `audio.output_dir`; cloud folders show an explicit warning before commit |
-| Runtime DBs, sockets, locks, queue, schedule, and caches | Machine-local runtime dir only | No cloud/sync opt-in; runtime under a sync root is refused when detected |
-| Local transcription | MLX Whisper or whisper.cpp on the user's machine | `transcription.mode = cloud-fallback` or `cloud-priority` plus a user-owned `transcription.cloud_command` |
-| Summary generation | Agent queue or local fallback | User-owned `llm.command` can invoke any external agent or API wrapper |
-| Summary distribution | No external send | Connector-specific explicit actions such as Notion or Zulip send |
-| Calendar ingest | Disabled until configured | Google Calendar via `gog`/OAuth, or another connector provider |
-| Search index and history | Local SQLite only | No cloud search backend; future sync must be a separate explicit feature |
+### Admission and idempotency
 
-Rules for new code:
+The Host accepts only a real WAV inside the configured recordings directory,
+with the filename contract `<title>_YYYYMMDD_HHMMSS.wav`. Automatic completion
+uses a hash of the resolved path, size, and modification time as the idempotency
+key. Re-delivering the same event returns the existing task. A manual reprocess
+uses a new key because the user intentionally requested another run.
 
-- Never put audio, transcript, summary, prompt, search, or schedule content on a
-  network/cloud service unless the user explicitly selected that workflow.
-- `config.json` must not store secrets. It may store env var names, command
-  arrays, paths, and booleans.
-- Warnings for cloud content folders are opt-in confirmations, not hard blocks.
-  Runtime/state folders are different: they must stay machine-local because live
-  SQLite WAL files, locks, sockets, and process state are not sync-safe.
-- Connector providers report capability and provenance; they do not make hidden
-  network calls on discovery.
+## Durable task model
 
-## Library and search root boundary
+`~/.config/yulu/host.sqlite` is the source of truth. A task records:
 
-The v1 library is one content root: the Yulu data dir (`~/Movies/Yulu` by
-default). Search vNext may introduce a root registry, but the safe boundary is:
+- recording stem, title, and validated audio path;
+- idempotency key, automatic/manual trigger, and Agent provider;
+- current state and semantic phase;
+- current lease token and attempt number;
+- summary instructions and Notion opt-in/destination hint;
+- native Agent session identity and any error;
+- append-only task events, committed artifact metadata, and delivery metadata.
 
-1. The default registry contains only the Yulu data dir.
-2. External roots are explicit opt-in and read-only from Yulu's perspective.
-3. Runtime locations are never valid content roots: no `search.sqlite`,
-   `prompts.sqlite`, `vocab.sqlite`, WAL files, sockets, locks, pid files,
-   caches, or `agent-queue.json`.
-4. `.realtime.transcript.txt` stays excluded from durable search because it is
-   noisy and superseded by final transcripts.
-5. Cross-device sync is not implied by multiple roots. Sync needs its own product
-   design, conflict model, and privacy prompt.
+Only the current lease holder may report progress, commit artifacts, authorize a
+delivery, report a delivery, or complete the task. This prevents a stale Agent
+attempt from committing after a retry has claimed the task.
 
-The current Search vNext plan lives in
-`docs/superpowers/specs/2026-06-24-search-vnext-roadmap.md` and keeps semantic
-search gated behind a local-runtime spike.
+```mermaid
+stateDiagram-v2
+    [*] --> queued
+    queued --> awaiting_policy: automatic processing disabled
+    awaiting_agent --> awaiting_policy: automatic processing disabled
+    awaiting_policy --> queued: policy re-enabled or explicit manual takeover
+    queued --> awaiting_agent: Hermes unavailable
+    awaiting_agent --> running: claimed with lease
+    queued --> running: claimed with lease
+    running --> artifacts_committed: transcript and summary committed together
+    artifacts_committed --> completed: no external delivery
+    artifacts_committed --> sending: Notion explicitly authorized
+    sending --> delivery_reported: Hermes reports page URL or ID
+    delivery_reported --> completed: audit passes
+    running --> failed: deterministic failure
+    sending --> delivery_unverified: outcome uncertain
+    delivery_reported --> delivery_unverified: Host restarts before completion
+    delivery_unverified --> completed: user confirms existing page
+    delivery_unverified --> cancelled: user abandons delivery
+```
+
+On Host restart, interrupted local processing returns to `queued`. A task that
+may already have contacted Notion becomes `delivery_unverified`; it is never
+blindly replayed as if the side effect were known to have failed.
+Likewise, policy-disabled dispatchable tasks move to `awaiting_policy`; the Host
+does not claim them, and capture completion receives a permanent policy result
+rather than creating a future implicit backlog. The global `enabled` switch also
+disables manual work and on-demand transcription. The narrower
+`auto_process_recordings` switch pauses only automatic work: dictation and manual
+reprocessing remain available, and explicit manual takeover promotes the same
+paused task instead of admitting a duplicate.
+
+## Artifact commit boundary
+
+Each task has a private Host-owned directory under
+`~/.config/yulu/agent-tasks/<task-id>/`. The transcription transport stages
+`transcript.txt`; Hermes never receives a general file tool or either path.
+Instead, the artifact MCP exposes only task-scoped operations to:
+
+- read the leased task transcript;
+- stage the complete Markdown summary;
+- commit the fixed `transcript.txt` and `summary.md` pair.
+
+The Agent then calls the authenticated `recording_artifact_commit` MCP tool with
+the task ID, lease, and provenance. The Host:
+
+1. verifies both files exist, contain text, and are within size limits;
+2. checks that the audio filename matches the task recording stem;
+3. writes both final files with private permissions using temporary files and
+   atomic rename;
+4. records SHA-256, byte size, MIME type, provenance, and commit time;
+5. advances the task only after both artifact records are stored.
+
+Directly writing a final recording sidecar does not complete a task.
+
+## Notion side-effect boundary
+
+Notion is disabled per task unless `sendToNotion=true` was recorded at enqueue
+time. Recording work uses two non-overlapping MCP servers:
+
+- `/mcp/recording-artifact`, configured in Hermes as `yulu_artifact`, exposes
+  only task get/progress, task-scoped transcript read, summary stage, and artifact
+  commit;
+- `/mcp/recording-delivery`, configured as `yulu_delivery`, exposes only task get,
+  Host-verified committed-summary read, and Notion begin/commit boundaries.
+
+The general `/mcp` server remains the full Yulu capability surface for interactive
+Agents. The artifact session receives only `yulu_artifact`; it has neither `file`
+nor any connector toolset. If delivery is authorized, the Host starts a new native
+Hermes session with only `yulu_delivery,notion`. It never resumes the artifact
+session containing raw-transcript context. The Host records and audits the two
+native session IDs separately, then backfills artifact provenance with the actual
+artifact session ID.
+
+After artifacts are committed:
+
+1. The Host validates the lease, opt-in, task state, and artifacts, then persists
+   `sending` and the stable delivery key before giving the new Agent session any
+   connector capability.
+2. Hermes requests `recording_begin_notion_delivery` to confirm the authorization
+   and receive any page identity already verified by an earlier delivery.
+3. Hermes reads the summary through `recording_committed_summary_read`; the Host
+   verifies the artifact row, expected path, byte count, and SHA-256 first.
+4. If the Host returned an existing page URL/ID, Hermes updates exactly that page
+   without search or create. Otherwise it searches the stable key
+   (`yulu-<task-id>`) once, updates the single exact match, or creates one page
+   only when the parsed search result is explicitly empty.
+6. Hermes uses its own Notion connector and includes that key as an idempotency
+   marker.
+7. Hermes reports the destination and page URL or ID with
+   `recording_commit_notion_delivery`.
+8. The Host accepts completion only when the delivery session contains no extra
+   connector calls, exactly one matching write, and a write result consistent
+   with the reported URL or page ID.
+
+The delivery identity is keyed by recording plus destination, not by whether the
+task happens to be `completed` at lookup time. If a later local reprocessing
+attempt fails before another external write, the next authorized send reuses the
+reported task, page identity, and stable `yulu-<task-id>` key. An uncertain write
+must instead be resolved through explicit confirm-or-abandon reconciliation;
+normal retry cannot cross that boundary.
+
+Yulu never reads Notion credentials and never treats Agent prose as proof that a
+page was created. Completion also requires an exported Hermes session showing
+either a direct update of the Host-verified page or a successful exact-marker
+search branch, plus a Notion write result matching the reported page identity and
+the Host calls in the required order.
+
+## General Agent separation
+
+The recording pipeline and interactive Agent Console are deliberately separate:
+
+- `resolveHermesAgentRuntime()` resolves Hermes for recording and dictation.
+- `resolveAgentRuntime()` resolves the configured or detected general Agent for
+  conversation.
+- Recording tasks remain Hermes-backed even when the general Agent is Codex,
+  Claude Code, or OpenClaw.
+- This boundary is fail-closed: if Hermes is unavailable, the task becomes
+  `awaiting_agent`. The Host never falls back to the general Agent for recording
+  speech or summaries.
+- The general Agent's connector configuration stays with that Agent. Yulu may
+  expose local recordings, search, prompts, glossary, health, and task tools, but
+  it does not proxy arbitrary connector calls.
+
+Connector ownership is partitioned by intent. Delivery of a recording's committed
+artifacts to Notion always belongs to the leased Hermes recording task and uses
+`agent_pipeline.notion_destination`, task opt-in, and the Host delivery key.
+A Notion action requested inside an unrelated conversation belongs to the selected
+general Agent and is not a recording delivery. The two paths must not silently
+trigger one another.
+
+## Python capture edge
+
+Python remains useful for macOS workflow glue, but it is not an AI control plane.
+Its runtime responsibilities are limited to:
+
+- capture start/stop/status calls;
+- meeting detection and scheduling around capture;
+- dictation audio capture plus authenticated Host transport;
+- completion-event delivery or durable local spooling;
+- local clipboard, notification, and permission helpers.
+
+Adding an Agent capability to Python is an architecture regression. New speech,
+summary, conversation, or connector behavior belongs in Hermes or the selected
+general Agent behind the existing Host contracts.
+
+## Local Host security
+
+The Host:
+
+- binds to `127.0.0.1`;
+- rejects Host headers other than localhost/loopback;
+- requires a constant-time-checked per-install bearer token for MCP, completion,
+  warm-up, and Agent transcription requests;
+- accepts transcription paths only inside the recording or dictation roots;
+- exposes audio files by basename from the configured recording directory;
+- stores task workspaces and databases under the machine-local config root.
+
+`GET /healthz` is intentionally unauthenticated and reports only process health.
+It proves that the loopback Host is listening, not that Hermes or the recording
+pipeline is healthy.
+
+## Privacy boundary
+
+Raw capture is local. Enabling automatic Agent processing authorizes Yulu to hand
+audio to Hermes; Hermes' own provider determines whether that processing stays
+on-device or uses a remote service. Documentation and UI must not describe this
+as unconditionally local speech recognition.
+
+Notion requires a separate per-task opt-in. Other interactive connector actions
+belong to the general Agent and follow that Agent's own consent and credential
+model. Yulu configuration must not contain connector secrets.
+
+Runtime databases, bearer tokens, task workspaces, sockets, locks, and event
+spools must remain machine-local. A user may choose another recording content
+directory, but live runtime state must not be placed in a sync folder.
+
+## macOS and platform boundary
+
+macOS is the only shipped capture arm. ScreenCaptureKit, AVFoundation, TCC,
+launchd, Accessibility, and menu-bar integration are intentional platform
+details. Neutral platform seams may describe capture, paths, permissions,
+dependencies, and service lifecycle, but another platform is not supported until
+it supplies equivalent native permission and capture behavior.
+
+Do not replace the macOS capture arm with a cross-platform Python recorder. The
+portable boundary starts after a validated recording artifact exists.
+
+## Non-goals
+
+- Provider selection or model tuning inside Yulu.
+- A Yulu-owned summary, conversation, or connector runtime.
+- Hidden external delivery or automatic replay of uncertain side effects.
+- Multiple independent artifact commit paths.
+- Cloud synchronization of live Host state.
+
+## Related documents
+
+- [`configuration.md`](configuration.md)
+- [`operations.md`](operations.md)
+- [`ADR index`](../yulu/spec/adr/README.md)

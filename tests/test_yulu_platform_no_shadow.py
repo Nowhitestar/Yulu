@@ -1,7 +1,7 @@
 """Stdlib-shadow guard for the platform seam (RESEARCH Pitfall 1, threat T-01-01).
 
-The ``stt_daemon`` plist puts ``yulu/scripts`` on ``PYTHONPATH`` and ``doctor.py``
-inserts it on ``sys.path``. If the platform package were ever named ``platform/``
+The runtime puts ``yulu/scripts`` on ``PYTHONPATH`` and ``doctor.py`` inserts it
+on ``sys.path``. If the platform package were ever named ``platform/``
 instead of ``yulu_platform/``, ``import platform`` from any process with
 ``yulu/scripts`` on the path would resolve to OUR package instead of the stdlib
 ``platform`` module — which ``numpy`` (imported by ``echo_cancel.py``) pulls in
@@ -20,7 +20,7 @@ SCRIPTS = ROOT / "yulu" / "scripts"
 
 
 def test_stdlib_platform_not_shadowed():
-    # Reproduce the daemon's path order: yulu/scripts at the FRONT of sys.path.
+        # Reproduce the runtime path order: yulu/scripts at the FRONT of sys.path.
     sys.path.insert(0, str(SCRIPTS))
     try:
         # Drop any cached binding so the import re-resolves against the path above.

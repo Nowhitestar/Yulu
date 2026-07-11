@@ -29,7 +29,7 @@ def _sample_report() -> HostCapabilityReport:
     report.capabilities["claude"] = Capability(
         Provenance.HOST_PATH, Status.USABLE, "/usr/local/bin/claude", "claude v1.2.3"
     )
-    report.capabilities["whisper-cli"] = Capability(
+    report.capabilities["hermes"] = Capability(
         Provenance.ABSENT, Status.ABSENT, "", "not found"
     )
     report.capabilities["recording-dir"] = Capability(

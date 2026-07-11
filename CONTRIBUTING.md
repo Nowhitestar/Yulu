@@ -4,20 +4,21 @@ Thanks for considering a contribution. Yulu is small enough that the process is 
 
 ## Ground rules
 
-- **Privacy is the product.** Anything that sends audio, transcripts, or calendar data off the device by default is a non-starter. Cloud features are opt-in, off by default, and isolated behind a single config flag.
+- **Privacy boundaries must be explicit.** Native capture and durable task state stay local. Agent/model and connector behavior belongs to the selected local Agent; every Yulu-triggered external delivery must be separately authorized and auditable.
 - **No virtual audio devices.** The whole point of the ScreenCaptureKit path is that users do not need to install BlackHole / Loopback / multi-output devices. PRs that introduce a virtual driver as a hard requirement will not be accepted.
 - **Recording must always ask.** `notify.py` consent prompts are not optional, even for "convenience" auto-record paths.
-- **Bring-your-own-LLM.** Do not hard-code one vendor in the summary path. The agent queue (`agent-queue.json`) and the configurable `llm.command` are the two supported entry points.
+- **Do not rebuild the Agent.** Hermes owns recording transcription, summary reasoning, and authorized connector use. Yulu owns native capture, durable tasks, leases, task-scoped artifacts, policy, and audit. Agent Console may use another selected Agent without changing the recording pipeline.
 
 ## Before you open a PR
 
-1. **Run the existing flow end-to-end** on your own machine: `setup.sh` → trigger a manual recording → confirm `transcript.txt` and `summary.md` get written. Smoke-test changes in `meeting_daemon.py`, `audio_daemon.swift`, and `transcribe.py` against a real meeting whenever you can.
-2. **Do not commit secrets.** `.gitignore` blocks the obvious files (`client_secret*.json`, `config.json`, recordings) but the responsibility is yours. If you ever pasted real tokens during development, rotate them in Google Cloud and revoke the old client.
+1. **Run the existing flow end-to-end** on your own machine: `make dev-install` → `yulu doctor --json` → trigger a manual recording → confirm its durable Host task completes and both `transcript.txt` and `summary.md` are committed. Exercise `meeting_daemon.py`, `audio_daemon.swift`, and the TypeScript recording pipeline when those boundaries change.
+2. **Do not commit secrets or user data.** `.gitignore` blocks common config, token, recording, and transcript paths, but the responsibility is yours. Rotate the Yulu MCP token and revoke any affected Agent/calendar credential after exposure.
 3. **Match the codebase style.**
    - Python: type hints where it helps, no new heavy dependencies, prefer the standard library.
+   - TypeScript: preserve the Host state-machine invariants and add failure/restart/idempotency tests for every new transition.
    - Swift: keep `audio_daemon.swift` and `recorder_status.swift` runnable as standalone files; do not split into a Swift package without prior discussion.
    - Shell: `bash`, `set -e` style. The installer must remain idempotent.
-4. **Update docs.** README for user-visible changes, `docs/operations.md` for new commands, `CHANGELOG.md` for everything that lands.
+4. **Update current docs.** README for user-visible changes and `docs/operations.md` for operational changes. Use a Conventional Commit/PR title; release-please owns `VERSION` and `CHANGELOG.md`.
 
 ## What is in scope
 
@@ -25,26 +26,26 @@ Thanks for considering a contribution. Yulu is small enough that the process is 
 |---|---|
 | Audio | Stability fixes, sample rate negotiation, AirPods edge cases |
 | Detection | More meeting apps (Webex, BlueJeans, Discord stages, etc.) |
-| Transcription | Speaker diarization, punctuation post-processing, language auto-detect |
-| Summary templates | New template variants under `scripts/summary_template*.md` |
+| Agent pipeline | Hermes compatibility, capability isolation, recovery, idempotency, and audit |
+| Summary prompts | Prompt-library improvements that preserve Agent ownership |
 | Calendars | Outlook / iCloud calendar adapters that mirror the Google one |
-| Output sinks | Notion / Telegram / Zulip / local Obsidian vault formatters |
-| Packaging | Homebrew tap, signed `Yulu.app` releases on GitHub |
+| Connectors | Agent-owned connector workflows with explicit Yulu authorization and verified results |
+| Packaging | Checksum-verified, signed, notarized, and stapled runtime releases |
 
 ## What is out of scope (for now)
 
 - Cross-platform ports (Windows / Linux). The macOS-native path is the moat; a cross-platform version would be a fork, not a PR.
-- Realtime UI / Electron desktop app. The floating Swift status window is on purpose minimal.
-- Vendor-specific cloud transcription as the default path. Adapters are fine; defaults are not.
+- Reimplementing transcription, summarization, chat, or connector engines that Hermes or the selected Agent already provides.
+- Unsigned production installer assets or updater paths that require administrator privileges.
 
 ## Reporting bugs
 
 Open an issue with:
 
 1. macOS version + Apple Silicon / Intel.
-2. `echo '{"action":"status"}' | nc -w 2 -U ~/.config/yulu/audio_daemon.sock` output.
-3. The last ~50 lines of `~/Library/Logs/yulu/*.log` (or wherever your LaunchAgent log path resolves to).
-4. What you expected vs. what happened.
+2. The relevant, redacted section of `yulu doctor --json`.
+3. The Host task ID/state and the last ~50 relevant lines from `~/.config/yulu/*.log`; never include tokens, transcripts, or meeting content.
+4. Hermes version/contract status and what you expected versus what happened.
 
 ## Security
 

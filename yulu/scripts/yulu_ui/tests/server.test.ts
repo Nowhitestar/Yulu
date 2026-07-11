@@ -1,12 +1,14 @@
-import { describe, it, expect, afterAll, beforeAll } from "vitest";
-import { mkdtempSync, mkdirSync, cpSync, rmSync, writeFileSync, existsSync, readFileSync } from "node:fs";
+import { describe, it, expect, afterAll, beforeAll, vi } from "vitest";
+import { mkdtempSync, mkdirSync, cpSync, rmSync, writeFileSync, readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { request as httpRequest } from "node:http";
 import Database from "better-sqlite3";
 import { startServer, type RunningServer } from "../src/server.js";
-import { notionMcpPendingPath, notionMcpTokenPath } from "../src/notionMcpOAuth.js";
+import { HostStore } from "../src/hostStore.js";
+import { RecordingPipeline } from "../src/recordingPipeline.js";
+import { AgentUnavailableError } from "../src/agentGateway.js";
 
 function rawHttp(port: number, path: string, hostHeader: string): Promise<{ status: number; body: string }> {
   return new Promise((resolve, reject) => {
@@ -29,6 +31,10 @@ beforeAll(async () => {
   const configDir = join(root, ".config", "yulu");
   mkdirSync(configDir, { recursive: true });
   cpSync(join(HERE, "fixtures/config.json"), join(configDir, "config.json"));
+  const configPath = join(configDir, "config.json");
+  const config = JSON.parse(readFileSync(configPath, "utf8")) as Record<string, unknown>;
+  config.llm = { ...(config.llm as Record<string, unknown>), enabled: false };
+  writeFileSync(configPath, JSON.stringify(config));
 
   // Stub minimum DBs so lazy openDb doesn't fail if accessed
   for (const f of ["prompts.sqlite", "vocab.sqlite", "search.sqlite"]) {
@@ -100,6 +106,97 @@ describe("server", () => {
     expect(r.status).toBe(401);
   });
 
+  it("protects Agent transcription endpoints with the Bearer token", async () => {
+    const configDir = join(env.root, ".config", "yulu");
+    writeFileSync(join(configDir, "mcp-token.json"), JSON.stringify({ token: "test-token" }));
+    for (const path of ["/api/agent/transcription/warm", "/api/agent/transcribe"]) {
+      const response = await fetch(`${env.baseUrl}${path}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Yulu-MCP-Token": "test-token" },
+        body: path.endsWith("/transcribe") ? JSON.stringify({ audioPath: "/tmp/input.wav" }) : undefined,
+      });
+      expect(response.status).toBe(401);
+    }
+  });
+
+  it("returns warm and on-demand Hermes transcription results to authenticated callers", async () => {
+    const configDir = join(env.root, ".config", "yulu");
+    const audioPath = join(env.root, "Movies", "Yulu", "Dictation_20260711_130000.wav");
+    writeFileSync(join(configDir, "mcp-token.json"), JSON.stringify({ token: "test-token" }));
+    writeFileSync(audioPath, Buffer.alloc(44));
+    const warmSpy = vi.spyOn(RecordingPipeline.prototype, "warmTranscription")
+      .mockResolvedValueOnce({ provider: "hermes" });
+    const transcribeSpy = vi.spyOn(RecordingPipeline.prototype, "transcribeOnDemand")
+      .mockResolvedValueOnce({ transcript: "hello dictation", provider: "xai", chunks: 1 });
+    const headers = { "Content-Type": "application/json", "Authorization": "Bearer test-token" };
+    try {
+      const warm = await fetch(`${env.baseUrl}/api/agent/transcription/warm`, { method: "POST", headers });
+      expect(warm.status).toBe(200);
+      expect(await warm.json()).toEqual({ ok: true, provider: "hermes" });
+
+      const transcribe = await fetch(`${env.baseUrl}/api/agent/transcribe`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ audioPath }),
+      });
+      expect(transcribe.status).toBe(200);
+      expect(await transcribe.json()).toEqual({
+        ok: true,
+        transcript: "hello dictation",
+        provider: "xai",
+        chunks: 1,
+      });
+      expect(transcribeSpy).toHaveBeenCalledWith({ audioPath });
+    } finally {
+      warmSpy.mockRestore();
+      transcribeSpy.mockRestore();
+    }
+  });
+
+  it("rejects out-of-scope transcription paths before contacting the Agent", async () => {
+    const configDir = join(env.root, ".config", "yulu");
+    writeFileSync(join(configDir, "mcp-token.json"), JSON.stringify({ token: "test-token" }));
+    const outside = join(env.root, "outside.wav");
+    writeFileSync(outside, Buffer.alloc(44));
+    const response = await fetch(`${env.baseUrl}/api/agent/transcribe`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": "Bearer test-token" },
+      body: JSON.stringify({ audioPath: outside }),
+    });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ ok: false, error: "invalid_agent_transcription" });
+  });
+
+  it("surfaces unavailable Hermes warm/transcribe requests without falling back", async () => {
+    const configDir = join(env.root, ".config", "yulu");
+    const moviesDir = join(env.root, "Movies", "Yulu");
+    writeFileSync(join(configDir, "mcp-token.json"), JSON.stringify({ token: "test-token" }));
+    const audioPath = join(moviesDir, "Dictation_20260711_120000.wav");
+    writeFileSync(audioPath, Buffer.alloc(44));
+    const headers = { "Content-Type": "application/json", "Authorization": "Bearer test-token" };
+
+    const warmSpy = vi.spyOn(RecordingPipeline.prototype, "warmTranscription")
+      .mockRejectedValueOnce(new AgentUnavailableError("Hermes offline"));
+    const transcribeSpy = vi.spyOn(RecordingPipeline.prototype, "transcribeOnDemand")
+      .mockRejectedValueOnce(new AgentUnavailableError("Hermes offline"));
+    try {
+      const warm = await fetch(`${env.baseUrl}/api/agent/transcription/warm`, { method: "POST", headers });
+      expect(warm.status).toBe(503);
+      expect(await warm.json()).toMatchObject({ ok: false, error: "agent_unavailable" });
+
+      const transcribe = await fetch(`${env.baseUrl}/api/agent/transcribe`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ audioPath }),
+      });
+      expect(transcribe.status).toBe(503);
+      expect(await transcribe.json()).toMatchObject({ ok: false, error: "agent_unavailable" });
+    } finally {
+      warmSpy.mockRestore();
+      transcribeSpy.mockRestore();
+    }
+  });
+
   it("/mcp initializes with the correct token", async () => {
     const configDir = join(env.root, ".config", "yulu");
     writeFileSync(join(configDir, "mcp-token.json"), JSON.stringify({ token: "test-token" }));
@@ -117,8 +214,193 @@ describe("server", () => {
     const body = await mcpPost("tools/list") as { result?: { tools?: Array<{ name: string }> } };
     const names = body.result?.tools?.map((tool) => tool.name) ?? [];
     expect(names).toContain("recording_get");
-    expect(names).toContain("recording_summarize");
+    expect(names).toContain("recording_artifact_commit");
+    expect(names).toContain("recording_begin_notion_delivery");
+    expect(names).toContain("recording_commit_notion_delivery");
+    expect(names).not.toContain("recording_transcribe");
+    expect(names).not.toContain("recording_summarize");
+    expect(names).not.toContain("summary_send");
     expect(names).not.toContain("recording_delete");
+  });
+
+  it("exposes separate minimal artifact and delivery MCP capability sets", async () => {
+    const configDir = join(env.root, ".config", "yulu");
+    writeFileSync(join(configDir, "mcp-token.json"), JSON.stringify({ token: "test-token" }));
+    const initialized = await mcpPost("initialize", {
+      protocolVersion: "2025-06-18",
+      capabilities: {},
+      clientInfo: { name: "test", version: "1.0" },
+    }, "/mcp/recording-artifact") as { result?: { serverInfo?: { name?: string } } };
+    expect(initialized.result?.serverInfo?.name).toBe("yulu-recording-artifact");
+
+    const body = await mcpPost("tools/list", undefined, "/mcp/recording-artifact") as {
+      result?: { tools?: Array<{ name: string }> };
+    };
+    const names = body.result?.tools?.map((tool) => tool.name).sort() ?? [];
+    expect(names).toEqual([
+      "recording_artifact_commit",
+      "recording_task_get",
+      "recording_task_progress",
+      "recording_task_summary_stage",
+      "recording_task_transcript_read",
+    ]);
+    expect(names).not.toContain("recording_start");
+    expect(names).not.toContain("recording_stop");
+    expect(names.some((name) => name.startsWith("prompt"))).toBe(false);
+    expect(names.some((name) => name.startsWith("glossary"))).toBe(false);
+
+    const delivery = await mcpPost("tools/list", undefined, "/mcp/recording-delivery") as {
+      result?: { tools?: Array<{ name: string }> };
+    };
+    expect(delivery.result?.tools?.map((tool) => tool.name).sort()).toEqual([
+      "recording_begin_notion_delivery",
+      "recording_commit_notion_delivery",
+      "recording_committed_summary_read",
+      "recording_task_get",
+    ]);
+  });
+
+  it("accepts an authenticated recording completion once and exposes its durable task", async () => {
+    const configDir = join(env.root, ".config", "yulu");
+    const moviesDir = join(env.root, "Movies", "Yulu");
+    const token = "test-token";
+    writeFileSync(join(configDir, "mcp-token.json"), JSON.stringify({ token }));
+    const audioPath = join(moviesDir, "Pipeline_20260711_120000.wav");
+    writeFileSync(audioPath, Buffer.alloc(44));
+
+    const unauthorized = await fetch(`${env.baseUrl}/api/recordings/completed`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ audioPath, title: "Pipeline", sendToNotion: true }),
+    });
+    expect(unauthorized.status).toBe(401);
+
+    const post = () => fetch(`${env.baseUrl}/api/recordings/completed`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}` },
+      body: JSON.stringify({ audioPath, title: "Pipeline", sendToNotion: true }),
+    });
+    const first = await post();
+    expect(first.status).toBe(202);
+    const firstBody = await first.json() as { taskId: string; created: boolean };
+    expect(firstBody.created).toBe(true);
+    const secondBody = await (await post()).json() as { taskId: string; created: boolean };
+    expect(secondBody).toEqual({ taskId: firstBody.taskId, created: false, ok: true, state: expect.any(String) });
+
+    const taskCall = await mcpPost("tools/call", {
+      name: "recording_task_get",
+      arguments: { taskId: firstBody.taskId },
+    }) as { result?: { content?: Array<{ text?: string }> } };
+    const task = JSON.parse(taskCall.result?.content?.[0]?.text ?? "{}");
+    expect(task).toMatchObject({ id: firstBody.taskId, recordingStem: "Pipeline_20260711_120000", sendToNotion: true });
+  });
+
+  it("returns a permanent policy result instead of creating a disabled completion task", async () => {
+    const root = mkdtempSync(join(tmpdir(), "yulu-policy-disabled-"));
+    const configDir = join(root, ".config", "yulu");
+    const moviesDir = join(root, "Movies", "Yulu");
+    mkdirSync(configDir, { recursive: true });
+    mkdirSync(moviesDir, { recursive: true });
+    const configFile = join(configDir, "config.json");
+    const config = JSON.parse(readFileSync(join(HERE, "fixtures/config.json"), "utf8")) as Record<string, unknown>;
+    config.agent_pipeline = {
+      ...(config.agent_pipeline as Record<string, unknown>),
+      enabled: false,
+      auto_process_recordings: true,
+    };
+    writeFileSync(configFile, JSON.stringify(config));
+    writeFileSync(join(configDir, "mcp-token.json"), JSON.stringify({ token: "policy-token" }));
+    const audioPath = join(moviesDir, "Paused_20260711_130000.wav");
+    writeFileSync(audioPath, Buffer.alloc(44));
+    const server = await startServer({
+      configDir,
+      configFile,
+      moviesDir,
+      hostDb: join(configDir, "host.sqlite"),
+      agentTasksDir: join(configDir, "agent-tasks"),
+      recordingEventsDir: join(configDir, "recording-events"),
+      agentQueueJson: join(configDir, "agent-queue.json"),
+      mcpTokenJson: join(configDir, "mcp-token.json"),
+    });
+    try {
+      const response = await fetch(`http://127.0.0.1:${server.address.port}/api/recordings/completed`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": "Bearer policy-token" },
+        body: JSON.stringify({ audioPath, title: "Paused" }),
+      });
+      expect(response.status).toBe(409);
+      expect(await response.json()).toEqual({
+        ok: false,
+        error: "recording_pipeline_policy_disabled",
+        permanent: true,
+        detail: "Agent recording pipeline is disabled by policy",
+      });
+      const store = new HostStore(join(configDir, "host.sqlite"));
+      expect(store.listTasks()).toEqual([]);
+      store.close();
+    } finally {
+      await server.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("commits task-scoped artifacts before allowing a Notion delivery report", async () => {
+    const configDir = join(env.root, ".config", "yulu");
+    const moviesDir = join(env.root, "Movies", "Yulu");
+    const token = "test-token";
+    writeFileSync(join(configDir, "mcp-token.json"), JSON.stringify({ token }));
+    const audioPath = join(moviesDir, "Commit_20260711_120000.wav");
+    writeFileSync(audioPath, Buffer.alloc(44));
+    const response = await fetch(`${env.baseUrl}/api/recordings/completed`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}` },
+      body: JSON.stringify({ audioPath, title: "Commit", sendToNotion: true }),
+    });
+    const { taskId } = await response.json() as { taskId: string };
+
+    const secondWriter = new HostStore(join(configDir, "host.sqlite"));
+    const claimed = secondWriter.claim(taskId, "hermes");
+    expect(claimed?.id).toBe(taskId);
+    const workspace = join(configDir, "agent-tasks", taskId);
+    mkdirSync(workspace, { recursive: true });
+    writeFileSync(join(workspace, "transcript.txt"), "committed transcript");
+    const transcriptRead = await mcpPost("tools/call", {
+      name: "recording_task_transcript_read",
+      arguments: { taskId, leaseToken: claimed!.leaseToken },
+    }, "/mcp/recording-artifact") as { result?: { content?: Array<{ text?: string }> } };
+    expect(JSON.parse(transcriptRead.result?.content?.[0]?.text ?? "{}").transcript).toContain("committed transcript");
+    await mcpPost("tools/call", {
+      name: "recording_task_summary_stage",
+      arguments: { taskId, leaseToken: claimed!.leaseToken, summary: "# Committed summary" },
+    }, "/mcp/recording-artifact");
+
+    const commit = await mcpPost("tools/call", {
+      name: "recording_artifact_commit",
+      arguments: { taskId, leaseToken: claimed!.leaseToken, provenance: { transcriptionProvider: "test" } },
+    }, "/mcp/recording-artifact") as { result?: { content?: Array<{ text?: string }> } };
+    expect(JSON.parse(commit.result?.content?.[0]?.text ?? "{}").state).toBe("artifacts_committed");
+
+    const begin = await mcpPost("tools/call", {
+      name: "recording_begin_notion_delivery",
+      arguments: { taskId, leaseToken: claimed!.leaseToken },
+    }, "/mcp/recording-delivery") as { result?: { content?: Array<{ text?: string }> } };
+    expect(JSON.parse(begin.result?.content?.[0]?.text ?? "{}").status).toBe("sending");
+    const committedSummary = await mcpPost("tools/call", {
+      name: "recording_committed_summary_read",
+      arguments: { taskId, leaseToken: claimed!.leaseToken },
+    }, "/mcp/recording-delivery") as { result?: { content?: Array<{ text?: string }> } };
+    expect(JSON.parse(committedSummary.result?.content?.[0]?.text ?? "{}").summary).toContain("Committed summary");
+    await mcpPost("tools/call", {
+      name: "recording_commit_notion_delivery",
+      arguments: {
+        taskId,
+        leaseToken: claimed!.leaseToken,
+        url: "https://www.notion.so/test-page",
+      },
+    }, "/mcp/recording-delivery");
+    expect(secondWriter.getTask(taskId)?.state).toBe("delivery_reported");
+    expect(readFileSync(join(moviesDir, "Commit_20260711_120000.transcript.txt"), "utf8")).toContain("committed transcript");
+    secondWriter.close();
   });
 
   it("/mcp exposes recording text without WAV bytes", async () => {
@@ -267,36 +549,6 @@ describe("server", () => {
     }
   });
 
-  it("handles Notion MCP OAuth callback without exposing token values", async () => {
-    const configDir = join(env.root, ".config", "yulu");
-    writeFileSync(notionMcpPendingPath(configDir), JSON.stringify({
-      state: "state-123",
-      codeVerifier: "verifier",
-      clientId: "client",
-      redirectUri: `${env.baseUrl}/integrations/notion/callback`,
-      tokenEndpoint: "https://auth.notion.test/token",
-      authorizationEndpoint: "https://auth.notion.test/authorize",
-      createdAt: Date.now(),
-      expiresAt: Date.now() + 60_000,
-    }));
-    const originalFetch = globalThis.fetch;
-    globalThis.fetch = (async () => ({
-      ok: true,
-      status: 200,
-      json: async () => ({ access_token: "access-secret", refresh_token: "refresh-secret", token_type: "Bearer" }),
-      text: async () => "",
-    })) as unknown as typeof fetch;
-    try {
-      const r = await rawHttp(env.server.address.port, "/integrations/notion/callback?code=abc&state=state-123", `127.0.0.1:${env.server.address.port}`);
-
-      expect(r.status, r.body).toBe(200);
-      expect(r.body).toContain("Notion connected");
-      expect(r.body).not.toContain("access-secret");
-      expect(existsSync(notionMcpTokenPath(configDir))).toBe(true);
-    } finally {
-      globalThis.fetch = originalFetch;
-    }
-  });
 });
 
 function parseMcpResponse(text: string): unknown {
@@ -304,8 +556,8 @@ function parseMcpResponse(text: string): unknown {
   return JSON.parse(dataLine ? dataLine.slice(6) : text);
 }
 
-async function mcpPost(method: string, params?: unknown): Promise<unknown> {
-  const r = await fetch(`${env.baseUrl}/mcp`, {
+async function mcpPost(method: string, params?: unknown, path = "/mcp"): Promise<unknown> {
+  const r = await fetch(`${env.baseUrl}${path}`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",

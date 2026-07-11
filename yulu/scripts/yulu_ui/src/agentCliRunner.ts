@@ -109,7 +109,13 @@ function stripClaudeSessionFlags(args: string[]): string[] {
 }
 
 function stripHermesSessionFlags(args: string[]): string[] {
-  return stripFlagWithValue(args, new Set(["--resume", "-r", "--query", "-q"]));
+  return stripFlagWithValue(
+    args,
+    new Set(["--resume", "-r", "--query", "-q", "--toolsets", "-t"]),
+  ).filter((arg) => (
+    !/^--(?:resume|query|toolsets)=/.test(arg) &&
+    !/^-(?:r|q|t).+/.test(arg)
+  ));
 }
 
 function stripOpenClawSessionFlags(args: string[]): string[] {
@@ -145,7 +151,7 @@ export function buildClaudeSessionCommand(
 
 export function buildHermesSessionCommand(
   command: string[],
-  input: { nativeSessionId?: string; prompt: string },
+  input: { nativeSessionId?: string; prompt: string; toolsets?: readonly string[] },
 ): string[] {
   const [head, ...rawArgs] = command;
   if (!head) return command;
@@ -154,6 +160,11 @@ export function buildHermesSessionCommand(
   if (!args.includes("-Q") && !args.includes("--quiet")) args.push("-Q");
   if (!args.includes("--source")) args.push("--source", "yulu");
   if (input.nativeSessionId) args.push("--resume", input.nativeSessionId);
+  if (input.toolsets !== undefined) {
+    const toolsets = [...new Set(input.toolsets.map((value) => value.trim()).filter(Boolean))];
+    if (toolsets.length === 0) throw new Error("Hermes toolsets must not be empty");
+    args.push("--toolsets", toolsets.join(","));
+  }
   return [head, ...args, "--query", input.prompt];
 }
 
@@ -209,6 +220,14 @@ function extractCodexSessionId(stdout: string): string | undefined {
 function extractAnySessionId(text: string): string | undefined {
   UUID_ANYWHERE_RE.lastIndex = 0;
   return UUID_ANYWHERE_RE.exec(text)?.[0];
+}
+
+export function extractHermesSessionId(stderr: string): string | undefined {
+  for (const line of stderr.split(/\r?\n/)) {
+    const match = /^\s*session_id:\s*(\S+)\s*$/.exec(line);
+    if (match) return match[1];
+  }
+  return undefined;
 }
 
 function extractCodexFinalMessage(stdout: string): string {
@@ -304,6 +323,7 @@ export async function runAgentCliCommand(args: {
   nativeSessionId?: string;
   yuluSessionId?: string;
   configDir?: string;
+  hermesToolsets?: readonly string[];
 }): Promise<AgentCliRunResult> {
   if (!args.configDir) {
     return runLlmCommand(args.runtime.command, args.scriptDir, args.prompt, args.timeoutMs, args.runtime.cwd);
@@ -324,13 +344,17 @@ export async function runAgentCliCommand(args: {
     const command = buildHermesSessionCommand(args.runtime.command, {
       nativeSessionId: args.nativeSessionId,
       prompt: args.prompt,
+      toolsets: args.hermesToolsets,
     });
     const result = await runSpawnCommand(command, {
       cwd: args.runtime.cwd,
       stdin: "",
       timeoutMs: args.timeoutMs,
     });
-    const nativeSessionId = args.nativeSessionId || extractAnySessionId(`${result.stdout}\n${result.stderr}`);
+    const nativeSessionId =
+      args.nativeSessionId ||
+      extractHermesSessionId(result.stderr) ||
+      extractAnySessionId(`${result.stdout}\n${result.stderr}`);
     return { ...result, nativeSessionId };
   }
 

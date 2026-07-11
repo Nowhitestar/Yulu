@@ -31,7 +31,9 @@ def test_collect_report_identifies_source_runtime_and_legacy_paths():
     assert report["runtime_exists"] is True
     assert report["legacy_root_exists"] is False
     assert "checks" in report
+    assert "agent_pipeline" in report
     assert any(check["name"] == "python3" for check in report["checks"])
+    assert any(check["name"] == "hermes" for check in report["checks"])
 
 
 def test_collect_report_does_not_run_swiftc_version(tmp_path, monkeypatch):
@@ -47,11 +49,9 @@ def test_collect_report_does_not_run_swiftc_version(tmp_path, monkeypatch):
     monkeypatch.setattr(doctor, "_install_info", lambda root: {"present": False})
     monkeypatch.setattr(doctor, "_check_command", fake_check_command)
     monkeypatch.setattr(doctor, "_socket_status", lambda path: {"exists": False})
-    monkeypatch.setattr(doctor, "check_stt_daemon", lambda config_dir: {"ok": False})
     monkeypatch.setattr(doctor, "check_search_index", lambda config_dir: {"ok": False})
     monkeypatch.setattr(doctor, "check_yulu_ui", lambda script_dir, config_dir: {"ok": False})
     monkeypatch.setattr(doctor, "_host_capabilities", lambda config_dir, runtime_root: {"schema_version": 1, "capabilities": {}})
-    monkeypatch.setattr(doctor, "_connector_capabilities", lambda config_dir, runtime_root: {"schema_version": 1, "connectors": {}})
 
     doctor.collect_report(
         source_root=ROOT,
@@ -132,7 +132,7 @@ def test_release_runtime_without_git_is_healthy_source(tmp_path, capsys):
     assert data["source_install"]["version"] == "v9.9.9"
 
 
-def test_stt_daemon_section_present_when_config_empty(tmp_path):
+def test_retired_stt_daemon_section_is_absent(tmp_path):
     doctor = load_doctor()
     report = doctor.collect_report(
         source_root=ROOT,
@@ -140,18 +140,15 @@ def test_stt_daemon_section_present_when_config_empty(tmp_path):
         legacy_root=ROOT / "missing-legacy",
         config_dir=tmp_path,
     )
-    assert "stt_daemon" in report
-    sd = report["stt_daemon"]
-    assert sd["socket_present"] is False
-    assert sd["daemon_reachable"] is False
-    assert sd["vocab_db_present"] is False
-    assert report["privacy_opt_in"]["transcription"]["mode"] == "local"
+    assert "stt_daemon" not in report
+    assert report["privacy_opt_in"]["transcription"]["owner"] == "agent"
+    assert report["privacy_opt_in"]["transcription"]["yulu_executor"] is False
 
 
-def test_privacy_opt_in_section_flags_cloud_without_command(tmp_path):
+def test_privacy_opt_in_section_flags_disabled_agent_pipeline(tmp_path):
     doctor = load_doctor()
     (tmp_path / "config.json").write_text(
-        '{"transcription": {"mode": "cloud-priority", "cloud_command": []}}',
+        '{"agent_pipeline": {"enabled": false}}',
         encoding="utf-8",
     )
 
@@ -163,7 +160,168 @@ def test_privacy_opt_in_section_flags_cloud_without_command(tmp_path):
     )
 
     assert report["privacy_opt_in"]["ok"] is False
-    assert report["privacy_opt_in"]["transcription"]["cloud_opt_in"] is True
+    assert report["privacy_opt_in"]["transcription"]["ok"] is False
+
+
+def test_agent_pipeline_health_is_ok_when_required_runtime_is_ready(tmp_path):
+    doctor = load_doctor()
+    (tmp_path / "config.json").write_text(
+        '{"agent_pipeline": {"enabled": true}}', encoding="utf-8"
+    )
+    token = tmp_path / "mcp-token.json"
+    token.write_text('{"token": "abcdefghijklmnopqrstuvwxyz012345"}', encoding="utf-8")
+    token.chmod(0o600)
+
+    report = doctor.check_agent_pipeline(
+        tmp_path,
+        [
+            {"name": "hermes", "ok": True, "path": "/bin/hermes", "version": "1"},
+            {"name": "ffmpeg", "ok": True, "path": "/bin/ffmpeg", "version": "1"},
+        ],
+        {"healthz_ok": True, "port": 7777},
+    )
+
+    assert report["enabled"] is True
+    assert report["ok"] is True
+    assert report["reasons"] == []
+    assert report["components"]["mcp_token"]["mode"] == "0600"
+
+
+def test_enabled_agent_pipeline_fails_closed_when_runtime_is_unavailable(tmp_path):
+    doctor = load_doctor()
+    (tmp_path / "config.json").write_text(
+        '{"agent_pipeline": {"enabled": true}}', encoding="utf-8"
+    )
+
+    pipeline = doctor.check_agent_pipeline(
+        tmp_path,
+        [
+            {"name": "hermes", "ok": False, "path": ""},
+            {"name": "ffmpeg", "ok": True, "path": "/bin/ffmpeg"},
+        ],
+        {"healthz_ok": False, "port": 7777, "error": "down"},
+    )
+
+    assert pipeline["ok"] is False
+    assert set(pipeline["reasons"]) == {"hermes_cli", "mcp_token", "ui_healthz"}
+    assert doctor._overall_ok({
+        "checks": [{"name": "python3", "ok": True}],
+        "legacy_processes": [],
+        "source_git": {"is_repo": True},
+        "source_install": {"present": False},
+        "agent_pipeline": pipeline,
+    }) is False
+
+
+def test_hermes_contract_probes_required_command_surfaces(monkeypatch):
+    doctor = load_doctor()
+    outputs = {
+        ("serve", "--help"): "--port --host --skip-build",
+        ("sessions", "export", "--help"): "--session-id output",
+        ("config", "set", "--help"): "key value",
+        ("--help",): "--toolsets",
+    }
+
+    def fake_run(cmd, timeout=5, cwd=None):
+        return 0, outputs[tuple(cmd[1:])], ""
+
+    monkeypatch.setattr(doctor, "_run", fake_run)
+
+    contract = doctor.check_hermes_cli_contract("/opt/hermes/bin/hermes")
+
+    assert contract["ok"] is True
+    assert contract["required"] == ["serve", "sessions_export", "config_set", "toolsets"]
+    assert all(probe["ok"] for probe in contract["probes"].values())
+
+
+def test_hermes_contract_reports_incompatible_sessions_export(monkeypatch):
+    doctor = load_doctor()
+
+    def fake_run(cmd, timeout=5, cwd=None):
+        if cmd[1:3] == ["sessions", "export"]:
+            return 2, "", "unknown command"
+        return 0, "--port --host --skip-build --session-id output key value --toolsets", ""
+
+    monkeypatch.setattr(doctor, "_run", fake_run)
+
+    contract = doctor.check_hermes_cli_contract("/opt/hermes/bin/hermes")
+
+    assert contract["ok"] is False
+    assert contract["missing"] == ["sessions_export"]
+
+
+def test_hermes_phase_registration_requires_both_enabled_capability_servers(monkeypatch):
+    doctor = load_doctor()
+    output = """
+      Name             Transport                      Tools        Status
+      yulu_artifact    http://127.0.0.1:7777/mcp...   all          ✓ enabled
+      yulu_delivery    http://127.0.0.1:7777/mcp...   all          ✓ enabled
+    """
+    monkeypatch.setattr(doctor, "_run", lambda *_a, **_k: (0, output, ""))
+    assert doctor.check_hermes_phase_registration("/opt/hermes/bin/hermes")["ok"] is True
+
+    missing_delivery = output.replace(
+        "yulu_delivery    http://127.0.0.1:7777/mcp...   all          ✓ enabled",
+        "yulu_delivery    http://127.0.0.1:7777/mcp...   all          disabled",
+    )
+    monkeypatch.setattr(doctor, "_run", lambda *_a, **_k: (0, missing_delivery, ""))
+    result = doctor.check_hermes_phase_registration("/opt/hermes/bin/hermes")
+    assert result["ok"] is False
+    assert result["missing"] == ["yulu_delivery"]
+
+
+def test_agent_pipeline_fails_when_hermes_contract_is_incompatible(tmp_path):
+    doctor = load_doctor()
+    (tmp_path / "config.json").write_text(
+        '{"agent_pipeline": {"enabled": true}}', encoding="utf-8"
+    )
+    token = tmp_path / "mcp-token.json"
+    token.write_text('{"token": "abcdefghijklmnopqrstuvwxyz012345"}', encoding="utf-8")
+    token.chmod(0o600)
+
+    pipeline = doctor.check_agent_pipeline(
+        tmp_path,
+        [
+            {"name": "hermes", "ok": True, "path": "/bin/hermes"},
+            {"name": "ffmpeg", "ok": True, "path": "/bin/ffmpeg"},
+        ],
+        {"healthz_ok": True, "port": 7777},
+        hermes_contract={"ok": False, "probed": True, "missing": ["serve"]},
+    )
+
+    assert pipeline["ok"] is False
+    assert pipeline["reasons"] == ["hermes_contract"]
+
+
+def test_agent_pipeline_fails_when_phase_mcp_registration_is_missing(tmp_path):
+    doctor = load_doctor()
+    (tmp_path / "config.json").write_text(
+        '{"agent_pipeline": {"enabled": true}}', encoding="utf-8"
+    )
+    token = tmp_path / "mcp-token.json"
+    token.write_text('{"token": "abcdefghijklmnopqrstuvwxyz012345"}', encoding="utf-8")
+    token.chmod(0o600)
+    pipeline = doctor.check_agent_pipeline(
+        tmp_path,
+        [
+            {"name": "hermes", "ok": True, "path": "/bin/hermes"},
+            {"name": "ffmpeg", "ok": True, "path": "/bin/ffmpeg"},
+        ],
+        {"healthz_ok": True, "port": 7777},
+        hermes_phase_registration={"ok": False, "probed": True, "missing": ["yulu_delivery"]},
+    )
+    assert pipeline["ok"] is False
+    assert pipeline["reasons"] == ["hermes_phase_mcp"]
+
+
+def test_disabled_agent_pipeline_does_not_fail_overall_health(tmp_path):
+    doctor = load_doctor()
+    (tmp_path / "config.json").write_text(
+        '{"agent_pipeline": {"enabled": false}}', encoding="utf-8"
+    )
+    pipeline = doctor.check_agent_pipeline(tmp_path, [], {"healthz_ok": False})
+    assert pipeline["enabled"] is False
+    assert pipeline["ok"] is True
 
 
 def test_search_index_section_absent_db_reports_missing(tmp_path):

@@ -5,8 +5,7 @@ import { useT } from "../../i18n/LanguageProvider.js";
  * AdvancedDisclosure — a collapsible <details> that hides advanced/power-user
  * knobs behind a summary, collapsed by default (P3-2). Native <details> keeps it
  * keyboard-accessible and needs no controlled state; the summary carries a quiet
- * "change with care" note. Used for the `advanced` category content and the
- * automation match-array editors.
+ * "change with care" note. Used for automation match-array editors.
  *
  * `title`/`note` are already-resolved display strings (callers pass t("…")); when
  * omitted they fall back to the localized generic "Advanced / change with care".

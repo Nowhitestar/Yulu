@@ -1,10 +1,8 @@
-"""In-memory cache over the prompts.sqlite table + shared meeting-date helper."""
+"""In-memory cache over the prompts.sqlite Agent instruction table."""
 
 from __future__ import annotations
 
-import re
 import threading
-from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -13,39 +11,11 @@ from .db import (
 )
 
 
-_DATE_SUFFIX_RE = re.compile(r"_(\d{8})_\d{6}\.")
-
-
-def resolve_meeting_date(audio_path: Path) -> str:
-    """Resolve YYYY-MM-DD for a meeting audio file.
-
-    Strategy (4 tiers):
-      1. Look for `_YYYYMMDD_HHMMSS.` in the filename (audio_daemon naming).
-      2. Try to parse it as a date. On parse failure (e.g. "20269999"),
-         drop to tier 3.
-      3. Fall back to os.stat(path).st_mtime, system timezone.
-      4. On stat failure (file missing), return today's date.
-
-    Shared by transcribe.py (at enqueue) and agent_queue_worker (at dispatch)
-    so the value is stable across the queue boundary.
-    """
-    audio_path = Path(audio_path)
-    m = _DATE_SUFFIX_RE.search(audio_path.name)
-    if m:
-        try:
-            return datetime.strptime(m.group(1), "%Y%m%d").strftime("%Y-%m-%d")
-        except ValueError:
-            pass
-    try:
-        return datetime.fromtimestamp(audio_path.stat().st_mtime).strftime("%Y-%m-%d")
-    except OSError:
-        return datetime.now().strftime("%Y-%m-%d")
-
-
 class PromptsCache:
     """Loads prompts from sqlite; exposes auto_run / by_slug / by_id / render.
 
-    Architectural twin: yulu/scripts/stt_daemon/vocab_cache.py::VocabCache.
+    Kept intentionally small so Agent-owned dictation can render local prompts
+    without a resident transcription service.
     Same WAL-aware reload semantics, same threading.RLock.
 
     API:
@@ -166,7 +136,7 @@ class PromptsCache:
 
         my_transcript / their_transcript / speaker_transcript / speaker_list all
         default to "" so legacy callers and legacy prompts (mono / pre-Phase-3 /
-        pre-diarization) keep rendering EXACTLY unchanged — the additive-var contract.
+        older callers) keep rendering EXACTLY unchanged — the additive-var contract.
         """
         best_transcript = speaker_transcript or transcript
         return (prompt.content

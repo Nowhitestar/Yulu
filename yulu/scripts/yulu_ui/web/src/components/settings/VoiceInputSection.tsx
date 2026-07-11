@@ -35,13 +35,6 @@ const MOD_SYMBOLS: Record<(typeof MODIFIER_ORDER)[number], string> = {
   ctrl: "⌃",
   alt: "⌥",
 };
-const ENGINES = [
-  { value: "auto", label: "auto" },
-  { value: "hermes", label: "Hermes" },
-  { value: "mlx", label: "MLX" },
-  { value: "whisper", label: "Whisper.cpp" },
-];
-
 function formatHotkey(spec: HotkeySpec) {
   const mods = MODIFIER_ORDER
     .filter((m) => spec.modifiers.includes(m))
@@ -167,13 +160,6 @@ export function VoiceInputSection({ tracker }: VoiceInputSectionProps) {
         );
       })}
 
-      <InlineEditRow
-        label={t("settings.voice.engine")}
-        type="select"
-        value={dictation.engine ?? "auto"}
-        options={ENGINES}
-        onCommit={commit("transcription.dictation.engine") as (v: string) => void}
-      />
       <InlineEditRow
         label={t("settings.voice.prompt.dictate")}
         type="select"

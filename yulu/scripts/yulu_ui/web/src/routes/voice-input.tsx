@@ -13,7 +13,6 @@ interface HistoryItem {
   createdAt: string;
   action: "dictate" | "translate";
   text: string;
-  engine: string;
   promptSlug: string;
   targetLanguage: string;
 }
@@ -53,15 +52,15 @@ export function VoiceInput() {
   const utils = trpc.useUtils();
   const config = trpc.config.get.useQuery();
   const health = trpc.daemons.health.useQuery(undefined, { refetchInterval: 5_000 });
+  const transcriptionHealth = trpc.agentTasks.transcriptionHealth.useQuery(undefined, { refetchInterval: 5_000 });
   const recording = trpc.recording.state.useQuery(undefined, { refetchInterval: 1_000 });
   const history = trpc.recording.history.useQuery(undefined, { refetchInterval: 5_000 });
   const hotkeys = config.data?.status_agent.hotkeys;
   const dictation = config.data?.transcription.dictation;
   const translateLanguage = config.data?.transcription.dictation.target_language || "English";
   const agent = health.data?.find((d) => d.name === "com.yulu.statusagent");
-  const stt = health.data?.find((d) => d.name === "com.yulu.sttdaemon");
   const enabled = config.data?.status_agent.enabled ?? true;
-  const ready = enabled && agent?.status === "running" && stt?.status === "running";
+  const ready = enabled && agent?.status === "running" && transcriptionHealth.data?.available === true;
   const state = recording.data?.state ?? "idle";
   const isRecording = state === "recording" && recording.data?.dictationActive;
   const isProcessing = state === "processing";

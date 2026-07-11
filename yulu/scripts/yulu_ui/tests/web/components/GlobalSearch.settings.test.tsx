@@ -6,7 +6,7 @@ import { render, fireEvent, waitFor, within } from "@testing-library/react";
 // only hits are the client-side settings hits GlobalSearch synthesises.
 const SCHEMA = [
   { path: "audio.mic_device",       category: "audio",         label: "麦克风设备", type: "select", reload: { kind: "restart", daemons: ["audiodaemon"] } },
-  { path: "transcription.language", category: "transcription", label: "语言",      type: "text",   reload: { kind: "restart", daemons: ["sttdaemon"] } },
+  { path: "transcription.language", category: "transcription", label: "语言",      type: "text",   reload: { kind: "none" } },
   { path: "llm.enabled",            category: "llm",           label: "启用 LLM",  type: "toggle", reload: { kind: "none" } },
 ];
 

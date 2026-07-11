@@ -47,6 +47,20 @@ describe("PromptReader — existing prompt", () => {
     expect(onSave).toHaveBeenCalledWith({ name: "New Name" });
   });
 
+  it("limits autorun to summaries and clears it when the category changes", async () => {
+    const onSave = vi.fn();
+    render(<PromptReader prompt={EXISTING} onSave={onSave} onDelete={vi.fn()} />);
+    const user = userEvent.setup();
+
+    await user.selectOptions(screen.getByLabelText(/^类别$/i), "cleanup");
+    const toggle = screen.getByRole("switch");
+    expect(toggle).toBeDisabled();
+    expect(toggle).toHaveAttribute("aria-checked", "false");
+    expect(screen.getByText("自动运行仅适用于摘要模板。")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /^保存$/i }));
+    expect(onSave).toHaveBeenCalledWith({ category: "cleanup", isAutoRun: false });
+  });
+
   it("Delete button fires onDelete after confirm=true", async () => {
     const onDelete = vi.fn();
     render(<PromptReader prompt={EXISTING} onSave={vi.fn()} onDelete={onDelete} />);

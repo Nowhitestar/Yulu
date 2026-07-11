@@ -1,10 +1,5 @@
 #!/usr/bin/env python3
-"""Low-latency voice input experiment.
-
-Records a short mic-only clip through audio_daemon, sends it to stt_daemon as
-JobKind.DICTATION, applies the selected prompt as STT context, then writes the
-result to the clipboard and pastes it into the focused app unless disabled.
-"""
+"""Agent-owned voice input coordinated by Yulu's native capture layer."""
 
 from __future__ import annotations
 
@@ -41,26 +36,22 @@ CONFIG_DIR = _resolve_runtime_dir()
 CONFIG_PATH = CONFIG_DIR / "config.json"
 AUDIO_SOCKET = CONFIG_DIR / "audio_daemon.sock"
 STATUS_AGENT_SOCKET = CONFIG_DIR / "status_agent.sock"
-STT_SOCKET = CONFIG_DIR / "stt_daemon.sock"
+MCP_TOKEN_PATH = CONFIG_DIR / "mcp-token.json"
 PROMPTS_DB = CONFIG_DIR / "prompts.sqlite"
 VOCAB_DB = CONFIG_DIR / "vocab.sqlite"
 DICTATION_DIR = CONFIG_DIR / "dictation"
 STATE_PATH = DICTATION_DIR / "state.json"
 HISTORY_PATH = DICTATION_DIR / "history.jsonl"
-DICTATION_REALTIME_PID_PATH = DICTATION_DIR / "realtime.pid"
+LEGACY_REALTIME_PID_PATH = DICTATION_DIR / "realtime.pid"
 DEFAULT_PROMPT_SLUG = "dictation-cleanup"
 DEFAULT_TRANSLATE_PROMPT_SLUG = "dictation-translate"
 DEFAULT_UI_BASE_URL = "http://127.0.0.1:7777"
-DEFAULT_XAI_TRANSLATION_MODEL = "grok-4.20-0309-non-reasoning"
 DEFAULT_CONTEXT_LIMIT = 240
-DEFAULT_TIMEOUT_SEC = 3.0
-DEFAULT_DEADLINE_SEC = 3.0
 DEFAULT_HERMES_TIMEOUT_SEC = 30.0
 DEFAULT_HERMES_DEADLINE_SEC = 30.0
 DEFAULT_HERMES_TRANSLATE_TIMEOUT_SEC = 30.0
 DEFAULT_HERMES_TRANSLATE_DEADLINE_SEC = 30.0
-DEFAULT_DICTATION_REALTIME_CHUNK_SEC = 2.0
-DICTATION_REALTIME_STOP_WAIT_SEC = 4.0
+LEGACY_REALTIME_STOP_WAIT_SEC = 4.0
 FFMPEG_FALLBACKS = (
     Path("/opt/homebrew/opt/ffmpeg-full/bin/ffmpeg"),
     Path("/opt/homebrew/bin/ffmpeg"),
@@ -72,7 +63,6 @@ DEADLINE_RESERVE_SEC = 0.0
 MIN_STT_TIMEOUT_SEC = 0.2
 CLIPBOARD_RESERVE_SEC = 0.5
 PASTE_RESERVE_SEC = 0.8
-STT_RESPONSE_GRACE_SEC = 0.0
 CJK_CHAR_RE = r"\u3400-\u4dbf\u4e00-\u9fff"
 CJK_PUNCT_RE = "，。！？、；：,.!?;:"
 
@@ -151,6 +141,37 @@ def _config() -> dict[str, Any]:
     return _load_json(CONFIG_PATH)
 
 
+def _host_agent_request(path: str, payload: dict[str, Any], *, timeout_sec: float) -> dict[str, Any]:
+    token_doc = _load_json(MCP_TOKEN_PATH)
+    token = str(token_doc.get("token") or "").strip()
+    if not token:
+        raise DictationError("Yulu Host token is unavailable")
+    base_url = os.environ.get("YULU_UI_BASE_URL", "").strip()
+    if not base_url:
+        base_url = f"http://127.0.0.1:{os.environ.get('YULU_UI_PORT', '7777')}"
+    request = urllib.request.Request(
+        base_url.rstrip("/") + path,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=max(0.2, timeout_sec)) as response:
+            result = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
+        raise DictationError(f"Hermes transcription failed: HTTP {exc.code} {body}") from exc
+    except OSError as exc:
+        raise DictationError(f"Hermes transcription unavailable: {exc}") from exc
+    if not isinstance(result, dict) or result.get("ok") is not True:
+        detail = result.get("detail") if isinstance(result, dict) else "invalid Host response"
+        raise DictationError(f"Hermes transcription failed: {detail}")
+    return result
+
+
 def _dictation_config(config: dict[str, Any]) -> dict[str, Any]:
     trans = config.get("transcription", {})
     if not isinstance(trans, dict):
@@ -159,71 +180,14 @@ def _dictation_config(config: dict[str, Any]) -> dict[str, Any]:
     return item if isinstance(item, dict) else {}
 
 
-def dictation_realtime_enabled(config: dict[str, Any]) -> bool:
-    trans = config.get("transcription", {})
-    trans = trans if isinstance(trans, dict) else {}
-    if "realtime_enabled" in trans:
-        return bool(trans.get("realtime_enabled"))
-    audio = config.get("audio", {})
-    audio = audio if isinstance(audio, dict) else {}
-    return bool(audio.get("realtime_transcribe", True))
-
-
-def dictation_realtime_chunk_sec(config: dict[str, Any]) -> float:
-    dict_cfg = _dictation_config(config)
-    raw = dict_cfg.get("realtime_chunk_sec")
-    if raw is None:
-        trans = config.get("transcription", {})
-        trans = trans if isinstance(trans, dict) else {}
-        realtime = trans.get("realtime", {})
-        realtime = realtime if isinstance(realtime, dict) else {}
-        raw = realtime.get("dictation_chunk_sec")
-    try:
-        value = float(raw)
-    except (TypeError, ValueError):
-        value = DEFAULT_DICTATION_REALTIME_CHUNK_SEC
-    return max(0.5, value)
-
-
-def _explicit_engine(value: Any) -> str:
-    text = str(value or "").strip()
-    return "" if text.lower() == "auto" else text
-
-
 def resolve_engine(config: dict[str, Any], requested: str | None) -> str:
-    explicit = _explicit_engine(requested)
-    if explicit:
-        return explicit
-    dict_cfg = _dictation_config(config)
-    trans = config.get("transcription", {})
-    trans = trans if isinstance(trans, dict) else {}
-    realtime = trans.get("realtime", {})
-    realtime = realtime if isinstance(realtime, dict) else {}
-    return str(
-        _explicit_engine(dict_cfg.get("engine"))
-        or _explicit_engine(realtime.get("engine"))
-        or _explicit_engine(trans.get("final_engine"))
-        or "mlx"
-    )
-
-
-def _supports_native_english_translation(engine: str, target_language: str) -> bool:
-    target = target_language.strip().lower().replace("_", "-")
-    if target not in {"", "en", "eng", "english", "en-us", "en-gb"}:
-        return False
-    return engine.strip().lower().replace("_", "-") in {"mlx", "whisper", "whisper-cli"}
-
-
-def stt_context_prompt(engine: str, context_prompt: str) -> str:
-    native = {"mlx", "whisper", "whisper-cli", "whisper_cli"}
-    return "" if engine.strip().lower().replace("_", "-") in native else context_prompt
+    # Hermes owns engine/provider selection. Keep the CLI option only so older
+    # Shortcuts continue to parse while upgrading.
+    return "hermes"
 
 
 def resolve_translation_engine(config: dict[str, Any], requested: str | None, target_language: str) -> str:
-    engine = resolve_engine(config, requested)
-    if requested or _supports_native_english_translation(engine, target_language):
-        return engine
-    return "mlx" if _supports_native_english_translation("mlx", target_language) else engine
+    return "hermes"
 
 
 def resolve_language(config: dict[str, Any], requested: str | None) -> str:
@@ -322,46 +286,14 @@ def _is_dictation_audio_path(value: Any) -> bool:
         return text.startswith(str(DICTATION_DIR))
 
 
-def start_dictation_realtime(audio_path: str, *, config: dict[str, Any] | None = None) -> None:
-    cfg = config or _config()
-    if not dictation_realtime_enabled(cfg) or not audio_path:
-        return
-    script = Path(__file__).resolve().with_name("realtime_transcribe.py")
-    if not script.exists():
-        return
-    stop_dictation_realtime(wait=False)
-    DICTATION_DIR.mkdir(parents=True, exist_ok=True)
-    log_path = DICTATION_DIR / "realtime.log"
-    cmd = [
-        sys.executable,
-        str(script),
-        str(audio_path),
-        "Dictation",
-        "--chunk-sec",
-        f"{dictation_realtime_chunk_sec(cfg):g}",
-        "--unsubscribe-reason",
-        "dictation_stopped",
-    ]
-    try:
-        with log_path.open("ab") as log_file:
-            proc = subprocess.Popen(
-                cmd,
-                stdout=log_file,
-                stderr=log_file,
-                start_new_session=True,
-            )
-        DICTATION_REALTIME_PID_PATH.write_text(str(proc.pid), encoding="utf-8")
-    except Exception:
-        pass
-
-
-def stop_dictation_realtime(*, wait: bool = True) -> None:
-    if not DICTATION_REALTIME_PID_PATH.exists():
+def cleanup_legacy_realtime_sidecar(*, wait: bool = True) -> None:
+    """Stop a stale pre-Agent-native sidecar left by an older installation."""
+    if not LEGACY_REALTIME_PID_PATH.exists():
         return
     try:
-        pid = int(DICTATION_REALTIME_PID_PATH.read_text(encoding="utf-8").strip())
+        pid = int(LEGACY_REALTIME_PID_PATH.read_text(encoding="utf-8").strip())
     except Exception:
-        DICTATION_REALTIME_PID_PATH.unlink(missing_ok=True)
+        LEGACY_REALTIME_PID_PATH.unlink(missing_ok=True)
         return
 
     def alive() -> bool:
@@ -388,7 +320,7 @@ def stop_dictation_realtime(*, wait: bool = True) -> None:
             except Exception:
                 os.kill(pid, signal.SIGTERM)
             if wait:
-                deadline = time.time() + DICTATION_REALTIME_STOP_WAIT_SEC
+                deadline = time.time() + LEGACY_REALTIME_STOP_WAIT_SEC
                 while time.time() < deadline and alive():
                     time.sleep(0.1)
                 if alive():
@@ -401,7 +333,7 @@ def stop_dictation_realtime(*, wait: bool = True) -> None:
                             pass
     except Exception:
         pass
-    DICTATION_REALTIME_PID_PATH.unlink(missing_ok=True)
+    LEGACY_REALTIME_PID_PATH.unlink(missing_ok=True)
 
 
 def start_recording(
@@ -456,7 +388,6 @@ def start_recording(
             except Exception:
                 pass
     _write_json(STATE_PATH, state)
-    start_dictation_realtime(resp["file"], config=_config())
     return state
 
 
@@ -472,7 +403,7 @@ def stop_recording() -> dict[str, Any]:
     resp = _socket_send(AUDIO_SOCKET, {"action": "stop"}, timeout=8)
     if resp.get("status") != "stopped" or not resp.get("file"):
         raise DictationError(f"dictation stop failed: {resp}")
-    stop_dictation_realtime(wait=True)
+    cleanup_legacy_realtime_sidecar(wait=True)
     state["audio_path"] = resp["file"]
     state["recording_duration_sec"] = resp.get("duration", 0)
     state["stopped_at"] = _now()
@@ -501,7 +432,7 @@ def cancel_recording() -> dict[str, Any]:
         stopped = True
         audio_path = str(resp.get("file") or active_file or audio_path)
 
-    stop_dictation_realtime(wait=False)
+    cleanup_legacy_realtime_sidecar(wait=False)
     result = {
         "text": "",
         "action": "cancel",
@@ -548,29 +479,25 @@ def transcribe_dictation(
     target_language: str,
     timeout_sec: float,
 ) -> dict[str, Any]:
-    from transcribe_client import transcribe_file
-
     prepare_t0 = time.monotonic()
     stt_audio_path, tmp_audio_path, audio_stats = _prepare_dictation_audio_with_stats(audio_path)
     prepare_t1 = time.monotonic()
     try:
         stt_t0 = time.monotonic()
-        response = transcribe_file(
-            audio_path=stt_audio_path,
-            engine=engine,
-            language=language,
-            meeting_title="",
-            kind="dictation",
-            timeout_sec=max(0.2, timeout_sec - STT_RESPONSE_GRACE_SEC),
-            response_timeout_sec=timeout_sec,
-            connect_timeout_sec=1.0,
-            channel_split=False,
-            socket_path=STT_SOCKET,
-            context_prompt=context_prompt,
-            dictation_mode=dictation_mode,
-            target_language=target_language,
+        payload = _host_agent_request(
+            "/api/agent/transcribe",
+            {"audioPath": stt_audio_path},
+            timeout_sec=timeout_sec,
         )
         stt_t1 = time.monotonic()
+        response = {
+            "status": "ok",
+            "text": str(payload.get("transcript") or "").strip(),
+            "engine_used": "hermes",
+            "provider": str(payload.get("provider") or "hermes"),
+            "chunks": int(payload.get("chunks") or 0),
+            "language_used": language,
+        }
         response.update(audio_stats)
         response["prepare_ms"] = int((prepare_t1 - prepare_t0) * 1000)
         response["stt_ms"] = int((stt_t1 - stt_t0) * 1000)
@@ -590,13 +517,8 @@ def _wav_duration_ms(path: Path) -> int:
 
 
 def _trim_mono_voice(mono_path: Path) -> tuple[Path, Path | None, int]:
-    from stt_daemon.runtime import _prepare_channel_for_transcribe
-
-    trimmed = Path(tempfile.NamedTemporaryFile(suffix=".dictation.trim.wav", delete=False).name)
-    prepared, offset_ms = _prepare_channel_for_transcribe(mono_path, trimmed)
-    if prepared == trimmed:
-        return trimmed, trimmed, offset_ms
-    trimmed.unlink(missing_ok=True)
+    # Preprocessing policy belongs to Hermes; Yulu only normalizes transport to
+    # mono PCM so the Agent receives the microphone channel deterministically.
     return mono_path, None, 0
 
 
@@ -637,8 +559,19 @@ def _prepare_dictation_audio_with_stats(audio_path: str) -> tuple[str, Path | No
         return audio_path, None, stats
 
     tmp: Path | None = None
-    if sample_rate != 16000:
-        tmp = Path(tempfile.NamedTemporaryFile(suffix=".dictation.mic.16k.wav", delete=False).name)
+    if channels == 2:
+        DICTATION_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
+        try:
+            DICTATION_DIR.chmod(0o700)
+        except OSError:
+            pass
+        with tempfile.NamedTemporaryFile(
+            suffix=".dictation.mic.16k.wav",
+            dir=DICTATION_DIR,
+            delete=False,
+        ) as handle:
+            tmp = Path(handle.name)
+        tmp.chmod(0o600)
         try:
             subprocess.run(
                 [
@@ -658,14 +591,7 @@ def _prepare_dictation_audio_with_stats(audio_path: str) -> tuple[str, Path | No
             tmp = None
 
     if tmp is None:
-        from stt_daemon.runtime import _extract_channel
-
-        tmp = Path(tempfile.NamedTemporaryFile(suffix=".dictation.mic.wav", delete=False).name)
-        try:
-            _extract_channel(path, channel=0, out_path=tmp)
-        except Exception:
-            tmp.unlink(missing_ok=True)
-            raise
+        raise DictationError("failed to prepare dictation audio for Hermes")
 
     prepared, trimmed_tmp, offset_ms = _trim_mono_voice(tmp)
     if trimmed_tmp is not None:
@@ -688,15 +614,6 @@ def normalize_text(text: str) -> str:
     text = re.sub(fr"\s+([{re.escape(CJK_PUNCT_RE)}])", r"\1", text)
     text = re.sub(fr"([{re.escape(CJK_PUNCT_RE)}])\s+(?=[{CJK_CHAR_RE}])", r"\1", text)
     return text.strip()
-
-
-def strip_realtime_speaker_tags(text: str) -> str:
-    lines: list[str] = []
-    for line in text.splitlines():
-        cleaned = re.sub(r"^\[[^\]]+\]\s*", "", line).strip()
-        if cleaned:
-            lines.append(cleaned)
-    return normalize_text(" ".join(lines))
 
 
 def _cjk_only(text: str) -> str:
@@ -723,47 +640,6 @@ def preserve_short_cjk_replacements(source: str, candidate: str) -> str:
         elif tag == "insert":
             parts.append(candidate[j1:j2])
     return normalize_text("".join(parts))
-
-
-def realtime_dictation_response(audio_path: str) -> dict[str, Any] | None:
-    path = Path(audio_path)
-    realtime_path = path.with_suffix(".realtime.transcript.txt")
-    try:
-        from realtime_coverage import realtime_coverage_ok
-        from transcribe_text import read_realtime_transcript
-    except Exception:
-        return None
-    text = read_realtime_transcript(realtime_path)
-    if not text or not realtime_coverage_ok(path):
-        return None
-    cleaned = strip_realtime_speaker_tags(text)
-    if not cleaned:
-        return None
-    input_bytes = path.stat().st_size if path.exists() else 0
-    input_ms = _wav_duration_ms(path)
-    return {
-        "text": cleaned,
-        "engine_used": "realtime",
-        "language_used": "",
-        "prepare_ms": 0,
-        "stt_ms": 0,
-        "audio_input_bytes": input_bytes,
-        "stt_audio_bytes": 0,
-        "audio_input_ms": input_ms,
-        "stt_audio_ms": 0,
-        "trim_leading_ms": 0,
-        "realtime_reused": True,
-    }
-
-
-def stt_translation_is_final(response: dict[str, Any], target_language: str) -> bool:
-    target = target_language.strip().lower().replace("_", "-")
-    if target not in {"", "en", "eng", "english", "en-us", "en-gb"}:
-        return False
-    engine = str(response.get("engine_used") or "").strip().lower()
-    if engine not in {"mlx", "whisper", "whisper-cli", "whisper_cli"}:
-        return False
-    return translation_not_needed(extract_response_text(response), target_language)
 
 
 def translation_not_needed(text: str, target_language: str) -> bool:
@@ -793,66 +669,6 @@ def _agent_command(config: dict[str, Any]) -> list[str]:
     return []
 
 
-def _run_hermes_xai_chat_prompt(prompt: str, *, config: dict[str, Any], timeout_sec: float) -> str:
-    trans = config.get("transcription", {}) if isinstance(config, dict) else {}
-    trans = trans if isinstance(trans, dict) else {}
-    hermes = trans.get("hermes", {})
-    hermes = hermes if isinstance(hermes, dict) else {}
-    agent_dir = Path(str(hermes.get("agent_dir") or "~/.hermes/hermes-agent")).expanduser()
-    if not agent_dir.exists():
-        return ""
-    agent_dir_str = str(agent_dir)
-    if agent_dir_str not in sys.path:
-        sys.path.insert(0, agent_dir_str)
-    try:
-        from tools.xai_http import hermes_xai_user_agent, resolve_xai_http_credentials
-    except Exception:
-        return ""
-    creds = resolve_xai_http_credentials()
-    api_key = str(creds.get("api_key") or "").strip()
-    if not api_key:
-        return ""
-    base_url = str(creds.get("base_url") or "https://api.x.ai/v1").strip().rstrip("/")
-    payload = {
-        "model": DEFAULT_XAI_TRANSLATION_MODEL,
-        "messages": [
-            {
-                "role": "system",
-                "content": "You are a low-latency dictation postprocessor. Follow the user instructions exactly. Output only the final text.",
-            },
-            {"role": "user", "content": prompt},
-        ],
-        "max_tokens": 96,
-        "temperature": 0,
-    }
-    req = urllib.request.Request(
-        base_url + "/chat/completions",
-        data=json.dumps(payload).encode("utf-8"),
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-            "User-Agent": str(hermes_xai_user_agent()),
-        },
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=timeout_sec) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-    except TimeoutError as exc:
-        raise DictationError("dictation postprocess timeout") from exc
-    except urllib.error.URLError as exc:
-        if isinstance(exc.reason, TimeoutError):
-            raise DictationError("dictation postprocess timeout") from exc
-        return ""
-    except Exception:
-        return ""
-    choices = data.get("choices") if isinstance(data, dict) else None
-    if not isinstance(choices, list) or not choices:
-        return ""
-    message = choices[0].get("message") if isinstance(choices[0], dict) else None
-    return str((message or {}).get("content") or "").strip()
-
-
 def _run_agent_prompt(prompt: str, *, config: dict[str, Any], timeout_sec: float) -> str:
     if timeout_sec < MIN_STT_TIMEOUT_SEC:
         raise DictationError("dictation postprocess deadline exceeded")
@@ -860,10 +676,6 @@ def _run_agent_prompt(prompt: str, *, config: dict[str, Any], timeout_sec: float
     if not command:
         raise DictationError("dictation postprocess agent not configured")
     head = Path(command[0]).name
-    if head == "hermes":
-        fast = _run_hermes_xai_chat_prompt(prompt, config=config, timeout_sec=timeout_sec)
-        if fast:
-            return fast
     input_text = prompt
     cmd = command
     if head == "hermes":
@@ -921,22 +733,6 @@ def postprocess_translation(
     config: dict[str, Any] | None = None,
 ) -> str:
     vocab = glossary_hint(limit=160)
-    fast_prompt = "\n".join(
-        part for part in [
-            f"Instructions: {context_prompt.strip()}",
-            vocab,
-            f"Text: {text}",
-            f"Translate to {target_language}. Output only the final text.",
-        ]
-        if part
-    )
-    fast = _run_hermes_xai_chat_prompt(
-        fast_prompt,
-        config=config or _config(),
-        timeout_sec=timeout_sec,
-    )
-    if fast:
-        return normalize_text(fast)
     prompt = "\n\n".join(
         part for part in [
             context_prompt.strip(),
@@ -959,21 +755,8 @@ def postprocess_dictation(
     if not context_prompt.strip() or timeout_sec < MIN_STT_TIMEOUT_SEC:
         return text
     vocab = glossary_hint(limit=160)
-    fast_prompt = "\n".join(
-        part for part in [
-            f"Instructions: {context_prompt.strip()}",
-            vocab,
-            f"Text: {text}",
-            "Clean up this dictation for direct insertion. Preserve the words already recognized, especially names, numbers, technical terms, and near-homophones. Only fix spacing, punctuation, obvious filler words, and clear transcription glitches. Output only the final text.",
-            "保留已经识别出的词；不要擅自把近音词替换成另一个词。",
-        ]
-        if part
-    )
     cfg = config or _config()
     try:
-        fast = _run_hermes_xai_chat_prompt(fast_prompt, config=cfg, timeout_sec=timeout_sec)
-        if fast:
-            return preserve_short_cjk_replacements(text, normalize_text(fast))
         prompt = "\n\n".join(
             part for part in [
                 context_prompt.strip(),
@@ -1158,30 +941,15 @@ def send_voice_chat(
 
 
 def warm_dictation_engine(*, engine: str, timeout_sec: float, target_language: str = "") -> dict[str, Any]:
-    from stt_cli import _request_response
-    import asyncio
-
-    native_translate = bool(target_language) and _supports_native_english_translation(engine, target_language)
-    warm_engine = "mlx-realtime" if engine == "mlx" and not native_translate else engine
-    payload = asyncio.run(_request_response(
-        STT_SOCKET,
-        {"type": "warm_up", "engine": warm_engine},
-        timeout=timeout_sec,
-    ))
-    if payload and payload.get("type") == "error" and warm_engine != engine:
-        payload = asyncio.run(_request_response(
-            STT_SOCKET,
-            {"type": "warm_up", "engine": engine},
-            timeout=timeout_sec,
-        ))
-        warm_engine = engine
-    if payload is None:
-        raise DictationError("stt_daemon not reachable")
-    if payload.get("type") == "error":
-        raise DictationError(str(payload.get("message") or "warm-up failed"))
+    payload = _host_agent_request(
+        "/api/agent/transcription/warm",
+        {},
+        timeout_sec=timeout_sec,
+    )
+    warm_engine = str(payload.get("provider") or "hermes")
     return {
-        "text": str(payload.get("detail") or f"warmed {warm_engine}"),
-        "engine": engine,
+        "text": f"warmed {warm_engine}",
+        "engine": "hermes",
         "warmed_engine": warm_engine,
         "target_language": target_language,
         "ok": True,
@@ -1209,27 +977,21 @@ def process_audio(
         target_language=target_language,
     )
     t1 = time.monotonic()
-    response = realtime_dictation_response(str(state["audio_path"]))
-    if response is None:
-        response = transcribe_dictation(
-            audio_path=str(state["audio_path"]),
-            engine=engine,
-            language=language,
-            context_prompt=stt_context_prompt(engine, context),
-            dictation_mode="translate" if target_language else "dictate",
-            target_language=target_language,
-            timeout_sec=timeout_sec,
-        )
+    response = transcribe_dictation(
+        audio_path=str(state["audio_path"]),
+        engine=engine,
+        language=language,
+        context_prompt=context,
+        dictation_mode="translate" if target_language else "dictate",
+        target_language=target_language,
+        timeout_sec=timeout_sec,
+    )
     raw_text = extract_response_text(response)
     text = normalize_text(raw_text)
     if not text:
         raise DictationError("empty dictation result")
     postprocess_ms = 0
-    if (
-        target_language
-        and not stt_translation_is_final(response, target_language)
-        and not translation_not_needed(text, target_language)
-    ):
+    if target_language and not translation_not_needed(text, target_language):
         postprocess_t0 = time.monotonic()
         text = postprocess_translation(
             text=text,
@@ -1298,8 +1060,8 @@ def _print(result: dict[str, Any], *, as_json: bool) -> None:
 
 
 def _add_common(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--engine", help="STT engine: auto, mlx, whisper, hermes, cloud")
-    parser.add_argument("--language", help="STT language, default from config or zh")
+    parser.add_argument("--engine", help="deprecated compatibility option; Hermes always owns transcription")
+    parser.add_argument("--language", help="transcription language hint, default from config or zh")
     parser.add_argument("--prompt", default=None, help=f"prompt slug, default {DEFAULT_PROMPT_SLUG}; use 'none' to skip")
     parser.add_argument("--prompt-id", default=None, help="prompt id, overrides --prompt")
     parser.add_argument("--translate-to", default=None, help=f"translate dictation to this language via {DEFAULT_TRANSLATE_PROMPT_SLUG}")
@@ -1320,33 +1082,33 @@ def build_parser() -> argparse.ArgumentParser:
     start.add_argument("--silence-seconds", type=float, default=MANUAL_SILENCE_SECONDS)
     stop = sub.add_parser("stop", help="stop, transcribe, copy, and paste unless disabled")
     _add_common(stop)
-    stop.add_argument("--deadline-sec", type=float, default=None, help=f"post-stop wall-clock budget, default {DEFAULT_DEADLINE_SEC}")
+    stop.add_argument("--deadline-sec", type=float, default=None, help=f"post-stop wall-clock budget, default {DEFAULT_HERMES_DEADLINE_SEC}")
     toggle = sub.add_parser("toggle", help="start dictation, or stop the active dictation")
     _add_common(toggle)
-    toggle.add_argument("--deadline-sec", type=float, default=None, help=f"post-stop wall-clock budget, default {DEFAULT_DEADLINE_SEC}")
+    toggle.add_argument("--deadline-sec", type=float, default=None, help=f"post-stop wall-clock budget, default {DEFAULT_HERMES_DEADLINE_SEC}")
     toggle.add_argument("--silence-seconds", type=float, default=MANUAL_SILENCE_SECONDS)
     once = sub.add_parser("once", help="record for a fixed duration, then process")
     _add_common(once)
     once.add_argument("--duration", type=float, default=1.2, help="recording duration in seconds")
-    once.add_argument("--deadline-sec", type=float, default=None, help=f"overall once wall-clock budget, default {DEFAULT_DEADLINE_SEC}")
+    once.add_argument("--deadline-sec", type=float, default=None, help=f"overall once wall-clock budget, default {DEFAULT_HERMES_DEADLINE_SEC}")
     once.add_argument("--silence-seconds", type=float, default=3.0)
     ask = sub.add_parser("ask", help="record a question, send it to Agent Console, and open the chat")
     _add_common(ask)
     ask.add_argument("--duration", type=float, default=1.2, help="recording duration in seconds")
-    ask.add_argument("--deadline-sec", type=float, default=None, help=f"overall capture+STT budget before agent call, default {DEFAULT_DEADLINE_SEC}")
+    ask.add_argument("--deadline-sec", type=float, default=None, help=f"overall capture+transcription budget before agent call, default {DEFAULT_HERMES_DEADLINE_SEC}")
     ask.add_argument("--silence-seconds", type=float, default=3.0)
     ask.add_argument("--session-id", default="", help="continue an existing Agent Console session")
     ask.add_argument("--ui-url", default=DEFAULT_UI_BASE_URL, help=f"Yulu UI base URL, default {DEFAULT_UI_BASE_URL}")
     ask.add_argument("--no-open", action="store_true", help="do not open Agent Console after sending")
     ask_toggle = sub.add_parser("ask-toggle", help="start a voice-chat recording, or stop and send it")
     _add_common(ask_toggle)
-    ask_toggle.add_argument("--deadline-sec", type=float, default=None, help=f"post-stop wall-clock budget, default {DEFAULT_DEADLINE_SEC}")
+    ask_toggle.add_argument("--deadline-sec", type=float, default=None, help=f"post-stop wall-clock budget, default {DEFAULT_HERMES_DEADLINE_SEC}")
     ask_toggle.add_argument("--silence-seconds", type=float, default=MANUAL_SILENCE_SECONDS)
     ask_toggle.add_argument("--session-id", default="", help="continue an existing Agent Console session")
     ask_toggle.add_argument("--ui-url", default=DEFAULT_UI_BASE_URL, help=f"Yulu UI base URL, default {DEFAULT_UI_BASE_URL}")
     ask_toggle.add_argument("--no-open", action="store_true", help="do not open Agent Console after sending")
-    warm = sub.add_parser("warm", help="pre-warm the configured dictation STT engine")
-    warm.add_argument("--engine", help="STT engine: auto, mlx, whisper, hermes, cloud")
+    warm = sub.add_parser("warm", help="pre-warm Hermes transcription")
+    warm.add_argument("--engine", help="deprecated compatibility option; Hermes always owns transcription")
     warm.add_argument("--translate-to", default=None, help="pre-warm the translation engine for this target language")
     warm.add_argument("--timeout-sec", type=float, default=60.0)
     warm.add_argument("--json", action="store_true")
@@ -1394,16 +1156,13 @@ def main(argv: list[str] | None = None) -> int:
         else:
             prompt_slug = args.prompt or dict_cfg.get("prompt_slug") or DEFAULT_PROMPT_SLUG
         is_translate = bool(target_language)
-        hermes_translate = engine == "hermes" and is_translate
         default_timeout = (
             DEFAULT_HERMES_TRANSLATE_TIMEOUT_SEC if is_translate else
-            DEFAULT_HERMES_TIMEOUT_SEC if engine == "hermes" else
-            DEFAULT_TIMEOUT_SEC
+            DEFAULT_HERMES_TIMEOUT_SEC
         )
         default_deadline = (
             DEFAULT_HERMES_TRANSLATE_DEADLINE_SEC if is_translate else
-            DEFAULT_HERMES_DEADLINE_SEC if engine == "hermes" else
-            DEFAULT_DEADLINE_SEC
+            DEFAULT_HERMES_DEADLINE_SEC
         )
         if args.timeout_sec is not None:
             timeout_sec = float(args.timeout_sec)
@@ -1486,7 +1245,7 @@ def main(argv: list[str] | None = None) -> int:
             if remaining <= deadline_reserve_sec + MIN_STT_TIMEOUT_SEC:
                 raise DictationError(f"dictation deadline exceeded before STT ({deadline_sec:.1f}s)")
             timeout_sec = min(timeout_sec, remaining - deadline_reserve_sec)
-        engine = args.engine or state.get("engine") or engine
+        engine = resolve_engine(config, args.engine or state.get("engine") or engine)
         language = args.language or state.get("language") or language
         prompt_slug = args.prompt or state.get("prompt_slug") or prompt_slug
         prompt_id = args.prompt_id or state.get("prompt_id")

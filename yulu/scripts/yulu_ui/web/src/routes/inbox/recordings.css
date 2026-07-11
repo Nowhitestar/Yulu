@@ -153,43 +153,8 @@
 .recording-row-output {
   color: color-mix(in oklch, var(--accent) 72%, transparent);
 }
-.recording-row-output-live {
-  color: color-mix(in oklch, var(--green) 72%, transparent);
-}
 .recording-row-icons .rec-status {
   padding: 2px 6px;
-}
-.recording-row-wrap .share-popover-root {
-  position: absolute;
-  right: 12px;
-  top: 12px;
-  opacity: 0;
-  transform: translateY(2px);
-  transition: opacity 120ms, transform 120ms;
-}
-.recording-row-wrap:hover .share-popover-root,
-.recording-row-wrap:focus-within .share-popover-root,
-.recording-row-wrap:has(.recording-row.active) .share-popover-root {
-  opacity: 1;
-  transform: translateY(0);
-}
-.recording-row-share {
-  width: 28px;
-  height: 28px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border: 1px solid var(--edge-card);
-  border-radius: var(--radius-control);
-  color: var(--fg-2);
-  background: var(--glass-2);
-  backdrop-filter: var(--blur-pill);
-  -webkit-backdrop-filter: var(--blur-pill);
-  box-shadow: inset 0 1px 0 var(--edge-top);
-}
-.recording-row-share:hover {
-  color: var(--accent-on, var(--accent));
-  background: var(--accent-soft);
 }
 .recording-row-status {
   color: var(--accent-on, var(--accent));
@@ -227,12 +192,6 @@
 .recording-context-menu button:hover { background: var(--row-hover); }
 .recording-context-menu button.danger { color: var(--red); }
 .recording-context-menu button:disabled { opacity: 0.45; cursor: not-allowed; }
-.recording-share-panel {
-  position: fixed;
-  z-index: 110;
-  width: min(360px, calc(100vw - 24px));
-}
-
 @media (max-width: 760px) {
   .recording-row {
     padding: 10px 40px 10px calc(10px + var(--recording-indent));

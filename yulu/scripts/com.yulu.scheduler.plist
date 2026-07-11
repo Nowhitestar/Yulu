@@ -26,7 +26,7 @@
     <key>EnvironmentVariables</key>
     <dict>
         <key>PATH</key>
-        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:__HOME__/.nvm/versions/node/v22.22.1/bin</string>
+        <string>__PATH__</string>
     </dict>
 </dict>
 </plist>

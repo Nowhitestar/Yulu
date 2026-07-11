@@ -4,9 +4,7 @@ import { MemoryRouter } from "react-router";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 const navigateMock = vi.fn();
-const transcribeMutate = vi.fn();
-const summarizeMutate = vi.fn();
-const sendMutate = vi.fn();
+const reprocessMutate = vi.fn();
 const configurePluginMutate = vi.fn();
 const setDestinationMutate = vi.fn();
 const refreshDestinationMutate = vi.fn();
@@ -24,6 +22,7 @@ let mockSelectedSession: Record<string, unknown> | null = null;
 let mockZulipConfigured = false;
 let mockCalendars: Array<Record<string, unknown>> = [];
 let mockTasks: Array<Record<string, unknown>> = [];
+let mockDurableTasks: Array<Record<string, unknown>> = [];
 
 function taskFixture(overrides: Record<string, unknown> = {}) {
   const stages = overrides.stages as Record<string, unknown> | undefined;
@@ -38,7 +37,6 @@ function taskFixture(overrides: Record<string, unknown> = {}) {
     error: "",
     hasTranscript: true,
     hasSummary: true,
-    hasRealtime: false,
     ...overrides,
   };
 }
@@ -134,8 +132,7 @@ vi.mock("../../../web/src/trpc.js", () => {
         get: {
           useQuery: () => ({
             data: {
-              connectors: { notion: { send_summary: true }, zulip: { send_summary: false } },
-              output: { notion: { destination_label: "Meetings DB" }, zulip: { stream: "" } },
+              agent_pipeline: { auto_send_notion: true },
               calendars: mockCalendars,
             },
           }),
@@ -144,11 +141,8 @@ vi.mock("../../../web/src/trpc.js", () => {
       prompts: {
         list: { useQuery: () => ({ data: [{ id: "p1", slug: "summary", name: "会议纪要" }] }) },
       },
-      daemons: {
-        health: { useQuery: () => ({ data: [{ name: "com.yulu.sttdaemon", status: "running" }, { name: "com.yulu.agentqueue", status: "running" }] }) },
-      },
-      queue: {
-        list: { useQuery: () => ({ data: { total: 0, stats: {}, entries: [] }, isPending: false }) },
+      agentTasks: {
+        list: { useQuery: () => ({ data: mockDurableTasks, isPending: false }) },
       },
       scheduler: {
         overview: { useQuery: () => ({ data: { events: [], meetings: [] }, isPending: false }) },
@@ -162,9 +156,7 @@ vi.mock("../../../web/src/trpc.js", () => {
         toggle: { useMutation: () => mutation() },
       },
       recordings: {
-        transcribe: { useMutation: () => mutation(transcribeMutate) },
-        summarize: { useMutation: () => mutation(summarizeMutate) },
-        sendSummary: { useMutation: () => mutation(sendMutate) },
+        reprocess: { useMutation: () => mutation(reprocessMutate) },
       },
       ask: {
         ask: { useMutation: () => ({ mutateAsync: askMutateAsync, isPending: false }) },
@@ -218,9 +210,7 @@ function wrap(initialEntries = ["/agent-console"]) {
 beforeEach(() => {
   localStorage.removeItem("yulu_ui.agent.history_height");
   navigateMock.mockClear();
-  transcribeMutate.mockClear();
-  summarizeMutate.mockClear();
-  sendMutate.mockClear();
+  reprocessMutate.mockClear();
   configurePluginMutate.mockClear();
   setDestinationMutate.mockClear();
   refreshDestinationMutate.mockClear();
@@ -238,6 +228,11 @@ beforeEach(() => {
   mockZulipConfigured = false;
   mockCalendars = [{ type: "google", enabled: true, gog_account: "yulu@example.com", watch_calendars: ["primary"] }];
   mockTasks = [taskFixture()];
+  mockDurableTasks = [
+    { id: "task-queued", recordingStem: "Queued", title: "Queued recording", state: "queued", phase: "queued", agentProvider: "hermes", attempt: 0, error: null, createdAt: "", updatedAt: "" },
+    { id: "task-running", recordingStem: "Running", title: "Running recording", state: "running", phase: "summarizing", agentProvider: "hermes", attempt: 1, error: null, createdAt: "", updatedAt: "" },
+    { id: "task-failed", recordingStem: "Failed", title: "Failed recording", state: "failed", phase: "failed", agentProvider: "hermes", attempt: 1, error: "boom", createdAt: "", updatedAt: "" },
+  ];
   askMutateAsync.mockResolvedValue({
     answer: "OK",
     sources: [],
@@ -288,6 +283,17 @@ describe("AgentConsole", () => {
     expect(getByText("底层 Agent")).toBeInTheDocument();
   });
 
+  it("renders durable Agent task state in Run Tasks mode", () => {
+    const { getByText } = wrap();
+    fireEvent.click(getByText("跑任务"));
+
+    expect(getByText("Agent 任务")).toBeInTheDocument();
+    expect(getByText("Queued recording")).toBeInTheDocument();
+    expect(getByText("等待 1")).toBeInTheDocument();
+    expect(getByText("运行 1")).toBeInTheDocument();
+    expect(getByText("失败 1")).toBeInTheDocument();
+  });
+
   it("supports keyboard resizing for the history and recent-meetings split", () => {
     const { container } = wrap();
     const separator = container.querySelector(".agent-session-resizer") as HTMLElement;
@@ -311,64 +317,154 @@ describe("AgentConsole", () => {
     expect(getByText("配置快捷键").closest("a")).toHaveAttribute("href", "/settings/voice");
   });
 
-  it("shows recent task cards and can send a ready summary", () => {
+  it("shows recent task cards and sends through an authorized Hermes task", () => {
     const { getByText, container } = wrap();
     expect(getByText("Product Sync")).toBeInTheDocument();
     expect(container.querySelector(".agent-stage-line")).toBeNull();
 
-    const notionSend = getByText("发送 Notion").closest("button") as HTMLButtonElement | null;
+    const notionSend = getByText("处理并发送 Notion").closest("button") as HTMLButtonElement | null;
     expect(notionSend).not.toBeNull();
     fireEvent.click(notionSend!);
 
-    expect(sendMutate).toHaveBeenCalledWith(
-      { stem: "ProductSync_20260625_093000", channel: "notion" },
+    expect(reprocessMutate).toHaveBeenCalledWith(
+      { stem: "ProductSync_20260625_093000", promptId: "p1", sendToNotion: true },
       expect.any(Object),
     );
   });
 
-  it("shows transcribe progress in the same task action slot immediately after click", () => {
+  it("allows a paused automatic task to be taken over from the main Agent Console", async () => {
+    mockDurableTasks = [{
+      id: "task-auto-paused",
+      recordingStem: "ProductSync_20260625_093000",
+      title: "Product Sync",
+      trigger: "automatic",
+      state: "awaiting_policy",
+      phase: "queued",
+      sendToNotion: false,
+      agentProvider: "hermes",
+      attempt: 0,
+      error: "Automatic Agent recording processing is paused by policy",
+      createdAt: "2026-06-25T09:31:00.000Z",
+      updatedAt: "2026-06-25T09:31:00.000Z",
+    }];
+    const { getByRole, getByText } = wrap();
+
+    expect(getByText("Agent 自动处理已暂停")).toBeInTheDocument();
+    const processButton = getByRole("button", { name: "让 Hermes 处理" });
+    expect(processButton).toBeEnabled();
+    fireEvent.click(processButton);
+    expect(reprocessMutate).toHaveBeenCalledWith(
+      { stem: "ProductSync_20260625_093000", promptId: "p1", sendToNotion: false },
+      expect.any(Object),
+    );
+    mockDurableTasks = [{
+      ...mockDurableTasks[0],
+      state: "completed",
+      phase: "completed",
+      trigger: "manual",
+      updatedAt: "2999-06-25T09:32:00.000Z",
+    }];
+    fireEvent.click(getByText("能力"));
+    await waitFor(() => expect(getByText("Hermes 已处理")).toBeInTheDocument());
+  });
+
+  it("keeps an uncertain Notion delivery fenced in the main Agent Console", () => {
+    mockDurableTasks = [{
+      id: "task-delivery-uncertain",
+      recordingStem: "ProductSync_20260625_093000",
+      title: "Product Sync",
+      trigger: "manual",
+      state: "delivery_unverified",
+      phase: "failed",
+      sendToNotion: true,
+      agentProvider: "hermes",
+      attempt: 1,
+      error: "Host restarted during delivery",
+      createdAt: "2026-06-25T09:31:00.000Z",
+      updatedAt: "2026-06-25T09:32:00.000Z",
+    }];
+    const { getByText, queryByRole } = wrap();
+
+    expect(getByText("请核实 Notion 发送结果")).toBeInTheDocument();
+    expect(queryByRole("button", { name: "让 Hermes 处理" })).toBeNull();
+    expect(queryByRole("button", { name: "处理并发送 Notion" })).toBeNull();
+  });
+
+  it("uses the most recently updated durable task when a historical task id is reused", () => {
+    mockDurableTasks = [
+      {
+        id: "task-reused",
+        recordingStem: "ProductSync_20260625_093000",
+        title: "Product Sync",
+        trigger: "manual",
+        state: "queued",
+        phase: "queued",
+        sendToNotion: true,
+        agentProvider: "hermes",
+        attempt: 1,
+        error: null,
+        createdAt: "2026-06-20T09:00:00.000Z",
+        updatedAt: "2026-06-25T10:00:00.000Z",
+      },
+      {
+        id: "task-newer-created-history",
+        recordingStem: "ProductSync_20260625_093000",
+        title: "Product Sync",
+        trigger: "manual",
+        state: "completed",
+        phase: "completed",
+        sendToNotion: false,
+        agentProvider: "hermes",
+        attempt: 1,
+        error: null,
+        createdAt: "2026-06-24T09:00:00.000Z",
+        updatedAt: "2026-06-24T09:01:00.000Z",
+      },
+    ];
+    const { getByText, queryByRole } = wrap();
+
+    expect(getByText("已排队等待 Hermes")).toBeInTheDocument();
+    expect(queryByRole("button", { name: "让 Hermes 处理" })).toBeNull();
+    expect(queryByRole("button", { name: "处理并发送 Notion" })).toBeNull();
+  });
+
+  it("shows Hermes processing progress in the same task action slot immediately after click", () => {
     mockTasks = [taskFixture({
       stages: { transcribe: "idle", summarize: "idle", send: "idle" },
       hasTranscript: false,
       hasSummary: false,
     })];
     const { getByRole, getByText, queryByRole } = wrap();
-    fireEvent.click(getByRole("button", { name: "生成转写" }));
+    fireEvent.click(getByRole("button", { name: "让 Hermes 处理" }));
 
-    expect(transcribeMutate).toHaveBeenCalledWith(
-      { stem: "ProductSync_20260625_093000" },
+    expect(reprocessMutate).toHaveBeenCalledWith(
+      { stem: "ProductSync_20260625_093000", promptId: "p1", sendToNotion: false },
       expect.objectContaining({ onError: expect.any(Function), onSettled: expect.any(Function) }),
     );
-    expect(getByText("生成转写中")).toBeInTheDocument();
-    expect(queryByRole("button", { name: "生成转写" })).toBeNull();
+    expect(getByText("Hermes 处理中")).toBeInTheDocument();
+    expect(queryByRole("button", { name: "让 Hermes 处理" })).toBeNull();
   });
 
-  it("shows summary progress in the same task action slot immediately after click", () => {
+  it("shows Hermes Notion progress in the same task action slot immediately after click", () => {
     mockTasks = [taskFixture({
       stages: { transcribe: "done", summarize: "idle", send: "idle" },
       hasSummary: false,
     })];
     const { getByRole, getByText, queryByRole } = wrap();
-    fireEvent.click(getByRole("button", { name: "生成摘要" }));
+    fireEvent.click(getByRole("button", { name: "处理并发送 Notion" }));
 
-    expect(summarizeMutate).toHaveBeenCalledWith(
-      { stem: "ProductSync_20260625_093000", promptId: "p1" },
+    expect(reprocessMutate).toHaveBeenCalledWith(
+      { stem: "ProductSync_20260625_093000", promptId: "p1", sendToNotion: true },
       expect.objectContaining({ onError: expect.any(Function), onSettled: expect.any(Function) }),
     );
-    expect(getByText("生成摘要中")).toBeInTheDocument();
-    expect(queryByRole("button", { name: "生成摘要" })).toBeNull();
+    expect(getByText("Hermes 处理并发送 Notion 中")).toBeInTheDocument();
+    expect(queryByRole("button", { name: "处理并发送 Notion" })).toBeNull();
   });
 
-  it("routes unconfigured send channels to Agent plugin configuration", () => {
-    const { getAllByText } = wrap();
-    const zulipButton = getAllByText("Zulip")[0];
-    expect(zulipButton).toBeDefined();
-    fireEvent.click(zulipButton!);
-    expect(configurePluginMutate).toHaveBeenCalledWith({ plugin: "zulip" });
-    expect(sendMutate).not.toHaveBeenCalledWith(
-      { stem: "ProductSync_20260625_093000", channel: "zulip" },
-      expect.any(Object),
-    );
+  it("does not expose Zulip as a recording delivery action", () => {
+    const { queryByRole } = wrap();
+    expect(queryByRole("button", { name: "Zulip" })).toBeNull();
+    expect(reprocessMutate).not.toHaveBeenCalled();
   });
 
   it("keeps Hermes and OpenClaw visible and connectable", () => {

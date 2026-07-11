@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router";
 import { useQueryClient } from "@tanstack/react-query";
-import { Activity, Check, ChevronLeft, Code, Copy, FileText, RefreshCw, Sparkles, Pencil, Trash2, Users, GitMerge } from "lucide-react";
+import { Check, ChevronLeft, Code, Copy, FileText, Send, Sparkles, Pencil, Trash2, Users, GitMerge } from "lucide-react";
 import { trpc } from "../../trpc.js";
 import { AudioPlayer } from "../../components/AudioPlayer.js";
 import { TranscriptView, type SpeakerData } from "../../components/TranscriptView.js";
@@ -12,10 +12,10 @@ import { TagEditor } from "../../components/TagEditor.js";
 import { EmptyState } from "../../components/EmptyState.js";
 import { ReprocessButton, type ReprocessButtonState } from "../../components/ReprocessButton.js";
 import { RecordingStatusBadge } from "../../components/RecordingStatusBadge.js";
-import { SharePopover, type ShareHistoryEntry, type ShareTarget, type SummaryChannel } from "../../components/SharePopover.js";
 import { useConfirm } from "../../hooks/useConfirm.js";
 import { useT } from "../../i18n/LanguageProvider.js";
 import { useWsChannel } from "../../ws.js";
+import { isTrustedNotionUrl } from "../../../../src/notionDelivery.js";
 import "./recordings.reader.css";
 
 const GET_KEY = [["recordings", "get"]] as const;
@@ -29,26 +29,101 @@ const SPEAKER_COLORS = [
   "#5CCFE6",
 ];
 const AUDIO_MOUNT_DELAY_MS = 250;
-const RETRANSCRIBE_SPEAKER_OPTIONS = ["auto", "1", "2", "3", "4", "5", "6", "7", "8"] as const;
 
 export const handle = {
   breadcrumb: "breadcrumb.reader",
   filters: null,
 };
 
-type Tab = "transcript" | "summary" | "realtime" | "raw";
-interface TranscriptionModelOption {
+type Tab = "transcript" | "summary" | "raw";
+type ReprocessAction = "process" | "notion";
+type AgentTaskState =
+  | "queued"
+  | "awaiting_agent"
+  | "awaiting_policy"
+  | "running"
+  | "artifacts_committed"
+  | "sending"
+  | "delivery_reported"
+  | "delivery_unverified"
+  | "completed"
+  | "failed"
+  | "cancelled";
+
+interface AgentTaskView {
   id: string;
-  engine: "mlx" | "whisper" | "hermes";
-  model: string;
-  label: string;
-  active: boolean;
+  state: AgentTaskState;
+  phase: string;
+  trigger: "automatic" | "manual";
+  sendToNotion: boolean;
+  error: string | null;
 }
+
+interface NotionDeliveryView {
+  status: "sending" | "reported" | "abandoned";
+  url: string | null;
+  detail: string | null;
+}
+
 interface SummaryTemplateOption {
   id: string;
   slug: string;
   name: string;
   isAutoRun: boolean;
+}
+
+const ACTIVE_AGENT_TASK_STATES = new Set<AgentTaskState>([
+  "queued",
+  "awaiting_agent",
+  "awaiting_policy",
+  "running",
+  "artifacts_committed",
+  "sending",
+  "delivery_reported",
+]);
+
+function allowsManualPolicyOverride(task: AgentTaskView | null | undefined): boolean {
+  return task?.state === "awaiting_policy" && task.trigger === "automatic";
+}
+
+function AgentTaskStatus({
+  task,
+  delivery,
+}: {
+  task?: AgentTaskView | null;
+  delivery?: NotionDeliveryView | null;
+}) {
+  const t = useT();
+  if (!task) return null;
+
+  let key = "reader.agentTask.processing";
+  if (task.state === "queued") key = "reader.agentTask.queued";
+  else if (task.state === "awaiting_agent") key = "reader.agentTask.awaiting";
+  else if (task.state === "awaiting_policy") key = "reader.agentTask.awaitingPolicy";
+  else if (task.state === "failed") key = "reader.agentTask.failed";
+  else if (task.state === "delivery_unverified") key = "reader.agentTask.deliveryUnverified";
+  else if (task.state === "cancelled") key = "reader.agentTask.cancelled";
+  else if (task.state === "completed" && task.sendToNotion && delivery?.status === "reported") key = "reader.agentTask.notionSent";
+  else if (task.state === "completed" && task.sendToNotion) key = "reader.agentTask.deliveryUnverified";
+  else if (task.state === "completed") key = "reader.agentTask.processed";
+  else if (task.phase === "transcribing") key = "reader.agentTask.transcribing";
+  else if (task.phase === "summarizing") key = "reader.agentTask.summarizing";
+  else if (task.sendToNotion && (task.state === "sending" || task.state === "delivery_reported")) key = "reader.agentTask.sendingNotion";
+
+  const content = t(key);
+  const failed = task.state === "failed" || task.state === "delivery_unverified";
+  return (
+    <span
+      className={`reader-agent-task-status${failed ? " failed" : ""}`}
+      data-testid="agent-task-status"
+      data-state={task.state}
+      title={task.error || delivery?.detail || undefined}
+    >
+      {task.state === "completed" && task.sendToNotion && delivery?.status === "reported" && delivery.url && isTrustedNotionUrl(delivery.url) ? (
+        <a href={delivery.url} target="_blank" rel="noreferrer">{content}</a>
+      ) : content}
+    </span>
+  );
 }
 interface SummaryPromptRow {
   id: string;
@@ -56,32 +131,6 @@ interface SummaryPromptRow {
   name: string;
   is_auto_run?: number;
 }
-interface DetectedModel {
-  name: string;
-  path: string;
-}
-
-function mergeTranscriptionModelOptions(
-  baseOptions: TranscriptionModelOption[],
-  detectedModels: DetectedModel[] | undefined,
-): TranscriptionModelOption[] {
-  const options = [...baseOptions];
-  const seen = new Set(options.map((option) => option.id));
-  for (const model of detectedModels ?? []) {
-    const id = `whisper:${model.path}`;
-    if (seen.has(id)) continue;
-    seen.add(id);
-    options.push({
-      id,
-      engine: "whisper",
-      model: model.path,
-      label: `whisper.cpp · ${model.name}`,
-      active: false,
-    });
-  }
-  return options;
-}
-
 function mergeSummaryTemplateOptions(
   recordingOptions: SummaryTemplateOption[],
   promptRows: SummaryPromptRow[] | undefined,
@@ -111,7 +160,7 @@ function defaultSummaryTemplateIdFor(
 }
 
 function isTab(v: string | null): v is Tab {
-  return v === "transcript" || v === "summary" || v === "realtime" || v === "raw";
+  return v === "transcript" || v === "summary" || v === "raw";
 }
 
 function audioSrcFor(data: { stem: string; audioFile?: string | null; audioMtimeMs?: number | null }): string {
@@ -289,28 +338,30 @@ export function RecordingReader() {
   const confirm = useConfirm();
   const t = useT();
   const { data, error, isPending } = trpc.recordings.get.useQuery({ stem }, { enabled: stem.length > 0 });
-  const { data: detectedModels } = trpc.capabilities.detected_models.useQuery();
   const { data: summaryPrompts } = trpc.prompts.list.useQuery({ category: "summary" });
 
   const qc = useQueryClient();
-  const [lastAction, setLastAction] = useState<"transcribe" | "summarize" | null>(null);
-  const [actionError, setActionError] = useState<{ action: "transcribe" | "summarize"; message: string } | null>(null);
-  const [retranscribeSpeakerCount, setRetranscribeSpeakerCount] =
-    useState<(typeof RETRANSCRIBE_SPEAKER_OPTIONS)[number]>("auto");
-  const [transcriptionModelId, setTranscriptionModelId] = useState("");
+  const [submittedAction, setSubmittedAction] = useState<ReprocessAction | null>(null);
+  const [submittedTaskId, setSubmittedTaskId] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<{ action: ReprocessAction; message: string } | null>(null);
   const [summaryTemplateId, setSummaryTemplateId] = useState("");
-  const [pendingShareChannel, setPendingShareChannel] = useState<SummaryChannel | null>(null);
   const targetAudioSrc = data ? audioSrcFor(data) : null;
+
+  useEffect(() => {
+    setSubmittedAction(null);
+    setSubmittedTaskId(null);
+    setActionError(null);
+  }, [stem]);
   const [mountedAudioSrc, setMountedAudioSrc] = useState<string | null>(null);
   const [copiedSummary, setCopiedSummary] = useState(false);
   const copyResetRef = useRef<number | null>(null);
 
-  const transcribeMut = trpc.recordings.transcribe.useMutation();
-  const summarizeMut = trpc.recordings.summarize.useMutation();
+  const reprocessMut = trpc.recordings.reprocess.useMutation();
   const renameMut = trpc.recordings.rename.useMutation();
   const setTagsMut = trpc.recordings.setTags.useMutation();
   const deleteMut = trpc.recordings.delete.useMutation();
-  const sendSummaryMut = trpc.recordings.sendSummary.useMutation();
+  const confirmDeliveryMut = trpc.agentTasks.confirmNotionDelivery.useMutation();
+  const abandonDeliveryMut = trpc.agentTasks.abandonNotionDelivery.useMutation();
   const renameSpeakerMut = trpc.recordings.renameSpeaker.useMutation();
   const mergeSpeakersMut = trpc.recordings.mergeSpeakers.useMutation();
   const assignSegmentSpeakerMut = trpc.recordings.assignSegmentSpeaker.useMutation();
@@ -325,7 +376,6 @@ export function RecordingReader() {
   const invalidateBoth = () => {
     qc.invalidateQueries({ queryKey: GET_KEY });
     qc.invalidateQueries({ queryKey: LIST_KEY });
-    qc.invalidateQueries({ queryKey: [["recordings", "shareTargets"]] });
   };
 
   // ---- Rename (inline title edit) ----
@@ -382,6 +432,8 @@ export function RecordingReader() {
   };
 
   const handleDelete = () => {
+    const task = data?.agentTask as AgentTaskView | null | undefined;
+    if (task && (ACTIVE_AGENT_TASK_STATES.has(task.state) || task.state === "delivery_unverified")) return;
     const label = data?.title ?? stem;
     if (!confirm(t("reader.delete.confirm", { label }))) return;
     deleteMut.mutate({ stem }, {
@@ -397,9 +449,6 @@ export function RecordingReader() {
     if (msg.stem !== stem) return;
     qc.invalidateQueries({ queryKey: [["recordings", "get"]] });
     qc.invalidateQueries({ queryKey: [["recordings", "list"]] });
-    if (msg.state === "done" || msg.state === "failed") {
-      setActionError(null);
-    }
   });
 
   useEffect(() => {
@@ -411,14 +460,6 @@ export function RecordingReader() {
 
   useEffect(() => {
     if (!data) return;
-    const modelOptions = mergeTranscriptionModelOptions(
-      (data.transcriptionModelOptions ?? []) as TranscriptionModelOption[],
-      detectedModels as DetectedModel[] | undefined,
-    );
-    const activeModel = modelOptions.find((option) => option.active) ?? modelOptions[0];
-    setTranscriptionModelId((current) =>
-      modelOptions.some((option) => option.id === current) ? current : activeModel?.id ?? ""
-    );
     const templateOptions = mergeSummaryTemplateOptions(
       (data.summaryTemplateOptions ?? []) as SummaryTemplateOption[],
       summaryPrompts as SummaryPromptRow[] | undefined,
@@ -427,67 +468,72 @@ export function RecordingReader() {
     setSummaryTemplateId((current) =>
       templateOptions.some((option) => option.id === current) ? current : defaultTemplateId
     );
-  }, [data?.stem, data?.defaultSummaryTemplateId, data?.transcriptionModelOptions, detectedModels, summaryPrompts]);
+  }, [data?.stem, data?.defaultSummaryTemplateId, data?.summaryTemplateOptions, summaryPrompts]);
 
-  function deriveButtonState(action: "transcribe" | "summarize"): ReprocessButtonState {
-    const status = data?.status ?? "idle";
-    const targetRunning = action === "transcribe" ? "transcribing" : "summarizing";
-    const targetFailed = action === "transcribe" ? "transcription_failed" : "summary_failed";
+  function deriveButtonState(action: ReprocessAction): ReprocessButtonState {
+    const task = data?.agentTask as AgentTaskView | null | undefined;
+    const delivery = data?.notionDelivery as NotionDeliveryView | null | undefined;
+    const wantsNotion = action === "notion";
+    const matchesCurrentTask = task?.sendToNotion === wantsNotion;
     if (actionError?.action === action) return "failed";
-    if (status === targetRunning) return "running";
-    if ((status === targetFailed || status === "failed") && lastAction === action) return "failed";
-    if (status === "idle" && lastAction === action) return "done";
+    if (submittedAction === action && (!submittedTaskId || task?.id !== submittedTaskId)) return "running";
+    if (!task || !matchesCurrentTask) return "idle";
+    if (ACTIVE_AGENT_TASK_STATES.has(task.state) && !allowsManualPolicyOverride(task)) return "running";
+    if (task.state === "failed" || task.state === "delivery_unverified") return "failed";
+    if (task.state === "completed") {
+      if (!wantsNotion) return "done";
+      return delivery?.status === "reported" ? "done" : "failed";
+    }
     return "idle";
   }
 
-  function buttonError(action: "transcribe" | "summarize"): string | undefined {
-    return actionError?.action === action ? actionError.message : data?.statusError;
+  function buttonError(action: ReprocessAction): string | undefined {
+    if (actionError?.action === action) return actionError.message;
+    const task = data?.agentTask as AgentTaskView | null | undefined;
+    if (task?.sendToNotion !== (action === "notion")) return undefined;
+    const delivery = data?.notionDelivery as NotionDeliveryView | null | undefined;
+    return task.error || delivery?.detail || data?.statusError;
   }
 
-  const handleTranscribe = () => {
-    setLastAction("transcribe");
-    setActionError(null);
-    const diarizationNumSpeakers =
-      retranscribeSpeakerCount === "auto" ? null : Number(retranscribeSpeakerCount);
-    const modelOptions = mergeTranscriptionModelOptions(
-      (data?.transcriptionModelOptions ?? []) as TranscriptionModelOption[],
-      detectedModels as DetectedModel[] | undefined,
-    );
-    const selectedModel = modelOptions.find((option) => option.id === transcriptionModelId);
-    transcribeMut.mutate({
-      stem,
-      diarizationNumSpeakers,
-      ...(selectedModel ? {
-        transcriptionModel: { engine: selectedModel.engine, model: selectedModel.model },
-      } : {}),
-    }, {
-      onError: (err) => setActionError({ action: "transcribe", message: err.message }),
-      onSettled: invalidateBoth,
-    });
-  };
-  const handleSummarize = () => {
-    setLastAction("summarize");
+  const handleReprocess = (action: ReprocessAction) => {
+    setSubmittedAction(action);
+    setSubmittedTaskId(null);
     setActionError(null);
     const templateOptions = mergeSummaryTemplateOptions(
       (data?.summaryTemplateOptions ?? []) as SummaryTemplateOption[],
       summaryPrompts as SummaryPromptRow[] | undefined,
     );
     const promptId = summaryTemplateId || defaultSummaryTemplateIdFor(templateOptions, data?.defaultSummaryTemplateId);
-    summarizeMut.mutate({ stem, promptId: promptId || null }, {
-      onError: (err) => setActionError({ action: "summarize", message: err.message }),
+    reprocessMut.mutate({
+      stem,
+      promptId: promptId || null,
+      sendToNotion: action === "notion",
+    }, {
+      onSuccess: (result) => setSubmittedTaskId(result.taskId),
+      onError: (err) => setActionError({ action, message: err.message }),
       onSettled: invalidateBoth,
     });
   };
 
-  const handleSendSummary = (target: ShareTarget) => {
-    if (!confirm(t("reader.send.confirm", { label: target.label, destination: target.destination }))) return;
-    setPendingShareChannel(target.channel);
-    sendSummaryMut.mutate({ stem, channel: target.channel }, {
-      onError: (err) => console.error("sendSummary failed:", err.message),
-      onSettled: () => {
-        setPendingShareChannel(null);
-        invalidateBoth();
-      },
+  const handleConfirmDelivery = () => {
+    const task = data?.agentTask as AgentTaskView | null | undefined;
+    const delivery = data?.notionDelivery as NotionDeliveryView | null | undefined;
+    if (!task || task.state !== "delivery_unverified") return;
+    const url = window.prompt(t("reader.reconciliation.confirmPrompt"), delivery?.url ?? "");
+    if (url === null) return;
+    confirmDeliveryMut.mutate({ id: task.id, url: url.trim() || undefined }, {
+      onError: (err) => setActionError({ action: "notion", message: err.message }),
+      onSettled: invalidateBoth,
+    });
+  };
+
+  const handleAbandonDelivery = () => {
+    const task = data?.agentTask as AgentTaskView | null | undefined;
+    if (!task || task.state !== "delivery_unverified") return;
+    if (!confirm(t("reader.reconciliation.abandonConfirm"))) return;
+    abandonDeliveryMut.mutate({ id: task.id }, {
+      onError: (err) => setActionError({ action: "notion", message: err.message }),
+      onSettled: invalidateBoth,
     });
   };
 
@@ -577,13 +623,18 @@ export function RecordingReader() {
   const initialSeek = Number.isFinite(parsedSeek) ? parsedSeek : undefined;
 
   const audioSrc = audioSrcFor(data);
-  const shareTargets = (data.shareTargets ?? []) as ShareTarget[];
-  const summaryTargets = shareTargets;
-  const shareHistory = (data.shareHistory ?? []) as ShareHistoryEntry[];
-  const modelOptions = mergeTranscriptionModelOptions(
-    (data.transcriptionModelOptions ?? []) as TranscriptionModelOption[],
-    detectedModels as DetectedModel[] | undefined,
-  );
+  const agentTask = data.agentTask as AgentTaskView | null | undefined;
+  const notionDelivery = data.notionDelivery as NotionDeliveryView | null | undefined;
+  const taskActive = agentTask ? ACTIVE_AGENT_TASK_STATES.has(agentTask.state) : false;
+  const manualPolicyOverrideAllowed = allowsManualPolicyOverride(agentTask);
+  const taskBlocksManualActions = taskActive && !manualPolicyOverrideAllowed;
+  const taskDeleteBlocked = taskActive || agentTask?.state === "delivery_unverified";
+  const actionsDisabled = !data.wavPath || taskBlocksManualActions || agentTask?.state === "delivery_unverified" || reprocessMut.isPending;
+  const actionsDisabledReason = !data.wavPath
+    ? t("reader.disabled.wavMissing")
+    : taskBlocksManualActions || agentTask?.state === "delivery_unverified"
+      ? t("reader.disabled.agentTaskActive")
+      : undefined;
   const summaryTemplateOptions = mergeSummaryTemplateOptions(
     (data.summaryTemplateOptions ?? []) as SummaryTemplateOption[],
     summaryPrompts as SummaryPromptRow[] | undefined,
@@ -634,39 +685,12 @@ export function RecordingReader() {
               <div className="reader-meta">
                 <span>{new Date(data.mtimeMs).toLocaleDateString()}</span>
                 <span>•</span>
-                <RecordingStatusBadge state={data.status} error={data.statusError} />
+                {!agentTask && <RecordingStatusBadge state={data.status} error={data.statusError} />}
+                <AgentTaskStatus task={agentTask} delivery={notionDelivery} />
                 <TagEditor tags={data.tags ?? []} onChange={handleTagsChange} />
               </div>
             </div>
             <div className="reader-header-actions">
-              {modelOptions.length > 0 && (
-                <label className="reader-action-select reader-action-select--model" title={t("reader.transcriptionModel.title")}>
-                  <span>{t("reader.transcriptionModel.label")}</span>
-                  <select
-                    value={transcriptionModelId}
-                    aria-label={t("reader.transcriptionModel.aria")}
-                    onChange={(e) => setTranscriptionModelId(e.target.value)}
-                  >
-                    {modelOptions.map((option) => (
-                      <option key={option.id} value={option.id}>{option.label}</option>
-                    ))}
-                  </select>
-                </label>
-              )}
-              <label className="reader-speaker-select" title={t("reader.retranscribeSpeakers.title")}>
-                <Users size={13} strokeWidth={1.8} aria-hidden="true" />
-                <select
-                  value={retranscribeSpeakerCount}
-                  aria-label={t("reader.retranscribeSpeakers.label")}
-                  onChange={(e) => setRetranscribeSpeakerCount(e.target.value as (typeof RETRANSCRIBE_SPEAKER_OPTIONS)[number])}
-                >
-                  {RETRANSCRIBE_SPEAKER_OPTIONS.map((value) => (
-                    <option key={value} value={value}>
-                      {value === "auto" ? t("reader.retranscribeSpeakers.auto") : value}
-                    </option>
-                  ))}
-                </select>
-              </label>
               {summaryTemplateOptions.length > 0 && (
                 <label className="reader-action-select reader-action-select--summary" title={t("reader.summaryTemplate.title")}>
                   <span>{t("reader.summaryTemplate.label")}</span>
@@ -683,23 +707,13 @@ export function RecordingReader() {
                   </select>
                 </label>
               )}
-              <SharePopover
-                className="reader-header-share"
-                targets={summaryTargets}
-                history={shareHistory}
-                pendingChannel={pendingShareChannel}
-                onSend={(channel) => {
-                  const target = summaryTargets.find((item) => item.channel === channel);
-                  if (target) handleSendSummary(target);
-                }}
-              />
               <button
                 type="button"
                 className="reader-header-icon reader-header-delete"
                 onClick={handleDelete}
-                disabled={deleteMut.isPending}
+                disabled={deleteMut.isPending || taskDeleteBlocked}
                 aria-label={t("reader.delete.aria")}
-                title={t("reader.delete.title")}
+                title={taskDeleteBlocked ? t("reader.disabled.agentTaskActive") : t("reader.delete.title")}
               >
                 <Trash2 size={15} strokeWidth={1.75} />
               </button>
@@ -708,24 +722,49 @@ export function RecordingReader() {
 
           <div className="reader-actions">
           <ReprocessButton
-            label={t("reader.action.retranscribe")}
-            icon={<RefreshCw size={14} strokeWidth={1.75} />}
-            state={deriveButtonState("transcribe")}
-            error={buttonError("transcribe")}
-            onClick={handleTranscribe}
-            disabled={!data?.wavPath}
-            disabledReason={!data?.wavPath ? t("reader.disabled.wavMissing") : undefined}
+            label={t("reader.action.process")}
+            icon={<Sparkles size={14} strokeWidth={1.75} />}
+            state={deriveButtonState("process")}
+            error={buttonError("process")}
+            onClick={() => handleReprocess("process")}
+            disabled={actionsDisabled}
+            disabledReason={actionsDisabledReason}
           />
           <ReprocessButton
-            label={t("reader.action.regenerate")}
-            icon={<Sparkles size={14} strokeWidth={1.75} />}
-            state={deriveButtonState("summarize")}
-            error={buttonError("summarize")}
-            onClick={handleSummarize}
-            disabled={!(data?.transcript || data?.realtime)}
-            disabledReason={!(data?.transcript || data?.realtime) ? t("reader.disabled.transcriptFirst") : undefined}
+            label={t("reader.action.processAndSendNotion")}
+            icon={<Send size={14} strokeWidth={1.75} />}
+            state={deriveButtonState("notion")}
+            error={buttonError("notion")}
+            onClick={() => handleReprocess("notion")}
+            disabled={actionsDisabled}
+            disabledReason={actionsDisabledReason}
           />
           </div>
+
+          {agentTask?.state === "delivery_unverified" && (
+            <div className="reader-reconciliation" role="alert">
+              <div>
+                <strong>{t("reader.reconciliation.heading")}</strong>
+                <p>{t("reader.reconciliation.description")}</p>
+              </div>
+              <div className="reader-reconciliation-actions">
+                <button
+                  type="button"
+                  onClick={handleConfirmDelivery}
+                  disabled={confirmDeliveryMut.isPending || abandonDeliveryMut.isPending}
+                >
+                  {t("reader.reconciliation.confirmDelivered")}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleAbandonDelivery}
+                  disabled={confirmDeliveryMut.isPending || abandonDeliveryMut.isPending}
+                >
+                  {t("reader.reconciliation.abandon")}
+                </button>
+              </div>
+            </div>
+          )}
 
           {mountedAudioSrc === audioSrc ? (
             <AudioPlayer src={audioSrc} initialSeek={initialSeek} />
@@ -758,18 +797,6 @@ export function RecordingReader() {
             <FileText size={14} strokeWidth={1.75} />
             {t("reader.tab.transcript")}
           </button>
-          {data.hasRealtime && (
-            <button
-              key="realtime"
-              type="button"
-              aria-selected={tab === "realtime"}
-              className={"reader-tab" + (tab === "realtime" ? " active" : "")}
-              onClick={() => setTab("realtime")}
-            >
-              <Activity size={14} strokeWidth={1.75} />
-              {t("reader.tab.realtime")}
-            </button>
-          )}
           {showRaw && (
             <button
               key="raw"
@@ -817,9 +844,6 @@ export function RecordingReader() {
                 />
               )
               : <EmptyState label={t("reader.empty.transcript")} />
-          )}
-          {tab === "realtime" && (
-            <pre className="reader-raw">{data.realtime ?? ""}</pre>
           )}
           {tab === "raw" && showRaw && (
             <pre className="reader-raw">{data.raw ?? data.transcript ?? ""}</pre>

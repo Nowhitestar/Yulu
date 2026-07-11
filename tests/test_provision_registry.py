@@ -1,6 +1,6 @@
 """PROV-01 — the provision/ step registry contract (Wave 0).
 
-The registry WRAPS the six Phase-1 setup_*.sh 1:1 (D-01/D-06); it never ports
+The registry WRAPS the four setup_*.sh concerns 1:1; it never ports
 their bash logic. Each step exposes:
 
   * check() -> bool           — a READ-ONLY probe ("is this already done?")
@@ -15,7 +15,7 @@ These tests prove:
   (1) StepResult is frozen and the three statuses are producible;
   (2) check()==True -> apply()=="skipped" and DOES NOT spawn bash;
   (3) check()==False -> subprocess returncode maps ok / error (truncated detail);
-  (4) REGISTRY = the six named ScriptSteps in setup.sh order, each wrapping the
+  (4) REGISTRY = the four named ScriptSteps in setup.sh order, each wrapping the
       matching setup_*.sh filename;
   (5) step_by_name resolves a known step and raises on an unknown one;
   (6) a hermetic real-bash drive (mark integration) reusing
@@ -46,12 +46,10 @@ from provision import REGISTRY, ScriptStep, Step, StepResult, step_by_name  # no
 from provision import registry as registry_mod  # noqa: E402
 
 
-# The six concerns, in setup.sh's documented order, mapped to their script bodies.
+# The concerns, in setup.sh's documented order, mapped to their script bodies.
 EXPECTED_STEPS = [
     ("deps", "setup_deps.sh"),
     ("audio", "setup_audio.sh"),
-    ("models", "setup_models.sh"),
-    ("capabilities", "setup_capabilities.sh"),
     ("daemons", "setup_daemons.sh"),
     ("ui", "setup_ui.sh"),
 ]
@@ -92,6 +90,32 @@ def test_apply_skips_without_spawning_bash_when_check_true(monkeypatch):
     assert isinstance(result, StepResult)
     assert result.name == "deps"
     assert result.status == "skipped"
+
+
+def test_force_apply_bypasses_satisfied_probe(monkeypatch):
+    captured = []
+
+    def _ok(cmd, *a, **k):
+        captured.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, stdout="done\n", stderr="")
+
+    monkeypatch.setattr(registry_mod.subprocess, "run", _ok)
+    step = ScriptStep("daemons", "setup_daemons.sh", probe=lambda: True)
+    result = step.apply("release", force=True)
+    assert result.status == "ok"
+    assert captured == [["bash", str(registry_mod.SCRIPTS_DIR / "setup_daemons.sh"), "release"]]
+
+
+def test_compatible_node_probe_rejects_new_abi_and_accepts_node24(tmp_path):
+    node26 = tmp_path / "node26"
+    node24 = tmp_path / "node24"
+    node26.write_text("#!/usr/bin/env bash\nprintf 'v26.1.0\\n'\n")
+    node24.write_text("#!/usr/bin/env bash\nprintf 'v24.15.0\\n'\n")
+    node26.chmod(0o755)
+    node24.chmod(0o755)
+
+    assert registry_mod._compatible_node_present([node26]) is False
+    assert registry_mod._compatible_node_present([node26, node24]) is True
 
 
 # ── (3) returncode -> ok / error mapping ─────────────────────────────
@@ -143,10 +167,10 @@ def test_apply_passes_argv_list_no_shell(monkeypatch):
     assert captured["shell"] is False
 
 
-# ── (4) REGISTRY = six steps, setup.sh order, 1:1 script map ─────────
+# ── (4) REGISTRY = four steps, setup.sh order, 1:1 script map ────────
 
 
-def test_registry_six_steps_in_order():
+def test_registry_four_steps_in_order():
     assert [s.name for s in REGISTRY] == [name for name, _ in EXPECTED_STEPS]
 
 
@@ -208,7 +232,6 @@ def _hermetic_env(tmp_path: Path, shim: Path) -> dict:
         "HOME": str(home),
         "PATH": f"{shim}{os.pathsep}{os.environ.get('PATH', '')}",
         "CONFIG_DIR": str(config_dir),
-        "MODEL_DIR": str(config_dir / "models"),
         "LAUNCH_AGENTS_DIR": str(launch_agents),
         "UPGRADE_MODE": "false",
     })

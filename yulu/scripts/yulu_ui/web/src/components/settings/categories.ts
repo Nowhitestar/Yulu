@@ -22,7 +22,6 @@ export const CATEGORIES: CategoryMeta[] = [
   { id: "transcription", labelKey: "settings.category.transcription.label", descKey: "settings.category.transcription.desc" },
   { id: "voice",         labelKey: "settings.category.voice.label",         descKey: "settings.category.voice.desc" },
   { id: "automation",    labelKey: "settings.category.automation.label",    descKey: "settings.category.automation.desc" },
-  { id: "advanced",      labelKey: "settings.category.advanced.label",      descKey: "settings.category.advanced.desc" },
 ];
 
 export const CATEGORY_ORDER: SettingCategory[] = CATEGORIES.map((c) => c.id);

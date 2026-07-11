@@ -10,13 +10,12 @@ import { logsRouter }       from "./logs.js";
 import { recordingRouter }  from "./recording.js";
 import { systemRouter }     from "./system.js";
 import { integrationsRouter } from "./integrations.js";
-import { llmRouter }          from "./llm.js";
 import { askRouter }          from "./ask.js";
-import { queueRouter }        from "./queue.js";
 import { doctorRouter }       from "./doctor.js";
 import { schedulerRouter }    from "./scheduler.js";
 import { agentConsoleRouter } from "./agentConsole.js";
 import { agentSessionsRouter } from "./agentSessions.js";
+import { agentTasksRouter } from "./agentTasks.js";
 
 export const appRouter = router({
   recordings:   recordingsRouter,
@@ -30,13 +29,12 @@ export const appRouter = router({
   recording:    recordingRouter,
   system:       systemRouter,
   integrations: integrationsRouter,
-  llm:          llmRouter,
   ask:          askRouter,
-  queue:        queueRouter,
   doctor:       doctorRouter,
   scheduler:    schedulerRouter,
   agentConsole: agentConsoleRouter,
   agentSessions: agentSessionsRouter,
+  agentTasks: agentTasksRouter,
 });
 
 export type AppRouter = typeof appRouter;

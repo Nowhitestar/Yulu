@@ -162,10 +162,6 @@ def test_daemon_start_raises_busy_when_daemon_already_recording(monkeypatch, tmp
         return None
 
     monkeypatch.setattr(record_audio, "socket_send", fake_socket_send)
-    # Pin realtime side effect so the test is hermetic even if we fail to
-    # short-circuit (test will then fail on the assertion below, not crash).
-    monkeypatch.setattr(record_audio, "start_realtime_transcriber",
-                        lambda *a, **k: None)
 
     with acquire(lock_path=lock, timeout=0.1) as lock_handle:
         with pytest.raises(RecordingBusy) as exc_info:
@@ -210,8 +206,6 @@ def test_daemon_start_proceeds_when_daemon_idle(monkeypatch, tmp_path):
         return None
 
     monkeypatch.setattr(record_audio, "socket_send", fake_socket_send)
-    monkeypatch.setattr(record_audio, "start_realtime_transcriber",
-                        lambda *a, **k: None)
 
     with acquire(lock_path=lock, timeout=0.1) as lock_handle:
         ok = record_audio.daemon_start("FreshMeeting", lock_handle=lock_handle)
@@ -246,7 +240,6 @@ def test_daemon_start_omits_legacy_sox_mic_device_for_native_daemon(monkeypatch,
         if cmd.get("action") == "status"
         else {"status": "recording", "file": "/tmp/native.wav"}
     ))
-    monkeypatch.setattr(record_audio, "start_realtime_transcriber", lambda *a, **k: None)
 
     assert record_audio.daemon_start("NativeMeeting") is True
     start_cmd = next(c for c in calls if c.get("action") == "start")
@@ -280,7 +273,6 @@ def test_daemon_start_routes_through_capture_controller(monkeypatch, tmp_path):
         "silence_duration_sec": 75,
         "silence_threshold": 0.04,
     })
-    monkeypatch.setattr(record_audio, "start_realtime_transcriber", lambda *a, **k: None)
     monkeypatch.setattr(record_audio, "socket_send", lambda cmd: (_ for _ in ()).throw(AssertionError("socket_send bypassed seam")))
 
     assert record_audio.daemon_start("SeamMeeting") is True

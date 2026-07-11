@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Local diagnostics only. Do not upload this pkg as an official release unless
+# it is signed with a Developer ID Installer certificate and independently
+# verified. The production release workflow intentionally publishes the signed,
+# notarized, stapled runtime zip instead.
 set -euo pipefail
 
 usage() {

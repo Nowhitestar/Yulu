@@ -300,15 +300,25 @@
   font-size: 11px;
 }
 
-.agent-send-row {
+.agent-task-actions {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(112px, 1fr));
   gap: 7px;
 }
 
-.agent-send-row .agent-action {
+.agent-task-actions .agent-action {
   width: 100%;
 }
+
+.agent-task-state {
+  margin-bottom: 7px;
+  color: var(--fg-2);
+  font-size: 11px;
+}
+
+.agent-task-state[data-state="completed"] { color: var(--green); }
+.agent-task-state[data-state="failed"],
+.agent-task-state[data-state="delivery_unverified"] { color: var(--red); }
 
 .agent-recording-bar {
   min-height: 48px;

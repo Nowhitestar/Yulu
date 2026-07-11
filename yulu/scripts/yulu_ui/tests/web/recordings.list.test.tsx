@@ -5,20 +5,14 @@ import { MemoryRouter } from "react-router";
 const listMock = vi.fn();
 const renameMutate = vi.fn();
 const deleteMutate = vi.fn();
-const transcribeMutate = vi.fn();
-const summarizeMutate = vi.fn();
-const sendSummaryMutate = vi.fn();
-const shareTargetsMock = vi.fn(() => ({ data: { targets: [], history: [] } }));
+const reprocessMutate = vi.fn();
 vi.mock("../../web/src/trpc.js", () => ({
   trpc: {
     recordings: {
       list: { useQuery: (...a: unknown[]) => listMock(...a) },
-      shareTargets: { useQuery: () => shareTargetsMock() },
       rename: { useMutation: () => ({ mutate: renameMutate }) },
       delete: { useMutation: () => ({ mutate: deleteMutate }) },
-      transcribe: { useMutation: () => ({ mutate: transcribeMutate }) },
-      summarize: { useMutation: () => ({ mutate: summarizeMutate }) },
-      sendSummary: { useMutation: () => ({ mutate: sendSummaryMutate }) },
+      reprocess: { useMutation: () => ({ mutate: reprocessMutate, isPending: false }) },
     },
   },
 }));
@@ -29,8 +23,8 @@ import { RecordingsList } from "../../web/src/routes/inbox/recordings";
 
 function rows() {
   return [
-    { stem: "TeamSync_20260102_090000", title: "TeamSync", tags: ["Design"], recordedAt: "2026-01-02T09:00:00", durationSeconds: 2720, mtimeMs: 2, hasTranscript: true, hasSummary: true, hasRealtime: true, firstWords: "we discussed", status: "idle" },
-    { stem: "Memo_20260101_120000", title: "Memo", tags: [], recordedAt: "2026-01-01T12:00:00", durationSeconds: 42, mtimeMs: 1, hasTranscript: true, hasSummary: false, hasRealtime: false, firstWords: "quick note", status: "transcribing" },
+    { stem: "TeamSync_20260102_090000", title: "TeamSync", tags: ["Design"], recordedAt: "2026-01-02T09:00:00", durationSeconds: 2720, mtimeMs: 2, hasTranscript: true, hasSummary: true, firstWords: "we discussed", status: "idle" },
+    { stem: "Memo_20260101_120000", title: "Memo", tags: [], recordedAt: "2026-01-01T12:00:00", durationSeconds: 42, mtimeMs: 1, hasTranscript: true, hasSummary: false, firstWords: "quick note", status: "transcribing" },
   ];
 }
 
@@ -38,11 +32,7 @@ describe("RecordingsList", () => {
   beforeEach(() => {
     renameMutate.mockClear();
     deleteMutate.mockClear();
-    transcribeMutate.mockClear();
-    summarizeMutate.mockClear();
-    sendSummaryMutate.mockClear();
-    shareTargetsMock.mockClear();
-    shareTargetsMock.mockReturnValue({ data: { targets: [], history: [] } });
+    reprocessMutate.mockClear();
   });
 
   it("renders compact recording rows without transcript previews", () => {
@@ -58,7 +48,6 @@ describe("RecordingsList", () => {
     expect(screen.getByLabelText("添加标签")).toBeInTheDocument();
     expect(screen.getAllByLabelText("Transcript ready")).toHaveLength(2);
     expect(screen.getByLabelText("Summary ready")).toBeInTheDocument();
-    expect(screen.getByLabelText("Realtime transcript ready")).toBeInTheDocument();
     // The Voicemail/Meeting type badge is gone.
     expect(screen.queryByText(/voicemail/i)).toBeNull();
   });
@@ -78,7 +67,7 @@ describe("RecordingsList", () => {
 
   it("shows a Failed badge (not a forever-spinner) with the error in a tooltip", () => {
     listMock.mockReturnValue({
-      data: [{ stem: "TeamSync_20260102_090000", title: "TeamSync", tags: [], recordedAt: "2026-01-02T09:00:00", durationSeconds: null, mtimeMs: 2, hasTranscript: false, hasSummary: false, hasRealtime: false, firstWords: null, status: "failed", statusError: "engine crashed" }],
+      data: [{ stem: "TeamSync_20260102_090000", title: "TeamSync", tags: [], recordedAt: "2026-01-02T09:00:00", durationSeconds: null, mtimeMs: 2, hasTranscript: false, hasSummary: false, firstWords: null, status: "failed", statusError: "engine crashed" }],
       isPending: false,
     });
     render(<MemoryRouter><RecordingsList /></MemoryRouter>);
@@ -89,53 +78,50 @@ describe("RecordingsList", () => {
 
   it("renders no status badge for an idle row", () => {
     listMock.mockReturnValue({
-      data: [{ stem: "TeamSync_20260102_090000", title: "TeamSync", tags: [], recordedAt: "2026-01-02T09:00:00", durationSeconds: null, mtimeMs: 2, hasTranscript: true, hasSummary: true, hasRealtime: false, firstWords: "hi", status: "idle" }],
+      data: [{ stem: "TeamSync_20260102_090000", title: "TeamSync", tags: [], recordedAt: "2026-01-02T09:00:00", durationSeconds: null, mtimeMs: 2, hasTranscript: true, hasSummary: true, firstWords: "hi", status: "idle" }],
       isPending: false,
     });
     render(<MemoryRouter><RecordingsList /></MemoryRouter>);
     expect(screen.queryByTestId("recording-status")).toBeNull();
   });
 
-  it("opens a row context menu with actions based on available outputs", () => {
+  it("opens a row context menu with the two durable Hermes actions", () => {
     listMock.mockReturnValue({ data: rows(), isPending: false });
     render(<MemoryRouter><RecordingsList /></MemoryRouter>);
     fireEvent.contextMenu(screen.getByText("TeamSync"));
     expect(screen.getByRole("menuitem", { name: /重命名/i })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("menuitem", { name: /重新转写/i }));
-    expect(transcribeMutate).toHaveBeenCalledWith({ stem: "TeamSync_20260102_090000" });
-
-    fireEvent.contextMenu(screen.getByText("Memo"));
-    expect(screen.queryByRole("menuitem", { name: /重新生成摘要/i })).toBeNull();
-  });
-
-  it("keeps row sharing and the context menu mutually exclusive", () => {
-    listMock.mockReturnValue({ data: rows(), isPending: false });
-    render(<MemoryRouter><RecordingsList /></MemoryRouter>);
-
-    const shareButtons = screen.getAllByRole("button", { name: "分享摘要" });
-    fireEvent.click(shareButtons[0]!);
-    expect(screen.getByRole("dialog", { name: "分享摘要" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("menuitem", { name: /Hermes.*处理/i }));
+    expect(reprocessMutate).toHaveBeenCalledWith({
+      stem: "TeamSync_20260102_090000",
+      sendToNotion: false,
+    });
 
     fireEvent.contextMenu(screen.getByText("TeamSync"));
-    expect(screen.queryByRole("dialog", { name: "分享摘要" })).toBeNull();
-    expect(screen.getByRole("menu")).toBeInTheDocument();
-
-    fireEvent.click(shareButtons[1]!);
-    expect(screen.queryByRole("menu")).toBeNull();
-    expect(screen.getByRole("dialog", { name: "分享摘要" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("menuitem", { name: /发送 Notion/i }));
+    expect(reprocessMutate).toHaveBeenLastCalledWith({
+      stem: "TeamSync_20260102_090000",
+      sendToNotion: true,
+    });
   });
 
-  it("closes row sharing with Escape and an outside pointer", () => {
-    listMock.mockReturnValue({ data: rows(), isPending: false });
+  it("disables duplicate Hermes actions while a durable task is active", () => {
+    const active = rows();
+    active[0] = { ...active[0]!, status: "agent_queued" };
+    listMock.mockReturnValue({ data: active, isPending: false });
     render(<MemoryRouter><RecordingsList /></MemoryRouter>);
-    const shareButton = screen.getAllByRole("button", { name: "分享摘要" })[0]!;
+    fireEvent.contextMenu(screen.getByText("TeamSync"));
+    expect(screen.getByRole("menuitem", { name: /Hermes.*处理/i })).toBeDisabled();
+    expect(screen.getByRole("menuitem", { name: /发送 Notion/i })).toBeDisabled();
+    expect(screen.getByRole("menuitem", { name: /删除/i })).toBeDisabled();
+  });
 
-    fireEvent.click(shareButton);
-    fireEvent.keyDown(window, { key: "Escape" });
-    expect(screen.queryByRole("dialog", { name: "分享摘要" })).toBeNull();
+  it("disables deletion while a Notion result is unverified", () => {
+    const uncertain = rows();
+    uncertain[0] = { ...uncertain[0]!, status: "delivery_unverified" };
+    listMock.mockReturnValue({ data: uncertain, isPending: false });
+    render(<MemoryRouter><RecordingsList /></MemoryRouter>);
+    fireEvent.contextMenu(screen.getByText("TeamSync"));
 
-    fireEvent.click(shareButton);
-    fireEvent.mouseDown(document.body);
-    expect(screen.queryByRole("dialog", { name: "分享摘要" })).toBeNull();
+    expect(screen.getByRole("menuitem", { name: /删除/i })).toBeDisabled();
   });
 });

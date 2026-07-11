@@ -7,8 +7,6 @@ import "./LogsSection.css";
 
 const YULU_DAEMONS = [
   "com.yulu.audiodaemon",
-  "com.yulu.sttdaemon",
-  "com.yulu.agentqueue",
   "com.yulu.statusagent",
   "com.yulu.scheduler",
   "com.yulu.detector",

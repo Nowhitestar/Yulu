@@ -8,7 +8,6 @@
     "backend": "daemon"
   },
   "transcription": {
-    "final_engine": "mlx",
     "language": "zh",
     "glossary": ["AgentKey", "OpenClaw"]
   },

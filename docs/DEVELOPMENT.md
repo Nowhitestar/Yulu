@@ -6,19 +6,25 @@ Yulu has five separate layers. Keep them separate:
 2. Runtime install: the copy launchd/Yulu.app uses to run locally.
 3. Config/state: `~/.config/yulu`.
 4. Meeting artifacts: `~/Movies/Yulu`.
-5. Agent interface: Hermes skill + l-skills backup.
+5. Agent boundary: authenticated MCP servers, Hermes phase toolsets, and the Yulu skill.
 
-Current dogfood source repo on Lewis's machine is `~/.yulu`. The target developer-friendly checkout is `~/Documents/Codebase/yulu`; move there only after the current dirty worktree has been committed or intentionally migrated.
+Keep the editable checkout separate from `~/.yulu`, which is the installed
+runtime used by LaunchAgents.
 
 ## Daily loop
 
 ```bash
 make doctor
 make test
+cd yulu/scripts/yulu_ui && npm ci && npm run typecheck && npm test && npm run build
+cd -
 make dev-install-dry-run
 ```
 
 Do not install development code while Yulu is recording. `dev-install-dry-run` checks the audio daemon socket and refuses if it sees an active recording.
+After reviewable tests pass, run `make dev-install` and verify the installed
+runtime with `~/.local/bin/yulu doctor --json`, `/healthz`, and the phase MCP
+registrations.
 
 ## Branch workflow
 
@@ -35,13 +41,15 @@ git commit -m "fix: <short description>"
 git push -u origin HEAD
 ```
 
-Use PRs for anything that changes runtime behavior, launchd, packaging, or skill semantics.
+Use PRs for anything that changes runtime behavior, launchd, packaging, or skill
+semantics. Use a Conventional Commit/PR title; release-please owns `VERSION`,
+`CHANGELOG.md`, release tags, and the normal release PR.
 
 ## Runtime rules
 
 - Do not hand-edit `~/.config/yulu` unless debugging a local state problem.
 - Do not commit `.wav`, transcript, summary, logs, sockets, pid files, or local config.
-- Do not patch the legacy OpenClaw runtime as the only fix. If an emergency runtime patch is necessary, immediately port it back to the source repo.
+- Fix the source checkout first, then synchronize it with `make dev-install`; never leave a runtime-only patch as the source of truth.
 - Before migrating launchd paths, run `make doctor` and record existing processes.
 
 ## Skill sync
@@ -53,21 +61,11 @@ make sync-skill-dry-run
 make sync-skill
 ```
 
-This syncs to:
-
-- `~/.hermes/skills/leizi/yulu/SKILL.md`
-- `~/Documents/Codebase/l-skills/skills/yulu/SKILL.md`
-
-## Third-party code CLI protocol
-
-Each code agent gets one narrow task and one branch/worktree.
+For an end-user-style install, prefer the supported command instead:
 
 ```bash
-mkdir -p .agent/tasks .agent/runs
-git checkout -b fix/<slug>
-codex exec --skip-git-repo-check --sandbox workspace-write --ephemeral \
-  -o .agent/runs/<slug>.md \
-  "Read .agent/tasks/<slug>.md. Implement only that task. Add/update tests. Run required tests. Do not touch unrelated files."
+yulu skill install --agent <agent-name>
 ```
 
-For parallel agents, use `git worktree` and never let two agents modify the same checkout.
+For parallel work, use separate worktrees or explicitly non-overlapping files;
+never let two writers mutate the same checkout without coordination.

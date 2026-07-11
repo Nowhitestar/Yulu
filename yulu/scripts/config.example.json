@@ -24,14 +24,6 @@
       "app_id_env": "FEISHU_APP_ID",
       "app_secret_env": "FEISHU_APP_SECRET",
       "note": "Connector switches are safe config only; credentials stay in env vars or the host agent/plugin."
-    },
-    "notion": {
-      "send_summary": false,
-      "note": "Legacy compatibility flag. Agent Console prefers the selected Agent's Notion connector plus agent_console.destinations."
-    },
-    "zulip": {
-      "send_summary": false,
-      "note": "Legacy compatibility flag. Agent Console prefers the selected Agent's Zulip connector plus agent_console.destinations."
     }
   },
   "ui": {
@@ -57,61 +49,34 @@
     "note": "backend=daemon 使用原生 ScreenCaptureKit + AVFoundation，不需要 BlackHole；mic_device 在原生 daemon 中选择麦克风，system_audio_device 仅 SoX fallback 使用"
   },
   "transcription": {
-    "mode": "local",
-    "post_recording_mode": "fast_summary",
-    "final_engine": "mlx",
     "language": "zh",
-    "local_model_path": "~/.config/yulu/models/ggml-large-v3.bin",
-    "whisper_cli": "whisper-cli",
-    "mlx": {
-      "model": "mlx-community/whisper-large-v3-mlx"
-    },
-    "hermes": {
-      "agent_dir": "~/.hermes/hermes-agent",
-      "model": null,
-      "diarize": true,
-      "note": "Set final_engine=realtime.engine to \"hermes\" to delegate STT to Hermes' configured/default provider. If Hermes is configured for Grok/xAI, Yulu sends the audio to that provider through Hermes' credentials/config and preserves returned speaker diarization. This path never calls Yulu STT from Hermes."
-    },
     "dictation": {
-      "engine": "auto",
       "language": "zh",
       "prompt_slug": "dictation-cleanup",
       "translate_prompt_slug": "dictation-translate",
       "target_language": "English",
       "context_limit": 240,
-      "deadline_sec": 8,
-      "timeout_sec": 8,
+      "deadline_sec": 30,
+      "timeout_sec": 30,
       "translate_deadline_sec": 30,
       "translate_timeout_sec": 30,
-      "note": "Experimental low-latency voice input (`yulu dictate`). Use auto to inherit realtime.engine/final_engine, or set hermes/mlx/whisper explicitly. STT receives audio plus glossary hints only; selected prompts are reserved for post-STT processing such as translation. Hermes translation uses the translate_* budget because it may need a second postprocess call."
-    },
-    "realtime": {
-      "engine": "mlx",
-      "mlx_model": "mlx-community/whisper-large-v3-turbo",
-      "chunk_sec": 15,
-      "chunk_max_sec": 30,
-      "note": "Realtime/live captions run a FASTER model than the final pass so they keep up with wall-clock audio for arbitrarily-long recordings. mlx_model defaults to turbo (~4-8x faster than large-v3); the final transcript is re-done with transcription.mlx.model. chunk_sec = caption cadence; chunk_max_sec caps how much audio one live chunk transcribes so a backlog can't snowball into one slow mega-chunk."
-    },
-    "diarization": {
-      "enabled": false,
-      "provider": "sherpa-onnx",
-      "seg_model": "",
-      "emb_model": "",
-      "num_speakers": null,
-      "threshold": 0.6,
-      "note": "Speaker attribution ('who said what'), v0.6. OFF by default — set enabled=true to provision (setup/yulu migrate then pip-install the cross-platform sherpa-onnx engine into the daemon interpreter + download ~33 MB of ONNX models, both idempotent & offline-by-default). Runs POST-recording, OFF the realtime critical path: the live caption stream never waits on diarization, and a missing engine/model degrades to today's plain transcript with no error. provider=sherpa-onnx is the only backend today. seg_model/emb_model: leave \"\" to use the managed ~/.config/yulu/models/diarization/{segmentation,campplus}.onnx, or an absolute ~/path to override. num_speakers: null = auto-cluster (a calendar-attendee count, when available, is used as a free prior); set an integer to force a known headcount (the reliable lever for Chinese, where auto over-splits). threshold (auto mode only, ignored when num_speakers is set): lower is more sensitive and can split into more speakers; 0.6 is the conservative default to reduce phantom speakers; uncertain clustering fails toward recoverable under-merge (two people one label, fixable in the UI) rather than many phantom speakers."
+      "note": "Voice input is transcribed by Hermes through the authenticated Host endpoint. Yulu only supplies capture, local prompt, and glossary context."
     }
   },
-  "stt_daemon": {
-    "default_engine": "mlx",
-    "live_chunk_max_per_session": 4
+  "agent_pipeline": {
+    "enabled": true,
+    "auto_process_recordings": true,
+    "auto_send_notion": false,
+    "notion_destination": "Yulu Meeting",
+    "hermes_serve_port": 0,
+    "transcription_chunk_sec": 1200
   },
   "llm": {
     "enabled": true,
     "command": null,
     "agent": {
-      "provider": "auto",
-      "note": "Agent Console auto-detects Codex, Claude Code, Hermes, or OpenClaw when command is null. Set command to any Agent CLI wrapper for Gemini, Grok, or custom runtimes."
+      "provider": "hermes",
+      "note": "Hermes is the default conversation Agent. Recording and dictation transcription always use the dedicated Hermes capability regardless of the conversation Agent selection."
     }
   },
   "agent_console": {
@@ -120,32 +85,11 @@
       "note": "Yulu-side filter for capabilities shown in Agent Console. Summary is always available; add notion/zulip/calendar from the console when you want them visible."
     },
     "destinations": {
-      "codex": {
+      "hermes": {
         "notion": {
           "target": "Yulu Meeting"
-        },
-        "zulip": {
-          "stream": "",
-          "topic": ""
         }
       }
-    }
-  },
-  "output": {
-    "channel": "file",
-    "zulip": {
-      "stream_id": "",
-      "stream": "",
-      "topic": "会议纪要",
-      "note": "Legacy output fallback. Agent Console uses per-agent destinations and the selected Agent's Zulip plugin/account."
-    },
-    "notion": {
-      "destination_id": "",
-      "destination_type": "database",
-      "destination_label": "",
-      "api_key_env": "NOTION_API_KEY",
-      "database_id": "",
-      "note": "Legacy output fallback. Agent Console uses per-agent destinations and the selected Agent's Notion plugin/account."
     }
   },
   "meeting_detection": {

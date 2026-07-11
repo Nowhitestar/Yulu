@@ -1,5 +1,6 @@
 import { createServer, type Server as HttpServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { Hono } from "hono";
+import { z } from "zod";
 import { createReadStream, statSync, existsSync } from "node:fs";
 import { join, basename, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -17,12 +18,22 @@ import { startLogTailer } from "./logTailer.js";
 import { serveStaticFile } from "./staticFile.js";
 import { homedir } from "node:os";
 import type { AppContext } from "./trpc.js";
-import { JobRegistry } from "./jobStatus.js";
-import { exchangeCodeForTokens } from "./notionMcpOAuth.js";
 import { resolveAgentRuntime } from "./agentRuntime.js";
 import { ensureBackgroundAgentSession } from "./agentSessionStore.js";
 import { createCaller } from "./trpc.js";
-import { handleMcpRequest, isMcpRequest } from "./mcp.js";
+import { handleMcpRequest, isAuthorizedToken, isMcpRequest } from "./mcp.js";
+import { HostStore } from "./hostStore.js";
+import { ArtifactStore } from "./artifactStore.js";
+import { AgentUnavailableError } from "./agentGateway.js";
+import {
+  InvalidRecordingCompletionError,
+  InvalidTranscriptionInputError,
+  RecordingPipeline,
+  RecordingPipelinePolicyDisabledError,
+} from "./recordingPipeline.js";
+import { startRecordingEventInbox } from "./recordingEventInbox.js";
+import { migrateLegacyAgentQueue } from "./legacyQueueMigration.js";
+import { acquireHostInstanceLock, type HostInstanceLock } from "./hostInstanceLock.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -38,7 +49,29 @@ export async function startServer(pathOverrides: Partial<RuntimePaths> = {}): Pr
   const port = Number(process.env.YULU_UI_PORT ?? 7777);
   const host = "127.0.0.1";
   const launchAgents = join(homedir(), "Library", "LaunchAgents");
-  const runtimePaths = { ...paths, ...pathOverrides } as RuntimePaths;
+  const runtimePaths = {
+    ...paths,
+    ...pathOverrides,
+    hostDb: pathOverrides.hostDb ?? (pathOverrides.configDir ? join(pathOverrides.configDir, "host.sqlite") : paths.hostDb),
+    agentTasksDir: pathOverrides.agentTasksDir ?? (pathOverrides.configDir ? join(pathOverrides.configDir, "agent-tasks") : paths.agentTasksDir),
+    recordingEventsDir: pathOverrides.recordingEventsDir ?? (pathOverrides.configDir ? join(pathOverrides.configDir, "recording-events") : paths.recordingEventsDir),
+    agentQueueJson: pathOverrides.agentQueueJson ?? (pathOverrides.configDir ? join(pathOverrides.configDir, "agent-queue.json") : paths.agentQueueJson),
+  } as RuntimePaths;
+
+  const instanceLock = acquireHostInstanceLock(runtimePaths.configDir);
+  try {
+    return await startLockedServer(runtimePaths, { port, host, launchAgents, instanceLock });
+  } catch (error) {
+    instanceLock.release();
+    throw error;
+  }
+}
+
+async function startLockedServer(
+  runtimePaths: RuntimePaths,
+  options: { port: number; host: string; launchAgents: string; instanceLock: HostInstanceLock },
+): Promise<RunningServer> {
+  const { port, host, launchAgents, instanceLock } = options;
 
   // Lazy DB getters so /healthz works even when the SQLite files aren't present yet
   let _prompts: ReturnType<typeof openDb> | null = null;
@@ -50,14 +83,57 @@ export async function startServer(pathOverrides: Partial<RuntimePaths> = {}): Pr
     get search()  { return (_search ??= openDb(runtimePaths.searchDb)); },
   };
 
-  const jobRegistry = new JobRegistry();
+  const configManager = new ConfigManager(runtimePaths.configFile);
+  const hostStore = new HostStore(runtimePaths.hostDb);
+  const artifactStore = new ArtifactStore(runtimePaths.moviesDir, runtimePaths.agentTasksDir);
+  const retiredLegacyTaskIds = hostStore.retireLegacyImportedTasks();
+  for (const taskId of retiredLegacyTaskIds) {
+    try { artifactStore.cleanupWorkspace(taskId); } catch { /* best effort */ }
+  }
+  if (retiredLegacyTaskIds.length > 0) {
+    console.warn(`[yulu_ui] retired ${retiredLegacyTaskIds.length} imported legacy queue tasks without execution`);
+  }
+  const activeWorkspaceStates = new Set([
+    "queued", "awaiting_agent", "awaiting_policy", "running", "artifacts_committed", "sending", "delivery_reported",
+  ]);
+  const activeWorkspaceTaskIds = hostStore.listTasks(10_000)
+    .filter((task) => activeWorkspaceStates.has(task.state))
+    .map((task) => task.id);
+  const cleanedWorkspaces = artifactStore.cleanupInactiveWorkspaces(activeWorkspaceTaskIds);
+  if (cleanedWorkspaces.length > 0) {
+    console.warn(`[yulu_ui] cleaned ${cleanedWorkspaces.length} inactive Agent task workspaces`);
+  }
+  const recordingPipeline = new RecordingPipeline({
+    store: hostStore,
+    artifacts: artifactStore,
+    config: configManager,
+    paths: runtimePaths,
+    pubsub: appPubSub,
+    promptDb: () => dbProxy.prompts,
+  });
+  try {
+    const migration = migrateLegacyAgentQueue({
+      queuePath: runtimePaths.agentQueueJson,
+    });
+    if (migration) {
+      console.warn(
+        `[yulu_ui] archived legacy Agent queue: retired=${migration.retiredPending} ` +
+        `materialized=${migration.alreadyMaterialized} unresolvable=${migration.unresolvable} ` +
+        `archive=${migration.archivePath}`,
+      );
+    }
+  } catch (error) {
+    console.warn(`[yulu_ui] legacy Agent queue migration failed; source preserved: ${(error as Error).message}`);
+  }
 
   const ctx: AppContext = {
-    config:    new ConfigManager(runtimePaths.configFile),
+    config:    configManager,
     launchctl: new LaunchctlClient(launchAgents),
     pubsub:    appPubSub,
     paths:     runtimePaths,
-    jobs:      jobRegistry,
+    host:      hostStore,
+    artifacts: artifactStore,
+    recordingPipeline,
     db:        dbProxy,
   };
 
@@ -90,16 +166,89 @@ export async function startServer(pathOverrides: Partial<RuntimePaths> = {}): Pr
 
   app.get("/healthz", (c) => c.json({ status: "ok", uptime: process.uptime() }));
 
-  app.get("/integrations/notion/callback", async (c) => {
+  const RecordingCompletionSchema = z.object({
+    audioPath: z.string().min(1),
+    title: z.string().max(200).optional(),
+    sendToNotion: z.boolean().optional(),
+  });
+  app.post("/api/recordings/completed", async (c) => {
+    if (!isAuthorizedToken(
+      runtimePaths.mcpTokenJson,
+      c.req.header("authorization") ?? "",
+      c.req.header("x-yulu-mcp-token") ?? "",
+    )) return c.json({ ok: false, error: "unauthorized" }, 401);
+    let parsed: z.infer<typeof RecordingCompletionSchema>;
     try {
-      await exchangeCodeForTokens({
-        configDir: runtimePaths.configDir,
-        callbackUrl: c.req.url,
-      });
-      return c.html("<!doctype html><html><body><h1>Notion connected</h1><p>You can close this window and return to Yulu.</p></body></html>");
-    } catch (exc) {
-      const message = (exc as Error).message;
-      return c.html(`<!doctype html><html><body><h1>Notion connection failed</h1><p>${escapeHtml(message)}</p></body></html>`, 400);
+      parsed = RecordingCompletionSchema.parse(await c.req.json());
+    } catch (error) {
+      return c.json({ ok: false, error: "invalid_recording_completion", detail: (error as Error).message }, 400);
+    }
+    try {
+      const result = recordingPipeline.enqueueCompletion(parsed);
+      return c.json({
+        ok: true,
+        taskId: result.task.id,
+        state: result.task.state,
+        created: result.created,
+      }, 202);
+    } catch (error) {
+      if (error instanceof RecordingPipelinePolicyDisabledError) {
+        return c.json({
+          ok: false,
+          error: "recording_pipeline_policy_disabled",
+          permanent: true,
+          detail: error.message,
+        }, 409);
+      }
+      if (error instanceof InvalidRecordingCompletionError) {
+        return c.json({
+          ok: false,
+          error: "recording_completion_rejected",
+          permanent: true,
+          detail: error.message,
+        }, 400);
+      }
+      return c.json({ ok: false, error: "recording_completion_failed", permanent: false, detail: (error as Error).message }, 503);
+    }
+  });
+
+  const AgentTranscriptionSchema = z.object({ audioPath: z.string().min(1) });
+  app.post("/api/agent/transcription/warm", async (c) => {
+    if (!isAuthorizedToken(runtimePaths.mcpTokenJson, c.req.header("authorization") ?? "")) {
+      return c.json({ ok: false, error: "unauthorized" }, 401);
+    }
+    try {
+      const result = await recordingPipeline.warmTranscription();
+      return c.json({ ok: true, ...result });
+    } catch (error) {
+      if (error instanceof AgentUnavailableError) {
+        return c.json({ ok: false, error: "agent_unavailable", detail: error.message }, 503);
+      }
+      return c.json({ ok: false, error: "agent_transcription_warm_failed", detail: (error as Error).message }, 502);
+    }
+  });
+
+  app.post("/api/agent/transcribe", async (c) => {
+    if (!isAuthorizedToken(runtimePaths.mcpTokenJson, c.req.header("authorization") ?? "")) {
+      return c.json({ ok: false, error: "unauthorized" }, 401);
+    }
+    let parsed: z.infer<typeof AgentTranscriptionSchema>;
+    try {
+      parsed = AgentTranscriptionSchema.parse(await c.req.json());
+    } catch (error) {
+      return c.json({ ok: false, error: "invalid_agent_transcription", detail: (error as Error).message }, 400);
+    }
+    try {
+      const result = await recordingPipeline.transcribeOnDemand(parsed);
+      return c.json({ ok: true, ...result });
+    } catch (error) {
+      if (error instanceof InvalidTranscriptionInputError) {
+        return c.json({ ok: false, error: "invalid_agent_transcription", detail: error.message }, 400);
+      }
+      if (error instanceof AgentUnavailableError) {
+        return c.json({ ok: false, error: "agent_unavailable", detail: error.message }, 503);
+      }
+      return c.json({ ok: false, error: "agent_transcription_failed", detail: (error as Error).message }, 502);
     }
   });
 
@@ -220,7 +369,6 @@ export async function startServer(pathOverrides: Partial<RuntimePaths> = {}): Pr
     }
     void bridgeNodeToFetch(req, res, (r) => Promise.resolve(app.fetch(r)));
   });
-  mountWsMultiplexer(http, appPubSub);
 
   const inboxWatcher = startInboxWatcher({
     moviesDir: runtimePaths.moviesDir,
@@ -232,17 +380,71 @@ export async function startServer(pathOverrides: Partial<RuntimePaths> = {}): Pr
     pubsub: appPubSub,
   });
 
-  await new Promise<void>((resolve) => http.listen(port, host, resolve));
+  try {
+    await listenHttp(http, port, host);
+  } catch (error) {
+    logTailer.stop();
+    inboxWatcher.stop();
+    try { await recordingPipeline.close(); } catch { /* preserve the listen error */ }
+    try { hostStore.close(); } catch { /* best effort */ }
+    throw error;
+  }
+  let recordingEventInbox: ReturnType<typeof startRecordingEventInbox>;
+  try {
+    mountWsMultiplexer(http, appPubSub);
+    recordingEventInbox = startRecordingEventInbox({
+      dir: runtimePaths.recordingEventsDir,
+      pipeline: recordingPipeline,
+    });
+    recordingPipeline.kick();
+  } catch (error) {
+    logTailer.stop();
+    inboxWatcher.stop();
+    try { await recordingPipeline.close(); } catch { /* preserve the startup error */ }
+    await new Promise<void>((resolve) => http.close(() => resolve()));
+    try { hostStore.close(); } catch { /* best effort */ }
+    throw error;
+  }
   const addr = http.address() as { port: number };
+  let closePromise: Promise<void> | null = null;
   return {
     http,
     address: addr,
-    close: () => new Promise<void>((resolve) => {
-      logTailer.stop();
-      inboxWatcher.stop();
-      http.close(() => resolve());
-    }),
+    close: () => {
+      closePromise ??= (async () => {
+        try {
+          logTailer.stop();
+          inboxWatcher.stop();
+          recordingEventInbox.stop();
+          await recordingPipeline.close();
+          await new Promise<void>((resolve) => http.close(() => resolve()));
+          _prompts?.close();
+          _vocab?.close();
+          _search?.close();
+          hostStore.close();
+        } finally {
+          instanceLock.release();
+        }
+      })();
+      return closePromise;
+    },
   };
+}
+
+function listenHttp(http: HttpServer, port: number, host: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const onListening = () => {
+      http.off("error", onError);
+      resolve();
+    };
+    const onError = (error: Error) => {
+      http.off("listening", onListening);
+      reject(error);
+    };
+    http.once("error", onError);
+    http.once("listening", onListening);
+    http.listen(port, host);
+  });
 }
 
 /**
@@ -324,15 +526,6 @@ async function bridgeNodeToFetch(
     res.statusCode = 500;
     res.end((e as Error).message);
   }
-}
-
-function escapeHtml(value: string): string {
-  return value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
 }
 
 // CLI entry

@@ -3,12 +3,15 @@ import { test, expect } from "@playwright/test";
 
 test.describe.configure({ mode: "serial" });
 
-test("shell loads + redirects / to /inbox", async ({ page }) => {
+test.beforeEach(async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem("yulu_ui.lang", "en"));
+});
+
+test("shell loads + redirects / to the Agent Console workspace", async ({ page }) => {
   await page.goto("/");
-  await expect(page).toHaveURL(/\/inbox$/);
-  // Sidebar brand text capitalized
-  await expect(page.getByText("Yulu", { exact: true }).first()).toBeVisible();
-  await expect(page.getByText("Recordings").first()).toBeVisible();
+  await expect(page).toHaveURL(/\/agent-console$/);
+  await expect(page.getByRole("tablist", { name: "Agent Console mode" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "问会议" })).toBeVisible();
 });
 
 test("Sidebar: single Recordings entry, no Voicemails/Meetings, no counts", async ({ page }) => {
@@ -17,15 +20,17 @@ test("Sidebar: single Recordings entry, no Voicemails/Meetings, no counts", asyn
   await expect(page.locator(".sidebar a", { hasText: /^Recordings$/ })).toHaveCount(1);
   await expect(page.locator(".sidebar a", { hasText: /^Voicemails$/ })).toHaveCount(0);
   await expect(page.locator(".sidebar a", { hasText: /^Meetings$/ })).toHaveCount(0);
-  // Bottom region with Settings + Health
+  await expect(page.locator('.sidebar a[href="/settings"]')).toHaveCount(1);
+  await expect(page.locator('.sidebar a[href="/health"]')).toHaveCount(1);
+  // Bottom region reports the local runtime rather than duplicating nav links.
   const bottom = page.locator('[data-testid="sidebar-bottom"]');
-  await expect(bottom).toContainText("Settings");
-  await expect(bottom).toContainText("Health");
+  await expect(bottom).toContainText("Local Engine");
 });
 
 test("Recordings — list renders + clicking a row opens reader", async ({ page }) => {
   await page.goto("/inbox");
-  await expect(page.getByRole("button", { name: "All", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Recordings", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "More" })).toBeVisible();
   const rows = page.getByTestId("recording-row");
   const count = await rows.count();
   if (count === 0) {
@@ -66,24 +71,25 @@ test("GlobalSearch popover opens via ⌘K, lists results, closes on Esc", async 
   await expect(page.locator(".gs-popover")).toBeHidden();
 });
 
-test("Settings — single page with all 6 sections", async ({ page }) => {
+test("Settings — Agent-native categories render current detail sections", async ({ page }) => {
   await page.goto("/settings");
-  await expect(page.getByRole("heading", { name: "Audio", exact: true })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Transcription", exact: true })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "LLM", exact: true })).toBeVisible();
+  await expect(page).toHaveURL(/\/settings\/general$/);
+  await expect(page.getByTestId("settings-category")).toHaveCount(5);
+  await expect(page.getByRole("heading", { name: "Host capabilities", exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Hotkey & UI", exact: true })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Integrations", exact: true })).toBeVisible();
+  await page.goto("/settings/audio");
+  await expect(page.getByRole("heading", { name: "Audio", exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Storage", exact: true })).toBeVisible();
 });
 
-test("Settings — old /settings/audio redirects to /settings#audio", async ({ page }) => {
-  await page.goto("/settings/audio");
-  await expect(page).toHaveURL(/\/settings#audio$/);
+test("Settings — retired LLM settings route redirects to Agent Console", async ({ page }) => {
+  await page.goto("/settings/llm");
+  await expect(page).toHaveURL(/\/agent-console$/);
 });
 
 test("Knowledge/Prompts — new prompt mode hides Delete, Save disabled until valid", async ({ page }) => {
   await page.goto("/knowledge/prompts");
-  await page.getByRole("link", { name: /\+ new prompt/i }).click();
+  await page.getByRole("link", { name: /\+ new template/i }).click();
   await expect(page).toHaveURL(/\/knowledge\/prompts\/new/);
   await expect(page.getByRole("button", { name: /^delete$/i })).toHaveCount(0);
   await expect(page.getByRole("button", { name: /^save$/i })).toBeDisabled();
@@ -93,18 +99,20 @@ test("Knowledge/Prompts — new prompt mode hides Delete, Save disabled until va
   await expect(page.getByRole("button", { name: /^save$/i })).toBeEnabled();
 });
 
-test("Knowledge/Glossary — table renders + Add term button is visible", async ({ page }) => {
+test("Knowledge/Glossary — proper-noun editor renders", async ({ page }) => {
   await page.goto("/knowledge/glossary");
-  await expect(page.getByRole("button", { name: /\+ add term/i })).toBeVisible();
-  await expect(page.locator(".etable-cell", { hasText: /^Term$/ }).first()).toBeVisible();
-  await expect(page.locator(".etable-cell", { hasText: /^Last edited$/ }).first()).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Proper nouns" })).toBeVisible();
+  await expect(page.getByRole("textbox", { name: "Enter a proper noun, then press Return" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Add", exact: true })).toBeDisabled();
 });
 
-test("Health — single page shows summary + Daemons grid by default", async ({ page }) => {
+test("Health — defaults to Doctor and exposes the current daemon grid", async ({ page }) => {
   await page.goto("/health");
   await expect(page.locator('[data-testid="health-summary"]')).toBeVisible();
-  await expect(page.locator('[data-testid="tab-daemons"][aria-selected="true"]')).toBeVisible();
-  const knownDaemons = ["audiodaemon", "sttdaemon", "agentqueue", "statusagent", "scheduler", "detector", "calendar", "ui"];
+  await expect(page.locator('[data-testid="tab-doctor"][aria-selected="true"]')).toBeVisible();
+  await page.locator('[data-testid="tab-daemons"]').click();
+  await expect(page).toHaveURL(/\/health#daemons$/);
+  const knownDaemons = ["audiodaemon", "statusagent", "scheduler", "detector", "calendar", "ui"];
   for (const d of knownDaemons) {
     await expect(page.locator(".daemon-card-name", { hasText: d })).toBeVisible({ timeout: 10_000 });
   }
@@ -148,7 +156,7 @@ test("AudioPlayer survives A → B → A switch (Phase I regression)", async ({ 
   await expect(page.getByRole("button", { name: /^pause$/i })).toBeVisible({ timeout: 5_000 });
 });
 
-test("RecordingReader has Re-transcribe and Re-generate summary buttons", async ({ page }) => {
+test("RecordingReader exposes the two durable Hermes pipeline actions", async ({ page }) => {
   await page.goto("/inbox");
   const rows = page.getByTestId("recording-row");
   const count = await rows.count();
@@ -157,6 +165,6 @@ test("RecordingReader has Re-transcribe and Re-generate summary buttons", async 
     return;
   }
   await rows.first().click();
-  await expect(page.getByRole("button", { name: /Re-transcribe/i })).toBeVisible({ timeout: 10_000 });
-  await expect(page.getByRole("button", { name: /Re-generate summary/i })).toBeVisible();
+  await expect(page.getByRole("button", { name: /Let Hermes process/i })).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByRole("button", { name: /Process and send to Notion/i })).toBeVisible();
 });

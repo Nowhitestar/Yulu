@@ -17,6 +17,7 @@ import {
 } from "../agentPlugins.js";
 import { ensureBackgroundAgentSession, updateAgentSessionNativeSession } from "../agentSessionStore.js";
 import { runAgentCliCommand } from "../agentCliRunner.js";
+import type { HostStore } from "../hostStore.js";
 
 type StageState = "idle" | "waiting" | "running" | "done" | "failed";
 type AgentId = "codex" | "claude" | "hermes" | "openclaw";
@@ -51,7 +52,7 @@ interface DestinationOption {
   id: string;
   label: string;
   value: string;
-  source: "agent" | "saved" | "legacy" | "default";
+  source: "agent" | "saved" | "default";
   kind?: string;
   target?: string;
   stream?: string;
@@ -64,13 +65,6 @@ const AGENT_META: Record<AgentId, { command: string; name: string; supported: bo
   hermes: { command: "hermes", name: "Hermes", supported: true },
   openclaw: { command: "openclaw", name: "OpenClaw", supported: true },
 };
-
-interface ShareHistoryEntry {
-  channel?: unknown;
-  status?: unknown;
-  message?: unknown;
-  sentAt?: unknown;
-}
 
 interface AgentConsoleTask {
   id: string;
@@ -171,16 +165,6 @@ function selectedConsoleAgent(config: unknown, scriptDir: string, moviesDir: str
   return normalizeConsoleAgent(runtime.provider);
 }
 
-function readShareHistory(path: string): ShareHistoryEntry[] {
-  if (!existsSync(path)) return [];
-  try {
-    const parsed = JSON.parse(readFileSync(path, "utf8"));
-    return Array.isArray(parsed) ? parsed.filter((entry): entry is ShareHistoryEntry => !!entry && typeof entry === "object") : [];
-  } catch {
-    return [];
-  }
-}
-
 function stringValue(root: Record<string, unknown>, key: string): string {
   return typeof root[key] === "string" ? String(root[key]).trim() : "";
 }
@@ -234,42 +218,6 @@ function normalizeCachedOption(channel: "notion" | "zulip", raw: unknown): Desti
   };
 }
 
-function legacyDestinationOptions(config: unknown, channel: "notion" | "zulip"): DestinationOption[] {
-  const output = asRecord(asRecord(config).output);
-  const out: DestinationOption[] = [];
-  if (channel === "notion") {
-    const notion = asRecord(output.notion);
-    const target =
-      stringValue(notion, "destination_label") ||
-      stringValue(notion, "destination_id") ||
-      stringValue(notion, "database_id");
-    if (target) {
-      addOption(out, {
-        id: `notion:${target}`,
-        label: target,
-        value: target,
-        target,
-        source: "legacy",
-      });
-    }
-    return out;
-  }
-  const zulip = asRecord(output.zulip);
-  const stream = stringValue(zulip, "stream");
-  const topic = stringValue(zulip, "topic");
-  if (stream && topic) {
-    addOption(out, {
-      id: `zulip:${stream}:${topic}`,
-      label: `${stream} / ${topic}`,
-      value: `${stream} / ${topic}`,
-      stream,
-      topic,
-      source: "legacy",
-    });
-  }
-  return out;
-}
-
 function destinationOptions(config: unknown, agent: AgentId | null, channel: "notion" | "zulip") {
   const out: DestinationOption[] = [];
   const saved = agentDestinationView(config, agent, channel);
@@ -292,7 +240,6 @@ function destinationOptions(config: unknown, agent: AgentId | null, channel: "no
       source: "saved",
     });
   }
-  for (const option of legacyDestinationOptions(config, channel)) addOption(out, option);
   for (const raw of destinationOptionRoot(config, agent, channel)) {
     const option = normalizeCachedOption(channel, raw);
     if (option) addOption(out, option);
@@ -377,27 +324,27 @@ function stageForRecording(
   dir: string,
   hasTranscript: boolean,
   hasSummary: boolean,
-  shareHistory: ShareHistoryEntry[],
-  jobs: { get: (stem: string) => { action: string; state: string; error?: string } | undefined },
+  host: Pick<HostStore, "latestForRecording">,
 ) {
-  const job = jobs.get(stem);
+  const task = host.latestForRecording(stem);
+  const taskActive = !!task && !["completed", "cancelled", "failed", "delivery_unverified"].includes(task.state);
   const transcribe: StageState =
     hasSummary || hasTranscript ? "done" :
-    job?.action === "transcribe" && job.state === "failed" ? "failed" :
-    job?.state === "transcribing" ? "running" :
+    task?.state === "failed" ? "failed" :
+    taskActive ? "running" :
     "idle";
   const summarize: StageState =
     hasSummary ? "done" :
-    job?.action === "summarize" && job.state === "failed" ? "failed" :
-    job?.state === "summarizing" ? "running" :
+    task?.state === "failed" && hasTranscript ? "failed" :
+    taskActive && task.phase !== "transcribing" && task.phase !== "queued" ? "running" :
     transcribe === "done" ? "idle" : "waiting";
-  const lastShare = shareHistory[0];
   const send: StageState =
-    lastShare?.status === "success" ? "done" :
-    lastShare?.status === "failed" ? "failed" :
+    task?.sendToNotion && task.state === "completed" ? "done" :
+    task?.sendToNotion && ["sending", "delivery_reported"].includes(task.state) ? "running" :
+    task?.sendToNotion && ["failed", "delivery_unverified"].includes(task.state) ? "failed" :
     hasSummary ? "idle" : "waiting";
-  const dest = lastShare?.channel === "zulip" ? "zulip" : lastShare?.channel === "notion" ? "notion" : null;
-  const error = job?.error ?? (lastShare?.status === "failed" ? String(lastShare.message ?? "send failed") : "");
+  const dest = task?.sendToNotion ? "notion" : null;
+  const error = task?.error ?? "";
   return {
     stages: { record: "done" as StageState, transcribe, summarize, send },
     dest: dest as SendDest,
@@ -408,7 +355,7 @@ function stageForRecording(
   };
 }
 
-function recentTasks(dir: string, jobs: { get: (stem: string) => { action: string; state: string; error?: string } | undefined }): AgentConsoleTask[] {
+function recentTasks(dir: string, host: Pick<HostStore, "latestForRecording">): AgentConsoleTask[] {
   if (!existsSync(dir)) return [];
   const cutoff = Date.now() - RECENT_DAYS_MS;
   const tasks: AgentConsoleTask[] = [];
@@ -421,7 +368,6 @@ function recentTasks(dir: string, jobs: { get: (stem: string) => { action: strin
     const stat = statSync(wavPath);
     if (stat.mtimeMs < cutoff) continue;
     const recordedAt = isoFromStem(date!, time!);
-    const shareHistory = readShareHistory(join(dir, `${stem}.shares.json`));
     tasks.push({
       id: stem,
       stem,
@@ -434,8 +380,7 @@ function recentTasks(dir: string, jobs: { get: (stem: string) => { action: strin
         dir,
         existsSync(join(dir, `${stem}.transcript.txt`)),
         existsSync(join(dir, `${stem}.summary.md`)),
-        shareHistory,
-        jobs,
+        host,
       ),
     });
   }
@@ -461,7 +406,7 @@ export const agentConsoleRouter = router({
       ? ensureBackgroundAgentSession(ctx.paths.configDir, { agent: runtime.provider, runtimeLabel: runtime.label })
       : null;
     const recState = await recordingState(ctx.paths.statusAgentSock);
-    const tasks = recentTasks(ctx.paths.moviesDir, ctx.jobs);
+    const tasks = recentTasks(ctx.paths.moviesDir, ctx.host);
     if (recState.state === "recording") {
       tasks.unshift({
         id: "__active_recording__",
@@ -651,6 +596,9 @@ export const agentConsoleRouter = router({
       if (!agent) return { ok: false as const, error: "当前底层 Agent 不支持保存发送目标" };
       if (input.channel === "notion") {
         ctx.config.update(`agent_console.destinations.${agent}.notion.target`, input.target);
+        // Automatic recording delivery is always executed by Hermes. Keep the
+        // user-visible Notion destination aligned with that durable pipeline.
+        ctx.config.update("agent_pipeline.notion_destination", input.target);
       } else {
         ctx.config.update(`agent_console.destinations.${agent}.zulip.stream`, input.stream);
         ctx.config.update(`agent_console.destinations.${agent}.zulip.topic`, input.topic);

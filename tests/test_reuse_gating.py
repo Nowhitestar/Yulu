@@ -2,9 +2,8 @@
 
 The reuse decision — "reuse the host's tool and SKIP our install" vs "install Yulu's own"
 — is driven by the Phase-3 tri-state report, NEVER by a boolean. This is the load-bearing
-honesty constraint: a host tool that is merely *present-but-unverified* (e.g. a broken /
-unimportable whisper-cli) must NOT be reused, because reusing it would reintroduce the exact
-silent first-recording failure the tri-state exists to prevent (report.py:35 docstring:
+honesty constraint: a host tool that is merely *present-but-unverified* must NOT be reused
+(report.py:35 docstring:
 "A boolean must never drive a skip-install decision").
 
 This test replicates the SAME lookup the production gate uses — the
@@ -36,8 +35,8 @@ from capabilities.report import (  # noqa: E402
     Status,
 )
 
-# The three capabilities REUSE-01 names and Phase 5 gates (gog added in Task 1).
-GATED_CAPS = ("whisper_cli", "mlx_whisper", "gog")
+# Calendar CLI is the remaining Yulu-owned install/reuse gate.
+GATED_CAPS = ("gog",)
 
 # The full tri-state and the decision each value MUST produce (D-04 / Pitfall 4).
 TRI_STATE_DECISIONS = [
@@ -134,10 +133,10 @@ def test_missing_host_capabilities_section_defaults_to_install():
     the production helper echoes ``absent`` on any such failure, which means install.
     """
     error_envelope = {"error": "doctor failed", "schema_version": 1, "capabilities": {}}
-    assert _status_for("whisper_cli", error_envelope) == "absent"
-    assert _decision(_status_for("whisper_cli", error_envelope)) == "install"
+    assert _status_for("gog", error_envelope) == "absent"
+    assert _decision(_status_for("gog", error_envelope)) == "install"
     # And a wholly empty / malformed dict still degrades to install.
-    assert _decision(_status_for("whisper_cli", {})) == "install"
+    assert _decision(_status_for("gog", {})) == "install"
 
 
 def test_malformed_capabilities_node_defaults_to_install():
@@ -170,7 +169,7 @@ def test_status_value_is_never_a_boolean():
     the string-equality gate would silently misbehave; this catches it at the boundary.
     """
     for status_value, _ in TRI_STATE_DECISIONS:
-        report_dict = _report_with("whisper_cli", status_value)
-        status = report_dict["capabilities"]["whisper_cli"]["status"]
+        report_dict = _report_with("gog", status_value)
+        status = report_dict["capabilities"]["gog"]["status"]
         assert isinstance(status, str) and not isinstance(status, bool)
         assert status in {"usable", "present-but-unverified", "absent"}

@@ -4,7 +4,10 @@ name: Release publish (reusable)
 #   - release-please.yml (automatic, on Release PR merge)
 #   - release.yml        (manual escape hatch, on `v*.*.*` tag push)
 # It checks out the tag, re-runs the test suite, packages the assets, and
-# creates/updates the GitHub Release with the pkg installer.
+# creates/updates the GitHub Release with a notarized user-level runtime zip.
+# package-pkg remains a local diagnostic target only: this repository does not
+# currently hold a Developer ID Installer certificate, so unsigned pkg files
+# must never be presented as production release assets.
 
 on:
   workflow_call:
@@ -23,7 +26,7 @@ jobs:
   publish:
     name: Build & publish release assets
     runs-on: macos-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     env:
       TAG: ${{ inputs.tag }}
     steps:
@@ -54,8 +57,6 @@ jobs:
                    yulu/scripts/setup.sh \
                    yulu/scripts/setup_deps.sh \
                    yulu/scripts/setup_audio.sh \
-                   yulu/scripts/setup_models.sh \
-                   yulu/scripts/setup_capabilities.sh \
                    yulu/scripts/setup_daemons.sh \
                    yulu/scripts/setup_ui.sh \
                    yulu/scripts/lib/common.sh \
@@ -85,8 +86,24 @@ jobs:
           python -m pip install pytest
           python -m pytest -q
 
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: yulu/scripts/yulu_ui/package-lock.json
+
+      - name: Node typecheck, tests, and build
+        working-directory: yulu/scripts/yulu_ui
+        run: |
+          set -euo pipefail
+          npm ci
+          npm run typecheck
+          npm test
+          npm run build
+
       # Sign + notarize + staple BEFORE packaging (Pitfall 4 ordering): the .app
-      # DIRECTORIES are stapled here so the ticket travels inside the pkg that the
+      # DIRECTORIES are stapled here so the ticket travels inside the zip that the
       # next step builds. sign_and_notarize.sh also runs build_*.sh (bottom-up
       # hardened-runtime signing), so the package step below uses --skip-build to
       # avoid re-running the build and overwriting the stapled bundles.
@@ -113,18 +130,41 @@ jobs:
           # correct: signing/stapling intentionally mutates the allowlisted
           # bundle bytes (Info.plist, Mach-O, _CodeSignature/CodeResources).
           make package TAG="$TAG" PACKAGE_ARGS=--skip-build
-          make package-pkg TAG="$TAG" PACKAGE_PKG_ARGS="--runtime-zip dist/yulu-macos-arm64-$TAG.zip"
-          test -f "dist/yulu-macos-arm64-$TAG.pkg"
+          make checksums
+          test -f "dist/yulu-macos-arm64-$TAG.zip"
+          test -f "dist/install.sh"
+          test -f "dist/checksums.txt"
+          (cd dist && shasum -a 256 -c checksums.txt)
+          PYTHONPATH=yulu/scripts python3 - <<'PY'
+          import os
+          import tempfile
+          from pathlib import Path
 
-      # SLSA build-provenance attestation for the release pkg (BUILD-04). Minted
+          from release_installer import (
+              extract_release_zip,
+              validate_runtime_layout,
+              verify_release_bundle_security,
+              verify_runtime_manifest,
+          )
+
+          tag = os.environ["TAG"]
+          archive = Path("dist") / f"yulu-macos-arm64-{tag}.zip"
+          with tempfile.TemporaryDirectory() as temporary:
+              runtime = extract_release_zip(archive, Path(temporary))
+              validate_runtime_layout(runtime, tag)
+              verify_release_bundle_security(runtime, require_staple=True)
+              verify_runtime_manifest(runtime)
+          PY
+
+      # SLSA build-provenance attestation for the release zip (BUILD-04). Minted
       # from this workflow's OIDC token; verifiable with `gh attestation verify
-      # <pkg> --repo Nowhitestar/Yulu`. Requires id-token/attestations: write
+      # <zip> --repo Nowhitestar/Yulu`. Requires id-token/attestations: write
       # (declared on this job above). A4: confirm the reusable workflow inherits
       # those permissions on a real run.
-      - name: Attest release pkg provenance
+      - name: Attest release zip provenance
         uses: actions/attest-build-provenance@v4
         with:
-          subject-path: dist/yulu-macos-arm64-${{ inputs.tag }}.pkg
+          subject-path: dist/yulu-macos-arm64-${{ inputs.tag }}.zip
 
       - name: Prepare release notes
         run: |
@@ -146,23 +186,31 @@ jobs:
               body = match.group(0).strip()
           else:
               body = f"Release {tag}"
+          bridge = pathlib.Path("docs/release-notes") / f"{tag}.md"
+          if bridge.is_file():
+              body = f"{body}\n\n{bridge.read_text().strip()}"
           notes.write_text(body + "\n")
           print(notes)
           PY
 
-      - name: Create or update GitHub Release
+      - name: Upload verified assets to draft GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           ASSETS=(
-            "dist/yulu-macos-arm64-$TAG.pkg"
+            "dist/yulu-macos-arm64-$TAG.zip"
+            "dist/install.sh"
+            "dist/checksums.txt"
           )
           if gh release view "$TAG" >/dev/null 2>&1; then
+            # release-please creates a draft. Re-draft an existing release on a
+            # manual rerun so clobbered assets are never partially public.
             EDIT_ARGS=(
               "$TAG"
               --title "$TAG"
               --notes-file "$RUNNER_TEMP/release-notes.md"
+              --draft
             )
             if [[ "$TAG" == *-* ]]; then
               EDIT_ARGS+=(--prerelease)
@@ -177,12 +225,58 @@ jobs:
               "${ASSETS[@]}"
               --title "$TAG"
               --notes-file "$RUNNER_TEMP/release-notes.md"
+              --draft
             )
             if [[ "$TAG" == *-* ]]; then
               CREATE_ARGS+=(--prerelease)
             fi
             gh release create "${CREATE_ARGS[@]}"
           fi
+
+          # Refuse to publish until every required remote asset exists and has a
+          # non-zero size. The release remains draft on any failure above/below.
+          gh release view "$TAG" --json assets --jq '.assets[] | [.name, .size] | @tsv' \
+            > "$RUNNER_TEMP/release-assets.tsv"
+          for asset in "${ASSETS[@]}"; do
+            name="$(basename "$asset")"
+            awk -F '\t' -v expected="$name" '
+              $1 == expected && $2 + 0 > 0 { found = 1 }
+              END { exit(found ? 0 : 1) }
+            ' "$RUNNER_TEMP/release-assets.tsv" || {
+              echo "Required uploaded asset is missing or empty: $name" >&2
+              exit 1
+            }
+          done
+
+          # Re-download the draft assets and compare the actual remote bytes,
+          # not just their names/sizes, before making the release public.
+          REMOTE_DIR="$RUNNER_TEMP/yulu-remote-release-assets"
+          rm -rf "$REMOTE_DIR"
+          mkdir -p "$REMOTE_DIR"
+          for asset in "${ASSETS[@]}"; do
+            name="$(basename "$asset")"
+            gh release download "$TAG" --pattern "$name" --dir "$REMOTE_DIR"
+            cmp "$asset" "$REMOTE_DIR/$name" || {
+              echo "Uploaded release asset differs from the verified local bytes: $name" >&2
+              exit 1
+            }
+          done
+
+      - name: Publish completed GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          PUBLISH_ARGS=(
+            "$TAG"
+            --draft=false
+          )
+          if [[ "$TAG" == *-* ]]; then
+            PUBLISH_ARGS+=(--prerelease)
+          else
+            PUBLISH_ARGS+=(--prerelease=false)
+          fi
+          gh release edit "${PUBLISH_ARGS[@]}"
 
       # Tear down the ephemeral signing keychain and remove the decoded cert/key,
       # ALWAYS — even if an earlier step failed — so the imported Developer ID

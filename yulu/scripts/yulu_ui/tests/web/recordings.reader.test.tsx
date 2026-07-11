@@ -3,15 +3,15 @@ import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { MemoryRouter, Routes, Route } from "react-router";
 
 const getMock = vi.fn();
-const transcribeMutate = vi.fn();
-const summarizeMutate = vi.fn();
+const reprocessMutate = vi.fn();
 const renameMutate = vi.fn();
 const setTagsMutate = vi.fn();
 const deleteMutate = vi.fn();
+const confirmDeliveryMutate = vi.fn();
+const abandonDeliveryMutate = vi.fn();
 const renameSpeakerMutate = vi.fn();
 const mergeSpeakersMutate = vi.fn();
 const assignSegmentSpeakerMutate = vi.fn();
-const sendSummaryMutate = vi.fn();
 const promptListMock = vi.fn();
 const navigateMock = vi.fn();
 const confirmMock = vi.fn(() => true);
@@ -21,21 +21,20 @@ vi.mock("../../web/src/trpc.js", () => ({
   trpc: {
     recordings: {
       get: { useQuery: (...a: unknown[]) => getMock(...a) },
-      transcribe: { useMutation: () => ({ mutate: transcribeMutate }) },
-      summarize: { useMutation: () => ({ mutate: summarizeMutate }) },
+      reprocess: { useMutation: () => ({ mutate: reprocessMutate, isPending: false }) },
       rename: { useMutation: () => ({ mutate: renameMutate, isPending: false }) },
       setTags: { useMutation: () => ({ mutate: setTagsMutate, isPending: false }) },
       delete: { useMutation: () => ({ mutate: deleteMutate, isPending: false }) },
-      sendSummary: { useMutation: () => ({ mutate: sendSummaryMutate, isPending: false }) },
       renameSpeaker: { useMutation: () => ({ mutate: renameSpeakerMutate, isPending: false }) },
       mergeSpeakers: { useMutation: () => ({ mutate: mergeSpeakersMutate, isPending: false }) },
       assignSegmentSpeaker: { useMutation: () => ({ mutate: assignSegmentSpeakerMutate, isPending: false }) },
     },
-    capabilities: {
-      detected_models: { useQuery: () => ({ data: [] }) },
-    },
     prompts: {
       list: { useQuery: (...a: unknown[]) => promptListMock(...a) },
+    },
+    agentTasks: {
+      confirmNotionDelivery: { useMutation: () => ({ mutate: confirmDeliveryMutate, isPending: false }) },
+      abandonNotionDelivery: { useMutation: () => ({ mutate: abandonDeliveryMutate, isPending: false }) },
     },
   },
 }));
@@ -56,8 +55,8 @@ import { RecordingReader } from "../../web/src/routes/inbox/recordings.$stem";
 
 const baseData = {
   stem: "TeamSync_20260102_090000", type: "meeting" as const, title: "TeamSync",
-  tags: [] as string[], mtimeMs: 1, transcript: "t", summary: "s", realtime: null,
-  hasRealtime: false, status: "idle",
+  tags: [] as string[], mtimeMs: 1, transcript: "t", summary: "s",
+  status: "idle", wavPath: "/tmp/TeamSync_20260102_090000.wav",
 };
 
 function renderAt(stem: string) {
@@ -74,43 +73,49 @@ beforeEach(() => {
     configurable: true,
   });
   clipboardWriteText.mockClear();
-  transcribeMutate.mockClear();
-  summarizeMutate.mockClear();
+  reprocessMutate.mockClear();
   promptListMock.mockReset();
   promptListMock.mockReturnValue({ data: [] });
   renameMutate.mockClear(); setTagsMutate.mockClear(); deleteMutate.mockClear();
-  renameSpeakerMutate.mockClear(); mergeSpeakersMutate.mockClear(); assignSegmentSpeakerMutate.mockClear(); sendSummaryMutate.mockClear();
+  confirmDeliveryMutate.mockClear(); abandonDeliveryMutate.mockClear();
+  renameSpeakerMutate.mockClear(); mergeSpeakersMutate.mockClear(); assignSegmentSpeakerMutate.mockClear();
   navigateMock.mockClear(); confirmMock.mockClear(); confirmMock.mockReturnValue(true);
 });
 
 describe("RecordingReader", () => {
-  it("shows Realtime tab when hasRealtime is true (meeting)", () => {
-    getMock.mockReturnValue({ data: { stem: "TeamSync_20260102_090000", type: "meeting", title: "TeamSync", mtimeMs: 1, transcript: "t", summary: "s", realtime: "r", hasRealtime: true, status: "idle" }, isPending: false });
+  it("does not expose the retired realtime transcript surface", () => {
+    getMock.mockReturnValue({ data: { ...baseData, realtime: "legacy realtime text", hasRealtime: true }, isPending: false });
     renderAt("TeamSync_20260102_090000");
-    expect(screen.getByRole("button", { name: /实时/i })).toBeInTheDocument();
-  });
-
-  it("hides Realtime tab when hasRealtime is false", () => {
-    getMock.mockReturnValue({ data: { stem: "Memo_20260101_120000", title: "Memo", mtimeMs: 1, transcript: "t", summary: "s", realtime: null, hasRealtime: false, status: "idle" }, isPending: false });
-    renderAt("Memo_20260101_120000");
     expect(screen.queryByRole("button", { name: /实时/i })).toBeNull();
+    expect(screen.queryByText("legacy realtime text")).toBeNull();
   });
 
-  it("renders Re-transcribe + Re-generate summary buttons", () => {
-    getMock.mockReturnValue({ data: { stem: "Memo_20260101_120000", title: "Memo", mtimeMs: 1, transcript: "t", summary: "s", realtime: null, hasRealtime: false, status: "idle" }, isPending: false });
+  it("labels both manual processing actions as Hermes Agent pipeline work", () => {
+    getMock.mockReturnValue({ data: { ...baseData, stem: "Memo_20260101_120000", title: "Memo" }, isPending: false });
     renderAt("Memo_20260101_120000");
-    expect(screen.getByRole("button", { name: /重新转写/i })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /重新生成摘要/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /让 Hermes 处理/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /处理并发送 Notion/i })).toBeInTheDocument();
   });
 
-  it("keeps selectors in the header and only processing actions in the action bar", () => {
-    getMock.mockReturnValue({ data: { ...baseData }, isPending: false });
+  it("keeps only the summary template selector and removes Yulu model/speaker controls", () => {
+    getMock.mockReturnValue({
+      data: {
+        ...baseData,
+        summaryTemplateOptions: [
+          { id: "p-summary", slug: "summary", name: "标准摘要", isAutoRun: true },
+        ],
+      },
+      isPending: false,
+    });
     const { container } = renderAt("TeamSync_20260102_090000");
 
     expect(container.querySelectorAll(".reader-header-actions select")).toHaveLength(1);
+    expect(screen.getByRole("combobox", { name: /摘要模板/i })).toBeInTheDocument();
+    expect(screen.queryByRole("combobox", { name: /转写模型/i })).toBeNull();
+    expect(screen.queryByRole("combobox", { name: /说话人数/i })).toBeNull();
     expect(container.querySelectorAll(".reader-actions select")).toHaveLength(0);
     expect(container.querySelectorAll(".reader-actions .rpb")).toHaveLength(2);
-    expect(container.querySelector(".reader-header-actions .reader-header-share")).toBeInTheDocument();
+    expect(container.querySelector(".reader-header-actions .reader-header-delete")).toBeInTheDocument();
   });
 
   it("shows load errors instead of pretending every recording is missing", () => {
@@ -120,81 +125,78 @@ describe("RecordingReader", () => {
     expect(screen.queryByText(/未找到录音/)).toBeNull();
   });
 
-  it("renders the Share menu and confirms destination before sending", () => {
+  it("sends to Notion only through a new authorized Hermes task", () => {
+    getMock.mockReturnValue({ data: baseData, isPending: false });
+    renderAt(baseData.stem);
+
+    fireEvent.click(screen.getByRole("button", { name: /处理并发送 Notion/i }));
+    expect(reprocessMutate).toHaveBeenCalledWith(
+      { stem: baseData.stem, promptId: null, sendToNotion: true },
+      expect.anything(),
+    );
+    expect(screen.queryByRole("button", { name: /Zulip/ })).toBeNull();
+  });
+
+  it("disables both Agent actions when the recording WAV is missing", () => {
     getMock.mockReturnValue({
-      data: {
-        ...baseData,
-        shareTargets: [
-          { channel: "notion", label: "Notion", destination: "db-1", enabled: true, disabledReason: null, lastShare: null },
-          { channel: "zulip", label: "Zulip", destination: "meetings / 纪要", enabled: true, disabledReason: null, lastShare: null },
-        ],
-        shareHistory: [],
-      },
+      data: { ...baseData, wavPath: null },
       isPending: false,
     });
     renderAt(baseData.stem);
 
-    fireEvent.click(screen.getByRole("button", { name: /分享/ }));
-    fireEvent.click(screen.getByRole("button", { name: /Notion/ }));
-
-    expect(confirmMock).toHaveBeenCalledWith("发送摘要到 Notion：db-1？");
-    expect(sendSummaryMutate).toHaveBeenCalledWith(
-      { stem: baseData.stem, channel: "notion" },
-      expect.anything(),
-    );
-    expect(screen.getByRole("button", { name: /Zulip/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /让 Hermes 处理/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /处理并发送 Notion/i })).toBeDisabled();
   });
 
-  it("keeps the Share menu disabled when no summary exists", () => {
+  it("offers explicit confirm and abandon actions instead of retrying an uncertain Notion write", () => {
     getMock.mockReturnValue({
       data: {
         ...baseData,
-        summary: null,
-        shareTargets: [{ channel: "notion", label: "Notion", destination: "db-1", enabled: false, disabledReason: "Needs AI Summary", lastShare: null }],
-        shareHistory: [],
+        agentTask: {
+          id: "019f0000-0000-7000-8000-000000000123",
+          state: "delivery_unverified",
+          phase: "failed",
+          sendToNotion: true,
+          error: "Host restarted during delivery",
+        },
+        notionDelivery: {
+          status: "reported",
+          url: "https://app.notion.com/p/0123456789abcdef0123456789abcdef",
+          detail: null,
+        },
       },
       isPending: false,
     });
+    const promptSpy = vi.spyOn(window, "prompt").mockReturnValueOnce("https://app.notion.com/p/0123456789abcdef0123456789abcdef");
     renderAt(baseData.stem);
 
-    fireEvent.click(screen.getByRole("button", { name: /分享/ }));
-    expect(screen.getByRole("button", { name: /Notion/ })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /让 Hermes 处理/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /处理并发送 Notion/i })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: /确认已有页面/i }));
+    expect(confirmDeliveryMutate).toHaveBeenCalledWith({
+      id: "019f0000-0000-7000-8000-000000000123",
+      url: "https://app.notion.com/p/0123456789abcdef0123456789abcdef",
+    }, expect.anything());
+
+    fireEvent.click(screen.getByRole("button", { name: /放弃本次投递/i }));
+    expect(abandonDeliveryMutate).toHaveBeenCalledWith({
+      id: "019f0000-0000-7000-8000-000000000123",
+    }, expect.anything());
+    expect(reprocessMutate).not.toHaveBeenCalled();
+    promptSpy.mockRestore();
   });
 
-  it("passes a speaker-count override when re-transcribing from the reader", () => {
-    getMock.mockReturnValue({ data: { ...baseData, wavPath: "/tmp/TeamSync.wav" }, isPending: false });
+  it("submits reprocessing as one Hermes task without legacy model/speaker overrides", () => {
+    getMock.mockReturnValue({ data: baseData, isPending: false });
     renderAt(baseData.stem);
-    fireEvent.change(screen.getByRole("combobox", { name: /说话人数/i }), { target: { value: "3" } });
-    fireEvent.click(screen.getByRole("button", { name: /重新转写/i }));
-    expect(transcribeMutate).toHaveBeenCalledWith(
-      { stem: baseData.stem, diarizationNumSpeakers: 3 },
+    expect(screen.queryByRole("combobox", { name: /转写模型/i })).toBeNull();
+    expect(screen.queryByRole("combobox", { name: /说话人数/i })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /让 Hermes 处理/i }));
+    expect(reprocessMutate).toHaveBeenCalledWith(
+      { stem: baseData.stem, promptId: null, sendToNotion: false },
       expect.anything(),
     );
-  });
-
-  it("passes the selected transcription model when re-transcribing", () => {
-    getMock.mockReturnValue({
-      data: {
-        ...baseData,
-        wavPath: "/tmp/TeamSync.wav",
-        transcriptionModelOptions: [
-          { id: "mlx:large", engine: "mlx", model: "mlx-community/whisper-large-v3-mlx", label: "MLX · large-v3", active: true },
-          { id: "whisper:/models/medium.bin", engine: "whisper", model: "/models/medium.bin", label: "whisper.cpp · medium", active: false },
-        ],
-      },
-      isPending: false,
-    });
-    renderAt(baseData.stem);
-    fireEvent.change(screen.getByRole("combobox", { name: /转写模型/i }), { target: { value: "whisper:/models/medium.bin" } });
-    fireEvent.click(screen.getByRole("button", { name: /重新转写/i }));
-    expect(transcribeMutate).toHaveBeenCalledWith(
-      {
-        stem: baseData.stem,
-        diarizationNumSpeakers: null,
-        transcriptionModel: { engine: "whisper", model: "/models/medium.bin" },
-      },
-      expect.anything(),
-    );
+    expect(screen.getAllByRole("button", { name: /运行中/i })).toHaveLength(1);
   });
 
   it("passes the selected summary template when regenerating summary", () => {
@@ -212,40 +214,138 @@ describe("RecordingReader", () => {
     });
     renderAt(baseData.stem);
     fireEvent.change(screen.getByRole("combobox", { name: /摘要模板/i }), { target: { value: "p-decision" } });
-    fireEvent.click(screen.getByRole("button", { name: /重新生成摘要/i }));
-    expect(summarizeMutate).toHaveBeenCalledWith(
-      { stem: baseData.stem, promptId: "p-decision" },
+    fireEvent.click(screen.getByRole("button", { name: /让 Hermes 处理/i }));
+    expect(reprocessMutate).toHaveBeenCalledWith(
+      { stem: baseData.stem, promptId: "p-decision", sendToNotion: false },
       expect.anything(),
     );
   });
 
-  it("allows regenerating summary from realtime-only recordings", () => {
+  it("allows a Hermes template task when only the WAV exists", () => {
     getMock.mockReturnValue({
-      data: { ...baseData, transcript: null, summary: null, realtime: "live text", hasRealtime: true },
+      data: { ...baseData, transcript: null, summary: null },
       isPending: false,
     });
     renderAt(baseData.stem);
-    fireEvent.click(screen.getByRole("button", { name: /重新生成摘要/i }));
-    expect(summarizeMutate).toHaveBeenCalledWith(
-      { stem: baseData.stem, promptId: null },
+    fireEvent.click(screen.getByRole("button", { name: /让 Hermes 处理/i }));
+    expect(reprocessMutate).toHaveBeenCalledWith(
+      { stem: baseData.stem, promptId: null, sendToNotion: false },
       expect.anything(),
     );
+  });
+
+  it("disables duplicate manual tasks while a Hermes pipeline task is queued", () => {
+    getMock.mockReturnValue({
+      data: {
+        ...baseData,
+        agentTask: {
+          id: "task-1",
+          state: "queued",
+          phase: "queued",
+          sendToNotion: false,
+          error: null,
+        },
+      },
+      isPending: false,
+    });
+    const { container } = renderAt(baseData.stem);
+
+    const processingButtons = screen.getAllByRole("button", { name: /运行中/i });
+    expect(processingButtons).toHaveLength(1);
+    const actionButtons = [...container.querySelectorAll<HTMLButtonElement>(".reader-actions button")];
+    expect(actionButtons).toHaveLength(2);
+    expect(actionButtons.every((button) => button.disabled)).toBe(true);
+    expect(screen.getByRole("button", { name: /删除录音/i })).toBeDisabled();
+    expect(screen.getByText("已排队等待 Hermes")).toBeInTheDocument();
+  });
+
+  it("allows a paused automatic task to be taken over by an explicit manual action", () => {
+    getMock.mockReturnValue({
+      data: {
+        ...baseData,
+        agentTask: {
+          id: "task-auto-paused",
+          state: "awaiting_policy",
+          phase: "queued",
+          trigger: "automatic",
+          sendToNotion: false,
+          error: "Automatic Agent recording processing is paused by policy",
+        },
+      },
+      isPending: false,
+    });
+    renderAt(baseData.stem);
+
+    const processButton = screen.getByRole("button", { name: /让 Hermes 处理/i });
+    const notionButton = screen.getByRole("button", { name: /处理并发送 Notion/i });
+    expect(processButton).toBeEnabled();
+    expect(notionButton).toBeEnabled();
+
+    fireEvent.click(processButton);
+    expect(reprocessMutate).toHaveBeenCalledWith(
+      { stem: baseData.stem, promptId: null, sendToNotion: false },
+      expect.anything(),
+    );
+    expect(screen.getByRole("button", { name: /删除录音/i })).toBeDisabled();
+  });
+
+  it("blocks deletion while Notion delivery is unverified", () => {
+    getMock.mockReturnValue({
+      data: {
+        ...baseData,
+        agentTask: {
+          id: "task-1",
+          state: "delivery_unverified",
+          phase: "failed",
+          sendToNotion: true,
+          error: "Host restarted during delivery",
+        },
+      },
+      isPending: false,
+    });
+    renderAt(baseData.stem);
+
+    expect(screen.getByRole("button", { name: /删除录音/i })).toBeDisabled();
+  });
+
+  it("does not render an untrusted legacy Notion URL as a link", () => {
+    getMock.mockReturnValue({
+      data: {
+        ...baseData,
+        agentTask: {
+          id: "task-1",
+          state: "completed",
+          phase: "completed",
+          sendToNotion: true,
+          error: null,
+        },
+        notionDelivery: {
+          status: "reported",
+          url: "javascript:alert(document.cookie)",
+          detail: null,
+        },
+      },
+      isPending: false,
+    });
+    renderAt(baseData.stem);
+
+    expect(screen.getByTestId("agent-task-status").querySelector("a")).toBeNull();
   });
 
   it("surfaces reprocess mutation errors on the button", async () => {
     getMock.mockReturnValue({ data: baseData, isPending: false });
-    summarizeMutate.mockImplementation((_args: unknown, opts: { onError?: (err: Error) => void }) => {
+    reprocessMutate.mockImplementation((_args: unknown, opts: { onError?: (err: Error) => void }) => {
       opts.onError?.(new Error("Job already running for this recording"));
     });
     renderAt(baseData.stem);
-    fireEvent.click(screen.getByRole("button", { name: /重新生成摘要/i }));
+    fireEvent.click(screen.getByRole("button", { name: /让 Hermes 处理/i }));
     await waitFor(() => {
       expect(screen.getByRole("button", { name: /Job already running/ })).toBeInTheDocument();
     });
   });
 
   it("renders the summary through MarkdownView, not a raw <pre>", () => {
-    getMock.mockReturnValue({ data: { stem: "Memo_20260101_120000", title: "Memo", mtimeMs: 1, transcript: "t", summary: "# Heading", realtime: null, hasRealtime: false, status: "idle" }, isPending: false });
+    getMock.mockReturnValue({ data: { stem: "Memo_20260101_120000", title: "Memo", mtimeMs: 1, transcript: "t", summary: "# Heading", status: "idle" }, isPending: false });
     renderAt("Memo_20260101_120000");
     expect(screen.getByTestId("markdown")).toHaveTextContent("# Heading");
   });

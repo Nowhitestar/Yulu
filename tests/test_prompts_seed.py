@@ -19,22 +19,25 @@ def test_seed_constants_complete():
     assert not any(p["slug"].startswith("voicemail") for p in SEED_PROMPTS)
     for p in SEED_PROMPTS:
         assert p["category"] in ("summary", "cleanup", "voice")
-        # Legacy single-track prompts must include a transcript source;
-        # dual-track prompts use {{my_transcript}}/{{their_transcript}} instead.
-        if p["slug"] in {"dictation-cleanup", "dictation-translate"}:
+        if p["category"] == "summary":
+            # Summary templates are instructions only. The Host expands safe
+            # metadata, while Hermes reads transcript content through MCP.
+            assert "recording_task_transcript_read" in p["content"]
+            assert not any(var in p["content"] for var in (
+                "{{transcript}}", "{{best_transcript}}", "{{my_transcript}}",
+                "{{their_transcript}}", "{{speaker_transcript}}", "{{speaker_list}}",
+            ))
+        elif p["slug"] in {"dictation-cleanup", "dictation-translate"}:
             assert "{{transcript}}" not in p["content"]
             assert "语音" in p["content"]
             if p["slug"] == "dictation-translate":
                 assert "{{target_language}}" in p["content"]
-        elif p["slug"] == "action-items-by-speaker":
-            assert "{{my_transcript}}" in p["content"]
-            assert "{{their_transcript}}" in p["content"]
         else:
             assert "{{transcript}}" in p["content"] or "{{best_transcript}}" in p["content"]
-    # auto-run: summary + transcript-cleanup yes, action-items no
+    # Automatic completion consumes summary templates only.
     auto = {p["slug"]: p["is_auto_run"] for p in SEED_PROMPTS}
     assert auto["summary"] is True
-    assert auto["transcript-cleanup"] is True
+    assert auto["transcript-cleanup"] is False
     assert auto["action-items"] is False
 
 
@@ -50,9 +53,9 @@ def test_seed_includes_action_items_by_speaker(tmp_path):
     p = repo.by_slug("action-items-by-speaker")
     # OFF by default — opt-in
     assert p.is_auto_run is False
-    # Uses both new template vars
-    assert "{{my_transcript}}" in p.content
-    assert "{{their_transcript}}" in p.content
+    assert "recording_task_transcript_read" in p.content
+    assert "{{my_transcript}}" not in p.content
+    assert "{{their_transcript}}" not in p.content
 
 
 def test_seed_total_count_at_least_four():

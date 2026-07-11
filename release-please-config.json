@@ -7,7 +7,7 @@
       "version-file": "VERSION",
       "changelog-path": "CHANGELOG.md",
       "include-v-in-tag": true,
-      "draft": false,
+      "draft": true,
       "prerelease": false
     }
   }

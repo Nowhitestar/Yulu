@@ -1,9 +1,6 @@
 import sys
 import wave
 import json
-import asyncio
-import threading
-import time
 import subprocess
 from pathlib import Path
 
@@ -25,7 +22,7 @@ def _write_silent_wav(path: Path, *, seconds: float = 1.0, rate: int = 16000) ->
         wav.writeframes(b"\x00\x00" * int(seconds * rate))
 
 
-def test_resolve_engine_prefers_dictation_config():
+def test_resolve_engine_delegates_provider_selection_to_hermes():
     cfg = {
         "transcription": {
             "final_engine": "mlx",
@@ -34,10 +31,11 @@ def test_resolve_engine_prefers_dictation_config():
         }
     }
     assert dictate.resolve_engine(cfg, None) == "hermes"
-    assert dictate.resolve_engine(cfg, "mlx") == "mlx"
+    assert dictate.resolve_engine(cfg, "mlx") == "hermes"
+    assert dictate.resolve_engine(cfg, "whisper") == "hermes"
 
 
-def test_resolve_engine_auto_inherits_realtime_then_final():
+def test_resolve_engine_ignores_legacy_realtime_and_final_engines():
     cfg = {
         "transcription": {
             "final_engine": "mlx",
@@ -45,14 +43,14 @@ def test_resolve_engine_auto_inherits_realtime_then_final():
             "dictation": {"engine": "auto"},
         }
     }
-    assert dictate.resolve_engine(cfg, None) == "whisper"
-    assert dictate.resolve_engine(cfg, "auto") == "whisper"
+    assert dictate.resolve_engine(cfg, None) == "hermes"
+    assert dictate.resolve_engine(cfg, "auto") == "hermes"
 
     cfg["transcription"]["realtime"] = {"engine": "auto"}
-    assert dictate.resolve_engine(cfg, None) == "mlx"
+    assert dictate.resolve_engine(cfg, None) == "hermes"
 
 
-def test_resolve_engine_missing_dictation_block_inherits_selected_stt():
+def test_resolve_engine_defaults_to_hermes_without_dictation_config():
     cfg = {
         "transcription": {
             "final_engine": "hermes",
@@ -62,11 +60,12 @@ def test_resolve_engine_missing_dictation_block_inherits_selected_stt():
     assert dictate.resolve_engine(cfg, None) == "hermes"
 
 
-def test_translate_defaults_to_native_whisper_when_dictation_engine_is_hermes():
+def test_translation_provider_selection_belongs_to_hermes():
     cfg = {"transcription": {"dictation": {"engine": "hermes"}}}
 
-    assert dictate.resolve_translation_engine(cfg, None, "English") == "mlx"
+    assert dictate.resolve_translation_engine(cfg, None, "English") == "hermes"
     assert dictate.resolve_translation_engine(cfg, "hermes", "English") == "hermes"
+    assert dictate.resolve_translation_engine(cfg, "mlx", "English") == "hermes"
 
 
 def test_render_context_prompt_uses_selected_prompt(tmp_path):
@@ -134,7 +133,6 @@ def test_start_recording_persists_prompt_id(monkeypatch, tmp_path):
     monkeypatch.setattr(dictate, "DICTATION_DIR", tmp_path / "dictation")
     monkeypatch.setattr(dictate, "STATE_PATH", state_path)
     monkeypatch.setattr(dictate, "_socket_send", fake_socket_send)
-    monkeypatch.setattr(dictate, "start_dictation_realtime", lambda *args, **kwargs: None)
     monkeypatch.setattr(
         dictate,
         "current_frontmost_app",
@@ -170,7 +168,6 @@ def test_start_recording_uses_supplied_target_without_frontmost_lookup(monkeypat
     monkeypatch.setattr(dictate, "DICTATION_DIR", tmp_path / "dictation")
     monkeypatch.setattr(dictate, "STATE_PATH", state_path)
     monkeypatch.setattr(dictate, "_socket_send", fake_socket_send)
-    monkeypatch.setattr(dictate, "start_dictation_realtime", lambda *args, **kwargs: None)
     monkeypatch.setattr(dictate, "current_frontmost_app", fail_frontmost)
 
     state = dictate.start_recording(
@@ -202,7 +199,6 @@ def test_start_recording_can_skip_target_capture(monkeypatch, tmp_path):
     monkeypatch.setattr(dictate, "DICTATION_DIR", tmp_path / "dictation")
     monkeypatch.setattr(dictate, "STATE_PATH", state_path)
     monkeypatch.setattr(dictate, "_socket_send", fake_socket_send)
-    monkeypatch.setattr(dictate, "start_dictation_realtime", lambda *args, **kwargs: None)
     monkeypatch.setattr(dictate, "current_frontmost_app", fail_frontmost)
 
     state = dictate.start_recording(
@@ -233,7 +229,6 @@ def test_start_recording_persists_state_when_target_capture_fails(monkeypatch, t
     monkeypatch.setattr(dictate, "DICTATION_DIR", tmp_path / "dictation")
     monkeypatch.setattr(dictate, "STATE_PATH", state_path)
     monkeypatch.setattr(dictate, "_socket_send", fake_socket_send)
-    monkeypatch.setattr(dictate, "start_dictation_realtime", lambda *args, **kwargs: None)
     monkeypatch.setattr(dictate, "current_frontmost_app", fail_frontmost)
 
     state = dictate.start_recording(
@@ -251,29 +246,24 @@ def test_start_recording_persists_state_when_target_capture_fails(monkeypatch, t
     assert "target_bundle_id" not in state
 
 
-def test_start_recording_starts_realtime_sidecar(monkeypatch, tmp_path):
+def test_start_recording_is_capture_only_without_realtime_sidecar(monkeypatch, tmp_path):
     state_path = tmp_path / "dictation" / "state.json"
     audio_path = tmp_path / "dictation.wav"
-    observed = {}
+    calls = []
 
     def fake_socket_send(socket_path, payload, **kwargs):
+        calls.append(payload["action"])
         if payload["action"] == "status":
             return {"recording": False}
         return {"status": "recording", "file": str(audio_path)}
-
-    def fake_start_realtime(path, **kwargs):
-        observed["path"] = path
-        observed["config"] = kwargs["config"]
 
     monkeypatch.setattr(dictate, "DICTATION_DIR", tmp_path / "dictation")
     monkeypatch.setattr(dictate, "STATE_PATH", state_path)
     monkeypatch.setattr(dictate, "_socket_send", fake_socket_send)
     monkeypatch.setattr(dictate, "current_frontmost_app", lambda: {})
-    monkeypatch.setattr(dictate, "_config", lambda: {"transcription": {"realtime_enabled": True}})
-    monkeypatch.setattr(dictate, "start_dictation_realtime", fake_start_realtime)
 
     state = dictate.start_recording(
-        engine="mlx",
+        engine="hermes",
         language="zh",
         prompt_slug="dictation-cleanup",
         prompt_id=None,
@@ -283,8 +273,8 @@ def test_start_recording_starts_realtime_sidecar(monkeypatch, tmp_path):
     )
 
     assert state["audio_path"] == str(audio_path)
-    assert observed["path"] == str(audio_path)
-    assert observed["config"]["transcription"]["realtime_enabled"] is True
+    assert state["engine"] == "hermes"
+    assert calls == ["status", "start"]
 
 
 def test_stop_recording_stops_realtime_sidecar(monkeypatch, tmp_path):
@@ -302,7 +292,7 @@ def test_stop_recording_stops_realtime_sidecar(monkeypatch, tmp_path):
 
     monkeypatch.setattr(dictate, "STATE_PATH", state_path)
     monkeypatch.setattr(dictate, "_socket_send", fake_socket_send)
-    monkeypatch.setattr(dictate, "stop_dictation_realtime", lambda **kwargs: stopped.append(kwargs))
+    monkeypatch.setattr(dictate, "cleanup_legacy_realtime_sidecar", lambda **kwargs: stopped.append(kwargs))
 
     state = dictate.stop_recording()
 
@@ -330,7 +320,7 @@ def test_cancel_recording_stops_dictation_without_transcribing(monkeypatch, tmp_
     monkeypatch.setattr(dictate, "DICTATION_DIR", dictation_dir)
     monkeypatch.setattr(dictate, "STATE_PATH", state_path)
     monkeypatch.setattr(dictate, "_socket_send", fake_socket_send)
-    monkeypatch.setattr(dictate, "stop_dictation_realtime", lambda **kwargs: stopped.append(kwargs))
+    monkeypatch.setattr(dictate, "cleanup_legacy_realtime_sidecar", lambda **kwargs: stopped.append(kwargs))
 
     result = dictate.cancel_recording()
 
@@ -354,7 +344,7 @@ def test_cancel_recording_refuses_meeting_recording(monkeypatch, tmp_path):
     monkeypatch.setattr(dictate, "DICTATION_DIR", tmp_path / "dictation")
     monkeypatch.setattr(dictate, "STATE_PATH", state_path)
     monkeypatch.setattr(dictate, "_socket_send", fake_socket_send)
-    monkeypatch.setattr(dictate, "stop_dictation_realtime", lambda **kwargs: None)
+    monkeypatch.setattr(dictate, "cleanup_legacy_realtime_sidecar", lambda **kwargs: None)
 
     with pytest.raises(dictate.DictationError, match="not dictation"):
         dictate.cancel_recording()
@@ -553,11 +543,11 @@ def test_translate_to_uses_translate_prompt(monkeypatch, tmp_path):
     assert observed["timeout_sec"] > 15
 
 
-def test_english_translate_defaults_to_native_whisper(monkeypatch, tmp_path):
+def test_english_translate_uses_hermes(monkeypatch, tmp_path):
     observed = {}
     state = {
         "audio_path": str(tmp_path / "dictation.wav"),
-        "engine": "mlx",
+        "engine": "hermes",
         "language": "zh",
         "prompt_slug": "dictation-translate",
         "target_language": "English",
@@ -583,7 +573,7 @@ def test_english_translate_defaults_to_native_whisper(monkeypatch, tmp_path):
     })
 
     assert dictate.main(["once", "--translate-to", "English", "--no-paste", "--no-copy"]) == 0
-    assert observed["engine"] == "mlx"
+    assert observed["engine"] == "hermes"
     assert observed["timeout_sec"] > 15
 
 
@@ -888,7 +878,7 @@ def test_warm_translate_resolves_translation_engine(monkeypatch, capsys):
 
     monkeypatch.setattr(dictate, "_config", lambda: {"transcription": {"dictation": {"engine": "hermes"}}})
     monkeypatch.setattr(dictate, "warm_dictation_engine", lambda **kwargs: observed.update(kwargs) or {
-        "text": "warmed mlx",
+        "text": "warmed hermes",
         "engine": kwargs["engine"],
         "warmed_engine": kwargs["engine"],
         "target_language": kwargs["target_language"],
@@ -896,42 +886,47 @@ def test_warm_translate_resolves_translation_engine(monkeypatch, capsys):
     })
 
     assert dictate.main(["warm", "--translate-to", "English", "--json"]) == 0
-    assert observed == {"engine": "mlx", "timeout_sec": 60.0, "target_language": "English"}
-    assert json.loads(capsys.readouterr().out)["warmed_engine"] == "mlx"
+    assert observed == {"engine": "hermes", "timeout_sec": 60.0, "target_language": "English"}
+    assert json.loads(capsys.readouterr().out)["warmed_engine"] == "hermes"
 
 
-def test_warm_mlx_prewarms_realtime_backend(monkeypatch):
-    import stt_cli
+def test_warm_dictation_engine_uses_host_hermes_endpoint(monkeypatch):
+    observed = {}
 
-    observed = []
+    def fake_host_request(path, payload, *, timeout_sec):
+        observed.update(path=path, payload=payload, timeout_sec=timeout_sec)
+        return {"ok": True, "provider": "hermes"}
 
-    async def fake_request(socket_path, payload, timeout):
-        observed.append(payload)
-        return {"type": "ok", "detail": f"warmed {payload['engine']}"}
-
-    monkeypatch.setattr(stt_cli, "_request_response", fake_request)
+    monkeypatch.setattr(dictate, "_host_agent_request", fake_host_request)
 
     result = dictate.warm_dictation_engine(engine="mlx", timeout_sec=30)
-    assert observed == [{"type": "warm_up", "engine": "mlx-realtime"}]
-    assert result["engine"] == "mlx"
-    assert result["warmed_engine"] == "mlx-realtime"
+    assert observed == {
+        "path": "/api/agent/transcription/warm",
+        "payload": {},
+        "timeout_sec": 30,
+    }
+    assert result["engine"] == "hermes"
+    assert result["warmed_engine"] == "hermes"
 
 
-def test_warm_mlx_translate_prewarms_final_backend(monkeypatch):
-    import stt_cli
+def test_warm_translation_uses_same_host_hermes_endpoint(monkeypatch):
+    observed = {}
 
-    observed = []
+    def fake_host_request(path, payload, *, timeout_sec):
+        observed.update(path=path, payload=payload, timeout_sec=timeout_sec)
+        return {"ok": True, "provider": "xai"}
 
-    async def fake_request(socket_path, payload, timeout):
-        observed.append(payload)
-        return {"type": "ok", "detail": f"warmed {payload['engine']}"}
+    monkeypatch.setattr(dictate, "_host_agent_request", fake_host_request)
 
-    monkeypatch.setattr(stt_cli, "_request_response", fake_request)
-
-    result = dictate.warm_dictation_engine(engine="mlx", target_language="English", timeout_sec=30)
-    assert observed == [{"type": "warm_up", "engine": "mlx"}]
-    assert result["engine"] == "mlx"
-    assert result["warmed_engine"] == "mlx"
+    result = dictate.warm_dictation_engine(engine="hermes", target_language="English", timeout_sec=30)
+    assert observed == {
+        "path": "/api/agent/transcription/warm",
+        "payload": {},
+        "timeout_sec": 30,
+    }
+    assert result["engine"] == "hermes"
+    assert result["warmed_engine"] == "xai"
+    assert result["target_language"] == "English"
 
 
 def test_voice_chat_opens_status_agent_window(monkeypatch):
@@ -1230,17 +1225,17 @@ def test_extract_response_text_prefers_mic_channel():
 
 def test_transcribe_dictation_preserves_fractional_timeout(monkeypatch, tmp_path):
     observed = {}
+    audio = tmp_path / "a.wav"
+    _write_silent_wav(audio)
 
-    def fake_transcribe_file(**kwargs):
-        observed.update(kwargs)
-        return {"text": "ok"}
+    def fake_host_request(path, payload, *, timeout_sec):
+        observed.update(path=path, payload=payload, timeout_sec=timeout_sec)
+        return {"ok": True, "transcript": "ok", "provider": "hermes", "chunks": 1}
 
-    import transcribe_client
+    monkeypatch.setattr(dictate, "_host_agent_request", fake_host_request)
 
-    monkeypatch.setattr(transcribe_client, "transcribe_file", fake_transcribe_file)
-
-    dictate.transcribe_dictation(
-        audio_path=str(tmp_path / "a.wav"),
+    result = dictate.transcribe_dictation(
+        audio_path=str(audio),
         engine="hermes",
         language="en",
         context_prompt="cleanup prompt",
@@ -1250,12 +1245,12 @@ def test_transcribe_dictation_preserves_fractional_timeout(monkeypatch, tmp_path
     )
 
     assert abs(observed["timeout_sec"] - 1.55) < 0.001
-    assert observed["response_timeout_sec"] == 1.55
-    assert observed["channel_split"] is False
-    assert observed["context_prompt"] == "cleanup prompt"
-    assert observed["meeting_title"] == ""
-    assert observed["dictation_mode"] == "dictate"
-    assert observed["target_language"] == ""
+    assert observed["path"] == "/api/agent/transcribe"
+    assert observed["payload"] == {"audioPath": str(audio)}
+    assert result["text"] == "ok"
+    assert result["engine_used"] == "hermes"
+    assert result["provider"] == "hermes"
+    assert result["chunks"] == 1
 
 
 def test_prepare_dictation_audio_rejects_empty_wav(tmp_path):
@@ -1270,6 +1265,8 @@ def test_prepare_dictation_audio_rejects_empty_wav(tmp_path):
 
 
 def test_transcribe_dictation_extracts_stereo_mic_channel(monkeypatch, tmp_path):
+    dictation_dir = tmp_path / "host-allowed-dictation"
+    monkeypatch.setattr(dictate, "DICTATION_DIR", dictation_dir)
     stereo = tmp_path / "dictation.wav"
     left = [1000, -2000]
     right = [0, 0]
@@ -1285,21 +1282,20 @@ def test_transcribe_dictation_extracts_stereo_mic_channel(monkeypatch, tmp_path)
 
     observed = {}
 
-    def fake_transcribe_file(**kwargs):
-        observed.update(kwargs)
-        with wave.open(kwargs["audio_path"], "rb") as wav:
+    def fake_host_request(path, payload, *, timeout_sec):
+        observed.update(path=path, payload=payload, timeout_sec=timeout_sec)
+        prepared_path = payload["audioPath"]
+        with wave.open(prepared_path, "rb") as wav:
             raw = wav.readframes(wav.getnframes())
             observed["channels"] = wav.getnchannels()
             observed["samples"] = [
                 int.from_bytes(raw[i : i + 2], "little", signed=True)
                 for i in range(0, len(raw), 2)
             ]
-        observed["temp_exists_during_call"] = Path(kwargs["audio_path"]).exists()
-        return {"text": "ok"}
+        observed["temp_exists_during_call"] = Path(prepared_path).exists()
+        return {"ok": True, "transcript": "ok", "provider": "hermes", "chunks": 1}
 
-    import transcribe_client
-
-    monkeypatch.setattr(transcribe_client, "transcribe_file", fake_transcribe_file)
+    monkeypatch.setattr(dictate, "_host_agent_request", fake_host_request)
 
     dictate.transcribe_dictation(
         audio_path=str(stereo),
@@ -1311,16 +1307,18 @@ def test_transcribe_dictation_extracts_stereo_mic_channel(monkeypatch, tmp_path)
         timeout_sec=3.0,
     )
 
-    assert observed["audio_path"] != str(stereo)
+    assert observed["path"] == "/api/agent/transcribe"
+    assert observed["payload"]["audioPath"] != str(stereo)
+    assert Path(observed["payload"]["audioPath"]).parent == dictation_dir.resolve()
     assert observed["channels"] == 1
     assert observed["samples"] == left
     assert observed["temp_exists_during_call"] is True
-    assert observed["dictation_mode"] == "translate"
-    assert observed["target_language"] == "English"
-    assert not Path(observed["audio_path"]).exists()
+    assert observed["timeout_sec"] == 3.0
+    assert not Path(observed["payload"]["audioPath"]).exists()
 
 
 def test_prepare_dictation_audio_downsamples_48k_stereo(monkeypatch, tmp_path):
+    monkeypatch.setattr(dictate, "DICTATION_DIR", tmp_path / "dictation")
     stereo = tmp_path / "dictation.wav"
     with wave.open(str(stereo), "wb") as wav:
         wav.setnchannels(2)
@@ -1368,7 +1366,8 @@ def test_resolve_ffmpeg_uses_fallback_when_path_is_minimal(monkeypatch, tmp_path
     assert dictate._resolve_ffmpeg() == str(ffmpeg)
 
 
-def test_prepare_dictation_audio_trims_outer_silence_after_downsample(monkeypatch, tmp_path):
+def test_prepare_dictation_audio_leaves_silence_policy_to_hermes(monkeypatch, tmp_path):
+    monkeypatch.setattr(dictate, "DICTATION_DIR", tmp_path / "dictation")
     stereo = tmp_path / "dictation.wav"
     with wave.open(str(stereo), "wb") as wav:
         wav.setnchannels(2)
@@ -1397,10 +1396,10 @@ def test_prepare_dictation_audio_trims_outer_silence_after_downsample(monkeypatc
         with wave.open(out_path, "rb") as wav:
             assert wav.getnchannels() == 1
             assert wav.getframerate() == 16000
-            assert wav.getnframes() < 16000 * 3
+            assert wav.getnframes() == 16000 * 3
         assert stats["audio_input_ms"] == 3000
-        assert 0 < stats["stt_audio_ms"] < stats["audio_input_ms"]
-        assert stats["trim_leading_ms"] > 0
+        assert stats["stt_audio_ms"] == stats["audio_input_ms"]
+        assert stats["trim_leading_ms"] == 0
         assert stats["stt_audio_bytes"] < stats["audio_input_bytes"]
     finally:
         if tmp_path_out is not None:
@@ -1466,7 +1465,7 @@ def test_process_audio_copies_text(monkeypatch, tmp_path):
     assert copied == ["hello github"]
 
 
-def test_process_audio_reuses_realtime_transcript(monkeypatch, tmp_path):
+def test_process_audio_ignores_legacy_realtime_transcript_and_uses_host_result(monkeypatch, tmp_path):
     audio = tmp_path / "dictation.wav"
     _write_silent_wav(audio, seconds=1.0)
     audio.with_suffix(".realtime.transcript.txt").write_text(
@@ -1474,19 +1473,24 @@ def test_process_audio_reuses_realtime_transcript(monkeypatch, tmp_path):
         encoding="utf-8",
     )
     copied = []
+    transcribed = []
 
     monkeypatch.setattr(dictate, "render_context_prompt", lambda **kwargs: "context")
     monkeypatch.setattr(
         dictate,
         "transcribe_dictation",
-        lambda **kwargs: pytest.fail("full STT should not run when realtime transcript is reusable"),
+        lambda **kwargs: transcribed.append(kwargs) or {
+            "text": " full Host result ",
+            "engine_used": "hermes",
+            "language_used": "zh",
+        },
     )
     monkeypatch.setattr(dictate, "postprocess_dictation", lambda **kwargs: kwargs["text"])
     monkeypatch.setattr(dictate, "copy_to_clipboard", lambda text: copied.append(text))
 
     result = dictate.process_audio(
         state={"audio_path": str(audio)},
-        engine="mlx",
+        engine="hermes",
         language="zh",
         prompt_slug="dictation-cleanup",
         prompt_id=None,
@@ -1497,13 +1501,13 @@ def test_process_audio_reuses_realtime_transcript(monkeypatch, tmp_path):
         context_limit=800,
     )
 
-    assert result["text"] == "hello realtime from sidecar"
-    assert result["engine"] == "realtime"
-    assert result["stt_ms"] == 0
-    assert copied == ["hello realtime from sidecar"]
+    assert result["text"] == "full Host result"
+    assert result["engine"] == "hermes"
+    assert len(transcribed) == 1
+    assert copied == ["full Host result"]
 
 
-def test_process_audio_falls_back_when_realtime_coverage_is_short(monkeypatch, tmp_path):
+def test_process_audio_ignores_legacy_realtime_coverage_metadata(monkeypatch, tmp_path):
     audio = tmp_path / "dictation.wav"
     _write_silent_wav(audio, seconds=60.0)
     audio.with_suffix(".realtime.transcript.txt").write_text("[Me] partial only", encoding="utf-8")
@@ -1513,13 +1517,13 @@ def test_process_audio_falls_back_when_realtime_coverage_is_short(monkeypatch, t
     monkeypatch.setattr(
         dictate,
         "transcribe_dictation",
-        lambda **kwargs: {"text": " full result ", "engine_used": "mlx", "language_used": "zh"},
+        lambda **kwargs: {"text": " full Host result ", "engine_used": "hermes", "language_used": "zh"},
     )
     monkeypatch.setattr(dictate, "postprocess_dictation", lambda **kwargs: kwargs["text"])
 
     result = dictate.process_audio(
         state={"audio_path": str(audio)},
-        engine="mlx",
+        engine="hermes",
         language="zh",
         prompt_slug="dictation-cleanup",
         prompt_id=None,
@@ -1530,8 +1534,8 @@ def test_process_audio_falls_back_when_realtime_coverage_is_short(monkeypatch, t
         context_limit=800,
     )
 
-    assert result["text"] == "full result"
-    assert result["engine"] == "mlx"
+    assert result["text"] == "full Host result"
+    assert result["engine"] == "hermes"
 
 
 def test_process_audio_runs_dictation_prompt_postprocess(monkeypatch, tmp_path):
@@ -1541,15 +1545,15 @@ def test_process_audio_runs_dictation_prompt_postprocess(monkeypatch, tmp_path):
     monkeypatch.setattr(
         dictate,
         "transcribe_dictation",
-        lambda **kwargs: {"text": "github, 呃, codex", "engine_used": "mlx", "language_used": "zh"},
+        lambda **kwargs: {"text": "github, 呃, codex", "engine_used": "hermes", "language_used": "zh"},
     )
     monkeypatch.setattr(dictate, "glossary_hint", lambda **kwargs: "常见术语：GitHub => GitHub")
-    monkeypatch.setattr(dictate, "_run_hermes_xai_chat_prompt", lambda *args, **kwargs: "GitHub Codex")
+    monkeypatch.setattr(dictate, "_run_agent_prompt", lambda *args, **kwargs: "GitHub Codex")
     monkeypatch.setattr(dictate, "copy_to_clipboard", lambda text: copied.append(text))
 
     result = dictate.process_audio(
         state={"audio_path": str(tmp_path / "a.wav")},
-        engine="mlx",
+        engine="hermes",
         language="zh",
         prompt_slug="dictation-cleanup",
         prompt_id=None,
@@ -1567,7 +1571,7 @@ def test_process_audio_runs_dictation_prompt_postprocess(monkeypatch, tmp_path):
 
 def test_process_audio_translate_runs_agent_postprocess(monkeypatch, tmp_path):
     copied = []
-    calls = []
+    observed = {}
 
     monkeypatch.setattr(dictate, "render_context_prompt", lambda **kwargs: "translate context")
     monkeypatch.setattr(
@@ -1576,19 +1580,13 @@ def test_process_audio_translate_runs_agent_postprocess(monkeypatch, tmp_path):
         lambda **kwargs: {"text": "也不容易，也是，呃", "engine_used": "hermes", "language_used": "zh"},
     )
     monkeypatch.setattr(dictate, "glossary_hint", lambda **kwargs: "常见术语：AgentKey => AgentKey")
-    monkeypatch.setattr(dictate, "_config", lambda: {"llm": {"enabled": True, "agent": {"provider": "hermes"}}})
-    monkeypatch.setattr(dictate, "_run_hermes_xai_chat_prompt", lambda *args, **kwargs: "")
     monkeypatch.setattr(dictate, "copy_to_clipboard", lambda text: copied.append(text))
 
-    def fake_run(cmd, **kwargs):
-        calls.append([cmd, kwargs])
-        assert cmd[:2] == ["hermes", "-z"]
-        assert "translate context" in cmd[2]
-        assert "AgentKey => AgentKey" in cmd[2]
-        assert "也不容易" in cmd[2]
-        return subprocess.CompletedProcess(cmd, 0, stdout="It's not easy either.", stderr="")
+    def fake_agent_prompt(prompt, *, config, timeout_sec):
+        observed.update(prompt=prompt, config=config, timeout_sec=timeout_sec)
+        return "It's not easy either."
 
-    monkeypatch.setattr(dictate.subprocess, "run", fake_run)
+    monkeypatch.setattr(dictate, "_run_agent_prompt", fake_agent_prompt)
 
     result = dictate.process_audio(
         state={"audio_path": str(tmp_path / "a.wav")},
@@ -1605,30 +1603,17 @@ def test_process_audio_translate_runs_agent_postprocess(monkeypatch, tmp_path):
 
     assert result["text"] == "It's not easy either."
     assert copied == ["It's not easy either."]
-    assert calls
+    assert "translate context" in observed["prompt"]
+    assert "AgentKey => AgentKey" in observed["prompt"]
+    assert "也不容易" in observed["prompt"]
 
 
-def test_hermes_postprocess_uses_xai_fast_path(monkeypatch):
-    monkeypatch.setattr(dictate, "_run_hermes_xai_chat_prompt", lambda *args, **kwargs: "Fast translation")
-    monkeypatch.setattr(dictate.subprocess, "run", lambda *args, **kwargs: pytest.fail("subprocess should be skipped"))
-
-    result = dictate._run_agent_prompt(
-        "Translate this.",
-        config={"llm": {"enabled": True, "agent": {"provider": "hermes"}}},
-        timeout_sec=3.0,
-    )
-
-    assert result == "Fast translation"
-
-
-def test_hermes_postprocess_falls_back_when_xai_fast_path_unavailable(monkeypatch):
-    calls = []
-    monkeypatch.setattr(dictate, "_run_hermes_xai_chat_prompt", lambda *args, **kwargs: "")
+def test_agent_postprocess_uses_configured_hermes_cli(monkeypatch):
+    observed = {}
 
     def fake_run(cmd, **kwargs):
-        calls.append(cmd)
-        assert str(Path.home() / ".local/bin") in kwargs["env"]["PATH"].split(":")
-        return subprocess.CompletedProcess(cmd, 0, stdout="Fallback translation", stderr="")
+        observed.update(cmd=cmd, kwargs=kwargs)
+        return subprocess.CompletedProcess(cmd, 0, stdout="Agent translation", stderr="")
 
     monkeypatch.setattr(dictate.subprocess, "run", fake_run)
 
@@ -1638,19 +1623,34 @@ def test_hermes_postprocess_falls_back_when_xai_fast_path_unavailable(monkeypatc
         timeout_sec=3.0,
     )
 
-    assert result == "Fallback translation"
-    assert calls and calls[0][:2] == ["hermes", "-z"]
+    assert result == "Agent translation"
+    assert observed["cmd"] == ["hermes", "-z", "Translate this.", "--ignore-rules"]
+    assert str(Path.home() / ".local/bin") in observed["kwargs"]["env"]["PATH"].split(":")
+
+
+def test_agent_postprocess_surfaces_configured_cli_failure(monkeypatch):
+    def fake_run(cmd, **kwargs):
+        return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="Hermes failed")
+
+    monkeypatch.setattr(dictate.subprocess, "run", fake_run)
+
+    with pytest.raises(dictate.DictationError, match="Hermes failed"):
+        dictate._run_agent_prompt(
+            "Translate this.",
+            config={"llm": {"enabled": True, "agent": {"provider": "hermes"}}},
+            timeout_sec=3.0,
+        )
 
 
 def test_dictation_postprocess_prompt_discourages_homophone_rewrites(monkeypatch):
     captured = {}
 
-    def fake_fast(prompt, **kwargs):
+    def fake_agent_prompt(prompt, **kwargs):
         captured["prompt"] = prompt
         return "清理后"
 
     monkeypatch.setattr(dictate, "glossary_hint", lambda **kwargs: "")
-    monkeypatch.setattr(dictate, "_run_hermes_xai_chat_prompt", fake_fast)
+    monkeypatch.setattr(dictate, "_run_agent_prompt", fake_agent_prompt)
 
     assert dictate.postprocess_dictation(
         text="把请求路由到另外一个",
@@ -1666,7 +1666,7 @@ def test_dictation_postprocess_preserves_short_recognized_cjk_terms(monkeypatch)
     monkeypatch.setattr(dictate, "glossary_hint", lambda **kwargs: "")
     monkeypatch.setattr(
         dictate,
-        "_run_hermes_xai_chat_prompt",
+        "_run_agent_prompt",
         lambda *args, **kwargs: "把进球自动路由到另外一个",
     )
 
@@ -1678,21 +1678,21 @@ def test_dictation_postprocess_preserves_short_recognized_cjk_terms(monkeypatch)
     ) == "把请求自动路由到另外一个"
 
 
-def test_process_audio_uses_native_english_translation(monkeypatch, tmp_path):
+def test_process_audio_accepts_english_transcript_from_hermes(monkeypatch, tmp_path):
     copied = []
 
     monkeypatch.setattr(dictate, "render_context_prompt", lambda **kwargs: "translate context")
     monkeypatch.setattr(
         dictate,
         "transcribe_dictation",
-        lambda **kwargs: {"text": "It's not easy either.", "engine_used": "mlx", "language_used": "zh"},
+        lambda **kwargs: {"text": "It's not easy either.", "engine_used": "hermes", "language_used": "en"},
     )
     monkeypatch.setattr(dictate, "postprocess_translation", lambda **kwargs: pytest.fail("postprocess should be skipped"))
     monkeypatch.setattr(dictate, "copy_to_clipboard", lambda text: copied.append(text))
 
     result = dictate.process_audio(
         state={"audio_path": str(tmp_path / "a.wav")},
-        engine="mlx",
+        engine="hermes",
         language="zh",
         prompt_slug="dictation-translate",
         prompt_id=None,
@@ -1707,21 +1707,21 @@ def test_process_audio_uses_native_english_translation(monkeypatch, tmp_path):
     assert copied == ["It's not easy either."]
 
 
-def test_process_audio_does_not_send_template_to_mlx_stt(monkeypatch, tmp_path):
+def test_process_audio_passes_template_into_agent_owned_transcription_flow(monkeypatch, tmp_path):
     observed = {}
 
     monkeypatch.setattr(dictate, "render_context_prompt", lambda **kwargs: "语音输入模式：清理文本。")
 
     def fake_transcribe(**kwargs):
         observed.update(kwargs)
-        return {"text": "Clean text.", "engine_used": "mlx", "language_used": "zh"}
+        return {"text": "Clean text.", "engine_used": "hermes", "language_used": "en"}
 
     monkeypatch.setattr(dictate, "transcribe_dictation", fake_transcribe)
-    monkeypatch.setattr(dictate, "postprocess_translation", lambda **kwargs: pytest.fail("native English translation should skip postprocess"))
+    monkeypatch.setattr(dictate, "postprocess_translation", lambda **kwargs: pytest.fail("English result should skip postprocess"))
 
     result = dictate.process_audio(
         state={"audio_path": str(tmp_path / "a.wav")},
-        engine="mlx",
+        engine="hermes",
         language="zh",
         prompt_slug="dictation-translate",
         prompt_id=None,
@@ -1733,24 +1733,24 @@ def test_process_audio_does_not_send_template_to_mlx_stt(monkeypatch, tmp_path):
     )
 
     assert result["text"] == "Clean text."
-    assert observed["context_prompt"] == ""
+    assert observed["context_prompt"] == "语音输入模式：清理文本。"
 
 
-def test_process_audio_falls_back_when_native_translation_returns_source(monkeypatch, tmp_path):
+def test_process_audio_uses_agent_postprocess_when_hermes_returns_source_language(monkeypatch, tmp_path):
     copied = []
 
     monkeypatch.setattr(dictate, "render_context_prompt", lambda **kwargs: "translate context")
     monkeypatch.setattr(
         dictate,
         "transcribe_dictation",
-        lambda **kwargs: {"text": "这还是中文", "engine_used": "mlx", "language_used": "zh"},
+        lambda **kwargs: {"text": "这还是中文", "engine_used": "hermes", "language_used": "zh"},
     )
     monkeypatch.setattr(dictate, "postprocess_translation", lambda **kwargs: "This is still Chinese.")
     monkeypatch.setattr(dictate, "copy_to_clipboard", lambda text: copied.append(text))
 
     result = dictate.process_audio(
         state={"audio_path": str(tmp_path / "a.wav")},
-        engine="mlx",
+        engine="hermes",
         language="zh",
         prompt_slug="dictation-translate",
         prompt_id=None,
@@ -1804,14 +1804,12 @@ def test_process_audio_translate_does_not_copy_source_on_postprocess_timeout(mon
         "transcribe_dictation",
         lambda **kwargs: {"text": "也不容易，也是，呃", "engine_used": "hermes", "language_used": "zh"},
     )
-    monkeypatch.setattr(dictate, "_config", lambda: {"llm": {"enabled": True, "agent": {"provider": "hermes"}}})
-    monkeypatch.setattr(dictate, "_run_hermes_xai_chat_prompt", lambda *args, **kwargs: "")
     monkeypatch.setattr(dictate, "copy_to_clipboard", lambda text: copied.append(text))
 
-    def fail_run(cmd, **kwargs):
-        raise subprocess.TimeoutExpired(cmd, kwargs["timeout"])
+    def fail_agent_prompt(*args, **kwargs):
+        raise dictate.DictationError("dictation postprocess timeout")
 
-    monkeypatch.setattr(dictate.subprocess, "run", fail_run)
+    monkeypatch.setattr(dictate, "_run_agent_prompt", fail_agent_prompt)
 
     with pytest.raises(dictate.DictationError, match="postprocess timeout"):
         dictate.process_audio(
@@ -1829,79 +1827,58 @@ def test_process_audio_translate_does_not_copy_source_on_postprocess_timeout(mon
     assert copied == []
 
 
-def test_process_audio_round_trips_through_stt_daemon(monkeypatch, tmp_path):
-    from socket_helpers import short_socket_dir
-    from stt_daemon.app import STTDaemonApp
-    from stt_daemon.config import DaemonConfig
-    from stt_daemon.runtime import MockSTTBackend
-    from vocab import VocabRepo, open_db
-
-    db = tmp_path / "vocab.sqlite"
-    VocabRepo(open_db(db))
-    cfg = DaemonConfig(
-        socket_path=short_socket_dir() / "stt.sock",
-        vocab_db_path=db,
-        pid_file=tmp_path / "stt.pid",
-        log_path=None,
-        sessions_dir=tmp_path / "sessions",
-    )
-    backend = MockSTTBackend(canned_text=" hello   github ")
-    app_ref = {}
-    stop = threading.Event()
-    started = threading.Event()
-
-    def worker():
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        app = STTDaemonApp(cfg, backends={"mlx": backend})
-        app_ref["loop"] = loop
-        app_ref["app"] = app
-        loop.run_until_complete(app.start())
-        started.set()
-
-        async def wait_stop():
-            while not stop.is_set():
-                await asyncio.sleep(0.05)
-            await app.stop()
-
-        loop.run_until_complete(wait_stop())
-        loop.close()
-
-    thread = threading.Thread(target=worker, daemon=True)
-    thread.start()
-    assert started.wait(timeout=5)
-    deadline = time.time() + 5
-    while time.time() < deadline and not cfg.socket_path.exists():
-        time.sleep(0.05)
-    assert cfg.socket_path.exists()
-
+def test_process_audio_round_trips_through_host_hermes_endpoint(monkeypatch, tmp_path):
+    observed = {}
     audio = tmp_path / "dictation.wav"
-    audio.write_bytes(b"RIFFstub")
-    monkeypatch.setattr(dictate, "STT_SOCKET", cfg.socket_path)
+    token_path = tmp_path / "mcp_token.json"
+    _write_silent_wav(audio)
+    token_path.write_text('{"token":"secret-token"}', encoding="utf-8")
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            return b'{"ok":true,"transcript":" hello   github ","provider":"hermes","chunks":1}'
+
+    def fake_urlopen(request, timeout):
+        observed["url"] = request.full_url
+        observed["body"] = json.loads(request.data.decode("utf-8"))
+        observed["headers"] = {key.lower(): value for key, value in request.header_items()}
+        observed["timeout"] = timeout
+        return FakeResponse()
+
+    monkeypatch.setattr(dictate, "MCP_TOKEN_PATH", token_path)
+    monkeypatch.setenv("YULU_UI_BASE_URL", "http://127.0.0.1:7777")
+    monkeypatch.setattr(dictate.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(dictate, "render_context_prompt", lambda **kwargs: "context")
     monkeypatch.setattr(dictate, "postprocess_dictation", lambda **kwargs: kwargs["text"])
-    try:
-        result = dictate.process_audio(
-            state={"audio_path": str(audio)},
-            engine="mlx",
-            language="en",
-            prompt_slug="dictation-cleanup",
-            prompt_id=None,
-            target_language="",
-            timeout_sec=3.0,
-            copy=False,
-            paste=False,
-            context_limit=240,
-        )
-    finally:
-        stop.set()
-        thread.join(timeout=5)
+
+    result = dictate.process_audio(
+        state={"audio_path": str(audio)},
+        engine="hermes",
+        language="en",
+        prompt_slug="dictation-cleanup",
+        prompt_id=None,
+        target_language="",
+        timeout_sec=3.0,
+        copy=False,
+        paste=False,
+        context_limit=240,
+    )
 
     assert result["text"] == "hello github"
+    assert result["engine"] == "hermes"
     assert result["copied"] is False
     assert result["pasted"] is False
-    assert backend.last_options["job_kind"] == "dictation"
-    assert backend.last_options["dictation_mode"] == "dictate"
-    assert "语音输入模式" not in (backend.last_initial_prompt or "")
+    assert observed["url"] == "http://127.0.0.1:7777/api/agent/transcribe"
+    assert observed["body"] == {"audioPath": str(audio)}
+    assert observed["headers"]["authorization"] == "Bearer secret-token"
+    assert observed["headers"]["content-type"] == "application/json"
+    assert observed["timeout"] == 3.0
 
 
 def test_process_audio_pastes_to_recorded_target(monkeypatch, tmp_path):
