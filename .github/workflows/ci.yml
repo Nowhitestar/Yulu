@@ -163,7 +163,9 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          # Pin the lowest supported toolchain boundary so dependency upgrades
+          # cannot silently raise it while floating Node 20 CI stays green.
+          node-version: '20.19.0'
           cache: 'npm'
           cache-dependency-path: yulu/scripts/yulu_ui/package-lock.json
 

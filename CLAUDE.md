@@ -44,7 +44,7 @@ executor, or file-only work queue to Yulu. The accepted decision is
 - Python 3.8+: capture edge, meeting/calendar scheduling, dictation transport,
   installer, diagnostics, and CLI helpers.
 - Bash: setup, lifecycle, packaging, and the `yulu` command dispatcher.
-- Node.js 20+: Host and web UI; use the checked-in npm lockfile.
+- Node.js 20.19+, 22.12+, or 24: Host and web UI; use the checked-in npm lockfile.
 
 ### Main dependencies
 

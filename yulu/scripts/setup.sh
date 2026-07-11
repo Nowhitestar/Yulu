@@ -152,7 +152,7 @@ confirm_deps_install() {
 
     echo "  将安装以下软件包："
     echo "    - ffmpeg / sox       (音频检查与备用处理)"
-    echo "    - node@24            (本地 Host 运行时，已有 Node 20–24 时复用)"
+    echo "    - node@24            (本地 Host 运行时，已有 Node 20.19+/22.12+/24 时复用)"
     echo "    - terminal-notifier  (系统通知)"
     echo "    - steipete/tap/gogcli (Google 日历 CLI)"
     echo "    - cloudflared        (日历 webhook 隧道)"

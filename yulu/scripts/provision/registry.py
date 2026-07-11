@@ -197,17 +197,31 @@ def _compatible_node_present(candidates: list[Path] | None = None) -> bool:
                 timeout=2,
                 check=False,
             )
-            major = int(result.stdout.strip().lstrip("v").split(".", 1)[0])
-        except (OSError, ValueError, subprocess.SubprocessError):
+            parts = result.stdout.strip().lstrip("v").split(".")
+            major, minor = int(parts[0]), int(parts[1])
+        except (IndexError, OSError, ValueError, subprocess.SubprocessError):
             continue
-        if result.returncode == 0 and 20 <= major <= 24:
+        supported = (
+            (major == 20 and minor >= 19)
+            or (major == 22 and minor >= 12)
+            or major == 24
+        )
+        if result.returncode == 0 and supported:
             return True
     return False
 
 
 def _deps_ready() -> bool:
     """deps: the brew-managed system tooling the steps rely on is on PATH."""
-    return _have("brew") and _have("cloudflared") and _compatible_node_present()
+    required_commands = (
+        "brew",
+        "cloudflared",
+        "ffmpeg",
+        "gog",
+        "sox",
+        "terminal-notifier",
+    )
+    return all(_have(command) for command in required_commands) and _compatible_node_present()
 
 
 def _audio_ready() -> bool:

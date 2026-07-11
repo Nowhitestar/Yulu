@@ -77,7 +77,7 @@ curl -fsSL https://raw.githubusercontent.com/Nowhitestar/Yulu/main/install.sh | 
 
 1. 检查 macOS 13+、Xcode CLI Tools、Homebrew、Python 3。
 2. 把选定的 Yulu runtime 安装到 `~/.yulu/`（路径固定，别移走）。
-3. 安装本地 Host 与音频/通知所需的 Homebrew 包，包括兼容的 `node@24`（已有 Node 20/22/24 时复用）、`sox`、`ffmpeg` 和 `terminal-notifier`。
+3. 安装本地 Host 与音频/通知所需的 Homebrew 包，包括兼容的 `node@24`（已有 Node 20.19+/22.12+/24 时复用）、`sox`、`ffmpeg` 和 `terminal-notifier`。
 4. 写用户级配置到 `~/.config/yulu/config.json`，建录音目录 `~/Movies/Yulu/`。
 5. 编译窗口扫描器，引导授权"辅助功能"。
 6. 编译并签名 `Yulu.app`，引导授权"麦克风"和"屏幕与系统音频录制"。

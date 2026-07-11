@@ -106,16 +106,35 @@ def test_force_apply_bypasses_satisfied_probe(monkeypatch):
     assert captured == [["bash", str(registry_mod.SCRIPTS_DIR / "setup_daemons.sh"), "release"]]
 
 
-def test_compatible_node_probe_rejects_new_abi_and_accepts_node24(tmp_path):
-    node26 = tmp_path / "node26"
-    node24 = tmp_path / "node24"
-    node26.write_text("#!/usr/bin/env bash\nprintf 'v26.1.0\\n'\n")
-    node24.write_text("#!/usr/bin/env bash\nprintf 'v24.15.0\\n'\n")
-    node26.chmod(0o755)
-    node24.chmod(0o755)
+def test_compatible_node_probe_enforces_toolchain_boundaries(tmp_path):
+    def node(name, version):
+        path = tmp_path / name
+        path.write_text(f"#!/usr/bin/env bash\nprintf '{version}\\n'\n")
+        path.chmod(0o755)
+        return path
 
-    assert registry_mod._compatible_node_present([node26]) is False
-    assert registry_mod._compatible_node_present([node26, node24]) is True
+    node20_old = node("node20-old", "v20.17.0")
+    node20 = node("node20", "v20.19.0")
+    node22_old = node("node22-old", "v22.11.0")
+    node22 = node("node22", "v22.12.0")
+    node24 = node("node24", "v24.15.0")
+    node26 = node("node26", "v26.1.0")
+    malformed = node("malformed", "v20")
+
+    for rejected in (node20_old, node22_old, node26, malformed):
+        assert registry_mod._compatible_node_present([rejected]) is False
+    for accepted in (node20, node22, node24):
+        assert registry_mod._compatible_node_present([accepted]) is True
+
+
+def test_deps_probe_requires_every_setup_postcondition(monkeypatch):
+    required = {"brew", "cloudflared", "ffmpeg", "gog", "sox", "terminal-notifier"}
+    monkeypatch.setattr(registry_mod, "_compatible_node_present", lambda: True)
+    monkeypatch.setattr(registry_mod, "_have", lambda command: command in required)
+    assert registry_mod._deps_ready() is True
+
+    monkeypatch.setattr(registry_mod, "_have", lambda command: command in required - {"ffmpeg"})
+    assert registry_mod._deps_ready() is False
 
 
 # ── (3) returncode -> ok / error mapping ─────────────────────────────
@@ -205,9 +224,9 @@ def test_step_by_name_raises_on_unknown():
 
 
 STUBBED_COMMANDS = [
-    "brew", "launchctl", "npm", "node", "curl", "swiftc", "nc",
+    "brew", "cloudflared", "ffmpeg", "launchctl", "npm", "node", "curl", "swiftc", "nc",
     "tccutil", "open", "pkill", "pgrep", "xattr", "gog",
-    "terminal-notifier", "sw_vers",
+    "sox", "terminal-notifier", "sw_vers",
 ]
 
 
@@ -216,7 +235,10 @@ def _make_shim_dir(tmp_path: Path) -> Path:
     shim.mkdir()
     for name in STUBBED_COMMANDS:
         stub = shim / name
-        stub.write_text("#!/usr/bin/env bash\nexit 0\n")
+        if name == "node":
+            stub.write_text("#!/usr/bin/env bash\n[[ \"${1:-}\" == \"-v\" ]] && printf 'v24.15.0\\n'\nexit 0\n")
+        else:
+            stub.write_text("#!/usr/bin/env bash\nexit 0\n")
         stub.chmod(stub.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
     return shim
 

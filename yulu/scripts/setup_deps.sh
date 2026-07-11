@@ -9,8 +9,9 @@
 # must be non-interactive (Pitfall 5); the setup.sh orchestrator owns that
 # confirmation and only invokes this script once the user has consented.
 #
-# `brew install` is idempotent: already-installed formulae emit a one-line
-# warning and exit 0, so re-running this script is safe.
+# Re-running is safe: usable host commands are reused, and a failed Homebrew
+# invocation is judged by its postcondition because Homebrew can install/link a
+# formula successfully before returning non-zero for an unrelated cleanup step.
 #
 # shellcheck source=lib/common.sh
 set -uo pipefail
@@ -18,6 +19,20 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/common.sh
 . "$SCRIPT_DIR/lib/common.sh"
+
+ensure_brew_command() {
+    local formula="$1"
+    local command_name="$2"
+
+    if command -v "$command_name" >/dev/null 2>&1; then
+        return 0
+    fi
+
+    if ! brew install "$formula"; then
+        warn "brew install $formula 返回失败，正在核对实际安装结果"
+    fi
+    command -v "$command_name" >/dev/null 2>&1
+}
 
 setup_deps() {
     local mode="${1:-release}"   # release|dev — accepted for orchestrator parity
@@ -39,49 +54,29 @@ setup_deps() {
         return 1
     fi
 
-    # `brew install` is idempotent — already-installed packages emit a one-line
-    # warning and exit 0.
-
-    # Always-install base tools (audio/notifications). These have no host-reuse
-    # gate — Yulu needs its own. sox/ffmpeg/terminal-notifier stay unconditional.
-    if ! brew install sox ffmpeg terminal-notifier 2>&1 | tail -1; then
+    # Reuse working commands. Installing one formula at a time prevents a
+    # partially successful multi-formula transaction from aborting an otherwise
+    # healthy upgrade, while the command postcondition still fails closed.
+    if ! ensure_brew_command sox sox \
+        || ! ensure_brew_command ffmpeg ffmpeg \
+        || ! ensure_brew_command terminal-notifier terminal-notifier; then
         err "音频/通知工具安装失败"
         return 1
     fi
     ok "音频/通知工具安装完成"
 
     # better-sqlite3 is compiled for the Host's Node ABI. Reuse a supported
-    # Node 20/22/24 when present; current odd/newer runtimes are not assumed
-    # compatible with the native module used by this release.
-    local candidate major
+    # Node only when it satisfies the shared Vite/native-runtime policy.
     local compatible_node=""
-    local node_candidates=()
-    if command -v node >/dev/null 2>&1; then
-        node_candidates+=("$(command -v node)")
-    fi
-    node_candidates+=(
-        "$HOME"/.nvm/versions/node/v20*/bin/node
-        "$HOME"/.nvm/versions/node/v22*/bin/node
-        "$HOME"/.nvm/versions/node/v24*/bin/node
-        /opt/homebrew/opt/node@20/bin/node
-        /opt/homebrew/opt/node@22/bin/node
-        /opt/homebrew/opt/node@24/bin/node
-        /usr/local/opt/node@20/bin/node
-        /usr/local/opt/node@22/bin/node
-        /usr/local/opt/node@24/bin/node
-    )
-    for candidate in "${node_candidates[@]}"; do
-        [[ -x "$candidate" ]] || continue
-        major="$("$candidate" -v 2>/dev/null | sed -E 's/^v([0-9]+).*/\1/')"
-        if [[ -n "$major" && "$major" -ge 20 && "$major" -le 24 ]]; then
-            compatible_node="$candidate"
-            break
-        fi
-    done
+    compatible_node="$(compatible_node_bin || true)"
     if [[ -n "$compatible_node" ]]; then
         ok "检测到兼容 Node（$($compatible_node -v)），跳过 brew install node@24"
     else
-        if ! brew install node@24 2>&1 | tail -1; then
+        if ! brew install node@24; then
+            warn "brew install node@24 返回失败，正在核对实际安装结果"
+        fi
+        compatible_node="$(compatible_node_bin || true)"
+        if [[ -z "$compatible_node" ]]; then
             err "Node 24 Host 运行时安装失败"
             return 1
         fi
@@ -93,16 +88,17 @@ setup_deps() {
     if [[ "$(capability_status gog)" == "usable" ]]; then
         ok "检测到可用的 gog（复用主机的），跳过 brew install steipete/tap/gogcli"
     else
-        if ! brew install steipete/tap/gogcli 2>&1 | tail -1; then
+        if ! brew install steipete/tap/gogcli; then
+            warn "brew install steipete/tap/gogcli 返回失败，正在核对实际安装结果"
+        fi
+        if [[ "$(capability_status gog)" != "usable" ]]; then
             err "gog CLI 安装失败"
             return 1
         fi
         ok "gog CLI 安装完成"
     fi
 
-    # cloudflared stays unconditional — Yulu's calendar webhook tunnel needs its own
-    # (no host-reuse capability is reported for it).
-    if ! brew install cloudflared 2>&1 | tail -1; then
+    if ! ensure_brew_command cloudflared cloudflared; then
         err "cloudflared 安装失败"
         return 1
     fi
