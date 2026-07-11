@@ -95,12 +95,37 @@ def test_dev_install_metadata_marks_runtime_as_dev(monkeypatch, tmp_path):
     }
 
 
-def test_preferred_node_rejects_unsupported_major(monkeypatch, tmp_path):
+def test_node_runtime_policy_enforces_ui_toolchain_floor(monkeypatch):
+    versions = {
+        "/opt/node20-old": "20.17.0",
+        "/opt/node20": "20.19.0",
+        "/opt/node22-old": "22.11.0",
+        "/opt/node22": "22.12.0",
+        "/opt/node24": "24.0.0",
+        "/opt/node26": "26.0.0",
+        "/opt/broken": "not-a-version",
+    }
+
+    def fake_run(cmd, **_kwargs):
+        return subprocess.CompletedProcess(cmd, 0, stdout=versions[cmd[0]], stderr="")
+
+    monkeypatch.setattr(dev_install, "_run", fake_run)
+
+    assert dev_install._compatible_node_version("/opt/node20-old") is False
+    assert dev_install._compatible_node_version("/opt/node20") is True
+    assert dev_install._compatible_node_version("/opt/node22-old") is False
+    assert dev_install._compatible_node_version("/opt/node22") is True
+    assert dev_install._compatible_node_version("/opt/node24") is True
+    assert dev_install._compatible_node_version("/opt/node26") is False
+    assert dev_install._compatible_node_version("/opt/broken") is False
+
+
+def test_preferred_node_rejects_unsupported_version(monkeypatch, tmp_path):
     candidates = ["/opt/node26", "/opt/node24"]
     monkeypatch.setattr(dev_install, "_node_candidates", lambda: candidates)
     monkeypatch.setattr(
         dev_install,
-        "_compatible_node_major",
+        "_compatible_node_version",
         lambda candidate: candidate.endswith("24"),
     )
     monkeypatch.setattr(dev_install, "_node_can_load_ui_native_modules", lambda *_args: True)
@@ -127,7 +152,13 @@ def test_build_ui_uses_compatible_node_path_for_npm(monkeypatch, tmp_path):
 
     assert calls[0][0] == ["/opt/homebrew/bin/npm", "run", "build"]
     assert calls[0][1]["cwd"] == ui_dir
-    assert calls[0][1]["env"]["PATH"].split(":")[1] == "/opt/node24/bin"
+    assert calls[0][1]["env"]["PATH"].split(":")[0] == "/opt/node24/bin"
+
+
+def test_launch_path_puts_selected_node_before_local_bin():
+    parts = dev_install._launch_path("/opt/homebrew/opt/node@24/bin/node").split(":")
+    assert parts[0] == "/opt/homebrew/opt/node@24/bin"
+    assert parts.index(str(Path.home() / ".local/bin")) > 0
 
 
 def test_dev_install_retires_legacy_stt_daemon():

@@ -16,7 +16,9 @@ Reuses the repo's shells-out-to-bash subprocess pattern (test_package_release.py
 NOT bats. ROOT is the standard root anchor.
 """
 
+import json
 import os
+import plistlib
 import shutil
 import stat
 import subprocess
@@ -46,6 +48,8 @@ COMMON_LIB = "lib/common.sh"
 # config writers need the real interpreter.
 STUBBED_COMMANDS = [
     "brew",
+    "cloudflared",
+    "ffmpeg",
     "launchctl",
     "npm",
     "node",
@@ -60,6 +64,7 @@ STUBBED_COMMANDS = [
     "gog",
     "terminal-notifier",
     "sw_vers",
+    "sox",
 ]
 
 
@@ -142,6 +147,45 @@ def test_setup_ui_accepts_node24_runtime(tmp_path):
     assert result.stdout.strip().splitlines()[-1] == str(node)
 
 
+@pytest.mark.parametrize(
+    ("version", "supported"),
+    [
+        ("v20.18.3", False),
+        ("v20.19.0", True),
+        ("v21.7.3", False),
+        ("v22.11.0", False),
+        ("v22.12.0", True),
+        ("v23.11.1", False),
+        ("v24.0.0", True),
+        ("v26.0.0", False),
+        ("malformed", False),
+    ],
+)
+def test_shared_node_runtime_policy_matches_ui_toolchain(version, supported):
+    result = run(
+        ["bash", "-c", ". ./lib/common.sh; node_version_supported \"$1\"", "_", version],
+        cwd=SCRIPTS,
+    )
+    assert (result.returncode == 0) is supported
+
+
+def test_setup_ui_skips_stale_node20_and_selects_node24(tmp_path):
+    stale = tmp_path / "node20"
+    current = tmp_path / "home" / ".nvm" / "versions" / "node" / "v24.15.0" / "bin" / "node"
+    current.parent.mkdir(parents=True)
+    stale.write_text("#!/usr/bin/env bash\nprintf 'v20.17.0\\n'\n")
+    current.write_text("#!/usr/bin/env bash\nprintf 'v24.15.0\\n'\n")
+    stale.chmod(0o755)
+    current.chmod(0o755)
+    result = run(
+        ["bash", "-c", ". ./setup_ui.sh; compatible_node_bin"],
+        cwd=SCRIPTS,
+        env={"HOME": str(tmp_path / "home"), "NODE_BIN": str(stale), "PATH": "/usr/bin:/bin"},
+    )
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert result.stdout.strip().splitlines()[-1] == str(current)
+
+
 def test_setup_ui_fails_when_required_host_node_is_unavailable(tmp_path):
     shim = _make_shim_dir(tmp_path)
     env = _hermetic_env(tmp_path, shim)
@@ -156,12 +200,66 @@ def test_setup_ui_fails_when_required_host_node_is_unavailable(tmp_path):
 
 def test_setup_deps_propagates_brew_failure(tmp_path):
     shim = _make_shim_dir(tmp_path)
+    (shim / "ffmpeg").unlink()
     (shim / "brew").write_text("#!/usr/bin/env bash\nexit 42\n")
     (shim / "brew").chmod(0o755)
     env = _hermetic_env(tmp_path, shim)
+    env["PATH"] = f"{shim}:/usr/bin:/bin"
     result = run(["bash", str(SCRIPTS / "setup_deps.sh"), "release"], cwd=SCRIPTS, env=env)
     assert result.returncode != 0
     assert "安装失败" in result.stdout
+
+
+def test_brew_command_accepts_usable_postcondition_after_nonzero_exit(tmp_path):
+    shim = tmp_path / "bin"
+    shim.mkdir()
+    brew = shim / "brew"
+    ffmpeg = shim / "ffmpeg"
+    brew.write_text(
+        "#!/usr/bin/env bash\n"
+        f"printf '#!/usr/bin/env bash\\nexit 0\\n' > {ffmpeg}\n"
+        f"chmod +x {ffmpeg}\n"
+        "exit 42\n"
+    )
+    brew.chmod(0o755)
+    result = run(
+        ["bash", "-c", ". ./setup_deps.sh; ensure_brew_command ffmpeg ffmpeg"],
+        cwd=SCRIPTS,
+        env={"PATH": f"{shim}:/usr/bin:/bin"},
+    )
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert "核对实际安装结果" in result.stdout
+
+
+def test_gog_install_accepts_usable_postcondition_after_nonzero_exit(tmp_path):
+    shim = _make_shim_dir(tmp_path)
+    (shim / "gog").unlink()
+    brew = shim / "brew"
+    gog = shim / "gog"
+    brew.write_text(
+        "#!/usr/bin/env bash\n"
+        "if [[ \"$*\" == *gogcli* ]]; then\n"
+        f"  printf '#!/usr/bin/env bash\\nexit 0\\n' > {gog}\n"
+        f"  chmod +x {gog}\n"
+        "  exit 42\n"
+        "fi\n"
+        "exit 0\n"
+    )
+    brew.chmod(0o755)
+    command = (
+        ". ./setup_deps.sh; "
+        "capability_status() { "
+        "if command -v gog >/dev/null 2>&1 && gog --version >/dev/null 2>&1; "
+        "then echo usable; else echo absent; fi; }; "
+        "setup_deps release"
+    )
+    result = run(
+        ["bash", "-c", command],
+        cwd=SCRIPTS,
+        env={"HOME": str(tmp_path / "home"), "PATH": f"{shim}:/usr/bin:/bin"},
+    )
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert "gog CLI 安装完成" in result.stdout
 
 
 def test_orchestrator_propagates_each_core_concern_failure():
@@ -247,12 +345,50 @@ def test_common_lib_sources_cleanly_under_set_u():
         ". ./lib/common.sh; "
         "declare -f ok >/dev/null && declare -f install_plist >/dev/null "
         "&& declare -f resolve_install_mode >/dev/null && declare -f launch_path >/dev/null "
+        "&& declare -f node_version_supported >/dev/null && declare -f compatible_node_bin >/dev/null "
         "&& echo COMMON_OK"
     )
     result = run(["bash", "-c", snippet], cwd=SCRIPTS)
     assert result.returncode == 0, result.stderr + result.stdout
     assert "COMMON_OK" in result.stdout
     assert "unbound variable" not in result.stderr
+
+
+def test_install_plist_puts_selected_node_directory_first(tmp_path):
+    launch_agents = tmp_path / "LaunchAgents"
+    launch_agents.mkdir()
+    shim = tmp_path / "bin"
+    shim.mkdir()
+    launchctl = shim / "launchctl"
+    launchctl.write_text("#!/usr/bin/env bash\nexit 0\n")
+    launchctl.chmod(0o755)
+    selected_node = "/opt/homebrew/opt/node@24/bin/node"
+    env = {
+        "HOME": str(tmp_path / "home"),
+        "PATH": f"{shim}:/usr/bin:/bin",
+        "NODE_BIN": selected_node,
+        "PYTHON_BIN": "/usr/bin/python3",
+        "SCRIPT_DIR": str(SCRIPTS),
+        "LAUNCH_AGENTS_DIR": str(launch_agents),
+    }
+    result = run(
+        ["bash", "-c", ". ./lib/common.sh; install_plist ./com.yulu.ui.plist com.yulu.ui.plist"],
+        cwd=SCRIPTS,
+        env=env,
+    )
+    assert result.returncode == 0, result.stderr + result.stdout
+    plist = plistlib.loads((launch_agents / "com.yulu.ui.plist").read_bytes())
+    assert plist["ProgramArguments"][0] == selected_node
+    path_parts = plist["EnvironmentVariables"]["PATH"].split(":")
+    assert path_parts[0] == "/opt/homebrew/opt/node@24/bin"
+
+
+def test_package_engine_matches_installer_node_policy():
+    expected = "^20.19.0 || ^22.12.0 || >=24.0.0 <25"
+    package = json.loads((SCRIPTS / "yulu_ui" / "package.json").read_text())
+    lock = json.loads((SCRIPTS / "yulu_ui" / "package-lock.json").read_text())
+    assert package["engines"]["node"] == expected
+    assert lock["packages"][""]["engines"]["node"] == expected
 
 
 # ─── (b)+(c) each concern runs standalone in isolation, idempotently ──

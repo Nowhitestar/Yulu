@@ -28,39 +28,6 @@ export NODE_BIN="${NODE_BIN:-$(command -v node || true)}"
 export LAUNCH_AGENTS_DIR="${LAUNCH_AGENTS_DIR:-$HOME/Library/LaunchAgents}"
 export SCRIPT_DIR
 
-compatible_node_bin() {
-    local candidate
-    local node_major
-    local candidates=()
-    if [[ -n "${NODE_BIN:-}" ]]; then
-        candidates+=("$NODE_BIN")
-    fi
-    if command -v node >/dev/null 2>&1; then
-        candidates+=("$(command -v node)")
-    fi
-    candidates+=(
-        "$HOME"/.nvm/versions/node/v20*/bin/node
-        "$HOME"/.nvm/versions/node/v22*/bin/node
-        "$HOME"/.nvm/versions/node/v24*/bin/node
-        /opt/homebrew/opt/node@20/bin/node
-        /opt/homebrew/opt/node@22/bin/node
-        /opt/homebrew/opt/node@24/bin/node
-        /usr/local/opt/node@20/bin/node
-        /usr/local/opt/node@22/bin/node
-        /usr/local/opt/node@24/bin/node
-    )
-
-    for candidate in "${candidates[@]}"; do
-        [[ -x "$candidate" ]] || continue
-        node_major="$("$candidate" -v 2>/dev/null | sed -E 's/^v([0-9]+).*/\1/')"
-        if [[ -n "$node_major" && "$node_major" -ge 20 && "$node_major" -le 24 ]]; then
-            printf '%s\n' "$candidate"
-            return 0
-        fi
-    done
-    return 1
-}
-
 ui_runtime_modules_ready() {
     local ui_dir="$1"
     (
@@ -99,7 +66,7 @@ setup_ui() {
     local resolved_node
     if ! resolved_node="$(compatible_node_bin)"; then
         err "未检测到兼容的 Node；持久化 Host 无法启动。"
-        err "需要 Node 20、22 或 24；当前默认 node: $(node -v 2>/dev/null || echo 'not found')"
+        err "需要 Node 20.19+、22.12+ 或 24；当前默认 node: $(node -v 2>/dev/null || echo 'not found')"
         return 1
     fi
     export NODE_BIN="$resolved_node"
@@ -115,10 +82,10 @@ setup_ui() {
     fi
     export PATH="$node_dir:$PATH"
 
-    local node_major
-    node_major="$("$NODE_BIN" -v 2>/dev/null | sed -E 's/^v([0-9]+).*/\1/')"
-    if [[ -z "$node_major" || "$node_major" -lt 20 || "$node_major" -gt 24 ]]; then
-        err "node 版本不兼容（$("$NODE_BIN" -v 2>/dev/null || echo 'unknown')），Host 需要 Node 20–24。"
+    local node_version
+    node_version="$("$NODE_BIN" -v 2>/dev/null)"
+    if ! node_version_supported "$node_version"; then
+        err "node 版本不兼容（${node_version:-unknown}），Host 需要 Node 20.19+、22.12+ 或 24。"
         return 1
     fi
     ok "Node $("$NODE_BIN" -v) 满足 yulu_ui 要求"

@@ -6,9 +6,10 @@
 # setup_audio.sh / setup_daemons.sh / the setup.sh
 # orchestrator). Provides:
 #   1. printf-based color + log helpers (ok/warn/err/info/header/prompt)
-#   2. launch_path        — the §6b stable launch PATH (NO nvm-versioned literal)
-#   3. install_plist      — the §8c de-duplication target (one canonical copy)
-#   4. resolve_install_mode / detect_source — the D-13 dev/release fork reader
+#   2. Node runtime selection shared by dependency + UI setup
+#   3. launch_path        — selected Node first, then stable system fallbacks
+#   4. install_plist      — the §8c de-duplication target (one canonical copy)
+#   5. resolve_install_mode / detect_source — the D-13 dev/release fork reader
 #
 # Sourcing this file is side-effect-free: it only defines functions + color vars.
 #
@@ -72,17 +73,66 @@ except Exception:
         || echo "absent"
 }
 
-# ─── 2. launch_path — stable PATH for launchd plists (§6b fix) ────────
-# Ports dev_install.py::_launch_path (lines 86-99) to bash. The monolith
-# (setup.sh:852) baked an nvm-VERSIONED node path — `$(node -v)` — straight
-# into the plist __PATH__ at install time, so a later `nvm install` /
-# uninstall left the LaunchAgent pointing at a node that no longer exists
-# (and is attacker-influenceable). Here we hardcode a stable, well-known
-# prefix order and only GLOB the highest-sorted nvm node dir if present —
-# never a literal version string.
+# ─── 2. Node runtime policy + selection ──────────────────────────────
+# Vite 8 requires Node 20.19+ or 22.12+. Yulu additionally keeps the Host on
+# even-numbered LTS lines through Node 24 because better-sqlite3 is native.
+node_version_supported() {
+    local version="${1#v}"
+    local major rest minor
+    major="${version%%.*}"
+    rest="${version#*.}"
+    minor="${rest%%.*}"
+
+    [[ "$major" =~ ^[0-9]+$ && "$minor" =~ ^[0-9]+$ ]] || return 1
+    case "$major" in
+        20) (( minor >= 19 )) ;;
+        22) (( minor >= 12 )) ;;
+        24) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+compatible_node_bin() {
+    local candidate version
+    local candidates=()
+    if [[ -n "${NODE_BIN:-}" ]]; then
+        candidates+=("$NODE_BIN")
+    fi
+    if command -v node >/dev/null 2>&1; then
+        candidates+=("$(command -v node)")
+    fi
+    candidates+=(
+        "$HOME"/.nvm/versions/node/v20*/bin/node
+        "$HOME"/.nvm/versions/node/v22*/bin/node
+        "$HOME"/.nvm/versions/node/v24*/bin/node
+        /opt/homebrew/opt/node@20/bin/node
+        /opt/homebrew/opt/node@22/bin/node
+        /opt/homebrew/opt/node@24/bin/node
+        /usr/local/opt/node@20/bin/node
+        /usr/local/opt/node@22/bin/node
+        /usr/local/opt/node@24/bin/node
+    )
+
+    for candidate in "${candidates[@]}"; do
+        [[ -x "$candidate" ]] || continue
+        version="$("$candidate" -v 2>/dev/null)"
+        if node_version_supported "$version"; then
+            printf '%s\n' "$candidate"
+            return 0
+        fi
+    done
+    return 1
+}
+
+# ─── 3. launch_path — Host-aligned PATH for launchd plists ───────────
+# Mirrors dev_install.py::_launch_path: the selected Host Node directory comes
+# first so /usr/bin/env node and npx children use the same runtime/ABI as the
+# absolute ProgramArguments entry. Stable system prefixes follow; callers that
+# have not selected a runtime get the highest available nvm bin as a fallback.
 #
 # Echoes the assembled PATH on stdout; de-dupes entries (first wins).
 launch_path() {
+    local selected_node="${1:-}"
     local -a parts=(
         "$HOME/.local/bin"
         "/opt/homebrew/bin"
@@ -93,11 +143,18 @@ launch_path() {
         "/sbin"
     )
 
-    # Optionally insert the highest-sorted ~/.nvm/versions/node/*/bin (glob,
+    # Keep child processes on the same Node runtime as the Host. The absolute
+    # ProgramArguments path is stable for Homebrew's versioned node@24 keg; its
+    # directory must also precede an unversioned/newer node on PATH.
+    if [[ -n "$selected_node" ]]; then
+        parts=("$(dirname "$selected_node")" "${parts[@]}")
+    fi
+
+    # Without an explicit selection, insert the highest-sorted nvm bin (glob,
     # NOT a baked `$(node -v)` literal) right after ~/.local/bin, mirroring
-    # dev_install.py's parts.insert(1, ...).
+    # dev_install.py's fallback.
     local nvm_root="$HOME/.nvm/versions/node"
-    if [[ -d "$nvm_root" ]]; then
+    if [[ -z "$selected_node" && -d "$nvm_root" ]]; then
         # Collect matching dirs via a glob (shellcheck SC2012: no `ls`), guard
         # against the literal-glob-when-no-match case, then reverse-sort so the
         # newest version directory wins.
@@ -112,7 +169,7 @@ launch_path() {
             while IFS= read -r line; do
                 sorted_bins+=("$line")
             done < <(printf '%s\n' "${nvm_bins[@]}" | sort -r)
-            parts=("${parts[0]}" "${sorted_bins[0]}" "${parts[@]:1}")
+            parts=("${sorted_bins[0]}" "${parts[@]}")
         fi
     fi
 
@@ -146,8 +203,8 @@ launch_path() {
 # Env (each falls back so `set -u` standalone callers don't crash):
 #   PYTHON_BIN, NODE_BIN, SCRIPT_DIR, LAUNCH_AGENTS_DIR
 #
-# Substitutes the five fixed plist tokens. __PATH__ uses launch_path (§6b),
-# never a baked nvm version. Tokens absent from a given template (e.g.
+# Substitutes the five fixed plist tokens. __PATH__ uses launch_path (§6b) with
+# the exact selected Node directory first. Tokens absent from a given template (e.g.
 # com.yulu.audiodaemon.plist has no __PATH__/__PYTHON__ — it's `open -W
 # Yulu.app`, the §8b form Phase 2 owns) are simply left untouched by sed;
 # this helper substitutes only the tokens present and MUST NOT regress §8b.
@@ -175,9 +232,9 @@ install_plist() {
         return 1
     fi
 
-    # §6b fix: stable PATH from launch_path, NOT an nvm-versioned literal.
+    # Keep the selected Host Node first, followed by stable system fallbacks.
     local lp
-    lp="$(launch_path)"
+    lp="$(launch_path "$node_bin")"
 
     if ! sed -i '' \
         -e "s|__PYTHON__|$python_bin|g" \

@@ -153,27 +153,27 @@ def _node_can_load_ui_native_modules(node_bin: str, ui_dir: Path | None) -> bool
     return result.returncode == 0
 
 
-def _compatible_node_major(node_bin: str) -> bool:
+def _compatible_node_version(node_bin: str) -> bool:
     result = _run(
-        [node_bin, "-p", "Number(process.versions.node.split('.')[0])"],
+        [node_bin, "-p", "process.versions.node"],
         timeout=10,
         check=False,
     )
     if result.returncode != 0:
         return False
     try:
-        major = int(result.stdout.strip())
-    except ValueError:
+        major, minor, *_ = (int(part) for part in result.stdout.strip().split("."))
+    except (TypeError, ValueError):
         return False
-    return 20 <= major <= 24
+    return (major == 20 and minor >= 19) or (major == 22 and minor >= 12) or major == 24
 
 
 def preferred_node(script_dir: Path | None = None) -> str:
     ui_dir = script_dir / "yulu_ui" if script_dir is not None else SOURCE_ROOT / "yulu/scripts/yulu_ui"
     for candidate in _node_candidates():
-        if _compatible_node_major(candidate) and _node_can_load_ui_native_modules(candidate, ui_dir):
+        if _compatible_node_version(candidate) and _node_can_load_ui_native_modules(candidate, ui_dir):
             return candidate
-    raise RuntimeError("Yulu Host requires Node.js 20, 22, or 24 with compatible native modules")
+    raise RuntimeError("Yulu Host requires Node.js 20.19+, 22.12+, or 24 with compatible native modules")
 
 
 def _launch_path(node_bin: str | None = None) -> str:
@@ -187,12 +187,12 @@ def _launch_path(node_bin: str | None = None) -> str:
         "/sbin",
     ]
     if node_bin:
-        parts.insert(1, str(Path(node_bin).parent))
+        parts.insert(0, str(Path(node_bin).parent))
     else:
         nvm = Path.home() / ".nvm/versions/node"
         if nvm.exists():
             for candidate in sorted(nvm.glob("*/bin"), reverse=True):
-                parts.insert(1, str(candidate))
+                parts.insert(0, str(candidate))
                 break
     return ":".join(dict.fromkeys(parts))
 

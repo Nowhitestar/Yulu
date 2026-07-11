@@ -83,8 +83,8 @@ uses Codex, Claude Code, OpenClaw, or a custom Agent for conversation. See
 - macOS 13 or later.
 - Apple Silicon (arm64) for official release installs. The installer rejects
   Intel-only Macs before downloading the arm64 asset.
-- Node.js 20, 22, or 24 for the local Host. The installer adds Homebrew
-  `node@24` when no compatible runtime is present.
+- Node.js 20.19+, 22.12+, or 24 for the local Host. The installer adds
+  Homebrew `node@24` when no compatible runtime is present.
 - Python 3.10 or newer for the capture edge, diagnostics, and installer.
 - A working Hermes CLI on the PATH visible to the Yulu UI LaunchAgent. Hermes is
   required for automatic recording processing and voice transcription.
