@@ -1,4 +1,5 @@
 import base64
+import json
 import os
 import re
 import shutil
@@ -355,6 +356,14 @@ def test_release_publish_uploads_zip_installer_and_checksums_without_pkg():
     assert workflow.index("gh release upload") < workflow.index("--draft=false")
     release_please = (ROOT / "release-please-config.json").read_text(encoding="utf-8")
     assert '"draft": true' in release_please
+
+
+def test_draft_release_forces_tag_creation_before_release_pr_reconciliation():
+    config = json.loads((ROOT / "release-please-config.json").read_text(encoding="utf-8"))
+    package = config["packages"]["."]
+
+    assert package["draft"] is True
+    assert package["force-tag-creation"] is True
 
 
 def test_signing_builds_manifest_then_resigns_before_notarization():

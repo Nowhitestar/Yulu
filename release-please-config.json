@@ -8,6 +8,7 @@
       "changelog-path": "CHANGELOG.md",
       "include-v-in-tag": true,
       "draft": true,
+      "force-tag-creation": true,
       "prerelease": false
     }
   }
