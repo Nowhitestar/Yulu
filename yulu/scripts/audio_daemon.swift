@@ -19,7 +19,6 @@ let SOCKET_PATH = CONFIG_DIR.appendingPathComponent("audio_daemon.sock")
 let STATE_PATH = CONFIG_DIR.appendingPathComponent(".state.json")
 let PID_PATH = CONFIG_DIR.appendingPathComponent(".audio_daemon.pid")
 let LOG_PATH = CONFIG_DIR.appendingPathComponent("audio_daemon.log")
-let QUEUE_PATH = CONFIG_DIR.appendingPathComponent("agent-queue.json")
 let DEFAULT_SILENCE_THRESHOLD: Float = 0.01
 let DEFAULT_SILENCE_SEC: TimeInterval = 300
 let SAMPLE_RATE: UInt32 = 48000
@@ -66,25 +65,6 @@ func log(_ msg: String) {
     let line = "[\(df.string(from: Date()))] \(msg)"
     print(line); fflush(stdout)
     logFile?.write(Data((line + "\n").utf8))
-}
-
-func notifyAgent(_ eventType: String, _ fields: [String: Any] = [:]) {
-    var entry = fields
-    entry["id"] = UUID().uuidString
-    entry["type"] = eventType
-    entry["ts"] = ISO8601DateFormatter().string(from: Date())
-
-    try? FileManager.default.createDirectory(at: CONFIG_DIR, withIntermediateDirectories: true)
-
-    var queue: [[String: Any]] = []
-    if let data = try? Data(contentsOf: QUEUE_PATH),
-       let existing = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
-        queue = existing
-    }
-    queue.append(entry)
-    if let data = try? JSONSerialization.data(withJSONObject: queue, options: [.prettyPrinted]) {
-        try? data.write(to: QUEUE_PATH, options: [.atomic])
-    }
 }
 
 // ─── WAV 写入器 ───────────────────────────────────────

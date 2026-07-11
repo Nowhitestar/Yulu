@@ -12,48 +12,54 @@ def load_privacy():
     return module
 
 
-def test_empty_config_reports_local_first_defaults():
+def test_empty_config_reports_agent_owned_defaults():
     mod = load_privacy()
 
     report = mod.privacy_opt_in_report({})
 
     assert report["ok"] is True
-    assert report["transcription"]["mode"] == "local"
-    assert report["transcription"]["local_default"] is True
-    assert report["transcription"]["cloud_opt_in"] is False
+    assert report["transcription"]["owner"] == "agent"
+    assert report["transcription"]["provider"] == "hermes"
+    assert report["transcription"]["yulu_executor"] is False
+    assert report["conversation"]["provider"] == "hermes"
+    assert report["conversation"]["yulu_executor"] is False
     assert report["summary_delivery"]["auto_channel"] == "file"
     assert report["summary_delivery"]["external_opt_in_channels"] == []
 
 
-def test_cloud_mode_without_command_is_not_ready():
+def test_disabled_agent_pipeline_is_not_ready():
     mod = load_privacy()
 
     report = mod.privacy_opt_in_report({
-        "transcription": {"mode": "cloud-fallback", "cloud_command": []}
+        "agent_pipeline": {"enabled": False}
     })
 
     assert report["ok"] is False
-    assert report["transcription"]["cloud_opt_in"] is True
-    assert report["transcription"]["cloud_command_configured"] is False
+    assert report["transcription"]["ok"] is False
 
 
 def test_external_summary_opt_ins_are_reported():
     mod = load_privacy()
 
     report = mod.privacy_opt_in_report({
-        "transcription": {"mode": "cloud-priority", "cloud_command": ["my-stt", "{audio}"]},
-        "output": {"channel": "zulip"},
-        "connectors": {
-            "notion": {"send_summary": True},
-            "zulip": {"send_summary": False},
-        },
+        "llm": {"agent": {"provider": "hermes"}},
+        "agent_pipeline": {"auto_send_notion": True},
     })
 
     assert report["ok"] is True
-    assert report["transcription"]["cloud_command_configured"] is True
+    assert report["transcription"]["provider"] == "hermes"
     assert report["summary_delivery"]["auto_external_opt_in"] is True
-    assert report["summary_delivery"]["external_opt_in_channels"] == ["zulip", "notion"]
-    assert report["summary_delivery"]["manual_connector_opt_ins"] == {
-        "notion": True,
-        "zulip": False,
-    }
+    assert report["summary_delivery"]["external_opt_in_channels"] == ["notion"]
+    assert report["summary_delivery"]["owner"] == "hermes"
+
+
+def test_conversation_agent_does_not_change_hermes_transcription_owner():
+    mod = load_privacy()
+
+    report = mod.privacy_opt_in_report({
+        "llm": {"agent": {"provider": "codex"}},
+        "agent_pipeline": {"enabled": True},
+    })
+
+    assert report["conversation"]["provider"] == "codex"
+    assert report["transcription"]["provider"] == "hermes"

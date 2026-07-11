@@ -16,6 +16,9 @@ set -euo pipefail
 
 INSTALL_DIR="${INSTALL_DIR:-$HOME/.yulu}"
 HELPER_URL="https://raw.githubusercontent.com/Nowhitestar/Yulu/main/yulu/scripts/release_installer.py"
+# package.sh replaces this sentinel in the versioned release asset. The raw-main
+# bootstrap intentionally leaves it untouched and falls back to HELPER_URL.
+EMBEDDED_HELPER_BASE64="__YULU_EMBEDDED_RELEASE_INSTALLER_BASE64__"
 
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -108,10 +111,34 @@ if [[ "$(uname -s)" != "Darwin" ]]; then
     err "Yulu is macOS-only. Got: $(uname -s)"
     exit 1
 fi
-ok "macOS $(sw_vers -productVersion)"
+MACOS_VERSION="$(sw_vers -productVersion)"
+MACOS_MAJOR="${MACOS_VERSION%%.*}"
+if [[ ! "$MACOS_MAJOR" =~ ^[0-9]+$ || "$MACOS_MAJOR" -lt 13 ]]; then
+    err "Yulu requires macOS 13 or newer. Got: $MACOS_VERSION"
+    exit 1
+fi
+ok "macOS $MACOS_VERSION"
+
+# Official release assets contain arm64 native bundles. A shell running under
+# Rosetta reports x86_64 even on Apple Silicon, so prefer the hardware capability
+# bit and fall back to uname only when sysctl is unavailable. Dev installs build
+# locally and therefore keep their existing architecture behavior.
+if ! (( ${#TARGET_ARGS[@]} > 0 )) || [[ "${TARGET_ARGS[0]}" != "--dev" ]]; then
+    ARM64_CAPABLE="$(sysctl -n hw.optional.arm64 2>/dev/null || true)"
+    if [[ "$ARM64_CAPABLE" != "1" && "$(uname -m)" != "arm64" ]]; then
+        err "Official Yulu release assets require an Apple Silicon (arm64) Mac."
+        err "This Mac reports architecture: $(uname -m)"
+        exit 1
+    fi
+    ok "Apple Silicon release architecture"
+fi
 
 if ! command -v python3 &>/dev/null; then
     err "python3 is required. Install Python 3 and retry."
+    exit 1
+fi
+if ! python3 -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)' 2>/dev/null; then
+    err "Python 3.10 or newer is required. Install a current Python 3 and retry."
     exit 1
 fi
 ok "python3 $(python3 --version | awk '{print $2}')"
@@ -149,14 +176,21 @@ cleanup() {
 trap cleanup EXIT
 
 HELPER="$TMP_DIR/release_installer.py"
-if command -v curl &>/dev/null; then
-    if ! curl -fsSL "$HELPER_URL" -o "$HELPER"; then
-        err "Failed to download installer helper from $HELPER_URL"
+if [[ "$EMBEDDED_HELPER_BASE64" != __YULU_EMBEDDED_* ]]; then
+    if ! printf '%s' "$EMBEDDED_HELPER_BASE64" | base64 --decode > "$HELPER"; then
+        err "Failed to unpack the embedded release installer helper."
         exit 1
     fi
+    ok "Using installer helper embedded in this release asset"
 else
-    warn "curl not found; downloading with python3 urllib."
-    if ! python3 - "$HELPER_URL" "$HELPER" <<'PY'
+    if command -v curl &>/dev/null; then
+        if ! curl -fsSL "$HELPER_URL" -o "$HELPER"; then
+            err "Failed to download installer helper from $HELPER_URL"
+            exit 1
+        fi
+    else
+        warn "curl not found; downloading with python3 urllib."
+        if ! python3 - "$HELPER_URL" "$HELPER" <<'PY'
 import sys
 import urllib.request
 
@@ -167,9 +201,10 @@ with urllib.request.urlopen(request, timeout=30) as response:
 with open(output, "wb") as handle:
     handle.write(data)
 PY
-    then
-        err "Failed to download installer helper from $HELPER_URL"
-        exit 1
+        then
+            err "Failed to download installer helper from $HELPER_URL"
+            exit 1
+        fi
     fi
 fi
 if [[ ! -s "$HELPER" ]]; then

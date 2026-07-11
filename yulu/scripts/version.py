@@ -107,7 +107,12 @@ def format_version(info: dict[str, object], short: bool = False) -> str:
         if source == "release" and install.get("version"):
             git_bits.append(f"release {install['version']}")
         elif source == "dev" and install.get("branch"):
-            git_bits.append(f"dev {install['branch']}")
+            snapshot = f"dev {install['branch']}"
+            if install.get("commit"):
+                snapshot += f"@{install['commit']}"
+            git_bits.append(snapshot)
+            if install.get("dirty") is True:
+                git_bits.append("dirty snapshot")
     if git_bits:
         parts.append(f"({', '.join(git_bits)})")
     if not info.get("valid_semver"):

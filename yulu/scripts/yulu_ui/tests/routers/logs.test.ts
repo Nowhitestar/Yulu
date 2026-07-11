@@ -29,7 +29,7 @@ describe("logsRouter", () => {
     const { ctx, cleanup } = makeCtx();
     try {
       const caller = createCaller(logsRouter, ctx);
-      const r = await caller.tail({ name: "com.yulu.sttdaemon", limit: 5 });
+      const r = await caller.tail({ name: "com.yulu.statusagent", limit: 5 });
       expect(r.lines).toEqual([]);
     } finally { cleanup(); }
   });

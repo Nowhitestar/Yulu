@@ -1,4 +1,4 @@
-import { Loader2, AlertTriangle } from "lucide-react";
+import { Loader2, AlertTriangle, Clock3 } from "lucide-react";
 import { useT } from "../i18n/LanguageProvider.js";
 import "./RecordingStatusBadge.css";
 
@@ -10,6 +10,12 @@ export type RecordingJobState =
   | "recording_failed"
   | "transcription_failed"
   | "summary_failed"
+  | "agent_queued"
+  | "awaiting_agent"
+  | "awaiting_policy"
+  | "agent_failed"
+  | "sending_notion"
+  | "delivery_unverified"
   | string;
 
 export interface RecordingStatusBadgeProps {
@@ -27,6 +33,12 @@ const LABEL_KEYS: Record<string, string> = {
   recording_failed: "status.recording_failed",
   transcription_failed: "status.transcription_failed",
   summary_failed: "status.summary_failed",
+  agent_queued: "status.agent_queued",
+  awaiting_agent: "status.awaiting_agent",
+  awaiting_policy: "status.awaiting_policy",
+  agent_failed: "status.agent_failed",
+  sending_notion: "status.sending_notion",
+  delivery_unverified: "status.delivery_unverified",
 };
 
 /**
@@ -37,7 +49,8 @@ const LABEL_KEYS: Record<string, string> = {
 export function RecordingStatusBadge({ state, error, compact }: RecordingStatusBadgeProps) {
   const t = useT();
   if (state === "idle" || !(state in LABEL_KEYS)) return null;
-  const failed = state === "failed" || state.endsWith("_failed");
+  const failed = state === "failed" || state.endsWith("_failed") || state === "delivery_unverified";
+  const waiting = state === "agent_queued" || state === "awaiting_agent" || state === "awaiting_policy";
   return (
     <span
       className={`rec-status rec-status-${failed ? "failed" : "busy"}`}
@@ -47,7 +60,9 @@ export function RecordingStatusBadge({ state, error, compact }: RecordingStatusB
     >
       {failed
         ? <AlertTriangle size={11} strokeWidth={2} />
-        : <Loader2 size={11} strokeWidth={2.25} className="rec-status-spin" />}
+        : waiting
+          ? <Clock3 size={11} strokeWidth={2} />
+          : <Loader2 size={11} strokeWidth={2.25} className="rec-status-spin" />}
       {!compact && <span>{t(LABEL_KEYS[state]!)}</span>}
     </span>
   );

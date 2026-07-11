@@ -30,6 +30,8 @@ yulu/scripts/recorder_status
 yulu/scripts/window_scanner
 yulu/scripts/audio_daemon
 yulu/scripts/status_agent
+# Generated during release signing, then covered by Yulu.app's code signature.
+yulu/scripts/Yulu.app/Contents/Resources/runtime-manifest.json
 
 # IDE / agent local state
 .idea/

@@ -11,7 +11,6 @@ describe("paths", () => {
     expect(paths.vocabDb).toBe(`${home}/.config/yulu/vocab.sqlite`);
     expect(paths.searchDb).toBe(`${home}/.config/yulu/search.sqlite`);
     expect(paths.audioDaemonSock).toBe(`${home}/.config/yulu/audio_daemon.sock`);
-    expect(paths.sttDaemonSock).toBe(`${home}/.config/yulu/stt_daemon.sock`);
     expect(paths.statusAgentSock).toBe(`${home}/.config/yulu/status_agent.sock`);
     expect(paths.moviesDir).toBe(`${home}/Movies/Yulu`);
   });

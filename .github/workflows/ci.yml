@@ -30,8 +30,6 @@ jobs:
                    yulu/scripts/setup.sh \
                    yulu/scripts/setup_deps.sh \
                    yulu/scripts/setup_audio.sh \
-                   yulu/scripts/setup_models.sh \
-                   yulu/scripts/setup_capabilities.sh \
                    yulu/scripts/setup_daemons.sh \
                    yulu/scripts/setup_ui.sh \
                    yulu/scripts/lib/common.sh \
@@ -59,8 +57,6 @@ jobs:
             yulu/scripts/setup.sh \
             yulu/scripts/setup_deps.sh \
             yulu/scripts/setup_audio.sh \
-            yulu/scripts/setup_models.sh \
-            yulu/scripts/setup_capabilities.sh \
             yulu/scripts/setup_daemons.sh \
             yulu/scripts/setup_ui.sh \
             yulu/scripts/lib/common.sh \
@@ -117,7 +113,8 @@ jobs:
           mkdir -p .ci-build
           for f in yulu/scripts/audio_daemon.swift \
                    yulu/scripts/window_scanner.swift \
-                   yulu/scripts/recorder_status.swift; do
+                   yulu/scripts/recorder_status.swift \
+                   yulu/scripts/meeting_prompt.swift; do
             stem="$(basename "$f" .swift)"
             printf 'swiftc %s -> .ci-build/%s\n' "$f" "$stem"
             swiftc -o ".ci-build/$stem" "$f"

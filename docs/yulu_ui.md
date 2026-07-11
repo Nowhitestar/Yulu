@@ -1,18 +1,22 @@
 # Yulu Web UI
 
-A local web UI at `http://127.0.0.1:7777/` for browsing meetings, settings,
-prompts, glossary, and daemon health. Runs as the `com.yulu.ui` LaunchAgent — auto-starts
-on login, restarts on crash.
+The required local Host and web UI at `http://127.0.0.1:7777/`. It owns durable
+recording tasks, authenticated MCP endpoints, Agent artifact commits, recovery,
+and the browser surface. `com.yulu.ui` starts it on login and restarts it on
+crash.
 
 ## Pages
 
-- `/inbox` `/inbox/:stem` — recordings (meetings) list + audio waveform + transcript/summary/raw/realtime tabs. (Legacy `/inbox/voicemails` and `/inbox/meetings` links redirect here.)
-- `/inbox/search` — full-text search across recordings with cross-page navigation
-- `/settings/{audio,transcription,llm,integrations,storage}` — inline-edit settings with restart banner
-- `/knowledge/prompts` `/knowledge/prompts/:id` `/knowledge/prompts/new` — prompt master-detail
+- `/agent-console` — selected general Agent, recording controls, and recent durable task state
+- `/voice-input` — Hermes-backed dictation and translation
+- `/inbox` `/inbox/:stem` — recordings, playback, committed transcript/summary, and task/delivery actions
+- `/settings/{general,audio,transcription,appearance}` — current local preferences
+- `/knowledge/prompts` `/knowledge/prompts/:id` — Agent instruction prompt master-detail
 - `/knowledge/glossary` — vocabulary table with inline-edit + bulk delete
-- `/health/daemons` — 8 daemon status cards (auto-poll 5 s)
-- `/health/logs` — live log tail via WebSocket
+- `/health` — Doctor, durable task queue, scheduler, installed services, and logs
+
+Legacy inbox/settings/health deep links redirect to their current consolidated
+pages.
 
 ## Layout
 
@@ -29,8 +33,10 @@ yulu/scripts/yulu_ui/
 
 `setup.sh` (and `setup.sh --upgrade`) handles this automatically:
 
-1. `npm ci` (skipped when `package-lock.json` SHA matches the stored marker)
-2. `npm run build` → `dist/server.js` + `dist/web/`
+1. Release install: verify the CI-built `dist/`, then run `npm ci --omit=dev`
+   only for native/runtime dependencies; never rewrite the signed release files.
+2. Development install: run `npm ci`, then `npm run build` to produce
+   `dist/server.js` + `dist/web/`.
 3. Install `com.yulu.ui.plist` to `~/Library/LaunchAgents/`
 4. `launchctl load` → server listens on `127.0.0.1:7777`
 5. Poll `/healthz` for up to 10 s
@@ -67,7 +73,7 @@ yulu logs ui                              # tail -f
 tail -f ~/.config/yulu/ui.log
 ```
 
-You can also tail any of the 8 daemon logs from inside the web UI at `/health/logs`.
+You can also inspect current service logs from the Logs section on `/health`.
 
 ## Doctor
 
@@ -76,6 +82,6 @@ yulu doctor                # human output (includes yulu_ui block)
 yulu doctor --json         # full report shape; yulu_ui at key `yulu_ui`
 ```
 
-`yulu_ui` checks: `dist/server.js`, `dist/web/index.html`, plist installed, launchctl
-loaded, `/healthz` response, log size. UI is treated as optional — missing artifacts
-do not flip the overall doctor exit code.
+`yulu_ui` checks `dist/server.js`, `dist/web/index.html`, the installed plist,
+launchctl state, `/healthz`, and the log. When `agent_pipeline.enabled=true`, a
+missing or unreachable Host makes `yulu doctor` fail.

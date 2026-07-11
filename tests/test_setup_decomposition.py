@@ -17,6 +17,7 @@ NOT bats. ROOT is the standard root anchor.
 """
 
 import os
+import shutil
 import stat
 import subprocess
 from pathlib import Path
@@ -27,12 +28,10 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "yulu" / "scripts"
 
-# The six decomposed concern scripts the thin orchestrator (setup.sh) sequences.
+# The four decomposed concern scripts the thin orchestrator sequences.
 CONCERN_SCRIPTS = [
     "setup_deps.sh",
     "setup_audio.sh",
-    "setup_models.sh",
-    "setup_capabilities.sh",
     "setup_daemons.sh",
     "setup_ui.sh",
 ]
@@ -74,20 +73,43 @@ def run(cmd: list[str], cwd: Path, env: dict[str, str] | None = None) -> subproc
 def _make_shim_dir(tmp_path: Path) -> Path:
     """Create a PATH-shim dir of no-op executables for the side-effectful externals.
 
-    Each stub just `exit 0`. `npm` additionally needs to print a plausible
-    `npm ci`/`npm run build` no-op (the scripts only check its exit code). `node`
-    is stubbed to fail the version probe path gracefully — setup_ui.sh treats a
-    missing/old node as "skip" (returns 0), which keeps the run hermetic without a
-    real Node toolchain.
+    The Node/npm/curl stubs model a healthy required Host without launching it:
+    Node reports v24, npm materializes the two checked build artifacts, and curl
+    returns the /healthz payload. Other commands are successful no-ops.
     """
     shim = tmp_path / "shim-bin"
     shim.mkdir()
     for name in STUBBED_COMMANDS:
         stub = shim / name
-        # `node -v` returning nothing → setup_ui.sh's node_major guard treats it as
-        # too-low/absent and skips the npm build (returncode 0). Everything else is
-        # a bare exit-0 no-op.
-        stub.write_text("#!/usr/bin/env bash\nexit 0\n")
+        if name == "launchctl":
+            # An absent service makes `launchctl print` non-zero; model that
+            # separately from successful no-op load/bootout commands.
+            stub.write_text(
+                "#!/usr/bin/env bash\n"
+                "[[ \"${1:-}\" == \"print\" ]] && exit 1\n"
+                "exit 0\n"
+            )
+        elif name == "node":
+            stub.write_text(
+                "#!/usr/bin/env bash\n"
+                "[[ \"${1:-}\" == \"-v\" ]] && printf 'v24.15.0\\n'\n"
+                "exit 0\n"
+            )
+        elif name == "npm":
+            stub.write_text(
+                "#!/usr/bin/env bash\n"
+                "mkdir -p node_modules\n"
+                "if [[ \"${1:-}\" == \"run\" && \"${2:-}\" == \"build\" ]]; then\n"
+                "  mkdir -p dist/web\n"
+                "  printf 'server' > dist/server.js\n"
+                "  printf 'web' > dist/web/index.html\n"
+                "fi\n"
+                "exit 0\n"
+            )
+        elif name == "curl":
+            stub.write_text("#!/usr/bin/env bash\nprintf '{\"status\":\"ok\"}\\n'\n")
+        else:
+            stub.write_text("#!/usr/bin/env bash\nexit 0\n")
         stub.chmod(stub.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
     return shim
 
@@ -102,10 +124,101 @@ def _hermetic_env(tmp_path: Path, shim: Path) -> dict[str, str]:
         "HOME": str(home),
         "PATH": f"{shim}{os.pathsep}{os.environ.get('PATH', '')}",
         "CONFIG_DIR": str(config_dir),
-        "MODEL_DIR": str(config_dir / "models"),
         "LAUNCH_AGENTS_DIR": str(launch_agents),
         "UPGRADE_MODE": "false",
     }
+
+
+def test_setup_ui_accepts_node24_runtime(tmp_path):
+    node = tmp_path / "node24"
+    node.write_text("#!/usr/bin/env bash\nprintf 'v24.15.0\\n'\n")
+    node.chmod(node.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+    result = run(
+        ["bash", "-c", ". ./setup_ui.sh; compatible_node_bin"],
+        cwd=SCRIPTS,
+        env={"NODE_BIN": str(node)},
+    )
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert result.stdout.strip().splitlines()[-1] == str(node)
+
+
+def test_setup_ui_fails_when_required_host_node_is_unavailable(tmp_path):
+    shim = _make_shim_dir(tmp_path)
+    env = _hermetic_env(tmp_path, shim)
+    result = run(
+        ["bash", "-c", ". ./setup_ui.sh; compatible_node_bin() { return 1; }; setup_ui dev"],
+        cwd=SCRIPTS,
+        env=env,
+    )
+    assert result.returncode != 0
+    assert "Host" in result.stdout
+
+
+def test_setup_deps_propagates_brew_failure(tmp_path):
+    shim = _make_shim_dir(tmp_path)
+    (shim / "brew").write_text("#!/usr/bin/env bash\nexit 42\n")
+    (shim / "brew").chmod(0o755)
+    env = _hermetic_env(tmp_path, shim)
+    result = run(["bash", str(SCRIPTS / "setup_deps.sh"), "release"], cwd=SCRIPTS, env=env)
+    assert result.returncode != 0
+    assert "安装失败" in result.stdout
+
+
+def test_orchestrator_propagates_each_core_concern_failure():
+    text = (SCRIPTS / "setup.sh").read_text(encoding="utf-8")
+    for concern in ("setup_audio.sh", "setup_daemons.sh", "setup_ui.sh"):
+        assert f'"$SCRIPT_DIR/{concern}" "$MODE" || return 1' in text
+
+
+def test_setup_ui_release_uses_prebuilt_dist_without_rebuilding(tmp_path):
+    scripts = tmp_path / "scripts"
+    (scripts / "lib").mkdir(parents=True)
+    (scripts / "yulu_ui" / "dist" / "web").mkdir(parents=True)
+    shutil.copy2(SCRIPTS / "setup_ui.sh", scripts / "setup_ui.sh")
+    shutil.copy2(SCRIPTS / "lib" / "common.sh", scripts / "lib" / "common.sh")
+    shutil.copy2(SCRIPTS / "com.yulu.ui.plist", scripts / "com.yulu.ui.plist")
+    shutil.copy2(SCRIPTS / "yulu_ui" / "package-lock.json", scripts / "yulu_ui" / "package-lock.json")
+    (scripts / "yulu_ui" / "dist" / "server.js").write_text("signed-server")
+    (scripts / "yulu_ui" / "dist" / "web" / "index.html").write_text("signed-web")
+    shim = _make_shim_dir(tmp_path)
+    calls = tmp_path / "npm-calls"
+    (shim / "npm").write_text(
+        "#!/usr/bin/env bash\n"
+        "mkdir -p node_modules\n"
+        f"printf '%s\\n' \"$*\" >> {calls}\n"
+        "exit 0\n"
+    )
+    (shim / "npm").chmod(0o755)
+    env = _hermetic_env(tmp_path, shim)
+    result = run(["bash", str(scripts / "setup_ui.sh"), "release"], cwd=scripts, env=env)
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert calls.read_text().splitlines() == ["ci --omit=dev"]
+    assert (scripts / "yulu_ui" / "dist" / "server.js").read_text() == "signed-server"
+    assert (scripts / "yulu_ui" / "dist" / "web" / "index.html").read_text() == "signed-web"
+
+
+def test_setup_ui_release_rejects_missing_prebuilt_dist_before_npm(tmp_path):
+    scripts = tmp_path / "scripts"
+    (scripts / "lib").mkdir(parents=True)
+    (scripts / "yulu_ui").mkdir(parents=True)
+    shutil.copy2(SCRIPTS / "setup_ui.sh", scripts / "setup_ui.sh")
+    shutil.copy2(SCRIPTS / "lib" / "common.sh", scripts / "lib" / "common.sh")
+    shim = _make_shim_dir(tmp_path)
+    calls = tmp_path / "npm-calls"
+    (shim / "npm").write_text(
+        "#!/usr/bin/env bash\n"
+        f"printf '%s\\n' \"$*\" >> {calls}\n"
+        "exit 0\n"
+    )
+    (shim / "npm").chmod(0o755)
+    result = run(
+        ["bash", str(scripts / "setup_ui.sh"), "release"],
+        cwd=scripts,
+        env=_hermetic_env(tmp_path, shim),
+    )
+    assert result.returncode != 0
+    assert "CI" in result.stdout
+    assert not calls.exists()
 
 
 # ─── (a) `set -uo pipefail` present ──────────────────────────────────
@@ -151,7 +264,8 @@ def test_concern_runs_in_isolation_no_unbound(tmp_path, script):
     `set -u`."""
     shim = _make_shim_dir(tmp_path)
     env = _hermetic_env(tmp_path, shim)
-    result = run(["bash", str(SCRIPTS / script), "release"], cwd=SCRIPTS, env=env)
+    mode = "dev" if script == "setup_ui.sh" else "release"
+    result = run(["bash", str(SCRIPTS / script), mode], cwd=SCRIPTS, env=env)
     assert result.returncode == 0, f"{script} returncode={result.returncode}\n{result.stderr}\n{result.stdout}"
     assert "unbound variable" not in result.stderr, f"{script} tripped set -u:\n{result.stderr}"
 
@@ -162,9 +276,10 @@ def test_concern_is_idempotent(tmp_path, script):
     the same success — the second run does not error."""
     shim = _make_shim_dir(tmp_path)
     env = _hermetic_env(tmp_path, shim)
-    first = run(["bash", str(SCRIPTS / script), "release"], cwd=SCRIPTS, env=env)
+    mode = "dev" if script == "setup_ui.sh" else "release"
+    first = run(["bash", str(SCRIPTS / script), mode], cwd=SCRIPTS, env=env)
     assert first.returncode == 0, f"{script} first run failed:\n{first.stderr}\n{first.stdout}"
-    second = run(["bash", str(SCRIPTS / script), "release"], cwd=SCRIPTS, env=env)
+    second = run(["bash", str(SCRIPTS / script), mode], cwd=SCRIPTS, env=env)
     assert second.returncode == 0, f"{script} second run failed:\n{second.stderr}\n{second.stdout}"
     assert "unbound variable" not in second.stderr
 

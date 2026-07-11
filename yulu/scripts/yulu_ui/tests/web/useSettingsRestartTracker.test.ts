@@ -46,7 +46,7 @@ describe("useSettingsRestartTracker", () => {
   it("clearAll wipes all entries", () => {
     const { result } = renderHook(() => useSettingsRestartTracker());
     act(() => result.current.record("audio.silence_threshold", ["audiodaemon"]));
-    act(() => result.current.record("transcription.glossary", ["sttdaemon"]));
+    act(() => result.current.record("meeting_detection.enabled", ["detector"]));
     act(() => result.current.clearAll());
     expect(result.current.daemons.size).toBe(0);
   });

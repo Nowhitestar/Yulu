@@ -16,8 +16,6 @@ type DaemonLabel = inferProcedureInput<AppRouter["daemons"]["restart"]>["name"];
 // Daemon short name → LaunchAgent label (consolidated map, was duplicated across 6 sub-pages)
 const DAEMON_LABEL: Record<string, DaemonLabel> = {
   audiodaemon: "com.yulu.audiodaemon",
-  sttdaemon: "com.yulu.sttdaemon",
-  agentqueue: "com.yulu.agentqueue",
   statusagent: "com.yulu.statusagent",
   scheduler: "com.yulu.scheduler",
   detector: "com.yulu.detector",

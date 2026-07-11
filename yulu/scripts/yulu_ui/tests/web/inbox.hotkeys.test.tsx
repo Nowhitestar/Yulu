@@ -9,19 +9,16 @@ vi.mock("../../web/src/trpc.js", () => ({
     recordings: {
       list: { useQuery: () => ({
         data: [
-          { stem: "rec1", title: "Rec1", recordedAt: null, mtimeMs: 3, hasTranscript: true, hasSummary: false, hasRealtime: false, firstWords: "a", status: "idle" },
-          { stem: "rec2", title: "Rec2", recordedAt: null, mtimeMs: 2, hasTranscript: true, hasSummary: false, hasRealtime: false, firstWords: "b", status: "idle" },
-          { stem: "rec3", title: "Rec3", recordedAt: null, mtimeMs: 1, hasTranscript: true, hasSummary: false, hasRealtime: false, firstWords: "c", status: "idle" },
+          { stem: "rec1", title: "Rec1", recordedAt: null, mtimeMs: 3, hasTranscript: true, hasSummary: false, firstWords: "a", status: "idle" },
+          { stem: "rec2", title: "Rec2", recordedAt: null, mtimeMs: 2, hasTranscript: true, hasSummary: false, firstWords: "b", status: "idle" },
+          { stem: "rec3", title: "Rec3", recordedAt: null, mtimeMs: 1, hasTranscript: true, hasSummary: false, firstWords: "c", status: "idle" },
         ],
         isPending: false,
       }) },
       get: { useQuery: () => ({ data: null, isPending: false }) },
-      shareTargets: { useQuery: () => ({ data: { targets: [], history: [] } }) },
       rename: { useMutation: () => ({ mutate: vi.fn() }) },
       delete: { useMutation: () => ({ mutate: vi.fn() }) },
-      transcribe: { useMutation: () => ({ mutate: vi.fn() }) },
-      summarize: { useMutation: () => ({ mutate: vi.fn() }) },
-      sendSummary: { useMutation: () => ({ mutate: vi.fn() }) },
+      reprocess: { useMutation: () => ({ mutate: vi.fn(), isPending: false }) },
     },
     glossary: { list: { useQuery: () => ({ data: [], isError: false }) } },
   },

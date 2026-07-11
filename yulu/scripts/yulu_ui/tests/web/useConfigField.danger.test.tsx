@@ -10,11 +10,11 @@ const showUndo = vi.fn();
 const configSetData = vi.fn();
 const configInvalidate = vi.fn();
 
-// audio.output_dir is danger + restart-class; transcription.language is a plain
-// restart field; llm.enabled is reload:none. useConfigField looks all of these up.
+// audio.output_dir is danger + restart-class; product language and llm.enabled
+// apply without daemon reload. useConfigField looks all of these up.
 const SCHEMA = [
   { path: "audio.output_dir",          category: "audio",         label: "Recording output dir", type: "path",   danger: true, reload: { kind: "restart", daemons: ["audiodaemon"] } },
-  { path: "transcription.language",    category: "transcription", label: "Language",             type: "text",                 reload: { kind: "restart", daemons: ["sttdaemon"] } },
+  { path: "transcription.language",    category: "transcription", label: "Language",             type: "text",                 reload: { kind: "none" } },
   { path: "llm.enabled",               category: "llm",           label: "Enabled",              type: "toggle",               reload: { kind: "none" } },
 ];
 

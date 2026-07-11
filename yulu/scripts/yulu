@@ -16,13 +16,12 @@
 #   yulu restart              stop + start
 #   yulu version              Show Yulu version + git metadata
 #   yulu status               Show service + daemon health
-#   yulu doctor               Check config, daemon, model, queue, and calendar health
+#   yulu doctor               Check Host, Agent, and calendar health
 #   yulu logs [name]          Tail logs (default: audio_daemon)
 #   yulu record start "title" Manual recording start
 #   yulu record stop          Manual recording stop
 #   yulu dictate ...          Experimental low-latency voice input
 #   yulu repair-permissions   Reset/open Screen & System Audio Recording permission helper
-#   yulu transcription ...    Switch transcription engine and post-recording mode
 #   yulu where                Print key paths (repo / config / recordings / launchagents)
 
 set -e
@@ -69,13 +68,13 @@ Commands:
   restart          stop + start
   version          Show Yulu version + git metadata
   status           Service + daemon health snapshot
-  doctor           Config + daemon + transcription + queue health check
-  logs [daemon]    Tail logs. Daemon = audio_daemon (default), scheduler, detector, calendar, agentqueue, realtime_transcribe, ui
+  doctor           Config + Host task + Agent capability health check
+  logs [daemon]    Tail logs. Daemon = audio_daemon (default), scheduler, detector, calendar, ui
   record start "title"   Manually start a recording
   record stop            Manually stop the current recording
   dictate start|stop|once|toggle|ask
                     Experimental low-latency voice input. Mic-only recording,
-                    STT dictation job, prompt/vocab context, clipboard, optional paste
+                    Agent transcription, prompt/vocab context, clipboard, optional paste
                     Use --translate-to "English" for prompt-based quick translation
                     Use ask to send a voice question into Agent Console chat
   status-agent dictate
@@ -87,21 +86,11 @@ Commands:
   status-agent hotkeys
                     Print configured global shortcuts for dictation, translation, and voice chat
   repair-permissions     Open/reset Screen & System Audio Recording permission helper
-  transcription status   Show transcription engine + post-recording mode
-  transcription mode fast|full
-                    fast = realtime transcript -> polish -> summary
-                    full = final full-audio transcription -> polish -> summary
-  transcription engine mlx [model]
-                    Use mlx-whisper, e.g. mlx-community/whisper-large-v3-mlx
-  transcription engine whisper [model-path]
-                    Use whisper.cpp GGML model
-  transcription engine hermes [agent-dir]
-                    Use Hermes' configured STT provider
   search "term" [--since 7d --type meeting --in summary --json --open]
                     Search across meetings and summaries
   provision <step>|--all|--list
-                    Run a named install step (deps|audio|models|capabilities|daemons|ui),
-                    --all to resume-walk all six (skips already-done steps;
+                    Run a named install step (deps|audio|daemons|ui),
+                    --all to resume-walk all four (skips already-done steps;
                     verifies --asset first when given), or --list to show them
   skill install [--agent <name>]
                     Install/refresh the Yulu agent skill (decoupled from install,
@@ -134,6 +123,7 @@ cmd_update() {
         err "release_installer.py not found at $SCRIPT_DIR — your install may be partial."
         exit 1
     fi
+
     python3 "$SCRIPT_DIR/release_installer.py" update \
         --install-dir "$REPO_DIR" \
         "$@"
@@ -239,11 +229,6 @@ cmd_version() {
 
 cmd_logs() {
     local name="${1:-audio_daemon}"
-    case "$name" in
-        agentqueue|agent_queue|agent-queue)
-            name="agent_queue_worker"
-            ;;
-    esac
     local log_path="$CONFIG_DIR/${name}.log"
     if [[ ! -f "$log_path" ]]; then
         # Try alternative paths used by some daemons.
@@ -294,15 +279,10 @@ cmd_repair_permissions() {
     python3 "$SCRIPT_DIR/repair_permissions.py" "$@"
 }
 
-cmd_transcription() {
-    python3 "$SCRIPT_DIR/configure.py" transcription "$@"
-}
-
 cmd_where() {
     echo "Repo (code):       $REPO_DIR"
     echo "Config:            $CONFIG_DIR"
     echo "LaunchAgents:      $LAUNCH_AGENTS_DIR/com.yulu.*.plist"
-    echo "Whisper models:    $CONFIG_DIR/models/"
     local rec_dir
     rec_dir=$(python3 -c "
 import json
@@ -333,7 +313,6 @@ case "${1:-help}" in
     record)    shift; cmd_record "$@" ;;
     dictate)   shift; PYTHONPATH="$SCRIPT_DIR:${PYTHONPATH:-}" exec "${PYTHON:-python3}" "$SCRIPT_DIR/dictate.py" "$@" ;;
     repair-permissions|repair_permissions) shift; cmd_repair_permissions "$@" ;;
-    transcription|transcribe) shift; cmd_transcription "$@" ;;
     vocab)     shift; PYTHONPATH="$SCRIPT_DIR:${PYTHONPATH:-}" exec "${PYTHON:-python3}" -m vocab.cli "$@" ;;
     provision) shift; PYTHONPATH="$SCRIPT_DIR:${PYTHONPATH:-}" exec "${PYTHON:-python3}" -m provision.cli provision "$@" ;;
     skill)     shift; PYTHONPATH="$SCRIPT_DIR:${PYTHONPATH:-}" exec "${PYTHON:-python3}" -m provision.cli skill "$@" ;;
@@ -348,9 +327,7 @@ case "${1:-help}" in
         fi
         ;;
     rollback)  shift; PYTHONPATH="$SCRIPT_DIR:${PYTHONPATH:-}" exec "${PYTHON:-python3}" -m migrate.cli rollback "$@" ;;
-    stt)       shift; PYTHONPATH="$SCRIPT_DIR:${PYTHONPATH:-}" exec "${PYTHON:-python3}" -m stt_cli "$@" ;;
     prompts)   shift; PYTHONPATH="$SCRIPT_DIR:${PYTHONPATH:-}" exec "${PYTHON:-python3}" -m prompts.cli "$@" ;;
-    summaries) shift; PYTHONPATH="$SCRIPT_DIR:${PYTHONPATH:-}" exec "${PYTHON:-python3}" -m summaries_cli "$@" ;;
     memo)      err "'yulu memo' was removed — all recordings are meetings now. Use: yulu record start \"<title>\""; exit 1 ;;
     search)    shift; PYTHONPATH="$SCRIPT_DIR:${PYTHONPATH:-}" exec "${PYTHON:-python3}" -m search.cli "$@" ;;
     status-agent|statusagent) shift; PYTHONPATH="$SCRIPT_DIR:${PYTHONPATH:-}" exec "${PYTHON:-python3}" -m status_agent_config "$@" ;;

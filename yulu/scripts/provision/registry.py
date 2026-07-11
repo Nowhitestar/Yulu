@@ -7,9 +7,9 @@ This module is the interface-defining spine of Phase 6 (D-06): plans 06-02
 
 WRAP, DON'T PORT (D-01 / D-06)
 ------------------------------
-Each step WRAPS one of the six Phase-1 ``setup_*.sh`` concern scripts 1:1 via a
+Each step WRAPS one of the four ``setup_*.sh`` concern scripts 1:1 via a
 ``subprocess.run(["bash", script, mode])`` argv list. It NEVER re-implements the
-bash logic. The six scripts (deps / audio / models / capabilities / daemons / ui)
+bash logic. The scripts (deps / audio / daemons / ui)
 are already idempotent, non-interactive, mode-parameterized, and hermetically
 tested by ``tests/test_setup_decomposition.py``. The registry adds only a Python
 ``check()`` / ``apply()`` / ``StepResult`` veneer over those exact bodies — so the
@@ -50,21 +50,16 @@ step name raises rather than executing an arbitrary path.
 
 from __future__ import annotations
 
-import json
 import shutil
 import subprocess
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
 
-# yulu/scripts/ — the directory holding the six setup_*.sh concern scripts and
+# yulu/scripts/ — the directory holding the setup concern scripts and
 # the lib/common.sh foundation. The registry joins each script name under here so
 # the path is never caller-supplied (T-06-01).
 SCRIPTS_DIR = Path(__file__).resolve().parent.parent
-
-# The runtime config that several read-only probes consult. Tolerant readers below
-# never raise on a missing/corrupt file (degrade to "not done" → the step runs).
-CONFIG_PATH = Path.home() / ".config" / "yulu" / "config.json"
 
 # How much of a failing script's stderr/stdout to carry in StepResult.detail.
 _DETAIL_LIMIT = 500
@@ -112,7 +107,7 @@ class Step(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def apply(self, mode: str) -> StepResult:
+    def apply(self, mode: str, *, force: bool = False) -> StepResult:
         """Perform the concern (or skip it when ``check()`` is already True)."""
         raise NotImplementedError
 
@@ -142,9 +137,13 @@ class ScriptStep(Step):
             # "not confirmed done" → let apply() run (the script is idempotent).
             return False
 
-    def apply(self, mode: str) -> StepResult:
+    def apply(self, mode: str, *, force: bool = False) -> StepResult:
         # Idempotency contract: never re-do destructive work when already done.
-        if self.check():
+        # Package upgrades deliberately force lifecycle reconciliation: the
+        # packaged runtime can be new while the loaded LaunchAgents still point
+        # at old code. In that case a state probe is not proof that the active
+        # process is current, and the wrapped scripts are already idempotent.
+        if not force and self.check():
             return StepResult(self.name, "skipped", "check() satisfied")
         proc = subprocess.run(
             ["bash", str(SCRIPTS_DIR / self.script), mode],
@@ -158,7 +157,7 @@ class ScriptStep(Step):
         return StepResult(self.name, "ok", "")
 
 
-# ── Read-only probes for the six concerns (check() bodies) ───────────
+# ── Read-only probes for the concerns (check() bodies) ──────────────
 #
 # Each probe answers "is this concern already satisfied?" by INSPECTING state —
 # never by mutating it. The probes intentionally degrade to False (run the step)
@@ -171,139 +170,50 @@ def _have(cmd: str) -> bool:
     return shutil.which(cmd) is not None
 
 
-def _load_config() -> dict:
-    """Tolerantly read config.json; return {} on missing/corrupt (degrade safe)."""
-    try:
-        return json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
-    except Exception:
-        return {}
+def _compatible_node_present(candidates: list[Path] | None = None) -> bool:
+    if candidates is None:
+        candidates = []
+        resolved = shutil.which("node")
+        if resolved:
+            candidates.append(Path(resolved))
+        home = Path.home()
+        for major in (20, 22, 24):
+            candidates.extend((home / ".nvm" / "versions" / "node").glob(f"v{major}*/bin/node"))
+            candidates.extend([
+                Path(f"/opt/homebrew/opt/node@{major}/bin/node"),
+                Path(f"/usr/local/opt/node@{major}/bin/node"),
+            ])
+
+    seen: set[Path] = set()
+    for candidate in candidates:
+        if candidate in seen or not candidate.is_file():
+            continue
+        seen.add(candidate)
+        try:
+            result = subprocess.run(
+                [str(candidate), "-v"],
+                capture_output=True,
+                text=True,
+                timeout=2,
+                check=False,
+            )
+            major = int(result.stdout.strip().lstrip("v").split(".", 1)[0])
+        except (OSError, ValueError, subprocess.SubprocessError):
+            continue
+        if result.returncode == 0 and 20 <= major <= 24:
+            return True
+    return False
 
 
 def _deps_ready() -> bool:
     """deps: the brew-managed system tooling the steps rely on is on PATH."""
-    return _have("brew") and _have("cloudflared")
+    return _have("brew") and _have("cloudflared") and _compatible_node_present()
 
 
 def _audio_ready() -> bool:
     """audio: the compiled Yulu.app audio_daemon binary exists and is executable."""
     binary = SCRIPTS_DIR / "Yulu.app" / "Contents" / "MacOS" / "audio_daemon"
     return binary.is_file() and (binary.stat().st_mode & 0o111) != 0
-
-
-def _whisper_model_present(trans: dict) -> bool:
-    """The whisper half of the `models` step: configured local model exists, OR engine is
-    mlx (weights fetched lazily on first transcription, so no on-disk file gates it)."""
-    engine = str(trans.get("engine", "")).lower()
-    if engine == "mlx":
-        return True
-    model_path = trans.get("local_model_path")
-    if model_path:
-        return Path(str(model_path)).expanduser().is_file()
-    return False
-
-
-def _diarization_engine_importable() -> bool:
-    """True iff ``sherpa_onnx`` is importable from THIS interpreter (the daemon's python3).
-
-    PORT-01: the engine co-locates in the daemon interpreter (no isolated venv), so the
-    ``models`` step's ``check()`` must treat "engine importable" as part of "diarization
-    provisioned" — otherwise a re-run with models-on-disk-but-engine-missing would
-    short-circuit to skipped and never install sherpa. Probed without importing the heavy
-    module. Never raises (degrade → False → the idempotent install step runs)."""
-    try:
-        import importlib.util
-
-        return importlib.util.find_spec("sherpa_onnx") is not None
-    except Exception:
-        return False
-
-
-def _diarization_models_present(trans: dict) -> bool:
-    """The diarization half of the `models` step (v0.6): ENGINE + both ONNX files.
-
-    Satisfied when diarization is DISABLED (nothing to provision) OR (the sherpa-onnx engine
-    is importable AND both ONNX files exist). The file check delegates to
-    ``stt_daemon.backends.diarize.models_present`` (the single source of truth for the
-    model-file contract); the engine check (PORT-01) mirrors the ``setup_models.sh``
-    ``diarization_engine_present`` probe so ``check()`` and the script agree on "done".
-    Tolerant: any import/error → treat as "not present" so the step runs (both halves are
-    idempotent). Never raises.
-    """
-    diar = trans.get("diarization", {}) if isinstance(trans.get("diarization"), dict) else {}
-    if not diar.get("enabled"):
-        return True  # diarization off → no diarization engine/files required
-    if not _diarization_engine_importable():
-        return False  # engine missing → the models step must run to install it
-    try:
-        import sys as _sys
-
-        if str(SCRIPTS_DIR) not in _sys.path:
-            _sys.path.insert(0, str(SCRIPTS_DIR))
-        from stt_daemon.backends.diarize import models_present
-
-        return models_present(
-            seg_path=diar.get("seg_model") or None,
-            emb_path=diar.get("emb_model") or None,
-        )
-    except Exception:
-        return False
-
-
-def _model_present() -> bool:
-    """models: BOTH the whisper-model concern AND the diarization-model concern are satisfied.
-
-    The diarization half short-circuits to True when diarization is disabled, so this stays a
-    no-op for installs that never turn diarization on (the step count remains six — diarization
-    extends the existing `models` step rather than adding a seventh)."""
-    cfg = _load_config()
-    trans = cfg.get("transcription", {}) if isinstance(cfg, dict) else {}
-    return _whisper_model_present(trans) and _diarization_models_present(trans)
-
-
-def _mlx_required(cfg: dict) -> bool:
-    """True iff config selects MLX for final, realtime, or the daemon default.
-
-    A missing config means this concern is not yet knowable; return False so a standalone
-    registry smoke does not try to repair Python packages before setup_config has created the
-    user's real config.json.
-    """
-    if not cfg:
-        return False
-    trans = cfg.get("transcription", {}) if isinstance(cfg, dict) else {}
-    realtime = trans.get("realtime", {}) if isinstance(trans.get("realtime"), dict) else {}
-    stt = cfg.get("stt_daemon", {}) if isinstance(cfg.get("stt_daemon"), dict) else {}
-    engines = {
-        str(trans.get("final_engine") or trans.get("engine") or "").strip().lower(),
-        str(realtime.get("engine") or "").strip().lower(),
-        str(stt.get("default_engine") or "").strip().lower(),
-    }
-    return "mlx" in engines
-
-
-def _mlx_importable() -> bool:
-    """capabilities: selected MLX is truly usable, not merely installed.
-
-    The wrapped ``setup_capabilities.sh`` now repairs mlx-whisper in the daemon interpreter
-    when MLX is configured. ``check()`` uses the same lightweight prerequisite contract as
-    that script: the package plus its common YAML dependency must be discoverable from the
-    daemon interpreter. Full MLX/Metal warm-up is intentionally not run during provisioning's
-    read-only check.
-    """
-    cfg = _load_config()
-    if not _mlx_required(cfg):
-        return True
-    try:
-        import sys as _sys
-
-        if str(SCRIPTS_DIR) not in _sys.path:
-            _sys.path.insert(0, str(SCRIPTS_DIR))
-        from capabilities.probes import probe_module_spec
-
-        mlx_present, _ = probe_module_spec("mlx_whisper")
-        yaml_present, _ = probe_module_spec("yaml")
-        return mlx_present and yaml_present
-    except Exception:
-        return False
 
 
 def _launchagents_loaded() -> bool:
@@ -331,14 +241,12 @@ def _ui_built() -> bool:
 # ── The ordered registry (setup.sh sequence) ─────────────────────────
 #
 # Order mirrors setup.sh:894-919 exactly:
-#   deps → audio → models → capabilities → daemons → ui
+#   deps → audio → daemons → ui
 # Each entry wraps its setup_*.sh 1:1 with the matching read-only probe.
 
 REGISTRY: list[Step] = [
     ScriptStep("deps", "setup_deps.sh", probe=_deps_ready),
     ScriptStep("audio", "setup_audio.sh", probe=_audio_ready),
-    ScriptStep("models", "setup_models.sh", probe=_model_present),
-    ScriptStep("capabilities", "setup_capabilities.sh", probe=_mlx_importable),
     ScriptStep("daemons", "setup_daemons.sh", probe=_launchagents_loaded),
     ScriptStep("ui", "setup_ui.sh", probe=_ui_built),
 ]

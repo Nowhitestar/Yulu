@@ -1,33 +1,18 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { chmodSync, mkdtempSync, writeFileSync, rmSync, mkdirSync, existsSync, readFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync, rmSync, mkdirSync, existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { recordingsRouter } from "../../src/routers/recordings.js";
 import { createCaller, type AppContext } from "../../src/trpc.js";
-import { JobRegistry } from "../../src/jobStatus.js";
 import { PubSub, type AppChannels } from "../../src/pubsub.js";
-
-const spawnMock = vi.hoisted(() => vi.fn());
-vi.mock("node:child_process", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:child_process")>();
-  return { ...actual, spawn: spawnMock };
-});
-
-let lastSpawnStdin = "";
+import { RecordingTaskDeletionBlockedError } from "../../src/hostStore.js";
 
 function mkCtx(opts: { moviesDir: string }): AppContext {
-  const configState = {
-    transcription: {
-      final_engine: "mlx",
-      local_model_path: "~/.config/yulu/models/ggml-large-v3.bin",
-      mlx: { model: "mlx-community/whisper-large-v3-mlx" },
-    },
-    llm: { enabled: true, command: null, agent: { provider: "custom" } },
-    connectors: {},
-    output: {},
-    agent_console: { plugins: { added: ["summary"] } },
-  };
   const promptRows: Array<Record<string, unknown>> = [];
+  const enqueueReprocess = vi.fn(() => ({
+    task: { id: "019f0000-0000-7000-8000-000000000099" },
+    created: true,
+  }));
   const promptsDb = {
     prepare: (sql: string) => ({
       all: (..._args: unknown[]) => {
@@ -47,47 +32,22 @@ function mkCtx(opts: { moviesDir: string }): AppContext {
     paths: {
       moviesDir: opts.moviesDir,
       configDir: join(opts.moviesDir, "config"),
-      transcribePy: "/fake/transcribe.py",
       agentQueueJson: join(opts.moviesDir, "agent-queue.json"),
       scriptDir: "/fake/yulu/scripts",
     },
-    jobs: new JobRegistry(),
-    pubsub: new PubSub<AppChannels>(),
-    config: {
-      read: () => configState,
-      update: (key: string, value: unknown) => {
-        const parts = key.split(".");
-        let cursor = configState as Record<string, unknown>;
-        for (let i = 0; i < parts.length - 1; i++) {
-          const part = parts[i]!;
-          cursor[part] = (cursor[part] ?? {}) as Record<string, unknown>;
-          cursor = cursor[part] as Record<string, unknown>;
-        }
-        cursor[parts[parts.length - 1]!] = value;
-        return { daemonsNeedingRestart: ["sttdaemon"], daemonsNeedingSighup: [] };
-      },
+    host: {
+      latestForRecording: vi.fn(() => null),
+      getNotionDelivery: vi.fn(() => null),
+      prepareRecordingDeletion: vi.fn(() => []),
+      purgeRecordingTasks: vi.fn(() => []),
     },
+    artifacts: { cleanupWorkspace: vi.fn() },
+    pubsub: new PubSub<AppChannels>(),
+    config: { read: () => ({}) },
     launchctl: { restart: vi.fn(), status: vi.fn(), start: vi.fn(), stop: vi.fn(), sighup: vi.fn() },
     db: { prompts: promptsDb },
+    recordingPipeline: { enqueueReprocess },
   } as unknown as AppContext;
-}
-
-function mockSpawn(stdout: string, exitCode = 0, stderr = "") {
-  spawnMock.mockImplementation(() => {
-    const handlers = new Map<string, (arg: unknown) => void>();
-    const proc = {
-      stdin: {
-        write: (chunk: Buffer | string) => { lastSpawnStdin += chunk.toString(); },
-        end: () => {},
-      },
-      stdout: { on: (e: string, cb: (b: Buffer) => void) => { if (e === "data" && stdout) cb(Buffer.from(stdout)); } },
-      stderr: { on: (e: string, cb: (b: Buffer) => void) => { if (e === "data" && stderr) cb(Buffer.from(stderr)); } },
-      on: (e: string, cb: (arg: unknown) => void) => { handlers.set(e, cb); },
-      kill: () => {},
-    };
-    setImmediate(() => handlers.get("close")?.(exitCode));
-    return proc;
-  });
 }
 
 function wavHeaderOnly(): Buffer {
@@ -130,25 +90,12 @@ function wavWithDuration(seconds: number): Buffer {
 
 describe("recordings router", () => {
   let root: string; let mvDir: string;
-  let oldPath: string | undefined;
-  let oldCodexRoots: string | undefined;
-  let oldRootsOnly: string | undefined;
   beforeEach(() => {
-    spawnMock.mockReset();
-    lastSpawnStdin = "";
-    oldPath = process.env.PATH;
-    oldCodexRoots = process.env.YULU_CODEX_PLUGIN_ROOTS;
-    oldRootsOnly = process.env.YULU_AGENT_PLUGIN_ROOTS_ONLY;
     root = mkdtempSync(join(tmpdir(), "rec_"));
     mvDir = join(root, "movies");
     mkdirSync(mvDir);
   });
   afterEach(() => {
-    process.env.PATH = oldPath;
-    if (oldCodexRoots === undefined) delete process.env.YULU_CODEX_PLUGIN_ROOTS;
-    else process.env.YULU_CODEX_PLUGIN_ROOTS = oldCodexRoots;
-    if (oldRootsOnly === undefined) delete process.env.YULU_AGENT_PLUGIN_ROOTS_ONLY;
-    else process.env.YULU_AGENT_PLUGIN_ROOTS_ONLY = oldRootsOnly;
     rmSync(root, { recursive: true, force: true });
   });
 
@@ -187,7 +134,7 @@ describe("recordings router", () => {
     expect(r.title).toBe("TeamSync");
   });
 
-  it("get includes transcription model and summary template choices", async () => {
+  it("get includes summary template choices", async () => {
     const stem = "TeamSync_20260102_090000";
     writeFileSync(join(mvDir, `${stem}.wav`), "");
     const ctx = mkCtx({ moviesDir: mvDir });
@@ -202,36 +149,35 @@ describe("recordings router", () => {
 
     const r = await createCaller(recordingsRouter, ctx).get({ stem });
 
-    expect(r.transcriptionModelOptions.some((option: { label: string; active: boolean }) =>
-      option.label.includes("MLX") && option.active
-    )).toBe(true);
     expect(r.summaryTemplateOptions).toEqual([
       { id: "p1", slug: "summary", name: "Standard Summary", isAutoRun: true },
     ]);
     expect(r.defaultSummaryTemplateId).toBe("p1");
   });
 
-  it("summarize can use realtime transcript when final transcript is missing", async () => {
+  it("reprocess delegates the recording to the durable Agent pipeline", async () => {
     const stem = "TeamSync_20260102_090000";
     const wavPath = join(mvDir, `${stem}.wav`);
-    const realtimePath = join(mvDir, `${stem}.realtime.transcript.txt`);
     writeFileSync(wavPath, "");
-    writeFileSync(realtimePath, "live text");
     const ctx = mkCtx({ moviesDir: mvDir });
     const caller = createCaller(recordingsRouter, ctx);
 
-    await caller.summarize({ stem });
+    const result = await caller.reprocess({ stem });
 
-    const queue = JSON.parse(readFileSync(ctx.paths.agentQueueJson, "utf8"));
-    expect(queue).toHaveLength(1);
-    expect(queue[0].type).toBe("summary_request");
-    expect(queue[0].stem).toBe(stem);
-    expect(queue[0].title).toBe("TeamSync");
-    expect(queue[0].transcriptPath).toBe(realtimePath);
-    expect(queue[0].audio_path).toBe(wavPath);
+    expect(ctx.recordingPipeline.enqueueReprocess).toHaveBeenCalledWith({
+      audioPath: wavPath,
+      title: "TeamSync",
+      sendToNotion: false,
+      instructions: "Produce an accurate transcript and a factual, structured meeting summary.",
+    });
+    expect(result).toEqual({
+      ok: true,
+      taskId: "019f0000-0000-7000-8000-000000000099",
+      created: true,
+    });
   });
 
-  it("summarize enqueues the selected summary template snapshot", async () => {
+  it("reprocess passes the selected summary template to the Agent as instructions", async () => {
     const stem = "TeamSync_20260102_090000";
     writeFileSync(join(mvDir, `${stem}.wav`), "");
     writeFileSync(join(mvDir, `${stem}.transcript.txt`), "final text");
@@ -241,35 +187,33 @@ describe("recordings router", () => {
       slug: "decisions",
       name: "Decision Memo",
       category: "summary",
-      content: "Decisions from {{transcript}}",
+      content: "{{meeting_title}} ({{date}}): Decisions from {{transcript}}",
       is_auto_run: 0,
     });
 
-    await createCaller(recordingsRouter, ctx).summarize({ stem, promptId: "p-decision" });
+    await createCaller(recordingsRouter, ctx).reprocess({ stem, promptId: "p-decision" });
 
-    const queue = JSON.parse(readFileSync(ctx.paths.agentQueueJson, "utf8"));
-    expect(queue[0]).toMatchObject({
-      prompt_id: "p-decision",
-      prompt_slug: "decisions",
-      prompt_name: "Decision Memo",
-      prompt_content_snapshot: "Decisions from {{transcript}}",
+    expect(ctx.recordingPipeline.enqueueReprocess).toHaveBeenCalledWith({
+      audioPath: join(mvDir, `${stem}.wav`),
+      title: "TeamSync",
+      sendToNotion: false,
+      instructions: "{{meeting_title}} ({{date}}): Decisions from {{transcript}}",
     });
   });
 
-  it("transcribe applies a selected transcription model and restarts sttdaemon", async () => {
+  it("reprocess delegates optional Notion delivery to the durable Agent pipeline", async () => {
     const stem = "TeamSync_20260102_090000";
     writeFileSync(join(mvDir, `${stem}.wav`), "");
-    mockSpawn("", 0);
     const ctx = mkCtx({ moviesDir: mvDir });
 
-    await createCaller(recordingsRouter, ctx).transcribe({
-      stem,
-      transcriptionModel: { engine: "whisper", model: "/models/ggml-medium.bin" },
-    });
+    await createCaller(recordingsRouter, ctx).reprocess({ stem, sendToNotion: true });
 
-    expect(ctx.config.read().transcription.final_engine).toBe("whisper");
-    expect(ctx.config.read().transcription.local_model_path).toBe("/models/ggml-medium.bin");
-    expect(ctx.launchctl.restart).toHaveBeenCalledWith("com.yulu.sttdaemon");
+    expect(ctx.recordingPipeline.enqueueReprocess).toHaveBeenCalledWith({
+      audioPath: join(mvDir, `${stem}.wav`),
+      title: "TeamSync",
+      sendToNotion: true,
+      instructions: "Produce an accurate transcript and a factual, structured meeting summary.",
+    });
   });
 
   it("get prefers clean audio for playback when present", async () => {
@@ -303,16 +247,51 @@ describe("recordings router", () => {
     expect(r.speakerData.segments[0].display_name).toBe("Speaker 1");
   });
 
-  it("transcribe throws NOT_FOUND when WAV missing", async () => {
+  it("reprocess throws NOT_FOUND when WAV is missing", async () => {
     const caller = createCaller(recordingsRouter, mkCtx({ moviesDir: mvDir }));
-    await expect(caller.transcribe({ stem: "Memo_20260101_120000" })).rejects.toThrow(/WAV file missing/);
+    await expect(caller.reprocess({ stem: "Memo_20260101_120000" })).rejects.toThrow(/WAV file missing/);
   });
 
-  it("list reflects JobRegistry status", async () => {
+  it("list reflects the durable Host task status", async () => {
     writeFileSync(join(mvDir, "Memo_20260101_120000.wav"), "");
     const ctx = mkCtx({ moviesDir: mvDir });
-    ctx.jobs.set({ stem: "Memo_20260101_120000", action: "transcribe", state: "transcribing", startedAt: Date.now(), jobId: "j1" });
+    ctx.host = {
+      latestForRecording: vi.fn(() => ({ state: "running", phase: "transcribing", error: null })),
+    } as unknown as AppContext["host"];
     expect((await createCaller(recordingsRouter, ctx).list({}))[0].status).toBe("transcribing");
+  });
+
+  it("get exposes the Notion delivery recorded for the durable Agent task", async () => {
+    const stem = "TeamSync_20260102_090000";
+    const taskId = "019f0000-0000-7000-8000-000000000100";
+    const delivery = {
+      taskId,
+      deliveryKey: "notion-page-1",
+      status: "reported",
+      destination: "Product Notes",
+      url: "https://www.notion.so/0123456789abcdef0123456789abcdef",
+      pageId: "0123456789abcdef0123456789abcdef",
+      detail: null,
+      createdAt: "2026-07-11T00:00:00.000Z",
+      updatedAt: "2026-07-11T00:00:01.000Z",
+    };
+    writeFileSync(join(mvDir, `${stem}.wav`), "");
+    const ctx = mkCtx({ moviesDir: mvDir });
+    ctx.host = {
+      latestForRecording: vi.fn(() => ({
+        id: taskId,
+        state: "delivery_reported",
+        phase: "sending_notion",
+        error: null,
+      })),
+      getNotionDelivery: vi.fn(() => delivery),
+    } as unknown as AppContext["host"];
+
+    const detail = await createCaller(recordingsRouter, ctx).get({ stem });
+
+    expect(detail.agentTask).toMatchObject({ id: taskId, state: "delivery_reported" });
+    expect(detail.notionDelivery).toEqual(delivery);
+    expect(ctx.host.getNotionDelivery).toHaveBeenCalledWith(taskId);
   });
 
   it("marks a non-WAV recording file as recording_failed", async () => {
@@ -493,153 +472,38 @@ describe("recordings router", () => {
     expect(seen).toContain("removed");
   });
 
-  it("sendSummary routes through the selected Agent CLI when the Console plugin is configured", async () => {
-    const stem = "TeamSync_20260102_090000";
-    writeFileSync(join(mvDir, `${stem}.wav`), "");
-    writeFileSync(join(mvDir, `${stem}.summary.md`), "summary");
+  it("cancels durable queued work, cleans its workspace, and purges task rows during deletion", async () => {
+    const stem = "Memo_20260101_120000";
+    const taskId = "019f0000-0000-7000-8000-000000000123";
+    writeFileSync(join(mvDir, `${stem}.wav`), "audio");
     const ctx = mkCtx({ moviesDir: mvDir });
-    const fakeCodex = join(root, "bin", "codex");
-    const pluginRoot = join(root, "codex-plugins");
-    mkdirSync(join(root, "bin"));
-    mkdirSync(join(pluginRoot, "notion"), { recursive: true });
-    writeFileSync(fakeCodex, "#!/bin/sh\nexit 0\n");
-    chmodSync(fakeCodex, 0o755);
-    process.env.PATH = `${join(root, "bin")}:${oldPath ?? ""}`;
-    process.env.YULU_CODEX_PLUGIN_ROOTS = pluginRoot;
-    process.env.YULU_AGENT_PLUGIN_ROOTS_ONLY = "1";
-    ctx.config = { read: () => ({
-      llm: { enabled: true, command: [fakeCodex], agent: { provider: "codex" } },
-      agent_console: {
-        plugins: { added: ["summary", "notion"] },
-        destinations: { codex: { notion: { target: "Product Notes" } } },
-      },
-    }) } as unknown as AppContext["config"];
-    const nativeSessionId = "019f0000-0000-7000-8000-000000000002";
-    mockSpawn(
-      `${JSON.stringify({ type: "session", session_id: nativeSessionId })}\n` +
-      `${JSON.stringify({ type: "message", text: "sent" })}\n`,
-    );
+    vi.mocked(ctx.host.prepareRecordingDeletion).mockReturnValue([taskId]);
+    vi.mocked(ctx.host.purgeRecordingTasks).mockReturnValue([taskId]);
 
-    const r = await createCaller(recordingsRouter, ctx).sendSummary({ stem, channel: "notion" });
+    await createCaller(recordingsRouter, ctx).delete({ stem });
 
-    expect(r.ok).toBe(true);
-    const call = spawnMock.mock.calls[0]!;
-    expect(call[0]).toBe(fakeCodex);
-    expect(call[2].cwd).toBe("/fake/yulu/scripts");
-    expect(lastSpawnStdin).toContain("Destination: Product Notes");
-    const history = JSON.parse(readFileSync(join(mvDir, `${stem}.shares.json`), "utf8"));
-    expect(history[0]).toMatchObject({ channel: "notion", status: "success", destination: "Product Notes" });
-    const sessions = JSON.parse(readFileSync(join(ctx.paths.configDir, "agent-sessions.json"), "utf8"));
-    expect(sessions.sessions[0]).toMatchObject({
-      purpose: "background",
-      nativeSessionId,
+    expect(ctx.host.prepareRecordingDeletion).toHaveBeenCalledWith(stem);
+    expect(ctx.artifacts.cleanupWorkspace).toHaveBeenCalledWith(taskId);
+    expect(ctx.host.purgeRecordingTasks).toHaveBeenCalledWith(stem);
+    expect(existsSync(join(mvDir, `${stem}.wav`))).toBe(false);
+  });
+
+  it("blocks deletion while delivery is active or unverified", async () => {
+    const stem = "Memo_20260101_120000";
+    writeFileSync(join(mvDir, `${stem}.wav`), "audio");
+    const ctx = mkCtx({ moviesDir: mvDir });
+    vi.mocked(ctx.host.prepareRecordingDeletion).mockImplementation(() => {
+      throw new RecordingTaskDeletionBlockedError(stem, ["delivery_unverified"]);
     });
+
+    await expect(createCaller(recordingsRouter, ctx).delete({ stem })).rejects.toThrow(
+      /cannot be deleted.*delivery_unverified/,
+    );
+    expect(ctx.artifacts.cleanupWorkspace).not.toHaveBeenCalled();
+    expect(ctx.host.purgeRecordingTasks).not.toHaveBeenCalled();
+    expect(existsSync(join(mvDir, `${stem}.wav`))).toBe(true);
   });
 
-  it("get exposes Agent Console share targets for added plugins only", async () => {
-    const stem = "TeamSync_20260102_090000";
-    writeFileSync(join(mvDir, `${stem}.wav`), "");
-    writeFileSync(join(mvDir, `${stem}.summary.md`), "summary");
-    const ctx = mkCtx({ moviesDir: mvDir });
-    const fakeCodex = join(root, "bin", "codex");
-    const pluginRoot = join(root, "codex-plugins");
-    mkdirSync(join(root, "bin"));
-    mkdirSync(join(pluginRoot, "notion"), { recursive: true });
-    writeFileSync(fakeCodex, "#!/bin/sh\nexit 0\n");
-    chmodSync(fakeCodex, 0o755);
-    process.env.PATH = `${join(root, "bin")}:${oldPath ?? ""}`;
-    process.env.YULU_CODEX_PLUGIN_ROOTS = pluginRoot;
-    process.env.YULU_AGENT_PLUGIN_ROOTS_ONLY = "1";
-    ctx.config = { read: () => ({
-      llm: { enabled: true, command: [fakeCodex], agent: { provider: "codex" } },
-      agent_console: { plugins: { added: ["summary", "notion"] } },
-    }) } as unknown as AppContext["config"];
-
-    const r = await createCaller(recordingsRouter, ctx).get({ stem });
-
-    expect(r.enabledSummaryTargets).toEqual([]);
-    expect(r.shareTargets).toEqual([
-      expect.objectContaining({ channel: "notion", label: "Notion", destination: "Yulu Meeting", enabled: true }),
-    ]);
-  });
-
-  it("keeps configured Zulip disabled until a stream and topic are selected in Agent Console", async () => {
-    const stem = "TeamSync_20260102_090000";
-    writeFileSync(join(mvDir, `${stem}.wav`), "");
-    writeFileSync(join(mvDir, `${stem}.summary.md`), "summary");
-    const ctx = mkCtx({ moviesDir: mvDir });
-    const fakeCodex = join(root, "bin", "codex");
-    const pluginRoot = join(root, "codex-plugins");
-    mkdirSync(join(root, "bin"));
-    mkdirSync(join(pluginRoot, "zulip"), { recursive: true });
-    writeFileSync(fakeCodex, "#!/bin/sh\nexit 0\n");
-    chmodSync(fakeCodex, 0o755);
-    process.env.PATH = `${join(root, "bin")}:${oldPath ?? ""}`;
-    process.env.YULU_CODEX_PLUGIN_ROOTS = pluginRoot;
-    process.env.YULU_AGENT_PLUGIN_ROOTS_ONLY = "1";
-    ctx.config = { read: () => ({
-      llm: { enabled: true, command: [fakeCodex], agent: { provider: "codex" } },
-      agent_console: { plugins: { added: ["summary", "zulip"] } },
-    }) } as unknown as AppContext["config"];
-
-    const r = await createCaller(recordingsRouter, ctx).get({ stem });
-
-    expect(r.shareTargets).toEqual([
-      expect.objectContaining({
-        channel: "zulip",
-        destination: "选择 Channel 和 Topic",
-        enabled: false,
-        disabledReason: "请选择 Zulip Channel 和 Topic",
-      }),
-    ]);
-  });
-
-  it("get ignores legacy Telegram summary targets", async () => {
-    const stem = "TeamSync_20260102_090000";
-    writeFileSync(join(mvDir, `${stem}.wav`), "");
-    writeFileSync(join(mvDir, `${stem}.summary.md`), "summary");
-    const ctx = mkCtx({ moviesDir: mvDir });
-    ctx.config = { read: () => ({
-      connectors: { telegram: { send_summary: true } },
-      output: { telegram: { chat_id: "123" } },
-    }) } as unknown as AppContext["config"];
-
-    const r = await createCaller(recordingsRouter, ctx).get({ stem });
-
-    expect(r.enabledSummaryTargets).toEqual([]);
-  });
-
-  it("sendSummary rejects a plugin that was not added in Agent Console", async () => {
-    const stem = "TeamSync_20260102_090000";
-    writeFileSync(join(mvDir, `${stem}.wav`), "");
-    writeFileSync(join(mvDir, `${stem}.summary.md`), "summary");
-    const caller = createCaller(recordingsRouter, mkCtx({ moviesDir: mvDir }));
-
-    await expect(caller.sendSummary({ stem, channel: "notion" })).rejects.toThrow(/not added/i);
-    expect(spawnMock).not.toHaveBeenCalled();
-  });
-
-  it("sendSummary rejects an added plugin that the selected Agent has not configured", async () => {
-    const stem = "TeamSync_20260102_090000";
-    writeFileSync(join(mvDir, `${stem}.wav`), "");
-    writeFileSync(join(mvDir, `${stem}.summary.md`), "summary");
-    const fakeCodex = join(root, "bin", "codex");
-    mkdirSync(join(root, "bin"));
-    writeFileSync(fakeCodex, "#!/bin/sh\nexit 0\n");
-    chmodSync(fakeCodex, 0o755);
-    process.env.PATH = `${join(root, "bin")}:${oldPath ?? ""}`;
-    process.env.YULU_CODEX_PLUGIN_ROOTS = join(root, "empty-plugins");
-    process.env.YULU_AGENT_PLUGIN_ROOTS_ONLY = "1";
-    const ctx = mkCtx({ moviesDir: mvDir });
-    ctx.config = { read: () => ({
-      llm: { enabled: true, command: [fakeCodex], agent: { provider: "codex" } },
-      agent_console: { plugins: { added: ["summary", "notion"] } },
-    }) } as unknown as AppContext["config"];
-    const caller = createCaller(recordingsRouter, ctx);
-
-    await expect(caller.sendSummary({ stem, channel: "notion" })).rejects.toThrow(/尚未配置|not configured/i);
-    expect(spawnMock).not.toHaveBeenCalled();
-  });
 });
 
 function writeSpeakerFixture(dir: string, stem: string) {

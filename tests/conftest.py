@@ -1,5 +1,11 @@
 import os
 from pathlib import Path
+import sys
+
+
+SCRIPTS_DIR = Path(__file__).resolve().parents[1] / "yulu" / "scripts"
+if str(SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_DIR))
 
 
 def _default_tmp_root() -> Path:
@@ -27,5 +33,5 @@ def _ensure_test_paths() -> None:
 
 def pytest_configure(config):
     _ensure_test_paths()
-    config.addinivalue_line("markers", "e2e: opt-in tests that require real mlx-whisper model")
+    config.addinivalue_line("markers", "e2e: opt-in tests that require real external runtimes")
     config.addinivalue_line("markers", "integration: tests that spawn the daemon process")

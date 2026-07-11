@@ -54,7 +54,8 @@ setup_audio() {
     local _bin
     for _bin in "$SCRIPT_DIR/Yulu.app/Contents/MacOS/audio_daemon" \
                 "$SCRIPT_DIR/StatusAgent.app/Contents/MacOS/status_agent" \
-                "$SCRIPT_DIR/recorder_status"; do
+                "$SCRIPT_DIR/recorder_status" \
+                "$SCRIPT_DIR/meeting_prompt"; do
         [[ -f "$_bin" ]] && chmod +x "$_bin"
     done
 
@@ -70,11 +71,12 @@ setup_audio() {
             if "$build_script"; then
                 ok "Yulu.app 已编译并签名（dev）"
             else
-                warn "Yulu.app 编译/签名失败 — 麦克风/系统音频捕获将不可用。"
-                warn "  常见原因：codesign 身份歧义。看上面的 codesign 报错。"
+                err "Yulu.app 编译/签名失败 — 无法安装核心录音能力。"
+                return 1
             fi
         else
-            warn "Yulu.app 的 build script 不存在或不可执行，跳过"
+            err "Yulu.app 的 build script 不存在或不可执行"
+            return 1
         fi
 
         # Dev builds are ad-hoc-signed, so strip Gatekeeper quarantine to avoid the
@@ -101,7 +103,8 @@ setup_audio() {
         if [[ -f "$SCRIPT_DIR/Yulu.app/Contents/MacOS/audio_daemon" ]]; then
             ok "Yulu.app: 使用发布包内已签名+公证的二进制（不编译）"
         else
-            warn "Yulu.app 二进制缺失；请确认发布包完整或使用 --dev 从源码编译"
+            err "Yulu.app 二进制缺失；发布包不完整"
+            return 1
         fi
     fi
 

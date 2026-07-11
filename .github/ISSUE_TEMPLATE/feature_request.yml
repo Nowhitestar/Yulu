@@ -13,7 +13,7 @@ body:
     attributes:
       label: What's the underlying problem?
       description: Describe the situation that this feature would fix. Concrete > abstract.
-      placeholder: e.g. "I have back-to-back meetings and can't tell which `meeting-recordings/<timestamp>/` belongs to which calendar event without opening each summary."
+      placeholder: e.g. "I have back-to-back meetings and can't tell which recording belongs to which calendar event without opening each summary."
     validations:
       required: true
 
@@ -21,7 +21,7 @@ body:
     id: proposal
     attributes:
       label: What would you like Yulu to do?
-      placeholder: e.g. "Name the recording folder after the calendar event title (sanitized) instead of just the timestamp."
+      placeholder: e.g. "Use the calendar title as the recording title and keep the durable task linked to it."
 
   - type: textarea
     id: alternatives

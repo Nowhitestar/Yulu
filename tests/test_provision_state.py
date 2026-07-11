@@ -148,7 +148,7 @@ def test_mark_preserves_source_across_many_marks(tmp_path):
         json.dumps({"schema": 1, "source": "release", "version": "0.5.1"}) + "\n",
         encoding="utf-8",
     )
-    for name in ("deps", "audio", "models", "capabilities", "daemons", "ui"):
+    for name in ("deps", "audio", "daemons", "ui"):
         state.mark(ledger, name, "ok")
     doc = state.load(ledger)
     assert doc["source"] == "release"  # never clobbered across the whole walk
@@ -162,11 +162,11 @@ def test_is_done_only_true_on_ok(tmp_path):
     ledger = tmp_path / ".yulu-install.json"
     state.mark(ledger, "deps", "ok")
     state.mark(ledger, "audio", "running")
-    state.mark(ledger, "models", "error", detail="boom")
+    state.mark(ledger, "daemons", "error", detail="boom")
     state.mark(ledger, "ui", "skipped")
     assert state.is_done(ledger, "deps") is True
     assert state.is_done(ledger, "audio") is False  # running ≠ done
-    assert state.is_done(ledger, "models") is False  # error ≠ done
+    assert state.is_done(ledger, "daemons") is False  # error ≠ done
     assert state.is_done(ledger, "ui") is False  # skipped ≠ done (was not applied here)
     assert state.is_done(ledger, "never-marked") is False
 
@@ -178,7 +178,7 @@ def test_is_done_missing_ledger_is_false(tmp_path):
 def test_resume_order_missing_steps_returns_all(tmp_path):
     # A fresh ledger (or a pre-Phase-6 install with no `steps`) → every step runs.
     ledger = tmp_path / ".yulu-install.json"
-    names = ["deps", "audio", "models", "capabilities", "daemons", "ui"]
+    names = ["deps", "audio", "daemons", "ui"]
     assert state.resume_order(names, ledger) == names
 
 
@@ -186,6 +186,6 @@ def test_resume_order_preserves_registry_order(tmp_path):
     ledger = tmp_path / ".yulu-install.json"
     state.mark(ledger, "audio", "ok")  # mark out of order
     state.mark(ledger, "deps", "ok")
-    names = ["deps", "audio", "models", "capabilities", "daemons", "ui"]
+    names = ["deps", "audio", "daemons", "ui"]
     # deps+audio are ok → dropped; the REST keep registry order (not mark order).
-    assert state.resume_order(names, ledger) == ["models", "capabilities", "daemons", "ui"]
+    assert state.resume_order(names, ledger) == ["daemons", "ui"]

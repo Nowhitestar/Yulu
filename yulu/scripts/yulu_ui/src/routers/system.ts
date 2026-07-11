@@ -203,7 +203,7 @@ export const systemRouter = router({
   }),
 
   logPaths: publicProcedure.query(({ ctx }) => {
-    const names = ["audiodaemon", "sttdaemon", "agentqueue", "statusagent", "scheduler", "detector", "calendar", "ui"];
+    const names = ["audiodaemon", "statusagent", "scheduler", "detector", "calendar", "ui"];
     return names.map((name) => ({ name, path: `${ctx.paths.configDir}/${name}.log` }));
   }),
 

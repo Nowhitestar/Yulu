@@ -15,7 +15,6 @@ def _load_record_audio(tmp_path, monkeypatch):
     state_path = tmp_path / ".state.json"
     monkeypatch.setattr(record_audio, "STATE_PATH", state_path)
     monkeypatch.setattr(record_audio, "CONFIG_DIR", tmp_path)
-    monkeypatch.setattr(record_audio, "REALTIME_PID_PATH", tmp_path / ".realtime.pid")
     return record_audio, state_path
 
 
@@ -50,8 +49,6 @@ def test_daemon_status_resumes_when_state_is_recording_but_daemon_is_idle(tmp_pa
 
     monkeypatch.setattr(record_audio, "socket_send", fake_socket_send)
     monkeypatch.setattr(record_audio, "load_config", lambda: {"silence_duration_sec": 300, "silence_threshold": 0.01})
-    monkeypatch.setattr(record_audio, "start_realtime_transcriber", lambda *a, **k: None)
-    monkeypatch.setattr(record_audio, "stop_realtime_transcriber", lambda *a, **k: None)
 
     status = record_audio.daemon_status()
 
@@ -74,7 +71,6 @@ def test_daemon_stop_merges_resume_segments_back_to_first_wav(tmp_path, monkeypa
     )
 
     monkeypatch.setattr(record_audio, "socket_send", lambda cmd: {"status": "stopped", "file": str(second), "duration": 10})
-    monkeypatch.setattr(record_audio, "stop_realtime_transcriber", lambda *a, **k: None)
 
     result = record_audio.daemon_stop()
 

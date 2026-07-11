@@ -6,14 +6,14 @@ import { RestartBanner } from "../../web/src/components/RestartBanner.js";
 describe("RestartBanner (P4a-6 — single Restart now + dismiss)", () => {
   const daemons = [
     { name: "audiodaemon", keys: ["audio.silence_threshold", "audio.mic_device"] },
-    { name: "sttdaemon", keys: ["transcription.final_engine"] },
+    { name: "scheduler", keys: ["calendars"] },
   ];
 
   it("shows a single clear restart message and the affected daemon names", () => {
     render(<RestartBanner daemons={daemons} onRestartAll={vi.fn()} onDismiss={vi.fn()} />);
     expect(screen.getByText(/需要重启守护进程/)).toBeInTheDocument();
     expect(screen.getByText(/audiodaemon/)).toBeInTheDocument();
-    expect(screen.getByText(/sttdaemon/)).toBeInTheDocument();
+    expect(screen.getByText(/scheduler/)).toBeInTheDocument();
   });
 
   it("renders exactly one primary 'Restart now' and no per-daemon restart buttons", () => {
@@ -21,7 +21,7 @@ describe("RestartBanner (P4a-6 — single Restart now + dismiss)", () => {
     expect(screen.getByRole("button", { name: "立即重启" })).toBeInTheDocument();
     // No per-daemon "Restart <name>" buttons anymore.
     expect(screen.queryByRole("button", { name: /restart audiodaemon/i })).toBeNull();
-    expect(screen.queryByRole("button", { name: /restart sttdaemon/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /restart scheduler/i })).toBeNull();
   });
 
   it("'Restart now' fires onRestartAll", async () => {

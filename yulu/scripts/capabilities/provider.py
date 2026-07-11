@@ -21,7 +21,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 
 from . import report
-from .probes import probe_command, probe_mlx_whisper
+from .probes import probe_command
 from .report import Capability, Provenance, Status
 
 
@@ -73,9 +73,6 @@ class ClaudeCodeProvider(CapabilityProvider):
     - ``claude_cli`` — the host ``claude`` CLI resolved via the login-shell PATH
       (:func:`probe_command`). Present → an ``agent-config`` entry carrying the resolved path
       and ``--version`` detail; absent → ``report.absent("claude not on login PATH")``.
-    - ``agent_mlx_whisper`` — the mlx-whisper the agent's interpreter can import
-      (:func:`probe_mlx_whisper`), reframed to ``agent-config`` when present.
-
     The provider only relabels provenance; it issues no new subprocess of its own (T-03-05).
     """
 
@@ -91,10 +88,19 @@ class ClaudeCodeProvider(CapabilityProvider):
         else:
             caps["claude_cli"] = _as_agent_config(claude)
 
-        # The agent's whisper view — mlx-whisper importability, reframed agent-config when present.
-        caps["agent_mlx_whisper"] = _as_agent_config(probe_mlx_whisper())
-
         return caps
+
+
+class HermesProvider(CapabilityProvider):
+    """Provider for the Hermes Agent that owns Yulu's AI workflows."""
+
+    agent_name = "hermes"
+
+    def capabilities(self) -> dict[str, Capability]:
+        hermes = probe_command("hermes", ("--version",))
+        if hermes.status is Status.ABSENT:
+            return {"hermes_cli": report.absent("hermes not on login PATH")}
+        return {"hermes_cli": _as_agent_config(hermes)}
 
 
 class CodexProvider(CapabilityProvider):
@@ -107,13 +113,7 @@ class CodexProvider(CapabilityProvider):
     - ``codex_cli`` — the host ``codex`` CLI resolved via the login-shell PATH
       (:func:`probe_command`). Present → an ``agent-config`` entry carrying the resolved path
       and ``--version`` detail; absent → ``report.absent("codex not on login PATH")``.
-    - ``codex_mlx_whisper`` — the mlx-whisper the agent's interpreter can import
-      (:func:`probe_mlx_whisper`), reframed to ``agent-config`` when present.
-
-    The mlx-whisper key is **namespaced by** :attr:`agent_name` (``codex_mlx_whisper``, NOT the
-    bare ``agent_mlx_whisper`` that :class:`ClaudeCodeProvider` emits) so the doctor fold's
-    last-writer-wins merge (``doctor.py:271-272``) never clobbers one agent's mlx-whisper
-    finding with another's (T-08-01). Codex is a real configured agent (``codex_llm.py`` shim).
+    Codex is a real configured agent selected through the shared Agent seam.
     """
 
     agent_name = "codex"
@@ -128,9 +128,6 @@ class CodexProvider(CapabilityProvider):
         else:
             caps["codex_cli"] = _as_agent_config(codex)
 
-        # The agent's whisper view — namespaced key (T-08-01) so three agents never collide.
-        caps["codex_mlx_whisper"] = _as_agent_config(probe_mlx_whisper())
-
         return caps
 
 
@@ -142,9 +139,6 @@ class OpenClawProvider(CapabilityProvider):
     - ``openclaw_cli`` — the host ``openclaw`` CLI resolved via the login-shell PATH
       (:func:`probe_command`). Present → an ``agent-config`` entry; absent →
       ``report.absent("openclaw not on login PATH")``.
-    - ``openclaw_mlx_whisper`` — mlx-whisper importability (:func:`probe_mlx_whisper`),
-      reframed to ``agent-config`` when present, under a key **namespaced by** :attr:`agent_name`.
-
     The probed binary name is ``openclaw``; if the OpenClaw CLI is named differently on a given
     host, the login-PATH probe simply returns ``absent`` and the entry degrades safely — the
     CONTRACT (a present CLI relabels to agent-config; an absent one degrades) is what this phase
@@ -163,27 +157,23 @@ class OpenClawProvider(CapabilityProvider):
         else:
             caps["openclaw_cli"] = _as_agent_config(openclaw)
 
-        # The agent's whisper view — namespaced key (T-08-01) so three agents never collide.
-        caps["openclaw_mlx_whisper"] = _as_agent_config(probe_mlx_whisper())
-
         return caps
 
 
 def default_providers() -> list[CapabilityProvider]:
     """The registered providers Yulu queries today — the single Phase-8 extension point.
 
-    Returns all three v1 agents: :class:`ClaudeCodeProvider`, :class:`CodexProvider`, and
-    :class:`OpenClawProvider`. Phase 8 added Codex/OpenClaw as *pure addition* — two new
-    subclass instances appended here, with NO edits to ``report.py``, ``probes.py``, or
-    ``doctor.py``. Plan 03's doctor wiring iterates this list to fold each provider's
-    contributed entries into the ``host_capabilities`` section; the new providers namespace
-    their mlx-whisper key by ``agent_name`` so all three agents aggregate without collision.
+    Returns Hermes plus the three coding-agent providers: :class:`ClaudeCodeProvider`,
+    :class:`CodexProvider`, and :class:`OpenClawProvider`. Each is a drop-in
+    subclass registered here. Doctor iterates this list to fold each provider's
+    contributed CLI entries into the ``host_capabilities`` section.
     """
-    return [ClaudeCodeProvider(), CodexProvider(), OpenClawProvider()]
+    return [HermesProvider(), ClaudeCodeProvider(), CodexProvider(), OpenClawProvider()]
 
 
 __all__ = [
     "CapabilityProvider",
+    "HermesProvider",
     "ClaudeCodeProvider",
     "CodexProvider",
     "OpenClawProvider",

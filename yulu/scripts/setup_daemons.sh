@@ -48,12 +48,52 @@ setup_daemons() {
 
     local plist_dir="$SCRIPT_DIR"
 
+    # Retired executors must be removed on upgrade so they cannot race the Host
+    # task store or duplicate Agent-owned transcription work.
+    local obsolete label
+    local retire_failed=false
+    local launch_domain
+    launch_domain="gui/$(id -u)"
+    for obsolete in com.yulu.agentqueue.plist com.yulu.sttdaemon.plist; do
+        label="${obsolete%.plist}"
+        # Boot out by service label first: the job can remain loaded even when
+        # its plist was already deleted. Keep unload/remove as compatibility
+        # fallbacks for older launchctl behavior.
+        launchctl bootout "$launch_domain/$label" 2>/dev/null || true
+        if [[ -f "$LAUNCH_AGENTS_DIR/$obsolete" ]]; then
+            launchctl unload "$LAUNCH_AGENTS_DIR/$obsolete" 2>/dev/null || true
+        fi
+        launchctl remove "$label" 2>/dev/null || true
+        rm -f "$LAUNCH_AGENTS_DIR/$obsolete"
+        ok "legacy $label 已请求卸载"
+    done
+    pkill -f "agent_queue_worker.py" 2>/dev/null || true
+    pkill -f "stt_daemon" 2>/dev/null || true
+    for obsolete in com.yulu.agentqueue.plist com.yulu.sttdaemon.plist; do
+        label="${obsolete%.plist}"
+        if launchctl print "$launch_domain/$label" >/dev/null 2>&1; then
+            err "legacy $label 仍处于加载状态，停止安装以避免重复执行"
+            retire_failed=true
+        fi
+    done
+    [[ "$retire_failed" == false ]] || return 1
+    rm -f \
+        "$CONFIG_DIR/stt_daemon.sock" \
+        "$CONFIG_DIR/stt_daemon.pid" \
+        "$CONFIG_DIR/dictation/realtime.pid"
+
     # Yulu.app (native system audio + mic capture). install_plist leaves any
     # tokens it doesn't recognize in this plist untouched (§8b not regressed).
     if [[ -f "$plist_dir/com.yulu.audiodaemon.plist" ]]; then
-        install_plist "$plist_dir/com.yulu.audiodaemon.plist" "com.yulu.audiodaemon.plist"
-        launchctl load "$LAUNCH_AGENTS_DIR/com.yulu.audiodaemon.plist" 2>/dev/null || true
+        install_plist "$plist_dir/com.yulu.audiodaemon.plist" "com.yulu.audiodaemon.plist" || return 1
+        if ! launchctl load "$LAUNCH_AGENTS_DIR/com.yulu.audiodaemon.plist" 2>/dev/null; then
+            err "audiodaemon LaunchAgent 加载失败"
+            return 1
+        fi
         ok "audiodaemon 已加载"
+    else
+        err "com.yulu.audiodaemon.plist 缺失"
+        return 1
     fi
 
     # Status agent: menu-bar recording indicator + Start Recording item.
@@ -77,46 +117,28 @@ setup_daemons() {
         ok "detector 已加载"
     fi
 
-    # Agent queue worker: promptly handles summary_request events via llm.command.
-    if [[ -f "$plist_dir/com.yulu.agentqueue.plist" ]]; then
-        install_plist "$plist_dir/com.yulu.agentqueue.plist" "com.yulu.agentqueue.plist"
-        launchctl load "$LAUNCH_AGENTS_DIR/com.yulu.agentqueue.plist" 2>/dev/null || true
-        ok "agentqueue 已加载"
+    # Vocab and prompt data are deterministic context inputs for Agent-owned
+    # dictation; search remains the local recording index. None require an STT
+    # daemon, so seed them independently.
+    info "种子词表 vocab.sqlite..."
+    if PYTHONPATH="$SCRIPT_DIR" "$PYTHON_BIN" -m vocab.cli seed --from-current >/dev/null 2>&1; then
+        ok "vocab seed 完成"
+    else
+        warn "vocab seed 失败（可稍后重试: yulu vocab seed --from-current）"
     fi
 
-    # STT daemon: resident mlx-whisper service + vocab cache.
-    if [[ -f "$plist_dir/com.yulu.sttdaemon.plist" ]]; then
-        mkdir -p "$CONFIG_DIR/logs"
-        install_plist "$plist_dir/com.yulu.sttdaemon.plist" "com.yulu.sttdaemon.plist"
-        launchctl load "$LAUNCH_AGENTS_DIR/com.yulu.sttdaemon.plist" 2>/dev/null || true
-        ok "sttdaemon 已加载"
+    info "种子 prompts.sqlite..."
+    if PYTHONPATH="$SCRIPT_DIR" "$PYTHON_BIN" -m prompts.cli seed --from-current >/dev/null 2>&1; then
+        ok "prompts seed 完成"
+    else
+        warn "prompts seed 失败（可稍后重试: yulu prompts seed --from-current）"
+    fi
 
-        # Seed vocab.sqlite from frozen snapshots (idempotent). Explicit if/else
-        # (not A && B || C) so a future failing `ok` can't trigger the warn branch
-        # — same behavior as the monolith, shellcheck SC2015-clean.
-        info "种子词表 vocab.sqlite..."
-        if PYTHONPATH="$SCRIPT_DIR" "$PYTHON_BIN" -m vocab.cli seed --from-current >/dev/null 2>&1; then
-            ok "vocab seed 完成"
-        else
-            warn "vocab seed 失败（可稍后重试: yulu vocab seed --from-current）"
-        fi
-
-        # Seed prompts.sqlite from frozen snapshots (idempotent).
-        info "种子 prompts.sqlite..."
-        if PYTHONPATH="$SCRIPT_DIR" "$PYTHON_BIN" -m prompts.cli seed --from-current >/dev/null 2>&1; then
-            ok "prompts seed 完成"
-        else
-            warn "prompts seed 失败（可稍后重试: yulu prompts seed --from-current）"
-        fi
-
-        # Bootstrap search.sqlite schema (idempotent). First `yulu search`
-        # call will run a full sweep over ~/Movies/Yulu to populate it.
-        info "初始化 search.sqlite..."
-        if PYTHONPATH="$SCRIPT_DIR" "$PYTHON_BIN" -m search.indexer init >/dev/null 2>&1; then
-            ok "search index 初始化完成（首次 yulu search 会全量索引）"
-        else
-            warn "search index 初始化失败（可稍后重试: yulu search --reindex）"
-        fi
+    info "初始化 search.sqlite..."
+    if PYTHONPATH="$SCRIPT_DIR" "$PYTHON_BIN" -m search.indexer init >/dev/null 2>&1; then
+        ok "search index 初始化完成（首次 yulu search 会全量索引）"
+    else
+        warn "search index 初始化失败（可稍后重试: yulu search --reindex）"
     fi
 
     # Calendar service (optional, only if gog configured). The interactive

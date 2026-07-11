@@ -9,8 +9,7 @@ import type { SettingsRestartTracker } from "./useSettingsRestartTracker.js";
 
 /**
  * Prefix match a config key against the registry, longest-prefix wins — mirrors
- * the server's `defFor` so a sub-field key like `transcription.mlx.model`
- * resolves to its parent `transcription.mlx` definition (and its reload class).
+ * the server's `defFor` for grouped settings such as status-agent hotkeys.
  */
 function defFor(schema: SettingMeta[] | undefined, key: string): SettingMeta | undefined {
   if (!schema) return undefined;
@@ -142,11 +141,8 @@ export function useConfigField(tracker: SettingsRestartTracker): ConfigFieldApi 
     if (isBlocked(key)) return undefined;            // guard: drop the edit
     const def = defFor(schema, key);
     const suppressRestart = opts?.suppressRestart ?? false;
-    // Danger-flagged fields (e.g. audio.output_dir, audio.backend,
-    // transcription.local_model_path / .mlx) ask for an explicit confirm before
-    // persisting — the same honest opt-in as the cloud-folder warning, but
-    // generic. A decline drops the edit silently (no commit, no toast). NON-danger
-    // fields keep the original synchronous path untouched (no regression).
+    // Danger-flagged fields ask for an explicit confirm before persisting. A
+    // decline drops the edit silently (no commit, no toast).
     if (def?.danger) {
       return confirm(def.label ?? key).then((ok) => {
         if (!ok) return undefined;

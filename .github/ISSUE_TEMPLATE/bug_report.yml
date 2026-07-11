@@ -6,7 +6,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        Thanks for taking the time to file a bug. Yulu runs entirely on your machine and depends heavily on macOS permissions, audio routing, and local model files — please fill in the environment fields below, otherwise we'll just have to ask anyway.
+        Thanks for taking the time to file a bug. Yulu's native capture and Host run locally and depend on macOS permissions, audio routing, and a compatible Hermes Agent. Please fill in the environment fields below and redact recordings, transcripts, tokens, and connector data.
 
   - type: textarea
     id: what-happened
@@ -51,7 +51,7 @@ body:
     attributes:
       label: Yulu version / commit
       description: Output of `yulu version`, or `python3 yulu/scripts/version.py --json` from your clone.
-      placeholder: "Yulu 0.5.0-dev (17c49f5, dirty)"
+      placeholder: "Yulu 0.18.0 (17c49f5, v0.18.0)"
     validations:
       required: true
 
@@ -60,9 +60,10 @@ body:
     attributes:
       label: How did you install?
       options:
-        - "Cloned the repo and ran `bash yulu/scripts/setup.sh`"
-        - "Cloned the repo, ran setup.sh, then customized config"
-        - "Manual install (no setup.sh)"
+        - "Official GitHub Release / one-line installer"
+        - "Development checkout via `make dev-install`"
+        - "Development checkout with customized config"
+        - "Manual install without the supported installer"
         - "Other (describe below)"
     validations:
       required: true
@@ -71,7 +72,7 @@ body:
     id: audiodaemon
     attributes:
       label: Yulu.app code-signing identity
-      description: Run `codesign -dv yulu/scripts/Yulu.app 2>&1 | grep Authority` and pick the first result.
+      description: Run `codesign -dv ~/.yulu/yulu/scripts/Yulu.app 2>&1 | grep Authority` (or use the equivalent path in a dev checkout) and pick the first result.
       options:
         - "Developer ID Application"
         - "Apple Development"
@@ -86,10 +87,10 @@ body:
       label: Relevant logs
       description: |
         Paste the last ~30 lines of whichever logs are relevant. Common ones:
-        - `~/Library/Logs/yulu/meeting_daemon.log`
-        - `~/Library/Logs/yulu/audio_daemon.log`
-        - `~/Library/Logs/yulu/scheduler.log`
-        - `tail -f` whatever was running when the bug happened
+        - `~/.config/yulu/ui.log`
+        - `~/.config/yulu/audio_daemon.log`
+        - `~/.config/yulu/scheduler.log`
+        - `~/.config/yulu/status_agent.log`
         Redact any meeting titles or attendee names you don't want public.
       render: shell
 
@@ -100,5 +101,5 @@ body:
       description: |
         Optional. Things that often matter:
         - Are you using BlackHole or a multi-output device? (Yulu is built to NOT need either.)
-        - Is whisper.cpp's `whisper-cli` on your PATH? Which model file?
-        - Which agent picks up `agent-queue.json` (Claude Code, Codex, OpenClaw, custom)?
+        - Which Hermes version is installed, and does `yulu doctor --json` report its required CLI contract as healthy?
+        - What Host task ID/state is shown? For `delivery_unverified`, did you confirm or abandon the existing Notion result?

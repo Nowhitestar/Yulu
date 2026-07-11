@@ -7,7 +7,7 @@ modules — ``registry`` (the steps), ``state`` (the kill-at-step-N ledger), and
 These tests prove the load-bearing properties WITHOUT a real agent or a real
 install (every step.apply / gate is monkeypatched):
 
-  (1) ``--list`` prints all six registry step names;
+  (1) ``--list`` prints all four registry step names;
   (2) ``provision <unknown>`` errors and lists the valid step names (an untrusted
       step name never executes an arbitrary path — T-06-16);
   (3) GATE-BEFORE-APPLY (T-06-15, the spike's headline control): ``provision --all
@@ -18,7 +18,7 @@ install (every step.apply / gate is monkeypatched):
       Q1/Pitfall 5) and walks the registry, marking each step in a tmp ledger
       with running-before-apply / result-after (the resume contract);
   (5) ``--all`` resumes — a ledger with deps+audio already ``ok`` re-applies only
-      the remaining four steps (no ok step is re-run);
+      the remaining two steps (no ok step is re-run);
   (6) a single ``provision <step>`` dispatches to exactly that named step.
 
 Import style mirrors test_provision_registry.py / test_provision_resume.py:
@@ -45,7 +45,7 @@ from provision import registry as registry_mod  # noqa: E402
 STEP_NAMES = [s.name for s in REGISTRY]
 
 
-# ── (1) --list prints the six step names ─────────────────────────────
+# ── (1) --list prints the four step names ────────────────────────────
 
 
 def test_list_prints_all_step_names(capsys):
@@ -175,7 +175,7 @@ def test_all_resumes_skipping_already_ok_steps(tmp_path, monkeypatch):
     code = cli.main(["provision", "--all", "--ledger", str(ledger)])
     assert code == 0
     # deps + audio were skipped (already ok); only the rest re-applied.
-    assert applied == ["models", "capabilities", "daemons", "ui"]
+    assert applied == ["daemons", "ui"]
     # The installer source survived the walk (Pitfall 3).
     assert json.loads(ledger.read_text())["source"] == "release"
 
@@ -188,7 +188,7 @@ def test_all_stops_and_records_error_for_resume(tmp_path, monkeypatch):
 
     def _fake_apply(self, _mode):
         applied.append(self.name)
-        if self.name == "models":
+        if self.name == "daemons":
             return StepResult(self.name, "error", "boom")
         return StepResult(self.name, "ok", "")
 
@@ -196,11 +196,11 @@ def test_all_stops_and_records_error_for_resume(tmp_path, monkeypatch):
 
     code = cli.main(["provision", "--all", "--ledger", str(ledger)])
     assert code != 0  # an errored step makes the walk fail
-    # Walk stopped at models — capabilities/daemons/ui never ran.
-    assert applied == ["deps", "audio", "models"]
+    # Walk stopped at daemons — UI never ran.
+    assert applied == ["deps", "audio", "daemons"]
     doc = json.loads(ledger.read_text())
-    assert doc["steps"]["models"]["status"] == "error"
-    assert "capabilities" not in doc["steps"]
+    assert doc["steps"]["daemons"]["status"] == "error"
+    assert "ui" not in doc["steps"]
 
 
 # ── (6) a single named step dispatches to exactly that step ──────────
@@ -220,6 +220,25 @@ def test_single_step_dispatch_runs_only_that_step(tmp_path, monkeypatch):
     assert code == 0
     assert applied == ["audio"]  # only the named step ran
     assert json.loads(ledger.read_text())["steps"]["audio"]["status"] == "ok"
+
+
+def test_force_single_step_bypasses_probe_and_records_fresh_result(tmp_path, monkeypatch):
+    ledger = tmp_path / ".yulu-install.json"
+    ledger.write_text(
+        json.dumps({"steps": {"daemons": {"status": "ok", "ts": "old"}}}) + "\n",
+        encoding="utf-8",
+    )
+    calls: list[tuple[str, bool]] = []
+
+    def _fake_apply(self, _mode, *, force=False):
+        calls.append((self.name, force))
+        return StepResult(self.name, "ok", "refreshed")
+
+    monkeypatch.setattr(registry_mod.ScriptStep, "apply", _fake_apply)
+    code = cli.main(["provision", "daemons", "--force", "--ledger", str(ledger)])
+    assert code == 0
+    assert calls == [("daemons", True)]
+    assert json.loads(ledger.read_text())["steps"]["daemons"]["detail"] == "refreshed"
 
 
 # ── skill install dispatches through the cli to skill_install ────────

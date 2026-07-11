@@ -1,131 +1,254 @@
 # Configuration Reference
 
-Yulu's configuration lives at `~/.config/yulu/config.json`. The file is created by `setup.sh` and is not part of the repository.
+Yulu reads active configuration from `~/.config/yulu/config.json`. The installer
+creates it with private per-user defaults. The file contains product preferences,
+paths, and Agent selection only; it must not contain Agent or connector secrets.
 
-## Full schema
+The current schema reflects the Agent-native architecture: Yulu has no speech
+provider, model, summary runtime, or connector-execution setting.
+
+## Representative configuration
 
 ```json
 {
   "audio": {
     "backend": "daemon",
-    "output_dir": "/path/to/Yulu/meeting-recordings",
+    "output_dir": "~/Movies/Yulu",
+    "mic_device": "",
     "silence_threshold": 0.01,
     "silence_duration_sec": 300,
-    "half_duplex": true,
-    "mic_device": null,
-    "system_audio_device": null
+    "half_duplex": true
   },
   "transcription": {
-    "mode": "local",
-    "post_recording_mode": "fast_summary",
-    "final_engine": "mlx",
-    "mlx": {
-      "python": "~/.config/yulu/venv-mlx-whisper/bin/python",
-      "model": "mlx-community/whisper-large-v3-mlx"
-    },
-    "realtime": {
-      "engine": "mlx",
-      "mlx_model": "mlx-community/whisper-large-v3-mlx",
-      "chunk_sec": 60
-    },
-    "whisper_cli": "whisper-cli",
-    "local_model_path": "~/.config/yulu/models/ggml-large-v3.bin",
     "language": "zh",
-    "command": null
+    "dictation": {
+      "prompt_slug": "dictation-cleanup",
+      "translate_prompt_slug": "dictation-translate",
+      "target_language": "English",
+      "context_limit": 240,
+      "deadline_sec": 30,
+      "timeout_sec": 30,
+      "translate_deadline_sec": 30,
+      "translate_timeout_sec": 30
+    }
+  },
+  "agent_pipeline": {
+    "enabled": true,
+    "auto_process_recordings": true,
+    "auto_send_notion": false,
+    "notion_destination": "Yulu Meeting",
+    "hermes_serve_port": 0,
+    "transcription_chunk_sec": 1200
   },
   "llm": {
     "enabled": true,
-    "command": null
+    "command": null,
+    "agent": {
+      "provider": "hermes"
+    }
   },
-  "output": {
-    "channel": "file"
+  "agent_console": {
+    "plugins": {
+      "added": ["summary"]
+    },
+    "destinations": {
+      "hermes": {
+        "notion": {
+          "target": "Yulu Meeting"
+        }
+      }
+    }
   },
+  "status_agent": {
+    "enabled": true,
+    "hotkeys": {
+      "dictate": { "key": "Space", "modifiers": ["ctrl", "alt"] },
+      "translate": {
+        "key": "T",
+        "modifiers": ["ctrl", "alt"],
+        "target_language": "English"
+      },
+      "voice_chat": { "key": "A", "modifiers": ["ctrl", "alt"] }
+    }
+  },
+  "calendars": [
+    {
+      "type": "macos",
+      "enabled": true,
+      "watch_calendars": []
+    }
+  ],
   "meeting_detection": {
     "enabled": true,
     "interval_sec": 10,
     "stable_sec": 15,
     "prompt_cooldown_sec": 1800
   },
-  "calendars": []
+  "ui": {
+    "theme": {
+      "family": "default",
+      "mode": "auto",
+      "custom": {
+        "light": {},
+        "dark": {}
+      }
+    }
+  }
 }
 ```
 
-## Sections
+Unknown keys are generally preserved for forward compatibility, but retired
+runtime keys are archived and removed on Host startup.
 
-### `audio`
+## `audio`
 
-| Field | Default | Notes |
-|---|---|---|
-| `backend` | `"daemon"` | `"daemon"` (recommended, ScreenCaptureKit) or `"sox"` (legacy fallback) |
-| `output_dir` | repo path | Where WAVs are written. Git-ignored if it stays inside the repo |
-| `silence_threshold` | `0.01` | RMS threshold below which system audio is considered silent |
-| `silence_duration_sec` | `300` | Auto-stop recording after this many seconds of pure silence |
-| `half_duplex` | `true` | Crossfade to microphone during system silence |
-| `mic_device`, `system_audio_device` | `null` | Only used by the SoX fallback. Ignore for the daemon backend |
+| Field | Installer value | Meaning |
+|---|---:|---|
+| `backend` | `"daemon"` | Native `Yulu.app` capture. This is the supported product path. |
+| `output_dir` | `~/Movies/Yulu` | Recording content root. The Host accepts completed recordings only from this root. |
+| `mic_device` | `""` | Optional native microphone selection. Empty uses the current default. |
+| `silence_threshold` | `0.01` | System-audio silence threshold used by capture behavior. |
+| `silence_duration_sec` | `300` | Auto-stop threshold for prolonged silence. |
+| `half_duplex` | `true` | Prefer system audio while others speak and microphone during system silence. |
 
-### `transcription`
+Native permission state is not configuration. `Yulu.app` must be allowed under
+Microphone and Screen & System Audio Recording in macOS Settings.
 
-| Field | Default | Notes |
-|---|---|---|
-| `mode` | `"local"` | Reserved for future cloud adapters |
-| `post_recording_mode` | `"fast_summary"` | `"fast_summary"` uses the realtime transcript generated during the meeting, then polish + summary. `"full_transcribe"` reruns the final engine on the full WAV before summarizing |
-| `final_engine` | `"mlx"` on Apple Silicon, `"whisper"` as non-MLX fallback | `"mlx"` uses `mlx-whisper`; `"whisper"` uses whisper.cpp |
-| `mlx.python` | `~/.config/yulu/venv-mlx-whisper/bin/python` | Python executable with `mlx-whisper` installed |
-| `mlx.model` | `mlx-community/whisper-large-v3-mlx` | Best-quality MLX model. Use `mlx-community/whisper-large-v3-turbo` when speed matters more |
-| `realtime.engine` | same as `final_engine` | Engine for chunked realtime transcription. This transcript is used by `fast_summary` |
-| `realtime.chunk_sec` | `60` | Chunk size for realtime-ish transcription |
-| `whisper_cli` | `"whisper-cli"` | Path or name of the whisper.cpp binary |
-| `local_model_path` | `~/.config/yulu/models/ggml-large-v3.bin` | whisper.cpp model file. `large-v3` is best quality; `large-v3-q5_0` is smaller/faster |
-| `language` | `"zh"` | Whisper language code; use `"auto"` for detection |
-| `command` | `null` | Optional override. A list of argv tokens with `{{input}}` and `{{output_stem}}` placeholders |
+## `agent_pipeline`
 
-Switch at runtime:
+This section controls durable recording work, not an AI implementation.
+
+| Field | Default | Meaning |
+|---|---:|---|
+| `enabled` | `true` | Master switch for recording intelligence. When false, all durable work pauses in `awaiting_policy`, manual processing is rejected, and on-demand Hermes transcription is unavailable. |
+| `auto_process_recordings` | `true` | Accept completed recordings and dispatch automatic tasks. When false, recordings remain saved, automatic work pauses, and explicit manual processing stays available. |
+| `auto_send_notion` | `false` | Add explicit Notion authorization to automatically created recording tasks. |
+| `notion_destination` | `"Yulu Meeting"` | Human-readable destination hint passed to Hermes. It is not a credential or database secret. |
+| `hermes_serve_port` | `0` | Loopback Hermes service port; `0` requests an OS-assigned free port. |
+| `transcription_chunk_sec` | `1200` | Audio segment duration prepared for Hermes, constrained to 60–3600 seconds. |
+
+Setting `auto_send_notion=true` is a real side-effect opt-in. The Host will allow
+Hermes to begin delivery only after transcript and summary artifacts have been
+committed together.
+
+The switches have deliberately different scope. `enabled=false` is the global
+fail-closed boundary: all dispatchable work moves to `awaiting_policy`, manual
+processing is rejected, and on-demand Hermes dictation/transcription reports
+unavailable. `auto_process_recordings=false` pauses only automatic intake and
+automatic dispatch. Explicit manual reprocessing and on-demand dictation remain
+available; choosing a manual action for an automatic `awaiting_policy` task
+promotes that same durable task instead of creating a duplicate.
+
+## `transcription`
+
+Yulu no longer selects or runs a speech engine. Hermes owns that choice. The
+remaining section carries language and dictation interaction context.
+
+| Field | Installer value | Meaning |
+|---|---:|---|
+| `language` | `"zh"` | Requested/source language metadata supplied around the Agent-owned flow. |
+| `dictation.prompt_slug` | `"dictation-cleanup"` | Local prompt selected for normal dictation cleanup. |
+| `dictation.translate_prompt_slug` | `"dictation-translate"` | Local prompt selected for quick translation. |
+| `dictation.target_language` | `"English"` | Default translation target. |
+| `dictation.context_limit` | `240` | Maximum local prompt/glossary context characters. |
+| `dictation.deadline_sec` | `30` | End-to-end post-capture budget used by installed shortcuts. |
+| `dictation.timeout_sec` | `30` | Host/Agent request budget used by installed shortcuts. |
+| `dictation.translate_deadline_sec` | `30` | Translation-specific deadline override. |
+| `dictation.translate_timeout_sec` | `30` | Translation-specific request override. |
+
+The Host accepts on-demand audio only from the configured recordings directory
+or `~/.config/yulu/dictation`, and only as a valid absolute WAV path.
+
+## `llm` and Agent Console
+
+`llm` selects the **general Agent** used for interactive Agent Console work.
+Recording processing remains pinned to Hermes.
+
+| Field | Default | Meaning |
+|---|---:|---|
+| `enabled` | `true` | Enable the general Agent used by interactive conversations. This does not disable Hermes recording or dictation. |
+| `command` | `null` | Optional explicit general-Agent argv. No shell interpolation is performed. |
+| `agent.provider` | `"auto"` in schema; installer chooses `"hermes"` | `auto`, `codex`, `claude`, `claude-code`, `hermes`, `openclaw`, `gemini`, `grok`, or `custom`. Gemini, Grok, and custom providers currently require an explicit `command`. |
+
+When `provider=auto`, the general runtime detects supported CLIs in its current
+priority order. This does not change the recording provider: automatic recording
+and dictation still require a usable Hermes CLI. If Hermes is unavailable, a
+recording task waits in `awaiting_agent`; it does not fall back to the general
+Agent.
+
+To stop recording intelligence and any configured Hermes speech provider, set
+`agent_pipeline.enabled=false`. `llm.enabled=false` only disables general
+conversation work.
+
+`agent_console.plugins.added` is a presentation filter for capabilities shown in
+Agent Console. `agent_console.destinations` stores human-readable destination
+hints. Credentials, OAuth state, connector tools, and actual connection settings
+belong to the Agent. For a durable recording delivery,
+`agent_pipeline.notion_destination` is the authoritative destination hint;
+`agent_console.destinations` must not independently trigger delivery.
+
+## `status_agent`
+
+The menu-bar Agent exposes recording state and global shortcuts. Hotkey modifiers
+are `cmd`, `shift`, `alt`, and `ctrl`. The default shortcuts are:
+
+- `ctrl+alt+Space`: dictation;
+- `ctrl+alt+T`: translation;
+- `ctrl+alt+A`: voice question into Agent Console.
+
+Use `yulu status-agent hotkeys` to inspect the effective values.
+
+## Calendars and meeting detection
+
+Calendar/window detection exists only to decide when to offer native capture. It
+is not the connector surface used by Agent Console.
+
+The recommended calendar source is `type: "macos"`, which reuses calendars
+already visible in macOS Calendar. `watch_calendars` may be empty for all visible
+calendars or contain explicit names. `meeting_detection` controls window polling,
+stability, and cooldown for recording prompts.
+
+Interactive calendar reasoning and other connector actions belong to the selected
+general Agent.
+
+## Themes
+
+`ui.theme.family` is `default`, `ayu`, `paper`, or `custom`.
+`ui.theme.mode` is `auto`, `light`, or `dark`. Custom light/dark token maps are
+optional and may override wallpaper, surfaces, edges, text, muted text, accent,
+and semantic colors.
+
+## Automatic migration of retired settings
+
+When the Host opens the config, it performs one-way, auditable retirement:
+
+- old inference settings are copied to
+  `config.legacy-transcription.<timestamp>.json` and removed from the active
+  `transcription` object;
+- old Yulu-owned external-delivery settings are copied to
+  `config.legacy-connectors.<timestamp>.json`; destination hints and explicit
+  Notion opt-in are projected into the Agent-native fields before the active
+  blocks are removed;
+- archives are written with mode `0600` and are not active runtime inputs.
+
+The settings API rejects attempts to write a retired inference field. Do not copy
+archived keys back into `config.json`.
+
+## Validation and safety
+
+Validate syntax without exposing the file contents:
 
 ```bash
-yulu transcription mode fast
-yulu transcription mode full
-yulu transcription engine mlx mlx-community/whisper-large-v3-mlx
-yulu transcription engine mlx mlx-community/whisper-large-v3-turbo
-yulu transcription engine whisper ~/.config/yulu/models/ggml-large-v3.bin
+python3 -m json.tool ~/.config/yulu/config.json >/dev/null
+yulu doctor --json
 ```
 
-### `llm`
+Operational guidance:
 
-| Field | Default | Notes |
-|---|---|---|
-| `enabled` | `true` | If `false`, the local fallback summary is final and no `summary_request` is queued |
-| `command` | `null` | Optional CLI to call directly. Receives the prompt on stdin, writes Markdown to stdout. Example: `["claude", "--print", "--model", "claude-opus-4-7"]`. If `null`, summarization is queued for an external agent |
-
-### `output`
-
-| Field | Default | Notes |
-|---|---|---|
-| `channel` | `"file"` | One of `"file"`, `"telegram"`, `"zulip"`, `"notion"`. Non-file outputs are experimental and must be configured manually; setup does not install their optional dependencies. `telegram` requires `TELEGRAM_BOT_TOKEN`; `zulip` requires the `zulip` Python package and `~/.zuliprc`; `notion` requires `notion-client` and `NOTION_API_KEY` |
-
-### `meeting_detection`
-
-| Field | Default | Notes |
-|---|---|---|
-| `enabled` | `true` | Window-based detection daemon |
-| `interval_sec` | `10` | Polling interval |
-| `stable_sec` | `15` | Window must be present for this long before prompting |
-| `prompt_cooldown_sec` | `1800` | Re-prompt cooldown per meeting signature |
-
-### `calendars`
-
-Array of calendar adapters. Currently only Google is supported.
-
-```json
-{
-  "type": "google",
-  "enabled": true,
-  "gog_account": "your.email@example.com",
-  "watch_calendars": ["primary"]
-}
-```
-
-## Tips
-
-- Keep `config.json` out of git. The default `.gitignore` already blocks it.
-- If you change `local_model_path`, run a manual `transcribe.py` against an existing WAV to verify the new model works before relying on it during a meeting.
-- `llm.command` is a generic hatch — anything that reads stdin and writes Markdown works (`claude`, `codex`, `gpt`, `ollama run …`, your own shim). Leave it empty if you want a coding agent to pick up `agent-queue.json`.
+- Keep `config.json`, `mcp-token.json`, `host.sqlite`, and task workspaces out of
+  Git and cloud-sync folders.
+- Store Agent and connector credentials in the Agent's own credential store.
+- Prefer the Settings UI or Yulu commands for updates; the Host performs atomic
+  writes and rejects stale concurrent edits.
+- After changing Agent availability or pipeline settings, restart the Host with
+  `yulu restart` and verify `yulu doctor --json`.

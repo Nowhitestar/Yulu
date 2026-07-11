@@ -7,12 +7,12 @@ re-run (so no daemon is duplicated). The ledger contract that guarantees this is
 exercised here without a real agent: the "agent" is just a caller marking steps.
 
 These tests prove:
-  (1) kill-at-step-N — seed deps+audio "ok" and models "running" (the killed
-      step), assert is_done(deps)&&is_done(audio)&&!is_done(models), and assert
-      resume_order(...) == ["models","capabilities","daemons","ui"] (redo the
+  (1) kill-at-step-N — seed deps+audio "ok" and daemons "running" (the killed
+      step), assert is_done(deps)&&is_done(audio)&&!is_done(daemons), and assert
+      resume_order(...) == ["daemons","ui"] (redo the
       killed step + everything after it, NEVER an ok step);
   (2) a corrupt ledger starts fresh (resume_order returns ALL steps);
-  (3) Pitfall 3 across the resume path — after marking the killed "models" step
+  (3) Pitfall 3 across the resume path — after marking the killed "daemons" step
       "ok", the installer `source` field still survives.
 
 Source: RESEARCH §"Simulating kill-at-step-N resume in pytest" + Pattern 2 resume
@@ -31,7 +31,7 @@ if str(SCRIPTS) not in sys.path:
 import provision.state as state  # noqa: E402
 
 # The setup.sh step sequence the resume walk follows (registry order).
-STEP_NAMES = ["deps", "audio", "models", "capabilities", "daemons", "ui"]
+STEP_NAMES = ["deps", "audio", "daemons", "ui"]
 
 
 def _seed_installer_doc(ledger: Path, source: str = "release") -> None:
@@ -53,19 +53,19 @@ def test_resume_skips_done_reruns_killed_and_later(tmp_path):
     ledger = tmp_path / ".yulu-install.json"
     _seed_installer_doc(ledger)
 
-    # Simulate a run killed DURING step "models": deps+audio reached "ok", models
+    # Simulate a run killed DURING step "daemons": deps+audio reached "ok", daemons
     # was marked "running" before apply() and never reached "ok" (SIGKILL).
     state.mark(ledger, "deps", "ok")
     state.mark(ledger, "audio", "ok")
-    state.mark(ledger, "models", "running")  # killed here — never "ok"
+    state.mark(ledger, "daemons", "running")  # killed here — never "ok"
 
     assert state.is_done(ledger, "deps")
     assert state.is_done(ledger, "audio")
-    assert not state.is_done(ledger, "models")  # NOT ok → will be re-run
+    assert not state.is_done(ledger, "daemons")  # NOT ok → will be re-run
 
     # The resume walk re-runs the killed step + everything after it; the prior ok
-    # steps are skipped, and capabilities/daemons/ui (never reached) also run.
-    assert state.resume_order(STEP_NAMES, ledger) == ["models", "capabilities", "daemons", "ui"]
+    # steps are skipped, and daemons/ui (never reached) also run.
+    assert state.resume_order(STEP_NAMES, ledger) == ["daemons", "ui"]
 
 
 def test_resume_after_error_reruns_from_failed_step(tmp_path):
@@ -76,7 +76,7 @@ def test_resume_after_error_reruns_from_failed_step(tmp_path):
     state.mark(ledger, "deps", "ok")
     state.mark(ledger, "audio", "error", detail="brew failed")
     assert not state.is_done(ledger, "audio")
-    assert state.resume_order(STEP_NAMES, ledger) == ["audio", "models", "capabilities", "daemons", "ui"]
+    assert state.resume_order(STEP_NAMES, ledger) == ["audio", "daemons", "ui"]
 
 
 def test_resume_when_killed_before_first_mark(tmp_path):
@@ -114,9 +114,9 @@ def test_source_survives_completing_the_killed_step(tmp_path):
     _seed_installer_doc(ledger)
     state.mark(ledger, "deps", "ok")
     state.mark(ledger, "audio", "ok")
-    state.mark(ledger, "models", "running")  # killed
+    state.mark(ledger, "daemons", "running")  # killed
     # Resume completes the killed step.
-    state.mark(ledger, "models", "ok")
+    state.mark(ledger, "daemons", "ok")
 
     doc = state.load(ledger)
     # The installer source MUST still be intact after the resume path (Pitfall 3) —
@@ -124,9 +124,9 @@ def test_source_survives_completing_the_killed_step(tmp_path):
     assert doc["source"] == "release"
     assert doc["version"] == "0.5.1"
     assert doc["sha256"] == "abc123"
-    assert state.is_done(ledger, "models")
-    # And resume_order now advances past models.
-    assert state.resume_order(STEP_NAMES, ledger) == ["capabilities", "daemons", "ui"]
+    assert state.is_done(ledger, "daemons")
+    # And resume_order now advances past daemons.
+    assert state.resume_order(STEP_NAMES, ledger) == ["ui"]
 
 
 def test_dev_source_also_preserved(tmp_path):

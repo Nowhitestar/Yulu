@@ -81,3 +81,21 @@ def test_uninstall_help_documents_agent_safe_options():
     assert "--purge-backups" in text
     assert "PKG_RUNTIME_ROOT" in text
     assert "pkgutil --forget" in text
+
+
+def test_uninstall_removes_agent_mcp_before_self_deleting_pkg_runtime():
+    text = (ROOT / "yulu" / "scripts" / "uninstall.sh").read_text(encoding="utf-8")
+
+    assert text.index("-m provision.cli mcp remove") < text.index(
+        'remove_path "$PKG_RUNTIME_ROOT" "pkg runtime"'
+    )
+
+
+def test_uninstall_boots_out_known_jobs_even_when_plists_are_missing():
+    text = (ROOT / "yulu" / "scripts" / "uninstall.sh").read_text(encoding="utf-8")
+
+    assert 'launchctl bootout "$launch_domain/$label"' in text
+    assert "com.yulu.agentqueue" in text
+    assert "com.yulu.sttdaemon" in text
+    assert 'pkill -f "agent_queue_worker.py"' in text
+    assert 'pkill -f "stt_daemon"' in text

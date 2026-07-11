@@ -77,6 +77,7 @@ package:
 
 
 package-pkg:
+	@echo "NOTE: package-pkg is a local diagnostic artifact only; official releases publish the notarized runtime zip until a Developer ID Installer certificate is configured."
 	@if [ -z "$(TAG)" ]; then echo "Usage: make package-pkg TAG=vX.Y.Z"; exit 1; fi
 	bash packaging/scripts/package_pkg.sh "$(TAG)" $(PACKAGE_PKG_ARGS)
 

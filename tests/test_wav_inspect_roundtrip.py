@@ -9,7 +9,7 @@ from pathlib import Path
 SCRIPTS = Path(__file__).resolve().parents[1] / "yulu" / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-from stt_daemon.wav_inspect import WavLayout, classify
+from wav_inspect import WavLayout, classify
 
 
 def _swift_equivalent_header(audio_size: int) -> bytes:

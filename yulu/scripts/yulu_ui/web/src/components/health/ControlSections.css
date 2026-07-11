@@ -86,16 +86,23 @@
 }
 .control-pill[data-status="done"],
 .control-pill[data-status="running"],
+.control-pill[data-status="completed"],
 .control-pill[data-status="ok"] {
   color: var(--green);
 }
 .control-pill[data-status="error"],
 .control-pill[data-status="crashed"],
-.control-pill[data-status="failed"] {
+.control-pill[data-status="failed"],
+.control-pill[data-status="delivery_unverified"] {
   color: var(--red);
 }
 .control-pill[data-status="processing"],
 .control-pill[data-status="pending"],
+.control-pill[data-status="queued"],
+.control-pill[data-status="awaiting_agent"],
+.control-pill[data-status="artifacts_committed"],
+.control-pill[data-status="sending"],
+.control-pill[data-status="delivery_reported"],
 .control-pill[data-status="warn"] {
   color: var(--amber);
 }

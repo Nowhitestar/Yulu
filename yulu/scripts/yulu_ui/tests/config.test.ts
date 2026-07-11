@@ -1,8 +1,8 @@
 import { describe, it, expect, vi } from "vitest";
-import { ConfigManager } from "../src/config.js";
+import { ConfigManager, migrateLegacyTranscriptionConfig } from "../src/config.js";
 import * as fs from "node:fs";
 import { ZodError } from "zod";
-import { cpSync, mkdtempSync, rmSync, utimesSync, statSync, readFileSync } from "node:fs";
+import { cpSync, mkdtempSync, readdirSync, rmSync, utimesSync, statSync, readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -32,13 +32,18 @@ describe("ConfigManager", () => {
   it("read() tolerates a minimal/partial config (fills audio defaults, no throw)", () => {
     const dir = mkdtempSync(join(tmpdir(), "yulu_min_"));
     const path = join(dir, "config.json");
-    fs.writeFileSync(path, JSON.stringify({ audio: { output_dir: "~/Movies/Yulu" }, transcription: {} }));
+    fs.writeFileSync(path, JSON.stringify({ audio: { output_dir: "~/Movies/Yulu" } }));
     try {
       const cfg = new ConfigManager(path).read();
       expect(cfg.audio.silence_threshold).toBe(0.01);       // default
       expect(cfg.audio.silence_duration_sec).toBe(300);     // default
       expect(cfg.audio.output_dir).toBe("~/Movies/Yulu");
-      expect(cfg.transcription.diarization.threshold).toBe(0.6);
+      expect(cfg.transcription.language).toBe("zh");
+      expect(cfg.transcription.dictation.prompt_slug).toBe("dictation-cleanup");
+      expect(cfg.transcription.dictation.timeout_sec).toBe(30);
+      expect(cfg.transcription.dictation.deadline_sec).toBe(30);
+      expect(cfg.transcription.dictation.translate_timeout_sec).toBe(30);
+      expect(cfg.transcription.dictation.translate_deadline_sec).toBe(30);
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 
@@ -49,6 +54,109 @@ describe("ConfigManager", () => {
     try {
       const cfg = new ConfigManager(path).read();
       expect(cfg.status_agent.enabled).toBe(true);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it("archives and migrates retired Yulu connector configuration", () => {
+    const dir = mkdtempSync(join(tmpdir(), "yulu_connector_migration_"));
+    const path = join(dir, "config.json");
+    fs.writeFileSync(path, JSON.stringify({
+      audio: { output_dir: "~/Movies/Yulu" },
+      transcription: {},
+      connectors: {
+        notion: { send_summary: true, database_id: "notion-db" },
+        zulip: { stream: "legacy-stream", topic: "legacy-topic" },
+      },
+      output: { notion: { destination_label: "Meetings DB" } },
+    }));
+    try {
+      const cfg = new ConfigManager(path).read();
+      expect(cfg.agent_pipeline.auto_send_notion).toBe(true);
+      expect(cfg.agent_pipeline.notion_destination).toBe("Meetings DB");
+      expect(cfg.agent_console.destinations.hermes?.notion.target).toBe("Meetings DB");
+      const raw = JSON.parse(readFileSync(path, "utf8"));
+      expect(raw.output).toBeUndefined();
+      expect(raw.connectors.notion).toBeUndefined();
+      expect(raw.connectors.zulip).toBeUndefined();
+      const archives = readdirSync(dir).filter((name) => name.includes("legacy-connectors"));
+      expect(archives).toHaveLength(1);
+      expect(JSON.parse(readFileSync(join(dir, archives[0]!), "utf8"))).toMatchObject({
+        connectors: { notion: { database_id: "notion-db" } },
+      });
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it("preserves an explicit durable Notion destination during connector migration", () => {
+    const dir = mkdtempSync(join(tmpdir(), "yulu_connector_destination_"));
+    const path = join(dir, "config.json");
+    fs.writeFileSync(path, JSON.stringify({
+      audio: { output_dir: "~/Movies/Yulu" },
+      transcription: {},
+      agent_pipeline: { notion_destination: "Explicit target" },
+      connectors: { notion: { database_id: "legacy-db" } },
+    }));
+    try {
+      expect(new ConfigManager(path).read().agent_pipeline.notion_destination).toBe("Explicit target");
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it("archives retired local transcription settings before removing them from active config", () => {
+    const dir = mkdtempSync(join(tmpdir(), "yulu_transcription_migration_"));
+    const path = join(dir, "config.json");
+    fs.writeFileSync(path, JSON.stringify({
+      audio: { output_dir: "~/Movies/Yulu" },
+      transcription: {
+        language: "ja",
+        glossary: ["AgentKey"],
+        mode: "local",
+        post_recording_mode: "full_transcribe",
+        final_engine: "mlx",
+        local_model_path: "/models/legacy.bin",
+        whisper_cli: "whisper-cli",
+        mlx: { model: "legacy-mlx" },
+        hermes: { model: "legacy-hermes" },
+        realtime: { mlx_model: "legacy-realtime" },
+        diarization: { enabled: true },
+        command: ["legacy-stt"],
+        realtime_enabled: true,
+        dictation: {
+          engine: "whisper",
+          prompt_slug: "dictation-tight",
+          target_language: "English",
+          timeout_sec: 3,
+          deadline_sec: 45,
+          translate_timeout_sec: 2,
+          translate_deadline_sec: 3,
+        },
+      },
+    }));
+    try {
+      const migration = migrateLegacyTranscriptionConfig(path);
+      expect(migration.changed).toBe(true);
+      expect(migration.archivePath).toBeTruthy();
+      expect(statSync(migration.archivePath!).mode & 0o777).toBe(0o600);
+      const archive = JSON.parse(readFileSync(migration.archivePath!, "utf8"));
+      expect(archive.transcription).toMatchObject({
+        final_engine: "mlx",
+        local_model_path: "/models/legacy.bin",
+        hermes: { model: "legacy-hermes" },
+        dictation: { engine: "whisper", timeout_sec: 3, translate_timeout_sec: 2, translate_deadline_sec: 3 },
+      });
+
+      const active = JSON.parse(readFileSync(path, "utf8"));
+      expect(active.transcription).toEqual({
+        language: "ja",
+        glossary: ["AgentKey"],
+        dictation: {
+          prompt_slug: "dictation-tight",
+          target_language: "English",
+          timeout_sec: 30,
+          deadline_sec: 45,
+          translate_timeout_sec: 30,
+          translate_deadline_sec: 30,
+        },
+      });
+      expect(migrateLegacyTranscriptionConfig(path)).toEqual({ changed: false, archivePath: null });
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 
@@ -63,33 +171,23 @@ describe("ConfigManager", () => {
     } finally { cleanup(); }
   });
 
-  it("classifies SIGHUP-only changes (glossary)", () => {
-    const { mgr, cleanup } = makeCfg();
+  it("update() preserves restrictive config file permissions", () => {
+    const { path, mgr, cleanup } = makeCfg();
     try {
-      // glossary → sighup sttdaemon (VocabCache reload)
-      const r2 = mgr.update("transcription.glossary", ["NewTerm"]);
-      expect(r2.daemonsNeedingSighup).toEqual(["sttdaemon"]);
-      expect(r2.daemonsNeedingRestart).toEqual([]);
-
-      // llm.command → none (registry corrected: agentqueue re-reads each tick)
-      const r3 = mgr.update("llm.command", ["codex"]);
-      expect(r3.daemonsNeedingSighup).toEqual([]);
-      expect(r3.daemonsNeedingRestart).toEqual([]);
+      fs.chmodSync(path, 0o600);
+      mgr.update("audio.silence_threshold", 0.02);
+      expect(statSync(path).mode & 0o777).toBe(0o600);
     } finally { cleanup(); }
   });
 
-  it("classifies transcription.mode + transcription.cloud_command as sttdaemon restart (TRANS-01/02)", () => {
+  it("Agent-owned language and LLM settings apply without daemon reload", () => {
     const { mgr, cleanup } = makeCfg();
     try {
-      const rMode = mgr.update("transcription.mode", "cloud-fallback");
-      expect(rMode.daemonsNeedingRestart).toEqual(["sttdaemon"]);
-      expect(rMode.daemonsNeedingSighup).toEqual([]);
-      expect(mgr.read().transcription.mode).toBe("cloud-fallback");
-
-      const rCmd = mgr.update("transcription.cloud_command", ["my-cloud-stt", "--stdin"]);
-      expect(rCmd.daemonsNeedingRestart).toEqual(["sttdaemon"]);
-      expect(rCmd.daemonsNeedingSighup).toEqual([]);
-      expect(mgr.read().transcription.cloud_command).toEqual(["my-cloud-stt", "--stdin"]);
+      const language = mgr.update("transcription.language", "en");
+      expect(language).toEqual({ daemonsNeedingRestart: [], daemonsNeedingSighup: [] });
+      const r3 = mgr.update("llm.command", ["codex"]);
+      expect(r3.daemonsNeedingSighup).toEqual([]);
+      expect(r3.daemonsNeedingRestart).toEqual([]);
     } finally { cleanup(); }
   });
 
@@ -119,10 +217,10 @@ describe("atomic write", () => {
 });
 
 describe("registry-driven classify + per-field validation", () => {
-  it("language 改完返回 restart sttdaemon(注册表驱动)", () => {
+  it("language is an Agent input and needs no daemon reload", () => {
     const { mgr, cleanup } = makeCfg();
     try {
-      expect(mgr.update("transcription.language", "en")).toEqual({ daemonsNeedingRestart: ["sttdaemon"], daemonsNeedingSighup: [] });
+      expect(mgr.update("transcription.language", "en")).toEqual({ daemonsNeedingRestart: [], daemonsNeedingSighup: [] });
     } finally { cleanup(); }
   });
   it("llm.command 改完无需动作", () => {
@@ -137,19 +235,12 @@ describe("registry-driven classify + per-field validation", () => {
       expect(() => mgr.update("audio.silence_threshold", 5)).toThrow(ZodError);  // max 1
     } finally { cleanup(); }
   });
-  it("record 子路径(transcription.mlx.model)不被父级 z.record 误拒,reload 仍前缀匹配 sttdaemon", () => {
+  it("rejects retired local transcription settings", () => {
     const { mgr, cleanup } = makeCfg();
     try {
-      expect(() => mgr.update("transcription.mlx.model", "whisper-large-v3-mlx")).not.toThrow();
-      expect(mgr.update("transcription.mlx.final_model", "turbo")).toEqual({ daemonsNeedingRestart: ["sttdaemon"], daemonsNeedingSighup: [] });
-    } finally { cleanup(); }
-  });
-  it("post_recording_mode:合法枚举值写入成功且 reload none;非法值被拒(P2-1)", () => {
-    const { mgr, cleanup } = makeCfg();
-    try {
-      expect(mgr.update("transcription.post_recording_mode", "full_transcribe")).toEqual({ daemonsNeedingRestart: [], daemonsNeedingSighup: [] });
-      expect(mgr.read().transcription.post_recording_mode).toBe("full_transcribe");
-      expect(() => mgr.update("transcription.post_recording_mode", "bogus")).toThrow(ZodError);
+      expect(() => mgr.update("transcription.mlx.model", "legacy-model")).toThrow(/Agent-owned/);
+      expect(() => mgr.update("transcription.diarization.enabled", true)).toThrow(/Agent-owned/);
+      expect(() => mgr.update("transcription.dictation.engine", "whisper")).toThrow(/Agent-owned/);
     } finally { cleanup(); }
   });
   it("meeting_detection.enabled 改完 restart detector;interval_sec<1 被拒(P2-3)", () => {
@@ -160,35 +251,18 @@ describe("registry-driven classify + per-field validation", () => {
       expect(() => mgr.update("meeting_detection.interval_sec", 0)).toThrow(ZodError);
     } finally { cleanup(); }
   });
-  it("output.* 写入成功且 reload none;output.channel 非法枚举被拒(P2-4)", () => {
+  it("agent_pipeline auto-send consent writes without daemon reload", () => {
     const { mgr, cleanup } = makeCfg();
     try {
-      expect(mgr.update("output.channel", "notion")).toEqual({ daemonsNeedingRestart: [], daemonsNeedingSighup: [] });
-      expect(mgr.update("output.notion.destination_id", "page-1")).toEqual({ daemonsNeedingRestart: [], daemonsNeedingSighup: [] });
-      expect(mgr.update("output.notion.destination_type", "page")).toEqual({ daemonsNeedingRestart: [], daemonsNeedingSighup: [] });
-      expect(mgr.update("output.notion.destination_label", "Weekly Memo")).toEqual({ daemonsNeedingRestart: [], daemonsNeedingSighup: [] });
-      expect(mgr.update("output.zulip.stream_id", "2")).toEqual({ daemonsNeedingRestart: [], daemonsNeedingSighup: [] });
-      expect(mgr.update("output.notion.api_key_env", "NOTION_API_KEY")).toEqual({ daemonsNeedingRestart: [], daemonsNeedingSighup: [] });
-      const out = (mgr.read() as {
-        output?: {
-          channel?: string;
-          notion?: { destination_id?: string; destination_type?: string; destination_label?: string; api_key_env?: string };
-          zulip?: { stream_id?: string };
-        };
-      }).output;
-      expect(out?.channel).toBe("notion");
-      expect(out?.notion?.destination_id).toBe("page-1");
-      expect(out?.notion?.destination_type).toBe("page");
-      expect(out?.notion?.destination_label).toBe("Weekly Memo");
-      expect(out?.zulip?.stream_id).toBe("2");
-      expect(out?.notion?.api_key_env).toBe("NOTION_API_KEY");
-      expect(() => mgr.update("output.channel", "carrier-pigeon")).toThrow(ZodError);
+      expect(mgr.update("agent_pipeline.auto_send_notion", true)).toEqual({ daemonsNeedingRestart: [], daemonsNeedingSighup: [] });
+      expect(mgr.read().agent_pipeline.auto_send_notion).toBe(true);
+      expect(() => mgr.update("agent_pipeline.auto_send_notion", "yes")).toThrow(ZodError);
     } finally { cleanup(); }
   });
 });
 
-describe("cloud transcription holds NO keys (TRANS-02 / T-04-KEY guardrail)", () => {
-  it("config.ts declares no held cloud API-key / token / secret field", () => {
+describe("Agent-owned transcription holds no provider credentials", () => {
+  it("config.ts declares no held transcription API-key / token / secret field", () => {
     let src = readFileSync(CONFIG_TS, "utf8");
     for (const allowedEnvNameRef of [
       "api_key_env",
@@ -198,7 +272,6 @@ describe("cloud transcription holds NO keys (TRANS-02 / T-04-KEY guardrail)", ()
     ]) {
       src = src.replaceAll(allowedEnvNameRef, "");
     }
-    // The cloud path is a COMMAND (transcription.cloud_command), never a held credential.
     expect(/cloud_api_key|api[_-]?key|cloud[_-]?key|\btoken\b|\bsecret\b|password/i.test(src)).toBe(false);
   });
 });

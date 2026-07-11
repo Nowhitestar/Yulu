@@ -2,8 +2,8 @@
 #
 # lib/common.sh — shared helpers for the decomposed setup_*.sh concern scripts.
 #
-# Sourced by setup_deps.sh / setup_models.sh / setup_ui.sh (and, in later plans,
-# setup_audio.sh / setup_capabilities.sh / setup_daemons.sh / the setup.sh
+# Sourced by setup_deps.sh / setup_ui.sh (and
+# setup_audio.sh / setup_daemons.sh / the setup.sh
 # orchestrator). Provides:
 #   1. printf-based color + log helpers (ok/warn/err/info/header/prompt)
 #   2. launch_path        — the §6b stable launch PATH (NO nvm-versioned literal)
@@ -44,7 +44,7 @@ header() {
 prompt() { printf '%b➡️%b %s ' "$YELLOW" "$NC" "$1"; }
 
 # ─── 1b. capability_status — read one capability's tri-state from the report ──
-# The reuse gate (REUSE-01/02, D-04) shared by setup_deps.sh + setup_capabilities.sh.
+# Host capability lookup used by setup_deps.sh.
 #
 # Runs `doctor.py --json` with FIXED argv and parses
 # `host_capabilities.capabilities.<cap>.status` in Python (T-05-04). It echoes ONLY
@@ -57,7 +57,7 @@ prompt() { printf '%b➡️%b %s ' "$YELLOW" "$NC" "$1"; }
 # Callers MUST gate STRICTLY on `== "usable"` (Pitfall 4 / report.py:35): the tri-state
 # is never collapsed to a boolean. `present-but-unverified` and `absent` both install.
 #
-# Usage: status="$(capability_status whisper_cli)"   # whisper_cli | mlx_whisper | gog | …
+# Usage: status="$(capability_status gog)"
 capability_status() {
     local cap="$1"
     local py="${PYTHON_BIN:-$(command -v python3 || echo /usr/bin/python3)}"
@@ -170,19 +170,25 @@ install_plist() {
         launchctl unload "$dest" 2>/dev/null || true
     fi
 
-    cp "$src" "$dest"
+    if ! cp "$src" "$dest"; then
+        err "$name: 复制到 $dest 失败"
+        return 1
+    fi
 
     # §6b fix: stable PATH from launch_path, NOT an nvm-versioned literal.
     local lp
     lp="$(launch_path)"
 
-    sed -i '' \
+    if ! sed -i '' \
         -e "s|__PYTHON__|$python_bin|g" \
         -e "s|__NODE_BIN__|$node_bin|g" \
         -e "s|__HOME__|$HOME|g" \
         -e "s|__SCRIPT_DIR__|$script_dir|g" \
         -e "s|__PATH__|$lp|g" \
-        "$dest" 2>/dev/null || true
+        "$dest" 2>/dev/null; then
+        err "$name: plist token 替换失败"
+        return 1
+    fi
 
     ok "$name: 已复制"
 }

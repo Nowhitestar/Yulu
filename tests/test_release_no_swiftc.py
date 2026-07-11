@@ -149,6 +149,12 @@ def test_release_fork_invokes_no_swiftc(tmp_path):
     (work / "lib").mkdir(parents=True)
     (work / "lib" / "common.sh").write_text((SCRIPTS / "lib" / "common.sh").read_text())
     (work / "setup_audio.sh").write_text(SETUP_AUDIO.read_text())
+    # A release install is now fail-closed when its CI-built core bundle is
+    # absent. Plant that packaged artifact so this test isolates its intended
+    # compiler-boundary assertion.
+    audio_binary = work / "Yulu.app" / "Contents" / "MacOS" / "audio_daemon"
+    audio_binary.parent.mkdir(parents=True)
+    audio_binary.write_text("prebuilt release binary")
 
     shim, sentinel = _recording_shim(tmp_path)
 

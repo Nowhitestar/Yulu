@@ -8,7 +8,7 @@
 #   - The repo clone at ~/.yulu (only if Yulu was installed via install.sh)
 #
 # Asks before removing (data preserved by default):
-#   - ~/.config/yulu/  (config, logs, daemon state, downloaded whisper models)
+#   - ~/.config/yulu/  (config, logs, and Host task state)
 #   - ~/Movies/Yulu/   (your meeting recordings)
 #   - Registered agent skills (~/.claude/skills/yulu, ~/.openclaw/skills/yulu, …)
 #
@@ -63,7 +63,7 @@ Options:
   --dry-run, --plan      Print what would be removed, then exit without changes
   --json                 With --dry-run/--plan, print the uninstall plan as JSON
   --purge                Also remove ~/.config/yulu, ~/Movies/Yulu, agent skills
-  --purge-config         Remove ~/.config/yulu (config, models, logs)
+  --purge-config         Remove ~/.config/yulu (config, logs, Host task state)
   --purge-recordings     Remove the recordings directory (~/Movies/Yulu by default)
   --purge-skills         Run \`npx skills remove yulu\` for all registered agents
   --purge-backups        Remove ~/.yulu.backup-* runtime backups
@@ -224,7 +224,7 @@ echo "  • Pkg runtime:       $PKG_RUNTIME_ROOT"
 echo "  • Pkg receipt:       $PKG_IDENTIFIER (if present)"
 echo
 echo "Will ask about:"
-echo "  • Config + models:   $CONFIG_DIR"
+echo "  • Config + state:    $CONFIG_DIR"
 echo "  • Recordings:        $RECORDING_DIR"
 echo "  • Agent skills:      ~/.<agent>/skills/yulu/"
 echo "  • Runtime backups:   $BACKUP_PARENT/$BACKUP_PATTERN ($(backup_count) found)"
@@ -248,6 +248,23 @@ fi
 
 header "Stopping background services"
 found=0
+launch_domain="gui/$(id -u)"
+known_labels=(
+    com.yulu.audiodaemon
+    com.yulu.scheduler
+    com.yulu.detector
+    com.yulu.calendar
+    com.yulu.statusagent
+    com.yulu.ui
+    com.yulu.agentqueue
+    com.yulu.sttdaemon
+)
+# Jobs can remain registered after their plist is manually deleted, so always
+# remove the known labels before relying on the on-disk plist sweep.
+for label in "${known_labels[@]}"; do
+    launchctl bootout "$launch_domain/$label" 2>/dev/null || true
+    launchctl remove "$label" 2>/dev/null || true
+done
 for plist in "$LAUNCH_AGENTS_DIR"/com.yulu.*.plist; do
     [[ -f "$plist" ]] || continue
     found=1
@@ -257,6 +274,10 @@ for plist in "$LAUNCH_AGENTS_DIR"/com.yulu.*.plist; do
     ok "removed $label"
 done
 [[ $found -eq 0 ]] && warn "no Yulu LaunchAgents installed"
+rm -f \
+    "$CONFIG_DIR/stt_daemon.sock" \
+    "$CONFIG_DIR/stt_daemon.pid" \
+    "$CONFIG_DIR/dictation/realtime.pid"
 
 # ─── 2. Kill any leftover daemon processes ───────────────────────
 
@@ -264,6 +285,8 @@ pkill -f "Yulu.app/Contents/MacOS/audio_daemon" 2>/dev/null && ok "killed runnin
 pkill -f "yulu/scripts/scheduler_daemon.py" 2>/dev/null || true
 pkill -f "yulu/scripts/meeting_detector.py" 2>/dev/null || true
 pkill -f "yulu_ui/dist/server.js" 2>/dev/null && ok "killed running yulu_ui server" || true
+pkill -f "agent_queue_worker.py" 2>/dev/null || true
+pkill -f "stt_daemon" 2>/dev/null || true
 
 # ─── 3. Remove yulu CLI symlink ──────────────────────────────────
 
@@ -272,7 +295,13 @@ if [[ -L "$LOCAL_BIN/yulu" || -f "$LOCAL_BIN/yulu" ]]; then
     ok "removed $LOCAL_BIN/yulu"
 fi
 
-# ─── 3b. Remove pkg-installed visible app/runtime/receipt ───────────
+# ─── 3b. Remove Agent MCP registrations while runtime code exists ───
+
+header "Agent MCP cleanup"
+PYTHONPATH="$SCRIPT_DIR:${PYTHONPATH:-}" "${PYTHON:-python3}" -m provision.cli mcp remove --detected-only --non-fatal \
+    || warn "Yulu MCP cleanup failed (continuing uninstall)"
+
+# ─── 3c. Remove pkg-installed visible app/runtime/receipt ───────────
 
 remove_path() {
     local path="$1"
@@ -323,15 +352,11 @@ else
     info "Keeping agent skills. Remove later: npx skills remove yulu -g"
 fi
 
-header "Agent MCP cleanup"
-PYTHONPATH="$SCRIPT_DIR:${PYTHONPATH:-}" "${PYTHON:-python3}" -m provision.cli mcp remove --detected-only --non-fatal \
-    || warn "Yulu MCP cleanup failed (continuing uninstall)"
-
 # ─── 5. Optional: ~/.config/yulu ─────────────────────────────────
 
-header "Config + whisper models"
+header "Config + Host state"
 if [[ -d "$CONFIG_DIR" ]]; then
-    if [[ "$KEEP_DATA" == true ]] && ask_yes_no "Remove $CONFIG_DIR (config, daemon state, downloaded whisper models)?" "n"; then
+    if [[ "$KEEP_DATA" == true ]] && ask_yes_no "Remove $CONFIG_DIR (config, daemon and Host task state)?" "n"; then
         KEEP_DATA=false
     fi
     if [[ "$KEEP_DATA" != true ]]; then

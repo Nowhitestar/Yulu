@@ -55,7 +55,7 @@ def test_daemon_manager_install_writes_plist(tmp_path, monkeypatch):
     mgr = MacOSDaemonManager()
     spec = base.ServiceSpec(
         name="com.yulu.testjob",
-        program=["python3", "-m", "stt_daemon"],
+        program=["python3", "-m", "example_service"],
         keep_alive=True,
     )
     mgr.install(spec)

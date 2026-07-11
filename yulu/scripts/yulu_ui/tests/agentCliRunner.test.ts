@@ -4,6 +4,7 @@ import {
   buildCodexSessionCommand,
   buildHermesSessionCommand,
   buildOpenClawSessionCommand,
+  extractHermesSessionId,
 } from "../src/agentCliRunner.js";
 
 describe("agentCliRunner", () => {
@@ -72,6 +73,7 @@ describe("agentCliRunner", () => {
       {
         nativeSessionId: "019f0000-0000-7000-8000-000000000001",
         prompt: "总结昨天的会议",
+        toolsets: ["file", "yulu"],
       },
     );
 
@@ -83,9 +85,58 @@ describe("agentCliRunner", () => {
       "yulu",
       "--resume",
       "019f0000-0000-7000-8000-000000000001",
+      "--toolsets",
+      "file,yulu",
       "--query",
       "总结昨天的会议",
     ]);
+  });
+
+  it("replaces configured Hermes toolsets with the task allowlist", () => {
+    const command = buildHermesSessionCommand(
+      [
+        "hermes",
+        "-p",
+        "yulu-runtime",
+        "chat",
+        "-t",
+        "all",
+        "--toolsets=terminal,notion",
+        "-tbrowser",
+      ],
+      { prompt: "只处理本地 artifact", toolsets: ["yulu_artifact", "yulu_artifact"] },
+    );
+
+    expect(command).toEqual([
+      "hermes",
+      "-p",
+      "yulu-runtime",
+      "chat",
+      "-Q",
+      "--source",
+      "yulu",
+      "--toolsets",
+      "yulu_artifact",
+      "--query",
+      "只处理本地 artifact",
+    ]);
+  });
+
+  it("fails closed when an explicit Hermes toolset allowlist is empty", () => {
+    expect(() => buildHermesSessionCommand(
+      ["hermes", "chat"],
+      { prompt: "处理录音", toolsets: [] },
+    )).toThrow("Hermes toolsets must not be empty");
+  });
+
+  it("extracts Hermes' native non-UUID session id from stderr", () => {
+    expect(extractHermesSessionId("\nsession_id: 20260711_123456_a1b2c3\n")).toBe(
+      "20260711_123456_a1b2c3",
+    );
+  });
+
+  it("only accepts Hermes session ids from a dedicated stderr line", () => {
+    expect(extractHermesSessionId("warning: session_id: 20260711_123456_a1b2c3\n")).toBeUndefined();
   });
 
   it("builds an OpenClaw command with an explicit session id", () => {

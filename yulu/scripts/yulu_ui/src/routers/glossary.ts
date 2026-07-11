@@ -40,13 +40,12 @@ export const glossaryRouter = router({
       scope: Scope.optional(),
       notes: z.string().optional(),
     }))
-    .mutation(async ({ ctx, input }) => {
+    .mutation(({ ctx, input }) => {
       ensureVocabTable(ctx.db.vocab);
       const now = new Date().toISOString().replace(/\.\d+Z$/, "Z");
       ctx.db.vocab.prepare(
         "INSERT INTO custom_words (id, term, canonical, scope, source, enabled, note, created_at, updated_at) VALUES (?, ?, ?, ?, 'manual', 1, ?, ?, ?)"
       ).run(randomUUID(), input.term, input.canonical ?? input.term, input.scope ?? "both", input.notes ?? null, now, now);
-      await hupStt(ctx);
       return { ok: true };
     }),
 
@@ -58,7 +57,7 @@ export const glossaryRouter = router({
       scope: Scope.optional(),
       notes: z.string().nullable().optional(),
     }))
-    .mutation(async ({ ctx, input }) => {
+    .mutation(({ ctx, input }) => {
       ensureVocabTable(ctx.db.vocab);
       const fields: string[] = []; const values: unknown[] = [];
       if (input.term !== undefined)   { fields.push("term = ?");   values.push(input.term); }
@@ -69,22 +68,20 @@ export const glossaryRouter = router({
       fields.push("updated_at = ?"); values.push(new Date().toISOString().replace(/\.\d+Z$/, "Z"));
       values.push(input.id);
       const r = ctx.db.vocab.prepare(`UPDATE custom_words SET ${fields.join(", ")} WHERE id = ?`).run(...values);
-      await hupStt(ctx);
       return { updated: r.changes };
     }),
 
   delete: publicProcedure
     .input(z.object({ id: z.string().min(1) }))
-    .mutation(async ({ ctx, input }) => {
+    .mutation(({ ctx, input }) => {
       ensureVocabTable(ctx.db.vocab);
       const r = ctx.db.vocab.prepare("DELETE FROM custom_words WHERE id = ?").run(input.id);
-      await hupStt(ctx);
       return { deleted: r.changes };
     }),
 
   deleteMany: publicProcedure
     .input(z.object({ ids: z.array(z.string().min(1)).min(1).max(200) }))
-    .mutation(async ({ ctx, input }) => {
+    .mutation(({ ctx, input }) => {
       ensureVocabTable(ctx.db.vocab);
       const ids = [...new Set(input.ids)];
       const remove = ctx.db.vocab.prepare("DELETE FROM custom_words WHERE id = ?");
@@ -92,7 +89,6 @@ export const glossaryRouter = router({
         rowIds.reduce((deleted, id) => deleted + remove.run(id).changes, 0)
       );
       const deleted = removeAll(ids);
-      await hupStt(ctx);
       return { deleted };
     }),
 });
@@ -121,8 +117,4 @@ function migrateLegacyVocab(db: DbType): void {
     const note = [row.notes, row.pinyin ? `pinyin: ${row.pinyin}` : ""].filter(Boolean).join("\n") || null;
     insert.run(randomUUID(), term, term, note, row.created_at, row.updated_at);
   }
-}
-
-async function hupStt(ctx: { launchctl: { sighup: (l: string) => Promise<void> } }): Promise<void> {
-  try { await ctx.launchctl.sighup("com.yulu.sttdaemon"); } catch { /* daemon may be down */ }
 }

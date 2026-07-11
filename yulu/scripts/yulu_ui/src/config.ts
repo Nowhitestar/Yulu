@@ -1,4 +1,5 @@
-import { readFileSync, writeFileSync, renameSync, statSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, renameSync, statSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
 import { z } from "zod";
 import { defFor, reloadFor } from "./settingsRegistry.js";
 
@@ -20,35 +21,6 @@ const ConnectorsSchema = z.object({
     read_calendar: z.boolean().default(false),
     app_id_env: z.string().default("FEISHU_APP_ID"),
     app_secret_env: z.string().default("FEISHU_APP_SECRET"),
-  }).passthrough().default({}),
-  notion: z.object({
-    send_summary: z.boolean().default(false),
-    database_id: z.string().default(""),
-    api_key_env: z.string().default("NOTION_API_KEY"),
-  }).passthrough().default({}),
-  zulip: z.object({
-    send_summary: z.boolean().default(false),
-    stream: z.string().default("meetings"),
-    topic: z.string().default("会议纪要"),
-  }).passthrough().default({}),
-}).passthrough().default({});
-
-const OutputSchema = z.object({
-  // Keep legacy "telegram" readable so older config.json files do not break the UI.
-  // New writes are blocked by settingsRegistry and the visible settings UI.
-  channel: z.enum(["file", "zulip", "notion", "telegram"]).default("file"),
-  notion: z.object({
-    destination_id: z.string().default(""),
-    destination_type: z.string().default("database"),
-    destination_label: z.string().default(""),
-    database_id: z.string().default(""),
-    api_key_env: z.string().default("NOTION_API_KEY"),
-  }).passthrough().default({}),
-  zulip: z.object({
-    stream_id: z.string().default(""),
-    stream: z.string().default("meetings"),
-    topic: z.string().default("会议纪要"),
-    zuliprc: z.string().default("~/.zuliprc"),
   }).passthrough().default({}),
 }).passthrough().default({});
 
@@ -90,13 +62,25 @@ const AgentConsoleSchema = z.object({
   }).passthrough()).default({}),
 }).passthrough().default({});
 
+const AgentPipelineSchema = z.object({
+  enabled: z.boolean().default(true),
+  auto_process_recordings: z.boolean().default(true),
+  auto_send_notion: z.boolean().default(false),
+  notion_destination: z.string().default("Yulu Meeting"),
+  // 0 asks Hermes to bind an OS-assigned loopback port, avoiding collisions
+  // with a user's own dashboard process.
+  hermes_serve_port: z.number().int().min(0).max(65535).default(0),
+  transcription_chunk_sec: z.number().int().min(60).max(3600).default(1200),
+}).passthrough().default({});
+
 const DictationSchema = z.object({
-  engine: z.enum(["auto", "mlx", "whisper", "hermes"]).default("auto"),
   prompt_slug: z.string().default("dictation-cleanup"),
   translate_prompt_slug: z.string().default("dictation-translate"),
   target_language: z.string().default("English"),
-  timeout_sec: z.number().default(3),
-  deadline_sec: z.number().default(3),
+  timeout_sec: z.number().default(30),
+  deadline_sec: z.number().default(30),
+  translate_timeout_sec: z.number().default(30),
+  translate_deadline_sec: z.number().default(30),
   context_limit: z.number().default(240),
 }).passthrough().default({});
 
@@ -115,9 +99,6 @@ const StatusAgentSchema = z.object({
   }).passthrough().default({}),
 }).passthrough().default({});
 
-const DEFAULT_MLX_MODEL = "mlx-community/whisper-large-v3-mlx";
-const DEFAULT_REALTIME_MLX_MODEL = "mlx-community/whisper-large-v3-turbo";
-
 export const ConfigSchema = z.object({
   // Defaults so a minimal/partial config.json (e.g. only audio.output_dir) still
   // parses — otherwise config.get 500s and the whole settings page breaks.
@@ -130,39 +111,10 @@ export const ConfigSchema = z.object({
     backend: z.string().optional(),
   }).default({}),
   transcription: z.object({
-    mode: z.enum(["local", "cloud-fallback", "cloud-priority"]).default("local"),
-    post_recording_mode: z.enum(["fast_summary", "full_transcribe"]).default("fast_summary"),
-    final_engine: z.enum(["mlx", "whisper", "hermes"]).default("mlx"),
     language: z.string().default("zh"),
     glossary: z.array(z.string()).optional(),
-    local_model_path: z.string().default("~/.config/yulu/models/ggml-large-v3.bin"),
-    whisper_cli: z.string().default("whisper-cli"),
-    mlx: z.object({
-      model: z.string().default(DEFAULT_MLX_MODEL),
-    }).passthrough().default({}),
-    hermes: z.object({
-      agent_dir: z.string().default("~/.hermes/hermes-agent"),
-      model: z.string().nullable().optional(),
-      diarize: z.boolean().default(true),
-    }).passthrough().default({}),
-    realtime: z.object({
-      engine: z.enum(["mlx", "whisper", "hermes"]).default("mlx"),
-      mlx_model: z.string().default(DEFAULT_REALTIME_MLX_MODEL),
-      chunk_sec: z.number().default(15),
-      chunk_max_sec: z.number().default(30),
-    }).passthrough().default({}),
     dictation: DictationSchema,
-    diarization: z.object({
-      enabled: z.boolean().default(false),
-      provider: z.string().default("sherpa-onnx"),
-      seg_model: z.string().default(""),
-      emb_model: z.string().default(""),
-      num_speakers: z.number().nullable().default(null),
-      threshold: z.number().default(0.6),
-    }).passthrough().default({}),
-    command: z.array(z.string()).optional(),
-    realtime_enabled: z.boolean().default(true),
-  }).passthrough(),
+  }).passthrough().default({}),
   llm: z.object({
     enabled: z.boolean().optional(),
     command: z.array(z.string()).nullable().optional(),
@@ -173,8 +125,8 @@ export const ConfigSchema = z.object({
   status_agent: StatusAgentSchema,
   calendars: z.array(CalendarSchema).default([]),
   connectors: ConnectorsSchema,
-  output: OutputSchema,
   agent_console: AgentConsoleSchema,
+  agent_pipeline: AgentPipelineSchema,
   ui: z.object({
     theme: ThemeSchema,
   }).passthrough().default({}),
@@ -189,11 +141,179 @@ export interface UpdateResult {
   daemonsNeedingSighup: string[];
 }
 
+type JsonRecord = Record<string, unknown>;
+
+function record(value: unknown): JsonRecord {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? value as JsonRecord
+    : {};
+}
+
+function ensureRecord(parent: JsonRecord, key: string): JsonRecord {
+  const current = record(parent[key]);
+  parent[key] = current;
+  return current;
+}
+
+function stringField(parent: JsonRecord, ...keys: string[]): string {
+  for (const key of keys) {
+    const value = parent[key];
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return "";
+}
+
+export interface AgentNativeConfigMigration {
+  changed: boolean;
+  archivePath: string | null;
+}
+
+const RETIRED_TRANSCRIPTION_KEYS = [
+  "mode",
+  "post_recording_mode",
+  "final_engine",
+  "local_model_path",
+  "whisper_cli",
+  "mlx",
+  "hermes",
+  "realtime",
+  "diarization",
+  "command",
+  "realtime_enabled",
+] as const;
+
+function hasOwn(record: JsonRecord, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(record, key);
+}
+
+/**
+ * Retire Yulu-owned connector configuration without destroying it.
+ *
+ * Destination preferences move to the Hermes Agent projection, the explicit
+ * Notion opt-in moves to agent_pipeline, and the removed connector/output
+ * blocks are written to a mode-0600 archive before the active config changes.
+ */
+export function migrateAgentNativeConfig(path: string): AgentNativeConfigMigration {
+  if (!existsSync(path)) return { changed: false, archivePath: null };
+  const raw = JSON.parse(readFileSync(path, "utf8")) as unknown;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new Error("Yulu config must contain a JSON object");
+  }
+  const root = raw as JsonRecord;
+  const connectors = record(root.connectors);
+  const legacyNotion = record(connectors.notion);
+  const legacyZulip = record(connectors.zulip);
+  const legacyOutput = record(root.output);
+  const hasLegacy = Object.keys(legacyNotion).length > 0 ||
+    Object.keys(legacyZulip).length > 0 || Object.keys(legacyOutput).length > 0;
+  if (!hasLegacy) return { changed: false, archivePath: null };
+
+  const pipeline = ensureRecord(root, "agent_pipeline");
+  if (typeof pipeline.auto_send_notion !== "boolean") {
+    pipeline.auto_send_notion = legacyNotion.send_summary === true || legacyOutput.channel === "notion";
+  }
+
+  const consoleConfig = ensureRecord(root, "agent_console");
+  const destinations = ensureRecord(consoleConfig, "destinations");
+  const hermes = ensureRecord(destinations, "hermes");
+  const oldNotionOutput = record(legacyOutput.notion);
+  const notionTarget = stringField(
+    oldNotionOutput,
+    "destination_label",
+    "destination_id",
+    "database_id",
+  ) || stringField(legacyNotion, "database_id");
+  const notion = ensureRecord(hermes, "notion");
+  if (!stringField(notion, "target") && notionTarget) notion.target = notionTarget;
+  if (!hasOwn(pipeline, "notion_destination") && notionTarget) pipeline.notion_destination = notionTarget;
+
+  const oldZulipOutput = record(legacyOutput.zulip);
+  const zulip = ensureRecord(hermes, "zulip");
+  const stream = stringField(oldZulipOutput, "stream") || stringField(legacyZulip, "stream");
+  const topic = stringField(oldZulipOutput, "topic") || stringField(legacyZulip, "topic");
+  if (!stringField(zulip, "stream") && stream) zulip.stream = stream;
+  if (!stringField(zulip, "topic") && topic) zulip.topic = topic;
+
+  const stamp = new Date().toISOString().replace(/[-:.]/g, "");
+  const archivePath = join(dirname(path), `${basename(path, ".json")}.legacy-connectors.${stamp}.json`);
+  const archive = {
+    version: 1,
+    migratedAt: new Date().toISOString(),
+    sourcePath: path,
+    connectors: { notion: legacyNotion, zulip: legacyZulip },
+    output: legacyOutput,
+  };
+  const archiveTmp = `${archivePath}.${process.pid}.tmp`;
+  writeFileSync(archiveTmp, `${JSON.stringify(archive, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+  renameSync(archiveTmp, archivePath);
+
+  delete connectors.notion;
+  delete connectors.zulip;
+  root.connectors = connectors;
+  delete root.output;
+  const configTmp = `${path}.${process.pid}.agent-native.tmp`;
+  writeFileSync(configTmp, `${JSON.stringify(root, null, 2)}\n`, { encoding: "utf8", mode: statSync(path).mode });
+  renameSync(configTmp, path);
+  return { changed: true, archivePath };
+}
+
+/** Archive and remove the retired Yulu-owned STT configuration surface. */
+export function migrateLegacyTranscriptionConfig(path: string): AgentNativeConfigMigration {
+  if (!existsSync(path)) return { changed: false, archivePath: null };
+  const raw = JSON.parse(readFileSync(path, "utf8")) as unknown;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new Error("Yulu config must contain a JSON object");
+  }
+  const root = raw as JsonRecord;
+  const transcription = record(root.transcription);
+  const legacy: JsonRecord = {};
+  for (const key of RETIRED_TRANSCRIPTION_KEYS) {
+    if (!hasOwn(transcription, key)) continue;
+    legacy[key] = transcription[key];
+  }
+  const dictation = record(transcription.dictation);
+  const legacyDictation: JsonRecord = {};
+  if (hasOwn(dictation, "engine")) {
+    legacyDictation.engine = dictation.engine;
+  }
+  for (const key of ["timeout_sec", "deadline_sec", "translate_timeout_sec", "translate_deadline_sec"] as const) {
+    const value = dictation[key];
+    if (typeof value !== "number" || value > 3) continue;
+    legacyDictation[key] = value;
+    dictation[key] = 30;
+  }
+  if (Object.keys(legacyDictation).length > 0) legacy.dictation = legacyDictation;
+  if (Object.keys(legacy).length === 0) return { changed: false, archivePath: null };
+
+  const stamp = new Date().toISOString().replace(/[-:.]/g, "");
+  const archivePath = join(dirname(path), `${basename(path, ".json")}.legacy-transcription.${stamp}.json`);
+  const archiveTmp = `${archivePath}.${process.pid}.tmp`;
+  writeFileSync(archiveTmp, `${JSON.stringify({
+    version: 1,
+    migratedAt: new Date().toISOString(),
+    sourcePath: path,
+    transcription: legacy,
+  }, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+  renameSync(archiveTmp, archivePath);
+
+  for (const key of RETIRED_TRANSCRIPTION_KEYS) delete transcription[key];
+  delete dictation.engine;
+  if (hasOwn(transcription, "dictation")) transcription.dictation = dictation;
+  root.transcription = transcription;
+  const configTmp = `${path}.${process.pid}.agent-transcription.tmp`;
+  writeFileSync(configTmp, `${JSON.stringify(root, null, 2)}\n`, { encoding: "utf8", mode: statSync(path).mode });
+  renameSync(configTmp, path);
+  return { changed: true, archivePath };
+}
+
 export class ConfigManager {
   private cached: YuluConfig | null = null;
   private cachedMtime = 0;
 
-  constructor(private readonly path: string) {}
+  constructor(private readonly path: string) {
+    migrateAgentNativeConfig(path);
+    migrateLegacyTranscriptionConfig(path);
+  }
 
   read(): YuluConfig {
     const mtime = statSync(this.path).mtimeMs;
@@ -211,6 +331,9 @@ export class ConfigManager {
    * last read (someone else wrote to it).
    */
   update(dottedKey: string, value: unknown): UpdateResult {
+    if (isRetiredTranscriptionSetting(dottedKey)) {
+      throw new Error(`setting is retired because transcription is Agent-owned: ${dottedKey}`);
+    }
     const onDiskMtime = statSync(this.path).mtimeMs;
     if (this.cached && onDiskMtime !== this.cachedMtime) {
       throw new Error(`Config file changed externally — reload before writing (${this.path})`);
@@ -218,16 +341,25 @@ export class ConfigManager {
     const cfg = JSON.parse(readFileSync(this.path, "utf8"));
     setByDottedKey(cfg, dottedKey, value);
     const def = defFor(dottedKey);
-    // 校验只在精确路径做(reload 才前缀匹配);否则改 record 子字段(如 transcription.mlx.model)
+    // 校验只在精确路径做（reload 才前缀匹配），否则更新 record 子字段
     // 会被父级 z.record schema 误拒。
     if (def && def.path === dottedKey) def.validate.parse(value);
     ConfigSchema.parse(cfg);  // validate before write
     const tmp = `${this.path}.tmp.${process.pid}`;
-    writeFileSync(tmp, JSON.stringify(cfg, null, 2) + "\n");
+    const currentMode = statSync(this.path).mode & 0o777;
+    writeFileSync(tmp, JSON.stringify(cfg, null, 2) + "\n", { mode: currentMode });
     renameSync(tmp, this.path);   // POSIX 原子,等价 Python os.replace
     this.cached = null;       // invalidate; next read() re-parses
     return classify(dottedKey);
   }
+}
+
+function isRetiredTranscriptionSetting(dottedKey: string): boolean {
+  if (dottedKey === "transcription.dictation.engine" || dottedKey.startsWith("transcription.dictation.engine.")) return true;
+  return RETIRED_TRANSCRIPTION_KEYS.some((key) => {
+    const path = `transcription.${key}`;
+    return dottedKey === path || dottedKey.startsWith(`${path}.`);
+  });
 }
 
 function setByDottedKey(obj: Record<string, unknown>, dotted: string, value: unknown): void {

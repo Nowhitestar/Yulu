@@ -14,6 +14,7 @@ import secrets
 import shutil
 import subprocess
 import sys
+import tempfile
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
@@ -21,20 +22,105 @@ from pathlib import Path
 from typing import Iterable, Optional
 
 ENDPOINT = "http://127.0.0.1:7777/mcp"
+ARTIFACT_ENDPOINT = f"{ENDPOINT}/recording-artifact"
+DELIVERY_ENDPOINT = f"{ENDPOINT}/recording-delivery"
 ENV_NAME = "YULU_MCP_TOKEN"
 CONFIG_DIR = Path.home() / ".config" / "yulu"
 TOKEN_PATH = CONFIG_DIR / "mcp-token.json"
 AGENTS = ("codex", "claude", "openclaw", "hermes")
+LOGIN_PATH_MARKER = "__YULU_LOGIN_PATH__"
+
+
+def _fallback_executable_dirs() -> list[str]:
+    home = Path.home()
+    return [
+        str(home / ".local" / "bin"),
+        str(home / ".npm-global" / "bin"),
+        str(home / ".nvm" / "current" / "bin"),
+        "/opt/homebrew/opt/node/bin",
+        "/opt/homebrew/bin",
+        "/usr/local/bin",
+        "/usr/bin",
+        "/bin",
+        "/usr/sbin",
+        "/sbin",
+    ]
+
+
+def _deduplicated_path(entries: Iterable[str]) -> str:
+    return os.pathsep.join(dict.fromkeys(entry for entry in entries if entry))
+
+
+def _which(command: str, search_path: str | None = None) -> str | None:
+    try:
+        return shutil.which(command, path=search_path) if search_path is not None else shutil.which(command)
+    except TypeError:
+        # A few callers/tests replace shutil.which with the one-argument form.
+        return None
+
+
+def _login_shell_path() -> str:
+    shell = os.environ.get("SHELL", "")
+    if not shell or not Path(shell).is_file() or not os.access(shell, os.X_OK):
+        return ""
+    try:
+        proc = subprocess.run(
+            [shell, "-lc", f'printf "{LOGIN_PATH_MARKER}%s\\n" "$PATH"'],
+            text=True,
+            capture_output=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    if proc.returncode != 0:
+        return ""
+    for line in reversed(proc.stdout.splitlines()):
+        if line.startswith(LOGIN_PATH_MARKER):
+            return line.removeprefix(LOGIN_PATH_MARKER)
+    return ""
+
+
+def executable_search_path() -> str:
+    login_path = _login_shell_path()
+    return _deduplicated_path([
+        *(os.environ.get("PATH", "").split(os.pathsep)),
+        *(login_path.split(os.pathsep) if login_path else []),
+        *_fallback_executable_dirs(),
+    ])
+
+
+def resolve_executable(command: str) -> str | None:
+    if os.path.dirname(command):
+        path = Path(command).expanduser()
+        return str(path) if path.is_file() and os.access(path, os.X_OK) else None
+    current = _which(command)
+    if current:
+        return current
+
+    # Check deterministic GUI/LaunchAgent fallbacks before starting a login
+    # shell; Hermes commonly installs to ~/.local/bin.
+    fallback_path = _deduplicated_path([
+        *(os.environ.get("PATH", "").split(os.pathsep)),
+        *_fallback_executable_dirs(),
+    ])
+    fallback = _which(command, fallback_path)
+    if fallback:
+        return fallback
+    return _which(command, executable_search_path())
 
 
 def ensure_token(path: Path = TOKEN_PATH, rotate: bool = False) -> str:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        path.parent.chmod(0o700)
+    except OSError:
+        pass
     if not rotate:
         token = read_token(path)
         if token:
             chmod_600(path)
             return token
     token = secrets.token_urlsafe(32)
-    path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(f".{os.getpid()}.tmp")
     tmp.write_text(json.dumps({
         "token": token,
@@ -61,6 +147,67 @@ def chmod_600(path: Path) -> None:
         path.chmod(0o600)
     except OSError:
         pass
+
+
+def backup_hermes_config() -> None:
+    path = Path.home() / ".hermes" / "config.yaml"
+    if not path.is_file():
+        return
+    backup = path.with_name("config.yaml.yulu-backup")
+    tmp = backup.with_suffix(f".{os.getpid()}.tmp")
+    shutil.copyfile(path, tmp)
+    chmod_600(tmp)
+    os.replace(tmp, backup)
+    chmod_600(backup)
+
+
+def _snapshot_hermes_config(path: Path) -> tuple[Path, bool, int | None]:
+    """Create a unique same-directory snapshot for one config transaction.
+
+    The snapshot is always mode 0600, including the empty marker used when the
+    config did not exist. The original mode is tracked separately so rollback
+    can restore both bytes and permissions exactly.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    existed = path.exists()
+    original_mode = (path.stat().st_mode & 0o7777) if existed else None
+    fd, raw_snapshot = tempfile.mkstemp(
+        prefix=f".{path.name}.yulu-transaction-",
+        dir=str(path.parent),
+    )
+    snapshot = Path(raw_snapshot)
+    try:
+        with os.fdopen(fd, "wb") as destination:
+            if existed:
+                with path.open("rb") as source:
+                    shutil.copyfileobj(source, destination)
+            destination.flush()
+            os.fsync(destination.fileno())
+        snapshot.chmod(0o600)
+        return snapshot, existed, original_mode
+    except Exception:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+        snapshot.unlink(missing_ok=True)
+        raise
+
+
+def _restore_hermes_config(
+    path: Path,
+    snapshot: Path,
+    existed: bool,
+    original_mode: int | None,
+) -> None:
+    """Atomically restore the config state captured for this transaction."""
+    if existed:
+        os.replace(snapshot, path)
+        if original_mode is not None:
+            path.chmod(original_mode)
+    else:
+        path.unlink(missing_ok=True)
+        snapshot.unlink(missing_ok=True)
 
 
 def normalize_agent(agent: str) -> str:
@@ -92,19 +239,32 @@ def wanted_agents(args: argparse.Namespace) -> list[str]:
 
 def detected(agent: str) -> bool:
     if agent in {"codex", "claude"}:
-        return shutil.which(agent) is not None
+        return resolve_executable(agent) is not None
     if agent == "hermes":
-        return shutil.which("hermes") is not None or (Path.home() / ".hermes" / "config.yaml").exists()
+        return resolve_executable("hermes") is not None or (Path.home() / ".hermes" / "config.yaml").exists()
     if agent == "openclaw":
-        return shutil.which("openclaw") is not None or (Path.home() / ".openclaw" / "openclaw.json").exists()
+        return resolve_executable("openclaw") is not None or (Path.home() / ".openclaw" / "openclaw.json").exists()
     return False
 
 
-def run(argv: list[str], *, non_fatal: bool) -> bool:
-    if shutil.which(argv[0]) is None:
+def run(
+    argv: list[str],
+    *,
+    non_fatal: bool,
+    input_text: str | None = None,
+    quiet: bool = False,
+) -> bool:
+    executable = resolve_executable(argv[0])
+    if executable is None:
         print(f"skip: {argv[0]} not found")
         return non_fatal
-    proc = subprocess.run(argv, text=True)
+    proc = subprocess.run(
+        [executable, *argv[1:]],
+        text=True,
+        input=input_text,
+        stdout=subprocess.DEVNULL if quiet else None,
+        stderr=subprocess.DEVNULL if quiet else None,
+    )
     if proc.returncode == 0:
         return True
     print(f"warn: {' '.join(argv[:4])} failed with {proc.returncode}", file=sys.stderr)
@@ -112,9 +272,16 @@ def run(argv: list[str], *, non_fatal: bool) -> bool:
 
 
 def set_launchctl_env(token: str) -> None:
-    if shutil.which("launchctl") is None:
+    launchctl = resolve_executable("launchctl")
+    if launchctl is None:
         return
-    subprocess.run(["launchctl", "setenv", ENV_NAME, token], text=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    subprocess.run([launchctl, "setenv", ENV_NAME, token], text=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def recording_phase_endpoint(endpoint: str, phase: str) -> str:
+    if phase not in {"artifact", "delivery"}:
+        raise ValueError(f"unknown recording phase: {phase}")
+    return f"{endpoint.rstrip('/')}/recording-{phase}"
 
 
 def install_agent(agent: str, token: str, endpoint: str, *, non_fatal: bool) -> bool:
@@ -127,16 +294,12 @@ def install_agent(agent: str, token: str, endpoint: str, *, non_fatal: bool) -> 
         return run(["claude", "mcp", "add", "--scope", "user", "--transport", "http", "yulu", endpoint, "--header", f"Authorization: Bearer {token}"], non_fatal=non_fatal)
     if agent == "openclaw":
         payload = json.dumps({"url": endpoint, "transport": "streamable-http", "headers": {"Authorization": f"Bearer {token}"}}, separators=(",", ":"))
-        if shutil.which("openclaw"):
+        if resolve_executable("openclaw"):
             return run(["openclaw", "mcp", "set", "yulu", payload], non_fatal=non_fatal)
         write_openclaw_config(payload)
         return True
     if agent == "hermes":
-        if shutil.which("hermes"):
-            run(["hermes", "mcp", "remove", "yulu"], non_fatal=True)
-            run(["hermes", "mcp", "add", "yulu", "--url", endpoint, "--auth", "header"], non_fatal=True)
-        write_hermes_config(endpoint, token)
-        return True
+        return write_hermes_config(endpoint, token, non_fatal=non_fatal)
     raise ValueError(agent)
 
 
@@ -146,15 +309,12 @@ def remove_agent(agent: str, *, non_fatal: bool) -> bool:
     if agent == "claude":
         return run(["claude", "mcp", "remove", "yulu", "--scope", "user"], non_fatal=non_fatal)
     if agent == "openclaw":
-        if shutil.which("openclaw"):
+        if resolve_executable("openclaw"):
             return run(["openclaw", "mcp", "unset", "yulu"], non_fatal=non_fatal)
         unset_openclaw_config()
         return True
     if agent == "hermes":
-        if shutil.which("hermes"):
-            run(["hermes", "mcp", "remove", "yulu"], non_fatal=True)
-        unset_hermes_config()
-        return True
+        return unset_hermes_config(non_fatal=non_fatal)
     raise ValueError(agent)
 
 
@@ -179,51 +339,84 @@ def unset_openclaw_config() -> None:
     chmod_600(path)
 
 
-def write_hermes_config(endpoint: str, token: str) -> None:
-    path = Path.home() / ".hermes" / "config.yaml"
-    block = (
-        "  yulu:\n"
-        f"    url: {endpoint}\n"
-        "    headers:\n"
-        f"      Authorization: Bearer {token}\n"
-        "    enabled: true\n"
-        "    timeout: 120\n"
-        "    connect_timeout: 20\n"
-    )
-    path.parent.mkdir(parents=True, exist_ok=True)
-    text = path.read_text(encoding="utf-8") if path.exists() else ""
-    path.write_text(replace_yaml_child(text, "mcp_servers", "yulu", block), encoding="utf-8")
-    chmod_600(path)
+def write_hermes_config(endpoint: str, token: str, *, non_fatal: bool) -> bool:
+    """Register Yulu without parsing or rewriting Hermes-owned YAML.
+
+    ``hermes mcp add`` is intentionally interactive (auth, connection probe,
+    and tool selection), so it is not suitable for a package postinstall.
+    Hermes' own ``config set`` command preserves unrelated config and writes
+    atomically. Remove the previous Yulu entry first so stale stdio/tool-filter
+    fields cannot survive a transport change.
+    """
+    if resolve_executable("hermes") is None:
+        print("skip: hermes not found")
+        return non_fatal
+
+    config_path = Path.home() / ".hermes" / "config.yaml"
+    try:
+        snapshot, existed, original_mode = _snapshot_hermes_config(config_path)
+    except OSError as exc:
+        print(f"warn: could not snapshot Hermes config: {exc}", file=sys.stderr)
+        return False
+
+    committed = False
+    values = []
+    for name, url in (
+        ("yulu", endpoint),
+        ("yulu_artifact", recording_phase_endpoint(endpoint, "artifact")),
+        ("yulu_delivery", recording_phase_endpoint(endpoint, "delivery")),
+    ):
+        values.extend((
+            (f"mcp_servers.{name}.url", url),
+            (f"mcp_servers.{name}.headers.Authorization", f"Bearer {token}"),
+            (f"mcp_servers.{name}.enabled", "true"),
+            (f"mcp_servers.{name}.timeout", "120"),
+            (f"mcp_servers.{name}.connect_timeout", "20"),
+        ))
+    try:
+        # Keep the fixed audit backup for operator inspection, but rollback
+        # below always uses this invocation's unique transaction snapshot.
+        backup_hermes_config()
+        for name in ("yulu", "yulu_pipeline", "yulu_artifact", "yulu_delivery"):
+            if not run(
+                ["hermes", "mcp", "remove", name],
+                non_fatal=False,
+                input_text="y\n",
+                quiet=True,
+            ):
+                return False
+        for key, value in values:
+            if not run(
+                ["hermes", "config", "set", key, value],
+                non_fatal=False,
+                quiet=True,
+            ):
+                return False
+        chmod_600(config_path)
+        committed = True
+        return True
+    finally:
+        if committed:
+            snapshot.unlink(missing_ok=True)
+        else:
+            _restore_hermes_config(config_path, snapshot, existed, original_mode)
 
 
-def unset_hermes_config() -> None:
-    path = Path.home() / ".hermes" / "config.yaml"
-    if not path.exists():
-        return
-    text = path.read_text(encoding="utf-8")
-    path.write_text(replace_yaml_child(text, "mcp_servers", "yulu", ""), encoding="utf-8")
-    chmod_600(path)
-
-
-def replace_yaml_child(text: str, section: str, child: str, block: str) -> str:
-    lines = text.splitlines(keepends=True)
-    header = f"{section}:"
-    start = next((i for i, line in enumerate(lines) if line.strip() == header), -1)
-    if start < 0:
-        prefix = text if text.endswith("\n") or not text else text + "\n"
-        return prefix + header + "\n" + block
-    end = start + 1
-    while end < len(lines) and (lines[end].startswith(" ") or not lines[end].strip()):
-        end += 1
-    child_start = next((i for i in range(start + 1, end) if lines[i].startswith(f"  {child}:")), -1)
-    if child_start >= 0:
-        child_end = child_start + 1
-        while child_end < end and not (lines[child_end].startswith("  ") and not lines[child_end].startswith("    ") and lines[child_end].strip().endswith(":")):
-            child_end += 1
-        lines[child_start:child_end] = [block] if block else []
-    elif block:
-        lines.insert(end, block)
-    return "".join(lines)
+def unset_hermes_config(*, non_fatal: bool) -> bool:
+    if resolve_executable("hermes") is None:
+        print("skip: hermes not found")
+        return non_fatal
+    backup_hermes_config()
+    ok = True
+    for name in ("yulu", "yulu_pipeline", "yulu_artifact", "yulu_delivery"):
+        ok = run(
+            ["hermes", "mcp", "remove", name],
+            non_fatal=non_fatal,
+            input_text="y\n",
+            quiet=True,
+        ) and ok
+    chmod_600(Path.home() / ".hermes" / "config.yaml")
+    return ok
 
 
 def cmd_install(args: argparse.Namespace) -> int:
@@ -279,7 +472,12 @@ def configured(agent: str) -> Optional[bool]:
             return False
     if agent == "hermes":
         path = Path.home() / ".hermes" / "config.yaml"
-        return path.exists() and "\n  yulu:" in ("\n" + path.read_text(encoding="utf-8", errors="ignore"))
+        text = "\n" + path.read_text(encoding="utf-8", errors="ignore") if path.exists() else ""
+        return (
+            "\n  yulu:" in text
+            and "\n  yulu_artifact:" in text
+            and "\n  yulu_delivery:" in text
+        )
     return None
 
 

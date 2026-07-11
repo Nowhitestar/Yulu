@@ -10,7 +10,9 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
+import sqlite3
 import socket
 import subprocess
 import sys
@@ -23,12 +25,202 @@ DEFAULT_LEGACY_ROOT = Path.home() / ".openclaw/workspace/meeting-assistant/yulu"
 DEFAULT_CONFIG_DIR = Path.home() / ".config/yulu"
 
 
+def check_host_tasks(config_dir: Path) -> dict[str, Any]:
+    """Read-only summary of the durable Host Agent task store."""
+    path = config_dir / "host.sqlite"
+    report: dict[str, Any] = {"path": str(path), "present": path.exists(), "total": 0, "states": {}}
+    if not path.exists():
+        return report
+    try:
+        conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=1)
+        try:
+            rows = conn.execute("SELECT state, COUNT(*) FROM agent_tasks GROUP BY state").fetchall()
+        finally:
+            conn.close()
+        report["states"] = {str(state): int(count) for state, count in rows}
+        report["total"] = sum(report["states"].values())
+    except Exception as exc:
+        report["error"] = str(exc)
+    return report
+
+
+def check_agent_pipeline(
+    config_dir: Path,
+    checks: list[dict[str, Any]],
+    ui_report: dict[str, Any],
+    hermes_contract: dict[str, Any] | None = None,
+    hermes_phase_registration: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Verify the dependencies required by the Agent-owned recording pipeline.
+
+    An existing config follows the Host schema's enabled-by-default behavior;
+    only ``agent_pipeline.enabled=false`` disables the gate. An absent/unreadable
+    config remains a separate installation diagnosis rather than a pipeline failure.
+    """
+    config_path = Path(config_dir) / "config.json"
+    config: dict[str, Any] = {}
+    config_loaded = False
+    config_error = ""
+    try:
+        raw = json.loads(config_path.read_text(encoding="utf-8"))
+        if isinstance(raw, dict):
+            config = raw
+            config_loaded = True
+        else:
+            config_error = "config root is not an object"
+    except FileNotFoundError:
+        config_error = "config missing"
+    except Exception as exc:
+        config_error = f"config unreadable: {exc}"
+
+    pipeline_cfg = config.get("agent_pipeline")
+    section_present = isinstance(pipeline_cfg, dict)
+    if not section_present:
+        pipeline_cfg = {}
+    configured = config_loaded
+    # Match the Host schema: an existing config defaults the pipeline to enabled
+    # unless the operator explicitly disables it.
+    enabled = configured and pipeline_cfg.get("enabled") is not False
+    by_name = {str(item.get("name")): item for item in checks}
+    hermes = by_name.get("hermes", {})
+    ffmpeg = by_name.get("ffmpeg", {})
+
+    token_path = Path(config_dir) / "mcp-token.json"
+    token_present = token_path.is_file()
+    token_valid = False
+    token_mode: str | None = None
+    token_mode_secure = False
+    token_error = ""
+    if token_present:
+        try:
+            token_doc = json.loads(token_path.read_text(encoding="utf-8"))
+            token = token_doc.get("token") if isinstance(token_doc, dict) else None
+            mode = token_path.stat().st_mode & 0o777
+            token_mode = f"{mode:04o}"
+            token_mode_secure = (mode & 0o077) == 0
+            token_valid = isinstance(token, str) and len(token.strip()) >= 16 and token_mode_secure
+            if not token_mode_secure:
+                token_error = "token permissions must be 0600"
+            elif not isinstance(token, str) or len(token.strip()) < 16:
+                token_error = "token is missing or too short"
+        except Exception as exc:
+            token_error = str(exc)
+
+    components = {
+        "hermes_cli": {
+            "ok": bool(hermes.get("ok")),
+            "path": hermes.get("path", ""),
+            "version": hermes.get("version", ""),
+        },
+        "hermes_contract": hermes_contract or {
+            "ok": True,
+            "probed": False,
+            "detail": "contract probe not requested",
+        },
+        "hermes_phase_mcp": hermes_phase_registration or {
+            "ok": True,
+            "probed": False,
+            "detail": "phase MCP registration probe not requested",
+        },
+        "ffmpeg": {
+            "ok": bool(ffmpeg.get("ok")),
+            "path": ffmpeg.get("path", ""),
+            "version": ffmpeg.get("version", ""),
+        },
+        "mcp_token": {
+            "ok": token_valid,
+            "path": str(token_path),
+            "present": token_present,
+            "mode": token_mode,
+            "mode_secure": token_mode_secure,
+            "error": token_error,
+        },
+        "ui_healthz": {
+            "ok": bool(ui_report.get("healthz_ok")),
+            "port": ui_report.get("port"),
+            "error": ui_report.get("error"),
+        },
+    }
+    reasons = [name for name, value in components.items() if not value["ok"]] if enabled else []
+    return {
+        "configured": configured,
+        "section_present": section_present,
+        "enabled": enabled,
+        "ok": not enabled or not reasons,
+        "config_path": str(config_path),
+        "config_error": config_error,
+        "components": components,
+        "reasons": reasons,
+    }
+
+
 def _run(cmd: list[str], timeout: int = 5, cwd: Path | None = None) -> tuple[int, str, str]:
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, cwd=str(cwd) if cwd else None)
         return result.returncode, result.stdout.strip(), result.stderr.strip()
     except Exception as exc:
         return 999, "", str(exc)
+
+
+def check_hermes_cli_contract(path: str | None) -> dict[str, Any]:
+    """Feature-probe the Hermes CLI surfaces the Host actually depends on."""
+    if not path:
+        return {"ok": False, "probed": False, "missing": ["hermes executable"]}
+    probes = {
+        "serve": (["serve", "--help"], ["--port", "--host", "--skip-build"]),
+        "sessions_export": (
+            ["sessions", "export", "--help"],
+            ["--session-id", "output"],
+        ),
+        "config_set": (["config", "set", "--help"], ["key", "value"]),
+        "toolsets": (["--help"], ["--toolsets"]),
+    }
+    details: dict[str, Any] = {}
+    missing: list[str] = []
+    for name, (args, markers) in probes.items():
+        code, stdout, stderr = _run([path, *args], timeout=5)
+        output = f"{stdout}\n{stderr}"
+        absent = [marker for marker in markers if marker not in output]
+        ok = code == 0 and not absent
+        details[name] = {"ok": ok, "missing_markers": absent, "exit_code": code}
+        if not ok:
+            missing.append(name)
+    return {
+        "ok": not missing,
+        "probed": True,
+        "path": path,
+        "required": list(probes),
+        "missing": missing,
+        "probes": details,
+    }
+
+
+def check_hermes_phase_registration(path: str | None) -> dict[str, Any]:
+    """Read-only check for the two phase-specific MCP capability names.
+
+    ``hermes mcp list`` does not expose connector credentials. Parse only the
+    first and final table columns, and never return the command's raw output.
+    """
+    required = {"yulu_artifact", "yulu_delivery"}
+    if not path:
+        return {"ok": False, "probed": False, "missing": sorted(required)}
+    code, stdout, _stderr = _run([path, "mcp", "list"], timeout=5)
+    enabled: set[str] = set()
+    if code == 0:
+        ansi = re.compile(r"\x1b\[[0-9;]*m")
+        for raw_line in stdout.splitlines():
+            parts = ansi.sub("", raw_line).strip().split()
+            if len(parts) >= 2 and parts[0] in required and parts[-1] == "enabled":
+                enabled.add(parts[0])
+    missing = sorted(required - enabled)
+    return {
+        "ok": code == 0 and not missing,
+        "probed": True,
+        "required": sorted(required),
+        "enabled": sorted(enabled),
+        "missing": missing,
+        "exit_code": code,
+    }
 
 
 def _git_info(root: Path) -> dict[str, Any]:
@@ -84,19 +276,26 @@ def _dependency_manager() -> Any:
 
 
 def _check_command(name: str, args: list[str] | None = None) -> dict[str, Any]:
-    path = shutil.which(name)
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from capabilities.probes import resolve_on_login_path
+        path = resolve_on_login_path(name)
+    except Exception:
+        path = shutil.which(name)
     # Presence read routes through the DependencyManager seam when available;
     # falls back to the which() result off Darwin / when the seam is absent.
     ok = bool(path)
     mgr = _dependency_manager()
     if mgr is not None:
         try:
-            ok = bool(mgr.is_available(name))
+            # Keep the dependency-manager read for platform abstraction, but a
+            # command check is usable only when we resolved an executable path.
+            mgr.is_available(name)
         except Exception:
-            ok = bool(path)
+            pass
     check = {"name": name, "ok": ok, "path": path or ""}
     if path and args:
-        code, out, err = _run([name, *args])
+        code, out, err = _run([path, *args])
         check.update({"returncode": code, "version": (out or err).splitlines()[0] if (out or err) else ""})
     return check
 
@@ -133,68 +332,8 @@ def _yulu_processes() -> list[str]:
     code, out, _ = _run(["ps", "aux"], timeout=5)
     if code != 0:
         return []
-    needles = ("yulu", "Yulu.app", "audio_daemon", "transcribe.py", "realtime_transcribe", "mlx-whisper")
+    needles = ("yulu", "Yulu.app", "audio_daemon")
     return [line for line in out.splitlines() if any(n in line for n in needles) and "doctor.py" not in line]
-
-
-def check_stt_daemon(config_dir: Path) -> dict[str, Any]:
-    """Health check the resident stt_daemon: socket, pid, vocab DB, model load."""
-    socket_path = config_dir / "stt_daemon.sock"
-    pid_file = config_dir / "stt_daemon.pid"
-    vocab_db = config_dir / "vocab.sqlite"
-    log_file = config_dir / "logs" / "stt_daemon.log"
-    report: dict[str, Any] = {
-        "socket_path": str(socket_path),
-        "socket_present": socket_path.exists(),
-        "pid_file_present": pid_file.exists(),
-        "vocab_db_present": vocab_db.exists(),
-        "log_path": str(log_file),
-        "log_present": log_file.exists(),
-        "vocab_term_count": None,
-        "daemon_reachable": False,
-        "model_loaded": None,
-        "in_flight_jobs": None,
-        "active_sessions": None,
-        "error": None,
-    }
-
-    if vocab_db.exists():
-        try:
-            import sqlite3
-            conn = sqlite3.connect(str(vocab_db))
-            try:
-                row = conn.execute("SELECT COUNT(*) FROM custom_words").fetchone()
-                report["vocab_term_count"] = row[0]
-            finally:
-                conn.close()
-        except sqlite3.DatabaseError as exc:
-            report["error"] = f"vocab.sqlite read error: {exc}"
-
-    if socket_path.exists():
-        try:
-            import asyncio
-            async def _ask() -> dict[str, Any]:
-                reader, writer = await asyncio.wait_for(
-                    asyncio.open_unix_connection(str(socket_path)), timeout=2.0
-                )
-                writer.write(b'{"type":"health"}\n')
-                await writer.drain()
-                line = await asyncio.wait_for(reader.readline(), timeout=2.0)
-                writer.close()
-                try:
-                    await writer.wait_closed()
-                except (ConnectionResetError, BrokenPipeError):
-                    pass
-                return json.loads(line.decode())
-            payload = asyncio.run(_ask())
-            report["daemon_reachable"] = True
-            report["model_loaded"] = payload.get("model_loaded")
-            report["in_flight_jobs"] = payload.get("in_flight_jobs")
-            report["active_sessions"] = payload.get("active_sessions")
-        except Exception as exc:
-            report["error"] = f"health rpc failed: {exc}"
-
-    return report
 
 
 def check_search_index(config_dir: Path) -> dict[str, Any]:
@@ -231,58 +370,30 @@ def check_search_index(config_dir: Path) -> dict[str, Any]:
 
 
 def _host_capabilities(config_dir: Path, runtime_root: Path) -> dict[str, Any]:
-    """Assemble the versioned ``host_capabilities`` section (DETECT-01/03/05).
+    """Report Agent CLIs, calendar support, and local recording readiness.
 
-    Mirrors :func:`check_search_index`'s lazy-import + never-raise contract: it inserts the
-    scripts dir on ``sys.path``, guardedly imports the stdlib-only ``capabilities`` module,
-    and builds a :class:`HostCapabilityReport` from Plan 01's probes plus Plan 02's providers.
-
-    The six DETECT-03 probes are folded in directly:
-    ``claude`` / ``whisper_cli`` (login-shell PATH via ``probe_command``), ``mlx_whisper``
-    (daemon-interpreter importability), ``llm_command`` (RESOLVED + statted, NEVER executed —
-    T-03-01), ``models`` (path-bounded model scan), and ``recording_dir`` (writability via the
-    Phase 2 PathResolver). Then every ``default_providers()`` entry's ``capabilities()`` dict is
-    merged (``agent-config`` provenance) — so the ClaudeCodeProvider's ``claude_cli`` /
-    ``agent_mlx_whisper`` reach the report end-to-end (DETECT-05).
-
-    The WHOLE body is wrapped in try/except so any failure degrades to
-    ``{"error": str(exc), "schema_version": 1, "capabilities": {}}`` — this NEVER raises and
-    never hangs ``yulu doctor`` (the doctor never-raise contract; T-03-07). It is read-only:
-    no subprocess executes the configured ``llm.command`` and nothing mutates runtime state.
-
-    ``runtime_root`` is accepted for symmetry with the other runtime-scoped checks (the probes
-    resolve their own well-known roots today); it lets a future revision scope model/recording
-    discovery to the running install without changing this signature.
+    Transcription engines and models are intentionally absent: the selected
+    Agent owns those capabilities. The whole body remains read-only and
+    never-raise so ``yulu doctor`` is safe on partially configured hosts.
     """
     try:
         sys.path.insert(0, str(Path(__file__).resolve().parent))
         from capabilities.probes import (
             probe_command,
-            probe_diarization,
             probe_llm_command,
-            probe_mlx_whisper,
             probe_recording_dir,
-            scan_models,
         )
         from capabilities.provider import default_providers
         from capabilities.report import HostCapabilityReport
 
         report = HostCapabilityReport()
-        # The six DETECT-03 capabilities (claude/whisper-cli/mlx-whisper/llm.command/models/dir).
+        # Agent and deterministic Host capabilities only.
+        report.capabilities["hermes"] = probe_command("hermes", ("--version",))
         report.capabilities["claude"] = probe_command("claude", ("--version",))
-        report.capabilities["whisper_cli"] = probe_command("whisper-cli", ("--version",))
-        report.capabilities["mlx_whisper"] = probe_mlx_whisper()
-        # llm.command is RESOLVED + statted only — the configured command is never executed.
         report.capabilities["llm_command"] = probe_llm_command(config_dir / "config.json")
-        report.capabilities["models"] = scan_models()
         report.capabilities["recording_dir"] = probe_recording_dir()
-        # diarization (v0.6, DIAR-04) — a Yulu-managed tri-state entry (usable /
-        # present-but-unverified / absent). NOT an agent-config reframe: diarization is
-        # provisioned + owned by Yulu, surfaced here so the UI can show readiness.
-        report.capabilities["diarization"] = probe_diarization()
         # gog (Google Calendar CLI from steipete/tap/gogcli) — a host CLI with host-path
         # provenance, NOT an agent-config reframe (D-06 provider neutrality stays intact).
-        # Added so REUSE-01's wording (whisper / model / claude / gog) is fully covered and
         # setup_deps.sh can gate `brew install steipete/tap/gogcli` on its tri-state.
         # probe_command resolves on the login PATH and reports USABLE even if `--version`
         # yields nothing (resolution, not version, drives usability).
@@ -304,30 +415,6 @@ def _host_capabilities(config_dir: Path, runtime_root: Path) -> dict[str, Any]:
         return {"error": str(exc), "schema_version": 1, "capabilities": {}}
 
 
-def _connector_capabilities(config_dir: Path, runtime_root: Path) -> dict[str, Any]:
-    """Assemble reusable calendar/output connector probes.
-
-    Mirrors ``_host_capabilities``: read-only, lazy-imported, and never-raise. The report is
-    separate from host runtime capabilities because connectors carry user-facing actions such as
-    ``calendar.read`` and ``summary.send``.
-    """
-    try:
-        sys.path.insert(0, str(Path(__file__).resolve().parent))
-        from connectors.provider import default_providers
-        from connectors.report import ConnectorReport
-
-        report = ConnectorReport()
-        for provider in default_providers():
-            try:
-                for connector_id, connector in provider.connectors().items():
-                    report.connectors[connector_id] = connector
-            except Exception:
-                continue
-        return report.to_dict()
-    except Exception as exc:
-        return {"error": str(exc), "schema_version": 1, "connectors": {}}
-
-
 def _privacy_opt_in(config_dir: Path) -> dict[str, Any]:
     """Report local-first defaults and explicit cloud/external-service opt-ins."""
     try:
@@ -344,9 +431,11 @@ def check_yulu_ui(
     config_dir: Path,
     timeout: float = 2.0,
 ) -> dict[str, Any]:
-    """Phase G health check: verify yulu_ui dist artifacts, LaunchAgent, and
-    /healthz. UI is optional — missing artifacts are not a doctor-level failure.
-    Always returns a dict with the same keys so JSON consumers can rely on it."""
+    """Verify the required durable Host build, LaunchAgent, and /healthz.
+
+    ``agent_pipeline`` consumes this report and makes an enabled pipeline fail
+    overall health when the Host is absent or unreachable.
+    """
     script_dir = Path(script_dir).expanduser()
     config_dir = Path(config_dir).expanduser()
 
@@ -417,19 +506,27 @@ def collect_report(
         _check_command("ffmpeg", ["-version"]),
         _check_command("ffprobe", ["-version"]),
         _check_command("swiftc"),
+        _check_command("hermes", ["--version"]),
         _check_command("codex", ["--version"]),
         _check_command("gh", ["--version"]),
     ]
 
-    queue_path = config_dir / "agent-queue.json"
     config_path = config_dir / "config.json"
-    queue_entries = None
-    if queue_path.exists():
-        try:
-            data = json.loads(queue_path.read_text(encoding="utf-8"))
-            queue_entries = len(data) if isinstance(data, list) else None
-        except Exception:
-            queue_entries = None
+    ui_report = check_yulu_ui(runtime_root / "yulu" / "scripts", config_dir)
+    hermes_check = next((item for item in checks if item.get("name") == "hermes"), {})
+    hermes_contract = check_hermes_cli_contract(
+        str(hermes_check.get("path") or "") if hermes_check.get("ok") else None
+    )
+    hermes_phase_registration = check_hermes_phase_registration(
+        str(hermes_check.get("path") or "") if hermes_check.get("ok") else None
+    )
+    agent_pipeline = check_agent_pipeline(
+        config_dir,
+        checks,
+        ui_report,
+        hermes_contract=hermes_contract,
+        hermes_phase_registration=hermes_phase_registration,
+    )
 
     return {
         "source_root": str(source_root),
@@ -442,17 +539,15 @@ def collect_report(
         "config_dir": str(config_dir),
         "config_exists": config_dir.exists(),
         "config_path_exists": config_path.exists(),
-        "queue_path_exists": queue_path.exists(),
-        "queue_entries": queue_entries,
+        "host_tasks": check_host_tasks(config_dir),
         "socket": _socket_status(config_dir / "audio_daemon.sock"),
-        "stt_daemon": check_stt_daemon(config_dir),
         "search_index": check_search_index(config_dir),
         # §5d fix (CONCERNS §5d, D-07): the UI check must look at the RUNTIME install, not the
         # source checkout — a production install (source_root != runtime_root) now reports the
         # installed UI dist honestly. When source_root == runtime_root (dev), behavior is unchanged.
-        "yulu_ui": check_yulu_ui(runtime_root / "yulu" / "scripts", config_dir),
+        "yulu_ui": ui_report,
+        "agent_pipeline": agent_pipeline,
         "host_capabilities": _host_capabilities(config_dir, runtime_root),
-        "connector_capabilities": _connector_capabilities(config_dir, runtime_root),
         "privacy_opt_in": _privacy_opt_in(config_dir),
         "processes": processes,
         "legacy_processes": legacy_processes,
@@ -469,6 +564,9 @@ def _overall_ok(report: dict[str, Any]) -> bool:
     if report.get("legacy_processes"):
         return False
     if not report.get("source_git", {}).get("is_repo") and not report.get("source_install", {}).get("present"):
+        return False
+    pipeline = report.get("agent_pipeline", {})
+    if pipeline.get("enabled") and not pipeline.get("ok"):
         return False
     return True
 
@@ -494,7 +592,12 @@ def print_human(report: dict[str, Any]) -> None:
             print(f"  install metadata error: {install['error']}")
     print(f"{mark(report['runtime_exists'])} runtime: {report['runtime_root']}")
     print(f"{mark(not report['legacy_processes'])} legacy root: {report['legacy_root']} exists={report['legacy_root_exists']} legacy_processes={len(report['legacy_processes'])}")
-    print(f"{mark(report['config_exists'])} config: {report['config_dir']} queue_entries={report['queue_entries']}")
+    host_tasks = report.get("host_tasks", {})
+    print(f"{mark(report['config_exists'])} config: {report['config_dir']} host_tasks={host_tasks.get('total', 0)}")
+    if host_tasks.get("error"):
+        print(f"  host task store error: {host_tasks['error']}")
+    elif host_tasks.get("states"):
+        print("  task states: " + " ".join(f"{state}={count}" for state, count in sorted(host_tasks["states"].items())))
     sock = report["socket"]
     print(f"{mark(sock.get('ok', False))} audio daemon socket: {sock.get('path')} exists={sock.get('exists')}")
     if sock.get("ok") and (sock.get("sysReady") is not None or sock.get("micReady") is not None):
@@ -508,15 +611,6 @@ def print_human(report: dict[str, Any]) -> None:
         print(f"  {sys_part} {mic_part}{err_part}")
         if sock.get("sysReady") is False:
             print("  repair: yulu repair-permissions --reset")
-    sd = report.get("stt_daemon", {})
-    if sd:
-        print(f"{mark(sd.get('daemon_reachable', False))} stt_daemon socket: {sd.get('socket_path')} present={sd.get('socket_present')} reachable={sd.get('daemon_reachable')}")
-        if sd.get("vocab_term_count") is not None:
-            print(f"  vocab terms: {sd['vocab_term_count']}")
-        if sd.get("daemon_reachable"):
-            print(f"  model_loaded={sd.get('model_loaded')} in_flight={sd.get('in_flight_jobs')} sessions={sd.get('active_sessions')}")
-        elif sd.get("error"):
-            print(f"  error: {sd['error']}")
     si = report.get("search_index", {})
     if si:
         print(f"{mark(si.get('ok', False))} search index: {si.get('db_path')} present={si.get('present')}")
@@ -539,6 +633,15 @@ def print_human(report: dict[str, Any]) -> None:
             print(f"  log: {ui['log_path']} ({size_kb:.1f} KB)")
         if ui.get("error"):
             print(f"  error: {ui['error']}")
+    pipeline = report.get("agent_pipeline", {})
+    if pipeline:
+        enabled = bool(pipeline.get("enabled"))
+        print(
+            f"{mark(bool(pipeline.get('ok')))} agent pipeline: "
+            f"enabled={enabled} ok={pipeline.get('ok')}"
+        )
+        if enabled and pipeline.get("reasons"):
+            print("  unavailable: " + ", ".join(str(item) for item in pipeline["reasons"]))
     hc = report.get("host_capabilities", {})
     if hc:
         caps = hc.get("capabilities", {}) or {}

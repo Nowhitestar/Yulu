@@ -1,13 +1,11 @@
 """Codifies acceptance criteria from the design spec
 (docs/superpowers/specs/2026-05-22-stt-daemon-and-vocab-design.md §13).
 
-These tests verify the end-state of the 8-phase implementation: no shadow
-mlx-whisper imports outside the daemon, transcribe.py reduced to thin
-client + business logic, vocab DB seeded with the legacy glossary, and
-the daemon's package structure intact.
+These tests retain the still-relevant capture, vocabulary, prompt, and search
+invariants. The retired Yulu batch transcriber and JSON Agent queue are covered
+by the Host/Hermes tests in ``yulu_ui`` instead.
 """
 
-import re
 import subprocess
 import sys
 from pathlib import Path
@@ -16,14 +14,8 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "yulu" / "scripts"
 
 
-def test_no_mlx_whisper_imports_outside_stt_daemon():
-    """Acceptance #2: actual `import mlx_whisper` only inside stt_daemon/.
-
-    String references in docstrings, comments, doctor-process needles,
-    setup.sh venv paths, and config example paths are allowed — those
-    aren't shadow STT runtimes, they're legitimate references to the
-    venv name or process-detection patterns.
-    """
+def test_no_yulu_mlx_whisper_imports():
+    """Transcription runtimes belong to the selected Agent."""
     result = subprocess.run(
         ["grep", "-rE", "-I", "--exclude-dir=__pycache__",
          r"^import mlx_whisper|^from mlx_whisper",
@@ -31,59 +23,11 @@ def test_no_mlx_whisper_imports_outside_stt_daemon():
         capture_output=True, text=True,
     )
     hits = [line for line in result.stdout.strip().splitlines() if line]
-    bad = []
-    for hit in hits:
-        path_str, _ = hit.split(":", 1)
-        p = Path(path_str)
-        # Allowed: anything under stt_daemon/, including tests for it.
-        if "stt_daemon" in p.parts:
-            continue
-        if p.name.startswith("test_stt_"):
-            continue
-        bad.append(hit)
-    assert not bad, f"mlx_whisper imported outside stt_daemon: {bad}"
+    assert not hits, f"Yulu still imports mlx_whisper: {hits}"
 
 
-def test_realtime_transcribe_is_daemon_subscriber():
-    """Acceptance #2 part 2: realtime_transcribe.py routes through the daemon."""
-    text = (SCRIPTS / "realtime_transcribe.py").read_text(encoding="utf-8")
-    assert "mlx_whisper" not in text, "realtime_transcribe.py still imports mlx_whisper"
-    assert "subscribe_session" in text, "realtime_transcribe.py is not a daemon subscriber"
-
-
-def test_transcribe_py_no_inline_mlx_invocation():
-    """Acceptance #3: transcribe.py is a thin client; no in-process mlx-whisper.
-
-    The line-count target in the original spec was aspirational (< 200) but
-    the preserved business logic (refine, summarize, fallback, agent queue,
-    prompt templates) reasonably runs ~340 lines. The substantive check is
-    that all STT goes through transcribe_client RPC — no direct mlx import
-    or subprocess invocation of mlx-whisper / whisper-cli remains.
-    """
-    path = SCRIPTS / "transcribe.py"
-    text = path.read_text(encoding="utf-8")
-    assert "from transcribe_client import" in text or "import transcribe_client" in text, \
-        "transcribe.py should delegate STT to transcribe_client"
-    assert not re.search(r"^\s*import\s+mlx_whisper", text, re.MULTILINE), \
-        "transcribe.py still has inline mlx_whisper import"
-    # The legacy `transcribe_mlx` and `transcribe` helper functions are gone
-    assert "def transcribe_mlx" not in text
-    assert "def final_transcribe_audio" not in text
-    line_count = sum(1 for _ in path.open(encoding="utf-8"))
-    assert line_count < 400, f"transcribe.py too long: {line_count} lines"
-
-
-def test_default_glossary_constant_removed():
-    """Acceptance #4: DEFAULT_GLOSSARY removed from transcribe.py source."""
-    text = (SCRIPTS / "transcribe.py").read_text(encoding="utf-8")
-    assert "DEFAULT_GLOSSARY" not in text, "DEFAULT_GLOSSARY should not appear in transcribe.py"
-
-
-def test_inline_replacements_dict_removed():
-    """Acceptance #4 part 2: inline replacements dict removed from transcribe.py."""
-    text = (SCRIPTS / "transcribe.py").read_text(encoding="utf-8")
-    # Look for the specific legacy dict literal pattern
-    assert '"agent king": "AgentKey"' not in text
+def test_realtime_transcribe_executor_is_removed():
+    assert not (SCRIPTS / "realtime_transcribe.py").exists()
 
 
 def test_seed_count_threshold(tmp_path):
@@ -96,19 +40,8 @@ def test_seed_count_threshold(tmp_path):
     assert repo.count() >= 23, f"seed produced too few rows: {repo.count()}"
 
 
-def test_stt_daemon_package_complete():
-    """All expected stt_daemon modules exist."""
-    pkg = SCRIPTS / "stt_daemon"
-    for name in (
-        "__init__.py", "__main__.py", "protocol.py", "logging.py",
-        "config.py", "vocab_cache.py", "runtime.py", "scheduler.py",
-        "control_server.py", "app.py", "live_session.py",
-    ):
-        assert (pkg / name).exists(), f"missing {name}"
-    backends = pkg / "backends"
-    assert (backends / "__init__.py").exists()
-    assert (backends / "mlx.py").exists()
-    assert (backends / "whisper_cli.py").exists()
+def test_stt_daemon_package_is_removed():
+    assert not (SCRIPTS / "stt_daemon").exists()
 
 
 def test_vocab_package_complete():
@@ -118,46 +51,32 @@ def test_vocab_package_complete():
         assert (pkg / name).exists(), f"missing {name}"
 
 
-def test_launchd_plist_template_exists():
-    """The stt_daemon launchd plist template is installable via setup.sh."""
-    plist = SCRIPTS / "com.yulu.sttdaemon.plist"
-    assert plist.exists()
-    text = plist.read_text(encoding="utf-8")
-    for placeholder in ("__PYTHON__", "__SCRIPT_DIR__", "__HOME__", "__PATH__"):
-        assert placeholder in text, f"{placeholder} missing from plist template"
+def test_stt_launchagent_is_retired_on_install():
+    assert not (SCRIPTS / "com.yulu.sttdaemon.plist").exists()
+    assert "com.yulu.sttdaemon.plist" in (SCRIPTS / "dev_install.py").read_text(encoding="utf-8")
+    assert "com.yulu.sttdaemon.plist" in (SCRIPTS / "setup_daemons.sh").read_text(encoding="utf-8")
 
 
 # ── Prompt Library acceptance (spec 2026-05-22-prompt-library-design.md) ──
 
-def test_transcribe_no_summary_prompt_constant():
-    """Acceptance #1: SUMMARY_PROMPT removed from transcribe.py + worker."""
-    for name in ("transcribe.py", "agent_queue_worker.py"):
-        text = (SCRIPTS / name).read_text(encoding="utf-8")
-        assert "SUMMARY_PROMPT" not in text, f"{name} still has SUMMARY_PROMPT"
-
-
-def test_transcribe_no_summarize_or_fallback_def():
-    """Acceptance #2: inline LLM helpers removed from transcribe.py."""
-    import re as _re
-    text = (SCRIPTS / "transcribe.py").read_text(encoding="utf-8")
-    assert _re.search(r"^\s*def\s+summarize\b", text, _re.MULTILINE) is None
-    assert _re.search(r"^\s*def\s+fallback_summary\b", text, _re.MULTILINE) is None
-    assert _re.search(r"^\s*def\s+refine_transcript\b", text, _re.MULTILINE) is None
-
-
-def test_transcribe_is_thin():
-    """Acceptance #8: transcribe.py is a thin orchestrator.
-
-    Limit bumped 200 → 220 (Phase 6, search-index push) → 225 (realtime-robustness
-    fix: the fast_summary coverage guard that stops a truncated realtime transcript
-    from being reused as the final) → 240 (v0.6 Phase 13, diarization wiring: capture
-    timestamped ASR segments + one thin call to
-    stt_daemon.diarize_pipeline.run_diarize_stage) → 260 (per-run speaker-count CLI
-    override for UI re-transcribe; → 280 (Hermes STT manifest wiring; the HEAVY
-    diarize logic lives in that module, NOT here — the orchestrator only gained the wiring). Still well under the
-    pre-refactor (~600 line) monolith; the orchestrator-ness invariant holds."""
-    line_count = sum(1 for _ in (SCRIPTS / "transcribe.py").open(encoding="utf-8"))
-    assert line_count <= 280, f"transcribe.py too long: {line_count} lines"
+def test_legacy_batch_executors_are_removed():
+    """Batch transcription, summarization and connectors are Agent-owned."""
+    for name in (
+        "transcribe.py",
+        "agent_queue_worker.py",
+        "queue_store.py",
+        "agent_notify.py",
+        "send_summary.py",
+        "com.yulu.agentqueue.plist",
+        "stt_cli.py",
+        "transcribe_client.py",
+        "realtime_transcribe.py",
+        "realtime_coverage.py",
+        "transcribe_text.py",
+        "setup_models.sh",
+        "setup_capabilities.sh",
+    ):
+        assert not (SCRIPTS / name).exists(), f"retired executor still exists: {name}"
 
 
 def test_prompts_seed_count(tmp_path):
@@ -177,8 +96,11 @@ def test_prompts_package_complete():
         assert (pkg / name).exists(), f"missing {name}"
 
 
-def test_summaries_cli_exists():
-    assert (SCRIPTS / "summaries_cli.py").exists()
+def test_legacy_summary_cli_is_removed():
+    assert not (SCRIPTS / "summaries_cli.py").exists()
+    wrapper = (SCRIPTS / "yulu").read_text(encoding="utf-8")
+    assert "summaries)" not in wrapper
+    assert "stt)" not in wrapper
 
 
 def test_adr_004_exists():
@@ -189,13 +111,11 @@ def test_adr_004_exists():
 # ── Dual-Track + Recording Lock acceptance (spec 2026-05-22-dual-track-recording-design.md) ──
 
 def test_wav_inspect_classifier_module_exists():
-    pkg = SCRIPTS / "stt_daemon"
-    assert (pkg / "wav_inspect.py").exists()
+    assert (SCRIPTS / "wav_inspect.py").exists()
 
 
-def test_transcript_merge_module_exists():
-    pkg = SCRIPTS / "stt_daemon"
-    assert (pkg / "transcript_merge.py").exists()
+def test_legacy_transcript_merge_module_is_removed():
+    assert not (SCRIPTS / "stt_daemon" / "transcript_merge.py").exists()
 
 
 def test_recording_lock_module_exists():
@@ -235,14 +155,6 @@ def test_promptscache_render_accepts_speaker_vars():
     assert "their_transcript" in params
 
 
-def test_transcribe_uses_channel_split_and_three_outputs():
-    text = (SCRIPTS / "transcribe.py").read_text(encoding="utf-8")
-    assert "channel_split=True" in text
-    assert ".mic.transcript.txt" in text
-    assert ".sys.transcript.txt" in text
-    assert "transcript_merge" in text
-
-
 def test_record_audio_acquires_recording_lock():
     text = (SCRIPTS / "record_audio.py").read_text(encoding="utf-8")
     assert "acquire_recording_lock" in text or "from recording_lock import" in text
@@ -252,16 +164,15 @@ def test_record_audio_acquires_recording_lock():
 def test_meeting_daemon_acquires_recording_lock():
     text = (SCRIPTS / "meeting_daemon.py").read_text(encoding="utf-8")
     assert "acquire_recording_lock" in text or "from recording_lock import" in text
-    assert "start_realtime_transcriber(audio_path, title)" in text
     assert "recorder_status.log" in text
     assert "wait(timeout=0.4)" in text
 
 
-def test_meeting_daemon_accepts_async_summary_queue():
+def test_meeting_daemon_hands_completed_recordings_to_host():
     text = (SCRIPTS / "meeting_daemon.py").read_text(encoding="utf-8")
-    assert "summary_queued = False" in text
-    assert '"enqueued" in line and "LLM jobs" in line' in text
-    assert "摘要任务已进入队列" in text
+    assert "/api/recordings/completed" in text
+    assert "recording-events" in text
+    assert "send_summary.py" not in text
 
 
 # ── Voicemail REMOVAL acceptance (voicemail unified into meetings) ──
@@ -293,12 +204,6 @@ def test_prompts_db_check_constraint_drops_voicemail():
     assert "CHECK(category IN ('summary', 'cleanup', 'voicemail'))" not in text
     # The migration that collapses legacy voicemail rows stays.
     assert "_migrate_category_check_constraint" in text
-
-
-def test_agent_queue_worker_has_generic_summary_notify():
-    text = (SCRIPTS / "agent_queue_worker.py").read_text(encoding="utf-8")
-    assert "_maybe_summary_notify" in text
-    assert "_maybe_voicemail_notify" not in text
 
 
 def test_yulu_wrapper_memo_is_removed():
@@ -609,23 +514,6 @@ def test_phase6_11_stem_parser_skips_nonmatching():
     from search.indexer import parse_stem
     assert parse_stem("notes") is None
     assert parse_stem("manual-note") is None
-
-
-def test_phase6_12_index_failure_does_not_break_pipeline():
-    """The search-index write hook in the sole LLM dispatcher
-    (agent_queue_worker) is wrapped in try/except so a search-index failure
-    can never break the recording → summary pipeline. (The runtime behaviour
-    is exercised end-to-end by
-    test_agent_queue_worker_search_hook::test_hook_failure_does_not_break_processing.)"""
-    text = (SCRIPTS / "agent_queue_worker.py").read_text(encoding="utf-8")
-    # The indexer import + upsert live inside a try/except that logs, not raises.
-    idx = text.index("from search import indexer as _search_indexer")
-    # The `try:` opens just before the indexer import…
-    assert "try:" in text[idx - 120 : idx]
-    # …and the matching except logs the failure rather than re-raising.
-    window = text[idx : idx + 700]
-    assert "except Exception" in window
-    assert "search index upsert failed" in window
 
 
 def test_phase6_13_ipc_path_matches_in_process(tmp_path, monkeypatch):

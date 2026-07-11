@@ -22,7 +22,7 @@ EXCLUDES=(
     ".claude"
     ".planning"
     "AGENTS.md"
-    "dist"
+    "/dist"
     ".ci-build"
     ".venv*"
     "venv"
@@ -74,8 +74,16 @@ rsync_exclude_args() {
 tar_exclude_args() {
     local pattern
     for pattern in "${EXCLUDES[@]}"; do
-        printf '%s\n' "--exclude=$pattern"
-        printf '%s\n' "--exclude=./$pattern"
+        if [[ "$pattern" == /* ]]; then
+            # bsdtar treats even a seemingly anchored `./dist` pattern as a
+            # basename match at every depth. Copy it here, then remove only the
+            # staged top-level path below so nested runtime dist/ directories
+            # remain in the release payload.
+            continue
+        else
+            printf '%s\n' "--exclude=$pattern"
+            printf '%s\n' "--exclude=./$pattern"
+        fi
     done
 }
 
@@ -211,8 +219,31 @@ else
     (cd "$ROOT" && tar "${TAR_ARGS[@]}" -cf - .) | (cd "$STAGE/yulu" && tar -xf -)
 fi
 
+# `/dist` is a repository-root build-output directory. Keep nested runtime
+# directories such as yulu/scripts/yulu_ui/dist, which contain the signed Host.
+rm -rf "$STAGE/yulu/dist"
+
 if [[ -f "$ROOT/install.sh" ]]; then
     cp "$ROOT/install.sh" "$INSTALL_ASSET"
+    # The versioned release installer must remain immutable even if main moves on.
+    # Replace the raw-bootstrap sentinel with the exact helper shipped in this
+    # runtime. The source install.sh keeps the sentinel and downloads main as the
+    # intentional one-line/bootstrap fallback.
+    HELPER_PAYLOAD="$(base64 < "$ROOT/yulu/scripts/release_installer.py" | tr -d '\r\n')"
+    INSTALL_TMP="$(mktemp "$DIST_ABS/install.sh.XXXXXX")"
+    awk -v payload="$HELPER_PAYLOAD" '
+        {
+            sub(/__YULU_EMBEDDED_RELEASE_INSTALLER_BASE64__/, payload)
+            print
+        }
+    ' "$INSTALL_ASSET" > "$INSTALL_TMP"
+    if grep -q '__YULU_EMBEDDED_RELEASE_INSTALLER_BASE64__' "$INSTALL_TMP"; then
+        echo "Failed to embed release_installer.py into release install.sh" >&2
+        rm -f "$INSTALL_TMP"
+        exit 1
+    fi
+    chmod +x "$INSTALL_TMP"
+    mv "$INSTALL_TMP" "$INSTALL_ASSET"
 fi
 
 rm -f "$ZIP_PATH"

@@ -5,8 +5,6 @@ from __future__ import annotations
 import argparse
 import csv
 import json
-import os
-import signal
 import sys
 from dataclasses import asdict
 from pathlib import Path
@@ -19,20 +17,6 @@ from .seed import seed_from_current, restore_defaults
 
 
 DEFAULT_DB = Path.home() / ".config" / "yulu" / "prompts.sqlite"
-WORKER_PID = Path.home() / ".config" / "yulu" / "agent_queue_worker.pid"
-
-
-def _sighup_worker() -> None:
-    """Best-effort SIGHUP to running agent_queue_worker for cache reload."""
-    try:
-        if not WORKER_PID.exists():
-            return
-        pid = int(WORKER_PID.read_text().strip())
-        os.kill(pid, signal.SIGHUP)
-    except (OSError, ValueError):
-        pass
-
-
 def _prompt_to_dict(p: Prompt) -> dict:
     d = asdict(p)
     d["category"] = p.category.value
@@ -135,15 +119,19 @@ def _cmd_edit(args: argparse.Namespace, repo: PromptsRepo) -> int:
 
     category = Category(args.category) if args.category else None
 
-    repo.edit(
-        args.slug,
-        name=args.name or None,
-        content=content,
-        category=category,
-        is_auto_run=is_auto_run,
-        sort_order=getattr(args, "sort_order", None),
-        note=args.note if hasattr(args, "note") else None,
-    )
+    try:
+        repo.edit(
+            args.slug,
+            name=args.name or None,
+            content=content,
+            category=category,
+            is_auto_run=is_auto_run,
+            sort_order=getattr(args, "sort_order", None),
+            note=args.note if hasattr(args, "note") else None,
+        )
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
     return 0
 
 
@@ -254,9 +242,8 @@ def _cmd_import(args: argparse.Namespace, repo: PromptsRepo) -> int:
 
 
 def _cmd_reload(args: argparse.Namespace, repo: PromptsRepo) -> int:
-    """reload — SIGHUP the worker (best-effort) and print confirmation."""
-    _sighup_worker()
-    print("SIGHUP sent (best-effort)")
+    """reload — retained as a compatibility no-op; Host reads prompts per task."""
+    print("Prompt catalog is read on demand; no worker reload is required")
     return 0
 
 
@@ -373,8 +360,6 @@ def main(argv: Optional[list[str]] = None) -> int:
     finally:
         repo.conn.close()
 
-    if args.cmd in {"add", "edit", "remove", "seed", "import"}:
-        _sighup_worker()
     return code
 
 

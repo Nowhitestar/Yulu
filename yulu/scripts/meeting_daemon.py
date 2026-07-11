@@ -29,6 +29,8 @@ import sys
 import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
 import meeting_actions
 from state_store import (
@@ -49,6 +51,8 @@ CONFIG_PATH = CONFIG_DIR / "config.json"
 SCHEDULE_PATH = CONFIG_DIR / "schedule.json"
 STATE_PATH = CONFIG_DIR / ".state.json"
 SCHEDULER_PID = CONFIG_DIR / ".scheduler.pid"
+MCP_TOKEN_PATH = CONFIG_DIR / "mcp-token.json"
+RECORDING_EVENTS_DIR = CONFIG_DIR / "recording-events"
 SCRIPT_DIR = Path(__file__).resolve().parent
 
 DEFAULT_DURATION_MIN = 60
@@ -66,36 +70,126 @@ def load_config():
         return json.load(f)
 
 
-def _post_recording_plan(audio_path: str) -> dict:
-    plan = {
-        "event": "transcribing",
-        "message": "📝 转录 + 摘要...",
-        "error": "转录失败",
-    }
-    if not audio_path:
-        return plan
+def _auto_send_notion(path: Path | None = None) -> bool:
+    path = path or CONFIG_PATH
     try:
-        from transcribe_text import (
-            FAST_POST_RECORDING_MODE,
-            normalize_post_recording_mode,
-            reusable_realtime_transcript,
-        )
-
-        cfg = json.loads(CONFIG_PATH.read_text(encoding="utf-8")) if CONFIG_PATH.exists() else {}
-        trans_cfg = dict(cfg.get("transcription", {}) or {})
-        post_mode = normalize_post_recording_mode(trans_cfg.get("post_recording_mode"))
-        if post_mode != FAST_POST_RECORDING_MODE:
-            return plan
-        realtime_text, _reason = reusable_realtime_transcript(Path(audio_path), trans_cfg)
-        if realtime_text:
-            return {
-                "event": "summarizing",
-                "message": "📝 生成摘要（复用实时转写）...",
-                "error": "摘要处理失败",
-            }
+        config = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
-        return plan
-    return plan
+        return False
+    if not isinstance(config, dict):
+        return False
+    pipeline = config.get("agent_pipeline")
+    return bool(pipeline.get("auto_send_notion")) if isinstance(pipeline, dict) else False
+
+
+def _agent_pipeline_auto_processing(path: Path | None = None) -> bool:
+    """Treat only explicit policy opt-outs as disabled at the capture edge.
+
+    The Host remains authoritative and returns a permanent policy result if its
+    current config differs. Missing legacy keys retain the schema defaults.
+    """
+    path = path or CONFIG_PATH
+    try:
+        config = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return True
+    if not isinstance(config, dict):
+        return True
+    pipeline = config.get("agent_pipeline")
+    if not isinstance(pipeline, dict):
+        return True
+    return pipeline.get("enabled", True) is not False and pipeline.get("auto_process_recordings", True) is not False
+
+
+def _recording_completed_payload(audio_path: str, title: str) -> dict:
+    return {
+        "audioPath": audio_path,
+        "title": title,
+        "sendToNotion": _auto_send_notion(),
+    }
+
+
+def _read_mcp_token(path: Path | None = None) -> str:
+    path = path or MCP_TOKEN_PATH
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return ""
+    token = raw.get("token") if isinstance(raw, dict) else ""
+    return token.strip() if isinstance(token, str) else ""
+
+
+def _post_recording_completed(payload: dict, *, timeout: float = 5.0) -> str:
+    token = _read_mcp_token()
+    if not token:
+        return "transient"
+    port = os.environ.get("YULU_UI_PORT", "7777").strip() or "7777"
+    request = Request(
+        f"http://127.0.0.1:{port}/api/recordings/completed",
+        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urlopen(request, timeout=timeout) as response:
+            response.read()
+            status = getattr(response, "status", response.getcode())
+            return "accepted" if 200 <= int(status) < 300 else "transient"
+    except HTTPError as exc:
+        try:
+            body = json.loads(exc.read().decode("utf-8"))
+        except Exception:
+            body = {}
+        if (
+            exc.code == 409
+            and isinstance(body, dict)
+            and body.get("error") == "recording_pipeline_policy_disabled"
+            and body.get("permanent") is True
+        ):
+            return "policy_disabled"
+        return "transient"
+    except (URLError, OSError, TimeoutError, ValueError):
+        return "transient"
+
+
+def _spool_recording_completed(payload: dict, directory: Path | None = None) -> Path:
+    directory = directory or RECORDING_EVENTS_DIR
+    directory.mkdir(parents=True, exist_ok=True)
+    directory.chmod(0o700)
+    event_id = str(uuid.uuid4())
+    target = directory / f"{event_id}.json"
+    tmp = directory / f".{event_id}.{os.getpid()}.tmp"
+    try:
+        tmp.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        tmp.chmod(0o600)
+        os.replace(tmp, target)
+    finally:
+        tmp.unlink(missing_ok=True)
+    return target
+
+
+def _dispatch_recording_completed(audio_path: str, title: str) -> Path | None:
+    if not _agent_pipeline_auto_processing():
+        print("⏸️ 录音已保存；Agent 自动处理已按策略暂停")
+        return None
+    payload = _recording_completed_payload(audio_path, title)
+    result = _post_recording_completed(payload)
+    if result == "accepted":
+        print("📤 录音完成事件已交给 Yulu Host")
+        return None
+    if result == "policy_disabled":
+        print("⏸️ 录音已保存；Yulu Host 已确认 Agent 自动处理策略处于暂停状态")
+        return None
+    spool_path = _spool_recording_completed(payload)
+    print(f"⏳ Yulu Host 暂不可用，录音完成事件已持久化: {spool_path}")
+    return spool_path
 
 
 def load_schedule():
@@ -462,11 +556,6 @@ def _start_recording(title, meeting_id=""):
                 meeting_id=meeting_id, backend="daemon", path=STATE_PATH,
                 extra={"segments": [audio_path]},
             )
-            try:
-                from record_audio import start_realtime_transcriber
-                start_realtime_transcriber(audio_path, title)
-            except Exception as exc:
-                print(f"⚠️ 实时转写启动失败: {exc}", file=sys.stderr)
             print(f"✅ 录制中: {audio_path}")
 
             # 启动状态浮窗
@@ -651,85 +740,37 @@ def _stop_and_process():
         [sys.executable, str(record), "stop"],
         capture_output=True, text=True,
     )
+    if stop_result.returncode != 0:
+        detail = (stop_result.stderr or stop_result.stdout or "unknown stop error").strip()
+        print(f"❌ 停止录制失败: {detail}", file=sys.stderr)
+        return
     for line in stop_result.stdout.splitlines():
         if line.startswith("FINAL_RECORDING_PATH="):
             audio_path = line.split("=", 1)[1].strip() or audio_path
             break
 
+    audio_path = str(audio_path or "").strip()
+    if not audio_path:
+        print("❌ 停止录制后未获得录音路径", file=sys.stderr)
+        return
+    resolved_audio_path = Path(audio_path).expanduser().resolve()
+    if not resolved_audio_path.is_file():
+        print(f"❌ 停止录制后找不到录音文件: {resolved_audio_path}", file=sys.stderr)
+        return
+    audio_path = str(resolved_audio_path)
+
     notify = SCRIPT_DIR / "notify.py"
     subprocess.Popen([sys.executable, str(notify), "notify_stop", title],
                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-    process_plan = _post_recording_plan(audio_path)
-
-    # 2. 通知 agent 开始处理
-    try:
-        from agent_notify import notify
-        notify(process_plan["event"], title=title)
-    except Exception:
-        pass
-
-    # 3. 转录/复用实时稿 + 摘要
-    print(process_plan["message"])
-    transcribe = SCRIPT_DIR / "transcribe.py"
-    result = subprocess.run(
-        [sys.executable, str(transcribe), audio_path],
-        capture_output=True, text=True,
-    )
-    if result.returncode != 0:
-        print(f"❌ {process_plan['error']}:\n{result.stderr}", file=sys.stderr)
-        return
-    print(result.stdout)
-
-    # 4. 通知 agent 转录完成
-    transcript_path = None
-    summary_path = None
-    summary_pending_agent = False
-    summary_queued = False
-    for line in result.stdout.split("\n"):
-        if line.startswith("Transcript saved:"):
-            transcript_path = line.split("Transcript saved:", 1)[1].strip()
-        if line.startswith("Summary saved:"):
-            summary_path = line.split("Summary saved:", 1)[1].strip()
-        if line.startswith("Summary status:") and "draft_agent_pending" in line:
-            summary_pending_agent = True
-        if "enqueued" in line and "LLM jobs" in line:
-            summary_queued = True
-
-    try:
-        notify("transcript", title=title, path=transcript_path or "")
-    except Exception:
-        pass
-
-    if not summary_path:
-        if transcript_path or summary_queued:
-            set_recording_stopped(path=STATE_PATH)
-            try:
-                data = load_schedule()
-                save_schedule(data)
-            except Exception:
-                pass
-            print("⏳ 摘要任务已进入队列，agent_queue_worker 会继续生成最终摘要")
-            print(f"✅ 完成: {transcript_path or audio_path}")
-            return
-        print("❌ 找不到 summary 路径", file=sys.stderr)
-        return
-
-    # 3. 发送。若 summary 等待 agent 最终生成，则不发送草稿，由 heartbeat 的 summary_request 负责覆盖并推送。
-    if not summary_pending_agent:
-        send = SCRIPT_DIR / "send_summary.py"
-        subprocess.run([sys.executable, str(send), summary_path], capture_output=True)
-
-        config = load_config()
-        channel = config.get("output", {}).get("channel", "file")
-        subprocess.Popen(
-            [sys.executable, str(notify), "notify_sent", title, channel],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        )
-    else:
-        print("⏳ Summary 草稿已保存，等待 agent 按模板生成最终版")
-
     set_recording_stopped(path=STATE_PATH)
+
+    # 2. Host 接管后续 Agent 工作流。Host 不可用时持久化事件，绝不回退到
+    # 已退役的 Yulu-owned 转录、摘要或 connector 执行器。
+    try:
+        _dispatch_recording_completed(audio_path, title)
+    except OSError as exc:
+        print(f"⚠️ 录音已保存，但录音完成事件持久化失败: {exc}", file=sys.stderr)
 
     # 清理当前录制相关的过期 ask_stop 事件，避免测试/重载后残留。
     try:
@@ -738,7 +779,7 @@ def _stop_and_process():
     except Exception:
         pass
 
-    print(f"✅ 完成: {summary_path}")
+    print(f"✅ 录音已保存: {audio_path}")
 
 
 # ───────────────────────────────────────────────

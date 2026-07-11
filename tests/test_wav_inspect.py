@@ -1,4 +1,4 @@
-"""Unit tests for stt_daemon.wav_inspect.WavLayout classifier.
+"""Unit tests for the runtime-independent wav_inspect classifier.
 
 Generates synthetic WAV byte streams (RIFF / fmt / optional LIST-INFO / data)
 rather than producing audio — the classifier only inspects header bytes."""
@@ -13,7 +13,7 @@ from pathlib import Path
 SCRIPTS = Path(__file__).resolve().parents[1] / "yulu" / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-from stt_daemon.wav_inspect import WavLayout, classify, DUAL_TRACK_MARKER
+from wav_inspect import WavLayout, classify, DUAL_TRACK_MARKER
 
 
 def _write_mono(path: Path, n_samples: int = 16) -> None:

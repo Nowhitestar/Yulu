@@ -4,8 +4,8 @@ These tests assert the three load-bearing guarantees of Plan 03's doctor wiring:
 
 1. **DETECT-01/03 surfaced** — ``collect_report()`` / ``doctor --json`` carry a
    ``host_capabilities`` section with an int ``schema_version`` and a ``capabilities`` dict
-   covering the DETECT-03 set (claude / whisper_cli / mlx_whisper / llm_command / models /
-   recording_dir), each with a string provenance ∈ the 4-set and a tri-state status ∈ the
+   covering Agent CLI / command, calendar, and recording-directory readiness,
+   each with a string provenance ∈ the 4-set and a tri-state status ∈ the
    3-set — NEVER a Python bool (D-01/D-08).
 2. **Existing report shape intact** — every pre-existing top-level doctor key still appears;
    ``host_capabilities`` is purely additive and the assembly never raises (doctor's
@@ -27,8 +27,8 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 DOCTOR = ROOT / "yulu" / "scripts" / "doctor.py"
 
-# The DETECT-03 capability coverage the host_capabilities section must expose.
-DETECT_03_KEYS = {"claude", "whisper_cli", "mlx_whisper", "llm_command", "models", "recording_dir"}
+# Agent and deterministic Host capability coverage.
+HOST_KEYS = {"hermes", "claude", "llm_command", "recording_dir", "gog"}
 
 VALID_PROVENANCE = {"host-path", "yulu-managed", "agent-config", "absent"}
 VALID_STATUS = {"usable", "present-but-unverified", "absent"}
@@ -38,8 +38,8 @@ VALID_STATUS = {"usable", "present-but-unverified", "absent"}
 PRE_EXISTING_TOP_KEYS = {
     "source_root", "source_git", "runtime_root", "runtime_exists",
     "legacy_root", "legacy_root_exists", "config_dir", "config_exists",
-    "config_path_exists", "queue_path_exists", "queue_entries", "socket",
-    "stt_daemon", "search_index", "yulu_ui", "processes",
+    "config_path_exists", "host_tasks", "socket",
+    "search_index", "yulu_ui", "processes",
     "legacy_processes", "runtime_processes", "checks",
 }
 
@@ -66,8 +66,8 @@ def test_host_capabilities_present_with_schema_version_and_capabilities(tmp_path
     assert isinstance(hc.get("capabilities"), dict)
 
 
-def test_host_capabilities_covers_detect03_keys_with_valid_provenance_and_tristate(tmp_path):
-    """The section covers the six DETECT-03 capabilities, each with a valid provenance + a
+def test_host_capabilities_covers_agent_native_keys_with_valid_provenance_and_tristate(tmp_path):
+    """The section covers Agent-native capabilities, each with a valid provenance + a
     tri-state status string (NEVER a boolean) — D-01/D-08."""
     doctor = load_doctor()
     report = doctor.collect_report(
@@ -77,7 +77,7 @@ def test_host_capabilities_covers_detect03_keys_with_valid_provenance_and_trista
         config_dir=tmp_path / "cfg",
     )
     caps = report["host_capabilities"]["capabilities"]
-    assert DETECT_03_KEYS <= set(caps), f"missing DETECT-03 keys: {DETECT_03_KEYS - set(caps)}"
+    assert HOST_KEYS <= set(caps), f"missing Host keys: {HOST_KEYS - set(caps)}"
     for name, cap in caps.items():
         assert cap["provenance"] in VALID_PROVENANCE, f"{name}: bad provenance {cap['provenance']!r}"
         assert cap["status"] in VALID_STATUS, f"{name}: bad status {cap['status']!r}"
@@ -87,7 +87,7 @@ def test_host_capabilities_covers_detect03_keys_with_valid_provenance_and_trista
 
 def test_host_capabilities_includes_provider_agent_config_entries(tmp_path):
     """default_providers() entries reach the report end-to-end (DETECT-05): the
-    ClaudeCodeProvider contributes claude_cli + agent_mlx_whisper keys."""
+    ClaudeCodeProvider contributes its CLI key without inspecting STT internals."""
     doctor = load_doctor()
     report = doctor.collect_report(
         source_root=ROOT,
@@ -96,8 +96,9 @@ def test_host_capabilities_includes_provider_agent_config_entries(tmp_path):
         config_dir=tmp_path / "cfg",
     )
     caps = report["host_capabilities"]["capabilities"]
+    assert "hermes_cli" in caps
     assert "claude_cli" in caps
-    assert "agent_mlx_whisper" in caps
+    assert "agent_mlx_whisper" not in caps
 
 
 def test_existing_report_shape_intact(tmp_path):
@@ -174,6 +175,6 @@ def test_main_json_emits_host_capabilities_end_to_end(tmp_path, capsys):
     hc = data["host_capabilities"]
     assert isinstance(hc["schema_version"], int)
     caps = hc["capabilities"]
-    assert DETECT_03_KEYS <= set(caps)
+    assert HOST_KEYS <= set(caps)
     assert all(c["status"] in VALID_STATUS for c in caps.values())
     assert all(not isinstance(c["status"], bool) for c in caps.values())

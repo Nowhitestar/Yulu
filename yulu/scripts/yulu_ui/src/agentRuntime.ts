@@ -174,6 +174,31 @@ export function resolveAgentRuntime(config: unknown, opts: { scriptDir: string; 
   return noRuntime(opts.moviesDir, "missing", `${requested} CLI is not available on PATH`);
 }
 
+/** Resolve Hermes independently from the Agent selected for conversation.
+ * Recording and dictation depend on Hermes' audio API, so selecting Codex or
+ * Claude for chat must not disable transcription when Hermes is installed.
+ */
+export function resolveHermesAgentRuntime(
+  _config: unknown,
+  opts: { scriptDir: string; moviesDir: string },
+): AgentRuntime {
+  if (executableExists("hermes")) {
+    return {
+      provider: "hermes",
+      label: "Hermes",
+      source: "auto-detected",
+      // Recording is a separate capability contract from Agent Console. Keep
+      // both `hermes serve` and phase workflows on the same direct executable;
+      // llm.command wrappers/profiles and llm.enabled do not govern this path.
+      command: ["hermes"],
+      cwd: opts.moviesDir,
+      disabledReason: null,
+    };
+  }
+
+  return noRuntime(opts.moviesDir, "missing", "Hermes CLI is not available on PATH");
+}
+
 export function commandPreview(runtime: AgentRuntime): string {
   if (runtime.command.length === 0) return "";
   const resolved = resolveExecutable(runtime.command[0]!, process.env);

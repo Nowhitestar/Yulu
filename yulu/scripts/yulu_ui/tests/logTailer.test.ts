@@ -35,11 +35,11 @@ describe("logTailer", () => {
   });
 
   it("uses the short daemon name (sans com.yulu. prefix) in published events", async () => {
-    writeFileSync(join(root, "sttdaemon.log"), "");
+    writeFileSync(join(root, "statusagent.log"), "");
     tailer = startLogTailer({ configDir: root, pubsub });
     await waitMs(50);
-    appendFileSync(join(root, "sttdaemon.log"), "hello\n");
-    await vi.waitFor(() => expect(events.some((e) => e.name === "sttdaemon")).toBe(true));
+    appendFileSync(join(root, "statusagent.log"), "hello\n");
+    await vi.waitFor(() => expect(events.some((e) => e.name === "statusagent")).toBe(true));
   });
 
   it("skips missing log files silently (no throw)", () => {
@@ -49,10 +49,10 @@ describe("logTailer", () => {
   });
 
   it("emits events with numeric ts (timestamp in ms)", async () => {
-    writeFileSync(join(root, "agentqueue.log"), "");
+    writeFileSync(join(root, "ui.log"), "");
     tailer = startLogTailer({ configDir: root, pubsub });
     await waitMs(50);
-    appendFileSync(join(root, "agentqueue.log"), "x\n");
+    appendFileSync(join(root, "ui.log"), "x\n");
     await vi.waitFor(() => expect(events.length).toBeGreaterThan(0));
     expect(typeof events[0]!.ts).toBe("number");
     expect(events[0]!.ts).toBeGreaterThan(0);

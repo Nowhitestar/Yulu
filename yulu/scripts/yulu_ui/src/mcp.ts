@@ -10,11 +10,22 @@ import { z } from "zod";
 import { appRouter } from "./routers/_app.js";
 import { createCaller, type AppContext } from "./trpc.js";
 import { ipcSend } from "./ipc.js";
+import { isTrustedNotionUrl, isValidNotionPageId } from "./notionDelivery.js";
+import { RecordingPipelinePolicyDisabledError } from "./recordingPipeline.js";
 
 const exec = promisify(execFile) as (cmd: string, args: string[], opts?: object) => Promise<{ stdout: string; stderr: string }>;
 
+export const YULU_MCP_PATH = "/mcp";
+export const RECORDING_ARTIFACT_MCP_PATH = "/mcp/recording-artifact";
+export const RECORDING_DELIVERY_MCP_PATH = "/mcp/recording-delivery";
+
+function mcpRequestPath(req: IncomingMessage): string {
+  return new URL(req.url ?? "/", `http://${req.headers.host ?? "127.0.0.1"}`).pathname;
+}
+
 export function isMcpRequest(req: IncomingMessage): boolean {
-  return new URL(req.url ?? "/", `http://${req.headers.host ?? "127.0.0.1"}`).pathname === "/mcp";
+  return [YULU_MCP_PATH, RECORDING_ARTIFACT_MCP_PATH, RECORDING_DELIVERY_MCP_PATH]
+    .includes(mcpRequestPath(req));
 }
 
 export async function handleMcpRequest(req: IncomingMessage, res: ServerResponse, ctx: AppContext): Promise<void> {
@@ -29,7 +40,12 @@ export async function handleMcpRequest(req: IncomingMessage, res: ServerResponse
     return;
   }
 
-  const server = yuluMcpServer(ctx);
+  const path = mcpRequestPath(req);
+  const server = path === RECORDING_ARTIFACT_MCP_PATH
+    ? recordingArtifactMcpServer(ctx)
+    : path === RECORDING_DELIVERY_MCP_PATH
+      ? recordingDeliveryMcpServer(ctx)
+      : yuluMcpServer(ctx);
   const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
   try {
     await server.connect(transport);
@@ -65,16 +81,20 @@ export function yuluMcpServer(ctx: AppContext): McpServer {
     description: "Start a Yulu recording.",
     inputSchema: { title: z.string().max(200).optional() },
   }, async ({ title }) => json(await runRecordAudio(ctx, ["start", title?.trim() || "未命名会议"])));
-  server.registerTool("recording_stop", { description: "Stop the active Yulu recording." }, async () => json(await runRecordAudio(ctx, ["stop"])));
+  server.registerTool("recording_stop", { description: "Stop the active Yulu recording." }, async () =>
+    json(await stopRecordingAndEnqueue(ctx)));
 
   server.registerTool("recordings_list", {
     description: "List recordings.",
     inputSchema: { limit: z.number().int().positive().max(500).optional(), since: z.number().int().nonnegative().optional() },
   }, async (input) => json(await caller.recordings.list(input)));
   server.registerTool("recording_get", {
-    description: "Read recording metadata, transcript, realtime transcript, summary, tags, speakers, and share state. Audio bytes are not returned.",
+    description: "Read recording metadata, transcript, summary, tags, speakers, durable Agent task, and delivery state. Audio bytes are not returned.",
     inputSchema: { stem: z.string().min(1) },
   }, async ({ stem }) => json(safeRecording(await caller.recordings.get({ stem }))));
+  registerRecordingTaskGet(server, ctx, json);
+  registerRecordingArtifactTools(server, ctx, json);
+  registerRecordingDeliveryTools(server, ctx, json);
   server.registerTool("recording_search", {
     description: "Search Yulu transcripts and summaries.",
     inputSchema: {
@@ -90,16 +110,6 @@ export function yuluMcpServer(ctx: AppContext): McpServer {
   server.registerTool("speaker_rename", { inputSchema: { stem: z.string().min(1), speakerId: z.string().min(1), displayName: z.string().max(80) } }, async (input) => json(await caller.recordings.renameSpeaker(input)));
   server.registerTool("speaker_merge", { inputSchema: { stem: z.string().min(1), fromSpeakerId: z.string().min(1), toSpeakerId: z.string().min(1) } }, async (input) => json(await caller.recordings.mergeSpeakers(input)));
   server.registerTool("speaker_assign_segment", { inputSchema: { stem: z.string().min(1), segmentIndex: z.number().int().nonnegative(), speakerId: z.string().min(1) } }, async (input) => json(await caller.recordings.assignSegmentSpeaker(input)));
-  server.registerTool("recording_transcribe", {
-    inputSchema: {
-      stem: z.string().min(1),
-      diarizationNumSpeakers: z.number().int().min(1).max(8).nullable().optional(),
-      transcriptionModel: z.object({ engine: z.enum(["mlx", "whisper", "hermes"]), model: z.string().min(1).optional() }).nullable().optional(),
-    },
-  }, async (input) => json(await caller.recordings.transcribe(input)));
-  server.registerTool("recording_summarize", { inputSchema: { stem: z.string().min(1), promptId: z.string().nullable().optional() } }, async (input) => json(await caller.recordings.summarize(input)));
-  server.registerTool("summary_send", { inputSchema: { stem: z.string().min(1), channel: z.enum(["notion", "zulip"]) } }, async (input) => json(await caller.recordings.sendSummary(input)));
-
   server.registerTool("prompts_list", { inputSchema: { category: z.enum(["summary", "cleanup", "voice"]).optional() } }, async (input) => json(await caller.prompts.list(input)));
   server.registerTool("prompt_get", { inputSchema: { id: z.string().min(1) } }, async (input) => json(await caller.prompts.get(input)));
   server.registerTool("prompt_create", { inputSchema: { slug: z.string(), name: z.string().min(1), category: z.enum(["summary", "cleanup", "voice"]), content: z.string().min(1), isAutoRun: z.boolean().optional() } }, async (input) => json(await caller.prompts.create(input)));
@@ -111,16 +121,11 @@ export function yuluMcpServer(ctx: AppContext): McpServer {
   server.registerTool("glossary_update", { inputSchema: { id: z.string().min(1), term: z.string().optional(), canonical: z.string().optional(), scope: z.enum(["prompt", "replace", "both"]).optional(), notes: z.string().nullable().optional() } }, async (input) => json(await caller.glossary.update(input)));
   server.registerTool("glossary_delete", { inputSchema: { id: z.string().min(1) } }, async (input) => json(await caller.glossary.delete(input)));
 
-  server.registerTool("queue_list", {}, async () => json(await caller.queue.list()));
-  server.registerTool("queue_retry", { inputSchema: { id: z.string().min(1) } }, async (input) => json(await caller.queue.retry(input)));
-  server.registerTool("queue_cancel", { inputSchema: { id: z.string().min(1) } }, async (input) => json(await caller.queue.cancel(input)));
-  server.registerTool("queue_clear_stale", {}, async () => json(await caller.queue.clearStale()));
   server.registerTool("health_check", {}, async () => json(await caller.doctor.run()));
 
   server.registerResource("recordings", "yulu://recordings", { mimeType: "application/json" }, async (uri) => resource(uri.href, await caller.recordings.list({ limit: 100 })));
   server.registerResource("prompts", "yulu://prompts", { mimeType: "application/json" }, async (uri) => resource(uri.href, await caller.prompts.list({})));
   server.registerResource("glossary", "yulu://glossary", { mimeType: "application/json" }, async (uri) => resource(uri.href, await caller.glossary.list()));
-  server.registerResource("queue", "yulu://queue", { mimeType: "application/json" }, async (uri) => resource(uri.href, await caller.queue.list()));
   server.registerResource("health", "yulu://health", { mimeType: "application/json" }, async (uri) => resource(uri.href, await caller.doctor.run()));
   server.registerResource("search", new ResourceTemplate("yulu://search{?q}", { list: undefined }), { mimeType: "application/json" }, async (uri) => {
     const q = uri.searchParams.get("q")?.trim();
@@ -140,6 +145,162 @@ export function yuluMcpServer(ctx: AppContext): McpServer {
   return server;
 }
 
+type McpJsonResult = { content: Array<{ type: "text"; text: string }> };
+
+function taskJson(ctx: AppContext, taskId: string): Record<string, unknown> {
+  const task = ctx.host.getTask(taskId);
+  if (!task) throw new Error(`task not found: ${taskId}`);
+  return {
+    id: task.id,
+    recordingStem: task.recordingStem,
+    state: task.state,
+    phase: task.phase,
+    sendToNotion: task.sendToNotion,
+    destinationHint: task.destinationHint,
+    attempt: task.attempt,
+    error: task.error,
+  };
+}
+
+function requireTaskLease(ctx: AppContext, taskId: string, leaseToken: string) {
+  const task = ctx.host.getTask(taskId);
+  if (!task) throw new Error(`task not found: ${taskId}`);
+  if (!task.leaseToken || task.leaseToken !== leaseToken) {
+    throw new Error(`stale lease for task ${taskId}`);
+  }
+  return task;
+}
+
+function registerRecordingTaskGet(
+  server: McpServer,
+  ctx: AppContext,
+  json: (value: unknown) => McpJsonResult,
+): void {
+  server.registerTool("recording_task_get", {
+    description: "Get the durable state of a Yulu Agent task.",
+    inputSchema: { taskId: z.string().uuid() },
+  }, async ({ taskId }) => json(taskJson(ctx, taskId)));
+}
+
+function registerRecordingArtifactTools(
+  server: McpServer,
+  ctx: AppContext,
+  json: (value: unknown) => McpJsonResult,
+): void {
+  server.registerTool("recording_task_progress", {
+    description: "Report semantic progress for the active leased recording task.",
+    inputSchema: {
+      taskId: z.string().uuid(),
+      leaseToken: z.string().uuid(),
+      phase: z.enum(["transcribing", "summarizing", "committing_artifacts"]),
+      message: z.string().max(1000).optional(),
+    },
+  }, async ({ taskId, leaseToken, phase, message }) =>
+    json(ctx.host.recordProgress(taskId, leaseToken, phase, message)));
+  server.registerTool("recording_task_transcript_read", {
+    description: "Read only this leased task's Host-staged transcript. No filesystem path is exposed.",
+    inputSchema: { taskId: z.string().uuid(), leaseToken: z.string().uuid() },
+  }, async ({ taskId, leaseToken }) => {
+    const task = requireTaskLease(ctx, taskId, leaseToken);
+    if (task.state !== "running") throw new Error(`task ${taskId} cannot read its transcript from ${task.state}`);
+    return json({ taskId, transcript: ctx.artifacts.readStagedTranscript(taskId) });
+  });
+  server.registerTool("recording_task_summary_stage", {
+    description: "Stage the final Markdown summary for this leased task through the Host.",
+    inputSchema: {
+      taskId: z.string().uuid(),
+      leaseToken: z.string().uuid(),
+      summary: z.string().min(1).max(2 * 1024 * 1024),
+    },
+  }, async ({ taskId, leaseToken, summary }) => {
+    const task = requireTaskLease(ctx, taskId, leaseToken);
+    if (task.state !== "running") throw new Error(`task ${taskId} cannot stage a summary from ${task.state}`);
+    ctx.artifacts.writeStagedSummary(taskId, summary);
+    return json({ ok: true, taskId, bytes: Buffer.byteLength(summary.trim() + "\n", "utf8") });
+  });
+  server.registerTool("recording_artifact_commit", {
+    description: "Atomically commit the fixed task-scoped transcript.txt and summary.md staging files into Yulu.",
+    inputSchema: {
+      taskId: z.string().uuid(),
+      leaseToken: z.string().uuid(),
+      provenance: z.record(z.unknown()).optional(),
+    },
+  }, async ({ taskId, leaseToken, provenance }) => {
+    const task = ctx.host.recordProgress(taskId, leaseToken, "committing_artifacts", "Agent requested artifact commit");
+    const {
+      nativeSessionId: _nativeSessionId,
+      artifactSessionId: _artifactSessionId,
+      deliverySessionId: _deliverySessionId,
+      ...safeProvenance
+    } = provenance ?? {};
+    const records = ctx.artifacts.commitFromWorkspace(task, {
+      ...safeProvenance,
+      agentProvider: task.agentProvider,
+      committedBy: "yulu-host",
+    });
+    const updated = ctx.host.recordArtifacts(taskId, leaseToken, records);
+    ctx.pubsub.publish("recordings-changed", { reason: "changed" });
+    return json({
+      ok: true,
+      taskId,
+      state: updated.state,
+      artifacts: records.map((record) => ({ kind: record.kind, sha256: record.sha256, bytes: record.bytes })),
+    });
+  });
+}
+
+function registerRecordingDeliveryTools(
+  server: McpServer,
+  ctx: AppContext,
+  json: (value: unknown) => McpJsonResult,
+): void {
+  server.registerTool("recording_committed_summary_read", {
+    description: "Read the committed summary only after verifying its Host artifact record and SHA-256 hash.",
+    inputSchema: { taskId: z.string().uuid(), leaseToken: z.string().uuid() },
+  }, async ({ taskId, leaseToken }) => {
+    const task = requireTaskLease(ctx, taskId, leaseToken);
+    if (!["artifacts_committed", "sending"].includes(task.state)) {
+      throw new Error(`task ${taskId} cannot read its committed summary from ${task.state}`);
+    }
+    const summary = ctx.host.listArtifacts(taskId).find((record) => record.kind === "summary");
+    if (!summary) throw new Error("committed summary artifact record is missing");
+    return json({ taskId, summary: ctx.artifacts.readCommittedSummary(task, summary), sha256: summary.sha256 });
+  });
+  server.registerTool("recording_begin_notion_delivery", {
+    description: "Authorize the active leased task to begin its configured Notion side effect after artifacts are committed.",
+    inputSchema: { taskId: z.string().uuid(), leaseToken: z.string().uuid() },
+  }, async ({ taskId, leaseToken }) => json(ctx.host.beginNotionDelivery(taskId, leaseToken)));
+  server.registerTool("recording_commit_notion_delivery", {
+    description: "Record a Notion delivery result after Hermes' own Notion connector reports success.",
+    inputSchema: {
+      taskId: z.string().uuid(),
+      leaseToken: z.string().uuid(),
+      url: z.string().url().max(2000).refine(isTrustedNotionUrl, "URL must use HTTPS on an approved Notion host").optional(),
+      pageId: z.string().max(36).refine(isValidNotionPageId, "page ID must be 32-character hex or UUID").optional(),
+      detail: z.string().max(2000).optional(),
+    },
+  }, async ({ taskId, leaseToken, url, pageId, detail }) =>
+    json(ctx.host.recordNotionDelivery(taskId, leaseToken, { url, pageId, detail })));
+}
+
+function phaseJson(value: unknown): McpJsonResult {
+  return { content: [{ type: "text", text: JSON.stringify(value, null, 2) }] };
+}
+
+export function recordingArtifactMcpServer(ctx: AppContext): McpServer {
+  const server = new McpServer({ name: "yulu-recording-artifact", version: "1.0.0" });
+  registerRecordingTaskGet(server, ctx, phaseJson);
+  registerRecordingArtifactTools(server, ctx, phaseJson);
+  return server;
+}
+
+export function recordingDeliveryMcpServer(ctx: AppContext): McpServer {
+  const server = new McpServer({ name: "yulu-recording-delivery", version: "1.0.0" });
+  registerRecordingTaskGet(server, ctx, phaseJson);
+  registerRecordingDeliveryTools(server, ctx, phaseJson);
+  return server;
+}
+
 function isLocalHost(req: IncomingMessage): boolean {
   const host = req.headers.host ?? "";
   const hostname = host.split(":")[0] ?? "";
@@ -147,6 +308,14 @@ function isLocalHost(req: IncomingMessage): boolean {
 }
 
 function isAuthorized(req: IncomingMessage, tokenPath: string): boolean {
+  return isAuthorizedToken(
+    tokenPath,
+    headerValue(req.headers.authorization),
+    headerValue(req.headers["x-yulu-mcp-token"]),
+  );
+}
+
+export function isAuthorizedToken(tokenPath: string, authorization = "", xToken = ""): boolean {
   if (!existsSync(tokenPath)) return false;
   let token = "";
   try {
@@ -155,7 +324,7 @@ function isAuthorized(req: IncomingMessage, tokenPath: string): boolean {
   } catch {
     return false;
   }
-  const candidate = bearerToken(req.headers.authorization) || headerValue(req.headers["x-yulu-mcp-token"]);
+  const candidate = bearerToken(authorization) || xToken.trim();
   if (!token || !candidate) return false;
   const a = Buffer.from(candidate);
   const b = Buffer.from(token);
@@ -177,5 +346,57 @@ async function runRecordAudio(ctx: AppContext, args: string[]) {
     env: { ...process.env, PYTHONPATH: ctx.paths.scriptDir },
     cwd: process.env.HOME,
   });
-  return { ok: true, stdout, stderr };
+  return { ok: true as const, stdout, stderr };
+}
+
+type RecordingStopContext = Pick<AppContext, "config" | "recordingPipeline">;
+type RecordingStopResult = { ok: true; stdout: string; stderr: string };
+
+function finalRecordingPath(stdout: string): string | undefined {
+  for (const line of stdout.split(/\r?\n/)) {
+    if (!line.startsWith("FINAL_RECORDING_PATH=")) continue;
+    const path = line.slice("FINAL_RECORDING_PATH=".length).trim();
+    if (path) return path;
+  }
+  return undefined;
+}
+
+function autoSendNotion(ctx: RecordingStopContext): boolean {
+  return ctx.config.read().agent_pipeline.auto_send_notion;
+}
+
+export async function stopRecordingAndEnqueue(
+  ctx: AppContext,
+  stopRecording: () => Promise<RecordingStopResult> = () => runRecordAudio(ctx, ["stop"]),
+) {
+  const result = await stopRecording();
+  const audioPath = finalRecordingPath(result.stdout);
+  if (!audioPath) throw new Error("recording stopped but FINAL_RECORDING_PATH was missing");
+  const sendToNotion = autoSendNotion(ctx);
+  let enqueued;
+  try {
+    enqueued = ctx.recordingPipeline.enqueueCompletion({ audioPath, sendToNotion });
+  } catch (error) {
+    if (error instanceof RecordingPipelinePolicyDisabledError) {
+      return {
+        ...result,
+        pipeline: {
+          accepted: false as const,
+          permanent: true as const,
+          reason: error.message,
+          sendToNotion,
+        },
+      };
+    }
+    throw error;
+  }
+  return {
+    ...result,
+    pipeline: {
+      taskId: enqueued.task.id,
+      state: enqueued.task.state,
+      created: enqueued.created,
+      sendToNotion,
+    },
+  };
 }
