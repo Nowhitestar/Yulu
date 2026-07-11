@@ -43,7 +43,7 @@
 .markdown-body em { font-style: italic; }
 
 .markdown-body code {
-  font-family: "SF Mono", ui-monospace, monospace;
+  font-family: var(--font-mono);
   font-size: 0.88em;
   background: var(--field-bg);
   padding: 1px 5px;

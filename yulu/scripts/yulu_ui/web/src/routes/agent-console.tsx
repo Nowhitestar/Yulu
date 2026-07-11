@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { Link, useLocation, useNavigate, useSearchParams } from "react-router";
 import {
   AlertCircle,
@@ -35,7 +35,9 @@ import {
 } from "lucide-react";
 import { trpc } from "../trpc.js";
 import { useWsChannel } from "../ws.js";
+import { usePersistedSize } from "../hooks/usePersistedSize.js";
 import { MarkdownView } from "../components/MarkdownView.js";
+import { Logo } from "../components/Logo.js";
 import "./agent-console.css";
 
 export const handle = { breadcrumb: "breadcrumb.agentConsole", filters: null };
@@ -433,25 +435,23 @@ export function AgentConsole() {
     });
   };
 
+  const taskRail: TaskRailProps = {
+    tasks: visibleTasks,
+    isLoading: overview.isPending,
+    actionPending: toggleRecording.isPending || transcribe.isPending || summarize.isPending || sendSummary.isPending,
+    onToggleRecording: () => toggleRecording.mutate(),
+    onOpenAll: () => navigate("/inbox"),
+    onOpenTask: (task) => { if (task.stem) navigate(`/inbox/${task.stem}`); },
+    onTranscribe: runTranscribe,
+    onSummarize: runSummarize,
+    onSend: runSend,
+    sharePlugins: plugins.current.filter((plugin) => plugin.id === "notion" || plugin.id === "zulip"),
+    onConfigurePlugin: runConfigurePlugin,
+    onConfigureDestination: setDestinationPlugin,
+  };
+
   return (
     <div className={`agent-console-page${floating ? " voice-chat-popover" : ""}`}>
-      {!floating && <aside className="agent-console-rail agent-console-rail-left" aria-label="最近三天待处理">
-        <TaskRail
-          tasks={visibleTasks}
-          isLoading={overview.isPending}
-          actionPending={toggleRecording.isPending || transcribe.isPending || summarize.isPending || sendSummary.isPending}
-          onToggleRecording={() => toggleRecording.mutate()}
-          onOpenAll={() => navigate("/inbox")}
-          onOpenTask={(task) => task.stem ? navigate(`/inbox/${task.stem}`) : undefined}
-          onTranscribe={runTranscribe}
-          onSummarize={runSummarize}
-          onSend={runSend}
-          sharePlugins={plugins.current.filter((plugin) => plugin.id === "notion" || plugin.id === "zulip")}
-          onConfigurePlugin={runConfigurePlugin}
-          onConfigureDestination={setDestinationPlugin}
-        />
-      </aside>}
-
       <main className="agent-console-center">
         {!floating && <div className="agent-console-modebar" role="tablist" aria-label="Agent Console mode">
           <button type="button" className={mode === "ask" ? "active" : ""} onClick={() => setMode("ask")}>
@@ -480,6 +480,7 @@ export function AgentConsole() {
             agentName={activeAgent?.name ?? "Agent"}
             initialSessionId={requestedSessionId}
             floating={floating}
+            taskRail={floating ? null : taskRail}
           />
         ) : (
           <RunTasks
@@ -578,6 +579,21 @@ function VoiceInputPanel() {
   );
 }
 
+interface TaskRailProps {
+  tasks: AgentTask[];
+  isLoading: boolean;
+  actionPending: boolean;
+  onToggleRecording: () => void;
+  onOpenAll: () => void;
+  onOpenTask: (task: AgentTask) => void;
+  onTranscribe: (task: AgentTask) => void;
+  onSummarize: (task: AgentTask) => void;
+  onSend: (task: AgentTask, channel: "notion" | "zulip") => void;
+  sharePlugins: AgentPluginState[];
+  onConfigurePlugin: (plugin: AgentPluginId) => void;
+  onConfigureDestination: (plugin: AgentPluginState) => void;
+}
+
 function TaskRail({
   tasks,
   isLoading,
@@ -591,20 +607,7 @@ function TaskRail({
   sharePlugins,
   onConfigurePlugin,
   onConfigureDestination,
-}: {
-  tasks: AgentTask[];
-  isLoading: boolean;
-  actionPending: boolean;
-  onToggleRecording: () => void;
-  onOpenAll: () => void;
-  onOpenTask: (task: AgentTask) => void;
-  onTranscribe: (task: AgentTask) => void;
-  onSummarize: (task: AgentTask) => void;
-  onSend: (task: AgentTask, channel: "notion" | "zulip") => void;
-  sharePlugins: AgentPluginState[];
-  onConfigurePlugin: (plugin: AgentPluginId) => void;
-  onConfigureDestination: (plugin: AgentPluginState) => void;
-}) {
+}: TaskRailProps) {
   return (
     <>
       <div className="agent-rail-head">
@@ -858,11 +861,13 @@ function AskMeetings({
   agentName,
   initialSessionId,
   floating,
+  taskRail,
 }: {
   agentId: string;
   agentName: string;
   initialSessionId: string | null;
   floating: boolean;
+  taskRail: TaskRailProps | null;
 }) {
   const navigate = useNavigate();
   const utils = trpc.useUtils();
@@ -1032,12 +1037,13 @@ function AskMeetings({
           onDelete={deleteSelectedSession}
           onArchive={archiveSelectedSession}
           onPin={pinSelectedSession}
+          taskRail={taskRail}
         />
         <div className="agent-chat-main">
           <ChatHeader title={sessionTitle} sub={`由 ${agentName} 处理 · ${sessionSub}`} />
           <div className="agent-chat-thread empty">
             <div className="agent-chat-start">
-              <span className="agent-chat-start-icon"><Bot size={17} strokeWidth={2} /></span>
+              <span className="agent-chat-start-icon"><Logo size={52} /></span>
               <div className="agent-chat-title">问本地会议</div>
               <div className="agent-chat-sub">本地记录、Notion、Zulip 会自动进入上下文。</div>
               <div className="agent-chat-starters">
@@ -1069,6 +1075,7 @@ function AskMeetings({
         onDelete={deleteSelectedSession}
         onArchive={archiveSelectedSession}
         onPin={pinSelectedSession}
+        taskRail={taskRail}
       />
       <div className="agent-chat-main">
         <ChatHeader title={sessionTitle} sub={`由 ${agentName} 处理 · ${sessionSub}`} />
@@ -1164,6 +1171,7 @@ function AgentSessionPanel({
   onDelete,
   onArchive,
   onPin,
+  taskRail,
 }: {
   sessions: AgentSessionSummary[];
   selectedSessionId: string | null;
@@ -1174,59 +1182,131 @@ function AgentSessionPanel({
   onDelete: (session: AgentSessionSummary) => void;
   onArchive: (session: AgentSessionSummary) => void;
   onPin: (session: AgentSessionSummary) => void;
+  taskRail: TaskRailProps | null;
 }) {
   const [query, setQuery] = useState("");
+  const [historyHeight, setHistoryHeight] = usePersistedSize("yulu_ui.agent.history_height", 300);
+  const renderedHistoryHeight = Math.min(600, Math.max(140, historyHeight));
+  const panelRef = useRef<HTMLElement>(null);
+  const resizeCleanupRef = useRef<(() => void) | null>(null);
   const groups = groupedSessions(sessions, query);
+
+  useEffect(() => () => resizeCleanupRef.current?.(), []);
+  useEffect(() => {
+    if (historyHeight !== renderedHistoryHeight) setHistoryHeight(renderedHistoryHeight);
+  }, [historyHeight, renderedHistoryHeight, setHistoryHeight]);
+
+  const clampHistoryHeight = (next: number) => {
+    const panelHeight = panelRef.current?.getBoundingClientRect().height ?? 0;
+    const max = panelHeight > 0 ? Math.min(600, Math.max(140, panelHeight - 170)) : 600;
+    return Math.min(max, Math.max(140, next));
+  };
+
+  const startResize = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const panel = panelRef.current;
+    if (!panel) return;
+    event.preventDefault();
+    const startY = event.clientY;
+    const startHeight = renderedHistoryHeight;
+    const onMove = (moveEvent: PointerEvent) => {
+      setHistoryHeight(clampHistoryHeight(startHeight + moveEvent.clientY - startY));
+    };
+    const cleanup = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", cleanup);
+      window.removeEventListener("pointercancel", cleanup);
+      window.removeEventListener("blur", cleanup);
+      resizeCleanupRef.current = null;
+    };
+    resizeCleanupRef.current?.();
+    resizeCleanupRef.current = cleanup;
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", cleanup);
+    window.addEventListener("pointercancel", cleanup);
+    window.addEventListener("blur", cleanup);
+  };
+
+  const resizeWithKeyboard = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    const delta = event.key === "ArrowUp" ? -20 : event.key === "ArrowDown" ? 20 : 0;
+    if (delta === 0 && event.key !== "Home" && event.key !== "End") return;
+    event.preventDefault();
+    if (event.key === "Home") setHistoryHeight(140);
+    else if (event.key === "End") setHistoryHeight(clampHistoryHeight(Number.POSITIVE_INFINITY));
+    else setHistoryHeight(clampHistoryHeight(renderedHistoryHeight + delta));
+  };
+
   return (
-    <aside className="agent-session-panel" aria-label="Agent 会话历史">
-      <div className="agent-session-panel-head">
-        <span>历史</span>
-        <button type="button" className="agent-session-new" onClick={onNew}>新对话</button>
-      </div>
-      <input
-        className="agent-session-search"
-        value={query}
-        onChange={(event) => setQuery(event.currentTarget.value)}
-        placeholder="搜索对话"
-      />
-      <div className="agent-session-groups">
-        {groups.map((group) => (
-          <div key={group.label} className="agent-session-group">
-            <div className="agent-session-group-label">{group.label}</div>
-            {group.sessions.map((session) => (
-              <div
-                key={session.id}
-                className={`agent-session-item ${session.id === selectedSessionId ? "active" : ""}`}
-              >
-                <button
-                  type="button"
-                  className="agent-session-select"
-                  onClick={() => onSelect(session.id)}
-                  title={session.title}
+    <aside ref={panelRef} className="agent-session-panel" aria-label="Agent 会话与最近会议">
+      <div className="agent-session-pane agent-session-history" style={taskRail ? { height: renderedHistoryHeight } : undefined}>
+        <div className="agent-session-panel-head">
+          <span>历史</span>
+          <button type="button" className="agent-session-new" onClick={onNew}>新对话</button>
+        </div>
+        <input
+          className="agent-session-search"
+          value={query}
+          onChange={(event) => setQuery(event.currentTarget.value)}
+          placeholder="搜索对话"
+        />
+        <div className="agent-session-groups">
+          {groups.map((group) => (
+            <div key={group.label} className="agent-session-group">
+              <div className="agent-session-group-label">{group.label}</div>
+              {group.sessions.map((session) => (
+                <div
+                  key={session.id}
+                  className={`agent-session-item ${session.id === selectedSessionId ? "active" : ""}`}
                 >
-                  <MessageSquare size={13} strokeWidth={2} />
-                  <span>
-                    <strong>{session.title}</strong>
-                    <em>{session.messageCount} 条 · {formatSessionTime(session.updatedAt)}</em>
-                  </span>
-                </button>
-                <details className="agent-session-menu">
-                  <summary aria-label={`${session.title} 操作`}>
-                    <MoreHorizontal size={14} strokeWidth={2} />
-                  </summary>
-                  <div>
-                    <button type="button" onClick={() => onRename(session)}><Pencil size={13} />重命名</button>
-                    <button type="button" onClick={() => onPin(session)}><Pin size={13} />{session.pinnedAt ? "取消置顶" : "置顶"}</button>
-                    <button type="button" onClick={() => onArchive(session)}><Archive size={13} />归档</button>
-                    <button type="button" className="danger" onClick={() => onDelete(session)}><Trash2 size={13} />删除</button>
-                  </div>
-                </details>
-              </div>
-            ))}
-          </div>
-        ))}
-        {groups.length === 0 && <span className="agent-session-empty">{loading ? "读取历史..." : "暂无历史会话"}</span>}
+                  <button
+                    type="button"
+                    className="agent-session-select"
+                    onClick={() => onSelect(session.id)}
+                    title={session.title}
+                  >
+                    <MessageSquare size={13} strokeWidth={2} />
+                    <span>
+                      <strong>{session.title}</strong>
+                      <em>{session.messageCount} 条 · {formatSessionTime(session.updatedAt)}</em>
+                    </span>
+                  </button>
+                  <details className="agent-session-menu">
+                    <summary aria-label={`${session.title} 操作`}>
+                      <MoreHorizontal size={14} strokeWidth={2} />
+                    </summary>
+                    <div>
+                      <button type="button" onClick={() => onRename(session)}><Pencil size={13} />重命名</button>
+                      <button type="button" onClick={() => onPin(session)}><Pin size={13} />{session.pinnedAt ? "取消置顶" : "置顶"}</button>
+                      <button type="button" onClick={() => onArchive(session)}><Archive size={13} />归档</button>
+                      <button type="button" className="danger" onClick={() => onDelete(session)}><Trash2 size={13} />删除</button>
+                    </div>
+                  </details>
+                </div>
+              ))}
+            </div>
+          ))}
+          {groups.length === 0 && <span className="agent-session-empty">{loading ? "读取历史..." : "暂无历史会话"}</span>}
+        </div>
       </div>
+      {taskRail && (
+        <>
+          <div
+            className="agent-session-resizer"
+            role="separator"
+            tabIndex={0}
+            aria-label="调整历史和最近会议的高度"
+            aria-orientation="horizontal"
+            aria-valuemin={140}
+            aria-valuemax={600}
+            aria-valuenow={Math.round(renderedHistoryHeight)}
+            onPointerDown={startResize}
+            onKeyDown={resizeWithKeyboard}
+            onDoubleClick={() => setHistoryHeight(300)}
+          ><span /></div>
+          <div className="agent-session-pane agent-session-recent">
+            <TaskRail {...taskRail} />
+          </div>
+        </>
+      )}
     </aside>
   );
 }

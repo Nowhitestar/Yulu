@@ -1,5 +1,6 @@
 .yulu-logo {
   display: block;
-  border-radius: 7px;
-  overflow: hidden;
+  flex: none;
+  overflow: visible;
+  filter: drop-shadow(0 8px 16px color-mix(in oklch, var(--accent) 24%, transparent));
 }

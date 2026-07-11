@@ -1,6 +1,5 @@
-import { Link } from "react-router";
 import { useEffect, useState } from "react";
-import { Bot, Circle, Copy, FileText, Keyboard, Languages, Mic, SlidersHorizontal, Sparkles, Square } from "lucide-react";
+import { Bot, Circle, Copy, Keyboard, Languages, Mic } from "lucide-react";
 import { trpc } from "../trpc.js";
 import { useT } from "../i18n/LanguageProvider.js";
 import "./voice-input.css";
@@ -50,17 +49,12 @@ function formatHistoryTime(value: string) {
 
 export function VoiceInput() {
   const t = useT();
-  const [lastAction, setLastAction] = useState<VoiceAction | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const utils = trpc.useUtils();
   const config = trpc.config.get.useQuery();
   const health = trpc.daemons.health.useQuery(undefined, { refetchInterval: 5_000 });
   const recording = trpc.recording.state.useQuery(undefined, { refetchInterval: 1_000 });
   const history = trpc.recording.history.useQuery(undefined, { refetchInterval: 5_000 });
-  const invalidateRecording = () => { void utils.recording.state.invalidate(); };
-  const dictate = trpc.recording.dictate.useMutation({ onSuccess: invalidateRecording });
-  const translate = trpc.recording.translate.useMutation({ onSuccess: invalidateRecording });
-  const voiceChat = trpc.recording.voiceChat.useMutation({ onSuccess: invalidateRecording });
   const hotkeys = config.data?.status_agent.hotkeys;
   const dictation = config.data?.transcription.dictation;
   const translateLanguage = config.data?.transcription.dictation.target_language || "English";
@@ -69,30 +63,12 @@ export function VoiceInput() {
   const enabled = config.data?.status_agent.enabled ?? true;
   const ready = enabled && agent?.status === "running" && stt?.status === "running";
   const state = recording.data?.state ?? "idle";
-  const activeIntent = recording.data?.dictationIntent;
-  const activeAction: VoiceAction | null =
-    state === "recording" && recording.data?.dictationActive
-      ? activeIntent === "voice_chat" ? "voice_chat" : lastAction
-      : null;
   const isRecording = state === "recording" && recording.data?.dictationActive;
   const isProcessing = state === "processing";
-  const meetingRecording = state === "recording" && !recording.data?.dictationActive;
-  const pending = dictate.isPending || translate.isPending || voiceChat.isPending;
-
-  useEffect(() => {
-    if (state === "idle") setLastAction(null);
-  }, [state]);
 
   useEffect(() => {
     if (state === "idle") void utils.recording.history.invalidate();
   }, [state, utils]);
-
-  function runAction(id: VoiceAction) {
-    setLastAction(id);
-    if (id === "dictate") dictate.mutate();
-    if (id === "translate") translate.mutate({ targetLanguage: translateLanguage });
-    if (id === "voice_chat") voiceChat.mutate();
-  }
 
   async function copyHistory(item: HistoryItem) {
     try {
@@ -132,9 +108,6 @@ export function VoiceInput() {
             : id === "translate"
               ? dictation?.translate_prompt_slug || "dictation-translate"
               : "Agent Console";
-          const actionIsActive = activeAction === id || (isRecording && !activeAction && id === "dictate");
-          const disabled = !ready || pending || isProcessing || meetingRecording || (Boolean(activeAction) && !actionIsActive);
-          const ButtonIcon = actionIsActive ? Square : Icon;
           return (
             <section key={id} className="voice-action">
               <div className="voice-action-icon"><Icon size={18} strokeWidth={1.9} /></div>
@@ -146,38 +119,10 @@ export function VoiceInput() {
                   {language && <span>{language}</span>}
                 </div>
               </div>
-              <button
-                type="button"
-                className="voice-action-button"
-                disabled={disabled}
-                onClick={() => runAction(id)}
-              >
-                <ButtonIcon size={14} strokeWidth={2} />
-                <span>{actionIsActive ? t("voiceInput.button.stop") : t(`voiceInput.button.${id}`)}</span>
-              </button>
               <div className="voice-action-prompt">{prompt}</div>
             </section>
           );
         })}
-      </div>
-
-      <div className="voice-input-links">
-        <Link to="/knowledge/prompts" className="voice-link">
-          <FileText size={15} strokeWidth={1.8} />
-          {t("voiceInput.link.prompts")}
-        </Link>
-        <Link to="/knowledge/glossary" className="voice-link">
-          <Sparkles size={15} strokeWidth={1.8} />
-          {t("voiceInput.link.glossary")}
-        </Link>
-        <Link to="/voice-chat" className="voice-link primary">
-          <Bot size={15} strokeWidth={1.8} />
-          {t("voiceInput.link.voiceChat")}
-        </Link>
-        <Link to="/settings/voice" className="voice-link primary">
-          <SlidersHorizontal size={15} strokeWidth={1.8} />
-          {t("voiceInput.link.settings")}
-        </Link>
       </div>
 
       <section className="voice-history">

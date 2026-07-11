@@ -107,4 +107,35 @@ describe("RecordingsList", () => {
     fireEvent.contextMenu(screen.getByText("Memo"));
     expect(screen.queryByRole("menuitem", { name: /重新生成摘要/i })).toBeNull();
   });
+
+  it("keeps row sharing and the context menu mutually exclusive", () => {
+    listMock.mockReturnValue({ data: rows(), isPending: false });
+    render(<MemoryRouter><RecordingsList /></MemoryRouter>);
+
+    const shareButtons = screen.getAllByRole("button", { name: "分享摘要" });
+    fireEvent.click(shareButtons[0]!);
+    expect(screen.getByRole("dialog", { name: "分享摘要" })).toBeInTheDocument();
+
+    fireEvent.contextMenu(screen.getByText("TeamSync"));
+    expect(screen.queryByRole("dialog", { name: "分享摘要" })).toBeNull();
+    expect(screen.getByRole("menu")).toBeInTheDocument();
+
+    fireEvent.click(shareButtons[1]!);
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(screen.getByRole("dialog", { name: "分享摘要" })).toBeInTheDocument();
+  });
+
+  it("closes row sharing with Escape and an outside pointer", () => {
+    listMock.mockReturnValue({ data: rows(), isPending: false });
+    render(<MemoryRouter><RecordingsList /></MemoryRouter>);
+    const shareButton = screen.getAllByRole("button", { name: "分享摘要" })[0]!;
+
+    fireEvent.click(shareButton);
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.queryByRole("dialog", { name: "分享摘要" })).toBeNull();
+
+    fireEvent.click(shareButton);
+    fireEvent.mouseDown(document.body);
+    expect(screen.queryByRole("dialog", { name: "分享摘要" })).toBeNull();
+  });
 });

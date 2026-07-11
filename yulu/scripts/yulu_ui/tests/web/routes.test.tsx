@@ -81,4 +81,20 @@ describe("placeholder routes smoke", () => {
   it("has exactly 8 routes", () => {
     expect(ROUTES).toHaveLength(8);
   });
+
+  it("keeps the three voice-input reference cards and removes redundant action controls", () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const router = createMemoryRouter([{ path: "/", element: <VoiceInput /> }], { initialEntries: ["/"] });
+    const { container } = render(
+      <ThemeProvider>
+        <QueryClientProvider client={qc}>
+          <RouterProvider router={router} />
+        </QueryClientProvider>
+      </ThemeProvider>,
+    );
+    expect(container.querySelectorAll(".voice-action")).toHaveLength(3);
+    expect(container.querySelector(".voice-action-button")).toBeNull();
+    expect(container.querySelector(".voice-input-links")).toBeNull();
+    expect(container.querySelector(".voice-history")).toBeInTheDocument();
+  });
 });

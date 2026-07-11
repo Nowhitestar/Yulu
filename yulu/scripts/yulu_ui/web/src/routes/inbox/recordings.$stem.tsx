@@ -602,80 +602,111 @@ export function RecordingReader() {
             <ChevronLeft size={14} strokeWidth={1.8} />
             <span>{t("nav.recordings")}</span>
           </button>
-          <div className="reader-titlerow">
-            {editingTitle ? (
-              <input
-                ref={titleInputRef}
-                className="reader-title-input"
-                value={titleDraft}
-                placeholder={data.title ?? t("reader.title.placeholder")}
-                aria-label={t("reader.title.aria")}
-                onChange={(e) => setTitleDraft(e.target.value)}
-                onBlur={commitRename}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") { e.preventDefault(); commitRename(); }
-                  else if (e.key === "Escape") { e.preventDefault(); setEditingTitle(false); }
+          <div className="reader-heading">
+            <div className="reader-heading-copy">
+              <div className="reader-titlerow">
+                {editingTitle ? (
+                  <input
+                    ref={titleInputRef}
+                    className="reader-title-input"
+                    value={titleDraft}
+                    placeholder={data.title ?? t("reader.title.placeholder")}
+                    aria-label={t("reader.title.aria")}
+                    onChange={(e) => setTitleDraft(e.target.value)}
+                    onBlur={commitRename}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") { e.preventDefault(); commitRename(); }
+                      else if (e.key === "Escape") { e.preventDefault(); setEditingTitle(false); }
+                    }}
+                  />
+                ) : (
+                  <button
+                    type="button"
+                    className="reader-title reader-title-edit"
+                    onClick={startRename}
+                    title={t("reader.title.rename")}
+                  >
+                    <span>{data.title ?? data.stem}</span>
+                    <Pencil size={12} strokeWidth={1.75} className="reader-title-pencil" />
+                  </button>
+                )}
+              </div>
+              <div className="reader-meta">
+                <span>{new Date(data.mtimeMs).toLocaleDateString()}</span>
+                <span>•</span>
+                <RecordingStatusBadge state={data.status} error={data.statusError} />
+                <TagEditor tags={data.tags ?? []} onChange={handleTagsChange} />
+              </div>
+            </div>
+            <div className="reader-header-actions">
+              {modelOptions.length > 0 && (
+                <label className="reader-action-select reader-action-select--model" title={t("reader.transcriptionModel.title")}>
+                  <span>{t("reader.transcriptionModel.label")}</span>
+                  <select
+                    value={transcriptionModelId}
+                    aria-label={t("reader.transcriptionModel.aria")}
+                    onChange={(e) => setTranscriptionModelId(e.target.value)}
+                  >
+                    {modelOptions.map((option) => (
+                      <option key={option.id} value={option.id}>{option.label}</option>
+                    ))}
+                  </select>
+                </label>
+              )}
+              <label className="reader-speaker-select" title={t("reader.retranscribeSpeakers.title")}>
+                <Users size={13} strokeWidth={1.8} aria-hidden="true" />
+                <select
+                  value={retranscribeSpeakerCount}
+                  aria-label={t("reader.retranscribeSpeakers.label")}
+                  onChange={(e) => setRetranscribeSpeakerCount(e.target.value as (typeof RETRANSCRIBE_SPEAKER_OPTIONS)[number])}
+                >
+                  {RETRANSCRIBE_SPEAKER_OPTIONS.map((value) => (
+                    <option key={value} value={value}>
+                      {value === "auto" ? t("reader.retranscribeSpeakers.auto") : value}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              {summaryTemplateOptions.length > 0 && (
+                <label className="reader-action-select reader-action-select--summary" title={t("reader.summaryTemplate.title")}>
+                  <span>{t("reader.summaryTemplate.label")}</span>
+                  <select
+                    value={summaryTemplateId}
+                    aria-label={t("reader.summaryTemplate.aria")}
+                    onChange={(e) => setSummaryTemplateId(e.target.value)}
+                  >
+                    {summaryTemplateOptions.map((option) => (
+                      <option key={option.id} value={option.id}>
+                        {option.isAutoRun ? `${option.name} · ${t("reader.summaryTemplate.autorun")}` : option.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+              <SharePopover
+                className="reader-header-share"
+                targets={summaryTargets}
+                history={shareHistory}
+                pendingChannel={pendingShareChannel}
+                onSend={(channel) => {
+                  const target = summaryTargets.find((item) => item.channel === channel);
+                  if (target) handleSendSummary(target);
                 }}
               />
-            ) : (
               <button
                 type="button"
-                className="reader-title reader-title-edit"
-                onClick={startRename}
-                title={t("reader.title.rename")}
+                className="reader-header-icon reader-header-delete"
+                onClick={handleDelete}
+                disabled={deleteMut.isPending}
+                aria-label={t("reader.delete.aria")}
+                title={t("reader.delete.title")}
               >
-                <span>{data.title ?? data.stem}</span>
-                <Pencil size={12} strokeWidth={1.75} className="reader-title-pencil" />
+                <Trash2 size={15} strokeWidth={1.75} />
               </button>
-            )}
-          </div>
-          <div className="reader-meta">
-            <span>{new Date(data.mtimeMs).toLocaleDateString()}</span>
-            <span>•</span>
-            <RecordingStatusBadge state={data.status} error={data.statusError} />
-            <TagEditor tags={data.tags ?? []} onChange={handleTagsChange} />
-          </div>
-          <div className="reader-header-actions">
-            <button
-              type="button"
-              className="reader-header-icon reader-header-delete"
-              onClick={handleDelete}
-              disabled={deleteMut.isPending}
-              aria-label={t("reader.delete.aria")}
-              title={t("reader.delete.title")}
-            >
-              <Trash2 size={15} strokeWidth={1.75} />
-            </button>
+            </div>
           </div>
 
           <div className="reader-actions">
-          {modelOptions.length > 0 && (
-            <label className="reader-action-select reader-action-select--model" title={t("reader.transcriptionModel.title")}>
-              <span>{t("reader.transcriptionModel.label")}</span>
-              <select
-                value={transcriptionModelId}
-                aria-label={t("reader.transcriptionModel.aria")}
-                onChange={(e) => setTranscriptionModelId(e.target.value)}
-              >
-                {modelOptions.map((option) => (
-                  <option key={option.id} value={option.id}>{option.label}</option>
-                ))}
-              </select>
-            </label>
-          )}
-          <label className="reader-speaker-select" title={t("reader.retranscribeSpeakers.title")}>
-            <span>{t("reader.retranscribeSpeakers.label")}</span>
-            <select
-              value={retranscribeSpeakerCount}
-              onChange={(e) => setRetranscribeSpeakerCount(e.target.value as (typeof RETRANSCRIBE_SPEAKER_OPTIONS)[number])}
-            >
-              {RETRANSCRIBE_SPEAKER_OPTIONS.map((value) => (
-                <option key={value} value={value}>
-                  {value === "auto" ? t("reader.retranscribeSpeakers.auto") : value}
-                </option>
-              ))}
-            </select>
-          </label>
           <ReprocessButton
             label={t("reader.action.retranscribe")}
             icon={<RefreshCw size={14} strokeWidth={1.75} />}
@@ -685,22 +716,6 @@ export function RecordingReader() {
             disabled={!data?.wavPath}
             disabledReason={!data?.wavPath ? t("reader.disabled.wavMissing") : undefined}
           />
-          {summaryTemplateOptions.length > 0 && (
-            <label className="reader-action-select reader-action-select--summary" title={t("reader.summaryTemplate.title")}>
-              <span>{t("reader.summaryTemplate.label")}</span>
-              <select
-                value={summaryTemplateId}
-                aria-label={t("reader.summaryTemplate.aria")}
-                onChange={(e) => setSummaryTemplateId(e.target.value)}
-              >
-                {summaryTemplateOptions.map((option) => (
-                  <option key={option.id} value={option.id}>
-                    {option.isAutoRun ? `${option.name} · ${t("reader.summaryTemplate.autorun")}` : option.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-          )}
           <ReprocessButton
             label={t("reader.action.regenerate")}
             icon={<Sparkles size={14} strokeWidth={1.75} />}
@@ -709,15 +724,6 @@ export function RecordingReader() {
             onClick={handleSummarize}
             disabled={!(data?.transcript || data?.realtime)}
             disabledReason={!(data?.transcript || data?.realtime) ? t("reader.disabled.transcriptFirst") : undefined}
-          />
-          <SharePopover
-            targets={summaryTargets}
-            history={shareHistory}
-            pendingChannel={pendingShareChannel}
-            onSend={(channel) => {
-              const target = summaryTargets.find((item) => item.channel === channel);
-              if (target) handleSendSummary(target);
-            }}
           />
           </div>
 

@@ -65,8 +65,17 @@ const LOADING_TARGETS: ShareTarget[] = [
   { channel: "zulip", label: "Zulip", destination: "", enabled: false, disabledReason: "Loading", lastShare: null },
 ];
 
-function RecordingRowShare({ row, onSettled }: { row: Row; onSettled: () => void }) {
-  const [open, setOpen] = useState(false);
+function RecordingRowShare({
+  row,
+  open,
+  onOpenChange,
+  onSettled,
+}: {
+  row: Row;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onSettled: () => void;
+}) {
   const [pendingChannel, setPendingChannel] = useState<SummaryChannel | null>(null);
   const confirm = useConfirm();
   const t = useT();
@@ -96,7 +105,8 @@ function RecordingRowShare({ row, onSettled }: { row: Row; onSettled: () => void
       history={history}
       pendingChannel={pendingChannel}
       onSend={send}
-      onOpenChange={setOpen}
+      open={open}
+      onOpenChange={onOpenChange}
     >
       <Share2 size={14} strokeWidth={1.8} />
     </SharePopover>
@@ -177,6 +187,7 @@ export function RecordingsList() {
   const qc = useContext(QueryClientContext);
   const [menu, setMenu] = useState<{ row: Row; x: number; y: number } | null>(null);
   const [shareMenu, setShareMenu] = useState<{ row: Row; x: number; y: number } | null>(null);
+  const [openShareStem, setOpenShareStem] = useState<string | null>(null);
 
   const invalidate = () => {
     qc?.invalidateQueries({ queryKey: [["recordings", "list"]] });
@@ -219,6 +230,8 @@ export function RecordingsList() {
   const openMenu = (event: MouseEvent, row: Row) => {
     event.preventDefault();
     event.stopPropagation();
+    setOpenShareStem(null);
+    setShareMenu(null);
     setMenu({ row, x: event.clientX, y: event.clientY });
   };
 
@@ -306,7 +319,18 @@ export function RecordingsList() {
                 </div>
               </div>
             </NavLink>
-            <RecordingRowShare row={r} onSettled={invalidate} />
+            <RecordingRowShare
+              row={r}
+              open={openShareStem === r.stem}
+              onOpenChange={(open) => {
+                setOpenShareStem(open ? r.stem : null);
+                if (open) {
+                  setMenu(null);
+                  setShareMenu(null);
+                }
+              }}
+              onSettled={invalidate}
+            />
           </div>
           );
         })}
@@ -343,6 +367,7 @@ export function RecordingsList() {
             type="button"
             role="menuitem"
             onClick={() => {
+              setOpenShareStem(null);
               setShareMenu({ row: menu.row, x: menu.x, y: menu.y });
               closeMenu();
             }}

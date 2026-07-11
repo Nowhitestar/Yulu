@@ -22,7 +22,7 @@
 .testpop-close { width: 20px; height: 20px; border-radius: 50%; color: var(--fg-3); font-size: 13px; }
 .testpop-close:hover { color: var(--fg); background: var(--row-hover); }
 .testpop-out, .testpop-err {
-  font-family: "SF Mono", ui-monospace, monospace;
+  font-family: var(--font-mono);
   font-size: 11px;
   margin: 4px 0 0 0;
   padding: 6px 8px;

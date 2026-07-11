@@ -37,6 +37,7 @@ interface SharePopoverProps extends SharePanelProps {
   className?: string;
   align?: "left" | "right";
   disabled?: boolean;
+  open?: boolean;
   onOpenChange?: (open: boolean) => void;
   children?: ReactNode;
 }
@@ -151,18 +152,21 @@ export function SharePopover({
   className,
   align = "right",
   disabled,
+  open: controlledOpen,
   onOpenChange,
   children,
 }: SharePopoverProps) {
-  const [open, setOpen] = useState(false);
+  const [uncontrolledOpen, setUncontrolledOpen] = useState(false);
+  const open = controlledOpen ?? uncontrolledOpen;
   const [popoverStyle, setPopoverStyle] = useState<CSSProperties | null | undefined>(undefined);
   const rootRef = useRef<HTMLDivElement>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
   const t = useT();
 
-  useEffect(() => {
-    onOpenChange?.(open);
-  }, [onOpenChange, open]);
+  const updateOpen = (next: boolean) => {
+    if (controlledOpen === undefined) setUncontrolledOpen(next);
+    onOpenChange?.(next);
+  };
 
   useLayoutEffect(() => {
     if (!open) {
@@ -200,10 +204,10 @@ export function SharePopover({
       const target = event.target as Node | null;
       if (target && rootRef.current?.contains(target)) return;
       if (target && popoverRef.current?.contains(target)) return;
-      setOpen(false);
+      updateOpen(false);
     };
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setOpen(false);
+      if (event.key === "Escape") updateOpen(false);
     };
     window.addEventListener("mousedown", onDown);
     window.addEventListener("keydown", onKey);
@@ -211,7 +215,7 @@ export function SharePopover({
       window.removeEventListener("mousedown", onDown);
       window.removeEventListener("keydown", onKey);
     };
-  }, [open]);
+  }, [controlledOpen, onOpenChange, open]);
 
   return (
     <div className={`share-popover-root share-popover-root--${align}`} ref={rootRef}>
@@ -224,7 +228,7 @@ export function SharePopover({
         onClick={(event) => {
           event.preventDefault();
           event.stopPropagation();
-          setOpen((value) => !value);
+          updateOpen(!open);
         }}
       >
         {children ?? (

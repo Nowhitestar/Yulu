@@ -36,8 +36,11 @@ export function Sidebar() {
   return (
     <aside className="sidebar">
       <div className="sidebar-brand">
-        <Logo size={26} />
-        <span className="sidebar-brand-text">{t("app.name")}</span>
+        <Logo size={30} />
+        <span className="sidebar-brand-text" aria-label={t("app.name")}>
+          <span className="sidebar-brand-wordmark">Yulu</span>
+          <span className="sidebar-brand-hanzi">语录</span>
+        </span>
       </div>
 
       {TOP_SECTIONS.map((section) => (

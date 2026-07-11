@@ -69,7 +69,7 @@
   background: var(--glass);
   color: var(--fg-2);
   font-size: 11px;
-  font-family: ui-monospace, monospace;
+  font-family: var(--font-mono);
   flex-shrink: 0;
 }
 
@@ -177,7 +177,7 @@
 .gs-result-meta {
   color: var(--fg-2);
   font-size: 11.5px;
-  font-family: ui-monospace, monospace;
+  font-family: var(--font-mono);
   flex-shrink: 0;
 }
 .gs-result-snippet {
@@ -413,7 +413,7 @@
 .gs-ask-source-meta {
   color: var(--fg-2);
   font-size: 11px;
-  font-family: ui-monospace, monospace;
+  font-family: var(--font-mono);
   flex-shrink: 0;
 }
 
@@ -558,7 +558,7 @@
   padding: 1px 5px;
   font-size: 10px;
   color: var(--fg);
-  font-family: ui-monospace, monospace;
+  font-family: var(--font-mono);
 }
 .gs-footer-count { margin-left: auto; }
 

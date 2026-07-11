@@ -67,6 +67,17 @@ describe("glossaryRouter", () => {
     } finally { cleanup(); }
   });
 
+  it("deleteMany() removes a canonical group atomically and SIGHUPs once", async () => {
+    const { ctx, sighup, cleanup } = makeCtx();
+    try {
+      const caller = createCaller(glossaryRouter, ctx);
+      expect(await caller.deleteMany({ ids: ["w1", "w2", "w1"] })).toEqual({ deleted: 2 });
+      expect(ctx.db.vocab.prepare("SELECT COUNT(*) AS n FROM custom_words").get()).toEqual({ n: 0 });
+      expect(sighup).toHaveBeenCalledTimes(1);
+      expect(sighup).toHaveBeenCalledWith("com.yulu.sttdaemon");
+    } finally { cleanup(); }
+  });
+
   it("migrates legacy vocab rows into custom_words", async () => {
     const { db } = makeTmpDb(`
       CREATE TABLE vocab (

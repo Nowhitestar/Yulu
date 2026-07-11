@@ -123,7 +123,7 @@
   flex: 1;
 }
 .path-display {
-  font-family: "SF Mono", ui-monospace, monospace;
+  font-family: var(--font-mono);
   font-size: 11px;
   color: var(--fg-2);
   overflow: hidden;

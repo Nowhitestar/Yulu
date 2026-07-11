@@ -81,6 +81,20 @@ export const glossaryRouter = router({
       await hupStt(ctx);
       return { deleted: r.changes };
     }),
+
+  deleteMany: publicProcedure
+    .input(z.object({ ids: z.array(z.string().min(1)).min(1).max(200) }))
+    .mutation(async ({ ctx, input }) => {
+      ensureVocabTable(ctx.db.vocab);
+      const ids = [...new Set(input.ids)];
+      const remove = ctx.db.vocab.prepare("DELETE FROM custom_words WHERE id = ?");
+      const removeAll = ctx.db.vocab.transaction((rowIds: string[]) =>
+        rowIds.reduce((deleted, id) => deleted + remove.run(id).changes, 0)
+      );
+      const deleted = removeAll(ids);
+      await hupStt(ctx);
+      return { deleted };
+    }),
 });
 
 function ensureVocabTable(db: { exec: (sql: string) => unknown }): void {

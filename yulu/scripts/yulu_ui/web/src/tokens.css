@@ -1,5 +1,31 @@
+@font-face {
+  font-family: "Fraunces";
+  font-style: normal;
+  font-weight: 300 900;
+  font-display: swap;
+  src: url("./assets/fonts/fraunces-latin-variable.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Inter";
+  font-style: normal;
+  font-weight: 300 700;
+  font-display: swap;
+  src: url("./assets/fonts/inter-latin-variable.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Geist Mono";
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url("./assets/fonts/geist-mono-latin-variable.woff2") format("woff2");
+}
+
 :root {
   color-scheme: light;
+  --font-heading: "Fraunces", "Noto Serif SC", ui-serif, Georgia, serif;
+  --font-han: "Songti SC", "STSong", "Noto Serif CJK SC", serif;
+  --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+  --font-mono: "Geist Mono", "SF Mono", ui-monospace, monospace;
   --radius-panel: 28.8px;
   --radius-pill: 999px;
   --radius-inner: 22.4px;
@@ -42,31 +68,31 @@
 
 [data-theme="dark"] {
   color-scheme: dark;
-  --wp-1: #090c12;
-  --wp-2: #10151e;
-  --wp-3: #1b2432;
-  --glass: rgba(0, 0, 0, 0.38);
-  --glass-2: rgba(9, 14, 22, 0.5);
-  --glass-3: rgba(18, 25, 36, 0.66);
-  --glass-paper: rgba(18, 25, 36, 0.78);
-  --edge: rgba(255, 255, 255, 0.08);
+  --wp-1: oklch(0.15 0.005 250);
+  --wp-2: oklch(0.15 0.005 250);
+  --wp-3: oklch(0.2 0.005 250);
+  --glass: oklch(0.2 0.005 250 / 0.4);
+  --glass-2: oklch(0.2 0.005 250 / 0.5);
+  --glass-3: oklch(0.25 0.005 250 / 0.5);
+  --glass-paper: oklch(0.2 0.005 250 / 0.6);
+  --edge: oklch(0.3 0.005 250 / 0.3);
   --edge-top: rgba(255, 255, 255, 0.12);
   --edge-card: rgba(255, 255, 255, 0.1);
-  --fg: #f4f7fb;
-  --fg-2: #a7b1c2;
-  --fg-3: rgba(167, 177, 194, 0.58);
-  --accent: #69a7ff;
-  --accent-soft: rgba(105, 167, 255, 0.18);
-  --accent-on: #dceaff;
-  --blue: #69a7ff;
+  --fg: oklch(0.95 0.005 250);
+  --fg-2: oklch(0.65 0.005 250);
+  --fg-3: oklch(0.65 0.005 250 / 0.58);
+  --accent: oklch(0.65 0.15 250);
+  --accent-soft: oklch(0.65 0.15 250 / 0.15);
+  --accent-on: oklch(0.65 0.15 250);
+  --blue: oklch(0.65 0.15 250);
   --green: #6bd17a;
   --red: #ff6961;
   --purple: #b794ff;
   --shadow: 0 4px 28px -8px rgba(0, 0, 0, 0.48), inset 0 1px 0 var(--edge-top);
   --shadow-card: 0 2px 18px -6px rgba(0, 0, 0, 0.42), inset 0 1px 0 var(--edge-top);
   --row-hover: rgba(255, 255, 255, 0.065);
-  --field-bg: rgba(20, 28, 42, 0.78);
-  --surface-solid: #101722;
+  --field-bg: oklch(0.25 0.005 250 / 0.78);
+  --surface-solid: oklch(0.15 0.005 250);
   --bg: var(--wp-2);
 }
 
