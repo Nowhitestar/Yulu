@@ -29,7 +29,7 @@ test("Sidebar: single Recordings entry, no Voicemails/Meetings, no counts", asyn
 
 test("Recordings — list renders + clicking a row opens reader", async ({ page }) => {
   await page.goto("/inbox");
-  await expect(page.getByRole("heading", { name: "Recordings", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: /Recordings/ }).first()).toBeVisible({ timeout: 10_000 });
   await expect(page.getByRole("button", { name: "More" })).toBeVisible();
   const rows = page.getByTestId("recording-row");
   const count = await rows.count();
@@ -156,7 +156,7 @@ test("AudioPlayer survives A → B → A switch (Phase I regression)", async ({ 
   await expect(page.getByRole("button", { name: /^pause$/i })).toBeVisible({ timeout: 5_000 });
 });
 
-test("RecordingReader exposes the two durable Hermes pipeline actions", async ({ page }) => {
+test("RecordingReader exposes independent transcription, summary, and share actions", async ({ page }) => {
   await page.goto("/inbox");
   const rows = page.getByTestId("recording-row");
   const count = await rows.count();
@@ -165,6 +165,9 @@ test("RecordingReader exposes the two durable Hermes pipeline actions", async ({
     return;
   }
   await rows.first().click();
-  await expect(page.getByRole("button", { name: /Let Hermes process/i })).toBeVisible({ timeout: 10_000 });
-  await expect(page.getByRole("button", { name: /Process and send to Notion/i })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Re-transcribe" })).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByRole("button", { name: "Re-generate summary" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Share summary" })).toBeVisible();
+  await expect(page.getByRole("button", { name: /Let Hermes process/i })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /Process and send to Notion/i })).toHaveCount(0);
 });

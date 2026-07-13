@@ -326,22 +326,21 @@ function stageForRecording(
   hasSummary: boolean,
   host: Pick<HostStore, "latestForRecording">,
 ) {
-  const task = host.latestForRecording(stem);
-  const taskActive = !!task && !["completed", "cancelled", "failed", "delivery_unverified"].includes(task.state);
+  const latestTask = host.latestForRecording(stem);
+  const task = latestTask && !["cancelled", "failed"].includes(latestTask.state) ? latestTask : null;
+  const taskActive = !!task && !["completed", "delivery_unverified"].includes(task.state);
   const transcribe: StageState =
     hasSummary || hasTranscript ? "done" :
-    task?.state === "failed" ? "failed" :
     taskActive ? "running" :
     "idle";
   const summarize: StageState =
     hasSummary ? "done" :
-    task?.state === "failed" && hasTranscript ? "failed" :
     taskActive && task.phase !== "transcribing" && task.phase !== "queued" ? "running" :
     transcribe === "done" ? "idle" : "waiting";
   const send: StageState =
     task?.sendToNotion && task.state === "completed" ? "done" :
     task?.sendToNotion && ["sending", "delivery_reported"].includes(task.state) ? "running" :
-    task?.sendToNotion && ["failed", "delivery_unverified"].includes(task.state) ? "failed" :
+    task?.sendToNotion && task.state === "delivery_unverified" ? "failed" :
     hasSummary ? "idle" : "waiting";
   const dest = task?.sendToNotion ? "notion" : null;
   const error = task?.error ?? "";
@@ -379,7 +378,7 @@ function recentTasks(dir: string, host: Pick<HostStore, "latestForRecording">): 
         stem,
         dir,
         existsSync(join(dir, `${stem}.transcript.txt`)),
-        existsSync(join(dir, `${stem}.summary.md`)),
+        existsSync(join(dir, `${stem}.summary.md`)) && !existsSync(join(dir, `${stem}.summary.stale`)),
         host,
       ),
     });

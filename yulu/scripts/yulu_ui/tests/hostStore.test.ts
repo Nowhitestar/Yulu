@@ -75,43 +75,7 @@ describe("HostStore", () => {
     expect(store!.listTasks()).toHaveLength(1);
   });
 
-  it("lists a reused older task ahead of newer history after it is requeued", () => {
-    createStore();
-    const reused = enqueue(false).task;
-    store!.db.prepare(`
-      UPDATE agent_tasks SET state = 'completed', phase = 'completed',
-        created_at = '2020-01-01T00:00:00.000Z', updated_at = '2020-01-01T00:00:00.000Z'
-      WHERE id = ?
-    `).run(reused.id);
-    const newer = store!.enqueueRecording({
-      idempotencyKey: "manual:newer-history",
-      recordingStem: reused.recordingStem,
-      title: "Newer history",
-      audioPath: reused.audioPath,
-      sendToNotion: false,
-      destinationHint: "Yulu Meeting",
-      agentProvider: "hermes",
-      trigger: "manual",
-    }).task;
-    store!.db.prepare(`
-      UPDATE agent_tasks SET state = 'completed', phase = 'completed',
-        created_at = '2022-01-01T00:00:00.000Z', updated_at = '2022-01-01T00:00:00.000Z'
-      WHERE id = ?
-    `).run(newer.id);
-
-    store!.requeueCompleted(reused.id, {
-      title: "Reused now",
-      audioPath: reused.audioPath,
-      sendToNotion: false,
-      destinationHint: "Yulu Meeting",
-      agentProvider: "hermes",
-      instructions: "",
-    });
-
-    expect(store!.listTasks().map((task) => task.id)).toEqual([reused.id, newer.id]);
-  });
-
-  it("refuses retry or requeue when the recording already has another active task", () => {
+  it("refuses retry when the recording already has another active task", () => {
     createStore();
     const historical = enqueue(false).task;
     store!.db.prepare("UPDATE agent_tasks SET state = 'failed', phase = 'failed' WHERE id = ?")
@@ -128,16 +92,6 @@ describe("HostStore", () => {
     }).task;
 
     expect(() => store!.retry(historical.id)).toThrow(`already has active Agent task ${active.id}`);
-    store!.db.prepare("UPDATE agent_tasks SET state = 'completed', phase = 'completed' WHERE id = ?")
-      .run(historical.id);
-    expect(() => store!.requeueCompleted(historical.id, {
-      title: "Reused historical task",
-      audioPath: historical.audioPath,
-      sendToNotion: true,
-      destinationHint: "Yulu Meeting",
-      agentProvider: "hermes",
-      instructions: "",
-    })).toThrow(`already has active Agent task ${active.id}`);
     expect(store!.listTasks().filter((task) => [
       "queued", "awaiting_agent", "awaiting_policy", "running",
       "artifacts_committed", "sending", "delivery_reported", "delivery_unverified",
@@ -198,6 +152,73 @@ describe("HostStore", () => {
     expect(store!.getTask(legacy.id)?.state).toBe("cancelled");
     expect(store!.getTask(current.id)?.state).toBe("queued");
     expect(store!.listEvents(legacy.id).at(-1)?.type).toBe("legacy.task_retired");
+  });
+
+  it("retires legacy manual tasks as cancelled unless delivery may have started", () => {
+    createStore();
+    const reason = "Retired legacy combined manual task after atomic meeting actions migration";
+    const states = [
+      "queued", "awaiting_agent", "awaiting_policy", "running",
+      "artifacts_committed", "sending", "delivery_reported",
+    ] as const;
+    const ids = new Map<string, string>();
+    for (const [index, state] of states.entries()) {
+      const task = store!.enqueueRecording({
+        idempotencyKey: `manual:legacy:${state}`,
+        recordingStem: `Legacy${index}_20260711_01010${index}`,
+        title: `Legacy ${state}`,
+        audioPath: join(root, `Legacy${index}.wav`),
+        sendToNotion: state === "sending" || state === "delivery_reported",
+        destinationHint: "Yulu Meeting",
+        agentProvider: "hermes",
+        trigger: "manual",
+      }).task;
+      store!.db.prepare("UPDATE agent_tasks SET state = ? WHERE id = ?").run(state, task.id);
+      ids.set(state, task.id);
+    }
+    const previouslyMisclassified = store!.enqueueRecording({
+      idempotencyKey: "manual:legacy:previously-failed",
+      recordingStem: "LegacyFailed_20260711_020000",
+      title: "Legacy failed",
+      audioPath: join(root, "LegacyFailed.wav"),
+      sendToNotion: false,
+      destinationHint: "",
+      agentProvider: "hermes",
+      trigger: "manual",
+    }).task;
+    store!.db.prepare("UPDATE agent_tasks SET state = 'failed', phase = 'failed', error = ? WHERE id = ?")
+      .run(reason, previouslyMisclassified.id);
+
+    const retired = store!.retireLegacyManualTasks();
+
+    expect(new Set(retired)).toEqual(new Set([...ids.values(), previouslyMisclassified.id]));
+    for (const [state, id] of ids) {
+      expect(store!.getTask(id)?.state).toBe(["sending", "delivery_reported"].includes(state) ? "delivery_unverified" : "cancelled");
+    }
+    expect(store!.getTask(previouslyMisclassified.id)?.state).toBe("cancelled");
+  });
+
+  it("cancels only policy-paused automatic work before a manual action", () => {
+    createStore();
+    const automatic = enqueue(false).task;
+    store!.pauseDispatchableForPolicy("Automatic processing disabled", "automatic");
+
+    expect(store!.cancelPolicyPausedAutomaticForManualAction(automatic.recordingStem)).toEqual([automatic.id]);
+    expect(store!.getTask(automatic.id)).toMatchObject({
+      state: "cancelled",
+      error: "Superseded by an explicit manual meeting action",
+    });
+    expect(store!.listEvents(automatic.id).at(-1)?.type).toBe("task.cancelled");
+  });
+
+  it("persists unavailable checks and resets the retry budget on explicit retry", () => {
+    createStore();
+    const task = enqueue(false).task;
+
+    expect(store!.markAwaitingAgent(task.id, "offline").attempt).toBe(1);
+    expect(store!.markAwaitingAgent(task.id, "still offline").attempt).toBe(2);
+    store!.fail(task.id, null, "unavailable");
+    expect(store!.retry(task.id).attempt).toBe(0);
   });
 
   it("requires the current lease and commits artifacts before Notion", () => {
@@ -282,8 +303,7 @@ describe("HostStore", () => {
     } as Parameters<HostStore["recordNotionDelivery"]>[2] & { destination: string });
 
     expect(reported.destination).toBe("Yulu Meeting");
-    expect(store!.latestDeliveredForRecording(claimed.recordingStem, "Yulu Meeting")?.id).toBe(claimed.id);
-    expect(store!.latestDeliveredForRecording(claimed.recordingStem, "Agent-controlled destination")).toBeNull();
+    expect(store!.getNotionDelivery(claimed.id)?.destination).toBe("Yulu Meeting");
   });
 
   it.each([
@@ -314,55 +334,6 @@ describe("HostStore", () => {
       pageId: "fedcba9876543210fedcba9876543210",
     })).toThrow("must identify the same page");
     expect(store!.getTask(claimed.id)?.state).toBe("sending");
-  });
-
-  it("requeues a completed Notion task without changing its delivery marker", () => {
-    createStore();
-    const claimed = (() => { enqueue(true); return store!.claimNext("hermes")!; })();
-    store!.recordArtifacts(claimed.id, claimed.leaseToken!, artifacts(claimed.id));
-    store!.recordPhaseSession(claimed.id, claimed.leaseToken!, "artifact", "old-artifact-session");
-    const marker = store!.beginNotionDelivery(claimed.id, claimed.leaseToken!).deliveryKey;
-    store!.recordPhaseSession(claimed.id, claimed.leaseToken!, "delivery", "old-delivery-session");
-    store!.recordNotionDelivery(claimed.id, claimed.leaseToken!, {
-      url: `https://app.notion.com/p/${NOTION_PAGE_ID}`,
-      pageId: NOTION_PAGE_ID,
-    });
-    store!.complete(claimed.id, claimed.leaseToken!, {});
-
-    const requeued = store!.requeueCompleted(claimed.id, {
-      title: "Updated Demo",
-      audioPath: join(root, "Demo_20260711_120000.wav"),
-      sendToNotion: true,
-      destinationHint: "Updated Destination",
-      agentProvider: "hermes",
-      instructions: "Use the decision memo template",
-    });
-
-    expect(requeued).toMatchObject({
-      id: claimed.id,
-      state: "queued",
-      title: "Updated Demo",
-      instructions: "Use the decision memo template",
-      nativeSessionId: null,
-      artifactSessionId: null,
-      deliverySessionId: null,
-    });
-    expect(store!.latestDeliveredForRecording(requeued.recordingStem, "Yulu Meeting")?.id).toBe(claimed.id);
-    expect(store!.getNotionDelivery(claimed.id)?.deliveryKey).toBe(marker);
-    expect(store!.listEvents(claimed.id).at(-1)).toMatchObject({
-      type: "task.requeued",
-      payload: { reusedDeliveryKey: marker },
-    });
-
-    const reclaimed = store!.claimNext("hermes")!;
-    store!.recordArtifacts(reclaimed.id, reclaimed.leaseToken!, artifacts(reclaimed.id));
-    const resumedDelivery = store!.beginNotionDelivery(reclaimed.id, reclaimed.leaseToken!);
-    expect(resumedDelivery).toMatchObject({
-      deliveryKey: marker,
-      url: `https://app.notion.com/p/${NOTION_PAGE_ID}`,
-      pageId: NOTION_PAGE_ID,
-    });
-    expect(store!.beginNotionDelivery(reclaimed.id, reclaimed.leaseToken!)).toEqual(resumedDelivery);
   });
 
   it("cancels queued work before deletion and purges its durable rows", () => {
@@ -400,33 +371,6 @@ describe("HostStore", () => {
     expect(store!.resumePolicyPaused("automatic")).toHaveLength(1);
     expect(store!.getTask(task.id)?.state).toBe("queued");
     expect(store!.claimNext("hermes")?.id).toBe(task.id);
-  });
-
-  it("finds a reported delivery after its reused task later fails", () => {
-    createStore();
-    const claimed = (() => { enqueue(true); return store!.claimNext("hermes")!; })();
-    store!.recordArtifacts(claimed.id, claimed.leaseToken!, artifacts(claimed.id));
-    const marker = store!.beginNotionDelivery(claimed.id, claimed.leaseToken!).deliveryKey;
-    store!.recordNotionDelivery(claimed.id, claimed.leaseToken!, {
-      url: `https://app.notion.com/p/${NOTION_PAGE_ID}`,
-      pageId: NOTION_PAGE_ID,
-    });
-    store!.complete(claimed.id, claimed.leaseToken!, {});
-    store!.requeueCompleted(claimed.id, {
-      title: "Updated Demo",
-      audioPath: join(root, "Demo_20260711_120000.wav"),
-      sendToNotion: true,
-      destinationHint: "Yulu Meeting",
-      agentProvider: "hermes",
-      instructions: "Updated",
-    });
-    const secondClaim = store!.claimNext("hermes")!;
-    store!.fail(secondClaim.id, secondClaim.leaseToken, "transcription failed before delivery");
-
-    expect(store!.getTask(claimed.id)?.state).toBe("failed");
-    expect(store!.latestDeliveredForRecording(claimed.recordingStem, "Yulu Meeting")?.id).toBe(claimed.id);
-    expect(store!.getNotionDelivery(claimed.id)?.deliveryKey).toBe(marker);
-    expect(store!.latestDeliveredForRecording(claimed.recordingStem, "Different database")).toBeNull();
   });
 
   it("blocks recording deletion while an Agent task owns the audio", () => {

@@ -290,114 +290,64 @@ export class HostStore {
     return retire();
   }
 
+  retireLegacyManualTasks(): string[] {
+    const reason = "Retired legacy combined manual task after atomic meeting actions migration";
+    const retire = this.db.transaction(() => {
+      const rows = this.db.prepare(`
+        SELECT * FROM agent_tasks
+        WHERE trigger = 'manual' AND (
+          state IN ('queued', 'awaiting_agent', 'awaiting_policy', 'running',
+                    'artifacts_committed', 'sending', 'delivery_reported')
+          OR (state = 'failed' AND error = ?)
+        )
+        ORDER BY created_at
+      `).all(reason) as TaskRow[];
+      const timestamp = now();
+      for (const row of rows) {
+        const deliveryMayHaveStarted = ["sending", "delivery_reported"].includes(row.state);
+        const state: AgentTaskState = deliveryMayHaveStarted ? "delivery_unverified" : "cancelled";
+        this.db.prepare(`
+          UPDATE agent_tasks SET state = ?, phase = 'failed', lease_token = NULL,
+            error = ?, updated_at = ? WHERE id = ?
+        `).run(state, reason, timestamp, row.id);
+        this.appendEvent(
+          row.id,
+          deliveryMayHaveStarted ? "notion.delivery_unverified" : "legacy.manual_task_retired",
+          { reason },
+        );
+      }
+      return rows.map((row) => row.id);
+    });
+    return retire();
+  }
+
+  cancelPolicyPausedAutomaticForManualAction(stem: string): string[] {
+    const reason = "Superseded by an explicit manual meeting action";
+    const cancel = this.db.transaction(() => {
+      const rows = this.db.prepare(`
+        SELECT id FROM agent_tasks
+        WHERE recording_stem = ? AND trigger = 'automatic' AND state = 'awaiting_policy'
+        ORDER BY created_at
+      `).all(stem) as Array<{ id: string }>;
+      const timestamp = now();
+      for (const row of rows) {
+        this.db.prepare(`
+          UPDATE agent_tasks SET state = 'cancelled', phase = 'failed', lease_token = NULL,
+            error = ?, updated_at = ?
+          WHERE id = ? AND trigger = 'automatic' AND state = 'awaiting_policy'
+        `).run(reason, timestamp, row.id);
+        this.appendEvent(row.id, "task.cancelled", { reason: "manual_action" });
+      }
+      return rows.map((row) => row.id);
+    });
+    return cancel();
+  }
+
   latestForRecording(stem: string): AgentTask | null {
     const row = this.db.prepare(
       "SELECT * FROM agent_tasks WHERE recording_stem = ? ORDER BY updated_at DESC, created_at DESC LIMIT 1",
     ).get(stem) as TaskRow | undefined;
     return row ? toTask(row) : null;
-  }
-
-  latestDeliveredForRecording(stem: string, destination: string): AgentTask | null {
-    const row = this.db.prepare(`
-      SELECT agent_tasks.* FROM agent_tasks
-      JOIN notion_deliveries ON notion_deliveries.task_id = agent_tasks.id
-      WHERE agent_tasks.recording_stem = ?
-        AND agent_tasks.send_to_notion = 1
-        AND notion_deliveries.status = 'reported'
-        AND notion_deliveries.destination = ?
-      ORDER BY agent_tasks.updated_at DESC, agent_tasks.created_at DESC
-      LIMIT 1
-    `).get(stem, destination) as TaskRow | undefined;
-    return row ? toTask(row) : null;
-  }
-
-  latestCompletedForRecording(stem: string): AgentTask | null {
-    const row = this.db.prepare(`
-      SELECT * FROM agent_tasks
-      WHERE recording_stem = ? AND state = 'completed'
-      ORDER BY updated_at DESC, created_at DESC LIMIT 1
-    `).get(stem) as TaskRow | undefined;
-    return row ? toTask(row) : null;
-  }
-
-  requeueCompleted(id: string, input: {
-    title: string;
-    audioPath: string;
-    sendToNotion: boolean;
-    destinationHint: string;
-    agentProvider: string;
-    instructions: string;
-    trigger?: AgentTaskTrigger;
-  }): AgentTask {
-    const requeue = this.db.transaction(() => {
-      const task = this.getTask(id);
-      if (!task) throw new Error(`task not found: ${id}`);
-      if (!["completed", "failed"].includes(task.state)) {
-        throw new Error(`task ${id} cannot requeue from ${task.state}`);
-      }
-      const competing = this.competingActiveTask(task.recordingStem, id);
-      if (competing) {
-        throw new Error(`recording ${task.recordingStem} already has active Agent task ${competing.id}`);
-      }
-      this.db.prepare(`
-        UPDATE agent_tasks SET title = ?, audio_path = ?, state = 'queued', phase = 'queued',
-          send_to_notion = ?, destination_hint = ?, agent_provider = ?, instructions = ?, trigger = ?,
-          native_session_id = NULL, artifact_session_id = NULL, delivery_session_id = NULL,
-          lease_token = NULL, error = NULL, audit_json = NULL,
-          updated_at = ? WHERE id = ? AND state IN ('completed', 'failed')
-      `).run(
-        input.title,
-        input.audioPath,
-        input.sendToNotion ? 1 : 0,
-        input.destinationHint,
-        input.agentProvider,
-        input.instructions,
-        input.trigger ?? "manual",
-        now(),
-        id,
-      );
-      this.appendEvent(id, "task.requeued", {
-        sendToNotion: input.sendToNotion,
-        reusedDeliveryKey: this.getNotionDelivery(id)?.deliveryKey ?? null,
-      });
-      return this.getTask(id)!;
-    });
-    return requeue.immediate();
-  }
-
-  promotePausedAutomaticToManual(id: string, input: {
-    title: string;
-    audioPath: string;
-    sendToNotion: boolean;
-    destinationHint: string;
-    agentProvider: string;
-    instructions: string;
-  }): AgentTask {
-    const promote = this.db.transaction(() => {
-      const task = this.getTask(id);
-      if (!task) throw new Error(`task not found: ${id}`);
-      if (task.state !== "awaiting_policy" || task.trigger !== "automatic") {
-        throw new Error(`task ${id} cannot become manual from ${task.state}/${task.trigger}`);
-      }
-      this.db.prepare(`
-        UPDATE agent_tasks SET title = ?, audio_path = ?, send_to_notion = ?,
-          destination_hint = ?, agent_provider = ?, instructions = ?, trigger = 'manual',
-          state = 'queued', phase = 'queued', error = NULL, lease_token = NULL,
-          updated_at = ? WHERE id = ? AND state = 'awaiting_policy' AND trigger = 'automatic'
-      `).run(
-        input.title,
-        input.audioPath,
-        input.sendToNotion ? 1 : 0,
-        input.destinationHint,
-        input.agentProvider,
-        input.instructions,
-        now(),
-        id,
-      );
-      this.appendEvent(id, "task.manual_override", { previousTrigger: "automatic" });
-      return this.getTask(id)!;
-    });
-    return promote.immediate();
   }
 
   prepareRecordingDeletion(stem: string): string[] {
@@ -492,14 +442,20 @@ export class HostStore {
     return claim();
   }
 
-  markAwaitingAgent(id: string, reason: string): void {
-    const timestamp = now();
-    this.db.prepare(`
-      UPDATE agent_tasks SET state = 'awaiting_agent', phase = 'queued', error = ?,
-        lease_token = NULL, updated_at = ?
-      WHERE id = ? AND state IN ('queued', 'awaiting_agent')
-    `).run(reason.slice(0, 1000), timestamp, id);
-    this.appendEvent(id, "task.awaiting_agent", { reason });
+  markAwaitingAgent(id: string, reason: string): AgentTask {
+    const mark = this.db.transaction(() => {
+      const timestamp = now();
+      const result = this.db.prepare(`
+        UPDATE agent_tasks SET state = 'awaiting_agent', phase = 'queued', error = ?,
+          lease_token = NULL, attempt = attempt + 1, updated_at = ?
+        WHERE id = ? AND state IN ('queued', 'awaiting_agent')
+      `).run(reason.slice(0, 1000), timestamp, id);
+      if (result.changes !== 1) throw new Error(`task ${id} cannot await Agent before claim`);
+      const task = this.getTask(id)!;
+      this.appendEvent(id, "task.awaiting_agent", { reason, attempt: task.attempt });
+      return task;
+    });
+    return mark();
   }
 
   pauseDispatchableForPolicy(reason: string, trigger?: AgentTaskTrigger): AgentTask[] {
@@ -920,7 +876,7 @@ export class HostStore {
       this.db.prepare(`
         UPDATE agent_tasks SET state = 'queued', phase = 'queued', lease_token = NULL,
           native_session_id = NULL, artifact_session_id = NULL, delivery_session_id = NULL,
-          error = NULL, audit_json = NULL, updated_at = ? WHERE id = ?
+          attempt = 0, error = NULL, audit_json = NULL, updated_at = ? WHERE id = ?
       `).run(now(), id);
       this.appendEvent(id, "task.retried", {});
       return this.getTask(id)!;

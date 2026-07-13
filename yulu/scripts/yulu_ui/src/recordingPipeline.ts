@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, statSync } from "node:fs";
 import { basename, extname, isAbsolute, join, relative, resolve } from "node:path";
 import type { ConfigManager, YuluConfig } from "./config.js";
@@ -14,13 +14,19 @@ import {
   InvalidPromptInstructionsError,
   automaticSummaryInstructions,
   recordingDateFromStem,
-  renderSummaryInstructions,
 } from "./promptInstructions.js";
 import type { PubSub, AppChannels } from "./pubsub.js";
 import type { paths as RuntimePaths } from "./paths.js";
 
 const REC_FILE_RE = /^(.+?)_(\d{8})_(\d{6})\.wav$/;
 const DISPATCH_POLL_MS = 15_000;
+const MAX_AGENT_ATTEMPTS = 3;
+const MAX_AGENT_RETRY_DELAY_MS = 5 * 60_000;
+
+export function agentRetryDelayMs(attempt: number, baseMs = DISPATCH_POLL_MS): number {
+  const exponent = Math.max(0, Math.trunc(attempt) - 1);
+  return Math.min(Math.max(1, baseMs) * (2 ** exponent), MAX_AGENT_RETRY_DELAY_MS);
+}
 
 export class InvalidTranscriptionInputError extends Error {
   constructor(message: string) {
@@ -78,10 +84,6 @@ export interface RecordingCompletionInput {
   sendToNotion?: boolean;
 }
 
-export interface RecordingReprocessInput extends RecordingCompletionInput {
-  instructions?: string;
-}
-
 export interface OnDemandTranscriptionInput {
   audioPath: string;
 }
@@ -115,47 +117,19 @@ export class RecordingPipeline {
   private stopped = false;
   private gateway: RecordingAgentGateway | null = null;
   private gatewayKey = "";
+  private readonly retryBaseMs: number;
+  private retryNotBefore = 0;
+  private retryTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(private readonly options: RecordingPipelineOptions) {
-    this.poll = setInterval(() => this.kick(), options.pollMs ?? DISPATCH_POLL_MS);
+    this.retryBaseMs = options.pollMs ?? DISPATCH_POLL_MS;
+    this.retireLegacyManualTasks();
+    this.poll = setInterval(() => this.kick(), this.retryBaseMs);
     this.poll.unref();
   }
 
   enqueueCompletion(input: RecordingCompletionInput): { task: AgentTask; created: boolean } {
-    return this.enqueue(input, null, true);
-  }
-
-  enqueueReprocess(input: RecordingReprocessInput): { task: AgentTask; created: boolean } {
-    const prepared = this.prepare(input, false);
-    this.reconcileDispatchPolicy(this.options.config.read());
-    const active = this.options.store.latestForRecording(prepared.stem);
-    if (active?.state === "delivery_unverified") {
-      throw new Error("Notion delivery outcome is uncertain; confirm the existing page or abandon the delivery before reprocessing");
-    }
-    if (active?.state === "awaiting_policy" && active.trigger === "automatic") {
-      const task = this.options.store.promotePausedAutomaticToManual(active.id, prepared);
-      this.kick();
-      return { task, created: false };
-    }
-    if (active && !["completed", "failed", "cancelled"].includes(active.state)) {
-      this.kick();
-      return { task: active, created: false };
-    }
-    if (prepared.sendToNotion) {
-      const delivered = this.options.store.latestDeliveredForRecording(
-        prepared.stem,
-        prepared.destinationHint,
-      );
-      const completed = this.options.store.latestCompletedForRecording(prepared.stem);
-      const reusable = delivered
-        ?? (completed && !this.options.store.getNotionDelivery(completed.id) ? completed : null);
-      if (reusable) {
-        const task = this.options.store.requeueCompleted(reusable.id, prepared);
-        this.kick();
-        return { task, created: false };
-      }
-    }
-    return this.persist(prepared, `manual:${randomUUID()}`);
+    return this.persist(this.prepare(input), null);
   }
 
   async warmTranscription(): Promise<{ provider: string }> {
@@ -186,23 +160,12 @@ export class RecordingPipeline {
     }
   }
 
-  private enqueue(
-    input: RecordingReprocessInput,
-    idempotencyOverride: string | null,
-    requireAutoProcess: boolean,
-  ): { task: AgentTask; created: boolean } {
-    return this.persist(this.prepare(input, requireAutoProcess), idempotencyOverride);
-  }
-
-  private prepare(
-    input: RecordingReprocessInput,
-    requireAutoProcess: boolean,
-  ): PreparedRecordingTask {
+  private prepare(input: RecordingCompletionInput): PreparedRecordingTask {
     const config = this.options.config.read();
     if (!pipelineConfig(config).enabled) {
       throw new RecordingPipelinePolicyDisabledError("Agent recording pipeline is disabled by policy");
     }
-    if (requireAutoProcess && !pipelineConfig(config).auto_process_recordings) {
+    if (!pipelineConfig(config).auto_process_recordings) {
       throw new RecordingPipelinePolicyDisabledError("Automatic Agent recording processing is paused by policy");
     }
     let audioPath: string;
@@ -233,9 +196,7 @@ export class RecordingPipeline {
     };
     let instructions: string;
     try {
-      instructions = requireAutoProcess
-        ? automaticSummaryInstructions(this.options.promptDb, instructionContext)
-        : renderSummaryInstructions(input.instructions?.trim() ?? "", instructionContext);
+      instructions = automaticSummaryInstructions(this.options.promptDb, instructionContext);
     } catch (error) {
       if (error instanceof InvalidPromptInstructionsError) {
         throw new InvalidRecordingCompletionError(error.message);
@@ -250,7 +211,7 @@ export class RecordingPipeline {
       destinationHint: pipelineConfig(config).notion_destination,
       agentProvider: runtime.provider,
       instructions,
-      trigger: requireAutoProcess ? "automatic" : "manual",
+      trigger: "automatic",
     };
   }
 
@@ -270,12 +231,8 @@ export class RecordingPipeline {
       trigger: input.trigger,
     });
     this.reconcileDispatchPolicy(this.options.config.read());
-    let current = this.options.store.getTask(result.task.id)!;
-    if (input.trigger === "manual" && current.state === "awaiting_policy" && current.trigger === "automatic") {
-      current = this.options.store.promotePausedAutomaticToManual(current.id, input);
-    }
     this.kick();
-    return { task: current, created: result.created && current.id === result.task.id };
+    return result;
   }
 
   list(limit = 100): AgentTask[] {
@@ -318,6 +275,7 @@ export class RecordingPipeline {
   retry(id: string): AgentTask {
     const config = this.options.config.read();
     const task = this.options.store.retry(id);
+    this.resumeDispatchNow();
     this.reconcileDispatchPolicy(config);
     this.kick();
     return this.options.store.getTask(task.id)!;
@@ -339,6 +297,12 @@ export class RecordingPipeline {
 
   kick(): void {
     if (this.dispatching || this.stopped) return;
+    const retryDelay = this.retryNotBefore - Date.now();
+    if (retryDelay > 0) {
+      this.scheduleRetry(retryDelay);
+      return;
+    }
+    this.retryNotBefore = 0;
     this.dispatching = true;
     this.dispatchPromise = this.dispatchLoop()
       .catch((error) => {
@@ -356,6 +320,8 @@ export class RecordingPipeline {
   async close(): Promise<void> {
     this.stopped = true;
     clearInterval(this.poll);
+    if (this.retryTimer) clearTimeout(this.retryTimer);
+    this.retryTimer = null;
     await this.dispatchPromise;
     this.gateway?.close();
     this.gateway = null;
@@ -372,8 +338,18 @@ export class RecordingPipeline {
       const gateway = this.resolveGateway(config);
       const health = gateway.health();
       if (!health.available) {
-        const queued = this.options.store.listTasks(500).find((task) => task.state === "queued");
-        if (queued) this.options.store.markAwaitingAgent(queued.id, health.reason ?? "Hermes is unavailable");
+        const waiting = this.options.store.listTasks(500)
+          .find((task) => task.state === "queued" || task.state === "awaiting_agent");
+        if (waiting) {
+          const reason = health.reason ?? "Hermes is unavailable";
+          const awaiting = this.options.store.markAwaitingAgent(waiting.id, reason);
+          if (awaiting.attempt >= MAX_AGENT_ATTEMPTS) {
+            this.options.store.fail(waiting.id, null, `Hermes unavailable after ${MAX_AGENT_ATTEMPTS} checks: ${reason}`);
+            this.publish(waiting, "failed", reason);
+            continue;
+          }
+          this.deferDispatch(awaiting.attempt);
+        }
         return;
       }
       const task = this.options.store.claimNext(gateway.provider);
@@ -384,20 +360,18 @@ export class RecordingPipeline {
   }
 
   private reconcileDispatchPolicy(config: YuluConfig): string | null {
+    this.retireLegacyManualTasks();
     const disabledReason = pipelineDisabledReason(config);
     if (disabledReason) {
       this.options.store.pauseDispatchableForPolicy(disabledReason);
       return disabledReason;
     }
     if (!pipelineConfig(config).auto_process_recordings) {
-      this.options.store.pauseDispatchableForPolicy(
-        "Automatic Agent recording processing is paused by policy",
-        "automatic",
-      );
-      this.options.store.resumePolicyPaused("manual");
-      return null;
+      const reason = "Automatic Agent recording processing is paused by policy";
+      this.options.store.pauseDispatchableForPolicy(reason, "automatic");
+      return reason;
     }
-    this.options.store.resumePolicyPaused();
+    this.options.store.resumePolicyPaused("automatic");
     return null;
   }
 
@@ -522,6 +496,7 @@ export class RecordingPipeline {
       try { this.options.artifacts.cleanupWorkspace(task.id); }
       catch { /* artifacts are already committed; cleanup is best effort */ }
       this.publish(task, "done");
+      this.resumeDispatchNow();
       this.options.pubsub.publish("recordings-changed", { reason: "changed" });
       return true;
     } catch (error) {
@@ -532,11 +507,14 @@ export class RecordingPipeline {
           this.publish(task, "failed", error.message);
           return true;
         }
+        if (task.attempt >= MAX_AGENT_ATTEMPTS) {
+          const message = `Hermes unavailable after ${MAX_AGENT_ATTEMPTS} attempts: ${error.message}`;
+          this.options.store.fail(task.id, leaseToken, message);
+          this.publish(task, "failed", message);
+          return true;
+        }
         this.options.store.releaseToAwaitingAgent(task.id, leaseToken, error.message);
-        // The lightweight health check only proves that the CLI exists. A
-        // startup failure is discovered here; stop this pass so we do not
-        // immediately reclaim the same task in a hot loop. The regular poll
-        // (or an explicit kick) will retry it later.
+        this.deferDispatch(task.attempt);
         return false;
       } else {
         this.options.store.fail(task.id, leaseToken, (error as Error).message);
@@ -548,5 +526,34 @@ export class RecordingPipeline {
 
   private publish(task: AgentTask, state: "transcribing" | "summarizing" | "done" | "failed", error?: string): void {
     this.options.pubsub.publish("jobs", { stem: task.recordingStem, jobId: task.id, state, error });
+  }
+
+  private retireLegacyManualTasks(): void {
+    for (const taskId of this.options.store.retireLegacyManualTasks()) {
+      try { this.options.artifacts.cleanupWorkspace(taskId); } catch { /* migration is already durable */ }
+    }
+  }
+
+  private deferDispatch(attempt: number): void {
+    const delay = agentRetryDelayMs(attempt, this.retryBaseMs);
+    this.retryNotBefore = Date.now() + delay;
+    if (this.retryTimer) clearTimeout(this.retryTimer);
+    this.retryTimer = null;
+    this.scheduleRetry(delay);
+  }
+
+  private scheduleRetry(delay: number): void {
+    if (this.retryTimer || this.stopped) return;
+    this.retryTimer = setTimeout(() => {
+      this.retryTimer = null;
+      this.kick();
+    }, Math.max(1, delay));
+    this.retryTimer.unref();
+  }
+
+  private resumeDispatchNow(): void {
+    this.retryNotBefore = 0;
+    if (this.retryTimer) clearTimeout(this.retryTimer);
+    this.retryTimer = null;
   }
 }

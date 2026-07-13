@@ -1,5 +1,7 @@
 export const STANDARD_SUMMARY_INSTRUCTIONS =
   "Produce an accurate transcript and a factual, structured meeting summary.";
+export const STANDALONE_SUMMARY_INSTRUCTIONS =
+  "Produce a factual, structured meeting summary from the complete transcript supplied below.";
 
 const TASK_TRANSCRIPT_REFERENCE =
   "the complete transcript returned for this task by the task-scoped MCP `recording_task_transcript_read` operation";
@@ -97,6 +99,16 @@ export function renderSummaryInstructions(
     },
   );
   return rendered.trim();
+}
+
+/** Render the same template contract for a direct summary-only Agent action. */
+export function renderStandaloneSummaryInstructions(
+  template: string,
+  context: SummaryInstructionContext,
+): string {
+  return renderSummaryInstructions(template, context)
+    .replaceAll(TASK_SPEAKER_REFERENCE, "the speaker labels and metadata in the transcript supplied below")
+    .replaceAll(TASK_TRANSCRIPT_REFERENCE, "the complete transcript supplied below");
 }
 
 /** Select the single automatic summary template deterministically. */

@@ -85,33 +85,23 @@ describe("RecordingsList", () => {
     expect(screen.queryByTestId("recording-status")).toBeNull();
   });
 
-  it("opens a row context menu with the two durable Hermes actions", () => {
+  it("opens a row context menu with one entry to the atomic actions", () => {
     listMock.mockReturnValue({ data: rows(), isPending: false });
     render(<MemoryRouter><RecordingsList /></MemoryRouter>);
     fireEvent.contextMenu(screen.getByText("TeamSync"));
     expect(screen.getByRole("menuitem", { name: /重命名/i })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("menuitem", { name: /Hermes.*处理/i }));
-    expect(reprocessMutate).toHaveBeenCalledWith({
-      stem: "TeamSync_20260102_090000",
-      sendToNotion: false,
-    });
-
-    fireEvent.contextMenu(screen.getByText("TeamSync"));
-    fireEvent.click(screen.getByRole("menuitem", { name: /发送 Notion/i }));
-    expect(reprocessMutate).toHaveBeenLastCalledWith({
-      stem: "TeamSync_20260102_090000",
-      sendToNotion: true,
-    });
+    expect(screen.getByRole("menuitem", { name: /转录、总结与分享/i })).toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: /发送 Notion/i })).toBeNull();
+    expect(reprocessMutate).not.toHaveBeenCalled();
   });
 
-  it("disables duplicate Hermes actions while a durable task is active", () => {
+  it("keeps the atomic-actions entry available while protecting deletion during an active task", () => {
     const active = rows();
     active[0] = { ...active[0]!, status: "agent_queued" };
     listMock.mockReturnValue({ data: active, isPending: false });
     render(<MemoryRouter><RecordingsList /></MemoryRouter>);
     fireEvent.contextMenu(screen.getByText("TeamSync"));
-    expect(screen.getByRole("menuitem", { name: /Hermes.*处理/i })).toBeDisabled();
-    expect(screen.getByRole("menuitem", { name: /发送 Notion/i })).toBeDisabled();
+    expect(screen.getByRole("menuitem", { name: /转录、总结与分享/i })).toBeEnabled();
     expect(screen.getByRole("menuitem", { name: /删除/i })).toBeDisabled();
   });
 

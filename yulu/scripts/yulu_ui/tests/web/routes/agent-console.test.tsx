@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 const navigateMock = vi.fn();
 const reprocessMutate = vi.fn();
+const sendSummaryMutate = vi.fn();
 const configurePluginMutate = vi.fn();
 const setDestinationMutate = vi.fn();
 const refreshDestinationMutate = vi.fn();
@@ -157,6 +158,7 @@ vi.mock("../../../web/src/trpc.js", () => {
       },
       recordings: {
         reprocess: { useMutation: () => mutation(reprocessMutate) },
+        sendSummary: { useMutation: () => mutation(sendSummaryMutate) },
       },
       ask: {
         ask: { useMutation: () => ({ mutateAsync: askMutateAsync, isPending: false }) },
@@ -211,6 +213,7 @@ beforeEach(() => {
   localStorage.removeItem("yulu_ui.agent.history_height");
   navigateMock.mockClear();
   reprocessMutate.mockClear();
+  sendSummaryMutate.mockClear();
   configurePluginMutate.mockClear();
   setDestinationMutate.mockClear();
   refreshDestinationMutate.mockClear();
@@ -317,22 +320,24 @@ describe("AgentConsole", () => {
     expect(getByText("配置快捷键").closest("a")).toHaveAttribute("href", "/settings/voice");
   });
 
-  it("shows recent task cards and sends through an authorized Hermes task", () => {
-    const { getByText, container } = wrap();
+  it("shows Share as the next action when transcript and summary already exist", () => {
+    const { getByRole, getByText, container } = wrap();
     expect(getByText("Product Sync")).toBeInTheDocument();
     expect(container.querySelector(".agent-stage-line")).toBeNull();
 
-    const notionSend = getByText("处理并发送 Notion").closest("button") as HTMLButtonElement | null;
-    expect(notionSend).not.toBeNull();
-    fireEvent.click(notionSend!);
-
-    expect(reprocessMutate).toHaveBeenCalledWith(
-      { stem: "ProductSync_20260625_093000", promptId: "p1", sendToNotion: true },
-      expect.any(Object),
-    );
+    fireEvent.click(getByRole("button", { name: "分享" }));
+    expect(getByRole("menu", { name: "选择分享渠道" })).toBeInTheDocument();
+    fireEvent.click(getByRole("menuitem", { name: /分享到 Notion/ }));
+    expect(sendSummaryMutate).toHaveBeenCalledWith({
+      stem: "ProductSync_20260625_093000",
+      channel: "notion",
+      label: "Notion",
+      destination: "Yulu Meeting",
+    }, expect.any(Object));
+    expect(reprocessMutate).not.toHaveBeenCalled();
   });
 
-  it("allows a paused automatic task to be taken over from the main Agent Console", async () => {
+  it("ignores a paused automatic task and still shows the artifact-derived next action", async () => {
     mockDurableTasks = [{
       id: "task-auto-paused",
       recordingStem: "ProductSync_20260625_093000",
@@ -347,25 +352,35 @@ describe("AgentConsole", () => {
       createdAt: "2026-06-25T09:31:00.000Z",
       updatedAt: "2026-06-25T09:31:00.000Z",
     }];
-    const { getByRole, getByText } = wrap();
+    const { getByRole, queryByText } = wrap();
 
-    expect(getByText("Agent 自动处理已暂停")).toBeInTheDocument();
-    const processButton = getByRole("button", { name: "让 Hermes 处理" });
-    expect(processButton).toBeEnabled();
-    fireEvent.click(processButton);
-    expect(reprocessMutate).toHaveBeenCalledWith(
-      { stem: "ProductSync_20260625_093000", promptId: "p1", sendToNotion: false },
-      expect.any(Object),
-    );
+    expect(queryByText("Agent 自动处理已暂停")).toBeNull();
+    const actionsButton = getByRole("button", { name: "分享" });
+    expect(actionsButton).toBeEnabled();
+    expect(reprocessMutate).not.toHaveBeenCalled();
+  });
+
+  it("does not surface retired legacy queue state on a meeting with usable artifacts", () => {
+    mockTasks = [taskFixture({ error: "Legacy queue task retired without automatic execution" })];
     mockDurableTasks = [{
-      ...mockDurableTasks[0],
-      state: "completed",
-      phase: "completed",
-      trigger: "manual",
-      updatedAt: "2999-06-25T09:32:00.000Z",
+      id: "legacy-retired",
+      recordingStem: "ProductSync_20260625_093000",
+      title: "Product Sync",
+      trigger: "automatic",
+      state: "cancelled",
+      phase: "failed",
+      sendToNotion: false,
+      agentProvider: "hermes",
+      attempt: 0,
+      error: "Legacy queue task retired without automatic execution",
+      createdAt: "2026-06-25T09:31:00.000Z",
+      updatedAt: "2026-06-25T09:31:00.000Z",
     }];
-    fireEvent.click(getByText("能力"));
-    await waitFor(() => expect(getByText("Hermes 已处理")).toBeInTheDocument());
+    const { getByRole, queryByText } = wrap();
+
+    expect(queryByText(/Legacy queue task retired/)).toBeNull();
+    expect(queryByText("Hermes 任务已取消")).toBeNull();
+    expect(getByRole("button", { name: "分享" })).toBeInTheDocument();
   });
 
   it("keeps an uncertain Notion delivery fenced in the main Agent Console", () => {
@@ -428,43 +443,37 @@ describe("AgentConsole", () => {
     expect(queryByRole("button", { name: "处理并发送 Notion" })).toBeNull();
   });
 
-  it("shows Hermes processing progress in the same task action slot immediately after click", () => {
+  it("shows Transcribe first when the recording has no transcript", () => {
     mockTasks = [taskFixture({
       stages: { transcribe: "idle", summarize: "idle", send: "idle" },
       hasTranscript: false,
       hasSummary: false,
     })];
-    const { getByRole, getByText, queryByRole } = wrap();
-    fireEvent.click(getByRole("button", { name: "让 Hermes 处理" }));
-
-    expect(reprocessMutate).toHaveBeenCalledWith(
-      { stem: "ProductSync_20260625_093000", promptId: "p1", sendToNotion: false },
-      expect.objectContaining({ onError: expect.any(Function), onSettled: expect.any(Function) }),
-    );
-    expect(getByText("Hermes 处理中")).toBeInTheDocument();
-    expect(queryByRole("button", { name: "让 Hermes 处理" })).toBeNull();
+    const { getByRole } = wrap();
+    fireEvent.click(getByRole("button", { name: "转录" }));
+    expect(reprocessMutate).not.toHaveBeenCalled();
+    expect(navigateMock).toHaveBeenCalledWith("/inbox/ProductSync_20260625_093000");
   });
 
-  it("shows Hermes Notion progress in the same task action slot immediately after click", () => {
+  it("shows Summary after transcription and before sharing", () => {
     mockTasks = [taskFixture({
       stages: { transcribe: "done", summarize: "idle", send: "idle" },
+      hasTranscript: true,
       hasSummary: false,
     })];
-    const { getByRole, getByText, queryByRole } = wrap();
-    fireEvent.click(getByRole("button", { name: "处理并发送 Notion" }));
-
-    expect(reprocessMutate).toHaveBeenCalledWith(
-      { stem: "ProductSync_20260625_093000", promptId: "p1", sendToNotion: true },
-      expect.objectContaining({ onError: expect.any(Function), onSettled: expect.any(Function) }),
-    );
-    expect(getByText("Hermes 处理并发送 Notion 中")).toBeInTheDocument();
+    const { queryByRole, getByRole } = wrap();
     expect(queryByRole("button", { name: "处理并发送 Notion" })).toBeNull();
+    expect(getByRole("button", { name: "总结" })).toBeInTheDocument();
+    expect(reprocessMutate).not.toHaveBeenCalled();
   });
 
-  it("does not expose Zulip as a recording delivery action", () => {
-    const { queryByRole } = wrap();
-    expect(queryByRole("button", { name: "Zulip" })).toBeNull();
-    expect(reprocessMutate).not.toHaveBeenCalled();
+  it("offers every configured Agent share channel", () => {
+    mockZulipConfigured = true;
+    const { getByRole } = wrap();
+    fireEvent.click(getByRole("button", { name: "分享" }));
+    expect(getByRole("menuitem", { name: /分享到 Notion/ })).toBeInTheDocument();
+    expect(getByRole("menuitem", { name: /分享到 Zulip/ })).toBeInTheDocument();
+    expect(getByRole("menuitem", { name: /更多分享渠道/ })).toBeInTheDocument();
   });
 
   it("keeps Hermes and OpenClaw visible and connectable", () => {

@@ -6,7 +6,7 @@ import { ArtifactStore, type AgentTaskWorkspace } from "../src/artifactStore.js"
 import { ConfigManager } from "../src/config.js";
 import { HostStore } from "../src/hostStore.js";
 import { PubSub, type AppChannels } from "../src/pubsub.js";
-import { RecordingPipeline } from "../src/recordingPipeline.js";
+import { RecordingPipeline, agentRetryDelayMs } from "../src/recordingPipeline.js";
 import { AgentUnavailableError, type RecordingAgentGateway } from "../src/agentGateway.js";
 import { paths } from "../src/paths.js";
 
@@ -34,6 +34,8 @@ describe("RecordingPipeline", () => {
     reuseArtifactSessionForDelivery?: boolean;
     notionThrowsAfterCapability?: boolean;
     notionUnavailableAfterCapability?: boolean;
+    legacyManualTask?: boolean;
+    pollMs?: number;
     autoPrompts?: Array<{
       id: string;
       slug: string;
@@ -57,6 +59,16 @@ describe("RecordingPipeline", () => {
     }));
     writeFileSync(audioPath, Buffer.alloc(44));
     store = new HostStore(join(configDir, "host.sqlite"));
+    const legacyManualTask = opts.legacyManualTask ? store.enqueueRecording({
+      idempotencyKey: "manual:legacy-combined-task",
+      recordingStem: "Demo_20260711_120000",
+      title: "Legacy manual task",
+      audioPath,
+      sendToNotion: false,
+      destinationHint: "Yulu Meeting",
+      agentProvider: "hermes",
+      trigger: "manual",
+    }).task : null;
     const available = opts.available !== false;
     const warmTranscription = vi.fn(async () => {});
     let lastOnDemandWorkspace = "";
@@ -72,7 +84,6 @@ describe("RecordingPipeline", () => {
       return { transcript: "hello transcript", provider: "test-hermes", chunks: 1 };
     });
     let notionStartedFromState = "";
-    const notionBeginResults: Array<{ url: string | null; pageId: string | null }> = [];
     const runArtifactWorkflow = vi.fn(async ({ task, leaseToken, workspace }: Parameters<RecordingAgentGateway["runArtifactWorkflow"]>[0]) => {
       writeFileSync(workspace.summaryPath, "# Summary\n\nhello\n");
       if (!opts.skipArtifactCommit) {
@@ -107,7 +118,6 @@ describe("RecordingPipeline", () => {
         throw new AgentUnavailableError("Hermes delivery runtime became unavailable");
       }
       const delivery = store!.beginNotionDelivery(task.id, leaseToken);
-      notionBeginResults.push({ url: delivery.url, pageId: delivery.pageId });
       store!.recordNotionDelivery(task.id, leaseToken, {
         url: "https://notion.so/demo",
       });
@@ -173,7 +183,7 @@ describe("RecordingPipeline", () => {
         }),
       }) : undefined,
       gatewayFactory,
-      pollMs: 60_000,
+      pollMs: opts.pollMs ?? 60_000,
     });
     return {
       audioPath,
@@ -187,8 +197,8 @@ describe("RecordingPipeline", () => {
       runArtifactWorkflow,
       runNotionWorkflow,
       notionStartedFromState: () => notionStartedFromState,
-      notionBeginResults,
       lastOnDemandWorkspace: () => lastOnDemandWorkspace,
+      legacyManualTask,
     };
   }
 
@@ -245,26 +255,6 @@ describe("RecordingPipeline", () => {
     expect(store!.listTasks()).toEqual([]);
   });
 
-  it("renders manual instructions once at the pipeline boundary", () => {
-    const { audioPath } = setup();
-    const { task } = pipeline!.enqueueReprocess({
-      audioPath,
-      title: "Literal {{transcript}} title",
-      instructions: "{{meeting_title}} | {{date}} | {{transcript}}",
-    });
-
-    expect(task.instructions).toBe(
-      "Literal {{transcript}} title | 2026-07-11 | the complete transcript returned for this task by the task-scoped MCP `recording_task_transcript_read` operation",
-    );
-  });
-
-  it("rejects unknown manual summary variables before creating a task", () => {
-    const { audioPath } = setup();
-    expect(() => pipeline!.enqueueReprocess({ audioPath, instructions: "Read {{secret_file}}" }))
-      .toThrow("Unsupported summary template variable(s): secret_file");
-    expect(store!.listTasks()).toEqual([]);
-  });
-
   it("keeps the recording and reports awaiting_agent without a fallback", async () => {
     const { audioPath } = setup({ available: false });
     expect(pipeline!.transcriptionHealth()).toEqual({
@@ -277,6 +267,18 @@ describe("RecordingPipeline", () => {
     const { task } = pipeline!.enqueueCompletion({ audioPath, title: "Demo", sendToNotion: true });
     await vi.waitFor(() => expect(store!.getTask(task.id)?.state).toBe("awaiting_agent"));
     expect(store!.listArtifacts(task.id)).toEqual([]);
+  });
+
+  it("backs off and fails after three unavailable health checks", async () => {
+    const { audioPath, transcribe } = setup({ available: false, pollMs: 5 });
+    const { task } = pipeline!.enqueueCompletion({ audioPath, title: "Demo" });
+
+    await vi.waitFor(() => expect(store!.getTask(task.id)?.state).toBe("failed"));
+    expect(store!.getTask(task.id)).toMatchObject({
+      attempt: 3,
+      error: expect.stringContaining("unavailable after 3 checks"),
+    });
+    expect(transcribe).not.toHaveBeenCalled();
   });
 
   it("never exposes Notion when the Host did not observe the artifact commit", async () => {
@@ -331,6 +333,37 @@ describe("RecordingPipeline", () => {
     expect(store!.getTask(task.id)?.attempt).toBe(1);
   });
 
+  it("backs off exponentially and fails an unavailable task after three attempts", async () => {
+    expect(agentRetryDelayMs(1, 10)).toBe(10);
+    expect(agentRetryDelayMs(2, 10)).toBe(20);
+    expect(agentRetryDelayMs(3, 10)).toBe(40);
+    expect(agentRetryDelayMs(99, 10)).toBe(5 * 60_000);
+
+    const { audioPath, transcribe } = setup({ transcribeUnavailable: true, pollMs: 5 });
+    const { task } = pipeline!.enqueueCompletion({ audioPath, title: "Demo" });
+
+    await vi.waitFor(() => expect(store!.getTask(task.id)?.state).toBe("failed"));
+    expect(transcribe).toHaveBeenCalledTimes(3);
+    expect(store!.getTask(task.id)).toMatchObject({
+      attempt: 3,
+      error: expect.stringContaining("unavailable after 3 attempts"),
+    });
+  });
+
+  it("retires active legacy manual durable tasks when the pipeline starts", () => {
+    const { legacyManualTask } = setup({ legacyManualTask: true });
+
+    expect(legacyManualTask).not.toBeNull();
+    expect(store!.getTask(legacyManualTask!.id)).toMatchObject({
+      state: "cancelled",
+      phase: "failed",
+      error: "Retired legacy combined manual task after atomic meeting actions migration",
+    });
+    expect(store!.listTasks().filter((task) => task.trigger === "manual" && ![
+      "completed", "failed", "cancelled", "delivery_unverified",
+    ].includes(task.state))).toEqual([]);
+  });
+
   it("returns from an empty dispatch without constructing or probing a gateway", async () => {
     const { gatewayFactory } = setup();
     pipeline!.kick();
@@ -362,79 +395,6 @@ describe("RecordingPipeline", () => {
     expect(store!.getTask(task.id)?.state).toBe("queued");
     await expect(pipeline!.close()).resolves.toBeUndefined();
     log.mockRestore();
-  });
-
-  it("pauses automatic work but still executes explicit manual reprocessing", async () => {
-    const { audioPath, moviesDir, configManager, transcribe } = setup({ autoProcess: false });
-    expect(() => pipeline!.enqueueCompletion({ audioPath })).toThrow("Automatic Agent recording processing is paused by policy");
-
-    const automaticPath = join(moviesDir, "Automatic_20260711_130000.wav");
-    writeFileSync(automaticPath, Buffer.alloc(44));
-    const automatic = store!.enqueueRecording({
-      idempotencyKey: "preexisting-automatic",
-      recordingStem: "Automatic_20260711_130000",
-      title: "Automatic",
-      audioPath: automaticPath,
-      sendToNotion: false,
-      destinationHint: "Yulu Meeting",
-      agentProvider: "hermes",
-      trigger: "automatic",
-    }).task;
-
-    const { task } = pipeline!.enqueueReprocess({ audioPath, title: "Manual" });
-    expect(task.trigger).toBe("manual");
-    expect(pipeline!.transcriptionHealth()).toMatchObject({
-      available: true,
-      paused: true,
-      policyReason: expect.stringContaining("paused by policy"),
-    });
-    await vi.waitFor(() => expect(store!.getTask(task.id)?.state).toBe("completed"));
-    expect(store!.getTask(automatic.id)?.state).toBe("awaiting_policy");
-    expect(transcribe).toHaveBeenCalledTimes(1);
-
-    configManager.update("agent_pipeline.auto_process_recordings", true);
-    pipeline!.kick();
-    await vi.waitFor(() => expect(store!.getTask(automatic.id)?.state).toBe("completed"));
-    expect(store!.listEvents(automatic.id).map((event) => event.type)).toContain("task.policy_resumed");
-    expect(transcribe).toHaveBeenCalledTimes(2);
-  });
-
-  it("promotes a paused automatic task for the same recording into one manual task", async () => {
-    const { audioPath, transcribe } = setup({ autoProcess: false });
-    const automatic = store!.enqueueRecording({
-      idempotencyKey: "automatic:same-recording",
-      recordingStem: "Demo_20260711_120000",
-      title: "Automatic Demo",
-      audioPath,
-      sendToNotion: false,
-      destinationHint: "Yulu Meeting",
-      agentProvider: "hermes",
-      trigger: "automatic",
-    }).task;
-
-    const result = pipeline!.enqueueReprocess({ audioPath, title: "Manual Demo" });
-
-    expect(result).toMatchObject({ created: false, task: { id: automatic.id, trigger: "manual" } });
-    expect(store!.listTasks()).toHaveLength(1);
-    expect(store!.listEvents(automatic.id).map((event) => event.type)).toContain("task.manual_override");
-    await vi.waitFor(() => expect(store!.getTask(automatic.id)?.state).toBe("completed"));
-    expect(transcribe).toHaveBeenCalledTimes(1);
-  });
-
-  it("reuses an active manual task when its delayed automatic completion event arrives", async () => {
-    let releaseContract!: () => void;
-    const contractGate = new Promise<void>((resolve) => { releaseContract = resolve; });
-    const { audioPath, transcribe } = setup({ transcribeContractGate: contractGate });
-    const manual = pipeline!.enqueueReprocess({ audioPath, title: "Manual Demo" });
-    await vi.waitFor(() => expect(store!.getTask(manual.task.id)?.state).toBe("running"));
-
-    const delayed = pipeline!.enqueueCompletion({ audioPath, title: "Automatic Demo" });
-
-    expect(delayed).toMatchObject({ created: false, task: { id: manual.task.id, trigger: "manual" } });
-    expect(store!.listTasks()).toHaveLength(1);
-    releaseContract();
-    await vi.waitFor(() => expect(store!.getTask(manual.task.id)?.state).toBe("completed"));
-    expect(transcribe).toHaveBeenCalledTimes(1);
   });
 
   it("rejects completion permanently when the whole pipeline is disabled", () => {
@@ -503,52 +463,9 @@ describe("RecordingPipeline", () => {
         error = 'Host restarted during Notion delivery' WHERE id = ?
     `).run(first.task.id);
 
-    expect(() => pipeline!.enqueueReprocess({ audioPath, sendToNotion: false })).toThrow(
-      "confirm the existing page or abandon",
-    );
-    expect(() => pipeline!.enqueueReprocess({ audioPath, sendToNotion: true })).toThrow(
-      "confirm the existing page or abandon",
-    );
     expect(() => pipeline!.retry(first.task.id)).toThrow(/cannot retry from delivery_unverified/);
     expect(pipeline!.confirmNotionDelivery(first.task.id, {}).state).toBe("completed");
-    const retry = pipeline!.enqueueReprocess({ audioPath, sendToNotion: true });
-    expect(retry.created).toBe(false);
-    expect(retry.task.id).toBe(first.task.id);
     expect(store!.getNotionDelivery(first.task.id)?.deliveryKey).toBe(`yulu-${first.task.id}`);
-    await vi.waitFor(() => expect(store!.getTask(first.task.id)?.state).toBe("completed"));
-  });
-
-  it("reuses the delivered task and marker for repeated manual Notion sends", async () => {
-    const { audioPath, notionBeginResults } = setup();
-    const first = pipeline!.enqueueReprocess({
-      audioPath,
-      sendToNotion: true,
-      instructions: "First summary",
-    });
-    await vi.waitFor(() => expect(store!.getTask(first.task.id)?.state).toBe("completed"));
-    const marker = store!.getNotionDelivery(first.task.id)?.deliveryKey;
-
-    const second = pipeline!.enqueueReprocess({
-      audioPath,
-      sendToNotion: true,
-      instructions: "Updated summary",
-    });
-
-    expect(second).toMatchObject({ created: false, task: { id: first.task.id } });
-    expect(store!.getNotionDelivery(first.task.id)?.deliveryKey).toBe(marker);
-    await vi.waitFor(() => {
-      expect(store!.getTask(first.task.id)).toMatchObject({
-        state: "completed",
-        attempt: 2,
-        instructions: "Updated summary",
-      });
-    });
-    expect(store!.listTasks()).toHaveLength(1);
-    expect(store!.getNotionDelivery(first.task.id)?.deliveryKey).toBe(marker);
-    expect(notionBeginResults).toEqual([
-      { url: null, pageId: null },
-      { url: "https://notion.so/demo", pageId: null },
-    ]);
   });
 
   it("rejects a recording symlink that escapes the recordings directory", () => {

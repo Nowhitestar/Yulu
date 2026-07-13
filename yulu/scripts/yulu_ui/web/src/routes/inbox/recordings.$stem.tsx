@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router";
 import { useQueryClient } from "@tanstack/react-query";
-import { Check, ChevronLeft, Code, Copy, FileText, Send, Sparkles, Pencil, Trash2, Users, GitMerge } from "lucide-react";
+import { Check, ChevronLeft, Code, Copy, FileText, RefreshCw, Sparkles, Pencil, Trash2, Users, GitMerge } from "lucide-react";
 import { trpc } from "../../trpc.js";
 import { AudioPlayer } from "../../components/AudioPlayer.js";
 import { TranscriptView, type SpeakerData } from "../../components/TranscriptView.js";
@@ -12,10 +12,10 @@ import { TagEditor } from "../../components/TagEditor.js";
 import { EmptyState } from "../../components/EmptyState.js";
 import { ReprocessButton, type ReprocessButtonState } from "../../components/ReprocessButton.js";
 import { RecordingStatusBadge } from "../../components/RecordingStatusBadge.js";
+import { SharePopover, type ShareHistoryEntry, type ShareTarget } from "../../components/SharePopover.js";
 import { useConfirm } from "../../hooks/useConfirm.js";
 import { useT } from "../../i18n/LanguageProvider.js";
 import { useWsChannel } from "../../ws.js";
-import { isTrustedNotionUrl } from "../../../../src/notionDelivery.js";
 import "./recordings.reader.css";
 
 const GET_KEY = [["recordings", "get"]] as const;
@@ -36,7 +36,7 @@ export const handle = {
 };
 
 type Tab = "transcript" | "summary" | "raw";
-type ReprocessAction = "process" | "notion";
+type ManualAction = "transcribe" | "summarize" | "share";
 type AgentTaskState =
   | "queued"
   | "awaiting_agent"
@@ -94,24 +94,19 @@ function AgentTaskStatus({
   delivery?: NotionDeliveryView | null;
 }) {
   const t = useT();
-  if (!task) return null;
+  if (!task || !ACTIVE_AGENT_TASK_STATES.has(task.state)) return null;
 
   let key = "reader.agentTask.processing";
   if (task.state === "queued") key = "reader.agentTask.queued";
   else if (task.state === "awaiting_agent") key = "reader.agentTask.awaiting";
   else if (task.state === "awaiting_policy") key = "reader.agentTask.awaitingPolicy";
-  else if (task.state === "failed") key = "reader.agentTask.failed";
   else if (task.state === "delivery_unverified") key = "reader.agentTask.deliveryUnverified";
-  else if (task.state === "cancelled") key = "reader.agentTask.cancelled";
-  else if (task.state === "completed" && task.sendToNotion && delivery?.status === "reported") key = "reader.agentTask.notionSent";
-  else if (task.state === "completed" && task.sendToNotion) key = "reader.agentTask.deliveryUnverified";
-  else if (task.state === "completed") key = "reader.agentTask.processed";
   else if (task.phase === "transcribing") key = "reader.agentTask.transcribing";
   else if (task.phase === "summarizing") key = "reader.agentTask.summarizing";
   else if (task.sendToNotion && (task.state === "sending" || task.state === "delivery_reported")) key = "reader.agentTask.sendingNotion";
 
   const content = t(key);
-  const failed = task.state === "failed" || task.state === "delivery_unverified";
+  const failed = task.state === "delivery_unverified";
   return (
     <span
       className={`reader-agent-task-status${failed ? " failed" : ""}`}
@@ -119,9 +114,7 @@ function AgentTaskStatus({
       data-state={task.state}
       title={task.error || delivery?.detail || undefined}
     >
-      {task.state === "completed" && task.sendToNotion && delivery?.status === "reported" && delivery.url && isTrustedNotionUrl(delivery.url) ? (
-        <a href={delivery.url} target="_blank" rel="noreferrer">{content}</a>
-      ) : content}
+      {content}
     </span>
   );
 }
@@ -341,22 +334,24 @@ export function RecordingReader() {
   const { data: summaryPrompts } = trpc.prompts.list.useQuery({ category: "summary" });
 
   const qc = useQueryClient();
-  const [submittedAction, setSubmittedAction] = useState<ReprocessAction | null>(null);
-  const [submittedTaskId, setSubmittedTaskId] = useState<string | null>(null);
-  const [actionError, setActionError] = useState<{ action: ReprocessAction; message: string } | null>(null);
+  const [completedAction, setCompletedAction] = useState<ManualAction | null>(null);
+  const [actionError, setActionError] = useState<{ action: ManualAction; message: string } | null>(null);
+  const [pendingShareChannel, setPendingShareChannel] = useState<string | null>(null);
   const [summaryTemplateId, setSummaryTemplateId] = useState("");
   const targetAudioSrc = data ? audioSrcFor(data) : null;
 
   useEffect(() => {
-    setSubmittedAction(null);
-    setSubmittedTaskId(null);
+    setCompletedAction(null);
     setActionError(null);
+    setPendingShareChannel(null);
   }, [stem]);
   const [mountedAudioSrc, setMountedAudioSrc] = useState<string | null>(null);
   const [copiedSummary, setCopiedSummary] = useState(false);
   const copyResetRef = useRef<number | null>(null);
 
-  const reprocessMut = trpc.recordings.reprocess.useMutation();
+  const transcribeMut = trpc.recordings.transcribe.useMutation();
+  const summarizeMut = trpc.recordings.summarize.useMutation();
+  const sendSummaryMut = trpc.recordings.sendSummary.useMutation();
   const renameMut = trpc.recordings.rename.useMutation();
   const setTagsMut = trpc.recordings.setTags.useMutation();
   const deleteMut = trpc.recordings.delete.useMutation();
@@ -470,48 +465,61 @@ export function RecordingReader() {
     );
   }, [data?.stem, data?.defaultSummaryTemplateId, data?.summaryTemplateOptions, summaryPrompts]);
 
-  function deriveButtonState(action: ReprocessAction): ReprocessButtonState {
-    const task = data?.agentTask as AgentTaskView | null | undefined;
-    const delivery = data?.notionDelivery as NotionDeliveryView | null | undefined;
-    const wantsNotion = action === "notion";
-    const matchesCurrentTask = task?.sendToNotion === wantsNotion;
+  function deriveButtonState(action: Exclude<ManualAction, "share">): ReprocessButtonState {
     if (actionError?.action === action) return "failed";
-    if (submittedAction === action && (!submittedTaskId || task?.id !== submittedTaskId)) return "running";
-    if (!task || !matchesCurrentTask) return "idle";
-    if (ACTIVE_AGENT_TASK_STATES.has(task.state) && !allowsManualPolicyOverride(task)) return "running";
-    if (task.state === "failed" || task.state === "delivery_unverified") return "failed";
-    if (task.state === "completed") {
-      if (!wantsNotion) return "done";
-      return delivery?.status === "reported" ? "done" : "failed";
-    }
+    if (action === "transcribe" && transcribeMut.isPending) return "running";
+    if (action === "summarize" && summarizeMut.isPending) return "running";
+    if (completedAction === action) return "done";
     return "idle";
   }
 
-  function buttonError(action: ReprocessAction): string | undefined {
+  function buttonError(action: Exclude<ManualAction, "share">): string | undefined {
     if (actionError?.action === action) return actionError.message;
-    const task = data?.agentTask as AgentTaskView | null | undefined;
-    if (task?.sendToNotion !== (action === "notion")) return undefined;
-    const delivery = data?.notionDelivery as NotionDeliveryView | null | undefined;
-    return task.error || delivery?.detail || data?.statusError;
+    return undefined;
   }
 
-  const handleReprocess = (action: ReprocessAction) => {
-    setSubmittedAction(action);
-    setSubmittedTaskId(null);
+  const handleTranscribe = () => {
+    setCompletedAction(null);
+    setActionError(null);
+    transcribeMut.mutate({ stem }, {
+      onSuccess: () => setCompletedAction("transcribe"),
+      onError: (err) => setActionError({ action: "transcribe", message: err.message }),
+      onSettled: invalidateBoth,
+    });
+  };
+
+  const handleSummarize = () => {
+    setCompletedAction(null);
     setActionError(null);
     const templateOptions = mergeSummaryTemplateOptions(
       (data?.summaryTemplateOptions ?? []) as SummaryTemplateOption[],
       summaryPrompts as SummaryPromptRow[] | undefined,
     );
     const promptId = summaryTemplateId || defaultSummaryTemplateIdFor(templateOptions, data?.defaultSummaryTemplateId);
-    reprocessMut.mutate({
-      stem,
-      promptId: promptId || null,
-      sendToNotion: action === "notion",
-    }, {
-      onSuccess: (result) => setSubmittedTaskId(result.taskId),
-      onError: (err) => setActionError({ action, message: err.message }),
+    summarizeMut.mutate({ stem, promptId: promptId || null }, {
+      onSuccess: () => setCompletedAction("summarize"),
+      onError: (err) => setActionError({ action: "summarize", message: err.message }),
       onSettled: invalidateBoth,
+    });
+  };
+
+  const handleShare = (target: { channel: string; label: string; destination: string }) => {
+    if (!confirm(t("reader.send.confirm", { label: target.label, destination: target.destination || t("value.unset") }))) return;
+    setCompletedAction(null);
+    setActionError(null);
+    setPendingShareChannel(target.channel);
+    sendSummaryMut.mutate({
+      stem,
+      channel: target.channel,
+      label: target.label,
+      destination: target.destination,
+    }, {
+      onSuccess: () => setCompletedAction("share"),
+      onError: (err) => setActionError({ action: "share", message: err.message }),
+      onSettled: () => {
+        setPendingShareChannel(null);
+        invalidateBoth();
+      },
     });
   };
 
@@ -522,7 +530,7 @@ export function RecordingReader() {
     const url = window.prompt(t("reader.reconciliation.confirmPrompt"), delivery?.url ?? "");
     if (url === null) return;
     confirmDeliveryMut.mutate({ id: task.id, url: url.trim() || undefined }, {
-      onError: (err) => setActionError({ action: "notion", message: err.message }),
+      onError: (err) => setActionError({ action: "share", message: err.message }),
       onSettled: invalidateBoth,
     });
   };
@@ -532,7 +540,7 @@ export function RecordingReader() {
     if (!task || task.state !== "delivery_unverified") return;
     if (!confirm(t("reader.reconciliation.abandonConfirm"))) return;
     abandonDeliveryMut.mutate({ id: task.id }, {
-      onError: (err) => setActionError({ action: "notion", message: err.message }),
+      onError: (err) => setActionError({ action: "share", message: err.message }),
       onSettled: invalidateBoth,
     });
   };
@@ -629,12 +637,13 @@ export function RecordingReader() {
   const manualPolicyOverrideAllowed = allowsManualPolicyOverride(agentTask);
   const taskBlocksManualActions = taskActive && !manualPolicyOverrideAllowed;
   const taskDeleteBlocked = taskActive || agentTask?.state === "delivery_unverified";
-  const actionsDisabled = !data.wavPath || taskBlocksManualActions || agentTask?.state === "delivery_unverified" || reprocessMut.isPending;
-  const actionsDisabledReason = !data.wavPath
-    ? t("reader.disabled.wavMissing")
-    : taskBlocksManualActions || agentTask?.state === "delivery_unverified"
+  const manualActionPending = transcribeMut.isPending || summarizeMut.isPending || sendSummaryMut.isPending;
+  const taskActionBlocked = taskBlocksManualActions || agentTask?.state === "delivery_unverified";
+  const actionsDisabledReason = taskActionBlocked
       ? t("reader.disabled.agentTaskActive")
       : undefined;
+  const shareTargets = (data.shareTargets ?? []) as ShareTarget[];
+  const shareHistory = (data.shareHistory ?? []) as ShareHistoryEntry[];
   const summaryTemplateOptions = mergeSummaryTemplateOptions(
     (data.summaryTemplateOptions ?? []) as SummaryTemplateOption[],
     summaryPrompts as SummaryPromptRow[] | undefined,
@@ -722,24 +731,34 @@ export function RecordingReader() {
 
           <div className="reader-actions">
           <ReprocessButton
-            label={t("reader.action.process")}
-            icon={<Sparkles size={14} strokeWidth={1.75} />}
-            state={deriveButtonState("process")}
-            error={buttonError("process")}
-            onClick={() => handleReprocess("process")}
-            disabled={actionsDisabled}
-            disabledReason={actionsDisabledReason}
+            label={t("reader.action.retranscribe")}
+            icon={<RefreshCw size={14} strokeWidth={1.75} />}
+            state={deriveButtonState("transcribe")}
+            error={buttonError("transcribe")}
+            onClick={handleTranscribe}
+            disabled={!data.wavPath || taskActionBlocked || manualActionPending}
+            disabledReason={!data.wavPath ? t("reader.disabled.wavMissing") : actionsDisabledReason}
           />
           <ReprocessButton
-            label={t("reader.action.processAndSendNotion")}
-            icon={<Send size={14} strokeWidth={1.75} />}
-            state={deriveButtonState("notion")}
-            error={buttonError("notion")}
-            onClick={() => handleReprocess("notion")}
-            disabled={actionsDisabled}
-            disabledReason={actionsDisabledReason}
+            label={t("reader.action.regenerate")}
+            icon={<Sparkles size={14} strokeWidth={1.75} />}
+            state={deriveButtonState("summarize")}
+            error={buttonError("summarize")}
+            onClick={handleSummarize}
+            disabled={!(data.transcript || data.realtime) || taskActionBlocked || manualActionPending}
+            disabledReason={!(data.transcript || data.realtime) ? t("reader.disabled.transcriptFirst") : actionsDisabledReason}
+          />
+          <SharePopover
+            className="reader-action-share"
+            targets={shareTargets}
+            history={shareHistory}
+            pendingChannel={pendingShareChannel}
+            onSend={handleShare}
+            disabled={!data.summary || data.summaryStale || taskActionBlocked || manualActionPending}
           />
           </div>
+
+          {actionError?.action === "share" && <div className="reader-action-error" role="alert">{actionError.message}</div>}
 
           {agentTask?.state === "delivery_unverified" && (
             <div className="reader-reconciliation" role="alert">

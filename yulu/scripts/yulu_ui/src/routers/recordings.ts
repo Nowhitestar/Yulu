@@ -1,12 +1,18 @@
-import { closeSync, existsSync, openSync, readFileSync, readSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, openSync, readFileSync, readSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { join, resolve, relative, isAbsolute } from "node:path";
 import { z } from "zod";
-import { STANDARD_SUMMARY_INSTRUCTIONS } from "../promptInstructions.js";
+import {
+  recordingDateFromStem,
+  renderStandaloneSummaryInstructions,
+  STANDALONE_SUMMARY_INSTRUCTIONS,
+} from "../promptInstructions.js";
 import { TRPCError } from "@trpc/server";
 import { router, publicProcedure } from "../trpc.js";
 import {
   publicAgentTask,
   RecordingTaskDeletionBlockedError,
+  type AgentTask,
   type HostStore,
 } from "../hostStore.js";
 import {
@@ -15,6 +21,9 @@ import {
   readTagsSidecar,
   writeTagsSidecar,
 } from "../recordingMeta.js";
+import { resolveAgentRuntime } from "../agentRuntime.js";
+import { runAgentShareSummary, runAgentSummarize } from "../agentActions.js";
+import { agentDestinationHint, agentPluginOverview, normalizeConsoleAgent } from "../agentPlugins.js";
 
 // Every recording is a meeting now (voicemails were unified into meetings and
 // the separate voicemails/ directory was merged into the root). A recording is
@@ -32,6 +41,41 @@ interface SummaryPromptSnapshot {
   slug: string;
   name: string;
   content: string;
+}
+
+interface ShareHistoryEntry {
+  id: string;
+  channel: string;
+  label: string;
+  destination: string;
+  sentAt: string;
+  status: "success" | "failed" | "unverified";
+  message?: string;
+}
+
+const manualActionLocks = new Map<string, string>();
+
+interface ShareTarget {
+  channel: string;
+  label: string;
+  destination: string;
+  enabled: boolean;
+  disabledReason: string | null;
+  lastShare: ShareHistoryEntry | null;
+}
+
+const ACTIVE_AGENT_TASK_STATES = new Set([
+  "queued", "awaiting_agent", "running", "artifacts_committed",
+  "sending", "delivery_reported", "delivery_unverified",
+]);
+const CURRENT_AGENT_TASK_STATES = new Set([
+  ...ACTIVE_AGENT_TASK_STATES,
+  "awaiting_policy",
+]);
+
+function currentAgentTask(stem: string, host?: HostStore): AgentTask | null {
+  const task = host?.latestForRecording(stem) ?? null;
+  return task && CURRENT_AGENT_TASK_STATES.has(task.state) ? task : null;
 }
 
 function isoFromStem(date: string, time: string): string {
@@ -145,8 +189,8 @@ function wavHealthError(path: string): string | null {
 }
 
 function recordingStatus(stem: string, wavPath: string, host?: HostStore): RecordingStatus {
-  const task = host?.latestForRecording(stem);
-  if (task && task.state !== "completed" && task.state !== "cancelled") {
+  const task = currentAgentTask(stem, host);
+  if (task) {
     if (task.state === "queued") return { status: "agent_queued" };
     if (task.state === "awaiting_agent") return { status: "awaiting_agent", statusError: task.error ?? undefined };
     if (task.state === "awaiting_policy") return { status: "awaiting_policy", statusError: task.error ?? undefined };
@@ -433,6 +477,146 @@ function writeTextAtomic(path: string, body: string): void {
   renameSync(tmp, path);
 }
 
+function shareHistoryPath(dir: string, stem: string): string {
+  return join(dir, `${stem}.shares.json`);
+}
+
+function normalizeChannel(value: unknown): string | null {
+  const channel = typeof value === "string" ? value.trim().toLowerCase() : "";
+  return /^[a-z0-9][a-z0-9_-]{0,39}$/.test(channel) ? channel : null;
+}
+
+function channelLabel(channel: string): string {
+  if (channel === "notion") return "Notion";
+  if (channel === "zulip") return "Zulip";
+  return channel.split(/[-_]/).filter(Boolean)
+    .map((part) => part[0]!.toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function normalizeShareHistoryEntry(value: unknown): ShareHistoryEntry | null {
+  if (!isRecord(value)) return null;
+  const channel = normalizeChannel(value.channel);
+  const status = value.status === "success" || value.status === "failed" || value.status === "unverified"
+    ? value.status
+    : null;
+  if (!channel || !status || typeof value.sentAt !== "string") return null;
+  return {
+    id: typeof value.id === "string" ? value.id : `${value.sentAt}-${channel}`,
+    channel,
+    label: typeof value.label === "string" ? value.label : channelLabel(channel),
+    destination: typeof value.destination === "string" ? value.destination : "",
+    sentAt: value.sentAt,
+    status,
+    message: typeof value.message === "string" ? value.message : undefined,
+  };
+}
+
+function readShareHistory(path: string): ShareHistoryEntry[] {
+  try {
+    const parsed = JSON.parse(readFileSync(path, "utf8"));
+    if (!Array.isArray(parsed)) return [];
+    return parsed.map(normalizeShareHistoryEntry)
+      .filter((entry): entry is ShareHistoryEntry => entry !== null)
+      .sort((a, b) => b.sentAt.localeCompare(a.sentAt));
+  } catch {
+    return [];
+  }
+}
+
+function appendShareHistory(dir: string, stem: string, entry: Omit<ShareHistoryEntry, "id" | "sentAt">): void {
+  const next = {
+    id: randomUUID(),
+    sentAt: new Date().toISOString().replace(/\.\d+Z$/, "Z"),
+    ...entry,
+  };
+  const entries = [next, ...readShareHistory(shareHistoryPath(dir, stem))].slice(0, 50);
+  writeTextAtomic(shareHistoryPath(dir, stem), `${JSON.stringify(entries, null, 2)}\n`);
+}
+
+function shareTargets(config: unknown, opts: {
+  hasSummary: boolean;
+  history: ShareHistoryEntry[];
+  scriptDir: string;
+  moviesDir: string;
+}): ShareTarget[] {
+  const runtime = resolveAgentRuntime(config, { scriptDir: opts.scriptDir, moviesDir: opts.moviesDir });
+  const agent = normalizeConsoleAgent(runtime.provider);
+  return agentPluginOverview(config, { agent: runtime.provider, agentReady: !runtime.disabledReason }).current
+    .filter((plugin) => plugin.id === "notion" || plugin.id === "zulip")
+    .map((plugin) => {
+      const channel = plugin.id as "notion" | "zulip";
+      const label = channelLabel(channel);
+      const destination = plugin.destination?.value || agentDestinationHint(config, agent, channel, "");
+      let disabledReason: string | null = null;
+      if (!opts.hasSummary) disabledReason = "Needs AI Summary";
+      else if (runtime.disabledReason) disabledReason = runtime.disabledReason;
+      else if (plugin.status !== "configured") disabledReason = plugin.detail || `${label} Agent plugin is not configured`;
+      else if (plugin.destination && !plugin.destination.configured) disabledReason = plugin.destination.missingReason || "Destination missing";
+      return {
+        channel,
+        label,
+        destination,
+        enabled: disabledReason === null,
+        disabledReason,
+        lastShare: opts.history.find((entry) => entry.channel === channel) ?? null,
+      };
+    });
+}
+
+function assertNoActiveAgentTask(host: HostStore, stem: string): void {
+  const task = host.latestForRecording(stem);
+  if (task && ACTIVE_AGENT_TASK_STATES.has(task.state)) {
+    throw new TRPCError({ code: "CONFLICT", message: "An Agent task is already active for this recording" });
+  }
+}
+
+function prepareManualAction(
+  host: HostStore,
+  cleanupWorkspace: (taskId: string) => void,
+  stem: string,
+): void {
+  for (const taskId of host.cancelPolicyPausedAutomaticForManualAction(stem)) {
+    try { cleanupWorkspace(taskId); } catch { /* task cancellation is already durable */ }
+  }
+  assertNoActiveAgentTask(host, stem);
+}
+
+async function withManualActionLock<T>(stem: string, action: string, run: () => Promise<T>): Promise<T> {
+  const current = manualActionLocks.get(stem);
+  if (current) {
+    throw new TRPCError({ code: "CONFLICT", message: `${current} is already running for this recording` });
+  }
+  manualActionLocks.set(stem, action);
+  try {
+    return await run();
+  } finally {
+    manualActionLocks.delete(stem);
+  }
+}
+
+function summaryStalePath(dir: string, stem: string): string {
+  return join(dir, `${stem}.summary.stale`);
+}
+
+function speakersStalePath(dir: string, stem: string): string {
+  return join(dir, `${stem}.speakers.stale`);
+}
+
+function hasCurrentSummary(dir: string, stem: string): boolean {
+  return existsSync(join(dir, `${stem}.summary.md`)) && !existsSync(summaryStalePath(dir, stem));
+}
+
+function markDerivedArtifactsStale(dir: string, stem: string): void {
+  const timestamp = `${new Date().toISOString()}\n`;
+  if (existsSync(join(dir, `${stem}.summary.md`))) writeTextAtomic(summaryStalePath(dir, stem), timestamp);
+  if (existsSync(speakersSidecarPath(dir, stem))) writeTextAtomic(speakersStalePath(dir, stem), timestamp);
+}
+
+function clearStaleMarker(path: string): void {
+  if (existsSync(path)) rmSync(path);
+}
+
 function writeSpeakerSidecar(dir: string, stem: string, doc: SpeakerSidecar): SpeakerSidecar {
   updateSegmentDisplayNames(doc);
   const path = speakersSidecarPath(dir, stem);
@@ -440,6 +624,7 @@ function writeSpeakerSidecar(dir: string, stem: string, doc: SpeakerSidecar): Sp
   const transcriptPath = join(dir, `${stem}.transcript.txt`);
   const existingTranscript = existsSync(transcriptPath) ? readFileSync(transcriptPath, "utf8") : null;
   writeTextAtomic(transcriptPath, renderTranscriptPreservingBodies(doc, existingTranscript));
+  clearStaleMarker(speakersStalePath(dir, stem));
   return doc;
 }
 
@@ -469,7 +654,7 @@ function listRecordings(dir: string, host?: HostStore): Row[] {
       wavPath, sizeBytes: stat.size, mtimeMs: stat.mtimeMs,
       durationSeconds: wavDurationSeconds(wavPath),
       hasTranscript: existsSync(transcriptPath),
-      hasSummary: existsSync(join(dir, `${stem}.summary.md`)),
+      hasSummary: hasCurrentSummary(dir, stem),
       hasRealtime: existsSync(join(dir, `${stem}.realtime.transcript.txt`)),
         firstWords: firstWordsOf(transcriptPath),
         status: currentStatus.status, statusError: currentStatus.statusError,
@@ -515,10 +700,13 @@ export const recordingsRouter = router({
       const title = resolveTitle(dir, input.stem, derivedTitle);
       const tags = readTagsSidecar(join(dir, `${input.stem}.tags.json`));
       const currentStatus = recordingStatus(input.stem, wav, ctx.host);
-      const agentTask = ctx.host?.latestForRecording(input.stem) ?? null;
+      const agentTask = currentAgentTask(input.stem, ctx.host);
       const notionDelivery = agentTask ? ctx.host?.getNotionDelivery(agentTask.id) ?? null : null;
       const transcript = read(".transcript.txt");
       const raw = read(".raw.transcript.txt");
+      const shareHistory = readShareHistory(shareHistoryPath(dir, input.stem));
+      const hasSummary = hasCurrentSummary(dir, input.stem);
+      const summaryStale = existsSync(join(dir, `${input.stem}.summary.md`)) && !hasSummary;
       // Older Yulu releases wrote identical `.transcript.txt` and
       // `.raw.transcript.txt` files; the primary transcript may later differ.
       // Only surface raw as
@@ -532,12 +720,20 @@ export const recordingsRouter = router({
         raw,
         rawDiffers,
         summary: read(".summary.md"),
+        summaryStale,
         realtime: read(".realtime.transcript.txt"),
         hasRealtime: existsSync(join(dir, `${input.stem}.realtime.transcript.txt`)),
-        speakerData: readSpeakerSidecar(dir, input.stem),
+        speakerData: existsSync(speakersStalePath(dir, input.stem)) ? null : readSpeakerSidecar(dir, input.stem),
         status: currentStatus.status, statusError: currentStatus.statusError,
         agentTask: agentTask ? publicAgentTask(agentTask) : null,
         notionDelivery,
+        shareTargets: shareTargets(ctx.config.read(), {
+          hasSummary,
+          history: shareHistory,
+          scriptDir: ctx.paths.scriptDir,
+          moviesDir: ctx.paths.moviesDir,
+        }),
+        shareHistory,
         summaryTemplateOptions: summaryTemplateOptions(ctx.db?.prompts),
         defaultSummaryTemplateId: defaultSummaryTemplateId(summaryTemplateOptions(ctx.db?.prompts)),
       };
@@ -657,9 +853,13 @@ export const recordingsRouter = router({
     }),
 
   delete: publicProcedure
-    .input(z.object({ stem: z.string() }))
+    .input(z.object({ stem: z.string().min(1) }))
     .mutation(({ ctx, input }) => {
       const dir = ctx.paths.moviesDir;
+      const currentManualAction = manualActionLocks.get(input.stem);
+      if (currentManualAction) {
+        throw new TRPCError({ code: "CONFLICT", message: `${currentManualAction} is already running for this recording` });
+      }
       let taskIds: string[];
       try {
         taskIds = ctx.host.prepareRecordingDeletion(input.stem);
@@ -670,21 +870,18 @@ export const recordingsRouter = router({
         throw error;
       }
       for (const taskId of taskIds) ctx.artifacts.cleanupWorkspace(taskId);
-      // Every known sidecar a recording can spawn. `.tags.json`/`.title` are the
-      // UI-editable ones; the rest are pipeline outputs.
-      const suffixes = [".wav", ".clean.wav", ".transcript.txt", ".raw.transcript.txt",
-                        ".realtime.transcript.txt", ".realtime.coverage.json", ".realtime.json",
-                        ".speakers.json",
-                        ".summary.md", ".summary.html",
-                        ".mic.transcript.txt", ".sys.transcript.txt",
-                        ".title", ".tags.json", ".shares.json"];
-      const targets = new Set(suffixes.map((s) => join(dir, `${input.stem}${s}`)));
-      // `<stem>.chunk-*` split-recording fragments (glob — no fixed count).
-      // Read the dir and match by prefix instead of trusting a wildcard path.
-      const chunkPrefix = `${input.stem}.chunk-`;
+      // Recording siblings are intentionally prefix-based: older releases and
+      // migrations created extra backups, lock files, and `.realtime` dirs.
+      // Exact `<stem>.` / `.<stem>.` prefixes avoid a growing, incomplete
+      // suffix allowlist while still keeping deletion scoped to one recording.
+      const targets = new Set<string>();
+      const prefix = `${input.stem}.`;
+      const hiddenPrefix = `.${input.stem}.`;
       try {
         for (const f of readdirSync(dir)) {
-          if (f.startsWith(chunkPrefix)) targets.add(join(dir, f));
+          if (f === `${input.stem}.wav` || f.startsWith(prefix) || f.startsWith(hiddenPrefix)) {
+            targets.add(join(dir, f));
+          }
         }
       } catch { /* dir gone — nothing to remove */ }
       let removed = 0;
@@ -692,7 +889,7 @@ export const recordingsRouter = router({
         // Containment guard: only ever unlink inside the recordings dir, never
         // follow a stem that escapes via `..` or an absolute path.
         if (!isInside(dir, p)) continue;
-        if (existsSync(p)) { unlinkSync(p); removed++; }
+        if (existsSync(p)) { rmSync(p, { recursive: true }); removed++; }
       }
       try {
         ctx.host.purgeRecordingTasks(input.stem);
@@ -706,29 +903,155 @@ export const recordingsRouter = router({
       return { removed };
     }),
 
-  reprocess: publicProcedure
+  transcribe: publicProcedure
+    .input(z.object({ stem: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      return withManualActionLock(input.stem, "Transcription", async () => {
+        const dir = ctx.paths.moviesDir;
+        const wavPath = join(dir, `${input.stem}.wav`);
+        if (!existsSync(wavPath)) throw new TRPCError({ code: "NOT_FOUND", message: "WAV file missing" });
+        prepareManualAction(ctx.host, (taskId) => ctx.artifacts.cleanupWorkspace(taskId), input.stem);
+        const result = await ctx.recordingPipeline.transcribeOnDemand({ audioPath: wavPath });
+        const transcript = `${result.transcript.trim()}\n`;
+        writeTextAtomic(join(dir, `${input.stem}.transcript.txt`), transcript);
+        writeTextAtomic(join(dir, `${input.stem}.raw.transcript.txt`), transcript);
+        markDerivedArtifactsStale(dir, input.stem);
+        ctx.pubsub.publish("recordings-changed", { reason: "changed" });
+        ctx.pubsub.publish("jobs", { stem: input.stem, jobId: `manual-transcribe:${input.stem}`, state: "done" });
+        return { ok: true as const, provider: result.provider, chunks: result.chunks };
+      });
+    }),
+
+  summarize: publicProcedure
+    .input(z.object({ stem: z.string(), promptId: z.string().nullable().optional() }))
+    .mutation(async ({ ctx, input }) => {
+      return withManualActionLock(input.stem, "Summary generation", async () => {
+        const dir = ctx.paths.moviesDir;
+        const transcriptPath = existsSync(join(dir, `${input.stem}.transcript.txt`))
+          ? join(dir, `${input.stem}.transcript.txt`)
+          : join(dir, `${input.stem}.realtime.transcript.txt`);
+        if (!existsSync(transcriptPath)) {
+          throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Transcript missing — run Re-transcribe first" });
+        }
+        prepareManualAction(ctx.host, (taskId) => ctx.artifacts.cleanupWorkspace(taskId), input.stem);
+        const prompt = summaryPromptSnapshot(ctx.db?.prompts, input.promptId ?? null);
+        if (input.promptId && !prompt) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "summary template not found" });
+        }
+        const derivedTitle = `${input.stem}.wav`.match(REC_FILE_RE)?.[1] ?? input.stem;
+        const title = resolveTitle(dir, input.stem, derivedTitle) ?? input.stem;
+        const runtime = resolveAgentRuntime(ctx.config.read(), {
+          scriptDir: ctx.paths.scriptDir,
+          moviesDir: ctx.paths.moviesDir,
+        });
+        const instructions = renderStandaloneSummaryInstructions(
+          prompt?.content ?? STANDALONE_SUMMARY_INSTRUCTIONS,
+          { title, date: recordingDateFromStem(input.stem) },
+        );
+        const result = await runAgentSummarize({
+          configDir: ctx.paths.configDir,
+          scriptDir: ctx.paths.scriptDir,
+          runtime,
+          transcriptPath,
+          title,
+          instructions,
+        });
+        writeTextAtomic(join(dir, `${input.stem}.summary.md`), `${result.stdout.trim()}\n`);
+        clearStaleMarker(summaryStalePath(dir, input.stem));
+        ctx.pubsub.publish("recordings-changed", { reason: "changed" });
+        ctx.pubsub.publish("jobs", { stem: input.stem, jobId: result.sessionId, state: "done" });
+        return { ok: true as const, sessionId: result.sessionId };
+      });
+    }),
+
+  sendSummary: publicProcedure
     .input(z.object({
       stem: z.string(),
-      promptId: z.string().nullable().optional(),
-      sendToNotion: z.boolean().optional(),
+      channel: z.string().trim().regex(/^[a-z0-9][a-z0-9_-]{0,39}$/),
+      label: z.string().trim().min(1).max(80).optional(),
+      destination: z.string().trim().max(500).optional(),
     }))
     .mutation(async ({ ctx, input }) => {
-      const dir = ctx.paths.moviesDir;
-      const wavPath = join(dir, `${input.stem}.wav`);
-      if (!existsSync(wavPath)) throw new TRPCError({ code: "NOT_FOUND", message: "WAV file missing" });
-      const mm = `${input.stem}.wav`.match(REC_FILE_RE);
-      const derivedTitle = mm ? mm[1]! : null;
-      const title = resolveTitle(dir, input.stem, derivedTitle);
-      const prompt = summaryPromptSnapshot(ctx.db?.prompts, input.promptId ?? null);
-      if (input.promptId && !prompt) {
-        throw new TRPCError({ code: "BAD_REQUEST", message: "summary template not found" });
-      }
-      const result = ctx.recordingPipeline.enqueueReprocess({
-        audioPath: wavPath,
-        title: title ?? input.stem,
-        sendToNotion: input.sendToNotion === true,
-        instructions: prompt?.content ?? STANDARD_SUMMARY_INSTRUCTIONS,
+      return withManualActionLock(input.stem, "Sharing", async () => {
+        const dir = ctx.paths.moviesDir;
+        const summaryPath = join(dir, `${input.stem}.summary.md`);
+        if (!existsSync(join(dir, `${input.stem}.wav`))) {
+          throw new TRPCError({ code: "NOT_FOUND", message: `recording not found: ${input.stem}` });
+        }
+        if (!existsSync(summaryPath)) {
+          throw new TRPCError({ code: "PRECONDITION_FAILED", message: "summary missing" });
+        }
+        if (!hasCurrentSummary(dir, input.stem)) {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message: "Summary is based on an older transcript — regenerate it before sharing",
+          });
+        }
+        prepareManualAction(ctx.host, (taskId) => ctx.artifacts.cleanupWorkspace(taskId), input.stem);
+        const config = ctx.config.read();
+        const runtime = resolveAgentRuntime(config, {
+          scriptDir: ctx.paths.scriptDir,
+          moviesDir: ctx.paths.moviesDir,
+        });
+        const history = readShareHistory(shareHistoryPath(dir, input.stem));
+        const knownTarget = shareTargets(config, {
+          hasSummary: true,
+          history,
+          scriptDir: ctx.paths.scriptDir,
+          moviesDir: ctx.paths.moviesDir,
+        }).find((target) => target.channel === input.channel);
+        const label = input.label || knownTarget?.label || channelLabel(input.channel);
+        const destination = input.destination || knownTarget?.destination || "";
+        const recordFailure = (message: string) => appendShareHistory(dir, input.stem, {
+          channel: input.channel,
+          label,
+          destination,
+          status: "failed",
+          message,
+        });
+        if (knownTarget && !knownTarget.enabled) {
+          const message = knownTarget.disabledReason || `${label} is not configured`;
+          recordFailure(message);
+          throw new TRPCError({ code: "PRECONDITION_FAILED", message });
+        }
+        if (runtime.disabledReason) {
+          const message = runtime.disabledReason;
+          recordFailure(message);
+          throw new TRPCError({ code: "PRECONDITION_FAILED", message });
+        }
+        const derivedTitle = `${input.stem}.wav`.match(REC_FILE_RE)?.[1] ?? input.stem;
+        const title = resolveTitle(dir, input.stem, derivedTitle) ?? input.stem;
+        try {
+          const result = await runAgentShareSummary({
+            configDir: ctx.paths.configDir,
+            scriptDir: ctx.paths.scriptDir,
+            runtime,
+            channel: input.channel,
+            channelLabel: label,
+            summaryPath,
+            title,
+            destinationHint: destination,
+          });
+          appendShareHistory(dir, input.stem, {
+            channel: input.channel,
+            label,
+            destination,
+            status: "success",
+            message: result.delivery.url || result.delivery.id || result.delivery.destination || undefined,
+          });
+          ctx.pubsub.publish("recordings-changed", { reason: "changed" });
+          return { ok: true as const, sessionId: result.sessionId };
+        } catch (error) {
+          const message = (error as Error).message;
+          appendShareHistory(dir, input.stem, {
+            channel: input.channel,
+            label,
+            destination,
+            status: "unverified",
+            message: `Delivery result is uncertain. Verify the destination before retrying. ${message}`,
+          });
+          throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message });
+        }
       });
-      return { ok: true as const, taskId: result.task.id, created: result.created };
     }),
 });
