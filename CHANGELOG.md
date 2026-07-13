@@ -4,6 +4,13 @@ All notable changes to Yulu are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.19.0](https://github.com/Nowhitestar/Yulu/compare/v0.18.1...v0.19.0) (2026-07-13)
+
+
+### Features
+
+* **recordings:** restore atomic meeting actions ([#95](https://github.com/Nowhitestar/Yulu/issues/95)) ([1d783fa](https://github.com/Nowhitestar/Yulu/commit/1d783fad64598fc332c5f720be2725db888aa749))
+
 ## [0.18.1](https://github.com/Nowhitestar/Yulu/compare/v0.18.0...v0.18.1) (2026-07-11)
 
 
