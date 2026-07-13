@@ -7,11 +7,27 @@ import { createCaller, type AppContext } from "../../src/trpc.js";
 import { PubSub, type AppChannels } from "../../src/pubsub.js";
 import { RecordingTaskDeletionBlockedError } from "../../src/hostStore.js";
 
+const agentActions = vi.hoisted(() => ({
+  summarize: vi.fn(async () => ({ stdout: "# Fresh summary\n", stderr: "", sessionId: "summary-session" })),
+  share: vi.fn(async () => ({
+    stdout: "sent",
+    stderr: "",
+    sessionId: "share-session",
+    delivery: { status: "sent", channel: "slack", destination: "#meetings", url: "", id: "msg-1" },
+  })),
+}));
+
+vi.mock("../../src/agentActions.js", () => ({
+  runAgentSummarize: agentActions.summarize,
+  runAgentShareSummary: agentActions.share,
+}));
+
 function mkCtx(opts: { moviesDir: string }): AppContext {
   const promptRows: Array<Record<string, unknown>> = [];
-  const enqueueReprocess = vi.fn(() => ({
-    task: { id: "019f0000-0000-7000-8000-000000000099" },
-    created: true,
+  const transcribeOnDemand = vi.fn(async () => ({
+    transcript: "fresh transcript",
+    provider: "hermes-test",
+    chunks: 2,
   }));
   const promptsDb = {
     prepare: (sql: string) => ({
@@ -38,15 +54,16 @@ function mkCtx(opts: { moviesDir: string }): AppContext {
     host: {
       latestForRecording: vi.fn(() => null),
       getNotionDelivery: vi.fn(() => null),
+      cancelPolicyPausedAutomaticForManualAction: vi.fn(() => []),
       prepareRecordingDeletion: vi.fn(() => []),
       purgeRecordingTasks: vi.fn(() => []),
     },
     artifacts: { cleanupWorkspace: vi.fn() },
     pubsub: new PubSub<AppChannels>(),
-    config: { read: () => ({}) },
+    config: { read: () => ({ llm: { command: [process.execPath] } }) },
     launchctl: { restart: vi.fn(), status: vi.fn(), start: vi.fn(), stop: vi.fn(), sighup: vi.fn() },
     db: { prompts: promptsDb },
-    recordingPipeline: { enqueueReprocess },
+    recordingPipeline: { transcribeOnDemand },
   } as unknown as AppContext;
 }
 
@@ -91,6 +108,8 @@ function wavWithDuration(seconds: number): Buffer {
 describe("recordings router", () => {
   let root: string; let mvDir: string;
   beforeEach(() => {
+    agentActions.summarize.mockClear();
+    agentActions.share.mockClear();
     root = mkdtempSync(join(tmpdir(), "rec_"));
     mvDir = join(root, "movies");
     mkdirSync(mvDir);
@@ -155,65 +174,116 @@ describe("recordings router", () => {
     expect(r.defaultSummaryTemplateId).toBe("p1");
   });
 
-  it("reprocess delegates the recording to the durable Agent pipeline", async () => {
+  it("re-transcribes without running summary or delivery", async () => {
     const stem = "TeamSync_20260102_090000";
     const wavPath = join(mvDir, `${stem}.wav`);
-    writeFileSync(wavPath, "");
+    writeFileSync(wavPath, wavWithDuration(1));
+    writeFileSync(join(mvDir, `${stem}.summary.md`), "old summary");
+    const ctx = mkCtx({ moviesDir: mvDir });
+
+    const result = await createCaller(recordingsRouter, ctx).transcribe({ stem });
+
+    expect(ctx.recordingPipeline.transcribeOnDemand).toHaveBeenCalledWith({ audioPath: wavPath });
+    expect(readFileSync(join(mvDir, `${stem}.transcript.txt`), "utf8")).toBe("fresh transcript\n");
+    expect(readFileSync(join(mvDir, `${stem}.raw.transcript.txt`), "utf8")).toBe("fresh transcript\n");
+    expect(readFileSync(join(mvDir, `${stem}.summary.md`), "utf8")).toBe("old summary");
+    expect(existsSync(join(mvDir, `${stem}.summary.stale`))).toBe(true);
+    expect(agentActions.summarize).not.toHaveBeenCalled();
+    expect(agentActions.share).not.toHaveBeenCalled();
+    expect(result.provider).toBe("hermes-test");
+  });
+
+  it("re-summarizes the existing transcript without transcribing", async () => {
+    const stem = "TeamSync_20260102_090000";
+    writeFileSync(join(mvDir, `${stem}.wav`), wavWithDuration(1));
+    writeFileSync(join(mvDir, `${stem}.transcript.txt`), "existing transcript");
+    const ctx = mkCtx({ moviesDir: mvDir });
+
+    await createCaller(recordingsRouter, ctx).summarize({ stem });
+
+    expect(ctx.recordingPipeline.transcribeOnDemand).not.toHaveBeenCalled();
+    expect(agentActions.summarize).toHaveBeenCalledWith(expect.objectContaining({
+      transcriptPath: join(mvDir, `${stem}.transcript.txt`),
+      title: "TeamSync",
+      instructions: expect.not.stringContaining("Produce an accurate transcript"),
+    }));
+    expect(readFileSync(join(mvDir, `${stem}.summary.md`), "utf8")).toBe("# Fresh summary\n");
+  });
+
+  it("blocks sharing an old summary after re-transcription until it is regenerated", async () => {
+    const stem = "TeamSync_20260102_090000";
+    writeFileSync(join(mvDir, `${stem}.wav`), wavWithDuration(1));
+    writeFileSync(join(mvDir, `${stem}.summary.md`), "old summary");
+    writeSpeakerFixture(mvDir, stem);
     const ctx = mkCtx({ moviesDir: mvDir });
     const caller = createCaller(recordingsRouter, ctx);
 
-    const result = await caller.reprocess({ stem });
+    await caller.transcribe({ stem });
+    const stale = await caller.get({ stem });
+    expect(stale.summaryStale).toBe(true);
+    expect(stale.speakerData).toBeNull();
+    expect((await caller.list({}))[0].hasSummary).toBe(false);
+    await expect(caller.sendSummary({ stem, channel: "slack", label: "Slack", destination: "#meetings" }))
+      .rejects.toThrow("older transcript");
 
-    expect(ctx.recordingPipeline.enqueueReprocess).toHaveBeenCalledWith({
-      audioPath: wavPath,
-      title: "TeamSync",
-      sendToNotion: false,
-      instructions: "Produce an accurate transcript and a factual, structured meeting summary.",
-    });
-    expect(result).toEqual({
-      ok: true,
-      taskId: "019f0000-0000-7000-8000-000000000099",
-      created: true,
-    });
+    await caller.summarize({ stem });
+    expect((await caller.get({ stem })).summaryStale).toBe(false);
+    await expect(caller.sendSummary({ stem, channel: "slack", label: "Slack", destination: "#meetings" }))
+      .resolves.toMatchObject({ ok: true });
   });
 
-  it("reprocess passes the selected summary template to the Agent as instructions", async () => {
+  it("serializes manual actions for one recording", async () => {
     const stem = "TeamSync_20260102_090000";
-    writeFileSync(join(mvDir, `${stem}.wav`), "");
-    writeFileSync(join(mvDir, `${stem}.transcript.txt`), "final text");
+    writeFileSync(join(mvDir, `${stem}.wav`), wavWithDuration(1));
     const ctx = mkCtx({ moviesDir: mvDir });
-    (ctx.db.prompts as unknown as { __rows: Array<Record<string, unknown>> }).__rows.push({
-      id: "p-decision",
-      slug: "decisions",
-      name: "Decision Memo",
-      category: "summary",
-      content: "{{meeting_title}} ({{date}}): Decisions from {{transcript}}",
-      is_auto_run: 0,
-    });
+    let finish!: (value: { transcript: string; provider: string; chunks: number }) => void;
+    vi.mocked(ctx.recordingPipeline.transcribeOnDemand).mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    const caller = createCaller(recordingsRouter, ctx);
 
-    await createCaller(recordingsRouter, ctx).reprocess({ stem, promptId: "p-decision" });
-
-    expect(ctx.recordingPipeline.enqueueReprocess).toHaveBeenCalledWith({
-      audioPath: join(mvDir, `${stem}.wav`),
-      title: "TeamSync",
-      sendToNotion: false,
-      instructions: "{{meeting_title}} ({{date}}): Decisions from {{transcript}}",
-    });
+    const first = caller.transcribe({ stem });
+    await vi.waitFor(() => expect(ctx.recordingPipeline.transcribeOnDemand).toHaveBeenCalled());
+    await expect(caller.summarize({ stem })).rejects.toThrow("Transcription is already running");
+    finish({ transcript: "fresh transcript", provider: "test", chunks: 1 });
+    await expect(first).resolves.toMatchObject({ ok: true });
   });
 
-  it("reprocess delegates optional Notion delivery to the durable Agent pipeline", async () => {
+  it("cancels a policy-paused automatic pipeline before a manual action", async () => {
     const stem = "TeamSync_20260102_090000";
-    writeFileSync(join(mvDir, `${stem}.wav`), "");
+    const wavPath = join(mvDir, `${stem}.wav`);
+    writeFileSync(wavPath, wavWithDuration(1));
     const ctx = mkCtx({ moviesDir: mvDir });
+    vi.mocked(ctx.host.cancelPolicyPausedAutomaticForManualAction).mockReturnValue(["paused-task"]);
 
-    await createCaller(recordingsRouter, ctx).reprocess({ stem, sendToNotion: true });
+    await createCaller(recordingsRouter, ctx).transcribe({ stem });
 
-    expect(ctx.recordingPipeline.enqueueReprocess).toHaveBeenCalledWith({
-      audioPath: join(mvDir, `${stem}.wav`),
-      title: "TeamSync",
-      sendToNotion: true,
-      instructions: "Produce an accurate transcript and a factual, structured meeting summary.",
-    });
+    expect(ctx.host.cancelPolicyPausedAutomaticForManualAction).toHaveBeenCalledWith(stem);
+    expect(ctx.artifacts.cleanupWorkspace).toHaveBeenCalledWith("paused-task");
+  });
+
+  it("allows repeated shares to any Agent-supported channel and records each attempt", async () => {
+    const stem = "TeamSync_20260102_090000";
+    writeFileSync(join(mvDir, `${stem}.wav`), wavWithDuration(1));
+    writeFileSync(join(mvDir, `${stem}.summary.md`), "summary to share");
+    const ctx = mkCtx({ moviesDir: mvDir });
+    const caller = createCaller(recordingsRouter, ctx);
+
+    await caller.sendSummary({ stem, channel: "slack", label: "Slack", destination: "#meetings" });
+    await caller.sendSummary({ stem, channel: "slack", label: "Slack", destination: "#meetings" });
+
+    expect(agentActions.share).toHaveBeenCalledTimes(2);
+    expect(agentActions.share).toHaveBeenLastCalledWith(expect.objectContaining({
+      channel: "slack",
+      channelLabel: "Slack",
+      destinationHint: "#meetings",
+    }));
+    const history = JSON.parse(readFileSync(join(mvDir, `${stem}.shares.json`), "utf8")) as Array<Record<string, unknown>>;
+    expect(history).toHaveLength(2);
+    expect(history.every((entry) => entry.channel === "slack" && entry.status === "success")).toBe(true);
+  });
+
+  it("does not expose the retired combined manual reprocess procedure", () => {
+    const caller = createCaller(recordingsRouter, mkCtx({ moviesDir: mvDir }));
+    expect("reprocess" in caller).toBe(false);
   });
 
   it("get prefers clean audio for playback when present", async () => {
@@ -245,11 +315,6 @@ describe("recordings router", () => {
     const r = await createCaller(recordingsRouter, mkCtx({ moviesDir: mvDir })).get({ stem });
     expect(r.speakerData.provider).toBe("sherpa-onnx");
     expect(r.speakerData.segments[0].display_name).toBe("Speaker 1");
-  });
-
-  it("reprocess throws NOT_FOUND when WAV is missing", async () => {
-    const caller = createCaller(recordingsRouter, mkCtx({ moviesDir: mvDir }));
-    await expect(caller.reprocess({ stem: "Memo_20260101_120000" })).rejects.toThrow(/WAV file missing/);
   });
 
   it("list reflects the durable Host task status", async () => {
@@ -293,6 +358,35 @@ describe("recordings router", () => {
     expect(detail.notionDelivery).toEqual(delivery);
     expect(ctx.host.getNotionDelivery).toHaveBeenCalledWith(taskId);
   });
+
+  it.each(["failed", "cancelled", "completed"])(
+    "get hides a historical %s Agent task from the current meeting state",
+    async (state) => {
+      const stem = "TeamSync_20260102_090000";
+      writeFileSync(join(mvDir, `${stem}.wav`), wavWithDuration(1));
+      const ctx = mkCtx({ moviesDir: mvDir });
+      ctx.host = {
+        latestForRecording: vi.fn(() => ({
+          id: "historical-task",
+          state,
+          phase: state === "completed" ? "completed" : "failed",
+          sendToNotion: true,
+          error: state === "failed" ? "Retired legacy task" : null,
+        })),
+        getNotionDelivery: vi.fn(() => ({ status: "reported" })),
+      } as unknown as AppContext["host"];
+
+      const caller = createCaller(recordingsRouter, ctx);
+      const detail = await caller.get({ stem });
+      const row = (await caller.list({}))[0];
+
+      expect(detail.status).toBe("idle");
+      expect(detail.statusError).toBeUndefined();
+      expect(detail.agentTask).toBeNull();
+      expect(detail.notionDelivery).toBeNull();
+      expect(row.status).toBe("idle");
+    },
+  );
 
   it("marks a non-WAV recording file as recording_failed", async () => {
     const stem = "GoogleChrome_20260611_160424";
@@ -445,21 +539,30 @@ describe("recordings router", () => {
 
   // ---- delete (sidecar sweep) -----------------------------------------------
 
-  it("delete removes the wav plus all known sidecars (incl. speakers/mic/sys/chunk/tags/title)", async () => {
+  it("delete removes every exact-stem sibling, including legacy backups, locks, and directories", async () => {
     const stem = "TeamSync_20260102_090000";
     const files = [
-      ".wav", ".transcript.txt", ".raw.transcript.txt", ".realtime.transcript.txt",
-      ".realtime.coverage.json", ".summary.md", ".summary.html", ".speakers.json",
-      ".mic.transcript.txt", ".sys.transcript.txt", ".title", ".tags.json",
+      ".wav", ".clean.wav", ".transcript.txt", ".raw.transcript.txt", ".realtime.transcript.txt",
+      ".realtime.coverage.json", ".realtime.json", ".summary.md", ".summary.html", ".speakers.json",
+      ".speakers.json.pre-coalesce.bak", ".transcript.txt.pre-coalesce.bak",
+      ".mic.transcript.txt", ".sys.transcript.txt", ".title", ".tags.json", ".shares.json",
+      ".voicemail-todos.summary.md", ".voicemail-todos.summary.html",
       ".chunk-0.wav", ".chunk-1.wav",
     ];
     for (const f of files) writeFileSync(join(mvDir, `${stem}${f}`), "x");
+    const hiddenLock = join(mvDir, `.${stem}.summary.md.lock`);
+    writeFileSync(hiddenLock, "lock");
+    const realtimeDir = join(mvDir, `${stem}.realtime`);
+    mkdirSync(realtimeDir);
+    writeFileSync(join(realtimeDir, "segments.json"), "[]");
     // A sibling recording must be left untouched.
     writeFileSync(join(mvDir, "Other_20260103_080000.wav"), "x");
     const caller = createCaller(recordingsRouter, mkCtx({ moviesDir: mvDir }));
     const res = await caller.delete({ stem });
-    expect(res.removed).toBe(files.length);
+    expect(res.removed).toBe(files.length + 2);
     for (const f of files) expect(existsSync(join(mvDir, `${stem}${f}`))).toBe(false);
+    expect(existsSync(hiddenLock)).toBe(false);
+    expect(existsSync(realtimeDir)).toBe(false);
     expect(existsSync(join(mvDir, "Other_20260103_080000.wav"))).toBe(true);
   });
 

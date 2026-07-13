@@ -4,6 +4,9 @@ import { MemoryRouter, Routes, Route } from "react-router";
 
 const getMock = vi.fn();
 const reprocessMutate = vi.fn();
+const transcribeMutate = vi.fn();
+const summarizeMutate = vi.fn();
+const sendSummaryMutate = vi.fn();
 const renameMutate = vi.fn();
 const setTagsMutate = vi.fn();
 const deleteMutate = vi.fn();
@@ -22,6 +25,9 @@ vi.mock("../../web/src/trpc.js", () => ({
     recordings: {
       get: { useQuery: (...a: unknown[]) => getMock(...a) },
       reprocess: { useMutation: () => ({ mutate: reprocessMutate, isPending: false }) },
+      transcribe: { useMutation: () => ({ mutate: transcribeMutate, isPending: false }) },
+      summarize: { useMutation: () => ({ mutate: summarizeMutate, isPending: false }) },
+      sendSummary: { useMutation: () => ({ mutate: sendSummaryMutate, isPending: false }) },
       rename: { useMutation: () => ({ mutate: renameMutate, isPending: false }) },
       setTags: { useMutation: () => ({ mutate: setTagsMutate, isPending: false }) },
       delete: { useMutation: () => ({ mutate: deleteMutate, isPending: false }) },
@@ -74,6 +80,7 @@ beforeEach(() => {
   });
   clipboardWriteText.mockClear();
   reprocessMutate.mockClear();
+  transcribeMutate.mockClear(); summarizeMutate.mockClear(); sendSummaryMutate.mockClear();
   promptListMock.mockReset();
   promptListMock.mockReturnValue({ data: [] });
   renameMutate.mockClear(); setTagsMutate.mockClear(); deleteMutate.mockClear();
@@ -90,11 +97,12 @@ describe("RecordingReader", () => {
     expect(screen.queryByText("legacy realtime text")).toBeNull();
   });
 
-  it("labels both manual processing actions as Hermes Agent pipeline work", () => {
+  it("exposes transcription, summarization, and sharing as separate actions", () => {
     getMock.mockReturnValue({ data: { ...baseData, stem: "Memo_20260101_120000", title: "Memo" }, isPending: false });
     renderAt("Memo_20260101_120000");
-    expect(screen.getByRole("button", { name: /让 Hermes 处理/i })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /处理并发送 Notion/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /重新转写/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /重新生成摘要/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /分享摘要/i })).toBeInTheDocument();
   });
 
   it("keeps only the summary template selector and removes Yulu model/speaker controls", () => {
@@ -125,27 +133,34 @@ describe("RecordingReader", () => {
     expect(screen.queryByText(/未找到录音/)).toBeNull();
   });
 
-  it("sends to Notion only through a new authorized Hermes task", () => {
-    getMock.mockReturnValue({ data: baseData, isPending: false });
+  it("shares the current summary without reprocessing it", () => {
+    getMock.mockReturnValue({ data: {
+      ...baseData,
+      shareTargets: [{ channel: "notion", label: "Notion", destination: "Yulu Meeting", enabled: true, disabledReason: null, lastShare: null }],
+      shareHistory: [],
+    }, isPending: false });
     renderAt(baseData.stem);
 
-    fireEvent.click(screen.getByRole("button", { name: /处理并发送 Notion/i }));
-    expect(reprocessMutate).toHaveBeenCalledWith(
-      { stem: baseData.stem, promptId: null, sendToNotion: true },
+    fireEvent.click(screen.getByRole("button", { name: /分享摘要/i }));
+    fireEvent.click(screen.getByRole("button", { name: /Notion/i }));
+    expect(sendSummaryMutate).toHaveBeenCalledWith(
+      { stem: baseData.stem, channel: "notion", label: "Notion", destination: "Yulu Meeting" },
       expect.anything(),
     );
-    expect(screen.queryByRole("button", { name: /Zulip/ })).toBeNull();
+    expect(transcribeMutate).not.toHaveBeenCalled();
+    expect(summarizeMutate).not.toHaveBeenCalled();
   });
 
-  it("disables both Agent actions when the recording WAV is missing", () => {
+  it("only disables re-transcription when the WAV is missing", () => {
     getMock.mockReturnValue({
       data: { ...baseData, wavPath: null },
       isPending: false,
     });
     renderAt(baseData.stem);
 
-    expect(screen.getByRole("button", { name: /让 Hermes 处理/i })).toBeDisabled();
-    expect(screen.getByRole("button", { name: /处理并发送 Notion/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /重新转写/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /重新生成摘要/i })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /分享摘要/i })).toBeEnabled();
   });
 
   it("offers explicit confirm and abandon actions instead of retrying an uncertain Notion write", () => {
@@ -170,8 +185,9 @@ describe("RecordingReader", () => {
     const promptSpy = vi.spyOn(window, "prompt").mockReturnValueOnce("https://app.notion.com/p/0123456789abcdef0123456789abcdef");
     renderAt(baseData.stem);
 
-    expect(screen.getByRole("button", { name: /让 Hermes 处理/i })).toBeDisabled();
-    expect(screen.getByRole("button", { name: /处理并发送 Notion/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /重新转写/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /重新生成摘要/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /分享摘要/i })).toBeDisabled();
     fireEvent.click(screen.getByRole("button", { name: /确认已有页面/i }));
     expect(confirmDeliveryMutate).toHaveBeenCalledWith({
       id: "019f0000-0000-7000-8000-000000000123",
@@ -186,17 +202,15 @@ describe("RecordingReader", () => {
     promptSpy.mockRestore();
   });
 
-  it("submits reprocessing as one Hermes task without legacy model/speaker overrides", () => {
+  it("re-transcribes without also summarizing or sharing", () => {
     getMock.mockReturnValue({ data: baseData, isPending: false });
     renderAt(baseData.stem);
     expect(screen.queryByRole("combobox", { name: /转写模型/i })).toBeNull();
     expect(screen.queryByRole("combobox", { name: /说话人数/i })).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: /让 Hermes 处理/i }));
-    expect(reprocessMutate).toHaveBeenCalledWith(
-      { stem: baseData.stem, promptId: null, sendToNotion: false },
-      expect.anything(),
-    );
-    expect(screen.getAllByRole("button", { name: /运行中/i })).toHaveLength(1);
+    fireEvent.click(screen.getByRole("button", { name: /重新转写/i }));
+    expect(transcribeMutate).toHaveBeenCalledWith({ stem: baseData.stem }, expect.anything());
+    expect(summarizeMutate).not.toHaveBeenCalled();
+    expect(sendSummaryMutate).not.toHaveBeenCalled();
   });
 
   it("passes the selected summary template when regenerating summary", () => {
@@ -214,24 +228,23 @@ describe("RecordingReader", () => {
     });
     renderAt(baseData.stem);
     fireEvent.change(screen.getByRole("combobox", { name: /摘要模板/i }), { target: { value: "p-decision" } });
-    fireEvent.click(screen.getByRole("button", { name: /让 Hermes 处理/i }));
-    expect(reprocessMutate).toHaveBeenCalledWith(
-      { stem: baseData.stem, promptId: "p-decision", sendToNotion: false },
+    fireEvent.click(screen.getByRole("button", { name: /重新生成摘要/i }));
+    expect(summarizeMutate).toHaveBeenCalledWith(
+      { stem: baseData.stem, promptId: "p-decision" },
       expect.anything(),
     );
+    expect(transcribeMutate).not.toHaveBeenCalled();
   });
 
-  it("allows a Hermes template task when only the WAV exists", () => {
+  it("allows only transcription when no transcript or summary exists", () => {
     getMock.mockReturnValue({
       data: { ...baseData, transcript: null, summary: null },
       isPending: false,
     });
     renderAt(baseData.stem);
-    fireEvent.click(screen.getByRole("button", { name: /让 Hermes 处理/i }));
-    expect(reprocessMutate).toHaveBeenCalledWith(
-      { stem: baseData.stem, promptId: null, sendToNotion: false },
-      expect.anything(),
-    );
+    expect(screen.getByRole("button", { name: /重新转写/i })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /重新生成摘要/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /分享摘要/i })).toBeDisabled();
   });
 
   it("disables duplicate manual tasks while a Hermes pipeline task is queued", () => {
@@ -250,10 +263,8 @@ describe("RecordingReader", () => {
     });
     const { container } = renderAt(baseData.stem);
 
-    const processingButtons = screen.getAllByRole("button", { name: /运行中/i });
-    expect(processingButtons).toHaveLength(1);
     const actionButtons = [...container.querySelectorAll<HTMLButtonElement>(".reader-actions button")];
-    expect(actionButtons).toHaveLength(2);
+    expect(actionButtons).toHaveLength(3);
     expect(actionButtons.every((button) => button.disabled)).toBe(true);
     expect(screen.getByRole("button", { name: /删除录音/i })).toBeDisabled();
     expect(screen.getByText("已排队等待 Hermes")).toBeInTheDocument();
@@ -276,18 +287,41 @@ describe("RecordingReader", () => {
     });
     renderAt(baseData.stem);
 
-    const processButton = screen.getByRole("button", { name: /让 Hermes 处理/i });
-    const notionButton = screen.getByRole("button", { name: /处理并发送 Notion/i });
-    expect(processButton).toBeEnabled();
-    expect(notionButton).toBeEnabled();
+    const transcribeButton = screen.getByRole("button", { name: /重新转写/i });
+    const summarizeButton = screen.getByRole("button", { name: /重新生成摘要/i });
+    expect(transcribeButton).toBeEnabled();
+    expect(summarizeButton).toBeEnabled();
 
-    fireEvent.click(processButton);
-    expect(reprocessMutate).toHaveBeenCalledWith(
-      { stem: baseData.stem, promptId: null, sendToNotion: false },
-      expect.anything(),
-    );
+    fireEvent.click(summarizeButton);
+    expect(summarizeMutate).toHaveBeenCalledWith({ stem: baseData.stem, promptId: null }, expect.anything());
     expect(screen.getByRole("button", { name: /删除录音/i })).toBeDisabled();
   });
+
+  it.each(["failed", "cancelled", "completed"])(
+    "does not present a historical %s Agent task as the meeting's current status",
+    (state) => {
+      getMock.mockReturnValue({
+        data: {
+          ...baseData,
+          agentTask: {
+            id: "historical-task",
+            state,
+            phase: state === "completed" ? "completed" : "failed",
+            trigger: "automatic",
+            sendToNotion: false,
+            error: state === "failed" ? "Retired legacy task" : null,
+          },
+        },
+        isPending: false,
+      });
+      renderAt(baseData.stem);
+
+      expect(screen.queryByTestId("agent-task-status")).toBeNull();
+      expect(screen.getByRole("button", { name: /重新转写/i })).toBeEnabled();
+      expect(screen.getByRole("button", { name: /重新生成摘要/i })).toBeEnabled();
+      expect(screen.getByRole("button", { name: /分享摘要/i })).toBeEnabled();
+    },
+  );
 
   it("blocks deletion while Notion delivery is unverified", () => {
     getMock.mockReturnValue({
@@ -327,18 +361,18 @@ describe("RecordingReader", () => {
       },
       isPending: false,
     });
-    renderAt(baseData.stem);
+    const { container } = renderAt(baseData.stem);
 
-    expect(screen.getByTestId("agent-task-status").querySelector("a")).toBeNull();
+    expect(container.querySelector(".reader-agent-task-status")).toBeNull();
   });
 
-  it("surfaces reprocess mutation errors on the button", async () => {
+  it("surfaces transcription mutation errors on the button", async () => {
     getMock.mockReturnValue({ data: baseData, isPending: false });
-    reprocessMutate.mockImplementation((_args: unknown, opts: { onError?: (err: Error) => void }) => {
+    transcribeMutate.mockImplementation((_args: unknown, opts: { onError?: (err: Error) => void }) => {
       opts.onError?.(new Error("Job already running for this recording"));
     });
     renderAt(baseData.stem);
-    fireEvent.click(screen.getByRole("button", { name: /让 Hermes 处理/i }));
+    fireEvent.click(screen.getByRole("button", { name: /重新转写/i }));
     await waitFor(() => {
       expect(screen.getByRole("button", { name: /Job already running/ })).toBeInTheDocument();
     });

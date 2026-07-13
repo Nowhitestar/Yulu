@@ -106,6 +106,55 @@ describe("agentConsoleRouter", () => {
     });
   });
 
+  it("does not surface a terminal legacy failure as the meeting's current action state", async () => {
+    const root = mkdtempSync(join(tmpdir(), "agent-console-"));
+    roots.push(root);
+    const moviesDir = join(root, "movies");
+    mkdirSync(moviesDir);
+    const stem = "LegacyMeeting_20260712_160000";
+    writeFileSync(join(moviesDir, `${stem}.wav`), wavHeader());
+
+    const result = await createCaller(agentConsoleRouter, makeCtx(
+      moviesDir,
+      { llm: { agent: { provider: "auto" } } },
+      () => ({
+        state: "failed",
+        phase: "failed",
+        sendToNotion: false,
+        error: "Retired legacy combined manual task after atomic meeting actions migration",
+      }),
+    )).overview();
+
+    expect(result.tasks[0]).toMatchObject({
+      stem,
+      stages: { transcribe: "idle", summarize: "waiting", send: "waiting" },
+      error: "",
+    });
+  });
+
+  it("treats a stale summary as needing regeneration", async () => {
+    const root = mkdtempSync(join(tmpdir(), "agent-console-"));
+    roots.push(root);
+    const moviesDir = join(root, "movies");
+    mkdirSync(moviesDir);
+    const stem = "Retranscribed_20260712_170000";
+    writeFileSync(join(moviesDir, `${stem}.wav`), wavHeader());
+    writeFileSync(join(moviesDir, `${stem}.transcript.txt`), "fresh transcript");
+    writeFileSync(join(moviesDir, `${stem}.summary.md`), "old summary");
+    writeFileSync(join(moviesDir, `${stem}.summary.stale`), "2026-07-12T17:01:00Z\n");
+
+    const result = await createCaller(agentConsoleRouter, makeCtx(
+      moviesDir,
+      { llm: { agent: { provider: "auto" } } },
+    )).overview();
+
+    expect(result.tasks[0]).toMatchObject({
+      hasTranscript: true,
+      hasSummary: false,
+      stages: { transcribe: "done", summarize: "idle", send: "waiting" },
+    });
+  });
+
   it("normalizes recent recordings into task cards", async () => {
     const root = mkdtempSync(join(tmpdir(), "agent-console-"));
     roots.push(root);

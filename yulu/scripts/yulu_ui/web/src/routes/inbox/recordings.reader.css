@@ -407,6 +407,22 @@
   background: var(--row-hover);
   color: var(--fg);
 }
+.reader-action-share {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--fg-2);
+  font-size: 12px;
+  font-weight: 650;
+}
+.reader-action-share:hover:not(:disabled) { background: var(--row-hover); color: var(--fg); }
+.reader-action-share:disabled { opacity: .45; cursor: default; }
+.reader-action-error { margin: -8px 0 14px; color: var(--red); font-size: 12px; }
 .reader-header .audioplayer {
   margin: 0;
 }

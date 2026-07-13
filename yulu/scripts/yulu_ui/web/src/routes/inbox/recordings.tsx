@@ -2,7 +2,7 @@ import { useContext, useEffect, useState } from "react";
 import type { CSSProperties, MouseEvent } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router";
 import { QueryClientContext } from "@tanstack/react-query";
-import { Clock, FileText, Pencil, Plus, Send, Sparkles, Trash2 } from "lucide-react";
+import { Clock, FileText, Pencil, Plus, Sparkles, Trash2 } from "lucide-react";
 import { trpc } from "../../trpc.js";
 import { useWsChannel } from "../../ws.js";
 import { MasterDetail } from "../../components/MasterDetail.js";
@@ -74,7 +74,6 @@ export function RecordingsList() {
   };
   const renameMut = trpc.recordings.rename.useMutation({ onSettled: invalidate });
   const deleteMut = trpc.recordings.delete.useMutation({ onSettled: invalidate });
-  const reprocessMut = trpc.recordings.reprocess.useMutation({ onSettled: invalidate });
 
   useWsChannel("recordings-changed", () => {
     invalidate();
@@ -214,26 +213,13 @@ export function RecordingsList() {
           <button
             type="button"
             role="menuitem"
-            disabled={isBusy(menu.row)}
             onClick={() => {
               closeMenu();
-              reprocessMut.mutate({ stem: menu.row.stem, sendToNotion: false });
+              navigate(`/inbox/${menu.row.stem}`);
             }}
           >
-            <Sparkles size={13} strokeWidth={1.8} />
-            <span>{t("reader.action.process")}</span>
-          </button>
-          <button
-            type="button"
-            role="menuitem"
-            disabled={isBusy(menu.row)}
-            onClick={() => {
-              closeMenu();
-              reprocessMut.mutate({ stem: menu.row.stem, sendToNotion: true });
-            }}
-          >
-            <Send size={13} strokeWidth={1.8} />
-            <span>{t("reader.action.processAndSendNotion")}</span>
+            <FileText size={13} strokeWidth={1.8} />
+            <span>{t("reader.action.openAtomic")}</span>
           </button>
           <button
             type="button"

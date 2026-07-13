@@ -25,6 +25,7 @@ import {
   Radar,
   RefreshCw,
   Send,
+  Share2,
   ShieldCheck,
   Sparkles,
   Square,
@@ -43,10 +44,6 @@ import "./agent-console.css";
 export const handle = { breadcrumb: "breadcrumb.agentConsole", filters: null };
 
 type StageState = "idle" | "waiting" | "running" | "done" | "failed";
-interface OptimisticTaskAction {
-  sendToNotion: boolean;
-  startedAt: number;
-}
 type SendDest = "notion" | "zulip" | null;
 type ConsoleMode = "ask" | "run";
 type AgentId = "codex" | "claude" | "hermes" | "openclaw";
@@ -141,6 +138,14 @@ interface AgentPluginOverview {
   available: AgentPluginState[];
   all: AgentPluginState[];
 }
+
+interface MeetingShareTarget {
+  channel: "notion" | "zulip";
+  label: string;
+  destination: string;
+}
+
+type MeetingNextAction = "transcribe" | "summarize" | "share";
 
 interface AskSource {
   ref?: number;
@@ -288,6 +293,21 @@ function asConfigRecord(config: unknown): Record<string, unknown> {
   return typeof config === "object" && config !== null && !Array.isArray(config) ? config as Record<string, unknown> : {};
 }
 
+function nextMeetingAction(task: AgentTask): MeetingNextAction {
+  if (!task.hasTranscript) return "transcribe";
+  if (!task.hasSummary) return "summarize";
+  return "share";
+}
+
+function configuredMeetingShareTargets(plugins: AgentPluginOverview): MeetingShareTarget[] {
+  return plugins.current.flatMap((plugin) => {
+    if ((plugin.id !== "notion" && plugin.id !== "zulip") || plugin.status !== "configured") return [];
+    const destination = plugin.destination?.value?.trim() ?? "";
+    if (!plugin.destination?.configured || !destination) return [];
+    return [{ channel: plugin.id, label: plugin.label, destination }];
+  });
+}
+
 export function AgentConsole() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -302,7 +322,7 @@ export function AgentConsole() {
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [detectMessage, setDetectMessage] = useState<string>("点击后重新扫描本机 CLI 路径");
   const [notice, setNotice] = useState<string | null>(null);
-  const [optimisticTaskActions, setOptimisticTaskActions] = useState<Record<string, OptimisticTaskAction>>({});
+  const [sharingStem, setSharingStem] = useState<string | null>(null);
 
   const overview = trpc.agentConsole.overview.useQuery(undefined, { refetchInterval: 5000 });
   const detectAgents = trpc.agentConsole.detectAgents.useQuery(undefined, { enabled: false });
@@ -313,9 +333,7 @@ export function AgentConsole() {
   const toggleRecording = trpc.recording.toggle.useMutation({
     onSettled: () => void utils.agentConsole.overview.invalidate(),
   });
-  const reprocess = trpc.recordings.reprocess.useMutation({
-    onSettled: () => void utils.agentConsole.overview.invalidate(),
-  });
+  const sendSummary = trpc.recordings.sendSummary.useMutation();
   const addPlugin = trpc.agentConsole.addPlugin.useMutation({
     onSettled: () => void utils.agentConsole.overview.invalidate(),
   });
@@ -351,74 +369,20 @@ export function AgentConsole() {
   const latestAgentTaskByStem = useMemo(() => {
     const latest = new Map<string, DurableAgentTask>();
     for (const task of (agentTasksQuery.data ?? []) as DurableAgentTask[]) {
-      if (!latest.has(task.recordingStem)) latest.set(task.recordingStem, task);
+      if (isActiveDurableTask(task) && !latest.has(task.recordingStem)) latest.set(task.recordingStem, task);
     }
     return latest;
   }, [agentTasksQuery.data]);
+  const meetingShareTargets = useMemo(() => configuredMeetingShareTargets(plugins), [plugins]);
 
   useEffect(() => {
     if (!summaryPromptId && prompts.length > 0) setSummaryPromptId(firstAvailablePrompt(prompts));
   }, [prompts, summaryPromptId]);
 
-  useEffect(() => {
-    setOptimisticTaskActions((current) => {
-      const next = { ...current };
-      let changed = false;
-      const now = Date.now();
-      for (const [stem, optimistic] of Object.entries(current)) {
-        if (!optimistic) continue;
-        const serverTask = latestAgentTaskByStem.get(stem);
-        const serverTimestamp = Date.parse(serverTask?.updatedAt ?? "");
-        const serverCaughtUp = Boolean(
-          serverTask &&
-          serverTask.sendToNotion === optimistic.sendToNotion &&
-          Number.isFinite(serverTimestamp) &&
-          serverTimestamp >= optimistic.startedAt - 1_000,
-        );
-        const expired = now - optimistic.startedAt > 20_000;
-        if (serverCaughtUp || expired) {
-          delete next[stem];
-          changed = true;
-        }
-      }
-      return changed ? next : current;
-    });
-  }, [latestAgentTaskByStem]);
-
   const activeAgent = useMemo(() => {
     const agents = (overview.data?.agents as ConsoleAgent[] | undefined) ?? [];
     return agents.find((agent) => agent.connected) ?? agents.find((agent) => agent.supported) ?? null;
   }, [overview.data?.agents]);
-
-  const invalidateAfterAction = () => {
-    void utils.agentConsole.overview.invalidate();
-    void utils.recordings.list.invalidate();
-    void utils.agentTasks.list.invalidate();
-  };
-
-  const clearOptimisticTaskAction = (stem: string) => {
-    setOptimisticTaskActions((current) => {
-      if (!current[stem]) return current;
-      const next = { ...current };
-      delete next[stem];
-      return next;
-    });
-  };
-
-  const runProcess = (task: AgentTask, sendToNotion: boolean) => {
-    if (!task.stem) return;
-    setOptimisticTaskActions((current) => ({
-      ...current,
-      [task.stem]: { sendToNotion, startedAt: Date.now() },
-    }));
-    reprocess.mutate({ stem: task.stem, promptId: summaryPromptId, sendToNotion }, {
-      onError: (error) => {
-        clearOptimisticTaskAction(task.stem);
-        setNotice(error.message);
-      },
-      onSettled: invalidateAfterAction,
-    });
-  };
 
   const runConfigurePlugin = (plugin: AgentPluginId) => {
     configurePlugin.mutate({ plugin });
@@ -448,16 +412,35 @@ export function AgentConsole() {
     });
   };
 
+  const runMeetingShare = (task: AgentTask, target: MeetingShareTarget) => {
+    setNotice(null);
+    setSharingStem(task.stem);
+    sendSummary.mutate({
+      stem: task.stem,
+      channel: target.channel,
+      label: target.label,
+      destination: target.destination,
+    }, {
+      onSuccess: () => setNotice(`已分享到 ${target.label} · ${target.destination}`),
+      onError: (error) => setNotice(error.message),
+      onSettled: () => {
+        setSharingStem(null);
+        void utils.agentConsole.overview.invalidate();
+      },
+    });
+  };
+
   const taskRail: TaskRailProps = {
     tasks,
     agentTasks: latestAgentTaskByStem,
-    optimisticActions: optimisticTaskActions,
     isLoading: overview.isPending,
-    actionPending: toggleRecording.isPending || reprocess.isPending,
+    actionPending: toggleRecording.isPending,
+    shareTargets: meetingShareTargets,
+    sharingStem,
     onToggleRecording: () => toggleRecording.mutate(),
     onOpenAll: () => navigate("/inbox"),
     onOpenTask: (task) => { if (task.stem) navigate(`/inbox/${task.stem}`); },
-    onProcess: runProcess,
+    onShare: runMeetingShare,
   };
 
   return (
@@ -592,25 +575,27 @@ function VoiceInputPanel() {
 interface TaskRailProps {
   tasks: AgentTask[];
   agentTasks: ReadonlyMap<string, DurableAgentTask>;
-  optimisticActions: Record<string, OptimisticTaskAction>;
   isLoading: boolean;
   actionPending: boolean;
+  shareTargets: MeetingShareTarget[];
+  sharingStem: string | null;
   onToggleRecording: () => void;
   onOpenAll: () => void;
   onOpenTask: (task: AgentTask) => void;
-  onProcess: (task: AgentTask, sendToNotion: boolean) => void;
+  onShare: (task: AgentTask, target: MeetingShareTarget) => void;
 }
 
 function TaskRail({
   tasks,
   agentTasks,
-  optimisticActions,
   isLoading,
   actionPending,
+  shareTargets,
+  sharingStem,
   onToggleRecording,
   onOpenAll,
   onOpenTask,
-  onProcess,
+  onShare,
 }: TaskRailProps) {
   return (
     <>
@@ -631,10 +616,11 @@ function TaskRail({
             task={task}
             disabled={actionPending}
             agentTask={agentTasks.get(task.stem)}
-            optimisticAction={optimisticActions[task.stem]}
             onOpen={() => onOpenTask(task)}
             onStopRecording={onToggleRecording}
-            onProcess={(sendToNotion) => onProcess(task, sendToNotion)}
+            shareTargets={shareTargets}
+            sharePending={sharingStem === task.stem}
+            onShare={(target) => onShare(task, target)}
           />
         ))}
       </div>
@@ -646,27 +632,27 @@ function TaskCard({
   task,
   disabled,
   agentTask,
-  optimisticAction,
   onOpen,
   onStopRecording,
-  onProcess,
+  shareTargets,
+  sharePending,
+  onShare,
 }: {
   task: AgentTask;
   disabled: boolean;
   agentTask?: DurableAgentTask;
-  optimisticAction?: OptimisticTaskAction;
   onOpen: () => void;
   onStopRecording: () => void;
-  onProcess: (sendToNotion: boolean) => void;
+  shareTargets: MeetingShareTarget[];
+  sharePending: boolean;
+  onShare: (target: MeetingShareTarget) => void;
 }) {
-  const failed = agentTask?.state === "failed" || agentTask?.state === "delivery_unverified";
-  const complete = agentTask?.state === "completed";
-  const error = agentTask?.error || task.error;
+  const failed = agentTask?.state === "delivery_unverified";
+  const error = agentTask?.error || (Object.values(task.stages).includes("failed") ? task.error : "");
   return (
-    <div className={"agent-task-card" + (failed ? " failed" : complete ? " complete" : "")}>
+    <div className={"agent-task-card" + (failed ? " failed" : "")}>
       <div className="agent-task-head">
         <button type="button" className="agent-task-title" onClick={onOpen}>{task.title}</button>
-        {complete && <span className="agent-task-done"><CheckCircle2 size={13} strokeWidth={2} />已完成</span>}
       </div>
       <div className="agent-task-meta">{dayLabelText(task.dayLabel)} · {formatTime(task.recordedAt)}</div>
       {error && (
@@ -678,10 +664,12 @@ function TaskCard({
       <TaskAction
         task={task}
         agentTask={agentTask}
-        optimisticAction={optimisticAction}
         disabled={disabled}
+        onOpen={onOpen}
         onStopRecording={onStopRecording}
-        onProcess={onProcess}
+        shareTargets={shareTargets}
+        sharePending={sharePending}
+        onShare={onShare}
       />
     </div>
   );
@@ -699,25 +687,27 @@ function RunningState({ label }: { label: string }) {
 function TaskAction({
   task,
   agentTask,
-  optimisticAction,
   disabled,
+  onOpen,
   onStopRecording,
-  onProcess,
+  shareTargets,
+  sharePending,
+  onShare,
 }: {
   task: AgentTask;
   agentTask?: DurableAgentTask;
-  optimisticAction?: OptimisticTaskAction;
   disabled: boolean;
+  onOpen: () => void;
   onStopRecording: () => void;
-  onProcess: (sendToNotion: boolean) => void;
+  shareTargets: MeetingShareTarget[];
+  sharePending: boolean;
+  onShare: (target: MeetingShareTarget) => void;
 }) {
+  const [shareOpen, setShareOpen] = useState(false);
   if (task.stages.record === "running") {
     return (
       <RecordingBar startedAt={task.recordedAt} disabled={disabled} onStop={onStopRecording} />
     );
-  }
-  if (optimisticAction) {
-    return <RunningState label={optimisticAction.sendToNotion ? "Hermes 处理并发送 Notion 中" : "Hermes 处理中"} />;
   }
   if (agentTask && isActiveDurableTask(agentTask)) {
     return <RunningState label={durableTaskLabel(agentTask)} />;
@@ -725,20 +715,49 @@ function TaskAction({
   if (!agentTask && task.stages.transcribe === "running") return <RunningState label="Hermes 转写中" />;
   if (!agentTask && task.stages.summarize === "running") return <RunningState label="Hermes 生成摘要中" />;
   if (!agentTask && task.stages.send === "running") return <RunningState label="正在发送到 Notion" />;
-  return (
-    <>
-      {agentTask && <div className="agent-task-state" data-state={agentTask.state}>{durableTaskLabel(agentTask)}</div>}
-      <div className="agent-task-actions">
-        <button type="button" className="agent-action primary" disabled={disabled} onClick={() => onProcess(false)}>
-          <Sparkles size={14} strokeWidth={2} />
-          让 Hermes 处理
+  const nextAction = nextMeetingAction(task);
+  if (nextAction === "share") {
+    return (
+      <div className="agent-task-share">
+        <button
+          type="button"
+          className="agent-action primary"
+          disabled={disabled || sharePending}
+          aria-expanded={shareOpen}
+          onClick={() => setShareOpen((open) => !open)}
+        >
+          {sharePending ? <Loader2 className="spin" size={14} strokeWidth={2} /> : <Share2 size={14} strokeWidth={2} />}
+          {sharePending ? "分享中" : "分享"}
+          {!sharePending && <ChevronDown size={13} strokeWidth={2} />}
         </button>
-        <button type="button" className="agent-action secondary" disabled={disabled} onClick={() => onProcess(true)}>
-          <Send size={14} strokeWidth={2} />
-          处理并发送 Notion
-        </button>
+        {shareOpen && !sharePending && (
+          <div className="agent-task-share-menu" role="menu" aria-label="选择分享渠道">
+            {shareTargets.map((target) => (
+              <button key={target.channel} type="button" role="menuitem" onClick={() => {
+                setShareOpen(false);
+                onShare(target);
+              }}>
+                <span>分享到 {target.label}</span>
+                <small>{target.destination}</small>
+              </button>
+            ))}
+            <button type="button" role="menuitem" onClick={onOpen}>
+              <span>更多分享渠道…</span>
+              <small>由当前 Agent 支持的渠道决定</small>
+            </button>
+          </div>
+        )}
       </div>
-    </>
+    );
+  }
+  const actionLabel = nextAction === "transcribe" ? "转录" : "总结";
+  return (
+    <div className="agent-task-actions">
+      <button type="button" className="agent-action primary" disabled={disabled} onClick={onOpen}>
+        {nextAction === "transcribe" ? <FileText size={14} strokeWidth={2} /> : <Sparkles size={14} strokeWidth={2} />}
+        {actionLabel}
+      </button>
+    </div>
   );
 }
 

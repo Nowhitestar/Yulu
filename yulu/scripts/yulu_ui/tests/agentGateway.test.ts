@@ -11,6 +11,8 @@ import {
   directHermesRecordingCommandProblem,
   hermesRecordingContractProblem,
   hermesRecordingToolsets,
+  hermesServeReadyPort,
+  hermesServeStartFailure,
   hermesWorkflowFailureMessage,
 } from "../src/agentGateway.js";
 import { ArtifactStore } from "../src/artifactStore.js";
@@ -81,6 +83,19 @@ function knownDeliveryCalls(): Call[] {
 }
 
 describe("Hermes recording Agent gateway", () => {
+  it("accepts current and legacy Hermes serve readiness markers", () => {
+    expect(hermesServeReadyPort("HERMES_BACKEND_READY port=64873")).toBe(64873);
+    expect(hermesServeReadyPort("HERMES_DASHBOARD_READY port=7999")).toBe(7999);
+    expect(hermesServeReadyPort("Hermes backend listening on 127.0.0.1:64873")).toBeNull();
+  });
+
+  it("stops treating repeated Hermes startup failures as retryable after three attempts", () => {
+    expect(hermesServeStartFailure("not ready", 2)).toBeInstanceOf(AgentUnavailableError);
+    const terminal = hermesServeStartFailure("not ready", 3);
+    expect(terminal).not.toBeInstanceOf(AgentUnavailableError);
+    expect(terminal.message).toContain("failed 3 consecutive times");
+  });
+
   it("does not hide an upstream Hermes failure behind its session id", () => {
     expect(hermesWorkflowFailureMessage({
       code: 1,

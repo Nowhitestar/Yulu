@@ -15,8 +15,9 @@ import {
   notionPageIdentityProblem,
 } from "./notionDelivery.js";
 
-const HERMES_READY_RE = /HERMES_DASHBOARD_READY\s+port=(\d+)/;
+const HERMES_READY_RE = /HERMES_(?:BACKEND|DASHBOARD)_READY\s+port=(\d+)/;
 const HERMES_START_TIMEOUT_MS = 30_000;
+const HERMES_START_MAX_FAILURES = 3;
 const HERMES_TRANSCRIBE_TIMEOUT_MS = 15 * 60_000;
 const HERMES_WORKFLOW_TIMEOUT_MS = 20 * 60_000;
 const HERMES_MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
@@ -147,6 +148,18 @@ export class AgentUnavailableError extends Error {
   }
 }
 
+export function hermesServeReadyPort(output: string): number | null {
+  const match = HERMES_READY_RE.exec(output);
+  return match?.[1] ? Number(match[1]) : null;
+}
+
+export function hermesServeStartFailure(message: string, consecutiveFailures: number): Error {
+  if (consecutiveFailures >= HERMES_START_MAX_FAILURES) {
+    return new Error(`Hermes serve failed ${consecutiveFailures} consecutive times: ${message}`);
+  }
+  return new AgentUnavailableError(message);
+}
+
 export interface TranscriptionResult {
   transcript: string;
   provider: string;
@@ -264,6 +277,7 @@ class HermesServeClient {
   private process: ChildProcessWithoutNullStreams | null = null;
   private port: number | null = null;
   private starting: Promise<number> | null = null;
+  private consecutiveStartFailures = 0;
 
   constructor(private readonly options: HermesServeOptions) {}
 
@@ -361,11 +375,12 @@ class HermesServeClient {
         reject(new Error(`Hermes serve did not become ready: ${(stderr || stdout).trim()}`));
       }, HERMES_START_TIMEOUT_MS);
       const inspect = () => {
-        const match = HERMES_READY_RE.exec(`${stdout}\n${stderr}`);
-        if (!match || ready) return;
+        const readyPort = hermesServeReadyPort(`${stdout}\n${stderr}`);
+        if (readyPort === null || ready) return;
         ready = true;
+        this.consecutiveStartFailures = 0;
         clearTimeout(timer);
-        this.port = Number(match[1]);
+        this.port = readyPort;
         resolve(this.port);
       };
       proc.stdout.on("data", (chunk: Buffer) => { stdout = appendLog(stdout, chunk); inspect(); });
@@ -387,7 +402,9 @@ class HermesServeClient {
     try {
       return await this.ensureRunning();
     } catch (error) {
-      throw new AgentUnavailableError((error as Error).message);
+      this.consecutiveStartFailures += 1;
+      const message = (error as Error).message;
+      throw hermesServeStartFailure(message, this.consecutiveStartFailures);
     }
   }
 
