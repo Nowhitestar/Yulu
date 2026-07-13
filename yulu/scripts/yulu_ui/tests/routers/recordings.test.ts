@@ -60,7 +60,7 @@ function mkCtx(opts: { moviesDir: string }): AppContext {
     },
     artifacts: { cleanupWorkspace: vi.fn() },
     pubsub: new PubSub<AppChannels>(),
-    config: { read: () => ({}) },
+    config: { read: () => ({ llm: { command: [process.execPath] } }) },
     launchctl: { restart: vi.fn(), status: vi.fn(), start: vi.fn(), stop: vi.fn(), sighup: vi.fn() },
     db: { prompts: promptsDb },
     recordingPipeline: { transcribeOnDemand },
