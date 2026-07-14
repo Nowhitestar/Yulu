@@ -24,6 +24,10 @@ export function mountWsMultiplexer(http: HttpServer, pubsub: PubSub<AppChannels>
           if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ channel: msg.channel, payload }));
         });
         unsubs.set(msg.channel, off);
+        const latest = pubsub.latest(msg.channel);
+        if (latest !== undefined && ws.readyState === ws.OPEN) {
+          ws.send(JSON.stringify({ channel: msg.channel, payload: latest }));
+        }
       } else if (msg.type === "unsubscribe" && msg.channel) {
         unsubs.get(msg.channel)?.();
         unsubs.delete(msg.channel);

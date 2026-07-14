@@ -20,4 +20,10 @@ describe("PubSub", () => {
     unsub(); unsub();
     expect(ps.subscriberCount("x")).toBe(0);
   });
+
+  it("retains the latest value so a late WebSocket subscriber can hydrate", () => {
+    const ps = new PubSub<{ live: { text: string } }>();
+    ps.publish("live", { text: "已有实时内容" });
+    expect(ps.latest("live")).toEqual({ text: "已有实时内容" });
+  });
 });

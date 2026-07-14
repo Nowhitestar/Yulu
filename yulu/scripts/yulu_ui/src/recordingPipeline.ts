@@ -17,6 +17,17 @@ import {
 } from "./promptInstructions.js";
 import type { PubSub, AppChannels } from "./pubsub.js";
 import type { paths as RuntimePaths } from "./paths.js";
+import {
+  applyGlossaryContract,
+  hasGlossaryContract,
+  loadGlossaryContract,
+  type GlossaryContract,
+} from "./glossaryContract.js";
+import {
+  normalizeTranscriptionLanguage,
+  trustedRealtimeTranscript,
+  type TranscriptionLanguage,
+} from "./realtimeTranscription.js";
 
 const REC_FILE_RE = /^(.+?)_(\d{8})_(\d{6})\.wav$/;
 const DISPATCH_POLL_MS = 15_000;
@@ -82,10 +93,12 @@ export interface RecordingCompletionInput {
   audioPath: string;
   title?: string;
   sendToNotion?: boolean;
+  language?: TranscriptionLanguage;
 }
 
 export interface OnDemandTranscriptionInput {
   audioPath: string;
+  language?: TranscriptionLanguage;
 }
 
 export interface RecordingPipelineOptions {
@@ -95,12 +108,14 @@ export interface RecordingPipelineOptions {
   paths: typeof RuntimePaths;
   pubsub: PubSub<AppChannels>;
   promptDb?: () => unknown;
+  vocabDb?: () => unknown;
   gatewayFactory?: (config: YuluConfig) => RecordingAgentGateway;
   pollMs?: number;
 }
 
 interface PreparedRecordingTask {
   audioPath: string;
+  transcriptionLanguage: TranscriptionLanguage;
   stem: string;
   title: string;
   sendToNotion: boolean;
@@ -151,7 +166,10 @@ export class RecordingPipeline {
       chunkPattern: join(workspaceDir, "audio-%03d.wav"),
     };
     try {
-      return await gateway.transcribeAudio(audioPath, workspace);
+      const language = normalizeTranscriptionLanguage(
+        input.language ?? this.options.config.read().transcription.language,
+      );
+      return await gateway.transcribeAudio(audioPath, workspace, language, this.glossary());
     } finally {
       if (!isInside(workspaceRoot, workspaceDir) || !basename(workspaceDir).startsWith("transcribe-")) {
         throw new Error("refusing to clean an invalid Agent transcription workspace");
@@ -205,6 +223,9 @@ export class RecordingPipeline {
     }
     return {
       audioPath,
+      transcriptionLanguage: normalizeTranscriptionLanguage(
+        input.language ?? config.transcription.language,
+      ),
       stem,
       title,
       sendToNotion: input.sendToNotion === true,
@@ -224,6 +245,7 @@ export class RecordingPipeline {
       recordingStem: input.stem,
       title: input.title,
       audioPath: input.audioPath,
+      transcriptionLanguage: input.transcriptionLanguage,
       sendToNotion: input.sendToNotion,
       destinationHint: input.destinationHint,
       agentProvider: input.agentProvider,
@@ -441,7 +463,23 @@ export class RecordingPipeline {
     try {
       this.publish(task, "transcribing");
       const workspace = this.options.artifacts.workspace(task.id);
-      const transcription = await gateway.transcribe(task, workspace);
+      const glossary = this.glossary();
+      const realtime = trustedRealtimeTranscript(task.audioPath, task.transcriptionLanguage);
+      const rawTranscription = realtime
+        ? {
+            transcript: realtime.transcript,
+            provider: "hermes-realtime",
+            chunks: realtime.chunks,
+            language: task.transcriptionLanguage,
+          }
+        : await gateway.transcribe(task, workspace, glossary);
+      const transcript = glossary
+        ? applyGlossaryContract(rawTranscription.transcript, glossary)
+        : rawTranscription.transcript;
+      const transcription = { ...rawTranscription, transcript };
+      if (realtime || transcript !== rawTranscription.transcript) {
+        this.options.artifacts.writeStagedTranscript(task.id, transcript);
+      }
       this.options.store.recordProgress(task.id, leaseToken, "summarizing", `Hermes transcription provider: ${transcription.provider}`);
       this.publish(task, "summarizing");
       const current = this.options.store.getTask(task.id)!;
@@ -450,6 +488,7 @@ export class RecordingPipeline {
         leaseToken,
         workspace,
         transcriptionProvider: transcription.provider,
+        glossary,
       };
       const artifactResult = await gateway.runArtifactWorkflow(workflowInput);
       this.options.store.recordPhaseSession(task.id, leaseToken, "artifact", artifactResult.nativeSessionId);
@@ -521,6 +560,15 @@ export class RecordingPipeline {
         this.publish(task, "failed", (error as Error).message);
         return true;
       }
+    }
+  }
+
+  private glossary(): GlossaryContract | undefined {
+    try {
+      const contract = loadGlossaryContract(this.options.vocabDb?.());
+      return hasGlossaryContract(contract) ? contract : undefined;
+    } catch {
+      return undefined;
     }
   }
 

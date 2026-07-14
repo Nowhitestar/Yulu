@@ -9,6 +9,16 @@ import { envWithFallbackPath, resolveExecutable } from "./executables.js";
 import type { AgentTask } from "./hostStore.js";
 import type { AgentTaskWorkspace, ArtifactStore } from "./artifactStore.js";
 import {
+  applyGlossaryContract,
+  type GlossaryContract,
+} from "./glossaryContract.js";
+import {
+  assessRealtimeTranscript,
+  cleanTranscriptText,
+  normalizeTranscriptionLanguage,
+  type TranscriptionLanguage,
+} from "./realtimeTranscription.js";
+import {
   canonicalNotionPageIdentity,
   isTrustedNotionUrl,
   isValidNotionPageId,
@@ -21,7 +31,8 @@ const HERMES_START_MAX_FAILURES = 3;
 const HERMES_TRANSCRIBE_TIMEOUT_MS = 15 * 60_000;
 const HERMES_WORKFLOW_TIMEOUT_MS = 20 * 60_000;
 const HERMES_MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
-const HERMES_CONTRACT_CACHE_MS = 15_000;
+const HERMES_CONTRACT_CACHE_MS = 5 * 60_000;
+const HERMES_CONTRACT_PROBE_TIMEOUT_MS = 30_000;
 
 export interface HermesCommandProbeResult {
   code: number;
@@ -70,7 +81,7 @@ async function runHermesCommandProbeAsync(
 ): Promise<HermesCommandProbeResult> {
   const result = await runProcess(command, [...args], {
     cwd: process.cwd(),
-    timeoutMs: 5_000,
+    timeoutMs: HERMES_CONTRACT_PROBE_TIMEOUT_MS,
     maxOutputBytes: 2 * 1024 * 1024,
   });
   return { code: result.code, stdout: result.stdout, stderr: result.stderr };
@@ -117,10 +128,15 @@ export async function hermesRecordingContractProblemAsync(
   command: string,
   probe: HermesAsyncCommandProbe = runHermesCommandProbeAsync,
 ): Promise<string | null> {
-  const [commandResults, mcp] = await Promise.all([
-    Promise.all(HERMES_CONTRACT_COMMANDS.map((required) => probe(command, required.args))),
-    probe(command, ["mcp", "list"]),
-  ]);
+  // Hermes is a Python CLI. LaunchAgent children inherit background QoS, and
+  // cold-starting five interpreters at once can make valid probes time out or
+  // contend on shared startup state. This contract runs once and is cached, so
+  // prefer deterministic sequential checks over a fragile parallel cold start.
+  const commandResults: HermesCommandProbeResult[] = [];
+  for (const required of HERMES_CONTRACT_COMMANDS) {
+    commandResults.push(await probe(command, required.args));
+  }
+  const mcp = await probe(command, ["mcp", "list"]);
   return hermesRecordingContractResultsProblem(commandResults, mcp);
 }
 
@@ -164,6 +180,7 @@ export interface TranscriptionResult {
   transcript: string;
   provider: string;
   chunks: number;
+  language?: TranscriptionLanguage;
 }
 
 export interface AgentSessionAudit {
@@ -211,6 +228,7 @@ export interface AgentArtifactWorkflowInput {
   leaseToken: string;
   workspace: AgentTaskWorkspace;
   transcriptionProvider: string;
+  glossary?: GlossaryContract;
 }
 
 export type AgentNotionWorkflowInput = AgentArtifactWorkflowInput;
@@ -219,8 +237,8 @@ export interface RecordingAgentGateway {
   readonly provider: string;
   health(): AgentGatewayHealth;
   warmTranscription(): Promise<void>;
-  transcribeAudio(audioPath: string, workspace: AgentTaskWorkspace): Promise<TranscriptionResult>;
-  transcribe(task: AgentTask, workspace: AgentTaskWorkspace): Promise<TranscriptionResult>;
+  transcribeAudio(audioPath: string, workspace: AgentTaskWorkspace, language?: TranscriptionLanguage, glossary?: GlossaryContract): Promise<TranscriptionResult>;
+  transcribe(task: AgentTask, workspace: AgentTaskWorkspace, glossary?: GlossaryContract): Promise<TranscriptionResult>;
   runArtifactWorkflow(input: AgentArtifactWorkflowInput): Promise<AgentWorkflowResult>;
   runNotionWorkflow(input: AgentNotionWorkflowInput): Promise<AgentWorkflowResult>;
   close(): void;
@@ -285,7 +303,12 @@ class HermesServeClient {
     await this.runningPort();
   }
 
-  async transcribe(audioPath: string, workspace: AgentTaskWorkspace): Promise<TranscriptionResult> {
+  async transcribe(
+    audioPath: string,
+    workspace: AgentTaskWorkspace,
+    language: TranscriptionLanguage = "zh",
+    glossary?: GlossaryContract,
+  ): Promise<TranscriptionResult> {
     const port = await this.runningPort();
     this.cleanupTransportAudio(workspace);
     try {
@@ -325,6 +348,8 @@ class HermesServeClient {
           body: JSON.stringify({
             data_url: `data:audio/wav;base64,${audio.toString("base64")}`,
             mime_type: "audio/wav",
+            language,
+            prompt: glossary?.prompt || undefined,
           }),
           signal: AbortSignal.timeout(HERMES_TRANSCRIBE_TIMEOUT_MS),
         });
@@ -332,7 +357,7 @@ class HermesServeClient {
         if (!response.ok || payload.ok !== true) {
           throw new Error(`Hermes transcription failed (${response.status}): ${String(payload.detail ?? "unknown error")}`);
         }
-        const transcript = String(payload.transcript ?? "").trim();
+        const transcript = cleanTranscriptText(String(payload.transcript ?? ""));
         provider = String(payload.provider ?? provider);
         // A transport segment may be entirely silent (especially the tail of
         // a long meeting). Skip that segment; only fail when the whole
@@ -340,7 +365,21 @@ class HermesServeClient {
         if (transcript) transcripts.push(transcript);
       }
       if (transcripts.length === 0) throw new Error("Hermes returned no speech transcript for the recording");
-      return { transcript: transcripts.join("\n\n"), provider, chunks: chunks.length };
+      const transcript = applyGlossaryContract(
+        cleanTranscriptText(transcripts.join("\n\n")),
+        glossary ?? { prompt: "", replacements: [], summaryInstruction: "" },
+      );
+      const normalizedLanguage = normalizeTranscriptionLanguage(language);
+      const quality = assessRealtimeTranscript({
+        text: transcript,
+        language: normalizedLanguage,
+        coveredMs: 1,
+        totalMs: 1,
+      });
+      if (!quality.trusted) {
+        throw new Error(`Hermes transcript violated the requested language contract: ${quality.reason}`);
+      }
+      return { transcript, provider, chunks: chunks.length, language: normalizedLanguage };
     } finally {
       this.cleanupTransportAudio(workspace);
     }
@@ -417,12 +456,7 @@ class HermesServeClient {
   }
 }
 
-export function buildHermesRecordingPrompt(input: {
-  task: AgentTask;
-  leaseToken: string;
-  workspace: AgentTaskWorkspace;
-  transcriptionProvider: string;
-}): string {
+export function buildHermesRecordingPrompt(input: AgentArtifactWorkflowInput): string {
   const { task, leaseToken, transcriptionProvider } = input;
   return [
     "You are Hermes, the selected local Agent for Yulu.",
@@ -433,6 +467,9 @@ export function buildHermesRecordingPrompt(input: {
     `Meeting title: ${task.title}`,
     `Transcript provider: Hermes ${transcriptionProvider}`,
     ...(task.instructions ? ["", "User-selected summary instructions:", task.instructions] : []),
+    ...(input.glossary?.summaryInstruction
+      ? ["", "Terminology contract:", input.glossary.summaryInstruction]
+      : []),
     "",
     "Required order:",
     "1. Call the dedicated Yulu artifact MCP `recording_task_transcript_read` with taskId and leaseToken. Do not use filesystem tools.",
@@ -925,13 +962,18 @@ export class HermesRecordingGateway implements RecordingAgentGateway {
     return this.serve.warm();
   }
 
-  async transcribeAudio(audioPath: string, workspace: AgentTaskWorkspace): Promise<TranscriptionResult> {
+  async transcribeAudio(
+    audioPath: string,
+    workspace: AgentTaskWorkspace,
+    language: TranscriptionLanguage = "zh",
+    glossary?: GlossaryContract,
+  ): Promise<TranscriptionResult> {
     await this.requireRecordingContract();
-    return this.serve.transcribe(audioPath, workspace);
+    return this.serve.transcribe(audioPath, workspace, language, glossary);
   }
 
-  transcribe(task: AgentTask, workspace: AgentTaskWorkspace): Promise<TranscriptionResult> {
-    return this.transcribeAudio(task.audioPath, workspace).then((result) => {
+  transcribe(task: AgentTask, workspace: AgentTaskWorkspace, glossary?: GlossaryContract): Promise<TranscriptionResult> {
+    return this.transcribeAudio(task.audioPath, workspace, task.transcriptionLanguage, glossary).then((result) => {
       this.artifacts.writeStagedTranscript(task.id, result.transcript);
       return result;
     });

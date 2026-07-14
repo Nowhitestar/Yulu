@@ -67,6 +67,30 @@ func log(_ msg: String) {
     logFile?.write(Data((line + "\n").utf8))
 }
 
+func launchMeetingSilencePrompt() -> Bool {
+    let scriptDir = Bundle.main.bundleURL.deletingLastPathComponent()
+    let meetingDaemon = scriptDir.appendingPathComponent("meeting_daemon.py")
+    guard FileManager.default.fileExists(atPath: meetingDaemon.path) else {
+        log("Silence prompt adapter missing: \(meetingDaemon.path)")
+        return false
+    }
+    let task = Process()
+    task.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+    task.arguments = [
+        "PYTHONPATH=\(scriptDir.path)",
+        "python3", meetingDaemon.path, "auto_stop",
+    ]
+    task.currentDirectoryURL = scriptDir
+    do {
+        try task.run()
+        log("🔇 Silence threshold reached — asking before stopping meeting recording")
+        return true
+    } catch {
+        log("Silence prompt launch failed: \(error)")
+        return false
+    }
+}
+
 // ─── WAV 写入器 ───────────────────────────────────────
 
 class WavWriter {
@@ -367,6 +391,14 @@ class AudioRecorder {
         }
     }
 
+    func noteCaptureRouteChange(now: Date = Date()) {
+        syncState {
+            guard isRecordingState else { return }
+            lastMicAudioTime = now
+            lastSysAudioTime = now
+        }
+    }
+
     func silenceExpired(now: Date = Date()) -> Bool {
         return syncState {
             silenceExpiredOnQueue(now: now)
@@ -486,7 +518,8 @@ class AudioRecorder {
             guard let self = self, self.silenceExpiredOnQueue() else { return }
             guard !self.autoStopRequested else { return }
             self.autoStopRequested = true
-            log("🔇 silence \(Int(self.silenceSecondsState))s (both channels) — auto stop")
+            let action = SYS_DISABLED ? "auto stop" : "confirm before stop"
+            log("🔇 silence \(Int(self.silenceSecondsState))s (both channels) — \(action)")
             DispatchQueue.main.async { [weak self] in
                 self?.onStopRequest?()
             }
@@ -505,7 +538,10 @@ class AudioRecorder {
 
 class MicCapture {
     let recorder: AudioRecorder
-    var engine: AVAudioEngine?
+    private let lifecycleQueue = DispatchQueue(label: "com.yulu.mic-capture.lifecycle")
+    private var engine: AVAudioEngine?
+    private var configurationObserver: NSObjectProtocol?
+    private var generation: UInt64 = 0
     var selectedDeviceUID: String?
 
     init(recorder: AudioRecorder) { self.recorder = recorder }
@@ -589,6 +625,11 @@ class MicCapture {
     }
 
     func start() {
+        lifecycleQueue.sync { startOnQueue() }
+    }
+
+    private func startOnQueue() {
+        guard engine == nil else { return }
         let engine = AVAudioEngine()
         let input = engine.inputNode
         configureInputDevice(input)
@@ -619,13 +660,51 @@ class MicCapture {
         do {
             try engine.start()
             self.engine = engine
+            generation &+= 1
+            let currentGeneration = generation
+            configurationObserver = NotificationCenter.default.addObserver(
+                forName: .AVAudioEngineConfigurationChange,
+                object: engine,
+                queue: nil
+            ) { [weak self, weak engine] _ in
+                guard let self = self, let engine = engine else { return }
+                self.lifecycleQueue.async {
+                    guard self.engine === engine,
+                          self.generation == currentGeneration else { return }
+                    self.restartAfterConfigurationChange()
+                }
+            }
             MIC_READY = true; MIC_ERROR = ""
             log("🎤 Mic capture started (channels=\(fmt.channelCount), gain=\(recorder.micGain)x)")
         }
         catch { MIC_READY = false; MIC_ERROR = "\(error)"; log("Mic start failed: \(error)") }
     }
 
-    func stop() { engine?.stop(); engine = nil; log("🎤 Mic idle") }
+    private func restartAfterConfigurationChange() {
+        log("🎤 Mic audio route changed — restarting capture")
+        recorder.noteCaptureRouteChange()
+        stopOnQueue(logIdle: false)
+        Thread.sleep(forTimeInterval: 0.1)
+        startOnQueue()
+    }
+
+    func stop() {
+        lifecycleQueue.sync { stopOnQueue(logIdle: true) }
+    }
+
+    private func stopOnQueue(logIdle: Bool) {
+        generation &+= 1
+        if let observer = configurationObserver {
+            NotificationCenter.default.removeObserver(observer)
+            configurationObserver = nil
+        }
+        if let engine = engine {
+            engine.inputNode.removeTap(onBus: 0)
+            engine.stop()
+            self.engine = nil
+        }
+        if logIdle { log("🎤 Mic idle") }
+    }
 }
 
 // ─── SCStream 输出处理器 ──────────────────────────────
@@ -877,6 +956,57 @@ final class ScreenCaptureKitBackend: CaptureBackend {
 // existing silence-monitor (startSilenceMonitor) only auto-stops when BOTH
 // channels are quiet, so a sys-only zero-out does not false-stop the recording.
 
+private struct ZeroBufferRecoveryPolicy {
+    let threshold: Int
+    let maxAttempts: Int
+    private(set) var consecutiveZeroCallbacks = 0
+    private(set) var attempts = 0
+    private(set) var episode: UInt64 = 0
+    private var armed = true
+
+    init(threshold: Int, maxAttempts: Int) {
+        self.threshold = threshold
+        self.maxAttempts = maxAttempts
+    }
+
+    mutating func resetForRecording() {
+        consecutiveZeroCallbacks = 0
+        attempts = 0
+        episode &+= 1
+        armed = true
+    }
+
+    mutating func commitRecoveryAttempt() {
+        attempts += 1
+        consecutiveZeroCallbacks = 0
+    }
+
+    mutating func rearmAfterRecovery() {
+        consecutiveZeroCallbacks = 0
+        episode &+= 1
+        armed = true
+    }
+
+    mutating func observe(allZero: Bool, running: Bool, rebuilding: Bool) -> Bool {
+        guard running else {
+            consecutiveZeroCallbacks = 0
+            return false
+        }
+        guard allZero else {
+            if consecutiveZeroCallbacks > 0 || !armed { episode &+= 1 }
+            consecutiveZeroCallbacks = 0
+            armed = true
+            return false
+        }
+        if consecutiveZeroCallbacks == 0 { episode &+= 1 }
+        consecutiveZeroCallbacks += 1
+        guard armed, !rebuilding, attempts < maxAttempts,
+              consecutiveZeroCallbacks >= threshold else { return false }
+        armed = false
+        return true
+    }
+}
+
 @available(macOS 14.4, *)
 final class ProcessTapBackend: CaptureBackend {
     let recorder: AudioRecorder
@@ -891,17 +1021,15 @@ final class ProcessTapBackend: CaptureBackend {
     private var _lastError = ""
 
     // ── Pitfall 3 zero-buffer detection state ──
-    // Count consecutive IO callbacks that carried real frames but were entirely
-    // silent. Once the run of all-zero callbacks crosses the threshold while the
-    // backend believes it is capturing, trigger a teardown+rebuild. Reset to 0 on
-    // any callback that carries non-zero audio.
-    private var zeroRunCallbacks = 0
-    private let zeroRunThreshold = 200   // ~callbacks; tap fires often, so a sustained
-                                         // run (not a momentary genuine-quiet blip) is
-                                         // what crosses this — distinguishes the bug
-                                         // from real silence (which the silence-monitor
-                                         // already owns).
+    // Real silence and a stuck tap both arrive as all-zero buffers. Recover once
+    // per continuous zero-buffer episode, re-arm only after real audio returns,
+    // and cap the total attempts so a quiet recording cannot rebuild forever.
+    private var zeroRecoveryPolicy = ZeroBufferRecoveryPolicy(
+        threshold: 200,
+        maxAttempts: 3
+    )
     private var rebuilding = false
+    private var captureGeneration: UInt64 = 0
 
     init(recorder: AudioRecorder) {
         self.recorder = recorder
@@ -961,7 +1089,12 @@ final class ProcessTapBackend: CaptureBackend {
 
         if buildTap(probe: false) {
             lifecycleLock.unlock()
-            lock.lock(); running = true; zeroRunCallbacks = 0; lock.unlock()
+            lock.lock()
+            running = true
+            rebuilding = false
+            captureGeneration &+= 1
+            zeroRecoveryPolicy.resetForRecording()
+            lock.unlock()
             SYS_READY = true; SYS_ERROR = ""
             log("🔊 Sys tap capture started")
         } else {
@@ -1129,49 +1262,91 @@ final class ProcessTapBackend: CaptureBackend {
         if allZero {
             lock.lock()
             let isRunning = running
-            if isRunning {
-                zeroRunCallbacks += 1
-            } else {
-                zeroRunCallbacks = 0
+            let tripped = zeroRecoveryPolicy.observe(
+                allZero: true,
+                running: isRunning,
+                rebuilding: rebuilding
+            )
+            let currentZeroRun = zeroRecoveryPolicy.consecutiveZeroCallbacks
+            let generation = captureGeneration
+            let zeroEpisode = zeroRecoveryPolicy.episode
+            if tripped {
+                rebuilding = true
             }
-            let currentZeroRun = zeroRunCallbacks
-            let tripped = isRunning && !rebuilding && currentZeroRun >= zeroRunThreshold
-            if tripped { rebuilding = true }
             lock.unlock()
             if tripped {
                 log("⚠️ Sys tap delivered \(currentZeroRun) all-zero buffers — teardown+rebuild (Pitfall 3)")
                 // Rebuild off the realtime IO thread.
                 DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-                    self?.recoverFromZeroBuffers()
+                    self?.recoverFromZeroBuffers(
+                        generation: generation,
+                        zeroEpisode: zeroEpisode
+                    )
                 }
             }
             return   // don't push silence into the WAV
         }
 
-        // Real audio → reset the zero run and convert using the SAME clamp as
-        // SysAudioOutput (do not re-derive it).
-        lock.lock(); zeroRunCallbacks = 0; lock.unlock()
+        // Real audio resets and re-arms the current zero-buffer episode.
+        lock.lock()
+        _ = zeroRecoveryPolicy.observe(
+            allZero: false,
+            running: running,
+            rebuilding: rebuilding
+        )
+        lock.unlock()
         let int16s = stereoFloats.map { Int16(max(-1.0, min(1.0, $0)) * Float(Int16.max)) }
         recorder.onSysAudio(int16s)
     }
 
     /// Pitfall 3 recovery: full teardown then rebuild of the tap+aggregate stack.
-    private func recoverFromZeroBuffers() {
+    private func recoverFromZeroBuffers(generation: UInt64, zeroEpisode: UInt64) {
         lifecycleLock.lock()
         defer { lifecycleLock.unlock() }
-        teardown()
         lock.lock()
-        let shouldRestart = running
-        zeroRunCallbacks = 0
+        let sameGeneration = captureGeneration == generation
+        let shouldRestart = running && sameGeneration
+            && zeroRecoveryPolicy.episode == zeroEpisode
+        if shouldRestart {
+            zeroRecoveryPolicy.commitRecoveryAttempt()
+        } else if sameGeneration {
+            rebuilding = false
+        }
         lock.unlock()
-        if shouldRestart, buildTap(probe: false) {
+        guard shouldRestart else { return }
+
+        // A delayed recovery from a previous recording must never tear down the
+        // current recording's tap.
+        teardown()
+        var rebuilt = false
+        for delay in [0.0, 0.1, 0.3] {
+            if delay > 0 { Thread.sleep(forTimeInterval: delay) }
+            lock.lock()
+            let stillCurrent = running && captureGeneration == generation
+            lock.unlock()
+            guard stillCurrent else { break }
+            if buildTap(probe: false) {
+                rebuilt = true
+                break
+            }
+        }
+        if rebuilt {
             SYS_READY = true; SYS_ERROR = ""
             log("🔊 Sys tap rebuilt after zero-buffer recovery")
-        } else if shouldRestart {
+        } else {
             SYS_READY = false; SYS_ERROR = _lastError
             log("Sys tap rebuild failed: \(_lastError)")
         }
-        lock.lock(); rebuilding = false; lock.unlock()
+        lock.lock()
+        if captureGeneration == generation {
+            rebuilding = false
+            if rebuilt {
+                zeroRecoveryPolicy.rearmAfterRecovery()
+            } else {
+                running = false
+            }
+        }
+        lock.unlock()
     }
 
     /// Destroy the IO proc, aggregate device, and tap in the exact order from
@@ -1479,6 +1654,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let rec = AudioRecorder(); recorder = rec
         rec.onStopRequest = { [weak self] in
             guard let self = self else { return }
+            if !SYS_DISABLED && launchMeetingSilencePrompt() {
+                return
+            }
             let wasRecording = self.recorder?.isRecording ?? false
             _ = self.recorder?.stop()
             if wasRecording {
@@ -1552,6 +1730,28 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 // ─── 入口 ──────────────────────────────────────────────
 
 if CommandLine.arguments.contains("--self-test") {
+    var recovery = ZeroBufferRecoveryPolicy(threshold: 3, maxAttempts: 2)
+    assert(!recovery.observe(allZero: true, running: true, rebuilding: false))
+    assert(!recovery.observe(allZero: true, running: true, rebuilding: false))
+    assert(recovery.observe(allZero: true, running: true, rebuilding: false))
+    recovery.commitRecoveryAttempt()
+    let firstEpisode = recovery.episode
+    assert(!recovery.observe(allZero: true, running: true, rebuilding: false))
+    assert(!recovery.observe(allZero: false, running: true, rebuilding: false))
+    assert(recovery.episode != firstEpisode)
+    assert(!recovery.observe(allZero: true, running: true, rebuilding: false))
+    assert(!recovery.observe(allZero: true, running: true, rebuilding: false))
+    assert(recovery.observe(allZero: true, running: true, rebuilding: false))
+    recovery.commitRecoveryAttempt()
+    assert(!recovery.observe(allZero: false, running: true, rebuilding: false))
+    assert(!recovery.observe(allZero: true, running: true, rebuilding: false))
+    assert(!recovery.observe(allZero: true, running: true, rebuilding: false))
+    assert(!recovery.observe(allZero: true, running: true, rebuilding: false))
+    recovery.resetForRecording()
+    assert(!recovery.observe(allZero: true, running: true, rebuilding: false))
+    assert(!recovery.observe(allZero: true, running: true, rebuilding: false))
+    assert(recovery.observe(allZero: true, running: true, rebuilding: false))
+
     let recorder = AudioRecorder()
     recorder._selfTestSetSilenceState(
         recording: true,

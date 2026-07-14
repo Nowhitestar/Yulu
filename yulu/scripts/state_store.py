@@ -153,6 +153,7 @@ def recording_info(state: dict[str, Any] | None = None) -> dict[str, Any]:
         "file_path": state.get("file_path") or state.get("audio_path", ""),
         "started_at": state.get("started_at", ""),
         "backend": state.get("backend", "daemon"),
+        "transcription_language": state.get("transcription_language", "zh"),
     }
 
 

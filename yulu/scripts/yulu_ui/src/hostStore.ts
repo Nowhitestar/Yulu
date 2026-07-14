@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { isTrustedNotionUrl, isValidNotionPageId, notionPageIdentityProblem } from "./notionDelivery.js";
+import type { TranscriptionLanguage } from "./realtimeTranscription.js";
 
 export type AgentTaskState =
   | "queued"
@@ -34,6 +35,7 @@ export interface AgentTask {
   recordingStem: string;
   title: string;
   audioPath: string;
+  transcriptionLanguage: TranscriptionLanguage;
   trigger: AgentTaskTrigger;
   state: AgentTaskState;
   phase: AgentTaskPhase;
@@ -97,6 +99,7 @@ interface TaskRow {
   recording_stem: string;
   title: string;
   audio_path: string;
+  transcription_language: TranscriptionLanguage;
   trigger: AgentTaskTrigger;
   state: AgentTaskState;
   phase: AgentTaskPhase;
@@ -125,6 +128,7 @@ function toTask(row: TaskRow): AgentTask {
     recordingStem: row.recording_stem,
     title: row.title,
     audioPath: row.audio_path,
+    transcriptionLanguage: row.transcription_language,
     trigger: row.trigger,
     state: row.state,
     phase: row.phase,
@@ -190,6 +194,7 @@ export class HostStore {
     recordingStem: string;
     title: string;
     audioPath: string;
+    transcriptionLanguage?: TranscriptionLanguage;
     sendToNotion: boolean;
     destinationHint: string;
     agentProvider: string;
@@ -219,16 +224,17 @@ export class HostStore {
       }
       this.db.prepare(`
         INSERT OR IGNORE INTO agent_tasks (
-          id, idempotency_key, recording_stem, title, audio_path, trigger,
+          id, idempotency_key, recording_stem, title, audio_path, transcription_language, trigger,
           state, phase, send_to_notion, destination_hint, agent_provider, instructions,
           attempt, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, 'queued', 'queued', ?, ?, ?, ?, 0, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', 'queued', ?, ?, ?, ?, 0, ?, ?)
       `).run(
         id,
         input.idempotencyKey,
         input.recordingStem,
         input.title,
         input.audioPath,
+        input.transcriptionLanguage ?? "zh",
         input.trigger ?? "automatic",
         input.sendToNotion ? 1 : 0,
         input.destinationHint,
@@ -943,6 +949,7 @@ export class HostStore {
         recording_stem TEXT NOT NULL,
         title TEXT NOT NULL,
         audio_path TEXT NOT NULL,
+        transcription_language TEXT NOT NULL DEFAULT 'zh',
         trigger TEXT NOT NULL DEFAULT 'automatic' CHECK(trigger IN ('automatic', 'manual')),
         state TEXT NOT NULL,
         phase TEXT NOT NULL,
@@ -1013,6 +1020,9 @@ export class HostStore {
     }
     if (!columns.some((column) => column.name === "trigger")) {
       this.db.exec("ALTER TABLE agent_tasks ADD COLUMN trigger TEXT NOT NULL DEFAULT 'automatic' CHECK(trigger IN ('automatic', 'manual'))");
+    }
+    if (!columns.some((column) => column.name === "transcription_language")) {
+      this.db.exec("ALTER TABLE agent_tasks ADD COLUMN transcription_language TEXT NOT NULL DEFAULT 'zh'");
     }
   }
 }

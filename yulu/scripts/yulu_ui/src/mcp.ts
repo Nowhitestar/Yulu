@@ -12,6 +12,7 @@ import { createCaller, type AppContext } from "./trpc.js";
 import { ipcSend } from "./ipc.js";
 import { isTrustedNotionUrl, isValidNotionPageId } from "./notionDelivery.js";
 import { RecordingPipelinePolicyDisabledError } from "./recordingPipeline.js";
+import { applyGlossaryContract, loadGlossaryContract } from "./glossaryContract.js";
 
 const exec = promisify(execFile) as (cmd: string, args: string[], opts?: object) => Promise<{ stdout: string; stderr: string }>;
 
@@ -215,8 +216,9 @@ function registerRecordingArtifactTools(
   }, async ({ taskId, leaseToken, summary }) => {
     const task = requireTaskLease(ctx, taskId, leaseToken);
     if (task.state !== "running") throw new Error(`task ${taskId} cannot stage a summary from ${task.state}`);
-    ctx.artifacts.writeStagedSummary(taskId, summary);
-    return json({ ok: true, taskId, bytes: Buffer.byteLength(summary.trim() + "\n", "utf8") });
+    const corrected = applyGlossaryContract(summary, loadGlossaryContract(ctx.db?.vocab));
+    ctx.artifacts.writeStagedSummary(taskId, corrected);
+    return json({ ok: true, taskId, bytes: Buffer.byteLength(corrected.trim() + "\n", "utf8") });
   });
   server.registerTool("recording_artifact_commit", {
     description: "Atomically commit the fixed task-scoped transcript.txt and summary.md staging files into Yulu.",

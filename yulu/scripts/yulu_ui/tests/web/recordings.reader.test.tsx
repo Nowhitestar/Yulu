@@ -90,11 +90,11 @@ beforeEach(() => {
 });
 
 describe("RecordingReader", () => {
-  it("does not expose the retired realtime transcript surface", () => {
-    getMock.mockReturnValue({ data: { ...baseData, realtime: "legacy realtime text", hasRealtime: true }, isPending: false });
+  it("shows the realtime transcript while the final transcript is not ready", () => {
+    getMock.mockReturnValue({ data: { ...baseData, transcript: null, summary: null, realtime: "实时中文内容", hasRealtime: true }, isPending: false });
     renderAt("TeamSync_20260102_090000");
-    expect(screen.queryByRole("button", { name: /实时/i })).toBeNull();
-    expect(screen.queryByText("legacy realtime text")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /^转写$/i }));
+    expect(screen.getByText("实时中文内容")).toBeInTheDocument();
   });
 
   it("exposes transcription, summarization, and sharing as separate actions", () => {

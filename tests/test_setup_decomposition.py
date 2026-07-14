@@ -379,6 +379,7 @@ def test_install_plist_puts_selected_node_directory_first(tmp_path):
     assert result.returncode == 0, result.stderr + result.stdout
     plist = plistlib.loads((launch_agents / "com.yulu.ui.plist").read_bytes())
     assert plist["ProgramArguments"][0] == selected_node
+    assert plist["ProcessType"] == "Interactive"
     path_parts = plist["EnvironmentVariables"]["PATH"].split(":")
     assert path_parts[0] == "/opt/homebrew/opt/node@24/bin"
 

@@ -82,6 +82,17 @@ def _auto_send_notion(path: Path | None = None) -> bool:
     return bool(pipeline.get("auto_send_notion")) if isinstance(pipeline, dict) else False
 
 
+def _transcription_language(path: Path | None = None) -> str:
+    path = path or CONFIG_PATH
+    try:
+        config = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return "zh"
+    transcription = config.get("transcription") if isinstance(config, dict) else None
+    language = transcription.get("language") if isinstance(transcription, dict) else None
+    return language if language in {"zh", "en", "ja", "auto"} else "zh"
+
+
 def _agent_pipeline_auto_processing(path: Path | None = None) -> bool:
     """Treat only explicit policy opt-outs as disabled at the capture edge.
 
@@ -101,11 +112,12 @@ def _agent_pipeline_auto_processing(path: Path | None = None) -> bool:
     return pipeline.get("enabled", True) is not False and pipeline.get("auto_process_recordings", True) is not False
 
 
-def _recording_completed_payload(audio_path: str, title: str) -> dict:
+def _recording_completed_payload(audio_path: str, title: str, language: str | None = None) -> dict:
     return {
         "audioPath": audio_path,
         "title": title,
         "sendToNotion": _auto_send_notion(),
+        "language": language if language in {"zh", "en", "ja", "auto"} else _transcription_language(),
     }
 
 
@@ -156,6 +168,30 @@ def _post_recording_completed(payload: dict, *, timeout: float = 5.0) -> str:
         return "transient"
 
 
+def _post_realtime(action: str, payload: dict, *, timeout: float = 30.0) -> bool:
+    token = _read_mcp_token()
+    if not token:
+        return False
+    port = os.environ.get("YULU_UI_PORT", "7777").strip() or "7777"
+    request = Request(
+        f"http://127.0.0.1:{port}/api/recordings/realtime/{action}",
+        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urlopen(request, timeout=timeout) as response:
+            response.read()
+            status = getattr(response, "status", response.getcode())
+            return 200 <= int(status) < 300
+    except (HTTPError, URLError, OSError, TimeoutError, ValueError):
+        return False
+
+
 def _spool_recording_completed(payload: dict, directory: Path | None = None) -> Path:
     directory = directory or RECORDING_EVENTS_DIR
     directory.mkdir(parents=True, exist_ok=True)
@@ -175,11 +211,11 @@ def _spool_recording_completed(payload: dict, directory: Path | None = None) -> 
     return target
 
 
-def _dispatch_recording_completed(audio_path: str, title: str) -> Path | None:
+def _dispatch_recording_completed(audio_path: str, title: str, language: str | None = None) -> Path | None:
     if not _agent_pipeline_auto_processing():
         print("⏸️ 录音已保存；Agent 自动处理已按策略暂停")
         return None
-    payload = _recording_completed_payload(audio_path, title)
+    payload = _recording_completed_payload(audio_path, title, language)
     result = _post_recording_completed(payload)
     if result == "accepted":
         print("📤 录音完成事件已交给 Yulu Host")
@@ -551,12 +587,21 @@ def _start_recording(title, meeting_id=""):
                 started_at=datetime.now().isoformat(),
             )
 
+            language = _transcription_language()
             set_recording_started(
                 title, audio_path,
                 meeting_id=meeting_id, backend="daemon", path=STATE_PATH,
-                extra={"segments": [audio_path]},
+                extra={"segments": [audio_path], "transcription_language": language},
             )
             print(f"✅ 录制中: {audio_path}")
+            if _post_realtime("start", {
+                "audioPath": audio_path,
+                "title": title,
+                "language": language,
+            }):
+                print(f"📝 实时转写已启动 ({language})")
+            else:
+                print("⚠️ 实时转写暂不可用；停止后仍会完整转写", file=sys.stderr)
 
             # 启动状态浮窗
             _launch_status_window(title)
@@ -733,6 +778,7 @@ def _stop_and_process():
 
     title = rec.get("title", "meeting")
     audio_path = rec.get("audio_path") or rec.get("file_path")
+    language = rec.get("transcription_language") or _transcription_language()
 
     # 1. 停录制
     record = SCRIPT_DIR / "record_audio.py"
@@ -759,6 +805,9 @@ def _stop_and_process():
         return
     audio_path = str(resolved_audio_path)
 
+    if not _post_realtime("stop", {"audioPath": audio_path}):
+        print("⚠️ 实时转写收尾失败；将使用完整录音重新转写", file=sys.stderr)
+
     notify = SCRIPT_DIR / "notify.py"
     subprocess.Popen([sys.executable, str(notify), "notify_stop", title],
                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -768,7 +817,7 @@ def _stop_and_process():
     # 2. Host 接管后续 Agent 工作流。Host 不可用时持久化事件，绝不回退到
     # 已退役的 Yulu-owned 转录、摘要或 connector 执行器。
     try:
-        _dispatch_recording_completed(audio_path, title)
+        _dispatch_recording_completed(audio_path, title, language)
     except OSError as exc:
         print(f"⚠️ 录音已保存，但录音完成事件持久化失败: {exc}", file=sys.stderr)
 

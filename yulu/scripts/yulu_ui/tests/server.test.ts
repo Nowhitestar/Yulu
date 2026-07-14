@@ -9,6 +9,7 @@ import { startServer, type RunningServer } from "../src/server.js";
 import { HostStore } from "../src/hostStore.js";
 import { RecordingPipeline } from "../src/recordingPipeline.js";
 import { AgentUnavailableError } from "../src/agentGateway.js";
+import { RealtimeTranscriptionCoordinator } from "../src/realtimeTranscription.js";
 
 function rawHttp(port: number, path: string, hostHeader: string): Promise<{ status: number; body: string }> {
   return new Promise((resolve, reject) => {
@@ -137,7 +138,7 @@ describe("server", () => {
       const transcribe = await fetch(`${env.baseUrl}/api/agent/transcribe`, {
         method: "POST",
         headers,
-        body: JSON.stringify({ audioPath }),
+        body: JSON.stringify({ audioPath, language: "ja" }),
       });
       expect(transcribe.status).toBe(200);
       expect(await transcribe.json()).toEqual({
@@ -146,10 +147,47 @@ describe("server", () => {
         provider: "xai",
         chunks: 1,
       });
-      expect(transcribeSpy).toHaveBeenCalledWith({ audioPath });
+      expect(transcribeSpy).toHaveBeenCalledWith({ audioPath, language: "ja" });
     } finally {
       warmSpy.mockRestore();
       transcribeSpy.mockRestore();
+    }
+  });
+
+  it("protects and forwards realtime recording start/stop requests", async () => {
+    const configDir = join(env.root, ".config", "yulu");
+    const audioPath = join(env.root, "Movies", "Yulu", "Realtime_20260714_160000.wav");
+    writeFileSync(join(configDir, "mcp-token.json"), JSON.stringify({ token: "test-token" }));
+    writeFileSync(audioPath, Buffer.alloc(44));
+    const startSpy = vi.spyOn(RealtimeTranscriptionCoordinator.prototype, "start").mockResolvedValueOnce();
+    const stopSpy = vi.spyOn(RealtimeTranscriptionCoordinator.prototype, "stop").mockResolvedValueOnce(null);
+    const headers = { "Content-Type": "application/json", "Authorization": "Bearer test-token" };
+    try {
+      const unauthorized = await fetch(`${env.baseUrl}/api/recordings/realtime/start`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ audioPath, title: "Realtime", language: "zh" }),
+      });
+      expect(unauthorized.status).toBe(401);
+
+      const started = await fetch(`${env.baseUrl}/api/recordings/realtime/start`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ audioPath, title: "Realtime", language: "zh" }),
+      });
+      expect(started.status).toBe(200);
+      expect(startSpy).toHaveBeenCalledWith({ audioPath, title: "Realtime", language: "zh" });
+
+      const stopped = await fetch(`${env.baseUrl}/api/recordings/realtime/stop`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ audioPath }),
+      });
+      expect(stopped.status).toBe(200);
+      expect(stopSpy).toHaveBeenCalledWith(audioPath);
+    } finally {
+      startSpy.mockRestore();
+      stopSpy.mockRestore();
     }
   });
 
@@ -349,6 +387,10 @@ describe("server", () => {
     const moviesDir = join(env.root, "Movies", "Yulu");
     const token = "test-token";
     writeFileSync(join(configDir, "mcp-token.json"), JSON.stringify({ token }));
+    await mcpPost("tools/call", {
+      name: "glossary_add",
+      arguments: { term: "阿法学院", canonical: "阿尔法学院", scope: "both" },
+    });
     const audioPath = join(moviesDir, "Commit_20260711_120000.wav");
     writeFileSync(audioPath, Buffer.alloc(44));
     const response = await fetch(`${env.baseUrl}/api/recordings/completed`, {
@@ -371,7 +413,7 @@ describe("server", () => {
     expect(JSON.parse(transcriptRead.result?.content?.[0]?.text ?? "{}").transcript).toContain("committed transcript");
     await mcpPost("tools/call", {
       name: "recording_task_summary_stage",
-      arguments: { taskId, leaseToken: claimed!.leaseToken, summary: "# Committed summary" },
+      arguments: { taskId, leaseToken: claimed!.leaseToken, summary: "# 阿法学院 summary" },
     }, "/mcp/recording-artifact");
 
     const commit = await mcpPost("tools/call", {
@@ -389,7 +431,7 @@ describe("server", () => {
       name: "recording_committed_summary_read",
       arguments: { taskId, leaseToken: claimed!.leaseToken },
     }, "/mcp/recording-delivery") as { result?: { content?: Array<{ text?: string }> } };
-    expect(JSON.parse(committedSummary.result?.content?.[0]?.text ?? "{}").summary).toContain("Committed summary");
+    expect(JSON.parse(committedSummary.result?.content?.[0]?.text ?? "{}").summary).toContain("阿尔法学院 summary");
     await mcpPost("tools/call", {
       name: "recording_commit_notion_delivery",
       arguments: {
@@ -400,6 +442,7 @@ describe("server", () => {
     }, "/mcp/recording-delivery");
     expect(secondWriter.getTask(taskId)?.state).toBe("delivery_reported");
     expect(readFileSync(join(moviesDir, "Commit_20260711_120000.transcript.txt"), "utf8")).toContain("committed transcript");
+    expect(readFileSync(join(moviesDir, "Commit_20260711_120000.summary.md"), "utf8")).toContain("阿尔法学院 summary");
     secondWriter.close();
   });
 

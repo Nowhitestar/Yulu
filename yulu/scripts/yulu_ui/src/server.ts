@@ -34,6 +34,7 @@ import {
 import { startRecordingEventInbox } from "./recordingEventInbox.js";
 import { migrateLegacyAgentQueue } from "./legacyQueueMigration.js";
 import { acquireHostInstanceLock, type HostInstanceLock } from "./hostInstanceLock.js";
+import { RealtimeTranscriptionCoordinator } from "./realtimeTranscription.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -110,6 +111,12 @@ async function startLockedServer(
     paths: runtimePaths,
     pubsub: appPubSub,
     promptDb: () => dbProxy.prompts,
+    vocabDb: () => dbProxy.vocab,
+  });
+  const realtimeTranscription = new RealtimeTranscriptionCoordinator({
+    pubsub: appPubSub,
+    transcribe: (audioPath, language) => recordingPipeline.transcribeOnDemand({ audioPath, language }),
+    allowedRoot: runtimePaths.moviesDir,
   });
   try {
     const migration = migrateLegacyAgentQueue({
@@ -170,6 +177,7 @@ async function startLockedServer(
     audioPath: z.string().min(1),
     title: z.string().max(200).optional(),
     sendToNotion: z.boolean().optional(),
+    language: z.enum(["zh", "en", "ja", "auto"]).optional(),
   });
   app.post("/api/recordings/completed", async (c) => {
     if (!isAuthorizedToken(
@@ -184,6 +192,7 @@ async function startLockedServer(
       return c.json({ ok: false, error: "invalid_recording_completion", detail: (error as Error).message }, 400);
     }
     try {
+      await realtimeTranscription.stop(parsed.audioPath);
       const result = recordingPipeline.enqueueCompletion(parsed);
       return c.json({
         ok: true,
@@ -212,7 +221,40 @@ async function startLockedServer(
     }
   });
 
-  const AgentTranscriptionSchema = z.object({ audioPath: z.string().min(1) });
+  const RealtimeStartSchema = z.object({
+    audioPath: z.string().min(1),
+    title: z.string().max(200).default(""),
+    language: z.enum(["zh", "en", "ja", "auto"]),
+  });
+  const RealtimeStopSchema = z.object({ audioPath: z.string().min(1) });
+  app.post("/api/recordings/realtime/start", async (c) => {
+    if (!isAuthorizedToken(runtimePaths.mcpTokenJson, c.req.header("authorization") ?? "")) {
+      return c.json({ ok: false, error: "unauthorized" }, 401);
+    }
+    try {
+      const parsed = RealtimeStartSchema.parse(await c.req.json());
+      await realtimeTranscription.start(parsed);
+      return c.json({ ok: true });
+    } catch (error) {
+      return c.json({ ok: false, error: "realtime_start_failed", detail: (error as Error).message }, 400);
+    }
+  });
+  app.post("/api/recordings/realtime/stop", async (c) => {
+    if (!isAuthorizedToken(runtimePaths.mcpTokenJson, c.req.header("authorization") ?? "")) {
+      return c.json({ ok: false, error: "unauthorized" }, 401);
+    }
+    try {
+      const parsed = RealtimeStopSchema.parse(await c.req.json());
+      return c.json({ ok: true, result: await realtimeTranscription.stop(parsed.audioPath) });
+    } catch (error) {
+      return c.json({ ok: false, error: "realtime_stop_failed", detail: (error as Error).message }, 400);
+    }
+  });
+
+  const AgentTranscriptionSchema = z.object({
+    audioPath: z.string().min(1),
+    language: z.enum(["zh", "en", "ja", "auto"]).optional(),
+  });
   app.post("/api/agent/transcription/warm", async (c) => {
     if (!isAuthorizedToken(runtimePaths.mcpTokenJson, c.req.header("authorization") ?? "")) {
       return c.json({ ok: false, error: "unauthorized" }, 401);
@@ -385,6 +427,7 @@ async function startLockedServer(
   } catch (error) {
     logTailer.stop();
     inboxWatcher.stop();
+    try { await realtimeTranscription.close(); } catch { /* preserve the listen error */ }
     try { await recordingPipeline.close(); } catch { /* preserve the listen error */ }
     try { hostStore.close(); } catch { /* best effort */ }
     throw error;
@@ -400,6 +443,7 @@ async function startLockedServer(
   } catch (error) {
     logTailer.stop();
     inboxWatcher.stop();
+    try { await realtimeTranscription.close(); } catch { /* preserve the startup error */ }
     try { await recordingPipeline.close(); } catch { /* preserve the startup error */ }
     await new Promise<void>((resolve) => http.close(() => resolve()));
     try { hostStore.close(); } catch { /* best effort */ }
@@ -416,8 +460,23 @@ async function startLockedServer(
           logTailer.stop();
           inboxWatcher.stop();
           recordingEventInbox.stop();
+          await realtimeTranscription.close();
           await recordingPipeline.close();
-          await new Promise<void>((resolve) => http.close(() => resolve()));
+          await new Promise<void>((resolve) => {
+            let completed = false;
+            const done = () => {
+              if (completed) return;
+              completed = true;
+              clearTimeout(forceClose);
+              resolve();
+            };
+            const forceClose = setTimeout(() => {
+              http.closeAllConnections();
+              done();
+            }, 2_000);
+            forceClose.unref();
+            http.close(done);
+          });
           _prompts?.close();
           _vocab?.close();
           _search?.close();
@@ -530,5 +589,23 @@ async function bridgeNodeToFetch(
 
 // CLI entry
 if (import.meta.url === `file://${process.argv[1]}`) {
-  startServer().then((s) => console.log(`[yulu_ui] listening on http://127.0.0.1:${s.address.port}`));
+  startServer().then((server) => {
+    console.log(`[yulu_ui] listening on http://127.0.0.1:${server.address.port}`);
+    let stopping = false;
+    const shutdown = () => {
+      if (stopping) return;
+      stopping = true;
+      void server.close()
+        .then(() => process.exit(0))
+        .catch((error) => {
+          console.error(`[yulu_ui] shutdown failed: ${(error as Error).message}`);
+          process.exit(1);
+        });
+    };
+    process.once("SIGTERM", shutdown);
+    process.once("SIGINT", shutdown);
+  }).catch((error) => {
+    console.error(`[yulu_ui] failed to start: ${(error as Error).message}`);
+    process.exitCode = 1;
+  });
 }

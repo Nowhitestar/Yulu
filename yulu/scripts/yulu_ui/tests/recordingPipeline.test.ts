@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ArtifactStore, type AgentTaskWorkspace } from "../src/artifactStore.js";
@@ -36,6 +36,7 @@ describe("RecordingPipeline", () => {
     notionUnavailableAfterCapability?: boolean;
     legacyManualTask?: boolean;
     pollMs?: number;
+    glossaryRows?: Array<{ term: string; canonical: string; scope: "prompt" | "replace" | "both" }>;
     autoPrompts?: Array<{
       id: string;
       slug: string;
@@ -182,6 +183,9 @@ describe("RecordingPipeline", () => {
             .sort((a, b) => a.sort_order - b.sort_order || a.slug.localeCompare(b.slug))[0],
         }),
       }) : undefined,
+      vocabDb: opts.glossaryRows ? () => ({
+        prepare: () => ({ all: () => opts.glossaryRows }),
+      }) : undefined,
       gatewayFactory,
       pollMs: opts.pollMs ?? 60_000,
     });
@@ -222,6 +226,55 @@ describe("RecordingPipeline", () => {
     ))).toBe(true);
     expect(existsSync(join(configDir, "agent-tasks", first.task.id))).toBe(false);
     expect(() => writeFileSync(join(moviesDir, "proof"), "ok")).not.toThrow();
+  });
+
+  it("reuses a trusted same-language realtime transcript instead of retranscribing", async () => {
+    const { audioPath, moviesDir, transcribe } = setup();
+    writeFileSync(audioPath.replace(/\.wav$/, ".realtime.transcript.txt"), "这是会议的实时转写，with Alpha。\n");
+    writeFileSync(audioPath.replace(/\.wav$/, ".realtime.coverage.json"), JSON.stringify({
+      language: "zh",
+      covered_ms: 60_000,
+      total_ms: 60_000,
+      chunks: 4,
+      trusted: true,
+      reason: null,
+      finished: true,
+    }));
+
+    const result = pipeline!.enqueueCompletion({ audioPath, language: "zh" });
+    await vi.waitFor(() => expect(store!.getTask(result.task.id)?.state).toBe("completed"));
+
+    expect(transcribe).not.toHaveBeenCalled();
+    expect(readFileSync(join(moviesDir, "Demo_20260711_120000.transcript.txt"), "utf8"))
+      .toContain("这是会议的实时转写，with Alpha。");
+  });
+
+  it("applies glossary aliases to transcription and passes canonical terms to summary", async () => {
+    const setupResult = setup({
+      glossaryRows: [
+        { term: "阿尔法学院", canonical: "阿尔法学院", scope: "both" },
+        { term: "阿法学院", canonical: "阿尔法学院", scope: "both" },
+      ],
+    });
+    setupResult.transcribe.mockImplementationOnce(async (task) => {
+      const workspace = new ArtifactStore(setupResult.moviesDir, join(setupResult.configDir, "agent-tasks")).workspace(task.id);
+      writeFileSync(workspace.transcriptPath, "阿法学院会议");
+      return { transcript: "阿法学院会议", provider: "test-hermes", chunks: 1 };
+    });
+
+    const result = pipeline!.enqueueCompletion({ audioPath: setupResult.audioPath, language: "zh" });
+    await vi.waitFor(() => expect(store!.getTask(result.task.id)?.state).toBe("completed"));
+
+    expect(readFileSync(join(setupResult.moviesDir, "Demo_20260711_120000.transcript.txt"), "utf8"))
+      .toBe("阿尔法学院会议\n");
+    expect(setupResult.transcribe).toHaveBeenCalledWith(
+      expect.any(Object),
+      expect.any(Object),
+      expect.objectContaining({ prompt: expect.stringContaining("阿尔法学院") }),
+    );
+    expect(setupResult.runArtifactWorkflow).toHaveBeenCalledWith(expect.objectContaining({
+      glossary: expect.objectContaining({ summaryInstruction: expect.stringContaining("阿法学院 => 阿尔法学院") }),
+    }));
   });
 
   it("snapshots only the first automatic summary prompt at enqueue time", () => {
@@ -479,7 +532,9 @@ describe("RecordingPipeline", () => {
   });
 
   it("warms and reuses one Hermes gateway for allowed on-demand WAVs, then removes the workspace", async () => {
-    const setupResult = setup();
+    const setupResult = setup({
+      glossaryRows: [{ term: "阿尔法学院", canonical: "阿尔法学院", scope: "both" }],
+    });
     await expect(pipeline!.warmTranscription()).resolves.toEqual({ provider: "hermes" });
     const first = await pipeline!.transcribeOnDemand({ audioPath: setupResult.audioPath });
 
@@ -487,7 +542,7 @@ describe("RecordingPipeline", () => {
     mkdirSync(dictationDir, { recursive: true });
     const dictationWav = join(dictationDir, "dictation.wav");
     writeFileSync(dictationWav, Buffer.alloc(44));
-    const second = await pipeline!.transcribeOnDemand({ audioPath: dictationWav });
+    const second = await pipeline!.transcribeOnDemand({ audioPath: dictationWav, language: "ja" });
 
     expect(first).toEqual({ transcript: "dictation transcript", provider: "test-hermes", chunks: 1 });
     expect(second.transcript).toBe("dictation transcript");
@@ -495,8 +550,14 @@ describe("RecordingPipeline", () => {
     expect(setupResult.warmTranscription).toHaveBeenCalledTimes(1);
     expect(setupResult.transcribeAudio).toHaveBeenNthCalledWith(1, realpathSync(setupResult.audioPath), expect.objectContaining({
       dir: expect.stringContaining(".agent-workspaces/transcribe-"),
-    }));
-    expect(setupResult.transcribeAudio).toHaveBeenNthCalledWith(2, realpathSync(dictationWav), expect.any(Object));
+    }), "zh", expect.objectContaining({ prompt: expect.stringContaining("阿尔法学院") }));
+    expect(setupResult.transcribeAudio).toHaveBeenNthCalledWith(
+      2,
+      realpathSync(dictationWav),
+      expect.any(Object),
+      "ja",
+      expect.objectContaining({ prompt: expect.stringContaining("阿尔法学院") }),
+    );
     expect(existsSync(setupResult.lastOnDemandWorkspace())).toBe(false);
   });
 
