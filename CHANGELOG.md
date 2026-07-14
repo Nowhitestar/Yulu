@@ -4,6 +4,13 @@ All notable changes to Yulu are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.20.0](https://github.com/Nowhitestar/Yulu/compare/v0.19.0...v0.20.0) (2026-07-14)
+
+
+### Features
+
+* **recordings:** keep capture and transcription continuous ([#97](https://github.com/Nowhitestar/Yulu/issues/97)) ([f1fabf9](https://github.com/Nowhitestar/Yulu/commit/f1fabf9a829f194f7810f64142d746d1e451a2bb))
+
 ## [0.19.0](https://github.com/Nowhitestar/Yulu/compare/v0.18.1...v0.19.0) (2026-07-13)
 
 
