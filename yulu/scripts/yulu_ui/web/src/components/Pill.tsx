@@ -15,12 +15,15 @@ interface RecordingMsg {
   file?: string;
 }
 
+type RealtimeMsg = import("../../../src/pubsub.js").AppChannels["realtime-transcript"];
+
 export function Pill() {
   const t = useT();
   const initial = trpc.recording.state.useQuery();
   const [state, setState] = useState<PillState>("idle");
   const [elapsed, setElapsed] = useState(0);
   const [level, setLevel] = useState(0);
+  const [realtime, setRealtime] = useState<RealtimeMsg | null>(null);
   const hotkey = (initial.data as { hotkey?: string } | undefined)?.hotkey ?? "⌘⇧V";
   const toggle = trpc.recording.toggle.useMutation();
   const hydratedRef = useRef(false);
@@ -39,12 +42,17 @@ export function Pill() {
 
   useWsChannel("recording", (msg: RecordingMsg) => {
     setState(msg.state);
+    if (msg.state === "idle" || msg.state === "recording") setRealtime(null);
     if (typeof msg.elapsedSec === "number") setElapsed(msg.elapsedSec);
     if (typeof msg.level === "number")      setLevel(msg.level);
   });
 
   useWsChannel("daemons", (msg) => {
     if (msg.name === "com.yulu.audiodaemon" && msg.status !== "running") setState("daemonDown");
+  });
+
+  useWsChannel("realtime-transcript", (msg) => {
+    setRealtime(msg);
   });
 
   switch (state) {
@@ -59,11 +67,19 @@ export function Pill() {
 
     case "recording":
       return (
-        <div className="pill pill-recording" role="status" aria-label={t("pill.recordingAria")}>
-          <span className="pill-dot pulse" />
-          <span className="pill-time">{formatElapsed(elapsed)}</span>
-          <Meter level={level} />
-          <button className="pill-stop" onClick={() => toggle.mutate()} aria-label={t("pill.stopAria")}>■</button>
+        <div className="pill-live-stack">
+          {realtime?.text && (
+            <div className="pill-live-transcript" role="log" aria-live="polite">
+              <div className="pill-live-heading">{t("pill.realtime")}</div>
+              <div className="pill-live-copy">{tailLines(realtime.text, 6)}</div>
+            </div>
+          )}
+          <div className="pill pill-recording" role="status" aria-label={t("pill.recordingAria")}>
+            <span className="pill-dot pulse" />
+            <span className="pill-time">{formatElapsed(elapsed)}</span>
+            <Meter level={level} />
+            <button className="pill-stop" onClick={() => toggle.mutate()} aria-label={t("pill.stopAria")}>■</button>
+          </div>
         </div>
       );
 
@@ -91,6 +107,10 @@ export function Pill() {
         </a>
       );
   }
+}
+
+function tailLines(text: string, count: number): string {
+  return text.split(/\n+/).map((line) => line.trim()).filter(Boolean).slice(-count).join("\n");
 }
 
 function formatElapsed(sec: number): string {

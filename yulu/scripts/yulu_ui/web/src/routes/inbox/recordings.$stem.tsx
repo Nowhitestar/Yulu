@@ -853,10 +853,10 @@ export function RecordingReader() {
             ) : <EmptyState label={t("reader.empty.summary")} />
           )}
           {tab === "transcript" && (
-            data.transcript
+            (data.transcript || data.realtime)
               ? (
                 <TranscriptView
-                  text={data.transcript}
+                  text={data.transcript ?? data.realtime ?? ""}
                   speakerData={data.speakerData}
                   onSeek={handleSeek}
                   onAssignSpeaker={handleAssignSegmentSpeaker}

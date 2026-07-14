@@ -12,6 +12,12 @@ describe("settingsRegistry", () => {
     }
   });
   it("language is an Agent input and applies without daemon reload", () => {
+    const def = defFor("transcription.language");
+    expect(def?.type).toBe("select");
+    for (const language of ["zh", "en", "ja", "auto"]) {
+      expect(def?.validate.safeParse(language).success).toBe(true);
+    }
+    expect(def?.validate.safeParse("fr").success).toBe(false);
     expect(reloadFor("transcription.language")).toEqual({ kind: "none" });
   });
   it("llm.command 改完无需动作(读取即生效)", () => {

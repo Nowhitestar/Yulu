@@ -24,6 +24,7 @@ import {
 import { resolveAgentRuntime } from "../agentRuntime.js";
 import { runAgentShareSummary, runAgentSummarize } from "../agentActions.js";
 import { agentDestinationHint, agentPluginOverview, normalizeConsoleAgent } from "../agentPlugins.js";
+import { applyGlossaryContract, loadGlossaryContract } from "../glossaryContract.js";
 
 // Every recording is a meeting now (voicemails were unified into meetings and
 // the separate voicemails/ directory was merged into the root). A recording is
@@ -944,10 +945,14 @@ export const recordingsRouter = router({
           scriptDir: ctx.paths.scriptDir,
           moviesDir: ctx.paths.moviesDir,
         });
-        const instructions = renderStandaloneSummaryInstructions(
+        const baseInstructions = renderStandaloneSummaryInstructions(
           prompt?.content ?? STANDALONE_SUMMARY_INSTRUCTIONS,
           { title, date: recordingDateFromStem(input.stem) },
         );
+        const glossary = loadGlossaryContract(ctx.db?.vocab);
+        const instructions = [baseInstructions, glossary.summaryInstruction]
+          .filter(Boolean)
+          .join("\n\n");
         const result = await runAgentSummarize({
           configDir: ctx.paths.configDir,
           scriptDir: ctx.paths.scriptDir,
@@ -956,7 +961,8 @@ export const recordingsRouter = router({
           title,
           instructions,
         });
-        writeTextAtomic(join(dir, `${input.stem}.summary.md`), `${result.stdout.trim()}\n`);
+        const summary = applyGlossaryContract(result.stdout.trim(), glossary);
+        writeTextAtomic(join(dir, `${input.stem}.summary.md`), `${summary}\n`);
         clearStaleMarker(summaryStalePath(dir, input.stem));
         ctx.pubsub.publish("recordings-changed", { reason: "changed" });
         ctx.pubsub.publish("jobs", { stem: input.stem, jobId: result.sessionId, state: "done" });

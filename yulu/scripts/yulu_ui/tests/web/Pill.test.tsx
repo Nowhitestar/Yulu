@@ -61,4 +61,19 @@ describe("Pill state machine", () => {
     act(() => wsHandlers.get("daemons")?.({ name: "com.yulu.audiodaemon", status: "stopped", pid: 0 }));
     expect(screen.getByText(/音频守护/)).toBeInTheDocument();
   });
+
+  it("shows realtime Chinese transcript while recording", () => {
+    render(<Pill />);
+    act(() => wsHandlers.get("recording")?.({ state: "recording" }));
+    act(() => wsHandlers.get("realtime-transcript")?.({
+      status: "transcribing",
+      stem: "中文会议_20260714_160000",
+      language: "zh",
+      text: "这是中文，with an English term",
+      coveredMs: 15_000,
+      trusted: false,
+    }));
+    expect(screen.getByText(/实时转写/)).toBeInTheDocument();
+    expect(screen.getByText(/这是中文/)).toBeInTheDocument();
+  });
 });

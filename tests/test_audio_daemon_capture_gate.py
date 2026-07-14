@@ -251,6 +251,40 @@ def test_pitfall3_zero_buffer_detection_and_rebuild():
     assert "buildTap" in src, "tap (re)build entry point buildTap is missing"
 
 
+def test_pitfall3_zero_buffer_recovery_is_bounded_and_generation_scoped():
+    src = _source()
+    assert "ZeroBufferRecoveryPolicy" in src
+    assert "maxAttempts: 3" in src
+    assert "captureGeneration" in src
+    assert "recoverFromZeroBuffers(generation:" in src
+
+    start = src.index("private func recoverFromZeroBuffers(generation:")
+    end = src.index("private func teardown()", start)
+    body = src[start:end]
+    assert body.index("captureGeneration == generation") < body.index("teardown()")
+
+
+def test_mic_capture_restarts_after_audio_route_change():
+    src = _source()
+    start = src.index("class MicCapture")
+    end = src.index("// ─── SCStream", start)
+    body = src[start:end]
+    assert ".AVAudioEngineConfigurationChange" in body
+    assert "restartAfterConfigurationChange" in body
+    assert "noteCaptureRouteChange" in body
+
+
+def test_meeting_silence_threshold_prompts_instead_of_stopping_capture_directly():
+    src = _source()
+    start = src.index("rec.onStopRequest =")
+    end = src.index("// Probe TCC permissions", start)
+    body = src[start:end]
+    assert "launchMeetingSilencePrompt()" in body
+    assert "SYS_DISABLED" in body
+    assert 'appendingPathComponent("meeting_daemon.py")' in src
+    assert 'meetingDaemon.path, "auto_stop"' in src
+
+
 def test_tap_feeds_existing_sink():
     # The tap must push into the SAME frame sink as the SCK arm and reuse the
     # exact SysAudioOutput Int16 clamp (no re-derivation).

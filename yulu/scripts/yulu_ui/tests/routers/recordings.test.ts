@@ -22,7 +22,7 @@ vi.mock("../../src/agentActions.js", () => ({
   runAgentShareSummary: agentActions.share,
 }));
 
-function mkCtx(opts: { moviesDir: string }): AppContext {
+function mkCtx(opts: { moviesDir: string; glossaryRows?: Array<Record<string, unknown>> }): AppContext {
   const promptRows: Array<Record<string, unknown>> = [];
   const transcribeOnDemand = vi.fn(async () => ({
     transcript: "fresh transcript",
@@ -62,7 +62,12 @@ function mkCtx(opts: { moviesDir: string }): AppContext {
     pubsub: new PubSub<AppChannels>(),
     config: { read: () => ({ llm: { command: [process.execPath] } }) },
     launchctl: { restart: vi.fn(), status: vi.fn(), start: vi.fn(), stop: vi.fn(), sighup: vi.fn() },
-    db: { prompts: promptsDb },
+    db: {
+      prompts: promptsDb,
+      vocab: {
+        prepare: () => ({ all: () => opts.glossaryRows ?? [] }),
+      },
+    },
     recordingPipeline: { transcribeOnDemand },
   } as unknown as AppContext;
 }
@@ -197,7 +202,15 @@ describe("recordings router", () => {
     const stem = "TeamSync_20260102_090000";
     writeFileSync(join(mvDir, `${stem}.wav`), wavWithDuration(1));
     writeFileSync(join(mvDir, `${stem}.transcript.txt`), "existing transcript");
-    const ctx = mkCtx({ moviesDir: mvDir });
+    agentActions.summarize.mockResolvedValueOnce({
+      stdout: "# 阿法学院\n",
+      stderr: "",
+      sessionId: "summary-session",
+    });
+    const ctx = mkCtx({
+      moviesDir: mvDir,
+      glossaryRows: [{ term: "阿法学院", canonical: "阿尔法学院", scope: "both" }],
+    });
 
     await createCaller(recordingsRouter, ctx).summarize({ stem });
 
@@ -205,9 +218,9 @@ describe("recordings router", () => {
     expect(agentActions.summarize).toHaveBeenCalledWith(expect.objectContaining({
       transcriptPath: join(mvDir, `${stem}.transcript.txt`),
       title: "TeamSync",
-      instructions: expect.not.stringContaining("Produce an accurate transcript"),
+      instructions: expect.stringContaining("阿法学院 => 阿尔法学院"),
     }));
-    expect(readFileSync(join(mvDir, `${stem}.summary.md`), "utf8")).toBe("# Fresh summary\n");
+    expect(readFileSync(join(mvDir, `${stem}.summary.md`), "utf8")).toBe("# 阿尔法学院\n");
   });
 
   it("blocks sharing an old summary after re-transcription until it is regenerated", async () => {

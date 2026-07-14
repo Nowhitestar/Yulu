@@ -111,7 +111,7 @@ export const ConfigSchema = z.object({
     backend: z.string().optional(),
   }).default({}),
   transcription: z.object({
-    language: z.string().default("zh"),
+    language: z.enum(["zh", "en", "ja", "auto"]).default("zh"),
     glossary: z.array(z.string()).optional(),
     dictation: DictationSchema,
   }).passthrough().default({}),

@@ -156,7 +156,7 @@ describe("Hermes recording Agent gateway", () => {
     ))).toContain("sessions export");
   });
 
-  it("keeps health lightweight and shares one concurrent async contract probe", async () => {
+  it("keeps health lightweight and shares one sequential async contract probe", async () => {
     const root = mkdtempSync(join(tmpdir(), "yulu-hermes-contract-"));
     const originalPath = process.env.PATH;
     const hermes = join(root, "hermes");
@@ -195,14 +195,13 @@ describe("Hermes recording Agent gateway", () => {
       const first = gateway.warmTranscription();
       const second = gateway.warmTranscription();
       const both = Promise.allSettled([first, second]);
-      await vi.waitFor(() => expect(probe).toHaveBeenCalledTimes(5));
-      expect(new Set(pending.map(({ args }) => args.join(" ")))).toEqual(new Set([
+      const expectedOrder = [
         "serve --help",
         "sessions export --help",
         "config set --help",
         "--help",
         "mcp list",
-      ]));
+      ];
 
       const outputs: Record<string, string> = {
         "serve --help": "--port --host --skip-build",
@@ -212,8 +211,11 @@ describe("Hermes recording Agent gateway", () => {
         // Deliberately omit yulu_delivery so warm fails before starting serve.
         "mcp list": "yulu_artifact http://127.0.0.1:7777/mcp/recording-artifact all enabled",
       };
-      for (const item of pending) {
-        item.resolve({ code: 0, stdout: outputs[item.args.join(" ")] ?? "", stderr: "" });
+      for (const [index, expected] of expectedOrder.entries()) {
+        await vi.waitFor(() => expect(probe).toHaveBeenCalledTimes(index + 1));
+        const item = pending[index]!;
+        expect(item.args.join(" ")).toBe(expected);
+        item.resolve({ code: 0, stdout: outputs[expected] ?? "", stderr: "" });
       }
       const results = await both;
       for (const result of results) {
@@ -238,11 +240,22 @@ describe("Hermes recording Agent gateway", () => {
       summaryPath: "/private/raw/task/summary.md",
       chunkPattern: "/private/raw/task/audio-%03d.wav",
     };
-    const artifact = buildHermesRecordingPrompt({ task, leaseToken, workspace, transcriptionProvider: "xai" });
+    const artifact = buildHermesRecordingPrompt({
+      task,
+      leaseToken,
+      workspace,
+      transcriptionProvider: "xai",
+      glossary: {
+        prompt: "阿尔法学院",
+        replacements: [{ term: "阿法学院", canonical: "阿尔法学院" }],
+        summaryInstruction: "Use the canonical term 阿尔法学院. Replace 阿法学院 => 阿尔法学院.",
+      },
+    });
     expect(artifact).toContain("recording_task_transcript_read");
     expect(artifact).toContain("recording_task_summary_stage");
     expect(artifact).not.toContain("/private/raw");
     expect(artifact).not.toContain("Notion search");
+    expect(artifact).toContain("Use the canonical term 阿尔法学院");
 
     const delivery = buildHermesNotionDeliveryPrompt({ task, leaseToken, workspace });
     expect(delivery).toContain("new, separately authorized");

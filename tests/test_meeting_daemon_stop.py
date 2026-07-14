@@ -41,6 +41,7 @@ def _prepare_stop(monkeypatch, tmp_path, *, returncode=0, final_path=None):
         "audio_path": str(wav),
         "file_path": str(wav),
         "backend": "daemon",
+        "transcription_language": "zh",
     })
     monkeypatch.setattr(meeting_daemon, "set_recording_stopped", lambda **_kw: {})
     monkeypatch.setattr(meeting_daemon, "load_schedule", lambda: {"events": [], "meetings": []})
@@ -93,6 +94,7 @@ def test_stop_posts_completion_to_host_and_never_runs_legacy_pipeline(monkeypatc
             "audioPath": str(wav.resolve()),
             "title": "Team Sync",
             "sendToNotion": True,
+            "language": "zh",
         },
         "timeout": 5.0,
     }
@@ -121,6 +123,7 @@ def test_stop_spools_completion_atomically_when_host_is_unavailable(monkeypatch,
         "audioPath": str(wav.resolve()),
         "title": "Team Sync",
         "sendToNotion": True,
+        "language": "zh",
     }
     assert not list(meeting_daemon.RECORDING_EVENTS_DIR.glob("*.tmp"))
     assert not list(meeting_daemon.RECORDING_EVENTS_DIR.glob(".*.tmp"))
@@ -178,12 +181,54 @@ def test_auto_send_notion_uses_agent_pipeline_consent(monkeypatch, tmp_path):
         "agent_pipeline": {"auto_send_notion": False},
     }), encoding="utf-8")
     assert meeting_daemon._recording_completed_payload("/tmp/a.wav", "A")["sendToNotion"] is False
+    assert meeting_daemon._recording_completed_payload("/tmp/a.wav", "A")["language"] == "zh"
 
     cfg.write_text(json.dumps({"agent_pipeline": {"auto_send_notion": True}}), encoding="utf-8")
     assert meeting_daemon._recording_completed_payload("/tmp/a.wav", "A")["sendToNotion"] is True
 
     cfg.write_text("{}", encoding="utf-8")
     assert meeting_daemon._recording_completed_payload("/tmp/a.wav", "A")["sendToNotion"] is False
+
+
+def test_realtime_request_freezes_configured_language_and_uses_bearer_token(monkeypatch, tmp_path):
+    import meeting_daemon
+
+    token_path = tmp_path / "mcp-token.json"
+    config_path = tmp_path / "config.json"
+    token_path.write_text(json.dumps({"token": "secret"}), encoding="utf-8")
+    config_path.write_text(json.dumps({"transcription": {"language": "ja"}}), encoding="utf-8")
+    monkeypatch.setattr(meeting_daemon, "MCP_TOKEN_PATH", token_path)
+    monkeypatch.setattr(meeting_daemon, "CONFIG_PATH", config_path)
+    monkeypatch.setenv("YULU_UI_PORT", "8123")
+    seen = {}
+
+    def fake_urlopen(request, timeout):
+        seen.update({
+            "url": request.full_url,
+            "authorization": request.get_header("Authorization"),
+            "payload": json.loads(request.data.decode("utf-8")),
+            "timeout": timeout,
+        })
+        return _Response(status=200)
+
+    monkeypatch.setattr(meeting_daemon, "urlopen", fake_urlopen)
+
+    language = meeting_daemon._transcription_language()
+    assert meeting_daemon._post_realtime("start", {
+        "audioPath": "/tmp/meeting.wav",
+        "title": "日本語会議",
+        "language": language,
+    }) is True
+    assert seen == {
+        "url": "http://127.0.0.1:8123/api/recordings/realtime/start",
+        "authorization": "Bearer secret",
+        "payload": {
+            "audioPath": "/tmp/meeting.wav",
+            "title": "日本語会議",
+            "language": "ja",
+        },
+        "timeout": 30.0,
+    }
 
 
 def test_stop_failure_or_missing_file_does_not_dispatch(monkeypatch, tmp_path):

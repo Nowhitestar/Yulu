@@ -68,6 +68,35 @@
   color: var(--red);
   box-shadow: var(--edge-shadow), 0 0 0 1px var(--red);
 }
+.pill-live-stack { position: relative; }
+.pill-live-transcript {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 10px);
+  width: min(420px, calc(100vw - 40px));
+  padding: 12px 14px;
+  border: 1px solid var(--edge-card);
+  border-radius: var(--radius-control);
+  background: color-mix(in oklch, var(--glass-2) 92%, var(--surface-solid));
+  backdrop-filter: var(--blur-glass);
+  -webkit-backdrop-filter: var(--blur-glass);
+  box-shadow: var(--shadow);
+  color: var(--fg);
+  z-index: 110;
+}
+.pill-live-heading {
+  margin-bottom: 6px;
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 750;
+}
+.pill-live-copy {
+  max-height: 9em;
+  overflow: hidden;
+  white-space: pre-line;
+  font-size: 13px;
+  line-height: 1.5;
+}
 .pill-warn { font-size: 14px; }
 
 .topbar-record .pill {
@@ -122,4 +151,5 @@
     padding: 0 12px;
     font-size: 12px;
   }
+  .pill-live-transcript { right: -8px; }
 }
