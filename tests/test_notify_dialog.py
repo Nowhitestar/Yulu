@@ -12,6 +12,29 @@ sys.path.insert(0, str(SCRIPTS))
 import notify
 
 
+def test_stop_notification_distinguishes_manual_and_automatic(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        notify,
+        "remind",
+        lambda title, message, subtitle="": calls.append((title, message, subtitle)),
+    )
+
+    notify.notify_stop("Team Sync", "manual")
+    notify.notify_stop("Team Sync", "automatic")
+
+    assert calls[0] == (
+        "Yulu",
+        "会议「Team Sync」\n已停止录制，正在生成纪要...",
+        "录制已停止",
+    )
+    assert calls[1] == (
+        "Yulu",
+        "会议「Team Sync」\n已自动停止录制，正在生成纪要...",
+        "自动停止",
+    )
+
+
 def _capture_osascript_script(monkeypatch):
     """Patch subprocess.run so that notify._fallback_dialog produces an
     AppleScript we can inspect without actually showing a dialog."""

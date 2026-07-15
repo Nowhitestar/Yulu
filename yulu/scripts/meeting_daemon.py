@@ -684,8 +684,10 @@ def cmd_auto_stop():
     choice = result.stdout.strip()
     print(f"Stop choice: {choice}")
 
-    if choice in ("停止录制", "停止", "timeout"):
-        _stop_and_process()
+    if choice in ("停止录制", "停止"):
+        _stop_and_process(stop_reason="manual")
+    elif choice == "timeout":
+        _stop_and_process(stop_reason="automatic")
     else:
         # 用户选继续：再延 30 分钟问一次。save_schedule 会顺手清理已过期 ask_stop。
         end_at = datetime.now() + timedelta(minutes=30)
@@ -701,7 +703,8 @@ def cmd_auto_stop():
 
 def cmd_stop():
     print("🛑 手动停止录制")
-    _stop_and_process()
+    if not _stop_and_process():
+        raise SystemExit(1)
 
 
 def _active_recording_info():
@@ -735,8 +738,13 @@ def _launch_status_window(title):
     log_path = CONFIG_DIR / "recorder_status.log"
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     log_file = log_path.open("ab")
-    proc = subprocess.Popen([str(status_bin), title, str(STATE_PATH)],
-                            stdout=log_file, stderr=log_file)
+    proc = subprocess.Popen(
+        [str(status_bin), title, str(STATE_PATH)],
+        stdin=subprocess.DEVNULL,
+        stdout=log_file,
+        stderr=log_file,
+        start_new_session=True,
+    )
     log_file.close()
     try:
         exited = proc.wait(timeout=0.4)
@@ -767,14 +775,14 @@ def _kill_status_window():
             pass
 
 
-def _stop_and_process():
-    # 先关状态浮窗
-    _kill_status_window()
+def _stop_and_process(stop_reason="manual"):
+    # The caption window observes the state file and exits only after capture
+    # confirms stop. Killing it here would make a failed stop look successful.
 
     rec = _active_recording_info()
     if not rec:
         print("没有正在进行的录制", file=sys.stderr)
-        return
+        return False
 
     title = rec.get("title", "meeting")
     audio_path = rec.get("audio_path") or rec.get("file_path")
@@ -789,7 +797,7 @@ def _stop_and_process():
     if stop_result.returncode != 0:
         detail = (stop_result.stderr or stop_result.stdout or "unknown stop error").strip()
         print(f"❌ 停止录制失败: {detail}", file=sys.stderr)
-        return
+        return False
     for line in stop_result.stdout.splitlines():
         if line.startswith("FINAL_RECORDING_PATH="):
             audio_path = line.split("=", 1)[1].strip() or audio_path
@@ -798,18 +806,18 @@ def _stop_and_process():
     audio_path = str(audio_path or "").strip()
     if not audio_path:
         print("❌ 停止录制后未获得录音路径", file=sys.stderr)
-        return
+        return False
     resolved_audio_path = Path(audio_path).expanduser().resolve()
     if not resolved_audio_path.is_file():
         print(f"❌ 停止录制后找不到录音文件: {resolved_audio_path}", file=sys.stderr)
-        return
+        return False
     audio_path = str(resolved_audio_path)
 
     if not _post_realtime("stop", {"audioPath": audio_path}):
         print("⚠️ 实时转写收尾失败；将使用完整录音重新转写", file=sys.stderr)
 
     notify = SCRIPT_DIR / "notify.py"
-    subprocess.Popen([sys.executable, str(notify), "notify_stop", title],
+    subprocess.Popen([sys.executable, str(notify), "notify_stop", title, stop_reason],
                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     set_recording_stopped(path=STATE_PATH)
@@ -829,6 +837,7 @@ def _stop_and_process():
         pass
 
     print(f"✅ 录音已保存: {audio_path}")
+    return True
 
 
 # ───────────────────────────────────────────────

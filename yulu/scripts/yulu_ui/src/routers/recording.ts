@@ -184,7 +184,7 @@ export const recordingRouter = router({
       };
     } catch {
       return {
-        state: "idle",
+        state: "unknown",
         hotkey: "?",
         launcherPid: undefined,
         dictationActive: false,

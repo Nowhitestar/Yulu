@@ -20,6 +20,24 @@ func statusAgentScriptDir() -> String {
         ?? "\((Bundle.main.bundlePath as NSString).deletingLastPathComponent)"
 }
 
+func yuluPythonProcess(scriptDir: String) -> Process {
+    let task = Process()
+    let candidates = [
+        "/opt/homebrew/bin/python3",
+        "/usr/local/bin/python3",
+        "/usr/bin/python3",
+    ]
+    let python = candidates.first(where: FileManager.default.isExecutableFile(atPath:))
+        ?? "/usr/bin/python3"
+    task.executableURL = URL(fileURLWithPath: python)
+    task.currentDirectoryURL = URL(fileURLWithPath: scriptDir)
+    var env = ProcessInfo.processInfo.environment
+    let existing = env["PYTHONPATH"] ?? ""
+    env["PYTHONPATH"] = existing.isEmpty ? scriptDir : "\(scriptDir):\(existing)"
+    task.environment = env
+    return task
+}
+
 func log(_ msg: String) {
     let ts = ISO8601DateFormatter().string(from: Date())
     let line = "[\(ts)] \(msg)\n"
@@ -277,13 +295,8 @@ func defaultHotkeySpecs() -> [HotkeySpec] {
 }
 
 func readHotkeysFromConfig() -> [HotkeySpec] {
-    let task = Process()
-    task.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-    task.arguments = [
-        "PYTHONPATH=\(statusAgentScriptDir())",
-        "python3", "status_agent_config.py", "hotkeys", "--json",
-    ]
-    task.currentDirectoryURL = URL(fileURLWithPath: statusAgentScriptDir())
+    let task = yuluPythonProcess(scriptDir: statusAgentScriptDir())
+    task.arguments = ["status_agent_config.py", "hotkeys", "--json"]
     let pipe = Pipe()
     task.standardOutput = pipe
     task.standardError = Pipe()
@@ -639,13 +652,10 @@ class RecordingLauncher {
     // observes recording=true off the audio daemon and drives the indicator.
     @discardableResult
     static func launchStart(title: String) -> Int32? {
-        let task = Process()
-        task.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        let task = yuluPythonProcess(scriptDir: scriptDir())
         task.arguments = [
-            "PYTHONPATH=\(scriptDir())",
-            "python3", "meeting_daemon.py", "start", title,
+            "meeting_daemon.py", "start", title,
         ]
-        task.currentDirectoryURL = URL(fileURLWithPath: scriptDir())
         task.standardInput = FileHandle.nullDevice
         let logFH = launcherLog()
         task.standardOutput = logFH
@@ -661,15 +671,12 @@ class RecordingLauncher {
 
     @discardableResult
     static func launchStartMeeting(meetingId: String, join: Bool) -> Int32? {
-        let task = Process()
-        task.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        let task = yuluPythonProcess(scriptDir: scriptDir())
         var args = [
-            "PYTHONPATH=\(scriptDir())",
-            "python3", "meeting_daemon.py", "start_meeting", meetingId,
+            "meeting_daemon.py", "start_meeting", meetingId,
         ]
         if join { args.append("--join") }
         task.arguments = args
-        task.currentDirectoryURL = URL(fileURLWithPath: scriptDir())
         task.standardInput = FileHandle.nullDevice
         let logFH = launcherLog()
         task.standardOutput = logFH
@@ -684,18 +691,13 @@ class RecordingLauncher {
     }
 
     // Stop the recording. meeting_daemon.py stop sends the daemon stop RPC and
-    // then runs the (potentially slow) transcribe + enqueue pipeline, so it's
-    // spawned detached and its PID returned to the caller — the agent tracks it
-    // as the "processing" launcher until it exits.
+    // then runs the (potentially slow) per-recording transcription pipeline.
     @discardableResult
     static func launchStop() -> Int32? {
-        let task = Process()
-        task.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        let task = yuluPythonProcess(scriptDir: scriptDir())
         task.arguments = [
-            "PYTHONPATH=\(scriptDir())",
-            "python3", "meeting_daemon.py", "stop",
+            "meeting_daemon.py", "stop",
         ]
-        task.currentDirectoryURL = URL(fileURLWithPath: scriptDir())
         task.standardInput = FileHandle.nullDevice
         let logFH = launcherLog()
         task.standardOutput = logFH
@@ -711,11 +713,9 @@ class RecordingLauncher {
 
     @discardableResult
     static func launchDictateToggle(targetBundleId: String = "", targetAppName: String = "") -> Int32? {
-        let task = Process()
-        task.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        let task = yuluPythonProcess(scriptDir: scriptDir())
         var args = [
-            "PYTHONPATH=\(scriptDir())",
-            "python3", "dictate.py", "toggle",
+            "dictate.py", "toggle",
             "--json",
         ]
         if !targetBundleId.isEmpty {
@@ -725,7 +725,6 @@ class RecordingLauncher {
             args.append(contentsOf: ["--target-app-name", targetAppName])
         }
         task.arguments = args
-        task.currentDirectoryURL = URL(fileURLWithPath: scriptDir())
         task.standardInput = FileHandle.nullDevice
         let logFH = launcherLog()
         task.standardOutput = logFH
@@ -741,11 +740,9 @@ class RecordingLauncher {
 
     @discardableResult
     static func launchDictateTranslateToggle(targetLanguage: String, targetBundleId: String = "", targetAppName: String = "") -> Int32? {
-        let task = Process()
-        task.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        let task = yuluPythonProcess(scriptDir: scriptDir())
         var args = [
-            "PYTHONPATH=\(scriptDir())",
-            "python3", "dictate.py", "toggle",
+            "dictate.py", "toggle",
             "--translate-to", targetLanguage.isEmpty ? "English" : targetLanguage,
             "--json",
         ]
@@ -756,7 +753,6 @@ class RecordingLauncher {
             args.append(contentsOf: ["--target-app-name", targetAppName])
         }
         task.arguments = args
-        task.currentDirectoryURL = URL(fileURLWithPath: scriptDir())
         task.standardInput = FileHandle.nullDevice
         let logFH = launcherLog()
         task.standardOutput = logFH
@@ -772,11 +768,9 @@ class RecordingLauncher {
 
     @discardableResult
     static func launchWarmDictation(targetLanguage: String = "") -> Int32? {
-        let task = Process()
-        task.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        let task = yuluPythonProcess(scriptDir: scriptDir())
         var args = [
-            "PYTHONPATH=\(scriptDir())",
-            "python3", "dictate.py", "warm",
+            "dictate.py", "warm",
             "--timeout-sec", "90",
             "--json",
         ]
@@ -784,7 +778,6 @@ class RecordingLauncher {
             args.append(contentsOf: ["--translate-to", targetLanguage])
         }
         task.arguments = args
-        task.currentDirectoryURL = URL(fileURLWithPath: scriptDir())
         task.standardInput = FileHandle.nullDevice
         let logFH = launcherLog()
         task.standardOutput = logFH
@@ -800,16 +793,13 @@ class RecordingLauncher {
 
     @discardableResult
     static func launchVoiceChatToggle() -> Int32? {
-        let task = Process()
-        task.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        let task = yuluPythonProcess(scriptDir: scriptDir())
         task.arguments = [
-            "PYTHONPATH=\(scriptDir())",
-            "python3", "dictate.py", "ask-toggle",
+            "dictate.py", "ask-toggle",
             "--no-paste",
             "--no-copy",
             "--json",
         ]
-        task.currentDirectoryURL = URL(fileURLWithPath: scriptDir())
         task.standardInput = FileHandle.nullDevice
         let logFH = launcherLog()
         task.standardOutput = logFH
@@ -825,14 +815,11 @@ class RecordingLauncher {
 
     @discardableResult
     static func launchDictateCancel() -> Int32? {
-        let task = Process()
-        task.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        let task = yuluPythonProcess(scriptDir: scriptDir())
         task.arguments = [
-            "PYTHONPATH=\(scriptDir())",
-            "python3", "dictate.py", "cancel",
+            "dictate.py", "cancel",
             "--json",
         ]
-        task.currentDirectoryURL = URL(fileURLWithPath: scriptDir())
         task.standardInput = FileHandle.nullDevice
         let logFH = launcherLog()
         task.standardOutput = logFH
@@ -982,15 +969,8 @@ class IPCServer {
                 : URL(fileURLWithPath: CommandLine.arguments[0])
                     .deletingLastPathComponent().path)
 
-        let task = Process()
-        task.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        task.arguments = ["python3", "-m", "search.ipc_helper"]
-        var env = ProcessInfo.processInfo.environment
-        let existing = env["PYTHONPATH"] ?? ""
-        env["PYTHONPATH"] = existing.isEmpty
-            ? scriptsDir
-            : "\(scriptsDir):\(existing)"
-        task.environment = env
+        let task = yuluPythonProcess(scriptDir: scriptsDir)
+        task.arguments = ["-m", "search.ipc_helper"]
 
         let stdinPipe = Pipe()
         let stdoutPipe = Pipe()
@@ -1537,12 +1517,9 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 log("dictation recording active; ignoring meeting stop")
                 return
             }
-            // Spawn the stop+transcribe pipeline detached and track its PID so
-            // the indicator shows "processing" until the transcript is written.
-            if let pid = RecordingLauncher.launchStop() {
-                launcherPids.append(pid)
-                applyState(.processing)
-            }
+            // Keep displaying recording until the audio daemon confirms the
+            // stop. Transcription progress belongs to the recording itself.
+            _ = RecordingLauncher.launchStop()
         case .processing:
             log("starting next recording while previous processing continues")
             startRecordingFromMenu()
@@ -1557,12 +1534,8 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func startRecordingFromMenu() {
         let title = RecordingLauncher.defaultTitle()
-        if RecordingLauncher.launchStart(title: title) != nil {
-            // meeting_daemon.py start returns immediately; the poller observes
-            // recording=true and drives the indicator. Stop launchers remain in
-            // launcherPids so prior transcription can finish in the background.
-            applyState(.recording)
-        }
+        // The poller moves the UI only after the audio daemon confirms capture.
+        _ = RecordingLauncher.launchStart(title: title)
     }
 
     @objc func onDictateToggle() {
@@ -1658,9 +1631,7 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func startCurrentMeeting(from sender: NSMenuItem, join: Bool) {
         guard let meetingId = sender.representedObject as? String,
               !meetingId.isEmpty else { return }
-        if RecordingLauncher.launchStartMeeting(meetingId: meetingId, join: join) != nil {
-            applyState(.recording)
-        }
+        _ = RecordingLauncher.launchStartMeeting(meetingId: meetingId, join: join)
     }
 
     private func showDaemonDownNotification() {
@@ -2052,6 +2023,19 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
               let url = URL(string: "http://127.0.0.1:7777/inbox/\(stem)") else { return }
         NSWorkspace.shared.open(url)
     }
+}
+
+if CommandLine.arguments.contains("--self-test") {
+    let scriptsDir = "/tmp/yulu-scripts"
+    let task = yuluPythonProcess(scriptDir: scriptsDir)
+    guard task.executableURL?.path != "/usr/bin/env",
+          task.currentDirectoryURL?.path == scriptsDir,
+          task.environment?["PYTHONPATH"]?.split(separator: ":").first == Substring(scriptsDir) else {
+        fputs("status_agent self-test failed\n", stderr)
+        exit(1)
+    }
+    print("status_agent self-test ok: \(task.executableURL?.path ?? "missing")")
+    exit(0)
 }
 
 let app = NSApplication.shared
