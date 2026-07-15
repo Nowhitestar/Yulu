@@ -161,6 +161,14 @@ describe("server", () => {
     writeFileSync(audioPath, Buffer.alloc(44));
     const startSpy = vi.spyOn(RealtimeTranscriptionCoordinator.prototype, "start").mockResolvedValueOnce();
     const stopSpy = vi.spyOn(RealtimeTranscriptionCoordinator.prototype, "stop").mockResolvedValueOnce(null);
+    const optionsSpy = vi.spyOn(RealtimeTranscriptionCoordinator.prototype, "updateOptions").mockResolvedValueOnce({
+      status: "transcribing",
+      stem: "Realtime_20260714_160000",
+      language: "zh",
+      text: "",
+      coveredMs: 0,
+      trusted: false,
+    });
     const headers = { "Content-Type": "application/json", "Authorization": "Bearer test-token" };
     try {
       const unauthorized = await fetch(`${env.baseUrl}/api/recordings/realtime/start`, {
@@ -185,9 +193,18 @@ describe("server", () => {
       });
       expect(stopped.status).toBe(200);
       expect(stopSpy).toHaveBeenCalledWith(audioPath);
+
+      const options = await fetch(`${env.baseUrl}/api/recordings/realtime/options`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ audioPath, targetLanguage: "日本語", translationEnabled: true }),
+      });
+      expect(options.status).toBe(200);
+      expect(optionsSpy).toHaveBeenCalledWith({ audioPath, targetLanguage: "日本語", translationEnabled: true });
     } finally {
       startSpy.mockRestore();
       stopSpy.mockRestore();
+      optionsSpy.mockRestore();
     }
   });
 

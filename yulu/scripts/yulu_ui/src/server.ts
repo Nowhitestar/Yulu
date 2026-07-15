@@ -19,6 +19,7 @@ import { serveStaticFile } from "./staticFile.js";
 import { homedir } from "node:os";
 import type { AppContext } from "./trpc.js";
 import { resolveAgentRuntime } from "./agentRuntime.js";
+import { runAgentCliCommand } from "./agentCliRunner.js";
 import { ensureBackgroundAgentSession } from "./agentSessionStore.js";
 import { createCaller } from "./trpc.js";
 import { handleMcpRequest, isAuthorizedToken, isMcpRequest } from "./mcp.js";
@@ -116,6 +117,36 @@ async function startLockedServer(
   const realtimeTranscription = new RealtimeTranscriptionCoordinator({
     pubsub: appPubSub,
     transcribe: (audioPath, language) => recordingPipeline.transcribeOnDemand({ audioPath, language }),
+    warm: async () => { await recordingPipeline.warmTranscription(); },
+    translate: async (sourceText, targetLanguage, context) => {
+      const configuredHome = process.env.YULU_HERMES_HOME?.trim() || process.env.HERMES_HOME?.trim();
+      const hermesHome = configuredHome?.startsWith("~/")
+        ? join(homedir(), configuredHome.slice(2))
+        : configuredHome || join(homedir(), ".hermes");
+      const python = join(hermesHome, "hermes-agent", "venv", "bin", "python");
+      if (!existsSync(python)) throw new AgentUnavailableError("Hermes Agent runtime is unavailable");
+      const result = await runAgentCliCommand({
+        runtime: {
+          provider: "custom",
+          label: "Hermes live-caption translation",
+          source: "auto-detected",
+          command: [python, "realtime_translate.py"],
+          cwd: runtimePaths.moviesDir,
+          disabledReason: null,
+        },
+        scriptDir: runtimePaths.scriptDir,
+        configDir: runtimePaths.configDir,
+        timeoutMs: 10_000,
+        prompt: JSON.stringify({ sourceText, targetLanguage, context }),
+      });
+      const translated = result.stdout.trim().replace(/^```(?:\w+)?\s*|\s*```$/g, "").trim();
+      if (result.code !== 0 || !translated) {
+        throw new Error((result.stderr || result.stdout || "realtime translation failed").trim());
+      }
+      return translated;
+    },
+    defaultTargetLanguage: () => configManager.read().transcription.dictation.target_language || "English",
+    defaultTranslationEnabled: false,
     allowedRoot: runtimePaths.moviesDir,
   });
   try {
@@ -227,6 +258,11 @@ async function startLockedServer(
     language: z.enum(["zh", "en", "ja", "auto"]),
   });
   const RealtimeStopSchema = z.object({ audioPath: z.string().min(1) });
+  const RealtimeOptionsSchema = z.object({
+    audioPath: z.string().min(1),
+    targetLanguage: z.enum(["English", "日本語", "한국어", "Français", "Español", "Deutsch", "繁體中文"]),
+    translationEnabled: z.boolean(),
+  });
   app.post("/api/recordings/realtime/start", async (c) => {
     if (!isAuthorizedToken(runtimePaths.mcpTokenJson, c.req.header("authorization") ?? "")) {
       return c.json({ ok: false, error: "unauthorized" }, 401);
@@ -248,6 +284,17 @@ async function startLockedServer(
       return c.json({ ok: true, result: await realtimeTranscription.stop(parsed.audioPath) });
     } catch (error) {
       return c.json({ ok: false, error: "realtime_stop_failed", detail: (error as Error).message }, 400);
+    }
+  });
+  app.post("/api/recordings/realtime/options", async (c) => {
+    if (!isAuthorizedToken(runtimePaths.mcpTokenJson, c.req.header("authorization") ?? "")) {
+      return c.json({ ok: false, error: "unauthorized" }, 401);
+    }
+    try {
+      const parsed = RealtimeOptionsSchema.parse(await c.req.json());
+      return c.json({ ok: true, result: await realtimeTranscription.updateOptions(parsed) });
+    } catch (error) {
+      return c.json({ ok: false, error: "realtime_options_failed", detail: (error as Error).message }, 400);
     }
   });
 

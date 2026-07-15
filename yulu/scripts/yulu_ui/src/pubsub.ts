@@ -49,6 +49,14 @@ export type AppChannels = {
     text: string;
     coveredMs: number;
     trusted: boolean;
+    sequence?: number;
+    sourceText?: string;
+    sourceLanguage?: "zh" | "en" | "ja" | "auto";
+    translationText?: string;
+    targetLanguage?: string;
+    translationStatus?: "disabled" | "pending" | "ready" | "failed";
+    startedAt?: string;
+    emittedAt?: string;
     reason?: string | null;
     error?: string;
   };
