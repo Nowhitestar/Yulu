@@ -20,6 +20,7 @@ Yulu 是一个围绕本地 Agent 设计的 macOS 会议记录工具。它原生�
 跟 Otter / Granola / Fireflies 比：
 
 - **系统音频原生录制**：用 macOS 13+ 的 `ScreenCaptureKit`，**不需要 BlackHole 或多输出设备**。
+- **实时字幕悬浮层**：默认在当前屏幕中下方显示原文，可拖动位置、选择目标语言并切换双语或仅译文；也可以收起为呼吸状态的 Yulu Logo。
 - **智能能力归 Agent**：Hermes 负责录音转写、总结和明确授权的 Notion 投递；Yulu 不再维护另一套模型、STT 或 connector runtime。
 - **Agent Console 是默认工作台**：开始录制、最近三天任务状态、问会议、底层 Agent 切换、当前能力都在一个界面里完成。
 - **任务状态真正持久化**：Host 用 SQLite 保存任务、租约、事件、产物哈希和投递结果；进程重启后可以恢复，也能区分录音、Agent、产物提交和外部投递分别在哪里失败。
