@@ -4,6 +4,13 @@ All notable changes to Yulu are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.21.0](https://github.com/Nowhitestar/Yulu/compare/v0.20.0...v0.21.0) (2026-07-15)
+
+
+### Features
+
+* **captions:** redesign realtime subtitles and translation ([5dee237](https://github.com/Nowhitestar/Yulu/commit/5dee237d95b4f8065588b3f56c2386c35df78e2a))
+
 ## [0.20.0](https://github.com/Nowhitestar/Yulu/compare/v0.19.0...v0.20.0) (2026-07-14)
 
 
