@@ -27,12 +27,12 @@ describe("recordingRouter", () => {
     expect(r.dictationActive).toBe(false);
   });
 
-  it("state() degrades to idle when status_agent.sock is unavailable", async () => {
+  it("state() reports unknown when status_agent.sock is unavailable", async () => {
     const ctx = { paths: { statusAgentSock: "/tmp/yulu-missing-status-agent.sock" } } as unknown as AppContext;
     const caller = createCaller(recordingRouter, ctx);
     const r = await caller.state();
     expect(r).toEqual({
-      state: "idle",
+      state: "unknown",
       hotkey: "?",
       launcherPid: undefined,
       dictationActive: false,
@@ -57,6 +57,19 @@ describe("recordingRouter", () => {
     expect(r.stateBefore).toBe("idle");
     expect(r.stateAfter).toBe("recording");
     expect(published).toEqual([{ state: "recording" }]);
+  });
+
+  it("toggle() does not publish an unrecognized recording state", async () => {
+    const published: unknown[] = [];
+    fake = await startFakeSocket(() => ({ ok: false, state_before: "recording", state_after: "unknown" }));
+    const ctx = {
+      paths: { statusAgentSock: fake.path },
+      pubsub: { publish: (_channel: string, payload: unknown) => published.push(payload) },
+    } as unknown as AppContext;
+    const caller = createCaller(recordingRouter, ctx);
+
+    expect(await caller.toggle()).toEqual({ stateBefore: "recording", stateAfter: "unknown" });
+    expect(published).toEqual([]);
   });
 
   it("dictate() dispatches the dictation IPC action", async () => {

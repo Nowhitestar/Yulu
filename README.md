@@ -65,6 +65,8 @@ uses Codex, Claude Code, OpenClaw, or a custom Agent for conversation. See
 ## Product surface
 
 - Native system-audio and microphone capture without a virtual audio device.
+- Movable live captions on the active display, with source-only, bilingual, or
+  translation-only views and a selectable target language.
 - Agent Console at `http://127.0.0.1:7777/agent-console`.
 - Durable task status for transcription, summarization, artifact commit, and
   optional Notion delivery.

@@ -131,6 +131,16 @@ The files are committed as one Host operation after Hermes writes them into a
 private task workspace. A file appearing without a completed task should be
 treated as incomplete evidence and investigated through the Host audit state.
 
+## Realtime captions
+
+Starting a recording opens a movable subtitle overlay near the bottom center of
+the active display. It shows source text by default. Hover over the capsule to
+choose a target language or switch to `双语` or `仅翻译`.
+
+Drag the six-dot handle to reposition the overlay. Use the down arrow to collapse
+it to the breathing Yulu logo, then click the logo to restore captions. Click the
+`录制中` control to stop; the overlay disappears after capture stops.
+
 ## Dictation and voice input
 
 Dictation uses mic-only native capture and the authenticated Host transcription

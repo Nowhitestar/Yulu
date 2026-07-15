@@ -238,7 +238,7 @@ def test_stop_failure_or_missing_file_does_not_dispatch(monkeypatch, tmp_path):
         "_dispatch_recording_completed",
         lambda *_a: (_ for _ in ()).throw(AssertionError("must not dispatch")),
     )
-    meeting_daemon._stop_and_process()
+    assert meeting_daemon._stop_and_process() is False
     assert [Path(args[1]).name for args in calls] == ["record_audio.py"]
 
     missing = tmp_path / "missing.wav"
@@ -248,8 +248,152 @@ def test_stop_failure_or_missing_file_does_not_dispatch(monkeypatch, tmp_path):
         "_dispatch_recording_completed",
         lambda *_a: (_ for _ in ()).throw(AssertionError("must not dispatch")),
     )
-    meeting_daemon._stop_and_process()
+    assert meeting_daemon._stop_and_process() is False
     assert [Path(args[1]).name for args in calls] == ["record_audio.py"]
+
+
+def test_stop_keeps_window_until_state_confirmation(monkeypatch, tmp_path):
+    meeting_daemon, _wav, _calls = _prepare_stop(monkeypatch, tmp_path)
+    killed = []
+    monkeypatch.setattr(meeting_daemon, "_kill_status_window", lambda: killed.append(True))
+
+    assert meeting_daemon._stop_and_process() is True
+    assert killed == []
+
+
+def test_stop_notification_receives_stop_reason(monkeypatch, tmp_path):
+    meeting_daemon, _wav, _calls = _prepare_stop(monkeypatch, tmp_path)
+    notifications = []
+    monkeypatch.setattr(
+        meeting_daemon.subprocess,
+        "Popen",
+        lambda args, **_kwargs: notifications.append(args) or SimpleNamespace(),
+    )
+
+    assert meeting_daemon._stop_and_process() is True
+    assert notifications[0][-1] == "manual"
+
+    notifications.clear()
+    assert meeting_daemon._stop_and_process(stop_reason="automatic") is True
+    assert notifications[0][-1] == "automatic"
+
+
+def test_auto_stop_distinguishes_user_choice_from_timeout(monkeypatch):
+    import meeting_daemon
+
+    choices = iter(["停止录制", "timeout"])
+    reasons = []
+    monkeypatch.setattr(meeting_daemon, "load_state", lambda: {})
+    monkeypatch.setattr(
+        meeting_daemon,
+        "recording_info",
+        lambda _state: {"title": "Team Sync", "meeting_id": "meeting-1"},
+    )
+    monkeypatch.setattr(
+        meeting_daemon.subprocess,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(stdout=next(choices)),
+    )
+    monkeypatch.setattr(
+        meeting_daemon,
+        "_stop_and_process",
+        lambda stop_reason="manual": reasons.append(stop_reason) or True,
+    )
+
+    meeting_daemon.cmd_auto_stop()
+    meeting_daemon.cmd_auto_stop()
+
+    assert reasons == ["manual", "automatic"]
+
+
+def test_auto_stop_continue_schedules_the_next_prompt(monkeypatch):
+    import meeting_daemon
+
+    events = []
+    monkeypatch.setattr(meeting_daemon, "load_state", lambda: {})
+    monkeypatch.setattr(
+        meeting_daemon,
+        "recording_info",
+        lambda _state: {"title": "Team Sync", "meeting_id": "meeting-1"},
+    )
+    monkeypatch.setattr(
+        meeting_daemon.subprocess,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(stdout="继续录制"),
+    )
+    monkeypatch.setattr(meeting_daemon, "_add_runtime_event", events.append)
+    monkeypatch.setattr(
+        meeting_daemon,
+        "_stop_and_process",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("must not stop")),
+    )
+
+    meeting_daemon.cmd_auto_stop()
+
+    assert len(events) == 1
+    assert events[0]["id"] == "recording-meeting-1::ask_stop_extended"
+    assert events[0]["kind"] == "ask_stop"
+    assert events[0]["meeting_id"] == "meeting-1"
+    assert events[0]["title"] == "Team Sync"
+
+
+def test_auto_stop_without_active_recording_is_a_noop(monkeypatch, capsys):
+    import meeting_daemon
+
+    monkeypatch.setattr(meeting_daemon, "load_state", lambda: {})
+    monkeypatch.setattr(meeting_daemon, "recording_info", lambda _state: None)
+    monkeypatch.setattr(
+        meeting_daemon.subprocess,
+        "run",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("must not show prompt")),
+    )
+    monkeypatch.setattr(
+        meeting_daemon,
+        "_stop_and_process",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("must not stop")),
+    )
+
+    meeting_daemon.cmd_auto_stop()
+
+    assert "没有正在进行的录制" in capsys.readouterr().out
+
+
+def test_status_window_detaches_from_parent_session(monkeypatch, tmp_path):
+    import meeting_daemon
+
+    script_dir = tmp_path / "scripts"
+    config_dir = tmp_path / "config"
+    script_dir.mkdir()
+    config_dir.mkdir()
+    status_bin = script_dir / "recorder_status"
+    status_bin.write_text("binary", encoding="utf-8")
+    state_path = config_dir / ".state.json"
+    state_path.write_text('{"recording":true}', encoding="utf-8")
+    seen = {}
+
+    class _Process:
+        pid = 12345
+
+        def wait(self, timeout):
+            raise meeting_daemon.subprocess.TimeoutExpired("recorder_status", timeout)
+
+    def fake_popen(args, **kwargs):
+        seen["args"] = args
+        seen["kwargs"] = kwargs
+        return _Process()
+
+    monkeypatch.setattr(meeting_daemon, "SCRIPT_DIR", script_dir)
+    monkeypatch.setattr(meeting_daemon, "CONFIG_DIR", config_dir)
+    monkeypatch.setattr(meeting_daemon, "STATE_PATH", state_path)
+    monkeypatch.setattr(meeting_daemon, "_kill_status_window", lambda: None)
+    monkeypatch.setattr(meeting_daemon.subprocess, "Popen", fake_popen)
+
+    meeting_daemon._launch_status_window("Team Sync")
+
+    assert seen["args"] == [str(status_bin), "Team Sync", str(state_path)]
+    assert seen["kwargs"]["stdin"] is meeting_daemon.subprocess.DEVNULL
+    assert seen["kwargs"]["start_new_session"] is True
+    assert json.loads(state_path.read_text(encoding="utf-8"))["_status_pid"] == 12345
 
 
 def test_start_recording_uses_capture_controller(monkeypatch):

@@ -117,10 +117,11 @@ def ask_stop(meeting_title, timeout=None):
     )
 
 
-def notify_stop_auto(meeting_title):
-    """自动停止录制后的通知。"""
-    message = f"会议「{meeting_title}」\n已自动停止录制，正在生成纪要..."
-    remind("Yulu", message, subtitle="自动停止")
+def notify_stop(meeting_title, reason="manual"):
+    automatic = reason == "automatic"
+    action = "已自动停止录制" if automatic else "已停止录制"
+    subtitle = "自动停止" if automatic else "录制已停止"
+    remind("Yulu", f"会议「{meeting_title}」\n{action}，正在生成纪要...", subtitle=subtitle)
 
 
 def notify_summary_sent(meeting_title, channel):
@@ -142,7 +143,7 @@ if __name__ == "__main__":
     elif action == "ask_stop":
         print(ask_stop(sys.argv[2]))
     elif action == "notify_stop":
-        notify_stop_auto(sys.argv[2])
+        notify_stop(sys.argv[2], sys.argv[3] if len(sys.argv) > 3 else "manual")
     elif action == "notify_sent":
         notify_summary_sent(sys.argv[2], sys.argv[3])
     else:

@@ -1,12 +1,12 @@
 // web/src/components/Pill.tsx
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { Mic } from "lucide-react";
 import { trpc } from "../trpc.js";
 import { useWsChannel } from "../ws.js";
 import { useT } from "../i18n/LanguageProvider.js";
 import "./Pill.css";
 
-export type PillState = "idle" | "recording" | "processing" | "meetingBusy" | "daemonDown";
+export type PillState = "idle" | "recording" | "processing" | "meetingBusy" | "daemonDown" | "unknown";
 
 interface RecordingMsg {
   state: PillState;
@@ -19,30 +19,44 @@ type RealtimeMsg = import("../../../src/pubsub.js").AppChannels["realtime-transc
 
 export function Pill() {
   const t = useT();
-  const initial = trpc.recording.state.useQuery();
-  const [state, setState] = useState<PillState>("idle");
+  const initial = trpc.recording.state.useQuery(undefined, {
+    refetchInterval: 500,
+    refetchIntervalInBackground: true,
+  });
+  const [state, setState] = useState<PillState>("unknown");
   const [elapsed, setElapsed] = useState(0);
   const [level, setLevel] = useState(0);
   const [realtime, setRealtime] = useState<RealtimeMsg | null>(null);
   const hotkey = (initial.data as { hotkey?: string } | undefined)?.hotkey ?? "⌘⇧V";
   const toggle = trpc.recording.toggle.useMutation();
-  const hydratedRef = useRef(false);
 
-  // Hydrate from initial fetch — only once. After that, WebSocket events drive
-  // state transitions. This avoids the bootstrap query stomping live state
-  // every time react-query rebuilds its result object on re-render.
+  // The native menu and the web button both converge on the StatusAgent state.
+  // WebSocket events are the fast path; polling repairs missed/cross-process events.
   useEffect(() => {
-    if (hydratedRef.current) return;
-    const initState = (initial.data as { state?: PillState } | undefined)?.state;
-    if (initState) {
-      hydratedRef.current = true;
-      setState(initState);
+    const confirmedState = (initial.data as { state?: PillState } | undefined)?.state;
+    if (confirmedState) {
+      setState((current) => confirmedState === "unknown" && current !== "unknown" ? current : confirmedState);
+      if (confirmedState === "idle") {
+        setElapsed(0);
+        setLevel(0);
+        setRealtime(null);
+      }
     }
-  }, [initial.data]);
+  }, [initial.data, initial.dataUpdatedAt]);
+
+  useEffect(() => {
+    if (state !== "recording") return;
+    const timer = window.setInterval(() => setElapsed((value) => value + 1), 1_000);
+    return () => window.clearInterval(timer);
+  }, [state]);
 
   useWsChannel("recording", (msg: RecordingMsg) => {
     setState(msg.state);
-    if (msg.state === "idle" || msg.state === "recording") setRealtime(null);
+    if (msg.state === "idle") {
+      setElapsed(0);
+      setLevel(0);
+      setRealtime(null);
+    }
     if (typeof msg.elapsedSec === "number") setElapsed(msg.elapsedSec);
     if (typeof msg.level === "number")      setLevel(msg.level);
   });
@@ -105,6 +119,14 @@ export function Pill() {
           <span className="pill-warn">⚠</span>
           <span>{t("pill.daemonDown")}</span>
         </a>
+      );
+
+    case "unknown":
+      return (
+        <div className="pill pill-down" role="alert">
+          <span className="pill-warn">⚠</span>
+          <span>{t("pill.statusUnavailable")}</span>
+        </div>
       );
   }
 }

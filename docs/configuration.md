@@ -149,7 +149,7 @@ remaining section carries language and dictation interaction context.
 | `language` | `"zh"` | Requested/source language metadata supplied around the Agent-owned flow. |
 | `dictation.prompt_slug` | `"dictation-cleanup"` | Local prompt selected for normal dictation cleanup. |
 | `dictation.translate_prompt_slug` | `"dictation-translate"` | Local prompt selected for quick translation. |
-| `dictation.target_language` | `"English"` | Default translation target. |
+| `dictation.target_language` | `"English"` | Default target for dictation translation and the realtime-caption language selector. |
 | `dictation.context_limit` | `240` | Maximum local prompt/glossary context characters. |
 | `dictation.deadline_sec` | `30` | End-to-end post-capture budget used by installed shortcuts. |
 | `dictation.timeout_sec` | `30` | Host/Agent request budget used by installed shortcuts. |

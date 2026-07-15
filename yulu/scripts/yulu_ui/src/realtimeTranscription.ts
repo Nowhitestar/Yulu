@@ -35,10 +35,36 @@ interface Session {
   text: string;
   chunks: number;
   coveredMs: number;
+  pendingPcm: Buffer;
+  overlapPcm: Buffer;
+  sourceText: string;
+  sourceSegments: string[];
+  sequence: number;
+  startedAt: string;
+  translationEnabled: boolean;
+  targetLanguage: string;
+  translationText: string;
+  translationStatus: "disabled" | "pending" | "ready" | "failed";
+  translationGeneration: number;
+  translationRunning: boolean;
+  queuedTranslation: TranslationRequest | null;
   timer: ReturnType<typeof setInterval> | null;
   pump: Promise<void> | null;
   error: string | null;
 }
+
+interface TranslationRequest {
+  generation: number;
+  sourceText: string;
+  context: string[];
+  targetLanguage: string;
+}
+
+const PCM_BYTES_PER_MS = 32; // 16 kHz, mono, signed 16-bit PCM
+const DEFAULT_MIN_SEGMENT_MS = 1_200;
+const DEFAULT_TAIL_SILENCE_MS = 450;
+const DEFAULT_MAX_SEGMENT_MS = 6_000;
+const DEFAULT_OVERLAP_MS = 800;
 
 export interface RealtimeAssessment {
   trusted: boolean;
@@ -50,16 +76,90 @@ export function normalizeTranscriptionLanguage(value: unknown): TranscriptionLan
 }
 
 export function cleanTranscriptText(value: string): string {
-  const blocked = new Set([
-    "请不吝点赞 订阅 转发 打赏支持明镜与点点栏目",
-  ]);
+  const blocked = [
+    /请不吝点赞.*订阅.*转发.*打赏.*明镜与点点栏目/,
+    /字幕志愿者/,
+    /中文字幕/,
+    /我用了字幕.*可能不正确.*请勿模仿/,
+  ];
   const lines: string[] = [];
   for (const raw of value.split(/\r?\n/)) {
     const line = raw.trim();
-    if (!line || blocked.has(line) || lines.at(-1) === line) continue;
+    if (!line || blocked.some((pattern) => pattern.test(line)) || lines.at(-1) === line) continue;
     lines.push(line);
   }
   return lines.join("\n").trim();
+}
+
+function pcmDurationMs(pcm: Buffer): number {
+  return Math.floor(pcm.length / PCM_BYTES_PER_MS);
+}
+
+function frameEnergy(pcm: Buffer): number {
+  if (pcm.length < 2) return 0;
+  let squares = 0;
+  let samples = 0;
+  for (let offset = 0; offset + 1 < pcm.length; offset += 2) {
+    const value = pcm.readInt16LE(offset);
+    squares += value * value;
+    samples += 1;
+  }
+  return Math.sqrt(squares / Math.max(1, samples));
+}
+
+export function trailingSilenceMs(pcm: Buffer, frameMs = 50): number {
+  const frameBytes = Math.max(2, frameMs * PCM_BYTES_PER_MS);
+  let silentBytes = 0;
+  for (let end = pcm.length; end > 0;) {
+    const start = Math.max(0, end - frameBytes);
+    const frame = pcm.subarray(start, end);
+    if (hasVoice(frame)) break;
+    silentBytes += frame.length;
+    end = start;
+  }
+  return Math.floor(silentBytes / PCM_BYTES_PER_MS);
+}
+
+export function segmentCutBytes(pcm: Buffer, input: {
+  force?: boolean;
+  minSegmentMs?: number;
+  tailSilenceMs?: number;
+  maxSegmentMs?: number;
+} = {}): number {
+  const alignedLength = pcm.length - (pcm.length % 2);
+  if (input.force) return alignedLength;
+  const minSegmentMs = input.minSegmentMs ?? DEFAULT_MIN_SEGMENT_MS;
+  const tailSilence = input.tailSilenceMs ?? DEFAULT_TAIL_SILENCE_MS;
+  const maxSegmentMs = input.maxSegmentMs ?? DEFAULT_MAX_SEGMENT_MS;
+  const durationMs = pcmDurationMs(pcm);
+  if (durationMs < minSegmentMs) return 0;
+  if (trailingSilenceMs(pcm) >= tailSilence && hasVoice(pcm)) return alignedLength;
+  if (durationMs < maxSegmentMs) return 0;
+
+  const frameMs = 50;
+  const frameBytes = frameMs * PCM_BYTES_PER_MS;
+  const searchStart = Math.max(minSegmentMs * PCM_BYTES_PER_MS, alignedLength - 1_500 * PCM_BYTES_PER_MS);
+  let quietestEnd = alignedLength;
+  let quietestEnergy = Number.POSITIVE_INFINITY;
+  for (let start = searchStart; start + frameBytes <= alignedLength; start += frameBytes) {
+    const energy = frameEnergy(pcm.subarray(start, start + frameBytes));
+    if (energy < quietestEnergy) {
+      quietestEnergy = energy;
+      quietestEnd = start + frameBytes;
+    }
+  }
+  return quietestEnd - (quietestEnd % 2);
+}
+
+export function dedupeTranscriptSegment(existing: string, incoming: string): string {
+  const previous = cleanTranscriptText(existing);
+  const next = cleanTranscriptText(incoming);
+  if (!next || previous.split(/\n+/).at(-1) === next) return "";
+  const maxOverlap = Math.min(previous.length, next.length, 160);
+  for (let length = maxOverlap; length >= 4; length -= 1) {
+    if (previous.endsWith(next.slice(0, length))) return next.slice(length).trim();
+  }
+  return next;
 }
 
 export function assessRealtimeTranscript(input: {
@@ -70,6 +170,9 @@ export function assessRealtimeTranscript(input: {
 }): RealtimeAssessment {
   const text = cleanTranscriptText(input.text);
   if (!text) return { trusted: false, reason: "empty transcript" };
+  if (!/[A-Za-z0-9\u3400-\u9fff\u3040-\u30ff]/.test(text)) {
+    return { trusted: false, reason: "transcript contains no speech text" };
+  }
   const coverage = input.totalMs > 0 ? input.coveredMs / input.totalMs : 0;
   if (coverage < 0.85) return { trusted: false, reason: "incomplete audio coverage" };
 
@@ -88,6 +191,37 @@ export function assessRealtimeTranscript(input: {
     return { trusted: false, reason: "repetitive transcript" };
   }
   return { trusted: true, reason: null };
+}
+
+function cleanRealtimeChunk(value: string, language: TranscriptionLanguage): string {
+  return cleanTranscriptText(value)
+    .split(/\n+/)
+    .map((line) => {
+      const cleaned = line.replace(
+        /(?:[^\u3400-\u9fff\u3040-\u30ffA-Za-z0-9]*[A-Za-zÀ-ÖØ-öø-ÿ]+(?:['-][A-Za-zÀ-ÖØ-öø-ÿ]+)?){2,}/g,
+        (run) => {
+          const words = run.match(/[A-Za-zÀ-ÖØ-öø-ÿ]+(?:['-][A-Za-zÀ-ÖØ-öø-ÿ]+)?/g)
+            ?.map((word) => word.toLowerCase()) ?? [];
+          return new Set(words).size < words.length ? "" : run;
+        },
+      ).replace(/^[\s，,、﹑﹐﹌﹗﹚]+|[\s，,、﹑﹐﹌﹗﹚]+$/g, "").trim();
+      const tokens = cleaned.split(/[\s，,、﹑﹐﹌﹗﹚]+/).filter(Boolean);
+      return tokens.length >= 2 && new Set(tokens).size === 1 ? "" : cleaned;
+    })
+    .filter((line) => {
+      if (!assessRealtimeTranscript({ text: line, language, coveredMs: 1, totalMs: 1 }).trusted) return false;
+      const han = (line.match(/[\u3400-\u9fff]/g) ?? []).length;
+      const kana = (line.match(/[\u3040-\u30ff]/g) ?? []).length;
+      const latin = (line.match(/[A-Za-z]/g) ?? []).length;
+      if (language === "zh" && han < 4 && latin >= 8) return false;
+      if (language === "ja" && han + kana < 4 && latin >= 8) return false;
+      return true;
+    })
+    .join("\n");
+}
+
+function isLanguageContractRejection(error: unknown): boolean {
+  return error instanceof Error && error.message.includes("violated the requested language contract");
 }
 
 function sidecarPath(audioPath: string): string {
@@ -193,20 +327,33 @@ function writeMonoWav(path: string, pcm: Buffer): void {
 
 export class RealtimeTranscriptionCoordinator {
   private active: Session | null = null;
-  private readonly chunkSec: number;
   private readonly pollMs: number;
   private readonly allowedRoot: string | null;
+  private readonly minSegmentMs: number;
+  private readonly tailSilenceMs: number;
+  private readonly maxSegmentMs: number;
+  private readonly overlapMs: number;
 
   constructor(private readonly options: {
     pubsub: PubSub<AppChannels>;
     transcribe: (audioPath: string, language: TranscriptionLanguage) => Promise<TranscriptionResult>;
+    warm?: () => Promise<void>;
+    translate?: (sourceText: string, targetLanguage: string, context: string[]) => Promise<string>;
+    defaultTargetLanguage?: () => string;
+    defaultTranslationEnabled?: boolean;
     allowedRoot?: string;
     chunkSec?: number;
     pollMs?: number;
+    minSegmentMs?: number;
+    tailSilenceMs?: number;
+    overlapMs?: number;
   }) {
-    this.chunkSec = options.chunkSec ?? 15;
-    this.pollMs = options.pollMs ?? 1_000;
+    this.pollMs = options.pollMs ?? 250;
     this.allowedRoot = options.allowedRoot ? realpathSync(options.allowedRoot) : null;
+    this.minSegmentMs = options.minSegmentMs ?? DEFAULT_MIN_SEGMENT_MS;
+    this.tailSilenceMs = options.tailSilenceMs ?? DEFAULT_TAIL_SILENCE_MS;
+    this.maxSegmentMs = (options.chunkSec ?? DEFAULT_MAX_SEGMENT_MS / 1_000) * 1_000;
+    this.overlapMs = options.overlapMs ?? DEFAULT_OVERLAP_MS;
   }
 
   async start(input: { audioPath: string; title: string; language: TranscriptionLanguage }): Promise<void> {
@@ -230,6 +377,19 @@ export class RealtimeTranscriptionCoordinator {
       text: "",
       chunks: 0,
       coveredMs: 0,
+      pendingPcm: Buffer.alloc(0),
+      overlapPcm: Buffer.alloc(0),
+      sourceText: "",
+      sourceSegments: [],
+      sequence: 0,
+      startedAt: new Date().toISOString(),
+      translationEnabled: Boolean(this.options.translate && this.options.defaultTranslationEnabled),
+      targetLanguage: this.options.defaultTargetLanguage?.().trim() || "English",
+      translationText: "",
+      translationStatus: this.options.translate && this.options.defaultTranslationEnabled ? "pending" : "disabled",
+      translationGeneration: 0,
+      translationRunning: false,
+      queuedTranslation: null,
       timer: null,
       pump: null,
       error: null,
@@ -237,10 +397,33 @@ export class RealtimeTranscriptionCoordinator {
     rmSync(sidecarPath(audioPath), { force: true });
     rmSync(coveragePath(audioPath), { force: true });
     this.active = session;
+    void this.options.warm?.().catch(() => {});
     this.publish(session, "starting", false);
     await this.queuePump(false);
     session.timer = setInterval(() => { void this.queuePump(false); }, this.pollMs);
     session.timer.unref();
+  }
+
+  async updateOptions(input: {
+    audioPath: string;
+    targetLanguage: string;
+    translationEnabled: boolean;
+  }): Promise<AppChannels["realtime-transcript"]> {
+    const session = this.active;
+    if (!session || realpathSync(input.audioPath) !== session.audioPath) {
+      throw new Error("realtime transcription session is not active");
+    }
+    session.translationEnabled = Boolean(this.options.translate && input.translationEnabled);
+    session.targetLanguage = input.targetLanguage.trim() || session.targetLanguage;
+    session.translationText = "";
+    session.translationStatus = session.translationEnabled ? "pending" : "disabled";
+    session.translationGeneration += 1;
+    session.queuedTranslation = null;
+    if (session.translationEnabled && session.sourceText) {
+      this.queueTranslation(session);
+      return this.message(session, "transcribing", false);
+    }
+    return this.publish(session, "transcribing", false);
   }
 
   async stop(audioPath?: string): Promise<AppChannels["realtime-transcript"] | null> {
@@ -262,6 +445,9 @@ export class RealtimeTranscriptionCoordinator {
       ? assessment.reason
       : `realtime transcription failed: ${session.error}`;
     this.writeCoverage(session, totalMs, trusted, reason, true);
+    session.translationGeneration += 1;
+    session.queuedTranslation = null;
+    session.sequence += 1;
     const result = this.message(session, session.error ? "failed" : "finished", trusted, reason);
     this.options.pubsub.publish("realtime-transcript", result);
     rmSync(`${session.audioPath}.realtime`, { recursive: true, force: true });
@@ -291,42 +477,135 @@ export class RealtimeTranscriptionCoordinator {
 
   private async pump(session: Session, force: boolean): Promise<void> {
     const bytesPerSecond = session.format.sampleRate * session.format.blockAlign;
-    const chunkBytes = Math.max(session.format.blockAlign, Math.floor(this.chunkSec * bytesPerSecond));
-    while (this.active === session) {
-      const size = statSync(session.audioPath).size;
-      const available = Math.floor((size - session.offset) / session.format.blockAlign) * session.format.blockAlign;
-      if (available <= 0 || (!force && available < chunkBytes)) return;
-      const consume = force ? available : Math.min(available, chunkBytes);
+    const size = statSync(session.audioPath).size;
+    const available = Math.floor((size - session.offset) / session.format.blockAlign) * session.format.blockAlign;
+    if (available > 0) {
       const fd = openSync(session.audioPath, "r");
-      const source = Buffer.alloc(consume);
+      const source = Buffer.alloc(available);
       try {
-        readSync(fd, source, 0, consume, session.offset);
+        readSync(fd, source, 0, available, session.offset);
       } finally {
         closeSync(fd);
       }
-      session.offset += consume;
+      session.offset += available;
       session.coveredMs = Math.round((session.offset - session.format.dataOffset) / bytesPerSecond * 1000);
       const pcm = mono16kPcm(source, session.format);
-      if (hasVoice(pcm)) {
-        const chunkDir = `${session.audioPath}.realtime`;
-        mkdirSync(chunkDir, { recursive: true, mode: 0o700 });
-        const chunkPath = join(chunkDir, `chunk-${session.chunks.toString().padStart(4, "0")}.wav`);
-        writeMonoWav(chunkPath, pcm);
+      session.pendingPcm = Buffer.concat([session.pendingPcm, pcm]);
+    }
+    await this.flushSegments(session, force);
+  }
+
+  private async flushSegments(session: Session, force: boolean): Promise<void> {
+    while (this.active === session && session.pendingPcm.length > 0) {
+      const cut = segmentCutBytes(session.pendingPcm, {
+        force,
+        minSegmentMs: this.minSegmentMs,
+        tailSilenceMs: this.tailSilenceMs,
+        maxSegmentMs: this.maxSegmentMs,
+      });
+      if (cut <= 0) return;
+      const segment = session.pendingPcm.subarray(0, cut);
+      session.pendingPcm = session.pendingPcm.subarray(cut);
+      if (!hasVoice(segment)) {
+        session.overlapPcm = Buffer.alloc(0);
+        this.writeCoverage(session, this.durationMs(session), false, null, false);
+        if (force) continue;
+        continue;
+      }
+
+      const pcm = session.overlapPcm.length > 0
+        ? Buffer.concat([session.overlapPcm, segment])
+        : segment;
+      const chunkDir = `${session.audioPath}.realtime`;
+      mkdirSync(chunkDir, { recursive: true, mode: 0o700 });
+      const chunkPath = join(chunkDir, `chunk-${session.chunks.toString().padStart(4, "0")}.wav`);
+      writeMonoWav(chunkPath, pcm);
+      try {
+        const result = await this.options.transcribe(chunkPath, session.language);
+        const sourceText = dedupeTranscriptSegment(
+          session.text,
+          cleanRealtimeChunk(result.transcript, session.language),
+        );
+        if (sourceText) {
+          session.sourceText = sourceText;
+          session.sourceSegments.push(sourceText);
+          session.sourceSegments = session.sourceSegments.slice(-3);
+          session.text = cleanTranscriptText([session.text, sourceText].filter(Boolean).join("\n"));
+          atomicWrite(sidecarPath(session.audioPath), session.text + "\n");
+          session.translationText = "";
+          session.translationStatus = session.translationEnabled ? "pending" : "disabled";
+          session.translationGeneration += 1;
+          if (session.translationEnabled) this.queueTranslation(session);
+          else this.publish(session, "transcribing", false);
+        }
+        session.chunks += 1;
+      } catch (error) {
+        if (!isLanguageContractRejection(error)) throw error;
+        session.chunks += 1;
+      } finally {
+        rmSync(chunkPath, { force: true });
+      }
+
+      const silenceBytes = trailingSilenceMs(segment) * PCM_BYTES_PER_MS;
+      const speechEnd = Math.max(0, segment.length - silenceBytes);
+      const overlapBytes = this.overlapMs * PCM_BYTES_PER_MS;
+      session.overlapPcm = segment.subarray(Math.max(0, speechEnd - overlapBytes), speechEnd);
+      this.writeCoverage(session, this.durationMs(session), false, null, false);
+      if (!force && session.pendingPcm.length === 0) return;
+    }
+  }
+
+  private queueTranslation(session: Session): void {
+    if (!this.options.translate || !session.translationEnabled || !session.sourceText) return;
+    session.queuedTranslation = {
+      generation: session.translationGeneration,
+      sourceText: session.sourceText,
+      context: session.sourceSegments.slice(-3, -1),
+      targetLanguage: session.targetLanguage,
+    };
+    session.translationStatus = "pending";
+    this.publish(session, "transcribing", false);
+    if (!session.translationRunning) void this.drainTranslations(session);
+  }
+
+  private async drainTranslations(session: Session): Promise<void> {
+    const translate = this.options.translate;
+    if (!translate || session.translationRunning) return;
+    session.translationRunning = true;
+    try {
+      while (this.active === session && session.queuedTranslation) {
+        const request = session.queuedTranslation;
+        session.queuedTranslation = null;
         try {
-          const result = await this.options.transcribe(chunkPath, session.language);
-          const partial = cleanTranscriptText(result.transcript);
-          if (partial && session.text.split(/\n+/).at(-1) !== partial) {
-            session.text = cleanTranscriptText([session.text, partial].filter(Boolean).join("\n"));
-            atomicWrite(sidecarPath(session.audioPath), session.text + "\n");
+          const translated = cleanTranscriptText(await translate(
+            request.sourceText,
+            request.targetLanguage,
+            request.context,
+          ));
+          if (
+            this.active === session &&
+            session.translationEnabled &&
+            request.generation === session.translationGeneration
+          ) {
+            session.translationText = translated;
+            session.translationStatus = translated ? "ready" : "failed";
+            this.publish(session, "transcribing", false);
           }
-          session.chunks += 1;
-        } finally {
-          rmSync(chunkPath, { force: true });
+        } catch {
+          if (
+            this.active === session &&
+            session.translationEnabled &&
+            request.generation === session.translationGeneration
+          ) {
+            session.translationText = "";
+            session.translationStatus = "failed";
+            this.publish(session, "transcribing", false);
+          }
         }
       }
-      this.writeCoverage(session, this.durationMs(session), false, null, false);
-      this.publish(session, "transcribing", false);
-      if (force) continue;
+    } finally {
+      session.translationRunning = false;
+      if (this.active === session && session.queuedTranslation) void this.drainTranslations(session);
     }
   }
 
@@ -367,6 +646,14 @@ export class RealtimeTranscriptionCoordinator {
       text: session.text,
       coveredMs: session.coveredMs,
       trusted,
+      sequence: session.sequence,
+      sourceText: session.sourceText,
+      sourceLanguage: session.language,
+      translationText: session.translationText,
+      targetLanguage: session.targetLanguage,
+      translationStatus: session.translationStatus,
+      startedAt: session.startedAt,
+      emittedAt: new Date().toISOString(),
       reason,
       error: session.error ?? undefined,
     };
@@ -377,8 +664,11 @@ export class RealtimeTranscriptionCoordinator {
     status: AppChannels["realtime-transcript"]["status"],
     trusted: boolean,
     reason: string | null = null,
-  ): void {
-    this.options.pubsub.publish("realtime-transcript", this.message(session, status, trusted, reason));
+  ): AppChannels["realtime-transcript"] {
+    session.sequence += 1;
+    const message = this.message(session, status, trusted, reason);
+    this.options.pubsub.publish("realtime-transcript", message);
+    return message;
   }
 }
 

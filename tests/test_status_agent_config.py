@@ -157,6 +157,30 @@ def test_status_agent_has_hotkeys_no_voicemail():
     assert "meeting_daemon.py" in src, "launcher should shell out to meeting_daemon.py"
 
 
+def test_status_agent_uses_supported_python_and_daemon_confirmed_meeting_state():
+    src = _swift_source()
+    assert "func yuluPythonProcess(scriptDir: String)" in src
+    assert '"/opt/homebrew/bin/python3"' in src
+    assert 'task.executableURL = URL(fileURLWithPath: "/usr/bin/env")' not in src
+
+    toggle_start = src.index("@objc func onMenuToggle()")
+    start_recording = src.index("private func startRecordingFromMenu()")
+    toggle_body = src[toggle_start:start_recording]
+    assert "_ = RecordingLauncher.launchStop()" in toggle_body
+    assert "launcherPids.append(pid)" not in toggle_body
+
+    dictate_start = src.index("@objc func onDictateToggle()")
+    start_body = src[start_recording:dictate_start]
+    assert "RecordingLauncher.launchStart(title: title)" in start_body
+    assert "applyState(.recording)" not in start_body
+
+
+def test_recorder_status_uses_supported_python():
+    src = (SCRIPTS / "recorder_status.swift").read_text(encoding="utf-8")
+    assert '"/opt/homebrew/bin/python3"' in src
+    assert 'process.executableURL = URL(fileURLWithPath: "/usr/bin/env")' not in src
+
+
 def test_status_agent_has_dictation_menu_entry():
     src = _swift_source()
     assert '"Start Dictation"' in src
