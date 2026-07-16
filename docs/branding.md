@@ -6,58 +6,53 @@ This file is the contract for anything that puts the Yulu name on it: README hea
 
 - **English wordmark**: `Yulu` (capital Y, lowercase rest). Never `YULU`, `yulu`, `Yu Lu`, or `yu-lu`.
 - **Chinese wordmark**: `语录`. Always traditional or simplified depending on the surrounding text — do not mix.
-- **Tagline (English)**: *Listen quietly. Capture everything.*
-- **Tagline (中文)**: 「让每场会议，都成为一本语录。」
+- **Current README descriptor (English)**: *Native meeting capture. Live captions. Agent-ready memory.*
+- **Current README descriptor (中文)**: 「原生录制，实时字幕，让每场会议成为 Agent 可用的记忆。」
 - **Pronunciation**: *yǔ lù* (Mandarin) — closest English approximation: "yoo-loo".
 - **Etymology in copy** (use once per surface, not on every page):
   > Yulu (语录, *yǔ lù*) is the Chinese word for "recorded sayings" — the genre that produced *The Analects of Confucius*.
 
 ## Logo
 
-The mark is a serif `语` in ink on warm parchment, with a small cinnabar dot.
+The current mark is a blue liquid-glass lens containing two white quotation
+marks. It represents captured speech without turning Yulu into a chat-bubble
+brand.
 
-| Element | Token | Hex |
-|---|---|---|
-| Parchment background | `paper` | `#F5F1E8` |
-| Ink | `ink` | `#1B1B1B` |
-| Cinnabar accent | `cinnabar` | `#A23B2B` |
+| Element | Value |
+|---|---|
+| Lens gradient | `#60AAF3` to `#2C5DBD` |
+| Quotation marks | White, `95%` to `72%` opacity |
+| Surface highlight | White radial glow, up to `55%` opacity |
+| Edge highlight | White, `50%` opacity |
 
-- The cinnabar dot is the **only** chromatic accent. Do not add a second hue.
-- The character must be set in a CJK serif (宋体 / Mincho), not sans-serif.
-- Minimum clear space around the rounded square: 12% of its side length.
+- Preserve the organic lens silhouette and the two quotation marks as one mark.
+- Keep clear space equal to at least 12% of the mark's width.
 - Minimum size: 24×24 px on screen, 8 mm in print.
-
-If a one-color version is needed (favicon, monochrome print), drop the cinnabar dot. Do not invert the parchment to white.
+- A restrained blue glow is allowed in the digital UI. Do not add another hue.
+- The old parchment `语` character with a cinnabar dot is a legacy mark. Do not
+  use it in new UI, README art, release artwork, or previews.
 
 ### Logo files
 
-- `assets/logo.svg` — primary, color, 120×120, system-font `语`.
-- `assets/logo.png` — to be generated (suggest 512×512 export of the SVG with the character converted to a path so it renders the same on all platforms). Run once before each release: see `docs/branding.md` § "Generating raster logos".
+- `yulu/scripts/yulu_ui/web/src/components/Logo.tsx` — UI source of truth.
+- `yulu/scripts/yulu_ui/web/public/favicon.svg` — static app equivalent.
+- `assets/logo.svg` — README and documentation equivalent.
 
-### Generating raster logos
-
-The SVG uses a font-family fallback chain. To make sure the rendered `语` looks the same everywhere, convert it to a path before exporting raster images. Two acceptable workflows:
-
-1. Open `assets/logo.svg` in [Figma](https://figma.com) or Affinity Designer → select the text → Convert to Outlines/Paths → re-export as `assets/logo.svg` and `assets/logo.png`.
-2. Use the [Inkscape](https://inkscape.org) CLI:
-   ```bash
-   inkscape assets/logo.svg --export-text-to-path \
-     --export-filename=assets/logo-flat.svg
-   inkscape assets/logo-flat.svg --export-type=png \
-     --export-width=512 --export-filename=assets/logo.png
-   ```
+Keep these three representations visually aligned. Generate any raster export
+from the static SVG rather than recreating the legacy character mark.
 
 ## Typography
 
-Pick one serif and one mono. Do not introduce a sans-serif unless explicitly needed for OS chrome.
-
 | Use | Family | License |
 |---|---|---|
-| English body / headings | Charter (system on macOS, Webfont mirror via [practicaltypography.com](https://practicaltypography.com/charter.html)) | Bitstream — free, redistributable |
-| Chinese body / headings | Source Han Serif SC / 思源宋体 | SIL OFL |
-| Mono (code, terminal) | JetBrains Mono | Apache 2.0 |
+| Product headings | Fraunces, then a CJK serif fallback | SIL OFL |
+| Product body | Inter, then the macOS system sans-serif | SIL OFL |
+| Chinese display text | Songti SC / Noto Serif CJK SC where a serif is intended | System / SIL OFL |
+| Mono (code, terminal, timers) | Geist Mono, then SF Mono | SIL OFL / system |
 
-In code blocks and config samples, always use mono. In flowing prose, never mix CJK sans with English serif.
+In code blocks and config samples, always use mono. Product controls and dense
+status surfaces use the sans-serif body stack; editorial headings use the serif
+stack.
 
 ## Voice
 
@@ -74,7 +69,8 @@ Three rules:
 
 ## Don'ts
 
-- Do not put Yulu in a circle or a chat bubble. It is a page, not a conversation app.
-- Do not animate the logo. Do not add gradients, drop shadows, or 3-D effects.
+- Do not replace the current mark with the legacy parchment `语` asset.
+- Do not turn the lens into a generic circular chat bubble.
+- Do not distort, recolor, rotate, or separate the quotation marks from the lens.
 - Do not use stock "AI sparkle" icons.
 - Do not translate the tagline word-for-word into a third language without a native speaker editing it.
