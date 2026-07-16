@@ -39,6 +39,7 @@ describe("ConfigManager", () => {
       expect(cfg.audio.silence_duration_sec).toBe(300);     // default
       expect(cfg.audio.output_dir).toBe("~/Movies/Yulu");
       expect(cfg.transcription.language).toBe("zh");
+      expect(cfg.realtime_captions.strategy).toBe("local-hybrid");
       expect(cfg.transcription.dictation.prompt_slug).toBe("dictation-cleanup");
       expect(cfg.transcription.dictation.timeout_sec).toBe(30);
       expect(cfg.transcription.dictation.deadline_sec).toBe(30);

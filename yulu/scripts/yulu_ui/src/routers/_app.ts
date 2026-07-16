@@ -16,6 +16,7 @@ import { schedulerRouter }    from "./scheduler.js";
 import { agentConsoleRouter } from "./agentConsole.js";
 import { agentSessionsRouter } from "./agentSessions.js";
 import { agentTasksRouter } from "./agentTasks.js";
+import { localCaptionRouter } from "./localCaption.js";
 
 export const appRouter = router({
   recordings:   recordingsRouter,
@@ -35,6 +36,7 @@ export const appRouter = router({
   agentConsole: agentConsoleRouter,
   agentSessions: agentSessionsRouter,
   agentTasks: agentTasksRouter,
+  localCaption: localCaptionRouter,
 });
 
 export type AppRouter = typeof appRouter;

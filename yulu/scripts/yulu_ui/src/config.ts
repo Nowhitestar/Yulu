@@ -115,6 +115,9 @@ export const ConfigSchema = z.object({
     glossary: z.array(z.string()).optional(),
     dictation: DictationSchema,
   }).passthrough().default({}),
+  realtime_captions: z.object({
+    strategy: z.enum(["local-hybrid", "agent-only"]).default("local-hybrid"),
+  }).passthrough().default({}),
   llm: z.object({
     enabled: z.boolean().optional(),
     command: z.array(z.string()).nullable().optional(),

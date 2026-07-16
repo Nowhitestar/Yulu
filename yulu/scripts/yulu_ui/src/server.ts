@@ -36,6 +36,8 @@ import { startRecordingEventInbox } from "./recordingEventInbox.js";
 import { migrateLegacyAgentQueue } from "./legacyQueueMigration.js";
 import { acquireHostInstanceLock, type HostInstanceLock } from "./hostInstanceLock.js";
 import { RealtimeTranscriptionCoordinator } from "./realtimeTranscription.js";
+import { LocalCaptionManager } from "./localCaptionManager.js";
+import { applyGlossaryContract, loadGlossaryContract } from "./glossaryContract.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -114,8 +116,20 @@ async function startLockedServer(
     promptDb: () => dbProxy.prompts,
     vocabDb: () => dbProxy.vocab,
   });
+  const localCaption = new LocalCaptionManager({
+    scriptDir: runtimePaths.scriptDir,
+    configDir: runtimePaths.configDir,
+    strategy: () => configManager.read().realtime_captions.strategy,
+  });
+  if (localCaption.status().installed && localCaption.status().strategy === "local-hybrid") {
+    void localCaption.warm().catch((error) => {
+      console.warn(`[yulu_ui] local caption warm-up failed: ${(error as Error).message}`);
+    });
+  }
   const realtimeTranscription = new RealtimeTranscriptionCoordinator({
     pubsub: appPubSub,
+    streaming: localCaption,
+    stabilize: (text) => applyGlossaryContract(text, loadGlossaryContract(dbProxy.vocab)),
     transcribe: (audioPath, language) => recordingPipeline.transcribeOnDemand({ audioPath, language }),
     warm: async () => { await recordingPipeline.warmTranscription(); },
     translate: async (sourceText, targetLanguage, context) => {
@@ -172,6 +186,7 @@ async function startLockedServer(
     host:      hostStore,
     artifacts: artifactStore,
     recordingPipeline,
+    localCaption,
     db:        dbProxy,
   };
 

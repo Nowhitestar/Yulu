@@ -20,6 +20,13 @@ describe("settingsRegistry", () => {
     expect(def?.validate.safeParse("fr").success).toBe(false);
     expect(reloadFor("transcription.language")).toEqual({ kind: "none" });
   });
+  it("local hybrid caption strategy applies without restarting capture", () => {
+    const def = defFor("realtime_captions.strategy");
+    expect(def?.validate.safeParse("local-hybrid").success).toBe(true);
+    expect(def?.validate.safeParse("agent-only").success).toBe(true);
+    expect(def?.validate.safeParse("cloud").success).toBe(false);
+    expect(reloadFor("realtime_captions.strategy")).toEqual({ kind: "none" });
+  });
   it("llm.command 改完无需动作(读取即生效)", () => {
     expect(reloadFor("llm.command")).toEqual({ kind: "none" });
   });

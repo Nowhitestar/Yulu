@@ -21,6 +21,7 @@ Yulu deliberately does not rebuild Agent capabilities:
 |---|---|
 | Yulu native app | ScreenCaptureKit system audio, AVFoundation microphone capture, and macOS privacy permissions |
 | Yulu Host | Durable tasks, idempotency, leases, artifact commits, authorization, recovery, and audit |
+| Optional local caption model | Low-latency, private sherpa-onnx Paraformer INT8 live captions only |
 | Hermes | Recording speech recognition, meeting summaries, and explicitly authorized Notion delivery |
 | Selected general Agent | Agent Console conversation and its own connectors |
 | Python capture edge | Start/stop capture and deliver or spool the completed-recording event; no AI runtime |
@@ -66,7 +67,8 @@ uses Codex, Claude Code, OpenClaw, or a custom Agent for conversation. See
 
 - Native system-audio and microphone capture without a virtual audio device.
 - Movable live captions on the active display, with source-only, bilingual, or
-  translation-only views and a selectable target language.
+  translation-only views and a selectable target language. The optional local
+  model targets sub-second first text; Hermes/Whisper always creates the final transcript.
 - Agent Console at `http://127.0.0.1:7777/agent-console`.
 - Durable task status for transcription, summarization, artifact commit, and
   optional Notion delivery.
@@ -88,6 +90,8 @@ uses Codex, Claude Code, OpenClaw, or a custom Agent for conversation. See
 - Node.js 20.19+, 22.12+, or 24 for the local Host. The installer adds
   Homebrew `node@24` when no compatible runtime is present.
 - Python 3.10 or newer for the capture edge, diagnostics, and installer.
+- About 320 MB of optional local storage for free low-latency captions; install
+  and manage the model from Settings → Transcription.
 - A working Hermes CLI on the PATH visible to the Yulu UI LaunchAgent. Hermes is
   required for automatic recording processing and voice transcription.
 - Optionally, another supported Agent CLI for Agent Console conversation.

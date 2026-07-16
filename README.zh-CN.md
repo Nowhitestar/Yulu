@@ -20,8 +20,8 @@ Yulu 是一个围绕本地 Agent 设计的 macOS 会议记录工具。它原生�
 跟 Otter / Granola / Fireflies 比：
 
 - **系统音频原生录制**：用 macOS 13+ 的 `ScreenCaptureKit`，**不需要 BlackHole 或多输出设备**。
-- **实时字幕悬浮层**：默认在当前屏幕中下方显示原文，可拖动位置、选择目标语言并切换双语或仅译文；也可以收起为呼吸状态的 Yulu Logo。
-- **智能能力归 Agent**：Hermes 负责录音转写、总结和明确授权的 Notion 投递；Yulu 不再维护另一套模型、STT 或 connector runtime。
+- **实时字幕悬浮层**：默认在当前屏幕中下方显示原文，可拖动位置、选择目标语言并切换双语或仅译文；可选本地 sherpa-onnx INT8 模型提供低延时字幕，也可以收起为呼吸状态的 Yulu Logo。
+- **最终智能能力归 Agent**：本地模型只负责临时实时字幕；Hermes/Whisper 始终生成最终转写，Hermes 继续负责总结和明确授权的 Notion 投递。
 - **Agent Console 是默认工作台**：开始录制、最近三天任务状态、问会议、底层 Agent 切换、当前能力都在一个界面里完成。
 - **任务状态真正持久化**：Host 用 SQLite 保存任务、租约、事件、产物哈希和投递结果；进程重启后可以恢复，也能区分录音、Agent、产物提交和外部投递分别在哪里失败。
 - **连接能力跟着 Agent 走**：录音产物发送到 Notion 时使用 Hermes 自己的 connector；其它交互式连接器动作由 Agent Console 当前选中的 Agent 负责。凭据始终留在 Agent 侧。
@@ -82,7 +82,7 @@ curl -fsSL https://raw.githubusercontent.com/Nowhitestar/Yulu/main/install.sh | 
 4. 写用户级配置到 `~/.config/yulu/config.json`，建录音目录 `~/Movies/Yulu/`。
 5. 编译窗口扫描器，引导授权"辅助功能"。
 6. 编译并签名 `Yulu.app`，引导授权"麦克风"和"屏幕与系统音频录制"。
-7. 不安装 Yulu 自己的语音模型；自动录音处理和语音输入要求 LaunchAgent 的 PATH 中已有可用 Hermes CLI。
+7. 不默认下载实时字幕模型；可在「设置 → 转写」按需安装约 320 MB 的免费本地模型。自动录音最终处理和语音输入仍要求 LaunchAgent 的 PATH 中已有可用 Hermes CLI。
 8. 引导选择 Agent Console 的通用 Agent provider；这不会改变录音任务固定使用 Hermes 的边界。
 9. （可选）通过 `gog` 配置 Yulu 自己的日历调度。
 10. 安装本地 Host、原生录音、菜单栏、调度和检测等 LaunchAgent。
@@ -272,7 +272,7 @@ Agent Console
 - `audio.backend = "daemon"` 是受支持的原生录音路径；`output_dir` 同时是 Host 接受完成录音的安全边界。
 - `agent_pipeline` 只控制持久化任务、自动处理和 Notion 授权，不选择模型或保存 connector 凭据。
 - `auto_send_notion = true` 是真实外部副作用授权。每个录音任务都会限制 Hermes 的工具集；未授权任务没有 Notion 或其它 connector 的可调用能力。Hermes 只有在转录和纪要一起提交后，才能向 Host 申请投递。
-- `transcription` 只保留语言和听写交互上下文；Yulu 不再配置或运行语音模型。
+- `transcription` 只保留语言和听写交互上下文；`realtime_captions` 只选择临时实时字幕路径，最终转写仍由 Hermes/Whisper 完成。
 - `llm.agent.provider` / `llm.command` 选择 Agent Console 的通用 Agent。无论这里选什么，录音处理和语音输入仍固定使用 Hermes。
 - `agent_console.plugins.added` 只是能力展示过滤。连接器凭据、OAuth 和实际配置属于 Agent，不进入 Yulu 配置。
 

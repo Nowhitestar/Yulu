@@ -9,6 +9,7 @@ const SCHEMA = [
   { path: "audio.mic_device",         category: "audio",         label: "麦克风设备", type: "select", reload: { kind: "restart", daemons: ["audiodaemon"] } },
   { path: "audio.output_dir",         category: "audio",         label: "录音输出目录", type: "path", reload: { kind: "restart", daemons: ["audiodaemon"] } },
   { path: "transcription.language",   category: "transcription", label: "语言",      type: "select", reload: { kind: "none" } },
+  { path: "realtime_captions.strategy", category: "transcription", label: "实时字幕方案", type: "select", reload: { kind: "none" } },
   { path: "llm.enabled",              category: "llm",           label: "启用 LLM",  type: "toggle", reload: { kind: "none" } },
   { path: "status_agent.enabled",     category: "general",       label: "菜单栏 Agent", type: "toggle", reload: { kind: "none" } },
   { path: "status_agent.hotkeys",     category: "voice",         label: "语音输入快捷键", type: "text", reload: { kind: "sighup", daemons: ["statusagent"] } },
@@ -39,6 +40,7 @@ vi.mock("../../../web/src/trpc.js", () => {
       language: "auto",
       dictation: { prompt_slug: "dictation-cleanup", translate_prompt_slug: "dictation-translate", target_language: "English" },
     },
+    realtime_captions: { strategy: "local-hybrid" },
     llm: { enabled: false, command: [] },
     status_agent: {
       enabled: false,
@@ -60,6 +62,7 @@ vi.mock("../../../web/src/trpc.js", () => {
     config: { get: { setData: () => {}, invalidate: () => {} } },
     system: { cloud: { detect: { fetch: async () => ({ is_cloud: false, engine: "", reason: "", dataless: false }) } } },
     prompts: { list: { invalidate: () => {} } },
+    localCaption: { status: { invalidate: () => {} } },
   };
   return {
     trpc: {
@@ -116,6 +119,21 @@ vi.mock("../../../web/src/trpc.js", () => {
       },
       agentTasks: {
         transcriptionHealth: { useQuery: () => ({ data: { available: true, provider: "hermes", reason: null }, isPending: false }) },
+      },
+      localCaption: {
+        status: { useQuery: () => ({ data: {
+          installed: false,
+          ready: false,
+          operation: "idle",
+          runtimeBytes: 0,
+          modelBytes: 0,
+          sessionActive: false,
+          message: null,
+          error: null,
+        } }) },
+        install: { useMutation: noopMutation },
+        uninstall: { useMutation: noopMutation },
+        test: { useMutation: noopMutation },
       },
       llm: { test: { useMutation: noopMutation } },
       prompts: {
@@ -329,7 +347,8 @@ describe("Settings category detail content (re-homed widgets)", () => {
     expect(container.querySelector("h2.settings-section-h")?.textContent).toBe(translate("zh", "settings.transcription.heading"));
     expect(detail.getByText("Hermes")).toBeInTheDocument();
     expect(detail.getByText(translate("zh", "settings.transcription.language.label"))).toBeInTheDocument();
-    expect(detail.queryByText(/MLX|Whisper|实时转写|说话人分离/)).toBeNull();
+    expect(detail.getAllByText(/Whisper/).length).toBeGreaterThan(0);
+    expect(detail.queryByText(/MLX|说话人分离/)).toBeNull();
   });
 
   it("voice: hotkey capture commits key and modifiers from the pressed shortcut", async () => {

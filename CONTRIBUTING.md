@@ -7,7 +7,7 @@ Thanks for considering a contribution. Yulu is small enough that the process is 
 - **Privacy boundaries must be explicit.** Native capture and durable task state stay local. Agent/model and connector behavior belongs to the selected local Agent; every Yulu-triggered external delivery must be separately authorized and auditable.
 - **No virtual audio devices.** The whole point of the ScreenCaptureKit path is that users do not need to install BlackHole / Loopback / multi-output devices. PRs that introduce a virtual driver as a hard requirement will not be accepted.
 - **Recording must always ask.** `notify.py` consent prompts are not optional, even for "convenience" auto-record paths.
-- **Do not rebuild the Agent.** Hermes owns recording transcription, summary reasoning, and authorized connector use. Yulu owns native capture, durable tasks, leases, task-scoped artifacts, policy, and audit. Agent Console may use another selected Agent without changing the recording pipeline.
+- **Do not rebuild the Agent.** Hermes owns durable recording transcription, summary reasoning, and authorized connector use. Yulu may run the narrowly scoped, optional local caption model defined by ADR-006, but its mutable output must never replace the Hermes final transcript. Yulu otherwise owns native capture, durable tasks, leases, task-scoped artifacts, policy, and audit. Agent Console may use another selected Agent without changing the recording pipeline.
 
 ## Before you open a PR
 
@@ -35,7 +35,7 @@ Thanks for considering a contribution. Yulu is small enough that the process is 
 ## What is out of scope (for now)
 
 - Cross-platform ports (Windows / Linux). The macOS-native path is the moat; a cross-platform version would be a fork, not a PR.
-- Reimplementing transcription, summarization, chat, or connector engines that Hermes or the selected Agent already provides.
+- Reimplementing durable transcription, summarization, chat, or connector engines that Hermes or the selected Agent already provides. The optional ephemeral realtime-caption path in ADR-006 is the sole speech-engine exception.
 - Unsigned production installer assets or updater paths that require administrator privileges.
 
 ## Reporting bugs

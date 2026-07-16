@@ -63,6 +63,9 @@
       "note": "Voice input is transcribed by Hermes through the authenticated Host endpoint. Yulu only supplies capture, local prompt, and glossary context."
     }
   },
+  "realtime_captions": {
+    "strategy": "local-hybrid"
+  },
   "agent_pipeline": {
     "enabled": true,
     "auto_process_recordings": true,

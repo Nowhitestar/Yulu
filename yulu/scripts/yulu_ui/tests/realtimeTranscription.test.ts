@@ -1,15 +1,17 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PubSub, type AppChannels } from "../src/pubsub.js";
+import type { StreamingCaptionEngine } from "../src/localCaptionEngine.js";
 import {
   RealtimeTranscriptionCoordinator,
   assessRealtimeTranscript,
+  captionsLikelyDuplicate,
   dedupeTranscriptSegment,
   segmentCutBytes,
+  sourceSeparated16kPcm,
   trailingSilenceMs,
-  trustedRealtimeTranscript,
 } from "../src/realtimeTranscription.js";
 
 const roots: string[] = [];
@@ -17,12 +19,12 @@ afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
-function writeStereoWav(path: string, seconds: number, sample = 5000): void {
+function writeStereoWav(path: string, seconds: number, sample = 5000, systemSample = sample): void {
   const frames = Math.floor(48_000 * seconds);
   const pcm = Buffer.alloc(frames * 4);
   for (let i = 0; i < frames; i += 1) {
     pcm.writeInt16LE(sample, i * 4);
-    pcm.writeInt16LE(sample, i * 4 + 2);
+    pcm.writeInt16LE(systemSample, i * 4 + 2);
   }
   const wav = Buffer.alloc(44 + pcm.length);
   wav.write("RIFF", 0);
@@ -48,6 +50,106 @@ function monoPcm(seconds: number, sample: number): Buffer {
 }
 
 describe("RealtimeTranscriptionCoordinator", () => {
+  it("streams source-separated PCM, exposes mutable partials, and persists stable text only", async () => {
+    const root = mkdtempSync(join(tmpdir(), "yulu-realtime-streaming-"));
+    roots.push(root);
+    const audioPath = join(root, "流式会议_20260716_190000.wav");
+    writeStereoWav(audioPath, 0.05, 1_000, 2_000);
+    const pubsub = new PubSub<AppChannels>();
+    const events: AppChannels["realtime-transcript"][] = [];
+    pubsub.subscribe("realtime-transcript", (event) => events.push(event));
+    const engine: StreamingCaptionEngine = {
+      provider: "test-streaming",
+      warm: vi.fn(async () => {}),
+      start: vi.fn(async () => {}),
+      feed: vi.fn(async () => ({
+        updates: {
+          mic: { partial: "正在讨论", stable: [], audioMs: 50 },
+          system: { partial: "远端方案", stable: [], audioMs: 50 },
+        },
+      })),
+      finish: vi.fn(async () => ({
+        updates: {
+          system: { partial: "", stable: [{ text: "远端方案已经确认", endMs: 640 }], audioMs: 50 },
+          mic: { partial: "", stable: [{ text: "远端方案已经确认", endMs: 1_000 }], audioMs: 50 },
+        },
+      })),
+      abort: vi.fn(async () => {}),
+      close: vi.fn(async () => {}),
+    };
+    const coordinator = new RealtimeTranscriptionCoordinator({
+      pubsub,
+      streaming: engine,
+      transcribe: vi.fn(async () => ({ transcript: "fallback", provider: "test", chunks: 1, language: "zh" as const })),
+      pollMs: 60_000,
+    });
+
+    await coordinator.start({ audioPath, title: "流式会议", language: "zh" });
+
+    expect(engine.start).toHaveBeenCalledWith("zh");
+    expect(engine.feed).toHaveBeenCalledOnce();
+    const chunks = vi.mocked(engine.feed).mock.calls[0]![0];
+    expect(chunks.mic?.readInt16LE(0)).toBe(1_000);
+    expect(chunks.system?.readInt16LE(0)).toBe(2_000);
+    expect(events.at(-1)).toMatchObject({
+      captionMode: "streaming",
+      captionProvider: "test-streaming",
+      stableText: "",
+      partialText: "远端方案\n正在讨论",
+    });
+    expect(existsSync(audioPath.replace(/\.wav$/, ".realtime.transcript.txt"))).toBe(false);
+
+    const result = await coordinator.stop(audioPath);
+
+    expect(result).toMatchObject({
+      status: "finished",
+      text: "远端方案已经确认",
+      stableText: "远端方案已经确认",
+      partialText: "",
+    });
+    expect(readFileSync(audioPath.replace(/\.wav$/, ".realtime.transcript.txt"), "utf8"))
+      .toBe("远端方案已经确认\n");
+    await coordinator.close();
+  });
+
+  it("falls back to segmented Hermes captions when the local stream fails", async () => {
+    const root = mkdtempSync(join(tmpdir(), "yulu-realtime-stream-fallback-"));
+    roots.push(root);
+    const audioPath = join(root, "回退会议_20260716_191000.wav");
+    writeStereoWav(audioPath, 0.05);
+    const transcribe = vi.fn(async () => ({ transcript: "兼容回退正常", provider: "test", chunks: 1, language: "zh" as const }));
+    const engine: StreamingCaptionEngine = {
+      provider: "broken-stream",
+      warm: vi.fn(async () => {}),
+      start: vi.fn(async () => {}),
+      feed: vi.fn(async () => { throw new Error("decoder crashed"); }),
+      finish: vi.fn(async () => ({ updates: {} })),
+      abort: vi.fn(async () => {}),
+      close: vi.fn(async () => {}),
+    };
+    const coordinator = new RealtimeTranscriptionCoordinator({
+      pubsub: new PubSub<AppChannels>(),
+      streaming: engine,
+      transcribe,
+      minSegmentMs: 1,
+      chunkSec: 0.01,
+      pollMs: 60_000,
+    });
+
+    await coordinator.start({ audioPath, title: "回退会议", language: "zh" });
+    const result = await coordinator.stop(audioPath);
+
+    expect(engine.abort).toHaveBeenCalledOnce();
+    expect(transcribe).toHaveBeenCalled();
+    expect(result).toMatchObject({
+      status: "finished",
+      captionMode: "segmented",
+      captionProvider: "hermes-segmented",
+      fallbackReason: "local caption failed: decoder crashed",
+      text: "兼容回退正常",
+    });
+  });
+
   it("tails a growing Yulu WAV, freezes the selected language, and persists partial text", async () => {
     const root = mkdtempSync(join(tmpdir(), "yulu-realtime-"));
     roots.push(root);
@@ -105,7 +207,6 @@ describe("RealtimeTranscriptionCoordinator", () => {
       trusted: false,
       error: "provider unavailable",
     });
-    expect(trustedRealtimeTranscript(audioPath, "zh")).toBeNull();
   });
 
   it("drops per-chunk language drift and known caption hallucinations without failing the session", async () => {
@@ -326,6 +427,27 @@ describe("RealtimeTranscriptionCoordinator", () => {
 });
 
 describe("realtime caption segmentation", () => {
+  it("keeps source channels separate and removes delayed cross-channel duplicates", () => {
+    const source = Buffer.alloc(48 * 4);
+    for (let frame = 0; frame < 48; frame += 1) {
+      source.writeInt16LE(1_000, frame * 4);
+      source.writeInt16LE(2_000, frame * 4 + 2);
+    }
+    const separated = sourceSeparated16kPcm(source, {
+      dataOffset: 44,
+      channels: 2,
+      sampleRate: 48_000,
+      blockAlign: 4,
+      bitsPerSample: 16,
+    });
+    expect(separated.chunks.mic).toHaveLength(16 * 2);
+    expect(separated.chunks.system).toHaveLength(16 * 2);
+    expect(separated.chunks.mic?.readInt16LE(0)).toBe(1_000);
+    expect(separated.chunks.system?.readInt16LE(0)).toBe(2_000);
+    expect(captionsLikelyDuplicate("我们继续讨论实时转录方案", "我们继续讨论实时转录的方案")).toBe(true);
+    expect(captionsLikelyDuplicate("我同意这个方向", "接下来检查安装步骤")).toBe(false);
+  });
+
   it("cuts after trailing silence and removes overlap text", () => {
     const voice = monoPcm(1.3, 5_000);
     const silence = monoPcm(0.5, 0);

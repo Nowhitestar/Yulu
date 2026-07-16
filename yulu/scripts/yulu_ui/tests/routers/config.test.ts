@@ -65,6 +65,18 @@ describe("configRouter", () => {
     } finally { cleanup(); }
   });
 
+  it("update(realtime_captions.strategy) synchronizes the local model lifecycle", async () => {
+    const { ctx, cleanup } = makeCtx();
+    const syncStrategy = vi.fn().mockResolvedValue(undefined);
+    ctx.localCaption = { syncStrategy } as never;
+    try {
+      const caller = createCaller(configRouter, ctx);
+      const result = await caller.update({ key: "realtime_captions.strategy", value: "agent-only" });
+      expect(result.daemonsNeedingRestart).toEqual([]);
+      expect(syncStrategy).toHaveBeenCalledOnce();
+    } finally { cleanup(); }
+  });
+
   it("update(connectors.feishu.read_calendar) restarts calendar scheduler services", async () => {
     const { ctx, cleanup } = makeCtx();
     try {

@@ -228,7 +228,7 @@ describe("RecordingPipeline", () => {
     expect(() => writeFileSync(join(moviesDir, "proof"), "ok")).not.toThrow();
   });
 
-  it("reuses a trusted same-language realtime transcript instead of retranscribing", async () => {
+  it("always runs the final Hermes quality pass instead of promoting realtime captions", async () => {
     const { audioPath, moviesDir, transcribe } = setup();
     writeFileSync(audioPath.replace(/\.wav$/, ".realtime.transcript.txt"), "这是会议的实时转写，with Alpha。\n");
     writeFileSync(audioPath.replace(/\.wav$/, ".realtime.coverage.json"), JSON.stringify({
@@ -244,9 +244,11 @@ describe("RecordingPipeline", () => {
     const result = pipeline!.enqueueCompletion({ audioPath, language: "zh" });
     await vi.waitFor(() => expect(store!.getTask(result.task.id)?.state).toBe("completed"));
 
-    expect(transcribe).not.toHaveBeenCalled();
+    expect(transcribe).toHaveBeenCalledOnce();
     expect(readFileSync(join(moviesDir, "Demo_20260711_120000.transcript.txt"), "utf8"))
-      .toContain("这是会议的实时转写，with Alpha。");
+      .toContain("hello transcript");
+    expect(readFileSync(join(moviesDir, "Demo_20260711_120000.transcript.txt"), "utf8"))
+      .not.toContain("这是会议的实时转写，with Alpha。");
   });
 
   it("applies glossary aliases to transcription and passes canonical terms to summary", async () => {

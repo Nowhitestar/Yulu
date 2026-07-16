@@ -137,9 +137,18 @@ Starting a recording opens a movable subtitle overlay near the bottom center of
 the active display. It shows source text by default. Hover over the capsule to
 choose a target language or switch to `双语` or `仅翻译`.
 
+The default strategy is dual-stage: the optional local sherpa-onnx Paraformer
+INT8 model emits fast mutable captions while recording, and Hermes/Whisper always
+reprocesses the completed WAV into the durable transcript. Open Settings →
+Transcription to install, test, remove, or switch the realtime model. The first
+install downloads about 1 GB and keeps about 320 MB; it has no usage fee and does
+not upload caption audio. If the model is missing or fails, the current recording
+falls back to the Agent-compatible caption path.
+
 Drag the six-dot handle to reposition the overlay. Use the down arrow to collapse
 it to the breathing Yulu logo, then click the logo to restore captions. Click the
 `录制中` control to stop; the overlay disappears after capture stops.
+The model cannot be removed while a recording is active.
 
 ## Dictation and voice input
 

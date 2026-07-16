@@ -233,6 +233,9 @@ create_config() {
       "timeout_sec": 30
     }
   },
+  "realtime_captions": {
+    "strategy": "local-hybrid"
+  },
   "llm": {
     "enabled": true,
     "command": null,

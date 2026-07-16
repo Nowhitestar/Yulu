@@ -9,6 +9,7 @@ Agent-owned intelligence. The current runtime decision is recorded in
 Yulu owns only the capabilities that require a trusted product boundary:
 
 - native system-audio and microphone capture;
+- optional, ephemeral low-latency captions whose audio and model stay local;
 - macOS permission visibility and repair;
 - recording path validation;
 - durable tasks, idempotency, leases, recovery, and audit events;
@@ -17,10 +18,11 @@ Yulu owns only the capabilities that require a trusted product boundary:
 - explicit authorization and recording of external delivery outcomes;
 - local MCP authentication and access control.
 
-Hermes owns speech recognition, summary generation, and Notion delivery for the
-recording pipeline. The Agent selected in Agent Console owns interactive
-conversation and its own connectors. Yulu does not contain an AI, chat, or
-connector execution engine.
+Hermes owns the durable final speech recognition, summary generation, and Notion
+delivery for the recording pipeline. The optional local caption engine owns only
+mutable live display text and never becomes the final task artifact. The Agent
+selected in Agent Console owns interactive conversation and its own connectors.
+Yulu does not contain a general AI, chat, or connector execution engine.
 
 ## Runtime components
 
@@ -29,6 +31,8 @@ connector execution engine.
 | Native capture | `Yulu.app`, `audio_daemon.swift` | Capture through ScreenCaptureKit and AVFoundation; expose start/stop/status over `audio_daemon.sock` |
 | Capture edge | `record_audio.py`, `meeting_daemon.py`, dictation/status adapters | Control native capture; submit a completed-recording event; atomically spool when Host is unavailable |
 | Local Host | `yulu_ui/src/server.ts` | Loopback HTTP, tRPC, WebSocket, static UI, and authenticated MCP |
+| Realtime caption engine | `localCaptionManager.ts`, `sherpa_caption_worker.py` | Optional local Paraformer INT8 worker for source-separated mutable captions; install/test/remove from Settings |
+| Realtime coordinator | `realtimeTranscription.ts` | Feed mic/system streams, publish partial/stable captions, apply glossary corrections, and fall back to Agent-compatible chunks |
 | Durable store | `hostStore.ts` | Persist tasks, events, leases, artifact records, and Notion delivery records in `host.sqlite` |
 | Pipeline coordinator | `recordingPipeline.ts` | Validate input, enqueue/claim tasks, dispatch Hermes, enforce state transitions, and recover failures |
 | Recording gateway | `agentGateway.ts` | Start a loopback Hermes service for audio, run the Hermes recording workflow, and audit its tool calls |
@@ -45,6 +49,8 @@ control plane, not just the browser interface.
 flowchart TD
     A["Calendar, window, menu, CLI, or MCP action"] --> B["Yulu.app native capture"]
     B --> C["Local WAV"]
+    B --> O["Optional local live captions"]
+    O --> P["Ephemeral overlay + realtime sidecar"]
     C --> D["Python capture-completion adapter"]
     D -->|"Bearer-authenticated loopback request"| E["Yulu Host"]
     D -->|"Host unavailable"| F["Atomic completion-event spool"]

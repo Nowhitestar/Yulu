@@ -4,8 +4,9 @@ Yulu reads active configuration from `~/.config/yulu/config.json`. The installer
 creates it with private per-user defaults. The file contains product preferences,
 paths, and Agent selection only; it must not contain Agent or connector secrets.
 
-The current schema reflects the Agent-native architecture: Yulu has no speech
-provider, model, summary runtime, or connector-execution setting.
+The current schema keeps final transcription, summaries, and connectors Agent-native.
+An optional Yulu-managed sherpa-onnx model is used only for ephemeral low-latency
+captions; Hermes/Whisper still produces the durable final transcript.
 
 ## Representative configuration
 
@@ -31,6 +32,9 @@ provider, model, summary runtime, or connector-execution setting.
       "translate_deadline_sec": 30,
       "translate_timeout_sec": 30
     }
+  },
+  "realtime_captions": {
+    "strategy": "local-hybrid"
   },
   "agent_pipeline": {
     "enabled": true,
@@ -141,8 +145,8 @@ promotes that same durable task instead of creating a duplicate.
 
 ## `transcription`
 
-Yulu no longer selects or runs a speech engine. Hermes owns that choice. The
-remaining section carries language and dictation interaction context.
+Hermes owns durable transcription. This section carries language and dictation
+interaction context; it does not select the realtime caption model.
 
 | Field | Installer value | Meaning |
 |---|---:|---|
@@ -158,6 +162,19 @@ remaining section carries language and dictation interaction context.
 
 The Host accepts on-demand audio only from the configured recordings directory
 or `~/.config/yulu/dictation`, and only as a valid absolute WAV path.
+
+## `realtime_captions`
+
+This section selects the live-caption path. The default `local-hybrid` strategy
+uses the optional local sherpa-onnx Paraformer INT8 model for mutable live captions,
+then always runs Hermes/Whisper after recording stops for the durable transcript.
+`agent-only` keeps the previous chunked Agent-compatible caption path. The local
+model can be installed, tested, and removed from Settings → Transcription; audio
+sent to it stays on the Mac.
+
+| Field | Default | Meaning |
+|---|---:|---|
+| `strategy` | `"local-hybrid"` | `local-hybrid` for low-latency local captions plus final Whisper, or `agent-only` for compatibility. If the local runtime is absent or fails, the active recording falls back to the compatible path. |
 
 ## `llm` and Agent Console
 

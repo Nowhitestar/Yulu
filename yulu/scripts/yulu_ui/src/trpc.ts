@@ -7,6 +7,7 @@ import type { paths as pathsType } from "./paths.js";
 import type { HostStore } from "./hostStore.js";
 import type { ArtifactStore } from "./artifactStore.js";
 import type { RecordingPipeline } from "./recordingPipeline.js";
+import type { LocalCaptionManager } from "./localCaptionManager.js";
 
 export interface AppContext {
   config: ConfigManager;
@@ -16,6 +17,7 @@ export interface AppContext {
   host: HostStore;
   artifacts: ArtifactStore;
   recordingPipeline: RecordingPipeline;
+  localCaption?: LocalCaptionManager;
   db: {
     prompts: DbType;
     vocab: DbType;

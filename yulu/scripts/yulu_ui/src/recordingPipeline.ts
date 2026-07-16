@@ -25,7 +25,6 @@ import {
 } from "./glossaryContract.js";
 import {
   normalizeTranscriptionLanguage,
-  trustedRealtimeTranscript,
   type TranscriptionLanguage,
 } from "./realtimeTranscription.js";
 
@@ -464,20 +463,16 @@ export class RecordingPipeline {
       this.publish(task, "transcribing");
       const workspace = this.options.artifacts.workspace(task.id);
       const glossary = this.glossary();
-      const realtime = trustedRealtimeTranscript(task.audioPath, task.transcriptionLanguage);
-      const rawTranscription = realtime
-        ? {
-            transcript: realtime.transcript,
-            provider: "hermes-realtime",
-            chunks: realtime.chunks,
-            language: task.transcriptionLanguage,
-          }
-        : await gateway.transcribe(task, workspace, glossary);
+      // Realtime captions optimize feedback latency; they are intentionally not
+      // the final transcript source. Hermes/Whisper always performs the quality
+      // pass after capture so mutable Paraformer output cannot be promoted into
+      // the durable transcript or summary.
+      const rawTranscription = await gateway.transcribe(task, workspace, glossary);
       const transcript = glossary
         ? applyGlossaryContract(rawTranscription.transcript, glossary)
         : rawTranscription.transcript;
       const transcription = { ...rawTranscription, transcript };
-      if (realtime || transcript !== rawTranscription.transcript) {
+      if (transcript !== rawTranscription.transcript) {
         this.options.artifacts.writeStagedTranscript(task.id, transcript);
       }
       this.options.store.recordProgress(task.id, leaseToken, "summarizing", `Hermes transcription provider: ${transcription.provider}`);
