@@ -343,6 +343,42 @@ final class LogoView: NSView {
     }
 }
 
+final class OutlinedCaptionLabel: NSView {
+    private let outlineLabel = NSTextField(wrappingLabelWithString: "")
+    private let fillLabel = NSTextField(wrappingLabelWithString: "")
+
+    var attributedStringValue: NSAttributedString {
+        get { fillLabel.attributedStringValue }
+        set {
+            fillLabel.attributedStringValue = newValue
+            let outlined = NSMutableAttributedString(attributedString: newValue)
+            outlined.addAttributes(
+                [.strokeColor: NSColor.black, .strokeWidth: 9.0],
+                range: NSRange(location: 0, length: outlined.length)
+            )
+            outlineLabel.attributedStringValue = outlined
+        }
+    }
+
+    var outlineAttributedStringValue: NSAttributedString { outlineLabel.attributedStringValue }
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        [outlineLabel, fillLabel].forEach { label in
+            label.frame = bounds
+            label.autoresizingMask = [.width, .height]
+            label.alignment = .center
+            label.maximumNumberOfLines = 2
+            label.lineBreakMode = .byTruncatingTail
+            label.isSelectable = false
+            label.drawsBackground = false
+            addSubview(label)
+        }
+    }
+
+    required init?(coder: NSCoder) { nil }
+}
+
 final class AppDel: NSObject, NSApplicationDelegate, NSWindowDelegate {
     let meetingTitle: String
     let statePath: String
@@ -358,8 +394,8 @@ final class AppDel: NSObject, NSApplicationDelegate, NSWindowDelegate {
     var targetPopup: NSPopUpButton!
     var displayPopup: NSPopUpButton!
     var collapseButton: CollapseButton!
-    var sourceLabel: NSTextField!
-    var translationLabel: NSTextField!
+    var sourceLabel: OutlinedCaptionLabel!
+    var translationLabel: OutlinedCaptionLabel!
     var logoView: LogoView!
 
     var activeScreen: NSScreen!
@@ -535,14 +571,8 @@ final class AppDel: NSObject, NSApplicationDelegate, NSWindowDelegate {
         return popup
     }
 
-    func makeCaptionLabel() -> NSTextField {
-        let label = NSTextField(wrappingLabelWithString: "")
-        label.alignment = .center
-        label.maximumNumberOfLines = 2
-        label.lineBreakMode = .byTruncatingTail
-        label.isSelectable = false
-        label.drawsBackground = false
-        return label
+    func makeCaptionLabel() -> OutlinedCaptionLabel {
+        OutlinedCaptionLabel(frame: .zero)
     }
 
     func layoutViews() {
@@ -1113,7 +1143,14 @@ if arguments.contains("--self-test") {
     assert(app.parseState(["recording": ["audio_path": "/tmp/a.wav"]]).recording == true)
     assert(app.displayMode == .source && !app.displayMode.translationEnabled)
     let captionAttributes = app.captionString("caption", size: 30, color: .white, weight: .bold).attributes(at: 0, effectiveRange: nil)
-    assert(captionAttributes[.shadow] == nil && captionAttributes[.strokeWidth] == nil)
+    assert(captionAttributes[.shadow] == nil)
+    assert(captionAttributes[.backgroundColor] == nil)
+    assert(captionAttributes[.strokeWidth] == nil && captionAttributes[.strokeColor] == nil)
+    let outlinedLabel = OutlinedCaptionLabel(frame: NSRect(x: 0, y: 0, width: 400, height: 66))
+    outlinedLabel.attributedStringValue = app.captionString("caption", size: 30, color: .white, weight: .bold)
+    let outlineAttributes = outlinedLabel.outlineAttributedStringValue.attributes(at: 0, effectiveRange: nil)
+    assert((outlineAttributes[.strokeWidth] as? NSNumber)?.doubleValue == 9.0)
+    assert((outlineAttributes[.strokeColor] as? NSColor) == NSColor.black)
     let compactToolbar = app.toolbarFrame(compact: true, in: NSRect(x: 0, y: 0, width: 900, height: 176))
     assert(compactToolbar.width == compactToolbarWidth)
     let compactButton = RecordingButton(frame: app.compactRecordingButtonFrame(in: NSRect(origin: .zero, size: compactToolbar.size)))
