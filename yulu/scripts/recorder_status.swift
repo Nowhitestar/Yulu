@@ -358,6 +358,8 @@ final class AppDel: NSObject, NSApplicationDelegate, NSWindowDelegate {
     var targetPopup: NSPopUpButton!
     var displayPopup: NSPopUpButton!
     var collapseButton: CollapseButton!
+    var sourceOutlineLabel: NSTextField!
+    var translationOutlineLabel: NSTextField!
     var sourceLabel: NSTextField!
     var translationLabel: NSTextField!
     var logoView: LogoView!
@@ -368,6 +370,8 @@ final class AppDel: NSObject, NSApplicationDelegate, NSWindowDelegate {
     var toolbarCompact = false
     var currentAudioPath = ""
     var sourceText = ""
+    var captionRevealTarget = ""
+    var captionRevealCharactersPerStep = 1
     var translationText = ""
     var translationFailed = false
     var warningText = ""
@@ -385,6 +389,7 @@ final class AppDel: NSObject, NSApplicationDelegate, NSWindowDelegate {
     var timeTimer: Timer?
     var stateTimer: Timer?
     var captionTimer: Timer?
+    var captionRevealTimer: Timer?
     var toolbarHideWorkItem: DispatchWorkItem?
     var reconnectWorkItem: DispatchWorkItem?
     var stopProcess: Process?
@@ -408,7 +413,7 @@ final class AppDel: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        [timeTimer, stateTimer, captionTimer].forEach { $0?.invalidate() }
+        [timeTimer, stateTimer, captionTimer, captionRevealTimer].forEach { $0?.invalidate() }
         toolbarHideWorkItem?.cancel()
         reconnectWorkItem?.cancel()
         webSocketTask?.cancel(with: .goingAway, reason: nil)
@@ -501,8 +506,12 @@ final class AppDel: NSObject, NSApplicationDelegate, NSWindowDelegate {
         collapseButton.action = #selector(collapse)
         toolbar.addSubview(collapseButton)
 
+        sourceOutlineLabel = makeCaptionLabel()
+        translationOutlineLabel = makeCaptionLabel()
         sourceLabel = makeCaptionLabel()
         translationLabel = makeCaptionLabel()
+        root.addSubview(sourceOutlineLabel)
+        root.addSubview(translationOutlineLabel)
         root.addSubview(sourceLabel)
         root.addSubview(translationLabel)
 
@@ -539,10 +548,29 @@ final class AppDel: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let label = NSTextField(wrappingLabelWithString: "")
         label.alignment = .center
         label.maximumNumberOfLines = 2
-        label.lineBreakMode = .byTruncatingTail
+        label.lineBreakMode = .byCharWrapping
+        label.cell?.wraps = true
+        label.cell?.isScrollable = false
         label.isSelectable = false
         label.drawsBackground = false
         return label
+    }
+
+    func sourceCaptionFrame(in bounds: NSRect) -> NSRect {
+        NSRect(x: 12, y: 60, width: bounds.width - 24, height: 78)
+    }
+
+    func secondaryCaptionFrame(in bounds: NSRect) -> NSRect {
+        NSRect(x: 18, y: 8, width: bounds.width - 36, height: 48)
+    }
+
+    func layoutCaptionLabels() {
+        let sourceFrame = sourceCaptionFrame(in: root.bounds)
+        let secondaryFrame = secondaryCaptionFrame(in: root.bounds)
+        sourceOutlineLabel.frame = sourceFrame
+        sourceLabel.frame = sourceFrame
+        translationOutlineLabel.frame = secondaryFrame
+        translationLabel.frame = secondaryFrame
     }
 
     func layoutViews() {
@@ -551,13 +579,12 @@ final class AppDel: NSObject, NSApplicationDelegate, NSWindowDelegate {
             logoView.isHidden = true
             toolbar.isHidden = false
             toolbar.frame = toolbarFrame(compact: toolbarCompact, in: root.bounds)
+            layoutCaptionLabels()
             let fullControls = [grip, timeLabel, sourceLanguageLabel, targetPopup, displayPopup, collapseButton]
             fullControls.forEach { $0?.isHidden = toolbarCompact }
             if toolbarCompact {
                 recordingButton.frame = compactRecordingButtonFrame(in: toolbar.bounds)
                 recordingButton.centersContent = true
-                sourceLabel.frame = NSRect(x: 18, y: 62, width: root.bounds.width - 36, height: 66)
-                translationLabel.frame = NSRect(x: 24, y: 20, width: root.bounds.width - 48, height: 42)
                 return
             }
             recordingButton.centersContent = false
@@ -569,10 +596,10 @@ final class AppDel: NSObject, NSApplicationDelegate, NSWindowDelegate {
             targetPopup.frame = NSRect(x: x, y: 3, width: 88, height: 24); x += 90
             displayPopup.frame = NSRect(x: x, y: 3, width: 66, height: 24)
             collapseButton.frame = NSRect(x: toolbar.bounds.width - 30, y: 3, width: 24, height: 24)
-            sourceLabel.frame = NSRect(x: 18, y: 62, width: root.bounds.width - 36, height: 66)
-            translationLabel.frame = NSRect(x: 24, y: 20, width: root.bounds.width - 48, height: 42)
         } else {
             toolbar.isHidden = true
+            sourceOutlineLabel.isHidden = true
+            translationOutlineLabel.isHidden = true
             sourceLabel.isHidden = true
             translationLabel.isHidden = true
             logoView.isHidden = false
@@ -680,6 +707,8 @@ final class AppDel: NSObject, NSApplicationDelegate, NSWindowDelegate {
         guard !closing else { return }
         timeLabel.stringValue = formatElapsed(Date().timeIntervalSince(startTime))
         if Date().timeIntervalSince(lastCaptionAt) > 6, !sourceText.isEmpty, warningText.isEmpty {
+            sourceOutlineLabel.animator().alphaValue = 0
+            translationOutlineLabel.animator().alphaValue = 0
             sourceLabel.animator().alphaValue = 0
             translationLabel.animator().alphaValue = 0
         }
@@ -763,12 +792,10 @@ final class AppDel: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let path = realtimeTranscriptPath(audioPath: currentAudioPath)
         guard FileManager.default.fileExists(atPath: path) else { return }
         let lines = captionLines(readTail(path: path))
-        guard let latest = lines.suffix(2).nilIfEmpty?.joined(separator: " "), latest != sourceText else { return }
-        sourceText = latest
+        guard let latest = lines.suffix(2).nilIfEmpty?.joined(separator: " "), latest != captionRevealTarget else { return }
         translationText = ""
         translationFailed = false
-        lastCaptionAt = Date()
-        renderCaptions(animated: true)
+        queueCaptionReveal(latest)
     }
 
     func realtimeTranscriptPath(audioPath: String) -> String {
@@ -806,8 +833,12 @@ final class AppDel: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     func renderCaptions(animated: Bool, warning: Bool = false) {
         guard expanded else { return }
-        sourceLabel.isHidden = displayMode == .translation
-        translationLabel.isHidden = displayMode == .source
+        let sourceHidden = displayMode == .translation
+        let translationHidden = displayMode == .source
+        sourceOutlineLabel.isHidden = sourceHidden
+        sourceLabel.isHidden = sourceHidden
+        translationOutlineLabel.isHidden = translationHidden
+        translationLabel.isHidden = translationHidden
         let displayedTranslation = translationFailed
             ? (displayMode == .translation && !sourceText.isEmpty ? "翻译暂不可用 · \(sourceText)" : "翻译暂不可用")
             : translationText
@@ -816,40 +847,104 @@ final class AppDel: NSObject, NSApplicationDelegate, NSWindowDelegate {
             : warningText
         let secondaryText = warningText.isEmpty && displayMode == .bilingual ? displayedTranslation : ""
         if displayMode == .translation {
+            translationOutlineLabel.frame = sourceLabel.frame
             translationLabel.frame = sourceLabel.frame
-            translationLabel.attributedStringValue = captionString(mainText, size: 30, color: .white, weight: .bold)
+            setCaption(mainText, size: 30, color: .white, weight: .bold, fill: translationLabel, outline: translationOutlineLabel)
         } else {
-            translationLabel.frame = NSRect(x: 24, y: 20, width: root.bounds.width - 48, height: 42)
-            sourceLabel.attributedStringValue = captionString(
+            let secondaryFrame = secondaryCaptionFrame(in: root.bounds)
+            translationOutlineLabel.frame = secondaryFrame
+            translationLabel.frame = secondaryFrame
+            setCaption(
                 mainText,
                 size: 30,
                 color: warning ? NSColor(hex: "#FFD1CC") : .white,
-                weight: .bold
+                weight: .bold,
+                fill: sourceLabel,
+                outline: sourceOutlineLabel
             )
-            translationLabel.attributedStringValue = captionString(secondaryText, size: 18, color: NSColor(hex: "#F4E0AC"), weight: .semibold)
+            setCaption(secondaryText, size: 18, color: NSColor(hex: "#F4E0AC"), weight: .semibold, fill: translationLabel, outline: translationOutlineLabel)
         }
-        sourceLabel.alphaValue = mainText.isEmpty ? 0 : 1
-        translationLabel.alphaValue = (displayMode == .translation ? mainText : secondaryText).isEmpty ? 0 : 1
+        let sourceAlpha: CGFloat = mainText.isEmpty ? 0 : 1
+        let translationAlpha: CGFloat = (displayMode == .translation ? mainText : secondaryText).isEmpty ? 0 : 1
+        sourceOutlineLabel.alphaValue = sourceAlpha
+        sourceLabel.alphaValue = sourceAlpha
+        translationOutlineLabel.alphaValue = translationAlpha
+        translationLabel.alphaValue = translationAlpha
         guard animated else { return }
         if !sourceLabel.isHidden && !mainText.isEmpty {
+            sourceOutlineLabel.alphaValue = 0
             sourceLabel.alphaValue = 0
+            sourceOutlineLabel.animator().alphaValue = 1
             sourceLabel.animator().alphaValue = 1
         }
         if !translationLabel.isHidden && !(displayMode == .translation ? mainText : secondaryText).isEmpty {
+            translationOutlineLabel.alphaValue = 0
             translationLabel.alphaValue = 0
+            translationOutlineLabel.animator().alphaValue = 1
             translationLabel.animator().alphaValue = 1
         }
     }
 
-    func captionString(_ text: String, size: CGFloat, color: NSColor, weight: NSFont.Weight) -> NSAttributedString {
+    func setCaption(_ text: String, size: CGFloat, color: NSColor, weight: NSFont.Weight, fill: NSTextField, outline: NSTextField) {
+        let visibleText = visibleCaptionText(text, size: size, weight: weight, width: max(1, fill.bounds.width - 12))
+        outline.attributedStringValue = captionString(visibleText, size: size, color: color, weight: weight, outlineOnly: true)
+        fill.attributedStringValue = captionString(visibleText, size: size, color: color, weight: weight)
+    }
+
+    func visibleCaptionText(_ text: String, size: CGFloat, weight: NSFont.Weight, width: CGFloat, maxLines: Int = 2) -> String {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, maxLines > 0, width > 0 else { return trimmed }
+        let font = NSFont.systemFont(ofSize: size, weight: weight)
         let paragraph = NSMutableParagraphStyle()
         paragraph.alignment = .center
-        paragraph.lineBreakMode = .byTruncatingTail
-        return NSAttributedString(string: text, attributes: [
-            .font: NSFont.systemFont(ofSize: size, weight: weight),
-            .foregroundColor: color,
+        paragraph.lineBreakMode = .byCharWrapping
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: font,
             .paragraphStyle: paragraph,
-        ])
+        ]
+        let maximumHeight = ceil(NSLayoutManager().defaultLineHeight(for: font) * CGFloat(maxLines))
+        func fits(_ value: String) -> Bool {
+            let bounds = (value as NSString).boundingRect(
+                with: NSSize(width: width, height: 10_000),
+                options: [.usesLineFragmentOrigin, .usesFontLeading],
+                attributes: attributes
+            )
+            return ceil(bounds.height) <= maximumHeight
+        }
+        guard !fits(trimmed) else { return trimmed }
+
+        let characters = Array(trimmed)
+        var low = 1
+        var high = characters.count
+        var best = String(characters.suffix(1))
+        while low <= high {
+            let count = (low + high) / 2
+            let suffix = String(characters.suffix(count)).trimmingCharacters(in: .whitespacesAndNewlines)
+            let candidate = "…" + suffix
+            if fits(candidate) {
+                best = candidate
+                low = count + 1
+            } else {
+                high = count - 1
+            }
+        }
+        return best
+    }
+
+    func captionString(_ text: String, size: CGFloat, color: NSColor, weight: NSFont.Weight, outlineOnly: Bool = false) -> NSAttributedString {
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.alignment = .center
+        paragraph.lineBreakMode = .byCharWrapping
+        var attributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: size, weight: weight),
+            .foregroundColor: outlineOnly ? NSColor.black : color,
+            .paragraphStyle: paragraph,
+        ]
+        if outlineOnly {
+            attributes[.strokeColor] = NSColor.black
+            attributes[.strokeWidth] = 9.0
+        }
+        return NSAttributedString(string: text, attributes: attributes)
     }
 
     @objc func targetLanguageChanged() {
@@ -981,18 +1076,89 @@ final class AppDel: NSObject, NSApplicationDelegate, NSWindowDelegate {
         lastWebSocketEventAt = Date()
         sourceLanguage = payload["sourceLanguage"] as? String ?? payload["language"] as? String ?? sourceLanguage
         sourceLanguageLabel.stringValue = sourceLanguageTitle(sourceLanguage) + " →"
-        let source = (payload["sourceText"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let translation = (payload["translationText"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let stableSource = payload["sourceText"] as? String ?? ""
+        let partialSource = (payload["partialText"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let source = liveCaptionSourceText(stable: stableSource, partial: partialSource)
+        let incomingTranslation = (payload["translationText"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let translation = partialSource.isEmpty ? incomingTranslation : ""
         let translationStatus = payload["translationStatus"] as? String ?? "disabled"
-        if !source.isEmpty, source != sourceText {
-            sourceText = source
-            lastCaptionAt = Date()
-        }
+        let sourceChanged = !source.isEmpty && source != captionRevealTarget
+        let nextTranslationFailed = partialSource.isEmpty && translationStatus == "failed"
+        let translationChanged = translation != translationText || nextTranslationFailed != translationFailed
+        let warningCleared = unhealthy || !warningText.isEmpty
         translationText = translation
-        translationFailed = translationStatus == "failed"
+        translationFailed = nextTranslationFailed
         unhealthy = false
         warningText = ""
-        renderCaptions(animated: true)
+        if sourceChanged {
+            queueCaptionReveal(source)
+        } else if translationChanged || warningCleared {
+            renderCaptions(animated: false)
+        }
+    }
+
+    func liveCaptionSourceText(stable: String, partial: String) -> String {
+        let partialText = partial.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !partialText.isEmpty { return partialText }
+        return stable.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    func captionCommonPrefixLength(_ current: [Character], _ target: [Character]) -> Int {
+        var count = 0
+        while count < current.count, count < target.count, current[count] == target[count] {
+            count += 1
+        }
+        return count
+    }
+
+    func captionRevealBatchSize(current: String, target: String, maxSteps: Int = 4) -> Int {
+        let currentCharacters = Array(current)
+        let targetCharacters = Array(target)
+        let prefixCount = captionCommonPrefixLength(currentCharacters, targetCharacters)
+        let remainingCount = max(0, targetCharacters.count - prefixCount)
+        let stepCount = max(1, maxSteps)
+        return max(1, (remainingCount + stepCount - 1) / stepCount)
+    }
+
+    func nextCaptionRevealText(current: String, target: String, charactersPerStep: Int) -> String {
+        let currentCharacters = Array(current)
+        let targetCharacters = Array(target)
+        guard !targetCharacters.isEmpty else { return "" }
+        let prefixCount = captionCommonPrefixLength(currentCharacters, targetCharacters)
+        guard prefixCount < targetCharacters.count else { return target }
+        let nextCount = min(targetCharacters.count, prefixCount + max(1, charactersPerStep))
+        return String(targetCharacters.prefix(nextCount))
+    }
+
+    func queueCaptionReveal(_ target: String) {
+        let normalizedTarget = target.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedTarget.isEmpty else { return }
+        captionRevealTarget = normalizedTarget
+        captionRevealCharactersPerStep = captionRevealBatchSize(current: sourceText, target: normalizedTarget)
+        captionRevealTimer?.invalidate()
+        captionRevealTimer = nil
+        advanceCaptionReveal()
+    }
+
+    func advanceCaptionReveal() {
+        guard !closing else { return }
+        let nextText = nextCaptionRevealText(
+            current: sourceText,
+            target: captionRevealTarget,
+            charactersPerStep: captionRevealCharactersPerStep
+        )
+        guard nextText != sourceText else { return }
+        sourceText = nextText
+        lastCaptionAt = Date()
+        renderCaptions(animated: false)
+        guard sourceText != captionRevealTarget else { return }
+
+        let timer = Timer(timeInterval: 0.045, repeats: false) { [weak self] _ in
+            self?.captionRevealTimer = nil
+            self?.advanceCaptionReveal()
+        }
+        captionRevealTimer = timer
+        timer.addToCommonRunLoop()
     }
 
     func sourceLanguageTitle(_ value: String) -> String {
@@ -1079,7 +1245,7 @@ final class AppDel: NSObject, NSApplicationDelegate, NSWindowDelegate {
     func finishAndExit() {
         guard !closing else { return }
         closing = true
-        [timeTimer, stateTimer, captionTimer].forEach { $0?.invalidate() }
+        [timeTimer, stateTimer, captionTimer, captionRevealTimer].forEach { $0?.invalidate() }
         webSocketTask?.cancel(with: .normalClosure, reason: nil)
         NSAnimationContext.runAnimationGroup({ context in
             context.duration = 0.12
@@ -1112,8 +1278,26 @@ if arguments.contains("--self-test") {
     assert(app.normalizedTargetLanguage("Japanese") == "日本語")
     assert(app.parseState(["recording": ["audio_path": "/tmp/a.wav"]]).recording == true)
     assert(app.displayMode == .source && !app.displayMode.translationEnabled)
+    assert(app.liveCaptionSourceText(stable: "stable", partial: " partial ") == "partial")
+    assert(app.liveCaptionSourceText(stable: " stable ", partial: "  ") == "stable")
+    assert(app.captionRevealBatchSize(current: "", target: "这是一个") == 1)
+    assert(app.captionRevealBatchSize(current: "", target: "这是一个足够长的增量") == 3)
+    assert(app.nextCaptionRevealText(current: "", target: "这是一个", charactersPerStep: 1) == "这")
+    assert(app.nextCaptionRevealText(current: "这是语音", target: "这是识别", charactersPerStep: 1) == "这是识")
+    assert(app.nextCaptionRevealText(current: "👨‍👩‍👧‍👦", target: "👨‍👩‍👧‍👦好", charactersPerStep: 1) == "👨‍👩‍👧‍👦好")
     let captionAttributes = app.captionString("caption", size: 30, color: .white, weight: .bold).attributes(at: 0, effectiveRange: nil)
-    assert(captionAttributes[.shadow] == nil && captionAttributes[.strokeWidth] == nil)
+    assert((captionAttributes[.foregroundColor] as? NSColor)?.isEqual(NSColor.white) == true)
+    assert(captionAttributes[.strokeColor] == nil && captionAttributes[.strokeWidth] == nil)
+    assert((captionAttributes[.paragraphStyle] as? NSParagraphStyle)?.lineBreakMode == .byCharWrapping)
+    let outlineAttributes = app.captionString("caption", size: 30, color: .white, weight: .bold, outlineOnly: true).attributes(at: 0, effectiveRange: nil)
+    assert((outlineAttributes[.strokeColor] as? NSColor)?.isEqual(NSColor.black) == true)
+    assert((outlineAttributes[.strokeWidth] as? NSNumber)?.doubleValue == 9.0)
+    let longCaption = "这是一段特意写得非常长的实时字幕，用来验证画面不会在第一行末尾截断，而且最新说出的文字依然完整保留"
+    let visibleLongCaption = app.visibleCaptionText(longCaption, size: 30, weight: .bold, width: 360)
+    assert(visibleLongCaption.hasPrefix("…"))
+    assert(visibleLongCaption.hasSuffix("最新说出的文字依然完整保留"))
+    let sourceCaptionFrame = app.sourceCaptionFrame(in: NSRect(x: 0, y: 0, width: 900, height: 176))
+    assert(sourceCaptionFrame.height >= NSLayoutManager().defaultLineHeight(for: .systemFont(ofSize: 30, weight: .bold)) * 2 + 8)
     let compactToolbar = app.toolbarFrame(compact: true, in: NSRect(x: 0, y: 0, width: 900, height: 176))
     assert(compactToolbar.width == compactToolbarWidth)
     let compactButton = RecordingButton(frame: app.compactRecordingButtonFrame(in: NSRect(origin: .zero, size: compactToolbar.size)))
