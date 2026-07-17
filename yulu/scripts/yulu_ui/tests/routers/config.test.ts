@@ -65,6 +65,18 @@ describe("configRouter", () => {
     } finally { cleanup(); }
   });
 
+  it("update(transcription.engine) synchronizes the local model lifecycle", async () => {
+    const { ctx, cleanup } = makeCtx();
+    const syncSelection = vi.fn().mockResolvedValue(undefined);
+    ctx.localCaption = { syncSelection } as never;
+    try {
+      const caller = createCaller(configRouter, ctx);
+      const result = await caller.update({ key: "transcription.engine", value: "xai" });
+      expect(result.daemonsNeedingRestart).toEqual([]);
+      expect(syncSelection).toHaveBeenCalledOnce();
+    } finally { cleanup(); }
+  });
+
   it("update(connectors.feishu.read_calendar) restarts calendar scheduler services", async () => {
     const { ctx, cleanup } = makeCtx();
     try {

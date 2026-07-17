@@ -8,7 +8,7 @@ crash.
 ## Pages
 
 - `/agent-console` — selected general Agent, recording controls, and recent durable task state
-- `/voice-input` — Hermes-backed dictation and translation
+- `/voice-input` — dictation and translation through the explicitly selected local/xAI audio engine
 - `/inbox` `/inbox/:stem` — recordings, playback, committed transcript/summary, and task/delivery actions
 - `/settings/{general,audio,transcription,appearance}` — current local preferences
 - `/knowledge/prompts` `/knowledge/prompts/:id` — Agent instruction prompt master-detail

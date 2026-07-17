@@ -74,7 +74,7 @@ export class ArtifactStore {
 
   writeStagedTranscript(taskId: string, transcript: string): string {
     const text = transcript.trim();
-    if (!text) throw new Error("Hermes returned an empty transcript");
+    if (!text) throw new Error("transcription returned an empty transcript");
     const path = this.workspace(taskId).transcriptPath;
     atomicWrite(path, text + "\n");
     return path;
@@ -118,6 +118,52 @@ export class ArtifactStore {
     const text = content.toString("utf8").trim();
     if (!text) throw new Error("committed summary contains no text");
     return text;
+  }
+
+  readCommittedTranscript(task: AgentTask, record: ArtifactRecord): string {
+    if (record.taskId !== task.id || record.recordingStem !== task.recordingStem || record.kind !== "transcript") {
+      throw new Error("transcript artifact record does not belong to this task");
+    }
+    const expectedPath = join(this.moviesDir, `${task.recordingStem}.transcript.txt`);
+    if (!isInside(this.moviesDir, expectedPath) || resolve(record.path) !== resolve(expectedPath)) {
+      throw new Error("transcript artifact record points outside the committed recording target");
+    }
+    const content = readFileSync(expectedPath);
+    if (content.length !== record.bytes || sha256(content) !== record.sha256) {
+      throw new Error("committed transcript no longer matches the Host artifact record");
+    }
+    const text = content.toString("utf8").trim();
+    if (!text) throw new Error("committed transcript contains no text");
+    return text;
+  }
+
+  commitTranscript(
+    task: AgentTask,
+    transcript: string,
+    provenance: Record<string, unknown>,
+  ): ArtifactRecord {
+    const text = transcript.trim();
+    if (!text) throw new Error("transcription returned an empty transcript");
+    if (basename(task.audioPath, ".wav") !== task.recordingStem) {
+      throw new Error("recording stem does not match the audio artifact");
+    }
+    const content = `${text}\n`;
+    const path = join(this.moviesDir, `${task.recordingStem}.transcript.txt`);
+    if (!isInside(this.moviesDir, path)) throw new Error("transcript target escapes the recordings directory");
+    this.writeStagedTranscript(task.id, text);
+    atomicWrite(path, content);
+    return {
+      id: randomUUID(),
+      taskId: task.id,
+      recordingStem: task.recordingStem,
+      kind: "transcript",
+      path,
+      sha256: sha256(content),
+      bytes: Buffer.byteLength(content),
+      mimeType: "text/plain",
+      provenance,
+      createdAt: new Date().toISOString(),
+    };
   }
 
   commitFromWorkspace(task: AgentTask, provenance: Record<string, unknown>): ArtifactRecord[] {

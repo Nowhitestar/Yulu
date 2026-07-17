@@ -1,8 +1,20 @@
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, unlinkSync } from "node:fs";
-import { homedir } from "node:os";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  symlinkSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { randomUUID } from "node:crypto";
+import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { envWithFallbackPath, resolveExecutable } from "./executables.js";
 import { resolveBundledScriptArgs, runLlmCommand } from "./llmCommand.js";
 import type { AgentRuntime } from "./agentRuntime.js";
@@ -22,6 +34,8 @@ interface CodexSessionIndexEntry {
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const UUID_ANYWHERE_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/ig;
+const HERMES_CONNECTOR_RE = /^[a-zA-Z0-9_.-]+$/;
+const HERMES_CONNECTOR_DISCOVERY_TIMEOUT_SECONDS = 8;
 
 function codexHome(): string {
   return process.env.CODEX_HOME || join(homedir(), ".codex");
@@ -230,6 +244,62 @@ export function extractHermesSessionId(stderr: string): string | undefined {
   return undefined;
 }
 
+/**
+ * Build a short-lived Hermes config that exposes exactly one MCP connector.
+ *
+ * Hermes discovers MCP servers in the background. A one-shot share can reach
+ * its first model turn before a stdio connector has registered its tools. The
+ * scoped config both extends that bounded wait and avoids starting unrelated
+ * connectors, while leaving the user's real Hermes config untouched.
+ */
+export function buildHermesConnectorConfig(raw: string, connector: string): string {
+  if (!HERMES_CONNECTOR_RE.test(connector)) {
+    throw new Error(`Invalid Hermes connector name: ${connector}`);
+  }
+  const config = parseYaml(raw) as Record<string, unknown> | null;
+  if (!config || typeof config !== "object" || Array.isArray(config)) {
+    throw new Error("Hermes config is not a YAML object");
+  }
+  const servers = config.mcp_servers;
+  if (!servers || typeof servers !== "object" || Array.isArray(servers)) {
+    throw new Error("Hermes config has no mcp_servers section");
+  }
+  const server = (servers as Record<string, unknown>)[connector];
+  if (!server) throw new Error(`Hermes connector is not configured: ${connector}`);
+  config.mcp_servers = { [connector]: server };
+  config.mcp_discovery_timeout = HERMES_CONNECTOR_DISCOVERY_TIMEOUT_SECONDS;
+  return stringifyYaml(config);
+}
+
+interface HermesConnectorProfile {
+  home: string;
+  cleanup: () => void;
+}
+
+export function prepareHermesConnectorProfile(connector: string, sourceHome?: string): HermesConnectorProfile {
+  const source = sourceHome || process.env.HERMES_HOME?.trim() || join(homedir(), ".hermes");
+  const configPath = join(source, "config.yaml");
+  if (!existsSync(configPath)) throw new Error(`Hermes config not found: ${configPath}`);
+
+  const home = mkdtempSync(join(tmpdir(), "yulu-hermes-connector-"));
+  chmodSync(home, 0o700);
+  try {
+    for (const entry of readdirSync(source)) {
+      if (entry === "config.yaml") continue;
+      symlinkSync(join(source, entry), join(home, entry));
+    }
+    const config = buildHermesConnectorConfig(readFileSync(configPath, "utf8"), connector);
+    writeFileSync(join(home, "config.yaml"), config, { encoding: "utf8", mode: 0o600 });
+  } catch (error) {
+    rmSync(home, { recursive: true, force: true });
+    throw error;
+  }
+  return {
+    home,
+    cleanup: () => rmSync(home, { recursive: true, force: true }),
+  };
+}
+
 function extractCodexFinalMessage(stdout: string): string {
   let last = "";
   for (const line of stdout.split(/\r?\n/)) {
@@ -281,10 +351,15 @@ function extractOpenClawFinalMessage(stdout: string): string {
   }
 }
 
-function runSpawnCommand(command: string[], input: { cwd: string; stdin: string; timeoutMs: number }): Promise<{ stdout: string; stderr: string; code: number }> {
+function runSpawnCommand(command: string[], input: {
+  cwd: string;
+  stdin: string;
+  timeoutMs: number;
+  env?: NodeJS.ProcessEnv;
+}): Promise<{ stdout: string; stderr: string; code: number }> {
   return new Promise((resolve) => {
     const [rawCmd, ...args] = resolveBundledScriptArgs(command, input.cwd);
-    const spawnEnv = envWithFallbackPath(process.env);
+    const spawnEnv = envWithFallbackPath({ ...process.env, ...input.env });
     const cmd = rawCmd ? resolveExecutable(rawCmd, spawnEnv) : "";
     if (!cmd) {
       resolve({ stdout: "", stderr: "agent command is empty", code: 1 });
@@ -324,6 +399,7 @@ export async function runAgentCliCommand(args: {
   yuluSessionId?: string;
   configDir?: string;
   hermesToolsets?: readonly string[];
+  hermesConnector?: string;
 }): Promise<AgentCliRunResult> {
   if (!args.configDir) {
     return runLlmCommand(args.runtime.command, args.scriptDir, args.prompt, args.timeoutMs, args.runtime.cwd);
@@ -346,11 +422,20 @@ export async function runAgentCliCommand(args: {
       prompt: args.prompt,
       toolsets: args.hermesToolsets,
     });
-    const result = await runSpawnCommand(command, {
-      cwd: args.runtime.cwd,
-      stdin: "",
-      timeoutMs: args.timeoutMs,
-    });
+    const profile = args.hermesConnector
+      ? prepareHermesConnectorProfile(args.hermesConnector)
+      : null;
+    let result: { stdout: string; stderr: string; code: number };
+    try {
+      result = await runSpawnCommand(command, {
+        cwd: args.runtime.cwd,
+        stdin: "",
+        timeoutMs: args.timeoutMs,
+        env: profile ? { HERMES_HOME: profile.home } : undefined,
+      });
+    } finally {
+      profile?.cleanup();
+    }
     const nativeSessionId =
       args.nativeSessionId ||
       extractHermesSessionId(result.stderr) ||

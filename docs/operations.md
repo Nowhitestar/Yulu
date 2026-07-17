@@ -127,9 +127,9 @@ A successful task reaches `completed` and creates both:
 ~/Movies/Yulu/<stem>.summary.md
 ```
 
-The files are committed as one Host operation after Hermes writes them into a
-private task workspace. A file appearing without a completed task should be
-treated as incomplete evidence and investigated through the Host audit state.
+The Host durably commits the transcript first, then asks Hermes to create and
+commit the summary from that transcript. A transcript can therefore remain valid
+when summary generation is unavailable; inspect the Host task state for progress.
 
 ## Realtime captions
 
@@ -137,17 +137,26 @@ Starting a recording opens a movable subtitle overlay near the bottom center of
 the active display. It shows source text by default. Hover over the capsule to
 choose a target language or switch to `双语` or `仅翻译`.
 
+The default audio engine is the local sherpa-onnx Paraformer INT8 model, which
+handles both mutable realtime captions and the durable final transcript. Open
+Settings → Transcription to install, test, or remove it. The first install
+downloads about 1 GB and keeps about 320 MB; it has no usage fee and does not
+upload audio. Users may instead explicitly select xAI cloud speech-to-text, which
+uses native realtime streaming and final transcription. Yulu never switches
+engines automatically when the selected engine is unavailable.
+
 Drag the six-dot handle to reposition the overlay. Use the down arrow to collapse
 it to the breathing Yulu logo, then click the logo to restore captions. Click the
 `录制中` control to stop; the overlay disappears after capture stops.
+The model cannot be removed while a recording is active.
 
 ## Dictation and voice input
 
 Dictation uses mic-only native capture and the authenticated Host transcription
-endpoint backed by Hermes.
+endpoint backed by the explicitly selected Yulu audio engine.
 
 ```bash
-# Verify Hermes' transcription service can become ready
+# Verify the selected audio engine can become ready
 yulu dictate warm --json
 
 # Record once without changing the clipboard or focused app

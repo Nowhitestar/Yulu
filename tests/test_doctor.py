@@ -141,8 +141,9 @@ def test_retired_stt_daemon_section_is_absent(tmp_path):
         config_dir=tmp_path,
     )
     assert "stt_daemon" not in report
-    assert report["privacy_opt_in"]["transcription"]["owner"] == "agent"
-    assert report["privacy_opt_in"]["transcription"]["yulu_executor"] is False
+    assert report["privacy_opt_in"]["transcription"]["owner"] == "yulu"
+    assert report["privacy_opt_in"]["transcription"]["provider"] == "local"
+    assert report["privacy_opt_in"]["transcription"]["yulu_executor"] is True
 
 
 def test_privacy_opt_in_section_flags_disabled_agent_pipeline(tmp_path):
@@ -160,7 +161,7 @@ def test_privacy_opt_in_section_flags_disabled_agent_pipeline(tmp_path):
     )
 
     assert report["privacy_opt_in"]["ok"] is False
-    assert report["privacy_opt_in"]["transcription"]["ok"] is False
+    assert report["privacy_opt_in"]["transcription"]["ok"] is True
 
 
 def test_agent_pipeline_health_is_ok_when_required_runtime_is_ready(tmp_path):

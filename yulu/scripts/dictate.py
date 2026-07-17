@@ -163,12 +163,12 @@ def _host_agent_request(path: str, payload: dict[str, Any], *, timeout_sec: floa
             result = json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")
-        raise DictationError(f"Hermes transcription failed: HTTP {exc.code} {body}") from exc
+        raise DictationError(f"Yulu transcription failed: HTTP {exc.code} {body}") from exc
     except OSError as exc:
-        raise DictationError(f"Hermes transcription unavailable: {exc}") from exc
+        raise DictationError(f"Yulu transcription unavailable: {exc}") from exc
     if not isinstance(result, dict) or result.get("ok") is not True:
         detail = result.get("detail") if isinstance(result, dict) else "invalid Host response"
-        raise DictationError(f"Hermes transcription failed: {detail}")
+        raise DictationError(f"Yulu transcription failed: {detail}")
     return result
 
 
@@ -181,13 +181,14 @@ def _dictation_config(config: dict[str, Any]) -> dict[str, Any]:
 
 
 def resolve_engine(config: dict[str, Any], requested: str | None) -> str:
-    # Hermes owns engine/provider selection. Keep the CLI option only so older
-    # Shortcuts continue to parse while upgrading.
-    return "hermes"
+    trans = config.get("transcription", {})
+    trans = trans if isinstance(trans, dict) else {}
+    engine = str(trans.get("engine") or "local").strip().lower()
+    return engine if engine in {"local", "xai"} else "local"
 
 
 def resolve_translation_engine(config: dict[str, Any], requested: str | None, target_language: str) -> str:
-    return "hermes"
+    return resolve_engine(config, requested)
 
 
 def resolve_language(config: dict[str, Any], requested: str | None) -> str:
@@ -486,15 +487,15 @@ def transcribe_dictation(
         stt_t0 = time.monotonic()
         payload = _host_agent_request(
             "/api/agent/transcribe",
-            {"audioPath": stt_audio_path},
+            {"audioPath": stt_audio_path, "language": language},
             timeout_sec=timeout_sec,
         )
         stt_t1 = time.monotonic()
         response = {
             "status": "ok",
             "text": str(payload.get("transcript") or "").strip(),
-            "engine_used": "hermes",
-            "provider": str(payload.get("provider") or "hermes"),
+            "engine_used": engine,
+            "provider": str(payload.get("provider") or engine),
             "chunks": int(payload.get("chunks") or 0),
             "language_used": language,
         }
@@ -517,8 +518,8 @@ def _wav_duration_ms(path: Path) -> int:
 
 
 def _trim_mono_voice(mono_path: Path) -> tuple[Path, Path | None, int]:
-    # Preprocessing policy belongs to Hermes; Yulu only normalizes transport to
-    # mono PCM so the Agent receives the microphone channel deterministically.
+    # Normalize transport to compact mic-only PCM so the selected engine
+    # receives the microphone channel deterministically.
     return mono_path, None, 0
 
 
@@ -591,7 +592,7 @@ def _prepare_dictation_audio_with_stats(audio_path: str) -> tuple[str, Path | No
             tmp = None
 
     if tmp is None:
-        raise DictationError("failed to prepare dictation audio for Hermes")
+        raise DictationError("failed to prepare dictation audio for Yulu transcription")
 
     prepared, trimmed_tmp, offset_ms = _trim_mono_voice(tmp)
     if trimmed_tmp is not None:
@@ -946,10 +947,10 @@ def warm_dictation_engine(*, engine: str, timeout_sec: float, target_language: s
         {},
         timeout_sec=timeout_sec,
     )
-    warm_engine = str(payload.get("provider") or "hermes")
+    warm_engine = str(payload.get("provider") or engine)
     return {
         "text": f"warmed {warm_engine}",
-        "engine": "hermes",
+        "engine": engine,
         "warmed_engine": warm_engine,
         "target_language": target_language,
         "ok": True,
@@ -1060,7 +1061,7 @@ def _print(result: dict[str, Any], *, as_json: bool) -> None:
 
 
 def _add_common(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--engine", help="deprecated compatibility option; Hermes always owns transcription")
+    parser.add_argument("--engine", help="deprecated compatibility option; Yulu uses the engine selected in Settings")
     parser.add_argument("--language", help="transcription language hint, default from config or zh")
     parser.add_argument("--prompt", default=None, help=f"prompt slug, default {DEFAULT_PROMPT_SLUG}; use 'none' to skip")
     parser.add_argument("--prompt-id", default=None, help="prompt id, overrides --prompt")
@@ -1107,8 +1108,8 @@ def build_parser() -> argparse.ArgumentParser:
     ask_toggle.add_argument("--session-id", default="", help="continue an existing Agent Console session")
     ask_toggle.add_argument("--ui-url", default=DEFAULT_UI_BASE_URL, help=f"Yulu UI base URL, default {DEFAULT_UI_BASE_URL}")
     ask_toggle.add_argument("--no-open", action="store_true", help="do not open Agent Console after sending")
-    warm = sub.add_parser("warm", help="pre-warm Hermes transcription")
-    warm.add_argument("--engine", help="deprecated compatibility option; Hermes always owns transcription")
+    warm = sub.add_parser("warm", help="pre-warm the selected Yulu transcription engine")
+    warm.add_argument("--engine", help="deprecated compatibility option; Yulu uses the engine selected in Settings")
     warm.add_argument("--translate-to", default=None, help="pre-warm the translation engine for this target language")
     warm.add_argument("--timeout-sec", type=float, default=60.0)
     warm.add_argument("--json", action="store_true")

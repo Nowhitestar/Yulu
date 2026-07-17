@@ -430,6 +430,7 @@ export const agentConsoleRouter = router({
     return {
       tasks,
       recording: recState,
+      recordingAgent: ctx.recordingPipeline.transcriptionHealth(),
       activeAgent: active,
       agents: detectAgents(config, ctx.paths.scriptDir, ctx.paths.moviesDir),
       backgroundSession: backgroundSession ? {
@@ -549,12 +550,23 @@ export const agentConsoleRouter = router({
   connectAgent: publicProcedure
     .input(CONNECT_AGENT_SCHEMA)
     .mutation(({ ctx, input }) => {
+      const current = ctx.config.read();
+      const selected = detectAgents(current, ctx.paths.scriptDir, ctx.paths.moviesDir)
+        .find((agent) => agent.id === input.agent);
+      if (!selected?.found) {
+        return {
+          ok: false as const,
+          error: `${AGENT_META[input.agent].name} 未找到，请先安装 CLI 后重新检测。`,
+          activeAgent: activeAgent(current, ctx.paths.scriptDir, ctx.paths.moviesDir),
+          agents: detectAgents(current, ctx.paths.scriptDir, ctx.paths.moviesDir),
+        };
+      }
       ctx.config.update("llm.enabled", true);
       ctx.config.update("llm.command", null);
       ctx.config.update("llm.agent.provider", input.agent);
       const config = ctx.config.read();
       return {
-        ok: true,
+        ok: true as const,
         activeAgent: activeAgent(config, ctx.paths.scriptDir, ctx.paths.moviesDir),
         agents: detectAgents(config, ctx.paths.scriptDir, ctx.paths.moviesDir),
       };
@@ -595,9 +607,9 @@ export const agentConsoleRouter = router({
       if (!agent) return { ok: false as const, error: "当前底层 Agent 不支持保存发送目标" };
       if (input.channel === "notion") {
         ctx.config.update(`agent_console.destinations.${agent}.notion.target`, input.target);
-        // Automatic recording delivery is always executed by Hermes. Keep the
-        // user-visible Notion destination aligned with that durable pipeline.
-        ctx.config.update("agent_pipeline.notion_destination", input.target);
+        if (agent === "hermes") {
+          ctx.config.update("agent_pipeline.notion_destination", input.target);
+        }
       } else {
         ctx.config.update(`agent_console.destinations.${agent}.zulip.stream`, input.stream);
         ctx.config.update(`agent_console.destinations.${agent}.zulip.topic`, input.topic);

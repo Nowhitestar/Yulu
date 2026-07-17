@@ -2,7 +2,6 @@ import {
   closeSync,
   mkdirSync,
   openSync,
-  readFileSync,
   readSync,
   realpathSync,
   renameSync,
@@ -12,12 +11,23 @@ import {
 } from "node:fs";
 import { basename, extname, isAbsolute, join, relative, sep } from "node:path";
 import { randomUUID } from "node:crypto";
-import type { TranscriptionResult } from "./agentGateway.js";
+import type {
+  CaptionSource,
+  StreamingCaptionEngine,
+  StreamingCaptionUpdate,
+} from "./localCaptionEngine.js";
 import type { AppChannels, PubSub } from "./pubsub.js";
 
 export type TranscriptionLanguage = "zh" | "en" | "ja" | "auto";
 
-interface WavFormat {
+export interface TranscriptionResult {
+  transcript: string;
+  provider: string;
+  chunks: number;
+  language?: TranscriptionLanguage;
+}
+
+export interface WavFormat {
   dataOffset: number;
   channels: number;
   sampleRate: number;
@@ -31,8 +41,14 @@ interface Session {
   title: string;
   language: TranscriptionLanguage;
   format: WavFormat;
+  mode: "streaming" | "segmented";
+  captionProvider: string;
   offset: number;
   text: string;
+  partialBySource: Record<CaptionSource, string>;
+  stableSegments: Array<{ source: CaptionSource; text: string; endMs: number; order: number }>;
+  stableOrder: number;
+  resamplePhase: number;
   chunks: number;
   coveredMs: number;
   pendingPcm: Buffer;
@@ -65,6 +81,12 @@ const DEFAULT_MIN_SEGMENT_MS = 1_200;
 const DEFAULT_TAIL_SILENCE_MS = 450;
 const DEFAULT_MAX_SEGMENT_MS = 6_000;
 const DEFAULT_OVERLAP_MS = 800;
+const DEFAULT_STREAMING_POLL_MS = 80;
+
+export interface SourceSeparatedPcm {
+  chunks: Partial<Record<CaptionSource, Buffer>>;
+  phase: number;
+}
 
 export interface RealtimeAssessment {
   trusted: boolean;
@@ -162,6 +184,30 @@ export function dedupeTranscriptSegment(existing: string, incoming: string): str
   return next;
 }
 
+function captionKey(value: string): string {
+  return value.toLocaleLowerCase().replace(/[^a-z0-9\u3400-\u9fff]+/g, "");
+}
+
+function bigrams(value: string): Set<string> {
+  const out = new Set<string>();
+  for (let index = 0; index + 1 < value.length; index += 1) out.add(value.slice(index, index + 2));
+  return out;
+}
+
+/** Suppress the delayed microphone copy of system audio without dropping overlap speech. */
+export function captionsLikelyDuplicate(left: string, right: string): boolean {
+  const a = captionKey(left);
+  const b = captionKey(right);
+  if (Math.min(a.length, b.length) < 6) return a === b && a.length >= 3;
+  if (a.includes(b) || b.includes(a)) return true;
+  const aa = bigrams(a);
+  const bb = bigrams(b);
+  let intersection = 0;
+  for (const pair of aa) if (bb.has(pair)) intersection += 1;
+  const dice = 2 * intersection / Math.max(1, aa.size + bb.size);
+  return dice >= 0.82;
+}
+
 export function assessRealtimeTranscript(input: {
   text: string;
   language: TranscriptionLanguage;
@@ -238,7 +284,7 @@ function atomicWrite(path: string, content: string): void {
   renameSync(tmp, path);
 }
 
-function parseWavFormat(path: string): WavFormat {
+export function parseWavFormat(path: string): WavFormat {
   const fd = openSync(path, "r");
   try {
     const size = Math.min(statSync(path).size, 4096);
@@ -291,6 +337,40 @@ function mono16kPcm(source: Buffer, format: WavFormat): Buffer {
   return output.subarray(0, out);
 }
 
+/**
+ * Preserve Yulu's capture contract (left=mic, right=system) while reducing the
+ * growing WAV to exact-rate 16 kHz PCM streams. The integer phase accumulator
+ * avoids timing drift for non-48 kHz devices without buffering whole files.
+ */
+export function sourceSeparated16kPcm(
+  source: Buffer,
+  format: WavFormat,
+  initialPhase = 0,
+): SourceSeparatedPcm {
+  const sourceFrames = Math.floor(source.length / format.blockAlign);
+  const capacity = Math.ceil((sourceFrames * 16_000 + initialPhase) / format.sampleRate);
+  const mic = Buffer.alloc(Math.max(0, capacity) * 2);
+  const system = format.channels >= 2 ? Buffer.alloc(Math.max(0, capacity) * 2) : null;
+  let phase = initialPhase;
+  let outputFrames = 0;
+  for (let frame = 0; frame < sourceFrames; frame += 1) {
+    phase += 16_000;
+    if (phase < format.sampleRate) continue;
+    phase -= format.sampleRate;
+    const sourceOffset = frame * format.blockAlign;
+    mic.writeInt16LE(source.readInt16LE(sourceOffset), outputFrames * 2);
+    if (system) system.writeInt16LE(source.readInt16LE(sourceOffset + 2), outputFrames * 2);
+    outputFrames += 1;
+  }
+  return {
+    chunks: {
+      mic: mic.subarray(0, outputFrames * 2),
+      ...(system ? { system: system.subarray(0, outputFrames * 2) } : {}),
+    },
+    phase,
+  };
+}
+
 function hasVoice(pcm: Buffer): boolean {
   if (pcm.length < 2) return false;
   let peak = 0;
@@ -337,6 +417,8 @@ export class RealtimeTranscriptionCoordinator {
   constructor(private readonly options: {
     pubsub: PubSub<AppChannels>;
     transcribe: (audioPath: string, language: TranscriptionLanguage) => Promise<TranscriptionResult>;
+    streaming?: StreamingCaptionEngine | null;
+    stabilize?: (text: string) => string;
     warm?: () => Promise<void>;
     translate?: (sourceText: string, targetLanguage: string, context: string[]) => Promise<string>;
     defaultTargetLanguage?: () => string;
@@ -348,7 +430,7 @@ export class RealtimeTranscriptionCoordinator {
     tailSilenceMs?: number;
     overlapMs?: number;
   }) {
-    this.pollMs = options.pollMs ?? 250;
+    this.pollMs = options.pollMs ?? (options.streaming ? DEFAULT_STREAMING_POLL_MS : 250);
     this.allowedRoot = options.allowedRoot ? realpathSync(options.allowedRoot) : null;
     this.minSegmentMs = options.minSegmentMs ?? DEFAULT_MIN_SEGMENT_MS;
     this.tailSilenceMs = options.tailSilenceMs ?? DEFAULT_TAIL_SILENCE_MS;
@@ -367,14 +449,24 @@ export class RealtimeTranscriptionCoordinator {
       }
     }
     const format = parseWavFormat(audioPath);
+    const mode: Session["mode"] = this.options.streaming ? "streaming" : "segmented";
+    if (mode === "streaming") {
+      await this.options.streaming!.start(normalizeTranscriptionLanguage(input.language));
+    }
     const session: Session = {
       audioPath,
       stem: basename(audioPath, ".wav"),
       title: input.title,
       language: normalizeTranscriptionLanguage(input.language),
       format,
+      mode,
+      captionProvider: mode === "streaming" ? this.options.streaming!.provider : "segmented",
       offset: format.dataOffset,
       text: "",
+      partialBySource: { mic: "", system: "" },
+      stableSegments: [],
+      stableOrder: 0,
+      resamplePhase: 0,
       chunks: 0,
       coveredMs: 0,
       pendingPcm: Buffer.alloc(0),
@@ -433,6 +525,13 @@ export class RealtimeTranscriptionCoordinator {
     session.timer = null;
     if (session.pump) await session.pump;
     await this.queuePump(true);
+    if (session.mode === "streaming" && session.error === null) {
+      try {
+        this.applyStreamingUpdate(session, await this.options.streaming!.finish());
+      } catch (error) {
+        session.error = (error as Error).message;
+      }
+    }
     const totalMs = this.durationMs(session);
     const assessment = assessRealtimeTranscript({
       text: session.text,
@@ -457,6 +556,7 @@ export class RealtimeTranscriptionCoordinator {
 
   async close(): Promise<void> {
     if (this.active) await this.stop(this.active.audioPath);
+    await this.options.streaming?.close();
   }
 
   private async queuePump(force: boolean): Promise<void> {
@@ -489,10 +589,92 @@ export class RealtimeTranscriptionCoordinator {
       }
       session.offset += available;
       session.coveredMs = Math.round((session.offset - session.format.dataOffset) / bytesPerSecond * 1000);
-      const pcm = mono16kPcm(source, session.format);
-      session.pendingPcm = Buffer.concat([session.pendingPcm, pcm]);
+      if (session.mode === "streaming") {
+        const separated = sourceSeparated16kPcm(source, session.format, session.resamplePhase);
+        session.resamplePhase = separated.phase;
+        try {
+          this.applyStreamingUpdate(session, await this.options.streaming!.feed(separated.chunks));
+        } catch (error) {
+          await this.options.streaming?.abort();
+          throw error;
+        }
+      } else {
+        const pcm = mono16kPcm(source, session.format);
+        session.pendingPcm = Buffer.concat([session.pendingPcm, pcm]);
+      }
     }
-    await this.flushSegments(session, force);
+    if (session.mode === "segmented") await this.flushSegments(session, force);
+  }
+
+  private applyStreamingUpdate(session: Session, response: StreamingCaptionUpdate): void {
+    const previousDisplay = this.displayText(session);
+    const previousStable = session.text;
+    const accepted: string[] = [];
+    for (const source of ["system", "mic"] as const) {
+      const update = response.updates[source];
+      if (!update) continue;
+      session.partialBySource[source] = cleanTranscriptText(update.partial);
+      if (update.replaceStable) {
+        session.stableSegments = session.stableSegments.filter((segment) => segment.source !== source);
+      }
+      for (const item of update.stable) {
+        let text = cleanTranscriptText(item.text);
+        if (text && this.options.stabilize) text = cleanTranscriptText(this.options.stabilize(text));
+        if (!text) continue;
+        const candidate = {
+          source,
+          text,
+          endMs: item.endMs,
+          order: session.stableOrder++,
+        };
+        const duplicate = session.stableSegments.findIndex((existing) =>
+          existing.source !== source &&
+          Math.abs(existing.endMs - candidate.endMs) <= 1_500 &&
+          captionsLikelyDuplicate(existing.text, candidate.text),
+        );
+        if (duplicate >= 0) {
+          const existing = session.stableSegments[duplicate]!;
+          if (source === "system" && existing.source === "mic") {
+            session.stableSegments.splice(duplicate, 1, candidate);
+          }
+          continue;
+        }
+        session.stableSegments.push(candidate);
+        session.chunks += 1;
+        accepted.push(text);
+      }
+    }
+    session.stableSegments.sort((a, b) => a.endMs - b.endMs || a.order - b.order);
+    let stableText = "";
+    for (const segment of session.stableSegments) {
+      const addition = dedupeTranscriptSegment(stableText, segment.text);
+      if (addition) stableText = cleanTranscriptText([stableText, addition].filter(Boolean).join("\n"));
+    }
+    session.text = stableText;
+    if (session.text !== previousStable) {
+      atomicWrite(sidecarPath(session.audioPath), session.text ? `${session.text}\n` : "");
+    }
+    if (accepted.length > 0) {
+      session.sourceText = accepted.join("\n");
+      session.sourceSegments.push(session.sourceText);
+      session.sourceSegments = session.sourceSegments.slice(-3);
+      session.translationText = "";
+      session.translationStatus = session.translationEnabled ? "pending" : "disabled";
+      session.translationGeneration += 1;
+      if (session.translationEnabled) this.queueTranslation(session);
+    }
+    this.writeCoverage(session, this.durationMs(session), false, null, false);
+    if (!session.translationEnabled && this.displayText(session) !== previousDisplay) {
+      this.publish(session, "transcribing", false);
+    }
+  }
+
+  private displayText(session: Session): string {
+    return cleanTranscriptText([
+      session.text,
+      session.partialBySource.system,
+      session.partialBySource.mic,
+    ].filter(Boolean).join("\n"));
   }
 
   private async flushSegments(session: Session, force: boolean): Promise<void> {
@@ -626,6 +808,7 @@ export class RealtimeTranscriptionCoordinator {
       covered_ms: session.coveredMs,
       total_ms: totalMs,
       chunks: session.chunks,
+      provider: session.captionProvider,
       trusted,
       reason,
       finished,
@@ -643,7 +826,14 @@ export class RealtimeTranscriptionCoordinator {
       stem: session.stem,
       title: session.title,
       language: session.language,
-      text: session.text,
+      text: this.displayText(session),
+      stableText: session.text,
+      partialText: cleanTranscriptText([
+        session.partialBySource.system,
+        session.partialBySource.mic,
+      ].filter(Boolean).join("\n")),
+      captionProvider: session.captionProvider,
+      captionMode: session.mode,
       coveredMs: session.coveredMs,
       trusted,
       sequence: session.sequence,
@@ -669,20 +859,5 @@ export class RealtimeTranscriptionCoordinator {
     const message = this.message(session, status, trusted, reason);
     this.options.pubsub.publish("realtime-transcript", message);
     return message;
-  }
-}
-
-export function trustedRealtimeTranscript(
-  audioPath: string,
-  language: TranscriptionLanguage,
-): { transcript: string; chunks: number } | null {
-  try {
-    const coverage = JSON.parse(readFileSync(coveragePath(audioPath), "utf8")) as Record<string, unknown>;
-    if (coverage.finished !== true || coverage.trusted !== true || coverage.language !== language) return null;
-    const transcript = cleanTranscriptText(readFileSync(sidecarPath(audioPath), "utf8"));
-    if (!transcript) return null;
-    return { transcript, chunks: Number(coverage.chunks ?? 0) };
-  } catch {
-    return null;
   }
 }

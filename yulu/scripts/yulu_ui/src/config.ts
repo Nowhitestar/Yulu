@@ -67,10 +67,6 @@ const AgentPipelineSchema = z.object({
   auto_process_recordings: z.boolean().default(true),
   auto_send_notion: z.boolean().default(false),
   notion_destination: z.string().default("Yulu Meeting"),
-  // 0 asks Hermes to bind an OS-assigned loopback port, avoiding collisions
-  // with a user's own dashboard process.
-  hermes_serve_port: z.number().int().min(0).max(65535).default(0),
-  transcription_chunk_sec: z.number().int().min(60).max(3600).default(1200),
 }).passthrough().default({});
 
 const DictationSchema = z.object({
@@ -111,6 +107,8 @@ export const ConfigSchema = z.object({
     backend: z.string().optional(),
   }).default({}),
   transcription: z.object({
+    engine: z.enum(["local", "xai"]).default("local"),
+    xai_credential_source: z.enum(["auto", "hermes", "openclaw"]).default("auto"),
     language: z.enum(["zh", "en", "ja", "auto"]).default("zh"),
     glossary: z.array(z.string()).optional(),
     dictation: DictationSchema,
@@ -181,6 +179,8 @@ const RETIRED_TRANSCRIPTION_KEYS = [
   "command",
   "realtime_enabled",
 ] as const;
+
+const RETIRED_AGENT_AUDIO_KEYS = ["hermes_serve_port", "transcription_chunk_sec"] as const;
 
 function hasOwn(record: JsonRecord, key: string): boolean {
   return Object.prototype.hasOwnProperty.call(record, key);
@@ -283,7 +283,17 @@ export function migrateLegacyTranscriptionConfig(path: string): AgentNativeConfi
     dictation[key] = 30;
   }
   if (Object.keys(legacyDictation).length > 0) legacy.dictation = legacyDictation;
-  if (Object.keys(legacy).length === 0) return { changed: false, archivePath: null };
+  const legacyRealtimeCaptions = record(root.realtime_captions);
+  const pipeline = record(root.agent_pipeline);
+  const legacyAgentAudio: JsonRecord = {};
+  for (const key of RETIRED_AGENT_AUDIO_KEYS) {
+    if (hasOwn(pipeline, key)) legacyAgentAudio[key] = pipeline[key];
+  }
+  if (
+    Object.keys(legacy).length === 0 &&
+    Object.keys(legacyRealtimeCaptions).length === 0 &&
+    Object.keys(legacyAgentAudio).length === 0
+  ) return { changed: false, archivePath: null };
 
   const stamp = new Date().toISOString().replace(/[-:.]/g, "");
   const archivePath = join(dirname(path), `${basename(path, ".json")}.legacy-transcription.${stamp}.json`);
@@ -293,6 +303,8 @@ export function migrateLegacyTranscriptionConfig(path: string): AgentNativeConfi
     migratedAt: new Date().toISOString(),
     sourcePath: path,
     transcription: legacy,
+    realtime_captions: legacyRealtimeCaptions,
+    agent_pipeline_audio: legacyAgentAudio,
   }, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
   renameSync(archiveTmp, archivePath);
 
@@ -300,6 +312,9 @@ export function migrateLegacyTranscriptionConfig(path: string): AgentNativeConfi
   delete dictation.engine;
   if (hasOwn(transcription, "dictation")) transcription.dictation = dictation;
   root.transcription = transcription;
+  delete root.realtime_captions;
+  for (const key of RETIRED_AGENT_AUDIO_KEYS) delete pipeline[key];
+  if (hasOwn(root, "agent_pipeline")) root.agent_pipeline = pipeline;
   const configTmp = `${path}.${process.pid}.agent-transcription.tmp`;
   writeFileSync(configTmp, `${JSON.stringify(root, null, 2)}\n`, { encoding: "utf8", mode: statSync(path).mode });
   renameSync(configTmp, path);
@@ -332,7 +347,7 @@ export class ConfigManager {
    */
   update(dottedKey: string, value: unknown): UpdateResult {
     if (isRetiredTranscriptionSetting(dottedKey)) {
-      throw new Error(`setting is retired because transcription is Agent-owned: ${dottedKey}`);
+      throw new Error(`setting is retired because Yulu now uses one explicit audio engine: ${dottedKey}`);
     }
     const onDiskMtime = statSync(this.path).mtimeMs;
     if (this.cached && onDiskMtime !== this.cachedMtime) {
@@ -355,6 +370,8 @@ export class ConfigManager {
 }
 
 function isRetiredTranscriptionSetting(dottedKey: string): boolean {
+  if (dottedKey === "realtime_captions" || dottedKey.startsWith("realtime_captions.")) return true;
+  if (RETIRED_AGENT_AUDIO_KEYS.some((key) => dottedKey === `agent_pipeline.${key}` || dottedKey.startsWith(`agent_pipeline.${key}.`))) return true;
   if (dottedKey === "transcription.dictation.engine" || dottedKey.startsWith("transcription.dictation.engine.")) return true;
   return RETIRED_TRANSCRIPTION_KEYS.some((key) => {
     const path = `transcription.${key}`;

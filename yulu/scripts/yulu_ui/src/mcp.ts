@@ -203,7 +203,9 @@ function registerRecordingArtifactTools(
     inputSchema: { taskId: z.string().uuid(), leaseToken: z.string().uuid() },
   }, async ({ taskId, leaseToken }) => {
     const task = requireTaskLease(ctx, taskId, leaseToken);
-    if (task.state !== "running") throw new Error(`task ${taskId} cannot read its transcript from ${task.state}`);
+    if (!["running", "transcript_committed"].includes(task.state)) {
+      throw new Error(`task ${taskId} cannot read its transcript from ${task.state}`);
+    }
     return json({ taskId, transcript: ctx.artifacts.readStagedTranscript(taskId) });
   });
   server.registerTool("recording_task_summary_stage", {
@@ -215,7 +217,9 @@ function registerRecordingArtifactTools(
     },
   }, async ({ taskId, leaseToken, summary }) => {
     const task = requireTaskLease(ctx, taskId, leaseToken);
-    if (task.state !== "running") throw new Error(`task ${taskId} cannot stage a summary from ${task.state}`);
+    if (!["running", "transcript_committed"].includes(task.state)) {
+      throw new Error(`task ${taskId} cannot stage a summary from ${task.state}`);
+    }
     const corrected = applyGlossaryContract(summary, loadGlossaryContract(ctx.db?.vocab));
     ctx.artifacts.writeStagedSummary(taskId, corrected);
     return json({ ok: true, taskId, bytes: Buffer.byteLength(corrected.trim() + "\n", "utf8") });

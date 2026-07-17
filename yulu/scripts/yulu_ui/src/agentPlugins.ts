@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
+import { parse as parseYaml } from "yaml";
 
 export type ConsoleAgentId = "codex" | "claude" | "hermes" | "openclaw";
 export type AgentPluginId = "summary" | "notion" | "zulip" | "calendar";
@@ -44,6 +45,7 @@ export interface ConfigurePluginAction {
   plugin: AgentPluginId;
   label: string;
   agentCli: string;
+  manageCommand: string;
   message: string;
 }
 
@@ -216,9 +218,62 @@ function findPluginPath(agent: ConsoleAgentId, plugin: AgentPluginId): string {
     const found = walkForAlias(root, aliases);
     if (found) return found;
   }
-  if (agent === "hermes") return findHermesMcpTokenPath(aliases);
+  if (agent === "hermes") return findHermesMcpConfigPath(aliases) || findHermesMcpTokenPath(aliases);
   if (agent === "codex") return findCodexMcpPluginPath(plugin, aliases);
   return "";
+}
+
+function findHermesMcpConfigPath(aliases: string[]): string {
+  const configPath = join(hermesHome(), "config.yaml");
+  if (!existsSync(configPath)) return "";
+  let config: Record<string, unknown>;
+  try {
+    config = asRecord(parseYaml(readFileSync(configPath, "utf8")));
+  } catch {
+    return "";
+  }
+  const servers = asRecord(config.mcp_servers);
+  const env = readHermesEnv();
+  for (const [rawName, rawServer] of Object.entries(servers)) {
+    const name = rawName.toLowerCase();
+    if (!aliases.some((alias) => name.includes(alias))) continue;
+    const server = asRecord(rawServer);
+    if (server.enabled === false || hasUnresolvedEnvReference(server, env)) return "";
+    const serverEnv = asRecord(server.env);
+    const zulipRc = stringValue(serverEnv, "ZULIP_RC_PATH");
+    if (name.includes("zulip") && zulipRc && !existsSync(expandHome(zulipRc))) return "";
+    return `${configPath}#mcp_servers.${name}`;
+  }
+  return "";
+}
+
+function readHermesEnv(): Set<string> {
+  const values = new Set<string>();
+  const path = join(hermesHome(), ".env");
+  if (!existsSync(path)) return values;
+  try {
+    for (const line of readFileSync(path, "utf8").split(/\r?\n/)) {
+      const match = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/.exec(line);
+      if (match?.[2]?.trim()) values.add(match[1]!);
+    }
+  } catch {
+    return values;
+  }
+  return values;
+}
+
+function hasUnresolvedEnvReference(value: unknown, env: Set<string>): boolean {
+  if (typeof value === "string") {
+    for (const match of value.matchAll(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g)) {
+      if (!process.env[match[1]!] && !env.has(match[1]!)) return true;
+    }
+    return false;
+  }
+  if (Array.isArray(value)) return value.some((item) => hasUnresolvedEnvReference(item, env));
+  if (typeof value === "object" && value !== null) {
+    return Object.values(value).some((item) => hasUnresolvedEnvReference(item, env));
+  }
+  return false;
 }
 
 function findHermesMcpTokenPath(aliases: string[]): string {
@@ -347,6 +402,7 @@ export function configurePluginAction(agent: unknown, plugin: AgentPluginId): Co
       plugin,
       label,
       agentCli: "",
+      manageCommand: "",
       message: `当前底层 Agent 暂不支持配置 ${label} 插件。`,
     };
   }
@@ -361,6 +417,7 @@ export function configurePluginAction(agent: unknown, plugin: AgentPluginId): Co
     plugin,
     label,
     agentCli,
-    message: `请在 ${AGENT_LABEL[id]} 中添加或授权 ${label} 插件；Yulu 只会重新探测状态，不保存该插件凭证。`,
+    manageCommand: `${agentCli} mcp`,
+    message: `请在 ${AGENT_LABEL[id]} 的 MCP 管理器中添加或授权 ${label}；完成后返回 Yulu 重新检测。`,
   };
 }

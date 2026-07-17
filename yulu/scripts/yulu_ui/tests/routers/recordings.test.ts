@@ -8,6 +8,7 @@ import { PubSub, type AppChannels } from "../../src/pubsub.js";
 import { RecordingTaskDeletionBlockedError } from "../../src/hostStore.js";
 
 const agentActions = vi.hoisted(() => ({
+  DeliveryError: class AgentDeliveryFailedError extends Error {},
   summarize: vi.fn(async () => ({ stdout: "# Fresh summary\n", stderr: "", sessionId: "summary-session" })),
   share: vi.fn(async () => ({
     stdout: "sent",
@@ -18,6 +19,7 @@ const agentActions = vi.hoisted(() => ({
 }));
 
 vi.mock("../../src/agentActions.js", () => ({
+  AgentDeliveryFailedError: agentActions.DeliveryError,
   runAgentSummarize: agentActions.summarize,
   runAgentShareSummary: agentActions.share,
 }));
@@ -292,6 +294,23 @@ describe("recordings router", () => {
     const history = JSON.parse(readFileSync(join(mvDir, `${stem}.shares.json`), "utf8")) as Array<Record<string, unknown>>;
     expect(history).toHaveLength(2);
     expect(history.every((entry) => entry.channel === "slack" && entry.status === "success")).toBe(true);
+  });
+
+  it("records an explicit Agent connector rejection as failed instead of uncertain", async () => {
+    const stem = "TeamSync_20260102_090000";
+    writeFileSync(join(mvDir, `${stem}.wav`), wavWithDuration(1));
+    writeFileSync(join(mvDir, `${stem}.summary.md`), "summary to share");
+    agentActions.share.mockRejectedValueOnce(new agentActions.DeliveryError("connector unavailable"));
+
+    await expect(createCaller(recordingsRouter, mkCtx({ moviesDir: mvDir })).sendSummary({
+      stem,
+      channel: "slack",
+      label: "Slack",
+      destination: "#meetings",
+    })).rejects.toThrow("connector unavailable");
+
+    const history = JSON.parse(readFileSync(join(mvDir, `${stem}.shares.json`), "utf8")) as Array<Record<string, unknown>>;
+    expect(history[0]).toMatchObject({ status: "failed", message: "connector unavailable" });
   });
 
   it("does not expose the retired combined manual reprocess procedure", () => {

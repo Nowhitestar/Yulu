@@ -1,6 +1,6 @@
 ---
 name: yulu
-description: "Yulu (语录) — native macOS recording with a durable local Host and Agent-owned transcription, summaries, conversation, and connectors."
+description: "Yulu (语录) — native macOS recording with a durable local Host, explicit audio engines, and Agent-owned summaries, conversation, and connectors."
 metadata:
   internal: true
   notice: "Internal architecture and developer guidance. The user-facing skill installed into Agents lives at skills/yulu/SKILL.md."
@@ -12,13 +12,15 @@ Yulu is an Agent-native macOS recorder. Preserve its responsibility boundary:
 
 - Yulu owns native capture, permissions, durable tasks, idempotency, leases,
   artifact commit, authorization, recovery, and audit.
-- Hermes owns recording speech recognition, summaries, and explicitly authorized
-  Notion delivery.
+- Yulu's explicitly selected local/xAI audio engine owns realtime captions,
+  final transcription, and dictation, with no automatic fallback.
+- Hermes/OpenClaw may supply xAI OAuth credentials but do not execute Yulu audio.
+- The recording Agent owns summaries and explicitly authorized Notion delivery.
 - The selected general Agent owns interactive conversation and its connectors.
 - Python is capture and local workflow glue, not an AI runtime.
 
-The authoritative runtime decision is
-[`ADR-005`](spec/adr/005-agent-native-durable-recording-pipeline.md).
+The authoritative runtime decisions are [`ADR-005`](spec/adr/005-agent-native-durable-recording-pipeline.md)
+and [`ADR-007`](spec/adr/007-explicit-audio-transcription-engines.md).
 
 ## Product flow
 
@@ -32,13 +34,16 @@ Yulu.app -> native system audio + microphone -> local WAV
 Python completion adapter -> Yulu Host -> durable task + lease
                                        |
                                        v
-                           Hermes speech recognition
+                           selected Yulu audio engine
+                                       |
+                                       v
+                           Host commits transcript
                                        |
                                        v
                            Hermes summary workflow
                                        |
                                        v
-                    Host commits transcript + summary atomically
+                              Host commits summary
                                        |
                                        +-> optional Hermes Notion delivery
 
@@ -56,16 +61,16 @@ spooled and replayed. Do not add a fallback AI path to the capture process.
 3. Automatic completion is idempotent. Replaying the same event must resolve to
    the same durable task.
 4. Only the current task lease may advance progress or commit.
-5. Transcript and summary are committed together from Host-controlled,
-   task-scoped artifacts; Agents never read or write their staging paths.
+5. The Host commits the selected-engine transcript before summary work, then
+   commits the Agent-produced summary from Host-controlled task artifacts.
 6. Notion requires a task-level opt-in and a Host authorization after artifacts
    are committed.
 7. An uncertain external delivery becomes `delivery_unverified`; never assume
    failure and retry blindly.
-8. Hermes remains the recording provider even when Agent Console selects another
-   Agent for conversation.
-9. Missing Hermes is fail-closed: the durable task waits in `awaiting_agent`; the
-   general Agent is never an implicit recording fallback.
+8. Hermes remains the automatic summary/delivery provider even when Agent Console
+   selects another Agent for conversation.
+9. Missing Hermes pauses summary work after transcript commit; the general Agent
+   is never an implicit summary fallback.
 10. Agent and connector credentials never belong in Yulu config or source.
 11. Runtime databases, bearer tokens, task workspaces, sockets, and event spools
     stay machine-local.
@@ -77,7 +82,8 @@ spooled and replayed. Do not add a fallback AI path to the capture process.
 | Capture and live readiness | Native app | `audio_daemon.sock` and capture state |
 | Completion handoff | Python capture edge | Authenticated Host request or `recording-events/` spool |
 | Task state and audit | Host | `~/.config/yulu/host.sqlite` |
-| Recording speech and summary | Hermes | Hermes session plus Host-committed artifacts |
+| Recording speech | selected Yulu audio engine | local model or direct xAI STT plus Host transcript artifact |
+| Recording summary | Hermes | Hermes session plus Host-committed summary artifact |
 | Artifact integrity | Host | artifact records, hashes, provenance, and final sidecars |
 | Notion side effect | Hermes connector + Host authorization/audit | Notion delivery record keyed by task |
 | Interactive conversation | selected general Agent | Agent Console session store and native Agent session |
@@ -115,8 +121,8 @@ registration, not read or print `mcp-token.json`.
 
 For a leased recording task:
 
-1. The Hermes audio phase creates the transcript inside the Host-controlled task boundary.
-2. In the artifact session, call `recording_task_transcript_read`; do not use filesystem tools.
+1. Yulu's explicitly selected audio engine creates and durably commits the transcript.
+2. In the Hermes artifact session, call `recording_task_transcript_read`; do not use filesystem tools.
 3. Apply the snapshotted summary instructions, then call `recording_task_summary_stage`
    with the complete Markdown summary.
 4. Call `recording_artifact_commit` with the current task ID and lease.
@@ -180,9 +186,11 @@ Relevant sections:
 
 - `audio`: native capture preferences and recording root;
 - `agent_pipeline`: durable processing, automatic enqueue, explicit Notion
-  opt-in, destination hint, Hermes loopback port, and chunk duration;
+  opt-in, and destination hint;
+- `transcription.engine` and `transcription.xai_credential_source`: explicit
+  local/xAI selection and OAuth wallet source;
 - `transcription.language` and `transcription.dictation`: language, prompt,
-  context, timeout, and deadline preferences only;
+  context, timeout, and deadline preferences;
 - `llm.agent.provider` / `llm.command`: general Agent Console runtime;
 - `agent_console`: capability display and non-secret destination hints;
 - `status_agent`: menu-bar and global shortcut preferences;
@@ -201,9 +209,10 @@ See [`docs/configuration.md`](../docs/configuration.md).
 | State | Meaning |
 |---|---|
 | `queued` | Durable task waiting for a claim |
-| `awaiting_agent` | Hermes unavailable; no current lease |
+| `awaiting_agent` | Selected audio engine or summary Agent unavailable; no current lease |
 | `running` | Current leased attempt is transcribing or summarizing |
-| `artifacts_committed` | Transcript and summary committed together |
+| `transcript_committed` | Final transcript is durable; summary may still be pending |
+| `artifacts_committed` | Transcript and summary are both committed |
 | `sending` | Host authorized the Hermes Notion side effect |
 | `delivery_reported` | Hermes reported a Notion page URL or ID |
 | `completed` | Required audit passed |
@@ -224,7 +233,10 @@ Do not edit task state directly in SQLite.
 | `scripts/yulu_ui/src/server.ts` | Loopback Host, APIs, MCP dispatch, and UI server |
 | `scripts/yulu_ui/src/hostStore.ts` | Durable task, lease, artifact, delivery, and event state |
 | `scripts/yulu_ui/src/recordingPipeline.ts` | Admission, idempotency, claim, dispatch, and recovery |
-| `scripts/yulu_ui/src/agentGateway.ts` | Hermes audio and workflow boundary plus tool-call audit |
+| `scripts/yulu_ui/src/audioTranscription.ts` | Explicit local/xAI audio-engine selection with no fallback |
+| `scripts/yulu_ui/src/xaiAudio.ts` | Direct xAI REST transcription and native realtime STT transport |
+| `scripts/yulu_ui/src/xaiCredentials.ts` | In-memory xAI OAuth reuse from installed Hermes/OpenClaw |
+| `scripts/yulu_ui/src/agentGateway.ts` | Hermes summary/delivery workflow boundary plus tool-call audit |
 | `scripts/yulu_ui/src/artifactStore.ts` | Task workspace and atomic artifact commit |
 | `scripts/yulu_ui/src/recordingEventInbox.ts` | Replay capture-completion events after Host downtime |
 | `scripts/yulu_ui/src/agentRuntime.ts` | Hermes recording resolution and separate general-Agent resolution |
@@ -287,8 +299,8 @@ See [`docs/operations.md`](../docs/operations.md) for exact checks.
 
 ## 中文摘要
 
-Yulu 的产品边界是：macOS 原生录音 + 本地可信 Host。Yulu 负责权限、持久化
-任务、幂等、租约、原子提交和审计；Hermes 负责录音转写、纪要和明确授权的
-Notion 投递；Agent Console 选择的通用 Agent 负责对话和自己的连接器；Python
-只做录音边缘控制和 Host 事件投递。不要在 Yulu 内新增第二套 AI、对话或连接器
-执行路径。
+Yulu 的产品边界是：macOS 原生录音 + 本地可信 Host。Yulu 明确选择本地或 xAI
+音频引擎，统一负责实时字幕、最终转写和听写，不做自动回退；Hermes/OpenClaw
+只可提供 xAI OAuth。录音 Agent 负责纪要和明确授权的 Notion 投递；Agent
+Console 选择的通用 Agent 负责对话和自己的连接器；Python 只做录音边缘控制和
+Host 事件投递。不要在 Yulu 内新增第二套对话或连接器执行路径。

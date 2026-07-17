@@ -22,17 +22,18 @@ def _write_silent_wav(path: Path, *, seconds: float = 1.0, rate: int = 16000) ->
         wav.writeframes(b"\x00\x00" * int(seconds * rate))
 
 
-def test_resolve_engine_delegates_provider_selection_to_hermes():
+def test_resolve_engine_uses_the_single_selected_audio_engine():
     cfg = {
         "transcription": {
+            "engine": "xai",
             "final_engine": "mlx",
             "realtime": {"engine": "whisper"},
             "dictation": {"engine": "hermes"},
         }
     }
-    assert dictate.resolve_engine(cfg, None) == "hermes"
-    assert dictate.resolve_engine(cfg, "mlx") == "hermes"
-    assert dictate.resolve_engine(cfg, "whisper") == "hermes"
+    assert dictate.resolve_engine(cfg, None) == "xai"
+    assert dictate.resolve_engine(cfg, "mlx") == "xai"
+    assert dictate.resolve_engine(cfg, "whisper") == "xai"
 
 
 def test_resolve_engine_ignores_legacy_realtime_and_final_engines():
@@ -43,29 +44,29 @@ def test_resolve_engine_ignores_legacy_realtime_and_final_engines():
             "dictation": {"engine": "auto"},
         }
     }
-    assert dictate.resolve_engine(cfg, None) == "hermes"
-    assert dictate.resolve_engine(cfg, "auto") == "hermes"
+    assert dictate.resolve_engine(cfg, None) == "local"
+    assert dictate.resolve_engine(cfg, "auto") == "local"
 
     cfg["transcription"]["realtime"] = {"engine": "auto"}
-    assert dictate.resolve_engine(cfg, None) == "hermes"
+    assert dictate.resolve_engine(cfg, None) == "local"
 
 
-def test_resolve_engine_defaults_to_hermes_without_dictation_config():
+def test_resolve_engine_defaults_to_local_without_audio_engine_config():
     cfg = {
         "transcription": {
             "final_engine": "hermes",
             "realtime": {"engine": "hermes"},
         }
     }
-    assert dictate.resolve_engine(cfg, None) == "hermes"
+    assert dictate.resolve_engine(cfg, None) == "local"
 
 
-def test_translation_provider_selection_belongs_to_hermes():
-    cfg = {"transcription": {"dictation": {"engine": "hermes"}}}
+def test_translation_uses_the_same_selected_audio_engine():
+    cfg = {"transcription": {"engine": "xai", "dictation": {"engine": "hermes"}}}
 
-    assert dictate.resolve_translation_engine(cfg, None, "English") == "hermes"
-    assert dictate.resolve_translation_engine(cfg, "hermes", "English") == "hermes"
-    assert dictate.resolve_translation_engine(cfg, "mlx", "English") == "hermes"
+    assert dictate.resolve_translation_engine(cfg, None, "English") == "xai"
+    assert dictate.resolve_translation_engine(cfg, "hermes", "English") == "xai"
+    assert dictate.resolve_translation_engine(cfg, "mlx", "English") == "xai"
 
 
 def test_render_context_prompt_uses_selected_prompt(tmp_path):
@@ -371,7 +372,7 @@ def test_no_copy_requires_no_paste(capsys):
 def test_toggle_starts_when_no_active_dictation(monkeypatch, tmp_path):
     observed = {}
 
-    monkeypatch.setattr(dictate, "_config", lambda: {"transcription": {"dictation": {"engine": "hermes"}}})
+    monkeypatch.setattr(dictate, "_config", lambda: {"transcription": {"engine": "local", "dictation": {"engine": "hermes"}}})
     monkeypatch.setattr(dictate, "active_dictation_state", lambda: None)
 
     def fake_start(**kwargs):
@@ -381,7 +382,7 @@ def test_toggle_starts_when_no_active_dictation(monkeypatch, tmp_path):
     monkeypatch.setattr(dictate, "start_recording", fake_start)
 
     assert dictate.main(["toggle", "--no-paste", "--no-copy"]) == 0
-    assert observed["engine"] == "hermes"
+    assert observed["engine"] == "local"
     assert observed["capture_target"] is False
 
 
@@ -512,7 +513,7 @@ def test_translate_to_uses_translate_prompt(monkeypatch, tmp_path):
     monkeypatch.setattr(
         dictate,
         "_config",
-        lambda: {"transcription": {"dictation": {"engine": "hermes", "timeout_sec": 8, "deadline_sec": 8}}},
+        lambda: {"transcription": {"engine": "xai", "dictation": {"engine": "hermes", "timeout_sec": 8, "deadline_sec": 8}}},
     )
     monkeypatch.setattr(dictate, "start_recording", lambda **kwargs: state)
     monkeypatch.setattr(dictate, "stop_recording", lambda: state)
@@ -537,13 +538,13 @@ def test_translate_to_uses_translate_prompt(monkeypatch, tmp_path):
     monkeypatch.setattr(dictate, "process_audio", fake_process)
 
     assert dictate.main(["once", "--translate-to", "Japanese", "--no-paste", "--no-copy"]) == 0
-    assert observed["engine"] == "hermes"
+    assert observed["engine"] == "xai"
     assert observed["prompt_slug"] == "dictation-translate"
     assert observed["target_language"] == "Japanese"
     assert observed["timeout_sec"] > 15
 
 
-def test_english_translate_uses_hermes(monkeypatch, tmp_path):
+def test_english_translate_uses_selected_audio_engine(monkeypatch, tmp_path):
     observed = {}
     state = {
         "audio_path": str(tmp_path / "dictation.wav"),
@@ -554,7 +555,7 @@ def test_english_translate_uses_hermes(monkeypatch, tmp_path):
         "stopped_at": "2026-06-30T18:32:00",
     }
 
-    monkeypatch.setattr(dictate, "_config", lambda: {"transcription": {"dictation": {"engine": "hermes"}}})
+    monkeypatch.setattr(dictate, "_config", lambda: {"transcription": {"engine": "xai", "dictation": {"engine": "hermes"}}})
     monkeypatch.setattr(dictate, "start_recording", lambda **kwargs: state)
     monkeypatch.setattr(dictate, "stop_recording", lambda: state)
     monkeypatch.setattr(dictate.time, "sleep", lambda seconds: None)
@@ -573,7 +574,7 @@ def test_english_translate_uses_hermes(monkeypatch, tmp_path):
     })
 
     assert dictate.main(["once", "--translate-to", "English", "--no-paste", "--no-copy"]) == 0
-    assert observed["engine"] == "hermes"
+    assert observed["engine"] == "xai"
     assert observed["timeout_sec"] > 15
 
 
@@ -589,7 +590,7 @@ def test_successful_dictation_appends_history(monkeypatch, tmp_path):
     }
 
     monkeypatch.setattr(dictate, "HISTORY_PATH", history_path)
-    monkeypatch.setattr(dictate, "_config", lambda: {"transcription": {"dictation": {"engine": "hermes"}}})
+    monkeypatch.setattr(dictate, "_config", lambda: {"transcription": {"engine": "local", "dictation": {"engine": "hermes"}}})
     monkeypatch.setattr(dictate, "start_recording", lambda **kwargs: state)
     monkeypatch.setattr(dictate, "stop_recording", lambda: state)
     monkeypatch.setattr(dictate.time, "sleep", lambda seconds: None)
@@ -861,22 +862,22 @@ def test_send_voice_chat_requests_deferred_answer(monkeypatch):
 def test_warm_resolves_dictation_engine(monkeypatch, capsys):
     observed = {}
 
-    monkeypatch.setattr(dictate, "_config", lambda: {"transcription": {"dictation": {"engine": "hermes"}}})
+    monkeypatch.setattr(dictate, "_config", lambda: {"transcription": {"engine": "local", "dictation": {"engine": "hermes"}}})
     monkeypatch.setattr(dictate, "warm_dictation_engine", lambda **kwargs: observed.update(kwargs) or {
-        "text": "warmed hermes",
-        "engine": "hermes",
+        "text": "warmed local",
+        "engine": "local",
         "ok": True,
     })
 
     assert dictate.main(["warm", "--json"]) == 0
-    assert observed == {"engine": "hermes", "timeout_sec": 60.0, "target_language": ""}
-    assert json.loads(capsys.readouterr().out)["engine"] == "hermes"
+    assert observed == {"engine": "local", "timeout_sec": 60.0, "target_language": ""}
+    assert json.loads(capsys.readouterr().out)["engine"] == "local"
 
 
 def test_warm_translate_resolves_translation_engine(monkeypatch, capsys):
     observed = {}
 
-    monkeypatch.setattr(dictate, "_config", lambda: {"transcription": {"dictation": {"engine": "hermes"}}})
+    monkeypatch.setattr(dictate, "_config", lambda: {"transcription": {"engine": "xai", "dictation": {"engine": "hermes"}}})
     monkeypatch.setattr(dictate, "warm_dictation_engine", lambda **kwargs: observed.update(kwargs) or {
         "text": "warmed hermes",
         "engine": kwargs["engine"],
@@ -886,11 +887,11 @@ def test_warm_translate_resolves_translation_engine(monkeypatch, capsys):
     })
 
     assert dictate.main(["warm", "--translate-to", "English", "--json"]) == 0
-    assert observed == {"engine": "hermes", "timeout_sec": 60.0, "target_language": "English"}
-    assert json.loads(capsys.readouterr().out)["warmed_engine"] == "hermes"
+    assert observed == {"engine": "xai", "timeout_sec": 60.0, "target_language": "English"}
+    assert json.loads(capsys.readouterr().out)["warmed_engine"] == "xai"
 
 
-def test_warm_dictation_engine_uses_host_hermes_endpoint(monkeypatch):
+def test_warm_dictation_engine_uses_host_audio_endpoint(monkeypatch):
     observed = {}
 
     def fake_host_request(path, payload, *, timeout_sec):
@@ -899,17 +900,17 @@ def test_warm_dictation_engine_uses_host_hermes_endpoint(monkeypatch):
 
     monkeypatch.setattr(dictate, "_host_agent_request", fake_host_request)
 
-    result = dictate.warm_dictation_engine(engine="mlx", timeout_sec=30)
+    result = dictate.warm_dictation_engine(engine="xai", timeout_sec=30)
     assert observed == {
         "path": "/api/agent/transcription/warm",
         "payload": {},
         "timeout_sec": 30,
     }
-    assert result["engine"] == "hermes"
+    assert result["engine"] == "xai"
     assert result["warmed_engine"] == "hermes"
 
 
-def test_warm_translation_uses_same_host_hermes_endpoint(monkeypatch):
+def test_warm_translation_uses_same_host_audio_endpoint(monkeypatch):
     observed = {}
 
     def fake_host_request(path, payload, *, timeout_sec):
@@ -918,13 +919,13 @@ def test_warm_translation_uses_same_host_hermes_endpoint(monkeypatch):
 
     monkeypatch.setattr(dictate, "_host_agent_request", fake_host_request)
 
-    result = dictate.warm_dictation_engine(engine="hermes", target_language="English", timeout_sec=30)
+    result = dictate.warm_dictation_engine(engine="xai", target_language="English", timeout_sec=30)
     assert observed == {
         "path": "/api/agent/transcription/warm",
         "payload": {},
         "timeout_sec": 30,
     }
-    assert result["engine"] == "hermes"
+    assert result["engine"] == "xai"
     assert result["warmed_engine"] == "xai"
     assert result["target_language"] == "English"
 
@@ -1246,7 +1247,7 @@ def test_transcribe_dictation_preserves_fractional_timeout(monkeypatch, tmp_path
 
     assert abs(observed["timeout_sec"] - 1.55) < 0.001
     assert observed["path"] == "/api/agent/transcribe"
-    assert observed["payload"] == {"audioPath": str(audio)}
+    assert observed["payload"] == {"audioPath": str(audio), "language": "en"}
     assert result["text"] == "ok"
     assert result["engine_used"] == "hermes"
     assert result["provider"] == "hermes"
@@ -1886,7 +1887,7 @@ def test_process_audio_round_trips_through_host_hermes_endpoint(monkeypatch, tmp
     assert result["copied"] is False
     assert result["pasted"] is False
     assert observed["url"] == "http://127.0.0.1:7777/api/agent/transcribe"
-    assert observed["body"] == {"audioPath": str(audio)}
+    assert observed["body"] == {"audioPath": str(audio), "language": "en"}
     assert observed["headers"]["authorization"] == "Bearer secret-token"
     assert observed["headers"]["content-type"] == "application/json"
     assert observed["timeout"] == 3.0

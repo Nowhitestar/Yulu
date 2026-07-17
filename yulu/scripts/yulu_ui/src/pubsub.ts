@@ -47,6 +47,10 @@ export type AppChannels = {
     title?: string;
     language: "zh" | "en" | "ja" | "auto";
     text: string;
+    stableText?: string;
+    partialText?: string;
+    captionProvider?: string;
+    captionMode?: "streaming" | "segmented";
     coveredMs: number;
     trusted: boolean;
     sequence?: number;

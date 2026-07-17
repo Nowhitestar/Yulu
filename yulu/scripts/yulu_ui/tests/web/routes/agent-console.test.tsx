@@ -6,6 +6,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 const navigateMock = vi.fn();
 const reprocessMutate = vi.fn();
 const sendSummaryMutate = vi.fn();
+const connectAgentMutate = vi.fn();
 const configurePluginMutate = vi.fn();
 const setDestinationMutate = vi.fn();
 const refreshDestinationMutate = vi.fn();
@@ -42,6 +43,16 @@ function taskFixture(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function pluginFixture() {
+  const all = [
+    { id: "summary", label: "总结", added: true, core: true, status: "configured", statusLabel: "已配置", resolvedPath: "", detail: "摘要由当前 Agent 执行", configureLabel: "已配置", agent: "codex" },
+    { id: "notion", label: "Notion", added: true, core: false, status: "configured", statusLabel: "已配置", resolvedPath: "/agent/notion", detail: "/agent/notion", configureLabel: "已配置", agent: "codex", destination: { channel: "notion", label: "Notion", value: "Yulu Meeting", configured: true, missingReason: "", notion: { target: "Yulu Meeting" } } },
+    { id: "zulip", label: "Zulip", added: true, core: false, status: mockZulipConfigured ? "configured" : "unconfigured", statusLabel: mockZulipConfigured ? "已配置" : "未配置", resolvedPath: mockZulipConfigured ? "/agent/zulip" : "", detail: mockZulipConfigured ? "/agent/zulip" : "Codex CLI 尚未配置 Zulip 插件", configureLabel: mockZulipConfigured ? "已配置" : "去配置", agent: "codex", destination: { channel: "zulip", label: "Zulip", value: mockZulipConfigured ? "meetings / weekly" : "选择 Channel 和 Topic", configured: mockZulipConfigured, missingReason: mockZulipConfigured ? "" : "请选择 Zulip Channel 和 Topic", zulip: { stream: mockZulipConfigured ? "meetings" : "", topic: mockZulipConfigured ? "weekly" : "" } } },
+    { id: "calendar", label: "日历", added: true, core: false, status: "configured", statusLabel: "已配置", resolvedPath: "/agent/calendar", detail: "/agent/calendar", configureLabel: "已配置", agent: "codex" },
+  ];
+  return { agent: "codex", current: all, available: [], all };
+}
+
 vi.mock("react-router", async (orig) => {
   const actual = await orig<typeof import("react-router")>();
   return { ...actual, useNavigate: () => navigateMock };
@@ -70,26 +81,18 @@ vi.mock("../../../web/src/trpc.js", () => {
           useQuery: () => ({
             data: {
               recording: { state: "idle", hotkey: "?" },
+              recordingAgent: { available: true, provider: "local", reason: null, paused: false, policyReason: null },
               agents: [
                 { id: "codex", name: "Codex CLI", command: "codex", found: true, path: "/opt/homebrew/bin/codex", supported: true, connected: true, unavailableReason: "", runtimePreview: "codex exec" },
                 { id: "claude", name: "Claude Code", command: "claude", found: true, path: "/usr/local/bin/claude", supported: true, connected: false, unavailableReason: "", runtimePreview: "" },
                 { id: "hermes", name: "Hermes", command: "hermes", found: true, path: "/Users/test/.local/bin/hermes", supported: true, connected: false, unavailableReason: "", runtimePreview: "" },
-                { id: "openclaw", name: "OpenClaw", command: "openclaw", found: true, path: "/opt/homebrew/bin/openclaw", supported: true, connected: false, unavailableReason: "", runtimePreview: "" },
+                { id: "openclaw", name: "OpenClaw", command: "openclaw", found: false, path: "", supported: true, connected: false, unavailableReason: "", runtimePreview: "" },
               ],
-              plugins: {
-                agent: "codex",
-                current: [
-                  { id: "summary", label: "总结", added: true, core: true, status: "configured", statusLabel: "已配置", resolvedPath: "", detail: "摘要由当前 Agent 执行", configureLabel: "已配置", agent: "codex" },
-                  { id: "notion", label: "Notion", added: true, core: false, status: "configured", statusLabel: "已配置", resolvedPath: "/agent/notion", detail: "/agent/notion", configureLabel: "已配置", agent: "codex", destination: { channel: "notion", label: "Notion", value: "Yulu Meeting", configured: true, missingReason: "", notion: { target: "Yulu Meeting" } } },
-                  { id: "zulip", label: "Zulip", added: true, core: false, status: mockZulipConfigured ? "configured" : "unconfigured", statusLabel: mockZulipConfigured ? "已配置" : "未配置", resolvedPath: mockZulipConfigured ? "/agent/zulip" : "", detail: mockZulipConfigured ? "/agent/zulip" : "Codex CLI 尚未配置 Zulip 插件", configureLabel: mockZulipConfigured ? "已配置" : "去配置", agent: "codex", destination: { channel: "zulip", label: "Zulip", value: mockZulipConfigured ? "meetings / weekly" : "选择 Channel 和 Topic", configured: mockZulipConfigured, missingReason: mockZulipConfigured ? "" : "请选择 Zulip Channel 和 Topic", zulip: { stream: mockZulipConfigured ? "meetings" : "", topic: mockZulipConfigured ? "weekly" : "" } } },
-                  { id: "calendar", label: "日历", added: true, core: false, status: "configured", statusLabel: "已配置", resolvedPath: "/agent/calendar", detail: "/agent/calendar", configureLabel: "已配置", agent: "codex" },
-                ],
-                available: [],
-                all: [],
-              },
+              plugins: pluginFixture(),
               tasks: mockTasks,
             },
             isPending: false,
+            isFetching: false,
             refetch: vi.fn(() => Promise.resolve({ data: null })),
           }),
         },
@@ -100,10 +103,26 @@ vi.mock("../../../web/src/trpc.js", () => {
             refetch: detectRefetch,
           }),
         },
-        connectAgent: { useMutation: () => mutation() },
+        connectAgent: { useMutation: () => ({ mutate: connectAgentMutate, isPending: false }) },
         addPlugin: { useMutation: () => mutation() },
         removePlugin: { useMutation: () => mutation() },
-        configurePlugin: { useMutation: () => mutation(configurePluginMutate) },
+        configurePlugin: {
+          useMutation: (options: { onSuccess?: (result: Record<string, unknown>) => void }) => ({
+            mutate: (input: { plugin: string }) => {
+              configurePluginMutate(input);
+              options.onSuccess?.({
+                ok: true,
+                agent: "codex",
+                plugin: input.plugin,
+                label: input.plugin === "notion" ? "Notion" : input.plugin === "zulip" ? "Zulip" : "日历",
+                agentCli: "codex",
+                manageCommand: "codex mcp",
+                message: "请在 Codex CLI 的 MCP 管理器中完成配置。",
+              });
+            },
+            isPending: false,
+          }),
+        },
         setDestination: { useMutation: () => mutation(setDestinationMutate) },
         destinationOptions: {
           useQuery: (input: { channel: "notion" | "zulip" }) => ({
@@ -214,6 +233,7 @@ beforeEach(() => {
   navigateMock.mockClear();
   reprocessMutate.mockClear();
   sendSummaryMutate.mockClear();
+  connectAgentMutate.mockReset();
   configurePluginMutate.mockClear();
   setDestinationMutate.mockClear();
   refreshDestinationMutate.mockClear();
@@ -236,6 +256,14 @@ beforeEach(() => {
     { id: "task-running", recordingStem: "Running", title: "Running recording", state: "running", phase: "summarizing", agentProvider: "hermes", attempt: 1, error: null, createdAt: "", updatedAt: "" },
     { id: "task-failed", recordingStem: "Failed", title: "Failed recording", state: "failed", phase: "failed", agentProvider: "hermes", attempt: 1, error: "boom", createdAt: "", updatedAt: "" },
   ];
+  connectAgentMutate.mockImplementation((input: { agent: string }, options: { onSuccess?: (result: unknown) => void; onSettled?: () => void }) => {
+    options.onSuccess?.({ ok: true, activeAgent: input.agent, agents: [] });
+    options.onSettled?.();
+  });
+  Object.defineProperty(navigator, "clipboard", {
+    configurable: true,
+    value: { writeText: vi.fn(() => Promise.resolve()) },
+  });
   askMutateAsync.mockResolvedValue({
     answer: "OK",
     sources: [],
@@ -273,7 +301,7 @@ beforeEach(() => {
 });
 
 describe("AgentConsole", () => {
-  it("renders the primary work areas and opens capabilities on demand", () => {
+  it("renders the primary work areas and opens Agents and Connectors on demand", () => {
     const { container, getByText, queryByText } = wrap();
     expect(getByText("最近三天")).toBeInTheDocument();
     expect(container.querySelector(".agent-session-history")).toBeInTheDocument();
@@ -281,9 +309,10 @@ describe("AgentConsole", () => {
     expect(container.querySelector(".agent-session-resizer")).toHaveAttribute("role", "separator");
     expect(container.querySelector(".agent-console-rail-left")).toBeNull();
     expect(getByText("问会议")).toBeInTheDocument();
-    expect(queryByText("底层 Agent")).not.toBeInTheDocument();
-    fireEvent.click(getByText("能力"));
-    expect(getByText("底层 Agent")).toBeInTheDocument();
+    expect(queryByText("Agent 角色")).not.toBeInTheDocument();
+    fireEvent.click(getByText("Agents"));
+    expect(getByText("Agent 角色")).toBeInTheDocument();
+    expect(getByText("当前 Agent 的 Connectors")).toBeInTheDocument();
   });
 
   it("renders durable Agent task state in Run Tasks mode", () => {
@@ -310,14 +339,18 @@ describe("AgentConsole", () => {
     expect(history).toHaveStyle({ height: "320px" });
   });
 
-  it("keeps voice input available without duplicating it in the mode bar", () => {
-    const { container, getByText, queryByText } = wrap();
-    const modebar = container.querySelector(".agent-console-modebar") as HTMLElement;
-    expect(within(modebar).queryByText("语音输入")).not.toBeInTheDocument();
-    fireEvent.click(getByText("能力"));
-    expect(getByText("打开").closest("a")).toHaveAttribute("href", "/voice-input");
-    expect(queryByText("查看入口")).not.toBeInTheDocument();
-    expect(getByText("配置快捷键").closest("a")).toHaveAttribute("href", "/settings/voice");
+  it("shows the two Agent roles and removes unrelated legacy sections", () => {
+    const { getByText, queryByText } = wrap();
+    fireEvent.click(getByText("Agents"));
+
+    expect(getByText("对话与手动操作")).toBeInTheDocument();
+    expect(getByText("实时字幕、转写与听写")).toBeInTheDocument();
+    expect(getByText("本地转写")).toBeInTheDocument();
+    expect(getByText("已选择 · 可用")).toBeInTheDocument();
+    expect(queryByText("语音输入")).not.toBeInTheDocument();
+    expect(queryByText("当前能力")).not.toBeInTheDocument();
+    expect(queryByText("本地状态")).not.toBeInTheDocument();
+    expect(queryByText("添加能力")).not.toBeInTheDocument();
   });
 
   it("shows Share as the next action when transcript and summary already exist", () => {
@@ -438,7 +471,7 @@ describe("AgentConsole", () => {
     ];
     const { getByText, queryByRole } = wrap();
 
-    expect(getByText("已排队等待 Hermes")).toBeInTheDocument();
+    expect(getByText("已排队等待处理")).toBeInTheDocument();
     expect(queryByRole("button", { name: "让 Hermes 处理" })).toBeNull();
     expect(queryByRole("button", { name: "处理并发送 Notion" })).toBeNull();
   });
@@ -476,74 +509,56 @@ describe("AgentConsole", () => {
     expect(getByRole("menuitem", { name: /更多分享渠道/ })).toBeInTheDocument();
   });
 
-  it("keeps Hermes and OpenClaw visible and connectable", () => {
+  it("switches only to installed conversation Agents", () => {
     const { getByText } = wrap();
-    fireEvent.click(getByText("能力"));
-    expect(getByText("Hermes")).toBeInTheDocument();
-    expect(getByText("OpenClaw")).toBeInTheDocument();
-    expect(getByText("Hermes").closest("button")).not.toBeDisabled();
+    fireEvent.click(getByText("Agents"));
+    fireEvent.click(getByText("更换"));
+    const selector = getByText("选择对话 Agent").closest(".agent-selector-panel") as HTMLElement;
+    const hermesButton = within(selector).getByText("Hermes").closest("button") as HTMLButtonElement;
+    const openClawButton = within(selector).getByText("OpenClaw").closest("button") as HTMLButtonElement;
+
+    expect(hermesButton).not.toBeDisabled();
+    expect(openClawButton).toBeDisabled();
+    fireEvent.click(within(selector).getByText("Claude Code"));
+    expect(connectAgentMutate).toHaveBeenCalledWith(
+      { agent: "claude" },
+      expect.objectContaining({ onSuccess: expect.any(Function), onError: expect.any(Function) }),
+    );
+    expect(getByText("对话 Agent 已切换为 Claude Code")).toBeInTheDocument();
   });
 
   it("runs Agent detection with visible feedback", async () => {
     const { getByText, findByText } = wrap();
-    fireEvent.click(getByText("能力"));
-    fireEvent.click(getByText("探测"));
+    fireEvent.click(getByText("Agents"));
+    fireEvent.click(getByText("管理 Agents 与 Connectors"));
+    fireEvent.click(getByText("重新检测"));
     expect(detectRefetch).toHaveBeenCalled();
     expect(await findByText("已找到 4/4 个 Agent CLI")).toBeInTheDocument();
   });
 
-  it("saves Notion send destination from Current Capabilities", () => {
-    const { getByPlaceholderText, getByText } = wrap();
-    fireEvent.click(getByText("能力"));
-    const row = getByText("Yulu Meeting").closest(".agent-cap-row") as HTMLElement;
-    fireEvent.click(within(row).getByText("更改"));
-    const input = getByPlaceholderText("Yulu Meeting") as HTMLInputElement;
-    fireEvent.change(input, { target: { value: "Product Notes" } });
-    fireEvent.click(getByText("保存"));
+  it("shows every Agent-owned Connector without add or remove controls", () => {
+    const { getByText, queryByLabelText } = wrap();
+    fireEvent.click(getByText("Agents"));
 
-    expect(setDestinationMutate).toHaveBeenCalledWith(
-      { channel: "notion", target: "Product Notes" },
-      expect.any(Object),
-    );
+    expect(getByText("Notion")).toBeInTheDocument();
+    expect(getByText("Zulip")).toBeInTheDocument();
+    expect(getByText("日历")).toBeInTheDocument();
+    expect(getByText("Connector 凭据保存在 Agent 内，不由 Yulu 保存。")).toBeInTheDocument();
+    expect(queryByLabelText(/移除/)).not.toBeInTheDocument();
   });
 
-  it("saves Zulip send destination from Agent connector candidates", () => {
-    mockZulipConfigured = true;
-    const { getByLabelText, getByText } = wrap();
-    fireEvent.click(getByText("能力"));
-    const row = getByText("meetings / weekly").closest(".agent-cap-row") as HTMLElement;
-    fireEvent.click(within(row).getByText("更改"));
-    fireEvent.change(getByLabelText("Zulip 候选目标"), { target: { value: "zulip:product:launch" } });
-    fireEvent.click(getByText("保存"));
-
-    expect(setDestinationMutate).toHaveBeenCalledWith(
-      { channel: "zulip", stream: "product", topic: "launch" },
-      expect.any(Object),
-    );
-  });
-
-  it("updates scheduler calendar subscriptions from the Console calendar modal", () => {
-    const { getByText } = wrap();
-    fireEvent.click(getByText("能力"));
-    const row = getByText("账户与订阅日历").closest(".agent-cap-row") as HTMLElement;
-    fireEvent.click(within(row).getByText("更改"));
-    const primaryRow = getByText("Primary").closest("label") as HTMLLabelElement;
-    const checkbox = primaryRow.querySelector("input") as HTMLInputElement;
-    fireEvent.click(checkbox);
-
-    expect(updateCalendarMutate).toHaveBeenCalledWith({
-      key: "calendars.0.watch_calendars",
-      value: [],
-    });
-  });
-
-  it("opens summary capability in the same change modal pattern", () => {
+  it("opens native Connector management without automatic Agent discovery", async () => {
     const { getByText, getByLabelText } = wrap();
-    fireEvent.click(getByText("能力"));
-    const row = getByText("会议纪要").closest(".agent-cap-row") as HTMLElement;
-    fireEvent.click(within(row).getByText("更改"));
-    expect(getByLabelText("总结配置")).toBeInTheDocument();
-    expect(getByText("默认总结模板")).toBeInTheDocument();
+    fireEvent.click(getByText("Agents"));
+    const row = getByText("Notion").closest(".agent-connector-row") as HTMLElement;
+    fireEvent.click(within(row).getByText("管理"));
+
+    const dialog = getByLabelText("Notion Connector 管理");
+    expect(within(dialog).getByText("codex mcp")).toBeInTheDocument();
+    expect(refreshDestinationMutate).not.toHaveBeenCalled();
+    fireEvent.click(within(dialog).getByText("复制管理命令"));
+    await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledWith("codex mcp"));
+    expect(within(dialog).getByText("已复制")).toBeInTheDocument();
   });
 
   it("renders Ask Meeting answers as Markdown", async () => {

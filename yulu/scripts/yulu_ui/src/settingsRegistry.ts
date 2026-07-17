@@ -61,6 +61,8 @@ export const SETTINGS: SettingDef[] = [
   { path: "audio.silence_duration_sec",  category: "audio", label: "静音时长(秒)", type: "number", validate: z.number().min(1).max(3600),   reload: R.restart("audiodaemon") },
   { path: "audio.backend",               category: "audio", label: "音频后端",     type: "select",  validate: z.enum(["daemon"]),          reload: R.restart("audiodaemon"), danger: true }, // 切换采集后端:可能中断录音
   { path: "transcription.language",      category: "transcription", label: "语言",   type: "select", validate: z.enum(["zh", "en", "ja", "auto"]), reload: R.none },
+  { path: "transcription.engine",        category: "transcription", label: "音频转写引擎", type: "select", validate: z.enum(["local", "xai"]), reload: R.none },
+  { path: "transcription.xai_credential_source", category: "transcription", label: "xAI OAuth 来源", type: "select", validate: z.enum(["auto", "hermes", "openclaw"]), reload: R.none },
   { path: "llm.enabled",                 category: "llm", label: "启用 LLM",       type: "toggle",  validate: z.boolean(),                 reload: R.none, hidden: true },
   { path: "llm.command",                 category: "llm", label: "LLM 后端",       type: "preset",  validate: z.array(z.string()).nullable(), reload: R.none, hidden: true },
   { path: "llm.agent.provider",          category: "llm", label: "Agent provider", type: "select",  validate: z.enum(["auto", "codex", "claude", "claude-code", "hermes", "openclaw"]), reload: R.none, hidden: true },

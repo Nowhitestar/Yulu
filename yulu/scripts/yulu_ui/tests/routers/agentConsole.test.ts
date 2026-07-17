@@ -5,6 +5,16 @@ import { tmpdir } from "node:os";
 import { agentConsoleRouter } from "../../src/routers/agentConsole.js";
 import { createCaller, type AppContext } from "../../src/trpc.js";
 
+vi.mock("../../src/executables.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../src/executables.js")>();
+  return {
+    ...actual,
+    envWithFallbackPath: (env: NodeJS.ProcessEnv = process.env) => process.env.YULU_TEST_PATH_ONLY === "1"
+      ? { ...env, PATH: env.PATH ?? "" }
+      : actual.envWithFallbackPath(env),
+  };
+});
+
 function wavHeader(): Buffer {
   const header = Buffer.alloc(44);
   header.write("RIFF", 0, "ascii");
@@ -56,6 +66,15 @@ function makeCtx(
     launchctl: {
       restart: vi.fn(async () => ({ ok: true })),
     },
+    recordingPipeline: {
+      transcriptionHealth: vi.fn(() => ({
+        available: true,
+        provider: "hermes",
+        reason: null,
+        paused: false,
+        policyReason: null,
+      })),
+    },
   } as unknown as AppContext;
 }
 
@@ -73,6 +92,7 @@ describe("agentConsoleRouter", () => {
     hermesHome: process.env.YULU_HERMES_HOME,
     rootsOnly: process.env.YULU_AGENT_PLUGIN_ROOTS_ONLY,
     codexConfig: process.env.YULU_CODEX_CONFIG_PATH,
+    testPathOnly: process.env.YULU_TEST_PATH_ONLY,
   };
   afterEach(() => {
     for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
@@ -82,6 +102,7 @@ describe("agentConsoleRouter", () => {
     restoreEnv("YULU_HERMES_HOME", oldEnv.hermesHome);
     restoreEnv("YULU_AGENT_PLUGIN_ROOTS_ONLY", oldEnv.rootsOnly);
     restoreEnv("YULU_CODEX_CONFIG_PATH", oldEnv.codexConfig);
+    restoreEnv("YULU_TEST_PATH_ONLY", oldEnv.testPathOnly);
   });
 
   it("treats existing summaries as ready even when the latest Host task is still running", async () => {
@@ -184,7 +205,12 @@ describe("agentConsoleRouter", () => {
     const root = mkdtempSync(join(tmpdir(), "agent-console-"));
     roots.push(root);
     const moviesDir = join(root, "movies");
+    const binDir = join(root, "bin");
     mkdirSync(moviesDir);
+    mkdirSync(binDir);
+    writeFileSync(join(binDir, "codex"), "#!/bin/sh\nexit 0\n");
+    chmodSync(join(binDir, "codex"), 0o755);
+    process.env.PATH = `${binDir}:${oldEnv.path ?? ""}`;
     const configState = { llm: { enabled: false, command: ["python3", "legacy.py"], agent: { provider: "auto" } } };
     const ctx = makeCtx(moviesDir, configState);
 
@@ -192,6 +218,24 @@ describe("agentConsoleRouter", () => {
 
     expect(result.ok).toBe(true);
     expect(configState.llm).toMatchObject({ enabled: true, command: null, agent: { provider: "codex" } });
+  });
+
+  it("refuses to select an Agent whose CLI is not installed", async () => {
+    const root = mkdtempSync(join(tmpdir(), "agent-console-"));
+    roots.push(root);
+    const moviesDir = join(root, "movies");
+    const binDir = join(root, "bin");
+    mkdirSync(moviesDir);
+    mkdirSync(binDir);
+    process.env.PATH = binDir;
+    process.env.YULU_TEST_PATH_ONLY = "1";
+    const configState = { llm: { enabled: true, command: null, agent: { provider: "hermes" } } };
+
+    const result = await createCaller(agentConsoleRouter, makeCtx(moviesDir, configState)).connectAgent({ agent: "codex" });
+
+    expect(result).toMatchObject({ ok: false, activeAgent: "hermes" });
+    expect(result.error).toContain("Codex CLI 未找到");
+    expect(configState.llm.agent.provider).toBe("hermes");
   });
 
   it("detects and connects non-Codex local Agent CLIs", async () => {
@@ -337,6 +381,83 @@ describe("agentConsoleRouter", () => {
     });
   });
 
+  it("detects Hermes connectors declared in config.yaml", async () => {
+    const root = mkdtempSync(join(tmpdir(), "agent-console-"));
+    roots.push(root);
+    const moviesDir = join(root, "movies");
+    const binDir = join(root, "bin");
+    const hermesHome = join(root, "hermes-home");
+    mkdirSync(moviesDir);
+    mkdirSync(binDir);
+    mkdirSync(hermesHome);
+    writeFileSync(join(binDir, "hermes"), "#!/bin/sh\nexit 0\n");
+    chmodSync(join(binDir, "hermes"), 0o755);
+    writeFileSync(join(hermesHome, "config.yaml"), [
+      "model: test",
+      "mcp_servers:",
+      "  notion:",
+      "    url: https://mcp.notion.com/mcp",
+      "  google_calendar:",
+      "    command: npx",
+      "other:",
+      "  notion: ignored",
+      "",
+    ].join("\n"));
+    process.env.PATH = `${binDir}:${oldEnv.path ?? ""}`;
+    process.env.YULU_AGENT_PLUGIN_ROOTS_ONLY = "1";
+    process.env.YULU_HERMES_HOME = hermesHome;
+
+    const result = await createCaller(agentConsoleRouter, makeCtx(moviesDir, {
+      llm: { enabled: true, command: null, agent: { provider: "hermes" } },
+      agent_console: { plugins: { added: ["summary"] } },
+    })).overview();
+
+    expect(result.plugins.all.find((plugin: { id: string }) => plugin.id === "notion")).toMatchObject({
+      status: "configured",
+      resolvedPath: `${join(hermesHome, "config.yaml")}#mcp_servers.notion`,
+    });
+    expect(result.plugins.all.find((plugin: { id: string }) => plugin.id === "calendar")).toMatchObject({
+      status: "configured",
+      resolvedPath: `${join(hermesHome, "config.yaml")}#mcp_servers.google_calendar`,
+    });
+  });
+
+  it("does not report a Hermes connector configured while required env placeholders are unresolved", async () => {
+    const root = mkdtempSync(join(tmpdir(), "agent-console-"));
+    roots.push(root);
+    const moviesDir = join(root, "movies");
+    const binDir = join(root, "bin");
+    const hermesHome = join(root, "hermes-home");
+    mkdirSync(moviesDir);
+    mkdirSync(binDir);
+    mkdirSync(hermesHome);
+    writeFileSync(join(binDir, "hermes"), "#!/bin/sh\nexit 0\n");
+    chmodSync(join(binDir, "hermes"), 0o755);
+    writeFileSync(join(hermesHome, "config.yaml"), [
+      "mcp_servers:",
+      "  zulip:",
+      "    command: npx",
+      "    env:",
+      "      ZULIP_REALM: ${ZULIP_REALM}",
+      "      ZULIP_EMAIL: ${ZULIP_EMAIL}",
+      "      ZULIP_API_KEY: ${ZULIP_API_KEY}",
+      "",
+    ].join("\n"));
+    process.env.PATH = `${binDir}:${oldEnv.path ?? ""}`;
+    process.env.YULU_AGENT_PLUGIN_ROOTS_ONLY = "1";
+    process.env.YULU_HERMES_HOME = hermesHome;
+
+    const result = await createCaller(agentConsoleRouter, makeCtx(moviesDir, {
+      llm: { enabled: true, command: null, agent: { provider: "hermes" } },
+      agent_console: { plugins: { added: ["summary"] } },
+    })).overview();
+
+    expect(result.plugins.all.find((plugin: { id: string }) => plugin.id === "zulip")).toMatchObject({
+      status: "unconfigured",
+      resolvedPath: "",
+    });
+  });
+
   it("adds and removes Console plugin filters without touching calendar connector config", async () => {
     const root = mkdtempSync(join(tmpdir(), "agent-console-"));
     roots.push(root);
@@ -380,13 +501,48 @@ describe("agentConsoleRouter", () => {
         },
       },
     });
-    expect(configState).toMatchObject({ agent_pipeline: { notion_destination: "Product Notes" } });
+    expect(configState).not.toHaveProperty("agent_pipeline.notion_destination");
     const result = await caller.overview();
     expect(result.plugins.current.find((plugin: { id: string }) => plugin.id === "notion")).toMatchObject({
       destination: expect.objectContaining({ value: "Product Notes", configured: true }),
     });
     expect(result.plugins.current.find((plugin: { id: string }) => plugin.id === "zulip")).toMatchObject({
       destination: expect.objectContaining({ value: "meetings / weekly", configured: true }),
+    });
+  });
+
+  it("keeps the durable Notion destination scoped to Hermes", async () => {
+    const root = mkdtempSync(join(tmpdir(), "agent-console-"));
+    roots.push(root);
+    const moviesDir = join(root, "movies");
+    mkdirSync(moviesDir);
+    const configState = {
+      llm: { enabled: true, command: ["hermes"], agent: { provider: "hermes" } },
+      agent_console: { plugins: { added: ["summary", "notion"] } },
+    };
+    const caller = createCaller(agentConsoleRouter, makeCtx(moviesDir, configState));
+
+    await caller.setDestination({ channel: "notion", target: "Hermes Notes" });
+
+    expect(configState).toMatchObject({
+      agent_console: { destinations: { hermes: { notion: { target: "Hermes Notes" } } } },
+      agent_pipeline: { notion_destination: "Hermes Notes" },
+    });
+  });
+
+  it("returns the native Agent MCP management command", async () => {
+    const root = mkdtempSync(join(tmpdir(), "agent-console-"));
+    roots.push(root);
+    const moviesDir = join(root, "movies");
+    mkdirSync(moviesDir);
+    const result = await createCaller(agentConsoleRouter, makeCtx(moviesDir, {
+      llm: { enabled: true, command: ["hermes"], agent: { provider: "hermes" } },
+    })).configurePlugin({ plugin: "notion" });
+
+    expect(result).toMatchObject({
+      ok: true,
+      agent: "hermes",
+      manageCommand: "hermes mcp",
     });
   });
 

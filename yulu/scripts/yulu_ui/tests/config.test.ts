@@ -39,6 +39,8 @@ describe("ConfigManager", () => {
       expect(cfg.audio.silence_duration_sec).toBe(300);     // default
       expect(cfg.audio.output_dir).toBe("~/Movies/Yulu");
       expect(cfg.transcription.language).toBe("zh");
+      expect(cfg.transcription.engine).toBe("local");
+      expect(cfg.transcription.xai_credential_source).toBe("auto");
       expect(cfg.transcription.dictation.prompt_slug).toBe("dictation-cleanup");
       expect(cfg.transcription.dictation.timeout_sec).toBe(30);
       expect(cfg.transcription.dictation.deadline_sec).toBe(30);
@@ -129,6 +131,12 @@ describe("ConfigManager", () => {
           translate_deadline_sec: 3,
         },
       },
+      realtime_captions: { strategy: "local-hybrid" },
+      agent_pipeline: {
+        enabled: true,
+        hermes_serve_port: 0,
+        transcription_chunk_sec: 1200,
+      },
     }));
     try {
       const migration = migrateLegacyTranscriptionConfig(path);
@@ -142,6 +150,8 @@ describe("ConfigManager", () => {
         hermes: { model: "legacy-hermes" },
         dictation: { engine: "whisper", timeout_sec: 3, translate_timeout_sec: 2, translate_deadline_sec: 3 },
       });
+      expect(archive.realtime_captions).toEqual({ strategy: "local-hybrid" });
+      expect(archive.agent_pipeline_audio).toEqual({ hermes_serve_port: 0, transcription_chunk_sec: 1200 });
 
       const active = JSON.parse(readFileSync(path, "utf8"));
       expect(active.transcription).toEqual({
@@ -156,6 +166,8 @@ describe("ConfigManager", () => {
           translate_deadline_sec: 30,
         },
       });
+      expect(active.realtime_captions).toBeUndefined();
+      expect(active.agent_pipeline).toEqual({ enabled: true });
       expect(migrateLegacyTranscriptionConfig(path)).toEqual({ changed: false, archivePath: null });
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
@@ -238,9 +250,11 @@ describe("registry-driven classify + per-field validation", () => {
   it("rejects retired local transcription settings", () => {
     const { mgr, cleanup } = makeCfg();
     try {
-      expect(() => mgr.update("transcription.mlx.model", "legacy-model")).toThrow(/Agent-owned/);
-      expect(() => mgr.update("transcription.diarization.enabled", true)).toThrow(/Agent-owned/);
-      expect(() => mgr.update("transcription.dictation.engine", "whisper")).toThrow(/Agent-owned/);
+      expect(() => mgr.update("transcription.mlx.model", "legacy-model")).toThrow(/explicit audio engine/);
+      expect(() => mgr.update("transcription.diarization.enabled", true)).toThrow(/explicit audio engine/);
+      expect(() => mgr.update("transcription.dictation.engine", "whisper")).toThrow(/explicit audio engine/);
+      expect(() => mgr.update("realtime_captions.strategy", "agent-only")).toThrow(/explicit audio engine/);
+      expect(() => mgr.update("agent_pipeline.hermes_serve_port", 8000)).toThrow(/explicit audio engine/);
     } finally { cleanup(); }
   });
   it("meeting_detection.enabled 改完 restart detector;interval_sec<1 被拒(P2-3)", () => {
@@ -261,7 +275,7 @@ describe("registry-driven classify + per-field validation", () => {
   });
 });
 
-describe("Agent-owned transcription holds no provider credentials", () => {
+describe("Yulu audio configuration holds no provider credentials", () => {
   it("config.ts declares no held transcription API-key / token / secret field", () => {
     let src = readFileSync(CONFIG_TS, "utf8");
     for (const allowedEnvNameRef of [

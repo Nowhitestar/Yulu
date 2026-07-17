@@ -247,7 +247,7 @@ describe("RecordingReader", () => {
     expect(screen.getByRole("button", { name: /分享摘要/i })).toBeDisabled();
   });
 
-  it("disables duplicate manual tasks while a Hermes pipeline task is queued", () => {
+  it("disables duplicate manual tasks while a recording task is queued", () => {
     getMock.mockReturnValue({
       data: {
         ...baseData,
@@ -267,7 +267,7 @@ describe("RecordingReader", () => {
     expect(actionButtons).toHaveLength(3);
     expect(actionButtons.every((button) => button.disabled)).toBe(true);
     expect(screen.getByRole("button", { name: /删除录音/i })).toBeDisabled();
-    expect(screen.getByText("已排队等待 Hermes")).toBeInTheDocument();
+    expect(screen.getByText("已排队等待处理")).toBeInTheDocument();
   });
 
   it("allows a paused automatic task to be taken over by an explicit manual action", () => {

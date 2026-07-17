@@ -11,7 +11,7 @@ describe("settingsRegistry", () => {
       expect(d.reload).toBeDefined();
     }
   });
-  it("language is an Agent input and applies without daemon reload", () => {
+  it("language is an audio-engine input and applies without daemon reload", () => {
     const def = defFor("transcription.language");
     expect(def?.type).toBe("select");
     for (const language of ["zh", "en", "ja", "auto"]) {
@@ -19,6 +19,18 @@ describe("settingsRegistry", () => {
     }
     expect(def?.validate.safeParse("fr").success).toBe(false);
     expect(reloadFor("transcription.language")).toEqual({ kind: "none" });
+  });
+  it("audio engine and xAI credential source apply without restarting capture", () => {
+    const engine = defFor("transcription.engine");
+    expect(engine?.validate.safeParse("local").success).toBe(true);
+    expect(engine?.validate.safeParse("xai").success).toBe(true);
+    expect(engine?.validate.safeParse("agent").success).toBe(false);
+    expect(reloadFor("transcription.engine")).toEqual({ kind: "none" });
+    const credential = defFor("transcription.xai_credential_source");
+    for (const source of ["auto", "hermes", "openclaw"]) {
+      expect(credential?.validate.safeParse(source).success).toBe(true);
+    }
+    expect(credential?.validate.safeParse("api-key").success).toBe(false);
   });
   it("llm.command 改完无需动作(读取即生效)", () => {
     expect(reloadFor("llm.command")).toEqual({ kind: "none" });

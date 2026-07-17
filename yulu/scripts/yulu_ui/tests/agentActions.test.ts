@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   run: vi.fn(async (input: {
     prompt?: string;
     hermesToolsets?: readonly string[];
+    hermesConnector?: string;
     yuluSessionId?: string;
   }) => ({
     stdout: input.hermesToolsets?.includes("slack")
@@ -81,6 +82,7 @@ describe("manual Agent recording actions", () => {
     expect(mocks.run).toHaveBeenCalledTimes(2);
     expect(mocks.run).toHaveBeenLastCalledWith(expect.objectContaining({
       hermesToolsets: ["slack"],
+      hermesConnector: "slack",
       yuluSessionId: "session-2",
     }));
     expect(second.delivery).toEqual({
@@ -144,5 +146,27 @@ describe("manual Agent recording actions", () => {
       title: "Weekly sync",
       destinationHint: "#meetings",
     })).rejects.toThrow("verifiable JSON delivery receipt");
+  });
+
+  it("surfaces an explicit connector failure as a verified no-delivery failure", async () => {
+    const summaryPath = join(root, "summary.md");
+    writeFileSync(summaryPath, "summary");
+    mocks.run.mockResolvedValueOnce({
+      stdout: '{"status":"failed","channel":"slack","destination":"#meetings","error":"connector unavailable"}',
+      stderr: "",
+      code: 0,
+      nativeSessionId: "native-1",
+    });
+
+    await expect(runAgentShareSummary({
+      configDir: root,
+      scriptDir: root,
+      runtime,
+      channel: "slack",
+      channelLabel: "Slack",
+      summaryPath,
+      title: "Weekly sync",
+      destinationHint: "#meetings",
+    })).rejects.toMatchObject({ name: "AgentDeliveryFailedError", message: "connector unavailable" });
   });
 });

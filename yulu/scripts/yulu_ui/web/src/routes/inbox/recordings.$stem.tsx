@@ -42,6 +42,7 @@ type AgentTaskState =
   | "awaiting_agent"
   | "awaiting_policy"
   | "running"
+  | "transcript_committed"
   | "artifacts_committed"
   | "sending"
   | "delivery_reported"
@@ -77,6 +78,7 @@ const ACTIVE_AGENT_TASK_STATES = new Set<AgentTaskState>([
   "awaiting_agent",
   "awaiting_policy",
   "running",
+  "transcript_committed",
   "artifacts_committed",
   "sending",
   "delivery_reported",
@@ -100,6 +102,7 @@ function AgentTaskStatus({
   if (task.state === "queued") key = "reader.agentTask.queued";
   else if (task.state === "awaiting_agent") key = "reader.agentTask.awaiting";
   else if (task.state === "awaiting_policy") key = "reader.agentTask.awaitingPolicy";
+  else if (task.state === "transcript_committed") key = "reader.agentTask.transcriptCommitted";
   else if (task.state === "delivery_unverified") key = "reader.agentTask.deliveryUnverified";
   else if (task.phase === "transcribing") key = "reader.agentTask.transcribing";
   else if (task.phase === "summarizing") key = "reader.agentTask.summarizing";

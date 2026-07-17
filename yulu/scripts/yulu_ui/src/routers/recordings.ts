@@ -22,7 +22,11 @@ import {
   writeTagsSidecar,
 } from "../recordingMeta.js";
 import { resolveAgentRuntime } from "../agentRuntime.js";
-import { runAgentShareSummary, runAgentSummarize } from "../agentActions.js";
+import {
+  AgentDeliveryFailedError,
+  runAgentShareSummary,
+  runAgentSummarize,
+} from "../agentActions.js";
 import { agentDestinationHint, agentPluginOverview, normalizeConsoleAgent } from "../agentPlugins.js";
 import { applyGlossaryContract, loadGlossaryContract } from "../glossaryContract.js";
 
@@ -66,7 +70,7 @@ interface ShareTarget {
 }
 
 const ACTIVE_AGENT_TASK_STATES = new Set([
-  "queued", "awaiting_agent", "running", "artifacts_committed",
+  "queued", "awaiting_agent", "running", "transcript_committed", "artifacts_committed",
   "sending", "delivery_reported", "delivery_unverified",
 ]);
 const CURRENT_AGENT_TASK_STATES = new Set([
@@ -1049,6 +1053,10 @@ export const recordingsRouter = router({
           return { ok: true as const, sessionId: result.sessionId };
         } catch (error) {
           const message = (error as Error).message;
+          if (error instanceof AgentDeliveryFailedError) {
+            recordFailure(message);
+            throw new TRPCError({ code: "PRECONDITION_FAILED", message });
+          }
           appendShareHistory(dir, input.stem, {
             channel: input.channel,
             label,

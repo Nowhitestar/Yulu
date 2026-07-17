@@ -181,6 +181,45 @@ def test_recorder_status_uses_supported_python():
     assert 'process.executableURL = URL(fileURLWithPath: "/usr/bin/env")' not in src
 
 
+def test_recorder_status_renders_streaming_partials_without_restarting_fade():
+    src = (SCRIPTS / "recorder_status.swift").read_text(encoding="utf-8")
+    handler_start = src.index("func handleWebSocketFrame")
+    handler_end = src.index("func sourceLanguageTitle", handler_start)
+    handler = src[handler_start:handler_end]
+    assert 'payload["partialText"]' in handler
+    assert "liveCaptionSourceText" in handler
+    assert 'let translation = partialSource.isEmpty ? incomingTranslation : ""' in handler
+    assert "renderCaptions(animated: false)" in handler
+
+
+def test_recorder_status_reveals_streaming_caption_graphemes_incrementally():
+    src = (SCRIPTS / "recorder_status.swift").read_text(encoding="utf-8")
+    handler_start = src.index("func handleWebSocketFrame")
+    handler_end = src.index("func sourceLanguageTitle", handler_start)
+    handler = src[handler_start:handler_end]
+
+    assert "func nextCaptionRevealText" in src
+    assert "queueCaptionReveal(source)" in handler
+    assert "captionRevealTarget" in src
+    assert "captionRevealTimer" in src
+    assert "Array(current)" in src
+    assert "Array(target)" in src
+
+
+def test_recorder_status_wraps_long_captions_and_keeps_the_latest_tail():
+    src = (SCRIPTS / "recorder_status.swift").read_text(encoding="utf-8")
+    label_start = src.index("final class OutlinedCaptionLabel")
+    label_end = src.index("final class AppDel", label_start)
+    caption_start = src.index("func captionString")
+    caption_end = src.index("@objc func targetLanguageChanged", caption_start)
+
+    assert ".byCharWrapping" in src[label_start:label_end]
+    assert ".byTruncatingTail" not in src[label_start:label_end]
+    assert "func visibleCaptionText" in src
+    assert "characters.suffix" in src
+    assert ".byCharWrapping" in src[caption_start:caption_end]
+
+
 def test_status_agent_has_dictation_menu_entry():
     src = _swift_source()
     assert '"Start Dictation"' in src
