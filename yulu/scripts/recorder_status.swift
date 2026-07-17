@@ -343,6 +343,44 @@ final class LogoView: NSView {
     }
 }
 
+final class OutlinedCaptionLabel: NSView {
+    private let outlineLabel = NSTextField(wrappingLabelWithString: "")
+    private let fillLabel = NSTextField(wrappingLabelWithString: "")
+
+    var attributedStringValue: NSAttributedString {
+        get { fillLabel.attributedStringValue }
+        set {
+            fillLabel.attributedStringValue = newValue
+            let outlined = NSMutableAttributedString(attributedString: newValue)
+            outlined.addAttributes(
+                [.strokeColor: NSColor.black, .strokeWidth: 9.0],
+                range: NSRange(location: 0, length: outlined.length)
+            )
+            outlineLabel.attributedStringValue = outlined
+        }
+    }
+
+    var outlineAttributedStringValue: NSAttributedString { outlineLabel.attributedStringValue }
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        [outlineLabel, fillLabel].forEach { label in
+            label.frame = bounds
+            label.autoresizingMask = [.width, .height]
+            label.alignment = .center
+            label.maximumNumberOfLines = 2
+            label.lineBreakMode = .byCharWrapping
+            label.cell?.wraps = true
+            label.cell?.isScrollable = false
+            label.isSelectable = false
+            label.drawsBackground = false
+            addSubview(label)
+        }
+    }
+
+    required init?(coder: NSCoder) { nil }
+}
+
 final class AppDel: NSObject, NSApplicationDelegate, NSWindowDelegate {
     let meetingTitle: String
     let statePath: String
@@ -358,10 +396,8 @@ final class AppDel: NSObject, NSApplicationDelegate, NSWindowDelegate {
     var targetPopup: NSPopUpButton!
     var displayPopup: NSPopUpButton!
     var collapseButton: CollapseButton!
-    var sourceOutlineLabel: NSTextField!
-    var translationOutlineLabel: NSTextField!
-    var sourceLabel: NSTextField!
-    var translationLabel: NSTextField!
+    var sourceLabel: OutlinedCaptionLabel!
+    var translationLabel: OutlinedCaptionLabel!
     var logoView: LogoView!
 
     var activeScreen: NSScreen!
@@ -506,12 +542,8 @@ final class AppDel: NSObject, NSApplicationDelegate, NSWindowDelegate {
         collapseButton.action = #selector(collapse)
         toolbar.addSubview(collapseButton)
 
-        sourceOutlineLabel = makeCaptionLabel()
-        translationOutlineLabel = makeCaptionLabel()
         sourceLabel = makeCaptionLabel()
         translationLabel = makeCaptionLabel()
-        root.addSubview(sourceOutlineLabel)
-        root.addSubview(translationOutlineLabel)
         root.addSubview(sourceLabel)
         root.addSubview(translationLabel)
 
@@ -544,16 +576,8 @@ final class AppDel: NSObject, NSApplicationDelegate, NSWindowDelegate {
         return popup
     }
 
-    func makeCaptionLabel() -> NSTextField {
-        let label = NSTextField(wrappingLabelWithString: "")
-        label.alignment = .center
-        label.maximumNumberOfLines = 2
-        label.lineBreakMode = .byCharWrapping
-        label.cell?.wraps = true
-        label.cell?.isScrollable = false
-        label.isSelectable = false
-        label.drawsBackground = false
-        return label
+    func makeCaptionLabel() -> OutlinedCaptionLabel {
+        OutlinedCaptionLabel(frame: .zero)
     }
 
     func sourceCaptionFrame(in bounds: NSRect) -> NSRect {
@@ -567,9 +591,7 @@ final class AppDel: NSObject, NSApplicationDelegate, NSWindowDelegate {
     func layoutCaptionLabels() {
         let sourceFrame = sourceCaptionFrame(in: root.bounds)
         let secondaryFrame = secondaryCaptionFrame(in: root.bounds)
-        sourceOutlineLabel.frame = sourceFrame
         sourceLabel.frame = sourceFrame
-        translationOutlineLabel.frame = secondaryFrame
         translationLabel.frame = secondaryFrame
     }
 
@@ -598,8 +620,6 @@ final class AppDel: NSObject, NSApplicationDelegate, NSWindowDelegate {
             collapseButton.frame = NSRect(x: toolbar.bounds.width - 30, y: 3, width: 24, height: 24)
         } else {
             toolbar.isHidden = true
-            sourceOutlineLabel.isHidden = true
-            translationOutlineLabel.isHidden = true
             sourceLabel.isHidden = true
             translationLabel.isHidden = true
             logoView.isHidden = false
@@ -707,8 +727,6 @@ final class AppDel: NSObject, NSApplicationDelegate, NSWindowDelegate {
         guard !closing else { return }
         timeLabel.stringValue = formatElapsed(Date().timeIntervalSince(startTime))
         if Date().timeIntervalSince(lastCaptionAt) > 6, !sourceText.isEmpty, warningText.isEmpty {
-            sourceOutlineLabel.animator().alphaValue = 0
-            translationOutlineLabel.animator().alphaValue = 0
             sourceLabel.animator().alphaValue = 0
             translationLabel.animator().alphaValue = 0
         }
@@ -835,9 +853,7 @@ final class AppDel: NSObject, NSApplicationDelegate, NSWindowDelegate {
         guard expanded else { return }
         let sourceHidden = displayMode == .translation
         let translationHidden = displayMode == .source
-        sourceOutlineLabel.isHidden = sourceHidden
         sourceLabel.isHidden = sourceHidden
-        translationOutlineLabel.isHidden = translationHidden
         translationLabel.isHidden = translationHidden
         let displayedTranslation = translationFailed
             ? (displayMode == .translation && !sourceText.isEmpty ? "翻译暂不可用 · \(sourceText)" : "翻译暂不可用")
@@ -847,48 +863,38 @@ final class AppDel: NSObject, NSApplicationDelegate, NSWindowDelegate {
             : warningText
         let secondaryText = warningText.isEmpty && displayMode == .bilingual ? displayedTranslation : ""
         if displayMode == .translation {
-            translationOutlineLabel.frame = sourceLabel.frame
             translationLabel.frame = sourceLabel.frame
-            setCaption(mainText, size: 30, color: .white, weight: .bold, fill: translationLabel, outline: translationOutlineLabel)
+            setCaption(mainText, size: 30, color: .white, weight: .bold, label: translationLabel)
         } else {
             let secondaryFrame = secondaryCaptionFrame(in: root.bounds)
-            translationOutlineLabel.frame = secondaryFrame
             translationLabel.frame = secondaryFrame
             setCaption(
                 mainText,
                 size: 30,
                 color: warning ? NSColor(hex: "#FFD1CC") : .white,
                 weight: .bold,
-                fill: sourceLabel,
-                outline: sourceOutlineLabel
+                label: sourceLabel
             )
-            setCaption(secondaryText, size: 18, color: NSColor(hex: "#F4E0AC"), weight: .semibold, fill: translationLabel, outline: translationOutlineLabel)
+            setCaption(secondaryText, size: 18, color: NSColor(hex: "#F4E0AC"), weight: .semibold, label: translationLabel)
         }
         let sourceAlpha: CGFloat = mainText.isEmpty ? 0 : 1
         let translationAlpha: CGFloat = (displayMode == .translation ? mainText : secondaryText).isEmpty ? 0 : 1
-        sourceOutlineLabel.alphaValue = sourceAlpha
         sourceLabel.alphaValue = sourceAlpha
-        translationOutlineLabel.alphaValue = translationAlpha
         translationLabel.alphaValue = translationAlpha
         guard animated else { return }
         if !sourceLabel.isHidden && !mainText.isEmpty {
-            sourceOutlineLabel.alphaValue = 0
             sourceLabel.alphaValue = 0
-            sourceOutlineLabel.animator().alphaValue = 1
             sourceLabel.animator().alphaValue = 1
         }
         if !translationLabel.isHidden && !(displayMode == .translation ? mainText : secondaryText).isEmpty {
-            translationOutlineLabel.alphaValue = 0
             translationLabel.alphaValue = 0
-            translationOutlineLabel.animator().alphaValue = 1
             translationLabel.animator().alphaValue = 1
         }
     }
 
-    func setCaption(_ text: String, size: CGFloat, color: NSColor, weight: NSFont.Weight, fill: NSTextField, outline: NSTextField) {
-        let visibleText = visibleCaptionText(text, size: size, weight: weight, width: max(1, fill.bounds.width - 12))
-        outline.attributedStringValue = captionString(visibleText, size: size, color: color, weight: weight, outlineOnly: true)
-        fill.attributedStringValue = captionString(visibleText, size: size, color: color, weight: weight)
+    func setCaption(_ text: String, size: CGFloat, color: NSColor, weight: NSFont.Weight, label: OutlinedCaptionLabel) {
+        let visibleText = visibleCaptionText(text, size: size, weight: weight, width: max(1, label.bounds.width - 12))
+        label.attributedStringValue = captionString(visibleText, size: size, color: color, weight: weight)
     }
 
     func visibleCaptionText(_ text: String, size: CGFloat, weight: NSFont.Weight, width: CGFloat, maxLines: Int = 2) -> String {
@@ -931,19 +937,15 @@ final class AppDel: NSObject, NSApplicationDelegate, NSWindowDelegate {
         return best
     }
 
-    func captionString(_ text: String, size: CGFloat, color: NSColor, weight: NSFont.Weight, outlineOnly: Bool = false) -> NSAttributedString {
+    func captionString(_ text: String, size: CGFloat, color: NSColor, weight: NSFont.Weight) -> NSAttributedString {
         let paragraph = NSMutableParagraphStyle()
         paragraph.alignment = .center
         paragraph.lineBreakMode = .byCharWrapping
-        var attributes: [NSAttributedString.Key: Any] = [
+        let attributes: [NSAttributedString.Key: Any] = [
             .font: NSFont.systemFont(ofSize: size, weight: weight),
-            .foregroundColor: outlineOnly ? NSColor.black : color,
+            .foregroundColor: color,
             .paragraphStyle: paragraph,
         ]
-        if outlineOnly {
-            attributes[.strokeColor] = NSColor.black
-            attributes[.strokeWidth] = 9.0
-        }
         return NSAttributedString(string: text, attributes: attributes)
     }
 
@@ -1287,11 +1289,15 @@ if arguments.contains("--self-test") {
     assert(app.nextCaptionRevealText(current: "👨‍👩‍👧‍👦", target: "👨‍👩‍👧‍👦好", charactersPerStep: 1) == "👨‍👩‍👧‍👦好")
     let captionAttributes = app.captionString("caption", size: 30, color: .white, weight: .bold).attributes(at: 0, effectiveRange: nil)
     assert((captionAttributes[.foregroundColor] as? NSColor)?.isEqual(NSColor.white) == true)
+    assert(captionAttributes[.shadow] == nil)
+    assert(captionAttributes[.backgroundColor] == nil)
     assert(captionAttributes[.strokeColor] == nil && captionAttributes[.strokeWidth] == nil)
     assert((captionAttributes[.paragraphStyle] as? NSParagraphStyle)?.lineBreakMode == .byCharWrapping)
-    let outlineAttributes = app.captionString("caption", size: 30, color: .white, weight: .bold, outlineOnly: true).attributes(at: 0, effectiveRange: nil)
-    assert((outlineAttributes[.strokeColor] as? NSColor)?.isEqual(NSColor.black) == true)
+    let outlinedLabel = OutlinedCaptionLabel(frame: NSRect(x: 0, y: 0, width: 400, height: 66))
+    outlinedLabel.attributedStringValue = app.captionString("caption", size: 30, color: .white, weight: .bold)
+    let outlineAttributes = outlinedLabel.outlineAttributedStringValue.attributes(at: 0, effectiveRange: nil)
     assert((outlineAttributes[.strokeWidth] as? NSNumber)?.doubleValue == 9.0)
+    assert((outlineAttributes[.strokeColor] as? NSColor) == NSColor.black)
     let longCaption = "这是一段特意写得非常长的实时字幕，用来验证画面不会在第一行末尾截断，而且最新说出的文字依然完整保留"
     let visibleLongCaption = app.visibleCaptionText(longCaption, size: 30, weight: .bold, width: 360)
     assert(visibleLongCaption.hasPrefix("…"))

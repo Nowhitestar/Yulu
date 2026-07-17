@@ -1,10 +1,26 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" width="120" height="120" role="img" aria-label="Yulu">
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128" fill="none" role="img" aria-label="Yulu">
   <title>Yulu</title>
-  <desc>The Chinese character 语 in serif ink on warm parchment, with a small cinnabar dot — a sentence that has landed.</desc>
-  <rect width="120" height="120" rx="22" fill="#F5F1E8"/>
-  <text x="60" y="84"
-        font-family="'Songti SC', 'STSong', 'Source Han Serif CN', 'Noto Serif CJK SC', 'Hiragino Mincho ProN', serif"
-        font-size="74" font-weight="500" fill="#1B1B1B" text-anchor="middle">语</text>
-  <circle cx="96" cy="94" r="3.6" fill="#A23B2B"/>
+  <desc>A blue liquid-glass quotation mark.</desc>
+  <defs>
+    <linearGradient id="lens" x1="64" y1="22" x2="64" y2="109" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#60aaf3"/>
+      <stop offset="1" stop-color="#2c5dbd"/>
+    </linearGradient>
+    <linearGradient id="bead" x1="0" y1="36" x2="0" y2="76" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#ffffff" stop-opacity="0.95"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0.72"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0" cy="0" r="1" gradientTransform="translate(41 31) rotate(47) scale(90)">
+      <stop stop-color="#ffffff" stop-opacity="0.55"/>
+      <stop offset="0.45" stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <path d="M64 22 C89 21 108 35 116 52 C124 68 121 84 110 96 C100 106 84 109 64 109 C42 109 25 106 15 96 C6 86 5 72 12 59 C20 39 39 24 60 22 C61 22 63 22 64 22 Z" fill="url(#lens)"/>
+  <path d="M64 22 C89 21 108 35 116 52 C124 68 121 84 110 96 C100 106 84 109 64 109 C42 109 25 106 15 96 C6 86 5 72 12 59 C20 39 39 24 60 22 C61 22 63 22 64 22 Z" fill="url(#glow)"/>
+  <g transform="translate(16 21) scale(0.75)" fill="url(#bead)">
+    <path d="M57 36 C59 36 59 39 57 40 C50 41 45 45 42 50 C44 49 47 48 50 48 C57 48 61 54 61 62 C61 70 56 76 49 76 C41 76 36 70 36 62 C36 50 44 40 57 36 Z"/>
+    <path d="M87 36 C89 36 89 39 87 40 C80 41 75 45 72 50 C74 49 77 48 80 48 C87 48 91 54 91 62 C91 70 86 76 79 76 C71 76 66 70 66 62 C66 50 74 40 87 36 Z"/>
+  </g>
+  <path d="M64 22 C89 21 108 35 116 52 C124 68 121 84 110 96 C100 106 84 109 64 109 C42 109 25 106 15 96 C6 86 5 72 12 59 C20 39 39 24 60 22 C61 22 63 22 64 22 Z" stroke="#ffffff" stroke-opacity="0.5" stroke-width="1.6"/>
 </svg>

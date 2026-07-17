@@ -208,8 +208,8 @@ def test_recorder_status_reveals_streaming_caption_graphemes_incrementally():
 
 def test_recorder_status_wraps_long_captions_and_keeps_the_latest_tail():
     src = (SCRIPTS / "recorder_status.swift").read_text(encoding="utf-8")
-    label_start = src.index("func makeCaptionLabel")
-    label_end = src.index("func layoutViews", label_start)
+    label_start = src.index("final class OutlinedCaptionLabel")
+    label_end = src.index("final class AppDel", label_start)
     caption_start = src.index("func captionString")
     caption_end = src.index("@objc func targetLanguageChanged", caption_start)
 
