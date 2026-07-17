@@ -111,15 +111,17 @@ export class SherpaCaptionEngine implements StreamingCaptionEngine {
   }
 
   async abort(): Promise<void> {
-    if (!this.child) return;
+    const child = this.child;
+    if (!child) return;
     try { await this.request("abort", {}, 2_000); }
-    catch { this.stopChild(new Error("local caption worker aborted")); }
+    catch { this.stopChild(child, new Error("local caption worker aborted")); }
   }
 
   async close(): Promise<void> {
-    if (!this.child) return;
+    const child = this.child;
+    if (!child) return;
     try { await this.request("shutdown", {}, 2_000); } catch { /* kill below */ }
-    this.stopChild(new Error("local caption worker closed"));
+    this.stopChild(child, new Error("local caption worker closed"));
   }
 
   private ensureChild(): ChildProcessWithoutNullStreams {
@@ -135,25 +137,25 @@ export class SherpaCaptionEngine implements StreamingCaptionEngine {
     this.child = child;
     this.stderr = "";
     this.lines = createInterface({ input: child.stdout });
-    this.lines.on("line", (line) => this.handleLine(line));
+    this.lines.on("line", (line) => this.handleLine(child, line));
     child.stderr.on("data", (chunk: Buffer) => {
       this.stderr = `${this.stderr}${chunk.toString("utf8")}`.slice(-4_000);
     });
-    child.once("error", (error) => this.stopChild(error));
+    child.once("error", (error) => this.stopChild(child, error));
     child.once("exit", (code, signal) => {
       const detail = this.stderr.trim();
-      this.stopChild(new Error(
+      this.stopChild(child, new Error(
         `local caption worker exited (${code ?? signal ?? "unknown"})${detail ? `: ${detail}` : ""}`,
       ));
     });
     return child;
   }
 
-  private handleLine(line: string): void {
+  private handleLine(child: ChildProcessWithoutNullStreams, line: string): void {
     let response: WorkerResponse;
     try { response = JSON.parse(line) as WorkerResponse; }
     catch {
-      this.stopChild(new Error(`local caption worker returned invalid JSON: ${line.slice(0, 200)}`));
+      this.stopChild(child, new Error(`local caption worker returned invalid JSON: ${line.slice(0, 200)}`));
       return;
     }
     const pending = this.pending.get(response.id);
@@ -185,8 +187,8 @@ export class SherpaCaptionEngine implements StreamingCaptionEngine {
     });
   }
 
-  private stopChild(error: Error): void {
-    const child = this.child;
+  private stopChild(child: ChildProcessWithoutNullStreams, error: Error): void {
+    if (this.child !== child) return;
     this.child = null;
     this.lines?.close();
     this.lines = null;

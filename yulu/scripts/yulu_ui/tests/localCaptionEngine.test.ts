@@ -1,6 +1,7 @@
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   resolveLocalCaptionRuntime,
@@ -78,6 +79,38 @@ describe("SherpaCaptionEngine", () => {
     await expect(engine.finish()).resolves.toMatchObject({
       updates: { mic: { partial: "", stable: [{ text: "实时字幕", endMs: 640 }] } },
     });
+    await engine.close();
+  });
+
+  it("ignores a delayed exit from a previously closed worker", async () => {
+    const root = tempRoot("yulu-local-caption-worker-restart-");
+    const workerPath = join(root, "fake_worker.py");
+    writeFileSync(workerPath, [
+      "#!/usr/bin/env python3",
+      "import json, signal, sys, time",
+      "signal.signal(signal.SIGTERM, lambda *_: None)",
+      "for line in sys.stdin:",
+      "    req = json.loads(line)",
+      "    action = req['action']",
+      "    result = {'updates': {}} if action == 'feed' else {'ready': True}",
+      "    print(json.dumps({'id': req['id'], 'ok': True, 'result': result}), flush=True)",
+      "    if action == 'shutdown':",
+      "        time.sleep(0.15)",
+      "        break",
+      "",
+    ].join("\n"));
+    chmodSync(workerPath, 0o755);
+    const engine = new SherpaCaptionEngine({
+      python: "/usr/bin/python3",
+      workerPath,
+      modelDir: root,
+    });
+
+    await engine.warm();
+    await engine.close();
+    await engine.warm();
+    await delay(250);
+    await expect(engine.feed({ mic: Buffer.from([1, 0]) })).resolves.toEqual({ updates: {} });
     await engine.close();
   });
 });
