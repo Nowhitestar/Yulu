@@ -4,9 +4,9 @@ Yulu reads active configuration from `~/.config/yulu/config.json`. The installer
 creates it with private per-user defaults. The file contains product preferences,
 paths, and Agent selection only; it must not contain Agent or connector secrets.
 
-The current schema keeps final transcription, summaries, and connectors Agent-native.
-An optional Yulu-managed sherpa-onnx model is used only for ephemeral low-latency
-captions; Hermes/Whisper still produces the durable final transcript.
+The current schema separates Yulu's audio engine from the summary Agent and its
+connectors. The explicitly selected audio engine handles realtime captions, final
+transcription, and dictation; local is the default and there is no automatic fallback.
 
 ## Representative configuration
 
@@ -21,6 +21,8 @@ captions; Hermes/Whisper still produces the durable final transcript.
     "half_duplex": true
   },
   "transcription": {
+    "engine": "local",
+    "xai_credential_source": "auto",
     "language": "zh",
     "dictation": {
       "prompt_slug": "dictation-cleanup",
@@ -33,16 +35,11 @@ captions; Hermes/Whisper still produces the durable final transcript.
       "translate_timeout_sec": 30
     }
   },
-  "realtime_captions": {
-    "strategy": "local-hybrid"
-  },
   "agent_pipeline": {
     "enabled": true,
     "auto_process_recordings": true,
     "auto_send_notion": false,
-    "notion_destination": "Yulu Meeting",
-    "hermes_serve_port": 0,
-    "transcription_chunk_sec": 1200
+    "notion_destination": "Yulu Meeting"
   },
   "llm": {
     "enabled": true,
@@ -124,33 +121,32 @@ This section controls durable recording work, not an AI implementation.
 
 | Field | Default | Meaning |
 |---|---:|---|
-| `enabled` | `true` | Master switch for recording intelligence. When false, all durable work pauses in `awaiting_policy`, manual processing is rejected, and on-demand Hermes transcription is unavailable. |
+| `enabled` | `true` | Master switch for automatic summary/delivery work. When false, durable Agent work pauses in `awaiting_policy`; the separately selected audio engine remains available for transcription and dictation. |
 | `auto_process_recordings` | `true` | Accept completed recordings and dispatch automatic tasks. When false, recordings remain saved, automatic work pauses, and explicit manual processing stays available. |
 | `auto_send_notion` | `false` | Add explicit Notion authorization to automatically created recording tasks. |
 | `notion_destination` | `"Yulu Meeting"` | Human-readable destination hint passed to Hermes. It is not a credential or database secret. |
-| `hermes_serve_port` | `0` | Loopback Hermes service port; `0` requests an OS-assigned free port. |
-| `transcription_chunk_sec` | `1200` | Audio segment duration prepared for Hermes, constrained to 60–3600 seconds. |
 
 Setting `auto_send_notion=true` is a real side-effect opt-in. The Host will allow
-Hermes to begin delivery only after transcript and summary artifacts have been
-committed together.
+Hermes to begin delivery only after the transcript has been durably committed and
+the summary has been generated and committed.
 
-The switches have deliberately different scope. `enabled=false` is the global
-fail-closed boundary: all dispatchable work moves to `awaiting_policy`, manual
-processing is rejected, and on-demand Hermes dictation/transcription reports
-unavailable. `auto_process_recordings=false` pauses only automatic intake and
-automatic dispatch. Explicit manual reprocessing and on-demand dictation remain
-available; choosing a manual action for an automatic `awaiting_policy` task
-promotes that same durable task instead of creating a duplicate.
+The switches have deliberately different scope. `enabled=false` pauses summary and
+delivery work at `awaiting_policy`; it does not disable the independently selected
+audio engine. `auto_process_recordings=false` pauses only automatic intake and
+automatic dispatch. Explicit transcription and dictation remain available, and
+choosing a manual summary action for an automatic `awaiting_policy` task promotes
+that same durable task instead of creating a duplicate.
 
 ## `transcription`
 
-Hermes owns durable transcription. This section carries language and dictation
-interaction context; it does not select the realtime caption model.
+One explicit Yulu audio engine handles realtime captions, final transcription,
+and dictation. The default is local and there is no automatic fallback.
 
 | Field | Installer value | Meaning |
 |---|---:|---|
-| `language` | `"zh"` | Requested/source language metadata supplied around the Agent-owned flow. |
+| `engine` | `"local"` | `local` or `xai`; the selected value is used exactly for all audio transcription paths. |
+| `xai_credential_source` | `"auto"` | Reuse xAI OAuth from `hermes` or `openclaw`; `auto` is valid only when exactly one source is connected. |
+| `language` | `"zh"` | Requested/source language metadata supplied to the selected audio engine. |
 | `dictation.prompt_slug` | `"dictation-cleanup"` | Local prompt selected for normal dictation cleanup. |
 | `dictation.translate_prompt_slug` | `"dictation-translate"` | Local prompt selected for quick translation. |
 | `dictation.target_language` | `"English"` | Default target for dictation translation and the realtime-caption language selector. |
@@ -163,39 +159,26 @@ interaction context; it does not select the realtime caption model.
 The Host accepts on-demand audio only from the configured recordings directory
 or `~/.config/yulu/dictation`, and only as a valid absolute WAV path.
 
-## `realtime_captions`
-
-This section selects the live-caption path. The default `local-hybrid` strategy
-uses the optional local sherpa-onnx Paraformer INT8 model for mutable live captions,
-then always runs Hermes/Whisper after recording stops for the durable transcript.
-`agent-only` keeps the previous chunked Agent-compatible caption path. The local
-model can be installed, tested, and removed from Settings → Transcription; audio
-sent to it stays on the Mac.
-
-| Field | Default | Meaning |
-|---|---:|---|
-| `strategy` | `"local-hybrid"` | `local-hybrid` for low-latency local captions plus final Whisper, or `agent-only` for compatibility. If the local runtime is absent or fails, the active recording falls back to the compatible path. |
-
 ## `llm` and Agent Console
 
 `llm` selects the **general Agent** used for interactive Agent Console work.
-Recording processing remains pinned to Hermes.
+Automatic summary/delivery work remains pinned to Hermes. Audio transcription is
+controlled independently by `transcription.engine`.
 
 | Field | Default | Meaning |
 |---|---:|---|
-| `enabled` | `true` | Enable the general Agent used by interactive conversations. This does not disable Hermes recording or dictation. |
+| `enabled` | `true` | Enable the general Agent used by interactive conversations. This does not disable the selected Yulu audio engine. |
 | `command` | `null` | Optional explicit general-Agent argv. No shell interpolation is performed. |
 | `agent.provider` | `"auto"` in schema; installer chooses `"hermes"` | `auto`, `codex`, `claude`, `claude-code`, `hermes`, `openclaw`, `gemini`, `grok`, or `custom`. Gemini, Grok, and custom providers currently require an explicit `command`. |
 
 When `provider=auto`, the general runtime detects supported CLIs in its current
-priority order. This does not change the recording provider: automatic recording
-and dictation still require a usable Hermes CLI. If Hermes is unavailable, a
-recording task waits in `awaiting_agent`; it does not fall back to the general
-Agent.
+priority order. This does not change the audio engine or automatic summary Agent.
+If Hermes is unavailable, a recording transcript can still be committed by the
+selected audio engine while its summary task waits in `awaiting_agent`.
 
-To stop recording intelligence and any configured Hermes speech provider, set
-`agent_pipeline.enabled=false`. `llm.enabled=false` only disables general
-conversation work.
+To pause automatic summary and delivery work, set `agent_pipeline.enabled=false`.
+Realtime captions, transcription, and dictation remain controlled by the selected
+audio engine. `llm.enabled=false` only disables general conversation work.
 
 `agent_console.plugins.added` is a presentation filter for capabilities shown in
 Agent Console. `agent_console.destinations` stores human-readable destination
@@ -241,7 +224,8 @@ When the Host opens the config, it performs one-way, auditable retirement:
 
 - old inference settings are copied to
   `config.legacy-transcription.<timestamp>.json` and removed from the active
-  `transcription` object;
+  `transcription` object; the retired `realtime_captions` block and Hermes audio
+  service fields are archived in the same file and removed as well;
 - old Yulu-owned external-delivery settings are copied to
   `config.legacy-connectors.<timestamp>.json`; destination hints and explicit
   Notion opt-in are projected into the Agent-native fields before the active

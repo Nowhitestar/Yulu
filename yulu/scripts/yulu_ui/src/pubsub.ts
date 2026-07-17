@@ -51,7 +51,6 @@ export type AppChannels = {
     partialText?: string;
     captionProvider?: string;
     captionMode?: "streaming" | "segmented";
-    fallbackReason?: string | null;
     coveredMs: number;
     trusted: boolean;
     sequence?: number;

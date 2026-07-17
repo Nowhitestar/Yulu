@@ -38,6 +38,9 @@ import { acquireHostInstanceLock, type HostInstanceLock } from "./hostInstanceLo
 import { RealtimeTranscriptionCoordinator } from "./realtimeTranscription.js";
 import { LocalCaptionManager } from "./localCaptionManager.js";
 import { applyGlossaryContract, loadGlossaryContract } from "./glossaryContract.js";
+import { XaiCredentialManager } from "./xaiCredentials.js";
+import { XaiAudioClient } from "./xaiAudio.js";
+import { AudioTranscriptionService } from "./audioTranscription.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -98,7 +101,7 @@ async function startLockedServer(
     console.warn(`[yulu_ui] retired ${retiredLegacyTaskIds.length} imported legacy queue tasks without execution`);
   }
   const activeWorkspaceStates = new Set([
-    "queued", "awaiting_agent", "awaiting_policy", "running", "artifacts_committed", "sending", "delivery_reported",
+    "queued", "awaiting_agent", "awaiting_policy", "running", "transcript_committed", "artifacts_committed", "sending", "delivery_reported",
   ]);
   const activeWorkspaceTaskIds = hostStore.listTasks(10_000)
     .filter((task) => activeWorkspaceStates.has(task.state))
@@ -107,6 +110,18 @@ async function startLockedServer(
   if (cleanedWorkspaces.length > 0) {
     console.warn(`[yulu_ui] cleaned ${cleanedWorkspaces.length} inactive Agent task workspaces`);
   }
+  const localCaption = new LocalCaptionManager({
+    scriptDir: runtimePaths.scriptDir,
+    configDir: runtimePaths.configDir,
+    selected: () => configManager.read().transcription.engine === "local",
+  });
+  const xaiCredentials = new XaiCredentialManager();
+  const xaiAudio = new XaiAudioClient(
+    xaiCredentials,
+    () => configManager.read().transcription.xai_credential_source,
+  );
+  const audioTranscription = new AudioTranscriptionService(configManager, localCaption, xaiAudio);
+  void xaiCredentials.status().catch(() => {});
   const recordingPipeline = new RecordingPipeline({
     store: hostStore,
     artifacts: artifactStore,
@@ -115,20 +130,16 @@ async function startLockedServer(
     pubsub: appPubSub,
     promptDb: () => dbProxy.prompts,
     vocabDb: () => dbProxy.vocab,
+    transcription: audioTranscription,
   });
-  const localCaption = new LocalCaptionManager({
-    scriptDir: runtimePaths.scriptDir,
-    configDir: runtimePaths.configDir,
-    strategy: () => configManager.read().realtime_captions.strategy,
-  });
-  if (localCaption.status().installed && localCaption.status().strategy === "local-hybrid") {
+  if (localCaption.status().installed && configManager.read().transcription.engine === "local") {
     void localCaption.warm().catch((error) => {
       console.warn(`[yulu_ui] local caption warm-up failed: ${(error as Error).message}`);
     });
   }
   const realtimeTranscription = new RealtimeTranscriptionCoordinator({
     pubsub: appPubSub,
-    streaming: localCaption,
+    streaming: audioTranscription,
     stabilize: (text) => applyGlossaryContract(text, loadGlossaryContract(dbProxy.vocab)),
     transcribe: (audioPath, language) => recordingPipeline.transcribeOnDemand({ audioPath, language }),
     warm: async () => { await recordingPipeline.warmTranscription(); },
@@ -187,6 +198,8 @@ async function startLockedServer(
     artifacts: artifactStore,
     recordingPipeline,
     localCaption,
+    audioTranscription,
+    xaiCredentials,
     db:        dbProxy,
   };
 
@@ -313,7 +326,7 @@ async function startLockedServer(
     }
   });
 
-  const AgentTranscriptionSchema = z.object({
+  const AudioTranscriptionSchema = z.object({
     audioPath: z.string().min(1),
     language: z.enum(["zh", "en", "ja", "auto"]).optional(),
   });
@@ -326,9 +339,9 @@ async function startLockedServer(
       return c.json({ ok: true, ...result });
     } catch (error) {
       if (error instanceof AgentUnavailableError) {
-        return c.json({ ok: false, error: "agent_unavailable", detail: error.message }, 503);
+        return c.json({ ok: false, error: "audio_engine_unavailable", detail: error.message }, 503);
       }
-      return c.json({ ok: false, error: "agent_transcription_warm_failed", detail: (error as Error).message }, 502);
+      return c.json({ ok: false, error: "audio_transcription_warm_failed", detail: (error as Error).message }, 502);
     }
   });
 
@@ -336,23 +349,23 @@ async function startLockedServer(
     if (!isAuthorizedToken(runtimePaths.mcpTokenJson, c.req.header("authorization") ?? "")) {
       return c.json({ ok: false, error: "unauthorized" }, 401);
     }
-    let parsed: z.infer<typeof AgentTranscriptionSchema>;
+    let parsed: z.infer<typeof AudioTranscriptionSchema>;
     try {
-      parsed = AgentTranscriptionSchema.parse(await c.req.json());
+      parsed = AudioTranscriptionSchema.parse(await c.req.json());
     } catch (error) {
-      return c.json({ ok: false, error: "invalid_agent_transcription", detail: (error as Error).message }, 400);
+      return c.json({ ok: false, error: "invalid_audio_transcription", detail: (error as Error).message }, 400);
     }
     try {
       const result = await recordingPipeline.transcribeOnDemand(parsed);
       return c.json({ ok: true, ...result });
     } catch (error) {
       if (error instanceof InvalidTranscriptionInputError) {
-        return c.json({ ok: false, error: "invalid_agent_transcription", detail: error.message }, 400);
+        return c.json({ ok: false, error: "invalid_audio_transcription", detail: error.message }, 400);
       }
       if (error instanceof AgentUnavailableError) {
-        return c.json({ ok: false, error: "agent_unavailable", detail: error.message }, 503);
+        return c.json({ ok: false, error: "audio_engine_unavailable", detail: error.message }, 503);
       }
-      return c.json({ ok: false, error: "agent_transcription_failed", detail: (error as Error).message }, 502);
+      return c.json({ ok: false, error: "audio_transcription_failed", detail: (error as Error).message }, 502);
     }
   });
 
@@ -491,6 +504,7 @@ async function startLockedServer(
     inboxWatcher.stop();
     try { await realtimeTranscription.close(); } catch { /* preserve the listen error */ }
     try { await recordingPipeline.close(); } catch { /* preserve the listen error */ }
+    xaiCredentials.close();
     try { hostStore.close(); } catch { /* best effort */ }
     throw error;
   }
@@ -507,6 +521,7 @@ async function startLockedServer(
     inboxWatcher.stop();
     try { await realtimeTranscription.close(); } catch { /* preserve the startup error */ }
     try { await recordingPipeline.close(); } catch { /* preserve the startup error */ }
+    xaiCredentials.close();
     await new Promise<void>((resolve) => http.close(() => resolve()));
     try { hostStore.close(); } catch { /* best effort */ }
     throw error;
@@ -524,6 +539,7 @@ async function startLockedServer(
           recordingEventInbox.stop();
           await realtimeTranscription.close();
           await recordingPipeline.close();
+          xaiCredentials.close();
           await new Promise<void>((resolve) => {
             let completed = false;
             const done = () => {

@@ -74,7 +74,7 @@ Commands:
   record stop            Manually stop the current recording
   dictate start|stop|once|toggle|ask
                     Experimental low-latency voice input. Mic-only recording,
-                    Agent transcription, prompt/vocab context, clipboard, optional paste
+                    selected Yulu audio engine, prompt/vocab context, clipboard, optional paste
                     Use --translate-to "English" for prompt-based quick translation
                     Use ask to send a voice question into Agent Console chat
   status-agent dictate

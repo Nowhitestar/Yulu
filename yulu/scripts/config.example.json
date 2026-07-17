@@ -49,6 +49,8 @@
     "note": "backend=daemon 使用原生 ScreenCaptureKit + AVFoundation，不需要 BlackHole；mic_device 在原生 daemon 中选择麦克风，system_audio_device 仅 SoX fallback 使用"
   },
   "transcription": {
+    "engine": "local",
+    "xai_credential_source": "auto",
     "language": "zh",
     "dictation": {
       "language": "zh",
@@ -60,26 +62,21 @@
       "timeout_sec": 30,
       "translate_deadline_sec": 30,
       "translate_timeout_sec": 30,
-      "note": "Voice input is transcribed by Hermes through the authenticated Host endpoint. Yulu only supplies capture, local prompt, and glossary context."
+      "note": "Yulu uses the selected transcription engine for dictation. Agent post-processing remains separate."
     }
-  },
-  "realtime_captions": {
-    "strategy": "local-hybrid"
   },
   "agent_pipeline": {
     "enabled": true,
     "auto_process_recordings": true,
     "auto_send_notion": false,
-    "notion_destination": "Yulu Meeting",
-    "hermes_serve_port": 0,
-    "transcription_chunk_sec": 1200
+    "notion_destination": "Yulu Meeting"
   },
   "llm": {
     "enabled": true,
     "command": null,
     "agent": {
       "provider": "hermes",
-      "note": "Hermes is the default conversation Agent. Recording and dictation transcription always use the dedicated Hermes capability regardless of the conversation Agent selection."
+      "note": "The selected Agent handles Agent Console conversation and its connectors. Hermes handles automatic recording summaries. Yulu owns realtime captions, final transcription, and dictation."
     }
   },
   "agent_console": {

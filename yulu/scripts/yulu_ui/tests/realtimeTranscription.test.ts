@@ -80,7 +80,7 @@ describe("RealtimeTranscriptionCoordinator", () => {
     const coordinator = new RealtimeTranscriptionCoordinator({
       pubsub,
       streaming: engine,
-      transcribe: vi.fn(async () => ({ transcript: "fallback", provider: "test", chunks: 1, language: "zh" as const })),
+      transcribe: vi.fn(async () => ({ transcript: "unused", provider: "test", chunks: 1, language: "zh" as const })),
       pollMs: 60_000,
     });
 
@@ -112,7 +112,55 @@ describe("RealtimeTranscriptionCoordinator", () => {
     await coordinator.close();
   });
 
-  it("falls back to segmented Hermes captions when the local stream fails", async () => {
+  it("replaces an xAI stable revision instead of appending the corrected transcript", async () => {
+    const root = mkdtempSync(join(tmpdir(), "yulu-realtime-revision-"));
+    roots.push(root);
+    const audioPath = join(root, "修订会议_20260717_120000.wav");
+    writeStereoWav(audioPath, 0.05);
+    const engine: StreamingCaptionEngine = {
+      provider: "xai-oauth:hermes",
+      warm: vi.fn(async () => {}),
+      start: vi.fn(async () => {}),
+      feed: vi.fn(async () => ({
+        updates: {
+          mic: {
+            partial: "实时字",
+            stable: [{ text: "测试雨露的实时字幕", endMs: 500 }],
+            audioMs: 50,
+            replaceStable: true,
+          },
+        },
+      })),
+      finish: vi.fn(async () => ({
+        updates: {
+          mic: {
+            partial: "",
+            stable: [{ text: "测试语录的实时字幕", endMs: 1_000 }],
+            audioMs: 50,
+            replaceStable: true,
+          },
+        },
+      })),
+      abort: vi.fn(async () => {}),
+      close: vi.fn(async () => {}),
+    };
+    const coordinator = new RealtimeTranscriptionCoordinator({
+      pubsub: new PubSub<AppChannels>(),
+      streaming: engine,
+      transcribe: vi.fn(async () => ({ transcript: "unused", provider: "test", chunks: 1, language: "zh" as const })),
+      pollMs: 60_000,
+    });
+
+    await coordinator.start({ audioPath, title: "修订会议", language: "zh" });
+    const result = await coordinator.stop(audioPath);
+
+    expect(result).toMatchObject({ text: "测试语录的实时字幕", partialText: "" });
+    expect(readFileSync(audioPath.replace(/\.wav$/, ".realtime.transcript.txt"), "utf8"))
+      .toBe("测试语录的实时字幕\n");
+    await coordinator.close();
+  });
+
+  it("fails the selected streaming engine without switching to segmented transcription", async () => {
     const root = mkdtempSync(join(tmpdir(), "yulu-realtime-stream-fallback-"));
     roots.push(root);
     const audioPath = join(root, "回退会议_20260716_191000.wav");
@@ -140,13 +188,13 @@ describe("RealtimeTranscriptionCoordinator", () => {
     const result = await coordinator.stop(audioPath);
 
     expect(engine.abort).toHaveBeenCalledOnce();
-    expect(transcribe).toHaveBeenCalled();
+    expect(transcribe).not.toHaveBeenCalled();
     expect(result).toMatchObject({
-      status: "finished",
-      captionMode: "segmented",
-      captionProvider: "hermes-segmented",
-      fallbackReason: "local caption failed: decoder crashed",
-      text: "兼容回退正常",
+      status: "failed",
+      captionMode: "streaming",
+      captionProvider: "broken-stream",
+      reason: "realtime transcription failed: decoder crashed",
+      text: "",
     });
   });
 
@@ -230,7 +278,7 @@ describe("RealtimeTranscriptionCoordinator", () => {
         ].join("\n"), provider: "test", chunks: 1, language: "zh",
       })
       .mockRejectedValueOnce(new Error(
-        "Hermes transcript violated the requested language contract: requested Chinese but transcript is English-only",
+        "selected audio engine transcript violated the requested language contract: requested Chinese but transcript is English-only",
       ))
       .mockResolvedValue({
         transcript: "我们继续讨论项目安排", provider: "test", chunks: 1, language: "zh",

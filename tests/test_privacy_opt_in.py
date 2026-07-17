@@ -12,22 +12,23 @@ def load_privacy():
     return module
 
 
-def test_empty_config_reports_agent_owned_defaults():
+def test_empty_config_reports_local_yulu_audio_defaults():
     mod = load_privacy()
 
     report = mod.privacy_opt_in_report({})
 
     assert report["ok"] is True
-    assert report["transcription"]["owner"] == "agent"
-    assert report["transcription"]["provider"] == "hermes"
-    assert report["transcription"]["yulu_executor"] is False
+    assert report["transcription"]["owner"] == "yulu"
+    assert report["transcription"]["provider"] == "local"
+    assert report["transcription"]["yulu_executor"] is True
+    assert report["transcription"]["cloud_audio_opt_in"] is False
     assert report["conversation"]["provider"] == "hermes"
     assert report["conversation"]["yulu_executor"] is False
     assert report["summary_delivery"]["auto_channel"] == "file"
     assert report["summary_delivery"]["external_opt_in_channels"] == []
 
 
-def test_disabled_agent_pipeline_is_not_ready():
+def test_disabled_agent_pipeline_does_not_disable_audio_engine():
     mod = load_privacy()
 
     report = mod.privacy_opt_in_report({
@@ -35,7 +36,7 @@ def test_disabled_agent_pipeline_is_not_ready():
     })
 
     assert report["ok"] is False
-    assert report["transcription"]["ok"] is False
+    assert report["transcription"]["ok"] is True
 
 
 def test_external_summary_opt_ins_are_reported():
@@ -47,19 +48,22 @@ def test_external_summary_opt_ins_are_reported():
     })
 
     assert report["ok"] is True
-    assert report["transcription"]["provider"] == "hermes"
+    assert report["transcription"]["provider"] == "local"
     assert report["summary_delivery"]["auto_external_opt_in"] is True
     assert report["summary_delivery"]["external_opt_in_channels"] == ["notion"]
     assert report["summary_delivery"]["owner"] == "hermes"
 
 
-def test_conversation_agent_does_not_change_hermes_transcription_owner():
+def test_conversation_agent_does_not_change_selected_audio_engine():
     mod = load_privacy()
 
     report = mod.privacy_opt_in_report({
         "llm": {"agent": {"provider": "codex"}},
         "agent_pipeline": {"enabled": True},
+        "transcription": {"engine": "xai", "xai_credential_source": "openclaw"},
     })
 
     assert report["conversation"]["provider"] == "codex"
-    assert report["transcription"]["provider"] == "hermes"
+    assert report["transcription"]["provider"] == "xai"
+    assert report["transcription"]["credential_source"] == "openclaw"
+    assert report["transcription"]["cloud_audio_opt_in"] is True

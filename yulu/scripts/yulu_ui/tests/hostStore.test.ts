@@ -383,6 +383,31 @@ describe("HostStore", () => {
     expect(store!.getTask(task.id)?.state).toBe("running");
   });
 
+  it("keeps a committed transcript and resumes summary work after Host restart", () => {
+    createStore();
+    const claimed = (() => { enqueue(false); return store!.claimNext("hermes")!; })();
+    store!.recordTranscript(claimed.id, claimed.leaseToken!, artifacts(claimed.id)[0]!);
+    const dbPath = join(root, "host.sqlite");
+
+    store!.close();
+    store = new HostStore(dbPath);
+
+    expect(store.getTask(claimed.id)).toMatchObject({
+      state: "transcript_committed",
+      phase: "summarizing",
+      leaseToken: null,
+      error: "Host restarted after transcript commit",
+    });
+    expect(store.listArtifacts(claimed.id)).toEqual([
+      expect.objectContaining({ kind: "transcript", sha256: "a".repeat(64) }),
+    ]);
+    expect(store.claimNext("hermes")).toMatchObject({
+      id: claimed.id,
+      state: "transcript_committed",
+      phase: "summarizing",
+    });
+  });
+
   it("moves an interrupted external delivery to delivery_unverified on restart", () => {
     createStore();
     const claimed = (() => { enqueue(true); return store!.claimNext("hermes")!; })();

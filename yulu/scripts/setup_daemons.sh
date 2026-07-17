@@ -49,7 +49,7 @@ setup_daemons() {
     local plist_dir="$SCRIPT_DIR"
 
     # Retired executors must be removed on upgrade so they cannot race the Host
-    # task store or duplicate Agent-owned transcription work.
+    # task store or duplicate Host-owned recording work.
     local obsolete label
     local retire_failed=false
     local launch_domain

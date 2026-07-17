@@ -1119,7 +1119,7 @@ final class AppDel: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let prefixCount = captionCommonPrefixLength(currentCharacters, targetCharacters)
         let remainingCount = max(0, targetCharacters.count - prefixCount)
         let stepCount = max(1, maxSteps)
-        return max(1, (remainingCount + stepCount - 1) / stepCount)
+        return min(4, max(1, (remainingCount + stepCount - 1) / stepCount))
     }
 
     func nextCaptionRevealText(current: String, target: String, charactersPerStep: Int) -> String {
@@ -1284,6 +1284,7 @@ if arguments.contains("--self-test") {
     assert(app.liveCaptionSourceText(stable: " stable ", partial: "  ") == "stable")
     assert(app.captionRevealBatchSize(current: "", target: "这是一个") == 1)
     assert(app.captionRevealBatchSize(current: "", target: "这是一个足够长的增量") == 3)
+    assert(app.captionRevealBatchSize(current: "", target: String(repeating: "长字幕", count: 20)) == 4)
     assert(app.nextCaptionRevealText(current: "", target: "这是一个", charactersPerStep: 1) == "这")
     assert(app.nextCaptionRevealText(current: "这是语音", target: "这是识别", charactersPerStep: 1) == "这是识")
     assert(app.nextCaptionRevealText(current: "👨‍👩‍👧‍👦", target: "👨‍👩‍👧‍👦好", charactersPerStep: 1) == "👨‍👩‍👧‍👦好")

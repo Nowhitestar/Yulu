@@ -1,23 +1,13 @@
-import { randomBytes } from "node:crypto";
-import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, unlinkSync } from "node:fs";
+import { spawn, spawnSync } from "node:child_process";
+import { existsSync, mkdtempSync, rmSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import type { AgentRuntime } from "./agentRuntime.js";
 import { runAgentCliCommand } from "./agentCliRunner.js";
 import { envWithFallbackPath, resolveExecutable } from "./executables.js";
 import type { AgentTask } from "./hostStore.js";
-import type { AgentTaskWorkspace, ArtifactStore } from "./artifactStore.js";
-import {
-  applyGlossaryContract,
-  type GlossaryContract,
-} from "./glossaryContract.js";
-import {
-  assessRealtimeTranscript,
-  cleanTranscriptText,
-  normalizeTranscriptionLanguage,
-  type TranscriptionLanguage,
-} from "./realtimeTranscription.js";
+import type { AgentTaskWorkspace } from "./artifactStore.js";
+import type { GlossaryContract } from "./glossaryContract.js";
 import {
   canonicalNotionPageIdentity,
   isTrustedNotionUrl,
@@ -25,14 +15,45 @@ import {
   notionPageIdentityProblem,
 } from "./notionDelivery.js";
 
-const HERMES_READY_RE = /HERMES_(?:BACKEND|DASHBOARD)_READY\s+port=(\d+)/;
-const HERMES_START_TIMEOUT_MS = 30_000;
-const HERMES_START_MAX_FAILURES = 3;
-const HERMES_TRANSCRIBE_TIMEOUT_MS = 15 * 60_000;
 const HERMES_WORKFLOW_TIMEOUT_MS = 20 * 60_000;
-const HERMES_MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
 const HERMES_CONTRACT_CACHE_MS = 5 * 60_000;
 const HERMES_CONTRACT_PROBE_TIMEOUT_MS = 30_000;
+
+function runProcess(command: string, args: string[], opts: {
+  cwd: string;
+  timeoutMs: number;
+  env?: NodeJS.ProcessEnv;
+  maxOutputBytes?: number;
+}): Promise<{ stdout: string; stderr: string; code: number }> {
+  return new Promise((resolve) => {
+    const env = opts.env ?? envWithFallbackPath(process.env);
+    const executable = resolveExecutable(command, env);
+    const proc = spawn(executable, args, { cwd: opts.cwd, env });
+    const max = opts.maxOutputBytes ?? 16 * 1024 * 1024;
+    let stdout = "";
+    let stderr = "";
+    let settled = false;
+    const finish = (result: { stdout: string; stderr: string; code: number }) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(result);
+    };
+    const timer = setTimeout(() => {
+      proc.kill("SIGKILL");
+      finish({ stdout, stderr: stderr || `process timed out after ${opts.timeoutMs}ms`, code: 124 });
+    }, opts.timeoutMs);
+    proc.stdout.on("data", (chunk: Buffer) => {
+      if (Buffer.byteLength(stdout) < max) stdout += chunk.toString("utf8");
+    });
+    proc.stderr.on("data", (chunk: Buffer) => {
+      if (Buffer.byteLength(stderr) < max) stderr += chunk.toString("utf8");
+    });
+    proc.on("error", (error) => finish({ stdout, stderr: stderr || error.message, code: 1 }));
+    proc.on("close", (code) => finish({ stdout, stderr, code: code ?? 1 }));
+    proc.stdin.end();
+  });
+}
 
 export interface HermesCommandProbeResult {
   code: number;
@@ -55,7 +76,6 @@ const HERMES_CONTRACT_COMMANDS: ReadonlyArray<{
   args: readonly string[];
   markers: readonly string[];
 }> = [
-  { name: "serve", args: ["serve", "--help"], markers: ["--port", "--host", "--skip-build"] },
   { name: "sessions export", args: ["sessions", "export", "--help"], markers: ["--session-id", "output"] },
   { name: "config set", args: ["config", "set", "--help"], markers: ["key", "value"] },
   { name: "toolsets", args: ["--help"], markers: ["--toolsets"] },
@@ -164,25 +184,6 @@ export class AgentUnavailableError extends Error {
   }
 }
 
-export function hermesServeReadyPort(output: string): number | null {
-  const match = HERMES_READY_RE.exec(output);
-  return match?.[1] ? Number(match[1]) : null;
-}
-
-export function hermesServeStartFailure(message: string, consecutiveFailures: number): Error {
-  if (consecutiveFailures >= HERMES_START_MAX_FAILURES) {
-    return new Error(`Hermes serve failed ${consecutiveFailures} consecutive times: ${message}`);
-  }
-  return new AgentUnavailableError(message);
-}
-
-export interface TranscriptionResult {
-  transcript: string;
-  provider: string;
-  chunks: number;
-  language?: TranscriptionLanguage;
-}
-
 export interface AgentSessionAudit {
   ok: boolean;
   toolNames: string[];
@@ -236,224 +237,9 @@ export type AgentNotionWorkflowInput = AgentArtifactWorkflowInput;
 export interface RecordingAgentGateway {
   readonly provider: string;
   health(): AgentGatewayHealth;
-  warmTranscription(): Promise<void>;
-  transcribeAudio(audioPath: string, workspace: AgentTaskWorkspace, language?: TranscriptionLanguage, glossary?: GlossaryContract): Promise<TranscriptionResult>;
-  transcribe(task: AgentTask, workspace: AgentTaskWorkspace, glossary?: GlossaryContract): Promise<TranscriptionResult>;
   runArtifactWorkflow(input: AgentArtifactWorkflowInput): Promise<AgentWorkflowResult>;
   runNotionWorkflow(input: AgentNotionWorkflowInput): Promise<AgentWorkflowResult>;
   close(): void;
-}
-
-interface HermesServeOptions {
-  command: string;
-  port: number;
-  chunkSec: number;
-}
-
-function appendLog(current: string, chunk: Buffer): string {
-  return (current + chunk.toString("utf8")).slice(-16_000);
-}
-
-function runProcess(command: string, args: string[], opts: {
-  cwd: string;
-  timeoutMs: number;
-  env?: NodeJS.ProcessEnv;
-  maxOutputBytes?: number;
-}): Promise<{ stdout: string; stderr: string; code: number }> {
-  return new Promise((resolve) => {
-    const env = opts.env ?? envWithFallbackPath(process.env);
-    const executable = resolveExecutable(command, env);
-    const proc = spawn(executable, args, { cwd: opts.cwd, env });
-    const max = opts.maxOutputBytes ?? 16 * 1024 * 1024;
-    let stdout = "";
-    let stderr = "";
-    let settled = false;
-    const finish = (result: { stdout: string; stderr: string; code: number }) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      resolve(result);
-    };
-    const timer = setTimeout(() => {
-      proc.kill("SIGKILL");
-      finish({ stdout, stderr: stderr || `process timed out after ${opts.timeoutMs}ms`, code: 124 });
-    }, opts.timeoutMs);
-    proc.stdout.on("data", (chunk: Buffer) => {
-      if (Buffer.byteLength(stdout) < max) stdout += chunk.toString("utf8");
-    });
-    proc.stderr.on("data", (chunk: Buffer) => {
-      if (Buffer.byteLength(stderr) < max) stderr += chunk.toString("utf8");
-    });
-    proc.on("error", (error) => finish({ stdout, stderr: stderr || error.message, code: 1 }));
-    proc.on("close", (code) => finish({ stdout, stderr, code: code ?? 1 }));
-    proc.stdin.end();
-  });
-}
-
-class HermesServeClient {
-  private readonly token = randomBytes(32).toString("base64url");
-  private process: ChildProcessWithoutNullStreams | null = null;
-  private port: number | null = null;
-  private starting: Promise<number> | null = null;
-  private consecutiveStartFailures = 0;
-
-  constructor(private readonly options: HermesServeOptions) {}
-
-  async warm(): Promise<void> {
-    await this.runningPort();
-  }
-
-  async transcribe(
-    audioPath: string,
-    workspace: AgentTaskWorkspace,
-    language: TranscriptionLanguage = "zh",
-    glossary?: GlossaryContract,
-  ): Promise<TranscriptionResult> {
-    const port = await this.runningPort();
-    this.cleanupTransportAudio(workspace);
-    try {
-      // Hermes providers may be local CLIs (notably whisper.cpp) that accept
-      // PCM WAV reliably but can silently yield no text for AAC/M4A. Keep each
-      // decoded transport chunk below Hermes' 25 MB upload ceiling.
-      const transportChunkSec = Math.min(this.options.chunkSec, 600);
-      const ffmpeg = await runProcess("ffmpeg", [
-        "-hide_banner", "-loglevel", "error", "-y",
-        "-i", audioPath,
-        "-vn", "-ac", "1", "-ar", "16000",
-        "-c:a", "pcm_s16le",
-        "-f", "segment", "-segment_format", "wav", "-segment_time", String(transportChunkSec),
-        "-reset_timestamps", "1", workspace.chunkPattern,
-      ], { cwd: workspace.dir, timeoutMs: HERMES_TRANSCRIBE_TIMEOUT_MS, maxOutputBytes: 1_000_000 });
-      if (ffmpeg.code !== 0) throw new Error(`failed to prepare audio for Hermes: ${ffmpeg.stderr.trim()}`);
-
-      const chunks = readdirSync(workspace.dir)
-        .filter((name) => /^audio-\d{3}\.wav$/.test(name))
-        .sort()
-        .map((name) => join(workspace.dir, name));
-      if (chunks.length === 0) throw new Error("ffmpeg produced no Hermes transcription chunks");
-
-      const transcripts: string[] = [];
-      let provider = "hermes";
-      for (const path of chunks) {
-        const audio = readFileSync(path);
-        if (audio.length > HERMES_MAX_UPLOAD_BYTES) {
-          throw new Error(`Hermes transcription chunk exceeds 25MB: ${basename(path)}`);
-        }
-        const response = await fetch(`http://127.0.0.1:${port}/api/audio/transcribe`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "X-Hermes-Session-Token": this.token,
-          },
-          body: JSON.stringify({
-            data_url: `data:audio/wav;base64,${audio.toString("base64")}`,
-            mime_type: "audio/wav",
-            language,
-            prompt: glossary?.prompt || undefined,
-          }),
-          signal: AbortSignal.timeout(HERMES_TRANSCRIBE_TIMEOUT_MS),
-        });
-        const payload = await response.json().catch(() => ({})) as Record<string, unknown>;
-        if (!response.ok || payload.ok !== true) {
-          throw new Error(`Hermes transcription failed (${response.status}): ${String(payload.detail ?? "unknown error")}`);
-        }
-        const transcript = cleanTranscriptText(String(payload.transcript ?? ""));
-        provider = String(payload.provider ?? provider);
-        // A transport segment may be entirely silent (especially the tail of
-        // a long meeting). Skip that segment; only fail when the whole
-        // recording contains no speech.
-        if (transcript) transcripts.push(transcript);
-      }
-      if (transcripts.length === 0) throw new Error("Hermes returned no speech transcript for the recording");
-      const transcript = applyGlossaryContract(
-        cleanTranscriptText(transcripts.join("\n\n")),
-        glossary ?? { prompt: "", replacements: [], summaryInstruction: "" },
-      );
-      const normalizedLanguage = normalizeTranscriptionLanguage(language);
-      const quality = assessRealtimeTranscript({
-        text: transcript,
-        language: normalizedLanguage,
-        coveredMs: 1,
-        totalMs: 1,
-      });
-      if (!quality.trusted) {
-        throw new Error(`Hermes transcript violated the requested language contract: ${quality.reason}`);
-      }
-      return { transcript, provider, chunks: chunks.length, language: normalizedLanguage };
-    } finally {
-      this.cleanupTransportAudio(workspace);
-    }
-  }
-
-  close(): void {
-    this.process?.kill("SIGTERM");
-    this.process = null;
-    this.port = null;
-    this.starting = null;
-  }
-
-  private ensureRunning(): Promise<number> {
-    if (this.port && this.process && this.process.exitCode === null) return Promise.resolve(this.port);
-    if (this.starting) return this.starting;
-    this.starting = new Promise<number>((resolve, reject) => {
-      const env = envWithFallbackPath({
-        ...process.env,
-        HERMES_DASHBOARD_SESSION_TOKEN: this.token,
-      });
-      const executable = resolveExecutable(this.options.command, env);
-      const proc = spawn(executable, [
-        "serve", "--port", String(this.options.port), "--host", "127.0.0.1", "--skip-build",
-      ], { env, cwd: process.env.HOME });
-      this.process = proc;
-      let stdout = "";
-      let stderr = "";
-      let ready = false;
-      const timer = setTimeout(() => {
-        if (ready) return;
-        proc.kill("SIGKILL");
-        reject(new Error(`Hermes serve did not become ready: ${(stderr || stdout).trim()}`));
-      }, HERMES_START_TIMEOUT_MS);
-      const inspect = () => {
-        const readyPort = hermesServeReadyPort(`${stdout}\n${stderr}`);
-        if (readyPort === null || ready) return;
-        ready = true;
-        this.consecutiveStartFailures = 0;
-        clearTimeout(timer);
-        this.port = readyPort;
-        resolve(this.port);
-      };
-      proc.stdout.on("data", (chunk: Buffer) => { stdout = appendLog(stdout, chunk); inspect(); });
-      proc.stderr.on("data", (chunk: Buffer) => { stderr = appendLog(stderr, chunk); inspect(); });
-      proc.on("error", (error) => {
-        if (!ready) { clearTimeout(timer); reject(error); }
-      });
-      proc.on("close", (code) => {
-        this.process = null;
-        this.port = null;
-        this.starting = null;
-        if (!ready) { clearTimeout(timer); reject(new Error(`Hermes serve exited ${code}: ${(stderr || stdout).trim()}`)); }
-      });
-    }).finally(() => { this.starting = null; });
-    return this.starting;
-  }
-
-  private async runningPort(): Promise<number> {
-    try {
-      return await this.ensureRunning();
-    } catch (error) {
-      this.consecutiveStartFailures += 1;
-      const message = (error as Error).message;
-      throw hermesServeStartFailure(message, this.consecutiveStartFailures);
-    }
-  }
-
-  private cleanupTransportAudio(workspace: AgentTaskWorkspace): void {
-    for (const name of readdirSync(workspace.dir)) {
-      if (/^audio-\d{3}\.wav$/.test(name)) {
-        try { unlinkSync(join(workspace.dir, name)); } catch { /* best effort */ }
-      }
-    }
-  }
 }
 
 export function buildHermesRecordingPrompt(input: AgentArtifactWorkflowInput): string {
@@ -465,7 +251,7 @@ export function buildHermesRecordingPrompt(input: AgentArtifactWorkflowInput): s
     `Task ID: ${task.id}`,
     `Lease token: ${leaseToken}`,
     `Meeting title: ${task.title}`,
-    `Transcript provider: Hermes ${transcriptionProvider}`,
+    `Transcript provider: ${transcriptionProvider}`,
     ...(task.instructions ? ["", "User-selected summary instructions:", task.instructions] : []),
     ...(input.glossary?.summaryInstruction
       ? ["", "Terminology contract:", input.glossary.summaryInstruction]
@@ -921,7 +707,6 @@ export function auditHermesSessionExport(raw: string, taskId: string, deliveryPh
 
 export class HermesRecordingGateway implements RecordingAgentGateway {
   readonly provider = "hermes";
-  private readonly serve: HermesServeClient;
   private contractProbePromise: Promise<string | null> | null = null;
   private contractProbePending = false;
   private contractProbeSettledAt = 0;
@@ -930,15 +715,8 @@ export class HermesRecordingGateway implements RecordingAgentGateway {
     private readonly runtime: AgentRuntime,
     private readonly configDir: string,
     private readonly scriptDir: string,
-    private readonly artifacts: ArtifactStore,
-    private readonly options: { servePort: number; chunkSec: number; commandProbe?: HermesAsyncCommandProbe },
-  ) {
-    this.serve = new HermesServeClient({
-      command: runtime.command[0] ?? "hermes",
-      port: options.servePort,
-      chunkSec: options.chunkSec,
-    });
-  }
+    private readonly options: { commandProbe?: HermesAsyncCommandProbe } = {},
+  ) {}
 
   health(): AgentGatewayHealth {
     if (this.runtime.provider !== "hermes") {
@@ -951,32 +729,8 @@ export class HermesRecordingGateway implements RecordingAgentGateway {
     if (commandProblem) return { available: false, provider: "hermes", reason: commandProblem };
     const env = envWithFallbackPath(process.env);
     const hermes = resolveExecutable(this.runtime.command[0]!, env);
-    const ffmpeg = resolveExecutable("ffmpeg", env);
     if (!existsSync(hermes)) return { available: false, provider: "hermes", reason: "Hermes CLI is unavailable" };
-    if (!existsSync(ffmpeg)) return { available: false, provider: "hermes", reason: "ffmpeg is required to transport audio to Hermes" };
     return { available: true, provider: "hermes", reason: null };
-  }
-
-  async warmTranscription(): Promise<void> {
-    await this.requireRecordingContract();
-    return this.serve.warm();
-  }
-
-  async transcribeAudio(
-    audioPath: string,
-    workspace: AgentTaskWorkspace,
-    language: TranscriptionLanguage = "zh",
-    glossary?: GlossaryContract,
-  ): Promise<TranscriptionResult> {
-    await this.requireRecordingContract();
-    return this.serve.transcribe(audioPath, workspace, language, glossary);
-  }
-
-  transcribe(task: AgentTask, workspace: AgentTaskWorkspace, glossary?: GlossaryContract): Promise<TranscriptionResult> {
-    return this.transcribeAudio(task.audioPath, workspace, task.transcriptionLanguage, glossary).then((result) => {
-      this.artifacts.writeStagedTranscript(task.id, result.transcript);
-      return result;
-    });
   }
 
   async runArtifactWorkflow(input: AgentArtifactWorkflowInput): Promise<AgentWorkflowResult> {
@@ -1010,7 +764,7 @@ export class HermesRecordingGateway implements RecordingAgentGateway {
   }
 
   close(): void {
-    this.serve.close();
+    // The summary/delivery gateway owns no persistent child process.
   }
 
   private async requireRecordingContract(): Promise<void> {

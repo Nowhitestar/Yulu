@@ -11,7 +11,6 @@ import {
 } from "node:fs";
 import { basename, extname, isAbsolute, join, relative, sep } from "node:path";
 import { randomUUID } from "node:crypto";
-import type { TranscriptionResult } from "./agentGateway.js";
 import type {
   CaptionSource,
   StreamingCaptionEngine,
@@ -20,6 +19,13 @@ import type {
 import type { AppChannels, PubSub } from "./pubsub.js";
 
 export type TranscriptionLanguage = "zh" | "en" | "ja" | "auto";
+
+export interface TranscriptionResult {
+  transcript: string;
+  provider: string;
+  chunks: number;
+  language?: TranscriptionLanguage;
+}
 
 export interface WavFormat {
   dataOffset: number;
@@ -37,7 +43,6 @@ interface Session {
   format: WavFormat;
   mode: "streaming" | "segmented";
   captionProvider: string;
-  fallbackReason: string | null;
   offset: number;
   text: string;
   partialBySource: Record<CaptionSource, string>;
@@ -279,7 +284,7 @@ function atomicWrite(path: string, content: string): void {
   renameSync(tmp, path);
 }
 
-function parseWavFormat(path: string): WavFormat {
+export function parseWavFormat(path: string): WavFormat {
   const fd = openSync(path, "r");
   try {
     const size = Math.min(statSync(path).size, 4096);
@@ -444,15 +449,9 @@ export class RealtimeTranscriptionCoordinator {
       }
     }
     const format = parseWavFormat(audioPath);
-    let mode: Session["mode"] = this.options.streaming ? "streaming" : "segmented";
-    let fallbackReason: string | null = null;
+    const mode: Session["mode"] = this.options.streaming ? "streaming" : "segmented";
     if (mode === "streaming") {
-      try {
-        await this.options.streaming!.start(normalizeTranscriptionLanguage(input.language));
-      } catch (error) {
-        mode = "segmented";
-        fallbackReason = `local caption unavailable: ${(error as Error).message}`;
-      }
+      await this.options.streaming!.start(normalizeTranscriptionLanguage(input.language));
     }
     const session: Session = {
       audioPath,
@@ -461,8 +460,7 @@ export class RealtimeTranscriptionCoordinator {
       language: normalizeTranscriptionLanguage(input.language),
       format,
       mode,
-      captionProvider: mode === "streaming" ? this.options.streaming!.provider : "hermes-segmented",
-      fallbackReason,
+      captionProvider: mode === "streaming" ? this.options.streaming!.provider : "segmented",
       offset: format.dataOffset,
       text: "",
       partialBySource: { mic: "", system: "" },
@@ -531,8 +529,7 @@ export class RealtimeTranscriptionCoordinator {
       try {
         this.applyStreamingUpdate(session, await this.options.streaming!.finish());
       } catch (error) {
-        await this.fallbackToSegmented(session, error);
-        await this.queuePump(true);
+        session.error = (error as Error).message;
       }
     }
     const totalMs = this.durationMs(session);
@@ -598,9 +595,8 @@ export class RealtimeTranscriptionCoordinator {
         try {
           this.applyStreamingUpdate(session, await this.options.streaming!.feed(separated.chunks));
         } catch (error) {
-          await this.fallbackToSegmented(session, error);
-          await this.pump(session, force);
-          return;
+          await this.options.streaming?.abort();
+          throw error;
         }
       } else {
         const pcm = mono16kPcm(source, session.format);
@@ -608,20 +604,6 @@ export class RealtimeTranscriptionCoordinator {
       }
     }
     if (session.mode === "segmented") await this.flushSegments(session, force);
-  }
-
-  private async fallbackToSegmented(session: Session, error: unknown): Promise<void> {
-    session.fallbackReason = `local caption failed: ${(error as Error).message}`;
-    session.mode = "segmented";
-    session.captionProvider = "hermes-segmented";
-    session.offset = session.format.dataOffset;
-    session.coveredMs = 0;
-    session.pendingPcm = Buffer.alloc(0);
-    session.overlapPcm = Buffer.alloc(0);
-    session.partialBySource = { mic: "", system: "" };
-    session.resamplePhase = 0;
-    await this.options.streaming?.abort();
-    this.publish(session, "transcribing", false, session.fallbackReason);
   }
 
   private applyStreamingUpdate(session: Session, response: StreamingCaptionUpdate): void {
@@ -632,6 +614,9 @@ export class RealtimeTranscriptionCoordinator {
       const update = response.updates[source];
       if (!update) continue;
       session.partialBySource[source] = cleanTranscriptText(update.partial);
+      if (update.replaceStable) {
+        session.stableSegments = session.stableSegments.filter((segment) => segment.source !== source);
+      }
       for (const item of update.stable) {
         let text = cleanTranscriptText(item.text);
         if (text && this.options.stabilize) text = cleanTranscriptText(this.options.stabilize(text));
@@ -824,7 +809,6 @@ export class RealtimeTranscriptionCoordinator {
       total_ms: totalMs,
       chunks: session.chunks,
       provider: session.captionProvider,
-      fallback_reason: session.fallbackReason,
       trusted,
       reason,
       finished,
@@ -850,7 +834,6 @@ export class RealtimeTranscriptionCoordinator {
       ].filter(Boolean).join("\n")),
       captionProvider: session.captionProvider,
       captionMode: session.mode,
-      fallbackReason: session.fallbackReason,
       coveredMs: session.coveredMs,
       trusted,
       sequence: session.sequence,

@@ -44,8 +44,8 @@ export const configRouter = router({
           // (for example in preview mode, or when the plist is not installed).
         }
       }
-      if (input.key === "realtime_captions.strategy") {
-        try { await ctx.localCaption?.syncStrategy(); }
+      if (input.key === "transcription.engine") {
+        try { await ctx.localCaption?.syncSelection(); }
         catch { /* keep the saved preference; model status exposes warmup failures */ }
       }
       // 服务端即时下发 SIGHUP(便宜、不打断录音);restart 仍由前端 banner 用户触发

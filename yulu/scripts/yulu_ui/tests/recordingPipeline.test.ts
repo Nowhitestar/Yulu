@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ArtifactStore, type AgentTaskWorkspace } from "../src/artifactStore.js";
+import { ArtifactStore } from "../src/artifactStore.js";
 import { ConfigManager } from "../src/config.js";
 import { HostStore } from "../src/hostStore.js";
 import { PubSub, type AppChannels } from "../src/pubsub.js";
@@ -72,17 +72,14 @@ describe("RecordingPipeline", () => {
     }).task : null;
     const available = opts.available !== false;
     const warmTranscription = vi.fn(async () => {});
-    let lastOnDemandWorkspace = "";
-    const transcribeAudio = vi.fn(async (_audioPath: string, workspace: AgentTaskWorkspace) => {
-      lastOnDemandWorkspace = workspace.dir;
-      writeFileSync(join(workspace.dir, "audio-000.wav"), "transport");
-      return { transcript: "dictation transcript", provider: "test-hermes", chunks: 1 };
-    });
-    const transcribe = vi.fn(async (task: Parameters<RecordingAgentGateway["transcribe"]>[0]) => {
+    const transcribe = vi.fn(async (
+      _audioPath: string,
+      language: "zh" | "en" | "ja" | "auto",
+      _glossary?: unknown,
+    ) => {
       if (opts.transcribeContractGate) await opts.transcribeContractGate;
-      if (opts.transcribeUnavailable) throw new AgentUnavailableError("Hermes serve failed");
-      artifacts.writeStagedTranscript(task.id, "hello transcript");
-      return { transcript: "hello transcript", provider: "test-hermes", chunks: 1 };
+      if (opts.transcribeUnavailable) throw new AgentUnavailableError("selected audio engine unavailable");
+      return { transcript: "hello transcript", provider: "test-audio", chunks: 1, language };
     });
     let notionStartedFromState = "";
     const runArtifactWorkflow = vi.fn(async ({ task, leaseToken, workspace }: Parameters<RecordingAgentGateway["runArtifactWorkflow"]>[0]) => {
@@ -149,9 +146,6 @@ describe("RecordingPipeline", () => {
     const gateway: RecordingAgentGateway = {
       provider: "hermes",
       health: () => ({ available, provider: "hermes", reason: available ? null : "Hermes offline" }),
-      warmTranscription,
-      transcribeAudio,
-      transcribe,
       runArtifactWorkflow,
       runNotionWorkflow,
       close: () => {},
@@ -186,6 +180,12 @@ describe("RecordingPipeline", () => {
       vocabDb: opts.glossaryRows ? () => ({
         prepare: () => ({ all: () => opts.glossaryRows }),
       }) : undefined,
+      transcription: {
+        provider: "test-audio",
+        health: () => ({ available: true, provider: "test-audio", reason: null }),
+        warm: warmTranscription,
+        transcribeFile: transcribe,
+      },
       gatewayFactory,
       pollMs: opts.pollMs ?? 60_000,
     });
@@ -196,17 +196,15 @@ describe("RecordingPipeline", () => {
       configManager,
       gatewayFactory,
       warmTranscription,
-      transcribeAudio,
       transcribe,
       runArtifactWorkflow,
       runNotionWorkflow,
       notionStartedFromState: () => notionStartedFromState,
-      lastOnDemandWorkspace: () => lastOnDemandWorkspace,
       legacyManualTask,
     };
   }
 
-  it("runs Hermes transcription, artifact commit, and Notion in one durable task", async () => {
+  it("runs selected audio transcription, summary Agent commit, and Notion in one durable task", async () => {
     const { audioPath, moviesDir, configDir, runArtifactWorkflow, runNotionWorkflow, notionStartedFromState } = setup({ sendToNotion: true });
     const first = pipeline!.enqueueCompletion({ audioPath, title: "Demo", sendToNotion: true });
     const duplicate = pipeline!.enqueueCompletion({ audioPath, title: "Demo", sendToNotion: true });
@@ -228,7 +226,7 @@ describe("RecordingPipeline", () => {
     expect(() => writeFileSync(join(moviesDir, "proof"), "ok")).not.toThrow();
   });
 
-  it("always runs the final Hermes quality pass instead of promoting realtime captions", async () => {
+  it("asks the selected audio service for the final transcript", async () => {
     const { audioPath, moviesDir, transcribe } = setup();
     writeFileSync(audioPath.replace(/\.wav$/, ".realtime.transcript.txt"), "这是会议的实时转写，with Alpha。\n");
     writeFileSync(audioPath.replace(/\.wav$/, ".realtime.coverage.json"), JSON.stringify({
@@ -258,10 +256,8 @@ describe("RecordingPipeline", () => {
         { term: "阿法学院", canonical: "阿尔法学院", scope: "both" },
       ],
     });
-    setupResult.transcribe.mockImplementationOnce(async (task) => {
-      const workspace = new ArtifactStore(setupResult.moviesDir, join(setupResult.configDir, "agent-tasks")).workspace(task.id);
-      writeFileSync(workspace.transcriptPath, "阿法学院会议");
-      return { transcript: "阿法学院会议", provider: "test-hermes", chunks: 1 };
+    setupResult.transcribe.mockImplementationOnce(async (_audioPath, language) => {
+      return { transcript: "阿法学院会议", provider: "test-audio", chunks: 1, language };
     });
 
     const result = pipeline!.enqueueCompletion({ audioPath: setupResult.audioPath, language: "zh" });
@@ -270,8 +266,8 @@ describe("RecordingPipeline", () => {
     expect(readFileSync(join(setupResult.moviesDir, "Demo_20260711_120000.transcript.txt"), "utf8"))
       .toBe("阿尔法学院会议\n");
     expect(setupResult.transcribe).toHaveBeenCalledWith(
-      expect.any(Object),
-      expect.any(Object),
+      realpathSync(setupResult.audioPath),
+      "zh",
       expect.objectContaining({ prompt: expect.stringContaining("阿尔法学院") }),
     );
     expect(setupResult.runArtifactWorkflow).toHaveBeenCalledWith(expect.objectContaining({
@@ -310,18 +306,20 @@ describe("RecordingPipeline", () => {
     expect(store!.listTasks()).toEqual([]);
   });
 
-  it("keeps the recording and reports awaiting_agent without a fallback", async () => {
+  it("persists the transcript while the summary Agent is unavailable", async () => {
     const { audioPath } = setup({ available: false });
     expect(pipeline!.transcriptionHealth()).toEqual({
-      available: false,
-      provider: "hermes",
-      reason: "Hermes offline",
+      available: true,
+      provider: "test-audio",
+      reason: null,
       paused: false,
       policyReason: null,
     });
     const { task } = pipeline!.enqueueCompletion({ audioPath, title: "Demo", sendToNotion: true });
-    await vi.waitFor(() => expect(store!.getTask(task.id)?.state).toBe("awaiting_agent"));
-    expect(store!.listArtifacts(task.id)).toEqual([]);
+    await vi.waitFor(() => expect(store!.getTask(task.id)?.state).toBe("transcript_committed"));
+    expect(store!.listArtifacts(task.id)).toEqual([
+      expect.objectContaining({ kind: "transcript" }),
+    ]);
   });
 
   it("backs off and fails after three unavailable health checks", async () => {
@@ -331,9 +329,9 @@ describe("RecordingPipeline", () => {
     await vi.waitFor(() => expect(store!.getTask(task.id)?.state).toBe("failed"));
     expect(store!.getTask(task.id)).toMatchObject({
       attempt: 3,
-      error: expect.stringContaining("unavailable after 3 checks"),
+      error: expect.stringContaining("Summary Agent unavailable after 3 attempts"),
     });
-    expect(transcribe).not.toHaveBeenCalled();
+    expect(transcribe).toHaveBeenCalledOnce();
   });
 
   it("never exposes Notion when the Host did not observe the artifact commit", async () => {
@@ -377,7 +375,7 @@ describe("RecordingPipeline", () => {
     expect(() => pipeline!.retry(task.id)).toThrow(/cannot retry from delivery_unverified/);
   });
 
-  it("does not hot-loop an awaiting task when Hermes startup fails after claim", async () => {
+  it("does not hot-loop when the selected audio engine fails after claim", async () => {
     const { audioPath, transcribe } = setup({ transcribeUnavailable: true });
     const { task } = pipeline!.enqueueCompletion({ audioPath, title: "Demo" });
 
@@ -401,7 +399,7 @@ describe("RecordingPipeline", () => {
     expect(transcribe).toHaveBeenCalledTimes(3);
     expect(store!.getTask(task.id)).toMatchObject({
       attempt: 3,
-      error: expect.stringContaining("unavailable after 3 attempts"),
+      error: expect.stringContaining("Selected audio engine unavailable after 3 attempts"),
     });
   });
 
@@ -458,21 +456,21 @@ describe("RecordingPipeline", () => {
     expect(store!.listTasks()).toEqual([]);
   });
 
-  it("fails closed for on-demand transcription when the whole pipeline is disabled", async () => {
-    const { audioPath, gatewayFactory, warmTranscription, transcribeAudio } = setup({ enabled: false });
+  it("keeps on-demand audio independent from automatic summary policy", async () => {
+    const { audioPath, gatewayFactory, warmTranscription, transcribe } = setup({ enabled: false });
 
     expect(pipeline!.transcriptionHealth()).toEqual({
-      available: false,
-      provider: "hermes",
-      reason: "Agent recording pipeline is disabled by policy",
+      available: true,
+      provider: "test-audio",
+      reason: null,
       paused: true,
       policyReason: "Agent recording pipeline is disabled by policy",
     });
-    await expect(pipeline!.warmTranscription()).rejects.toThrow("disabled by policy");
-    await expect(pipeline!.transcribeOnDemand({ audioPath })).rejects.toThrow("disabled by policy");
+    await expect(pipeline!.warmTranscription()).resolves.toEqual({ provider: "test-audio" });
+    await expect(pipeline!.transcribeOnDemand({ audioPath })).resolves.toMatchObject({ transcript: "hello transcript" });
     expect(gatewayFactory).not.toHaveBeenCalled();
-    expect(warmTranscription).not.toHaveBeenCalled();
-    expect(transcribeAudio).not.toHaveBeenCalled();
+    expect(warmTranscription).toHaveBeenCalledOnce();
+    expect(transcribe).toHaveBeenCalledOnce();
   });
 
   it("does not claim pre-existing queued or awaiting work after policy is disabled", async () => {
@@ -533,11 +531,11 @@ describe("RecordingPipeline", () => {
     expect(() => pipeline!.enqueueCompletion({ audioPath: escapedLink })).toThrow("outside the configured recordings directory");
   });
 
-  it("warms and reuses one Hermes gateway for allowed on-demand WAVs, then removes the workspace", async () => {
+  it("warms and reuses the selected audio service for allowed on-demand WAVs", async () => {
     const setupResult = setup({
       glossaryRows: [{ term: "阿尔法学院", canonical: "阿尔法学院", scope: "both" }],
     });
-    await expect(pipeline!.warmTranscription()).resolves.toEqual({ provider: "hermes" });
+    await expect(pipeline!.warmTranscription()).resolves.toEqual({ provider: "test-audio" });
     const first = await pipeline!.transcribeOnDemand({ audioPath: setupResult.audioPath });
 
     const dictationDir = join(setupResult.configDir, "dictation");
@@ -546,21 +544,22 @@ describe("RecordingPipeline", () => {
     writeFileSync(dictationWav, Buffer.alloc(44));
     const second = await pipeline!.transcribeOnDemand({ audioPath: dictationWav, language: "ja" });
 
-    expect(first).toEqual({ transcript: "dictation transcript", provider: "test-hermes", chunks: 1 });
-    expect(second.transcript).toBe("dictation transcript");
-    expect(setupResult.gatewayFactory).toHaveBeenCalledTimes(1);
+    expect(first).toEqual({ transcript: "hello transcript", provider: "test-audio", chunks: 1, language: "zh" });
+    expect(second).toEqual({ transcript: "hello transcript", provider: "test-audio", chunks: 1, language: "ja" });
+    expect(setupResult.gatewayFactory).not.toHaveBeenCalled();
     expect(setupResult.warmTranscription).toHaveBeenCalledTimes(1);
-    expect(setupResult.transcribeAudio).toHaveBeenNthCalledWith(1, realpathSync(setupResult.audioPath), expect.objectContaining({
-      dir: expect.stringContaining(".agent-workspaces/transcribe-"),
-    }), "zh", expect.objectContaining({ prompt: expect.stringContaining("阿尔法学院") }));
-    expect(setupResult.transcribeAudio).toHaveBeenNthCalledWith(
+    expect(setupResult.transcribe).toHaveBeenNthCalledWith(
+      1,
+      realpathSync(setupResult.audioPath),
+      "zh",
+      expect.objectContaining({ prompt: expect.stringContaining("阿尔法学院") }),
+    );
+    expect(setupResult.transcribe).toHaveBeenNthCalledWith(
       2,
       realpathSync(dictationWav),
-      expect.any(Object),
       "ja",
       expect.objectContaining({ prompt: expect.stringContaining("阿尔法学院") }),
     );
-    expect(existsSync(setupResult.lastOnDemandWorkspace())).toBe(false);
   });
 
   it("rejects WAVs outside approved roots, including symlink escapes", async () => {
@@ -574,20 +573,14 @@ describe("RecordingPipeline", () => {
     const escapedLink = join(dictationDir, "escaped.wav");
     symlinkSync(outside, escapedLink);
     await expect(pipeline!.transcribeOnDemand({ audioPath: escapedLink })).rejects.toThrow("outside Yulu recordings");
-    expect(setupResult.transcribeAudio).not.toHaveBeenCalled();
+    expect(setupResult.transcribe).not.toHaveBeenCalled();
   });
 
-  it("removes the temporary transcription workspace when Hermes fails", async () => {
+  it("propagates a selected audio service failure without constructing an Agent gateway", async () => {
     const setupResult = setup();
-    let failedWorkspace = "";
-    setupResult.transcribeAudio.mockImplementationOnce(async (_audioPath, workspace) => {
-      failedWorkspace = workspace.dir;
-      writeFileSync(join(workspace.dir, "audio-000.wav"), "sensitive transport audio");
-      throw new Error("Hermes transcription failed");
-    });
+    setupResult.transcribe.mockRejectedValueOnce(new Error("selected audio engine failed"));
 
-    await expect(pipeline!.transcribeOnDemand({ audioPath: setupResult.audioPath })).rejects.toThrow("Hermes transcription failed");
-    expect(failedWorkspace).toBeTruthy();
-    expect(existsSync(failedWorkspace)).toBe(false);
+    await expect(pipeline!.transcribeOnDemand({ audioPath: setupResult.audioPath })).rejects.toThrow("selected audio engine failed");
+    expect(setupResult.gatewayFactory).not.toHaveBeenCalled();
   });
 });

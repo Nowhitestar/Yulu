@@ -73,6 +73,7 @@ type DurableAgentTaskState =
   | "awaiting_agent"
   | "awaiting_policy"
   | "running"
+  | "transcript_committed"
   | "artifacts_committed"
   | "sending"
   | "delivery_reported"
@@ -137,6 +138,22 @@ interface AgentPluginOverview {
   current: AgentPluginState[];
   available: AgentPluginState[];
   all: AgentPluginState[];
+}
+
+interface RecordingAgentStatus {
+  available: boolean;
+  provider: string;
+  reason: string | null;
+  paused: boolean;
+  policyReason: string | null;
+}
+
+interface ConnectorGuide {
+  plugin: AgentPluginId;
+  label: string;
+  agentName: string;
+  manageCommand: string;
+  message: string;
 }
 
 interface MeetingShareTarget {
@@ -269,6 +286,21 @@ const AGENT_ICONS: Record<AgentId, JSX.Element> = {
   openclaw: <Cpu size={14} strokeWidth={1.9} />,
 };
 
+function agentName(id: AgentId): string {
+  if (id === "codex") return "Codex CLI";
+  if (id === "claude") return "Claude Code";
+  if (id === "hermes") return "Hermes";
+  return "OpenClaw";
+}
+
+function audioProviderName(provider: string): string {
+  if (provider === "local" || provider.startsWith("sherpa-onnx")) return "本地转写";
+  if (provider === "xai-oauth:hermes") return "xAI · Hermes OAuth";
+  if (provider === "xai-oauth:openclaw") return "xAI · OpenClaw OAuth";
+  if (provider.startsWith("xai")) return "xAI 云端";
+  return provider || "正在检测";
+}
+
 function formatTime(value: string): string {
   const d = new Date(value);
   if (Number.isNaN(d.valueOf())) return "";
@@ -300,7 +332,7 @@ function nextMeetingAction(task: AgentTask): MeetingNextAction {
 }
 
 function configuredMeetingShareTargets(plugins: AgentPluginOverview): MeetingShareTarget[] {
-  return plugins.current.flatMap((plugin) => {
+  return plugins.all.flatMap((plugin) => {
     if ((plugin.id !== "notion" && plugin.id !== "zulip") || plugin.status !== "configured") return [];
     const destination = plugin.destination?.value?.trim() ?? "";
     if (!plugin.destination?.configured || !destination) return [];
@@ -315,18 +347,15 @@ export function AgentConsole() {
   const floating = location.pathname === "/voice-chat";
   const utils = trpc.useUtils();
   const [mode, setMode] = useState<ConsoleMode>("ask");
-  const [summaryPromptId, setSummaryPromptId] = useState<string | null>(null);
-  const [summaryOpen, setSummaryOpen] = useState(false);
-  const [calendarOpen, setCalendarOpen] = useState(false);
-  const [destinationPlugin, setDestinationPlugin] = useState<AgentPluginState | null>(null);
   const [inspectorOpen, setInspectorOpen] = useState(false);
+  const [agentManagerOpen, setAgentManagerOpen] = useState(false);
+  const [connectorGuide, setConnectorGuide] = useState<ConnectorGuide | null>(null);
   const [detectMessage, setDetectMessage] = useState<string>("点击后重新扫描本机 CLI 路径");
   const [notice, setNotice] = useState<string | null>(null);
   const [sharingStem, setSharingStem] = useState<string | null>(null);
 
   const overview = trpc.agentConsole.overview.useQuery(undefined, { refetchInterval: 5000 });
   const detectAgents = trpc.agentConsole.detectAgents.useQuery(undefined, { enabled: false });
-  const promptsQuery = trpc.prompts.list.useQuery({ category: "summary" });
   const agentTasksQuery = trpc.agentTasks.list.useQuery({ limit: 100 }, { refetchInterval: 5000 });
   const schedulerQuery = trpc.scheduler.overview.useQuery(undefined, { refetchInterval: 15_000 });
 
@@ -334,22 +363,16 @@ export function AgentConsole() {
     onSettled: () => void utils.agentConsole.overview.invalidate(),
   });
   const sendSummary = trpc.recordings.sendSummary.useMutation();
-  const addPlugin = trpc.agentConsole.addPlugin.useMutation({
-    onSettled: () => void utils.agentConsole.overview.invalidate(),
-  });
-  const removePlugin = trpc.agentConsole.removePlugin.useMutation({
-    onSettled: () => void utils.agentConsole.overview.invalidate(),
-  });
   const configurePlugin = trpc.agentConsole.configurePlugin.useMutation({
-    onSuccess: (result) => setNotice(result.message),
-    onSettled: () => void utils.agentConsole.overview.invalidate(),
-  });
-  const setDestination = trpc.agentConsole.setDestination.useMutation({
     onSuccess: (result) => {
-      if (result.ok) setNotice("发送目标已保存，会跟随当前底层 Agent 使用。");
-      else setNotice(result.error ?? "发送目标保存失败");
+      setConnectorGuide({
+        plugin: result.plugin as AgentPluginId,
+        label: result.label,
+        agentName: result.agent ? agentName(result.agent as AgentId) : "当前 Agent",
+        manageCommand: result.manageCommand,
+        message: result.message,
+      });
     },
-    onSettled: () => void utils.agentConsole.overview.invalidate(),
   });
 
   useWsChannel("recordings-changed", () => {
@@ -363,8 +386,14 @@ export function AgentConsole() {
   useWsChannel("recording", () => void utils.agentConsole.overview.invalidate());
 
   const tasks = (overview.data?.tasks as AgentTask[] | undefined) ?? [];
-  const prompts = ((promptsQuery.data as SummaryPrompt[] | undefined) ?? []);
   const plugins = (overview.data?.plugins as AgentPluginOverview | undefined) ?? { agent: null, current: [], available: [], all: [] };
+  const recordingAgent = (overview.data?.recordingAgent as RecordingAgentStatus | undefined) ?? {
+    available: false,
+    provider: "",
+    reason: "正在检测音频引擎",
+    paused: false,
+    policyReason: null,
+  };
   const requestedSessionId = searchParams.get("session");
   const latestAgentTaskByStem = useMemo(() => {
     const latest = new Map<string, DurableAgentTask>();
@@ -375,13 +404,9 @@ export function AgentConsole() {
   }, [agentTasksQuery.data]);
   const meetingShareTargets = useMemo(() => configuredMeetingShareTargets(plugins), [plugins]);
 
-  useEffect(() => {
-    if (!summaryPromptId && prompts.length > 0) setSummaryPromptId(firstAvailablePrompt(prompts));
-  }, [prompts, summaryPromptId]);
-
   const activeAgent = useMemo(() => {
     const agents = (overview.data?.agents as ConsoleAgent[] | undefined) ?? [];
-    return agents.find((agent) => agent.connected) ?? agents.find((agent) => agent.supported) ?? null;
+    return agents.find((agent) => agent.connected) ?? agents.find((agent) => agent.supported && agent.found) ?? null;
   }, [overview.data?.agents]);
 
   const runConfigurePlugin = (plugin: AgentPluginId) => {
@@ -399,17 +424,6 @@ export function AgentConsole() {
     } catch (err) {
       setDetectMessage((err as Error).message || "探测失败");
     }
-  };
-
-  const runSaveDestination = (input:
-    | { channel: "notion"; target: string }
-    | { channel: "zulip"; stream: string; topic: string }
-  ) => {
-    setDestination.mutate(input, {
-      onSuccess: (result) => {
-        if (result.ok) setDestinationPlugin(null);
-      },
-    });
   };
 
   const runMeetingShare = (task: AgentTask, target: MeetingShareTarget) => {
@@ -457,7 +471,7 @@ export function AgentConsole() {
           </button>
           <button type="button" className="agent-inspector-toggle" onClick={() => setInspectorOpen(true)}>
             <ListChecks size={15} strokeWidth={1.9} />
-            能力
+            Agents
           </button>
         </div>}
         {notice && (
@@ -488,56 +502,47 @@ export function AgentConsole() {
       </main>
 
       {!floating && inspectorOpen && <div className="agent-inspector-scrim" aria-hidden="true" onClick={() => setInspectorOpen(false)} />}
-      {!floating && inspectorOpen && <aside className="agent-console-rail agent-console-rail-right open" aria-label="Agent 能力">
+      {!floating && inspectorOpen && <aside className="agent-console-rail agent-console-rail-right open" aria-label="Agents 与 Connectors">
         <div className="agent-rail-drawer-head">
-          <span>Agent 能力</span>
-          <button type="button" onClick={() => setInspectorOpen(false)} aria-label="关闭能力面板"><X size={14} strokeWidth={2} /></button>
+          <span>Agents 与 Connectors</span>
+          <button type="button" onClick={() => setInspectorOpen(false)} aria-label="关闭 Agents 与 Connectors"><X size={16} strokeWidth={2} /></button>
         </div>
-        <VoiceInputPanel />
-        <AgentSelector
+        <AgentRolesPanel
+          activeAgent={activeAgent}
+          recordingAgent={recordingAgent}
+          onChange={() => setAgentManagerOpen(true)}
+        />
+        {agentManagerOpen && <AgentSelector
           agents={(overview.data?.agents as ConsoleAgent[] | undefined) ?? []}
           detecting={detectAgents.isFetching}
           detectMessage={detectMessage}
           onDetect={() => void runDetectAgents()}
-        />
-        <CapabilitiesPanel
+          onConnected={(name) => {
+            setAgentManagerOpen(false);
+            setNotice(`对话 Agent 已切换为 ${name}`);
+          }}
+          onError={setNotice}
+        />}
+        <ConnectorsPanel
           plugins={plugins}
-          prompts={prompts}
-          selectedPromptId={summaryPromptId}
-          onPromptChange={setSummaryPromptId}
-          onOpenSummary={() => setSummaryOpen(true)}
-          onOpenCalendar={() => setCalendarOpen(true)}
-          onAddPlugin={(plugin) => addPlugin.mutate({ plugin })}
-          onRemovePlugin={(plugin) => removePlugin.mutate({ plugin })}
-          onConfigure={runConfigurePlugin}
-          onConfigureDestination={setDestinationPlugin}
-        />
-        <LocalStatus agentTasks={agentTasksQuery.data} onDetails={() => navigate("/health")} />
-      </aside>}
-
-      {calendarOpen && (
-        <CalendarConfigModal
-          plugin={plugins.current.find((plugin) => plugin.id === "calendar")}
           agentName={activeAgent?.name ?? "当前 Agent"}
-          onConfigure={() => runConfigurePlugin("calendar")}
-          onClose={() => setCalendarOpen(false)}
+          configuring={configurePlugin.isPending}
+          onManage={runConfigurePlugin}
         />
-      )}
-      {summaryOpen && (
-        <SummaryConfigModal
-          plugin={plugins.current.find((plugin) => plugin.id === "summary")}
-          prompts={prompts}
-          selectedPromptId={summaryPromptId}
-          onPromptChange={setSummaryPromptId}
-          onClose={() => setSummaryOpen(false)}
-        />
-      )}
-      {destinationPlugin && (
-        <DestinationConfigModal
-          plugin={destinationPlugin}
-          saving={setDestination.isPending}
-          onSave={runSaveDestination}
-          onClose={() => setDestinationPlugin(null)}
+        <button
+          type="button"
+          className="agent-manager-button"
+          onClick={() => setAgentManagerOpen((open) => !open)}
+        >
+          {agentManagerOpen ? "收起 Agent 管理" : "管理 Agents 与 Connectors"}
+        </button>
+      </aside>}
+      {connectorGuide && (
+        <ConnectorGuideModal
+          guide={connectorGuide}
+          detecting={detectAgents.isFetching || overview.isFetching}
+          onDetect={() => void runDetectAgents()}
+          onClose={() => setConnectorGuide(null)}
         />
       )}
     </div>
@@ -712,8 +717,8 @@ function TaskAction({
   if (agentTask && isActiveDurableTask(agentTask)) {
     return <RunningState label={durableTaskLabel(agentTask)} />;
   }
-  if (!agentTask && task.stages.transcribe === "running") return <RunningState label="Hermes 转写中" />;
-  if (!agentTask && task.stages.summarize === "running") return <RunningState label="Hermes 生成摘要中" />;
+  if (!agentTask && task.stages.transcribe === "running") return <RunningState label="Yulu 转写中" />;
+  if (!agentTask && task.stages.summarize === "running") return <RunningState label="摘要 Agent 工作中" />;
   if (!agentTask && task.stages.send === "running") return <RunningState label="正在发送到 Notion" />;
   const nextAction = nextMeetingAction(task);
   if (nextAction === "share") {
@@ -763,21 +768,22 @@ function TaskAction({
 
 function isActiveDurableTask(task: DurableAgentTask): boolean {
   if (task.state === "awaiting_policy" && task.trigger === "automatic") return false;
-  return ["queued", "awaiting_agent", "awaiting_policy", "running", "artifacts_committed", "sending", "delivery_reported", "delivery_unverified"].includes(task.state);
+  return ["queued", "awaiting_agent", "awaiting_policy", "running", "transcript_committed", "artifacts_committed", "sending", "delivery_reported", "delivery_unverified"].includes(task.state);
 }
 
 function durableTaskLabel(task: DurableAgentTask): string {
-  if (task.state === "queued") return "已排队等待 Hermes";
-  if (task.state === "awaiting_agent") return "等待 Hermes";
+  if (task.state === "queued") return "已排队等待处理";
+  if (task.state === "awaiting_agent") return "等待摘要 Agent";
   if (task.state === "awaiting_policy") return "Agent 自动处理已暂停";
-  if (task.state === "failed") return "Hermes 处理失败";
+  if (task.state === "transcript_committed") return "转写已保存，等待摘要 Agent";
+  if (task.state === "failed") return "处理失败";
   if (task.state === "delivery_unverified") return "请核实 Notion 发送结果";
-  if (task.state === "cancelled") return "Hermes 任务已取消";
-  if (task.state === "completed") return task.sendToNotion ? "已发送到 Notion" : "Hermes 已处理";
-  if (task.phase === "transcribing") return "Hermes 转写中";
-  if (task.phase === "summarizing") return "Hermes 生成摘要中";
+  if (task.state === "cancelled") return "任务已取消";
+  if (task.state === "completed") return task.sendToNotion ? "已发送到 Notion" : "已处理";
+  if (task.phase === "transcribing") return "Yulu 转写中";
+  if (task.phase === "summarizing") return "摘要 Agent 工作中";
   if (task.sendToNotion && (task.state === "sending" || task.state === "delivery_reported")) return "正在发送到 Notion";
-  return "Hermes 处理中";
+  return "处理中";
 }
 
 const WAVE_BARS = [12, 18, 24, 16, 22, 14, 20, 13];
@@ -1390,7 +1396,7 @@ function RunTasks({
   const schedulerRecord = asConfigRecord(scheduler);
   const events = Array.isArray(schedulerRecord.events) ? schedulerRecord.events as Array<Record<string, unknown>> : [];
   const meetings = Array.isArray(schedulerRecord.meetings) ? schedulerRecord.meetings as Array<Record<string, unknown>> : [];
-  const waiting = tasks.filter((task) => ["queued", "awaiting_agent", "awaiting_policy"].includes(task.state)).length;
+  const waiting = tasks.filter((task) => ["queued", "awaiting_agent", "awaiting_policy", "transcript_committed"].includes(task.state)).length;
   const running = tasks.filter((task) => ["running", "artifacts_committed", "sending", "delivery_reported"].includes(task.state)).length;
   const failed = tasks.filter((task) => task.state === "failed" || task.state === "delivery_unverified").length;
   return (
@@ -1441,22 +1447,69 @@ function RunTasks({
   );
 }
 
+function AgentRolesPanel({
+  activeAgent,
+  recordingAgent,
+  onChange,
+}: {
+  activeAgent: ConsoleAgent | null;
+  recordingAgent: RecordingAgentStatus;
+  onChange: () => void;
+}) {
+  return (
+    <section className="agent-panel agent-role-panel">
+      <div className="agent-panel-head"><span>Agent 角色</span></div>
+      <div className="agent-role-list">
+        <div className="agent-role-row">
+          <span className="agent-role-icon"><Bot size={17} strokeWidth={1.9} /></span>
+          <span className="agent-role-copy">
+            <strong>对话与手动操作</strong>
+            <em>{activeAgent?.name ?? "未选择 Agent"}</em>
+          </span>
+          <button type="button" className="agent-cap-action" onClick={onChange}>更换</button>
+        </div>
+        <div className="agent-role-row">
+          <span className="agent-role-icon"><Cpu size={17} strokeWidth={1.9} /></span>
+          <span className="agent-role-copy">
+            <strong>实时字幕、转写与听写</strong>
+            <em>{audioProviderName(recordingAgent.provider)}</em>
+          </span>
+          <span
+            className={`agent-role-state ${recordingAgent.available ? "ready" : "unavailable"}`}
+            title={recordingAgent.reason ?? undefined}
+          >
+            <span />已选择 · {recordingAgent.available ? "可用" : "不可用"}
+          </span>
+        </div>
+      </div>
+      <p className="agent-role-note">
+        实时字幕、最终转写和听写由 Yulu 使用所选音频引擎执行；摘要与 Connector 由 Agent 执行
+        {!recordingAgent.available && recordingAgent.reason ? `：${recordingAgent.reason}` : ""}
+      </p>
+    </section>
+  );
+}
+
 function AgentSelector({
   agents,
   detecting,
   detectMessage,
   onDetect,
+  onConnected,
+  onError,
 }: {
   agents: ConsoleAgent[];
   detecting: boolean;
   detectMessage: string;
   onDetect: () => void;
+  onConnected: (name: string) => void;
+  onError: (message: string) => void;
 }) {
   const connect = trpc.agentConsole.connectAgent.useMutation();
   const utils = trpc.useUtils();
   const ordered = agents.length > 0 ? agents : (["codex", "claude", "hermes", "openclaw"] as AgentId[]).map((id) => ({
     id,
-    name: id,
+    name: agentName(id),
     command: id,
     found: false,
     path: "",
@@ -1466,202 +1519,143 @@ function AgentSelector({
     runtimePreview: "",
   }));
   return (
-    <section className="agent-panel">
+    <section className="agent-panel agent-selector-panel">
       <div className="agent-panel-head">
-        <span>底层 Agent</span>
+        <span>选择对话 Agent</span>
         <button type="button" className="agent-link-btn" disabled={detecting} onClick={onDetect}>
-          {detecting ? <Loader2 className="spin" size={13} strokeWidth={2} /> : <Radar size={13} strokeWidth={2} />}
-          {detecting ? "探测中" : "探测"}
+          {detecting ? <Loader2 className="spin" size={13} strokeWidth={2} /> : <RefreshCw size={13} strokeWidth={2} />}
+          {detecting ? "检测中" : "重新检测"}
         </button>
       </div>
       <div className={"agent-detect-state" + (detecting ? " running" : "")}>{detectMessage}</div>
       <div className="agent-selector-list">
-        {ordered.map((agent) => (
-          <button
-            key={agent.id}
-            type="button"
-            className={"agent-selector-row" + (agent.connected ? " active" : "") + (!agent.supported ? " disabled" : "")}
-            disabled={!agent.supported || connect.isPending}
-            onClick={() => {
-              if (!agent.supported) return;
-              connect.mutate({ agent: agent.id }, {
-                onSettled: () => void utils.agentConsole.overview.invalidate(),
-              });
-            }}
-          >
-            <span className="agent-selector-main">
-              {AGENT_ICONS[agent.id]}
-              <span>{agent.name}</span>
-            </span>
-            <span className="agent-selector-state">
-              {agent.connected ? "已连接" : agent.supported ? (agent.found ? "可连接" : "未找到") : "未启用"}
-            </span>
-            {agent.path && <code>{agent.path}</code>}
-          </button>
-        ))}
+        {ordered.map((agent) => {
+          const disabled = agent.connected || !agent.supported || !agent.found || connect.isPending;
+          return (
+            <button
+              key={agent.id}
+              type="button"
+              className={`agent-selector-row${agent.connected ? " active" : ""}${disabled ? " disabled" : ""}`}
+              disabled={disabled}
+              onClick={() => {
+                connect.mutate({ agent: agent.id }, {
+                  onSuccess: (result) => {
+                    if (result.ok) onConnected(agent.name);
+                    else onError(result.error);
+                  },
+                  onError: (error) => onError(error.message),
+                  onSettled: () => void utils.agentConsole.overview.invalidate(),
+                });
+              }}
+            >
+              <span className="agent-selector-main">{AGENT_ICONS[agent.id]}<span>{agent.name}</span></span>
+              <span className="agent-selector-state">
+                {agent.connected ? "当前使用" : agent.found ? "可切换" : "未安装"}
+              </span>
+            </button>
+          );
+        })}
       </div>
     </section>
   );
 }
 
-function CapabilitiesPanel({
+function ConnectorsPanel({
   plugins,
-  prompts,
-  selectedPromptId,
-  onPromptChange,
-  onOpenSummary,
-  onOpenCalendar,
-  onAddPlugin,
-  onRemovePlugin,
-  onConfigure,
-  onConfigureDestination,
+  agentName,
+  configuring,
+  onManage,
 }: {
   plugins: AgentPluginOverview;
-  prompts: SummaryPrompt[];
-  selectedPromptId: string | null;
-  onPromptChange: (id: string) => void;
-  onOpenSummary: () => void;
-  onOpenCalendar: () => void;
-  onAddPlugin: (plugin: AgentPluginId) => void;
-  onRemovePlugin: (plugin: AgentPluginId) => void;
-  onConfigure: (plugin: AgentPluginId) => void;
-  onConfigureDestination: (plugin: AgentPluginState) => void;
+  agentName: string;
+  configuring: boolean;
+  onManage: (plugin: AgentPluginId) => void;
 }) {
-  const current = plugins.current.length > 0 ? plugins.current : plugins.all.filter((plugin) => plugin.id === "summary");
+  const connectors = plugins.all.filter((plugin) => plugin.id !== "summary");
   return (
-    <section className="agent-panel">
-      <div className="agent-panel-head"><span>当前能力</span></div>
-      <div className="agent-cap-list">
-        {current.map((plugin) => plugin.id === "summary" ? (
-          <SummaryCapabilityRow
-            key={plugin.id}
-            plugin={plugin}
-            prompts={prompts}
-            selectedPromptId={selectedPromptId}
-            onPromptChange={onPromptChange}
-            onOpenSummary={onOpenSummary}
-          />
-        ) : (
-          <PluginCapabilityRow
-            key={plugin.id}
-            plugin={plugin}
-            onOpenCalendar={onOpenCalendar}
-            onConfigure={() => onConfigure(plugin.id)}
-            onConfigureDestination={() => onConfigureDestination(plugin)}
-            onRemove={() => onRemovePlugin(plugin.id)}
-          />
-        ))}
+    <section className="agent-panel agent-connectors-panel">
+      <div className="agent-connectors-head">
+        <strong>当前 Agent 的 Connectors</strong>
+        <span>{agentName} 管理授权，Yulu 只读取配置状态</span>
       </div>
-      {plugins.available.length > 0 && (
-        <div className="agent-plugin-add">
-          <div className="agent-plugin-add-title">添加能力</div>
-          {plugins.available.map((plugin) => (
-            <button key={plugin.id} type="button" className="agent-plugin-add-row" onClick={() => onAddPlugin(plugin.id)}>
-              <span>{pluginIcon(plugin.id)}{plugin.label}</span>
-              <em>{plugin.status === "configured" ? "已在 Agent 配好" : plugin.statusLabel}</em>
+      <div className="agent-connector-list">
+        {connectors.map((plugin) => (
+          <div className="agent-connector-row" key={plugin.id}>
+            <span className="agent-connector-icon">{connectorIcon(plugin.id)}</span>
+            <span className="agent-connector-name">{plugin.label}</span>
+            <span className={`agent-connector-status ${plugin.status}`} title={plugin.detail}>
+              <span />{plugin.status === "configured" ? "已配置" : plugin.status === "unsupported" ? "不可用" : "未配置"}
+            </span>
+            <button
+              type="button"
+              className="agent-cap-action"
+              disabled={configuring || plugin.status === "unsupported"}
+              onClick={() => onManage(plugin.id)}
+            >
+              {plugin.status === "configured" ? "管理" : plugin.status === "unsupported" ? "不可用" : "去配置"}
             </button>
-          ))}
-        </div>
-      )}
+          </div>
+        ))}
+        {connectors.length === 0 && <div className="agent-connector-empty">正在读取 Connector 状态…</div>}
+      </div>
+      <div className="agent-connector-privacy">
+        <ShieldCheck size={15} strokeWidth={1.8} />
+        <span>Connector 凭据保存在 Agent 内，不由 Yulu 保存。</span>
+      </div>
     </section>
   );
 }
 
-function SummaryCapabilityRow({
-  plugin,
-  prompts,
-  selectedPromptId,
-  onPromptChange,
-  onOpenSummary,
+function connectorIcon(id: AgentPluginId) {
+  if (id === "calendar") return <Calendar size={16} strokeWidth={1.9} />;
+  if (id === "notion") return <Database size={16} strokeWidth={1.9} />;
+  return <Send size={16} strokeWidth={1.9} />;
+}
+
+function ConnectorGuideModal({
+  guide,
+  detecting,
+  onDetect,
+  onClose,
 }: {
-  plugin: AgentPluginState;
-  prompts: SummaryPrompt[];
-  selectedPromptId: string | null;
-  onPromptChange: (id: string) => void;
-  onOpenSummary: () => void;
+  guide: ConnectorGuide;
+  detecting: boolean;
+  onDetect: () => void;
+  onClose: () => void;
 }) {
-  const selectedPrompt = prompts.find((prompt) => prompt.id === selectedPromptId);
+  const [copied, setCopied] = useState(false);
+  const copyCommand = async () => {
+    if (!guide.manageCommand) return;
+    try {
+      await navigator.clipboard.writeText(guide.manageCommand);
+      setCopied(true);
+    } catch {
+      window.prompt("复制管理命令：", guide.manageCommand);
+    }
+  };
   return (
-    <div className="agent-cap-row stacked">
-      <div className="agent-cap-topline">
-        <span className="agent-cap-title"><FileText size={14} strokeWidth={1.9} />{plugin.label}</span>
-        <CapabilityStatus plugin={plugin} />
-      </div>
-      <div className="agent-cap-destination">
-        <span title={selectedPrompt ? promptLabel(selectedPrompt) : ""}>{selectedPrompt ? promptLabel(selectedPrompt) : "暂无总结模板"}</span>
-        <button type="button" className="agent-cap-action" disabled={prompts.length === 0 || plugin.status !== "configured"} onClick={() => {
-          if (prompts.length > 0 && plugin.status === "configured") onOpenSummary();
-          else onPromptChange(selectedPromptId ?? "");
-        }}>更改</button>
+    <div className="agent-modal-backdrop" onMouseDown={onClose}>
+      <div className="agent-modal" onMouseDown={(event) => event.stopPropagation()} role="dialog" aria-label={`${guide.label} Connector 管理`}>
+        <div className="agent-modal-head">
+          <div>
+            <strong>{connectorIcon(guide.plugin)}在 {guide.agentName} 中管理 {guide.label}</strong>
+            <span>{guide.message}</span>
+          </div>
+          <button type="button" onClick={onClose} aria-label="关闭"><X size={16} strokeWidth={2} /></button>
+        </div>
+        {guide.manageCommand && <code className="agent-connector-command">{guide.manageCommand}</code>}
+        <div className="agent-modal-actions">
+          <button type="button" className="agent-action secondary compact" onClick={() => void copyCommand()} disabled={!guide.manageCommand}>
+            {copied ? <Check size={13} strokeWidth={2} /> : null}{copied ? "已复制" : "复制管理命令"}
+          </button>
+          <button type="button" className="agent-action primary compact" onClick={onDetect} disabled={detecting}>
+            {detecting ? <Loader2 className="spin" size={13} strokeWidth={2} /> : <RefreshCw size={13} strokeWidth={2} />}
+            {detecting ? "检测中" : "重新检测"}
+          </button>
+        </div>
       </div>
     </div>
   );
-}
-
-function PluginCapabilityRow({
-  plugin,
-  onOpenCalendar,
-  onConfigure,
-  onConfigureDestination,
-  onRemove,
-}: {
-  plugin: AgentPluginState;
-  onOpenCalendar: () => void;
-  onConfigure: () => void;
-  onConfigureDestination: () => void;
-  onRemove: () => void;
-}) {
-  const configured = plugin.status === "configured";
-  const isCalendar = plugin.id === "calendar";
-  const isDestination = plugin.id === "notion" || plugin.id === "zulip";
-  const value =
-    isCalendar ? "账户与订阅日历" :
-    isDestination ? plugin.destination?.value || "未选择发送目标" :
-    plugin.detail || plugin.statusLabel;
-  return (
-    <div className="agent-cap-row stacked">
-      <div className="agent-cap-topline">
-        <span className="agent-cap-title">{pluginIcon(plugin.id)}{plugin.label}</span>
-        <span className="agent-cap-actions">
-          <CapabilityStatus plugin={plugin} />
-          {!plugin.core && (
-            <button type="button" className="agent-cap-remove" onClick={onRemove} aria-label={`移除 ${plugin.label}`}>
-              <X size={12} strokeWidth={2} />
-            </button>
-          )}
-        </span>
-      </div>
-      <div className="agent-cap-destination">
-        <span title={value}>{value}</span>
-        <button
-          type="button"
-          className={"agent-cap-action" + (!configured ? " warn" : "")}
-          onClick={() => {
-            if (!configured) onConfigure();
-            else if (isCalendar) onOpenCalendar();
-            else if (isDestination) onConfigureDestination();
-          }}
-          disabled={plugin.status === "unsupported"}
-        >
-          {!configured ? (plugin.status === "unsupported" ? "不可用" : "去配置") : "更改"}
-        </button>
-      </div>
-    </div>
-  );
-}
-
-function CapabilityStatus({ plugin }: { plugin: AgentPluginState }) {
-  return (
-    <span className={"agent-cap-status " + plugin.status} title={plugin.detail}>
-      <span />{plugin.statusLabel}
-    </span>
-  );
-}
-
-function pluginIcon(id: AgentPluginId) {
-  if (id === "calendar") return <Calendar size={14} strokeWidth={1.9} />;
-  if (id === "summary") return <FileText size={14} strokeWidth={1.9} />;
-  return <Send size={14} strokeWidth={1.9} />;
 }
 
 function SummaryConfigModal({

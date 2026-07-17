@@ -100,6 +100,7 @@
 .control-pill[data-status="pending"],
 .control-pill[data-status="queued"],
 .control-pill[data-status="awaiting_agent"],
+.control-pill[data-status="transcript_committed"],
 .control-pill[data-status="artifacts_committed"],
 .control-pill[data-status="sending"],
 .control-pill[data-status="delivery_reported"],

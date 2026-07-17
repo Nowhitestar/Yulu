@@ -219,6 +219,6 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-05-30T15:36:20.387Z
-Stopped at: Planned Phase 8 (08-01-PLAN.md — 1 plan, 1 wave); resume by executing `/gsd-execute-phase 8`
+Last session: 2026-07-17T19:05:00+0800
+Stopped at: Explicit local/xAI audio engines, xAI OAuth reuse, connector/Agent decoupling, and realtime subtitle smoothing are implemented and verified in the installed runtime. Long xAI batch uploads are compressed to 16 kHz mono FLAC before REST STT; full regression passed. Next: merge PR #103 and complete the release-please publication flow.
 Resume file: None

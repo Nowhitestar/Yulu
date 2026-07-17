@@ -22,6 +22,7 @@ const ACTIVE_STATES = new Set([
   "awaiting_agent",
   "awaiting_policy",
   "running",
+  "transcript_committed",
   "artifacts_committed",
   "sending",
   "delivery_reported",

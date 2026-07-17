@@ -11,7 +11,7 @@ afterEach(() => {
 });
 
 function fixture(
-  strategy: "local-hybrid" | "agent-only" | (() => "local-hybrid" | "agent-only") = "local-hybrid",
+  selected: boolean | (() => boolean) = true,
 ) {
   const root = mkdtempSync(join(tmpdir(), "yulu-caption-manager-"));
   roots.push(root);
@@ -43,7 +43,7 @@ function fixture(
   return new LocalCaptionManager({
     scriptDir,
     configDir,
-    strategy: typeof strategy === "function" ? strategy : () => strategy,
+    selected: typeof selected === "function" ? selected : () => selected,
   });
 }
 
@@ -53,7 +53,6 @@ describe("LocalCaptionManager", () => {
     expect(manager.status()).toMatchObject({
       installed: true,
       ready: true,
-      strategy: "local-hybrid",
       operation: "idle",
     });
 
@@ -62,23 +61,23 @@ describe("LocalCaptionManager", () => {
     await manager.close();
   });
 
-  it("keeps the compatibility strategy from starting the local model", async () => {
-    const manager = fixture("agent-only");
-    await expect(manager.start("zh")).rejects.toThrow("未启用");
+  it("does not start the local model when xAI is selected", async () => {
+    const manager = fixture(false);
+    await expect(manager.start("zh")).rejects.toThrow("未选择本地音频引擎");
     await expect(manager.test()).resolves.toMatchObject({ ok: true });
     expect(manager.status().sessionActive).toBe(false);
     await manager.close();
   });
 
-  it("falls back instead of using the Mandarin-English model for Japanese", async () => {
+  it("fails visibly instead of switching engines for unsupported Japanese", async () => {
     const manager = fixture();
     await expect(manager.start("ja")).rejects.toThrow("仅支持中英文");
     expect(manager.status().sessionActive).toBe(false);
     await manager.close();
   });
 
-  it("can install while compatibility mode is selected without treating disabled warmup as a failure", async () => {
-    const manager = fixture("agent-only");
+  it("can install while xAI is selected without warming the unselected local engine", async () => {
+    const manager = fixture(false);
     vi.spyOn(
       manager as unknown as { runInstaller(action: "install" | "uninstall"): Promise<void> },
       "runInstaller",
@@ -86,20 +85,19 @@ describe("LocalCaptionManager", () => {
 
     await expect(manager.install()).resolves.toMatchObject({
       installed: true,
-      strategy: "agent-only",
       operation: "idle",
     });
     await manager.close();
   });
 
-  it("releases the resident worker when compatibility mode is selected while idle", async () => {
-    let strategy: "local-hybrid" | "agent-only" = "local-hybrid";
-    const manager = fixture(() => strategy);
+  it("releases the resident worker when xAI is selected while idle", async () => {
+    let selected = true;
+    const manager = fixture(() => selected);
     await manager.test();
     expect((manager as unknown as { engine: unknown }).engine).not.toBeNull();
 
-    strategy = "agent-only";
-    await manager.syncStrategy();
+    selected = false;
+    await manager.syncSelection();
 
     expect((manager as unknown as { engine: unknown }).engine).toBeNull();
     await manager.close();

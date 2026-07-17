@@ -1,6 +1,6 @@
 ---
 name: yulu
-description: Control Yulu（语录）, an Agent-native macOS meeting recorder. Use it to start or stop native recording, inspect durable recording tasks, search or read meeting artifacts, and diagnose the local Host/Hermes pipeline.
+description: Control Yulu（语录）, an Agent-native macOS meeting recorder. Use it to start or stop native recording, inspect durable recording tasks, search or read meeting artifacts, and diagnose the local Host, audio-engine, and Agent pipeline.
 version: 2.0.0
 source: ~/.yulu/skills/yulu/SKILL.md
 metadata:
@@ -14,10 +14,11 @@ Yulu 是 macOS 原生会议记录器和可信本地控制面：
 
 - `Yulu.app` 负责 ScreenCaptureKit 系统音频、AVFoundation 麦克风和 macOS 权限；
 - Yulu Host 负责持久化任务、幂等、租约、恢复、产物原子提交和审计；
-- Hermes 负责录音转写、会议纪要和经任务明确授权的 Notion 投递；
+- Yulu 明确选择的本地/xAI 音频引擎负责实时字幕、最终转写和听写，绝不自动回退；
+- Hermes 负责会议纪要和经任务明确授权的 Notion 投递；Hermes/OpenClaw 只可在内存中提供已有 xAI OAuth，不执行 Yulu 音频；
 - Agent Console 选中的通用 Agent 负责交互式对话和它自己的连接器。
 
-Yulu 不再运行自己的语音模型、总结 worker、对话引擎或 connector runtime。不要寻找或恢复旧的 STT daemon、JSON Agent 队列或 Yulu-owned Notion 路径。
+Yulu 只管理受限的本地音频模型，不运行总结 worker、对话引擎或 connector runtime。不要寻找或恢复旧的 STT daemon、JSON Agent 队列或 Yulu-owned Notion 路径。
 
 ## 什么时候用
 
@@ -25,7 +26,7 @@ Yulu 不再运行自己的语音模型、总结 worker、对话引擎或 connect
 
 - 开始、停止或查看会议录音状态；
 - 查找某次历史会议、转录或纪要；
-- 查看录音处理进度，判断失败发生在录音、Hermes、产物提交还是 Notion 投递；
+- 查看录音处理进度，判断失败发生在录音、所选音频引擎、Hermes 纪要、产物提交还是 Notion 投递；
 - 重跑某次录音的 Agent 处理流程；
 - 查看或管理 Yulu 的提示词、术语表和本地搜索；
 - 验证 Yulu Host、MCP、Hermes 或 macOS 录音权限。
@@ -89,7 +90,7 @@ yulu record start "<meeting title>"
 yulu record stop
 ```
 
-停止只代表原生捕获结束。完成录音会提交给 Host，Host 持久化任务后再由 Hermes 转写和总结。不要告诉用户“纪要已完成”，除非关联任务达到 `completed` 且转录、纪要产物都已由 Host 提交。
+停止只代表原生捕获结束。完成录音会提交给 Host，所选音频引擎先生成并提交最终转录，再由 Hermes 生成纪要。不要告诉用户“纪要已完成”，除非关联任务达到 `completed` 且转录、纪要产物都已由 Host 提交。
 
 ### 查看处理进度
 
@@ -98,9 +99,10 @@ yulu record stop
 | 状态 | 含义 |
 |---|---|
 | `queued` | 已持久化，等待领取 |
-| `awaiting_agent` | Hermes 不可用，录音仍安全保存 |
+| `awaiting_agent` | 所选音频引擎或 Hermes 纪要 Agent 不可用，录音仍安全保存 |
 | `running` | 当前租约正在转写或总结 |
-| `artifacts_committed` | 转录和纪要已成对提交 |
+| `transcript_committed` | 最终转录已持久化，纪要仍可等待或重试 |
+| `artifacts_committed` | 转录和纪要均已提交 |
 | `sending` | Host 已授权 Hermes 联系 Notion |
 | `delivery_reported` | Hermes 已报告 Notion 页面 URL 或 ID |
 | `completed` | 所需产物和可选投递审计全部通过 |
@@ -121,13 +123,13 @@ yulu record stop
 
 ### 重跑录音处理
 
-从录音详情页使用统一的 Hermes 重处理动作。不要手工覆盖最终 sidecar、手工插入 SQLite 任务，或恢复旧的独立“转写/总结/发送”命令。重处理会创建新的显式 attempt；自动完成事件本身仍保持幂等。
+从录音详情页分别使用“重新转写”“重新生成纪要”“分享”动作。不要手工覆盖最终 sidecar 或手工插入 SQLite 任务。每个动作都显式、可独立重跑；自动完成事件本身仍保持幂等。
 
 ### Notion 投递
 
 录音任务只有在创建时记录 `sendToNotion=true`，或用户在统一重处理动作中明确选择发送，才允许投递。合法顺序是：
 
-1. Hermes 的音频阶段完成转写，Host 把转录限定在当前任务内；
+1. 用户选择的 Yulu 音频引擎完成转写，Host 先持久化提交转录；
 2. 独立 artifact session 调用 `recording_task_transcript_read`，按任务快照的总结指令生成纪要；
 3. 该 session 调用 `recording_task_summary_stage`，再调用 `recording_artifact_commit`；
 4. 如获授权，Host 启动全新的 delivery session；它先调用 `recording_begin_notion_delivery` 和 `recording_committed_summary_read`；
@@ -149,7 +151,7 @@ yulu record stop
 6. 已授权时必须进入全新的 delivery session；严格走 begin → `recording_committed_summary_read` → Hermes connector → commit 顺序。该 session 不得请求或接触原始转录。
 7. 最后报告简短状态；文字报告不能替代 Host 工具提交。
 
-如果 Hermes 无法完成，保留明确错误供 Host 记录。不要切换到 Yulu 内部模型或另一个通用 Agent 作为隐式 fallback。
+如果 Hermes 无法完成纪要或投递，保留明确错误供 Host 记录。不要切换到另一个通用 Agent 作为隐式 fallback；音频引擎也不得在本地与 xAI 之间自动切换。
 
 ## 本地路径
 
@@ -173,9 +175,10 @@ Host 暂时不可用时，录音完成事件会原子暂存并在恢复后重放
 1. **原生录音**：`recording_status` 或 `yulu status`；检查 `sysReady`、`micReady` 和 socket。
 2. **本地 Host**：`curl -fsS http://127.0.0.1:7777/healthz` 和 `yulu logs ui`。
 3. **持久化任务**：`recording_task_get` 或 `yulu doctor --json` 的 `host_tasks`。
-4. **Hermes**：doctor 中的 Agent capability，以及 Yulu LaunchAgent 能看到的稳定 Hermes PATH。
-5. **产物**：任务必须有两条 Host artifact 记录和两个最终 sidecar。
-6. **Notion**：检查任务 opt-in、delivery record、页面 URL/ID 和稳定标记。
+4. **音频引擎**：本地模型状态，或 xAI OAuth 来源与 xAI STT 错误。
+5. **Hermes**：纪要/投递 Agent capability，以及 Yulu LaunchAgent 能看到的稳定 Hermes PATH。
+6. **产物**：检查独立提交的 transcript artifact 和后续 summary artifact。
+7. **Notion**：检查任务 opt-in、delivery record、页面 URL/ID 和稳定标记。
 
 常用命令：
 
@@ -194,7 +197,7 @@ yulu repair-permissions
 
 - 不读取、复制或展示 MCP token、Host SQLite 内部 lease、Agent 凭据或 connector 凭据。
 - 不把录音或转录贴到聊天里，除非用户明确要求且只使用必要片段。
-- 自动处理会把音频交给 Hermes；是否离开本机取决于 Hermes 的 provider 配置，不要把它描述为无条件本地转写。
+- 选择本地引擎时音频不离开本机；选择 xAI 时 Yulu 直接把音频发送给 xAI，Hermes/OpenClaw 只提供内存中的 OAuth 凭据。
 - Notion 是单任务明确授权的副作用；其它 connector 动作遵循当前通用 Agent 自己的授权模型。
 - 不把 `host.sqlite`、token、task workspace、socket 或 event spool 放到云同步目录。
 
@@ -217,4 +220,4 @@ python3 yulu/scripts/doctor.py --json
 curl -fsS http://127.0.0.1:7777/healthz
 ```
 
-不要仅凭源码测试推断已安装 runtime 已更新。当前架构详情见 `docs/ARCHITECTURE.md`、`docs/operations.md` 和 `yulu/spec/adr/005-agent-native-durable-recording-pipeline.md`。
+不要仅凭源码测试推断已安装 runtime 已更新。当前架构详情见 `docs/ARCHITECTURE.md`、`docs/operations.md`、`yulu/spec/adr/005-agent-native-durable-recording-pipeline.md` 和 `yulu/spec/adr/007-explicit-audio-transcription-engines.md`。

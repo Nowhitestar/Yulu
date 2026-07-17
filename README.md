@@ -14,9 +14,10 @@ the Agents you already use. It records system audio and microphone input without
 a virtual audio device, shows movable realtime captions, turns meetings into
 searchable transcripts and summaries, and lets Agents work across that history.
 
-There is no Yulu account. Recordings and task state stay on your Mac. When Agent
-processing is enabled, Yulu hands audio to Hermes; whether that processing stays
-local or uses a remote provider depends on your Hermes configuration.
+There is no Yulu account. Recordings and task state stay on your Mac. Yulu uses
+the audio engine you explicitly select for realtime captions, final transcription,
+and dictation: local by default, or xAI cloud through OAuth reused from an installed
+Hermes/OpenClaw. Yulu never silently switches between them.
 
 ## What you can do
 
@@ -40,6 +41,12 @@ Agent Console is the default workspace. Start or stop recording, see recent
 meeting work, ask questions across local history, and inspect the selected
 Agent's capabilities without leaving the page.
 
+Open **Manage Agents & Connectors** in Agent Console to select the conversation
+Agent and inspect Notion, Zulip, calendar, and other connector status for that
+Agent. Yulu shows configuration state, copies the Agent's native management
+command, and stores non-secret destination preferences; credentials and OAuth
+remain in the Agent that owns the connector.
+
 <p align="center">
   <img src="assets/demos/recordings-reader.png" alt="Yulu recording library with audio playback and transcript reader" />
 </p>
@@ -53,7 +60,7 @@ synthetic.
 When recording starts, Yulu places pure movie-style subtitles near the bottom
 center of the currently active display.
 
-- Source text is the default. Install the optional local model from Settings → Transcription for low-latency private captions; Hermes still produces the final transcript.
+- Source text is the default. Install the optional local model from Settings → Transcription for private captions and transcription, or explicitly select xAI for cloud speech-to-text. The selected engine handles the whole audio path without automatic switching.
 - Choose a target language and switch between source-only, bilingual, and
   translation-only views while the meeting is live.
 - Drag the six-dot handle to move the caption overlay anywhere on the display.
@@ -71,8 +78,10 @@ center of the currently active display.
 - macOS 13 or later.
 - Apple Silicon (arm64) for official release installs.
 - Python 3.10 or newer.
-- A working Hermes CLI visible to Yulu's LaunchAgents for recording
-  transcription, summaries, and voice input.
+- A working Hermes CLI visible to Yulu's LaunchAgents when you want automatic
+  summaries or authorized connector delivery.
+- The local transcription model (default), or an existing xAI OAuth session in
+  Hermes/OpenClaw when you explicitly select xAI.
 - Optionally, Codex CLI, Claude Code, OpenClaw, Hermes, or a custom command for
   Agent Console conversation.
 
@@ -150,14 +159,12 @@ UI / menu bar / calendar / window detection / CLI / MCP
       + translation                   |
                                       v
                             authenticated local Host
-                                      |
-                            durable task + lease + audit
-                                      |
-                                      v
-                       Hermes transcription and summary
-                                      |
-                                      v
-                   atomic transcript + summary commit
+                         |                         |
+                         v                         v
+             selected Yulu audio engine    durable task + lease
+             local (default) or xAI               |
+                         |                         v
+                         +----> transcript commit -> summary Agent
                                       |
                          optional authorized sharing
 
@@ -168,8 +175,11 @@ The split is intentional:
 
 - **Yulu** owns native capture, permissions, local files, durable task state,
   artifact commits, recovery, and authorization boundaries.
-- **Hermes** owns recording transcription, summary generation, and explicitly
-  authorized Notion delivery.
+- **The selected Yulu audio engine** owns realtime captions, final transcripts,
+  and dictation. Selection is explicit and never falls back automatically.
+- **The recording Agent** owns summary generation and explicitly authorized
+  Notion delivery. Hermes/OpenClaw may supply xAI OAuth credentials but never
+  receive audio on Yulu's xAI path.
 - **The selected general Agent** owns Agent Console conversation and its own
   connectors.
 
@@ -227,8 +237,9 @@ pipeline. Install Yulu first, then add the skill to each Agent you want to use.
 - The Host binds to loopback and protects completion, transcription, and MCP
   requests with a per-install bearer token.
 - Yulu does not store Agent connector credentials.
-- Automatic processing authorizes Yulu to hand audio to Hermes. The Hermes
-  provider configuration determines whether processing is local or remote.
+- Selecting xAI authorizes Yulu to send audio directly to xAI for speech-to-text.
+  Hermes/OpenClaw only supply an existing xAI OAuth credential in memory; they do
+  not run Yulu's audio pipeline. Selecting local keeps speech recognition local.
 - External delivery requires explicit authorization; uncertain side effects are
   not blindly replayed.
 

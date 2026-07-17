@@ -107,7 +107,7 @@ describe("server", () => {
     expect(r.status).toBe(401);
   });
 
-  it("protects Agent transcription endpoints with the Bearer token", async () => {
+  it("protects compatibility audio transcription endpoints with the Bearer token", async () => {
     const configDir = join(env.root, ".config", "yulu");
     writeFileSync(join(configDir, "mcp-token.json"), JSON.stringify({ token: "test-token" }));
     for (const path of ["/api/agent/transcription/warm", "/api/agent/transcribe"]) {
@@ -120,20 +120,20 @@ describe("server", () => {
     }
   });
 
-  it("returns warm and on-demand Hermes transcription results to authenticated callers", async () => {
+  it("returns selected-engine warm and on-demand transcription results to authenticated callers", async () => {
     const configDir = join(env.root, ".config", "yulu");
     const audioPath = join(env.root, "Movies", "Yulu", "Dictation_20260711_130000.wav");
     writeFileSync(join(configDir, "mcp-token.json"), JSON.stringify({ token: "test-token" }));
     writeFileSync(audioPath, Buffer.alloc(44));
     const warmSpy = vi.spyOn(RecordingPipeline.prototype, "warmTranscription")
-      .mockResolvedValueOnce({ provider: "hermes" });
+      .mockResolvedValueOnce({ provider: "local" });
     const transcribeSpy = vi.spyOn(RecordingPipeline.prototype, "transcribeOnDemand")
       .mockResolvedValueOnce({ transcript: "hello dictation", provider: "xai", chunks: 1 });
     const headers = { "Content-Type": "application/json", "Authorization": "Bearer test-token" };
     try {
       const warm = await fetch(`${env.baseUrl}/api/agent/transcription/warm`, { method: "POST", headers });
       expect(warm.status).toBe(200);
-      expect(await warm.json()).toEqual({ ok: true, provider: "hermes" });
+      expect(await warm.json()).toEqual({ ok: true, provider: "local" });
 
       const transcribe = await fetch(`${env.baseUrl}/api/agent/transcribe`, {
         method: "POST",
@@ -208,7 +208,7 @@ describe("server", () => {
     }
   });
 
-  it("rejects out-of-scope transcription paths before contacting the Agent", async () => {
+  it("rejects out-of-scope transcription paths before contacting the audio engine", async () => {
     const configDir = join(env.root, ".config", "yulu");
     writeFileSync(join(configDir, "mcp-token.json"), JSON.stringify({ token: "test-token" }));
     const outside = join(env.root, "outside.wav");
@@ -219,10 +219,10 @@ describe("server", () => {
       body: JSON.stringify({ audioPath: outside }),
     });
     expect(response.status).toBe(400);
-    expect(await response.json()).toMatchObject({ ok: false, error: "invalid_agent_transcription" });
+    expect(await response.json()).toMatchObject({ ok: false, error: "invalid_audio_transcription" });
   });
 
-  it("surfaces unavailable Hermes warm/transcribe requests without falling back", async () => {
+  it("surfaces an unavailable selected audio engine without falling back", async () => {
     const configDir = join(env.root, ".config", "yulu");
     const moviesDir = join(env.root, "Movies", "Yulu");
     writeFileSync(join(configDir, "mcp-token.json"), JSON.stringify({ token: "test-token" }));
@@ -231,13 +231,13 @@ describe("server", () => {
     const headers = { "Content-Type": "application/json", "Authorization": "Bearer test-token" };
 
     const warmSpy = vi.spyOn(RecordingPipeline.prototype, "warmTranscription")
-      .mockRejectedValueOnce(new AgentUnavailableError("Hermes offline"));
+      .mockRejectedValueOnce(new AgentUnavailableError("selected audio engine offline"));
     const transcribeSpy = vi.spyOn(RecordingPipeline.prototype, "transcribeOnDemand")
-      .mockRejectedValueOnce(new AgentUnavailableError("Hermes offline"));
+      .mockRejectedValueOnce(new AgentUnavailableError("selected audio engine offline"));
     try {
       const warm = await fetch(`${env.baseUrl}/api/agent/transcription/warm`, { method: "POST", headers });
       expect(warm.status).toBe(503);
-      expect(await warm.json()).toMatchObject({ ok: false, error: "agent_unavailable" });
+      expect(await warm.json()).toMatchObject({ ok: false, error: "audio_engine_unavailable" });
 
       const transcribe = await fetch(`${env.baseUrl}/api/agent/transcribe`, {
         method: "POST",
@@ -245,7 +245,7 @@ describe("server", () => {
         body: JSON.stringify({ audioPath }),
       });
       expect(transcribe.status).toBe(503);
-      expect(await transcribe.json()).toMatchObject({ ok: false, error: "agent_unavailable" });
+      expect(await transcribe.json()).toMatchObject({ ok: false, error: "audio_engine_unavailable" });
     } finally {
       warmSpy.mockRestore();
       transcribeSpy.mockRestore();

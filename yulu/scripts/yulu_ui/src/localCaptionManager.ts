@@ -10,10 +10,7 @@ import {
   type StreamingCaptionUpdate,
 } from "./localCaptionEngine.js";
 
-export type RealtimeCaptionStrategy = "local-hybrid" | "agent-only";
-
 export interface LocalCaptionStatus {
-  strategy: RealtimeCaptionStrategy;
   installed: boolean;
   ready: boolean;
   provider: string;
@@ -71,7 +68,7 @@ export class LocalCaptionManager implements StreamingCaptionEngine {
   constructor(private readonly options: {
     scriptDir: string;
     configDir: string;
-    strategy: () => RealtimeCaptionStrategy;
+    selected: () => boolean;
   }) {}
 
   get provider(): string {
@@ -84,7 +81,6 @@ export class LocalCaptionManager implements StreamingCaptionEngine {
       configDir: this.options.configDir,
     });
     return {
-      strategy: this.options.strategy(),
       installed: runtime !== null,
       ready: runtime !== null && this.error === null,
       provider: this.provider,
@@ -107,7 +103,7 @@ export class LocalCaptionManager implements StreamingCaptionEngine {
       await this.runInstaller("install");
       this.error = null;
       this.message = "本地实时转录模型已安装";
-      if (this.options.strategy() === "local-hybrid") await this.warm();
+      if (this.options.selected()) await this.warm();
     } catch (error) {
       this.error = (error as Error).message;
       throw error;
@@ -128,7 +124,7 @@ export class LocalCaptionManager implements StreamingCaptionEngine {
       this.engine = null;
       await this.runInstaller("uninstall");
       this.error = null;
-      this.message = "本地模型已移除；实时字幕将使用兼容方案";
+      this.message = "本地模型已移除；重新安装前，本地音频引擎不可用";
     } catch (error) {
       this.error = (error as Error).message;
       throw error;
@@ -160,8 +156,8 @@ export class LocalCaptionManager implements StreamingCaptionEngine {
     }
   }
 
-  async syncStrategy(): Promise<void> {
-    if (this.options.strategy() === "agent-only") {
+  async syncSelection(): Promise<void> {
+    if (!this.options.selected()) {
       if (!this.active) {
         await this.engine?.close();
         this.engine = null;
@@ -176,7 +172,7 @@ export class LocalCaptionManager implements StreamingCaptionEngine {
   }
 
   async warm(): Promise<void> {
-    if (this.options.strategy() !== "local-hybrid") throw new Error("本地双阶段实时转录未启用");
+    if (!this.options.selected()) throw new Error("当前未选择本地音频引擎");
     try {
       await this.ensureEngine().warm();
       this.error = null;
@@ -187,8 +183,8 @@ export class LocalCaptionManager implements StreamingCaptionEngine {
   }
 
   async start(language: "zh" | "en" | "ja" | "auto"): Promise<void> {
-    if (this.options.strategy() !== "local-hybrid") throw new Error("本地双阶段实时转录未启用");
-    if (language === "ja") throw new Error("本地 Paraformer 仅支持中英文；日语使用 Agent 兼容方案");
+    if (!this.options.selected()) throw new Error("当前未选择本地音频引擎");
+    if (language === "ja") throw new Error("本地 Paraformer 仅支持中英文；如需日语，请在设置中明确选择 xAI 云端");
     try {
       await this.ensureEngine().start(language);
       this.error = null;
@@ -217,7 +213,7 @@ export class LocalCaptionManager implements StreamingCaptionEngine {
     }
     finally {
       this.active = false;
-      if (this.options.strategy() === "agent-only") {
+      if (!this.options.selected()) {
         try { await this.engine?.close(); } catch { /* the recording already ended */ }
         this.engine = null;
       }
@@ -228,7 +224,7 @@ export class LocalCaptionManager implements StreamingCaptionEngine {
     try { await this.engine?.abort(); }
     finally {
       this.active = false;
-      if (this.options.strategy() === "agent-only") {
+      if (!this.options.selected()) {
         try { await this.engine?.close(); } catch { /* preserve the abort result */ }
         this.engine = null;
       }

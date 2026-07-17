@@ -65,15 +65,15 @@ describe("configRouter", () => {
     } finally { cleanup(); }
   });
 
-  it("update(realtime_captions.strategy) synchronizes the local model lifecycle", async () => {
+  it("update(transcription.engine) synchronizes the local model lifecycle", async () => {
     const { ctx, cleanup } = makeCtx();
-    const syncStrategy = vi.fn().mockResolvedValue(undefined);
-    ctx.localCaption = { syncStrategy } as never;
+    const syncSelection = vi.fn().mockResolvedValue(undefined);
+    ctx.localCaption = { syncSelection } as never;
     try {
       const caller = createCaller(configRouter, ctx);
-      const result = await caller.update({ key: "realtime_captions.strategy", value: "agent-only" });
+      const result = await caller.update({ key: "transcription.engine", value: "xai" });
       expect(result.daemonsNeedingRestart).toEqual([]);
-      expect(syncStrategy).toHaveBeenCalledOnce();
+      expect(syncSelection).toHaveBeenCalledOnce();
     } finally { cleanup(); }
   });
 

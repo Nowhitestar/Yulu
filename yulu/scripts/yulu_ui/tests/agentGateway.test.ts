@@ -1,21 +1,13 @@
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { delimiter, join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
-  AgentUnavailableError,
-  HermesRecordingGateway,
   auditHermesSessionExport,
   buildHermesNotionDeliveryPrompt,
   buildHermesRecordingPrompt,
   directHermesRecordingCommandProblem,
   hermesRecordingContractProblem,
   hermesRecordingToolsets,
-  hermesServeReadyPort,
-  hermesServeStartFailure,
   hermesWorkflowFailureMessage,
 } from "../src/agentGateway.js";
-import { ArtifactStore } from "../src/artifactStore.js";
 import type { AgentRuntime } from "../src/agentRuntime.js";
 import type { AgentTask } from "../src/hostStore.js";
 
@@ -83,19 +75,6 @@ function knownDeliveryCalls(): Call[] {
 }
 
 describe("Hermes recording Agent gateway", () => {
-  it("accepts current and legacy Hermes serve readiness markers", () => {
-    expect(hermesServeReadyPort("HERMES_BACKEND_READY port=64873")).toBe(64873);
-    expect(hermesServeReadyPort("HERMES_DASHBOARD_READY port=7999")).toBe(7999);
-    expect(hermesServeReadyPort("Hermes backend listening on 127.0.0.1:64873")).toBeNull();
-  });
-
-  it("stops treating repeated Hermes startup failures as retryable after three attempts", () => {
-    expect(hermesServeStartFailure("not ready", 2)).toBeInstanceOf(AgentUnavailableError);
-    const terminal = hermesServeStartFailure("not ready", 3);
-    expect(terminal).not.toBeInstanceOf(AgentUnavailableError);
-    expect(terminal.message).toContain("failed 3 consecutive times");
-  });
-
   it("does not hide an upstream Hermes failure behind its session id", () => {
     expect(hermesWorkflowFailureMessage({
       code: 1,
@@ -154,83 +133,6 @@ describe("Hermes recording Agent gateway", () => {
         ? { code: 2, stdout: "", stderr: "unknown command" }
         : probe(command, args)
     ))).toContain("sessions export");
-  });
-
-  it("keeps health lightweight and shares one sequential async contract probe", async () => {
-    const root = mkdtempSync(join(tmpdir(), "yulu-hermes-contract-"));
-    const originalPath = process.env.PATH;
-    const hermes = join(root, "hermes");
-    const ffmpeg = join(root, "ffmpeg");
-    writeFileSync(hermes, "#!/bin/sh\nexit 99\n");
-    writeFileSync(ffmpeg, "#!/bin/sh\nexit 99\n");
-    chmodSync(hermes, 0o755);
-    chmodSync(ffmpeg, 0o755);
-    process.env.PATH = `${root}${delimiter}${originalPath ?? ""}`;
-    const movies = join(root, "movies");
-    const workspaces = join(root, "workspaces");
-    mkdirSync(movies);
-    const artifacts = new ArtifactStore(movies, workspaces);
-    const pending: Array<{
-      args: readonly string[];
-      resolve: (result: { code: number; stdout: string; stderr: string }) => void;
-    }> = [];
-    const probe = vi.fn((_command: string, args: readonly string[]) => new Promise<{
-      code: number;
-      stdout: string;
-      stderr: string;
-    }>((resolve) => pending.push({ args, resolve })));
-    const gateway = new HermesRecordingGateway({
-      provider: "hermes",
-      label: "Hermes",
-      source: "auto-detected",
-      command: [hermes],
-      cwd: movies,
-      disabledReason: null,
-    }, root, root, artifacts, { servePort: 7999, chunkSec: 300, commandProbe: probe });
-
-    try {
-      expect(gateway.health()).toEqual({ available: true, provider: "hermes", reason: null });
-      expect(probe).not.toHaveBeenCalled();
-
-      const first = gateway.warmTranscription();
-      const second = gateway.warmTranscription();
-      const both = Promise.allSettled([first, second]);
-      const expectedOrder = [
-        "serve --help",
-        "sessions export --help",
-        "config set --help",
-        "--help",
-        "mcp list",
-      ];
-
-      const outputs: Record<string, string> = {
-        "serve --help": "--port --host --skip-build",
-        "sessions export --help": "--session-id output",
-        "config set --help": "key value",
-        "--help": "--toolsets",
-        // Deliberately omit yulu_delivery so warm fails before starting serve.
-        "mcp list": "yulu_artifact http://127.0.0.1:7777/mcp/recording-artifact all enabled",
-      };
-      for (const [index, expected] of expectedOrder.entries()) {
-        await vi.waitFor(() => expect(probe).toHaveBeenCalledTimes(index + 1));
-        const item = pending[index]!;
-        expect(item.args.join(" ")).toBe(expected);
-        item.resolve({ code: 0, stdout: outputs[expected] ?? "", stderr: "" });
-      }
-      const results = await both;
-      for (const result of results) {
-        expect(result.status).toBe("rejected");
-        if (result.status === "rejected") {
-          expect(result.reason).toBeInstanceOf(AgentUnavailableError);
-          expect((result.reason as Error).message).toContain("yulu_delivery");
-        }
-      }
-      expect(probe).toHaveBeenCalledTimes(5);
-    } finally {
-      gateway.close();
-      process.env.PATH = originalPath;
-      rmSync(root, { recursive: true, force: true });
-    }
   });
 
   it("builds capability-only prompts without filesystem paths or resumed transcript context", () => {

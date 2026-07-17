@@ -8,8 +8,9 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 const SCHEMA = [
   { path: "audio.mic_device",         category: "audio",         label: "麦克风设备", type: "select", reload: { kind: "restart", daemons: ["audiodaemon"] } },
   { path: "audio.output_dir",         category: "audio",         label: "录音输出目录", type: "path", reload: { kind: "restart", daemons: ["audiodaemon"] } },
+  { path: "transcription.engine",     category: "transcription", label: "音频引擎",  type: "select", reload: { kind: "none" } },
   { path: "transcription.language",   category: "transcription", label: "语言",      type: "select", reload: { kind: "none" } },
-  { path: "realtime_captions.strategy", category: "transcription", label: "实时字幕方案", type: "select", reload: { kind: "none" } },
+  { path: "transcription.xai_credential_source", category: "transcription", label: "xAI OAuth 来源", type: "select", reload: { kind: "none" } },
   { path: "llm.enabled",              category: "llm",           label: "启用 LLM",  type: "toggle", reload: { kind: "none" } },
   { path: "status_agent.enabled",     category: "general",       label: "菜单栏 Agent", type: "toggle", reload: { kind: "none" } },
   { path: "status_agent.hotkeys",     category: "voice",         label: "语音输入快捷键", type: "text", reload: { kind: "sighup", daemons: ["statusagent"] } },
@@ -37,10 +38,11 @@ vi.mock("../../../web/src/trpc.js", () => {
   const cfg = {
     audio: { mic_device: "BuiltInMic", system_audio_device: ":1", output_dir: "/tmp", silence_threshold: 0.01, silence_duration_sec: 300, backend: "daemon" },
     transcription: {
+      engine: "local",
       language: "auto",
+      xai_credential_source: "auto",
       dictation: { prompt_slug: "dictation-cleanup", translate_prompt_slug: "dictation-translate", target_language: "English" },
     },
-    realtime_captions: { strategy: "local-hybrid" },
     llm: { enabled: false, command: [] },
     status_agent: {
       enabled: false,
@@ -63,6 +65,7 @@ vi.mock("../../../web/src/trpc.js", () => {
     system: { cloud: { detect: { fetch: async () => ({ is_cloud: false, engine: "", reason: "", dataless: false }) } } },
     prompts: { list: { invalidate: () => {} } },
     localCaption: { status: { invalidate: () => {} } },
+    xaiAudio: { status: { invalidate: () => {} } },
   };
   return {
     trpc: {
@@ -117,9 +120,6 @@ vi.mock("../../../web/src/trpc.js", () => {
           }),
         },
       },
-      agentTasks: {
-        transcriptionHealth: { useQuery: () => ({ data: { available: true, provider: "hermes", reason: null }, isPending: false }) },
-      },
       localCaption: {
         status: { useQuery: () => ({ data: {
           installed: false,
@@ -133,6 +133,17 @@ vi.mock("../../../web/src/trpc.js", () => {
         } }) },
         install: { useMutation: noopMutation },
         uninstall: { useMutation: noopMutation },
+        test: { useMutation: noopMutation },
+      },
+      xaiAudio: {
+        status: { useQuery: () => ({ data: {
+          sources: [
+            { source: "hermes", installed: true, oauthSupported: true, connected: false, detail: "需要授权 xAI OAuth" },
+            { source: "openclaw", installed: true, oauthSupported: false, connected: false, detail: "当前 OpenClaw 版本不支持 xAI OAuth" },
+          ],
+          authorization: { source: null, status: "idle", verificationUrl: "", userCode: "", message: "" },
+        }, error: null }) },
+        authorize: { useMutation: noopMutation },
         test: { useMutation: noopMutation },
       },
       llm: { test: { useMutation: noopMutation } },
@@ -339,15 +350,15 @@ describe("Settings category detail content (re-homed widgets)", () => {
     })));
   });
 
-  it("transcription: shows Agent-owned execution and product inputs", () => {
+  it("transcription: shows explicit local/xAI engine selection", () => {
     const { container } = wrap("/settings/transcription");
     const detail = within(container.querySelector(".masterdetail-detail") as HTMLElement);
     // Section <h2> heading is distinct from the detail <h1> title (the category
     // label also renders "转写").
     expect(container.querySelector("h2.settings-section-h")?.textContent).toBe(translate("zh", "settings.transcription.heading"));
-    expect(detail.getByText("Hermes")).toBeInTheDocument();
+    expect(detail.getByText(translate("zh", "settings.transcription.engine.label"))).toBeInTheDocument();
     expect(detail.getByText(translate("zh", "settings.transcription.language.label"))).toBeInTheDocument();
-    expect(detail.getAllByText(/Whisper/).length).toBeGreaterThan(0);
+    expect(detail.getByText(translate("zh", "settings.transcription.xai.title"))).toBeInTheDocument();
     expect(detail.queryByText(/MLX|说话人分离/)).toBeNull();
   });
 

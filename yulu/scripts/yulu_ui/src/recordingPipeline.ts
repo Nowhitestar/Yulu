@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, statSync } from "node:fs";
+import { mkdirSync, realpathSync, rmSync, statSync } from "node:fs";
 import { basename, extname, isAbsolute, join, relative, resolve } from "node:path";
 import type { ConfigManager, YuluConfig } from "./config.js";
 import { resolveHermesAgentRuntime } from "./agentRuntime.js";
@@ -25,8 +25,10 @@ import {
 } from "./glossaryContract.js";
 import {
   normalizeTranscriptionLanguage,
+  type TranscriptionResult,
   type TranscriptionLanguage,
 } from "./realtimeTranscription.js";
+import type { AudioTranscriptionService } from "./audioTranscription.js";
 
 const REC_FILE_RE = /^(.+?)_(\d{8})_(\d{6})\.wav$/;
 const DISPATCH_POLL_MS = 15_000;
@@ -108,6 +110,7 @@ export interface RecordingPipelineOptions {
   pubsub: PubSub<AppChannels>;
   promptDb?: () => unknown;
   vocabDb?: () => unknown;
+  transcription: Pick<AudioTranscriptionService, "provider" | "health" | "warm" | "transcribeFile">;
   gatewayFactory?: (config: YuluConfig) => RecordingAgentGateway;
   pollMs?: number;
 }
@@ -147,34 +150,17 @@ export class RecordingPipeline {
   }
 
   async warmTranscription(): Promise<{ provider: string }> {
-    const gateway = this.requireTranscriptionGateway();
-    await gateway.warmTranscription();
-    return { provider: gateway.provider };
+    await this.options.transcription.warm();
+    return { provider: this.options.transcription.provider };
   }
 
   async transcribeOnDemand(input: OnDemandTranscriptionInput) {
     const audioPath = this.resolveOnDemandAudioPath(input.audioPath);
-    const gateway = this.requireTranscriptionGateway();
-    const workspaceRoot = join(this.options.paths.configDir, "dictation", ".agent-workspaces");
-    mkdirSync(workspaceRoot, { recursive: true, mode: 0o700 });
-    const workspaceDir = mkdtempSync(join(workspaceRoot, "transcribe-"));
-    const workspace = {
-      dir: workspaceDir,
-      transcriptPath: join(workspaceDir, "transcript.txt"),
-      summaryPath: join(workspaceDir, "summary.md"),
-      chunkPattern: join(workspaceDir, "audio-%03d.wav"),
-    };
-    try {
-      const language = normalizeTranscriptionLanguage(
-        input.language ?? this.options.config.read().transcription.language,
-      );
-      return await gateway.transcribeAudio(audioPath, workspace, language, this.glossary());
-    } finally {
-      if (!isInside(workspaceRoot, workspaceDir) || !basename(workspaceDir).startsWith("transcribe-")) {
-        throw new Error("refusing to clean an invalid Agent transcription workspace");
-      }
-      rmSync(workspaceDir, { recursive: true, force: true });
-    }
+    return await this.options.transcription.transcribeFile(
+      audioPath,
+      normalizeTranscriptionLanguage(input.language ?? this.options.config.read().transcription.language),
+      this.glossary(),
+    );
   }
 
   private prepare(input: RecordingCompletionInput): PreparedRecordingTask {
@@ -268,26 +254,16 @@ export class RecordingPipeline {
     if (this.stopped) {
       return {
         available: false,
-        provider: "hermes",
-        reason: "Agent recording pipeline is closed",
+        provider: this.options.transcription.provider,
+        reason: "Yulu audio transcription service is closed",
         paused: false,
         policyReason: null,
       };
     }
     const config = this.options.config.read();
     const policyReason = dispatchPolicyReason(config);
-    const disabledReason = pipelineDisabledReason(config);
-    if (disabledReason) {
-      return {
-        available: false,
-        provider: "hermes",
-        reason: disabledReason,
-        paused: true,
-        policyReason: disabledReason,
-      };
-    }
     return {
-      ...this.resolveGateway(config).health(),
+      ...this.options.transcription.health(),
       paused: policyReason !== null,
       policyReason,
     };
@@ -357,22 +333,6 @@ export class RecordingPipeline {
       // but an idle dispatcher must remain a cheap Host-store operation.
       if (!this.options.store.hasDispatchableTask()) return;
       const gateway = this.resolveGateway(config);
-      const health = gateway.health();
-      if (!health.available) {
-        const waiting = this.options.store.listTasks(500)
-          .find((task) => task.state === "queued" || task.state === "awaiting_agent");
-        if (waiting) {
-          const reason = health.reason ?? "Hermes is unavailable";
-          const awaiting = this.options.store.markAwaitingAgent(waiting.id, reason);
-          if (awaiting.attempt >= MAX_AGENT_ATTEMPTS) {
-            this.options.store.fail(waiting.id, null, `Hermes unavailable after ${MAX_AGENT_ATTEMPTS} checks: ${reason}`);
-            this.publish(waiting, "failed", reason);
-            continue;
-          }
-          this.deferDispatch(awaiting.attempt);
-        }
-        return;
-      }
       const task = this.options.store.claimNext(gateway.provider);
       if (!task || !task.leaseToken) return;
       const canContinue = await this.runTask(gateway, task, task.leaseToken);
@@ -405,8 +365,7 @@ export class RecordingPipeline {
       scriptDir: this.options.paths.scriptDir,
       moviesDir: this.options.paths.moviesDir,
     });
-    const cfg = pipelineConfig(config);
-    const key = JSON.stringify({ provider: runtime.provider, command: runtime.command, port: cfg.hermes_serve_port, chunk: cfg.transcription_chunk_sec });
+    const key = JSON.stringify({ provider: runtime.provider, command: runtime.command });
     if (this.gateway && this.gatewayKey === key) return this.gateway;
     this.gateway?.close();
     this.gatewayKey = key;
@@ -414,21 +373,8 @@ export class RecordingPipeline {
       runtime,
       this.options.paths.configDir,
       this.options.paths.scriptDir,
-      this.options.artifacts,
-      { servePort: cfg.hermes_serve_port, chunkSec: cfg.transcription_chunk_sec },
     );
     return this.gateway;
-  }
-
-  private requireTranscriptionGateway(): RecordingAgentGateway {
-    if (this.stopped) throw new AgentUnavailableError("Agent recording pipeline is closed");
-    const config = this.options.config.read();
-    const disabledReason = pipelineDisabledReason(config);
-    if (disabledReason) throw new AgentUnavailableError(disabledReason);
-    const gateway = this.resolveGateway(config);
-    const health = gateway.health();
-    if (!health.available) throw new AgentUnavailableError(health.reason ?? "Hermes transcription is unavailable");
-    return gateway;
   }
 
   private resolveOnDemandAudioPath(input: string): string {
@@ -463,19 +409,41 @@ export class RecordingPipeline {
       this.publish(task, "transcribing");
       const workspace = this.options.artifacts.workspace(task.id);
       const glossary = this.glossary();
-      // Realtime captions optimize feedback latency; they are intentionally not
-      // the final transcript source. Hermes/Whisper always performs the quality
-      // pass after capture so mutable Paraformer output cannot be promoted into
-      // the durable transcript or summary.
-      const rawTranscription = await gateway.transcribe(task, workspace, glossary);
-      const transcript = glossary
-        ? applyGlossaryContract(rawTranscription.transcript, glossary)
-        : rawTranscription.transcript;
-      const transcription = { ...rawTranscription, transcript };
-      if (transcript !== rawTranscription.transcript) {
+      const existingTranscript = this.options.store.listArtifacts(task.id)
+        .find((artifact) => artifact.kind === "transcript");
+      let transcription: TranscriptionResult;
+      if (existingTranscript) {
+        const transcript = this.options.artifacts.readCommittedTranscript(task, existingTranscript);
         this.options.artifacts.writeStagedTranscript(task.id, transcript);
+        transcription = {
+          transcript,
+          provider: String(existingTranscript.provenance.transcriptionProvider ?? "unknown"),
+          chunks: Number(existingTranscript.provenance.transcriptChunks ?? 1),
+          language: task.transcriptionLanguage,
+        };
+      } else {
+        const rawTranscription = await this.options.transcription.transcribeFile(
+          task.audioPath,
+          task.transcriptionLanguage,
+          glossary,
+        );
+        const transcript = glossary
+          ? applyGlossaryContract(rawTranscription.transcript, glossary)
+          : rawTranscription.transcript;
+        transcription = { ...rawTranscription, transcript };
+        const record = this.options.artifacts.commitTranscript(task, transcript, {
+          transcriptionProvider: transcription.provider,
+          transcriptChunks: transcription.chunks,
+          committedBy: "yulu-host",
+        });
+        this.options.store.recordTranscript(task.id, leaseToken, record);
+        this.options.pubsub.publish("recordings-changed", { reason: "changed" });
       }
-      this.options.store.recordProgress(task.id, leaseToken, "summarizing", `Hermes transcription provider: ${transcription.provider}`);
+      const gatewayHealth = gateway.health();
+      if (!gatewayHealth.available) {
+        throw new AgentUnavailableError(gatewayHealth.reason ?? "Summary Agent is unavailable");
+      }
+      this.options.store.recordProgress(task.id, leaseToken, "summarizing", `Transcription provider: ${transcription.provider}`);
       this.publish(task, "summarizing");
       const current = this.options.store.getTask(task.id)!;
       const workflowInput = {
@@ -542,7 +510,10 @@ export class RecordingPipeline {
           return true;
         }
         if (task.attempt >= MAX_AGENT_ATTEMPTS) {
-          const message = `Hermes unavailable after ${MAX_AGENT_ATTEMPTS} attempts: ${error.message}`;
+          const component = current?.state === "transcript_committed"
+            ? "Summary Agent"
+            : "Selected audio engine";
+          const message = `${component} unavailable after ${MAX_AGENT_ATTEMPTS} attempts: ${error.message}`;
           this.options.store.fail(task.id, leaseToken, message);
           this.publish(task, "failed", message);
           return true;

@@ -14,6 +14,7 @@ export interface CaptionSourceUpdate {
   partial: string;
   stable: StableCaptionSegment[];
   audioMs: number;
+  replaceStable?: boolean;
 }
 
 export interface StreamingCaptionUpdate {

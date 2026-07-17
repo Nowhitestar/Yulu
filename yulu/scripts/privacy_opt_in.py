@@ -24,6 +24,13 @@ def privacy_opt_in_report(config: Mapping[str, Any] | None) -> dict[str, Any]:
     agent_pipeline = _dict(cfg.get("agent_pipeline"))
     llm = _dict(cfg.get("llm"))
     agent = _dict(llm.get("agent"))
+    transcription = _dict(cfg.get("transcription"))
+    transcription_engine = str(transcription.get("engine") or "local").strip().lower()
+    if transcription_engine not in {"local", "xai"}:
+        transcription_engine = "local"
+    xai_credential_source = str(
+        transcription.get("xai_credential_source") or "auto"
+    ).strip().lower()
     conversation_provider = str(agent.get("provider") or "hermes").strip().lower()
     pipeline_enabled = agent_pipeline.get("enabled") is not False
 
@@ -34,10 +41,12 @@ def privacy_opt_in_report(config: Mapping[str, Any] | None) -> dict[str, Any]:
         "schema_version": 1,
         "ok": pipeline_enabled,
         "transcription": {
-            "owner": "agent",
-            "provider": "hermes",
-            "yulu_executor": False,
-            "ok": pipeline_enabled,
+            "owner": "yulu",
+            "provider": transcription_engine,
+            "yulu_executor": True,
+            "cloud_audio_opt_in": transcription_engine == "xai",
+            "credential_source": xai_credential_source if transcription_engine == "xai" else None,
+            "ok": True,
         },
         "conversation": {
             "owner": "agent",

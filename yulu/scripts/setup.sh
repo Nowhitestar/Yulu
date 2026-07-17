@@ -233,9 +233,6 @@ create_config() {
       "timeout_sec": 30
     }
   },
-  "realtime_captions": {
-    "strategy": "local-hybrid"
-  },
   "llm": {
     "enabled": true,
     "command": null,
@@ -247,9 +244,7 @@ create_config() {
     "enabled": true,
     "auto_process_recordings": true,
     "auto_send_notion": false,
-    "notion_destination": "Yulu Meeting",
-    "hermes_serve_port": 0,
-    "transcription_chunk_sec": 1200
+    "notion_destination": "Yulu Meeting"
   },
   "status_agent": {
     "enabled": true

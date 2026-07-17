@@ -5,15 +5,17 @@ import { MemoryRouter } from "react-router";
 
 const update = vi.fn(async () => ({ daemonsNeedingRestart: [], daemonsNeedingSighup: [] }));
 let recordingState = "idle";
-let transcriptionHealth = { available: true, provider: "hermes", reason: null as string | null };
 let localInstalled = false;
 const installLocal = vi.fn();
 const uninstallLocal = vi.fn();
 const testLocal = vi.fn();
+const authorizeXai = vi.fn();
+const testXai = vi.fn();
 
 const schema = [
+  { path: "transcription.engine", category: "transcription", label: "音频引擎", type: "select", reload: { kind: "none" } },
   { path: "transcription.language", category: "transcription", label: "语言", type: "select", reload: { kind: "none" } },
-  { path: "realtime_captions.strategy", category: "transcription", label: "实时字幕方案", type: "select", reload: { kind: "none" } },
+  { path: "transcription.xai_credential_source", category: "transcription", label: "xAI OAuth 来源", type: "select", reload: { kind: "none" } },
 ];
 
 vi.mock("../../web/src/ws.js", () => ({
@@ -24,12 +26,9 @@ vi.mock("../../web/src/ws.js", () => ({
 vi.mock("../../web/src/trpc.js", () => ({
   trpc: {
     config: {
-      get: { useQuery: () => ({ data: { transcription: { language: "auto" }, realtime_captions: { strategy: "local-hybrid" } }, isPending: false }) },
+      get: { useQuery: () => ({ data: { transcription: { engine: "local", language: "auto", xai_credential_source: "auto" } }, isPending: false }) },
       schema: { useQuery: () => ({ data: schema, isPending: false }) },
       update: { useMutation: () => ({ mutateAsync: update }) },
-    },
-    agentTasks: {
-      transcriptionHealth: { useQuery: () => ({ data: transcriptionHealth, isPending: false }) },
     },
     localCaption: {
       status: { useQuery: () => ({ data: {
@@ -46,10 +45,22 @@ vi.mock("../../web/src/trpc.js", () => ({
       uninstall: { useMutation: () => ({ mutate: uninstallLocal, isPending: false, error: null }) },
       test: { useMutation: () => ({ mutate: testLocal, isPending: false, error: null }) },
     },
+    xaiAudio: {
+      status: { useQuery: () => ({ data: {
+        sources: [
+          { source: "hermes", installed: true, oauthSupported: true, connected: false, detail: "需要授权 xAI OAuth" },
+          { source: "openclaw", installed: true, oauthSupported: false, connected: false, detail: "当前 OpenClaw 版本不支持 xAI OAuth" },
+        ],
+        authorization: { source: null, status: "idle", verificationUrl: "", userCode: "", message: "" },
+      }, error: null }) },
+      authorize: { useMutation: () => ({ mutate: authorizeXai, isPending: false, error: null }) },
+      test: { useMutation: () => ({ mutate: testXai, isPending: false, error: null, data: null }) },
+    },
     recording: { state: { useQuery: () => ({ data: { state: recordingState } }) } },
     useUtils: () => ({
       config: { get: { setData: vi.fn(), invalidate: vi.fn() } },
       localCaption: { status: { invalidate: vi.fn() } },
+      xaiAudio: { status: { invalidate: vi.fn() } },
     }),
   },
 }));
@@ -74,22 +85,25 @@ function mount() {
 beforeEach(() => {
   update.mockClear();
   recordingState = "idle";
-  transcriptionHealth = { available: true, provider: "hermes", reason: null };
   localInstalled = false;
   installLocal.mockClear();
   uninstallLocal.mockClear();
   testLocal.mockClear();
+  authorizeXai.mockClear();
+  testXai.mockClear();
   vi.spyOn(window, "confirm").mockReturnValue(true);
 });
 
 describe("TranscriptionSection", () => {
-  it("presents the recommended dual-stage strategy and local model guidance", () => {
+  it("presents one explicit audio engine and both credential-backed choices", () => {
     mount();
-    expect(screen.getByText("Hermes")).toBeInTheDocument();
+    expect(screen.getByText("音频引擎")).toBeInTheDocument();
     expect(screen.getByText("语言")).toBeInTheDocument();
-    expect(screen.getByText("实时字幕方案")).toBeInTheDocument();
-    expect(screen.getByText("本地实时转录模型")).toBeInTheDocument();
+    expect(screen.getByText("xAI OAuth 来源")).toBeInTheDocument();
+    expect(screen.getByText("本地音频引擎")).toBeInTheDocument();
+    expect(screen.getByText("xAI 云端音频引擎")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "安装本地模型" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "授权 xAI" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /管理术语表/ })).toHaveAttribute("href", "/knowledge/glossary");
 
     for (const retired of [/MLX/i, /说话人分离/i, /说话人数/i]) {
@@ -120,7 +134,7 @@ describe("TranscriptionSection", () => {
     await vi.waitFor(() => expect(update).toHaveBeenCalledWith({ key: "transcription.language", value: "zh" }));
   });
 
-  it("keeps language editable while recording because Agent settings need no daemon restart", () => {
+  it("keeps language editable while recording because the selected engine reads it directly", () => {
     recordingState = "recording";
     mount();
     const row = screen.getByText("语言").closest(".row") as HTMLElement;
@@ -128,9 +142,9 @@ describe("TranscriptionSection", () => {
     expect(within(row).queryByText(/录音中不可改/)).toBeNull();
   });
 
-  it("shows the Agent transcription health reason when Hermes is unavailable", () => {
-    transcriptionHealth = { available: false, provider: "hermes", reason: "ffmpeg is required" };
+  it("starts xAI OAuth only through an installed Agent credential wallet", async () => {
     mount();
-    expect(screen.getByText("ffmpeg is required")).toBeInTheDocument();
+    await userEvent.setup().click(screen.getByRole("button", { name: "授权 xAI" }));
+    expect(authorizeXai).toHaveBeenCalledWith({ source: "hermes" });
   });
 });

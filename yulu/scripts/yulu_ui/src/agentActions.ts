@@ -25,6 +25,13 @@ export interface AgentShareSummaryResult extends AgentActionResult {
   };
 }
 
+export class AgentDeliveryFailedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "AgentDeliveryFailedError";
+  }
+}
+
 interface AgentActionBase {
   configDir: string;
   scriptDir: string;
@@ -68,6 +75,10 @@ function parseShareDelivery(output: string, expectedChannel: string): AgentShare
   const destination = String(receipt.destination ?? "").trim();
   const url = String(receipt.url ?? "").trim();
   const id = String(receipt.id ?? "").trim();
+  if (["failed", "error"].includes(status) && channel === expectedChannel) {
+    const detail = String(receipt.error ?? receipt.message ?? "Connector delivery failed").trim();
+    throw new AgentDeliveryFailedError(detail || "Connector delivery failed");
+  }
   if (!["sent", "success"].includes(status) || channel !== expectedChannel || !(destination || url || id)) {
     throw new Error("Agent delivery receipt did not verify the requested channel and destination");
   }
@@ -79,6 +90,7 @@ async function runIsolatedAction(args: AgentActionBase & {
   userMessage: string;
   prompt: string;
   hermesToolsets?: readonly string[];
+  hermesConnector?: string;
 }): Promise<AgentActionResult> {
   requireRuntime(args.runtime);
   const session = createAgentSession(args.configDir, {
@@ -100,6 +112,7 @@ async function runIsolatedAction(args: AgentActionBase & {
     yuluSessionId: session.id,
     configDir: args.configDir,
     hermesToolsets: args.runtime.provider === "hermes" ? args.hermesToolsets : undefined,
+    hermesConnector: args.runtime.provider === "hermes" ? args.hermesConnector : undefined,
   });
   if (result.nativeSessionId) {
     updateAgentSessionNativeSession(args.configDir, session.id, {
@@ -149,6 +162,7 @@ export async function runAgentShareSummary(args: AgentShareSummaryArgs): Promise
     sessionTitle: `分享 · ${args.title} · ${args.channelLabel}`,
     userMessage: `分享会议摘要到 ${args.channelLabel}: ${args.title}`,
     hermesToolsets: [args.channel],
+    hermesConnector: args.channel,
     prompt: [
       `Send the meeting summary to ${args.channelLabel} using the selected Agent's configured connector/toolset.`,
       `Meeting title: ${args.title}`,

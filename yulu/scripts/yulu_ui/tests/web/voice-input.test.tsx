@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 
-let agentAvailable = true;
+let audioAvailable = true;
 let statusAgentRunning = true;
 let pipelinePaused = false;
 let pipelineDisabled = false;
@@ -38,11 +38,9 @@ vi.mock("../../web/src/trpc.js", () => ({
     agentTasks: {
       transcriptionHealth: { useQuery: () => ({
         data: {
-          available: agentAvailable && !pipelineDisabled,
-          provider: "hermes",
-          reason: pipelineDisabled
-            ? "Agent recording pipeline is disabled by policy"
-            : agentAvailable ? null : "ffmpeg is required",
+          available: audioAvailable,
+          provider: "local",
+          reason: audioAvailable ? null : "selected audio engine is unavailable",
           paused: pipelinePaused || pipelineDisabled,
           policyReason: pipelineDisabled
             ? "Agent recording pipeline is disabled by policy"
@@ -61,20 +59,20 @@ import { VoiceInput } from "../../web/src/routes/voice-input.js";
 import { translate } from "../../web/src/i18n/LanguageProvider.js";
 
 beforeEach(() => {
-  agentAvailable = true;
+  audioAvailable = true;
   statusAgentRunning = true;
   pipelinePaused = false;
   pipelineDisabled = false;
 });
 
 describe("VoiceInput readiness", () => {
-  it("is ready only when both StatusAgent and Agent transcription are available", () => {
+  it("is ready when both StatusAgent and the selected audio engine are available", () => {
     render(<VoiceInput />);
     expect(screen.getByText(translate("zh", "voiceInput.status.ready"))).toBeInTheDocument();
   });
 
-  it("does not report ready when Hermes or ffmpeg is unavailable", () => {
-    agentAvailable = false;
+  it("does not report ready when the selected audio engine is unavailable", () => {
+    audioAvailable = false;
     render(<VoiceInput />);
     expect(screen.getByText(translate("zh", "voiceInput.status.check"))).toBeInTheDocument();
     expect(screen.queryByText(translate("zh", "voiceInput.status.ready"))).toBeNull();
@@ -86,10 +84,9 @@ describe("VoiceInput readiness", () => {
     expect(screen.getByText(translate("zh", "voiceInput.status.ready"))).toBeInTheDocument();
   });
 
-  it("blocks on-demand dictation when the whole Agent pipeline is disabled", () => {
+  it("keeps dictation ready when the summary pipeline is disabled", () => {
     pipelineDisabled = true;
     render(<VoiceInput />);
-    expect(screen.getByText(translate("zh", "voiceInput.status.check"))).toBeInTheDocument();
-    expect(screen.queryByText(translate("zh", "voiceInput.status.ready"))).toBeNull();
+    expect(screen.getByText(translate("zh", "voiceInput.status.ready"))).toBeInTheDocument();
   });
 });
