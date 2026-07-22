@@ -420,6 +420,82 @@ describe("recordings router", () => {
     },
   );
 
+  it("surfaces xAI long-request expiry as a retryable transcription failure", async () => {
+    const stem = "TeamSync_20260102_090000";
+    const error = "Selected audio engine unavailable after 3 attempts: xAI transcription failed (500): Auth context expired.";
+    writeFileSync(join(mvDir, `${stem}.wav`), wavWithDuration(1));
+    const ctx = mkCtx({ moviesDir: mvDir });
+    ctx.host = {
+      latestForRecording: vi.fn(() => ({
+        id: "expired-xai-task",
+        state: "failed",
+        phase: "failed",
+        sendToNotion: false,
+        error,
+      })),
+      getNotionDelivery: vi.fn(() => null),
+    } as unknown as AppContext["host"];
+
+    const caller = createCaller(recordingsRouter, ctx);
+    const detail = await caller.get({ stem });
+    const row = (await caller.list({}))[0];
+
+    expect(detail).toMatchObject({
+      status: "transcription_failed",
+      statusError: error,
+      agentTask: { id: "expired-xai-task", state: "failed", error },
+    });
+    expect(row).toMatchObject({ status: "transcription_failed", statusError: error });
+  });
+
+  it("clears an older transcription failure after a successful manual transcript", async () => {
+    const stem = "TeamSync_20260102_090000";
+    writeFileSync(join(mvDir, `${stem}.wav`), wavWithDuration(1));
+    writeFileSync(join(mvDir, `${stem}.transcript.txt`), "Recovered transcript\n");
+    const ctx = mkCtx({ moviesDir: mvDir });
+    ctx.host = {
+      latestForRecording: vi.fn(() => ({
+        id: "older-failed-task",
+        state: "failed",
+        phase: "failed",
+        sendToNotion: false,
+        error: "xAI transcription failed (500): Auth context expired.",
+        updatedAt: "2020-01-01T00:00:00.000Z",
+      })),
+      getNotionDelivery: vi.fn(() => null),
+    } as unknown as AppContext["host"];
+
+    const caller = createCaller(recordingsRouter, ctx);
+    const detail = await caller.get({ stem });
+    const row = (await caller.list({}))[0];
+
+    expect(detail).toMatchObject({ status: "idle", statusError: undefined, agentTask: null });
+    expect(row).toMatchObject({ status: "idle", statusError: undefined, hasTranscript: true });
+  });
+
+  it("does not label a Hermes artifact audit error containing transcript_read as transcription failure", async () => {
+    const stem = "TeamSync_20260102_090000";
+    writeFileSync(join(mvDir, `${stem}.wav`), wavWithDuration(1));
+    const ctx = mkCtx({ moviesDir: mvDir });
+    ctx.host = {
+      latestForRecording: vi.fn(() => ({
+        id: "artifact-audit-task",
+        state: "failed",
+        phase: "failed",
+        sendToNotion: false,
+        error: "Hermes session used tools outside the artifact capability set: recording_task_transcript_read",
+      })),
+      getNotionDelivery: vi.fn(() => null),
+    } as unknown as AppContext["host"];
+
+    const caller = createCaller(recordingsRouter, ctx);
+    const detail = await caller.get({ stem });
+    const row = (await caller.list({}))[0];
+
+    expect(detail).toMatchObject({ status: "idle", statusError: undefined, agentTask: null });
+    expect(row).toMatchObject({ status: "idle", statusError: undefined });
+  });
+
   it("marks a non-WAV recording file as recording_failed", async () => {
     const stem = "GoogleChrome_20260611_160424";
     writeFileSync(join(mvDir, `${stem}.wav`), JSON.stringify({ type: "recording_crashed" }));

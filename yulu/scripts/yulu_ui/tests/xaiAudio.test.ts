@@ -11,6 +11,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
   process.env.PATH = originalPath;
   delete process.env.FFMPEG_ARGS_FILE;
+  delete process.env.FFMPEG_SECOND_CHUNK;
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
@@ -80,6 +81,66 @@ describe("XaiAudioClient", () => {
     expect(internal.drain().updates.mic).toMatchObject({ partial: "", stable: [] });
   });
 
+  it("reconnects a half-open realtime stream after voiced audio produces no transcript", async () => {
+    const credentials = { resolve: vi.fn(), cachedStatus: vi.fn() };
+    const client = new XaiAudioClient(credentials as never, () => "hermes");
+    const send = vi.fn();
+    const reconnectRealtime = vi.fn(async () => {});
+    const internal = client as unknown as {
+      socket: { readyState: number; send: typeof send };
+      realtimeUrl: URL;
+      voiceWithoutTranscriptMs: number;
+      reconnectRealtime(): Promise<void>;
+    };
+    internal.socket = { readyState: 1, send };
+    internal.realtimeUrl = new URL("wss://api.x.ai/v1/stt");
+    internal.voiceWithoutTranscriptMs = 11_900;
+    internal.reconnectRealtime = reconnectRealtime;
+    const voicedPcm = Buffer.alloc(3_200);
+    for (let offset = 0; offset < voicedPcm.length; offset += 2) voicedPcm.writeInt16LE(5_000, offset);
+
+    await client.feed({ mic: voicedPcm });
+
+    expect(reconnectRealtime).toHaveBeenCalledOnce();
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("keeps earlier stable text when a replayed realtime session sends an authoritative revision", () => {
+    const credentials = { resolve: vi.fn(), cachedStatus: vi.fn() };
+    const client = new XaiAudioClient(credentials as never, () => "hermes");
+    const internal = client as unknown as {
+      realtimeGeneration: number;
+      sessionBaseMs: number;
+      handleMessage(raw: string): void;
+      drain(): {
+        updates: { mic?: { stable: Array<{ text: string }>; replaceStable?: boolean } };
+      };
+    };
+    internal.handleMessage(JSON.stringify({
+      type: "transcript.done",
+      text: "one two three four five",
+      channel_index: 0,
+      start: 0,
+      duration: 10,
+    }));
+    internal.drain();
+    internal.realtimeGeneration = 1;
+    internal.sessionBaseMs = 5_000;
+
+    internal.handleMessage(JSON.stringify({
+      type: "transcript.done",
+      text: "three four five six seven",
+      channel_index: 0,
+      start: 0,
+      duration: 10,
+    }));
+
+    expect(internal.drain().updates.mic).toMatchObject({
+      replaceStable: true,
+      stable: [{ text: "one two three four five\nsix seven" }],
+    });
+  });
+
   it("compresses meeting audio before REST STT and retries a transient xAI 500", async () => {
     const root = mkdtempSync(join(tmpdir(), "yulu-xai-audio-"));
     roots.push(root);
@@ -91,7 +152,12 @@ describe("XaiAudioClient", () => {
       "#!/bin/sh",
       "printf '%s\\n' \"$@\" > \"$FFMPEG_ARGS_FILE\"",
       "for last do :; done",
-      "printf 'fLaC' > \"$last\"",
+      "first=$(printf '%s' \"$last\" | sed 's/%04d/0000/')",
+      "printf 'fLaC' > \"$first\"",
+      "if [ \"$FFMPEG_SECOND_CHUNK\" = 1 ]; then",
+      "  second=$(printf '%s' \"$last\" | sed 's/%04d/0001/')",
+      "  printf 'fLaC' > \"$second\"",
+      "fi",
     ].join("\n"));
     chmodSync(ffmpegPath, 0o755);
     process.env.PATH = `${root}:${originalPath ?? ""}`;
@@ -130,9 +196,11 @@ describe("XaiAudioClient", () => {
       chunks: 1,
       language: "en",
     });
+    expect(credentials.resolve).toHaveBeenCalledTimes(2);
     expect(credentials.resolve).toHaveBeenCalledWith("hermes");
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(readFileSync(ffmpegArgsPath, "utf8")).toContain("-ac\n1\n-ar\n16000\n-c:a\nflac");
+    expect(readFileSync(ffmpegArgsPath, "utf8")).toContain("-segment_time\n600");
 
     const persistentFailure = vi.fn(async () => new Response("{}", {
       status: 500,
@@ -143,5 +211,43 @@ describe("XaiAudioClient", () => {
       "xAI transcription failed (500): xAI service returned an internal error after retry",
     );
     expect(persistentFailure).toHaveBeenCalledTimes(2);
+  });
+
+  it("transcribes long recordings as separate requests and merges overlap", async () => {
+    const root = mkdtempSync(join(tmpdir(), "yulu-xai-audio-segments-"));
+    roots.push(root);
+    const audioPath = join(root, "long.wav");
+    writeFileSync(audioPath, Buffer.alloc(44));
+    const ffmpegPath = join(root, "ffmpeg");
+    writeFileSync(ffmpegPath, [
+      "#!/bin/sh",
+      "for last do :; done",
+      "first=$(printf '%s' \"$last\" | sed 's/%04d/0000/')",
+      "second=$(printf '%s' \"$last\" | sed 's/%04d/0001/')",
+      "printf 'fLaC' > \"$first\"",
+      "printf 'fLaC' > \"$second\"",
+    ].join("\n"));
+    chmodSync(ffmpegPath, 0o755);
+    process.env.PATH = `${root}:${originalPath ?? ""}`;
+    const credentials = {
+      resolve: vi.fn(async () => ({ accessToken: "fresh-token", source: "hermes" as const })),
+      cachedStatus: vi.fn(),
+    };
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      text: fetchMock.mock.calls.length === 1
+        ? "one two three four five"
+        : "three four five six seven",
+    }), { status: 200, headers: { "content-type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new XaiAudioClient(credentials as never, () => "hermes");
+
+    await expect(client.transcribeFile(audioPath, "en")).resolves.toEqual({
+      transcript: "one two three four five\nsix seven",
+      provider: "xai-oauth:hermes",
+      chunks: 2,
+      language: "en",
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(credentials.resolve).toHaveBeenCalledTimes(2);
   });
 });
