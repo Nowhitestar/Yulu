@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PubSub, type AppChannels } from "../src/pubsub.js";
-import type { StreamingCaptionEngine } from "../src/localCaptionEngine.js";
+import type { StreamingCaptionEngine, StreamingCaptionUpdate } from "../src/localCaptionEngine.js";
 import {
   RealtimeTranscriptionCoordinator,
   assessRealtimeTranscript,
@@ -112,6 +112,158 @@ describe("RealtimeTranscriptionCoordinator", () => {
     await coordinator.close();
   });
 
+  it("shows one live caption when mic and system partials differ only cosmetically", async () => {
+    const root = mkdtempSync(join(tmpdir(), "yulu-realtime-partial-dedupe-"));
+    roots.push(root);
+    const audioPath = join(root, "重复字幕_20260721_140551.wav");
+    writeStereoWav(audioPath, 0.05);
+    const pubsub = new PubSub<AppChannels>();
+    const events: AppChannels["realtime-transcript"][] = [];
+    pubsub.subscribe("realtime-transcript", (event) => events.push(event));
+    const engine: StreamingCaptionEngine = {
+      provider: "test-streaming",
+      warm: vi.fn(async () => {}),
+      start: vi.fn(async () => {}),
+      feed: vi.fn(async () => ({
+        updates: {
+          system: { partial: "嗯。所以这是我们学院的主要课程", stable: [], audioMs: 50 },
+          mic: { partial: "嗯，所以这是我们学院的主要课程", stable: [], audioMs: 50 },
+        },
+      })),
+      finish: vi.fn(async () => ({ updates: {} })),
+      abort: vi.fn(async () => {}),
+      close: vi.fn(async () => {}),
+    };
+    const coordinator = new RealtimeTranscriptionCoordinator({
+      pubsub,
+      streaming: engine,
+      transcribe: vi.fn(async () => ({ transcript: "unused", provider: "test", chunks: 1, language: "zh" as const })),
+      pollMs: 60_000,
+    });
+
+    await coordinator.start({ audioPath, title: "重复字幕", language: "zh" });
+
+    expect(events.at(-1)?.partialText).toBe("嗯。所以这是我们学院的主要课程");
+    await coordinator.close();
+  });
+
+  it("keeps the remaining channel visible when the active partial clears", async () => {
+    const root = mkdtempSync(join(tmpdir(), "yulu-realtime-partial-clear-"));
+    roots.push(root);
+    const audioPath = join(root, "单路字幕_20260722_120000.wav");
+    writeStereoWav(audioPath, 0.05);
+    const pubsub = new PubSub<AppChannels>();
+    const engine: StreamingCaptionEngine = {
+      provider: "test-streaming",
+      warm: vi.fn(async () => {}),
+      start: vi.fn(async () => {}),
+      feed: vi.fn()
+        .mockResolvedValueOnce({
+          updates: {
+            system: { partial: "系统声音", stable: [], audioMs: 50 },
+            mic: { partial: "麦克风仍在说", stable: [], audioMs: 50 },
+          },
+        })
+        .mockResolvedValueOnce({
+          updates: {
+            system: { partial: "", stable: [], audioMs: 100 },
+            mic: { partial: "麦克风仍在说", stable: [], audioMs: 100 },
+          },
+        }),
+      finish: vi.fn(async () => ({ updates: {} })),
+      abort: vi.fn(async () => {}),
+      close: vi.fn(async () => {}),
+    };
+    const coordinator = new RealtimeTranscriptionCoordinator({
+      pubsub,
+      streaming: engine,
+      transcribe: vi.fn(async () => ({ transcript: "unused", provider: "test", chunks: 1, language: "zh" as const })),
+      pollMs: 60_000,
+    });
+
+    await coordinator.start({ audioPath, title: "单路字幕", language: "zh" });
+    writeStereoWav(audioPath, 0.1);
+    const result = await coordinator.stop(audioPath);
+
+    expect(result?.partialText).toBe("麦克风仍在说");
+    await coordinator.close();
+  });
+
+  it("shows the current revision instead of stacking it under the previous stable sentence", async () => {
+    const root = mkdtempSync(join(tmpdir(), "yulu-realtime-revision-display-"));
+    roots.push(root);
+    const audioPath = join(root, "修订显示_20260721_170601.wav");
+    writeStereoWav(audioPath, 0.05);
+    const pubsub = new PubSub<AppChannels>();
+    const events: AppChannels["realtime-transcript"][] = [];
+    pubsub.subscribe("realtime-transcript", (event) => events.push(event));
+    const stable = "然后所有的分配等等，比如说你，比如说我占了我";
+    const partial = "然后所有的分配等等，比如说你，比如说我站在我的角度";
+    const engine: StreamingCaptionEngine = {
+      provider: "test-streaming",
+      warm: vi.fn(async () => {}),
+      start: vi.fn(async () => {}),
+      feed: vi.fn(async () => ({
+        updates: {
+          system: {
+            partial,
+            stable: [{ text: stable, endMs: 40 }],
+            audioMs: 50,
+          },
+        },
+      })),
+      finish: vi.fn(async () => ({ updates: {} })),
+      abort: vi.fn(async () => {}),
+      close: vi.fn(async () => {}),
+    };
+    const coordinator = new RealtimeTranscriptionCoordinator({
+      pubsub,
+      streaming: engine,
+      transcribe: vi.fn(async () => ({ transcript: "unused", provider: "test", chunks: 1, language: "zh" as const })),
+      pollMs: 60_000,
+    });
+
+    await coordinator.start({ audioPath, title: "修订显示", language: "zh" });
+
+    expect(events.at(-1)).toMatchObject({ text: partial, stableText: stable, partialText: partial });
+    await coordinator.close();
+  });
+
+  it("deduplicates long cross-channel stable revisions despite timestamp drift", async () => {
+    const root = mkdtempSync(join(tmpdir(), "yulu-realtime-stable-dedupe-"));
+    roots.push(root);
+    const audioPath = join(root, "稳定字幕_20260721_140551.wav");
+    writeStereoWav(audioPath, 0.05);
+    const shared = "我们继续讨论实时字幕的稳定性，确保系统声音和麦克风收进来的同一句话不会在最终结果里完整重复一遍。";
+    const pubsub = new PubSub<AppChannels>();
+    const engine: StreamingCaptionEngine = {
+      provider: "test-streaming",
+      warm: vi.fn(async () => {}),
+      start: vi.fn(async () => {}),
+      feed: vi.fn(async () => ({
+        updates: {
+          system: { partial: "", stable: [{ text: shared, endMs: 4_000 }], audioMs: 50, replaceStable: true },
+          mic: { partial: "", stable: [{ text: shared.replace("同一句话", "同样一句话"), endMs: 9_000 }], audioMs: 50, replaceStable: true },
+        },
+      })),
+      finish: vi.fn(async () => ({ updates: {} })),
+      abort: vi.fn(async () => {}),
+      close: vi.fn(async () => {}),
+    };
+    const coordinator = new RealtimeTranscriptionCoordinator({
+      pubsub,
+      streaming: engine,
+      transcribe: vi.fn(async () => ({ transcript: "unused", provider: "test", chunks: 1, language: "zh" as const })),
+      pollMs: 60_000,
+    });
+
+    await coordinator.start({ audioPath, title: "稳定字幕", language: "zh" });
+    const result = await coordinator.stop(audioPath);
+
+    expect(result?.stableText).toBe(shared);
+    await coordinator.close();
+  });
+
   it("replaces an xAI stable revision instead of appending the corrected transcript", async () => {
     const root = mkdtempSync(join(tmpdir(), "yulu-realtime-revision-"));
     roots.push(root);
@@ -170,7 +322,9 @@ describe("RealtimeTranscriptionCoordinator", () => {
       provider: "broken-stream",
       warm: vi.fn(async () => {}),
       start: vi.fn(async () => {}),
-      feed: vi.fn(async () => { throw new Error("decoder crashed"); }),
+      feed: vi.fn()
+        .mockRejectedValueOnce(new Error("xAI streaming STT connection closed early"))
+        .mockRejectedValueOnce(new Error("实时字幕引擎尚未启动")),
       finish: vi.fn(async () => ({ updates: {} })),
       abort: vi.fn(async () => {}),
       close: vi.fn(async () => {}),
@@ -185,15 +339,17 @@ describe("RealtimeTranscriptionCoordinator", () => {
     });
 
     await coordinator.start({ audioPath, title: "回退会议", language: "zh" });
+    writeStereoWav(audioPath, 0.1);
     const result = await coordinator.stop(audioPath);
 
     expect(engine.abort).toHaveBeenCalledOnce();
+    expect(engine.feed).toHaveBeenCalledOnce();
     expect(transcribe).not.toHaveBeenCalled();
     expect(result).toMatchObject({
       status: "failed",
       captionMode: "streaming",
       captionProvider: "broken-stream",
-      reason: "realtime transcription failed: decoder crashed",
+      reason: "realtime transcription failed: xAI streaming STT connection closed early",
       text: "",
     });
   });
@@ -374,11 +530,80 @@ describe("RealtimeTranscriptionCoordinator", () => {
     });
     expect(events.at(-1)?.sequence).toBeGreaterThan(0);
 
+    const translationCalls = translate.mock.calls.length;
+    const unchanged = await coordinator.updateOptions({
+      audioPath,
+      targetLanguage: "English",
+      translationEnabled: true,
+    });
+    expect(unchanged).toMatchObject({
+      translationText: "English:我们确认下一步",
+      translationStatus: "ready",
+    });
+    expect(translate).toHaveBeenCalledTimes(translationCalls);
+
     await coordinator.updateOptions({ audioPath, targetLanguage: "日本語", translationEnabled: true });
     await vi.waitFor(() => expect(events.at(-1)?.translationText).toBe("日本語:我们确认下一步"));
     expect(translate).toHaveBeenLastCalledWith("我们确认下一步", "日本語", []);
     await coordinator.updateOptions({ audioPath, targetLanguage: "日本語", translationEnabled: false });
     expect(events.at(-1)).toMatchObject({ translationText: "", translationStatus: "disabled" });
+    await coordinator.stop(audioPath);
+  });
+
+  it("keeps the previous translation visible while the next caption is translating", async () => {
+    const root = mkdtempSync(join(tmpdir(), "yulu-realtime-translation-pending-"));
+    roots.push(root);
+    const audioPath = join(root, "连续翻译_20260722_120000.wav");
+    writeStereoWav(audioPath, 0.05);
+    const pubsub = new PubSub<AppChannels>();
+    const events: AppChannels["realtime-transcript"][] = [];
+    pubsub.subscribe("realtime-transcript", (event) => events.push(event));
+    let resolveNext: ((value: string) => void) | undefined;
+    const nextTranslation = new Promise<string>((resolve) => { resolveNext = resolve; });
+    const translate = vi.fn()
+      .mockResolvedValueOnce("First translation")
+      .mockReturnValueOnce(nextTranslation);
+    const engine: StreamingCaptionEngine = {
+      provider: "test-streaming",
+      warm: vi.fn(async () => {}),
+      start: vi.fn(async () => {}),
+      feed: vi.fn(async () => ({
+        updates: {
+          mic: { partial: "", stable: [{ text: "第一句", endMs: 50 }], audioMs: 50 },
+        },
+      })),
+      finish: vi.fn(async () => ({ updates: {} })),
+      abort: vi.fn(async () => {}),
+      close: vi.fn(async () => {}),
+    };
+    const coordinator = new RealtimeTranscriptionCoordinator({
+      pubsub,
+      streaming: engine,
+      transcribe: vi.fn(async () => ({ transcript: "unused", provider: "test", chunks: 1, language: "zh" as const })),
+      translate,
+      defaultTranslationEnabled: true,
+      pollMs: 60_000,
+    });
+
+    await coordinator.start({ audioPath, title: "连续翻译", language: "zh" });
+    await vi.waitFor(() => expect(events.at(-1)?.translationText).toBe("First translation"));
+    const internal = coordinator as unknown as {
+      active: object;
+      applyStreamingUpdate(session: object, response: StreamingCaptionUpdate): void;
+    };
+    internal.applyStreamingUpdate(internal.active, {
+      updates: {
+        mic: { partial: "", stable: [{ text: "第二句", endMs: 100 }], audioMs: 100 },
+      },
+    });
+
+    expect(events.at(-1)).toMatchObject({
+      sourceText: "第二句",
+      translationText: "First translation",
+      translationStatus: "pending",
+    });
+    resolveNext?.("Second translation");
+    await vi.waitFor(() => expect(events.at(-1)?.translationText).toBe("Second translation"));
     await coordinator.stop(audioPath);
   });
 

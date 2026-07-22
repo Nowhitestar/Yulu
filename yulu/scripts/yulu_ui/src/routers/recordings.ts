@@ -1,6 +1,6 @@
 import { closeSync, existsSync, openSync, readFileSync, readSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
-import { join, resolve, relative, isAbsolute } from "node:path";
+import { dirname, join, resolve, relative, isAbsolute } from "node:path";
 import { z } from "zod";
 import {
   recordingDateFromStem,
@@ -78,9 +78,21 @@ const CURRENT_AGENT_TASK_STATES = new Set([
   "awaiting_policy",
 ]);
 
-function currentAgentTask(stem: string, host?: HostStore): AgentTask | null {
+function isTranscriptionTaskFailure(task: AgentTask): boolean {
+  return task.state === "failed" && /selected audio engine|xAI transcription failed|speech-to-text|STT (?:failed|unavailable)|语音识别失败|转写失败/i
+    .test(task.error ?? "");
+}
+
+function currentAgentTask(stem: string, host?: HostStore, recordingsDir?: string): AgentTask | null {
   const task = host?.latestForRecording(stem) ?? null;
-  return task && CURRENT_AGENT_TASK_STATES.has(task.state) ? task : null;
+  if (task && recordingsDir && isTranscriptionTaskFailure(task)) {
+    const transcriptPath = join(recordingsDir, `${stem}.transcript.txt`);
+    const failedAt = Date.parse(task.updatedAt);
+    if (existsSync(transcriptPath) && Number.isFinite(failedAt) && statSync(transcriptPath).mtimeMs > failedAt) {
+      return null;
+    }
+  }
+  return task && (CURRENT_AGENT_TASK_STATES.has(task.state) || isTranscriptionTaskFailure(task)) ? task : null;
 }
 
 function isoFromStem(date: string, time: string): string {
@@ -194,12 +206,15 @@ function wavHealthError(path: string): string | null {
 }
 
 function recordingStatus(stem: string, wavPath: string, host?: HostStore): RecordingStatus {
-  const task = currentAgentTask(stem, host);
+  const task = currentAgentTask(stem, host, dirname(wavPath));
   if (task) {
     if (task.state === "queued") return { status: "agent_queued" };
     if (task.state === "awaiting_agent") return { status: "awaiting_agent", statusError: task.error ?? undefined };
     if (task.state === "awaiting_policy") return { status: "awaiting_policy", statusError: task.error ?? undefined };
-    if (task.state === "failed") return { status: "agent_failed", statusError: task.error ?? undefined };
+    if (task.state === "failed") return {
+      status: isTranscriptionTaskFailure(task) ? "transcription_failed" : "agent_failed",
+      statusError: task.error ?? undefined,
+    };
     if (task.state === "delivery_unverified") return { status: "delivery_unverified", statusError: task.error ?? undefined };
     if (task.state === "sending" || task.state === "delivery_reported") return { status: "sending_notion" };
     if (task.phase === "transcribing") return { status: "transcribing" };
@@ -705,7 +720,7 @@ export const recordingsRouter = router({
       const title = resolveTitle(dir, input.stem, derivedTitle);
       const tags = readTagsSidecar(join(dir, `${input.stem}.tags.json`));
       const currentStatus = recordingStatus(input.stem, wav, ctx.host);
-      const agentTask = currentAgentTask(input.stem, ctx.host);
+      const agentTask = currentAgentTask(input.stem, ctx.host, dir);
       const notionDelivery = agentTask ? ctx.host?.getNotionDelivery(agentTask.id) ?? null : null;
       const transcript = read(".transcript.txt");
       const raw = read(".raw.transcript.txt");

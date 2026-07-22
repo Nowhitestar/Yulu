@@ -188,22 +188,35 @@ def test_recorder_status_renders_streaming_partials_without_restarting_fade():
     handler = src[handler_start:handler_end]
     assert 'payload["partialText"]' in handler
     assert "liveCaptionSourceText" in handler
-    assert 'let translation = partialSource.isEmpty ? incomingTranslation : ""' in handler
+    assert "liveCaptionTranslationText" in handler
     assert "renderCaptions(animated: false)" in handler
 
 
-def test_recorder_status_reveals_streaming_caption_graphemes_incrementally():
+def test_recorder_status_preserves_each_display_mode_during_streaming_updates():
+    src = (SCRIPTS / "recorder_status.swift").read_text(encoding="utf-8")
+    live_start = src.index("func liveCaptionSourceText")
+    live_end = src.index("func captionSpeechCharacterCount", live_start)
+    live = src[live_start:live_end]
+    render_start = src.index("func renderCaptions")
+    render_end = src.index("func setCaption", render_start)
+    render = src[render_start:render_end]
+
+    assert 'return stableText + "\\n" + partialText' not in live
+    assert 'status == "disabled"' in live
+    assert 'incomingText.isEmpty ? current : incomingText' in live
+    assert '"翻译暂不可用 · \\(sourceText)"' not in render
+
+
+def test_recorder_status_updates_streaming_captions_without_typewriter_delay():
     src = (SCRIPTS / "recorder_status.swift").read_text(encoding="utf-8")
     handler_start = src.index("func handleWebSocketFrame")
     handler_end = src.index("func sourceLanguageTitle", handler_start)
     handler = src[handler_start:handler_end]
 
-    assert "func nextCaptionRevealText" in src
-    assert "queueCaptionReveal(source)" in handler
-    assert "captionRevealTarget" in src
-    assert "captionRevealTimer" in src
-    assert "Array(current)" in src
-    assert "Array(target)" in src
+    assert "setSourceCaption(source)" in handler
+    assert "func nextCaptionRevealText" not in src
+    assert "captionRevealTarget" not in src
+    assert "captionRevealTimer" not in src
 
 
 def test_recorder_status_wraps_long_captions_and_keeps_the_latest_tail():
@@ -213,11 +226,27 @@ def test_recorder_status_wraps_long_captions_and_keeps_the_latest_tail():
     caption_start = src.index("func captionString")
     caption_end = src.index("@objc func targetLanguageChanged", caption_start)
 
-    assert ".byCharWrapping" in src[label_start:label_end]
+    assert ".byWordWrapping" in src[label_start:label_end]
     assert ".byTruncatingTail" not in src[label_start:label_end]
     assert "func visibleCaptionText" in src
+    assert "semanticBreaks" in src
     assert "characters.suffix" in src
-    assert ".byCharWrapping" in src[caption_start:caption_end]
+    assert ".byWordWrapping" in src[caption_start:caption_end]
+
+
+def test_recorder_status_bounds_live_caption_before_appkit_layout():
+    src = (SCRIPTS / "recorder_status.swift").read_text(encoding="utf-8")
+    visible_start = src.index("func visibleCaptionText")
+    visible_end = src.index("func captionString", visible_start)
+    visible = src[visible_start:visible_end]
+    live_start = src.index("func liveCaptionSourceText")
+    live_end = src.index("func captionSpeechCharacterCount", live_start)
+    live = src[live_start:live_end]
+
+    assert "let trimmed = boundedCaptionText(text, maxCharacters: captionLayoutCharacterLimit)" in visible
+    assert visible.index("boundedCaptionText") < visible.index("boundingRect")
+    assert "boundedCaptionText(stable, maxCharacters: stableCaptionCharacterLimit)" in live
+    assert "boundedCaptionText(partial, maxCharacters: partialCaptionCharacterLimit)" in live
 
 
 def test_status_agent_has_dictation_menu_entry():

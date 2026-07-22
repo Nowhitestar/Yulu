@@ -323,6 +323,56 @@ describe("RecordingReader", () => {
     },
   );
 
+  it("guides an xAI auth-context expiry to re-authorize", () => {
+    const error = "Selected audio engine unavailable after 3 attempts: xAI transcription failed (500): Auth context expired.";
+    getMock.mockReturnValue({
+      data: {
+        ...baseData,
+        status: "transcription_failed",
+        statusError: error,
+        agentTask: {
+          id: "expired-xai-task",
+          state: "failed",
+          phase: "failed",
+          trigger: "automatic",
+          sendToNotion: false,
+          error,
+        },
+      },
+      isPending: false,
+    });
+    renderAt(baseData.stem);
+
+    expect(screen.getByTestId("agent-task-status")).toHaveTextContent("xAI 授权失效");
+    expect(screen.getByRole("link", { name: "重新授权 xAI" }))
+      .toHaveAttribute("href", "/settings/transcription");
+  });
+
+  it("guides a real xAI 401 failure to re-authorize", () => {
+    const error = "Selected audio engine unavailable: xAI transcription failed (401): Unauthorized";
+    getMock.mockReturnValue({
+      data: {
+        ...baseData,
+        status: "transcription_failed",
+        statusError: error,
+        agentTask: {
+          id: "unauthorized-xai-task",
+          state: "failed",
+          phase: "failed",
+          trigger: "manual",
+          sendToNotion: false,
+          error,
+        },
+      },
+      isPending: false,
+    });
+    renderAt(baseData.stem);
+
+    expect(screen.getByTestId("agent-task-status")).toHaveTextContent("xAI 授权失效");
+    expect(screen.getByRole("link", { name: "重新授权 xAI" }))
+      .toHaveAttribute("href", "/settings/transcription");
+  });
+
   it("blocks deletion while Notion delivery is unverified", () => {
     getMock.mockReturnValue({
       data: {

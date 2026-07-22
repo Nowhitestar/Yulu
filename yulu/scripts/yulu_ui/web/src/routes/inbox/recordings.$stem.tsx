@@ -1,7 +1,7 @@
 // web/src/routes/inbox/recordings.$stem.tsx
 import { useEffect, useRef, useState } from "react";
 import type { CSSProperties } from "react";
-import { useNavigate, useParams, useSearchParams } from "react-router";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import { Check, ChevronLeft, Code, Copy, FileText, RefreshCw, Sparkles, Pencil, Trash2, Users, GitMerge } from "lucide-react";
 import { trpc } from "../../trpc.js";
@@ -88,6 +88,15 @@ function allowsManualPolicyOverride(task: AgentTaskView | null | undefined): boo
   return task?.state === "awaiting_policy" && task.trigger === "automatic";
 }
 
+function isXaiAuthorizationFailure(error: string): boolean {
+  return /xAI transcription failed\s*\(401\)|Auth context expired|(?:resolve|refresh|解析|刷新).*xAI OAuth|xAI OAuth.*(?:unavailable|不可用)/i
+    .test(error);
+}
+
+function isTranscriptionFailure(error: string): boolean {
+  return /selected audio engine|xAI transcription failed|speech-to-text|STT (?:failed|unavailable)|语音识别失败|转写失败/i.test(error);
+}
+
 function AgentTaskStatus({
   task,
   delivery,
@@ -96,6 +105,26 @@ function AgentTaskStatus({
   delivery?: NotionDeliveryView | null;
 }) {
   const t = useT();
+  if (task?.state === "failed" && isTranscriptionFailure(task.error ?? "")) {
+    const error = task.error ?? "";
+    const authorizationFailure = isXaiAuthorizationFailure(error);
+    const message = authorizationFailure
+      ? t("reader.agentTask.xaiAuthRequired")
+      : isTranscriptionFailure(error)
+        ? t("reader.agentTask.transcriptionFailed")
+        : t("reader.agentTask.failed");
+    return (
+      <span
+        className="reader-agent-task-status failed"
+        data-testid="agent-task-status"
+        data-state={task.state}
+        title={task.error || undefined}
+      >
+        {message}
+        {authorizationFailure && <>{" · "}<Link to="/settings/transcription">{t("reader.agentTask.reauthorizeXai")}</Link></>}
+      </span>
+    );
+  }
   if (!task || !ACTIVE_AGENT_TASK_STATES.has(task.state)) return null;
 
   let key = "reader.agentTask.processing";

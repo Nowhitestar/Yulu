@@ -46,6 +46,7 @@ interface Session {
   offset: number;
   text: string;
   partialBySource: Record<CaptionSource, string>;
+  activePartialSource: CaptionSource | null;
   stableSegments: Array<{ source: CaptionSource; text: string; endMs: number; order: number }>;
   stableOrder: number;
   resamplePhase: number;
@@ -371,7 +372,7 @@ export function sourceSeparated16kPcm(
   };
 }
 
-function hasVoice(pcm: Buffer): boolean {
+export function hasVoice(pcm: Buffer): boolean {
   if (pcm.length < 2) return false;
   let peak = 0;
   let squares = 0;
@@ -464,6 +465,7 @@ export class RealtimeTranscriptionCoordinator {
       offset: format.dataOffset,
       text: "",
       partialBySource: { mic: "", system: "" },
+      activePartialSource: null,
       stableSegments: [],
       stableOrder: 0,
       resamplePhase: 0,
@@ -492,8 +494,10 @@ export class RealtimeTranscriptionCoordinator {
     void this.options.warm?.().catch(() => {});
     this.publish(session, "starting", false);
     await this.queuePump(false);
-    session.timer = setInterval(() => { void this.queuePump(false); }, this.pollMs);
-    session.timer.unref();
+    if (session.error === null) {
+      session.timer = setInterval(() => { void this.queuePump(false); }, this.pollMs);
+      session.timer.unref();
+    }
   }
 
   async updateOptions(input: {
@@ -505,8 +509,13 @@ export class RealtimeTranscriptionCoordinator {
     if (!session || realpathSync(input.audioPath) !== session.audioPath) {
       throw new Error("realtime transcription session is not active");
     }
-    session.translationEnabled = Boolean(this.options.translate && input.translationEnabled);
-    session.targetLanguage = input.targetLanguage.trim() || session.targetLanguage;
+    const translationEnabled = Boolean(this.options.translate && input.translationEnabled);
+    const targetLanguage = input.targetLanguage.trim() || session.targetLanguage;
+    if (translationEnabled === session.translationEnabled && targetLanguage === session.targetLanguage) {
+      return this.message(session, "transcribing", false);
+    }
+    session.translationEnabled = translationEnabled;
+    session.targetLanguage = targetLanguage;
     session.translationText = "";
     session.translationStatus = session.translationEnabled ? "pending" : "disabled";
     session.translationGeneration += 1;
@@ -524,7 +533,7 @@ export class RealtimeTranscriptionCoordinator {
     if (session.timer) clearInterval(session.timer);
     session.timer = null;
     if (session.pump) await session.pump;
-    await this.queuePump(true);
+    if (session.error === null) await this.queuePump(true);
     if (session.mode === "streaming" && session.error === null) {
       try {
         this.applyStreamingUpdate(session, await this.options.streaming!.finish());
@@ -561,14 +570,16 @@ export class RealtimeTranscriptionCoordinator {
 
   private async queuePump(force: boolean): Promise<void> {
     const session = this.active;
-    if (!session) return;
+    if (!session || session.error !== null) return;
     if (session.pump) {
       await session.pump;
       if (!force) return;
     }
     session.pump = this.pump(session, force)
       .catch((error) => {
-        session.error = (error as Error).message;
+        if (session.error === null) session.error = (error as Error).message;
+        if (session.timer) clearInterval(session.timer);
+        session.timer = null;
         this.publish(session, "failed", false, session.error);
       })
       .finally(() => { session.pump = null; });
@@ -610,10 +621,13 @@ export class RealtimeTranscriptionCoordinator {
     const previousDisplay = this.displayText(session);
     const previousStable = session.text;
     const accepted: string[] = [];
+    const changedPartials: CaptionSource[] = [];
     for (const source of ["system", "mic"] as const) {
       const update = response.updates[source];
       if (!update) continue;
-      session.partialBySource[source] = cleanTranscriptText(update.partial);
+      const partial = cleanTranscriptText(update.partial);
+      if (partial !== session.partialBySource[source]) changedPartials.push(source);
+      session.partialBySource[source] = partial;
       if (update.replaceStable) {
         session.stableSegments = session.stableSegments.filter((segment) => segment.source !== source);
       }
@@ -629,7 +643,10 @@ export class RealtimeTranscriptionCoordinator {
         };
         const duplicate = session.stableSegments.findIndex((existing) =>
           existing.source !== source &&
-          Math.abs(existing.endMs - candidate.endMs) <= 1_500 &&
+          (Math.abs(existing.endMs - candidate.endMs) <= 1_500 || (
+            update.replaceStable === true &&
+            Math.min(captionKey(existing.text).length, captionKey(candidate.text).length) >= 40
+          )) &&
           captionsLikelyDuplicate(existing.text, candidate.text),
         );
         if (duplicate >= 0) {
@@ -644,6 +661,8 @@ export class RealtimeTranscriptionCoordinator {
         accepted.push(text);
       }
     }
+    if (changedPartials.length === 1) session.activePartialSource = changedPartials[0]!;
+    else if (changedPartials.length > 1) session.activePartialSource = null;
     session.stableSegments.sort((a, b) => a.endMs - b.endMs || a.order - b.order);
     let stableText = "";
     for (const segment of session.stableSegments) {
@@ -658,7 +677,6 @@ export class RealtimeTranscriptionCoordinator {
       session.sourceText = accepted.join("\n");
       session.sourceSegments.push(session.sourceText);
       session.sourceSegments = session.sourceSegments.slice(-3);
-      session.translationText = "";
       session.translationStatus = session.translationEnabled ? "pending" : "disabled";
       session.translationGeneration += 1;
       if (session.translationEnabled) this.queueTranslation(session);
@@ -670,11 +688,20 @@ export class RealtimeTranscriptionCoordinator {
   }
 
   private displayText(session: Session): string {
-    return cleanTranscriptText([
-      session.text,
-      session.partialBySource.system,
-      session.partialBySource.mic,
-    ].filter(Boolean).join("\n"));
+    const partial = this.partialText(session);
+    if (partial) return partial;
+    return session.stableSegments.at(-1)?.text ?? session.text;
+  }
+
+  private partialText(session: Session): string {
+    const system = session.partialBySource.system;
+    const mic = session.partialBySource.mic;
+    if (system && mic && captionsLikelyDuplicate(system, mic)) return system;
+    const active = session.activePartialSource
+      ? session.partialBySource[session.activePartialSource]
+      : "";
+    if (active) return active;
+    return cleanTranscriptText([system, mic].filter(Boolean).join("\n"));
   }
 
   private async flushSegments(session: Session, force: boolean): Promise<void> {
@@ -714,7 +741,6 @@ export class RealtimeTranscriptionCoordinator {
           session.sourceSegments = session.sourceSegments.slice(-3);
           session.text = cleanTranscriptText([session.text, sourceText].filter(Boolean).join("\n"));
           atomicWrite(sidecarPath(session.audioPath), session.text + "\n");
-          session.translationText = "";
           session.translationStatus = session.translationEnabled ? "pending" : "disabled";
           session.translationGeneration += 1;
           if (session.translationEnabled) this.queueTranslation(session);
@@ -828,10 +854,7 @@ export class RealtimeTranscriptionCoordinator {
       language: session.language,
       text: this.displayText(session),
       stableText: session.text,
-      partialText: cleanTranscriptText([
-        session.partialBySource.system,
-        session.partialBySource.mic,
-      ].filter(Boolean).join("\n")),
+      partialText: this.partialText(session),
       captionProvider: session.captionProvider,
       captionMode: session.mode,
       coveredMs: session.coveredMs,
