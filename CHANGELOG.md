@@ -4,6 +4,13 @@ All notable changes to Yulu are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.22.2](https://github.com/Nowhitestar/Yulu/compare/v0.22.1...v0.22.2) (2026-07-23)
+
+
+### Bug Fixes
+
+* **transcription:** recover realtime xAI connections ([#107](https://github.com/Nowhitestar/Yulu/issues/107)) ([0a61057](https://github.com/Nowhitestar/Yulu/commit/0a6105773d17884bbcb39d9bdd734ca5c42a64b8))
+
 ## [0.22.1](https://github.com/Nowhitestar/Yulu/compare/v0.22.0...v0.22.1) (2026-07-22)
 
 
