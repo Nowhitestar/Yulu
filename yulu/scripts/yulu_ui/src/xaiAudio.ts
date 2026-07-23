@@ -48,6 +48,8 @@ const XAI_STT_MAX_UPLOAD_BYTES = 500_000_000;
 const XAI_STT_SEGMENT_SEC = 10 * 60;
 const REALTIME_STALL_VOICE_MS = 12_000;
 const REALTIME_REPLAY_MS = 15_000;
+const REALTIME_RECONNECT_MIN_MS = 1_000;
+const REALTIME_RECONNECT_MAX_MS = 5_000;
 const STEREO_PCM_BYTES_PER_MS = 64;
 const execFileAsync = promisify(execFile);
 
@@ -107,6 +109,9 @@ export class XaiAudioClient implements StreamingCaptionEngine {
   private voiceWithoutTranscriptMs = 0;
   private replayChunks: Buffer[] = [];
   private replayBytes = 0;
+  private reconnectNotBeforeMs = 0;
+  private reconnectDelayMs = REALTIME_RECONNECT_MIN_MS;
+  private lastStreamingError: Error | null = null;
 
   constructor(
     private readonly credentials: XaiCredentialManager,
@@ -155,18 +160,29 @@ export class XaiAudioClient implements StreamingCaptionEngine {
     await this.connectRealtimeWithRetry(url);
   }
 
-  private async connectRealtimeWithRetry(url: URL): Promise<void> {
+  private async connectRealtimeWithRetry(url: URL): Promise<boolean> {
+    if (Date.now() < this.reconnectNotBeforeMs) return false;
     for (let attempt = 0; attempt < 2; attempt += 1) {
       try {
         const credential = await this.credentials.resolve(this.credentialSource());
         await this.connectRealtime(credential, url);
-        return;
+        this.reconnectNotBeforeMs = 0;
+        this.reconnectDelayMs = REALTIME_RECONNECT_MIN_MS;
+        this.lastStreamingError = null;
+        return true;
       } catch (error) {
         this.disconnectSocket();
-        if (attempt > 0 || !isRetryableRealtimeStartError(error)) throw error;
+        if (!isRetryableRealtimeStartError(error)) throw error;
+        if (attempt > 0) {
+          this.lastStreamingError = error instanceof Error ? error : new Error(String(error));
+          this.reconnectNotBeforeMs = Date.now() + this.reconnectDelayMs;
+          this.reconnectDelayMs = Math.min(REALTIME_RECONNECT_MAX_MS, this.reconnectDelayMs * 2);
+          return false;
+        }
         await new Promise<void>((resolve) => setTimeout(resolve, 200));
       }
     }
+    return false;
   }
 
   private async connectRealtime(credential: XaiCredential, url: URL): Promise<void> {
@@ -221,7 +237,10 @@ export class XaiAudioClient implements StreamingCaptionEngine {
 
   async finish(): Promise<StreamingCaptionUpdate> {
     const socket = this.socket;
-    if (!socket) return { updates: {} };
+    if (!socket) {
+      if (this.lastStreamingError) throw this.lastStreamingError;
+      return { updates: {} };
+    }
     if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "audio.done" }));
     try {
       await withTimeout(this.done!, 30_000, "xAI streaming STT finish timed out");
@@ -242,6 +261,9 @@ export class XaiAudioClient implements StreamingCaptionEngine {
     this.realtimeUrl = null;
     this.replayChunks = [];
     this.replayBytes = 0;
+    this.reconnectNotBeforeMs = 0;
+    this.reconnectDelayMs = REALTIME_RECONNECT_MIN_MS;
+    this.lastStreamingError = null;
   }
 
   async close(): Promise<void> {
@@ -465,6 +487,7 @@ export class XaiAudioClient implements StreamingCaptionEngine {
 
   private async reconnectRealtime(): Promise<void> {
     if (!this.realtimeUrl) throw new Error("xAI streaming STT session is not configured");
+    if (Date.now() < this.reconnectNotBeforeMs) return;
     const replay = Buffer.concat(this.replayChunks);
     const replayDurationMs = Math.floor(replay.length / STEREO_PCM_BYTES_PER_MS);
     this.disconnectSocket();
@@ -472,7 +495,7 @@ export class XaiAudioClient implements StreamingCaptionEngine {
     this.sessionBaseMs = Math.max(0, Math.max(this.elapsedMs.mic, this.elapsedMs.system) - replayDurationMs);
     this.partial.mic = "";
     this.partial.system = "";
-    await this.connectRealtimeWithRetry(this.realtimeUrl);
+    if (!await this.connectRealtimeWithRetry(this.realtimeUrl)) return;
     if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
       throw new Error("xAI streaming STT reconnect did not open a session");
     }
@@ -487,6 +510,7 @@ export class XaiAudioClient implements StreamingCaptionEngine {
   }
 
   private fail(error: Error): void {
+    this.lastStreamingError = error;
     this.readyReject?.(error);
     this.doneReject?.(error);
     this.disconnectSocket();

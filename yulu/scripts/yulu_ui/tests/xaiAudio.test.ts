@@ -105,6 +105,65 @@ describe("XaiAudioClient", () => {
     expect(send).not.toHaveBeenCalled();
   });
 
+  it("keeps a retryable TLS reconnect failure non-terminal and retries after backoff", async () => {
+    const credentials = {
+      resolve: vi.fn(async () => ({ accessToken: "test-oauth-token", source: "hermes" as const })),
+      cachedStatus: vi.fn(),
+    };
+    const client = new XaiAudioClient(credentials as never, () => "hermes");
+    const connectRealtime = vi.fn()
+      .mockRejectedValueOnce(new Error("Client network socket disconnected before secure TLS connection was established"))
+      .mockRejectedValueOnce(new Error("Client network socket disconnected before secure TLS connection was established"))
+      .mockRejectedValueOnce(new Error("Client network socket disconnected before secure TLS connection was established"))
+      .mockRejectedValueOnce(new Error("Client network socket disconnected before secure TLS connection was established"))
+      .mockRejectedValueOnce(new Error("Client network socket disconnected before secure TLS connection was established"))
+      .mockRejectedValueOnce(new Error("Client network socket disconnected before secure TLS connection was established"))
+      .mockRejectedValueOnce(new Error("Client network socket disconnected before secure TLS connection was established"))
+      .mockRejectedValueOnce(new Error("Client network socket disconnected before secure TLS connection was established"))
+      .mockResolvedValueOnce(undefined);
+    const internal = client as unknown as {
+      connectRealtime: typeof connectRealtime;
+      connectRealtimeWithRetry(url: URL): Promise<boolean>;
+      reconnectDelayMs: number;
+    };
+    internal.connectRealtime = connectRealtime;
+    const now = vi.spyOn(Date, "now").mockReturnValue(10_000);
+    const url = new URL("wss://api.x.ai/v1/stt");
+
+    await expect(internal.connectRealtimeWithRetry(url)).resolves.toBe(false);
+    expect(connectRealtime).toHaveBeenCalledTimes(2);
+
+    now.mockReturnValue(10_999);
+    await expect(internal.connectRealtimeWithRetry(url)).resolves.toBe(false);
+    expect(connectRealtime).toHaveBeenCalledTimes(2);
+
+    now.mockReturnValue(11_000);
+    await expect(internal.connectRealtimeWithRetry(url)).resolves.toBe(false);
+    expect(internal.reconnectDelayMs).toBe(4_000);
+
+    now.mockReturnValue(13_000);
+    await expect(internal.connectRealtimeWithRetry(url)).resolves.toBe(false);
+    expect(internal.reconnectDelayMs).toBe(5_000);
+
+    now.mockReturnValue(17_000);
+    await expect(internal.connectRealtimeWithRetry(url)).resolves.toBe(false);
+    expect(internal.reconnectDelayMs).toBe(5_000);
+
+    now.mockReturnValue(22_000);
+    await expect(internal.connectRealtimeWithRetry(url)).resolves.toBe(true);
+    expect(connectRealtime).toHaveBeenCalledTimes(9);
+    expect(internal.reconnectDelayMs).toBe(1_000);
+    now.mockRestore();
+  });
+
+  it("reports the last streaming error when recording finishes disconnected", async () => {
+    const client = new XaiAudioClient({} as never, () => "hermes");
+    const error = new Error("xAI streaming STT connection closed early");
+    (client as unknown as { lastStreamingError: Error }).lastStreamingError = error;
+
+    await expect(client.finish()).rejects.toBe(error);
+  });
+
   it("keeps earlier stable text when a replayed realtime session sends an authoritative revision", () => {
     const credentials = { resolve: vi.fn(), cachedStatus: vi.fn() };
     const client = new XaiAudioClient(credentials as never, () => "hermes");

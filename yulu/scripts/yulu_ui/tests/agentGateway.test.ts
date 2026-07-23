@@ -176,6 +176,20 @@ describe("Hermes recording Agent gateway", () => {
     });
   });
 
+  it("accepts Hermes exports that use double-underscore MCP tool names", () => {
+    const calls = artifactCalls().map((call) => ({
+      ...call,
+      name: call.name.replace("mcp_yulu_artifact_", "mcp__yulu_artifact__"),
+    }));
+    expect(auditHermesSessionExport(exported(calls), task.id, false)).toMatchObject({
+      ok: true,
+      toolNames: artifactCalls().map((call) => call.name),
+      artifactCommit: true,
+      unexpectedToolCalls: [],
+      notionOrderValid: true,
+    });
+  });
+
   it("rejects arbitrary tools in the artifact session", () => {
     const audit = auditHermesSessionExport(exported([
       ...artifactCalls().slice(0, 1),
