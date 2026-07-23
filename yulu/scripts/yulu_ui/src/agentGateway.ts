@@ -312,6 +312,11 @@ function toolContentText(value: unknown): string {
   catch { return ""; }
 }
 
+function canonicalHermesToolName(name: string): string {
+  const match = /^mcp__([A-Za-z0-9_-]+)__([A-Za-z0-9_-]+)$/.exec(name);
+  return match ? `mcp_${match[1]}_${match[2]}` : name;
+}
+
 function exportedToolCalls(value: unknown): ExportedToolCall[] {
   if (!value || typeof value !== "object") return [];
   const rows = Array.isArray(value) ? value : [value];
@@ -336,7 +341,7 @@ function exportedToolCalls(value: unknown): ExportedToolCall[] {
         const id = call && typeof call === "object" ? String((call as { id?: unknown }).id ?? "") : "";
         const fn = call && typeof call === "object" ? (call as { function?: unknown }).function : null;
         if (!fn || typeof fn !== "object") continue;
-        const name = String((fn as { name?: unknown }).name ?? "");
+        const name = canonicalHermesToolName(String((fn as { name?: unknown }).name ?? ""));
         const args = String((fn as { arguments?: unknown }).arguments ?? "");
         if (name) calls.push({ id, name, arguments: args, result: results.get(id) ?? "" });
       }
