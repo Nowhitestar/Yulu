@@ -32,14 +32,27 @@ function selectedEngine(config: ConfigManager): AudioTranscriptionEngine {
   return config.read().transcription.engine;
 }
 
-function trustedRealtimeTranscript(audioPath: string): string | null {
+function trustedRealtimeTranscript(
+  audioPath: string,
+): Pick<TranscriptionResult, "transcript" | "provider" | "chunks"> | null {
   const transcriptPath = audioPath.replace(/\.wav$/i, ".realtime.transcript.txt");
   const coveragePath = audioPath.replace(/\.wav$/i, ".realtime.coverage.json");
   if (!existsSync(transcriptPath) || !existsSync(coveragePath)) return null;
   try {
-    const coverage = JSON.parse(readFileSync(coveragePath, "utf8")) as { trusted?: boolean; final?: boolean };
+    const coverage = JSON.parse(readFileSync(coveragePath, "utf8")) as {
+      trusted?: boolean;
+      finished?: boolean;
+      final?: boolean;
+      provider?: unknown;
+      chunks?: unknown;
+    };
     const transcript = cleanTranscriptText(readFileSync(transcriptPath, "utf8"));
-    return coverage.trusted === true && coverage.final === true && transcript ? transcript : null;
+    if (coverage.trusted !== true || (coverage.finished !== true && coverage.final !== true) || !transcript) return null;
+    const provider = typeof coverage.provider === "string" ? coverage.provider.trim() : "";
+    const chunks = typeof coverage.chunks === "number" && Number.isInteger(coverage.chunks) && coverage.chunks > 0
+      ? coverage.chunks
+      : 1;
+    return { transcript, provider: provider || "realtime", chunks };
   } catch { return null; }
 }
 
@@ -152,14 +165,14 @@ export class AudioTranscriptionService implements StreamingCaptionEngine {
     if (selectedEngine(this.config) === "xai") {
       try { return await this.xai.transcribeFile(audioPath, language, glossary); }
       catch (error) {
+        const realtime = trustedRealtimeTranscript(audioPath);
+        if (realtime?.provider.startsWith("xai")) return { ...realtime, language };
         if (error instanceof AgentUnavailableError) throw error;
         throw new AgentUnavailableError((error as Error).message);
       }
     }
     const status = this.local.status();
     if (!status.ready) throw new AgentUnavailableError(status.error || "本地转写模型尚未安装");
-    const trusted = trustedRealtimeTranscript(audioPath);
-    if (trusted) return { transcript: trusted, provider: this.local.provider, chunks: 1, language };
     return await this.transcribeLocalFile(audioPath, language);
   }
 

@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { AudioTranscriptionService } from "../src/audioTranscription.js";
 
@@ -37,6 +40,32 @@ describe("AudioTranscriptionService", () => {
 
     await expect(service.transcribeFile("/tmp/not-opened.wav", "zh")).rejects.toThrow("xAI offline");
     expect(local.start).not.toHaveBeenCalled();
+  });
+
+  it("uses a finished trusted realtime transcript when final xAI transcription fails", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "yulu-audio-transcription-"));
+    const audioPath = join(dir, "Demo_20260805_140009.wav");
+    writeFileSync(audioPath.replace(/\.wav$/, ".realtime.transcript.txt"), "完整的实时转写");
+    writeFileSync(audioPath.replace(/\.wav$/, ".realtime.coverage.json"), JSON.stringify({
+      provider: "xai-oauth:yulu",
+      chunks: 231,
+      trusted: true,
+      finished: true,
+    }));
+    const { local, xai, service } = setup("xai");
+    xai.transcribeFile.mockRejectedValueOnce(new Error("xAI returned an empty transcript"));
+
+    try {
+      await expect(service.transcribeFile(audioPath, "zh")).resolves.toEqual({
+        transcript: "完整的实时转写",
+        provider: "xai-oauth:yulu",
+        chunks: 231,
+        language: "zh",
+      });
+      expect(local.start).not.toHaveBeenCalled();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("does not fall back to xAI when the selected local engine is unavailable", async () => {
