@@ -78,8 +78,8 @@ Yulu's separate xAI audio OAuth grant is stored in macOS Keychain.
 - Completion-event recovery inbox: `~/.config/yulu/recording-events/`.
 - Local bearer token: `~/.config/yulu/mcp-token.json`; never print it.
 
-Relevant config sections are `audio`, `transcription` (engine, xAI credential
-source, language, and dictation context), `agent_pipeline`, `llm`,
+Relevant config sections are `audio`, `transcription` (engine, language, and
+dictation context), `agent_pipeline`, `llm`,
 `agent_console`, `status_agent`,
 `calendars`, `meeting_detection`, and `ui`.
 
