@@ -52,6 +52,11 @@ describe("settingsRegistry", () => {
     expect(def?.validate.safeParse(300).success).toBe(true);
     expect(def?.validate.safeParse(3601).success).toBe(false);
   });
+  it("per-recording audio settings apply without restarting audiodaemon", () => {
+    for (const path of ["audio.mic_device", "audio.output_dir", "audio.silence_threshold", "audio.silence_duration_sec"]) {
+      expect(reloadFor(path)).toEqual({ kind: "none" });
+    }
+  });
   it("does not register retired Yulu-owned transcription settings", () => {
     for (const path of [
       "transcription.mode",

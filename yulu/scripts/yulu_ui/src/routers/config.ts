@@ -6,6 +6,10 @@ import { SETTINGS, type SettingDef } from "../settingsRegistry.js";
 // schema (which is not JSON-serializable and must never cross the wire).
 export type SettingMeta = Omit<SettingDef, "validate">;
 
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 export const configRouter = router({
   get: publicProcedure.query(({ ctx }) => ctx.config.read()),
 
@@ -35,23 +39,24 @@ export const configRouter = router({
     }))
     .mutation(async ({ ctx, input }) => {
       const result = ctx.config.update(input.key, input.value);
+      const applyErrors: string[] = [];
       if (input.key === "status_agent.enabled" && typeof input.value === "boolean") {
         try {
           if (input.value) await ctx.launchctl.start("com.yulu.statusagent");
           else await ctx.launchctl.stop("com.yulu.statusagent");
-        } catch {
-          // Persist the user's preference even if launchctl cannot act right now
-          // (for example in preview mode, or when the plist is not installed).
+        } catch (error) {
+          applyErrors.push(`statusagent: ${errorMessage(error)}`);
         }
       }
       if (input.key === "transcription.engine") {
         try { await ctx.localCaption?.syncSelection(); }
-        catch { /* keep the saved preference; model status exposes warmup failures */ }
+        catch (error) { applyErrors.push(`transcription: ${errorMessage(error)}`); }
       }
       // 服务端即时下发 SIGHUP(便宜、不打断录音);restart 仍由前端 banner 用户触发
       for (const d of result.daemonsNeedingSighup) {
-        try { await ctx.launchctl.sighup("com.yulu." + d); } catch { /* daemon 可能没起 */ }
+        try { await ctx.launchctl.sighup("com.yulu." + d); }
+        catch (error) { applyErrors.push(`${d}: ${errorMessage(error)}`); }
       }
-      return result;
+      return { ...result, applyErrors };
     }),
 });

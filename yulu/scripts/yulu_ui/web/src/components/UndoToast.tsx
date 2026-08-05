@@ -15,11 +15,13 @@ export interface UndoRequest {
 interface UndoToastApi {
   /** Show the "已保存 · 撤销" toast for a few seconds. */
   showUndo: (req: UndoRequest) => void;
+  /** Show a settings save/apply failure instead of silently dropping it. */
+  showError: (message: string) => void;
 }
 
 // Default no-op so the hook is safe to call without a provider (e.g. in unit
 // tests of a single section). SettingsLayout supplies the real implementation.
-const UndoToastContext = createContext<UndoToastApi>({ showUndo: () => {} });
+const UndoToastContext = createContext<UndoToastApi>({ showUndo: () => {}, showError: () => {} });
 
 export function useUndoToast(): UndoToastApi {
   return useContext(UndoToastContext);
@@ -35,6 +37,7 @@ export function useUndoToast(): UndoToastApi {
 export function UndoToastProvider({ children }: { children: ReactNode }) {
   const t = useT();
   const [req, setReq] = useState<UndoRequest | null>(null);
+  const [error, setError] = useState("");
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const clear = useCallback(() => {
@@ -43,8 +46,16 @@ export function UndoToastProvider({ children }: { children: ReactNode }) {
 
   const showUndo = useCallback((next: UndoRequest) => {
     clear();
+    setError("");
     setReq(next);
     timer.current = setTimeout(() => setReq(null), TOAST_MS);
+  }, [clear]);
+
+  const showError = useCallback((message: string) => {
+    clear();
+    setReq(null);
+    setError(message);
+    timer.current = setTimeout(() => setError(""), TOAST_MS);
   }, [clear]);
 
   useEffect(() => clear, [clear]);
@@ -56,13 +67,18 @@ export function UndoToastProvider({ children }: { children: ReactNode }) {
   };
 
   return (
-    <UndoToastContext.Provider value={{ showUndo }}>
+    <UndoToastContext.Provider value={{ showUndo, showError }}>
       {children}
       {req && (
         <div className="undo-toast" role="status" data-testid="undo-toast">
           <span className="undo-toast-msg">{t("undo.saved")}</span>
           <span className="undo-toast-sep">·</span>
           <button type="button" className="undo-toast-btn" onClick={onUndo}>{t("undo.action")}</button>
+        </div>
+      )}
+      {error && (
+        <div className="undo-toast undo-toast--error" role="alert" data-testid="settings-error-toast">
+          <span>{error}</span>
         </div>
       )}
     </UndoToastContext.Provider>

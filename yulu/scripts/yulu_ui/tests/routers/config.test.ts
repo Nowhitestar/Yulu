@@ -46,12 +46,12 @@ describe("configRouter", () => {
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 
-  it("update() returns restart targets", async () => {
+  it("audio capture settings need no daemon restart", async () => {
     const { ctx, cleanup } = makeCtx();
     try {
       const caller = createCaller(configRouter, ctx);
       const r = await caller.update({ key: "audio.silence_threshold", value: 0.02 });
-      expect(r.daemonsNeedingRestart).toContain("audiodaemon");
+      expect(r.daemonsNeedingRestart).toEqual([]);
     } finally { cleanup(); }
   });
 
@@ -77,6 +77,16 @@ describe("configRouter", () => {
     } finally { cleanup(); }
   });
 
+  it("returns an apply error when transcription model synchronization fails", async () => {
+    const { ctx, cleanup } = makeCtx();
+    ctx.localCaption = { syncSelection: vi.fn().mockRejectedValue(new Error("model warmup failed")) } as never;
+    try {
+      const caller = createCaller(configRouter, ctx);
+      const result = await caller.update({ key: "transcription.engine", value: "xai" });
+      expect(result.applyErrors).toEqual(["transcription: model warmup failed"]);
+    } finally { cleanup(); }
+  });
+
   it("update(connectors.feishu.read_calendar) restarts calendar scheduler services", async () => {
     const { ctx, cleanup } = makeCtx();
     try {
@@ -93,10 +103,22 @@ describe("configRouter", () => {
       const caller = createCaller(configRouter, ctx);
       const off = await caller.update({ key: "status_agent.enabled", value: false });
       expect(off.daemonsNeedingRestart).toEqual([]);
+      expect(off.applyErrors).toEqual([]);
       expect(stop).toHaveBeenCalledWith("com.yulu.statusagent");
       const on = await caller.update({ key: "status_agent.enabled", value: true });
       expect(on.daemonsNeedingRestart).toEqual([]);
       expect(start).toHaveBeenCalledWith("com.yulu.statusagent");
+    } finally { cleanup(); }
+  });
+
+  it("returns an apply error when a saved preference could not reach launchctl", async () => {
+    const { ctx, stop, cleanup } = makeCtx();
+    stop.mockRejectedValueOnce(new Error("service not loaded"));
+    try {
+      const caller = createCaller(configRouter, ctx);
+      const result = await caller.update({ key: "status_agent.enabled", value: false });
+      expect(result.applyErrors).toEqual(["statusagent: service not loaded"]);
+      expect((await caller.get()).status_agent.enabled).toBe(false);
     } finally { cleanup(); }
   });
 
@@ -108,6 +130,16 @@ describe("configRouter", () => {
       expect(r.daemonsNeedingRestart).toEqual([]);
       expect(r.daemonsNeedingSighup).toEqual(["statusagent"]);
       expect(sighup).toHaveBeenCalledWith("com.yulu.statusagent");
+    } finally { cleanup(); }
+  });
+
+  it("returns an apply error when a daemon SIGHUP fails", async () => {
+    const { ctx, sighup, cleanup } = makeCtx();
+    sighup.mockRejectedValueOnce(new Error("service unavailable"));
+    try {
+      const caller = createCaller(configRouter, ctx);
+      const result = await caller.update({ key: "status_agent.hotkeys.dictate.key", value: "F1" });
+      expect(result.applyErrors).toEqual(["statusagent: service unavailable"]);
     } finally { cleanup(); }
   });
 

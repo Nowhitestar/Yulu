@@ -743,6 +743,59 @@ class MicCapture {
 
     init(recorder: AudioRecorder) { self.recorder = recorder }
 
+    private static func stringProperty(_ device: AudioObjectID, selector: AudioObjectPropertySelector) -> String? {
+        var address = AudioObjectPropertyAddress(
+            mSelector: selector,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var size = UInt32(MemoryLayout<CFString?>.size)
+        let pointer = UnsafeMutablePointer<CFString?>.allocate(capacity: 1)
+        pointer.initialize(to: nil)
+        defer {
+            pointer.deinitialize(count: 1)
+            pointer.deallocate()
+        }
+        guard AudioObjectGetPropertyData(device, &address, 0, nil, &size, pointer) == noErr,
+              let value = pointer.pointee else { return nil }
+        return value as String
+    }
+
+    private static func hasStreams(_ device: AudioObjectID, scope: AudioObjectPropertyScope) -> Bool {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyStreams,
+            mScope: scope,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var size: UInt32 = 0
+        return AudioObjectGetPropertyDataSize(device, &address, 0, nil, &size) == noErr && size > 0
+    }
+
+    static func availableDevices() -> [String: Any] {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDevices,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var size: UInt32 = 0
+        guard AudioObjectGetPropertyDataSize(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size) == noErr else {
+            return ["error": "coreaudio_device_size_failed"]
+        }
+        var devices = [AudioDeviceID](repeating: 0, count: Int(size) / MemoryLayout<AudioDeviceID>.size)
+        guard AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size, &devices) == noErr else {
+            return ["error": "coreaudio_device_list_failed"]
+        }
+        var input: [[String: String]] = []
+        var output: [[String: String]] = []
+        for device in devices {
+            guard let uid = stringProperty(device, selector: kAudioDevicePropertyDeviceUID) else { continue }
+            let item = ["uid": uid, "name": stringProperty(device, selector: kAudioObjectPropertyName) ?? uid]
+            if hasStreams(device, scope: kAudioDevicePropertyScopeInput) { input.append(item) }
+            if hasStreams(device, scope: kAudioDevicePropertyScopeOutput) { output.append(item) }
+        }
+        return ["input": input, "output": output]
+    }
+
     private func audioDeviceID(forUID uid: String) -> AudioDeviceID? {
         var address = AudioObjectPropertyAddress(
             mSelector: kAudioHardwarePropertyDevices,
@@ -758,38 +811,20 @@ class MicCapture {
         guard AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size, &devices) == noErr else {
             return nil
         }
-        for device in devices {
-            var uidAddress = AudioObjectPropertyAddress(
-                mSelector: kAudioDevicePropertyDeviceUID,
-                mScope: kAudioObjectPropertyScopeGlobal,
-                mElement: kAudioObjectPropertyElementMain
-            )
-            var uidSize = UInt32(MemoryLayout<CFString?>.size)
-            let uidPtr = UnsafeMutablePointer<CFString?>.allocate(capacity: 1)
-            uidPtr.initialize(to: nil)
-            defer {
-                uidPtr.deinitialize(count: 1)
-                uidPtr.deallocate()
-            }
-            if AudioObjectGetPropertyData(device, &uidAddress, 0, nil, &uidSize, uidPtr) == noErr,
-               let cfUID = uidPtr.pointee,
-               (cfUID as String) == uid {
-                return device
-            }
+        for device in devices where Self.stringProperty(device, selector: kAudioDevicePropertyDeviceUID) == uid {
+            return device
         }
         return nil
     }
 
-    private func configureInputDevice(_ input: AVAudioInputNode) {
+    private func configureInputDevice(_ input: AVAudioInputNode) -> String? {
         guard let uid = selectedDeviceUID?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !uid.isEmpty else { return }
+              !uid.isEmpty else { return nil }
         guard let deviceID = audioDeviceID(forUID: uid) else {
-            log("🎤 Mic device UID not found, using default input: \(uid)")
-            return
+            return "mic_device_not_found: \(uid)"
         }
         guard let audioUnit = input.audioUnit else {
-            log("🎤 Mic input audio unit unavailable, using default input")
-            return
+            return "mic_input_audio_unit_unavailable"
         }
         var selectedID = deviceID
         let status = AudioUnitSetProperty(
@@ -802,8 +837,9 @@ class MicCapture {
         )
         if status == noErr {
             log("🎤 Mic input device selected: \(uid)")
+            return nil
         } else {
-            log("🎤 Mic input device selection failed (\(status)), using default input: \(uid)")
+            return "mic_device_selection_failed: \(status)"
         }
     }
 
@@ -829,7 +865,12 @@ class MicCapture {
         guard engine == nil else { return }
         let engine = AVAudioEngine()
         let input = engine.inputNode
-        configureInputDevice(input)
+        if let error = configureInputDevice(input) {
+            MIC_READY = false
+            MIC_ERROR = error
+            log("🎤 Mic input device configuration failed: \(error)")
+            return
+        }
         let fmt = input.outputFormat(forBus: 0)
 
         input.installTap(onBus: 0, bufferSize: 4096, format: fmt) { [weak self] buf, _ in
@@ -1587,6 +1628,7 @@ class SocketServer {
     /// idempotent) sys start still run in onRecordingStart after the reply.
     var rearmSysCapture: (() -> Void)?
     var configureMicDevice: ((String?) -> Void)?
+    var listAudioDevices: (() -> [String: Any])?
 
     // Read requests off the accept thread, then route control actions through a
     // serial queue so recorder mutations stay one-at-a-time. Window scans are
@@ -1797,6 +1839,8 @@ class SocketServer {
             resp = ["status":"stopped", "file": p ?? "", "duration": d]
         case "status":
             resp = ["recording": recorder.isRecording, "file": recorder.currentFilePath, "micLevel": recorder.micLevel, "sysReady": SYS_READY, "sysError": SYS_ERROR, "micReady": MIC_READY, "micError": MIC_ERROR, "meetingMicState": recorder.meetingMicState.rawValue]
+        case "audio_devices":
+            resp = listAudioDevices?() ?? ["error": "coreaudio_device_provider_unavailable"]
         case "quit": resp = ["status":"bye"]; send(c, resp)
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { NSApp.terminate(nil) }; return
         default: resp = ["error":"unknown: \(action)"]
@@ -1908,6 +1952,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         ss.configureMicDevice = { [weak self] uid in
             self?.micCapture?.selectedDeviceUID = uid
         }
+        ss.listAudioDevices = { MicCapture.availableDevices() }
         ss.onRecordingStop = { [weak self] in
             self?.meetingMuteMonitor?.stop()
             self?.audioCapture?.stopCapture()

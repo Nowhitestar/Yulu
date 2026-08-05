@@ -361,7 +361,13 @@ export class ConfigManager {
     // 校验只在精确路径做（reload 才前缀匹配），否则更新 record 子字段
     // 会被父级 z.record schema 误拒。
     if (def && def.path === dottedKey) def.validate.parse(value);
-    ConfigSchema.parse(cfg);  // validate before write
+    const parsed = ConfigSchema.parse(cfg);  // validate before write
+    if (
+      (dottedKey === "transcription.engine" || dottedKey === "transcription.language") &&
+      parsed.transcription.engine === "local" && parsed.transcription.language === "ja"
+    ) {
+      throw new Error("本地 Paraformer 仅支持中英文；日语请使用 xAI 云端引擎");
+    }
     const tmp = `${this.path}.tmp.${process.pid}`;
     const currentMode = statSync(this.path).mode & 0o777;
     writeFileSync(tmp, JSON.stringify(cfg, null, 2) + "\n", { mode: currentMode });

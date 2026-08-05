@@ -99,6 +99,14 @@ beforeEach(() => {
 });
 
 describe("TranscriptionSection", () => {
+  it("explains an unavailable selected engine and hides unsupported Japanese for local", async () => {
+    mount();
+    expect(screen.getByText(/模型尚未就绪/)).toBeInTheDocument();
+    const languageRow = screen.getByText("语言").closest(".row") as HTMLElement;
+    await userEvent.click(within(languageRow).getByText("auto"));
+    expect(within(languageRow).queryByRole("option", { name: "ja" })).toBeNull();
+  });
+
   it("presents one explicit audio engine and Yulu-owned xAI authorization", () => {
     mount();
     expect(screen.getByText("音频引擎")).toBeInTheDocument();

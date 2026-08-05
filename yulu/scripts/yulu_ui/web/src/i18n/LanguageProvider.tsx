@@ -44,6 +44,10 @@ function isLang(v: unknown): v is Lang {
   return v === "zh" || v === "en";
 }
 
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 function readStored(): Lang {
   try {
     const v = localStorage.getItem(KEY);
@@ -109,11 +113,12 @@ export function LanguageProvider({ children }: { children: ReactNode }) {
   return <LanguageContext.Provider value={value}>{children}</LanguageContext.Provider>;
 }
 
-export function LanguageConfigSync() {
+export function LanguageConfigSync({ onError }: { onError?: (message: string) => void } = {}) {
   const { data: cfg } = trpc.config.get.useQuery();
   const updateMut = trpc.config.update.useMutation();
   const utils = trpc.useUtils();
   const { lang, setLang } = useLang();
+  const t = useT();
   const hydrated = useRef(false);
   const lastConfig = useRef<Lang | null>(null);
 
@@ -132,9 +137,17 @@ export function LanguageConfigSync() {
     lastConfig.current = lang;
     updateMut.mutate(
       { key: "ui.language", value: lang },
-      { onSettled: () => void utils.config.get.invalidate() },
+      {
+        onSuccess: (result: { applyErrors?: string[] }) => {
+          if (result.applyErrors?.length) {
+            onError?.(t("settings.save.applyFailed", { error: result.applyErrors.join("; ") }));
+          }
+        },
+        onError: (error: unknown) => onError?.(t("settings.save.failed", { error: errorMessage(error) })),
+        onSettled: () => void utils.config.get.invalidate(),
+      },
     );
-  }, [lang, updateMut, utils]);
+  }, [lang, onError, t, updateMut, utils]);
 
   return null;
 }

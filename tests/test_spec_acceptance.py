@@ -309,6 +309,8 @@ def test_audio_daemon_mic_device_is_request_configured():
     assert 'json["mic_device"]' in text
     assert "configureInputDevice" in text
     assert "kAudioOutputUnitProperty_CurrentDevice" in text
+    assert "mic_device_not_found" in text
+    assert "if let error = configureInputDevice(input)" in text
 
 
 def test_yulu_wrapper_dispatches_status_agent():

@@ -6,6 +6,16 @@ import { useDangerConfirm } from "../components/DangerConfirm.js";
 import { useIsRecording } from "./useIsRecording.js";
 import { useSettingsSchema, type SettingMeta } from "./useSettingsSchema.js";
 import type { SettingsRestartTracker } from "./useSettingsRestartTracker.js";
+import { useT } from "../i18n/LanguageProvider.js";
+
+interface ConfigUpdateResult {
+  daemonsNeedingRestart: string[];
+  applyErrors?: string[];
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 
 /**
  * Prefix match a config key against the registry, longest-prefix wins — mirrors
@@ -96,9 +106,10 @@ export function useConfigField(tracker: SettingsRestartTracker): ConfigFieldApi 
   const { data: schema } = useSettingsSchema();
   const { data: cfg } = trpc.config.get.useQuery();
   const isRecording = useIsRecording();
-  const { showUndo } = useUndoToast();
+  const { showUndo, showError } = useUndoToast();
   const { confirm } = useDangerConfirm();
   const utils = trpc.useUtils();
+  const t = useT();
 
   // Restart-tracking happens in doCommit (so it can be suppressed per-commit),
   // not in a fixed onSuccess — otherwise every calendars array edit would trip
@@ -116,26 +127,39 @@ export function useConfigField(tracker: SettingsRestartTracker): ConfigFieldApi 
   const doCommit = useCallback((key: string, value: unknown, def: SettingMeta | undefined, suppressRestart: boolean) => {
     const prev = valueAt(cfg, key);
     const p = updateMut.mutateAsync({ key, value });
-    p.then((res: { daemonsNeedingRestart: string[] }) => {
+    p.then((res: ConfigUpdateResult) => {
       utils.config.get.setData(undefined, (old) => setValueAt(old, key, value));
       void utils.config.get.invalidate();
+      void utils.daemons?.health.invalidate();
       if (!suppressRestart) tracker.record(key, res.daemonsNeedingRestart);
+      if (res.applyErrors?.length) {
+        showError(t("settings.save.applyFailed", { error: res.applyErrors.join("; ") }));
+        return;
+      }
       showUndo({
         label: def?.label ?? key,
         // The undo re-commit mirrors this commit's suppression so undoing an
         // add/remove doesn't surprise the user with a restart banner.
         onUndo: () => {
           const up = updateMut.mutateAsync({ key, value: prev });
-          up.then((r: { daemonsNeedingRestart: string[] }) => {
+          up.then((r: ConfigUpdateResult) => {
             utils.config.get.setData(undefined, (old) => setValueAt(old, key, prev));
             void utils.config.get.invalidate();
+            void utils.daemons?.health.invalidate();
             if (!suppressRestart) tracker.record(key, r.daemonsNeedingRestart);
-          }).catch(() => {});
+            if (r.applyErrors?.length) {
+              showError(t("settings.save.applyFailed", { error: r.applyErrors.join("; ") }));
+            }
+          }).catch((error: unknown) => {
+            showError(t("settings.save.failed", { error: errorMessage(error) }));
+          });
         },
       });
-    }).catch(() => { /* surfaced elsewhere; no toast on failure */ });
+    }).catch((error: unknown) => {
+      showError(t("settings.save.failed", { error: errorMessage(error) }));
+    });
     return p;
-  }, [cfg, updateMut, showUndo, tracker, utils]);
+  }, [cfg, updateMut, showError, showUndo, t, tracker, utils]);
 
   const commit = useCallback((key: string, opts?: CommitOptions) => (value: unknown) => {
     if (isBlocked(key)) return undefined;            // guard: drop the edit

@@ -55,11 +55,11 @@ const DictationSchema = z.object({
 export const SETTINGS: SettingDef[] = [
   { path: "ui.language",                 category: "general", label: "Language", type: "select", validate: z.enum(["zh", "en"]), reload: R.sighup("statusagent") },
   { path: "ui.theme",                    category: "general", label: "Theme", type: "preset", validate: ThemeSettingSchema, reload: R.none },
-  { path: "audio.mic_device",            category: "audio", label: "麦克风设备",   type: "select",  validate: z.string(),                  reload: R.restart("audiodaemon") },
+  { path: "audio.mic_device",            category: "audio", label: "麦克风设备",   type: "select",  validate: z.string(),                  reload: R.none },
   { path: "audio.system_audio_device",   category: "audio", label: "系统音设备",   type: "select",  validate: z.string().nullable(),       reload: R.restart("audiodaemon") },
-  { path: "audio.output_dir",            category: "audio", label: "录音输出目录", type: "path",    validate: z.string().min(1),           reload: R.restart("audiodaemon"), danger: true }, // 改录音落盘位置:影响正在/后续录音
-  { path: "audio.silence_threshold",     category: "audio", label: "静音阈值",     type: "number",  validate: z.number().min(0).max(1),    reload: R.restart("audiodaemon") },
-  { path: "audio.silence_duration_sec",  category: "audio", label: "静音时长(秒)", type: "number", validate: z.number().min(1).max(3600),   reload: R.restart("audiodaemon") },
+  { path: "audio.output_dir",            category: "audio", label: "录音输出目录", type: "path",    validate: z.string().min(1),           reload: R.none, danger: true },
+  { path: "audio.silence_threshold",     category: "audio", label: "静音阈值",     type: "number",  validate: z.number().min(0).max(1),    reload: R.none },
+  { path: "audio.silence_duration_sec",  category: "audio", label: "静音时长(秒)", type: "number", validate: z.number().min(1).max(3600),   reload: R.none },
   { path: "audio.backend",               category: "audio", label: "音频后端",     type: "select",  validate: z.enum(["daemon"]),          reload: R.restart("audiodaemon"), danger: true }, // 切换采集后端:可能中断录音
   { path: "transcription.language",      category: "transcription", label: "语言",   type: "select", validate: z.enum(["zh", "en", "ja", "auto"]), reload: R.none },
   { path: "transcription.engine",        category: "transcription", label: "音频转写引擎", type: "select", validate: z.enum(["local", "xai"]), reload: R.none },

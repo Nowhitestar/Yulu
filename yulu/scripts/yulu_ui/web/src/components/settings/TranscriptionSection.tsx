@@ -52,6 +52,19 @@ export function TranscriptionSection({ tracker }: TranscriptionSectionProps) {
 
   if (!config) return null;
 
+  const selectedEngine = config.transcription.engine ?? "local";
+  const engineHelp = selectedEngine === "local" && local.data && !local.data.ready
+    ? t("settings.transcription.engine.localUnavailable")
+    : selectedEngine === "xai" && xai.data && !xai.data.connected
+      ? t("settings.transcription.engine.xaiUnavailable")
+      : t("settings.transcription.engine.help");
+  const languageOptions = [
+    { value: "zh", label: "zh" },
+    { value: "en", label: "en" },
+    ...(selectedEngine === "xai" ? [{ value: "ja", label: "ja" }] : []),
+    { value: "auto", label: "auto" },
+  ];
+
   return (
     <section id="transcription" className="settings-section">
       <h2 className="settings-section-h">{t("settings.transcription.heading")}</h2>
@@ -59,9 +72,9 @@ export function TranscriptionSection({ tracker }: TranscriptionSectionProps) {
 
       <InlineEditRow
         label={t("settings.transcription.engine.label")}
-        help={t("settings.transcription.engine.help")}
+        help={engineHelp}
         type="select"
-        value={config.transcription.engine ?? "local"}
+        value={selectedEngine}
         options={[
           { value: "local", label: t("settings.transcription.engine.local") },
           { value: "xai", label: t("settings.transcription.engine.xai") },
@@ -76,12 +89,7 @@ export function TranscriptionSection({ tracker }: TranscriptionSectionProps) {
         help={t("settings.transcription.language.help")}
         type="select"
         value={config.transcription.language ?? "auto"}
-        options={[
-          { value: "zh", label: "zh" },
-          { value: "en", label: "en" },
-          { value: "ja", label: "ja" },
-          { value: "auto", label: "auto" },
-        ]}
+        options={languageOptions}
         onCommit={commit("transcription.language") as (value: string) => void}
         disabled={isBlocked("transcription.language")}
         status={tracker.statusFor("transcription.language")}

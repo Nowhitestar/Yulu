@@ -5,6 +5,7 @@ import { spawn } from "node:child_process";
 import { z } from "zod";
 import { router, publicProcedure } from "../trpc.js";
 import { openDb } from "../db.js";
+import { ipcSend } from "../ipc.js";
 
 // esbuild inlines these via `define` at build time. In dev (tsx) the
 // identifiers are undefined and we fall back to reading package.json.
@@ -90,6 +91,12 @@ const CLOUD_DETECT_DEGRADED: CloudDetect = {
   dataless: false,
 };
 
+const audioDeviceReplySchema = z.object({
+  input: z.array(z.object({ uid: z.string().min(1), name: z.string().min(1) })).default([]),
+  output: z.array(z.object({ uid: z.string().min(1), name: z.string().min(1) })).default([]),
+  error: z.string().optional(),
+});
+
 // P3-1 (About block): format the install source the way version.py's
 // format_version does — "release <version>" / "dev <branch>" — or null when the
 // install file is absent/malformed (e.g. a plain dev checkout).
@@ -160,24 +167,19 @@ export const systemRouter = router({
       return { ok: true as const };
     }),
 
-  audioDevices: publicProcedure.query(async () => {
-    const { stdout, code } = await runSpawn("system_profiler", ["SPAudioDataType", "-json"]);
-    if (code !== 0) return { input: [], output: [] };
+  audioDevices: publicProcedure.query(async ({ ctx }) => {
     try {
-      const parsed = JSON.parse(stdout) as { SPAudioDataType?: Array<{ _items?: Array<Record<string, unknown>> }> };
-      const items = parsed.SPAudioDataType?.[0]?._items ?? [];
-      const input: Array<{ uid: string; name: string }> = [];
-      const output: Array<{ uid: string; name: string }> = [];
-      for (const item of items) {
-        const name = String(item._name ?? "");
-        const uid = String(item.coreaudio_device_uid ?? "");
-        if (!name || !uid) continue;
-        if (item.coreaudio_device_input !== undefined) input.push({ uid, name });
-        if (item.coreaudio_device_output !== undefined) output.push({ uid, name });
-      }
-      return { input, output };
-    } catch {
-      return { input: [], output: [] };
+      const parsed = audioDeviceReplySchema.parse(
+        await ipcSend(ctx.paths.audioDaemonSock, { action: "audio_devices" }),
+      );
+      if (parsed.error) return { input: [], output: [], error: parsed.error };
+      return { input: parsed.input, output: parsed.output, error: null };
+    } catch (error) {
+      return {
+        input: [],
+        output: [],
+        error: error instanceof Error ? error.message : String(error),
+      };
     }
   }),
 

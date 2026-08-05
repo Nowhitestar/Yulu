@@ -331,6 +331,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Fixed
+- **Settings now reflect and control the installed runtime.** Audio device choices come from the native CoreAudio daemon, capture settings take effect on the next recording without an unnecessary daemon restart, invalid local-Japanese transcription combinations are rejected, save/apply/restart failures are visible, and StatusAgent shows configured versus live service state without duplicate or non-editable controls.
 - **Release installs lost Unix executable bits.** `release_installer.py` used `ZipFile.extractall()`, which does not restore the mode stored in each entry's `external_attr` — every file (including the `Yulu.app` / `StatusAgent.app` Mach-O binaries launchd spawns directly) landed as `0644`, so the menu-bar agent and audio daemon failed with "Launchd job spawn failed" on a fresh install. The installer now re-applies each entry's recorded permission bits after extraction.
 - **`setup.sh` aborted under non-interactive stdin.** The optional agent-skill registration `read` returned non-zero at EOF and, under `set -e`, failed the whole run — which triggered an install rollback. The `read`s now tolerate EOF.
 - **`setup.sh` self-heals `.app` exec bits.** `chmod +x` is re-asserted on the bundled binaries before launch, so existing installs recover on `yulu update` even when extracted by an older installer.

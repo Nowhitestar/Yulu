@@ -175,14 +175,26 @@ describe("ConfigManager", () => {
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 
-  it("update() writes + returns diff with restart targets", () => {
+  it("audio capture parameters apply to the next recording without restarting the daemon", () => {
     const { mgr, cleanup } = makeCfg();
     try {
       const result = mgr.update("audio.silence_threshold", 0.02);
-      expect(result.daemonsNeedingRestart).toContain("audiodaemon");
+      expect(result.daemonsNeedingRestart).toEqual([]);
       expect(result.daemonsNeedingSighup).toEqual([]);
       const cfg = mgr.read();
       expect(cfg.audio.silence_threshold).toBe(0.02);
+    } finally { cleanup(); }
+  });
+
+  it("rejects the unsupported local + Japanese transcription combination", () => {
+    const { mgr, cleanup } = makeCfg();
+    try {
+      expect(() => mgr.update("transcription.language", "ja")).toThrow(/日语请使用 xAI/);
+      expect(mgr.read().transcription.language).toBe("zh");
+      mgr.update("transcription.engine", "xai");
+      expect(() => mgr.update("transcription.language", "ja")).not.toThrow();
+      expect(() => mgr.update("transcription.engine", "local")).toThrow(/日语请使用 xAI/);
+      expect(mgr.read().transcription.engine).toBe("xai");
     } finally { cleanup(); }
   });
 
