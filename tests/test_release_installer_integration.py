@@ -31,6 +31,9 @@ def synthetic_assets_skip_macos_signature_verification(monkeypatch, tmp_path):
 def build_fake_asset(tmp_path: Path, tag: str = "v0.5.0", setup_body: str | None = None) -> tuple[Path, Path]:
     root = tmp_path / "asset-root" / "yulu"
     (root / "yulu" / "scripts").mkdir(parents=True)
+    keychain_helper = root / "yulu" / "scripts" / "Yulu.app" / "Contents" / "MacOS" / "xai_keychain"
+    keychain_helper.parent.mkdir(parents=True)
+    keychain_helper.write_text("binary\n", encoding="utf-8")
     (root / "VERSION").write_text(tag.removeprefix("v") + "\n", encoding="utf-8")
     setup_script = setup_body or '#!/usr/bin/env bash\necho setup "$@"\n'
     (root / "yulu" / "scripts" / "setup.sh").write_text(setup_script, encoding="utf-8")

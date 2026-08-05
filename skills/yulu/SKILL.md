@@ -15,7 +15,7 @@ Yulu 是 macOS 原生会议记录器和可信本地控制面：
 - `Yulu.app` 负责 ScreenCaptureKit 系统音频、AVFoundation 麦克风和 macOS 权限；
 - Yulu Host 负责持久化任务、幂等、租约、恢复、产物原子提交和审计；
 - Yulu 明确选择的本地/xAI 音频引擎负责实时字幕、最终转写和听写，绝不自动回退；
-- Hermes 负责会议纪要和经任务明确授权的 Notion 投递；Hermes/OpenClaw 只可在内存中提供已有 xAI OAuth，不执行 Yulu 音频；
+- Yulu 直接管理 xAI OAuth 并把凭据保存在 macOS 钥匙串；Hermes 负责会议纪要和经任务明确授权的 Notion 投递；
 - Agent Console 选中的通用 Agent 负责交互式对话和它自己的连接器。
 
 Yulu 只管理受限的本地音频模型，不运行总结 worker、对话引擎或 connector runtime。不要寻找或恢复旧的 STT daemon、JSON Agent 队列或 Yulu-owned Notion 路径。
@@ -197,7 +197,7 @@ yulu repair-permissions
 
 - 不读取、复制或展示 MCP token、Host SQLite 内部 lease、Agent 凭据或 connector 凭据。
 - 不把录音或转录贴到聊天里，除非用户明确要求且只使用必要片段。
-- 选择本地引擎时音频不离开本机；选择 xAI 时 Yulu 直接把音频发送给 xAI，Hermes/OpenClaw 只提供内存中的 OAuth 凭据。
+- 选择本地引擎时音频不离开本机；选择 xAI 时 Yulu 直接把音频发送给 xAI，并从 macOS 钥匙串读取自己的 OAuth 凭据。
 - Notion 是单任务明确授权的副作用；其它 connector 动作遵循当前通用 Agent 自己的授权模型。
 - 不把 `host.sqlite`、token、task workspace、socket 或 event spool 放到云同步目录。
 

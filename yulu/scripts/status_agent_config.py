@@ -19,6 +19,7 @@ IPC_SOCKET_PATH = Path.home() / ".config" / "yulu" / "status_agent.sock"
 
 DEFAULT_BLOCK = {
     "enabled": True,
+    "feedback_sounds": True,
     "hotkeys": {
         "dictate": {"key": "Space", "modifiers": ["ctrl", "alt"]},
         "translate": {"key": "T", "modifiers": ["ctrl", "alt"], "target_language": "English"},

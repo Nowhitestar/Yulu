@@ -61,6 +61,7 @@ def test_install_mcp_registration_fails_when_required_hermes_registration_fails(
 def test_dev_install_manages_status_agent_plist():
     assert "com.yulu.statusagent.plist" in dev_install.LAUNCHAGENTS
     assert "VERSION" in dev_install.RUNTIME_ITEMS
+    assert "assets/Yulu.icns" in dev_install.RUNTIME_ITEMS
 
 
 def test_dev_install_metadata_marks_runtime_as_dev(monkeypatch, tmp_path):

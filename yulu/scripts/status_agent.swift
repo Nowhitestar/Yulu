@@ -15,6 +15,43 @@ let PID_FILE = "\(CONFIG_DIR)/status_agent.pid"
 let LOG_FILE = "\(CONFIG_DIR)/status_agent.log"
 let IPC_SOCKET_PATH = "\(CONFIG_DIR)/status_agent.sock"
 
+enum AppLanguage: String {
+    case zh, en
+}
+
+var activeAppLanguage: AppLanguage = .zh
+
+func readAppLanguage() -> AppLanguage {
+    let path = "\(CONFIG_DIR)/config.json"
+    guard let data = FileManager.default.contents(atPath: path),
+          let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+          let ui = json["ui"] as? [String: Any],
+          let raw = ui["language"] as? String,
+          let language = AppLanguage(rawValue: raw) else { return .zh }
+    return language
+}
+
+func L(_ zh: String, _ en: String) -> String {
+    activeAppLanguage == .zh ? zh : en
+}
+
+func appLocale() -> Locale {
+    Locale(identifier: activeAppLanguage == .zh ? "zh_CN" : "en_US")
+}
+
+func targetLanguageDisplayName(_ value: String) -> String {
+    switch value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+    case "english", "en": return L("英语", "English")
+    case "japanese", "ja", "日本語": return L("日语", "Japanese")
+    case "korean", "ko", "한국어": return L("韩语", "Korean")
+    case "french", "fr", "français": return L("法语", "French")
+    case "spanish", "es", "español": return L("西班牙语", "Spanish")
+    case "german", "de", "deutsch": return L("德语", "German")
+    case "traditional chinese", "zh-hant", "繁體中文": return L("繁体中文", "Traditional Chinese")
+    default: return value.isEmpty ? L("英语", "English") : value
+    }
+}
+
 func statusAgentScriptDir() -> String {
     ProcessInfo.processInfo.environment["YULU_SCRIPT_DIR"]
         ?? "\((Bundle.main.bundlePath as NSString).deletingLastPathComponent)"
@@ -60,66 +97,129 @@ func writePidFile() {
     try? "\(pid)".write(toFile: PID_FILE, atomically: true, encoding: .utf8)
 }
 
+func feedbackSoundsEnabled() -> Bool {
+    let path = "\(CONFIG_DIR)/config.json"
+    guard let data = FileManager.default.contents(atPath: path),
+          let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+          let block = json["status_agent"] as? [String: Any] else { return true }
+    return block["feedback_sounds"] as? Bool ?? true
+}
+
+func normalizedMicLevel(_ rms: Double) -> CGFloat {
+    guard rms > 0 else { return 0 }
+    let decibels = 20 * log10(rms)
+    return CGFloat(min(1, max(0, (decibels + 55) / 40)))
+}
+
+func parseDictationOutput(_ data: Data) -> [String: Any]? {
+    guard !data.isEmpty else { return nil }
+    return try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+}
+
+enum VoiceFeedbackSound {
+    case start, success, failure
+}
+
+final class VoiceFeedbackPlayer {
+    private var activeSound: NSSound?
+
+    func play(_ kind: VoiceFeedbackSound) {
+        guard feedbackSoundsEnabled(), let sound = NSSound(data: Self.wavData(for: kind)) else { return }
+        activeSound?.stop()
+        activeSound = sound
+        sound.volume = 0.22
+        sound.play()
+    }
+
+    private static func wavData(for kind: VoiceFeedbackSound) -> Data {
+        let frequencies: [Double]
+        let toneDuration: Double
+        let gapDuration: Double
+        switch kind {
+        case .start:
+            frequencies = [660, 880]; toneDuration = 0.035; gapDuration = 0
+        case .success:
+            frequencies = [880, 1175]; toneDuration = 0.035; gapDuration = 0
+        case .failure:
+            frequencies = [260, 220]; toneDuration = 0.055; gapDuration = 0.025
+        }
+        let sampleRate = 44_100
+        let toneFrames = Int(Double(sampleRate) * toneDuration)
+        let gapFrames = Int(Double(sampleRate) * gapDuration)
+        let fadeFrames = max(1, Int(Double(sampleRate) * 0.006))
+        var samples: [Int16] = []
+        for (index, frequency) in frequencies.enumerated() {
+            for frame in 0..<toneFrames {
+                let fadeIn = min(1, Double(frame) / Double(fadeFrames))
+                let fadeOut = min(1, Double(toneFrames - frame - 1) / Double(fadeFrames))
+                let envelope = min(fadeIn, fadeOut)
+                let value = sin(2 * Double.pi * frequency * Double(frame) / Double(sampleRate))
+                samples.append(Int16(value * envelope * 0.16 * Double(Int16.max)))
+            }
+            if index < frequencies.count - 1 && gapFrames > 0 {
+                samples.append(contentsOf: repeatElement(0, count: gapFrames))
+            }
+        }
+
+        var pcm = Data(capacity: samples.count * 2)
+        for sample in samples {
+            var value = sample.littleEndian
+            withUnsafeBytes(of: &value) { pcm.append(contentsOf: $0) }
+        }
+        var wav = Data()
+        wav.append("RIFF".data(using: .ascii)!)
+        wav.appendLittleEndian(UInt32(36 + pcm.count))
+        wav.append("WAVEfmt ".data(using: .ascii)!)
+        wav.appendLittleEndian(UInt32(16))
+        wav.appendLittleEndian(UInt16(1))
+        wav.appendLittleEndian(UInt16(1))
+        wav.appendLittleEndian(UInt32(sampleRate))
+        wav.appendLittleEndian(UInt32(sampleRate * 2))
+        wav.appendLittleEndian(UInt16(2))
+        wav.appendLittleEndian(UInt16(16))
+        wav.append("data".data(using: .ascii)!)
+        wav.appendLittleEndian(UInt32(pcm.count))
+        wav.append(pcm)
+        return wav
+    }
+}
+
+private extension Data {
+    mutating func appendLittleEndian<T: FixedWidthInteger>(_ value: T) {
+        var encoded = value.littleEndian
+        Swift.withUnsafeBytes(of: &encoded) { append(contentsOf: $0) }
+    }
+}
+
 class MenuBuilder {
     static func build(target: AnyObject) -> NSMenu {
         let menu = NSMenu()
-        // The Start/Stop title is updated dynamically by StatusAgentApp;
-        // here we just provide an action wire-up.
-        let toggleItem = NSMenuItem(
-            title: "Start Recording",
-            action: #selector(StatusAgentApp.onMenuToggle),
-            keyEquivalent: ""
-        )
-        toggleItem.target = target
-        toggleItem.identifier = NSUserInterfaceItemIdentifier("toggle")
-        menu.addItem(toggleItem)
 
-        let dictateItem = NSMenuItem(
-            title: "Start Dictation",
-            action: #selector(StatusAgentApp.onDictateToggle),
-            keyEquivalent: ""
-        )
-        dictateItem.target = target
-        dictateItem.identifier = NSUserInterfaceItemIdentifier("dictate_once")
-        menu.addItem(dictateItem)
-        let voiceChatItem = NSMenuItem(
-            title: "Ask Agent by Voice",
-            action: #selector(StatusAgentApp.onVoiceChat),
-            keyEquivalent: ""
-        )
-        voiceChatItem.target = target
-        voiceChatItem.identifier = NSUserInterfaceItemIdentifier("voice_chat")
-        menu.addItem(voiceChatItem)
-        menu.addItem(NSMenuItem.separator())
-        let hotkeyLabel = NSMenuItem(title: "Hotkeys: loading...", action: nil, keyEquivalent: "")
-        hotkeyLabel.isEnabled = false
-        hotkeyLabel.identifier = NSUserInterfaceItemIdentifier("hotkeys_label")
-        menu.addItem(hotkeyLabel)
-        menu.addItem(NSMenuItem.separator())
-
-        let currentLabel = NSMenuItem(title: "Current meeting", action: nil, keyEquivalent: "")
+        let currentLabel = NSMenuItem(title: L("当前会议", "Current Meeting"), action: nil, keyEquivalent: "")
         currentLabel.identifier = NSUserInterfaceItemIdentifier("current_meeting_label")
         currentLabel.isEnabled = false
         currentLabel.isHidden = true
         menu.addItem(currentLabel)
 
         let currentRecord = NSMenuItem(
-            title: "Record current meeting",
+            title: L("录制此会议", "Record This Meeting"),
             action: #selector(StatusAgentApp.onCurrentMeetingRecord(_:)),
             keyEquivalent: ""
         )
         currentRecord.target = target
         currentRecord.identifier = NSUserInterfaceItemIdentifier("current_meeting_record")
+        currentRecord.image = NSImage(systemSymbolName: "record.circle", accessibilityDescription: nil)
         currentRecord.isHidden = true
         menu.addItem(currentRecord)
 
         let currentJoin = NSMenuItem(
-            title: "Record and join current meeting",
+            title: L("录制并加入", "Record and Join"),
             action: #selector(StatusAgentApp.onCurrentMeetingRecordJoin(_:)),
             keyEquivalent: ""
         )
         currentJoin.target = target
         currentJoin.identifier = NSUserInterfaceItemIdentifier("current_meeting_join")
+        currentJoin.image = NSImage(systemSymbolName: "arrow.up.right.circle", accessibilityDescription: nil)
         currentJoin.isHidden = true
         menu.addItem(currentJoin)
 
@@ -128,34 +228,105 @@ class MenuBuilder {
         currentSep.isHidden = true
         menu.addItem(currentSep)
 
-        let recentLabel = NSMenuItem(title: "Recent recordings", action: nil, keyEquivalent: "")
-        recentLabel.isEnabled = false
-        menu.addItem(recentLabel)
-        // Up to 5 dynamic items inserted here at menuWillOpen time
-        for i in 0..<5 {
-            let item = NSMenuItem(title: "", action: nil, keyEquivalent: "")
-            item.identifier = NSUserInterfaceItemIdentifier("recent_\(i)")
-            item.isHidden = true
-            menu.addItem(item)
-        }
+        // The Start/Stop title is updated dynamically by StatusAgentApp;
+        // here we just provide an action wire-up.
+        let toggleItem = NSMenuItem(
+            title: L("开始录制", "Start Recording"),
+            action: #selector(StatusAgentApp.onMenuToggle),
+            keyEquivalent: ""
+        )
+        toggleItem.target = target
+        toggleItem.identifier = NSUserInterfaceItemIdentifier("toggle")
+        toggleItem.image = NSImage(systemSymbolName: "record.circle", accessibilityDescription: nil)
+        menu.addItem(toggleItem)
+        menu.addItem(NSMenuItem.separator())
+
+        let dictateItem = NSMenuItem(
+            title: L("开始听写", "Start Dictation"),
+            action: #selector(StatusAgentApp.onDictateToggle),
+            keyEquivalent: ""
+        )
+        dictateItem.target = target
+        dictateItem.identifier = NSUserInterfaceItemIdentifier("dictate_once")
+        dictateItem.image = NSImage(systemSymbolName: "waveform", accessibilityDescription: nil)
+        menu.addItem(dictateItem)
+
+        let translateItem = NSMenuItem(
+            title: L("翻译为英语", "Translate to English"),
+            action: #selector(StatusAgentApp.onDictateTranslateFromMenu),
+            keyEquivalent: ""
+        )
+        translateItem.target = target
+        translateItem.identifier = NSUserInterfaceItemIdentifier("dictate_translate")
+        translateItem.image = NSImage(systemSymbolName: "character.bubble", accessibilityDescription: nil)
+        menu.addItem(translateItem)
+
+        let voiceChatItem = NSMenuItem(
+            title: L("语音询问 Agent", "Ask Agent by Voice"),
+            action: #selector(StatusAgentApp.onVoiceChat),
+            keyEquivalent: ""
+        )
+        voiceChatItem.target = target
+        voiceChatItem.identifier = NSUserInterfaceItemIdentifier("voice_chat")
+        voiceChatItem.image = NSImage(systemSymbolName: "bubble.left.and.waveform", accessibilityDescription: nil)
+        menu.addItem(voiceChatItem)
+        menu.addItem(NSMenuItem.separator())
+
         let openInbox = NSMenuItem(
-            title: "Open inbox",
+            title: L("打开 Yulu", "Open Yulu"),
             action: #selector(StatusAgentApp.onOpenInbox),
             keyEquivalent: ""
         )
         openInbox.target = target
+        openInbox.image = NSImage(systemSymbolName: "tray", accessibilityDescription: nil)
         menu.addItem(openInbox)
+
         let openAgentConsole = NSMenuItem(
-            title: "Open Agent Console",
+            title: L("打开 Agent Console", "Open Agent Console"),
             action: #selector(StatusAgentApp.onOpenAgentConsole),
             keyEquivalent: ""
         )
         openAgentConsole.target = target
+        openAgentConsole.image = NSImage(systemSymbolName: "sparkles", accessibilityDescription: nil)
         menu.addItem(openAgentConsole)
+
+        let recentItem = NSMenuItem(title: L("最近记录", "Recent Recordings"), action: nil, keyEquivalent: "")
+        recentItem.identifier = NSUserInterfaceItemIdentifier("recent_recordings")
+        recentItem.image = NSImage(systemSymbolName: "clock.arrow.circlepath", accessibilityDescription: nil)
+        let recentMenu = NSMenu(title: L("最近记录", "Recent Recordings"))
+        let recentEmpty = NSMenuItem(title: L("暂无最近记录", "No Recent Recordings"), action: nil, keyEquivalent: "")
+        recentEmpty.identifier = NSUserInterfaceItemIdentifier("recent_empty")
+        recentEmpty.isEnabled = false
+        recentMenu.addItem(recentEmpty)
+        for i in 0..<5 {
+            let item = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+            item.identifier = NSUserInterfaceItemIdentifier("recent_\(i)")
+            item.isHidden = true
+            recentMenu.addItem(item)
+        }
+        recentMenu.addItem(NSMenuItem.separator())
+        let showAll = NSMenuItem(
+            title: L("查看全部记录", "Show All Recordings"),
+            action: #selector(StatusAgentApp.onOpenInbox),
+            keyEquivalent: ""
+        )
+        showAll.target = target
+        recentMenu.addItem(showAll)
+        recentItem.submenu = recentMenu
+        menu.addItem(recentItem)
+
+        let settings = NSMenuItem(
+            title: L("设置…", "Settings…"),
+            action: #selector(StatusAgentApp.onOpenSettings),
+            keyEquivalent: ","
+        )
+        settings.target = target
+        settings.image = NSImage(systemSymbolName: "gearshape", accessibilityDescription: nil)
+        menu.addItem(settings)
         menu.addItem(NSMenuItem.separator())
 
         let quit = NSMenuItem(
-            title: "Quit Yulu Status Agent",
+            title: L("退出 Yulu", "Quit Yulu"),
             action: #selector(NSApplication.terminate(_:)),
             keyEquivalent: "q"
         )
@@ -166,6 +337,7 @@ class MenuBuilder {
 
 struct RecentRecording {
     let stem: String
+    let title: String
     let mtime: Date
 }
 
@@ -174,6 +346,7 @@ struct CurrentMeeting {
     let title: String
     let link: String
     let start: Date
+    let end: Date
 }
 
 struct CapturedPasteTarget {
@@ -223,7 +396,8 @@ func loadCurrentMeeting() -> CurrentMeeting? {
                 id: id,
                 title: title,
                 link: (m["link"] as? String) ?? "",
-                start: start
+                start: start,
+                end: end
             ))
         }
     }
@@ -232,7 +406,19 @@ func loadCurrentMeeting() -> CurrentMeeting? {
 
 func shortMeetingTitle(_ title: String) -> String {
     if title.count <= 38 { return title }
-    return "\(title.prefix(35))..."
+    return "\(title.prefix(35))…"
+}
+
+func recentRecordingMenuTitle(time: String, name: String) -> NSAttributedString {
+    let paragraph = NSMutableParagraphStyle()
+    paragraph.tabStops = [NSTextTab(textAlignment: .left, location: 104)]
+    return NSAttributedString(
+        string: "\(time)\t\(name)",
+        attributes: [
+            .font: NSFont.menuFont(ofSize: 0),
+            .paragraphStyle: paragraph,
+        ]
+    )
 }
 
 // Resolve the recordings base directory from config.json (D-07): read
@@ -284,6 +470,33 @@ struct HotkeySpec {
     let modifierMask: UInt32
     let label: String
     let targetLanguage: String
+}
+
+func menuKeyEquivalent(for label: String) -> String {
+    let key = String(label.drop(while: { "⌘⇧⌃⌥".contains($0) }))
+    switch key {
+    case "Space": return " "
+    case "Tab": return "\t"
+    case "Return": return "\r"
+    case "Escape": return "\u{1b}"
+    default:
+        if key.hasPrefix("F"),
+           let number = Int(key.dropFirst()),
+           (1...20).contains(number),
+           let scalar = UnicodeScalar(0xF703 + number) {
+            return String(Character(scalar))
+        }
+        return key.lowercased()
+    }
+}
+
+func menuModifierFlags(for mask: UInt32) -> NSEvent.ModifierFlags {
+    var flags: NSEvent.ModifierFlags = []
+    if mask & 0x0100 != 0 { flags.insert(.command) }
+    if mask & 0x0200 != 0 { flags.insert(.shift) }
+    if mask & 0x0800 != 0 { flags.insert(.option) }
+    if mask & 0x1000 != 0 { flags.insert(.control) }
+    return flags
 }
 
 func defaultHotkeySpecs() -> [HotkeySpec] {
@@ -396,19 +609,29 @@ class HotkeyRegistrar {
 }
 
 enum VoiceOverlayAnimationMode {
-    case none, recording, processing
+    case none, recording, processing, success
 }
 
 class VoiceWaveView: NSView {
     private var tick = 0
     private var timer: Timer?
     var mode: VoiceOverlayAnimationMode = .recording {
+        didSet { updateTimer(); needsDisplay = true }
+    }
+    var level: CGFloat = 0 {
         didSet { needsDisplay = true }
     }
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        if window == nil {
+        updateTimer()
+    }
+
+    private func updateTimer() {
+        let shouldAnimate = window != nil
+            && mode == .processing
+            && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        if !shouldAnimate {
             timer?.invalidate()
             timer = nil
             return
@@ -424,21 +647,32 @@ class VoiceWaveView: NSView {
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
         if mode == .none { return }
-        NSColor.controlAccentColor.setFill()
+        let electricBlue = NSColor(calibratedRed: 0.15, green: 0.67, blue: 1.0, alpha: 1)
+        if mode == .success {
+            NSColor(calibratedRed: 0.25, green: 0.86, blue: 0.63, alpha: 1).setStroke()
+            let check = NSBezierPath()
+            check.lineWidth = 2.6
+            check.lineCapStyle = .round
+            check.lineJoinStyle = .round
+            check.move(to: NSPoint(x: bounds.midX - 7, y: bounds.midY))
+            check.line(to: NSPoint(x: bounds.midX - 2, y: bounds.midY - 5))
+            check.line(to: NSPoint(x: bounds.midX + 8, y: bounds.midY + 6))
+            check.stroke()
+            return
+        }
         if mode == .processing {
-            let dots = 3
-            let size: CGFloat = 5
-            let gap: CGFloat = 5
-            let total = CGFloat(dots) * size + CGFloat(dots - 1) * gap
-            let startX = (bounds.width - total) / 2
-            for i in 0..<dots {
-                let phase = Double(tick + i * 3) * 0.38
-                let alpha = CGFloat(0.35 + (sin(phase) + 1) * 0.28)
-                NSColor.controlAccentColor.withAlphaComponent(alpha).setFill()
-                let x = startX + CGFloat(i) * (size + gap)
-                let y = (bounds.height - size) / 2
-                NSBezierPath(ovalIn: NSRect(x: x, y: y, width: size, height: size)).fill()
-            }
+            electricBlue.setStroke()
+            let ring = NSBezierPath()
+            ring.lineWidth = 2.2
+            ring.lineCapStyle = .round
+            let start = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 25.0 : Double(tick * 24)
+            ring.appendArc(
+                withCenter: NSPoint(x: bounds.midX, y: bounds.midY),
+                radius: 7,
+                startAngle: start,
+                endAngle: start + 275
+            )
+            ring.stroke()
             return
         }
         let bars = 5
@@ -446,18 +680,37 @@ class VoiceWaveView: NSView {
         let width: CGFloat = 3
         let total = CGFloat(bars) * width + CGFloat(bars - 1) * gap
         let startX = (bounds.width - total) / 2
+        let shapes: [CGFloat] = [0.42, 0.78, 1, 0.68, 0.32]
+        let amplitude = max(0.40, min(1, level))
+        NSGraphicsContext.saveGraphicsState()
+        let glow = NSShadow()
+        glow.shadowColor = electricBlue.withAlphaComponent(0.58)
+        glow.shadowBlurRadius = 5
+        glow.set()
+        electricBlue.setFill()
         for i in 0..<bars {
-            let phase = Double(tick + i * 2) * 0.42
-            let height = CGFloat(8 + (sin(phase) + 1) * 10)
+            let height = 4 + 16 * amplitude * shapes[i]
             let x = startX + CGFloat(i) * (width + gap)
             let y = (bounds.height - height) / 2
-            NSBezierPath(roundedRect: NSRect(x: x, y: y, width: width, height: height), xRadius: 2, yRadius: 2).fill()
+            let slash = min(1.5, height / 3)
+            let bar = NSBezierPath()
+            bar.move(to: NSPoint(x: x, y: y + slash))
+            bar.line(to: NSPoint(x: x + width, y: y))
+            bar.line(to: NSPoint(x: x + width, y: y + height - slash))
+            bar.line(to: NSPoint(x: x, y: y + height))
+            bar.close()
+            bar.fill()
         }
+        electricBlue.withAlphaComponent(0.78).setFill()
+        NSBezierPath(rect: NSRect(x: startX - 1, y: bounds.midY - 0.5, width: total + 2, height: 1)).fill()
+        NSGraphicsContext.restoreGraphicsState()
     }
 }
 
 class VoiceOverlayContainerView: NSView {
-    var onCancel: (() -> Void)?
+    var mode: VoiceOverlayAnimationMode = .none {
+        didSet { configureLayer(); needsDisplay = true }
+    }
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -472,36 +725,37 @@ class VoiceOverlayContainerView: NSView {
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
         configureLayer()
+        needsDisplay = true
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let capsule = NSBezierPath(
+            roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5),
+            xRadius: 17.5,
+            yRadius: 17.5
+        )
+        NSColor(calibratedRed: 0.055, green: 0.10, blue: 0.15, alpha: 0.97).setFill()
+        capsule.fill()
+        capsule.lineWidth = 1
+        NSColor(calibratedRed: 0.20, green: 0.39, blue: 0.53, alpha: 0.72).setStroke()
+        capsule.stroke()
     }
 
     private func configureLayer() {
         wantsLayer = true
         guard let layer = layer else { return }
-        let isDark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        let fill = isDark
-            ? NSColor(calibratedRed: 0.07, green: 0.09, blue: 0.13, alpha: 0.96)
-            : NSColor(calibratedRed: 0.96, green: 0.985, blue: 1.0, alpha: 0.97)
-        layer.backgroundColor = fill.cgColor
-        layer.cornerRadius = 20
-        layer.borderWidth = 1
-        layer.borderColor = NSColor.controlAccentColor.withAlphaComponent(isDark ? 0.20 : 0.16).cgColor
-        layer.shadowColor = NSColor.black.cgColor
-        layer.shadowOpacity = isDark ? 0.32 : 0.12
-        layer.shadowRadius = 16
-        layer.shadowOffset = NSSize(width: 0, height: 6)
+        layer.backgroundColor = NSColor.clear.cgColor
+        layer.cornerRadius = 18
+        layer.borderWidth = 0
+        let isRecording = mode == .recording
+        layer.shadowColor = isRecording
+            ? NSColor(calibratedRed: 0.15, green: 0.67, blue: 1.0, alpha: 1).cgColor
+            : NSColor.black.cgColor
+        layer.shadowOpacity = isRecording ? 0.18 : 0.28
+        layer.shadowRadius = isRecording ? 12 : 14
+        layer.shadowOffset = NSSize(width: 0, height: isRecording ? 2 : 5)
     }
 
-    override func resetCursorRects() {
-        addCursorRect(bounds, cursor: .pointingHand)
-    }
-
-    override func mouseDown(with event: NSEvent) {
-        alphaValue = 0.76
-        onCancel?()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { [weak self] in
-            self?.alphaValue = 1.0
-        }
-    }
 }
 
 // Enumerate the recordings directory directly off disk (no Python, no
@@ -509,6 +763,21 @@ class VoiceOverlayContainerView: NSView {
 // recording now lives in the single root directory (the historical
 // ~/Movies/Yulu/memos subdirectory was merged into the root by the
 // recording-unify migration).
+func recentRecordingFallbackTitle(_ stem: String) -> String {
+    let withoutTimestamp = stem.replacingOccurrences(
+        of: #"_[0-9]{8}_[0-9]{6}$"#,
+        with: "",
+        options: .regularExpression
+    )
+    return withoutTimestamp
+        .replacingOccurrences(of: "_", with: " ")
+        .replacingOccurrences(
+            of: #"([a-z0-9])([A-Z])"#,
+            with: "$1 $2",
+            options: .regularExpression
+        )
+}
+
 func loadRecentRecordings(limit: Int = 5) -> [RecentRecording] {
     let base = loadRecordingDir()
     var out: [RecentRecording] = []
@@ -520,7 +789,12 @@ func loadRecentRecordings(limit: Int = 5) -> [RecentRecording] {
             let path = "\(dir)/\(f)"
             let attrs = try? FileManager.default.attributesOfItem(atPath: path)
             let mtime = (attrs?[.modificationDate] as? Date) ?? Date.distantPast
-            out.append(RecentRecording(stem: stem, mtime: mtime))
+            let savedTitle = (try? String(
+                contentsOf: URL(fileURLWithPath: "\(dir)/\(stem).title"),
+                encoding: .utf8
+            ))?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let title = savedTitle.isEmpty ? recentRecordingFallbackTitle(stem) : savedTitle
+            out.append(RecentRecording(stem: stem, title: title, mtime: mtime))
         }
     }
     scan(base)
@@ -610,7 +884,7 @@ class IconStateMachine {
         case .daemonDown:   name = "status_idle"   // (caller can overlay; not in v1)
         }
         guard let img = NSImage(named: name) else { return nil }
-        img.isTemplate = true
+        img.isTemplate = false
         return img
     }
 }
@@ -621,6 +895,8 @@ class IconStateMachine {
 // the status agent is just a button + indicator, all recording lifecycle +
 // transcribe + enqueue stays in the Python pipeline.
 class RecordingLauncher {
+    typealias DictationCompletion = ([String: Any]?, String, Int32) -> Void
+
     private static func scriptDir() -> String {
         ProcessInfo.processInfo.environment["YULU_SCRIPT_DIR"]
             ?? "\((Bundle.main.bundlePath as NSString).deletingLastPathComponent)"
@@ -644,7 +920,7 @@ class RecordingLauncher {
            !name.isEmpty {
             return name
         }
-        return "Recording"
+        return L("录音", "Recording")
     }
 
     // Start a meeting recording (mic + system). meeting_daemon.py start sends
@@ -711,9 +987,67 @@ class RecordingLauncher {
         }
     }
 
-    @discardableResult
-    static func launchDictateToggle(targetBundleId: String = "", targetAppName: String = "") -> Int32? {
+    private static func launchDictation(
+        arguments: [String],
+        completion: @escaping DictationCompletion
+    ) -> Int32? {
         let task = yuluPythonProcess(scriptDir: scriptDir())
+        task.arguments = arguments
+        task.standardInput = FileHandle.nullDevice
+
+        let tempDir = FileManager.default.temporaryDirectory
+        let token = UUID().uuidString
+        let outputURL = tempDir.appendingPathComponent("yulu-dictation-\(token).out")
+        let errorURL = tempDir.appendingPathComponent("yulu-dictation-\(token).err")
+        FileManager.default.createFile(atPath: outputURL.path, contents: nil)
+        FileManager.default.createFile(atPath: errorURL.path, contents: nil)
+        guard let outputHandle = FileHandle(forWritingAtPath: outputURL.path),
+              let errorHandle = FileHandle(forWritingAtPath: errorURL.path) else {
+            try? FileManager.default.removeItem(at: outputURL)
+            try? FileManager.default.removeItem(at: errorURL)
+            return nil
+        }
+        task.standardOutput = outputHandle
+        task.standardError = errorHandle
+        task.terminationHandler = { process in
+            try? outputHandle.close()
+            try? errorHandle.close()
+            let output = (try? Data(contentsOf: outputURL)) ?? Data()
+            let error = (try? Data(contentsOf: errorURL)) ?? Data()
+            try? FileManager.default.removeItem(at: outputURL)
+            try? FileManager.default.removeItem(at: errorURL)
+
+            let logHandle = launcherLog()
+            try? logHandle.write(contentsOf: output)
+            try? logHandle.write(contentsOf: error)
+            try? logHandle.close()
+
+            let result = parseDictationOutput(output)
+            let message = String(data: error, encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            DispatchQueue.main.async {
+                completion(result, message, process.terminationStatus)
+            }
+        }
+        do {
+            try task.run()
+            return task.processIdentifier
+        } catch {
+            try? outputHandle.close()
+            try? errorHandle.close()
+            try? FileManager.default.removeItem(at: outputURL)
+            try? FileManager.default.removeItem(at: errorURL)
+            log("⚠️ failed to launch dictation: \(error)")
+            return nil
+        }
+    }
+
+    @discardableResult
+    static func launchDictateToggle(
+        targetBundleId: String = "",
+        targetAppName: String = "",
+        completion: @escaping DictationCompletion
+    ) -> Int32? {
         var args = [
             "dictate.py", "toggle",
             "--json",
@@ -724,23 +1058,16 @@ class RecordingLauncher {
         if !targetAppName.isEmpty {
             args.append(contentsOf: ["--target-app-name", targetAppName])
         }
-        task.arguments = args
-        task.standardInput = FileHandle.nullDevice
-        let logFH = launcherLog()
-        task.standardOutput = logFH
-        task.standardError = logFH
-        do {
-            try task.run()
-            return task.processIdentifier
-        } catch {
-            log("⚠️ failed to launch dictate.py toggle: \(error)")
-            return nil
-        }
+        return launchDictation(arguments: args, completion: completion)
     }
 
     @discardableResult
-    static func launchDictateTranslateToggle(targetLanguage: String, targetBundleId: String = "", targetAppName: String = "") -> Int32? {
-        let task = yuluPythonProcess(scriptDir: scriptDir())
+    static func launchDictateTranslateToggle(
+        targetLanguage: String,
+        targetBundleId: String = "",
+        targetAppName: String = "",
+        completion: @escaping DictationCompletion
+    ) -> Int32? {
         var args = [
             "dictate.py", "toggle",
             "--translate-to", targetLanguage.isEmpty ? "English" : targetLanguage,
@@ -752,18 +1079,7 @@ class RecordingLauncher {
         if !targetAppName.isEmpty {
             args.append(contentsOf: ["--target-app-name", targetAppName])
         }
-        task.arguments = args
-        task.standardInput = FileHandle.nullDevice
-        let logFH = launcherLog()
-        task.standardOutput = logFH
-        task.standardError = logFH
-        do {
-            try task.run()
-            return task.processIdentifier
-        } catch {
-            log("⚠️ failed to launch dictate.py translate toggle: \(error)")
-            return nil
-        }
+        return launchDictation(arguments: args, completion: completion)
     }
 
     @discardableResult
@@ -941,6 +1257,8 @@ class IPCServer {
             sendJSON(c, openVoiceChatResponse(obj: obj))
         case "paste_clipboard":
             sendJSON(c, pasteClipboardResponse(obj: obj))
+        case "preview_sound":
+            sendJSON(c, previewSoundResponse())
         case "search":
             // Shell out to python3 -m search.ipc_helper. Keeps all FTS5
             // logic in Python so the Swift binary doesn't need to bind
@@ -1125,6 +1443,16 @@ class IPCServer {
         return resp
     }
 
+    private func previewSoundResponse() -> [String: Any] {
+        let sem = DispatchSemaphore(value: 0)
+        DispatchQueue.main.async { [weak self] in
+            self?.app?.previewFeedbackSound()
+            sem.signal()
+        }
+        _ = sem.wait(timeout: .now() + 2)
+        return ["ok": true, "enabled": feedbackSoundsEnabled()]
+    }
+
     private func sendJSON(_ c: Int32, _ obj: [String: Any]) {
         guard var data = try? JSONSerialization.data(withJSONObject: obj, options: []) else {
             return
@@ -1141,6 +1469,13 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var voiceOverlayWindow: NSPanel?
     var voiceOverlayLabel: NSTextField?
     var voiceOverlayWave: VoiceWaveView?
+    var voiceOverlayStopButton: NSButton?
+    var voiceOverlayCancelButton: NSButton?
+    let feedbackPlayer = VoiceFeedbackPlayer()
+    var processingDetailWorkItem: DispatchWorkItem?
+    var feedbackDismissWorkItem: DispatchWorkItem?
+    var feedbackVisibleUntil: Date?
+    var pendingStartFeedbackText: String?
     // ponytail: one pending dictation target; add per-session IDs if overlapping dictations need exact cursor restore.
     var capturedPasteTarget: CapturedPasteTarget?
     var pollerTimer: Timer?
@@ -1149,6 +1484,7 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var daemonDownStreak: Int = 0
     var launcherPids: [Int32] = []
     var voiceLauncherPids: [Int32] = []
+    var resultManagedLauncherPids: Set<Int32> = []
     var hotkeyRegistrars: [HotkeyRegistrar] = []
     var sighupSource: DispatchSourceSignal?
     // IPC server exposing `status` / `toggle` / `open_inbox` on
@@ -1159,23 +1495,22 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         writePidFile()
         log("🟢 Yulu Status Agent started (pid=\(ProcessInfo.processInfo.processIdentifier))")
+        activeAppLanguage = readAppLanguage()
 
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let btn = statusItem.button {
-            btn.title = "语"
-            btn.toolTip = "Yulu — click to record"
+            btn.title = ""
+            btn.toolTip = L("Yulu — 点击开始录制", "Yulu — click to record")
         }
-        menu = MenuBuilder.build(target: self)
-        menu.delegate = self
-        statusItem.menu = menu
-        registerHotkeysFromConfig()
+        rebuildMenu()
         _ = RecordingLauncher.launchWarmDictation()
         _ = RecordingLauncher.launchWarmDictation(targetLanguage: dictationTargetLanguage(fallback: "English"))
         signal(SIGHUP, SIG_IGN)
         sighupSource = DispatchSource.makeSignalSource(signal: SIGHUP, queue: .main)
         sighupSource?.setEventHandler { [weak self] in
-            log("SIGHUP received — re-registering hotkeys")
-            self?.registerHotkeysFromConfig()
+            log("SIGHUP received — refreshing menu and hotkeys")
+            activeAppLanguage = readAppLanguage()
+            self?.rebuildMenu()
         }
         sighupSource?.resume()
 
@@ -1196,28 +1531,42 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
         poll()  // immediate first tick
     }
 
+    private func rebuildMenu() {
+        menu = MenuBuilder.build(target: self)
+        menu.delegate = self
+        statusItem.menu = menu
+        statusItem.button?.toolTip = L("Yulu — 点击开始录制", "Yulu — click to record")
+        registerHotkeysFromConfig()
+        applyState(state)
+    }
+
     private func registerHotkeysFromConfig() {
         hotkeyRegistrars.forEach { $0.unregister() }
         hotkeyRegistrars = []
         let specs = readHotkeysFromConfig()
-        var labels: [String] = []
         for (idx, spec) in specs.enumerated() {
             let registrar = HotkeyRegistrar(id: UInt32(idx + 1))
             let ok = registrar.register(keyCode: spec.keyCode, modifierMask: spec.modifierMask) { [weak self] in
                 self?.onHotkey(spec)
             }
             if ok { hotkeyRegistrars.append(registrar) }
-            let name: String
+            let identifier: String
             switch spec.action {
-            case "dictate": name = "Dictate"
-            case "translate": name = "Translate"
-            case "voice_chat": name = "Ask"
-            default: name = spec.action
+            case "dictate": identifier = "dictate_once"
+            case "translate": identifier = "dictate_translate"
+            case "voice_chat": identifier = "voice_chat"
+            default: continue
             }
-            labels.append(ok ? "\(name) \(spec.label)" : "\(name) unavailable")
-        }
-        if let item = menu.items.first(where: { $0.identifier == NSUserInterfaceItemIdentifier("hotkeys_label") }) {
-            item.title = "Hotkeys: \(labels.joined(separator: " · "))"
+            if let item = menu.items.first(where: {
+                $0.identifier == NSUserInterfaceItemIdentifier(identifier)
+            }) {
+                item.keyEquivalent = ok ? menuKeyEquivalent(for: spec.label) : ""
+                item.keyEquivalentModifierMask = menuModifierFlags(for: spec.modifierMask)
+                if spec.action == "translate" {
+                    let target = targetLanguageDisplayName(spec.targetLanguage)
+                    item.title = L("翻译为\(target)", "Translate to \(target)")
+                }
+            }
         }
     }
 
@@ -1260,11 +1609,23 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         daemonDownStreak = 0
         let recording = (resp["recording"] as? Bool) ?? false
+        if let micLevel = resp["micLevel"] as? NSNumber {
+            voiceOverlayWave?.level = normalizedMicLevel(micLevel.doubleValue)
+        }
 
+        if !resultManagedLauncherPids.isEmpty {
+            applyState(.processing)
+            return
+        }
         if recording {
             let file = (resp["file"] as? String) ?? ""
             activeRecordingIsDictation = file.hasPrefix("\(CONFIG_DIR)/dictation/")
             applyState(.recording)
+            if activeRecordingIsDictation, let text = pendingStartFeedbackText {
+                pendingStartFeedbackText = nil
+                showVoiceOverlay(text, animation: .recording)
+                feedbackPlayer.play(.start)
+            }
             return
         }
         activeRecordingIsDictation = false
@@ -1281,7 +1642,7 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @discardableResult
     func activeLauncherPids() -> [Int32] {
-        let active = launcherPids.filter { pidIsActive($0) }
+        let active = launcherPids.filter { resultManagedLauncherPids.contains($0) || pidIsActive($0) }
         if active.count != launcherPids.count { launcherPids = active }
         voiceLauncherPids = voiceLauncherPids.filter { active.contains($0) || pidIsActive($0) }
         return active
@@ -1311,7 +1672,7 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
             panel = existing
         } else {
             panel = NSPanel(
-                contentRect: NSRect(x: 0, y: 0, width: 120, height: 40),
+                contentRect: NSRect(x: 0, y: 0, width: 180, height: 36),
                 styleMask: [.borderless, .nonactivatingPanel],
                 backing: .buffered,
                 defer: false
@@ -1322,53 +1683,116 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
             panel.backgroundColor = .clear
             panel.isOpaque = false
             panel.ignoresMouseEvents = false
+            panel.title = L("Yulu 听写状态", "Yulu Dictation Status")
+            panel.setAccessibilityElement(true)
+            panel.setAccessibilityRole(.window)
+            panel.setAccessibilityLabel(L("Yulu 听写状态", "Yulu Dictation Status"))
 
-            let visual = VoiceOverlayContainerView(frame: panel.contentView?.bounds ?? NSRect(x: 0, y: 0, width: 120, height: 40))
+            let visual = VoiceOverlayContainerView(frame: panel.contentView?.bounds ?? NSRect(x: 0, y: 0, width: 180, height: 36))
+            visual.appearance = NSAppearance(named: .darkAqua)
             visual.autoresizingMask = [.width, .height]
-            visual.onCancel = { [weak self] in
-                self?.cancelVoiceInputFromOverlay()
-            }
+            visual.setAccessibilityElement(true)
+            visual.setAccessibilityRole(.group)
 
             let label = NSTextField(labelWithString: text)
-            label.alignment = .left
+            label.alignment = .center
             label.font = .systemFont(ofSize: 13, weight: .semibold)
-            label.textColor = .labelColor
+            label.textColor = NSColor(calibratedWhite: 0.94, alpha: 1)
             label.translatesAutoresizingMaskIntoConstraints = false
+            label.setAccessibilityElement(true)
 
             let waveView = VoiceWaveView()
             waveView.translatesAutoresizingMaskIntoConstraints = false
-            let content = NSView()
+            waveView.setAccessibilityElement(false)
+            let stopButton = NSButton(title: "■", target: self, action: #selector(stopVoiceInputFromOverlay))
+            stopButton.isBordered = false
+            stopButton.font = .systemFont(ofSize: 12, weight: .semibold)
+            stopButton.attributedTitle = NSAttributedString(
+                string: "■",
+                attributes: [.foregroundColor: NSColor(calibratedWhite: 0.94, alpha: 1)]
+            )
+            stopButton.wantsLayer = true
+            stopButton.layer?.backgroundColor = NSColor.white.withAlphaComponent(0.10).cgColor
+            stopButton.layer?.cornerRadius = 8
+            stopButton.toolTip = L("停止听写", "Stop dictation")
+            stopButton.setAccessibilityLabel(L("停止听写", "Stop dictation"))
+            stopButton.translatesAutoresizingMaskIntoConstraints = false
+            let cancelButton = NSButton(title: "×", target: self, action: #selector(cancelVoiceInputFromOverlay))
+            cancelButton.isBordered = false
+            cancelButton.font = .systemFont(ofSize: 17, weight: .medium)
+            cancelButton.attributedTitle = NSAttributedString(
+                string: "×",
+                attributes: [.foregroundColor: NSColor(calibratedWhite: 0.62, alpha: 1)]
+            )
+            cancelButton.toolTip = L("取消听写", "Cancel dictation")
+            cancelButton.setAccessibilityLabel(L("取消听写", "Cancel dictation"))
+            cancelButton.translatesAutoresizingMaskIntoConstraints = false
+            let content = NSStackView(views: [waveView, label, stopButton, cancelButton])
+            content.orientation = .horizontal
+            content.alignment = .centerY
+            content.spacing = 2
+            content.detachesHiddenViews = true
             content.translatesAutoresizingMaskIntoConstraints = false
+            content.setCustomSpacing(6, after: waveView)
+            content.setCustomSpacing(8, after: label)
 
             visual.addSubview(content)
-            content.addSubview(waveView)
-            content.addSubview(label)
             NSLayoutConstraint.activate([
                 content.centerXAnchor.constraint(equalTo: visual.centerXAnchor),
                 content.centerYAnchor.constraint(equalTo: visual.centerYAnchor),
                 content.leadingAnchor.constraint(greaterThanOrEqualTo: visual.leadingAnchor, constant: 8),
                 content.trailingAnchor.constraint(lessThanOrEqualTo: visual.trailingAnchor, constant: -8),
-                waveView.leadingAnchor.constraint(equalTo: content.leadingAnchor),
-                waveView.centerYAnchor.constraint(equalTo: content.centerYAnchor),
                 waveView.widthAnchor.constraint(equalToConstant: 24),
                 waveView.heightAnchor.constraint(equalToConstant: 20),
-                label.leadingAnchor.constraint(equalTo: waveView.trailingAnchor, constant: 6),
-                label.trailingAnchor.constraint(equalTo: content.trailingAnchor),
-                label.centerYAnchor.constraint(equalTo: content.centerYAnchor),
+                stopButton.widthAnchor.constraint(equalToConstant: 28),
+                stopButton.heightAnchor.constraint(equalToConstant: 28),
+                cancelButton.widthAnchor.constraint(equalToConstant: 24),
+                cancelButton.heightAnchor.constraint(equalToConstant: 28),
             ])
 
             panel.contentView = visual
             voiceOverlayWindow = panel
             voiceOverlayLabel = label
             voiceOverlayWave = waveView
+            voiceOverlayStopButton = stopButton
+            voiceOverlayCancelButton = cancelButton
         }
 
         voiceOverlayLabel?.stringValue = text
+        voiceOverlayLabel?.textColor = NSColor(calibratedWhite: 0.94, alpha: 1)
+        voiceOverlayLabel?.setAccessibilityLabel(text)
         voiceOverlayWave?.mode = animation
         voiceOverlayWave?.isHidden = animation == .none
+        (panel.contentView as? VoiceOverlayContainerView)?.mode = animation
+        let recordingControls = animation == .recording
+        voiceOverlayStopButton?.isHidden = !recordingControls
+        voiceOverlayCancelButton?.isHidden = !recordingControls
         if let screen = NSScreen.main {
             let f = screen.visibleFrame
-            panel.setFrameOrigin(NSPoint(x: f.midX - panel.frame.width / 2, y: f.minY + 86))
+            let textWidth = voiceOverlayLabel?.intrinsicContentSize.width ?? 0
+            let compactWidth: CGFloat
+            switch animation {
+            case .recording:
+                compactWidth = 180
+            case .processing:
+                compactWidth = text == L("正在启动…", "Starting…") || text == L("正在输入…", "Inserting…")
+                    ? 140
+                    : min(260, max(140, ceil(textWidth + 52)))
+            case .success:
+                compactWidth = 112
+            case .none:
+                compactWidth = min(260, max(112, ceil(textWidth + 32)))
+            }
+            let target = NSRect(x: f.midX - compactWidth / 2, y: f.minY + 86, width: compactWidth, height: 36)
+            if panel.isVisible && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+                NSAnimationContext.runAnimationGroup { context in
+                    context.duration = 0.18
+                    context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                    panel.animator().setFrame(target, display: true)
+                }
+            } else {
+                panel.setFrame(target, display: true)
+            }
         }
         panel.orderFrontRegardless()
     }
@@ -1377,8 +1801,56 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
         voiceOverlayWindow?.orderOut(nil)
     }
 
-    private func cancelVoiceInputFromOverlay() {
-        log("voice overlay clicked — canceling active voice input")
+    private func showTimedVoiceFeedback(
+        _ text: String,
+        sound: VoiceFeedbackSound?,
+        duration: TimeInterval
+    ) {
+        processingDetailWorkItem?.cancel()
+        feedbackDismissWorkItem?.cancel()
+        feedbackVisibleUntil = Date().addingTimeInterval(duration)
+        applyState(.idle)
+        showVoiceOverlay(text, animation: text == L("已输入", "Inserted") ? .success : .none)
+        if let sound { feedbackPlayer.play(sound) }
+        let dismiss = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.feedbackVisibleUntil = nil
+            if self.state == .idle { self.hideVoiceOverlay() }
+        }
+        feedbackDismissWorkItem = dismiss
+        DispatchQueue.main.asyncAfter(deadline: .now() + duration, execute: dismiss)
+    }
+
+    private func scheduleLongProcessingLabel() {
+        processingDetailWorkItem?.cancel()
+        let item = DispatchWorkItem { [weak self] in
+            guard self?.state == .processing else { return }
+            self?.showVoiceOverlay(L("正在确认完整录音…", "Finalizing recording…"), animation: .processing)
+        }
+        processingDetailWorkItem = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0, execute: item)
+    }
+
+    private func scheduleStartConfirmationPolls() {
+        for delay in [0.05, 0.15, 0.3] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                guard self?.pendingStartFeedbackText != nil else { return }
+                self?.poll()
+            }
+        }
+    }
+
+    @objc private func stopVoiceInputFromOverlay() {
+        guard state == .recording && activeRecordingIsDictation else { return }
+        if activeDictationIntent() == "voice_chat" {
+            onVoiceChat()
+        } else {
+            onDictateToggle()
+        }
+    }
+
+    @objc private func cancelVoiceInputFromOverlay() {
+        log("voice overlay cancel clicked — canceling active voice input")
         let voicePids = activeVoiceLauncherPids()
         for pid in voicePids {
             _ = kill(pid, SIGTERM)
@@ -1386,21 +1858,18 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let canceled = Set(voicePids)
         launcherPids.removeAll { canceled.contains($0) }
         voiceLauncherPids.removeAll { canceled.contains($0) }
+        resultManagedLauncherPids.subtract(canceled)
         _ = RecordingLauncher.launchDictateCancel()
+        pendingStartFeedbackText = nil
         activeRecordingIsDictation = false
         capturedPasteTarget = nil
-        applyState(.idle)
-        showVoiceOverlay("已取消", animation: .none)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
-            if self?.state == .idle {
-                self?.hideVoiceOverlay()
-            }
-        }
+        showTimedVoiceFeedback(L("已取消", "Canceled"), sound: nil, duration: 0.8)
     }
 
     private func applyState(_ new: AgentState) {
         state = new
-        if new == .idle || new == .daemonDown {
+        let feedbackStillVisible = feedbackVisibleUntil.map { $0 > Date() } ?? false
+        if new == .daemonDown || (new == .idle && !feedbackStillVisible) {
             hideVoiceOverlay()
         }
         if let btn = statusItem.button {
@@ -1408,15 +1877,15 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 btn.image = img
                 btn.title = ""
             } else {
-                // Fallback if assets missing — keep text glyph
-                btn.image = nil
+                let symbol: String
                 switch new {
-                case .idle:        btn.title = "语"
-                case .recording:   btn.title = "● 语"
-                case .processing:  btn.title = "⋯ 语"
-                case .meetingBusy: btn.title = "🟡 语"
-                case .daemonDown:  btn.title = "🚫 语"
+                case .idle, .meetingBusy: symbol = "quote.bubble.fill"
+                case .recording: symbol = "record.circle.fill"
+                case .processing: symbol = "ellipsis.circle.fill"
+                case .daemonDown: symbol = "exclamationmark.circle.fill"
                 }
+                btn.image = NSImage(systemSymbolName: symbol, accessibilityDescription: "Yulu")
+                btn.title = ""
             }
             if new == .meetingBusy {
                 btn.alphaValue = 0.4  // greyed-out
@@ -1429,21 +1898,32 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let wantId = NSUserInterfaceItemIdentifier("toggle")
         if let item = menu.items.first(where: { $0.identifier == wantId }) {
             switch new {
-            case .idle:        item.title = "Start Recording"
-            case .recording:   item.title = activeRecordingIsDictation ? "Dictation in progress" : "● Recording — click to stop"
-            case .processing:  item.title = "Start Recording (transcribing previous)"
-            case .meetingBusy: item.title = "Meeting in progress"
-            case .daemonDown:  item.title = "Audio daemon not running"
+            case .idle:        item.title = L("开始录制", "Start Recording")
+            case .recording:   item.title = activeRecordingIsDictation ? L("听写进行中", "Dictation in Progress") : L("停止录制", "Stop Recording")
+            case .processing:  item.title = L("开始录制（上一条正在转写）", "Start Recording (transcribing previous)")
+            case .meetingBusy: item.title = L("会议进行中", "Meeting in Progress")
+            case .daemonDown:  item.title = L("音频服务不可用", "Audio Service Unavailable")
             }
+            item.image = NSImage(
+                systemSymbolName: new == .recording && !activeRecordingIsDictation
+                    ? "stop.circle.fill"
+                    : "record.circle",
+                accessibilityDescription: nil
+            )
             item.isEnabled = (new == .idle || (new == .recording && !activeRecordingIsDictation) || new == .processing)
         }
         let voiceChatActive = (new == .recording && activeRecordingIsDictation && activeDictationIntent() == "voice_chat")
         if let item = menu.items.first(where: { $0.identifier == NSUserInterfaceItemIdentifier("dictate_once") }) {
-            item.title = voiceChatActive ? "Voice Chat in progress" : ((new == .recording && activeRecordingIsDictation) ? "Stop Dictation" : "Start Dictation")
+            item.title = voiceChatActive
+                ? L("语音对话进行中", "Voice Chat in Progress")
+                : ((new == .recording && activeRecordingIsDictation) ? L("停止听写", "Stop Dictation") : L("开始听写", "Start Dictation"))
             item.isEnabled = (new == .idle || new == .processing || (new == .recording && activeRecordingIsDictation && !voiceChatActive))
         }
+        if let item = menu.items.first(where: { $0.identifier == NSUserInterfaceItemIdentifier("dictate_translate") }) {
+            item.isEnabled = (new == .idle || new == .processing)
+        }
         if let item = menu.items.first(where: { $0.identifier == NSUserInterfaceItemIdentifier("voice_chat") }) {
-            item.title = voiceChatActive ? "Stop Voice Chat" : "Ask Agent by Voice"
+            item.title = voiceChatActive ? L("停止语音对话", "Stop Voice Chat") : L("语音询问 Agent", "Ask Agent by Voice")
             item.isEnabled = (new == .idle || new == .processing || voiceChatActive)
         }
     }
@@ -1460,19 +1940,32 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
         refreshCurrentMeetingItems()
 
         let recents = loadRecentRecordings(limit: 5)
-        for i in 0..<5 {
-            let wantId = NSUserInterfaceItemIdentifier("recent_\(i)")
-            guard let item = menu.items.first(where: { $0.identifier == wantId })
-                else { continue }
-            if i < recents.count {
-                let r = recents[i]
-                item.title = r.stem
-                item.target = self
-                item.action = #selector(onRecentClicked(_:))
-                item.representedObject = r.stem
-                item.isHidden = false
-            } else {
-                item.isHidden = true
+        let dateFormatter = DateFormatter()
+        dateFormatter.locale = appLocale()
+        dateFormatter.setLocalizedDateFormatFromTemplate("MMM d HH:mm")
+        if let recentMenu = menu.items.first(where: {
+            $0.identifier == NSUserInterfaceItemIdentifier("recent_recordings")
+        })?.submenu {
+            recentMenu.items.first(where: {
+                $0.identifier == NSUserInterfaceItemIdentifier("recent_empty")
+            })?.isHidden = !recents.isEmpty
+            for i in 0..<5 {
+                let wantId = NSUserInterfaceItemIdentifier("recent_\(i)")
+                guard let item = recentMenu.items.first(where: { $0.identifier == wantId })
+                    else { continue }
+                if i < recents.count {
+                    let r = recents[i]
+                    let time = dateFormatter.string(from: r.mtime)
+                    let name = shortMeetingTitle(r.title)
+                    item.title = "\(time) \(name)"
+                    item.attributedTitle = recentRecordingMenuTitle(time: time, name: name)
+                    item.target = self
+                    item.action = #selector(onRecentClicked(_:))
+                    item.representedObject = r.stem
+                    item.isHidden = false
+                } else {
+                    item.isHidden = true
+                }
             }
         }
     }
@@ -1486,10 +1979,14 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let record = menu.items.first(where: { $0.identifier == NSUserInterfaceItemIdentifier("current_meeting_record") })
         let join = menu.items.first(where: { $0.identifier == NSUserInterfaceItemIdentifier("current_meeting_join") })
         let sep = menu.items.first(where: { $0.identifier == NSUserInterfaceItemIdentifier("current_meeting_separator") })
+        let toggle = menu.items.first(where: { $0.identifier == NSUserInterfaceItemIdentifier("toggle") })
 
         label?.isHidden = !visible
         record?.isHidden = !visible
         sep?.isHidden = !visible
+        if state == .idle {
+            toggle?.title = visible ? L("开始无标题录制", "Start Untitled Recording") : L("开始录制", "Start Recording")
+        }
 
         guard let meeting = meeting else {
             join?.isHidden = true
@@ -1497,11 +1994,18 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
 
         let title = shortMeetingTitle(meeting.title)
-        record?.title = "Record: \(title)"
+        let endFormatter = DateFormatter()
+        endFormatter.locale = appLocale()
+        endFormatter.timeStyle = .short
+        label?.title = L(
+            "当前会议 · \(title) · \(endFormatter.string(from: meeting.end)) 结束",
+            "Current Meeting · \(title) · Ends \(endFormatter.string(from: meeting.end))"
+        )
+        record?.title = L("录制此会议", "Record This Meeting")
         record?.representedObject = meeting.id
         record?.isEnabled = canStart
 
-        join?.title = "Record and join: \(title)"
+        join?.title = L("录制并加入", "Record and Join")
         join?.representedObject = meeting.id
         join?.isHidden = meeting.link.isEmpty
         join?.isEnabled = canStart
@@ -1538,6 +2042,69 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
         _ = RecordingLauncher.launchStart(title: title)
     }
 
+    func previewFeedbackSound() {
+        feedbackPlayer.play(.success)
+    }
+
+    private func handleDictationCompletion(
+        result: [String: Any]?,
+        error: String,
+        status: Int32,
+        wasStopping: Bool,
+        recordingText: String,
+        pid: Int32?
+    ) {
+        if let pid {
+            resultManagedLauncherPids.remove(pid)
+            launcherPids.removeAll { $0 == pid }
+            voiceLauncherPids.removeAll { $0 == pid }
+        }
+        let isStartCompletion = !wasStopping && status == 0 && result?["action"] as? String == "start"
+        if isStartCompletion && !resultManagedLauncherPids.isEmpty { return }
+        processingDetailWorkItem?.cancel()
+        if isStartCompletion {
+            feedbackVisibleUntil = nil
+            activeRecordingIsDictation = true
+            applyState(.recording)
+            showVoiceOverlay(recordingText, animation: .recording)
+            if pendingStartFeedbackText != nil {
+                pendingStartFeedbackText = nil
+                feedbackPlayer.play(.start)
+            }
+            return
+        }
+
+        pendingStartFeedbackText = nil
+        activeRecordingIsDictation = false
+        capturedPasteTarget = nil
+        if wasStopping && status == 0 && result?["action"] as? String == "stop" {
+            log("dictation result success pasted=\(result?["pasted"] as? Bool == true) post_stop_ms=\(result?["post_stop_ms"] ?? 0)")
+            if result?["pasted"] as? Bool == true {
+                showTimedVoiceFeedback(L("已输入", "Inserted"), sound: .success, duration: 0.8)
+            } else if result?["copied"] as? Bool == true {
+                showTimedVoiceFeedback(L("已复制，请按 ⌘V", "Copied — press ⌘V"), sound: .failure, duration: 3.5)
+            } else {
+                showTimedVoiceFeedback(L("听写完成，未自动输入", "Dictation complete — not inserted"), sound: .failure, duration: 3.5)
+            }
+            return
+        }
+
+        let code = result?["error_code"] as? String ?? "transcription_failed"
+        let message: String
+        if !wasStopping {
+            message = L("无法开始听写", "Could not start dictation")
+        } else if code == "no_speech" {
+            message = L("没有听到清晰语音", "No clear speech detected")
+        } else if code == "paste_failed" {
+            message = L("已复制，请按 ⌘V", "Copied — press ⌘V")
+        } else {
+            message = L("听写失败 · 录音已保留", "Dictation failed · Recording saved")
+        }
+        log("dictation result failure status=\(status) code=\(code) error=\(error)")
+        showTimedVoiceFeedback(message, sound: .failure, duration: code == "no_speech" ? 2.5 : 4.0)
+        poll()
+    }
+
     @objc func onDictateToggle() {
         let stopping = (state == .recording && activeRecordingIsDictation)
         if stopping && activeDictationIntent() == "voice_chat" {
@@ -1546,22 +2113,52 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         let target = stopping ? nil : currentInputTargetApplication()
         let pasteTarget = stopping ? nil : capturePasteTarget(for: target)
-        if let pid = RecordingLauncher.launchDictateToggle(
+        feedbackDismissWorkItem?.cancel()
+        feedbackVisibleUntil = nil
+        if stopping {
+            showVoiceOverlay(L("正在输入…", "Inserting…"), animation: .processing)
+            applyState(.processing)
+            scheduleLongProcessingLabel()
+        } else {
+            capturedPasteTarget = pasteTarget
+            pendingStartFeedbackText = L("听写中", "Dictating")
+            applyState(.processing)
+            showVoiceOverlay(L("正在启动…", "Starting…"), animation: .processing)
+        }
+        var launchedPid: Int32?
+        let pid = RecordingLauncher.launchDictateToggle(
             targetBundleId: target?.bundleIdentifier ?? "",
             targetAppName: target?.localizedName ?? ""
-        ) {
-            if stopping {
-                launcherPids.append(pid)
-                voiceLauncherPids.append(pid)
-                showVoiceOverlay("正在处理", wave: false)
-                applyState(.processing)
-            } else {
-                activeRecordingIsDictation = true
-                capturedPasteTarget = pasteTarget
-                showVoiceOverlay("正在听写", wave: true)
-                applyState(.recording)
-            }
+        ) { [weak self] result, error, status in
+            self?.handleDictationCompletion(
+                result: result,
+                error: error,
+                status: status,
+                wasStopping: stopping,
+                recordingText: L("听写中", "Dictating"),
+                pid: launchedPid
+            )
         }
+        launchedPid = pid
+        if pid != nil && !stopping { scheduleStartConfirmationPolls() }
+        if let pid, stopping {
+            launcherPids.append(pid)
+            voiceLauncherPids.append(pid)
+            resultManagedLauncherPids.insert(pid)
+        } else if pid == nil {
+            handleDictationCompletion(
+                result: nil,
+                error: "launch_failed",
+                status: -1,
+                wasStopping: stopping,
+                recordingText: L("听写中", "Dictating"),
+                pid: nil
+            )
+        }
+    }
+
+    @objc func onDictateTranslateFromMenu() {
+        onDictateTranslate(targetLanguage: dictationTargetLanguage(fallback: "English"))
     }
 
     func onDictateTranslate(targetLanguage: String) {
@@ -1576,22 +2173,48 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         let target = stopping ? nil : currentInputTargetApplication()
         let pasteTarget = stopping ? nil : capturePasteTarget(for: target)
-        if let pid = RecordingLauncher.launchDictateTranslateToggle(
+        feedbackDismissWorkItem?.cancel()
+        feedbackVisibleUntil = nil
+        if stopping {
+            showVoiceOverlay(L("正在输入…", "Inserting…"), animation: .processing)
+            applyState(.processing)
+            scheduleLongProcessingLabel()
+        } else {
+            capturedPasteTarget = pasteTarget
+            pendingStartFeedbackText = L("正在翻译", "Translating")
+            applyState(.processing)
+            showVoiceOverlay(L("正在启动…", "Starting…"), animation: .processing)
+        }
+        var launchedPid: Int32?
+        let pid = RecordingLauncher.launchDictateTranslateToggle(
             targetLanguage: dictationTargetLanguage(fallback: targetLanguage),
             targetBundleId: target?.bundleIdentifier ?? "",
             targetAppName: target?.localizedName ?? ""
-        ) {
-            if stopping {
-                launcherPids.append(pid)
-                voiceLauncherPids.append(pid)
-                showVoiceOverlay("正在处理", wave: false)
-                applyState(.processing)
-            } else {
-                activeRecordingIsDictation = true
-                capturedPasteTarget = pasteTarget
-                showVoiceOverlay("正在翻译", wave: true)
-                applyState(.recording)
-            }
+        ) { [weak self] result, error, status in
+            self?.handleDictationCompletion(
+                result: result,
+                error: error,
+                status: status,
+                wasStopping: stopping,
+                recordingText: L("正在翻译", "Translating"),
+                pid: launchedPid
+            )
+        }
+        launchedPid = pid
+        if pid != nil && !stopping { scheduleStartConfirmationPolls() }
+        if let pid, stopping {
+            launcherPids.append(pid)
+            voiceLauncherPids.append(pid)
+            resultManagedLauncherPids.insert(pid)
+        } else if pid == nil {
+            handleDictationCompletion(
+                result: nil,
+                error: "launch_failed",
+                status: -1,
+                wasStopping: stopping,
+                recordingText: L("正在翻译", "Translating"),
+                pid: nil
+            )
         }
     }
 
@@ -1609,12 +2232,12 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
             if stopping {
                 launcherPids.append(pid)
                 voiceLauncherPids.append(pid)
-                showVoiceOverlay("正在处理", wave: false)
+                showVoiceOverlay(L("正在处理", "Processing"), wave: false)
                 applyState(.processing)
             } else {
                 activeRecordingIsDictation = true
                 capturedPasteTarget = nil
-                showVoiceOverlay("正在提问", wave: true)
+                showVoiceOverlay(L("正在提问", "Asking"), wave: true)
                 applyState(.recording)
             }
         }
@@ -1638,7 +2261,10 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
         log("daemon down — surfacing notification")
         let note = NSUserNotification()
         note.title = "Yulu"
-        note.informativeText = "audio_daemon not running. Restart with: launchctl load ~/Library/LaunchAgents/com.yulu.audiodaemon.plist"
+        note.informativeText = L(
+            "音频服务未运行，请在 Yulu 健康状态中重新启动。",
+            "The audio service is not running. Restart it from Yulu Health."
+        )
         NSUserNotificationCenter.default.deliver(note)
     }
 
@@ -1654,19 +2280,44 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
+    @objc func onOpenSettings() {
+        if let url = URL(string: "http://127.0.0.1:7777/settings") {
+            NSWorkspace.shared.open(url)
+        }
+    }
+
     private func currentInputTargetApplication() -> NSRunningApplication? {
         if let front = NSWorkspace.shared.frontmostApplication,
            isUsableInputTarget(front) {
             return front
+        }
+        if let focused = focusedInputApplication() {
+            return focused
         }
         return NSWorkspace.shared.runningApplications.first { app in
             app.isActive && isUsableInputTarget(app)
         }
     }
 
+    private func focusedInputApplication() -> NSRunningApplication? {
+        guard AXIsProcessTrusted() else { return nil }
+        let system = AXUIElementCreateSystemWide()
+        var focused: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(
+            system,
+            kAXFocusedUIElementAttribute as CFString,
+            &focused
+        ) == .success, let focused else { return nil }
+        var pid: pid_t = 0
+        guard AXUIElementGetPid(focused as! AXUIElement, &pid) == .success,
+              let app = NSRunningApplication(processIdentifier: pid),
+              isUsableInputTarget(app) else { return nil }
+        return app
+    }
+
     private func isUsableInputTarget(_ app: NSRunningApplication) -> Bool {
         let bundleId = app.bundleIdentifier ?? ""
-        if bundleId == "com.apple.loginwindow" || bundleId == Bundle.main.bundleIdentifier {
+        if bundleId == "com.apple.loginwindow" || bundleId == "com.apple.SecurityAgent" || bundleId == Bundle.main.bundleIdentifier {
             return false
         }
         return app.activationPolicy != .prohibited
@@ -1990,7 +2641,7 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 backing: .buffered,
                 defer: false
             )
-            panel.title = "Yulu Voice Chat"
+            panel.title = L("Yulu 语音对话", "Yulu Voice Chat")
             panel.isReleasedWhenClosed = false
             panel.level = .floating
             panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
@@ -2034,6 +2685,23 @@ if CommandLine.arguments.contains("--self-test") {
         fputs("status_agent self-test failed\n", stderr)
         exit(1)
     }
+    let prettyJSON = Data("{\n  \"action\": \"stop\",\n  \"pasted\": true\n}\n".utf8)
+    assert(parseDictationOutput(prettyJSON)?["action"] as? String == "stop")
+    assert(normalizedMicLevel(0) == 0)
+    assert(normalizedMicLevel(0.1) > normalizedMicLevel(0.01))
+    assert(menuKeyEquivalent(for: "⌃⌥Space") == " ")
+    assert(menuKeyEquivalent(for: "⌃⌥T") == "t")
+    assert(menuModifierFlags(for: 0x1800) == [.control, .option])
+    assert(recentRecordingFallbackTitle("AgentKey_Product_Weekly_20260804_160014") == "Agent Key Product Weekly")
+    assert(recentRecordingMenuTitle(time: "Aug 5 09:30", name: "Roadmap").string == "Aug 5 09:30\tRoadmap")
+    activeAppLanguage = .en
+    let menuTarget = StatusAgentApp()
+    let menu = MenuBuilder.build(target: menuTarget)
+    assert(menu.items.first(where: { $0.identifier?.rawValue == "current_meeting_label" })?.isHidden == true)
+    assert(menu.items.first(where: { $0.identifier?.rawValue == "recent_recordings" })?.submenu != nil)
+    assert(menu.items.contains(where: { $0.title == "Settings…" && $0.keyEquivalent == "," }))
+    assert(menu.items.last?.title == "Quit Yulu")
+    withExtendedLifetime(menuTarget) {}
     print("status_agent self-test ok: \(task.executableURL?.path ?? "missing")")
     exit(0)
 }

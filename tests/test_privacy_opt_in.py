@@ -60,10 +60,10 @@ def test_conversation_agent_does_not_change_selected_audio_engine():
     report = mod.privacy_opt_in_report({
         "llm": {"agent": {"provider": "codex"}},
         "agent_pipeline": {"enabled": True},
-        "transcription": {"engine": "xai", "xai_credential_source": "openclaw"},
+        "transcription": {"engine": "xai"},
     })
 
     assert report["conversation"]["provider"] == "codex"
     assert report["transcription"]["provider"] == "xai"
-    assert report["transcription"]["credential_source"] == "openclaw"
+    assert report["transcription"]["credential_source"] == "yulu-keychain"
     assert report["transcription"]["cloud_audio_opt_in"] is True

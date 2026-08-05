@@ -10,18 +10,19 @@ const SCHEMA = [
   { path: "audio.output_dir",         category: "audio",         label: "录音输出目录", type: "path", reload: { kind: "restart", daemons: ["audiodaemon"] } },
   { path: "transcription.engine",     category: "transcription", label: "音频引擎",  type: "select", reload: { kind: "none" } },
   { path: "transcription.language",   category: "transcription", label: "语言",      type: "select", reload: { kind: "none" } },
-  { path: "transcription.xai_credential_source", category: "transcription", label: "xAI OAuth 来源", type: "select", reload: { kind: "none" } },
   { path: "llm.enabled",              category: "llm",           label: "启用 LLM",  type: "toggle", reload: { kind: "none" } },
   { path: "status_agent.enabled",     category: "general",       label: "菜单栏 Agent", type: "toggle", reload: { kind: "none" } },
+  { path: "status_agent.feedback_sounds", category: "voice",     label: "听写提示音", type: "toggle", reload: { kind: "none" } },
   { path: "status_agent.hotkeys",     category: "voice",         label: "语音输入快捷键", type: "text", reload: { kind: "sighup", daemons: ["statusagent"] } },
   { path: "transcription.dictation",  category: "voice",         label: "语音输入模板", type: "text", reload: { kind: "none" } },
 ];
 
 // Shared spy so tests can assert config.update was called on a field edit.
 // vi.hoisted keeps it available inside the hoisted vi.mock factory below.
-const { configUpdateSpy, promptsListSpy, recording } = vi.hoisted(() => ({
+const { configUpdateSpy, promptsListSpy, previewSoundSpy, recording } = vi.hoisted(() => ({
   configUpdateSpy: vi.fn(async (_vars: { key: string; value: unknown }) => ({ daemonsNeedingRestart: [], daemonsNeedingSighup: [] })),
   promptsListSpy: vi.fn(),
+  previewSoundSpy: vi.fn(),
   recording: { state: "idle" as string },
 }));
 
@@ -40,12 +41,12 @@ vi.mock("../../../web/src/trpc.js", () => {
     transcription: {
       engine: "local",
       language: "auto",
-      xai_credential_source: "auto",
       dictation: { prompt_slug: "dictation-cleanup", translate_prompt_slug: "dictation-translate", target_language: "English" },
     },
     llm: { enabled: false, command: [] },
     status_agent: {
       enabled: false,
+      feedback_sounds: true,
       hotkeys: {
         dictate: { key: "Space", modifiers: ["ctrl", "alt"] },
         translate: { key: "T", modifiers: ["ctrl", "alt"] },
@@ -85,7 +86,10 @@ vi.mock("../../../web/src/trpc.js", () => {
         }) },
       },
       daemons: { restart: { useMutation: noopMutation } },
-      recording: { state: { useQuery: () => ({ data: { state: recording.state } }) } },
+      recording: {
+        state: { useQuery: () => ({ data: { state: recording.state } }) },
+        previewSound: { useMutation: () => ({ mutate: previewSoundSpy, isPending: false }) },
+      },
       system: {
         audioDevices: { useQuery: () => ({ data: {
           input: [
@@ -137,13 +141,13 @@ vi.mock("../../../web/src/trpc.js", () => {
       },
       xaiAudio: {
         status: { useQuery: () => ({ data: {
-          sources: [
-            { source: "hermes", installed: true, oauthSupported: true, connected: false, detail: "需要授权 xAI OAuth" },
-            { source: "openclaw", installed: true, oauthSupported: false, connected: false, detail: "当前 OpenClaw 版本不支持 xAI OAuth" },
-          ],
-          authorization: { source: null, status: "idle", verificationUrl: "", userCode: "", message: "" },
+          connected: false,
+          detail: "需要在 Yulu 中授权 xAI",
+          authorization: { status: "idle", verificationUrl: "", userCode: "", message: "" },
         }, error: null }) },
         authorize: { useMutation: noopMutation },
+        cancelAuthorization: { useMutation: noopMutation },
+        logout: { useMutation: noopMutation },
         test: { useMutation: noopMutation },
       },
       llm: { test: { useMutation: noopMutation } },
@@ -377,6 +381,20 @@ describe("Settings category detail content (re-homed widgets)", () => {
       key: "status_agent.hotkeys.dictate.modifiers",
       value: ["ctrl", "alt"],
     })));
+  });
+
+  it("voice: feedback sound toggle and preview are wired", async () => {
+    configUpdateSpy.mockClear();
+    previewSoundSpy.mockClear();
+    const { container } = wrap("/settings/voice");
+    const voice = within(container.querySelector("#voice-input") as HTMLElement);
+    fireEvent.click(voice.getByRole("switch", { name: "听写提示音" }));
+    await waitFor(() => expect(configUpdateSpy).toHaveBeenCalledWith(expect.objectContaining({
+      key: "status_agent.feedback_sounds",
+      value: false,
+    })));
+    fireEvent.click(voice.getByRole("button", { name: "试听" }));
+    expect(previewSoundSpy).toHaveBeenCalledTimes(1);
   });
 
   it("voice: dictation template selector commits the selected prompt slug", async () => {

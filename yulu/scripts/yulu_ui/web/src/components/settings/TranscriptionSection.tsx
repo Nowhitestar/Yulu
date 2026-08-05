@@ -24,11 +24,31 @@ export function TranscriptionSection({ tracker }: TranscriptionSectionProps) {
   const uninstall = trpc.localCaption.uninstall.useMutation({ onSettled: refreshLocal });
   const testModel = trpc.localCaption.test.useMutation({ onSettled: refreshLocal });
   const authorizeXai = trpc.xaiAudio.authorize.useMutation({ onSettled: refreshXai });
+  const cancelXaiAuthorization = trpc.xaiAudio.cancelAuthorization.useMutation({ onSettled: refreshXai });
+  const logoutXai = trpc.xaiAudio.logout.useMutation({ onSettled: refreshXai });
   const testXai = trpc.xaiAudio.test.useMutation({ onSettled: refreshXai });
   const { commit, isBlocked } = useConfigField(tracker);
   const t = useT();
   const localBusy = (local.data?.operation ?? "idle") !== "idle"
     || install.isPending || uninstall.isPending || testModel.isPending;
+  const xaiAuthorizing = xai.data?.authorization.status === "starting"
+    || xai.data?.authorization.status === "running";
+
+  const startXaiAuthorization = () => {
+    const authorizationWindow = window.open("about:blank", "_blank");
+    if (authorizationWindow) authorizationWindow.opener = null;
+    authorizeXai.mutate(undefined, {
+      onSuccess: (authorization) => {
+        if (!authorization.verificationUrl) {
+          authorizationWindow?.close();
+          return;
+        }
+        if (authorizationWindow) authorizationWindow.location.href = authorization.verificationUrl;
+        else window.open(authorization.verificationUrl, "_blank", "noopener,noreferrer");
+      },
+      onError: () => authorizationWindow?.close(),
+    });
+  };
 
   if (!config) return null;
 
@@ -137,86 +157,66 @@ export function TranscriptionSection({ tracker }: TranscriptionSectionProps) {
         )}
       </div>
 
-      <InlineEditRow
-        label={t("settings.transcription.xai.source.label")}
-        help={t("settings.transcription.xai.source.help")}
-        type="select"
-        value={config.transcription.xai_credential_source ?? "auto"}
-        options={[
-          { value: "auto", label: t("settings.transcription.xai.source.auto") },
-          { value: "hermes", label: "Hermes OAuth" },
-          { value: "openclaw", label: "OpenClaw OAuth" },
-        ]}
-        onCommit={commit("transcription.xai_credential_source") as (value: string) => void}
-        disabled={isBlocked("transcription.xai_credential_source")}
-        status={tracker.statusFor("transcription.xai_credential_source")}
-      />
-
-      <div className="local-caption-card" data-installed={xai.data?.sources.some((source) => source.connected) ? "true" : "false"}>
+      <div className="local-caption-card" data-installed={xai.data?.connected ? "true" : "false"}>
         <div className="local-caption-head">
           <div>
             <div className="local-caption-title">{t("settings.transcription.xai.title")}</div>
             <div className="local-caption-sub">{t("settings.transcription.xai.sub")}</div>
           </div>
-          <span className={`provider-state ${xai.data?.sources.some((source) => source.connected) ? "provider-state--ok" : "provider-state--muted"}`}>
-            {xai.data?.sources.some((source) => source.connected)
+          <span className={`provider-state ${xai.data?.connected ? "provider-state--ok" : "provider-state--muted"}`}>
+            {xai.data?.connected
               ? t("settings.transcription.xai.connected")
               : t("settings.transcription.xai.unavailable")}
           </span>
         </div>
 
-        {(xai.data?.sources ?? []).map((source) => (
-          <div className="row" key={source.source}>
-            <div className="row-label">
-              <div>{source.source === "hermes" ? "Hermes" : "OpenClaw"}</div>
-              <div className="row-help">{source.detail}</div>
-            </div>
-            <div className="row-value">
-              {source.connected
-                ? t("settings.transcription.xai.connected")
-                : source.installed && source.oauthSupported
-                  ? (
-                    <button
-                      type="button"
-                      className="path-btn"
-                      disabled={authorizeXai.isPending || xai.data?.authorization.status === "running"}
-                      onClick={() => authorizeXai.mutate({ source: source.source })}
-                    >
-                      {t("settings.transcription.xai.authorize")}
-                    </button>
-                  )
-                  : t("settings.transcription.xai.notSupported")}
-            </div>
-            <div className="row-status" />
-          </div>
-        ))}
-
-        {xai.data?.authorization.status === "running" && (
+        {xai.data?.detail && !xaiAuthorizing && (
+          <div className="provider-status-note">{xai.data.detail}</div>
+        )}
+        {xaiAuthorizing && (
           <div className="provider-status-note" role="status">
-            {xai.data.authorization.message}
-            {xai.data.authorization.verificationUrl && (
+            {xai.data?.authorization.message}
+            {xai.data?.authorization.verificationUrl && (
               <> · <a href={xai.data.authorization.verificationUrl} target="_blank" rel="noreferrer">{t("settings.transcription.xai.openAuthorization")}</a></>
             )}
-            {xai.data.authorization.userCode && <> · {t("settings.transcription.xai.code")} {xai.data.authorization.userCode}</>}
+            {xai.data?.authorization.userCode && <> · {t("settings.transcription.xai.code")} {xai.data.authorization.userCode}</>}
           </div>
         )}
-        {(xai.error || authorizeXai.error || testXai.error || xai.data?.authorization.status === "failed") && (
+        {(xai.error || authorizeXai.error || cancelXaiAuthorization.error || logoutXai.error || testXai.error || xai.data?.authorization.status === "failed") && (
           <div className="provider-status-note provider-status-note--bad" role="alert">
-            {xai.error?.message || authorizeXai.error?.message || testXai.error?.message || xai.data?.authorization.message}
+            {xai.error?.message || authorizeXai.error?.message || cancelXaiAuthorization.error?.message || logoutXai.error?.message || testXai.error?.message || xai.data?.authorization.message}
           </div>
         )}
         {testXai.data?.ok && (
           <div className="provider-status-note">{t("settings.transcription.xai.testPassed")} · {testXai.data.provider}</div>
         )}
         <div className="local-caption-actions">
-          <button
-            type="button"
-            className="path-btn"
-            disabled={testXai.isPending || !xai.data?.sources.some((source) => source.connected)}
-            onClick={() => testXai.mutate({ source: config.transcription.xai_credential_source ?? "auto" })}
-          >
-            {testXai.isPending ? t("settings.transcription.xai.testing") : t("settings.transcription.xai.test")}
-          </button>
+          {xaiAuthorizing ? (
+            <button type="button" className="path-btn" disabled={cancelXaiAuthorization.isPending} onClick={() => cancelXaiAuthorization.mutate()}>
+              {t("settings.transcription.xai.cancel")}
+            </button>
+          ) : (
+            <button type="button" className="path-btn local-caption-primary" disabled={authorizeXai.isPending} onClick={startXaiAuthorization}>
+              {xai.data?.connected ? t("settings.transcription.xai.reauthorize") : t("settings.transcription.xai.authorize")}
+            </button>
+          )}
+          {xai.data?.connected && !xaiAuthorizing && (
+            <>
+              <button type="button" className="path-btn" disabled={testXai.isPending} onClick={() => testXai.mutate()}>
+                {testXai.isPending ? t("settings.transcription.xai.testing") : t("settings.transcription.xai.test")}
+              </button>
+              <button
+                type="button"
+                className="path-btn"
+                disabled={logoutXai.isPending}
+                onClick={() => {
+                  if (window.confirm(t("settings.transcription.xai.logoutConfirm"))) logoutXai.mutate();
+                }}
+              >
+                {t("settings.transcription.xai.logout")}
+              </button>
+            </>
+          )}
         </div>
         <div className="provider-install-hint">{t("settings.transcription.xai.noDependency")}</div>
       </div>

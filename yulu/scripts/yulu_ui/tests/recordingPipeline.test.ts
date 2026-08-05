@@ -533,8 +533,14 @@ describe("RecordingPipeline", () => {
 
   it("warms and reuses the selected audio service for allowed on-demand WAVs", async () => {
     const setupResult = setup({
-      glossaryRows: [{ term: "阿尔法学院", canonical: "阿尔法学院", scope: "both" }],
+      glossaryRows: [{ term: "预录", canonical: "玉录", scope: "both" }],
     });
+    setupResult.transcribe.mockImplementation(async (_audioPath, language) => ({
+      transcript: "打开预录",
+      provider: "test-audio",
+      chunks: 1,
+      language,
+    }));
     await expect(pipeline!.warmTranscription()).resolves.toEqual({ provider: "test-audio" });
     const first = await pipeline!.transcribeOnDemand({ audioPath: setupResult.audioPath });
 
@@ -544,21 +550,21 @@ describe("RecordingPipeline", () => {
     writeFileSync(dictationWav, Buffer.alloc(44));
     const second = await pipeline!.transcribeOnDemand({ audioPath: dictationWav, language: "ja" });
 
-    expect(first).toEqual({ transcript: "hello transcript", provider: "test-audio", chunks: 1, language: "zh" });
-    expect(second).toEqual({ transcript: "hello transcript", provider: "test-audio", chunks: 1, language: "ja" });
+    expect(first).toEqual({ transcript: "打开玉录", provider: "test-audio", chunks: 1, language: "zh" });
+    expect(second).toEqual({ transcript: "打开玉录", provider: "test-audio", chunks: 1, language: "ja" });
     expect(setupResult.gatewayFactory).not.toHaveBeenCalled();
     expect(setupResult.warmTranscription).toHaveBeenCalledTimes(1);
     expect(setupResult.transcribe).toHaveBeenNthCalledWith(
       1,
       realpathSync(setupResult.audioPath),
       "zh",
-      expect.objectContaining({ prompt: expect.stringContaining("阿尔法学院") }),
+      expect.objectContaining({ prompt: expect.stringContaining("玉录") }),
     );
     expect(setupResult.transcribe).toHaveBeenNthCalledWith(
       2,
       realpathSync(dictationWav),
       "ja",
-      expect.objectContaining({ prompt: expect.stringContaining("阿尔法学院") }),
+      expect.objectContaining({ prompt: expect.stringContaining("玉录") }),
     );
   });
 

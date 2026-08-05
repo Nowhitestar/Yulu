@@ -19,9 +19,11 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
+import { trpc } from "../trpc.js";
 import { MESSAGES, type Lang } from "./messages.js";
 
 export type { Lang } from "./messages.js";
@@ -105,6 +107,36 @@ export function LanguageProvider({ children }: { children: ReactNode }) {
 
   const value = useMemo<LanguageContextValue>(() => ({ lang, setLang, t }), [lang, setLang, t]);
   return <LanguageContext.Provider value={value}>{children}</LanguageContext.Provider>;
+}
+
+export function LanguageConfigSync() {
+  const { data: cfg } = trpc.config.get.useQuery();
+  const updateMut = trpc.config.update.useMutation();
+  const utils = trpc.useUtils();
+  const { lang, setLang } = useLang();
+  const hydrated = useRef(false);
+  const lastConfig = useRef<Lang | null>(null);
+
+  useEffect(() => {
+    if (!cfg) return;
+    const raw = (cfg as { ui?: { language?: unknown } }).ui?.language;
+    const next = isLang(raw) ? raw : DEFAULT_LANG;
+    if (next === lastConfig.current) return;
+    lastConfig.current = next;
+    hydrated.current = true;
+    setLang(next);
+  }, [cfg, setLang]);
+
+  useEffect(() => {
+    if (!hydrated.current || lang === lastConfig.current) return;
+    lastConfig.current = lang;
+    updateMut.mutate(
+      { key: "ui.language", value: lang },
+      { onSettled: () => void utils.config.get.invalidate() },
+    );
+  }, [lang, updateMut, utils]);
+
+  return null;
 }
 
 export function useLang(): { lang: Lang; setLang: (l: Lang) => void } {

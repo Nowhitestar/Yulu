@@ -1,5 +1,25 @@
 import Cocoa
 
+enum AppLanguage: String {
+    case zh, en
+}
+
+func readAppLanguage() -> AppLanguage {
+    let url = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".config/yulu/config.json")
+    guard let data = try? Data(contentsOf: url),
+          let raw = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+          let ui = raw["ui"] as? [String: Any],
+          let value = ui["language"] as? String,
+          let language = AppLanguage(rawValue: value) else { return .zh }
+    return language
+}
+
+let activeAppLanguage = readAppLanguage()
+
+func L(_ zh: String, _ en: String) -> String {
+    activeAppLanguage == .zh ? zh : en
+}
+
 extension NSColor {
     convenience init(hex: String, alpha: CGFloat = 1) {
         var s = hex.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -193,7 +213,7 @@ final class PromptApp: NSObject, NSApplicationDelegate {
         dot.theme = theme
         panel.addSubview(dot)
 
-        let heading = NSTextField(labelWithString: "会议开始了")
+        let heading = NSTextField(labelWithString: L("会议开始了", "Meeting started"))
         heading.frame = NSRect(x: 72, y: 188, width: 420, height: 26)
         heading.font = .systemFont(ofSize: 22, weight: .bold)
         heading.textColor = theme.text
@@ -206,7 +226,7 @@ final class PromptApp: NSObject, NSApplicationDelegate {
         title.lineBreakMode = .byTruncatingTail
         panel.addSubview(title)
 
-        let sub = NSTextField(labelWithString: "是否开始录制音频？")
+        let sub = NSTextField(labelWithString: L("是否开始录制音频？", "Start recording audio?"))
         sub.frame = NSRect(x: 72, y: 122, width: 400, height: 22)
         sub.font = .systemFont(ofSize: 14, weight: .regular)
         sub.textColor = theme.muted
@@ -214,10 +234,10 @@ final class PromptApp: NSObject, NSApplicationDelegate {
 
         actionMenu = NSPopUpButton(frame: NSRect(x: 72, y: 42, width: 208, height: 34))
         actionMenu.bezelStyle = .rounded
-        actionMenu.addItem(withTitle: "开始录制")
+        actionMenu.addItem(withTitle: L("开始录制", "Start recording"))
         actionMenu.item(at: 0)?.representedObject = "record"
         if !meetingLink.isEmpty {
-            actionMenu.addItem(withTitle: "开始录制并加入会议")
+            actionMenu.addItem(withTitle: L("开始录制并加入会议", "Start recording and join"))
             actionMenu.item(at: 1)?.representedObject = "record_join"
         }
         actionMenu.target = self
@@ -229,7 +249,7 @@ final class PromptApp: NSObject, NSApplicationDelegate {
         }
         panel.addSubview(actionMenu)
 
-        let ignore = NSButton(title: "忽略", target: self, action: #selector(ignore))
+        let ignore = NSButton(title: L("忽略", "Ignore"), target: self, action: #selector(ignore))
         ignore.frame = NSRect(x: 304, y: 40, width: 92, height: 38)
         ignore.isBordered = false
         ignore.wantsLayer = true
@@ -251,7 +271,9 @@ final class PromptApp: NSObject, NSApplicationDelegate {
     }
 
     func titleForAction(_ action: String) -> String {
-        return action == "record_join" ? "录制并加入" : "开始录制"
+        return action == "record_join"
+            ? L("录制并加入", "Record and Join")
+            : L("开始录制", "Start Recording")
     }
 
     @objc func actionChanged() {
@@ -291,7 +313,7 @@ if CommandLine.arguments.contains("--self-test") {
     exit(0)
 }
 
-let title = CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : "未命名会议"
+let title = CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : L("未命名会议", "Untitled Meeting")
 let link = CommandLine.arguments.count > 2 ? CommandLine.arguments[2] : ""
 let primaryAction = CommandLine.arguments.count > 3 ? CommandLine.arguments[3] : "record"
 let app = NSApplication.shared

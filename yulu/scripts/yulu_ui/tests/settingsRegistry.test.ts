@@ -20,23 +20,32 @@ describe("settingsRegistry", () => {
     expect(def?.validate.safeParse("fr").success).toBe(false);
     expect(reloadFor("transcription.language")).toEqual({ kind: "none" });
   });
-  it("audio engine and xAI credential source apply without restarting capture", () => {
+  it("app language supports Chinese and English and refreshes the status agent", () => {
+    const def = defFor("ui.language");
+    expect(def?.validate.safeParse("zh").success).toBe(true);
+    expect(def?.validate.safeParse("en").success).toBe(true);
+    expect(def?.validate.safeParse("ja").success).toBe(false);
+    expect(reloadFor("ui.language")).toEqual({ kind: "sighup", daemons: ["statusagent"] });
+  });
+  it("audio engine applies without restarting capture", () => {
     const engine = defFor("transcription.engine");
     expect(engine?.validate.safeParse("local").success).toBe(true);
     expect(engine?.validate.safeParse("xai").success).toBe(true);
     expect(engine?.validate.safeParse("agent").success).toBe(false);
     expect(reloadFor("transcription.engine")).toEqual({ kind: "none" });
-    const credential = defFor("transcription.xai_credential_source");
-    for (const source of ["auto", "hermes", "openclaw"]) {
-      expect(credential?.validate.safeParse(source).success).toBe(true);
-    }
-    expect(credential?.validate.safeParse("api-key").success).toBe(false);
+    expect(defFor("transcription.xai_credential_source")).toBeUndefined();
   });
   it("llm.command 改完无需动作(读取即生效)", () => {
     expect(reloadFor("llm.command")).toEqual({ kind: "none" });
   });
   it("status_agent.enabled 保存后由 config router 直接 start/stop,不走重启横幅", () => {
     expect(reloadFor("status_agent.enabled")).toEqual({ kind: "none" });
+  });
+  it("dictation feedback sounds apply immediately", () => {
+    const def = defFor("status_agent.feedback_sounds");
+    expect(def?.validate.safeParse(true).success).toBe(true);
+    expect(def?.validate.safeParse("true").success).toBe(false);
+    expect(reloadFor("status_agent.feedback_sounds")).toEqual({ kind: "none" });
   });
   it("silence_duration_sec 默认 300 秒在可配置范围内", () => {
     const def = defFor("audio.silence_duration_sec");
@@ -46,6 +55,7 @@ describe("settingsRegistry", () => {
   it("does not register retired Yulu-owned transcription settings", () => {
     for (const path of [
       "transcription.mode",
+      "transcription.xai_credential_source",
       "transcription.post_recording_mode",
       "transcription.final_engine",
       "transcription.local_model_path",

@@ -1,305 +1,534 @@
-import { spawn, type ChildProcess } from "node:child_process";
-import { accessSync, constants, existsSync, readFileSync, realpathSync } from "node:fs";
-import { homedir } from "node:os";
-import { dirname, join } from "node:path";
-import { envWithFallbackPath, resolveExecutable } from "./executables.js";
+import { spawn } from "node:child_process";
+import { constants } from "node:fs";
+import { access } from "node:fs/promises";
 
-export type XaiCredentialSource = "auto" | "hermes" | "openclaw";
-type ConcreteXaiCredentialSource = Exclude<XaiCredentialSource, "auto">;
+const XAI_OAUTH_DISCOVERY_URL = "https://auth.x.ai/.well-known/openid-configuration";
+const XAI_OAUTH_TOKEN_URL = "https://auth.x.ai/oauth2/token";
+const XAI_OAUTH_REVOKE_URL = "https://auth.x.ai/oauth2/revoke";
+// Temporary public Grok CLI client. Replace with a Yulu-owned registration before broad release.
+const XAI_OAUTH_CLIENT_ID = "b1a00492-073a-47ea-816f-4c329264a828";
+const XAI_OAUTH_SCOPE = "openid profile email offline_access grok-cli:access api:access";
+const TOKEN_REFRESH_SKEW_MS = 2 * 60_000;
+const REQUEST_TIMEOUT_MS = 20_000;
+const MAX_HELPER_OUTPUT_BYTES = 128_000;
+const MAX_POLL_NETWORK_FAILURES = 5;
 
 export interface XaiCredential {
   accessToken: string;
-  source: ConcreteXaiCredentialSource;
 }
 
-export interface XaiCredentialSourceStatus {
-  source: ConcreteXaiCredentialSource;
-  installed: boolean;
-  oauthSupported: boolean;
-  connected: boolean;
-  detail: string;
-  authorizeCommand: string;
+export interface StoredXaiCredential {
+  version: 1;
+  accessToken: string;
+  refreshToken: string;
+  expiresAt: number;
+  tokenEndpoint: string;
+}
+
+export interface XaiTokenStore {
+  read(): Promise<StoredXaiCredential | null>;
+  write(value: StoredXaiCredential): Promise<void>;
+  clear(): Promise<void>;
 }
 
 export interface XaiAuthorizationState {
-  source: ConcreteXaiCredentialSource | null;
-  status: "idle" | "running" | "succeeded" | "failed";
+  status: "idle" | "starting" | "running" | "succeeded" | "failed";
   verificationUrl: string;
   userCode: string;
   message: string;
 }
 
 export interface XaiCredentialStatus {
-  sources: XaiCredentialSourceStatus[];
+  connected: boolean;
+  detail: string;
   authorization: XaiAuthorizationState;
 }
 
-interface ProcessResult {
-  code: number;
-  stdout: string;
+interface XaiCredentialManagerOptions {
+  store: XaiTokenStore;
+  fetchFn?: typeof fetch;
+  now?: () => number;
 }
 
-const HERMES_RESOLVER = [
-  "import json",
-  "from hermes_cli.auth import resolve_xai_oauth_runtime_credentials",
-  "value = resolve_xai_oauth_runtime_credentials()",
-  "print(json.dumps({'accessToken': value['api_key']}))",
-].join("; ");
+interface DiscoveryDocument {
+  deviceAuthorizationEndpoint: string;
+  tokenEndpoint: string;
+}
 
-const OPENCLAW_RESOLVER = String.raw`
-const modulePath = process.argv[1];
-const mod = await import(new URL('file://' + modulePath).href);
-const store = mod.loadAuthProfileStore();
-const order = mod.resolveAuthProfileOrder({ store, provider: 'xai' });
-for (const profileId of order) {
-  const profile = store.profiles?.[profileId];
-  if (!profile || profile.provider !== 'xai' || profile.type !== 'oauth') continue;
-  const resolved = await mod.resolveApiKeyForProfile({ store, profileId });
-  if (resolved?.apiKey) {
-    process.stdout.write(JSON.stringify({ accessToken: resolved.apiKey }));
-    process.exit(0);
+interface DeviceAuthorization {
+  deviceCode: string;
+  userCode: string;
+  verificationUrl: string;
+  expiresIn: number;
+  interval: number;
+}
+
+function jsonObject(value: unknown, context: string): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`${context} 返回了无效数据`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function requiredString(value: unknown, field: string, context: string): string {
+  const text = typeof value === "string" ? value.trim() : "";
+  if (!text) throw new Error(`${context} 缺少 ${field}`);
+  return text;
+}
+
+function positiveNumber(value: unknown, fallback: number, maximum: number): number {
+  const number = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(number) || number <= 0) return fallback;
+  return Math.min(maximum, Math.max(1, Math.floor(number)));
+}
+
+function validateXaiUrl(value: string, field: string): string {
+  let parsed: URL;
+  try { parsed = new URL(value); }
+  catch { throw new Error(`xAI OAuth ${field} 不是有效 URL`); }
+  const host = parsed.hostname.toLowerCase();
+  if (parsed.protocol !== "https:" || (host !== "x.ai" && !host.endsWith(".x.ai"))) {
+    throw new Error(`拒绝使用非 xAI HTTPS ${field}`);
+  }
+  return parsed.toString();
+}
+
+async function responseObject(response: Response, context: string): Promise<Record<string, unknown>> {
+  try { return jsonObject(await response.json(), context); }
+  catch (error) {
+    if (error instanceof Error && error.message.includes(context)) throw error;
+    throw new Error(`${context} 返回了无效 JSON`);
   }
 }
-throw new Error('OpenClaw has no usable xAI OAuth profile');
-`;
 
-function expandedHome(value: string): string {
-  return value.startsWith("~/") ? join(homedir(), value.slice(2)) : value;
-}
-
-function commandPath(command: string, env: NodeJS.ProcessEnv = process.env): string | null {
-  const resolved = resolveExecutable(command, envWithFallbackPath(env));
-  try {
-    accessSync(resolved, constants.X_OK);
-    return resolved;
-  } catch {
-    return null;
-  }
-}
-
-function hermesHome(env: NodeJS.ProcessEnv = process.env): string {
-  return expandedHome(env.YULU_HERMES_HOME?.trim() || env.HERMES_HOME?.trim() || join(homedir(), ".hermes"));
-}
-
-function openClawPackageRoot(env: NodeJS.ProcessEnv = process.env): string | null {
-  const executable = commandPath("openclaw", env);
-  if (!executable || !existsSync(executable)) return null;
-  try { return dirname(realpathSync(executable)); }
-  catch { return null; }
-}
-
-function openClawRuntimePath(env: NodeJS.ProcessEnv = process.env): string | null {
-  const root = openClawPackageRoot(env);
-  if (!root) return null;
-  const path = join(root, "dist", "plugin-sdk", "agent-runtime.js");
-  return existsSync(path) ? path : null;
-}
-
-export function openClawSupportsXaiOAuth(env: NodeJS.ProcessEnv = process.env): boolean {
-  const root = openClawPackageRoot(env);
-  if (!root) return false;
-  const plugin = join(root, "dist", "extensions", "xai", "index.js");
-  if (!existsSync(plugin)) return false;
-  try { return /methodId\s*:\s*["']oauth["']/.test(readFileSync(plugin, "utf8")); }
-  catch { return false; }
-}
-
-function run(command: string, args: string[], options: {
-  cwd?: string;
-  env?: NodeJS.ProcessEnv;
-  timeoutMs?: number;
-} = {}): Promise<ProcessResult> {
-  return new Promise((resolve) => {
-    const env = envWithFallbackPath(options.env ?? process.env);
-    const executable = commandPath(command, env);
-    if (!executable) return resolve({ code: 127, stdout: "" });
-    const child = spawn(executable, args, {
-      cwd: options.cwd,
-      env,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    let stdout = "";
-    const append = (chunk: Buffer) => { stdout = `${stdout}${chunk.toString("utf8")}`.slice(-128_000); };
-    child.stdout.on("data", append);
-    child.stderr.on("data", append);
-    const timer = setTimeout(() => child.kill("SIGKILL"), options.timeoutMs ?? 15_000);
-    timer.unref();
-    child.once("error", () => {
+async function wait(ms: number, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) throw new DOMException("Aborted", "AbortError");
+  await new Promise<void>((resolve, reject) => {
+    const onAbort = () => {
       clearTimeout(timer);
-      resolve({ code: 1, stdout });
-    });
-    child.once("close", (code) => {
-      clearTimeout(timer);
-      resolve({ code: code ?? 1, stdout });
-    });
+      reject(new DOMException("Aborted", "AbortError"));
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    timer.unref?.();
+    signal.addEventListener("abort", onAbort, { once: true });
   });
 }
 
-function jsonFromOutput(output: string): Record<string, unknown> {
-  for (const line of output.trim().split(/\r?\n/).reverse()) {
-    try {
-      const parsed = JSON.parse(line) as unknown;
-      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed as Record<string, unknown>;
-    } catch { /* try the previous line */ }
-  }
-  throw new Error("Agent credential resolver returned no JSON");
+function isAbort(error: unknown): boolean {
+  return error instanceof Error && error.name === "AbortError";
 }
 
-function safeAuthorizationUpdate(current: XaiAuthorizationState, output: string): XaiAuthorizationState {
-  const url = output.match(/https:\/\/[^\s"'<>]+/i)?.[0] ?? current.verificationUrl;
-  const explicitCode = output.match(/(?:user\s*code|verification\s*code|code)\s*[:=]\s*([A-Z0-9-]{4,20})/i)?.[1];
-  return {
-    ...current,
-    verificationUrl: url,
-    userCode: explicitCode ?? current.userCode,
-    message: url ? "请在浏览器完成 xAI 授权" : "正在等待 xAI 授权",
-  };
+function networkFailureMessage(error: unknown): string {
+  const cause = error && typeof error === "object" && "cause" in error
+    ? (error as { cause?: unknown }).cause
+    : undefined;
+  const rawCode = cause && typeof cause === "object" && "code" in cause
+    ? (cause as { code?: unknown }).code
+    : undefined;
+  const code = typeof rawCode === "string" && /^[A-Z0-9_]{2,64}$/.test(rawCode) ? rawCode : "";
+  return `无法连接 xAI OAuth 服务${code ? `（${code}）` : ""}，请检查网络或代理后重试`;
+}
+
+export class KeychainXaiTokenStore implements XaiTokenStore {
+  constructor(private readonly helperPath: string) {}
+
+  async read(): Promise<StoredXaiCredential | null> {
+    const result = await this.run("read");
+    if (result.code === 44) return null;
+    if (result.code !== 0) throw new Error("无法读取 macOS 钥匙串中的 xAI OAuth");
+    let parsed: unknown;
+    try { parsed = JSON.parse(result.stdout); }
+    catch { throw new Error("macOS 钥匙串中的 xAI OAuth 数据无效"); }
+    const value = jsonObject(parsed, "xAI OAuth 凭证");
+    const accessToken = requiredString(value.accessToken, "accessToken", "xAI OAuth 凭证");
+    const refreshToken = requiredString(value.refreshToken, "refreshToken", "xAI OAuth 凭证");
+    const expiresAt = Number(value.expiresAt);
+    const tokenEndpoint = validateXaiUrl(
+      requiredString(value.tokenEndpoint, "tokenEndpoint", "xAI OAuth 凭证"),
+      "token endpoint",
+    );
+    if (value.version !== 1 || !Number.isFinite(expiresAt)) {
+      throw new Error("macOS 钥匙串中的 xAI OAuth 数据版本无效");
+    }
+    return { version: 1, accessToken, refreshToken, expiresAt, tokenEndpoint };
+  }
+
+  async write(value: StoredXaiCredential): Promise<void> {
+    const result = await this.run("write", JSON.stringify(value));
+    if (result.code !== 0) throw new Error("无法保存 xAI OAuth 到 macOS 钥匙串");
+  }
+
+  async clear(): Promise<void> {
+    const result = await this.run("delete");
+    if (result.code !== 0 && result.code !== 44) {
+      throw new Error("无法从 macOS 钥匙串删除 xAI OAuth");
+    }
+  }
+
+  private async run(action: "read" | "write" | "delete", input = ""): Promise<{ code: number; stdout: string }> {
+    try { await access(this.helperPath, constants.X_OK); }
+    catch { throw new Error("Yulu xAI 钥匙串组件不可用，请重新安装 Yulu"); }
+    return await new Promise((resolve) => {
+      const child = spawn(this.helperPath, [action], { stdio: ["pipe", "pipe", "pipe"] });
+      let stdout = "";
+      let settled = false;
+      const finish = (code: number) => {
+        if (settled) return;
+        settled = true;
+        resolve({ code, stdout });
+      };
+      child.stdout.on("data", (chunk: Buffer) => {
+        stdout = `${stdout}${chunk.toString("utf8")}`.slice(-MAX_HELPER_OUTPUT_BYTES);
+      });
+      child.once("error", () => finish(1));
+      child.once("close", (code) => finish(code ?? 1));
+      const timer = setTimeout(() => {
+        child.kill("SIGKILL");
+        finish(1);
+      }, 10_000);
+      timer.unref();
+      child.once("close", () => clearTimeout(timer));
+      child.stdin.once("error", () => finish(1));
+      child.stdin.end(input);
+    });
+  }
 }
 
 export class XaiCredentialManager {
-  private authProcess: ChildProcess | null = null;
+  private readonly store: XaiTokenStore;
+  private readonly fetchFn: typeof fetch;
+  private readonly now: () => number;
   private authorization: XaiAuthorizationState = {
-    source: null,
     status: "idle",
     verificationUrl: "",
     userCode: "",
     message: "",
   };
-  private cachedSources: XaiCredentialSourceStatus[] = [];
+  private authorizationController: AbortController | null = null;
+  private authorizationGeneration = 0;
+  private refreshPromise: Promise<StoredXaiCredential> | null = null;
+  private cachedConnected = false;
+  private cachedDetail = "正在检查 Yulu xAI OAuth";
+
+  constructor(options: XaiCredentialManagerOptions) {
+    this.store = options.store;
+    this.fetchFn = options.fetchFn ?? fetch;
+    this.now = options.now ?? Date.now;
+  }
 
   async status(): Promise<XaiCredentialStatus> {
-    const sources = await Promise.all([this.hermesStatus(), this.openClawStatus()]);
-    this.cachedSources = sources;
-    return { sources, authorization: { ...this.authorization } };
-  }
-
-  cachedStatus(source: XaiCredentialSource): XaiCredentialSourceStatus | null {
-    const connected = this.cachedSources.filter((item) => item.connected && item.oauthSupported);
-    if (source === "auto") return connected.length === 1 ? connected[0]! : null;
-    return this.cachedSources.find((item) => item.source === source) ?? null;
-  }
-
-  async resolve(source: XaiCredentialSource): Promise<XaiCredential> {
-    const selected = await this.selectSource(source);
-    return selected === "hermes" ? await this.resolveHermes() : await this.resolveOpenClaw();
-  }
-
-  startAuthorization(source: ConcreteXaiCredentialSource): XaiAuthorizationState {
-    if (this.authProcess) throw new Error("已有 xAI OAuth 授权正在进行");
-    const env = envWithFallbackPath(process.env);
-    const command = commandPath(source === "hermes" ? "hermes" : "openclaw", env);
-    if (!command) throw new Error(`${source === "hermes" ? "Hermes" : "OpenClaw"} 未安装`);
-    if (source === "openclaw" && !openClawSupportsXaiOAuth(env)) {
-      throw new Error("当前 OpenClaw 版本不支持 xAI OAuth");
+    try {
+      const credential = await this.store.read();
+      this.cachedConnected = credential !== null;
+      this.cachedDetail = credential ? "xAI OAuth 已连接" : "需要在 Yulu 中授权 xAI";
+      return {
+        connected: this.cachedConnected,
+        detail: this.cachedDetail,
+        authorization: { ...this.authorization },
+      };
+    } catch (error) {
+      this.cachedConnected = false;
+      this.cachedDetail = error instanceof Error ? error.message : "无法读取 xAI OAuth";
+      return {
+        connected: false,
+        detail: this.cachedDetail,
+        authorization: { ...this.authorization },
+      };
     }
-    const args = source === "hermes"
-      ? ["auth", "add", "xai-oauth", "--no-browser"]
-      : ["models", "auth", "login", "--provider", "xai", "--method", "oauth"];
-    const child = spawn(command, args, { env, stdio: ["ignore", "pipe", "pipe"] });
-    this.authProcess = child;
+  }
+
+  cachedStatus(): { connected: boolean; detail: string } {
+    return { connected: this.cachedConnected, detail: this.cachedDetail };
+  }
+
+  async authorize(): Promise<XaiAuthorizationState> {
+    if (this.authorizationController) throw new Error("已有 xAI OAuth 授权正在进行");
+    const controller = new AbortController();
+    const generation = ++this.authorizationGeneration;
+    this.authorizationController = controller;
     this.authorization = {
-      source,
-      status: "running",
+      status: "starting",
       verificationUrl: "",
       userCode: "",
-      message: "正在启动 xAI OAuth",
+      message: "正在向 xAI 请求授权码",
     };
-    const inspect = (chunk: Buffer) => {
-      this.authorization = safeAuthorizationUpdate(this.authorization, chunk.toString("utf8"));
-    };
-    child.stdout.on("data", inspect);
-    child.stderr.on("data", inspect);
-    child.once("error", () => {
-      this.authProcess = null;
-      this.authorization = { ...this.authorization, status: "failed", message: "无法启动 Agent OAuth" };
-    });
-    child.once("close", (code) => {
-      this.authProcess = null;
+    try {
+      const discovery = await this.discovery(controller.signal);
+      const device = await this.requestDeviceAuthorization(discovery.deviceAuthorizationEndpoint, controller.signal);
       this.authorization = {
-        ...this.authorization,
-        status: code === 0 ? "succeeded" : "failed",
-        message: code === 0 ? "xAI OAuth 已连接" : "xAI OAuth 授权失败或已取消",
+        status: "running",
+        verificationUrl: device.verificationUrl,
+        userCode: device.userCode,
+        message: "请在浏览器完成 xAI 授权",
       };
-      void this.status();
-    });
+      void this.pollAuthorization(discovery.tokenEndpoint, device, controller, generation);
+      return { ...this.authorization };
+    } catch (error) {
+      if (this.authorizationGeneration === generation) {
+        this.authorizationController = null;
+        this.authorization = {
+          status: "failed",
+          verificationUrl: "",
+          userCode: "",
+          message: isAbort(error) && controller.signal.aborted
+            ? "xAI OAuth 授权已取消"
+            : (error as Error).message,
+        };
+      }
+      throw error;
+    }
+  }
+
+  cancelAuthorization(): XaiAuthorizationState {
+    this.authorizationGeneration += 1;
+    this.authorizationController?.abort();
+    this.authorizationController = null;
+    this.authorization = {
+      status: "idle",
+      verificationUrl: "",
+      userCode: "",
+      message: "xAI OAuth 授权已取消",
+    };
     return { ...this.authorization };
   }
 
-  close(): void {
-    this.authProcess?.kill("SIGTERM");
-    this.authProcess = null;
-  }
-
-  private async selectSource(source: XaiCredentialSource): Promise<ConcreteXaiCredentialSource> {
-    if (source !== "auto") return source;
-    const { sources } = await this.status();
-    const connected = sources.filter((item) => item.connected && item.oauthSupported);
-    if (connected.length === 1) return connected[0]!.source;
-    if (connected.length === 0) throw new Error("Hermes/OpenClaw 均没有可用的 xAI OAuth");
-    throw new Error("检测到多个 xAI OAuth，请明确选择 Hermes 或 OpenClaw");
-  }
-
-  private async hermesStatus(): Promise<XaiCredentialSourceStatus> {
-    const installed = Boolean(commandPath("hermes"));
-    if (!installed) return {
-      source: "hermes", installed: false, oauthSupported: false, connected: false,
-      detail: "Hermes 未安装", authorizeCommand: "hermes auth add xai-oauth --no-browser",
-    };
-    const result = await run("hermes", ["auth", "status", "xai-oauth"], { timeoutMs: 8_000 });
-    const connected = result.code === 0 && /logged\s+in/i.test(result.stdout);
-    return {
-      source: "hermes", installed: true, oauthSupported: true, connected,
-      detail: connected ? "xAI OAuth 已连接" : "需要授权 xAI OAuth",
-      authorizeCommand: "hermes auth add xai-oauth --no-browser",
-    };
-  }
-
-  private async openClawStatus(): Promise<XaiCredentialSourceStatus> {
-    const installed = Boolean(commandPath("openclaw"));
-    const oauthSupported = installed && openClawSupportsXaiOAuth();
-    let connected = false;
-    if (oauthSupported) {
-      const result = await run("openclaw", ["models", "auth", "list", "--provider", "xai", "--json"], { timeoutMs: 10_000 });
+  async logout(): Promise<void> {
+    this.cancelAuthorization();
+    const credential = await this.store.read().catch(() => null);
+    if (credential) {
       try {
-        const parsed = JSON.parse(result.stdout) as { profiles?: Array<{ type?: string }> };
-        connected = result.code === 0 && Boolean(parsed.profiles?.some((profile) => profile.type === "oauth"));
-      } catch { connected = false; }
+        await this.request(XAI_OAUTH_REVOKE_URL, {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" },
+          body: new URLSearchParams({
+            client_id: XAI_OAUTH_CLIENT_ID,
+            token: credential.refreshToken,
+            token_type_hint: "refresh_token",
+          }),
+        });
+      } catch { /* local logout must still remove the credential */ }
     }
+    await this.store.clear();
+    this.cachedConnected = false;
+    this.cachedDetail = "需要在 Yulu 中授权 xAI";
+    this.authorization = { status: "idle", verificationUrl: "", userCode: "", message: "已退出 xAI OAuth" };
+  }
+
+  async resolve(): Promise<XaiCredential> {
+    const stored = await this.store.read();
+    if (!stored) throw new Error("请先在 Yulu 设置中授权 xAI");
+    if (stored.expiresAt > this.now() + TOKEN_REFRESH_SKEW_MS) {
+      return { accessToken: stored.accessToken };
+    }
+    const refreshed = await this.refresh(stored);
+    return { accessToken: refreshed.accessToken };
+  }
+
+  close(): void {
+    this.cancelAuthorization();
+  }
+
+  private async discovery(signal: AbortSignal): Promise<DiscoveryDocument> {
+    const response = await this.request(XAI_OAUTH_DISCOVERY_URL, {
+      headers: { Accept: "application/json" },
+      signal,
+    });
+    if (!response.ok) throw new Error(`xAI OAuth 服务发现失败（HTTP ${response.status}）`);
+    const payload = await responseObject(response, "xAI OAuth 服务发现");
+    const deviceAuthorizationEndpoint = validateXaiUrl(
+      requiredString(payload.device_authorization_endpoint, "device_authorization_endpoint", "xAI OAuth 服务发现"),
+      "device authorization endpoint",
+    );
+    const tokenEndpoint = validateXaiUrl(
+      requiredString(payload.token_endpoint, "token_endpoint", "xAI OAuth 服务发现"),
+      "token endpoint",
+    );
+    if (payload.authorization_endpoint) {
+      validateXaiUrl(String(payload.authorization_endpoint), "authorization endpoint");
+    }
+    return { deviceAuthorizationEndpoint, tokenEndpoint };
+  }
+
+  private async requestDeviceAuthorization(endpoint: string, signal: AbortSignal): Promise<DeviceAuthorization> {
+    const response = await this.request(endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" },
+      body: new URLSearchParams({ client_id: XAI_OAUTH_CLIENT_ID, scope: XAI_OAUTH_SCOPE }),
+      signal,
+    });
+    if (!response.ok) throw new Error(`xAI 授权码请求失败（HTTP ${response.status}）`);
+    const payload = await responseObject(response, "xAI 授权码");
+    const verificationUrl = validateXaiUrl(
+      requiredString(
+        payload.verification_uri_complete ?? payload.verification_uri,
+        "verification_uri",
+        "xAI 授权码",
+      ),
+      "verification URL",
+    );
     return {
-      source: "openclaw", installed, oauthSupported, connected,
-      detail: !installed ? "OpenClaw 未安装"
-        : !oauthSupported ? "当前版本不支持 xAI OAuth"
-          : connected ? "xAI OAuth 已连接" : "需要授权 xAI OAuth",
-      authorizeCommand: "openclaw models auth login --provider xai --method oauth",
+      deviceCode: requiredString(payload.device_code, "device_code", "xAI 授权码"),
+      userCode: requiredString(payload.user_code, "user_code", "xAI 授权码").slice(0, 32),
+      verificationUrl,
+      expiresIn: positiveNumber(payload.expires_in, 1_800, 3_600),
+      interval: positiveNumber(payload.interval, 5, 30),
     };
   }
 
-  private async resolveHermes(): Promise<XaiCredential> {
-    const home = hermesHome();
-    const repo = join(home, "hermes-agent");
-    const python = join(repo, "venv", "bin", "python");
-    if (!existsSync(python)) throw new Error("Hermes xAI OAuth runtime 不可用");
-    const result = await run(python, ["-c", HERMES_RESOLVER], {
-      cwd: repo,
-      env: { ...process.env, HERMES_HOME: home },
-      timeoutMs: 30_000,
-    });
-    if (result.code !== 0) throw new Error("Hermes 无法解析或刷新 xAI OAuth，请重新授权");
-    const parsed = jsonFromOutput(result.stdout);
-    const accessToken = String(parsed.accessToken ?? "").trim();
-    if (!accessToken) throw new Error("Hermes 返回了空的 xAI OAuth token");
-    return { accessToken, source: "hermes" };
+  private async pollAuthorization(
+    tokenEndpoint: string,
+    device: DeviceAuthorization,
+    controller: AbortController,
+    generation: number,
+  ): Promise<void> {
+    const deadline = this.now() + device.expiresIn * 1_000;
+    let interval = device.interval;
+    let networkFailures = 0;
+    try {
+      while (this.now() < deadline) {
+        await wait(interval * 1_000, controller.signal);
+        let response: Response;
+        try {
+          response = await this.request(tokenEndpoint, {
+            method: "POST",
+            headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" },
+            body: new URLSearchParams({
+              grant_type: "urn:ietf:params:oauth:grant-type:device_code",
+              client_id: XAI_OAUTH_CLIENT_ID,
+              device_code: device.deviceCode,
+            }),
+            signal: controller.signal,
+          });
+        } catch (error) {
+          if (controller.signal.aborted) throw error;
+          networkFailures += 1;
+          if (networkFailures >= MAX_POLL_NETWORK_FAILURES) {
+            throw new Error(networkFailureMessage(error));
+          }
+          if (this.authorizationGeneration === generation) {
+            this.authorization = {
+              ...this.authorization,
+              message: `与 xAI 的连接暂时中断，正在重试（${networkFailures}/${MAX_POLL_NETWORK_FAILURES}）`,
+            };
+          }
+          continue;
+        }
+        if (networkFailures > 0 && this.authorizationGeneration === generation) {
+          this.authorization = {
+            ...this.authorization,
+            message: "请在浏览器完成 xAI 授权",
+          };
+        }
+        networkFailures = 0;
+        const payload = await responseObject(response, "xAI OAuth token");
+        if (response.ok) {
+          const accessToken = requiredString(payload.access_token, "access_token", "xAI OAuth token");
+          const refreshToken = requiredString(payload.refresh_token, "refresh_token", "xAI OAuth token");
+          const expiresIn = positiveNumber(payload.expires_in, 900, 24 * 60 * 60);
+          await this.store.write({
+            version: 1,
+            accessToken,
+            refreshToken,
+            expiresAt: this.now() + expiresIn * 1_000,
+            tokenEndpoint,
+          });
+          this.cachedConnected = true;
+          this.cachedDetail = "xAI OAuth 已连接";
+          if (this.authorizationGeneration === generation) {
+            this.authorization = {
+              status: "succeeded",
+              verificationUrl: "",
+              userCode: "",
+              message: "xAI OAuth 已连接",
+            };
+          }
+          return;
+        }
+        const errorCode = String(payload.error ?? "");
+        if (errorCode === "authorization_pending") continue;
+        if (errorCode === "slow_down") {
+          interval = Math.min(30, interval + 5);
+          continue;
+        }
+        if (errorCode === "access_denied") throw new Error("xAI OAuth 授权已被拒绝");
+        if (errorCode === "expired_token") throw new Error("xAI OAuth 授权码已过期，请重试");
+        throw new Error(`xAI OAuth 授权失败${errorCode ? `：${errorCode}` : ""}`);
+      }
+      throw new Error("等待 xAI OAuth 授权超时，请重试");
+    } catch (error) {
+      if (this.authorizationGeneration === generation && !isAbort(error)) {
+        this.authorization = {
+          status: "failed",
+          verificationUrl: "",
+          userCode: "",
+          message: error instanceof Error ? error.message : "xAI OAuth 授权失败",
+        };
+      }
+    } finally {
+      if (this.authorizationGeneration === generation) this.authorizationController = null;
+    }
   }
 
-  private async resolveOpenClaw(): Promise<XaiCredential> {
-    if (!openClawSupportsXaiOAuth()) throw new Error("当前 OpenClaw 版本不支持 xAI OAuth");
-    const runtimePath = openClawRuntimePath();
-    if (!runtimePath) throw new Error("OpenClaw OAuth runtime 不可用");
-    const result = await run(process.execPath, ["--input-type=module", "-e", OPENCLAW_RESOLVER, runtimePath], { timeoutMs: 30_000 });
-    if (result.code !== 0) throw new Error("OpenClaw 无法解析或刷新 xAI OAuth，请重新授权");
-    const parsed = jsonFromOutput(result.stdout);
-    const accessToken = String(parsed.accessToken ?? "").trim();
-    if (!accessToken) throw new Error("OpenClaw 返回了空的 xAI OAuth token");
-    return { accessToken, source: "openclaw" };
+  private async refresh(stored: StoredXaiCredential): Promise<StoredXaiCredential> {
+    if (this.refreshPromise) return await this.refreshPromise;
+    this.refreshPromise = this.refreshCredential(stored);
+    try { return await this.refreshPromise; }
+    finally { this.refreshPromise = null; }
+  }
+
+  private async refreshCredential(stored: StoredXaiCredential): Promise<StoredXaiCredential> {
+    const tokenEndpoint = validateXaiUrl(stored.tokenEndpoint || XAI_OAUTH_TOKEN_URL, "token endpoint");
+    const response = await this.request(tokenEndpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" },
+      body: new URLSearchParams({
+        grant_type: "refresh_token",
+        client_id: XAI_OAUTH_CLIENT_ID,
+        refresh_token: stored.refreshToken,
+      }),
+    });
+    const payload = await responseObject(response, "xAI OAuth 刷新");
+    if (!response.ok) {
+      if (response.status === 403) {
+        throw new Error("当前 xAI 账号没有 API 或音频转写权限，重新授权不会改变账号权限");
+      }
+      if (response.status === 400 || response.status === 401) {
+        await this.store.clear();
+        this.cachedConnected = false;
+        this.cachedDetail = "xAI OAuth 已失效，请重新授权";
+        throw new Error("xAI OAuth 已失效，请在 Yulu 设置中重新授权");
+      }
+      throw new Error(`xAI OAuth 刷新失败（HTTP ${response.status}）`);
+    }
+    const accessToken = requiredString(payload.access_token, "access_token", "xAI OAuth 刷新");
+    const refreshToken = typeof payload.refresh_token === "string" && payload.refresh_token.trim()
+      ? payload.refresh_token.trim()
+      : stored.refreshToken;
+    const expiresIn = positiveNumber(payload.expires_in, 900, 24 * 60 * 60);
+    const refreshed: StoredXaiCredential = {
+      version: 1,
+      accessToken,
+      refreshToken,
+      expiresAt: this.now() + expiresIn * 1_000,
+      tokenEndpoint,
+    };
+    await this.store.write(refreshed);
+    return refreshed;
+  }
+
+  private async request(url: string, init: RequestInit = {}): Promise<Response> {
+    const timeoutController = new AbortController();
+    const timer = setTimeout(() => timeoutController.abort(), REQUEST_TIMEOUT_MS);
+    timer.unref();
+    const signals = [timeoutController.signal];
+    if (init.signal) signals.push(init.signal);
+    try {
+      return await this.fetchFn(url, { ...init, signal: AbortSignal.any(signals) });
+    } finally {
+      clearTimeout(timer);
+    }
   }
 }

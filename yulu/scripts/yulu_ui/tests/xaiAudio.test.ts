@@ -18,7 +18,7 @@ afterEach(() => {
 describe("XaiAudioClient", () => {
   it("keeps partials live while replacing segmented finals with xAI's corrected full transcript", () => {
     const credentials = { resolve: vi.fn(), cachedStatus: vi.fn() };
-    const client = new XaiAudioClient(credentials as never, () => "hermes");
+    const client = new XaiAudioClient(credentials as never);
     const internal = client as unknown as {
       handleMessage(raw: string): void;
       drain(): {
@@ -83,7 +83,7 @@ describe("XaiAudioClient", () => {
 
   it("reconnects a half-open realtime stream after voiced audio produces no transcript", async () => {
     const credentials = { resolve: vi.fn(), cachedStatus: vi.fn() };
-    const client = new XaiAudioClient(credentials as never, () => "hermes");
+    const client = new XaiAudioClient(credentials as never);
     const send = vi.fn();
     const reconnectRealtime = vi.fn(async () => {});
     const internal = client as unknown as {
@@ -107,10 +107,10 @@ describe("XaiAudioClient", () => {
 
   it("keeps a retryable TLS reconnect failure non-terminal and retries after backoff", async () => {
     const credentials = {
-      resolve: vi.fn(async () => ({ accessToken: "test-oauth-token", source: "hermes" as const })),
+      resolve: vi.fn(async () => ({ accessToken: "test-oauth-token" })),
       cachedStatus: vi.fn(),
     };
-    const client = new XaiAudioClient(credentials as never, () => "hermes");
+    const client = new XaiAudioClient(credentials as never);
     const connectRealtime = vi.fn()
       .mockRejectedValueOnce(new Error("Client network socket disconnected before secure TLS connection was established"))
       .mockRejectedValueOnce(new Error("Client network socket disconnected before secure TLS connection was established"))
@@ -157,7 +157,7 @@ describe("XaiAudioClient", () => {
   });
 
   it("reports the last streaming error when recording finishes disconnected", async () => {
-    const client = new XaiAudioClient({} as never, () => "hermes");
+    const client = new XaiAudioClient({} as never);
     const error = new Error("xAI streaming STT connection closed early");
     (client as unknown as { lastStreamingError: Error }).lastStreamingError = error;
 
@@ -166,7 +166,7 @@ describe("XaiAudioClient", () => {
 
   it("keeps earlier stable text when a replayed realtime session sends an authoritative revision", () => {
     const credentials = { resolve: vi.fn(), cachedStatus: vi.fn() };
-    const client = new XaiAudioClient(credentials as never, () => "hermes");
+    const client = new XaiAudioClient(credentials as never);
     const internal = client as unknown as {
       realtimeGeneration: number;
       sessionBaseMs: number;
@@ -224,7 +224,6 @@ describe("XaiAudioClient", () => {
     const credentials = {
       resolve: vi.fn(async () => ({
         accessToken: "test-oauth-token",
-        source: "hermes" as const,
       })),
       cachedStatus: vi.fn(),
     };
@@ -247,16 +246,16 @@ describe("XaiAudioClient", () => {
       });
     });
     vi.stubGlobal("fetch", fetchMock);
-    const client = new XaiAudioClient(credentials as never, () => "hermes");
+    const client = new XaiAudioClient(credentials as never);
 
     await expect(client.transcribeFile(audioPath, "en")).resolves.toEqual({
       transcript: "hello from xAI",
-      provider: "xai-oauth:hermes",
+      provider: "xai-oauth:yulu",
       chunks: 1,
       language: "en",
     });
     expect(credentials.resolve).toHaveBeenCalledTimes(2);
-    expect(credentials.resolve).toHaveBeenCalledWith("hermes");
+    expect(credentials.resolve).toHaveBeenCalledWith();
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(readFileSync(ffmpegArgsPath, "utf8")).toContain("-ac\n1\n-ar\n16000\n-c:a\nflac");
     expect(readFileSync(ffmpegArgsPath, "utf8")).toContain("-segment_time\n600");
@@ -289,7 +288,7 @@ describe("XaiAudioClient", () => {
     chmodSync(ffmpegPath, 0o755);
     process.env.PATH = `${root}:${originalPath ?? ""}`;
     const credentials = {
-      resolve: vi.fn(async () => ({ accessToken: "fresh-token", source: "hermes" as const })),
+      resolve: vi.fn(async () => ({ accessToken: "fresh-token" })),
       cachedStatus: vi.fn(),
     };
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({
@@ -298,11 +297,11 @@ describe("XaiAudioClient", () => {
         : "three four five six seven",
     }), { status: 200, headers: { "content-type": "application/json" } }));
     vi.stubGlobal("fetch", fetchMock);
-    const client = new XaiAudioClient(credentials as never, () => "hermes");
+    const client = new XaiAudioClient(credentials as never);
 
     await expect(client.transcribeFile(audioPath, "en")).resolves.toEqual({
       transcript: "one two three four five\nsix seven",
-      provider: "xai-oauth:hermes",
+      provider: "xai-oauth:yulu",
       chunks: 2,
       language: "en",
     });

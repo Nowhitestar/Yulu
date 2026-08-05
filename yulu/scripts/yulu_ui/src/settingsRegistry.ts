@@ -53,6 +53,7 @@ const DictationSchema = z.object({
 
 // 仅当前已暴露的设置(P2 再补缺失项)。reload 已修正(B3)。
 export const SETTINGS: SettingDef[] = [
+  { path: "ui.language",                 category: "general", label: "Language", type: "select", validate: z.enum(["zh", "en"]), reload: R.sighup("statusagent") },
   { path: "ui.theme",                    category: "general", label: "Theme", type: "preset", validate: ThemeSettingSchema, reload: R.none },
   { path: "audio.mic_device",            category: "audio", label: "麦克风设备",   type: "select",  validate: z.string(),                  reload: R.restart("audiodaemon") },
   { path: "audio.system_audio_device",   category: "audio", label: "系统音设备",   type: "select",  validate: z.string().nullable(),       reload: R.restart("audiodaemon") },
@@ -62,7 +63,6 @@ export const SETTINGS: SettingDef[] = [
   { path: "audio.backend",               category: "audio", label: "音频后端",     type: "select",  validate: z.enum(["daemon"]),          reload: R.restart("audiodaemon"), danger: true }, // 切换采集后端:可能中断录音
   { path: "transcription.language",      category: "transcription", label: "语言",   type: "select", validate: z.enum(["zh", "en", "ja", "auto"]), reload: R.none },
   { path: "transcription.engine",        category: "transcription", label: "音频转写引擎", type: "select", validate: z.enum(["local", "xai"]), reload: R.none },
-  { path: "transcription.xai_credential_source", category: "transcription", label: "xAI OAuth 来源", type: "select", validate: z.enum(["auto", "hermes", "openclaw"]), reload: R.none },
   { path: "llm.enabled",                 category: "llm", label: "启用 LLM",       type: "toggle",  validate: z.boolean(),                 reload: R.none, hidden: true },
   { path: "llm.command",                 category: "llm", label: "LLM 后端",       type: "preset",  validate: z.array(z.string()).nullable(), reload: R.none, hidden: true },
   { path: "llm.agent.provider",          category: "llm", label: "Agent provider", type: "select",  validate: z.enum(["auto", "codex", "claude", "claude-code", "hermes", "openclaw"]), reload: R.none, hidden: true },
@@ -84,6 +84,7 @@ export const SETTINGS: SettingDef[] = [
   { path: "meeting_detection.dedicated_meeting_apps", category: "automation", label: "Dedicated meeting apps",    type: "command", validate: z.array(z.string()), reload: R.restart("detector"), advanced: true },
   { path: "meeting_detection.ignore_window_keywords", category: "automation", label: "Ignore window keywords",    type: "command", validate: z.array(z.string()), reload: R.restart("detector"), advanced: true },
   { path: "status_agent.enabled",        category: "general", label: "菜单栏 Agent", type: "toggle", validate: z.boolean(),               reload: R.none },
+  { path: "status_agent.feedback_sounds", category: "voice", label: "听写提示音", type: "toggle", validate: z.boolean(),                 reload: R.none },
   { path: "status_agent.hotkeys",        category: "voice", label: "语音输入快捷键", type: "text", validate: HotkeysSchema,              reload: R.sighup("statusagent") },
   { path: "transcription.dictation",     category: "voice", label: "语音输入模板", type: "text", validate: DictationSchema,             reload: R.none },
 ];

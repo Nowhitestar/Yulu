@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { AudioTranscriptionService } from "../src/audioTranscription.js";
 
 function setup(engine: "local" | "xai") {
-  const configValue = { transcription: { engine, xai_credential_source: "hermes" } };
+  const configValue = { transcription: { engine } };
   const config = { read: () => configValue };
   const local = {
     provider: "local-test",
@@ -15,16 +15,16 @@ function setup(engine: "local" | "xai") {
     close: vi.fn(async () => {}),
   };
   const xai = {
-    provider: "xai-oauth",
-    credentialStatus: vi.fn(() => ({ source: "hermes", connected: true, detail: "connected" })),
+    provider: "xai-oauth:yulu",
+    credentialStatus: vi.fn(() => ({ connected: true, detail: "connected" })),
     warm: vi.fn(async () => {}),
     start: vi.fn(async () => {}),
     feed: vi.fn(async () => ({ updates: {} })),
     finish: vi.fn(async () => ({ updates: {} })),
     abort: vi.fn(async () => {}),
     close: vi.fn(async () => {}),
-    transcribeFile: vi.fn(async () => ({ transcript: "xAI transcript", provider: "xai-oauth:hermes", chunks: 1, language: "zh" as const })),
-    testCredential: vi.fn(async () => ({ ok: true as const, provider: "xai-oauth:hermes" })),
+    transcribeFile: vi.fn(async () => ({ transcript: "xAI transcript", provider: "xai-oauth:yulu", chunks: 1, language: "zh" as const })),
+    testCredential: vi.fn(async () => ({ ok: true as const, provider: "xai-oauth:yulu" })),
   };
   const service = new AudioTranscriptionService(config as never, local as never, xai as never);
   return { configValue, local, xai, service };

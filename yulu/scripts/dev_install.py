@@ -28,6 +28,7 @@ LOCAL_BIN = Path.home() / ".local/bin"
 
 RUNTIME_ITEMS = [
     "VERSION",
+    "assets/Yulu.icns",
     "install.sh",
     "skills/yulu/SKILL.md",
     "yulu/SKILL.md",

@@ -72,6 +72,7 @@ export function VoiceInputSection({ tracker }: VoiceInputSectionProps) {
   const { data: prompts } = trpc.prompts.list.useQuery({ category: "voice" });
   const { commit, isBlocked } = useConfigField(tracker);
   const t = useT();
+  const previewSound = trpc.recording.previewSound.useMutation();
   const [capturing, setCapturing] = useState<HotkeyAction | null>(null);
   const [captureError, setCaptureError] = useState("");
 
@@ -122,6 +123,31 @@ export function VoiceInputSection({ tracker }: VoiceInputSectionProps) {
         disabled={isBlocked("status_agent.enabled")}
         status={tracker.statusFor("status_agent.enabled")}
       />
+
+      <InlineEditRow
+        label={t("settings.voice.feedbackSounds")}
+        type="toggle"
+        value={cfg.status_agent.feedback_sounds ?? true}
+        onCommit={commit("status_agent.feedback_sounds")}
+        status={tracker.statusFor("status_agent.feedback_sounds")}
+      />
+      <div className="row">
+        <div className="row-label">
+          <div>{t("settings.voice.previewSound")}</div>
+          <div className="row-help">{t("settings.voice.feedbackSoundsHelp")}</div>
+        </div>
+        <div className="row-value">
+          <button
+            type="button"
+            className="path-btn"
+            disabled={!(cfg.status_agent.feedback_sounds ?? true) || previewSound.isPending}
+            onClick={() => previewSound.mutate()}
+          >
+            {t("settings.voice.preview")}
+          </button>
+        </div>
+        <div className="row-status" />
+      </div>
 
       {ACTIONS.map((action) => {
         const spec = hotkeys[action];

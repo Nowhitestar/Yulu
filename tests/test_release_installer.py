@@ -456,6 +456,9 @@ def test_verify_checksum_passes_and_fails(tmp_path):
 def make_runtime(root: Path, version: str = "0.5.0") -> Path:
     runtime = root / "yulu"
     (runtime / "yulu" / "scripts").mkdir(parents=True)
+    keychain_helper = runtime / "yulu" / "scripts" / "Yulu.app" / "Contents" / "MacOS" / "xai_keychain"
+    keychain_helper.parent.mkdir(parents=True)
+    keychain_helper.write_text("binary\n", encoding="utf-8")
     (runtime / "VERSION").write_text(version + "\n", encoding="utf-8")
     (runtime / "yulu" / "scripts" / "setup.sh").write_text("#!/usr/bin/env bash\n", encoding="utf-8")
     (runtime / "yulu" / "scripts" / "yulu").write_text("#!/usr/bin/env bash\n", encoding="utf-8")
@@ -513,7 +516,7 @@ def make_manifest_runtime(tmp_path: Path) -> tuple[Path, Path]:
     (scripts / "setup.sh").chmod(0o755)
     (scripts / "yulu").chmod(0o755)
     (scripts / "Yulu.app" / "Contents" / "Resources").mkdir(parents=True)
-    (scripts / "Yulu.app" / "Contents" / "MacOS").mkdir(parents=True)
+    (scripts / "Yulu.app" / "Contents" / "MacOS").mkdir(parents=True, exist_ok=True)
     (scripts / "Yulu.app" / "Contents" / "MacOS" / "audio_daemon").write_bytes(b"signed app")
     (scripts / "StatusAgent.app" / "Contents" / "MacOS").mkdir(parents=True)
     (scripts / "StatusAgent.app" / "Contents" / "MacOS" / "status_agent").write_bytes(b"signed app")

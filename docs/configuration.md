@@ -22,7 +22,6 @@ transcription, and dictation; local is the default and there is no automatic fal
   },
   "transcription": {
     "engine": "local",
-    "xai_credential_source": "auto",
     "language": "zh",
     "dictation": {
       "prompt_slug": "dictation-cleanup",
@@ -145,7 +144,6 @@ and dictation. The default is local and there is no automatic fallback.
 | Field | Installer value | Meaning |
 |---|---:|---|
 | `engine` | `"local"` | `local` or `xai`; the selected value is used exactly for all audio transcription paths. |
-| `xai_credential_source` | `"auto"` | Reuse xAI OAuth from `hermes` or `openclaw`; `auto` is valid only when exactly one source is connected. |
 | `language` | `"zh"` | Requested/source language metadata supplied to the selected audio engine. |
 | `dictation.prompt_slug` | `"dictation-cleanup"` | Local prompt selected for normal dictation cleanup. |
 | `dictation.translate_prompt_slug` | `"dictation-translate"` | Local prompt selected for quick translation. |
@@ -158,6 +156,11 @@ and dictation. The default is local and there is no automatic fallback.
 
 The Host accepts on-demand audio only from the configured recordings directory
 or `~/.config/yulu/dictation`, and only as a valid absolute WAV path.
+
+xAI OAuth is authorized from Settings and stored in macOS Keychain. Tokens are
+not configuration fields and never appear in `config.json`. Upgrades archive and
+remove the retired `transcription.xai_credential_source` field; Hermes/OpenClaw
+credentials are not imported or deleted.
 
 ## `llm` and Agent Console
 

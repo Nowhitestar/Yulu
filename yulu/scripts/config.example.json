@@ -27,6 +27,7 @@
     }
   },
   "ui": {
+    "language": "zh",
     "theme": {
       "family": "default",
       "mode": "auto",
@@ -50,7 +51,6 @@
   },
   "transcription": {
     "engine": "local",
-    "xai_credential_source": "auto",
     "language": "zh",
     "dictation": {
       "language": "zh",
@@ -127,6 +127,7 @@
   },
   "status_agent": {
     "enabled": true,
+    "feedback_sounds": true,
     "hotkeys": {
       "dictate": {"key": "Space", "modifiers": ["ctrl", "alt"]},
       "translate": {"key": "T", "modifiers": ["ctrl", "alt"], "target_language": "English"},

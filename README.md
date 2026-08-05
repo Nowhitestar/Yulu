@@ -16,8 +16,8 @@ searchable transcripts and summaries, and lets Agents work across that history.
 
 There is no Yulu account. Recordings and task state stay on your Mac. Yulu uses
 the audio engine you explicitly select for realtime captions, final transcription,
-and dictation: local by default, or xAI cloud through OAuth reused from an installed
-Hermes/OpenClaw. Yulu never silently switches between them.
+and dictation: local by default, or xAI cloud through OAuth authorized directly in
+Yulu. Yulu never silently switches between them.
 
 ## What you can do
 
@@ -80,8 +80,8 @@ center of the currently active display.
 - Python 3.10 or newer.
 - A working Hermes CLI visible to Yulu's LaunchAgents when you want automatic
   summaries or authorized connector delivery.
-- The local transcription model (default), or an existing xAI OAuth session in
-  Hermes/OpenClaw when you explicitly select xAI.
+- The local transcription model (default), or xAI OAuth authorized directly in
+  Settings when you explicitly select xAI.
 - Optionally, Codex CLI, Claude Code, OpenClaw, Hermes, or a custom command for
   Agent Console conversation.
 
@@ -178,8 +178,7 @@ The split is intentional:
 - **The selected Yulu audio engine** owns realtime captions, final transcripts,
   and dictation. Selection is explicit and never falls back automatically.
 - **The recording Agent** owns summary generation and explicitly authorized
-  Notion delivery. Hermes/OpenClaw may supply xAI OAuth credentials but never
-  receive audio on Yulu's xAI path.
+  Notion delivery. It does not receive audio or xAI OAuth credentials.
 - **The selected general Agent** owns Agent Console conversation and its own
   connectors.
 
@@ -238,8 +237,8 @@ pipeline. Install Yulu first, then add the skill to each Agent you want to use.
   requests with a per-install bearer token.
 - Yulu does not store Agent connector credentials.
 - Selecting xAI authorizes Yulu to send audio directly to xAI for speech-to-text.
-  Hermes/OpenClaw only supply an existing xAI OAuth credential in memory; they do
-  not run Yulu's audio pipeline. Selecting local keeps speech recognition local.
+  Yulu stores its OAuth grant in macOS Keychain; Hermes and OpenClaw do not receive
+  the grant or run Yulu's audio pipeline. Selecting local keeps speech recognition local.
 - External delivery requires explicit authorization; uncertain side effects are
   not blindly replayed.
 

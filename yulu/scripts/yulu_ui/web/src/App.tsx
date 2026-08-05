@@ -3,7 +3,7 @@ import { createBrowserRouter, RouterProvider, Navigate, useParams, useSearchPara
 import { useState } from "react";
 import { trpc, makeTrpcClient } from "./trpc.js";
 import { ThemeConfigSync, ThemeProvider } from "./theme.js";
-import { LanguageProvider } from "./i18n/LanguageProvider.js";
+import { LanguageConfigSync, LanguageProvider } from "./i18n/LanguageProvider.js";
 import { WsProvider } from "./ws.js";
 import { RootLayout } from "./routes/root.js";
 import { InboxLayout, handle as inboxLayoutHandle } from "./routes/inbox/_layout.js";
@@ -108,6 +108,7 @@ export function App() {
         <ThemeProvider>
           <ThemeConfigSync />
           <LanguageProvider>
+            <LanguageConfigSync />
             <WsProvider>
               <RouterProvider router={router} />
             </WsProvider>

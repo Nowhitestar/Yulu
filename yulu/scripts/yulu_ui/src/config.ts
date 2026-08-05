@@ -88,6 +88,7 @@ const StatusAgentHotkeySchema = z.object({
 
 const StatusAgentSchema = z.object({
   enabled: z.boolean().default(true),
+  feedback_sounds: z.boolean().default(true),
   hotkeys: z.object({
     dictate: StatusAgentHotkeySchema.default({ key: "Space", modifiers: ["ctrl", "alt"] }),
     translate: StatusAgentHotkeySchema.default({ key: "T", modifiers: ["ctrl", "alt"], target_language: "English" }),
@@ -108,7 +109,6 @@ export const ConfigSchema = z.object({
   }).default({}),
   transcription: z.object({
     engine: z.enum(["local", "xai"]).default("local"),
-    xai_credential_source: z.enum(["auto", "hermes", "openclaw"]).default("auto"),
     language: z.enum(["zh", "en", "ja", "auto"]).default("zh"),
     glossary: z.array(z.string()).optional(),
     dictation: DictationSchema,
@@ -126,6 +126,7 @@ export const ConfigSchema = z.object({
   agent_console: AgentConsoleSchema,
   agent_pipeline: AgentPipelineSchema,
   ui: z.object({
+    language: z.enum(["zh", "en"]).default("zh"),
     theme: ThemeSchema,
   }).passthrough().default({}),
 }).passthrough();
@@ -167,6 +168,7 @@ export interface AgentNativeConfigMigration {
 }
 
 const RETIRED_TRANSCRIPTION_KEYS = [
+  "xai_credential_source",
   "mode",
   "post_recording_mode",
   "final_engine",

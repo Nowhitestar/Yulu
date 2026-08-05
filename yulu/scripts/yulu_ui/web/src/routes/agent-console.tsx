@@ -295,8 +295,7 @@ function agentName(id: AgentId): string {
 
 function audioProviderName(provider: string): string {
   if (provider === "local" || provider.startsWith("sherpa-onnx")) return "本地转写";
-  if (provider === "xai-oauth:hermes") return "xAI · Hermes OAuth";
-  if (provider === "xai-oauth:openclaw") return "xAI · OpenClaw OAuth";
+  if (provider === "xai-oauth:yulu") return "xAI · Yulu OAuth";
   if (provider.startsWith("xai")) return "xAI 云端";
   return provider || "正在检测";
 }

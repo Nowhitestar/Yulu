@@ -114,6 +114,16 @@ describe("recordingRouter", () => {
     expect(r).toEqual({ stateBefore: "idle", stateAfter: "recording" });
   });
 
+  it("previewSound() dispatches the native feedback preview", async () => {
+    fake = await startFakeSocket((req) => {
+      expect(req).toEqual({ action: "preview_sound" });
+      return { ok: true, enabled: true };
+    });
+    const ctx = { paths: { statusAgentSock: fake.path } } as unknown as AppContext;
+    const caller = createCaller(recordingRouter, ctx);
+    expect(await caller.previewSound()).toEqual({ ok: true, enabled: true });
+  });
+
   it("history() returns dictation history newest first", async () => {
     tempDir = await mkdtemp(join(tmpdir(), "yulu-recording-history-"));
     await mkdir(join(tempDir, "dictation"), { recursive: true });

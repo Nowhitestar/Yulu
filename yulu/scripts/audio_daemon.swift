@@ -259,6 +259,82 @@ func interruptedRecordingTitle() -> String? {
     return title.isEmpty ? "meeting" : title
 }
 
+enum MeetingMicState: String {
+    case unmuted
+    case muted
+    case unknown
+}
+
+struct MeetingMuteClassifier {
+    private static func normalized(_ value: String) -> String {
+        value.lowercased()
+            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func actionMatches(_ label: String, _ action: String) -> Bool {
+        label == action || label.hasPrefix(action + " ") || label.hasPrefix(action + "(")
+    }
+
+    static func classifyControlLabel(_ value: String) -> MeetingMicState? {
+        let label = normalized(value)
+        let ignored = [
+            "mute all", "unmute all", "ask to unmute", "mute participant",
+            "全体静音", "将所有人静音", "解除所有人静音", "请求解除静音",
+        ]
+        guard !label.isEmpty, !ignored.contains(where: label.contains) else { return nil }
+
+        // Button labels describe the action, not the current state: an "Unmute"
+        // button means the meeting microphone is currently muted.
+        let mutedActions = [
+            "unmute my audio", "unmute audio", "unmute", "turn on microphone",
+            "start microphone", "解除静音", "取消静音", "开启麦克风", "打开麦克风",
+            "麦克风已关闭",
+        ]
+        if mutedActions.contains(where: { actionMatches(label, $0) }) { return .muted }
+
+        let unmutedActions = [
+            "mute my audio", "mute audio", "mute", "turn off microphone",
+            "stop microphone", "静音", "关闭麦克风", "麦克风已开启",
+        ]
+        if unmutedActions.contains(where: { actionMatches(label, $0) }) { return .unmuted }
+        return nil
+    }
+
+    static func isSupportedApp(appName: String, bundleID: String?) -> Bool {
+        let app = normalized("\(appName) \(bundleID ?? "")")
+        return [
+            "zoom.us", "zoom workplace", "us.zoom.xos",
+            "腾讯会议", "tencent meeting", "tencentmeeting", "voov meeting", "wemeet", "com.tencent.meeting",
+            "google chrome", "com.google.chrome", " arc ", "company.thebrowser.browser",
+            "safari", "microsoft edge", "com.microsoft.edgemac",
+        ].contains(where: app.contains)
+    }
+
+    static func isSupportedMeetingWindow(appName: String, bundleID: String?, title: String) -> Bool {
+        let app = normalized("\(appName) \(bundleID ?? "")")
+        if ["zoom.us", "zoom workplace", "us.zoom.xos"].contains(where: app.contains) {
+            return true
+        }
+        if ["腾讯会议", "tencent meeting", "tencentmeeting", "voov meeting", "wemeet", "com.tencent.meeting"].contains(where: app.contains) {
+            return true
+        }
+        let browser = [
+            "google chrome", "com.google.chrome", " arc ", "company.thebrowser.browser",
+            "safari", "microsoft edge", "com.microsoft.edgemac",
+        ].contains(where: app.contains)
+        let window = normalized(title)
+        return browser && (window.contains("google meet") || window.contains("meet.google.com") || window.hasPrefix("meet -"))
+    }
+}
+
+func micSamplesForRecording(_ samples: [Float], gain: Float, meetingState: MeetingMicState) -> [Int16] {
+    if meetingState == .muted {
+        return [Int16](repeating: 0, count: samples.count)
+    }
+    return samples.map { Int16(max(-1.0, min(1.0, $0 * gain)) * Float(Int16.max)) }
+}
+
 // ─── 音频数据管理器 + 源分离立体声 (L=mic, R=sys) ───
 
 class AudioRecorder {
@@ -277,6 +353,8 @@ class AudioRecorder {
     var onStopRequest: (() -> Void)?
     private var sysGapMicFallbackLogged = false
     private var micGainState: Float = DEFAULT_MIC_GAIN
+    private var micLevelState: Float = 0
+    private var meetingMicStateState: MeetingMicState = .unknown
     private var autoStopRequested = false
 
     // Streaming buffers
@@ -310,6 +388,30 @@ class AudioRecorder {
         syncState { micGainState }
     }
 
+    var micLevel: Float {
+        syncState { micLevelState }
+    }
+
+    var meetingMicState: MeetingMicState {
+        syncState { meetingMicStateState }
+    }
+
+    func updateMeetingMicState(_ state: MeetingMicState) {
+        recorderQueue.async { [weak self] in
+            guard let self = self, self.meetingMicStateState != state else { return }
+            self.meetingMicStateState = state
+            guard self.isRecordingState else { return }
+            switch state {
+            case .muted:
+                log("🎤 Meeting mic muted — microphone track suppressed")
+            case .unmuted:
+                log("🎤 Meeting mic unmuted — microphone track recording")
+            case .unknown:
+                log("🎤 Meeting mic state unknown — microphone track recording")
+            }
+        }
+    }
+
     func configure(silenceSeconds: TimeInterval, silenceThreshold: Float, outputDir: URL) {
         syncState {
             silenceSecondsState = silenceSeconds
@@ -336,7 +438,9 @@ class AudioRecorder {
             lastSysAudioTime = Date()
             sysBuf = []
             micBuf = []
+            micLevelState = 0
             sysGapMicFallbackLogged = false
+            meetingMicStateState = .unknown
             autoStopRequested = false
             writeState(recording: true, title: title, path: url.path)
             log("🎙 \(fn)")
@@ -360,6 +464,8 @@ class AudioRecorder {
             lastSysAudioTime = nil
             sysBuf = []
             micBuf = []
+            micLevelState = 0
+            meetingMicStateState = .unknown
             writeState(recording: false)
             log("⏹ \(dur)s")
             return (p, dur)
@@ -382,9 +488,11 @@ class AudioRecorder {
         recorderQueue.async { [weak self] in
             guard let self = self, self.isRecordingState else { return }
             let gain = self.micGainState
-            let ints = samples.map { Int16(max(-1.0, min(1.0, $0 * gain)) * Float(Int16.max)) }
+            let ints = micSamplesForRecording(samples, gain: gain, meetingState: self.meetingMicStateState)
             self.micBuf.append(contentsOf: ints)
-            if self.calcRMS(ints) > self.silenceThresholdState {
+            let rms = self.calcRMS(ints)
+            self.micLevelState = self.meetingMicStateState == .muted ? 0 : max(rms, self.micLevelState * 0.72)
+            if self.meetingMicStateState != .muted && rms > self.silenceThresholdState {
                 self.lastMicAudioTime = Date()
             }
             self.mixAndWriteOnQueue()
@@ -533,6 +641,95 @@ class AudioRecorder {
         silenceTimer?.cancel()
         silenceTimer = nil
         autoStopRequested = false
+    }
+}
+
+final class MeetingMuteMonitor {
+    private let recorder: AudioRecorder
+    private let queue = DispatchQueue(label: "com.yulu.meeting-mute-monitor", qos: .utility)
+    private var timer: DispatchSourceTimer?
+
+    init(recorder: AudioRecorder) {
+        self.recorder = recorder
+    }
+
+    func start() {
+        queue.async { [weak self] in
+            guard let self = self, self.timer == nil else { return }
+            let timer = DispatchSource.makeTimerSource(queue: self.queue)
+            timer.schedule(deadline: .now(), repeating: 1)
+            timer.setEventHandler { [weak self] in
+                guard let self = self else { return }
+                self.recorder.updateMeetingMicState(self.scan())
+            }
+            self.timer = timer
+            timer.resume()
+        }
+    }
+
+    func stop() {
+        queue.async { [weak self] in
+            guard let self = self else { return }
+            self.timer?.setEventHandler {}
+            self.timer?.cancel()
+            self.timer = nil
+            self.recorder.updateMeetingMicState(.unknown)
+        }
+    }
+
+    private func scan() -> MeetingMicState {
+        guard AXIsProcessTrusted() else { return .unknown }
+        for app in NSWorkspace.shared.runningApplications where app.activationPolicy == .regular {
+            guard MeetingMuteClassifier.isSupportedApp(
+                appName: app.localizedName ?? "",
+                bundleID: app.bundleIdentifier
+            ) else { continue }
+            let appElement = AXUIElementCreateApplication(app.processIdentifier)
+            AXUIElementSetMessagingTimeout(appElement, 0.2)
+            var windowsRef: CFTypeRef?
+            guard AXUIElementCopyAttributeValue(appElement, kAXWindowsAttribute as CFString, &windowsRef) == .success,
+                  let windows = windowsRef as? [AXUIElement] else { continue }
+            for window in windows {
+                let title = stringAttribute(window, kAXTitleAttribute as CFString) ?? ""
+                guard MeetingMuteClassifier.isSupportedMeetingWindow(
+                    appName: app.localizedName ?? "",
+                    bundleID: app.bundleIdentifier,
+                    title: title
+                ) else { continue }
+                if let state = muteState(in: window) { return state }
+            }
+        }
+        return .unknown
+    }
+
+    private func muteState(in root: AXUIElement) -> MeetingMicState? {
+        var stack: [(AXUIElement, Int)] = [(root, 0)]
+        var visited = 0
+        while let (element, depth) = stack.popLast(), visited < 600 {
+            visited += 1
+            let role = stringAttribute(element, kAXRoleAttribute as CFString) ?? ""
+            if ["AXButton", "AXCheckBox", "AXMenuItem", "AXRadioButton", "AXPopUpButton"].contains(role) {
+                for attribute in [kAXTitleAttribute, kAXDescriptionAttribute, kAXHelpAttribute] {
+                    if let label = stringAttribute(element, attribute as CFString),
+                       let state = MeetingMuteClassifier.classifyControlLabel(label) {
+                        return state
+                    }
+                }
+            }
+            guard depth < 12 else { continue }
+            var childrenRef: CFTypeRef?
+            if AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &childrenRef) == .success,
+               let children = childrenRef as? [AXUIElement] {
+                for child in children.reversed() { stack.append((child, depth + 1)) }
+            }
+        }
+        return nil
+    }
+
+    private func stringAttribute(_ element: AXUIElement, _ attribute: CFString) -> String? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, attribute, &value) == .success else { return nil }
+        return value as? String
     }
 }
 
@@ -1599,7 +1796,7 @@ class SocketServer {
             if wasRecording { onRecordingStop?() }
             resp = ["status":"stopped", "file": p ?? "", "duration": d]
         case "status":
-            resp = ["recording": recorder.isRecording, "file": recorder.currentFilePath, "sysReady": SYS_READY, "sysError": SYS_ERROR, "micReady": MIC_READY, "micError": MIC_ERROR]
+            resp = ["recording": recorder.isRecording, "file": recorder.currentFilePath, "micLevel": recorder.micLevel, "sysReady": SYS_READY, "sysError": SYS_ERROR, "micReady": MIC_READY, "micError": MIC_ERROR, "meetingMicState": recorder.meetingMicState.rawValue]
         case "quit": resp = ["status":"bye"]; send(c, resp)
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { NSApp.terminate(nil) }; return
         default: resp = ["error":"unknown: \(action)"]
@@ -1639,6 +1836,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var recorder: AudioRecorder?
     var micCapture: MicCapture?
     var audioCapture: CaptureBackend?   // D-02 seam: SCK arm now, tap arm (02-04) drops in here
+    var meetingMuteMonitor: MeetingMuteMonitor?
     var socketServer: SocketServer?
 
     func applicationDidFinishLaunching(_ n: Notification) {
@@ -1652,6 +1850,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         log("🎧 Audio Daemon (pid=\(ProcessInfo.processInfo.processIdentifier))")
 
         let rec = AudioRecorder(); recorder = rec
+        let muteMonitor = MeetingMuteMonitor(recorder: rec); meetingMuteMonitor = muteMonitor
         rec.onStopRequest = { [weak self] in
             guard let self = self else { return }
             if !SYS_DISABLED && launchMeetingSilencePrompt() {
@@ -1660,6 +1859,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             let wasRecording = self.recorder?.isRecording ?? false
             _ = self.recorder?.stop()
             if wasRecording {
+                self.meetingMuteMonitor?.stop()
                 self.audioCapture?.stopCapture()
                 self.micCapture?.stop()
             }
@@ -1696,6 +1896,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         ss.onRecordingStart = { [weak self] in
             self?.audioCapture?.startCapture()
             self?.micCapture?.start()
+            if !SYS_DISABLED { self?.meetingMuteMonitor?.start() }
         }
         // Pre-gate sys re-arm (self-heal): refresh SYS_READY/SYS_ERROR with a real
         // arm attempt before the "start" readiness gate, so a stale false left by a
@@ -1708,6 +1909,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             self?.micCapture?.selectedDeviceUID = uid
         }
         ss.onRecordingStop = { [weak self] in
+            self?.meetingMuteMonitor?.stop()
             self?.audioCapture?.stopCapture()
             self?.micCapture?.stop()
         }
@@ -1720,7 +1922,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ n: Notification) {
-        recorder?.stop(); socketServer?.stop(); audioCapture?.stopCapture(); micCapture?.stop()
+        recorder?.stop(); socketServer?.stop(); meetingMuteMonitor?.stop(); audioCapture?.stopCapture(); micCapture?.stop()
         try? FileManager.default.removeItem(at: PID_PATH)
         try? FileManager.default.removeItem(at: SOCKET_PATH)
         try? logFile?.close()
@@ -1730,6 +1932,24 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 // ─── 入口 ──────────────────────────────────────────────
 
 if CommandLine.arguments.contains("--self-test") {
+    assert(MeetingMuteClassifier.classifyControlLabel("Unmute My Audio") == .muted)
+    assert(MeetingMuteClassifier.classifyControlLabel("开启麦克风 (⌘D)") == .muted)
+    assert(MeetingMuteClassifier.classifyControlLabel("Mute") == .unmuted)
+    assert(MeetingMuteClassifier.classifyControlLabel("关闭麦克风 (⌘D)") == .unmuted)
+    assert(MeetingMuteClassifier.classifyControlLabel("Ask to Unmute") == nil)
+    assert(MeetingMuteClassifier.isSupportedMeetingWindow(
+        appName: "Google Chrome",
+        bundleID: "com.google.Chrome",
+        title: "Meet - abc-defg-hij"
+    ))
+    assert(!MeetingMuteClassifier.isSupportedMeetingWindow(
+        appName: "Google Chrome",
+        bundleID: "com.google.Chrome",
+        title: "Gmail"
+    ))
+    assert(micSamplesForRecording([0.5], gain: 1, meetingState: .muted) == [0])
+    assert(micSamplesForRecording([0.5], gain: 1, meetingState: .unknown)[0] > 0)
+
     var recovery = ZeroBufferRecoveryPolicy(threshold: 3, maxAttempts: 2)
     assert(!recovery.observe(allZero: true, running: true, rebuilding: false))
     assert(!recovery.observe(allZero: true, running: true, rebuilding: false))

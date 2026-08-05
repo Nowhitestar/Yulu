@@ -18,7 +18,6 @@ import {
   type TranscriptionLanguage,
 } from "./realtimeTranscription.js";
 import { XaiAudioClient } from "./xaiAudio.js";
-import type { XaiCredentialSource } from "./xaiCredentials.js";
 
 export type AudioTranscriptionEngine = "local" | "xai";
 
@@ -31,10 +30,6 @@ interface StableItem {
 
 function selectedEngine(config: ConfigManager): AudioTranscriptionEngine {
   return config.read().transcription.engine;
-}
-
-function selectedCredentialSource(config: ConfigManager): XaiCredentialSource {
-  return config.read().transcription.xai_credential_source;
 }
 
 function trustedRealtimeTranscript(audioPath: string): string | null {
@@ -101,12 +96,11 @@ export class AudioTranscriptionService implements StreamingCaptionEngine {
         reason: status.ready ? null : status.error || "本地转写模型尚未安装",
       };
     }
-    const source = selectedCredentialSource(this.config);
-    const status = this.xaiCredentialStatus(source);
+    const status = this.xaiCredentialStatus();
     return {
       available: status?.connected === true,
-      provider: status?.connected ? `xai-oauth:${status.source}` : "xai-oauth",
-      reason: status?.connected ? null : status?.detail || "正在检查 Hermes/OpenClaw xAI OAuth",
+      provider: status?.connected ? "xai-oauth:yulu" : "xai-oauth",
+      reason: status?.connected ? null : status?.detail || "正在检查 Yulu xAI OAuth",
     };
   }
 
@@ -169,12 +163,12 @@ export class AudioTranscriptionService implements StreamingCaptionEngine {
     return await this.transcribeLocalFile(audioPath, language);
   }
 
-  async testXai(source: XaiCredentialSource) {
-    return await this.xai.testCredential(source);
+  async testXai() {
+    return await this.xai.testCredential();
   }
 
-  private xaiCredentialStatus(source: XaiCredentialSource) {
-    return this.xai.credentialStatus(source);
+  private xaiCredentialStatus() {
+    return this.xai.credentialStatus();
   }
 
   private async transcribeLocalFile(audioPath: string, language: TranscriptionLanguage): Promise<TranscriptionResult> {

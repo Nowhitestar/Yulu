@@ -300,6 +300,7 @@ inputs are not ready instead of producing a fake-success silent file.
 | `~/.config/yulu/recording-events/` | Capture-completion recovery inbox |
 | `~/.config/yulu/config.json` | Active non-secret preferences |
 | `~/.config/yulu/mcp-token.json` | Local bearer token; do not print or copy |
+| macOS Keychain service `com.yulu.xai-oauth` | Yulu-owned xAI audio OAuth grant; never print or export |
 | `~/Movies/Yulu/` | Recording content and committed sidecars |
 
 Use `yulu where` to confirm the effective installation and recording paths.
@@ -407,6 +408,6 @@ python3 yulu/scripts/doctor.py --json
   inboxes in a cloud-sync directory.
 - Never claim a recording task succeeded from Agent prose alone; use Host state.
 - Never retry an uncertain external side effect without reconciliation.
-- Never add Agent credentials to Yulu config or logs.
+- Never add Agent credentials or Yulu's xAI OAuth grant to config or logs.
 - Separate capture health, Host durability, Hermes availability, artifact commit,
   and Notion delivery when diagnosing a user-visible failure.

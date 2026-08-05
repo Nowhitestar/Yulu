@@ -1,7 +1,4 @@
-import { z } from "zod";
 import { publicProcedure, router } from "../trpc.js";
-
-const SourceSchema = z.enum(["hermes", "openclaw"]);
 
 function credentials(ctx: { xaiCredentials?: import("../xaiCredentials.js").XaiCredentialManager }) {
   if (!ctx.xaiCredentials) throw new Error("xAI OAuth 管理器不可用");
@@ -16,9 +13,11 @@ function audio(ctx: { audioTranscription?: import("../audioTranscription.js").Au
 export const xaiAudioRouter = router({
   status: publicProcedure.query(async ({ ctx }) => await credentials(ctx).status()),
   authorize: publicProcedure
-    .input(z.object({ source: SourceSchema }))
-    .mutation(({ ctx, input }) => credentials(ctx).startAuthorization(input.source)),
+    .mutation(async ({ ctx }) => await credentials(ctx).authorize()),
+  cancelAuthorization: publicProcedure
+    .mutation(({ ctx }) => credentials(ctx).cancelAuthorization()),
+  logout: publicProcedure
+    .mutation(async ({ ctx }) => await credentials(ctx).logout()),
   test: publicProcedure
-    .input(z.object({ source: z.enum(["auto", "hermes", "openclaw"]) }))
-    .mutation(async ({ ctx, input }) => await audio(ctx).testXai(input.source)),
+    .mutation(async ({ ctx }) => await audio(ctx).testXai()),
 });
