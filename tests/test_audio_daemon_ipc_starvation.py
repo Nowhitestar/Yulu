@@ -92,6 +92,35 @@ def test_window_scan_requests_fail_fast_when_previous_scan_is_stuck():
     assert "windowScanQueue.async" in handle_windows
 
 
+def test_second_daemon_cannot_replace_live_socket_owner():
+    """A second app instance must leave the active daemon's socket intact."""
+    source = DAEMON_SOURCE.read_text()
+    socket_server = source[source.index("class SocketServer") : source.index("// ─── App Delegate")]
+    start = _swift_function(socket_server, "func start() -> Bool")
+    stop = _swift_function(socket_server, "func stop()")
+
+    lock_helper = source[source.index("func acquireExclusiveFileLock") : source.index("class SocketServer")]
+    assert "flock(fd, LOCK_EX | LOCK_NB)" in lock_helper
+    assert start.index("acquireExclusiveFileLock(at: SOCKET_LOCK_PATH)") < start.index(
+        "unixSocketIsReachable(at: SOCKET_PATH)"
+    )
+    assert "singletonLockFD = lockFD" in start
+    assert "unixSocketIsReachable(at: SOCKET_PATH)" in start
+    assert "return false" in start
+    assert "ownsSocketPath = true" in start
+    assert "if ownsSocketPath" in stop
+    assert "removeItem(at: SOCKET_PATH)" in stop
+    assert "close(singletonLockFD)" in stop
+    assert stop.index("removeItem(at: SOCKET_PATH)") < stop.index("close(singletonLockFD)")
+
+    termination = source[source.index("func applicationWillTerminate") :]
+    termination = termination[: termination.index("\n    }")]
+    assert "removeItem(at: SOCKET_PATH)" not in termination
+
+    launch = source[source.index("func applicationDidFinishLaunching") : source.index("func applicationWillTerminate")]
+    assert launch.index("guard ss.start()") < launch.index("write(to: PID_PATH")
+
+
 def _daemon_alive() -> bool:
     """Probe — connect and send a status request the standard way."""
     if not SOCKET_PATH.exists():

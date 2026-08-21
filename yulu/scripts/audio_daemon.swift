@@ -16,6 +16,7 @@ import AudioToolbox
 let HOME = FileManager.default.homeDirectoryForCurrentUser
 let CONFIG_DIR = HOME.appendingPathComponent(".config/yulu")
 let SOCKET_PATH = CONFIG_DIR.appendingPathComponent("audio_daemon.sock")
+let SOCKET_LOCK_PATH = CONFIG_DIR.appendingPathComponent(".audio_daemon.lock")
 let STATE_PATH = CONFIG_DIR.appendingPathComponent(".state.json")
 let PID_PATH = CONFIG_DIR.appendingPathComponent(".audio_daemon.pid")
 let LOG_PATH = CONFIG_DIR.appendingPathComponent("audio_daemon.log")
@@ -1611,9 +1612,37 @@ final class ProcessTapBackend: CaptureBackend {
 
 // ─── Socket 服务器 ────────────────────────────────────
 
+func unixSocketIsReachable(at path: URL) -> Bool {
+    guard FileManager.default.fileExists(atPath: path.path) else { return false }
+    let fd = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
+    guard fd >= 0 else { return false }
+    defer { close(fd) }
+
+    var addr = sockaddr_un()
+    addr.sun_family = sa_family_t(AF_UNIX)
+    _ = path.path.withCString { strncpy(&addr.sun_path.0, $0, min(path.path.utf8.count, 103)) }
+    return withUnsafePointer(to: &addr) {
+        $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+            Darwin.connect(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) == 0
+        }
+    }
+}
+
+func acquireExclusiveFileLock(at path: URL) -> Int32? {
+    let fd = Darwin.open(path.path, O_CREAT | O_RDWR, 0o600)
+    guard fd >= 0 else { return nil }
+    guard flock(fd, LOCK_EX | LOCK_NB) == 0 else {
+        close(fd)
+        return nil
+    }
+    return fd
+}
+
 class SocketServer {
     let recorder: AudioRecorder
     var sock: Int32 = -1
+    private(set) var ownsSocketPath = false
+    private var singletonLockFD: Int32 = -1
     /// Hooks the daemon uses to start/stop ScreenCaptureKit + microphone capture only
     /// while a recording is in flight, so the macOS menu-bar recording indicator
     /// reflects reality. AppDelegate wires these to the CaptureBackend / MicCapture.
@@ -1649,23 +1678,47 @@ class SocketServer {
 
     func stop() {
         if sock >= 0 { close(sock); sock = -1 }
+        if ownsSocketPath {
+            try? FileManager.default.removeItem(at: SOCKET_PATH)
+            ownsSocketPath = false
+        }
+        if singletonLockFD >= 0 {
+            close(singletonLockFD)
+            singletonLockFD = -1
+        }
     }
 
-    func start() {
+    func start() -> Bool {
+        guard let lockFD = acquireExclusiveFileLock(at: SOCKET_LOCK_PATH) else {
+            log("Socket: another audio daemon holds the process lock")
+            return false
+        }
+        singletonLockFD = lockFD
+        if unixSocketIsReachable(at: SOCKET_PATH) {
+            log("Socket: another audio daemon is already active")
+            stop()
+            return false
+        }
         try? FileManager.default.removeItem(at: SOCKET_PATH)
         sock = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
-        guard sock >= 0 else { log("Socket: create failed"); return }
+        guard sock >= 0 else { log("Socket: create failed"); stop(); return false }
         var addr = sockaddr_un()
         addr.sun_family = sa_family_t(AF_UNIX)
         _ = SOCKET_PATH.path.withCString { strncpy(&addr.sun_path.0, $0, min(SOCKET_PATH.path.utf8.count, 103)) }
         let ok = withUnsafePointer(to: &addr) {
             $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { Darwin.bind(sock, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) }
         }
-        guard ok == 0 else { log("Socket: bind \(ok)"); close(sock); sock = -1; return }
+        guard ok == 0 else { log("Socket: bind failed errno=\(errno)"); stop(); return false }
+        ownsSocketPath = true
         // status_agent polls at 1Hz, voicemail.cli polls during recording, and
         // shell scripts ping ad-hoc — a backlog of 5 is trivial to overrun if
         // any handler stalls. 64 absorbs realistic bursts without queueing.
-        Darwin.listen(sock, 64); chmod(SOCKET_PATH.path, 0o600)
+        guard Darwin.listen(sock, 64) == 0 else {
+            log("Socket: listen failed errno=\(errno)")
+            stop()
+            return false
+        }
+        chmod(SOCKET_PATH.path, 0o600)
         log("Socket ready")
         DispatchQueue.global(qos: .background).async { [weak self] in
             guard let self = self else { return }
@@ -1685,6 +1738,7 @@ class SocketServer {
                 }
             }
         }
+        return true
     }
 
     /// Per-accepted-fd hardening:
@@ -1890,7 +1944,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
         logFile = try? FileHandle(forWritingTo: LOG_PATH)
         _ = try? logFile?.seekToEnd()
-        try? "\(ProcessInfo.processInfo.processIdentifier)".write(to: PID_PATH, atomically: true, encoding: .utf8)
         log("🎧 Audio Daemon (pid=\(ProcessInfo.processInfo.processIdentifier))")
 
         let rec = AudioRecorder(); recorder = rec
@@ -1958,7 +2011,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             self?.audioCapture?.stopCapture()
             self?.micCapture?.stop()
         }
-        ss.start()
+        guard ss.start() else {
+            log("Another audio daemon owns the socket; exiting")
+            NSApp.terminate(nil)
+            return
+        }
+        try? "\(ProcessInfo.processInfo.processIdentifier)".write(to: PID_PATH, atomically: true, encoding: .utf8)
         if let title = interruptedRecordingTitle(), let p = rec.start(title: title) {
             log("⚠️ Resuming interrupted recording: \(p)")
             ss.onRecordingStart?()
@@ -1967,9 +2025,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ n: Notification) {
+        let ownedSocket = socketServer?.ownsSocketPath ?? false
         recorder?.stop(); socketServer?.stop(); meetingMuteMonitor?.stop(); audioCapture?.stopCapture(); micCapture?.stop()
-        try? FileManager.default.removeItem(at: PID_PATH)
-        try? FileManager.default.removeItem(at: SOCKET_PATH)
+        if ownedSocket { try? FileManager.default.removeItem(at: PID_PATH) }
         try? logFile?.close()
     }
 }
@@ -1977,6 +2035,41 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 // ─── 入口 ──────────────────────────────────────────────
 
 if CommandLine.arguments.contains("--self-test") {
+    let socketTestRoot = FileManager.default.fileExists(atPath: "/private/tmp")
+        ? URL(fileURLWithPath: "/private/tmp", isDirectory: true)
+        : FileManager.default.temporaryDirectory
+    let socketTestDirectory = socketTestRoot
+        .appendingPathComponent("yulu-audio-daemon-\(UUID().uuidString)")
+    try! FileManager.default.createDirectory(at: socketTestDirectory, withIntermediateDirectories: true)
+    let socketTestPath = socketTestDirectory.appendingPathComponent("daemon.sock")
+    let socketTestFD = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
+    assert(socketTestFD >= 0)
+    var socketTestAddress = sockaddr_un()
+    socketTestAddress.sun_family = sa_family_t(AF_UNIX)
+    _ = socketTestPath.path.withCString {
+        strncpy(&socketTestAddress.sun_path.0, $0, min(socketTestPath.path.utf8.count, 103))
+    }
+    let socketTestBind = withUnsafePointer(to: &socketTestAddress) {
+        $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+            Darwin.bind(socketTestFD, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
+        }
+    }
+    assert(socketTestBind == 0)
+    assert(Darwin.listen(socketTestFD, 1) == 0)
+    assert(unixSocketIsReachable(at: socketTestPath))
+    assert(FileManager.default.fileExists(atPath: socketTestPath.path))
+    close(socketTestFD)
+
+    let lockTestPath = socketTestDirectory.appendingPathComponent("daemon.lock")
+    let firstLockFD = acquireExclusiveFileLock(at: lockTestPath)
+    assert(firstLockFD != nil)
+    assert(acquireExclusiveFileLock(at: lockTestPath) == nil)
+    close(firstLockFD!)
+    let secondLockFD = acquireExclusiveFileLock(at: lockTestPath)
+    assert(secondLockFD != nil)
+    close(secondLockFD!)
+    try? FileManager.default.removeItem(at: socketTestDirectory)
+
     assert(MeetingMuteClassifier.classifyControlLabel("Unmute My Audio") == .muted)
     assert(MeetingMuteClassifier.classifyControlLabel("开启麦克风 (⌘D)") == .muted)
     assert(MeetingMuteClassifier.classifyControlLabel("Mute") == .unmuted)
