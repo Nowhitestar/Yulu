@@ -21,8 +21,8 @@ Yulu owns only the capabilities that require a trusted product boundary:
 - local MCP authentication and access control.
 
 The selected Yulu audio engine owns realtime captions, final speech recognition,
-and dictation. `local` is the default; `xai` connects directly to xAI and uses
-Hermes/OpenClaw only to resolve an existing OAuth bearer in memory. There is no
+and dictation. `local` is the default; `xai` connects directly to xAI with OAuth
+authorized in Yulu and stored in macOS Keychain. There is no
 automatic engine fallback. The recording Agent owns summary generation and
 Notion delivery, while the Agent selected in Agent Console owns interactive
 conversation and its connectors. Yulu does not contain a general chat or
@@ -37,7 +37,7 @@ connector execution engine.
 | Local Host | `yulu_ui/src/server.ts` | Loopback HTTP, tRPC, WebSocket, static UI, and authenticated MCP |
 | Audio transcription service | `audioTranscription.ts` | Lock a session to the explicitly selected local/xAI engine; serve realtime, final, and dictation requests without fallback |
 | Local audio engine | `localCaptionManager.ts`, `sherpa_caption_worker.py` | Paraformer INT8 source-separated captions and local final transcription; install/test/remove from Settings |
-| xAI audio engine | `xaiAudio.ts`, `xaiCredentials.ts` | Direct xAI Streaming/REST STT; reuse Hermes/OpenClaw OAuth in memory without routing audio through either Agent |
+| xAI audio engine | `xaiAudio.ts`, `xaiCredentials.ts`, `xai_keychain.swift` | Direct xAI Streaming/REST STT plus Yulu-owned device OAuth and macOS Keychain storage |
 | Realtime coordinator | `realtimeTranscription.ts` | Feed mic/system streams and publish partial/stable captions from the selected engine |
 | Durable store | `hostStore.ts` | Persist tasks, events, leases, artifact records, and Notion delivery records in `host.sqlite` |
 | Pipeline coordinator | `recordingPipeline.ts` | Commit the selected-engine transcript first, then dispatch summary/delivery Agent work and recover failures |
@@ -282,8 +282,8 @@ pipeline is healthy.
 ## Privacy boundary
 
 Raw capture is local. Selecting xAI explicitly authorizes Yulu to send audio
-directly to xAI; selecting local keeps it on the Mac. Hermes/OpenClaw only supply
-an OAuth bearer on the xAI path. The summary Agent receives the committed
+directly to xAI; selecting local keeps it on the Mac. Yulu stores the xAI OAuth
+grant in macOS Keychain and never sends it to an Agent. The summary Agent receives the committed
 transcript and bounded task instructions, not an audio-transcription role.
 
 Notion requires a separate per-task opt-in. Other interactive connector actions

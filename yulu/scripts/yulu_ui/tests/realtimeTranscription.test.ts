@@ -50,6 +50,30 @@ function monoPcm(seconds: number, sample: number): Buffer {
 }
 
 describe("RealtimeTranscriptionCoordinator", () => {
+  it("does not replace an active meeting when dictation asks to start", async () => {
+    const root = mkdtempSync(join(tmpdir(), "yulu-realtime-conflict-"));
+    roots.push(root);
+    const meetingPath = join(root, "meeting.wav");
+    const dictationPath = join(root, "dictation.wav");
+    writeStereoWav(meetingPath, 0.05);
+    writeStereoWav(dictationPath, 0.05);
+    const coordinator = new RealtimeTranscriptionCoordinator({
+      pubsub: new PubSub<AppChannels>(),
+      transcribe: vi.fn(async () => ({ transcript: "会议内容", provider: "test", chunks: 1, language: "zh" as const })),
+      pollMs: 60_000,
+    });
+
+    await coordinator.start({ audioPath: meetingPath, title: "会议", language: "zh" });
+    await expect(coordinator.start({
+      audioPath: dictationPath,
+      title: "听写",
+      language: "zh",
+      replaceActive: false,
+    })).rejects.toThrow("already active");
+    await expect(coordinator.stop(meetingPath)).resolves.toMatchObject({ stem: "meeting" });
+    await coordinator.close();
+  });
+
   it("streams source-separated PCM, exposes mutable partials, and persists stable text only", async () => {
     const root = mkdtempSync(join(tmpdir(), "yulu-realtime-streaming-"));
     roots.push(root);
@@ -270,7 +294,7 @@ describe("RealtimeTranscriptionCoordinator", () => {
     const audioPath = join(root, "修订会议_20260717_120000.wav");
     writeStereoWav(audioPath, 0.05);
     const engine: StreamingCaptionEngine = {
-      provider: "xai-oauth:hermes",
+      provider: "xai-oauth:yulu",
       warm: vi.fn(async () => {}),
       start: vi.fn(async () => {}),
       feed: vi.fn(async () => ({

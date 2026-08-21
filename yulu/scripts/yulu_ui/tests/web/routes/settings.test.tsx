@@ -6,23 +6,33 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 // config.schema metadata used by the category list + detail. Shape mirrors the
 // server's SettingMeta (registry entry minus the Zod validate field).
 const SCHEMA = [
-  { path: "audio.mic_device",         category: "audio",         label: "麦克风设备", type: "select", reload: { kind: "restart", daemons: ["audiodaemon"] } },
-  { path: "audio.output_dir",         category: "audio",         label: "录音输出目录", type: "path", reload: { kind: "restart", daemons: ["audiodaemon"] } },
+  { path: "audio.mic_device",         category: "audio",         label: "麦克风设备", type: "select", reload: { kind: "none" } },
+  { path: "audio.output_dir",         category: "audio",         label: "录音输出目录", type: "path", reload: { kind: "none" } },
   { path: "transcription.engine",     category: "transcription", label: "音频引擎",  type: "select", reload: { kind: "none" } },
   { path: "transcription.language",   category: "transcription", label: "语言",      type: "select", reload: { kind: "none" } },
-  { path: "transcription.xai_credential_source", category: "transcription", label: "xAI OAuth 来源", type: "select", reload: { kind: "none" } },
   { path: "llm.enabled",              category: "llm",           label: "启用 LLM",  type: "toggle", reload: { kind: "none" } },
   { path: "status_agent.enabled",     category: "general",       label: "菜单栏 Agent", type: "toggle", reload: { kind: "none" } },
+  { path: "status_agent.feedback_sounds", category: "voice",     label: "听写提示音", type: "toggle", reload: { kind: "none" } },
   { path: "status_agent.hotkeys",     category: "voice",         label: "语音输入快捷键", type: "text", reload: { kind: "sighup", daemons: ["statusagent"] } },
   { path: "transcription.dictation",  category: "voice",         label: "语音输入模板", type: "text", reload: { kind: "none" } },
+  { path: "meeting_detection.enabled", category: "automation", label: "会议检测", type: "toggle", reload: { kind: "restart", daemons: ["detector"] } },
 ];
+
+interface ConfigUpdateResult {
+  daemonsNeedingRestart: string[];
+  daemonsNeedingSighup: string[];
+  applyErrors?: string[];
+}
 
 // Shared spy so tests can assert config.update was called on a field edit.
 // vi.hoisted keeps it available inside the hoisted vi.mock factory below.
-const { configUpdateSpy, promptsListSpy, recording } = vi.hoisted(() => ({
-  configUpdateSpy: vi.fn(async (_vars: { key: string; value: unknown }) => ({ daemonsNeedingRestart: [], daemonsNeedingSighup: [] })),
+const { configUpdateSpy, promptsListSpy, previewSoundSpy, restartSpy, recording, statusAgent } = vi.hoisted(() => ({
+  configUpdateSpy: vi.fn(async (_vars: { key: string; value: unknown }): Promise<ConfigUpdateResult> => ({ daemonsNeedingRestart: [], daemonsNeedingSighup: [] })),
   promptsListSpy: vi.fn(),
+  previewSoundSpy: vi.fn(),
+  restartSpy: vi.fn(async (_vars: { name: string }) => ({ ok: true })),
   recording: { state: "idle" as string },
+  statusAgent: { state: "running" as string },
 }));
 
 // useConfigField → useIsRecording subscribes to the recording WS channel. Stub
@@ -40,12 +50,12 @@ vi.mock("../../../web/src/trpc.js", () => {
     transcription: {
       engine: "local",
       language: "auto",
-      xai_credential_source: "auto",
       dictation: { prompt_slug: "dictation-cleanup", translate_prompt_slug: "dictation-translate", target_language: "English" },
     },
     llm: { enabled: false, command: [] },
     status_agent: {
       enabled: false,
+      feedback_sounds: true,
       hotkeys: {
         dictate: { key: "Space", modifiers: ["ctrl", "alt"] },
         translate: { key: "T", modifiers: ["ctrl", "alt"] },
@@ -84,8 +94,29 @@ vi.mock("../../../web/src/trpc.js", () => {
           isPending: false,
         }) },
       },
-      daemons: { restart: { useMutation: noopMutation } },
-      recording: { state: { useQuery: () => ({ data: { state: recording.state } }) } },
+      daemons: {
+        health: { useQuery: () => ({ data: [
+          { name: "com.yulu.statusagent", status: statusAgent.state, pid: statusAgent.state === "running" ? 123 : 0, exitStatus: 0, lastLog: "Ready" },
+        ] }) },
+        restart: { useMutation: (opts?: { onSuccess?: (res: unknown, vars: { name: string }) => void }) => ({
+          mutateAsync: async (vars: { name: string }) => {
+            const result = await restartSpy(vars);
+            opts?.onSuccess?.(result, vars);
+            return result;
+          },
+          isPending: false,
+        }) },
+      },
+      recording: {
+        state: { useQuery: () => ({ data: { state: recording.state } }) },
+        previewSound: { useMutation: (opts?: { onError?: (error: Error) => void }) => ({
+          mutate: () => {
+            try { previewSoundSpy(); }
+            catch (error) { opts?.onError?.(error as Error); }
+          },
+          isPending: false,
+        }) },
+      },
       system: {
         audioDevices: { useQuery: () => ({ data: {
           input: [
@@ -137,13 +168,13 @@ vi.mock("../../../web/src/trpc.js", () => {
       },
       xaiAudio: {
         status: { useQuery: () => ({ data: {
-          sources: [
-            { source: "hermes", installed: true, oauthSupported: true, connected: false, detail: "需要授权 xAI OAuth" },
-            { source: "openclaw", installed: true, oauthSupported: false, connected: false, detail: "当前 OpenClaw 版本不支持 xAI OAuth" },
-          ],
-          authorization: { source: null, status: "idle", verificationUrl: "", userCode: "", message: "" },
+          connected: false,
+          detail: "需要在 Yulu 中授权 xAI",
+          authorization: { status: "idle", verificationUrl: "", userCode: "", message: "" },
         }, error: null }) },
         authorize: { useMutation: noopMutation },
+        cancelAuthorization: { useMutation: noopMutation },
+        logout: { useMutation: noopMutation },
         test: { useMutation: noopMutation },
       },
       llm: { test: { useMutation: noopMutation } },
@@ -173,6 +204,7 @@ import { SettingsCategory } from "../../../web/src/routes/settings.$category.js"
 import { categoryLabelKey } from "../../../web/src/components/settings/categories.js";
 import { CATEGORIES } from "../../../web/src/components/settings/categories.js";
 import { translate, LanguageProvider } from "../../../web/src/i18n/LanguageProvider.js";
+import { UndoToastProvider } from "../../../web/src/components/UndoToast.js";
 import { ThemeProvider } from "../../../web/src/theme.js";
 
 // Minimal breadcrumb probe that mirrors TopBar's breadcrumb computation (read
@@ -239,9 +271,11 @@ function wrap(initial = "/settings/general") {
   const result = render(
     <ThemeProvider>
       <LanguageProvider>
-        <QueryClientProvider client={qc}>
-          <RouterProvider router={router} />
-        </QueryClientProvider>
+        <UndoToastProvider>
+          <QueryClientProvider client={qc}>
+            <RouterProvider router={router} />
+          </QueryClientProvider>
+        </UndoToastProvider>
       </LanguageProvider>
     </ThemeProvider>
   );
@@ -313,15 +347,20 @@ describe("Settings (3-column MasterDetail)", () => {
 });
 
 describe("Settings category detail content (re-homed widgets)", () => {
-  it("general: capabilities (read-only) + theme + status agent + about", () => {
-    const { container, getByText } = wrap("/settings/general");
+  beforeEach(() => {
+    statusAgent.state = "running";
+    previewSoundSpy.mockReset();
+  });
+
+  it("general: capabilities (read-only) + theme + about", () => {
+    const { container } = wrap("/settings/general");
     const detail = within(container.querySelector(".masterdetail-detail") as HTMLElement);
     expect(detail.getByText(translate("zh", "settings.capabilities.heading"))).toBeInTheDocument();
     // Theme controls are re-homed here.
     expect(container.querySelector('[role="group"][aria-label="主题"]')).not.toBeNull();
     expect(container.querySelector('[role="group"][aria-label="主题明暗模式"]')).not.toBeNull();
     expect(container.querySelector('[role="group"][aria-label="主题家族"]')).not.toBeNull();
-    expect(getByText(translate("zh", "settings.hotkey.statusAgent.label"))).toBeInTheDocument();
+    expect(detail.queryByText(translate("zh", "settings.hotkey.statusAgent.label"))).toBeNull();
     // P3-1: the read-only About block (version + install source) lives in general.
     expect(detail.getByText(translate("zh", "settings.about.heading"))).toBeInTheDocument();
     expect(detail.getByText("0.8.0")).toBeInTheDocument();
@@ -377,6 +416,41 @@ describe("Settings category detail content (re-homed widgets)", () => {
       key: "status_agent.hotkeys.dictate.modifiers",
       value: ["ctrl", "alt"],
     })));
+  });
+
+  it("voice: shows configured state separately from the live StatusAgent state", () => {
+    const { container } = wrap("/settings/voice");
+    const voice = within(container.querySelector("#voice-input") as HTMLElement);
+    expect(voice.getByText(translate("zh", "settings.voice.statusAgent.disabledRunning"))).toBeInTheDocument();
+  });
+
+  it("voice: feedback sound toggle and preview are wired", async () => {
+    configUpdateSpy.mockClear();
+    previewSoundSpy.mockClear();
+    const { container } = wrap("/settings/voice");
+    const voice = within(container.querySelector("#voice-input") as HTMLElement);
+    fireEvent.click(voice.getByRole("switch", { name: "听写提示音" }));
+    await waitFor(() => expect(configUpdateSpy).toHaveBeenCalledWith(expect.objectContaining({
+      key: "status_agent.feedback_sounds",
+      value: false,
+    })));
+    fireEvent.click(voice.getByRole("button", { name: "试听" }));
+    expect(previewSoundSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("voice: disables preview while StatusAgent is stopped", () => {
+    statusAgent.state = "stopped";
+    const { container } = wrap("/settings/voice");
+    const voice = within(container.querySelector("#voice-input") as HTMLElement);
+    expect(voice.getByRole("button", { name: "试听" })).toBeDisabled();
+  });
+
+  it("voice: surfaces preview IPC failures", async () => {
+    previewSoundSpy.mockImplementationOnce(() => { throw new Error("status agent offline"); });
+    const { container, getByTestId } = wrap("/settings/voice");
+    const voice = within(container.querySelector("#voice-input") as HTMLElement);
+    fireEvent.click(voice.getByRole("button", { name: "试听" }));
+    await waitFor(() => expect(getByTestId("settings-error-toast")).toHaveTextContent("status agent offline"));
   });
 
   it("voice: dictation template selector commits the selected prompt slug", async () => {
@@ -463,15 +537,15 @@ describe("Settings — recording-guard + undo (Task 5)", () => {
   beforeEach(() => {
     recording.state = "idle";
     configUpdateSpy.mockClear();
+    restartSpy.mockClear();
   });
 
   it("while recording, a restart-class field is locked (disabled, not editable)", () => {
     recording.state = "recording";
-    const { container } = wrap("/settings/audio");
-    const audio = container.querySelector("#audio") as HTMLElement;
-    const row = within(audio).getByText(translate("zh", "settings.audio.outputDir.label")).closest(".row")!;
-    // The path picker is replaced by read-only display + a 录音中 note.
-    expect(within(row as HTMLElement).queryByRole("button", { name: translate("zh", "path.choose") })).toBeNull();
+    const { container } = wrap("/settings/automation");
+    const automation = container.querySelector("#automation") as HTMLElement;
+    const row = within(automation).getByText(translate("zh", "settings.automation.enabled.label")).closest(".row")!;
+    expect(within(row as HTMLElement).queryByRole("switch")).toBeNull();
     expect(within(row as HTMLElement).getByText(/录音中/)).toBeInTheDocument();
   });
 
@@ -493,5 +567,16 @@ describe("Settings — recording-guard + undo (Task 5)", () => {
     configUpdateSpy.mockClear();
     fireEvent.click(within(toast).getByText("撤销"));
     await waitFor(() => expect(configUpdateSpy).toHaveBeenCalledWith(expect.objectContaining({ key: "transcription.language", value: "auto" })));
+  });
+
+  it("shows a visible error when a requested daemon restart fails", async () => {
+    configUpdateSpy.mockResolvedValueOnce({ daemonsNeedingRestart: ["detector"], daemonsNeedingSighup: [] });
+    restartSpy.mockRejectedValueOnce(new Error("launchctl load failed"));
+    const { container, getByText, getByTestId } = wrap("/settings/automation");
+    const automation = within(container.querySelector("#automation") as HTMLElement);
+    fireEvent.click(automation.getByRole("switch", { name: translate("zh", "settings.automation.enabled.label") }));
+    await waitFor(() => getByText(translate("zh", "restartBanner.restartNow")));
+    fireEvent.click(getByText(translate("zh", "restartBanner.restartNow")));
+    await waitFor(() => expect(getByTestId("settings-error-toast")).toHaveTextContent("launchctl load failed"));
   });
 });

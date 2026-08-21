@@ -28,9 +28,6 @@ def privacy_opt_in_report(config: Mapping[str, Any] | None) -> dict[str, Any]:
     transcription_engine = str(transcription.get("engine") or "local").strip().lower()
     if transcription_engine not in {"local", "xai"}:
         transcription_engine = "local"
-    xai_credential_source = str(
-        transcription.get("xai_credential_source") or "auto"
-    ).strip().lower()
     conversation_provider = str(agent.get("provider") or "hermes").strip().lower()
     pipeline_enabled = agent_pipeline.get("enabled") is not False
 
@@ -45,7 +42,7 @@ def privacy_opt_in_report(config: Mapping[str, Any] | None) -> dict[str, Any]:
             "provider": transcription_engine,
             "yulu_executor": True,
             "cloud_audio_opt_in": transcription_engine == "xai",
-            "credential_source": xai_credential_source if transcription_engine == "xai" else None,
+            "credential_source": "yulu-keychain" if transcription_engine == "xai" else None,
             "ok": True,
         },
         "conversation": {

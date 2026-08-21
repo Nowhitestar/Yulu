@@ -191,6 +191,7 @@ def test_daemon_start_proceeds_when_daemon_idle(monkeypatch, tmp_path):
     calls = []
 
     monkeypatch.setattr(record_audio, "load_config", lambda: {
+        "output_dir": str(tmp_path / "recordings"),
         "mic_device": "StudioMicUID",
         "silence_duration_sec": 123,
         "silence_threshold": 0.07,
@@ -212,6 +213,7 @@ def test_daemon_start_proceeds_when_daemon_idle(monkeypatch, tmp_path):
 
     assert ok is True
     start_cmd = next(c for c in calls if c.get("action") == "start")
+    assert start_cmd["output_dir"] == str(tmp_path / "recordings")
     assert start_cmd["mic_device"] == "StudioMicUID"
     assert start_cmd["silence_seconds"] == 123
     assert start_cmd["silence_threshold"] == 0.07

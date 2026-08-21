@@ -19,9 +19,11 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
+import { trpc } from "../trpc.js";
 import { MESSAGES, type Lang } from "./messages.js";
 
 export type { Lang } from "./messages.js";
@@ -40,6 +42,10 @@ const DEFAULT_LANG: Lang = "zh";
 
 function isLang(v: unknown): v is Lang {
   return v === "zh" || v === "en";
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function readStored(): Lang {
@@ -105,6 +111,45 @@ export function LanguageProvider({ children }: { children: ReactNode }) {
 
   const value = useMemo<LanguageContextValue>(() => ({ lang, setLang, t }), [lang, setLang, t]);
   return <LanguageContext.Provider value={value}>{children}</LanguageContext.Provider>;
+}
+
+export function LanguageConfigSync({ onError }: { onError?: (message: string) => void } = {}) {
+  const { data: cfg } = trpc.config.get.useQuery();
+  const updateMut = trpc.config.update.useMutation();
+  const utils = trpc.useUtils();
+  const { lang, setLang } = useLang();
+  const t = useT();
+  const hydrated = useRef(false);
+  const lastConfig = useRef<Lang | null>(null);
+
+  useEffect(() => {
+    if (!cfg) return;
+    const raw = (cfg as { ui?: { language?: unknown } }).ui?.language;
+    const next = isLang(raw) ? raw : DEFAULT_LANG;
+    if (next === lastConfig.current) return;
+    lastConfig.current = next;
+    hydrated.current = true;
+    setLang(next);
+  }, [cfg, setLang]);
+
+  useEffect(() => {
+    if (!hydrated.current || lang === lastConfig.current) return;
+    lastConfig.current = lang;
+    updateMut.mutate(
+      { key: "ui.language", value: lang },
+      {
+        onSuccess: (result: { applyErrors?: string[] }) => {
+          if (result.applyErrors?.length) {
+            onError?.(t("settings.save.applyFailed", { error: result.applyErrors.join("; ") }));
+          }
+        },
+        onError: (error: unknown) => onError?.(t("settings.save.failed", { error: errorMessage(error) })),
+        onSettled: () => void utils.config.get.invalidate(),
+      },
+    );
+  }, [lang, onError, t, updateMut, utils]);
+
+  return null;
 }
 
 export function useLang(): { lang: Lang; setLang: (l: Lang) => void } {

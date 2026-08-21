@@ -6,31 +6,31 @@
 	<dict>
 		<key>Resources/Yulu.icns</key>
 		<data>
-		HKr3yQCYab6Qqf6PXpKW7dWCTGc=
+		oqVKbsm6NPHWi+OlAzHn7X/M6ck=
 		</data>
 		<key>Resources/status_idle.png</key>
 		<data>
-		GbsCV8JSMdL2NZ57EG3yLXLSOzg=
+		uH7HCd/2frRbYgHPr68ceCiZ4yM=
 		</data>
 		<key>Resources/status_idle@2x.png</key>
 		<data>
-		PnIQm6n/LCYeHs/PZvqZ7SpaX8Y=
+		KWSR7JjQjtXREbdeZIDcgip3j54=
 		</data>
 		<key>Resources/status_processing.png</key>
 		<data>
-		tfFqKZ3vP3SbSX4uX5JNhvlMGGA=
+		3MdaJ1o9qLiJYGFfiSyKpqVHfSI=
 		</data>
 		<key>Resources/status_processing@2x.png</key>
 		<data>
-		tqd45pbN1dN5fAHgxTpIQ2UJRX8=
+		zh6Uh3iBHYpINkiZnCOWLywrZvo=
 		</data>
 		<key>Resources/status_recording.png</key>
 		<data>
-		asiydlXfghNKuc6CeDFUxUXJplk=
+		uDH79rkiNuiyvw4puKr3spEhwCg=
 		</data>
 		<key>Resources/status_recording@2x.png</key>
 		<data>
-		YXVK0F4Ke9PLhbWJL3d5Vx2tA6I=
+		x8evu70p30khG9ydN/XkLDtQRJg=
 		</data>
 	</dict>
 	<key>files2</key>
@@ -39,49 +39,49 @@
 		<dict>
 			<key>hash2</key>
 			<data>
-			AI/XZjenoVaaIYSUYcuYnCvgmvLrXl6dcrIdkbWDdtE=
+			tQ3Y5o3VJdi7TkuhDbVN69xM46Gede4bOZvj4sAvrNU=
 			</data>
 		</dict>
 		<key>Resources/status_idle.png</key>
 		<dict>
 			<key>hash2</key>
 			<data>
-			QjyiopE5JUsD3aIklxsz430R5Ph/vLx9FtlNQ4HYXvY=
+			ZYrTy/VP6Xw8XKUP6c4RyYlVknmHF9QPq/jkJOuykMg=
 			</data>
 		</dict>
 		<key>Resources/status_idle@2x.png</key>
 		<dict>
 			<key>hash2</key>
 			<data>
-			P/KPt0plUjF/sOPz9yDWWBRO14ZFFGUM/6GaBlxQClw=
+			TkFFY5PTWYumIWP2GOx8K5DloSs7ID730aVs6JbowR0=
 			</data>
 		</dict>
 		<key>Resources/status_processing.png</key>
 		<dict>
 			<key>hash2</key>
 			<data>
-			9XfhsWFP77dsBMXjFE7bM7iBytZshHe1V6w66uM0a0k=
+			++ZEWIp/ToEwoZdfyA7LV5m5BIzzNAwtCYg1QmembmM=
 			</data>
 		</dict>
 		<key>Resources/status_processing@2x.png</key>
 		<dict>
 			<key>hash2</key>
 			<data>
-			kR++LgsPJIgoz3X0JFNhMcWZkCd4aNCz18sJKDiCUMU=
+			YnqteqHZJ5vEuZKSWhozF8zw9d4wjXX3Xu+YDyKJnKU=
 			</data>
 		</dict>
 		<key>Resources/status_recording.png</key>
 		<dict>
 			<key>hash2</key>
 			<data>
-			7DQRfwTzSi5nNJYug5LCy5YxiZ4QXiavbDmlmAcy8fo=
+			AFhCTqsaI/1WFR7t/do4plxmvO7ERnZIa/rmSCbq8t8=
 			</data>
 		</dict>
 		<key>Resources/status_recording@2x.png</key>
 		<dict>
 			<key>hash2</key>
 			<data>
-			8go9SeyfpLC+Gn618f3Nm67s4lRF4KiE9ZAmalPkbU0=
+			ainYyMKutjMTAhLpjIL9GgIIWWgp7kXpiNX3+5yDOz8=
 			</data>
 		</dict>
 	</dict>

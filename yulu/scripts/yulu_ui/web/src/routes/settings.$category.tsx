@@ -27,7 +27,7 @@ const CATEGORY_SECTIONS: Record<string, (tracker: SettingsRestartTracker) => Rea
   general: (tracker) => (
     <>
       <CapabilitiesSection />
-      <HotkeySection tracker={tracker} />
+      <HotkeySection />
       <AboutSection />
     </>
   ),

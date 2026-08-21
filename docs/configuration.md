@@ -22,7 +22,6 @@ transcription, and dictation; local is the default and there is no automatic fal
   },
   "transcription": {
     "engine": "local",
-    "xai_credential_source": "auto",
     "language": "zh",
     "dictation": {
       "prompt_slug": "dictation-cleanup",
@@ -112,6 +111,11 @@ runtime keys are archived and removed on Host startup.
 | `silence_duration_sec` | `300` | Auto-stop threshold for prolonged silence. |
 | `half_duplex` | `true` | Prefer system audio while others speak and microphone during system silence. |
 
+`mic_device`, `output_dir`, `silence_threshold`, and `silence_duration_sec` are
+read when the next recording starts and do not require an audio-daemon restart.
+The microphone selector is populated by the running native CoreAudio daemon;
+an empty `mic_device` keeps the current macOS default input.
+
 Native permission state is not configuration. `Yulu.app` must be allowed under
 Microphone and Screen & System Audio Recording in macOS Settings.
 
@@ -145,8 +149,7 @@ and dictation. The default is local and there is no automatic fallback.
 | Field | Installer value | Meaning |
 |---|---:|---|
 | `engine` | `"local"` | `local` or `xai`; the selected value is used exactly for all audio transcription paths. |
-| `xai_credential_source` | `"auto"` | Reuse xAI OAuth from `hermes` or `openclaw`; `auto` is valid only when exactly one source is connected. |
-| `language` | `"zh"` | Requested/source language metadata supplied to the selected audio engine. |
+| `language` | `"zh"` | `zh`, `en`, `ja`, or `auto`. Japanese requires the `xai` engine; Settings rejects the unsupported `local` + `ja` combination. |
 | `dictation.prompt_slug` | `"dictation-cleanup"` | Local prompt selected for normal dictation cleanup. |
 | `dictation.translate_prompt_slug` | `"dictation-translate"` | Local prompt selected for quick translation. |
 | `dictation.target_language` | `"English"` | Default target for dictation translation and the realtime-caption language selector. |
@@ -158,6 +161,11 @@ and dictation. The default is local and there is no automatic fallback.
 
 The Host accepts on-demand audio only from the configured recordings directory
 or `~/.config/yulu/dictation`, and only as a valid absolute WAV path.
+
+xAI OAuth is authorized from Settings and stored in macOS Keychain. Tokens are
+not configuration fields and never appear in `config.json`. Upgrades archive and
+remove the retired `transcription.xai_credential_source` field; Hermes/OpenClaw
+credentials are not imported or deleted.
 
 ## `llm` and Agent Console
 

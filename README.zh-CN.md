@@ -14,8 +14,8 @@ Yulu（语录，*yǔ lù*）是一套围绕本地文件和现有 Agent 设计的
 实时字幕，把会议整理成可搜索的转录与纪要，并让 Agent 继续使用这些历史内容工作。
 
 Yulu 不需要账号。录音文件和任务状态保存在你的 Mac 上。实时字幕、最终转写和听写
-使用你明确选择的音频引擎：默认本地，也可选择复用 Hermes/OpenClaw xAI OAuth 的
-xAI 云端方案。Yulu 不会在两者之间自动切换。
+使用你明确选择的音频引擎：默认本地，也可直接在 Yulu 中授权 xAI 云端方案。
+Yulu 不会在两者之间自动切换。
 
 ## 现在可以做什么
 
@@ -70,8 +70,8 @@ Agent 中 Notion、Zulip、日历等连接器的状态。Yulu 只展示配置状
 - 正式 Release 目前支持 Apple Silicon（arm64）。
 - Python 3.10 或更高版本。
 - 自动生成纪要或投递连接器时，Yulu 的 LaunchAgent 需要能找到可用的 Hermes CLI。
-- 转写、听写和实时字幕默认使用本地引擎；也可显式选择 xAI，并复用已安装
-  Hermes/OpenClaw 中的 xAI OAuth。两种引擎不会自动切换。
+- 转写、听写和实时字幕默认使用本地引擎；也可显式选择 xAI，并直接在 Yulu
+  设置中完成 OAuth。两种引擎不会自动切换。
 - Agent Console 可选使用 Codex CLI、Claude Code、OpenClaw、Hermes 或自定义命令。
 
 缺少兼容的 Node.js 与必要音频工具时，安装器会自动准备。
@@ -168,7 +168,7 @@ Agent Console -> 用户选择的通用 Agent -> 该 Agent 自己的连接器
 - **Yulu** 负责原生录制、系统权限、本地文件、持久化任务、产物提交、恢复和授权边界。
 - **Yulu 所选音频引擎** 负责实时字幕、最终转写和听写；默认本地，也可显式选择
   xAI 云端，绝不自动降级或切换。
-- **Hermes/OpenClaw** 仅可作为现有 xAI OAuth 的凭据来源；音频协议与执行由 Yulu 负责。
+- **Yulu** 直接管理 xAI OAuth，并把凭据保存在 macOS 钥匙串；音频协议与执行均由 Yulu 负责。
 - **Hermes** 负责自动生成纪要，以及经过明确授权的连接器投递。
 - **用户选择的通用 Agent** 负责 Agent Console 对话和它自己的连接器。
 
@@ -222,8 +222,8 @@ yulu mcp test
 - 运行数据库、任务状态、token、socket 和日志保存在 `~/.config/yulu`。
 - Host 只监听回环地址，并使用每次安装生成的 bearer token 保护完成事件、转写和 MCP 请求。
 - Yulu 不保存 Agent 的连接器凭据。
-- 选择 xAI 代表允许 Yulu 把音频直接发送给 xAI；Hermes/OpenClaw 只在内存中提供
-  已有 OAuth 凭据。选择本地引擎时，语音识别留在本机。
+- 选择 xAI 代表允许 Yulu 把音频直接发送给 xAI；OAuth 凭据保存在 macOS 钥匙串，
+  不会发送给 Hermes 或 OpenClaw。选择本地引擎时，语音识别留在本机。
 - 外部投递必须经过明确授权；结果不确定时不会盲目重试。
 
 详细控制与排障见[配置](docs/configuration.md)、[运维](docs/operations.md)和

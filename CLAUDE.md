@@ -13,7 +13,7 @@ separate from the selected summary and conversation Agents.
   recovery, artifact commits, authorization, and audit.
 - The explicitly selected Yulu audio engine owns realtime captions, final
   transcripts, and dictation. `local` is the default; `xai` connects directly
-  to xAI while reusing an existing Hermes/OpenClaw OAuth bearer in memory.
+  to xAI using Yulu-owned OAuth stored in macOS Keychain.
 - Hermes owns automatic summary generation and explicitly authorized Notion
   delivery. It is not an audio execution dependency.
 - The Agent selected in Agent Console owns interactive conversation and its own
@@ -22,8 +22,9 @@ separate from the selected summary and conversation Agents.
 
 Do not add automatic fallback between audio engines, another summary worker,
 chat engine, connector executor, or file-only work queue to Yulu. The accepted
-decisions are [`ADR-005`](yulu/spec/adr/005-agent-native-durable-recording-pipeline.md)
-and [`ADR-007`](yulu/spec/adr/007-explicit-audio-transcription-engines.md).
+decisions are [`ADR-005`](yulu/spec/adr/005-agent-native-durable-recording-pipeline.md),
+[`ADR-007`](yulu/spec/adr/007-explicit-audio-transcription-engines.md), and
+[`ADR-008`](yulu/spec/adr/008-yulu-owned-xai-oauth.md).
 
 ### Constraints
 
@@ -63,8 +64,8 @@ and [`ADR-007`](yulu/spec/adr/007-explicit-audio-transcription-engines.md).
 - Optional `gog`/`cloudflared` only for Yulu-owned calendar scheduling.
 
 Yulu installs and manages only its local speech runtime. Connector credentials
-and OAuth state belong to the Agent, not this repository or `config.json`; xAI
-OAuth is resolved from Hermes/OpenClaw in memory and is never persisted by Yulu.
+and OAuth state belong to the Agent, not this repository or `config.json`;
+Yulu's separate xAI audio OAuth grant is stored in macOS Keychain.
 
 ### Configuration and state
 
@@ -77,8 +78,8 @@ OAuth is resolved from Hermes/OpenClaw in memory and is never persisted by Yulu.
 - Completion-event recovery inbox: `~/.config/yulu/recording-events/`.
 - Local bearer token: `~/.config/yulu/mcp-token.json`; never print it.
 
-Relevant config sections are `audio`, `transcription` (engine, xAI credential
-source, language, and dictation context), `agent_pipeline`, `llm`,
+Relevant config sections are `audio`, `transcription` (engine, language, and
+dictation context), `agent_pipeline`, `llm`,
 `agent_console`, `status_agent`,
 `calendars`, `meeting_detection`, and `ui`.
 
@@ -203,7 +204,7 @@ Agent Console -> selected general Agent -> that Agent's connectors
 | `yulu_ui/src/server.ts` | Loopback Host, tRPC, WebSocket, UI, and authenticated MCP |
 | `hostStore.ts` | Durable task, event, lease, artifact, and delivery records |
 | `audioTranscription.ts` | Explicit local/xAI realtime, final, and dictation selection without fallback |
-| `xaiAudio.ts` / `xaiCredentials.ts` | Direct xAI STT plus in-memory OAuth reuse from Hermes/OpenClaw |
+| `xaiAudio.ts` / `xaiCredentials.ts` / `xai_keychain.swift` | Direct xAI STT plus Yulu-owned device OAuth and Keychain storage |
 | `recordingPipeline.ts` | Validation, idempotency, claims, transcript commit, summary dispatch, recovery |
 | `agentGateway.ts` | Hermes summary/delivery workflow and required-tool audit |
 | `artifactStore.ts` | Task staging and independent transcript/summary commits |

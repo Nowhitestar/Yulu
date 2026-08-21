@@ -10,12 +10,13 @@ const installLocal = vi.fn();
 const uninstallLocal = vi.fn();
 const testLocal = vi.fn();
 const authorizeXai = vi.fn();
+const cancelXaiAuthorization = vi.fn();
+const logoutXai = vi.fn();
 const testXai = vi.fn();
 
 const schema = [
   { path: "transcription.engine", category: "transcription", label: "音频引擎", type: "select", reload: { kind: "none" } },
   { path: "transcription.language", category: "transcription", label: "语言", type: "select", reload: { kind: "none" } },
-  { path: "transcription.xai_credential_source", category: "transcription", label: "xAI OAuth 来源", type: "select", reload: { kind: "none" } },
 ];
 
 vi.mock("../../web/src/ws.js", () => ({
@@ -26,7 +27,7 @@ vi.mock("../../web/src/ws.js", () => ({
 vi.mock("../../web/src/trpc.js", () => ({
   trpc: {
     config: {
-      get: { useQuery: () => ({ data: { transcription: { engine: "local", language: "auto", xai_credential_source: "auto" } }, isPending: false }) },
+      get: { useQuery: () => ({ data: { transcription: { engine: "local", language: "auto" } }, isPending: false }) },
       schema: { useQuery: () => ({ data: schema, isPending: false }) },
       update: { useMutation: () => ({ mutateAsync: update }) },
     },
@@ -47,13 +48,13 @@ vi.mock("../../web/src/trpc.js", () => ({
     },
     xaiAudio: {
       status: { useQuery: () => ({ data: {
-        sources: [
-          { source: "hermes", installed: true, oauthSupported: true, connected: false, detail: "需要授权 xAI OAuth" },
-          { source: "openclaw", installed: true, oauthSupported: false, connected: false, detail: "当前 OpenClaw 版本不支持 xAI OAuth" },
-        ],
-        authorization: { source: null, status: "idle", verificationUrl: "", userCode: "", message: "" },
+        connected: false,
+        detail: "需要在 Yulu 中授权 xAI",
+        authorization: { status: "idle", verificationUrl: "", userCode: "", message: "" },
       }, error: null }) },
       authorize: { useMutation: () => ({ mutate: authorizeXai, isPending: false, error: null }) },
+      cancelAuthorization: { useMutation: () => ({ mutate: cancelXaiAuthorization, isPending: false, error: null }) },
+      logout: { useMutation: () => ({ mutate: logoutXai, isPending: false, error: null }) },
       test: { useMutation: () => ({ mutate: testXai, isPending: false, error: null, data: null }) },
     },
     recording: { state: { useQuery: () => ({ data: { state: recordingState } }) } },
@@ -90,18 +91,28 @@ beforeEach(() => {
   uninstallLocal.mockClear();
   testLocal.mockClear();
   authorizeXai.mockClear();
+  cancelXaiAuthorization.mockClear();
+  logoutXai.mockClear();
   testXai.mockClear();
   vi.spyOn(window, "confirm").mockReturnValue(true);
+  vi.spyOn(window, "open").mockReturnValue({ opener: null, close: vi.fn(), location: { href: "" } } as never);
 });
 
 describe("TranscriptionSection", () => {
-  it("presents one explicit audio engine and both credential-backed choices", () => {
+  it("explains an unavailable selected engine and hides unsupported Japanese for local", async () => {
+    mount();
+    expect(screen.getByText(/模型尚未就绪/)).toBeInTheDocument();
+    const languageRow = screen.getByText("语言").closest(".row") as HTMLElement;
+    await userEvent.click(within(languageRow).getByText("auto"));
+    expect(within(languageRow).queryByRole("option", { name: "ja" })).toBeNull();
+  });
+
+  it("presents one explicit audio engine and Yulu-owned xAI authorization", () => {
     mount();
     expect(screen.getByText("音频引擎")).toBeInTheDocument();
     expect(screen.getByText("语言")).toBeInTheDocument();
-    expect(screen.getByText("xAI OAuth 来源")).toBeInTheDocument();
     expect(screen.getByText("本地音频引擎")).toBeInTheDocument();
-    expect(screen.getByText("xAI 云端音频引擎")).toBeInTheDocument();
+    expect(screen.getByText("xAI OAuth 授权")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "安装本地模型" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "授权 xAI" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /管理术语表/ })).toHaveAttribute("href", "/knowledge/glossary");
@@ -142,9 +153,10 @@ describe("TranscriptionSection", () => {
     expect(within(row).queryByText(/录音中不可改/)).toBeNull();
   });
 
-  it("starts xAI OAuth only through an installed Agent credential wallet", async () => {
+  it("starts xAI OAuth directly from Yulu", async () => {
     mount();
     await userEvent.setup().click(screen.getByRole("button", { name: "授权 xAI" }));
-    expect(authorizeXai).toHaveBeenCalledWith({ source: "hermes" });
+    expect(authorizeXai).toHaveBeenCalledOnce();
+    expect(authorizeXai.mock.calls[0]?.[0]).toBeUndefined();
   });
 });

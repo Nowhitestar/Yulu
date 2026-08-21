@@ -156,11 +156,13 @@ export class RecordingPipeline {
 
   async transcribeOnDemand(input: OnDemandTranscriptionInput) {
     const audioPath = this.resolveOnDemandAudioPath(input.audioPath);
-    return await this.options.transcription.transcribeFile(
+    const glossary = this.glossary();
+    const result = await this.options.transcription.transcribeFile(
       audioPath,
       normalizeTranscriptionLanguage(input.language ?? this.options.config.read().transcription.language),
-      this.glossary(),
+      glossary,
     );
+    return { ...result, transcript: glossary ? applyGlossaryContract(result.transcript, glossary) : result.transcript };
   }
 
   private prepare(input: RecordingCompletionInput): PreparedRecordingTask {

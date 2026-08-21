@@ -38,7 +38,7 @@ import { acquireHostInstanceLock, type HostInstanceLock } from "./hostInstanceLo
 import { RealtimeTranscriptionCoordinator } from "./realtimeTranscription.js";
 import { LocalCaptionManager } from "./localCaptionManager.js";
 import { applyGlossaryContract, loadGlossaryContract } from "./glossaryContract.js";
-import { XaiCredentialManager } from "./xaiCredentials.js";
+import { KeychainXaiTokenStore, XaiCredentialManager } from "./xaiCredentials.js";
 import { XaiAudioClient } from "./xaiAudio.js";
 import { AudioTranscriptionService } from "./audioTranscription.js";
 
@@ -115,11 +115,10 @@ async function startLockedServer(
     configDir: runtimePaths.configDir,
     selected: () => configManager.read().transcription.engine === "local",
   });
-  const xaiCredentials = new XaiCredentialManager();
-  const xaiAudio = new XaiAudioClient(
-    xaiCredentials,
-    () => configManager.read().transcription.xai_credential_source,
-  );
+  const xaiCredentials = new XaiCredentialManager({
+    store: new KeychainXaiTokenStore(join(runtimePaths.scriptDir, "Yulu.app", "Contents", "MacOS", "xai_keychain")),
+  });
+  const xaiAudio = new XaiAudioClient(xaiCredentials);
   const audioTranscription = new AudioTranscriptionService(configManager, localCaption, xaiAudio);
   void xaiCredentials.status().catch(() => {});
   const recordingPipeline = new RecordingPipeline({
@@ -172,7 +171,7 @@ async function startLockedServer(
     },
     defaultTargetLanguage: () => configManager.read().transcription.dictation.target_language || "English",
     defaultTranslationEnabled: false,
-    allowedRoot: runtimePaths.moviesDir,
+    allowedRoots: [runtimePaths.moviesDir, join(runtimePaths.configDir, "dictation")],
   });
   try {
     const migration = migrateLegacyAgentQueue({
@@ -284,6 +283,7 @@ async function startLockedServer(
     audioPath: z.string().min(1),
     title: z.string().max(200).default(""),
     language: z.enum(["zh", "en", "ja", "auto"]),
+    replaceActive: z.boolean().optional(),
   });
   const RealtimeStopSchema = z.object({ audioPath: z.string().min(1) });
   const RealtimeOptionsSchema = z.object({

@@ -193,6 +193,9 @@ def _recording_segments(state):
 
 def _daemon_start_payload(title, cfg):
     payload = {"action": "start", "title": title}
+    output_dir = cfg.get("output_dir")
+    if isinstance(output_dir, str) and output_dir.strip():
+        payload["output_dir"] = os.path.expanduser(output_dir.strip())
     mic_device = cfg.get("mic_device")
     if isinstance(mic_device, str) and mic_device.strip() and not mic_device.strip().startswith(":"):
         payload["mic_device"] = mic_device.strip()

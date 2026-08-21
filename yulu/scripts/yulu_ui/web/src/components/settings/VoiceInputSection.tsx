@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { X } from "lucide-react";
 import { trpc } from "../../trpc.js";
 import { InlineEditRow } from "../InlineEditRow.js";
+import { useUndoToast } from "../UndoToast.js";
 import { useConfigField } from "../../hooks/useConfigField.js";
 import { useT } from "../../i18n/LanguageProvider.js";
 import type { SettingsRestartTracker } from "../../hooks/useSettingsRestartTracker.js";
@@ -70,8 +71,15 @@ function shortcutFromEvent(event: KeyboardEvent): HotkeySpec | null {
 export function VoiceInputSection({ tracker }: VoiceInputSectionProps) {
   const { data: cfg } = trpc.config.get.useQuery();
   const { data: prompts } = trpc.prompts.list.useQuery({ category: "voice" });
+  const { data: daemons } = trpc.daemons.health.useQuery(undefined, { refetchInterval: 5_000 });
   const { commit, isBlocked } = useConfigField(tracker);
   const t = useT();
+  const { showError } = useUndoToast();
+  const previewSound = trpc.recording.previewSound.useMutation({
+    onError: (error: unknown) => showError(t("settings.voice.previewFailed", {
+      error: error instanceof Error ? error.message : String(error),
+    })),
+  });
   const [capturing, setCapturing] = useState<HotkeyAction | null>(null);
   const [captureError, setCaptureError] = useState("");
 
@@ -102,6 +110,18 @@ export function VoiceInputSection({ tracker }: VoiceInputSectionProps) {
 
   const dictation = cfg.transcription.dictation ?? {};
   const hotkeys = cfg.status_agent.hotkeys ?? DEFAULT_HOTKEYS;
+  const statusAgent = daemons?.find((daemon) => daemon.name === "com.yulu.statusagent");
+  const agentRunning = statusAgent?.status === "running" || statusAgent?.status === "idle";
+  const agentEnabled = cfg.status_agent.enabled ?? false;
+  const agentHelp = !statusAgent
+    ? t("settings.voice.statusAgent.checking")
+    : agentEnabled && agentRunning
+      ? t("settings.voice.statusAgent.running")
+      : agentEnabled
+        ? t("settings.voice.statusAgent.enabledStopped")
+        : agentRunning
+          ? t("settings.voice.statusAgent.disabledRunning")
+          : t("settings.voice.statusAgent.stopped");
   const promptOptions = (prompts ?? []).map((p) => ({
     value: String((p as { slug: string }).slug),
     label: String((p as { name?: string; slug: string }).name || (p as { slug: string }).slug),
@@ -116,12 +136,38 @@ export function VoiceInputSection({ tracker }: VoiceInputSectionProps) {
 
       <InlineEditRow
         label={t("settings.hotkey.statusAgent.label")}
+        help={agentHelp}
         type="toggle"
-        value={cfg.status_agent.enabled ?? false}
+        value={agentEnabled}
         onCommit={commit("status_agent.enabled")}
         disabled={isBlocked("status_agent.enabled")}
         status={tracker.statusFor("status_agent.enabled")}
       />
+
+      <InlineEditRow
+        label={t("settings.voice.feedbackSounds")}
+        type="toggle"
+        value={cfg.status_agent.feedback_sounds ?? true}
+        onCommit={commit("status_agent.feedback_sounds")}
+        status={tracker.statusFor("status_agent.feedback_sounds")}
+      />
+      <div className="row">
+        <div className="row-label">
+          <div>{t("settings.voice.previewSound")}</div>
+          <div className="row-help">{t("settings.voice.feedbackSoundsHelp")}</div>
+        </div>
+        <div className="row-value">
+          <button
+            type="button"
+            className="path-btn"
+            disabled={!(cfg.status_agent.feedback_sounds ?? true) || !agentRunning || previewSound.isPending}
+            onClick={() => previewSound.mutate()}
+          >
+            {t("settings.voice.preview")}
+          </button>
+        </div>
+        <div className="row-status" />
+      </div>
 
       {ACTIONS.map((action) => {
         const spec = hotkeys[action];

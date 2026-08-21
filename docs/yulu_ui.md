@@ -10,7 +10,7 @@ crash.
 - `/agent-console` — selected general Agent, recording controls, and recent durable task state
 - `/voice-input` — dictation and translation through the explicitly selected local/xAI audio engine
 - `/inbox` `/inbox/:stem` — recordings, playback, committed transcript/summary, and task/delivery actions
-- `/settings/{general,audio,transcription,appearance}` — current local preferences
+- `/settings/{general,audio,transcription,voice,automation}` — current local preferences
 - `/knowledge/prompts` `/knowledge/prompts/:id` — Agent instruction prompt master-detail
 - `/knowledge/glossary` — vocabulary table with inline-edit + bulk delete
 - `/health` — Doctor, durable task queue, scheduler, installed services, and logs

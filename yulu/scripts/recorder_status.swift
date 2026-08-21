@@ -18,6 +18,26 @@ let stableCaptionCharacterLimit = 160
 let partialCaptionCharacterLimit = 120
 let captionLayoutCharacterLimit = 240
 
+enum AppLanguage: String {
+    case zh, en
+}
+
+func readAppLanguage() -> AppLanguage {
+    let url = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".config/yulu/config.json")
+    guard let data = try? Data(contentsOf: url),
+          let raw = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+          let ui = raw["ui"] as? [String: Any],
+          let value = ui["language"] as? String,
+          let language = AppLanguage(rawValue: value) else { return .zh }
+    return language
+}
+
+let activeAppLanguage = readAppLanguage()
+
+func L(_ zh: String, _ en: String) -> String {
+    activeAppLanguage == .zh ? zh : en
+}
+
 enum CaptionDisplayMode: Int {
     case bilingual = 0
     case translation = 1
@@ -27,18 +47,21 @@ enum CaptionDisplayMode: Int {
 }
 
 struct TargetLanguage {
-    let title: String
+    let zhTitle: String
+    let enTitle: String
     let value: String
+
+    var title: String { L(zhTitle, enTitle) }
 }
 
 let targetLanguages = [
-    TargetLanguage(title: "English", value: "English"),
-    TargetLanguage(title: "日本語", value: "日本語"),
-    TargetLanguage(title: "한국어", value: "한국어"),
-    TargetLanguage(title: "Français", value: "Français"),
-    TargetLanguage(title: "Español", value: "Español"),
-    TargetLanguage(title: "Deutsch", value: "Deutsch"),
-    TargetLanguage(title: "繁體中文", value: "繁體中文"),
+    TargetLanguage(zhTitle: "英语", enTitle: "English", value: "English"),
+    TargetLanguage(zhTitle: "日语", enTitle: "Japanese", value: "日本語"),
+    TargetLanguage(zhTitle: "韩语", enTitle: "Korean", value: "한국어"),
+    TargetLanguage(zhTitle: "法语", enTitle: "French", value: "Français"),
+    TargetLanguage(zhTitle: "西班牙语", enTitle: "Spanish", value: "Español"),
+    TargetLanguage(zhTitle: "德语", enTitle: "German", value: "Deutsch"),
+    TargetLanguage(zhTitle: "繁体中文", enTitle: "Traditional Chinese", value: "繁體中文"),
 ]
 
 extension NSColor {
@@ -124,7 +147,7 @@ final class RecordingButton: NSButton {
         title = ""
         isBordered = false
         setButtonType(.momentaryChange)
-        setAccessibilityLabel("停止录制")
+        setAccessibilityLabel(L("停止录制", "Stop recording"))
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
@@ -161,7 +184,9 @@ final class RecordingButton: NSButton {
             NSBezierPath(roundedRect: bounds, xRadius: 6, yRadius: 6).fill()
         }
 
-        let label = stoppingState ? "停止中…" : (active ? "点击停止" : "录制中")
+        let label = stoppingState
+            ? L("停止中…", "Stopping…")
+            : (active ? L("点击停止", "Stop") : L("录制中", "Recording"))
         let attributes: [NSAttributedString.Key: Any] = [
             .font: NSFont.systemFont(ofSize: 10, weight: .semibold),
             .foregroundColor: NSColor.white.withAlphaComponent(isEnabled ? 0.90 : 0.52),
@@ -193,7 +218,7 @@ final class CollapseButton: NSButton {
         title = ""
         isBordered = false
         setButtonType(.momentaryChange)
-        setAccessibilityLabel("收起字幕")
+        setAccessibilityLabel(L("收起字幕", "Collapse captions"))
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
@@ -257,10 +282,10 @@ final class LogoView: NSView {
         artwork.layer?.shadowOpacity = 0.35
         artwork.layer?.shadowRadius = 12
         artwork.layer?.shadowOffset = NSSize(width: 0, height: -6)
-        toolTip = "正在录制 · 点击展开字幕"
+        toolTip = L("正在录制 · 点击展开字幕", "Recording · Click to expand captions")
         setAccessibilityElement(true)
         setAccessibilityRole(.button)
-        setAccessibilityLabel("展开实时字幕")
+        setAccessibilityLabel(L("展开实时字幕", "Expand live captions"))
 
         let click = NSClickGestureRecognizer(target: self, action: #selector(clicked))
         addGestureRecognizer(click)
@@ -519,23 +544,28 @@ final class AppDel: NSObject, NSApplicationDelegate, NSWindowDelegate {
         recordingButton = RecordingButton(frame: .zero)
         recordingButton.target = self
         recordingButton.action = #selector(doStop)
-        recordingButton.toolTip = "点击停止录制"
+        recordingButton.toolTip = L("点击停止录制", "Click to stop recording")
         toolbar.addSubview(recordingButton)
 
         timeLabel = makeToolbarLabel("00:00")
         timeLabel.font = .monospacedDigitSystemFont(ofSize: 10, weight: .semibold)
         toolbar.addSubview(timeLabel)
 
-        sourceLanguageLabel = makeToolbarLabel("中文 →")
+        sourceLanguageLabel = makeToolbarLabel(L("中文 →", "Chinese →"))
         toolbar.addSubview(sourceLanguageLabel)
 
         targetPopup = makePopup(targetLanguages.map(\.title))
         targetPopup.target = self
         targetPopup.action = #selector(targetLanguageChanged)
-        targetPopup.selectItem(withTitle: normalizedTargetLanguage(loadTargetLanguage()))
+        let selectedTarget = normalizedTargetLanguage(loadTargetLanguage())
+        targetPopup.selectItem(at: targetLanguages.firstIndex(where: { $0.value == selectedTarget }) ?? 0)
         toolbar.addSubview(targetPopup)
 
-        displayPopup = makePopup(["双语", "仅翻译", "仅原文"])
+        displayPopup = makePopup([
+            L("双语", "Bilingual"),
+            L("仅翻译", "Translation"),
+            L("仅原文", "Original"),
+        ])
         displayPopup.target = self
         displayPopup.action = #selector(displayModeChanged)
         displayPopup.selectItem(at: displayMode.rawValue)
@@ -784,7 +814,7 @@ final class AppDel: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let problem = socket == nil || (socketRecording == false && info.recording == true) || (!audioPath.isEmpty && !growing && Date().timeIntervalSince(startTime) > 20)
         if problem && !stopping {
             unhealthy = true
-            warningText = "录音连接异常，请检查录音状态"
+            warningText = L("录音连接异常，请检查录音状态", "Recording connection issue — check recording status")
             renderCaptions(animated: true, warning: true)
             showToolbar()
         } else if unhealthy {
@@ -850,8 +880,8 @@ final class AppDel: NSObject, NSApplicationDelegate, NSWindowDelegate {
         raw.split(separator: "\n").compactMap { value in
             let line = value.trimmingCharacters(in: .whitespacesAndNewlines)
             if line.isEmpty { return nil }
-            if line.hasPrefix("[Me]") { return "你  " + line.dropFirst(4).trimmingCharacters(in: .whitespacesAndNewlines) }
-            if line.hasPrefix("[Them]") { return "对方  " + line.dropFirst(6).trimmingCharacters(in: .whitespacesAndNewlines) }
+            if line.hasPrefix("[Me]") { return L("你  ", "You  ") + line.dropFirst(4).trimmingCharacters(in: .whitespacesAndNewlines) }
+            if line.hasPrefix("[Them]") { return L("对方  ", "Them  ") + line.dropFirst(6).trimmingCharacters(in: .whitespacesAndNewlines) }
             return line
         }
     }
@@ -862,7 +892,7 @@ final class AppDel: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let translationHidden = displayMode == .source
         sourceLabel.isHidden = sourceHidden
         translationLabel.isHidden = translationHidden
-        let displayedTranslation = translationFailed ? "翻译暂不可用" : translationText
+        let displayedTranslation = translationFailed ? L("翻译暂不可用", "Translation unavailable") : translationText
         let mainText = warningText.isEmpty
             ? (displayMode == .translation ? displayedTranslation : sourceText)
             : warningText
@@ -1165,10 +1195,10 @@ final class AppDel: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     func sourceLanguageTitle(_ value: String) -> String {
         switch value {
-        case "en": return "English"
-        case "ja": return "日本語"
-        case "auto": return "自动"
-        default: return "中文"
+        case "en": return L("英语", "English")
+        case "ja": return L("日语", "Japanese")
+        case "auto": return L("自动", "Auto")
+        default: return L("中文", "Chinese")
         }
     }
 
@@ -1225,7 +1255,7 @@ final class AppDel: NSObject, NSApplicationDelegate, NSWindowDelegate {
                     self.stopping = false
                     self.recordingButton.stoppingState = false
                     self.recordingButton.isEnabled = true
-                    self.warningText = "停止录制失败，请重试"
+                    self.warningText = L("停止录制失败，请重试", "Could not stop recording — try again")
                     self.lastCaptionAt = Date()
                     self.renderCaptions(animated: true, warning: true)
                     self.showToolbar()
@@ -1239,7 +1269,7 @@ final class AppDel: NSObject, NSApplicationDelegate, NSWindowDelegate {
             stopping = false
             recordingButton.stoppingState = false
             recordingButton.isEnabled = true
-            warningText = "停止录制失败，请重试"
+            warningText = L("停止录制失败，请重试", "Could not stop recording — try again")
             renderCaptions(animated: true, warning: true)
         }
     }
@@ -1275,7 +1305,7 @@ let arguments = CommandLine.arguments
 if arguments.contains("--self-test") {
     let app = AppDel(title: "test", path: "")
     assert(app.realtimeTranscriptPath(audioPath: "/tmp/Memo_20260630_120000.wav") == "/tmp/Memo_20260630_120000.realtime.transcript.txt")
-    assert(app.captionLines("[Me] hello\n\n[Them] world\nplain\n") == ["你  hello", "对方  world", "plain"])
+    assert(app.captionLines("[Me] hello\n\n[Them] world\nplain\n") == [L("你  hello", "You  hello"), L("对方  world", "Them  world"), "plain"])
     assert(app.formatElapsed(12 * 60 + 48) == "12:48")
     assert(app.normalizedTargetLanguage("Japanese") == "日本語")
     assert(app.parseState(["recording": ["audio_path": "/tmp/a.wav"]]).recording == true)

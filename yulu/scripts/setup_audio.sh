@@ -53,6 +53,7 @@ setup_audio() {
     # and `yulu update` self-heal regardless of which release_installer extracted.
     local _bin
     for _bin in "$SCRIPT_DIR/Yulu.app/Contents/MacOS/audio_daemon" \
+                "$SCRIPT_DIR/Yulu.app/Contents/MacOS/xai_keychain" \
                 "$SCRIPT_DIR/StatusAgent.app/Contents/MacOS/status_agent" \
                 "$SCRIPT_DIR/recorder_status" \
                 "$SCRIPT_DIR/meeting_prompt"; do

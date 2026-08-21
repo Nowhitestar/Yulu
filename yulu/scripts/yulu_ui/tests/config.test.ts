@@ -40,12 +40,12 @@ describe("ConfigManager", () => {
       expect(cfg.audio.output_dir).toBe("~/Movies/Yulu");
       expect(cfg.transcription.language).toBe("zh");
       expect(cfg.transcription.engine).toBe("local");
-      expect(cfg.transcription.xai_credential_source).toBe("auto");
       expect(cfg.transcription.dictation.prompt_slug).toBe("dictation-cleanup");
       expect(cfg.transcription.dictation.timeout_sec).toBe(30);
       expect(cfg.transcription.dictation.deadline_sec).toBe(30);
       expect(cfg.transcription.dictation.translate_timeout_sec).toBe(30);
       expect(cfg.transcription.dictation.translate_deadline_sec).toBe(30);
+      expect(cfg.ui.language).toBe("zh");
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 
@@ -56,6 +56,7 @@ describe("ConfigManager", () => {
     try {
       const cfg = new ConfigManager(path).read();
       expect(cfg.status_agent.enabled).toBe(true);
+      expect(cfg.status_agent.feedback_sounds).toBe(true);
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 
@@ -110,6 +111,7 @@ describe("ConfigManager", () => {
       transcription: {
         language: "ja",
         glossary: ["AgentKey"],
+        xai_credential_source: "hermes",
         mode: "local",
         post_recording_mode: "full_transcribe",
         final_engine: "mlx",
@@ -145,6 +147,7 @@ describe("ConfigManager", () => {
       expect(statSync(migration.archivePath!).mode & 0o777).toBe(0o600);
       const archive = JSON.parse(readFileSync(migration.archivePath!, "utf8"));
       expect(archive.transcription).toMatchObject({
+        xai_credential_source: "hermes",
         final_engine: "mlx",
         local_model_path: "/models/legacy.bin",
         hermes: { model: "legacy-hermes" },
@@ -172,14 +175,26 @@ describe("ConfigManager", () => {
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 
-  it("update() writes + returns diff with restart targets", () => {
+  it("audio capture parameters apply to the next recording without restarting the daemon", () => {
     const { mgr, cleanup } = makeCfg();
     try {
       const result = mgr.update("audio.silence_threshold", 0.02);
-      expect(result.daemonsNeedingRestart).toContain("audiodaemon");
+      expect(result.daemonsNeedingRestart).toEqual([]);
       expect(result.daemonsNeedingSighup).toEqual([]);
       const cfg = mgr.read();
       expect(cfg.audio.silence_threshold).toBe(0.02);
+    } finally { cleanup(); }
+  });
+
+  it("rejects the unsupported local + Japanese transcription combination", () => {
+    const { mgr, cleanup } = makeCfg();
+    try {
+      expect(() => mgr.update("transcription.language", "ja")).toThrow(/日语请使用 xAI/);
+      expect(mgr.read().transcription.language).toBe("zh");
+      mgr.update("transcription.engine", "xai");
+      expect(() => mgr.update("transcription.language", "ja")).not.toThrow();
+      expect(() => mgr.update("transcription.engine", "local")).toThrow(/日语请使用 xAI/);
+      expect(mgr.read().transcription.engine).toBe("xai");
     } finally { cleanup(); }
   });
 

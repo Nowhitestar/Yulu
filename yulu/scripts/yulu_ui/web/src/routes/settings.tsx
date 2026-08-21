@@ -7,8 +7,9 @@ import { useSettingsRestartTracker, type SettingsRestartTracker } from "../hooks
 import { RestartBanner } from "../components/RestartBanner.js";
 import { MasterDetail } from "../components/MasterDetail.js";
 import { SettingsCategoryList } from "../components/settings/SettingsCategoryList.js";
-import { UndoToastProvider } from "../components/UndoToast.js";
+import { useUndoToast } from "../components/UndoToast.js";
 import { DangerConfirmProvider } from "../components/DangerConfirm.js";
+import { useT } from "../i18n/LanguageProvider.js";
 import "./settings.css";
 
 type DaemonLabel = inferProcedureInput<AppRouter["daemons"]["restart"]>["name"];
@@ -37,6 +38,8 @@ export interface SettingsOutletContext {
  */
 export function SettingsLayout() {
   const tracker = useSettingsRestartTracker();
+  const { showError } = useUndoToast();
+  const t = useT();
   const restartMut = trpc.daemons.restart.useMutation({
     onSuccess: (_res: unknown, vars: { name: string }) => {
       const short = vars.name.replace(/^com\.yulu\./, "");
@@ -48,7 +51,14 @@ export function SettingsLayout() {
     <RestartBanner
       daemons={Array.from(tracker.daemons, ([name, keys]) => ({ name, keys: Array.from(keys) }))}
       onRestartAll={() => {
-        for (const name of tracker.daemons.keys()) restartMut.mutateAsync({ name: (DAEMON_LABEL[name] ?? name) as DaemonLabel });
+        const restarts = Array.from(tracker.daemons.keys(), (name) =>
+          restartMut.mutateAsync({ name: (DAEMON_LABEL[name] ?? name) as DaemonLabel }),
+        );
+        void Promise.all(restarts).catch((error: unknown) => {
+          showError(t("settings.restart.failed", {
+            error: error instanceof Error ? error.message : String(error),
+          }));
+        });
       }}
       onDismiss={() => tracker.clearAll()}
     />
@@ -57,20 +67,18 @@ export function SettingsLayout() {
   const outletContext: SettingsOutletContext = { tracker };
 
   return (
-    <UndoToastProvider>
-      <DangerConfirmProvider>
-        <div className="settings-page">
-          {banner && <div className="settings-banner">{banner}</div>}
-          <div className="settings-masterdetail">
-            <MasterDetail
-              className="masterdetail--settings-mobile-tabs"
-              storageKey="yulu_ui.settings.width"
-              listSlot={<SettingsCategoryList />}
-              detailSlot={<Outlet context={outletContext} />}
-            />
-          </div>
+    <DangerConfirmProvider>
+      <div className="settings-page">
+        {banner && <div className="settings-banner">{banner}</div>}
+        <div className="settings-masterdetail">
+          <MasterDetail
+            className="masterdetail--settings-mobile-tabs"
+            storageKey="yulu_ui.settings.width"
+            listSlot={<SettingsCategoryList />}
+            detailSlot={<Outlet context={outletContext} />}
+          />
         </div>
-      </DangerConfirmProvider>
-    </UndoToastProvider>
+      </div>
+    </DangerConfirmProvider>
   );
 }

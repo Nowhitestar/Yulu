@@ -18,7 +18,6 @@ import {
   type TranscriptionLanguage,
 } from "./realtimeTranscription.js";
 import { XaiAudioClient } from "./xaiAudio.js";
-import type { XaiCredentialSource } from "./xaiCredentials.js";
 
 export type AudioTranscriptionEngine = "local" | "xai";
 
@@ -33,18 +32,27 @@ function selectedEngine(config: ConfigManager): AudioTranscriptionEngine {
   return config.read().transcription.engine;
 }
 
-function selectedCredentialSource(config: ConfigManager): XaiCredentialSource {
-  return config.read().transcription.xai_credential_source;
-}
-
-function trustedRealtimeTranscript(audioPath: string): string | null {
+function trustedRealtimeTranscript(
+  audioPath: string,
+): Pick<TranscriptionResult, "transcript" | "provider" | "chunks"> | null {
   const transcriptPath = audioPath.replace(/\.wav$/i, ".realtime.transcript.txt");
   const coveragePath = audioPath.replace(/\.wav$/i, ".realtime.coverage.json");
   if (!existsSync(transcriptPath) || !existsSync(coveragePath)) return null;
   try {
-    const coverage = JSON.parse(readFileSync(coveragePath, "utf8")) as { trusted?: boolean; final?: boolean };
+    const coverage = JSON.parse(readFileSync(coveragePath, "utf8")) as {
+      trusted?: boolean;
+      finished?: boolean;
+      final?: boolean;
+      provider?: unknown;
+      chunks?: unknown;
+    };
     const transcript = cleanTranscriptText(readFileSync(transcriptPath, "utf8"));
-    return coverage.trusted === true && coverage.final === true && transcript ? transcript : null;
+    if (coverage.trusted !== true || (coverage.finished !== true && coverage.final !== true) || !transcript) return null;
+    const provider = typeof coverage.provider === "string" ? coverage.provider.trim() : "";
+    const chunks = typeof coverage.chunks === "number" && Number.isInteger(coverage.chunks) && coverage.chunks > 0
+      ? coverage.chunks
+      : 1;
+    return { transcript, provider: provider || "realtime", chunks };
   } catch { return null; }
 }
 
@@ -101,12 +109,11 @@ export class AudioTranscriptionService implements StreamingCaptionEngine {
         reason: status.ready ? null : status.error || "本地转写模型尚未安装",
       };
     }
-    const source = selectedCredentialSource(this.config);
-    const status = this.xaiCredentialStatus(source);
+    const status = this.xaiCredentialStatus();
     return {
       available: status?.connected === true,
-      provider: status?.connected ? `xai-oauth:${status.source}` : "xai-oauth",
-      reason: status?.connected ? null : status?.detail || "正在检查 Hermes/OpenClaw xAI OAuth",
+      provider: status?.connected ? "xai-oauth:yulu" : "xai-oauth",
+      reason: status?.connected ? null : status?.detail || "正在检查 Yulu xAI OAuth",
     };
   }
 
@@ -158,23 +165,23 @@ export class AudioTranscriptionService implements StreamingCaptionEngine {
     if (selectedEngine(this.config) === "xai") {
       try { return await this.xai.transcribeFile(audioPath, language, glossary); }
       catch (error) {
+        const realtime = trustedRealtimeTranscript(audioPath);
+        if (realtime?.provider.startsWith("xai")) return { ...realtime, language };
         if (error instanceof AgentUnavailableError) throw error;
         throw new AgentUnavailableError((error as Error).message);
       }
     }
     const status = this.local.status();
     if (!status.ready) throw new AgentUnavailableError(status.error || "本地转写模型尚未安装");
-    const trusted = trustedRealtimeTranscript(audioPath);
-    if (trusted) return { transcript: trusted, provider: this.local.provider, chunks: 1, language };
     return await this.transcribeLocalFile(audioPath, language);
   }
 
-  async testXai(source: XaiCredentialSource) {
-    return await this.xai.testCredential(source);
+  async testXai() {
+    return await this.xai.testCredential();
   }
 
-  private xaiCredentialStatus(source: XaiCredentialSource) {
-    return this.xai.credentialStatus(source);
+  private xaiCredentialStatus() {
+    return this.xai.credentialStatus();
   }
 
   private async transcribeLocalFile(audioPath: string, language: TranscriptionLanguage): Promise<TranscriptionResult> {

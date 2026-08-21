@@ -23,6 +23,7 @@ def test_load_defaults_when_block_missing(tmp_path, monkeypatch):
     _stub_config(tmp_path, monkeypatch, {})
     block = sac.load()
     assert block["enabled"] is True
+    assert block["feedback_sounds"] is True
     assert block["hotkeys"]["dictate"]["key"] == "Space"
     assert block["hotkeys"]["translate"]["target_language"] == "English"
     assert block["hotkeys"]["voice_chat"]["key"] == "A"
@@ -169,8 +170,8 @@ def test_status_agent_uses_supported_python_and_daemon_confirmed_meeting_state()
     assert "_ = RecordingLauncher.launchStop()" in toggle_body
     assert "launcherPids.append(pid)" not in toggle_body
 
-    dictate_start = src.index("@objc func onDictateToggle()")
-    start_body = src[start_recording:dictate_start]
+    start_end = src.index("func previewFeedbackSound()", start_recording)
+    start_body = src[start_recording:start_end]
     assert "RecordingLauncher.launchStart(title: title)" in start_body
     assert "applyState(.recording)" not in start_body
 
@@ -266,8 +267,10 @@ def test_status_agent_has_dictation_menu_entry():
     assert "dictateTranslateResponse" in src
     assert "--target-bundle-id" in src
     assert "currentInputTargetApplication()" in src
+    assert "focusedInputApplication()" in src
     assert "isUsableInputTarget" in src
     assert "com.apple.loginwindow" in src
+    assert "com.apple.SecurityAgent" in src
     assert "NSWorkspace.shared.frontmostApplication" in src
     assert "NSWorkspace.shared.runningApplications.first" in src
     assert "launchd agents can report loginwindow as frontmost" in src
@@ -280,12 +283,100 @@ def test_status_agent_has_dictation_menu_entry():
     assert "dictation recording active; ignoring meeting stop" in src
 
 
+def test_status_agent_dictation_feedback_is_result_driven_and_explicit():
+    src = _swift_source()
+    assert "handleDictationCompletion" in src
+    assert 'result?["action"] as? String == "stop"' in src
+    assert 'result?["pasted"] as? Bool == true' in src
+    assert '"没有听到清晰语音"' in src
+    assert '"已复制，请按 ⌘V"' in src
+    assert '"听写失败 · 录音已保留"' in src
+    assert 'showTimedVoiceFeedback(L("已输入", "Inserted"), sound: .success, duration: 0.8)' in src
+    assert 'showVoiceOverlay(L("正在确认完整录音…", "Finalizing recording…"), animation: .processing)' in src
+    assert "voiceOverlayStopButton" in src
+    assert "voiceOverlayCancelButton" in src
+    assert "voice overlay clicked" not in src
+    assert "accessibilityDisplayShouldReduceMotion" in src
+    assert "panel.setAccessibilityRole(.window)" in src
+    assert "pendingStartFeedbackText" in src
+    assert "scheduleStartConfirmationPolls" in src
+    handler = src[src.index("private func handleDictationCompletion") : src.index("@objc func onDictateToggle")]
+    assert handler.index("isStartCompletion && !resultManagedLauncherPids.isEmpty") < handler.index("processingDetailWorkItem?.cancel()")
+    assert 'case "preview_sound"' in src
+    assert "feedbackSoundsEnabled()" in src
+    poll = src[src.index("private func applyPollResult") : src.index("@discardableResult\n    func activeLauncherPids")]
+    assert poll.index("!resultManagedLauncherPids.isEmpty") < poll.index("if recording")
+
+
+def test_status_agent_dictation_overlay_matches_approved_a2_layout():
+    src = _swift_source()
+    assert "width: 180, height: 36" in src
+    assert "compactWidth = 180" in src
+    assert "? 140" in src
+    assert "compactWidth = 112" in src
+    assert "f.midX - compactWidth / 2" in src
+    assert "context.duration = 0.18" in src
+    assert "content.detachesHiddenViews = true" in src
+    assert "visual.appearance = NSAppearance(named: .darkAqua)" in src
+    assert "case none, recording, processing, success" in src
+    assert 'pendingStartFeedbackText = L("听写中", "Dictating")' in src
+    assert "max(0.40, min(1, level))" in src
+    assert "green: 0.10, blue: 0.15, alpha: 0.97" in src
+    assert "override func draw(_ dirtyRect: NSRect)" in src
+    assert "voiceOverlayLabel?.textColor = NSColor(calibratedWhite: 0.94, alpha: 1)" in src
+    assert "glow.shadowBlurRadius = 5" in src
+    assert "accessibilityDisplayShouldReduceMotion" in src
+
+
+def test_audio_daemon_status_exposes_real_mic_level():
+    src = (SCRIPTS / "audio_daemon.swift").read_text(encoding="utf-8")
+    assert "private var micLevelState: Float = 0" in src
+    assert "self.micLevelState = self.meetingMicStateState == .muted" in src
+    assert '"micLevel": recorder.micLevel' in src
+
+
 def test_status_agent_has_agent_console_entry():
     src = _swift_source()
     assert '"Open Agent Console"' in src
     assert '"open_agent_console"' in src
     assert "onOpenAgentConsole" in src
     assert "http://127.0.0.1:7777/agent-console" in src
+
+
+def test_status_agent_menu_matches_approved_hierarchy():
+    src = _swift_source()
+    menu = src[src.index("class MenuBuilder") : src.index("struct RecentRecording")]
+    assert menu.index('"Current Meeting"') < menu.index('"Start Recording"')
+    assert menu.index('"Start Recording"') < menu.index('"Start Dictation"')
+    assert menu.index('"Start Dictation"') < menu.index('"Translate to English"')
+    assert menu.index('"Translate to English"') < menu.index('"Ask Agent by Voice"')
+    assert menu.index('"Open Yulu"') < menu.index('"Open Agent Console"')
+    assert menu.index('"Open Agent Console"') < menu.index('"Recent Recordings"')
+    assert menu.index('"Recent Recordings"') < menu.index('"Settings…"')
+    assert menu.index('"Settings…"') < menu.index('"Quit Yulu"')
+    assert "recentItem.submenu = recentMenu" in menu
+    assert "menuKeyEquivalent(for: spec.label)" in src
+    assert "item.keyEquivalentModifierMask = menuModifierFlags" in src
+    assert 'toggle?.title = visible ? L("开始无标题录制", "Start Untitled Recording")' in src
+    assert 'title: L("查看全部记录", "Show All Recordings")' in src
+    assert "recentRecordingFallbackTitle" in src
+    assert "recentRecordingMenuTitle(time: time, name: name)" in src
+    assert 'string: "\\(time)\\t\\(name)"' in src
+    assert "http://127.0.0.1:7777/settings" in src
+
+
+def test_native_ui_uses_config_backed_language_and_current_logo():
+    src = _swift_source()
+    assert 'let ui = json["ui"] as? [String: Any]' in src
+    assert 'let raw = ui["language"] as? String' in src
+    assert "activeAppLanguage = readAppLanguage()" in src
+    assert 'btn.title = "语"' not in src
+    assert 'img.isTemplate = false' in src
+
+    for name in ["recorder_status.swift", "meeting_prompt.swift"]:
+        native = (SCRIPTS / name).read_text(encoding="utf-8")
+        assert 'let ui = raw["ui"] as? [String: Any]' in native
+        assert 'let value = ui["language"] as? String' in native
 
 
 def test_status_agent_has_voice_chat_entry():

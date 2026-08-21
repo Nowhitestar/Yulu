@@ -243,6 +243,7 @@ def validate_runtime_layout(runtime_dir: Path, tag: str) -> None:
         runtime_dir / "yulu" / "scripts" / "setup.sh",
         runtime_dir / "yulu" / "scripts" / "yulu",
         runtime_dir / "yulu" / "scripts" / "version.py",
+        runtime_dir / "yulu" / "scripts" / "Yulu.app" / "Contents" / "MacOS" / "xai_keychain",
     ]
     for path in required:
         if not path.is_file():

@@ -228,6 +228,11 @@ export const recordingRouter = router({
     return { stateBefore: r.state_before ?? "?", stateAfter };
   }),
 
+  previewSound: publicProcedure.mutation(async ({ ctx }) => {
+    const r = await ipcSend<{ ok: boolean; enabled?: boolean }>(ctx.paths.statusAgentSock, { action: "preview_sound" });
+    return { ok: r.ok, enabled: r.enabled ?? true };
+  }),
+
   openInbox: publicProcedure.mutation(async ({ ctx }) => {
     await ipcSend(ctx.paths.statusAgentSock, { action: "open_inbox" });
     return { ok: true };

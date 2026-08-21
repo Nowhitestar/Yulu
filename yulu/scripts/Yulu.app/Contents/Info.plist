@@ -17,9 +17,9 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>0.9.0</string>
+	<string>0.22.2</string>
 	<key>CFBundleVersion</key>
-	<string>453</string>
+	<string>529</string>
 	<key>LSUIElement</key>
 	<true/>
 	<key>NSAudioCaptureUsageDescription</key>
@@ -29,6 +29,6 @@
 	<key>NSScreenCaptureUsageDescription</key>
 	<string>Yulu captures system audio for meeting notes.</string>
 	<key>YuluVersion</key>
-	<string>0.9.0</string>
+	<string>0.22.2</string>
 </dict>
 </plist>

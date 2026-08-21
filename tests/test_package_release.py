@@ -39,6 +39,7 @@ def make_project(tmp_path: Path, version: str = "0.5.0-dev", git_marker: str | N
     write_file(project / "yulu" / "scripts" / "yulu", "#!/usr/bin/env bash\n")
     write_file(project / "yulu" / "scripts" / "release_installer.py", "print('installer')\n")
     write_file(project / "yulu" / "scripts" / "Yulu.app" / "Contents" / "MacOS" / "audio_daemon", "binary\n")
+    write_file(project / "yulu" / "scripts" / "Yulu.app" / "Contents" / "MacOS" / "xai_keychain", "binary\n")
     write_file(project / "yulu" / "scripts" / "recorder_status", "binary\n")
     write_file(project / "tests" / "test_dev_only.py", "def test_dev_only(): pass\n")
     write_file(project / ".github" / "workflows" / "ci.yml", "name: ci\n")

@@ -14,7 +14,7 @@ import type {
 } from "./localCaptionEngine.js";
 import type { TranscriptionLanguage } from "./realtimeTranscription.js";
 import { captionsLikelyDuplicate, cleanTranscriptText, dedupeTranscriptSegment, hasVoice } from "./realtimeTranscription.js";
-import { XaiCredentialManager, type XaiCredential, type XaiCredentialSource } from "./xaiCredentials.js";
+import { XaiCredentialManager, type XaiCredential } from "./xaiCredentials.js";
 
 interface XaiTranscriptEvent {
   type?: string;
@@ -89,7 +89,6 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: s
 
 export class XaiAudioClient implements StreamingCaptionEngine {
   private socket: WebSocket | null = null;
-  private activeSource: "hermes" | "openclaw" | null = null;
   private ready: Promise<void> | null = null;
   private readyResolve: (() => void) | null = null;
   private readyReject: ((error: Error) => void) | null = null;
@@ -113,17 +112,14 @@ export class XaiAudioClient implements StreamingCaptionEngine {
   private reconnectDelayMs = REALTIME_RECONNECT_MIN_MS;
   private lastStreamingError: Error | null = null;
 
-  constructor(
-    private readonly credentials: XaiCredentialManager,
-    private readonly credentialSource: () => XaiCredentialSource,
-  ) {}
+  constructor(private readonly credentials: XaiCredentialManager) {}
 
   get provider(): string {
-    return this.activeSource ? `xai-oauth:${this.activeSource}` : "xai-oauth";
+    return "xai-oauth:yulu";
   }
 
   async warm(): Promise<void> {
-    await this.credentials.resolve(this.credentialSource());
+    await this.credentials.resolve();
   }
 
   async start(language: TranscriptionLanguage): Promise<void> {
@@ -164,7 +160,7 @@ export class XaiAudioClient implements StreamingCaptionEngine {
     if (Date.now() < this.reconnectNotBeforeMs) return false;
     for (let attempt = 0; attempt < 2; attempt += 1) {
       try {
-        const credential = await this.credentials.resolve(this.credentialSource());
+        const credential = await this.credentials.resolve();
         await this.connectRealtime(credential, url);
         this.reconnectNotBeforeMs = 0;
         this.reconnectDelayMs = REALTIME_RECONNECT_MIN_MS;
@@ -186,7 +182,6 @@ export class XaiAudioClient implements StreamingCaptionEngine {
   }
 
   private async connectRealtime(credential: XaiCredential, url: URL): Promise<void> {
-    this.activeSource = credential.source;
     this.doneChannels = new Set();
     this.ready = new Promise<void>((resolve, reject) => {
       this.readyResolve = resolve;
@@ -248,7 +243,6 @@ export class XaiAudioClient implements StreamingCaptionEngine {
     } finally {
       socket.close();
       this.socket = null;
-      this.activeSource = null;
       this.realtimeUrl = null;
       this.replayChunks = [];
       this.replayBytes = 0;
@@ -257,7 +251,6 @@ export class XaiAudioClient implements StreamingCaptionEngine {
 
   async abort(): Promise<void> {
     this.disconnectSocket();
-    this.activeSource = null;
     this.realtimeUrl = null;
     this.replayChunks = [];
     this.replayBytes = 0;
@@ -298,8 +291,8 @@ export class XaiAudioClient implements StreamingCaptionEngine {
         }
         let segmentTranscript = "";
         for (let attempt = 0; attempt < 2; attempt += 1) {
-          const credential = await this.credentials.resolve(this.credentialSource());
-          provider = `xai-oauth:${credential.source}`;
+          const credential = await this.credentials.resolve();
+          provider = "xai-oauth:yulu";
           const form = new FormData();
           const formattedLanguage = xaiLanguage(language);
           if (formattedLanguage) {
@@ -354,8 +347,8 @@ export class XaiAudioClient implements StreamingCaptionEngine {
     }
   }
 
-  async testCredential(source: XaiCredentialSource): Promise<{ ok: true; provider: string }> {
-    const credential = await this.credentials.resolve(source);
+  async testCredential(): Promise<{ ok: true; provider: string }> {
+    const credential = await this.credentials.resolve();
     const wav = Buffer.alloc(44 + 32_000);
     wav.write("RIFF", 0);
     wav.writeUInt32LE(wav.length - 8, 4);
@@ -378,11 +371,11 @@ export class XaiAudioClient implements StreamingCaptionEngine {
       signal: AbortSignal.timeout(30_000),
     });
     if (!response.ok) throw new Error(`xAI 音频权限验证失败（HTTP ${response.status}）`);
-    return { ok: true, provider: `xai-oauth:${credential.source}` };
+    return { ok: true, provider: "xai-oauth:yulu" };
   }
 
-  credentialStatus(source: XaiCredentialSource) {
-    return this.credentials.cachedStatus(source);
+  credentialStatus() {
+    return this.credentials.cachedStatus();
   }
 
   private handleMessage(raw: string): void {

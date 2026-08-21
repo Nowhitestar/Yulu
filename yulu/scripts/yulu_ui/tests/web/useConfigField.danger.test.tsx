@@ -5,8 +5,15 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, fireEvent, act } from "@testing-library/react";
 
-const updateMutate = vi.fn(async (_vars: { key: string; value: unknown }) => ({ daemonsNeedingRestart: [], daemonsNeedingSighup: [] }));
+interface ConfigUpdateResult {
+  daemonsNeedingRestart: string[];
+  daemonsNeedingSighup: string[];
+  applyErrors?: string[];
+}
+
+const updateMutate = vi.fn(async (_vars: { key: string; value: unknown }): Promise<ConfigUpdateResult> => ({ daemonsNeedingRestart: [], daemonsNeedingSighup: [] }));
 const showUndo = vi.fn();
+const showError = vi.fn();
 const configSetData = vi.fn();
 const configInvalidate = vi.fn();
 
@@ -26,7 +33,7 @@ vi.mock("../../web/src/ws.js", () => ({
 }));
 
 vi.mock("../../web/src/components/UndoToast.js", () => ({
-  useUndoToast: () => ({ showUndo }),
+  useUndoToast: () => ({ showUndo, showError }),
 }));
 
 vi.mock("../../web/src/trpc.js", () => ({
@@ -76,6 +83,7 @@ function mount() {
 beforeEach(() => {
   updateMutate.mockClear();
   showUndo.mockClear();
+  showError.mockClear();
   configSetData.mockClear();
   configInvalidate.mockClear();
   recordingState = "idle";
@@ -124,5 +132,26 @@ describe("useConfigField — danger-confirm gate (P3-3)", () => {
       output: { channel: "file" },
     });
     expect(configInvalidate).toHaveBeenCalled();
+  });
+
+  it("surfaces persistence failures", async () => {
+    updateMutate.mockRejectedValueOnce(new Error("config changed externally"));
+    mount();
+    fireEvent.click(screen.getByText("plain"));
+    await waitFor(() => expect(showError).toHaveBeenCalledWith(expect.stringContaining("config changed externally")));
+    expect(showUndo).not.toHaveBeenCalled();
+  });
+
+  it("surfaces runtime apply failures after the value was saved", async () => {
+    updateMutate.mockResolvedValueOnce({
+      daemonsNeedingRestart: [],
+      daemonsNeedingSighup: [],
+      applyErrors: ["statusagent: service not loaded"],
+    });
+    mount();
+    fireEvent.click(screen.getByText("plain"));
+    await waitFor(() => expect(showError).toHaveBeenCalledWith(expect.stringContaining("service not loaded")));
+    expect(configSetData).toHaveBeenCalled();
+    expect(showUndo).not.toHaveBeenCalled();
   });
 });

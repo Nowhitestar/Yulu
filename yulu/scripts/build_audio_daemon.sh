@@ -5,7 +5,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 APP="$SCRIPT_DIR/Yulu.app"
 BIN="$SCRIPT_DIR/audio_daemon"
+KEYCHAIN_BIN="$SCRIPT_DIR/xai_keychain"
 APP_BIN="$APP/Contents/MacOS/audio_daemon"
+APP_KEYCHAIN_BIN="$APP/Contents/MacOS/xai_keychain"
 RES_DIR="$APP/Contents/Resources"
 INFO="$APP/Contents/Info.plist"
 ICNS_SRC="$REPO_DIR/assets/Yulu.icns"
@@ -22,14 +24,18 @@ swiftc -o "$BIN" audio_daemon.swift \
   -framework CoreMedia \
   -framework CoreAudio \
   -framework AudioToolbox
+swiftc -o "$KEYCHAIN_BIN" xai_keychain.swift \
+  -framework Security
 
 mkdir -p "$APP/Contents/MacOS" "$RES_DIR"
 cp "$BIN" "$APP_BIN"
+cp "$KEYCHAIN_BIN" "$APP_KEYCHAIN_BIN"
 chmod +x "$APP_BIN"
+chmod +x "$APP_KEYCHAIN_BIN"
 
 # Bundle the Yulu icon so System Settings, the Dock, TCC prompts, and
 # terminal-notifier (via -sender com.yulu.audiodaemon) all show the
-# parchment-and-ink 语 logo instead of a generic placeholder.
+# current blue liquid-glass Yulu logo instead of a generic placeholder.
 if [[ -f "$ICNS_SRC" ]]; then
   cp "$ICNS_SRC" "$RES_DIR/Yulu.icns"
 else
@@ -96,6 +102,8 @@ fi
 # a real secure timestamp (an unsigned/absent timestamp makes notarization fail).
 #   1. inner Mach-O first ($APP_BIN), then 2. the bundle ($APP).
 ENTITLEMENTS="$SCRIPT_DIR/Yulu.app.entitlements"
+codesign --force --options runtime --timestamp \
+  --sign "$IDENTITY" "$APP_KEYCHAIN_BIN"
 codesign --force --options runtime --timestamp \
   --entitlements "$ENTITLEMENTS" --sign "$IDENTITY" "$APP_BIN"
 codesign --force --options runtime --timestamp \

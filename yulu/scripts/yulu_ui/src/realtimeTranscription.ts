@@ -9,7 +9,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { basename, extname, isAbsolute, join, relative, sep } from "node:path";
+import { basename, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { randomUUID } from "node:crypto";
 import type {
   CaptionSource,
@@ -409,7 +409,7 @@ function writeMonoWav(path: string, pcm: Buffer): void {
 export class RealtimeTranscriptionCoordinator {
   private active: Session | null = null;
   private readonly pollMs: number;
-  private readonly allowedRoot: string | null;
+  private readonly allowedRoots: string[];
   private readonly minSegmentMs: number;
   private readonly tailSilenceMs: number;
   private readonly maxSegmentMs: number;
@@ -424,7 +424,7 @@ export class RealtimeTranscriptionCoordinator {
     translate?: (sourceText: string, targetLanguage: string, context: string[]) => Promise<string>;
     defaultTargetLanguage?: () => string;
     defaultTranslationEnabled?: boolean;
-    allowedRoot?: string;
+    allowedRoots?: string[];
     chunkSec?: number;
     pollMs?: number;
     minSegmentMs?: number;
@@ -432,20 +432,31 @@ export class RealtimeTranscriptionCoordinator {
     overlapMs?: number;
   }) {
     this.pollMs = options.pollMs ?? (options.streaming ? DEFAULT_STREAMING_POLL_MS : 250);
-    this.allowedRoot = options.allowedRoot ? realpathSync(options.allowedRoot) : null;
+    this.allowedRoots = (options.allowedRoots ?? []).map((root) => {
+      try { return realpathSync(root); } catch { return resolve(root); }
+    });
     this.minSegmentMs = options.minSegmentMs ?? DEFAULT_MIN_SEGMENT_MS;
     this.tailSilenceMs = options.tailSilenceMs ?? DEFAULT_TAIL_SILENCE_MS;
     this.maxSegmentMs = (options.chunkSec ?? DEFAULT_MAX_SEGMENT_MS / 1_000) * 1_000;
     this.overlapMs = options.overlapMs ?? DEFAULT_OVERLAP_MS;
   }
 
-  async start(input: { audioPath: string; title: string; language: TranscriptionLanguage }): Promise<void> {
+  async start(input: {
+    audioPath: string;
+    title: string;
+    language: TranscriptionLanguage;
+    replaceActive?: boolean;
+  }): Promise<void> {
+    if (this.active && input.replaceActive === false) throw new Error("realtime transcription session is already active");
     if (this.active) await this.stop(this.active.audioPath);
     if (extname(input.audioPath).toLowerCase() !== ".wav") throw new Error("realtime input must be a WAV file");
     const audioPath = realpathSync(input.audioPath);
-    if (this.allowedRoot) {
-      const child = relative(this.allowedRoot, audioPath);
-      if (child === ".." || child.startsWith(`..${sep}`) || isAbsolute(child)) {
+    if (this.allowedRoots.length > 0) {
+      const allowed = this.allowedRoots.some((root) => {
+        const child = relative(root, audioPath);
+        return child !== ".." && !child.startsWith(`..${sep}`) && !isAbsolute(child);
+      });
+      if (!allowed) {
         throw new Error("realtime input must be inside the recordings directory");
       }
     }

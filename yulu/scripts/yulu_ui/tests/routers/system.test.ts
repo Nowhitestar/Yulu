@@ -1,15 +1,20 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
 const spawnMock = vi.hoisted(() => vi.fn());
+const ipcSendMock = vi.hoisted(() => vi.fn());
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
   return { ...actual, spawn: spawnMock };
 });
+vi.mock("../../src/ipc.js", () => ({ ipcSend: ipcSendMock }));
 
 import { systemRouter } from "../../src/routers/system.js";
 import { createCaller, type AppContext } from "../../src/trpc.js";
 
-beforeEach(() => spawnMock.mockReset());
+beforeEach(() => {
+  spawnMock.mockReset();
+  ipcSendMock.mockReset();
+});
 
 function mockSpawn(stdout: string, exitCode = 0, stderr = "") {
   spawnMock.mockImplementation(() => {
@@ -79,18 +84,15 @@ describe("system.openInFinder", () => {
 });
 
 describe("system.audioDevices", () => {
-  it("returns input + output devices parsed from system_profiler JSON", async () => {
-    const fixture = JSON.stringify({
-      SPAudioDataType: [{
-        _items: [
-          { _name: "MacBook Pro Microphone", coreaudio_device_input: 1, coreaudio_device_uid: "BuiltInMic" },
-          { _name: "BlackHole 2ch", coreaudio_device_input: 2, coreaudio_device_uid: "BlackHole2ch" },
-          { _name: "MacBook Pro Speakers", coreaudio_device_output: 2, coreaudio_device_uid: "BuiltInSpeaker" },
-        ],
-      }],
+  it("returns CoreAudio devices reported by the native audio daemon", async () => {
+    ipcSendMock.mockResolvedValue({
+      input: [
+        { name: "MacBook Pro Microphone", uid: "BuiltInMic" },
+        { name: "BlackHole 2ch", uid: "BlackHole2ch" },
+      ],
+      output: [{ name: "MacBook Pro Speakers", uid: "BuiltInSpeaker" }],
     });
-    mockSpawn(fixture);
-    const caller = createCaller(systemRouter, {} as AppContext);
+    const caller = createCaller(systemRouter, { paths: { audioDaemonSock: "/tmp/audio.sock" } } as AppContext);
     const r = (await caller.audioDevices()) as {
       input: Array<{ uid: string; name: string }>;
       output: Array<{ uid: string; name: string }>;
@@ -98,22 +100,25 @@ describe("system.audioDevices", () => {
     expect(r.input.map((d) => d.name)).toEqual(["MacBook Pro Microphone", "BlackHole 2ch"]);
     expect(r.output.map((d) => d.name)).toEqual(["MacBook Pro Speakers"]);
     expect(r.input[0]!.uid).toBe("BuiltInMic");
+    expect(ipcSendMock).toHaveBeenCalledWith("/tmp/audio.sock", { action: "audio_devices" });
   });
 
-  it("returns empty arrays on parse failure", async () => {
-    mockSpawn("not json", 0);
-    const caller = createCaller(systemRouter, {} as AppContext);
+  it("returns an explicit error on malformed daemon replies", async () => {
+    ipcSendMock.mockResolvedValue({ input: [{ name: "Missing UID" }] });
+    const caller = createCaller(systemRouter, { paths: { audioDaemonSock: "/tmp/audio.sock" } } as AppContext);
     const r = await caller.audioDevices();
     expect(r.input).toEqual([]);
     expect(r.output).toEqual([]);
+    expect(r.error).toBeTruthy();
   });
 
-  it("returns empty arrays on non-zero exit", async () => {
-    mockSpawn("", 1, "failed");
-    const caller = createCaller(systemRouter, {} as AppContext);
+  it("returns an explicit error when the audio daemon is unavailable", async () => {
+    ipcSendMock.mockRejectedValue(new Error("connect ENOENT"));
+    const caller = createCaller(systemRouter, { paths: { audioDaemonSock: "/tmp/audio.sock" } } as AppContext);
     const r = await caller.audioDevices();
     expect(r.input).toEqual([]);
     expect(r.output).toEqual([]);
+    expect(r.error).toContain("ENOENT");
   });
 });
 

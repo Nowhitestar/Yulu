@@ -14,13 +14,14 @@ Yulu is an Agent-native macOS recorder. Preserve its responsibility boundary:
   artifact commit, authorization, recovery, and audit.
 - Yulu's explicitly selected local/xAI audio engine owns realtime captions,
   final transcription, and dictation, with no automatic fallback.
-- Hermes/OpenClaw may supply xAI OAuth credentials but do not execute Yulu audio.
+- Yulu owns xAI device OAuth and stores its grant in macOS Keychain.
 - The recording Agent owns summaries and explicitly authorized Notion delivery.
 - The selected general Agent owns interactive conversation and its connectors.
 - Python is capture and local workflow glue, not an AI runtime.
 
-The authoritative runtime decisions are [`ADR-005`](spec/adr/005-agent-native-durable-recording-pipeline.md)
-and [`ADR-007`](spec/adr/007-explicit-audio-transcription-engines.md).
+The authoritative runtime decisions are [`ADR-005`](spec/adr/005-agent-native-durable-recording-pipeline.md),
+[`ADR-007`](spec/adr/007-explicit-audio-transcription-engines.md), and
+[`ADR-008`](spec/adr/008-yulu-owned-xai-oauth.md).
 
 ## Product flow
 
@@ -187,8 +188,8 @@ Relevant sections:
 - `audio`: native capture preferences and recording root;
 - `agent_pipeline`: durable processing, automatic enqueue, explicit Notion
   opt-in, and destination hint;
-- `transcription.engine` and `transcription.xai_credential_source`: explicit
-  local/xAI selection and OAuth wallet source;
+- `transcription.engine`: explicit local/xAI selection; xAI OAuth is managed
+  separately in Settings and is never a config field;
 - `transcription.language` and `transcription.dictation`: language, prompt,
   context, timeout, and deadline preferences;
 - `llm.agent.provider` / `llm.command`: general Agent Console runtime;
@@ -235,7 +236,8 @@ Do not edit task state directly in SQLite.
 | `scripts/yulu_ui/src/recordingPipeline.ts` | Admission, idempotency, claim, dispatch, and recovery |
 | `scripts/yulu_ui/src/audioTranscription.ts` | Explicit local/xAI audio-engine selection with no fallback |
 | `scripts/yulu_ui/src/xaiAudio.ts` | Direct xAI REST transcription and native realtime STT transport |
-| `scripts/yulu_ui/src/xaiCredentials.ts` | In-memory xAI OAuth reuse from installed Hermes/OpenClaw |
+| `scripts/yulu_ui/src/xaiCredentials.ts` | Yulu-owned xAI device OAuth, refresh, and Keychain boundary |
+| `scripts/xai_keychain.swift` | Signed macOS Keychain storage helper for xAI OAuth |
 | `scripts/yulu_ui/src/agentGateway.ts` | Hermes summary/delivery workflow boundary plus tool-call audit |
 | `scripts/yulu_ui/src/artifactStore.ts` | Task workspace and atomic artifact commit |
 | `scripts/yulu_ui/src/recordingEventInbox.ts` | Replay capture-completion events after Host downtime |
@@ -300,7 +302,7 @@ See [`docs/operations.md`](../docs/operations.md) for exact checks.
 ## 中文摘要
 
 Yulu 的产品边界是：macOS 原生录音 + 本地可信 Host。Yulu 明确选择本地或 xAI
-音频引擎，统一负责实时字幕、最终转写和听写，不做自动回退；Hermes/OpenClaw
-只可提供 xAI OAuth。录音 Agent 负责纪要和明确授权的 Notion 投递；Agent
+音频引擎，统一负责实时字幕、最终转写和听写，不做自动回退；Yulu 自己管理 xAI
+OAuth 并保存到 macOS 钥匙串。录音 Agent 负责纪要和明确授权的 Notion 投递；Agent
 Console 选择的通用 Agent 负责对话和自己的连接器；Python 只做录音边缘控制和
 Host 事件投递。不要在 Yulu 内新增第二套对话或连接器执行路径。

@@ -16,6 +16,7 @@ import AudioToolbox
 let HOME = FileManager.default.homeDirectoryForCurrentUser
 let CONFIG_DIR = HOME.appendingPathComponent(".config/yulu")
 let SOCKET_PATH = CONFIG_DIR.appendingPathComponent("audio_daemon.sock")
+let SOCKET_LOCK_PATH = CONFIG_DIR.appendingPathComponent(".audio_daemon.lock")
 let STATE_PATH = CONFIG_DIR.appendingPathComponent(".state.json")
 let PID_PATH = CONFIG_DIR.appendingPathComponent(".audio_daemon.pid")
 let LOG_PATH = CONFIG_DIR.appendingPathComponent("audio_daemon.log")
@@ -259,6 +260,82 @@ func interruptedRecordingTitle() -> String? {
     return title.isEmpty ? "meeting" : title
 }
 
+enum MeetingMicState: String {
+    case unmuted
+    case muted
+    case unknown
+}
+
+struct MeetingMuteClassifier {
+    private static func normalized(_ value: String) -> String {
+        value.lowercased()
+            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func actionMatches(_ label: String, _ action: String) -> Bool {
+        label == action || label.hasPrefix(action + " ") || label.hasPrefix(action + "(")
+    }
+
+    static func classifyControlLabel(_ value: String) -> MeetingMicState? {
+        let label = normalized(value)
+        let ignored = [
+            "mute all", "unmute all", "ask to unmute", "mute participant",
+            "全体静音", "将所有人静音", "解除所有人静音", "请求解除静音",
+        ]
+        guard !label.isEmpty, !ignored.contains(where: label.contains) else { return nil }
+
+        // Button labels describe the action, not the current state: an "Unmute"
+        // button means the meeting microphone is currently muted.
+        let mutedActions = [
+            "unmute my audio", "unmute audio", "unmute", "turn on microphone",
+            "start microphone", "解除静音", "取消静音", "开启麦克风", "打开麦克风",
+            "麦克风已关闭",
+        ]
+        if mutedActions.contains(where: { actionMatches(label, $0) }) { return .muted }
+
+        let unmutedActions = [
+            "mute my audio", "mute audio", "mute", "turn off microphone",
+            "stop microphone", "静音", "关闭麦克风", "麦克风已开启",
+        ]
+        if unmutedActions.contains(where: { actionMatches(label, $0) }) { return .unmuted }
+        return nil
+    }
+
+    static func isSupportedApp(appName: String, bundleID: String?) -> Bool {
+        let app = normalized("\(appName) \(bundleID ?? "")")
+        return [
+            "zoom.us", "zoom workplace", "us.zoom.xos",
+            "腾讯会议", "tencent meeting", "tencentmeeting", "voov meeting", "wemeet", "com.tencent.meeting",
+            "google chrome", "com.google.chrome", " arc ", "company.thebrowser.browser",
+            "safari", "microsoft edge", "com.microsoft.edgemac",
+        ].contains(where: app.contains)
+    }
+
+    static func isSupportedMeetingWindow(appName: String, bundleID: String?, title: String) -> Bool {
+        let app = normalized("\(appName) \(bundleID ?? "")")
+        if ["zoom.us", "zoom workplace", "us.zoom.xos"].contains(where: app.contains) {
+            return true
+        }
+        if ["腾讯会议", "tencent meeting", "tencentmeeting", "voov meeting", "wemeet", "com.tencent.meeting"].contains(where: app.contains) {
+            return true
+        }
+        let browser = [
+            "google chrome", "com.google.chrome", " arc ", "company.thebrowser.browser",
+            "safari", "microsoft edge", "com.microsoft.edgemac",
+        ].contains(where: app.contains)
+        let window = normalized(title)
+        return browser && (window.contains("google meet") || window.contains("meet.google.com") || window.hasPrefix("meet -"))
+    }
+}
+
+func micSamplesForRecording(_ samples: [Float], gain: Float, meetingState: MeetingMicState) -> [Int16] {
+    if meetingState == .muted {
+        return [Int16](repeating: 0, count: samples.count)
+    }
+    return samples.map { Int16(max(-1.0, min(1.0, $0 * gain)) * Float(Int16.max)) }
+}
+
 // ─── 音频数据管理器 + 源分离立体声 (L=mic, R=sys) ───
 
 class AudioRecorder {
@@ -277,6 +354,8 @@ class AudioRecorder {
     var onStopRequest: (() -> Void)?
     private var sysGapMicFallbackLogged = false
     private var micGainState: Float = DEFAULT_MIC_GAIN
+    private var micLevelState: Float = 0
+    private var meetingMicStateState: MeetingMicState = .unknown
     private var autoStopRequested = false
 
     // Streaming buffers
@@ -310,6 +389,30 @@ class AudioRecorder {
         syncState { micGainState }
     }
 
+    var micLevel: Float {
+        syncState { micLevelState }
+    }
+
+    var meetingMicState: MeetingMicState {
+        syncState { meetingMicStateState }
+    }
+
+    func updateMeetingMicState(_ state: MeetingMicState) {
+        recorderQueue.async { [weak self] in
+            guard let self = self, self.meetingMicStateState != state else { return }
+            self.meetingMicStateState = state
+            guard self.isRecordingState else { return }
+            switch state {
+            case .muted:
+                log("🎤 Meeting mic muted — microphone track suppressed")
+            case .unmuted:
+                log("🎤 Meeting mic unmuted — microphone track recording")
+            case .unknown:
+                log("🎤 Meeting mic state unknown — microphone track recording")
+            }
+        }
+    }
+
     func configure(silenceSeconds: TimeInterval, silenceThreshold: Float, outputDir: URL) {
         syncState {
             silenceSecondsState = silenceSeconds
@@ -336,7 +439,9 @@ class AudioRecorder {
             lastSysAudioTime = Date()
             sysBuf = []
             micBuf = []
+            micLevelState = 0
             sysGapMicFallbackLogged = false
+            meetingMicStateState = .unknown
             autoStopRequested = false
             writeState(recording: true, title: title, path: url.path)
             log("🎙 \(fn)")
@@ -360,6 +465,8 @@ class AudioRecorder {
             lastSysAudioTime = nil
             sysBuf = []
             micBuf = []
+            micLevelState = 0
+            meetingMicStateState = .unknown
             writeState(recording: false)
             log("⏹ \(dur)s")
             return (p, dur)
@@ -382,9 +489,11 @@ class AudioRecorder {
         recorderQueue.async { [weak self] in
             guard let self = self, self.isRecordingState else { return }
             let gain = self.micGainState
-            let ints = samples.map { Int16(max(-1.0, min(1.0, $0 * gain)) * Float(Int16.max)) }
+            let ints = micSamplesForRecording(samples, gain: gain, meetingState: self.meetingMicStateState)
             self.micBuf.append(contentsOf: ints)
-            if self.calcRMS(ints) > self.silenceThresholdState {
+            let rms = self.calcRMS(ints)
+            self.micLevelState = self.meetingMicStateState == .muted ? 0 : max(rms, self.micLevelState * 0.72)
+            if self.meetingMicStateState != .muted && rms > self.silenceThresholdState {
                 self.lastMicAudioTime = Date()
             }
             self.mixAndWriteOnQueue()
@@ -536,6 +645,95 @@ class AudioRecorder {
     }
 }
 
+final class MeetingMuteMonitor {
+    private let recorder: AudioRecorder
+    private let queue = DispatchQueue(label: "com.yulu.meeting-mute-monitor", qos: .utility)
+    private var timer: DispatchSourceTimer?
+
+    init(recorder: AudioRecorder) {
+        self.recorder = recorder
+    }
+
+    func start() {
+        queue.async { [weak self] in
+            guard let self = self, self.timer == nil else { return }
+            let timer = DispatchSource.makeTimerSource(queue: self.queue)
+            timer.schedule(deadline: .now(), repeating: 1)
+            timer.setEventHandler { [weak self] in
+                guard let self = self else { return }
+                self.recorder.updateMeetingMicState(self.scan())
+            }
+            self.timer = timer
+            timer.resume()
+        }
+    }
+
+    func stop() {
+        queue.async { [weak self] in
+            guard let self = self else { return }
+            self.timer?.setEventHandler {}
+            self.timer?.cancel()
+            self.timer = nil
+            self.recorder.updateMeetingMicState(.unknown)
+        }
+    }
+
+    private func scan() -> MeetingMicState {
+        guard AXIsProcessTrusted() else { return .unknown }
+        for app in NSWorkspace.shared.runningApplications where app.activationPolicy == .regular {
+            guard MeetingMuteClassifier.isSupportedApp(
+                appName: app.localizedName ?? "",
+                bundleID: app.bundleIdentifier
+            ) else { continue }
+            let appElement = AXUIElementCreateApplication(app.processIdentifier)
+            AXUIElementSetMessagingTimeout(appElement, 0.2)
+            var windowsRef: CFTypeRef?
+            guard AXUIElementCopyAttributeValue(appElement, kAXWindowsAttribute as CFString, &windowsRef) == .success,
+                  let windows = windowsRef as? [AXUIElement] else { continue }
+            for window in windows {
+                let title = stringAttribute(window, kAXTitleAttribute as CFString) ?? ""
+                guard MeetingMuteClassifier.isSupportedMeetingWindow(
+                    appName: app.localizedName ?? "",
+                    bundleID: app.bundleIdentifier,
+                    title: title
+                ) else { continue }
+                if let state = muteState(in: window) { return state }
+            }
+        }
+        return .unknown
+    }
+
+    private func muteState(in root: AXUIElement) -> MeetingMicState? {
+        var stack: [(AXUIElement, Int)] = [(root, 0)]
+        var visited = 0
+        while let (element, depth) = stack.popLast(), visited < 600 {
+            visited += 1
+            let role = stringAttribute(element, kAXRoleAttribute as CFString) ?? ""
+            if ["AXButton", "AXCheckBox", "AXMenuItem", "AXRadioButton", "AXPopUpButton"].contains(role) {
+                for attribute in [kAXTitleAttribute, kAXDescriptionAttribute, kAXHelpAttribute] {
+                    if let label = stringAttribute(element, attribute as CFString),
+                       let state = MeetingMuteClassifier.classifyControlLabel(label) {
+                        return state
+                    }
+                }
+            }
+            guard depth < 12 else { continue }
+            var childrenRef: CFTypeRef?
+            if AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &childrenRef) == .success,
+               let children = childrenRef as? [AXUIElement] {
+                for child in children.reversed() { stack.append((child, depth + 1)) }
+            }
+        }
+        return nil
+    }
+
+    private func stringAttribute(_ element: AXUIElement, _ attribute: CFString) -> String? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, attribute, &value) == .success else { return nil }
+        return value as? String
+    }
+}
+
 class MicCapture {
     let recorder: AudioRecorder
     private let lifecycleQueue = DispatchQueue(label: "com.yulu.mic-capture.lifecycle")
@@ -545,6 +743,59 @@ class MicCapture {
     var selectedDeviceUID: String?
 
     init(recorder: AudioRecorder) { self.recorder = recorder }
+
+    private static func stringProperty(_ device: AudioObjectID, selector: AudioObjectPropertySelector) -> String? {
+        var address = AudioObjectPropertyAddress(
+            mSelector: selector,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var size = UInt32(MemoryLayout<CFString?>.size)
+        let pointer = UnsafeMutablePointer<CFString?>.allocate(capacity: 1)
+        pointer.initialize(to: nil)
+        defer {
+            pointer.deinitialize(count: 1)
+            pointer.deallocate()
+        }
+        guard AudioObjectGetPropertyData(device, &address, 0, nil, &size, pointer) == noErr,
+              let value = pointer.pointee else { return nil }
+        return value as String
+    }
+
+    private static func hasStreams(_ device: AudioObjectID, scope: AudioObjectPropertyScope) -> Bool {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyStreams,
+            mScope: scope,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var size: UInt32 = 0
+        return AudioObjectGetPropertyDataSize(device, &address, 0, nil, &size) == noErr && size > 0
+    }
+
+    static func availableDevices() -> [String: Any] {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDevices,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var size: UInt32 = 0
+        guard AudioObjectGetPropertyDataSize(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size) == noErr else {
+            return ["error": "coreaudio_device_size_failed"]
+        }
+        var devices = [AudioDeviceID](repeating: 0, count: Int(size) / MemoryLayout<AudioDeviceID>.size)
+        guard AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size, &devices) == noErr else {
+            return ["error": "coreaudio_device_list_failed"]
+        }
+        var input: [[String: String]] = []
+        var output: [[String: String]] = []
+        for device in devices {
+            guard let uid = stringProperty(device, selector: kAudioDevicePropertyDeviceUID) else { continue }
+            let item = ["uid": uid, "name": stringProperty(device, selector: kAudioObjectPropertyName) ?? uid]
+            if hasStreams(device, scope: kAudioDevicePropertyScopeInput) { input.append(item) }
+            if hasStreams(device, scope: kAudioDevicePropertyScopeOutput) { output.append(item) }
+        }
+        return ["input": input, "output": output]
+    }
 
     private func audioDeviceID(forUID uid: String) -> AudioDeviceID? {
         var address = AudioObjectPropertyAddress(
@@ -561,38 +812,20 @@ class MicCapture {
         guard AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size, &devices) == noErr else {
             return nil
         }
-        for device in devices {
-            var uidAddress = AudioObjectPropertyAddress(
-                mSelector: kAudioDevicePropertyDeviceUID,
-                mScope: kAudioObjectPropertyScopeGlobal,
-                mElement: kAudioObjectPropertyElementMain
-            )
-            var uidSize = UInt32(MemoryLayout<CFString?>.size)
-            let uidPtr = UnsafeMutablePointer<CFString?>.allocate(capacity: 1)
-            uidPtr.initialize(to: nil)
-            defer {
-                uidPtr.deinitialize(count: 1)
-                uidPtr.deallocate()
-            }
-            if AudioObjectGetPropertyData(device, &uidAddress, 0, nil, &uidSize, uidPtr) == noErr,
-               let cfUID = uidPtr.pointee,
-               (cfUID as String) == uid {
-                return device
-            }
+        for device in devices where Self.stringProperty(device, selector: kAudioDevicePropertyDeviceUID) == uid {
+            return device
         }
         return nil
     }
 
-    private func configureInputDevice(_ input: AVAudioInputNode) {
+    private func configureInputDevice(_ input: AVAudioInputNode) -> String? {
         guard let uid = selectedDeviceUID?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !uid.isEmpty else { return }
+              !uid.isEmpty else { return nil }
         guard let deviceID = audioDeviceID(forUID: uid) else {
-            log("🎤 Mic device UID not found, using default input: \(uid)")
-            return
+            return "mic_device_not_found: \(uid)"
         }
         guard let audioUnit = input.audioUnit else {
-            log("🎤 Mic input audio unit unavailable, using default input")
-            return
+            return "mic_input_audio_unit_unavailable"
         }
         var selectedID = deviceID
         let status = AudioUnitSetProperty(
@@ -605,8 +838,9 @@ class MicCapture {
         )
         if status == noErr {
             log("🎤 Mic input device selected: \(uid)")
+            return nil
         } else {
-            log("🎤 Mic input device selection failed (\(status)), using default input: \(uid)")
+            return "mic_device_selection_failed: \(status)"
         }
     }
 
@@ -632,7 +866,12 @@ class MicCapture {
         guard engine == nil else { return }
         let engine = AVAudioEngine()
         let input = engine.inputNode
-        configureInputDevice(input)
+        if let error = configureInputDevice(input) {
+            MIC_READY = false
+            MIC_ERROR = error
+            log("🎤 Mic input device configuration failed: \(error)")
+            return
+        }
         let fmt = input.outputFormat(forBus: 0)
 
         input.installTap(onBus: 0, bufferSize: 4096, format: fmt) { [weak self] buf, _ in
@@ -1373,9 +1612,37 @@ final class ProcessTapBackend: CaptureBackend {
 
 // ─── Socket 服务器 ────────────────────────────────────
 
+func unixSocketIsReachable(at path: URL) -> Bool {
+    guard FileManager.default.fileExists(atPath: path.path) else { return false }
+    let fd = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
+    guard fd >= 0 else { return false }
+    defer { close(fd) }
+
+    var addr = sockaddr_un()
+    addr.sun_family = sa_family_t(AF_UNIX)
+    _ = path.path.withCString { strncpy(&addr.sun_path.0, $0, min(path.path.utf8.count, 103)) }
+    return withUnsafePointer(to: &addr) {
+        $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+            Darwin.connect(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) == 0
+        }
+    }
+}
+
+func acquireExclusiveFileLock(at path: URL) -> Int32? {
+    let fd = Darwin.open(path.path, O_CREAT | O_RDWR, 0o600)
+    guard fd >= 0 else { return nil }
+    guard flock(fd, LOCK_EX | LOCK_NB) == 0 else {
+        close(fd)
+        return nil
+    }
+    return fd
+}
+
 class SocketServer {
     let recorder: AudioRecorder
     var sock: Int32 = -1
+    private(set) var ownsSocketPath = false
+    private var singletonLockFD: Int32 = -1
     /// Hooks the daemon uses to start/stop ScreenCaptureKit + microphone capture only
     /// while a recording is in flight, so the macOS menu-bar recording indicator
     /// reflects reality. AppDelegate wires these to the CaptureBackend / MicCapture.
@@ -1390,6 +1657,7 @@ class SocketServer {
     /// idempotent) sys start still run in onRecordingStart after the reply.
     var rearmSysCapture: (() -> Void)?
     var configureMicDevice: ((String?) -> Void)?
+    var listAudioDevices: (() -> [String: Any])?
 
     // Read requests off the accept thread, then route control actions through a
     // serial queue so recorder mutations stay one-at-a-time. Window scans are
@@ -1410,23 +1678,47 @@ class SocketServer {
 
     func stop() {
         if sock >= 0 { close(sock); sock = -1 }
+        if ownsSocketPath {
+            try? FileManager.default.removeItem(at: SOCKET_PATH)
+            ownsSocketPath = false
+        }
+        if singletonLockFD >= 0 {
+            close(singletonLockFD)
+            singletonLockFD = -1
+        }
     }
 
-    func start() {
+    func start() -> Bool {
+        guard let lockFD = acquireExclusiveFileLock(at: SOCKET_LOCK_PATH) else {
+            log("Socket: another audio daemon holds the process lock")
+            return false
+        }
+        singletonLockFD = lockFD
+        if unixSocketIsReachable(at: SOCKET_PATH) {
+            log("Socket: another audio daemon is already active")
+            stop()
+            return false
+        }
         try? FileManager.default.removeItem(at: SOCKET_PATH)
         sock = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
-        guard sock >= 0 else { log("Socket: create failed"); return }
+        guard sock >= 0 else { log("Socket: create failed"); stop(); return false }
         var addr = sockaddr_un()
         addr.sun_family = sa_family_t(AF_UNIX)
         _ = SOCKET_PATH.path.withCString { strncpy(&addr.sun_path.0, $0, min(SOCKET_PATH.path.utf8.count, 103)) }
         let ok = withUnsafePointer(to: &addr) {
             $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { Darwin.bind(sock, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) }
         }
-        guard ok == 0 else { log("Socket: bind \(ok)"); close(sock); sock = -1; return }
+        guard ok == 0 else { log("Socket: bind failed errno=\(errno)"); stop(); return false }
+        ownsSocketPath = true
         // status_agent polls at 1Hz, voicemail.cli polls during recording, and
         // shell scripts ping ad-hoc — a backlog of 5 is trivial to overrun if
         // any handler stalls. 64 absorbs realistic bursts without queueing.
-        Darwin.listen(sock, 64); chmod(SOCKET_PATH.path, 0o600)
+        guard Darwin.listen(sock, 64) == 0 else {
+            log("Socket: listen failed errno=\(errno)")
+            stop()
+            return false
+        }
+        chmod(SOCKET_PATH.path, 0o600)
         log("Socket ready")
         DispatchQueue.global(qos: .background).async { [weak self] in
             guard let self = self else { return }
@@ -1446,6 +1738,7 @@ class SocketServer {
                 }
             }
         }
+        return true
     }
 
     /// Per-accepted-fd hardening:
@@ -1599,7 +1892,9 @@ class SocketServer {
             if wasRecording { onRecordingStop?() }
             resp = ["status":"stopped", "file": p ?? "", "duration": d]
         case "status":
-            resp = ["recording": recorder.isRecording, "file": recorder.currentFilePath, "sysReady": SYS_READY, "sysError": SYS_ERROR, "micReady": MIC_READY, "micError": MIC_ERROR]
+            resp = ["recording": recorder.isRecording, "file": recorder.currentFilePath, "micLevel": recorder.micLevel, "sysReady": SYS_READY, "sysError": SYS_ERROR, "micReady": MIC_READY, "micError": MIC_ERROR, "meetingMicState": recorder.meetingMicState.rawValue]
+        case "audio_devices":
+            resp = listAudioDevices?() ?? ["error": "coreaudio_device_provider_unavailable"]
         case "quit": resp = ["status":"bye"]; send(c, resp)
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { NSApp.terminate(nil) }; return
         default: resp = ["error":"unknown: \(action)"]
@@ -1639,6 +1934,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var recorder: AudioRecorder?
     var micCapture: MicCapture?
     var audioCapture: CaptureBackend?   // D-02 seam: SCK arm now, tap arm (02-04) drops in here
+    var meetingMuteMonitor: MeetingMuteMonitor?
     var socketServer: SocketServer?
 
     func applicationDidFinishLaunching(_ n: Notification) {
@@ -1648,10 +1944,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
         logFile = try? FileHandle(forWritingTo: LOG_PATH)
         _ = try? logFile?.seekToEnd()
-        try? "\(ProcessInfo.processInfo.processIdentifier)".write(to: PID_PATH, atomically: true, encoding: .utf8)
         log("🎧 Audio Daemon (pid=\(ProcessInfo.processInfo.processIdentifier))")
 
         let rec = AudioRecorder(); recorder = rec
+        let muteMonitor = MeetingMuteMonitor(recorder: rec); meetingMuteMonitor = muteMonitor
         rec.onStopRequest = { [weak self] in
             guard let self = self else { return }
             if !SYS_DISABLED && launchMeetingSilencePrompt() {
@@ -1660,6 +1956,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             let wasRecording = self.recorder?.isRecording ?? false
             _ = self.recorder?.stop()
             if wasRecording {
+                self.meetingMuteMonitor?.stop()
                 self.audioCapture?.stopCapture()
                 self.micCapture?.stop()
             }
@@ -1696,6 +1993,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         ss.onRecordingStart = { [weak self] in
             self?.audioCapture?.startCapture()
             self?.micCapture?.start()
+            if !SYS_DISABLED { self?.meetingMuteMonitor?.start() }
         }
         // Pre-gate sys re-arm (self-heal): refresh SYS_READY/SYS_ERROR with a real
         // arm attempt before the "start" readiness gate, so a stale false left by a
@@ -1707,11 +2005,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         ss.configureMicDevice = { [weak self] uid in
             self?.micCapture?.selectedDeviceUID = uid
         }
+        ss.listAudioDevices = { MicCapture.availableDevices() }
         ss.onRecordingStop = { [weak self] in
+            self?.meetingMuteMonitor?.stop()
             self?.audioCapture?.stopCapture()
             self?.micCapture?.stop()
         }
-        ss.start()
+        guard ss.start() else {
+            log("Another audio daemon owns the socket; exiting")
+            NSApp.terminate(nil)
+            return
+        }
+        try? "\(ProcessInfo.processInfo.processIdentifier)".write(to: PID_PATH, atomically: true, encoding: .utf8)
         if let title = interruptedRecordingTitle(), let p = rec.start(title: title) {
             log("⚠️ Resuming interrupted recording: \(p)")
             ss.onRecordingStart?()
@@ -1720,9 +2025,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ n: Notification) {
-        recorder?.stop(); socketServer?.stop(); audioCapture?.stopCapture(); micCapture?.stop()
-        try? FileManager.default.removeItem(at: PID_PATH)
-        try? FileManager.default.removeItem(at: SOCKET_PATH)
+        let ownedSocket = socketServer?.ownsSocketPath ?? false
+        recorder?.stop(); socketServer?.stop(); meetingMuteMonitor?.stop(); audioCapture?.stopCapture(); micCapture?.stop()
+        if ownedSocket { try? FileManager.default.removeItem(at: PID_PATH) }
         try? logFile?.close()
     }
 }
@@ -1730,6 +2035,59 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 // ─── 入口 ──────────────────────────────────────────────
 
 if CommandLine.arguments.contains("--self-test") {
+    let socketTestRoot = FileManager.default.fileExists(atPath: "/private/tmp")
+        ? URL(fileURLWithPath: "/private/tmp", isDirectory: true)
+        : FileManager.default.temporaryDirectory
+    let socketTestDirectory = socketTestRoot
+        .appendingPathComponent("yulu-audio-daemon-\(UUID().uuidString)")
+    try! FileManager.default.createDirectory(at: socketTestDirectory, withIntermediateDirectories: true)
+    let socketTestPath = socketTestDirectory.appendingPathComponent("daemon.sock")
+    let socketTestFD = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
+    assert(socketTestFD >= 0)
+    var socketTestAddress = sockaddr_un()
+    socketTestAddress.sun_family = sa_family_t(AF_UNIX)
+    _ = socketTestPath.path.withCString {
+        strncpy(&socketTestAddress.sun_path.0, $0, min(socketTestPath.path.utf8.count, 103))
+    }
+    let socketTestBind = withUnsafePointer(to: &socketTestAddress) {
+        $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+            Darwin.bind(socketTestFD, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
+        }
+    }
+    assert(socketTestBind == 0)
+    assert(Darwin.listen(socketTestFD, 1) == 0)
+    assert(unixSocketIsReachable(at: socketTestPath))
+    assert(FileManager.default.fileExists(atPath: socketTestPath.path))
+    close(socketTestFD)
+
+    let lockTestPath = socketTestDirectory.appendingPathComponent("daemon.lock")
+    let firstLockFD = acquireExclusiveFileLock(at: lockTestPath)
+    assert(firstLockFD != nil)
+    assert(acquireExclusiveFileLock(at: lockTestPath) == nil)
+    close(firstLockFD!)
+    let secondLockFD = acquireExclusiveFileLock(at: lockTestPath)
+    assert(secondLockFD != nil)
+    close(secondLockFD!)
+    try? FileManager.default.removeItem(at: socketTestDirectory)
+
+    assert(MeetingMuteClassifier.classifyControlLabel("Unmute My Audio") == .muted)
+    assert(MeetingMuteClassifier.classifyControlLabel("开启麦克风 (⌘D)") == .muted)
+    assert(MeetingMuteClassifier.classifyControlLabel("Mute") == .unmuted)
+    assert(MeetingMuteClassifier.classifyControlLabel("关闭麦克风 (⌘D)") == .unmuted)
+    assert(MeetingMuteClassifier.classifyControlLabel("Ask to Unmute") == nil)
+    assert(MeetingMuteClassifier.isSupportedMeetingWindow(
+        appName: "Google Chrome",
+        bundleID: "com.google.Chrome",
+        title: "Meet - abc-defg-hij"
+    ))
+    assert(!MeetingMuteClassifier.isSupportedMeetingWindow(
+        appName: "Google Chrome",
+        bundleID: "com.google.Chrome",
+        title: "Gmail"
+    ))
+    assert(micSamplesForRecording([0.5], gain: 1, meetingState: .muted) == [0])
+    assert(micSamplesForRecording([0.5], gain: 1, meetingState: .unknown)[0] > 0)
+
     var recovery = ZeroBufferRecoveryPolicy(threshold: 3, maxAttempts: 2)
     assert(!recovery.observe(allZero: true, running: true, rebuilding: false))
     assert(!recovery.observe(allZero: true, running: true, rebuilding: false))
