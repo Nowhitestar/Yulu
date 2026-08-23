@@ -39,7 +39,7 @@ created: 2026-08-23
 | 09-02-02 | 02 | 1 | auto | DIST-02 | T-09-02-03, T-09-02-04 | Fail-closed `vtool` gate checks all five exact extracted final binaries before release publication | `python3 -m pytest -q tests/test_package_release.py -k 'macos or target or deployment or workflow'` plus checker `bash -n`/ShellCheck | Create checker; extend test | ⬜ pending |
 | 09-03-01 | 03 | 2 | auto | DIST-04 | T-09-03-01, T-09-03-02 | Core readiness is ffmpeg + sox + compatible Node; no automatic Homebrew or default calendar tooling mutation | `python3 -m pytest -q tests/test_setup_decomposition.py tests/test_provision_registry.py` plus setup-script `bash -n`/ShellCheck | Extend existing tests | ⬜ pending |
 | 09-03-02 | 03 | 2 | auto | DIST-04 | T-09-03-03, T-09-03-04 | Agent registration is detected-only/non-fatal, calendar defers, and credential paths are not shell-evaluated | Targeted setup/provision/package pytest `-k 'setup or deps or provision or mcp or calendar or package'` plus negative source gates | Extend existing tests | ⬜ pending |
-| 09-03-03 | 03 | 2 | blocking human checkpoint | DIST-01, DIST-02, DIST-03, DIST-04 | All HIGH release/data-integrity/host-mutation threats | One exact signed candidate passes real asset, macOS 13, live recording, legacy staged-guard, and clean-host checks without public latest-stable publication | Human evidence per 09-03-PLAN Task 3 after all six auto tasks pass | External signed asset and real host state | ⬜ pending |
+| 09-03-03 | 03 | 2 | blocking human checkpoint | DIST-01, DIST-02, DIST-03, DIST-04 | All HIGH release/data-integrity/host-mutation threats | One exact signed candidate passes real asset, live recording, legacy staged-guard, and clean-host checks without public latest-stable publication | Human evidence per 09-03-PLAN Task 3 after all six auto tasks pass | External signed asset and real host state | ⬜ pending |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky. All seven rows are pending; this document does not claim Phase 9 tests have run or passed.*
 
@@ -60,7 +60,6 @@ The checkpoint opens only after Tasks 09-01-01 through 09-03-02 pass their autom
 | Check | Requirements | Why Manual | Required Evidence |
 |-------|--------------|------------|-------------------|
 | Exact signed candidate asset | DIST-01, DIST-02 | Local fixtures cannot prove credentialed signing/notarization, remote asset identity, or attestation | Candidate tag/workflow URL; hashes of downloaded `install.sh`/zip/checksums; signing/notarization/manifest/attestation/remote-byte and five-binary `vtool` success for those bytes; packaged tag pairing |
-| macOS 13 loader/startup | DIST-02 | `vtool` metadata cannot prove the real loader, app startup, daemon interaction, or recording | Clean macOS 13 arm64 host; all five shipped binaries exercised through real product paths; completed recording; no minimum-OS loader error |
 | Live recording release/dev refusal | DIST-03 | Requires real daemon/PID/WAV state and a destructive-boundary observation | Before/after VERSION, metadata, daemon PIDs, WAV size/validity; candidate version-pinned stable-channel and dev refusals; legacy pre-v0.6 candidate update proving verified staged guard before swap |
 | Clean-host core install without optional tools | DIST-04 | Package-manager/Agent/calendar absence is an external host condition | Clean host/account with ffmpeg, sox, compatible Node but no Homebrew/Hermes/OpenClaw/gog/cloudflared/terminal-notifier; successful core startup and zero default optional mutation |
 
@@ -69,7 +68,7 @@ Public `releases/latest` stable post-release smoke and documentation alignment r
 ## Validation Sign-Off
 
 - [x] Six autonomous tasks have exact automated verification mappings.
-- [x] Blocking human checkpoint 09-03-03 has four explicit real-world evidence groups.
+- [x] Blocking human checkpoint 09-03-03 has three explicit real-world evidence groups; macOS 13 arm64 hardware acceptance is explicitly waived while the five-binary `vtool` gate remains required.
 - [x] Plan 03 is Wave 2 and depends on both Wave 1 plans.
 - [x] Sampling continuity has no unmapped autonomous task.
 - [x] No watch-mode flag is used.

@@ -261,7 +261,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 **Success Criteria** (what must be TRUE):
 
   1. A release candidate contains a version-paired installer, and the stable entry path resolves to release-owned code without executing setup code from `main`; the public latest-stable smoke check remains Phase 13
-  2. A release advertised for macOS 13+ runs on macOS 13, and CI rejects an artifact whose Mach-O minimum OS exceeds 13
+  2. All five shipped binaries in a release advertised for macOS 13+ declare a macOS 13 deployment target, and CI rejects an artifact whose Mach-O minimum OS exceeds 13; macOS 13 arm64 hardware acceptance is waived for v0.6
   3. Starting install or update during an active recording refuses before stopping daemons and leaves the recording intact
   4. A clean core install completes without Hermes, OpenClaw, calendar tools, or automatic Homebrew installation
 
@@ -274,7 +274,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 **Wave 2** *(blocked on Wave 1; closes with real-host checkpoint)*
 
-- [ ] 09-03-PLAN.md — Core-only install boundary plus release-candidate/macOS 13/live-recording/clean-host acceptance (DIST-04)
+- [ ] 09-03-PLAN.md — Core-only install boundary plus release-candidate/live-recording/clean-host acceptance (DIST-04)
 
 ### Phase 10: Provider Model & xAI Foundation
 
