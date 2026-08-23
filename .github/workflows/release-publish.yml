@@ -56,6 +56,7 @@ jobs:
                    packaging/scripts/package_pkg.sh \
                    packaging/scripts/pkg_postinstall.sh \
                    packaging/scripts/checksums.sh \
+                   packaging/scripts/check_macos_deployment_target.sh \
                    packaging/scripts/sign_and_notarize.sh \
                    yulu/scripts/setup.sh \
                    yulu/scripts/setup_deps.sh \
@@ -140,6 +141,7 @@ jobs:
           (cd dist && shasum -a 256 -c checksums.txt)
           PYTHONPATH=yulu/scripts python3 - <<'PY'
           import os
+          import subprocess
           import tempfile
           from pathlib import Path
 
@@ -157,6 +159,18 @@ jobs:
               validate_runtime_layout(runtime, tag)
               verify_release_bundle_security(runtime, require_staple=True)
               verify_runtime_manifest(runtime)
+              subprocess.run(
+                  [
+                      "bash",
+                      "packaging/scripts/check_macos_deployment_target.sh",
+                      str(runtime / "yulu/scripts/Yulu.app/Contents/MacOS/audio_daemon"),
+                      str(runtime / "yulu/scripts/Yulu.app/Contents/MacOS/xai_keychain"),
+                      str(runtime / "yulu/scripts/StatusAgent.app/Contents/MacOS/status_agent"),
+                      str(runtime / "yulu/scripts/recorder_status"),
+                      str(runtime / "yulu/scripts/meeting_prompt"),
+                  ],
+                  check=True,
+              )
           PY
 
       # SLSA build-provenance attestation for the release zip (BUILD-04). Minted

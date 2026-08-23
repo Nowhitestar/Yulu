@@ -26,6 +26,7 @@ jobs:
           for f in install.sh \
                    packaging/scripts/package.sh \
                    packaging/scripts/checksums.sh \
+                   packaging/scripts/check_macos_deployment_target.sh \
                    packaging/scripts/sign_and_notarize.sh \
                    yulu/scripts/setup.sh \
                    yulu/scripts/setup_deps.sh \
@@ -62,6 +63,7 @@ jobs:
             yulu/scripts/lib/common.sh \
             yulu/scripts/build_audio_daemon.sh \
             yulu/scripts/build_status_agent.sh \
+            packaging/scripts/check_macos_deployment_target.sh \
             packaging/scripts/sign_and_notarize.sh
 
       - name: Python syntax check
@@ -123,6 +125,12 @@ jobs:
           swiftc -target arm64-apple-macosx13.0 -o ".ci-build/xai_keychain" yulu/scripts/xai_keychain.swift -framework Security
           printf 'swiftc status_agent.swift (Cocoa + Carbon)\n'
           swiftc -target arm64-apple-macosx13.0 -o ".ci-build/status_agent" yulu/scripts/status_agent.swift -framework Cocoa -framework Carbon
+          bash packaging/scripts/check_macos_deployment_target.sh \
+            .ci-build/audio_daemon \
+            .ci-build/xai_keychain \
+            .ci-build/status_agent \
+            .ci-build/recorder_status \
+            .ci-build/meeting_prompt
 
       - name: Skill manifest sanity (skills/yulu/SKILL.md)
         run: |
