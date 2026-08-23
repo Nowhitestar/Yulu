@@ -4,7 +4,7 @@ milestone: v0.5
 milestone_name: milestone
 status: milestone_complete
 last_updated: 2026-05-30T15:49:51.797Z
-last_activity: 2026-08-05
+last_activity: 2026-08-23
 progress:
   total_phases: 8
   completed_phases: 8
@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-05-29)
 Phase: 8
 Plan: Not started
 Status: Milestone complete
-Last activity: 2026-08-05 - Completed quick task 260805-0f7: A2 dictation overlay
+Last activity: 2026-08-23 - Completed quick task 260823-jwv: Configure Matt Pocock engineering skills
 
 Progress: [██████████] 100%
 
@@ -209,6 +209,7 @@ None yet.
 | 260625-011 | Agent Console calendar and destination migration | 2026-06-25 | working-tree | [260625-011-agent-console-calendar-destinations](./quick/260625-011-agent-console-calendar-destinations/) |
 | 260626-001 | Agent Console chat and capability polish | 2026-06-26 | working-tree | [260626-001-agent-console-chat-capability-polish](./quick/260626-001-agent-console-chat-capability-polish/) |
 | 260805-0f7 | A2 dictation overlay | 2026-08-05 | working-tree | [260805-0f7-a2-180-140-112pt](./quick/260805-0f7-a2-180-140-112pt/) |
+| 260823-jwv | Configure Matt Pocock engineering skills | 2026-08-23 | 72d8adc | [260823-jwv-configure-matt-pocock-engineering-skills](./quick/260823-jwv-configure-matt-pocock-engineering-skills/) |
 
 ## Deferred Items
 
