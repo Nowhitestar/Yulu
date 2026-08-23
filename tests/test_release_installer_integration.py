@@ -28,9 +28,20 @@ def synthetic_assets_skip_macos_signature_verification(monkeypatch, tmp_path):
     )
 
 
+def write_idle_recording_guard(scripts_dir: Path) -> None:
+    guard_path = scripts_dir / "migrate" / "guard.py"
+    guard_path.parent.mkdir(parents=True, exist_ok=True)
+    guard_path.write_text(
+        "def recording_active() -> bool:\n"
+        "    return False\n",
+        encoding="utf-8",
+    )
+
+
 def build_fake_asset(tmp_path: Path, tag: str = "v0.5.0", setup_body: str | None = None) -> tuple[Path, Path]:
     root = tmp_path / "asset-root" / "yulu"
     (root / "yulu" / "scripts").mkdir(parents=True)
+    write_idle_recording_guard(root / "yulu" / "scripts")
     keychain_helper = root / "yulu" / "scripts" / "Yulu.app" / "Contents" / "MacOS" / "xai_keychain"
     keychain_helper.parent.mkdir(parents=True)
     keychain_helper.write_text("binary\n", encoding="utf-8")
@@ -275,6 +286,7 @@ def test_release_runtime_to_dev_failure_restores_runtime_config_and_services(tmp
     install_dir = tmp_path / "install"
     old_scripts = install_dir / "yulu" / "scripts"
     old_scripts.mkdir(parents=True)
+    write_idle_recording_guard(old_scripts)
     (install_dir / "VERSION").write_text("0.4.0\n", encoding="utf-8")
     (install_dir / ".yulu-install.json").write_text('{"source":"release"}\n', encoding="utf-8")
     old_setup = old_scripts / "setup.sh"
@@ -292,6 +304,7 @@ def test_release_runtime_to_dev_failure_restores_runtime_config_and_services(tmp
             assert not install_dir.exists()
             install_dir.mkdir()
             (install_dir / ".git").mkdir()
+            write_idle_recording_guard(install_dir / "yulu" / "scripts")
             return ""
         if cmd == ["git", "rev-parse", "--short", "HEAD"]:
             return "def5678"
