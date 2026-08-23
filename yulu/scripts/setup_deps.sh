@@ -34,6 +34,12 @@ ensure_brew_command() {
     command -v "$command_name" >/dev/null 2>&1
 }
 
+core_deps_ready() {
+    command -v ffmpeg >/dev/null 2>&1 \
+        && command -v sox >/dev/null 2>&1 \
+        && [[ -n "$(compatible_node_bin || true)" ]]
+}
+
 setup_deps() {
     local mode="${1:-release}"   # release|dev — accepted for orchestrator parity
     : "$mode"                    # not branched on here; deps are mode-agnostic
@@ -42,45 +48,47 @@ setup_deps() {
 
     echo "  将安装以下软件包："
     echo "    - ffmpeg / sox       (音频检查与备用处理)"
-    echo "    - terminal-notifier  (系统通知)"
     echo "    - node@24            (Yulu Host 运行时；仅在没有兼容 Node 时安装)"
-    echo "    - cloudflared        (日历 webhook 隧道)"
-    echo "  以下软件包仅在主机未提供可用版本时安装（复用优先）："
-    echo "    - steipete/tap/gogcli (Google 日历 CLI / gog)"
     echo
 
-    if ! command -v brew >/dev/null 2>&1; then
-        err "未检测到 Homebrew。请先安装 Homebrew，再运行本脚本。"
-        return 1
-    fi
-
-    # Reuse working commands. Installing one formula at a time prevents a
-    # partially successful multi-formula transaction from aborting an otherwise
-    # healthy upgrade, while the command postcondition still fails closed.
-    if ! ensure_brew_command sox sox \
-        || ! ensure_brew_command ffmpeg ffmpeg \
-        || ! ensure_brew_command terminal-notifier terminal-notifier; then
-        err "音频/通知工具安装失败"
-        return 1
-    fi
-    ok "音频/通知工具安装完成"
-
-    # better-sqlite3 is compiled for the Host's Node ABI. Reuse a supported
-    # Node only when it satisfies the shared Vite/native-runtime policy.
-    local compatible_node=""
-    compatible_node="$(compatible_node_bin || true)"
-    if [[ -n "$compatible_node" ]]; then
-        ok "检测到兼容 Node（$($compatible_node -v)），跳过 brew install node@24"
-    else
-        if ! brew install node@24; then
-            warn "brew install node@24 返回失败，正在核对实际安装结果"
-        fi
-        compatible_node="$(compatible_node_bin || true)"
-        if [[ -z "$compatible_node" ]]; then
-            err "Node 24 Host 运行时安装失败"
+    if ! core_deps_ready; then
+        if ! command -v brew >/dev/null 2>&1; then
+            err "缺少核心依赖（ffmpeg、sox 或兼容 Node），且未检测到 Homebrew。请先安装缺失依赖或 Homebrew 后重试。"
             return 1
         fi
-        ok "Node 24 Host 运行时安装完成"
+
+        # Reuse working commands. Installing one formula at a time prevents a
+        # partially successful transaction from hiding a missing command.
+        if ! ensure_brew_command sox sox || ! ensure_brew_command ffmpeg ffmpeg; then
+            err "音频工具安装失败"
+            return 1
+        fi
+
+        # better-sqlite3 is compiled for the Host's Node ABI. Reuse a supported
+        # Node only when it satisfies the shared Vite/native-runtime policy.
+        local compatible_node=""
+        compatible_node="$(compatible_node_bin || true)"
+        if [[ -z "$compatible_node" ]]; then
+            if ! brew install node@24; then
+                warn "brew install node@24 返回失败，正在核对实际安装结果"
+            fi
+            compatible_node="$(compatible_node_bin || true)"
+            if [[ -z "$compatible_node" ]]; then
+                err "Node 24 Host 运行时安装失败"
+                return 1
+            fi
+        fi
+    fi
+    ok "核心依赖已就绪"
+
+    if [[ "${YULU_INSTALL_CALENDAR:-}" != "1" ]]; then
+        return 0
+    fi
+
+    echo "  日历功能已明确启用，将安装 gog 和 cloudflared。"
+    if ! command -v brew >/dev/null 2>&1; then
+        err "日历工具需要 Homebrew；请先安装 Homebrew 后重试。"
+        return 1
     fi
 
     # REUSE-01 / D-04 / D-05: gate the gog CLI the same way (gog probe added in Task 1).

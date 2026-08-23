@@ -123,9 +123,7 @@ check_system() {
     ok "macOS $macos_version"
 
     if ! command -v brew &>/dev/null; then
-        warn "Homebrew 未安装，正在安装..."
-        /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-        ok "Homebrew 已安装"
+        warn "Homebrew 未安装；Yulu 不会自动安装它。仅在缺少核心依赖时才需要你先安装 Homebrew。"
     else
         ok "Homebrew $(brew --version | head -1)"
     fi
@@ -153,9 +151,6 @@ confirm_deps_install() {
     echo "  将安装以下软件包："
     echo "    - ffmpeg / sox       (音频检查与备用处理)"
     echo "    - node@24            (本地 Host 运行时，已有 Node 20.19+/22.12+/24 时复用)"
-    echo "    - terminal-notifier  (系统通知)"
-    echo "    - steipete/tap/gogcli (Google 日历 CLI)"
-    echo "    - cloudflared        (日历 webhook 隧道)"
     echo
 
     if [[ "$UPGRADE_MODE" != true ]]; then
