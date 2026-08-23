@@ -60,7 +60,7 @@ def _write_executable(path: Path, text: str) -> None:
 
 def _bootstrap_env(tmp_path: Path) -> tuple[dict[str, str], Path, Path]:
     fake_bin = tmp_path / "bin"
-    fake_bin.mkdir()
+    fake_bin.mkdir(parents=True)
     curl_log = tmp_path / "curl.log"
     argv_log = tmp_path / "argv.log"
     downloaded_install = tmp_path / "downloaded-install.sh"
@@ -70,7 +70,8 @@ def _bootstrap_env(tmp_path: Path) -> tuple[dict[str, str], Path, Path]:
         downloaded_install,
         "#!/usr/bin/env bash\n"
         "set -euo pipefail\n"
-        "printf '%s\\n' \"$@\" > \"$YULU_TEST_ARGV_LOG\"\n"
+        ": > \"$YULU_TEST_ARGV_LOG\"\n"
+        "if (($#)); then printf '%s\\n' \"$@\" > \"$YULU_TEST_ARGV_LOG\"; fi\n"
         "mkdir -p \"$INSTALL_DIR\"\n"
         "printf '0.6.0\\n' > \"$INSTALL_DIR/VERSION\"\n",
     )
@@ -256,6 +257,20 @@ def test_packaged_installer_pins_default_latest_and_rejects_conflicting_tag(tmp_
         assert result.returncode == 0, result.stderr + result.stdout
         assert argv_log.read_text(encoding="utf-8").splitlines()[-2:] == ["--version", "v0.6.0"]
         assert not curl_log.exists()
+
+    dev_dir = tmp_path / "run-dev"
+    env, curl_log, argv_log = _bootstrap_env(dev_dir)
+    env["INSTALL_DIR"] = str(dev_dir / "install")
+    dev = subprocess.run(
+        ["bash", str(dist / "install.sh"), "--dev"],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert dev.returncode == 0, dev.stderr + dev.stdout
+    assert argv_log.read_text(encoding="utf-8").splitlines()[-1] == "--dev"
+    assert not curl_log.exists()
 
     conflict_dir = tmp_path / "conflict"
     env, _, argv_log = _bootstrap_env(conflict_dir)

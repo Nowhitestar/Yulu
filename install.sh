@@ -4,8 +4,8 @@
 #
 # What it does:
 #   1. Sanity-check macOS, Python, and Xcode CLI tools.
-#   2. Download the release installer helper.
-#   3. Hand off to the helper to install the selected Yulu release asset.
+#   2. Enter the selected GitHub Release installer (or explicit dev helper).
+#   3. Install the selected Yulu runtime.
 #
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/Nowhitestar/Yulu/main/install.sh | bash
@@ -16,9 +16,10 @@ set -euo pipefail
 
 INSTALL_DIR="${INSTALL_DIR:-$HOME/.yulu}"
 HELPER_URL="https://raw.githubusercontent.com/Nowhitestar/Yulu/main/yulu/scripts/release_installer.py"
-# package.sh replaces this sentinel in the versioned release asset. The raw-main
-# bootstrap intentionally leaves it untouched and falls back to HELPER_URL.
+# package.sh replaces both sentinels in the versioned release asset. The raw-main
+# bootstrap leaves them untouched and forwards stable installs to a Release asset.
 EMBEDDED_HELPER_BASE64="__YULU_EMBEDDED_RELEASE_INSTALLER_BASE64__"
+PACKAGED_RELEASE_TAG="__YULU_PACKAGED_RELEASE_TAG__"
 
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -31,6 +32,27 @@ warn()  { printf "${YELLOW}⚠${NC} %s\n" "$1"; }
 err()   { printf "${RED}✗${NC} %s\n" "$1"; }
 info()  { printf "${BLUE}ℹ${NC} %s\n" "$1"; }
 header(){ printf "\n${BLUE}━━━ %s ━━━${NC}\n" "$1"; }
+
+normalize_release_tag() {
+    local tag="$1"
+    [[ "$tag" == v* ]] || tag="v$tag"
+    if [[ ! "$tag" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]]; then
+        printf '%s is not a valid SemVer release tag\n' "$1" >&2
+        return 2
+    fi
+    local prerelease="${tag%%+*}"
+    if [[ "$prerelease" == *-* ]]; then
+        prerelease="${prerelease#*-}"
+        local identifier
+        while IFS= read -r identifier; do
+            if [[ "$identifier" =~ ^[0-9]+$ && "$identifier" != "0" && "$identifier" == 0* ]]; then
+                printf '%s is not a valid SemVer release tag\n' "$1" >&2
+                return 2
+            fi
+        done < <(tr '.' '\n' <<< "$prerelease")
+    fi
+    printf '%s\n' "$tag"
+}
 
 usage() {
     cat <<'EOF'
@@ -69,7 +91,7 @@ while (($# > 0)); do
                 err "--version requires a value like v0.5.0"
                 exit 2
             fi
-            TARGET_ARGS=(--version "$2")
+            TARGET_ARGS=(--version "$(normalize_release_tag "$2")")
             TARGET_COUNT=$((TARGET_COUNT + 1))
             shift 2
             ;;
@@ -95,6 +117,16 @@ while (($# > 0)); do
         exit 2
     fi
 done
+
+if [[ "$PACKAGED_RELEASE_TAG" != __YULU_PACKAGED_* ]]; then
+    PACKAGED_RELEASE_TAG="$(normalize_release_tag "$PACKAGED_RELEASE_TAG")"
+    if ((${#TARGET_ARGS[@]} == 0)) || [[ "${TARGET_ARGS[0]}" == "--latest" ]]; then
+        TARGET_ARGS=(--version "$PACKAGED_RELEASE_TAG")
+    elif [[ "${TARGET_ARGS[0]}" == "--version" && "${TARGET_ARGS[1]}" != "$PACKAGED_RELEASE_TAG" ]]; then
+        printf 'Requested release %s does not match packaged release %s\n' "${TARGET_ARGS[1]}" "$PACKAGED_RELEASE_TAG" >&2
+        exit 2
+    fi
+fi
 
 # ─── Pre-flight ───────────────────────────────────────────────────
 
@@ -176,21 +208,16 @@ cleanup() {
 trap cleanup EXIT
 
 HELPER="$TMP_DIR/release_installer.py"
-if [[ "$EMBEDDED_HELPER_BASE64" != __YULU_EMBEDDED_* ]]; then
-    if ! printf '%s' "$EMBEDDED_HELPER_BASE64" | base64 --decode > "$HELPER"; then
-        err "Failed to unpack the embedded release installer helper."
-        exit 1
-    fi
-    ok "Using installer helper embedded in this release asset"
-else
+
+download_file() {
+    local url="$1"
+    local output="$2"
     if command -v curl &>/dev/null; then
-        if ! curl -fsSL "$HELPER_URL" -o "$HELPER"; then
-            err "Failed to download installer helper from $HELPER_URL"
-            exit 1
-        fi
-    else
-        warn "curl not found; downloading with python3 urllib."
-        if ! python3 - "$HELPER_URL" "$HELPER" <<'PY'
+        curl -fsSL "$url" -o "$output"
+        return
+    fi
+    warn "curl not found; downloading with python3 urllib."
+    python3 - "$url" "$output" <<'PY'
 import sys
 import urllib.request
 
@@ -201,10 +228,39 @@ with urllib.request.urlopen(request, timeout=30) as response:
 with open(output, "wb") as handle:
     handle.write(data)
 PY
-        then
-            err "Failed to download installer helper from $HELPER_URL"
-            exit 1
-        fi
+}
+
+if [[ "$EMBEDDED_HELPER_BASE64" == __YULU_EMBEDDED_* ]] && \
+   { ((${#TARGET_ARGS[@]} == 0)) || [[ "${TARGET_ARGS[0]}" != "--dev" ]]; }; then
+    RELEASE_INSTALLER="$TMP_DIR/install.sh"
+    if ((${#TARGET_ARGS[@]} > 0)) && [[ "${TARGET_ARGS[0]}" == "--version" ]]; then
+        RELEASE_INSTALLER_URL="https://github.com/Nowhitestar/Yulu/releases/download/${TARGET_ARGS[1]}/install.sh"
+    else
+        RELEASE_INSTALLER_URL="https://github.com/Nowhitestar/Yulu/releases/latest/download/install.sh"
+    fi
+    if ! download_file "$RELEASE_INSTALLER_URL" "$RELEASE_INSTALLER"; then
+        err "Failed to download release installer from $RELEASE_INSTALLER_URL"
+        exit 1
+    fi
+    if [[ ! -s "$RELEASE_INSTALLER" ]]; then
+        err "Downloaded release installer is empty: $RELEASE_INSTALLER_URL"
+        exit 1
+    fi
+    ok "Release installer downloaded"
+    INSTALL_DIR="$INSTALL_DIR" bash "$RELEASE_INSTALLER" "${TARGET_ARGS[@]}"
+    exit $?
+fi
+
+if [[ "$EMBEDDED_HELPER_BASE64" != __YULU_EMBEDDED_* ]]; then
+    if ! printf '%s' "$EMBEDDED_HELPER_BASE64" | base64 --decode > "$HELPER"; then
+        err "Failed to unpack the embedded release installer helper."
+        exit 1
+    fi
+    ok "Using installer helper embedded in this release asset"
+else
+    if ! download_file "$HELPER_URL" "$HELPER"; then
+        err "Failed to download installer helper from $HELPER_URL"
+        exit 1
     fi
 fi
 if [[ ! -s "$HELPER" ]]; then
