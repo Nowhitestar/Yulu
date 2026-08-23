@@ -1,7 +1,10 @@
+import base64
 import json
+import os
 import plistlib
 import shutil
 import subprocess
+import sys
 import urllib.error
 import zipfile
 from pathlib import Path
@@ -45,6 +48,228 @@ from release_installer import (
     write_runtime_manifest,
     write_install_metadata,
 )
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def _write_executable(path: Path, text: str) -> None:
+    path.write_text(text, encoding="utf-8")
+    path.chmod(0o755)
+
+
+def _bootstrap_env(tmp_path: Path) -> tuple[dict[str, str], Path, Path]:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    curl_log = tmp_path / "curl.log"
+    argv_log = tmp_path / "argv.log"
+    downloaded_install = tmp_path / "downloaded-install.sh"
+    downloaded_helper = tmp_path / "downloaded-helper.py"
+
+    _write_executable(
+        downloaded_install,
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        "printf '%s\\n' \"$@\" > \"$YULU_TEST_ARGV_LOG\"\n"
+        "mkdir -p \"$INSTALL_DIR\"\n"
+        "printf '0.6.0\\n' > \"$INSTALL_DIR/VERSION\"\n",
+    )
+    downloaded_helper.write_text(
+        "import os, pathlib, sys\n"
+        "pathlib.Path(os.environ['YULU_TEST_ARGV_LOG']).write_text('\\n'.join(sys.argv[1:]) + '\\n')\n"
+        "install_dir = pathlib.Path(sys.argv[sys.argv.index('--install-dir') + 1])\n"
+        "install_dir.mkdir(parents=True, exist_ok=True)\n"
+        "(install_dir / 'VERSION').write_text('dev\\n')\n"
+        "scripts = install_dir / 'yulu' / 'scripts'\n"
+        "scripts.mkdir(parents=True, exist_ok=True)\n"
+        "(scripts / 'yulu').write_text('#!/usr/bin/env bash\\n')\n",
+        encoding="utf-8",
+    )
+    _write_executable(
+        fake_bin / "curl",
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        "url=''\n"
+        "out=''\n"
+        "while (($#)); do\n"
+        "  case \"$1\" in\n"
+        "    -o) out=\"$2\"; shift 2 ;;\n"
+        "    -*) shift ;;\n"
+        "    *) url=\"$1\"; shift ;;\n"
+        "  esac\n"
+        "done\n"
+        "printf '%s\\n' \"$url\" >> \"$YULU_TEST_CURL_LOG\"\n"
+        "if [[ \"$url\" == */release_installer.py ]]; then\n"
+        "  cp \"$YULU_TEST_HELPER\" \"$out\"\n"
+        "else\n"
+        "  cp \"$YULU_TEST_RELEASE_INSTALL\" \"$out\"\n"
+        "fi\n",
+    )
+    _write_executable(fake_bin / "uname", "#!/usr/bin/env bash\n[[ ${1:-} == -s ]] && echo Darwin || echo arm64\n")
+    _write_executable(fake_bin / "sw_vers", "#!/usr/bin/env bash\necho 13.6\n")
+    _write_executable(fake_bin / "sysctl", "#!/usr/bin/env bash\necho 1\n")
+    _write_executable(fake_bin / "xcode-select", "#!/usr/bin/env bash\necho /Applications/Xcode.app/Contents/Developer\n")
+    _write_executable(fake_bin / "git", "#!/usr/bin/env bash\nexit 0\n")
+    (fake_bin / "python3").symlink_to(sys.executable)
+
+    env = os.environ.copy()
+    env.update(
+        {
+            "PATH": f"{fake_bin}:{env['PATH']}",
+            "YULU_TEST_CURL_LOG": str(curl_log),
+            "YULU_TEST_ARGV_LOG": str(argv_log),
+            "YULU_TEST_RELEASE_INSTALL": str(downloaded_install),
+            "YULU_TEST_HELPER": str(downloaded_helper),
+        }
+    )
+    return env, curl_log, argv_log
+
+
+@pytest.mark.parametrize("args", [(), ("--latest",)])
+def test_raw_stable_bootstrap_fetches_release_owned_latest_installer(tmp_path, args):
+    env, curl_log, argv_log = _bootstrap_env(tmp_path)
+    env["INSTALL_DIR"] = str(tmp_path / "install")
+
+    result = subprocess.run(
+        ["bash", str(ROOT / "install.sh"), *args],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert curl_log.read_text(encoding="utf-8").splitlines() == [
+        "https://github.com/Nowhitestar/Yulu/releases/latest/download/install.sh"
+    ]
+    assert "/main/yulu/scripts/release_installer.py" not in curl_log.read_text(encoding="utf-8")
+    assert argv_log.read_text(encoding="utf-8").splitlines() == list(args)
+
+
+def test_raw_version_bootstrap_normalizes_tag_before_release_url(tmp_path):
+    env, curl_log, argv_log = _bootstrap_env(tmp_path)
+    env["INSTALL_DIR"] = str(tmp_path / "install")
+
+    result = subprocess.run(
+        ["bash", str(ROOT / "install.sh"), "--version", "0.6.0"],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert curl_log.read_text(encoding="utf-8").splitlines() == [
+        "https://github.com/Nowhitestar/Yulu/releases/download/v0.6.0/install.sh"
+    ]
+    assert argv_log.read_text(encoding="utf-8").splitlines() == ["--version", "v0.6.0"]
+
+
+def test_raw_bootstrap_rejects_version_metacharacters_before_download(tmp_path):
+    marker = tmp_path / "injected"
+    env, curl_log, _ = _bootstrap_env(tmp_path)
+    env["INSTALL_DIR"] = str(tmp_path / "install")
+
+    result = subprocess.run(
+        ["bash", str(ROOT / "install.sh"), "--version", f"0.6.0;touch {marker}"],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert "valid SemVer" in result.stderr
+    assert not curl_log.exists()
+    assert not marker.exists()
+
+
+def test_raw_dev_bootstrap_is_only_path_using_main_helper(tmp_path):
+    env, curl_log, argv_log = _bootstrap_env(tmp_path)
+    env["INSTALL_DIR"] = str(tmp_path / "install")
+
+    result = subprocess.run(
+        ["bash", str(ROOT / "install.sh"), "--dev"],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert curl_log.read_text(encoding="utf-8").splitlines() == [
+        "https://raw.githubusercontent.com/Nowhitestar/Yulu/main/yulu/scripts/release_installer.py"
+    ]
+    assert argv_log.read_text(encoding="utf-8").splitlines()[-1] == "--dev"
+
+
+def test_packaged_installer_pins_default_latest_and_rejects_conflicting_tag(tmp_path):
+    project = tmp_path / "project"
+    scripts = project / "packaging" / "scripts"
+    helper = project / "yulu" / "scripts" / "release_installer.py"
+    scripts.mkdir(parents=True)
+    helper.parent.mkdir(parents=True)
+    shutil.copy2(ROOT / "install.sh", project / "install.sh")
+    shutil.copy2(ROOT / "packaging" / "scripts" / "package.sh", scripts / "package.sh")
+    helper.write_text(
+        "import os, pathlib, sys\n"
+        "pathlib.Path(os.environ['YULU_TEST_ARGV_LOG']).write_text('\\n'.join(sys.argv[1:]) + '\\n')\n"
+        "install_dir = pathlib.Path(sys.argv[sys.argv.index('--install-dir') + 1])\n"
+        "install_dir.mkdir(parents=True, exist_ok=True)\n"
+        "(install_dir / 'VERSION').write_text('0.6.0\\n')\n"
+        "scripts = install_dir / 'yulu' / 'scripts'\n"
+        "scripts.mkdir(parents=True, exist_ok=True)\n"
+        "(scripts / 'yulu').write_text('#!/usr/bin/env bash\\n')\n",
+        encoding="utf-8",
+    )
+    (project / "VERSION").write_text("0.6.0\n", encoding="utf-8")
+    dist = tmp_path / "dist"
+
+    packaged = subprocess.run(
+        ["bash", str(scripts / "package.sh"), "v0.6.0", "--dist", str(dist), "--skip-build"],
+        cwd=project,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert packaged.returncode == 0, packaged.stderr + packaged.stdout
+    text = (dist / "install.sh").read_text(encoding="utf-8")
+    assert 'PACKAGED_RELEASE_TAG="v0.6.0"' in text
+    assert "__YULU_EMBEDDED_RELEASE_INSTALLER_BASE64__" not in text
+    assert "__YULU_PACKAGED_RELEASE_TAG__" not in text
+    payload_line = next(line for line in text.splitlines() if line.startswith('EMBEDDED_HELPER_BASE64="'))
+    payload = payload_line.split('"', 2)[1]
+    assert base64.b64decode(payload).decode("utf-8") == helper.read_text(encoding="utf-8")
+
+    for args in ((), ("--latest",), ("--version", "0.6.0")):
+        run_dir = tmp_path / ("run-" + ("-".join(args) if args else "default"))
+        env, curl_log, argv_log = _bootstrap_env(run_dir)
+        env["INSTALL_DIR"] = str(run_dir / "install")
+        result = subprocess.run(
+            ["bash", str(dist / "install.sh"), *args],
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr + result.stdout
+        assert argv_log.read_text(encoding="utf-8").splitlines()[-2:] == ["--version", "v0.6.0"]
+        assert not curl_log.exists()
+
+    conflict_dir = tmp_path / "conflict"
+    env, _, argv_log = _bootstrap_env(conflict_dir)
+    env["INSTALL_DIR"] = str(conflict_dir / "install")
+    conflict = subprocess.run(
+        ["bash", str(dist / "install.sh"), "--version", "v0.6.1"],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert conflict.returncode == 2
+    assert "does not match packaged release v0.6.0" in conflict.stderr
+    assert not argv_log.exists()
 
 
 def test_parse_default_target_is_latest_release():
