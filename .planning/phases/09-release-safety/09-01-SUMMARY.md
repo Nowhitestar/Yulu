@@ -24,6 +24,7 @@ key-files:
     - packaging/scripts/package.sh
     - yulu/scripts/release_installer.py
     - tests/test_release_installer.py
+    - tests/test_release_installer_integration.py
 
 key-decisions:
   - "Raw stable bootstrap executes a GitHub Release-owned install.sh; raw main is dev-only."
@@ -50,7 +51,7 @@ Stable installs now bootstrap from immutable release-owned assets, while release
 - **Started:** 2026-08-23T08:28:46Z
 - **Completed:** 2026-08-23T08:41:58Z
 - **Tasks:** 2
-- **Files modified:** 4
+- **Files modified:** 5
 
 ## Accomplishments
 
@@ -70,12 +71,17 @@ Each task was implemented with a separate RED and GREEN commit:
    - `a4c23a9` — `test(09-01): add failing active recording update tests`
    - `5d42617` — `feat(09-01): block updates during active recordings`
 
+**Post-plan regression closure:**
+
+- `2068208` — `test(09-01): align integration fixtures with recording guard contract`
+
 ## Files Created/Modified
 
 - `install.sh` — Selects release-owned stable helpers, normalizes exact SemVer tags, and preserves the explicit dev helper path.
 - `packaging/scripts/package.sh` — Atomically injects installer code and the package's exact release tag.
 - `yulu/scripts/release_installer.py` — Enforces trusted recording-idle admission and recording-safe rollback behavior.
 - `tests/test_release_installer.py` — Covers bootstrap routing, packaged tag behavior, trusted guard loading, legacy fallback, and rollback refusal paths.
+- `tests/test_release_installer_integration.py` — Gives synthetic release and dev runtimes the canonical idle recording-guard contract.
 
 ## Decisions Made
 
@@ -90,10 +96,20 @@ Each task was implemented with a separate RED and GREEN commit:
 - `shellcheck -x -P SCRIPTDIR install.sh packaging/scripts/package.sh` — passed.
 - `python3 -m py_compile yulu/scripts/release_installer.py` — passed.
 - `python3 -m pytest -q tests/test_package_release.py tests/test_release_no_swiftc.py` — 29 passed.
+- `python3 -m pytest -q tests/test_release_installer_integration.py` — 13 passed after fixture alignment.
+- `make test` — 943 passed, 2 skipped; all five Swift build targets compiled successfully.
 
 ## Deviations from Plan
 
-None - plan executed exactly as written.
+### Auto-fixed Issues
+
+**1. [Rule 3 - Blocking] Aligned synthetic integration runtimes with the recording-guard contract**
+
+- **Found during:** Post-plan full-suite verification after Wave 1.
+- **Issue:** Eight transaction integration tests stopped at the new fail-closed admission check because their synthetic release asset and dev checkout omitted `migrate/guard.py`, so they never reached the setup and rollback behavior under test.
+- **Fix:** Added one minimal idle guard fixture and installed it into the synthetic release asset plus both old and cloned dev runtimes. Production fail-closed behavior was not changed.
+- **Files modified:** `tests/test_release_installer_integration.py`
+- **Commit:** `2068208`
 
 ## Known Stubs
 
@@ -101,7 +117,7 @@ None.
 
 ## Issues Encountered
 
-None.
+The first sandboxed `make test` run completed Python tests but Swift compilation could not write the external Clang module cache. Re-running the same gate with permitted cache access passed completely.
 
 ## User Setup Required
 
@@ -114,6 +130,6 @@ None - no external service configuration is required for this plan.
 
 ## Self-Check: PASSED
 
-- All four modified product/test files and this summary exist.
-- All four RED/GREEN task commits are present in Git history.
+- All five modified product/test files and this summary exist.
+- All four RED/GREEN task commits and the integration-fixture regression commit are present in Git history.
 - Stub scan found no plan-introduced UI/data stubs; the only matches are an existing capability comment and an intentional empty-branch test fixture.
