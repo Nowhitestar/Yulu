@@ -1,8 +1,10 @@
-# Roadmap: Yulu — Agent-Native Provisioning & Cross-Platform Foundation
+# Roadmap: Yulu
 
 ## Overview
 
 This is a brownfield re-architecture milestone. Yulu already ships (8 launchd daemons, Swift `audio_daemon`, Hono+tRPC+React UI, SQLite, MLX/whisper.cpp, release-please). The milestone adds three new horizontal layers above the unchanged runtime — a **platform-abstraction layer** (macOS impl now, Linux/Windows stubbed), an **agent-capability layer** (detect-and-reuse what the host agent already has), and an **agent-orchestration surface** (the host agent provisions Yulu via named, idempotent steps) — while fixing a catalogue of pre-existing fragilities. The journey runs detection-first along a strict one-way layer dependency (`provision/` → `capabilities/` → `platform/` → existing runtime): unblock signed pre-built binaries (Phase 1), lay the platform seams (Phase 2), build the `HostCapabilityReport` spine every consumer binds to (Phase 3), surface it in the UI (Phase 4), reuse host capabilities and safely separate syncable content from machine-local runtime (Phase 5), compose it all as an agent-orchestrated step registry (Phase 6), migrate existing installs without data loss (Phase 7), and generalize to all three agents (Phase 8).
+
+Milestone v0.6 turns that foundation into a reliable first-user journey: close release-safety blockers first, establish capability-specific provider behavior with xAI as a complete reference path, prove Core Activation with real artifacts, add supported runtime/gateway connections, then make optional integrations and release documentation coherent.
 
 ## Phases
 
@@ -21,6 +23,11 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 6: Agent-Orchestrated Provisioning + Decoupled Skill Install** - Named idempotent step registry, `yulu provision <step>`, attestation gate, resumable state, `yulu skill install --agent`; spike validates WHO calls provisioning (completed 2026-05-30)
 - [x] **Phase 7: Seamless Auto-Migration** - `yulu migrate` detect→plan→apply→verify with recording-guard, transactional rollback, and bounded backup lifecycle (completed 2026-05-30)
 - [x] **Phase 8: Multi-Agent Providers (Codex + OpenClaw)** - Generalize the proven ClaudeCode provider to complete the multi-agent-from-v1 lock (completed 2026-05-30)
+- [ ] **Phase 9: Release Safety** - Make stable install/update version-paired, macOS-13-compatible, recording-safe, and free of optional dependency blockers
+- [ ] **Phase 10: Provider Model & xAI Foundation** - Establish independent capability providers and prove xAI summary and cited local-meeting conversation end to end
+- [ ] **Phase 11: State-Driven Core Activation** - Guide every install cohort to a real saved recording, transcript, and summary
+- [ ] **Phase 12: Agent Runtime & Gateway Connections** - Connect Codex, Claude Code, Hermes, OpenClaw, and advanced CLIProxyAPI paths with correct credential ownership
+- [ ] **Phase 13: Optional Capabilities & Release Acceptance** - Make calendar, sharing, and conversation setup reachable, align public guidance, and validate the real release
 
 ## Phase Details
 
@@ -241,10 +248,86 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 **Research**: standard pattern (skip research-phase) — generalizes the reference implementation proven in Phase 3 against an already-locked interface.
 
+### Phase 9: Release Safety
+
+**Goal**: Users can install or update the advertised stable macOS release without running moving repository code, violating the macOS 13 floor, interrupting a recording, or being forced to install optional integrations.
+**Depends on**: Phase 8
+**Requirements**: DIST-01, DIST-02, DIST-03, DIST-04
+**Success Criteria** (what must be TRUE):
+
+  1. A user installs the latest stable release through an installer paired to that release, without executing setup code from `main`
+  2. A release advertised for macOS 13+ runs on macOS 13, and CI rejects an artifact whose Mach-O minimum OS exceeds 13
+  3. Starting install or update during an active recording refuses before stopping daemons and leaves the recording intact
+  4. A clean core install completes without Hermes, OpenClaw, calendar tools, or automatic Homebrew installation
+
+**Plans**: TBD
+
+### Phase 10: Provider Model & xAI Foundation
+
+**Goal**: Users can choose intelligence independently for transcription, summaries, and conversation, with explicit credential custody and an end-to-end xAI path that preserves local-first boundaries.
+**Depends on**: Phase 9
+**Requirements**: PRVD-01, PRVD-02, PRVD-03, PRVD-04, PRVD-05, XAI-01, XAI-02, XAI-03, XAI-04
+**Success Criteria** (what must be TRUE):
+
+  1. A user selects Transcription, Summary Provider, and Conversation Provider independently and sees capability-specific readiness proven by a real request
+  2. Direct API and gateway secrets remain in macOS Keychain, while every summary or conversation task stays pinned to its creation-time provider
+  3. A provider failure pauses the task and asks the user what to do, without silently switching provider, model, cost, or privacy boundary
+  4. One Yulu-owned xAI connection passes separate transcription, summary, and conversation probes, and xAI produces a saved Markdown summary from transcript content only
+  5. A user can ask across local meetings and receive cited source meetings while only bounded locally retrieved excerpts are sent with `store:false`; history stays local and no Web/X search or write connector is enabled
+
+**Plans**: TBD
+**UI hint**: yes
+
+### Phase 11: State-Driven Core Activation
+
+**Goal**: New, upgrading, and developer-install users reach the same verifiable first success through a flow driven by actual capability state.
+**Depends on**: Phase 10
+**Requirements**: ACT-01, ACT-02, ACT-03, ACT-04
+**Success Criteria** (what must be TRUE):
+
+  1. New, upgrading, and developer-install users enter one activation flow that skips every capability already proven ready
+  2. A user can keep transcription local or choose xAI only after seeing and accepting cloud, privacy, and cost implications
+  3. Core Activation completes only after a real recording is saved with its transcript and summary through the production path
+  4. A blocked step names the failed capability and opens the exact configuration surface needed to resolve it
+
+**Plans**: TBD
+**UI hint**: yes
+
+### Phase 12: Agent Runtime & Gateway Connections
+
+**Goal**: Users can connect any supported local agent or user-managed gateway without making one runtime mandatory or giving Yulu ownership of runtime OAuth credentials.
+**Depends on**: Phase 11
+**Requirements**: AGRT-01, AGRT-02, AGRT-03, AGRT-04
+**Success Criteria** (what must be TRUE):
+
+  1. A user connects Codex through official App Server managed OAuth and Yulu never receives or stores the OAuth token
+  2. A user connects an unmodified Claude Code runtime through native OAuth, or uses a direct API key when runtime OAuth is unavailable
+  3. A user connects Hermes or OpenClaw through a configured gateway, while core recording and activation remain usable without either runtime
+  4. An advanced user connects a separately managed CLIProxyAPI-compatible endpoint using only a base URL and local proxy key; Yulu neither requests nor manages its OAuth files or management key
+
+**Plans**: TBD
+**UI hint**: yes
+
+### Phase 13: Optional Capabilities & Release Acceptance
+
+**Goal**: Users can discover, configure, or defer non-core capabilities, and the shipped release presents one consistent supported journey across product and documentation surfaces.
+**Depends on**: Phase 12
+**Requirements**: OPT-01, OPT-02, OPT-03, DOCS-01, DOCS-02
+**Success Criteria** (what must be TRUE):
+
+  1. After Core Activation, a user can configure or defer calendar integration without blocking recording or summaries
+  2. A user can configure or defer sharing destinations, and a disabled share action opens the relevant setup surface
+  3. A user can configure or defer a Conversation Provider independently of the Summary Provider
+  4. README and website describe the same stable install path, provider types, cloud disclosures, optional capabilities, and first-success journey
+  5. A real release install shows the same shipped version and support boundary in its assets, installer, version metadata, About surface, and social preview
+
+**Plans**: TBD
+**UI hint**: yes
+
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8
+Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9 → 10 → 11 → 12 → 13
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
@@ -256,3 +339,8 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8
 | 6. Agent-Orchestrated Provisioning | 4/4 | Complete    | 2026-05-30 |
 | 7. Seamless Auto-Migration | 3/3 | Complete    | 2026-05-30 |
 | 8. Multi-Agent Providers | 1/1 | Complete    | 2026-05-30 |
+| 9. Release Safety | 0/TBD | Not started | - |
+| 10. Provider Model & xAI Foundation | 0/TBD | Not started | - |
+| 11. State-Driven Core Activation | 0/TBD | Not started | - |
+| 12. Agent Runtime & Gateway Connections | 0/TBD | Not started | - |
+| 13. Optional Capabilities & Release Acceptance | 0/TBD | Not started | - |

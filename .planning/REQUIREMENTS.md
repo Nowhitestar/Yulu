@@ -78,9 +78,36 @@
 
 ## Traceability
 
-Roadmap mapping will be filled by the roadmapper. Every v0.6 requirement must map to exactly one phase.
+| Requirement | Phase | Status |
+|-------------|-------|--------|
+| DIST-01 | Phase 9 | Pending |
+| DIST-02 | Phase 9 | Pending |
+| DIST-03 | Phase 9 | Pending |
+| DIST-04 | Phase 9 | Pending |
+| PRVD-01 | Phase 10 | Pending |
+| PRVD-02 | Phase 10 | Pending |
+| PRVD-03 | Phase 10 | Pending |
+| PRVD-04 | Phase 10 | Pending |
+| PRVD-05 | Phase 10 | Pending |
+| XAI-01 | Phase 10 | Pending |
+| XAI-02 | Phase 10 | Pending |
+| XAI-03 | Phase 10 | Pending |
+| XAI-04 | Phase 10 | Pending |
+| ACT-01 | Phase 11 | Pending |
+| ACT-02 | Phase 11 | Pending |
+| ACT-03 | Phase 11 | Pending |
+| ACT-04 | Phase 11 | Pending |
+| AGRT-01 | Phase 12 | Pending |
+| AGRT-02 | Phase 12 | Pending |
+| AGRT-03 | Phase 12 | Pending |
+| AGRT-04 | Phase 12 | Pending |
+| OPT-01 | Phase 13 | Pending |
+| OPT-02 | Phase 13 | Pending |
+| OPT-03 | Phase 13 | Pending |
+| DOCS-01 | Phase 13 | Pending |
+| DOCS-02 | Phase 13 | Pending |
 
-**Coverage before roadmap:** 26 requirements; 0 mapped.
+**Coverage:** 26/26 v0.6 requirements mapped exactly once.
 
 ---
 *Requirements defined: 2026-08-23*

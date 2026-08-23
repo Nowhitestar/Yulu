@@ -1,13 +1,13 @@
 ---
 gsd_state_version: 1.0
 milestone: v0.6
-milestone_name: milestone
-status: Defining requirements
-stopped_at: "Explicit local/xAI audio engines, xAI OAuth reuse, connector/Agent decoupling, and realtime subtitle smoothing are implemented and verified in the installed runtime. Long xAI batch uploads are compressed to 16 kHz mono FLAC before REST STT; full regression passed. Next: merge PR #103 and complete the release-please publication flow."
-last_updated: "2026-08-23T07:28:36.988Z"
-last_activity: 2026-08-23 — Milestone v0.6 started
+milestone_name: Reliable Distribution & Activation
+status: planning
+stopped_at: "Roadmap created; Phase 9 is ready for planning."
+last_updated: "2026-08-23T15:31:03+0800"
+last_activity: 2026-08-23
 progress:
-  total_phases: 0
+  total_phases: 5
   completed_phases: 0
   total_plans: 0
   completed_plans: 0
@@ -18,17 +18,17 @@ progress:
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-05-29)
+See: .planning/PROJECT.md (updated 2026-08-23)
 
 **Core value:** A new user can install Yulu, record a real meeting, and obtain saved audio, transcript, and summary without installing a specific agent.
-**Current focus:** Defining milestone v0.6 roadmap
+**Current focus:** Phase 9 — Release Safety
 
 ## Current Position
 
-Phase: Not started (defining requirements)
-Plan: —
-Status: Defining requirements
-Last activity: 2026-08-23 — Milestone v0.6 started
+Phase: 9 of 13 (Release Safety)
+Plan: 0 of TBD
+Status: Ready to plan
+Last activity: 2026-08-23 — v0.6 roadmap created with 26/26 requirements mapped
 
 ## Performance Metrics
 
@@ -219,6 +219,6 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-07-17T19:05:00+0800
-Stopped at: Explicit local/xAI audio engines, xAI OAuth reuse, connector/Agent decoupling, and realtime subtitle smoothing are implemented and verified in the installed runtime. Long xAI batch uploads are compressed to 16 kHz mono FLAC before REST STT; full regression passed. Next: merge PR #103 and complete the release-please publication flow.
+Last session: 2026-08-23T15:31:03+0800
+Stopped at: Roadmap created; Phase 9 is ready for planning.
 Resume file: None
