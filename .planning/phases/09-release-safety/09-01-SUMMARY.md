@@ -74,6 +74,7 @@ Each task was implemented with a separate RED and GREEN commit:
 **Post-plan regression closure:**
 
 - `2068208` — `test(09-01): align integration fixtures with recording guard contract`
+- `05a8429` — `fix(09-01): support default bootstrap on macOS Bash 3.2`
 
 ## Files Created/Modified
 
@@ -97,7 +98,9 @@ Each task was implemented with a separate RED and GREEN commit:
 - `python3 -m py_compile yulu/scripts/release_installer.py` — passed.
 - `python3 -m pytest -q tests/test_package_release.py tests/test_release_no_swiftc.py` — 29 passed.
 - `python3 -m pytest -q tests/test_release_installer_integration.py` — 13 passed after fixture alignment.
-- `make test` — 943 passed, 2 skipped; all five Swift build targets compiled successfully.
+- System-Bash default/latest bootstrap regression — 2 passed under `PATH=/usr/bin:/bin:/usr/sbin:/sbin`.
+- Phase 9 combined Python regression group — 196 passed.
+- `make test` — 935 passed, 16 skipped; all five Swift build targets compiled successfully.
 
 ## Deviations from Plan
 
@@ -110,6 +113,14 @@ Each task was implemented with a separate RED and GREEN commit:
 - **Fix:** Added one minimal idle guard fixture and installed it into the synthetic release asset plus both old and cloned dev runtimes. Production fail-closed behavior was not changed.
 - **Files modified:** `tests/test_release_installer_integration.py`
 - **Commit:** `2068208`
+
+**2. [Rule 1 - Bug] Preserved the zero-argument default handoff on macOS system Bash**
+
+- **Found during:** The first `v0.23.0-rc.1` release-candidate workflow.
+- **Issue:** Raw default stable bootstrap expanded an empty `TARGET_ARGS` array under `set -u`. macOS Bash 3.2 treated it as unbound, skipped the downloaded Release-owned installer, and cleanup masked the failure with status 0.
+- **Fix:** The handoff now invokes the downloaded installer with no array expansion for the default target and forwards the array only for explicit targets. The existing regression test runs through `/bin/bash` so the macOS compatibility boundary stays covered.
+- **Files modified:** `install.sh`, `tests/test_release_installer.py`
+- **Commit:** `05a8429`
 
 ## Known Stubs
 
