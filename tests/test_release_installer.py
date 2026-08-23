@@ -1220,6 +1220,7 @@ def test_install_dev_channel_updates_clean_existing_checkout(tmp_path, monkeypat
 
     monkeypatch.setattr(release_installer, "run", fake_run)
     monkeypatch.setattr(release_installer, "run_setup", fake_setup)
+    monkeypatch.setattr(release_installer, "assert_recording_idle", lambda _scripts: None)
 
     install_dev_channel(install_dir, config_path=tmp_path / "config.json")
 
@@ -1254,6 +1255,7 @@ def test_install_dev_channel_rejects_dirty_existing_checkout_before_fetch(tmp_pa
         return ""
 
     monkeypatch.setattr(release_installer, "run", fake_run)
+    monkeypatch.setattr(release_installer, "assert_recording_idle", lambda _scripts: None)
 
     with pytest.raises(InstallError, match="local changes"):
         install_dev_channel(install_dir, config_path=tmp_path / "config.json")
@@ -1286,6 +1288,7 @@ def test_install_dev_channel_rejects_full_sha_mismatch_even_with_same_short_pref
 
     monkeypatch.setattr(release_installer, "run", fake_run)
     monkeypatch.setattr(release_installer, "run_setup", fake_setup)
+    monkeypatch.setattr(release_installer, "assert_recording_idle", lambda _scripts: None)
 
     with pytest.raises(InstallError, match="local main differs from origin/main"):
         install_dev_channel(install_dir, config_path=tmp_path / "config.json")
@@ -1330,6 +1333,7 @@ def test_install_dev_channel_does_not_write_metadata_when_setup_fails(tmp_path, 
 
     monkeypatch.setattr(release_installer, "run", fake_run)
     monkeypatch.setattr(release_installer, "run_setup", fail_setup)
+    monkeypatch.setattr(release_installer, "assert_recording_idle", lambda _scripts: None)
 
     with pytest.raises(InstallError, match="setup failed"):
         install_dev_channel(install_dir, config_path=tmp_path / "config.json")
@@ -1391,6 +1395,7 @@ def test_in_place_dev_failure_restores_head_ref_worktree_config_and_services(tmp
     monkeypatch.setattr(release_installer, "run", fake_run)
     monkeypatch.setattr(release_installer, "run_setup", fail_setup)
     monkeypatch.setattr(release_installer, "repair_restored_runtime", repair_services)
+    monkeypatch.setattr(release_installer, "assert_recording_idle", lambda _scripts: None)
 
     with pytest.raises(InstallError, match="setup failed"):
         install_dev_channel(install_dir, config_path=config_path)
@@ -1459,6 +1464,7 @@ def test_install_dev_channel_replaces_release_runtime_with_checkout(tmp_path, mo
 
     monkeypatch.setattr(release_installer, "run", fake_run)
     monkeypatch.setattr(release_installer, "run_setup", fake_setup)
+    monkeypatch.setattr(release_installer, "assert_recording_idle", lambda _scripts: None)
 
     install_dev_channel(install_dir, config_path=tmp_path / "config.json")
 
@@ -1494,6 +1500,7 @@ def test_install_dev_channel_rolls_back_release_runtime_when_setup_fails(tmp_pat
 
     monkeypatch.setattr(release_installer, "run", fake_run)
     monkeypatch.setattr(release_installer, "run_setup", fail_setup)
+    monkeypatch.setattr(release_installer, "assert_recording_idle", lambda _scripts: None)
 
     with pytest.raises(InstallError, match="setup failed"):
         install_dev_channel(install_dir, config_path=tmp_path / "config.json")
