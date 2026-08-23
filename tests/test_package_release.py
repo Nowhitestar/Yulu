@@ -327,6 +327,44 @@ def test_installers_enforce_documented_macos_minimum():
         assert '"$MACOS_MAJOR" -lt 13' in script or '"$macos_major" -lt 13' in script
 
 
+def test_shipped_swift_builds_target_macos_13_arm64():
+    expected_outputs = {
+        "yulu/scripts/build_audio_daemon.sh": ("$BIN", "$KEYCHAIN_BIN"),
+        "yulu/scripts/build_status_agent.sh": ("$BIN", "$RECORDER_BIN", "$MEETING_PROMPT_BIN"),
+    }
+
+    for relative, outputs in expected_outputs.items():
+        script = (ROOT / relative).read_text(encoding="utf-8")
+        assert "SWIFT_TARGET=(-target arm64-apple-macosx13.0)" in script
+        for output in outputs:
+            compile_pattern = rf'swiftc\s+"\$\{{SWIFT_TARGET\[@\]\}}"\s+-o\s+"{re.escape(output)}"'
+            assert re.search(compile_pattern, script), f"{relative} does not target {output}"
+
+
+def test_ci_swift_smoke_build_targets_complete_native_inventory():
+    workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    build = workflow.split("Swift build", 1)[1].split("Skill manifest sanity", 1)[0]
+
+    for source in (
+        "audio_daemon.swift",
+        "xai_keychain.swift",
+        "window_scanner.swift",
+        "recorder_status.swift",
+        "meeting_prompt.swift",
+        "status_agent.swift",
+    ):
+        assert source in build
+    assert 'swiftc -target arm64-apple-macosx13.0 -o ".ci-build/$stem" "$f"' in build
+    assert (
+        'swiftc -target arm64-apple-macosx13.0 -o ".ci-build/xai_keychain" '
+        "yulu/scripts/xai_keychain.swift -framework Security"
+    ) in build
+    assert (
+        'swiftc -target arm64-apple-macosx13.0 -o ".ci-build/status_agent" '
+        "yulu/scripts/status_agent.swift -framework Cocoa -framework Carbon"
+    ) in build
+
+
 def test_release_publish_uploads_zip_installer_and_checksums_without_pkg():
     workflow = (ROOT / ".github" / "workflows" / "release-publish.yml").read_text(encoding="utf-8")
     release_block = workflow.split("Upload verified assets to draft GitHub Release", 1)[1]
