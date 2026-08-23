@@ -558,6 +558,7 @@ def test_main_plan_json_does_not_install(tmp_path, monkeypatch, capsys):
     assert data["install_dir"] == str(tmp_path / "install")
     assert [action["name"] for action in data["actions"]] == [
         "acquire_install_lock",
+        "assert_recording_idle",
         "resolve_github_release",
         "download_release_zip",
         "verify_sha256_checksums",
@@ -707,6 +708,231 @@ def make_runtime(root: Path, version: str = "0.5.0") -> Path:
         encoding="utf-8",
     )
     return runtime
+
+
+def write_recording_guard(runtime: Path, active: bool) -> Path:
+    guard = runtime / "yulu" / "scripts" / "migrate" / "guard.py"
+    guard.parent.mkdir(parents=True, exist_ok=True)
+    guard.write_text(
+        f"def recording_active():\n    return {active!r}\n",
+        encoding="utf-8",
+    )
+    return guard
+
+
+@pytest.mark.parametrize("target", [("--latest",), ("--dev",)])
+def test_main_refuses_active_recording_before_channel_dispatch(tmp_path, monkeypatch, capsys, target):
+    install_dir = tmp_path / "install"
+    write_recording_guard(install_dir, True)
+    calls = []
+    monkeypatch.setattr(
+        release_installer,
+        "install_release_target",
+        lambda *args, **kwargs: calls.append(("release", args, kwargs)),
+    )
+    monkeypatch.setattr(
+        release_installer,
+        "install_dev_channel",
+        lambda *args, **kwargs: calls.append(("dev", args, kwargs)),
+    )
+
+    exit_code = main(["update", *target, "--install-dir", str(install_dir)])
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert "recording is in progress" in captured.err
+    assert "Stop the recording, then retry" in captured.err
+    assert "Traceback" not in captured.err
+    assert calls == []
+
+
+def test_recording_guard_loader_uses_exact_runtime_and_restores_import_state(tmp_path):
+    idle_scripts = tmp_path / "idle" / "yulu" / "scripts"
+    active_scripts = tmp_path / "active" / "yulu" / "scripts"
+    for scripts, active in ((idle_scripts, False), (active_scripts, True)):
+        guard = scripts / "migrate" / "guard.py"
+        guard.parent.mkdir(parents=True)
+        guard.write_text(
+            "def recording_active():\n"
+            "    from record_audio import ACTIVE\n"
+            "    return ACTIVE\n",
+            encoding="utf-8",
+        )
+        (scripts / "record_audio.py").write_text(f"ACTIVE = {active!r}\n", encoding="utf-8")
+    original_path = sys.path.copy()
+    original_record_audio = sys.modules.get("record_audio")
+
+    release_installer.assert_recording_idle(idle_scripts)
+    with pytest.raises(release_installer.RecordingActiveInstallError):
+        release_installer.assert_recording_idle(active_scripts)
+
+    assert sys.path == original_path
+    assert sys.modules.get("record_audio") is original_record_audio
+
+
+def test_existing_dev_without_guard_fails_closed_before_git(tmp_path, monkeypatch):
+    install_dir = tmp_path / "install"
+    (install_dir / ".git").mkdir(parents=True)
+    commands = []
+
+    def fail_run(*args, **kwargs):
+        commands.append(args)
+        pytest.fail("missing guard must refuse before any git command")
+
+    monkeypatch.setattr(release_installer, "run", fail_run)
+
+    with pytest.raises(InstallError, match="recording safety guard"):
+        install_dev_channel(install_dir, config_path=tmp_path / "config.json")
+
+    assert commands == []
+
+
+def test_fresh_dev_install_does_not_require_recording_guard(tmp_path, monkeypatch):
+    install_dir = tmp_path / "install"
+    commands = []
+
+    def fake_run(cmd, cwd=None):
+        commands.append(cmd)
+        if cmd[:3] == ["git", "clone", "--branch"]:
+            install_dir.mkdir()
+            return ""
+        if cmd == ["git", "rev-parse", "--short", "HEAD"]:
+            return "abc1234"
+        return ""
+
+    monkeypatch.setattr(release_installer, "run", fake_run)
+    monkeypatch.setattr(release_installer, "run_setup", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        release_installer,
+        "assert_recording_idle",
+        lambda _scripts: pytest.fail("fresh install must not require an in-runtime guard"),
+    )
+
+    install_dev_channel(install_dir, run_setup_flag=False, config_path=tmp_path / "config.json")
+
+    assert commands[0][:3] == ["git", "clone", "--branch"]
+
+
+def test_late_dev_recording_refusal_rolls_back_without_setup_or_service_repair(tmp_path, monkeypatch):
+    install_dir = tmp_path / "install"
+    install_dir.mkdir()
+    (install_dir / "old.txt").write_text("old", encoding="utf-8")
+    checks = iter([None, release_installer.RecordingActiveInstallError("recording")])
+    setup_calls = []
+    repair_calls = []
+
+    def fake_run(cmd, cwd=None):
+        if cmd[:3] == ["git", "clone", "--branch"]:
+            install_dir.mkdir()
+            (install_dir / ".git").mkdir()
+            (install_dir / "new.txt").write_text("new", encoding="utf-8")
+            return ""
+        if cmd == ["git", "rev-parse", "--short", "HEAD"]:
+            return "abc1234"
+        return ""
+
+    def guard(_scripts):
+        result = next(checks)
+        if result is not None:
+            raise result
+
+    monkeypatch.setattr(release_installer, "run", fake_run)
+    monkeypatch.setattr(release_installer, "assert_recording_idle", guard)
+    monkeypatch.setattr(release_installer, "run_setup", lambda *args: setup_calls.append(args))
+    monkeypatch.setattr(release_installer, "repair_restored_runtime", lambda *args: repair_calls.append(args))
+
+    with pytest.raises(release_installer.RecordingActiveInstallError):
+        install_dev_channel(install_dir, config_path=tmp_path / "config.json")
+
+    assert (install_dir / "old.txt").read_text(encoding="utf-8") == "old"
+    assert not (install_dir / "new.txt").exists()
+    assert setup_calls == []
+    assert repair_calls == []
+
+
+def test_legacy_release_uses_verified_staged_guard_before_swap(tmp_path, monkeypatch):
+    install_dir = tmp_path / "install"
+    install_dir.mkdir()
+    (install_dir / "old.txt").write_text("old", encoding="utf-8")
+    staged_runtime = make_runtime(tmp_path / "candidate", "0.6.0")
+    write_recording_guard(staged_runtime, True)
+    events = []
+
+    monkeypatch.setattr(release_installer, "download_to_path", lambda _url, path: path.write_bytes(b"zip"))
+    monkeypatch.setattr(release_installer, "read_url_text", lambda _url: f"{'a' * 64}  yulu.zip\n")
+    monkeypatch.setattr(release_installer, "verify_checksum", lambda *_args: events.append("checksum"))
+    monkeypatch.setattr(release_installer, "extract_release_zip", lambda *_args: staged_runtime)
+    monkeypatch.setattr(release_installer, "validate_runtime_layout", lambda *_args: events.append("layout"))
+    monkeypatch.setattr(release_installer, "verify_release_bundle_security", lambda *_args: events.append("signature"))
+    monkeypatch.setattr(release_installer, "verify_runtime_manifest", lambda *_args: events.append("manifest"))
+    monkeypatch.setattr(
+        release_installer,
+        "replace_runtime_with_backup",
+        lambda *_args: pytest.fail("active staged guard must refuse before swap"),
+    )
+
+    with pytest.raises(release_installer.RecordingActiveInstallError):
+        release_installer.install_release_from_urls(
+            tag="v0.6.0",
+            asset_name="yulu.zip",
+            asset_url="https://example/yulu.zip",
+            checksums_url="https://example/checksums.txt",
+            install_dir=install_dir,
+            run_setup=False,
+            config_path=tmp_path / "config.json",
+        )
+
+    assert events == ["checksum", "layout", "signature", "manifest"]
+    assert (install_dir / "old.txt").read_text(encoding="utf-8") == "old"
+
+
+def test_late_release_recording_refusal_rolls_back_without_service_repair(tmp_path, monkeypatch):
+    install_dir = tmp_path / "install"
+    install_dir.mkdir()
+    (install_dir / "old.txt").write_text("old", encoding="utf-8")
+    staged_runtime = make_runtime(tmp_path / "candidate", "0.6.0")
+    (staged_runtime / "new.txt").write_text("new", encoding="utf-8")
+    checks = iter([None, release_installer.RecordingActiveInstallError("recording")])
+    repair_calls = []
+
+    monkeypatch.setattr(release_installer, "download_to_path", lambda _url, path: path.write_bytes(b"zip"))
+    monkeypatch.setattr(release_installer, "read_url_text", lambda _url: f"{'a' * 64}  yulu.zip\n")
+    monkeypatch.setattr(release_installer, "verify_checksum", lambda *_args: None)
+    monkeypatch.setattr(release_installer, "extract_release_zip", lambda *_args: staged_runtime)
+    monkeypatch.setattr(release_installer, "validate_runtime_layout", lambda *_args: None)
+    monkeypatch.setattr(release_installer, "verify_release_bundle_security", lambda *_args: None)
+    monkeypatch.setattr(release_installer, "verify_runtime_manifest", lambda *_args: None)
+
+    def guard(_scripts):
+        result = next(checks)
+        if result is not None:
+            raise result
+
+    monkeypatch.setattr(release_installer, "assert_recording_idle", guard)
+    monkeypatch.setattr(
+        release_installer,
+        "_run_setup_script",
+        lambda *_args, **_kwargs: pytest.fail("setup must not run after active recheck"),
+    )
+    monkeypatch.setattr(
+        release_installer,
+        "repair_restored_runtime",
+        lambda *args, **kwargs: repair_calls.append((args, kwargs)),
+    )
+
+    with pytest.raises(release_installer.RecordingActiveInstallError):
+        release_installer.install_release_from_urls(
+            tag="v0.6.0",
+            asset_name="yulu.zip",
+            asset_url="https://example/yulu.zip",
+            checksums_url="https://example/checksums.txt",
+            install_dir=install_dir,
+            config_path=tmp_path / "config.json",
+        )
+
+    assert (install_dir / "old.txt").read_text(encoding="utf-8") == "old"
+    assert not (install_dir / "new.txt").exists()
+    assert repair_calls == []
 
 
 def test_validate_runtime_layout_accepts_matching_version(tmp_path):
