@@ -323,6 +323,8 @@ def test_pkg_upgrade_forces_lifecycle_refresh_and_registers_mcp_before_host():
     assert "--agent hermes --agent codex --agent claude --agent openclaw" in registration
     assert "--detected-only --non-fatal" in registration
     assert "Hermes CLI and its Yulu phase MCP registrations are required" not in script
+    assert '"provider": "auto"' in script
+    assert '"provider": "hermes"' not in script
 
 
 def test_release_setup_preserves_ci_built_signed_ui_dist():
