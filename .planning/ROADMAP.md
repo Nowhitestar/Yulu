@@ -250,17 +250,26 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 ### Phase 9: Release Safety
 
-**Goal**: Users can install or update the advertised stable macOS release without running moving repository code, violating the macOS 13 floor, interrupting a recording, or being forced to install optional integrations.
+**Goal**: A signed release candidate proves the stable-channel install/update contract without running moving repository code, violating the macOS 13 floor, interrupting a recording, or forcing optional integrations; public latest-stable post-release smoke remains Phase 13.
 **Depends on**: Phase 8
 **Requirements**: DIST-01, DIST-02, DIST-03, DIST-04
 **Success Criteria** (what must be TRUE):
 
-  1. A user installs the latest stable release through an installer paired to that release, without executing setup code from `main`
+  1. A release candidate contains a version-paired installer, and the stable entry path resolves to release-owned code without executing setup code from `main`; the public latest-stable smoke check remains Phase 13
   2. A release advertised for macOS 13+ runs on macOS 13, and CI rejects an artifact whose Mach-O minimum OS exceeds 13
   3. Starting install or update during an active recording refuses before stopping daemons and leaves the recording intact
   4. A clean core install completes without Hermes, OpenClaw, calendar tools, or automatic Homebrew installation
 
-**Plans**: TBD
+**Plans**: 3 plans (2 waves)
+
+**Wave 1**
+
+- [ ] 09-01-PLAN.md — Version-paired stable bootstrap and shared active-recording update guard (DIST-01, DIST-03)
+- [ ] 09-02-PLAN.md — macOS 13 Swift targets and final-artifact `vtool` gate (DIST-02)
+
+**Wave 2** *(blocked on Wave 1; closes with real-host checkpoint)*
+
+- [ ] 09-03-PLAN.md — Core-only install boundary plus release-candidate/macOS 13/live-recording/clean-host acceptance (DIST-04)
 
 ### Phase 10: Provider Model & xAI Foundation
 
@@ -312,14 +321,14 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 **Goal**: Users can discover, configure, or defer non-core capabilities, and the shipped release presents one consistent supported journey across product and documentation surfaces.
 **Depends on**: Phase 12
-**Requirements**: OPT-01, OPT-02, OPT-03, DOCS-01, DOCS-02
+**Requirements**: OPT-01, OPT-02, OPT-03, DOCS-01, DOCS-02, DOCS-03
 **Success Criteria** (what must be TRUE):
 
   1. After Core Activation, a user can configure or defer calendar integration without blocking recording or summaries
   2. A user can configure or defer sharing destinations, and a disabled share action opens the relevant setup surface
   3. A user can configure or defer a Conversation Provider independently of the Summary Provider
   4. README and website describe the same stable install path, provider types, cloud disclosures, optional capabilities, and first-success journey
-  5. A real release install shows the same shipped version and support boundary in its assets, installer, version metadata, About surface, and social preview
+  5. After publication, the actual latest stable release installs through its release-owned installer and shows the same shipped version and support boundary in assets, metadata, About, and social preview
 
 **Plans**: TBD
 **UI hint**: yes
@@ -339,7 +348,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 6. Agent-Orchestrated Provisioning | 4/4 | Complete    | 2026-05-30 |
 | 7. Seamless Auto-Migration | 3/3 | Complete    | 2026-05-30 |
 | 8. Multi-Agent Providers | 1/1 | Complete    | 2026-05-30 |
-| 9. Release Safety | 0/TBD | Not started | - |
+| 9. Release Safety | 0/3 | Planned | - |
 | 10. Provider Model & xAI Foundation | 0/TBD | Not started | - |
 | 11. State-Driven Core Activation | 0/TBD | Not started | - |
 | 12. Agent Runtime & Gateway Connections | 0/TBD | Not started | - |

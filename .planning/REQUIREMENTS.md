@@ -8,7 +8,7 @@
 
 ### Reliable Distribution (DIST)
 
-- [ ] **DIST-01**: A user can install the latest stable release from a version-paired installer that does not execute the repository's moving `main` setup code
+- [ ] **DIST-01**: A release candidate contains a version-paired installer whose stable entry path never executes the repository's moving `main` setup code
 - [ ] **DIST-02**: A release artifact advertised for macOS 13+ is built with a macOS 13 deployment target and rejected by CI when its Mach-O minimum OS is higher
 - [ ] **DIST-03**: An install or update refuses to stop daemons while a recording is active and leaves the recording intact
 - [ ] **DIST-04**: A user can complete core installation without Hermes, OpenClaw, calendar tooling, or an automatic Homebrew installation
@@ -52,6 +52,7 @@
 
 - [ ] **DOCS-01**: README and website explain the same stable install path, supported provider types, cloud disclosures, optional capabilities, and first-success journey
 - [ ] **DOCS-02**: Release assets, installer, version metadata, About surface, and social preview identify the same shipped version and support boundary
+- [ ] **DOCS-03**: After publication, a user can install the actual latest stable release through its release-owned installer and pass the post-release smoke check
 
 ## Future Requirements
 
@@ -106,8 +107,9 @@
 | OPT-03 | Phase 13 | Pending |
 | DOCS-01 | Phase 13 | Pending |
 | DOCS-02 | Phase 13 | Pending |
+| DOCS-03 | Phase 13 | Pending |
 
-**Coverage:** 26/26 v0.6 requirements mapped exactly once.
+**Coverage:** 27/27 v0.6 requirements mapped exactly once.
 
 ---
 *Requirements defined: 2026-08-23*

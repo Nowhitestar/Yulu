@@ -9,7 +9,7 @@
 
 | ID | Description | Research Support |
 |----|-------------|------------------|
-| DIST-01 | A user can install the latest stable release from a version-paired installer that does not execute the repository's moving `main` setup code | The release workflow already publishes `install.sh`, and `package.sh` already embeds the exact same-release `release_installer.py`; the missing link is routing stable bootstrap traffic to that Release asset and pinning the selected tag. [VERIFIED: codebase — `install.sh:18-21,179-209`; `packaging/scripts/package.sh:196-199,226-247`; `.github/workflows/release-publish.yml:199-267`] |
+| DIST-01 | A signed draft/pre-release candidate has a version-paired stable-channel installer contract that does not execute the repository's moving `main` setup code; public latest-stable post-release smoke is Phase 13 DOCS-03 | The release workflow already produces `install.sh`, and `package.sh` already embeds the exact same-release `release_installer.py`; the missing link is routing stable-channel bootstrap code to that Release asset, pinning the selected tag, and verifying the exact signed candidate without claiming public latest-stable publication. [VERIFIED: codebase — `install.sh:18-21,179-209`; `packaging/scripts/package.sh:196-199,226-247`; `.github/workflows/release-publish.yml:199-267`] |
 | DIST-02 | A release artifact advertised for macOS 13+ is built with a macOS 13 deployment target and rejected by CI when its Mach-O minimum OS is higher | Both Swift build scripts omit `-target`; all five currently shipped Mach-O binaries report `minos 26.0`. Compiling the same sources with `-target arm64-apple-macosx13.0` succeeds and emits `minos 13.0`; a final-artifact `xcrun vtool -show-build` gate is therefore sufficient and necessary. [VERIFIED: codebase + local compile/vtool probe — `build_audio_daemon.sh:20-28`; `build_status_agent.sh:21-26`] |
 | DIST-03 | An install or update refuses to stop daemons while a recording is active and leaves the recording intact | Phase 7 already provides the canonical status-socket predicate and proves zero unloads on refusal. `release_installer.py` currently reaches runtime replacement and setup without calling it. Reuse the predicate before runtime mutation and before setup can stop daemons. [VERIFIED: codebase — `migrate/guard.py:49-97,100-148`; `release_installer.py:1003-1039,1114-1161,1292-1313`; `tests/test_migrate_recording_guard.py:128-175`] |
 | DIST-04 | A user can complete core installation without Hermes, OpenClaw, calendar tooling, or an automatic Homebrew installation | `setup.sh` currently auto-runs Homebrew's remote installer, `setup_deps.sh` unconditionally installs `gog`/`cloudflared`, `_deps_ready()` requires them, and setup aborts when Hermes registration fails. Each blocker has an existing optional/non-fatal seam to reuse. [VERIFIED: codebase — `setup.sh:125-169,269-383,659-669`; `setup_deps.sh:37-105`; `provision/registry.py:214-224`; `setup_daemons.sh:144-160`] |
@@ -17,7 +17,7 @@
 
 ## Summary
 
-Phase 9 is a wiring and release-gate phase, not an installer rewrite. The repository already produces the correct immutable unit: every GitHub Release contains a `dist/install.sh` whose embedded Python payload is byte-for-byte the `release_installer.py` from that release, and the workflow uploads and re-download-compares `install.sh`, the runtime zip, and `checksums.txt` before publication. The public bootstrap still bypasses that unit by downloading the helper from `raw/main`; stable install must instead enter through the Release-owned installer. [VERIFIED: codebase — `packaging/scripts/package.sh:226-247`; `tests/test_package_release.py:408-424`; `.github/workflows/release-publish.yml:199-267`]
+Phase 9 is a wiring and release-candidate gate phase, not an installer rewrite or a public stable-release publication phase. The repository already produces the correct immutable unit: a candidate Release contains a `dist/install.sh` whose embedded Python payload is byte-for-byte the `release_installer.py` from that release, and the workflow uploads and re-download-compares `install.sh`, the runtime zip, and `checksums.txt`. The current public bootstrap code still bypasses that unit by downloading the helper from `raw/main`; the stable-channel contract must instead enter through the Release-owned installer. Phase 9 verifies that behavior hermetically and against a signed draft/pre-release candidate; Phase 13 DOCS-03 owns the public `latest stable` post-release smoke. [VERIFIED: codebase — `packaging/scripts/package.sh:226-247`; `tests/test_package_release.py:408-424`; `.github/workflows/release-publish.yml:199-267`]
 
 The current macOS-compatibility failure has a direct root cause: local `swiftc` defaults to target `arm64-apple-macosx26.0`, while neither build script supplies a target triple. Consequently all five shipped executables currently encode `minos 26.0`. A local compile probe of those five sources with `-target arm64-apple-macosx13.0` succeeded and every resulting binary encoded `minos 13.0`; no Swift source redesign is required because newer audio APIs are already availability-gated. [VERIFIED: local probe 2026-08-23; codebase — `audio_daemon.swift:1249,1979`; `status_agent.swift:2374`]
 
@@ -378,20 +378,14 @@ All factual claims above were verified against the current codebase, local toolc
 
 ## Open Questions
 
-1. **Real macOS 13 hardware/VM acceptance remains unavailable locally.**
-   - What we know: all five sources compile with the explicit 13.0 target and the output load commands report `minos 13.0`. Apple's current Xcode matrix supports deployment targets that include macOS 13. [VERIFIED: local compile; CITED: https://developer.apple.com/xcode/system-requirements]
-   - What's unclear: whether the complete signed/notarized runtime starts, records, transcribes, and displays status on a clean macOS 13 host.
-   - Recommendation: make this an end-of-phase human gate, not a code-planning blocker.
+1. **RESOLVED — macOS 13 compatibility is a final human checkpoint.**
+   - Resolution: automated compile/load-command checks enforce `arm64-apple-macosx13.0` and exact `minos 13.0` for all five final binaries, while blocking checkpoint 09-03-03 verifies the complete signed/notarized release candidate starts and records on a clean macOS 13 arm64 host. Static/local results are not presented as runtime acceptance. [VERIFIED basis: local compile; CITED: https://developer.apple.com/xcode/system-requirements]
 
-2. **First protected update from a pre-v0.6 runtime needs the new Release installer path.**
-   - What we know: `migrate/guard.py` is present in tags v0.6.0+ but not v0.5.x; old `yulu update` executes its locally installed old helper. [VERIFIED: git history; `yulu:121-129`]
-   - What's unclear: which historical public cohort must be upgraded directly from v0.5.x in the Phase 9 release runbook.
-   - Recommendation: acceptance should exercise the new Release `install.sh` over a legacy fixture and load the guard from the verified staged runtime. Do not claim that old already-installed code retroactively gains the guard.
+2. **RESOLVED — legacy release updates enter through the new Release installer and use the verified staged guard.**
+   - Resolution: a pre-v0.6 runtime is not assumed to gain a guard retroactively. The new signed draft/pre-release candidate `install.sh` may perform only read-only download plus checksum/signature/manifest/layout verification, then loads `migrate.guard.recording_active` from that verified staged runtime and refuses before swap when active. Dev updates without a trusted installed guard fail closed. Checkpoint 09-03-03 exercises this legacy path. [VERIFIED basis: git history; `yulu:121-129`; `release_installer.py` transaction seams]
 
-3. **The exact core formula list should be confirmed by postcondition, not by historical grouping.**
-   - What we know: compatible Node is required by `setup_ui.sh`; `terminal-notifier` is explicitly skippable; `gog`/`cloudflared` are calendar-only; `ffmpeg`/`sox` remain in current core dependency setup. [VERIFIED: `setup_ui.sh`; `setup.sh:507-516`; `CLAUDE.md:53-65`]
-   - What's unclear: whether `sox` is required for the minimum Phase 9 recording path or only fallback processing.
-   - Recommendation: do not broaden Phase 9 into audio dependency redesign. Remove only proven optional blockers (`gog`, `cloudflared`, Agent CLIs, package-manager presence, skippable notifier); retain the existing audio/Node postconditions unless a targeted production-path test proves one optional.
+3. **RESOLVED — Phase 9 core dependencies retain ffmpeg, sox, and compatible Node.**
+   - Resolution: `_deps_ready()` and `setup_deps.sh` use exactly ffmpeg, sox, and `lib/common.sh::compatible_node_bin` as the core postcondition. `terminal-notifier` remains skippable; `gog`/`cloudflared` remain calendar-only behind `YULU_INSTALL_CALENDAR=1`; Agent CLIs and package-manager presence are not core readiness requirements. Phase 9 does not redesign audio dependencies. [VERIFIED basis: `setup_ui.sh`; `setup.sh:507-516`; `CLAUDE.md:53-65`]
 
 ## Environment Availability
 
@@ -426,7 +420,7 @@ All factual claims above were verified against the current codebase, local toolc
 
 | Req ID | Behavior | Test Type | Automated Command | File Exists? |
 |--------|----------|-----------|-------------------|--------------|
-| DIST-01 | Raw stable bootstrap selects Release `install.sh`; packaged asset embeds exact helper, pins exact tag, and stable path never fetches raw-main helper | Hermetic shell/package unit | `python3 -m pytest -q tests/test_package_release.py -k 'install or release'` | Existing file; new cases Wave 0 |
+| DIST-01 | Hermetic stable-channel bootstrap selects Release `install.sh`; signed candidate asset embeds exact helper, pins exact tag, and never fetches raw-main helper | Hermetic shell/package unit + signed draft/pre-release candidate evidence | `python3 -m pytest -q tests/test_release_installer.py -k 'target or bootstrap or packaged or main'`; checkpoint 09-03-03 | Existing test file; new cases Wave 0; public latest-stable smoke Phase 13 DOCS-03 |
 | DIST-02 | Every compile uses macOS 13 target; exact extracted Release runtime has five `minos 13.0` binaries | Static unit + macOS CI artifact integration | `python3 -m pytest -q tests/test_package_release.py -k 'macos or target'`; `bash packaging/scripts/check_macos_deployment_target.sh <five paths>` | Validator absent — Wave 0 |
 | DIST-03 | Active release and dev update refuse before mutation/setup; runtime bytes, daemon PIDs, and WAV remain intact | Unit + live manual | `python3 -m pytest -q tests/test_release_installer.py -k recording tests/test_migrate_recording_guard.py` | Installer cases absent — Wave 0 |
 | DIST-04 | Core setup/provision succeeds with Hermes/OpenClaw/gog/cloudflared/brew absent when core tools are usable; no optional install command runs | Hermetic shell + unit | `python3 -m pytest -q tests/test_setup_decomposition.py tests/test_provision_registry.py` | Existing files; inverse cases Wave 0 |
@@ -463,7 +457,7 @@ bash packaging/scripts/check_macos_deployment_target.sh \
 
 - **Per task commit:** task-specific pytest file(s), `bash -n`, and ShellCheck on touched shell.
 - **Per wave merge:** the 170-test relevant suite above.
-- **Phase gate:** full pytest green, real release workflow passes extracted-runtime `vtool`, stable installer asset bytes match uploaded bytes, live recording refusal passes, and clean macOS 13 acceptance is recorded.
+- **Phase gate:** after implementation, all planned automated commands must be green and blocking checkpoint 09-03-03 must record one traceable signed draft/pre-release candidate whose exact bytes pass extracted-runtime `vtool`, macOS 13 startup, live recording refusal, legacy staged-guard, and clean-host core-install checks. Public latest-stable publication/smoke remains Phase 13 DOCS-03.
 
 ### Wave 0 Gaps
 
@@ -476,10 +470,10 @@ bash packaging/scripts/check_macos_deployment_target.sh \
 
 ### Manual Acceptance
 
-1. Publish a draft/pre-release through the real workflow; ensure the `vtool` step passes before upload/publication and re-download the exact assets.
-2. On a clean macOS 13 arm64 host, run the Release-owned `install.sh`, then complete a real recording and confirm native helpers start without `bad CPU type`/minimum-OS loader errors.
-3. Start a real recording, note the WAV path/size and launchd PIDs, then run both stable update and dev update paths. Expected: non-zero refusal, unchanged runtime VERSION/metadata, unchanged daemon PIDs, WAV remains open/growing and completes normally after user stop.
-4. In a hermetic or clean user account with no Hermes/OpenClaw/gog/cloudflared and no Homebrew, but with the declared core commands available, complete core setup. Expected: no remote Homebrew bootstrap and no required-Agent/calendar error.
+1. Produce a signed/notarized draft or narrowly published pre-release candidate through the real credentialed workflow; leave public latest stable unchanged, verify the final-artifact `vtool` gate, and re-download the exact assets with their checksums/attestation evidence.
+2. On a clean macOS 13 arm64 host, run that candidate's packaged/version-pinned `install.sh`, start all shipped native paths, then complete a real recording and confirm no minimum-OS loader error.
+3. Start a real recording, note the WAV path/size and launchd PIDs, then run both the candidate's version-pinned stable-channel update/reinstall and the dev update path. Expected: non-zero refusal, unchanged runtime VERSION/metadata, unchanged daemon PIDs, WAV remains open/growing and completes normally after user stop. Repeat the release refusal over a legacy pre-v0.6 fixture to prove the verified staged guard runs before swap.
+4. In a clean user/VM with no Hermes/OpenClaw/gog/cloudflared/terminal-notifier and no Homebrew, but with ffmpeg, sox, and a compatible Node available, complete the candidate core setup. Expected: no remote Homebrew bootstrap or optional mutation, no required-Agent/calendar error, and calendar remains deferred without `YULU_INSTALL_CALENDAR=1`.
 
 ## Security Domain
 
