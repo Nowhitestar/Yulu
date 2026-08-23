@@ -145,6 +145,23 @@ def write_fake_pkg_tools(bin_dir: Path) -> None:
     mkbom.chmod(0o755)
 
 
+def write_fake_xcrun(bin_dir: Path) -> Path:
+    args_log = bin_dir / "xcrun-args.log"
+    xcrun = bin_dir / "xcrun"
+    write_file(
+        xcrun,
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        "printf '%s\\n' \"$@\" > \"$YULU_XCRUN_ARGS\"\n"
+        "if [[ \"${YULU_XCRUN_FAIL:-0}\" == \"1\" ]]; then\n"
+        "  exit 7\n"
+        "fi\n"
+        "printf '%s\\n' \"${YULU_VTOOL_OUTPUT:-}\"\n",
+    )
+    xcrun.chmod(0o755)
+    return args_log
+
+
 def test_package_writes_expected_zip_with_runtime_layout(tmp_path):
     project = make_project(tmp_path)
     dist = tmp_path / "dist"
@@ -363,6 +380,130 @@ def test_ci_swift_smoke_build_targets_complete_native_inventory():
         'swiftc -target arm64-apple-macosx13.0 -o ".ci-build/status_agent" '
         "yulu/scripts/status_agent.swift -framework Cocoa -framework Carbon"
     ) in build
+
+
+def test_deployment_target_checker_fails_closed_on_missing_input(tmp_path):
+    checker = ROOT / "packaging" / "scripts" / "check_macos_deployment_target.sh"
+
+    no_args = run(["bash", str(checker)], cwd=ROOT)
+    missing = run(["bash", str(checker), str(tmp_path / "missing binary")], cwd=ROOT)
+
+    assert no_args.returncode != 0
+    assert "binary path" in no_args.stderr
+    assert missing.returncode != 0
+    assert str(tmp_path / "missing binary") in missing.stderr
+
+
+def test_deployment_target_checker_requires_macos_13_arm64_metadata(tmp_path):
+    checker = ROOT / "packaging" / "scripts" / "check_macos_deployment_target.sh"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    args_log = write_fake_xcrun(bin_dir)
+    binary = tmp_path / "native helper"
+    write_file(binary, "mach-o\n")
+    base_env = {
+        "PATH": f"{bin_dir}:{os.environ['PATH']}",
+        "YULU_XCRUN_ARGS": str(args_log),
+    }
+
+    valid = run(
+        ["bash", str(checker), str(binary)],
+        cwd=ROOT,
+        env={**base_env, "YULU_VTOOL_OUTPUT": "platform MACOS\nminos 13.0\nsdk 26.0"},
+    )
+    assert valid.returncode == 0, valid.stderr + valid.stdout
+    assert args_log.read_text(encoding="utf-8").splitlines() == [
+        "vtool",
+        "-arch",
+        "arm64",
+        "-show-build",
+        str(binary),
+    ]
+
+    failures = (
+        ("wrong minos", "platform MACOS\nminos 14.0"),
+        ("wrong platform", "platform IOS\nminos 13.0"),
+        ("missing platform", "minos 13.0"),
+        ("missing minos", "platform MACOS"),
+    )
+    for name, output in failures:
+        result = run(
+            ["bash", str(checker), str(binary)],
+            cwd=ROOT,
+            env={**base_env, "YULU_VTOOL_OUTPUT": output},
+        )
+        assert result.returncode != 0, name
+        assert str(binary) in result.stderr
+
+    tool_failure = run(
+        ["bash", str(checker), str(binary)],
+        cwd=ROOT,
+        env={**base_env, "YULU_XCRUN_FAIL": "1"},
+    )
+    assert tool_failure.returncode != 0
+    assert str(binary) in tool_failure.stderr
+
+
+def test_deployment_target_checker_preserves_metacharacter_path(tmp_path):
+    checker = ROOT / "packaging" / "scripts" / "check_macos_deployment_target.sh"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    args_log = write_fake_xcrun(bin_dir)
+    marker = tmp_path / "injected"
+    binary = tmp_path / f"native helper; touch {marker.name}"
+    write_file(binary, "mach-o\n")
+
+    result = run(
+        ["bash", str(checker), str(binary)],
+        cwd=tmp_path,
+        env={
+            "PATH": f"{bin_dir}:{os.environ['PATH']}",
+            "YULU_XCRUN_ARGS": str(args_log),
+            "YULU_VTOOL_OUTPUT": "platform MACOS\nminos 13.0",
+        },
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert args_log.read_text(encoding="utf-8").splitlines()[-1] == str(binary)
+    assert not marker.exists()
+
+
+def test_deployment_target_workflow_gate_checks_exact_release_inventory():
+    checker = "packaging/scripts/check_macos_deployment_target.sh"
+    ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    release = (ROOT / ".github" / "workflows" / "release-publish.yml").read_text(encoding="utf-8")
+    ci_build = ci.split("Swift build", 1)[1].split("Skill manifest sanity", 1)[0]
+    release_validation = release.split("Package release assets", 1)[1].split(
+        "Attest release zip provenance", 1
+    )[0]
+    shipped = (
+        "audio_daemon",
+        "xai_keychain",
+        "status_agent",
+        "recorder_status",
+        "meeting_prompt",
+    )
+
+    assert checker in ci
+    assert checker in release
+    for binary in shipped:
+        assert f".ci-build/{binary}" in ci_build
+    for path in (
+        "yulu/scripts/Yulu.app/Contents/MacOS/audio_daemon",
+        "yulu/scripts/Yulu.app/Contents/MacOS/xai_keychain",
+        "yulu/scripts/StatusAgent.app/Contents/MacOS/status_agent",
+        "yulu/scripts/recorder_status",
+        "yulu/scripts/meeting_prompt",
+    ):
+        assert path in release_validation
+    assert "verify_release_bundle_security(runtime, require_staple=True)" in release_validation
+    assert "verify_runtime_manifest(runtime)" in release_validation
+    gate = release.index(checker, release.index("Package release assets"))
+    assert release.index("verify_runtime_manifest(runtime)") < gate
+    assert gate < release.index("Attest release zip provenance")
+    assert gate < release.index("gh release upload")
+    assert gate < release.index("Publish completed GitHub Release")
+    assert "shell=True" not in release_validation
 
 
 def test_release_publish_uploads_zip_installer_and_checksums_without_pkg():
