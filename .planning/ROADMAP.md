@@ -90,6 +90,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 **Wave 3** *(blocked on 02-03: shares audio_daemon.swift; has the blocking human-verify)*
 
 - [x] 02-04-PLAN.md — Core Audio process-tap arm (14.4+) behind if #available + NSAudioCaptureUsageDescription/entitlement/frameworks + VM/clean-machine validation checkpoint (PLAT-02, D-01/D-03/D-05) [checkpoint]
+
 **Research**: needs deeper per-phase research (Core-Audio-taps migration) — the SCK→tap swap is HIGH-confidence on the API but must be tested on 14.2 and 13.x VMs to verify the version gate + fallback (the dev's machine never reproduces the failure).
 **PROJECT.md update needed**: the SCK→Core-Audio-taps swap raises the effective macOS floor 13→14.4 for the audio path — keeping the 13–14.3 SCK arm vs raising the floor is a **constraint decision** to record in PROJECT.md, not an eng choice.
 **Parallelization**: the Swift `CaptureBackend` seam (ARCH #10) is independent of the Python detection/provisioning stack and can proceed in parallel after Phase 1 — they meet only at the `record_audio.py ↔ CaptureBackend` boundary.
@@ -120,6 +121,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 **Wave 3** *(blocked on 03-01 + 03-02: assembles the report in doctor)*
 
 - [x] 03-03-PLAN.md — doctor.py host_capabilities section (probes + default_providers aggregation) + §5d source-vs-runtime root fix (DETECT-01/03/05, D-05/D-07)
+
 **Research**: standard pattern (skip research-phase) — the report schema, login-shell PATH, and tri-state are well-specified across STACK/ARCHITECTURE/PITFALLS; schema design, not research.
 **Hard prerequisite (in-phase)**: resolve the `mlx_python` interpreter ambiguity (DETECT-04) before or within this phase — detection is meaningless without a defined "daemon interpreter" to probe. Tri-state must land here so a boolean never drives a "skip install" decision downstream.
 
@@ -147,6 +149,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] 04-02-PLAN.md — CapabilitiesSection (provenance label + resolved path + tri-state badge) slotted into settings (SET-01 consumer, SET-02, D-02)
 - [x] 04-03-PLAN.md — extend TranscriptionSection: mode radios local/cloud-fallback/cloud-priority + cloud COMMAND field (not a key) + detected-model selector (TRANS-01, TRANS-02, SET-04, D-03/D-04/D-05)
 - [x] 04-04-PLAN.md — skippable first-run Onboarding overlay reflecting live permission status, dismissable without completing (SET-03, D-06)
+
 **Research**: standard pattern (skip research-phase) — tRPC-over-`doctor.py --json` and the settings UI follow established codebase conventions.
 **UI hint**: yes
 
@@ -173,6 +176,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 **Wave 2** *(blocked on 05-01 + 05-03 — D-06 hard sequencing: the cloud picker ships only after the runtime split/lock)*
 
 - [x] 05-04-PLAN.md — wire the cloud-capable folder picker: audio.output_dir -> restart:audiodaemon propagation + cloud-warn-before-accept in the picker + live-cloud/live-restart human-verify checkpoint (DATA-01, DATA-03)
+
 **Research**: needs deeper per-phase research (cloud-sync data folder) — iCloud pinning robustness (`com.apple.fileprovider.pinned` vs File Provider API; Sequoia's 10-item Finder cap) and the content/runtime split for `vocab`/`prompts` SQLite need validation against real sync behavior.
 **Hard sequencing (in-phase)**: the content-vs-runtime separation (DATA-02) MUST land before the folder picker is wired to cloud roots (DATA-01/DATA-03) — users must never be able to put SQLite/sockets in a synced folder. Tri-state detection (Phase 3) gates the reuse-vs-install decision here.
 
@@ -200,6 +204,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 **Wave 2** *(blocked on 06-01/02/03 — composes all three)*
 
 - [x] 06-04-PLAN.md — provision/cli.py resume-walk driver + skill.py + yulu dispatcher wiring + setup.sh skill decouple (PROV-01/PROV-05, D-02/D-05/D-08)
+
 **Research**: needs deeper per-phase research (the spike IS the research) — `/gsd-plan-phase --research-phase 6`. FEATURES.md flags agent-as-primary-provisioning-UX as LOW confidence; STACK.md flags `uv`/`uvx` as "EVALUATE in spike." Exit criteria are explicit: partial-failure/resume (kill-at-step-N) and tampered-asset rejection, not just the happy path.
 **Spike-gated open question**: WHO calls provisioning — host agent vs `curl|bash`. The step registry itself is BUILD NOW regardless (the decomposed `setup_*.sh` scripts from Phase 1 map 1:1 onto these steps); the spike decides only the *caller*. If the spike fails, the verified signed-zip path stays primary.
 
@@ -265,7 +270,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 **Wave 1**
 
 - [x] 09-01-PLAN.md — Version-paired stable bootstrap and shared active-recording update guard (DIST-01, DIST-03)
-- [ ] 09-02-PLAN.md — macOS 13 Swift targets and final-artifact `vtool` gate (DIST-02)
+- [x] 09-02-PLAN.md — macOS 13 Swift targets and final-artifact `vtool` gate (DIST-02)
 
 **Wave 2** *(blocked on Wave 1; closes with real-host checkpoint)*
 
@@ -348,7 +353,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 6. Agent-Orchestrated Provisioning | 4/4 | Complete    | 2026-05-30 |
 | 7. Seamless Auto-Migration | 3/3 | Complete    | 2026-05-30 |
 | 8. Multi-Agent Providers | 1/1 | Complete    | 2026-05-30 |
-| 9. Release Safety | 1/3 | In Progress | - |
+| 9. Release Safety | 2/3 | In Progress|  |
 | 10. Provider Model & xAI Foundation | 0/TBD | Not started | - |
 | 11. State-Driven Core Activation | 0/TBD | Not started | - |
 | 12. Agent Runtime & Gateway Connections | 0/TBD | Not started | - |

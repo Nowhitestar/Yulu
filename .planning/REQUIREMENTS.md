@@ -9,7 +9,7 @@
 ### Reliable Distribution (DIST)
 
 - [x] **DIST-01**: A release candidate contains a version-paired installer whose stable entry path never executes the repository's moving `main` setup code
-- [ ] **DIST-02**: A release artifact advertised for macOS 13+ is built with a macOS 13 deployment target and rejected by CI when its Mach-O minimum OS is higher
+- [x] **DIST-02**: A release artifact advertised for macOS 13+ is built with a macOS 13 deployment target and rejected by CI when its Mach-O minimum OS is higher
 - [x] **DIST-03**: An install or update refuses to stop daemons while a recording is active and leaves the recording intact
 - [ ] **DIST-04**: A user can complete core installation without Hermes, OpenClaw, calendar tooling, or an automatic Homebrew installation
 
@@ -82,7 +82,7 @@
 | Requirement | Phase | Status |
 |-------------|-------|--------|
 | DIST-01 | Phase 9 | Complete |
-| DIST-02 | Phase 9 | Pending |
+| DIST-02 | Phase 9 | Complete |
 | DIST-03 | Phase 9 | Complete |
 | DIST-04 | Phase 9 | Pending |
 | PRVD-01 | Phase 10 | Pending |

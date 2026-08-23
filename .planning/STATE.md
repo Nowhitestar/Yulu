@@ -1,17 +1,17 @@
 ---
 gsd_state_version: 1.0
 milestone: v0.6
-milestone_name: Reliable Distribution & Activation
+milestone_name: milestone
 status: executing
-stopped_at: Completed 09-01-PLAN.md
-last_updated: "2026-08-23T08:43:07.571Z"
-last_activity: 2026-08-23 -- Completed Plan 09-01 stable bootstrap and recording-safe updates
+stopped_at: Completed 09-02-PLAN.md
+last_updated: "2026-08-23T08:55:40.956Z"
+last_activity: 2026-08-23
 progress:
   total_phases: 13
   completed_phases: 8
   total_plans: 32
-  completed_plans: 30
-  percent: 94
+  completed_plans: 31
+  percent: 62
 ---
 
 # Project State
@@ -26,9 +26,9 @@ See: .planning/PROJECT.md (updated 2026-08-23)
 ## Current Position
 
 Phase: 9 (Release Safety) — EXECUTING
-Plan: 2 of 3
+Plan: 3 of 3
 Status: Ready to execute
-Last activity: 2026-08-23 -- Completed Plan 09-01 stable bootstrap and recording-safe updates
+Last activity: 2026-08-23
 
 ## Performance Metrics
 
@@ -87,6 +87,7 @@ Last activity: 2026-08-23 -- Completed Plan 09-01 stable bootstrap and recording
 | Phase 07 P03 | 38 | 3 tasks | 7 files |
 | Phase 08 P01 | 14 | 2 tasks | 2 files |
 | Phase 09 P01 | 14min | 2 tasks | 4 files |
+| Phase 09 P02 | 6min | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -177,6 +178,8 @@ Recent decisions affecting current work:
 - [Phase 09]: Raw stable bootstrap executes a GitHub Release-owned install.sh; raw main is dev-only. — Stable installs must be version-paired and immutable.
 - [Phase 09]: Existing updates use the installed guard when present; legacy release updates use only the verified staged guard. — Recording admission must come from trusted code without blocking verified legacy upgrades.
 - [Phase 09]: Recording-active rollback restores bytes and configuration but skips service repair. — A refusal path must not disturb the active recorder.
+- [Phase 09]: Every shipped Swift compile declares arm64-apple-macosx13.0; host-toolchain defaults are never release inputs. — The advertised macOS 13 floor must be encoded by the compiler, not inferred from source availability guards.
+- [Phase 09]: One fixed five-binary vtool gate validates both CI outputs and exact extracted release bytes. — The release runtime, after signature and manifest verification, is the authoritative publication boundary.
 
 ### Pending Todos
 
@@ -223,6 +226,6 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-08-23T08:43:07.566Z
-Stopped at: Completed 09-01-PLAN.md
+Last session: 2026-08-23T08:55:40.952Z
+Stopped at: Completed 09-02-PLAN.md
 Resume file: None
