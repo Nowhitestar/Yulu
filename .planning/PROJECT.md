@@ -2,13 +2,13 @@
 
 ## What This Is
 
-Yulu is a local-first, **agent-first** native meeting recorder for macOS. It captures system audio (ScreenCaptureKit) and microphone locally, transcribes on-device (MLX Whisper / whisper.cpp), and hands the transcript to the user's own coding agent (Claude Code, Codex, OpenClaw…) — via a local `agent-queue.json` boundary — to produce the meeting note. No cloud transcription, no account, no virtual audio device; the audio never leaves the laptop unless the user opts in.
+Yulu is a local-first, **agent-optional** native meeting recorder for macOS. It captures system audio and microphone locally, then lets the user choose local transcription, xAI, a supported local Agent Runtime, a Model Gateway, or a Direct Model API for transcription, summaries, and meeting conversation. Audio or transcript content leaves the laptop only after the user explicitly enables a cloud capability.
 
-Its mental model is **Obsidian-like**: Yulu is the local data + capture layer, the coding agent is the intelligence layer, and both are local-first. Yulu is built *for an agent as its runtime*, not for an OS — so it reuses capabilities the host agent already has rather than reconfiguring its own.
+Its mental model remains **Obsidian-like**: Yulu owns local capture, retrieval, and durable artifacts; the user selects the intelligence provider. Agent Runtimes are supported, but Hermes or any other single agent is never a prerequisite.
 
 ## Core Value
 
-A meeting said out loud becomes a clean, searchable note **entirely on the user's machine, through the agent they already trust** — capture and transcription never depend on the cloud, and Yulu never makes the user reconfigure what their agent already provides.
+A new user can install Yulu, record a real meeting, and obtain saved audio, transcript, and summary without having to understand Yulu's internal daemons or install a specific agent.
 
 ## Requirements
 
@@ -30,19 +30,17 @@ A meeting said out loud becomes a clean, searchable note **entirely on the user'
 
 <!-- Current milestone scope. Hypotheses until shipped and validated. -->
 
-**Current milestone: Agent-Native Provisioning & Cross-Platform Foundation**
+**Current milestone: v0.6 Reliable Distribution & Activation**
 
-- [ ] Cross-platform abstraction layer — `CaptureBackend`, `DaemonManager`, path resolution, permission model, and dependency-install behind platform-agnostic interfaces (macOS implementation only this milestone; Win/Linux stubbed)
-- [ ] Agent-orchestrated provisioning — the host coding agent installs/provisions Yulu and reuses its own configured capabilities, rather than a macOS-specific installer (leading direction; validate the riskiest path via spike)
-- [ ] Host-capability detection + reuse — detect already-configured whisper / `claude` CLI / models / `gog` and reuse them instead of duplicating, across Claude Code + Codex + OpenClaw via an "agent capability provider" abstraction
-- [ ] Decouple skill install from core install — standalone, idempotent, agent-invokable (`yulu skill install [--agent]`); removed from the monolithic setup flow
-- [ ] `doctor.py` host-capability probes — `claude`, `whisper-cli`, `mlx-whisper` importability, configured `llm.command` validity, model paths/sizes, recording-dir writability
-- [ ] Web UI settings — surface + configure capabilities: data-folder location, transcription mode, model selection, and which host capabilities are reused (local vs cloud)
-- [ ] Web UI onboarding guidance — first-run setup walkthrough in the browser
-- [ ] Configurable data-folder location — enables folder-based cloud sync (point the folder at iCloud / Google Drive; sync is the OS's job, not Yulu's — the Obsidian model)
-- [ ] Configurable transcription mode — local-Whisper-first by default, user-selectable **cloud fallback** or **cloud priority**
-- [ ] Seamless auto-migration — existing `~/.yulu` (v0.5.x) installs auto-migrate config/data/reused-capabilities to the new model on upgrade
-- [ ] Prerequisite refactors — decompose the 1,342-line `setup.sh`; ship pre-compiled, signed (ideally notarized) binaries so release installs no longer need `swiftc`/Xcode
+- [ ] A stable release installer works independently of the repository's moving `main` branch and supports the documented macOS 13+ floor
+- [ ] Install and update never interrupt an active recording, and optional agent/calendar dependencies are not core-install blockers
+- [ ] One state-driven activation flow serves new installs, upgrades, and developer installs, skipping capabilities that are already ready
+- [ ] Core Activation proves a real saved recording, transcript, and summary; command detection alone is not treated as readiness
+- [ ] Transcription, Summary Provider, and Conversation Provider are independent choices with explicit credential ownership, real probes, task pinning, and no silent fallback
+- [ ] xAI is a first-class option for transcription, summary, and cited conversation over locally selected meeting excerpts
+- [ ] Codex, Claude Code, Hermes, and OpenClaw are supported without making any one of them mandatory; CLIProxyAPI remains an advanced user-managed gateway
+- [ ] Calendar, sharing, and conversation are reachable optional activation steps with configure-now or defer choices
+- [ ] README, website, installer, About, and release metadata describe the same supported paths and limitations
 
 ### Out of Scope
 
@@ -50,25 +48,27 @@ A meeting said out loud becomes a clean, searchable note **entirely on the user'
 
 - Actual Windows/Linux runtime implementations — architecture must be platform-agnostic, but only macOS is implemented this milestone (deferred to a future milestone)
 - A self-hosted cloud backend / Yulu-run sync service — cloud sync is delegated to the user's own folder sync (iCloud / Google Drive); Yulu runs no servers and holds no accounts
-- Drag-to-`/Applications` `.app` as the install model — superseded by agent-orchestrated provisioning; a single OS-native bundle over-fits macOS and fights the cross-platform goal
 - Accounts / multi-user / team features — Yulu is local-first and single-user
+- Full Grok Web/X search agent and write connectors — v0.6 conversation is bounded to local meeting retrieval
+- Bundling or forking CLIProxyAPI — advanced users may point Yulu at their own compatible gateway
+- Silent provider failover — a failed provider pauses the task and asks the user to choose
 
 ## Context
 
 - **Codebase map:** `.planning/codebase/` (ARCHITECTURE, STRUCTURE, STACK, INTEGRATIONS, CONVENTIONS, TESTING, CONCERNS) — generated 2026-05-29, grounds this milestone.
-- **The agent-integration seam already exists.** `agent-queue.json` + `llm.command` already treat the coding agent as a pluggable LLM dispatcher. Agent-native provisioning *extends an existing seam*, it is not a greenfield rewrite.
-- **The hard blockers are mapped.** `CONCERNS.md` enumerates: macOS coupling (ScreenCaptureKit, launchd, TCC, `swiftc`-at-install, hardcoded `~/Library`/`~/.config/yulu`/`~/Movies/Yulu` paths, Homebrew) → needs `CaptureBackend` + `DaemonManager` + path/permission/dependency abstractions; `setup.sh` is a 1,342-line monolith without `pipefail`; skill install is coupled into setup; capability duplication (`venv-mlx-whisper`, brew `whisper-cpp`, `~/.config/yulu/models` all duplicate what a host agent may already have); `doctor.py` does not probe host capabilities; the web-UI settings page has no capability-surfacing endpoint.
-- **Real bugs found to fold in or fix:** `status_agent.swift` hardcodes `~/Movies/Yulu` and ignores `config.json`; the `mlx_python` config field is read but never used (daemon runs under system `python3`, not the venv); `setup.sh` uses `set -e` without `pipefail`; unsigned/un-notarized binaries (`--timestamp=none`) + `xattr` quarantine strip; `~/.yulu.backup-*` dirs never cleaned.
-- **Distribution today:** `curl install.sh | bash` → `release_installer.py` → extract to `~/.yulu` → `setup.sh` (brew deps, `swiftc` compile, launchd load, model download, skill install). Release is automated via release-please on Conventional Commits.
+- **The integration seams already exist.** `agent-queue.json`, provider-native Agent Console sessions, xAI OAuth/audio, local search, Settings, and Health should be extended rather than replaced.
+- **Current release blockers are concrete.** The README `raw/main` installer is not paired with the latest release asset, current release Mach-O binaries target macOS 26 despite the macOS 13 claim, and updater safety does not guard active recordings.
+- **Current activation is incomplete.** The earlier onboarding surface was removed, setup still assumes Hermes in important paths, and calendar/share configuration surfaces are not reachable from the user's failure states.
+- **xAI release gate:** replace the public Grok CLI client ID with a Yulu-owned xAI client registration and verify language-model plus Responses access before broad distribution.
 
 ## Constraints
 
 - **Platform**: macOS 13+ today — **floor STAYS 13+** (confirmed Phase 2): system audio is dual-arm behind one `if #available` seam — Core Audio process taps on 14.4+ (removes the weekly re-permission nag) / ScreenCaptureKit on 13–14.3 (preserves compatibility). We do NOT raise the floor to 14.4. Architecture must NOT hard-couple to macOS; a cross-platform abstraction layer is a first-class deliverable this milestone.
-- **Privacy**: audio + transcripts stay local by default; any cloud (transcription or sync) is strictly opt-in and user-configured.
-- **Agent-native**: reuse host coding-agent capabilities (`claude`/whisper/models/`gog`); do not duplicate runtimes/models the agent already has.
+- **Privacy**: audio, transcripts, and conversation history stay local by default. Cloud upload requires capability-specific disclosure and consent; xAI conversation sends bounded selected excerpts with `store:false`.
+- **Provider ownership**: Codex/Claude OAuth remains owned by their official runtimes; Hermes/OpenClaw use gateways; direct model and gateway credentials are stored in macOS Keychain.
 - **Compatibility**: existing v0.5.x `~/.yulu` installs must auto-migrate seamlessly on upgrade.
 - **Distribution**: keep release-please + GitHub Releases + Conventional Commits as the release mechanism.
-- **Agents targeted (v1)**: Claude Code, Codex, OpenClaw — behind one capability-provider abstraction.
+- **Agents targeted (v0.6)**: Codex, Claude Code, Hermes, and OpenClaw. Summary and conversation providers are independent roles.
 
 ## Key Decisions
 
@@ -84,6 +84,9 @@ A meeting said out loud becomes a clean, searchable note **entirely on the user'
 | **Multi-agent from v1** (Claude Code + Codex + OpenClaw) via a capability-provider abstraction | Yulu is agent-native, not single-vendor | ✓ Done — Phase 8 (Codex + OpenClaw providers, 3-agent doctor aggregation) |
 | **Decouple skill install** from core install | The agent must be able to install/update the skill independently | ✓ Done — Phase 6 (`yulu skill install [--agent]`, removed from `setup.sh` flow) |
 | **macOS floor stays 13+** — dual-arm audio capture (Core Audio taps on 14.4+ / ScreenCaptureKit on 13–14.3 behind one `if #available` seam) | Milestone goal is abstraction, not platform-dropping; raising the floor to 14.4 would strand existing 13–14.3 users. Taps arm kills the 14.4+ re-permission nag; SCK arm keeps compatibility | ✓ Decided 2026-05-30 (Phase 2) |
+| Providers split into Agent Runtime, Model Gateway, and Direct Model API | Authentication, credential custody, execution, and readiness differ materially | Locked for v0.6 |
+| Transcription, summary, and conversation are independent selections | A provider being ready for one capability does not prove another | Locked for v0.6 |
+| xAI conversation uses local retrieval and `store:false` | Preserve local-first control while enabling useful meeting Q&A | Locked for v0.6 |
 
 ## Evolution
 
@@ -103,4 +106,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-05-29 after initialization*
+*Last updated: 2026-08-23 for milestone v0.6*

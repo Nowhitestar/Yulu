@@ -1,17 +1,17 @@
 ---
 gsd_state_version: 1.0
-milestone: v0.5
+milestone: v0.6
 milestone_name: milestone
-status: milestone_complete
-last_updated: 2026-05-30T15:49:51.797Z
-last_activity: 2026-08-23
+status: Defining requirements
+stopped_at: "Explicit local/xAI audio engines, xAI OAuth reuse, connector/Agent decoupling, and realtime subtitle smoothing are implemented and verified in the installed runtime. Long xAI batch uploads are compressed to 16 kHz mono FLAC before REST STT; full regression passed. Next: merge PR #103 and complete the release-please publication flow."
+last_updated: "2026-08-23T07:28:36.988Z"
+last_activity: 2026-08-23 — Milestone v0.6 started
 progress:
-  total_phases: 8
-  completed_phases: 8
-  total_plans: 29
-  completed_plans: 29
-  percent: 100
-stopped_at: Milestone complete (Phase 8 was final phase)
+  total_phases: 0
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
+  percent: 0
 ---
 
 # Project State
@@ -20,17 +20,15 @@ stopped_at: Milestone complete (Phase 8 was final phase)
 
 See: .planning/PROJECT.md (updated 2026-05-29)
 
-**Core value:** A meeting becomes a clean, searchable note entirely on the user's machine, through the agent they already trust — capture and transcription never depend on the cloud, and Yulu never makes the user reconfigure what their agent already provides.
-**Current focus:** Milestone complete
+**Core value:** A new user can install Yulu, record a real meeting, and obtain saved audio, transcript, and summary without installing a specific agent.
+**Current focus:** Defining milestone v0.6 roadmap
 
 ## Current Position
 
-Phase: 8
-Plan: Not started
-Status: Milestone complete
-Last activity: 2026-08-23 - Completed quick task 260823-jwv: Configure Matt Pocock engineering skills
-
-Progress: [██████████] 100%
+Phase: Not started (defining requirements)
+Plan: —
+Status: Defining requirements
+Last activity: 2026-08-23 — Milestone v0.6 started
 
 ## Performance Metrics
 
