@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v0.6
 milestone_name: Reliable Distribution & Activation
 status: executing
-stopped_at: Phase 9 planning complete; 3 verified plans are ready to execute.
-last_updated: "2026-08-23T08:26:37.233Z"
-last_activity: 2026-08-23 -- Phase 9 execution started
+stopped_at: Completed 09-01-PLAN.md
+last_updated: "2026-08-23T08:43:07.571Z"
+last_activity: 2026-08-23 -- Completed Plan 09-01 stable bootstrap and recording-safe updates
 progress:
   total_phases: 13
   completed_phases: 8
   total_plans: 32
-  completed_plans: 29
-  percent: 62
+  completed_plans: 30
+  percent: 94
 ---
 
 # Project State
@@ -26,15 +26,15 @@ See: .planning/PROJECT.md (updated 2026-08-23)
 ## Current Position
 
 Phase: 9 (Release Safety) — EXECUTING
-Plan: 1 of 3
-Status: Executing Phase 9
-Last activity: 2026-08-23 -- Phase 9 execution started
+Plan: 2 of 3
+Status: Ready to execute
+Last activity: 2026-08-23 -- Completed Plan 09-01 stable bootstrap and recording-safe updates
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 29
+- Total plans completed: 30
 - Average duration: — min
 - Total execution time: 0.0 hours
 
@@ -86,6 +86,7 @@ Last activity: 2026-08-23 -- Phase 9 execution started
 | Phase 07 P02 | 10min | 2 tasks tasks | 2 files files |
 | Phase 07 P03 | 38 | 3 tasks | 7 files |
 | Phase 08 P01 | 14 | 2 tasks | 2 files |
+| Phase 09 P01 | 14min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -173,6 +174,9 @@ Recent decisions affecting current work:
 - [Phase ?]: [07-03] verify is resolve-not-execute + fail-closed: doctor._host_capabilities called directly with Path args (no shell); a verify that cannot run is unhealthy so the backup is retained
 - [Phase ?]: [Phase 08]: [08-01] Namespaced ONLY the new providers' mlx-whisper key (codex_mlx_whisper / openclaw_mlx_whisper); ClaudeCodeProvider stays byte-for-byte so the doctor last-writer-wins fold aggregates all three agents collision-free WITHOUT editing doctor.py — provider-side fix because the collision is real
 - [Phase ?]: [Phase 08]: [08-01] No-exec-surface guard via AST import/call detection, not the plan's raw-text grep — the bare-word grep false-positives on the pre-existing ClaudeCodeProvider docstring prose 'no new subprocess of its own'
+- [Phase 09]: Raw stable bootstrap executes a GitHub Release-owned install.sh; raw main is dev-only. — Stable installs must be version-paired and immutable.
+- [Phase 09]: Existing updates use the installed guard when present; legacy release updates use only the verified staged guard. — Recording admission must come from trusted code without blocking verified legacy upgrades.
+- [Phase 09]: Recording-active rollback restores bytes and configuration but skips service repair. — A refusal path must not disturb the active recorder.
 
 ### Pending Todos
 
@@ -219,6 +223,6 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-08-23T16:10:00+0800
-Stopped at: Phase 9 planning complete; 3 verified plans are ready to execute.
+Last session: 2026-08-23T08:43:07.566Z
+Stopped at: Completed 09-01-PLAN.md
 Resume file: None

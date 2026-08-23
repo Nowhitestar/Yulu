@@ -264,7 +264,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 **Wave 1**
 
-- [ ] 09-01-PLAN.md — Version-paired stable bootstrap and shared active-recording update guard (DIST-01, DIST-03)
+- [x] 09-01-PLAN.md — Version-paired stable bootstrap and shared active-recording update guard (DIST-01, DIST-03)
 - [ ] 09-02-PLAN.md — macOS 13 Swift targets and final-artifact `vtool` gate (DIST-02)
 
 **Wave 2** *(blocked on Wave 1; closes with real-host checkpoint)*
@@ -348,7 +348,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 6. Agent-Orchestrated Provisioning | 4/4 | Complete    | 2026-05-30 |
 | 7. Seamless Auto-Migration | 3/3 | Complete    | 2026-05-30 |
 | 8. Multi-Agent Providers | 1/1 | Complete    | 2026-05-30 |
-| 9. Release Safety | 0/3 | Planned | - |
+| 9. Release Safety | 1/3 | In Progress | - |
 | 10. Provider Model & xAI Foundation | 0/TBD | Not started | - |
 | 11. State-Driven Core Activation | 0/TBD | Not started | - |
 | 12. Agent Runtime & Gateway Connections | 0/TBD | Not started | - |
