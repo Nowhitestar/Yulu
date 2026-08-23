@@ -247,7 +247,11 @@ if [[ "$EMBEDDED_HELPER_BASE64" == __YULU_EMBEDDED_* ]] && \
         exit 1
     fi
     ok "Release installer downloaded"
-    INSTALL_DIR="$INSTALL_DIR" bash "$RELEASE_INSTALLER" "${TARGET_ARGS[@]}"
+    if ((${#TARGET_ARGS[@]} == 0)); then
+        INSTALL_DIR="$INSTALL_DIR" bash "$RELEASE_INSTALLER"
+    else
+        INSTALL_DIR="$INSTALL_DIR" bash "$RELEASE_INSTALLER" "${TARGET_ARGS[@]}"
+    fi
     exit $?
 fi
 

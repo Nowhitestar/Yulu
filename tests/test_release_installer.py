@@ -132,7 +132,7 @@ def test_raw_stable_bootstrap_fetches_release_owned_latest_installer(tmp_path, a
     env["INSTALL_DIR"] = str(tmp_path / "install")
 
     result = subprocess.run(
-        ["bash", str(ROOT / "install.sh"), *args],
+        ["/bin/bash", str(ROOT / "install.sh"), *args],
         env=env,
         capture_output=True,
         text=True,
