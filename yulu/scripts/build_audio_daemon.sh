@@ -14,17 +14,18 @@ ICNS_SRC="$REPO_DIR/assets/Yulu.icns"
 YULU_VERSION_RAW="$(tr -d '[:space:]' < "$REPO_DIR/VERSION" 2>/dev/null || echo "0.0.0+unknown")"
 YULU_BUNDLE_VERSION="${YULU_VERSION_RAW%%[-+]*}"
 YULU_BUILD_NUMBER="$(git -C "$REPO_DIR" rev-list --count HEAD 2>/dev/null || echo 0)"
+SWIFT_TARGET=(-target arm64-apple-macosx13.0)
 
 cd "$SCRIPT_DIR"
 
-swiftc -o "$BIN" audio_daemon.swift \
+swiftc "${SWIFT_TARGET[@]}" -o "$BIN" audio_daemon.swift \
   -framework Cocoa \
   -framework ScreenCaptureKit \
   -framework AVFoundation \
   -framework CoreMedia \
   -framework CoreAudio \
   -framework AudioToolbox
-swiftc -o "$KEYCHAIN_BIN" xai_keychain.swift \
+swiftc "${SWIFT_TARGET[@]}" -o "$KEYCHAIN_BIN" xai_keychain.swift \
   -framework Security
 
 mkdir -p "$APP/Contents/MacOS" "$RES_DIR"

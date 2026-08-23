@@ -106,7 +106,7 @@ jobs:
           python3 yulu/scripts/version.py --check
           python3 yulu/scripts/version.py --json
 
-      - name: Swift build (audio_daemon, window_scanner, recorder_status)
+      - name: Swift build (native shipped inventory + window scanner)
         run: |
           set -euo pipefail
           swift --version
@@ -117,10 +117,12 @@ jobs:
                    yulu/scripts/meeting_prompt.swift; do
             stem="$(basename "$f" .swift)"
             printf 'swiftc %s -> .ci-build/%s\n' "$f" "$stem"
-            swiftc -o ".ci-build/$stem" "$f"
+            swiftc -target arm64-apple-macosx13.0 -o ".ci-build/$stem" "$f"
           done
+          printf 'swiftc xai_keychain.swift (Security)\n'
+          swiftc -target arm64-apple-macosx13.0 -o ".ci-build/xai_keychain" yulu/scripts/xai_keychain.swift -framework Security
           printf 'swiftc status_agent.swift (Cocoa + Carbon)\n'
-          swiftc -o ".ci-build/status_agent" yulu/scripts/status_agent.swift -framework Cocoa -framework Carbon
+          swiftc -target arm64-apple-macosx13.0 -o ".ci-build/status_agent" yulu/scripts/status_agent.swift -framework Cocoa -framework Carbon
 
       - name: Skill manifest sanity (skills/yulu/SKILL.md)
         run: |
