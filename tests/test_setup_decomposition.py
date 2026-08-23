@@ -210,6 +210,51 @@ def test_setup_deps_propagates_brew_failure(tmp_path):
     assert "安装失败" in result.stdout
 
 
+def _write_executable(path: Path, body: str = "exit 0\n") -> None:
+    path.write_text(f"#!/usr/bin/env bash\n{body}")
+    path.chmod(0o755)
+
+
+def test_setup_deps_core_ready_without_brew_is_idempotent(tmp_path):
+    shim = tmp_path / "core-bin"
+    shim.mkdir()
+    activity = tmp_path / "network-activity"
+    _write_executable(shim / "ffmpeg")
+    _write_executable(shim / "sox")
+    _write_executable(shim / "node", "printf 'v24.15.0\\n'\n")
+    _write_executable(shim / "curl", f"printf 'curl\\n' >> {activity}\n")
+    env = {
+        "HOME": str(tmp_path / "home"),
+        "NODE_BIN": str(shim / "node"),
+        "PATH": f"{shim}:/usr/bin:/bin",
+    }
+
+    for _ in range(2):
+        result = run(["bash", str(SCRIPTS / "setup_deps.sh"), "release"], cwd=SCRIPTS, env=env)
+        assert result.returncode == 0, result.stderr + result.stdout
+
+    assert shutil.which("brew", path=env["PATH"]) is None
+    assert not activity.exists()
+
+
+def test_setup_deps_missing_core_without_brew_fails_actionably(tmp_path):
+    shim = tmp_path / "core-bin"
+    shim.mkdir()
+    _write_executable(shim / "sox")
+    _write_executable(shim / "node", "printf 'v24.15.0\\n'\n")
+    env = {
+        "HOME": str(tmp_path / "home"),
+        "NODE_BIN": str(shim / "node"),
+        "PATH": f"{shim}:/usr/bin:/bin",
+    }
+
+    result = run(["bash", str(SCRIPTS / "setup_deps.sh"), "release"], cwd=SCRIPTS, env=env)
+
+    assert result.returncode != 0
+    assert "Homebrew" in result.stdout
+    assert "ffmpeg" in result.stdout
+
+
 def test_brew_command_accepts_usable_postcondition_after_nonzero_exit(tmp_path):
     shim = tmp_path / "bin"
     shim.mkdir()
@@ -231,17 +276,25 @@ def test_brew_command_accepts_usable_postcondition_after_nonzero_exit(tmp_path):
     assert "核对实际安装结果" in result.stdout
 
 
-def test_gog_install_accepts_usable_postcondition_after_nonzero_exit(tmp_path):
+def test_calendar_opt_in_is_the_only_optional_install_path_and_is_idempotent(tmp_path):
     shim = _make_shim_dir(tmp_path)
     (shim / "gog").unlink()
+    (shim / "cloudflared").unlink()
     brew = shim / "brew"
     gog = shim / "gog"
+    cloudflared = shim / "cloudflared"
+    calls = tmp_path / "brew-calls"
     brew.write_text(
         "#!/usr/bin/env bash\n"
+        f"printf '%s\\n' \"$*\" >> {calls}\n"
         "if [[ \"$*\" == *gogcli* ]]; then\n"
         f"  printf '#!/usr/bin/env bash\\nexit 0\\n' > {gog}\n"
         f"  chmod +x {gog}\n"
         "  exit 42\n"
+        "fi\n"
+        "if [[ \"$*\" == *cloudflared* ]]; then\n"
+        f"  printf '#!/usr/bin/env bash\\nexit 0\\n' > {cloudflared}\n"
+        f"  chmod +x {cloudflared}\n"
         "fi\n"
         "exit 0\n"
     )
@@ -253,13 +306,28 @@ def test_gog_install_accepts_usable_postcondition_after_nonzero_exit(tmp_path):
         "then echo usable; else echo absent; fi; }; "
         "setup_deps release"
     )
-    result = run(
-        ["bash", "-c", command],
-        cwd=SCRIPTS,
-        env={"HOME": str(tmp_path / "home"), "PATH": f"{shim}:/usr/bin:/bin"},
-    )
-    assert result.returncode == 0, result.stderr + result.stdout
-    assert "gog CLI 安装完成" in result.stdout
+    env = {
+        "HOME": str(tmp_path / "home"),
+        "PATH": f"{shim}:/usr/bin:/bin",
+    }
+    default = run(["bash", "-c", command], cwd=SCRIPTS, env=env)
+    assert default.returncode == 0, default.stderr + default.stdout
+    assert not calls.exists()
+
+    env["YULU_INSTALL_CALENDAR"] = "1"
+    for _ in range(2):
+        result = run(["bash", "-c", command], cwd=SCRIPTS, env=env)
+        assert result.returncode == 0, result.stderr + result.stdout
+    assert calls.read_text().splitlines() == [
+        "install steipete/tap/gogcli",
+        "install cloudflared",
+    ]
+
+
+def test_system_preflight_never_bootstraps_homebrew():
+    text = (SCRIPTS / "setup.sh").read_text(encoding="utf-8")
+    assert "raw.githubusercontent.com/Homebrew/install" not in text
+    assert '/bin/bash -c "$(curl' not in text
 
 
 def test_orchestrator_propagates_each_core_concern_failure():

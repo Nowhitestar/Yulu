@@ -127,13 +127,18 @@ def test_compatible_node_probe_enforces_toolchain_boundaries(tmp_path):
         assert registry_mod._compatible_node_present([accepted]) is True
 
 
-def test_deps_probe_requires_every_setup_postcondition(monkeypatch):
-    required = {"brew", "cloudflared", "ffmpeg", "gog", "sox", "terminal-notifier"}
+def test_deps_probe_accepts_only_core_postconditions(monkeypatch):
+    required = {"ffmpeg", "sox"}
     monkeypatch.setattr(registry_mod, "_compatible_node_present", lambda: True)
     monkeypatch.setattr(registry_mod, "_have", lambda command: command in required)
     assert registry_mod._deps_ready() is True
 
-    monkeypatch.setattr(registry_mod, "_have", lambda command: command in required - {"ffmpeg"})
+    for missing in required:
+        monkeypatch.setattr(registry_mod, "_have", lambda command, missing=missing: command in required - {missing})
+        assert registry_mod._deps_ready() is False
+
+    monkeypatch.setattr(registry_mod, "_have", lambda command: command in required)
+    monkeypatch.setattr(registry_mod, "_compatible_node_present", lambda: False)
     assert registry_mod._deps_ready() is False
 
 
