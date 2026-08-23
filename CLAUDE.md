@@ -281,6 +281,20 @@ The user-facing Yulu Agent contract is [`skills/yulu/SKILL.md`](skills/yulu/SKIL
 The internal architecture/developer guide is [`yulu/SKILL.md`](yulu/SKILL.md).
 <!-- GSD:skills-end -->
 
+## Agent skills
+
+### Issue tracker
+
+Issues and specs are tracked in GitHub Issues. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Use the five default triage labels. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Use a single-context domain model. See `docs/agents/domain.md`.
+
 <!-- GSD:workflow-start source:GSD defaults -->
 ## GSD Workflow Enforcement
 

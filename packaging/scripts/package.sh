@@ -226,19 +226,18 @@ rm -rf "$STAGE/yulu/dist"
 if [[ -f "$ROOT/install.sh" ]]; then
     cp "$ROOT/install.sh" "$INSTALL_ASSET"
     # The versioned release installer must remain immutable even if main moves on.
-    # Replace the raw-bootstrap sentinel with the exact helper shipped in this
-    # runtime. The source install.sh keeps the sentinel and downloads main as the
-    # intentional one-line/bootstrap fallback.
+    # Pair the release installer code and runtime selection in one atomic rewrite.
     HELPER_PAYLOAD="$(base64 < "$ROOT/yulu/scripts/release_installer.py" | tr -d '\r\n')"
     INSTALL_TMP="$(mktemp "$DIST_ABS/install.sh.XXXXXX")"
-    awk -v payload="$HELPER_PAYLOAD" '
+    awk -v payload="$HELPER_PAYLOAD" -v tag="$TAG" '
         {
             sub(/__YULU_EMBEDDED_RELEASE_INSTALLER_BASE64__/, payload)
+            sub(/__YULU_PACKAGED_RELEASE_TAG__/, tag)
             print
         }
     ' "$INSTALL_ASSET" > "$INSTALL_TMP"
-    if grep -q '__YULU_EMBEDDED_RELEASE_INSTALLER_BASE64__' "$INSTALL_TMP"; then
-        echo "Failed to embed release_installer.py into release install.sh" >&2
+    if grep -Eq '__YULU_(EMBEDDED_RELEASE_INSTALLER_BASE64|PACKAGED_RELEASE_TAG)__' "$INSTALL_TMP"; then
+        echo "Failed to embed release_installer.py and release tag into release install.sh" >&2
         rm -f "$INSTALL_TMP"
         exit 1
     fi

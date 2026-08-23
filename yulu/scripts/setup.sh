@@ -123,9 +123,7 @@ check_system() {
     ok "macOS $macos_version"
 
     if ! command -v brew &>/dev/null; then
-        warn "Homebrew 未安装，正在安装..."
-        /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-        ok "Homebrew 已安装"
+        warn "Homebrew 未安装；Yulu 不会自动安装它。仅在缺少核心依赖时才需要你先安装 Homebrew。"
     else
         ok "Homebrew $(brew --version | head -1)"
     fi
@@ -153,9 +151,6 @@ confirm_deps_install() {
     echo "  将安装以下软件包："
     echo "    - ffmpeg / sox       (音频检查与备用处理)"
     echo "    - node@24            (本地 Host 运行时，已有 Node 20.19+/22.12+/24 时复用)"
-    echo "    - terminal-notifier  (系统通知)"
-    echo "    - steipete/tap/gogcli (Google 日历 CLI)"
-    echo "    - cloudflared        (日历 webhook 隧道)"
     echo
 
     if [[ "$UPGRADE_MODE" != true ]]; then
@@ -237,7 +232,7 @@ create_config() {
     "enabled": true,
     "command": null,
     "agent": {
-      "provider": "hermes"
+      "provider": "auto"
     }
   },
   "agent_pipeline": {
@@ -308,7 +303,6 @@ setup_calendar() {
     prompt "请输入 client_secret.json 的路径（或拖入终端）:"
     read -r cred_path
     cred_path="${cred_path/#\~/$HOME}"
-    cred_path="$(eval echo "$cred_path")"
 
     if [[ ! -f "$cred_path" ]]; then
         err "文件不存在: $cred_path"
@@ -375,9 +369,9 @@ confirm_calendar_plist() {
     # On upgrade, setup_daemons.sh inherits the prior decision; no prompt needed.
     [[ "$UPGRADE_MODE" == true ]] && return 0
 
-    prompt "安装日历同步服务（Native Scheduler，用于提醒/自动录制）？[Y/n]"
+    prompt "安装日历同步服务（Native Scheduler，用于提醒/自动录制）？[y/N]"
     read -r ans
-    if [[ ! "$ans" =~ ^[nN] ]]; then
+    if [[ "$ans" =~ ^[yY] ]]; then
         YULU_INSTALL_CALENDAR=1
         export YULU_INSTALL_CALENDAR
     fi
@@ -656,17 +650,12 @@ create_config
 setup_calendar
 confirm_calendar_plist
 
-# Register the token-protected Host MCP endpoints before loading the Host. The
-# recording pipeline is deliberately Hermes-specific, so its general, artifact,
-# and delivery registrations are a required install boundary. Other Agents are
-# optional conversation providers and remain best-effort.
-if ! PYTHONPATH="$SCRIPT_DIR:${PYTHONPATH:-}" "$PYTHON_BIN" -m provision.cli mcp install --agent hermes; then
-    err "Hermes CLI and its Yulu phase MCP registrations are required. Install or repair Hermes, then rerun setup."
-    exit 1
-fi
+# Register token-protected Host MCP endpoints before loading the Host. Agent
+# discovery and registration are optional; core recording does not choose one.
 PYTHONPATH="$SCRIPT_DIR:${PYTHONPATH:-}" "$PYTHON_BIN" -m provision.cli mcp install \
-    --agent codex --agent claude --agent openclaw --detected-only --non-fatal \
-    || warn "Optional Agent MCP registration returned a warning"
+    --agent hermes --agent codex --agent claude --agent openclaw \
+    --detected-only --non-fatal \
+    || warn "Agent MCP registration returned a warning"
 
 run_setup_concerns || exit 1
 

@@ -15,14 +15,15 @@ ICONS_DIR="$SCRIPT_DIR/status_agent_icons"
 YULU_VERSION_RAW="$(tr -d '[:space:]' < "$REPO_DIR/VERSION" 2>/dev/null || echo "0.0.0+unknown")"
 YULU_BUNDLE_VERSION="${YULU_VERSION_RAW%%[-+]*}"
 YULU_BUILD_NUMBER="$(git -C "$REPO_DIR" rev-list --count HEAD 2>/dev/null || echo 0)"
+SWIFT_TARGET=(-target arm64-apple-macosx13.0)
 
 cd "$SCRIPT_DIR"
 
-swiftc -o "$BIN" status_agent.swift \
+swiftc "${SWIFT_TARGET[@]}" -o "$BIN" status_agent.swift \
   -framework Cocoa -framework Carbon -framework WebKit
-swiftc -o "$RECORDER_BIN" recorder_status.swift \
+swiftc "${SWIFT_TARGET[@]}" -o "$RECORDER_BIN" recorder_status.swift \
   -framework Cocoa
-swiftc -o "$MEETING_PROMPT_BIN" meeting_prompt.swift \
+swiftc "${SWIFT_TARGET[@]}" -o "$MEETING_PROMPT_BIN" meeting_prompt.swift \
   -framework Cocoa
 
 mkdir -p "$APP/Contents/MacOS" "$RES_DIR"

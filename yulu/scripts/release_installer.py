@@ -5,6 +5,7 @@ import argparse
 import errno
 import fcntl
 import hashlib
+import importlib.util
 import json
 import os
 import platform
@@ -16,6 +17,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -56,6 +58,53 @@ MAX_RUNTIME_MANIFEST_BYTES = 8 * 1024 * 1024
 
 class InstallError(RuntimeError):
     pass
+
+
+class RecordingActiveInstallError(InstallError):
+    """The installer refused a mutation because native capture is active."""
+
+
+def assert_recording_idle(scripts_dir: Path) -> None:
+    """Run ``migrate.guard.recording_active`` from one trusted runtime."""
+    scripts_dir = scripts_dir.resolve(strict=False)
+    guard_path = scripts_dir / "migrate" / "guard.py"
+    if not guard_path.is_file():
+        raise InstallError(
+            f"Yulu recording safety guard is missing at {guard_path}; "
+            "the existing runtime cannot be updated safely. Reinstall a current stable release first."
+        )
+
+    module_name = f"_yulu_installer_guard_{time.monotonic_ns()}"
+    original_path = sys.path.copy()
+    missing = object()
+    original_record_audio = sys.modules.pop("record_audio", missing)
+    try:
+        spec = importlib.util.spec_from_file_location(module_name, guard_path)
+        if spec is None or spec.loader is None:
+            raise ImportError("Python could not create a module loader")
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[module_name] = module
+        sys.path.insert(0, str(scripts_dir))
+        spec.loader.exec_module(module)
+        predicate = getattr(module, "recording_active", None)
+        if not callable(predicate):
+            raise AttributeError("recording_active is not callable")
+        if predicate():
+            raise RecordingActiveInstallError(
+                "Refusing Yulu install/update: a recording is in progress. "
+                "Stop the recording, then retry."
+            )
+    except RecordingActiveInstallError:
+        raise
+    except Exception as exc:
+        raise InstallError(f"Could not load recording safety guard from {guard_path}: {exc}") from exc
+    finally:
+        sys.path[:] = original_path
+        sys.modules.pop(module_name, None)
+        if original_record_audio is missing:
+            sys.modules.pop("record_audio", None)
+        else:
+            sys.modules["record_audio"] = original_record_audio
 
 
 def run(cmd: list[str], cwd: Path | None = None, timeout: float = RUN_TIMEOUT_SECONDS) -> str:
@@ -1006,6 +1055,8 @@ def install_dev_channel(
     config_path: Path | None = None,
 ) -> None:
     existed = path_exists_or_symlink(install_dir)
+    if existed:
+        assert_recording_idle(install_dir / "yulu" / "scripts")
     in_place_checkout = existed and (install_dir / ".git").exists()
     backup = None
     original_head = ""
@@ -1035,6 +1086,8 @@ def install_dev_channel(
             run(["git", "clone", "--branch", "main", REPO_URL, str(install_dir)])
         commit = run(["git", "rev-parse", "--short", "HEAD"], cwd=install_dir)
         if run_setup_flag:
+            if existed:
+                assert_recording_idle(install_dir / "yulu" / "scripts")
             run_setup(install_dir, upgrade=existed)
         write_install_metadata(install_dir, build_dev_metadata(branch="main", commit=commit))
         discard_config_snapshot(config_snapshot)
@@ -1079,7 +1132,9 @@ def install_dev_channel(
         should_repair = (backup is not None and runtime_restored) or (
             in_place_checkout and checkout_restored
         )
-        if should_repair and config_restored:
+        if should_repair and config_restored and not isinstance(
+            install_error, RecordingActiveInstallError
+        ):
             try:
                 repair_restored_runtime(install_dir)
             except Exception as exc:
@@ -1139,6 +1194,14 @@ def install_release_from_urls(
         validate_runtime_layout(staged_runtime, tag)
         verify_release_bundle_security(staged_runtime)
         verify_runtime_manifest(staged_runtime)
+        if existed:
+            installed_scripts = install_dir / "yulu" / "scripts"
+            guard_scripts = (
+                installed_scripts
+                if (installed_scripts / "migrate" / "guard.py").is_file()
+                else staged_runtime / "yulu" / "scripts"
+            )
+            assert_recording_idle(guard_scripts)
         config_snapshot = create_config_snapshot(config_path or default_config_path())
         try:
             backup = replace_runtime_with_backup(staged_runtime, install_dir)
@@ -1157,6 +1220,8 @@ def install_release_from_urls(
                 InstallMetadata(source="release", version=tag, asset=asset_name, sha256=expected),
             )
             if run_setup:
+                if existed:
+                    assert_recording_idle(install_dir / "yulu" / "scripts")
                 _run_setup_script(install_dir, upgrade=existed, timeout=setup_timeout)
             discard_config_snapshot(config_snapshot)
         except Exception as install_error:
@@ -1184,7 +1249,11 @@ def install_release_from_urls(
             except Exception as exc:
                 rollback_errors.append(f"config restore failed ({exc})")
 
-            if backup is not None and runtime_restored:
+            if (
+                backup is not None
+                and runtime_restored
+                and not isinstance(install_error, RecordingActiveInstallError)
+            ):
                 try:
                     repair_restored_runtime(install_dir, timeout=setup_timeout)
                 except Exception as exc:
@@ -1220,7 +1289,10 @@ def install_release_target(target: ReleaseTarget, install_dir: Path, run_setup_f
 
 
 def build_install_plan(command: str, target: ReleaseTarget, install_dir: Path, run_setup_flag: bool) -> dict:
-    actions: list[dict[str, object]] = [{"name": "acquire_install_lock"}]
+    actions: list[dict[str, object]] = [
+        {"name": "acquire_install_lock"},
+        {"name": "assert_recording_idle", "when": "updating an existing runtime"},
+    ]
     if target.kind == "dev":
         actions.extend(
             [
@@ -1307,6 +1379,14 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         install_dir = install_dir.resolve(strict=False)
         with acquire_install_lock(install_dir):
+            installed_guard = install_dir / "yulu" / "scripts" / "migrate" / "guard.py"
+            if installed_guard.is_file():
+                assert_recording_idle(install_dir / "yulu" / "scripts")
+            elif path_exists_or_symlink(install_dir) and target.kind == "dev":
+                raise InstallError(
+                    f"Yulu recording safety guard is missing at {installed_guard}; "
+                    "the existing dev runtime cannot be updated safely."
+                )
             if target.kind == "dev":
                 install_dev_channel(install_dir, run_setup_flag=not args.no_setup)
             else:

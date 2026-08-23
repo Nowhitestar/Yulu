@@ -212,15 +212,8 @@ def _compatible_node_present(candidates: list[Path] | None = None) -> bool:
 
 
 def _deps_ready() -> bool:
-    """deps: the brew-managed system tooling the steps rely on is on PATH."""
-    required_commands = (
-        "brew",
-        "cloudflared",
-        "ffmpeg",
-        "gog",
-        "sox",
-        "terminal-notifier",
-    )
+    """deps: the recording core commands are ready; integrations are optional."""
+    required_commands = ("ffmpeg", "sox")
     return all(_have(command) for command in required_commands) and _compatible_node_present()
 
 
