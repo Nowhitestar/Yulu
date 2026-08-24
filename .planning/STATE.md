@@ -3,9 +3,9 @@ gsd_state_version: 1.0
 milestone: v0.6
 milestone_name: milestone
 status: executing
-stopped_at: Ask Matt issues 121-122 complete — implementing issue 123 before issue 124
-last_updated: "2026-08-24T14:42:35.000Z"
-last_activity: 2026-08-24 -- Issue 122 passed 870 UI tests, build, credential gates, and two-axis review, then closed
+stopped_at: Ask Matt issues 121-123 complete — implementing issue 124
+last_updated: "2026-08-24T15:20:00.000Z"
+last_activity: 2026-08-24 -- Issue 123 passed 877 UI tests, build, artifact-path checks, and two-axis review, then closed
 progress:
   total_phases: 13
   completed_phases: 9
@@ -26,9 +26,9 @@ See: .planning/PROJECT.md (updated 2026-08-23)
 ## Current Position
 
 Phase: 10 (Provider Model & xAI Foundation) — PARTIAL IMPLEMENTATION
-Plan: #121/#122 complete; frontier #123 and #124; executing #123 first; #125 blocked by both
-Status: Ready to implement #123 in a fresh Ask Matt context
-Last activity: 2026-08-24 -- Issue #122 closed with commit, test, build, security, and review evidence
+Plan: #121/#122/#123 complete; frontier #124; #125 remains blocked by #124
+Status: Ready to implement #124 in a fresh Ask Matt context
+Last activity: 2026-08-24 -- Issue #123 closed with commit, test, build, artifact, and review evidence
 
 ## Performance Metrics
 
