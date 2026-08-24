@@ -145,6 +145,11 @@ upload audio. Users may instead explicitly select xAI cloud speech-to-text, whic
 uses native realtime streaming and final transcription. Yulu never switches
 engines automatically when the selected engine is unavailable.
 
+Settings → AI Providers owns the single xAI connection and its three independent
+real-request probes. A green summary or conversation result does not establish
+transcription readiness (or vice versa). An API key is used only after the user
+explicitly saves it, and never as an automatic response to OAuth/probe failure.
+
 Drag the six-dot handle to reposition the overlay. Use the down arrow to collapse
 it to the breathing Yulu logo, then click the logo to restore captions. Click the
 `录制中` control to stop; the overlay disappears after capture stops.
@@ -308,7 +313,8 @@ inputs are not ready instead of producing a fake-success silent file.
 | `~/.config/yulu/recording-events/` | Capture-completion recovery inbox |
 | `~/.config/yulu/config.json` | Active non-secret preferences |
 | `~/.config/yulu/mcp-token.json` | Local bearer token; do not print or copy |
-| macOS Keychain service `com.yulu.xai-oauth` | Yulu-owned xAI audio OAuth grant; never print or export |
+| macOS Keychain service `com.yulu.xai-oauth` | Yulu-owned Grok-compatible xAI OAuth grant; never print or export |
+| macOS Keychain service `com.yulu.provider-secret`, account `direct.xai` | Explicitly saved xAI API key; never print, export, or place in config/SQLite/logs/argv |
 | `~/Movies/Yulu/` | Recording content and committed sidecars |
 
 Use `yulu where` to confirm the effective installation and recording paths.

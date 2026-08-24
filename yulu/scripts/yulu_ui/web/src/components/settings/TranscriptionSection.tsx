@@ -14,48 +14,25 @@ export function TranscriptionSection({ tracker }: TranscriptionSectionProps) {
   const local = trpc.localCaption.status.useQuery(undefined, {
     refetchInterval: (query) => query.state.data?.operation !== "idle" ? 1_000 : 5_000,
   });
-  const xai = trpc.xaiAudio.status.useQuery(undefined, {
-    refetchInterval: (query) => query.state.data?.authorization.status === "running" ? 1_000 : 5_000,
+  const providers = trpc.providers.status.useQuery(undefined, {
+    refetchInterval: (query) => query.state.data?.connection.authorization.status === "running" ? 1_000 : 5_000,
   });
   const utils = trpc.useUtils();
   const refreshLocal = async () => { await utils.localCaption.status.invalidate(); };
-  const refreshXai = async () => { await utils.xaiAudio.status.invalidate(); };
   const install = trpc.localCaption.install.useMutation({ onSettled: refreshLocal });
   const uninstall = trpc.localCaption.uninstall.useMutation({ onSettled: refreshLocal });
   const testModel = trpc.localCaption.test.useMutation({ onSettled: refreshLocal });
-  const authorizeXai = trpc.xaiAudio.authorize.useMutation({ onSettled: refreshXai });
-  const cancelXaiAuthorization = trpc.xaiAudio.cancelAuthorization.useMutation({ onSettled: refreshXai });
-  const logoutXai = trpc.xaiAudio.logout.useMutation({ onSettled: refreshXai });
-  const testXai = trpc.xaiAudio.test.useMutation({ onSettled: refreshXai });
   const { commit, isBlocked } = useConfigField(tracker);
   const t = useT();
   const localBusy = (local.data?.operation ?? "idle") !== "idle"
     || install.isPending || uninstall.isPending || testModel.isPending;
-  const xaiAuthorizing = xai.data?.authorization.status === "starting"
-    || xai.data?.authorization.status === "running";
-
-  const startXaiAuthorization = () => {
-    const authorizationWindow = window.open("about:blank", "_blank");
-    if (authorizationWindow) authorizationWindow.opener = null;
-    authorizeXai.mutate(undefined, {
-      onSuccess: (authorization) => {
-        if (!authorization.verificationUrl) {
-          authorizationWindow?.close();
-          return;
-        }
-        if (authorizationWindow) authorizationWindow.location.href = authorization.verificationUrl;
-        else window.open(authorization.verificationUrl, "_blank", "noopener,noreferrer");
-      },
-      onError: () => authorizationWindow?.close(),
-    });
-  };
 
   if (!config) return null;
 
   const selectedEngine = config.transcription.engine ?? "local";
   const engineHelp = selectedEngine === "local" && local.data && !local.data.ready
     ? t("settings.transcription.engine.localUnavailable")
-    : selectedEngine === "xai" && xai.data && !xai.data.connected
+    : selectedEngine === "xai" && providers.data && !providers.data.connection.connected
       ? t("settings.transcription.engine.xaiUnavailable")
       : t("settings.transcription.engine.help");
   const languageOptions = [
@@ -165,68 +142,36 @@ export function TranscriptionSection({ tracker }: TranscriptionSectionProps) {
         )}
       </div>
 
-      <div className="local-caption-card" data-installed={xai.data?.connected ? "true" : "false"}>
+      <div className="local-caption-card" data-installed={providers.data?.connection.connected ? "true" : "false"}>
         <div className="local-caption-head">
           <div>
-            <div className="local-caption-title">{t("settings.transcription.xai.title")}</div>
-            <div className="local-caption-sub">{t("settings.transcription.xai.sub")}</div>
+            <div className="local-caption-title">{t("settings.providers.connection.title")}</div>
+            <div className="local-caption-sub">{t("settings.providers.connection.sub")}</div>
           </div>
-          <span className={`provider-state ${xai.data?.connected ? "provider-state--ok" : "provider-state--muted"}`}>
-            {xai.data?.connected
+          <span className={`provider-state ${providers.data?.connection.connected ? "provider-state--ok" : "provider-state--muted"}`}>
+            {providers.data?.connection.connected
               ? t("settings.transcription.xai.connected")
-              : t("settings.transcription.xai.unavailable")}
+              : t("settings.providers.connection.disconnected")}
           </span>
         </div>
 
-        {xai.data?.detail && !xaiAuthorizing && (
-          <div className="provider-status-note">{xai.data.detail}</div>
+        {providers.data?.connection.detail && (
+          <div className="provider-status-note">{providers.data.connection.detail}</div>
         )}
-        {xaiAuthorizing && (
-          <div className="provider-status-note" role="status">
-            {xai.data?.authorization.message}
-            {xai.data?.authorization.verificationUrl && (
-              <> · <a href={xai.data.authorization.verificationUrl} target="_blank" rel="noreferrer">{t("settings.transcription.xai.openAuthorization")}</a></>
-            )}
-            {xai.data?.authorization.userCode && <> · {t("settings.transcription.xai.code")} {xai.data.authorization.userCode}</>}
-          </div>
-        )}
-        {(xai.error || authorizeXai.error || cancelXaiAuthorization.error || logoutXai.error || testXai.error || xai.data?.authorization.status === "failed") && (
+        {providers.error && (
           <div className="provider-status-note provider-status-note--bad" role="alert">
-            {xai.error?.message || authorizeXai.error?.message || cancelXaiAuthorization.error?.message || logoutXai.error?.message || testXai.error?.message || xai.data?.authorization.message}
+            {providers.error.message}
           </div>
         )}
-        {testXai.data?.ok && (
-          <div className="provider-status-note">{t("settings.transcription.xai.testPassed")} · {testXai.data.provider}</div>
-        )}
-        <div className="local-caption-actions">
-          {xaiAuthorizing ? (
-            <button type="button" className="path-btn" disabled={cancelXaiAuthorization.isPending} onClick={() => cancelXaiAuthorization.mutate()}>
-              {t("settings.transcription.xai.cancel")}
-            </button>
-          ) : (
-            <button type="button" className="path-btn local-caption-primary" disabled={authorizeXai.isPending} onClick={startXaiAuthorization}>
-              {xai.data?.connected ? t("settings.transcription.xai.reauthorize") : t("settings.transcription.xai.authorize")}
-            </button>
-          )}
-          {xai.data?.connected && !xaiAuthorizing && (
-            <>
-              <button type="button" className="path-btn" disabled={testXai.isPending} onClick={() => testXai.mutate()}>
-                {testXai.isPending ? t("settings.transcription.xai.testing") : t("settings.transcription.xai.test")}
-              </button>
-              <button
-                type="button"
-                className="path-btn"
-                disabled={logoutXai.isPending}
-                onClick={() => {
-                  if (window.confirm(t("settings.transcription.xai.logoutConfirm"))) logoutXai.mutate();
-                }}
-              >
-                {t("settings.transcription.xai.logout")}
-              </button>
-            </>
-          )}
+        <div className="provider-status-note" role="status">
+          {t(`settings.providers.readiness.${providers.data?.readiness.transcription.status ?? "untested"}`)}
+          {providers.data?.readiness.transcription.testedAt && <> · {providers.data.readiness.transcription.model}</>}
         </div>
-        <div className="provider-install-hint">{t("settings.transcription.xai.noDependency")}</div>
+        <div className="local-caption-actions">
+          <Link className="path-btn local-caption-primary" to="/settings/llm">
+            {t("settings.providers.open")}
+          </Link>
+        </div>
       </div>
 
       <div style={{ marginTop: 16 }}>

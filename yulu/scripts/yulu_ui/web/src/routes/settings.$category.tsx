@@ -13,6 +13,7 @@ import { StorageSection } from "../components/settings/StorageSection.js";
 import { TranscriptionSection } from "../components/settings/TranscriptionSection.js";
 import { VoiceInputSection } from "../components/settings/VoiceInputSection.js";
 import { AutomationSection } from "../components/settings/AutomationSection.js";
+import { ProviderSection } from "../components/settings/ProviderSection.js";
 
 /**
  * Maps a settings category to the rich section components that render its
@@ -38,6 +39,7 @@ const CATEGORY_SECTIONS: Record<string, (tracker: SettingsRestartTracker) => Rea
     </>
   ),
   transcription: (tracker) => <TranscriptionSection tracker={tracker} />,
+  llm: (tracker) => <ProviderSection tracker={tracker} />,
   voice: (tracker) => <VoiceInputSection tracker={tracker} />,
   automation: (tracker) => <AutomationSection tracker={tracker} />,
 };

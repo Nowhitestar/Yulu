@@ -16,8 +16,9 @@ searchable transcripts and summaries, and lets Agents work across that history.
 
 There is no Yulu account. Recordings and task state stay on your Mac. Yulu uses
 the audio engine you explicitly select for realtime captions, final transcription,
-and dictation: local by default, or xAI cloud through OAuth authorized directly in
-Yulu. Yulu never silently switches between them.
+and dictation: local by default, or xAI cloud through one Grok-compatible OAuth
+or explicitly chosen API-key connection managed by Yulu. Yulu never silently
+switches between them or between credential sources.
 
 Transcription, Summary Provider, and Conversation Provider selections are
 independent. Durable summary work and locally stored conversations retain their
@@ -243,8 +244,10 @@ pipeline. Install Yulu first, then add the skill to each Agent you want to use.
   requests with a per-install bearer token.
 - Yulu does not store Agent connector credentials.
 - Selecting xAI authorizes Yulu to send audio directly to xAI for speech-to-text.
-  Yulu stores its OAuth grant in macOS Keychain; Hermes and OpenClaw do not receive
-  the grant or run Yulu's audio pipeline. Selecting local keeps speech recognition local.
+  Settings → AI Providers keeps OAuth tokens and explicitly submitted API keys in
+  macOS Keychain and tests transcription, summary, and conversation separately;
+  Hermes and OpenClaw do not receive the credential or run Yulu's audio pipeline.
+  Selecting local keeps speech recognition local.
 - External delivery requires explicit authorization; uncertain side effects are
   not blindly replayed.
 

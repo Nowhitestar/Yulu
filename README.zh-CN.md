@@ -14,8 +14,8 @@ Yulu（语录，*yǔ lù*）是一套围绕本地文件和现有 Agent 设计的
 实时字幕，把会议整理成可搜索的转录与纪要，并让 Agent 继续使用这些历史内容工作。
 
 Yulu 不需要账号。录音文件和任务状态保存在你的 Mac 上。实时字幕、最终转写和听写
-使用你明确选择的音频引擎：默认本地，也可直接在 Yulu 中授权 xAI 云端方案。
-Yulu 不会在两者之间自动切换。
+使用你明确选择的音频引擎：默认本地，也可通过 Yulu 管理的一次 Grok 兼容 OAuth
+或显式提交的 API Key 连接 xAI 云端方案。引擎与凭据来源之间都不会自动切换。
 
 ## 现在可以做什么
 
@@ -222,8 +222,9 @@ yulu mcp test
 - 运行数据库、任务状态、token、socket 和日志保存在 `~/.config/yulu`。
 - Host 只监听回环地址，并使用每次安装生成的 bearer token 保护完成事件、转写和 MCP 请求。
 - Yulu 不保存 Agent 的连接器凭据。
-- 选择 xAI 代表允许 Yulu 把音频直接发送给 xAI；OAuth 凭据保存在 macOS 钥匙串，
-  不会发送给 Hermes 或 OpenClaw。选择本地引擎时，语音识别留在本机。
+- 选择 xAI 代表允许 Yulu 把音频直接发送给 xAI；「设置 → 智能服务」把 OAuth
+  令牌和显式提交的 API Key 保存在 macOS 钥匙串，并分别测试转写、摘要和对话能力。
+  Hermes/OpenClaw 不会收到该凭据。选择本地引擎时，语音识别留在本机。
 - 外部投递必须经过明确授权；结果不确定时不会盲目重试。
 
 详细控制与排障见[配置](docs/configuration.md)、[运维](docs/operations.md)和

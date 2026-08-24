@@ -9,10 +9,6 @@ let localInstalled = false;
 const installLocal = vi.fn();
 const uninstallLocal = vi.fn();
 const testLocal = vi.fn();
-const authorizeXai = vi.fn();
-const cancelXaiAuthorization = vi.fn();
-const logoutXai = vi.fn();
-const testXai = vi.fn();
 
 const schema = [
   { path: "transcription.engine", category: "transcription", label: "音频引擎", type: "select", reload: { kind: "none" } },
@@ -46,22 +42,24 @@ vi.mock("../../web/src/trpc.js", () => ({
       uninstall: { useMutation: () => ({ mutate: uninstallLocal, isPending: false, error: null }) },
       test: { useMutation: () => ({ mutate: testLocal, isPending: false, error: null }) },
     },
-    xaiAudio: {
+    providers: {
       status: { useQuery: () => ({ data: {
-        connected: false,
-        detail: "需要在 Yulu 中授权 xAI",
-        authorization: { status: "idle", verificationUrl: "", userCode: "", message: "" },
+        connection: {
+          connected: false,
+          source: null,
+          detail: "需要在 Yulu 中连接 xAI",
+          authorization: { status: "idle", verificationUrl: "", userCode: "", message: "" },
+        },
+        readiness: {
+          transcription: { status: "untested", model: "speech-to-text", testedAt: null },
+        },
       }, error: null }) },
-      authorize: { useMutation: () => ({ mutate: authorizeXai, isPending: false, error: null }) },
-      cancelAuthorization: { useMutation: () => ({ mutate: cancelXaiAuthorization, isPending: false, error: null }) },
-      logout: { useMutation: () => ({ mutate: logoutXai, isPending: false, error: null }) },
-      test: { useMutation: () => ({ mutate: testXai, isPending: false, error: null, data: null }) },
     },
     recording: { state: { useQuery: () => ({ data: { state: recordingState } }) } },
     useUtils: () => ({
       config: { get: { setData: vi.fn(), invalidate: vi.fn() } },
       localCaption: { status: { invalidate: vi.fn() } },
-      xaiAudio: { status: { invalidate: vi.fn() } },
+      providers: { status: { invalidate: vi.fn() } },
     }),
   },
 }));
@@ -90,10 +88,6 @@ beforeEach(() => {
   installLocal.mockClear();
   uninstallLocal.mockClear();
   testLocal.mockClear();
-  authorizeXai.mockClear();
-  cancelXaiAuthorization.mockClear();
-  logoutXai.mockClear();
-  testXai.mockClear();
   vi.spyOn(window, "confirm").mockReturnValue(true);
   vi.spyOn(window, "open").mockReturnValue({ opener: null, close: vi.fn(), location: { href: "" } } as never);
 });
@@ -107,14 +101,15 @@ describe("TranscriptionSection", () => {
     expect(within(languageRow).queryByRole("option", { name: "ja" })).toBeNull();
   });
 
-  it("presents one explicit audio engine and Yulu-owned xAI authorization", () => {
+  it("presents one explicit audio engine and links to the shared xAI connection", () => {
     mount();
     expect(screen.getByText("音频引擎")).toBeInTheDocument();
     expect(screen.getByText("语言")).toBeInTheDocument();
     expect(screen.getByText("本地音频引擎")).toBeInTheDocument();
-    expect(screen.getByText("xAI OAuth 授权")).toBeInTheDocument();
+    expect(screen.getByText("xAI 连接")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "安装本地模型" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "授权 xAI" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "打开智能服务设置" })).toHaveAttribute("href", "/settings/llm");
+    expect(screen.queryByRole("button", { name: "使用 Grok 账号连接" })).toBeNull();
     expect(screen.getByRole("link", { name: /管理术语表/ })).toHaveAttribute("href", "/knowledge/glossary");
 
     for (const retired of [/MLX/i, /说话人分离/i, /说话人数/i]) {
@@ -153,10 +148,8 @@ describe("TranscriptionSection", () => {
     expect(within(row).queryByText(/录音中不可改/)).toBeNull();
   });
 
-  it("starts xAI OAuth directly from Yulu", async () => {
+  it("keeps xAI authorization on the shared provider route", () => {
     mount();
-    await userEvent.setup().click(screen.getByRole("button", { name: "授权 xAI" }));
-    expect(authorizeXai).toHaveBeenCalledOnce();
-    expect(authorizeXai.mock.calls[0]?.[0]).toBeUndefined();
+    expect(screen.getByRole("link", { name: "打开智能服务设置" })).toHaveAttribute("href", "/settings/llm");
   });
 });

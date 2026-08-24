@@ -52,6 +52,10 @@ vi.mock("../../../web/src/trpc.js", () => {
       language: "auto",
       dictation: { prompt_slug: "dictation-cleanup", translate_prompt_slug: "dictation-translate", target_language: "English" },
     },
+    intelligence: {
+      summary: { provider: "agent", model: "runtime-managed" },
+      conversation: { provider: "xai", model: "grok-4.6" },
+    },
     llm: { enabled: false, command: [] },
     status_agent: {
       enabled: false,
@@ -177,6 +181,29 @@ vi.mock("../../../web/src/trpc.js", () => {
         logout: { useMutation: noopMutation },
         test: { useMutation: noopMutation },
       },
+      providers: {
+        status: { useQuery: () => ({ data: {
+          connection: {
+            connected: false,
+            source: null,
+            oauthConnected: false,
+            apiKeyConfigured: false,
+            detail: "需要在 Yulu 中连接 xAI",
+            authorization: { status: "idle", verificationUrl: "", userCode: "", message: "" },
+          },
+          readiness: {
+            transcription: { capability: "transcription", status: "untested", model: "speech-to-text", testedAt: null, detail: "尚未测试", credentialSource: null },
+            summary: { capability: "summary", status: "untested", model: "grok-4.6", testedAt: null, detail: "尚未测试", credentialSource: null },
+            conversation: { capability: "conversation", status: "untested", model: "grok-4.6", testedAt: null, detail: "尚未测试", credentialSource: null },
+          },
+        }, error: null }) },
+        authorize: { useMutation: noopMutation },
+        cancelAuthorization: { useMutation: noopMutation },
+        logoutOAuth: { useMutation: noopMutation },
+        setApiKey: { useMutation: noopMutation },
+        clearApiKey: { useMutation: noopMutation },
+        probe: { useMutation: noopMutation },
+      },
       llm: { test: { useMutation: noopMutation } },
       prompts: {
         list: { useQuery: (input: unknown) => {
@@ -251,7 +278,6 @@ function routesTree() {
           handle: settingsHandle,
           children: [
             { index: true, element: <Navigate to="/settings/general" replace /> },
-            { path: "llm", element: <Navigate to="/agent-console" replace /> },
             { path: "integrations", element: <Navigate to="/agent-console" replace /> },
             {
               path: ":category",
@@ -308,6 +334,7 @@ describe("Settings (3-column MasterDetail)", () => {
     expect(scoped.getByText("通用")).toBeInTheDocument();
     expect(scoped.getByText("音频与存储")).toBeInTheDocument();
     expect(scoped.getByText("转写")).toBeInTheDocument();
+    expect(scoped.getByText("智能服务")).toBeInTheDocument();
     expect(scoped.queryByText("AI 集成")).toBeNull();
     expect(scoped.queryByText("Agent Console")).toBeNull();
   });
@@ -397,7 +424,7 @@ describe("Settings category detail content (re-homed widgets)", () => {
     expect(container.querySelector("h2.settings-section-h")?.textContent).toBe(translate("zh", "settings.transcription.heading"));
     expect(detail.getByText(translate("zh", "settings.transcription.engine.label"))).toBeInTheDocument();
     expect(detail.getByText(translate("zh", "settings.transcription.language.label"))).toBeInTheDocument();
-    expect(detail.getByText(translate("zh", "settings.transcription.xai.title"))).toBeInTheDocument();
+    expect(detail.getByText(translate("zh", "settings.providers.connection.title"))).toBeInTheDocument();
     expect(detail.queryByText(/MLX|说话人分离/)).toBeNull();
   });
 
@@ -498,12 +525,11 @@ describe("Settings category detail content (re-homed widgets)", () => {
     })));
   });
 
-  it("llm: legacy settings route redirects to Agent Console instead of rendering settings UI", () => {
-    const tree = routesTree();
-    const settingsRoute = tree[0]!.children!.find((c) => c.path === "settings")!;
-    const llmRoute = settingsRoute.children!.find((c) => c.path === "llm")!;
-    const el = llmRoute.element as React.ReactElement<{ to: string }>;
-    expect(el.props.to).toBe("/agent-console");
+  it("llm: renders the shared AI Providers settings surface", () => {
+    const { container } = wrap("/settings/llm");
+    const detail = within(container.querySelector(".masterdetail-detail") as HTMLElement);
+    expect(detail.getByText(translate("zh", "settings.providers.heading"))).toBeInTheDocument();
+    expect(detail.getByText(translate("zh", "settings.providers.connection.title"))).toBeInTheDocument();
   });
 
   it("integrations: legacy settings route redirects to Agent Console instead of rendering AI integration UI", () => {

@@ -179,10 +179,14 @@ and dictation. The default is local and there is no automatic fallback.
 The Host accepts on-demand audio only from the configured recordings directory
 or `~/.config/yulu/dictation`, and only as a valid absolute WAV path.
 
-xAI OAuth is authorized from Settings and stored in macOS Keychain. Tokens are
-not configuration fields and never appear in `config.json`. Upgrades archive and
-remove the retired `transcription.xai_credential_source` field; Hermes/OpenClaw
-credentials are not imported or deleted.
+xAI is connected once from Settings → AI Providers using Grok CLI-compatible
+OAuth or an API key the user explicitly chooses. OAuth tokens and API keys stay
+in separate macOS Keychain items; neither is a configuration field or browser
+read-back value. OAuth remains primary while present, and an OAuth or entitlement
+failure never causes an automatic switch to the saved API key. The page records
+separate real-request readiness for transcription, summary, and conversation.
+Upgrades archive and remove the retired `transcription.xai_credential_source`
+field; Hermes/OpenClaw credentials are not imported or deleted.
 
 ## `llm` and Agent Console
 

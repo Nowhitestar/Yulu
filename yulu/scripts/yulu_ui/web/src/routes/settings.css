@@ -173,9 +173,85 @@
   border-color: color-mix(in srgb, var(--accent) 30%, var(--edge-card));
 }
 
+.provider-choice-list,
+.provider-readiness-list {
+  display: grid;
+  gap: 0;
+}
+.provider-choice-row,
+.provider-readiness-row {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) minmax(220px, auto);
+  align-items: center;
+  gap: 16px;
+  min-height: 54px;
+  padding: 9px 4px;
+  border-top: 1px solid var(--edge);
+}
+.provider-choice-row:first-child { border-top: 0; }
+.provider-choice-row label {
+  color: var(--fg);
+  font-size: 13px;
+}
+.provider-choice-controls,
+.provider-api-key-controls {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: 0;
+}
+.provider-choice-controls .value-input { min-width: 140px; }
+.provider-model-input { max-width: 180px; }
+.provider-api-key-form {
+  display: grid;
+  gap: 6px;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--edge);
+}
+.provider-api-key-form > label {
+  color: var(--fg-2);
+  font-size: 11px;
+}
+.provider-api-key-controls input {
+  min-width: 0;
+  flex: 1 1 220px;
+  max-width: 360px;
+  height: 30px;
+  padding: 4px 9px;
+  border: 1px solid var(--edge-card);
+  border-radius: var(--radius-control);
+  background: var(--field-bg);
+  color: var(--fg);
+}
+.provider-readiness-list {
+  margin-top: 18px;
+}
+.provider-readiness-list h3 {
+  margin: 0;
+  padding-bottom: 6px;
+  color: var(--fg);
+  font-size: 12.5px;
+}
+.provider-readiness-status {
+  min-height: 16px;
+  margin-top: 3px;
+  color: var(--fg-3);
+  font-size: 10.5px;
+}
+.provider-readiness-status--bad { color: var(--red); }
+.provider-readiness-meta { font-family: var(--font-mono); }
+
 @media (max-width: 720px) {
   .local-caption-stats { grid-template-columns: 1fr; }
   .local-caption-actions .path-btn { min-height: 40px; }
+  .provider-choice-row,
+  .provider-readiness-row { grid-template-columns: minmax(0, 1fr); gap: 8px; }
+  .provider-choice-controls,
+  .provider-api-key-controls { justify-content: flex-start; flex-wrap: wrap; }
+  .provider-choice-controls .value-input,
+  .provider-model-input { width: 100%; max-width: none; }
 }
 
 .voice-hotkey-display {
