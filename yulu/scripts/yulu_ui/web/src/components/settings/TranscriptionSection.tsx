@@ -155,9 +155,6 @@ export function TranscriptionSection({ tracker }: TranscriptionSectionProps) {
           </span>
         </div>
 
-        {providers.data?.connection.detail && (
-          <div className="provider-status-note">{providers.data.connection.detail}</div>
-        )}
         {providers.error && (
           <div className="provider-status-note provider-status-note--bad" role="alert">
             {providers.error.message}
