@@ -275,6 +275,26 @@ function findMutableSession(store: AgentSessionStore, sessionId: string): AgentS
   return session;
 }
 
+export function pauseAgentSession(configDir: string, sessionId: string, reason: string): AgentSession {
+  const store = readAgentSessionStore(configDir);
+  const session = findMutableSession(store, sessionId);
+  session.status = "paused";
+  session.pausedReason = reason.slice(0, 1000);
+  session.updatedAt = nowIso();
+  writeAgentSessionStore(configDir, store);
+  return session;
+}
+
+export function resumeAgentSession(configDir: string, sessionId: string): AgentSession {
+  const store = readAgentSessionStore(configDir);
+  const session = findMutableSession(store, sessionId);
+  session.status = "active";
+  delete session.pausedReason;
+  session.updatedAt = nowIso();
+  writeAgentSessionStore(configDir, store);
+  return session;
+}
+
 export function renameAgentSession(configDir: string, sessionId: string, title: string): AgentSession {
   const store = readAgentSessionStore(configDir);
   const session = findMutableSession(store, sessionId);
