@@ -10,6 +10,7 @@ import {
   readAgentSessionStore,
   resumeAgentSession,
   storePath,
+  summarizeAgentSession,
   updateAgentSessionNativeSession,
 } from "../src/agentSessionStore.js";
 
@@ -129,5 +130,23 @@ describe("agentSessionStore", () => {
       messages: [{ text: "Keep this question" }],
     });
     expect(resumed.pausedReason).toBeUndefined();
+  });
+
+  it("projects pinned identity and pause status in conversation summaries", () => {
+    const root = mkdtempSync(join(tmpdir(), "agent-session-store-"));
+    roots.push(root);
+    const created = createAgentSession(root, {
+      purpose: "ask",
+      provider: "xai",
+      model: "grok-4.6-exact",
+    });
+    const paused = pauseAgentSession(root, created.id, "selected model unavailable");
+
+    expect(summarizeAgentSession(paused)).toMatchObject({
+      provider: "xai",
+      model: "grok-4.6-exact",
+      status: "paused",
+      pausedReason: "selected model unavailable",
+    });
   });
 });
