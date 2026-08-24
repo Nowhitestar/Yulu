@@ -308,8 +308,8 @@ describe("RecordingPipeline", () => {
     expect(store!.listTasks()).toEqual([]);
   });
 
-  it("persists the transcript while the summary Agent is unavailable", async () => {
-    const { audioPath } = setup({ available: false });
+  it("pauses an unavailable summary provider until explicit same-snapshot retry", async () => {
+    const { audioPath, configManager, transcribe } = setup({ available: false, pollMs: 5 });
     expect(pipeline!.transcriptionHealth()).toEqual({
       available: true,
       provider: "test-audio",
@@ -318,20 +318,29 @@ describe("RecordingPipeline", () => {
       policyReason: null,
     });
     const { task } = pipeline!.enqueueCompletion({ audioPath, title: "Demo", sendToNotion: true });
-    await vi.waitFor(() => expect(store!.getTask(task.id)?.state).toBe("transcript_committed"));
+    await vi.waitFor(() => expect(store!.getTask(task.id)).toMatchObject({
+      state: "awaiting_provider",
+      attempt: 1,
+      summaryProvider: "hermes",
+      summaryModel: "runtime-managed",
+    }));
     expect(store!.listArtifacts(task.id)).toEqual([
       expect.objectContaining({ kind: "transcript" }),
     ]);
-  });
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(store!.getTask(task.id)?.attempt).toBe(1);
+    expect(transcribe).toHaveBeenCalledOnce();
 
-  it("backs off and fails after three unavailable health checks", async () => {
-    const { audioPath, transcribe } = setup({ available: false, pollMs: 5 });
-    const { task } = pipeline!.enqueueCompletion({ audioPath, title: "Demo" });
-
-    await vi.waitFor(() => expect(store!.getTask(task.id)?.state).toBe("failed"));
+    configManager.update("intelligence.summary", { provider: "xai", model: "grok-new-default" });
+    pipeline!.retry(task.id);
+    await vi.waitFor(() => expect(store!.getTask(task.id)).toMatchObject({
+      state: "awaiting_provider",
+      attempt: 2,
+      summaryProvider: "hermes",
+      summaryModel: "runtime-managed",
+    }));
     expect(store!.getTask(task.id)).toMatchObject({
-      attempt: 3,
-      error: expect.stringContaining("Summary Agent unavailable after 3 attempts"),
+      error: "Hermes offline",
     });
     expect(transcribe).toHaveBeenCalledOnce();
   });
