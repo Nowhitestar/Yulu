@@ -762,6 +762,26 @@ describe("AgentConsole", () => {
     expect(queryByText(/条消息/)).toBeNull();
   });
 
+  it("names an existing Agent session from its pinned snapshot", async () => {
+    mockSessions = [{
+      id: "session-claude",
+      agent: "claude",
+      provider: "claude",
+      model: "runtime-managed",
+      status: "active",
+      title: "Pinned Claude",
+      updatedAt: "2026-08-24T10:00:00.000Z",
+      messageCount: 0,
+    }];
+    mockSelectedSession = { ...mockSessions[0], messages: [] };
+
+    const { getByText, findByText, queryByText } = wrap(["/agent-console"], "en");
+    fireEvent.click(getByText("Pinned Claude"));
+
+    expect(await findByText(/^claude is pinned to this conversation/)).toBeInTheDocument();
+    expect(queryByText(/^Codex CLI is pinned to this conversation/)).toBeNull();
+  });
+
   it("localizes the xAI privacy boundary and empty local result without a source card", async () => {
     mockConversationSelection = { provider: "xai", model: "grok-4.6-exact" };
     askMutateAsync.mockResolvedValueOnce({
