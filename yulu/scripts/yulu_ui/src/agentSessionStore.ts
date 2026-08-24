@@ -7,6 +7,8 @@ const STORE_VERSION = 2;
 const STORE_FILE = "agent-sessions.json";
 const MAX_TITLE_CHARS = 48;
 const MAX_MESSAGE_CHARS = 80_000;
+const MAX_HISTORY_MESSAGES = 12;
+const MAX_HISTORY_CHARS = 12_000;
 
 export const agentSessionSourceSchema = z.object({
   ref: z.number().optional(),
@@ -71,6 +73,11 @@ export type AgentSessionStore = z.infer<typeof storeSchema>;
 export type AgentSession = z.infer<typeof persistedSessionSchema>;
 export type AgentSessionMessage = z.infer<typeof persistedMessageSchema>;
 export type AgentSessionMessageInput = z.infer<typeof agentSessionMessageInputSchema>;
+
+export interface AgentSessionHistoryMessage {
+  role: "user" | "assistant";
+  content: string;
+}
 
 export function storePath(configDir: string): string {
   return join(configDir, STORE_FILE);
@@ -234,6 +241,28 @@ export function listAgentSessions(
 
 export function getAgentSession(configDir: string, id: string): AgentSession | null {
   return readAgentSessionStore(configDir).sessions.find((session) => session.id === id) ?? null;
+}
+
+export function projectAgentSessionHistory(
+  session: AgentSession,
+  currentQuestion?: string,
+): AgentSessionHistoryMessage[] {
+  const messages = session.messages.slice();
+  const last = messages.at(-1);
+  if (currentQuestion && last?.role === "user" && last.text.trim() === currentQuestion.trim()) {
+    messages.pop();
+  }
+  const history: AgentSessionHistoryMessage[] = [];
+  let remainingChars = MAX_HISTORY_CHARS;
+  for (let index = messages.length - 1; index >= 0 && history.length < MAX_HISTORY_MESSAGES && remainingChars > 0; index -= 1) {
+    const message = messages[index]!;
+    let content = message.text.trim().slice(0, remainingChars);
+    if (/[\uD800-\uDBFF]$/.test(content)) content = content.slice(0, -1);
+    if (!content) continue;
+    remainingChars -= content.length;
+    history.unshift({ role: message.role, content });
+  }
+  return history;
 }
 
 export function appendAgentSessionMessage(
