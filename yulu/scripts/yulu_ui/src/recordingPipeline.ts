@@ -475,21 +475,30 @@ export class RecordingPipeline {
             `Pinned Summary Provider xai is unavailable for model ${task.summaryModel}`,
           );
         }
-        const result = await xaiText.request({
-          capability: "summary",
-          model: task.summaryModel,
-          input: [
-            { role: "system", content: task.instructions },
-            { role: "user", content: transcription.transcript },
-          ],
-        });
+        let result: Awaited<ReturnType<XaiTextClient["request"]>>;
+        try {
+          result = await xaiText.request({
+            capability: "summary",
+            model: task.summaryModel,
+            input: [
+              { role: "system", content: task.instructions },
+              { role: "user", content: transcription.transcript },
+            ],
+          });
+        } catch (error) {
+          throw new AgentUnavailableError((error as Error).message);
+        }
         if (result.model !== task.summaryModel) {
           throw new AgentUnavailableError("xAI summary returned a different model identity");
         }
-        this.options.artifacts.writeStagedSummary(
-          task.id,
-          glossary ? applyGlossaryContract(result.text, glossary) : result.text,
-        );
+        try {
+          this.options.artifacts.writeStagedSummary(
+            task.id,
+            glossary ? applyGlossaryContract(result.text, glossary) : result.text,
+          );
+        } catch (error) {
+          throw new AgentUnavailableError((error as Error).message);
+        }
         const records = this.options.artifacts.commitFromWorkspace(current, {
           summaryProvider: "xai",
           summaryModel: result.model,
