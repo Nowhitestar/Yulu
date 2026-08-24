@@ -281,6 +281,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 **Goal**: Users can choose intelligence independently for transcription, summaries, and conversation, with explicit credential custody and an end-to-end xAI path that preserves local-first boundaries.
 **Depends on**: Phase 9
 **Requirements**: PRVD-01, PRVD-02, PRVD-03, PRVD-04, PRVD-05, XAI-01, XAI-02, XAI-03, XAI-04
+**Implementation source of truth**: GitHub spec #120 and Ask Matt tracer-bullet tickets #121-#125. The plans below are retained as research and acceptance references, not the execution queue.
 **Success Criteria** (what must be TRUE):
 
   1. A user selects Transcription, Summary Provider, and Conversation Provider independently and sees capability-specific readiness proven by a real request

@@ -3,9 +3,9 @@ gsd_state_version: 1.0
 milestone: v0.6
 milestone_name: milestone
 status: executing
-stopped_at: Phase 10 planning complete — ready for 10-01
-last_updated: "2026-08-24T12:40:33.000Z"
-last_activity: 2026-08-24 -- Phase 10/12 OAuth ownership corrected against official provider contracts
+stopped_at: Ask Matt tickets published — implementing GitHub issue 121
+last_updated: "2026-08-24T13:32:55.000Z"
+last_activity: 2026-08-24 -- Phase 10 spec 120 and tickets 121-125 published through Ask Matt
 progress:
   total_phases: 13
   completed_phases: 9
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-08-23)
 
 **Core value:** A new user can install Yulu, record a real meeting, and obtain saved audio, transcript, and summary without installing a specific agent.
-**Current focus:** Phase 10 — Provider Model & xAI Foundation
+**Current focus:** Phase 10 — Ask Matt spec and tracer-bullet tickets
 
 ## Current Position
 
-Phase: 10 (Provider Model & xAI Foundation) — PLANNED
-Plan: 0 of 5
-Status: Ready to execute
-Last activity: 2026-08-24 -- Phase 10/12 OAuth ownership corrected against official provider contracts
+Phase: 10 (Provider Model & xAI Foundation) — PARTIAL IMPLEMENTATION
+Plan: Ask Matt frontier #121; #122 blocked by #121; #123/#124 blocked by #122; #125 blocked by #123/#124
+Status: Implementing #121; four verified atomic commits preserved, ticket not yet complete
+Last activity: 2026-08-24 -- Phase 10 spec #120 and tickets #121-#125 published through Ask Matt
 
 ## Performance Metrics
 
@@ -99,6 +99,7 @@ Last activity: 2026-08-24 -- Phase 10/12 OAuth ownership corrected against offic
 Decisions are logged in PROJECT.md Key Decisions table.
 Recent decisions affecting current work:
 
+- [Workflow]: Phase 10 implementation truth is GitHub spec #120 and tracer-bullet tickets #121-#125. GSD Phase 10 plans remain reference material and do not drive execution unless explicitly requested.
 - [Init]: Build the cross-platform abstraction layer now (macOS-only impl) — avoid deepening lock-in.
 - [Init]: Install model = agent-orchestrated provisioning (spike to validate WHO calls it — Phase 6).
 - [Init]: Cloud sync = configurable data folder (Obsidian model), not a custom backend.
