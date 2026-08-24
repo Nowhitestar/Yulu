@@ -36,7 +36,8 @@ export const agentSessionsRouter = router({
     }))
     .mutation(({ ctx, input }) => {
       return createAgentSession(ctx.paths.configDir, {
-        agent: input.agent,
+        provider: input.agent,
+        model: "runtime-managed",
         title: input.title,
         purpose: "ask",
       });

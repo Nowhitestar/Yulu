@@ -152,17 +152,30 @@ function makeMessage(input: AgentSessionMessageInput): AgentSessionMessage {
 
 export function createAgentSession(
   configDir: string,
-  input: { agent: string; title?: string; purpose?: "ask" | "background"; runtimeLabel?: string },
+  input: {
+    title?: string;
+    runtimeLabel?: string;
+  } & (
+    { purpose?: "ask"; provider: string; model: string }
+    | { purpose: "background"; agent: string }
+  ),
 ): AgentSession {
   const store = readAgentSessionStore(configDir);
   const timestamp = nowIso();
+  const purpose = input.purpose ?? "ask";
+  const identity = input.purpose === "background"
+    ? { provider: input.agent, model: "runtime-managed" }
+    : z.object({
+        provider: z.string().trim().min(1).max(128),
+        model: z.string().trim().min(1).max(128),
+      }).parse(input);
   const session: AgentSession = {
     id: randomUUID(),
-    agent: input.agent,
-    provider: input.agent,
-    model: "runtime-managed",
+    agent: identity.provider,
+    provider: identity.provider,
+    model: identity.model,
     status: "active",
-    purpose: input.purpose ?? "ask",
+    purpose,
     title: titleFromText(input.title ?? ""),
     createdAt: timestamp,
     updatedAt: timestamp,
