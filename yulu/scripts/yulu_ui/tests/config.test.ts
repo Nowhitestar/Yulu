@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { ConfigManager, migrateLegacyTranscriptionConfig } from "../src/config.js";
+import { ConfigManager, ConfigSchema, XAI_TEXT_MODEL_DEFAULT, migrateLegacyTranscriptionConfig } from "../src/config.js";
 import * as fs from "node:fs";
 import { ZodError } from "zod";
 import { cpSync, mkdtempSync, readdirSync, rmSync, utimesSync, statSync, readFileSync } from "node:fs";
@@ -40,6 +40,9 @@ describe("ConfigManager", () => {
       expect(cfg.audio.output_dir).toBe("~/Movies/Yulu");
       expect(cfg.transcription.language).toBe("zh");
       expect(cfg.transcription.engine).toBe("local");
+      expect(cfg.intelligence.summary).toEqual({ provider: "agent", model: "runtime-managed" });
+      expect(cfg.intelligence.conversation).toEqual({ provider: "agent", model: "runtime-managed" });
+      expect(XAI_TEXT_MODEL_DEFAULT).toBe("grok-4.6");
       expect(cfg.transcription.dictation.prompt_slug).toBe("dictation-cleanup");
       expect(cfg.transcription.dictation.timeout_sec).toBe(30);
       expect(cfg.transcription.dictation.deadline_sec).toBe(30);
@@ -216,6 +219,40 @@ describe("ConfigManager", () => {
       expect(r3.daemonsNeedingSighup).toEqual([]);
       expect(r3.daemonsNeedingRestart).toEqual([]);
     } finally { cleanup(); }
+  });
+
+  it("updates summary and conversation selections independently", () => {
+    const { mgr, cleanup } = makeCfg();
+    try {
+      expect(mgr.update("intelligence.summary", {
+        provider: "xai",
+        model: "grok-4.6-fast",
+      })).toEqual({ daemonsNeedingRestart: [], daemonsNeedingSighup: [] });
+
+      const cfg = mgr.read();
+      expect(cfg.intelligence.summary).toEqual({ provider: "xai", model: "grok-4.6-fast" });
+      expect(cfg.intelligence.conversation).toEqual({ provider: "agent", model: "runtime-managed" });
+      expect(cfg.transcription.engine).toBe("local");
+    } finally { cleanup(); }
+  });
+
+  it("defaults an xAI selection to the documented exact text model", () => {
+    const cfg = ConfigSchema.parse({
+      intelligence: { summary: { provider: "xai" } },
+    });
+    expect(cfg.intelligence.summary).toEqual({ provider: "xai", model: XAI_TEXT_MODEL_DEFAULT });
+  });
+
+  it("rejects unsupported providers, invalid models, and credential-shaped selection fields", () => {
+    for (const selection of [
+      { provider: "gateway", model: "grok-4.6" },
+      { provider: "xai", model: "" },
+      { provider: "xai", model: "x".repeat(129) },
+      { provider: "agent", model: "grok-4.6" },
+      { provider: "xai", model: "grok-4.6", api_key: "not-allowed" },
+    ]) {
+      expect(ConfigSchema.safeParse({ intelligence: { summary: selection } }).success).toBe(false);
+    }
   });
 
   it("rejects updates when on-disk mtime advanced (external write)", () => {

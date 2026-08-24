@@ -38,6 +38,18 @@ describe("settingsRegistry", () => {
   it("llm.command 改完无需动作(读取即生效)", () => {
     expect(reloadFor("llm.command")).toEqual({ kind: "none" });
   });
+  it("registers independent summary and conversation provider/model selections", () => {
+    for (const path of ["intelligence.summary", "intelligence.conversation"]) {
+      const def = defFor(path);
+      expect(def?.category).toBe("llm");
+      expect(def?.type).toBe("select");
+      expect(def?.hidden).toBeFalsy();
+      expect(def?.validate.safeParse({ provider: "agent", model: "runtime-managed" }).success).toBe(true);
+      expect(def?.validate.safeParse({ provider: "xai", model: "grok-4.6" }).success).toBe(true);
+      expect(def?.validate.safeParse({ provider: "gateway", model: "grok-4.6" }).success).toBe(false);
+      expect(reloadFor(path)).toEqual({ kind: "none" });
+    }
+  });
   it("status_agent.enabled 保存后由 config router 直接 start/stop,不走重启横幅", () => {
     expect(reloadFor("status_agent.enabled")).toEqual({ kind: "none" });
   });
