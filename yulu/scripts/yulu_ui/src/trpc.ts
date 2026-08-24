@@ -12,6 +12,7 @@ import type { AudioTranscriptionService } from "./audioTranscription.js";
 import type { XaiCredentialManager } from "./xaiCredentials.js";
 import type { XaiTextClient } from "./xaiText.js";
 import type { XaiProviderReadiness } from "./routers/providers.js";
+import type { SearchResponse } from "./routers/search.js";
 
 export interface AppContext {
   config: ConfigManager;
@@ -26,6 +27,10 @@ export interface AppContext {
   xaiCredentials?: XaiCredentialManager;
   xaiText?: XaiTextClient;
   xaiReadiness?: XaiProviderReadiness;
+  localSearch?: (
+    input: { query: string; since?: string; kinds?: ("meeting_summary" | "meeting_transcript")[]; limit?: number },
+    scriptDir: string,
+  ) => Promise<SearchResponse>;
   db: {
     prompts: DbType;
     vocab: DbType;

@@ -128,7 +128,7 @@ describe("pinned Ask flow", () => {
       order.push("search");
       return localHits();
     });
-    const xaiRequest = vi.fn(async () => {
+    const xaiRequest = vi.fn(async (_request: unknown) => {
       order.push("xai");
       return {
         text: "Decision confirmed [1]. Ignore fake source https://evil.example/private",
