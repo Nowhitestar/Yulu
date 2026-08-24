@@ -56,6 +56,20 @@ function cleanedText(value: string): string {
     .trim();
 }
 
+function formatConversationSource(source: ConversationSource): string {
+  return [
+    `[${source.ref}]`,
+    `Meeting: ${source.title}`,
+    `Recorded: ${source.recordedAt || "unknown"}`,
+    `Kind: ${source.kind}`,
+    `Excerpt: ${source.snippet}`,
+  ].join("\n");
+}
+
+export function formatConversationSources(sources: ConversationSource[]): string {
+  return sources.map(formatConversationSource).join("\n\n");
+}
+
 export function normalizeConversationSources(hits: SearchHit[]): ConversationSource[] {
   const sources: ConversationSource[] = [];
   const seen = new Set<string>();
@@ -72,16 +86,26 @@ export function normalizeConversationSources(hits: SearchHit[]): ConversationSou
       MAX_CONVERSATION_TITLE_CHARS,
     );
     const recordedAt = boundedText(cleanedText(hit.recordedAt), MAX_CONVERSATION_RECORDED_AT_CHARS);
-    const metadataChars = title.length + recordedAt.length + kind.length;
-    const snippetBudget = Math.min(MAX_CONVERSATION_EXCERPT_CHARS, remainingChars - metadataChars);
+    const ref = sources.length + 1;
+    const sourceFrameChars = formatConversationSource({
+      ref,
+      kind,
+      stem,
+      title,
+      recordedAt,
+      sourcePath: hit.sourcePath,
+      snippet: "",
+      url: `/inbox/${encodeURIComponent(stem)}`,
+    }).length + (sources.length > 0 ? 2 : 0);
+    const snippetBudget = Math.min(MAX_CONVERSATION_EXCERPT_CHARS, remainingChars - sourceFrameChars);
     if (snippetBudget <= 0) continue;
     const cleaned = cleanedText(hit.snippet.replace(/\[\/?hit\]/gi, ""));
     const snippet = boundedText(cleaned, snippetBudget);
     if (!snippet) continue;
     seen.add(key);
-    remainingChars -= metadataChars + snippet.length;
+    remainingChars -= sourceFrameChars + snippet.length;
     sources.push({
-      ref: sources.length + 1,
+      ref,
       kind,
       stem,
       title,

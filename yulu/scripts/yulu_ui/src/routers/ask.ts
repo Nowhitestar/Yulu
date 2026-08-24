@@ -11,7 +11,12 @@ import {
   type AgentSessionRetrySnapshot,
 } from "../agentSessionStore.js";
 import { runAgentCliCommand } from "../agentCliRunner.js";
-import { normalizeConversationSources, runSearchCli, type ConversationSource } from "./search.js";
+import {
+  formatConversationSources,
+  normalizeConversationSources,
+  runSearchCli,
+  type ConversationSource,
+} from "./search.js";
 
 const MAX_QUESTION_CHARS = 2_000;
 const MAX_SOURCE_COUNT = 8;
@@ -66,13 +71,7 @@ function recoveryActions() {
 }
 
 function xaiInput(session: AgentSession, question: string, sources: ConversationSource[]) {
-  const excerpts = sources.map((source) => [
-    `[${source.ref}]`,
-    `Meeting: ${source.title}`,
-    `Recorded: ${source.recordedAt || "unknown"}`,
-    `Kind: ${source.kind}`,
-    `Excerpt: ${source.snippet}`,
-  ].join("\n")).join("\n\n");
+  const excerpts = formatConversationSources(sources);
   return [
     {
       role: "system" as const,
