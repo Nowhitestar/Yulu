@@ -296,6 +296,22 @@ def test_search_does_not_retrieve_private_distractors_from_question_glue(tmp_pat
     }
 
 
+def test_search_anchor_selection_does_not_depend_on_question_word_order(tmp_path, monkeypatch):
+    db, root = _make_natural_question_corpus(tmp_path)
+    from search import reader as reader_mod
+    monkeypatch.setattr(reader_mod, "CORPUS_ROOT", root)
+
+    hits, _tel = search(
+        "What launch/review decision was made across the Phoenix meetings?",
+        db_path=db,
+    )
+
+    assert {hit.stem for hit in hits} == {
+        "PhoenixLaunch_20260825_010300",
+        "PhoenixReview_20260825_010400",
+    }
+
+
 # ── reindex + doctor ──────────────────────────────────────────────────
 
 def test_reindex_rebuilds_from_scratch(tmp_path, monkeypatch):
