@@ -399,6 +399,24 @@ describe("RecordingPipeline", () => {
       });
   });
 
+  it("routes the exact claimed xAI task without a bounded queue pre-scan", async () => {
+    const { audioPath, configManager, gatewayFactory, xaiRequest } = setup({
+      xaiText: true,
+      gatewayFactoryThrows: true,
+    });
+    configManager.update("intelligence.summary", { provider: "xai", model: "grok-4.6-exact" });
+    const listTasks = vi.spyOn(store!, "listTasks").mockImplementation(() => {
+      throw new Error("bounded queue listing must not select the provider runner");
+    });
+
+    const { task } = pipeline!.enqueueCompletion({ audioPath, title: "Claimed xAI" });
+    await vi.waitFor(() => expect(store!.getTask(task.id)?.state).toBe("completed"));
+
+    expect(xaiRequest).toHaveBeenCalledOnce();
+    expect(gatewayFactory).not.toHaveBeenCalled();
+    listTasks.mockRestore();
+  });
+
   it("pauses an xAI summary failure after one attempt and retries the same snapshot without fallback", async () => {
     const { audioPath, configManager, xaiRequest, runArtifactWorkflow, transcribe } = setup({
       pollMs: 5,
