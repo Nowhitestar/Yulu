@@ -335,13 +335,14 @@ describe("RecordingPipeline", () => {
     pipeline!.retry(task.id);
     await vi.waitFor(() => expect(store!.getTask(task.id)).toMatchObject({
       state: "awaiting_provider",
-      attempt: 2,
+      attempt: 1,
       summaryProvider: "hermes",
       summaryModel: "runtime-managed",
     }));
     expect(store!.getTask(task.id)).toMatchObject({
       error: "Hermes offline",
     });
+    expect(store!.listEvents(task.id).filter((event) => event.type === "task.awaiting_provider")).toHaveLength(2);
     expect(transcribe).toHaveBeenCalledOnce();
   });
 

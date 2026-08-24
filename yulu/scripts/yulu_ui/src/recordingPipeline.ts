@@ -519,11 +519,13 @@ export class RecordingPipeline {
           this.publish(task, "failed", error.message);
           return true;
         }
+        if (current?.state === "transcript_committed") {
+          this.options.store.releaseToAwaitingProvider(task.id, leaseToken, error.message);
+          this.publish(task, "failed", error.message);
+          return false;
+        }
         if (task.attempt >= MAX_AGENT_ATTEMPTS) {
-          const component = current?.state === "transcript_committed"
-            ? "Summary Agent"
-            : "Selected audio engine";
-          const message = `${component} unavailable after ${MAX_AGENT_ATTEMPTS} attempts: ${error.message}`;
+          const message = `Selected audio engine unavailable after ${MAX_AGENT_ATTEMPTS} attempts: ${error.message}`;
           this.options.store.fail(task.id, leaseToken, message);
           this.publish(task, "failed", message);
           return true;
