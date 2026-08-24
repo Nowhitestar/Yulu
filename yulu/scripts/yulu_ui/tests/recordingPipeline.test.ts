@@ -346,6 +346,22 @@ describe("RecordingPipeline", () => {
     expect(transcribe).toHaveBeenCalledOnce();
   });
 
+  it("never dispatches a task through a provider other than its pinned snapshot", async () => {
+    const { audioPath, configManager, runArtifactWorkflow, transcribe } = setup({ pollMs: 5 });
+    configManager.update("intelligence.summary", { provider: "xai", model: "grok-4.6-exact" });
+
+    const { task } = pipeline!.enqueueCompletion({ audioPath, title: "Pinned xAI" });
+    await vi.waitFor(() => expect(store!.getTask(task.id)).toMatchObject({
+      state: "awaiting_provider",
+      summaryProvider: "xai",
+      summaryModel: "grok-4.6-exact",
+      error: expect.stringContaining("Pinned Summary Provider xai is unavailable"),
+    }));
+
+    expect(transcribe).toHaveBeenCalledOnce();
+    expect(runArtifactWorkflow).not.toHaveBeenCalled();
+  });
+
   it("never exposes Notion when the Host did not observe the artifact commit", async () => {
     const { audioPath, runNotionWorkflow } = setup({ skipArtifactCommit: true });
     const { task } = pipeline!.enqueueCompletion({ audioPath, sendToNotion: true });
