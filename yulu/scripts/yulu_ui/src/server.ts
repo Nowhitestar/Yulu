@@ -413,7 +413,7 @@ async function startLockedServer(
     await caller.agentSessions.append({ sessionId, message: { role: "user", text: question } });
     const answerAndAppend = async () => {
       try {
-        const answer = await caller.ask.ask({ question, limit: 10, sessionId });
+        const answer = await caller.ask.ask({ question, limit: 8, sessionId });
         const assistantMessage = {
           role: "assistant" as const,
           text: String(answer.answer ?? ""),
