@@ -75,6 +75,7 @@ describe("agentSessionStore", () => {
       purpose: "ask",
       provider: "xai",
       model: "grok-4.6-exact",
+      credentialSource: "oauth",
       title: "Pinned conversation",
     });
 
@@ -89,6 +90,7 @@ describe("agentSessionStore", () => {
       agent: "xai",
       provider: "xai",
       model: "grok-4.6-exact",
+      credentialSource: "oauth",
       status: "active",
       nativeSessionId: "native-session",
       messages: [{

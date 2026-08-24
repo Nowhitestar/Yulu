@@ -35,7 +35,13 @@ function context(
 }
 
 function session(ctx: AppContext, provider: string, model = "runtime-managed") {
-  return createAgentSession(ctx.paths.configDir, { purpose: "ask", provider, model, title: "Ask" });
+  return createAgentSession(ctx.paths.configDir, {
+    purpose: "ask",
+    provider,
+    model,
+    ...(provider === "xai" ? { credentialSource: "oauth" as const } : {}),
+    title: "Ask",
+  });
 }
 
 function localHits() {
@@ -160,7 +166,8 @@ describe("pinned Ask flow", () => {
     expect(xaiRequest).toHaveBeenCalledTimes(1);
     const request = xaiRequest.mock.calls[0]![0] as Record<string, unknown>;
     expect(request).toMatchObject({ capability: "conversation", model: "grok-4.6-exact" });
-    expect(Object.keys(request).sort()).toEqual(["capability", "input", "model"]);
+    expect(Object.keys(request).sort()).toEqual(["capability", "credentialSource", "input", "model"]);
+    expect(request.credentialSource).toBe("oauth");
     expect(JSON.stringify(request)).toContain("Earlier answer");
     expect(JSON.stringify(request)).toContain("Launch decision");
     expect(JSON.stringify(request)).not.toContain("/private/");
@@ -233,5 +240,23 @@ describe("pinned Ask flow", () => {
       model: "grok-4.6-exact",
       status: "paused",
     });
+  });
+
+  it("pauses when xAI returns a different credential identity", async () => {
+    const localSearch = vi.fn(async () => localHits());
+    const xaiRequest = vi.fn(async () => ({
+      text: "wrong credential",
+      model: "grok-4.6-exact",
+      credentialSource: "api-key",
+    }));
+    const ctx = context({}, { localSearch, xaiRequest });
+    const pinned = session(ctx, "xai", "grok-4.6-exact");
+
+    const result = await createCaller(askRouter, ctx).ask({ question: "identity", sessionId: pinned.id });
+
+    expect(result).toMatchObject({ ok: false, sessionStatus: "paused", usedFallback: false });
+    expect(result.llmError).toMatch(/credential.*oauth.*api-key/i);
+    expect(xaiRequest).toHaveBeenCalledTimes(1);
+    expect(runAgentCliCommand).not.toHaveBeenCalled();
   });
 });

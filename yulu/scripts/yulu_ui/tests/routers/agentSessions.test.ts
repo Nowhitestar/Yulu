@@ -13,6 +13,7 @@ function makeCtx(configDir: string, config: Record<string, unknown> = {
   return {
     paths: { configDir },
     config: { read: () => config },
+    xaiCredentials: { status: async () => ({ connected: true, source: "oauth" }) },
   } as unknown as AppContext;
 }
 
@@ -88,7 +89,7 @@ describe("agentSessionsRouter", () => {
     });
   });
 
-  it("pins the exact xAI model from config and resumes only that session", async () => {
+  it("pins the exact xAI model and credential source from the server", async () => {
     const root = mkdtempSync(join(tmpdir(), "agent-sessions-"));
     roots.push(root);
     const config = {
@@ -98,12 +99,22 @@ describe("agentSessionsRouter", () => {
     const caller = createCaller(agentSessionsRouter, makeCtx(root, config));
 
     const session = await caller.create({ agent: "codex", title: "Pinned xAI" });
-    expect(session).toMatchObject({ provider: "xai", model: "grok-4.6-exact", status: "active" });
+    expect(session).toMatchObject({
+      provider: "xai",
+      model: "grok-4.6-exact",
+      credentialSource: "oauth",
+      status: "active",
+    });
 
     config.intelligence.conversation = { provider: "agent", model: "runtime-managed" };
     pauseAgentSession(root, session.id, "request failed");
     const resumed = await caller.resume({ id: session.id });
-    expect(resumed).toMatchObject({ provider: "xai", model: "grok-4.6-exact", status: "active" });
+    expect(resumed).toMatchObject({
+      provider: "xai",
+      model: "grok-4.6-exact",
+      credentialSource: "oauth",
+      status: "active",
+    });
   });
 
   it("renames, pins, archives, and deletes sessions", async () => {

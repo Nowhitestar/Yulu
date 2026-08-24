@@ -14,6 +14,7 @@ describe("XaiTextClient.request", () => {
       resolve: vi.fn(async () => ({ accessToken: "oauth-secret", source: "oauth" as const })),
     };
     const fetchFn = vi.fn<typeof fetch>(async () => response({
+      model: "grok-4.6",
       output: [{
         type: "message",
         content: [{ type: "output_text", text: "Probe ready" }],
@@ -60,6 +61,37 @@ describe("XaiTextClient.request", () => {
     ]) {
       expect(body).not.toHaveProperty(forbidden);
     }
+  });
+
+  it("rejects credential or response model identity changes before accepting output", async () => {
+    const credentials = {
+      resolve: vi.fn(async () => ({ accessToken: "api-key-secret", source: "api-key" as const })),
+    };
+    const fetchFn = vi.fn<typeof fetch>(async () => response({
+      model: "grok-other",
+      output: [{
+        type: "message",
+        content: [{ type: "output_text", text: "Wrong model" }],
+      }],
+    }));
+    const client = new XaiTextClient(credentials as never, fetchFn);
+
+    await expect(client.request({
+      capability: "conversation",
+      model: "grok-4.6",
+      credentialSource: "oauth",
+      input: [{ role: "user", content: "probe" }],
+    })).rejects.toThrow(/credential.*oauth.*api-key/i);
+    expect(fetchFn).not.toHaveBeenCalled();
+
+    credentials.resolve.mockResolvedValue({ accessToken: "oauth-secret", source: "oauth" });
+    await expect(client.request({
+      capability: "conversation",
+      model: "grok-4.6",
+      credentialSource: "oauth",
+      input: [{ role: "user", content: "probe" }],
+    })).rejects.toThrow(/model.*grok-4.6.*grok-other/i);
+    expect(fetchFn).toHaveBeenCalledTimes(1);
   });
 
   it("bounds input and output and never includes provider bodies or secrets in errors", async () => {
