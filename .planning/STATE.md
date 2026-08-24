@@ -4,8 +4,8 @@ milestone: v0.6
 milestone_name: milestone
 status: executing
 stopped_at: Phase 10 planning complete — ready for 10-01
-last_updated: "2026-08-24T09:12:24.268Z"
-last_activity: 2026-08-24 -- Phase 10 planning complete
+last_updated: "2026-08-24T12:40:33.000Z"
+last_activity: 2026-08-24 -- Phase 10/12 OAuth ownership corrected against official provider contracts
 progress:
   total_phases: 13
   completed_phases: 9
@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-08-23)
 Phase: 10 (Provider Model & xAI Foundation) — PLANNED
 Plan: 0 of 5
 Status: Ready to execute
-Last activity: 2026-08-24 -- Phase 10 planning complete
+Last activity: 2026-08-24 -- Phase 10/12 OAuth ownership corrected against official provider contracts
 
 ## Performance Metrics
 
@@ -103,6 +103,8 @@ Recent decisions affecting current work:
 - [Init]: Install model = agent-orchestrated provisioning (spike to validate WHO calls it — Phase 6).
 - [Init]: Cloud sync = configurable data folder (Obsidian model), not a custom backend.
 - [Init]: Multi-agent from v1 (Claude Code + Codex + OpenClaw) via a capability-provider abstraction.
+- [Phase 10]: The official Grok CLI public OAuth client ID and Yulu's least-privilege API scopes are the intended xAI compatibility contract; Yulu owns only its Keychain item/connection lifecycle, and three real capability probes establish entitlement.
+- [Phase 12]: Codex OAuth is reused through official App Server/CLI custody. Yulu may invoke the unmodified Claude Code CLI or use the external Agent queue while Claude owns native sign-in/token custody; Yulu never imports that token, and direct API/SDK execution requires an Anthropic-supported API/cloud credential.
 - [Roadmap]: All three DATA requirements assigned to Phase 5 (separation-first) so the folder picker is never wired to cloud roots before content/runtime separation lands.
 - [Phase 1]: [01-01] Package named yulu_platform not platform — a platform/ package on yulu/scripts (stt_daemon plist PYTHONPATH) shadows stdlib platform that numpy imports; guarded permanently by test_yulu_platform_no_shadow.py
 - [Phase 1]: [01-01] Platform-seam ABCs are interface signatures only this phase (D-15); macOS impls Phase 2 (D-17); linux/windows arms raise NotImplementedError until v2 (XPLAT-01)

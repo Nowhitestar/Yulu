@@ -9,7 +9,7 @@ created: 2026-08-24
 
 # Phase 10 — Validation Strategy
 
-> Every autonomous task has a focused runnable gate. Live xAI/Yulu-owned OAuth acceptance is one final blocking checkpoint and cannot be replaced by mocked fetch tests.
+> Every autonomous task has a focused runnable gate. Live Grok CLI-compatible xAI OAuth acceptance is one final blocking checkpoint and cannot be replaced by mocked fetch tests.
 
 ## Test Infrastructure
 
@@ -36,7 +36,7 @@ created: 2026-08-24
 | 10-01-01 | 1 | PRVD-01 | Three settings are independent; no secret-shaped config fields | `tests/config.test.ts`, `tests/settingsRegistry.test.ts` | ⬜ |
 | 10-01-02 | 1 | PRVD-02, PRVD-03 | Task provider/model is immutable; claim does not overwrite; failure can pause | `tests/hostStore.test.ts`, `tests/recordingPipeline.test.ts` | ⬜ |
 | 10-01-03 | 1 | PRVD-02, XAI-04 | Session provider/model/history/status persists locally and migrates | new focused `tests/agentSessionStore.test.ts` | ⬜ |
-| 10-02-01 | 2 | PRVD-04 | Secret slots use Keychain stdin and never config/log/argv/read-back | `tests/xaiCredentials.test.ts`, `tests/test_xai_keychain_source.py`, package source gate | ⬜ |
+| 10-02-01 | 2 | PRVD-04 | Secret slots use Keychain stdin and never config/log/argv/read-back; official Grok client equality and Yulu's six-scope subset stay pinned | `tests/xaiCredentials.test.ts`, `tests/test_xai_keychain_source.py`, package source gate | ⬜ |
 | 10-02-02 | 2 | XAI-01, PRVD-05 | xAI text calls use exact model, `store:false`, no tools; response/error bounds | new `tests/xaiText.test.ts` | ⬜ |
 | 10-02-03 | 2 | XAI-01, PRVD-05 | Separate STT/summary/conversation real-probe endpoints and factual statuses | `tests/routers/xaiAudio.test.ts` plus new provider-router test | ⬜ |
 | 10-03-01 | 3 | XAI-02, PRVD-02 | Automatic xAI summary uses transcript-only input and existing artifact commit | `tests/recordingPipeline.test.ts`, `tests/artifactStore.test.ts` | ⬜ |
@@ -47,7 +47,7 @@ created: 2026-08-24
 | 10-04-03 | 3 | PRVD-02, PRVD-03, XAI-04 | Session remains pinned/local; mismatch/failure pauses, never switches | `tests/agentSessionStore.test.ts`, `tests/routers/ask.test.ts` | ⬜ |
 | 10-05-01 | 4 | PRVD-01, XAI-01 | Independent selectors and one shared xAI connection render accessibly | provider/transcription/settings React tests | ⬜ |
 | 10-05-02 | 4 | PRVD-03, XAI-03 | Paused summary/conversation actions and local source cards are visible | recording detail and Agent Console React tests | ⬜ |
-| 10-05-03 | 4 | all | One Yulu-owned connection passes three live probes, saves summary, answers with sources | blocking human/live-host checkpoint | ⬜ |
+| 10-05-03 | 4 | all | One Yulu-managed Grok OAuth connection passes three live probes, saves summary, answers with sources | blocking human/live-host checkpoint | ⬜ |
 
 ## Wave 0 Requirements
 
@@ -55,17 +55,17 @@ created: 2026-08-24
 - [ ] Extend HostStore/session tests before changing migrations or claim semantics.
 - [ ] Add bounded-excerpt and no-network-on-empty-search tests before the xAI ask branch.
 - [ ] Add provider UI tests before making `llm` visible in settings.
-- [ ] Add a source/package gate that rejects the temporary public Grok CLI client ID in a Phase 10 release candidate.
+- [ ] Add a source/package gate that pins exact equality with the official Grok CLI public client ID and pins Yulu's exact six-scope string as a reviewed subset; any upstream drift requires explicit compatibility review.
 
 `wave_0_complete` remains false until these failing tests exist. This is expected before execution.
 
 ## Blocking Live Checkpoint — 10-05-03
 
-Preconditions: all autonomous tasks green; packaged build contains a Yulu-owned xAI OAuth client registration; no test API key or OAuth token appears in logs/config/SQLite.
+Preconditions: all autonomous tasks green; packaged build uses the exact official Grok CLI client ID and the reviewed six-scope Yulu subset; no test API key or OAuth token appears in logs/config/SQLite.
 
 | Check | Evidence required |
 |-------|-------------------|
-| Shared connection | One authorization identity is shown as connected without exposing a token; logout/reconnect behaves once for all capabilities |
+| Shared connection | One Grok OAuth authorization identity is shown as connected without exposing a token; logout/reconnect behaves once for all capabilities |
 | Three readiness proofs | Timestamp/model/result for real STT probe, real summary probe, and real conversation probe; each can independently be ready/failed |
 | Production summary | A test recording's committed transcript and `.summary.md`; artifact DB provenance pins xAI + exact model; captured request proves transcript-only, `store:false`, no tools |
 | Local cited conversation | Question spanning at least two indexed meetings; UI source cards point to those local meetings; captured request shows only bounded excerpts/history, `store:false`, no tools/previous response/files |

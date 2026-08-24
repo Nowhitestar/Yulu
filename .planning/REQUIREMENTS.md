@@ -30,15 +30,15 @@
 
 ### xAI (XAI)
 
-- [ ] **XAI-01**: One Yulu-owned xAI OAuth connection can be reused for transcription, summary, and conversation while each capability keeps an independent selector and readiness probe
+- [ ] **XAI-01**: One Yulu-managed Grok CLI-compatible OAuth connection can be reused for transcription, summary, and conversation while each capability keeps an independent selector and real entitlement probe
 - [ ] **XAI-02**: A user can generate a saved Markdown summary with xAI from transcript content only
 - [ ] **XAI-03**: A user can ask questions across local meetings; Yulu retrieves bounded excerpts locally, sends only those excerpts to xAI with `store:false`, and displays source meetings
 - [ ] **XAI-04**: Yulu keeps xAI conversation history locally and does not enable xAI Web/X search or write connectors in v0.6
 
 ### Agent Runtimes and Gateways (AGRT)
 
-- [ ] **AGRT-01**: A user can connect Codex through the official App Server managed OAuth path without Yulu holding the OAuth token
-- [ ] **AGRT-02**: A user can connect an unmodified Claude Code runtime through its native OAuth path, with a direct API key path available when runtime OAuth is unavailable
+- [ ] **AGRT-01**: A user can reuse an existing Codex login or connect through the official App Server managed OAuth path without Yulu holding the OAuth token
+- [ ] **AGRT-02**: A user can run the unmodified local Claude Code CLI with its native user-owned OAuth, or hand work to an already-running Claude Code through Yulu's external Agent queue; Yulu never embeds Claude.ai login, reads/copies the token, or uses it outside the CLI, and direct API/SDK execution uses an Anthropic-supported API or cloud credential
 - [ ] **AGRT-03**: A user can connect Hermes or OpenClaw through a configured gateway without making either runtime a core dependency
 - [ ] **AGRT-04**: An advanced user can connect a separately managed CLIProxyAPI-compatible endpoint using only its base URL and local proxy key; Yulu does not manage its OAuth files or management key
 

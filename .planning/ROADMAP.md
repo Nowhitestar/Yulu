@@ -286,7 +286,7 @@ Decimal phases appear between their surrounding integers in numeric order.
   1. A user selects Transcription, Summary Provider, and Conversation Provider independently and sees capability-specific readiness proven by a real request
   2. Direct API and gateway secrets remain in macOS Keychain, while every summary or conversation task stays pinned to its creation-time provider
   3. A provider failure pauses the task and asks the user what to do, without silently switching provider, model, cost, or privacy boundary
-  4. One Yulu-owned xAI connection passes separate transcription, summary, and conversation probes, and xAI produces a saved Markdown summary from transcript content only
+  4. One Yulu-managed Grok CLI-compatible OAuth connection passes separate transcription, summary, and conversation entitlement probes, and xAI produces a saved Markdown summary from transcript content only
   5. A user can ask across local meetings and receive cited source meetings while only bounded locally retrieved excerpts are sent with `store:false`; history stays local and no Web/X search or write connector is enabled
 
 **Plans**: 5 plans (4 waves)
@@ -306,7 +306,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 **Wave 4** *(blocked on Wave 3; closes with live xAI checkpoint)*
 
-- [ ] 10-05-PLAN.md — AI Providers settings, failure/source UX, and Yulu-owned xAI production acceptance (PRVD-01, PRVD-03, PRVD-05, XAI-01, XAI-02, XAI-03, XAI-04)
+- [ ] 10-05-PLAN.md — AI Providers settings, failure/source UX, and Grok CLI-compatible xAI production acceptance (PRVD-01, PRVD-03, PRVD-05, XAI-01, XAI-02, XAI-03, XAI-04)
 **UI hint**: yes
 
 ### Phase 11: State-Driven Core Activation
@@ -331,8 +331,8 @@ Decimal phases appear between their surrounding integers in numeric order.
 **Requirements**: AGRT-01, AGRT-02, AGRT-03, AGRT-04
 **Success Criteria** (what must be TRUE):
 
-  1. A user connects Codex through official App Server managed OAuth and Yulu never receives or stores the OAuth token
-  2. A user connects an unmodified Claude Code runtime through native OAuth, or uses a direct API key when runtime OAuth is unavailable
+  1. A user reuses an existing Codex login or connects through official App Server managed OAuth, and Yulu never receives or stores the OAuth token
+  2. A user runs the unmodified local Claude Code CLI with its native user-owned OAuth or hands work to an already-running Claude Code through the external Agent queue; Yulu never embeds Claude.ai login, reads/copies the token, or uses it outside the CLI, and direct API/SDK execution uses an Anthropic-supported API/cloud credential
   3. A user connects Hermes or OpenClaw through a configured gateway, while core recording and activation remain usable without either runtime
   4. An advanced user connects a separately managed CLIProxyAPI-compatible endpoint using only a base URL and local proxy key; Yulu neither requests nor manages its OAuth files or management key
 

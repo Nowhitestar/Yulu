@@ -6,7 +6,7 @@
 |--------------------|-------------------------|------------|-------|
 | Capability setting | `transcription.engine` in `config.ts`, `settingsRegistry.ts`, `TranscriptionSection.tsx` | Add sibling summary/conversation selectors with the same config-update/reload-none path | A second settings store or provider registry framework |
 | xAI text request | `XaiAudioClient` in `xaiAudio.ts` | Mirror injected fetch, fixed origin, abort timeout, bounded retry, JSON validation, safe errors | SDK dependency or generic HTTP abstraction |
-| Shared xAI auth | `XaiCredentialManager.resolve()` | Reuse OAuth refresh/cache; add explicit Keychain API-key fallback at this one boundary | Copying OAuth/device flow per capability |
+| Shared xAI auth | `XaiCredentialManager.resolve()` | Preserve exact official Grok CLI client-ID equality plus Yulu's exact reviewed six-scope subset and reuse OAuth refresh/cache; add explicit Keychain API-key fallback at this one boundary | Copying OAuth/device flow per capability or inventing a Yulu client registration |
 | Multiple Keychain secrets | `xai_keychain.swift` + `KeychainXaiTokenStore.run()` | Extend the signed helper with a validated slot argument and stdin/stdout transport; retain legacy default slot | Secret in argv/env/config/SQLite or a second helper binary |
 | Summary artifact | `ArtifactStore.writeStagedSummary()` → `commitFromWorkspace()` → `HostStore.recordArtifacts()` | Route xAI through the same size/hash/path/atomic commit | Direct ad-hoc file write in automatic pipeline |
 | Manual summary | `runAgentSummarize()` branch in `routers/recordings.ts` | Snapshot selection once, then call Agent or xAI and keep existing atomic write/stale marker | A new summary endpoint |

@@ -62,9 +62,9 @@ No provider dropdown may write another capability's setting. Provider/model sele
 
 | State | xAI connection card | Capability row | Primary action |
 |-------|---------------------|----------------|----------------|
-| Not connected | “Not connected” muted badge; OAuth and API-key choices | xAI choice may remain selected but readiness is blocked | `Connect xAI` |
+| Not connected | “Not connected” muted badge; Grok OAuth and API-key choices | xAI choice may remain selected but readiness is blocked | `Connect with Grok` |
 | Authorizing | Device URL/code and cancel; `role=status` | Selectors remain usable; probes disabled | `Cancel` |
-| Connected, untested | Credential source label only (OAuth or API key; never token/key) | “Not tested” | `Test` |
+| Connected, untested | Credential source label only (Grok OAuth or API key; never token/key) | “Not tested” | `Test` |
 | Testing | Stable row height; spinner/text; button disabled | “Testing…” | none |
 | Ready | Green badge plus tested model/time | “Ready” | `Test again` |
 | Failed | Inline alert states problem and next action | “Needs attention”; selection unchanged | `Test again` / `Reconnect` |
@@ -77,7 +77,8 @@ No provider dropdown may write another capability's setting. Provider/model sele
 | Category | AI Providers | 智能服务 |
 | Category description | Choose transcription, summary, and conversation independently | 分别选择转写、摘要和对话服务 |
 | Shared-card title | xAI connection | xAI 连接 |
-| OAuth CTA | Connect xAI | 连接 xAI |
+| OAuth CTA | Connect with Grok | 使用 Grok 账号连接 |
+| OAuth helper | Uses Grok CLI OAuth. Available capabilities depend on your Grok account. | 使用 Grok CLI OAuth；可用能力取决于你的 Grok 账号。 |
 | API-key fallback | Use API key instead | 改用 API Key |
 | Secret helper | Saved in macOS Keychain. Yulu will not show it again. | 保存在 macOS 钥匙串中，Yulu 不会再次显示。 |
 | Probe actions | Test transcription / Test summary / Test conversation | 测试转写 / 测试摘要 / 测试对话 |
@@ -154,4 +155,3 @@ Accent is reserved for the active selector, primary action, links, and focus sta
 - [x] Dimension 6 Registry Safety: PASS — no registry block or dependency is added.
 
 **Approval:** approved 2026-08-24
-

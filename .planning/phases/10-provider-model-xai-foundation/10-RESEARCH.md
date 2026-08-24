@@ -1,13 +1,13 @@
 # Phase 10: Provider Model & xAI Foundation — Research
 
 **Researched:** 2026-08-24
-**Confidence:** High for the existing Yulu seams and xAI request/privacy contract; external client registration remains a release prerequisite
+**Confidence:** High for the existing Yulu seams, official Grok CLI OAuth contract, and xAI request/privacy contract
 
 ## Executive Conclusion
 
 The shortest safe implementation is an extension, not a replacement: preserve the existing local Agent path, add creation-time provider/model snapshots to the task/session records, add one small xAI Responses client beside `XaiAudioClient`, and branch at the two existing execution seams. The existing artifact store, local search CLI, Agent session JSON, OAuth manager, and packaged Keychain helper already cover most of the hard boundaries.
 
-Do not introduce an orchestration framework, vector database, xAI server-side conversation state, or a second credential helper. The missing behavior is concentrated in configuration, durable snapshots, one direct text client, two provider branches, and explicit paused states.
+Do not introduce an orchestration framework, vector database, xAI server-side conversation state, a second credential helper, or a Yulu-specific xAI OAuth registration. The missing behavior is concentrated in configuration, durable snapshots, one direct text client, two provider branches, and explicit paused states.
 
 ## Official xAI Contract
 
@@ -25,8 +25,14 @@ Do not introduce an orchestration framework, vector database, xAI server-side co
 
 ### OAuth and tools
 
-- xAI's CLI documents device authorization (`grok login --device-auth`), consistent with Yulu's existing discovery/device flow. Source: [xAI CLI reference](https://docs.x.ai/build/cli/reference).
+- xAI's official Grok Build source defines `b1a00492-073a-47ea-816f-4c329264a828` as its default public OAuth client and includes `grok-cli:access` plus `api:access`; Yulu's existing scope set is a least-privilege subset because Phase 10 does not use Grok conversation/workspace resources. This is the compatibility contract to pin, not a temporary credential to replace. Source: [Grok Build OAuth configuration](https://github.com/xai-org/grok-build/blob/main/crates/codegen/xai-grok-shell/src/auth/config.rs).
+- Grok CLI supports browser/device authorization, stores its session locally, refreshes it automatically, and gives an active session precedence over an API key. Yulu mirrors that precedence while keeping its own Keychain item; an API key is used only after an explicit user choice, never after a failed OAuth request. Source: [Grok CLI authentication](https://github.com/xai-org/grok-build/blob/main/crates/codegen/xai-grok-pager/docs/user-guide/02-authentication.md).
 - xAI citations are attached to tool-derived sources such as Web/X search. Phase 10 explicitly enables no such tools. Meeting sources must remain Yulu-owned structured records derived from local search. Source: [Citations](https://docs.x.ai/developers/tools/citations).
+
+## Phase 12 OAuth Boundary
+
+- Codex is compatible with the requested runtime-owned OAuth model. Its official App Server can read auth state and start ChatGPT browser/device login while Codex owns, persists, and refreshes the tokens. Yulu should call that surface and never read or copy `~/.codex/auth.json`. Source: [Codex App Server auth endpoints](https://developers.openai.com/codex/app-server) and [Codex authentication](https://developers.openai.com/codex/auth).
+- Claude Code supports the requested CLI-owned OAuth model only through Anthropic's unmodified binary. Anthropic permits an end user to sign in to that binary with their own subscription even when a platform runs it, but forbids the platform from embedding Claude.ai login, collecting/copying tokens, or routing subscription credentials outside the CLI. Phase 12 therefore preserves both Yulu's native `claude --print` path and the user-run external Agent queue; direct API/Agent SDK execution uses an API key or supported cloud provider. Source: [Claude Code legal and compliance](https://code.claude.com/docs/en/legal-and-compliance) and [Agent SDK overview](https://code.claude.com/docs/en/agent-sdk/overview).
 
 ## Existing Yulu Seams to Reuse
 
@@ -99,7 +105,7 @@ The existing `agent-sessions.json` remains canonical local history. Add the prov
 | T-10-06 | Model invents citations or local paths | Medium | Source cards only from normalized Yulu search hits; never accept model-provided source metadata |
 | T-10-07 | Failed provider loops, spends money, or silently falls back | High | One explicit attempt per user/dispatcher action; durable pause; retry same snapshot only |
 | T-10-08 | Malformed/oversized model output corrupts artifacts or UI | Medium | Response schema and size checks; existing ArtifactStore validation/atomic writes; React text rendering |
-| T-10-09 | Public Grok CLI client registration remains in shipped Yulu | High | Replace with Yulu-owned registered client before live acceptance; package-source test rejects temporary client ID |
+| T-10-09 | Grok CLI OAuth client/scopes or account/model entitlement changes upstream | High | Pin exact official client-ID equality and Yulu's exact reviewed six-scope subset in a source regression test; run separate real STT/summary/conversation probes; fail closed with a specific auth/entitlement/model result |
 
 ## Validation Strategy
 
@@ -108,9 +114,8 @@ The existing `agent-sessions.json` remains canonical local history. Add the prov
 - Pipeline/router tests prove xAI writes the real Markdown artifact from transcript-only input and never invokes Agent/search/connector paths.
 - Ask tests prove local search precedes network dispatch, excerpts/history are bounded, sources are local projections, and failure pauses the session.
 - React tests prove independent selectors, separate readiness badges, secret non-readback, and explicit failure actions.
-- A final live checkpoint uses one Yulu-owned xAI OAuth connection to run all three real probes, save one summary through the production path, and answer one local-meeting question with source cards.
+- A final live checkpoint uses one Yulu-managed Grok CLI-compatible OAuth connection to run all three real probes, save one summary through the production path, and answer one local-meeting question with source cards.
 
-## Open External Setup
+## Upstream Compatibility Constraint
 
-The code currently embeds a temporary public Grok CLI OAuth client ID. Before Phase 10 can be accepted, a Yulu-owned xAI device client must be registered with the required scopes and its identifier supplied through the release build's established non-secret configuration path. No plan should hide this prerequisite behind the xAI API-key fallback.
-
+The current public Grok CLI OAuth client is an upstream compatibility dependency, not an external registration task. Phase 10 acceptance requires exact equality with xAI's official client ID and separately verifies Yulu's exact six-scope string as a reviewed subset of the broader official scope list. It then exercises the installed candidate against the user's real entitlements. Authentication success cannot promote a capability to ready, and failure cannot silently substitute an API key, provider, or model.

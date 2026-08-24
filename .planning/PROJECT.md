@@ -59,13 +59,13 @@ A new user can install Yulu, record a real meeting, and obtain saved audio, tran
 - **The integration seams already exist.** `agent-queue.json`, provider-native Agent Console sessions, xAI OAuth/audio, local search, Settings, and Health should be extended rather than replaced.
 - **Current release blockers are concrete.** The README `raw/main` installer is not paired with the latest release asset, current release Mach-O binaries target macOS 26 despite the macOS 13 claim, and updater safety does not guard active recordings.
 - **Current activation is incomplete.** The earlier onboarding surface was removed, setup still assumes Hermes in important paths, and calendar/share configuration surfaces are not reachable from the user's failure states.
-- **xAI release gate:** replace the public Grok CLI client ID with a Yulu-owned xAI client registration and verify language-model plus Responses access before broad distribution.
+- **xAI OAuth contract:** keep the official Grok CLI public client ID and least-privilege API scopes as the compatibility path. Yulu manages its own Keychain credential and verifies STT, summary, and conversation entitlements separately before reporting readiness.
 
 ## Constraints
 
 - **Platform**: macOS 13+ today — **floor STAYS 13+** (confirmed Phase 2): system audio is dual-arm behind one `if #available` seam — Core Audio process taps on 14.4+ (removes the weekly re-permission nag) / ScreenCaptureKit on 13–14.3 (preserves compatibility). We do NOT raise the floor to 14.4. Architecture must NOT hard-couple to macOS; a cross-platform abstraction layer is a first-class deliverable this milestone.
 - **Privacy**: audio, transcripts, and conversation history stay local by default. Cloud upload requires capability-specific disclosure and consent; xAI conversation sends bounded selected excerpts with `store:false`.
-- **Provider ownership**: Codex/Claude OAuth remains owned by their official runtimes; Hermes/OpenClaw use gateways; direct model and gateway credentials are stored in macOS Keychain.
+- **Provider ownership**: xAI uses the official Grok CLI public OAuth client while Yulu owns only its local connection lifecycle and Keychain item. Codex OAuth remains owned by official App Server/CLI. Yulu may invoke the unmodified Claude Code CLI or let a user-run Claude Code consume the external Agent queue; Claude Code owns its native sign-in and token. Yulu never embeds Claude.ai login, reads/copies the token, or uses it outside the CLI; direct API/SDK execution requires an Anthropic-supported API/cloud credential. Hermes/OpenClaw use gateways; direct model and gateway credentials are stored in macOS Keychain.
 - **Compatibility**: existing v0.5.x `~/.yulu` installs must auto-migrate seamlessly on upgrade.
 - **Distribution**: keep release-please + GitHub Releases + Conventional Commits as the release mechanism.
 - **Agents targeted (v0.6)**: Codex, Claude Code, Hermes, and OpenClaw. Summary and conversation providers are independent roles.
@@ -87,6 +87,7 @@ A new user can install Yulu, record a real meeting, and obtain saved audio, tran
 | Providers split into Agent Runtime, Model Gateway, and Direct Model API | Authentication, credential custody, execution, and readiness differ materially | Locked for v0.6 |
 | Transcription, summary, and conversation are independent selections | A provider being ready for one capability does not prove another | Locked for v0.6 |
 | xAI conversation uses local retrieval and `store:false` | Preserve local-first control while enabling useful meeting Q&A | Locked for v0.6 |
+| CLI OAuth reuse follows each provider's supported custody boundary | Grok public-client OAuth, Codex App Server, and the unmodified Claude Code CLI keep their own auth; Yulu never imports CLI tokens | Locked for v0.6 |
 
 ## Evolution
 
