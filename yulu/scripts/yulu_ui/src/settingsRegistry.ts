@@ -51,6 +51,19 @@ const DictationSchema = z.object({
   target_language: z.string().optional(),
 }).passthrough();
 
+export const XAI_TEXT_MODEL_DEFAULT = "grok-4.6";
+
+export const TextProviderSelectionSchema = z.discriminatedUnion("provider", [
+  z.object({
+    provider: z.literal("agent"),
+    model: z.literal("runtime-managed").default("runtime-managed"),
+  }).strict(),
+  z.object({
+    provider: z.literal("xai"),
+    model: z.string().trim().min(1).max(128).default(XAI_TEXT_MODEL_DEFAULT),
+  }).strict(),
+]).default({ provider: "agent" });
+
 // 仅当前已暴露的设置(P2 再补缺失项)。reload 已修正(B3)。
 export const SETTINGS: SettingDef[] = [
   { path: "ui.language",                 category: "general", label: "Language", type: "select", validate: z.enum(["zh", "en"]), reload: R.sighup("statusagent") },
@@ -66,6 +79,8 @@ export const SETTINGS: SettingDef[] = [
   { path: "llm.enabled",                 category: "llm", label: "启用 LLM",       type: "toggle",  validate: z.boolean(),                 reload: R.none, hidden: true },
   { path: "llm.command",                 category: "llm", label: "LLM 后端",       type: "preset",  validate: z.array(z.string()).nullable(), reload: R.none, hidden: true },
   { path: "llm.agent.provider",          category: "llm", label: "Agent provider", type: "select",  validate: z.enum(["auto", "codex", "claude", "claude-code", "hermes", "openclaw"]), reload: R.none, hidden: true },
+  { path: "intelligence.summary",        category: "llm", label: "Summary provider", type: "select", validate: TextProviderSelectionSchema, reload: R.none },
+  { path: "intelligence.conversation",   category: "llm", label: "Conversation provider", type: "select", validate: TextProviderSelectionSchema, reload: R.none },
   { path: "calendars",                   category: "integrations", label: "日历",   type: "text",    validate: z.array(z.unknown()),        reload: R.restart("calendar", "scheduler"), hidden: true },
   { path: "connectors.gog.read_calendar", category: "integrations", label: "Read Google calendars", type: "toggle", validate: z.boolean(), reload: R.restart("calendar", "scheduler"), hidden: true },
   { path: "connectors.feishu.read_calendar", category: "integrations", label: "Read Feishu calendars", type: "toggle", validate: z.boolean(), reload: R.restart("calendar", "scheduler"), hidden: true },

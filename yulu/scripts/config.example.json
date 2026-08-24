@@ -65,6 +65,16 @@
       "note": "Yulu uses the selected transcription engine for dictation. Agent post-processing remains separate."
     }
   },
+  "intelligence": {
+    "summary": {
+      "provider": "agent",
+      "model": "runtime-managed"
+    },
+    "conversation": {
+      "provider": "agent",
+      "model": "runtime-managed"
+    }
+  },
   "agent_pipeline": {
     "enabled": true,
     "auto_process_recordings": true,
@@ -75,8 +85,8 @@
     "enabled": true,
     "command": null,
     "agent": {
-      "provider": "hermes",
-      "note": "The selected Agent handles Agent Console conversation and its connectors. Hermes handles automatic recording summaries. Yulu owns realtime captions, final transcription, and dictation."
+      "provider": "auto",
+      "note": "Local Agent use is optional and runtime-managed; Hermes is not required. Selecting xAI for summary or conversation defaults to exact model grok-4.6."
     }
   },
   "agent_console": {

@@ -1,7 +1,14 @@
 import { existsSync, readFileSync, writeFileSync, renameSync, statSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { z } from "zod";
-import { defFor, reloadFor } from "./settingsRegistry.js";
+import {
+  TextProviderSelectionSchema,
+  XAI_TEXT_MODEL_DEFAULT,
+  defFor,
+  reloadFor,
+} from "./settingsRegistry.js";
+
+export { XAI_TEXT_MODEL_DEFAULT };
 
 const CalendarSchema = z.object({
   type: z.enum(["macos", "system", "feishu", "google"]),
@@ -120,6 +127,10 @@ export const ConfigSchema = z.object({
       provider: z.enum(["auto", "codex", "claude", "claude-code", "hermes", "openclaw", "gemini", "grok", "custom"]).default("auto"),
     }).passthrough().default({}),
   }).default({}),
+  intelligence: z.object({
+    summary: TextProviderSelectionSchema,
+    conversation: TextProviderSelectionSchema,
+  }).strict().default({}),
   status_agent: StatusAgentSchema,
   calendars: z.array(CalendarSchema).default([]),
   connectors: ConnectorsSchema,
