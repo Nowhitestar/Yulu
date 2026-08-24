@@ -49,6 +49,29 @@ describe("ArtifactStore", () => {
     expect(() => store.readCommittedSummary(task, summary)).toThrow(/no longer matches/);
   });
 
+  it("keeps stale committed artifacts until a validated staged summary replaces them", () => {
+    const { store, task } = setup();
+    const transcriptPath = join(root, "Movies", "Yulu", `${task.recordingStem}.transcript.txt`);
+    const summaryPath = join(root, "Movies", "Yulu", `${task.recordingStem}.summary.md`);
+    const stalePath = join(root, "Movies", "Yulu", `${task.recordingStem}.summary.stale`);
+    writeFileSync(transcriptPath, "old transcript\n");
+    writeFileSync(summaryPath, "# Old summary\n");
+    writeFileSync(stalePath, "stale\n");
+    store.writeStagedTranscript(task.id, "new transcript");
+    writeFileSync(store.workspace(task.id).summaryPath, "   \n");
+
+    expect(() => store.commitFromWorkspace(task, {})).toThrow(/summary staging artifact contains no text/);
+    expect(readFileSync(transcriptPath, "utf8")).toBe("old transcript\n");
+    expect(readFileSync(summaryPath, "utf8")).toBe("# Old summary\n");
+    expect(existsSync(stalePath)).toBe(true);
+
+    store.writeStagedSummary(task.id, "# New summary");
+    store.commitFromWorkspace(task, {});
+    expect(readFileSync(transcriptPath, "utf8")).toBe("new transcript\n");
+    expect(readFileSync(summaryPath, "utf8")).toBe("# New summary\n");
+    expect(existsSync(stalePath)).toBe(false);
+  });
+
   it("rejects a task whose stem does not match its audio path", () => {
     const { store, task } = setup();
     const workspace = store.workspace(task.id);
