@@ -104,6 +104,8 @@ beforeEach(() => {
   setApiKey.mockClear();
   probe.mockClear();
   providerStatus.readiness.summary.status = "untested";
+  providerStatus.connection.authorization.status = "idle";
+  providerStatus.connection.authorization.message = "";
 });
 
 describe("ProviderSection", () => {
@@ -165,5 +167,17 @@ describe("ProviderSection", () => {
     expect(within(row).getByRole("alert")).toHaveTextContent(
       "Summary provider · grok-4.6 failed. Check account access or model settings, then test again.",
     );
+  });
+
+  it("localizes connection and credential failures instead of exposing backend copy", () => {
+    providerStatus.connection.authorization.status = "failed";
+    providerStatus.connection.authorization.message = "xAI OAuth 授权失败，请重试";
+
+    mount("en");
+
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "xAI connection failed. Check account or Keychain access, then retry.",
+    );
+    expect(screen.queryByText(/OAuth 授权失败/)).toBeNull();
   });
 });
