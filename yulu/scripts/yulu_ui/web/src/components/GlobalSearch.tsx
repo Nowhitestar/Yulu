@@ -28,6 +28,12 @@ interface SettingHit {
 
 type Item = ({ t: "hit" } & Hit) | ({ t: "setting" } & SettingHit);
 
+const RETIRED_LLM_SETTINGS = new Set([
+  "llm.enabled",
+  "llm.command",
+  "llm.agent.provider",
+]);
+
 function buildSettingHits(
   query: string,
   schema: ReadonlyArray<{ path: string; category: string; label: string }> | undefined,
@@ -37,6 +43,7 @@ function buildSettingHits(
   if (!q || !schema) return [];
   const byCategory = new Map<string, SettingHit>();
   for (const s of schema) {
+    if (RETIRED_LLM_SETTINGS.has(s.path)) continue;
     if (!categoryMeta(s.category)) continue;
     const catLabel = t(categoryLabelKey(s.category));
     const matches =
