@@ -234,6 +234,12 @@ def _make_natural_question_corpus(tmp_path: Path):
     (root / "Generic_20260825_010500.transcript.txt").write_text(
         "What did happen yesterday.", encoding="utf-8"
     )
+    (root / "PrivateLaunch_20260825_010600.transcript.txt").write_text(
+        "Private Apollo launch decision.", encoding="utf-8"
+    )
+    (root / "PrivateHiring_20260825_010700.transcript.txt").write_text(
+        "Private hiring follow-up owner.", encoding="utf-8"
+    )
     return db, root
 
 
@@ -264,7 +270,7 @@ def test_search_does_not_execute_user_supplied_fts_operators(tmp_path, monkeypat
     monkeypatch.setattr(reader_mod, "CORPUS_ROOT", root)
 
     hits, _tel = search(
-        'Phoenix AND/OR "review"? NOT (fallback)',
+        'Phoenix AND/OR "launch review"? NOT (fallback)',
         db_path=db,
     )
 
