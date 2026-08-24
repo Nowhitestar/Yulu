@@ -1,3 +1,5 @@
 # Deferred Items
 
 - 2026-08-23 — `yulu/scripts/dev_install.py::_install_mcp_registration` still treats Hermes registration as required. This pre-existing path is outside Plan 09-03's file ownership and the signed-candidate `setup.sh` clean-host checkpoint. Assign it to the Phase 12 Agent-runtime work or a Phase 9 gap plan before claiming that the separate dev installer is Agent-independent.
+- 2026-08-24 — The clean macOS 26.5 VM had no usable `python3`; `install.sh` correctly requires Python 3.10+, but the current first-run path only documents the prerequisite. Phase 13 onboarding/README work must make Python and npm readiness explicit or provide an approved non-silent installation path.
+- 2026-08-24 — `npm audit --omit=dev` on the exact installed `v0.23.0-rc.3` tree reported 3 high and 2 moderate findings in `fast-uri`, `ip-address`, `react-router`, `hono`, and `@hono/node-server`. Remediate and cut a new candidate before public stable release; Phase 9 acceptance did not mutate the lockfile.

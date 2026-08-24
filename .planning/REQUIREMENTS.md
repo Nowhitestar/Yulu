@@ -11,7 +11,7 @@
 - [x] **DIST-01**: A release candidate contains a version-paired installer whose stable entry path never executes the repository's moving `main` setup code
 - [x] **DIST-02**: A release artifact advertised for macOS 13+ is built with a macOS 13 deployment target and rejected by CI when its Mach-O minimum OS is higher; macOS 13 arm64 hardware acceptance is explicitly waived for v0.6
 - [x] **DIST-03**: An install or update refuses to stop daemons while a recording is active and leaves the recording intact
-- [ ] **DIST-04**: A user can complete core installation without Hermes, OpenClaw, calendar tooling, or an automatic Homebrew installation
+- [x] **DIST-04**: A user can complete core installation without Hermes, OpenClaw, calendar tooling, or an automatic Homebrew installation
 
 ### Core Activation (ACT)
 
@@ -84,7 +84,7 @@
 | DIST-01 | Phase 9 | Complete |
 | DIST-02 | Phase 9 | Complete |
 | DIST-03 | Phase 9 | Complete |
-| DIST-04 | Phase 9 | Pending |
+| DIST-04 | Phase 9 | Complete |
 | PRVD-01 | Phase 10 | Pending |
 | PRVD-02 | Phase 10 | Pending |
 | PRVD-03 | Phase 10 | Pending |

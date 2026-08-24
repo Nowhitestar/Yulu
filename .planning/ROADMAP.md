@@ -23,7 +23,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 6: Agent-Orchestrated Provisioning + Decoupled Skill Install** - Named idempotent step registry, `yulu provision <step>`, attestation gate, resumable state, `yulu skill install --agent`; spike validates WHO calls provisioning (completed 2026-05-30)
 - [x] **Phase 7: Seamless Auto-Migration** - `yulu migrate` detect→plan→apply→verify with recording-guard, transactional rollback, and bounded backup lifecycle (completed 2026-05-30)
 - [x] **Phase 8: Multi-Agent Providers (Codex + OpenClaw)** - Generalize the proven ClaudeCode provider to complete the multi-agent-from-v1 lock (completed 2026-05-30)
-- [ ] **Phase 9: Release Safety** - Make stable install/update version-paired, macOS-13-compatible, recording-safe, and free of optional dependency blockers
+- [x] **Phase 9: Release Safety** - Make stable install/update version-paired, macOS-13-compatible, recording-safe, and free of optional dependency blockers (completed 2026-08-24)
 - [ ] **Phase 10: Provider Model & xAI Foundation** - Establish independent capability providers and prove xAI summary and cited local-meeting conversation end to end
 - [ ] **Phase 11: State-Driven Core Activation** - Guide every install cohort to a real saved recording, transcript, and summary
 - [ ] **Phase 12: Agent Runtime & Gateway Connections** - Connect Codex, Claude Code, Hermes, OpenClaw, and advanced CLIProxyAPI paths with correct credential ownership
@@ -274,7 +274,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 **Wave 2** *(blocked on Wave 1; closes with real-host checkpoint)*
 
-- [ ] 09-03-PLAN.md — Core-only install boundary plus release-candidate/live-recording/clean-host acceptance (DIST-04)
+- [x] 09-03-PLAN.md — Core-only install boundary plus release-candidate/live-recording/clean-host acceptance (DIST-04)
 
 ### Phase 10: Provider Model & xAI Foundation
 
