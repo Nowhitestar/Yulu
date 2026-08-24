@@ -794,8 +794,8 @@ export function RecordingReader() {
             state={deriveButtonState("summarize")}
             error={buttonError("summarize")}
             onClick={handleSummarize}
-            disabled={!(data.transcript || data.realtime) || taskActionBlocked || manualActionPending}
-            disabledReason={!(data.transcript || data.realtime) ? t("reader.disabled.transcriptFirst") : actionsDisabledReason}
+            disabled={!data.transcript || taskActionBlocked || manualActionPending}
+            disabledReason={!data.transcript ? t("reader.disabled.transcriptFirst") : actionsDisabledReason}
           />
           <SharePopover
             className="reader-action-share"
