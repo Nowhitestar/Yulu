@@ -216,6 +216,9 @@ interface DestinationOption {
 
 interface AskResponse {
   answer: string;
+  provider?: string;
+  model?: string;
+  sessionStatus?: "active" | "paused";
   sources: AskSource[];
   remoteSources?: RemoteSource[];
   usedFallback: boolean;
@@ -246,6 +249,10 @@ interface ChatMessage {
 interface AgentSessionSummary {
   id: string;
   agent: string;
+  provider?: string;
+  model?: string;
+  status?: "active" | "paused";
+  pausedReason?: string;
   title: string;
   updatedAt: string;
   pinnedAt?: string;
@@ -264,6 +271,10 @@ interface AgentSessionMessage {
 interface AgentSession {
   id: string;
   agent: string;
+  provider?: string;
+  model?: string;
+  status?: "active" | "paused";
+  pausedReason?: string;
   title: string;
   updatedAt: string;
   pinnedAt?: string;
@@ -827,8 +838,9 @@ function sessionMessages(session: AgentSession | null | undefined): ChatMessage[
   }));
 }
 
-function citedLocalSources(message: ChatMessage): AskSource[] {
+function displayedLocalSources(message: ChatMessage, provider?: string): AskSource[] {
   if (!message.sources || message.sources.length === 0) return [];
+  if (provider === "xai") return message.sources;
   const refs = new Set<number>();
   for (const match of message.text.matchAll(/\[(\d{1,2})\]/g)) {
     const ref = Number(match[1]);
@@ -866,11 +878,13 @@ function AskMeetings({
   const deleteSession = trpc.agentSessions.delete.useMutation();
   const pinSession = trpc.agentSessions.pin.useMutation();
   const archiveSession = trpc.agentSessions.archive.useMutation();
-  const sessionsQuery = trpc.agentSessions.list.useQuery({ agent: agentId });
+  const resumeSession = trpc.agentSessions.resume.useMutation();
+  const sessionsQuery = trpc.agentSessions.list.useQuery();
   const [input, setInput] = useState("");
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [draftSession, setDraftSession] = useState(true);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [sessionStatusOverride, setSessionStatusOverride] = useState<"active" | "paused" | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const sessionQuery = trpc.agentSessions.get.useQuery(
     { id: selectedSessionId ?? "__none__" },
@@ -880,6 +894,12 @@ function AskMeetings({
   const sessions = (sessionsQuery.data?.sessions as AgentSessionSummary[] | undefined) ?? [];
   const selectedSession = (sessionQuery.data as AgentSession | null | undefined) ?? null;
   const selectedSessionSummary = selectedSessionId ? sessions.find((session) => session.id === selectedSessionId) : null;
+  const provider = selectedSession?.provider ?? selectedSessionSummary?.provider;
+  const model = selectedSession?.model ?? selectedSessionSummary?.model;
+  const sessionStatus = sessionStatusOverride ?? selectedSession?.status ?? selectedSessionSummary?.status ?? "active";
+  const pausedReason = selectedSession?.pausedReason ?? selectedSessionSummary?.pausedReason;
+  const identity = provider && model ? `${provider === "xai" ? "xAI" : provider} · ${model}` : null;
+  const conversationName = provider === "xai" ? "xAI" : agentName;
   const sessionTitle = selectedSession?.title || selectedSessionSummary?.title || (draftSession ? "新对话" : "问本地会议");
   const sessionSub = selectedSessionSummary
     ? `${selectedSessionSummary.messageCount} 条消息 · ${formatSessionTime(selectedSessionSummary.updatedAt)}`
@@ -908,6 +928,8 @@ function AskMeetings({
     setMessages(sessionMessages(selectedSession));
   }, [selectedSession, ask.isPending]);
 
+  useEffect(() => setSessionStatusOverride(null), [selectedSessionId]);
+
   useEffect(() => {
     const node = scrollRef.current;
     if (!node) return;
@@ -918,21 +940,18 @@ function AskMeetings({
     }
   }, [messages]);
 
-  const submit = async () => {
-    const question = input.trim();
-    if (!question || ask.isPending || createSession.isPending || appendSession.isPending) return;
-    setInput("");
-    let sessionId = selectedSessionId;
-    if (!sessionId) {
-      const created = await createSession.mutateAsync({ agent: agentId, title: question }) as AgentSession;
-      sessionId = created.id;
-      setSelectedSessionId(sessionId);
-      setDraftSession(false);
-    }
-    setMessages((prev) => [...prev, { role: "user", text: question }, { role: "assistant", text: "", pending: true }]);
+  const runQuestion = async (sessionId: string, question: string, appendQuestion: boolean) => {
+    setMessages((prev) => [
+      ...prev,
+      ...(appendQuestion ? [{ role: "user" as const, text: question }] : []),
+      { role: "assistant" as const, text: "", pending: true },
+    ]);
     try {
-      await appendSession.mutateAsync({ sessionId, message: { role: "user", text: question } });
-      const result = await ask.mutateAsync({ question, limit: 10, sessionId }) as AskResponse;
+      if (appendQuestion) {
+        await appendSession.mutateAsync({ sessionId, message: { role: "user", text: question } });
+      }
+      const result = await ask.mutateAsync({ question, limit: 8, sessionId }) as AskResponse;
+      if (result.sessionStatus) setSessionStatusOverride(result.sessionStatus);
       const assistantMessage: ChatMessage = {
         role: "assistant",
         text: result.answer,
@@ -946,7 +965,7 @@ function AskMeetings({
         return next;
       });
       await appendSession.mutateAsync({ sessionId, message: assistantMessage });
-      void utils.agentSessions.list.invalidate({ agent: agentId });
+      void utils.agentSessions.list.invalidate();
       void utils.agentSessions.get.invalidate({ id: sessionId });
     } catch (err) {
       const errorMessage = (err as Error).message;
@@ -964,10 +983,33 @@ function AskMeetings({
           sessionId,
           message: { role: "assistant", text: "", error: errorMessage },
         });
-        void utils.agentSessions.list.invalidate({ agent: agentId });
+        void utils.agentSessions.list.invalidate();
         void utils.agentSessions.get.invalidate({ id: sessionId });
       }
     }
+  };
+
+  const submit = async () => {
+    const question = input.trim();
+    if (!question || sessionStatus === "paused" || ask.isPending || createSession.isPending || appendSession.isPending) return;
+    setInput("");
+    let sessionId = selectedSessionId;
+    if (!sessionId) {
+      const created = await createSession.mutateAsync({ title: question }) as AgentSession;
+      sessionId = created.id;
+      setSelectedSessionId(sessionId);
+      setDraftSession(false);
+    }
+    await runQuestion(sessionId, question, true);
+  };
+
+  const retrySameProvider = async () => {
+    if (!selectedSessionId || resumeSession.isPending || ask.isPending) return;
+    const question = messages.slice().reverse().find((message) => message.role === "user")?.text.trim();
+    if (!question) return;
+    await resumeSession.mutateAsync({ id: selectedSessionId });
+    setSessionStatusOverride("active");
+    await runQuestion(selectedSessionId, question, false);
   };
 
   const startNewSession = () => {
@@ -975,6 +1017,7 @@ function AskMeetings({
     setSelectedSessionId(null);
     setMessages([]);
     setInput("");
+    setSessionStatusOverride(null);
   };
 
   const selectSession = (id: string) => {
@@ -983,7 +1026,7 @@ function AskMeetings({
   };
 
   const refreshSessions = (id?: string) => {
-    void utils.agentSessions.list.invalidate({ agent: agentId });
+    void utils.agentSessions.list.invalidate();
     if (id) void utils.agentSessions.get.invalidate({ id });
   };
 
@@ -1028,7 +1071,7 @@ function AskMeetings({
           taskRail={taskRail}
         />
         <div className="agent-chat-main">
-          <ChatHeader title={sessionTitle} sub={`由 ${agentName} 处理 · ${sessionSub}`} />
+          <ChatHeader title={sessionTitle} identity={identity} sub={`由 ${conversationName} 处理 · ${sessionSub}`} />
           <div className="agent-chat-thread empty">
             <div className="agent-chat-start">
               <span className="agent-chat-start-icon"><Logo size={52} /></span>
@@ -1044,7 +1087,23 @@ function AskMeetings({
             </div>
           </div>
           <div className="agent-chat-composer">
-            <Composer value={input} onChange={setInput} onSubmit={submit} pending={ask.isPending || createSession.isPending || appendSession.isPending} placeholder="问会议记录、决策、行动项..." />
+            {sessionStatus === "paused" && identity && (
+              <PausedConversation
+                identity={identity}
+                reason={pausedReason}
+                retrying={resumeSession.isPending || ask.isPending}
+                onRetry={() => void retrySameProvider()}
+                onNew={startNewSession}
+              />
+            )}
+            <Composer
+              value={input}
+              onChange={setInput}
+              onSubmit={submit}
+              pending={ask.isPending || createSession.isPending || appendSession.isPending || resumeSession.isPending}
+              disabled={sessionStatus === "paused"}
+              placeholder="问会议记录、决策、行动项..."
+            />
           </div>
         </div>
       </section>
@@ -1066,17 +1125,17 @@ function AskMeetings({
         taskRail={taskRail}
       />
       <div className="agent-chat-main">
-        <ChatHeader title={sessionTitle} sub={`由 ${agentName} 处理 · ${sessionSub}`} />
+        <ChatHeader title={sessionTitle} identity={identity} sub={`由 ${conversationName} 处理 · ${sessionSub}`} />
         <div ref={scrollRef} className="agent-chat-thread">
           <div className="agent-chat-thread-inner">
             {messages.map((message, index) => {
-              const localSources = citedLocalSources(message);
+              const localSources = displayedLocalSources(message, provider);
               return (
                 <div key={index} className={`agent-chat-row ${message.role}`}>
                   {message.role === "assistant" && <span className="agent-avatar"><Bot size={15} strokeWidth={2} /></span>}
                   <div className="agent-message">
                     {message.pending ? (
-                      <span className="agent-message-pending"><Loader2 className="spin" size={14} strokeWidth={2} />正在询问 {agentName}...</span>
+                      <span className="agent-message-pending"><Loader2 className="spin" size={14} strokeWidth={2} />正在询问 {conversationName}...</span>
                     ) : message.error ? (
                       <span className="agent-message-error">{message.error}</span>
                     ) : (
@@ -1096,20 +1155,66 @@ function AskMeetings({
           </div>
         </div>
         <div className="agent-chat-composer">
-          <Composer value={input} onChange={setInput} onSubmit={submit} pending={ask.isPending || createSession.isPending || appendSession.isPending} placeholder="继续提问..." />
+          {sessionStatus === "paused" && identity && (
+            <PausedConversation
+              identity={identity}
+              reason={pausedReason}
+              retrying={resumeSession.isPending || ask.isPending}
+              onRetry={() => void retrySameProvider()}
+              onNew={startNewSession}
+            />
+          )}
+          <Composer
+            value={input}
+            onChange={setInput}
+            onSubmit={submit}
+            pending={ask.isPending || createSession.isPending || appendSession.isPending || resumeSession.isPending}
+            disabled={sessionStatus === "paused"}
+            placeholder="继续提问..."
+          />
         </div>
       </div>
     </section>
   );
 }
 
-function ChatHeader({ title, sub }: { title: string; sub: string }) {
+function ChatHeader({ title, identity, sub }: { title: string; identity: string | null; sub: string }) {
   return (
     <div className="agent-chat-head">
       <div>
         <strong>{title}</strong>
+        {identity && <span className="agent-chat-identity">{identity}</span>}
         <span>{sub}</span>
+        {identity && <span>服务变更将在新对话中生效。</span>}
       </div>
+    </div>
+  );
+}
+
+function PausedConversation({
+  identity,
+  reason,
+  retrying,
+  onRetry,
+  onNew,
+}: {
+  identity: string;
+  reason?: string;
+  retrying: boolean;
+  onRetry: () => void;
+  onNew: () => void;
+}) {
+  return (
+    <div className="agent-conversation-paused">
+      <strong role="alert">服务已暂停</strong>
+      <span>{identity} 请求失败，Yulu 没有切换服务。</span>
+      {reason && <em>{reason}</em>}
+      <div>
+        <button type="button" disabled={retrying} onClick={onRetry}>使用同一服务重试</button>
+        <Link to="/settings/llm">打开智能服务设置</Link>
+        <button type="button" onClick={onNew}>新对话</button>
+      </div>
+      <small>服务变更将在新对话中生效。</small>
     </div>
   );
 }
@@ -1322,7 +1427,7 @@ function SourceSummary({
             <button key={`${source.url}-${sourceIndex}`} type="button" className="agent-citation" onClick={() => onOpenLocalSource(source)}>
               <span>[{source.ref ?? sourceIndex + 1}]</span>
               <strong>{source.title}</strong>
-              <em>{source.snippet}</em>
+              <em>{source.recordedAt ? `${source.recordedAt.slice(0, 10)} · ${source.snippet}` : source.snippet}</em>
             </button>
           ))}
         </div>
@@ -1345,6 +1450,7 @@ function Composer({
   onChange,
   onSubmit,
   pending,
+  disabled,
   placeholder,
   large,
 }: {
@@ -1352,6 +1458,7 @@ function Composer({
   onChange: (value: string) => void;
   onSubmit: () => void;
   pending?: boolean;
+  disabled?: boolean;
   placeholder: string;
   large?: boolean;
 }) {
@@ -1367,9 +1474,10 @@ function Composer({
           }
         }}
         rows={large ? 2 : 1}
+        disabled={disabled}
         placeholder={placeholder}
       />
-      <button type="button" disabled={!value.trim() || pending} onClick={onSubmit} aria-label="发送">
+      <button type="button" disabled={disabled || !value.trim() || pending} onClick={onSubmit} aria-label="发送">
         {pending ? <Loader2 className="spin" size={15} strokeWidth={2} /> : <ArrowUp size={15} strokeWidth={2} />}
       </button>
     </div>

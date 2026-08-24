@@ -529,6 +529,12 @@
   font-size: 11px;
 }
 
+.agent-chat-head .agent-chat-identity {
+  color: var(--accent-on, var(--accent));
+  font-family: var(--font-mono);
+  font-weight: 600;
+}
+
 .agent-session-panel {
   width: clamp(230px, 22vw, 280px);
   min-height: 0;
@@ -1007,6 +1013,48 @@
 
 .agent-chat-composer {
   padding: 10px 22px 18px;
+}
+
+.agent-conversation-paused {
+  max-width: 760px;
+  margin: 0 auto 10px;
+  display: grid;
+  gap: 5px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in oklch, var(--red) 38%, var(--edge-card));
+  border-radius: var(--radius-inner);
+  background: var(--glass-paper);
+}
+
+.agent-conversation-paused strong {
+  color: var(--red);
+}
+
+.agent-conversation-paused em,
+.agent-conversation-paused small {
+  color: var(--fg-2);
+  font-size: 11px;
+  font-style: normal;
+}
+
+.agent-conversation-paused > div {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.agent-conversation-paused button,
+.agent-conversation-paused a {
+  min-height: 30px;
+  display: inline-flex;
+  align-items: center;
+  padding: 5px 8px;
+  border-radius: var(--radius-control);
+  color: var(--accent-on, var(--accent));
+  background: var(--accent-soft);
+  font-size: 11px;
+  font-weight: 700;
 }
 
 .agent-composer {
