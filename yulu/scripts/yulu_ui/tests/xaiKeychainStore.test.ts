@@ -15,6 +15,12 @@ afterEach(() => {
 });
 
 describe("KeychainXaiTokenStore", () => {
+  it("accepts only the issue-scoped direct.xai provider slot", () => {
+    expect(() => new KeychainProviderSecretStore("/tmp/helper", "direct.xai")).not.toThrow();
+    expect(() => new KeychainProviderSecretStore("/tmp/helper", "direct.other")).toThrow("无效的提供商钥匙串槽位");
+    expect(() => new KeychainProviderSecretStore("/tmp/helper", "gateway.hermes")).toThrow("无效的提供商钥匙串槽位");
+  });
+
   it("passes OAuth JSON over stdin and handles Keychain not-found status", async () => {
     const root = mkdtempSync(join(tmpdir(), "yulu-xai-keychain-test-"));
     roots.push(root);

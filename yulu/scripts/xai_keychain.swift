@@ -14,9 +14,7 @@ private func target(for slot: String?) -> Target {
     guard let slot else {
         return Target(service: oauthService, account: "default")
     }
-    let allowedPrefix = slot.hasPrefix("direct.") || slot.hasPrefix("gateway.")
-    let allowedCharacters = slot.range(of: "^[A-Za-z0-9][A-Za-z0-9._-]{0,71}$", options: .regularExpression) != nil
-    guard allowedPrefix, allowedCharacters else {
+    guard slot == "direct.xai" else {
         fail("Invalid provider secret slot")
     }
     return Target(service: providerSecretService, account: slot)
@@ -86,7 +84,7 @@ private func deleteSecret(_ target: Target) {
 }
 
 guard CommandLine.arguments.count == 2 || CommandLine.arguments.count == 3 else {
-    fail("Usage: xai_keychain <read|write|delete> [direct.<id>|gateway.<id>]")
+    fail("Usage: xai_keychain <read|write|delete> [direct.xai]")
 }
 
 private let selectedTarget = target(for: CommandLine.arguments.count == 3 ? CommandLine.arguments[2] : nil)

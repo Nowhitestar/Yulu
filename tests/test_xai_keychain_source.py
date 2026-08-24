@@ -28,6 +28,6 @@ def test_provider_secret_slots_keep_values_off_argv_and_validate_slot_names():
     source = SOURCE.read_text(encoding="utf-8")
 
     assert "FileHandle.standardInput.readDataToEndOfFile()" in source
-    assert "direct." in source
-    assert "gateway." in source
+    assert 'slot == "direct.xai"' in source
+    assert "gateway." not in source
     assert "provider-secret" in source

@@ -13,7 +13,7 @@ const REQUEST_TIMEOUT_MS = 20_000;
 const MAX_HELPER_OUTPUT_BYTES = 128_000;
 const MAX_PROVIDER_SECRET_BYTES = 4_096;
 const MAX_POLL_NETWORK_FAILURES = 5;
-const PROVIDER_SECRET_SLOT_RE = /^(?:direct|gateway)\.[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+const XAI_API_KEY_SLOT = "direct.xai";
 
 export type XaiCredentialSource = "oauth" | "api-key";
 
@@ -226,7 +226,7 @@ export class KeychainProviderSecretStore implements XaiApiKeyStore {
     private readonly helperPath: string,
     private readonly slot: string,
   ) {
-    if (!PROVIDER_SECRET_SLOT_RE.test(slot)) throw new Error("无效的提供商钥匙串槽位");
+    if (slot !== XAI_API_KEY_SLOT) throw new Error("无效的提供商钥匙串槽位");
   }
 
   async configured(): Promise<boolean> {
@@ -612,9 +612,6 @@ export class XaiCredentialManager {
         throw new Error("当前 xAI 账号没有 API 或音频转写权限，重新授权不会改变账号权限");
       }
       if (response.status === 400 || response.status === 401) {
-        await this.store.clear();
-        this.cachedConnected = false;
-        this.cachedSource = null;
         this.cachedDetail = "xAI OAuth 已失效，请重新授权";
         throw new Error("xAI OAuth 已失效，请在 Yulu 设置中重新授权");
       }

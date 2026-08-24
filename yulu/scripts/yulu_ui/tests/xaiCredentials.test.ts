@@ -217,7 +217,7 @@ describe("XaiCredentialManager", () => {
     });
   });
 
-  it("clears terminal invalid-grant credentials and requires reauthorization", async () => {
+  it("retains invalid OAuth state so a saved API key cannot become an automatic fallback", async () => {
     const store = new MemoryTokenStore();
     store.value = {
       version: 1,
@@ -226,15 +226,20 @@ describe("XaiCredentialManager", () => {
       expiresAt: 1,
       tokenEndpoint: "https://auth.x.ai/oauth2/token",
     };
+    const apiKeyStore = new MemoryApiKeyStore();
+    apiKeyStore.value = "must-not-be-used";
     const manager = new XaiCredentialManager({
       store,
+      apiKeyStore,
       fetchFn: vi.fn(async () => json({ error: "invalid_grant" }, 400)),
       now: () => 10_000,
     });
 
     await expect(manager.resolve()).rejects.toThrow("xAI OAuth 已失效");
-    expect(store.clear).toHaveBeenCalledOnce();
-    expect(store.value).toBeNull();
+    await expect(manager.resolve()).rejects.toThrow("xAI OAuth 已失效");
+    expect(store.clear).not.toHaveBeenCalled();
+    expect(store.value?.refreshToken).toBe("dead-refresh");
+    expect(apiKeyStore.read).not.toHaveBeenCalled();
   });
 
   it("keeps credentials when xAI reports an account entitlement failure", async () => {
