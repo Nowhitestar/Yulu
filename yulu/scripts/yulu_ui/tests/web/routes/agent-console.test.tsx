@@ -758,6 +758,8 @@ describe("AgentConsole", () => {
     expect(getByRole("button", { name: "Retry same provider" })).toBeInTheDocument();
     expect(getByRole("link", { name: "Open AI Providers" })).toHaveAttribute("href", "/settings/llm");
     expect(getAllByText("Provider changes apply to a new conversation.")).toHaveLength(2);
+    expect(getByText(/^xAI is pinned to this conversation · 2 messages · /)).toBeInTheDocument();
+    expect(screen.queryByText(/条消息/)).toBeNull();
   });
 
   it("localizes the xAI privacy boundary and empty local result without a source card", async () => {
