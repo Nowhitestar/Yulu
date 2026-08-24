@@ -123,6 +123,10 @@ export function summarizeAgentSession(session: AgentSession) {
   return {
     id: session.id,
     agent: session.agent,
+    provider: session.provider,
+    model: session.model,
+    status: session.status,
+    pausedReason: session.pausedReason,
     purpose: session.purpose,
     title: session.title,
     createdAt: session.createdAt,
