@@ -814,8 +814,10 @@ export function RecordingReader() {
               <div>
                 <strong>{t("reader.providerPause.heading")}</strong>
                 <p>
-                  {agentTask.summaryProvider === "xai" ? "xAI" : agentTask.summaryProvider}
-                  {" · "}{agentTask.summaryModel}
+                  {t("reader.providerPause.body", {
+                    provider: agentTask.summaryProvider === "xai" ? "xAI" : agentTask.summaryProvider,
+                    model: agentTask.summaryModel,
+                  })}
                 </p>
                 {agentTask.error && <p>{agentTask.error}</p>}
               </div>
