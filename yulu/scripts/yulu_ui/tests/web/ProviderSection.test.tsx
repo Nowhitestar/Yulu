@@ -117,6 +117,8 @@ describe("ProviderSection", () => {
     expect(screen.getByLabelText("对话服务")).toHaveValue("xai");
     expect(screen.getAllByTestId(/^provider-readiness-/)).toHaveLength(3);
     expect(screen.getByText(/2026-08-24.*grok-4.6/)).toBeInTheDocument();
+    expect(within(screen.getByTestId("provider-readiness-conversation")).getByRole("status"))
+      .toHaveClass("provider-readiness-status--ok");
     expect(screen.queryByText(/oauth-secret|api-key-secret/)).toBeNull();
   });
 
