@@ -552,17 +552,16 @@ describe("RecordingPipeline", () => {
     expect(store!.getTask(task.id)?.error).toContain("phase MCP contract");
   });
 
-  it("contains dispatch boundary failures and leaves durable work queued", async () => {
-    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+  it("contains dispatch boundary failures and releases claimed work for retry", async () => {
     const { audioPath } = setup({ gatewayFactoryThrows: true });
     const { task } = pipeline!.enqueueCompletion({ audioPath, title: "Demo" });
 
-    await vi.waitFor(() => expect(log).toHaveBeenCalledWith(
-      expect.stringContaining("invalid runtime config"),
-    ));
-    expect(store!.getTask(task.id)?.state).toBe("queued");
+    await vi.waitFor(() => expect(store!.getTask(task.id)).toMatchObject({
+      state: "awaiting_agent",
+      attempt: 1,
+      error: "invalid runtime config",
+    }));
     await expect(pipeline!.close()).resolves.toBeUndefined();
-    log.mockRestore();
   });
 
   it("rejects completion permanently when the whole pipeline is disabled", () => {

@@ -359,7 +359,7 @@ export class RecordingPipeline {
     this.dispatchPromise = this.dispatchLoop()
       .catch((error) => {
         // Keep the Host alive and the durable queue intact when config parsing,
-        // gateway construction, or a store operation fails outside runTask.
+        // or a store operation fails outside runTask.
         // The poll loop will retry after the underlying condition is repaired.
         console.error(`[recording-pipeline] dispatch failed: ${(error as Error).message}`);
       })
@@ -387,15 +387,9 @@ export class RecordingPipeline {
       // work to claim. Runtime health may be queried independently by the UI,
       // but an idle dispatcher must remain a cheap Host-store operation.
       if (!this.options.store.hasDispatchableTask()) return;
-      const pending = this.options.store.listTasks(10_000)
-        .filter((task) => ["queued", "awaiting_agent", "transcript_committed"].includes(task.state))
-        .sort((left, right) => left.createdAt.localeCompare(right.createdAt))[0];
-      const gateway = pending?.summaryProvider === "xai" && !pending.sendToNotion
-        ? null
-        : this.resolveGateway(config);
       const task = this.options.store.claimNext();
       if (!task || !task.leaseToken) return;
-      const canContinue = await this.runTask(gateway, task, task.leaseToken);
+      const canContinue = await this.runTask(config, task, task.leaseToken);
       if (!canContinue) return;
     }
   }
@@ -464,8 +458,17 @@ export class RecordingPipeline {
     return audioPath;
   }
 
-  private async runTask(gateway: RecordingAgentGateway | null, task: AgentTask, leaseToken: string): Promise<boolean> {
+  private async runTask(config: YuluConfig, task: AgentTask, leaseToken: string): Promise<boolean> {
     try {
+      const usesXaiSummary = task.summaryProvider === "xai";
+      let gateway: RecordingAgentGateway | null = null;
+      if (!usesXaiSummary || task.sendToNotion) {
+        try {
+          gateway = this.resolveGateway(config);
+        } catch (error) {
+          throw new AgentUnavailableError((error as Error).message);
+        }
+      }
       this.publish(task, "transcribing");
       const workspace = this.options.artifacts.workspace(task.id);
       const glossary = this.glossary();
@@ -525,7 +528,7 @@ export class RecordingPipeline {
       };
       let artifactSessionId: string | null = null;
       let artifactToolNames: string[] = [];
-      if (task.summaryProvider === "xai") {
+      if (usesXaiSummary) {
         const xaiText = this.options.xaiText;
         if (!xaiText) {
           throw new AgentUnavailableError(
