@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 
-const STORE_VERSION = 1;
+const STORE_VERSION = 2;
 const STORE_FILE = "agent-sessions.json";
 const MAX_TITLE_CHARS = 48;
 const MAX_MESSAGE_CHARS = 80_000;
@@ -42,6 +42,10 @@ const persistedMessageSchema = agentSessionMessageInputSchema.extend({
 const persistedSessionSchema = z.object({
   id: z.string(),
   agent: z.string(),
+  provider: z.string().trim().min(1).max(128).optional(),
+  model: z.string().trim().min(1).max(128).optional(),
+  status: z.enum(["active", "paused"]).optional(),
+  pausedReason: z.string().max(1000).optional(),
   purpose: z.enum(["ask", "background"]).default("ask"),
   title: z.string(),
   createdAt: z.string(),
@@ -51,7 +55,12 @@ const persistedSessionSchema = z.object({
   nativeSessionId: z.string().optional(),
   runtimeLabel: z.string().optional(),
   messages: z.array(persistedMessageSchema),
-});
+}).transform((session) => ({
+  ...session,
+  provider: session.provider ?? session.agent,
+  model: session.model ?? "runtime-managed",
+  status: session.status ?? "active",
+}));
 
 const storeSchema = z.object({
   version: z.number(),
@@ -71,12 +80,21 @@ export function readAgentSessionStore(configDir: string): AgentSessionStore {
   const path = storePath(configDir);
   if (!existsSync(path)) return { version: STORE_VERSION, sessions: [] };
   try {
-    const parsed = storeSchema.safeParse(JSON.parse(readFileSync(path, "utf8")));
+    const raw = JSON.parse(readFileSync(path, "utf8"));
+    const parsed = storeSchema.safeParse(raw);
     if (!parsed.success) return { version: STORE_VERSION, sessions: [] };
-    return {
+    const store = {
       version: STORE_VERSION,
       sessions: parsed.data.sessions,
     };
+    const rawSessions = Array.isArray(raw.sessions) ? raw.sessions : [];
+    const needsMigration = raw.version !== STORE_VERSION || rawSessions.some((session: unknown) => {
+      if (!session || typeof session !== "object" || Array.isArray(session)) return false;
+      const value = session as Record<string, unknown>;
+      return !("provider" in value) || !("model" in value) || !("status" in value);
+    });
+    if (needsMigration) writeAgentSessionStore(configDir, store);
+    return store;
   } catch {
     return { version: STORE_VERSION, sessions: [] };
   }
@@ -141,6 +159,9 @@ export function createAgentSession(
   const session: AgentSession = {
     id: randomUUID(),
     agent: input.agent,
+    provider: input.agent,
+    model: "runtime-managed",
+    status: "active",
     purpose: input.purpose ?? "ask",
     title: titleFromText(input.title ?? ""),
     createdAt: timestamp,
