@@ -25,10 +25,9 @@ import { resolveAgentRuntime } from "../agentRuntime.js";
 import {
   AgentDeliveryFailedError,
   runAgentShareSummary,
-  runAgentSummarize,
 } from "../agentActions.js";
 import { agentDestinationHint, agentPluginOverview, normalizeConsoleAgent } from "../agentPlugins.js";
-import { applyGlossaryContract, loadGlossaryContract } from "../glossaryContract.js";
+import { loadGlossaryContract } from "../glossaryContract.js";
 
 // Every recording is a meeting now (voicemails were unified into meetings and
 // the separate voicemails/ directory was merged into the root). A recording is
@@ -947,9 +946,7 @@ export const recordingsRouter = router({
     .mutation(async ({ ctx, input }) => {
       return withManualActionLock(input.stem, "Summary generation", async () => {
         const dir = ctx.paths.moviesDir;
-        const transcriptPath = existsSync(join(dir, `${input.stem}.transcript.txt`))
-          ? join(dir, `${input.stem}.transcript.txt`)
-          : join(dir, `${input.stem}.realtime.transcript.txt`);
+        const transcriptPath = join(dir, `${input.stem}.transcript.txt`);
         if (!existsSync(transcriptPath)) {
           throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Transcript missing — run Re-transcribe first" });
         }
@@ -960,10 +957,6 @@ export const recordingsRouter = router({
         }
         const derivedTitle = `${input.stem}.wav`.match(REC_FILE_RE)?.[1] ?? input.stem;
         const title = resolveTitle(dir, input.stem, derivedTitle) ?? input.stem;
-        const runtime = resolveAgentRuntime(ctx.config.read(), {
-          scriptDir: ctx.paths.scriptDir,
-          moviesDir: ctx.paths.moviesDir,
-        });
         const baseInstructions = renderStandaloneSummaryInstructions(
           prompt?.content ?? STANDALONE_SUMMARY_INSTRUCTIONS,
           { title, date: recordingDateFromStem(input.stem) },
@@ -972,20 +965,12 @@ export const recordingsRouter = router({
         const instructions = [baseInstructions, glossary.summaryInstruction]
           .filter(Boolean)
           .join("\n\n");
-        const result = await runAgentSummarize({
-          configDir: ctx.paths.configDir,
-          scriptDir: ctx.paths.scriptDir,
-          runtime,
-          transcriptPath,
+        const result = ctx.recordingPipeline.enqueueSummaryRegeneration({
+          audioPath: join(dir, `${input.stem}.wav`),
           title,
           instructions,
         });
-        const summary = applyGlossaryContract(result.stdout.trim(), glossary);
-        writeTextAtomic(join(dir, `${input.stem}.summary.md`), `${summary}\n`);
-        clearStaleMarker(summaryStalePath(dir, input.stem));
-        ctx.pubsub.publish("recordings-changed", { reason: "changed" });
-        ctx.pubsub.publish("jobs", { stem: input.stem, jobId: result.sessionId, state: "done" });
-        return { ok: true as const, sessionId: result.sessionId };
+        return { ok: true as const, created: result.created, task: publicAgentTask(result.task) };
       });
     }),
 

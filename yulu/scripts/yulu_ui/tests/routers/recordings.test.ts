@@ -35,6 +35,21 @@ function mkCtx(opts: { moviesDir: string; glossaryRows?: Array<Record<string, un
     provider: "hermes-test",
     chunks: 2,
   }));
+  const enqueueSummaryRegeneration = vi.fn((input: { audioPath: string }) => {
+    const stem = input.audioPath.replace(/^.*\//, "").replace(/\.wav$/, "");
+    writeFileSync(join(opts.moviesDir, `${stem}.summary.md`), "# Fresh summary\n");
+    const stalePath = join(opts.moviesDir, `${stem}.summary.stale`);
+    if (existsSync(stalePath)) rmSync(stalePath);
+    return {
+      created: true,
+      task: {
+        id: "019f0000-0000-7000-8000-000000000123",
+        trigger: "manual",
+        summaryProvider: "hermes",
+        summaryModel: "runtime-managed",
+      },
+    };
+  });
   const promptsDb = {
     prepare: (sql: string) => ({
       all: (..._args: unknown[]) => {
@@ -74,7 +89,7 @@ function mkCtx(opts: { moviesDir: string; glossaryRows?: Array<Record<string, un
         prepare: () => ({ all: () => opts.glossaryRows ?? [] }),
       },
     },
-    recordingPipeline: { transcribeOnDemand },
+    recordingPipeline: { transcribeOnDemand, enqueueSummaryRegeneration },
   } as unknown as AppContext;
 }
 
@@ -208,11 +223,6 @@ describe("recordings router", () => {
     const stem = "TeamSync_20260102_090000";
     writeFileSync(join(mvDir, `${stem}.wav`), wavWithDuration(1));
     writeFileSync(join(mvDir, `${stem}.transcript.txt`), "existing transcript");
-    agentActions.summarize.mockResolvedValueOnce({
-      stdout: "# 阿法学院\n",
-      stderr: "",
-      sessionId: "summary-session",
-    });
     const ctx = mkCtx({
       moviesDir: mvDir,
       glossaryRows: [{ term: "阿法学院", canonical: "阿尔法学院", scope: "both" }],
@@ -221,12 +231,12 @@ describe("recordings router", () => {
     await createCaller(recordingsRouter, ctx).summarize({ stem });
 
     expect(ctx.recordingPipeline.transcribeOnDemand).not.toHaveBeenCalled();
-    expect(agentActions.summarize).toHaveBeenCalledWith(expect.objectContaining({
-      transcriptPath: join(mvDir, `${stem}.transcript.txt`),
+    expect(ctx.recordingPipeline.enqueueSummaryRegeneration).toHaveBeenCalledWith(expect.objectContaining({
+      audioPath: join(mvDir, `${stem}.wav`),
       title: "TeamSync",
       instructions: expect.stringContaining("阿法学院 => 阿尔法学院"),
     }));
-    expect(readFileSync(join(mvDir, `${stem}.summary.md`), "utf8")).toBe("# 阿尔法学院\n");
+    expect(agentActions.summarize).not.toHaveBeenCalled();
   });
 
   it("regenerates through a pinned xAI durable task using only the committed transcript", async () => {
@@ -251,8 +261,9 @@ describe("recordings router", () => {
     const host = new HostStore(join(configDir, "host.sqlite"));
     const artifacts = new ArtifactStore(mvDir, join(configDir, "agent-tasks"));
     const config = new ConfigManager(configFile);
+    const glossaryRows = [{ term: "阿法学院", canonical: "阿尔法学院", scope: "both" as const }];
     const xaiRequest = vi.fn(async (request: { model: string }) => ({
-      text: "# Fresh xAI summary",
+      text: "# 阿法学院",
       model: request.model,
       credentialSource: "oauth" as const,
     }));
@@ -275,7 +286,7 @@ describe("recordings router", () => {
       config,
       paths: runtimePaths,
       pubsub,
-      vocabDb: () => ({ prepare: () => ({ all: () => [] }) }),
+      vocabDb: () => ({ prepare: () => ({ all: () => glossaryRows }) }),
       transcription: {
         provider: "test-audio",
         health: () => ({ available: true, provider: "test-audio", reason: null }),
@@ -286,7 +297,7 @@ describe("recordings router", () => {
       gatewayFactory: () => { throw new Error("manual xAI summary must not construct an Agent gateway"); },
       pollMs: 60_000,
     });
-    const base = mkCtx({ moviesDir: mvDir });
+    const base = mkCtx({ moviesDir: mvDir, glossaryRows });
     const ctx = {
       ...base,
       paths: runtimePaths,
@@ -315,7 +326,7 @@ describe("recordings router", () => {
           { role: "user", content: "committed transcript" },
         ],
       });
-      expect(readFileSync(join(mvDir, `${stem}.summary.md`), "utf8")).toBe("# Fresh xAI summary\n");
+      expect(readFileSync(join(mvDir, `${stem}.summary.md`), "utf8")).toBe("# 阿尔法学院\n");
       expect(existsSync(join(mvDir, `${stem}.summary.stale`))).toBe(false);
     } finally {
       await pipeline.close();

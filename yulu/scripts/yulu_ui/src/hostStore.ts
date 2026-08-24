@@ -318,7 +318,7 @@ export class HostStore {
     const retire = this.db.transaction(() => {
       const rows = this.db.prepare(`
         SELECT * FROM agent_tasks
-        WHERE trigger = 'manual' AND (
+        WHERE trigger = 'manual' AND idempotency_key NOT LIKE 'summary-regeneration:%' AND (
           state IN ('queued', 'awaiting_agent', 'awaiting_provider', 'awaiting_policy', 'running',
                     'transcript_committed', 'artifacts_committed', 'sending', 'delivery_reported')
           OR (state = 'failed' AND error = ?)

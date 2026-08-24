@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync, realpathSync, rmSync, statSync } from "node:fs";
 import { basename, extname, isAbsolute, join, relative, resolve } from "node:path";
 import type { ConfigManager, YuluConfig } from "./config.js";
@@ -103,6 +103,12 @@ export interface OnDemandTranscriptionInput {
   language?: TranscriptionLanguage;
 }
 
+export interface SummaryRegenerationInput {
+  audioPath: string;
+  title?: string;
+  instructions: string;
+}
+
 export interface RecordingPipelineOptions {
   store: HostStore;
   artifacts: ArtifactStore;
@@ -153,6 +159,35 @@ export class RecordingPipeline {
     return this.persist(this.prepare(input), null);
   }
 
+  enqueueSummaryRegeneration(input: SummaryRegenerationInput): { task: AgentTask; created: boolean } {
+    const config = this.options.config.read();
+    if (!pipelineConfig(config).enabled) {
+      throw new RecordingPipelinePolicyDisabledError("Agent recording pipeline is disabled by policy");
+    }
+    const recording = this.resolveRecording(input.audioPath);
+    const instructions = input.instructions.trim();
+    if (!instructions) throw new InvalidRecordingCompletionError("summary instructions are empty");
+    const runtime = resolveHermesAgentRuntime(config, {
+      scriptDir: this.options.paths.scriptDir,
+      moviesDir: this.options.paths.moviesDir,
+    });
+    return this.persist({
+      audioPath: recording.audioPath,
+      transcriptionLanguage: normalizeTranscriptionLanguage(config.transcription.language),
+      stem: recording.stem,
+      title: input.title?.trim() || recording.title,
+      sendToNotion: false,
+      destinationHint: pipelineConfig(config).notion_destination,
+      agentProvider: runtime.provider,
+      summaryProvider: config.intelligence.summary.provider === "agent"
+        ? runtime.provider
+        : config.intelligence.summary.provider,
+      summaryModel: config.intelligence.summary.model,
+      instructions,
+      trigger: "manual",
+    }, `summary-regeneration:${randomUUID()}`);
+  }
+
   async warmTranscription(): Promise<{ provider: string }> {
     await this.options.transcription.warm();
     return { provider: this.options.transcription.provider };
@@ -177,10 +212,49 @@ export class RecordingPipeline {
     if (!pipelineConfig(config).auto_process_recordings) {
       throw new RecordingPipelinePolicyDisabledError("Automatic Agent recording processing is paused by policy");
     }
+    const recording = this.resolveRecording(input.audioPath);
+    const runtime = resolveHermesAgentRuntime(config, {
+      scriptDir: this.options.paths.scriptDir,
+      moviesDir: this.options.paths.moviesDir,
+    });
+    const title = input.title?.trim() || recording.title;
+    const instructionContext = {
+      title,
+      date: recordingDateFromStem(recording.stem),
+    };
+    let instructions: string;
+    try {
+      instructions = automaticSummaryInstructions(this.options.promptDb, instructionContext);
+    } catch (error) {
+      if (error instanceof InvalidPromptInstructionsError) {
+        throw new InvalidRecordingCompletionError(error.message);
+      }
+      throw error;
+    }
+    return {
+      audioPath: recording.audioPath,
+      transcriptionLanguage: normalizeTranscriptionLanguage(
+        input.language ?? config.transcription.language,
+      ),
+      stem: recording.stem,
+      title,
+      sendToNotion: input.sendToNotion === true,
+      destinationHint: pipelineConfig(config).notion_destination,
+      agentProvider: runtime.provider,
+      summaryProvider: config.intelligence.summary.provider === "agent"
+        ? runtime.provider
+        : config.intelligence.summary.provider,
+      summaryModel: config.intelligence.summary.model,
+      instructions,
+      trigger: "automatic",
+    };
+  }
+
+  private resolveRecording(input: string): { audioPath: string; stem: string; title: string } {
     let audioPath: string;
     let moviesRoot: string;
     try {
-      audioPath = realpathSync(resolve(input.audioPath));
+      audioPath = realpathSync(resolve(input));
       moviesRoot = realpathSync(this.options.paths.moviesDir);
     } catch {
       throw new InvalidRecordingCompletionError("recording WAV is missing");
@@ -193,41 +267,10 @@ export class RecordingPipeline {
     const name = basename(audioPath);
     const match = REC_FILE_RE.exec(name);
     if (!match) throw new InvalidRecordingCompletionError("recording filename does not match the Yulu recording contract");
-    const stem = name.slice(0, -4);
-    const runtime = resolveHermesAgentRuntime(config, {
-      scriptDir: this.options.paths.scriptDir,
-      moviesDir: this.options.paths.moviesDir,
-    });
-    const title = input.title?.trim() || match[1]!.replaceAll("_", " ");
-    const instructionContext = {
-      title,
-      date: recordingDateFromStem(stem),
-    };
-    let instructions: string;
-    try {
-      instructions = automaticSummaryInstructions(this.options.promptDb, instructionContext);
-    } catch (error) {
-      if (error instanceof InvalidPromptInstructionsError) {
-        throw new InvalidRecordingCompletionError(error.message);
-      }
-      throw error;
-    }
     return {
       audioPath,
-      transcriptionLanguage: normalizeTranscriptionLanguage(
-        input.language ?? config.transcription.language,
-      ),
-      stem,
-      title,
-      sendToNotion: input.sendToNotion === true,
-      destinationHint: pipelineConfig(config).notion_destination,
-      agentProvider: runtime.provider,
-      summaryProvider: config.intelligence.summary.provider === "agent"
-        ? runtime.provider
-        : config.intelligence.summary.provider,
-      summaryModel: config.intelligence.summary.model,
-      instructions,
-      trigger: "automatic",
+      stem: name.slice(0, -4),
+      title: match[1]!.replaceAll("_", " "),
     };
   }
 
@@ -367,7 +410,7 @@ export class RecordingPipeline {
     if (!pipelineConfig(config).auto_process_recordings) {
       const reason = "Automatic Agent recording processing is paused by policy";
       this.options.store.pauseDispatchableForPolicy(reason, "automatic");
-      return reason;
+      return null;
     }
     this.options.store.resumePolicyPaused("automatic");
     return null;
@@ -438,6 +481,20 @@ export class RecordingPipeline {
           chunks: Number(existingTranscript.provenance.transcriptChunks ?? 1),
           language: task.transcriptionLanguage,
         };
+      } else if (task.trigger === "manual") {
+        const record = this.options.artifacts.adoptCommittedTranscript(task, {
+          transcriptionProvider: "committed-transcript",
+          transcriptChunks: 1,
+          committedBy: "yulu-host",
+        });
+        this.options.store.recordTranscript(task.id, leaseToken, record);
+        transcription = {
+          transcript: this.options.artifacts.readCommittedTranscript(task, record),
+          provider: "committed-transcript",
+          chunks: 1,
+          language: task.transcriptionLanguage,
+        };
+        this.options.pubsub.publish("recordings-changed", { reason: "changed" });
       } else {
         const rawTranscription = await this.options.transcription.transcribeFile(
           task.audioPath,

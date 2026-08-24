@@ -137,6 +137,15 @@ export class ArtifactStore {
     return text;
   }
 
+  adoptCommittedTranscript(task: AgentTask, provenance: Record<string, unknown>): ArtifactRecord {
+    const path = join(this.moviesDir, `${task.recordingStem}.transcript.txt`);
+    if (!isInside(this.moviesDir, path)) {
+      throw new Error("transcript target escapes the recordings directory");
+    }
+    const transcript = readRequiredText(path, "transcript", MAX_TRANSCRIPT_BYTES).trimEnd();
+    return this.commitTranscript(task, transcript, provenance);
+  }
+
   commitTranscript(
     task: AgentTask,
     transcript: string,
