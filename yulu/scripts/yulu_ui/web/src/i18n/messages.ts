@@ -540,6 +540,15 @@ export const en: Messages = {
   "settings.providers.readiness.test.conversation": "Test conversation",
   "settings.providers.open": "Open AI Providers",
 
+  // ---- Agent Console: pinned xAI conversation ----
+  "agentConsole.xai.localBoundary": "Only bounded local meeting excerpts are used. Web, X, files, and connectors stay off.",
+  "agentConsole.xai.empty": "No matching local meeting excerpts were found. Nothing was sent to xAI.",
+  "agentConsole.provider.newSessionNote": "Provider changes apply to a new conversation.",
+  "agentConsole.provider.paused.heading": "Provider paused",
+  "agentConsole.provider.paused.body": "{identity} failed. Yulu did not switch providers.",
+  "agentConsole.provider.paused.retry": "Retry same provider",
+  "agentConsole.provider.paused.newConversation": "New conversation",
+
   // ---- Settings: auto-run templates ----
   "settings.llm.autorun.title": "Auto-run templates",
   "settings.llm.autorun.help": "These run automatically when a recording is transcribed.",
@@ -1319,6 +1328,15 @@ export const zh: Messages = {
   "settings.providers.readiness.test.summary": "测试摘要",
   "settings.providers.readiness.test.conversation": "测试对话",
   "settings.providers.open": "打开智能服务设置",
+
+  // ---- Agent Console: pinned xAI conversation ----
+  "agentConsole.xai.localBoundary": "只会使用有界的本地会议片段，不会调用 Web、X、文件或 Connectors。",
+  "agentConsole.xai.empty": "未找到匹配的本地会议片段，本次未向 xAI 发送内容。",
+  "agentConsole.provider.newSessionNote": "服务变更将在新对话中生效。",
+  "agentConsole.provider.paused.heading": "服务已暂停",
+  "agentConsole.provider.paused.body": "{identity} 请求失败，Yulu 没有切换服务。",
+  "agentConsole.provider.paused.retry": "使用同一服务重试",
+  "agentConsole.provider.paused.newConversation": "新对话",
 
   // ---- Settings: auto-run templates ----
   "settings.llm.autorun.title": "自动运行模板",

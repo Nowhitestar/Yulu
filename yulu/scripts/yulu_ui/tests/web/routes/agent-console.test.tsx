@@ -750,14 +750,14 @@ describe("AgentConsole", () => {
       ],
     };
 
-    const { getByText, findByText, getByRole } = wrap(["/agent-console"], "en");
+    const { getByText, getAllByText, findByText, getByRole } = wrap(["/agent-console"], "en");
     fireEvent.click(getByText("Paused xAI English"));
 
     expect(await findByText("Provider paused")).toHaveAttribute("role", "alert");
     expect(getByText("xAI · grok-4.6-exact failed. Yulu did not switch providers.")).toBeInTheDocument();
     expect(getByRole("button", { name: "Retry same provider" })).toBeInTheDocument();
     expect(getByRole("link", { name: "Open AI Providers" })).toHaveAttribute("href", "/settings/llm");
-    expect(getByText("Provider changes apply to a new conversation.")).toBeInTheDocument();
+    expect(getAllByText("Provider changes apply to a new conversation.")).toHaveLength(2);
   });
 
   it("localizes the xAI privacy boundary and empty local result without a source card", async () => {

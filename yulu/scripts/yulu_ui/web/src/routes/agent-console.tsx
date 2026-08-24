@@ -39,6 +39,7 @@ import { useWsChannel } from "../ws.js";
 import { usePersistedSize } from "../hooks/usePersistedSize.js";
 import { MarkdownView } from "../components/MarkdownView.js";
 import { Logo } from "../components/Logo.js";
+import { useT } from "../i18n/LanguageProvider.js";
 import "./agent-console.css";
 
 export const handle = { breadcrumb: "breadcrumb.agentConsole", filters: null };
@@ -870,6 +871,7 @@ function AskMeetings({
   taskRail: TaskRailProps | null;
 }) {
   const navigate = useNavigate();
+  const t = useT();
   const utils = trpc.useUtils();
   const ask = trpc.ask.ask.useMutation();
   const createSession = trpc.agentSessions.create.useMutation();
@@ -964,7 +966,7 @@ function AskMeetings({
       if (result.sessionStatus) setSessionStatusOverride(result.sessionStatus);
       const assistantMessage: ChatMessage = {
         role: "assistant",
-        text: result.answer,
+        text: result.llmStatus === "empty" ? t("agentConsole.xai.empty") : result.answer,
         sources: result.sources,
         remoteSources: result.remoteSources,
         error: result.llmStatus === "error" ? result.llmError ?? undefined : undefined,
@@ -1086,7 +1088,7 @@ function AskMeetings({
               <div className="agent-chat-title">问本地会议</div>
               <div className="agent-chat-sub">
                 {provider === "xai"
-                  ? "只会使用有界的本地会议片段，不会调用 Web、X、文件或 Connectors。"
+                  ? t("agentConsole.xai.localBoundary")
                   : "本地记录、Notion、Zulip 会自动进入上下文。"}
               </div>
               <div className="agent-chat-starters">
@@ -1191,13 +1193,14 @@ function AskMeetings({
 }
 
 function ChatHeader({ title, identity, sub }: { title: string; identity: string | null; sub: string }) {
+  const t = useT();
   return (
     <div className="agent-chat-head">
       <div>
         <strong>{title}</strong>
         {identity && <span className="agent-chat-identity">{identity}</span>}
         <span>{sub}</span>
-        {identity && <span>服务变更将在新对话中生效。</span>}
+        {identity && <span>{t("agentConsole.provider.newSessionNote")}</span>}
       </div>
     </div>
   );
@@ -1216,17 +1219,18 @@ function PausedConversation({
   onRetry: () => void;
   onNew: () => void;
 }) {
+  const t = useT();
   return (
     <div className="agent-conversation-paused">
-      <strong role="alert">服务已暂停</strong>
-      <span>{identity} 请求失败，Yulu 没有切换服务。</span>
+      <strong role="alert">{t("agentConsole.provider.paused.heading")}</strong>
+      <span>{t("agentConsole.provider.paused.body", { identity })}</span>
       {reason && <em>{reason}</em>}
       <div>
-        <button type="button" disabled={retrying} onClick={onRetry}>使用同一服务重试</button>
-        <Link to="/settings/llm">打开智能服务设置</Link>
-        <button type="button" onClick={onNew}>新对话</button>
+        <button type="button" disabled={retrying} onClick={onRetry}>{t("agentConsole.provider.paused.retry")}</button>
+        <Link to="/settings/llm">{t("settings.providers.open")}</Link>
+        <button type="button" onClick={onNew}>{t("agentConsole.provider.paused.newConversation")}</button>
       </div>
-      <small>服务变更将在新对话中生效。</small>
+      <small>{t("agentConsole.provider.newSessionNote")}</small>
     </div>
   );
 }
