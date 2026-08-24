@@ -248,9 +248,14 @@ export function projectAgentSessionHistory(
   currentQuestion?: string,
 ): AgentSessionHistoryMessage[] {
   const messages = session.messages.slice();
-  const last = messages.at(-1);
-  if (currentQuestion && last?.role === "user" && last.text.trim() === currentQuestion.trim()) {
-    messages.pop();
+  if (currentQuestion) {
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      const message = messages[index]!;
+      if (message.role === "user" && message.text.trim() === currentQuestion.trim()) {
+        messages.splice(index, 1);
+        break;
+      }
+    }
   }
   const history: AgentSessionHistoryMessage[] = [];
   let remainingChars = MAX_HISTORY_CHARS;
