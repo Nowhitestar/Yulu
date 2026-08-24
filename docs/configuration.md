@@ -4,9 +4,10 @@ Yulu reads active configuration from `~/.config/yulu/config.json`. The installer
 creates it with private per-user defaults. The file contains product preferences,
 paths, and Agent selection only; it must not contain Agent or connector secrets.
 
-The current schema separates Yulu's audio engine from the summary Agent and its
-connectors. The explicitly selected audio engine handles realtime captions, final
-transcription, and dictation; local is the default and there is no automatic fallback.
+The current schema separates the audio engine, Summary Provider, Conversation
+Provider, and connectors. The explicitly selected audio engine handles realtime
+captions, final transcription, and dictation; local is the default and no
+capability silently falls back to another provider or model.
 
 ## Representative configuration
 
@@ -33,6 +34,10 @@ transcription, and dictation; local is the default and there is no automatic fal
       "translate_deadline_sec": 30,
       "translate_timeout_sec": 30
     }
+  },
+  "intelligence": {
+    "summary": { "provider": "agent", "model": "runtime-managed" },
+    "conversation": { "provider": "agent", "model": "runtime-managed" }
   },
   "agent_pipeline": {
     "enabled": true,
@@ -141,6 +146,18 @@ automatic dispatch. Explicit transcription and dictation remain available, and
 choosing a manual summary action for an automatic `awaiting_policy` task promotes
 that same durable task instead of creating a duplicate.
 
+## `intelligence`
+
+`summary` and `conversation` are independent provider/model selections. `agent`
+uses the resolved local Agent runtime and requires model `runtime-managed`; `xai`
+stores the exact configured model name. Summary tasks and conversation sessions
+snapshot the resolved identity at creation, so later settings changes affect only
+new work. No credential belongs in either object.
+
+When a pinned Summary Provider is unavailable after transcript commit, the task
+enters `awaiting_provider` and stays there until an explicit same-provider retry.
+Yulu never rewrites the existing snapshot from current settings.
+
 ## `transcription`
 
 One explicit Yulu audio engine handles realtime captions, final transcription,
@@ -170,8 +187,9 @@ credentials are not imported or deleted.
 ## `llm` and Agent Console
 
 `llm` selects the **general Agent** used for interactive Agent Console work.
-Automatic summary/delivery work remains pinned to Hermes. Audio transcription is
-controlled independently by `transcription.engine`.
+It does not select transcription, summaries, or conversation identity: those use
+`transcription.engine` and the two `intelligence` selections. Agent-backed
+automatic summaries currently execute through Hermes.
 
 | Field | Default | Meaning |
 |---|---:|---|
@@ -180,9 +198,9 @@ controlled independently by `transcription.engine`.
 | `agent.provider` | `"auto"` in schema; installer chooses `"hermes"` | `auto`, `codex`, `claude`, `claude-code`, `hermes`, `openclaw`, `gemini`, `grok`, or `custom`. Gemini, Grok, and custom providers currently require an explicit `command`. |
 
 When `provider=auto`, the general runtime detects supported CLIs in its current
-priority order. This does not change the audio engine or automatic summary Agent.
-If Hermes is unavailable, a recording transcript can still be committed by the
-selected audio engine while its summary task waits in `awaiting_agent`.
+priority order. This does not change any existing audio/task/session snapshot.
+If the pinned Summary Provider is unavailable, a recording transcript remains
+committed while its summary task waits in `awaiting_provider`.
 
 To pause automatic summary and delivery work, set `agent_pipeline.enabled=false`.
 Realtime captions, transcription, and dictation remain controlled by the selected

@@ -4,7 +4,9 @@ Yulu is a macOS-native recording product with a durable local Host and explicit
 audio and Agent responsibility boundaries. The durable Agent pipeline is
 recorded in [`ADR-005`](../yulu/spec/adr/005-agent-native-durable-recording-pipeline.md),
 and the current audio-engine decision in
-[`ADR-007`](../yulu/spec/adr/007-explicit-audio-transcription-engines.md).
+[`ADR-007`](../yulu/spec/adr/007-explicit-audio-transcription-engines.md). The
+accepted xAI credential and text-capability boundary is
+[`ADR-009`](../yulu/spec/adr/009-grok-cli-compatible-xai-oauth.md).
 
 ## Responsibility boundary
 
@@ -22,11 +24,11 @@ Yulu owns only the capabilities that require a trusted product boundary:
 
 The selected Yulu audio engine owns realtime captions, final speech recognition,
 and dictation. `local` is the default; `xai` connects directly to xAI with OAuth
-authorized in Yulu and stored in macOS Keychain. There is no
-automatic engine fallback. The recording Agent owns summary generation and
-Notion delivery, while the Agent selected in Agent Console owns interactive
-conversation and its connectors. Yulu does not contain a general chat or
-connector execution engine.
+authorized in Yulu and stored in macOS Keychain. The exact Summary Provider pinned
+at task creation owns summary generation; Agent-backed summaries currently use
+Hermes, which also owns Notion delivery. The Agent selected in Agent Console owns
+interactive conversation and its connectors. No capability silently falls back
+to another provider, model, or credential source.
 
 ## Runtime components
 
@@ -39,7 +41,7 @@ connector execution engine.
 | Local audio engine | `localCaptionManager.ts`, `sherpa_caption_worker.py` | Paraformer INT8 source-separated captions and local final transcription; install/test/remove from Settings |
 | xAI audio engine | `xaiAudio.ts`, `xaiCredentials.ts`, `xai_keychain.swift` | Direct xAI Streaming/REST STT plus Yulu-owned device OAuth and macOS Keychain storage |
 | Realtime coordinator | `realtimeTranscription.ts` | Feed mic/system streams and publish partial/stable captions from the selected engine |
-| Durable store | `hostStore.ts` | Persist tasks, events, leases, artifact records, and Notion delivery records in `host.sqlite` |
+| Durable store | `hostStore.ts` | Persist tasks, pinned summary identity, events, leases, artifact records, and Notion delivery records in `host.sqlite` |
 | Pipeline coordinator | `recordingPipeline.ts` | Commit the selected-engine transcript first, then dispatch summary/delivery Agent work and recover failures |
 | Recording gateway | `agentGateway.ts` | Run the Hermes summary/delivery workflow and audit its tool calls; it does not execute production audio transcription |
 | Artifact boundary | `artifactStore.ts` | Independently commit transcript, then validate and atomically commit summary artifacts with hashes and provenance |
@@ -64,7 +66,7 @@ flowchart TD
     E --> G["Durable task, idempotency key, lease"]
     G --> H["Selected Yulu audio engine"]
     H --> Q["Host transcript commit"]
-    Q --> I["Summary Agent workflow"]
+    Q --> I["Pinned Summary Provider workflow"]
     I --> J["Task-scoped summary staging"]
     J --> K["Host atomic artifact commit and audit"]
     K -->|"Explicit Notion authorization"| L["Hermes Notion connector"]
@@ -104,7 +106,7 @@ uses a new key because the user intentionally requested another run.
 `~/.config/yulu/host.sqlite` is the source of truth. A task records:
 
 - recording stem, title, and validated audio path;
-- idempotency key, automatic/manual trigger, and Agent provider;
+- idempotency key, automatic/manual trigger, and pinned Summary Provider/model;
 - current state and semantic phase;
 - current lease token and attempt number;
 - summary instructions and Notion opt-in/destination hint;
@@ -125,6 +127,8 @@ stateDiagram-v2
     awaiting_agent --> running: claimed with lease
     queued --> running: claimed with lease
     running --> transcript_committed: transcript committed
+    transcript_committed --> awaiting_provider: pinned provider/model unavailable
+    awaiting_provider --> transcript_committed: explicit same-snapshot retry
     transcript_committed --> artifacts_committed: summary committed
     artifacts_committed --> completed: no external delivery
     artifacts_committed --> sending: Notion explicitly authorized
@@ -147,6 +151,8 @@ disables manual work and on-demand transcription. The narrower
 `auto_process_recordings` switch pauses only automatic work: dictation and manual
 reprocessing remain available, and explicit manual takeover promotes the same
 paused task instead of admitting a duplicate.
+Provider-paused tasks remain non-dispatching across restart. Their provider/model
+snapshot is immutable; Settings changes apply only to newly created work.
 
 ## Artifact commit boundary
 

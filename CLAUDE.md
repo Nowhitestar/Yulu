@@ -14,17 +14,18 @@ separate from the selected summary and conversation Agents.
 - The explicitly selected Yulu audio engine owns realtime captions, final
   transcripts, and dictation. `local` is the default; `xai` connects directly
   to xAI using Yulu-owned OAuth stored in macOS Keychain.
-- Hermes owns automatic summary generation and explicitly authorized Notion
-  delivery. It is not an audio execution dependency.
+- The exact Summary Provider pinned when work is created owns summary generation.
+  Agent-backed summaries currently use Hermes; Hermes also owns explicitly
+  authorized Notion delivery. It is not an audio execution dependency.
 - The Agent selected in Agent Console owns interactive conversation and its own
   connectors.
 - Python is capture/scheduling/desktop glue. It is not an AI runtime.
 
-Do not add automatic fallback between audio engines, another summary worker,
-chat engine, connector executor, or file-only work queue to Yulu. The accepted
-decisions are [`ADR-005`](yulu/spec/adr/005-agent-native-durable-recording-pipeline.md),
+Do not add automatic fallback between audio engines or Summary Providers, a
+second chat engine, connector executor, or file-only work queue to Yulu. The
+accepted decisions are [`ADR-005`](yulu/spec/adr/005-agent-native-durable-recording-pipeline.md),
 [`ADR-007`](yulu/spec/adr/007-explicit-audio-transcription-engines.md), and
-[`ADR-008`](yulu/spec/adr/008-yulu-owned-xai-oauth.md).
+[`ADR-009`](yulu/spec/adr/009-grok-cli-compatible-xai-oauth.md).
 
 ### Constraints
 
@@ -144,8 +145,9 @@ Do not infer live behavior from checkout tests alone.
 
 - Credentials are never stored in `config.json`.
 - `agent_pipeline.auto_send_notion=true` is real side-effect authorization.
-- `llm.agent.provider` selects the general Agent only; audio uses the separate
-  explicit `transcription.engine`, while automatic summaries remain Hermes-backed.
+- `llm.agent.provider` selects the general Agent only. Audio uses
+  `transcription.engine`; summary and conversation use their separate
+  `intelligence` selections, snapshotted when work is created.
 - Retired inference and Yulu-owned connector fields are archived with mode
   `0600` and removed from active config. Never reintroduce them.
 - Use atomic config writes and preserve unknown forward-compatible keys unless
@@ -187,7 +189,7 @@ Python completion adapter -> authenticated loopback Host
                                Host commits transcript
                                            |
                                            v
-                                  Hermes summary workflow
+                              pinned Summary Provider workflow
                                            |
                                            +-> Host commits summary
                                            +-> optional authorized Hermes Notion
@@ -231,9 +233,10 @@ There is no active STT or Agent-queue LaunchAgent.
    recording root and follow the recording stem contract.
 2. Only the current attempt lease can mutate a task.
 3. The selected Yulu audio engine produces the transcript, which the Host commits
-   before Hermes summary work. Hermes never performs production transcription.
-4. Hermes stages the summary through Host tools; Notion can begin only after the
-   summary is committed and the task opted in.
+   before pinned Summary Provider work. Summary Providers never perform production
+   transcription and never fall back to another provider or model.
+4. The Summary Provider commits through the Host artifact boundary; Hermes Notion
+   delivery can begin only after the summary is committed and the task opted in.
 5. A Notion result must include a page URL or ID and the stable
    `yulu-<task-id>` marker through the Hermes connector workflow.
 6. The Host binds to loopback, validates Host headers and recording roots, and
@@ -246,7 +249,7 @@ There is no active STT or Agent-queue LaunchAgent.
 ```text
 queued -> running -> transcript_committed -> artifacts_committed -> completed
    |          |                |                       |
-   |          |                +-> awaiting_agent      +-> sending -> delivery_reported -> completed
+   |          |                +-> awaiting_provider   +-> sending -> delivery_reported -> completed
    |          +-> failed
    +-> awaiting_agent
 
@@ -257,6 +260,8 @@ possible external-write uncertainty -> delivery_unverified
 
 - ADR-005 remains the durable task and Agent workflow decision.
 - ADR-007 supersedes the audio ownership and fallback decisions in ADR-005 and ADR-006.
+- ADR-009 supersedes ADR-008's summary capability boundary while retaining its
+  Yulu-managed xAI credential custody and no-silent-fallback rules.
 - ADR-002 remains relevant for glossary data; the selected audio engine consumes that context.
 - Historical ADR bodies remain history and must not be treated as active
   implementation instructions.
@@ -266,8 +271,8 @@ possible external-write uncertainty -> delivery_unverified
 - Adding another audio engine or automatic engine fallback outside ADR-007.
 - Using a JSON/file queue as active task ownership.
 - Running summary or connector code from Python capture paths.
-- Letting the general conversational Agent silently replace Hermes for
-  recording work.
+- Letting any current setting or runtime silently replace a task's pinned
+  Summary Provider or model.
 - Writing final transcript/summary files outside the Host commit contract.
 - Calling Notion without task opt-in, Host begin authorization, and Host result
   commit.

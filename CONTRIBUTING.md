@@ -4,10 +4,10 @@ Thanks for considering a contribution. Yulu is small enough that the process is 
 
 ## Ground rules
 
-- **Privacy boundaries must be explicit.** Native capture and durable task state stay local. Agent/model and connector behavior belongs to the selected local Agent; every Yulu-triggered external delivery must be separately authorized and auditable.
+- **Privacy boundaries must be explicit.** Native capture and durable task state stay local. Model execution belongs to the explicitly selected capability provider, while connectors belong to the selected local Agent; every Yulu-triggered external delivery must be separately authorized and auditable.
 - **No virtual audio devices.** The whole point of the ScreenCaptureKit path is that users do not need to install BlackHole / Loopback / multi-output devices. PRs that introduce a virtual driver as a hard requirement will not be accepted.
 - **Recording must always ask.** `notify.py` consent prompts are not optional, even for "convenience" auto-record paths.
-- **Keep audio and Agent boundaries separate.** The explicitly selected Yulu audio engine owns realtime captions, final transcription, and dictation without automatic fallback. Hermes owns automatic summary reasoning and authorized connector delivery. Yulu otherwise owns native capture, durable tasks, leases, task-scoped artifacts, policy, and audit. Agent Console may use another selected Agent without changing either pipeline.
+- **Keep capability boundaries separate.** The explicitly selected Yulu audio engine owns realtime captions, final transcription, and dictation. The task's pinned Summary Provider owns summary generation; Agent-backed summaries currently use Hermes, which also owns authorized connector delivery. Yulu owns native capture, durable tasks, leases, task-scoped artifacts, policy, and audit. No capability may silently fall back to another provider or model.
 
 ## Before you open a PR
 
@@ -35,7 +35,7 @@ Thanks for considering a contribution. Yulu is small enough that the process is 
 ## What is out of scope (for now)
 
 - Cross-platform ports (Windows / Linux). The macOS-native path is the moat; a cross-platform version would be a fork, not a PR.
-- Adding another transcription engine, automatic audio-engine fallback, or Yulu-owned summarization, chat, or connector execution. ADR-007 defines the accepted local/xAI audio engines and Agent boundary.
+- Adding another transcription engine, automatic provider/model fallback, a second chat engine, or Yulu-owned connector execution. ADR-007 defines audio engines and ADR-009 defines the accepted Grok-compatible xAI credential/capability boundary.
 - Unsigned production installer assets or updater paths that require administrator privileges.
 
 ## Reporting bugs

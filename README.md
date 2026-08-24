@@ -19,6 +19,12 @@ the audio engine you explicitly select for realtime captions, final transcriptio
 and dictation: local by default, or xAI cloud through OAuth authorized directly in
 Yulu. Yulu never silently switches between them.
 
+Transcription, Summary Provider, and Conversation Provider selections are
+independent. Durable summary work and locally stored conversations retain their
+creation-time provider/model identity; changing Settings affects only new work.
+If the pinned Summary Provider is unavailable, the committed transcript and task
+pause locally until an explicit same-provider retry instead of falling back.
+
 ## What you can do
 
 | Experience | What Yulu provides |
@@ -164,7 +170,7 @@ UI / menu bar / calendar / window detection / CLI / MCP
              selected Yulu audio engine    durable task + lease
              local (default) or xAI               |
                          |                         v
-                         +----> transcript commit -> summary Agent
+                         +----> transcript commit -> pinned Summary Provider
                                       |
                          optional authorized sharing
 
@@ -177,8 +183,8 @@ The split is intentional:
   artifact commits, recovery, and authorization boundaries.
 - **The selected Yulu audio engine** owns realtime captions, final transcripts,
   and dictation. Selection is explicit and never falls back automatically.
-- **The recording Agent** owns summary generation and explicitly authorized
-  Notion delivery. It does not receive audio or xAI OAuth credentials.
+- **The pinned Summary Provider** owns summary generation. Agent-backed summaries
+  currently use Hermes, which also owns explicitly authorized Notion delivery.
 - **The selected general Agent** owns Agent Console conversation and its own
   connectors.
 

@@ -86,7 +86,7 @@
     "command": null,
     "agent": {
       "provider": "auto",
-      "note": "Local Agent use is optional and runtime-managed; Hermes is not required. Selecting xAI for summary or conversation defaults to exact model grok-4.6."
+      "note": "Local Agent use is optional and runtime-managed; Agent-backed automatic summaries currently use Hermes. Selecting xAI for summary or conversation defaults to exact model grok-4.6."
     }
   },
   "agent_console": {

@@ -1,8 +1,8 @@
 # Operations Guide
 
-This guide covers the current native-capture and durable Agent runtime. Yulu
-does not operate a separate AI executor: capture ends at the local Host boundary,
-and Hermes performs recording intelligence.
+This guide covers the current native-capture and durable provider runtime.
+Capture ends at the local Host boundary. Summary work keeps its creation-time
+provider/model identity; Agent-backed summaries currently execute through Hermes.
 
 ## Daily commands
 
@@ -127,9 +127,9 @@ A successful task reaches `completed` and creates both:
 ~/Movies/Yulu/<stem>.summary.md
 ```
 
-The Host durably commits the transcript first, then asks Hermes to create and
-commit the summary from that transcript. A transcript can therefore remain valid
-when summary generation is unavailable; inspect the Host task state for progress.
+The Host durably commits the transcript first, then dispatches only to the task's
+pinned Summary Provider. A transcript can therefore remain valid when summary
+generation is unavailable; inspect the Host task state for progress.
 
 ## Realtime captions
 
@@ -176,7 +176,8 @@ missing/incomplete files, and paths outside those roots.
 | State | Meaning | Operator action |
 |---|---|---|
 | `queued` | Persisted and waiting to be claimed | Usually none; confirm Host is running |
-| `awaiting_agent` | Hermes is unavailable | Restore Hermes on the LaunchAgent PATH, then restart/kick the Host |
+| `awaiting_agent` | The selected audio/runtime dependency is unavailable before transcript commit | Restore the selected dependency; Yulu retries this pre-summary stage with bounded backoff |
+| `awaiting_provider` | The pinned Summary Provider/model is unavailable after transcript commit | Keep paused, or explicitly retry the same snapshot; Settings changes affect new tasks only |
 | `awaiting_policy` | Recording processing is paused by configuration | Re-enable the applicable policy, or explicitly take over an automatic task as manual work when only `auto_process_recordings` is false |
 | `running` | A leased attempt is transcribing or summarizing | Watch `phase` and UI log |
 | `artifacts_committed` | Transcript and summary are safely committed | Normally transitions immediately; inspect if stuck |
@@ -239,6 +240,13 @@ processing and dictation—remains stopped until it is re-enabled. When only
 `auto_process_recordings` is false, explicit manual reprocessing stays available
 and promotes an automatic paused task in place. The generic retry action never
 bypasses either policy.
+
+### Task is `awaiting_provider`
+
+The transcript is safely committed and automatic dispatch is stopped. Repair the
+pinned provider/model and use the explicit retry action to resume that same
+snapshot. Changing provider settings does not rebind this task; create new work
+if a different provider or model is intended.
 
 ### Task is `failed`
 
