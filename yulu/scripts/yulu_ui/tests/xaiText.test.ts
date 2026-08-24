@@ -87,4 +87,30 @@ describe("XaiTextClient.request", () => {
     })).rejects.toThrow("xAI text input exceeds");
     expect(fetchFn).toHaveBeenCalledOnce();
   });
+
+  it("cancels a chunked response as soon as it exceeds the output byte limit", async () => {
+    let cancelled = false;
+    let emitted = 0;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        emitted += 1;
+        controller.enqueue(new Uint8Array(256_000));
+        if (emitted === 8) controller.close();
+      },
+      cancel() { cancelled = true; },
+    });
+    const credentials = {
+      resolve: vi.fn(async () => ({ accessToken: "oauth-secret", source: "oauth" as const })),
+    };
+    const client = new XaiTextClient(credentials as never, vi.fn<typeof fetch>(async () =>
+      new Response(body, { status: 200, headers: { "content-type": "application/json" } })));
+
+    await expect(client.request({
+      capability: "summary",
+      model: "grok-4.6",
+      input: [{ role: "user", content: "probe" }],
+    })).rejects.toThrow("xAI text response exceeded the output limit");
+    expect(cancelled).toBe(true);
+    expect(emitted).toBeLessThan(8);
+  });
 });

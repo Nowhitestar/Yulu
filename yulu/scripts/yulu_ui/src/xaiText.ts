@@ -7,6 +7,7 @@ const MAX_INPUT_MESSAGES = 64;
 const MAX_OUTPUT_TOKENS = 8_192;
 const MAX_RESPONSE_BYTES = 1_000_000;
 const MAX_OUTPUT_CHARS = 131_072;
+const OUTPUT_LIMIT_ERROR = "xAI text response exceeded the output limit";
 
 export type XaiTextCapability = "summary" | "conversation";
 
@@ -67,9 +68,40 @@ function outputText(payload: unknown): string {
   }).join("\n").trim();
   if (!text) throw new Error("xAI text response was empty");
   if (text.length > MAX_OUTPUT_CHARS || Buffer.byteLength(text, "utf8") > MAX_RESPONSE_BYTES) {
-    throw new Error("xAI text response exceeded the output limit");
+    throw new Error(OUTPUT_LIMIT_ERROR);
   }
   return text;
+}
+
+async function readBoundedResponse(response: Response): Promise<string> {
+  const contentLength = Number(response.headers.get("content-length"));
+  if (Number.isFinite(contentLength) && contentLength > MAX_RESPONSE_BYTES) {
+    throw new Error(OUTPUT_LIMIT_ERROR);
+  }
+  if (!response.body) return "";
+
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let bytes = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      bytes += value.byteLength;
+      if (bytes > MAX_RESPONSE_BYTES) {
+        await reader.cancel();
+        throw new Error(OUTPUT_LIMIT_ERROR);
+      }
+      chunks.push(value);
+    }
+  } catch (error) {
+    if (error instanceof Error && error.message === OUTPUT_LIMIT_ERROR) throw error;
+    try { await reader.cancel(); } catch { /* best effort */ }
+    throw new Error("xAI text response was invalid");
+  } finally {
+    reader.releaseLock();
+  }
+  return Buffer.concat(chunks.map((chunk) => Buffer.from(chunk)), bytes).toString("utf8");
 }
 
 export class XaiTextClient {
@@ -105,14 +137,7 @@ export class XaiTextClient {
     if (!response.ok) {
       throw new Error(`xAI ${request.capability} request failed (HTTP ${response.status})`);
     }
-    const contentLength = Number(response.headers.get("content-length"));
-    if (Number.isFinite(contentLength) && contentLength > MAX_RESPONSE_BYTES) {
-      throw new Error("xAI text response exceeded the output limit");
-    }
-    const raw = await response.text();
-    if (Buffer.byteLength(raw, "utf8") > MAX_RESPONSE_BYTES) {
-      throw new Error("xAI text response exceeded the output limit");
-    }
+    const raw = await readBoundedResponse(response);
     let payload: unknown;
     try { payload = JSON.parse(raw); }
     catch { throw new Error("xAI text response was invalid"); }
