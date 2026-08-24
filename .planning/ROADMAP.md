@@ -289,7 +289,24 @@ Decimal phases appear between their surrounding integers in numeric order.
   4. One Yulu-owned xAI connection passes separate transcription, summary, and conversation probes, and xAI produces a saved Markdown summary from transcript content only
   5. A user can ask across local meetings and receive cited source meetings while only bounded locally retrieved excerpts are sent with `store:false`; history stays local and no Web/X search or write connector is enabled
 
-**Plans**: TBD
+**Plans**: 5 plans (4 waves)
+
+**Wave 1**
+
+- [ ] 10-01-PLAN.md — Independent provider/model settings plus immutable summary task and conversation session snapshots (PRVD-01, PRVD-02, PRVD-03, XAI-04)
+
+**Wave 2** *(blocked on Wave 1)*
+
+- [ ] 10-02-PLAN.md — Keychain-only provider secrets, shared xAI credentials, strict Responses client, and three real probes (PRVD-04, PRVD-05, XAI-01, XAI-04)
+
+**Wave 3** *(parallel after Wave 2)*
+
+- [ ] 10-03-PLAN.md — Pinned xAI/Agent summary execution, verified Markdown artifacts, and explicit provider pause (PRVD-02, PRVD-03, PRVD-05, XAI-01, XAI-02)
+- [ ] 10-04-PLAN.md — Pinned local-history conversation with bounded local retrieval and Yulu-owned meeting sources (PRVD-02, PRVD-03, PRVD-05, XAI-01, XAI-03, XAI-04)
+
+**Wave 4** *(blocked on Wave 3; closes with live xAI checkpoint)*
+
+- [ ] 10-05-PLAN.md — AI Providers settings, failure/source UX, and Yulu-owned xAI production acceptance (PRVD-01, PRVD-03, PRVD-05, XAI-01, XAI-02, XAI-03, XAI-04)
 **UI hint**: yes
 
 ### Phase 11: State-Driven Core Activation
@@ -354,7 +371,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 7. Seamless Auto-Migration | 3/3 | Complete    | 2026-05-30 |
 | 8. Multi-Agent Providers | 1/1 | Complete    | 2026-05-30 |
 | 9. Release Safety | 3/3 | Complete | 2026-08-24 |
-| 10. Provider Model & xAI Foundation | 0/TBD | Not started | - |
+| 10. Provider Model & xAI Foundation | 0/5 | Planned | - |
 | 11. State-Driven Core Activation | 0/TBD | Not started | - |
 | 12. Agent Runtime & Gateway Connections | 0/TBD | Not started | - |
 | 13. Optional Capabilities & Release Acceptance | 0/TBD | Not started | - |
