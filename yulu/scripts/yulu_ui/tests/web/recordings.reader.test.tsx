@@ -60,6 +60,7 @@ vi.mock("../../web/src/components/TranscriptView.js", () => ({ TranscriptView: (
 vi.mock("../../web/src/components/MarkdownView.js", () => ({ MarkdownView: ({ text }: { text: string }) => <div data-testid="markdown">{text}</div> }));
 
 import { RecordingReader } from "../../web/src/routes/inbox/recordings.$stem";
+import { LanguageProvider } from "../../web/src/i18n/LanguageProvider.js";
 
 const baseData = {
   stem: "TeamSync_20260102_090000", type: "meeting" as const, title: "TeamSync",
@@ -67,15 +68,18 @@ const baseData = {
   status: "idle", wavPath: "/tmp/TeamSync_20260102_090000.wav",
 };
 
-function renderAt(stem: string) {
+function renderAt(stem: string, lang?: "zh" | "en") {
+  if (lang) localStorage.setItem("yulu_ui.lang", lang);
+  const reader = <Routes><Route path="/inbox/:stem" element={<RecordingReader />} /></Routes>;
   return render(
     <MemoryRouter initialEntries={[`/inbox/${stem}`]}>
-      <Routes><Route path="/inbox/:stem" element={<RecordingReader />} /></Routes>
+      {lang ? <LanguageProvider>{reader}</LanguageProvider> : reader}
     </MemoryRouter>
   );
 }
 
 beforeEach(() => {
+  localStorage.removeItem("yulu_ui.lang");
   Object.defineProperty(navigator, "clipboard", {
     value: { writeText: clipboardWriteText },
     configurable: true,
@@ -239,6 +243,33 @@ describe("RecordingReader", () => {
     );
     fireEvent.click(keepPaused);
     expect(screen.getByText(/已保持暂停/i)).toBeInTheDocument();
+  });
+
+  it("states the pinned summary failure and no-switch recovery contract in English", () => {
+    getMock.mockReturnValue({
+      data: {
+        ...baseData,
+        agentTask: {
+          id: "019f0000-0000-7000-8000-000000000457",
+          state: "awaiting_provider",
+          phase: "summarizing",
+          trigger: "automatic",
+          sendToNotion: false,
+          summaryProvider: "xai",
+          summaryModel: "grok-4.6-pinned",
+          error: "xAI summary request failed (HTTP 403)",
+        },
+      },
+      isPending: false,
+    });
+
+    renderAt(baseData.stem, "en");
+
+    expect(screen.getByText("Provider paused")).toBeInTheDocument();
+    expect(screen.getByText("xAI · grok-4.6-pinned failed. Yulu did not switch providers.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Retry same provider" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Open AI Providers" })).toHaveAttribute("href", "/settings/llm");
+    expect(screen.getByRole("button", { name: "Keep paused" })).toBeInTheDocument();
   });
 
   it("re-transcribes without also summarizing or sharing", () => {
