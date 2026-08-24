@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import sqlite3
 import time
 from dataclasses import asdict, dataclass
@@ -39,6 +40,8 @@ log = logging.getLogger(__name__)
 
 # Hard cap on `limit` per spec §7.1 (IPC schema).
 MAX_LIMIT = 100
+
+_QUERY_TERM_RE = re.compile(r"[^\W_]+", re.UNICODE)
 
 # File-suffix → indexable? The sweep only walks .transcript.txt and
 # .summary.md (and slug-tagged variants). Realtime / raw / per-channel
@@ -175,6 +178,29 @@ def _since_clause(since: Optional[timedelta]) -> tuple[str, list]:
     return " AND recorded_at >= ?", [cutoff.strftime("%Y-%m-%dT%H:%M:%S")]
 
 
+def _literal_fts_query(query: str) -> str:
+    """Compile user text into a literal FTS5 expression.
+
+    Search inputs are plain language, not FTS syntax. Quoting each indexable
+    term prevents punctuation, quotes, and words such as AND/OR/NOT from being
+    executed as operators. OR keeps a natural question useful when its answer
+    is distributed across multiple meetings.
+    """
+    terms: list[str] = []
+    seen: set[str] = set()
+    for term in _QUERY_TERM_RE.findall(query):
+        if len(term) < 3:
+            continue
+        key = term.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        terms.append(term)
+    if not terms:
+        return f'"{query.replace(chr(34), chr(34) * 2)}"'
+    return " OR ".join(f'"{term}"' for term in terms)
+
+
 def _fts_search(
     query: str,
     *,
@@ -198,7 +224,7 @@ def _fts_search(
         ORDER BY bm25(docs)
         LIMIT ?
     """
-    params = [query, *k_params, *s_params, limit]
+    params = [_literal_fts_query(query), *k_params, *s_params, limit]
     rows = conn.execute(sql, params).fetchall()
     return [
         SearchHit(
