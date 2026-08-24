@@ -138,10 +138,10 @@ export function ProviderSection({ tracker }: { tracker: SettingsRestartTracker }
           </span>
         </div>
 
-        {connection?.detail && !authorizing && <div className="provider-status-note">{connection.detail}</div>}
+        <div className="provider-status-note">{t("settings.providers.connection.oauthHelp")}</div>
         {authorizing && (
           <div className="provider-status-note" role="status">
-            {authorization?.message}
+            {t("settings.providers.connection.authorizing")}
             {authorization?.verificationUrl && (
               <> · <a href={authorization.verificationUrl} target="_blank" rel="noreferrer">{t("settings.providers.connection.openAuthorization")}</a></>
             )}
@@ -187,12 +187,13 @@ export function ProviderSection({ tracker }: { tracker: SettingsRestartTracker }
             setApiKey.mutate({ apiKey }, { onSuccess: () => setApiKeyValue("") });
           }}
         >
+          <strong>{t("settings.providers.apiKey.alternative")}</strong>
           <label htmlFor="provider-xai-api-key">{t("settings.providers.apiKey.label")}</label>
           <div className="provider-api-key-controls">
             <input
               id="provider-xai-api-key"
               type="password"
-              autoComplete="off"
+              autoComplete="new-password"
               value={apiKey}
               maxLength={4_096}
               onChange={(event) => setApiKeyValue(event.target.value)}
@@ -214,6 +215,9 @@ export function ProviderSection({ tracker }: { tracker: SettingsRestartTracker }
             )}
           </div>
           <div className="provider-install-hint">{t("settings.providers.apiKey.help")}</div>
+          {connection?.oauthConnected && (
+            <div className="provider-install-hint">{t("settings.providers.apiKey.oauthPriority")}</div>
+          )}
         </form>
       </div>
 
@@ -232,7 +236,12 @@ export function ProviderSection({ tracker }: { tracker: SettingsRestartTracker }
                   className={`provider-readiness-status ${status === "failed" ? "provider-readiness-status--bad" : ""}`}
                   role={status === "failed" ? "alert" : "status"}
                 >
-                  {t(`settings.providers.readiness.${status}`)}
+                  {status === "failed"
+                    ? t("settings.providers.readiness.failedDetail", {
+                        capability: label,
+                        model: readiness?.model ?? "",
+                      })
+                    : t(`settings.providers.readiness.${status}`)}
                   {readiness?.testedAt && (
                     <> · <span className="provider-readiness-meta">{readiness.testedAt.slice(0, 16).replace("T", " ")} · {readiness.model}</span></>
                   )}
@@ -244,7 +253,11 @@ export function ProviderSection({ tracker }: { tracker: SettingsRestartTracker }
                 disabled={!connection?.connected || authorizing || probe.isPending}
                 onClick={() => probe.mutate({ capability })}
               >
-                {isTesting ? t("settings.providers.readiness.testing") : t(`settings.providers.readiness.test.${capability}`)}
+                {isTesting
+                  ? t("settings.providers.readiness.testing")
+                  : status === "ready" || status === "failed"
+                    ? t("settings.providers.readiness.testAgain")
+                    : t(`settings.providers.readiness.test.${capability}`)}
               </button>
             </div>
           );
