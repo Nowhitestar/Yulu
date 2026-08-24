@@ -2,7 +2,14 @@ import { afterEach, describe, expect, it } from "vitest";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { readAgentSessionStore, storePath } from "../src/agentSessionStore.js";
+import {
+  appendAgentSessionMessage,
+  createAgentSession,
+  getAgentSession,
+  readAgentSessionStore,
+  storePath,
+  updateAgentSessionNativeSession,
+} from "../src/agentSessionStore.js";
 
 describe("agentSessionStore", () => {
   const roots: string[] = [];
@@ -55,5 +62,35 @@ describe("agentSessionStore", () => {
       sessions: [{ provider: "codex", model: "runtime-managed", status: "active" }],
     });
     expect(readFileSync(storePath(root), "utf8")).toBe(JSON.stringify(migrated, null, 2) + "\n");
+  });
+
+  it("pins an ask session provider and model while persisting its local history", () => {
+    const root = mkdtempSync(join(tmpdir(), "agent-session-store-"));
+    roots.push(root);
+    const created = createAgentSession(root, {
+      purpose: "ask",
+      provider: "xai",
+      model: "grok-4.6-exact",
+      title: "Pinned conversation",
+    });
+
+    appendAgentSessionMessage(root, created.id, {
+      role: "assistant",
+      text: "Pinned answer",
+      sources: [{ title: "Roadmap", url: "/inbox/roadmap" }],
+    });
+    updateAgentSessionNativeSession(root, created.id, { nativeSessionId: "native-session" });
+
+    expect(getAgentSession(root, created.id)).toMatchObject({
+      agent: "xai",
+      provider: "xai",
+      model: "grok-4.6-exact",
+      status: "active",
+      nativeSessionId: "native-session",
+      messages: [{
+        text: "Pinned answer",
+        sources: [{ title: "Roadmap", url: "/inbox/roadmap" }],
+      }],
+    });
   });
 });
