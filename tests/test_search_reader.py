@@ -226,10 +226,12 @@ def _make_natural_question_corpus(tmp_path: Path):
     root = tmp_path / "Yulu"
     root.mkdir()
     (root / "PhoenixLaunch_20260825_010300.transcript.txt").write_text(
-        "Mei owns launch Oct14. Phoenix beta decision.", encoding="utf-8"
+        "Phoenix launch decision: release beta on Oct14. "
+        "Mei owns the rollout checklist.", encoding="utf-8"
     )
     (root / "PhoenixReview_20260825_010400.transcript.txt").write_text(
-        "Arun owns review Oct18. Phoenix readiness decision.", encoding="utf-8"
+        "Phoenix review decision: readiness review on Oct18. "
+        "Arun owns reviewer feedback.", encoding="utf-8"
     )
     (root / "Generic_20260825_010500.transcript.txt").write_text(
         "What did happen yesterday.", encoding="utf-8"

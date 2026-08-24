@@ -24,6 +24,38 @@ function lastCb(args: unknown[]) {
 }
 
 describe("searchRouter", () => {
+  it("keeps cross-meeting decision and owner evidence within conversation caps", () => {
+    const sources = normalizeConversationSources([
+      {
+        kind: "meeting_transcript",
+        stem: "PhoenixLaunch_20260825_010300",
+        meetingTitle: "Phoenix Launch",
+        recordedAt: "2026-08-25T01:03:00",
+        sourcePath: "/private/PhoenixLaunch.transcript.txt",
+        score: 2,
+        snippet: "Phoenix launch decision: release beta on Oct14. Mei owns the rollout checklist.",
+      },
+      {
+        kind: "meeting_transcript",
+        stem: "PhoenixReview_20260825_010400",
+        meetingTitle: "Phoenix Review",
+        recordedAt: "2026-08-25T01:04:00",
+        sourcePath: "/private/PhoenixReview.transcript.txt",
+        score: 1,
+        snippet: "Phoenix review decision: readiness review on Oct18. Arun owns reviewer feedback.",
+      },
+    ]);
+
+    const formatted = formatConversationSources(sources);
+    expect(sources).toHaveLength(2);
+    expect(formatted).toContain("release beta on Oct14");
+    expect(formatted).toContain("Mei owns the rollout checklist");
+    expect(formatted).toContain("readiness review on Oct18");
+    expect(formatted).toContain("Arun owns reviewer feedback");
+    expect(sources.every((source) => source.snippet.length <= 1_200)).toBe(true);
+    expect(formatted.length).toBeLessThanOrEqual(6_000);
+  });
+
   it("normalizes only bounded local meeting sources for conversation", () => {
     const hits = Array.from({ length: 10 }, (_, index) => ({
       kind: "meeting_summary",
