@@ -131,6 +131,12 @@ The Host durably commits the transcript first, then dispatches only to the task'
 pinned Summary Provider. A transcript can therefore remain valid when summary
 generation is unavailable; inspect the Host task state for progress.
 
+Manual summary regeneration creates the same durable summary-only task shape and
+adopts the already committed transcript; it does not re-run audio transcription.
+Successful xAI artifacts record the exact provider/model and storage-disabled
+contract without persisting instructions, transcript content, or credentials in
+provenance.
+
 ## Realtime captions
 
 Starting a recording opens a movable subtitle overlay near the bottom center of
@@ -243,15 +249,17 @@ The recording is safe and no Agent owns a lease. Check both
 global `enabled` switch is false, all recording intelligence—including manual
 processing and dictation—remains stopped until it is re-enabled. When only
 `auto_process_recordings` is false, explicit manual reprocessing stays available
-and promotes an automatic paused task in place. The generic retry action never
-bypasses either policy.
+and replaces paused automatic work with a new explicit manual summary task. The
+generic retry action never bypasses either policy.
 
 ### Task is `awaiting_provider`
 
 The transcript is safely committed and automatic dispatch is stopped. Repair the
 pinned provider/model and use the explicit retry action to resume that same
 snapshot. Changing provider settings does not rebind this task; create new work
-if a different provider or model is intended.
+if a different provider or model is intended. The recording surface also links
+to AI Providers for future work and allows the current task to remain paused
+without issuing another request.
 
 ### Task is `failed`
 

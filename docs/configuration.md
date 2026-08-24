@@ -144,7 +144,8 @@ delivery work at `awaiting_policy`; it does not disable the independently select
 audio engine. `auto_process_recordings=false` pauses only automatic intake and
 automatic dispatch. Explicit transcription and dictation remain available, and
 choosing a manual summary action for an automatic `awaiting_policy` task promotes
-that same durable task instead of creating a duplicate.
+the recording into a new explicit manual summary task after retiring the paused
+automatic work.
 
 ## `intelligence`
 
@@ -157,6 +158,11 @@ new work. No credential belongs in either object.
 When a pinned Summary Provider is unavailable after transcript commit, the task
 enters `awaiting_provider` and stays there until an explicit same-provider retry.
 Yulu never rewrites the existing snapshot from current settings.
+
+Both automatic and manual xAI summaries use only the snapshotted instructions
+and the committed transcript. Requests use the exact pinned model with response
+storage disabled; the returned Markdown must pass Host staging validation before
+the transcript/summary pair and artifact provenance are committed.
 
 ## `transcription`
 

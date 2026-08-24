@@ -25,6 +25,9 @@ independent. Durable summary work and locally stored conversations retain their
 creation-time provider/model identity; changing Settings affects only new work.
 If the pinned Summary Provider is unavailable, the committed transcript and task
 pause locally until an explicit same-provider retry instead of falling back.
+For xAI summaries, Yulu sends only the task's selected instructions and committed
+transcript, disables response storage, and saves validated Markdown through the
+same durable artifact transaction used by Agent-backed summaries.
 
 ## What you can do
 
