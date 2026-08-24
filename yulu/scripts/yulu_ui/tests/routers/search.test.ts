@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { normalizeConversationSources, searchRouter } from "../../src/routers/search.js";
+import { formatConversationSources, normalizeConversationSources, searchRouter } from "../../src/routers/search.js";
 import { createCaller, type AppContext } from "../../src/trpc.js";
 
 const execFileMock = vi.hoisted(() => vi.fn());
@@ -58,6 +58,7 @@ describe("searchRouter", () => {
     expect(sources.reduce((total, source) =>
       total + source.title.length + source.recordedAt.length + source.kind.length + source.snippet.length, 0)
     ).toBeLessThanOrEqual(6_000);
+    expect(formatConversationSources(sources).length).toBeLessThanOrEqual(6_000);
     expect(sources.filter((source) => source.stem === "Meeting_1")).toHaveLength(1);
   });
 
