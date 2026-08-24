@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   XaiCredentialManager,
+  type XaiApiKeyStore,
   type StoredXaiCredential,
   type XaiTokenStore,
 } from "../src/xaiCredentials.js";
@@ -9,6 +10,13 @@ class MemoryTokenStore implements XaiTokenStore {
   value: StoredXaiCredential | null = null;
   read = vi.fn(async () => this.value);
   write = vi.fn(async (value: StoredXaiCredential) => { this.value = value; });
+  clear = vi.fn(async () => { this.value = null; });
+}
+
+class MemoryApiKeyStore implements XaiApiKeyStore {
+  value: string | null = null;
+  read = vi.fn(async () => this.value);
+  write = vi.fn(async (value: string) => { this.value = value; });
   clear = vi.fn(async () => { this.value = null; });
 }
 
@@ -76,7 +84,54 @@ describe("XaiCredentialManager", () => {
     }));
     const deviceBody = fetchMock.mock.calls[1]![1]?.body as URLSearchParams;
     expect(deviceBody.get("client_id")).toBe("b1a00492-073a-47ea-816f-4c329264a828");
-    expect(deviceBody.get("scope")).toContain("api:access");
+    expect(deviceBody.get("scope")).toBe("openid profile email offline_access grok-cli:access api:access");
+  });
+
+  it("uses an explicitly saved API key only when OAuth is absent and never reads it back in status", async () => {
+    const store = new MemoryTokenStore();
+    const apiKeyStore = new MemoryApiKeyStore();
+    const manager = new XaiCredentialManager({ store, apiKeyStore });
+
+    await expect(manager.setApiKey("xai-explicit-secret")).resolves.toMatchObject({
+      connected: true,
+      source: "api-key",
+      oauthConnected: false,
+      apiKeyConfigured: true,
+    });
+    const status = await manager.status();
+    expect(JSON.stringify(status)).not.toContain("xai-explicit-secret");
+    await expect(manager.resolve()).resolves.toEqual({
+      accessToken: "xai-explicit-secret",
+      source: "api-key",
+    });
+
+    await expect(manager.clearApiKey()).resolves.toMatchObject({
+      connected: false,
+      source: null,
+      apiKeyConfigured: false,
+    });
+  });
+
+  it("keeps OAuth primary and never downgrades to an API key after refresh failure", async () => {
+    const store = new MemoryTokenStore();
+    store.value = {
+      version: 1,
+      accessToken: "expired-access",
+      refreshToken: "dead-refresh",
+      expiresAt: 1,
+      tokenEndpoint: "https://auth.x.ai/oauth2/token",
+    };
+    const apiKeyStore = new MemoryApiKeyStore();
+    apiKeyStore.value = "must-not-be-used";
+    const manager = new XaiCredentialManager({
+      store,
+      apiKeyStore,
+      fetchFn: vi.fn(async () => json({ error: "permission_denied" }, 403)),
+      now: () => 10_000,
+    });
+
+    await expect(manager.resolve()).rejects.toThrow("没有 API 或音频转写权限");
+    expect(apiKeyStore.read).not.toHaveBeenCalled();
   });
 
   it("recovers when one device-token poll has a transport failure", async () => {
@@ -152,8 +207,8 @@ describe("XaiCredentialManager", () => {
     const manager = new XaiCredentialManager({ store, fetchFn: fetchMock, now: () => 10_000 });
 
     await expect(Promise.all([manager.resolve(), manager.resolve()])).resolves.toEqual([
-      { accessToken: "fresh-access" },
-      { accessToken: "fresh-access" },
+      { accessToken: "fresh-access", source: "oauth" },
+      { accessToken: "fresh-access", source: "oauth" },
     ]);
     expect(fetchMock).toHaveBeenCalledOnce();
     expect(store.value).toMatchObject({

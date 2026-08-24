@@ -1,15 +1,32 @@
 import Foundation
 import Security
 
-private let service = "com.yulu.xai-oauth"
-private let account = "default"
+private let oauthService = "com.yulu.xai-oauth"
+private let providerSecretService = "com.yulu.provider-secret"
 private let notFoundExit: Int32 = 44
 
-private func baseQuery() -> [CFString: Any] {
+private struct Target {
+    let service: String
+    let account: String
+}
+
+private func target(for slot: String?) -> Target {
+    guard let slot else {
+        return Target(service: oauthService, account: "default")
+    }
+    let allowedPrefix = slot.hasPrefix("direct.") || slot.hasPrefix("gateway.")
+    let allowedCharacters = slot.range(of: "^[A-Za-z0-9][A-Za-z0-9._-]{0,71}$", options: .regularExpression) != nil
+    guard allowedPrefix, allowedCharacters else {
+        fail("Invalid provider secret slot")
+    }
+    return Target(service: providerSecretService, account: slot)
+}
+
+private func baseQuery(_ target: Target) -> [CFString: Any] {
     return [
         kSecClass: kSecClassGenericPassword,
-        kSecAttrService: service,
-        kSecAttrAccount: account,
+        kSecAttrService: target.service,
+        kSecAttrAccount: target.account,
     ]
 }
 
@@ -19,8 +36,8 @@ private func fail(_ message: String, status: OSStatus? = nil) -> Never {
     exit(1)
 }
 
-private func readSecret() {
-    var query = baseQuery()
+private func readSecret(_ target: Target) {
+    var query = baseQuery(target)
     query[kSecReturnData] = true
     query[kSecMatchLimit] = kSecMatchLimitOne
     var result: CFTypeRef?
@@ -32,7 +49,7 @@ private func readSecret() {
     FileHandle.standardOutput.write(data)
 }
 
-private func writeSecret() {
+private func writeSecret(_ target: Target) {
     let data = FileHandle.standardInput.readDataToEndOfFile()
     guard !data.isEmpty, data.count <= 65_536 else {
         fail("Invalid xAI OAuth payload")
@@ -41,7 +58,7 @@ private func writeSecret() {
         fail("xAI OAuth payload must be a JSON object")
     }
 
-    let query = baseQuery()
+    let query = baseQuery(target)
     let updateStatus = SecItemUpdate(
         query as CFDictionary,
         [kSecValueData: data] as CFDictionary
@@ -60,21 +77,22 @@ private func writeSecret() {
     }
 }
 
-private func deleteSecret() {
-    let status = SecItemDelete(baseQuery() as CFDictionary)
+private func deleteSecret(_ target: Target) {
+    let status = SecItemDelete(baseQuery(target) as CFDictionary)
     if status == errSecItemNotFound { exit(notFoundExit) }
     guard status == errSecSuccess else {
         fail("Unable to delete xAI OAuth from Keychain", status: status)
     }
 }
 
-guard CommandLine.arguments.count == 2 else {
-    fail("Usage: xai_keychain <read|write|delete>")
+guard CommandLine.arguments.count == 2 || CommandLine.arguments.count == 3 else {
+    fail("Usage: xai_keychain <read|write|delete> [direct.<id>|gateway.<id>]")
 }
 
+private let selectedTarget = target(for: CommandLine.arguments.count == 3 ? CommandLine.arguments[2] : nil)
 switch CommandLine.arguments[1] {
-case "read": readSecret()
-case "write": writeSecret()
-case "delete": deleteSecret()
+case "read": readSecret(selectedTarget)
+case "write": writeSecret(selectedTarget)
+case "delete": deleteSecret(selectedTarget)
 default: fail("Unknown command")
 }

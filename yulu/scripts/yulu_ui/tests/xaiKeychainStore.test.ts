@@ -1,8 +1,12 @@
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { KeychainXaiTokenStore, type StoredXaiCredential } from "../src/xaiCredentials.js";
+import {
+  KeychainProviderSecretStore,
+  KeychainXaiTokenStore,
+  type StoredXaiCredential,
+} from "../src/xaiCredentials.js";
 
 const roots: string[] = [];
 
@@ -48,6 +52,44 @@ describe("KeychainXaiTokenStore", () => {
     await expect(store.read()).resolves.toEqual(credential);
     await store.clear();
     await expect(store.read()).resolves.toBeNull();
+  });
+
+  it("passes a provider secret over stdin and exposes only configured status", async () => {
+    const root = mkdtempSync(join(tmpdir(), "yulu-provider-keychain-test-"));
+    roots.push(root);
+    const helper = join(root, "xai_keychain");
+    const storage = join(root, "stored.json");
+    const argvLog = join(root, "argv.json");
+    writeFileSync(helper, [
+      "#!/usr/bin/env node",
+      "const fs = require('node:fs');",
+      `const storage = ${JSON.stringify(storage)};`,
+      `fs.writeFileSync(${JSON.stringify(argvLog)}, JSON.stringify(process.argv));`,
+      "const action = process.argv[2];",
+      "if (action === 'read') {",
+      "  if (!fs.existsSync(storage)) process.exit(44);",
+      "  process.stdout.write(fs.readFileSync(storage));",
+      "} else if (action === 'write') {",
+      "  const chunks = [];",
+      "  process.stdin.on('data', (chunk) => chunks.push(chunk));",
+      "  process.stdin.on('end', () => fs.writeFileSync(storage, Buffer.concat(chunks)));",
+      "} else if (action === 'delete') {",
+      "  if (!fs.existsSync(storage)) process.exit(44);",
+      "  fs.rmSync(storage);",
+      "} else process.exit(1);",
+    ].join("\n"));
+    chmodSync(helper, 0o755);
+    const store = new KeychainProviderSecretStore(helper, "direct.xai");
+
+    await expect(store.configured()).resolves.toBe(false);
+    await store.write("xai-explicit-secret");
+    const argv = JSON.parse(readFileSync(argvLog, "utf8")) as string[];
+    expect(argv.slice(-2)).toEqual(["write", "direct.xai"]);
+    expect(JSON.stringify(argv)).not.toContain("xai-explicit-secret");
+    await expect(store.configured()).resolves.toBe(true);
+    await expect(store.read()).resolves.toBe("xai-explicit-secret");
+    await store.clear();
+    await expect(store.configured()).resolves.toBe(false);
   });
 
   it("handles a helper that exits before consuming stdin", async () => {

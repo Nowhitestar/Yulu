@@ -5,16 +5,21 @@ import { access } from "node:fs/promises";
 const XAI_OAUTH_DISCOVERY_URL = "https://auth.x.ai/.well-known/openid-configuration";
 const XAI_OAUTH_TOKEN_URL = "https://auth.x.ai/oauth2/token";
 const XAI_OAUTH_REVOKE_URL = "https://auth.x.ai/oauth2/revoke";
-// Temporary public Grok CLI client. Replace with a Yulu-owned registration before broad release.
+// Public Grok CLI compatibility contract; source tests pin this exact identity and scope subset.
 const XAI_OAUTH_CLIENT_ID = "b1a00492-073a-47ea-816f-4c329264a828";
 const XAI_OAUTH_SCOPE = "openid profile email offline_access grok-cli:access api:access";
 const TOKEN_REFRESH_SKEW_MS = 2 * 60_000;
 const REQUEST_TIMEOUT_MS = 20_000;
 const MAX_HELPER_OUTPUT_BYTES = 128_000;
+const MAX_PROVIDER_SECRET_BYTES = 4_096;
 const MAX_POLL_NETWORK_FAILURES = 5;
+const PROVIDER_SECRET_SLOT_RE = /^(?:direct|gateway)\.[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+
+export type XaiCredentialSource = "oauth" | "api-key";
 
 export interface XaiCredential {
   accessToken: string;
+  source: XaiCredentialSource;
 }
 
 export interface StoredXaiCredential {
@@ -31,6 +36,12 @@ export interface XaiTokenStore {
   clear(): Promise<void>;
 }
 
+export interface XaiApiKeyStore {
+  read(): Promise<string | null>;
+  write(value: string): Promise<void>;
+  clear(): Promise<void>;
+}
+
 export interface XaiAuthorizationState {
   status: "idle" | "starting" | "running" | "succeeded" | "failed";
   verificationUrl: string;
@@ -40,12 +51,16 @@ export interface XaiAuthorizationState {
 
 export interface XaiCredentialStatus {
   connected: boolean;
+  source: XaiCredentialSource | null;
+  oauthConnected: boolean;
+  apiKeyConfigured: boolean;
   detail: string;
   authorization: XaiAuthorizationState;
 }
 
 interface XaiCredentialManagerOptions {
   store: XaiTokenStore;
+  apiKeyStore?: XaiApiKeyStore;
   fetchFn?: typeof fetch;
   now?: () => number;
 }
@@ -132,6 +147,39 @@ function networkFailureMessage(error: unknown): string {
   return `无法连接 xAI OAuth 服务${code ? `（${code}）` : ""}，请检查网络或代理后重试`;
 }
 
+async function runKeychainHelper(
+  helperPath: string,
+  action: "read" | "write" | "delete",
+  slot?: string,
+  input = "",
+): Promise<{ code: number; stdout: string }> {
+  try { await access(helperPath, constants.X_OK); }
+  catch { throw new Error("Yulu xAI 钥匙串组件不可用，请重新安装 Yulu"); }
+  return await new Promise((resolve) => {
+    const child = spawn(helperPath, slot ? [action, slot] : [action], { stdio: ["pipe", "pipe", "pipe"] });
+    let stdout = "";
+    let settled = false;
+    const finish = (code: number) => {
+      if (settled) return;
+      settled = true;
+      resolve({ code, stdout });
+    };
+    child.stdout.on("data", (chunk: Buffer) => {
+      stdout = `${stdout}${chunk.toString("utf8")}`.slice(-MAX_HELPER_OUTPUT_BYTES);
+    });
+    child.once("error", () => finish(1));
+    child.once("close", (code) => finish(code ?? 1));
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL");
+      finish(1);
+    }, 10_000);
+    timer.unref();
+    child.once("close", () => clearTimeout(timer));
+    child.stdin.once("error", () => finish(1));
+    child.stdin.end(input);
+  });
+}
+
 export class KeychainXaiTokenStore implements XaiTokenStore {
   constructor(private readonly helperPath: string) {}
 
@@ -169,36 +217,61 @@ export class KeychainXaiTokenStore implements XaiTokenStore {
   }
 
   private async run(action: "read" | "write" | "delete", input = ""): Promise<{ code: number; stdout: string }> {
-    try { await access(this.helperPath, constants.X_OK); }
-    catch { throw new Error("Yulu xAI 钥匙串组件不可用，请重新安装 Yulu"); }
-    return await new Promise((resolve) => {
-      const child = spawn(this.helperPath, [action], { stdio: ["pipe", "pipe", "pipe"] });
-      let stdout = "";
-      let settled = false;
-      const finish = (code: number) => {
-        if (settled) return;
-        settled = true;
-        resolve({ code, stdout });
-      };
-      child.stdout.on("data", (chunk: Buffer) => {
-        stdout = `${stdout}${chunk.toString("utf8")}`.slice(-MAX_HELPER_OUTPUT_BYTES);
-      });
-      child.once("error", () => finish(1));
-      child.once("close", (code) => finish(code ?? 1));
-      const timer = setTimeout(() => {
-        child.kill("SIGKILL");
-        finish(1);
-      }, 10_000);
-      timer.unref();
-      child.once("close", () => clearTimeout(timer));
-      child.stdin.once("error", () => finish(1));
-      child.stdin.end(input);
-    });
+    return await runKeychainHelper(this.helperPath, action, undefined, input);
+  }
+}
+
+export class KeychainProviderSecretStore implements XaiApiKeyStore {
+  constructor(
+    private readonly helperPath: string,
+    private readonly slot: string,
+  ) {
+    if (!PROVIDER_SECRET_SLOT_RE.test(slot)) throw new Error("无效的提供商钥匙串槽位");
+  }
+
+  async configured(): Promise<boolean> {
+    return (await this.read()) !== null;
+  }
+
+  async read(): Promise<string | null> {
+    const result = await runKeychainHelper(this.helperPath, "read", this.slot);
+    if (result.code === 44) return null;
+    if (result.code !== 0) throw new Error("无法读取 macOS 钥匙串中的提供商凭证");
+    let parsed: unknown;
+    try { parsed = JSON.parse(result.stdout); }
+    catch { throw new Error("macOS 钥匙串中的提供商凭证无效"); }
+    const value = jsonObject(parsed, "提供商凭证");
+    const secret = requiredString(value.secret, "secret", "提供商凭证");
+    if (value.version !== 1 || Buffer.byteLength(secret, "utf8") > MAX_PROVIDER_SECRET_BYTES) {
+      throw new Error("macOS 钥匙串中的提供商凭证版本无效");
+    }
+    return secret;
+  }
+
+  async write(secret: string): Promise<void> {
+    if (!secret || Buffer.byteLength(secret, "utf8") > MAX_PROVIDER_SECRET_BYTES) {
+      throw new Error("xAI API Key 长度无效");
+    }
+    const result = await runKeychainHelper(
+      this.helperPath,
+      "write",
+      this.slot,
+      JSON.stringify({ version: 1, secret }),
+    );
+    if (result.code !== 0) throw new Error("无法保存提供商凭证到 macOS 钥匙串");
+  }
+
+  async clear(): Promise<void> {
+    const result = await runKeychainHelper(this.helperPath, "delete", this.slot);
+    if (result.code !== 0 && result.code !== 44) {
+      throw new Error("无法从 macOS 钥匙串删除提供商凭证");
+    }
   }
 }
 
 export class XaiCredentialManager {
   private readonly store: XaiTokenStore;
+  private readonly apiKeyStore?: XaiApiKeyStore;
   private readonly fetchFn: typeof fetch;
   private readonly now: () => number;
   private authorization: XaiAuthorizationState = {
@@ -211,37 +284,74 @@ export class XaiCredentialManager {
   private authorizationGeneration = 0;
   private refreshPromise: Promise<StoredXaiCredential> | null = null;
   private cachedConnected = false;
+  private cachedSource: XaiCredentialSource | null = null;
   private cachedDetail = "正在检查 Yulu xAI OAuth";
 
   constructor(options: XaiCredentialManagerOptions) {
     this.store = options.store;
+    this.apiKeyStore = options.apiKeyStore;
     this.fetchFn = options.fetchFn ?? fetch;
     this.now = options.now ?? Date.now;
   }
 
   async status(): Promise<XaiCredentialStatus> {
+    let apiKeyConfigured = false;
+    let apiKeyError: Error | null = null;
+    if (this.apiKeyStore) {
+      try { apiKeyConfigured = (await this.apiKeyStore.read()) !== null; }
+      catch (error) { apiKeyError = error as Error; }
+    }
     try {
       const credential = await this.store.read();
-      this.cachedConnected = credential !== null;
-      this.cachedDetail = credential ? "xAI OAuth 已连接" : "需要在 Yulu 中授权 xAI";
+      const oauthConnected = credential !== null;
+      this.cachedConnected = oauthConnected || apiKeyConfigured;
+      this.cachedSource = oauthConnected ? "oauth" : apiKeyConfigured ? "api-key" : null;
+      this.cachedDetail = oauthConnected
+        ? "xAI OAuth 已连接"
+        : apiKeyConfigured
+          ? "xAI API Key 已连接"
+          : apiKeyError?.message ?? "需要在 Yulu 中连接 xAI";
       return {
         connected: this.cachedConnected,
+        source: this.cachedSource,
+        oauthConnected,
+        apiKeyConfigured,
         detail: this.cachedDetail,
         authorization: { ...this.authorization },
       };
     } catch (error) {
       this.cachedConnected = false;
+      this.cachedSource = null;
       this.cachedDetail = error instanceof Error ? error.message : "无法读取 xAI OAuth";
       return {
         connected: false,
+        source: null,
+        oauthConnected: false,
+        apiKeyConfigured,
         detail: this.cachedDetail,
         authorization: { ...this.authorization },
       };
     }
   }
 
-  cachedStatus(): { connected: boolean; detail: string } {
-    return { connected: this.cachedConnected, detail: this.cachedDetail };
+  cachedStatus(): { connected: boolean; source: XaiCredentialSource | null; detail: string } {
+    return { connected: this.cachedConnected, source: this.cachedSource, detail: this.cachedDetail };
+  }
+
+  async setApiKey(value: string): Promise<XaiCredentialStatus> {
+    if (!this.apiKeyStore) throw new Error("xAI API Key 钥匙串不可用");
+    const secret = value.trim();
+    if (!secret || Buffer.byteLength(secret, "utf8") > MAX_PROVIDER_SECRET_BYTES) {
+      throw new Error("xAI API Key 长度无效");
+    }
+    await this.apiKeyStore.write(secret);
+    return await this.status();
+  }
+
+  async clearApiKey(): Promise<XaiCredentialStatus> {
+    if (!this.apiKeyStore) throw new Error("xAI API Key 钥匙串不可用");
+    await this.apiKeyStore.clear();
+    return await this.status();
   }
 
   async authorize(): Promise<XaiAuthorizationState> {
@@ -313,18 +423,23 @@ export class XaiCredentialManager {
     }
     await this.store.clear();
     this.cachedConnected = false;
+    this.cachedSource = null;
     this.cachedDetail = "需要在 Yulu 中授权 xAI";
     this.authorization = { status: "idle", verificationUrl: "", userCode: "", message: "已退出 xAI OAuth" };
   }
 
   async resolve(): Promise<XaiCredential> {
     const stored = await this.store.read();
-    if (!stored) throw new Error("请先在 Yulu 设置中授权 xAI");
-    if (stored.expiresAt > this.now() + TOKEN_REFRESH_SKEW_MS) {
-      return { accessToken: stored.accessToken };
+    if (stored) {
+      if (stored.expiresAt > this.now() + TOKEN_REFRESH_SKEW_MS) {
+        return { accessToken: stored.accessToken, source: "oauth" };
+      }
+      const refreshed = await this.refresh(stored);
+      return { accessToken: refreshed.accessToken, source: "oauth" };
     }
-    const refreshed = await this.refresh(stored);
-    return { accessToken: refreshed.accessToken };
+    const apiKey = await this.apiKeyStore?.read();
+    if (!apiKey) throw new Error("请先在 Yulu 设置中连接 xAI");
+    return { accessToken: apiKey, source: "api-key" };
   }
 
   close(): void {
@@ -436,6 +551,7 @@ export class XaiCredentialManager {
             tokenEndpoint,
           });
           this.cachedConnected = true;
+          this.cachedSource = "oauth";
           this.cachedDetail = "xAI OAuth 已连接";
           if (this.authorizationGeneration === generation) {
             this.authorization = {
@@ -498,6 +614,7 @@ export class XaiCredentialManager {
       if (response.status === 400 || response.status === 401) {
         await this.store.clear();
         this.cachedConnected = false;
+        this.cachedSource = null;
         this.cachedDetail = "xAI OAuth 已失效，请重新授权";
         throw new Error("xAI OAuth 已失效，请在 Yulu 设置中重新授权");
       }
