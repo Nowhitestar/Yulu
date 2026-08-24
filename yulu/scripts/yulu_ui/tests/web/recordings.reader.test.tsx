@@ -98,6 +98,7 @@ describe("RecordingReader", () => {
     renderAt("TeamSync_20260102_090000");
     fireEvent.click(screen.getByRole("button", { name: /^转写$/i }));
     expect(screen.getByText("实时中文内容")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /重新生成摘要/i })).toBeDisabled();
   });
 
   it("exposes transcription, summarization, and sharing as separate actions", () => {
