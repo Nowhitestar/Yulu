@@ -10,8 +10,10 @@ import {
   listAgentSessions,
   pinAgentSession,
   renameAgentSession,
+  resumeAgentSession,
   summarizeAgentSession,
 } from "../agentSessionStore.js";
+import { resolveAgentRuntime } from "../agentRuntime.js";
 
 export const agentSessionsRouter = router({
   list: publicProcedure
@@ -31,15 +33,30 @@ export const agentSessionsRouter = router({
 
   create: publicProcedure
     .input(z.object({
-      agent: z.string().min(1),
+      agent: z.string().min(1).optional(),
       title: z.string().max(48).optional(),
     }))
     .mutation(({ ctx, input }) => {
+      const config = ctx.config.read();
+      const selection = config.intelligence.conversation;
+      if (selection.provider === "xai") {
+        return createAgentSession(ctx.paths.configDir, {
+          provider: "xai",
+          model: selection.model,
+          title: input.title,
+          purpose: "ask",
+        });
+      }
+      const runtime = resolveAgentRuntime(config, {
+        scriptDir: ctx.paths.scriptDir,
+        moviesDir: ctx.paths.moviesDir,
+      });
       return createAgentSession(ctx.paths.configDir, {
-        provider: input.agent,
+        provider: runtime.provider,
         model: "runtime-managed",
         title: input.title,
         purpose: "ask",
+        runtimeLabel: runtime.label,
       });
     }),
 
@@ -77,5 +94,11 @@ export const agentSessionsRouter = router({
     .input(z.object({ id: z.string().min(1), archived: z.boolean() }))
     .mutation(({ ctx, input }) => {
       return archiveAgentSession(ctx.paths.configDir, input.id, input.archived);
+    }),
+
+  resume: publicProcedure
+    .input(z.object({ id: z.string().min(1) }))
+    .mutation(({ ctx, input }) => {
+      return resumeAgentSession(ctx.paths.configDir, input.id);
     }),
 });
