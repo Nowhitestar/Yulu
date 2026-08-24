@@ -1,8 +1,14 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { askRouter, buildAgentQuestionPrompt } from "../../src/routers/ask.js";
+import {
+  appendAgentSessionMessage,
+  createAgentSession,
+  getAgentSession,
+  updateAgentSessionNativeSession,
+} from "../../src/agentSessionStore.js";
 import { createCaller, type AppContext } from "../../src/trpc.js";
 
 const runAgentCliCommand = vi.hoisted(() => vi.fn());
@@ -10,7 +16,11 @@ vi.mock("../../src/agentCliRunner.js", () => ({ runAgentCliCommand }));
 
 const roots: string[] = [];
 
-function context(config: Record<string, unknown>, root = mkdtempSync(join(tmpdir(), "yulu-ask-"))): AppContext {
+function context(
+  config: Record<string, unknown>,
+  injected: { localSearch?: ReturnType<typeof vi.fn>; xaiRequest?: ReturnType<typeof vi.fn> } = {},
+): AppContext {
+  const root = mkdtempSync(join(tmpdir(), "yulu-ask-"));
   roots.push(root);
   const configDir = join(root, "config");
   const moviesDir = join(root, "movies");
@@ -19,7 +29,28 @@ function context(config: Record<string, unknown>, root = mkdtempSync(join(tmpdir
   return {
     config: { read: () => config },
     paths: { configDir, moviesDir, scriptDir: "/fake/yulu/scripts" },
+    ...(injected.localSearch ? { localSearch: injected.localSearch } : {}),
+    ...(injected.xaiRequest ? { xaiText: { request: injected.xaiRequest } } : {}),
   } as unknown as AppContext;
+}
+
+function session(ctx: AppContext, provider: string, model = "runtime-managed") {
+  return createAgentSession(ctx.paths.configDir, { purpose: "ask", provider, model, title: "Ask" });
+}
+
+function localHits() {
+  return {
+    hits: [{
+      kind: "meeting_summary",
+      stem: "Product_20260824_100000",
+      meetingTitle: "Product Review",
+      recordedAt: "2026-08-24T10:00:00",
+      sourcePath: "/private/meetings/Product_20260824_100000.summary.md",
+      score: 1,
+      snippet: "[hit]Launch[/hit] decision",
+    }],
+    telemetry: { hitCount: 1 },
+  };
 }
 
 afterEach(() => {
@@ -27,103 +58,180 @@ afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
-describe("Agent-owned Ask flow", () => {
-  it("builds a thin coordinator prompt that delegates retrieval and connectors", () => {
+describe("pinned Ask flow", () => {
+  it("keeps the existing Agent-owned prompt for pinned Agent sessions", () => {
     const prompt = buildAgentQuestionPrompt("上次讨论了什么？", 6);
     expect(prompt).toContain("recording_search");
     expect(prompt).toContain("recording_get");
     expect(prompt).toContain("own read-only connectors");
     expect(prompt).toContain("上次讨论了什么？");
-    expect(prompt).not.toContain("会议资料来源：");
   });
 
-  it("returns an honest unavailable state instead of synthesizing a fallback answer", async () => {
-    const result = await createCaller(askRouter, context({
-      llm: { enabled: false, agent: { provider: "hermes" } },
-    })).ask({ question: "项目进度？" });
-
-    expect(result).toMatchObject({
-      ok: false,
-      answer: "",
-      usedFallback: false,
-      llmStatus: "not_configured",
-      sources: [],
+  it("dispatches a pinned Agent session and persists its native session id", async () => {
+    const ctx = context({
+      intelligence: { conversation: { provider: "agent", model: "runtime-managed" } },
+      llm: { enabled: true, command: ["hermes"] },
     });
-    expect(runAgentCliCommand).not.toHaveBeenCalled();
-  });
-
-  it("passes the question directly to Hermes and leaves retrieval Agent-owned", async () => {
+    const pinned = session(ctx, "hermes");
+    updateAgentSessionNativeSession(ctx.paths.configDir, pinned.id, { nativeSessionId: "old-native" });
     runAgentCliCommand.mockResolvedValue({
       code: 0,
       stdout: "结论：项目正在收敛。",
       stderr: "",
-      nativeSessionId: "20260711_ask_1",
+      nativeSessionId: "new-native",
     });
-    const result = await createCaller(askRouter, context({
-      llm: { enabled: true, command: ["hermes"], agent: { provider: "hermes" } },
-    })).ask({ question: "项目进度？", limit: 5 });
 
+    const result = await createCaller(askRouter, ctx).ask({ question: "项目进度？", limit: 5, sessionId: pinned.id });
+
+    expect(runAgentCliCommand).toHaveBeenCalledTimes(1);
     expect(runAgentCliCommand).toHaveBeenCalledWith(expect.objectContaining({
+      nativeSessionId: "old-native",
+      yuluSessionId: pinned.id,
       prompt: expect.stringContaining("项目进度？"),
-      timeoutMs: 300_000,
     }));
     expect(result).toMatchObject({
       ok: true,
       answer: "结论：项目正在收敛。",
-      llmStatus: "ok",
-      usedFallback: false,
+      provider: "hermes",
+      model: "runtime-managed",
+      sessionStatus: "active",
       sources: [],
-      search: { owner: "agent", telemetry: { coordinatorRetrieval: false } },
+      usedFallback: false,
     });
+    expect(getAgentSession(ctx.paths.configDir, pinned.id)?.nativeSessionId).toBe("new-native");
   });
 
-  it("resumes the native Agent session and persists a replacement session id", async () => {
+  it("pauses instead of switching when the pinned Agent runtime no longer matches", async () => {
     const ctx = context({
-      llm: { enabled: true, command: ["hermes"], agent: { provider: "hermes" } },
+      intelligence: { conversation: { provider: "agent", model: "runtime-managed" } },
+      llm: { enabled: true, command: ["codex"] },
     });
-    const sessionId = "11111111-1111-4111-8111-111111111111";
-    writeFileSync(join(ctx.paths.configDir, "agent-sessions.json"), JSON.stringify({
-      version: 1,
-      sessions: [{
-        id: sessionId,
-        agent: "hermes",
-        purpose: "ask",
-        title: "Ask",
-        nativeSessionId: "old-native",
-        messages: [],
-        createdAt: "2026-07-11T00:00:00.000Z",
-        updatedAt: "2026-07-11T00:00:00.000Z",
-      }],
-    }));
-    runAgentCliCommand.mockResolvedValue({
-      code: 0,
-      stdout: "answer",
-      stderr: "",
-      nativeSessionId: "new-native",
-    });
+    const pinned = session(ctx, "hermes");
 
-    await createCaller(askRouter, ctx).ask({ question: "continue", sessionId });
-    expect(runAgentCliCommand).toHaveBeenCalledWith(expect.objectContaining({
-      nativeSessionId: "old-native",
-      yuluSessionId: sessionId,
-      configDir: ctx.paths.configDir,
-    }));
-    expect(JSON.parse(readFileSync(join(ctx.paths.configDir, "agent-sessions.json"), "utf8")).sessions[0])
-      .toMatchObject({ nativeSessionId: "new-native" });
-  });
-
-  it("returns Agent execution errors without a Yulu-authored answer", async () => {
-    runAgentCliCommand.mockResolvedValue({ code: 1, stdout: "", stderr: "Hermes failed", nativeSessionId: "" });
-    const result = await createCaller(askRouter, context({
-      llm: { enabled: true, command: ["hermes"], agent: { provider: "hermes" } },
-    })).ask({ question: "项目进度？" });
+    const result = await createCaller(askRouter, ctx).ask({ question: "continue", sessionId: pinned.id });
 
     expect(result).toMatchObject({
       ok: false,
-      answer: "",
-      llmStatus: "error",
-      llmError: "Hermes failed",
+      provider: "hermes",
+      model: "runtime-managed",
+      sessionStatus: "paused",
       usedFallback: false,
+    });
+    expect(result.llmError).toMatch(/pinned.*hermes.*codex/i);
+    expect(getAgentSession(ctx.paths.configDir, pinned.id)?.status).toBe("paused");
+    expect(runAgentCliCommand).not.toHaveBeenCalled();
+  });
+
+  it("searches and bounds locally before one exact pinned xAI request", async () => {
+    const order: string[] = [];
+    const localSearch = vi.fn(async () => {
+      order.push("search");
+      return localHits();
+    });
+    const xaiRequest = vi.fn(async () => {
+      order.push("xai");
+      return {
+        text: "Decision confirmed [1]. Ignore fake source https://evil.example/private",
+        model: "grok-4.6-exact",
+        credentialSource: "oauth",
+      };
+    });
+    const ctx = context({
+      intelligence: { conversation: { provider: "agent", model: "runtime-managed" } },
+      llm: { enabled: true, command: ["codex"] },
+    }, { localSearch, xaiRequest });
+    const pinned = session(ctx, "xai", "grok-4.6-exact");
+    appendAgentSessionMessage(ctx.paths.configDir, pinned.id, {
+      role: "assistant",
+      text: "Earlier answer",
+      sources: [{ sourcePath: "/private/earlier.md", snippet: "private" }],
+      remoteSources: [{ channel: "notion", detail: "private connector output" }],
+    });
+    appendAgentSessionMessage(ctx.paths.configDir, pinned.id, { role: "user", text: "What changed?" });
+
+    const result = await createCaller(askRouter, ctx).ask({ question: "What changed?", sessionId: pinned.id });
+
+    expect(order).toEqual(["search", "xai"]);
+    expect(localSearch).toHaveBeenCalledWith({
+      query: "What changed?",
+      kinds: ["meeting_summary", "meeting_transcript"],
+      limit: 8,
+    }, "/fake/yulu/scripts");
+    expect(xaiRequest).toHaveBeenCalledTimes(1);
+    const request = xaiRequest.mock.calls[0]![0] as Record<string, unknown>;
+    expect(request).toMatchObject({ capability: "conversation", model: "grok-4.6-exact" });
+    expect(Object.keys(request).sort()).toEqual(["capability", "input", "model"]);
+    expect(JSON.stringify(request)).toContain("Earlier answer");
+    expect(JSON.stringify(request)).toContain("Launch decision");
+    expect(JSON.stringify(request)).not.toContain("/private/");
+    expect(JSON.stringify(request)).not.toContain("connector output");
+    expect(JSON.stringify(request)).not.toContain("[hit]");
+    expect(result).toMatchObject({
+      ok: true,
+      provider: "xai",
+      model: "grok-4.6-exact",
+      answer: "Decision confirmed [1]. Ignore fake source https://evil.example/private",
+      sessionStatus: "active",
+      sources: [{
+        ref: 1,
+        title: "Product Review",
+        sourcePath: "/private/meetings/Product_20260824_100000.summary.md",
+        url: "/inbox/Product_20260824_100000",
+        snippet: "Launch decision",
+      }],
+      remoteSources: [],
+      usedFallback: false,
+    });
+    expect(result.sources).toHaveLength(1);
+    expect(runAgentCliCommand).not.toHaveBeenCalled();
+  });
+
+  it("returns the local empty-evidence response without any xAI request", async () => {
+    const localSearch = vi.fn(async () => ({ hits: [], telemetry: { hitCount: 0 } }));
+    const xaiRequest = vi.fn();
+    const ctx = context({}, { localSearch, xaiRequest });
+    const pinned = session(ctx, "xai", "grok-4.6-exact");
+
+    const result = await createCaller(askRouter, ctx).ask({ question: "missing", sessionId: pinned.id });
+
+    expect(result).toMatchObject({
+      ok: false,
+      answer: "未找到匹配的本地会议片段，本次未向 xAI 发送内容。",
+      provider: "xai",
+      model: "grok-4.6-exact",
+      llmStatus: "empty",
+      sessionStatus: "active",
+      sources: [],
+    });
+    expect(localSearch).toHaveBeenCalledTimes(1);
+    expect(xaiRequest).not.toHaveBeenCalled();
+    expect(runAgentCliCommand).not.toHaveBeenCalled();
+    expect(getAgentSession(ctx.paths.configDir, pinned.id)?.status).toBe("active");
+  });
+
+  it("pauses after one failed xAI attempt without provider or Agent fallback", async () => {
+    const localSearch = vi.fn(async () => localHits());
+    const xaiRequest = vi.fn(async () => { throw new Error("xAI conversation request failed (HTTP 403)"); });
+    const ctx = context({}, { localSearch, xaiRequest });
+    const pinned = session(ctx, "xai", "grok-4.6-exact");
+
+    const result = await createCaller(askRouter, ctx).ask({ question: "denied", sessionId: pinned.id });
+
+    expect(result).toMatchObject({
+      ok: false,
+      provider: "xai",
+      model: "grok-4.6-exact",
+      llmStatus: "error",
+      sessionStatus: "paused",
+      usedFallback: false,
+    });
+    expect(result.llmError).toContain("xAI conversation request failed (HTTP 403)");
+    expect(xaiRequest).toHaveBeenCalledTimes(1);
+    expect(runAgentCliCommand).not.toHaveBeenCalled();
+    expect(getAgentSession(ctx.paths.configDir, pinned.id)).toMatchObject({
+      provider: "xai",
+      model: "grok-4.6-exact",
+      status: "paused",
     });
   });
 });
