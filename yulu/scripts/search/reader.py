@@ -45,11 +45,12 @@ _QUERY_TERM_RE = re.compile(r"[^\W_]+", re.UNICODE)
 _LOW_SIGNAL_QUERY_TERMS = frozenset({
     "about", "across", "after", "again", "against", "all", "also", "and",
     "any", "are", "before", "between", "both", "but", "can", "could", "did",
-    "does", "each", "for", "from", "had", "has", "have", "how", "into", "its",
-    "made", "meeting", "meetings", "near", "not", "our", "ours", "should", "than",
+    "discuss", "discussed", "does", "each", "for", "from", "had", "has", "have",
+    "how", "into", "its", "made", "meeting", "meetings", "near", "not", "our",
+    "ours", "please", "regarding", "should", "tell", "than",
     "that", "the", "their", "them", "then", "there", "these", "they", "this",
     "those", "through", "was", "were", "what", "when", "where", "which", "who",
-    "why", "will", "with", "would", "your",
+    "why", "will", "with", "would", "you", "your",
 })
 
 # File-suffix → indexable? The sweep only walks .transcript.txt and
@@ -187,13 +188,18 @@ def _since_clause(since: Optional[timedelta]) -> tuple[str, list]:
     return " AND recorded_at >= ?", [cutoff.strftime("%Y-%m-%dT%H:%M:%S")]
 
 
-def _literal_fts_query(query: str) -> str:
+def _quote_fts_literal(value: str) -> str:
+    return f'"{value.replace(chr(34), chr(34) * 2)}"'
+
+
+def _literal_fts_query(query: str, conn: sqlite3.Connection) -> str:
     """Compile user text into a literal FTS5 expression.
 
     Search inputs are plain language, not FTS syntax. Quoting each indexable
     term prevents punctuation, quotes, and words such as AND/OR/NOT from being
-    executed as operators. OR keeps a natural question useful when its answer
-    is distributed across multiple meetings.
+    executed as operators. A corpus-supported anchor must also match another
+    informative term, so unrelated private meetings do not enter the bounded
+    conversation payload merely because they mention one generic topic word.
     """
     literal_tokens = _QUERY_TERM_RE.findall(query)
     terms: list[str] = []
@@ -208,9 +214,30 @@ def _literal_fts_query(query: str) -> str:
         terms.append(term)
     if not terms:
         literal_phrase = " ".join(literal_tokens) or query
-        escaped_phrase = literal_phrase.replace('"', '""')
-        return f'"{escaped_phrase}"'
-    return " OR ".join(f'"{term}"' for term in terms)
+        return _quote_fts_literal(literal_phrase)
+
+    positive_terms: list[tuple[int, str, int]] = []
+    for index, term in enumerate(terms):
+        literal = _quote_fts_literal(term)
+        count = int(conn.execute(
+            "SELECT COUNT(*) FROM docs WHERE docs MATCH ?", (literal,),
+        ).fetchone()[0])
+        if count > 0:
+            positive_terms.append((index, term, count))
+    if not positive_terms:
+        return _quote_fts_literal(" ".join(terms))
+
+    shared_terms = [entry for entry in positive_terms if entry[2] >= 2]
+    anchor = min(shared_terms or positive_terms, key=lambda entry: (entry[2], entry[0]))
+    anchor_literal = _quote_fts_literal(anchor[1])
+    companions = [
+        _quote_fts_literal(term)
+        for index, term, _count in positive_terms
+        if index != anchor[0]
+    ]
+    if not companions:
+        return anchor_literal
+    return f"{anchor_literal} AND ({' OR '.join(companions)})"
 
 
 def _fts_search(
@@ -236,7 +263,7 @@ def _fts_search(
         ORDER BY bm25(docs)
         LIMIT ?
     """
-    params = [_literal_fts_query(query), *k_params, *s_params, limit]
+    params = [_literal_fts_query(query, conn), *k_params, *s_params, limit]
     rows = conn.execute(sql, params).fetchall()
     return [
         SearchHit(
