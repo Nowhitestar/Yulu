@@ -25,6 +25,13 @@ from typing import Optional
 
 IPC_SOCKET_PATH = Path.home() / ".config" / "yulu" / "status_agent.sock"
 
+
+def _resolved_ipc_socket_path() -> Path:
+    config_dir = os.environ.get("YULU_CONFIG_DIR")
+    if config_dir:
+        return Path(config_dir).expanduser() / "status_agent.sock"
+    return IPC_SOCKET_PATH
+
 _DURATION_RE = re.compile(r"^(?P<n>\d+)\s*(?P<unit>[smhdw])$")
 _DURATION_UNITS = {
     "s": ("seconds", 1),
@@ -87,7 +94,7 @@ def _ipc_search(
     # Resolve socket path at call time so tests can monkeypatch the
     # module-level IPC_SOCKET_PATH without it being captured as a default.
     if socket_path is None:
-        socket_path = IPC_SOCKET_PATH
+        socket_path = _resolved_ipc_socket_path()
     """Send a {"action":"search", ...} request to status_agent.sock and
     return the parsed JSON response.
 
