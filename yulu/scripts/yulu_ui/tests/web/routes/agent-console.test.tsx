@@ -27,6 +27,7 @@ let mockZulipConfigured = false;
 let mockCalendars: Array<Record<string, unknown>> = [];
 let mockTasks: Array<Record<string, unknown>> = [];
 let mockDurableTasks: Array<Record<string, unknown>> = [];
+let mockConversationSelection: Record<string, unknown> = { provider: "agent", model: "runtime-managed" };
 
 function taskFixture(overrides: Record<string, unknown> = {}) {
   const stages = overrides.stages as Record<string, unknown> | undefined;
@@ -156,6 +157,7 @@ vi.mock("../../../web/src/trpc.js", () => {
             data: {
               agent_pipeline: { auto_send_notion: true },
               calendars: mockCalendars,
+              intelligence: { conversation: mockConversationSelection },
             },
           }),
         },
@@ -266,6 +268,7 @@ beforeEach(() => {
     { id: "task-running", recordingStem: "Running", title: "Running recording", state: "running", phase: "summarizing", agentProvider: "hermes", attempt: 1, error: null, createdAt: "", updatedAt: "" },
     { id: "task-failed", recordingStem: "Failed", title: "Failed recording", state: "failed", phase: "failed", agentProvider: "hermes", attempt: 1, error: "boom", createdAt: "", updatedAt: "" },
   ];
+  mockConversationSelection = { provider: "agent", model: "runtime-managed" };
   connectAgentMutate.mockImplementation((input: { agent: string }, options: { onSuccess?: (result: unknown) => void; onSettled?: () => void }) => {
     options.onSuccess?.({ ok: true, activeAgent: input.agent, agents: [] });
     options.onSettled?.();
@@ -661,22 +664,12 @@ describe("AgentConsole", () => {
   });
 
   it("describes xAI conversations as local-only before the first question", async () => {
-    mockSessions = [{
-      id: "session-xai-empty",
-      agent: "xai",
-      provider: "xai",
-      model: "grok-4.6-exact",
-      status: "active",
-      title: "Fresh xAI",
-      updatedAt: "2026-08-24T10:00:00.000Z",
-      messageCount: 0,
-    }];
-    mockSelectedSession = { ...mockSessions[0], messages: [] };
+    mockConversationSelection = { provider: "xai", model: "grok-4.6-exact" };
 
-    const { getByText, findByText, queryByText } = wrap();
-    fireEvent.click(getByText("Fresh xAI"));
+    const { findByText, queryByText } = wrap();
 
     expect(await findByText("只会使用有界的本地会议片段，不会调用 Web、X、文件或 Connectors。")).toBeInTheDocument();
+    expect(await findByText("xAI · grok-4.6-exact")).toBeInTheDocument();
     expect(queryByText("本地记录、Notion、Zulip 会自动进入上下文。")).not.toBeInTheDocument();
   });
 
