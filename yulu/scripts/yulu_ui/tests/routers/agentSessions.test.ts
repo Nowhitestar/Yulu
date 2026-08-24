@@ -4,11 +4,15 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { agentSessionsRouter } from "../../src/routers/agentSessions.js";
 import { createCaller, type AppContext } from "../../src/trpc.js";
-import { updateAgentSessionNativeSession } from "../../src/agentSessionStore.js";
+import { pauseAgentSession, updateAgentSessionNativeSession } from "../../src/agentSessionStore.js";
 
-function makeCtx(configDir: string): AppContext {
+function makeCtx(configDir: string, config: Record<string, unknown> = {
+  intelligence: { conversation: { provider: "agent", model: "runtime-managed" } },
+  llm: { enabled: true, command: ["codex"] },
+}): AppContext {
   return {
     paths: { configDir },
+    config: { read: () => config },
   } as unknown as AppContext;
 }
 
@@ -19,18 +23,18 @@ describe("agentSessionsRouter", () => {
     for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
   });
 
-  it("creates, lists, and reads sessions by selected Agent", async () => {
+  it("creates, lists, and reads sessions using the server-selected Agent", async () => {
     const root = mkdtempSync(join(tmpdir(), "agent-sessions-"));
     roots.push(root);
     const caller = createCaller(agentSessionsRouter, makeCtx(root));
 
     const codex = await caller.create({ agent: "codex", title: "本周产品会怎么推进？" });
-    const claude = await caller.create({ agent: "claude", title: "Claude session" });
+    const second = await caller.create({ agent: "malicious-browser-value", title: "Second session" });
     await caller.append({ sessionId: codex.id, message: { role: "user", text: "本周产品会怎么推进？" } });
     await caller.append({ sessionId: codex.id, message: { role: "assistant", text: "**结论**：继续推进。", sources: [{ title: "Product Weekly", url: "/inbox/a" }] } });
 
     const codexList = await caller.list({ agent: "codex" });
-    expect(codexList.sessions).toHaveLength(1);
+    expect(codexList.sessions).toHaveLength(2);
     expect(codexList.sessions[0]).toMatchObject({
       id: codex.id,
       agent: "codex",
@@ -39,7 +43,10 @@ describe("agentSessionsRouter", () => {
     });
 
     const all = await caller.list();
-    expect(all.sessions.map((session: { id: string }) => session.id).sort()).toEqual([claude.id, codex.id].sort());
+    expect(all.sessions.map((session: { id: string }) => session.id).sort()).toEqual([second.id, codex.id].sort());
+    expect(all.sessions.every((session: { provider: string; model: string }) =>
+      session.provider === "codex" && session.model === "runtime-managed"
+    )).toBe(true);
 
     const saved = await caller.get({ id: codex.id });
     expect(saved.messages).toHaveLength(2);
@@ -79,6 +86,24 @@ describe("agentSessionsRouter", () => {
       nativeSessionId: "019f0000-0000-7000-8000-000000000001",
       runtimeLabel: "Codex",
     });
+  });
+
+  it("pins the exact xAI model from config and resumes only that session", async () => {
+    const root = mkdtempSync(join(tmpdir(), "agent-sessions-"));
+    roots.push(root);
+    const config = {
+      intelligence: { conversation: { provider: "xai", model: "grok-4.6-exact" } },
+      llm: { enabled: true, command: ["codex"] },
+    };
+    const caller = createCaller(agentSessionsRouter, makeCtx(root, config));
+
+    const session = await caller.create({ agent: "codex", title: "Pinned xAI" });
+    expect(session).toMatchObject({ provider: "xai", model: "grok-4.6-exact", status: "active" });
+
+    config.intelligence.conversation = { provider: "agent", model: "runtime-managed" };
+    pauseAgentSession(root, session.id, "request failed");
+    const resumed = await caller.resume({ id: session.id });
+    expect(resumed).toMatchObject({ provider: "xai", model: "grok-4.6-exact", status: "active" });
   });
 
   it("renames, pins, archives, and deletes sessions", async () => {
