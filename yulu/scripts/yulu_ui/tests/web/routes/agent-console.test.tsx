@@ -777,6 +777,8 @@ describe("AgentConsole", () => {
 
     const { getByText, getByPlaceholderText, getByLabelText, findByText, container } = wrap(["/agent-console"], "en");
     expect(getByText("Only bounded local meeting excerpts are used. Web, X, files, and connectors stay off.")).toBeInTheDocument();
+    expect(getByText("xAI is selected for this new conversation · Session not created yet")).toBeInTheDocument();
+    expect(container).not.toHaveTextContent("xAI is pinned to this conversation · Session not created yet");
     fireEvent.change(getByPlaceholderText("问会议记录、决策、行动项..."), { target: { value: "missing" } });
     fireEvent.click(getByLabelText("发送"));
 
