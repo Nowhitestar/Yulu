@@ -399,6 +399,38 @@ describe("RecordingPipeline", () => {
       });
   });
 
+  it("pauses an xAI summary failure after one attempt and retries the same snapshot without fallback", async () => {
+    const { audioPath, configManager, xaiRequest, runArtifactWorkflow, transcribe } = setup({
+      pollMs: 5,
+      xaiText: true,
+    });
+    configManager.update("intelligence.summary", { provider: "xai", model: "grok-pinned" });
+    xaiRequest.mockRejectedValueOnce(new Error("xAI summary request failed (HTTP 403)"));
+
+    const { task } = pipeline!.enqueueCompletion({ audioPath });
+    await vi.waitFor(() => expect(store!.getTask(task.id)).toMatchObject({
+      state: "awaiting_provider",
+      attempt: 1,
+      summaryProvider: "xai",
+      summaryModel: "grok-pinned",
+      error: "xAI summary request failed (HTTP 403)",
+    }));
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(xaiRequest).toHaveBeenCalledOnce();
+    expect(transcribe).toHaveBeenCalledOnce();
+    expect(runArtifactWorkflow).not.toHaveBeenCalled();
+    expect(store!.listArtifacts(task.id).map((artifact) => artifact.kind)).toEqual(["transcript"]);
+
+    configManager.update("intelligence.summary", { provider: "agent", model: "runtime-managed" });
+    pipeline!.retry(task.id);
+    await vi.waitFor(() => expect(store!.getTask(task.id)?.state).toBe("completed"));
+
+    expect(xaiRequest).toHaveBeenCalledTimes(2);
+    expect(xaiRequest).toHaveBeenLastCalledWith(expect.objectContaining({ model: "grok-pinned" }));
+    expect(transcribe).toHaveBeenCalledOnce();
+    expect(runArtifactWorkflow).not.toHaveBeenCalled();
+  });
+
   it("never exposes Notion when the Host did not observe the artifact commit", async () => {
     const { audioPath, runNotionWorkflow } = setup({ skipArtifactCommit: true });
     const { task } = pipeline!.enqueueCompletion({ audioPath, sendToNotion: true });
