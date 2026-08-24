@@ -17,8 +17,9 @@ separate from the selected summary and conversation Agents.
 - The exact Summary Provider pinned when work is created owns summary generation.
   Agent-backed summaries currently use Hermes; Hermes also owns explicitly
   authorized Notion delivery. It is not an audio execution dependency.
-- The Agent selected in Agent Console owns interactive conversation and its own
-  connectors.
+- The pinned Conversation Provider owns interactive conversation. xAI receives
+  only bounded local meeting excerpts/history through Yulu's strict stateless
+  client; Agent-backed conversations retain their runtime-owned connectors.
 - Python is capture/scheduling/desktop glue. It is not an AI runtime.
 
 Do not add automatic fallback between audio engines or Summary Providers, a
@@ -194,7 +195,8 @@ Python completion adapter -> authenticated loopback Host
                                            +-> Host commits summary
                                            +-> optional authorized Hermes Notion
 
-Agent Console -> selected general Agent -> that Agent's connectors
+Agent Console -> pinned Conversation Provider -> xAI bounded local excerpts
+                                           or -> selected Agent + its connectors
 ```
 
 ### Runtime components
@@ -212,7 +214,8 @@ Agent Console -> selected general Agent -> that Agent's connectors
 | `artifactStore.ts` | Task staging and independent transcript/summary commits |
 | `recordingEventInbox.ts` | Replay completion events after Host downtime |
 | `agentRuntime.ts` | Separate Hermes recording resolution and general-Agent resolution |
-| prompt/glossary/search stores | Local context and discovery; no AI execution |
+| prompt/glossary/search stores | Local context and discovery; bounded xAI conversation retrieval |
+| `agentSessionStore.ts` / `xaiText.ts` | Pinned local conversation history/sources and strict stateless xAI text requests |
 
 ### Installed services
 

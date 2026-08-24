@@ -164,6 +164,15 @@ and the committed transcript. Requests use the exact pinned model with response
 storage disabled; the returned Markdown must pass Host staging validation before
 the transcript/summary pair and artifact provenance are committed.
 
+xAI conversations search only local meeting summaries and transcripts before a
+request. Yulu sends at most 8 normalized sources, 1,200 characters per excerpt,
+6,000 excerpt characters total, and a local-history tail of at most 12 messages
+and 12,000 characters. No matching excerpt sends no request. Requests use the
+pinned model with `store:false` and no tools, files, collections, Web/X search,
+connectors, or response chaining. Source cards come from those local search hits,
+not model output. A failure pauses the local session without changing its
+provider/model or deleting messages and sources.
+
 ## `transcription`
 
 One explicit Yulu audio engine handles realtime captions, final transcription,

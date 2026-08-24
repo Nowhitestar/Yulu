@@ -37,7 +37,7 @@ same durable artifact transaction used by Agent-backed summaries.
 | Follow live captions | Movie-style captions on the active display, draggable from the bottom center, with source-only, bilingual, or translation-only display; an optional private sherpa-onnx Paraformer INT8 model provides low-latency source text |
 | Review every meeting | Audio playback, transcript, summary, tags, speaker corrections, templates, glossary terms, and local search in one recording library |
 | Run each action explicitly | Re-transcribe, regenerate the summary, and share the summary are independent actions that can be repeated separately |
-| Ask across meeting history | Agent Console combines local recordings with the selected general Agent and that Agent's own connectors |
+| Ask across meeting history | Agent Console pins the selected Conversation Provider: xAI receives only bounded local excerpts/history, while Agent-backed conversations retain that Agent's own retrieval and connectors |
 | Speak instead of type | Global shortcuts provide dictation, quick translation, and voice questions that continue in Agent Console |
 | Inspect the system | Settings and Health expose permissions, capabilities, durable tasks, daemons, scheduler state, and logs |
 
@@ -49,7 +49,10 @@ same durable artifact transaction used by Agent-backed summaries.
 
 Agent Console is the default workspace. Start or stop recording, see recent
 meeting work, ask questions across local history, and inspect the selected
-Agent's capabilities without leaving the page.
+provider without leaving the page. xAI conversations search locally first,
+send nothing when no excerpt matches, and keep source cards and history local.
+Failures preserve the pinned provider/model and history until an explicit retry
+or a new conversation.
 
 Open **Manage Agents & Connectors** in Agent Console to select the conversation
 Agent and inspect Notion, Zulip, calendar, and other connector status for that
