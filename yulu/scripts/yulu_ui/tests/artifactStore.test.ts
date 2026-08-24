@@ -49,6 +49,21 @@ describe("ArtifactStore", () => {
     expect(() => store.readCommittedSummary(task, summary)).toThrow(/no longer matches/);
   });
 
+  it("adopts a committed transcript without rewriting its bytes during summary commit", () => {
+    const { store, task } = setup();
+    const transcriptPath = join(root, "Movies", "Yulu", `${task.recordingStem}.transcript.txt`);
+    const original = "committed transcript\n\n";
+    writeFileSync(transcriptPath, original);
+
+    const transcript = store.adoptCommittedTranscript(task, { source: "manual-regeneration" });
+    expect(readFileSync(transcriptPath, "utf8")).toBe(original);
+    expect(store.readCommittedTranscript(task, transcript)).toBe("committed transcript");
+
+    store.writeStagedSummary(task.id, "# Replacement summary");
+    store.commitFromWorkspace(task, {});
+    expect(readFileSync(transcriptPath, "utf8")).toBe(original);
+  });
+
   it("keeps stale committed artifacts until a validated staged summary replaces them", () => {
     const { store, task } = setup();
     const transcriptPath = join(root, "Movies", "Yulu", `${task.recordingStem}.transcript.txt`);
