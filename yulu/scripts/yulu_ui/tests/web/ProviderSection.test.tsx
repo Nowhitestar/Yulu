@@ -4,10 +4,25 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router";
 import { LanguageProvider } from "../../web/src/i18n/LanguageProvider.js";
 
-const { configUpdate, setApiKey, probe } = vi.hoisted(() => ({
+const { configUpdate, setApiKey, probe, providerStatus } = vi.hoisted(() => ({
   configUpdate: vi.fn(async () => ({ daemonsNeedingRestart: [], daemonsNeedingSighup: [] })),
   setApiKey: vi.fn(),
   probe: vi.fn(),
+  providerStatus: {
+    connection: {
+      connected: true,
+      source: "oauth" as const,
+      oauthConnected: true,
+      apiKeyConfigured: false,
+      detail: "xAI OAuth 已连接",
+      authorization: { status: "idle", verificationUrl: "", userCode: "", message: "" },
+    },
+    readiness: {
+      transcription: { capability: "transcription", status: "untested", model: "speech-to-text", testedAt: null, detail: "尚未测试", credentialSource: null },
+      summary: { capability: "summary", status: "untested", model: "grok-4.6", testedAt: null, detail: "尚未测试", credentialSource: null },
+      conversation: { capability: "conversation", status: "ready", model: "grok-4.6", testedAt: "2026-08-24T12:00:00.000Z", detail: "已通过真实请求测试", credentialSource: "oauth" },
+    },
+  },
 }));
 
 vi.mock("../../web/src/ws.js", () => ({
@@ -22,25 +37,10 @@ vi.mock("../../web/src/trpc.js", () => {
       conversation: { provider: "xai", model: "grok-4.6" },
     },
   };
-  const status = {
-    connection: {
-      connected: true,
-      source: "oauth",
-      oauthConnected: true,
-      apiKeyConfigured: false,
-      detail: "xAI OAuth 已连接",
-      authorization: { status: "idle", verificationUrl: "", userCode: "", message: "" },
-    },
-    readiness: {
-      transcription: { capability: "transcription", status: "untested", model: "speech-to-text", testedAt: null, detail: "尚未测试", credentialSource: null },
-      summary: { capability: "summary", status: "untested", model: "grok-4.6", testedAt: null, detail: "尚未测试", credentialSource: null },
-      conversation: { capability: "conversation", status: "ready", model: "grok-4.6", testedAt: "2026-08-24T12:00:00.000Z", detail: "已通过真实请求测试", credentialSource: "oauth" },
-    },
-  };
   const mutation = (fn = vi.fn()) => ({
     mutate: (input?: unknown, options?: { onSuccess?: (value: unknown) => void }) => {
       fn(input);
-      options?.onSuccess?.(status.connection);
+      options?.onSuccess?.(providerStatus.connection);
     },
     mutateAsync: async (input?: unknown) => fn(input),
     isPending: false,
@@ -61,7 +61,7 @@ vi.mock("../../web/src/trpc.js", () => {
       },
       recording: { state: { useQuery: () => ({ data: { state: "idle" }, dataUpdatedAt: 1 }) } },
       providers: {
-        status: { useQuery: () => ({ data: status, error: null }) },
+        status: { useQuery: () => ({ data: providerStatus, error: null }) },
         authorize: { useMutation: () => mutation() },
         cancelAuthorization: { useMutation: () => mutation() },
         logoutOAuth: { useMutation: () => mutation() },
@@ -87,7 +87,8 @@ const tracker = {
   daemons: new Map(),
 } as never;
 
-function mount() {
+function mount(lang: "zh" | "en" = "zh") {
+  localStorage.setItem("yulu_ui.lang", lang);
   return render(
     <MemoryRouter>
       <LanguageProvider>
@@ -98,9 +99,11 @@ function mount() {
 }
 
 beforeEach(() => {
+  localStorage.removeItem("yulu_ui.lang");
   configUpdate.mockClear();
   setApiKey.mockClear();
   probe.mockClear();
+  providerStatus.readiness.summary.status = "untested";
 });
 
 describe("ProviderSection", () => {
@@ -140,5 +143,25 @@ describe("ProviderSection", () => {
     await user.click(within(summaryRow).getByRole("button", { name: "测试摘要" }));
     expect(probe).toHaveBeenCalledWith({ capability: "summary" });
     expect(probe).not.toHaveBeenCalledWith({ capability: "transcription" });
+  });
+
+  it("explains Grok OAuth and the Keychain-only API key alternative in English", () => {
+    mount("en");
+
+    expect(screen.getByText("Uses Grok CLI OAuth. Available capabilities depend on your Grok account.")).toBeInTheDocument();
+    expect(screen.getByText("Use API key instead")).toBeInTheDocument();
+    expect(screen.getByText("Saved in macOS Keychain. Yulu will not show it again.")).toBeInTheDocument();
+    expect(screen.getByLabelText("xAI API Key")).toHaveAttribute("autocomplete", "new-password");
+  });
+
+  it("names the failed capability, pinned model, and recovery in the active language", () => {
+    providerStatus.readiness.summary.status = "failed";
+
+    mount("en");
+
+    const row = screen.getByTestId("provider-readiness-summary");
+    expect(within(row).getByRole("alert")).toHaveTextContent(
+      "Summary provider · grok-4.6 failed. Check account access or model settings, then test again.",
+    );
   });
 });
