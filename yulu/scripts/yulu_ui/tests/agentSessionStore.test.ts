@@ -168,6 +168,7 @@ describe("agentSessionStore", () => {
       });
     }
     appendAgentSessionMessage(root, created.id, { role: "user", text: "current question" });
+    appendAgentSessionMessage(root, created.id, { role: "assistant", text: "", error: "request failed" });
 
     const history = projectAgentSessionHistory(getAgentSession(root, created.id)!, "current question");
 
