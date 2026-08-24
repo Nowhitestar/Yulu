@@ -239,7 +239,45 @@ describe("pinned Ask flow", () => {
       provider: "xai",
       model: "grok-4.6-exact",
       status: "paused",
+      retrySnapshot: {
+        question: "denied",
+        sources: [{ snippet: "Launch decision" }],
+      },
     });
+    expect(result.sources).toMatchObject([{ snippet: "Launch decision" }]);
+  });
+
+  it("retries atomically with the persisted local evidence snapshot", async () => {
+    const localSearch = vi.fn(async () => localHits());
+    let pinnedId = "";
+    const xaiRequest = vi.fn()
+      .mockRejectedValueOnce(new Error("temporary xAI failure"))
+      .mockImplementationOnce(async () => {
+        expect(getAgentSession(ctx.paths.configDir, pinnedId)?.status).toBe("paused");
+        return { text: "Recovered [1]", model: "grok-4.6-exact", credentialSource: "oauth" };
+      });
+    const ctx = context({}, { localSearch, xaiRequest });
+    const pinned = session(ctx, "xai", "grok-4.6-exact");
+    pinnedId = pinned.id;
+
+    const failed = await createCaller(askRouter, ctx).ask({ question: "retry me", sessionId: pinned.id });
+    const retried = await createCaller(askRouter, ctx).ask({
+      question: "retry me",
+      sessionId: pinned.id,
+      retry: true,
+    });
+
+    expect(failed).toMatchObject({ sessionStatus: "paused", sources: [{ snippet: "Launch decision" }] });
+    expect(retried).toMatchObject({
+      ok: true,
+      answer: "Recovered [1]",
+      sessionStatus: "active",
+      sources: [{ snippet: "Launch decision" }],
+    });
+    expect(localSearch).toHaveBeenCalledTimes(1);
+    expect(xaiRequest).toHaveBeenCalledTimes(2);
+    expect(getAgentSession(ctx.paths.configDir, pinned.id)).toMatchObject({ status: "active" });
+    expect(getAgentSession(ctx.paths.configDir, pinned.id)?.retrySnapshot).toBeUndefined();
   });
 
   it("pauses when xAI returns a different credential identity", async () => {

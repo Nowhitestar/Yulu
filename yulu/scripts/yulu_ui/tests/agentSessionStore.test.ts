@@ -110,11 +110,27 @@ describe("agentSessionStore", () => {
     });
     appendAgentSessionMessage(root, created.id, { role: "user", text: "Keep this question" });
 
-    const paused = pauseAgentSession(root, created.id, "model unavailable ".repeat(100));
+    const paused = pauseAgentSession(root, created.id, "model unavailable ".repeat(100), {
+      question: "Keep this question",
+      sources: [{
+        ref: 1,
+        kind: "meeting_summary",
+        stem: "Weekly_20260824_100000",
+        title: "Weekly",
+        recordedAt: "2026-08-24T10:00:00",
+        sourcePath: "/private/weekly.summary.md",
+        snippet: "Pinned evidence",
+        url: "/inbox/Weekly_20260824_100000",
+      }],
+    });
     expect(paused).toMatchObject({
       provider: "xai",
       model: "grok-4.6-exact",
       status: "paused",
+      retrySnapshot: {
+        question: "Keep this question",
+        sources: [{ snippet: "Pinned evidence" }],
+      },
       messages: [{ text: "Keep this question" }],
     });
     expect(paused.pausedReason).toHaveLength(1000);
@@ -133,6 +149,7 @@ describe("agentSessionStore", () => {
       messages: [{ text: "Keep this question" }],
     });
     expect(resumed.pausedReason).toBeUndefined();
+    expect(resumed.retrySnapshot).toBeUndefined();
   });
 
   it("projects pinned identity and pause status in conversation summaries", () => {

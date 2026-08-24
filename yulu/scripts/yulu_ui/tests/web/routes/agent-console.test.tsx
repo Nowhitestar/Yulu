@@ -701,11 +701,12 @@ describe("AgentConsole", () => {
 
     fireEvent.click(getByRole("button", { name: "使用同一服务重试" }));
 
-    await waitFor(() => expect(resumeSessionMutateAsync).toHaveBeenCalledWith({ id: "session-paused" }));
+    expect(resumeSessionMutateAsync).not.toHaveBeenCalled();
     expect(askMutateAsync).toHaveBeenCalledTimes(1);
     expect(askMutateAsync).toHaveBeenCalledWith({
       question: "Retry this question",
       limit: 8,
+      retry: true,
       sessionId: "session-paused",
     });
     expect(await findByText("Retry result")).toBeInTheDocument();
