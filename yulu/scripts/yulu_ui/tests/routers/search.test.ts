@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { searchRouter } from "../../src/routers/search.js";
+import { normalizeConversationSources, searchRouter } from "../../src/routers/search.js";
 import { createCaller, type AppContext } from "../../src/trpc.js";
 
 const execFileMock = vi.hoisted(() => vi.fn());
@@ -24,6 +24,39 @@ function lastCb(args: unknown[]) {
 }
 
 describe("searchRouter", () => {
+  it("normalizes only bounded local meeting sources for conversation", () => {
+    const hits = Array.from({ length: 10 }, (_, index) => ({
+      kind: "meeting_summary",
+      stem: `Meeting_${index}`,
+      meetingTitle: index === 0 ? "" : `Meeting ${index}`,
+      recordedAt: "2026-08-24T10:00:00",
+      sourcePath: `/private/meeting-${index}.summary.md`,
+      score: 10 - index,
+      snippet: index === 0
+        ? `[hit]项目[/hit]\u0000 ${"😀".repeat(700)}`
+        : `excerpt ${index}`,
+    }));
+    hits.splice(2, 0, { ...hits[1]!, snippet: "duplicate" });
+    hits.splice(3, 0, { ...hits[1]!, kind: "calendar_event" });
+    hits.splice(4, 0, { ...hits[1]!, stem: "", snippet: "malformed" });
+
+    const sources = normalizeConversationSources(hits);
+
+    expect(sources).toHaveLength(8);
+    expect(sources.map((source) => source.ref)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+    expect(sources[0]).toMatchObject({
+      kind: "meeting_summary",
+      stem: "Meeting_0",
+      title: "Meeting_0",
+      sourcePath: "/private/meeting-0.summary.md",
+      url: "/inbox/Meeting_0",
+    });
+    expect(sources[0]!.snippet).not.toMatch(/\[\/?hit\]|\u0000|[\uD800-\uDFFF]$/u);
+    expect(sources.every((source) => source.snippet.length <= 1_200)).toBe(true);
+    expect(sources.reduce((total, source) => total + source.snippet.length, 0)).toBeLessThanOrEqual(6_000);
+    expect(sources.filter((source) => source.stem === "Meeting_1")).toHaveLength(1);
+  });
+
   it("run() spawns python search.cli with --json and returns parsed hits", async () => {
     execFileMock.mockImplementation((...args: unknown[]) => {
       lastCb(args)?.(null, { stdout: JSON.stringify(FAKE_HITS), stderr: "" });
