@@ -12,6 +12,7 @@ const setTagsMutate = vi.fn();
 const deleteMutate = vi.fn();
 const confirmDeliveryMutate = vi.fn();
 const abandonDeliveryMutate = vi.fn();
+const retryTaskMutate = vi.fn();
 const renameSpeakerMutate = vi.fn();
 const mergeSpeakersMutate = vi.fn();
 const assignSegmentSpeakerMutate = vi.fn();
@@ -39,6 +40,7 @@ vi.mock("../../web/src/trpc.js", () => ({
       list: { useQuery: (...a: unknown[]) => promptListMock(...a) },
     },
     agentTasks: {
+      retry: { useMutation: () => ({ mutate: retryTaskMutate, isPending: false }) },
       confirmNotionDelivery: { useMutation: () => ({ mutate: confirmDeliveryMutate, isPending: false }) },
       abandonNotionDelivery: { useMutation: () => ({ mutate: abandonDeliveryMutate, isPending: false }) },
     },
@@ -85,6 +87,7 @@ beforeEach(() => {
   promptListMock.mockReturnValue({ data: [] });
   renameMutate.mockClear(); setTagsMutate.mockClear(); deleteMutate.mockClear();
   confirmDeliveryMutate.mockClear(); abandonDeliveryMutate.mockClear();
+  retryTaskMutate.mockClear();
   renameSpeakerMutate.mockClear(); mergeSpeakersMutate.mockClear(); assignSegmentSpeakerMutate.mockClear();
   navigateMock.mockClear(); confirmMock.mockClear(); confirmMock.mockReturnValue(true);
 });
@@ -200,6 +203,41 @@ describe("RecordingReader", () => {
     }, expect.anything());
     expect(reprocessMutate).not.toHaveBeenCalled();
     promptSpy.mockRestore();
+  });
+
+  it("shows a paused task's pinned provider and explicit same-provider recovery actions", () => {
+    getMock.mockReturnValue({
+      data: {
+        ...baseData,
+        agentTask: {
+          id: "019f0000-0000-7000-8000-000000000456",
+          state: "awaiting_provider",
+          phase: "summarizing",
+          trigger: "automatic",
+          sendToNotion: false,
+          summaryProvider: "xai",
+          summaryModel: "grok-4.6-pinned",
+          error: "xAI summary request failed (HTTP 403)",
+        },
+      },
+      isPending: false,
+    });
+    renderAt(baseData.stem);
+
+    expect(screen.getByText(/xAI · grok-4\.6-pinned/i)).toBeInTheDocument();
+    const retry = screen.getByRole("button", { name: /重试同一服务/i });
+    const settings = screen.getByRole("link", { name: /打开智能服务设置/i });
+    const keepPaused = screen.getByRole("button", { name: /保持暂停/i });
+    expect(settings).toHaveAttribute("href", "/settings/llm");
+    expect(screen.getByRole("button", { name: /重新生成摘要/i })).toBeDisabled();
+
+    fireEvent.click(retry);
+    expect(retryTaskMutate).toHaveBeenCalledWith(
+      { id: "019f0000-0000-7000-8000-000000000456" },
+      expect.anything(),
+    );
+    fireEvent.click(keepPaused);
+    expect(screen.getByText(/已保持暂停/i)).toBeInTheDocument();
   });
 
   it("re-transcribes without also summarizing or sharing", () => {
