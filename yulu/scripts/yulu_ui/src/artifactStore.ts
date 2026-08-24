@@ -180,6 +180,8 @@ export class ArtifactStore {
     }
     atomicWrite(transcriptPath, transcript);
     atomicWrite(summaryPath, summary);
+    const stalePath = join(this.moviesDir, `${task.recordingStem}.summary.stale`);
+    if (existsSync(stalePath)) unlinkSync(stalePath);
 
     const createdAt = new Date().toISOString();
     return [
