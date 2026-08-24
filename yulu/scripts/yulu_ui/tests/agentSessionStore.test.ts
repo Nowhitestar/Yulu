@@ -1,0 +1,59 @@
+import { afterEach, describe, expect, it } from "vitest";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { readAgentSessionStore, storePath } from "../src/agentSessionStore.js";
+
+describe("agentSessionStore", () => {
+  const roots: string[] = [];
+
+  afterEach(() => {
+    for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  });
+
+  it("migrates legacy ask sessions once without losing local history or sources", () => {
+    const root = mkdtempSync(join(tmpdir(), "agent-session-store-"));
+    roots.push(root);
+    writeFileSync(storePath(root), JSON.stringify({
+      version: 1,
+      sessions: [{
+        id: "legacy-session",
+        agent: "codex",
+        purpose: "ask",
+        title: "Legacy conversation",
+        createdAt: "2026-08-24T10:00:00.000Z",
+        updatedAt: "2026-08-24T10:01:00.000Z",
+        pinnedAt: "2026-08-24T10:02:00.000Z",
+        nativeSessionId: "native-session",
+        messages: [{
+          id: "message-1",
+          role: "assistant",
+          text: "Legacy answer",
+          createdAt: "2026-08-24T10:01:00.000Z",
+          sources: [{ title: "Weekly", url: "/inbox/weekly" }],
+        }],
+      }],
+    }));
+
+    const session = readAgentSessionStore(root).sessions[0]!;
+    expect(session).toMatchObject({
+      agent: "codex",
+      provider: "codex",
+      model: "runtime-managed",
+      status: "active",
+      pinnedAt: "2026-08-24T10:02:00.000Z",
+      nativeSessionId: "native-session",
+      messages: [{
+        text: "Legacy answer",
+        sources: [{ title: "Weekly", url: "/inbox/weekly" }],
+      }],
+    });
+
+    const migrated = JSON.parse(readFileSync(storePath(root), "utf8"));
+    expect(migrated).toMatchObject({
+      version: 2,
+      sessions: [{ provider: "codex", model: "runtime-managed", status: "active" }],
+    });
+    expect(readFileSync(storePath(root), "utf8")).toBe(JSON.stringify(migrated, null, 2) + "\n");
+  });
+});
