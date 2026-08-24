@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v0.6
 milestone_name: milestone
 status: executing
-stopped_at: Ask Matt issues 121-124 complete — implementing issue 125
-last_updated: "2026-08-24T16:04:31.000Z"
-last_activity: 2026-08-25 -- Issue 124 passed 888 UI tests, build, privacy-boundary checks, and two-axis review, then closed
+stopped_at: Ask Matt Phase 10 spec and issues 120-125 complete — ready for the Phase 11 boundary
+last_updated: "2026-08-24T18:11:33.000Z"
+last_activity: 2026-08-25 -- Phase 10 passed installed xAI acceptance and parent spec #120 closed
 progress:
   total_phases: 13
-  completed_phases: 9
+  completed_phases: 10
   total_plans: 37
   completed_plans: 32
-  percent: 69
+  percent: 77
 ---
 
 # Project State
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-08-23)
 
 **Core value:** A new user can install Yulu, record a real meeting, and obtain saved audio, transcript, and summary without installing a specific agent.
-**Current focus:** Phase 10 — Ask Matt spec and tracer-bullet tickets
+**Current focus:** Phase 11 boundary — state-driven Core Activation is not yet specified for execution
 
 ## Current Position
 
-Phase: 10 (Provider Model & xAI Foundation) — PARTIAL IMPLEMENTATION
-Plan: #121/#122/#123/#124 complete; frontier #125; all declared blockers are closed
-Status: Ready to implement #125 in a fresh Ask Matt context
-Last activity: 2026-08-25 -- Issue #124 closed with commit, test, build, privacy, and review evidence
+Phase: 10 (Provider Model & xAI Foundation) — COMPLETE
+Plan: Ask Matt parent #120 and tracer-bullet tickets #121-#125 complete; no Phase 10 implementation frontier remains
+Status: Phase boundary; ready to discuss and specify Phase 11 through Ask Matt
+Last activity: 2026-08-25 -- Installed candidate `d7cfcef` passed five live evidence groups, full gates, and dual review; #120/#125 closed
 
 ## Performance Metrics
 
@@ -234,6 +234,6 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-08-24
-Stopped at: Phase 10 planning complete — ready for 10-01
+Last session: 2026-08-25
+Stopped at: Phase 10 accepted via Ask Matt #120-#125 — ready for the Phase 11 boundary
 Resume file: None

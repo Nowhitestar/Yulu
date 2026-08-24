@@ -22,18 +22,18 @@
 
 ### Provider Model (PRVD)
 
-- [ ] **PRVD-01**: A user can select Transcription, Summary Provider, and Conversation Provider independently
-- [ ] **PRVD-02**: A summary or conversation task remains pinned to the provider selected when the task is created
-- [ ] **PRVD-03**: When a provider fails, Yulu pauses and asks the user what to do instead of silently switching providers
-- [ ] **PRVD-04**: Direct Model API and Model Gateway credentials are stored in macOS Keychain and never written to Yulu config or logs
-- [ ] **PRVD-05**: Provider readiness is established by a capability-specific real request and production artifact validation, not command presence alone
+- [x] **PRVD-01**: A user can select Transcription, Summary Provider, and Conversation Provider independently
+- [x] **PRVD-02**: A summary or conversation task remains pinned to the provider selected when the task is created
+- [x] **PRVD-03**: When a provider fails, Yulu pauses and asks the user what to do instead of silently switching providers
+- [x] **PRVD-04**: Direct Model API and Model Gateway credentials are stored in macOS Keychain and never written to Yulu config or logs
+- [x] **PRVD-05**: Provider readiness is established by a capability-specific real request and production artifact validation, not command presence alone
 
 ### xAI (XAI)
 
-- [ ] **XAI-01**: One Yulu-managed Grok CLI-compatible OAuth connection can be reused for transcription, summary, and conversation while each capability keeps an independent selector and real entitlement probe
-- [ ] **XAI-02**: A user can generate a saved Markdown summary with xAI from transcript content only
-- [ ] **XAI-03**: A user can ask questions across local meetings; Yulu retrieves bounded excerpts locally, sends only those excerpts to xAI with `store:false`, and displays source meetings
-- [ ] **XAI-04**: Yulu keeps xAI conversation history locally and does not enable xAI Web/X search or write connectors in v0.6
+- [x] **XAI-01**: One Yulu-managed Grok CLI-compatible OAuth connection can be reused for transcription, summary, and conversation while each capability keeps an independent selector and real entitlement probe
+- [x] **XAI-02**: A user can generate a saved Markdown summary with xAI from transcript content only
+- [x] **XAI-03**: A user can ask questions across local meetings; Yulu retrieves bounded excerpts locally, sends only those excerpts to xAI with `store:false`, and displays source meetings
+- [x] **XAI-04**: Yulu keeps xAI conversation history locally and does not enable xAI Web/X search or write connectors in v0.6
 
 ### Agent Runtimes and Gateways (AGRT)
 
@@ -85,15 +85,15 @@
 | DIST-02 | Phase 9 | Complete |
 | DIST-03 | Phase 9 | Complete |
 | DIST-04 | Phase 9 | Complete |
-| PRVD-01 | Phase 10 | Pending |
-| PRVD-02 | Phase 10 | Pending |
-| PRVD-03 | Phase 10 | Pending |
-| PRVD-04 | Phase 10 | Pending |
-| PRVD-05 | Phase 10 | Pending |
-| XAI-01 | Phase 10 | Pending |
-| XAI-02 | Phase 10 | Pending |
-| XAI-03 | Phase 10 | Pending |
-| XAI-04 | Phase 10 | Pending |
+| PRVD-01 | Phase 10 | Complete |
+| PRVD-02 | Phase 10 | Complete |
+| PRVD-03 | Phase 10 | Complete |
+| PRVD-04 | Phase 10 | Complete |
+| PRVD-05 | Phase 10 | Complete |
+| XAI-01 | Phase 10 | Complete |
+| XAI-02 | Phase 10 | Complete |
+| XAI-03 | Phase 10 | Complete |
+| XAI-04 | Phase 10 | Complete |
 | ACT-01 | Phase 11 | Pending |
 | ACT-02 | Phase 11 | Pending |
 | ACT-03 | Phase 11 | Pending |

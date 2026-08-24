@@ -24,7 +24,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 7: Seamless Auto-Migration** - `yulu migrate` detect→plan→apply→verify with recording-guard, transactional rollback, and bounded backup lifecycle (completed 2026-05-30)
 - [x] **Phase 8: Multi-Agent Providers (Codex + OpenClaw)** - Generalize the proven ClaudeCode provider to complete the multi-agent-from-v1 lock (completed 2026-05-30)
 - [x] **Phase 9: Release Safety** - Make stable install/update version-paired, macOS-13-compatible, recording-safe, and free of optional dependency blockers (completed 2026-08-24)
-- [ ] **Phase 10: Provider Model & xAI Foundation** - Establish independent capability providers and prove xAI summary and cited local-meeting conversation end to end
+- [x] **Phase 10: Provider Model & xAI Foundation** - Establish independent capability providers and prove xAI summary and cited local-meeting conversation end to end (accepted via Ask Matt #120-#125 on 2026-08-25)
 - [ ] **Phase 11: State-Driven Core Activation** - Guide every install cohort to a real saved recording, transcript, and summary
 - [ ] **Phase 12: Agent Runtime & Gateway Connections** - Connect Codex, Claude Code, Hermes, OpenClaw, and advanced CLIProxyAPI paths with correct credential ownership
 - [ ] **Phase 13: Optional Capabilities & Release Acceptance** - Make calendar, sharing, and conversation setup reachable, align public guidance, and validate the real release
@@ -282,6 +282,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 **Depends on**: Phase 9
 **Requirements**: PRVD-01, PRVD-02, PRVD-03, PRVD-04, PRVD-05, XAI-01, XAI-02, XAI-03, XAI-04
 **Implementation source of truth**: GitHub spec #120 and Ask Matt tracer-bullet tickets #121-#125. The plans below are retained as research and acceptance references, not the execution queue.
+**Status**: Accepted on 2026-08-25 against installed candidate `d7cfcef`; redacted evidence is in `phases/10-provider-model-xai-foundation/10-05-SUMMARY.md`. GitHub #120 and #121-#125 are closed. The reference-plan checkboxes below intentionally remain unchanged because they were not the execution queue.
 **Success Criteria** (what must be TRUE):
 
   1. A user selects Transcription, Summary Provider, and Conversation Provider independently and sees capability-specific readiness proven by a real request
