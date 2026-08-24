@@ -228,7 +228,10 @@ def _literal_fts_query(query: str, conn: sqlite3.Connection) -> str:
         return _quote_fts_literal(" ".join(terms))
 
     shared_terms = [entry for entry in positive_terms if entry[2] >= 2]
-    anchor = min(shared_terms or positive_terms, key=lambda entry: (entry[2], entry[0]))
+    anchor = min(
+        shared_terms or positive_terms,
+        key=lambda entry: (entry[2], -len(entry[1]), entry[1].casefold()),
+    )
     anchor_literal = _quote_fts_literal(anchor[1])
     companions = [
         _quote_fts_literal(term)
