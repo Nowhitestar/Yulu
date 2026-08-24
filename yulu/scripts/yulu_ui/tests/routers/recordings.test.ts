@@ -5,7 +5,11 @@ import { join } from "node:path";
 import { recordingsRouter } from "../../src/routers/recordings.js";
 import { createCaller, type AppContext } from "../../src/trpc.js";
 import { PubSub, type AppChannels } from "../../src/pubsub.js";
-import { RecordingTaskDeletionBlockedError } from "../../src/hostStore.js";
+import { HostStore, RecordingTaskDeletionBlockedError } from "../../src/hostStore.js";
+import { ArtifactStore } from "../../src/artifactStore.js";
+import { ConfigManager } from "../../src/config.js";
+import { RecordingPipeline } from "../../src/recordingPipeline.js";
+import { paths } from "../../src/paths.js";
 
 const agentActions = vi.hoisted(() => ({
   DeliveryError: class AgentDeliveryFailedError extends Error {},
@@ -223,6 +227,100 @@ describe("recordings router", () => {
       instructions: expect.stringContaining("阿法学院 => 阿尔法学院"),
     }));
     expect(readFileSync(join(mvDir, `${stem}.summary.md`), "utf8")).toBe("# 阿尔法学院\n");
+  });
+
+  it("regenerates through a pinned xAI durable task using only the committed transcript", async () => {
+    const stem = "TeamSync_20260102_090000";
+    const wavPath = join(mvDir, `${stem}.wav`);
+    writeFileSync(wavPath, wavWithDuration(1));
+    writeFileSync(join(mvDir, `${stem}.transcript.txt`), "committed transcript\n");
+    writeFileSync(join(mvDir, `${stem}.summary.md`), "# Old summary\n");
+    writeFileSync(join(mvDir, `${stem}.summary.stale`), "stale\n");
+    const configDir = join(root, "config");
+    mkdirSync(configDir);
+    const configFile = join(configDir, "config.json");
+    writeFileSync(configFile, JSON.stringify({
+      transcription: {},
+      intelligence: {
+        summary: { provider: "xai", model: "grok-manual-pinned" },
+        conversation: { provider: "agent", model: "runtime-managed" },
+      },
+      llm: { agent: { provider: "hermes" } },
+      agent_pipeline: { enabled: true, auto_process_recordings: false },
+    }));
+    const host = new HostStore(join(configDir, "host.sqlite"));
+    const artifacts = new ArtifactStore(mvDir, join(configDir, "agent-tasks"));
+    const config = new ConfigManager(configFile);
+    const xaiRequest = vi.fn(async (request: { model: string }) => ({
+      text: "# Fresh xAI summary",
+      model: request.model,
+      credentialSource: "oauth" as const,
+    }));
+    const transcribeFile = vi.fn(async () => {
+      throw new Error("manual summary must not transcribe audio");
+    });
+    const runtimePaths = {
+      ...paths,
+      configDir,
+      configFile,
+      moviesDir: mvDir,
+      hostDb: join(configDir, "host.sqlite"),
+      agentTasksDir: join(configDir, "agent-tasks"),
+      recordingEventsDir: join(configDir, "recording-events"),
+    };
+    const pubsub = new PubSub<AppChannels>();
+    const pipeline = new RecordingPipeline({
+      store: host,
+      artifacts,
+      config,
+      paths: runtimePaths,
+      pubsub,
+      vocabDb: () => ({ prepare: () => ({ all: () => [] }) }),
+      transcription: {
+        provider: "test-audio",
+        health: () => ({ available: true, provider: "test-audio", reason: null }),
+        warm: async () => {},
+        transcribeFile,
+      },
+      xaiText: { request: xaiRequest },
+      gatewayFactory: () => { throw new Error("manual xAI summary must not construct an Agent gateway"); },
+      pollMs: 60_000,
+    });
+    const base = mkCtx({ moviesDir: mvDir });
+    const ctx = {
+      ...base,
+      paths: runtimePaths,
+      host,
+      artifacts,
+      config,
+      pubsub,
+      recordingPipeline: pipeline,
+    } as AppContext;
+
+    try {
+      const result = await createCaller(recordingsRouter, ctx).summarize({ stem });
+      await vi.waitFor(() => expect(host.latestForRecording(stem)?.state).toBe("completed"));
+
+      expect(result.task).toMatchObject({
+        trigger: "manual",
+        summaryProvider: "xai",
+        summaryModel: "grok-manual-pinned",
+      });
+      expect(transcribeFile).not.toHaveBeenCalled();
+      expect(xaiRequest).toHaveBeenCalledWith({
+        capability: "summary",
+        model: "grok-manual-pinned",
+        input: [
+          { role: "system", content: expect.any(String) },
+          { role: "user", content: "committed transcript" },
+        ],
+      });
+      expect(readFileSync(join(mvDir, `${stem}.summary.md`), "utf8")).toBe("# Fresh xAI summary\n");
+      expect(existsSync(join(mvDir, `${stem}.summary.stale`))).toBe(false);
+    } finally {
+      await pipeline.close();
+      host.close();
+    }
   });
 
   it("blocks sharing an old summary after re-transcription until it is regenerated", async () => {
