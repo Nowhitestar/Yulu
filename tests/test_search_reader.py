@@ -221,6 +221,56 @@ def test_search_composes_filters(tmp_path, monkeypatch):
     assert hits[0].kind == KIND_MEETING_TRANSCRIPT
 
 
+def _make_natural_question_corpus(tmp_path: Path):
+    db = tmp_path / "search.sqlite"
+    root = tmp_path / "Yulu"
+    root.mkdir()
+    (root / "PhoenixLaunch_20260825_010300.transcript.txt").write_text(
+        "Mei owns launch Oct14. Phoenix beta decision.", encoding="utf-8"
+    )
+    (root / "PhoenixReview_20260825_010400.transcript.txt").write_text(
+        "Arun owns review Oct18. Phoenix readiness decision.", encoding="utf-8"
+    )
+    return db, root
+
+
+def test_search_treats_natural_question_punctuation_as_literal_terms(tmp_path, monkeypatch):
+    db, root = _make_natural_question_corpus(tmp_path)
+    from search import reader as reader_mod
+    monkeypatch.setattr(reader_mod, "CORPUS_ROOT", root)
+
+    hits, tel = search(
+        "Across the Phoenix meetings, what launch/review decisions were made, "
+        "and who owns each follow-up?",
+        db_path=db,
+    )
+
+    by_stem = {hit.stem: hit for hit in hits}
+    assert set(by_stem) == {
+        "PhoenixLaunch_20260825_010300",
+        "PhoenixReview_20260825_010400",
+    }
+    assert "Mei" in by_stem["PhoenixLaunch_20260825_010300"].snippet
+    assert "Arun" in by_stem["PhoenixReview_20260825_010400"].snippet
+    assert tel["fallback_used"] is False
+
+
+def test_search_does_not_execute_user_supplied_fts_operators(tmp_path, monkeypatch):
+    db, root = _make_natural_question_corpus(tmp_path)
+    from search import reader as reader_mod
+    monkeypatch.setattr(reader_mod, "CORPUS_ROOT", root)
+
+    hits, _tel = search(
+        'Phoenix AND/OR "review"? NOT (fallback)',
+        db_path=db,
+    )
+
+    assert {hit.stem for hit in hits} == {
+        "PhoenixLaunch_20260825_010300",
+        "PhoenixReview_20260825_010400",
+    }
+
+
 # ── reindex + doctor ──────────────────────────────────────────────────
 
 def test_reindex_rebuilds_from_scratch(tmp_path, monkeypatch):
