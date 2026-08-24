@@ -142,8 +142,24 @@ export class ArtifactStore {
     if (!isInside(this.moviesDir, path)) {
       throw new Error("transcript target escapes the recordings directory");
     }
+    if (basename(task.audioPath, ".wav") !== task.recordingStem) {
+      throw new Error("recording stem does not match the audio artifact");
+    }
     const transcript = readRequiredText(path, "transcript", MAX_TRANSCRIPT_BYTES).trimEnd();
-    return this.commitTranscript(task, transcript, provenance);
+    const content = readFileSync(path);
+    this.writeStagedTranscript(task.id, transcript);
+    return {
+      id: randomUUID(),
+      taskId: task.id,
+      recordingStem: task.recordingStem,
+      kind: "transcript",
+      path,
+      sha256: sha256(content),
+      bytes: content.length,
+      mimeType: "text/plain",
+      provenance,
+      createdAt: new Date().toISOString(),
+    };
   }
 
   commitTranscript(
@@ -187,7 +203,21 @@ export class ArtifactStore {
     if (!isInside(this.moviesDir, transcriptPath) || !isInside(this.moviesDir, summaryPath)) {
       throw new Error("artifact target escapes the recordings directory");
     }
-    atomicWrite(transcriptPath, transcript);
+    let transcriptContent: Buffer;
+    if (existsSync(transcriptPath)) {
+      transcriptContent = readFileSync(transcriptPath);
+      const committedTranscript = readRequiredText(
+        transcriptPath,
+        "committed transcript",
+        MAX_TRANSCRIPT_BYTES,
+      );
+      if (committedTranscript !== transcript) {
+        throw new Error("staged transcript does not match the committed transcript");
+      }
+    } else {
+      atomicWrite(transcriptPath, transcript);
+      transcriptContent = Buffer.from(transcript, "utf8");
+    }
     atomicWrite(summaryPath, summary);
     const stalePath = join(this.moviesDir, `${task.recordingStem}.summary.stale`);
     if (existsSync(stalePath)) unlinkSync(stalePath);
@@ -200,8 +230,8 @@ export class ArtifactStore {
         recordingStem: task.recordingStem,
         kind: "transcript",
         path: transcriptPath,
-        sha256: sha256(transcript),
-        bytes: Buffer.byteLength(transcript),
+        sha256: sha256(transcriptContent),
+        bytes: transcriptContent.length,
         mimeType: "text/plain",
         provenance,
         createdAt,

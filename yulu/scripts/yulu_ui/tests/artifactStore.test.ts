@@ -72,7 +72,7 @@ describe("ArtifactStore", () => {
     writeFileSync(transcriptPath, "old transcript\n");
     writeFileSync(summaryPath, "# Old summary\n");
     writeFileSync(stalePath, "stale\n");
-    store.writeStagedTranscript(task.id, "new transcript");
+    store.writeStagedTranscript(task.id, "old transcript");
     writeFileSync(store.workspace(task.id).summaryPath, "   \n");
 
     expect(() => store.commitFromWorkspace(task, {})).toThrow(/summary staging artifact contains no text/);
@@ -82,7 +82,7 @@ describe("ArtifactStore", () => {
 
     store.writeStagedSummary(task.id, "# New summary");
     store.commitFromWorkspace(task, {});
-    expect(readFileSync(transcriptPath, "utf8")).toBe("new transcript\n");
+    expect(readFileSync(transcriptPath, "utf8")).toBe("old transcript\n");
     expect(readFileSync(summaryPath, "utf8")).toBe("# New summary\n");
     expect(existsSync(stalePath)).toBe(false);
   });
