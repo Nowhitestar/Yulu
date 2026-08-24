@@ -28,8 +28,8 @@ describe("searchRouter", () => {
     const hits = Array.from({ length: 10 }, (_, index) => ({
       kind: "meeting_summary",
       stem: `Meeting_${index}`,
-      meetingTitle: index === 0 ? "" : `Meeting ${index}`,
-      recordedAt: "2026-08-24T10:00:00",
+      meetingTitle: index === 0 ? `Title ${"界".repeat(10_000)}` : `Meeting ${index}`,
+      recordedAt: index === 0 ? `2026-${"1".repeat(10_000)}` : "2026-08-24T10:00:00",
       sourcePath: `/private/meeting-${index}.summary.md`,
       score: 10 - index,
       snippet: index === 0
@@ -47,13 +47,17 @@ describe("searchRouter", () => {
     expect(sources[0]).toMatchObject({
       kind: "meeting_summary",
       stem: "Meeting_0",
-      title: "Meeting_0",
       sourcePath: "/private/meeting-0.summary.md",
       url: "/inbox/Meeting_0",
     });
+    expect(sources[0]!.title).toHaveLength(200);
+    expect(sources[0]!.recordedAt).toHaveLength(64);
     expect(sources[0]!.snippet).not.toMatch(/\[\/?hit\]|\u0000|[\uD800-\uDFFF]$/u);
     expect(sources.every((source) => source.snippet.length <= 1_200)).toBe(true);
     expect(sources.reduce((total, source) => total + source.snippet.length, 0)).toBeLessThanOrEqual(6_000);
+    expect(sources.reduce((total, source) =>
+      total + source.title.length + source.recordedAt.length + source.kind.length + source.snippet.length, 0)
+    ).toBeLessThanOrEqual(6_000);
     expect(sources.filter((source) => source.stem === "Meeting_1")).toHaveLength(1);
   });
 

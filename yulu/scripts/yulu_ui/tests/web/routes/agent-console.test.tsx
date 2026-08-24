@@ -660,6 +660,26 @@ describe("AgentConsole", () => {
     expect(sessionListInputs.every((input) => input === undefined)).toBe(true);
   });
 
+  it("describes xAI conversations as local-only before the first question", async () => {
+    mockSessions = [{
+      id: "session-xai-empty",
+      agent: "xai",
+      provider: "xai",
+      model: "grok-4.6-exact",
+      status: "active",
+      title: "Fresh xAI",
+      updatedAt: "2026-08-24T10:00:00.000Z",
+      messageCount: 0,
+    }];
+    mockSelectedSession = { ...mockSessions[0], messages: [] };
+
+    const { getByText, findByText, queryByText } = wrap();
+    fireEvent.click(getByText("Fresh xAI"));
+
+    expect(await findByText("只会使用有界的本地会议片段，不会调用 Web、X、文件或 Connectors。")).toBeInTheDocument();
+    expect(queryByText("本地记录、Notion、Zulip 会自动进入上下文。")).not.toBeInTheDocument();
+  });
+
   it("preserves paused history and retries the same pinned snapshot only on click", async () => {
     mockSessions = [{
       id: "session-paused",

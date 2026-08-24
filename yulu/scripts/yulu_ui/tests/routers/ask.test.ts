@@ -216,6 +216,31 @@ describe("pinned Ask flow", () => {
     expect(getAgentSession(ctx.paths.configDir, pinned.id)?.status).toBe("active");
   });
 
+  it("pauses after a local retrieval failure without making a network request", async () => {
+    const localSearch = vi.fn(async () => { throw new Error("local index unavailable"); });
+    const xaiRequest = vi.fn();
+    const ctx = context({}, { localSearch, xaiRequest });
+    const pinned = session(ctx, "xai", "grok-4.6-exact");
+
+    const result = await createCaller(askRouter, ctx).ask({ question: "search failure", sessionId: pinned.id });
+    const paused = await createCaller(askRouter, ctx).ask({ question: "do not retry", sessionId: pinned.id });
+
+    expect(result).toMatchObject({
+      ok: false,
+      provider: "xai",
+      model: "grok-4.6-exact",
+      sessionStatus: "paused",
+      sources: [],
+      usedFallback: false,
+    });
+    expect(result.llmError).toContain("local index unavailable");
+    expect(paused).toMatchObject({ sessionStatus: "paused", llmStatus: "paused" });
+    expect(localSearch).toHaveBeenCalledTimes(1);
+    expect(xaiRequest).not.toHaveBeenCalled();
+    expect(runAgentCliCommand).not.toHaveBeenCalled();
+    expect(getAgentSession(ctx.paths.configDir, pinned.id)?.status).toBe("paused");
+  });
+
   it("pauses after one failed xAI attempt without provider or Agent fallback", async () => {
     const localSearch = vi.fn(async () => localHits());
     const xaiRequest = vi.fn(async () => { throw new Error("xAI conversation request failed (HTTP 403)"); });
