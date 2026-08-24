@@ -31,15 +31,20 @@
   gap: 8px;
 }
 
-.reader-reconciliation-actions button {
+.reader-reconciliation-actions button,
+.reader-reconciliation-actions a {
+  display: inline-flex;
+  align-items: center;
   padding: 7px 10px;
   border: 1px solid var(--line);
   border-radius: var(--radius-inner);
   background: var(--surface-2);
   color: var(--fg);
+  text-decoration: none;
 }
 
-.reader-reconciliation-actions button:hover:not(:disabled) {
+.reader-reconciliation-actions button:hover:not(:disabled),
+.reader-reconciliation-actions a:hover {
   border-color: var(--fg-3);
 }
 .reader-workspace {

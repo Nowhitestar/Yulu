@@ -69,7 +69,7 @@ interface ShareTarget {
 }
 
 const ACTIVE_AGENT_TASK_STATES = new Set([
-  "queued", "awaiting_agent", "running", "transcript_committed", "artifacts_committed",
+  "queued", "awaiting_agent", "awaiting_provider", "running", "transcript_committed", "artifacts_committed",
   "sending", "delivery_reported", "delivery_unverified",
 ]);
 const CURRENT_AGENT_TASK_STATES = new Set([
@@ -209,6 +209,7 @@ function recordingStatus(stem: string, wavPath: string, host?: HostStore): Recor
   if (task) {
     if (task.state === "queued") return { status: "agent_queued" };
     if (task.state === "awaiting_agent") return { status: "awaiting_agent", statusError: task.error ?? undefined };
+    if (task.state === "awaiting_provider") return { status: "awaiting_provider", statusError: task.error ?? undefined };
     if (task.state === "awaiting_policy") return { status: "awaiting_policy", statusError: task.error ?? undefined };
     if (task.state === "failed") return {
       status: isTranscriptionTaskFailure(task) ? "transcription_failed" : "agent_failed",

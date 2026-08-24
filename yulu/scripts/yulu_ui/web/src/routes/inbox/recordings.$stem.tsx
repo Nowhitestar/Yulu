@@ -40,6 +40,7 @@ type ManualAction = "transcribe" | "summarize" | "share";
 type AgentTaskState =
   | "queued"
   | "awaiting_agent"
+  | "awaiting_provider"
   | "awaiting_policy"
   | "running"
   | "transcript_committed"
@@ -57,6 +58,8 @@ interface AgentTaskView {
   phase: string;
   trigger: "automatic" | "manual";
   sendToNotion: boolean;
+  summaryProvider: string;
+  summaryModel: string;
   error: string | null;
 }
 
@@ -76,6 +79,7 @@ interface SummaryTemplateOption {
 const ACTIVE_AGENT_TASK_STATES = new Set<AgentTaskState>([
   "queued",
   "awaiting_agent",
+  "awaiting_provider",
   "awaiting_policy",
   "running",
   "transcript_committed",
@@ -130,6 +134,7 @@ function AgentTaskStatus({
   let key = "reader.agentTask.processing";
   if (task.state === "queued") key = "reader.agentTask.queued";
   else if (task.state === "awaiting_agent") key = "reader.agentTask.awaiting";
+  else if (task.state === "awaiting_provider") key = "reader.agentTask.awaitingProvider";
   else if (task.state === "awaiting_policy") key = "reader.agentTask.awaitingPolicy";
   else if (task.state === "transcript_committed") key = "reader.agentTask.transcriptCommitted";
   else if (task.state === "delivery_unverified") key = "reader.agentTask.deliveryUnverified";
@@ -370,12 +375,14 @@ export function RecordingReader() {
   const [actionError, setActionError] = useState<{ action: ManualAction; message: string } | null>(null);
   const [pendingShareChannel, setPendingShareChannel] = useState<string | null>(null);
   const [summaryTemplateId, setSummaryTemplateId] = useState("");
+  const [keptPausedTaskId, setKeptPausedTaskId] = useState<string | null>(null);
   const targetAudioSrc = data ? audioSrcFor(data) : null;
 
   useEffect(() => {
     setCompletedAction(null);
     setActionError(null);
     setPendingShareChannel(null);
+    setKeptPausedTaskId(null);
   }, [stem]);
   const [mountedAudioSrc, setMountedAudioSrc] = useState<string | null>(null);
   const [copiedSummary, setCopiedSummary] = useState(false);
@@ -389,6 +396,7 @@ export function RecordingReader() {
   const deleteMut = trpc.recordings.delete.useMutation();
   const confirmDeliveryMut = trpc.agentTasks.confirmNotionDelivery.useMutation();
   const abandonDeliveryMut = trpc.agentTasks.abandonNotionDelivery.useMutation();
+  const retryTaskMut = trpc.agentTasks.retry.useMutation();
   const renameSpeakerMut = trpc.recordings.renameSpeaker.useMutation();
   const mergeSpeakersMut = trpc.recordings.mergeSpeakers.useMutation();
   const assignSegmentSpeakerMut = trpc.recordings.assignSegmentSpeaker.useMutation();
@@ -563,6 +571,15 @@ export function RecordingReader() {
     if (url === null) return;
     confirmDeliveryMut.mutate({ id: task.id, url: url.trim() || undefined }, {
       onError: (err) => setActionError({ action: "share", message: err.message }),
+      onSettled: invalidateBoth,
+    });
+  };
+
+  const handleProviderRetry = () => {
+    const task = data?.agentTask as AgentTaskView | null | undefined;
+    if (!task || task.state !== "awaiting_provider") return;
+    retryTaskMut.mutate({ id: task.id }, {
+      onError: (err) => setActionError({ action: "summarize", message: err.message }),
       onSettled: invalidateBoth,
     });
   };
@@ -791,6 +808,36 @@ export function RecordingReader() {
           </div>
 
           {actionError?.action === "share" && <div className="reader-action-error" role="alert">{actionError.message}</div>}
+
+          {agentTask?.state === "awaiting_provider" && (
+            <div className="reader-reconciliation reader-provider-pause" role="alert">
+              <div>
+                <strong>{t("reader.providerPause.heading")}</strong>
+                <p>
+                  {agentTask.summaryProvider === "xai" ? "xAI" : agentTask.summaryProvider}
+                  {" · "}{agentTask.summaryModel}
+                </p>
+                {agentTask.error && <p>{agentTask.error}</p>}
+              </div>
+              {keptPausedTaskId === agentTask.id ? (
+                <span role="status">{t("reader.providerPause.kept")}</span>
+              ) : (
+                <div className="reader-reconciliation-actions">
+                  <button
+                    type="button"
+                    onClick={handleProviderRetry}
+                    disabled={retryTaskMut.isPending}
+                  >
+                    {t("reader.providerPause.retry")}
+                  </button>
+                  <Link to="/settings/llm">{t("settings.providers.open")}</Link>
+                  <button type="button" onClick={() => setKeptPausedTaskId(agentTask.id)}>
+                    {t("reader.providerPause.keep")}
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
 
           {agentTask?.state === "delivery_unverified" && (
             <div className="reader-reconciliation" role="alert">
