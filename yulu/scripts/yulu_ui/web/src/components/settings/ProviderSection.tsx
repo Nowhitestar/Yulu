@@ -233,7 +233,7 @@ export function ProviderSection({ tracker }: { tracker: SettingsRestartTracker }
               <div>
                 <div className="local-caption-title">{label}</div>
                 <div
-                  className={`provider-readiness-status ${status === "failed" ? "provider-readiness-status--bad" : ""}`}
+                  className={`provider-readiness-status ${status === "failed" ? "provider-readiness-status--bad" : status === "ready" ? "provider-readiness-status--ok" : ""}`}
                   role={status === "failed" ? "alert" : "status"}
                 >
                   {status === "failed"
