@@ -233,6 +233,7 @@ describe("RecordingReader", () => {
     const retry = screen.getByRole("button", { name: /重试同一服务/i });
     const settings = screen.getByRole("link", { name: /打开智能服务设置/i });
     const keepPaused = screen.getByRole("button", { name: /保持暂停/i });
+    expect(getComputedStyle(retry.parentElement as HTMLElement).flexWrap).toBe("wrap");
     expect(settings).toHaveAttribute("href", "/settings/llm");
     expect(screen.getByRole("button", { name: /重新生成摘要/i })).toBeDisabled();
 
