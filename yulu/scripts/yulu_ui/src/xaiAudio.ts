@@ -16,6 +16,10 @@ import type { TranscriptionLanguage } from "./realtimeTranscription.js";
 import { captionsLikelyDuplicate, cleanTranscriptText, dedupeTranscriptSegment, hasVoice } from "./realtimeTranscription.js";
 import { XaiCredentialManager, type XaiCredential } from "./xaiCredentials.js";
 
+function providerFor(credential: XaiCredential): string {
+  return credential.source === "api-key" ? "xai-api-key:yulu" : "xai-oauth:yulu";
+}
+
 interface XaiTranscriptEvent {
   type?: string;
   text?: string;
@@ -115,7 +119,8 @@ export class XaiAudioClient implements StreamingCaptionEngine {
   constructor(private readonly credentials: XaiCredentialManager) {}
 
   get provider(): string {
-    return "xai-oauth:yulu";
+    const source = this.credentials.cachedStatus().source;
+    return source === "api-key" ? "xai-api-key:yulu" : "xai-oauth:yulu";
   }
 
   async warm(): Promise<void> {
@@ -292,7 +297,7 @@ export class XaiAudioClient implements StreamingCaptionEngine {
         let segmentTranscript = "";
         for (let attempt = 0; attempt < 2; attempt += 1) {
           const credential = await this.credentials.resolve();
-          provider = "xai-oauth:yulu";
+          provider = providerFor(credential);
           const form = new FormData();
           const formattedLanguage = xaiLanguage(language);
           if (formattedLanguage) {
@@ -347,7 +352,7 @@ export class XaiAudioClient implements StreamingCaptionEngine {
     }
   }
 
-  async testCredential(): Promise<{ ok: true; provider: string }> {
+  async testCredential(): Promise<{ ok: true; provider: string; credentialSource: XaiCredential["source"] }> {
     const credential = await this.credentials.resolve();
     const wav = Buffer.alloc(44 + 32_000);
     wav.write("RIFF", 0);
@@ -371,7 +376,7 @@ export class XaiAudioClient implements StreamingCaptionEngine {
       signal: AbortSignal.timeout(30_000),
     });
     if (!response.ok) throw new Error(`xAI 音频权限验证失败（HTTP ${response.status}）`);
-    return { ok: true, provider: "xai-oauth:yulu" };
+    return { ok: true, provider: providerFor(credential), credentialSource: credential.source };
   }
 
   credentialStatus() {

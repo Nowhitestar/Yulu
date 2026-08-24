@@ -10,6 +10,8 @@ import type { RecordingPipeline } from "./recordingPipeline.js";
 import type { LocalCaptionManager } from "./localCaptionManager.js";
 import type { AudioTranscriptionService } from "./audioTranscription.js";
 import type { XaiCredentialManager } from "./xaiCredentials.js";
+import type { XaiTextClient } from "./xaiText.js";
+import type { XaiProviderReadiness } from "./routers/providers.js";
 
 export interface AppContext {
   config: ConfigManager;
@@ -22,6 +24,8 @@ export interface AppContext {
   localCaption?: LocalCaptionManager;
   audioTranscription?: AudioTranscriptionService;
   xaiCredentials?: XaiCredentialManager;
+  xaiText?: XaiTextClient;
+  xaiReadiness?: XaiProviderReadiness;
   db: {
     prompts: DbType;
     vocab: DbType;

@@ -38,9 +38,15 @@ import { acquireHostInstanceLock, type HostInstanceLock } from "./hostInstanceLo
 import { RealtimeTranscriptionCoordinator } from "./realtimeTranscription.js";
 import { LocalCaptionManager } from "./localCaptionManager.js";
 import { applyGlossaryContract, loadGlossaryContract } from "./glossaryContract.js";
-import { KeychainXaiTokenStore, XaiCredentialManager } from "./xaiCredentials.js";
+import {
+  KeychainProviderSecretStore,
+  KeychainXaiTokenStore,
+  XaiCredentialManager,
+} from "./xaiCredentials.js";
 import { XaiAudioClient } from "./xaiAudio.js";
+import { XaiTextClient } from "./xaiText.js";
 import { AudioTranscriptionService } from "./audioTranscription.js";
+import { createXaiProviderReadiness } from "./routers/providers.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -115,10 +121,14 @@ async function startLockedServer(
     configDir: runtimePaths.configDir,
     selected: () => configManager.read().transcription.engine === "local",
   });
+  const xaiKeychainHelper = join(runtimePaths.scriptDir, "Yulu.app", "Contents", "MacOS", "xai_keychain");
   const xaiCredentials = new XaiCredentialManager({
-    store: new KeychainXaiTokenStore(join(runtimePaths.scriptDir, "Yulu.app", "Contents", "MacOS", "xai_keychain")),
+    store: new KeychainXaiTokenStore(xaiKeychainHelper),
+    apiKeyStore: new KeychainProviderSecretStore(xaiKeychainHelper, "direct.xai"),
   });
   const xaiAudio = new XaiAudioClient(xaiCredentials);
+  const xaiText = new XaiTextClient(xaiCredentials);
+  const xaiReadiness = createXaiProviderReadiness();
   const audioTranscription = new AudioTranscriptionService(configManager, localCaption, xaiAudio);
   void xaiCredentials.status().catch(() => {});
   const recordingPipeline = new RecordingPipeline({
@@ -199,6 +209,8 @@ async function startLockedServer(
     localCaption,
     audioTranscription,
     xaiCredentials,
+    xaiText,
+    xaiReadiness,
     db:        dbProxy,
   };
 
