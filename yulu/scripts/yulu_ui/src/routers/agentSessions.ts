@@ -10,7 +10,6 @@ import {
   listAgentSessions,
   pinAgentSession,
   renameAgentSession,
-  resumeAgentSession,
   summarizeAgentSession,
 } from "../agentSessionStore.js";
 import { resolveAgentRuntime } from "../agentRuntime.js";
@@ -99,11 +98,5 @@ export const agentSessionsRouter = router({
     .input(z.object({ id: z.string().min(1), archived: z.boolean() }))
     .mutation(({ ctx, input }) => {
       return archiveAgentSession(ctx.paths.configDir, input.id, input.archived);
-    }),
-
-  resume: publicProcedure
-    .input(z.object({ id: z.string().min(1) }))
-    .mutation(({ ctx, input }) => {
-      return resumeAgentSession(ctx.paths.configDir, input.id);
     }),
 });

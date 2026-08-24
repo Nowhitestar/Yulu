@@ -878,7 +878,6 @@ function AskMeetings({
   const deleteSession = trpc.agentSessions.delete.useMutation();
   const pinSession = trpc.agentSessions.pin.useMutation();
   const archiveSession = trpc.agentSessions.archive.useMutation();
-  const resumeSession = trpc.agentSessions.resume.useMutation();
   const sessionsQuery = trpc.agentSessions.list.useQuery();
   const [input, setInput] = useState("");
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
@@ -940,7 +939,7 @@ function AskMeetings({
     }
   }, [messages]);
 
-  const runQuestion = async (sessionId: string, question: string, appendQuestion: boolean) => {
+  const runQuestion = async (sessionId: string, question: string, appendQuestion: boolean, retry = false) => {
     setMessages((prev) => [
       ...prev,
       ...(appendQuestion ? [{ role: "user" as const, text: question }] : []),
@@ -950,7 +949,12 @@ function AskMeetings({
       if (appendQuestion) {
         await appendSession.mutateAsync({ sessionId, message: { role: "user", text: question } });
       }
-      const result = await ask.mutateAsync({ question, limit: 8, sessionId }) as AskResponse;
+      const result = await ask.mutateAsync({
+        question,
+        limit: 8,
+        sessionId,
+        ...(retry ? { retry: true as const } : {}),
+      }) as AskResponse;
       if (result.sessionStatus) setSessionStatusOverride(result.sessionStatus);
       const assistantMessage: ChatMessage = {
         role: "assistant",
@@ -1004,12 +1008,10 @@ function AskMeetings({
   };
 
   const retrySameProvider = async () => {
-    if (!selectedSessionId || resumeSession.isPending || ask.isPending) return;
+    if (!selectedSessionId || ask.isPending) return;
     const question = messages.slice().reverse().find((message) => message.role === "user")?.text.trim();
     if (!question) return;
-    await resumeSession.mutateAsync({ id: selectedSessionId });
-    setSessionStatusOverride("active");
-    await runQuestion(selectedSessionId, question, false);
+    await runQuestion(selectedSessionId, question, false, true);
   };
 
   const startNewSession = () => {
@@ -1091,7 +1093,7 @@ function AskMeetings({
               <PausedConversation
                 identity={identity}
                 reason={pausedReason}
-                retrying={resumeSession.isPending || ask.isPending}
+                retrying={ask.isPending}
                 onRetry={() => void retrySameProvider()}
                 onNew={startNewSession}
               />
@@ -1100,7 +1102,7 @@ function AskMeetings({
               value={input}
               onChange={setInput}
               onSubmit={submit}
-              pending={ask.isPending || createSession.isPending || appendSession.isPending || resumeSession.isPending}
+              pending={ask.isPending || createSession.isPending || appendSession.isPending}
               disabled={sessionStatus === "paused"}
               placeholder="问会议记录、决策、行动项..."
             />
@@ -1159,7 +1161,7 @@ function AskMeetings({
             <PausedConversation
               identity={identity}
               reason={pausedReason}
-              retrying={resumeSession.isPending || ask.isPending}
+              retrying={ask.isPending}
               onRetry={() => void retrySameProvider()}
               onNew={startNewSession}
             />
@@ -1168,7 +1170,7 @@ function AskMeetings({
             value={input}
             onChange={setInput}
             onSubmit={submit}
-            pending={ask.isPending || createSession.isPending || appendSession.isPending || resumeSession.isPending}
+            pending={ask.isPending || createSession.isPending || appendSession.isPending}
             disabled={sessionStatus === "paused"}
             placeholder="继续提问..."
           />

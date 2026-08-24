@@ -5,6 +5,7 @@ import {
   getAgentSession,
   pauseAgentSession,
   projectAgentSessionHistory,
+  resumeAgentSession,
   updateAgentSessionNativeSession,
   type AgentSession,
 } from "../agentSessionStore.js";
@@ -94,15 +95,18 @@ function pauseResponse(
   reason: string,
   search: Record<string, unknown>,
   agentRuntime?: ReturnType<typeof runtimeProjection>,
+  sources: ConversationSource[] = [],
+  retrySnapshot?: { question: string; sources: ConversationSource[] },
+  persist = true,
 ) {
-  pauseAgentSession(configDir, session.id, reason);
+  if (persist) pauseAgentSession(configDir, session.id, reason, retrySnapshot);
   return {
     ok: false,
     answer: "",
     provider: session.provider,
     model: session.model,
     sessionStatus: "paused" as const,
-    sources: [],
+    sources,
     remoteSources: [],
     connectorContext: { owner: "agent" as const, outputs: [] },
     agentRuntime,
@@ -120,23 +124,46 @@ export const askRouter = router({
       question: z.string().trim().min(1).max(MAX_QUESTION_CHARS),
       limit: z.number().int().positive().max(MAX_SOURCE_COUNT).optional(),
       sessionId: z.string().min(1),
+      retry: z.literal(true).optional(),
     }))
     .mutation(async ({ input, ctx }) => {
       const startedAt = Date.now();
       const session = getAgentSession(ctx.paths.configDir, input.sessionId);
       if (!session || session.purpose !== "ask") throw new Error("Ask session not found");
-      if (session.status === "paused") {
+      if (session.status === "paused" && !input.retry) {
         return {
           ...pauseResponse(
             ctx.paths.configDir,
             session,
             session.pausedReason || "Conversation is paused; retry the same provider or create a new conversation",
             { owner: session.provider === "xai" ? "yulu" : "agent", query: input.question, hits: [] },
+            undefined,
+            [],
+            undefined,
+            false,
           ),
           llmStatus: "paused" as const,
           elapsedMs: Date.now() - startedAt,
         };
       }
+
+      const retrySnapshot = input.retry ? session.retrySnapshot : undefined;
+      if (input.retry && (!retrySnapshot || retrySnapshot.question !== input.question)) {
+        return {
+          ...pauseResponse(
+            ctx.paths.configDir,
+            session,
+            "The persisted retry snapshot is unavailable or does not match this question",
+            { owner: session.provider === "xai" ? "yulu" : "agent", query: input.question, hits: [] },
+            undefined,
+            [],
+            undefined,
+            false,
+          ),
+          elapsedMs: Date.now() - startedAt,
+        };
+      }
+      const question = retrySnapshot?.question ?? input.question;
 
       if (session.provider === "xai") {
         if (!session.credentialSource) {
@@ -145,24 +172,29 @@ export const askRouter = router({
               ctx.paths.configDir,
               session,
               "Pinned xAI conversation credential identity is unavailable",
-              { owner: "yulu", query: input.question, hits: [] },
+              { owner: "yulu", query: question, hits: [] },
+              undefined,
+              [],
+              retrySnapshot ?? { question, sources: [] },
             ),
             elapsedMs: Date.now() - startedAt,
           };
         }
-        const search = await (ctx.localSearch ?? runSearchCli)({
-          query: input.question,
+        const search = retrySnapshot ? null : await (ctx.localSearch ?? runSearchCli)({
+          query: question,
           kinds: ["meeting_summary", "meeting_transcript"],
           limit: MAX_SOURCE_COUNT,
         }, ctx.paths.scriptDir);
-        const sources = normalizeConversationSources(search.hits);
-        const searchProjection = {
-          owner: "yulu" as const,
-          query: input.question,
-          sourceCount: sources.length,
-          telemetry: search.telemetry,
-          elapsedMs: search.elapsedMs,
-        };
+        const sources = retrySnapshot?.sources ?? normalizeConversationSources(search!.hits);
+        const searchProjection = retrySnapshot
+          ? { owner: "yulu" as const, query: question, sourceCount: sources.length, snapshot: "persisted" as const }
+          : {
+              owner: "yulu" as const,
+              query: question,
+              sourceCount: sources.length,
+              telemetry: search!.telemetry,
+              elapsedMs: search!.elapsedMs,
+            };
         if (sources.length === 0) {
           return {
             ok: false,
@@ -182,7 +214,15 @@ export const askRouter = router({
         }
         if (!ctx.xaiText) {
           return {
-            ...pauseResponse(ctx.paths.configDir, session, `Pinned conversation provider xai is unavailable for model ${session.model}`, searchProjection),
+            ...pauseResponse(
+              ctx.paths.configDir,
+              session,
+              `Pinned conversation provider xai is unavailable for model ${session.model}`,
+              searchProjection,
+              undefined,
+              sources,
+              { question, sources },
+            ),
             elapsedMs: Date.now() - startedAt,
           };
         }
@@ -191,7 +231,7 @@ export const askRouter = router({
             capability: "conversation",
             model: session.model,
             credentialSource: session.credentialSource,
-            input: xaiInput(session, input.question, sources),
+            input: xaiInput(session, question, sources),
           });
           if (result.model !== session.model) {
             throw new Error(`Pinned conversation model ${session.model} returned as ${result.model}`);
@@ -199,6 +239,7 @@ export const askRouter = router({
           if (result.credentialSource !== session.credentialSource) {
             throw new Error(`Pinned xAI credential ${session.credentialSource} returned as ${result.credentialSource}`);
           }
+          if (input.retry) resumeAgentSession(ctx.paths.configDir, session.id);
           return {
             ok: true,
             answer: result.text,
@@ -216,7 +257,15 @@ export const askRouter = router({
           };
         } catch (error) {
           return {
-            ...pauseResponse(ctx.paths.configDir, session, (error as Error).message, searchProjection),
+            ...pauseResponse(
+              ctx.paths.configDir,
+              session,
+              (error as Error).message,
+              searchProjection,
+              undefined,
+              sources,
+              { question, sources },
+            ),
             elapsedMs: Date.now() - startedAt,
           };
         }
@@ -228,7 +277,7 @@ export const askRouter = router({
         moviesDir: ctx.paths.moviesDir,
       });
       const agentRuntime = runtimeProjection(runtime);
-      const search = agentOwnedSearchProjection(input.question);
+      const search = agentOwnedSearchProjection(question);
       if (session.model !== "runtime-managed" || runtime.disabledReason || runtime.provider !== session.provider) {
         const current = runtime.disabledReason ? `${runtime.provider} (${runtime.disabledReason})` : runtime.provider;
         return {
@@ -238,6 +287,8 @@ export const askRouter = router({
             `Pinned conversation provider ${session.provider} does not match current Agent runtime ${current}`,
             search,
             agentRuntime,
+            [],
+            retrySnapshot ?? { question, sources: [] },
           ),
           elapsedMs: Date.now() - startedAt,
         };
@@ -247,7 +298,7 @@ export const askRouter = router({
         const result = await runAgentCliCommand({
           runtime,
           scriptDir: ctx.paths.scriptDir,
-          prompt: buildAgentQuestionPrompt(input.question, input.limit ?? MAX_SOURCE_COUNT),
+          prompt: buildAgentQuestionPrompt(question, input.limit ?? MAX_SOURCE_COUNT),
           timeoutMs: AGENT_TIMEOUT_MS,
           nativeSessionId: session.nativeSessionId,
           yuluSessionId: session.id,
@@ -265,10 +316,11 @@ export const askRouter = router({
           : (result.stderr || result.stdout || `Agent exited ${result.code}`).trim();
         if (error) {
           return {
-            ...pauseResponse(ctx.paths.configDir, session, error, search, agentRuntime),
+            ...pauseResponse(ctx.paths.configDir, session, error, search, agentRuntime, [], { question, sources: [] }),
             elapsedMs: Date.now() - startedAt,
           };
         }
+        if (input.retry) resumeAgentSession(ctx.paths.configDir, session.id);
         return {
           ok: true,
           answer,
@@ -287,7 +339,15 @@ export const askRouter = router({
         };
       } catch (error) {
         return {
-          ...pauseResponse(ctx.paths.configDir, session, (error as Error).message, search, agentRuntime),
+          ...pauseResponse(
+            ctx.paths.configDir,
+            session,
+            (error as Error).message,
+            search,
+            agentRuntime,
+            [],
+            { question, sources: [] },
+          ),
           elapsedMs: Date.now() - startedAt,
         };
       }

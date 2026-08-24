@@ -28,6 +28,22 @@ export const agentSessionRemoteSourceSchema = z.object({
   connected: z.boolean().optional(),
 });
 
+const agentSessionRetrySourceSchema = z.object({
+  ref: z.number(),
+  kind: z.enum(["meeting_summary", "meeting_transcript"]),
+  stem: z.string(),
+  title: z.string(),
+  recordedAt: z.string(),
+  sourcePath: z.string(),
+  snippet: z.string(),
+  url: z.string(),
+});
+
+const agentSessionRetrySnapshotSchema = z.object({
+  question: z.string().trim().min(1).max(2_000),
+  sources: z.array(agentSessionRetrySourceSchema).max(8),
+});
+
 export const agentSessionMessageInputSchema = z.object({
   role: z.enum(["user", "assistant"]),
   text: z.string().max(MAX_MESSAGE_CHARS),
@@ -49,6 +65,7 @@ const persistedSessionSchema = z.object({
   credentialSource: z.enum(["oauth", "api-key"]).optional(),
   status: z.enum(["active", "paused"]).optional(),
   pausedReason: z.string().max(1000).optional(),
+  retrySnapshot: agentSessionRetrySnapshotSchema.optional(),
   purpose: z.enum(["ask", "background"]).default("ask"),
   title: z.string(),
   createdAt: z.string(),
@@ -74,6 +91,7 @@ export type AgentSessionStore = z.infer<typeof storeSchema>;
 export type AgentSession = z.infer<typeof persistedSessionSchema>;
 export type AgentSessionMessage = z.infer<typeof persistedMessageSchema>;
 export type AgentSessionMessageInput = z.infer<typeof agentSessionMessageInputSchema>;
+export type AgentSessionRetrySnapshot = z.infer<typeof agentSessionRetrySnapshotSchema>;
 
 export interface AgentSessionHistoryMessage {
   role: "user" | "assistant";
@@ -317,11 +335,17 @@ function findMutableSession(store: AgentSessionStore, sessionId: string): AgentS
   return session;
 }
 
-export function pauseAgentSession(configDir: string, sessionId: string, reason: string): AgentSession {
+export function pauseAgentSession(
+  configDir: string,
+  sessionId: string,
+  reason: string,
+  retrySnapshot?: AgentSessionRetrySnapshot,
+): AgentSession {
   const store = readAgentSessionStore(configDir);
   const session = findMutableSession(store, sessionId);
   session.status = "paused";
   session.pausedReason = reason.slice(0, 1000);
+  if (retrySnapshot) session.retrySnapshot = agentSessionRetrySnapshotSchema.parse(retrySnapshot);
   session.updatedAt = nowIso();
   writeAgentSessionStore(configDir, store);
   return session;
@@ -332,6 +356,7 @@ export function resumeAgentSession(configDir: string, sessionId: string): AgentS
   const session = findMutableSession(store, sessionId);
   session.status = "active";
   delete session.pausedReason;
+  delete session.retrySnapshot;
   session.updatedAt = nowIso();
   writeAgentSessionStore(configDir, store);
   return session;

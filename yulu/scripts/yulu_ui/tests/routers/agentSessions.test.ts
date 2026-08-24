@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { agentSessionsRouter } from "../../src/routers/agentSessions.js";
 import { createCaller, type AppContext } from "../../src/trpc.js";
-import { pauseAgentSession, updateAgentSessionNativeSession } from "../../src/agentSessionStore.js";
+import { updateAgentSessionNativeSession } from "../../src/agentSessionStore.js";
 
 function makeCtx(configDir: string, config: Record<string, unknown> = {
   intelligence: { conversation: { provider: "agent", model: "runtime-managed" } },
@@ -107,13 +107,10 @@ describe("agentSessionsRouter", () => {
     });
 
     config.intelligence.conversation = { provider: "agent", model: "runtime-managed" };
-    pauseAgentSession(root, session.id, "request failed");
-    const resumed = await caller.resume({ id: session.id });
-    expect(resumed).toMatchObject({
+    expect(await caller.get({ id: session.id })).toMatchObject({
       provider: "xai",
       model: "grok-4.6-exact",
       credentialSource: "oauth",
-      status: "active",
     });
   });
 
