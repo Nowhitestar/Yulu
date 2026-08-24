@@ -150,7 +150,7 @@ export function ProviderSection({ tracker }: { tracker: SettingsRestartTracker }
         )}
         {(providers.error || authorize.error || cancelAuthorization.error || logoutOAuth.error || setApiKey.error || clearApiKey.error || authorization?.status === "failed") && (
           <div className="provider-status-note provider-status-note--bad" role="alert">
-            {providers.error?.message || authorize.error?.message || cancelAuthorization.error?.message || logoutOAuth.error?.message || setApiKey.error?.message || clearApiKey.error?.message || authorization?.message}
+            {t("settings.providers.connection.failed")}
           </div>
         )}
 
