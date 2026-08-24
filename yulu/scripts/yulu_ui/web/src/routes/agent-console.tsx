@@ -906,7 +906,11 @@ function AskMeetings({
   const sessionStatus = sessionStatusOverride ?? selectedSession?.status ?? selectedSessionSummary?.status ?? "active";
   const pausedReason = selectedSession?.pausedReason ?? selectedSessionSummary?.pausedReason;
   const identity = provider && model ? `${provider === "xai" ? "xAI" : provider} · ${model}` : null;
-  const conversationName = provider === "xai" ? "xAI" : agentName;
+  const conversationName = provider === "xai"
+    ? "xAI"
+    : draftSession
+      ? agentName
+      : provider ?? selectedSession?.agent ?? selectedSessionSummary?.agent ?? agentName;
   const sessionTitle = selectedSession?.title || selectedSessionSummary?.title || (draftSession ? "新对话" : "问本地会议");
   const sessionSub = selectedSessionSummary
     ? t("agentConsole.provider.session.messages", {
@@ -916,7 +920,9 @@ function AskMeetings({
     : draftSession
       ? t("agentConsole.provider.session.draft")
       : t("agentConsole.provider.session.default");
-  const providerHeader = t("agentConsole.provider.header", {
+  const providerHeader = t(draftSession
+    ? "agentConsole.provider.draftHeader"
+    : "agentConsole.provider.header", {
     provider: conversationName,
     session: sessionSub,
   });
