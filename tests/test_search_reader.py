@@ -231,6 +231,9 @@ def _make_natural_question_corpus(tmp_path: Path):
     (root / "PhoenixReview_20260825_010400.transcript.txt").write_text(
         "Arun owns review Oct18. Phoenix readiness decision.", encoding="utf-8"
     )
+    (root / "Generic_20260825_010500.transcript.txt").write_text(
+        "What did happen yesterday.", encoding="utf-8"
+    )
     return db, root
 
 
@@ -262,6 +265,22 @@ def test_search_does_not_execute_user_supplied_fts_operators(tmp_path, monkeypat
 
     hits, _tel = search(
         'Phoenix AND/OR "review"? NOT (fallback)',
+        db_path=db,
+    )
+
+    assert {hit.stem for hit in hits} == {
+        "PhoenixLaunch_20260825_010300",
+        "PhoenixReview_20260825_010400",
+    }
+
+
+def test_search_does_not_retrieve_private_distractors_from_question_glue(tmp_path, monkeypatch):
+    db, root = _make_natural_question_corpus(tmp_path)
+    from search import reader as reader_mod
+    monkeypatch.setattr(reader_mod, "CORPUS_ROOT", root)
+
+    hits, _tel = search(
+        "What did we decide about Phoenix?",
         db_path=db,
     )
 
