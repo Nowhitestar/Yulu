@@ -879,6 +879,7 @@ function AskMeetings({
   const pinSession = trpc.agentSessions.pin.useMutation();
   const archiveSession = trpc.agentSessions.archive.useMutation();
   const sessionsQuery = trpc.agentSessions.list.useQuery();
+  const configQuery = trpc.config.get.useQuery();
   const [input, setInput] = useState("");
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [draftSession, setDraftSession] = useState(true);
@@ -893,8 +894,13 @@ function AskMeetings({
   const sessions = (sessionsQuery.data?.sessions as AgentSessionSummary[] | undefined) ?? [];
   const selectedSession = (sessionQuery.data as AgentSession | null | undefined) ?? null;
   const selectedSessionSummary = selectedSessionId ? sessions.find((session) => session.id === selectedSessionId) : null;
-  const provider = selectedSession?.provider ?? selectedSessionSummary?.provider;
-  const model = selectedSession?.model ?? selectedSessionSummary?.model;
+  const configuredConversation = asConfigRecord(
+    asConfigRecord(configQuery.data?.intelligence).conversation,
+  );
+  const draftXai = draftSession && configuredConversation.provider === "xai";
+  const provider = selectedSession?.provider ?? selectedSessionSummary?.provider ?? (draftXai ? "xai" : undefined);
+  const model = selectedSession?.model ?? selectedSessionSummary?.model
+    ?? (draftXai && typeof configuredConversation.model === "string" ? configuredConversation.model : undefined);
   const sessionStatus = sessionStatusOverride ?? selectedSession?.status ?? selectedSessionSummary?.status ?? "active";
   const pausedReason = selectedSession?.pausedReason ?? selectedSessionSummary?.pausedReason;
   const identity = provider && model ? `${provider === "xai" ? "xAI" : provider} · ${model}` : null;
