@@ -123,6 +123,8 @@ interface PreparedRecordingTask {
   sendToNotion: boolean;
   destinationHint: string;
   agentProvider: string;
+  summaryProvider: string;
+  summaryModel: string;
   instructions: string;
   trigger: AgentTaskTrigger;
 }
@@ -218,6 +220,10 @@ export class RecordingPipeline {
       sendToNotion: input.sendToNotion === true,
       destinationHint: pipelineConfig(config).notion_destination,
       agentProvider: runtime.provider,
+      summaryProvider: config.intelligence.summary.provider === "agent"
+        ? runtime.provider
+        : config.intelligence.summary.provider,
+      summaryModel: config.intelligence.summary.model,
       instructions,
       trigger: "automatic",
     };
@@ -236,6 +242,8 @@ export class RecordingPipeline {
       sendToNotion: input.sendToNotion,
       destinationHint: input.destinationHint,
       agentProvider: input.agentProvider,
+      summaryProvider: input.summaryProvider,
+      summaryModel: input.summaryModel,
       instructions: input.instructions,
       trigger: input.trigger,
     });
@@ -335,7 +343,7 @@ export class RecordingPipeline {
       // but an idle dispatcher must remain a cheap Host-store operation.
       if (!this.options.store.hasDispatchableTask()) return;
       const gateway = this.resolveGateway(config);
-      const task = this.options.store.claimNext(gateway.provider);
+      const task = this.options.store.claimNext();
       if (!task || !task.leaseToken) return;
       const canContinue = await this.runTask(gateway, task, task.leaseToken);
       if (!canContinue) return;

@@ -418,7 +418,7 @@ describe("server", () => {
     const { taskId } = await response.json() as { taskId: string };
 
     const secondWriter = new HostStore(join(configDir, "host.sqlite"));
-    const claimed = secondWriter.claim(taskId, "hermes");
+    const claimed = secondWriter.claim(taskId);
     expect(claimed?.id).toBe(taskId);
     const workspace = join(configDir, "agent-tasks", taskId);
     mkdirSync(workspace, { recursive: true });

@@ -68,6 +68,8 @@ describe("RecordingPipeline", () => {
       sendToNotion: false,
       destinationHint: "Yulu Meeting",
       agentProvider: "hermes",
+      summaryProvider: "hermes",
+      summaryModel: "runtime-managed",
       trigger: "manual",
     }).task : null;
     const available = opts.available !== false;
@@ -483,6 +485,8 @@ describe("RecordingPipeline", () => {
       sendToNotion: false,
       destinationHint: "Yulu Meeting",
       agentProvider: "hermes",
+      summaryProvider: "hermes",
+      summaryModel: "runtime-managed",
     }).task;
     const awaitingPath = join(moviesDir, "Awaiting_20260711_120001.wav");
     writeFileSync(awaitingPath, Buffer.alloc(44));
@@ -494,6 +498,8 @@ describe("RecordingPipeline", () => {
       sendToNotion: false,
       destinationHint: "Yulu Meeting",
       agentProvider: "hermes",
+      summaryProvider: "hermes",
+      summaryModel: "runtime-managed",
     }).task;
     store!.markAwaitingAgent(awaiting.id, "Hermes was offline");
 
@@ -504,7 +510,7 @@ describe("RecordingPipeline", () => {
       expect(store!.getTask(awaiting.id)?.state).toBe("awaiting_policy");
     });
     expect(transcribe).not.toHaveBeenCalled();
-    expect(store!.claimNext("hermes")).toBeNull();
+    expect(store!.claimNext()).toBeNull();
   });
 
   it("reuses the same task and delivery marker when reconciling an uncertain Notion result", async () => {

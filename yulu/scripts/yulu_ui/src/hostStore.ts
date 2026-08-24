@@ -8,6 +8,7 @@ import type { TranscriptionLanguage } from "./realtimeTranscription.js";
 export type AgentTaskState =
   | "queued"
   | "awaiting_agent"
+  | "awaiting_provider"
   | "awaiting_policy"
   | "running"
   | "transcript_committed"
@@ -45,6 +46,8 @@ export interface AgentTask {
   destinationHint: string;
   instructions: string;
   agentProvider: string;
+  summaryProvider: string;
+  summaryModel: string;
   nativeSessionId: string | null;
   artifactSessionId: string | null;
   deliverySessionId: string | null;
@@ -109,6 +112,8 @@ interface TaskRow {
   destination_hint: string;
   instructions: string;
   agent_provider: string;
+  summary_provider: string;
+  summary_model: string;
   native_session_id: string | null;
   artifact_session_id: string | null;
   delivery_session_id: string | null;
@@ -138,6 +143,8 @@ function toTask(row: TaskRow): AgentTask {
     destinationHint: row.destination_hint,
     instructions: row.instructions,
     agentProvider: row.agent_provider,
+    summaryProvider: row.summary_provider,
+    summaryModel: row.summary_model,
     nativeSessionId: row.native_session_id,
     artifactSessionId: row.artifact_session_id,
     deliverySessionId: row.delivery_session_id,
@@ -201,6 +208,8 @@ export class HostStore {
     sendToNotion: boolean;
     destinationHint: string;
     agentProvider: string;
+    summaryProvider: string;
+    summaryModel: string;
     instructions?: string;
     trigger?: AgentTaskTrigger;
   }): { task: AgentTask; created: boolean } {
@@ -212,7 +221,7 @@ export class HostStore {
       const active = this.db.prepare(`
         SELECT * FROM agent_tasks
         WHERE recording_stem = ?
-          AND state IN ('queued', 'awaiting_agent', 'awaiting_policy', 'running',
+          AND state IN ('queued', 'awaiting_agent', 'awaiting_provider', 'awaiting_policy', 'running',
                         'transcript_committed', 'artifacts_committed', 'sending', 'delivery_reported', 'delivery_unverified')
         ORDER BY updated_at DESC, created_at DESC LIMIT 1
       `).get(input.recordingStem) as TaskRow | undefined;
@@ -228,9 +237,10 @@ export class HostStore {
       this.db.prepare(`
         INSERT OR IGNORE INTO agent_tasks (
           id, idempotency_key, recording_stem, title, audio_path, transcription_language, trigger,
-          state, phase, send_to_notion, destination_hint, agent_provider, instructions,
+          state, phase, send_to_notion, destination_hint, agent_provider,
+          summary_provider, summary_model, instructions,
           attempt, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', 'queued', ?, ?, ?, ?, 0, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', 'queued', ?, ?, ?, ?, ?, ?, 0, ?, ?)
       `).run(
         id,
         input.idempotencyKey,
@@ -242,6 +252,8 @@ export class HostStore {
         input.sendToNotion ? 1 : 0,
         input.destinationHint,
         input.agentProvider,
+        input.summaryProvider,
+        input.summaryModel,
         input.instructions ?? "",
         timestamp,
         timestamp,
@@ -251,6 +263,8 @@ export class HostStore {
       if (task.id === id) this.appendEvent(task.id, "task.queued", {
         sendToNotion: input.sendToNotion,
         trigger: input.trigger ?? "automatic",
+        summaryProvider: input.summaryProvider,
+        summaryModel: input.summaryModel,
       });
       return { task, created: task.id === id };
     });
@@ -281,7 +295,7 @@ export class HostStore {
       const rows = this.db.prepare(`
         SELECT id FROM agent_tasks
         WHERE idempotency_key LIKE 'legacy-agent-queue:%'
-          AND state IN ('queued', 'awaiting_agent', 'awaiting_policy', 'running', 'transcript_committed', 'artifacts_committed')
+          AND state IN ('queued', 'awaiting_agent', 'awaiting_provider', 'awaiting_policy', 'running', 'transcript_committed', 'artifacts_committed')
       `).all() as Array<{ id: string }>;
       const timestamp = now();
       for (const row of rows) {
@@ -305,7 +319,7 @@ export class HostStore {
       const rows = this.db.prepare(`
         SELECT * FROM agent_tasks
         WHERE trigger = 'manual' AND (
-          state IN ('queued', 'awaiting_agent', 'awaiting_policy', 'running',
+          state IN ('queued', 'awaiting_agent', 'awaiting_provider', 'awaiting_policy', 'running',
                     'transcript_committed', 'artifacts_committed', 'sending', 'delivery_reported')
           OR (state = 'failed' AND error = ?)
         )
@@ -370,11 +384,11 @@ export class HostStore {
       }
       const timestamp = now();
       for (const row of rows) {
-        if (!['queued', 'awaiting_agent', 'awaiting_policy'].includes(row.state)) continue;
+        if (!['queued', 'awaiting_agent', 'awaiting_provider', 'awaiting_policy'].includes(row.state)) continue;
         this.db.prepare(`
           UPDATE agent_tasks SET state = 'cancelled', phase = 'failed', lease_token = NULL,
             error = 'Recording deleted before Agent task started', updated_at = ?
-          WHERE id = ? AND state IN ('queued', 'awaiting_agent', 'awaiting_policy')
+          WHERE id = ? AND state IN ('queued', 'awaiting_agent', 'awaiting_provider', 'awaiting_policy')
         `).run(timestamp, row.id);
         this.appendEvent(row.id, "task.cancelled", { reason: "recording_deleted" });
       }
@@ -398,7 +412,7 @@ export class HostStore {
     return purge();
   }
 
-  claimNext(provider: string): AgentTask | null {
+  claimNext(): AgentTask | null {
     const claim = this.db.transaction(() => {
       const row = this.db.prepare(`
         SELECT * FROM agent_tasks
@@ -412,13 +426,16 @@ export class HostStore {
         UPDATE agent_tasks
         SET state = CASE WHEN state = 'transcript_committed' THEN 'transcript_committed' ELSE 'running' END,
             phase = CASE WHEN state = 'transcript_committed' THEN 'summarizing' ELSE 'transcribing' END,
-            agent_provider = ?,
             native_session_id = NULL, artifact_session_id = NULL, delivery_session_id = NULL,
             lease_token = ?, attempt = attempt + 1, error = NULL, audit_json = NULL, updated_at = ?
         WHERE id = ? AND state IN ('queued', 'awaiting_agent', 'transcript_committed')
-      `).run(provider, lease, timestamp, row.id);
+      `).run(lease, timestamp, row.id);
       if (result.changes !== 1) return null;
-      this.appendEvent(row.id, "task.claimed", { provider, attempt: row.attempt + 1 });
+      this.appendEvent(row.id, "task.claimed", {
+        summaryProvider: row.summary_provider,
+        summaryModel: row.summary_model,
+        attempt: row.attempt + 1,
+      });
       return this.getTask(row.id);
     });
     return claim();
@@ -432,7 +449,7 @@ export class HostStore {
     `).get() !== undefined;
   }
 
-  claim(id: string, provider: string): AgentTask | null {
+  claim(id: string): AgentTask | null {
     const claim = this.db.transaction(() => {
       const row = this.db.prepare(
         "SELECT * FROM agent_tasks WHERE id = ? AND state IN ('queued', 'awaiting_agent', 'transcript_committed')",
@@ -443,13 +460,16 @@ export class HostStore {
         UPDATE agent_tasks
         SET state = CASE WHEN state = 'transcript_committed' THEN 'transcript_committed' ELSE 'running' END,
             phase = CASE WHEN state = 'transcript_committed' THEN 'summarizing' ELSE 'transcribing' END,
-            agent_provider = ?,
             native_session_id = NULL, artifact_session_id = NULL, delivery_session_id = NULL,
             lease_token = ?, attempt = attempt + 1, error = NULL, audit_json = NULL, updated_at = ?
         WHERE id = ? AND state IN ('queued', 'awaiting_agent', 'transcript_committed')
-      `).run(provider, lease, now(), id);
+      `).run(lease, now(), id);
       if (result.changes !== 1) return null;
-      this.appendEvent(id, "task.claimed", { provider, attempt: row.attempt + 1 });
+      this.appendEvent(id, "task.claimed", {
+        summaryProvider: row.summary_provider,
+        summaryModel: row.summary_model,
+        attempt: row.attempt + 1,
+      });
       return this.getTask(id);
     });
     return claim();
@@ -535,6 +555,26 @@ export class HostStore {
     `).run(id, id, reason.slice(0, 1000), now(), id, leaseToken);
     if (result.changes !== 1) throw new Error(`task ${id} changed before it could await Agent`);
     this.appendEvent(id, "task.awaiting_agent", { reason });
+    return this.getTask(id)!;
+  }
+
+  releaseToAwaitingProvider(id: string, leaseToken: string, reason: string): AgentTask {
+    const task = this.requireLease(id, leaseToken);
+    if (task.state !== "transcript_committed" || !this.listArtifacts(id).some((artifact) => artifact.kind === "transcript")) {
+      throw new Error(`task ${id} cannot await provider before transcript commit`);
+    }
+    const safeReason = reason.slice(0, 1000);
+    const result = this.db.prepare(`
+      UPDATE agent_tasks SET state = 'awaiting_provider', phase = 'summarizing',
+        error = ?, lease_token = NULL, updated_at = ?
+      WHERE id = ? AND lease_token = ? AND state = 'transcript_committed'
+    `).run(safeReason, now(), id, leaseToken);
+    if (result.changes !== 1) throw new Error(`task ${id} changed before it could await provider`);
+    this.appendEvent(id, "task.awaiting_provider", {
+      reason: safeReason,
+      summaryProvider: task.summaryProvider,
+      summaryModel: task.summaryModel,
+    });
     return this.getTask(id)!;
   }
 
@@ -917,7 +957,7 @@ export class HostStore {
     const retry = this.db.transaction(() => {
       const task = this.getTask(id);
       if (!task) throw new Error(`task not found: ${id}`);
-      if (!["failed", "awaiting_agent"].includes(task.state)) {
+      if (!["failed", "awaiting_agent", "awaiting_provider"].includes(task.state)) {
         throw new Error(`task ${id} cannot retry from ${task.state}`);
       }
       const competing = this.competingActiveTask(task.recordingStem, id);
@@ -925,7 +965,10 @@ export class HostStore {
         throw new Error(`recording ${task.recordingStem} already has active Agent task ${competing.id}`);
       }
       this.db.prepare(`
-        UPDATE agent_tasks SET state = 'queued', phase = 'queued', lease_token = NULL,
+        UPDATE agent_tasks SET
+          state = CASE WHEN state = 'awaiting_provider' THEN 'transcript_committed' ELSE 'queued' END,
+          phase = CASE WHEN state = 'awaiting_provider' THEN 'summarizing' ELSE 'queued' END,
+          lease_token = NULL,
           native_session_id = NULL, artifact_session_id = NULL, delivery_session_id = NULL,
           attempt = 0, error = NULL, audit_json = NULL, updated_at = ? WHERE id = ?
       `).run(now(), id);
@@ -939,7 +982,7 @@ export class HostStore {
     const row = this.db.prepare(`
       SELECT * FROM agent_tasks
       WHERE recording_stem = ? AND id != ?
-        AND state IN ('queued', 'awaiting_agent', 'awaiting_policy', 'running',
+        AND state IN ('queued', 'awaiting_agent', 'awaiting_provider', 'awaiting_policy', 'running',
                       'transcript_committed', 'artifacts_committed', 'sending', 'delivery_reported', 'delivery_unverified')
       ORDER BY updated_at DESC, created_at DESC LIMIT 1
     `).get(recordingStem, excludingId) as TaskRow | undefined;
@@ -1008,6 +1051,8 @@ export class HostStore {
         send_to_notion INTEGER NOT NULL DEFAULT 0,
         destination_hint TEXT NOT NULL DEFAULT '',
         agent_provider TEXT NOT NULL DEFAULT 'hermes',
+        summary_provider TEXT NOT NULL,
+        summary_model TEXT NOT NULL,
         instructions TEXT NOT NULL DEFAULT '',
         native_session_id TEXT,
         artifact_session_id TEXT,
@@ -1076,5 +1121,15 @@ export class HostStore {
     if (!columns.some((column) => column.name === "transcription_language")) {
       this.db.exec("ALTER TABLE agent_tasks ADD COLUMN transcription_language TEXT NOT NULL DEFAULT 'zh'");
     }
+    if (!columns.some((column) => column.name === "summary_provider")) {
+      this.db.exec("ALTER TABLE agent_tasks ADD COLUMN summary_provider TEXT NOT NULL DEFAULT 'agent'");
+    }
+    if (!columns.some((column) => column.name === "summary_model")) {
+      this.db.exec("ALTER TABLE agent_tasks ADD COLUMN summary_model TEXT NOT NULL DEFAULT 'runtime-managed'");
+    }
+    this.db.exec(`
+      UPDATE agent_tasks SET summary_provider = agent_provider
+      WHERE summary_provider = 'agent'
+    `);
   }
 }
