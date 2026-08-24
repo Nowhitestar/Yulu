@@ -26,6 +26,61 @@ export interface SearchResponse {
   telemetry: Record<string, unknown>;
 }
 
+export interface ConversationSource {
+  ref: number;
+  kind: SearchKind;
+  stem: string;
+  title: string;
+  recordedAt: string;
+  sourcePath: string;
+  snippet: string;
+  url: string;
+}
+
+const MAX_CONVERSATION_SOURCES = 8;
+const MAX_CONVERSATION_EXCERPT_CHARS = 1_200;
+const MAX_CONVERSATION_CONTEXT_CHARS = 6_000;
+
+function boundedText(value: string, maxChars: number): string {
+  let text = value.slice(0, maxChars);
+  if (/[\uD800-\uDBFF]$/.test(text)) text = text.slice(0, -1);
+  return text.trim();
+}
+
+export function normalizeConversationSources(hits: SearchHit[]): ConversationSource[] {
+  const sources: ConversationSource[] = [];
+  const seen = new Set<string>();
+  let remainingChars = MAX_CONVERSATION_CONTEXT_CHARS;
+  for (const hit of hits) {
+    if (sources.length >= MAX_CONVERSATION_SOURCES || remainingChars === 0) break;
+    if (!ALLOWED_KINDS.includes(hit.kind as SearchKind)) continue;
+    const kind = hit.kind as SearchKind;
+    const stem = hit.stem.trim();
+    const key = `${stem}\u0000${kind}`;
+    if (!stem || seen.has(key)) continue;
+    const cleaned = hit.snippet
+      .replace(/\[\/?hit\]/gi, "")
+      .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    const snippet = boundedText(cleaned, Math.min(MAX_CONVERSATION_EXCERPT_CHARS, remainingChars));
+    if (!snippet) continue;
+    seen.add(key);
+    remainingChars -= snippet.length;
+    sources.push({
+      ref: sources.length + 1,
+      kind,
+      stem,
+      title: hit.meetingTitle.trim() || stem,
+      recordedAt: hit.recordedAt.trim(),
+      sourcePath: hit.sourcePath,
+      snippet,
+      url: `/inbox/${encodeURIComponent(stem)}`,
+    });
+  }
+  return sources;
+}
+
 function normalizeHit(raw: Record<string, unknown>): SearchHit {
   return {
     kind: String(raw.kind ?? ""),
