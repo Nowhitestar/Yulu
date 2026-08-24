@@ -42,6 +42,15 @@ log = logging.getLogger(__name__)
 MAX_LIMIT = 100
 
 _QUERY_TERM_RE = re.compile(r"[^\W_]+", re.UNICODE)
+_LOW_SIGNAL_QUERY_TERMS = frozenset({
+    "about", "across", "after", "again", "against", "all", "also", "and",
+    "any", "are", "before", "between", "both", "but", "can", "could", "did",
+    "does", "each", "for", "from", "had", "has", "have", "how", "into", "its",
+    "made", "meeting", "meetings", "near", "not", "our", "ours", "should", "than",
+    "that", "the", "their", "them", "then", "there", "these", "they", "this",
+    "those", "through", "was", "were", "what", "when", "where", "which", "who",
+    "why", "will", "with", "would", "your",
+})
 
 # File-suffix → indexable? The sweep only walks .transcript.txt and
 # .summary.md (and slug-tagged variants). Realtime / raw / per-channel
@@ -186,18 +195,21 @@ def _literal_fts_query(query: str) -> str:
     executed as operators. OR keeps a natural question useful when its answer
     is distributed across multiple meetings.
     """
+    literal_tokens = _QUERY_TERM_RE.findall(query)
     terms: list[str] = []
     seen: set[str] = set()
-    for term in _QUERY_TERM_RE.findall(query):
+    for term in literal_tokens:
         if len(term) < 3:
             continue
         key = term.casefold()
-        if key in seen:
+        if key in _LOW_SIGNAL_QUERY_TERMS or key in seen:
             continue
         seen.add(key)
         terms.append(term)
     if not terms:
-        return f'"{query.replace(chr(34), chr(34) * 2)}"'
+        literal_phrase = " ".join(literal_tokens) or query
+        escaped_phrase = literal_phrase.replace('"', '""')
+        return f'"{escaped_phrase}"'
     return " OR ".join(f'"{term}"' for term in terms)
 
 
