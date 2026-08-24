@@ -7,6 +7,7 @@ import {
   createAgentSession,
   getAgentSession,
   pauseAgentSession,
+  projectAgentSessionHistory,
   readAgentSessionStore,
   resumeAgentSession,
   storePath,
@@ -148,5 +149,34 @@ describe("agentSessionStore", () => {
       status: "paused",
       pausedReason: "selected model unavailable",
     });
+  });
+
+  it("projects only a bounded local message tail without source metadata", () => {
+    const root = mkdtempSync(join(tmpdir(), "agent-session-store-"));
+    roots.push(root);
+    const created = createAgentSession(root, {
+      purpose: "ask",
+      provider: "xai",
+      model: "grok-4.6",
+    });
+    for (let index = 0; index < 14; index += 1) {
+      appendAgentSessionMessage(root, created.id, {
+        role: index % 2 === 0 ? "user" : "assistant",
+        text: `${index}:${"界".repeat(1_100)}`,
+        sources: [{ sourcePath: `/private/source-${index}.md`, snippet: "private source" }],
+        remoteSources: [{ channel: "notion", detail: "private connector output" }],
+      });
+    }
+    appendAgentSessionMessage(root, created.id, { role: "user", text: "current question" });
+
+    const history = projectAgentSessionHistory(getAgentSession(root, created.id)!, "current question");
+
+    expect(history.length).toBeLessThanOrEqual(12);
+    expect(history.reduce((total, message) => total + message.content.length, 0)).toBeLessThanOrEqual(12_000);
+    expect(history.at(-1)?.content).toContain("13:");
+    expect(history.some((message) => message.content === "current question")).toBe(false);
+    expect(history.every((message) => Object.keys(message).sort().join(",") === "content,role")).toBe(true);
+    expect(JSON.stringify(history)).not.toContain("sourcePath");
+    expect(JSON.stringify(history)).not.toContain("connector");
   });
 });
