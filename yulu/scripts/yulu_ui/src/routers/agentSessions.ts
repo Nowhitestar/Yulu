@@ -36,13 +36,18 @@ export const agentSessionsRouter = router({
       agent: z.string().min(1).optional(),
       title: z.string().max(48).optional(),
     }))
-    .mutation(({ ctx, input }) => {
+    .mutation(async ({ ctx, input }) => {
       const config = ctx.config.read();
       const selection = config.intelligence.conversation;
       if (selection.provider === "xai") {
+        const connection = await ctx.xaiCredentials?.status();
+        if (!connection?.connected || !connection.source) {
+          throw new Error("Connect xAI before starting an xAI conversation");
+        }
         return createAgentSession(ctx.paths.configDir, {
           provider: "xai",
           model: selection.model,
+          credentialSource: connection.source,
           title: input.title,
           purpose: "ask",
         });

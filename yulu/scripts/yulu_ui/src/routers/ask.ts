@@ -139,6 +139,17 @@ export const askRouter = router({
       }
 
       if (session.provider === "xai") {
+        if (!session.credentialSource) {
+          return {
+            ...pauseResponse(
+              ctx.paths.configDir,
+              session,
+              "Pinned xAI conversation credential identity is unavailable",
+              { owner: "yulu", query: input.question, hits: [] },
+            ),
+            elapsedMs: Date.now() - startedAt,
+          };
+        }
         const search = await (ctx.localSearch ?? runSearchCli)({
           query: input.question,
           kinds: ["meeting_summary", "meeting_transcript"],
@@ -179,10 +190,14 @@ export const askRouter = router({
           const result = await ctx.xaiText.request({
             capability: "conversation",
             model: session.model,
+            credentialSource: session.credentialSource,
             input: xaiInput(session, input.question, sources),
           });
           if (result.model !== session.model) {
             throw new Error(`Pinned conversation model ${session.model} returned as ${result.model}`);
+          }
+          if (result.credentialSource !== session.credentialSource) {
+            throw new Error(`Pinned xAI credential ${session.credentialSource} returned as ${result.credentialSource}`);
           }
           return {
             ok: true,

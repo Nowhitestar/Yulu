@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 
-const STORE_VERSION = 2;
+const STORE_VERSION = 3;
 const STORE_FILE = "agent-sessions.json";
 const MAX_TITLE_CHARS = 48;
 const MAX_MESSAGE_CHARS = 80_000;
@@ -46,6 +46,7 @@ const persistedSessionSchema = z.object({
   agent: z.string(),
   provider: z.string().trim().min(1).max(128).optional(),
   model: z.string().trim().min(1).max(128).optional(),
+  credentialSource: z.enum(["oauth", "api-key"]).optional(),
   status: z.enum(["active", "paused"]).optional(),
   pausedReason: z.string().max(1000).optional(),
   purpose: z.enum(["ask", "background"]).default("ask"),
@@ -167,7 +168,7 @@ export function createAgentSession(
     title?: string;
     runtimeLabel?: string;
   } & (
-    { purpose?: "ask"; provider: string; model: string }
+    { purpose?: "ask"; provider: string; model: string; credentialSource?: "oauth" | "api-key" }
     | { purpose: "background"; agent: string }
   ),
 ): AgentSession {
@@ -185,6 +186,9 @@ export function createAgentSession(
     agent: identity.provider,
     provider: identity.provider,
     model: identity.model,
+    ...(input.purpose !== "background" && input.credentialSource
+      ? { credentialSource: input.credentialSource }
+      : {}),
     status: "active",
     purpose,
     title: titleFromText(input.title ?? ""),

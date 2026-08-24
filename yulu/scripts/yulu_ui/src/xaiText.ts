@@ -19,6 +19,7 @@ export interface XaiTextMessage {
 export interface XaiTextRequest {
   capability: XaiTextCapability;
   model: string;
+  credentialSource?: XaiCredentialSource;
   input: XaiTextMessage[];
   maxOutputTokens?: number;
 }
@@ -73,6 +74,17 @@ function outputText(payload: unknown): string {
   return text;
 }
 
+function outputModel(payload: unknown): string {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    throw new Error("xAI text response was invalid");
+  }
+  const model = (payload as { model?: unknown }).model;
+  if (typeof model !== "string" || !model.trim() || model.length > 128) {
+    throw new Error("xAI text response model was invalid");
+  }
+  return model.trim();
+}
+
 async function readBoundedResponse(response: Response): Promise<string> {
   const contentLength = Number(response.headers.get("content-length"));
   if (Number.isFinite(contentLength) && contentLength > MAX_RESPONSE_BYTES) {
@@ -113,6 +125,9 @@ export class XaiTextClient {
   async request(request: XaiTextRequest): Promise<XaiTextResult> {
     const { model, maxOutputTokens } = validateRequest(request);
     const credential = await this.credentials.resolve();
+    if (request.credentialSource && credential.source !== request.credentialSource) {
+      throw new Error(`Pinned xAI credential ${request.credentialSource} does not match resolved credential ${credential.source}`);
+    }
     let response: Response;
     try {
       response = await this.fetchFn(XAI_RESPONSES_URL, {
@@ -141,9 +156,13 @@ export class XaiTextClient {
     let payload: unknown;
     try { payload = JSON.parse(raw); }
     catch { throw new Error("xAI text response was invalid"); }
+    const responseModel = outputModel(payload);
+    if (responseModel !== model) {
+      throw new Error(`Pinned xAI model ${model} does not match response model ${responseModel}`);
+    }
     return {
       text: outputText(payload),
-      model,
+      model: responseModel,
       credentialSource: credential.source,
     };
   }
