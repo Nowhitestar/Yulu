@@ -449,6 +449,11 @@ export class RecordingPipeline {
         this.options.store.recordTranscript(task.id, leaseToken, record);
         this.options.pubsub.publish("recordings-changed", { reason: "changed" });
       }
+      if (gateway.provider !== task.summaryProvider) {
+        throw new AgentUnavailableError(
+          `Pinned Summary Provider ${task.summaryProvider} is unavailable for model ${task.summaryModel}`,
+        );
+      }
       const gatewayHealth = gateway.health();
       if (!gatewayHealth.available) {
         throw new AgentUnavailableError(gatewayHealth.reason ?? "Summary Agent is unavailable");
