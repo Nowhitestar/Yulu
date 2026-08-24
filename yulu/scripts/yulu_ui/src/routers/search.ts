@@ -40,11 +40,20 @@ export interface ConversationSource {
 const MAX_CONVERSATION_SOURCES = 8;
 const MAX_CONVERSATION_EXCERPT_CHARS = 1_200;
 const MAX_CONVERSATION_CONTEXT_CHARS = 6_000;
+const MAX_CONVERSATION_TITLE_CHARS = 200;
+const MAX_CONVERSATION_RECORDED_AT_CHARS = 64;
 
 function boundedText(value: string, maxChars: number): string {
   let text = value.slice(0, maxChars);
   if (/[\uD800-\uDBFF]$/.test(text)) text = text.slice(0, -1);
   return text.trim();
+}
+
+function cleanedText(value: string): string {
+  return value
+    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 export function normalizeConversationSources(hits: SearchHit[]): ConversationSource[] {
@@ -58,21 +67,25 @@ export function normalizeConversationSources(hits: SearchHit[]): ConversationSou
     const stem = hit.stem.trim();
     const key = `${stem}\u0000${kind}`;
     if (!stem || seen.has(key)) continue;
-    const cleaned = hit.snippet
-      .replace(/\[\/?hit\]/gi, "")
-      .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, " ")
-      .replace(/\s+/g, " ")
-      .trim();
-    const snippet = boundedText(cleaned, Math.min(MAX_CONVERSATION_EXCERPT_CHARS, remainingChars));
+    const title = boundedText(
+      cleanedText(hit.meetingTitle) || stem,
+      MAX_CONVERSATION_TITLE_CHARS,
+    );
+    const recordedAt = boundedText(cleanedText(hit.recordedAt), MAX_CONVERSATION_RECORDED_AT_CHARS);
+    const metadataChars = title.length + recordedAt.length + kind.length;
+    const snippetBudget = Math.min(MAX_CONVERSATION_EXCERPT_CHARS, remainingChars - metadataChars);
+    if (snippetBudget <= 0) continue;
+    const cleaned = cleanedText(hit.snippet.replace(/\[\/?hit\]/gi, ""));
+    const snippet = boundedText(cleaned, snippetBudget);
     if (!snippet) continue;
     seen.add(key);
-    remainingChars -= snippet.length;
+    remainingChars -= metadataChars + snippet.length;
     sources.push({
       ref: sources.length + 1,
       kind,
       stem,
-      title: hit.meetingTitle.trim() || stem,
-      recordedAt: hit.recordedAt.trim(),
+      title,
+      recordedAt,
       sourcePath: hit.sourcePath,
       snippet,
       url: `/inbox/${encodeURIComponent(stem)}`,

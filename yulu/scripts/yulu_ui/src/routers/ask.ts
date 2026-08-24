@@ -8,6 +8,7 @@ import {
   resumeAgentSession,
   updateAgentSessionNativeSession,
   type AgentSession,
+  type AgentSessionRetrySnapshot,
 } from "../agentSessionStore.js";
 import { runAgentCliCommand } from "../agentCliRunner.js";
 import { normalizeConversationSources, runSearchCli, type ConversationSource } from "./search.js";
@@ -96,7 +97,7 @@ function pauseResponse(
   search: Record<string, unknown>,
   agentRuntime?: ReturnType<typeof runtimeProjection>,
   sources: ConversationSource[] = [],
-  retrySnapshot?: { question: string; sources: ConversationSource[] },
+  retrySnapshot?: AgentSessionRetrySnapshot,
   persist = true,
 ) {
   if (persist) pauseAgentSession(configDir, session.id, reason, retrySnapshot);
@@ -148,6 +149,9 @@ export const askRouter = router({
       }
 
       const retrySnapshot = input.retry ? session.retrySnapshot : undefined;
+      if (input.retry && session.status !== "paused") {
+        throw new Error("Only a paused conversation can retry its persisted snapshot");
+      }
       if (input.retry && (!retrySnapshot || retrySnapshot.question !== input.question)) {
         return {
           ...pauseResponse(
@@ -180,22 +184,42 @@ export const askRouter = router({
             elapsedMs: Date.now() - startedAt,
           };
         }
-        const search = retrySnapshot ? null : await (ctx.localSearch ?? runSearchCli)({
-          query: question,
-          kinds: ["meeting_summary", "meeting_transcript"],
-          limit: MAX_SOURCE_COUNT,
-        }, ctx.paths.scriptDir);
-        const sources = retrySnapshot?.sources ?? normalizeConversationSources(search!.hits);
-        const searchProjection = retrySnapshot
+        const shouldSearch = !retrySnapshot || retrySnapshot.retrievalPending;
+        let search = null;
+        if (shouldSearch) {
+          try {
+            search = await (ctx.localSearch ?? runSearchCli)({
+              query: question,
+              kinds: ["meeting_summary", "meeting_transcript"],
+              limit: MAX_SOURCE_COUNT,
+            }, ctx.paths.scriptDir);
+          } catch (error) {
+            return {
+              ...pauseResponse(
+                ctx.paths.configDir,
+                session,
+                (error as Error).message,
+                { owner: "yulu", query: question, hits: [] },
+                undefined,
+                [],
+                { question, sources: [], retrievalPending: true },
+              ),
+              elapsedMs: Date.now() - startedAt,
+            };
+          }
+        }
+        const sources = search ? normalizeConversationSources(search.hits) : retrySnapshot!.sources;
+        const searchProjection = !search
           ? { owner: "yulu" as const, query: question, sourceCount: sources.length, snapshot: "persisted" as const }
           : {
               owner: "yulu" as const,
               query: question,
               sourceCount: sources.length,
-              telemetry: search!.telemetry,
-              elapsedMs: search!.elapsedMs,
+              telemetry: search.telemetry,
+              elapsedMs: search.elapsedMs,
             };
         if (sources.length === 0) {
+          if (input.retry) resumeAgentSession(ctx.paths.configDir, session.id);
           return {
             ok: false,
             answer: EMPTY_EVIDENCE,

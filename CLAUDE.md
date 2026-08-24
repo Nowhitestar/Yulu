@@ -276,6 +276,8 @@ possible external-write uncertainty -> delivery_unverified
 - Running summary or connector code from Python capture paths.
 - Letting any current setting or runtime silently replace a task's pinned
   Summary Provider or model.
+- Letting a conversation retry switch provider, model, credential source, or
+  persisted local evidence snapshot.
 - Writing final transcript/summary files outside the Host commit contract.
 - Calling Notion without task opt-in, Host begin authorization, and Host result
   commit.

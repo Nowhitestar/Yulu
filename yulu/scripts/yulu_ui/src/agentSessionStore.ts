@@ -42,6 +42,7 @@ const agentSessionRetrySourceSchema = z.object({
 const agentSessionRetrySnapshotSchema = z.object({
   question: z.string().trim().min(1).max(2_000),
   sources: z.array(agentSessionRetrySourceSchema).max(8),
+  retrievalPending: z.boolean().optional(),
 });
 
 export const agentSessionMessageInputSchema = z.object({

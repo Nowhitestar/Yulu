@@ -1078,7 +1078,11 @@ function AskMeetings({
             <div className="agent-chat-start">
               <span className="agent-chat-start-icon"><Logo size={52} /></span>
               <div className="agent-chat-title">问本地会议</div>
-              <div className="agent-chat-sub">本地记录、Notion、Zulip 会自动进入上下文。</div>
+              <div className="agent-chat-sub">
+                {provider === "xai"
+                  ? "只会使用有界的本地会议片段，不会调用 Web、X、文件或 Connectors。"
+                  : "本地记录、Notion、Zulip 会自动进入上下文。"}
+              </div>
               <div className="agent-chat-starters">
                 {ASK_STARTERS.map((starter) => (
                   <button key={starter} type="button" onClick={() => setInput(starter)}>

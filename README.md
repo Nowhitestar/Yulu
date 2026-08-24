@@ -51,8 +51,9 @@ Agent Console is the default workspace. Start or stop recording, see recent
 meeting work, ask questions across local history, and inspect the selected
 provider without leaving the page. xAI conversations search locally first,
 send nothing when no excerpt matches, and keep source cards and history local.
-Failures preserve the pinned provider/model and history until an explicit retry
-or a new conversation.
+The session also pins the xAI credential source and verifies the response model.
+Failures preserve the provider/model/credential identity, evidence snapshot, and
+history until one explicit same-snapshot retry or a new conversation.
 
 Open **Manage Agents & Connectors** in Agent Console to select the conversation
 Agent and inspect Notion, Zulip, calendar, and other connector status for that

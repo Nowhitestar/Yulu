@@ -153,7 +153,8 @@ automatic work.
 uses the resolved local Agent runtime and requires model `runtime-managed`; `xai`
 stores the exact configured model name. Summary tasks and conversation sessions
 snapshot the resolved identity at creation, so later settings changes affect only
-new work. No credential belongs in either object.
+new work. No credential belongs in either object; xAI conversation sessions store
+only the non-secret credential-source identity (`oauth` or `api-key`).
 
 When a pinned Summary Provider is unavailable after transcript commit, the task
 enters `awaiting_provider` and stays there until an explicit same-provider retry.
@@ -166,12 +167,15 @@ the transcript/summary pair and artifact provenance are committed.
 
 xAI conversations search only local meeting summaries and transcripts before a
 request. Yulu sends at most 8 normalized sources, 1,200 characters per excerpt,
-6,000 excerpt characters total, and a local-history tail of at most 12 messages
-and 12,000 characters. No matching excerpt sends no request. Requests use the
-pinned model with `store:false` and no tools, files, collections, Web/X search,
-connectors, or response chaining. Source cards come from those local search hits,
-not model output. A failure pauses the local session without changing its
-provider/model or deleting messages and sources.
+6,000 characters total across source titles, dates, kinds, and excerpts, and a
+local-history tail of at most 12 messages and 12,000 characters. No matching
+excerpt sends no request. Requests use the pinned model and credential source
+with `store:false` and no tools, files, collections, Web/X search, connectors,
+or response chaining, and reject a different response model. Source cards come
+from those local search hits, not model output. A retrieval or request failure
+pauses the local session without changing its identity or deleting messages and
+sources. Explicit retry is one Host mutation and reuses the persisted evidence
+snapshot; current settings and a fresh search cannot replace it.
 
 ## `transcription`
 
