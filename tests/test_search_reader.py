@@ -261,10 +261,13 @@ def test_search_treats_natural_question_punctuation_as_literal_terms(tmp_path, m
         "PhoenixLaunch_20260825_010300",
         "PhoenixReview_20260825_010400",
     }
-    assert "Mei" in by_stem["PhoenixLaunch_20260825_010300"].snippet
-    assert "Mei owns the rollout checklist" in by_stem["PhoenixLaunch_20260825_010300"].snippet
-    assert "Arun" in by_stem["PhoenixReview_20260825_010400"].snippet
-    assert "Arun owns reviewer feedback" in by_stem["PhoenixReview_20260825_010400"].snippet
+    launch_snippet = (by_stem["PhoenixLaunch_20260825_010300"].snippet
+                      .replace("[hit]", "").replace("[/hit]", ""))
+    review_snippet = (by_stem["PhoenixReview_20260825_010400"].snippet
+                      .replace("[hit]", "").replace("[/hit]", ""))
+    assert "Mei owns the rollout checklist" in launch_snippet
+    assert "Arun owns reviewer feedback" in review_snippet
+    assert all(len(hit.snippet) <= 400 for hit in hits)
     assert tel["fallback_used"] is False
 
 

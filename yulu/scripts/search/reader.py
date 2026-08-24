@@ -259,7 +259,11 @@ def _fts_search(
     sql = f"""
         SELECT kind, stem, meeting_title, recorded_at, source_path,
                bm25(docs) AS score,
-               snippet(docs, 5, '[hit]', '[/hit]', '...', 96) AS snippet
+               substr(
+                   highlight(docs, 5, '[hit]', '[/hit]'),
+                   max(1, instr(highlight(docs, 5, '[hit]', '[/hit]'), '[hit]') - 80),
+                   400
+               ) AS snippet
         FROM docs
         WHERE docs MATCH ?
               {k_sql}{s_sql}
