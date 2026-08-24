@@ -2,9 +2,11 @@ import { afterEach, describe, expect, it } from "vitest";
 import { chmodSync, existsSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import Database from "better-sqlite3";
 import { HostStore, type ArtifactRecord } from "../src/hostStore.js";
 
 const NOTION_PAGE_ID = "0123456789abcdef0123456789abcdef";
+const SUMMARY_IDENTITY = { summaryProvider: "hermes", summaryModel: "runtime-managed" } as const;
 
 describe("HostStore", () => {
   let root = "";
@@ -33,6 +35,7 @@ describe("HostStore", () => {
       sendToNotion,
       destinationHint: "Yulu Meeting",
       agentProvider: "hermes",
+      ...SUMMARY_IDENTITY,
     });
   }
 
@@ -75,6 +78,86 @@ describe("HostStore", () => {
     expect(store!.listTasks()).toHaveLength(1);
   });
 
+  it("pins summary provider and model at enqueue and never rebinds them while claiming", () => {
+    createStore();
+    const queued = store!.enqueueRecording({
+      idempotencyKey: "recording:pinned:1",
+      recordingStem: "Pinned_20260711_120000",
+      title: "Pinned",
+      audioPath: join(root, "Pinned_20260711_120000.wav"),
+      sendToNotion: false,
+      destinationHint: "",
+      agentProvider: "codex",
+      summaryProvider: "xai",
+      summaryModel: "grok-4.6-exact",
+    }).task;
+
+    expect(queued).toMatchObject({ summaryProvider: "xai", summaryModel: "grok-4.6-exact" });
+    expect(store!.listEvents(queued.id)[0]).toMatchObject({
+      type: "task.queued",
+      payload: { summaryProvider: "xai", summaryModel: "grok-4.6-exact" },
+    });
+
+    const claimed = store!.claimNext()!;
+    expect(claimed).toMatchObject({ summaryProvider: "xai", summaryModel: "grok-4.6-exact" });
+    expect(store!.listEvents(queued.id).at(-1)).toMatchObject({
+      type: "task.claimed",
+      payload: { summaryProvider: "xai", summaryModel: "grok-4.6-exact" },
+    });
+  });
+
+  it("migrates legacy task rows to non-null provider-backed summary identity", () => {
+    root = mkdtempSync(join(tmpdir(), "yulu-host-store-legacy-"));
+    const dbPath = join(root, "host.sqlite");
+    const legacy = new Database(dbPath);
+    legacy.exec(`
+      CREATE TABLE agent_tasks (
+        id TEXT PRIMARY KEY,
+        idempotency_key TEXT NOT NULL UNIQUE,
+        recording_stem TEXT NOT NULL,
+        title TEXT NOT NULL,
+        audio_path TEXT NOT NULL,
+        transcription_language TEXT NOT NULL DEFAULT 'zh',
+        trigger TEXT NOT NULL DEFAULT 'automatic',
+        state TEXT NOT NULL,
+        phase TEXT NOT NULL,
+        send_to_notion INTEGER NOT NULL DEFAULT 0,
+        destination_hint TEXT NOT NULL DEFAULT '',
+        agent_provider TEXT NOT NULL DEFAULT 'hermes',
+        instructions TEXT NOT NULL DEFAULT '',
+        native_session_id TEXT,
+        artifact_session_id TEXT,
+        delivery_session_id TEXT,
+        lease_token TEXT,
+        attempt INTEGER NOT NULL DEFAULT 0,
+        error TEXT,
+        audit_json TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+    `);
+    legacy.prepare(`
+      INSERT INTO agent_tasks (
+        id, idempotency_key, recording_stem, title, audio_path, state, phase,
+        agent_provider, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, 'queued', 'queued', ?, ?, ?)
+    `).run(
+      "legacy-task", "legacy-key", "Legacy_20260711_120000", "Legacy",
+      join(root, "Legacy_20260711_120000.wav"), "codex", new Date().toISOString(), new Date().toISOString(),
+    );
+    legacy.close();
+
+    store = new HostStore(dbPath);
+    expect(store.getTask("legacy-task")).toMatchObject({
+      agentProvider: "codex",
+      summaryProvider: "codex",
+      summaryModel: "runtime-managed",
+    });
+    const columns = store.db.prepare("PRAGMA table_info(agent_tasks)").all() as Array<{ name: string; notnull: number }>;
+    expect(columns.find((column) => column.name === "summary_provider")?.notnull).toBe(1);
+    expect(columns.find((column) => column.name === "summary_model")?.notnull).toBe(1);
+  });
+
   it("refuses retry when the recording already has another active task", () => {
     createStore();
     const historical = enqueue(false).task;
@@ -88,6 +171,7 @@ describe("HostStore", () => {
       sendToNotion: false,
       destinationHint: "Yulu Meeting",
       agentProvider: "hermes",
+      ...SUMMARY_IDENTITY,
       trigger: "manual",
     }).task;
 
@@ -112,6 +196,7 @@ describe("HostStore", () => {
         sendToNotion: false,
         destinationHint: "Yulu Meeting",
         agentProvider: "hermes",
+        ...SUMMARY_IDENTITY,
         trigger: "manual",
       });
       expect(second).toMatchObject({ created: false, task: { id: first.id } });
@@ -145,6 +230,7 @@ describe("HostStore", () => {
       sendToNotion: false,
       destinationHint: "",
       agentProvider: "hermes",
+      ...SUMMARY_IDENTITY,
     }).task;
     const current = enqueue(false).task;
 
@@ -171,6 +257,7 @@ describe("HostStore", () => {
         sendToNotion: state === "sending" || state === "delivery_reported",
         destinationHint: "Yulu Meeting",
         agentProvider: "hermes",
+        ...SUMMARY_IDENTITY,
         trigger: "manual",
       }).task;
       store!.db.prepare("UPDATE agent_tasks SET state = ? WHERE id = ?").run(state, task.id);
@@ -184,6 +271,7 @@ describe("HostStore", () => {
       sendToNotion: false,
       destinationHint: "",
       agentProvider: "hermes",
+      ...SUMMARY_IDENTITY,
       trigger: "manual",
     }).task;
     store!.db.prepare("UPDATE agent_tasks SET state = 'failed', phase = 'failed', error = ? WHERE id = ?")
@@ -221,10 +309,68 @@ describe("HostStore", () => {
     expect(store!.retry(task.id).attempt).toBe(0);
   });
 
+  it("durably pauses committed summary work until an explicit same-provider retry", () => {
+    createStore();
+    const queued = store!.enqueueRecording({
+      idempotencyKey: "recording:provider-pause:1",
+      recordingStem: "Paused_20260711_120000",
+      title: "Paused",
+      audioPath: join(root, "Paused_20260711_120000.wav"),
+      sendToNotion: false,
+      destinationHint: "",
+      agentProvider: "codex",
+      summaryProvider: "xai",
+      summaryModel: "grok-4.6-exact",
+    }).task;
+    const claimed = store!.claim(queued.id)!;
+    store!.recordTranscript(claimed.id, claimed.leaseToken!, artifacts(claimed.id)[0]!);
+    const reason = "provider unavailable ".repeat(100);
+    const paused = store!.releaseToAwaitingProvider(claimed.id, claimed.leaseToken!, reason);
+
+    expect(paused).toMatchObject({
+      state: "awaiting_provider",
+      phase: "summarizing",
+      leaseToken: null,
+      summaryProvider: "xai",
+      summaryModel: "grok-4.6-exact",
+    });
+    expect(paused.error).toHaveLength(1000);
+    expect(store!.listArtifacts(claimed.id)).toEqual([
+      expect.objectContaining({ kind: "transcript", sha256: "a".repeat(64) }),
+    ]);
+    expect(store!.hasDispatchableTask()).toBe(false);
+    expect(store!.claimNext()).toBeNull();
+    expect(store!.listEvents(claimed.id).at(-1)).toMatchObject({
+      type: "task.awaiting_provider",
+      payload: {
+        summaryProvider: "xai",
+        summaryModel: "grok-4.6-exact",
+        reason: paused.error,
+      },
+    });
+
+    const dbPath = join(root, "host.sqlite");
+    store!.close();
+    store = new HostStore(dbPath);
+    expect(store.getTask(claimed.id)?.state).toBe("awaiting_provider");
+
+    const retried = store.retry(claimed.id);
+    expect(retried).toMatchObject({
+      state: "transcript_committed",
+      phase: "summarizing",
+      summaryProvider: "xai",
+      summaryModel: "grok-4.6-exact",
+    });
+    expect(store.claimNext()).toMatchObject({
+      summaryProvider: "xai",
+      summaryModel: "grok-4.6-exact",
+    });
+  });
+
   it("requires the current lease and commits artifacts before Notion", () => {
     createStore();
     const queued = enqueue().task;
-    const claimed = store!.claimNext("hermes")!;
+    const claimed = store!.claimNext()!;
     expect(claimed.id).toBe(queued.id);
     expect(claimed.leaseToken).toBeTruthy();
     expect(() => store!.recordArtifacts(claimed.id, "stale", artifacts(claimed.id))).toThrow(/stale lease/);
@@ -255,7 +401,7 @@ describe("HostStore", () => {
 
   it("records separate phase sessions and backfills only the audited artifact session", () => {
     createStore();
-    const claimed = (() => { enqueue(true); return store!.claimNext("hermes")!; })();
+    const claimed = (() => { enqueue(true); return store!.claimNext()!; })();
     store!.recordArtifacts(claimed.id, claimed.leaseToken!, artifacts(claimed.id));
     store!.recordPhaseSession(claimed.id, claimed.leaseToken!, "artifact", "artifact-session");
     store!.beginNotionDelivery(claimed.id, claimed.leaseToken!);
@@ -274,7 +420,7 @@ describe("HostStore", () => {
 
   it("never starts Notion when the task did not authorize it", () => {
     createStore();
-    const claimed = (() => { enqueue(false); return store!.claimNext("hermes")!; })();
+    const claimed = (() => { enqueue(false); return store!.claimNext()!; })();
     store!.recordArtifacts(claimed.id, claimed.leaseToken!, artifacts(claimed.id));
     expect(() => store!.beginNotionDelivery(claimed.id, claimed.leaseToken!)).toThrow(/not authorized/);
     expect(store!.complete(claimed.id, claimed.leaseToken!, {}).state).toBe("completed");
@@ -282,7 +428,7 @@ describe("HostStore", () => {
 
   it("does not accept an unverifiable Notion delivery report", () => {
     createStore();
-    const claimed = (() => { enqueue(true); return store!.claimNext("hermes")!; })();
+    const claimed = (() => { enqueue(true); return store!.claimNext()!; })();
     store!.recordArtifacts(claimed.id, claimed.leaseToken!, artifacts(claimed.id));
     store!.beginNotionDelivery(claimed.id, claimed.leaseToken!);
 
@@ -292,7 +438,7 @@ describe("HostStore", () => {
 
   it("keeps the Host-authorized destination when the Agent reports delivery", () => {
     createStore();
-    const claimed = (() => { enqueue(true); return store!.claimNext("hermes")!; })();
+    const claimed = (() => { enqueue(true); return store!.claimNext()!; })();
     store!.recordArtifacts(claimed.id, claimed.leaseToken!, artifacts(claimed.id));
     store!.beginNotionDelivery(claimed.id, claimed.leaseToken!);
 
@@ -313,7 +459,7 @@ describe("HostStore", () => {
     { pageId: "page" },
   ])("rejects an untrusted Notion delivery identifier: %j", (identifier) => {
     createStore();
-    const claimed = (() => { enqueue(true); return store!.claimNext("hermes")!; })();
+    const claimed = (() => { enqueue(true); return store!.claimNext()!; })();
     store!.recordArtifacts(claimed.id, claimed.leaseToken!, artifacts(claimed.id));
     store!.beginNotionDelivery(claimed.id, claimed.leaseToken!);
 
@@ -325,7 +471,7 @@ describe("HostStore", () => {
 
   it("rejects conflicting Notion URL and page ID identities", () => {
     createStore();
-    const claimed = (() => { enqueue(true); return store!.claimNext("hermes")!; })();
+    const claimed = (() => { enqueue(true); return store!.claimNext()!; })();
     store!.recordArtifacts(claimed.id, claimed.leaseToken!, artifacts(claimed.id));
     store!.beginNotionDelivery(claimed.id, claimed.leaseToken!);
 
@@ -358,6 +504,7 @@ describe("HostStore", () => {
       sendToNotion: false,
       destinationHint: "Yulu Meeting",
       agentProvider: "hermes",
+      ...SUMMARY_IDENTITY,
       trigger: "manual",
     }).task;
 
@@ -366,17 +513,17 @@ describe("HostStore", () => {
       state: "awaiting_policy",
       error: "Automatic processing disabled",
     });
-    expect(store!.claimNext("hermes")?.id).toBe(manual.id);
+    expect(store!.claimNext()?.id).toBe(manual.id);
 
     expect(store!.resumePolicyPaused("automatic")).toHaveLength(1);
     expect(store!.getTask(task.id)?.state).toBe("queued");
-    expect(store!.claimNext("hermes")?.id).toBe(task.id);
+    expect(store!.claimNext()?.id).toBe(task.id);
   });
 
   it("blocks recording deletion while an Agent task owns the audio", () => {
     createStore();
     const task = enqueue(false).task;
-    store!.claim(task.id, "hermes");
+    store!.claim(task.id);
 
     expect(() => store!.prepareRecordingDeletion(task.recordingStem)).toThrow(/cannot be deleted.*running/);
     expect(() => store!.purgeRecordingTasks(task.recordingStem)).toThrow(/cannot be deleted.*running/);
@@ -385,7 +532,7 @@ describe("HostStore", () => {
 
   it("keeps a committed transcript and resumes summary work after Host restart", () => {
     createStore();
-    const claimed = (() => { enqueue(false); return store!.claimNext("hermes")!; })();
+    const claimed = (() => { enqueue(false); return store!.claimNext()!; })();
     store!.recordTranscript(claimed.id, claimed.leaseToken!, artifacts(claimed.id)[0]!);
     const dbPath = join(root, "host.sqlite");
 
@@ -401,7 +548,7 @@ describe("HostStore", () => {
     expect(store.listArtifacts(claimed.id)).toEqual([
       expect.objectContaining({ kind: "transcript", sha256: "a".repeat(64) }),
     ]);
-    expect(store.claimNext("hermes")).toMatchObject({
+    expect(store.claimNext()).toMatchObject({
       id: claimed.id,
       state: "transcript_committed",
       phase: "summarizing",
@@ -410,7 +557,7 @@ describe("HostStore", () => {
 
   it("moves an interrupted external delivery to delivery_unverified on restart", () => {
     createStore();
-    const claimed = (() => { enqueue(true); return store!.claimNext("hermes")!; })();
+    const claimed = (() => { enqueue(true); return store!.claimNext()!; })();
     store!.recordArtifacts(claimed.id, claimed.leaseToken!, artifacts(claimed.id));
     store!.recordPhaseSession(claimed.id, claimed.leaseToken!, "artifact", "old-artifact-session");
     store!.beginNotionDelivery(claimed.id, claimed.leaseToken!);
@@ -436,7 +583,7 @@ describe("HostStore", () => {
 
   it("requires reconciliation when restart interrupts post-delivery session audit", () => {
     createStore();
-    const claimed = (() => { enqueue(true); return store!.claimNext("hermes")!; })();
+    const claimed = (() => { enqueue(true); return store!.claimNext()!; })();
     store!.recordArtifacts(claimed.id, claimed.leaseToken!, artifacts(claimed.id));
     store!.beginNotionDelivery(claimed.id, claimed.leaseToken!);
     store!.recordNotionDelivery(claimed.id, claimed.leaseToken!, {
@@ -459,7 +606,7 @@ describe("HostStore", () => {
 
   it("rejects conflicting identities during manual delivery reconciliation", () => {
     createStore();
-    const claimed = (() => { enqueue(true); return store!.claimNext("hermes")!; })();
+    const claimed = (() => { enqueue(true); return store!.claimNext()!; })();
     store!.recordArtifacts(claimed.id, claimed.leaseToken!, artifacts(claimed.id));
     store!.beginNotionDelivery(claimed.id, claimed.leaseToken!);
     store!.fail(claimed.id, claimed.leaseToken!, "delivery outcome unknown");
