@@ -226,19 +226,23 @@ vi.mock("../../../web/src/trpc.js", () => {
 });
 
 import { AgentConsole } from "../../../web/src/routes/agent-console.js";
+import { LanguageProvider } from "../../../web/src/i18n/LanguageProvider.js";
 
-function wrap(initialEntries = ["/agent-console"]) {
+function wrap(initialEntries = ["/agent-console"], lang?: "zh" | "en") {
+  if (lang) localStorage.setItem("yulu_ui.lang", lang);
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const console = <AgentConsole />;
   return render(
     <QueryClientProvider client={qc}>
       <MemoryRouter initialEntries={initialEntries}>
-        <AgentConsole />
+        {lang ? <LanguageProvider>{console}</LanguageProvider> : console}
       </MemoryRouter>
     </QueryClientProvider>,
   );
 }
 
 beforeEach(() => {
+  localStorage.removeItem("yulu_ui.lang");
   localStorage.removeItem("yulu_ui.agent.history_height");
   navigateMock.mockClear();
   reprocessMutate.mockClear();
@@ -724,6 +728,58 @@ describe("AgentConsole", () => {
     });
     expect(await findByText("Retry result")).toBeInTheDocument();
     expect(appendSessionMutateAsync).toHaveBeenCalledTimes(1);
+  });
+
+  it("renders pinned provider pause and recovery guidance in English", async () => {
+    mockSessions = [{
+      id: "session-paused-en",
+      agent: "xai",
+      provider: "xai",
+      model: "grok-4.6-exact",
+      status: "paused",
+      pausedReason: "request failed",
+      title: "Paused xAI English",
+      updatedAt: "2026-08-24T10:00:00.000Z",
+      messageCount: 2,
+    }];
+    mockSelectedSession = {
+      ...mockSessions[0],
+      messages: [
+        { role: "user", text: "Retry this question" },
+        { role: "assistant", text: "Preserved answer", sources: [] },
+      ],
+    };
+
+    const { getByText, findByText, getByRole } = wrap(["/agent-console"], "en");
+    fireEvent.click(getByText("Paused xAI English"));
+
+    expect(await findByText("Provider paused")).toHaveAttribute("role", "alert");
+    expect(getByText("xAI · grok-4.6-exact failed. Yulu did not switch providers.")).toBeInTheDocument();
+    expect(getByRole("button", { name: "Retry same provider" })).toBeInTheDocument();
+    expect(getByRole("link", { name: "Open AI Providers" })).toHaveAttribute("href", "/settings/llm");
+    expect(getByText("Provider changes apply to a new conversation.")).toBeInTheDocument();
+  });
+
+  it("localizes the xAI privacy boundary and empty local result without a source card", async () => {
+    mockConversationSelection = { provider: "xai", model: "grok-4.6-exact" };
+    askMutateAsync.mockResolvedValueOnce({
+      answer: "未找到匹配的本地会议片段，本次未向 xAI 发送内容。",
+      provider: "xai",
+      model: "grok-4.6-exact",
+      sessionStatus: "active",
+      sources: [],
+      remoteSources: [],
+      usedFallback: false,
+      llmStatus: "empty",
+    });
+
+    const { getByText, getByPlaceholderText, getByLabelText, findByText, container } = wrap(["/agent-console"], "en");
+    expect(getByText("Only bounded local meeting excerpts are used. Web, X, files, and connectors stay off.")).toBeInTheDocument();
+    fireEvent.change(getByPlaceholderText("问会议记录、决策、行动项..."), { target: { value: "missing" } });
+    fireEvent.click(getByLabelText("发送"));
+
+    expect(await findByText("No matching local meeting excerpts were found. Nothing was sent to xAI.")).toBeInTheDocument();
+    expect(container.querySelector(".agent-citation")).toBeNull();
   });
 
   it("resumes persisted Agent session history only after selecting it", async () => {
