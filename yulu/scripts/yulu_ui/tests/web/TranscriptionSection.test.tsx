@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router";
+import { LanguageProvider } from "../../web/src/i18n/LanguageProvider.js";
 
 const update = vi.fn(async () => ({ daemonsNeedingRestart: [], daemonsNeedingSighup: [] }));
 let recordingState = "idle";
@@ -73,15 +74,18 @@ const tracker = {
   daemons: new Map(),
 } as never;
 
-function mount() {
+function mount(lang?: "zh" | "en") {
+  if (lang) localStorage.setItem("yulu_ui.lang", lang);
+  const section = <TranscriptionSection tracker={tracker} />;
   return render(
     <MemoryRouter>
-      <TranscriptionSection tracker={tracker} />
+      {lang ? <LanguageProvider>{section}</LanguageProvider> : section}
     </MemoryRouter>,
   );
 }
 
 beforeEach(() => {
+  localStorage.removeItem("yulu_ui.lang");
   update.mockClear();
   recordingState = "idle";
   localInstalled = false;
@@ -151,5 +155,15 @@ describe("TranscriptionSection", () => {
   it("keeps xAI authorization on the shared provider route", () => {
     mount();
     expect(screen.getByRole("link", { name: "打开智能服务设置" })).toHaveAttribute("href", "/settings/llm");
+  });
+
+  it("keeps the compact xAI projection localized without rendering backend detail", () => {
+    mount("en");
+
+    expect(screen.getByText("xAI connection")).toBeInTheDocument();
+    expect(screen.getByText("Not connected")).toBeInTheDocument();
+    expect(screen.getByText("Not tested")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Open AI Providers" })).toHaveAttribute("href", "/settings/llm");
+    expect(screen.queryByText("需要在 Yulu 中连接 xAI")).toBeNull();
   });
 });
