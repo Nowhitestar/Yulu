@@ -19,6 +19,8 @@ const renameSessionMutateAsync = vi.fn();
 const deleteSessionMutateAsync = vi.fn();
 const pinSessionMutateAsync = vi.fn();
 const archiveSessionMutateAsync = vi.fn();
+const resumeSessionMutateAsync = vi.fn();
+let sessionListInputs: unknown[] = [];
 let mockSessions: Array<Record<string, unknown>> = [];
 let mockSelectedSession: Record<string, unknown> | null = null;
 let mockZulipConfigured = false;
@@ -184,7 +186,10 @@ vi.mock("../../../web/src/trpc.js", () => {
       },
       agentSessions: {
         list: {
-          useQuery: () => ({ data: { sessions: mockSessions }, isPending: false }),
+          useQuery: (input?: unknown) => {
+            sessionListInputs.push(input);
+            return { data: { sessions: mockSessions }, isPending: false };
+          },
         },
         get: {
           useQuery: (input: { id: string }) => ({
@@ -209,6 +214,9 @@ vi.mock("../../../web/src/trpc.js", () => {
         },
         archive: {
           useMutation: () => ({ mutateAsync: archiveSessionMutateAsync, isPending: false }),
+        },
+        resume: {
+          useMutation: () => ({ mutateAsync: resumeSessionMutateAsync, isPending: false }),
         },
       },
     },
@@ -246,6 +254,8 @@ beforeEach(() => {
   deleteSessionMutateAsync.mockReset();
   pinSessionMutateAsync.mockReset();
   archiveSessionMutateAsync.mockReset();
+  resumeSessionMutateAsync.mockReset();
+  sessionListInputs = [];
   mockSessions = [];
   mockSelectedSession = null;
   mockZulipConfigured = false;
@@ -288,6 +298,7 @@ beforeEach(() => {
   deleteSessionMutateAsync.mockResolvedValue({ deleted: true });
   pinSessionMutateAsync.mockResolvedValue({});
   archiveSessionMutateAsync.mockResolvedValue({});
+  resumeSessionMutateAsync.mockResolvedValue({});
   detectRefetch.mockResolvedValue({
     data: {
       agents: [
@@ -575,7 +586,7 @@ describe("AgentConsole", () => {
     await findByText("重点");
     expect(container.querySelector(".agent-message-text strong")).toHaveTextContent("重点");
     expect(container.querySelector(".agent-message-text li")).toHaveTextContent("行动项");
-    expect(createSessionMutateAsync).toHaveBeenCalledWith({ agent: "codex", title: "总结一下" });
+    expect(createSessionMutateAsync).toHaveBeenCalledWith({ title: "总结一下" });
     expect(appendSessionMutateAsync).toHaveBeenCalledTimes(2);
   });
 
@@ -603,6 +614,102 @@ describe("AgentConsole", () => {
 
     await findByText("我是 Yulu 的会议助手。");
     expect(queryByText("引用来源")).toBeNull();
+  });
+
+  it("shows a pinned xAI identity and only its persisted local source cards", async () => {
+    mockSessions = [{
+      id: "session-xai",
+      agent: "xai",
+      provider: "xai",
+      model: "grok-4.6-exact",
+      status: "active",
+      title: "Pinned xAI",
+      updatedAt: "2026-08-24T10:00:00.000Z",
+      messageCount: 2,
+    }];
+    mockSelectedSession = {
+      ...mockSessions[0],
+      messages: [
+        { role: "user", text: "What changed?" },
+        {
+          role: "assistant",
+          text: "A malicious model URL is https://evil.example/private",
+          sources: [{
+            ref: 1,
+            kind: "meeting_summary",
+            stem: "Product_20260824_100000",
+            title: "Product Review",
+            recordedAt: "2026-08-24T10:00:00",
+            sourcePath: "/private/Product.summary.md",
+            snippet: "Launch decision",
+            url: "/inbox/Product_20260824_100000",
+          }],
+        },
+      ],
+    };
+
+    const { getByText, findByText, container } = wrap();
+    fireEvent.click(getByText("Pinned xAI"));
+
+    expect(await findByText("xAI · grok-4.6-exact")).toBeInTheDocument();
+    const sourceCard = container.querySelector(".agent-citation") as HTMLElement;
+    expect(sourceCard).toHaveTextContent("Product Review");
+    expect(sourceCard).toHaveTextContent("2026-08-24");
+    expect(sourceCard).toHaveTextContent("Launch decision");
+    expect(sourceCard).not.toHaveTextContent("evil.example");
+    expect(sessionListInputs.every((input) => input === undefined)).toBe(true);
+  });
+
+  it("preserves paused history and retries the same pinned snapshot only on click", async () => {
+    mockSessions = [{
+      id: "session-paused",
+      agent: "xai",
+      provider: "xai",
+      model: "grok-4.6-exact",
+      status: "paused",
+      pausedReason: "xAI conversation request failed (HTTP 403)",
+      title: "Paused xAI",
+      updatedAt: "2026-08-24T10:00:00.000Z",
+      messageCount: 2,
+    }];
+    mockSelectedSession = {
+      ...mockSessions[0],
+      messages: [
+        { role: "user", text: "Retry this question" },
+        { role: "assistant", text: "Preserved answer", sources: [] },
+      ],
+    };
+    askMutateAsync.mockResolvedValueOnce({
+      answer: "Retry result",
+      provider: "xai",
+      model: "grok-4.6-exact",
+      sessionStatus: "active",
+      sources: [],
+      usedFallback: false,
+      llmStatus: "ok",
+    });
+
+    const { getByText, getByRole, findByText, container } = wrap();
+    fireEvent.click(getByText("Paused xAI"));
+
+    expect(await findByText("服务已暂停")).toHaveAttribute("role", "alert");
+    expect(getByText("xAI · grok-4.6-exact 请求失败，Yulu 没有切换服务。")).toBeInTheDocument();
+    expect(getByText("Preserved answer")).toBeInTheDocument();
+    expect(container.querySelector(".agent-composer textarea")).toBeDisabled();
+    expect(getByRole("link", { name: "打开智能服务设置" })).toHaveAttribute("href", "/settings/llm");
+    expect(askMutateAsync).not.toHaveBeenCalled();
+
+    fireEvent.click(getByRole("button", { name: "使用同一服务重试" }));
+
+    await waitFor(() => expect(resumeSessionMutateAsync).toHaveBeenCalledWith({ id: "session-paused" }));
+    expect(askMutateAsync).toHaveBeenCalledTimes(1);
+    expect(askMutateAsync).toHaveBeenCalledWith({
+      question: "Retry this question",
+      limit: 8,
+      sessionId: "session-paused",
+    });
+    expect(await findByText("Retry result")).toBeInTheDocument();
+    expect(appendSessionMutateAsync).toHaveBeenCalledTimes(1);
   });
 
   it("resumes persisted Agent session history only after selecting it", async () => {
@@ -730,7 +837,7 @@ describe("AgentConsole", () => {
     fireEvent.change(getByPlaceholderText("问会议记录、决策、行动项..."), { target: { value: "新的问题" } });
     fireEvent.click(getByLabelText("发送"));
 
-    await waitFor(() => expect(createSessionMutateAsync).toHaveBeenCalledWith({ agent: "codex", title: "新的问题" }));
-    expect(askMutateAsync).toHaveBeenCalledWith({ question: "新的问题", limit: 10, sessionId: "session-new" });
+    await waitFor(() => expect(createSessionMutateAsync).toHaveBeenCalledWith({ title: "新的问题" }));
+    expect(askMutateAsync).toHaveBeenCalledWith({ question: "新的问题", limit: 8, sessionId: "session-new" });
   });
 });
