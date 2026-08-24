@@ -37,6 +37,7 @@ describe("RecordingPipeline", () => {
     legacyManualTask?: boolean;
     pollMs?: number;
     glossaryRows?: Array<{ term: string; canonical: string; scope: "prompt" | "replace" | "both" }>;
+    xaiText?: boolean;
     autoPrompts?: Array<{
       id: string;
       slug: string;
@@ -193,7 +194,7 @@ describe("RecordingPipeline", () => {
         warm: warmTranscription,
         transcribeFile: transcribe,
       },
-      xaiText: { request: xaiRequest },
+      xaiText: opts.xaiText ? { request: xaiRequest } : undefined,
       gatewayFactory,
       pollMs: opts.pollMs ?? 60_000,
     });
@@ -370,7 +371,7 @@ describe("RecordingPipeline", () => {
   });
 
   it("commits an automatic xAI summary from only the pinned instructions and committed transcript", async () => {
-    const { audioPath, configManager, moviesDir, xaiRequest, runArtifactWorkflow } = setup();
+    const { audioPath, configManager, moviesDir, xaiRequest, runArtifactWorkflow } = setup({ xaiText: true });
     configManager.update("intelligence.summary", { provider: "xai", model: "grok-4.6-exact" });
 
     const { task } = pipeline!.enqueueCompletion({ audioPath, title: "Pinned xAI" });

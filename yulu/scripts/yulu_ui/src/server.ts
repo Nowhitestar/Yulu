@@ -140,6 +140,7 @@ async function startLockedServer(
     promptDb: () => dbProxy.prompts,
     vocabDb: () => dbProxy.vocab,
     transcription: audioTranscription,
+    xaiText,
   });
   if (localCaption.status().installed && configManager.read().transcription.engine === "local") {
     void localCaption.warm().catch((error) => {

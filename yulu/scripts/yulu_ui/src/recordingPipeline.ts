@@ -29,6 +29,7 @@ import {
   type TranscriptionLanguage,
 } from "./realtimeTranscription.js";
 import type { AudioTranscriptionService } from "./audioTranscription.js";
+import type { XaiTextClient } from "./xaiText.js";
 
 const REC_FILE_RE = /^(.+?)_(\d{8})_(\d{6})\.wav$/;
 const DISPATCH_POLL_MS = 15_000;
@@ -111,6 +112,7 @@ export interface RecordingPipelineOptions {
   promptDb?: () => unknown;
   vocabDb?: () => unknown;
   transcription: Pick<AudioTranscriptionService, "provider" | "health" | "warm" | "transcribeFile">;
+  xaiText?: Pick<XaiTextClient, "request">;
   gatewayFactory?: (config: YuluConfig) => RecordingAgentGateway;
   pollMs?: number;
 }
@@ -342,7 +344,12 @@ export class RecordingPipeline {
       // work to claim. Runtime health may be queried independently by the UI,
       // but an idle dispatcher must remain a cheap Host-store operation.
       if (!this.options.store.hasDispatchableTask()) return;
-      const gateway = this.resolveGateway(config);
+      const pending = this.options.store.listTasks(10_000)
+        .filter((task) => ["queued", "awaiting_agent", "transcript_committed"].includes(task.state))
+        .sort((left, right) => left.createdAt.localeCompare(right.createdAt))[0];
+      const gateway = pending?.summaryProvider === "xai" && !pending.sendToNotion
+        ? null
+        : this.resolveGateway(config);
       const task = this.options.store.claimNext();
       if (!task || !task.leaseToken) return;
       const canContinue = await this.runTask(gateway, task, task.leaseToken);
@@ -414,7 +421,7 @@ export class RecordingPipeline {
     return audioPath;
   }
 
-  private async runTask(gateway: RecordingAgentGateway, task: AgentTask, leaseToken: string): Promise<boolean> {
+  private async runTask(gateway: RecordingAgentGateway | null, task: AgentTask, leaseToken: string): Promise<boolean> {
     try {
       this.publish(task, "transcribing");
       const workspace = this.options.artifacts.workspace(task.id);
@@ -449,15 +456,6 @@ export class RecordingPipeline {
         this.options.store.recordTranscript(task.id, leaseToken, record);
         this.options.pubsub.publish("recordings-changed", { reason: "changed" });
       }
-      if (gateway.provider !== task.summaryProvider) {
-        throw new AgentUnavailableError(
-          `Pinned Summary Provider ${task.summaryProvider} is unavailable for model ${task.summaryModel}`,
-        );
-      }
-      const gatewayHealth = gateway.health();
-      if (!gatewayHealth.available) {
-        throw new AgentUnavailableError(gatewayHealth.reason ?? "Summary Agent is unavailable");
-      }
       this.options.store.recordProgress(task.id, leaseToken, "summarizing", `Transcription provider: ${transcription.provider}`);
       this.publish(task, "summarizing");
       const current = this.options.store.getTask(task.id)!;
@@ -468,9 +466,55 @@ export class RecordingPipeline {
         transcriptionProvider: transcription.provider,
         glossary,
       };
-      const artifactResult = await gateway.runArtifactWorkflow(workflowInput);
-      this.options.store.recordPhaseSession(task.id, leaseToken, "artifact", artifactResult.nativeSessionId);
-      if (!artifactResult.audit.ok) throw new Error(artifactResult.audit.errors.join("; "));
+      let artifactSessionId: string | null = null;
+      let artifactToolNames: string[] = [];
+      if (task.summaryProvider === "xai") {
+        const xaiText = this.options.xaiText;
+        if (!xaiText) {
+          throw new AgentUnavailableError(
+            `Pinned Summary Provider xai is unavailable for model ${task.summaryModel}`,
+          );
+        }
+        const result = await xaiText.request({
+          capability: "summary",
+          model: task.summaryModel,
+          input: [
+            { role: "system", content: task.instructions },
+            { role: "user", content: transcription.transcript },
+          ],
+        });
+        if (result.model !== task.summaryModel) {
+          throw new AgentUnavailableError("xAI summary returned a different model identity");
+        }
+        this.options.artifacts.writeStagedSummary(
+          task.id,
+          glossary ? applyGlossaryContract(result.text, glossary) : result.text,
+        );
+        const records = this.options.artifacts.commitFromWorkspace(current, {
+          summaryProvider: "xai",
+          summaryModel: result.model,
+          storageDisabled: true,
+          credentialSource: result.credentialSource,
+          committedBy: "yulu-host",
+        });
+        this.options.store.recordArtifacts(task.id, leaseToken, records);
+        this.options.pubsub.publish("recordings-changed", { reason: "changed" });
+      } else {
+        if (!gateway || gateway.provider !== task.summaryProvider) {
+          throw new AgentUnavailableError(
+            `Pinned Summary Provider ${task.summaryProvider} is unavailable for model ${task.summaryModel}`,
+          );
+        }
+        const gatewayHealth = gateway.health();
+        if (!gatewayHealth.available) {
+          throw new AgentUnavailableError(gatewayHealth.reason ?? "Summary Agent is unavailable");
+        }
+        const artifactResult = await gateway.runArtifactWorkflow(workflowInput);
+        artifactSessionId = artifactResult.nativeSessionId;
+        artifactToolNames = artifactResult.audit.toolNames;
+        this.options.store.recordPhaseSession(task.id, leaseToken, "artifact", artifactResult.nativeSessionId);
+        if (!artifactResult.audit.ok) throw new Error(artifactResult.audit.errors.join("; "));
+      }
       const afterAgent = this.options.store.getTask(task.id)!;
       if (afterAgent.state !== "artifacts_committed") {
         throw new Error(`Hermes exited without completing the artifact Host commit (state=${afterAgent.state})`);
@@ -481,6 +525,7 @@ export class RecordingPipeline {
       // only the Host-verified committed summary through its dedicated MCP.
       let deliveryResult = null;
       if (afterAgent.sendToNotion) {
+        if (!gateway) throw new AgentUnavailableError("Hermes delivery runtime is unavailable");
         // Persist the uncertainty fence before the Agent receives any external
         // connector capability. Even a write-before-begin policy violation or
         // process crash must become delivery_unverified, never a retryable task.
@@ -491,7 +536,7 @@ export class RecordingPipeline {
         });
       }
       if (deliveryResult) {
-        if (deliveryResult.nativeSessionId === artifactResult.nativeSessionId) {
+        if (artifactSessionId && deliveryResult.nativeSessionId === artifactSessionId) {
           throw new Error("Hermes reused the artifact session for Notion delivery");
         }
         this.options.store.recordPhaseSession(task.id, leaseToken, "delivery", deliveryResult.nativeSessionId);
@@ -503,8 +548,8 @@ export class RecordingPipeline {
         throw new Error(`Hermes exited without completing the required Host commits (state=${afterDelivery.state})`);
       }
       this.options.store.complete(task.id, leaseToken, {
-        artifactSessionId: artifactResult.nativeSessionId,
-        artifactToolNames: artifactResult.audit.toolNames,
+        artifactSessionId,
+        artifactToolNames,
         deliverySessionId: deliveryResult?.nativeSessionId ?? null,
         deliveryToolNames: deliveryResult?.audit.toolNames ?? [],
         transcriptChunks: transcription.chunks,
