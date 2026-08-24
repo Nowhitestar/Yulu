@@ -83,6 +83,11 @@ describe("RecordingPipeline", () => {
       if (opts.transcribeUnavailable) throw new AgentUnavailableError("selected audio engine unavailable");
       return { transcript: "hello transcript", provider: "test-audio", chunks: 1, language };
     });
+    const xaiRequest = vi.fn(async (request: { model: string }) => ({
+      text: "# xAI Summary\n\nhello",
+      model: request.model,
+      credentialSource: "oauth" as const,
+    }));
     let notionStartedFromState = "";
     const runArtifactWorkflow = vi.fn(async ({ task, leaseToken, workspace }: Parameters<RecordingAgentGateway["runArtifactWorkflow"]>[0]) => {
       writeFileSync(workspace.summaryPath, "# Summary\n\nhello\n");
@@ -188,6 +193,7 @@ describe("RecordingPipeline", () => {
         warm: warmTranscription,
         transcribeFile: transcribe,
       },
+      xaiText: { request: xaiRequest },
       gatewayFactory,
       pollMs: opts.pollMs ?? 60_000,
     });
@@ -199,6 +205,7 @@ describe("RecordingPipeline", () => {
       gatewayFactory,
       warmTranscription,
       transcribe,
+      xaiRequest,
       runArtifactWorkflow,
       runNotionWorkflow,
       notionStartedFromState: () => notionStartedFromState,
@@ -360,6 +367,35 @@ describe("RecordingPipeline", () => {
 
     expect(transcribe).toHaveBeenCalledOnce();
     expect(runArtifactWorkflow).not.toHaveBeenCalled();
+  });
+
+  it("commits an automatic xAI summary from only the pinned instructions and committed transcript", async () => {
+    const { audioPath, configManager, moviesDir, xaiRequest, runArtifactWorkflow } = setup();
+    configManager.update("intelligence.summary", { provider: "xai", model: "grok-4.6-exact" });
+
+    const { task } = pipeline!.enqueueCompletion({ audioPath, title: "Pinned xAI" });
+    await vi.waitFor(() => expect(store!.getTask(task.id)?.state).toBe("completed"));
+
+    expect(xaiRequest).toHaveBeenCalledOnce();
+    expect(xaiRequest).toHaveBeenCalledWith({
+      capability: "summary",
+      model: "grok-4.6-exact",
+      input: [
+        { role: "system", content: task.instructions },
+        { role: "user", content: "hello transcript" },
+      ],
+    });
+    expect(runArtifactWorkflow).not.toHaveBeenCalled();
+    expect(readFileSync(join(moviesDir, "Demo_20260711_120000.summary.md"), "utf8"))
+      .toBe("# xAI Summary\n\nhello\n");
+    expect(store!.listArtifacts(task.id).find((artifact) => artifact.kind === "summary")?.provenance)
+      .toEqual({
+        summaryProvider: "xai",
+        summaryModel: "grok-4.6-exact",
+        storageDisabled: true,
+        credentialSource: "oauth",
+        committedBy: "yulu-host",
+      });
   });
 
   it("never exposes Notion when the Host did not observe the artifact commit", async () => {
