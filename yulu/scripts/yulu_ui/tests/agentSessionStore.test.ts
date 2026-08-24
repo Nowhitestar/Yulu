@@ -6,7 +6,9 @@ import {
   appendAgentSessionMessage,
   createAgentSession,
   getAgentSession,
+  pauseAgentSession,
   readAgentSessionStore,
+  resumeAgentSession,
   storePath,
   updateAgentSessionNativeSession,
 } from "../src/agentSessionStore.js";
@@ -92,5 +94,40 @@ describe("agentSessionStore", () => {
         sources: [{ title: "Roadmap", url: "/inbox/roadmap" }],
       }],
     });
+  });
+
+  it("pauses and resumes a conversation without changing its identity or history", () => {
+    const root = mkdtempSync(join(tmpdir(), "agent-session-store-"));
+    roots.push(root);
+    const created = createAgentSession(root, {
+      purpose: "ask",
+      provider: "xai",
+      model: "grok-4.6-exact",
+    });
+    appendAgentSessionMessage(root, created.id, { role: "user", text: "Keep this question" });
+
+    const paused = pauseAgentSession(root, created.id, "model unavailable ".repeat(100));
+    expect(paused).toMatchObject({
+      provider: "xai",
+      model: "grok-4.6-exact",
+      status: "paused",
+      messages: [{ text: "Keep this question" }],
+    });
+    expect(paused.pausedReason).toHaveLength(1000);
+    expect(getAgentSession(root, created.id)).toMatchObject({
+      provider: "xai",
+      model: "grok-4.6-exact",
+      status: "paused",
+      pausedReason: paused.pausedReason,
+    });
+
+    const resumed = resumeAgentSession(root, created.id);
+    expect(resumed).toMatchObject({
+      provider: "xai",
+      model: "grok-4.6-exact",
+      status: "active",
+      messages: [{ text: "Keep this question" }],
+    });
+    expect(resumed.pausedReason).toBeUndefined();
   });
 });
