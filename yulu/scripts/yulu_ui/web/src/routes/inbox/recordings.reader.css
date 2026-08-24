@@ -10,6 +10,7 @@
 
 .reader-reconciliation {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
@@ -27,6 +28,7 @@
 
 .reader-reconciliation-actions {
   display: flex;
+  flex-wrap: wrap;
   flex: 0 0 auto;
   gap: 8px;
 }

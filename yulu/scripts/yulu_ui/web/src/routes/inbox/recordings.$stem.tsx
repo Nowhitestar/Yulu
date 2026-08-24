@@ -824,7 +824,7 @@ export function RecordingReader() {
               {keptPausedTaskId === agentTask.id ? (
                 <span role="status">{t("reader.providerPause.kept")}</span>
               ) : (
-                <div className="reader-reconciliation-actions">
+                <div className="reader-reconciliation-actions" style={{ flexWrap: "wrap" }}>
                   <button
                     type="button"
                     onClick={handleProviderRetry}
