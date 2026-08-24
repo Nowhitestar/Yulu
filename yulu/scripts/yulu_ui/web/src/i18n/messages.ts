@@ -544,6 +544,10 @@ export const en: Messages = {
   // ---- Agent Console: pinned xAI conversation ----
   "agentConsole.xai.localBoundary": "Only bounded local meeting excerpts are used. Web, X, files, and connectors stay off.",
   "agentConsole.xai.empty": "No matching local meeting excerpts were found. Nothing was sent to xAI.",
+  "agentConsole.provider.header": "{provider} is pinned to this conversation · {session}",
+  "agentConsole.provider.session.messages": "{count} messages · {time}",
+  "agentConsole.provider.session.draft": "Session not created yet",
+  "agentConsole.provider.session.default": "Reads all local records by default",
   "agentConsole.provider.newSessionNote": "Provider changes apply to a new conversation.",
   "agentConsole.provider.paused.heading": "Provider paused",
   "agentConsole.provider.paused.body": "{identity} failed. Yulu did not switch providers.",
@@ -1334,6 +1338,10 @@ export const zh: Messages = {
   // ---- Agent Console: pinned xAI conversation ----
   "agentConsole.xai.localBoundary": "只会使用有界的本地会议片段，不会调用 Web、X、文件或 Connectors。",
   "agentConsole.xai.empty": "未找到匹配的本地会议片段，本次未向 xAI 发送内容。",
+  "agentConsole.provider.header": "此对话固定使用 {provider} · {session}",
+  "agentConsole.provider.session.messages": "{count} 条消息 · {time}",
+  "agentConsole.provider.session.draft": "尚未创建 session",
+  "agentConsole.provider.session.default": "默认读取所有本地记录",
   "agentConsole.provider.newSessionNote": "服务变更将在新对话中生效。",
   "agentConsole.provider.paused.heading": "服务已暂停",
   "agentConsole.provider.paused.body": "{identity} 请求失败，Yulu 没有切换服务。",

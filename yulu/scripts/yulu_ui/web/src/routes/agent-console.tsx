@@ -909,8 +909,17 @@ function AskMeetings({
   const conversationName = provider === "xai" ? "xAI" : agentName;
   const sessionTitle = selectedSession?.title || selectedSessionSummary?.title || (draftSession ? "新对话" : "问本地会议");
   const sessionSub = selectedSessionSummary
-    ? `${selectedSessionSummary.messageCount} 条消息 · ${formatSessionTime(selectedSessionSummary.updatedAt)}`
-    : draftSession ? "尚未创建 session" : "默认读取所有本地记录";
+    ? t("agentConsole.provider.session.messages", {
+        count: selectedSessionSummary.messageCount,
+        time: formatSessionTime(selectedSessionSummary.updatedAt),
+      })
+    : draftSession
+      ? t("agentConsole.provider.session.draft")
+      : t("agentConsole.provider.session.default");
+  const providerHeader = t("agentConsole.provider.header", {
+    provider: conversationName,
+    session: sessionSub,
+  });
 
   useEffect(() => {
     if (initialSessionId) return;
@@ -1081,7 +1090,7 @@ function AskMeetings({
           taskRail={taskRail}
         />
         <div className="agent-chat-main">
-          <ChatHeader title={sessionTitle} identity={identity} sub={`由 ${conversationName} 处理 · ${sessionSub}`} />
+          <ChatHeader title={sessionTitle} identity={identity} sub={providerHeader} />
           <div className="agent-chat-thread empty">
             <div className="agent-chat-start">
               <span className="agent-chat-start-icon"><Logo size={52} /></span>
@@ -1139,7 +1148,7 @@ function AskMeetings({
         taskRail={taskRail}
       />
       <div className="agent-chat-main">
-        <ChatHeader title={sessionTitle} identity={identity} sub={`由 ${conversationName} 处理 · ${sessionSub}`} />
+        <ChatHeader title={sessionTitle} identity={identity} sub={providerHeader} />
         <div ref={scrollRef} className="agent-chat-thread">
           <div className="agent-chat-thread-inner">
             {messages.map((message, index) => {

@@ -750,7 +750,7 @@ describe("AgentConsole", () => {
       ],
     };
 
-    const { getByText, getAllByText, findByText, getByRole } = wrap(["/agent-console"], "en");
+    const { getByText, getAllByText, findByText, getByRole, queryByText } = wrap(["/agent-console"], "en");
     fireEvent.click(getByText("Paused xAI English"));
 
     expect(await findByText("Provider paused")).toHaveAttribute("role", "alert");
@@ -759,7 +759,7 @@ describe("AgentConsole", () => {
     expect(getByRole("link", { name: "Open AI Providers" })).toHaveAttribute("href", "/settings/llm");
     expect(getAllByText("Provider changes apply to a new conversation.")).toHaveLength(2);
     expect(getByText(/^xAI is pinned to this conversation · 2 messages · /)).toBeInTheDocument();
-    expect(screen.queryByText(/条消息/)).toBeNull();
+    expect(queryByText(/条消息/)).toBeNull();
   });
 
   it("localizes the xAI privacy boundary and empty local result without a source card", async () => {
