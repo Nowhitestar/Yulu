@@ -661,13 +661,95 @@ describe("RecordingPipeline", () => {
     expect(store!.listArtifacts(task.id).map((artifact) => artifact.kind)).toEqual(["transcript"]);
 
     configManager.update("intelligence.summary", { provider: "agent", model: "runtime-managed" });
+    configManager.update("agent_pipeline.auto_process_recordings", false);
     pipeline!.retry(task.id);
+    await vi.waitFor(() => expect(store!.getTask(task.id)?.state).toBe("awaiting_policy"));
+    expect(xaiRequest).toHaveBeenCalledOnce();
+    expect(transcribe).toHaveBeenCalledOnce();
+
+    configManager.update("agent_pipeline.auto_process_recordings", true);
+    pipeline!.kick();
     await vi.waitFor(() => expect(store!.getTask(task.id)?.state).toBe("completed"));
 
     expect(xaiRequest).toHaveBeenCalledTimes(2);
     expect(xaiRequest).toHaveBeenLastCalledWith(expect.objectContaining({ model: "grok-pinned" }));
     expect(transcribe).toHaveBeenCalledOnce();
     expect(runArtifactWorkflow).not.toHaveBeenCalled();
+  });
+
+  it("creates an explicit new-provider summary attempt over the same committed transcript", async () => {
+    const { audioPath, configManager, xaiRequest, transcribe } = setup({
+      available: false,
+      pollMs: 5,
+      xaiText: true,
+    });
+    writeFileSync(audioPath, wavWithAudio());
+    const guided = store!.beginActivationAttempt().attempt;
+    const original = pipeline!.enqueueCompletion({ audioPath, title: "Guided activation" }).task;
+    store!.correlateActivationAttempt(guided.id, original.id);
+    await vi.waitFor(() => expect(store!.getTask(original.id)?.state).toBe("awaiting_provider"));
+
+    configManager.update("intelligence.summary", { provider: "xai", model: "grok-new-explicit" });
+    const replacement = pipeline!.replaceSummaryProvider(original.id);
+    await vi.waitFor(() => expect(store!.getTask(replacement.id)?.state).toBe("completed"));
+
+    expect(store!.getTask(original.id)).toMatchObject({
+      state: "cancelled",
+      summaryProvider: "hermes",
+      summaryModel: "runtime-managed",
+    });
+    expect(store!.getTask(replacement.id)).toMatchObject({
+      summaryProvider: "xai",
+      summaryModel: "grok-new-explicit",
+    });
+    expect(store!.getActivationAttempt()).toMatchObject({ taskId: replacement.id });
+    expect(transcribe).toHaveBeenCalledOnce();
+    expect(xaiRequest).toHaveBeenCalledOnce();
+    expect(xaiRequest).toHaveBeenCalledWith(expect.objectContaining({ model: "grok-new-explicit" }));
+    expect(store!.listArtifacts(original.id).map((artifact) => artifact.kind)).toEqual(["transcript"]);
+    expect(store!.listArtifacts(replacement.id)).toEqual([
+      expect.objectContaining({
+        kind: "summary",
+        provenance: expect.objectContaining({
+          summaryProvider: "xai",
+          summaryModel: "grok-new-explicit",
+        }),
+      }),
+      expect.objectContaining({
+        kind: "transcript",
+        provenance: expect.objectContaining({ reusedFromTaskId: original.id }),
+      }),
+    ]);
+    expect(store!.getCoreActivationEvidence()).toMatchObject({
+      taskId: replacement.id,
+      summaryProvider: "xai",
+      summaryModel: "grok-new-explicit",
+    });
+  });
+
+  it("pauses a replacement transcript when the global pipeline is disabled", async () => {
+    const { audioPath, configManager, xaiRequest, transcribe } = setup({
+      available: false,
+      pollMs: 5,
+      xaiText: true,
+    });
+    writeFileSync(audioPath, wavWithAudio());
+    const original = pipeline!.enqueueCompletion({ audioPath, title: "Guided activation" }).task;
+    await vi.waitFor(() => expect(store!.getTask(original.id)?.state).toBe("awaiting_provider"));
+
+    configManager.update("intelligence.summary", { provider: "xai", model: "grok-new-explicit" });
+    configManager.update("agent_pipeline.enabled", false);
+    const replacement = pipeline!.replaceSummaryProvider(original.id);
+
+    await vi.waitFor(() => expect(store!.getTask(replacement.id)).toMatchObject({
+      state: "awaiting_policy",
+      summaryProvider: "xai",
+      summaryModel: "grok-new-explicit",
+    }));
+    expect(store!.listArtifacts(replacement.id).map((artifact) => artifact.kind)).toEqual(["transcript"]);
+    expect(transcribe).toHaveBeenCalledOnce();
+    expect(xaiRequest).not.toHaveBeenCalled();
+    expect(store!.claimNext()).toBeNull();
   });
 
   it("never exposes Notion when the Host did not observe the artifact commit", async () => {

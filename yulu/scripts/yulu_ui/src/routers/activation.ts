@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { z } from "zod";
-import { verifiedCoreActivationEvidence } from "../coreActivation.js";
+import { hasAudioFramesAtPath, verifiedCoreActivationEvidence } from "../coreActivation.js";
 import { ipcSend } from "../ipc.js";
 import {
   hasCurrentXaiTranscriptionConsent,
@@ -14,10 +14,16 @@ import {
   hasSupportedAgentSummaryIdentity,
   hasSupportedAgentSummaryReadinessProof,
 } from "../summaryProviderReadiness.js";
-import { publicAgentTask, type CoreActivationEvidence } from "../hostStore.js";
+import {
+  publicAgentTask,
+  type ActivationAttempt,
+  type AgentTask,
+  type CoreActivationEvidence,
+} from "../hostStore.js";
 import { runRecordAudio, stopRecordingAndEnqueue } from "../recordingCommand.js";
 
 const MICROPHONE_SETTINGS = "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone";
+const ACTIVATION_RECORDING_COMMAND_TIMEOUT_MS = 30_000;
 
 const captureStatusSchema = z.object({
   micReady: z.boolean(),
@@ -365,13 +371,173 @@ function activeAttempt(ctx: AppContext) {
     ? existing
     : ctx.host.recoverActivationAttemptTask(existing.id);
   const task = attempt.taskId ? ctx.host.getTask(attempt.taskId) : null;
+  const blocker = activationAttemptBlocker(ctx, attempt, task);
+  const transcriptCommitted = task !== null && blocker?.remediation.href === "/settings/llm";
+  const currentSummary = blocker && transcriptCommitted ? activationSummaryReadiness(ctx) : null;
   return {
-    state: task || attempt.recordingStem ? "processing" as const : "recording" as const,
+    state: task || attempt.recordingStem || attempt.handoffError ? "processing" as const : "recording" as const,
     evidence: null,
     journey: journeyState(ctx),
     attempt,
     task: task ? publicAgentTask(task) : null,
+    blocker,
+    summaryRecovery: currentSummary ? {
+      selected: currentSummary.selected,
+      state: currentSummary.state,
+      detail: currentSummary.detail,
+      remediation: currentSummary.remediation,
+      canReplace: currentSummary.state === "ready" && task !== null &&
+        ["failed", "awaiting_provider"].includes(task.state) && (
+        currentSummary.selected.provider !== task.summaryProvider ||
+        currentSummary.selected.model !== task.summaryModel
+      ),
+    } : null,
   };
+}
+
+function hasValidCommittedTranscript(ctx: AppContext, task: AgentTask): boolean {
+  const transcript = ctx.host.listArtifacts(task.id)
+    .find((artifact) => artifact.kind === "transcript");
+  if (!transcript) return false;
+  try {
+    ctx.artifacts.readCommittedTranscript(task, transcript);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function activationAttemptBlocker(
+  ctx: AppContext,
+  attempt: ActivationAttempt,
+  task: AgentTask | null,
+) {
+  if (attempt.handoffError) {
+    if (/recording (?:processing|pipeline)|pipeline.*(?:disabled|paused)|paused by policy/i.test(attempt.handoffError)) {
+      return {
+        capability: "recording_pipeline" as const,
+        detail: attempt.handoffError,
+        retry: "same_audio" as const,
+        remediation: { href: "/settings/automation" },
+      };
+    }
+    if (!attempt.stopRequestedAt) {
+      return {
+        capability: "audio" as const,
+        detail: attempt.handoffError,
+        retry: "start_recording" as const,
+        remediation: { href: "/settings/general" },
+      };
+    }
+    let retry: "same_audio" | "rerecord" = "same_audio";
+    if (attempt.recordingStem) {
+      retry = hasAudioFramesAtPath(join(ctx.paths.moviesDir, `${attempt.recordingStem}.wav`))
+        ? "same_audio"
+        : "rerecord";
+    }
+    return {
+      capability: "audio" as const,
+      detail: attempt.handoffError,
+      retry,
+      remediation: { href: "/settings/general" },
+    };
+  }
+  if (attempt.taskId && !task) {
+    return {
+      capability: "audio" as const,
+      detail: null,
+      retry: "rerecord" as const,
+      remediation: { href: "/settings/general" },
+    };
+  }
+  if (!task || ![
+    "awaiting_agent", "awaiting_provider", "awaiting_policy", "failed", "cancelled", "completed",
+  ].includes(task.state)) {
+    return null;
+  }
+  if (task.state === "awaiting_policy") {
+    return {
+      capability: "recording_pipeline" as const,
+      detail: task.error,
+      retry: "same_task" as const,
+      remediation: { href: "/settings/automation" },
+    };
+  }
+  const validAudio = hasAudioFramesAtPath(task.audioPath);
+  if (!validAudio) {
+    return {
+      capability: "audio" as const,
+      detail: null,
+      retry: "rerecord" as const,
+      remediation: { href: "/settings/general" },
+    };
+  }
+  const transcriptCommitted = hasValidCommittedTranscript(ctx, task);
+  const detail = task.error;
+  const classification = detail ?? "";
+  const settings = transcriptCommitted ? "/settings/llm" : "/settings/transcription";
+  if (/credential|oauth|api[- ]?key|unauthori[sz]ed|HTTP\s+(?:401|403)/i.test(classification)) {
+    return {
+      capability: "credential" as const,
+      detail,
+      retry: "same_task" as const,
+      remediation: { href: settings },
+    };
+  }
+  if (/\bmodel\b|HTTP\s+404/i.test(classification)) {
+    return {
+      capability: "model" as const,
+      detail,
+      retry: "same_task" as const,
+      remediation: { href: settings },
+    };
+  }
+  if (task.state === "awaiting_provider" || /provider.*unavailable|Agent.*unavailable|Hermes offline/i.test(classification)) {
+    return {
+      capability: "provider" as const,
+      detail,
+      retry: "same_task" as const,
+      remediation: { href: transcriptCommitted ? "/settings/llm" : "/settings/transcription" },
+    };
+  }
+  return transcriptCommitted ? {
+    capability: "summary" as const,
+    detail,
+    retry: "same_task" as const,
+    remediation: { href: "/settings/llm" },
+  } : {
+    capability: "transcription" as const,
+    detail,
+    retry: "same_task" as const,
+    remediation: { href: "/settings/transcription" },
+  };
+}
+
+async function stopAndCorrelateAttempt(ctx: AppContext, attempt: ActivationAttempt) {
+  try {
+    const result = await stopRecordingAndEnqueue(ctx, () => runRecordAudio(
+      ctx,
+      ["stop"],
+      { timeoutMs: ACTIVATION_RECORDING_COMMAND_TIMEOUT_MS },
+    ), ({ recordingStem }) => {
+      ctx.host.recordActivationAttemptStopped(attempt.id, recordingStem);
+    });
+    if (!result.pipeline.accepted) {
+      ctx.host.failActivationAttemptHandoff(attempt.id, result.pipeline.reason);
+      throw new Error(result.pipeline.reason);
+    }
+    ctx.host.correlateActivationAttempt(attempt.id, result.pipeline.taskId);
+    return activeAttempt(ctx);
+  } catch (error) {
+    const current = ctx.host.getActivationAttempt();
+    if (current && !current.taskId && !current.handoffError) {
+      ctx.host.failActivationAttemptHandoff(
+        attempt.id,
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+    throw error;
+  }
 }
 
 function verifiedAttemptEvidence(
@@ -481,9 +647,16 @@ export const activationRouter = router({
     const { attempt, created } = ctx.host.beginActivationAttempt();
     if (!created) return activeAttempt(ctx);
     try {
-      await runRecordAudio(ctx, ["start", "Core Activation"]);
+      await runRecordAudio(
+        ctx,
+        ["start", "Core Activation"],
+        { timeoutMs: ACTIVATION_RECORDING_COMMAND_TIMEOUT_MS },
+      );
     } catch (error) {
-      ctx.host.abandonActivationAttempt(attempt.id);
+      ctx.host.failActivationAttemptHandoff(
+        attempt.id,
+        error instanceof Error ? error.message : String(error),
+      );
       throw error;
     }
     return { state: "recording" as const, attempt };
@@ -493,26 +666,95 @@ export const activationRouter = router({
     if (!attempt) throw new Error("Activation Attempt not found");
     if (attempt.taskId) return activeAttempt(ctx);
     ctx.host.markActivationAttemptStopping(attempt.id);
-    try {
-      const result = await stopRecordingAndEnqueue(ctx, undefined, ({ recordingStem }) => {
-        ctx.host.recordActivationAttemptStopped(attempt.id, recordingStem);
-      });
-      if (!result.pipeline.accepted) {
-        ctx.host.failActivationAttemptHandoff(attempt.id, result.pipeline.reason);
-        throw new Error(result.pipeline.reason);
-      }
-      ctx.host.correlateActivationAttempt(attempt.id, result.pipeline.taskId);
-      return activeAttempt(ctx);
-    } catch (error) {
-      const current = ctx.host.getActivationAttempt();
-      if (current?.recordingStem && !current.taskId && !current.handoffError) {
+    return await stopAndCorrelateAttempt(ctx, attempt);
+  }),
+  retryAttempt: publicProcedure.mutation(async ({ ctx }) => {
+    const attempt = ctx.host.getActivationAttempt();
+    if (!attempt) throw new Error("Activation Attempt not found");
+    const task = attempt.taskId ? ctx.host.getTask(attempt.taskId) : null;
+    const blocker = activationAttemptBlocker(ctx, attempt, task);
+    if (!blocker) throw new Error("Activation Attempt is still making progress");
+    if (blocker.retry === "rerecord") throw new Error("Activation audio must be recorded again");
+    if (blocker.retry === "start_recording") {
+      const restarted = ctx.host.restartActivationAttempt(attempt.id);
+      try {
+        await runRecordAudio(
+          ctx,
+          ["start", "Core Activation"],
+          { timeoutMs: ACTIVATION_RECORDING_COMMAND_TIMEOUT_MS },
+        );
+      } catch (error) {
         ctx.host.failActivationAttemptHandoff(
-          attempt.id,
+          restarted.id,
           error instanceof Error ? error.message : String(error),
         );
+        throw error;
       }
+      return activeAttempt(ctx);
+    }
+    if (task) {
+      if (task.state === "awaiting_policy") {
+        ctx.recordingPipeline.kick();
+      } else {
+        const hasTranscriptRecord = ctx.host.listArtifacts(task.id)
+          .some((artifact) => artifact.kind === "transcript");
+        ctx.recordingPipeline.retry(task.id, {
+          allowCancelled: true,
+          ...(task.state === "completed" ? { allowCompleted: true } : {}),
+          ...(hasTranscriptRecord && !hasValidCommittedTranscript(ctx, task)
+            ? { discardArtifacts: true }
+            : {}),
+        });
+      }
+      return activeAttempt(ctx);
+    }
+    if (!attempt.recordingStem) return await stopAndCorrelateAttempt(ctx, attempt);
+    const audioPath = join(ctx.paths.moviesDir, `${attempt.recordingStem}.wav`);
+    const result = ctx.recordingPipeline.enqueueCompletion({
+      audioPath,
+      title: "Core Activation",
+      sendToNotion: ctx.config.read().agent_pipeline.auto_send_notion,
+    });
+    ctx.host.correlateActivationAttempt(attempt.id, result.task.id);
+    return activeAttempt(ctx);
+  }),
+  rerecordAttempt: publicProcedure.mutation(async ({ ctx }) => {
+    const attempt = ctx.host.getActivationAttempt();
+    if (!attempt) throw new Error("Activation Attempt not found");
+    const task = attempt.taskId ? ctx.host.getTask(attempt.taskId) : null;
+    if (activationAttemptBlocker(ctx, attempt, task)?.retry !== "rerecord") {
+      throw new Error("Activation audio remains recoverable");
+    }
+    const restarted = ctx.host.restartActivationAttempt(attempt.id);
+    try {
+      await runRecordAudio(
+        ctx,
+        ["start", "Core Activation"],
+        { timeoutMs: ACTIVATION_RECORDING_COMMAND_TIMEOUT_MS },
+      );
+    } catch (error) {
+      ctx.host.failActivationAttemptHandoff(
+        restarted.id,
+        error instanceof Error ? error.message : String(error),
+      );
       throw error;
     }
+    return { state: "recording" as const, attempt: restarted };
+  }),
+  replaceSummaryProvider: publicProcedure.mutation(({ ctx }) => {
+    const attempt = ctx.host.getActivationAttempt();
+    if (!attempt?.taskId) throw new Error("Activation summary attempt not found");
+    const task = ctx.host.getTask(attempt.taskId);
+    if (!task || !hasValidCommittedTranscript(ctx, task)) {
+      throw new Error("Activation transcript is not committed");
+    }
+    const summary = activationSummaryReadiness(ctx);
+    if (summary.state !== "ready") throw new Error("The newly selected Summary Provider is not ready");
+    if (summary.selected.provider === task.summaryProvider && summary.selected.model === task.summaryModel) {
+      throw new Error("Select a different Summary Provider or model before creating a new attempt");
+    }
+    ctx.recordingPipeline.replaceSummaryProvider(task.id);
+    return activeAttempt(ctx);
   }),
   acknowledgeGuidedCompletion: publicProcedure
     .input(z.object({ taskId: z.string().min(1).max(100) }))

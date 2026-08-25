@@ -46,6 +46,20 @@ interface AttemptData {
   } | null;
   journey: UnresolvedData["journey"];
   backgroundEvidence?: ActivatedData["evidence"] | null;
+  blocker?: {
+    capability: "audio" | "transcription" | "credential" | "model" | "provider" | "summary" |
+      "recording_pipeline";
+    detail: string | null;
+    retry: "same_task" | "same_audio" | "start_recording" | "rerecord";
+    remediation: { href: string };
+  } | null;
+  summaryRecovery?: {
+    selected: { provider: string; model: string };
+    state: "ready" | "blocked" | "disclosure_required";
+    detail: string | null;
+    remediation: { href: string } | null;
+    canReplace: boolean;
+  } | null;
 }
 
 interface UnresolvedData {
@@ -198,6 +212,9 @@ const activation = vi.hoisted(() => ({
   data: activatedData() as ActivatedData | UnresolvedData | AttemptData,
   startAttempt: vi.fn(async () => ({ state: "recording" })),
   stopAttempt: vi.fn(async () => ({ state: "processing" })),
+  retryAttempt: vi.fn(async () => ({ state: "processing" })),
+  rerecordAttempt: vi.fn(async () => ({ state: "recording" })),
+  replaceSummaryProvider: vi.fn(async () => ({ state: "processing" })),
   acknowledgeGuidedCompletion: vi.fn(async () => ({ acknowledged: true })),
   defer: vi.fn(async () => ({ journey: { shouldAutoEnter: false } })),
   acceptXaiDisclosure: vi.fn(async () => ({ disclosureVersion: "xai-audio-v1" })),
@@ -221,6 +238,11 @@ vi.mock("../../../web/src/trpc.js", () => ({
       } },
       startAttempt: { useMutation: () => ({ mutateAsync: activation.startAttempt, isPending: false }) },
       stopAttempt: { useMutation: () => ({ mutateAsync: activation.stopAttempt, isPending: false }) },
+      retryAttempt: { useMutation: () => ({ mutateAsync: activation.retryAttempt, isPending: false }) },
+      rerecordAttempt: { useMutation: () => ({ mutateAsync: activation.rerecordAttempt, isPending: false }) },
+      replaceSummaryProvider: {
+        useMutation: () => ({ mutateAsync: activation.replaceSummaryProvider, isPending: false }),
+      },
       acknowledgeGuidedCompletion: {
         useMutation: () => ({ mutateAsync: activation.acknowledgeGuidedCompletion, isPending: false }),
       },
@@ -277,6 +299,9 @@ afterEach(() => {
   activation.defer.mockClear();
   activation.startAttempt.mockClear();
   activation.stopAttempt.mockClear();
+  activation.retryAttempt.mockClear();
+  activation.rerecordAttempt.mockClear();
+  activation.replaceSummaryProvider.mockClear();
   activation.acknowledgeGuidedCompletion.mockClear();
   activation.acceptXaiDisclosure.mockClear();
   activation.acceptSummaryDisclosure.mockClear();
@@ -489,7 +514,7 @@ describe("/activate", () => {
     expect(activation.acknowledgeGuidedCompletion).not.toHaveBeenCalled();
   });
 
-  it("displays an existing durable provider pause without adding recovery controls", () => {
+  it("retries the original snapshot or explicitly starts a ready replacement summary attempt", async () => {
     activation.data = {
       state: "processing",
       evidence: null,
@@ -506,12 +531,61 @@ describe("/activate", () => {
         error: "Pinned Summary Provider is unavailable",
       },
       journey: unresolvedData().journey,
+      blocker: {
+        capability: "provider",
+        detail: "Pinned Summary Provider is unavailable",
+        retry: "same_task",
+        remediation: { href: "/settings/llm" },
+      },
+      summaryRecovery: {
+        selected: { provider: "xai", model: "grok-new-explicit" },
+        state: "ready",
+        detail: "ready",
+        remediation: null,
+        canReplace: true,
+      },
+    };
+    renderRoute("en");
+    const user = userEvent.setup();
+
+    expect(screen.getByRole("alert")).toHaveTextContent("Summary Provider blocked activation");
+    expect(screen.getByText("Pinned Summary Provider is unavailable")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Open AI Provider Settings" })).toHaveAttribute("href", "/settings/llm");
+    await user.click(screen.getByRole("button", { name: "Retry saved work" }));
+    expect(activation.retryAttempt).toHaveBeenCalledOnce();
+    await user.click(screen.getByRole("button", { name: "Use xai · grok-new-explicit" }));
+    expect(activation.replaceSummaryProvider).toHaveBeenCalledOnce();
+  });
+
+  it("labels a pre-transcript credential remediation by its transcription destination", () => {
+    activation.data = {
+      state: "processing",
+      evidence: null,
+      attempt: {
+        id: "attempt-transcription-credential",
+        startedAt: "2026-08-25T06:15:00.000Z",
+        taskId: "task-transcription-credential",
+        recordingStem: "Activation_20260825_141500",
+      },
+      task: {
+        id: "task-transcription-credential",
+        state: "failed",
+        phase: "failed",
+        error: "xAI transcription failed (HTTP 401)",
+      },
+      journey: unresolvedData().journey,
+      blocker: {
+        capability: "credential",
+        detail: "xAI transcription failed (HTTP 401)",
+        retry: "same_task",
+        remediation: { href: "/settings/transcription" },
+      },
     };
     renderRoute("en");
 
-    expect(screen.getByRole("alert")).toHaveTextContent("Activation processing needs attention");
-    expect(screen.getByText("Pinned Summary Provider is unavailable")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /retry|change provider/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Open Transcription Settings" }))
+      .toHaveAttribute("href", "/settings/transcription");
+    expect(screen.queryByRole("link", { name: "Open AI Provider Settings" })).not.toBeInTheDocument();
   });
 
   it("displays a durable stopped-recording handoff failure after restart", () => {
@@ -528,12 +602,80 @@ describe("/activate", () => {
       },
       task: null,
       journey: unresolvedData().journey,
+      blocker: {
+        capability: "recording_pipeline",
+        detail: "Automatic Agent recording processing is paused by policy",
+        retry: "same_audio",
+        remediation: { href: "/settings/automation" },
+      },
     };
     renderRoute("en");
 
-    expect(screen.getByRole("alert")).toHaveTextContent("Activation processing needs attention");
+    expect(screen.getByRole("alert")).toHaveTextContent("Recording processing policy blocked activation");
     expect(screen.getByText("Automatic Agent recording processing is paused by policy")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /retry|change provider/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Open Automation Settings" }))
+      .toHaveAttribute("href", "/settings/automation");
+    expect(screen.getByRole("button", { name: "Retry saved work" })).toBeInTheDocument();
+  });
+
+  it("offers re-recording only for an invalid saved-audio blocker", async () => {
+    activation.data = {
+      state: "processing",
+      evidence: null,
+      attempt: {
+        id: "attempt-invalid-audio",
+        startedAt: "2026-08-25T06:15:00.000Z",
+        taskId: "task-invalid-audio",
+        recordingStem: "Broken_20260825_141500",
+      },
+      task: {
+        id: "task-invalid-audio",
+        state: "failed",
+        phase: "failed",
+        error: "Recording contains no audio frames",
+      },
+      journey: unresolvedData().journey,
+      blocker: {
+        capability: "audio",
+        detail: "The saved recording does not contain valid audio",
+        retry: "rerecord",
+        remediation: { href: "/settings/general" },
+      },
+    };
+    renderRoute("en");
+    const user = userEvent.setup();
+
+    expect(screen.queryByRole("button", { name: "Retry saved work" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Record again" }));
+    expect(activation.rerecordAttempt).toHaveBeenCalledOnce();
+  });
+
+  it("labels capture-start recovery without claiming saved work", async () => {
+    activation.data = {
+      state: "processing",
+      evidence: null,
+      attempt: {
+        id: "attempt-start-failed",
+        startedAt: "2026-08-25T06:15:00.000Z",
+        taskId: null,
+        recordingStem: null,
+        handoffError: "audio daemon unavailable",
+      },
+      task: null,
+      journey: unresolvedData().journey,
+      blocker: {
+        capability: "audio",
+        detail: "audio daemon unavailable",
+        retry: "start_recording",
+        remediation: { href: "/settings/general" },
+      },
+    };
+    renderRoute("en");
+    const user = userEvent.setup();
+
+    expect(screen.queryByRole("button", { name: "Retry saved work" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Start recording" }));
+    expect(activation.retryAttempt).toHaveBeenCalledOnce();
   });
 
   it("does not move keyboard focus on each durable progress poll", () => {

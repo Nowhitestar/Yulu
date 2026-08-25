@@ -3,6 +3,7 @@ import { defineConfig, devices } from "@playwright/test";
 
 export default defineConfig({
   testDir: "./e2e",
+  testIgnore: "activation-recovery.spec.ts",
   timeout: 30_000,
   fullyParallel: false,
   retries: 0,

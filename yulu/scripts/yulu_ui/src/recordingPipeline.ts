@@ -345,13 +345,35 @@ export class RecordingPipeline {
     };
   }
 
-  retry(id: string): AgentTask {
+  retry(
+    id: string,
+    options: { allowCancelled?: boolean; allowCompleted?: boolean; discardArtifacts?: boolean } = {},
+  ): AgentTask {
     const config = this.options.config.read();
-    const task = this.options.store.retry(id);
+    const task = this.options.store.retry(id, options);
     this.resumeDispatchNow();
     this.reconcileDispatchPolicy(config);
     this.kick();
     return this.options.store.getTask(task.id)!;
+  }
+
+  replaceSummaryProvider(id: string): AgentTask {
+    const config = this.options.config.read();
+    const selection = config.intelligence.summary;
+    const summary = selection.provider === "xai"
+      ? selection
+      : this.summaryIdentity(config, resolveHermesAgentRuntime(config, {
+          scriptDir: this.options.paths.scriptDir,
+          moviesDir: this.options.paths.moviesDir,
+        }).provider);
+    const task = this.options.store.replaceSummaryAttempt(id, {
+      summaryProvider: summary.provider,
+      summaryModel: summary.model,
+    });
+    this.resumeDispatchNow();
+    this.reconcileDispatchPolicy(config);
+    this.kick();
+    return task;
   }
 
   confirmNotionDelivery(id: string, result: { url?: string; pageId?: string; detail?: string }): AgentTask {
@@ -526,11 +548,11 @@ export class RecordingPipeline {
           throw new AgentUnavailableError((error as Error).message);
         }
       }
-      this.publish(task, "transcribing");
       const workspace = this.options.artifacts.workspace(task.id);
       const glossary = this.glossary();
       const existingTranscript = this.options.store.listArtifacts(task.id)
         .find((artifact) => artifact.kind === "transcript");
+      this.publish(task, existingTranscript ? "summarizing" : "transcribing");
       let transcription: TranscriptionResult;
       if (existingTranscript) {
         const transcript = this.options.artifacts.readCommittedTranscript(task, existingTranscript);

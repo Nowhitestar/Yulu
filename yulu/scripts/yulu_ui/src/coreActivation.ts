@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync, realpathSync } from "node:fs";
+import { closeSync, existsSync, openSync, readFileSync, readSync, realpathSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
 import type { ArtifactStore } from "./artifactStore.js";
 import type {
@@ -7,7 +7,7 @@ import type {
   CoreActivationEvidence,
 } from "./hostStore.js";
 
-function hasAudioFrames(content: Buffer): boolean {
+export function hasAudioFrames(content: Buffer): boolean {
   if (
     content.length < 44 ||
     content.subarray(0, 4).toString("ascii") !== "RIFF" ||
@@ -23,6 +23,37 @@ function hasAudioFrames(content: Buffer): boolean {
     offset = dataStart + chunkSize + (chunkSize % 2);
   }
   return false;
+}
+
+export function hasAudioFramesAtPath(path: string): boolean {
+  let fd: number | null = null;
+  try {
+    const size = statSync(path).size;
+    if (size < 44) return false;
+    fd = openSync(path, "r");
+    const header = Buffer.alloc(12);
+    if (readSync(fd, header, 0, header.length, 0) < header.length) return false;
+    if (
+      header.subarray(0, 4).toString("ascii") !== "RIFF" ||
+      header.subarray(8, 12).toString("ascii") !== "WAVE"
+    ) return false;
+    let offset = 12;
+    const chunkHeader = Buffer.alloc(8);
+    while (offset + chunkHeader.length <= size) {
+      if (readSync(fd, chunkHeader, 0, chunkHeader.length, offset) < chunkHeader.length) return false;
+      const chunkSize = chunkHeader.readUInt32LE(4);
+      const dataStart = offset + chunkHeader.length;
+      if (chunkHeader.subarray(0, 4).toString("ascii") === "data") {
+        return chunkSize > 0 && dataStart + chunkSize <= size;
+      }
+      offset = dataStart + chunkSize + (chunkSize % 2);
+    }
+    return false;
+  } catch {
+    return false;
+  } finally {
+    if (fd !== null) closeSync(fd);
+  }
 }
 
 function hasProviderProvenance(candidate: CoreActivationCandidate): boolean {

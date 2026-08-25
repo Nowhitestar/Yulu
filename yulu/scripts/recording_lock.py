@@ -26,7 +26,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator, Optional
 
-DEFAULT_LOCK_PATH = Path.home() / ".config" / "yulu" / ".recording.lock"
+DEFAULT_LOCK_PATH = Path(
+    os.environ.get("YULU_CONFIG_DIR") or Path.home() / ".config" / "yulu"
+).expanduser() / ".recording.lock"
 
 
 @dataclass

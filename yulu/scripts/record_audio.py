@@ -37,7 +37,7 @@ from recording_lock import (
     RecordingBusy,
 )
 
-CONFIG_DIR = Path.home() / ".config" / "yulu"
+CONFIG_DIR = Path(os.environ.get("YULU_CONFIG_DIR") or Path.home() / ".config" / "yulu").expanduser()
 CONFIG_PATH = CONFIG_DIR / "config.json"
 SOCKET_PATH = CONFIG_DIR / "audio_daemon.sock"
 STATE_PATH = CONFIG_DIR / ".state.json"

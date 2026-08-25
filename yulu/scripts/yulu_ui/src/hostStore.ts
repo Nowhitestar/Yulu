@@ -556,11 +556,11 @@ export class HostStore {
     const pause = this.db.transaction(() => {
       const rows = (trigger ? this.db.prepare(`
         SELECT * FROM agent_tasks
-        WHERE state IN ('queued', 'awaiting_agent') AND trigger = ?
+        WHERE state IN ('queued', 'awaiting_agent', 'transcript_committed') AND trigger = ?
         ORDER BY created_at
       `).all(trigger) : this.db.prepare(`
         SELECT * FROM agent_tasks
-        WHERE state IN ('queued', 'awaiting_agent')
+        WHERE state IN ('queued', 'awaiting_agent', 'transcript_committed')
         ORDER BY created_at
       `).all()) as TaskRow[];
       const timestamp = now();
@@ -568,7 +568,7 @@ export class HostStore {
         this.db.prepare(`
           UPDATE agent_tasks SET state = 'awaiting_policy', phase = 'queued', error = ?,
             lease_token = NULL, updated_at = ?
-          WHERE id = ? AND state IN ('queued', 'awaiting_agent')
+          WHERE id = ? AND state IN ('queued', 'awaiting_agent', 'transcript_committed')
         `).run(reason.slice(0, 1000), timestamp, row.id);
         this.appendEvent(row.id, "task.awaiting_policy", { reason });
       }
@@ -588,7 +588,18 @@ export class HostStore {
       const timestamp = now();
       for (const row of rows) {
         this.db.prepare(`
-          UPDATE agent_tasks SET state = 'queued', phase = 'queued', error = NULL,
+          UPDATE agent_tasks SET
+            state = CASE
+              WHEN EXISTS (SELECT 1 FROM artifacts WHERE task_id = agent_tasks.id AND kind = 'transcript')
+                THEN 'transcript_committed'
+              ELSE 'queued'
+            END,
+            phase = CASE
+              WHEN EXISTS (SELECT 1 FROM artifacts WHERE task_id = agent_tasks.id AND kind = 'transcript')
+                THEN 'summarizing'
+              ELSE 'queued'
+            END,
+            error = NULL,
             lease_token = NULL, updated_at = ? WHERE id = ? AND state = 'awaiting_policy'
         `).run(timestamp, row.id);
         this.appendEvent(row.id, "task.policy_resumed", {});
@@ -688,7 +699,10 @@ export class HostStore {
       if (!kinds.has("transcript") || !kinds.has("summary")) {
         throw new Error("summary commit must include the verified transcript and summary records");
       }
+      const committedTranscript = this.listArtifacts(id)
+        .find((artifact) => artifact.kind === "transcript");
       for (const artifact of artifacts) {
+        const preservedTranscript = artifact.kind === "transcript" ? committedTranscript : undefined;
         this.db.prepare(`
           INSERT INTO artifacts (
             id, task_id, recording_stem, kind, path, sha256, bytes,
@@ -707,8 +721,8 @@ export class HostStore {
           artifact.sha256,
           artifact.bytes,
           artifact.mimeType,
-          JSON.stringify(artifact.provenance),
-          artifact.createdAt,
+          JSON.stringify(preservedTranscript?.provenance ?? artifact.provenance),
+          preservedTranscript?.createdAt ?? artifact.createdAt,
         );
       }
       this.db.prepare(`
@@ -860,6 +874,26 @@ export class HostStore {
       WHERE id = 1 AND attempt_id = ? AND task_id IS NULL
     `).run(attemptId);
     return result.changes === 1;
+  }
+
+  restartActivationAttempt(attemptId: string): ActivationAttempt {
+    const restart = this.db.transaction(() => {
+      const attempt = this.getActivationAttempt();
+      if (!attempt || attempt.id !== attemptId) throw new Error("Activation Attempt not found");
+      if (attempt.taskId) {
+        const task = this.getTask(attempt.taskId);
+        if (task && !["failed", "cancelled", "completed"].includes(task.state)) {
+          throw new Error("Activation Attempt still owns recoverable work");
+        }
+      }
+      this.db.prepare("DELETE FROM activation_attempt WHERE id = 1 AND attempt_id = ?").run(attemptId);
+      this.db.prepare(`
+        INSERT INTO activation_attempt (id, attempt_id, started_at)
+        VALUES (1, ?, ?)
+      `).run(randomUUID(), now());
+      return this.getActivationAttempt()!;
+    });
+    return restart.immediate();
   }
 
   markActivationAttemptStopping(attemptId: string): ActivationAttempt {
@@ -1347,21 +1381,38 @@ export class HostStore {
     return this.getTask(id)!;
   }
 
-  retry(id: string): AgentTask {
+  retry(
+    id: string,
+    options: { allowCancelled?: boolean; allowCompleted?: boolean; discardArtifacts?: boolean } = {},
+  ): AgentTask {
     const retry = this.db.transaction(() => {
       const task = this.getTask(id);
       if (!task) throw new Error(`task not found: ${id}`);
-      if (!["failed", "awaiting_agent", "awaiting_provider"].includes(task.state)) {
+      const retryable = ["failed", "awaiting_agent", "awaiting_provider"];
+      if (options.allowCancelled) retryable.push("cancelled");
+      if (options.allowCompleted) retryable.push("completed");
+      if (!retryable.includes(task.state)) {
         throw new Error(`task ${id} cannot retry from ${task.state}`);
       }
       const competing = this.competingActiveTask(task.recordingStem, id);
       if (competing) {
         throw new Error(`recording ${task.recordingStem} already has active Agent task ${competing.id}`);
       }
+      if (options.discardArtifacts) {
+        this.db.prepare("DELETE FROM artifacts WHERE task_id = ?").run(id);
+      }
       this.db.prepare(`
         UPDATE agent_tasks SET
-          state = CASE WHEN state = 'awaiting_provider' THEN 'transcript_committed' ELSE 'queued' END,
-          phase = CASE WHEN state = 'awaiting_provider' THEN 'summarizing' ELSE 'queued' END,
+          state = CASE
+            WHEN EXISTS (SELECT 1 FROM artifacts WHERE task_id = agent_tasks.id AND kind = 'transcript')
+              THEN 'transcript_committed'
+            ELSE 'queued'
+          END,
+          phase = CASE
+            WHEN EXISTS (SELECT 1 FROM artifacts WHERE task_id = agent_tasks.id AND kind = 'transcript')
+              THEN 'summarizing'
+            ELSE 'queued'
+          END,
           lease_token = NULL,
           native_session_id = NULL, artifact_session_id = NULL, delivery_session_id = NULL,
           attempt = 0, error = NULL, audit_json = NULL, updated_at = ? WHERE id = ?
@@ -1370,6 +1421,97 @@ export class HostStore {
       return this.getTask(id)!;
     });
     return retry.immediate();
+  }
+
+  replaceSummaryAttempt(
+    id: string,
+    selection: { summaryProvider: string; summaryModel: string },
+  ): AgentTask {
+    const replace = this.db.transaction(() => {
+      const original = this.getTask(id);
+      if (!original) throw new Error(`task not found: ${id}`);
+      if (!["failed", "awaiting_provider"].includes(original.state)) {
+        throw new Error(`task ${id} cannot replace its Summary Provider from ${original.state}`);
+      }
+      const summaryProvider = selection.summaryProvider.trim().toLowerCase();
+      const summaryModel = selection.summaryModel.trim();
+      if (!summaryProvider || summaryProvider.length > 100 || !summaryModel || summaryModel.length > 128) {
+        throw new Error("replacement Summary Provider identity is invalid");
+      }
+      if (summaryProvider === original.summaryProvider && summaryModel === original.summaryModel) {
+        throw new Error("replacement Summary Provider must differ from the original task snapshot");
+      }
+      const transcript = this.listArtifacts(id).find((artifact) => artifact.kind === "transcript");
+      if (!transcript) throw new Error(`task ${id} has no committed transcript to reuse`);
+      const competing = this.competingActiveTask(original.recordingStem, id);
+      if (competing) {
+        throw new Error(`recording ${original.recordingStem} already has active Agent task ${competing.id}`);
+      }
+
+      const replacementId = randomUUID();
+      const timestamp = now();
+      if (original.state === "awaiting_provider") {
+        this.db.prepare(`
+          UPDATE agent_tasks SET state = 'cancelled', phase = 'failed', lease_token = NULL,
+            error = 'Superseded by an explicit Summary Provider change', updated_at = ?
+          WHERE id = ? AND state = 'awaiting_provider'
+        `).run(timestamp, id);
+      }
+      this.db.prepare(`
+        INSERT INTO agent_tasks (
+          id, idempotency_key, recording_stem, title, audio_path, transcription_language, trigger,
+          state, phase, send_to_notion, destination_hint, agent_provider,
+          summary_provider, summary_model, instructions, attempt, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, 'manual', 'transcript_committed', 'summarizing', 0, ?, ?, ?, ?, ?, 0, ?, ?)
+      `).run(
+        replacementId,
+        `summary-regeneration:${randomUUID()}`,
+        original.recordingStem,
+        original.title,
+        original.audioPath,
+        original.transcriptionLanguage,
+        original.destinationHint,
+        summaryProvider,
+        summaryProvider,
+        summaryModel,
+        original.instructions,
+        timestamp,
+        timestamp,
+      );
+      this.db.prepare(`
+        INSERT INTO artifacts (
+          id, task_id, recording_stem, kind, path, sha256, bytes,
+          mime_type, provenance_json, created_at
+        ) VALUES (?, ?, ?, 'transcript', ?, ?, ?, ?, ?, ?)
+      `).run(
+        randomUUID(),
+        replacementId,
+        original.recordingStem,
+        transcript.path,
+        transcript.sha256,
+        transcript.bytes,
+        transcript.mimeType,
+        JSON.stringify({ ...transcript.provenance, reusedFromTaskId: original.id }),
+        timestamp,
+      );
+      this.db.prepare(`
+        UPDATE activation_attempt SET task_id = ?
+        WHERE id = 1 AND task_id = ? AND recording_stem = ?
+      `).run(replacementId, original.id, original.recordingStem);
+      this.appendEvent(id, "task.superseded", {
+        replacementTaskId: replacementId,
+        summaryProvider,
+        summaryModel,
+      });
+      this.appendEvent(replacementId, "task.queued", {
+        trigger: "manual",
+        summaryProvider,
+        summaryModel,
+        reusedTranscriptFromTaskId: original.id,
+      });
+      return this.getTask(replacementId)!;
+    });
+    return replace.immediate();
   }
 
   private competingActiveTask(recordingStem: string, excludingId: string): AgentTask | null {

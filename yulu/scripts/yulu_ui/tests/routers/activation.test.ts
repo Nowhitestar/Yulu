@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -100,6 +100,19 @@ describe("activation router", () => {
       disclosure: { kind: "local" as const },
     };
     const agentProbe = vi.fn(async () => agentReadiness);
+    const retryTask = vi.fn((
+      id: string,
+      options?: { allowCancelled?: boolean; allowCompleted?: boolean; discardArtifacts?: boolean },
+    ) => host!.retry(id, options));
+    const replaceSummaryProvider = vi.fn((id: string) => {
+      const selected = configValue.intelligence.summary.provider === "xai"
+        ? configValue.intelligence.summary
+        : { provider: agentReadiness.provider, model: agentReadiness.model };
+      return host!.replaceSummaryAttempt(id, {
+        summaryProvider: selected.provider,
+        summaryModel: selected.model,
+      });
+    });
     const ctx = {
       host,
       artifacts,
@@ -124,6 +137,11 @@ describe("activation router", () => {
         probe: agentProbe,
         gateway: () => ({} as never),
       },
+      recordingPipeline: {
+        retry: retryTask,
+        replaceSummaryProvider,
+        kick: vi.fn(),
+      },
     } as unknown as AppContext;
     return {
       moviesDir,
@@ -133,6 +151,8 @@ describe("activation router", () => {
       localStatus,
       xaiConnection,
       agentProbe,
+      retryTask,
+      replaceSummaryProvider,
       setAgentReadiness: (value: typeof agentReadiness) => { agentReadiness = value; },
       ctx,
     };
@@ -179,7 +199,7 @@ describe("activation router", () => {
     runRecordAudioMock.mockResolvedValue({ ok: true, stdout: "recording started\n", stderr: "" });
 
     const started = await caller.startAttempt();
-    expect(runRecordAudioMock).toHaveBeenCalledWith(ctx, ["start", "Core Activation"]);
+    expect(runRecordAudioMock).toHaveBeenCalledWith(ctx, ["start", "Core Activation"], { timeoutMs: 30_000 });
     expect(started).toMatchObject({
       state: "recording",
       attempt: { id: expect.any(String), taskId: null, recordingStem: null },
@@ -262,13 +282,31 @@ describe("activation router", () => {
     expect(host!.getActivationAttempt()?.id).toBe(started.attempt.id);
   });
 
-  it("does not strand a recording state when the production recorder fails to start", async () => {
+  it("durably names a bounded production-recorder start failure and retries capture", async () => {
     const { caller } = setup();
     runRecordAudioMock.mockRejectedValue(new Error("audio daemon unavailable"));
 
     await expect(caller.startAttempt()).rejects.toThrow("audio daemon unavailable");
-    expect(host!.getActivationAttempt()).toBeNull();
-    await expect(caller.status()).resolves.toMatchObject({ state: "unresolved" });
+    expect(host!.getActivationAttempt()).toMatchObject({
+      recordingStem: null,
+      taskId: null,
+      handoffError: "audio daemon unavailable",
+    });
+    await expect(caller.status()).resolves.toMatchObject({
+      state: "processing",
+      blocker: {
+        capability: "audio",
+        retry: "start_recording",
+        remediation: { href: "/settings/general" },
+      },
+    });
+
+    runRecordAudioMock.mockResolvedValue({ ok: true, stdout: "recording started\n", stderr: "" });
+    await expect(caller.retryAttempt()).resolves.toMatchObject({
+      state: "recording",
+      blocker: null,
+    });
+    expect(runRecordAudioMock).toHaveBeenCalledTimes(2);
   });
 
   it("blocks capture before start when production pipeline policy is paused", async () => {
@@ -338,6 +376,462 @@ describe("activation router", () => {
         recordingStem: "Guided_20260825_141500",
         handoffError: "Automatic Agent recording processing is paused by policy",
       },
+      blocker: {
+        capability: "recording_pipeline",
+        retry: "same_audio",
+        remediation: { href: "/settings/automation" },
+      },
+    });
+  });
+
+  it("turns a pre-correlation stop failure into a named durable audio blocker", async () => {
+    const { caller, ctx } = setup();
+    runRecordAudioMock.mockResolvedValue({ ok: true, stdout: "recording started\n", stderr: "" });
+    const started = await caller.startAttempt();
+    stopRecordingAndEnqueueMock.mockRejectedValue(new Error("audio daemon stop timed out"));
+
+    await expect(caller.stopAttempt()).rejects.toThrow("audio daemon stop timed out");
+    expect(host!.getActivationAttempt()).toMatchObject({
+      id: started.attempt.id,
+      recordingStem: null,
+      taskId: null,
+      handoffError: "audio daemon stop timed out",
+    });
+
+    host!.close();
+    host = new HostStore(join(root, "host.sqlite"));
+    const restartedCaller = createCaller(activationRouter, { ...ctx, host } as unknown as AppContext);
+    await expect(restartedCaller.status()).resolves.toMatchObject({
+      state: "processing",
+      blocker: {
+        capability: "audio",
+        retry: "same_audio",
+        remediation: { href: "/settings/general" },
+      },
+    });
+  });
+
+  it("names durable transcription and summary blockers with exact recovery actions", async () => {
+    const { caller, moviesDir, artifacts, configValue, retryTask } = setup();
+    const stem = "Guided_20260825_141500";
+    const audioPath = join(moviesDir, `${stem}.wav`);
+    writeFileSync(audioPath, wavWithAudio());
+    const attempt = host!.beginActivationAttempt().attempt;
+    const task = host!.enqueueRecording({
+      idempotencyKey: "recording:guided-blocker",
+      recordingStem: stem,
+      title: "Core Activation",
+      audioPath,
+      sendToNotion: false,
+      destinationHint: "",
+      agentProvider: "codex",
+      summaryProvider: "codex",
+      summaryModel: "runtime-managed",
+    }).task;
+    host!.correlateActivationAttempt(attempt.id, task.id);
+    let claimed = host!.claim(task.id)!;
+    host!.fail(task.id, claimed.leaseToken, "selected audio engine failed");
+
+    await expect(caller.status()).resolves.toMatchObject({
+      state: "processing",
+      blocker: {
+        capability: "transcription",
+        retry: "same_task",
+        remediation: { href: "/settings/transcription" },
+      },
+    });
+
+    host!.retry(task.id);
+    claimed = host!.claim(task.id)!;
+    const transcript = artifacts.commitTranscript(claimed, "preserved transcript", {
+      transcriptionProvider: "local",
+      committedBy: "yulu-host",
+    });
+    host!.recordTranscript(task.id, claimed.leaseToken!, transcript);
+    host!.fail(task.id, claimed.leaseToken, "summary output was empty");
+
+    await expect(caller.status()).resolves.toMatchObject({
+      state: "processing",
+      blocker: {
+        capability: "summary",
+        retry: "same_task",
+        remediation: { href: "/settings/llm" },
+      },
+      summaryRecovery: { canReplace: false },
+    });
+
+    configValue.intelligence.summary = { provider: "xai", model: "changed-default" };
+    await expect(caller.retryAttempt()).resolves.toMatchObject({
+      state: "processing",
+      task: {
+        id: task.id,
+        state: "transcript_committed",
+        summaryProvider: "codex",
+        summaryModel: "runtime-managed",
+      },
+    });
+    expect(retryTask).toHaveBeenCalledWith(task.id, { allowCancelled: true });
+  });
+
+  it("names credential, model, and provider failures without changing the pinned task", async () => {
+    const { caller, moviesDir } = setup();
+    const stem = "Guided_20260825_141502";
+    const audioPath = join(moviesDir, `${stem}.wav`);
+    writeFileSync(audioPath, wavWithAudio());
+    const attempt = host!.beginActivationAttempt().attempt;
+    const task = host!.enqueueRecording({
+      idempotencyKey: "recording:guided-named-blockers",
+      recordingStem: stem,
+      title: "Core Activation",
+      audioPath,
+      sendToNotion: false,
+      destinationHint: "",
+      agentProvider: "codex",
+      summaryProvider: "codex",
+      summaryModel: "runtime-managed",
+    }).task;
+    host!.correlateActivationAttempt(attempt.id, task.id);
+
+    for (const [detail, capability] of [
+      ["HTTP 401 credential rejected", "credential"],
+      ["selected model is unavailable", "model"],
+      ["Agent provider unavailable", "provider"],
+    ] as const) {
+      const claimed = host!.claim(task.id)!;
+      host!.fail(task.id, claimed.leaseToken, detail);
+      await expect(caller.status()).resolves.toMatchObject({
+        blocker: {
+          capability,
+          detail,
+          retry: "same_task",
+          remediation: { href: "/settings/transcription" },
+        },
+        task: {
+          id: task.id,
+          agentProvider: "codex",
+          summaryProvider: "codex",
+          summaryModel: "runtime-managed",
+        },
+      });
+      host!.retry(task.id);
+    }
+  });
+
+  it("uses an explicitly changed ready Summary Provider in a new correlated attempt", async () => {
+    const { caller, moviesDir, artifacts, configValue, ctx, replaceSummaryProvider } = setup();
+    const stem = "Guided_20260825_141501";
+    const audioPath = join(moviesDir, `${stem}.wav`);
+    writeFileSync(audioPath, wavWithAudio());
+    const attempt = host!.beginActivationAttempt().attempt;
+    const original = host!.enqueueRecording({
+      idempotencyKey: "recording:guided-provider-change",
+      recordingStem: stem,
+      title: "Core Activation",
+      audioPath,
+      sendToNotion: false,
+      destinationHint: "",
+      agentProvider: "codex",
+      summaryProvider: "codex",
+      summaryModel: "runtime-managed",
+    }).task;
+    host!.correlateActivationAttempt(attempt.id, original.id);
+    const claimed = host!.claim(original.id)!;
+    const transcript = artifacts.commitTranscript(claimed, "preserved transcript", {
+      transcriptionProvider: "local",
+      committedBy: "yulu-host",
+    });
+    host!.recordTranscript(original.id, claimed.leaseToken!, transcript);
+    host!.releaseToAwaitingProvider(original.id, claimed.leaseToken!, "Codex unavailable");
+
+    configValue.intelligence.summary = { provider: "xai", model: "grok-new-explicit" };
+    ctx.xaiReadiness!.set("summary", {
+      capability: "summary",
+      status: "ready",
+      model: "grok-new-explicit",
+      testedAt: "2026-08-25T04:00:00.000Z",
+      detail: "ready",
+      credentialSource: "oauth",
+    });
+    host!.recordSummaryDataPathDisclosure("xai", XAI_SUMMARY_DISCLOSURE_VERSION);
+
+    await expect(caller.status()).resolves.toMatchObject({
+      blocker: { capability: "provider", retry: "same_task" },
+      summaryRecovery: {
+        selected: { provider: "xai", model: "grok-new-explicit" },
+        state: "ready",
+        canReplace: true,
+      },
+    });
+    const replaced = await caller.replaceSummaryProvider();
+
+    expect(replaceSummaryProvider).toHaveBeenCalledWith(original.id);
+    expect(replaced).toMatchObject({
+      state: "processing",
+      task: {
+        id: expect.not.stringMatching(original.id),
+        state: "transcript_committed",
+        summaryProvider: "xai",
+        summaryModel: "grok-new-explicit",
+      },
+    });
+    expect(host!.getTask(original.id)?.state).toBe("cancelled");
+    expect(host!.getActivationAttempt()?.taskId).toBe(replaced.task!.id);
+  });
+
+  it("requires re-recording only when the preserved activation audio is invalid", async () => {
+    const { caller, moviesDir } = setup();
+    const stem = "Broken_20260825_141500";
+    const audioPath = join(moviesDir, `${stem}.wav`);
+    writeFileSync(audioPath, Buffer.alloc(44));
+    const attempt = host!.beginActivationAttempt().attempt;
+    const task = host!.enqueueRecording({
+      idempotencyKey: "recording:guided-invalid-audio",
+      recordingStem: stem,
+      title: "Core Activation",
+      audioPath,
+      sendToNotion: false,
+      destinationHint: "",
+      agentProvider: "codex",
+      summaryProvider: "codex",
+      summaryModel: "runtime-managed",
+    }).task;
+    host!.correlateActivationAttempt(attempt.id, task.id);
+    const claimed = host!.claim(task.id)!;
+    host!.fail(task.id, claimed.leaseToken, "transcription failed");
+
+    await expect(caller.status()).resolves.toMatchObject({
+      state: "processing",
+      blocker: {
+        capability: "audio",
+        retry: "rerecord",
+        remediation: { href: "/settings/general" },
+      },
+    });
+  });
+
+  it("turns a completed guided task with invalid artifacts into an actionable named blocker", async () => {
+    const { caller, moviesDir, artifacts, retryTask } = setup();
+    const attempt = host!.beginActivationAttempt().attempt;
+    const task = completeRecording(
+      moviesDir,
+      artifacts,
+      "Guided_invalid_summary_20260825_141500",
+      "2026-08-25T06:15:00.000Z",
+    );
+    host!.correlateActivationAttempt(attempt.id, task.id);
+    writeFileSync(join(moviesDir, `${task.recordingStem}.summary.md`), "tampered\n");
+
+    await expect(caller.status()).resolves.toMatchObject({
+      state: "processing",
+      task: { id: task.id, state: "completed" },
+      blocker: {
+        capability: "summary",
+        retry: "same_task",
+        remediation: { href: "/settings/llm" },
+      },
+      summaryRecovery: { canReplace: false },
+    });
+    await expect(caller.retryAttempt()).resolves.toMatchObject({
+      task: {
+        id: task.id,
+        state: "transcript_committed",
+        summaryProvider: task.summaryProvider,
+        summaryModel: task.summaryModel,
+      },
+    });
+    expect(retryTask).toHaveBeenCalledWith(task.id, {
+      allowCancelled: true,
+      allowCompleted: true,
+    });
+  });
+
+  it("re-transcribes valid audio when a completed transcript can no longer be verified", async () => {
+    const { caller, moviesDir, artifacts, retryTask } = setup();
+    const attempt = host!.beginActivationAttempt().attempt;
+    const task = completeRecording(
+      moviesDir,
+      artifacts,
+      "Guided_invalid_transcript_20260825_141500",
+      "2026-08-25T06:15:00.000Z",
+    );
+    host!.correlateActivationAttempt(attempt.id, task.id);
+    writeFileSync(join(moviesDir, `${task.recordingStem}.transcript.txt`), "tampered\n");
+
+    await expect(caller.status()).resolves.toMatchObject({
+      state: "processing",
+      task: { id: task.id, state: "completed" },
+      blocker: {
+        capability: "transcription",
+        retry: "same_task",
+        remediation: { href: "/settings/transcription" },
+      },
+    });
+    await caller.retryAttempt();
+    expect(host!.listArtifacts(task.id)).toEqual([]);
+    expect(retryTask).toHaveBeenCalledWith(task.id, {
+      allowCancelled: true,
+      allowCompleted: true,
+      discardArtifacts: true,
+    });
+  });
+
+  it("starts a new recording when a completed guided task no longer has valid audio", async () => {
+    const { caller, moviesDir, artifacts, ctx } = setup();
+    const attempt = host!.beginActivationAttempt().attempt;
+    const task = completeRecording(
+      moviesDir,
+      artifacts,
+      "Guided_invalid_audio_20260825_141500",
+      "2026-08-25T06:15:00.000Z",
+    );
+    host!.correlateActivationAttempt(attempt.id, task.id);
+    writeFileSync(task.audioPath, Buffer.alloc(44));
+    runRecordAudioMock.mockResolvedValue({ ok: true, stdout: "recording started\n", stderr: "" });
+
+    await expect(caller.status()).resolves.toMatchObject({
+      state: "processing",
+      blocker: { capability: "audio", retry: "rerecord" },
+    });
+    await expect(caller.rerecordAttempt()).resolves.toMatchObject({
+      state: "recording",
+      attempt: { id: expect.not.stringMatching(attempt.id), taskId: null },
+    });
+    expect(runRecordAudioMock).toHaveBeenCalledWith(ctx, ["start", "Core Activation"], { timeoutMs: 30_000 });
+  });
+
+  it("keeps a named audio blocker when starting the replacement recording fails", async () => {
+    const { caller, moviesDir } = setup();
+    const stem = "Broken_rerecord_20260825_141500";
+    const audioPath = join(moviesDir, `${stem}.wav`);
+    writeFileSync(audioPath, Buffer.alloc(44));
+    const attempt = host!.beginActivationAttempt().attempt;
+    const task = host!.enqueueRecording({
+      idempotencyKey: "recording:guided-rerecord-start-failure",
+      recordingStem: stem,
+      title: "Core Activation",
+      audioPath,
+      sendToNotion: false,
+      destinationHint: "",
+      agentProvider: "codex",
+      summaryProvider: "codex",
+      summaryModel: "runtime-managed",
+    }).task;
+    host!.correlateActivationAttempt(attempt.id, task.id);
+    const claimed = host!.claim(task.id)!;
+    host!.fail(task.id, claimed.leaseToken, "no audio frames");
+    runRecordAudioMock.mockRejectedValue(new Error("microphone disconnected"));
+
+    await expect(caller.rerecordAttempt()).rejects.toThrow("microphone disconnected");
+    await expect(caller.status()).resolves.toMatchObject({
+      state: "processing",
+      blocker: {
+        capability: "audio",
+        detail: "microphone disconnected",
+        retry: "start_recording",
+        remediation: { href: "/settings/general" },
+      },
+    });
+  });
+
+  it("inspects large saved WAVs without reading the whole recording into Host memory", async () => {
+    const { caller, moviesDir, artifacts } = setup();
+    const stem = "Guided_large_audio_20260825_141500";
+    const audioPath = join(moviesDir, `${stem}.wav`);
+    writeFileSync(audioPath, wavWithAudio());
+    truncateSync(audioPath, 3 * 1024 ** 3);
+    const attempt = host!.beginActivationAttempt().attempt;
+    const task = host!.enqueueRecording({
+      idempotencyKey: "recording:guided-large-audio",
+      recordingStem: stem,
+      title: "Core Activation",
+      audioPath,
+      sendToNotion: false,
+      destinationHint: "",
+      agentProvider: "codex",
+      summaryProvider: "codex",
+      summaryModel: "runtime-managed",
+    }).task;
+    host!.correlateActivationAttempt(attempt.id, task.id);
+    const claimed = host!.claim(task.id)!;
+    const transcript = artifacts.commitTranscript(claimed, "preserved transcript", {
+      transcriptionProvider: "local",
+      committedBy: "yulu-host",
+    });
+    host!.recordTranscript(task.id, claimed.leaseToken!, transcript);
+    host!.fail(task.id, claimed.leaseToken, "summary failed");
+
+    await expect(caller.status()).resolves.toMatchObject({
+      state: "processing",
+      blocker: { capability: "summary", retry: "same_task" },
+    });
+  });
+
+  it("can resume a cancelled activation task while leaving generic cancellation terminal", async () => {
+    const { caller, moviesDir, retryTask } = setup();
+    const stem = "Cancelled_20260825_141500";
+    const audioPath = join(moviesDir, `${stem}.wav`);
+    writeFileSync(audioPath, wavWithAudio());
+    const attempt = host!.beginActivationAttempt().attempt;
+    const task = host!.enqueueRecording({
+      idempotencyKey: "recording:guided-cancelled",
+      recordingStem: stem,
+      title: "Core Activation",
+      audioPath,
+      sendToNotion: false,
+      destinationHint: "",
+      agentProvider: "codex",
+      summaryProvider: "codex",
+      summaryModel: "runtime-managed",
+    }).task;
+    host!.correlateActivationAttempt(attempt.id, task.id);
+    host!.prepareRecordingDeletion(stem);
+
+    expect(() => host!.retry(task.id)).toThrow(/cannot retry from cancelled/);
+    await expect(caller.status()).resolves.toMatchObject({
+      state: "processing",
+      blocker: { capability: "transcription", retry: "same_task" },
+    });
+    await expect(caller.retryAttempt()).resolves.toMatchObject({
+      task: { id: task.id, state: "queued" },
+    });
+    expect(retryTask).toHaveBeenCalledWith(task.id, { allowCancelled: true });
+  });
+
+  it("recovers when recording deletion purges the correlated activation task", async () => {
+    const { caller, moviesDir } = setup();
+    const stem = "Deleted_activation_20260825_141500";
+    const audioPath = join(moviesDir, `${stem}.wav`);
+    writeFileSync(audioPath, wavWithAudio());
+    const attempt = host!.beginActivationAttempt().attempt;
+    const task = host!.enqueueRecording({
+      idempotencyKey: "recording:guided-deleted",
+      recordingStem: stem,
+      title: "Core Activation",
+      audioPath,
+      sendToNotion: false,
+      destinationHint: "",
+      agentProvider: "codex",
+      summaryProvider: "codex",
+      summaryModel: "runtime-managed",
+    }).task;
+    host!.correlateActivationAttempt(attempt.id, task.id);
+    host!.prepareRecordingDeletion(stem);
+    expect(host!.purgeRecordingTasks(stem)).toEqual([task.id]);
+    rmSync(audioPath);
+
+    await expect(caller.status()).resolves.toMatchObject({
+      state: "processing",
+      task: null,
+      blocker: {
+        capability: "audio",
+        retry: "rerecord",
+        remediation: { href: "/settings/general" },
+      },
+    });
+    runRecordAudioMock.mockResolvedValue({ ok: true, stdout: "recording started\n", stderr: "" });
+    await expect(caller.rerecordAttempt()).resolves.toMatchObject({
+      state: "recording",
+      attempt: { id: expect.not.stringMatching(attempt.id), taskId: null },
     });
   });
 

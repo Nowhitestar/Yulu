@@ -10,10 +10,19 @@ const exec = promisify(execFile) as (
   opts?: object,
 ) => Promise<{ stdout: string; stderr: string }>;
 
-export async function runRecordAudio(ctx: AppContext, args: string[]) {
+export async function runRecordAudio(
+  ctx: AppContext,
+  args: string[],
+  options: { timeoutMs?: number } = {},
+) {
   const { stdout, stderr } = await exec("python3", [join(ctx.paths.scriptDir, "record_audio.py"), ...args], {
-    env: { ...process.env, PYTHONPATH: ctx.paths.scriptDir },
+    env: {
+      ...process.env,
+      PYTHONPATH: ctx.paths.scriptDir,
+      YULU_CONFIG_DIR: ctx.paths.configDir,
+    },
     cwd: process.env.HOME,
+    ...(options.timeoutMs === undefined ? {} : { timeout: options.timeoutMs }),
   });
   return { ok: true as const, stdout, stderr };
 }

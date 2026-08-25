@@ -18,6 +18,9 @@ export function Activate() {
   });
   const startAttempt = trpc.activation.startAttempt.useMutation();
   const stopAttempt = trpc.activation.stopAttempt.useMutation();
+  const retryAttempt = trpc.activation.retryAttempt.useMutation();
+  const rerecordAttempt = trpc.activation.rerecordAttempt.useMutation();
+  const replaceSummaryProvider = trpc.activation.replaceSummaryProvider.useMutation();
   const defer = trpc.activation.defer.useMutation();
   const acceptXaiDisclosure = trpc.activation.acceptXaiTranscriptionDisclosure.useMutation();
   const acceptSummaryDisclosure = trpc.activation.acceptSummaryDataPathDisclosure.useMutation();
@@ -64,13 +67,25 @@ export function Activate() {
   if (activation.data?.state === "recording" || activation.data?.state === "processing") {
     const { task } = activation.data;
     const attemptError = activation.data.attempt.handoffError;
-    const needsAttention = Boolean(attemptError) || (task !== null && (
+    const blocker = activation.data.blocker;
+    const needsAttention = Boolean(blocker) || Boolean(attemptError) || (task !== null && (
         task.phase === "failed" ||
         ["awaiting_agent", "awaiting_provider", "awaiting_policy", "failed", "cancelled"].includes(task.state)
       ));
+    const blockerMessage = blocker ? ({
+      audio: "activation.attempt.blocker.audio",
+      transcription: "activation.attempt.blocker.transcription",
+      credential: "activation.attempt.blocker.credential",
+      model: "activation.attempt.blocker.model",
+      provider: "activation.attempt.blocker.provider",
+      summary: "activation.attempt.blocker.summary",
+      recording_pipeline: "activation.attempt.blocker.recordingPipeline",
+    } as const)[blocker.capability] : null;
     const progress = activation.data.state === "recording"
       ? t("activation.attempt.recording")
-      : needsAttention
+      : blockerMessage
+        ? t(blockerMessage)
+        : needsAttention
         ? t("activation.attempt.failed")
         : task?.phase === "transcribing"
           ? t("activation.attempt.transcribing")
@@ -79,6 +94,20 @@ export function Activate() {
             : task?.phase === "committing_artifacts" || task?.state === "artifacts_committed"
               ? t("activation.attempt.committing")
               : t("activation.attempt.queued");
+    const runRecovery = (action: () => Promise<unknown>) => {
+      setActionFailed(false);
+      void action().then(
+        () => activation.refetch(),
+        () => setActionFailed(true),
+      );
+    };
+    const remediationLabel = blocker?.remediation.href === "/settings/general"
+      ? t("activation.audioInput.openSettings")
+      : blocker?.remediation.href === "/settings/transcription"
+        ? t("activation.transcription.openSettings")
+        : blocker?.remediation.href === "/settings/automation"
+          ? t("activation.pipeline.openSettings")
+          : t("activation.summary.openSettings");
     return (
       <section className="activate-page" aria-labelledby="activate-title">
         <div className="activate-card">
@@ -87,7 +116,7 @@ export function Activate() {
           <p className="activate-status" role={needsAttention ? "alert" : "status"} aria-live="polite">
             {progress}
           </p>
-          {(task?.error || attemptError) && <p>{task?.error || attemptError}</p>}
+          {(blocker?.detail || task?.error || attemptError) && <p>{blocker?.detail || task?.error || attemptError}</p>}
           {activation.data.backgroundEvidence && (
             <div className="activation-notice" role="status" aria-live="polite">
               <span>{t("activation.notice.complete")}</span>
@@ -111,6 +140,38 @@ export function Activate() {
                 }}
               >
                 {t("activation.attempt.stop")}
+              </button>
+            )}
+            {blocker && (
+              <>
+                <Link className="activate-action" to={blocker.remediation.href}>{remediationLabel}</Link>
+                <button
+                  type="button"
+                  className="activate-action primary"
+                  disabled={retryAttempt.isPending || rerecordAttempt.isPending}
+                  onClick={() => runRecovery(() => blocker.retry === "rerecord"
+                    ? rerecordAttempt.mutateAsync()
+                    : retryAttempt.mutateAsync())}
+                >
+                  {blocker.retry === "rerecord"
+                    ? t("activation.attempt.rerecord")
+                    : blocker.retry === "start_recording"
+                      ? t("activation.attempt.start")
+                      : t("activation.attempt.retry")}
+                </button>
+              </>
+            )}
+            {activation.data.summaryRecovery?.canReplace && (
+              <button
+                type="button"
+                className="activate-action"
+                disabled={replaceSummaryProvider.isPending}
+                onClick={() => runRecovery(() => replaceSummaryProvider.mutateAsync())}
+              >
+                {t("activation.attempt.replaceSummary", {
+                  provider: activation.data.summaryRecovery.selected.provider,
+                  model: activation.data.summaryRecovery.selected.model,
+                })}
               </button>
             )}
             <Link className="activate-action" to="/agent-console">{t("activation.attempt.leave")}</Link>

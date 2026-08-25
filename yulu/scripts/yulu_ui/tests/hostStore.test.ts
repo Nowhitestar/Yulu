@@ -126,6 +126,104 @@ describe("HostStore", () => {
     });
   });
 
+  it("creates a new pinned summary attempt over the correlated committed transcript", () => {
+    createStore();
+    const activationAttempt = store!.beginActivationAttempt().attempt;
+    const original = enqueue(false).task;
+    store!.correlateActivationAttempt(activationAttempt.id, original.id);
+    const claimed = store!.claim(original.id)!;
+    store!.recordTranscript(claimed.id, claimed.leaseToken!, artifacts(claimed.id)[0]!);
+    store!.releaseToAwaitingProvider(claimed.id, claimed.leaseToken!, "Hermes offline");
+
+    const replacement = store!.replaceSummaryAttempt(original.id, {
+      summaryProvider: "xai",
+      summaryModel: "grok-pinned",
+    });
+
+    expect(store!.getTask(original.id)).toMatchObject({
+      state: "cancelled",
+      summaryProvider: "hermes",
+      summaryModel: "runtime-managed",
+    });
+    expect(replacement).toMatchObject({
+      recordingStem: original.recordingStem,
+      state: "transcript_committed",
+      phase: "summarizing",
+      trigger: "manual",
+      agentProvider: "xai",
+      summaryProvider: "xai",
+      summaryModel: "grok-pinned",
+    });
+    expect(replacement.id).not.toBe(original.id);
+    expect(store!.listArtifacts(original.id)).toEqual([
+      expect.objectContaining({ kind: "transcript", provenance: { agent: "hermes" } }),
+    ]);
+    expect(store!.listArtifacts(replacement.id)).toEqual([
+      expect.objectContaining({
+        kind: "transcript",
+        provenance: expect.objectContaining({ reusedFromTaskId: original.id }),
+      }),
+    ]);
+    expect(store!.getActivationAttempt()).toMatchObject({ taskId: replacement.id });
+    expect(store!.listEvents(original.id).at(-1)).toMatchObject({
+      type: "task.superseded",
+      payload: { replacementTaskId: replacement.id },
+    });
+  });
+
+  it("pins the replacement Agent provenance when moving from xAI to a Supported Agent", () => {
+    createStore();
+    const original = store!.enqueueRecording({
+      idempotencyKey: "recording:xai-to-agent-replacement",
+      recordingStem: "Meeting_20260710_103000",
+      title: "Meeting",
+      audioPath: "/tmp/Meeting_20260710_103000.wav",
+      sendToNotion: false,
+      destinationHint: "",
+      agentProvider: "xai",
+      summaryProvider: "xai",
+      summaryModel: "grok-old",
+    }).task;
+    const claimed = store!.claim(original.id)!;
+    store!.recordTranscript(claimed.id, claimed.leaseToken!, artifacts(claimed.id)[0]!);
+    store!.fail(claimed.id, claimed.leaseToken, "xAI summary failed");
+
+    const replacement = store!.replaceSummaryAttempt(original.id, {
+      summaryProvider: "codex",
+      summaryModel: "runtime-managed",
+    });
+
+    expect(replacement).toMatchObject({
+      agentProvider: "codex",
+      summaryProvider: "codex",
+      summaryModel: "runtime-managed",
+    });
+    expect(store!.getTask(original.id)).toMatchObject({
+      agentProvider: "xai",
+      summaryProvider: "xai",
+      summaryModel: "grok-old",
+    });
+  });
+
+  it("preserves committed-transcript progress across policy pause and resume", () => {
+    createStore();
+    const task = enqueue(false).task;
+    const claimed = store!.claim(task.id)!;
+    store!.recordTranscript(claimed.id, claimed.leaseToken!, artifacts(claimed.id)[0]!);
+    store!.releaseToAwaitingProvider(claimed.id, claimed.leaseToken!, "provider offline");
+    store!.retry(task.id);
+
+    expect(store!.pauseDispatchableForPolicy("pipeline disabled")).toEqual([
+      expect.objectContaining({ id: task.id, state: "awaiting_policy" }),
+    ]);
+    expect(store!.resumePolicyPaused()).toEqual([
+      expect.objectContaining({ id: task.id, state: "transcript_committed", phase: "summarizing" }),
+    ]);
+    expect(store!.listArtifacts(task.id)).toEqual([
+      expect.objectContaining({ kind: "transcript" }),
+    ]);
+  });
+
   it("recovers legacy Activation Attempt correlation only from work created after it began", () => {
     createStore();
     const oldTask = enqueue(false).task;
