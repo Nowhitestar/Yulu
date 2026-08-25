@@ -78,6 +78,31 @@ export interface ArtifactRecord {
   createdAt: string;
 }
 
+export interface ActivationArtifactFingerprint {
+  sha256: string;
+  bytes: number;
+}
+
+export interface CoreActivationEvidence {
+  recordingStem: string;
+  taskId: string;
+  transcriptionProvider: string;
+  summaryProvider: string;
+  summaryModel: string;
+  artifacts: {
+    audio: ActivationArtifactFingerprint;
+    transcript: ActivationArtifactFingerprint;
+    summary: ActivationArtifactFingerprint;
+  };
+  completedAt: string;
+}
+
+export interface CoreActivationCandidate {
+  task: AgentTask;
+  artifacts: ArtifactRecord[];
+  transcriptionProvider: string | null;
+}
+
 export interface NotionDelivery {
   taskId: string;
   deliveryKey: string;
@@ -713,6 +738,102 @@ export class HostStore {
     }));
   }
 
+  getCoreActivationEvidence(): CoreActivationEvidence | null {
+    const row = this.db.prepare("SELECT * FROM core_activation_evidence WHERE id = 1").get() as {
+      recording_stem: string;
+      task_id: string;
+      transcription_provider: string;
+      summary_provider: string;
+      summary_model: string;
+      audio_sha256: string;
+      audio_bytes: number;
+      transcript_sha256: string;
+      transcript_bytes: number;
+      summary_sha256: string;
+      summary_bytes: number;
+      completed_at: string;
+    } | undefined;
+    return row ? {
+      recordingStem: row.recording_stem,
+      taskId: row.task_id,
+      transcriptionProvider: row.transcription_provider,
+      summaryProvider: row.summary_provider,
+      summaryModel: row.summary_model,
+      artifacts: {
+        audio: { sha256: row.audio_sha256, bytes: row.audio_bytes },
+        transcript: { sha256: row.transcript_sha256, bytes: row.transcript_bytes },
+        summary: { sha256: row.summary_sha256, bytes: row.summary_bytes },
+      },
+      completedAt: row.completed_at,
+    } : null;
+  }
+
+  recordCoreActivationEvidence(evidence: CoreActivationEvidence): CoreActivationEvidence {
+    const fingerprints = Object.values(evidence.artifacts);
+    if (
+      !evidence.recordingStem.trim() || !evidence.taskId.trim() ||
+      !evidence.transcriptionProvider.trim() || !evidence.summaryProvider.trim() ||
+      !evidence.summaryModel.trim() || !Number.isFinite(Date.parse(evidence.completedAt)) ||
+      fingerprints.some((item) => !/^[a-f0-9]{64}$/i.test(item.sha256) || item.bytes <= 0)
+    ) {
+      throw new Error("Core Activation Evidence is incomplete");
+    }
+    this.db.prepare(`
+      INSERT OR IGNORE INTO core_activation_evidence (
+        id, recording_stem, task_id, transcription_provider, summary_provider, summary_model,
+        audio_sha256, audio_bytes, transcript_sha256, transcript_bytes,
+        summary_sha256, summary_bytes, completed_at
+      ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      evidence.recordingStem,
+      evidence.taskId,
+      evidence.transcriptionProvider,
+      evidence.summaryProvider,
+      evidence.summaryModel,
+      evidence.artifacts.audio.sha256,
+      evidence.artifacts.audio.bytes,
+      evidence.artifacts.transcript.sha256,
+      evidence.artifacts.transcript.bytes,
+      evidence.artifacts.summary.sha256,
+      evidence.artifacts.summary.bytes,
+      evidence.completedAt,
+    );
+    return this.getCoreActivationEvidence()!;
+  }
+
+  listCoreActivationCandidates(): CoreActivationCandidate[] {
+    const rows = this.db.prepare(`
+      SELECT * FROM agent_tasks
+      ORDER BY updated_at DESC, created_at DESC
+    `).all() as Array<TaskRow & { audit_json: string | null }>;
+    return rows.map((row) => {
+      let transcriptionProvider: string | null = null;
+      try {
+        const audit = JSON.parse(row.audit_json ?? "null") as Record<string, unknown> | null;
+        if (typeof audit?.transcriptionProvider === "string") {
+          transcriptionProvider = audit.transcriptionProvider;
+        }
+      } catch { /* malformed legacy audit cannot establish activation */ }
+      if (!transcriptionProvider) {
+        const progress = this.listEvents(row.id).reverse().find((event) => {
+          const message = event.payload.message;
+          return event.type === "task.progress" &&
+            typeof message === "string" &&
+            message.startsWith("Transcription provider:");
+        });
+        const message = progress?.payload.message;
+        if (typeof message === "string") {
+          transcriptionProvider = message.slice("Transcription provider:".length).trim() || null;
+        }
+      }
+      return {
+        task: toTask(row),
+        artifacts: this.listArtifacts(row.id),
+        transcriptionProvider,
+      };
+    });
+  }
+
   beginNotionDelivery(id: string, leaseToken: string): NotionDelivery {
     const begin = this.db.transaction(() => {
       const task = this.requireLease(id, leaseToken);
@@ -1104,6 +1225,22 @@ export class HostStore {
       );
       CREATE INDEX IF NOT EXISTS idx_agent_task_events_task
         ON agent_task_events(task_id, created_at);
+
+      CREATE TABLE IF NOT EXISTS core_activation_evidence (
+        id INTEGER PRIMARY KEY CHECK(id = 1),
+        recording_stem TEXT NOT NULL,
+        task_id TEXT NOT NULL,
+        transcription_provider TEXT NOT NULL,
+        summary_provider TEXT NOT NULL,
+        summary_model TEXT NOT NULL,
+        audio_sha256 TEXT NOT NULL,
+        audio_bytes INTEGER NOT NULL,
+        transcript_sha256 TEXT NOT NULL,
+        transcript_bytes INTEGER NOT NULL,
+        summary_sha256 TEXT NOT NULL,
+        summary_bytes INTEGER NOT NULL,
+        completed_at TEXT NOT NULL
+      );
     `);
     const columns = this.db.prepare("PRAGMA table_info(agent_tasks)").all() as Array<{ name: string }>;
     if (!columns.some((column) => column.name === "instructions")) {

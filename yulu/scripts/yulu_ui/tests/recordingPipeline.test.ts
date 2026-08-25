@@ -10,6 +10,24 @@ import { RecordingPipeline, agentRetryDelayMs } from "../src/recordingPipeline.j
 import { AgentUnavailableError, type RecordingAgentGateway } from "../src/agentGateway.js";
 import { paths } from "../src/paths.js";
 
+function wavWithAudio(): Buffer {
+  const header = Buffer.alloc(44);
+  header.write("RIFF", 0, "ascii");
+  header.writeUInt32LE(37, 4);
+  header.write("WAVE", 8, "ascii");
+  header.write("fmt ", 12, "ascii");
+  header.writeUInt32LE(16, 16);
+  header.writeUInt16LE(1, 20);
+  header.writeUInt16LE(1, 22);
+  header.writeUInt32LE(16_000, 24);
+  header.writeUInt32LE(32_000, 28);
+  header.writeUInt16LE(2, 32);
+  header.writeUInt16LE(16, 34);
+  header.write("data", 36, "ascii");
+  header.writeUInt32LE(1, 40);
+  return Buffer.concat([header, Buffer.from([1])]);
+}
+
 describe("RecordingPipeline", () => {
   let root = "";
   let store: HostStore | undefined;
@@ -93,7 +111,10 @@ describe("RecordingPipeline", () => {
     const runArtifactWorkflow = vi.fn(async ({ task, leaseToken, workspace }: Parameters<RecordingAgentGateway["runArtifactWorkflow"]>[0]) => {
       writeFileSync(workspace.summaryPath, "# Summary\n\nhello\n");
       if (!opts.skipArtifactCommit) {
-        const records = artifacts.commitFromWorkspace(task, { agent: "hermes" });
+        const records = artifacts.commitFromWorkspace(task, {
+          agentProvider: task.summaryProvider,
+          committedBy: "yulu-host",
+        });
         store!.recordArtifacts(task.id, leaseToken, records);
       }
       return {
@@ -236,6 +257,27 @@ describe("RecordingPipeline", () => {
     expect(() => writeFileSync(join(moviesDir, "proof"), "ok")).not.toThrow();
   });
 
+  it("persists Core Activation Evidence when a production recording completes", async () => {
+    const { audioPath } = setup();
+    writeFileSync(audioPath, wavWithAudio());
+
+    const { task } = pipeline!.enqueueCompletion({ audioPath, title: "Demo" });
+    await vi.waitFor(() => expect(store!.getTask(task.id)?.state).toBe("completed"));
+
+    expect(store!.getCoreActivationEvidence()).toMatchObject({
+      recordingStem: task.recordingStem,
+      taskId: task.id,
+      transcriptionProvider: "test-audio",
+      summaryProvider: "hermes",
+      summaryModel: "runtime-managed",
+      artifacts: {
+        audio: { bytes: 45, sha256: expect.stringMatching(/^[a-f0-9]{64}$/) },
+        transcript: { sha256: expect.stringMatching(/^[a-f0-9]{64}$/) },
+        summary: { sha256: expect.stringMatching(/^[a-f0-9]{64}$/) },
+      },
+    });
+  });
+
   it("asks the selected audio service for the final transcript", async () => {
     const { audioPath, moviesDir, transcribe } = setup();
     writeFileSync(audioPath.replace(/\.wav$/, ".realtime.transcript.txt"), "这是会议的实时转写，with Alpha。\n");
@@ -372,6 +414,7 @@ describe("RecordingPipeline", () => {
 
   it("commits an automatic xAI summary from only the pinned instructions and committed transcript", async () => {
     const { audioPath, configManager, moviesDir, xaiRequest, runArtifactWorkflow } = setup({ xaiText: true });
+    writeFileSync(audioPath, wavWithAudio());
     configManager.update("intelligence.summary", { provider: "xai", model: "grok-4.6-exact" });
 
     const { task } = pipeline!.enqueueCompletion({ audioPath, title: "Pinned xAI" });
@@ -397,6 +440,11 @@ describe("RecordingPipeline", () => {
         credentialSource: "oauth",
         committedBy: "yulu-host",
       });
+    expect(store!.getCoreActivationEvidence()).toMatchObject({
+      taskId: task.id,
+      summaryProvider: "xai",
+      summaryModel: "grok-4.6-exact",
+    });
   });
 
   it("routes the exact claimed xAI task without a bounded queue pre-scan", async () => {
@@ -469,6 +517,7 @@ describe("RecordingPipeline", () => {
 
   it("fences connector uncertainty before the delivery Agent can make a write", async () => {
     const { audioPath, notionStartedFromState } = setup({ notionThrowsAfterCapability: true });
+    writeFileSync(audioPath, wavWithAudio());
     const { task } = pipeline!.enqueueCompletion({ audioPath, sendToNotion: true });
 
     await vi.waitFor(() => expect(store!.getTask(task.id)?.state).toBe("delivery_unverified"));
@@ -477,6 +526,7 @@ describe("RecordingPipeline", () => {
       deliveryKey: `yulu-${task.id}`,
       status: "sending",
     });
+    expect(store!.getCoreActivationEvidence()).toMatchObject({ taskId: task.id });
     expect(() => pipeline!.retry(task.id)).toThrow(/cannot retry from delivery_unverified/);
   });
 

@@ -20,6 +20,7 @@ import { categoryLabelKey } from "./components/settings/categories.js";
 import { Health, handle as healthHandle } from "./routes/health.js";
 import { AgentConsole, handle as agentConsoleHandle } from "./routes/agent-console.js";
 import { VoiceInput, handle as voiceInputHandle } from "./routes/voice-input.js";
+import { Activate, handle as activateHandle } from "./routes/activate.js";
 
 function RecordingRedirect() {
   const { stem } = useParams();
@@ -40,6 +41,7 @@ const router = createBrowserRouter([
       { path: "agent-console", Component: AgentConsole, handle: agentConsoleHandle },
       { path: "voice-chat", Component: AgentConsole, handle: agentConsoleHandle },
       { path: "voice-input", Component: VoiceInput, handle: voiceInputHandle },
+      { path: "activate", Component: Activate, handle: activateHandle },
       {
         path: "inbox",
         Component: InboxLayout,

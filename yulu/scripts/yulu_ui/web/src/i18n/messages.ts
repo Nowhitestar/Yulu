@@ -102,6 +102,24 @@ export const en: Messages = {
   "breadcrumb.glossary": "Glossary",
   "breadcrumb.settings": "Settings",
   "breadcrumb.health": "Health",
+  "breadcrumb.activate": "Activation",
+
+  // ---- Core Activation ----
+  "activation.loading": "Checking activation…",
+  "activation.unresolved.title": "Core Activation is not verified yet",
+  "activation.unresolved.body": "Yulu has not found a completed production recording with verifiable audio, transcript, summary, and provider evidence.",
+  "activation.activated.status": "Core Activation verified",
+  "activation.activated.title": "Yulu is activated",
+  "activation.activated.body": "A completed production recording established durable Core Activation Evidence. Later provider changes or artifact cleanup do not revoke it.",
+  "activation.evidence.aria": "Core Activation Evidence",
+  "activation.evidence.recording": "Recording",
+  "activation.evidence.transcription": "Transcription",
+  "activation.evidence.summary": "Summary",
+  "activation.evidence.completed": "Completed",
+  "activation.sourceMissing": "The original recording is no longer available. Its durable activation evidence is still preserved.",
+  "activation.action.note": "Open completed note",
+  "activation.action.transcription": "Transcription settings",
+  "activation.action.providers": "AI Provider settings",
 
   // ---- Voice input ----
   "voiceInput.title": "Voice Input",
@@ -900,6 +918,24 @@ export const zh: Messages = {
   "breadcrumb.glossary": "术语表",
   "breadcrumb.settings": "设置",
   "breadcrumb.health": "健康状态",
+  "breadcrumb.activate": "激活",
+
+  // ---- Core Activation ----
+  "activation.loading": "正在检查激活状态…",
+  "activation.unresolved.title": "核心激活尚未验证",
+  "activation.unresolved.body": "Yulu 尚未找到同时具备可验证录音、转写、摘要与提供商证据的已完成生产录音。",
+  "activation.activated.status": "核心激活证据已验证",
+  "activation.activated.title": "Yulu 已激活",
+  "activation.activated.body": "一次已完成的生产录音建立了持久的核心激活证据。之后更改提供商或清理产物都不会撤销激活。",
+  "activation.evidence.aria": "核心激活证据",
+  "activation.evidence.recording": "录音",
+  "activation.evidence.transcription": "转写",
+  "activation.evidence.summary": "摘要",
+  "activation.evidence.completed": "完成时间",
+  "activation.sourceMissing": "原始录音已不存在，但持久的激活证据仍然保留。",
+  "activation.action.note": "打开已完成笔记",
+  "activation.action.transcription": "转写设置",
+  "activation.action.providers": "AI 提供商设置",
 
   // ---- Voice input ----
   "voiceInput.title": "语音输入",

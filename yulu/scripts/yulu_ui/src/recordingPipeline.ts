@@ -30,6 +30,7 @@ import {
 } from "./realtimeTranscription.js";
 import type { AudioTranscriptionService } from "./audioTranscription.js";
 import type { XaiTextClient } from "./xaiText.js";
+import { verifiedCoreActivationEvidence } from "./coreActivation.js";
 
 const REC_FILE_RE = /^(.+?)_(\d{8})_(\d{6})\.wav$/;
 const DISPATCH_POLL_MS = 15_000;
@@ -588,6 +589,12 @@ export class RecordingPipeline {
       if (afterAgent.state !== "artifacts_committed") {
         throw new Error(`Hermes exited without completing the artifact Host commit (state=${afterAgent.state})`);
       }
+      const activationEvidence = verifiedCoreActivationEvidence({
+        task: afterAgent,
+        artifacts: this.options.store.listArtifacts(task.id),
+        transcriptionProvider: transcription.provider,
+      }, this.options.artifacts, this.options.paths.moviesDir);
+      if (activationEvidence) this.options.store.recordCoreActivationEvidence(activationEvidence);
 
       // The delivery phase starts a new native session. It receives neither
       // the artifact session context nor filesystem capability, and can read
@@ -616,14 +623,15 @@ export class RecordingPipeline {
       if (afterDelivery.state !== expected) {
         throw new Error(`Hermes exited without completing the required Host commits (state=${afterDelivery.state})`);
       }
-      this.options.store.complete(task.id, leaseToken, {
+      const completionAudit = {
         artifactSessionId,
         artifactToolNames,
         deliverySessionId: deliveryResult?.nativeSessionId ?? null,
         deliveryToolNames: deliveryResult?.audit.toolNames ?? [],
         transcriptChunks: transcription.chunks,
         transcriptionProvider: transcription.provider,
-      });
+      };
+      this.options.store.complete(task.id, leaseToken, completionAudit);
       try { this.options.artifacts.cleanupWorkspace(task.id); }
       catch { /* artifacts are already committed; cleanup is best effort */ }
       this.publish(task, "done");

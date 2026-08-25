@@ -3,7 +3,7 @@ import { chmodSync, existsSync, mkdtempSync, rmSync, statSync, writeFileSync } f
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import Database from "better-sqlite3";
-import { HostStore, type ArtifactRecord } from "../src/hostStore.js";
+import { HostStore, type ArtifactRecord, type CoreActivationEvidence } from "../src/hostStore.js";
 
 const NOTION_PAGE_ID = "0123456789abcdef0123456789abcdef";
 const SUMMARY_IDENTITY = { summaryProvider: "hermes", summaryModel: "runtime-managed" } as const;
@@ -67,6 +67,42 @@ describe("HostStore", () => {
       },
     ];
   }
+
+  function activationEvidence(taskId: string): CoreActivationEvidence {
+    return {
+      recordingStem: "Demo_20260711_120000",
+      taskId,
+      transcriptionProvider: "local",
+      summaryProvider: "hermes",
+      summaryModel: "runtime-managed",
+      artifacts: {
+        audio: { sha256: "c".repeat(64), bytes: 44 },
+        transcript: { sha256: "a".repeat(64), bytes: 10 },
+        summary: { sha256: "b".repeat(64), bytes: 12 },
+      },
+      completedAt: "2026-07-11T12:10:00.000Z",
+    };
+  }
+
+  it("keeps Core Activation Evidence after task cleanup and Host restart", () => {
+    createStore();
+    const task = enqueue(false).task;
+    store!.db.prepare("UPDATE agent_tasks SET state = 'completed', phase = 'completed' WHERE id = ?").run(task.id);
+
+    expect(store!.recordCoreActivationEvidence(activationEvidence(task.id))).toEqual(activationEvidence(task.id));
+    expect(store!.recordCoreActivationEvidence({
+      ...activationEvidence("later-task"),
+      summaryProvider: "xai",
+      summaryModel: "grok-later",
+    })).toEqual(activationEvidence(task.id));
+    store!.purgeRecordingTasks(task.recordingStem);
+    expect(store!.getCoreActivationEvidence()).toEqual(activationEvidence(task.id));
+
+    const dbPath = join(root, "host.sqlite");
+    store!.close();
+    store = new HostStore(dbPath);
+    expect(store.getCoreActivationEvidence()).toEqual(activationEvidence(task.id));
+  });
 
   it("deduplicates recording completion by idempotency key", () => {
     createStore();
