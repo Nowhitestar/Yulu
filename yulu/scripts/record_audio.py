@@ -535,7 +535,8 @@ def main():
             try:
                 with acquire_recording_lock(timeout=0.5) as lock_handle:
                     if daemon_ensure_running():
-                        daemon_start(title, lock_handle=lock_handle)
+                        if not daemon_start(title, lock_handle=lock_handle):
+                            sys.exit(1)
                     else:
                         log("⚠️ Yulu 未运行，切换到 SoX 后端")
                         sox_start(title, lock_handle=lock_handle)

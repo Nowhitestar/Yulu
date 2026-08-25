@@ -36,6 +36,13 @@ key presence is not acceptance to send transcript text. Additional Agent Summary
 Providers remain blocked in the public activation flow until a Phase 12 adapter
 can prove the same identity, readiness, and disclosure contract.
 
+When activation readiness is green, `/activate` starts the same production
+recorder used elsewhere in Yulu and suggests a natural 10–20 second recording.
+Its durable Host task keeps processing after navigation or restart. Verified
+audio, transcript, summary, integrity, and provider provenance establish the
+milestone; guided completion opens the saved note, while other qualifying
+recordings show a nonblocking link without changing the current page.
+
 ## What you can do
 
 | Experience | What Yulu provides |

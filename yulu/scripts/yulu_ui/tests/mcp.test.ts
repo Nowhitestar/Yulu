@@ -11,7 +11,10 @@ import { RecordingPipelinePolicyDisabledError } from "../src/recordingPipeline.j
 
 function context(
   config: Record<string, unknown>,
-  enqueueCompletion = vi.fn(() => ({ task: { id: "task-1", state: "queued" }, created: true })),
+  enqueueCompletion = vi.fn(() => ({
+    task: { id: "task-1", recordingStem: "Team_20260711_120000", state: "queued" },
+    created: true,
+  })),
 ) {
   return {
     config: { read: () => config },
@@ -45,29 +48,47 @@ describe("MCP recording_stop pipeline handoff", () => {
   });
 
   it("enqueues the final path and prefers explicit Agent pipeline Notion consent", async () => {
-    const enqueueCompletion = vi.fn(() => ({ task: { id: "task-1", state: "queued" }, created: true }));
+    const enqueueCompletion = vi.fn(() => ({
+      task: { id: "task-1", recordingStem: "Team_20260711_120000", state: "queued" },
+      created: true,
+    }));
     const ctx = context({
       agent_pipeline: { auto_send_notion: false },
     }, enqueueCompletion);
+    const onRecordingStopped = vi.fn();
 
     const result = await stopRecordingAndEnqueue(ctx, async () => ({
       ok: true,
       stdout: "done\nFINAL_RECORDING_PATH=/Users/test/Movies/Yulu/Team_20260711_120000.wav\n",
       stderr: "",
-    }));
+    }), onRecordingStopped);
 
+    expect(onRecordingStopped).toHaveBeenCalledWith({
+      audioPath: "/Users/test/Movies/Yulu/Team_20260711_120000.wav",
+      recordingStem: "Team_20260711_120000",
+    });
     expect(enqueueCompletion).toHaveBeenCalledWith({
       audioPath: "/Users/test/Movies/Yulu/Team_20260711_120000.wav",
       sendToNotion: false,
     });
-    expect(result.pipeline).toEqual({ taskId: "task-1", state: "queued", created: true, sendToNotion: false });
+    expect(result.pipeline).toEqual({
+      accepted: true,
+      taskId: "task-1",
+      recordingStem: "Team_20260711_120000",
+      state: "queued",
+      created: true,
+      sendToNotion: false,
+    });
   });
 
   it.each([
     [{ agent_pipeline: { auto_send_notion: true } }, true],
     [{ agent_pipeline: { auto_send_notion: false } }, false],
   ])("uses the migrated Agent pipeline consent", async (config, expected) => {
-    const enqueueCompletion = vi.fn(() => ({ task: { id: "task-1", state: "queued" }, created: true }));
+    const enqueueCompletion = vi.fn(() => ({
+      task: { id: "task-1", recordingStem: "Team_20260711_120000", state: "queued" },
+      created: true,
+    }));
     const ctx = context(config, enqueueCompletion);
 
     await stopRecordingAndEnqueue(ctx, async () => ({

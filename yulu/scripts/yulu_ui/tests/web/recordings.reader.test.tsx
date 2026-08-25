@@ -16,6 +16,7 @@ const retryTaskMutate = vi.fn();
 const renameSpeakerMutate = vi.fn();
 const mergeSpeakersMutate = vi.fn();
 const assignSegmentSpeakerMutate = vi.fn();
+const acknowledgeGuidedCompletionMutate = vi.fn();
 const promptListMock = vi.fn();
 const navigateMock = vi.fn();
 const confirmMock = vi.fn(() => true);
@@ -44,6 +45,11 @@ vi.mock("../../web/src/trpc.js", () => ({
       confirmNotionDelivery: { useMutation: () => ({ mutate: confirmDeliveryMutate, isPending: false }) },
       abandonNotionDelivery: { useMutation: () => ({ mutate: abandonDeliveryMutate, isPending: false }) },
     },
+    activation: {
+      acknowledgeGuidedCompletion: {
+        useMutation: () => ({ mutate: acknowledgeGuidedCompletionMutate, isPending: false }),
+      },
+    },
   },
 }));
 vi.mock("../../web/src/ws.js", () => ({ useWsChannel: () => {} }));
@@ -68,11 +74,11 @@ const baseData = {
   status: "idle", wavPath: "/tmp/TeamSync_20260102_090000.wav",
 };
 
-function renderAt(stem: string, lang?: "zh" | "en") {
+function renderAt(stem: string, lang?: "zh" | "en", search = "") {
   if (lang) localStorage.setItem("yulu_ui.lang", lang);
   const reader = <Routes><Route path="/inbox/:stem" element={<RecordingReader />} /></Routes>;
   return render(
-    <MemoryRouter initialEntries={[`/inbox/${stem}`]}>
+    <MemoryRouter initialEntries={[`/inbox/${stem}${search}`]}>
       {lang ? <LanguageProvider>{reader}</LanguageProvider> : reader}
     </MemoryRouter>
   );
@@ -92,11 +98,22 @@ beforeEach(() => {
   renameMutate.mockClear(); setTagsMutate.mockClear(); deleteMutate.mockClear();
   confirmDeliveryMutate.mockClear(); abandonDeliveryMutate.mockClear();
   retryTaskMutate.mockClear();
+  acknowledgeGuidedCompletionMutate.mockClear();
   renameSpeakerMutate.mockClear(); mergeSpeakersMutate.mockClear(); assignSegmentSpeakerMutate.mockClear();
   navigateMock.mockClear(); confirmMock.mockClear(); confirmMock.mockReturnValue(true);
 });
 
 describe("RecordingReader", () => {
+  it("opens the guided saved note before acknowledging completion at the destination", () => {
+    getMock.mockReturnValue({ data: baseData, isPending: false });
+    renderAt(baseData.stem, "en", "?activation=complete&activationTaskId=guided-task-131");
+
+    expect(screen.getByRole("status")).toHaveTextContent("Core Activation complete");
+    expect(screen.getByRole("button", { name: "Summary" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByTestId("markdown")).toHaveTextContent("s");
+    expect(acknowledgeGuidedCompletionMutate).toHaveBeenCalledWith({ taskId: "guided-task-131" });
+  });
+
   it("shows the realtime transcript while the final transcript is not ready", () => {
     getMock.mockReturnValue({ data: { ...baseData, transcript: null, summary: null, realtime: "实时中文内容", hasRealtime: true }, isPending: false });
     renderAt("TeamSync_20260102_090000");

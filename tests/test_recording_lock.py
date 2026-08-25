@@ -224,6 +224,29 @@ def test_daemon_start_proceeds_when_daemon_idle(monkeypatch, tmp_path):
     assert meta["path"] == "/tmp/new.wav"
 
 
+def test_main_exits_nonzero_when_daemon_rejects_start(monkeypatch):
+    """Production callers must not treat an exit-0 daemon rejection as recording."""
+    import contextlib
+    import importlib
+    import record_audio
+    importlib.reload(record_audio)
+
+    monkeypatch.setattr(record_audio.sys, "argv", ["record_audio.py", "start", "Core Activation"])
+    monkeypatch.setattr(record_audio, "load_config", lambda: {"backend": "daemon"})
+    monkeypatch.setattr(record_audio, "daemon_ensure_running", lambda: True)
+    monkeypatch.setattr(record_audio, "daemon_start", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(
+        record_audio,
+        "acquire_recording_lock",
+        lambda **_kwargs: contextlib.nullcontext(None),
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        record_audio.main()
+
+    assert exc_info.value.code == 1
+
+
 def test_daemon_start_omits_legacy_sox_mic_device_for_native_daemon(monkeypatch, tmp_path):
     import importlib
     sys.path.insert(0, str(SCRIPTS))

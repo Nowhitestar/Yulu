@@ -14,6 +14,8 @@ import {
   hasSupportedAgentSummaryIdentity,
   hasSupportedAgentSummaryReadinessProof,
 } from "../summaryProviderReadiness.js";
+import { publicAgentTask, type CoreActivationEvidence } from "../hostStore.js";
+import { runRecordAudio, stopRecordingAndEnqueue } from "../recordingCommand.js";
 
 const MICROPHONE_SETTINGS = "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone";
 
@@ -221,7 +223,8 @@ async function activationReadiness(ctx: AppContext) {
       ? String(captureResult.reason)
       : "Audio daemon returned an invalid microphone status";
 
-  const configuredInputValue = ctx.config.read().audio.mic_device?.trim() || null;
+  const config = ctx.config.read();
+  const configuredInputValue = config.audio.mic_device?.trim() || null;
   const configuredInput = configuredInputValue?.startsWith(":") ? null : configuredInputValue;
   const availableInputs = devices?.success ? devices.data.input : [];
   const audioInputReady = configuredInput
@@ -237,7 +240,7 @@ async function activationReadiness(ctx: AppContext) {
         ? String(devicesResult.reason)
         : "Audio daemon returned an invalid device list";
 
-  const selected = ctx.config.read().transcription.engine;
+  const selected = config.transcription.engine;
   const localStatus = ctx.localCaption?.status();
   const local = {
     available: localStatus?.installed === true,
@@ -263,6 +266,13 @@ async function activationReadiness(ctx: AppContext) {
     ? local.ready ? "ready" as const : "blocked" as const
     : disclosureRequired ? "disclosure_required" as const : xai.ready ? "ready" as const : "blocked" as const;
   const summary = activationSummaryReadiness(ctx);
+  const pipeline = config.agent_pipeline;
+  const pipelineReady = pipeline.enabled && pipeline.auto_process_recordings;
+  const pipelineDetail = pipelineReady
+    ? null
+    : pipeline.enabled
+      ? "Automatic Agent recording processing is paused by policy"
+      : "Agent recording pipeline is disabled by policy";
   const nextStep = !microphoneReady
     ? "microphone_permission" as const
     : !audioInputReady
@@ -271,7 +281,9 @@ async function activationReadiness(ctx: AppContext) {
         ? "transcription" as const
         : summary.state !== "ready"
           ? "summary_provider" as const
-          : null;
+          : !pipelineReady
+            ? "recording_pipeline" as const
+            : null;
   const blocker = !microphoneReady ? {
     capability: "microphone_permission" as const,
     detail: microphoneDetail,
@@ -284,7 +296,11 @@ async function activationReadiness(ctx: AppContext) {
     capability: selected === "local" ? "local_transcription" as const : "xai_transcription" as const,
     detail: selected === "local" ? local.detail : xai.detail,
     remediation: { href: "/settings/transcription" },
-  } : transcriptionState === "disclosure_required" ? null : summary.blocker;
+  } : transcriptionState === "disclosure_required" ? null : summary.blocker ?? (!pipelineReady ? {
+    capability: "recording_pipeline" as const,
+    detail: pipelineDetail,
+    remediation: { href: "/settings/automation" },
+  } : null);
 
   return {
     nextStep,
@@ -318,6 +334,13 @@ async function activationReadiness(ctx: AppContext) {
         publicOnboardingSupported: summary.publicOnboardingSupported,
         remediation: summary.remediation,
       },
+      recordingPipeline: {
+        state: pipelineReady ? "ready" as const : "blocked" as const,
+        enabled: pipeline.enabled,
+        autoProcessRecordings: pipeline.auto_process_recordings,
+        detail: pipelineDetail,
+        remediation: pipelineReady ? null : { href: "/settings/automation" },
+      },
     },
   };
 }
@@ -335,43 +358,175 @@ function journeyState(ctx: { host: {
   };
 }
 
+function activeAttempt(ctx: AppContext) {
+  const existing = ctx.host.getActivationAttempt();
+  if (!existing) return null;
+  const attempt = existing.taskId || !existing.stopRequestedAt
+    ? existing
+    : ctx.host.recoverActivationAttemptTask(existing.id);
+  const task = attempt.taskId ? ctx.host.getTask(attempt.taskId) : null;
+  return {
+    state: task || attempt.recordingStem ? "processing" as const : "recording" as const,
+    evidence: null,
+    journey: journeyState(ctx),
+    attempt,
+    task: task ? publicAgentTask(task) : null,
+  };
+}
+
+function verifiedAttemptEvidence(
+  ctx: AppContext,
+  taskId: string,
+  stored: CoreActivationEvidence | null,
+): CoreActivationEvidence | null {
+  if (stored?.taskId === taskId) return stored;
+  const candidate = ctx.host.getCoreActivationCandidate(taskId);
+  return candidate
+    ? verifiedCoreActivationEvidence(candidate, ctx.artifacts, ctx.paths.moviesDir)
+    : null;
+}
+
+function activatedStatus(
+  ctx: AppContext,
+  evidence: CoreActivationEvidence,
+  evidenceCreated: boolean,
+  guidedCompletionPending = false,
+  guidedCompletion: { taskId: string; recordingStem: string } | null = null,
+) {
+  const safeStem = basename(evidence.recordingStem) === evidence.recordingStem;
+  const sourceArtifactAvailable = safeStem && existsSync(join(ctx.paths.moviesDir, `${evidence.recordingStem}.wav`));
+  let completedNote: string | null = null;
+  if (safeStem) {
+    const summaryPath = join(ctx.paths.moviesDir, `${evidence.recordingStem}.summary.md`);
+    if (existsSync(summaryPath)) {
+      try {
+        completedNote = readFileSync(summaryPath, "utf8").trim() || null;
+      } catch { /* a missing or unreadable note is not an available action */ }
+    }
+  }
+  return {
+    state: "activated" as const,
+    evidence,
+    evidenceCreated,
+    guidedCompletionPending,
+    guidedCompletion: guidedCompletionPending ? guidedCompletion : null,
+    sourceArtifactAvailable,
+    completedNoteAvailable: completedNote !== null,
+    completedNote,
+  };
+}
+
 export const activationRouter = router({
   status: publicProcedure.query(async ({ ctx }) => {
     let evidence = ctx.host.getCoreActivationEvidence();
+    let evidenceCreated = false;
+    const attempt = activeAttempt(ctx);
+    if (attempt) {
+      const guidedEvidence = attempt.attempt.taskId
+        ? verifiedAttemptEvidence(ctx, attempt.attempt.taskId, evidence)
+        : null;
+      if (guidedEvidence) {
+        if (!evidence) {
+          evidence = ctx.host.recordCoreActivationEvidence(guidedEvidence);
+          evidenceCreated = true;
+        }
+        const guidedCompletionPending = attempt.attempt.completionOpenedAt === null;
+        return activatedStatus(
+          ctx,
+          evidence,
+          evidenceCreated,
+          guidedCompletionPending,
+          guidedCompletionPending ? {
+            taskId: guidedEvidence.taskId,
+            recordingStem: guidedEvidence.recordingStem,
+          } : null,
+        );
+      }
+      return {
+        ...attempt,
+        backgroundEvidence: evidence,
+        backgroundEvidenceCreated: evidenceCreated,
+      };
+    }
     if (!evidence) {
       for (const candidate of ctx.host.listCoreActivationCandidates()) {
         const verified = verifiedCoreActivationEvidence(candidate, ctx.artifacts, ctx.paths.moviesDir);
         if (verified) {
           evidence = ctx.host.recordCoreActivationEvidence(verified);
+          evidenceCreated = true;
           break;
         }
       }
     }
-    if (!evidence) return {
-      state: "unresolved" as const,
-      evidence: null,
-      journey: journeyState(ctx),
-      ...await activationReadiness(ctx),
-    };
-    const safeStem = basename(evidence.recordingStem) === evidence.recordingStem;
-    const sourceArtifactAvailable = safeStem && existsSync(join(ctx.paths.moviesDir, `${evidence.recordingStem}.wav`));
-    let completedNote: string | null = null;
-    if (safeStem) {
-      const summaryPath = join(ctx.paths.moviesDir, `${evidence.recordingStem}.summary.md`);
-      if (existsSync(summaryPath)) {
-        try {
-          completedNote = readFileSync(summaryPath, "utf8").trim() || null;
-        } catch { /* a missing or unreadable note is not an available action */ }
-      }
+    if (!evidence) {
+      return {
+        state: "unresolved" as const,
+        evidence: null,
+        journey: journeyState(ctx),
+        ...await activationReadiness(ctx),
+      };
     }
-    return {
-      state: "activated" as const,
-      evidence,
-      sourceArtifactAvailable,
-      completedNoteAvailable: completedNote !== null,
-      completedNote,
-    };
+    return activatedStatus(ctx, evidence, evidenceCreated);
   }),
+  startAttempt: publicProcedure.mutation(async ({ ctx }) => {
+    const readiness = await activationReadiness(ctx);
+    if (readiness.nextStep === "recording_pipeline") {
+      throw new Error("Activation is blocked by recording pipeline policy");
+    }
+    if (readiness.nextStep) throw new Error(`Activation is blocked by ${readiness.nextStep}`);
+    const policy = ctx.config.read().agent_pipeline;
+    if (!policy.enabled || !policy.auto_process_recordings) {
+      throw new Error("Activation is blocked by recording pipeline policy");
+    }
+    const { attempt, created } = ctx.host.beginActivationAttempt();
+    if (!created) return activeAttempt(ctx);
+    try {
+      await runRecordAudio(ctx, ["start", "Core Activation"]);
+    } catch (error) {
+      ctx.host.abandonActivationAttempt(attempt.id);
+      throw error;
+    }
+    return { state: "recording" as const, attempt };
+  }),
+  stopAttempt: publicProcedure.mutation(async ({ ctx }) => {
+    const attempt = ctx.host.getActivationAttempt();
+    if (!attempt) throw new Error("Activation Attempt not found");
+    if (attempt.taskId) return activeAttempt(ctx);
+    ctx.host.markActivationAttemptStopping(attempt.id);
+    try {
+      const result = await stopRecordingAndEnqueue(ctx, undefined, ({ recordingStem }) => {
+        ctx.host.recordActivationAttemptStopped(attempt.id, recordingStem);
+      });
+      if (!result.pipeline.accepted) {
+        ctx.host.failActivationAttemptHandoff(attempt.id, result.pipeline.reason);
+        throw new Error(result.pipeline.reason);
+      }
+      ctx.host.correlateActivationAttempt(attempt.id, result.pipeline.taskId);
+      return activeAttempt(ctx);
+    } catch (error) {
+      const current = ctx.host.getActivationAttempt();
+      if (current?.recordingStem && !current.taskId && !current.handoffError) {
+        ctx.host.failActivationAttemptHandoff(
+          attempt.id,
+          error instanceof Error ? error.message : String(error),
+        );
+      }
+      throw error;
+    }
+  }),
+  acknowledgeGuidedCompletion: publicProcedure
+    .input(z.object({ taskId: z.string().min(1).max(100) }))
+    .mutation(({ ctx, input }) => {
+      const attempt = ctx.host.getActivationAttempt();
+      if (!attempt || attempt.taskId !== input.taskId) return { acknowledged: false };
+      const evidence = verifiedAttemptEvidence(
+        ctx,
+        input.taskId,
+        ctx.host.getCoreActivationEvidence(),
+      );
+      if (!evidence) return { acknowledged: false };
+      return { acknowledged: ctx.host.acknowledgeGuidedCompletion(input.taskId) };
+    }),
   acknowledgeAutomaticEntry: publicProcedure.mutation(({ ctx }) => {
     const result = ctx.host.acknowledgeAutomaticActivationEntry();
     return {

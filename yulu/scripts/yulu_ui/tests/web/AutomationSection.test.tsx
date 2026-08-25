@@ -11,6 +11,8 @@ let recordingState: string = "idle";
 // All meeting_detection fields are restart-class (detector); useConfigField reads
 // this to drive the recording-guard + undo. The 5 array fields are advanced.
 const SCHEMA = [
+  { path: "agent_pipeline.enabled", category: "automation", label: "Agent recording pipeline", type: "toggle", reload: { kind: "none" } },
+  { path: "agent_pipeline.auto_process_recordings", category: "automation", label: "Automatic recording processing", type: "toggle", reload: { kind: "none" } },
   { path: "meeting_detection.enabled",             category: "automation", label: "Meeting detection",  type: "toggle", reload: { kind: "restart", daemons: ["detector"] } },
   { path: "meeting_detection.interval_sec",        category: "automation", label: "Poll interval (s)",  type: "number", reload: { kind: "restart", daemons: ["detector"] } },
   { path: "meeting_detection.stable_sec",          category: "automation", label: "Stable window (s)",  type: "number", reload: { kind: "restart", daemons: ["detector"] } },
@@ -52,7 +54,7 @@ import { AutomationSection } from "../../web/src/components/settings/AutomationS
 const tracker = { record: vi.fn(), statusFor: () => null, clear: vi.fn(), pending: {} } as never;
 
 function baseConfig(overrides: Record<string, unknown> = {}) {
-  return { meeting_detection: {
+  return { agent_pipeline: { enabled: true, auto_process_recordings: true }, meeting_detection: {
     enabled: true, interval_sec: 10, stable_sec: 15, prompt_cooldown_sec: 1800,
     window_keywords: ["Zoom Meeting"], app_name_hints: ["Zoom"], target_app_names: ["Zoom"],
     dedicated_meeting_apps: ["Zoom"], ignore_window_keywords: ["Calendar"],
@@ -77,10 +79,30 @@ describe("AutomationSection — meeting detection (P2-3)", () => {
   it("renders all four meeting_detection fields with their current values", () => {
     mount();
     expect(screen.getByText("自动化")).toBeInTheDocument();
+    expect(screen.getByText("录音处理管线")).toBeInTheDocument();
+    expect(screen.getByText("自动处理录音")).toBeInTheDocument();
     expect(screen.getByText("会议检测")).toBeInTheDocument();
     expect(screen.getByText("轮询间隔（秒）")).toBeInTheDocument();
     expect(screen.getByText("稳定窗口（秒）")).toBeInTheDocument();
     expect(screen.getByText("提示冷却（秒）")).toBeInTheDocument();
+  });
+
+  it("resumes automatic recording processing through the production config seam", async () => {
+    configReturn = {
+      data: {
+        ...baseConfig(),
+        agent_pipeline: { enabled: true, auto_process_recordings: false },
+      },
+      isPending: false,
+    };
+    mount();
+    const row = screen.getByText("自动处理录音").closest(".row")!;
+    const user = userEvent.setup();
+    await user.click(within(row as HTMLElement).getByRole("switch"));
+    await vi.waitFor(() => expect(updateMutate).toHaveBeenCalledWith({
+      key: "agent_pipeline.auto_process_recordings",
+      value: true,
+    }));
   });
 
   it("toggling Meeting detection commits meeting_detection.enabled", async () => {

@@ -671,7 +671,13 @@ export class RecordingPipeline {
         artifacts: this.options.store.listArtifacts(task.id),
         transcriptionProvider: transcription.provider,
       }, this.options.artifacts, this.options.paths.moviesDir);
-      if (activationEvidence) this.options.store.recordCoreActivationEvidence(activationEvidence);
+      if (activationEvidence && !this.options.store.getCoreActivationEvidence()) {
+        const evidence = this.options.store.recordCoreActivationEvidence(activationEvidence);
+        this.options.pubsub.publish("core-activation", {
+          taskId: evidence.taskId,
+          recordingStem: evidence.recordingStem,
+        });
+      }
 
       // The delivery phase starts a new native session. It receives neither
       // the artifact session context nor filesystem capability, and can read

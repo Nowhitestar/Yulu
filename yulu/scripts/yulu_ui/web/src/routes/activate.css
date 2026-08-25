@@ -80,6 +80,25 @@
 .activate-engine legend { padding: 0 6px; font-weight: 600; }
 .activate-engine label { display: flex; align-items: center; gap: 8px; }
 
+.activation-notice {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  max-width: min(420px, calc(100vw - 48px));
+  padding: 14px 16px;
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-control);
+  background: var(--glass-paper);
+  box-shadow: var(--shadow-card);
+  color: var(--fg);
+}
+
+.activation-notice a { color: var(--accent); font-weight: 600; }
+
 .activate-blocker,
 .activate-disclosure,
 .activate-declined {
@@ -104,6 +123,13 @@
   flex-wrap: wrap;
   gap: 10px;
   margin-top: 28px;
+}
+
+.activate-recording-guidance {
+  flex-basis: 100%;
+  margin: 0;
+  color: var(--fg-2);
+  line-height: 1.5;
 }
 
 .activate-action {

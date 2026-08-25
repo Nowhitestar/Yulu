@@ -1,11 +1,14 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { useState } from "react";
 import userEvent from "@testing-library/user-event";
 import { createMemoryRouter, RouterProvider } from "react-router";
 import { LanguageProvider } from "../../../web/src/i18n/LanguageProvider.js";
 
 interface ActivatedData {
   state: "activated";
+  guidedCompletionPending?: boolean;
+  guidedCompletion?: { taskId: string; recordingStem: string } | null;
   evidence: {
     recordingStem: string;
     taskId: string;
@@ -24,13 +27,36 @@ interface ActivatedData {
   completedNote: string | null;
 }
 
+interface AttemptData {
+  state: "recording" | "processing";
+  evidence: null;
+  attempt: {
+    id: string;
+    startedAt: string;
+    stopRequestedAt?: string | null;
+    handoffError?: string | null;
+    taskId: string | null;
+    recordingStem: string | null;
+  };
+  task: {
+    id: string;
+    state: string;
+    phase: string;
+    error: string | null;
+  } | null;
+  journey: UnresolvedData["journey"];
+  backgroundEvidence?: ActivatedData["evidence"] | null;
+}
+
 interface UnresolvedData {
   state: "unresolved";
   evidence: null;
-  nextStep: "microphone_permission" | "audio_input" | "transcription" | "summary_provider" | null;
+  nextStep: "microphone_permission" | "audio_input" | "transcription" | "summary_provider" |
+    "recording_pipeline" | null;
   blocker: {
     capability: "microphone_permission" | "audio_input" | "local_transcription" | "xai_transcription" |
-      "summary_credentials" | "summary_model" | "summary_provider" | "summary_disclosure" | "summary_readiness";
+      "summary_credentials" | "summary_model" | "summary_provider" | "summary_disclosure" |
+      "summary_readiness" | "recording_pipeline";
     reason?: "missing_credentials" | "invalid_model" | "provider_unavailable" | "disclosure_required" |
       "disclosure_declined" | "readiness_failed" | "readiness_required";
     detail: string | null;
@@ -73,6 +99,13 @@ interface UnresolvedData {
         destination: string;
       } | null;
       publicOnboardingSupported: boolean;
+      remediation: { href: string } | null;
+    };
+    recordingPipeline: {
+      state: "ready" | "blocked";
+      enabled: boolean;
+      autoProcessRecordings: boolean;
+      detail: string | null;
       remediation: { href: string } | null;
     };
   };
@@ -123,6 +156,13 @@ function unresolvedData(): UnresolvedData {
         publicOnboardingSupported: true,
         remediation: null,
       },
+      recordingPipeline: {
+        state: "ready",
+        enabled: true,
+        autoProcessRecordings: true,
+        detail: null,
+        remediation: null,
+      },
     },
     journey: {
       shouldAutoEnter: false,
@@ -155,7 +195,10 @@ function activatedData(): ActivatedData {
 }
 
 const activation = vi.hoisted(() => ({
-  data: activatedData() as ActivatedData | UnresolvedData,
+  data: activatedData() as ActivatedData | UnresolvedData | AttemptData,
+  startAttempt: vi.fn(async () => ({ state: "recording" })),
+  stopAttempt: vi.fn(async () => ({ state: "processing" })),
+  acknowledgeGuidedCompletion: vi.fn(async () => ({ acknowledged: true })),
   defer: vi.fn(async () => ({ journey: { shouldAutoEnter: false } })),
   acceptXaiDisclosure: vi.fn(async () => ({ disclosureVersion: "xai-audio-v1" })),
   acceptSummaryDisclosure: vi.fn(async () => ({ disclosureVersion: "xai-summary-v1" })),
@@ -165,12 +208,22 @@ const activation = vi.hoisted(() => ({
   testLocal: vi.fn(async () => ({ ok: true })),
   probeXai: vi.fn(async () => ({ status: "ready" })),
   refetch: vi.fn(async () => ({})),
+  renderStatus: undefined as (() => void) | undefined,
 }));
 
 vi.mock("../../../web/src/trpc.js", () => ({
   trpc: {
     activation: {
-      status: { useQuery: () => ({ data: activation.data, isPending: false, refetch: activation.refetch }) },
+      status: { useQuery: () => {
+        const [, setVersion] = useState(0);
+        activation.renderStatus = () => setVersion((version) => version + 1);
+        return { data: activation.data, isPending: false, refetch: activation.refetch };
+      } },
+      startAttempt: { useMutation: () => ({ mutateAsync: activation.startAttempt, isPending: false }) },
+      stopAttempt: { useMutation: () => ({ mutateAsync: activation.stopAttempt, isPending: false }) },
+      acknowledgeGuidedCompletion: {
+        useMutation: () => ({ mutateAsync: activation.acknowledgeGuidedCompletion, isPending: false }),
+      },
       defer: { useMutation: () => ({ mutateAsync: activation.defer, isPending: false }) },
       acceptXaiTranscriptionDisclosure: {
         useMutation: () => ({ mutateAsync: activation.acceptXaiDisclosure, isPending: false }),
@@ -206,6 +259,7 @@ function renderRoute(lang: "zh" | "en") {
     [
       { path: "/activate", element: <Activate /> },
       { path: "/agent-console", element: <h1>Agent Console</h1> },
+      { path: "/inbox/:stem", element: <h1>Saved note</h1> },
     ],
     { initialEntries: ["/activate"] },
   );
@@ -221,6 +275,9 @@ afterEach(() => {
   localStorage.clear();
   activation.data = activatedData();
   activation.defer.mockClear();
+  activation.startAttempt.mockClear();
+  activation.stopAttempt.mockClear();
+  activation.acknowledgeGuidedCompletion.mockClear();
   activation.acceptXaiDisclosure.mockClear();
   activation.acceptSummaryDisclosure.mockClear();
   activation.declineSummaryDisclosure.mockClear();
@@ -229,6 +286,7 @@ afterEach(() => {
   activation.testLocal.mockClear();
   activation.probeXai.mockClear();
   activation.refetch.mockClear();
+  activation.renderStatus = undefined;
 });
 
 describe("/activate", () => {
@@ -302,6 +360,208 @@ describe("/activate", () => {
     expect(screen.queryByRole("radio", { name: "Local transcription" })).not.toBeInTheDocument();
     expect(screen.queryByRole("radio", { name: "xAI cloud transcription" })).not.toBeInTheDocument();
     expect(screen.queryByText("Checking activation…")).not.toBeInTheDocument();
+    expect(screen.getByText(/10–20 seconds/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Start recording" })).toBeInTheDocument();
+  });
+
+  it("starts and stops the production Activation Attempt without a synthetic duration gate", async () => {
+    activation.data = unresolvedData();
+    const user = userEvent.setup();
+    let view = renderRoute("en");
+
+    await user.click(screen.getByRole("button", { name: "Start recording" }));
+    expect(activation.startAttempt).toHaveBeenCalledOnce();
+
+    activation.data = {
+      state: "recording",
+      evidence: null,
+      attempt: {
+        id: "attempt-1",
+        startedAt: "2026-08-25T06:15:00.000Z",
+        taskId: null,
+        recordingStem: null,
+      },
+      task: null,
+      journey: unresolvedData().journey,
+    };
+    view.unmount();
+    view = renderRoute("en");
+    expect(screen.getByRole("status")).toHaveTextContent("Recording in progress");
+    expect(screen.getByText(/10–20 seconds/)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Stop recording" }));
+    expect(activation.stopAttempt).toHaveBeenCalledOnce();
+  });
+
+  it("opens the exact guided saved note after a UI reload", async () => {
+    activation.data = {
+      state: "processing",
+      evidence: null,
+      attempt: {
+        id: "attempt-1",
+        startedAt: "2026-08-25T06:15:00.000Z",
+        taskId: "019f0000-0000-7000-8000-000000000131",
+        recordingStem: "Activation_20260825_141500",
+      },
+      task: {
+        id: "019f0000-0000-7000-8000-000000000131",
+        state: "running",
+        phase: "transcribing",
+        error: null,
+      },
+      journey: unresolvedData().journey,
+    };
+    let view = renderRoute("en");
+    expect(screen.getByRole("status")).toHaveTextContent("Transcribing your recording");
+
+    view.unmount();
+    activation.data = {
+      ...activatedData(),
+      guidedCompletionPending: true,
+      guidedCompletion: {
+        taskId: "019f0000-0000-7000-8000-000000000131",
+        recordingStem: "Activation_20260825_141500",
+      },
+    };
+    view = renderRoute("en");
+    expect(await screen.findByRole("heading", { name: "Saved note" })).toBeInTheDocument();
+    expect(activation.acknowledgeGuidedCompletion).not.toHaveBeenCalled();
+    expect(view.router.state.location.pathname).toBe("/inbox/Activation_20260825_141500");
+    expect(view.router.state.location.search).toBe(
+      "?activation=complete&activationTaskId=019f0000-0000-7000-8000-000000000131",
+    );
+  });
+
+  it("names paused recording policy before offering Start and links to its controls", () => {
+    const data = unresolvedData();
+    data.nextStep = "recording_pipeline";
+    data.blocker = {
+      capability: "recording_pipeline",
+      detail: "Automatic recording processing is paused",
+      remediation: { href: "/settings/automation" },
+    };
+    data.readiness.recordingPipeline = {
+      state: "blocked",
+      enabled: true,
+      autoProcessRecordings: false,
+      detail: "Automatic recording processing is paused",
+      remediation: { href: "/settings/automation" },
+    };
+    activation.data = data;
+
+    renderRoute("en");
+
+    expect(screen.getByText("Recording processing needs attention")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Open Automation Settings" })).toHaveAttribute(
+      "href",
+      "/settings/automation",
+    );
+    expect(screen.queryByRole("button", { name: "Start recording" })).not.toBeInTheDocument();
+  });
+
+  it("announces unrelated evidence without replacing an active guided attempt", () => {
+    activation.data = {
+      state: "processing",
+      evidence: null,
+      attempt: {
+        id: "attempt-1",
+        startedAt: "2026-08-25T06:15:00.000Z",
+        taskId: "guided-task",
+        recordingStem: "Guided_20260825_141500",
+      },
+      task: {
+        id: "guided-task",
+        state: "running",
+        phase: "transcribing",
+        error: null,
+      },
+      journey: unresolvedData().journey,
+      backgroundEvidence: activatedData().evidence,
+    };
+    const view = renderRoute("en");
+
+    expect(screen.getByText("Transcribing your recording")).toBeInTheDocument();
+    expect(screen.getByText("Core Activation is complete.")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Open saved note" })).toHaveAttribute(
+      "href",
+      "/inbox/Planning_20260711_120000",
+    );
+    expect(view.router.state.location.pathname).toBe("/activate");
+    expect(activation.acknowledgeGuidedCompletion).not.toHaveBeenCalled();
+  });
+
+  it("displays an existing durable provider pause without adding recovery controls", () => {
+    activation.data = {
+      state: "processing",
+      evidence: null,
+      attempt: {
+        id: "attempt-1",
+        startedAt: "2026-08-25T06:15:00.000Z",
+        taskId: "019f0000-0000-7000-8000-000000000131",
+        recordingStem: "Activation_20260825_141500",
+      },
+      task: {
+        id: "019f0000-0000-7000-8000-000000000131",
+        state: "awaiting_provider",
+        phase: "failed",
+        error: "Pinned Summary Provider is unavailable",
+      },
+      journey: unresolvedData().journey,
+    };
+    renderRoute("en");
+
+    expect(screen.getByRole("alert")).toHaveTextContent("Activation processing needs attention");
+    expect(screen.getByText("Pinned Summary Provider is unavailable")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /retry|change provider/i })).not.toBeInTheDocument();
+  });
+
+  it("displays a durable stopped-recording handoff failure after restart", () => {
+    activation.data = {
+      state: "processing",
+      evidence: null,
+      attempt: {
+        id: "attempt-1",
+        startedAt: "2026-08-25T06:15:00.000Z",
+        stopRequestedAt: "2026-08-25T06:15:12.000Z",
+        handoffError: "Automatic Agent recording processing is paused by policy",
+        taskId: null,
+        recordingStem: "Guided_20260825_141500",
+      },
+      task: null,
+      journey: unresolvedData().journey,
+    };
+    renderRoute("en");
+
+    expect(screen.getByRole("alert")).toHaveTextContent("Activation processing needs attention");
+    expect(screen.getByText("Automatic Agent recording processing is paused by policy")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /retry|change provider/i })).not.toBeInTheDocument();
+  });
+
+  it("does not move keyboard focus on each durable progress poll", () => {
+    activation.data = {
+      state: "processing",
+      evidence: null,
+      attempt: {
+        id: "attempt-1",
+        startedAt: "2026-08-25T06:15:00.000Z",
+        taskId: "019f0000-0000-7000-8000-000000000131",
+        recordingStem: "Activation_20260825_141500",
+      },
+      task: {
+        id: "019f0000-0000-7000-8000-000000000131",
+        state: "running",
+        phase: "transcribing",
+        error: null,
+      },
+      journey: unresolvedData().journey,
+    };
+    renderRoute("en");
+    const leave = screen.getByRole("link", { name: "Continue using Yulu" });
+    leave.focus();
+
+    activation.data = { ...activation.data };
+    act(() => activation.renderStatus?.());
+
+    expect(leave).toHaveFocus();
   });
 
   it("localizes the xAI transcript disclosure and records it independently from credentials", async () => {

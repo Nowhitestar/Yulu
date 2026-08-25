@@ -1,9 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { execFile } from "node:child_process";
 import { timingSafeEqual } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { promisify } from "node:util";
 import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { z } from "zod";
@@ -11,10 +9,11 @@ import { appRouter } from "./routers/_app.js";
 import { createCaller, type AppContext } from "./trpc.js";
 import { ipcSend } from "./ipc.js";
 import { isTrustedNotionUrl, isValidNotionPageId } from "./notionDelivery.js";
-import { RecordingPipelinePolicyDisabledError } from "./recordingPipeline.js";
 import { applyGlossaryContract, loadGlossaryContract } from "./glossaryContract.js";
+import { runRecordAudio, stopRecordingAndEnqueue } from "./recordingCommand.js";
 
-const exec = promisify(execFile) as (cmd: string, args: string[], opts?: object) => Promise<{ stdout: string; stderr: string }>;
+export { stopRecordingAndEnqueue } from "./recordingCommand.js";
+
 
 export const YULU_MCP_PATH = "/mcp";
 export const RECORDING_ARTIFACT_MCP_PATH = "/mcp/recording-artifact";
@@ -347,64 +346,4 @@ function bearerToken(value: string | string[] | undefined): string {
 
 function headerValue(value: string | string[] | undefined): string {
   return Array.isArray(value) ? value[0] ?? "" : value ?? "";
-}
-
-async function runRecordAudio(ctx: AppContext, args: string[]) {
-  const { stdout, stderr } = await exec("python3", [join(ctx.paths.scriptDir, "record_audio.py"), ...args], {
-    env: { ...process.env, PYTHONPATH: ctx.paths.scriptDir },
-    cwd: process.env.HOME,
-  });
-  return { ok: true as const, stdout, stderr };
-}
-
-type RecordingStopContext = Pick<AppContext, "config" | "recordingPipeline">;
-type RecordingStopResult = { ok: true; stdout: string; stderr: string };
-
-function finalRecordingPath(stdout: string): string | undefined {
-  for (const line of stdout.split(/\r?\n/)) {
-    if (!line.startsWith("FINAL_RECORDING_PATH=")) continue;
-    const path = line.slice("FINAL_RECORDING_PATH=".length).trim();
-    if (path) return path;
-  }
-  return undefined;
-}
-
-function autoSendNotion(ctx: RecordingStopContext): boolean {
-  return ctx.config.read().agent_pipeline.auto_send_notion;
-}
-
-export async function stopRecordingAndEnqueue(
-  ctx: AppContext,
-  stopRecording: () => Promise<RecordingStopResult> = () => runRecordAudio(ctx, ["stop"]),
-) {
-  const result = await stopRecording();
-  const audioPath = finalRecordingPath(result.stdout);
-  if (!audioPath) throw new Error("recording stopped but FINAL_RECORDING_PATH was missing");
-  const sendToNotion = autoSendNotion(ctx);
-  let enqueued;
-  try {
-    enqueued = ctx.recordingPipeline.enqueueCompletion({ audioPath, sendToNotion });
-  } catch (error) {
-    if (error instanceof RecordingPipelinePolicyDisabledError) {
-      return {
-        ...result,
-        pipeline: {
-          accepted: false as const,
-          permanent: true as const,
-          reason: error.message,
-          sendToNotion,
-        },
-      };
-    }
-    throw error;
-  }
-  return {
-    ...result,
-    pipeline: {
-      taskId: enqueued.task.id,
-      state: enqueued.task.state,
-      created: enqueued.created,
-      sendToNotion,
-    },
-  };
 }

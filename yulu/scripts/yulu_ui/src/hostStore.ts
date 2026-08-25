@@ -1,7 +1,7 @@
 import Database, { type Database as DbType } from "better-sqlite3";
 import { randomUUID } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync } from "node:fs";
-import { dirname } from "node:path";
+import { basename, dirname } from "node:path";
 import { isTrustedNotionUrl, isValidNotionPageId, notionPageIdentityProblem } from "./notionDelivery.js";
 import type { TranscriptionLanguage } from "./realtimeTranscription.js";
 
@@ -106,6 +106,16 @@ export interface CoreActivationCandidate {
 export interface ActivationJourneyState {
   automaticEntryAcknowledgedAt: string | null;
   deferredAt: string | null;
+}
+
+export interface ActivationAttempt {
+  id: string;
+  startedAt: string;
+  stopRequestedAt: string | null;
+  completionOpenedAt: string | null;
+  handoffError: string | null;
+  taskId: string | null;
+  recordingStem: string | null;
 }
 
 export interface CloudTranscriptionConsent {
@@ -808,6 +818,127 @@ export class HostStore {
     };
   }
 
+  getActivationAttempt(): ActivationAttempt | null {
+    const row = this.db.prepare(`
+      SELECT attempt_id, started_at, stop_requested_at, completion_opened_at,
+        handoff_error, task_id, recording_stem
+      FROM activation_attempt WHERE id = 1
+    `).get() as {
+      attempt_id: string;
+      started_at: string;
+      stop_requested_at: string | null;
+      completion_opened_at: string | null;
+      handoff_error: string | null;
+      task_id: string | null;
+      recording_stem: string | null;
+    } | undefined;
+    return row ? {
+      id: row.attempt_id,
+      startedAt: row.started_at,
+      stopRequestedAt: row.stop_requested_at,
+      completionOpenedAt: row.completion_opened_at,
+      handoffError: row.handoff_error,
+      taskId: row.task_id,
+      recordingStem: row.recording_stem,
+    } : null;
+  }
+
+  beginActivationAttempt(): { attempt: ActivationAttempt; created: boolean } {
+    const existing = this.getActivationAttempt();
+    if (existing) return { attempt: existing, created: false };
+    if (this.getCoreActivationEvidence()) throw new Error("Core Activation is already established");
+    const result = this.db.prepare(`
+      INSERT OR IGNORE INTO activation_attempt (id, attempt_id, started_at)
+      VALUES (1, ?, ?)
+    `).run(randomUUID(), now());
+    return { attempt: this.getActivationAttempt()!, created: result.changes === 1 };
+  }
+
+  abandonActivationAttempt(attemptId: string): boolean {
+    const result = this.db.prepare(`
+      DELETE FROM activation_attempt
+      WHERE id = 1 AND attempt_id = ? AND task_id IS NULL
+    `).run(attemptId);
+    return result.changes === 1;
+  }
+
+  markActivationAttemptStopping(attemptId: string): ActivationAttempt {
+    const result = this.db.prepare(`
+      UPDATE activation_attempt SET stop_requested_at = ?
+      WHERE id = 1 AND attempt_id = ? AND task_id IS NULL
+    `).run(now(), attemptId);
+    if (result.changes !== 1) throw new Error("Activation Attempt is not recording");
+    return this.getActivationAttempt()!;
+  }
+
+  recordActivationAttemptStopped(attemptId: string, recordingStem: string): ActivationAttempt {
+    const stem = recordingStem.trim();
+    if (!stem || stem.length > 255 || basename(stem) !== stem) {
+      throw new Error("Activation recording identity is invalid");
+    }
+    const result = this.db.prepare(`
+      UPDATE activation_attempt SET recording_stem = ?, handoff_error = NULL
+      WHERE id = 1 AND attempt_id = ? AND stop_requested_at IS NOT NULL AND task_id IS NULL
+    `).run(stem, attemptId);
+    if (result.changes !== 1) throw new Error("Activation Attempt is not stopping");
+    return this.getActivationAttempt()!;
+  }
+
+  failActivationAttemptHandoff(attemptId: string, error: string): ActivationAttempt {
+    const detail = error.trim() || "Recording pipeline handoff failed";
+    const result = this.db.prepare(`
+      UPDATE activation_attempt SET handoff_error = ?
+      WHERE id = 1 AND attempt_id = ? AND task_id IS NULL
+    `).run(detail, attemptId);
+    if (result.changes !== 1) throw new Error("Activation Attempt handoff cannot fail");
+    return this.getActivationAttempt()!;
+  }
+
+  acknowledgeGuidedCompletion(taskId: string): boolean {
+    const result = this.db.prepare(`
+      UPDATE activation_attempt SET completion_opened_at = ?
+      WHERE id = 1 AND task_id = ? AND completion_opened_at IS NULL
+    `).run(now(), taskId);
+    return result.changes === 1;
+  }
+
+  correlateActivationAttempt(attemptId: string, taskId: string): ActivationAttempt {
+    const attempt = this.getActivationAttempt();
+    if (!attempt || attempt.id !== attemptId) throw new Error("Activation Attempt not found");
+    const task = this.getTask(taskId);
+    if (
+      !task ||
+      task.createdAt < attempt.startedAt ||
+      (attempt.recordingStem !== null && attempt.recordingStem !== task.recordingStem)
+    ) {
+      throw new Error("Activation Attempt task identity is invalid");
+    }
+    if (attempt.taskId && attempt.taskId !== task.id) {
+      throw new Error("Activation Attempt is already correlated to another task");
+    }
+    this.db.prepare(`
+      UPDATE activation_attempt SET task_id = ?, recording_stem = ?
+      WHERE id = 1 AND attempt_id = ?
+    `).run(task.id, task.recordingStem, attemptId);
+    return this.getActivationAttempt()!;
+  }
+
+  recoverActivationAttemptTask(attemptId: string): ActivationAttempt {
+    const attempt = this.getActivationAttempt();
+    if (!attempt || attempt.id !== attemptId) throw new Error("Activation Attempt not found");
+    if (attempt.taskId) return attempt;
+    if (!attempt.recordingStem) return attempt;
+    const rows = this.db.prepare(`
+      SELECT * FROM agent_tasks
+      WHERE created_at >= ? AND recording_stem = ?
+      ORDER BY created_at ASC
+      LIMIT 2
+    `).all(attempt.stopRequestedAt ?? attempt.startedAt, attempt.recordingStem) as TaskRow[];
+    return rows.length === 1
+      ? this.correlateActivationAttempt(attempt.id, rows[0]!.id)
+      : attempt;
+  }
+
   acknowledgeAutomaticActivationEntry(): {
     acknowledged: boolean;
     state: ActivationJourneyState;
@@ -940,32 +1071,40 @@ export class HostStore {
       SELECT * FROM agent_tasks
       ORDER BY updated_at DESC, created_at DESC
     `).all() as Array<TaskRow & { audit_json: string | null }>;
-    return rows.map((row) => {
-      let transcriptionProvider: string | null = null;
-      try {
-        const audit = JSON.parse(row.audit_json ?? "null") as Record<string, unknown> | null;
-        if (typeof audit?.transcriptionProvider === "string") {
-          transcriptionProvider = audit.transcriptionProvider;
-        }
-      } catch { /* malformed legacy audit cannot establish activation */ }
-      if (!transcriptionProvider) {
-        const progress = this.listEvents(row.id).reverse().find((event) => {
-          const message = event.payload.message;
-          return event.type === "task.progress" &&
-            typeof message === "string" &&
-            message.startsWith("Transcription provider:");
-        });
-        const message = progress?.payload.message;
-        if (typeof message === "string") {
-          transcriptionProvider = message.slice("Transcription provider:".length).trim() || null;
-        }
+    return rows.map((row) => this.coreActivationCandidate(row));
+  }
+
+  getCoreActivationCandidate(taskId: string): CoreActivationCandidate | null {
+    const row = this.db.prepare("SELECT * FROM agent_tasks WHERE id = ?").get(taskId) as
+      (TaskRow & { audit_json: string | null }) | undefined;
+    return row ? this.coreActivationCandidate(row) : null;
+  }
+
+  private coreActivationCandidate(row: TaskRow & { audit_json: string | null }): CoreActivationCandidate {
+    let transcriptionProvider: string | null = null;
+    try {
+      const audit = JSON.parse(row.audit_json ?? "null") as Record<string, unknown> | null;
+      if (typeof audit?.transcriptionProvider === "string") {
+        transcriptionProvider = audit.transcriptionProvider;
       }
-      return {
-        task: toTask(row),
-        artifacts: this.listArtifacts(row.id),
-        transcriptionProvider,
-      };
-    });
+    } catch { /* malformed legacy audit cannot establish activation */ }
+    if (!transcriptionProvider) {
+      const progress = this.listEvents(row.id).reverse().find((event) => {
+        const message = event.payload.message;
+        return event.type === "task.progress" &&
+          typeof message === "string" &&
+          message.startsWith("Transcription provider:");
+      });
+      const message = progress?.payload.message;
+      if (typeof message === "string") {
+        transcriptionProvider = message.slice("Transcription provider:".length).trim() || null;
+      }
+    }
+    return {
+      task: toTask(row),
+      artifacts: this.listArtifacts(row.id),
+      transcriptionProvider,
+    };
   }
 
   beginNotionDelivery(id: string, leaseToken: string): NotionDelivery {
@@ -1380,6 +1519,17 @@ export class HostStore {
         id INTEGER PRIMARY KEY CHECK(id = 1),
         automatic_entry_acknowledged_at TEXT,
         deferred_at TEXT
+      );
+
+      CREATE TABLE IF NOT EXISTS activation_attempt (
+        id INTEGER PRIMARY KEY CHECK(id = 1),
+        attempt_id TEXT NOT NULL UNIQUE,
+        started_at TEXT NOT NULL,
+        stop_requested_at TEXT,
+        completion_opened_at TEXT,
+        handoff_error TEXT,
+        task_id TEXT,
+        recording_stem TEXT
       );
 
       CREATE TABLE IF NOT EXISTS cloud_transcription_consent (

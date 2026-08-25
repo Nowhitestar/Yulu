@@ -43,11 +43,37 @@ export function AutomationSection({ tracker }: AutomationSectionProps) {
     prompt_cooldown_sec?: number;
     [key: string]: unknown;
   };
+  const pipeline = (cfg.agent_pipeline ?? {
+    enabled: true,
+    auto_process_recordings: true,
+  }) as {
+    enabled: boolean;
+    auto_process_recordings: boolean;
+  };
 
   return (
     <section id="automation" className="settings-section">
       <h2 className="settings-section-h">{t("settings.automation.heading")}</h2>
       <p className="settings-section-sub">{t("settings.automation.sub")}</p>
+
+      <InlineEditRow
+        label={t("settings.automation.pipeline.enabled.label")}
+        help={t("settings.automation.pipeline.enabled.help")}
+        type="toggle"
+        value={pipeline.enabled}
+        onCommit={commit("agent_pipeline.enabled") as (v: boolean) => void}
+        disabled={isBlocked("agent_pipeline.enabled")}
+        status={tracker.statusFor("agent_pipeline.enabled")}
+      />
+      <InlineEditRow
+        label={t("settings.automation.pipeline.autoProcess.label")}
+        help={t("settings.automation.pipeline.autoProcess.help")}
+        type="toggle"
+        value={pipeline.auto_process_recordings}
+        onCommit={commit("agent_pipeline.auto_process_recordings") as (v: boolean) => void}
+        disabled={isBlocked("agent_pipeline.auto_process_recordings")}
+        status={tracker.statusFor("agent_pipeline.auto_process_recordings")}
+      />
 
       <InlineEditRow
         label={t("settings.automation.enabled.label")}

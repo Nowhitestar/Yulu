@@ -10,7 +10,14 @@ import "./activate.css";
 export const handle = { breadcrumb: "breadcrumb.activate", filters: null };
 
 export function Activate() {
-  const activation = trpc.activation.status.useQuery();
+  const activation = trpc.activation.status.useQuery(undefined, {
+    refetchInterval: (query) => {
+      const state = query.state.data?.state;
+      return state === "recording" || state === "processing" ? 1_000 : false;
+    },
+  });
+  const startAttempt = trpc.activation.startAttempt.useMutation();
+  const stopAttempt = trpc.activation.stopAttempt.useMutation();
   const defer = trpc.activation.defer.useMutation();
   const acceptXaiDisclosure = trpc.activation.acceptXaiTranscriptionDisclosure.useMutation();
   const acceptSummaryDisclosure = trpc.activation.acceptSummaryDataPathDisclosure.useMutation();
@@ -27,14 +34,91 @@ export function Activate() {
   const [reviewSummaryDisclosure, setReviewSummaryDisclosure] = useState(false);
   const [actionFailed, setActionFailed] = useState(false);
   const titleRef = useRef<HTMLHeadingElement>(null);
+  const titleFocused = useRef(false);
+  const openingGuidedTask = useRef<string | null>(null);
   const navigate = useNavigate();
   const { lang } = useLang();
   const t = useT();
   useEffect(() => {
-    if (activation.data) titleRef.current?.focus();
+    if (
+      activation.data?.state !== "activated" ||
+      !activation.data.guidedCompletionPending ||
+      !activation.data.guidedCompletion
+    ) return;
+    const { taskId, recordingStem } = activation.data.guidedCompletion;
+    if (openingGuidedTask.current === taskId) return;
+    openingGuidedTask.current = taskId;
+    navigate(
+      `/inbox/${encodeURIComponent(recordingStem)}?activation=complete&activationTaskId=${encodeURIComponent(taskId)}`,
+      { replace: true },
+    );
+  }, [activation.data, navigate]);
+  useEffect(() => {
+    if (!activation.data || titleFocused.current) return;
+    titleFocused.current = true;
+    titleRef.current?.focus();
   }, [activation.data]);
   if (activation.isPending) {
     return <section className="activate-page" aria-live="polite">{t("activation.loading")}</section>;
+  }
+  if (activation.data?.state === "recording" || activation.data?.state === "processing") {
+    const { task } = activation.data;
+    const attemptError = activation.data.attempt.handoffError;
+    const needsAttention = Boolean(attemptError) || (task !== null && (
+        task.phase === "failed" ||
+        ["awaiting_agent", "awaiting_provider", "awaiting_policy", "failed", "cancelled"].includes(task.state)
+      ));
+    const progress = activation.data.state === "recording"
+      ? t("activation.attempt.recording")
+      : needsAttention
+        ? t("activation.attempt.failed")
+        : task?.phase === "transcribing"
+          ? t("activation.attempt.transcribing")
+          : task?.phase === "summarizing" || task?.state === "transcript_committed"
+            ? t("activation.attempt.summarizing")
+            : task?.phase === "committing_artifacts" || task?.state === "artifacts_committed"
+              ? t("activation.attempt.committing")
+              : t("activation.attempt.queued");
+    return (
+      <section className="activate-page" aria-labelledby="activate-title">
+        <div className="activate-card">
+          <h1 id="activate-title" ref={titleRef} tabIndex={-1}>{t("activation.attempt.title")}</h1>
+          <p className="activate-intro">{t("activation.attempt.duration")}</p>
+          <p className="activate-status" role={needsAttention ? "alert" : "status"} aria-live="polite">
+            {progress}
+          </p>
+          {(task?.error || attemptError) && <p>{task?.error || attemptError}</p>}
+          {activation.data.backgroundEvidence && (
+            <div className="activation-notice" role="status" aria-live="polite">
+              <span>{t("activation.notice.complete")}</span>
+              <Link to={`/inbox/${encodeURIComponent(activation.data.backgroundEvidence.recordingStem)}`}>
+                {t("activation.notice.open")}
+              </Link>
+            </div>
+          )}
+          <div className="activate-actions">
+            {activation.data.state === "recording" && (
+              <button
+                type="button"
+                className="activate-action primary"
+                disabled={stopAttempt.isPending}
+                onClick={() => {
+                  setActionFailed(false);
+                  void stopAttempt.mutateAsync().then(
+                    () => activation.refetch(),
+                    () => setActionFailed(true),
+                  );
+                }}
+              >
+                {t("activation.attempt.stop")}
+              </button>
+            )}
+            <Link className="activate-action" to="/agent-console">{t("activation.attempt.leave")}</Link>
+          </div>
+          {actionFailed && <p role="alert">{t("activation.action.error")}</p>}
+        </div>
+      </section>
+    );
   }
   if (!activation.data || activation.data.state === "unresolved") {
     const data = activation.data;
@@ -120,6 +204,11 @@ export function Activate() {
                 {readiness.summary.state === "ready"
                   ? t("activation.summary.ready")
                   : t("activation.summary.pending")}
+              </li>
+              <li data-state={readiness.recordingPipeline.state}>
+                {readiness.recordingPipeline.state === "ready"
+                  ? t("activation.pipeline.ready")
+                  : t("activation.pipeline.blocked")}
               </li>
             </ol>
           )}
@@ -208,6 +297,20 @@ export function Activate() {
                 </Link>
                 <button type="button" className="activate-action" onClick={() => void activation.refetch()}>
                   {t("activation.audioInput.retry")}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {data?.blocker?.capability === "recording_pipeline" && (
+            <div className="activate-blocker" role="alert">
+              <p>{t("activation.pipeline.guidance")}</p>
+              <div className="activate-actions">
+                <Link className="activate-action primary" to={data.blocker.remediation.href}>
+                  {t("activation.pipeline.openSettings")}
+                </Link>
+                <button type="button" className="activate-action" onClick={() => void activation.refetch()}>
+                  {t("activation.pipeline.retry")}
                 </button>
               </div>
             </div>
@@ -350,6 +453,19 @@ export function Activate() {
           )}
 
           <div className="activate-actions">
+            {data?.nextStep === null && (
+              <>
+                <p className="activate-recording-guidance">{t("activation.attempt.duration")}</p>
+                <button
+                  type="button"
+                  className="activate-action primary"
+                  disabled={startAttempt.isPending}
+                  onClick={() => void run(() => startAttempt.mutateAsync())}
+                >
+                  {t("activation.attempt.start")}
+                </button>
+              </>
+            )}
             <Link className="activate-action" to="/settings/llm">
               {t("activation.action.providers")}
             </Link>
@@ -375,7 +491,9 @@ export function Activate() {
     );
   }
 
-  const { evidence } = activation.data;
+  if (activation.data.state !== "activated") return null;
+  const activated = activation.data;
+  const { evidence } = activated;
   const completedAt = new Intl.DateTimeFormat(lang === "zh" ? "zh-CN" : "en", {
     dateStyle: "medium",
     timeStyle: "short",
@@ -398,12 +516,12 @@ export function Activate() {
           <div><dt>{t("activation.evidence.completed")}</dt><dd>{completedAt}</dd></div>
         </dl>
 
-        {!activation.data.sourceArtifactAvailable && (
+        {!activated.sourceArtifactAvailable && (
           <p className="activate-source-missing">{t("activation.sourceMissing")}</p>
         )}
 
         <div className="activate-actions">
-          {activation.data.completedNoteAvailable && (
+          {activated.completedNoteAvailable && (
             <button
               type="button"
               className="activate-action primary"
@@ -418,9 +536,9 @@ export function Activate() {
           <Link className="activate-action" to="/settings/llm">{t("activation.action.providers")}</Link>
         </div>
 
-        {noteOpen && activation.data.completedNote && (
+        {noteOpen && activated.completedNote && (
           <div id="activate-completed-note" className="activate-completed-note">
-            <MarkdownView text={activation.data.completedNote} />
+            <MarkdownView text={activated.completedNote} />
           </div>
         )}
       </div>

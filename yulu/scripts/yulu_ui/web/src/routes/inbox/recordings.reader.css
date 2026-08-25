@@ -61,6 +61,16 @@
   overscroll-behavior: contain;
   scrollbar-gutter: stable;
 }
+.reader-activation-success {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 32px;
+  color: var(--green);
+  background: color-mix(in srgb, var(--green) 8%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--green) 24%, transparent);
+  font-weight: 600;
+}
 .reader-header {
   container-type: inline-size;
   position: relative;

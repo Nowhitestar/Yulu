@@ -167,6 +167,16 @@ blocked, with remediation at `/settings/llm`; there is no fallback. Supported
 Agent onboarding remains blocked until its adapter supplies the same explicit
 identity, readiness proof, gateway, and local-or-external disclosure metadata.
 
+`/activate` records through the production recording command and correlates the
+returned Host task identity to a durable Activation Attempt. The page reads task
+state from the Host, so transcription and summary processing continue after the
+page is left and resume after UI or Host restart. Core Activation Evidence is
+committed only after the Host verifies nonempty audio and transcript, a current
+summary, artifact integrity, and provider provenance. Optional connector
+delivery happens afterward and cannot gate activation. A guided completion opens
+the saved note; manual, scheduled, and verified historical completions announce
+the saved note without navigating or moving focus.
+
 Drag the six-dot handle to reposition the overlay. Use the down arrow to collapse
 it to the breathing Yulu logo, then click the logo to restore captions. Click the
 `录制中` control to stop; the overlay disappears after capture stops.

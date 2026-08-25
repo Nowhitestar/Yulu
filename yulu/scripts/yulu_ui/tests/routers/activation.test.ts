@@ -4,9 +4,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const ipcSendMock = vi.hoisted(() => vi.fn());
+const runRecordAudioMock = vi.hoisted(() => vi.fn());
+const stopRecordingAndEnqueueMock = vi.hoisted(() => vi.fn());
 vi.mock("../../src/ipc.js", () => ({ ipcSend: ipcSendMock }));
+vi.mock("../../src/recordingCommand.js", () => ({
+  runRecordAudio: runRecordAudioMock,
+  stopRecordingAndEnqueue: stopRecordingAndEnqueueMock,
+}));
 
 import { ArtifactStore } from "../../src/artifactStore.js";
+import { verifiedCoreActivationEvidence } from "../../src/coreActivation.js";
 import { HostStore } from "../../src/hostStore.js";
 import { XAI_TRANSCRIPTION_DISCLOSURE_VERSION } from "../../src/transcriptionConsent.js";
 import { XAI_SUMMARY_DISCLOSURE_VERSION } from "../../src/summaryDataDisclosure.js";
@@ -42,6 +49,8 @@ describe("activation router", () => {
     if (root) rmSync(root, { recursive: true, force: true });
     root = "";
     ipcSendMock.mockReset();
+    runRecordAudioMock.mockReset();
+    stopRecordingAndEnqueueMock.mockReset();
   });
 
   function setup() {
@@ -55,6 +64,11 @@ describe("activation router", () => {
       transcription: { engine: "local" as "local" | "xai" },
       intelligence: {
         summary: { provider: "agent" as "agent" | "xai", model: "runtime-managed" },
+      },
+      agent_pipeline: {
+        enabled: true,
+        auto_process_recordings: true,
+        auto_send_notion: false,
       },
     };
     const localStatus = {
@@ -157,6 +171,196 @@ describe("activation router", () => {
           local: { available: true, ready: false, detail: "local model probe failed" },
         },
       },
+    });
+  });
+
+  it("starts the production recorder and resumes its exact durable task after Host restart", async () => {
+    const { caller, ctx } = setup();
+    runRecordAudioMock.mockResolvedValue({ ok: true, stdout: "recording started\n", stderr: "" });
+
+    const started = await caller.startAttempt();
+    expect(runRecordAudioMock).toHaveBeenCalledWith(ctx, ["start", "Core Activation"]);
+    expect(started).toMatchObject({
+      state: "recording",
+      attempt: { id: expect.any(String), taskId: null, recordingStem: null },
+    });
+
+    const task = host!.enqueueRecording({
+      idempotencyKey: "recording:guided-activation",
+      recordingStem: "Activation_20260825_141500",
+      title: "Core Activation",
+      audioPath: join(root, "movies", "Activation_20260825_141500.wav"),
+      sendToNotion: false,
+      destinationHint: "",
+      agentProvider: "codex",
+      summaryProvider: "codex",
+      summaryModel: "runtime-managed",
+    }).task;
+    stopRecordingAndEnqueueMock.mockImplementation(async (
+      _ctx: AppContext,
+      _stop: unknown,
+      onRecordingStopped?: (identity: { audioPath: string; recordingStem: string }) => void,
+    ) => {
+      onRecordingStopped?.({ audioPath: task.audioPath, recordingStem: task.recordingStem });
+      return {
+        ok: true,
+        stdout: `FINAL_RECORDING_PATH=${task.audioPath}\n`,
+        stderr: "",
+        pipeline: {
+          accepted: true,
+          taskId: task.id,
+          recordingStem: task.recordingStem,
+          state: task.state,
+          created: true,
+          sendToNotion: false,
+        },
+      };
+    });
+
+    await expect(caller.stopAttempt()).resolves.toMatchObject({
+      state: "processing",
+      attempt: {
+        taskId: task.id,
+        recordingStem: task.recordingStem,
+        stopRequestedAt: expect.any(String),
+        handoffError: null,
+      },
+      task: { id: task.id, state: "queued" },
+    });
+
+    host!.close();
+    host = new HostStore(join(root, "host.sqlite"));
+    const restartedCaller = createCaller(activationRouter, { ...ctx, host } as unknown as AppContext);
+    await expect(restartedCaller.status()).resolves.toMatchObject({
+      state: "processing",
+      attempt: { taskId: task.id, recordingStem: task.recordingStem },
+      task: { id: task.id, state: "queued" },
+    });
+  });
+
+  it("starts native capture only once for concurrent Activation Attempt requests", async () => {
+    const { caller } = setup();
+    let releaseStart!: () => void;
+    const startGate = new Promise<void>((resolve) => { releaseStart = resolve; });
+    runRecordAudioMock.mockImplementation(async () => {
+      if (runRecordAudioMock.mock.calls.length > 1) throw new Error("RecordingBusy");
+      await startGate;
+      return { ok: true, stdout: "recording started\n", stderr: "" };
+    });
+
+    const first = caller.startAttempt();
+    await vi.waitFor(() => expect(runRecordAudioMock).toHaveBeenCalledOnce());
+    const second = caller.startAttempt();
+    await expect(second).resolves.toMatchObject({
+      state: "recording",
+      attempt: { id: expect.any(String), taskId: null },
+    });
+    releaseStart();
+    const started = await first;
+
+    expect(runRecordAudioMock).toHaveBeenCalledOnce();
+    expect(host!.getActivationAttempt()?.id).toBe(started.attempt.id);
+  });
+
+  it("does not strand a recording state when the production recorder fails to start", async () => {
+    const { caller } = setup();
+    runRecordAudioMock.mockRejectedValue(new Error("audio daemon unavailable"));
+
+    await expect(caller.startAttempt()).rejects.toThrow("audio daemon unavailable");
+    expect(host!.getActivationAttempt()).toBeNull();
+    await expect(caller.status()).resolves.toMatchObject({ state: "unresolved" });
+  });
+
+  it("blocks capture before start when production pipeline policy is paused", async () => {
+    const { caller, configValue } = setup();
+    configValue.agent_pipeline.auto_process_recordings = false;
+
+    await expect(caller.status()).resolves.toMatchObject({
+      state: "unresolved",
+      nextStep: "recording_pipeline",
+      blocker: {
+        capability: "recording_pipeline",
+        remediation: { href: "/settings/automation" },
+      },
+      readiness: {
+        recordingPipeline: {
+          state: "blocked",
+          enabled: true,
+          autoProcessRecordings: false,
+        },
+      },
+    });
+    await expect(caller.startAttempt()).rejects.toThrow("recording pipeline policy");
+    expect(runRecordAudioMock).not.toHaveBeenCalled();
+    expect(host!.getActivationAttempt()).toBeNull();
+  });
+
+  it("durably displays a stopped recording whose production handoff fails", async () => {
+    const { caller, ctx } = setup();
+    runRecordAudioMock.mockResolvedValue({ ok: true, stdout: "recording started\n", stderr: "" });
+    await caller.startAttempt();
+    stopRecordingAndEnqueueMock.mockImplementation(async (
+      _ctx: AppContext,
+      _stop: unknown,
+      onRecordingStopped?: (identity: { audioPath: string; recordingStem: string }) => void,
+    ) => {
+      onRecordingStopped?.({
+        audioPath: join(root, "movies", "Guided_20260825_141500.wav"),
+        recordingStem: "Guided_20260825_141500",
+      });
+      return {
+        ok: true,
+        stdout: "FINAL_RECORDING_PATH=Guided_20260825_141500.wav\n",
+        stderr: "",
+        pipeline: {
+          accepted: false,
+          permanent: true,
+          reason: "Automatic Agent recording processing is paused by policy",
+          sendToNotion: false,
+        },
+      };
+    });
+
+    await expect(caller.stopAttempt()).rejects.toThrow("processing is paused by policy");
+    expect(host!.getActivationAttempt()).toMatchObject({
+      recordingStem: "Guided_20260825_141500",
+      taskId: null,
+      handoffError: "Automatic Agent recording processing is paused by policy",
+    });
+
+    host!.close();
+    host = new HostStore(join(root, "host.sqlite"));
+    const restartedCaller = createCaller(activationRouter, { ...ctx, host } as unknown as AppContext);
+    await expect(restartedCaller.status()).resolves.toMatchObject({
+      state: "processing",
+      task: null,
+      attempt: {
+        recordingStem: "Guided_20260825_141500",
+        handoffError: "Automatic Agent recording processing is paused by policy",
+      },
+    });
+  });
+
+  it("does not correlate unrelated work while the guided recorder is still active", async () => {
+    const { caller } = setup();
+    runRecordAudioMock.mockResolvedValue({ ok: true, stdout: "recording started\n", stderr: "" });
+    await caller.startAttempt();
+    host!.enqueueRecording({
+      idempotencyKey: "recording:scheduled-after-activation-start",
+      recordingStem: "Scheduled_20260825_141500",
+      title: "Scheduled",
+      audioPath: join(root, "movies", "Scheduled_20260825_141500.wav"),
+      sendToNotion: false,
+      destinationHint: "",
+      agentProvider: "codex",
+      summaryProvider: "codex",
+      summaryModel: "runtime-managed",
+    });
+
+    await expect(caller.status()).resolves.toMatchObject({
+      state: "recording",
+      attempt: { taskId: null, recordingStem: null },
+      task: null,
     });
   });
 
@@ -536,6 +740,7 @@ describe("activation router", () => {
 
     await expect(caller.status()).resolves.toMatchObject({
       state: "activated",
+      evidenceCreated: true,
       evidence: {
         recordingStem: recent.recordingStem,
         taskId: recent.id,
@@ -551,10 +756,102 @@ describe("activation router", () => {
     rmSync(recent.audioPath);
     await expect(caller.status()).resolves.toMatchObject({
       state: "activated",
+      evidenceCreated: false,
       evidence: { taskId: recent.id },
       sourceArtifactAvailable: false,
       completedNoteAvailable: true,
       completedNote: "# Verified summary",
+    });
+  });
+
+  it("keeps an active guided recording in place when unrelated work establishes activation", async () => {
+    const { moviesDir, artifacts, caller } = setup();
+    const attempt = host!.beginActivationAttempt().attempt;
+    const unrelated = completeRecording(
+      moviesDir,
+      artifacts,
+      "Scheduled_20260711_120000",
+      "2026-07-11T12:05:00.000Z",
+    );
+    const candidate = host!.getCoreActivationCandidate(unrelated.id);
+    const unrelatedEvidence = candidate
+      ? verifiedCoreActivationEvidence(candidate, artifacts, moviesDir)
+      : null;
+    expect(unrelatedEvidence).not.toBeNull();
+    host!.recordCoreActivationEvidence(unrelatedEvidence!);
+
+    await expect(caller.status()).resolves.toMatchObject({
+      state: "recording",
+      attempt: { id: attempt.id, taskId: null },
+      task: null,
+      backgroundEvidence: { taskId: unrelated.id, recordingStem: unrelated.recordingStem },
+    });
+  });
+
+  it("durably opens only the exact guided task once after Host restart", async () => {
+    const { moviesDir, artifacts, ctx } = setup();
+    const attempt = host!.beginActivationAttempt().attempt;
+    const exact = completeRecording(
+      moviesDir,
+      artifacts,
+      "Guided_20260711_120000",
+      "2026-07-11T12:05:00.000Z",
+    );
+    host!.correlateActivationAttempt(attempt.id, exact.id);
+
+    host!.close();
+    host = new HostStore(join(root, "host.sqlite"));
+    const restartedCaller = createCaller(activationRouter, { ...ctx, host } as unknown as AppContext);
+    await expect(restartedCaller.status()).resolves.toMatchObject({
+      state: "activated",
+      guidedCompletionPending: true,
+      evidence: { taskId: exact.id, recordingStem: exact.recordingStem },
+    });
+    await expect(restartedCaller.acknowledgeGuidedCompletion({ taskId: exact.id })).resolves.toEqual({
+      acknowledged: true,
+    });
+    await expect(restartedCaller.status()).resolves.toMatchObject({
+      state: "activated",
+      guidedCompletionPending: false,
+      evidence: { taskId: exact.id },
+    });
+    await expect(restartedCaller.acknowledgeGuidedCompletion({ taskId: "unrelated-task" })).resolves.toEqual({
+      acknowledged: false,
+    });
+  });
+
+  it("keeps immutable evidence separate from a later guided completion target", async () => {
+    const { moviesDir, artifacts, caller } = setup();
+    const attempt = host!.beginActivationAttempt().attempt;
+    const background = completeRecording(
+      moviesDir,
+      artifacts,
+      "Scheduled_20260711_120000",
+      "2026-07-11T12:05:00.000Z",
+    );
+    const backgroundCandidate = host!.getCoreActivationCandidate(background.id)!;
+    const backgroundEvidence = verifiedCoreActivationEvidence(backgroundCandidate, artifacts, moviesDir)!;
+    host!.recordCoreActivationEvidence(backgroundEvidence);
+    const guided = completeRecording(
+      moviesDir,
+      artifacts,
+      "Guided_20260711_120100",
+      "2026-07-11T12:06:00.000Z",
+    );
+    host!.correlateActivationAttempt(attempt.id, guided.id);
+
+    await expect(caller.status()).resolves.toMatchObject({
+      state: "activated",
+      evidence: { taskId: background.id, recordingStem: background.recordingStem },
+      guidedCompletionPending: true,
+      guidedCompletion: { taskId: guided.id, recordingStem: guided.recordingStem },
+    });
+    await caller.acknowledgeGuidedCompletion({ taskId: guided.id });
+    await expect(caller.status()).resolves.toMatchObject({
+      state: "activated",
+      evidence: { taskId: background.id },
+      guidedCompletionPending: false,
+      guidedCompletion: null,
     });
   });
 

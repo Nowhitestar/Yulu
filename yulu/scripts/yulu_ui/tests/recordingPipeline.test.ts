@@ -235,12 +235,13 @@ describe("RecordingPipeline", () => {
       recordingEventsDir: join(configDir, "recording-events"),
     };
     const configManager = new ConfigManager(configFile);
+    const pubsub = new PubSub<AppChannels>();
     pipeline = new RecordingPipeline({
       store,
       artifacts,
       config: configManager,
       paths: runtimePaths,
-      pubsub: new PubSub<AppChannels>(),
+      pubsub,
       promptDb: opts.autoPrompts ? () => ({
         prepare: () => ({
           get: (category: unknown) => opts.autoPrompts!
@@ -273,6 +274,7 @@ describe("RecordingPipeline", () => {
       xaiRequest,
       runArtifactWorkflow,
       runNotionWorkflow,
+      pubsub,
       notionStartedFromState: () => notionStartedFromState,
       legacyManualTask,
     };
@@ -301,7 +303,9 @@ describe("RecordingPipeline", () => {
   });
 
   it("persists Core Activation Evidence when a production recording completes", async () => {
-    const { audioPath } = setup();
+    const { audioPath, pubsub } = setup();
+    const completed: AppChannels["core-activation"][] = [];
+    pubsub.subscribe("core-activation", (event) => completed.push(event));
     writeFileSync(audioPath, wavWithAudio());
 
     const { task } = pipeline!.enqueueCompletion({ audioPath, title: "Demo" });
@@ -319,6 +323,29 @@ describe("RecordingPipeline", () => {
         summary: { sha256: expect.stringMatching(/^[a-f0-9]{64}$/) },
       },
     });
+    expect(completed).toEqual([{
+      taskId: task.id,
+      recordingStem: task.recordingStem,
+    }]);
+  });
+
+  it("announces only the recording that first establishes Core Activation Evidence", async () => {
+    const { audioPath, moviesDir, pubsub } = setup();
+    const completed: AppChannels["core-activation"][] = [];
+    pubsub.subscribe("core-activation", (event) => completed.push(event));
+    writeFileSync(audioPath, wavWithAudio());
+
+    const first = pipeline!.enqueueCompletion({ audioPath, title: "First" });
+    await vi.waitFor(() => expect(store!.getTask(first.task.id)?.state).toBe("completed"));
+    const secondPath = join(moviesDir, "Second_20260711_121000.wav");
+    writeFileSync(secondPath, wavWithAudio());
+    const second = pipeline!.enqueueCompletion({ audioPath: secondPath, title: "Second" });
+    await vi.waitFor(() => expect(store!.getTask(second.task.id)?.state).toBe("completed"));
+
+    expect(completed).toEqual([{
+      taskId: first.task.id,
+      recordingStem: first.task.recordingStem,
+    }]);
   });
 
   it("asks the selected audio service for the final transcript", async () => {
@@ -662,7 +689,9 @@ describe("RecordingPipeline", () => {
   });
 
   it("fences connector uncertainty before the delivery Agent can make a write", async () => {
-    const { audioPath, notionStartedFromState } = setup({ notionThrowsAfterCapability: true });
+    const { audioPath, notionStartedFromState, pubsub } = setup({ notionThrowsAfterCapability: true });
+    const completed: AppChannels["core-activation"][] = [];
+    pubsub.subscribe("core-activation", (event) => completed.push(event));
     writeFileSync(audioPath, wavWithAudio());
     const { task } = pipeline!.enqueueCompletion({ audioPath, sendToNotion: true });
 
@@ -673,6 +702,7 @@ describe("RecordingPipeline", () => {
       status: "sending",
     });
     expect(store!.getCoreActivationEvidence()).toMatchObject({ taskId: task.id });
+    expect(completed).toEqual([{ taskId: task.id, recordingStem: task.recordingStem }]);
     expect(() => pipeline!.retry(task.id)).toThrow(/cannot retry from delivery_unverified/);
   });
 

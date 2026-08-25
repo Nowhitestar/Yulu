@@ -104,6 +104,110 @@ describe("HostStore", () => {
     expect(store.getCoreActivationEvidence()).toEqual(activationEvidence(task.id));
   });
 
+  it("durably correlates an Activation Attempt to the production task identity", () => {
+    createStore();
+    const activationAttempt = store!.beginActivationAttempt().attempt;
+    const task = enqueue(false).task;
+
+    expect(store!.correlateActivationAttempt(activationAttempt.id, task.id)).toMatchObject({
+      id: activationAttempt.id,
+      taskId: task.id,
+      recordingStem: task.recordingStem,
+      startedAt: activationAttempt.startedAt,
+    });
+
+    const dbPath = join(root, "host.sqlite");
+    store!.close();
+    store = new HostStore(dbPath);
+    expect(store.getActivationAttempt()).toMatchObject({
+      id: activationAttempt.id,
+      taskId: task.id,
+      recordingStem: task.recordingStem,
+    });
+  });
+
+  it("recovers legacy Activation Attempt correlation only from work created after it began", () => {
+    createStore();
+    const oldTask = enqueue(false).task;
+    store!.db.prepare("UPDATE agent_tasks SET created_at = ? WHERE id = ?")
+      .run("2026-01-01T00:00:00.000Z", oldTask.id);
+    const attempt = store!.beginActivationAttempt().attempt;
+    store!.markActivationAttemptStopping(attempt.id);
+    store!.recordActivationAttemptStopped(attempt.id, "Activation_20260825_141500");
+    const newTask = store!.enqueueRecording({
+      idempotencyKey: "recording:activation:after-start",
+      recordingStem: "Activation_20260825_141500",
+      title: "Activation",
+      audioPath: join(root, "Activation_20260825_141500.wav"),
+      sendToNotion: false,
+      destinationHint: "",
+      agentProvider: "hermes",
+      ...SUMMARY_IDENTITY,
+    }).task;
+
+    expect(store!.recoverActivationAttemptTask(attempt.id)).toMatchObject({
+      taskId: newTask.id,
+      recordingStem: newTask.recordingStem,
+    });
+  });
+
+  it("leaves legacy Activation Attempt correlation unresolved when post-start work is ambiguous", () => {
+    createStore();
+    const attempt = store!.beginActivationAttempt().attempt;
+    store!.markActivationAttemptStopping(attempt.id);
+    store!.recordActivationAttemptStopped(attempt.id, "Activation_20260825_141500");
+    const first = store!.enqueueRecording({
+      idempotencyKey: "recording:activation:first",
+      recordingStem: "Activation_20260825_141500",
+      title: "Activation",
+      audioPath: join(root, "Activation_20260825_141500.wav"),
+      sendToNotion: false,
+      destinationHint: "",
+      agentProvider: "hermes",
+      ...SUMMARY_IDENTITY,
+    }).task;
+    store!.db.prepare("UPDATE agent_tasks SET state = 'failed' WHERE id = ?").run(first.id);
+    store!.enqueueRecording({
+      idempotencyKey: "recording:activation:second",
+      recordingStem: "Activation_20260825_141500",
+      title: "Activation",
+      audioPath: join(root, "Activation_20260825_141500.wav"),
+      sendToNotion: false,
+      destinationHint: "",
+      agentProvider: "hermes",
+      trigger: "manual",
+      ...SUMMARY_IDENTITY,
+    });
+
+    expect(store!.recoverActivationAttemptTask(attempt.id)).toMatchObject({
+      taskId: null,
+      recordingStem: "Activation_20260825_141500",
+    });
+  });
+
+  it("never recovers a sole unrelated task after guided recording stops", () => {
+    createStore();
+    const attempt = store!.beginActivationAttempt().attempt;
+    store!.markActivationAttemptStopping(attempt.id);
+    store!.recordActivationAttemptStopped(attempt.id, "Guided_20260825_141500");
+    const unrelated = store!.enqueueRecording({
+      idempotencyKey: "recording:unrelated-after-stop",
+      recordingStem: "Scheduled_20260825_141501",
+      title: "Scheduled",
+      audioPath: join(root, "Scheduled_20260825_141501.wav"),
+      sendToNotion: false,
+      destinationHint: "",
+      agentProvider: "hermes",
+      ...SUMMARY_IDENTITY,
+    }).task;
+
+    expect(store!.recoverActivationAttemptTask(attempt.id)).toMatchObject({
+      taskId: null,
+      recordingStem: "Guided_20260825_141500",
+    });
+    expect(store!.getTask(unrelated.id)).not.toBeNull();
+  });
+
   it("persists only the accepted cloud transcription disclosure version", () => {
     createStore();
 

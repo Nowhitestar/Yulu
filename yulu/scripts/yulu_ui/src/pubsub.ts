@@ -39,6 +39,7 @@ export type AppChannels = {
   "recording":       { state: "idle" | "recording" | "processing" | "meetingBusy" | "daemonDown"; file?: string; elapsedSec?: number; level?: number; };
   "daemons":         { name: string; status: "running" | "idle" | "stopped" | "crashed"; pid: number; lastLog?: string; };
   "recordings-changed": { reason: "added" | "removed" | "changed" };
+  "core-activation": { taskId: string; recordingStem: string };
   "logs":            { name: string; line: string; ts: number; };
   "jobs":            { stem: string; jobId: string; state: "transcribing" | "summarizing" | "done" | "failed"; error?: string };
   "realtime-transcript": {

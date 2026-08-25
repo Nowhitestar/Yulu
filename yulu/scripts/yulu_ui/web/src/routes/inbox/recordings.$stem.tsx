@@ -369,6 +369,16 @@ export function RecordingReader() {
   const t = useT();
   const { data, error, isPending } = trpc.recordings.get.useQuery({ stem }, { enabled: stem.length > 0 });
   const { data: summaryPrompts } = trpc.prompts.list.useQuery({ category: "summary" });
+  const acknowledgeGuidedCompletion = trpc.activation.acknowledgeGuidedCompletion.useMutation();
+  const acknowledgedGuidedTask = useRef<string | null>(null);
+  const activationComplete = params.get("activation") === "complete";
+  const activationTaskId = params.get("activationTaskId")?.trim() || null;
+
+  useEffect(() => {
+    if (!activationComplete || !activationTaskId || acknowledgedGuidedTask.current === activationTaskId) return;
+    acknowledgedGuidedTask.current = activationTaskId;
+    acknowledgeGuidedCompletion.mutate({ taskId: activationTaskId });
+  }, [acknowledgeGuidedCompletion, activationComplete, activationTaskId]);
 
   const qc = useQueryClient();
   const [completedAction, setCompletedAction] = useState<ManualAction | null>(null);
@@ -706,6 +716,12 @@ export function RecordingReader() {
   return (
     <div className="reader">
       <div className="reader-workspace">
+        {activationComplete && (
+          <div className="reader-activation-success" role="status" aria-live="polite">
+            <Check size={16} aria-hidden="true" />
+            {t("reader.activation.complete")}
+          </div>
+        )}
         <div className="reader-header">
           <button type="button" className="reader-mobile-back" onClick={() => navigate("/inbox")}>
             <ChevronLeft size={14} strokeWidth={1.8} />

@@ -81,6 +81,46 @@ test("shell sends an unresolved environment through /activate once", async ({ pa
   expect(acknowledgementRequests).toBe(1);
 });
 
+test("/activate resumes durable Host progress and permits nonblocking navigation", async ({ page }) => {
+  await page.unroute("**/trpc/activation.status*");
+  await page.route("**/trpc/activation.status*", (route) => route.fulfill({
+    status: 200,
+    contentType: "application/json",
+    body: JSON.stringify({
+      result: {
+        data: {
+          state: "processing",
+          evidence: null,
+          journey: {
+            automaticEntryAcknowledgedAt: "2026-08-25T00:00:00.000Z",
+            deferredAt: null,
+            shouldAutoEnter: false,
+          },
+          attempt: {
+            id: "e2e-attempt",
+            startedAt: "2026-08-25T00:00:00.000Z",
+            taskId: "e2e-task",
+            recordingStem: "Activation_20260825_080000",
+          },
+          task: {
+            id: "e2e-task",
+            state: "running",
+            phase: "transcribing",
+            error: null,
+          },
+        },
+      },
+    }),
+  }));
+
+  await page.goto("/activate");
+  await expect(page.getByRole("heading", { name: /Complete Core Activation|完成核心激活/ })).toBeVisible();
+  await expect(page.getByText(/10–20 (seconds|秒)/)).toBeVisible();
+  await expect(page.getByRole("status")).toContainText(/Transcribing your recording|正在转写录音/);
+  await page.getByRole("link", { name: /Continue using Yulu|继续使用 Yulu/ }).click();
+  await expect(page).toHaveURL(/\/agent-console$/);
+});
+
 test("Sidebar: single Recordings entry, no Voicemails/Meetings, no counts", async ({ page }) => {
   await page.goto("/inbox");
   await expect(page.locator(".sidebar-count")).toHaveCount(0);
