@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { AudioTranscriptionService } from "../src/audioTranscription.js";
 
-function setup(engine: "local" | "xai") {
+function setup(engine: "local" | "xai", xaiConsent = true) {
   const configValue = { transcription: { engine } };
   const config = { read: () => configValue };
   const local = {
@@ -29,11 +29,35 @@ function setup(engine: "local" | "xai") {
     transcribeFile: vi.fn(async () => ({ transcript: "xAI transcript", provider: "xai-oauth:yulu", chunks: 1, language: "zh" as const })),
     testCredential: vi.fn(async () => ({ ok: true as const, provider: "xai-oauth:yulu" })),
   };
-  const service = new AudioTranscriptionService(config as never, local as never, xai as never);
+  const service = new AudioTranscriptionService(
+    config as never,
+    local as never,
+    xai as never,
+    () => xaiConsent,
+  );
   return { configValue, local, xai, service };
 }
 
 describe("AudioTranscriptionService", () => {
+  it("rejects realtime and final xAI audio processing without current disclosure consent", async () => {
+    const { local, xai, service } = setup("xai", false);
+
+    await expect(service.start("zh")).rejects.toThrow("current Cloud Transcription Consent");
+    await expect(service.transcribeFile("/tmp/not-opened.wav", "zh"))
+      .rejects.toThrow("current Cloud Transcription Consent");
+    expect(xai.start).not.toHaveBeenCalled();
+    expect(xai.transcribeFile).not.toHaveBeenCalled();
+    expect(local.start).not.toHaveBeenCalled();
+  });
+
+  it("does not require cloud consent for selected local transcription", async () => {
+    const { local, xai, service } = setup("local", false);
+
+    await service.start("zh");
+    expect(local.start).toHaveBeenCalledOnce();
+    expect(xai.start).not.toHaveBeenCalled();
+  });
+
   it("does not fall back to local when the selected xAI engine fails", async () => {
     const { local, xai, service } = setup("xai");
     xai.transcribeFile.mockRejectedValueOnce(new Error("xAI offline"));

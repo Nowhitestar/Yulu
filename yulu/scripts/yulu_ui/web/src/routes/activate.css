@@ -49,6 +49,40 @@
 .activate-evidence dt { color: var(--fg-2); }
 .activate-evidence dd { margin: 0; overflow-wrap: anywhere; }
 
+.activate-readiness {
+  display: grid;
+  gap: 10px;
+  margin: 24px 0;
+  padding-left: 24px;
+}
+
+.activate-readiness li[data-state="ready"] { color: var(--green); }
+
+.activate-engine {
+  display: flex;
+  gap: 18px;
+  margin: 24px 0;
+  padding: 16px;
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-control);
+}
+
+.activate-engine legend { padding: 0 6px; font-weight: 600; }
+.activate-engine label { display: flex; align-items: center; gap: 8px; }
+
+.activate-blocker,
+.activate-disclosure,
+.activate-declined {
+  margin-top: 20px;
+  padding: 16px;
+  border-radius: var(--radius-control);
+  background: var(--accent-soft);
+}
+
+.activate-disclosure h2 { margin: 0 0 8px; font-size: 20px; }
+.activate-blocker .activate-actions,
+.activate-disclosure .activate-actions { margin-top: 12px; }
+
 .activate-source-missing {
   padding: 12px 14px;
   border-radius: var(--radius-control);

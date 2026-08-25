@@ -104,6 +104,26 @@ describe("HostStore", () => {
     expect(store.getCoreActivationEvidence()).toEqual(activationEvidence(task.id));
   });
 
+  it("persists only the accepted cloud transcription disclosure version", () => {
+    createStore();
+
+    expect(store!.getCloudTranscriptionConsent()).toBeNull();
+    expect(store!.recordCloudTranscriptionConsent("xai-audio-v1")).toEqual({
+      disclosureVersion: "xai-audio-v1",
+      acceptedAt: expect.any(String),
+    });
+
+    const dbPath = join(root, "host.sqlite");
+    store!.close();
+    store = new HostStore(dbPath);
+    expect(store.getCloudTranscriptionConsent()).toEqual({
+      disclosureVersion: "xai-audio-v1",
+      acceptedAt: expect.any(String),
+    });
+    const columns = store.db.prepare("PRAGMA table_info(cloud_transcription_consent)").all() as Array<{ name: string }>;
+    expect(columns.map((column) => column.name)).toEqual(["id", "disclosure_version", "accepted_at"]);
+  });
+
   it("deduplicates recording completion by idempotency key", () => {
     createStore();
     const first = enqueue();

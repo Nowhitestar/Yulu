@@ -108,6 +108,11 @@ export interface ActivationJourneyState {
   deferredAt: string | null;
 }
 
+export interface CloudTranscriptionConsent {
+  disclosureVersion: string;
+  acceptedAt: string;
+}
+
 export interface NotionDelivery {
   taskId: string;
   deliveryKey: string;
@@ -812,6 +817,30 @@ export class HostStore {
     return this.getActivationJourneyState();
   }
 
+  getCloudTranscriptionConsent(): CloudTranscriptionConsent | null {
+    const row = this.db.prepare(`
+      SELECT disclosure_version, accepted_at
+      FROM cloud_transcription_consent WHERE id = 1
+    `).get() as { disclosure_version: string; accepted_at: string } | undefined;
+    return row ? {
+      disclosureVersion: row.disclosure_version,
+      acceptedAt: row.accepted_at,
+    } : null;
+  }
+
+  recordCloudTranscriptionConsent(disclosureVersion: string): CloudTranscriptionConsent {
+    const version = disclosureVersion.trim();
+    if (!version || version.length > 100) throw new Error("Cloud Transcription Consent version is invalid");
+    this.db.prepare(`
+      INSERT INTO cloud_transcription_consent (id, disclosure_version, accepted_at)
+      VALUES (1, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        disclosure_version = excluded.disclosure_version,
+        accepted_at = excluded.accepted_at
+    `).run(version, now());
+    return this.getCloudTranscriptionConsent()!;
+  }
+
   recordCoreActivationEvidence(evidence: CoreActivationEvidence): CoreActivationEvidence {
     const fingerprints = Object.values(evidence.artifacts);
     if (
@@ -1290,6 +1319,12 @@ export class HostStore {
         id INTEGER PRIMARY KEY CHECK(id = 1),
         automatic_entry_acknowledged_at TEXT,
         deferred_at TEXT
+      );
+
+      CREATE TABLE IF NOT EXISTS cloud_transcription_consent (
+        id INTEGER PRIMARY KEY CHECK(id = 1),
+        disclosure_version TEXT NOT NULL,
+        accepted_at TEXT NOT NULL
       );
     `);
     const columns = this.db.prepare("PRAGMA table_info(agent_tasks)").all() as Array<{ name: string }>;

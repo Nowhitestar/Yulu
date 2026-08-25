@@ -11,8 +11,15 @@ export const handle = { breadcrumb: "breadcrumb.activate", filters: null };
 export function Activate() {
   const activation = trpc.activation.status.useQuery();
   const defer = trpc.activation.defer.useMutation();
+  const acceptXaiDisclosure = trpc.activation.acceptXaiTranscriptionDisclosure.useMutation();
+  const updateConfig = trpc.config.update.useMutation();
+  const testLocal = trpc.localCaption.test.useMutation();
+  const probeXai = trpc.providers.probe.useMutation();
   const [noteOpen, setNoteOpen] = useState(false);
   const [deferFailed, setDeferFailed] = useState(false);
+  const [pendingXai, setPendingXai] = useState(false);
+  const [disclosureDeclined, setDisclosureDeclined] = useState(false);
+  const [actionFailed, setActionFailed] = useState(false);
   const titleRef = useRef<HTMLHeadingElement>(null);
   const navigate = useNavigate();
   const { lang } = useLang();
@@ -24,15 +31,183 @@ export function Activate() {
     return <section className="activate-page" aria-live="polite">{t("activation.loading")}</section>;
   }
   if (!activation.data || activation.data.state === "unresolved") {
+    const data = activation.data;
+    const readiness = data?.readiness;
+    const selected = readiness?.transcription.selected ?? "local";
+    const disclosureOpen = Boolean(readiness && !disclosureDeclined && (
+      pendingXai || (selected === "xai" && readiness.transcription.xai.disclosureRequired)
+    ));
+    const run = async (action: () => Promise<unknown>) => {
+      setActionFailed(false);
+      try {
+        await action();
+        await activation.refetch();
+      } catch {
+        setActionFailed(true);
+      }
+    };
+    const chooseLocal = () => run(async () => {
+      setPendingXai(false);
+      setDisclosureDeclined(false);
+      await updateConfig.mutateAsync({ key: "transcription.engine", value: "local" });
+    });
+    const chooseXai = () => {
+      setDisclosureDeclined(false);
+      if (readiness?.transcription.xai.disclosureRequired) setPendingXai(true);
+      else void run(() => updateConfig.mutateAsync({ key: "transcription.engine", value: "xai" }));
+    };
+    const retryTranscription = () => run(() => selected === "local"
+      ? testLocal.mutateAsync()
+      : probeXai.mutateAsync({ capability: "transcription" }));
     return (
       <section className="activate-page" aria-labelledby="activate-title">
         <div className="activate-card">
           <h1 id="activate-title" ref={titleRef} tabIndex={-1}>{t("activation.unresolved.title")}</h1>
           <p>{t("activation.unresolved.body")}</p>
+
+          {readiness && (
+            <ol className="activate-readiness" aria-label={t("activation.readiness.aria")}>
+              <li data-state={readiness.microphonePermission.state}>
+                {readiness.microphonePermission.state === "ready"
+                  ? t("activation.microphone.ready")
+                  : t("activation.microphone.blocked")}
+              </li>
+              <li data-state={readiness.audioInput.state}>
+                {readiness.audioInput.state === "ready"
+                  ? t("activation.audioInput.ready")
+                  : t("activation.audioInput.blocked")}
+              </li>
+              <li data-state={readiness.transcription.state}>
+                {readiness.transcription.state === "ready"
+                  ? t("activation.transcription.ready")
+                  : t("activation.transcription.pending")}
+              </li>
+            </ol>
+          )}
+
+          {readiness && readiness.transcription.state !== "ready" && (
+            <fieldset className="activate-engine">
+              <legend>{t("activation.transcription.choose")}</legend>
+              <label>
+                <input
+                  type="radio"
+                  name="activation-transcription"
+                  checked={selected === "local" && !pendingXai}
+                  onChange={() => void chooseLocal()}
+                />
+                {t("activation.transcription.local")}
+              </label>
+              <label>
+                <input
+                  type="radio"
+                  name="activation-transcription"
+                  checked={selected === "xai" || pendingXai}
+                  onClick={() => {
+                    if (selected === "xai" && readiness.transcription.xai.disclosureRequired) {
+                      setDisclosureDeclined(false);
+                    }
+                  }}
+                  onChange={chooseXai}
+                />
+                {t("activation.transcription.xai")}
+              </label>
+            </fieldset>
+          )}
+
+          {data?.blocker?.capability === "microphone_permission" && (
+            <div className="activate-blocker" role="alert">
+              <p>{t("activation.microphone.guidance")}</p>
+              <div className="activate-actions">
+                <a className="activate-action primary" href={data.blocker.remediation.href}>
+                  {t("activation.microphone.openSettings")}
+                </a>
+                <button type="button" className="activate-action" onClick={() => void activation.refetch()}>
+                  {t("activation.microphone.retry")}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {data?.blocker?.capability === "audio_input" && (
+            <div className="activate-blocker" role="alert">
+              <p>{t("activation.audioInput.guidance")}</p>
+              <div className="activate-actions">
+                <Link className="activate-action primary" to={data.blocker.remediation.href}>
+                  {t("activation.audioInput.openSettings")}
+                </Link>
+                <button type="button" className="activate-action" onClick={() => void activation.refetch()}>
+                  {t("activation.audioInput.retry")}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {(data?.blocker?.capability === "local_transcription" ||
+            data?.blocker?.capability === "xai_transcription") && (
+            <div className="activate-blocker" role="alert">
+              <p>{data.blocker.capability === "local_transcription"
+                ? t("activation.transcription.localBlocked")
+                : t("activation.transcription.xaiBlocked")}</p>
+              <div className="activate-actions">
+                <Link className="activate-action primary" to={data.blocker.remediation.href}>
+                  {t("activation.transcription.openSettings")}
+                </Link>
+                <button type="button" className="activate-action" onClick={() => void retryTranscription()}>
+                  {t("activation.transcription.retry")}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {readiness && disclosureOpen && (
+            <div
+              className="activate-disclosure"
+              role="dialog"
+              aria-labelledby="activate-xai-disclosure-title"
+            >
+              <h2 id="activate-xai-disclosure-title">{t("activation.disclosure.title")}</h2>
+              <p>{t("activation.disclosure.privacy")}</p>
+              <p>{t("activation.disclosure.cost")}</p>
+              <div className="activate-actions">
+                <button
+                  type="button"
+                  className="activate-action primary"
+                  onClick={() => void run(async () => {
+                    await acceptXaiDisclosure.mutateAsync();
+                    if (pendingXai) {
+                      await updateConfig.mutateAsync({ key: "transcription.engine", value: "xai" });
+                    }
+                    setPendingXai(false);
+                  })}
+                >
+                  {t("activation.disclosure.accept")}
+                </button>
+                <button
+                  type="button"
+                  className="activate-action"
+                  onClick={() => {
+                    setPendingXai(false);
+                    setDisclosureDeclined(true);
+                  }}
+                >
+                  {t("activation.disclosure.decline")}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {readiness && disclosureDeclined && (
+            <div className="activate-declined" role="status">
+              <p>{t("activation.disclosure.declined")}</p>
+              {readiness.transcription.local.available && (
+                <button type="button" className="activate-action" onClick={() => void chooseLocal()}>
+                  {t("activation.disclosure.chooseLocal")}
+                </button>
+              )}
+            </div>
+          )}
+
           <div className="activate-actions">
-            <Link className="activate-action primary" to="/settings/transcription">
-              {t("activation.action.transcription")}
-            </Link>
             <Link className="activate-action" to="/settings/llm">
               {t("activation.action.providers")}
             </Link>
@@ -52,6 +227,7 @@ export function Activate() {
             </button>
           </div>
           {deferFailed && <p role="alert">{t("activation.defer.error")}</p>}
+          {actionFailed && <p role="alert">{t("activation.action.error")}</p>}
         </div>
       </section>
     );

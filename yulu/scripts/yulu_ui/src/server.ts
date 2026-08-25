@@ -44,6 +44,7 @@ import {
   XaiCredentialManager,
 } from "./xaiCredentials.js";
 import { XaiAudioClient } from "./xaiAudio.js";
+import { hasCurrentXaiTranscriptionConsent } from "./transcriptionConsent.js";
 import { XaiTextClient } from "./xaiText.js";
 import { AudioTranscriptionService } from "./audioTranscription.js";
 import { createXaiProviderReadiness } from "./routers/providers.js";
@@ -129,7 +130,12 @@ async function startLockedServer(
   const xaiAudio = new XaiAudioClient(xaiCredentials);
   const xaiText = new XaiTextClient(xaiCredentials);
   const xaiReadiness = createXaiProviderReadiness();
-  const audioTranscription = new AudioTranscriptionService(configManager, localCaption, xaiAudio);
+  const audioTranscription = new AudioTranscriptionService(
+    configManager,
+    localCaption,
+    xaiAudio,
+    () => hasCurrentXaiTranscriptionConsent(hostStore),
+  );
   void xaiCredentials.status().catch(() => {});
   const recordingPipeline = new RecordingPipeline({
     store: hostStore,

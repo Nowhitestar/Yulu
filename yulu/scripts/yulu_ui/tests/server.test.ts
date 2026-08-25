@@ -10,6 +10,7 @@ import { HostStore } from "../src/hostStore.js";
 import { RecordingPipeline } from "../src/recordingPipeline.js";
 import { AgentUnavailableError } from "../src/agentGateway.js";
 import { RealtimeTranscriptionCoordinator } from "../src/realtimeTranscription.js";
+import { XaiAudioClient } from "../src/xaiAudio.js";
 
 function rawHttp(port: number, path: string, hostHeader: string): Promise<{ status: number; body: string }> {
   return new Promise((resolve, reject) => {
@@ -26,6 +27,24 @@ function rawHttp(port: number, path: string, hostHeader: string): Promise<{ stat
 const HERE = dirname(fileURLToPath(import.meta.url));
 
 let env: { root: string; cleanup: () => void; server: RunningServer; baseUrl: string };
+
+function pcmWav(): Buffer {
+  const wav = Buffer.alloc(45);
+  wav.write("RIFF", 0);
+  wav.writeUInt32LE(37, 4);
+  wav.write("WAVEfmt ", 8);
+  wav.writeUInt32LE(16, 16);
+  wav.writeUInt16LE(1, 20);
+  wav.writeUInt16LE(1, 22);
+  wav.writeUInt32LE(16_000, 24);
+  wav.writeUInt32LE(32_000, 28);
+  wav.writeUInt16LE(2, 32);
+  wav.writeUInt16LE(16, 34);
+  wav.write("data", 36);
+  wav.writeUInt32LE(1, 40);
+  wav[44] = 1;
+  return wav;
+}
 
 beforeAll(async () => {
   const root = mkdtempSync(join(tmpdir(), "yulu_srv_"));
@@ -249,6 +268,91 @@ describe("server", () => {
     } finally {
       warmSpy.mockRestore();
       transcribeSpy.mockRestore();
+    }
+  });
+
+  it("rejects undisclosed xAI audio at realtime, on-demand, and scheduled production boundaries", async () => {
+    const root = mkdtempSync(join(tmpdir(), "yulu-xai-consent-guard-"));
+    const configDir = join(root, ".config", "yulu");
+    const moviesDir = join(root, "Movies", "Yulu");
+    mkdirSync(configDir, { recursive: true });
+    mkdirSync(moviesDir, { recursive: true });
+    const configFile = join(configDir, "config.json");
+    const config = JSON.parse(readFileSync(join(HERE, "fixtures/config.json"), "utf8"));
+    config.transcription = { ...config.transcription, engine: "xai" };
+    config.intelligence = {
+      ...config.intelligence,
+      summary: { provider: "xai", model: "grok-4.6-exact" },
+    };
+    config.agent_pipeline = { ...config.agent_pipeline, enabled: true, auto_process_recordings: true };
+    writeFileSync(configFile, JSON.stringify(config));
+    writeFileSync(join(configDir, "mcp-token.json"), JSON.stringify({ token: "consent-guard-token" }));
+    const audioPath = join(moviesDir, "Scheduled_20260711_140000.wav");
+    writeFileSync(audioPath, pcmWav());
+    const xaiStart = vi.spyOn(XaiAudioClient.prototype, "start");
+    const xaiTranscribe = vi.spyOn(XaiAudioClient.prototype, "transcribeFile");
+    const server = await startServer({
+      configDir,
+      configFile,
+      moviesDir,
+      hostDb: join(configDir, "host.sqlite"),
+      agentTasksDir: join(configDir, "agent-tasks"),
+      recordingEventsDir: join(configDir, "recording-events"),
+      agentQueueJson: join(configDir, "agent-queue.json"),
+      mcpTokenJson: join(configDir, "mcp-token.json"),
+    });
+    const headers = {
+      "Content-Type": "application/json",
+      "Authorization": "Bearer consent-guard-token",
+    };
+    try {
+      const baseUrl = `http://127.0.0.1:${server.address.port}`;
+      const realtime = await fetch(`${baseUrl}/api/recordings/realtime/start`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ audioPath, title: "Scheduled", language: "zh" }),
+      });
+      expect(realtime.status).toBe(400);
+      expect(await realtime.json()).toMatchObject({
+        ok: false,
+        error: "realtime_start_failed",
+        detail: expect.stringContaining("current Cloud Transcription Consent"),
+      });
+
+      const onDemand = await fetch(`${baseUrl}/api/agent/transcribe`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ audioPath, language: "zh" }),
+      });
+      expect(onDemand.status).toBe(503);
+      expect(await onDemand.json()).toMatchObject({
+        ok: false,
+        error: "audio_engine_unavailable",
+        detail: expect.stringContaining("current Cloud Transcription Consent"),
+      });
+
+      const completed = await fetch(`${baseUrl}/api/recordings/completed`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ audioPath, title: "Scheduled" }),
+      });
+      const { taskId } = await completed.json() as { taskId: string };
+      const store = new HostStore(join(configDir, "host.sqlite"));
+      try {
+        await vi.waitFor(() => expect(store.getTask(taskId)).toMatchObject({
+          state: "awaiting_agent",
+          error: expect.stringContaining("current Cloud Transcription Consent"),
+        }));
+      } finally {
+        store.close();
+      }
+      expect(xaiStart).not.toHaveBeenCalled();
+      expect(xaiTranscribe).not.toHaveBeenCalled();
+    } finally {
+      xaiStart.mockRestore();
+      xaiTranscribe.mockRestore();
+      await server.close();
+      rmSync(root, { recursive: true, force: true });
     }
   });
 

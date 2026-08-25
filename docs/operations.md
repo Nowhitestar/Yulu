@@ -148,8 +148,11 @@ handles both mutable realtime captions and the durable final transcript. Open
 Settings → Transcription to install, test, or remove it. The first install
 downloads about 1 GB and keeps about 320 MB; it has no usage fee and does not
 upload audio. Users may instead explicitly select xAI cloud speech-to-text, which
-uses native realtime streaming and final transcription. Yulu never switches
-engines automatically when the selected engine is unavailable.
+uses native realtime streaming and final transcription. Before any recording
+audio leaves the computer, the Host also requires the current versioned Cloud
+Transcription Consent acknowledging xAI processing and possible provider charges.
+Selecting xAI or saving its credential is not consent. Yulu never switches engines
+automatically when the selected engine is unavailable.
 
 Settings → AI Providers owns the single xAI connection and its three independent
 real-request probes. A green summary or conversation result does not establish

@@ -1,9 +1,14 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+
+const ipcSendMock = vi.hoisted(() => vi.fn());
+vi.mock("../../src/ipc.js", () => ({ ipcSend: ipcSendMock }));
+
 import { ArtifactStore } from "../../src/artifactStore.js";
 import { HostStore } from "../../src/hostStore.js";
+import { XAI_TRANSCRIPTION_DISCLOSURE_VERSION } from "../../src/transcriptionConsent.js";
 import { activationRouter } from "../../src/routers/activation.js";
 import { createCaller, type AppContext } from "../../src/trpc.js";
 
@@ -34,6 +39,7 @@ describe("activation router", () => {
     host = undefined;
     if (root) rmSync(root, { recursive: true, force: true });
     root = "";
+    ipcSendMock.mockReset();
   });
 
   function setup() {
@@ -42,13 +48,164 @@ describe("activation router", () => {
     mkdirSync(moviesDir);
     host = new HostStore(join(root, "host.sqlite"));
     const artifacts = new ArtifactStore(moviesDir, join(root, "tasks"));
+    const configValue = {
+      audio: { mic_device: "BuiltInMic" },
+      transcription: { engine: "local" as "local" | "xai" },
+    };
+    const localStatus = {
+      installed: true,
+      ready: true,
+      provider: "sherpa-onnx-paraformer-int8",
+      error: null as string | null,
+    };
+    ipcSendMock.mockImplementation(async (_path: string, payload: { action: string }) => {
+      if (payload.action === "status") return { micReady: true, micError: "" };
+      if (payload.action === "audio_devices") {
+        return { input: [{ uid: "BuiltInMic", name: "MacBook Pro Microphone" }], output: [] };
+      }
+      throw new Error(`unexpected action: ${payload.action}`);
+    });
     const ctx = {
       host,
       artifacts,
-      paths: { moviesDir },
+      paths: { moviesDir, audioDaemonSock: join(root, "audio.sock") },
+      config: {
+        read: () => configValue,
+        update: (_key: string, value: "local" | "xai") => {
+          configValue.transcription.engine = value;
+          return { daemonsNeedingRestart: [], daemonsNeedingSighup: [] };
+        },
+      },
+      localCaption: {
+        status: () => localStatus,
+        syncSelection: async () => {},
+      },
+      xaiCredentials: {
+        cachedStatus: () => ({ connected: true, source: "oauth", detail: "connected" }),
+      },
+      xaiReadiness: new Map(),
     } as unknown as AppContext;
-    return { moviesDir, artifacts, caller: createCaller(activationRouter, ctx) };
+    return { moviesDir, artifacts, caller: createCaller(activationRouter, ctx), configValue, localStatus, ctx };
   }
+
+  it("reports microphone, selected audio input, and local probe readiness separately", async () => {
+    const { caller, localStatus } = setup();
+
+    await expect(caller.status()).resolves.toMatchObject({
+      state: "unresolved",
+      nextStep: null,
+      blocker: null,
+      readiness: {
+        microphonePermission: { state: "ready" },
+        audioInput: { state: "ready", selectedDeviceUid: "BuiltInMic" },
+        transcription: {
+          selected: "local",
+          state: "ready",
+          local: { available: true, ready: true },
+        },
+      },
+    });
+
+    localStatus.ready = false;
+    localStatus.error = "local model probe failed";
+    await expect(caller.status()).resolves.toMatchObject({
+      nextStep: "transcription",
+      blocker: {
+        capability: "local_transcription",
+        remediation: { href: "/settings/transcription" },
+      },
+      readiness: {
+        transcription: {
+          selected: "local",
+          state: "blocked",
+          local: { available: true, ready: false, detail: "local model probe failed" },
+        },
+      },
+    });
+  });
+
+  it("treats the legacy CoreAudio index as the current default input", async () => {
+    const { caller, configValue } = setup();
+    configValue.audio.mic_device = ":0";
+
+    await expect(caller.status()).resolves.toMatchObject({
+      nextStep: null,
+      readiness: {
+        audioInput: { state: "ready", selectedDeviceUid: null },
+      },
+    });
+  });
+
+  it("requires the current xAI audio disclosure independently of authorization", async () => {
+    const { caller, configValue, ctx } = setup();
+    configValue.transcription.engine = "xai";
+    ctx.xaiReadiness!.set("transcription", {
+      capability: "transcription",
+      status: "ready",
+      model: "speech-to-text",
+      testedAt: "2026-08-25T04:00:00.000Z",
+      detail: "ready",
+      credentialSource: "oauth",
+    });
+    host!.recordCloudTranscriptionConsent("xai-audio-v0");
+
+    await expect(caller.status()).resolves.toMatchObject({
+      nextStep: "transcription",
+      readiness: {
+        transcription: {
+          selected: "xai",
+          state: "disclosure_required",
+          xai: {
+            ready: true,
+            disclosureVersion: XAI_TRANSCRIPTION_DISCLOSURE_VERSION,
+            acceptedDisclosureVersion: "xai-audio-v0",
+            disclosureRequired: true,
+          },
+        },
+      },
+    });
+
+    await expect(caller.acceptXaiTranscriptionDisclosure()).resolves.toMatchObject({
+      disclosureVersion: XAI_TRANSCRIPTION_DISCLOSURE_VERSION,
+      acceptedAt: expect.any(String),
+    });
+    await expect(caller.status()).resolves.toMatchObject({
+      nextStep: null,
+      readiness: {
+        transcription: {
+          selected: "xai",
+          state: "ready",
+          xai: { disclosureRequired: false },
+        },
+      },
+    });
+  });
+
+  it("names microphone and missing selected-input blockers with exact remediation", async () => {
+    const { caller } = setup();
+    ipcSendMock.mockImplementation(async (_path: string, payload: { action: string }) => {
+      if (payload.action === "status") return { micReady: false, micError: "TCC denied" };
+      return { input: [{ uid: "OtherMic", name: "Other microphone" }], output: [] };
+    });
+
+    await expect(caller.status()).resolves.toMatchObject({
+      nextStep: "microphone_permission",
+      blocker: {
+        capability: "microphone_permission",
+        remediation: {
+          href: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone",
+        },
+      },
+      readiness: {
+        microphonePermission: { state: "blocked", detail: "TCC denied" },
+        audioInput: {
+          state: "blocked",
+          selectedDeviceUid: "BuiltInMic",
+          remediation: { href: "/settings/general" },
+        },
+      },
+    });
+  });
 
   function completeRecording(
     moviesDir: string,
@@ -159,7 +316,7 @@ describe("activation router", () => {
   });
 
   it("acknowledges automatic entry once across Host restarts", async () => {
-    const { moviesDir, artifacts, caller } = setup();
+    const { caller, ctx } = setup();
 
     await expect(caller.status()).resolves.toMatchObject({
       state: "unresolved",
@@ -181,9 +338,8 @@ describe("activation router", () => {
     host!.close();
     host = new HostStore(join(root, "host.sqlite"));
     const restartedCaller = createCaller(activationRouter, {
+      ...ctx,
       host,
-      artifacts,
-      paths: { moviesDir },
     } as unknown as AppContext);
     await expect(restartedCaller.status()).resolves.toMatchObject({
       state: "unresolved",
@@ -212,7 +368,7 @@ describe("activation router", () => {
   });
 
   it("persists Activation Deferral without claiming Core Activation", async () => {
-    const { moviesDir, artifacts, caller } = setup();
+    const { caller, ctx } = setup();
 
     const firstDeferral = await caller.defer();
     expect(firstDeferral).toMatchObject({
@@ -230,9 +386,8 @@ describe("activation router", () => {
     host!.close();
     host = new HostStore(join(root, "host.sqlite"));
     const restartedCaller = createCaller(activationRouter, {
+      ...ctx,
       host,
-      artifacts,
-      paths: { moviesDir },
     } as unknown as AppContext);
     await expect(restartedCaller.status()).resolves.toMatchObject({
       state: "unresolved",
@@ -246,7 +401,7 @@ describe("activation router", () => {
   });
 
   it("reports durable entry and deferral write failures without changing the decision", async () => {
-    const { moviesDir, artifacts, caller } = setup();
+    const { caller, ctx } = setup();
     host!.close();
     host = undefined;
 
@@ -255,9 +410,8 @@ describe("activation router", () => {
 
     host = new HostStore(join(root, "host.sqlite"));
     const restartedCaller = createCaller(activationRouter, {
+      ...ctx,
       host,
-      artifacts,
-      paths: { moviesDir },
     } as unknown as AppContext);
     await expect(restartedCaller.status()).resolves.toMatchObject({
       state: "unresolved",

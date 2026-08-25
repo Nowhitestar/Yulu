@@ -95,7 +95,8 @@ center of the currently active display.
 - A working Hermes CLI visible to Yulu's LaunchAgents when you want automatic
   summaries or authorized connector delivery.
 - The local transcription model (default), or xAI OAuth authorized directly in
-  Settings when you explicitly select xAI.
+  Settings plus the current Cloud Transcription Consent when you explicitly
+  select xAI.
 - Optionally, Codex CLI, Claude Code, OpenClaw, Hermes, or a custom command for
   Agent Console conversation.
 
@@ -250,11 +251,14 @@ pipeline. Install Yulu first, then add the skill to each Agent you want to use.
 - The Host binds to loopback and protects completion, transcription, and MCP
   requests with a per-install bearer token.
 - Yulu does not store Agent connector credentials.
-- Selecting xAI authorizes Yulu to send audio directly to xAI for speech-to-text.
-  Settings → AI Providers keeps OAuth tokens and explicitly submitted API keys in
-  macOS Keychain and tests transcription, summary, and conversation separately;
-  Hermes and OpenClaw do not receive the credential or run Yulu's audio pipeline.
-  Selecting local keeps speech recognition local.
+- Selecting xAI does not by itself authorize cloud processing. Before sending
+  recording audio directly to xAI for speech-to-text, Yulu requires the current
+  Cloud Transcription Consent after disclosing that audio leaves the computer and
+  provider charges may apply. Settings → AI Providers keeps OAuth tokens and
+  explicitly submitted API keys in macOS Keychain and tests transcription,
+  summary, and conversation separately; Hermes and OpenClaw do not receive the
+  credential or run Yulu's audio pipeline. Selecting local keeps speech
+  recognition local.
 - External delivery requires explicit authorization; uncertain side effects are
   not blindly replayed.
 

@@ -18,6 +18,7 @@ import {
   type TranscriptionLanguage,
 } from "./realtimeTranscription.js";
 import { XaiAudioClient } from "./xaiAudio.js";
+import { XAI_TRANSCRIPTION_DISCLOSURE_VERSION } from "./transcriptionConsent.js";
 
 export type AudioTranscriptionEngine = "local" | "xai";
 
@@ -92,6 +93,7 @@ export class AudioTranscriptionService implements StreamingCaptionEngine {
     private readonly config: ConfigManager,
     private readonly local: LocalCaptionManager,
     private readonly xai: XaiAudioClient,
+    private readonly hasXaiTranscriptionConsent: () => boolean,
   ) {}
 
   get provider(): string {
@@ -123,6 +125,7 @@ export class AudioTranscriptionService implements StreamingCaptionEngine {
   }
 
   async start(language: TranscriptionLanguage): Promise<void> {
+    this.requireXaiTranscriptionConsent();
     if (this.active) await this.active.abort();
     const engine = selectedEngine(this.config) === "local" ? this.local : this.xai;
     this.active = engine;
@@ -163,6 +166,7 @@ export class AudioTranscriptionService implements StreamingCaptionEngine {
     glossary?: GlossaryContract,
   ): Promise<TranscriptionResult> {
     if (selectedEngine(this.config) === "xai") {
+      this.requireXaiTranscriptionConsent();
       try { return await this.xai.transcribeFile(audioPath, language, glossary); }
       catch (error) {
         const realtime = trustedRealtimeTranscript(audioPath);
@@ -182,6 +186,14 @@ export class AudioTranscriptionService implements StreamingCaptionEngine {
 
   private xaiCredentialStatus() {
     return this.xai.credentialStatus();
+  }
+
+  private requireXaiTranscriptionConsent(): void {
+    if (selectedEngine(this.config) === "xai" && !this.hasXaiTranscriptionConsent()) {
+      throw new AgentUnavailableError(
+        `xAI audio processing requires current Cloud Transcription Consent (${XAI_TRANSCRIPTION_DISCLOSURE_VERSION})`,
+      );
+    }
   }
 
   private async transcribeLocalFile(audioPath: string, language: TranscriptionLanguage): Promise<TranscriptionResult> {
