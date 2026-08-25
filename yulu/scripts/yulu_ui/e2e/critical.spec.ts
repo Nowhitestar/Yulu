@@ -116,7 +116,7 @@ test("/activate resumes durable Host progress and permits nonblocking navigation
   await page.goto("/activate");
   await expect(page.getByRole("heading", { name: /Complete Core Activation|完成核心激活/ })).toBeVisible();
   await expect(page.getByText(/10–20 (seconds|秒)/)).toBeVisible();
-  await expect(page.getByRole("status")).toContainText(/Transcribing your recording|正在转写录音/);
+  await expect(page.locator(".activate-status")).toContainText(/Transcribing your recording|正在转写录音/);
   await page.getByRole("link", { name: /Continue using Yulu|继续使用 Yulu/ }).click();
   await expect(page).toHaveURL(/\/agent-console$/);
 });
@@ -181,17 +181,18 @@ test("GlobalSearch popover opens via ⌘K, lists results, closes on Esc", async 
 test("Settings — Agent-native categories render current detail sections", async ({ page }) => {
   await page.goto("/settings");
   await expect(page).toHaveURL(/\/settings\/general$/);
-  await expect(page.getByTestId("settings-category")).toHaveCount(5);
+  await expect(page.getByTestId("settings-category")).toHaveCount(6);
   await expect(page.getByRole("heading", { name: "Host capabilities", exact: true })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Hotkey & UI", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "General", exact: true })).toBeVisible();
   await page.goto("/settings/audio");
   await expect(page.getByRole("heading", { name: "Audio", exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Storage", exact: true })).toBeVisible();
 });
 
-test("Settings — retired LLM settings route redirects to Agent Console", async ({ page }) => {
+test("Settings — AI provider settings render", async ({ page }) => {
   await page.goto("/settings/llm");
-  await expect(page).toHaveURL(/\/agent-console$/);
+  await expect(page).toHaveURL(/\/settings\/llm$/);
+  await expect(page.getByRole("heading", { name: "AI Providers", exact: true })).toBeVisible();
 });
 
 test("Knowledge/Prompts — new prompt mode hides Delete, Save disabled until valid", async ({ page }) => {
