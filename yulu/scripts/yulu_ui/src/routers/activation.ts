@@ -8,7 +8,7 @@ import {
   XAI_TRANSCRIPTION_DISCLOSURE_VERSION,
 } from "../transcriptionConsent.js";
 import type { AppContext } from "../trpc.js";
-import { publicProcedure, router } from "../trpc.js";
+import { publicProcedure, router, uiMutationProcedure } from "../trpc.js";
 import { XAI_SUMMARY_DISCLOSURE_VERSION } from "../summaryDataDisclosure.js";
 import {
   hasSupportedAgentSummaryIdentity,
@@ -389,7 +389,9 @@ function activeAttempt(ctx: AppContext) {
       canReplace: currentSummary.state === "ready" && task !== null &&
         ["failed", "awaiting_provider"].includes(task.state) && (
         currentSummary.selected.provider !== task.summaryProvider ||
-        currentSummary.selected.model !== task.summaryModel
+        currentSummary.selected.model !== task.summaryModel ||
+        (currentSummary.selected.provider === "xai" &&
+          currentSummary.credentialSource !== task.summaryCredentialSource)
       ),
     } : null,
   };
@@ -446,6 +448,20 @@ function activationAttemptBlocker(
     return {
       capability: "audio" as const,
       detail: null,
+      retry: "rerecord" as const,
+      remediation: { href: "/settings/general" },
+    };
+  }
+  if (!task && attempt.stopRequestedAt && attempt.recordingStem) {
+    const audioAvailable = hasAudioFramesAtPath(join(ctx.paths.moviesDir, `${attempt.recordingStem}.wav`));
+    return audioAvailable ? {
+      capability: "recording_pipeline" as const,
+      detail: "The saved activation recording was not handed off before Yulu Host stopped",
+      retry: "same_audio" as const,
+      remediation: { href: "/settings/automation" },
+    } : {
+      capability: "audio" as const,
+      detail: "The stopped activation recording is no longer available",
       retry: "rerecord" as const,
       remediation: { href: "/settings/general" },
     };
@@ -540,11 +556,11 @@ async function stopAndCorrelateAttempt(ctx: AppContext, attempt: ActivationAttem
   }
 }
 
-function verifiedAttemptEvidence(
+async function verifiedAttemptEvidence(
   ctx: AppContext,
   taskId: string,
   stored: CoreActivationEvidence | null,
-): CoreActivationEvidence | null {
+): Promise<CoreActivationEvidence | null> {
   if (stored?.taskId === taskId) return stored;
   const candidate = ctx.host.getCoreActivationCandidate(taskId);
   return candidate
@@ -560,11 +576,15 @@ function activatedStatus(
   guidedCompletion: { taskId: string; recordingStem: string } | null = null,
 ) {
   const safeStem = basename(evidence.recordingStem) === evidence.recordingStem;
-  const sourceArtifactAvailable = safeStem && existsSync(join(ctx.paths.moviesDir, `${evidence.recordingStem}.wav`));
+  const sourceArtifacts = {
+    audio: safeStem && existsSync(join(ctx.paths.moviesDir, `${evidence.recordingStem}.wav`)),
+    transcript: safeStem && existsSync(join(ctx.paths.moviesDir, `${evidence.recordingStem}.transcript.txt`)),
+    summary: safeStem && existsSync(join(ctx.paths.moviesDir, `${evidence.recordingStem}.summary.md`)),
+  };
   let completedNote: string | null = null;
   if (safeStem) {
     const summaryPath = join(ctx.paths.moviesDir, `${evidence.recordingStem}.summary.md`);
-    if (existsSync(summaryPath)) {
+    if (sourceArtifacts.summary) {
       try {
         completedNote = readFileSync(summaryPath, "utf8").trim() || null;
       } catch { /* a missing or unreadable note is not an available action */ }
@@ -576,7 +596,7 @@ function activatedStatus(
     evidenceCreated,
     guidedCompletionPending,
     guidedCompletion: guidedCompletionPending ? guidedCompletion : null,
-    sourceArtifactAvailable,
+    sourceArtifacts,
     completedNoteAvailable: completedNote !== null,
     completedNote,
   };
@@ -589,7 +609,7 @@ export const activationRouter = router({
     const attempt = activeAttempt(ctx);
     if (attempt) {
       const guidedEvidence = attempt.attempt.taskId
-        ? verifiedAttemptEvidence(ctx, attempt.attempt.taskId, evidence)
+        ? await verifiedAttemptEvidence(ctx, attempt.attempt.taskId, evidence)
         : null;
       if (guidedEvidence) {
         if (!evidence) {
@@ -616,7 +636,7 @@ export const activationRouter = router({
     }
     if (!evidence) {
       for (const candidate of ctx.host.listCoreActivationCandidates()) {
-        const verified = verifiedCoreActivationEvidence(candidate, ctx.artifacts, ctx.paths.moviesDir);
+        const verified = await verifiedCoreActivationEvidence(candidate, ctx.artifacts, ctx.paths.moviesDir);
         if (verified) {
           evidence = ctx.host.recordCoreActivationEvidence(verified);
           evidenceCreated = true;
@@ -634,7 +654,7 @@ export const activationRouter = router({
     }
     return activatedStatus(ctx, evidence, evidenceCreated);
   }),
-  startAttempt: publicProcedure.mutation(async ({ ctx }) => {
+  startAttempt: uiMutationProcedure.mutation(async ({ ctx }) => {
     const readiness = await activationReadiness(ctx);
     if (readiness.nextStep === "recording_pipeline") {
       throw new Error("Activation is blocked by recording pipeline policy");
@@ -661,14 +681,14 @@ export const activationRouter = router({
     }
     return { state: "recording" as const, attempt };
   }),
-  stopAttempt: publicProcedure.mutation(async ({ ctx }) => {
+  stopAttempt: uiMutationProcedure.mutation(async ({ ctx }) => {
     const attempt = ctx.host.getActivationAttempt();
     if (!attempt) throw new Error("Activation Attempt not found");
     if (attempt.taskId) return activeAttempt(ctx);
     ctx.host.markActivationAttemptStopping(attempt.id);
     return await stopAndCorrelateAttempt(ctx, attempt);
   }),
-  retryAttempt: publicProcedure.mutation(async ({ ctx }) => {
+  retryAttempt: uiMutationProcedure.mutation(async ({ ctx }) => {
     const attempt = ctx.host.getActivationAttempt();
     if (!attempt) throw new Error("Activation Attempt not found");
     const task = attempt.taskId ? ctx.host.getTask(attempt.taskId) : null;
@@ -718,7 +738,7 @@ export const activationRouter = router({
     ctx.host.correlateActivationAttempt(attempt.id, result.task.id);
     return activeAttempt(ctx);
   }),
-  rerecordAttempt: publicProcedure.mutation(async ({ ctx }) => {
+  rerecordAttempt: uiMutationProcedure.mutation(async ({ ctx }) => {
     const attempt = ctx.host.getActivationAttempt();
     if (!attempt) throw new Error("Activation Attempt not found");
     const task = attempt.taskId ? ctx.host.getTask(attempt.taskId) : null;
@@ -741,7 +761,7 @@ export const activationRouter = router({
     }
     return { state: "recording" as const, attempt: restarted };
   }),
-  replaceSummaryProvider: publicProcedure.mutation(({ ctx }) => {
+  replaceSummaryProvider: uiMutationProcedure.mutation(({ ctx }) => {
     const attempt = ctx.host.getActivationAttempt();
     if (!attempt?.taskId) throw new Error("Activation summary attempt not found");
     const task = ctx.host.getTask(attempt.taskId);
@@ -750,18 +770,22 @@ export const activationRouter = router({
     }
     const summary = activationSummaryReadiness(ctx);
     if (summary.state !== "ready") throw new Error("The newly selected Summary Provider is not ready");
-    if (summary.selected.provider === task.summaryProvider && summary.selected.model === task.summaryModel) {
-      throw new Error("Select a different Summary Provider or model before creating a new attempt");
+    if (
+      summary.selected.provider === task.summaryProvider &&
+      summary.selected.model === task.summaryModel &&
+      (summary.selected.provider !== "xai" || summary.credentialSource === task.summaryCredentialSource)
+    ) {
+      throw new Error("Select a different Summary Provider, model, or xAI credential source before creating a new attempt");
     }
     ctx.recordingPipeline.replaceSummaryProvider(task.id);
     return activeAttempt(ctx);
   }),
-  acknowledgeGuidedCompletion: publicProcedure
+  acknowledgeGuidedCompletion: uiMutationProcedure
     .input(z.object({ taskId: z.string().min(1).max(100) }))
-    .mutation(({ ctx, input }) => {
+    .mutation(async ({ ctx, input }) => {
       const attempt = ctx.host.getActivationAttempt();
       if (!attempt || attempt.taskId !== input.taskId) return { acknowledged: false };
-      const evidence = verifiedAttemptEvidence(
+      const evidence = await verifiedAttemptEvidence(
         ctx,
         input.taskId,
         ctx.host.getCoreActivationEvidence(),
@@ -769,7 +793,7 @@ export const activationRouter = router({
       if (!evidence) return { acknowledged: false };
       return { acknowledged: ctx.host.acknowledgeGuidedCompletion(input.taskId) };
     }),
-  acknowledgeAutomaticEntry: publicProcedure.mutation(({ ctx }) => {
+  acknowledgeAutomaticEntry: uiMutationProcedure.mutation(({ ctx }) => {
     const result = ctx.host.acknowledgeAutomaticActivationEntry();
     return {
       acknowledged: result.acknowledged,
@@ -779,7 +803,7 @@ export const activationRouter = router({
       },
     };
   }),
-  defer: publicProcedure.mutation(({ ctx }) => {
+  defer: uiMutationProcedure.mutation(({ ctx }) => {
     const state = ctx.host.deferActivationJourney();
     return {
       journey: {
@@ -788,23 +812,23 @@ export const activationRouter = router({
       },
     };
   }),
-  acceptXaiTranscriptionDisclosure: publicProcedure.mutation(({ ctx }) =>
+  acceptXaiTranscriptionDisclosure: uiMutationProcedure.mutation(({ ctx }) =>
     ctx.host.recordCloudTranscriptionConsent(XAI_TRANSCRIPTION_DISCLOSURE_VERSION)),
-  acceptSummaryDataPathDisclosure: publicProcedure.input(summaryDisclosureInput).mutation(({ ctx, input }) => {
+  acceptSummaryDataPathDisclosure: uiMutationProcedure.input(summaryDisclosureInput).mutation(({ ctx, input }) => {
     const disclosure = currentSummaryDisclosure(ctx, input);
     return ctx.host.recordSummaryDataPathDisclosure(
       disclosure.provider,
       disclosure.disclosureVersion,
     );
   }),
-  declineSummaryDataPathDisclosure: publicProcedure.input(summaryDisclosureInput).mutation(({ ctx, input }) => {
+  declineSummaryDataPathDisclosure: uiMutationProcedure.input(summaryDisclosureInput).mutation(({ ctx, input }) => {
     const disclosure = currentSummaryDisclosure(ctx, input);
     return ctx.host.declineSummaryDataPathDisclosure(
       disclosure.provider,
       disclosure.disclosureVersion,
     );
   }),
-  probeSummaryProvider: publicProcedure.mutation(async ({ ctx }) => {
+  probeSummaryProvider: uiMutationProcedure.mutation(async ({ ctx }) => {
     if (ctx.config.read().intelligence.summary.provider !== "agent") {
       throw new Error("The selected xAI Summary Provider uses the xAI capability probe");
     }

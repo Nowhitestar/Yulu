@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { closeSync, existsSync, openSync, readFileSync, readSync, realpathSync, statSync } from "node:fs";
+import { createReadStream, closeSync, existsSync, openSync, readSync, realpathSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
 import type { ArtifactStore } from "./artifactStore.js";
 import type {
@@ -79,11 +79,21 @@ function isSameFile(left: string, right: string): boolean {
   }
 }
 
-export function verifiedCoreActivationEvidence(
+async function audioFingerprint(path: string): Promise<{ sha256: string; bytes: number }> {
+  const hash = createHash("sha256");
+  let bytes = 0;
+  for await (const chunk of createReadStream(path)) {
+    bytes += chunk.length;
+    hash.update(chunk);
+  }
+  return { sha256: hash.digest("hex"), bytes };
+}
+
+export async function verifiedCoreActivationEvidence(
   candidate: CoreActivationCandidate,
   artifactStore: ArtifactStore,
   moviesDir: string,
-): CoreActivationEvidence | null {
+): Promise<CoreActivationEvidence | null> {
   const { task, artifacts, transcriptionProvider } = candidate;
   const transcript = artifacts.find((artifact) => artifact.kind === "transcript");
   const summary = artifacts.find((artifact) => artifact.kind === "summary");
@@ -97,8 +107,8 @@ export function verifiedCoreActivationEvidence(
   try {
     artifactStore.readCommittedTranscript(task, transcript);
     artifactStore.readCommittedSummary(task, summary);
-    const audio = readFileSync(audioPath);
-    if (!hasAudioFrames(audio)) return null;
+    if (!hasAudioFramesAtPath(audioPath)) return null;
+    const audio = await audioFingerprint(audioPath);
     return {
       recordingStem: task.recordingStem,
       taskId: task.id,
@@ -106,7 +116,7 @@ export function verifiedCoreActivationEvidence(
       summaryProvider: task.summaryProvider,
       summaryModel: task.summaryModel,
       artifacts: {
-        audio: { sha256: createHash("sha256").update(audio).digest("hex"), bytes: audio.length },
+        audio,
         transcript: { sha256: transcript.sha256, bytes: transcript.bytes },
         summary: { sha256: summary.sha256, bytes: summary.bytes },
       },

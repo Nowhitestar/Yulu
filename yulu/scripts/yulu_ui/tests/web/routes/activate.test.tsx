@@ -22,7 +22,7 @@ interface ActivatedData {
     };
     completedAt: string;
   };
-  sourceArtifactAvailable: boolean;
+  sourceArtifacts: { audio: boolean; transcript: boolean; summary: boolean };
   completedNoteAvailable: boolean;
   completedNote: string | null;
 }
@@ -202,7 +202,7 @@ function activatedData(): ActivatedData {
       },
       completedAt: "2026-07-11T12:05:00.000Z",
     },
-    sourceArtifactAvailable: true,
+    sourceArtifacts: { audio: true, transcript: true, summary: true },
     completedNoteAvailable: true,
     completedNote: "# Completed note\n\nVisible body",
   };
@@ -226,15 +226,24 @@ const activation = vi.hoisted(() => ({
   probeXai: vi.fn(async () => ({ status: "ready" })),
   refetch: vi.fn(async () => ({})),
   renderStatus: undefined as (() => void) | undefined,
+  isPending: false,
+  isError: false,
+  queryOptions: undefined as { retry?: boolean } | undefined,
 }));
 
 vi.mock("../../../web/src/trpc.js", () => ({
   trpc: {
     activation: {
-      status: { useQuery: () => {
+      status: { useQuery: (_input: undefined, options?: { retry?: boolean }) => {
         const [, setVersion] = useState(0);
         activation.renderStatus = () => setVersion((version) => version + 1);
-        return { data: activation.data, isPending: false, refetch: activation.refetch };
+        activation.queryOptions = options;
+        return {
+          data: activation.data,
+          isPending: activation.isPending,
+          isError: activation.isError,
+          refetch: activation.refetch,
+        };
       } },
       startAttempt: { useMutation: () => ({ mutateAsync: activation.startAttempt, isPending: false }) },
       stopAttempt: { useMutation: () => ({ mutateAsync: activation.stopAttempt, isPending: false }) },
@@ -312,6 +321,9 @@ afterEach(() => {
   activation.probeXai.mockClear();
   activation.refetch.mockClear();
   activation.renderStatus = undefined;
+  activation.isPending = false;
+  activation.isError = false;
+  activation.queryOptions = undefined;
 });
 
 describe("/activate", () => {
@@ -335,15 +347,34 @@ describe("/activate", () => {
     );
   });
 
-  it("explains a missing source artifact without revoking activated state", () => {
-    (activation.data as ActivatedData).sourceArtifactAvailable = false;
-    (activation.data as ActivatedData).completedNoteAvailable = true;
+  it.each([
+    ["audio", /原始录音已不存在/],
+    ["transcript", /转写文本已不存在/],
+    ["summary", /摘要笔记已不存在/],
+  ] as const)("explains a missing %s artifact without revoking activated state", (kind, message) => {
+    (activation.data as ActivatedData).sourceArtifacts[kind] = false;
+    if (kind === "summary") {
+      (activation.data as ActivatedData).completedNoteAvailable = false;
+      (activation.data as ActivatedData).completedNote = null;
+    }
     renderRoute("zh");
 
     expect(screen.getByRole("heading", { name: "Yulu 已激活" })).toBeInTheDocument();
     expect(screen.getByRole("status")).toHaveTextContent("核心激活证据已验证");
-    expect(screen.getByText(/原始录音已不存在/)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "打开已完成笔记" })).toBeInTheDocument();
+    expect(screen.getByText(message)).toBeInTheDocument();
+  });
+
+  it("shows a named retryable blocker when activation status fails directly", async () => {
+    activation.data = undefined as unknown as ActivatedData;
+    activation.isError = true;
+    renderRoute("zh");
+
+    expect(screen.getByRole("heading", { name: "无法检查激活状态" })).toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent("10 秒");
+    expect(activation.queryOptions).toMatchObject({ retry: false });
+    await userEvent.click(screen.getByRole("button", { name: "重新检查" }));
+    expect(activation.refetch).toHaveBeenCalledOnce();
+    expect(screen.getByRole("link", { name: "继续使用 Yulu" })).toHaveAttribute("href", "/agent-console");
   });
 
   it("defers the unresolved journey and exits to the normal product", async () => {

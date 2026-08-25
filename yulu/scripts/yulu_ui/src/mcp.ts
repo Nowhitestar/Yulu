@@ -224,14 +224,26 @@ function registerRecordingArtifactTools(
     return json({ ok: true, taskId, bytes: Buffer.byteLength(corrected.trim() + "\n", "utf8") });
   });
   server.registerTool("recording_artifact_commit", {
-    description: "Atomically commit the fixed task-scoped transcript.txt and summary.md staging files into Yulu.",
+    description: "Validate the selected Summary Provider/model, then atomically commit the fixed task-scoped transcript.txt and summary.md staging files into Yulu.",
     inputSchema: {
       taskId: z.string().uuid(),
       leaseToken: z.string().uuid(),
+      summaryProvider: z.string().min(1).max(100).optional(),
+      summaryModel: z.string().min(1).max(128).optional(),
       provenance: z.record(z.unknown()).optional(),
     },
-  }, async ({ taskId, leaseToken, provenance }) => {
+  }, async ({ taskId, leaseToken, summaryProvider, summaryModel, provenance }) => {
+    const pinned = requireTaskLease(ctx, taskId, leaseToken);
+    if (pinned.summaryProvider !== "hermes" && (
+      summaryProvider?.trim().toLowerCase() !== pinned.summaryProvider ||
+      summaryModel?.trim() !== pinned.summaryModel
+    )) {
+      throw new Error("Supported Agent returned a different Summary Provider/model identity");
+    }
     const task = ctx.host.recordProgress(taskId, leaseToken, "committing_artifacts", "Agent requested artifact commit");
+    if (pinned.summaryProvider !== "hermes") {
+      return json({ ok: true, taskId, state: task.state, staged: true, artifacts: [] });
+    }
     const {
       nativeSessionId: _nativeSessionId,
       artifactSessionId: _artifactSessionId,

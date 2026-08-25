@@ -11,6 +11,7 @@ export const handle = { breadcrumb: "breadcrumb.activate", filters: null };
 
 export function Activate() {
   const activation = trpc.activation.status.useQuery(undefined, {
+    retry: false,
     refetchInterval: (query) => {
       const state = query.state.data?.state;
       return state === "recording" || state === "processing" ? 1_000 : false;
@@ -63,6 +64,22 @@ export function Activate() {
   }, [activation.data]);
   if (activation.isPending) {
     return <section className="activate-page" aria-live="polite">{t("activation.loading")}</section>;
+  }
+  if (activation.isError) {
+    return (
+      <section className="activate-page" aria-labelledby="activate-title">
+        <div className="activate-card">
+          <h1 id="activate-title" ref={titleRef} tabIndex={-1}>{t("activation.statusError.title")}</h1>
+          <p role="alert">{t("activation.statusError.body")}</p>
+          <div className="activate-actions">
+            <button type="button" className="activate-action primary" onClick={() => void activation.refetch()}>
+              {t("activation.statusError.retry")}
+            </button>
+            <Link className="activate-action" to="/agent-console">{t("activation.statusError.continue")}</Link>
+          </div>
+        </div>
+      </section>
+    );
   }
   if (activation.data?.state === "recording" || activation.data?.state === "processing") {
     const { task } = activation.data;
@@ -577,8 +594,14 @@ export function Activate() {
           <div><dt>{t("activation.evidence.completed")}</dt><dd>{completedAt}</dd></div>
         </dl>
 
-        {!activated.sourceArtifactAvailable && (
-          <p className="activate-source-missing">{t("activation.sourceMissing")}</p>
+        {!activated.sourceArtifacts.audio && (
+          <p className="activate-source-missing">{t("activation.sourceMissing.audio")}</p>
+        )}
+        {!activated.sourceArtifacts.transcript && (
+          <p className="activate-source-missing">{t("activation.sourceMissing.transcript")}</p>
+        )}
+        {!activated.sourceArtifacts.summary && (
+          <p className="activate-source-missing">{t("activation.sourceMissing.summary")}</p>
         )}
 
         <div className="activate-actions">

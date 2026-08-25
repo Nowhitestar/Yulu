@@ -1,4 +1,4 @@
-import { initTRPC } from "@trpc/server";
+import { initTRPC, TRPCError } from "@trpc/server";
 import type { ConfigManager } from "./config.js";
 import type { LaunchctlClient } from "./launchctl.js";
 import type { PubSub, AppChannels } from "./pubsub.js";
@@ -16,6 +16,7 @@ import type { SearchResponse } from "./routers/search.js";
 import type { SupportedAgentSummaryAdapter } from "./summaryProviderReadiness.js";
 
 export interface AppContext {
+  uiMutationAuthorized?: boolean;
   config: ConfigManager;
   launchctl: LaunchctlClient;
   pubsub: PubSub<AppChannels>;
@@ -43,6 +44,12 @@ export interface AppContext {
 const t = initTRPC.context<AppContext>().create();
 export const router = t.router;
 export const publicProcedure = t.procedure;
+export const uiMutationProcedure = t.procedure.use(({ ctx, next }) => {
+  if (ctx.uiMutationAuthorized !== true) {
+    throw new TRPCError({ code: "UNAUTHORIZED", message: "UI mutation bearer required" });
+  }
+  return next({ ctx });
+});
 export const mergeRouters = t.mergeRouters;
 export const createCallerFactory = t.createCallerFactory;
 

@@ -7,7 +7,7 @@ import { useWsChannel } from "../ws.js";
 import "./activate.css";
 
 export function ActivationEntry({ children }: { children: ReactNode }) {
-  const activation = trpc.activation.status.useQuery();
+  const activation = trpc.activation.status.useQuery(undefined, { retry: false });
   const acknowledge = trpc.activation.acknowledgeAutomaticEntry.useMutation();
   const started = useRef(false);
   const [target, setTarget] = useState<"activate" | "normal" | null>(null);

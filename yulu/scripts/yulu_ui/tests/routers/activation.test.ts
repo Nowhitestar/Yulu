@@ -111,9 +111,24 @@ describe("activation router", () => {
       return host!.replaceSummaryAttempt(id, {
         summaryProvider: selected.provider,
         summaryModel: selected.model,
+        summaryCredentialSource: selected.provider === "xai" ? xaiConnection.source : null,
       });
     });
+    const enqueueCompletion = vi.fn((input: { audioPath: string; title: string; sendToNotion: boolean }) => ({
+      ...host!.enqueueRecording({
+        idempotencyKey: `activation-recovery:${input.audioPath}`,
+        recordingStem: input.audioPath.split("/").at(-1)!.replace(/\.wav$/, ""),
+        title: input.title,
+        audioPath: input.audioPath,
+        sendToNotion: input.sendToNotion,
+        destinationHint: "",
+        agentProvider: agentReadiness.provider,
+        summaryProvider: agentReadiness.provider,
+        summaryModel: agentReadiness.model,
+      }),
+    }));
     const ctx = {
+      uiMutationAuthorized: true,
       host,
       artifacts,
       paths: { moviesDir, audioDaemonSock: join(root, "audio.sock") },
@@ -138,6 +153,7 @@ describe("activation router", () => {
         gateway: () => ({} as never),
       },
       recordingPipeline: {
+        enqueueCompletion,
         retry: retryTask,
         replaceSummaryProvider,
         kick: vi.fn(),
@@ -153,6 +169,7 @@ describe("activation router", () => {
       agentProbe,
       retryTask,
       replaceSummaryProvider,
+      enqueueCompletion,
       setAgentReadiness: (value: typeof agentReadiness) => { agentReadiness = value; },
       ctx,
     };
@@ -384,6 +401,36 @@ describe("activation router", () => {
     });
   });
 
+  it("recovers a saved stopped recording after a crash before enqueue", async () => {
+    const { caller, moviesDir, enqueueCompletion } = setup();
+    const stem = "Crash_before_enqueue_20260825_141500";
+    writeFileSync(join(moviesDir, `${stem}.wav`), wavWithAudio());
+    const attempt = host!.beginActivationAttempt().attempt;
+    host!.markActivationAttemptStopping(attempt.id);
+    host!.recordActivationAttemptStopped(attempt.id, stem);
+
+    await expect(caller.status()).resolves.toMatchObject({
+      state: "processing",
+      task: null,
+      blocker: {
+        capability: "recording_pipeline",
+        retry: "same_audio",
+        remediation: { href: "/settings/automation" },
+      },
+    });
+
+    await expect(caller.retryAttempt()).resolves.toMatchObject({
+      state: "processing",
+      attempt: { recordingStem: stem, taskId: expect.any(String) },
+      task: { recordingStem: stem, state: "queued" },
+    });
+    expect(enqueueCompletion).toHaveBeenCalledWith({
+      audioPath: join(moviesDir, `${stem}.wav`),
+      title: "Core Activation",
+      sendToNotion: false,
+    });
+  });
+
   it("turns a pre-correlation stop failure into a named durable audio blocker", async () => {
     const { caller, ctx } = setup();
     runRecordAudioMock.mockResolvedValue({ ok: true, stdout: "recording started\n", stderr: "" });
@@ -576,6 +623,58 @@ describe("activation router", () => {
     });
     expect(host!.getTask(original.id)?.state).toBe("cancelled");
     expect(host!.getActivationAttempt()?.taskId).toBe(replaced.task!.id);
+  });
+
+  it("creates a new xAI attempt when only the ready credential source changes", async () => {
+    const { caller, moviesDir, artifacts, configValue, ctx, xaiConnection } = setup();
+    const stem = "Guided_credential_change_20260825_141501";
+    const audioPath = join(moviesDir, `${stem}.wav`);
+    writeFileSync(audioPath, wavWithAudio());
+    const attempt = host!.beginActivationAttempt().attempt;
+    const original = host!.enqueueRecording({
+      idempotencyKey: "recording:guided-credential-change",
+      recordingStem: stem,
+      title: "Core Activation",
+      audioPath,
+      sendToNotion: false,
+      destinationHint: "",
+      agentProvider: "xai",
+      summaryProvider: "xai",
+      summaryModel: "grok-pinned",
+      summaryCredentialSource: "oauth",
+    }).task;
+    host!.correlateActivationAttempt(attempt.id, original.id);
+    const claimed = host!.claim(original.id)!;
+    const transcript = artifacts.commitTranscript(claimed, "preserved transcript", {
+      transcriptionProvider: "local",
+      committedBy: "yulu-host",
+    });
+    host!.recordTranscript(original.id, claimed.leaseToken!, transcript);
+    host!.releaseToAwaitingProvider(original.id, claimed.leaseToken!, "OAuth credential unavailable");
+
+    configValue.intelligence.summary = { provider: "xai", model: "grok-pinned" };
+    xaiConnection.source = "api-key";
+    ctx.xaiReadiness!.set("summary", {
+      capability: "summary",
+      status: "ready",
+      model: "grok-pinned",
+      testedAt: "2026-08-25T04:00:00.000Z",
+      detail: "ready",
+      credentialSource: "api-key",
+    });
+    host!.recordSummaryDataPathDisclosure("xai", XAI_SUMMARY_DISCLOSURE_VERSION);
+
+    await expect(caller.status()).resolves.toMatchObject({
+      summaryRecovery: { canReplace: true },
+    });
+    await expect(caller.replaceSummaryProvider()).resolves.toMatchObject({
+      task: {
+        id: expect.not.stringMatching(original.id),
+        summaryProvider: "xai",
+        summaryModel: "grok-pinned",
+        summaryCredentialSource: "api-key",
+      },
+    });
   });
 
   it("requires re-recording only when the preserved activation audio is invalid", async () => {
@@ -1242,7 +1341,7 @@ describe("activation router", () => {
         summaryProvider: "hermes",
         summaryModel: "runtime-managed",
       },
-      sourceArtifactAvailable: true,
+      sourceArtifacts: { audio: true, transcript: true, summary: true },
       completedNoteAvailable: true,
     });
     expect(host!.getCoreActivationEvidence()?.taskId).toBe(recent.id);
@@ -1252,9 +1351,27 @@ describe("activation router", () => {
       state: "activated",
       evidenceCreated: false,
       evidence: { taskId: recent.id },
-      sourceArtifactAvailable: false,
+      sourceArtifacts: { audio: false, transcript: true, summary: true },
       completedNoteAvailable: true,
       completedNote: "# Verified summary",
+    });
+
+    writeFileSync(recent.audioPath, wavWithAudio());
+    rmSync(join(moviesDir, `${recent.recordingStem}.transcript.txt`));
+    await expect(caller.status()).resolves.toMatchObject({
+      state: "activated",
+      evidence: { taskId: recent.id },
+      sourceArtifacts: { audio: true, transcript: false, summary: true },
+    });
+
+    writeFileSync(join(moviesDir, `${recent.recordingStem}.transcript.txt`), "verified transcript");
+    rmSync(join(moviesDir, `${recent.recordingStem}.summary.md`));
+    await expect(caller.status()).resolves.toMatchObject({
+      state: "activated",
+      evidence: { taskId: recent.id },
+      sourceArtifacts: { audio: true, transcript: true, summary: false },
+      completedNoteAvailable: false,
+      completedNote: null,
     });
   });
 
@@ -1269,7 +1386,7 @@ describe("activation router", () => {
     );
     const candidate = host!.getCoreActivationCandidate(unrelated.id);
     const unrelatedEvidence = candidate
-      ? verifiedCoreActivationEvidence(candidate, artifacts, moviesDir)
+      ? await verifiedCoreActivationEvidence(candidate, artifacts, moviesDir)
       : null;
     expect(unrelatedEvidence).not.toBeNull();
     host!.recordCoreActivationEvidence(unrelatedEvidence!);
@@ -1314,6 +1431,24 @@ describe("activation router", () => {
     });
   });
 
+  it("does not acknowledge a guided task whose activation artifacts no longer verify", async () => {
+    const { moviesDir, artifacts, caller } = setup();
+    const attempt = host!.beginActivationAttempt().attempt;
+    const invalid = completeRecording(
+      moviesDir,
+      artifacts,
+      "Invalid_guided_20260711_120000",
+      "2026-07-11T12:05:00.000Z",
+    );
+    host!.correlateActivationAttempt(attempt.id, invalid.id);
+    rmSync(invalid.audioPath);
+
+    await expect(caller.acknowledgeGuidedCompletion({ taskId: invalid.id })).resolves.toEqual({
+      acknowledged: false,
+    });
+    expect(host!.getActivationAttempt()?.completionOpenedAt).toBeNull();
+  });
+
   it("keeps immutable evidence separate from a later guided completion target", async () => {
     const { moviesDir, artifacts, caller } = setup();
     const attempt = host!.beginActivationAttempt().attempt;
@@ -1324,7 +1459,7 @@ describe("activation router", () => {
       "2026-07-11T12:05:00.000Z",
     );
     const backgroundCandidate = host!.getCoreActivationCandidate(background.id)!;
-    const backgroundEvidence = verifiedCoreActivationEvidence(backgroundCandidate, artifacts, moviesDir)!;
+    const backgroundEvidence = (await verifiedCoreActivationEvidence(backgroundCandidate, artifacts, moviesDir))!;
     host!.recordCoreActivationEvidence(backgroundEvidence);
     const guided = completeRecording(
       moviesDir,

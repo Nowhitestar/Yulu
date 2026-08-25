@@ -30,6 +30,7 @@ import {
 } from "./realtimeTranscription.js";
 import type { AudioTranscriptionService } from "./audioTranscription.js";
 import type { XaiTextClient } from "./xaiText.js";
+import type { XaiCredentialSource } from "./xaiCredentials.js";
 import { verifiedCoreActivationEvidence } from "./coreActivation.js";
 import {
   hasCurrentSummaryDataPathDisclosure,
@@ -130,6 +131,7 @@ export interface RecordingPipelineOptions {
   vocabDb?: () => unknown;
   transcription: Pick<AudioTranscriptionService, "provider" | "health" | "warm" | "transcribeFile">;
   xaiText?: Pick<XaiTextClient, "request">;
+  xaiSummaryCredentialSource?: () => XaiCredentialSource | null;
   supportedAgentSummaryAdapter?: SupportedAgentSummaryAdapter;
   gatewayFactory?: (config: YuluConfig) => RecordingAgentGateway;
   pollMs?: number;
@@ -145,6 +147,7 @@ interface PreparedRecordingTask {
   agentProvider: string;
   summaryProvider: string;
   summaryModel: string;
+  summaryCredentialSource: XaiCredentialSource | null;
   instructions: string;
   trigger: AgentTaskTrigger;
 }
@@ -194,6 +197,7 @@ export class RecordingPipeline {
       agentProvider: summary.provider,
       summaryProvider: summary.provider,
       summaryModel: summary.model,
+      summaryCredentialSource: summary.credentialSource,
       instructions,
       trigger: "manual",
     }, `summary-regeneration:${randomUUID()}`);
@@ -255,6 +259,7 @@ export class RecordingPipeline {
       agentProvider: summary.provider,
       summaryProvider: summary.provider,
       summaryModel: summary.model,
+      summaryCredentialSource: summary.credentialSource,
       instructions,
       trigger: "automatic",
     };
@@ -284,15 +289,28 @@ export class RecordingPipeline {
     };
   }
 
-  private summaryIdentity(config: YuluConfig, legacyProvider: string): { provider: string; model: string } {
+  private summaryIdentity(
+    config: YuluConfig,
+    legacyProvider: string,
+  ): { provider: string; model: string; credentialSource: XaiCredentialSource | null } {
     const selection = config.intelligence.summary;
-    if (selection.provider === "xai") return selection;
+    if (selection.provider === "xai") {
+      const credentialSource = this.options.xaiSummaryCredentialSource?.() ?? null;
+      if (!credentialSource) {
+        throw new InvalidRecordingCompletionError("xAI Summary Provider readiness credential source is unavailable");
+      }
+      return { ...selection, credentialSource };
+    }
     const readiness = this.options.supportedAgentSummaryAdapter?.current();
-    if (!readiness) return { provider: legacyProvider, model: selection.model };
+    if (!readiness) return { provider: legacyProvider, model: selection.model, credentialSource: null };
     if (!hasSupportedAgentSummaryIdentity(readiness)) {
       throw new InvalidRecordingCompletionError("Supported Agent Summary Provider identity is invalid");
     }
-    return { provider: readiness.provider.trim().toLowerCase(), model: readiness.model.trim() };
+    return {
+      provider: readiness.provider.trim().toLowerCase(),
+      model: readiness.model.trim(),
+      credentialSource: null,
+    };
   }
 
   private persist(
@@ -310,6 +328,7 @@ export class RecordingPipeline {
       agentProvider: input.agentProvider,
       summaryProvider: input.summaryProvider,
       summaryModel: input.summaryModel,
+      summaryCredentialSource: input.summaryCredentialSource,
       instructions: input.instructions,
       trigger: input.trigger,
     });
@@ -359,16 +378,14 @@ export class RecordingPipeline {
 
   replaceSummaryProvider(id: string): AgentTask {
     const config = this.options.config.read();
-    const selection = config.intelligence.summary;
-    const summary = selection.provider === "xai"
-      ? selection
-      : this.summaryIdentity(config, resolveHermesAgentRuntime(config, {
-          scriptDir: this.options.paths.scriptDir,
-          moviesDir: this.options.paths.moviesDir,
-        }).provider);
+    const summary = this.summaryIdentity(config, resolveHermesAgentRuntime(config, {
+      scriptDir: this.options.paths.scriptDir,
+      moviesDir: this.options.paths.moviesDir,
+    }).provider);
     const task = this.options.store.replaceSummaryAttempt(id, {
       summaryProvider: summary.provider,
       summaryModel: summary.model,
+      summaryCredentialSource: summary.credentialSource,
     });
     this.resumeDispatchNow();
     this.reconcileDispatchPolicy(config);
@@ -608,6 +625,11 @@ export class RecordingPipeline {
       let artifactSessionId: string | null = null;
       let artifactToolNames: string[] = [];
       if (usesXaiSummary) {
+        if (!task.summaryCredentialSource) {
+          throw new AgentUnavailableError(
+            "xAI Summary Provider credential source was not pinned; create an explicit replacement attempt",
+          );
+        }
         if (!hasCurrentXaiSummaryDisclosure(this.options.store)) {
           throw new AgentUnavailableError(
             `xAI Summary Data Path Disclosure (${XAI_SUMMARY_DISCLOSURE_VERSION}) is required; open /settings/llm`,
@@ -624,6 +646,7 @@ export class RecordingPipeline {
           result = await xaiText.request({
             capability: "summary",
             model: task.summaryModel,
+            credentialSource: task.summaryCredentialSource ?? undefined,
             input: [
               { role: "system", content: task.instructions },
               { role: "user", content: transcription.transcript },
@@ -634,6 +657,9 @@ export class RecordingPipeline {
         }
         if (result.model !== task.summaryModel) {
           throw new AgentUnavailableError("xAI summary returned a different model identity");
+        }
+        if (result.credentialSource !== task.summaryCredentialSource) {
+          throw new AgentUnavailableError("xAI summary returned a different credential source");
         }
         try {
           this.options.artifacts.writeStagedSummary(
@@ -670,14 +696,19 @@ export class RecordingPipeline {
             identity?.provider.trim().toLowerCase() !== task.summaryProvider ||
             identity.model.trim() !== task.summaryModel
           ) {
-            const committedTask = this.options.store.getTask(task.id);
-            const summaryRecord = this.options.store.listArtifacts(task.id)
-              .find((artifact) => artifact.kind === "summary");
-            if (committedTask?.state === "artifacts_committed" && summaryRecord) {
-              this.options.artifacts.rejectCommittedSummary(committedTask, summaryRecord);
-            }
             throw new Error("Supported Agent returned a different Summary Provider/model identity");
           }
+          if (!artifactResult.audit.ok) throw new Error(artifactResult.audit.errors.join("; "));
+          const stagedTask = this.options.store.getTask(task.id)!;
+          const records = this.options.artifacts.commitFromWorkspace(stagedTask, {
+            agentProvider: task.summaryProvider,
+            summaryProvider: task.summaryProvider,
+            summaryModel: task.summaryModel,
+            artifactSessionId: artifactResult.nativeSessionId,
+            committedBy: "yulu-host",
+          });
+          this.options.store.recordArtifacts(task.id, leaseToken, records);
+          this.options.pubsub.publish("recordings-changed", { reason: "changed" });
         }
         artifactSessionId = artifactResult.nativeSessionId;
         artifactToolNames = artifactResult.audit.toolNames;
@@ -688,7 +719,7 @@ export class RecordingPipeline {
       if (afterAgent.state !== "artifacts_committed") {
         throw new Error(`Summary Provider exited without completing the artifact Host commit (state=${afterAgent.state})`);
       }
-      const activationEvidence = verifiedCoreActivationEvidence({
+      const activationEvidence = await verifiedCoreActivationEvidence({
         task: afterAgent,
         artifacts: this.options.store.listArtifacts(task.id),
         transcriptionProvider: transcription.provider,

@@ -1,4 +1,5 @@
 import { createServer, type Server as HttpServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { randomBytes, timingSafeEqual } from "node:crypto";
 import { Hono } from "hono";
 import { z } from "zod";
 import { createReadStream, statSync, existsSync } from "node:fs";
@@ -62,7 +63,6 @@ type RuntimePaths = typeof paths;
 export async function startServer(pathOverrides: Partial<RuntimePaths> = {}): Promise<RunningServer> {
   const port = Number(process.env.YULU_UI_PORT ?? 7777);
   const host = "127.0.0.1";
-  const launchAgents = join(homedir(), "Library", "LaunchAgents");
   const runtimePaths = {
     ...paths,
     ...pathOverrides,
@@ -71,6 +71,7 @@ export async function startServer(pathOverrides: Partial<RuntimePaths> = {}): Pr
     recordingEventsDir: pathOverrides.recordingEventsDir ?? (pathOverrides.configDir ? join(pathOverrides.configDir, "recording-events") : paths.recordingEventsDir),
     agentQueueJson: pathOverrides.agentQueueJson ?? (pathOverrides.configDir ? join(pathOverrides.configDir, "agent-queue.json") : paths.agentQueueJson),
   } as RuntimePaths;
+  const launchAgents = runtimePaths.launchAgentsDir;
 
   const instanceLock = acquireHostInstanceLock(runtimePaths.configDir);
   try {
@@ -86,6 +87,7 @@ async function startLockedServer(
   options: { port: number; host: string; launchAgents: string; instanceLock: HostInstanceLock },
 ): Promise<RunningServer> {
   const { port, host, launchAgents, instanceLock } = options;
+  const uiToken = randomBytes(32).toString("base64url");
 
   // Lazy DB getters so /healthz works even when the SQLite files aren't present yet
   let _prompts: ReturnType<typeof openDb> | null = null;
@@ -147,6 +149,10 @@ async function startLockedServer(
     vocabDb: () => dbProxy.vocab,
     transcription: audioTranscription,
     xaiText,
+    xaiSummaryCredentialSource: () => {
+      const proof = xaiReadiness.get("summary");
+      return proof?.status === "ready" ? proof.credentialSource : null;
+    },
   });
   if (localCaption.status().installed && configManager.read().transcription.engine === "local") {
     void localCaption.warm().catch((error) => {
@@ -249,6 +255,10 @@ async function startLockedServer(
   });
 
   app.get("/healthz", (c) => c.json({ status: "ok", uptime: process.uptime() }));
+  app.get("/api/ui-token", (c) => {
+    c.header("Cache-Control", "no-store");
+    return c.json({ token: uiToken });
+  });
 
   const RecordingCompletionSchema = z.object({
     audioPath: z.string().min(1),
@@ -470,7 +480,10 @@ async function startLockedServer(
     endpoint: "/trpc",
     req: c.req.raw,
     router: appRouter,
-    createContext: () => ctx,
+    createContext: () => ({
+      ...ctx,
+      uiMutationAuthorized: matchesUiBearer(c.req.header("authorization") ?? "", uiToken),
+    }),
     onError: ({ error, path }) => console.error(`[trpc] ${path}: ${error.message}`),
   }));
 
@@ -585,6 +598,13 @@ async function startLockedServer(
       return closePromise;
     },
   };
+}
+
+function matchesUiBearer(authorization: string, expected: string): boolean {
+  const candidate = /^Bearer\s+(.+)$/i.exec(authorization)?.[1]?.trim() ?? "";
+  const left = Buffer.from(candidate);
+  const right = Buffer.from(expected);
+  return left.length === right.length && timingSafeEqual(left, right);
 }
 
 function listenHttp(http: HttpServer, port: number, host: string): Promise<void> {

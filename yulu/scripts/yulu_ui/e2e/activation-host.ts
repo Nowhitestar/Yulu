@@ -17,10 +17,12 @@ const root = mkdtempSync(join(tmpdir(), "yulu-activation-e2e-"));
 const configDir = join(root, "config");
 const moviesDir = join(root, "Movies", "Yulu");
 const scriptDir = join(root, "scripts");
+const launchAgentsDir = join(root, "Library", "LaunchAgents");
 const sourceScripts = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const recordingPath = join(moviesDir, "Core_Activation_20260825_141500.wav");
 mkdirSync(configDir, { recursive: true });
 mkdirSync(moviesDir, { recursive: true });
+mkdirSync(launchAgentsDir, { recursive: true });
 mkdirSync(join(scriptDir, "Yulu.app", "Contents", "MacOS"), { recursive: true });
 
 for (const name of ["record_audio.py", "recording_lock.py", "state_store.py", "yulu_platform"]) {
@@ -147,6 +149,7 @@ try {
     audioDaemonSock: fakeAudio.path,
     moviesDir,
     scriptDir,
+    launchAgentsDir,
     agentQueueJson: join(configDir, "agent-queue.json"),
     mcpTokenJson: join(configDir, "mcp-token.json"),
   });

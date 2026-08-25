@@ -23,6 +23,9 @@ const activation = vi.hoisted(() => ({
   } | undefined,
   acknowledge: vi.fn(async () => ({ acknowledged: true })),
   refetch: vi.fn(async () => undefined),
+  isPending: false,
+  isError: false,
+  queryOptions: undefined as { retry?: boolean } | undefined,
 }));
 
 const ws = vi.hoisted(() => ({
@@ -32,7 +35,15 @@ const ws = vi.hoisted(() => ({
 vi.mock("../../../web/src/trpc.js", () => ({
   trpc: {
     activation: {
-      status: { useQuery: () => ({ data: activation.data, isPending: false, refetch: activation.refetch }) },
+      status: { useQuery: (_input: undefined, options?: { retry?: boolean }) => {
+        activation.queryOptions = options;
+        return {
+          data: activation.data,
+          isPending: activation.isPending,
+          isError: activation.isError,
+          refetch: activation.refetch,
+        };
+      } },
       acknowledgeAutomaticEntry: {
         useMutation: () => ({ mutateAsync: activation.acknowledge }),
       },
@@ -79,6 +90,9 @@ afterEach(() => {
   };
   activation.acknowledge.mockClear();
   activation.refetch.mockClear();
+  activation.isPending = false;
+  activation.isError = false;
+  activation.queryOptions = undefined;
   ws.coreActivation = undefined;
 });
 
@@ -158,10 +172,22 @@ describe("/ entry", () => {
 
   it("keeps the requested product route when status is unavailable", async () => {
     activation.data = undefined;
+    activation.isError = true;
     const router = renderEntry("/inbox");
 
     expect(await screen.findByRole("heading", { name: "Normal product" })).toBeInTheDocument();
     expect(router.state.location.pathname).toBe("/inbox");
     expect(activation.acknowledge).not.toHaveBeenCalled();
+    expect(activation.queryOptions).toMatchObject({ retry: false });
+  });
+
+  it("shows a bounded pending state without entering activation", () => {
+    activation.data = undefined;
+    activation.isPending = true;
+    renderEntry("/inbox");
+
+    expect(screen.getByRole("status")).toHaveTextContent("正在检查激活状态");
+    expect(activation.acknowledge).not.toHaveBeenCalled();
+    expect(activation.queryOptions).toMatchObject({ retry: false });
   });
 });

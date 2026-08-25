@@ -197,7 +197,7 @@ test("recording UI state survives restart, ignores background completion, and op
       taskId: "task-e2e",
       recordingStem: "Activation_20260825_141500",
     },
-    sourceArtifactAvailable: true,
+    sourceArtifacts: { audio: true, transcript: true, summary: true },
     completedNoteAvailable: true,
     completedNote: "# Activated",
   };
@@ -270,7 +270,7 @@ test("named provider and invalid-audio blockers expose only their exact recoveri
     .toHaveAttribute("href", "/settings/llm");
   await page.getByRole("button", { name: "Retry saved work" }).click();
   await page.getByRole("button", { name: "Use xai · grok-new-explicit" }).click();
-  expect({ retries, replacements }).toEqual({ retries: 1, replacements: 1 });
+  await expect.poll(() => ({ retries, replacements })).toEqual({ retries: 1, replacements: 1 });
 
   status = {
     ...processingActivation(),

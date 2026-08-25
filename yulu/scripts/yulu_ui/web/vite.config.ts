@@ -13,6 +13,7 @@ export default defineConfig({
     strictPort: true,
     host: "127.0.0.1",
     proxy: {
+      "/api/ui-token": "http://127.0.0.1:7777",
       "/trpc":    "http://127.0.0.1:7777",
       "/files":   "http://127.0.0.1:7777",
       "/healthz": "http://127.0.0.1:7777",

@@ -104,6 +104,24 @@ describe("HostStore", () => {
     expect(store.getCoreActivationEvidence()).toEqual(activationEvidence(task.id));
   });
 
+  it("bounds historical Core Activation candidates by recency", () => {
+    createStore();
+    for (let index = 0; index < 5; index += 1) {
+      store!.enqueueRecording({
+        idempotencyKey: `recording:activation-candidate:${index}`,
+        recordingStem: `Candidate_20260711_12000${index}`,
+        title: `Candidate ${index}`,
+        audioPath: join(root, `Candidate_20260711_12000${index}.wav`),
+        sendToNotion: false,
+        destinationHint: "",
+        agentProvider: "hermes",
+        ...SUMMARY_IDENTITY,
+      });
+    }
+
+    expect(store!.listCoreActivationCandidates(2)).toHaveLength(2);
+  });
+
   it("durably correlates an Activation Attempt to the production task identity", () => {
     createStore();
     const activationAttempt = store!.beginActivationAttempt().attempt;
@@ -138,6 +156,7 @@ describe("HostStore", () => {
     const replacement = store!.replaceSummaryAttempt(original.id, {
       summaryProvider: "xai",
       summaryModel: "grok-pinned",
+      summaryCredentialSource: "oauth",
     });
 
     expect(store!.getTask(original.id)).toMatchObject({
@@ -171,6 +190,45 @@ describe("HostStore", () => {
     });
   });
 
+  it("creates an explicit xAI replacement when only the credential source changes", () => {
+    createStore();
+    const original = store!.enqueueRecording({
+      idempotencyKey: "recording:xai-credential-replacement",
+      recordingStem: "Credential_20260711_120000",
+      title: "Credential",
+      audioPath: join(root, "Credential_20260711_120000.wav"),
+      sendToNotion: false,
+      destinationHint: "",
+      agentProvider: "xai",
+      summaryProvider: "xai",
+      summaryModel: "grok-pinned",
+      summaryCredentialSource: "oauth",
+    }).task;
+    const claimed = store!.claim(original.id)!;
+    const transcript = { ...artifacts(claimed.id)[0]!, taskId: claimed.id, recordingStem: claimed.recordingStem };
+    store!.recordTranscript(claimed.id, claimed.leaseToken!, transcript);
+    store!.releaseToAwaitingProvider(claimed.id, claimed.leaseToken!, "OAuth unavailable");
+
+    const replacement = store!.replaceSummaryAttempt(original.id, {
+      summaryProvider: "xai",
+      summaryModel: "grok-pinned",
+      summaryCredentialSource: "api-key",
+    });
+
+    expect(replacement).toMatchObject({
+      state: "transcript_committed",
+      summaryProvider: "xai",
+      summaryModel: "grok-pinned",
+      summaryCredentialSource: "api-key",
+    });
+    expect(store!.listArtifacts(replacement.id)).toEqual([
+      expect.objectContaining({
+        kind: "transcript",
+        provenance: expect.objectContaining({ reusedFromTaskId: original.id }),
+      }),
+    ]);
+  });
+
   it("pins the replacement Agent provenance when moving from xAI to a Supported Agent", () => {
     createStore();
     const original = store!.enqueueRecording({
@@ -183,6 +241,7 @@ describe("HostStore", () => {
       agentProvider: "xai",
       summaryProvider: "xai",
       summaryModel: "grok-old",
+      summaryCredentialSource: "oauth",
     }).task;
     const claimed = store!.claim(original.id)!;
     store!.recordTranscript(claimed.id, claimed.leaseToken!, artifacts(claimed.id)[0]!);
@@ -386,6 +445,7 @@ describe("HostStore", () => {
       agentProvider: "codex",
       summaryProvider: "xai",
       summaryModel: "grok-4.6-exact",
+      summaryCredentialSource: "oauth",
     }).task;
 
     expect(queued).toMatchObject({ summaryProvider: "xai", summaryModel: "grok-4.6-exact" });
@@ -617,6 +677,7 @@ describe("HostStore", () => {
       agentProvider: "codex",
       summaryProvider: "xai",
       summaryModel: "grok-4.6-exact",
+      summaryCredentialSource: "oauth",
     }).task;
     const claimed = store!.claim(queued.id)!;
     store!.recordTranscript(claimed.id, claimed.leaseToken!, artifacts(claimed.id)[0]!);

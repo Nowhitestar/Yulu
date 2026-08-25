@@ -25,7 +25,7 @@ test.beforeEach(async ({ page }) => {
             },
             completedAt: "2026-08-25T00:00:00.000Z",
           },
-          sourceArtifactAvailable: false,
+          sourceArtifacts: { audio: false, transcript: false, summary: false },
           completedNoteAvailable: false,
           completedNote: null,
         },

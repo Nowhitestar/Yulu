@@ -264,10 +264,10 @@ describe("recordings router", () => {
     const artifacts = new ArtifactStore(mvDir, join(configDir, "agent-tasks"));
     const config = new ConfigManager(configFile);
     const glossaryRows = [{ term: "阿法学院", canonical: "阿尔法学院", scope: "both" as const }];
-    const xaiRequest = vi.fn(async (request: { model: string }) => ({
+    const xaiRequest = vi.fn(async (request: { model: string; credentialSource?: "oauth" | "api-key" }) => ({
       text: "# 阿法学院",
       model: request.model,
-      credentialSource: "oauth" as const,
+      credentialSource: request.credentialSource ?? "oauth",
     }));
     const transcribeFile = vi.fn(async () => {
       throw new Error("manual summary must not transcribe audio");
@@ -296,6 +296,7 @@ describe("recordings router", () => {
         transcribeFile,
       },
       xaiText: { request: xaiRequest },
+      xaiSummaryCredentialSource: () => "oauth",
       gatewayFactory: () => { throw new Error("manual xAI summary must not construct an Agent gateway"); },
       pollMs: 60_000,
     });
@@ -323,6 +324,7 @@ describe("recordings router", () => {
       expect(xaiRequest).toHaveBeenCalledWith({
         capability: "summary",
         model: "grok-manual-pinned",
+        credentialSource: "oauth",
         input: [
           { role: "system", content: expect.any(String) },
           { role: "user", content: "committed transcript" },

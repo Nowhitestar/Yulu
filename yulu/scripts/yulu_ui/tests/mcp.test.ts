@@ -153,4 +153,70 @@ describe("phase-specific recording MCP capability boundaries", () => {
       "recording_task_get",
     ]);
   });
+
+  it("rejects a Supported Agent identity before replacing committed artifacts", async () => {
+    const recordProgress = vi.fn();
+    const commitFromWorkspace = vi.fn();
+    const server = recordingArtifactMcpServer({
+      host: {
+        getTask: () => ({
+          id: "019f0000-0000-7000-8000-000000000132",
+          leaseToken: "019f0000-0000-7000-8000-000000000133",
+          summaryProvider: "codex",
+          summaryModel: "runtime-managed",
+        }),
+        recordProgress,
+      },
+      artifacts: { commitFromWorkspace },
+    } as unknown as AppContext);
+    const tool = (server as unknown as {
+      _registeredTools: Record<string, { handler: (input: Record<string, unknown>) => Promise<unknown> }>;
+    })._registeredTools.recording_artifact_commit!;
+
+    await expect(tool.handler({
+      taskId: "019f0000-0000-7000-8000-000000000132",
+      leaseToken: "019f0000-0000-7000-8000-000000000133",
+      summaryProvider: "claude-code",
+      summaryModel: "runtime-managed",
+    })).rejects.toThrow("different Summary Provider/model identity");
+    expect(recordProgress).not.toHaveBeenCalled();
+    expect(commitFromWorkspace).not.toHaveBeenCalled();
+  });
+
+  it("keeps a valid Supported Agent summary staged until the runtime identity is verified", async () => {
+    const recordProgress = vi.fn(() => ({
+      id: "019f0000-0000-7000-8000-000000000132",
+      state: "transcript_committed",
+      summaryProvider: "codex",
+      summaryModel: "runtime-managed",
+    }));
+    const commitFromWorkspace = vi.fn();
+    const recordArtifacts = vi.fn();
+    const server = recordingArtifactMcpServer({
+      host: {
+        getTask: () => ({
+          id: "019f0000-0000-7000-8000-000000000132",
+          leaseToken: "019f0000-0000-7000-8000-000000000133",
+          summaryProvider: "codex",
+          summaryModel: "runtime-managed",
+        }),
+        recordProgress,
+        recordArtifacts,
+      },
+      artifacts: { commitFromWorkspace },
+    } as unknown as AppContext);
+    const tool = (server as unknown as {
+      _registeredTools: Record<string, { handler: (input: Record<string, unknown>) => Promise<unknown> }>;
+    })._registeredTools.recording_artifact_commit!;
+
+    await expect(tool.handler({
+      taskId: "019f0000-0000-7000-8000-000000000132",
+      leaseToken: "019f0000-0000-7000-8000-000000000133",
+      summaryProvider: "codex",
+      summaryModel: "runtime-managed",
+    })).resolves.toBeDefined();
+    expect(recordProgress).toHaveBeenCalledOnce();
+    expect(commitFromWorkspace).not.toHaveBeenCalled();
+    expect(recordArtifacts).not.toHaveBeenCalled();
+  });
 });

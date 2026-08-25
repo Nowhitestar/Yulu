@@ -97,6 +97,38 @@ describe("server", () => {
     expect(body.result.data.name).toBe("yulu-ui");
   });
 
+  it("requires the process-local UI bearer for activation mutations", async () => {
+    const crossSite = new FormData();
+    crossSite.set("input", JSON.stringify({ json: null }));
+    const rejected = await fetch(`${env.baseUrl}/trpc/activation.defer`, {
+      method: "POST",
+      headers: { Origin: "https://attacker.example" },
+      body: crossSite,
+    });
+    expect(rejected.ok).toBe(false);
+
+    const configDir = join(env.root, ".config", "yulu");
+    const store = new HostStore(join(configDir, "host.sqlite"));
+    expect(store.getActivationJourneyState().deferredAt).toBeNull();
+
+    const tokenResponse = await fetch(`${env.baseUrl}/api/ui-token`);
+    expect(tokenResponse.status).toBe(200);
+    expect(tokenResponse.headers.get("cache-control")).toContain("no-store");
+    const { token } = await tokenResponse.json() as { token: string };
+    const accepted = await fetch(`${env.baseUrl}/trpc/activation.defer`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ json: null }),
+    });
+    expect(accepted.status).toBe(200);
+    expect(store.getActivationJourneyState().deferredAt).toEqual(expect.any(String));
+    store.db.prepare("DELETE FROM activation_journey_state").run();
+    store.close();
+  });
+
   it("rejects non-localhost via Host header guard", async () => {
     const r = await rawHttp(env.server.address.port, "/healthz", "evil.com:7777");
     expect(r.status).toBe(403);
@@ -282,7 +314,7 @@ describe("server", () => {
     config.transcription = { ...config.transcription, engine: "xai" };
     config.intelligence = {
       ...config.intelligence,
-      summary: { provider: "xai", model: "grok-4.6-exact" },
+      summary: { provider: "agent", model: "runtime-managed" },
     };
     config.agent_pipeline = { ...config.agent_pipeline, enabled: true, auto_process_recordings: true };
     writeFileSync(configFile, JSON.stringify(config));

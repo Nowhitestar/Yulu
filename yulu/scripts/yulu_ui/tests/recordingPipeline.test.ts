@@ -56,6 +56,8 @@ describe("RecordingPipeline", () => {
     pollMs?: number;
     glossaryRows?: Array<{ term: string; canonical: string; scope: "prompt" | "replace" | "both" }>;
     xaiText?: boolean;
+    xaiReadinessCredentialSource?: "oauth" | "api-key";
+    xaiExecutionCredentialSource?: "oauth" | "api-key";
     xaiSummaryDisclosure?: boolean;
     supportedAgentAdapter?: boolean;
     supportedAgentResultModel?: string;
@@ -108,15 +110,27 @@ describe("RecordingPipeline", () => {
       if (opts.transcribeUnavailable) throw new AgentUnavailableError("selected audio engine unavailable");
       return { transcript: "hello transcript", provider: "test-audio", chunks: 1, language };
     });
-    const xaiRequest = vi.fn(async (request: { model: string }) => ({
-      text: "# xAI Summary\n\nhello",
-      model: request.model,
-      credentialSource: "oauth" as const,
-    }));
+    const xaiRequest = vi.fn(async (request: { model: string; credentialSource?: "oauth" | "api-key" }) => {
+      const credentialSource = opts.xaiExecutionCredentialSource ?? "oauth";
+      if (request.credentialSource && request.credentialSource !== credentialSource) {
+        throw new Error(
+          `Pinned xAI credential ${request.credentialSource} does not match resolved credential ${credentialSource}`,
+        );
+      }
+      return {
+        text: "# xAI Summary\n\nhello",
+        model: request.model,
+        credentialSource,
+      };
+    });
     let notionStartedFromState = "";
     const runArtifactWorkflow = vi.fn(async ({ task, leaseToken, workspace }: Parameters<RecordingAgentGateway["runArtifactWorkflow"]>[0]) => {
+      const reportedIdentity = opts.supportedAgentAdapter ? {
+        provider: "codex",
+        model: opts.supportedAgentResultModel ?? "runtime-managed",
+      } : undefined;
       writeFileSync(workspace.summaryPath, "# Summary\n\nhello\n");
-      if (!opts.skipArtifactCommit) {
+      if (!opts.skipArtifactCommit && !opts.supportedAgentAdapter) {
         const records = artifacts.commitFromWorkspace(task, {
           agentProvider: task.summaryProvider,
           summaryProvider: task.summaryProvider,
@@ -129,10 +143,7 @@ describe("RecordingPipeline", () => {
         stdout: "artifacts done",
         stderr: "session_id: artifact-session",
         nativeSessionId: "artifact-session",
-        summaryIdentity: opts.supportedAgentAdapter ? {
-          provider: "codex",
-          model: opts.supportedAgentResultModel ?? "runtime-managed",
-        } : undefined,
+        summaryIdentity: reportedIdentity,
         audit: {
           ok: true,
           toolNames: ["mcp_yulu_artifact_recording_artifact_commit"],
@@ -259,6 +270,7 @@ describe("RecordingPipeline", () => {
         transcribeFile: transcribe,
       },
       xaiText: opts.xaiText ? { request: xaiRequest } : undefined,
+      xaiSummaryCredentialSource: () => opts.xaiReadinessCredentialSource ?? "oauth",
       supportedAgentSummaryAdapter,
       gatewayFactory,
       pollMs: opts.pollMs ?? 60_000,
@@ -550,6 +562,8 @@ describe("RecordingPipeline", () => {
       supportedAgentResultModel: "different-model",
     });
     writeFileSync(audioPath, wavWithAudio());
+    const summaryPath = join(moviesDir, "Demo_20260711_120000.summary.md");
+    writeFileSync(summaryPath, "# Prior verified summary\n");
     store!.recordSummaryDataPathDisclosure("codex", "codex-summary-v1");
 
     const { task } = pipeline!.enqueueCompletion({ audioPath, title: "Wrong Agent model" });
@@ -557,9 +571,9 @@ describe("RecordingPipeline", () => {
       state: "failed",
       error: expect.stringContaining("different Summary Provider/model identity"),
     }));
-    expect(existsSync(join(moviesDir, `${task.recordingStem}.summary.stale`))).toBe(true);
-    expect(existsSync(join(moviesDir, `${task.recordingStem}.summary.md`))).toBe(false);
-    expect(existsSync(join(configDir, "agent-tasks", task.id, "rejected-summary.md"))).toBe(true);
+    expect(readFileSync(summaryPath, "utf8")).toBe("# Prior verified summary\n");
+    expect(existsSync(join(moviesDir, `${task.recordingStem}.summary.stale`))).toBe(false);
+    expect(existsSync(join(configDir, "agent-tasks", task.id, "rejected-summary.md"))).toBe(false);
     expect(store!.getCoreActivationEvidence()).toBeNull();
   });
 
@@ -597,6 +611,7 @@ describe("RecordingPipeline", () => {
     expect(xaiRequest).toHaveBeenCalledWith({
       capability: "summary",
       model: "grok-4.6-exact",
+      credentialSource: "oauth",
       input: [
         { role: "system", content: task.instructions },
         { role: "user", content: "hello transcript" },
@@ -675,6 +690,59 @@ describe("RecordingPipeline", () => {
     expect(xaiRequest).toHaveBeenLastCalledWith(expect.objectContaining({ model: "grok-pinned" }));
     expect(transcribe).toHaveBeenCalledOnce();
     expect(runArtifactWorkflow).not.toHaveBeenCalled();
+  });
+
+  it("pins xAI summary execution to the readiness credential source", async () => {
+    const { audioPath, configManager, xaiRequest } = setup({
+      pollMs: 5,
+      xaiText: true,
+      xaiReadinessCredentialSource: "oauth",
+      xaiExecutionCredentialSource: "api-key",
+    });
+    configManager.update("intelligence.summary", { provider: "xai", model: "grok-pinned" });
+
+    const { task } = pipeline!.enqueueCompletion({ audioPath });
+    expect(task).toMatchObject({
+      summaryProvider: "xai",
+      summaryModel: "grok-pinned",
+      summaryCredentialSource: "oauth",
+    });
+    await vi.waitFor(() => expect(store!.getTask(task.id)).toMatchObject({
+      state: "awaiting_provider",
+      summaryCredentialSource: "oauth",
+      error: expect.stringContaining("Pinned xAI credential oauth"),
+    }));
+    expect(xaiRequest).toHaveBeenCalledWith(expect.objectContaining({ credentialSource: "oauth" }));
+  });
+
+  it("does not send a legacy xAI task whose credential source was never pinned", async () => {
+    const { audioPath, configManager, xaiRequest } = setup({
+      pollMs: 5,
+      xaiText: true,
+    });
+    configManager.update("intelligence.summary", { provider: "xai", model: "grok-pinned" });
+    const task = store!.enqueueRecording({
+      idempotencyKey: "recording:legacy-xai-without-source",
+      recordingStem: "Demo_20260711_120000",
+      title: "Legacy xAI",
+      audioPath,
+      sendToNotion: false,
+      destinationHint: "",
+      agentProvider: "xai",
+      summaryProvider: "xai",
+      summaryModel: "grok-pinned",
+      summaryCredentialSource: "oauth",
+    }).task;
+    store!.db.prepare("UPDATE agent_tasks SET summary_credential_source = NULL WHERE id = ?").run(task.id);
+
+    pipeline!.kick();
+
+    await vi.waitFor(() => expect(store!.getTask(task.id)).toMatchObject({
+      state: "awaiting_provider",
+      summaryCredentialSource: null,
+      error: expect.stringContaining("credential source was not pinned"),
+    }));
+    expect(xaiRequest).not.toHaveBeenCalled();
   });
 
   it("creates an explicit new-provider summary attempt over the same committed transcript", async () => {

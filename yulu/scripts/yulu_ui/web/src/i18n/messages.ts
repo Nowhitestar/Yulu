@@ -107,6 +107,10 @@ export const en: Messages = {
 
   // ---- Core Activation ----
   "activation.loading": "Checking activation…",
+  "activation.statusError.title": "Activation status unavailable",
+  "activation.statusError.body": "Yulu Host did not return Core Activation status within 10 seconds. Retry the Host check or continue using Yulu.",
+  "activation.statusError.retry": "Check again",
+  "activation.statusError.continue": "Continue using Yulu",
   "activation.unresolved.title": "Start your Activation Journey",
   "activation.unresolved.body": "Core Activation is not verified yet. Finish a real production recording with saved audio, transcript, summary, and provider evidence, or continue using Yulu and return later.",
   "activation.activated.status": "Core Activation verified",
@@ -117,7 +121,9 @@ export const en: Messages = {
   "activation.evidence.transcription": "Transcription",
   "activation.evidence.summary": "Summary",
   "activation.evidence.completed": "Completed",
-  "activation.sourceMissing": "The original recording is no longer available. Its durable activation evidence is still preserved.",
+  "activation.sourceMissing.audio": "The original recording is no longer available. Its durable activation evidence is still preserved.",
+  "activation.sourceMissing.transcript": "The transcript is no longer available. Its durable activation evidence is still preserved.",
+  "activation.sourceMissing.summary": "The summary note is no longer available. Its durable activation evidence is still preserved.",
   "activation.action.note": "Open completed note",
   "activation.action.transcription": "Transcription settings",
   "activation.action.providers": "AI Provider settings",
@@ -1009,6 +1015,10 @@ export const zh: Messages = {
 
   // ---- Core Activation ----
   "activation.loading": "正在检查激活状态…",
+  "activation.statusError.title": "无法检查激活状态",
+  "activation.statusError.body": "Yulu Host 未在 10 秒内返回核心激活状态。请重新检查，或继续使用 Yulu。",
+  "activation.statusError.retry": "重新检查",
+  "activation.statusError.continue": "继续使用 Yulu",
   "activation.unresolved.title": "开始激活 Yulu",
   "activation.unresolved.body": "核心激活尚未验证。请完成一次真实生产录音并保存音频、转写、摘要与提供商证据；也可以先使用 Yulu，稍后再回来完成。",
   "activation.activated.status": "核心激活证据已验证",
@@ -1019,7 +1029,9 @@ export const zh: Messages = {
   "activation.evidence.transcription": "转写",
   "activation.evidence.summary": "摘要",
   "activation.evidence.completed": "完成时间",
-  "activation.sourceMissing": "原始录音已不存在，但持久的激活证据仍然保留。",
+  "activation.sourceMissing.audio": "原始录音已不存在，但持久的激活证据仍然保留。",
+  "activation.sourceMissing.transcript": "转写文本已不存在，但持久的激活证据仍然保留。",
+  "activation.sourceMissing.summary": "摘要笔记已不存在，但持久的激活证据仍然保留。",
   "activation.action.note": "打开已完成笔记",
   "activation.action.transcription": "转写设置",
   "activation.action.providers": "AI 提供商设置",

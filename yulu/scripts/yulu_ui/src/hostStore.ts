@@ -4,6 +4,7 @@ import { chmodSync, existsSync, mkdirSync } from "node:fs";
 import { basename, dirname } from "node:path";
 import { isTrustedNotionUrl, isValidNotionPageId, notionPageIdentityProblem } from "./notionDelivery.js";
 import type { TranscriptionLanguage } from "./realtimeTranscription.js";
+import type { XaiCredentialSource } from "./xaiCredentials.js";
 
 export type AgentTaskState =
   | "queued"
@@ -48,6 +49,7 @@ export interface AgentTask {
   agentProvider: string;
   summaryProvider: string;
   summaryModel: string;
+  summaryCredentialSource: XaiCredentialSource | null;
   nativeSessionId: string | null;
   artifactSessionId: string | null;
   deliverySessionId: string | null;
@@ -175,6 +177,7 @@ interface TaskRow {
   agent_provider: string;
   summary_provider: string;
   summary_model: string;
+  summary_credential_source: XaiCredentialSource | null;
   native_session_id: string | null;
   artifact_session_id: string | null;
   delivery_session_id: string | null;
@@ -206,6 +209,7 @@ function toTask(row: TaskRow): AgentTask {
     agentProvider: row.agent_provider,
     summaryProvider: row.summary_provider,
     summaryModel: row.summary_model,
+    summaryCredentialSource: row.summary_credential_source,
     nativeSessionId: row.native_session_id,
     artifactSessionId: row.artifact_session_id,
     deliverySessionId: row.delivery_session_id,
@@ -271,9 +275,14 @@ export class HostStore {
     agentProvider: string;
     summaryProvider: string;
     summaryModel: string;
+    summaryCredentialSource?: XaiCredentialSource | null;
     instructions?: string;
     trigger?: AgentTaskTrigger;
   }): { task: AgentTask; created: boolean } {
+    const summaryCredentialSource = input.summaryCredentialSource ?? null;
+    if (input.summaryProvider.trim().toLowerCase() === "xai" && !summaryCredentialSource) {
+      throw new Error("xAI Summary Provider credential source is required");
+    }
     const id = randomUUID();
     const timestamp = now();
     const insert = this.db.transaction(() => {
@@ -299,9 +308,9 @@ export class HostStore {
         INSERT OR IGNORE INTO agent_tasks (
           id, idempotency_key, recording_stem, title, audio_path, transcription_language, trigger,
           state, phase, send_to_notion, destination_hint, agent_provider,
-          summary_provider, summary_model, instructions,
+          summary_provider, summary_model, summary_credential_source, instructions,
           attempt, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', 'queued', ?, ?, ?, ?, ?, ?, 0, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', 'queued', ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
       `).run(
         id,
         input.idempotencyKey,
@@ -315,6 +324,7 @@ export class HostStore {
         input.agentProvider,
         input.summaryProvider,
         input.summaryModel,
+        summaryCredentialSource,
         input.instructions ?? "",
         timestamp,
         timestamp,
@@ -326,6 +336,7 @@ export class HostStore {
         trigger: input.trigger ?? "automatic",
         summaryProvider: input.summaryProvider,
         summaryModel: input.summaryModel,
+        summaryCredentialSource,
       });
       return { task, created: task.id === id };
     });
@@ -495,6 +506,7 @@ export class HostStore {
       this.appendEvent(row.id, "task.claimed", {
         summaryProvider: row.summary_provider,
         summaryModel: row.summary_model,
+        summaryCredentialSource: row.summary_credential_source,
         attempt: row.attempt + 1,
       });
       return this.getTask(row.id);
@@ -529,6 +541,7 @@ export class HostStore {
       this.appendEvent(id, "task.claimed", {
         summaryProvider: row.summary_provider,
         summaryModel: row.summary_model,
+        summaryCredentialSource: row.summary_credential_source,
         attempt: row.attempt + 1,
       });
       return this.getTask(id);
@@ -646,6 +659,7 @@ export class HostStore {
       reason: safeReason,
       summaryProvider: task.summaryProvider,
       summaryModel: task.summaryModel,
+      summaryCredentialSource: task.summaryCredentialSource,
     });
     return this.getTask(id)!;
   }
@@ -1100,11 +1114,13 @@ export class HostStore {
     return this.getCoreActivationEvidence()!;
   }
 
-  listCoreActivationCandidates(): CoreActivationCandidate[] {
+  listCoreActivationCandidates(limit = 50): CoreActivationCandidate[] {
+    const boundedLimit = Math.max(1, Math.min(Math.trunc(limit), 100));
     const rows = this.db.prepare(`
       SELECT * FROM agent_tasks
       ORDER BY updated_at DESC, created_at DESC
-    `).all() as Array<TaskRow & { audit_json: string | null }>;
+      LIMIT ?
+    `).all(boundedLimit) as Array<TaskRow & { audit_json: string | null }>;
     return rows.map((row) => this.coreActivationCandidate(row));
   }
 
@@ -1425,7 +1441,11 @@ export class HostStore {
 
   replaceSummaryAttempt(
     id: string,
-    selection: { summaryProvider: string; summaryModel: string },
+    selection: {
+      summaryProvider: string;
+      summaryModel: string;
+      summaryCredentialSource?: XaiCredentialSource | null;
+    },
   ): AgentTask {
     const replace = this.db.transaction(() => {
       const original = this.getTask(id);
@@ -1435,10 +1455,18 @@ export class HostStore {
       }
       const summaryProvider = selection.summaryProvider.trim().toLowerCase();
       const summaryModel = selection.summaryModel.trim();
+      const summaryCredentialSource = selection.summaryCredentialSource ?? null;
       if (!summaryProvider || summaryProvider.length > 100 || !summaryModel || summaryModel.length > 128) {
         throw new Error("replacement Summary Provider identity is invalid");
       }
-      if (summaryProvider === original.summaryProvider && summaryModel === original.summaryModel) {
+      if (summaryProvider === "xai" && !summaryCredentialSource) {
+        throw new Error("replacement xAI Summary Provider credential source is required");
+      }
+      if (
+        summaryProvider === original.summaryProvider &&
+        summaryModel === original.summaryModel &&
+        summaryCredentialSource === original.summaryCredentialSource
+      ) {
         throw new Error("replacement Summary Provider must differ from the original task snapshot");
       }
       const transcript = this.listArtifacts(id).find((artifact) => artifact.kind === "transcript");
@@ -1461,8 +1489,8 @@ export class HostStore {
         INSERT INTO agent_tasks (
           id, idempotency_key, recording_stem, title, audio_path, transcription_language, trigger,
           state, phase, send_to_notion, destination_hint, agent_provider,
-          summary_provider, summary_model, instructions, attempt, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, 'manual', 'transcript_committed', 'summarizing', 0, ?, ?, ?, ?, ?, 0, ?, ?)
+          summary_provider, summary_model, summary_credential_source, instructions, attempt, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, 'manual', 'transcript_committed', 'summarizing', 0, ?, ?, ?, ?, ?, ?, 0, ?, ?)
       `).run(
         replacementId,
         `summary-regeneration:${randomUUID()}`,
@@ -1474,6 +1502,7 @@ export class HostStore {
         summaryProvider,
         summaryProvider,
         summaryModel,
+        summaryCredentialSource,
         original.instructions,
         timestamp,
         timestamp,
@@ -1502,11 +1531,13 @@ export class HostStore {
         replacementTaskId: replacementId,
         summaryProvider,
         summaryModel,
+        summaryCredentialSource,
       });
       this.appendEvent(replacementId, "task.queued", {
         trigger: "manual",
         summaryProvider,
         summaryModel,
+        summaryCredentialSource,
         reusedTranscriptFromTaskId: original.id,
       });
       return this.getTask(replacementId)!;
@@ -1589,6 +1620,7 @@ export class HostStore {
         agent_provider TEXT NOT NULL DEFAULT 'hermes',
         summary_provider TEXT NOT NULL,
         summary_model TEXT NOT NULL,
+        summary_credential_source TEXT CHECK(summary_credential_source IN ('oauth', 'api-key')),
         instructions TEXT NOT NULL DEFAULT '',
         native_session_id TEXT,
         artifact_session_id TEXT,
@@ -1708,6 +1740,9 @@ export class HostStore {
     }
     if (!columns.some((column) => column.name === "summary_model")) {
       this.db.exec("ALTER TABLE agent_tasks ADD COLUMN summary_model TEXT NOT NULL DEFAULT 'runtime-managed'");
+    }
+    if (!columns.some((column) => column.name === "summary_credential_source")) {
+      this.db.exec("ALTER TABLE agent_tasks ADD COLUMN summary_credential_source TEXT");
     }
     this.db.exec(`
       UPDATE agent_tasks SET summary_provider = agent_provider

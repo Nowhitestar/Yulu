@@ -44,6 +44,7 @@ export const paths = {
   uiLog:            join(CONFIG_DIR, "ui.log"),
   uiPid:            join(CONFIG_DIR, "yulu_ui.pid"),
   moviesDir:        MOVIES_DIR,
+  launchAgentsDir:  join(HOME, "Library", "LaunchAgents"),
   scriptDir:        SCRIPT_DIR,
   agentQueueJson:   join(CONFIG_DIR, "agent-queue.json"),
   mcpTokenJson:     join(CONFIG_DIR, "mcp-token.json"),
