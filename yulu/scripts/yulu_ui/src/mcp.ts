@@ -242,6 +242,8 @@ function registerRecordingArtifactTools(
     const records = ctx.artifacts.commitFromWorkspace(task, {
       ...safeProvenance,
       agentProvider: task.agentProvider,
+      summaryProvider: task.summaryProvider,
+      summaryModel: task.summaryModel,
       committedBy: "yulu-host",
     });
     const updated = ctx.host.recordArtifacts(taskId, leaseToken, records);

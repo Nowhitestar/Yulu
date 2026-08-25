@@ -4,6 +4,7 @@ import { CheckCircle2 } from "lucide-react";
 import { MarkdownView } from "../components/MarkdownView.js";
 import { useLang, useT } from "../i18n/LanguageProvider.js";
 import { trpc } from "../trpc.js";
+import { XAI_TEXT_MODEL_DEFAULT } from "../../../src/settingsRegistry.js";
 import "./activate.css";
 
 export const handle = { breadcrumb: "breadcrumb.activate", filters: null };
@@ -12,6 +13,9 @@ export function Activate() {
   const activation = trpc.activation.status.useQuery();
   const defer = trpc.activation.defer.useMutation();
   const acceptXaiDisclosure = trpc.activation.acceptXaiTranscriptionDisclosure.useMutation();
+  const acceptSummaryDisclosure = trpc.activation.acceptSummaryDataPathDisclosure.useMutation();
+  const declineSummaryDisclosure = trpc.activation.declineSummaryDataPathDisclosure.useMutation();
+  const probeSummaryProvider = trpc.activation.probeSummaryProvider.useMutation();
   const updateConfig = trpc.config.update.useMutation();
   const testLocal = trpc.localCaption.test.useMutation();
   const probeXai = trpc.providers.probe.useMutation();
@@ -19,6 +23,8 @@ export function Activate() {
   const [deferFailed, setDeferFailed] = useState(false);
   const [pendingXai, setPendingXai] = useState(false);
   const [disclosureDeclined, setDisclosureDeclined] = useState(false);
+  const [summaryDisclosureDeclined, setSummaryDisclosureDeclined] = useState(false);
+  const [reviewSummaryDisclosure, setReviewSummaryDisclosure] = useState(false);
   const [actionFailed, setActionFailed] = useState(false);
   const titleRef = useRef<HTMLHeadingElement>(null);
   const navigate = useNavigate();
@@ -34,6 +40,7 @@ export function Activate() {
     const data = activation.data;
     const readiness = data?.readiness;
     const selected = readiness?.transcription.selected ?? "local";
+    const summary = readiness?.summary;
     const disclosureOpen = Boolean(readiness && !disclosureDeclined && (
       pendingXai || (selected === "xai" && readiness.transcription.xai.disclosureRequired)
     ));
@@ -59,6 +66,33 @@ export function Activate() {
     const retryTranscription = () => run(() => selected === "local"
       ? testLocal.mutateAsync()
       : probeXai.mutateAsync({ capability: "transcription" }));
+    const chooseSummary = (provider: "agent" | "xai") => run(async () => {
+      setSummaryDisclosureDeclined(false);
+      setReviewSummaryDisclosure(false);
+      await updateConfig.mutateAsync({
+        key: "intelligence.summary",
+        value: provider === "xai"
+          ? { provider: "xai", model: XAI_TEXT_MODEL_DEFAULT }
+          : { provider: "agent", model: "runtime-managed" },
+      });
+    });
+    const retrySummary = () => run(() => summary?.selected.provider === "xai"
+      ? probeXai.mutateAsync({ capability: "summary" })
+      : probeSummaryProvider.mutateAsync());
+    const summaryProviderLabel = summary?.selected.provider === "xai"
+      ? "xAI"
+      : summary?.selected.provider === "agent"
+        ? t("activation.summary.agent")
+        : summary?.selected.provider ?? "";
+    const summaryBlocker = data?.blocker && "reason" in data.blocker ? data.blocker : null;
+    const summaryDisclosureIsDeclined = summaryDisclosureDeclined ||
+      summaryBlocker?.reason === "disclosure_declined";
+    const summaryDisclosureDecision = summary?.disclosure ? {
+      provider: summary.disclosure.provider,
+      disclosureVersion: summary.disclosure.disclosureVersion,
+      data: summary.disclosure.data,
+      destination: summary.disclosure.destination,
+    } : null;
     return (
       <section className="activate-page" aria-labelledby="activate-title">
         <div className="activate-card">
@@ -82,7 +116,44 @@ export function Activate() {
                   ? t("activation.transcription.ready")
                   : t("activation.transcription.pending")}
               </li>
+              <li data-state={readiness.summary.state}>
+                {readiness.summary.state === "ready"
+                  ? t("activation.summary.ready")
+                  : t("activation.summary.pending")}
+              </li>
             </ol>
+          )}
+
+          {summary && (
+            <div className="activate-summary">
+              <dl aria-label={t("activation.summary.identity.aria")}>
+                <div><dt>{t("activation.summary.provider")}</dt><dd>{summaryProviderLabel}</dd></div>
+                <div><dt>{t("activation.summary.model")}</dt><dd>{summary.selected.model}</dd></div>
+              </dl>
+              {summary.state !== "ready" && (
+                <fieldset className="activate-engine">
+                  <legend>{t("activation.summary.choose")}</legend>
+                  <label>
+                    <input
+                      type="radio"
+                      name="activation-summary"
+                      checked={summary.selected.provider !== "xai"}
+                      onChange={() => void chooseSummary("agent")}
+                    />
+                    {t("activation.summary.agent")}
+                  </label>
+                  <label>
+                    <input
+                      type="radio"
+                      name="activation-summary"
+                      checked={summary.selected.provider === "xai"}
+                      onChange={() => void chooseSummary("xai")}
+                    />
+                    xAI
+                  </label>
+                </fieldset>
+              )}
+            </div>
           )}
 
           {readiness && readiness.transcription.state !== "ready" && (
@@ -204,6 +275,77 @@ export function Activate() {
                   {t("activation.disclosure.chooseLocal")}
                 </button>
               )}
+            </div>
+          )}
+
+          {summary?.state === "disclosure_required" && summary.disclosure &&
+            (!summaryDisclosureIsDeclined || reviewSummaryDisclosure) && (
+            <div
+              className="activate-disclosure"
+              role="dialog"
+              aria-labelledby="activate-summary-disclosure-title"
+            >
+              <h2 id="activate-summary-disclosure-title">
+                {t("activation.summaryDisclosure.title", { provider: summaryProviderLabel })}
+              </h2>
+              <p>{t("activation.summaryDisclosure.privacy", { destination: summary.disclosure.destination })}</p>
+              <div className="activate-actions">
+                <button
+                  type="button"
+                  className="activate-action primary"
+                  onClick={() => void run(async () => {
+                    await acceptSummaryDisclosure.mutateAsync(summaryDisclosureDecision!);
+                    setSummaryDisclosureDeclined(false);
+                    setReviewSummaryDisclosure(false);
+                  })}
+                >
+                  {t("activation.summaryDisclosure.accept")}
+                </button>
+                <button
+                  type="button"
+                  className="activate-action"
+                  onClick={() => void run(async () => {
+                    await declineSummaryDisclosure.mutateAsync(summaryDisclosureDecision!);
+                    setSummaryDisclosureDeclined(true);
+                    setReviewSummaryDisclosure(false);
+                  })}
+                >
+                  {t("activation.disclosure.decline")}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {summaryDisclosureIsDeclined && !reviewSummaryDisclosure && summary && (
+            <div className="activate-declined" role="alert">
+              <p>{t("activation.summaryDisclosure.declined", { provider: summaryProviderLabel })}</p>
+              <div className="activate-actions">
+                <Link className="activate-action" to="/settings/llm">
+                  {t("activation.summary.openSettings")}
+                </Link>
+                <button
+                  type="button"
+                  className="activate-action"
+                  onClick={() => setReviewSummaryDisclosure(true)}
+                >
+                  {t("activation.summaryDisclosure.review")}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {summaryBlocker && summaryBlocker.reason !== "disclosure_required" &&
+            summaryBlocker.reason !== "disclosure_declined" && (
+            <div className="activate-blocker" role="alert">
+              <p>{t(`activation.summary.blocker.${summaryBlocker.reason}`)}</p>
+              <div className="activate-actions">
+                <Link className="activate-action primary" to={summaryBlocker.remediation.href}>
+                  {t("activation.summary.openSettings")}
+                </Link>
+                <button type="button" className="activate-action" onClick={() => void retrySummary()}>
+                  {t("activation.summary.retry")}
+                </button>
+              </div>
             </div>
           )}
 

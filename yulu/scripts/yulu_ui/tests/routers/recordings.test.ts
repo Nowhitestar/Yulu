@@ -10,6 +10,7 @@ import { ArtifactStore } from "../../src/artifactStore.js";
 import { ConfigManager } from "../../src/config.js";
 import { RecordingPipeline } from "../../src/recordingPipeline.js";
 import { paths } from "../../src/paths.js";
+import { XAI_SUMMARY_DISCLOSURE_VERSION } from "../../src/summaryDataDisclosure.js";
 
 const agentActions = vi.hoisted(() => ({
   DeliveryError: class AgentDeliveryFailedError extends Error {},
@@ -259,6 +260,7 @@ describe("recordings router", () => {
       agent_pipeline: { enabled: true, auto_process_recordings: false },
     }));
     const host = new HostStore(join(configDir, "host.sqlite"));
+    host.recordSummaryDataPathDisclosure("xai", XAI_SUMMARY_DISCLOSURE_VERSION);
     const artifacts = new ArtifactStore(mvDir, join(configDir, "agent-tasks"));
     const config = new ConfigManager(configFile);
     const glossaryRows = [{ term: "阿法学院", canonical: "阿尔法学院", scope: "both" as const }];

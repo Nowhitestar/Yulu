@@ -251,6 +251,22 @@ export class ArtifactStore {
     ];
   }
 
+  rejectCommittedSummary(task: AgentTask, record: ArtifactRecord): void {
+    if (basename(task.audioPath, ".wav") !== task.recordingStem) {
+      throw new Error("recording stem does not match the audio artifact");
+    }
+    const summaryPath = join(this.moviesDir, `${task.recordingStem}.summary.md`);
+    const stalePath = join(this.moviesDir, `${task.recordingStem}.summary.stale`);
+    if (!isInside(this.moviesDir, summaryPath) || !isInside(this.moviesDir, stalePath)) {
+      throw new Error("summary stale marker escapes the recordings directory");
+    }
+    this.readCommittedSummary(task, record);
+    atomicWrite(stalePath, `${new Date().toISOString()}\n`);
+    const rejectedPath = join(this.workspace(task.id).dir, "rejected-summary.md");
+    if (existsSync(rejectedPath)) unlinkSync(rejectedPath);
+    renameSync(summaryPath, rejectedPath);
+  }
+
   cleanupTransportAudio(taskId: string): void {
     const workspace = this.workspace(taskId);
     for (const name of readdirSync(workspace.dir)) {

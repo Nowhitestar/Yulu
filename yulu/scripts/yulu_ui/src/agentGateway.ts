@@ -206,6 +206,7 @@ export interface AgentWorkflowResult {
   stderr: string;
   nativeSessionId: string;
   audit: AgentSessionAudit;
+  summaryIdentity?: { provider: string; model: string };
 }
 
 export function hermesWorkflowFailureMessage(result: {

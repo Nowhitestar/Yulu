@@ -9,6 +9,8 @@ vi.mock("../../src/ipc.js", () => ({ ipcSend: ipcSendMock }));
 import { ArtifactStore } from "../../src/artifactStore.js";
 import { HostStore } from "../../src/hostStore.js";
 import { XAI_TRANSCRIPTION_DISCLOSURE_VERSION } from "../../src/transcriptionConsent.js";
+import { XAI_SUMMARY_DISCLOSURE_VERSION } from "../../src/summaryDataDisclosure.js";
+import type { SupportedAgentSummaryReadiness } from "../../src/summaryProviderReadiness.js";
 import { activationRouter } from "../../src/routers/activation.js";
 import { createCaller, type AppContext } from "../../src/trpc.js";
 
@@ -51,6 +53,9 @@ describe("activation router", () => {
     const configValue = {
       audio: { mic_device: "BuiltInMic" },
       transcription: { engine: "local" as "local" | "xai" },
+      intelligence: {
+        summary: { provider: "agent" as "agent" | "xai", model: "runtime-managed" },
+      },
     };
     const localStatus = {
       installed: true,
@@ -65,6 +70,22 @@ describe("activation router", () => {
       }
       throw new Error(`unexpected action: ${payload.action}`);
     });
+    const xaiConnection = {
+      connected: true,
+      source: "oauth" as "oauth" | "api-key" | null,
+      detail: "connected",
+    };
+    let agentReadiness = {
+      capability: "summary" as const,
+      provider: "codex",
+      model: "runtime-managed",
+      status: "ready" as "ready" | "failed",
+      testedAt: "2026-08-25T04:00:00.000Z" as string | null,
+      detail: "ready",
+      credentialSource: "oauth" as string | null,
+      disclosure: { kind: "local" as const },
+    };
+    const agentProbe = vi.fn(async () => agentReadiness);
     const ctx = {
       host,
       artifacts,
@@ -81,11 +102,26 @@ describe("activation router", () => {
         syncSelection: async () => {},
       },
       xaiCredentials: {
-        cachedStatus: () => ({ connected: true, source: "oauth", detail: "connected" }),
+        cachedStatus: () => xaiConnection,
       },
       xaiReadiness: new Map(),
+      supportedAgentSummaryAdapter: {
+        current: () => agentReadiness,
+        probe: agentProbe,
+        gateway: () => ({} as never),
+      },
     } as unknown as AppContext;
-    return { moviesDir, artifacts, caller: createCaller(activationRouter, ctx), configValue, localStatus, ctx };
+    return {
+      moviesDir,
+      artifacts,
+      caller: createCaller(activationRouter, ctx),
+      configValue,
+      localStatus,
+      xaiConnection,
+      agentProbe,
+      setAgentReadiness: (value: typeof agentReadiness) => { agentReadiness = value; },
+      ctx,
+    };
   }
 
   it("reports microphone, selected audio input, and local probe readiness separately", async () => {
@@ -179,6 +215,250 @@ describe("activation router", () => {
         },
       },
     });
+  });
+
+  it("requires xAI summary readiness and a separate transcript Data Path Disclosure", async () => {
+    const { caller, configValue, ctx } = setup();
+    configValue.intelligence.summary = { provider: "xai", model: "grok-summary-exact" };
+    ctx.xaiReadiness!.set("summary", {
+      capability: "summary",
+      status: "ready",
+      model: "grok-summary-exact",
+      testedAt: "2026-08-25T04:00:00.000Z",
+      detail: "ready",
+      credentialSource: "oauth",
+    });
+
+    await expect(caller.status()).resolves.toMatchObject({
+      nextStep: "summary_provider",
+      blocker: {
+        capability: "summary_disclosure",
+        reason: "disclosure_required",
+        remediation: { href: "/settings/llm" },
+      },
+      readiness: {
+        summary: {
+          selected: { provider: "xai", model: "grok-summary-exact" },
+          state: "disclosure_required",
+          disclosure: {
+            provider: "xai",
+            disclosureVersion: XAI_SUMMARY_DISCLOSURE_VERSION,
+            acceptedDisclosureVersion: null,
+            data: "transcript_text",
+            destination: "xAI",
+          },
+        },
+      },
+    });
+
+    await expect(caller.acceptSummaryDataPathDisclosure({
+      provider: "xai",
+      disclosureVersion: XAI_SUMMARY_DISCLOSURE_VERSION,
+      data: "transcript_text",
+      destination: "xAI",
+    })).resolves.toMatchObject({
+      provider: "xai",
+      disclosureVersion: XAI_SUMMARY_DISCLOSURE_VERSION,
+    });
+    await expect(caller.status()).resolves.toMatchObject({
+      nextStep: null,
+      blocker: null,
+      readiness: { summary: { state: "ready" } },
+    });
+
+    await expect(caller.declineSummaryDataPathDisclosure({
+      provider: "xai",
+      disclosureVersion: XAI_SUMMARY_DISCLOSURE_VERSION,
+      data: "transcript_text",
+      destination: "xAI",
+    })).resolves.toMatchObject({
+      provider: "xai",
+      disclosureVersion: XAI_SUMMARY_DISCLOSURE_VERSION,
+      decision: "declined",
+    });
+    await expect(caller.status()).resolves.toMatchObject({
+      nextStep: "summary_provider",
+      blocker: { capability: "summary_disclosure", reason: "disclosure_declined" },
+      readiness: { summary: { state: "disclosure_required", disclosure: { declined: true } } },
+    });
+
+    host!.close();
+    host = new HostStore(join(root, "host.sqlite"));
+    const restartedCaller = createCaller(activationRouter, {
+      ...ctx,
+      host,
+    } as unknown as AppContext);
+    await expect(restartedCaller.status()).resolves.toMatchObject({
+      blocker: { capability: "summary_disclosure", reason: "disclosure_declined" },
+      readiness: { summary: { disclosure: { declined: true } } },
+    });
+  });
+
+  it("consumes provider-neutral Supported Agent readiness without a Hermes prerequisite", async () => {
+    const { caller, ctx } = setup();
+    ctx.supportedAgentSummaryAdapter = undefined;
+
+    await expect(caller.status()).resolves.toMatchObject({
+      nextStep: "summary_provider",
+      blocker: {
+        capability: "summary_provider",
+        reason: "provider_unavailable",
+        detail: expect.not.stringMatching(/Hermes/i),
+        remediation: { href: "/settings/llm" },
+      },
+      readiness: {
+        summary: {
+          selected: { provider: "agent", model: "runtime-managed" },
+          state: "blocked",
+          publicOnboardingSupported: false,
+        },
+      },
+    });
+
+    let externalReadiness: SupportedAgentSummaryReadiness = {
+        capability: "summary",
+        provider: "codex",
+        model: "runtime-managed",
+        status: "ready",
+        testedAt: "2026-08-25T04:00:00.000Z",
+        detail: "ready",
+        credentialSource: "oauth",
+        disclosure: {
+          kind: "external",
+          disclosureVersion: "codex-summary-v1",
+          data: "transcript_text",
+          destination: "Codex service",
+        },
+      };
+    ctx.supportedAgentSummaryAdapter = {
+      current: () => externalReadiness,
+      probe: async () => { throw new Error("not used"); },
+      gateway: () => ({} as never),
+    };
+    await expect(caller.status()).resolves.toMatchObject({
+      blocker: { capability: "summary_disclosure", reason: "disclosure_required" },
+      readiness: {
+        summary: {
+          selected: { provider: "codex", model: "runtime-managed" },
+          state: "disclosure_required",
+          publicOnboardingSupported: true,
+          disclosure: { destination: "Codex service" },
+        },
+      },
+    });
+    const displayedDisclosure = {
+      provider: "codex",
+      disclosureVersion: "codex-summary-v1",
+      data: "transcript_text" as const,
+      destination: "Codex service",
+    };
+    externalReadiness = {
+      ...externalReadiness,
+      disclosure: {
+        kind: "external",
+        disclosureVersion: "codex-summary-v2",
+        data: "transcript_text",
+        destination: "Changed service",
+      },
+    };
+    await expect(caller.acceptSummaryDataPathDisclosure(displayedDisclosure)).rejects.toThrow(
+      "Data Path Disclosure changed",
+    );
+    externalReadiness = {
+      ...externalReadiness,
+      disclosure: {
+        kind: "external",
+        disclosureVersion: "codex-summary-v1",
+        data: "transcript_text",
+        destination: "Codex service",
+      },
+    };
+    await caller.acceptSummaryDataPathDisclosure(displayedDisclosure);
+    await expect(caller.status()).resolves.toMatchObject({
+      nextStep: null,
+      readiness: { summary: { state: "ready", selected: { provider: "codex" } } },
+    });
+  });
+
+  it("names xAI credential, model, provider, and readiness blockers", async () => {
+    const { caller, configValue, ctx, xaiConnection } = setup();
+    configValue.intelligence.summary = { provider: "xai", model: "grok-summary-exact" };
+    host!.recordSummaryDataPathDisclosure("xai", XAI_SUMMARY_DISCLOSURE_VERSION);
+
+    xaiConnection.connected = false;
+    xaiConnection.source = null;
+    await expect(caller.status()).resolves.toMatchObject({
+      blocker: { capability: "summary_credentials", reason: "missing_credentials" },
+    });
+
+    xaiConnection.connected = true;
+    xaiConnection.source = "oauth";
+    configValue.intelligence.summary.model = "";
+    await expect(caller.status()).resolves.toMatchObject({
+      blocker: { capability: "summary_model", reason: "invalid_model" },
+    });
+
+    configValue.intelligence.summary.model = "grok-summary-exact";
+    ctx.xaiReadiness = undefined;
+    await expect(caller.status()).resolves.toMatchObject({
+      blocker: { capability: "summary_provider", reason: "provider_unavailable" },
+    });
+
+    ctx.xaiReadiness = new Map([["summary", {
+      capability: "summary",
+      status: "failed",
+      model: "grok-summary-exact",
+      testedAt: "2026-08-25T04:00:00.000Z",
+      detail: "probe failed",
+      credentialSource: "oauth",
+    }]]);
+    await expect(caller.status()).resolves.toMatchObject({
+      blocker: { capability: "summary_readiness", reason: "readiness_failed" },
+    });
+
+    ctx.xaiReadiness = new Map([["summary", {
+      capability: "summary",
+      status: "failed",
+      reason: "invalid_model",
+      model: "grok-summary-exact",
+      testedAt: "2026-08-25T04:00:00.000Z",
+      detail: "HTTP 404: model not found",
+      credentialSource: "oauth",
+    }]]);
+    await expect(caller.status()).resolves.toMatchObject({
+      blocker: { capability: "summary_model", reason: "invalid_model" },
+    });
+  });
+
+  it("requires proof metadata and exposes the generic Agent capability probe", async () => {
+    const { caller, setAgentReadiness, agentProbe } = setup();
+    setAgentReadiness({
+      capability: "summary",
+      provider: "codex",
+      model: "runtime-managed",
+      status: "ready",
+      testedAt: null,
+      detail: "claimed ready without proof",
+      credentialSource: null,
+      disclosure: { kind: "local" },
+    });
+    await expect(caller.status()).resolves.toMatchObject({
+      blocker: { capability: "summary_readiness", reason: "readiness_failed" },
+      readiness: { summary: { state: "blocked" } },
+    });
+
+    setAgentReadiness({
+      capability: "summary",
+      provider: "codex",
+      model: "runtime-managed",
+      status: "failed",
+      testedAt: "2026-08-25T04:00:00.000Z",
+      detail: "failed",
+      credentialSource: "oauth",
+      disclosure: { kind: "local" },
+    });
+    await caller.probeSummaryProvider();
+    expect(agentProbe).toHaveBeenCalledOnce();
   });
 
   it("names microphone and missing selected-input blockers with exact remediation", async () => {

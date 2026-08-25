@@ -114,6 +114,14 @@ describe("providers router", () => {
       testedAt: expect.any(String),
     });
     expect(JSON.stringify(failed)).not.toMatch(/secret-token|private prompt/);
+
+    ctx.xaiText.request.mockRejectedValueOnce(new Error("xAI summary request failed (HTTP 404)"));
+    const invalidModel = await caller.probe({ capability: "summary" });
+    expect(invalidModel).toMatchObject({
+      capability: "summary",
+      status: "failed",
+      reason: "invalid_model",
+    });
   });
 
   it("offers credential lifecycle mutations without any secret read procedure or response", async () => {

@@ -27,9 +27,12 @@ interface ActivatedData {
 interface UnresolvedData {
   state: "unresolved";
   evidence: null;
-  nextStep: "microphone_permission" | "audio_input" | "transcription" | null;
+  nextStep: "microphone_permission" | "audio_input" | "transcription" | "summary_provider" | null;
   blocker: {
-    capability: "microphone_permission" | "audio_input" | "local_transcription" | "xai_transcription";
+    capability: "microphone_permission" | "audio_input" | "local_transcription" | "xai_transcription" |
+      "summary_credentials" | "summary_model" | "summary_provider" | "summary_disclosure" | "summary_readiness";
+    reason?: "missing_credentials" | "invalid_model" | "provider_unavailable" | "disclosure_required" |
+      "disclosure_declined" | "readiness_failed" | "readiness_required";
     detail: string | null;
     remediation: { href: string };
   } | null;
@@ -52,6 +55,24 @@ interface UnresolvedData {
         acceptedDisclosureVersion: string | null;
         disclosureRequired: boolean;
       };
+      remediation: { href: string } | null;
+    };
+    summary: {
+      selected: { provider: string; model: string };
+      state: "ready" | "blocked" | "disclosure_required";
+      detail: string | null;
+      credentialSource: string | null;
+      testedAt: string | null;
+      disclosure: {
+        provider: string;
+        disclosureVersion: string;
+        acceptedDisclosureVersion: string | null;
+        declined: boolean;
+        required: boolean;
+        data: "transcript_text";
+        destination: string;
+      } | null;
+      publicOnboardingSupported: boolean;
       remediation: { href: string } | null;
     };
   };
@@ -82,6 +103,24 @@ function unresolvedData(): UnresolvedData {
           acceptedDisclosureVersion: null,
           disclosureRequired: true,
         },
+        remediation: null,
+      },
+      summary: {
+        selected: { provider: "xai", model: "grok-summary-exact" },
+        state: "ready",
+        detail: "ready",
+        credentialSource: "oauth",
+        testedAt: "2026-08-25T04:00:00.000Z",
+        disclosure: {
+          provider: "xai",
+          disclosureVersion: "xai-summary-v1",
+          acceptedDisclosureVersion: "xai-summary-v1",
+          declined: false,
+          required: false,
+          data: "transcript_text",
+          destination: "xAI",
+        },
+        publicOnboardingSupported: true,
         remediation: null,
       },
     },
@@ -119,6 +158,9 @@ const activation = vi.hoisted(() => ({
   data: activatedData() as ActivatedData | UnresolvedData,
   defer: vi.fn(async () => ({ journey: { shouldAutoEnter: false } })),
   acceptXaiDisclosure: vi.fn(async () => ({ disclosureVersion: "xai-audio-v1" })),
+  acceptSummaryDisclosure: vi.fn(async () => ({ disclosureVersion: "xai-summary-v1" })),
+  declineSummaryDisclosure: vi.fn(async () => ({ disclosureVersion: "xai-summary-v1", decision: "declined" })),
+  probeSummaryProvider: vi.fn(async () => ({ status: "ready" })),
   updateConfig: vi.fn(async () => ({})),
   testLocal: vi.fn(async () => ({ ok: true })),
   probeXai: vi.fn(async () => ({ status: "ready" })),
@@ -132,6 +174,15 @@ vi.mock("../../../web/src/trpc.js", () => ({
       defer: { useMutation: () => ({ mutateAsync: activation.defer, isPending: false }) },
       acceptXaiTranscriptionDisclosure: {
         useMutation: () => ({ mutateAsync: activation.acceptXaiDisclosure, isPending: false }),
+      },
+      acceptSummaryDataPathDisclosure: {
+        useMutation: () => ({ mutateAsync: activation.acceptSummaryDisclosure, isPending: false }),
+      },
+      declineSummaryDataPathDisclosure: {
+        useMutation: () => ({ mutateAsync: activation.declineSummaryDisclosure, isPending: false }),
+      },
+      probeSummaryProvider: {
+        useMutation: () => ({ mutateAsync: activation.probeSummaryProvider, isPending: false }),
       },
     },
     config: {
@@ -171,6 +222,9 @@ afterEach(() => {
   activation.data = activatedData();
   activation.defer.mockClear();
   activation.acceptXaiDisclosure.mockClear();
+  activation.acceptSummaryDisclosure.mockClear();
+  activation.declineSummaryDisclosure.mockClear();
+  activation.probeSummaryProvider.mockClear();
   activation.updateConfig.mockClear();
   activation.testLocal.mockClear();
   activation.probeXai.mockClear();
@@ -241,9 +295,133 @@ describe("/activate", () => {
     expect(screen.getByText("Audio input ready")).toBeInTheDocument();
     expect(screen.queryByText(/System Settings.*Microphone/)).not.toBeInTheDocument();
     expect(screen.getByText("Selected transcription ready")).toBeInTheDocument();
+    expect(screen.getByText("Selected Summary Provider ready")).toBeInTheDocument();
+    expect(screen.getByText("xAI")).toBeInTheDocument();
+    expect(screen.getByText("grok-summary-exact")).toBeInTheDocument();
+    expect(screen.queryByText(/automatic|fallback/i)).not.toBeInTheDocument();
     expect(screen.queryByRole("radio", { name: "Local transcription" })).not.toBeInTheDocument();
     expect(screen.queryByRole("radio", { name: "xAI cloud transcription" })).not.toBeInTheDocument();
     expect(screen.queryByText("Checking activation…")).not.toBeInTheDocument();
+  });
+
+  it("localizes the xAI transcript disclosure and records it independently from credentials", async () => {
+    activation.data = unresolvedData();
+    activation.data.nextStep = "summary_provider";
+    activation.data.blocker = {
+      capability: "summary_disclosure",
+      reason: "disclosure_required",
+      detail: "disclosure required",
+      remediation: { href: "/settings/llm" },
+    };
+    activation.data.readiness.summary.state = "disclosure_required";
+    activation.data.readiness.summary.disclosure!.acceptedDisclosureVersion = null;
+    activation.data.readiness.summary.disclosure!.required = true;
+    renderRoute("zh");
+    const user = userEvent.setup();
+
+    const disclosure = screen.getByRole("dialog", { name: "xAI 摘要数据路径披露" });
+    expect(disclosure).toHaveTextContent("转写文本会发送给 xAI");
+    expect(disclosure).not.toHaveTextContent(/OAuth.*同意|API Key.*同意/);
+    await user.click(screen.getByRole("button", { name: "接受数据路径披露" }));
+    expect(activation.acceptSummaryDisclosure).toHaveBeenCalledWith({
+      provider: "xai",
+      disclosureVersion: "xai-summary-v1",
+      data: "transcript_text",
+      destination: "xAI",
+    });
+    expect(activation.updateConfig).not.toHaveBeenCalled();
+  });
+
+  it("turns declined summary disclosure into a named blocker without fallback", async () => {
+    activation.data = unresolvedData();
+    activation.data.nextStep = "summary_provider";
+    activation.data.blocker = {
+      capability: "summary_disclosure",
+      reason: "disclosure_required",
+      detail: "disclosure required",
+      remediation: { href: "/settings/llm" },
+    };
+    activation.data.readiness.summary.state = "disclosure_required";
+    activation.data.readiness.summary.disclosure!.required = true;
+    const user = userEvent.setup();
+    renderRoute("en");
+
+    await user.click(screen.getByRole("button", { name: "Decline" }));
+    expect(activation.declineSummaryDisclosure).toHaveBeenCalledWith({
+      provider: "xai",
+      disclosureVersion: "xai-summary-v1",
+      data: "transcript_text",
+      destination: "xAI",
+    });
+    const blocker = screen.getByRole("alert");
+    expect(blocker).toHaveTextContent("xAI remains selected");
+    expect(blocker).toHaveTextContent("transcript text was not sent");
+    expect(screen.getByRole("link", { name: "Open AI Provider Settings" })).toHaveAttribute("href", "/settings/llm");
+    expect(activation.updateConfig).not.toHaveBeenCalled();
+    expect(activation.probeXai).not.toHaveBeenCalled();
+  });
+
+  it("retries the selected Supported Agent capability instead of only refetching stale state", async () => {
+    activation.data = unresolvedData();
+    activation.data.nextStep = "summary_provider";
+    activation.data.blocker = {
+      capability: "summary_readiness",
+      reason: "readiness_failed",
+      detail: "Agent probe failed",
+      remediation: { href: "/settings/llm" },
+    };
+    activation.data.readiness.summary.selected = { provider: "codex", model: "runtime-managed" };
+    activation.data.readiness.summary.state = "blocked";
+    activation.data.readiness.summary.disclosure = null;
+    const user = userEvent.setup();
+    renderRoute("en");
+
+    await user.click(screen.getByRole("button", { name: "Retry Summary Provider check" }));
+    expect(activation.probeSummaryProvider).toHaveBeenCalledOnce();
+    expect(activation.probeXai).not.toHaveBeenCalled();
+    expect(activation.updateConfig).not.toHaveBeenCalled();
+  });
+
+  it("retries only the selected xAI summary capability with exact remediation", async () => {
+    activation.data = unresolvedData();
+    activation.data.nextStep = "summary_provider";
+    activation.data.blocker = {
+      capability: "summary_readiness",
+      reason: "readiness_failed",
+      detail: "probe failed",
+      remediation: { href: "/settings/llm" },
+    };
+    activation.data.readiness.summary.state = "blocked";
+    activation.data.readiness.summary.remediation = { href: "/settings/llm" };
+    const user = userEvent.setup();
+    renderRoute("en");
+
+    expect(screen.getByRole("alert")).toHaveTextContent("readiness check failed");
+    await user.click(screen.getByRole("button", { name: "Retry Summary Provider check" }));
+    expect(activation.probeXai).toHaveBeenCalledWith({ capability: "summary" });
+    expect(activation.updateConfig).not.toHaveBeenCalled();
+    expect(screen.queryByText("Checking activation…")).not.toBeInTheDocument();
+  });
+
+  it("changes Summary Provider only from the explicit user choice", async () => {
+    activation.data = unresolvedData();
+    activation.data.nextStep = "summary_provider";
+    activation.data.blocker = {
+      capability: "summary_readiness",
+      reason: "readiness_required",
+      detail: "probe required",
+      remediation: { href: "/settings/llm" },
+    };
+    activation.data.readiness.summary.state = "blocked";
+    const user = userEvent.setup();
+    renderRoute("en");
+
+    await user.click(screen.getByRole("radio", { name: "Supported Agent" }));
+    expect(activation.updateConfig).toHaveBeenCalledWith({
+      key: "intelligence.summary",
+      value: { provider: "agent", model: "runtime-managed" },
+    });
+    expect(activation.probeXai).not.toHaveBeenCalled();
   });
 
   it("exits microphone blocking with exact macOS guidance and bounded retry", async () => {

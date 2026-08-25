@@ -13,6 +13,7 @@ import type { XaiCredentialManager } from "./xaiCredentials.js";
 import type { XaiTextClient } from "./xaiText.js";
 import type { XaiProviderReadiness } from "./routers/providers.js";
 import type { SearchResponse } from "./routers/search.js";
+import type { SupportedAgentSummaryAdapter } from "./summaryProviderReadiness.js";
 
 export interface AppContext {
   config: ConfigManager;
@@ -27,6 +28,7 @@ export interface AppContext {
   xaiCredentials?: XaiCredentialManager;
   xaiText?: XaiTextClient;
   xaiReadiness?: XaiProviderReadiness;
+  supportedAgentSummaryAdapter?: SupportedAgentSummaryAdapter;
   localSearch?: (
     input: { query: string; since?: string; kinds?: ("meeting_summary" | "meeting_transcript")[]; limit?: number },
     scriptDir: string,

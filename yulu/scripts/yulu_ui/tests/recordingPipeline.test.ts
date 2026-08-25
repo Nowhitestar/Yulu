@@ -56,6 +56,9 @@ describe("RecordingPipeline", () => {
     pollMs?: number;
     glossaryRows?: Array<{ term: string; canonical: string; scope: "prompt" | "replace" | "both" }>;
     xaiText?: boolean;
+    xaiSummaryDisclosure?: boolean;
+    supportedAgentAdapter?: boolean;
+    supportedAgentResultModel?: string;
     autoPrompts?: Array<{
       id: string;
       slug: string;
@@ -79,6 +82,9 @@ describe("RecordingPipeline", () => {
     }));
     writeFileSync(audioPath, Buffer.alloc(44));
     store = new HostStore(join(configDir, "host.sqlite"));
+    if (opts.xaiSummaryDisclosure === true || (opts.xaiText && opts.xaiSummaryDisclosure !== false)) {
+      store.recordSummaryDataPathDisclosure("xai", "xai-summary-v1");
+    }
     const legacyManualTask = opts.legacyManualTask ? store.enqueueRecording({
       idempotencyKey: "manual:legacy-combined-task",
       recordingStem: "Demo_20260711_120000",
@@ -113,6 +119,8 @@ describe("RecordingPipeline", () => {
       if (!opts.skipArtifactCommit) {
         const records = artifacts.commitFromWorkspace(task, {
           agentProvider: task.summaryProvider,
+          summaryProvider: task.summaryProvider,
+          summaryModel: task.summaryModel,
           committedBy: "yulu-host",
         });
         store!.recordArtifacts(task.id, leaseToken, records);
@@ -121,6 +129,10 @@ describe("RecordingPipeline", () => {
         stdout: "artifacts done",
         stderr: "session_id: artifact-session",
         nativeSessionId: "artifact-session",
+        summaryIdentity: opts.supportedAgentAdapter ? {
+          provider: "codex",
+          model: opts.supportedAgentResultModel ?? "runtime-managed",
+        } : undefined,
         audit: {
           ok: true,
           toolNames: ["mcp_yulu_artifact_recording_artifact_commit"],
@@ -179,6 +191,36 @@ describe("RecordingPipeline", () => {
       runNotionWorkflow,
       close: () => {},
     };
+    const supportedAgentGateway = {
+      ...gateway,
+      provider: "codex",
+      runArtifactWorkflow: async (input: Parameters<RecordingAgentGateway["runArtifactWorkflow"]>[0]) => ({
+        ...await runArtifactWorkflow(input),
+        summaryIdentity: {
+          provider: "codex",
+          model: opts.supportedAgentResultModel ?? "runtime-managed",
+        },
+      }),
+    };
+    const supportedAgentSummaryAdapter = opts.supportedAgentAdapter ? {
+      current: () => ({
+        capability: "summary" as const,
+        provider: "codex",
+        model: "runtime-managed",
+        status: "ready" as const,
+        testedAt: "2026-08-25T04:00:00.000Z",
+        detail: "ready",
+        credentialSource: "oauth",
+        disclosure: {
+          kind: "external" as const,
+          disclosureVersion: "codex-summary-v1",
+          data: "transcript_text" as const,
+          destination: "Codex service",
+        },
+      }),
+      probe: async () => { throw new Error("not used"); },
+      gateway: () => supportedAgentGateway,
+    } : undefined;
     const gatewayFactory = vi.fn(() => {
       if (opts.gatewayFactoryThrows) throw new Error("invalid runtime config");
       return gateway;
@@ -216,6 +258,7 @@ describe("RecordingPipeline", () => {
         transcribeFile: transcribe,
       },
       xaiText: opts.xaiText ? { request: xaiRequest } : undefined,
+      supportedAgentSummaryAdapter,
       gatewayFactory,
       pollMs: opts.pollMs ?? 60_000,
     });
@@ -397,7 +440,10 @@ describe("RecordingPipeline", () => {
   });
 
   it("never dispatches a task through a provider other than its pinned snapshot", async () => {
-    const { audioPath, configManager, runArtifactWorkflow, transcribe } = setup({ pollMs: 5 });
+    const { audioPath, configManager, runArtifactWorkflow, transcribe } = setup({
+      pollMs: 5,
+      xaiSummaryDisclosure: true,
+    });
     configManager.update("intelligence.summary", { provider: "xai", model: "grok-4.6-exact" });
 
     const { task } = pipeline!.enqueueCompletion({ audioPath, title: "Pinned xAI" });
@@ -410,6 +456,106 @@ describe("RecordingPipeline", () => {
 
     expect(transcribe).toHaveBeenCalledOnce();
     expect(runArtifactWorkflow).not.toHaveBeenCalled();
+  });
+
+  it("blocks undisclosed xAI transcript processing at the production summary boundary", async () => {
+    const { audioPath, configManager, xaiRequest, runArtifactWorkflow } = setup({
+      pollMs: 5,
+      xaiText: true,
+      xaiSummaryDisclosure: false,
+    });
+    configManager.update("intelligence.summary", { provider: "xai", model: "grok-pinned" });
+
+    const { task } = pipeline!.enqueueCompletion({ audioPath, title: "Undisclosed xAI" });
+    await vi.waitFor(() => expect(store!.getTask(task.id)).toMatchObject({
+      state: "awaiting_provider",
+      summaryProvider: "xai",
+      summaryModel: "grok-pinned",
+      error: expect.stringContaining("xAI Summary Data Path Disclosure"),
+    }));
+    expect(xaiRequest).not.toHaveBeenCalled();
+    expect(runArtifactWorkflow).not.toHaveBeenCalled();
+
+    store!.recordSummaryDataPathDisclosure("xai", "xai-summary-v1");
+    pipeline!.retry(task.id);
+    await vi.waitFor(() => expect(store!.getTask(task.id)?.state).toBe("completed"));
+    expect(xaiRequest).toHaveBeenCalledOnce();
+    expect(runArtifactWorkflow).not.toHaveBeenCalled();
+  });
+
+  it("binds a Supported Agent readiness adapter to the same production identity and disclosure", async () => {
+    const { audioPath, runArtifactWorkflow } = setup({
+      pollMs: 5,
+      supportedAgentAdapter: true,
+    });
+    writeFileSync(audioPath, wavWithAudio());
+
+    const { task } = pipeline!.enqueueCompletion({ audioPath, title: "Supported Agent" });
+    await vi.waitFor(() => expect(store!.getTask(task.id)).toMatchObject({
+      state: "awaiting_provider",
+      summaryProvider: "codex",
+      summaryModel: "runtime-managed",
+      error: expect.stringContaining("Codex service Data Path Disclosure"),
+    }));
+    expect(runArtifactWorkflow).not.toHaveBeenCalled();
+
+    store!.recordSummaryDataPathDisclosure("codex", "codex-summary-v1");
+    pipeline!.retry(task.id);
+    await vi.waitFor(() => expect(store!.getTask(task.id)?.state).toBe("completed"));
+    expect(runArtifactWorkflow).toHaveBeenCalledOnce();
+    expect(store!.listArtifacts(task.id).find((artifact) => artifact.kind === "summary")?.provenance)
+      .toMatchObject({
+        agentProvider: "codex",
+        summaryProvider: "codex",
+        summaryModel: "runtime-managed",
+      });
+    expect(store!.getCoreActivationEvidence()).toMatchObject({
+      taskId: task.id,
+      summaryProvider: "codex",
+      summaryModel: "runtime-managed",
+    });
+  });
+
+  it("rejects Supported Agent artifacts without the pinned model provenance", async () => {
+    const { audioPath, moviesDir, configDir } = setup({
+      pollMs: 5,
+      supportedAgentAdapter: true,
+      supportedAgentResultModel: "different-model",
+    });
+    writeFileSync(audioPath, wavWithAudio());
+    store!.recordSummaryDataPathDisclosure("codex", "codex-summary-v1");
+
+    const { task } = pipeline!.enqueueCompletion({ audioPath, title: "Wrong Agent model" });
+    await vi.waitFor(() => expect(store!.getTask(task.id)).toMatchObject({
+      state: "failed",
+      error: expect.stringContaining("different Summary Provider/model identity"),
+    }));
+    expect(existsSync(join(moviesDir, `${task.recordingStem}.summary.stale`))).toBe(true);
+    expect(existsSync(join(moviesDir, `${task.recordingStem}.summary.md`))).toBe(false);
+    expect(existsSync(join(configDir, "agent-tasks", task.id, "rejected-summary.md"))).toBe(true);
+    expect(store!.getCoreActivationEvidence()).toBeNull();
+  });
+
+  it("does not quarantine a prior summary when the mismatched Agent never committed this task", async () => {
+    const { audioPath, moviesDir, configDir } = setup({
+      pollMs: 5,
+      supportedAgentAdapter: true,
+      supportedAgentResultModel: "different-model",
+      skipArtifactCommit: true,
+    });
+    writeFileSync(audioPath, wavWithAudio());
+    const summaryPath = join(moviesDir, "Demo_20260711_120000.summary.md");
+    writeFileSync(summaryPath, "# Prior verified summary\n");
+    store!.recordSummaryDataPathDisclosure("codex", "codex-summary-v1");
+
+    const { task } = pipeline!.enqueueCompletion({ audioPath, title: "Preserve prior summary" });
+    await vi.waitFor(() => expect(store!.getTask(task.id)).toMatchObject({
+      state: "failed",
+      error: expect.stringContaining("different Summary Provider/model identity"),
+    }));
+    expect(readFileSync(summaryPath, "utf8")).toBe("# Prior verified summary\n");
+    expect(existsSync(join(moviesDir, `${task.recordingStem}.summary.stale`))).toBe(false);
+    expect(existsSync(join(configDir, "agent-tasks", task.id, "rejected-summary.md"))).toBe(false);
   });
 
   it("commits an automatic xAI summary from only the pinned instructions and committed transcript", async () => {

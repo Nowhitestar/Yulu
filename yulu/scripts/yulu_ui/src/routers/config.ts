@@ -40,6 +40,13 @@ export const configRouter = router({
     .mutation(async ({ ctx, input }) => {
       const result = ctx.config.update(input.key, input.value);
       const applyErrors: string[] = [];
+      if (input.key === "transcription.engine") ctx.xaiReadiness?.delete("transcription");
+      if (input.key === "intelligence.summary" || input.key.startsWith("intelligence.summary.")) {
+        ctx.xaiReadiness?.delete("summary");
+      }
+      if (input.key === "intelligence.conversation" || input.key.startsWith("intelligence.conversation.")) {
+        ctx.xaiReadiness?.delete("conversation");
+      }
       if (input.key === "status_agent.enabled" && typeof input.value === "boolean") {
         try {
           if (input.value) await ctx.launchctl.start("com.yulu.statusagent");

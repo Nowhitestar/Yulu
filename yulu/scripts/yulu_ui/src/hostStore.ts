@@ -113,6 +113,22 @@ export interface CloudTranscriptionConsent {
   acceptedAt: string;
 }
 
+export interface SummaryDataPathDisclosure {
+  provider: string;
+  disclosureVersion: string;
+  decision: "accepted" | "declined";
+  decidedAt: string;
+}
+
+function summaryDisclosureIdentity(provider: string, disclosureVersion: string) {
+  const normalized = provider.trim().toLowerCase();
+  const version = disclosureVersion.trim();
+  if (!/^[a-z0-9][a-z0-9._-]{0,99}$/.test(normalized) || !version || version.length > 100) {
+    throw new Error("Summary Data Path Disclosure identity is invalid");
+  }
+  return { provider: normalized, disclosureVersion: version };
+}
+
 export interface NotionDelivery {
   taskId: string;
   deliveryKey: string;
@@ -841,6 +857,51 @@ export class HostStore {
     return this.getCloudTranscriptionConsent()!;
   }
 
+  getSummaryDataPathDisclosure(provider: string): SummaryDataPathDisclosure | null {
+    const normalized = provider.trim().toLowerCase();
+    const row = this.db.prepare(`
+      SELECT provider, disclosure_version, decision, decided_at
+      FROM summary_data_path_disclosures WHERE provider = ?
+    `).get(normalized) as {
+      provider: string;
+      disclosure_version: string;
+      decision: "accepted" | "declined";
+      decided_at: string;
+    } | undefined;
+    return row ? {
+      provider: row.provider,
+      disclosureVersion: row.disclosure_version,
+      decision: row.decision,
+      decidedAt: row.decided_at,
+    } : null;
+  }
+
+  recordSummaryDataPathDisclosure(provider: string, disclosureVersion: string): SummaryDataPathDisclosure {
+    const identity = summaryDisclosureIdentity(provider, disclosureVersion);
+    this.db.prepare(`
+      INSERT INTO summary_data_path_disclosures (provider, disclosure_version, decision, decided_at)
+      VALUES (?, ?, 'accepted', ?)
+      ON CONFLICT(provider) DO UPDATE SET
+        disclosure_version = excluded.disclosure_version,
+        decision = excluded.decision,
+        decided_at = excluded.decided_at
+    `).run(identity.provider, identity.disclosureVersion, now());
+    return this.getSummaryDataPathDisclosure(identity.provider)!;
+  }
+
+  declineSummaryDataPathDisclosure(provider: string, disclosureVersion: string): SummaryDataPathDisclosure {
+    const identity = summaryDisclosureIdentity(provider, disclosureVersion);
+    this.db.prepare(`
+      INSERT INTO summary_data_path_disclosures (provider, disclosure_version, decision, decided_at)
+      VALUES (?, ?, 'declined', ?)
+      ON CONFLICT(provider) DO UPDATE SET
+        disclosure_version = excluded.disclosure_version,
+        decision = excluded.decision,
+        decided_at = excluded.decided_at
+    `).run(identity.provider, identity.disclosureVersion, now());
+    return this.getSummaryDataPathDisclosure(identity.provider)!;
+  }
+
   recordCoreActivationEvidence(evidence: CoreActivationEvidence): CoreActivationEvidence {
     const fingerprints = Object.values(evidence.artifacts);
     if (
@@ -1325,6 +1386,13 @@ export class HostStore {
         id INTEGER PRIMARY KEY CHECK(id = 1),
         disclosure_version TEXT NOT NULL,
         accepted_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS summary_data_path_disclosures (
+        provider TEXT PRIMARY KEY,
+        disclosure_version TEXT NOT NULL,
+        decision TEXT NOT NULL CHECK(decision IN ('accepted', 'declined')),
+        decided_at TEXT NOT NULL
       );
     `);
     const columns = this.db.prepare("PRAGMA table_info(agent_tasks)").all() as Array<{ name: string }>;

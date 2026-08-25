@@ -29,6 +29,13 @@ For xAI summaries, Yulu sends only the task's selected instructions and committe
 transcript, disables response storage, and saves validated Markdown through the
 same durable artifact transaction used by Agent-backed summaries.
 
+Core Activation names the exact selected Summary Provider and model. xAI is
+ready only after its current model and credential source pass a real capability
+probe and the current versioned Data Path Disclosure is accepted; OAuth or API
+key presence is not acceptance to send transcript text. Additional Agent Summary
+Providers remain blocked in the public activation flow until a Phase 12 adapter
+can prove the same identity, readiness, and disclosure contract.
+
 ## What you can do
 
 | Experience | What Yulu provides |

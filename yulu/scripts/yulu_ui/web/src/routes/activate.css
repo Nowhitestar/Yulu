@@ -49,6 +49,16 @@
 .activate-evidence dt { color: var(--fg-2); }
 .activate-evidence dd { margin: 0; overflow-wrap: anywhere; }
 
+.activate-summary dl {
+  display: grid;
+  gap: 8px;
+  margin: 20px 0;
+}
+
+.activate-summary dl div { display: grid; grid-template-columns: 160px minmax(0, 1fr); gap: 16px; }
+.activate-summary dt { color: var(--fg-2); }
+.activate-summary dd { margin: 0; overflow-wrap: anywhere; }
+
 .activate-readiness {
   display: grid;
   gap: 10px;

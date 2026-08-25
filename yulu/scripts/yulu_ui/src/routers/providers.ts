@@ -14,6 +14,7 @@ export interface XaiReadinessResult {
   testedAt: string | null;
   detail: string;
   credentialSource: XaiCredentialSource | null;
+  reason?: "invalid_model" | "readiness_failed";
 }
 
 export type XaiProviderReadiness = Map<XaiCapability, XaiReadinessResult>;
@@ -167,12 +168,16 @@ export const providersRouter = router({
       };
       readiness.set(capability, ready);
       return ready;
-    } catch {
+    } catch (error) {
+      const reason = /\(HTTP 404\)/.test(error instanceof Error ? error.message : "")
+        ? "invalid_model" as const
+        : "readiness_failed" as const;
       const failed: XaiReadinessResult = {
         ...started,
         status: "failed",
         testedAt: new Date().toISOString(),
         detail: `${capability} · ${model} 测试失败，请检查账号权限或模型设置后重试`,
+        reason,
       };
       readiness.set(capability, failed);
       return failed;

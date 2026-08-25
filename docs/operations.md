@@ -159,6 +159,14 @@ real-request probes. A green summary or conversation result does not establish
 transcription readiness (or vice versa). An API key is used only after the user
 explicitly saves it, and never as an automatic response to OAuth/probe failure.
 
+The Core Activation page shows the selected Summary Provider and model. An xAI
+summary requires both the current successful summary probe and the current
+versioned disclosure that transcript text goes to xAI. Authorization alone does
+not satisfy that disclosure. Declining it is durable and leaves xAI selected but
+blocked, with remediation at `/settings/llm`; there is no fallback. Supported
+Agent onboarding remains blocked until its adapter supplies the same explicit
+identity, readiness proof, gateway, and local-or-external disclosure metadata.
+
 Drag the six-dot handle to reposition the overlay. Use the down arrow to collapse
 it to the breathing Yulu logo, then click the logo to restore captions. Click the
 `录制中` control to stop; the overlay disappears after capture stops.
@@ -262,7 +270,9 @@ pinned provider/model and use the explicit retry action to resume that same
 snapshot. Changing provider settings does not rebind this task; create new work
 if a different provider or model is intended. The recording surface also links
 to AI Providers for future work and allows the current task to remain paused
-without issuing another request.
+without issuing another request. A missing or declined current Data Path
+Disclosure is also an `awaiting_provider` condition: accept the exact disclosure
+at `/settings/llm`, then retry the same pinned task.
 
 ### Task is `failed`
 

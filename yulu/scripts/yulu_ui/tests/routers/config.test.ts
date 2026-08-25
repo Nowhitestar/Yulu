@@ -77,6 +77,37 @@ describe("configRouter", () => {
     } finally { cleanup(); }
   });
 
+  it("invalidates process-scoped readiness when a capability provider or model changes", async () => {
+    const { ctx, cleanup } = makeCtx();
+    ctx.xaiReadiness = new Map([
+      ["summary", {
+        capability: "summary",
+        status: "ready",
+        model: "grok-old",
+        testedAt: "2026-08-25T04:00:00.000Z",
+        detail: "ready",
+        credentialSource: "oauth",
+      }],
+      ["conversation", {
+        capability: "conversation",
+        status: "ready",
+        model: "grok-conversation",
+        testedAt: "2026-08-25T04:00:00.000Z",
+        detail: "ready",
+        credentialSource: "oauth",
+      }],
+    ]);
+    try {
+      const caller = createCaller(configRouter, ctx);
+      await caller.update({
+        key: "intelligence.summary",
+        value: { provider: "xai", model: "grok-new" },
+      });
+      expect(ctx.xaiReadiness.has("summary")).toBe(false);
+      expect(ctx.xaiReadiness.has("conversation")).toBe(true);
+    } finally { cleanup(); }
+  });
+
   it("returns an apply error when transcription model synchronization fails", async () => {
     const { ctx, cleanup } = makeCtx();
     ctx.localCaption = { syncSelection: vi.fn().mockRejectedValue(new Error("model warmup failed")) } as never;

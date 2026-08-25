@@ -124,6 +124,44 @@ describe("HostStore", () => {
     expect(columns.map((column) => column.name)).toEqual(["id", "disclosure_version", "accepted_at"]);
   });
 
+  it("persists summary Data Path Disclosure separately by provider", () => {
+    createStore();
+
+    expect(store!.getSummaryDataPathDisclosure("xai")).toBeNull();
+    expect(store!.recordSummaryDataPathDisclosure("xai", "xai-summary-v1")).toEqual({
+      provider: "xai",
+      disclosureVersion: "xai-summary-v1",
+      decision: "accepted",
+      decidedAt: expect.any(String),
+    });
+    expect(store!.recordSummaryDataPathDisclosure("codex", "codex-summary-v2")).toEqual({
+      provider: "codex",
+      disclosureVersion: "codex-summary-v2",
+      decision: "accepted",
+      decidedAt: expect.any(String),
+    });
+    expect(store!.declineSummaryDataPathDisclosure("xai", "xai-summary-v1")).toEqual({
+      provider: "xai",
+      disclosureVersion: "xai-summary-v1",
+      decision: "declined",
+      decidedAt: expect.any(String),
+    });
+
+    const dbPath = join(root, "host.sqlite");
+    store!.close();
+    store = new HostStore(dbPath);
+    expect(store.getSummaryDataPathDisclosure("xai")).toMatchObject({
+      provider: "xai",
+      disclosureVersion: "xai-summary-v1",
+      decision: "declined",
+      decidedAt: expect.any(String),
+    });
+    expect(store.getSummaryDataPathDisclosure("codex")).toMatchObject({
+      provider: "codex",
+      disclosureVersion: "codex-summary-v2",
+    });
+  });
+
   it("deduplicates recording completion by idempotency key", () => {
     createStore();
     const first = enqueue();

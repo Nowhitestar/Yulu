@@ -31,10 +31,13 @@ function hasProviderProvenance(candidate: CoreActivationCandidate): boolean {
   if (!summary || !transcriptionProvider?.trim() || !task.summaryProvider.trim() || !task.summaryModel.trim()) {
     return false;
   }
-  return task.summaryProvider === "xai"
-    ? summary.provenance.summaryProvider === task.summaryProvider &&
-        summary.provenance.summaryModel === task.summaryModel
-    : summary.provenance.agentProvider === task.summaryProvider;
+  const summaryIdentityMatches = summary.provenance.summaryProvider === task.summaryProvider &&
+    summary.provenance.summaryModel === task.summaryModel;
+  if (task.summaryProvider === "xai") return summaryIdentityMatches;
+  if (summary.provenance.agentProvider !== task.summaryProvider) return false;
+  if (summaryIdentityMatches) return true;
+  return task.summaryProvider === "hermes" &&
+    summary.provenance.summaryProvider === undefined && summary.provenance.summaryModel === undefined;
 }
 
 function isSameFile(left: string, right: string): boolean {
