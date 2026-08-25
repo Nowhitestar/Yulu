@@ -25,7 +25,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 8: Multi-Agent Providers (Codex + OpenClaw)** - Generalize the proven ClaudeCode provider to complete the multi-agent-from-v1 lock (completed 2026-05-30)
 - [x] **Phase 9: Release Safety** - Make stable install/update version-paired, macOS-13-compatible, recording-safe, and free of optional dependency blockers (completed 2026-08-24)
 - [x] **Phase 10: Provider Model & xAI Foundation** - Establish independent capability providers and prove xAI summary and cited local-meeting conversation end to end (accepted via Ask Matt #120-#125 on 2026-08-25)
-- [ ] **Phase 11: State-Driven Core Activation** - Guide every install cohort to a real saved recording, transcript, and summary
+- [x] **Phase 11: State-Driven Core Activation** - Guide every install cohort to a real saved recording, transcript, and summary (accepted via Ask Matt #126-#132 on 2026-08-25)
 - [ ] **Phase 12: Agent Runtime & Gateway Connections** - Connect Codex, Claude Code, Hermes, OpenClaw, and advanced CLIProxyAPI paths with correct credential ownership
 - [ ] **Phase 13: Optional Capabilities & Release Acceptance** - Make calendar, sharing, and conversation setup reachable, align public guidance, and validate the real release
 
@@ -316,6 +316,8 @@ Decimal phases appear between their surrounding integers in numeric order.
 **Goal**: New, upgrading, and developer-install users reach the same verifiable first success through a flow driven by actual capability state.
 **Depends on**: Phase 10
 **Requirements**: ACT-01, ACT-02, ACT-03, ACT-04
+**Implementation source of truth**: GitHub spec #126 and Ask Matt tracer-bullet tickets #127-#132. `.planning` remains a historical and milestone reference rather than the execution queue.
+**Status**: Accepted on 2026-08-25 against installed candidate `78fed41`; checkout, isolated browser, package, install, restart, health, authorization, and production Core Activation evidence all passed. Complete public Agent onboarding remains Phase 12.
 **Success Criteria** (what must be TRUE):
 
   1. New, upgrading, and developer-install users enter one activation flow that skips every capability already proven ready
@@ -323,7 +325,7 @@ Decimal phases appear between their surrounding integers in numeric order.
   3. Core Activation completes only after a real recording is saved with its transcript and summary through the production path
   4. A blocked step names the failed capability and opens the exact configuration surface needed to resolve it
 
-**Plans**: TBD
+**Tickets**: 6/6 complete (#127 evidence, #128 entry/resume, #129 transcription consent, #130 summary readiness, #131 production activation, #132 recovery)
 **UI hint**: yes
 
 ### Phase 12: Agent Runtime & Gateway Connections
@@ -373,7 +375,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 7. Seamless Auto-Migration | 3/3 | Complete    | 2026-05-30 |
 | 8. Multi-Agent Providers | 1/1 | Complete    | 2026-05-30 |
 | 9. Release Safety | 3/3 | Complete | 2026-08-24 |
-| 10. Provider Model & xAI Foundation | 0/5 | Planned | - |
-| 11. State-Driven Core Activation | 0/TBD | Not started | - |
+| 10. Provider Model & xAI Foundation | 5/5 Ask Matt tickets | Complete | 2026-08-25 |
+| 11. State-Driven Core Activation | 6/6 Ask Matt tickets | Complete | 2026-08-25 |
 | 12. Agent Runtime & Gateway Connections | 0/TBD | Not started | - |
 | 13. Optional Capabilities & Release Acceptance | 0/TBD | Not started | - |

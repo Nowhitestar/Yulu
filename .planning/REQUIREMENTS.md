@@ -15,10 +15,10 @@
 
 ### Core Activation (ACT)
 
-- [ ] **ACT-01**: New, upgrading, and developer-install users see one state-driven activation flow that skips steps already proven ready
-- [ ] **ACT-02**: A user can choose local transcription or explicitly consent to xAI cloud transcription after seeing privacy and cost implications
-- [ ] **ACT-03**: Core Activation completes only after a real recording produces saved audio, transcript, and summary through the production save path
-- [ ] **ACT-04**: A failed activation step explains the blocking capability and links directly to the relevant configuration surface
+- [x] **ACT-01**: New, upgrading, and developer-install users see one state-driven activation flow that skips steps already proven ready
+- [x] **ACT-02**: A user can choose local transcription or explicitly consent to xAI cloud transcription after seeing privacy and cost implications
+- [x] **ACT-03**: Core Activation completes only after a real recording produces saved audio, transcript, and summary through the production save path
+- [x] **ACT-04**: A failed activation step explains the blocking capability and links directly to the relevant configuration surface
 
 ### Provider Model (PRVD)
 
@@ -94,10 +94,10 @@
 | XAI-02 | Phase 10 | Complete |
 | XAI-03 | Phase 10 | Complete |
 | XAI-04 | Phase 10 | Complete |
-| ACT-01 | Phase 11 | Pending |
-| ACT-02 | Phase 11 | Pending |
-| ACT-03 | Phase 11 | Pending |
-| ACT-04 | Phase 11 | Pending |
+| ACT-01 | Phase 11 | Complete |
+| ACT-02 | Phase 11 | Complete |
+| ACT-03 | Phase 11 | Complete |
+| ACT-04 | Phase 11 | Complete |
 | AGRT-01 | Phase 12 | Pending |
 | AGRT-02 | Phase 12 | Pending |
 | AGRT-03 | Phase 12 | Pending |

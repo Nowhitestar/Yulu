@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v0.6
 milestone_name: milestone
 status: executing
-stopped_at: Ask Matt Phase 10 spec and issues 120-125 complete — ready for the Phase 11 boundary
-last_updated: "2026-08-24T18:11:33.000Z"
-last_activity: 2026-08-25 -- Phase 10 passed installed xAI acceptance and parent spec #120 closed
+stopped_at: Ask Matt Phase 11 spec and issues 126-132 complete — ready for the Phase 12 boundary
+last_updated: "2026-08-25T09:28:09.000Z"
+last_activity: 2026-08-25 -- Phase 11 passed installed Core Activation acceptance at 78fed41
 progress:
   total_phases: 13
-  completed_phases: 10
+  completed_phases: 11
   total_plans: 37
   completed_plans: 32
-  percent: 77
+  percent: 85
 ---
 
 # Project State
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-08-23)
 
 **Core value:** A new user can install Yulu, record a real meeting, and obtain saved audio, transcript, and summary without installing a specific agent.
-**Current focus:** Phase 11 boundary — state-driven Core Activation is not yet specified for execution
+**Current focus:** Phase 12 boundary — Agent Runtime & Gateway Connections
 
 ## Current Position
 
-Phase: 10 (Provider Model & xAI Foundation) — COMPLETE
-Plan: Ask Matt parent #120 and tracer-bullet tickets #121-#125 complete; no Phase 10 implementation frontier remains
-Status: Phase boundary; ready to discuss and specify Phase 11 through Ask Matt
-Last activity: 2026-08-25 -- Installed candidate `d7cfcef` passed five live evidence groups, full gates, and dual review; #120/#125 closed
+Phase: 11 (State-Driven Core Activation) — COMPLETE
+Plan: Ask Matt parent #126 and tracer-bullet tickets #127-#132 complete; no Phase 11 implementation frontier remains
+Status: Phase boundary; ready to discuss and specify Phase 12 through Ask Matt
+Last activity: 2026-08-25 -- Installed candidate `78fed41` passed checkout, browser, package, install/restart, authorization, health, production evidence, and dual review
 
 ## Performance Metrics
 
@@ -100,6 +100,9 @@ Decisions are logged in PROJECT.md Key Decisions table.
 Recent decisions affecting current work:
 
 - [Workflow]: Phase 10 implementation truth is GitHub spec #120 and tracer-bullet tickets #121-#125. GSD Phase 10 plans remain reference material and do not drive execution unless explicitly requested.
+- [Workflow]: Phase 11 implementation truth is GitHub spec #126 and tracer-bullet tickets #127-#132. `.planning` remains reference material; Phase 12 must continue through Ask Matt unless the user explicitly requests GSD.
+- [Phase 11]: Core Activation Evidence is durable verified fact, not current health; audio, transcript, summary, integrity, and provider provenance establish it, while later source deletion is explained without revocation.
+- [Phase 11]: Provider authorization and capability-specific data disclosure remain separate; retries preserve task provider/model/credential source and explicit replacements create a new attempt without silent fallback.
 - [Init]: Build the cross-platform abstraction layer now (macOS-only impl) — avoid deepening lock-in.
 - [Init]: Install model = agent-orchestrated provisioning (spike to validate WHO calls it — Phase 6).
 - [Init]: Cloud sync = configurable data folder (Obsidian model), not a custom backend.
@@ -147,8 +150,8 @@ Recent decisions affecting current work:
 - [Phase 04]: [04-03] TranscriptionSection extended (D-03/D-04/D-05, D-07 extend-not-replace): mode radios (local default/cloud-fallback/cloud-priority -> transcription.mode) + cloud COMMAND via CommandEditor (-> transcription.cloud_command, llm.command trust model, NO key) + detected-model selector (trpc.capabilities.detected_models -> transcription.local_model_path); both new keys map to restart:sttdaemon in RESTART_MAP
 - [Phase 04]: [04-03] Keyless-cloud guardrail (T-04-KEY, HIGH) enforced by TWO tests: source-grep over config.ts (no api_key/token/secret/password identifier) AND a rendered no-key invariant in TranscriptionSection.test.tsx (no type=password, no api-key/token/secret label/placeholder/text). cloud_command is a SEPARATE key from pre-existing transcription.command (classify longest-prefix match, no collision)
 - [Phase 04]: [04-03] Model-selector persists to one deterministic key transcription.local_model_path (list_models returns whisper model FILES .bin/.gguf/.safetensors, matching existing Local-model-path filter=bin row); empty detected_models -> disabled 'no models detected' select. Recurring trap re-hit: adding a new trpc query (detected_models) to a section crashes tests/web/routes/settings.test.tsx until its mock path is added (deviation Rule 1/3)
-- [Phase 04]: [04-04] Onboarding first-run gating uses BOTH localStorage (synchronous short-circuit, no-flash) + config.onboarding_dismissed (durable): dismissed = localFlag || cfg.onboarding_dismissed === true -> renders null (never forced, SET-03)
-- [Phase 04]: [04-04] Onboarding Skip hides immediately via local state then awaits config.update (skip-without-complete); a config-write failure can't re-show it because localStorage already gates it. Mounted self-gating in RootLayout (sibling of Pill), not a route
+- [Phase 04, superseded by Phase 11]: The retired walkthrough used localStorage plus `config.onboarding_dismissed`; current onboarding truth is durable `/activate` journey/evidence state and must not be inferred from that legacy flag.
+- [Phase 04, superseded by Phase 11]: The retired RootLayout walkthrough skip behavior is historical only; current defer/resume behavior is persisted by the Activation Journey.
 - [Phase ?]: [05-01] runtime_dir() LOCKED machine-local (never reads audio.output_dir), stays ~/.config/yulu — NOT relocated (Pitfall 1: churn vs 38+ callers); data_dir() is the only configurable content root
 - [Phase ?]: [05-01] Runtime lock framed as SQLite-WAL corruption + file eviction, never 'sockets can't exist in a synced folder' (Pitfall 3: a socket CAN bind under iCloud, verified on-device)
 - [Phase ?]: [05-01] 3 content literals (search CORPUS_ROOT, voicemail VOICEMAIL_DIR_DEFAULT, record_audio output_dir fallback) route via _resolve_data_dir(); SEARCH_DB_PATH stays on runtime_dir(); helpers degrade to historical literal off-Darwin; assert_runtime_not_synced lazily imports cloud_detect (Plan 03 same-wave) and no-ops until it lands
@@ -235,5 +238,5 @@ Items acknowledged and carried forward from previous milestone close:
 ## Session Continuity
 
 Last session: 2026-08-25
-Stopped at: Phase 10 accepted via Ask Matt #120-#125 — ready for the Phase 11 boundary
+Stopped at: Phase 11 accepted via Ask Matt #126-#132 — ready for the Phase 12 boundary
 Resume file: None
