@@ -80,6 +80,7 @@
 }
 
 .activate-action:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.activate-action:disabled { cursor: wait; opacity: 0.65; }
 
 .activate-completed-note {
   margin-top: 24px;

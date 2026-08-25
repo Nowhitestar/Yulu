@@ -103,6 +103,11 @@ export interface CoreActivationCandidate {
   transcriptionProvider: string | null;
 }
 
+export interface ActivationJourneyState {
+  automaticEntryAcknowledgedAt: string | null;
+  deferredAt: string | null;
+}
+
 export interface NotionDelivery {
   taskId: string;
   deliveryKey: string;
@@ -768,6 +773,45 @@ export class HostStore {
     } : null;
   }
 
+  getActivationJourneyState(): ActivationJourneyState {
+    const row = this.db.prepare(`
+      SELECT automatic_entry_acknowledged_at, deferred_at
+      FROM activation_journey_state WHERE id = 1
+    `).get() as {
+      automatic_entry_acknowledged_at: string | null;
+      deferred_at: string | null;
+    } | undefined;
+    return {
+      automaticEntryAcknowledgedAt: row?.automatic_entry_acknowledged_at ?? null,
+      deferredAt: row?.deferred_at ?? null,
+    };
+  }
+
+  acknowledgeAutomaticActivationEntry(): {
+    acknowledged: boolean;
+    state: ActivationJourneyState;
+  } {
+    const result = this.db.prepare(`
+      INSERT INTO activation_journey_state (id, automatic_entry_acknowledged_at)
+      SELECT 1, ?
+      WHERE NOT EXISTS (SELECT 1 FROM core_activation_evidence WHERE id = 1)
+      ON CONFLICT(id) DO UPDATE SET automatic_entry_acknowledged_at = excluded.automatic_entry_acknowledged_at
+      WHERE activation_journey_state.automatic_entry_acknowledged_at IS NULL
+        AND activation_journey_state.deferred_at IS NULL
+    `).run(now());
+    return { acknowledged: result.changes === 1, state: this.getActivationJourneyState() };
+  }
+
+  deferActivationJourney(): ActivationJourneyState {
+    this.db.prepare(`
+      INSERT INTO activation_journey_state (id, deferred_at)
+      VALUES (1, ?)
+      ON CONFLICT(id) DO UPDATE SET deferred_at = excluded.deferred_at
+      WHERE activation_journey_state.deferred_at IS NULL
+    `).run(now());
+    return this.getActivationJourneyState();
+  }
+
   recordCoreActivationEvidence(evidence: CoreActivationEvidence): CoreActivationEvidence {
     const fingerprints = Object.values(evidence.artifacts);
     if (
@@ -1240,6 +1284,12 @@ export class HostStore {
         summary_sha256 TEXT NOT NULL,
         summary_bytes INTEGER NOT NULL,
         completed_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS activation_journey_state (
+        id INTEGER PRIMARY KEY CHECK(id = 1),
+        automatic_entry_acknowledged_at TEXT,
+        deferred_at TEXT
       );
     `);
     const columns = this.db.prepare("PRAGMA table_info(agent_tasks)").all() as Array<{ name: string }>;

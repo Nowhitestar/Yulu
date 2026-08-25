@@ -34,6 +34,7 @@ export const en: Messages = {
   "nav.recordings": "Recordings",
   "nav.prompts": "Templates",
   "nav.glossary": "Glossary",
+  "nav.activate": "Activate Yulu",
   "nav.settings": "Settings",
   "nav.health": "Health",
   "nav.health.aria": "Daemon health: {state}",
@@ -106,8 +107,8 @@ export const en: Messages = {
 
   // ---- Core Activation ----
   "activation.loading": "Checking activation…",
-  "activation.unresolved.title": "Core Activation is not verified yet",
-  "activation.unresolved.body": "Yulu has not found a completed production recording with verifiable audio, transcript, summary, and provider evidence.",
+  "activation.unresolved.title": "Start your Activation Journey",
+  "activation.unresolved.body": "Core Activation is not verified yet. Finish a real production recording with saved audio, transcript, summary, and provider evidence, or continue using Yulu and return later.",
   "activation.activated.status": "Core Activation verified",
   "activation.activated.title": "Yulu is activated",
   "activation.activated.body": "A completed production recording established durable Core Activation Evidence. Later provider changes or artifact cleanup do not revoke it.",
@@ -120,6 +121,8 @@ export const en: Messages = {
   "activation.action.note": "Open completed note",
   "activation.action.transcription": "Transcription settings",
   "activation.action.providers": "AI Provider settings",
+  "activation.action.defer": "Do this later",
+  "activation.defer.error": "Yulu couldn't save your choice. Try again before leaving this page.",
 
   // ---- Voice input ----
   "voiceInput.title": "Voice Input",
@@ -393,6 +396,8 @@ export const en: Messages = {
   "settings.hotkey.statusAgent.label": "Status agent enabled",
   "settings.hotkey.themeMode.label": "Appearance",
   "settings.hotkey.theme.label": "UI theme",
+  "settings.activation.label": "Activation Journey",
+  "settings.activation.open": "Open Activation Journey",
 
   // ---- Settings: Voice input section ----
   "settings.voice.heading": "Voice Input",
@@ -850,6 +855,7 @@ export const zh: Messages = {
   "nav.recordings": "录音",
   "nav.prompts": "模板",
   "nav.glossary": "术语表",
+  "nav.activate": "激活 Yulu",
   "nav.settings": "设置",
   "nav.health": "健康状态",
   "nav.health.aria": "守护进程健康状态：{state}",
@@ -922,8 +928,8 @@ export const zh: Messages = {
 
   // ---- Core Activation ----
   "activation.loading": "正在检查激活状态…",
-  "activation.unresolved.title": "核心激活尚未验证",
-  "activation.unresolved.body": "Yulu 尚未找到同时具备可验证录音、转写、摘要与提供商证据的已完成生产录音。",
+  "activation.unresolved.title": "开始激活 Yulu",
+  "activation.unresolved.body": "核心激活尚未验证。请完成一次真实生产录音并保存音频、转写、摘要与提供商证据；也可以先使用 Yulu，稍后再回来完成。",
   "activation.activated.status": "核心激活证据已验证",
   "activation.activated.title": "Yulu 已激活",
   "activation.activated.body": "一次已完成的生产录音建立了持久的核心激活证据。之后更改提供商或清理产物都不会撤销激活。",
@@ -936,6 +942,8 @@ export const zh: Messages = {
   "activation.action.note": "打开已完成笔记",
   "activation.action.transcription": "转写设置",
   "activation.action.providers": "AI 提供商设置",
+  "activation.action.defer": "稍后再做",
+  "activation.defer.error": "Yulu 无法保存你的选择。请重试后再离开此页面。",
 
   // ---- Voice input ----
   "voiceInput.title": "语音输入",
@@ -1207,6 +1215,8 @@ export const zh: Messages = {
   "settings.hotkey.statusAgent.label": "启用菜单栏 Agent",
   "settings.hotkey.themeMode.label": "明暗模式",
   "settings.hotkey.theme.label": "界面主题",
+  "settings.activation.label": "激活流程",
+  "settings.activation.open": "打开激活流程",
 
   // ---- Settings: Voice input section ----
   "settings.voice.heading": "语音输入",

@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { Link } from "react-router";
+import { useEffect, useRef, useState } from "react";
+import { Link, useNavigate } from "react-router";
 import { CheckCircle2 } from "lucide-react";
 import { MarkdownView } from "../components/MarkdownView.js";
 import { useLang, useT } from "../i18n/LanguageProvider.js";
@@ -10,9 +10,16 @@ export const handle = { breadcrumb: "breadcrumb.activate", filters: null };
 
 export function Activate() {
   const activation = trpc.activation.status.useQuery();
+  const defer = trpc.activation.defer.useMutation();
   const [noteOpen, setNoteOpen] = useState(false);
+  const [deferFailed, setDeferFailed] = useState(false);
+  const titleRef = useRef<HTMLHeadingElement>(null);
+  const navigate = useNavigate();
   const { lang } = useLang();
   const t = useT();
+  useEffect(() => {
+    if (activation.data) titleRef.current?.focus();
+  }, [activation.data]);
   if (activation.isPending) {
     return <section className="activate-page" aria-live="polite">{t("activation.loading")}</section>;
   }
@@ -20,8 +27,31 @@ export function Activate() {
     return (
       <section className="activate-page" aria-labelledby="activate-title">
         <div className="activate-card">
-          <h1 id="activate-title">{t("activation.unresolved.title")}</h1>
+          <h1 id="activate-title" ref={titleRef} tabIndex={-1}>{t("activation.unresolved.title")}</h1>
           <p>{t("activation.unresolved.body")}</p>
+          <div className="activate-actions">
+            <Link className="activate-action primary" to="/settings/transcription">
+              {t("activation.action.transcription")}
+            </Link>
+            <Link className="activate-action" to="/settings/llm">
+              {t("activation.action.providers")}
+            </Link>
+            <button
+              type="button"
+              className="activate-action"
+              disabled={defer.isPending}
+              onClick={() => {
+                setDeferFailed(false);
+                void defer.mutateAsync().then(
+                  () => navigate("/agent-console", { replace: true }),
+                  () => setDeferFailed(true),
+                );
+              }}
+            >
+              {t("activation.action.defer")}
+            </button>
+          </div>
+          {deferFailed && <p role="alert">{t("activation.defer.error")}</p>}
         </div>
       </section>
     );
@@ -40,7 +70,7 @@ export function Activate() {
           <CheckCircle2 size={18} aria-hidden="true" />
           {t("activation.activated.status")}
         </div>
-        <h1 id="activate-title">{t("activation.activated.title")}</h1>
+        <h1 id="activate-title" ref={titleRef} tabIndex={-1}>{t("activation.activated.title")}</h1>
         <p className="activate-intro">{t("activation.activated.body")}</p>
 
         <dl className="activate-evidence" aria-label={t("activation.evidence.aria")}>

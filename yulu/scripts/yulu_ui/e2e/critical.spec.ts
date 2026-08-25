@@ -5,13 +5,80 @@ test.describe.configure({ mode: "serial" });
 
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => localStorage.setItem("yulu_ui.lang", "en"));
+  await page.route("**/trpc/activation.status*", (route) => route.fulfill({
+    status: 200,
+    contentType: "application/json",
+    body: JSON.stringify({
+      result: {
+        data: {
+          state: "activated",
+          evidence: {
+            recordingStem: "e2e-fixture",
+            taskId: "e2e-task",
+            transcriptionProvider: "e2e",
+            summaryProvider: "e2e",
+            summaryModel: "e2e",
+            artifacts: {
+              audio: { sha256: "a".repeat(64), bytes: 1 },
+              transcript: { sha256: "b".repeat(64), bytes: 1 },
+              summary: { sha256: "c".repeat(64), bytes: 1 },
+            },
+            completedAt: "2026-08-25T00:00:00.000Z",
+          },
+          sourceArtifactAvailable: false,
+          completedNoteAvailable: false,
+          completedNote: null,
+        },
+      },
+    }),
+  }));
+  await page.route("**/trpc/activation.acknowledgeAutomaticEntry*", (route) => route.abort("blockedbyclient"));
+  await page.route("**/trpc/activation.defer*", (route) => route.abort("blockedbyclient"));
 });
 
-test("shell loads + redirects / to the Agent Console workspace", async ({ page }) => {
+test("shell sends an unresolved environment through /activate once", async ({ page }) => {
+  let acknowledgementRequests = 0;
+  await page.unroute("**/trpc/activation.status*");
+  await page.unroute("**/trpc/activation.acknowledgeAutomaticEntry*");
+  await page.route("**/trpc/activation.status*", (route) => route.fulfill({
+    status: 200,
+    contentType: "application/json",
+    body: JSON.stringify({
+      result: {
+        data: {
+          state: "unresolved",
+          evidence: null,
+          journey: {
+            automaticEntryAcknowledgedAt: null,
+            deferredAt: null,
+            shouldAutoEnter: true,
+          },
+        },
+      },
+    }),
+  }));
+  await page.route("**/trpc/activation.acknowledgeAutomaticEntry*", (route) => {
+    acknowledgementRequests += 1;
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        result: {
+          data: {
+            acknowledged: true,
+            journey: {
+              automaticEntryAcknowledgedAt: "2026-08-25T00:00:00.000Z",
+              deferredAt: null,
+            },
+          },
+        },
+      }),
+    });
+  });
   await page.goto("/");
-  await expect(page).toHaveURL(/\/agent-console$/);
-  await expect(page.getByRole("tablist", { name: "Agent Console mode" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "问会议" })).toBeVisible();
+  await expect(page).toHaveURL(/\/activate$/);
+  await expect(page.getByRole("heading", { name: "Start your Activation Journey" })).toBeVisible();
+  expect(acknowledgementRequests).toBe(1);
 });
 
 test("Sidebar: single Recordings entry, no Voicemails/Meetings, no counts", async ({ page }) => {

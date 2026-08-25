@@ -2,6 +2,7 @@ import { ThemePresetPicker } from "../ThemePresetPicker.js";
 import { ThemeToggle } from "../ThemeToggle.js";
 import { LanguageToggle } from "../LanguageToggle.js";
 import { useT } from "../../i18n/LanguageProvider.js";
+import { Link } from "react-router";
 
 export function HotkeySection() {
   const t = useT();
@@ -23,6 +24,13 @@ export function HotkeySection() {
       <div className="row row--wide">
         <div className="row-label">{t("settings.hotkey.theme.label")}</div>
         <div className="row-value"><ThemePresetPicker /></div>
+        <div className="row-status" />
+      </div>
+      <div className="row">
+        <div className="row-label">{t("settings.activation.label")}</div>
+        <div className="row-value">
+          <Link to="/activate">{t("settings.activation.open")}</Link>
+        </div>
         <div className="row-status" />
       </div>
     </section>

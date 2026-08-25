@@ -5,6 +5,7 @@ import { createMemoryRouter, RouterProvider } from "react-router";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ThemeProvider } from "../../web/src/theme.js";
 import { WsProvider } from "../../web/src/ws.js";
+import { LanguageProvider } from "../../web/src/i18n/LanguageProvider.js";
 
 // Stub trpc so every router call returns an empty/safe payload — the goal is mount-without-crash
 vi.mock("../../web/src/trpc.js", () => {
@@ -49,6 +50,7 @@ import { SettingsLayout } from "../../web/src/routes/settings.js";
 import { Health }    from "../../web/src/routes/health.js";
 import { AgentConsole } from "../../web/src/routes/agent-console.js";
 import { VoiceInput } from "../../web/src/routes/voice-input.js";
+import { Activate } from "../../web/src/routes/activate.js";
 
 const ROUTES: { name: string; Component: React.ComponentType }[] = [
   { name: "agent-console",          Component: AgentConsole },
@@ -59,6 +61,7 @@ const ROUTES: { name: string; Component: React.ComponentType }[] = [
   { name: "settings",               Component: SettingsLayout },
   { name: "health",                 Component: Health },
   { name: "voice-input",            Component: VoiceInput },
+  { name: "activate",               Component: Activate },
 ];
 
 describe("placeholder routes smoke", () => {
@@ -68,18 +71,20 @@ describe("placeholder routes smoke", () => {
     expect(() =>
       render(
         <ThemeProvider>
-          <QueryClientProvider client={qc}>
-            <WsProvider>
-              <RouterProvider router={router} />
-            </WsProvider>
-          </QueryClientProvider>
+          <LanguageProvider>
+            <QueryClientProvider client={qc}>
+              <WsProvider>
+                <RouterProvider router={router} />
+              </WsProvider>
+            </QueryClientProvider>
+          </LanguageProvider>
         </ThemeProvider>,
       ),
     ).not.toThrow();
   });
 
-  it("has exactly 8 routes", () => {
-    expect(ROUTES).toHaveLength(8);
+  it("has exactly 9 routes", () => {
+    expect(ROUTES).toHaveLength(9);
   });
 
   it("keeps the three voice-input reference cards and removes redundant action controls", () => {

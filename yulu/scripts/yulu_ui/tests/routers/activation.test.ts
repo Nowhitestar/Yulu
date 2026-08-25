@@ -154,7 +154,118 @@ describe("activation router", () => {
     );
     writeFileSync(join(moviesDir, `${task.recordingStem}.summary.stale`), "stale\n");
 
-    await expect(caller.status()).resolves.toEqual({ state: "unresolved", evidence: null });
+    await expect(caller.status()).resolves.toMatchObject({ state: "unresolved", evidence: null });
     expect(host!.getCoreActivationEvidence()).toBeNull();
+  });
+
+  it("acknowledges automatic entry once across Host restarts", async () => {
+    const { moviesDir, artifacts, caller } = setup();
+
+    await expect(caller.status()).resolves.toMatchObject({
+      state: "unresolved",
+      journey: {
+        shouldAutoEnter: true,
+        automaticEntryAcknowledgedAt: null,
+        deferredAt: null,
+      },
+    });
+    await expect(caller.acknowledgeAutomaticEntry()).resolves.toMatchObject({
+      acknowledged: true,
+      journey: { shouldAutoEnter: false },
+    });
+    await expect(caller.acknowledgeAutomaticEntry()).resolves.toMatchObject({
+      acknowledged: false,
+      journey: { shouldAutoEnter: false },
+    });
+
+    host!.close();
+    host = new HostStore(join(root, "host.sqlite"));
+    const restartedCaller = createCaller(activationRouter, {
+      host,
+      artifacts,
+      paths: { moviesDir },
+    } as unknown as AppContext);
+    await expect(restartedCaller.status()).resolves.toMatchObject({
+      state: "unresolved",
+      journey: {
+        shouldAutoEnter: false,
+        automaticEntryAcknowledgedAt: expect.any(String),
+        deferredAt: null,
+      },
+    });
+  });
+
+  it("does not acknowledge automatic entry after Core Activation is proven", async () => {
+    const { moviesDir, artifacts, caller } = setup();
+    completeRecording(
+      moviesDir,
+      artifacts,
+      "Activated_20260711_120000",
+      "2026-07-11T12:05:00.000Z",
+    );
+    await expect(caller.status()).resolves.toMatchObject({ state: "activated" });
+
+    await expect(caller.acknowledgeAutomaticEntry()).resolves.toMatchObject({
+      acknowledged: false,
+      journey: { automaticEntryAcknowledgedAt: null },
+    });
+  });
+
+  it("persists Activation Deferral without claiming Core Activation", async () => {
+    const { moviesDir, artifacts, caller } = setup();
+
+    const firstDeferral = await caller.defer();
+    expect(firstDeferral).toMatchObject({
+      journey: {
+        shouldAutoEnter: false,
+        automaticEntryAcknowledgedAt: null,
+        deferredAt: expect.any(String),
+      },
+    });
+    await expect(caller.defer()).resolves.toMatchObject({
+      journey: { deferredAt: firstDeferral.journey.deferredAt },
+    });
+    await expect(caller.status()).resolves.toMatchObject({ state: "unresolved", evidence: null });
+
+    host!.close();
+    host = new HostStore(join(root, "host.sqlite"));
+    const restartedCaller = createCaller(activationRouter, {
+      host,
+      artifacts,
+      paths: { moviesDir },
+    } as unknown as AppContext);
+    await expect(restartedCaller.status()).resolves.toMatchObject({
+      state: "unresolved",
+      evidence: null,
+      journey: {
+        shouldAutoEnter: false,
+        automaticEntryAcknowledgedAt: null,
+        deferredAt: expect.any(String),
+      },
+    });
+  });
+
+  it("reports durable entry and deferral write failures without changing the decision", async () => {
+    const { moviesDir, artifacts, caller } = setup();
+    host!.close();
+    host = undefined;
+
+    await expect(caller.acknowledgeAutomaticEntry()).rejects.toThrow();
+    await expect(caller.defer()).rejects.toThrow();
+
+    host = new HostStore(join(root, "host.sqlite"));
+    const restartedCaller = createCaller(activationRouter, {
+      host,
+      artifacts,
+      paths: { moviesDir },
+    } as unknown as AppContext);
+    await expect(restartedCaller.status()).resolves.toMatchObject({
+      state: "unresolved",
+      journey: {
+        shouldAutoEnter: true,
+        automaticEntryAcknowledgedAt: null,
+        deferredAt: null,
+      },
+    });
   });
 });
