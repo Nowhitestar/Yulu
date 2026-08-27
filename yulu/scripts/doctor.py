@@ -374,6 +374,7 @@ _CAPABILITIES = {"transcription", "summary", "conversation"}
 _READINESS_STATUSES = {"ready", "failed", "untested"}
 _READINESS_REASONS = {"invalid_model", "readiness_failed", "unknown_outcome"}
 _CREDENTIAL_SOURCES = {"runtime-oauth", "oauth", "api-key"}
+_AUTHORIZATION_CLASSES = {"chatgpt", "claude-subscription", "api-key", "amazon-bedrock", "unknown"}
 _VERSION_SOURCES = {"live-runtime", "readiness-history", "not-applicable", "unverified"}
 _LABELS = {
     "codex": "Codex",
@@ -451,6 +452,9 @@ def _runtime_evidence_projection(value: Any) -> dict[str, Any]:
                 raw, r"[A-Za-z0-9][A-Za-z0-9._:/+-]*", limit=128,
             )
     projected.update({
+        **({"authorization_class": authorization_class}
+           if (authorization_class := _enum(item.get("authorizationClass"), _AUTHORIZATION_CLASSES))
+           else {}),
         "fallback_occurred": item.get("fallbackOccurred")
         if isinstance(item.get("fallbackOccurred"), bool) else None,
         "tools_enabled": item.get("toolsEnabled")
@@ -513,6 +517,10 @@ def _connection_projection(value: Any) -> dict[str, Any]:
         "authorization": {
             "connected": authorization.get("connected") is True,
             "credential_source": _enum(authorization.get("credentialSource"), _CREDENTIAL_SOURCES),
+            **({"authorization_class": authorization_class}
+               if (authorization_class := _enum(
+                   authorization.get("authorizationClass"), _AUTHORIZATION_CLASSES,
+               )) else {}),
         },
         "compatibility": {
             "runtime_version": _version(authorization.get("runtimeVersion")),

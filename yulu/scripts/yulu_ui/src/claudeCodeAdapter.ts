@@ -5,10 +5,13 @@ const PROBE_PROMPT = "Reply with exactly YULU_CLAUDE_PROBE_OK and do not use too
 export interface ClaudeCodeRuntimeInspection {
   runtimeVersion: string;
   authorized: boolean;
+  authorizationClass: ClaudeCodeAuthorizationClass;
   authorizationMethod: string | null;
   apiProvider: string | null;
   features: string[];
 }
+
+export type ClaudeCodeAuthorizationClass = "claude-subscription" | "api-key" | "unknown" | null;
 
 export interface ClaudeCodeRuntimeConversationResult {
   runtimeVersion: string;
@@ -40,6 +43,7 @@ export interface ClaudeCodeRuntimeEvidence {
   adapter: "claude-code";
   transport: typeof CLAUDE_CODE_TRANSPORT;
   runtimeVersion: string;
+  authorizationClass: ClaudeCodeAuthorizationClass;
   requestedProvider: null;
   requestedModel: string;
   actualProvider: string | null;
@@ -123,6 +127,7 @@ function versionAtLeast(actual: string, minimum: string): boolean {
 }
 
 function runtimeEvidence(
+  authorizationClass: ClaudeCodeAuthorizationClass,
   requestedModel: string,
   result: ClaudeCodeRuntimeConversationResult,
   terminalStatus: ClaudeCodeRuntimeEvidence["terminalStatus"],
@@ -131,6 +136,7 @@ function runtimeEvidence(
     adapter: "claude-code",
     transport: CLAUDE_CODE_TRANSPORT,
     runtimeVersion: result.runtimeVersion,
+    authorizationClass,
     requestedProvider: null,
     requestedModel,
     actualProvider: null,
@@ -142,6 +148,21 @@ function runtimeEvidence(
     cancellationRequested: result.cancellationRequested ?? false,
     cancellationConfirmed: result.cancellationConfirmed ?? null,
   };
+}
+
+function authorizationRemediation(
+  executable: string,
+  authorizationClass: ClaudeCodeAuthorizationClass,
+  action: string,
+): string {
+  const login = `run ${executable} auth login and choose a Claude subscription`;
+  if (authorizationClass === "api-key") {
+    return `Claude Code API-key login cannot be used as Runtime-owned OAuth; ${login}, then ${action}`;
+  }
+  if (authorizationClass === "unknown") {
+    return `Claude Code authorization type is not recognized as a Claude subscription; ${login}, then ${action}`;
+  }
+  return `Run ${executable} auth login and choose a Claude subscription, then ${action}`;
 }
 
 function identityMatches(
@@ -172,13 +193,15 @@ export class ClaudeCodeAdapter {
     const versionSupported = versionAtLeast(inspected.runtimeVersion, CLAUDE_CODE_MINIMUM_VERSION);
     const missingFeatures = requiredFeatures.filter((feature) => !inspected.features.includes(feature));
     const supported = versionSupported && missingFeatures.length === 0;
+    const authorized = inspected.authorized && inspected.authorizationClass === "claude-subscription";
     return {
       adapter: "claude-code" as const,
       transport: CLAUDE_CODE_TRANSPORT,
       runtimeVersion: inspected.runtimeVersion,
       minimumVersion: CLAUDE_CODE_MINIMUM_VERSION,
       supported,
-      authorized: inspected.authorized,
+      authorized,
+      authorizationClass: inspected.authorizationClass,
       authorizationMethod: inspected.authorizationMethod,
       apiProvider: inspected.apiProvider,
       availableModels: [] as string[],
@@ -193,7 +216,11 @@ export class ClaudeCodeAdapter {
           ? "Claude Code cannot currently prove policy-managed hooks are disabled; Summary remains unavailable"
           : missingFeatures.length > 0
             ? `Claude Code ${inspected.runtimeVersion} is missing required Yulu features: ${missingFeatures.join(", ")}`
-            : inspected.authorized ? null : `Run ${this.executable} auth login, then refresh this connection`,
+            : authorized ? null : authorizationRemediation(
+              this.executable,
+              inspected.authorizationClass,
+              "refresh this connection",
+            ),
     };
   }
 
@@ -223,7 +250,11 @@ export class ClaudeCodeAdapter {
       return {
         status: "failed",
         reason: "authorization_required",
-        remediation: `Run ${this.executable} auth login, then test ${capability} again`,
+        remediation: authorizationRemediation(
+          this.executable,
+          status.authorizationClass,
+          `test ${capability} again`,
+        ),
       };
     }
     let result: ClaudeCodeRuntimeConversationResult;
@@ -243,6 +274,7 @@ export class ClaudeCodeAdapter {
       };
     }
     const evidence = runtimeEvidence(
+      status.authorizationClass,
       input.model,
       result,
       result.terminalStatus === "unknown" ? "unknown" : "failed",
@@ -279,7 +311,11 @@ export class ClaudeCodeAdapter {
     const status = await this.status({ toolFree: true });
     if (!status.supported) throw new Error(status.remediation ?? "Claude Code runtime is unsupported");
     if (!status.authorized) {
-      throw new Error(`Run ${this.executable} auth login, then retry this same Summary input`);
+      throw new Error(authorizationRemediation(
+        this.executable,
+        status.authorizationClass,
+        "retry this same Summary input",
+      ));
     }
     const result = await this.client.runConversation({
       model: input.model,
@@ -298,6 +334,7 @@ export class ClaudeCodeAdapter {
       timeoutMs: 300_000,
     });
     const evidence = runtimeEvidence(
+      status.authorizationClass,
       input.model,
       result,
       result.terminalStatus === "unknown" ? "unknown" : result.terminalStatus === "failed" ? "failed" : "ready",
@@ -345,7 +382,11 @@ export class ClaudeCodeAdapter {
     const status = await this.status();
     if (!status.supported) throw new Error(status.remediation ?? "Claude Code runtime is unsupported");
     if (!status.authorized) {
-      throw new Error(`Run ${this.executable} auth login, then retry this same Conversation input`);
+      throw new Error(authorizationRemediation(
+        this.executable,
+        status.authorizationClass,
+        "retry this same Conversation input",
+      ));
     }
     const result = await this.client.runConversation({
       model: input.model,
@@ -355,6 +396,7 @@ export class ClaudeCodeAdapter {
       ...(input.nativeSessionId ? { nativeSessionId: input.nativeSessionId } : {}),
     });
     const evidence = runtimeEvidence(
+      status.authorizationClass,
       input.model,
       result,
       result.terminalStatus === "unknown" ? "unknown" : result.terminalStatus === "failed" ? "failed" : "ready",

@@ -160,7 +160,11 @@ conversation sessions snapshot the connection/provider/model identity at
 creation, so later settings changes affect only new work. No credential belongs
 in either object; persisted tasks and xAI conversation sessions store only
 non-secret credential class/source identities such as `runtime-oauth`, `oauth`,
-or `api-key`.
+or `api-key`. Codex and Claude Code readiness evidence also records only a
+non-secret authorization class. Codex accepts `chatgpt`; Claude Code accepts
+`claude-subscription`. An observed `api-key`, `amazon-bedrock`, or unknown class
+does not satisfy their Runtime-owned OAuth contract and invalidates current
+readiness without deleting historical evidence.
 
 When a pinned Summary Provider is unavailable after transcript commit, the task
 enters `awaiting_provider` and stays there until an explicit same-provider retry.

@@ -28,7 +28,7 @@ function fakeClaude() {
     '  process.exit(0);',
     '}',
     'if (args[0] === "auth" && args[1] === "status") {',
-    '  process.stdout.write(JSON.stringify({ loggedIn: true, authMethod: "claude.ai", apiProvider: "firstParty" }));',
+    '  process.stdout.write(JSON.stringify({ loggedIn: true, authMethod: process.env.YULU_FAKE_CLAUDE_AUTH_METHOD || "claude.ai", apiProvider: process.env.YULU_FAKE_CLAUDE_API_PROVIDER || "firstParty" }));',
     '  process.exit(0);',
     '}',
     'if (args.includes("--help")) {',
@@ -99,6 +99,7 @@ describe("Claude Code production CLI client", () => {
 
     await expect(client.inspect()).resolves.toMatchObject({
       authorized: true,
+      authorizationClass: "claude-subscription",
       apiProvider: "firstParty",
     });
   });
@@ -120,6 +121,7 @@ describe("Claude Code production CLI client", () => {
     await expect(client.inspect()).resolves.toEqual({
       runtimeVersion: "2.1.169",
       authorized: true,
+      authorizationClass: "claude-subscription",
       authorizationMethod: "claude.ai",
       apiProvider: "firstParty",
       features: [
@@ -145,6 +147,42 @@ describe("Claude Code production CLI client", () => {
     ]);
     expect(JSON.stringify(calls)).not.toContain("--print");
     expect(JSON.stringify(await client.inspect())).not.toMatch(/token|credential/i);
+  });
+
+  it.each([
+    ["api_key", "firstParty", "api-key"],
+    ["oauth", "firstParty", "unknown"],
+    ["claude.ai", "thirdParty", "claude-subscription"],
+  ] as const)("reports authMethod=%s provider=%s as non-secret class %s without guessing authorization", async (
+    authorizationMethod,
+    apiProvider,
+    authorizationClass,
+  ) => {
+    const fake = fakeClaude();
+    const client = new ClaudeCodeCliRuntimeClient({
+      executable: fake.executable,
+      cwd: fake.root,
+      env: {
+        YULU_FAKE_CLAUDE_LOG: fake.logPath,
+        YULU_FAKE_CLAUDE_STDIN_LOG: fake.stdinLogPath,
+        YULU_FAKE_CLAUDE_AUTH_METHOD: authorizationMethod,
+        YULU_FAKE_CLAUDE_API_PROVIDER: apiProvider,
+      },
+    });
+
+    await expect(client.inspect()).resolves.toMatchObject({
+      runtimeVersion: "2.1.169",
+      authorized: false,
+      authorizationClass,
+      authorizationMethod,
+      apiProvider,
+    });
+    const calls = readFileSync(fake.logPath, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+    expect(calls).toEqual([
+      ["--version"],
+      ["--help"],
+      ["auth", "status"],
+    ]);
   });
 
   it("fails closed on optional --max-turns when runConversation is called before inspect", async () => {

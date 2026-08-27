@@ -12,6 +12,7 @@ function client(overrides: Partial<CodexRuntimeClient> = {}): CodexRuntimeClient
     inspect: vi.fn(async () => ({
       runtimeVersion: "0.144.4",
       authorized: true,
+      authorizationClass: "chatgpt" as const,
       models: ["gpt-5.6-sol", "gpt-5.6-terra"],
     })),
     runTurn: vi.fn(async (input) => ({
@@ -34,6 +35,7 @@ describe("Codex Agent adapter conformance", () => {
       inspect: vi.fn(async () => ({
         runtimeVersion: "0.144.4",
         authorized: true,
+        authorizationClass: "chatgpt" as const,
         models: ["gpt-5.6-sol"],
         account: { email: "must-not-leave-runtime@example.test", accessToken: "secret-token" },
       })),
@@ -47,6 +49,7 @@ describe("Codex Agent adapter conformance", () => {
       minimumVersion: CODEX_MINIMUM_VERSION,
       supported: true,
       authorized: true,
+      authorizationClass: "chatgpt",
       availableModels: ["gpt-5.6-sol"],
       features: [
         "account/read",
@@ -70,9 +73,38 @@ describe("Codex Agent adapter conformance", () => {
     expect(JSON.stringify(await adapter.status())).not.toContain("must-not-leave-runtime");
   });
 
+  it("rejects API-key authorization before any model request and gives exact ChatGPT OAuth remediation", async () => {
+    const runtime = client({
+      inspect: vi.fn(async () => ({
+        runtimeVersion: "0.144.4",
+        authorized: false,
+        authorizationClass: "api-key" as const,
+        models: [],
+      })),
+    });
+    const adapter = new CodexAgentAdapter({ executable: "/fake/codex", client: runtime });
+
+    await expect(adapter.status()).resolves.toMatchObject({
+      authorized: false,
+      authorizationClass: "api-key",
+      remediation: "Codex API-key authorization cannot be used as Runtime-owned OAuth; run /fake/codex login without --with-api-key to complete ChatGPT OAuth, then refresh this connection",
+    });
+    await expect(adapter.probe({ model: "gpt-5.6-sol" })).resolves.toEqual({
+      status: "failed",
+      reason: "authorization_required",
+      remediation: "Codex API-key authorization cannot be used as Runtime-owned OAuth; run /fake/codex login without --with-api-key to complete ChatGPT OAuth, then test Conversation again",
+    });
+    expect(runtime.runTurn).not.toHaveBeenCalled();
+  });
+
   it("fails closed for an unsupported runtime version before any model request", async () => {
     const runtime = client({
-      inspect: vi.fn(async () => ({ runtimeVersion: "0.143.9", authorized: true, models: ["gpt-5.6-sol"] })),
+      inspect: vi.fn(async () => ({
+        runtimeVersion: "0.143.9",
+        authorized: true,
+        authorizationClass: "chatgpt" as const,
+        models: ["gpt-5.6-sol"],
+      })),
     });
     const adapter = new CodexAgentAdapter({ executable: "/fake/codex", client: runtime });
 
@@ -96,6 +128,7 @@ describe("Codex Agent adapter conformance", () => {
         adapter: "codex",
         transport: "codex-app-server-stdio",
         runtimeVersion: "0.144.4",
+        authorizationClass: "chatgpt",
         requestedProvider: "openai",
         requestedModel: "gpt-5.6-sol",
         actualProvider: "openai",

@@ -33,6 +33,19 @@ function supportedAgentCopy(adapter: string) {
   return "agentConnections.codex";
 }
 
+function authorizationClassLabel(
+  t: ReturnType<typeof useT>,
+  authorizationClass: string | null,
+): string {
+  if (authorizationClass === "chatgpt") return t("agentConnections.authorizationClass.chatgpt");
+  if (authorizationClass === "claude-subscription") {
+    return t("agentConnections.authorizationClass.claudeSubscription");
+  }
+  if (authorizationClass === "api-key") return t("agentConnections.authorizationClass.apiKey");
+  if (authorizationClass === "amazon-bedrock") return t("agentConnections.authorizationClass.amazonBedrock");
+  return t("agentConnections.authorizationClass.unknown");
+}
+
 function candidateModel(adapter: string) {
   if (adapter === "claude-code") return "claude-sonnet-5";
   if (adapter === "hermes") return "grok-4.6";
@@ -738,7 +751,15 @@ export function AgentConnections({ embedded = false }: { embedded?: boolean } = 
               </div>
               <div>
                 <dt>{t(`${copy}.authorization`)}</dt>
-                <dd>{t(`${copy}.runtimeOAuth`)}</dd>
+                <dd>
+                  {t(`${copy}.runtimeOAuth`)}
+                  {"authorizationClass" in agent.authorization && (
+                    <><br /><span>{authorizationClassLabel(
+                      t,
+                      agent.authorization.authorizationClass,
+                    )}</span></>
+                  )}
+                </dd>
               </div>
               <div>
                 <dt>{t(`${copy}.features`)}</dt>
@@ -823,7 +844,8 @@ export function AgentConnections({ embedded = false }: { embedded?: boolean } = 
                     <div className="agent-connection-actions">
                       <button
                         type="button"
-                        disabled={!model.trim() || item.currentReadiness.status !== "ready"}
+                        disabled={!agent.authorization.connected || !model.trim() ||
+                          item.currentReadiness.status !== "ready"}
                         onClick={() => void run(() => select.mutateAsync({
                           connectionId: agent.id,
                           capability,

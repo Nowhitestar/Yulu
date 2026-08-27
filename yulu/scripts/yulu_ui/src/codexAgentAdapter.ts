@@ -6,8 +6,11 @@ const PROBE_PROMPT = "Reply with exactly YULU_CODEX_PROBE_OK and do not use tool
 export interface CodexRuntimeInspection {
   runtimeVersion: string;
   authorized: boolean;
+  authorizationClass: CodexAuthorizationClass;
   models: string[];
 }
+
+export type CodexAuthorizationClass = "chatgpt" | "api-key" | "amazon-bedrock" | "unknown" | null;
 
 export interface CodexRuntimeTurnResult {
   answer: string;
@@ -39,6 +42,7 @@ export interface CodexRuntimeEvidence {
   adapter: "codex";
   transport: typeof CODEX_TRANSPORT;
   runtimeVersion: string;
+  authorizationClass: CodexAuthorizationClass;
   requestedProvider: typeof CODEX_PROVIDER;
   requestedModel: string;
   actualProvider: string | null;
@@ -131,6 +135,7 @@ function versionAtLeast(actual: string, minimum: string): boolean {
 
 function evidence(
   runtimeVersion: string,
+  authorizationClass: CodexAuthorizationClass,
   requestedModel: string,
   result: CodexRuntimeTurnResult,
   terminalStatus: CodexRuntimeEvidence["terminalStatus"],
@@ -139,6 +144,7 @@ function evidence(
     adapter: "codex",
     transport: CODEX_TRANSPORT,
     runtimeVersion,
+    authorizationClass,
     requestedProvider: CODEX_PROVIDER,
     requestedModel,
     actualProvider: result.actualProvider || null,
@@ -150,6 +156,24 @@ function evidence(
     cancellationRequested: result.cancellationRequested ?? false,
     cancellationConfirmed: result.cancellationConfirmed ?? null,
   };
+}
+
+function authorizationRemediation(
+  executable: string,
+  authorizationClass: CodexAuthorizationClass,
+  action: string,
+): string {
+  const login = `run ${executable} login without --with-api-key to complete ChatGPT OAuth`;
+  if (authorizationClass === "api-key") {
+    return `Codex API-key authorization cannot be used as Runtime-owned OAuth; ${login}, then ${action}`;
+  }
+  if (authorizationClass === "amazon-bedrock") {
+    return `Codex Amazon Bedrock authorization cannot be used as Runtime-owned OAuth; ${login}, then ${action}`;
+  }
+  if (authorizationClass === "unknown") {
+    return `Codex authorization type is not recognized as ChatGPT OAuth; ${login}, then ${action}`;
+  }
+  return `Run ${executable} login without --with-api-key, then ${action}`;
 }
 
 function identityMatches(
@@ -176,13 +200,15 @@ export class CodexAgentAdapter {
   async status(input: { toolFree?: boolean } = {}) {
     const inspected = await this.client.inspect(input);
     const supported = versionAtLeast(inspected.runtimeVersion, CODEX_MINIMUM_VERSION);
+    const authorized = inspected.authorized && inspected.authorizationClass === "chatgpt";
     return {
       adapter: "codex" as const,
       transport: CODEX_TRANSPORT,
       runtimeVersion: inspected.runtimeVersion,
       minimumVersion: CODEX_MINIMUM_VERSION,
       supported,
-      authorized: inspected.authorized,
+      authorized,
+      authorizationClass: inspected.authorizationClass,
       availableModels: [...new Set(inspected.models)].sort(),
       features: [...FEATURES],
       login: {
@@ -190,7 +216,11 @@ export class CodexAgentAdapter {
         statusCommand: `${this.executable} login status`,
       },
       remediation: supported
-        ? inspected.authorized ? null : `Run ${this.executable} login, then refresh this connection`
+        ? authorized ? null : authorizationRemediation(
+          this.executable,
+          inspected.authorizationClass,
+          "refresh this connection",
+        )
         : `Upgrade Codex to ${CODEX_MINIMUM_VERSION} or newer, then refresh this connection`,
     };
   }
@@ -220,7 +250,11 @@ export class CodexAgentAdapter {
       return {
         status: "failed",
         reason: "authorization_required",
-        remediation: `Run ${this.executable} login, then test ${capability} again`,
+        remediation: authorizationRemediation(
+          this.executable,
+          status.authorizationClass,
+          `test ${capability} again`,
+        ),
       };
     }
     if (!status.availableModels.includes(input.model)) {
@@ -255,6 +289,7 @@ export class CodexAgentAdapter {
     }
     const runtimeEvidence = evidence(
       status.runtimeVersion,
+      status.authorizationClass,
       input.model,
       result,
       result.terminalStatus === "unknown" ? "unknown" : "failed",
@@ -297,7 +332,13 @@ export class CodexAgentAdapter {
   }) {
     const status = await this.status({ toolFree: true });
     if (!status.supported) throw new Error(status.remediation ?? "Codex runtime is unsupported");
-    if (!status.authorized) throw new Error(`Run ${this.executable} login, then retry this same Summary input`);
+    if (!status.authorized) {
+      throw new Error(authorizationRemediation(
+        this.executable,
+        status.authorizationClass,
+        "retry this same Summary input",
+      ));
+    }
     if (!status.availableModels.includes(input.model)) {
       throw new Error(`Codex model ${input.model} is not available; restore the pinned model, then retry this same Summary input`);
     }
@@ -319,6 +360,7 @@ export class CodexAgentAdapter {
     });
     const runtimeEvidence = evidence(
       status.runtimeVersion,
+      status.authorizationClass,
       input.model,
       result,
       result.terminalStatus === "unknown" ? "unknown" : result.terminalStatus === "failed" ? "failed" : "ready",
@@ -359,7 +401,13 @@ export class CodexAgentAdapter {
   }) {
     const status = await this.status();
     if (!status.supported) throw new Error(status.remediation ?? "Codex runtime is unsupported");
-    if (!status.authorized) throw new Error(`Run ${this.executable} login, then retry this same conversation input`);
+    if (!status.authorized) {
+      throw new Error(authorizationRemediation(
+        this.executable,
+        status.authorizationClass,
+        "retry this same conversation input",
+      ));
+    }
     if (!status.availableModels.includes(input.model)) {
       throw new Error(`Codex model ${input.model} is not available; restore the pinned model, then retry this same input`);
     }
@@ -372,6 +420,7 @@ export class CodexAgentAdapter {
     });
     const runtimeEvidence = evidence(
       status.runtimeVersion,
+      status.authorizationClass,
       input.model,
       result,
       result.terminalStatus === "unknown" ? "unknown" : result.terminalStatus === "failed" ? "failed" : "ready",

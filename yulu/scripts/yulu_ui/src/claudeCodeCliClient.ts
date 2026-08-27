@@ -209,9 +209,17 @@ export class ClaudeCodeCliRuntimeClient implements ClaudeCodeRuntimeClient {
       }
       const authorizationMethod = typeof auth.authMethod === "string" ? auth.authMethod : null;
       const apiProvider = typeof auth.apiProvider === "string" ? auth.apiProvider : null;
+      const authorizationClass = auth.loggedIn !== true
+        ? null
+        : authorizationMethod === "claude.ai"
+          ? "claude-subscription" as const
+          : authorizationMethod === "api_key"
+            ? "api-key" as const
+            : "unknown" as const;
       return {
         runtimeVersion,
-        authorized: auth.loggedIn === true && apiProvider === "firstParty",
+        authorized: authorizationClass === "claude-subscription" && apiProvider === "firstParty",
+        authorizationClass,
         authorizationMethod,
         apiProvider,
         features,

@@ -46,7 +46,7 @@ for await (const line of createInterface({ input: process.stdin })) {
   if (message.method === "initialize") send({ id: message.id, result: { userAgent: "fake" } });
   if (message.method === "account/read" && mode === "hang-account") continue;
   if (message.method === "account/read") send({ id: message.id, result: {
-    account: { type: "chatgpt", email: "private@example.test", accessToken: "never-project-this" },
+    account: { type: process.env.YULU_FAKE_CODEX_ACCOUNT_TYPE || "chatgpt", email: "private@example.test", accessToken: "never-project-this" },
     requiresOpenaiAuth: true,
   } });
   if (message.method === "model/list") send({ id: message.id, result: {
@@ -137,6 +137,7 @@ describe("Codex app-server stdio client", () => {
     await expect(client.inspect()).resolves.toEqual({
       runtimeVersion: "0.144.4",
       authorized: true,
+      authorizationClass: "chatgpt",
       models: ["gpt-5.6-sol"],
     });
 
@@ -148,6 +149,40 @@ describe("Codex app-server stdio client", () => {
       "model/list",
     ]);
     expect(messages.find((message) => message.method === "account/read")?.params).toEqual({ refreshToken: false });
+    expect(JSON.stringify(await client.inspect())).not.toContain("private@example.test");
+    expect(JSON.stringify(await client.inspect())).not.toContain("never-project-this");
+  });
+
+  it.each([
+    ["apiKey", "api-key"],
+    ["amazonBedrock", "amazon-bedrock"],
+    ["futureAccountType", "unknown"],
+  ] as const)("reports %s authorization as non-secret class %s without treating it as runtime OAuth", async (
+    accountType,
+    authorizationClass,
+  ) => {
+    const fake = fakeCodexRuntime();
+    const client = new CodexAppServerRuntimeClient({
+      executable: fake.executable,
+      cwd: fake.root,
+      env: {
+        YULU_FAKE_CODEX_AUDIT: fake.audit,
+        YULU_FAKE_CODEX_ACCOUNT_TYPE: accountType,
+      },
+    });
+
+    await expect(client.inspect()).resolves.toEqual({
+      runtimeVersion: "0.144.4",
+      authorized: false,
+      authorizationClass,
+      models: [],
+    });
+    const messages = readFileSync(fake.audit, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+    expect(messages.map((message) => message.method)).toEqual([
+      "initialize",
+      "initialized",
+      "account/read",
+    ]);
     expect(JSON.stringify(await client.inspect())).not.toContain("private@example.test");
     expect(JSON.stringify(await client.inspect())).not.toContain("never-project-this");
   });

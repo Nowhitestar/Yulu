@@ -456,6 +456,7 @@ export class AgentConnectionCenter {
           authorization: {
             connected: Boolean(status?.authorized && status.supported),
             credentialSource: "runtime-oauth" as const,
+            authorizationClass: status?.authorizationClass ?? null,
             runtimeVersion: status?.runtimeVersion ?? null,
             minimumVersion: status?.minimumVersion ?? null,
             versionSource: "live-runtime" as const,
@@ -556,6 +557,7 @@ export class AgentConnectionCenter {
           authorization: {
             connected: Boolean(status?.authorized && status.supported),
             credentialSource: "runtime-oauth" as const,
+            authorizationClass: status?.authorizationClass ?? null,
             runtimeVersion: status?.runtimeVersion ?? null,
             minimumVersion: status?.minimumVersion ?? null,
             versionSource: "live-runtime" as const,
@@ -2722,6 +2724,7 @@ export class AgentConnectionCenter {
       minimumVersion: status.minimumVersion,
       supported: status.supported,
       authorized: status.authorized,
+      authorizationClass: status.authorizationClass,
       modelAvailable: status.availableModels.includes(model),
       features: [...status.features].sort(),
     });
@@ -2739,6 +2742,7 @@ export class AgentConnectionCenter {
       minimumVersion: status.minimumVersion,
       supported: status.supported,
       authorized: status.authorized,
+      authorizationClass: status.authorizationClass,
       authorizationMethod: status.authorizationMethod,
       apiProvider: status.apiProvider,
       features: [...status.features].sort(),

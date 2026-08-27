@@ -96,6 +96,7 @@ const mocks = vi.hoisted(() => ({
       authorization: {
         connected: true,
         credentialSource: "runtime-oauth",
+        authorizationClass: "chatgpt",
         runtimeVersion: "0.144.4",
         minimumVersion: "0.144.0",
         supported: true,
@@ -146,6 +147,7 @@ const mocks = vi.hoisted(() => ({
       authorization: {
         connected: true,
         credentialSource: "runtime-oauth",
+        authorizationClass: "claude-subscription",
         runtimeVersion: "2.1.169",
         minimumVersion: "2.1.169",
         supported: true,
@@ -513,6 +515,29 @@ describe("shared Agent Connection Center", () => {
     expect(within(codex).getByText(/0.144.4/)).toBeInTheDocument();
     expect(mocks.probe).not.toHaveBeenCalled();
     expect(mocks.confirmCandidate).not.toHaveBeenCalled();
+  });
+
+  it("shows a non-secret OAuth class mismatch and disables stale Codex readiness actions", () => {
+    const codex = mocks.view.connections.find((connection) => connection.id === "codex");
+    expect(codex).toBeDefined();
+    const originalAuthorization = { ...codex!.authorization };
+    const remediation =
+      "Codex API-key authorization cannot be used as Runtime-owned OAuth; run /fake/bin/codex login without --with-api-key to complete ChatGPT OAuth, then refresh this connection";
+    Object.assign(codex!.authorization, {
+      connected: false,
+      authorizationClass: "api-key",
+      remediation,
+    });
+
+    mount("en");
+
+    const card = screen.getByTestId("agent-connection-codex");
+    expect(within(card).getByText("API key (not Runtime-owned OAuth)")).toBeInTheDocument();
+    expect(within(card).getByText(remediation).parentElement).toHaveAttribute("role", "alert");
+    expect(within(card).getByRole("button", { name: "Select Codex for future summaries" })).toBeDisabled();
+    expect(within(card).getByRole("button", { name: "Test summary" })).toBeDisabled();
+
+    Object.assign(codex!.authorization, originalAuthorization);
   });
 
   it("explicitly confirms a Codex candidate, accepts only Conversation disclosure, probes, and selects", async () => {

@@ -412,7 +412,18 @@ export class CodexAppServerRuntimeClient implements CodexRuntimeClient {
       });
       await session.initialize();
       const accountResponse = asRecord(await session.request("account/read", { refreshToken: false }));
-      const authorized = accountResponse.account !== null && accountResponse.account !== undefined;
+      const accountValue = accountResponse.account;
+      const accountType = stringValue(asRecord(accountValue).type);
+      const authorizationClass = accountValue === null || accountValue === undefined
+        ? null
+        : accountType === "chatgpt"
+          ? "chatgpt" as const
+          : accountType === "apiKey"
+            ? "api-key" as const
+            : accountType === "amazonBedrock"
+              ? "amazon-bedrock" as const
+              : "unknown" as const;
+      const authorized = authorizationClass === "chatgpt";
       const models: string[] = [];
       if (authorized) {
         let cursor: string | null = null;
@@ -433,7 +444,7 @@ export class CodexAppServerRuntimeClient implements CodexRuntimeClient {
           if (cursor) cursors.add(cursor);
         } while (cursor);
       }
-      return { runtimeVersion: version, authorized, models: [...new Set(models)] };
+      return { runtimeVersion: version, authorized, authorizationClass, models: [...new Set(models)] };
     } finally {
       session?.close();
       if (isolatedCwd) rmSync(isolatedCwd, { recursive: true, force: true });

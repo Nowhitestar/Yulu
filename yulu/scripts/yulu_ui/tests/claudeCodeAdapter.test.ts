@@ -26,6 +26,7 @@ function client(overrides: Partial<ClaudeCodeRuntimeClient> = {}): ClaudeCodeRun
     inspect: vi.fn(async () => ({
       runtimeVersion: "2.1.169",
       authorized: true,
+      authorizationClass: "claude-subscription" as const,
       authorizationMethod: "claude.ai",
       apiProvider: "firstParty",
       features: [...SUMMARY_SUPPORTED_FEATURES],
@@ -51,6 +52,7 @@ describe("Claude Code adapter conformance", () => {
       inspect: vi.fn(async () => ({
         runtimeVersion: "2.1.169",
         authorized: true,
+        authorizationClass: "claude-subscription" as const,
         authorizationMethod: "claude.ai",
         apiProvider: "firstParty",
         features: [...SUPPORTED_FEATURES],
@@ -67,6 +69,7 @@ describe("Claude Code adapter conformance", () => {
       minimumVersion: CLAUDE_CODE_MINIMUM_VERSION,
       supported: true,
       authorized: true,
+      authorizationClass: "claude-subscription",
       authorizationMethod: "claude.ai",
       apiProvider: "firstParty",
       availableModels: [],
@@ -81,6 +84,32 @@ describe("Claude Code adapter conformance", () => {
     expect(JSON.stringify(await adapter.status())).not.toContain("must-not-leave-runtime");
   });
 
+  it("rejects API-key login before any model request and gives exact Claude subscription remediation", async () => {
+    const runtime = client({
+      inspect: vi.fn(async () => ({
+        runtimeVersion: "2.1.228",
+        authorized: false,
+        authorizationClass: "api-key" as const,
+        authorizationMethod: "api_key",
+        apiProvider: "firstParty",
+        features: [...SUPPORTED_FEATURES],
+      })),
+    });
+    const adapter = new ClaudeCodeAdapter({ executable: "/fake/claude", client: runtime });
+
+    await expect(adapter.status()).resolves.toMatchObject({
+      authorized: false,
+      authorizationClass: "api-key",
+      remediation: "Claude Code API-key login cannot be used as Runtime-owned OAuth; run /fake/claude auth login and choose a Claude subscription, then refresh this connection",
+    });
+    await expect(adapter.probe({ model: "claude-sonnet-5" })).resolves.toEqual({
+      status: "failed",
+      reason: "authorization_required",
+      remediation: "Claude Code API-key login cannot be used as Runtime-owned OAuth; run /fake/claude auth login and choose a Claude subscription, then test Conversation again",
+    });
+    expect(runtime.runConversation).not.toHaveBeenCalled();
+  });
+
   it("runs a bounded tool-free Conversation probe and returns exact redacted Runtime Evidence", async () => {
     const runtime = client();
     const adapter = new ClaudeCodeAdapter({ executable: "/fake/claude", client: runtime });
@@ -93,6 +122,7 @@ describe("Claude Code adapter conformance", () => {
         adapter: "claude-code",
         transport: "claude-code-print-stream-json",
         runtimeVersion: "2.1.169",
+        authorizationClass: "claude-subscription",
         requestedProvider: null,
         requestedModel: "claude-sonnet-5",
         actualProvider: null,
@@ -142,6 +172,7 @@ describe("Claude Code adapter conformance", () => {
       inspect: vi.fn(async () => ({
         runtimeVersion: "2.1.169",
         authorized: true,
+        authorizationClass: "claude-subscription" as const,
         authorizationMethod: "claude.ai",
         apiProvider: "firstParty",
         features: [...SUPPORTED_FEATURES],
@@ -172,6 +203,7 @@ describe("Claude Code adapter conformance", () => {
       inspect: vi.fn(async () => ({
         runtimeVersion: "2.1.210",
         authorized: true,
+        authorizationClass: "claude-subscription" as const,
         authorizationMethod: "claude.ai",
         apiProvider: "firstParty",
         features: [...SUPPORTED_FEATURES],
@@ -191,6 +223,7 @@ describe("Claude Code adapter conformance", () => {
       inspect: vi.fn(async () => ({
         runtimeVersion: "2.1.210",
         authorized: true,
+        authorizationClass: "claude-subscription" as const,
         authorizationMethod: "claude.ai",
         apiProvider: "firstParty",
         features: SUPPORTED_FEATURES.filter((feature) => feature !== "tools/none"),
@@ -231,6 +264,7 @@ describe("Claude Code adapter conformance", () => {
         adapter: "claude-code",
         transport: "claude-code-print-stream-json",
         runtimeVersion: "2.1.169",
+        authorizationClass: "claude-subscription",
         requestedProvider: null,
         requestedModel: "claude-sonnet-5",
         actualProvider: null,
@@ -358,6 +392,7 @@ describe("Claude Code adapter conformance", () => {
       inspect: vi.fn(async () => ({
         runtimeVersion,
         authorized,
+        authorizationClass: authorized ? "claude-subscription" as const : null,
         authorizationMethod: authorized ? "claude.ai" : null,
         apiProvider: authorized ? "firstParty" : null,
         features: [...SUPPORTED_FEATURES],
@@ -381,6 +416,7 @@ describe("Claude Code adapter conformance", () => {
         inspect: vi.fn(async () => ({
           runtimeVersion: "2.1.169",
           authorized: true,
+          authorizationClass: "claude-subscription" as const,
           authorizationMethod: "claude.ai",
           apiProvider: "firstParty",
           features: SUPPORTED_FEATURES.filter((feature) => feature !== missingFeature),

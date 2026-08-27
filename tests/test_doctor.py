@@ -44,6 +44,7 @@ def test_agent_connection_diagnostics_whitelist_current_history_and_remediation(
                 "authorization": {
                     "connected": True,
                     "credentialSource": "runtime-oauth",
+                    "authorizationClass": "chatgpt",
                     "runtimeVersion": "0.144.4",
                     "minimumVersion": "0.144.0",
                     "supported": True,
@@ -73,6 +74,7 @@ def test_agent_connection_diagnostics_whitelist_current_history_and_remediation(
                             "adapter": "codex",
                             "transport": "codex-app-server-stdio",
                             "runtimeVersion": "0.144.4",
+                            "authorizationClass": "chatgpt",
                             "requestedProvider": "openai",
                             "requestedModel": "gpt-5.6-sol",
                             "actualProvider": "openai",
@@ -106,7 +108,11 @@ def test_agent_connection_diagnostics_whitelist_current_history_and_remediation(
         "adapter": "codex",
         "label": "Codex",
         "lifecycle": "connected",
-        "authorization": {"connected": True, "credential_source": "runtime-oauth"},
+        "authorization": {
+            "connected": True,
+            "credential_source": "runtime-oauth",
+            "authorization_class": "chatgpt",
+        },
         "compatibility": {
             "runtime_version": "0.144.4",
             "minimum_version": "0.144.0",
@@ -136,6 +142,7 @@ def test_agent_connection_diagnostics_whitelist_current_history_and_remediation(
                     "adapter": "codex",
                     "transport": "codex-app-server-stdio",
                     "runtime_version": "0.144.4",
+                    "authorization_class": "chatgpt",
                     "requested_provider": "openai",
                     "requested_model": "gpt-5.6-sol",
                     "actual_provider": "openai",
@@ -225,6 +232,29 @@ def test_agent_connection_diagnostics_projects_adapter_contracts_and_history_sou
     serialized = json.dumps(report)
     assert "secret-looking-label" not in serialized
     assert "arbitrary-label" not in serialized
+
+
+def test_agent_connection_diagnostics_rejects_unrecognized_authorization_classes():
+    doctor = load_doctor()
+
+    evidence = doctor._runtime_evidence_projection({
+        "authorizationClass": "chatgpt;token=never-report-this",
+    })
+    connection = doctor._connection_projection({
+        "id": "codex",
+        "kind": "supported-agent",
+        "adapter": "codex",
+        "authorization": {
+            "connected": False,
+            "credentialSource": "runtime-oauth",
+            "authorizationClass": "api-key:never-report-this",
+        },
+        "capabilities": [],
+    })
+
+    assert "authorization_class" not in evidence
+    assert "authorization_class" not in connection["authorization"]
+    assert "never-report-this" not in json.dumps({"evidence": evidence, "connection": connection})
 
 
 def test_agent_connection_diagnostics_fail_closed_without_host(monkeypatch):

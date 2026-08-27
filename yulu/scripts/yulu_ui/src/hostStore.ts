@@ -95,6 +95,7 @@ export interface SummaryCommitRuntimeEvidence {
   adapter: string;
   transport: string;
   runtimeVersion: string;
+  authorizationClass?: RuntimeAuthorizationClass | null;
   requestedProvider: string | null;
   requestedModel: string;
   actualProvider: string | null;
@@ -108,6 +109,13 @@ export interface SummaryCommitRuntimeEvidence {
   cancellationRequested?: boolean;
   cancellationConfirmed?: boolean | null;
 }
+
+export type RuntimeAuthorizationClass =
+  | "chatgpt"
+  | "claude-subscription"
+  | "api-key"
+  | "amazon-bedrock"
+  | "unknown";
 
 export interface ActivationArtifactFingerprint {
   sha256: string;
@@ -196,6 +204,7 @@ export interface PersistedAgentConnectionReadiness {
     adapter: string;
     transport: string;
     runtimeVersion: string | null;
+    authorizationClass?: RuntimeAuthorizationClass | null;
     requestedProvider: string | null;
     requestedModel: string;
     actualProvider: string | null;
@@ -233,6 +242,13 @@ function boundedEvidenceString(value: unknown, max: number): string | null {
   return typeof value === "string" && value.length <= max ? value : null;
 }
 
+function runtimeAuthorizationClass(value: unknown): RuntimeAuthorizationClass | null {
+  return value === "chatgpt" || value === "claude-subscription" || value === "api-key" ||
+      value === "amazon-bedrock" || value === "unknown"
+    ? value
+    : null;
+}
+
 export function secretSafeSummaryRuntimeEvidence(
   input: SummaryCommitRuntimeEvidence,
 ): SummaryCommitRuntimeEvidence {
@@ -240,10 +256,12 @@ export function secretSafeSummaryRuntimeEvidence(
   const terminalStatus = raw.terminalStatus === "ready" || raw.terminalStatus === "failed" || raw.terminalStatus === "unknown"
     ? raw.terminalStatus
     : "failed";
+  const authorizationClass = runtimeAuthorizationClass(raw.authorizationClass);
   return {
     adapter: boundedEvidenceString(raw.adapter, 100) ?? "",
     transport: boundedEvidenceString(raw.transport, 200) ?? "",
     runtimeVersion: boundedEvidenceString(raw.runtimeVersion, 200) ?? "",
+    ...(authorizationClass ? { authorizationClass } : {}),
     requestedProvider: raw.requestedProvider === null ? null : boundedEvidenceString(raw.requestedProvider, 128),
     requestedModel: boundedEvidenceString(raw.requestedModel, 128) ?? "",
     actualProvider: raw.actualProvider === null ? null : boundedEvidenceString(raw.actualProvider, 128),
@@ -272,6 +290,7 @@ function secretSafeReadinessEvidence(
   const adapter = boundedEvidenceString(raw.adapter, 100) ?? "";
   const transport = boundedEvidenceString(raw.transport, 200) ?? "";
   const runtimeVersion = raw.runtimeVersion === null ? null : boundedEvidenceString(raw.runtimeVersion, 200);
+  const authorizationClass = runtimeAuthorizationClass(raw.authorizationClass);
   const requestedProvider = raw.requestedProvider === null ? null : boundedEvidenceString(raw.requestedProvider, 128);
   const requestedModel = boundedEvidenceString(raw.requestedModel, 128) ?? "";
   const actualProvider = raw.actualProvider === null ? null : boundedEvidenceString(raw.actualProvider, 128);
@@ -286,6 +305,7 @@ function secretSafeReadinessEvidence(
     adapter,
     transport,
     runtimeVersion,
+    ...(authorizationClass ? { authorizationClass } : {}),
     requestedProvider,
     requestedModel,
     actualProvider,

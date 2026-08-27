@@ -461,6 +461,17 @@ be slow on a fresh machine. A timeout terminates the entire setup process group,
 restores the prior runtime, and reruns that runtime's upgrade setup to repair its
 LaunchAgents before returning failure.
 
+## Codex and Claude Code native OAuth classes
+
+Codex and Claude Code connections are OAuth-only. Yulu reads only the
+runtime's non-secret authorization class: Codex must report ChatGPT OAuth and
+Claude Code must report a Claude subscription login. API-key, Amazon Bedrock,
+or unknown authorization is shown as disconnected and cannot reuse an earlier
+ready result. The earlier result remains visible as history; current readiness
+returns to untested until the required native OAuth login is restored and the
+capability is tested explicitly. Use the exact native login remediation shown
+by Agent Connection Center; Yulu never changes or copies runtime credentials.
+
 Hermes compatibility is feature-gated rather than inferred from a version
 string. `yulu doctor --json` probes the required `serve`, `sessions export`,
 `config set`, and toolset command surfaces. Treat a failed

@@ -65,6 +65,7 @@ function setup(
       minimumVersion: "0.144.0",
       supported: true,
       authorized: true,
+      authorizationClass: "chatgpt" as const,
       availableModels: ["gpt-5.6-sol"],
       features: [
         "account/read" as const,
@@ -89,6 +90,7 @@ function setup(
         adapter: "codex" as const,
         transport: "codex-app-server-stdio" as const,
         runtimeVersion: "0.144.4",
+        authorizationClass: "chatgpt" as const,
         requestedProvider: "openai" as const,
         requestedModel: model,
         actualProvider: "openai",
@@ -109,6 +111,7 @@ function setup(
         adapter: "codex" as const,
         transport: "codex-app-server-stdio" as const,
         runtimeVersion: "0.144.4",
+        authorizationClass: "chatgpt" as const,
         requestedProvider: "openai" as const,
         requestedModel: model,
         actualProvider: "openai",
@@ -128,6 +131,7 @@ function setup(
         adapter: "codex" as const,
         transport: "codex-app-server-stdio" as const,
         runtimeVersion: "0.144.4",
+        authorizationClass: "chatgpt" as const,
         requestedProvider: "openai" as const,
         requestedModel: model,
         actualProvider: "openai",
@@ -151,6 +155,7 @@ function setup(
       minimumVersion: "2.1.169",
       supported: true,
       authorized: true,
+      authorizationClass: "claude-subscription" as const,
       authorizationMethod: "claude.ai",
       apiProvider: "firstParty",
       availableModels: [],
@@ -179,6 +184,7 @@ function setup(
         adapter: "claude-code" as const,
         transport: "claude-code-print-stream-json" as const,
         runtimeVersion: "2.1.169",
+        authorizationClass: "claude-subscription" as const,
         requestedProvider: null,
         requestedModel: model,
         actualProvider: null,
@@ -199,6 +205,7 @@ function setup(
         adapter: "claude-code" as const,
         transport: "claude-code-print-stream-json" as const,
         runtimeVersion: "2.1.169",
+        authorizationClass: "claude-subscription" as const,
         requestedProvider: null,
         requestedModel: model,
         actualProvider: null,
@@ -218,6 +225,7 @@ function setup(
         adapter: "claude-code" as const,
         transport: "claude-code-print-stream-json" as const,
         runtimeVersion: "2.1.169",
+        authorizationClass: "claude-subscription" as const,
         requestedProvider: null,
         requestedModel: model,
         actualProvider: null,
@@ -1676,6 +1684,7 @@ describe("public Agent Connection Host contract", () => {
         authorization: expect.objectContaining({
           connected: true,
           credentialSource: "runtime-oauth",
+          authorizationClass: "chatgpt",
           runtimeVersion: "0.144.4",
           loginCommand: "/fake/bin/codex login",
         }),
@@ -1726,12 +1735,71 @@ describe("public Agent Connection Host contract", () => {
       expect.objectContaining({
         status: "ready",
         runtimeEvidence: expect.objectContaining({
+          authorizationClass: "chatgpt",
           requestedModel: "gpt-5.6-sol",
           actualModel: "gpt-5.6-sol",
           fallbackOccurred: false,
         }),
       }),
     ]);
+    setupResult.host.close();
+  });
+
+  it("invalidates Codex OAuth readiness when account/read reports an API-key class", async () => {
+    const setupResult = setup({
+      audio: {},
+      transcription: { engine: "local", language: "zh" },
+      intelligence: {
+        summary: { provider: "agent", model: "runtime-managed" },
+        conversation: { provider: "agent", model: "runtime-managed" },
+      },
+      llm: { agent: { provider: "auto" } },
+    }, [{ adapter: "codex", label: "Codex", path: "/fake/bin/codex" }]);
+    const caller = createCaller(agentConnectionsRouter, {
+      agentConnections: setupResult.center,
+      uiMutationAuthorized: true,
+    } as never);
+
+    await caller.refreshCandidates();
+    await caller.confirmCandidate({ candidateId: "candidate:codex", model: "gpt-5.6-sol" });
+    await caller.acceptDisclosure({ connectionId: "codex", capability: "conversation" });
+    await caller.probe({ connectionId: "codex", capability: "conversation", model: "gpt-5.6-sol" });
+    const oauthStatus = await setupResult.codex.status();
+    setupResult.codex.status.mockImplementation(async () => ({
+      ...oauthStatus,
+      authorized: false,
+      authorizationClass: "api-key",
+      availableModels: [],
+      remediation:
+        "Codex API-key authorization cannot be used as Runtime-owned OAuth; run /fake/bin/codex login without --with-api-key to complete ChatGPT OAuth, then refresh this connection",
+    } as never));
+
+    const view = await caller.view();
+    const codex = view.connections.find((connection: { id: string }) => connection.id === "codex");
+    expect(codex).toMatchObject({
+      lifecycle: "disconnected",
+      authorization: {
+        connected: false,
+        credentialSource: "runtime-oauth",
+        authorizationClass: "api-key",
+        remediation:
+          "Codex API-key authorization cannot be used as Runtime-owned OAuth; run /fake/bin/codex login without --with-api-key to complete ChatGPT OAuth, then refresh this connection",
+      },
+    });
+    expect(codex?.capabilities.find(({ capability }: { capability: string }) => capability === "conversation"))
+      .toMatchObject({
+        currentReadiness: { status: "untested", testedAt: null },
+        readinessHistory: [expect.objectContaining({
+          status: "ready",
+          runtimeEvidence: expect.objectContaining({ authorizationClass: "chatgpt" }),
+        })],
+      });
+    await expect(caller.select({
+      connectionId: "codex",
+      capability: "conversation",
+      model: "gpt-5.6-sol",
+    })).rejects.toThrow();
+    expect(setupResult.codex.probe).toHaveBeenCalledTimes(1);
     setupResult.host.close();
   });
 
@@ -1771,6 +1839,7 @@ describe("public Agent Connection Host contract", () => {
         authorization: expect.objectContaining({
           connected: true,
           credentialSource: "runtime-oauth",
+          authorizationClass: "claude-subscription",
           runtimeVersion: "2.1.169",
           authorizationMethod: "claude.ai",
           loginCommand: "/fake/bin/claude auth login",
@@ -1820,6 +1889,7 @@ describe("public Agent Connection Host contract", () => {
         status: "ready",
         runtimeEvidence: expect.objectContaining({
           adapter: "claude-code",
+          authorizationClass: "claude-subscription",
           requestedModel: "claude-sonnet-5",
           actualModel: "claude-sonnet-5",
           sessionId: "019f0000-0000-7000-8000-000000000136",
@@ -1836,6 +1906,69 @@ describe("public Agent Connection Host contract", () => {
         currentReadiness: { status: "untested", testedAt: null },
         readinessHistory: [expect.objectContaining({ status: "ready", model: "claude-sonnet-5" })],
       });
+    setupResult.host.close();
+  });
+
+  it("invalidates Claude Code OAuth readiness when native status reports API-key login", async () => {
+    const setupResult = setup({
+      audio: {},
+      transcription: { engine: "local", language: "zh" },
+      intelligence: {
+        summary: { provider: "agent", model: "runtime-managed" },
+        conversation: { provider: "agent", model: "runtime-managed" },
+      },
+      llm: { agent: { provider: "auto" } },
+    }, [{ adapter: "claude-code", label: "Claude Code", path: "/fake/bin/claude" }]);
+    const caller = createCaller(agentConnectionsRouter, {
+      agentConnections: setupResult.center,
+      uiMutationAuthorized: true,
+    } as never);
+
+    await caller.refreshCandidates();
+    await caller.confirmCandidate({ candidateId: "candidate:claude-code", model: "claude-sonnet-5" });
+    await caller.acceptDisclosure({ connectionId: "claude-code", capability: "conversation" });
+    await caller.probe({
+      connectionId: "claude-code",
+      capability: "conversation",
+      model: "claude-sonnet-5",
+    });
+    const oauthStatus = await setupResult.claude.status();
+    setupResult.claude.status.mockImplementation(async () => ({
+      ...oauthStatus,
+      authorized: false,
+      authorizationClass: "api-key",
+      authorizationMethod: "api_key",
+      remediation:
+        "Claude Code API-key login cannot be used as Runtime-owned OAuth; run /fake/bin/claude auth login and choose a Claude subscription, then refresh this connection",
+    } as never));
+
+    const view = await caller.view();
+    const claude = view.connections.find((connection: { id: string }) => connection.id === "claude-code");
+    expect(claude).toMatchObject({
+      lifecycle: "disconnected",
+      authorization: {
+        connected: false,
+        credentialSource: "runtime-oauth",
+        authorizationClass: "api-key",
+        authorizationMethod: "api_key",
+        remediation:
+          "Claude Code API-key login cannot be used as Runtime-owned OAuth; run /fake/bin/claude auth login and choose a Claude subscription, then refresh this connection",
+      },
+    });
+    expect(claude?.capabilities.find(({ capability }: { capability: string }) => capability === "conversation"))
+      .toMatchObject({
+        currentReadiness: { status: "untested", testedAt: null },
+        readinessHistory: [expect.objectContaining({
+          status: "ready",
+          runtimeEvidence: expect.objectContaining({ authorizationClass: "claude-subscription" }),
+        })],
+      });
+    await expect(caller.select({
+      connectionId: "claude-code",
+      capability: "conversation",
+      model: "claude-sonnet-5",
+    })).rejects.toThrow();
+    expect(setupResult.claude.probe).toHaveBeenCalledTimes(1);
     setupResult.host.close();
   });
 
