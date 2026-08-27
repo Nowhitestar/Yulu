@@ -18,6 +18,7 @@ import { HostStore } from "../../src/hostStore.js";
 import { XAI_TRANSCRIPTION_DISCLOSURE_VERSION } from "../../src/transcriptionConsent.js";
 import { XAI_SUMMARY_DISCLOSURE_VERSION } from "../../src/summaryDataDisclosure.js";
 import type { SupportedAgentSummaryReadiness } from "../../src/summaryProviderReadiness.js";
+import type { AgentConnectionCenter } from "../../src/agentConnections.js";
 import { activationRouter } from "../../src/routers/activation.js";
 import { createCaller, type AppContext } from "../../src/trpc.js";
 
@@ -37,6 +38,50 @@ function wavWithAudio(): Buffer {
   header.write("data", 36, "ascii");
   header.writeUInt32LE(1, 40);
   return Buffer.concat([header, Buffer.from([1])]);
+}
+
+type SummaryActivationState = Awaited<ReturnType<AgentConnectionCenter["summaryActivation"]>>;
+
+function summaryContract(input: {
+  connectionId?: string;
+  provider?: string;
+  label?: string;
+  model?: string;
+  state?: SummaryActivationState["state"];
+  credentialSource?: SummaryActivationState["credentialSource"];
+  testedAt?: string | null;
+  disclosure?: SummaryActivationState["disclosure"];
+  publicOnboardingSupported?: boolean;
+  blocker?: SummaryActivationState["blocker"];
+  directXaiAvailable?: boolean;
+} = {}): SummaryActivationState {
+  const selected = {
+    connectionId: input.connectionId ?? "codex",
+    provider: input.provider ?? "codex",
+    label: input.label ?? "Codex",
+    model: input.model ?? "runtime-managed",
+  };
+  const state = input.state ?? "ready";
+  const blocker = input.blocker ?? null;
+  const credentialSource = input.credentialSource ?? null;
+  return {
+    selected,
+    options: state === "ready" && selected.connectionId ? [{
+      ...selected,
+      connectionId: selected.connectionId,
+      credentialSource,
+      selected: true,
+    }] : [],
+    directXaiAvailable: input.directXaiAvailable ?? true,
+    state,
+    detail: blocker?.detail ?? null,
+    credentialSource,
+    testedAt: input.testedAt ?? "2026-08-25T04:00:00.000Z",
+    disclosure: input.disclosure ?? null,
+    publicOnboardingSupported: input.publicOnboardingSupported ?? true,
+    remediation: blocker?.remediation ?? null,
+    blocker,
+  };
 }
 
 describe("activation router", () => {
@@ -89,7 +134,7 @@ describe("activation router", () => {
       source: "oauth" as "oauth" | "api-key" | null,
       detail: "connected",
     };
-    let agentReadiness = {
+    let agentReadiness: SupportedAgentSummaryReadiness = {
       capability: "summary" as const,
       provider: "codex",
       model: "runtime-managed",
@@ -159,6 +204,88 @@ describe("activation router", () => {
         kick: vi.fn(),
       },
     } as unknown as AppContext;
+    let summaryActivationState = summaryContract();
+    const summaryActivation = vi.fn(async () => summaryActivationState);
+    ctx.agentConnections = {
+      summaryActivation,
+      acceptDisclosure: vi.fn(({ connectionId, capability }: { connectionId: string; capability: string }) => {
+        if (capability === "transcription" && connectionId === "direct-xai") {
+          return host!.recordCloudTranscriptionConsent(XAI_TRANSCRIPTION_DISCLOSURE_VERSION);
+        }
+        if (capability !== "summary") throw new Error("unexpected capability");
+        const disclosure = summaryActivationState.disclosure;
+        if (!disclosure || disclosure.connectionId !== connectionId) throw new Error("Summary disclosure is local");
+        const result = connectionId === "direct-xai"
+          ? host!.recordSummaryDataPathDisclosure("xai", disclosure.disclosureVersion)
+          : (() => {
+        if (!host!.listAgentConnectionRecords().some((record) => record.id === connectionId)) {
+          host!.upsertAgentConnectionRecord({
+            id: connectionId,
+            kind: "supported-agent",
+            adapter: connectionId,
+            label: connectionId,
+            lifecycle: "available",
+            settings: {},
+          });
+        }
+            return host!.recordAgentConnectionDisclosure({
+              connectionId,
+              capability: "summary",
+              disclosureVersion: disclosure.disclosureVersion,
+              decision: "accepted",
+            });
+          })();
+        summaryActivationState = {
+          ...summaryActivationState,
+          state: "ready",
+          blocker: null,
+          remediation: null,
+          disclosure: {
+            ...disclosure,
+            required: false,
+            declined: false,
+            acceptedDisclosureVersion: disclosure.disclosureVersion,
+          },
+        };
+        return result;
+      }),
+      declineDisclosure: vi.fn(({ connectionId, capability }: { connectionId: string; capability: string }) => {
+        if (capability !== "summary") throw new Error("unexpected capability");
+        const disclosure = summaryActivationState.disclosure;
+        if (!disclosure || disclosure.connectionId !== connectionId) throw new Error("Summary disclosure is local");
+        const result = connectionId === "direct-xai"
+          ? host!.declineSummaryDataPathDisclosure("xai", disclosure.disclosureVersion)
+          : host!.recordAgentConnectionDisclosure({
+              connectionId,
+              capability: "summary",
+              disclosureVersion: disclosure.disclosureVersion,
+              decision: "declined",
+            });
+        const remediation = {
+          href: `/settings/llm?connection=${encodeURIComponent(connectionId)}&capability=summary`,
+        };
+        summaryActivationState = {
+          ...summaryActivationState,
+          state: "disclosure_required",
+          detail: `Review the ${summaryActivationState.selected.label} Summary data path before recording`,
+          disclosure: {
+            ...disclosure,
+            required: true,
+            declined: true,
+            acceptedDisclosureVersion: null,
+          },
+          remediation,
+          blocker: {
+            capability: "summary_disclosure",
+            reason: "disclosure_declined",
+            detail: `Review the ${summaryActivationState.selected.label} Summary data path before recording`,
+            remediation,
+          },
+        };
+        return result;
+      }),
+      probe: vi.fn(async () => agentProbe()),
+    } as never;
     return {
       moviesDir,
       artifacts,
@@ -167,10 +294,12 @@ describe("activation router", () => {
       localStatus,
       xaiConnection,
       agentProbe,
+      summaryActivation,
       retryTask,
       replaceSummaryProvider,
       enqueueCompletion,
-      setAgentReadiness: (value: typeof agentReadiness) => { agentReadiness = value; },
+      setAgentReadiness: (value: SupportedAgentSummaryReadiness) => { agentReadiness = value; },
+      setSummaryActivation: (value: SummaryActivationState) => { summaryActivationState = value; },
       ctx,
     };
   }
@@ -231,6 +360,7 @@ describe("activation router", () => {
       destinationHint: "",
       agentProvider: "codex",
       summaryProvider: "codex",
+      summaryConnectionId: "codex",
       summaryModel: "runtime-managed",
     }).task;
     stopRecordingAndEnqueueMock.mockImplementation(async (
@@ -473,6 +603,7 @@ describe("activation router", () => {
       destinationHint: "",
       agentProvider: "codex",
       summaryProvider: "codex",
+      summaryConnectionId: "codex",
       summaryModel: "runtime-managed",
     }).task;
     host!.correlateActivationAttempt(attempt.id, task.id);
@@ -502,7 +633,7 @@ describe("activation router", () => {
       blocker: {
         capability: "summary",
         retry: "same_task",
-        remediation: { href: "/agent-connections?capability=summary" },
+        remediation: { href: "/settings/llm?connection=codex&capability=summary" },
       },
       summaryRecovery: { canReplace: false },
     });
@@ -518,6 +649,54 @@ describe("activation router", () => {
       },
     });
     expect(retryTask).toHaveBeenCalledWith(task.id, { allowCancelled: true });
+  });
+
+  it("surfaces an unknown Summary outcome without offering an ordinary retry", async () => {
+    const { caller, moviesDir, artifacts } = setup();
+    const stem = "Guided_20260825_141501";
+    const audioPath = join(moviesDir, `${stem}.wav`);
+    writeFileSync(audioPath, wavWithAudio());
+    const attempt = host!.beginActivationAttempt().attempt;
+    const task = host!.enqueueRecording({
+      idempotencyKey: "recording:guided-unknown-summary",
+      recordingStem: stem,
+      title: "Core Activation",
+      audioPath,
+      sendToNotion: false,
+      destinationHint: "",
+      agentProvider: "claude-code",
+      summaryProvider: "claude-code",
+      summaryConnectionId: "claude-code",
+      summaryModel: "claude-sonnet-5",
+      summaryCredentialClass: "runtime-oauth",
+      summaryDisclosureVersion: "claude-code-summary-v1",
+    }).task;
+    host!.correlateActivationAttempt(attempt.id, task.id);
+    const claimed = host!.claim(task.id)!;
+    const transcript = artifacts.commitTranscript(claimed, "preserved transcript", {
+      transcriptionProvider: "local",
+      committedBy: "yulu-host",
+    });
+    host!.recordTranscript(task.id, claimed.leaseToken!, transcript);
+    host!.recordSummaryInputSnapshot(task.id, claimed.leaseToken!, transcript);
+    host!.beginSummaryExecution(task.id, claimed.leaseToken!);
+    host!.markSummaryUnknownOutcome(task.id, claimed.leaseToken!);
+
+    await expect(caller.status()).resolves.toMatchObject({
+      state: "processing",
+      task: {
+        id: task.id,
+        state: "execution_unverified",
+        summaryProvider: "claude-code",
+        summaryModel: "claude-sonnet-5",
+      },
+      blocker: {
+        capability: "summary",
+        retry: "new_summary_attempt",
+        remediation: { href: "/settings/llm?connection=claude-code&capability=summary" },
+      },
+    });
+    expect(() => host!.retry(task.id)).toThrow("cannot retry from execution_unverified");
   });
 
   it("names credential, model, and provider failures without changing the pinned task", async () => {
@@ -565,7 +744,15 @@ describe("activation router", () => {
   });
 
   it("uses an explicitly changed ready Summary Provider in a new correlated attempt", async () => {
-    const { caller, moviesDir, artifacts, configValue, ctx, replaceSummaryProvider } = setup();
+    const {
+      caller,
+      moviesDir,
+      artifacts,
+      configValue,
+      ctx,
+      replaceSummaryProvider,
+      setSummaryActivation,
+    } = setup();
     const stem = "Guided_20260825_141501";
     const audioPath = join(moviesDir, `${stem}.wav`);
     writeFileSync(audioPath, wavWithAudio());
@@ -600,6 +787,13 @@ describe("activation router", () => {
       credentialSource: "oauth",
     });
     host!.recordSummaryDataPathDisclosure("xai", XAI_SUMMARY_DISCLOSURE_VERSION);
+    setSummaryActivation(summaryContract({
+      connectionId: "direct-xai",
+      provider: "xai",
+      label: "xAI",
+      model: "grok-new-explicit",
+      credentialSource: "oauth",
+    }));
 
     await expect(caller.status()).resolves.toMatchObject({
       blocker: { capability: "provider", retry: "same_task" },
@@ -626,7 +820,15 @@ describe("activation router", () => {
   });
 
   it("creates a new xAI attempt when only the ready credential source changes", async () => {
-    const { caller, moviesDir, artifacts, configValue, ctx, xaiConnection } = setup();
+    const {
+      caller,
+      moviesDir,
+      artifacts,
+      configValue,
+      ctx,
+      xaiConnection,
+      setSummaryActivation,
+    } = setup();
     const stem = "Guided_credential_change_20260825_141501";
     const audioPath = join(moviesDir, `${stem}.wav`);
     writeFileSync(audioPath, wavWithAudio());
@@ -663,6 +865,13 @@ describe("activation router", () => {
       credentialSource: "api-key",
     });
     host!.recordSummaryDataPathDisclosure("xai", XAI_SUMMARY_DISCLOSURE_VERSION);
+    setSummaryActivation(summaryContract({
+      connectionId: "direct-xai",
+      provider: "xai",
+      label: "xAI",
+      model: "grok-pinned",
+      credentialSource: "api-key",
+    }));
 
     await expect(caller.status()).resolves.toMatchObject({
       summaryRecovery: { canReplace: true },
@@ -726,7 +935,7 @@ describe("activation router", () => {
       blocker: {
         capability: "summary",
         retry: "same_task",
-        remediation: { href: "/agent-connections?capability=summary" },
+        remediation: { href: "/settings/llm?capability=summary" },
       },
       summaryRecovery: { canReplace: false },
     });
@@ -1015,7 +1224,7 @@ describe("activation router", () => {
   });
 
   it("requires xAI summary readiness and a separate transcript Data Path Disclosure", async () => {
-    const { caller, configValue, ctx } = setup();
+    const { caller, configValue, ctx, setSummaryActivation } = setup();
     configValue.intelligence.summary = { provider: "xai", model: "grok-summary-exact" };
     ctx.xaiReadiness!.set("summary", {
       capability: "summary",
@@ -1025,13 +1234,38 @@ describe("activation router", () => {
       detail: "ready",
       credentialSource: "oauth",
     });
+    const remediation = { href: "/settings/llm?connection=direct-xai&capability=summary" };
+    setSummaryActivation(summaryContract({
+      connectionId: "direct-xai",
+      provider: "xai",
+      label: "xAI",
+      model: "grok-summary-exact",
+      state: "disclosure_required",
+      credentialSource: "oauth",
+      disclosure: {
+        provider: "xai",
+        connectionId: "direct-xai",
+        disclosureVersion: XAI_SUMMARY_DISCLOSURE_VERSION,
+        acceptedDisclosureVersion: null,
+        declined: false,
+        required: true,
+        data: "transcript_text",
+        destination: "xAI",
+      },
+      blocker: {
+        capability: "summary_disclosure",
+        reason: "disclosure_required",
+        detail: "Review the xAI Summary data path before recording",
+        remediation,
+      },
+    }));
 
     await expect(caller.status()).resolves.toMatchObject({
       nextStep: "summary_provider",
       blocker: {
         capability: "summary_disclosure",
         reason: "disclosure_required",
-        remediation: { href: "/agent-connections?capability=summary" },
+        remediation: { href: "/settings/llm?connection=direct-xai&capability=summary" },
       },
       readiness: {
         summary: {
@@ -1092,8 +1326,22 @@ describe("activation router", () => {
   });
 
   it("consumes provider-neutral Supported Agent readiness without a Hermes prerequisite", async () => {
-    const { caller, ctx } = setup();
+    const { caller, ctx, setSummaryActivation } = setup();
     ctx.supportedAgentSummaryAdapter = undefined;
+    const unavailableRemediation = { href: "/settings/llm?connection=codex&capability=summary" };
+    setSummaryActivation(summaryContract({
+      connectionId: "codex",
+      provider: "agent",
+      label: "Summary Provider",
+      state: "blocked",
+      publicOnboardingSupported: false,
+      blocker: {
+        capability: "summary_provider",
+        reason: "provider_unavailable",
+        detail: "A Supported Agent summary adapter is not available in this release",
+        remediation: unavailableRemediation,
+      },
+    }));
 
     await expect(caller.status()).resolves.toMatchObject({
       nextStep: "summary_provider",
@@ -1101,7 +1349,7 @@ describe("activation router", () => {
         capability: "summary_provider",
         reason: "provider_unavailable",
         detail: expect.not.stringMatching(/Hermes/i),
-        remediation: { href: "/agent-connections?capability=summary" },
+        remediation: { href: "/settings/llm?connection=codex&capability=summary" },
       },
       readiness: {
         summary: {
@@ -1132,6 +1380,31 @@ describe("activation router", () => {
       probe: async () => { throw new Error("not used"); },
       gateway: () => ({} as never),
     };
+    const disclosureRemediation = { href: "/settings/llm?connection=codex&capability=summary" };
+    const codexDisclosure = (disclosureVersion: string, destination: string) => summaryContract({
+      connectionId: "codex",
+      provider: "codex",
+      label: "Codex",
+      state: "disclosure_required",
+      credentialSource: "oauth",
+      disclosure: {
+        provider: "codex",
+        connectionId: "codex",
+        disclosureVersion,
+        acceptedDisclosureVersion: null,
+        declined: false,
+        required: true,
+        data: "transcript_text",
+        destination,
+      },
+      blocker: {
+        capability: "summary_disclosure",
+        reason: "disclosure_required",
+        detail: "Review the Codex Summary data path before recording",
+        remediation: disclosureRemediation,
+      },
+    });
+    setSummaryActivation(codexDisclosure("codex-summary-v1", "Codex service"));
     await expect(caller.status()).resolves.toMatchObject({
       blocker: { capability: "summary_disclosure", reason: "disclosure_required" },
       readiness: {
@@ -1158,6 +1431,7 @@ describe("activation router", () => {
         destination: "Changed service",
       },
     };
+    setSummaryActivation(codexDisclosure("codex-summary-v2", "Changed service"));
     await expect(caller.acceptSummaryDataPathDisclosure(displayedDisclosure)).rejects.toThrow(
       "Data Path Disclosure changed",
     );
@@ -1170,6 +1444,7 @@ describe("activation router", () => {
         destination: "Codex service",
       },
     };
+    setSummaryActivation(codexDisclosure("codex-summary-v1", "Codex service"));
     await caller.acceptSummaryDataPathDisclosure(displayedDisclosure);
     await expect(caller.status()).resolves.toMatchObject({
       nextStep: null,
@@ -1177,58 +1452,51 @@ describe("activation router", () => {
     });
   });
 
-  it("names xAI credential, model, provider, and readiness blockers", async () => {
-    const { caller, configValue, ctx, xaiConnection } = setup();
-    configValue.intelligence.summary = { provider: "xai", model: "grok-summary-exact" };
-    host!.recordSummaryDataPathDisclosure("xai", XAI_SUMMARY_DISCLOSURE_VERSION);
+  it("names xAI credential, model, provider, and readiness blockers from the shared contract", async () => {
+    const { caller, setSummaryActivation } = setup();
+    const remediation = { href: "/settings/llm?connection=direct-xai&capability=summary" };
+    const blockedXai = (
+      capability: NonNullable<SummaryActivationState["blocker"]>["capability"],
+      reason: NonNullable<SummaryActivationState["blocker"]>["reason"],
+      detail: string,
+    ) => summaryContract({
+      connectionId: "direct-xai",
+      provider: "xai",
+      label: "xAI",
+      model: "grok-summary-exact",
+      state: "blocked",
+      credentialSource: "oauth",
+      blocker: { capability, reason, detail, remediation },
+    });
 
-    xaiConnection.connected = false;
-    xaiConnection.source = null;
+    setSummaryActivation(blockedXai("summary_credentials", "missing_credentials", "xAI is not authorized"));
     await expect(caller.status()).resolves.toMatchObject({
       blocker: { capability: "summary_credentials", reason: "missing_credentials" },
     });
 
-    xaiConnection.connected = true;
-    xaiConnection.source = "oauth";
-    configValue.intelligence.summary.model = "";
+    setSummaryActivation(blockedXai("summary_model", "invalid_model", "xAI Summary model is invalid"));
     await expect(caller.status()).resolves.toMatchObject({
       blocker: { capability: "summary_model", reason: "invalid_model" },
     });
 
-    configValue.intelligence.summary.model = "grok-summary-exact";
-    ctx.xaiReadiness = undefined;
+    setSummaryActivation(blockedXai("summary_provider", "provider_unavailable", "xAI is unavailable"));
     await expect(caller.status()).resolves.toMatchObject({
       blocker: { capability: "summary_provider", reason: "provider_unavailable" },
     });
 
-    ctx.xaiReadiness = new Map([["summary", {
-      capability: "summary",
-      status: "failed",
-      model: "grok-summary-exact",
-      testedAt: "2026-08-25T04:00:00.000Z",
-      detail: "probe failed",
-      credentialSource: "oauth",
-    }]]);
+    setSummaryActivation(blockedXai("summary_readiness", "readiness_failed", "probe failed"));
     await expect(caller.status()).resolves.toMatchObject({
       blocker: { capability: "summary_readiness", reason: "readiness_failed" },
     });
 
-    ctx.xaiReadiness = new Map([["summary", {
-      capability: "summary",
-      status: "failed",
-      reason: "invalid_model",
-      model: "grok-summary-exact",
-      testedAt: "2026-08-25T04:00:00.000Z",
-      detail: "HTTP 404: model not found",
-      credentialSource: "oauth",
-    }]]);
+    setSummaryActivation(blockedXai("summary_model", "invalid_model", "HTTP 404: model not found"));
     await expect(caller.status()).resolves.toMatchObject({
       blocker: { capability: "summary_model", reason: "invalid_model" },
     });
   });
 
-  it("requires proof metadata and exposes the generic Agent capability probe", async () => {
-    const { caller, setAgentReadiness, agentProbe } = setup();
+  it("consumes a failed shared readiness contract and exposes the selected connection probe", async () => {
+    const { caller, setAgentReadiness, setSummaryActivation, agentProbe } = setup();
     setAgentReadiness({
       capability: "summary",
       provider: "codex",
@@ -1239,6 +1507,15 @@ describe("activation router", () => {
       credentialSource: null,
       disclosure: { kind: "local" },
     });
+    setSummaryActivation(summaryContract({
+      state: "blocked",
+      blocker: {
+        capability: "summary_readiness",
+        reason: "readiness_failed",
+        detail: "The Supported Agent did not return current readiness proof",
+        remediation: { href: "/settings/llm?connection=codex&capability=summary" },
+      },
+    }));
     await expect(caller.status()).resolves.toMatchObject({
       blocker: { capability: "summary_readiness", reason: "readiness_failed" },
       readiness: { summary: { state: "blocked" } },

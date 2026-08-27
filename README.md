@@ -32,9 +32,10 @@ same durable artifact transaction used by Agent-backed summaries.
 Core Activation names the exact selected Summary Provider and model. xAI is
 ready only after its current model and credential source pass a real capability
 probe and the current versioned Data Path Disclosure is accepted; OAuth or API
-key presence is not acceptance to send transcript text. Additional Agent Summary
-Providers remain blocked in the public activation flow until a Phase 12 adapter
-can prove the same identity, readiness, and disclosure contract.
+key presence is not acceptance to send transcript text. Activation lists only
+connections that currently satisfy the shared Summary contract: direct xAI,
+Codex, Claude Code, or CLIProxyAPI. Hermes and OpenClaw are Conversation-only
+and never appear as Summary choices.
 
 When activation readiness is green, `/activate` starts the same production
 recorder used elsewhere in Yulu and suggests a natural 10–20 second recording.
@@ -69,11 +70,12 @@ The session also pins the xAI credential source and verifies the response model.
 Failures preserve the provider/model/credential identity, evidence snapshot, and
 history until one explicit same-snapshot retry or a new conversation.
 
-Open **Manage Agents & Connectors** in Agent Console to select the conversation
-Agent and inspect Notion, Zulip, calendar, and other connector status for that
-Agent. Yulu shows configuration state, copies the Agent's native management
-command, and stores non-secret destination preferences; credentials and OAuth
-remain in the Agent that owns the connector.
+Open **Settings → Intelligent Services** for the authoritative Agent Connection
+Center. It connects, discloses, tests, selects, repairs, and deletes each
+capability without sending a model request merely because the page opened.
+Activation and Agent Console deep-link to that exact connection and capability.
+New conversations require an explicit ready selection; existing pinned sessions
+keep their creation-time provider, model, connection, and native session.
 
 <p align="center">
   <img src="assets/demos/recordings-reader.png" alt="Yulu recording library with audio playback and transcript reader" />
@@ -106,8 +108,9 @@ center of the currently active display.
 - macOS 13 or later.
 - Apple Silicon (arm64) for official release installs.
 - Python 3.10 or newer.
-- A working Hermes CLI visible to Yulu's LaunchAgents when you want automatic
-  summaries or authorized connector delivery.
+- A ready Summary Provider connection in Settings (xAI, Codex, Claude Code, or
+  CLIProxyAPI) when you want automatic summaries. Hermes is required only for
+  authorized connector delivery; Hermes and OpenClaw remain Conversation-only.
 - The local transcription model (default), or xAI OAuth authorized directly in
   Settings plus the current Cloud Transcription Consent when you explicitly
   select xAI.
@@ -206,8 +209,9 @@ The split is intentional:
   artifact commits, recovery, and authorization boundaries.
 - **The selected Yulu audio engine** owns realtime captions, final transcripts,
   and dictation. Selection is explicit and never falls back automatically.
-- **The pinned Summary Provider** owns summary generation. Agent-backed summaries
-  currently use Hermes, which also owns explicitly authorized Notion delivery.
+- **The pinned Summary Provider** owns summary generation through the exact
+  eligible xAI, Codex, Claude Code, or CLIProxyAPI connection selected when the
+  task was created. Hermes may still own explicitly authorized Notion delivery.
 - **The selected general Agent** owns Agent Console conversation and its own
   connectors.
 
@@ -265,10 +269,11 @@ pipeline. Install Yulu first, then add the skill to each Agent you want to use.
 | Hermes 0.20.0 | Unavailable until Hermes exposes a stable, tool-free capability-probe surface | Not supported | PATH, config, and OAuth status alone never count as ready |
 | CLIProxyAPI | Supported for an explicitly saved endpoint, exact model, and Yulu-managed inference key | Supported with an independent exact-model readiness proof | Credentials are write-only and never returned to the browser |
 
-Opening Agent Connection Center performs status inspection only and never spends
+Settings → Intelligent Services is the authoritative Agent Connection Center.
+Opening it performs status inspection only and never probes a model or spends
 model quota. A capability test requires its current Data Path Disclosure first.
-Deleting Hermes or OpenClaw removes only Yulu's connection/readiness history and
-future selection; it does not log out of or reconfigure the native runtime.
+Deleting a runtime-owned connection removes only Yulu's connection/readiness
+history and future selection; it does not log out of or reconfigure the runtime.
 
 ## Data and privacy
 
@@ -282,7 +287,7 @@ future selection; it does not log out of or reconfigure the native runtime.
 - Selecting xAI does not by itself authorize cloud processing. Before sending
   recording audio directly to xAI for speech-to-text, Yulu requires the current
   Cloud Transcription Consent after disclosing that audio leaves the computer and
-  provider charges may apply. Settings → AI Providers keeps OAuth tokens and
+  provider charges may apply. Settings → Intelligent Services keeps OAuth tokens and
   explicitly submitted API keys in macOS Keychain and tests transcription,
   summary, and conversation separately; Hermes and OpenClaw do not receive the
   credential or run Yulu's audio pipeline. Selecting local keeps speech

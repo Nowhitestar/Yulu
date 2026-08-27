@@ -43,6 +43,8 @@ interface AttemptData {
     state: string;
     phase: string;
     error: string | null;
+    summaryProvider?: string;
+    summaryModel?: string;
   } | null;
   journey: UnresolvedData["journey"];
   backgroundEvidence?: ActivatedData["evidence"] | null;
@@ -50,7 +52,7 @@ interface AttemptData {
     capability: "audio" | "transcription" | "credential" | "model" | "provider" | "summary" |
       "recording_pipeline";
     detail: string | null;
-    retry: "same_task" | "same_audio" | "start_recording" | "rerecord";
+    retry: "same_task" | "same_audio" | "start_recording" | "rerecord" | "new_summary_attempt";
     remediation: { href: string };
   } | null;
   summaryRecovery?: {
@@ -225,10 +227,23 @@ const activation = vi.hoisted(() => ({
   updateConfig: vi.fn(async () => ({})),
   testLocal: vi.fn(async () => ({ ok: true })),
   probeXai: vi.fn(async () => ({ status: "ready" })),
+  createSummaryAttemptFromUnknown: vi.fn(async () => ({ state: "transcript_committed" })),
   selectAgentConnection: vi.fn(async () => ({})),
   acceptAgentConnectionDisclosure: vi.fn(async () => ({})),
   declineAgentConnectionDisclosure: vi.fn(async () => ({})),
   agentConnectionView: { connections: [{ id: "direct-xai" }] },
+  summaryActivation: {
+    directXaiAvailable: true,
+    selected: { connectionId: "direct-xai", provider: "xai", label: "xAI", model: "grok-summary-exact" },
+    state: "ready",
+    options: [
+      { connectionId: "direct-xai", provider: "xai", label: "xAI", model: "grok-summary-exact", selected: true },
+      { connectionId: "codex", provider: "codex", label: "Codex", model: "gpt-5.6-sol", selected: false },
+      { connectionId: "claude-code", provider: "claude-code", label: "Claude Code", model: "claude-sonnet-5", selected: false },
+      { connectionId: "cliproxyapi", provider: "cliproxyapi", label: "CLIProxyAPI", model: "gateway-summary", selected: false },
+    ],
+  },
+  summaryRefetch: vi.fn(async () => ({})),
   refetch: vi.fn(async () => ({})),
   renderStatus: undefined as (() => void) | undefined,
   isPending: false,
@@ -284,15 +299,29 @@ vi.mock("../../../web/src/trpc.js", () => ({
       probe: { useMutation: () => ({ mutateAsync: activation.probeXai, isPending: false }) },
     },
     agentConnections: {
+      summaryActivation: {
+        useQuery: () => ({
+          data: activation.summaryActivation,
+          isPending: false,
+          isError: false,
+          refetch: activation.summaryRefetch,
+        }),
+      },
       view: {
         useQuery: () => ({ data: activation.agentConnectionView, isPending: false, isError: false }),
       },
       select: { useMutation: () => ({ mutateAsync: activation.selectAgentConnection, isPending: false }) },
+      probe: { useMutation: () => ({ mutateAsync: activation.probeXai, isPending: false }) },
       acceptDisclosure: {
         useMutation: () => ({ mutateAsync: activation.acceptAgentConnectionDisclosure, isPending: false }),
       },
       declineDisclosure: {
         useMutation: () => ({ mutateAsync: activation.declineAgentConnectionDisclosure, isPending: false }),
+      },
+    },
+    agentTasks: {
+      createSummaryAttemptFromUnknown: {
+        useMutation: () => ({ mutateAsync: activation.createSummaryAttemptFromUnknown, isPending: false }),
       },
     },
     useUtils: () => ({ activation: { status: { invalidate: activation.refetch } } }),
@@ -336,14 +365,22 @@ afterEach(() => {
   activation.updateConfig.mockClear();
   activation.testLocal.mockClear();
   activation.probeXai.mockClear();
+  activation.createSummaryAttemptFromUnknown.mockClear();
   activation.selectAgentConnection.mockClear();
   activation.acceptAgentConnectionDisclosure.mockClear();
   activation.declineAgentConnectionDisclosure.mockClear();
   activation.refetch.mockClear();
+  activation.summaryRefetch.mockClear();
   activation.renderStatus = undefined;
   activation.isPending = false;
   activation.isError = false;
   activation.queryOptions = undefined;
+  activation.summaryActivation.selected = {
+    connectionId: "direct-xai",
+    provider: "xai",
+    label: "xAI",
+    model: "grok-summary-exact",
+  };
 });
 
 describe("/activate", () => {
@@ -363,7 +400,7 @@ describe("/activate", () => {
     );
     expect(screen.getByRole("link", { name: "AI Provider settings" })).toHaveAttribute(
       "href",
-      "/agent-connections",
+      "/settings/llm",
     );
   });
 
@@ -430,7 +467,7 @@ describe("/activate", () => {
     expect(screen.queryByText(/System Settings.*Microphone/)).not.toBeInTheDocument();
     expect(screen.getByText("Selected transcription ready")).toBeInTheDocument();
     expect(screen.getByText("Selected Summary Provider ready")).toBeInTheDocument();
-    expect(screen.getByText("xAI")).toBeInTheDocument();
+    expect(screen.getAllByText("xAI").length).toBeGreaterThan(0);
     expect(screen.getByText("grok-summary-exact")).toBeInTheDocument();
     expect(screen.queryByText(/automatic|fallback/i)).not.toBeInTheDocument();
     expect(screen.queryByRole("radio", { name: "Local transcription" })).not.toBeInTheDocument();
@@ -586,7 +623,7 @@ describe("/activate", () => {
         capability: "provider",
         detail: "Pinned Summary Provider is unavailable",
         retry: "same_task",
-        remediation: { href: "/agent-connections?capability=summary" },
+        remediation: { href: "/settings/llm?capability=summary" },
       },
       summaryRecovery: {
         selected: { provider: "xai", model: "grok-new-explicit" },
@@ -601,7 +638,7 @@ describe("/activate", () => {
 
     expect(screen.getByRole("alert")).toHaveTextContent("Summary Provider blocked activation");
     expect(screen.getByText("Pinned Summary Provider is unavailable")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Open AI Provider Settings" })).toHaveAttribute("href", "/agent-connections?capability=summary");
+    expect(screen.getByRole("link", { name: "Open AI Provider Settings" })).toHaveAttribute("href", "/settings/llm?capability=summary");
     await user.click(screen.getByRole("button", { name: "Retry saved work" }));
     expect(activation.retryAttempt).toHaveBeenCalledOnce();
     await user.click(screen.getByRole("button", { name: "Use xai · grok-new-explicit" }));
@@ -629,14 +666,58 @@ describe("/activate", () => {
         capability: "credential",
         detail: "xAI transcription failed (HTTP 401)",
         retry: "same_task",
-        remediation: { href: "/agent-connections?connection=direct-xai&capability=transcription" },
+        remediation: { href: "/settings/llm?connection=direct-xai&capability=transcription" },
       },
     };
     renderRoute("en");
 
     expect(screen.getByRole("link", { name: "Open Transcription Settings" }))
-      .toHaveAttribute("href", "/agent-connections?connection=direct-xai&capability=transcription");
+      .toHaveAttribute("href", "/settings/llm?connection=direct-xai&capability=transcription");
     expect(screen.queryByRole("link", { name: "Open AI Provider Settings" })).not.toBeInTheDocument();
+  });
+
+  it("offers an explicit new Summary attempt for Unknown Outcome without ordinary retry", async () => {
+    activation.data = {
+      state: "processing",
+      evidence: null,
+      attempt: {
+        id: "attempt-unknown-summary",
+        startedAt: "2026-08-25T06:15:00.000Z",
+        taskId: "019f0000-0000-7000-8000-000000000142",
+        recordingStem: "Activation_20260825_141501",
+      },
+      task: {
+        id: "019f0000-0000-7000-8000-000000000142",
+        state: "execution_unverified",
+        phase: "failed",
+        error: "Claude Code Summary outcome is unknown",
+        summaryProvider: "claude-code",
+        summaryModel: "claude-sonnet-5",
+      },
+      journey: unresolvedData().journey,
+      blocker: {
+        capability: "summary",
+        detail: "Claude Code Summary outcome is unknown",
+        retry: "new_summary_attempt",
+        remediation: { href: "/settings/llm?connection=claude-code&capability=summary" },
+      },
+    } as AttemptData;
+    renderRoute("en");
+    const user = userEvent.setup();
+
+    expect(screen.getByRole("alert")).toHaveTextContent("Claude Code Summary outcome is unknown");
+    expect(screen.getByText(/claude-code · claude-sonnet-5/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Retry saved work" })).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Open AI Provider Settings" })).toHaveAttribute(
+      "href",
+      "/settings/llm?connection=claude-code&capability=summary",
+    );
+    await user.click(screen.getByRole("button", { name: "Start a new Summary attempt" }));
+    expect(activation.createSummaryAttemptFromUnknown).toHaveBeenCalledWith({
+      id: "019f0000-0000-7000-8000-000000000142",
+    });
+    await user.click(screen.getByRole("button", { name: "Keep waiting" }));
+    expect(screen.getByRole("status")).toHaveTextContent("Kept waiting");
   });
 
   it("displays a durable stopped-recording handoff failure after restart", () => {
@@ -764,7 +845,7 @@ describe("/activate", () => {
       capability: "summary_disclosure",
       reason: "disclosure_required",
       detail: "disclosure required",
-      remediation: { href: "/agent-connections?capability=summary" },
+      remediation: { href: "/settings/llm?capability=summary" },
     };
     activation.data.readiness.summary.state = "disclosure_required";
     activation.data.readiness.summary.disclosure!.acceptedDisclosureVersion = null;
@@ -791,7 +872,7 @@ describe("/activate", () => {
       capability: "summary_disclosure",
       reason: "disclosure_required",
       detail: "disclosure required",
-      remediation: { href: "/agent-connections?capability=summary" },
+      remediation: { href: "/settings/llm?capability=summary" },
     };
     activation.data.readiness.summary.state = "disclosure_required";
     activation.data.readiness.summary.disclosure!.required = true;
@@ -807,7 +888,7 @@ describe("/activate", () => {
     const blocker = screen.getByRole("alert");
     expect(blocker).toHaveTextContent("xAI remains selected");
     expect(blocker).toHaveTextContent("transcript text was not sent");
-    expect(screen.getByRole("link", { name: "Open AI Provider Settings" })).toHaveAttribute("href", "/agent-connections?capability=summary");
+    expect(screen.getByRole("link", { name: "Open AI Provider Settings" })).toHaveAttribute("href", "/settings/llm?capability=summary");
     expect(activation.updateConfig).not.toHaveBeenCalled();
     expect(activation.probeXai).not.toHaveBeenCalled();
   });
@@ -819,7 +900,7 @@ describe("/activate", () => {
       capability: "summary_disclosure",
       reason: "disclosure_required",
       detail: "Codex disclosure required",
-      remediation: { href: "/agent-connections?capability=summary" },
+      remediation: { href: "/settings/llm?capability=summary" },
     };
     activation.data.readiness.summary.selected = { provider: "codex", model: "gpt-5.6-sol" };
     activation.data.readiness.summary.state = "disclosure_required";
@@ -850,7 +931,7 @@ describe("/activate", () => {
       capability: "summary_disclosure",
       reason: "disclosure_required",
       detail: "Claude Code Summary disclosure required",
-      remediation: { href: "/agent-connections?capability=summary" },
+      remediation: { href: "/settings/llm?capability=summary" },
     };
     activation.data.readiness.summary.selected = {
       provider: "claude-code",
@@ -885,19 +966,77 @@ describe("/activate", () => {
       capability: "summary_readiness",
       reason: "readiness_failed",
       detail: "Claude Code cannot currently prove policy-managed hooks are disabled; Summary remains unavailable",
-      remediation: { href: "/agent-connections?capability=summary" },
+      remediation: { href: "/settings/llm?capability=summary" },
     };
     activation.data.readiness.summary.selected = { provider: "claude-code", model: "claude-sonnet-5" };
     activation.data.readiness.summary.state = "blocked";
     activation.data.readiness.summary.disclosure = null;
+    activation.summaryActivation.selected = {
+      connectionId: "claude-code",
+      provider: "claude-code",
+      label: "Claude Code",
+      model: "claude-sonnet-5",
+    };
     const user = userEvent.setup();
     renderRoute("en");
 
     expect(screen.getByText(/policy-managed hooks.*Summary remains unavailable/)).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Retry Summary Provider check" }));
-    expect(activation.probeSummaryProvider).toHaveBeenCalledOnce();
-    expect(activation.probeXai).not.toHaveBeenCalled();
+    expect(activation.probeXai).toHaveBeenCalledWith({
+      connectionId: "claude-code",
+      capability: "summary",
+      model: "claude-sonnet-5",
+    });
+    expect(activation.probeSummaryProvider).not.toHaveBeenCalled();
     expect(activation.updateConfig).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["en", "The activation action failed: Claude runtime denied the exact model"],
+    ["zh", "激活操作失败：Claude runtime denied the exact model"],
+  ] as const)("keeps the exact localized Summary mutation failure in %s", async (lang, expected) => {
+    activation.data = unresolvedData();
+    activation.data.nextStep = "summary_provider";
+    activation.data.blocker = {
+      capability: "summary_readiness",
+      reason: "readiness_failed",
+      detail: "Claude Code Summary is not ready",
+      remediation: { href: "/settings/llm?connection=claude-code&capability=summary" },
+    };
+    activation.summaryActivation.selected = {
+      connectionId: "claude-code",
+      provider: "claude-code",
+      label: "Claude Code",
+      model: "claude-sonnet-5",
+    };
+    activation.probeXai.mockRejectedValueOnce(new Error("Claude runtime denied the exact model"));
+    renderRoute(lang);
+    const user = userEvent.setup();
+
+    await user.click(screen.getByRole("button", {
+      name: lang === "en" ? "Retry Summary Provider check" : "重试摘要提供商检查",
+    }));
+    expect(await screen.findByText(expected)).toHaveAttribute("role", "alert");
+  });
+
+  it("does not offer a no-op Summary retry when no explicit connection is selected", () => {
+    activation.data = unresolvedData();
+    activation.data.nextStep = "summary_provider";
+    activation.data.blocker = {
+      capability: "summary_readiness",
+      reason: "provider_unavailable",
+      detail: "Choose a ready Summary Provider connection",
+      remediation: { href: "/settings/llm?capability=summary" },
+    };
+    (activation.summaryActivation as unknown as { selected: null }).selected = null;
+
+    renderRoute("en");
+
+    expect(screen.getByRole("link", { name: "Open AI Provider Settings" })).toHaveAttribute(
+      "href",
+      "/settings/llm?capability=summary",
+    );
+    expect(screen.queryByRole("button", { name: "Retry Summary Provider check" })).not.toBeInTheDocument();
   });
 
   it("retries only the selected xAI summary capability with exact remediation", async () => {
@@ -907,43 +1046,63 @@ describe("/activate", () => {
       capability: "summary_readiness",
       reason: "readiness_failed",
       detail: "probe failed",
-      remediation: { href: "/agent-connections?capability=summary" },
+      remediation: { href: "/settings/llm?capability=summary" },
     };
     activation.data.readiness.summary.state = "blocked";
-    activation.data.readiness.summary.remediation = { href: "/agent-connections?capability=summary" };
+    activation.data.readiness.summary.remediation = { href: "/settings/llm?capability=summary" };
     const user = userEvent.setup();
     renderRoute("en");
 
     expect(screen.getByRole("alert")).toHaveTextContent("readiness check failed");
     await user.click(screen.getByRole("button", { name: "Retry Summary Provider check" }));
-    expect(activation.probeXai).toHaveBeenCalledWith({ capability: "summary" });
+    expect(activation.probeXai).toHaveBeenCalledWith({
+      connectionId: "direct-xai",
+      capability: "summary",
+      model: "grok-summary-exact",
+    });
     expect(activation.updateConfig).not.toHaveBeenCalled();
     expect(screen.queryByText("Checking activation…")).not.toBeInTheDocument();
   });
 
-  it("changes Summary only through the shared Agent Connection contract", async () => {
+  it("lists only shared-contract eligible Summary Providers and selects the exact connection", async () => {
     activation.data = unresolvedData();
     activation.data.nextStep = "summary_provider";
     activation.data.blocker = {
       capability: "summary_readiness",
       reason: "readiness_required",
       detail: "probe required",
-      remediation: { href: "/agent-connections?capability=summary" },
+      remediation: { href: "/settings/llm?capability=summary" },
     };
     activation.data.readiness.summary.state = "blocked";
     activation.data.readiness.summary.selected = { provider: "agent", model: "runtime-managed" };
     const user = userEvent.setup();
     renderRoute("en");
 
-    expect(screen.queryByRole("radio", { name: "Supported Agent" })).not.toBeInTheDocument();
-    await user.click(screen.getByRole("radio", { name: "xAI" }));
+    expect(screen.getByRole("radio", { name: "xAI" })).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: "Codex" })).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: "Claude Code" })).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: "CLIProxyAPI" })).toBeInTheDocument();
+    expect(screen.queryByRole("radio", { name: "Hermes" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("radio", { name: "OpenClaw" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("radio", { name: "Codex" }));
     expect(activation.selectAgentConnection).toHaveBeenCalledWith({
-      connectionId: "direct-xai",
+      connectionId: "codex",
       capability: "summary",
-      model: "grok-4.6",
+      model: "gpt-5.6-sol",
     });
+    expect(activation.summaryRefetch).toHaveBeenCalledOnce();
     expect(activation.updateConfig).not.toHaveBeenCalled();
     expect(activation.probeXai).not.toHaveBeenCalled();
+  });
+
+  it("keeps every eligible Summary Provider selectable when the current choice is ready", () => {
+    activation.data = unresolvedData();
+    renderRoute("en");
+
+    expect(screen.getByRole("radio", { name: "xAI" })).toBeChecked();
+    expect(screen.getByRole("radio", { name: "Codex" })).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: "Claude Code" })).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: "CLIProxyAPI" })).toBeInTheDocument();
   });
 
   it("exits microphone blocking with exact macOS guidance and bounded retry", async () => {
@@ -1091,13 +1250,13 @@ describe("/activate", () => {
     activation.data.blocker = {
       capability: "xai_transcription",
       detail: "xAI probe failed",
-      remediation: { href: "/agent-connections?connection=direct-xai&capability=transcription" },
+      remediation: { href: "/settings/llm?connection=direct-xai&capability=transcription" },
     };
     activation.data.readiness.transcription.selected = "xai";
     activation.data.readiness.transcription.state = "blocked";
     activation.data.readiness.transcription.xai.disclosureRequired = false;
     activation.data.readiness.transcription.xai.acceptedDisclosureVersion = "xai-audio-v1";
-    activation.data.readiness.transcription.remediation = { href: "/agent-connections?connection=direct-xai&capability=transcription" };
+    activation.data.readiness.transcription.remediation = { href: "/settings/llm?connection=direct-xai&capability=transcription" };
     const user = userEvent.setup();
     renderRoute("en");
 

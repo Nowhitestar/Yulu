@@ -4,7 +4,6 @@ import { CheckCircle2 } from "lucide-react";
 import { MarkdownView } from "../components/MarkdownView.js";
 import { useLang, useT } from "../i18n/LanguageProvider.js";
 import { trpc } from "../trpc.js";
-import { XAI_TEXT_MODEL_DEFAULT } from "../../../src/settingsRegistry.js";
 import "./activate.css";
 
 export const handle = { breadcrumb: "breadcrumb.activate", filters: null };
@@ -17,18 +16,19 @@ export function Activate() {
       return state === "recording" || state === "processing" ? 1_000 : false;
     },
   });
-  const agentConnectionView = trpc.agentConnections.view.useQuery();
+  const summaryContract = trpc.agentConnections.summaryActivation.useQuery();
   const startAttempt = trpc.activation.startAttempt.useMutation();
   const stopAttempt = trpc.activation.stopAttempt.useMutation();
   const retryAttempt = trpc.activation.retryAttempt.useMutation();
   const rerecordAttempt = trpc.activation.rerecordAttempt.useMutation();
   const replaceSummaryProvider = trpc.activation.replaceSummaryProvider.useMutation();
+  const createSummaryAttemptFromUnknown = trpc.agentTasks.createSummaryAttemptFromUnknown.useMutation();
   const defer = trpc.activation.defer.useMutation();
-  const probeSummaryProvider = trpc.activation.probeSummaryProvider.useMutation();
   const updateConfig = trpc.config.update.useMutation();
   const testLocal = trpc.localCaption.test.useMutation();
   const probeXai = trpc.providers.probe.useMutation();
   const selectAgentConnection = trpc.agentConnections.select.useMutation();
+  const probeAgentConnection = trpc.agentConnections.probe.useMutation();
   const acceptAgentConnectionDisclosure = trpc.agentConnections.acceptDisclosure.useMutation();
   const declineAgentConnectionDisclosure = trpc.agentConnections.declineDisclosure.useMutation();
   const [noteOpen, setNoteOpen] = useState(false);
@@ -37,15 +37,15 @@ export function Activate() {
   const [disclosureDeclined, setDisclosureDeclined] = useState(false);
   const [summaryDisclosureDeclined, setSummaryDisclosureDeclined] = useState(false);
   const [reviewSummaryDisclosure, setReviewSummaryDisclosure] = useState(false);
-  const [actionFailed, setActionFailed] = useState(false);
+  const [actionFailed, setActionFailed] = useState<string | null>(null);
+  const [keptUnknownTaskId, setKeptUnknownTaskId] = useState<string | null>(null);
   const titleRef = useRef<HTMLHeadingElement>(null);
   const titleFocused = useRef(false);
   const openingGuidedTask = useRef<string | null>(null);
   const navigate = useNavigate();
   const { lang } = useLang();
   const t = useT();
-  const directXaiAvailable = agentConnectionView.data?.connections
-    .some((connection) => connection.id === "direct-xai") === true;
+  const directXaiAvailable = summaryContract.data?.directXaiAvailable === true;
   useEffect(() => {
     if (
       activation.data?.state !== "activated" ||
@@ -88,6 +88,7 @@ export function Activate() {
     const { task } = activation.data;
     const attemptError = activation.data.attempt.handoffError;
     const blocker = activation.data.blocker;
+    const unknownSummaryOutcome = blocker?.retry === "new_summary_attempt" && task !== null;
     const needsAttention = Boolean(blocker) || Boolean(attemptError) || (task !== null && (
         task.phase === "failed" ||
         ["awaiting_agent", "awaiting_provider", "awaiting_policy", "failed", "cancelled"].includes(task.state)
@@ -115,10 +116,10 @@ export function Activate() {
               ? t("activation.attempt.committing")
               : t("activation.attempt.queued");
     const runRecovery = (action: () => Promise<unknown>) => {
-      setActionFailed(false);
+      setActionFailed(null);
       void action().then(
         () => activation.refetch(),
-        () => setActionFailed(true),
+        (error) => setActionFailed(error instanceof Error ? error.message : String(error)),
       );
     };
     const remediationLabel = blocker?.remediation.href === "/settings/general"
@@ -135,8 +136,19 @@ export function Activate() {
           <p className="activate-intro">{t("activation.attempt.duration")}</p>
           <p className="activate-status" role={needsAttention ? "alert" : "status"} aria-live="polite">
             {progress}
+            {unknownSummaryOutcome && (
+              <>
+                {" · "}{t("activation.attempt.unknownSummary", {
+                  provider: task.summaryProvider,
+                  model: task.summaryModel,
+                })}
+                {blocker.detail && <> {blocker.detail}</>}
+              </>
+            )}
           </p>
-          {(blocker?.detail || task?.error || attemptError) && <p>{blocker?.detail || task?.error || attemptError}</p>}
+          {!unknownSummaryOutcome && (blocker?.detail || task?.error || attemptError) && (
+            <p>{blocker?.detail || task?.error || attemptError}</p>
+          )}
           {activation.data.backgroundEvidence && (
             <div className="activation-notice" role="status" aria-live="polite">
               <span>{t("activation.notice.complete")}</span>
@@ -152,10 +164,10 @@ export function Activate() {
                 className="activate-action primary"
                 disabled={stopAttempt.isPending}
                 onClick={() => {
-                  setActionFailed(false);
+                  setActionFailed(null);
                   void stopAttempt.mutateAsync().then(
                     () => activation.refetch(),
-                    () => setActionFailed(true),
+                    (error) => setActionFailed(error instanceof Error ? error.message : String(error)),
                   );
                 }}
               >
@@ -165,20 +177,44 @@ export function Activate() {
             {blocker && (
               <>
                 <Link className="activate-action" to={blocker.remediation.href}>{remediationLabel}</Link>
-                <button
-                  type="button"
-                  className="activate-action primary"
-                  disabled={retryAttempt.isPending || rerecordAttempt.isPending}
-                  onClick={() => runRecovery(() => blocker.retry === "rerecord"
-                    ? rerecordAttempt.mutateAsync()
-                    : retryAttempt.mutateAsync())}
-                >
-                  {blocker.retry === "rerecord"
-                    ? t("activation.attempt.rerecord")
-                    : blocker.retry === "start_recording"
-                      ? t("activation.attempt.start")
-                      : t("activation.attempt.retry")}
-                </button>
+                {blocker.retry === "new_summary_attempt" && task ? (
+                  keptUnknownTaskId === task.id ? (
+                    <span role="status">{t("activation.attempt.unknownKept")}</span>
+                  ) : (
+                    <>
+                      <button
+                        type="button"
+                        className="activate-action primary"
+                        disabled={createSummaryAttemptFromUnknown.isPending}
+                        onClick={() => runRecovery(() => createSummaryAttemptFromUnknown.mutateAsync({ id: task.id }))}
+                      >
+                        {t("activation.attempt.newSummaryAttempt")}
+                      </button>
+                      <button
+                        type="button"
+                        className="activate-action"
+                        onClick={() => setKeptUnknownTaskId(task.id)}
+                      >
+                        {t("activation.attempt.keepWaiting")}
+                      </button>
+                    </>
+                  )
+                ) : (
+                  <button
+                    type="button"
+                    className="activate-action primary"
+                    disabled={retryAttempt.isPending || rerecordAttempt.isPending}
+                    onClick={() => runRecovery(() => blocker.retry === "rerecord"
+                      ? rerecordAttempt.mutateAsync()
+                      : retryAttempt.mutateAsync())}
+                  >
+                    {blocker.retry === "rerecord"
+                      ? t("activation.attempt.rerecord")
+                      : blocker.retry === "start_recording"
+                        ? t("activation.attempt.start")
+                        : t("activation.attempt.retry")}
+                  </button>
+                )}
               </>
             )}
             {activation.data.summaryRecovery?.canReplace && (
@@ -196,7 +232,9 @@ export function Activate() {
             )}
             <Link className="activate-action" to="/agent-console">{t("activation.attempt.leave")}</Link>
           </div>
-          {actionFailed && <p role="alert">{t("activation.action.error")}</p>}
+          {actionFailed && (
+            <p role="alert">{t("activation.action.errorDetail", { reason: actionFailed })}</p>
+          )}
         </div>
       </section>
     );
@@ -210,12 +248,12 @@ export function Activate() {
       pendingXai || (selected === "xai" && readiness.transcription.xai.disclosureRequired)
     ));
     const run = async (action: () => Promise<unknown>) => {
-      setActionFailed(false);
+      setActionFailed(null);
       try {
         await action();
-        await activation.refetch();
-      } catch {
-        setActionFailed(true);
+        await Promise.all([activation.refetch(), summaryContract.refetch()]);
+      } catch (error) {
+        setActionFailed(error instanceof Error ? error.message : String(error));
       }
     };
     const chooseLocal = () => run(async () => {
@@ -234,23 +272,33 @@ export function Activate() {
     const retryTranscription = () => run(() => selected === "local"
       ? testLocal.mutateAsync()
       : probeXai.mutateAsync({ capability: "transcription" }));
-    const chooseXaiSummary = () => run(async () => {
+    const chooseSummary = (option: {
+      connectionId: string;
+      model: string;
+    }) => run(async () => {
       setSummaryDisclosureDeclined(false);
       setReviewSummaryDisclosure(false);
       await selectAgentConnection.mutateAsync({
-        connectionId: "direct-xai",
+        connectionId: option.connectionId,
         capability: "summary",
-        model: XAI_TEXT_MODEL_DEFAULT,
+        model: option.model,
       });
     });
-    const retrySummary = () => run(() => summary?.selected.provider === "xai"
-      ? probeXai.mutateAsync({ capability: "summary" })
-      : probeSummaryProvider.mutateAsync());
-    const summaryProviderLabel = summary?.selected.provider === "xai"
+    const retrySummary = () => {
+      const selectedSummary = summaryContract.data?.selected;
+      if (!selectedSummary?.connectionId) return;
+      const connectionId = selectedSummary.connectionId;
+      void run(() => probeAgentConnection.mutateAsync({
+        connectionId,
+        capability: "summary",
+        model: selectedSummary.model,
+      }));
+    };
+    const summaryProviderLabel = summaryContract.data?.selected?.label ?? (summary?.selected.provider === "xai"
       ? "xAI"
       : summary?.selected.provider === "agent"
         ? t("activation.summary.agent")
-        : summary?.selected.provider ?? "";
+        : summary?.selected.provider ?? "");
     const summaryDisclosureConnectionId = summary?.disclosure?.connectionId ??
       (summary?.selected.provider === "xai" ? "direct-xai" : null);
     const summaryBlocker = data?.blocker && "reason" in data.blocker ? data.blocker : null;
@@ -298,18 +346,20 @@ export function Activate() {
                 <div><dt>{t("activation.summary.provider")}</dt><dd>{summaryProviderLabel}</dd></div>
                 <div><dt>{t("activation.summary.model")}</dt><dd>{summary.selected.model}</dd></div>
               </dl>
-              {summary.state !== "ready" && directXaiAvailable && (
+              {summaryContract.data && summaryContract.data.options.length > 0 && (
                 <fieldset className="activate-engine">
                   <legend>{t("activation.summary.choose")}</legend>
-                  <label>
-                    <input
-                      type="radio"
-                      name="activation-summary"
-                      checked={summary.selected.provider === "xai"}
-                      onChange={() => void chooseXaiSummary()}
-                    />
-                    xAI
-                  </label>
+                  {summaryContract.data.options.map((option) => (
+                    <label key={option.connectionId}>
+                      <input
+                        type="radio"
+                        name="activation-summary"
+                        checked={option.selected}
+                        onChange={() => void chooseSummary(option)}
+                      />
+                      {option.label}
+                    </label>
+                  ))}
                 </fieldset>
               )}
             </div>
@@ -511,7 +561,7 @@ export function Activate() {
             <div className="activate-declined" role="alert">
               <p>{t("activation.summaryDisclosure.declined", { provider: summaryProviderLabel })}</p>
               <div className="activate-actions">
-                <Link className="activate-action" to="/agent-connections?capability=summary">
+                <Link className="activate-action" to="/settings/llm?capability=summary">
                   {t("activation.summary.openSettings")}
                 </Link>
                 <button
@@ -534,9 +584,11 @@ export function Activate() {
                 <Link className="activate-action primary" to={summaryBlocker.remediation.href}>
                   {t("activation.summary.openSettings")}
                 </Link>
-                <button type="button" className="activate-action" onClick={() => void retrySummary()}>
-                  {t("activation.summary.retry")}
-                </button>
+                {summaryContract.data?.selected?.connectionId && (
+                  <button type="button" className="activate-action" onClick={() => void retrySummary()}>
+                    {t("activation.summary.retry")}
+                  </button>
+                )}
               </div>
             </div>
           )}
@@ -555,7 +607,7 @@ export function Activate() {
                 </button>
               </>
             )}
-            <Link className="activate-action" to="/agent-connections">
+            <Link className="activate-action" to="/settings/llm">
               {t("activation.action.providers")}
             </Link>
             <button
@@ -574,7 +626,9 @@ export function Activate() {
             </button>
           </div>
           {deferFailed && <p role="alert">{t("activation.defer.error")}</p>}
-          {actionFailed && <p role="alert">{t("activation.action.error")}</p>}
+          {actionFailed && (
+            <p role="alert">{t("activation.action.errorDetail", { reason: actionFailed })}</p>
+          )}
         </div>
       </section>
     );
@@ -628,7 +682,7 @@ export function Activate() {
             </button>
           )}
           <Link className="activate-action" to="/settings/transcription">{t("activation.action.transcription")}</Link>
-          <Link className="activate-action" to="/agent-connections">{t("activation.action.providers")}</Link>
+          <Link className="activate-action" to="/settings/llm">{t("activation.action.providers")}</Link>
         </div>
 
         {noteOpen && activated.completedNote && (

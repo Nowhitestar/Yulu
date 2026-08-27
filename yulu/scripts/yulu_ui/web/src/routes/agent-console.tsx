@@ -875,6 +875,7 @@ function AskMeetings({
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [sessionStatusOverride, setSessionStatusOverride] = useState<"active" | "paused" | null>(null);
   const [recoveryOverride, setRecoveryOverride] = useState<ConversationRecovery | null>(null);
+  const [createError, setCreateError] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const sessionQuery = trpc.agentSessions.get.useQuery(
     { id: selectedSessionId ?? "__none__" },
@@ -888,17 +889,23 @@ function AskMeetings({
     asConfigRecord(configQuery.data?.intelligence).conversation,
   );
   const draftXai = draftSession && configuredConversation.provider === "xai";
-  const provider = selectedSession?.provider ?? selectedSessionSummary?.provider ?? (draftXai ? "xai" : undefined);
+  const draftConnectionId = draftXai
+    ? "direct-xai"
+    : draftSession && typeof configuredConversation.connectionId === "string"
+      ? configuredConversation.connectionId
+      : undefined;
+  const draftProvider = draftXai ? "xai" : draftConnectionId;
+  const provider = selectedSession?.provider ?? selectedSessionSummary?.provider ?? draftProvider;
   const model = selectedSession?.model ?? selectedSessionSummary?.model
-    ?? (draftXai && typeof configuredConversation.model === "string" ? configuredConversation.model : undefined);
+    ?? (draftSession && typeof configuredConversation.model === "string" ? configuredConversation.model : undefined);
   const sessionStatus = sessionStatusOverride ?? selectedSession?.status ?? selectedSessionSummary?.status ?? "active";
   const pausedReason = selectedSession?.pausedReason ?? selectedSessionSummary?.pausedReason;
-  const connectionId = selectedSession?.connectionId ?? selectedSessionSummary?.connectionId;
+  const connectionId = selectedSession?.connectionId ?? selectedSessionSummary?.connectionId ?? draftConnectionId;
   const defaultRepairPath = connectionId
-    ? `/agent-connections?connection=${encodeURIComponent(connectionId)}&capability=conversation`
+    ? `/settings/llm?connection=${encodeURIComponent(connectionId)}&capability=conversation`
     : provider === "xai"
-      ? "/agent-connections?connection=direct-xai&capability=conversation"
-      : "/agent-connections?capability=conversation";
+      ? "/settings/llm?connection=direct-xai&capability=conversation"
+      : "/settings/llm?capability=conversation";
   const conversationRecovery = recoveryOverride ?? (sessionStatus === "paused" ? {
     retry: selectedSession?.retrySnapshot ? "same_snapshot" as const : "unavailable_unknown_outcome" as const,
     settingsPath: defaultRepairPath,
@@ -958,7 +965,10 @@ function AskMeetings({
     const node = scrollRef.current;
     if (!node) return;
     if (typeof node.scrollTo === "function") {
-      node.scrollTo({ top: node.scrollHeight, behavior: "smooth" });
+      node.scrollTo({
+        top: node.scrollHeight,
+        behavior: window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches ? "auto" : "smooth",
+      });
     } else {
       node.scrollTop = node.scrollHeight;
     }
@@ -1023,12 +1033,19 @@ function AskMeetings({
     const question = input.trim();
     if (!question || sessionStatus === "paused" || ask.isPending || createSession.isPending || appendSession.isPending) return;
     setInput("");
+    setCreateError(null);
     let sessionId = selectedSessionId;
     if (!sessionId) {
-      const created = await createSession.mutateAsync({ title: question }) as AgentSession;
-      sessionId = created.id;
-      setSelectedSessionId(sessionId);
-      setDraftSession(false);
+      try {
+        const created = await createSession.mutateAsync({ title: question }) as AgentSession;
+        sessionId = created.id;
+        setSelectedSessionId(sessionId);
+        setDraftSession(false);
+      } catch (error) {
+        setInput(question);
+        setCreateError(error instanceof Error ? error.message : String(error));
+        return;
+      }
     }
     await runQuestion(sessionId, question, true);
   };
@@ -1047,6 +1064,7 @@ function AskMeetings({
     setInput("");
     setSessionStatusOverride(null);
     setRecoveryOverride(null);
+    setCreateError(null);
   };
 
   const selectSession = (id: string) => {
@@ -1120,6 +1138,15 @@ function AskMeetings({
             </div>
           </div>
           <div className="agent-chat-composer">
+            {draftSession && createError && (
+              <NewConversationFailure
+                identity={identity ?? conversationName}
+                reason={createError}
+                repairPath={defaultRepairPath}
+                retrying={createSession.isPending}
+                onRetry={() => void submit()}
+              />
+            )}
             {sessionStatus === "paused" && identity && (
               <PausedConversation
                 identity={identity}
@@ -1258,6 +1285,35 @@ function PausedConversation({
         <button type="button" onClick={onNew}>{t("agentConsole.provider.paused.newConversation")}</button>
       </div>
       <small>{t("agentConsole.provider.newSessionNote")}</small>
+    </div>
+  );
+}
+
+function NewConversationFailure({
+  identity,
+  reason,
+  repairPath,
+  retrying,
+  onRetry,
+}: {
+  identity: string;
+  reason: string;
+  repairPath: string;
+  retrying: boolean;
+  onRetry: () => void;
+}) {
+  const t = useT();
+  return (
+    <div className="agent-conversation-paused">
+      <strong role="alert">{t("agentConsole.provider.createFailed.heading")}</strong>
+      <span>{t("agentConsole.provider.createFailed.body", { identity })}</span>
+      <em>{reason}</em>
+      <div>
+        <button type="button" disabled={retrying} onClick={onRetry}>
+          {t("agentConsole.provider.createFailed.retry")}
+        </button>
+        <Link to={repairPath}>{t("settings.providers.open")}</Link>
+      </div>
     </div>
   );
 }
@@ -1616,7 +1672,7 @@ function AgentRolesPanel({
             <strong>对话与手动操作</strong>
             <em>{activeAgent?.name ?? "未选择 Agent"}</em>
           </span>
-          <Link className="agent-cap-action" to="/agent-connections?capability=conversation">管理 Agent 连接</Link>
+          <Link className="agent-cap-action" to="/settings/llm?capability=conversation">管理 Agent 连接</Link>
         </div>
         <div className="agent-role-row">
           <span className="agent-role-icon"><Cpu size={17} strokeWidth={1.9} /></span>

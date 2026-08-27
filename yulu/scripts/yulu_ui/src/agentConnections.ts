@@ -374,7 +374,7 @@ export class AgentConnectionCenter {
             ? config.transcription.engine === "xai"
             : config.intelligence[capability].provider === "xai",
           remediation: currentReadiness.status === "failed"
-            ? { href: `/agent-connections?connection=${DIRECT_XAI_ID}&capability=${capability}` }
+            ? { href: `/settings/llm?connection=${DIRECT_XAI_ID}&capability=${capability}` }
             : null,
         };
       }),
@@ -418,7 +418,7 @@ export class AgentConnectionCenter {
           return {
             capability,
             declared: capability === "summary"
-              ? codexSummaryIsolationDeclared(status) && currentReadiness.status === "ready"
+              ? codexSummaryIsolationDeclared(status)
               : true,
             currentReadiness,
             readinessHistory: this.host.listAgentConnectionReadinessHistory(record.id, capability),
@@ -436,7 +436,7 @@ export class AgentConnectionCenter {
             },
             selected: selection.provider === "agent" && selection.connectionId === record.id,
             remediation: currentReadiness.status === "failed" || !status?.authorized || !status?.supported
-              ? { href: `/agent-connections?connection=${record.id}&capability=${capability}` }
+              ? { href: `/settings/llm?connection=${record.id}&capability=${capability}` }
               : null,
           };
         });
@@ -517,7 +517,7 @@ export class AgentConnectionCenter {
           return {
             capability,
             declared: capability === "summary"
-              ? claudeSummaryIsolationDeclared(summaryStatus) && currentReadiness.status === "ready"
+              ? claudeSummaryIsolationDeclared(summaryStatus)
               : true,
             currentReadiness,
             readinessHistory: this.host.listAgentConnectionReadinessHistory(record.id, capability),
@@ -535,7 +535,7 @@ export class AgentConnectionCenter {
             },
             selected: selection.provider === "agent" && selection.connectionId === record.id,
             remediation: currentReadiness.status === "failed" || !capabilityStatus?.authorized || !capabilityStatus?.supported
-              ? { href: `/agent-connections?connection=${record.id}&capability=${capability}` }
+              ? { href: `/settings/llm?connection=${record.id}&capability=${capability}` }
               : null,
           };
         });
@@ -628,7 +628,7 @@ export class AgentConnectionCenter {
             },
             selected: selection.provider === "agent" && selection.connectionId === record.id,
             remediation: currentReadiness.status === "failed" || !status?.authorized || !status?.supported
-              ? { href: `/agent-connections?connection=${record.id}&capability=conversation` }
+              ? { href: `/settings/llm?connection=${record.id}&capability=conversation` }
               : null,
           }],
           settings: { conversationModel, executablePath: executable },
@@ -682,7 +682,7 @@ export class AgentConnectionCenter {
             },
             selected: selection.provider === "agent" && selection.connectionId === record.id,
             remediation: currentReadiness.status === "failed" || !keyConfigured
-              ? { href: `/agent-connections?connection=${record.id}&capability=${capability}` }
+              ? { href: `/settings/llm?connection=${record.id}&capability=${capability}` }
               : null,
           };
         });
@@ -732,7 +732,7 @@ export class AgentConnectionCenter {
       capabilities: capabilitiesForAdapter(candidate.adapter),
       selected: false,
       readiness: "untested" as const,
-      remediation: { href: `/agent-connections?candidate=${encodeURIComponent(candidate.id)}` },
+      remediation: { href: `/settings/llm?candidate=${encodeURIComponent(candidate.id)}` },
       }));
     const legacyConnections = records
       .filter((record) => record.kind === "legacy-custom")
@@ -746,7 +746,7 @@ export class AgentConnectionCenter {
         capabilities: [],
         readiness: "unsupported" as const,
         settings: record.settings,
-        remediation: { href: `/agent-connections?legacy=${encodeURIComponent(record.id)}` },
+        remediation: { href: `/settings/llm?legacy=${encodeURIComponent(record.id)}` },
       }));
     return {
       connections,
@@ -775,6 +775,121 @@ export class AgentConnectionCenter {
               }
             : { connectionId: null, model: config.intelligence.conversation.model },
       },
+    };
+  }
+
+  async summaryActivation() {
+    const view = await this.view();
+    const providerName = (adapter: string) => adapter === "direct-xai" ? "xai" : adapter;
+    const summaryCapabilities = view.connections.flatMap((connection) => {
+      const capability = connection.capabilities.find((item) => item.capability === "summary");
+      return capability ? [{ connection, capability }] : [];
+    });
+    const options = summaryCapabilities
+      .filter(({ connection, capability }) =>
+        connection.authorization.connected &&
+        capability.declared &&
+        capability.currentReadiness.status === "ready" &&
+        capability.disclosure.required === false)
+      .map(({ connection, capability }) => ({
+        connectionId: connection.id,
+        provider: providerName(connection.adapter),
+        label: connection.label,
+        model: capability.currentReadiness.model,
+        credentialSource: connection.authorization.credentialSource,
+        selected: capability.selected &&
+          capability.currentReadiness.model === view.selections.summary.model,
+      }));
+    const selectedConnectionId = view.selections.summary.connectionId;
+    const selectedEntry = summaryCapabilities.find(({ connection }) =>
+      connection.id === selectedConnectionId);
+    const selected = selectedEntry ? {
+      connectionId: selectedEntry.connection.id,
+      provider: providerName(selectedEntry.connection.adapter),
+      label: selectedEntry.connection.label,
+      model: view.selections.summary.model,
+    } : {
+      connectionId: selectedConnectionId,
+      provider: this.config.read().intelligence.summary.provider,
+      label: "Summary Provider",
+      model: view.selections.summary.model,
+    };
+    const remediation = {
+      href: selectedConnectionId
+        ? `/settings/llm?connection=${encodeURIComponent(selectedConnectionId)}&capability=summary`
+        : "/settings/llm?capability=summary",
+    };
+    const current = selectedEntry?.capability.currentReadiness;
+    const selectedModelReady = current?.model === selected.model;
+    const disclosure = selectedEntry?.capability.disclosure;
+    const reason = !selectedEntry
+      ? "provider_unavailable" as const
+      : !selectedEntry.connection.authorization.connected
+        ? "missing_credentials" as const
+        : !selectedEntry.capability.declared
+          ? "provider_unavailable" as const
+          : !selectedModelReady
+            ? "readiness_required" as const
+            : current?.status === "failed"
+              ? current.reason === "invalid_model"
+                ? "invalid_model" as const
+                : current.reason === "unknown_outcome"
+                  ? "unknown_outcome" as const
+                  : "readiness_failed" as const
+              : current?.status !== "ready"
+                ? "readiness_required" as const
+                : disclosure?.required
+                  ? disclosure.decision === "declined"
+                    ? "disclosure_declined" as const
+                    : "disclosure_required" as const
+                  : null;
+    const blocker = reason ? {
+      capability: reason === "missing_credentials"
+        ? "summary_credentials" as const
+        : reason === "invalid_model"
+          ? "summary_model" as const
+          : reason === "provider_unavailable"
+            ? "summary_provider" as const
+            : reason === "disclosure_required" || reason === "disclosure_declined"
+              ? "summary_disclosure" as const
+              : "summary_readiness" as const,
+      reason,
+      detail: !selectedModelReady && reason === "readiness_required"
+        ? `${selected.label} Summary model ${selected.model} has not been tested in this Host process`
+        : current?.detail ?? (
+          reason === "missing_credentials"
+            ? `${selected.label} is not authorized for Summary`
+            : reason === "disclosure_required" || reason === "disclosure_declined"
+              ? `Review the ${selected.label} Summary data path before recording`
+              : `${selected.label} Summary is not currently ready`
+        ),
+      remediation,
+    } : null;
+    return {
+      selected,
+      options,
+      directXaiAvailable: view.connections.some((connection) => connection.id === DIRECT_XAI_ID),
+      state: blocker?.capability === "summary_disclosure"
+        ? "disclosure_required" as const
+        : blocker ? "blocked" as const : "ready" as const,
+      detail: blocker?.detail ?? current?.detail ?? null,
+      credentialSource: selectedModelReady
+        ? selectedEntry?.connection.authorization.credentialSource ?? null : null,
+      testedAt: selectedModelReady ? current?.testedAt ?? null : null,
+      disclosure: selectedEntry && disclosure ? {
+        provider: providerName(selectedEntry.connection.adapter),
+        connectionId: selectedEntry.connection.id,
+        disclosureVersion: disclosure.disclosureVersion,
+        acceptedDisclosureVersion: disclosure.decision === "accepted"
+          ? disclosure.disclosureVersion : null,
+        declined: disclosure.decision === "declined",
+        required: disclosure.required,
+        data: disclosure.data,
+        destination: disclosure.destination,
+      } : null,
+      publicOnboardingSupported: Boolean(selectedEntry?.capability.declared),
+      remediation: blocker ? remediation : null,
+      blocker,
     };
   }
 
@@ -2137,6 +2252,28 @@ export class AgentConnectionCenter {
     } catch {
       throw new Error("Test this exact Codex Conversation model before starting a new conversation");
     }
+  }
+
+  async assertXaiConversationReady(input: { model: string }): Promise<XaiCredentialSource> {
+    const direct = this.host.listAgentConnectionRecords().find((record) =>
+      record.id === DIRECT_XAI_ID && record.adapter === "direct-xai"
+    );
+    const source = direct ? this.credentialSource(direct.settings.credentialSource) : null;
+    this.credentials.setPreferredSource?.(source);
+    const status = await this.credentials.status();
+    const connected = source === "oauth"
+      ? status.oauthConnected
+      : source === "api-key" ? status.apiKeyConfigured : false;
+    const proof = this.readiness.get("conversation");
+    if (
+      !direct || !source || !connected ||
+      proof?.status !== "ready" ||
+      proof.model !== input.model ||
+      proof.credentialSource !== source
+    ) {
+      throw new Error("Test this exact xAI Conversation model and credential before starting a new conversation");
+    }
+    return source;
   }
 
   async converseClaude(input: {

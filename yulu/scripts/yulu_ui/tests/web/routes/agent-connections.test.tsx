@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter } from "react-router";
+import { MemoryRouter, Route, Routes, useLocation } from "react-router";
 import { LanguageProvider } from "../../../web/src/i18n/LanguageProvider.js";
 
 const mocks = vi.hoisted(() => ({
@@ -75,7 +75,7 @@ const mocks = vi.hoisted(() => ({
           },
           readinessHistory: [{ status: "ready", model: "grok-summary", testedAt: "2026-08-26T12:00:00.000Z" }],
           disclosure: { required: true, disclosureVersion: "xai-summary-v1", data: "transcript_text", destination: "xAI" },
-          remediation: { href: "/agent-connections?connection=direct-xai&capability=summary" },
+          remediation: { href: "/settings/llm?connection=direct-xai&capability=summary" },
         },
         {
           capability: "conversation",
@@ -180,7 +180,7 @@ const mocks = vi.hoisted(() => ({
           data: "transcript_text",
           destination: "Claude Code runtime and its configured model provider",
         },
-        remediation: { href: "/agent-connections?connection=claude-code&capability=summary" },
+        remediation: { href: "/settings/llm?connection=claude-code&capability=summary" },
       }, {
         capability: "conversation",
         declared: true,
@@ -326,7 +326,7 @@ const mocks = vi.hoisted(() => ({
       capabilities: ["conversation"],
       selected: false,
       readiness: "untested",
-      remediation: { href: "/agent-connections?candidate=candidate%3Acodex" },
+      remediation: { href: "/settings/llm?candidate=candidate%3Acodex" },
     }, {
       id: "candidate:claude-code",
       kind: "supported-agent",
@@ -338,7 +338,7 @@ const mocks = vi.hoisted(() => ({
       capabilities: ["conversation"],
       selected: false,
       readiness: "untested",
-      remediation: { href: "/agent-connections?candidate=candidate%3Aclaude-code" },
+      remediation: { href: "/settings/llm?candidate=candidate%3Aclaude-code" },
     }, {
       id: "candidate:hermes",
       kind: "supported-agent",
@@ -350,7 +350,7 @@ const mocks = vi.hoisted(() => ({
       capabilities: ["conversation"],
       selected: false,
       readiness: "untested",
-      remediation: { href: "/agent-connections?candidate=candidate%3Ahermes" },
+      remediation: { href: "/settings/llm?candidate=candidate%3Ahermes" },
     }, {
       id: "candidate:openclaw",
       kind: "supported-agent",
@@ -362,7 +362,7 @@ const mocks = vi.hoisted(() => ({
       capabilities: ["conversation"],
       selected: false,
       readiness: "untested",
-      remediation: { href: "/agent-connections?candidate=candidate%3Aopenclaw" },
+      remediation: { href: "/settings/llm?candidate=candidate%3Aopenclaw" },
     }],
     legacyConnections: [{
       id: "legacy-custom:migrated",
@@ -374,7 +374,7 @@ const mocks = vi.hoisted(() => ({
       capabilities: [],
       readiness: "unsupported",
       settings: { executable: "private-wrapper" },
-      remediation: { href: "/agent-connections?legacy=legacy-custom%3Amigrated" },
+      remediation: { href: "/settings/llm?legacy=legacy-custom%3Amigrated" },
     }],
     selections: {
       transcription: { connectionId: null, model: "local" },
@@ -417,12 +417,20 @@ vi.mock("../../../web/src/trpc.js", () => {
   };
 });
 
-import { AgentConnections } from "../../../web/src/routes/agent-connections.js";
+import {
+  AgentConnections,
+  LegacyAgentConnectionsRedirect,
+} from "../../../web/src/routes/agent-connections.js";
 
-function mount(lang: "zh" | "en" = "zh") {
+function LocationProbe() {
+  const location = useLocation();
+  return <output>{`${location.pathname}${location.search}`}</output>;
+}
+
+function mount(lang: "zh" | "en" = "zh", initialEntry = "/settings/llm") {
   localStorage.setItem("yulu_ui.lang", lang);
   return render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={[initialEntry]}>
       <LanguageProvider>
         <AgentConnections />
       </LanguageProvider>
@@ -438,6 +446,58 @@ beforeEach(() => {
 });
 
 describe("shared Agent Connection Center", () => {
+  it("preserves exact remediation parameters when redirecting the legacy center path", async () => {
+    render(
+      <MemoryRouter initialEntries={["/agent-connections?connection=codex&capability=summary"]}>
+        <Routes>
+          <Route path="/agent-connections" element={<LegacyAgentConnectionsRedirect />} />
+          <Route path="/settings/llm" element={<LocationProbe />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText("/settings/llm?connection=codex&capability=summary"))
+      .toBeInTheDocument();
+  });
+
+  it("focuses the exact connection capability from a remediation deep link without probing", async () => {
+    mount("en", "/settings/llm?connection=codex&capability=summary");
+
+    const target = screen.getByTestId("connection-capability-codex-summary");
+    await vi.waitFor(() => expect(target).toHaveFocus());
+    expect(target).toHaveAttribute("aria-current", "location");
+    expect(mocks.probe).not.toHaveBeenCalled();
+  });
+
+  it("focuses and names an exact connection-only remediation target without probing", async () => {
+    mount("en", "/settings/llm?connection=codex");
+
+    const target = screen.getByTestId("agent-connection-codex");
+    await vi.waitFor(() => expect(target).toHaveFocus());
+    expect(target).toHaveAttribute("aria-current", "location");
+    expect(mocks.probe).not.toHaveBeenCalled();
+  });
+
+  it("keeps a deleted pinned connection deep link actionable with a focused tombstone", async () => {
+    const saved = mocks.view.connections;
+    mocks.view.connections = saved.filter((connection) => connection.id !== "codex");
+    mount("en", "/settings/llm?connection=codex&capability=summary");
+
+    const target = screen.getByTestId("missing-remediation-connection");
+    await vi.waitFor(() => expect(target).toHaveFocus());
+    expect(target).toHaveAttribute("id", "agent-connection-codex-summary");
+    expect(target).toHaveAttribute("aria-current", "location");
+    expect(target).toHaveTextContent("codex");
+    expect(target).toHaveTextContent("Summary");
+    expect(target).toHaveTextContent("Existing pinned work stays pinned");
+    expect(mocks.probe).not.toHaveBeenCalled();
+
+    const user = userEvent.setup();
+    await user.click(within(target).getByRole("button", { name: "Scan installed runtimes" }));
+    expect(mocks.refresh).toHaveBeenCalledOnce();
+    mocks.view.connections = saved;
+  });
+
   it("opens without a probe and distinguishes candidates, legacy connections, current readiness, and history", () => {
     mount();
 
@@ -588,6 +648,38 @@ describe("shared Agent Connection Center", () => {
     expect(within(conversation).getByRole("button", { name: `Accept ${label} Conversation Data Path Disclosure` }))
       .toBeInTheDocument();
     expect(within(conversation).getByRole("button", { name: "Test conversation" })).toBeDisabled();
+  });
+
+  it.each([
+    ["en", "The action did not complete: Codex exact model access denied"],
+    ["zh", "操作未完成：Codex exact model access denied"],
+  ] as const)("shows an exact localized mutation failure in %s", async (lang, expected) => {
+    mocks.probe.mockRejectedValueOnce(new Error("Codex exact model access denied"));
+    mount(lang);
+    const user = userEvent.setup();
+    const summary = screen.getByTestId("connection-capability-codex-summary");
+
+    await user.click(within(summary).getByRole("button", {
+      name: lang === "en" ? "Accept Summary Data Path Disclosure" : "接受摘要数据路径说明",
+    }));
+    await user.click(within(summary)
+      .getByRole("button", { name: lang === "en" ? "Test summary" : "测试摘要" }));
+
+    expect(await screen.findByText(expected)).toHaveAttribute("role", "alert");
+  });
+
+  it("deletes a connected Codex record through the same impact-confirmation path", async () => {
+    mount("en");
+    const user = userEvent.setup();
+    const card = screen.getByTestId("agent-connection-codex");
+
+    await user.click(within(card).getByRole("button", { name: "Delete connection" }));
+    expect(mocks.deletionImpact).toHaveBeenCalledWith({ connectionId: "codex" });
+    const dialog = await screen.findByRole("dialog", { name: "Delete Codex connection" });
+    expect(within(dialog).getByText(/native OAuth login and runtime configuration remain unchanged/i))
+      .toBeInTheDocument();
+    await user.click(within(dialog).getByRole("button", { name: "Confirm deletion" }));
+    expect(mocks.remove).toHaveBeenCalledWith({ connectionId: "codex", confirmed: true });
   });
 
   it("creates CLIProxyAPI only from explicit endpoint, exact models, write-only key, and confirmation", async () => {

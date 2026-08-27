@@ -5,6 +5,12 @@
   color: var(--fg);
 }
 
+.agent-connections-page.embedded {
+  max-width: none;
+  margin: 0;
+  padding: 0;
+}
+
 .agent-connections-hero,
 .agent-connection-card-head,
 .agent-connection-capability-head,
@@ -136,6 +142,19 @@
   border-radius: 10px;
 }
 
+.agent-connection-card[aria-current="location"],
+.agent-connection-capability[aria-current="location"] {
+  outline: 3px solid var(--accent);
+  outline-offset: 3px;
+}
+
+.agent-connection-capability[aria-current="location"]::before {
+  content: "→";
+  display: block;
+  margin-bottom: 6px;
+  font-weight: 700;
+}
+
 .agent-connection-capability p { color: var(--fg-3); overflow-wrap: anywhere; }
 .agent-connection-model { display: grid; gap: 6px; color: var(--fg-2); font-size: 12px; }
 .agent-connection-model input {
@@ -179,4 +198,15 @@
   .agent-connection-capabilities { grid-template-columns: 1fr; }
   .agent-connection-api-key > div { align-items: stretch; flex-direction: column; }
   .agent-connection-api-key input { min-width: 0; width: 100%; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-connections-page *,
+  .agent-connections-page *::before,
+  .agent-connections-page *::after {
+    scroll-behavior: auto !important;
+    transition-duration: .01ms !important;
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+  }
 }

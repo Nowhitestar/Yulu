@@ -2,7 +2,7 @@
 
 This guide covers the current native-capture and durable provider runtime.
 Capture ends at the local Host boundary. Summary work keeps its creation-time
-provider/model identity; Agent-backed summaries currently execute through Hermes.
+connection/provider/model identity and never switches or replays automatically.
 
 ## Daily commands
 
@@ -154,18 +154,21 @@ Transcription Consent acknowledging xAI processing and possible provider charges
 Selecting xAI or saving its credential is not consent. Yulu never switches engines
 automatically when the selected engine is unavailable.
 
-Settings → AI Providers owns the single xAI connection and its three independent
-real-request probes. A green summary or conversation result does not establish
-transcription readiness (or vice versa). An API key is used only after the user
-explicitly saves it, and never as an automatic response to OAuth/probe failure.
+Settings → Intelligent Services owns the authoritative Agent Connection Center,
+including direct xAI and supported runtime/Gateway connections. Opening it does
+not probe a model. Its three capability readiness results are independent: a
+green Summary or Conversation result does not establish Transcription readiness
+(or vice versa). An API key is used only after the user explicitly saves it,
+never as an automatic response to OAuth/probe failure.
 
 The Core Activation page shows the selected Summary Provider and model. An xAI
 summary requires both the current successful summary probe and the current
 versioned disclosure that transcript text goes to xAI. Authorization alone does
 not satisfy that disclosure. Declining it is durable and leaves xAI selected but
-blocked, with remediation at `/settings/llm`; there is no fallback. Supported
-Agent onboarding remains blocked until its adapter supplies the same explicit
-identity, readiness proof, gateway, and local-or-external disclosure metadata.
+blocked, with remediation at `/settings/llm`; there is no fallback. Activation
+lists only Summary connections whose shared contract currently proves explicit
+identity, readiness, and accepted disclosure: xAI, Codex, Claude Code, or
+CLIProxyAPI. Hermes and OpenClaw remain Conversation-only.
 
 `/activate` records through the production recording command and correlates the
 returned Host task identity to a durable Activation Attempt. The page reads task
@@ -217,6 +220,7 @@ missing/incomplete files, and paths outside those roots.
 | `delivery_reported` | Hermes reported a page URL or ID | Normally transitions immediately; inspect audit if stuck |
 | `completed` | Required artifacts and optional delivery audit passed | No action |
 | `failed` | Deterministic processing or validation failure | Read `error`, fix the cause, then use the UI/task retry surface where offered |
+| `execution_unverified` | Host cannot prove whether the pinned Summary request executed or produced a result | Do not use ordinary retry. Wait, repair the exact connection, or explicitly create a new Summary attempt; the original remains closed and is never replayed automatically |
 | `delivery_unverified` | Host cannot prove whether Notion already changed | Reconcile the destination manually before any new delivery attempt |
 | `cancelled` | Task was intentionally ended | No action |
 
@@ -255,13 +259,15 @@ The recording is safe; no Agent owns a lease. Check the same environment the UI
 LaunchAgent receives:
 
 ```bash
-command -v hermes
 yulu doctor --json
 yulu logs ui
 ```
 
-If Hermes is installed only through a shell-specific PATH, reinstall/reload Yulu
-so the stable executable path is available to `com.yulu.ui`.
+Use Settings → Intelligent Services to inspect the exact pinned dependency.
+Current Summary connections are xAI, Codex, Claude Code, or CLIProxyAPI; a
+legacy already-pinned Hermes task may still require a stable Hermes executable
+path. Reinstall or reload Yulu when a required runtime is visible only through a
+shell-specific PATH and therefore unavailable to `com.yulu.ui`.
 
 ### Task is `awaiting_policy`
 
@@ -294,8 +300,29 @@ yulu doctor --json
 ```
 
 Common deterministic failures include an invalid recording path, incomplete WAV,
-Hermes returning empty content, missing staged artifacts, an expired lease, or a
-Hermes workflow that exited without the required Host commit calls.
+a Summary Provider returning empty or mismatched content, missing staged
+artifacts, an expired lease, or a legacy Hermes workflow that exited without the
+required Host commit calls.
+
+### Task is `execution_unverified`
+
+This state is deliberately not equivalent to `failed`. The pinned xAI, Codex,
+Claude Code, or CLIProxyAPI Summary request may already have executed, so Yulu
+does not offer ordinary same-execution retry and never replays it on restart.
+The Activation and recording-reader surfaces preserve the exact connection,
+provider, model, and failure reason. Choose one explicit action:
+
+- **Keep waiting** leaves the original task unchanged while you inspect the
+  provider or native session.
+- **Open AI Provider Settings** repairs the exact pinned connection and Summary
+  capability; it does not replay the task.
+- **Create new Summary attempt** retires the unknown original and creates a new
+  task from the same committed transcript with the same pinned identity. This is
+  a new execution, not a retry of the unknown one.
+
+If the pinned connection was deleted, the Settings deep link opens a focused
+tombstone explaining that existing work remains pinned and is not reconnected,
+switched, or replayed automatically.
 
 ### Task is `delivery_unverified`
 

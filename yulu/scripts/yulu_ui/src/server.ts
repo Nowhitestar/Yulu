@@ -20,6 +20,7 @@ import { serveStaticFile } from "./staticFile.js";
 import { homedir } from "node:os";
 import type { AppContext } from "./trpc.js";
 import { resolveAgentRuntime } from "./agentRuntime.js";
+import { ConversationConnectionRequiredError } from "./routers/agentSessions.js";
 import { runAgentCliCommand } from "./agentCliRunner.js";
 import {
   ensureBackgroundAgentSession,
@@ -478,20 +479,33 @@ async function startLockedServer(
     const question = String(input.question ?? "").trim();
     if (!question) return c.json({ ok: false, error: "question_required" }, 400);
 
-    const config = ctx.config.read();
-    const runtime = resolveAgentRuntime(config, {
-      scriptDir: runtimePaths.scriptDir,
-      moviesDir: runtimePaths.moviesDir,
-    });
     const caller = createCaller(appRouter, { ...ctx, uiMutationAuthorized: true });
-    const agent = runtime.provider === "none" ? "agent" : runtime.provider;
     const existingSessionId = typeof input.sessionId === "string" && input.sessionId.trim()
       ? input.sessionId.trim()
       : "";
     const defer = input.defer === true;
-    const session = existingSessionId
-      ? await caller.agentSessions.get({ id: existingSessionId })
-      : await caller.agentSessions.create({ agent, title: question.slice(0, 48) });
+    let session;
+    if (existingSessionId) {
+      session = await caller.agentSessions.get({ id: existingSessionId });
+    } else {
+      try {
+        session = await caller.agentSessions.create({ title: question.slice(0, 48) });
+      } catch (error) {
+        const readinessError = error instanceof ConversationConnectionRequiredError
+          ? error
+          : error && typeof error === "object" && "cause" in error &&
+              error.cause instanceof ConversationConnectionRequiredError
+            ? error.cause
+            : null;
+        if (!readinessError) throw error;
+        return c.json({
+          ok: false,
+          error: "conversation_connection_required",
+          detail: readinessError.message,
+          remediation: "/settings/llm?capability=conversation",
+        }, 409);
+      }
+    }
     const sessionId = String(session?.id ?? existingSessionId);
     if (!sessionId) return c.json({ ok: false, error: "session_unavailable" }, 500);
 

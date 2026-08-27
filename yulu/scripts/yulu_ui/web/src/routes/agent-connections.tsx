@@ -1,10 +1,15 @@
 import { useEffect, useRef, useState } from "react";
-import { Link } from "react-router";
+import { Link, Navigate, useLocation, useSearchParams } from "react-router";
 import { trpc } from "../trpc.js";
 import { useT } from "../i18n/LanguageProvider.js";
 import "./agent-connections.css";
 
 export const handle = { breadcrumb: "breadcrumb.agentConnections", filters: null };
+
+export function LegacyAgentConnectionsRedirect() {
+  const { search } = useLocation();
+  return <Navigate to={`/settings/llm${search}`} replace />;
+}
 
 type Capability = "transcription" | "summary" | "conversation";
 
@@ -35,6 +40,12 @@ function candidateModel(adapter: string) {
   return "gpt-5.6-sol";
 }
 
+function actionFailureReason(error: unknown): string {
+  return error instanceof Error && error.message.trim()
+    ? error.message
+    : String(error || "Unknown error");
+}
+
 function readinessFailure(
   t: ReturnType<typeof useT>,
   readiness: { model: string; reason?: "invalid_model" | "readiness_failed" | "unknown_outcome" },
@@ -47,8 +58,9 @@ function readinessFailure(
     : t("agentConnections.remediation.probeFailed", { model: readiness.model });
 }
 
-export function AgentConnections() {
+export function AgentConnections({ embedded = false }: { embedded?: boolean } = {}) {
   const t = useT();
+  const [searchParams] = useSearchParams();
   const view = trpc.agentConnections.view.useQuery();
   const utils = trpc.useUtils();
   const saveGateway = trpc.agentConnections.saveGateway.useMutation();
@@ -79,9 +91,28 @@ export function AgentConnections() {
   const [gatewayKey, setGatewayKey] = useState("");
   const [gatewayConfirmed, setGatewayConfirmed] = useState(false);
   const [impact, setImpact] = useState<DeletionImpact | null>(null);
-  const [actionError, setActionError] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
   const deleteButtonRef = useRef<HTMLButtonElement | null>(null);
   const deletionDialogRef = useRef<HTMLElement>(null);
+  const focusedRemediation = useRef<string | null>(null);
+  const remediationConnection = searchParams.get("connection");
+  const remediationCapability = searchParams.get("capability") as Capability | null;
+  const remediationTargetId = remediationConnection && remediationCapability &&
+    ["transcription", "summary", "conversation"].includes(remediationCapability)
+    ? `agent-connection-${remediationConnection}-${remediationCapability}`
+    : remediationConnection ? `agent-connection-${remediationConnection}` : null;
+
+  useEffect(() => {
+    if (!view.data || !remediationTargetId || focusedRemediation.current === remediationTargetId) return;
+    const target = document.getElementById(remediationTargetId);
+    if (!target) return;
+    focusedRemediation.current = remediationTargetId;
+    target.focus();
+    target.scrollIntoView?.({
+      block: "center",
+      behavior: window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches ? "auto" : "smooth",
+    });
+  }, [remediationTargetId, view.data]);
 
   useEffect(() => {
     if (impact) deletionDialogRef.current?.focus();
@@ -96,22 +127,22 @@ export function AgentConnections() {
     await utils.agentConnections.view.invalidate();
   };
   const run = async (action: () => Promise<unknown>) => {
-    setActionError(false);
+    setActionError(null);
     try {
       await action();
       await refresh();
-    } catch {
-      setActionError(true);
+    } catch (error) {
+      setActionError(actionFailureReason(error));
     }
   };
 
-  if (view.isPending) return <main className="agent-connections-page" aria-live="polite">{t("agentConnections.loading")}</main>;
+  if (view.isPending) return <section className="agent-connections-page" aria-live="polite">{t("agentConnections.loading")}</section>;
   if (view.isError || !view.data) {
     return (
-      <main className="agent-connections-page">
+      <section className="agent-connections-page">
         <h1>{t("agentConnections.title")}</h1>
         <p role="alert">{t("agentConnections.loadFailed")}</p>
-      </main>
+      </section>
     );
   }
 
@@ -136,6 +167,10 @@ export function AgentConnections() {
   const deletionConnection = impact
     ? view.data.connections.find((item) => item.id === impact.connectionId)
     : undefined;
+  const missingRemediationConnection = remediationConnection &&
+    !view.data.connections.some((item) => item.id === remediationConnection)
+    ? remediationConnection
+    : null;
   const authorizing = connection?.authorization.status === "starting" || connection?.authorization.status === "running";
   const startAuthorization = () => {
     const authorizationWindow = window.open("about:blank", "_blank");
@@ -152,12 +187,14 @@ export function AgentConnections() {
     });
   };
 
+  const Page = embedded ? "section" : "main";
+  const Title = embedded ? "h2" : "h1";
   return (
-    <main className="agent-connections-page" aria-labelledby="agent-connections-title">
+    <Page className={`agent-connections-page${embedded ? " embedded" : ""}`} aria-labelledby="agent-connections-title">
       <header className="agent-connections-hero">
         <div>
           <p className="agent-connections-eyebrow">Yulu Host</p>
-          <h1 id="agent-connections-title">{t("agentConnections.title")}</h1>
+          <Title id="agent-connections-title">{t("agentConnections.title")}</Title>
           <p>{t("agentConnections.subtitle")}</p>
         </div>
         <button
@@ -171,10 +208,48 @@ export function AgentConnections() {
       </header>
 
       <p className="agent-connections-shared-note">{t("agentConnections.sharedDestination")}</p>
-      {actionError && <p className="agent-connection-error" role="alert">{t("agentConnections.actionFailed")}</p>}
+      {actionError && (
+        <p className="agent-connection-error" role="alert">
+          {t("agentConnections.actionFailedDetail", { reason: actionError })}
+        </p>
+      )}
+
+      {missingRemediationConnection && remediationTargetId && (
+        <section
+          id={remediationTargetId}
+          className="agent-connection-card agent-connection-missing"
+          data-testid="missing-remediation-connection"
+          aria-current="location"
+          tabIndex={-1}
+          role="alert"
+        >
+          <h2>{t("agentConnections.missing.heading")}</h2>
+          <p>{t("agentConnections.missing.body", {
+            connection: missingRemediationConnection,
+            capability: remediationCapability
+              ? capabilityLabel(t, remediationCapability)
+              : t("agentConnections.missing.allCapabilities"),
+          })}</p>
+          <p>{t("agentConnections.missing.pinned")}</p>
+          <button
+            type="button"
+            className="agent-connection-button"
+            disabled={refreshCandidates.isPending}
+            onClick={() => void run(() => refreshCandidates.mutateAsync())}
+          >
+            {t("agentConnections.refreshCandidates")}
+          </button>
+        </section>
+      )}
 
       {connection && (
-        <section className="agent-connection-card" aria-labelledby="direct-xai-title">
+        <section
+          id={`agent-connection-${connection.id}`}
+          className="agent-connection-card"
+          aria-labelledby="direct-xai-title"
+          aria-current={remediationTargetId === `agent-connection-${connection.id}` ? "location" : undefined}
+          tabIndex={-1}
+        >
           <div className="agent-connection-card-head">
             <div>
               <h2 id="direct-xai-title">xAI</h2>
@@ -289,7 +364,14 @@ export function AgentConnections() {
               const history = item.readinessHistory[0];
               const model = modelDrafts[capability] ?? item.currentReadiness.model;
               return (
-                <article className="agent-connection-capability" data-testid={`connection-capability-${capability}`} key={capability}>
+                <article
+                  id={`agent-connection-${connection.id}-${capability}`}
+                  className="agent-connection-capability"
+                  data-testid={`connection-capability-${capability}`}
+                  aria-current={remediationTargetId === `agent-connection-${connection.id}-${capability}` ? "location" : undefined}
+                  tabIndex={-1}
+                  key={capability}
+                >
                   <div className="agent-connection-capability-head">
                     <div>
                       <h3>{capabilityLabel(t, capability)}</h3>
@@ -373,9 +455,12 @@ export function AgentConnections() {
             type="button"
             className="agent-connection-delete"
             onClick={() => {
-              setActionError(false);
+              setActionError(null);
               void deletionImpact.mutateAsync({ connectionId: connection.id })
-                .then((result) => setImpact(result as DeletionImpact), () => setActionError(true));
+                .then(
+                  (result) => setImpact(result as DeletionImpact),
+                  (error) => setActionError(actionFailureReason(error)),
+                );
             }}
           >
             {t("agentConnections.delete")}
@@ -398,9 +483,13 @@ export function AgentConnections() {
       )}
 
       <section
+        id={`agent-connection-${gatewayConnection?.id ?? "cliproxyapi"}`}
         className="agent-connection-card"
         data-testid={gatewayConnection ? "agent-connection-cliproxyapi" : "cliproxyapi-create"}
         aria-labelledby="cliproxyapi-title"
+        aria-current={remediationTargetId === `agent-connection-${gatewayConnection?.id ?? "cliproxyapi"}`
+          ? "location" : undefined}
+        tabIndex={-1}
       >
         <div className="agent-connection-card-head">
           <div>
@@ -530,8 +619,11 @@ export function AgentConnections() {
               const current = testing ? "testing" : item.currentReadiness.status;
               return (
                 <article
+                  id={`agent-connection-${gatewayConnection.id}-${capability}`}
                   className="agent-connection-capability"
                   data-testid={`connection-capability-cliproxyapi-${capability}`}
+                  aria-current={remediationTargetId === `agent-connection-${gatewayConnection.id}-${capability}` ? "location" : undefined}
+                  tabIndex={-1}
                   key={capability}
                 >
                   <div className="agent-connection-capability-head">
@@ -593,9 +685,12 @@ export function AgentConnections() {
             className="agent-connection-delete"
             onClick={(event) => {
               deleteButtonRef.current = event.currentTarget;
-              setActionError(false);
+              setActionError(null);
               void deletionImpact.mutateAsync({ connectionId: gatewayConnection.id })
-                .then((result) => setImpact(result as DeletionImpact), () => setActionError(true));
+                .then(
+                  (result) => setImpact(result as DeletionImpact),
+                  (error) => setActionError(actionFailureReason(error)),
+                );
             }}
           >
             {t("agentConnections.delete")}
@@ -607,9 +702,12 @@ export function AgentConnections() {
         const copy = supportedAgentCopy(agent.adapter);
         return (
           <section
+            id={`agent-connection-${agent.id}`}
             className="agent-connection-card"
             data-testid={`agent-connection-${agent.adapter}`}
             aria-labelledby={`${agent.id}-title`}
+            aria-current={remediationTargetId === `agent-connection-${agent.id}` ? "location" : undefined}
+            tabIndex={-1}
             key={agent.id}
           >
             <div className="agent-connection-card-head">
@@ -671,8 +769,11 @@ export function AgentConnections() {
                 const disclosureAcceptedLocally = acceptedSupportedDisclosures.has(modelKey);
                 return (
                   <article
+                    id={`agent-connection-${agent.id}-${capability}`}
                     className="agent-connection-capability"
                     data-testid={`connection-capability-${agent.adapter}-${capability}`}
+                    aria-current={remediationTargetId === `agent-connection-${agent.id}-${capability}` ? "location" : undefined}
+                    tabIndex={-1}
                     key={capability}
                   >
                     <div className="agent-connection-capability-head">
@@ -750,20 +851,21 @@ export function AgentConnections() {
                 );
               })}
             </div>
-            {"summaryUnsupported" in agent && (
-              <button
-                type="button"
-                className="agent-connection-delete"
-                onClick={(event) => {
-                  deleteButtonRef.current = event.currentTarget;
-                  setActionError(false);
-                  void deletionImpact.mutateAsync({ connectionId: agent.id })
-                    .then((result) => setImpact(result as DeletionImpact), () => setActionError(true));
-                }}
-              >
-                {t("agentConnections.delete")}
-              </button>
-            )}
+            <button
+              type="button"
+              className="agent-connection-delete"
+              onClick={(event) => {
+                deleteButtonRef.current = event.currentTarget;
+                setActionError(null);
+                void deletionImpact.mutateAsync({ connectionId: agent.id })
+                  .then(
+                    (result) => setImpact(result as DeletionImpact),
+                    (error) => setActionError(actionFailureReason(error)),
+                  );
+              }}
+            >
+              {t("agentConnections.delete")}
+            </button>
           </section>
         );
       })}
@@ -834,11 +936,13 @@ export function AgentConnections() {
         </section>
       )}
 
-      <nav className="agent-connections-backlinks" aria-label={t("agentConnections.backlinks") }>
-        <Link to="/activate">{t("breadcrumb.activate")}</Link>
-        <Link to="/settings/llm">{t("breadcrumb.settings")}</Link>
-        <Link to="/agent-console">{t("breadcrumb.agentConsole")}</Link>
-      </nav>
+      {!embedded && (
+        <nav className="agent-connections-backlinks" aria-label={t("agentConnections.backlinks") }>
+          <Link to="/activate">{t("breadcrumb.activate")}</Link>
+          <Link to="/settings/llm">{t("breadcrumb.settings")}</Link>
+          <Link to="/agent-console">{t("breadcrumb.agentConsole")}</Link>
+        </nav>
+      )}
 
       {impact && deletionConnection && (
         <div className="agent-connection-dialog-backdrop">
@@ -865,7 +969,7 @@ export function AgentConnections() {
             <ul>{impact.pinnedConversations.map((session) => <li key={session.id}>{session.title}</li>)}</ul>
             <p>{t(deletionConnection.adapter === "cliproxyapi"
               ? "agentConnections.gateway.deleteBoundary"
-              : deletionConnection.adapter === "hermes" || deletionConnection.adapter === "openclaw"
+              : deletionConnection.adapter !== "direct-xai"
                 ? "agentConnections.delete.runtimeBoundary"
                 : "agentConnections.delete.oauthBoundary")}</p>
             <div className="agent-connection-actions">
@@ -888,6 +992,6 @@ export function AgentConnections() {
           </section>
         </div>
       )}
-    </main>
+    </Page>
   );
 }

@@ -80,6 +80,7 @@ vi.mock("../../../web/src/trpc.js", () => {
     prompts: { list: { invalidate: () => {} } },
     localCaption: { status: { invalidate: () => {} } },
     xaiAudio: { status: { invalidate: () => {} } },
+    agentConnections: { view: { invalidate: () => Promise.resolve() } },
   };
   return {
     trpc: {
@@ -154,6 +155,37 @@ vi.mock("../../../web/src/trpc.js", () => {
             isPending: false,
           }),
         },
+      },
+      agentConnections: {
+        view: { useQuery: () => ({
+          data: {
+            connections: [],
+            candidates: [],
+            legacyConnections: [],
+            selections: {
+              transcription: { connectionId: null, model: "local" },
+              summary: { connectionId: null, model: "grok-4.6" },
+              conversation: { connectionId: null, model: "grok-4.6" },
+            },
+          },
+          isPending: false,
+          isError: false,
+        }) },
+        saveGateway: { useMutation: noopMutation },
+        refreshCandidates: { useMutation: noopMutation },
+        confirmCandidate: { useMutation: noopMutation },
+        select: { useMutation: noopMutation },
+        selectCredentialSource: { useMutation: noopMutation },
+        probe: { useMutation: noopMutation },
+        acceptDisclosure: { useMutation: noopMutation },
+        restoreDirectXai: { useMutation: noopMutation },
+        authorize: { useMutation: noopMutation },
+        cancelAuthorization: { useMutation: noopMutation },
+        logoutOAuth: { useMutation: noopMutation },
+        setApiKey: { useMutation: noopMutation },
+        clearApiKey: { useMutation: noopMutation },
+        deletionImpact: { useMutation: noopMutation },
+        remove: { useMutation: noopMutation },
       },
       localCaption: {
         status: { useQuery: () => ({ data: {
@@ -532,12 +564,13 @@ describe("Settings category detail content (re-homed widgets)", () => {
     })));
   });
 
-  it("llm: routes connection state and repair to the shared Agent Connection Center", () => {
+  it("llm: hosts the authoritative Agent Connection Center", () => {
     const { container } = wrap("/settings/llm");
     const detail = within(container.querySelector(".masterdetail-detail") as HTMLElement);
-    expect(detail.getByText(translate("zh", "settings.connectionCenter.heading"))).toBeInTheDocument();
-    expect(detail.getByRole("link", { name: translate("zh", "settings.connectionCenter.open") }))
-      .toHaveAttribute("href", "/agent-connections");
+    expect(detail.getByRole("heading", { name: translate("zh", "agentConnections.title") }))
+      .toBeInTheDocument();
+    expect(detail.queryByRole("link", { name: translate("zh", "settings.connectionCenter.open") }))
+      .toBeNull();
   });
 
   it("integrations: legacy settings route redirects to Agent Console instead of rendering AI integration UI", () => {

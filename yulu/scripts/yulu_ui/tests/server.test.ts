@@ -11,6 +11,8 @@ import { RecordingPipeline } from "../src/recordingPipeline.js";
 import { AgentUnavailableError } from "../src/agentGateway.js";
 import { RealtimeTranscriptionCoordinator } from "../src/realtimeTranscription.js";
 import { XaiAudioClient } from "../src/xaiAudio.js";
+import { createAgentSession } from "../src/agentSessionStore.js";
+import { XAI_CONVERSATION_DISCLOSURE_VERSION } from "../src/conversationDataDisclosure.js";
 
 function rawHttp(port: number, path: string, hostHeader: string): Promise<{ status: number; body: string }> {
   return new Promise((resolve, reject) => {
@@ -774,17 +776,39 @@ describe("server", () => {
     expect(await r.text()).toMatch(/UI not built/);
   });
 
-  it("/api/voice-chat/ask creates and continues a chat session", async () => {
+  it("/api/voice-chat/ask rejects implicit creation and continues an existing pinned session", async () => {
     const configDir = join(env.root, ".config", "yulu");
     writeFileSync(join(configDir, "mcp-token.json"), JSON.stringify({ token: "test-token" }));
     const config = JSON.parse(readFileSync(join(configDir, "config.json"), "utf8"));
     config.llm = { enabled: false, command: null };
     writeFileSync(join(configDir, "config.json"), JSON.stringify(config, null, 2));
 
-    const r = await fetch(`${env.baseUrl}/api/voice-chat/ask`, {
+    const rejected = await fetch(`${env.baseUrl}/api/voice-chat/ask`, {
       method: "POST",
       headers: { "Content-Type": "application/json", "Authorization": "Bearer test-token" },
       body: JSON.stringify({ question: "hello agent" }),
+    });
+    expect(rejected.status).toBe(409);
+    expect(await rejected.json()).toMatchObject({
+      ok: false,
+      error: "conversation_connection_required",
+      detail: expect.stringContaining("/settings/llm?capability=conversation"),
+      remediation: "/settings/llm?capability=conversation",
+    });
+
+    const pinned = createAgentSession(configDir, {
+      provider: "xai",
+      connectionId: "direct-xai",
+      model: "grok-4.6-exact",
+      credentialSource: "oauth",
+      disclosureVersion: XAI_CONVERSATION_DISCLOSURE_VERSION,
+      title: "Pinned voice chat",
+      purpose: "ask",
+    });
+    const r = await fetch(`${env.baseUrl}/api/voice-chat/ask`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": "Bearer test-token" },
+      body: JSON.stringify({ question: "hello agent", sessionId: pinned.id }),
     });
     expect(r.status).toBe(200);
     const body = await r.json() as { ok: boolean; sessionId: string; url: string };
@@ -808,7 +832,7 @@ describe("server", () => {
     expect(session.messages.map((m: { role: string }) => m.role)).toEqual(["user", "assistant", "user", "assistant"]);
   });
 
-  it("/api/voice-chat/ask can return immediately and answer in the background", async () => {
+  it("/api/voice-chat/ask can return immediately for an existing pinned session", async () => {
     const configDir = join(env.root, ".config", "yulu");
     writeFileSync(join(configDir, "mcp-token.json"), JSON.stringify({ token: "test-token" }));
     const unauthorized = await fetch(`${env.baseUrl}/api/voice-chat/ask`, {
@@ -817,10 +841,19 @@ describe("server", () => {
       body: JSON.stringify({ question: "must not spend" }),
     });
     expect(unauthorized.status).toBe(401);
+    const pinned = createAgentSession(configDir, {
+      provider: "xai",
+      connectionId: "direct-xai",
+      model: "grok-4.6-exact",
+      credentialSource: "oauth",
+      disclosureVersion: XAI_CONVERSATION_DISCLOSURE_VERSION,
+      title: "Pinned deferred voice chat",
+      purpose: "ask",
+    });
     const r = await fetch(`${env.baseUrl}/api/voice-chat/ask`, {
       method: "POST",
       headers: { "Content-Type": "application/json", "Authorization": "Bearer test-token" },
-      body: JSON.stringify({ question: "deferred hello", defer: true }),
+      body: JSON.stringify({ question: "deferred hello", defer: true, sessionId: pinned.id }),
     });
     expect(r.status).toBe(200);
     const body = await r.json() as { ok: boolean; deferred: boolean; sessionId: string; answer: string; url: string };

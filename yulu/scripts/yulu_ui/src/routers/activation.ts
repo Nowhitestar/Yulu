@@ -9,11 +9,6 @@ import {
 } from "../transcriptionConsent.js";
 import type { AppContext } from "../trpc.js";
 import { publicProcedure, router, uiMutationProcedure } from "../trpc.js";
-import { XAI_SUMMARY_DISCLOSURE_VERSION } from "../summaryDataDisclosure.js";
-import {
-  hasSupportedAgentSummaryIdentity,
-  hasSupportedAgentSummaryReadinessProof,
-} from "../summaryProviderReadiness.js";
 import {
   publicAgentTask,
   type ActivationAttempt,
@@ -42,61 +37,14 @@ const summaryDisclosureInput = z.object({
   destination: z.string().min(1).max(200),
 }).strict();
 
-type SummaryBlockerReason =
-  | "missing_credentials"
-  | "invalid_model"
-  | "provider_unavailable"
-  | "disclosure_required"
-  | "disclosure_declined"
-  | "readiness_failed"
-  | "readiness_required"
-  | "unknown_outcome";
+const SUMMARY_SETTINGS = { href: "/settings/llm?capability=summary" } as const;
+const XAI_TRANSCRIPTION_SETTINGS = "/settings/llm?connection=direct-xai&capability=transcription";
 
-type SummaryBlockerCapability =
-  | "summary_credentials"
-  | "summary_model"
-  | "summary_provider"
-  | "summary_disclosure"
-  | "summary_readiness";
-
-const SUMMARY_SETTINGS = { href: "/agent-connections?capability=summary" } as const;
-const XAI_TRANSCRIPTION_SETTINGS = "/agent-connections?connection=direct-xai&capability=transcription";
-
-function summaryBlocker(
-  capability: SummaryBlockerCapability,
-  reason: SummaryBlockerReason,
-  detail: string,
-) {
-  return { capability, reason, detail, remediation: SUMMARY_SETTINGS };
-}
-
-function summaryDisclosure(
-  ctx: AppContext,
-  provider: string,
-  metadata: { disclosureVersion: string; data: "transcript_text"; destination: string; connectionId?: string },
-) {
-  const receipt = metadata.connectionId
-    ? ctx.host.getAgentConnectionDisclosure(metadata.connectionId, "summary")
-    : ctx.host.getSummaryDataPathDisclosure(provider);
-  const current = receipt?.disclosureVersion === metadata.disclosureVersion;
-  return {
-    provider,
-    ...metadata,
-    acceptedDisclosureVersion: current && receipt.decision === "accepted" ? receipt.disclosureVersion : null,
-    declined: current && receipt.decision === "declined",
-    required: !current || receipt.decision !== "accepted",
-  };
-}
-
-function validModel(model: string): boolean {
-  return Boolean(model.trim()) && model.length <= 128;
-}
-
-function currentSummaryDisclosure(
+async function currentSummaryDisclosure(
   ctx: AppContext,
   input: z.infer<typeof summaryDisclosureInput>,
 ) {
-  const summary = activationSummaryReadiness(ctx);
+  const summary = await activationSummaryReadiness(ctx);
   const disclosure = summary.disclosure;
   if (
     !disclosure ||
@@ -110,109 +58,9 @@ function currentSummaryDisclosure(
   return disclosure;
 }
 
-function activationSummaryReadiness(ctx: AppContext) {
-  const selection = ctx.config.read().intelligence.summary;
-  if (selection.provider === "xai") {
-    const selected = { provider: "xai", model: selection.model };
-    const disclosure = summaryDisclosure(ctx, "xai", {
-      disclosureVersion: XAI_SUMMARY_DISCLOSURE_VERSION,
-      data: "transcript_text",
-      destination: "xAI",
-    });
-    const connection = ctx.xaiCredentials?.cachedStatus();
-    const probe = ctx.xaiReadiness?.get("summary");
-    const blocker = !validModel(selection.model)
-      ? summaryBlocker("summary_model", "invalid_model", "The selected xAI summary model is invalid")
-      : !ctx.xaiCredentials || !ctx.xaiReadiness
-        ? summaryBlocker("summary_provider", "provider_unavailable", "The xAI summary provider is unavailable")
-        : !connection?.connected || !connection.source
-          ? summaryBlocker("summary_credentials", "missing_credentials", "xAI summary credentials are missing")
-          : probe?.capability !== "summary" || probe.model !== selection.model || probe.credentialSource !== connection.source
-            ? summaryBlocker("summary_readiness", "readiness_required", "The selected xAI summary capability has not passed its current probe")
-            : probe.status === "failed"
-              ? probe.reason === "invalid_model"
-                ? summaryBlocker("summary_model", "invalid_model", probe.detail)
-                : summaryBlocker("summary_readiness", "readiness_failed", probe.detail)
-              : probe.status !== "ready"
-                ? summaryBlocker("summary_readiness", "readiness_required", probe.detail)
-                : disclosure.required
-                  ? summaryBlocker(
-                      "summary_disclosure",
-                      disclosure.declined ? "disclosure_declined" : "disclosure_required",
-                      "Transcript text disclosure is required before xAI summary processing",
-                    )
-                  : null;
-    return {
-      selected,
-      state: blocker?.capability === "summary_disclosure" ? "disclosure_required" as const
-        : blocker ? "blocked" as const : "ready" as const,
-      detail: blocker?.detail ?? probe?.detail ?? null,
-      credentialSource: connection?.source ?? null,
-      testedAt: probe?.testedAt ?? null,
-      disclosure,
-      publicOnboardingSupported: true,
-      remediation: blocker ? SUMMARY_SETTINGS : null,
-      blocker,
-    };
-  }
-
-  const adapter = ctx.supportedAgentSummaryAdapter;
-  const result = adapter?.current();
-  if (!result || !hasSupportedAgentSummaryIdentity(result)) {
-    const blocker = summaryBlocker(
-      "summary_provider",
-      "provider_unavailable",
-      "A Supported Agent summary adapter is not available in this release",
-    );
-    return {
-      selected: { provider: "agent", model: selection.model },
-      state: "blocked" as const,
-      detail: blocker.detail,
-      credentialSource: null,
-      testedAt: null,
-      disclosure: null,
-      publicOnboardingSupported: false,
-      remediation: SUMMARY_SETTINGS,
-      blocker,
-    };
-  }
-
-  const provider = result.provider.trim().toLowerCase();
-  const disclosureMetadata = result.disclosure;
-  const disclosure = disclosureMetadata?.kind === "external"
-    ? summaryDisclosure(ctx, provider, disclosureMetadata)
-    : null;
-  const reason = result.reason ?? (result.status === "failed" ? "readiness_failed" : "readiness_required");
-  const capability: SummaryBlockerCapability = reason === "missing_credentials"
-    ? "summary_credentials"
-    : reason === "invalid_model"
-      ? "summary_model"
-      : reason === "provider_unavailable"
-        ? "summary_provider"
-        : "summary_readiness";
-  const blocker = result.status === "ready" && !hasSupportedAgentSummaryReadinessProof(result)
-    ? summaryBlocker("summary_readiness", "readiness_failed", "The Supported Agent did not return current readiness proof")
-    : result.status !== "ready"
-    ? summaryBlocker(capability, reason, result.detail)
-    : disclosure?.required
-      ? summaryBlocker(
-          "summary_disclosure",
-          disclosure.declined ? "disclosure_declined" : "disclosure_required",
-          "Transcript text disclosure is required before Agent summary processing",
-        )
-      : null;
-  return {
-    selected: { provider, model: result.model },
-    state: blocker?.capability === "summary_disclosure" ? "disclosure_required" as const
-      : blocker ? "blocked" as const : "ready" as const,
-    detail: blocker?.detail ?? result.detail,
-    credentialSource: result.credentialSource,
-    testedAt: result.testedAt,
-    disclosure,
-    publicOnboardingSupported: true,
-    remediation: blocker ? SUMMARY_SETTINGS : null,
-    blocker,
-  };
+async function activationSummaryReadiness(ctx: AppContext) {
+  if (!ctx.agentConnections) throw new Error("Agent Connection Center is unavailable");
+  return await ctx.agentConnections.summaryActivation();
 }
 
 async function activationReadiness(ctx: AppContext) {
@@ -275,7 +123,7 @@ async function activationReadiness(ctx: AppContext) {
   const transcriptionState = selected === "local"
     ? local.ready ? "ready" as const : "blocked" as const
     : disclosureRequired ? "disclosure_required" as const : xai.ready ? "ready" as const : "blocked" as const;
-  const summary = activationSummaryReadiness(ctx);
+  const summary = await activationSummaryReadiness(ctx);
   const pipeline = config.agent_pipeline;
   const pipelineReady = pipeline.enabled && pipeline.auto_process_recordings;
   const pipelineDetail = pipelineReady
@@ -370,7 +218,7 @@ function journeyState(ctx: { host: {
   };
 }
 
-function activeAttempt(ctx: AppContext) {
+async function activeAttempt(ctx: AppContext) {
   const existing = ctx.host.getActivationAttempt();
   if (!existing) return null;
   const attempt = existing.taskId || !existing.stopRequestedAt
@@ -378,8 +226,8 @@ function activeAttempt(ctx: AppContext) {
     : ctx.host.recoverActivationAttemptTask(existing.id);
   const task = attempt.taskId ? ctx.host.getTask(attempt.taskId) : null;
   const blocker = activationAttemptBlocker(ctx, attempt, task);
-  const transcriptCommitted = task !== null && blocker?.remediation.href === SUMMARY_SETTINGS.href;
-  const currentSummary = blocker && transcriptCommitted ? activationSummaryReadiness(ctx) : null;
+  const transcriptCommitted = task !== null && hasValidCommittedTranscript(ctx, task);
+  const currentSummary = blocker && transcriptCommitted ? await activationSummaryReadiness(ctx) : null;
   return {
     state: task || attempt.recordingStem || attempt.handoffError ? "processing" as const : "recording" as const,
     evidence: null,
@@ -413,6 +261,14 @@ function hasValidCommittedTranscript(ctx: AppContext, task: AgentTask): boolean 
   } catch {
     return false;
   }
+}
+
+function summarySettingsForTask(task: AgentTask): string {
+  const connectionId = task.summaryConnectionId ??
+    (task.summaryProvider === "xai" ? "direct-xai" : null);
+  return connectionId
+    ? `/settings/llm?connection=${encodeURIComponent(connectionId)}&capability=summary`
+    : SUMMARY_SETTINGS.href;
 }
 
 function activationAttemptBlocker(
@@ -472,6 +328,14 @@ function activationAttemptBlocker(
       remediation: { href: "/settings/general" },
     };
   }
+  if (task?.state === "execution_unverified") {
+    return {
+      capability: "summary" as const,
+      detail: task.error,
+      retry: "new_summary_attempt" as const,
+      remediation: { href: summarySettingsForTask(task) },
+    };
+  }
   if (!task || ![
     "awaiting_agent", "awaiting_provider", "awaiting_policy", "failed", "cancelled", "completed",
   ].includes(task.state)) {
@@ -498,7 +362,7 @@ function activationAttemptBlocker(
   const detail = task.error;
   const classification = detail ?? "";
   const settings = transcriptCommitted
-    ? SUMMARY_SETTINGS.href
+    ? summarySettingsForTask(task)
     : /\bxai\b/i.test(classification) || ctx.config.read().transcription.engine === "xai"
       ? XAI_TRANSCRIPTION_SETTINGS
       : "/settings/transcription";
@@ -530,7 +394,7 @@ function activationAttemptBlocker(
     capability: "summary" as const,
     detail,
     retry: "same_task" as const,
-    remediation: SUMMARY_SETTINGS,
+    remediation: { href: summarySettingsForTask(task) },
   } : {
     capability: "transcription" as const,
     detail,
@@ -553,7 +417,7 @@ async function stopAndCorrelateAttempt(ctx: AppContext, attempt: ActivationAttem
       throw new Error(result.pipeline.reason);
     }
     ctx.host.correlateActivationAttempt(attempt.id, result.pipeline.taskId);
-    return activeAttempt(ctx);
+    return await activeAttempt(ctx);
   } catch (error) {
     const current = ctx.host.getActivationAttempt();
     if (current && !current.taskId && !current.handoffError) {
@@ -616,7 +480,7 @@ export const activationRouter = router({
   status: publicProcedure.query(async ({ ctx }) => {
     let evidence = ctx.host.getCoreActivationEvidence();
     let evidenceCreated = false;
-    const attempt = activeAttempt(ctx);
+    const attempt = await activeAttempt(ctx);
     if (attempt) {
       const guidedEvidence = attempt.attempt.taskId
         ? await verifiedAttemptEvidence(ctx, attempt.attempt.taskId, evidence)
@@ -675,7 +539,7 @@ export const activationRouter = router({
       throw new Error("Activation is blocked by recording pipeline policy");
     }
     const { attempt, created } = ctx.host.beginActivationAttempt();
-    if (!created) return activeAttempt(ctx);
+    if (!created) return await activeAttempt(ctx);
     try {
       await runRecordAudio(
         ctx,
@@ -694,7 +558,7 @@ export const activationRouter = router({
   stopAttempt: uiMutationProcedure.mutation(async ({ ctx }) => {
     const attempt = ctx.host.getActivationAttempt();
     if (!attempt) throw new Error("Activation Attempt not found");
-    if (attempt.taskId) return activeAttempt(ctx);
+    if (attempt.taskId) return await activeAttempt(ctx);
     ctx.host.markActivationAttemptStopping(attempt.id);
     return await stopAndCorrelateAttempt(ctx, attempt);
   }),
@@ -720,7 +584,7 @@ export const activationRouter = router({
         );
         throw error;
       }
-      return activeAttempt(ctx);
+      return await activeAttempt(ctx);
     }
     if (task) {
       if (task.state === "awaiting_policy") {
@@ -736,7 +600,7 @@ export const activationRouter = router({
             : {}),
         });
       }
-      return activeAttempt(ctx);
+      return await activeAttempt(ctx);
     }
     if (!attempt.recordingStem) return await stopAndCorrelateAttempt(ctx, attempt);
     const audioPath = join(ctx.paths.moviesDir, `${attempt.recordingStem}.wav`);
@@ -746,7 +610,7 @@ export const activationRouter = router({
       sendToNotion: ctx.config.read().agent_pipeline.auto_send_notion,
     });
     ctx.host.correlateActivationAttempt(attempt.id, result.task.id);
-    return activeAttempt(ctx);
+    return await activeAttempt(ctx);
   }),
   rerecordAttempt: uiMutationProcedure.mutation(async ({ ctx }) => {
     const attempt = ctx.host.getActivationAttempt();
@@ -771,14 +635,14 @@ export const activationRouter = router({
     }
     return { state: "recording" as const, attempt: restarted };
   }),
-  replaceSummaryProvider: uiMutationProcedure.mutation(({ ctx }) => {
+  replaceSummaryProvider: uiMutationProcedure.mutation(async ({ ctx }) => {
     const attempt = ctx.host.getActivationAttempt();
     if (!attempt?.taskId) throw new Error("Activation summary attempt not found");
     const task = ctx.host.getTask(attempt.taskId);
     if (!task || !hasValidCommittedTranscript(ctx, task)) {
       throw new Error("Activation transcript is not committed");
     }
-    const summary = activationSummaryReadiness(ctx);
+    const summary = await activationSummaryReadiness(ctx);
     if (summary.state !== "ready") throw new Error("The newly selected Summary Provider is not ready");
     if (
       summary.selected.provider === task.summaryProvider &&
@@ -788,7 +652,7 @@ export const activationRouter = router({
       throw new Error("Select a different Summary Provider, model, or xAI credential source before creating a new attempt");
     }
     ctx.recordingPipeline.replaceSummaryProvider(task.id);
-    return activeAttempt(ctx);
+    return await activeAttempt(ctx);
   }),
   acknowledgeGuidedCompletion: uiMutationProcedure
     .input(z.object({ taskId: z.string().min(1).max(100) }))
@@ -826,37 +690,30 @@ export const activationRouter = router({
     ctx.agentConnections
       ? ctx.agentConnections.acceptDisclosure({ connectionId: "direct-xai", capability: "transcription" })
       : ctx.host.recordCloudTranscriptionConsent(XAI_TRANSCRIPTION_DISCLOSURE_VERSION)),
-  acceptSummaryDataPathDisclosure: uiMutationProcedure.input(summaryDisclosureInput).mutation(({ ctx, input }) => {
-    const disclosure = currentSummaryDisclosure(ctx, input);
-    if (ctx.agentConnections) {
-      return ctx.agentConnections.acceptDisclosure({
-        connectionId: disclosure.connectionId ?? "direct-xai",
-        capability: "summary",
-      });
-    }
-    return ctx.host.recordSummaryDataPathDisclosure(
-      disclosure.provider,
-      disclosure.disclosureVersion,
-    );
+  acceptSummaryDataPathDisclosure: uiMutationProcedure.input(summaryDisclosureInput).mutation(async ({ ctx, input }) => {
+    const disclosure = await currentSummaryDisclosure(ctx, input);
+    if (!ctx.agentConnections) throw new Error("Agent Connection Center is unavailable");
+    return ctx.agentConnections.acceptDisclosure({
+      connectionId: disclosure.connectionId,
+      capability: "summary",
+    });
   }),
-  declineSummaryDataPathDisclosure: uiMutationProcedure.input(summaryDisclosureInput).mutation(({ ctx, input }) => {
-    const disclosure = currentSummaryDisclosure(ctx, input);
-    if (ctx.agentConnections) {
-      return ctx.agentConnections.declineDisclosure({
-        connectionId: disclosure.connectionId ?? "direct-xai",
-        capability: "summary",
-      });
-    }
-    return ctx.host.declineSummaryDataPathDisclosure(
-      disclosure.provider,
-      disclosure.disclosureVersion,
-    );
+  declineSummaryDataPathDisclosure: uiMutationProcedure.input(summaryDisclosureInput).mutation(async ({ ctx, input }) => {
+    const disclosure = await currentSummaryDisclosure(ctx, input);
+    if (!ctx.agentConnections) throw new Error("Agent Connection Center is unavailable");
+    return ctx.agentConnections.declineDisclosure({
+      connectionId: disclosure.connectionId,
+      capability: "summary",
+    });
   }),
   probeSummaryProvider: uiMutationProcedure.mutation(async ({ ctx }) => {
-    if (ctx.config.read().intelligence.summary.provider !== "agent") {
-      throw new Error("The selected xAI Summary Provider uses the xAI capability probe");
-    }
-    if (!ctx.supportedAgentSummaryAdapter) throw new Error("A Supported Agent summary adapter is unavailable");
-    return await ctx.supportedAgentSummaryAdapter.probe();
+    if (!ctx.agentConnections) throw new Error("Agent Connection Center is unavailable");
+    const summary = await ctx.agentConnections.summaryActivation();
+    if (!summary.selected.connectionId) throw new Error("Select an explicit Summary connection before testing it");
+    return await ctx.agentConnections.probe({
+      connectionId: summary.selected.connectionId,
+      capability: "summary",
+      model: summary.selected.model,
+    });
   }),
 });

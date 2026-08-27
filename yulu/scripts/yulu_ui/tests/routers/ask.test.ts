@@ -670,7 +670,7 @@ describe("pinned Ask flow", () => {
       usedFallback: false,
       recovery: {
         retry: "same_snapshot",
-        settingsPath: "/agent-connections?connection=codex&capability=conversation",
+        settingsPath: "/settings/llm?connection=codex&capability=conversation",
       },
     });
     expect(failed.llmError).toContain("run /fake/codex login");
@@ -1024,7 +1024,7 @@ describe("pinned Ask flow", () => {
       sessionStatus: "paused",
       llmError: expect.stringContaining("conversation data path disclosure"),
       recovery: {
-        settingsPath: "/agent-connections?connection=direct-xai&capability=conversation",
+        settingsPath: "/settings/llm?connection=direct-xai&capability=conversation",
       },
     });
     expect(localSearch).not.toHaveBeenCalled();

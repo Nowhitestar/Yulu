@@ -11,6 +11,7 @@ const capability = z.enum(["transcription", "summary", "conversation"]);
 
 export const agentConnectionsRouter = router({
   view: publicProcedure.query(({ ctx }) => center(ctx).view()),
+  summaryActivation: publicProcedure.query(({ ctx }) => center(ctx).summaryActivation()),
   saveGateway: uiMutationProcedure
     .input(z.object({
       endpoint: z.string().trim().min(1).max(2_048),

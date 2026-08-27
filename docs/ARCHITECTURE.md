@@ -25,10 +25,11 @@ Yulu owns only the capabilities that require a trusted product boundary:
 The selected Yulu audio engine owns realtime captions, final speech recognition,
 and dictation. `local` is the default; `xai` connects directly to xAI with OAuth
 authorized in Yulu and stored in macOS Keychain. The exact Summary Provider pinned
-at task creation owns summary generation; Agent-backed summaries currently use
-Hermes, which also owns Notion delivery. The Agent selected in Agent Console owns
-interactive conversation and its connectors. No capability silently falls back
-to another provider, model, or credential source.
+at task creation owns summary generation through its explicit xAI, Codex,
+Claude Code, or CLIProxyAPI connection. Hermes may still own Notion delivery.
+The explicit ready connection selected for a new Agent Console session owns its
+interactive conversation and connectors. No capability silently falls back to
+another provider, model, connection, or credential source.
 
 ## Runtime components
 
@@ -43,7 +44,7 @@ to another provider, model, or credential source.
 | Realtime coordinator | `realtimeTranscription.ts` | Feed mic/system streams and publish partial/stable captions from the selected engine |
 | Durable store | `hostStore.ts` | Persist tasks, pinned summary identity, events, leases, artifact records, and Notion delivery records in `host.sqlite` |
 | Pipeline coordinator | `recordingPipeline.ts` | Commit the selected-engine transcript first, then dispatch summary/delivery Agent work and recover failures |
-| Recording gateway | `agentGateway.ts` | Run the Hermes summary/delivery workflow and audit its tool calls; it does not execute production audio transcription |
+| Recording gateways | `supportedAgentSummaryAdapter.ts`, `agentGateway.ts` | Run the task's pinned xAI/Codex/Claude Code/CLIProxyAPI Summary workflow; retain legacy pinned Hermes artifact work and use a separate audited Hermes session only for authorized connector delivery; they do not execute production audio transcription |
 | Artifact boundary | `artifactStore.ts` | Independently commit transcript, then validate and atomically commit summary artifacts with hashes and provenance |
 | General Agent runtime | `agentRuntime.ts`, Agent Console | Resolve Codex, Claude Code, Hermes, OpenClaw, or a configured command for conversation |
 | Local context | prompt, glossary, search SQLite databases | Supply instructions and discoverable local data; never execute AI work |
@@ -129,6 +130,8 @@ stateDiagram-v2
     running --> transcript_committed: transcript committed
     transcript_committed --> awaiting_provider: pinned provider/model unavailable
     awaiting_provider --> transcript_committed: explicit same-snapshot retry
+    transcript_committed --> execution_unverified: Summary request outcome unknown
+    execution_unverified --> cancelled: explicit new attempt retires original
     transcript_committed --> artifacts_committed: summary committed
     artifacts_committed --> completed: no external delivery
     artifacts_committed --> sending: Notion explicitly authorized
@@ -141,9 +144,14 @@ stateDiagram-v2
     delivery_unverified --> cancelled: user abandons delivery
 ```
 
-On Host restart, interrupted local processing returns to `queued`. A task that
-may already have contacted Notion becomes `delivery_unverified`; it is never
-blindly replayed as if the side effect were known to have failed.
+On Host restart, interrupted local processing returns to `queued` only when the
+Host can prove no Summary request was dispatched. If a pinned Summary request
+may have executed but its result cannot be proven, the task becomes
+`execution_unverified`; Yulu never retries that execution automatically. The UI
+preserves its connection/provider/model and reason, and offers wait, exact
+connection repair, or an explicit new Summary attempt that retires the original.
+A task that may already have contacted Notion becomes `delivery_unverified`; it
+is likewise never blindly replayed as if the side effect were known to have failed.
 Likewise, policy-disabled dispatchable tasks move to `awaiting_policy`; the Host
 does not claim them, and capture completion receives a permanent policy result
 rather than creating a future implicit backlog. The global `enabled` switch also
@@ -158,15 +166,28 @@ snapshot is immutable; Settings changes apply only to newly created work.
 
 Each task has a private Host-owned directory under
 `~/.config/yulu/agent-tasks/<task-id>/`. The transcription transport stages
-`transcript.txt`; Hermes never receives a general file tool or either path.
-Instead, the artifact MCP exposes only task-scoped operations to:
+`transcript.txt`. Every current Summary path remains behind the same Host-owned
+artifact fence:
 
-- read the leased task transcript;
-- stage the complete Markdown summary;
-- commit the fixed `transcript.txt` and `summary.md` pair.
+- direct xAI returns Markdown for the exact pinned model and credential source;
+  the Host stages it without exposing either task path;
+- Codex, Claude Code, and CLIProxyAPI return staged Summary output plus exact,
+  secret-safe runtime evidence; the Host validates their pinned connection,
+  provider, model, disclosure, input artifact, and no-fallback identity before
+  staging or committing anything;
+- legacy already-pinned Hermes recording work may use the artifact MCP, which
+  exposes only task-scoped operations to:
 
-The Agent then calls the authenticated `recording_artifact_commit` MCP tool with
-the task ID, lease, and provenance. The Host:
+  - read the leased task transcript;
+  - stage the complete Markdown summary;
+  - commit the fixed `transcript.txt` and `summary.md` pair.
+
+Hermes and OpenClaw are not selectable Summary connections for new work. On the
+legacy Hermes path, the Agent calls the authenticated
+`recording_artifact_commit` MCP tool with the task ID, lease, and provenance.
+On direct and supported-connection paths, the Host performs the equivalent
+commit after validating returned output and runtime evidence. In every case the
+Host:
 
 1. verifies both files exist, contain text, and are within size limits;
 2. checks that the audio filename matches the task recording stem;
@@ -234,15 +255,15 @@ the Host calls in the required order.
 
 The recording pipeline and interactive Agent Console are deliberately separate:
 
-- `resolveHermesAgentRuntime()` resolves Hermes for automatic summary and delivery.
-- `resolveAgentRuntime()` resolves the configured or detected general Agent for
-  conversation.
-- Recording summary/delivery tasks remain Hermes-backed even when the general
-  Agent is Codex, Claude Code, or OpenClaw. Audio uses the separately selected
-  local or xAI engine.
-- This boundary is fail-closed: if Hermes is unavailable after transcription,
-  the task remains `transcript_committed`/`awaiting_agent`. The Host never falls
-  back to the general Agent for the summary.
+- The task-pinned Summary connection resolves xAI, Codex, Claude Code, or
+  CLIProxyAPI independently from Conversation. Hermes and OpenClaw are never
+  Summary choices.
+- New conversations resolve only the explicit ready connection selected in the
+  Agent Connection Center. Existing sessions keep their pinned native identity.
+- Audio uses the separately selected local or xAI engine.
+- These boundaries fail closed: unavailable pinned work pauses with its committed
+  transcript or conversation history. The Host never falls back to another
+  Summary or Conversation connection.
 - The general Agent's connector configuration stays with that Agent. Yulu may
   expose local recordings, search, prompts, glossary, health, and task tools, but
   it does not proxy arbitrary connector calls.

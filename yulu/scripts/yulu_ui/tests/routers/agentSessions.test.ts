@@ -19,8 +19,8 @@ import {
 } from "../../src/conversationDataDisclosure.js";
 
 function makeCtx(configDir: string, config: Record<string, unknown> = {
-  intelligence: { conversation: { provider: "agent", model: "runtime-managed" } },
-  llm: { enabled: true, command: ["codex"] },
+  intelligence: { conversation: { provider: "agent", connectionId: "codex", model: "gpt-5.6-sol" } },
+  llm: { enabled: false, command: null, agent: { provider: "auto" } },
 }): AppContext {
   return {
     uiMutationAuthorized: true,
@@ -74,13 +74,25 @@ function makeCtx(configDir: string, config: Record<string, unknown> = {
           },
         },
       }],
-      getAgentConnectionDisclosure: () => ({
-        connectionId: "direct-xai",
-        capability: "conversation",
-        disclosureVersion: XAI_CONVERSATION_DISCLOSURE_VERSION,
-        decision: "accepted",
-        decidedAt: "2026-08-27T00:00:00.000Z",
-      }),
+      getAgentConnectionDisclosure: () => {
+        const conversation = (config as {
+          intelligence?: { conversation?: { provider?: string } };
+        }).intelligence?.conversation;
+        const directXai = conversation?.provider === "xai";
+        return {
+          connectionId: directXai ? "direct-xai" : "codex",
+          capability: "conversation",
+          disclosureVersion: directXai
+            ? XAI_CONVERSATION_DISCLOSURE_VERSION
+            : CODEX_CONVERSATION_DISCLOSURE_VERSION,
+          decision: "accepted",
+          decidedAt: "2026-08-27T00:00:00.000Z",
+        };
+      },
+    },
+    agentConnections: {
+      assertCodexConversationReady: async () => undefined,
+      assertXaiConversationReady: async () => "oauth",
     },
   } as unknown as AppContext;
 }
@@ -114,7 +126,7 @@ describe("agentSessionsRouter", () => {
     const all = await caller.list();
     expect(all.sessions.map((session: { id: string }) => session.id).sort()).toEqual([second.id, codex.id].sort());
     expect(all.sessions.every((session: { provider: string; model: string }) =>
-      session.provider === "codex" && session.model === "runtime-managed"
+      session.provider === "codex" && session.model === "gpt-5.6-sol"
     )).toBe(true);
 
     const saved = await caller.get({ id: codex.id });
@@ -124,6 +136,19 @@ describe("agentSessionsRouter", () => {
       text: "**结论**：继续推进。",
       sources: [{ title: "Product Weekly", url: "/inbox/a" }],
     });
+  });
+
+  it("rejects a new conversation without an explicit ready connection", async () => {
+    const root = mkdtempSync(join(tmpdir(), "agent-sessions-"));
+    roots.push(root);
+    const ctx = makeCtx(root, {
+      intelligence: { conversation: { provider: "agent", model: "runtime-managed" } },
+      llm: { enabled: true, command: ["codex"] },
+    });
+
+    await expect(createCaller(agentSessionsRouter, ctx).create({ title: "No implicit runtime" }))
+      .rejects.toThrow("/settings/llm?capability=conversation");
+    await expect(createCaller(agentSessionsRouter, ctx).list()).resolves.toEqual({ sessions: [] });
   });
 
   it("renames a blank session from the first user message", async () => {

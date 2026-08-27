@@ -61,6 +61,7 @@ interface AgentTaskView {
   sendToNotion: boolean;
   summaryProvider: string;
   summaryModel: string;
+  summaryConnectionId?: string | null;
   error: string | null;
 }
 
@@ -411,6 +412,7 @@ export function RecordingReader() {
   const confirmDeliveryMut = trpc.agentTasks.confirmNotionDelivery.useMutation();
   const abandonDeliveryMut = trpc.agentTasks.abandonNotionDelivery.useMutation();
   const retryTaskMut = trpc.agentTasks.retry.useMutation();
+  const createSummaryAttemptFromUnknownMut = trpc.agentTasks.createSummaryAttemptFromUnknown.useMutation();
   const renameSpeakerMut = trpc.recordings.renameSpeaker.useMutation();
   const mergeSpeakersMut = trpc.recordings.mergeSpeakers.useMutation();
   const assignSegmentSpeakerMut = trpc.recordings.assignSegmentSpeaker.useMutation();
@@ -598,6 +600,15 @@ export function RecordingReader() {
     });
   };
 
+  const handleUnknownSummaryAttempt = () => {
+    const task = data?.agentTask as AgentTaskView | null | undefined;
+    if (!task || task.state !== "execution_unverified") return;
+    createSummaryAttemptFromUnknownMut.mutate({ id: task.id }, {
+      onError: (err) => setActionError({ action: "summarize", message: err.message }),
+      onSettled: invalidateBoth,
+    });
+  };
+
   const handleAbandonDelivery = () => {
     const task = data?.agentTask as AgentTaskView | null | undefined;
     if (!task || task.state !== "delivery_unverified") return;
@@ -695,6 +706,11 @@ export function RecordingReader() {
 
   const audioSrc = audioSrcFor(data);
   const agentTask = data.agentTask as AgentTaskView | null | undefined;
+  const summaryRepairConnectionId = agentTask?.summaryConnectionId ??
+    (agentTask?.summaryProvider === "xai" ? "direct-xai" : null);
+  const summaryRepairPath = summaryRepairConnectionId
+    ? `/settings/llm?connection=${encodeURIComponent(summaryRepairConnectionId)}&capability=summary`
+    : "/settings/llm?capability=summary";
   const notionDelivery = data.notionDelivery as NotionDeliveryView | null | undefined;
   const taskActive = agentTask ? ACTIVE_AGENT_TASK_STATES.has(agentTask.state) : false;
   const manualPolicyOverrideAllowed = allowsManualPolicyOverride(agentTask);
@@ -852,9 +868,39 @@ export function RecordingReader() {
                   >
                     {t("reader.providerPause.retry")}
                   </button>
-                  <Link to="/settings/llm">{t("settings.providers.open")}</Link>
+                  <Link to={summaryRepairPath}>{t("settings.providers.open")}</Link>
                   <button type="button" onClick={() => setKeptPausedTaskId(agentTask.id)}>
                     {t("reader.providerPause.keep")}
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+
+          {agentTask?.state === "execution_unverified" && (
+            <div className="reader-reconciliation reader-provider-pause" role="alert">
+              <div>
+                <strong>{t("reader.unknownSummary.heading")}</strong>
+                <p>{t("reader.unknownSummary.body", {
+                  provider: agentTask.summaryProvider === "xai" ? "xAI" : agentTask.summaryProvider,
+                  model: agentTask.summaryModel,
+                })}</p>
+                {agentTask.error && <p>{agentTask.error}</p>}
+              </div>
+              {keptPausedTaskId === agentTask.id ? (
+                <span role="status">{t("reader.unknownSummary.kept")}</span>
+              ) : (
+                <div className="reader-reconciliation-actions" style={{ flexWrap: "wrap" }}>
+                  <button
+                    type="button"
+                    onClick={handleUnknownSummaryAttempt}
+                    disabled={createSummaryAttemptFromUnknownMut.isPending}
+                  >
+                    {t("reader.unknownSummary.newAttempt")}
+                  </button>
+                  <Link to={summaryRepairPath}>{t("settings.providers.open")}</Link>
+                  <button type="button" onClick={() => setKeptPausedTaskId(agentTask.id)}>
+                    {t("reader.unknownSummary.keep")}
                   </button>
                 </div>
               )}

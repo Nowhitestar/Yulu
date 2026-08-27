@@ -13,7 +13,6 @@ import {
   renameAgentSession,
   summarizeAgentSession,
 } from "../agentSessionStore.js";
-import { resolveAgentRuntime } from "../agentRuntime.js";
 import {
   CLAUDE_CODE_CONVERSATION_DISCLOSURE_VERSION,
   CLIPROXYAPI_CONVERSATION_DISCLOSURE_VERSION,
@@ -24,6 +23,25 @@ import {
   hasCurrentAgentConversationDisclosure,
   hasCurrentXaiConversationDisclosure,
 } from "../conversationDataDisclosure.js";
+
+export class ConversationConnectionRequiredError extends Error {
+  override name = "ConversationConnectionRequiredError";
+}
+
+function conversationConnectionRequired(message: string): never {
+  throw new ConversationConnectionRequiredError(message);
+}
+
+async function requireConversationReadiness<T>(check: () => Promise<T>): Promise<T> {
+  try {
+    return await check();
+  } catch (error) {
+    throw new ConversationConnectionRequiredError(
+      error instanceof Error ? error.message : "The selected Conversation connection is not ready",
+      { cause: error },
+    );
+  }
+}
 
 export const agentSessionsRouter = router({
   list: publicProcedure
@@ -50,23 +68,24 @@ export const agentSessionsRouter = router({
       const config = ctx.config.read();
       const selection = config.intelligence.conversation;
       if ("disabled" in selection && selection.disabled) {
-        throw new Error(
+        conversationConnectionRequired(
           "Conversation selection was cleared after its Agent connection was deleted; select and test a new connection",
         );
       }
       if (selection.provider === "xai") {
         if (!hasCurrentXaiConversationDisclosure(ctx.host)) {
-          throw new Error("Accept the current xAI conversation data path disclosure in Agent Connection Center");
+          conversationConnectionRequired("Accept the current xAI conversation data path disclosure in Agent Connection Center");
         }
-        const connection = await ctx.xaiCredentials?.status();
-        if (!connection?.connected || !connection.source) {
-          throw new Error("Connect xAI before starting an xAI conversation");
+        if (!ctx.agentConnections) {
+          conversationConnectionRequired("Test this exact xAI Conversation model before starting a new conversation");
         }
+        const credentialSource = await requireConversationReadiness(() =>
+          ctx.agentConnections!.assertXaiConversationReady({ model: selection.model }));
         return createAgentSession(ctx.paths.configDir, {
           provider: "xai",
           connectionId: "direct-xai",
           model: selection.model,
-          credentialSource: connection.source,
+          credentialSource,
           disclosureVersion: XAI_CONVERSATION_DISCLOSURE_VERSION,
           title: input.title,
           purpose: "ask",
@@ -81,7 +100,9 @@ export const agentSessionsRouter = router({
             (record.kind === "gateway" && record.adapter === "cliproxyapi"))
         );
         if (!connection) {
-          throw new Error(`Pinned Agent connection ${selection.connectionId} is unavailable in Agent Connection Center`);
+          conversationConnectionRequired(
+            `Pinned Agent connection ${selection.connectionId} is unavailable in Agent Connection Center`,
+          );
         }
         const runtimeLabel = connection.adapter === "claude-code"
           ? "Claude Code"
@@ -113,28 +134,35 @@ export const agentSessionsRouter = router({
           connection.id,
           disclosureVersion,
         ) || !gatewayDisclosureMatches) {
-          throw new Error(`Accept the current ${runtimeLabel} Conversation data path disclosure in Agent Connection Center`);
+          conversationConnectionRequired(
+            `Accept the current ${runtimeLabel} Conversation data path disclosure in Agent Connection Center`,
+          );
         }
         if (!ctx.agentConnections) {
-          throw new Error(`Test this exact ${runtimeLabel} Conversation model before starting a new conversation`);
+          conversationConnectionRequired(
+            `Test this exact ${runtimeLabel} Conversation model before starting a new conversation`,
+          );
         }
         if (connection.adapter === "cliproxyapi") {
-          await ctx.agentConnections.assertGatewayConversationReady({
-            connectionId: connection.id,
-            model: selection.model,
-          });
+          await requireConversationReadiness(() => ctx.agentConnections!.assertGatewayConversationReady({
+              connectionId: connection.id,
+              model: selection.model,
+            }));
         } else if (connection.adapter === "claude-code") {
-          await ctx.agentConnections.assertClaudeConversationReady({
-            connectionId: connection.id,
-            model: selection.model,
-          });
+          await requireConversationReadiness(() => ctx.agentConnections!.assertClaudeConversationReady({
+              connectionId: connection.id,
+              model: selection.model,
+            }));
         } else if (connection.adapter === "hermes" || connection.adapter === "openclaw") {
-          const runtimeProvider = await ctx.agentConnections.assertConversationOnlyReady({
-            connectionId: connection.id,
-            model: selection.model,
-          });
+          const runtimeProvider = await requireConversationReadiness(() =>
+            ctx.agentConnections!.assertConversationOnlyReady({
+              connectionId: connection.id,
+              model: selection.model,
+            }));
           if (!runtimeProvider) {
-            throw new Error(`Test this exact ${runtimeLabel} Conversation provider and model before starting a new conversation`);
+            conversationConnectionRequired(
+              `Test this exact ${runtimeLabel} Conversation provider and model before starting a new conversation`,
+            );
           }
           return createAgentSession(ctx.paths.configDir, {
             provider: connection.adapter,
@@ -148,10 +176,10 @@ export const agentSessionsRouter = router({
             runtimeLabel,
           });
         } else {
-          await ctx.agentConnections.assertCodexConversationReady({
-            connectionId: connection.id,
-            model: selection.model,
-          });
+          await requireConversationReadiness(() => ctx.agentConnections!.assertCodexConversationReady({
+              connectionId: connection.id,
+              model: selection.model,
+            }));
         }
         return createAgentSession(ctx.paths.configDir, {
           provider: connection.adapter,
@@ -170,17 +198,9 @@ export const agentSessionsRouter = router({
           runtimeLabel: runtimeLabel,
         });
       }
-      const runtime = resolveAgentRuntime(config, {
-        scriptDir: ctx.paths.scriptDir,
-        moviesDir: ctx.paths.moviesDir,
-      });
-      return createAgentSession(ctx.paths.configDir, {
-        provider: runtime.provider,
-        model: "runtime-managed",
-        title: input.title,
-        purpose: "ask",
-        runtimeLabel: runtime.label,
-      });
+      conversationConnectionRequired(
+        "Select, disclose, and test an explicit Conversation connection in /settings/llm?capability=conversation",
+      );
     }),
 
   append: uiMutationProcedure

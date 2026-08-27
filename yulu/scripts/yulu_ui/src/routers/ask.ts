@@ -123,10 +123,10 @@ function recoveryActions(session: AgentSession, retryAvailable = true) {
       ? "same_snapshot" as const
       : "unavailable_unknown_outcome" as const,
     settingsPath: session.connectionId
-      ? `/agent-connections?connection=${encodeURIComponent(session.connectionId)}&capability=conversation`
+      ? `/settings/llm?connection=${encodeURIComponent(session.connectionId)}&capability=conversation`
       : session.provider === "xai"
-      ? "/agent-connections?connection=direct-xai&capability=conversation"
-      : "/agent-connections?capability=conversation",
+      ? "/settings/llm?connection=direct-xai&capability=conversation"
+      : "/settings/llm?capability=conversation",
     newConversation: true,
   };
 }

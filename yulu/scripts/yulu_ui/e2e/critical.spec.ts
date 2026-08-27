@@ -1,5 +1,13 @@
 // e2e/critical.spec.ts
-import { test, expect } from "@playwright/test";
+import { test, expect, type Route } from "@playwright/test";
+
+function fulfill(route: Route, data: unknown) {
+  return route.fulfill({
+    status: 200,
+    contentType: "application/json",
+    body: JSON.stringify({ result: { data } }),
+  });
+}
 
 test.describe.configure({ mode: "serial" });
 
@@ -189,10 +197,176 @@ test("Settings — Agent-native categories render current detail sections", asyn
   await expect(page.getByRole("heading", { name: "Storage", exact: true })).toBeVisible();
 });
 
-test("Settings — AI provider settings render", async ({ page }) => {
-  await page.goto("/settings/llm");
-  await expect(page).toHaveURL(/\/settings\/llm$/);
-  await expect(page.getByRole("heading", { name: "AI Providers", exact: true })).toBeVisible();
+test("Settings — Agent Connection Center is authoritative and honors exact remediation links", async ({ page }) => {
+  let probes = 0;
+  page.on("request", (request) => {
+    if (request.url().includes("/trpc/agentConnections.probe")) probes += 1;
+  });
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.addInitScript(() => {
+    const original = HTMLElement.prototype.scrollIntoView;
+    HTMLElement.prototype.scrollIntoView = function scrollIntoView(options?: boolean | ScrollIntoViewOptions) {
+      (window as typeof window & { __yuluScrollBehavior?: ScrollBehavior }).__yuluScrollBehavior =
+        typeof options === "object" ? options.behavior : undefined;
+      original?.call(this, options);
+    };
+  });
+
+  await page.goto("/settings/llm?connection=direct-xai&capability=summary");
+  await expect(page).toHaveURL(/\/settings\/llm\?connection=direct-xai&capability=summary$/);
+  await expect(page.getByRole("heading", { name: "Agent Connection Center", exact: true })).toBeVisible();
+  const target = page.locator("#agent-connection-direct-xai-summary");
+  await expect(target).toBeFocused();
+  await expect(target).toHaveAttribute("aria-current", "location");
+  await expect(target.getByRole("status")).toBeVisible();
+  await expect.poll(() => page.evaluate(() =>
+    (window as typeof window & { __yuluScrollBehavior?: ScrollBehavior }).__yuluScrollBehavior,
+  )).toBe("auto");
+  expect(probes).toBe(0);
+
+  await page.keyboard.press("Tab");
+  await expect(page.locator(":focus")).toBeVisible();
+
+  await page.route("**/trpc/config.get*", (route) => fulfill(route, { ui: { language: "zh" } }));
+  await page.addInitScript(() => localStorage.setItem("yulu_ui.lang", "zh"));
+  await page.reload();
+  await expect(page.getByRole("heading", { name: "Agent 连接中心", exact: true })).toBeVisible();
+  expect(probes).toBe(0);
+});
+
+test("Agent Console preserves a pinned pause and only retries after an explicit action", async ({ page }) => {
+  await page.route("**/trpc/config.get*", (route) => fulfill(route, {
+    ui: { language: "en" },
+    agent_pipeline: { auto_send_notion: false },
+    calendars: [],
+    intelligence: { conversation: { provider: "xai", model: "grok-4.6-exact" } },
+  }));
+  await page.route("**/trpc/agentSessions.list*", (route) => fulfill(route, { sessions: [{
+    id: "session-paused-e2e",
+    agent: "xai",
+    provider: "xai",
+    connectionId: "direct-xai",
+    model: "grok-4.6-exact",
+    status: "paused",
+    pausedReason: "xAI conversation request failed (HTTP 403)",
+    title: "Paused xAI E2E",
+    updatedAt: "2026-08-25T04:00:00.000Z",
+    messageCount: 2,
+  }] }));
+  await page.route("**/trpc/agentSessions.get*", (route) => fulfill(route, {
+    id: "session-paused-e2e",
+    agent: "xai",
+    provider: "xai",
+    connectionId: "direct-xai",
+    model: "grok-4.6-exact",
+    status: "paused",
+    pausedReason: "xAI conversation request failed (HTTP 403)",
+    title: "Paused xAI E2E",
+    updatedAt: "2026-08-25T04:00:00.000Z",
+    retrySnapshot: { question: "Retry the pinned request", sources: [] },
+    messages: [
+      { role: "user", text: "Retry the pinned request" },
+      { role: "assistant", text: "Preserved answer", sources: [] },
+    ],
+  }));
+  await page.route("**/trpc/agentSessions.append*", (route) => fulfill(route, { appended: true }));
+  let asks = 0;
+  await page.route("**/trpc/ask.ask*", (route) => {
+    asks += 1;
+    return fulfill(route, {
+      answer: "Explicit retry result",
+      provider: "xai",
+      model: "grok-4.6-exact",
+      sessionStatus: "active",
+      sources: [],
+      usedFallback: false,
+      llmStatus: "ok",
+    });
+  });
+
+  await page.goto("/agent-console");
+  await page.getByText("Paused xAI E2E").click();
+  await expect(page.getByText("Provider paused", { exact: true })).toHaveAttribute("role", "alert");
+  await expect(page.getByText("xAI · grok-4.6-exact failed. Yulu did not switch providers.")).toBeVisible();
+  await expect(page.getByText("xAI conversation request failed (HTTP 403)")).toBeVisible();
+  await expect(page.getByText("Preserved answer")).toBeVisible();
+  await expect(page.getByRole("link", { name: "Open AI Providers" })).toHaveAttribute(
+    "href",
+    "/settings/llm?connection=direct-xai&capability=conversation",
+  );
+  expect(asks).toBe(0);
+
+  await page.getByRole("button", { name: "Retry same provider" }).focus();
+  await page.keyboard.press("Enter");
+  await expect.poll(() => asks).toBe(1);
+  await expect(page.getByText("Provider paused", { exact: true })).toBeHidden();
+  await expect(page.getByPlaceholder("继续提问...")).toBeEnabled();
+});
+
+test("Agent Console repairs a deleted pinned connection through a focused Settings tombstone", async ({ page }) => {
+  await page.route("**/trpc/config.get*", (route) => fulfill(route, {
+    ui: { language: "en" },
+    agent_pipeline: { auto_send_notion: false },
+    calendars: [],
+    intelligence: { conversation: { provider: "agent", connectionId: "codex-deleted", model: "gpt-5.6-sol" } },
+  }));
+  const pausedSession = {
+    id: "session-deleted-e2e",
+    agent: "codex",
+    provider: "codex",
+    connectionId: "codex-deleted",
+    model: "gpt-5.6-sol",
+    status: "paused",
+    pausedReason: "Pinned connection codex-deleted was deleted",
+    title: "Deleted connection E2E",
+    updatedAt: "2026-08-28T04:00:00.000Z",
+    messageCount: 1,
+  };
+  await page.route("**/trpc/agentSessions.list*", (route) => fulfill(route, { sessions: [pausedSession] }));
+  await page.route("**/trpc/agentSessions.get*", (route) => fulfill(route, {
+    ...pausedSession,
+    retrySnapshot: { question: "Keep this pinned request", sources: [] },
+    messages: [{ role: "user", text: "Keep this pinned request" }],
+  }));
+  let asks = 0;
+  let probes = 0;
+  page.on("request", (request) => {
+    if (request.url().includes("/trpc/ask.ask")) asks += 1;
+    if (request.url().includes("/trpc/agentConnections.probe")) probes += 1;
+  });
+  await page.route("**/trpc/agentConnections.view*", (route) => fulfill(route, {
+    connections: [],
+    candidates: [],
+    legacyConnections: [],
+    selections: {
+      transcription: { connectionId: null, model: "local" },
+      summary: { connectionId: null, model: "" },
+      conversation: { connectionId: null, model: "" },
+    },
+  }));
+
+  await page.goto("/agent-console");
+  await page.getByText("Deleted connection E2E").click();
+  await expect(page.getByText("Provider paused", { exact: true })).toHaveAttribute("role", "alert");
+  await expect(page.getByText("Codex · gpt-5.6-sol failed. Yulu did not switch providers.")).toBeVisible();
+  await expect(page.getByText("Pinned connection codex-deleted was deleted")).toBeVisible();
+  expect(asks).toBe(0);
+
+  const repair = page.getByRole("link", { name: "Open AI Providers" });
+  await expect(repair).toHaveAttribute(
+    "href",
+    "/settings/llm?connection=codex-deleted&capability=conversation",
+  );
+  await repair.click();
+  await expect(page).toHaveURL(/\/settings\/llm\?connection=codex-deleted&capability=conversation$/);
+  const tombstone = page.getByTestId("missing-remediation-connection");
+  await expect(tombstone).toBeFocused();
+  await expect(tombstone).toHaveAttribute("id", "agent-connection-codex-deleted-conversation");
+  await expect(tombstone).toHaveAttribute("aria-current", "location");
+  await expect(tombstone).toContainText("codex-deleted");
+  await expect(tombstone).toContainText("Conversation");
+  await expect(tombstone).toContainText("Existing pinned work stays pinned");
+  expect({ asks, probes }).toEqual({ asks: 0, probes: 0 });
 });
 
 test("Knowledge/Prompts — new prompt mode hides Delete, Save disabled until valid", async ({ page }) => {

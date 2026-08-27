@@ -2012,6 +2012,14 @@
   to { transform: scaleY(1.08); opacity: 0.92; }
 }
 
+@media (prefers-reduced-motion: reduce) {
+  .spin,
+  .agent-recording-dot,
+  .agent-recording-wave span {
+    animation: none;
+  }
+}
+
 @media (max-width: 1180px) {
   .agent-console-page {
     grid-template-columns: minmax(0, 1fr);

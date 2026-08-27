@@ -532,7 +532,7 @@ describe("AgentConsole", () => {
     fireEvent.click(getByText("Agents"));
     expect(getByRole("link", { name: "管理 Agent 连接" })).toHaveAttribute(
       "href",
-      "/agent-connections?capability=conversation",
+      "/settings/llm?capability=conversation",
     );
     expect(connectAgentMutate).not.toHaveBeenCalled();
   });
@@ -666,6 +666,33 @@ describe("AgentConsole", () => {
     expect(queryByText("本地记录、Notion、Zulip 会自动进入上下文。")).not.toBeInTheDocument();
   });
 
+  it("keeps a failed new-session attempt explicit and repairs the selected connection", async () => {
+    mockConversationSelection = {
+      provider: "agent",
+      connectionId: "codex",
+      model: "gpt-5.6-sol",
+    };
+    createSessionMutateAsync.mockRejectedValueOnce(new Error("Codex readiness proof expired"));
+
+    const { findByPlaceholderText, getByLabelText, findByText, getByText, getByRole } = wrap(undefined, "en");
+    const input = await findByPlaceholderText("问会议记录、决策、行动项...");
+    fireEvent.change(input, { target: { value: "What changed?" } });
+    fireEvent.click(getByLabelText("发送"));
+
+    expect(await findByText("Couldn't start conversation")).toHaveAttribute("role", "alert");
+    expect(getByText("codex · gpt-5.6-sol could not start. Yulu did not switch providers."))
+      .toBeInTheDocument();
+    expect(getByText("Codex readiness proof expired")).toBeInTheDocument();
+    expect(getByRole("link", { name: "Open AI Providers" })).toHaveAttribute(
+      "href",
+      "/settings/llm?connection=codex&capability=conversation",
+    );
+    expect(input).toHaveValue("What changed?");
+
+    fireEvent.click(getByRole("button", { name: "Retry new conversation" }));
+    await waitFor(() => expect(createSessionMutateAsync).toHaveBeenCalledTimes(2));
+  });
+
   it("preserves paused history and retries the same pinned snapshot only on click", async () => {
     mockSessions = [{
       id: "session-paused",
@@ -705,7 +732,7 @@ describe("AgentConsole", () => {
     expect(container.querySelector(".agent-composer textarea")).toBeDisabled();
     expect(getByRole("link", { name: "打开智能服务设置" })).toHaveAttribute(
       "href",
-      "/agent-connections?connection=direct-xai&capability=conversation",
+      "/settings/llm?connection=direct-xai&capability=conversation",
     );
     expect(askMutateAsync).not.toHaveBeenCalled();
 
@@ -747,7 +774,7 @@ describe("AgentConsole", () => {
       llmError: "Claude Code Conversation outcome is unknown",
       recovery: {
         retry: "unavailable_unknown_outcome",
-        settingsPath: "/agent-connections?connection=claude-code&capability=conversation",
+        settingsPath: "/settings/llm?connection=claude-code&capability=conversation",
         newConversation: true,
       },
     });
@@ -761,7 +788,7 @@ describe("AgentConsole", () => {
     expect(queryByRole("button", { name: "使用同一服务重试" })).toBeNull();
     expect(getByRole("link", { name: "打开智能服务设置" })).toHaveAttribute(
       "href",
-      "/agent-connections?connection=claude-code&capability=conversation",
+      "/settings/llm?connection=claude-code&capability=conversation",
     );
     expect(askMutateAsync).toHaveBeenCalledTimes(1);
   });
@@ -795,7 +822,7 @@ describe("AgentConsole", () => {
     expect(getByRole("button", { name: "Retry same provider" })).toBeInTheDocument();
     expect(getByRole("link", { name: "Open AI Providers" })).toHaveAttribute(
       "href",
-      "/agent-connections?connection=direct-xai&capability=conversation",
+      "/settings/llm?connection=direct-xai&capability=conversation",
     );
     expect(getAllByText("Provider changes apply to a new conversation.")).toHaveLength(2);
     expect(getByText(/^xAI is pinned to this conversation · 2 messages · /)).toBeInTheDocument();

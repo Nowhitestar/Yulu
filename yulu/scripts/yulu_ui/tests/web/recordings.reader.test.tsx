@@ -13,6 +13,7 @@ const deleteMutate = vi.fn();
 const confirmDeliveryMutate = vi.fn();
 const abandonDeliveryMutate = vi.fn();
 const retryTaskMutate = vi.fn();
+const createSummaryAttemptFromUnknownMutate = vi.fn();
 const renameSpeakerMutate = vi.fn();
 const mergeSpeakersMutate = vi.fn();
 const assignSegmentSpeakerMutate = vi.fn();
@@ -42,6 +43,9 @@ vi.mock("../../web/src/trpc.js", () => ({
     },
     agentTasks: {
       retry: { useMutation: () => ({ mutate: retryTaskMutate, isPending: false }) },
+      createSummaryAttemptFromUnknown: {
+        useMutation: () => ({ mutate: createSummaryAttemptFromUnknownMutate, isPending: false }),
+      },
       confirmNotionDelivery: { useMutation: () => ({ mutate: confirmDeliveryMutate, isPending: false }) },
       abandonNotionDelivery: { useMutation: () => ({ mutate: abandonDeliveryMutate, isPending: false }) },
     },
@@ -98,6 +102,7 @@ beforeEach(() => {
   renameMutate.mockClear(); setTagsMutate.mockClear(); deleteMutate.mockClear();
   confirmDeliveryMutate.mockClear(); abandonDeliveryMutate.mockClear();
   retryTaskMutate.mockClear();
+  createSummaryAttemptFromUnknownMutate.mockClear();
   acknowledgeGuidedCompletionMutate.mockClear();
   renameSpeakerMutate.mockClear(); mergeSpeakersMutate.mockClear(); assignSegmentSpeakerMutate.mockClear();
   navigateMock.mockClear(); confirmMock.mockClear(); confirmMock.mockReturnValue(true);
@@ -251,7 +256,7 @@ describe("RecordingReader", () => {
     const settings = screen.getByRole("link", { name: /打开智能服务设置/i });
     const keepPaused = screen.getByRole("button", { name: /保持暂停/i });
     expect(getComputedStyle(retry.parentElement as HTMLElement).flexWrap).toBe("wrap");
-    expect(settings).toHaveAttribute("href", "/settings/llm");
+    expect(settings).toHaveAttribute("href", "/settings/llm?connection=direct-xai&capability=summary");
     expect(screen.getByRole("button", { name: /重新生成摘要/i })).toBeDisabled();
 
     fireEvent.click(retry);
@@ -286,8 +291,48 @@ describe("RecordingReader", () => {
     expect(screen.getByText("Provider paused")).toBeInTheDocument();
     expect(screen.getByText("xAI · grok-4.6-pinned failed. Yulu did not switch providers.")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Retry same provider" })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Open AI Providers" })).toHaveAttribute("href", "/settings/llm");
+    expect(screen.getByRole("link", { name: "Open AI Providers" })).toHaveAttribute(
+      "href",
+      "/settings/llm?connection=direct-xai&capability=summary",
+    );
     expect(screen.getByRole("button", { name: "Keep paused" })).toBeInTheDocument();
+  });
+
+  it("explains an unknown Summary outcome and requires an explicit new attempt", () => {
+    getMock.mockReturnValue({
+      data: {
+        ...baseData,
+        agentTask: {
+          id: "019f0000-0000-7000-8000-000000000458",
+          state: "execution_unverified",
+          phase: "failed",
+          trigger: "automatic",
+          sendToNotion: false,
+          summaryProvider: "claude-code",
+          summaryModel: "claude-sonnet-5",
+          summaryConnectionId: "claude-code",
+          error: "Claude Code Summary outcome is unknown",
+        },
+      },
+      isPending: false,
+    });
+    renderAt(baseData.stem, "en");
+
+    const alert = screen.getByRole("alert");
+    expect(alert).toHaveTextContent("claude-code · claude-sonnet-5");
+    expect(alert).toHaveTextContent("Claude Code Summary outcome is unknown");
+    expect(screen.queryByRole("button", { name: "Retry same provider" })).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Open AI Providers" })).toHaveAttribute(
+      "href",
+      "/settings/llm?connection=claude-code&capability=summary",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Start a new Summary attempt" }));
+    expect(createSummaryAttemptFromUnknownMutate).toHaveBeenCalledWith(
+      { id: "019f0000-0000-7000-8000-000000000458" },
+      expect.anything(),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Keep waiting" }));
+    expect(screen.getByRole("status")).toHaveTextContent("Kept waiting");
   });
 
   it("re-transcribes without also summarizing or sharing", () => {

@@ -16,6 +16,28 @@ import { paths } from "../src/paths.js";
 import { CodexConversationError } from "../src/codexAgentAdapter.js";
 import { ClaudeCodeConversationError } from "../src/claudeCodeAdapter.js";
 import { XaiTextUnknownOutcomeError } from "../src/xaiText.js";
+import { activationRouter } from "../src/routers/activation.js";
+import { createCaller, type AppContext } from "../src/trpc.js";
+
+const activationRecording = vi.hoisted(() => ({ audioPath: "" }));
+
+vi.mock("../src/recordingCommand.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/recordingCommand.js")>();
+  return {
+    ...actual,
+    runRecordAudio: vi.fn(async (_ctx: unknown, args: string[]) => ({
+      ok: true as const,
+      stdout: args[0] === "stop" ? `FINAL_RECORDING_PATH=${activationRecording.audioPath}\n` : "",
+      stderr: "",
+    })),
+  };
+});
+
+vi.mock("../src/ipc.js", () => ({
+  ipcSend: vi.fn(async (_socket: string, request: { action: string }) => request.action === "status"
+    ? { micReady: true }
+    : { input: [{ uid: "BuiltInMic", name: "Built-in Microphone" }] }),
+}));
 
 function wavWithAudio(): Buffer {
   const header = Buffer.alloc(44);
@@ -547,6 +569,8 @@ describe("RecordingPipeline", () => {
       audioPath,
       moviesDir,
       configDir,
+      artifacts,
+      runtimePaths,
       configManager,
       gatewayFactory,
       warmTranscription,
@@ -949,6 +973,103 @@ describe("RecordingPipeline", () => {
       summaryModel: "runtime-managed",
     });
   });
+
+  it.each([
+    ["codex", "Codex", "codex-summary-v1"],
+    ["claude-code", "Claude Code", "claude-code-summary-v1"],
+    ["cliproxyapi", "CLIProxyAPI", "cliproxyapi-summary-v1"],
+  ] as const)(
+    "completes a qualifying Activation recording through the real %s Summary pipeline",
+    async (provider, label, disclosureVersion) => {
+      const {
+        audioPath,
+        artifacts,
+        runtimePaths,
+        configManager,
+        runArtifactWorkflow,
+      } = setup({
+        pollMs: 5,
+        supportedAgentAdapter: true,
+        supportedAgentProvider: provider,
+      });
+      writeFileSync(audioPath, wavWithAudio());
+      activationRecording.audioPath = audioPath;
+      store!.recordAgentConnectionDisclosure({
+        connectionId: provider,
+        capability: "summary",
+        disclosureVersion,
+        decision: "accepted",
+      });
+      const ctx = {
+        uiMutationAuthorized: true,
+        host: store,
+        artifacts,
+        paths: { ...runtimePaths, audioDaemonSock: join(root, "audio-daemon.sock") },
+        config: configManager,
+        localCaption: {
+          status: () => ({ installed: true, ready: true, provider: "local", error: null }),
+        },
+        agentConnections: {
+          summaryActivation: async () => ({
+            directXaiAvailable: false,
+            selected: {
+              connectionId: provider,
+              provider,
+              label,
+              model: "runtime-managed",
+            },
+            state: "ready" as const,
+            detail: null,
+            credentialSource: provider === "cliproxyapi" ? "api-key" : "runtime-oauth",
+            testedAt: "2026-08-28T00:00:00.000Z",
+            disclosure: null,
+            publicOnboardingSupported: true,
+            remediation: null,
+            blocker: null,
+            options: [{
+              connectionId: provider,
+              provider,
+              label,
+              model: "runtime-managed",
+              selected: true,
+            }],
+          }),
+        },
+        recordingPipeline: pipeline,
+      } as unknown as AppContext;
+      const caller = createCaller(activationRouter, ctx);
+
+      await expect(caller.startAttempt()).resolves.toMatchObject({ state: "recording" });
+      const stopped = await caller.stopAttempt();
+      expect(stopped).toMatchObject({
+        state: "processing",
+        task: {
+          summaryProvider: provider,
+          summaryModel: "runtime-managed",
+          summaryConnectionId: provider,
+        },
+      });
+      await vi.waitFor(() => expect(store!.getTask(stopped.task!.id)?.state).toBe("completed"));
+      expect(runArtifactWorkflow).toHaveBeenCalledOnce();
+
+      await expect(caller.status()).resolves.toMatchObject({
+        state: "activated",
+        guidedCompletionPending: true,
+        evidence: {
+          taskId: stopped.task!.id,
+          recordingStem: "Demo_20260711_120000",
+          transcriptionProvider: "test-audio",
+          summaryProvider: provider,
+          summaryModel: "runtime-managed",
+          artifacts: {
+            audio: { sha256: expect.stringMatching(/^[a-f0-9]{64}$/), bytes: 45 },
+            transcript: { sha256: expect.stringMatching(/^[a-f0-9]{64}$/), bytes: 17 },
+            summary: { sha256: expect.stringMatching(/^[a-f0-9]{64}$/) },
+          },
+        },
+      });
+    },
+  );
 
   it("snapshots and commits Claude Code Summary through the shared Host-owned artifact fence", async () => {
     const { audioPath, runArtifactWorkflow } = setup({

@@ -150,11 +150,17 @@ automatic work.
 ## `intelligence`
 
 `summary` and `conversation` are independent provider/model selections. `agent`
-uses the resolved local Agent runtime and requires model `runtime-managed`; `xai`
-stores the exact configured model name. Summary tasks and conversation sessions
-snapshot the resolved identity at creation, so later settings changes affect only
-new work. No credential belongs in either object; xAI conversation sessions store
-only the non-secret credential-source identity (`oauth` or `api-key`).
+uses an explicit Agent Connection Center selection in the form
+`{ "provider": "agent", "connectionId": "…", "model": "exact-model" }`.
+Codex, Claude Code, and CLIProxyAPI therefore keep both the exact connection ID
+and exact tested model; `runtime-managed` is only a legacy compatibility value,
+not proof that a current connection is ready. `xai` stores the exact configured
+model name and resolves to the direct xAI connection. Summary tasks and
+conversation sessions snapshot the connection/provider/model identity at
+creation, so later settings changes affect only new work. No credential belongs
+in either object; persisted tasks and xAI conversation sessions store only
+non-secret credential class/source identities such as `runtime-oauth`, `oauth`,
+or `api-key`.
 
 When a pinned Summary Provider is unavailable after transcript commit, the task
 enters `awaiting_provider` and stays there until an explicit same-provider retry.
@@ -198,12 +204,15 @@ and dictation. The default is local and there is no automatic fallback.
 The Host accepts on-demand audio only from the configured recordings directory
 or `~/.config/yulu/dictation`, and only as a valid absolute WAV path.
 
-xAI is connected once from Settings → AI Providers using Grok CLI-compatible
-OAuth or an API key the user explicitly chooses. OAuth tokens and API keys stay
+Settings → Intelligent Services is the authoritative Agent Connection Center.
+xAI is connected there using Grok CLI-compatible OAuth or an API key the user
+explicitly chooses. OAuth tokens and API keys stay
 in separate macOS Keychain items; neither is a configuration field or browser
 read-back value. OAuth remains primary while present, and an OAuth or entitlement
 failure never causes an automatic switch to the saved API key. The page records
 separate real-request readiness for transcription, summary, and conversation.
+Opening or deep-linking it performs status inspection only; it does not
+implicitly run a capability probe or model request.
 Upgrades archive and remove the retired `transcription.xai_credential_source`
 field; Hermes/OpenClaw credentials are not imported or deleted.
 
@@ -218,10 +227,11 @@ fail-closed even when native OAuth status is healthy.
 
 ## `llm` and Agent Console
 
-`llm` selects the **general Agent** used for interactive Agent Console work.
-It does not select transcription, summaries, or conversation identity: those use
-`transcription.engine` and the two `intelligence` selections. Agent-backed
-automatic summaries currently execute through Hermes.
+`llm` configures legacy general-Agent behavior. It does not select transcription,
+summaries, or conversation identity: those use `transcription.engine` and the two
+`intelligence` selections. Future Agent Console sessions require an explicit
+ready `intelligence.conversation` connection; an existing session keeps its
+pinned connection, provider, model, and native session identity.
 
 | Field | Default | Meaning |
 |---|---:|---|
