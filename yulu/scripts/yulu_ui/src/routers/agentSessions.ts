@@ -14,6 +14,10 @@ import {
 } from "../agentSessionStore.js";
 import { resolveAgentRuntime } from "../agentRuntime.js";
 import { hasCurrentXaiConversationDisclosure } from "../conversationDataDisclosure.js";
+import {
+  CODEX_CONVERSATION_DISCLOSURE_VERSION,
+  hasCurrentAgentConversationDisclosure,
+} from "../conversationDataDisclosure.js";
 
 export const agentSessionsRouter = router({
   list: publicProcedure
@@ -53,6 +57,39 @@ export const agentSessionsRouter = router({
           credentialSource: connection.source,
           title: input.title,
           purpose: "ask",
+        });
+      }
+      if (selection.provider === "agent" && "connectionId" in selection && selection.connectionId) {
+        const connection = ctx.host.listAgentConnectionRecords().find((record) =>
+          record.id === selection.connectionId &&
+          record.kind === "supported-agent" &&
+          record.adapter === "codex"
+        );
+        if (!connection) {
+          throw new Error(`Pinned Codex connection ${selection.connectionId} is unavailable in Agent Connection Center`);
+        }
+        if (!hasCurrentAgentConversationDisclosure(
+          ctx.host,
+          connection.id,
+          CODEX_CONVERSATION_DISCLOSURE_VERSION,
+        )) {
+          throw new Error("Accept the current Codex Conversation data path disclosure in Agent Connection Center");
+        }
+        if (!ctx.agentConnections) {
+          throw new Error("Test this exact Codex Conversation model before starting a new conversation");
+        }
+        await ctx.agentConnections.assertCodexConversationReady({
+          connectionId: connection.id,
+          model: selection.model,
+        });
+        return createAgentSession(ctx.paths.configDir, {
+          provider: "codex",
+          connectionId: connection.id,
+          model: selection.model,
+          credentialSource: "runtime-oauth",
+          title: input.title,
+          purpose: "ask",
+          runtimeLabel: connection.label,
         });
       }
       const runtime = resolveAgentRuntime(config, {

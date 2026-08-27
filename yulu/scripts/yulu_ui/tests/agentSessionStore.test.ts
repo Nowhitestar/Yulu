@@ -62,7 +62,7 @@ describe("agentSessionStore", () => {
 
     const migrated = JSON.parse(readFileSync(storePath(root), "utf8"));
     expect(migrated).toMatchObject({
-      version: 3,
+      version: 4,
       sessions: [{ provider: "codex", model: "runtime-managed", status: "active" }],
     });
     expect(readFileSync(storePath(root), "utf8")).toBe(JSON.stringify(migrated, null, 2) + "\n");

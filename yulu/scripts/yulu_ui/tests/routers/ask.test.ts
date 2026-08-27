@@ -10,7 +10,11 @@ import {
   updateAgentSessionNativeSession,
 } from "../../src/agentSessionStore.js";
 import { createCaller, type AppContext } from "../../src/trpc.js";
-import { XAI_CONVERSATION_DISCLOSURE_VERSION } from "../../src/conversationDataDisclosure.js";
+import {
+  CODEX_CONVERSATION_DISCLOSURE_VERSION,
+  XAI_CONVERSATION_DISCLOSURE_VERSION,
+} from "../../src/conversationDataDisclosure.js";
+import { CodexConversationError } from "../../src/codexAgentAdapter.js";
 
 const runAgentCliCommand = vi.hoisted(() => vi.fn());
 vi.mock("../../src/agentCliRunner.js", () => ({ runAgentCliCommand }));
@@ -23,6 +27,8 @@ function context(
     localSearch?: ReturnType<typeof vi.fn>;
     xaiRequest?: ReturnType<typeof vi.fn>;
     conversationDisclosure?: boolean;
+    codexDisclosure?: boolean;
+    codexConverse?: ReturnType<typeof vi.fn>;
   } = {},
 ): AppContext {
   const root = mkdtempSync(join(tmpdir(), "yulu-ask-"));
@@ -34,10 +40,14 @@ function context(
   return {
     config: { read: () => config },
     host: {
-      getAgentConnectionDisclosure: () => injected.conversationDisclosure === false ? null : ({
-        connectionId: "direct-xai",
+      getAgentConnectionDisclosure: (connectionId: string) =>
+        (connectionId === "codex" ? injected.codexDisclosure === false : injected.conversationDisclosure === false)
+          ? null : ({
+        connectionId,
         capability: "conversation",
-        disclosureVersion: XAI_CONVERSATION_DISCLOSURE_VERSION,
+        disclosureVersion: connectionId === "codex"
+          ? CODEX_CONVERSATION_DISCLOSURE_VERSION
+          : XAI_CONVERSATION_DISCLOSURE_VERSION,
         decision: "accepted",
         decidedAt: "2026-08-27T00:00:00.000Z",
       }),
@@ -45,6 +55,9 @@ function context(
     paths: { configDir, moviesDir, scriptDir: "/fake/yulu/scripts" },
     ...(injected.localSearch ? { localSearch: injected.localSearch } : {}),
     ...(injected.xaiRequest ? { xaiText: { request: injected.xaiRequest } } : {}),
+    ...(injected.codexConverse ? {
+      agentConnections: { converseCodex: injected.codexConverse },
+    } : {}),
   } as unknown as AppContext;
 }
 
@@ -54,6 +67,10 @@ function session(ctx: AppContext, provider: string, model = "runtime-managed") {
     provider,
     model,
     ...(provider === "xai" ? { credentialSource: "oauth" as const } : {}),
+    ...(provider === "codex" ? {
+      connectionId: "codex",
+      credentialSource: "runtime-oauth" as const,
+    } : {}),
     title: "Ask",
   });
 }
@@ -79,6 +96,170 @@ afterEach(() => {
 });
 
 describe("pinned Ask flow", () => {
+  it("persists the first Codex thread and resumes only that thread after global selection changes", async () => {
+    const config = {
+      intelligence: { conversation: { provider: "agent", connectionId: "codex", model: "gpt-5.6-sol" } },
+      llm: { enabled: false, command: null, agent: { provider: "auto" } },
+    };
+    const codexConverse = vi.fn()
+      .mockResolvedValueOnce({
+        answer: "First pinned answer",
+        nativeSessionId: "019f0000-0000-7000-8000-000000000135",
+        usedFallback: false,
+        evidence: { requestedModel: "gpt-5.6-sol", actualModel: "gpt-5.6-sol" },
+      })
+      .mockResolvedValueOnce({
+        answer: "Resumed pinned answer",
+        nativeSessionId: "019f0000-0000-7000-8000-000000000135",
+        usedFallback: false,
+        evidence: { requestedModel: "gpt-5.6-sol", actualModel: "gpt-5.6-sol" },
+      });
+    const ctx = context(config, { codexConverse });
+    const pinned = session(ctx, "codex", "gpt-5.6-sol");
+
+    const first = await createCaller(askRouter, ctx).ask({ question: "first", sessionId: pinned.id });
+    config.intelligence.conversation = { provider: "xai", model: "grok-future" } as never;
+    const second = await createCaller(askRouter, ctx).ask({ question: "second", sessionId: pinned.id });
+
+    expect(first).toMatchObject({ ok: true, answer: "First pinned answer", provider: "codex", model: "gpt-5.6-sol" });
+    expect(second).toMatchObject({ ok: true, answer: "Resumed pinned answer", provider: "codex", model: "gpt-5.6-sol" });
+    expect(codexConverse).toHaveBeenNthCalledWith(1, {
+      connectionId: "codex",
+      model: "gpt-5.6-sol",
+      prompt: expect.stringContaining("first"),
+    });
+    expect(codexConverse).toHaveBeenNthCalledWith(2, {
+      connectionId: "codex",
+      model: "gpt-5.6-sol",
+      prompt: expect.stringContaining("second"),
+      nativeSessionId: "019f0000-0000-7000-8000-000000000135",
+    });
+    expect(getAgentSession(ctx.paths.configDir, pinned.id)).toMatchObject({
+      connectionId: "codex",
+      model: "gpt-5.6-sol",
+      nativeSessionId: "019f0000-0000-7000-8000-000000000135",
+    });
+    expect(runAgentCliCommand).not.toHaveBeenCalled();
+  });
+
+  it("pauses Codex with the same input snapshot and exact remediation without fallback", async () => {
+    const config = {
+      intelligence: { conversation: { provider: "agent", connectionId: "codex", model: "gpt-5.6-sol" } },
+      llm: { enabled: false, command: null, agent: { provider: "auto" } },
+    };
+    const codexConverse = vi.fn()
+      .mockRejectedValueOnce(new Error("Codex authorization expired; run /fake/codex login"))
+      .mockResolvedValueOnce({
+        answer: "Recovered pinned answer",
+        nativeSessionId: "019f0000-0000-7000-8000-000000000135",
+        usedFallback: false,
+        evidence: { requestedModel: "gpt-5.6-sol", actualModel: "gpt-5.6-sol" },
+      });
+    const ctx = context(config, { codexConverse });
+    const pinned = session(ctx, "codex", "gpt-5.6-sol");
+
+    const failed = await createCaller(askRouter, ctx).ask({ question: "same input", sessionId: pinned.id });
+    const paused = getAgentSession(ctx.paths.configDir, pinned.id);
+    config.intelligence.conversation = { provider: "xai", model: "grok-future" } as never;
+    const retried = await createCaller(askRouter, ctx).ask({
+      question: "same input",
+      sessionId: pinned.id,
+      retry: true,
+    });
+
+    expect(failed).toMatchObject({
+      ok: false,
+      provider: "codex",
+      model: "gpt-5.6-sol",
+      usedFallback: false,
+      recovery: {
+        retry: "same_snapshot",
+        settingsPath: "/agent-connections?connection=codex&capability=conversation",
+      },
+    });
+    expect(failed.llmError).toContain("run /fake/codex login");
+    expect(paused).toMatchObject({
+      status: "paused",
+      provider: "codex",
+      connectionId: "codex",
+      model: "gpt-5.6-sol",
+      retrySnapshot: { question: "same input", sources: [] },
+    });
+    expect(getAgentSession(ctx.paths.configDir, pinned.id)).toMatchObject({ status: "active" });
+    expect(retried).toMatchObject({ ok: true, answer: "Recovered pinned answer", sessionStatus: "active" });
+    expect(codexConverse).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      connectionId: "codex",
+      model: "gpt-5.6-sol",
+      prompt: expect.stringContaining("same input"),
+    }));
+    expect(runAgentCliCommand).not.toHaveBeenCalled();
+  });
+
+  it("pins a Codex thread created by an unknown first turn and retries only that thread", async () => {
+    const config = {
+      intelligence: { conversation: { provider: "agent", connectionId: "codex", model: "gpt-5.6-sol" } },
+      llm: { enabled: false, command: null, agent: { provider: "auto" } },
+    };
+    const nativeSessionId = "019f0000-0000-7000-8000-000000000777";
+    const codexConverse = vi.fn()
+      .mockRejectedValueOnce(new CodexConversationError(
+        "Codex conversation outcome is unknown; do not retry automatically",
+        {
+          nativeSessionId,
+          unknownOutcome: true,
+          evidence: {
+            adapter: "codex",
+            transport: "codex-app-server-stdio",
+            runtimeVersion: "0.144.4",
+            requestedProvider: "openai",
+            requestedModel: "gpt-5.6-sol",
+            actualProvider: "openai",
+            actualModel: "gpt-5.6-sol",
+            requestId: "turn-unknown-135",
+            sessionId: nativeSessionId,
+            terminalStatus: "unknown",
+            fallbackOccurred: false,
+            cancellationRequested: true,
+            cancellationConfirmed: false,
+          },
+        },
+      ))
+      .mockResolvedValueOnce({
+        answer: "Recovered the same thread",
+        nativeSessionId,
+        usedFallback: false,
+        evidence: { requestedModel: "gpt-5.6-sol", actualModel: "gpt-5.6-sol" },
+      });
+    const ctx = context(config, { codexConverse });
+    const pinned = session(ctx, "codex", "gpt-5.6-sol");
+
+    const failed = await createCaller(askRouter, ctx).ask({ question: "same input", sessionId: pinned.id });
+    expect(failed).toMatchObject({
+      ok: false,
+      sessionStatus: "paused",
+      usedFallback: false,
+      runtimeEvidence: {
+        sessionId: nativeSessionId,
+        terminalStatus: "unknown",
+        cancellationRequested: true,
+        cancellationConfirmed: false,
+      },
+    });
+    expect(getAgentSession(ctx.paths.configDir, pinned.id)).toMatchObject({
+      status: "paused",
+      nativeSessionId,
+      retrySnapshot: { question: "same input", sources: [] },
+    });
+
+    await expect(createCaller(askRouter, ctx).ask({
+      question: "same input",
+      sessionId: pinned.id,
+      retry: true,
+    })).resolves.toMatchObject({ ok: true, answer: "Recovered the same thread" });
+    expect(codexConverse).toHaveBeenNthCalledWith(2, expect.objectContaining({ nativeSessionId }));
+    expect(runAgentCliCommand).not.toHaveBeenCalled();
+  });
+
   it("keeps the existing Agent-owned prompt for pinned Agent sessions", () => {
     const prompt = buildAgentQuestionPrompt("上次讨论了什么？", 6);
     expect(prompt).toContain("recording_search");

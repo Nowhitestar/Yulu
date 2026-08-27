@@ -97,6 +97,44 @@ describe("server", () => {
     expect(body.result.data.name).toBe("yulu-ui");
   });
 
+  it("wires the production Codex adapter into the Host Agent Connection route", async () => {
+    const configDir = join(env.root, ".config", "yulu");
+    const store = new HostStore(join(configDir, "host.sqlite"));
+    store.upsertAgentConnectionRecord({
+      id: "codex",
+      kind: "supported-agent",
+      adapter: "codex",
+      label: "Codex",
+      lifecycle: "available",
+      settings: {
+        executablePath: join(env.root, "missing-codex-runtime"),
+        conversationModel: "gpt-5.6-sol",
+      },
+    });
+    try {
+      const response = await fetch(`${env.baseUrl}/trpc/agentConnections.view`);
+      expect(response.status).toBe(200);
+      const body = await response.json() as {
+        result: { data: { connections: Array<Record<string, unknown>> } };
+      };
+      expect(body.result.data.connections).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          id: "codex",
+          adapter: "codex",
+          lifecycle: "disconnected",
+          authorization: expect.objectContaining({
+            connected: false,
+            credentialSource: "runtime-oauth",
+            remediation: "Codex runtime status is unavailable",
+          }),
+        }),
+      ]));
+    } finally {
+      store.deleteAgentConnectionRecord("codex");
+      store.close();
+    }
+  });
+
   it("requires the process-local UI bearer for activation mutations", async () => {
     const crossSite = new FormData();
     crossSite.set("input", JSON.stringify({ json: null }));

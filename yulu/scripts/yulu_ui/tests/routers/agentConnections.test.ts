@@ -39,6 +39,48 @@ function setup(
   const audio = { testXai: vi.fn() };
   const text = { request: vi.fn() };
   const discover = vi.fn(() => discovered);
+  const codex = {
+    status: vi.fn(async () => ({
+      adapter: "codex" as const,
+      transport: "codex-app-server-stdio",
+      runtimeVersion: "0.144.4",
+      minimumVersion: "0.144.0",
+      supported: true,
+      authorized: true,
+      availableModels: ["gpt-5.6-sol"],
+      features: [
+        "account/read" as const,
+        "model/list" as const,
+        "thread/start" as const,
+        "thread/resume" as const,
+        "no-provider-model-fallback" as const,
+      ],
+      login: { command: "/fake/bin/codex login", statusCommand: "/fake/bin/codex login status" },
+      remediation: null,
+    })),
+    probe: vi.fn(async ({ model }: { model: string }) => ({
+      status: "ready" as const,
+      reason: null,
+      remediation: null,
+      evidence: {
+        adapter: "codex" as const,
+        transport: "codex-app-server-stdio" as const,
+        runtimeVersion: "0.144.4",
+        requestedProvider: "openai" as const,
+        requestedModel: model,
+        actualProvider: "openai",
+        actualModel: model,
+        requestId: "turn-135",
+        sessionId: "thread-probe-135",
+        terminalStatus: "ready" as const,
+        fallbackOccurred: false,
+        cancellationRequested: false,
+        cancellationConfirmed: null,
+      },
+    })),
+    converse: vi.fn(),
+  };
+  const codexAdapter = vi.fn(() => codex);
   const center = new AgentConnectionCenter({
     config: new ConfigManager(configPath),
     host,
@@ -47,6 +89,7 @@ function setup(
     audio,
     text,
     discover,
+    codexAdapter,
   });
   host.upsertAgentConnectionRecord({
     id: "direct-xai",
@@ -62,6 +105,8 @@ function setup(
     credentials,
     audio,
     text,
+    codex,
+    codexAdapter,
     configPath,
     root,
     configManager: new ConfigManager(configPath),
@@ -73,6 +118,7 @@ function setup(
       audio,
       text,
       discover,
+      codexAdapter,
     }),
     discover,
   };
@@ -83,6 +129,160 @@ afterEach(() => {
 });
 
 describe("public Agent Connection Host contract", () => {
+  it("confirms Codex explicitly, projects native auth without probing, and proves only Conversation", async () => {
+    const setupResult = setup({
+      audio: {},
+      transcription: { engine: "local", language: "zh" },
+      intelligence: {
+        summary: { provider: "agent", model: "runtime-managed" },
+        conversation: { provider: "agent", model: "runtime-managed" },
+      },
+      llm: { agent: { provider: "auto" } },
+    }, [{ adapter: "codex", label: "Codex", path: "/fake/bin/codex" }]);
+    const caller = createCaller(agentConnectionsRouter, {
+      agentConnections: setupResult.center,
+      uiMutationAuthorized: true,
+    } as never);
+
+    await caller.refreshCandidates();
+    await expect(caller.confirmCandidate({
+      candidateId: "candidate:codex",
+      model: "gpt-5.6-sol",
+    })).resolves.toMatchObject({
+      connections: expect.arrayContaining([expect.objectContaining({
+        id: "codex",
+        kind: "supported-agent",
+        adapter: "codex",
+        authorization: expect.objectContaining({
+          connected: true,
+          credentialSource: "runtime-oauth",
+          runtimeVersion: "0.144.4",
+          loginCommand: "/fake/bin/codex login",
+        }),
+        capabilities: [expect.objectContaining({
+          capability: "conversation",
+          currentReadiness: expect.objectContaining({
+            status: "untested",
+            model: "gpt-5.6-sol",
+            testedAt: null,
+            detail: "Not tested in this Host process",
+            credentialSource: null,
+          }),
+        })],
+      })]),
+    });
+    expect(setupResult.codex.status).toHaveBeenCalled();
+    expect(setupResult.codex.probe).not.toHaveBeenCalled();
+    expect(setupResult.codex.converse).not.toHaveBeenCalled();
+
+    const beforeDisclosure = await caller.view();
+    const codex = beforeDisclosure.connections.find((connection: { id: string }) => connection.id === "codex");
+    expect(codex.capabilities[0].disclosure).toMatchObject({
+      required: true,
+      data: "conversation_text_and_agent_tool_context",
+      destination: "Codex runtime and its configured providers/connectors",
+    });
+    await caller.acceptDisclosure({ connectionId: "codex", capability: "conversation" });
+    expect(setupResult.host.getAgentConnectionDisclosure("codex", "conversation")).toMatchObject({
+      decision: "accepted",
+      disclosureVersion: "codex-conversation-v1",
+    });
+    expect(setupResult.host.getSummaryDataPathDisclosure("codex")).toBeNull();
+
+    await expect(caller.probe({ connectionId: "codex", capability: "conversation" })).resolves.toMatchObject({
+      capability: "conversation",
+      status: "ready",
+      model: "gpt-5.6-sol",
+    });
+    expect(setupResult.codex.probe).toHaveBeenCalledWith({ model: "gpt-5.6-sol" });
+    await caller.select({ connectionId: "codex", capability: "conversation", model: "gpt-5.6-sol" });
+    await expect(caller.view()).resolves.toMatchObject({
+      selections: { conversation: { connectionId: "codex", model: "gpt-5.6-sol" } },
+    });
+    expect(JSON.parse(readFileSync(setupResult.configPath, "utf8"))).toMatchObject({
+      intelligence: { conversation: { provider: "agent", connectionId: "codex", model: "gpt-5.6-sol" } },
+    });
+    expect(setupResult.host.listAgentConnectionReadinessHistory("codex", "conversation")).toEqual([
+      expect.objectContaining({
+        status: "ready",
+        runtimeEvidence: expect.objectContaining({
+          requestedModel: "gpt-5.6-sol",
+          actualModel: "gpt-5.6-sol",
+          fallbackOccurred: false,
+        }),
+      }),
+    ]);
+    setupResult.host.close();
+  });
+
+  it("probes the requested Codex model and invalidates readiness when exact runtime identity changes", async () => {
+    const setupResult = setup({
+      audio: {},
+      transcription: { engine: "local", language: "zh" },
+      intelligence: {
+        summary: { provider: "agent", model: "runtime-managed" },
+        conversation: { provider: "agent", model: "runtime-managed" },
+      },
+      llm: { agent: { provider: "auto" } },
+    }, [{ adapter: "codex", label: "Codex", path: "/fake/bin/codex" }]);
+    setupResult.codex.status.mockResolvedValue({
+      ...(await setupResult.codex.status()),
+      availableModels: ["gpt-5.6-sol", "gpt-5.6-terra"],
+    });
+    const caller = createCaller(agentConnectionsRouter, {
+      agentConnections: setupResult.center,
+      uiMutationAuthorized: true,
+    } as never);
+
+    await caller.refreshCandidates();
+    await caller.confirmCandidate({ candidateId: "candidate:codex", model: "gpt-5.6-sol" });
+    await expect(caller.probe({
+      connectionId: "codex",
+      capability: "conversation",
+      model: "gpt-5.6-terra",
+    })).resolves.toMatchObject({ status: "ready", model: "gpt-5.6-terra" });
+    expect(setupResult.codex.probe).toHaveBeenLastCalledWith({ model: "gpt-5.6-terra" });
+    await expect(caller.select({
+      connectionId: "codex",
+      capability: "conversation",
+      model: "gpt-5.6-terra",
+    })).resolves.toMatchObject({
+      selections: { conversation: { connectionId: "codex", model: "gpt-5.6-terra" } },
+    });
+
+    const readyStatus = await setupResult.codex.status();
+    setupResult.codex.status.mockResolvedValue({ ...readyStatus, authorized: false });
+    const disconnected = await caller.view();
+    expect(disconnected.connections.find(({ id }: { id: string }) => id === "codex")?.capabilities[0]?.currentReadiness)
+      .toMatchObject({ status: "untested", model: "gpt-5.6-terra" });
+    await expect(caller.select({
+      connectionId: "codex",
+      capability: "conversation",
+      model: "gpt-5.6-terra",
+    })).rejects.toThrow(/test this exact Codex Conversation model/i);
+
+    setupResult.codex.status.mockResolvedValue({ ...readyStatus, authorized: true });
+    await caller.probe({ connectionId: "codex", capability: "conversation", model: "gpt-5.6-terra" });
+    setupResult.host.upsertAgentConnectionRecord({
+      id: "codex",
+      kind: "supported-agent",
+      adapter: "codex",
+      label: "Codex",
+      lifecycle: "available",
+      settings: {
+        executablePath: "/replacement/bin/codex",
+        conversationModel: "gpt-5.6-terra",
+        credentialSource: "runtime-oauth",
+      },
+    });
+    await expect(caller.select({
+      connectionId: "codex",
+      capability: "conversation",
+      model: "gpt-5.6-terra",
+    })).rejects.toThrow(/test this exact Codex Conversation model/i);
+    setupResult.host.close();
+  });
+
   it("opens secret-safe without probing and migrates old Agent choices to candidate or legacy state", async () => {
     const supported = setup({
       audio: {},

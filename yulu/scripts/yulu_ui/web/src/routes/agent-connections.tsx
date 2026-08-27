@@ -35,6 +35,7 @@ export function AgentConnections() {
   const view = trpc.agentConnections.view.useQuery();
   const utils = trpc.useUtils();
   const refreshCandidates = trpc.agentConnections.refreshCandidates.useMutation();
+  const confirmCandidate = trpc.agentConnections.confirmCandidate.useMutation();
   const select = trpc.agentConnections.select.useMutation();
   const selectCredentialSource = trpc.agentConnections.selectCredentialSource.useMutation();
   const probe = trpc.agentConnections.probe.useMutation();
@@ -49,6 +50,7 @@ export function AgentConnections() {
   const remove = trpc.agentConnections.remove.useMutation();
   const [apiKey, setApiKeyValue] = useState("");
   const [modelDrafts, setModelDrafts] = useState<Partial<Record<Capability, string>>>({});
+  const [codexModels, setCodexModels] = useState<Record<string, string>>({});
   const [impact, setImpact] = useState<DeletionImpact | null>(null);
   const [actionError, setActionError] = useState(false);
   const deleteButtonRef = useRef<HTMLButtonElement>(null);
@@ -86,7 +88,15 @@ export function AgentConnections() {
     );
   }
 
-  const connection = view.data.connections.find((item) => item.id === "direct-xai");
+  type ConnectionView = (typeof view.data.connections)[number];
+  const connection = view.data.connections.find((item): item is Extract<
+    ConnectionView,
+    { adapter: "direct-xai" }
+  > => item.adapter === "direct-xai");
+  const codexConnections = view.data.connections.filter((item): item is Extract<
+    ConnectionView,
+    { adapter: "codex" }
+  > => item.adapter === "codex");
   const authorizing = connection?.authorization.status === "starting" || connection?.authorization.status === "running";
   const startAuthorization = () => {
     const authorizationWindow = window.open("about:blank", "_blank");
@@ -348,11 +358,148 @@ export function AgentConnections() {
         </section>
       )}
 
+      {codexConnections.map((codex) => {
+        const capability = codex.capabilities[0]!;
+        const model = codexModels[codex.id] ?? codex.settings.conversationModel;
+        const testing = probe.isPending && probe.variables?.connectionId === codex.id;
+        const current = testing ? "testing" : capability.currentReadiness.status;
+        return (
+          <section
+            className="agent-connection-card"
+            data-testid={`agent-connection-${codex.adapter}`}
+            aria-labelledby={`${codex.id}-title`}
+            key={codex.id}
+          >
+            <div className="agent-connection-card-head">
+              <div>
+                <h2 id={`${codex.id}-title`}>{codex.label}</h2>
+                <p>{t("agentConnections.codex.description")}</p>
+              </div>
+              <span
+                className={`agent-connection-state ${codex.authorization.connected ? "ready" : "muted"}`}
+                role="status"
+                aria-label={t("agentConnections.codex.statusAria")}
+              >
+                {codex.authorization.connected
+                  ? t("agentConnections.connected")
+                  : t("agentConnections.disconnected")}
+              </span>
+            </div>
+
+            <dl className="agent-connection-runtime-details">
+              <div>
+                <dt>{t("agentConnections.codex.version")}</dt>
+                <dd>{codex.authorization.runtimeVersion ?? "—"} · {t("agentConnections.codex.minimumVersion", {
+                  version: codex.authorization.minimumVersion ?? "—",
+                })}</dd>
+              </div>
+              <div>
+                <dt>{t("agentConnections.codex.authorization")}</dt>
+                <dd>{t("agentConnections.codex.runtimeOAuth")}</dd>
+              </div>
+              <div>
+                <dt>{t("agentConnections.codex.features")}</dt>
+                <dd>{codex.authorization.features.join(" · ")}</dd>
+              </div>
+            </dl>
+
+            <div className="agent-connection-guidance" role={codex.authorization.remediation ? "alert" : "note"}>
+              <p>{t("agentConnections.codex.loginGuidance")}</p>
+              <code>{codex.authorization.loginCommand}</code>
+              <br />
+              <code>{codex.authorization.statusCommand}</code>
+              {codex.authorization.remediation && <p>{codex.authorization.remediation}</p>}
+            </div>
+
+            <article
+              className="agent-connection-capability"
+              data-testid="connection-capability-codex-conversation"
+            >
+              <div className="agent-connection-capability-head">
+                <div>
+                  <h3>{capabilityLabel(t, "conversation")}</h3>
+                  <p>{capability.currentReadiness.model}</p>
+                </div>
+                <span
+                  className={`agent-capability-state ${current}`}
+                  role={current === "failed" ? "alert" : "status"}
+                >
+                  {t(`agentConnections.readiness.${current}`)}
+                </span>
+              </div>
+              {capability.currentReadiness.status === "failed" && (
+                <p className="agent-capability-detail">
+                  {readinessFailure(t, capability.currentReadiness)}
+                </p>
+              )}
+              <label className="agent-connection-model" htmlFor={`${codex.id}-conversation-model`}>
+                <span>{t("agentConnections.codex.model")}</span>
+                <input
+                  id={`${codex.id}-conversation-model`}
+                  type="text"
+                  maxLength={128}
+                  value={model}
+                  onChange={(event) => setCodexModels((currentModels) => ({
+                    ...currentModels,
+                    [codex.id]: event.target.value,
+                  }))}
+                />
+              </label>
+              {capability.disclosure?.required && (
+                <div className="agent-connection-guidance" role="alert">
+                  {t("agentConnections.codex.disclosure")}
+                  <button
+                    type="button"
+                    onClick={() => void run(() => acceptDisclosure.mutateAsync({
+                      connectionId: codex.id,
+                      capability: "conversation",
+                    }))}
+                  >
+                    {t("agentConnections.codex.disclosureAccept")}
+                  </button>
+                </div>
+              )}
+              <div className="agent-connection-actions">
+                <button
+                  type="button"
+                  disabled={!model.trim()}
+                  onClick={() => void run(() => select.mutateAsync({
+                    connectionId: codex.id,
+                    capability: "conversation",
+                    model,
+                  }))}
+                >
+                  {t("agentConnections.codex.select")}
+                </button>
+                <button
+                  type="button"
+                  disabled={!codex.authorization.connected || probe.isPending}
+                  onClick={() => void run(() => probe.mutateAsync({
+                    connectionId: codex.id,
+                    capability: "conversation",
+                    model,
+                  }))}
+                >
+                  {testing
+                    ? t("agentConnections.readiness.testing")
+                    : t("agentConnections.test.conversation")}
+                </button>
+              </div>
+            </article>
+          </section>
+        );
+      })}
+
       <section className="agent-connections-list" aria-labelledby="agent-candidates-title">
         <h2 id="agent-candidates-title">{t("agentConnections.candidates.title")}</h2>
         <p>{t("agentConnections.candidates.explanation")}</p>
         {view.data.candidates.map((candidate) => (
-          <details className="agent-connection-card compact" key={candidate.id}>
+          <details
+            className="agent-connection-card compact"
+            data-testid={`agent-candidate-${candidate.adapter}`}
+            open={candidate.adapter === "codex"}
+            key={candidate.id}
+          >
             <summary>
               <strong>{candidate.label}</strong>
               <span>{t("agentConnections.candidates.badge")}</span>
@@ -362,6 +509,33 @@ export function AgentConnections() {
               <div><dt>{t("agentConnections.detectedPath")}</dt><dd><code>{candidate.detectedPath ?? t("agentConnections.migrated")}</code></dd></div>
               <div><dt>{t("agentConnections.declaredCapabilities")}</dt><dd>{candidate.capabilities.map((item) => capabilityLabel(t, item as Capability)).join(" · ")}</dd></div>
             </dl>
+            {candidate.adapter === "codex" && candidate.detectedPath && (
+              <div className="agent-connection-candidate-action">
+                <label className="agent-connection-model" htmlFor={`${candidate.id}-conversation-model`}>
+                  <span>{t("agentConnections.codex.model")}</span>
+                  <input
+                    id={`${candidate.id}-conversation-model`}
+                    type="text"
+                    maxLength={128}
+                    value={codexModels[candidate.id] ?? "gpt-5.6-sol"}
+                    onChange={(event) => setCodexModels((currentModels) => ({
+                      ...currentModels,
+                      [candidate.id]: event.target.value,
+                    }))}
+                  />
+                </label>
+                <button
+                  type="button"
+                  disabled={confirmCandidate.isPending || !(codexModels[candidate.id] ?? "gpt-5.6-sol").trim()}
+                  onClick={() => void run(() => confirmCandidate.mutateAsync({
+                    candidateId: candidate.id,
+                    model: codexModels[candidate.id] ?? "gpt-5.6-sol",
+                  }))}
+                >
+                  {t("agentConnections.codex.confirm")}
+                </button>
+              </div>
+            )}
           </details>
         ))}
         {view.data.candidates.length === 0 && <p>{t("agentConnections.candidates.empty")}</p>}

@@ -1,11 +1,14 @@
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { agentSessionsRouter } from "../../src/routers/agentSessions.js";
 import { createCaller, type AppContext } from "../../src/trpc.js";
 import { updateAgentSessionNativeSession } from "../../src/agentSessionStore.js";
-import { XAI_CONVERSATION_DISCLOSURE_VERSION } from "../../src/conversationDataDisclosure.js";
+import {
+  CODEX_CONVERSATION_DISCLOSURE_VERSION,
+  XAI_CONVERSATION_DISCLOSURE_VERSION,
+} from "../../src/conversationDataDisclosure.js";
 
 function makeCtx(configDir: string, config: Record<string, unknown> = {
   intelligence: { conversation: { provider: "agent", model: "runtime-managed" } },
@@ -16,6 +19,14 @@ function makeCtx(configDir: string, config: Record<string, unknown> = {
     config: { read: () => config },
     xaiCredentials: { status: async () => ({ connected: true, source: "oauth" }) },
     host: {
+      listAgentConnectionRecords: () => [{
+        id: "codex",
+        kind: "supported-agent",
+        adapter: "codex",
+        label: "Codex",
+        lifecycle: "available",
+        settings: { executablePath: "/fake/codex", conversationModel: "gpt-5.6-sol" },
+      }],
       getAgentConnectionDisclosure: () => ({
         connectionId: "direct-xai",
         capability: "conversation",
@@ -135,6 +146,81 @@ describe("agentSessionsRouter", () => {
       model: "grok-4.6-exact",
       credentialSource: "oauth",
     });
+  });
+
+  it("snapshots the exact Codex connection and model for each new conversation", async () => {
+    const root = mkdtempSync(join(tmpdir(), "agent-sessions-"));
+    roots.push(root);
+    const config = {
+      intelligence: {
+        conversation: { provider: "agent", connectionId: "codex", model: "gpt-5.6-sol" },
+      },
+      llm: { enabled: false, command: null, agent: { provider: "auto" } },
+    };
+    const ctx = makeCtx(root, config);
+    const assertCodexConversationReady = vi.fn(async () => undefined);
+    ctx.agentConnections = { assertCodexConversationReady } as never;
+    let accepted = false;
+    ctx.host.getAgentConnectionDisclosure = () => accepted ? {
+      connectionId: "codex",
+      capability: "conversation",
+      disclosureVersion: CODEX_CONVERSATION_DISCLOSURE_VERSION,
+      decision: "accepted",
+      decidedAt: "2026-08-27T00:00:00.000Z",
+    } : null;
+    const caller = createCaller(agentSessionsRouter, ctx);
+
+    await expect(caller.create({ title: "Pinned Codex" }))
+      .rejects.toThrow("Codex Conversation data path disclosure");
+    accepted = true;
+    const created = await caller.create({ title: "Pinned Codex" });
+    expect(created).toMatchObject({
+      provider: "codex",
+      connectionId: "codex",
+      model: "gpt-5.6-sol",
+      credentialSource: "runtime-oauth",
+    });
+    expect(created.nativeSessionId).toBeUndefined();
+    expect(assertCodexConversationReady).toHaveBeenCalledWith({
+      connectionId: "codex",
+      model: "gpt-5.6-sol",
+    });
+
+    config.intelligence.conversation = { provider: "xai", model: "grok-future" } as never;
+    expect(await caller.get({ id: created.id })).toMatchObject({
+      provider: "codex",
+      connectionId: "codex",
+      model: "gpt-5.6-sol",
+      credentialSource: "runtime-oauth",
+    });
+  });
+
+  it("refuses a new Codex conversation when current exact readiness is stale", async () => {
+    const root = mkdtempSync(join(tmpdir(), "agent-sessions-"));
+    roots.push(root);
+    const config = {
+      intelligence: {
+        conversation: { provider: "agent", connectionId: "codex", model: "gpt-5.6-sol" },
+      },
+      llm: { enabled: false, command: null, agent: { provider: "auto" } },
+    };
+    const ctx = makeCtx(root, config);
+    ctx.host.getAgentConnectionDisclosure = () => ({
+      connectionId: "codex",
+      capability: "conversation",
+      disclosureVersion: CODEX_CONVERSATION_DISCLOSURE_VERSION,
+      decision: "accepted",
+      decidedAt: "2026-08-27T00:00:00.000Z",
+    });
+    ctx.agentConnections = {
+      assertCodexConversationReady: vi.fn(async () => {
+        throw new Error("Test this exact Codex Conversation model before starting a new conversation");
+      }),
+    } as never;
+
+    await expect(createCaller(agentSessionsRouter, ctx).create({ title: "No stale proof" }))
+      .rejects.toThrow(/test this exact Codex Conversation model/i);
+    await expect(createCaller(agentSessionsRouter, ctx).list()).resolves.toEqual({ sessions: [] });
   });
 
   it("renames, pins, archives, and deletes sessions", async () => {

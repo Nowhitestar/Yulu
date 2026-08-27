@@ -18,9 +18,11 @@ import {
 } from "./transcriptionConsent.js";
 import { readAgentSessionStore } from "./agentSessionStore.js";
 import {
+  CODEX_CONVERSATION_DISCLOSURE_VERSION,
   hasCurrentXaiConversationDisclosure,
   XAI_CONVERSATION_DISCLOSURE_VERSION,
 } from "./conversationDataDisclosure.js";
+import type { CodexAgentAdapter } from "./codexAgentAdapter.js";
 
 export type AgentConnectionCapability = "transcription" | "summary" | "conversation";
 
@@ -63,9 +65,11 @@ export interface AgentConnectionCenterOptions {
   text: XaiTextBoundary;
   readiness?: XaiProviderReadiness;
   discover: () => DiscoveredAgentRuntime[];
+  codexAdapter?: (executable: string) => Pick<CodexAgentAdapter, "status" | "probe" | "converse">;
 }
 
 const DIRECT_XAI_ID = "direct-xai";
+const CODEX_ID = "codex";
 const MIGRATION_ID = "agent-connections-v1";
 const SUPPORTED_ADAPTERS = new Set(["codex", "claude-code", "hermes", "openclaw"]);
 
@@ -100,7 +104,8 @@ function adapterFromCommand(command: string[]): string | null {
 
 function capabilitiesForAdapter(adapter: string): AgentConnectionCapability[] {
   if (adapter === "hermes" || adapter === "openclaw") return ["conversation"];
-  if (adapter === "codex" || adapter === "claude-code") return ["summary", "conversation"];
+  if (adapter === "codex") return ["conversation"];
+  if (adapter === "claude-code") return ["summary", "conversation"];
   return [];
 }
 
@@ -123,6 +128,10 @@ export class AgentConnectionCenter {
   private readonly text: XaiTextBoundary;
   private readonly readiness: XaiProviderReadiness;
   private readonly configDir: string;
+  private readonly codexReadiness = new Map<string, {
+    readiness: XaiReadinessResult;
+    identity: string;
+  }>();
 
   constructor(private readonly options: AgentConnectionCenterOptions) {
     this.config = options.config;
@@ -149,10 +158,10 @@ export class AgentConnectionCenter {
     const selectedCredentialConnected = selectedCredentialSource === "oauth"
       ? status.oauthConnected
       : selectedCredentialSource === "api-key" ? status.apiKeyConfigured : false;
-    const connections = direct ? [{
+    const directConnections = direct ? [{
       id: direct.id,
-      kind: direct.kind,
-      adapter: direct.adapter,
+      kind: "direct-provider" as const,
+      adapter: "direct-xai" as const,
       label: direct.label,
       lifecycle: selectedCredentialConnected ? "connected" as const : "disconnected" as const,
       authorization: {
@@ -237,7 +246,78 @@ export class AgentConnectionCenter {
           : XAI_TEXT_MODEL_DEFAULT,
       },
     }] : [];
-    const candidates = this.host.listAgentConnectionCandidates().map((candidate) => ({
+    const codexConnections = await Promise.all(records
+      .filter((record) => record.kind === "supported-agent" && record.adapter === "codex")
+      .map(async (record) => {
+        const executable = String(record.settings.executablePath ?? "");
+        const model = String(record.settings.conversationModel ?? "").trim();
+        let status: Awaited<ReturnType<CodexAgentAdapter["status"]>> | null = null;
+        let statusError: string | null = null;
+        try {
+          status = await this.requireCodexAdapter(executable).status();
+        } catch {
+          statusError = "Codex runtime status is unavailable";
+        }
+        const proof = status ? this.codexReadiness.get(record.id) : undefined;
+        const identity = status ? this.codexIdentity(executable, model, status) : null;
+        const currentReadiness = proof && proof.identity === identity
+          ? proof.readiness
+          : untested("conversation", model);
+        if (proof && proof.identity !== identity) this.codexReadiness.delete(record.id);
+        const disclosure = this.host.getAgentConnectionDisclosure(record.id, "conversation");
+        const selection = asRecord(config.intelligence.conversation);
+        return {
+          id: record.id,
+          kind: "supported-agent" as const,
+          adapter: "codex" as const,
+          label: record.label,
+          lifecycle: status?.authorized ? "connected" as const : "disconnected" as const,
+          authorization: {
+            connected: Boolean(status?.authorized && status.supported),
+            credentialSource: "runtime-oauth" as const,
+            runtimeVersion: status?.runtimeVersion ?? null,
+            minimumVersion: status?.minimumVersion ?? null,
+            supported: status?.supported ?? false,
+            availableModels: status?.availableModels ?? [],
+            features: status?.features ?? [],
+            loginCommand: status?.login.command ?? `${executable} login`,
+            statusCommand: status?.login.statusCommand ?? `${executable} login status`,
+            remediation: status?.remediation ?? statusError,
+          },
+          capabilities: [{
+            capability: "conversation" as const,
+            declared: true,
+            currentReadiness,
+            readinessHistory: this.host.listAgentConnectionReadinessHistory(record.id, "conversation"),
+            disclosure: {
+              required: disclosure?.disclosureVersion !== CODEX_CONVERSATION_DISCLOSURE_VERSION ||
+                disclosure.decision !== "accepted",
+              disclosureVersion: CODEX_CONVERSATION_DISCLOSURE_VERSION,
+              data: "conversation_text_and_agent_tool_context",
+              destination: "Codex runtime and its configured providers/connectors",
+              decision: disclosure?.disclosureVersion === CODEX_CONVERSATION_DISCLOSURE_VERSION
+                ? disclosure.decision : null,
+              decidedAt: disclosure?.disclosureVersion === CODEX_CONVERSATION_DISCLOSURE_VERSION
+                ? disclosure.decidedAt : null,
+            },
+            selected: selection.provider === "agent" && selection.connectionId === record.id,
+            remediation: currentReadiness.status === "failed" || !status?.authorized || !status?.supported
+              ? { href: `/agent-connections?connection=${record.id}&capability=conversation` }
+              : null,
+          }],
+          settings: {
+            conversationModel: model,
+            executablePath: executable,
+          },
+        };
+      }));
+    const connections = [...directConnections, ...codexConnections];
+    const connectedAdapters = new Set(records
+      .filter((record) => record.kind === "supported-agent")
+      .map((record) => record.adapter));
+    const candidates = this.host.listAgentConnectionCandidates()
+      .filter((candidate) => !connectedAdapters.has(candidate.adapter))
+      .map((candidate) => ({
       id: candidate.id,
       kind: "supported-agent" as const,
       adapter: candidate.adapter,
@@ -249,7 +329,7 @@ export class AgentConnectionCenter {
       selected: false,
       readiness: "untested" as const,
       remediation: { href: `/agent-connections?candidate=${encodeURIComponent(candidate.id)}` },
-    }));
+      }));
     const legacyConnections = records
       .filter((record) => record.kind === "legacy-custom")
       .map((record) => ({
@@ -275,16 +355,25 @@ export class AgentConnectionCenter {
         summary: direct && config.intelligence.summary.provider === "xai"
           ? { connectionId: DIRECT_XAI_ID, model: config.intelligence.summary.model }
           : { connectionId: null, model: config.intelligence.summary.model },
-        conversation: direct && config.intelligence.conversation.provider === "xai"
+        conversation: config.intelligence.conversation.provider === "xai" && direct
           ? { connectionId: DIRECT_XAI_ID, model: config.intelligence.conversation.model }
-          : { connectionId: null, model: config.intelligence.conversation.model },
+          : config.intelligence.conversation.provider === "agent" &&
+              "connectionId" in config.intelligence.conversation && config.intelligence.conversation.connectionId
+            ? {
+                connectionId: config.intelligence.conversation.connectionId,
+                model: config.intelligence.conversation.model,
+              }
+            : { connectionId: null, model: config.intelligence.conversation.model },
       },
     };
   }
 
   async xaiProjection() {
     const view = await this.view();
-    const direct = view.connections.find((connection) => connection.id === DIRECT_XAI_ID);
+    const direct = view.connections.find((connection): connection is Extract<
+      (typeof view.connections)[number],
+      { adapter: "direct-xai" }
+    > => connection.adapter === "direct-xai");
     if (!direct) {
       const config = this.config.read();
       return {
@@ -333,8 +422,74 @@ export class AgentConnectionCenter {
     };
   }
 
-  async probe(input: { connectionId: string; capability: AgentConnectionCapability }): Promise<XaiReadinessResult> {
+  async probe(input: {
+    connectionId: string;
+    capability: AgentConnectionCapability;
+    model?: string;
+  }): Promise<XaiReadinessResult> {
     this.ensureMigrated();
+    const codexRecord = this.codexRecord(input.connectionId);
+    if (codexRecord) {
+      if (input.capability !== "conversation") {
+        throw new Error("This Codex connection currently supports Conversation only");
+      }
+      const model = input.model?.trim() || String(codexRecord.settings.conversationModel ?? "").trim();
+      if (!model || model.length > 128) throw new Error("Codex Conversation model is invalid");
+      if (model !== codexRecord.settings.conversationModel) {
+        this.codexReadiness.delete(codexRecord.id);
+        this.host.upsertAgentConnectionRecord({
+          ...codexRecord,
+          settings: { ...codexRecord.settings, conversationModel: model },
+        });
+      }
+      const testedAt = new Date().toISOString();
+      const executable = String(codexRecord.settings.executablePath ?? "");
+      const adapter = this.requireCodexAdapter(executable);
+      const result = await adapter.probe({ model });
+      const status = await adapter.status();
+      const exactIdentity = Boolean(
+        status.supported &&
+        status.authorized &&
+        status.availableModels.includes(model) &&
+        result.evidence?.runtimeVersion === status.runtimeVersion &&
+        result.evidence.requestedModel === model &&
+        result.evidence.actualModel === model &&
+        result.evidence.actualProvider === "openai" &&
+        result.evidence.fallbackOccurred === false,
+      );
+      const effectiveStatus = result.status === "ready" && !exactIdentity ? "failed" : result.status;
+      const readiness: XaiReadinessResult = {
+        capability: "conversation",
+        status: effectiveStatus,
+        model,
+        credentialSource: null,
+        testedAt,
+        detail: effectiveStatus === "ready"
+          ? `conversation · ${model} passed the Codex production adapter probe`
+          : result.status === "failed"
+            ? result.remediation ?? `conversation · ${model} failed`
+            : `conversation · ${model} failed; the exact Codex executable, authorization, version, features, or model changed during the probe`,
+        reason: result.reason === "invalid_model" ? "invalid_model" : "readiness_failed",
+      };
+      this.codexReadiness.set(codexRecord.id, {
+        readiness,
+        identity: this.codexIdentity(executable, model, status),
+      });
+      if (result.evidence) {
+        this.host.recordAgentConnectionReadiness({
+          connectionId: codexRecord.id,
+          capability: "conversation",
+          status: effectiveStatus,
+          model,
+          credentialSource: null,
+          detail: readiness.detail,
+          reason: readiness.reason ?? null,
+          runtimeEvidence: result.evidence,
+          testedAt,
+        });
+      }
+      return readiness;
+    }
     if (input.connectionId !== DIRECT_XAI_ID || !this.hasDirectConnection()) {
       throw new Error("Only explicit Agent Connections can run a Capability Probe");
     }
@@ -434,12 +589,61 @@ export class AgentConnectionCenter {
     return await this.view();
   }
 
+  async confirmCandidate(input: { candidateId: string; model: string }) {
+    this.ensureMigrated();
+    const candidate = this.host.listAgentConnectionCandidates()
+      .find((item) => item.id === input.candidateId);
+    if (!candidate || candidate.adapter !== "codex" || !candidate.detectedPath) {
+      throw new Error("Codex Connection Candidate with a detected runtime is required");
+    }
+    const model = input.model.trim();
+    if (!model || model.length > 128) throw new Error("Codex Conversation model is invalid");
+    const status = await this.requireCodexAdapter(candidate.detectedPath).status();
+    if (!status.supported) throw new Error(status.remediation ?? "Codex runtime is unsupported");
+    if (status.authorized && !status.availableModels.includes(model)) {
+      throw new Error(`Codex model ${model} is not available from model/list`);
+    }
+    this.codexReadiness.delete(CODEX_ID);
+    this.host.upsertAgentConnectionRecord({
+      id: CODEX_ID,
+      kind: "supported-agent",
+      adapter: "codex",
+      label: candidate.label,
+      lifecycle: "available",
+      settings: {
+        executablePath: candidate.detectedPath,
+        conversationModel: model,
+        credentialSource: "runtime-oauth",
+      },
+    });
+    return await this.view();
+  }
+
   async select(input: {
     connectionId: string;
     capability: AgentConnectionCapability;
     model?: string;
   }) {
     this.ensureMigrated();
+    const codexRecord = this.codexRecord(input.connectionId);
+    if (codexRecord) {
+      if (input.capability !== "conversation") {
+        throw new Error("This Codex connection currently supports Conversation only");
+      }
+      const model = input.model?.trim() || String(codexRecord.settings.conversationModel ?? "").trim();
+      if (!model || model.length > 128) throw new Error("Codex Conversation model is invalid");
+      await this.requireCurrentCodexReadiness(codexRecord.id, model);
+      this.host.upsertAgentConnectionRecord({
+        ...codexRecord,
+        settings: { ...codexRecord.settings, conversationModel: model },
+      });
+      this.config.update("intelligence.conversation", {
+        provider: "agent",
+        connectionId: codexRecord.id,
+        model,
+      });
+      return await this.view();
+    }
     if (input.connectionId !== DIRECT_XAI_ID) {
       const candidate = this.host.listAgentConnectionCandidates()
         .find((item) => item.id === input.connectionId);
@@ -473,6 +677,18 @@ export class AgentConnectionCenter {
 
   acceptDisclosure(input: { connectionId: string; capability: AgentConnectionCapability }) {
     this.ensureMigrated();
+    if (this.codexRecord(input.connectionId)) {
+      if (input.capability !== "conversation") {
+        throw new Error("This Codex connection currently supports Conversation only");
+      }
+      const receipt = this.host.recordAgentConnectionDisclosure({
+        connectionId: input.connectionId,
+        capability: "conversation",
+        disclosureVersion: CODEX_CONVERSATION_DISCLOSURE_VERSION,
+        decision: "accepted",
+      });
+      return { ...input, accepted: true, disclosureVersion: receipt.disclosureVersion };
+    }
     if (input.connectionId !== DIRECT_XAI_ID || !this.hasDirectConnection()) {
       throw new Error("Agent Connection not found");
     }
@@ -498,6 +714,18 @@ export class AgentConnectionCenter {
     capability: "summary" | "conversation";
   }) {
     this.ensureMigrated();
+    if (this.codexRecord(input.connectionId)) {
+      if (input.capability !== "conversation") {
+        throw new Error("This Codex connection currently supports Conversation only");
+      }
+      const receipt = this.host.recordAgentConnectionDisclosure({
+        connectionId: input.connectionId,
+        capability: "conversation",
+        disclosureVersion: CODEX_CONVERSATION_DISCLOSURE_VERSION,
+        decision: "declined",
+      });
+      return { ...input, decision: receipt.decision, disclosureVersion: receipt.disclosureVersion };
+    }
     if (input.connectionId !== DIRECT_XAI_ID || !this.hasDirectConnection()) {
       throw new Error("Agent Connection not found");
     }
@@ -612,6 +840,31 @@ export class AgentConnectionCenter {
     return await this.view();
   }
 
+  async converseCodex(input: {
+    connectionId: string;
+    model: string;
+    prompt: string;
+    nativeSessionId?: string;
+  }) {
+    const record = this.codexRecord(input.connectionId);
+    if (!record) {
+      throw new Error(`Pinned Codex connection ${input.connectionId} is unavailable; restore it in Agent Connection Center`);
+    }
+    return await this.requireCodexAdapter(String(record.settings.executablePath ?? "")).converse({
+      model: input.model,
+      prompt: input.prompt,
+      ...(input.nativeSessionId ? { nativeSessionId: input.nativeSessionId } : {}),
+    });
+  }
+
+  async assertCodexConversationReady(input: { connectionId: string; model: string }): Promise<void> {
+    try {
+      await this.requireCurrentCodexReadiness(input.connectionId, input.model);
+    } catch {
+      throw new Error("Test this exact Codex Conversation model before starting a new conversation");
+    }
+  }
+
   private finishProbe(
     result: XaiReadinessResult,
     actual: { actualProvider: string | null; actualModel: string | null } | null,
@@ -646,6 +899,51 @@ export class AgentConnectionCenter {
 
   private hasDirectConnection(): boolean {
     return this.host.listAgentConnectionRecords().some((record) => record.id === DIRECT_XAI_ID);
+  }
+
+  private codexRecord(connectionId: string) {
+    return this.host.listAgentConnectionRecords().find((record) =>
+      record.id === connectionId && record.kind === "supported-agent" && record.adapter === "codex"
+    );
+  }
+
+  private codexIdentity(
+    executable: string,
+    model: string,
+    status: Awaited<ReturnType<CodexAgentAdapter["status"]>>,
+  ): string {
+    return JSON.stringify({
+      executable,
+      model,
+      runtimeVersion: status.runtimeVersion,
+      minimumVersion: status.minimumVersion,
+      supported: status.supported,
+      authorized: status.authorized,
+      modelAvailable: status.availableModels.includes(model),
+      features: [...status.features].sort(),
+    });
+  }
+
+  private async requireCurrentCodexReadiness(connectionId: string, model: string): Promise<void> {
+    const record = this.codexRecord(connectionId);
+    if (!record) throw new Error("Test this exact Codex Conversation model before selecting it");
+    const executable = String(record.settings.executablePath ?? "");
+    const status = await this.requireCodexAdapter(executable).status();
+    const proof = this.codexReadiness.get(record.id);
+    const identity = this.codexIdentity(executable, model, status);
+    if (
+      proof?.readiness.status !== "ready" ||
+      proof.readiness.model !== model ||
+      proof.identity !== identity
+    ) {
+      this.codexReadiness.delete(record.id);
+      throw new Error("Test this exact Codex Conversation model before selecting it");
+    }
+  }
+
+  private requireCodexAdapter(executable: string) {
+    if (!executable || !this.options.codexAdapter) throw new Error("Codex production adapter is unavailable");
+    return this.options.codexAdapter(executable);
   }
 
   private credentialSource(value: unknown): XaiCredentialSource | null {

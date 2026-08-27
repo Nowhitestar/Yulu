@@ -974,4 +974,46 @@ describe("HostStore", () => {
     })).toThrow("must identify the same page");
     expect(store!.getTask(claimed.id)?.state).toBe("delivery_unverified");
   });
+
+  it("migrates the pre-Codex Agent connection schema without losing existing records", () => {
+    root = mkdtempSync(join(tmpdir(), "yulu-host-store-"));
+    const dbPath = join(root, "host.sqlite");
+    const legacy = new Database(dbPath);
+    legacy.exec(`
+      CREATE TABLE agent_connections (
+        id TEXT PRIMARY KEY,
+        kind TEXT NOT NULL CHECK(kind IN ('direct-provider', 'legacy-custom')),
+        adapter TEXT NOT NULL,
+        label TEXT NOT NULL,
+        lifecycle TEXT NOT NULL CHECK(lifecycle IN ('available', 'legacy')),
+        settings_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      INSERT INTO agent_connections
+        (id, kind, adapter, label, lifecycle, settings_json, created_at, updated_at)
+      VALUES
+        ('direct-xai', 'direct-provider', 'direct-xai', 'xAI', 'available', '{}',
+         '2026-08-26T00:00:00.000Z', '2026-08-26T00:00:00.000Z');
+    `);
+    legacy.close();
+
+    store = new HostStore(dbPath);
+    expect(store.listAgentConnectionRecords()).toEqual([
+      expect.objectContaining({ id: "direct-xai", kind: "direct-provider", adapter: "direct-xai" }),
+    ]);
+
+    store.upsertAgentConnectionRecord({
+      id: "codex",
+      kind: "supported-agent",
+      adapter: "codex",
+      label: "Codex",
+      lifecycle: "available",
+      settings: { executablePath: "/fake/bin/codex", conversationModel: "gpt-5.6-sol" },
+    });
+    expect(store.listAgentConnectionRecords().find((record) => record.id === "codex")).toMatchObject({
+      kind: "supported-agent",
+      settings: { executablePath: "/fake/bin/codex", conversationModel: "gpt-5.6-sol" },
+    });
+  });
 });

@@ -134,7 +134,7 @@ export interface SummaryDataPathDisclosure {
 
 export interface PersistedAgentConnection {
   id: string;
-  kind: "direct-provider" | "legacy-custom";
+  kind: "direct-provider" | "supported-agent" | "legacy-custom";
   adapter: string;
   label: string;
   lifecycle: "available" | "legacy";
@@ -173,7 +173,7 @@ export interface PersistedAgentConnectionReadiness {
     actualModel: string | null;
     requestId: string | null;
     sessionId: string | null;
-    terminalStatus: "ready" | "failed";
+    terminalStatus: "ready" | "failed" | "unknown";
     fallbackOccurred: boolean;
   };
   testedAt: string;
@@ -2011,7 +2011,7 @@ export class HostStore {
 
       CREATE TABLE IF NOT EXISTS agent_connections (
         id TEXT PRIMARY KEY,
-        kind TEXT NOT NULL CHECK(kind IN ('direct-provider', 'legacy-custom')),
+        kind TEXT NOT NULL CHECK(kind IN ('direct-provider', 'supported-agent', 'legacy-custom')),
         adapter TEXT NOT NULL,
         label TEXT NOT NULL,
         lifecycle TEXT NOT NULL CHECK(lifecycle IN ('available', 'legacy')),
@@ -2060,6 +2060,38 @@ export class HostStore {
         PRIMARY KEY(connection_id, capability)
       );
     `);
+    const agentConnectionTable = this.db.prepare(
+      "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'agent_connections'",
+    ).get() as { sql: string } | undefined;
+    if (agentConnectionTable && !agentConnectionTable.sql.includes("supported-agent")) {
+      this.db.pragma("foreign_keys = OFF");
+      try {
+        this.db.exec(`
+          BEGIN;
+          CREATE TABLE agent_connections_v2 (
+            id TEXT PRIMARY KEY,
+            kind TEXT NOT NULL CHECK(kind IN ('direct-provider', 'supported-agent', 'legacy-custom')),
+            adapter TEXT NOT NULL,
+            label TEXT NOT NULL,
+            lifecycle TEXT NOT NULL CHECK(lifecycle IN ('available', 'legacy')),
+            settings_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+          );
+          INSERT INTO agent_connections_v2
+            SELECT id, kind, adapter, label, lifecycle, settings_json, created_at, updated_at
+            FROM agent_connections;
+          DROP TABLE agent_connections;
+          ALTER TABLE agent_connections_v2 RENAME TO agent_connections;
+          COMMIT;
+        `);
+      } catch (error) {
+        if (this.db.inTransaction) this.db.exec("ROLLBACK");
+        throw error;
+      } finally {
+        this.db.pragma("foreign_keys = ON");
+      }
+    }
     const readinessColumns = this.db.prepare("PRAGMA table_info(agent_connection_readiness_history)")
       .all() as Array<{ name: string }>;
     if (!readinessColumns.some((column) => column.name === "runtime_evidence_json")) {

@@ -7,6 +7,7 @@ import { LanguageProvider } from "../../../web/src/i18n/LanguageProvider.js";
 const mocks = vi.hoisted(() => ({
   probe: vi.fn(async () => ({ status: "ready" })),
   refresh: vi.fn(async () => ({})),
+  confirmCandidate: vi.fn(async () => ({})),
   select: vi.fn(async () => ({})),
   acceptDisclosure: vi.fn(async () => ({})),
   selectCredentialSource: vi.fn(async () => ({})),
@@ -78,6 +79,39 @@ const mocks = vi.hoisted(() => ({
           remediation: null,
         },
       ],
+    }, {
+      id: "codex",
+      kind: "supported-agent",
+      adapter: "codex",
+      label: "Codex",
+      lifecycle: "connected",
+      authorization: {
+        connected: true,
+        credentialSource: "runtime-oauth",
+        runtimeVersion: "0.144.4",
+        minimumVersion: "0.144.0",
+        supported: true,
+        availableModels: ["gpt-5.6-sol"],
+        features: ["account/read", "model/list", "thread/start", "thread/resume", "no-provider-model-fallback"],
+        loginCommand: "/fake/bin/codex login",
+        statusCommand: "/fake/bin/codex login status",
+        remediation: null,
+      },
+      settings: { executablePath: "/fake/bin/codex", conversationModel: "gpt-5.6-sol" },
+      capabilities: [{
+        capability: "conversation",
+        declared: true,
+        selected: false,
+        currentReadiness: { status: "ready", model: "gpt-5.6-sol", testedAt: "2026-08-27T12:00:00.000Z" },
+        readinessHistory: [],
+        disclosure: {
+          required: true,
+          disclosureVersion: "codex-conversation-v1",
+          data: "conversation_text_and_agent_tool_context",
+          destination: "Codex runtime and its configured providers/connectors",
+        },
+        remediation: null,
+      }],
     }],
     candidates: [{
       id: "candidate:codex",
@@ -126,6 +160,7 @@ vi.mock("../../../web/src/trpc.js", () => {
         view: { useQuery: () => ({ data: mocks.view, isPending: false, isError: false, refetch: vi.fn() }) },
         probe: { useMutation: () => mutation(mocks.probe) },
         refreshCandidates: { useMutation: () => mutation(mocks.refresh) },
+        confirmCandidate: { useMutation: () => mutation(mocks.confirmCandidate) },
         select: { useMutation: () => mutation(mocks.select) },
         acceptDisclosure: { useMutation: () => mutation(mocks.acceptDisclosure) },
         selectCredentialSource: { useMutation: () => mutation(mocks.selectCredentialSource) },
@@ -172,7 +207,41 @@ describe("shared Agent Connection Center", () => {
     expect(within(summary).getByText("需要修复")).toHaveAttribute("role", "alert");
     expect(within(summary).getByText("模型 grok-summary 不可用。请输入账户可访问的准确模型 ID，然后重新测试。")).toBeInTheDocument();
     expect(within(summary).getByText(/历史：已就绪/)).toBeInTheDocument();
+    const codex = screen.getByTestId("agent-connection-codex");
+    expect(within(codex).getByText("/fake/bin/codex login")).toBeInTheDocument();
+    expect(within(codex).getByText(/0.144.4/)).toBeInTheDocument();
     expect(mocks.probe).not.toHaveBeenCalled();
+    expect(mocks.confirmCandidate).not.toHaveBeenCalled();
+  });
+
+  it("explicitly confirms a Codex candidate, accepts only Conversation disclosure, probes, and selects", async () => {
+    mount("en");
+    const user = userEvent.setup();
+    const candidate = screen.getByTestId("agent-candidate-codex");
+
+    await user.clear(within(candidate).getByRole("textbox", { name: "Codex Conversation model" }));
+    await user.type(within(candidate).getByRole("textbox", { name: "Codex Conversation model" }), "gpt-5.6-sol");
+    await user.click(within(candidate).getByRole("button", { name: "Connect Codex runtime" }));
+    expect(mocks.confirmCandidate).toHaveBeenCalledWith({
+      candidateId: "candidate:codex",
+      model: "gpt-5.6-sol",
+    });
+
+    const codex = screen.getByTestId("agent-connection-codex");
+    await user.click(within(codex).getByRole("button", { name: "Accept Conversation Data Path Disclosure" }));
+    expect(mocks.acceptDisclosure).toHaveBeenCalledWith({ connectionId: "codex", capability: "conversation" });
+    await user.click(within(codex).getByRole("button", { name: "Test conversation" }));
+    expect(mocks.probe).toHaveBeenCalledWith({
+      connectionId: "codex",
+      capability: "conversation",
+      model: "gpt-5.6-sol",
+    });
+    await user.click(within(codex).getByRole("button", { name: "Select Codex for future conversations" }));
+    expect(mocks.select).toHaveBeenCalledWith({
+      connectionId: "codex",
+      capability: "conversation",
+      model: "gpt-5.6-sol",
+    });
   });
 
   it("runs only the explicit capability action and previews deletion impact before confirmation", async () => {

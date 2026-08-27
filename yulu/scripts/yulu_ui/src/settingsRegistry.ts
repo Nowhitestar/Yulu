@@ -53,10 +53,15 @@ const DictationSchema = z.object({
 
 export const XAI_TEXT_MODEL_DEFAULT = "grok-4.6";
 
-export const TextProviderSelectionSchema = z.discriminatedUnion("provider", [
+export const TextProviderSelectionSchema = z.union([
   z.object({
     provider: z.literal("agent"),
     model: z.literal("runtime-managed").default("runtime-managed"),
+  }).strict(),
+  z.object({
+    provider: z.literal("agent"),
+    connectionId: z.string().trim().min(1).max(200),
+    model: z.string().trim().min(1).max(128),
   }).strict(),
   z.object({
     provider: z.literal("xai"),

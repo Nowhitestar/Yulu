@@ -51,6 +51,8 @@ import { AudioTranscriptionService } from "./audioTranscription.js";
 import { createXaiProviderReadiness } from "./routers/providers.js";
 import { AgentConnectionCenter } from "./agentConnections.js";
 import { discoverAgentConnectionCandidates } from "./agentConnectionDiscovery.js";
+import { CodexAgentAdapter } from "./codexAgentAdapter.js";
+import { CodexAppServerRuntimeClient } from "./codexAppServerClient.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -149,6 +151,13 @@ async function startLockedServer(
     text: xaiText,
     readiness: xaiReadiness,
     discover: discoverAgentConnectionCandidates,
+    codexAdapter: (executable) => new CodexAgentAdapter({
+      executable,
+      client: new CodexAppServerRuntimeClient({
+        executable,
+        cwd: runtimePaths.moviesDir,
+      }),
+    }),
   });
   void xaiCredentials.status().catch(() => {});
   const recordingPipeline = new RecordingPipeline({

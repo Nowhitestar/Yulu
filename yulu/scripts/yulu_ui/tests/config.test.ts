@@ -253,6 +253,11 @@ describe("ConfigManager", () => {
     ]) {
       expect(ConfigSchema.safeParse({ intelligence: { summary: selection } }).success).toBe(false);
     }
+    expect(ConfigSchema.safeParse({
+      intelligence: {
+        summary: { provider: "agent", connectionId: "codex", model: "gpt-5.6-sol" },
+      },
+    }).success).toBe(true);
   });
 
   it("rejects updates when on-disk mtime advanced (external write)", () => {

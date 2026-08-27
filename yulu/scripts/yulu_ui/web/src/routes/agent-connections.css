@@ -110,6 +110,15 @@
 }
 
 .agent-connection-api-key { margin-top: 18px; }
+.agent-connection-runtime-details > div {
+  display: grid;
+  grid-template-columns: 180px 1fr;
+  gap: 12px;
+}
+.agent-connection-runtime-details dt { color: var(--fg-3); }
+.agent-connection-runtime-details dd { margin: 0; overflow-wrap: anywhere; }
+.agent-connection-candidate-action { display: grid; gap: 12px; margin-top: 16px; }
+.agent-connection-candidate-action > button { justify-self: start; min-height: 36px; }
 .agent-connection-api-key label,
 .agent-connection-api-key small { display: block; margin-bottom: 7px; }
 .agent-connection-api-key input { min-width: 260px; min-height: 34px; }

@@ -17,7 +17,12 @@ import {
   runSearchCli,
   type ConversationSource,
 } from "./search.js";
-import { hasCurrentXaiConversationDisclosure } from "../conversationDataDisclosure.js";
+import {
+  CODEX_CONVERSATION_DISCLOSURE_VERSION,
+  hasCurrentAgentConversationDisclosure,
+  hasCurrentXaiConversationDisclosure,
+} from "../conversationDataDisclosure.js";
+import { CodexConversationError } from "../codexAgentAdapter.js";
 
 const MAX_QUESTION_CHARS = 2_000;
 const MAX_SOURCE_COUNT = 8;
@@ -63,10 +68,12 @@ function agentOwnedSearchProjection(question: string) {
   };
 }
 
-function recoveryActions(provider: string) {
+function recoveryActions(session: AgentSession) {
   return {
     retry: "same_snapshot" as const,
-    settingsPath: provider === "xai"
+    settingsPath: session.connectionId
+      ? `/agent-connections?connection=${encodeURIComponent(session.connectionId)}&capability=conversation`
+      : session.provider === "xai"
       ? "/agent-connections?connection=direct-xai&capability=conversation"
       : "/agent-connections?capability=conversation",
     newConversation: true,
@@ -113,7 +120,7 @@ function pauseResponse(
     remoteSources: [],
     connectorContext: { owner: "agent" as const, outputs: [] },
     agentRuntime,
-    recovery: recoveryActions(session.provider),
+    recovery: recoveryActions(session),
     usedFallback: false,
     llmStatus: "error" as const,
     llmError: reason,
@@ -171,6 +178,116 @@ export const askRouter = router({
       }
       const question = retrySnapshot?.question ?? input.question;
 
+      if (session.provider === "codex") {
+        const search = agentOwnedSearchProjection(question);
+        const snapshot = retrySnapshot ?? { question, sources: [] };
+        if (!session.connectionId || session.credentialSource !== "runtime-oauth") {
+          return {
+            ...pauseResponse(
+              ctx.paths.configDir,
+              session,
+              "Pinned Codex connection identity is unavailable; create a new conversation after selecting Codex again",
+              search,
+              undefined,
+              [],
+              snapshot,
+            ),
+            elapsedMs: Date.now() - startedAt,
+          };
+        }
+        if (!hasCurrentAgentConversationDisclosure(
+          ctx.host,
+          session.connectionId,
+          CODEX_CONVERSATION_DISCLOSURE_VERSION,
+        )) {
+          return {
+            ...pauseResponse(
+              ctx.paths.configDir,
+              session,
+              "The current Codex Conversation data path disclosure is required",
+              search,
+              undefined,
+              [],
+              snapshot,
+            ),
+            elapsedMs: Date.now() - startedAt,
+          };
+        }
+        if (!ctx.agentConnections) {
+          return {
+            ...pauseResponse(
+              ctx.paths.configDir,
+              session,
+              `Pinned Codex connection ${session.connectionId} is unavailable; restore it in Agent Connection Center`,
+              search,
+              undefined,
+              [],
+              snapshot,
+            ),
+            elapsedMs: Date.now() - startedAt,
+          };
+        }
+        try {
+          const result = await ctx.agentConnections.converseCodex({
+            connectionId: session.connectionId,
+            model: session.model,
+            prompt: buildAgentQuestionPrompt(question, input.limit ?? MAX_SOURCE_COUNT),
+            ...(session.nativeSessionId ? { nativeSessionId: session.nativeSessionId } : {}),
+          });
+          if (!session.nativeSessionId) {
+            updateAgentSessionNativeSession(ctx.paths.configDir, session.id, {
+              nativeSessionId: result.nativeSessionId,
+              runtimeLabel: "Codex",
+            });
+          } else if (result.nativeSessionId !== session.nativeSessionId) {
+            throw new Error("Codex returned a different thread; latest-thread fallback was rejected");
+          }
+          if (input.retry) resumeAgentSession(ctx.paths.configDir, session.id);
+          return {
+            ok: true,
+            answer: result.answer,
+            provider: session.provider,
+            model: session.model,
+            sessionStatus: "active" as const,
+            sources: [],
+            remoteSources: [],
+            connectorContext: { owner: "agent" as const, outputs: [] },
+            runtimeEvidence: result.evidence,
+            usedFallback: false,
+            llmStatus: "ok" as const,
+            llmError: null,
+            search,
+            elapsedMs: Date.now() - startedAt,
+          };
+        } catch (error) {
+          if (
+            error instanceof CodexConversationError &&
+            !session.nativeSessionId &&
+            error.nativeSessionId
+          ) {
+            updateAgentSessionNativeSession(ctx.paths.configDir, session.id, {
+              nativeSessionId: error.nativeSessionId,
+              runtimeLabel: "Codex",
+            });
+          }
+          return {
+            ...pauseResponse(
+              ctx.paths.configDir,
+              session,
+              (error as Error).message,
+              search,
+              undefined,
+              [],
+              snapshot,
+            ),
+            ...(error instanceof CodexConversationError
+              ? { runtimeEvidence: error.evidence }
+              : {}),
+            elapsedMs: Date.now() - startedAt,
+          };
+        }
+      }
+
       if (session.provider === "xai") {
         if (!hasCurrentXaiConversationDisclosure(ctx.host)) {
           return {
@@ -186,7 +303,7 @@ export const askRouter = router({
             elapsedMs: Date.now() - startedAt,
           };
         }
-        if (!session.credentialSource) {
+        if (session.credentialSource !== "oauth" && session.credentialSource !== "api-key") {
           return {
             ...pauseResponse(
               ctx.paths.configDir,
