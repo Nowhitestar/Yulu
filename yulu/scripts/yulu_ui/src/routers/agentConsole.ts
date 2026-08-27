@@ -328,7 +328,7 @@ function stageForRecording(
 ) {
   const latestTask = host.latestForRecording(stem);
   const task = latestTask && !["cancelled", "failed"].includes(latestTask.state) ? latestTask : null;
-  const taskActive = !!task && !["completed", "delivery_unverified"].includes(task.state);
+  const taskActive = !!task && !["completed", "delivery_unverified", "execution_unverified"].includes(task.state);
   const transcribe: StageState =
     hasSummary || hasTranscript ? "done" :
     taskActive ? "running" :

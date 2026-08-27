@@ -843,21 +843,57 @@ describe("/activate", () => {
     });
   });
 
+  it("records Claude Code Summary disclosure independently against its selected connection", async () => {
+    activation.data = unresolvedData();
+    activation.data.nextStep = "summary_provider";
+    activation.data.blocker = {
+      capability: "summary_disclosure",
+      reason: "disclosure_required",
+      detail: "Claude Code Summary disclosure required",
+      remediation: { href: "/agent-connections?capability=summary" },
+    };
+    activation.data.readiness.summary.selected = {
+      provider: "claude-code",
+      model: "claude-sonnet-5",
+    };
+    activation.data.readiness.summary.state = "disclosure_required";
+    activation.data.readiness.summary.disclosure = {
+      provider: "claude-code",
+      connectionId: "claude-code",
+      disclosureVersion: "claude-code-summary-v1",
+      acceptedDisclosureVersion: null,
+      declined: false,
+      required: true,
+      data: "transcript_text",
+      destination: "Claude Code runtime and its configured model provider",
+    };
+    renderRoute("en");
+    const user = userEvent.setup();
+
+    await user.click(screen.getByRole("button", { name: "Accept Data Path Disclosure" }));
+    expect(activation.acceptAgentConnectionDisclosure).toHaveBeenCalledWith({
+      connectionId: "claude-code",
+      capability: "summary",
+    });
+    expect(activation.acceptSummaryDisclosure).not.toHaveBeenCalled();
+  });
+
   it("retries the selected Supported Agent capability instead of only refetching stale state", async () => {
     activation.data = unresolvedData();
     activation.data.nextStep = "summary_provider";
     activation.data.blocker = {
       capability: "summary_readiness",
       reason: "readiness_failed",
-      detail: "Agent probe failed",
+      detail: "Claude Code cannot currently prove policy-managed hooks are disabled; Summary remains unavailable",
       remediation: { href: "/agent-connections?capability=summary" },
     };
-    activation.data.readiness.summary.selected = { provider: "codex", model: "runtime-managed" };
+    activation.data.readiness.summary.selected = { provider: "claude-code", model: "claude-sonnet-5" };
     activation.data.readiness.summary.state = "blocked";
     activation.data.readiness.summary.disclosure = null;
     const user = userEvent.setup();
     renderRoute("en");
 
+    expect(screen.getByText(/policy-managed hooks.*Summary remains unavailable/)).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Retry Summary Provider check" }));
     expect(activation.probeSummaryProvider).toHaveBeenCalledOnce();
     expect(activation.probeXai).not.toHaveBeenCalled();

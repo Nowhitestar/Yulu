@@ -8,6 +8,7 @@ import { HostStore } from "../src/hostStore.js";
 import { PubSub, type AppChannels } from "../src/pubsub.js";
 import { RecordingPipeline, agentRetryDelayMs } from "../src/recordingPipeline.js";
 import { AgentUnavailableError, type RecordingAgentGateway } from "../src/agentGateway.js";
+import { ClaudeCodeSummaryUnknownOutcomeError } from "../src/summaryProviderReadiness.js";
 import { paths } from "../src/paths.js";
 
 function wavWithAudio(): Buffer {
@@ -60,10 +61,12 @@ describe("RecordingPipeline", () => {
     xaiExecutionCredentialSource?: "oauth" | "api-key";
     xaiSummaryDisclosure?: boolean;
     supportedAgentAdapter?: boolean;
+    supportedAgentProvider?: "codex" | "claude-code";
     supportedAgentResultModel?: string;
     supportedAgentMissingEvidence?: boolean;
     supportedAgentToolNames?: string[];
     supportedAgentSummaryText?: string;
+    supportedAgentUnknownOutcome?: boolean;
     autoPrompts?: Array<{
       id: string;
       slug: string;
@@ -79,12 +82,16 @@ describe("RecordingPipeline", () => {
     const moviesDir = join(root, "Movies", "Yulu");
     const configFile = join(configDir, "config.json");
     const audioPath = join(moviesDir, "Demo_20260711_120000.wav");
+    const supportedAgentProvider = opts.supportedAgentProvider ?? "codex";
+    const supportedAgentDisclosureVersion = supportedAgentProvider === "codex"
+      ? "codex-summary-v1"
+      : "claude-code-summary-v1";
     const artifacts = new ArtifactStore(moviesDir, join(configDir, "agent-tasks"));
     writeFileSync(configFile, JSON.stringify({
       transcription: {},
       ...(opts.supportedAgentAdapter ? {
         intelligence: {
-          summary: { provider: "agent", connectionId: "codex", model: "runtime-managed" },
+          summary: { provider: "agent", connectionId: supportedAgentProvider, model: "runtime-managed" },
           conversation: { provider: "agent", model: "runtime-managed" },
         },
       } : {}),
@@ -95,12 +102,15 @@ describe("RecordingPipeline", () => {
     store = new HostStore(join(configDir, "host.sqlite"));
     if (opts.supportedAgentAdapter) {
       store.upsertAgentConnectionRecord({
-        id: "codex",
+        id: supportedAgentProvider,
         kind: "supported-agent",
-        adapter: "codex",
-        label: "Codex",
+        adapter: supportedAgentProvider,
+        label: supportedAgentProvider === "codex" ? "Codex" : "Claude Code",
         lifecycle: "available",
-        settings: { executablePath: "/fake/codex", summaryModel: "runtime-managed" },
+        settings: {
+          executablePath: supportedAgentProvider === "codex" ? "/fake/codex" : "/fake/claude",
+          summaryModel: "runtime-managed",
+        },
       });
     }
     if (opts.xaiSummaryDisclosure === true || (opts.xaiText && opts.xaiSummaryDisclosure !== false)) {
@@ -145,7 +155,7 @@ describe("RecordingPipeline", () => {
     let notionStartedFromState = "";
     const runArtifactWorkflow = vi.fn(async ({ task, leaseToken, workspace }: Parameters<RecordingAgentGateway["runArtifactWorkflow"]>[0]) => {
       const reportedIdentity = opts.supportedAgentAdapter ? {
-        provider: "codex",
+        provider: supportedAgentProvider,
         model: opts.supportedAgentResultModel ?? "runtime-managed",
       } : undefined;
       writeFileSync(workspace.summaryPath, opts.supportedAgentSummaryText ?? "# Summary\n\nhello\n");
@@ -223,23 +233,46 @@ describe("RecordingPipeline", () => {
     };
     const supportedAgentGateway = {
       ...gateway,
-      provider: "codex",
+      provider: supportedAgentProvider,
       runArtifactWorkflow: async (input: Parameters<RecordingAgentGateway["runArtifactWorkflow"]>[0]) => {
+        if (opts.supportedAgentUnknownOutcome) {
+          throw new ClaudeCodeSummaryUnknownOutcomeError(
+            "Claude Code Summary entered Unknown Outcome; inspect the native session before a new attempt",
+            {
+              nativeSessionId: "unknown-session-140",
+              evidence: {
+                adapter: "claude-code",
+                transport: "claude-code-print-stream-json",
+                runtimeVersion: "2.1.169",
+                requestedProvider: null,
+                requestedModel: "runtime-managed",
+                actualProvider: null,
+                actualModel: "runtime-managed",
+                requestId: null,
+                sessionId: "unknown-session-140",
+                terminalStatus: "unknown",
+                fallbackOccurred: false,
+              },
+            },
+          );
+        }
         const result = await runArtifactWorkflow(input);
         return {
           ...result,
           summaryIdentity: {
-            provider: "codex",
+            provider: supportedAgentProvider,
             model: opts.supportedAgentResultModel ?? "runtime-managed",
           },
           summary: opts.supportedAgentSummaryText ?? "# Summary\n\nhello\n",
           runtimeEvidence: opts.supportedAgentMissingEvidence ? undefined : {
-            adapter: "codex",
-            transport: "codex-app-server-stdio",
-            runtimeVersion: "0.144.4",
-            requestedProvider: "openai",
+            adapter: supportedAgentProvider,
+            transport: supportedAgentProvider === "codex"
+              ? "codex-app-server-stdio"
+              : "claude-code-print-stream-json",
+            runtimeVersion: supportedAgentProvider === "codex" ? "0.144.4" : "2.1.169",
+            requestedProvider: supportedAgentProvider === "codex" ? "openai" : null,
             requestedModel: "runtime-managed",
-            actualProvider: "openai",
+            actualProvider: supportedAgentProvider === "codex" ? "openai" : null,
             actualModel: opts.supportedAgentResultModel ?? "runtime-managed",
             requestId: "turn-139",
             sessionId: "artifact-session",
@@ -257,19 +290,19 @@ describe("RecordingPipeline", () => {
     const supportedAgentSummaryAdapter = opts.supportedAgentAdapter ? {
       current: () => ({
         capability: "summary" as const,
-        provider: "codex",
+        provider: supportedAgentProvider,
         model: "runtime-managed",
         status: "ready" as const,
         testedAt: "2026-08-25T04:00:00.000Z",
         detail: "ready",
         credentialSource: "runtime-oauth",
-        connectionId: "codex",
+        connectionId: supportedAgentProvider,
         disclosure: {
           kind: "external" as const,
-          connectionId: "codex",
-          disclosureVersion: "codex-summary-v1",
+          connectionId: supportedAgentProvider,
+          disclosureVersion: supportedAgentDisclosureVersion,
           data: "transcript_text" as const,
-          destination: "Codex service",
+          destination: `${supportedAgentProvider === "codex" ? "Codex" : "Claude Code"} service`,
         },
       }),
       probe: async () => { throw new Error("not used"); },
@@ -630,6 +663,67 @@ describe("RecordingPipeline", () => {
     });
   });
 
+  it("snapshots and commits Claude Code Summary through the shared Host-owned artifact fence", async () => {
+    const { audioPath, runArtifactWorkflow } = setup({
+      pollMs: 5,
+      supportedAgentAdapter: true,
+      supportedAgentProvider: "claude-code",
+    });
+    writeFileSync(audioPath, wavWithAudio());
+    store!.recordAgentConnectionDisclosure({
+      connectionId: "claude-code",
+      capability: "summary",
+      disclosureVersion: "claude-code-summary-v1",
+      decision: "accepted",
+    });
+
+    const { task } = pipeline!.enqueueCompletion({ audioPath, title: "Claude Summary" });
+    expect(task).toMatchObject({
+      summaryProvider: "claude-code",
+      summaryModel: "runtime-managed",
+      summaryConnectionId: "claude-code",
+      summaryCredentialClass: "runtime-oauth",
+      summaryDisclosureVersion: "claude-code-summary-v1",
+      summaryInputArtifactId: null,
+    });
+    await vi.waitFor(() => expect(store!.getTask(task.id)?.state).toBe("completed"));
+    expect(runArtifactWorkflow).toHaveBeenCalledOnce();
+    expect(runArtifactWorkflow).toHaveBeenCalledWith(expect.objectContaining({
+      committedTranscript: "hello transcript",
+      task: expect.objectContaining({
+        summaryProvider: "claude-code",
+        summaryConnectionId: "claude-code",
+        summaryInputArtifactId: expect.any(String),
+        summaryInputArtifactSha256: expect.stringMatching(/^[a-f0-9]{64}$/),
+        summaryInputArtifactBytes: 17,
+      }),
+    }));
+    expect(store!.listArtifacts(task.id).find((artifact) => artifact.kind === "summary")?.provenance)
+      .toMatchObject({
+        agentProvider: "claude-code",
+        summaryProvider: "claude-code",
+        summaryModel: "runtime-managed",
+        summaryConnectionId: "claude-code",
+        summaryCredentialClass: "runtime-oauth",
+        summaryDisclosureVersion: "claude-code-summary-v1",
+        summaryInputArtifactId: expect.any(String),
+        summaryInputArtifactSha256: expect.stringMatching(/^[a-f0-9]{64}$/),
+        runtimeEvidence: expect.objectContaining({
+          adapter: "claude-code",
+          requestedProvider: null,
+          actualProvider: null,
+          actualModel: "runtime-managed",
+          fallbackOccurred: false,
+          terminalStatus: "ready",
+        }),
+      });
+    expect(store!.getCoreActivationEvidence()).toMatchObject({
+      taskId: task.id,
+      summaryProvider: "claude-code",
+      summaryModel: "runtime-managed",
+    });
+  });
+
   it.each([
     ["tool call", { supportedAgentToolNames: ["commandExecution"] }, "attempted a tool call"],
     ["missing Runtime Evidence", { supportedAgentMissingEvidence: true }, "complete Runtime Evidence"],
@@ -660,6 +754,73 @@ describe("RecordingPipeline", () => {
     expect(existsSync(join(moviesDir, `${task.recordingStem}.summary.stale`))).toBe(false);
     expect(existsSync(join(configDir, "agent-tasks", task.id, "rejected-summary.md"))).toBe(false);
     expect(store!.getCoreActivationEvidence()).toBeNull();
+  });
+
+  it("fails closed on Claude Code tool use without replacing a prior summary", async () => {
+    const { audioPath, moviesDir, configDir } = setup({
+      pollMs: 5,
+      supportedAgentAdapter: true,
+      supportedAgentProvider: "claude-code",
+      supportedAgentToolNames: ["Bash"],
+    });
+    writeFileSync(audioPath, wavWithAudio());
+    const summaryPath = join(moviesDir, "Demo_20260711_120000.summary.md");
+    writeFileSync(summaryPath, "# Prior verified summary\n");
+    store!.recordAgentConnectionDisclosure({
+      connectionId: "claude-code",
+      capability: "summary",
+      disclosureVersion: "claude-code-summary-v1",
+      decision: "accepted",
+    });
+
+    const { task } = pipeline!.enqueueCompletion({ audioPath, title: "Reject Claude tool use" });
+    await vi.waitFor(() => expect(store!.getTask(task.id)).toMatchObject({
+      state: "failed",
+      error: expect.stringContaining("attempted a tool call"),
+    }));
+    expect(readFileSync(summaryPath, "utf8")).toBe("# Prior verified summary\n");
+    expect(existsSync(join(moviesDir, `${task.recordingStem}.summary.stale`))).toBe(false);
+    expect(existsSync(join(configDir, "agent-tasks", task.id, "rejected-summary.md"))).toBe(false);
+    expect(store!.getCoreActivationEvidence()).toBeNull();
+  });
+
+  it("persists Claude Code Summary Unknown Outcome without allowing retry or replacing a prior summary", async () => {
+    const { audioPath, moviesDir, configDir } = setup({
+      pollMs: 5,
+      supportedAgentAdapter: true,
+      supportedAgentProvider: "claude-code",
+      supportedAgentUnknownOutcome: true,
+    });
+    writeFileSync(audioPath, wavWithAudio());
+    const summaryPath = join(moviesDir, "Demo_20260711_120000.summary.md");
+    writeFileSync(summaryPath, "# Prior verified summary\n");
+    store!.recordAgentConnectionDisclosure({
+      connectionId: "claude-code",
+      capability: "summary",
+      disclosureVersion: "claude-code-summary-v1",
+      decision: "accepted",
+    });
+
+    const { task } = pipeline!.enqueueCompletion({ audioPath, title: "Unknown Claude Summary" });
+    await vi.waitFor(() => expect(store!.getTask(task.id)).toMatchObject({
+      state: "execution_unverified",
+      nativeSessionId: "unknown-session-140",
+      error: expect.stringContaining("Unknown Outcome"),
+    }));
+    expect(() => pipeline!.retry(task.id)).toThrow("cannot retry from execution_unverified");
+    expect(readFileSync(summaryPath, "utf8")).toBe("# Prior verified summary\n");
+    expect(existsSync(join(moviesDir, `${task.recordingStem}.summary.stale`))).toBe(false);
+    expect(existsSync(join(configDir, "agent-tasks", task.id, "rejected-summary.md"))).toBe(false);
+    expect(store!.getCoreActivationEvidence()).toBeNull();
+    expect(store!.listEvents(task.id)).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        type: "claude.summary_unknown_outcome",
+        payload: expect.objectContaining({
+          nativeSessionId: "unknown-session-140",
+          runtimeEvidence: expect.objectContaining({ terminalStatus: "unknown" }),
+        }),
+      }),
+    ]));
   });
 
   it("rejects Supported Agent artifacts without the pinned model provenance", async () => {

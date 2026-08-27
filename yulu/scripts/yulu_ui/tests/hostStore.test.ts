@@ -155,6 +155,116 @@ describe("HostStore", () => {
     expect(store!.listArtifacts(task.id)).toEqual([]);
   });
 
+  it("durably fences an Agent execution Unknown Outcome from retry, claim, and recording deletion", () => {
+    createStore();
+    const task = store!.enqueueRecording({
+      idempotencyKey: "recording:claude-unknown-outcome",
+      recordingStem: "Demo_20260711_120000",
+      title: "Demo",
+      audioPath: join(root, "Demo_20260711_120000.wav"),
+      sendToNotion: false,
+      destinationHint: "",
+      agentProvider: "claude-code",
+      summaryProvider: "claude-code",
+      summaryModel: "claude-sonnet-5",
+      summaryConnectionId: "claude-code",
+      summaryCredentialClass: "runtime-oauth",
+      summaryDisclosureVersion: "claude-code-summary-v1",
+    }).task;
+    const claimed = store!.claim(task.id)!;
+    const transcript = artifacts(task.id)[0]!;
+    store!.recordTranscript(task.id, claimed.leaseToken!, transcript);
+    store!.recordSummaryInputSnapshot(task.id, claimed.leaseToken!, transcript);
+    const unknown = store!.markClaudeSummaryUnknownOutcome(
+      task.id,
+      claimed.leaseToken!,
+      "Claude Code Summary entered Unknown Outcome",
+      "unknown-session-140",
+      {
+        adapter: "claude-code",
+        transport: "claude-code-print-stream-json",
+        runtimeVersion: "2.1.169",
+        requestedProvider: null,
+        requestedModel: "claude-sonnet-5",
+        actualProvider: null,
+        actualModel: "claude-sonnet-5",
+        requestId: null,
+        sessionId: "unknown-session-140",
+        terminalStatus: "unknown",
+        fallbackOccurred: false,
+      },
+    );
+
+    expect(unknown).toMatchObject({
+      state: "execution_unverified",
+      phase: "failed",
+      leaseToken: null,
+      nativeSessionId: "unknown-session-140",
+      error: "Claude Code Summary entered Unknown Outcome",
+    });
+    expect(store!.claimNext()).toBeNull();
+    expect(() => store!.retry(task.id)).toThrow("cannot retry from execution_unverified");
+    expect(store!.listEvents(task.id)).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        type: "claude.summary_unknown_outcome",
+        payload: expect.objectContaining({
+          nativeSessionId: "unknown-session-140",
+          runtimeEvidence: expect.objectContaining({ terminalStatus: "unknown" }),
+        }),
+      }),
+    ]));
+    expect(() => store!.prepareRecordingDeletion(task.recordingStem)).toThrow("execution_unverified");
+  });
+
+  it.each([
+    ["wrong terminal", { terminalStatus: "ready" as const }],
+    ["wrong model", { actualModel: "claude-fallback" }],
+    ["wrong provider", { actualProvider: "anthropic" }],
+  ])("rejects Unknown Outcome persistence with %s evidence", (_label, evidenceOverride) => {
+    createStore();
+    const task = store!.enqueueRecording({
+      idempotencyKey: `recording:claude-unknown-${_label}`,
+      recordingStem: "Demo_20260711_120000",
+      title: "Demo",
+      audioPath: join(root, "Demo_20260711_120000.wav"),
+      sendToNotion: false,
+      destinationHint: "",
+      agentProvider: "claude-code",
+      summaryProvider: "claude-code",
+      summaryModel: "claude-sonnet-5",
+      summaryConnectionId: "claude-code",
+      summaryCredentialClass: "runtime-oauth",
+      summaryDisclosureVersion: "claude-code-summary-v1",
+    }).task;
+    const claimed = store!.claim(task.id)!;
+    const transcript = artifacts(task.id)[0]!;
+    store!.recordTranscript(task.id, claimed.leaseToken!, transcript);
+    store!.recordSummaryInputSnapshot(task.id, claimed.leaseToken!, transcript);
+    const evidence = {
+      adapter: "claude-code",
+      transport: "claude-code-print-stream-json",
+      runtimeVersion: "2.1.169",
+      requestedProvider: null,
+      requestedModel: "claude-sonnet-5",
+      actualProvider: null,
+      actualModel: "claude-sonnet-5",
+      requestId: "unknown-result-140",
+      sessionId: "unknown-session-140",
+      terminalStatus: "unknown" as const,
+      fallbackOccurred: false,
+      ...evidenceOverride,
+    };
+
+    expect(() => store!.markClaudeSummaryUnknownOutcome(
+      task.id,
+      claimed.leaseToken!,
+      "Unknown Outcome",
+      "unknown-session-140",
+      evidence,
+    )).toThrow("does not match the pinned Summary task identity");
+    expect(store!.getTask(task.id)?.state).toBe("transcript_committed");
+  });
+
   it("authorizes a Codex Summary commit only for unchanged lease/input and exact terminal Runtime Evidence", () => {
     createStore();
     const task = store!.enqueueRecording({
@@ -224,6 +334,66 @@ describe("HostStore", () => {
       runtimeEvidence,
       toolCalls: [],
     })).toThrow(/input artifact identity changed/i);
+  });
+
+  it("authorizes a Claude Code Summary commit only from exact observable null-provider Runtime Evidence", () => {
+    createStore();
+    const task = store!.enqueueRecording({
+      idempotencyKey: "recording:claude-summary-commit-fence",
+      recordingStem: "Demo_20260711_120000",
+      title: "Demo",
+      audioPath: join(root, "Demo_20260711_120000.wav"),
+      sendToNotion: false,
+      destinationHint: "",
+      agentProvider: "claude-code",
+      summaryProvider: "claude-code",
+      summaryModel: "claude-sonnet-5",
+      summaryConnectionId: "claude-code",
+      summaryCredentialClass: "runtime-oauth",
+      summaryDisclosureVersion: "claude-code-summary-v1",
+    }).task;
+    const claimed = store!.claim(task.id)!;
+    const transcript = artifacts(task.id)[0]!;
+    store!.recordTranscript(task.id, claimed.leaseToken!, transcript);
+    store!.recordSummaryInputSnapshot(task.id, claimed.leaseToken!, transcript);
+    const runtimeEvidence = {
+      adapter: "claude-code",
+      transport: "claude-code-print-stream-json",
+      runtimeVersion: "2.1.169",
+      requestedProvider: null,
+      requestedModel: "claude-sonnet-5",
+      actualProvider: null,
+      actualModel: "claude-sonnet-5",
+      requestId: "request-summary-140",
+      sessionId: "019f0000-0000-7000-8000-000000000140",
+      terminalStatus: "ready" as const,
+      fallbackOccurred: false,
+    };
+
+    expect(store!.validateSummaryCommit(task.id, claimed.leaseToken!, {
+      connectionId: "claude-code",
+      credentialClass: "runtime-oauth",
+      disclosureVersion: "claude-code-summary-v1",
+      inputArtifact: transcript,
+      runtimeEvidence,
+      toolCalls: [],
+    })).toMatchObject({ id: task.id, state: "transcript_committed" });
+    expect(() => store!.validateSummaryCommit(task.id, claimed.leaseToken!, {
+      connectionId: "claude-code",
+      credentialClass: "runtime-oauth",
+      disclosureVersion: "claude-code-summary-v1",
+      inputArtifact: transcript,
+      runtimeEvidence: { ...runtimeEvidence, actualProvider: "anthropic" },
+      toolCalls: [],
+    })).toThrow(/Runtime Evidence/i);
+    expect(() => store!.validateSummaryCommit(task.id, claimed.leaseToken!, {
+      connectionId: "claude-code",
+      credentialClass: "runtime-oauth",
+      disclosureVersion: "claude-code-summary-v1",
+      inputArtifact: transcript,
+      runtimeEvidence: { ...runtimeEvidence, fallbackOccurred: true },
+      toolCalls: [],
+    })).toThrow(/Runtime Evidence/i);
   });
 
   it("keeps Core Activation Evidence after task cleanup and Host restart", () => {

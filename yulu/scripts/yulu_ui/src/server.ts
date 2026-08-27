@@ -117,6 +117,7 @@ async function startLockedServer(
   }
   const activeWorkspaceStates = new Set([
     "queued", "awaiting_agent", "awaiting_policy", "running", "transcript_committed", "artifacts_committed", "sending", "delivery_reported",
+    "execution_unverified",
   ]);
   const activeWorkspaceTaskIds = hostStore.listTasks(10_000)
     .filter((task) => activeWorkspaceStates.has(task.state))

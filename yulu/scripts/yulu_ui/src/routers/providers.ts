@@ -22,7 +22,7 @@ export interface XaiReadinessResult {
   testedAt: string | null;
   detail: string;
   credentialSource: XaiCredentialSource | null;
-  reason?: "invalid_model" | "readiness_failed";
+  reason?: "invalid_model" | "readiness_failed" | "unknown_outcome";
 }
 
 export type XaiProviderReadiness = Map<XaiCapability, XaiReadinessResult>;

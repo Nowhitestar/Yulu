@@ -19,6 +19,7 @@ const SUPPORTED_FEATURES = [
   "probe-isolation",
   "fallback-model/opt-in",
 ];
+const SUMMARY_SUPPORTED_FEATURES = [...SUPPORTED_FEATURES, "managed-hooks/none"];
 
 function client(overrides: Partial<ClaudeCodeRuntimeClient> = {}): ClaudeCodeRuntimeClient {
   return {
@@ -27,15 +28,17 @@ function client(overrides: Partial<ClaudeCodeRuntimeClient> = {}): ClaudeCodeRun
       authorized: true,
       authorizationMethod: "claude.ai",
       apiProvider: "firstParty",
-      features: [...SUPPORTED_FEATURES],
+      features: [...SUMMARY_SUPPORTED_FEATURES],
     })),
     runConversation: vi.fn(async (input) => ({
+      runtimeVersion: "2.1.169",
       answer: input.probe ? "YULU_CLAUDE_PROBE_OK" : "Pinned answer",
       nativeSessionId: input.nativeSessionId ?? "019f0000-0000-7000-8000-000000000136",
       actualModel: input.model,
       requestId: "request-136",
       fallbackOccurred: false,
       toolCalls: [],
+      ...(input.toolFree ? { isolationProven: true } : {}),
       terminalStatus: "completed" as const,
     })),
     ...overrides,
@@ -107,6 +110,170 @@ describe("Claude Code adapter conformance", () => {
       prompt: "Reply with exactly YULU_CLAUDE_PROBE_OK and do not use tools.",
       probe: true,
       timeoutMs: 30_000,
+    });
+  });
+
+  it("uses the exact-model tool-free adapter for an independent Summary probe", async () => {
+    const runtime = client();
+    const adapter = new ClaudeCodeAdapter({ executable: "/fake/claude", client: runtime });
+
+    await expect(adapter.probeSummary({ model: "claude-sonnet-5" })).resolves.toMatchObject({
+      status: "ready",
+      evidence: {
+        requestedProvider: null,
+        requestedModel: "claude-sonnet-5",
+        actualProvider: null,
+        actualModel: "claude-sonnet-5",
+        fallbackOccurred: false,
+      },
+    });
+    expect(runtime.runConversation).toHaveBeenCalledWith({
+      model: "claude-sonnet-5",
+      prompt: "Reply with exactly YULU_CLAUDE_PROBE_OK and do not use tools.",
+      probe: true,
+      toolFree: true,
+      timeoutMs: 30_000,
+    });
+  });
+
+  it("keeps Summary unavailable before model invocation when managed hooks cannot be proven absent", async () => {
+    const runConversation = vi.fn();
+    const runtime = client({
+      inspect: vi.fn(async () => ({
+        runtimeVersion: "2.1.169",
+        authorized: true,
+        authorizationMethod: "claude.ai",
+        apiProvider: "firstParty",
+        features: [...SUPPORTED_FEATURES],
+      })),
+      runConversation,
+    });
+    const adapter = new ClaudeCodeAdapter({ executable: "/fake/claude", client: runtime });
+
+    await expect(adapter.status({ toolFree: true })).resolves.toMatchObject({
+      supported: false,
+      remediation: expect.stringContaining("policy-managed hooks"),
+    });
+    await expect(adapter.probeSummary({ model: "claude-sonnet-5" })).resolves.toMatchObject({
+      status: "failed",
+      reason: "unsupported_runtime",
+      remediation: expect.stringContaining("policy-managed hooks"),
+    });
+    await expect(adapter.summarize({
+      model: "claude-sonnet-5",
+      instructions: "Selected instructions.",
+      transcript: "Committed transcript.",
+    })).rejects.toThrow("policy-managed hooks");
+    expect(runConversation).not.toHaveBeenCalled();
+  });
+
+  it("summarizes only selected instructions and committed transcript through a fresh tool-free invocation", async () => {
+    const runtime = client({
+      runConversation: vi.fn(async (input) => ({
+        runtimeVersion: "2.1.169",
+        answer: "# Safe summary",
+        nativeSessionId: "019f0000-0000-7000-8000-000000000140",
+        actualModel: input.model,
+        requestId: "request-140",
+        fallbackOccurred: false,
+        toolCalls: [],
+        isolationProven: true,
+        terminalStatus: "completed" as const,
+      })),
+    });
+    const adapter = new ClaudeCodeAdapter({ executable: "/fake/claude", client: runtime });
+
+    await expect(adapter.summarize({
+      model: "claude-sonnet-5",
+      instructions: "Use concise bullets.",
+      transcript: "Host-read committed transcript.",
+    })).resolves.toEqual({
+      summary: "# Safe summary",
+      nativeSessionId: "019f0000-0000-7000-8000-000000000140",
+      evidence: {
+        adapter: "claude-code",
+        transport: "claude-code-print-stream-json",
+        runtimeVersion: "2.1.169",
+        requestedProvider: null,
+        requestedModel: "claude-sonnet-5",
+        actualProvider: null,
+        actualModel: "claude-sonnet-5",
+        requestId: "request-140",
+        sessionId: "019f0000-0000-7000-8000-000000000140",
+        terminalStatus: "ready",
+        fallbackOccurred: false,
+        cancellationRequested: false,
+        cancellationConfirmed: null,
+      },
+    });
+    expect(runtime.runConversation).toHaveBeenCalledWith({
+      model: "claude-sonnet-5",
+      prompt: [
+        "Produce the recording summary from only the selected instructions and committed transcript below.",
+        "Return only the Markdown summary. Do not use tools or perform side effects.",
+        "",
+        "Selected instructions:",
+        "Use concise bullets.",
+        "",
+        "Committed transcript:",
+        "Host-read committed transcript.",
+      ].join("\n"),
+      probe: false,
+      toolFree: true,
+      timeoutMs: 300_000,
+    });
+  });
+
+  it.each([
+    ["missing isolation proof", { isolationProven: false }, /isolation proof/i],
+    ["different invocation version", { runtimeVersion: "2.1.170" }, /model, session, or fallback identity/i],
+    ["missing terminal result identity", { requestId: null }, /result identity/i],
+    ["tool use", { toolCalls: ["Bash"] }, /tool call/i],
+    ["model fallback", { actualModel: "claude-fallback", fallbackOccurred: true }, /fallback identity/i],
+    ["invalid output", { answer: "bad\0summary" }, /invalid output/i],
+  ])("rejects Summary %s before output can be committed", async (_label, overrides, error) => {
+    const runtime = client({
+      runConversation: vi.fn(async (input) => ({
+        runtimeVersion: "2.1.169",
+        answer: "# Summary",
+        nativeSessionId: "019f0000-0000-7000-8000-000000000140",
+        actualModel: input.model,
+        requestId: "request-140",
+        fallbackOccurred: false,
+        toolCalls: [],
+        isolationProven: true,
+        terminalStatus: "completed" as const,
+        ...overrides,
+      })),
+    });
+    const adapter = new ClaudeCodeAdapter({ executable: "/fake/claude", client: runtime });
+
+    await expect(adapter.summarize({
+      model: "claude-sonnet-5",
+      instructions: "Selected instructions.",
+      transcript: "Committed transcript.",
+    })).rejects.toThrow(error);
+  });
+
+  it("does not declare Summary ready when the probe lacks isolation or terminal result proof", async () => {
+    const runtime = client({
+      runConversation: vi.fn(async (input) => ({
+        runtimeVersion: "2.1.169",
+        answer: "YULU_CLAUDE_PROBE_OK",
+        nativeSessionId: "019f0000-0000-7000-8000-000000000140",
+        actualModel: input.model,
+        requestId: null,
+        fallbackOccurred: false,
+        toolCalls: [],
+        isolationProven: false,
+        terminalStatus: "completed" as const,
+      })),
+    });
+    const adapter = new ClaudeCodeAdapter({ executable: "/fake/claude", client: runtime });
+
+    await expect(adapter.probeSummary({ model: "claude-sonnet-5" })).resolves.toMatchObject({
+      status: "failed",
+      reason: "identity_mismatch",
     });
   });
 
@@ -201,6 +368,7 @@ describe("Claude Code adapter conformance", () => {
   ])("rejects %s instead of accepting a Conversation fallback", async (_label, overrides) => {
     const runtime = client({
       runConversation: vi.fn(async () => ({
+        runtimeVersion: "2.1.169",
         answer: "must be rejected",
         nativeSessionId: "019f0000-0000-7000-8000-000000000136",
         actualModel: "claude-sonnet-5",
@@ -228,6 +396,7 @@ describe("Claude Code adapter conformance", () => {
     const nativeSessionId = "019f0000-0000-7000-8000-000000000888";
     const runtime = client({
       runConversation: vi.fn(async () => ({
+        runtimeVersion: "2.1.169",
         answer: "",
         nativeSessionId,
         actualModel: "claude-sonnet-5",

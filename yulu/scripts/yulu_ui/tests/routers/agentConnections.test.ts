@@ -149,6 +149,7 @@ function setup(
         "tools/none" as const,
         "probe-isolation" as const,
         "fallback-model/opt-in" as const,
+        "managed-hooks/none" as const,
       ],
       login: { command: "/fake/bin/claude auth login", statusCommand: "/fake/bin/claude auth status" },
       remediation: null,
@@ -167,6 +168,45 @@ function setup(
         actualModel: model,
         requestId: "request-136",
         sessionId: "019f0000-0000-7000-8000-000000000136",
+        terminalStatus: "ready" as const,
+        fallbackOccurred: false,
+        cancellationRequested: false,
+        cancellationConfirmed: null,
+      },
+    })),
+    probeSummary: vi.fn(async ({ model }: { model: string }) => ({
+      status: "ready" as const,
+      reason: null,
+      remediation: null,
+      evidence: {
+        adapter: "claude-code" as const,
+        transport: "claude-code-print-stream-json" as const,
+        runtimeVersion: "2.1.169",
+        requestedProvider: null,
+        requestedModel: model,
+        actualProvider: null,
+        actualModel: model,
+        requestId: "request-probe-140",
+        sessionId: "019f0000-0000-7000-8000-000000000140",
+        terminalStatus: "ready" as const,
+        fallbackOccurred: false,
+        cancellationRequested: false,
+        cancellationConfirmed: null,
+      },
+    })),
+    summarize: vi.fn(async ({ model }: { model: string }) => ({
+      summary: "# Claude Summary\n\nOnly committed input.",
+      nativeSessionId: "019f0000-0000-7000-8000-000000000141",
+      evidence: {
+        adapter: "claude-code" as const,
+        transport: "claude-code-print-stream-json" as const,
+        runtimeVersion: "2.1.169",
+        requestedProvider: null,
+        requestedModel: model,
+        actualProvider: null,
+        actualModel: model,
+        requestId: "request-summary-140",
+        sessionId: "019f0000-0000-7000-8000-000000000141",
         terminalStatus: "ready" as const,
         fallbackOccurred: false,
         cancellationRequested: false,
@@ -355,7 +395,7 @@ describe("public Agent Connection Host contract", () => {
           loginCommand: "/fake/bin/claude auth login",
           statusCommand: "/fake/bin/claude auth status",
         }),
-        capabilities: [expect.objectContaining({
+        capabilities: expect.arrayContaining([expect.objectContaining({
           capability: "conversation",
           declared: true,
           currentReadiness: expect.objectContaining({
@@ -367,7 +407,7 @@ describe("public Agent Connection Host contract", () => {
             disclosureVersion: CLAUDE_CODE_CONVERSATION_DISCLOSURE_VERSION,
             data: "conversation_text_and_agent_tool_context",
           }),
-        })],
+        })]),
       })]),
     });
     expect(setupResult.claude.probe).not.toHaveBeenCalled();
@@ -387,6 +427,10 @@ describe("public Agent Connection Host contract", () => {
       capability: "conversation",
       model: "claude-sonnet-5",
     });
+    const live = await caller.view();
+    expect(live.connections.find((item: { id: string }) => item.id === "claude-code")?.capabilities
+      .find(({ capability }: { capability: string }) => capability === "summary"))
+      .toMatchObject({ declared: false, currentReadiness: { status: "untested" } });
     await expect(caller.view()).resolves.toMatchObject({
       selections: { conversation: { connectionId: "claude-code", model: "claude-sonnet-5" } },
     });
@@ -404,12 +448,335 @@ describe("public Agent Connection Host contract", () => {
     ]);
 
     const restarted = await setupResult.makeCenter().view();
-    expect(restarted.connections.find((item) => item.id === "claude-code")?.capabilities[0])
+    expect(restarted.connections.find((item) => item.id === "claude-code")?.capabilities
+      .find(({ capability }) => capability === "conversation"))
       .toMatchObject({
         capability: "conversation",
         currentReadiness: { status: "untested", testedAt: null },
         readinessHistory: [expect.objectContaining({ status: "ready", model: "claude-sonnet-5" })],
       });
+    setupResult.host.close();
+  });
+
+  it("migrates a #136 Conversation-only Claude record while keeping Summary fail-closed", async () => {
+    const setupResult = setup({
+      audio: {},
+      transcription: { engine: "local", language: "zh" },
+      intelligence: {
+        summary: { provider: "xai", model: "grok-summary" },
+        conversation: {
+          provider: "agent",
+          connectionId: "claude-code",
+          model: "claude-sonnet-5",
+        },
+      },
+      llm: { agent: { provider: "auto" } },
+    });
+    setupResult.host.upsertAgentConnectionRecord({
+      id: "claude-code",
+      kind: "supported-agent",
+      adapter: "claude-code",
+      label: "Claude Code",
+      lifecycle: "available",
+      settings: {
+        executablePath: "/fake/bin/claude",
+        conversationModel: "claude-sonnet-5",
+      },
+    });
+    const conversationStatus = await setupResult.claude.status();
+    setupResult.claude.status.mockReset();
+    setupResult.claude.status
+      .mockResolvedValueOnce(conversationStatus)
+      .mockResolvedValueOnce({
+        ...conversationStatus,
+        supported: false,
+        features: conversationStatus.features.filter((feature) => feature !== "managed-hooks/none"),
+        remediation: "Claude Code cannot currently prove policy-managed hooks are disabled; Summary remains unavailable",
+      } as never);
+
+    const view = await setupResult.center.view();
+    const claude = view.connections.find((connection) => connection.id === "claude-code");
+
+    expect(claude).toMatchObject({
+      authorization: { connected: true },
+      settings: {
+        summaryModel: "claude-sonnet-5",
+        conversationModel: "claude-sonnet-5",
+      },
+      capabilities: expect.arrayContaining([
+        expect.objectContaining({
+          capability: "summary",
+          declared: false,
+          currentReadiness: expect.objectContaining({
+            status: "failed",
+            model: "claude-sonnet-5",
+            testedAt: null,
+            detail: "Claude Code cannot currently prove policy-managed hooks are disabled; Summary remains unavailable",
+            reason: "readiness_failed",
+          }),
+        }),
+        expect.objectContaining({
+          capability: "conversation",
+          declared: true,
+          selected: true,
+          currentReadiness: expect.objectContaining({ status: "untested", model: "claude-sonnet-5" }),
+        }),
+      ]),
+    });
+    expect(setupResult.claude.probe).not.toHaveBeenCalled();
+    expect(setupResult.claude.probeSummary).not.toHaveBeenCalled();
+    setupResult.host.close();
+  });
+
+  it("keeps Claude Conversation available when only the Summary isolation status check fails", async () => {
+    const setupResult = setup({
+      audio: {},
+      transcription: { engine: "local", language: "zh" },
+      intelligence: {
+        summary: { provider: "xai", model: "grok-summary" },
+        conversation: {
+          provider: "agent",
+          connectionId: "claude-code",
+          model: "claude-sonnet-5",
+        },
+      },
+      llm: { agent: { provider: "auto" } },
+    });
+    setupResult.host.upsertAgentConnectionRecord({
+      id: "claude-code",
+      kind: "supported-agent",
+      adapter: "claude-code",
+      label: "Claude Code",
+      lifecycle: "available",
+      settings: {
+        executablePath: "/fake/bin/claude",
+        summaryModel: "claude-sonnet-5",
+        conversationModel: "claude-sonnet-5",
+      },
+    });
+    const conversationStatus = await setupResult.claude.status();
+    setupResult.claude.status.mockReset();
+    setupResult.claude.status
+      .mockResolvedValueOnce(conversationStatus)
+      .mockRejectedValueOnce(new Error("tool-free inspection failed"));
+
+    const view = await setupResult.center.view();
+    const claude = view.connections.find((connection) => connection.id === "claude-code");
+
+    expect(claude).toMatchObject({
+      lifecycle: "connected",
+      authorization: { connected: true },
+      capabilities: expect.arrayContaining([
+        expect.objectContaining({
+          capability: "summary",
+          declared: false,
+          currentReadiness: expect.objectContaining({
+            status: "failed",
+            detail: "Claude Code Summary isolation status is unavailable",
+          }),
+        }),
+        expect.objectContaining({
+          capability: "conversation",
+          declared: true,
+          selected: true,
+          currentReadiness: expect.objectContaining({ status: "untested" }),
+        }),
+      ]),
+    });
+    setupResult.host.close();
+  });
+
+  it("proves and selects Claude Code Summary independently from Conversation readiness and disclosure", async () => {
+    const setupResult = setup({
+      audio: {},
+      transcription: { engine: "local", language: "zh" },
+      intelligence: {
+        summary: { provider: "agent", model: "runtime-managed" },
+        conversation: { provider: "agent", model: "runtime-managed" },
+      },
+      llm: { agent: { provider: "auto" } },
+    }, [{ adapter: "claude-code", label: "Claude Code", path: "/fake/bin/claude" }]);
+    const caller = createCaller(agentConnectionsRouter, {
+      agentConnections: setupResult.center,
+      uiMutationAuthorized: true,
+    } as never);
+
+    await caller.refreshCandidates();
+    await caller.confirmCandidate({ candidateId: "candidate:claude-code", model: "claude-sonnet-5" });
+    const before = await caller.view();
+    expect(before.connections.find((connection: { id: string }) => connection.id === "claude-code")?.capabilities)
+      .toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          capability: "summary",
+          declared: false,
+          currentReadiness: expect.objectContaining({
+            status: "untested", model: "claude-sonnet-5", testedAt: null,
+          }),
+          disclosure: expect.objectContaining({
+            required: true,
+            disclosureVersion: "claude-code-summary-v1",
+            data: "transcript_text",
+          }),
+        }),
+        expect.objectContaining({ capability: "conversation" }),
+      ]));
+
+    await caller.acceptDisclosure({ connectionId: "claude-code", capability: "summary" });
+    expect(setupResult.host.getAgentConnectionDisclosure("claude-code", "summary")).toMatchObject({
+      decision: "accepted",
+      disclosureVersion: "claude-code-summary-v1",
+    });
+    expect(setupResult.host.getAgentConnectionDisclosure("claude-code", "conversation")).toBeNull();
+
+    setupResult.claude.status.mockClear();
+    await expect(caller.probe({
+      connectionId: "claude-code",
+      capability: "summary",
+      model: "claude-sonnet-5",
+    })).resolves.toMatchObject({ capability: "summary", status: "ready", model: "claude-sonnet-5" });
+    expect(setupResult.claude.probeSummary).toHaveBeenCalledWith({ model: "claude-sonnet-5" });
+    expect(setupResult.claude.status).toHaveBeenCalledWith({ toolFree: true });
+    expect(setupResult.claude.probe).not.toHaveBeenCalled();
+
+    setupResult.claude.status.mockClear();
+    await caller.select({
+      connectionId: "claude-code",
+      capability: "summary",
+      model: "claude-sonnet-5",
+    });
+    expect(setupResult.claude.status).toHaveBeenCalledWith({ toolFree: true });
+    await expect(caller.view()).resolves.toMatchObject({
+      selections: { summary: { connectionId: "claude-code", model: "claude-sonnet-5" } },
+    });
+    expect(JSON.parse(readFileSync(setupResult.configPath, "utf8"))).toMatchObject({
+      intelligence: {
+        summary: { provider: "agent", connectionId: "claude-code", model: "claude-sonnet-5" },
+      },
+    });
+    expect(setupResult.host.listAgentConnectionReadinessHistory("claude-code", "summary"))
+      .toEqual([expect.objectContaining({
+        status: "ready",
+        runtimeEvidence: expect.objectContaining({
+          adapter: "claude-code",
+          requestedProvider: null,
+          actualProvider: null,
+          requestedModel: "claude-sonnet-5",
+          actualModel: "claude-sonnet-5",
+          fallbackOccurred: false,
+        }),
+      })]);
+
+    const task = setupResult.host.enqueueRecording({
+      idempotencyKey: "recording:claude-summary-production",
+      recordingStem: "Claude_20260827_200000",
+      title: "Claude production Summary",
+      audioPath: join(setupResult.root, "Claude_20260827_200000.wav"),
+      sendToNotion: false,
+      destinationHint: "",
+      agentProvider: "claude-code",
+      summaryProvider: "claude-code",
+      summaryModel: "claude-sonnet-5",
+      summaryConnectionId: "claude-code",
+      summaryCredentialClass: "runtime-oauth",
+      summaryDisclosureVersion: "claude-code-summary-v1",
+    }).task;
+    const gateway = setupResult.center.summaryAdapter().gateway(setupResult.configManager.read());
+    await expect(gateway.runArtifactWorkflow({
+      task,
+      leaseToken: "host-owned",
+      workspace: {
+        dir: join(setupResult.root, "private-stage"),
+        transcriptPath: join(setupResult.root, "private-stage", "transcript.txt"),
+        summaryPath: join(setupResult.root, "private-stage", "summary.md"),
+        chunkPattern: join(setupResult.root, "private-stage", "audio-%03d.wav"),
+      },
+      transcriptionProvider: "local",
+      committedTranscript: "Only committed transcript text.",
+    })).resolves.toMatchObject({
+      summary: "# Claude Summary\n\nOnly committed input.",
+      summaryIdentity: { provider: "claude-code", model: "claude-sonnet-5" },
+      audit: { toolNames: [], notionWrite: false },
+    });
+    expect(setupResult.claude.summarize).toHaveBeenCalledWith({
+      model: "claude-sonnet-5",
+      instructions: task.instructions,
+      transcript: "Only committed transcript text.",
+    });
+    setupResult.host.close();
+  });
+
+  it("does not declare Claude Code Summary when the current runtime cannot prove every isolation feature", async () => {
+    const setupResult = setup({
+      audio: {},
+      transcription: { engine: "local", language: "zh" },
+      intelligence: {
+        summary: { provider: "agent", model: "runtime-managed" },
+        conversation: { provider: "agent", model: "runtime-managed" },
+      },
+      llm: { agent: { provider: "auto" } },
+    }, [{ adapter: "claude-code", label: "Claude Code", path: "/fake/bin/claude" }]);
+    const completeStatus = await setupResult.claude.status();
+    setupResult.claude.status.mockResolvedValue({
+      ...completeStatus,
+      features: completeStatus.features.filter((feature) => feature !== "tools/none"),
+    });
+    const caller = createCaller(agentConnectionsRouter, {
+      agentConnections: setupResult.center,
+      uiMutationAuthorized: true,
+    } as never);
+
+    await caller.refreshCandidates();
+    await caller.confirmCandidate({ candidateId: "candidate:claude-code", model: "claude-sonnet-5" });
+    const view = await caller.view();
+    const claude = view.connections.find((connection: { id: string }) => connection.id === "claude-code");
+    expect(claude.capabilities.find(({ capability }: { capability: string }) => capability === "summary"))
+      .toMatchObject({ declared: false, currentReadiness: { status: "untested" } });
+    expect(claude.capabilities.find(({ capability }: { capability: string }) => capability === "conversation"))
+      .toMatchObject({ declared: true });
+    await expect(caller.probe({ connectionId: "claude-code", capability: "summary" }))
+      .resolves.toMatchObject({ status: "failed" });
+    setupResult.host.close();
+  });
+
+  it("preserves Claude Code Summary probe Unknown Outcome as distinct readiness evidence", async () => {
+    const setupResult = setup({
+      audio: {},
+      transcription: { engine: "local", language: "zh" },
+      intelligence: {
+        summary: { provider: "agent", model: "runtime-managed" },
+        conversation: { provider: "agent", model: "runtime-managed" },
+      },
+      llm: { agent: { provider: "auto" } },
+    }, [{ adapter: "claude-code", label: "Claude Code", path: "/fake/bin/claude" }]);
+    const caller = createCaller(agentConnectionsRouter, {
+      agentConnections: setupResult.center,
+      uiMutationAuthorized: true,
+    } as never);
+    await caller.refreshCandidates();
+    await caller.confirmCandidate({ candidateId: "candidate:claude-code", model: "claude-sonnet-5" });
+    const ready = await setupResult.claude.probeSummary({ model: "claude-sonnet-5" });
+    setupResult.claude.probeSummary.mockImplementationOnce(async () => ({
+      ...ready,
+      status: "failed",
+      reason: "unknown_outcome",
+      remediation: "Claude Code probe entered Unknown Outcome",
+      evidence: { ...ready.evidence!, terminalStatus: "unknown" },
+    } as never));
+
+    await expect(caller.probe({
+      connectionId: "claude-code",
+      capability: "summary",
+      model: "claude-sonnet-5",
+    })).resolves.toMatchObject({
+      status: "failed",
+      reason: "unknown_outcome",
+      detail: "Claude Code probe entered Unknown Outcome",
+    });
+    expect(setupResult.host.listAgentConnectionReadinessHistory("claude-code", "summary"))
+      .toEqual([expect.objectContaining({
+        reason: "unknown_outcome",
+        runtimeEvidence: expect.objectContaining({ terminalStatus: "unknown" }),
+      })]);
     setupResult.host.close();
   });
 

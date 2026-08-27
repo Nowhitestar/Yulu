@@ -49,7 +49,8 @@ type SummaryBlockerReason =
   | "disclosure_required"
   | "disclosure_declined"
   | "readiness_failed"
-  | "readiness_required";
+  | "readiness_required"
+  | "unknown_outcome";
 
 type SummaryBlockerCapability =
   | "summary_credentials"

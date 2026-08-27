@@ -9,6 +9,7 @@ import type {
 import type { XaiProviderReadiness, XaiReadinessResult } from "./routers/providers.js";
 import { XAI_TEXT_MODEL_DEFAULT } from "./settingsRegistry.js";
 import {
+  CLAUDE_CODE_SUMMARY_DISCLOSURE_VERSION,
   CODEX_SUMMARY_DISCLOSURE_VERSION,
   hasCurrentXaiSummaryDisclosure,
   XAI_SUMMARY_DISCLOSURE_VERSION,
@@ -25,7 +26,7 @@ import {
   XAI_CONVERSATION_DISCLOSURE_VERSION,
 } from "./conversationDataDisclosure.js";
 import type { CodexAgentAdapter } from "./codexAgentAdapter.js";
-import type { ClaudeCodeAdapter } from "./claudeCodeAdapter.js";
+import { ClaudeCodeConversationError, type ClaudeCodeAdapter } from "./claudeCodeAdapter.js";
 import {
   AgentUnavailableError,
   type AgentArtifactWorkflowInput,
@@ -35,6 +36,7 @@ import type {
   SupportedAgentSummaryAdapter,
   SupportedAgentSummaryReadiness,
 } from "./summaryProviderReadiness.js";
+import { ClaudeCodeSummaryUnknownOutcomeError } from "./summaryProviderReadiness.js";
 
 export type AgentConnectionCapability = "transcription" | "summary" | "conversation";
 
@@ -83,7 +85,7 @@ export interface AgentConnectionCenterOptions {
   >;
   claudeAdapter?: (executable: string) => Pick<
     ClaudeCodeAdapter,
-    "status" | "probe" | "converse"
+    "status" | "probe" | "probeSummary" | "summarize" | "converse"
   >;
 }
 
@@ -101,6 +103,19 @@ const CODEX_SUMMARY_ISOLATION_FEATURES = [
   "mcpServerStatus/list",
   "app/list",
   "no-provider-model-fallback",
+] as const;
+const CLAUDE_CODE_SUMMARY_ISOLATION_FEATURES = [
+  "auth/status",
+  "safe-mode",
+  "print/stream-json",
+  "verbose",
+  "model",
+  "session-id",
+  "probe-bounds",
+  "tools/none",
+  "probe-isolation",
+  "fallback-model/opt-in",
+  "managed-hooks/none",
 ] as const;
 
 const LABELS: Record<string, string> = {
@@ -147,6 +162,14 @@ function codexSummaryIsolationDeclared(
   ));
 }
 
+function claudeSummaryIsolationDeclared(
+  status: Awaited<ReturnType<ClaudeCodeAdapter["status"]>> | null,
+): boolean {
+  return Boolean(status?.supported && CLAUDE_CODE_SUMMARY_ISOLATION_FEATURES.every(
+    (feature) => status.features.includes(feature),
+  ));
+}
+
 function untested(capability: AgentConnectionCapability, model: string): XaiReadinessResult {
   return {
     capability,
@@ -176,6 +199,10 @@ export class AgentConnectionCenter {
   }>();
 
   private codexReadinessKey(connectionId: string, capability: "summary" | "conversation"): string {
+    return `${connectionId}:${capability}`;
+  }
+
+  private claudeReadinessKey(connectionId: string, capability: "summary" | "conversation"): string {
     return `${connectionId}:${capability}`;
   }
 
@@ -374,22 +401,75 @@ export class AgentConnectionCenter {
       .filter((record) => record.kind === "supported-agent" && record.adapter === "claude-code")
       .map(async (record) => {
         const executable = String(record.settings.executablePath ?? "");
-        const conversationModel = String(record.settings.conversationModel ?? "").trim();
+        const summaryModel = String(record.settings.summaryModel ?? record.settings.conversationModel ?? "").trim();
+        const conversationModel = String(record.settings.conversationModel ?? record.settings.summaryModel ?? "").trim();
         let status: Awaited<ReturnType<ClaudeCodeAdapter["status"]>> | null = null;
+        let summaryStatus: Awaited<ReturnType<ClaudeCodeAdapter["status"]>> | null = null;
         let statusError: string | null = null;
+        let summaryStatusError: string | null = null;
         try {
-          status = await this.requireClaudeAdapter(executable).status();
+          const adapter = this.requireClaudeAdapter(executable);
+          const [conversationResult, summaryResult] = await Promise.allSettled([
+            adapter.status(),
+            adapter.status({ toolFree: true }),
+          ]);
+          if (conversationResult.status === "fulfilled") status = conversationResult.value;
+          else statusError = "Claude Code runtime status is unavailable";
+          if (summaryResult.status === "fulfilled") summaryStatus = summaryResult.value;
+          else summaryStatusError = "Claude Code Summary isolation status is unavailable";
         } catch {
           statusError = "Claude Code runtime status is unavailable";
+          summaryStatusError = "Claude Code Summary isolation status is unavailable";
         }
-        const proof = status ? this.claudeReadiness.get(record.id) : undefined;
-        const identity = status ? this.claudeIdentity(executable, conversationModel, status) : null;
-        const currentReadiness = proof && proof.identity === identity
-          ? proof.readiness
-          : untested("conversation", conversationModel);
-        if (proof && proof.identity !== identity) this.claudeReadiness.delete(record.id);
-        const disclosure = this.host.getAgentConnectionDisclosure(record.id, "conversation");
-        const selection = asRecord(config.intelligence.conversation);
+        const capabilities = (["summary", "conversation"] as const).map((capability) => {
+          const model = capability === "summary" ? summaryModel : conversationModel;
+          const capabilityStatus = capability === "summary" ? summaryStatus : status;
+          const readinessKey = this.claudeReadinessKey(record.id, capability);
+          const proof = capabilityStatus ? this.claudeReadiness.get(readinessKey) : undefined;
+          const identity = capabilityStatus ? this.claudeIdentity(executable, model, capabilityStatus) : null;
+          let currentReadiness = proof && proof.identity === identity
+            ? proof.readiness
+            : untested(capability, model);
+          if (capability === "summary" && (!summaryStatus || !summaryStatus.supported)) {
+            currentReadiness = {
+              ...currentReadiness,
+              status: "failed",
+              detail: summaryStatus?.remediation ?? summaryStatusError ??
+                "Claude Code Summary isolation proof is unavailable",
+              reason: "readiness_failed",
+            };
+          }
+          if (proof && proof.identity !== identity) this.claudeReadiness.delete(readinessKey);
+          const disclosure = this.host.getAgentConnectionDisclosure(record.id, capability);
+          const disclosureVersion = capability === "summary"
+            ? CLAUDE_CODE_SUMMARY_DISCLOSURE_VERSION
+            : CLAUDE_CODE_CONVERSATION_DISCLOSURE_VERSION;
+          const selection = asRecord(config.intelligence[capability]);
+          return {
+            capability,
+            declared: capability === "summary"
+              ? claudeSummaryIsolationDeclared(summaryStatus) && currentReadiness.status === "ready"
+              : true,
+            currentReadiness,
+            readinessHistory: this.host.listAgentConnectionReadinessHistory(record.id, capability),
+            disclosure: {
+              required: disclosure?.disclosureVersion !== disclosureVersion || disclosure.decision !== "accepted",
+              disclosureVersion,
+              data: capability === "summary"
+                ? "transcript_text" as const
+                : "conversation_text_and_agent_tool_context" as const,
+              destination: capability === "summary"
+                ? "Claude Code runtime and its configured model provider"
+                : "Claude Code runtime and its configured model/tools",
+              decision: disclosure?.disclosureVersion === disclosureVersion ? disclosure.decision : null,
+              decidedAt: disclosure?.disclosureVersion === disclosureVersion ? disclosure.decidedAt : null,
+            },
+            selected: selection.provider === "agent" && selection.connectionId === record.id,
+            remediation: currentReadiness.status === "failed" || !capabilityStatus?.authorized || !capabilityStatus?.supported
+              ? { href: `/agent-connections?connection=${record.id}&capability=${capability}` }
+              : null,
+          };
+        });
         return {
           id: record.id,
           kind: "supported-agent" as const,
@@ -410,28 +490,9 @@ export class AgentConnectionCenter {
             statusCommand: status?.login.statusCommand ?? `${executable} auth status`,
             remediation: status?.remediation ?? statusError,
           },
-          capabilities: [{
-            capability: "conversation" as const,
-            declared: true,
-            currentReadiness,
-            readinessHistory: this.host.listAgentConnectionReadinessHistory(record.id, "conversation"),
-            disclosure: {
-              required: disclosure?.disclosureVersion !== CLAUDE_CODE_CONVERSATION_DISCLOSURE_VERSION ||
-                disclosure.decision !== "accepted",
-              disclosureVersion: CLAUDE_CODE_CONVERSATION_DISCLOSURE_VERSION,
-              data: "conversation_text_and_agent_tool_context" as const,
-              destination: "Claude Code runtime and its configured model/tools",
-              decision: disclosure?.disclosureVersion === CLAUDE_CODE_CONVERSATION_DISCLOSURE_VERSION
-                ? disclosure.decision : null,
-              decidedAt: disclosure?.disclosureVersion === CLAUDE_CODE_CONVERSATION_DISCLOSURE_VERSION
-                ? disclosure.decidedAt : null,
-            },
-            selected: selection.provider === "agent" && selection.connectionId === record.id,
-            remediation: currentReadiness.status === "failed" || !status?.authorized || !status?.supported
-              ? { href: `/agent-connections?connection=${record.id}&capability=conversation` }
-              : null,
-          }],
+          capabilities,
           settings: {
+            summaryModel,
             conversationModel,
             executablePath: executable,
           },
@@ -630,54 +691,64 @@ export class AgentConnectionCenter {
     }
     const claudeRecord = this.claudeRecord(input.connectionId);
     if (claudeRecord) {
-      if (input.capability !== "conversation") {
-        throw new Error("This Claude Code connection supports Conversation only in this release");
+      if (input.capability !== "summary" && input.capability !== "conversation") {
+        throw new Error("This Claude Code connection supports Summary and Conversation only");
       }
-      const model = input.model?.trim() || String(claudeRecord.settings.conversationModel ?? "").trim();
-      if (!model || model.length > 128) throw new Error("Claude Code Conversation model is invalid");
-      if (model !== claudeRecord.settings.conversationModel) {
-        this.claudeReadiness.delete(claudeRecord.id);
+      const setting = input.capability === "summary" ? "summaryModel" : "conversationModel";
+      const fallbackSetting = input.capability === "summary" ? "conversationModel" : "summaryModel";
+      const label = input.capability === "summary" ? "Summary" : "Conversation";
+      const model = input.model?.trim() ||
+        String(claudeRecord.settings[setting] ?? claudeRecord.settings[fallbackSetting] ?? "").trim();
+      if (!model || model.length > 128) throw new Error(`Claude Code ${label} model is invalid`);
+      const readinessKey = this.claudeReadinessKey(claudeRecord.id, input.capability);
+      if (model !== claudeRecord.settings[setting]) {
+        this.claudeReadiness.delete(readinessKey);
         this.host.upsertAgentConnectionRecord({
           ...claudeRecord,
-          settings: { ...claudeRecord.settings, conversationModel: model },
+          settings: { ...claudeRecord.settings, [setting]: model },
         });
       }
       const testedAt = new Date().toISOString();
       const executable = String(claudeRecord.settings.executablePath ?? "");
       const adapter = this.requireClaudeAdapter(executable);
-      const result = await adapter.probe({ model });
-      const status = await adapter.status();
+      const result = input.capability === "summary"
+        ? await adapter.probeSummary({ model })
+        : await adapter.probe({ model });
+      const status = await adapter.status(input.capability === "summary" ? { toolFree: true } : {});
       const exactIdentity = Boolean(
         status.supported &&
+        (input.capability !== "summary" || claudeSummaryIsolationDeclared(status)) &&
         status.authorized &&
         result.evidence?.runtimeVersion === status.runtimeVersion &&
+        result.evidence.requestedProvider === null &&
         result.evidence.requestedModel === model &&
+        result.evidence.actualProvider === null &&
         result.evidence.actualModel === model &&
         result.evidence.sessionId &&
         result.evidence.fallbackOccurred === false,
       );
       const effectiveStatus = result.status === "ready" && !exactIdentity ? "failed" : result.status;
       const readiness: XaiReadinessResult = {
-        capability: "conversation",
+        capability: input.capability,
         status: effectiveStatus,
         model,
         credentialSource: null,
         testedAt,
         detail: effectiveStatus === "ready"
-          ? `conversation · ${model} passed the Claude Code production adapter probe`
+          ? `${input.capability} · ${model} passed the Claude Code production adapter probe`
           : result.status === "failed"
-            ? result.remediation ?? `conversation · ${model} failed`
-            : `conversation · ${model} failed; the exact Claude executable, authorization, version, features, model, or session changed during the probe`,
-        reason: "readiness_failed",
+            ? result.remediation ?? `${input.capability} · ${model} failed`
+            : `${input.capability} · ${model} failed; the exact Claude executable, authorization, version, features, model, or session changed during the probe`,
+        reason: result.reason === "unknown_outcome" ? "unknown_outcome" : "readiness_failed",
       };
-      this.claudeReadiness.set(claudeRecord.id, {
+      this.claudeReadiness.set(readinessKey, {
         readiness,
         identity: this.claudeIdentity(executable, model, status),
       });
       if (result.evidence) {
         this.host.recordAgentConnectionReadiness({
           connectionId: claudeRecord.id,
-          capability: "conversation",
+          capability: input.capability,
           status: effectiveStatus,
           model,
           credentialSource: null,
@@ -800,7 +871,8 @@ export class AgentConnectionCenter {
     if (candidate.adapter === "claude-code") {
       const status = await this.requireClaudeAdapter(candidate.detectedPath).status();
       if (!status.supported) throw new Error(status.remediation ?? "Claude Code runtime is unsupported");
-      this.claudeReadiness.delete(CLAUDE_CODE_ID);
+      this.claudeReadiness.delete(this.claudeReadinessKey(CLAUDE_CODE_ID, "summary"));
+      this.claudeReadiness.delete(this.claudeReadinessKey(CLAUDE_CODE_ID, "conversation"));
       this.host.upsertAgentConnectionRecord({
         id: CLAUDE_CODE_ID,
         kind: "supported-agent",
@@ -809,6 +881,7 @@ export class AgentConnectionCenter {
         lifecycle: "available",
         settings: {
           executablePath: candidate.detectedPath,
+          summaryModel: model,
           conversationModel: model,
           credentialSource: "runtime-oauth",
         },
@@ -869,17 +942,20 @@ export class AgentConnectionCenter {
     }
     const claudeRecord = this.claudeRecord(input.connectionId);
     if (claudeRecord) {
-      if (input.capability !== "conversation") {
-        throw new Error("This Claude Code connection supports Conversation only in this release");
+      if (input.capability !== "summary" && input.capability !== "conversation") {
+        throw new Error("This Claude Code connection supports Summary and Conversation only");
       }
-      const model = input.model?.trim() || String(claudeRecord.settings.conversationModel ?? "").trim();
-      if (!model || model.length > 128) throw new Error("Claude Code Conversation model is invalid");
-      await this.requireCurrentClaudeReadiness(claudeRecord.id, model);
+      const setting = input.capability === "summary" ? "summaryModel" : "conversationModel";
+      const fallbackSetting = input.capability === "summary" ? "conversationModel" : "summaryModel";
+      const model = input.model?.trim() ||
+        String(claudeRecord.settings[setting] ?? claudeRecord.settings[fallbackSetting] ?? "").trim();
+      if (!model || model.length > 128) throw new Error(`Claude Code ${input.capability} model is invalid`);
+      await this.requireCurrentClaudeReadiness(claudeRecord.id, input.capability, model);
       this.host.upsertAgentConnectionRecord({
         ...claudeRecord,
-        settings: { ...claudeRecord.settings, conversationModel: model },
+        settings: { ...claudeRecord.settings, [setting]: model },
       });
-      this.config.update("intelligence.conversation", {
+      this.config.update(`intelligence.${input.capability}`, {
         provider: "agent",
         connectionId: claudeRecord.id,
         model,
@@ -920,13 +996,15 @@ export class AgentConnectionCenter {
   acceptDisclosure(input: { connectionId: string; capability: AgentConnectionCapability }) {
     this.ensureMigrated();
     if (this.claudeRecord(input.connectionId)) {
-      if (input.capability !== "conversation") {
-        throw new Error("This Claude Code connection supports Conversation only in this release");
+      if (input.capability !== "summary" && input.capability !== "conversation") {
+        throw new Error("This Claude Code connection supports Summary and Conversation only");
       }
       const receipt = this.host.recordAgentConnectionDisclosure({
         connectionId: input.connectionId,
-        capability: "conversation",
-        disclosureVersion: CLAUDE_CODE_CONVERSATION_DISCLOSURE_VERSION,
+        capability: input.capability,
+        disclosureVersion: input.capability === "summary"
+          ? CLAUDE_CODE_SUMMARY_DISCLOSURE_VERSION
+          : CLAUDE_CODE_CONVERSATION_DISCLOSURE_VERSION,
         decision: "accepted",
       });
       return { ...input, accepted: true, disclosureVersion: receipt.disclosureVersion };
@@ -971,13 +1049,16 @@ export class AgentConnectionCenter {
   }) {
     this.ensureMigrated();
     if (this.claudeRecord(input.connectionId)) {
-      if (input.capability !== "conversation") {
-        throw new Error("This Claude Code connection supports Conversation only in this release");
+      if (input.capability !== "summary" && input.capability !== "conversation") {
+        throw new Error("This Claude Code connection supports Summary and Conversation only");
       }
+      const disclosureVersion = input.capability === "summary"
+        ? CLAUDE_CODE_SUMMARY_DISCLOSURE_VERSION
+        : CLAUDE_CODE_CONVERSATION_DISCLOSURE_VERSION;
       const receipt = this.host.recordAgentConnectionDisclosure({
         connectionId: input.connectionId,
-        capability: "conversation",
-        disclosureVersion: CLAUDE_CODE_CONVERSATION_DISCLOSURE_VERSION,
+        capability: input.capability,
+        disclosureVersion,
         decision: "declined",
       });
       return { ...input, decision: receipt.decision, disclosureVersion: receipt.disclosureVersion };
@@ -1113,85 +1194,117 @@ export class AgentConnectionCenter {
 
   summaryAdapter(): SupportedAgentSummaryAdapter {
     return {
-      current: (snapshot) => this.currentCodexSummaryReadiness(snapshot),
+      current: (snapshot) => this.currentSupportedAgentSummaryReadiness(snapshot),
       probe: async () => {
         const selection = this.config.read().intelligence.summary;
         if (selection.provider !== "agent" || !("connectionId" in selection)) {
-          return this.unavailableCodexSummary("Select an explicit Codex Summary connection before testing it");
+          return this.unavailableSupportedSummary("Select an explicit Supported Agent Summary connection before testing it");
         }
         await this.probe({
           connectionId: selection.connectionId,
           capability: "summary",
           model: selection.model,
         });
-        return this.currentCodexSummaryReadiness({
+        return this.currentSupportedAgentSummaryReadiness({
           connectionId: selection.connectionId,
-          provider: "codex",
+          provider: "agent",
           model: selection.model,
         });
       },
-      gateway: () => ({
-        provider: "codex",
-        health: () => {
-          const readiness = this.currentCodexSummaryReadiness();
-          return {
-            available: readiness.status === "ready",
-            provider: "codex",
-            reason: readiness.status === "ready" ? null : readiness.detail,
-          };
-        },
-        runArtifactWorkflow: async (input: AgentArtifactWorkflowInput) => {
-          const task = input.task;
-          const readiness = this.currentCodexSummaryReadiness({
-            connectionId: task.summaryConnectionId,
-            provider: task.summaryProvider,
-            model: task.summaryModel,
-          });
-          if (readiness.status !== "ready" || !task.summaryConnectionId) {
-            throw new AgentUnavailableError(readiness.detail);
-          }
-          if (task.summaryCredentialClass !== "runtime-oauth") {
-            throw new AgentUnavailableError("The pinned Codex credential class is not runtime-owned authorization");
-          }
-          const record = this.codexRecord(task.summaryConnectionId);
-          if (!record) {
-            throw new AgentUnavailableError(`Pinned Codex connection ${task.summaryConnectionId} is unavailable`);
-          }
-          if (!input.committedTranscript?.trim()) {
-            throw new Error("Codex Summary requires the committed transcript text");
-          }
-          const result = await this.requireCodexAdapter(String(record.settings.executablePath ?? "")).summarize({
-            model: task.summaryModel,
-            instructions: task.instructions,
-            transcript: input.committedTranscript,
-          });
-          return {
-            stdout: "",
-            stderr: "",
-            nativeSessionId: result.nativeSessionId,
-            summary: result.summary,
-            runtimeEvidence: result.evidence,
-            summaryIdentity: { provider: "codex", model: task.summaryModel },
-            audit: {
-              ok: true,
-              toolNames: [],
-              artifactCommit: false,
-              notionDeliveryBegin: false,
-              notionSearch: false,
-              notionWrite: false,
-              notionIdempotencyMarker: false,
-              notionWriteResultVerified: false,
-              notionDeliveryCommit: false,
-              notionOrderValid: true,
-              errors: [],
-            },
-          };
-        },
-        runNotionWorkflow: async (_input: AgentNotionWorkflowInput) => {
-          throw new AgentUnavailableError("Codex Summary invocations have no delivery authority");
-        },
-        close: () => {},
-      }),
+      gateway: (_config, snapshot) => {
+        const selection = this.config.read().intelligence.summary;
+        const connectionId = snapshot?.connectionId ?? (
+          selection.provider === "agent" && "connectionId" in selection ? selection.connectionId : null
+        );
+        const record = connectionId
+          ? this.host.listAgentConnectionRecords().find((candidate) => candidate.id === connectionId)
+          : null;
+        const provider = snapshot?.provider === "codex" || snapshot?.provider === "claude-code"
+          ? snapshot.provider
+          : record?.adapter === "codex" || record?.adapter === "claude-code" ? record.adapter : "";
+        return {
+          provider,
+          health: () => {
+            const readiness = this.currentSupportedAgentSummaryReadiness(snapshot);
+            return {
+              available: readiness.status === "ready",
+              provider,
+              reason: readiness.status === "ready" ? null : readiness.detail,
+            };
+          },
+          runArtifactWorkflow: async (input: AgentArtifactWorkflowInput) => {
+            const task = input.task;
+            const readiness = this.currentSupportedAgentSummaryReadiness({
+              connectionId: task.summaryConnectionId,
+              provider: task.summaryProvider,
+              model: task.summaryModel,
+            });
+            if (readiness.status !== "ready" || !task.summaryConnectionId) {
+              throw new AgentUnavailableError(readiness.detail);
+            }
+            if (task.summaryCredentialClass !== "runtime-oauth") {
+              throw new AgentUnavailableError("The pinned Supported Agent credential class is not runtime-owned authorization");
+            }
+            const codexRecord = this.codexRecord(task.summaryConnectionId);
+            const claudeRecord = this.claudeRecord(task.summaryConnectionId);
+            if (!codexRecord && !claudeRecord) {
+              throw new AgentUnavailableError(`Pinned Supported Agent connection ${task.summaryConnectionId} is unavailable`);
+            }
+            if (!input.committedTranscript?.trim()) {
+              throw new Error("Supported Agent Summary requires the committed transcript text");
+            }
+            let result:
+              | Awaited<ReturnType<CodexAgentAdapter["summarize"]>>
+              | Awaited<ReturnType<ClaudeCodeAdapter["summarize"]>>;
+            try {
+              result = codexRecord
+                ? await this.requireCodexAdapter(String(codexRecord.settings.executablePath ?? "")).summarize({
+                    model: task.summaryModel,
+                    instructions: task.instructions,
+                    transcript: input.committedTranscript,
+                  })
+                : await this.requireClaudeAdapter(String(claudeRecord!.settings.executablePath ?? "")).summarize({
+                    model: task.summaryModel,
+                    instructions: task.instructions,
+                    transcript: input.committedTranscript,
+                  });
+            } catch (error) {
+              if (error instanceof ClaudeCodeConversationError && error.unknownOutcome && error.nativeSessionId) {
+                throw new ClaudeCodeSummaryUnknownOutcomeError(error.message, {
+                  nativeSessionId: error.nativeSessionId,
+                  evidence: error.evidence,
+                });
+              }
+              throw error;
+            }
+            return {
+              stdout: "",
+              stderr: "",
+              nativeSessionId: result.nativeSessionId,
+              summary: result.summary,
+              runtimeEvidence: result.evidence,
+              summaryIdentity: { provider: task.summaryProvider, model: task.summaryModel },
+              audit: {
+                ok: true,
+                toolNames: [],
+                artifactCommit: false,
+                notionDeliveryBegin: false,
+                notionSearch: false,
+                notionWrite: false,
+                notionIdempotencyMarker: false,
+                notionWriteResultVerified: false,
+                notionDeliveryCommit: false,
+                notionOrderValid: true,
+                errors: [],
+              },
+            };
+          },
+          runNotionWorkflow: async (_input: AgentNotionWorkflowInput) => {
+            throw new AgentUnavailableError("Supported Agent Summary invocations have no delivery authority");
+          },
+          close: () => {},
+        };
+      },
     };
   }
 
@@ -1239,13 +1352,13 @@ export class AgentConnectionCenter {
 
   async assertClaudeConversationReady(input: { connectionId: string; model: string }): Promise<void> {
     try {
-      await this.requireCurrentClaudeReadiness(input.connectionId, input.model);
+      await this.requireCurrentClaudeReadiness(input.connectionId, "conversation", input.model);
     } catch {
       throw new Error("Test this exact Claude Code Conversation model before starting a new conversation");
     }
   }
 
-  private unavailableCodexSummary(detail: string): SupportedAgentSummaryReadiness {
+  private unavailableSupportedSummary(detail: string): SupportedAgentSummaryReadiness {
     return {
       capability: "summary",
       provider: "",
@@ -1260,6 +1373,82 @@ export class AgentConnectionCenter {
     };
   }
 
+  private currentSupportedAgentSummaryReadiness(snapshot?: {
+    connectionId: string | null;
+    provider: string;
+    model: string;
+  }): SupportedAgentSummaryReadiness {
+    const selection = this.config.read().intelligence.summary;
+    const connectionId = snapshot?.connectionId ?? (
+      selection.provider === "agent" && "connectionId" in selection ? selection.connectionId : null
+    );
+    if (!connectionId) {
+      return this.unavailableSupportedSummary("Select an explicit Supported Agent Summary connection before using it");
+    }
+    const record = this.host.listAgentConnectionRecords().find((candidate) => candidate.id === connectionId);
+    if (!record || (record.adapter !== "codex" && record.adapter !== "claude-code")) {
+      return this.unavailableSupportedSummary(`Pinned Supported Agent connection ${connectionId} is unavailable`);
+    }
+    if (snapshot && snapshot.provider !== "agent" && snapshot.provider !== record.adapter) {
+      return this.unavailableSupportedSummary("Pinned Summary Provider does not match its Agent Connection adapter");
+    }
+    const exactSnapshot = snapshot ? { ...snapshot, provider: record.adapter } : undefined;
+    return record.adapter === "codex"
+      ? this.currentCodexSummaryReadiness(exactSnapshot)
+      : this.currentClaudeSummaryReadiness(exactSnapshot);
+  }
+
+  private currentClaudeSummaryReadiness(snapshot?: {
+    connectionId: string | null;
+    provider: string;
+    model: string;
+  }): SupportedAgentSummaryReadiness {
+    const selection = this.config.read().intelligence.summary;
+    const connectionId = snapshot?.connectionId ?? (
+      selection.provider === "agent" && "connectionId" in selection ? selection.connectionId : null
+    );
+    const model = snapshot?.model ?? selection.model;
+    if (!connectionId || (snapshot && snapshot.provider !== "claude-code")) {
+      return this.unavailableSupportedSummary("Select an explicit Claude Code Summary connection before using it");
+    }
+    const record = this.claudeRecord(connectionId);
+    if (!record) {
+      return this.unavailableSupportedSummary(`Pinned Claude Code connection ${connectionId} is unavailable`);
+    }
+    const proof = this.claudeReadiness.get(this.claudeReadinessKey(connectionId, "summary"));
+    let sameSettings = false;
+    if (proof) {
+      try {
+        const identity = JSON.parse(proof.identity) as { executable?: string; model?: string };
+        sameSettings = identity.executable === String(record.settings.executablePath ?? "") &&
+          identity.model === model;
+      } catch {
+        sameSettings = false;
+      }
+    }
+    const readiness = proof && sameSettings && proof.readiness.model === model
+      ? proof.readiness
+      : untested("summary", model);
+    return {
+      capability: "summary",
+      provider: "claude-code",
+      model,
+      status: readiness.status,
+      testedAt: readiness.testedAt,
+      detail: readiness.detail,
+      credentialSource: "runtime-oauth",
+      connectionId,
+      disclosure: {
+        kind: "external",
+        connectionId,
+        disclosureVersion: CLAUDE_CODE_SUMMARY_DISCLOSURE_VERSION,
+        data: "transcript_text",
+        destination: "Claude Code runtime and its configured model provider",
+      },
+      ...(readiness.reason ? { reason: readiness.reason } : {}),
+    };
+  }
+
   private currentCodexSummaryReadiness(snapshot?: {
     connectionId: string | null;
     provider: string;
@@ -1271,10 +1460,10 @@ export class AgentConnectionCenter {
     );
     const model = snapshot?.model ?? selection.model;
     if (!connectionId || (snapshot && snapshot.provider !== "codex")) {
-      return this.unavailableCodexSummary("Select an explicit Codex Summary connection before using it");
+      return this.unavailableSupportedSummary("Select an explicit Codex Summary connection before using it");
     }
     const record = this.codexRecord(connectionId);
-    if (!record) return this.unavailableCodexSummary(`Pinned Codex connection ${connectionId} is unavailable`);
+    if (!record) return this.unavailableSupportedSummary(`Pinned Codex connection ${connectionId} is unavailable`);
     const proof = this.codexReadiness.get(this.codexReadinessKey(connectionId, "summary"));
     let sameSettings = false;
     if (proof) {
@@ -1415,20 +1604,27 @@ export class AgentConnectionCenter {
     }
   }
 
-  private async requireCurrentClaudeReadiness(connectionId: string, model: string): Promise<void> {
+  private async requireCurrentClaudeReadiness(
+    connectionId: string,
+    capability: "summary" | "conversation",
+    model: string,
+  ): Promise<void> {
     const record = this.claudeRecord(connectionId);
-    if (!record) throw new Error("Test this exact Claude Code Conversation model before selecting it");
+    if (!record) throw new Error(`Test this exact Claude Code ${capability} model before selecting it`);
     const executable = String(record.settings.executablePath ?? "");
-    const status = await this.requireClaudeAdapter(executable).status();
-    const proof = this.claudeReadiness.get(record.id);
+    const status = await this.requireClaudeAdapter(executable).status(
+      capability === "summary" ? { toolFree: true } : {},
+    );
+    const readinessKey = this.claudeReadinessKey(record.id, capability);
+    const proof = this.claudeReadiness.get(readinessKey);
     const identity = this.claudeIdentity(executable, model, status);
     if (
       proof?.readiness.status !== "ready" ||
       proof.readiness.model !== model ||
       proof.identity !== identity
     ) {
-      this.claudeReadiness.delete(record.id);
-      throw new Error("Test this exact Claude Code Conversation model before selecting it");
+      this.claudeReadiness.delete(readinessKey);
+      throw new Error(`Test this exact Claude Code ${capability} model before selecting it`);
     }
   }
 

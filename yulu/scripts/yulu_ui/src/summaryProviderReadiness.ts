@@ -1,5 +1,20 @@
 export type SummaryReadinessStatus = "untested" | "testing" | "ready" | "failed";
 
+export class ClaudeCodeSummaryUnknownOutcomeError extends Error {
+  readonly nativeSessionId: string;
+  readonly evidence: SummaryCommitRuntimeEvidence;
+
+  constructor(message: string, options: {
+    nativeSessionId: string;
+    evidence: SummaryCommitRuntimeEvidence;
+  }) {
+    super(message);
+    this.name = "ClaudeCodeSummaryUnknownOutcomeError";
+    this.nativeSessionId = options.nativeSessionId;
+    this.evidence = options.evidence;
+  }
+}
+
 import type {
   AgentArtifactWorkflowInput,
   AgentWorkflowResult,
@@ -28,13 +43,16 @@ export interface SupportedAgentSummaryReadiness {
   credentialSource: string | null;
   connectionId?: string | null;
   disclosure: SummaryDisclosureMetadata | null;
-  reason?: "missing_credentials" | "invalid_model" | "provider_unavailable" | "readiness_failed" | "readiness_required";
+  reason?: "missing_credentials" | "invalid_model" | "provider_unavailable" | "readiness_failed" | "readiness_required" | "unknown_outcome";
 }
 
 export interface SupportedAgentSummaryAdapter {
   current: (snapshot?: { connectionId: string | null; provider: string; model: string }) => SupportedAgentSummaryReadiness;
   probe: () => Promise<SupportedAgentSummaryReadiness>;
-  gateway: (config: YuluConfig) => SupportedAgentSummaryGateway;
+  gateway: (
+    config: YuluConfig,
+    snapshot?: { connectionId: string | null; provider: string; model: string },
+  ) => SupportedAgentSummaryGateway;
 }
 
 export interface SupportedAgentSummaryGateway extends RecordingAgentGateway {

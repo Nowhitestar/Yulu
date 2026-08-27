@@ -12,11 +12,13 @@ function fakeClaude() {
   const executable = join(root, "claude");
   const logPath = join(root, "argv.jsonl");
   const stdinLogPath = join(root, "stdin.txt");
+  const contextLogPath = join(root, "context.jsonl");
   writeFileSync(executable, [
     `#!${process.execPath}`,
     'import { appendFileSync } from "node:fs";',
     'const args = process.argv.slice(2);',
     'appendFileSync(process.env.YULU_FAKE_CLAUDE_LOG, `${JSON.stringify(args)}\\n`);',
+    'if (process.env.YULU_FAKE_CLAUDE_CONTEXT_LOG) appendFileSync(process.env.YULU_FAKE_CLAUDE_CONTEXT_LOG, `${JSON.stringify({ cwd: process.cwd(), env: Object.keys(process.env).sort() })}\\n`);',
     'if (process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN || process.env.CLAUDE_CODE_OAUTH_TOKEN || process.env.ANTHROPIC_BASE_URL || process.env.ANTHROPIC_CUSTOM_HEADERS || process.env.CLAUDE_CODE_USE_BEDROCK || process.env.CLAUDE_CODE_USE_VERTEX || process.env.CLAUDE_CODE_USE_FOUNDRY) {',
     '  process.stderr.write("credential or provider-routing environment leaked");',
     '  process.exit(3);',
@@ -30,7 +32,7 @@ function fakeClaude() {
     '  process.exit(0);',
     '}',
     'if (args.includes("--help")) {',
-    '  process.stdout.write("--safe-mode --print --output-format stream-json --verbose --model --session-id --resume --max-turns --tools --disallowedTools --strict-mcp-config --mcp-config --disable-slash-commands --no-session-persistence --fallback-model");',
+    '  process.stdout.write("--safe-mode --print --output-format stream-json --verbose --model --session-id --resume --max-turns --tools --disallowedTools --strict-mcp-config --mcp-config --setting-sources --settings --disable-slash-commands --no-chrome --include-hook-events --system-prompt --no-session-persistence --fallback-model");',
     '  process.exit(0);',
     '}',
     'if (args.includes("--print")) {',
@@ -42,7 +44,8 @@ function fakeClaude() {
     '  const sessionFlag = args.includes("--resume") ? "--resume" : "--session-id";',
     '  const sessionId = args[args.indexOf(sessionFlag) + 1];',
     '  const answer = prompt.includes("YULU_CLAUDE_PROBE_OK") ? "YULU_CLAUDE_PROBE_OK" : "Pinned Claude answer";',
-    '  process.stdout.write(`${JSON.stringify({ type: "system", subtype: "init", session_id: sessionId, model, tools: [], mcp_servers: [], uuid: "init-136" })}\\n`);',
+    '  process.stdout.write(`${JSON.stringify({ type: "system", subtype: "init", session_id: sessionId, model, claude_code_version: process.env.YULU_FAKE_CLAUDE_RUNTIME_VERSION || "2.1.169", tools: [], mcp_servers: [], slash_commands: [], skills: process.env.YULU_FAKE_CLAUDE_SKILL ? [process.env.YULU_FAKE_CLAUDE_SKILL] : [], plugins: process.env.YULU_FAKE_CLAUDE_PLUGIN ? [{ name: process.env.YULU_FAKE_CLAUDE_PLUGIN }] : [] })}\\n`);',
+    '  if (process.env.YULU_FAKE_CLAUDE_HOOK === "1") process.stdout.write(`${JSON.stringify({ type: "hook_started", hook_name: "managed-policy-hook" })}\\n`);',
     '  if (process.env.YULU_FAKE_CLAUDE_HANG === "1") {',
     '    process.on("SIGINT", () => {});',
     '    await new Promise((resolve) => setInterval(resolve, 1_000_000));',
@@ -58,7 +61,7 @@ function fakeClaude() {
     'process.exit(2);',
   ].join("\n"), { mode: 0o700 });
   chmodSync(executable, 0o700);
-  return { root, executable, logPath, stdinLogPath };
+  return { root, executable, logPath, stdinLogPath, contextLogPath };
 }
 
 afterEach(() => {
@@ -160,6 +163,7 @@ describe("Claude Code production CLI client", () => {
       probe: true,
       timeoutMs: 10_000,
     })).resolves.toEqual({
+      runtimeVersion: "2.1.169",
       answer: "YULU_CLAUDE_PROBE_OK",
       nativeSessionId: "019f0000-0000-7000-8000-000000000136",
       actualModel: "claude-sonnet-5",
@@ -181,9 +185,15 @@ describe("Claude Code production CLI client", () => {
       "--max-turns", "1",
       "--tools", "",
       "--disallowedTools", "*",
+      "--disallowedTools", "mcp__*",
       "--strict-mcp-config",
       "--mcp-config", '{"mcpServers":{}}',
+      "--setting-sources", "",
+      "--settings", '{"disableAllHooks":true,"disableClaudeAiConnectors":true}',
       "--disable-slash-commands",
+      "--no-chrome",
+      "--include-hook-events",
+      "--system-prompt", "",
       "--no-session-persistence",
     ]]);
     expect(readFileSync(fake.stdinLogPath, "utf8")).toBe(
@@ -194,6 +204,103 @@ describe("Claude Code production CLI client", () => {
     expect(allArgs).not.toContain("-c");
     expect(allArgs).not.toContain("--fallback-model");
     expect(allArgs).not.toContain("--fork-session");
+  });
+
+  it("runs production Summary through the same fresh tool-free path with a minimal environment", async () => {
+    const fake = fakeClaude();
+    const client = new ClaudeCodeCliRuntimeClient({
+      executable: fake.executable,
+      cwd: fake.root,
+      env: {
+        YULU_FAKE_CLAUDE_LOG: fake.logPath,
+        YULU_FAKE_CLAUDE_STDIN_LOG: fake.stdinLogPath,
+        YULU_FAKE_CLAUDE_CONTEXT_LOG: fake.contextLogPath,
+        YULU_UNRELATED_RECORDING_PATH: "/private/recordings/must-not-leak.wav",
+        ANTHROPIC_API_KEY: "must-not-reach-runtime",
+        ANTHROPIC_BASE_URL: "https://must-not-reach-runtime.example",
+        ANTHROPIC_CUSTOM_HEADERS: "x-secret: must-not-reach-runtime",
+        CLAUDE_CODE_USE_BEDROCK: "1",
+      },
+      sessionIdFactory: () => "019f0000-0000-7000-8000-000000000140",
+    });
+
+    await expect(client.runConversation({
+      model: "claude-sonnet-5",
+      prompt: "selected instructions and committed transcript only",
+      probe: false,
+      toolFree: true,
+      timeoutMs: 10_000,
+    })).resolves.toMatchObject({
+      runtimeVersion: "2.1.169",
+      nativeSessionId: "019f0000-0000-7000-8000-000000000140",
+      terminalStatus: "completed",
+      fallbackOccurred: false,
+      toolCalls: [],
+      isolationProven: false,
+    });
+    const calls = readFileSync(fake.logPath, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+    expect(calls).toEqual([[
+      "--safe-mode",
+      "--print",
+      "--output-format", "stream-json",
+      "--verbose",
+      "--model", "claude-sonnet-5",
+      "--session-id", "019f0000-0000-7000-8000-000000000140",
+      "--max-turns", "1",
+      "--tools", "",
+      "--disallowedTools", "*",
+      "--disallowedTools", "mcp__*",
+      "--strict-mcp-config",
+      "--mcp-config", '{"mcpServers":{}}',
+      "--setting-sources", "",
+      "--settings", '{"disableAllHooks":true,"disableClaudeAiConnectors":true}',
+      "--disable-slash-commands",
+      "--no-chrome",
+      "--include-hook-events",
+      "--system-prompt", "",
+      "--no-session-persistence",
+    ]]);
+    const context = JSON.parse(readFileSync(fake.contextLogPath, "utf8").trim());
+    expect(context.cwd).not.toBe(fake.root);
+    expect(context.env).not.toEqual(expect.arrayContaining([
+      "YULU_UNRELATED_RECORDING_PATH",
+      "ANTHROPIC_API_KEY",
+      "ANTHROPIC_BASE_URL",
+      "ANTHROPIC_CUSTOM_HEADERS",
+      "CLAUDE_CODE_USE_BEDROCK",
+    ]));
+  });
+
+  it("reports same-invocation skills, plugins, and hook events as disqualifying tool evidence", async () => {
+    const fake = fakeClaude();
+    const client = new ClaudeCodeCliRuntimeClient({
+      executable: fake.executable,
+      cwd: fake.root,
+      env: {
+        YULU_FAKE_CLAUDE_LOG: fake.logPath,
+        YULU_FAKE_CLAUDE_STDIN_LOG: fake.stdinLogPath,
+        YULU_FAKE_CLAUDE_SKILL: "managed-skill",
+        YULU_FAKE_CLAUDE_PLUGIN: "managed-plugin",
+        YULU_FAKE_CLAUDE_HOOK: "1",
+      },
+      sessionIdFactory: () => "019f0000-0000-7000-8000-000000000142",
+    });
+
+    await expect(client.runConversation({
+      model: "claude-sonnet-5",
+      prompt: "selected instructions and committed transcript only",
+      probe: false,
+      toolFree: true,
+      timeoutMs: 10_000,
+    })).resolves.toMatchObject({
+      runtimeVersion: "2.1.169",
+      isolationProven: false,
+      toolCalls: [
+        "skill:managed-skill",
+        'plugin:{"name":"managed-plugin"}',
+        "hook:hook_started",
+      ],
+    });
   });
 
   it("resumes only the exact pinned native session without latest, continue, or fallback modes", async () => {
@@ -252,6 +359,7 @@ describe("Claude Code production CLI client", () => {
     })).resolves.toMatchObject({
       nativeSessionId,
       actualModel: "claude-sonnet-5",
+      requestId: null,
       terminalStatus: "unknown",
       cancellationRequested: true,
       cancellationConfirmed: false,
@@ -280,6 +388,7 @@ describe("Claude Code production CLI client", () => {
     })).resolves.toMatchObject({
       nativeSessionId,
       actualModel: "claude-sonnet-5",
+      requestId: null,
       terminalStatus: "unknown",
       cancellationRequested: false,
       cancellationConfirmed: false,

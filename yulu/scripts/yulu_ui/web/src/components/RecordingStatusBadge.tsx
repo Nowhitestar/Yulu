@@ -16,6 +16,7 @@ export type RecordingJobState =
   | "agent_failed"
   | "sending_notion"
   | "delivery_unverified"
+  | "execution_unverified"
   | string;
 
 export interface RecordingStatusBadgeProps {
@@ -39,6 +40,7 @@ const LABEL_KEYS: Record<string, string> = {
   agent_failed: "status.agent_failed",
   sending_notion: "status.sending_notion",
   delivery_unverified: "status.delivery_unverified",
+  execution_unverified: "status.execution_unverified",
 };
 
 /**
@@ -49,7 +51,8 @@ const LABEL_KEYS: Record<string, string> = {
 export function RecordingStatusBadge({ state, error, compact }: RecordingStatusBadgeProps) {
   const t = useT();
   if (state === "idle" || !(state in LABEL_KEYS)) return null;
-  const failed = state === "failed" || state.endsWith("_failed") || state === "delivery_unverified";
+  const failed = state === "failed" || state.endsWith("_failed") ||
+    state === "delivery_unverified" || state === "execution_unverified";
   const waiting = state === "agent_queued" || state === "awaiting_agent" || state === "awaiting_policy";
   return (
     <span

@@ -154,7 +154,11 @@ describe("server", () => {
       adapter: "claude-code",
       label: "Claude Code",
       lifecycle: "available",
-      settings: { executablePath: executable, conversationModel: "claude-sonnet-5" },
+      settings: {
+        executablePath: executable,
+        summaryModel: "claude-sonnet-5",
+        conversationModel: "claude-sonnet-5",
+      },
     });
     try {
       const response = await fetch(`${env.baseUrl}/trpc/agentConnections.view`);
@@ -175,7 +179,17 @@ describe("server", () => {
             loginCommand: `${executable} auth login`,
             statusCommand: `${executable} auth status`,
           }),
-          capabilities: [expect.objectContaining({ capability: "conversation" })],
+          capabilities: expect.arrayContaining([
+            expect.objectContaining({
+              capability: "summary",
+              declared: false,
+              currentReadiness: expect.objectContaining({
+                status: "failed",
+                detail: expect.stringContaining("policy-managed hooks"),
+              }),
+            }),
+            expect.objectContaining({ capability: "conversation", declared: true }),
+          ]),
         }),
       ]));
     } finally {

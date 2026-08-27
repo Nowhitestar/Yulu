@@ -118,7 +118,8 @@ export function RecordingsList() {
     "summarizing",
     "sending_notion",
   ].includes(row.status);
-  const isDeleteBlocked = (row: Row) => isBusy(row) || row.status === "delivery_unverified";
+  const isDeleteBlocked = (row: Row) => isBusy(row) ||
+    row.status === "delivery_unverified" || row.status === "execution_unverified";
 
   const renameRow = (row: Row) => {
     closeMenu();

@@ -79,6 +79,7 @@ type DurableAgentTaskState =
   | "sending"
   | "delivery_reported"
   | "delivery_unverified"
+  | "execution_unverified"
   | "completed"
   | "failed"
   | "cancelled";
@@ -648,7 +649,7 @@ function TaskCard({
   sharePending: boolean;
   onShare: (target: MeetingShareTarget) => void;
 }) {
-  const failed = agentTask?.state === "delivery_unverified";
+  const failed = agentTask?.state === "delivery_unverified" || agentTask?.state === "execution_unverified";
   const error = agentTask?.error || (Object.values(task.stages).includes("failed") ? task.error : "");
   return (
     <div className={"agent-task-card" + (failed ? " failed" : "")}>
@@ -764,7 +765,7 @@ function TaskAction({
 
 function isActiveDurableTask(task: DurableAgentTask): boolean {
   if (task.state === "awaiting_policy" && task.trigger === "automatic") return false;
-  return ["queued", "awaiting_agent", "awaiting_policy", "running", "transcript_committed", "artifacts_committed", "sending", "delivery_reported", "delivery_unverified"].includes(task.state);
+  return ["queued", "awaiting_agent", "awaiting_policy", "running", "transcript_committed", "artifacts_committed", "sending", "delivery_reported", "delivery_unverified", "execution_unverified"].includes(task.state);
 }
 
 function durableTaskLabel(task: DurableAgentTask): string {
@@ -774,6 +775,7 @@ function durableTaskLabel(task: DurableAgentTask): string {
   if (task.state === "transcript_committed") return "转写已保存，等待摘要 Agent";
   if (task.state === "failed") return "处理失败";
   if (task.state === "delivery_unverified") return "请核实 Notion 发送结果";
+  if (task.state === "execution_unverified") return "Agent 执行结果未知，请先核实";
   if (task.state === "cancelled") return "任务已取消";
   if (task.state === "completed") return task.sendToNotion ? "已发送到 Notion" : "已处理";
   if (task.phase === "transcribing") return "Yulu 转写中";
@@ -1546,7 +1548,9 @@ function RunTasks({
   const meetings = Array.isArray(schedulerRecord.meetings) ? schedulerRecord.meetings as Array<Record<string, unknown>> : [];
   const waiting = tasks.filter((task) => ["queued", "awaiting_agent", "awaiting_policy", "transcript_committed"].includes(task.state)).length;
   const running = tasks.filter((task) => ["running", "artifacts_committed", "sending", "delivery_reported"].includes(task.state)).length;
-  const failed = tasks.filter((task) => task.state === "failed" || task.state === "delivery_unverified").length;
+  const failed = tasks.filter((task) =>
+    task.state === "failed" || task.state === "delivery_unverified" || task.state === "execution_unverified"
+  ).length;
   return (
     <section className="agent-run-panel">
       <div className="agent-run-card">
@@ -1901,7 +1905,9 @@ function DestinationConfigModal({
 
 function LocalStatus({ agentTasks, onDetails }: { agentTasks: unknown; onDetails: () => void }) {
   const tasks = Array.isArray(agentTasks) ? agentTasks as DurableAgentTask[] : [];
-  const activeTasks = tasks.filter((task) => !["completed", "failed", "cancelled", "delivery_unverified"].includes(task.state));
+  const activeTasks = tasks.filter((task) =>
+    !["completed", "failed", "cancelled", "delivery_unverified", "execution_unverified"].includes(task.state)
+  );
   return (
     <section className="agent-panel agent-local-status">
       <div className="agent-panel-head">

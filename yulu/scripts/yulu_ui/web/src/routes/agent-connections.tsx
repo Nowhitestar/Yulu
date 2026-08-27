@@ -23,8 +23,11 @@ function capabilityLabel(t: ReturnType<typeof useT>, capability: Capability): st
 
 function readinessFailure(
   t: ReturnType<typeof useT>,
-  readiness: { model: string; reason?: "invalid_model" | "readiness_failed" },
+  readiness: { model: string; reason?: "invalid_model" | "readiness_failed" | "unknown_outcome" },
 ): string {
+  if (readiness.reason === "unknown_outcome") {
+    return t("agentConnections.remediation.unknownOutcome", { model: readiness.model });
+  }
   return readiness.reason === "invalid_model"
     ? t("agentConnections.remediation.invalidModel", { model: readiness.model })
     : t("agentConnections.remediation.probeFailed", { model: readiness.model });
@@ -414,8 +417,9 @@ export function AgentConnections() {
               {agent.capabilities.map((item) => {
                 const capability = item.capability;
                 const modelKey = `${agent.id}:${capability}`;
-                const configuredModel = capability === "summary" && "summaryModel" in agent.settings
-                  ? agent.settings.summaryModel
+                const configuredModel = capability === "summary"
+                  ? ("summaryModel" in agent.settings ? agent.settings.summaryModel : undefined) ??
+                    agent.settings.conversationModel
                   : agent.settings.conversationModel;
                 const model = agentModelDrafts[modelKey] ?? configuredModel;
                 const testing = probe.isPending && probe.variables?.connectionId === agent.id &&
@@ -441,7 +445,7 @@ export function AgentConnections() {
                     </div>
                     {item.currentReadiness.status === "failed" && (
                       <p className="agent-capability-detail">
-                        {readinessFailure(t, item.currentReadiness)}
+                        {item.currentReadiness.detail}
                       </p>
                     )}
                     <label className="agent-connection-model" htmlFor={`${agent.id}-${capability}-model`}>
@@ -474,7 +478,7 @@ export function AgentConnections() {
                     <div className="agent-connection-actions">
                       <button
                         type="button"
-                        disabled={!model.trim()}
+                        disabled={!model.trim() || item.currentReadiness.status !== "ready"}
                         onClick={() => void run(() => select.mutateAsync({
                           connectionId: agent.id,
                           capability,

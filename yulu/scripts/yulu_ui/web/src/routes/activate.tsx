@@ -529,6 +529,7 @@ export function Activate() {
             summaryBlocker.reason !== "disclosure_declined" && (
             <div className="activate-blocker" role="alert">
               <p>{t(`activation.summary.blocker.${summaryBlocker.reason}`)}</p>
+              {summaryBlocker.detail && <p>{summaryBlocker.detail}</p>}
               <div className="activate-actions">
                 <Link className="activate-action primary" to={summaryBlocker.remediation.href}>
                   {t("activation.summary.openSettings")}

@@ -151,9 +151,29 @@ const mocks = vi.hoisted(() => ({
       },
       settings: {
         executablePath: "/fake/bin/claude",
+        summaryModel: "claude-sonnet-5",
         conversationModel: "claude-sonnet-5",
       },
       capabilities: [{
+        capability: "summary",
+        declared: false,
+        selected: false,
+        currentReadiness: {
+          status: "failed",
+          model: "claude-sonnet-5",
+          testedAt: null,
+          detail: "Claude Code cannot currently prove policy-managed hooks are disabled; Summary remains unavailable",
+          reason: "readiness_failed",
+        },
+        readinessHistory: [],
+        disclosure: {
+          required: true,
+          disclosureVersion: "claude-code-summary-v1",
+          data: "transcript_text",
+          destination: "Claude Code runtime and its configured model provider",
+        },
+        remediation: { href: "/agent-connections?connection=claude-code&capability=summary" },
+      }, {
         capability: "conversation",
         declared: true,
         selected: false,
@@ -261,6 +281,8 @@ function mount(lang: "zh" | "en" = "zh") {
 beforeEach(() => {
   localStorage.clear();
   vi.clearAllMocks();
+  const claude = mocks.view.connections.find((connection) => connection.id === "claude-code");
+  if (claude) claude.settings.summaryModel = "claude-sonnet-5";
 });
 
 describe("shared Agent Connection Center", () => {
@@ -335,7 +357,7 @@ describe("shared Agent Connection Center", () => {
     });
   });
 
-  it("connects Claude Code and exposes only its independently disclosed Conversation capability", async () => {
+  it("connects Claude Code and routes Summary independently from Conversation", async () => {
     mount("en");
     const user = userEvent.setup();
     const candidate = screen.getByTestId("agent-candidate-claude-code");
@@ -350,21 +372,50 @@ describe("shared Agent Connection Center", () => {
 
     const claude = screen.getByTestId("agent-connection-claude-code");
     expect(within(claude).getByText("/fake/bin/claude auth login")).toBeInTheDocument();
-    expect(within(claude).queryByRole("heading", { name: "Summary" })).not.toBeInTheDocument();
-    await user.click(within(claude).getByRole("button", { name: "Accept Claude Code Conversation Data Path Disclosure" }));
+    const summary = within(claude).getByTestId("connection-capability-claude-code-summary");
+    const conversation = within(claude).getByTestId("connection-capability-claude-code-conversation");
+    expect(within(summary).getByText(/policy-managed hooks.*Summary remains unavailable/)).toBeInTheDocument();
+    await user.click(within(summary).getByRole("button", { name: "Accept Claude Code Summary Data Path Disclosure" }));
+    expect(mocks.acceptDisclosure).toHaveBeenCalledWith({ connectionId: "claude-code", capability: "summary" });
+    await user.click(within(summary).getByRole("button", { name: "Test summary" }));
+    expect(mocks.probe).toHaveBeenCalledWith({
+      connectionId: "claude-code",
+      capability: "summary",
+      model: "claude-sonnet-5",
+    });
+    expect(within(summary).getByRole("button", { name: "Select Claude Code for future summaries" })).toBeDisabled();
+    await user.click(within(conversation).getByRole("button", { name: "Accept Claude Code Conversation Data Path Disclosure" }));
     expect(mocks.acceptDisclosure).toHaveBeenCalledWith({ connectionId: "claude-code", capability: "conversation" });
-    await user.click(within(claude).getByRole("button", { name: "Test conversation" }));
+    await user.click(within(conversation).getByRole("button", { name: "Test conversation" }));
     expect(mocks.probe).toHaveBeenCalledWith({
       connectionId: "claude-code",
       capability: "conversation",
       model: "claude-sonnet-5",
     });
-    await user.click(within(claude).getByRole("button", { name: "Select Claude Code for future conversations" }));
+    await user.click(within(conversation).getByRole("button", { name: "Select Claude Code for future conversations" }));
     expect(mocks.select).toHaveBeenCalledWith({
       connectionId: "claude-code",
       capability: "conversation",
       model: "claude-sonnet-5",
     });
+  });
+
+  it("migrates a #136 Conversation-only Claude connection without declaring Summary ready", () => {
+    const claude = mocks.view.connections.find((connection) => connection.id === "claude-code");
+    expect(claude).toBeDefined();
+    (claude!.settings as { summaryModel?: string }).summaryModel = undefined;
+
+    mount("en");
+
+    const card = screen.getByTestId("agent-connection-claude-code");
+    const summary = within(card).getByTestId("connection-capability-claude-code-summary");
+    const conversation = within(card).getByTestId("connection-capability-claude-code-conversation");
+    expect(within(summary).getByRole("textbox", { name: "Claude Code Summary model" }))
+      .toHaveValue("claude-sonnet-5");
+    expect(within(summary).getByText(/policy-managed hooks.*Summary remains unavailable/)).toBeInTheDocument();
+    expect(within(summary).getByRole("button", { name: "Select Claude Code for future summaries" })).toBeDisabled();
+    expect(within(conversation).getByRole("button", { name: "Select Claude Code for future conversations" }))
+      .toBeEnabled();
   });
 
   it("runs only the explicit capability action and previews deletion impact before confirmation", async () => {

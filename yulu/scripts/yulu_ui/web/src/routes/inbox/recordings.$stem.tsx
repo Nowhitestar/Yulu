@@ -48,6 +48,7 @@ type AgentTaskState =
   | "sending"
   | "delivery_reported"
   | "delivery_unverified"
+  | "execution_unverified"
   | "completed"
   | "failed"
   | "cancelled";
@@ -86,6 +87,8 @@ const ACTIVE_AGENT_TASK_STATES = new Set<AgentTaskState>([
   "artifacts_committed",
   "sending",
   "delivery_reported",
+  "delivery_unverified",
+  "execution_unverified",
 ]);
 
 function allowsManualPolicyOverride(task: AgentTaskView | null | undefined): boolean {
@@ -138,12 +141,13 @@ function AgentTaskStatus({
   else if (task.state === "awaiting_policy") key = "reader.agentTask.awaitingPolicy";
   else if (task.state === "transcript_committed") key = "reader.agentTask.transcriptCommitted";
   else if (task.state === "delivery_unverified") key = "reader.agentTask.deliveryUnverified";
+  else if (task.state === "execution_unverified") key = "reader.agentTask.executionUnverified";
   else if (task.phase === "transcribing") key = "reader.agentTask.transcribing";
   else if (task.phase === "summarizing") key = "reader.agentTask.summarizing";
   else if (task.sendToNotion && (task.state === "sending" || task.state === "delivery_reported")) key = "reader.agentTask.sendingNotion";
 
   const content = t(key);
-  const failed = task.state === "delivery_unverified";
+  const failed = task.state === "delivery_unverified" || task.state === "execution_unverified";
   return (
     <span
       className={`reader-agent-task-status${failed ? " failed" : ""}`}
@@ -695,9 +699,9 @@ export function RecordingReader() {
   const taskActive = agentTask ? ACTIVE_AGENT_TASK_STATES.has(agentTask.state) : false;
   const manualPolicyOverrideAllowed = allowsManualPolicyOverride(agentTask);
   const taskBlocksManualActions = taskActive && !manualPolicyOverrideAllowed;
-  const taskDeleteBlocked = taskActive || agentTask?.state === "delivery_unverified";
+  const taskDeleteBlocked = taskActive;
   const manualActionPending = transcribeMut.isPending || summarizeMut.isPending || sendSummaryMut.isPending;
-  const taskActionBlocked = taskBlocksManualActions || agentTask?.state === "delivery_unverified";
+  const taskActionBlocked = taskBlocksManualActions;
   const actionsDisabledReason = taskActionBlocked
       ? t("reader.disabled.agentTaskActive")
       : undefined;

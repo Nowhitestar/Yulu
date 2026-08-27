@@ -17,6 +17,7 @@ export type AgentTaskState =
   | "sending"
   | "delivery_reported"
   | "delivery_unverified"
+  | "execution_unverified"
   | "completed"
   | "failed"
   | "cancelled";
@@ -91,7 +92,7 @@ export interface SummaryCommitRuntimeEvidence {
   adapter: string;
   transport: string;
   runtimeVersion: string;
-  requestedProvider: string;
+  requestedProvider: string | null;
   requestedModel: string;
   actualProvider: string | null;
   actualModel: string | null;
@@ -183,7 +184,7 @@ export interface PersistedAgentConnectionReadiness {
   model: string;
   credentialSource: XaiCredentialSource | null;
   detail: string;
-  reason: "invalid_model" | "readiness_failed" | null;
+  reason: "invalid_model" | "readiness_failed" | "unknown_outcome" | null;
   runtimeEvidence: {
     adapter: string;
     transport: string;
@@ -316,6 +317,7 @@ const RECORDING_DELETE_BLOCKING_STATES = new Set<AgentTaskState>([
   "sending",
   "delivery_reported",
   "delivery_unverified",
+  "execution_unverified",
 ]);
 
 export class RecordingTaskDeletionBlockedError extends Error {
@@ -488,18 +490,21 @@ export class HostStore {
       runtime_evidence_json: string;
       tested_at: string;
     }>;
-    return rows.map((row) => ({
-      id: row.id,
-      connectionId: row.connection_id,
-      capability: row.capability,
-      status: row.status,
-      model: row.model,
-      credentialSource: row.credential_source,
-      detail: row.detail,
-      reason: row.reason,
-      runtimeEvidence: JSON.parse(row.runtime_evidence_json) as PersistedAgentConnectionReadiness["runtimeEvidence"],
-      testedAt: row.tested_at,
-    }));
+    return rows.map((row) => {
+      const runtimeEvidence = JSON.parse(row.runtime_evidence_json) as PersistedAgentConnectionReadiness["runtimeEvidence"];
+      return {
+        id: row.id,
+        connectionId: row.connection_id,
+        capability: row.capability,
+        status: row.status,
+        model: row.model,
+        credentialSource: row.credential_source,
+        detail: row.detail,
+        reason: runtimeEvidence.terminalStatus === "unknown" ? "unknown_outcome" : row.reason,
+        runtimeEvidence,
+        testedAt: row.tested_at,
+      };
+    });
   }
 
   recordAgentConnectionReadiness(
@@ -519,7 +524,7 @@ export class HostStore {
       input.model,
       input.credentialSource,
       input.detail,
-      input.reason,
+      input.reason === "unknown_outcome" ? "readiness_failed" : input.reason,
       JSON.stringify(input.runtimeEvidence),
       input.testedAt,
     );
@@ -609,7 +614,8 @@ export class HostStore {
         SELECT * FROM agent_tasks
         WHERE recording_stem = ?
           AND state IN ('queued', 'awaiting_agent', 'awaiting_provider', 'awaiting_policy', 'running',
-                        'transcript_committed', 'artifacts_committed', 'sending', 'delivery_reported', 'delivery_unverified')
+                        'transcript_committed', 'artifacts_committed', 'sending', 'delivery_reported', 'delivery_unverified',
+                        'execution_unverified')
         ORDER BY updated_at DESC, created_at DESC LIMIT 1
       `).get(input.recordingStem) as TaskRow | undefined;
       if (active) return { task: toTask(active), created: false };
@@ -1160,7 +1166,7 @@ export class HostStore {
       throw new Error(`task ${id} cannot authorize a Summary commit from ${task.state}`);
     }
     if (
-      task.summaryProvider !== "codex" ||
+      !["codex", "claude-code"].includes(task.summaryProvider) ||
       task.summaryConnectionId !== input.connectionId ||
       task.summaryCredentialClass !== input.credentialClass ||
       task.summaryDisclosureVersion !== input.disclosureVersion
@@ -1177,17 +1183,21 @@ export class HostStore {
       throw new Error("Summary input artifact identity changed before commit authorization");
     }
     const evidence = input.runtimeEvidence;
+    const providerIdentityMatches = task.summaryProvider === "codex"
+      ? evidence.adapter === "codex" && evidence.transport === "codex-app-server-stdio" &&
+        evidence.requestedProvider === "openai" && evidence.actualProvider === "openai"
+      : evidence.adapter === "claude-code" && evidence.transport === "claude-code-print-stream-json" &&
+        evidence.requestedProvider === null && evidence.actualProvider === null;
     if (
-      evidence.adapter !== "codex" || evidence.transport !== "codex-app-server-stdio" ||
-      !evidence.runtimeVersion.trim() || evidence.requestedProvider !== "openai" ||
-      evidence.requestedModel !== task.summaryModel || evidence.actualProvider !== "openai" ||
-      evidence.actualModel !== task.summaryModel || !evidence.requestId || !evidence.sessionId ||
-      evidence.terminalStatus !== "ready" || evidence.fallbackOccurred
+      !providerIdentityMatches || !evidence.runtimeVersion.trim() ||
+      evidence.requestedModel !== task.summaryModel || evidence.actualModel !== task.summaryModel ||
+      !evidence.requestId || !evidence.sessionId || evidence.terminalStatus !== "ready" ||
+      evidence.fallbackOccurred
     ) {
-      throw new Error("Codex Summary Runtime Evidence does not match the pinned task identity");
+      throw new Error("Supported Agent Summary Runtime Evidence does not match the pinned task identity");
     }
     if (input.toolCalls.length > 0) {
-      throw new Error("Codex Summary attempted a tool call or direct side effect");
+      throw new Error("Supported Agent Summary attempted a tool call or direct side effect");
     }
     return task;
   }
@@ -1803,7 +1813,7 @@ export class HostStore {
     const task = this.getTask(id);
     if (!task) throw new Error(`task not found: ${id}`);
     if (leaseToken && task.leaseToken !== leaseToken) throw new Error(`stale lease for task ${id}`);
-    if (["completed", "cancelled", "delivery_unverified"].includes(task.state)) return task;
+    if (["completed", "cancelled", "delivery_unverified", "execution_unverified"].includes(task.state)) return task;
     const state: AgentTaskState = ["sending", "delivery_reported"].includes(task.state)
       ? "delivery_unverified"
       : "failed";
@@ -1812,6 +1822,43 @@ export class HostStore {
         error = ?, updated_at = ? WHERE id = ?
     `).run(state, error.slice(0, 4000), now(), id);
     this.appendEvent(id, state === "delivery_unverified" ? "notion.delivery_unverified" : "task.failed", { error });
+    return this.getTask(id)!;
+  }
+
+  markClaudeSummaryUnknownOutcome(
+    id: string,
+    leaseToken: string,
+    error: string,
+    nativeSessionId: string,
+    evidence: SummaryCommitRuntimeEvidence,
+  ): AgentTask {
+    const task = this.requireLease(id, leaseToken);
+    if (task.state !== "transcript_committed") {
+      throw new Error(`task ${id} cannot enter Unknown Outcome from ${task.state}`);
+    }
+    const artifact = this.listArtifacts(id).find((record) => record.kind === "transcript");
+    if (
+      !artifact || task.summaryInputArtifactId !== artifact.id ||
+      task.summaryInputArtifactSha256 !== artifact.sha256 || task.summaryInputArtifactBytes !== artifact.bytes
+    ) {
+      throw new Error("Summary input artifact identity changed before Unknown Outcome persistence");
+    }
+    const providerIdentityMatches = task.summaryProvider === "claude-code" &&
+      evidence.adapter === "claude-code" && evidence.transport === "claude-code-print-stream-json" &&
+      evidence.requestedProvider === null && evidence.actualProvider === null;
+    if (
+      !providerIdentityMatches || !evidence.runtimeVersion.trim() ||
+      evidence.requestedModel !== task.summaryModel || evidence.actualModel !== task.summaryModel ||
+      evidence.sessionId !== nativeSessionId ||
+      evidence.terminalStatus !== "unknown" || evidence.fallbackOccurred
+    ) {
+      throw new Error("Claude Code Unknown Outcome evidence does not match the pinned Summary task identity");
+    }
+    this.db.prepare(`
+      UPDATE agent_tasks SET state = 'execution_unverified', phase = 'failed', lease_token = NULL,
+        native_session_id = ?, artifact_session_id = ?, error = ?, audit_json = ?, updated_at = ? WHERE id = ?
+    `).run(nativeSessionId, nativeSessionId, error.slice(0, 4000), JSON.stringify({ runtimeEvidence: evidence }), now(), id);
+    this.appendEvent(id, "claude.summary_unknown_outcome", { error, nativeSessionId, runtimeEvidence: evidence });
     return this.getTask(id)!;
   }
 
@@ -1998,7 +2045,8 @@ export class HostStore {
       SELECT * FROM agent_tasks
       WHERE recording_stem = ? AND id != ?
         AND state IN ('queued', 'awaiting_agent', 'awaiting_provider', 'awaiting_policy', 'running',
-                      'transcript_committed', 'artifacts_committed', 'sending', 'delivery_reported', 'delivery_unverified')
+                      'transcript_committed', 'artifacts_committed', 'sending', 'delivery_reported', 'delivery_unverified',
+                      'execution_unverified')
       ORDER BY updated_at DESC, created_at DESC LIMIT 1
     `).get(recordingStem, excludingId) as TaskRow | undefined;
     return row ? toTask(row) : null;

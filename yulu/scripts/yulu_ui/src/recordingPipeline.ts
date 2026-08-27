@@ -41,6 +41,7 @@ import {
 import {
   hasSupportedAgentSummaryIdentity,
   hasSupportedAgentSummaryReadinessProof,
+  ClaudeCodeSummaryUnknownOutcomeError,
   type SupportedAgentSummaryAdapter,
   type SupportedAgentSummaryGateway,
 } from "./summaryProviderReadiness.js";
@@ -331,7 +332,7 @@ export class RecordingPipeline {
     const readiness = explicitConnectionId
       ? this.options.supportedAgentSummaryAdapter?.current({
           connectionId: explicitConnectionId,
-          provider: "codex",
+          provider: "agent",
           model: selection.model,
         })
       : undefined;
@@ -578,7 +579,11 @@ export class RecordingPipeline {
         `${disclosure.destination} Data Path Disclosure (${disclosure.disclosureVersion}) is required; open /settings/llm`,
       );
     }
-    return adapter.gateway(config);
+    return adapter.gateway(config, {
+      connectionId: task.summaryConnectionId,
+      provider: task.summaryProvider,
+      model: task.summaryModel,
+    });
   }
 
   private resolveOnDemandAudioPath(input: string): string {
@@ -778,11 +783,11 @@ export class RecordingPipeline {
             throw new Error("Supported Agent returned a different Summary Provider/model identity");
           }
           if (task.summaryConnectionId && supportedResult.summary === undefined) {
-            throw new Error("Codex Summary returned no staged output");
+            throw new Error("Supported Agent Summary returned no staged output");
           }
           if (supportedResult.summary !== undefined) {
             if (supportedResult.summary.includes("\u0000")) {
-              throw new Error("Codex Summary returned invalid summary output");
+              throw new Error("Supported Agent Summary returned invalid summary output");
             }
             this.options.artifacts.writeStagedSummary(
               task.id,
@@ -792,7 +797,7 @@ export class RecordingPipeline {
           if (!supportedResult.audit.ok) throw new Error(supportedResult.audit.errors.join("; "));
           if (task.summaryConnectionId) {
             if (!supportedResult.runtimeEvidence || !task.summaryCredentialClass || !task.summaryDisclosureVersion) {
-              throw new Error("Codex Summary did not return complete Runtime Evidence for the pinned task snapshot");
+              throw new Error("Supported Agent Summary did not return complete Runtime Evidence for the pinned task snapshot");
             }
             this.options.store.validateSummaryCommit(task.id, leaseToken, {
               connectionId: task.summaryConnectionId,
@@ -885,7 +890,17 @@ export class RecordingPipeline {
       this.options.pubsub.publish("recordings-changed", { reason: "changed" });
       return true;
     } catch (error) {
-      if (error instanceof AgentUnavailableError) {
+      if (error instanceof ClaudeCodeSummaryUnknownOutcomeError) {
+        this.options.store.markClaudeSummaryUnknownOutcome(
+          task.id,
+          leaseToken,
+          error.message,
+          error.nativeSessionId,
+          error.evidence,
+        );
+        this.publish(task, "failed", error.message);
+        return true;
+      } else if (error instanceof AgentUnavailableError) {
         const current = this.options.store.getTask(task.id);
         if (current && ["sending", "delivery_reported", "delivery_unverified"].includes(current.state)) {
           this.options.store.fail(task.id, leaseToken, error.message);

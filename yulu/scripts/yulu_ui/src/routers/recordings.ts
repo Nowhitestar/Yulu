@@ -70,7 +70,7 @@ interface ShareTarget {
 
 const ACTIVE_AGENT_TASK_STATES = new Set([
   "queued", "awaiting_agent", "awaiting_provider", "running", "transcript_committed", "artifacts_committed",
-  "sending", "delivery_reported", "delivery_unverified",
+  "sending", "delivery_reported", "delivery_unverified", "execution_unverified",
 ]);
 const CURRENT_AGENT_TASK_STATES = new Set([
   ...ACTIVE_AGENT_TASK_STATES,
@@ -216,6 +216,7 @@ function recordingStatus(stem: string, wavPath: string, host?: HostStore): Recor
       statusError: task.error ?? undefined,
     };
     if (task.state === "delivery_unverified") return { status: "delivery_unverified", statusError: task.error ?? undefined };
+    if (task.state === "execution_unverified") return { status: "execution_unverified", statusError: task.error ?? undefined };
     if (task.state === "sending" || task.state === "delivery_reported") return { status: "sending_notion" };
     if (task.phase === "transcribing") return { status: "transcribing" };
     return { status: "summarizing" };

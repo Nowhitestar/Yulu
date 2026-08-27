@@ -27,6 +27,7 @@ const ACTIVE_STATES = new Set([
   "sending",
   "delivery_reported",
   "delivery_unverified",
+  "execution_unverified",
 ]);
 
 export function AgentQueueSection() {
@@ -87,6 +88,7 @@ export function AgentQueueSection() {
                 <div>{t("health.queue.attempt")}: {entry.attempt}</div>
                 <div>{t("health.queue.updated")}: {entry.updatedAt}</div>
                 {entry.state === "delivery_unverified" && <div>{t("health.queue.deliveryUnverified")}</div>}
+                {entry.state === "execution_unverified" && <div>{t("health.queue.executionUnverified")}</div>}
                 {entry.error && <div>{t("health.queue.error")}: {entry.error}</div>}
               </div>
               {RETRYABLE_STATES.has(entry.state) && !entries.some((other) => (
