@@ -58,7 +58,8 @@ type SummaryBlockerCapability =
   | "summary_disclosure"
   | "summary_readiness";
 
-const SUMMARY_SETTINGS = { href: "/settings/llm" } as const;
+const SUMMARY_SETTINGS = { href: "/agent-connections?capability=summary" } as const;
+const XAI_TRANSCRIPTION_SETTINGS = "/agent-connections?connection=direct-xai&capability=transcription";
 
 function summaryBlocker(
   capability: SummaryBlockerCapability,
@@ -301,7 +302,7 @@ async function activationReadiness(ctx: AppContext) {
   } : transcriptionState === "blocked" ? {
     capability: selected === "local" ? "local_transcription" as const : "xai_transcription" as const,
     detail: selected === "local" ? local.detail : xai.detail,
-    remediation: { href: "/settings/transcription" },
+    remediation: { href: selected === "xai" ? XAI_TRANSCRIPTION_SETTINGS : "/settings/transcription" },
   } : transcriptionState === "disclosure_required" ? null : summary.blocker ?? (!pipelineReady ? {
     capability: "recording_pipeline" as const,
     detail: pipelineDetail,
@@ -328,7 +329,9 @@ async function activationReadiness(ctx: AppContext) {
         state: transcriptionState,
         local,
         xai,
-        remediation: transcriptionState === "blocked" ? { href: "/settings/transcription" } : null,
+        remediation: transcriptionState === "blocked"
+          ? { href: selected === "xai" ? XAI_TRANSCRIPTION_SETTINGS : "/settings/transcription" }
+          : null,
       },
       summary: {
         selected: summary.selected,
@@ -372,7 +375,7 @@ function activeAttempt(ctx: AppContext) {
     : ctx.host.recoverActivationAttemptTask(existing.id);
   const task = attempt.taskId ? ctx.host.getTask(attempt.taskId) : null;
   const blocker = activationAttemptBlocker(ctx, attempt, task);
-  const transcriptCommitted = task !== null && blocker?.remediation.href === "/settings/llm";
+  const transcriptCommitted = task !== null && blocker?.remediation.href === SUMMARY_SETTINGS.href;
   const currentSummary = blocker && transcriptCommitted ? activationSummaryReadiness(ctx) : null;
   return {
     state: task || attempt.recordingStem || attempt.handoffError ? "processing" as const : "recording" as const,
@@ -491,7 +494,11 @@ function activationAttemptBlocker(
   const transcriptCommitted = hasValidCommittedTranscript(ctx, task);
   const detail = task.error;
   const classification = detail ?? "";
-  const settings = transcriptCommitted ? "/settings/llm" : "/settings/transcription";
+  const settings = transcriptCommitted
+    ? SUMMARY_SETTINGS.href
+    : /\bxai\b/i.test(classification) || ctx.config.read().transcription.engine === "xai"
+      ? XAI_TRANSCRIPTION_SETTINGS
+      : "/settings/transcription";
   if (/credential|oauth|api[- ]?key|unauthori[sz]ed|HTTP\s+(?:401|403)/i.test(classification)) {
     return {
       capability: "credential" as const,
@@ -513,14 +520,14 @@ function activationAttemptBlocker(
       capability: "provider" as const,
       detail,
       retry: "same_task" as const,
-      remediation: { href: transcriptCommitted ? "/settings/llm" : "/settings/transcription" },
+      remediation: { href: settings },
     };
   }
   return transcriptCommitted ? {
     capability: "summary" as const,
     detail,
     retry: "same_task" as const,
-    remediation: { href: "/settings/llm" },
+    remediation: SUMMARY_SETTINGS,
   } : {
     capability: "transcription" as const,
     detail,
@@ -813,9 +820,14 @@ export const activationRouter = router({
     };
   }),
   acceptXaiTranscriptionDisclosure: uiMutationProcedure.mutation(({ ctx }) =>
-    ctx.host.recordCloudTranscriptionConsent(XAI_TRANSCRIPTION_DISCLOSURE_VERSION)),
+    ctx.agentConnections
+      ? ctx.agentConnections.acceptDisclosure({ connectionId: "direct-xai", capability: "transcription" })
+      : ctx.host.recordCloudTranscriptionConsent(XAI_TRANSCRIPTION_DISCLOSURE_VERSION)),
   acceptSummaryDataPathDisclosure: uiMutationProcedure.input(summaryDisclosureInput).mutation(({ ctx, input }) => {
     const disclosure = currentSummaryDisclosure(ctx, input);
+    if (ctx.agentConnections) {
+      return ctx.agentConnections.acceptDisclosure({ connectionId: "direct-xai", capability: "summary" });
+    }
     return ctx.host.recordSummaryDataPathDisclosure(
       disclosure.provider,
       disclosure.disclosureVersion,
@@ -823,6 +835,12 @@ export const activationRouter = router({
   }),
   declineSummaryDataPathDisclosure: uiMutationProcedure.input(summaryDisclosureInput).mutation(({ ctx, input }) => {
     const disclosure = currentSummaryDisclosure(ctx, input);
+    if (ctx.agentConnections) {
+      return ctx.agentConnections.declineDisclosure({
+        connectionId: "direct-xai",
+        capability: "summary",
+      });
+    }
     return ctx.host.declineSummaryDataPathDisclosure(
       disclosure.provider,
       disclosure.disclosureVersion,

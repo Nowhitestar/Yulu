@@ -17,19 +17,20 @@ export function Activate() {
       return state === "recording" || state === "processing" ? 1_000 : false;
     },
   });
+  const agentConnectionView = trpc.agentConnections.view.useQuery();
   const startAttempt = trpc.activation.startAttempt.useMutation();
   const stopAttempt = trpc.activation.stopAttempt.useMutation();
   const retryAttempt = trpc.activation.retryAttempt.useMutation();
   const rerecordAttempt = trpc.activation.rerecordAttempt.useMutation();
   const replaceSummaryProvider = trpc.activation.replaceSummaryProvider.useMutation();
   const defer = trpc.activation.defer.useMutation();
-  const acceptXaiDisclosure = trpc.activation.acceptXaiTranscriptionDisclosure.useMutation();
-  const acceptSummaryDisclosure = trpc.activation.acceptSummaryDataPathDisclosure.useMutation();
-  const declineSummaryDisclosure = trpc.activation.declineSummaryDataPathDisclosure.useMutation();
   const probeSummaryProvider = trpc.activation.probeSummaryProvider.useMutation();
   const updateConfig = trpc.config.update.useMutation();
   const testLocal = trpc.localCaption.test.useMutation();
   const probeXai = trpc.providers.probe.useMutation();
+  const selectAgentConnection = trpc.agentConnections.select.useMutation();
+  const acceptAgentConnectionDisclosure = trpc.agentConnections.acceptDisclosure.useMutation();
+  const declineAgentConnectionDisclosure = trpc.agentConnections.declineDisclosure.useMutation();
   const [noteOpen, setNoteOpen] = useState(false);
   const [deferFailed, setDeferFailed] = useState(false);
   const [pendingXai, setPendingXai] = useState(false);
@@ -43,6 +44,8 @@ export function Activate() {
   const navigate = useNavigate();
   const { lang } = useLang();
   const t = useT();
+  const directXaiAvailable = agentConnectionView.data?.connections
+    .some((connection) => connection.id === "direct-xai") === true;
   useEffect(() => {
     if (
       activation.data?.state !== "activated" ||
@@ -120,7 +123,7 @@ export function Activate() {
     };
     const remediationLabel = blocker?.remediation.href === "/settings/general"
       ? t("activation.audioInput.openSettings")
-      : blocker?.remediation.href === "/settings/transcription"
+      : blocker?.remediation.href.includes("capability=transcription") || blocker?.remediation.href === "/settings/transcription"
         ? t("activation.transcription.openSettings")
         : blocker?.remediation.href === "/settings/automation"
           ? t("activation.pipeline.openSettings")
@@ -223,19 +226,21 @@ export function Activate() {
     const chooseXai = () => {
       setDisclosureDeclined(false);
       if (readiness?.transcription.xai.disclosureRequired) setPendingXai(true);
-      else void run(() => updateConfig.mutateAsync({ key: "transcription.engine", value: "xai" }));
+      else void run(() => selectAgentConnection.mutateAsync({
+        connectionId: "direct-xai",
+        capability: "transcription",
+      }));
     };
     const retryTranscription = () => run(() => selected === "local"
       ? testLocal.mutateAsync()
       : probeXai.mutateAsync({ capability: "transcription" }));
-    const chooseSummary = (provider: "agent" | "xai") => run(async () => {
+    const chooseXaiSummary = () => run(async () => {
       setSummaryDisclosureDeclined(false);
       setReviewSummaryDisclosure(false);
-      await updateConfig.mutateAsync({
-        key: "intelligence.summary",
-        value: provider === "xai"
-          ? { provider: "xai", model: XAI_TEXT_MODEL_DEFAULT }
-          : { provider: "agent", model: "runtime-managed" },
+      await selectAgentConnection.mutateAsync({
+        connectionId: "direct-xai",
+        capability: "summary",
+        model: XAI_TEXT_MODEL_DEFAULT,
       });
     });
     const retrySummary = () => run(() => summary?.selected.provider === "xai"
@@ -249,12 +254,6 @@ export function Activate() {
     const summaryBlocker = data?.blocker && "reason" in data.blocker ? data.blocker : null;
     const summaryDisclosureIsDeclined = summaryDisclosureDeclined ||
       summaryBlocker?.reason === "disclosure_declined";
-    const summaryDisclosureDecision = summary?.disclosure ? {
-      provider: summary.disclosure.provider,
-      disclosureVersion: summary.disclosure.disclosureVersion,
-      data: summary.disclosure.data,
-      destination: summary.disclosure.destination,
-    } : null;
     return (
       <section className="activate-page" aria-labelledby="activate-title">
         <div className="activate-card">
@@ -297,24 +296,15 @@ export function Activate() {
                 <div><dt>{t("activation.summary.provider")}</dt><dd>{summaryProviderLabel}</dd></div>
                 <div><dt>{t("activation.summary.model")}</dt><dd>{summary.selected.model}</dd></div>
               </dl>
-              {summary.state !== "ready" && (
+              {summary.state !== "ready" && directXaiAvailable && (
                 <fieldset className="activate-engine">
                   <legend>{t("activation.summary.choose")}</legend>
                   <label>
                     <input
                       type="radio"
                       name="activation-summary"
-                      checked={summary.selected.provider !== "xai"}
-                      onChange={() => void chooseSummary("agent")}
-                    />
-                    {t("activation.summary.agent")}
-                  </label>
-                  <label>
-                    <input
-                      type="radio"
-                      name="activation-summary"
                       checked={summary.selected.provider === "xai"}
-                      onChange={() => void chooseSummary("xai")}
+                      onChange={() => void chooseXaiSummary()}
                     />
                     xAI
                   </label>
@@ -335,20 +325,22 @@ export function Activate() {
                 />
                 {t("activation.transcription.local")}
               </label>
-              <label>
-                <input
-                  type="radio"
-                  name="activation-transcription"
-                  checked={selected === "xai" || pendingXai}
-                  onClick={() => {
-                    if (selected === "xai" && readiness.transcription.xai.disclosureRequired) {
-                      setDisclosureDeclined(false);
-                    }
-                  }}
-                  onChange={chooseXai}
-                />
-                {t("activation.transcription.xai")}
-              </label>
+              {directXaiAvailable && (
+                <label>
+                  <input
+                    type="radio"
+                    name="activation-transcription"
+                    checked={selected === "xai" || pendingXai}
+                    onClick={() => {
+                      if (selected === "xai" && readiness.transcription.xai.disclosureRequired) {
+                        setDisclosureDeclined(false);
+                      }
+                    }}
+                    onChange={chooseXai}
+                  />
+                  {t("activation.transcription.xai")}
+                </label>
+              )}
             </fieldset>
           )}
 
@@ -425,9 +417,15 @@ export function Activate() {
                   type="button"
                   className="activate-action primary"
                   onClick={() => void run(async () => {
-                    await acceptXaiDisclosure.mutateAsync();
+                    await acceptAgentConnectionDisclosure.mutateAsync({
+                      connectionId: "direct-xai",
+                      capability: "transcription",
+                    });
                     if (pendingXai) {
-                      await updateConfig.mutateAsync({ key: "transcription.engine", value: "xai" });
+                      await selectAgentConnection.mutateAsync({
+                        connectionId: "direct-xai",
+                        capability: "transcription",
+                      });
                     }
                     setPendingXai(false);
                   })}
@@ -475,7 +473,10 @@ export function Activate() {
                   type="button"
                   className="activate-action primary"
                   onClick={() => void run(async () => {
-                    await acceptSummaryDisclosure.mutateAsync(summaryDisclosureDecision!);
+                    await acceptAgentConnectionDisclosure.mutateAsync({
+                      connectionId: "direct-xai",
+                      capability: "summary",
+                    });
                     setSummaryDisclosureDeclined(false);
                     setReviewSummaryDisclosure(false);
                   })}
@@ -486,7 +487,10 @@ export function Activate() {
                   type="button"
                   className="activate-action"
                   onClick={() => void run(async () => {
-                    await declineSummaryDisclosure.mutateAsync(summaryDisclosureDecision!);
+                    await declineAgentConnectionDisclosure.mutateAsync({
+                      connectionId: "direct-xai",
+                      capability: "summary",
+                    });
                     setSummaryDisclosureDeclined(true);
                     setReviewSummaryDisclosure(false);
                   })}
@@ -501,7 +505,7 @@ export function Activate() {
             <div className="activate-declined" role="alert">
               <p>{t("activation.summaryDisclosure.declined", { provider: summaryProviderLabel })}</p>
               <div className="activate-actions">
-                <Link className="activate-action" to="/settings/llm">
+                <Link className="activate-action" to="/agent-connections?capability=summary">
                   {t("activation.summary.openSettings")}
                 </Link>
                 <button
@@ -544,7 +548,7 @@ export function Activate() {
                 </button>
               </>
             )}
-            <Link className="activate-action" to="/settings/llm">
+            <Link className="activate-action" to="/agent-connections">
               {t("activation.action.providers")}
             </Link>
             <button
@@ -617,7 +621,7 @@ export function Activate() {
             </button>
           )}
           <Link className="activate-action" to="/settings/transcription">{t("activation.action.transcription")}</Link>
-          <Link className="activate-action" to="/settings/llm">{t("activation.action.providers")}</Link>
+          <Link className="activate-action" to="/agent-connections">{t("activation.action.providers")}</Link>
         </div>
 
         {noteOpen && activated.completedNote && (

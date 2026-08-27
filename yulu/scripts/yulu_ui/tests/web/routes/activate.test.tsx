@@ -224,6 +224,10 @@ const activation = vi.hoisted(() => ({
   updateConfig: vi.fn(async () => ({})),
   testLocal: vi.fn(async () => ({ ok: true })),
   probeXai: vi.fn(async () => ({ status: "ready" })),
+  selectAgentConnection: vi.fn(async () => ({})),
+  acceptAgentConnectionDisclosure: vi.fn(async () => ({})),
+  declineAgentConnectionDisclosure: vi.fn(async () => ({})),
+  agentConnectionView: { connections: [{ id: "direct-xai" }] },
   refetch: vi.fn(async () => ({})),
   renderStatus: undefined as (() => void) | undefined,
   isPending: false,
@@ -278,6 +282,18 @@ vi.mock("../../../web/src/trpc.js", () => ({
     providers: {
       probe: { useMutation: () => ({ mutateAsync: activation.probeXai, isPending: false }) },
     },
+    agentConnections: {
+      view: {
+        useQuery: () => ({ data: activation.agentConnectionView, isPending: false, isError: false }),
+      },
+      select: { useMutation: () => ({ mutateAsync: activation.selectAgentConnection, isPending: false }) },
+      acceptDisclosure: {
+        useMutation: () => ({ mutateAsync: activation.acceptAgentConnectionDisclosure, isPending: false }),
+      },
+      declineDisclosure: {
+        useMutation: () => ({ mutateAsync: activation.declineAgentConnectionDisclosure, isPending: false }),
+      },
+    },
     useUtils: () => ({ activation: { status: { invalidate: activation.refetch } } }),
   },
 }));
@@ -319,6 +335,9 @@ afterEach(() => {
   activation.updateConfig.mockClear();
   activation.testLocal.mockClear();
   activation.probeXai.mockClear();
+  activation.selectAgentConnection.mockClear();
+  activation.acceptAgentConnectionDisclosure.mockClear();
+  activation.declineAgentConnectionDisclosure.mockClear();
   activation.refetch.mockClear();
   activation.renderStatus = undefined;
   activation.isPending = false;
@@ -343,7 +362,7 @@ describe("/activate", () => {
     );
     expect(screen.getByRole("link", { name: "AI Provider settings" })).toHaveAttribute(
       "href",
-      "/settings/llm",
+      "/agent-connections",
     );
   });
 
@@ -566,7 +585,7 @@ describe("/activate", () => {
         capability: "provider",
         detail: "Pinned Summary Provider is unavailable",
         retry: "same_task",
-        remediation: { href: "/settings/llm" },
+        remediation: { href: "/agent-connections?capability=summary" },
       },
       summaryRecovery: {
         selected: { provider: "xai", model: "grok-new-explicit" },
@@ -581,7 +600,7 @@ describe("/activate", () => {
 
     expect(screen.getByRole("alert")).toHaveTextContent("Summary Provider blocked activation");
     expect(screen.getByText("Pinned Summary Provider is unavailable")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Open AI Provider Settings" })).toHaveAttribute("href", "/settings/llm");
+    expect(screen.getByRole("link", { name: "Open AI Provider Settings" })).toHaveAttribute("href", "/agent-connections?capability=summary");
     await user.click(screen.getByRole("button", { name: "Retry saved work" }));
     expect(activation.retryAttempt).toHaveBeenCalledOnce();
     await user.click(screen.getByRole("button", { name: "Use xai · grok-new-explicit" }));
@@ -609,13 +628,13 @@ describe("/activate", () => {
         capability: "credential",
         detail: "xAI transcription failed (HTTP 401)",
         retry: "same_task",
-        remediation: { href: "/settings/transcription" },
+        remediation: { href: "/agent-connections?connection=direct-xai&capability=transcription" },
       },
     };
     renderRoute("en");
 
     expect(screen.getByRole("link", { name: "Open Transcription Settings" }))
-      .toHaveAttribute("href", "/settings/transcription");
+      .toHaveAttribute("href", "/agent-connections?connection=direct-xai&capability=transcription");
     expect(screen.queryByRole("link", { name: "Open AI Provider Settings" })).not.toBeInTheDocument();
   });
 
@@ -744,7 +763,7 @@ describe("/activate", () => {
       capability: "summary_disclosure",
       reason: "disclosure_required",
       detail: "disclosure required",
-      remediation: { href: "/settings/llm" },
+      remediation: { href: "/agent-connections?capability=summary" },
     };
     activation.data.readiness.summary.state = "disclosure_required";
     activation.data.readiness.summary.disclosure!.acceptedDisclosureVersion = null;
@@ -756,12 +775,11 @@ describe("/activate", () => {
     expect(disclosure).toHaveTextContent("转写文本会发送给 xAI");
     expect(disclosure).not.toHaveTextContent(/OAuth.*同意|API Key.*同意/);
     await user.click(screen.getByRole("button", { name: "接受数据路径披露" }));
-    expect(activation.acceptSummaryDisclosure).toHaveBeenCalledWith({
-      provider: "xai",
-      disclosureVersion: "xai-summary-v1",
-      data: "transcript_text",
-      destination: "xAI",
+    expect(activation.acceptAgentConnectionDisclosure).toHaveBeenCalledWith({
+      connectionId: "direct-xai",
+      capability: "summary",
     });
+    expect(activation.acceptSummaryDisclosure).not.toHaveBeenCalled();
     expect(activation.updateConfig).not.toHaveBeenCalled();
   });
 
@@ -772,7 +790,7 @@ describe("/activate", () => {
       capability: "summary_disclosure",
       reason: "disclosure_required",
       detail: "disclosure required",
-      remediation: { href: "/settings/llm" },
+      remediation: { href: "/agent-connections?capability=summary" },
     };
     activation.data.readiness.summary.state = "disclosure_required";
     activation.data.readiness.summary.disclosure!.required = true;
@@ -780,16 +798,15 @@ describe("/activate", () => {
     renderRoute("en");
 
     await user.click(screen.getByRole("button", { name: "Decline" }));
-    expect(activation.declineSummaryDisclosure).toHaveBeenCalledWith({
-      provider: "xai",
-      disclosureVersion: "xai-summary-v1",
-      data: "transcript_text",
-      destination: "xAI",
+    expect(activation.declineAgentConnectionDisclosure).toHaveBeenCalledWith({
+      connectionId: "direct-xai",
+      capability: "summary",
     });
+    expect(activation.declineSummaryDisclosure).not.toHaveBeenCalled();
     const blocker = screen.getByRole("alert");
     expect(blocker).toHaveTextContent("xAI remains selected");
     expect(blocker).toHaveTextContent("transcript text was not sent");
-    expect(screen.getByRole("link", { name: "Open AI Provider Settings" })).toHaveAttribute("href", "/settings/llm");
+    expect(screen.getByRole("link", { name: "Open AI Provider Settings" })).toHaveAttribute("href", "/agent-connections?capability=summary");
     expect(activation.updateConfig).not.toHaveBeenCalled();
     expect(activation.probeXai).not.toHaveBeenCalled();
   });
@@ -801,7 +818,7 @@ describe("/activate", () => {
       capability: "summary_readiness",
       reason: "readiness_failed",
       detail: "Agent probe failed",
-      remediation: { href: "/settings/llm" },
+      remediation: { href: "/agent-connections?capability=summary" },
     };
     activation.data.readiness.summary.selected = { provider: "codex", model: "runtime-managed" };
     activation.data.readiness.summary.state = "blocked";
@@ -822,10 +839,10 @@ describe("/activate", () => {
       capability: "summary_readiness",
       reason: "readiness_failed",
       detail: "probe failed",
-      remediation: { href: "/settings/llm" },
+      remediation: { href: "/agent-connections?capability=summary" },
     };
     activation.data.readiness.summary.state = "blocked";
-    activation.data.readiness.summary.remediation = { href: "/settings/llm" };
+    activation.data.readiness.summary.remediation = { href: "/agent-connections?capability=summary" };
     const user = userEvent.setup();
     renderRoute("en");
 
@@ -836,24 +853,28 @@ describe("/activate", () => {
     expect(screen.queryByText("Checking activation…")).not.toBeInTheDocument();
   });
 
-  it("changes Summary Provider only from the explicit user choice", async () => {
+  it("changes Summary only through the shared Agent Connection contract", async () => {
     activation.data = unresolvedData();
     activation.data.nextStep = "summary_provider";
     activation.data.blocker = {
       capability: "summary_readiness",
       reason: "readiness_required",
       detail: "probe required",
-      remediation: { href: "/settings/llm" },
+      remediation: { href: "/agent-connections?capability=summary" },
     };
     activation.data.readiness.summary.state = "blocked";
+    activation.data.readiness.summary.selected = { provider: "agent", model: "runtime-managed" };
     const user = userEvent.setup();
     renderRoute("en");
 
-    await user.click(screen.getByRole("radio", { name: "Supported Agent" }));
-    expect(activation.updateConfig).toHaveBeenCalledWith({
-      key: "intelligence.summary",
-      value: { provider: "agent", model: "runtime-managed" },
+    expect(screen.queryByRole("radio", { name: "Supported Agent" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("radio", { name: "xAI" }));
+    expect(activation.selectAgentConnection).toHaveBeenCalledWith({
+      connectionId: "direct-xai",
+      capability: "summary",
+      model: "grok-4.6",
     });
+    expect(activation.updateConfig).not.toHaveBeenCalled();
     expect(activation.probeXai).not.toHaveBeenCalled();
   });
 
@@ -919,8 +940,16 @@ describe("/activate", () => {
     expect(activation.updateConfig).not.toHaveBeenCalled();
 
     await user.click(screen.getByRole("button", { name: "Accept and select xAI" }));
-    expect(activation.acceptXaiDisclosure).toHaveBeenCalledOnce();
-    expect(activation.updateConfig).toHaveBeenCalledWith({ key: "transcription.engine", value: "xai" });
+    expect(activation.acceptAgentConnectionDisclosure).toHaveBeenCalledWith({
+      connectionId: "direct-xai",
+      capability: "transcription",
+    });
+    expect(activation.acceptXaiDisclosure).not.toHaveBeenCalled();
+    expect(activation.selectAgentConnection).toHaveBeenCalledWith({
+      connectionId: "direct-xai",
+      capability: "transcription",
+    });
+    expect(activation.updateConfig).not.toHaveBeenCalled();
   });
 
   it("localizes the xAI audio disclosure in Chinese", () => {
@@ -994,13 +1023,13 @@ describe("/activate", () => {
     activation.data.blocker = {
       capability: "xai_transcription",
       detail: "xAI probe failed",
-      remediation: { href: "/settings/transcription" },
+      remediation: { href: "/agent-connections?connection=direct-xai&capability=transcription" },
     };
     activation.data.readiness.transcription.selected = "xai";
     activation.data.readiness.transcription.state = "blocked";
     activation.data.readiness.transcription.xai.disclosureRequired = false;
     activation.data.readiness.transcription.xai.acceptedDisclosureVersion = "xai-audio-v1";
-    activation.data.readiness.transcription.remediation = { href: "/settings/transcription" };
+    activation.data.readiness.transcription.remediation = { href: "/agent-connections?connection=direct-xai&capability=transcription" };
     const user = userEvent.setup();
     renderRoute("en");
 

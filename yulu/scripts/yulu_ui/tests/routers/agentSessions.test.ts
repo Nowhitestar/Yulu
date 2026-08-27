@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { agentSessionsRouter } from "../../src/routers/agentSessions.js";
 import { createCaller, type AppContext } from "../../src/trpc.js";
 import { updateAgentSessionNativeSession } from "../../src/agentSessionStore.js";
+import { XAI_CONVERSATION_DISCLOSURE_VERSION } from "../../src/conversationDataDisclosure.js";
 
 function makeCtx(configDir: string, config: Record<string, unknown> = {
   intelligence: { conversation: { provider: "agent", model: "runtime-managed" } },
@@ -14,6 +15,15 @@ function makeCtx(configDir: string, config: Record<string, unknown> = {
     paths: { configDir },
     config: { read: () => config },
     xaiCredentials: { status: async () => ({ connected: true, source: "oauth" }) },
+    host: {
+      getAgentConnectionDisclosure: () => ({
+        connectionId: "direct-xai",
+        capability: "conversation",
+        disclosureVersion: XAI_CONVERSATION_DISCLOSURE_VERSION,
+        decision: "accepted",
+        decidedAt: "2026-08-27T00:00:00.000Z",
+      }),
+    },
   } as unknown as AppContext;
 }
 
@@ -89,14 +99,27 @@ describe("agentSessionsRouter", () => {
     });
   });
 
-  it("pins the exact xAI model and credential source from the server", async () => {
+  it("requires the separate conversation disclosure before pinning the exact xAI identity", async () => {
     const root = mkdtempSync(join(tmpdir(), "agent-sessions-"));
     roots.push(root);
     const config = {
       intelligence: { conversation: { provider: "xai", model: "grok-4.6-exact" } },
       llm: { enabled: true, command: ["codex"] },
     };
-    const caller = createCaller(agentSessionsRouter, makeCtx(root, config));
+    const ctx = makeCtx(root, config);
+    let accepted = false;
+    ctx.host.getAgentConnectionDisclosure = () => accepted ? {
+      connectionId: "direct-xai",
+      capability: "conversation",
+      disclosureVersion: XAI_CONVERSATION_DISCLOSURE_VERSION,
+      decision: "accepted",
+      decidedAt: "2026-08-27T00:00:00.000Z",
+    } : null;
+    const caller = createCaller(agentSessionsRouter, ctx);
+
+    await expect(caller.create({ agent: "codex", title: "Pinned xAI" }))
+      .rejects.toThrow("conversation data path disclosure");
+    accepted = true;
 
     const session = await caller.create({ agent: "codex", title: "Pinned xAI" });
     expect(session).toMatchObject({

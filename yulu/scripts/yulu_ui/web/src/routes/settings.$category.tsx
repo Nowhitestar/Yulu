@@ -1,6 +1,6 @@
 // web/src/routes/settings.$category.tsx
 import type { ReactNode } from "react";
-import { useParams, useOutletContext } from "react-router";
+import { Link, useParams, useOutletContext } from "react-router";
 import { categoryMeta } from "../components/settings/categories.js";
 import { useT } from "../i18n/LanguageProvider.js";
 import type { SettingsOutletContext } from "./settings.js";
@@ -13,7 +13,19 @@ import { StorageSection } from "../components/settings/StorageSection.js";
 import { TranscriptionSection } from "../components/settings/TranscriptionSection.js";
 import { VoiceInputSection } from "../components/settings/VoiceInputSection.js";
 import { AutomationSection } from "../components/settings/AutomationSection.js";
-import { ProviderSection } from "../components/settings/ProviderSection.js";
+
+function AgentConnectionSettingsLink() {
+  const t = useT();
+  return (
+    <section className="settings-section" id="agent-connections-settings">
+      <h2 className="settings-section-h">{t("settings.connectionCenter.heading")}</h2>
+      <p className="settings-section-sub">{t("settings.connectionCenter.sub")}</p>
+      <Link className="settings-link-button" to="/agent-connections">
+        {t("settings.connectionCenter.open")}
+      </Link>
+    </section>
+  );
+}
 
 /**
  * Maps a settings category to the rich section components that render its
@@ -39,7 +51,7 @@ const CATEGORY_SECTIONS: Record<string, (tracker: SettingsRestartTracker) => Rea
     </>
   ),
   transcription: (tracker) => <TranscriptionSection tracker={tracker} />,
-  llm: (tracker) => <ProviderSection tracker={tracker} />,
+  llm: () => <AgentConnectionSettingsLink />,
   voice: (tracker) => <VoiceInputSection tracker={tracker} />,
   automation: (tracker) => <AutomationSection tracker={tracker} />,
 };

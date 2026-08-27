@@ -132,6 +132,61 @@ export interface SummaryDataPathDisclosure {
   decidedAt: string;
 }
 
+export interface PersistedAgentConnection {
+  id: string;
+  kind: "direct-provider" | "legacy-custom";
+  adapter: string;
+  label: string;
+  lifecycle: "available" | "legacy";
+  settings: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PersistedAgentConnectionCandidate {
+  id: string;
+  adapter: string;
+  label: string;
+  source: "discovered" | "migrated";
+  detectedPath: string | null;
+  settings: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PersistedAgentConnectionReadiness {
+  id: string;
+  connectionId: string;
+  capability: "transcription" | "summary" | "conversation";
+  status: "ready" | "failed";
+  model: string;
+  credentialSource: XaiCredentialSource | null;
+  detail: string;
+  reason: "invalid_model" | "readiness_failed" | null;
+  runtimeEvidence: {
+    adapter: string;
+    transport: string;
+    runtimeVersion: string | null;
+    requestedProvider: string;
+    requestedModel: string;
+    actualProvider: string | null;
+    actualModel: string | null;
+    requestId: string | null;
+    sessionId: string | null;
+    terminalStatus: "ready" | "failed";
+    fallbackOccurred: boolean;
+  };
+  testedAt: string;
+}
+
+export interface AgentConnectionDataPathDisclosure {
+  connectionId: string;
+  capability: "transcription" | "summary" | "conversation";
+  disclosureVersion: string;
+  decision: "accepted" | "declined";
+  decidedAt: string;
+}
+
 function summaryDisclosureIdentity(provider: string, disclosureVersion: string) {
   const normalized = provider.trim().toLowerCase();
   const version = disclosureVersion.trim();
@@ -262,6 +317,232 @@ export class HostStore {
 
   close(): void {
     this.db.close();
+  }
+
+  listAgentConnectionRecords(): PersistedAgentConnection[] {
+    const rows = this.db.prepare(`
+      SELECT * FROM agent_connections ORDER BY created_at, id
+    `).all() as Array<{
+      id: string;
+      kind: PersistedAgentConnection["kind"];
+      adapter: string;
+      label: string;
+      lifecycle: PersistedAgentConnection["lifecycle"];
+      settings_json: string;
+      created_at: string;
+      updated_at: string;
+    }>;
+    return rows.map((row) => ({
+      id: row.id,
+      kind: row.kind,
+      adapter: row.adapter,
+      label: row.label,
+      lifecycle: row.lifecycle,
+      settings: JSON.parse(row.settings_json) as Record<string, unknown>,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    }));
+  }
+
+  upsertAgentConnectionRecord(input: Omit<PersistedAgentConnection, "createdAt" | "updatedAt">): void {
+    const timestamp = now();
+    this.db.prepare(`
+      INSERT INTO agent_connections (
+        id, kind, adapter, label, lifecycle, settings_json, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        kind = excluded.kind,
+        adapter = excluded.adapter,
+        label = excluded.label,
+        lifecycle = excluded.lifecycle,
+        settings_json = excluded.settings_json,
+        updated_at = excluded.updated_at
+    `).run(
+      input.id,
+      input.kind,
+      input.adapter,
+      input.label,
+      input.lifecycle,
+      JSON.stringify(input.settings),
+      timestamp,
+      timestamp,
+    );
+  }
+
+  deleteAgentConnectionRecord(id: string): void {
+    this.db.prepare("DELETE FROM agent_connections WHERE id = ?").run(id);
+  }
+
+  listAgentConnectionCandidates(): PersistedAgentConnectionCandidate[] {
+    const rows = this.db.prepare(`
+      SELECT * FROM agent_connection_candidates ORDER BY created_at, id
+    `).all() as Array<{
+      id: string;
+      adapter: string;
+      label: string;
+      source: PersistedAgentConnectionCandidate["source"];
+      detected_path: string | null;
+      settings_json: string;
+      created_at: string;
+      updated_at: string;
+    }>;
+    return rows.map((row) => ({
+      id: row.id,
+      adapter: row.adapter,
+      label: row.label,
+      source: row.source,
+      detectedPath: row.detected_path,
+      settings: JSON.parse(row.settings_json) as Record<string, unknown>,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    }));
+  }
+
+  upsertAgentConnectionCandidate(input: Omit<PersistedAgentConnectionCandidate, "createdAt" | "updatedAt">): void {
+    const timestamp = now();
+    this.db.prepare(`
+      INSERT INTO agent_connection_candidates (
+        id, adapter, label, source, detected_path, settings_json, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        adapter = excluded.adapter,
+        label = excluded.label,
+        source = excluded.source,
+        detected_path = excluded.detected_path,
+        settings_json = excluded.settings_json,
+        updated_at = excluded.updated_at
+    `).run(
+      input.id,
+      input.adapter,
+      input.label,
+      input.source,
+      input.detectedPath,
+      JSON.stringify(input.settings),
+      timestamp,
+      timestamp,
+    );
+  }
+
+  hasAgentConnectionMigration(id: string): boolean {
+    return this.db.prepare("SELECT 1 FROM agent_connection_migrations WHERE id = ?")
+      .get(id) !== undefined;
+  }
+
+  recordAgentConnectionMigration(id: string): void {
+    this.db.prepare(`
+      INSERT OR IGNORE INTO agent_connection_migrations (id, completed_at) VALUES (?, ?)
+    `).run(id, now());
+  }
+
+  listAgentConnectionReadinessHistory(
+    connectionId: string,
+    capability: PersistedAgentConnectionReadiness["capability"],
+    limit = 10,
+  ): PersistedAgentConnectionReadiness[] {
+    const rows = this.db.prepare(`
+      SELECT * FROM agent_connection_readiness_history
+      WHERE connection_id = ? AND capability = ?
+      ORDER BY tested_at DESC, id DESC LIMIT ?
+    `).all(connectionId, capability, Math.max(1, Math.min(100, limit))) as Array<{
+      id: string;
+      connection_id: string;
+      capability: PersistedAgentConnectionReadiness["capability"];
+      status: PersistedAgentConnectionReadiness["status"];
+      model: string;
+      credential_source: XaiCredentialSource | null;
+      detail: string;
+      reason: PersistedAgentConnectionReadiness["reason"];
+      runtime_evidence_json: string;
+      tested_at: string;
+    }>;
+    return rows.map((row) => ({
+      id: row.id,
+      connectionId: row.connection_id,
+      capability: row.capability,
+      status: row.status,
+      model: row.model,
+      credentialSource: row.credential_source,
+      detail: row.detail,
+      reason: row.reason,
+      runtimeEvidence: JSON.parse(row.runtime_evidence_json) as PersistedAgentConnectionReadiness["runtimeEvidence"],
+      testedAt: row.tested_at,
+    }));
+  }
+
+  recordAgentConnectionReadiness(
+    input: Omit<PersistedAgentConnectionReadiness, "id">,
+  ): PersistedAgentConnectionReadiness {
+    const id = randomUUID();
+    this.db.prepare(`
+      INSERT INTO agent_connection_readiness_history (
+        id, connection_id, capability, status, model, credential_source, detail, reason,
+        runtime_evidence_json, tested_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      id,
+      input.connectionId,
+      input.capability,
+      input.status,
+      input.model,
+      input.credentialSource,
+      input.detail,
+      input.reason,
+      JSON.stringify(input.runtimeEvidence),
+      input.testedAt,
+    );
+    return { id, ...input };
+  }
+
+  clearAgentConnectionReadinessHistory(connectionId: string): void {
+    this.db.prepare("DELETE FROM agent_connection_readiness_history WHERE connection_id = ?")
+      .run(connectionId);
+  }
+
+  getAgentConnectionDisclosure(
+    connectionId: string,
+    capability: AgentConnectionDataPathDisclosure["capability"],
+  ): AgentConnectionDataPathDisclosure | null {
+    const row = this.db.prepare(`
+      SELECT * FROM agent_connection_disclosures
+      WHERE connection_id = ? AND capability = ?
+    `).get(connectionId, capability) as {
+      connection_id: string;
+      capability: AgentConnectionDataPathDisclosure["capability"];
+      disclosure_version: string;
+      decision: AgentConnectionDataPathDisclosure["decision"];
+      decided_at: string;
+    } | undefined;
+    return row ? {
+      connectionId: row.connection_id,
+      capability: row.capability,
+      disclosureVersion: row.disclosure_version,
+      decision: row.decision,
+      decidedAt: row.decided_at,
+    } : null;
+  }
+
+  recordAgentConnectionDisclosure(input: {
+    connectionId: string;
+    capability: AgentConnectionDataPathDisclosure["capability"];
+    disclosureVersion: string;
+    decision: AgentConnectionDataPathDisclosure["decision"];
+  }): AgentConnectionDataPathDisclosure {
+    const decidedAt = now();
+    this.db.prepare(`
+      INSERT INTO agent_connection_disclosures (
+        connection_id, capability, disclosure_version, decision, decided_at
+      ) VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(connection_id, capability) DO UPDATE SET
+        disclosure_version = excluded.disclosure_version,
+        decision = excluded.decision,
+        decided_at = excluded.decided_at
+    `).run(input.connectionId, input.capability, input.disclosureVersion, input.decision, decidedAt);
+    return { ...input, decidedAt };
+  }
+
+  clearAgentConnectionDisclosures(connectionId: string): void {
+    this.db.prepare("DELETE FROM agent_connection_disclosures WHERE connection_id = ?")
+      .run(connectionId);
   }
 
   enqueueRecording(input: {
@@ -1036,6 +1317,10 @@ export class HostStore {
     return this.getCloudTranscriptionConsent()!;
   }
 
+  clearCloudTranscriptionConsent(): void {
+    this.db.prepare("DELETE FROM cloud_transcription_consent WHERE id = 1").run();
+  }
+
   getSummaryDataPathDisclosure(provider: string): SummaryDataPathDisclosure | null {
     const normalized = provider.trim().toLowerCase();
     const row = this.db.prepare(`
@@ -1079,6 +1364,11 @@ export class HostStore {
         decided_at = excluded.decided_at
     `).run(identity.provider, identity.disclosureVersion, now());
     return this.getSummaryDataPathDisclosure(identity.provider)!;
+  }
+
+  clearSummaryDataPathDisclosure(provider: string): void {
+    this.db.prepare("DELETE FROM summary_data_path_disclosures WHERE provider = ?")
+      .run(provider.trim().toLowerCase());
   }
 
   recordCoreActivationEvidence(evidence: CoreActivationEvidence): CoreActivationEvidence {
@@ -1718,7 +2008,63 @@ export class HostStore {
         decision TEXT NOT NULL CHECK(decision IN ('accepted', 'declined')),
         decided_at TEXT NOT NULL
       );
+
+      CREATE TABLE IF NOT EXISTS agent_connections (
+        id TEXT PRIMARY KEY,
+        kind TEXT NOT NULL CHECK(kind IN ('direct-provider', 'legacy-custom')),
+        adapter TEXT NOT NULL,
+        label TEXT NOT NULL,
+        lifecycle TEXT NOT NULL CHECK(lifecycle IN ('available', 'legacy')),
+        settings_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS agent_connection_candidates (
+        id TEXT PRIMARY KEY,
+        adapter TEXT NOT NULL,
+        label TEXT NOT NULL,
+        source TEXT NOT NULL CHECK(source IN ('discovered', 'migrated')),
+        detected_path TEXT,
+        settings_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS agent_connection_migrations (
+        id TEXT PRIMARY KEY,
+        completed_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS agent_connection_readiness_history (
+        id TEXT PRIMARY KEY,
+        connection_id TEXT NOT NULL REFERENCES agent_connections(id) ON DELETE CASCADE,
+        capability TEXT NOT NULL CHECK(capability IN ('transcription', 'summary', 'conversation')),
+        status TEXT NOT NULL CHECK(status IN ('ready', 'failed')),
+        model TEXT NOT NULL,
+        credential_source TEXT CHECK(credential_source IN ('oauth', 'api-key')),
+        detail TEXT NOT NULL,
+        reason TEXT CHECK(reason IN ('invalid_model', 'readiness_failed')),
+        runtime_evidence_json TEXT NOT NULL DEFAULT '{}',
+        tested_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_agent_connection_readiness
+        ON agent_connection_readiness_history(connection_id, capability, tested_at DESC);
+
+      CREATE TABLE IF NOT EXISTS agent_connection_disclosures (
+        connection_id TEXT NOT NULL REFERENCES agent_connections(id) ON DELETE CASCADE,
+        capability TEXT NOT NULL CHECK(capability IN ('transcription', 'summary', 'conversation')),
+        disclosure_version TEXT NOT NULL,
+        decision TEXT NOT NULL CHECK(decision IN ('accepted', 'declined')),
+        decided_at TEXT NOT NULL,
+        PRIMARY KEY(connection_id, capability)
+      );
     `);
+    const readinessColumns = this.db.prepare("PRAGMA table_info(agent_connection_readiness_history)")
+      .all() as Array<{ name: string }>;
+    if (!readinessColumns.some((column) => column.name === "runtime_evidence_json")) {
+      this.db.exec("ALTER TABLE agent_connection_readiness_history ADD COLUMN runtime_evidence_json TEXT NOT NULL DEFAULT '{}'");
+    }
     const columns = this.db.prepare("PRAGMA table_info(agent_tasks)").all() as Array<{ name: string }>;
     if (!columns.some((column) => column.name === "instructions")) {
       this.db.exec("ALTER TABLE agent_tasks ADD COLUMN instructions TEXT NOT NULL DEFAULT ''");

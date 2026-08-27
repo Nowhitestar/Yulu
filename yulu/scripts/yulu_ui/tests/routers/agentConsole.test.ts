@@ -39,6 +39,7 @@ function makeCtx(
   latestForRecording: (stem: string) => unknown = () => null,
 ): AppContext {
   return {
+    uiMutationAuthorized: true,
     paths: {
       moviesDir,
       configDir: join(moviesDir, "config"),
@@ -201,7 +202,7 @@ describe("agentConsoleRouter", () => {
     });
   });
 
-  it("connectAgent prefers the selected Agent and clears explicit commands", async () => {
+  it("keeps a discovered runtime candidate-only and preserves the legacy selection", async () => {
     const root = mkdtempSync(join(tmpdir(), "agent-console-"));
     roots.push(root);
     const moviesDir = join(root, "movies");
@@ -216,11 +217,12 @@ describe("agentConsoleRouter", () => {
 
     const result = await createCaller(agentConsoleRouter, ctx).connectAgent({ agent: "codex" });
 
-    expect(result.ok).toBe(true);
-    expect(configState.llm).toMatchObject({ enabled: true, command: null, agent: { provider: "codex" } });
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("Agent Connection Center");
+    expect(configState.llm).toMatchObject({ enabled: false, command: ["python3", "legacy.py"], agent: { provider: "auto" } });
   });
 
-  it("refuses to select an Agent whose CLI is not installed", async () => {
+  it("does not use the legacy selector even when a candidate CLI is absent", async () => {
     const root = mkdtempSync(join(tmpdir(), "agent-console-"));
     roots.push(root);
     const moviesDir = join(root, "movies");
@@ -234,7 +236,7 @@ describe("agentConsoleRouter", () => {
     const result = await createCaller(agentConsoleRouter, makeCtx(moviesDir, configState)).connectAgent({ agent: "codex" });
 
     expect(result).toMatchObject({ ok: false, activeAgent: "hermes" });
-    expect(result.error).toContain("Codex CLI 未找到");
+    expect(result.error).toContain("Agent Connection Center");
     expect(configState.llm.agent.provider).toBe("hermes");
   });
 
@@ -262,16 +264,13 @@ describe("agentConsoleRouter", () => {
       expect.objectContaining({ id: "openclaw", found: true, supported: true }),
     ]));
 
-    await caller.connectAgent({ agent: "hermes" });
+    await expect(caller.connectAgent({ agent: "hermes" })).resolves.toMatchObject({ ok: false });
     result = await caller.overview();
-    expect(result.activeAgent).toBe("hermes");
-    expect(result.agents.find((agent: { id: string }) => agent.id === "hermes")).toMatchObject({
-      connected: true,
-      runtimePreview: expect.stringContaining("hermes"),
-    });
+    expect(result.activeAgent).toBe("codex");
+    expect(result.agents.find((agent: { id: string }) => agent.id === "hermes")).toMatchObject({ connected: false });
     expect(result.plugins.current.find((plugin: { id: string }) => plugin.id === "summary")).toMatchObject({
       status: "configured",
-      agent: "hermes",
+      agent: "codex",
     });
   });
 
@@ -312,7 +311,7 @@ describe("agentConsoleRouter", () => {
       status: "unconfigured",
     });
 
-    await caller.connectAgent({ agent: "claude" });
+    configState.llm.agent.provider = "claude";
     result = await caller.overview();
     expect(result.plugins.current.find((plugin: { id: string }) => plugin.id === "notion")).toMatchObject({
       status: "unconfigured",

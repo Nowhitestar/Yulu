@@ -229,4 +229,17 @@ describe("providers router", () => {
       .rejects.toThrow("UI mutation bearer required");
     expect(ctx.host.recordCloudTranscriptionConsent).not.toHaveBeenCalled();
   });
+
+  it("requires the same authenticated UI mutation boundary for credential and probe actions", async () => {
+    const { caller, ctx } = setup(false);
+
+    await expect(caller.authorize()).rejects.toThrow("UI mutation bearer required");
+    await expect(caller.setApiKey({ apiKey: "submitted-once" }))
+      .rejects.toThrow("UI mutation bearer required");
+    await expect(caller.probe({ capability: "conversation" }))
+      .rejects.toThrow("UI mutation bearer required");
+    expect(ctx.xaiCredentials.authorize).not.toHaveBeenCalled();
+    expect(ctx.xaiCredentials.setApiKey).not.toHaveBeenCalled();
+    expect(ctx.xaiText.request).not.toHaveBeenCalled();
+  });
 });

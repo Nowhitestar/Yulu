@@ -1,7 +1,7 @@
 import { accessSync, constants, existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { delimiter, join } from "node:path";
 import { z } from "zod";
-import { router, publicProcedure } from "../trpc.js";
+import { router, publicProcedure, uiMutationProcedure } from "../trpc.js";
 import { envWithFallbackPath } from "../executables.js";
 import { resolveAgentRuntime, commandPreview } from "../agentRuntime.js";
 import { ipcSend } from "../ipc.js";
@@ -547,28 +547,15 @@ export const agentConsoleRouter = router({
       };
     }),
 
-  connectAgent: publicProcedure
+  connectAgent: uiMutationProcedure
     .input(CONNECT_AGENT_SCHEMA)
     .mutation(({ ctx, input }) => {
       const current = ctx.config.read();
-      const selected = detectAgents(current, ctx.paths.scriptDir, ctx.paths.moviesDir)
-        .find((agent) => agent.id === input.agent);
-      if (!selected?.found) {
-        return {
-          ok: false as const,
-          error: `${AGENT_META[input.agent].name} 未找到，请先安装 CLI 后重新检测。`,
-          activeAgent: activeAgent(current, ctx.paths.scriptDir, ctx.paths.moviesDir),
-          agents: detectAgents(current, ctx.paths.scriptDir, ctx.paths.moviesDir),
-        };
-      }
-      ctx.config.update("llm.enabled", true);
-      ctx.config.update("llm.command", null);
-      ctx.config.update("llm.agent.provider", input.agent);
-      const config = ctx.config.read();
       return {
-        ok: true as const,
-        activeAgent: activeAgent(config, ctx.paths.scriptDir, ctx.paths.moviesDir),
-        agents: detectAgents(config, ctx.paths.scriptDir, ctx.paths.moviesDir),
+        ok: false as const,
+        error: `${AGENT_META[input.agent].name} is a Connection Candidate. Use Agent Connection Center after a supported production adapter is available.`,
+        activeAgent: activeAgent(current, ctx.paths.scriptDir, ctx.paths.moviesDir),
+        agents: detectAgents(current, ctx.paths.scriptDir, ctx.paths.moviesDir),
       };
     }),
 

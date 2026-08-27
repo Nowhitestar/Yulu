@@ -527,31 +527,20 @@ describe("AgentConsole", () => {
     expect(getByRole("menuitem", { name: /更多分享渠道/ })).toBeInTheDocument();
   });
 
-  it("switches only to installed conversation Agents", () => {
-    const { getByText } = wrap();
+  it("opens the shared Agent Connection Center instead of mutating a separate Agent selection", () => {
+    const { getByText, getByRole } = wrap();
     fireEvent.click(getByText("Agents"));
-    fireEvent.click(getByText("更换"));
-    const selector = getByText("选择对话 Agent").closest(".agent-selector-panel") as HTMLElement;
-    const hermesButton = within(selector).getByText("Hermes").closest("button") as HTMLButtonElement;
-    const openClawButton = within(selector).getByText("OpenClaw").closest("button") as HTMLButtonElement;
-
-    expect(hermesButton).not.toBeDisabled();
-    expect(openClawButton).toBeDisabled();
-    fireEvent.click(within(selector).getByText("Claude Code"));
-    expect(connectAgentMutate).toHaveBeenCalledWith(
-      { agent: "claude" },
-      expect.objectContaining({ onSuccess: expect.any(Function), onError: expect.any(Function) }),
+    expect(getByRole("link", { name: "管理 Agent 连接" })).toHaveAttribute(
+      "href",
+      "/agent-connections?capability=conversation",
     );
-    expect(getByText("对话 Agent 已切换为 Claude Code")).toBeInTheDocument();
+    expect(connectAgentMutate).not.toHaveBeenCalled();
   });
 
-  it("runs Agent detection with visible feedback", async () => {
-    const { getByText, findByText } = wrap();
+  it("does not scan or probe runtimes merely by opening the Agent inspector", () => {
+    const { getByText } = wrap();
     fireEvent.click(getByText("Agents"));
-    fireEvent.click(getByText("管理 Agents 与 Connectors"));
-    fireEvent.click(getByText("重新检测"));
-    expect(detectRefetch).toHaveBeenCalled();
-    expect(await findByText("已找到 4/4 个 Agent CLI")).toBeInTheDocument();
+    expect(detectRefetch).not.toHaveBeenCalled();
   });
 
   it("shows every Agent-owned Connector without add or remove controls", () => {
@@ -713,7 +702,10 @@ describe("AgentConsole", () => {
     expect(getByText("xAI · grok-4.6-exact 请求失败，Yulu 没有切换服务。")).toBeInTheDocument();
     expect(getByText("Preserved answer")).toBeInTheDocument();
     expect(container.querySelector(".agent-composer textarea")).toBeDisabled();
-    expect(getByRole("link", { name: "打开智能服务设置" })).toHaveAttribute("href", "/settings/llm");
+    expect(getByRole("link", { name: "打开智能服务设置" })).toHaveAttribute(
+      "href",
+      "/agent-connections?connection=direct-xai&capability=conversation",
+    );
     expect(askMutateAsync).not.toHaveBeenCalled();
 
     fireEvent.click(getByRole("button", { name: "使用同一服务重试" }));
@@ -756,7 +748,10 @@ describe("AgentConsole", () => {
     expect(await findByText("Provider paused")).toHaveAttribute("role", "alert");
     expect(getByText("xAI · grok-4.6-exact failed. Yulu did not switch providers.")).toBeInTheDocument();
     expect(getByRole("button", { name: "Retry same provider" })).toBeInTheDocument();
-    expect(getByRole("link", { name: "Open AI Providers" })).toHaveAttribute("href", "/settings/llm");
+    expect(getByRole("link", { name: "Open AI Providers" })).toHaveAttribute(
+      "href",
+      "/agent-connections?connection=direct-xai&capability=conversation",
+    );
     expect(getAllByText("Provider changes apply to a new conversation.")).toHaveLength(2);
     expect(getByText(/^xAI is pinned to this conversation · 2 messages · /)).toBeInTheDocument();
     expect(queryByText(/条消息/)).toBeNull();

@@ -359,9 +359,7 @@ export function AgentConsole() {
   const utils = trpc.useUtils();
   const [mode, setMode] = useState<ConsoleMode>("ask");
   const [inspectorOpen, setInspectorOpen] = useState(false);
-  const [agentManagerOpen, setAgentManagerOpen] = useState(false);
   const [connectorGuide, setConnectorGuide] = useState<ConnectorGuide | null>(null);
-  const [detectMessage, setDetectMessage] = useState<string>("点击后重新扫描本机 CLI 路径");
   const [notice, setNotice] = useState<string | null>(null);
   const [sharingStem, setSharingStem] = useState<string | null>(null);
 
@@ -425,15 +423,11 @@ export function AgentConsole() {
   };
 
   const runDetectAgents = async () => {
-    setDetectMessage("正在扫描 PATH 和常见安装目录...");
     try {
-      const result = await detectAgents.refetch();
+      await detectAgents.refetch();
       await overview.refetch();
-      const agents = (result.data?.agents as ConsoleAgent[] | undefined) ?? [];
-      const found = agents.filter((agent) => agent.found).length;
-      setDetectMessage(`已找到 ${found}/${agents.length || 4} 个 Agent CLI`);
     } catch (err) {
-      setDetectMessage((err as Error).message || "探测失败");
+      setNotice((err as Error).message || "探测失败");
     }
   };
 
@@ -521,32 +515,13 @@ export function AgentConsole() {
         <AgentRolesPanel
           activeAgent={activeAgent}
           recordingAgent={recordingAgent}
-          onChange={() => setAgentManagerOpen(true)}
         />
-        {agentManagerOpen && <AgentSelector
-          agents={(overview.data?.agents as ConsoleAgent[] | undefined) ?? []}
-          detecting={detectAgents.isFetching}
-          detectMessage={detectMessage}
-          onDetect={() => void runDetectAgents()}
-          onConnected={(name) => {
-            setAgentManagerOpen(false);
-            setNotice(`对话 Agent 已切换为 ${name}`);
-          }}
-          onError={setNotice}
-        />}
         <ConnectorsPanel
           plugins={plugins}
           agentName={activeAgent?.name ?? "当前 Agent"}
           configuring={configurePlugin.isPending}
           onManage={runConfigurePlugin}
         />
-        <button
-          type="button"
-          className="agent-manager-button"
-          onClick={() => setAgentManagerOpen((open) => !open)}
-        >
-          {agentManagerOpen ? "收起 Agent 管理" : "管理 Agents 与 Connectors"}
-        </button>
       </aside>}
       {connectorGuide && (
         <ConnectorGuideModal
@@ -1119,6 +1094,9 @@ function AskMeetings({
             {sessionStatus === "paused" && identity && (
               <PausedConversation
                 identity={identity}
+                repairPath={provider === "xai"
+                  ? "/agent-connections?connection=direct-xai&capability=conversation"
+                  : "/agent-connections?capability=conversation"}
                 reason={pausedReason}
                 retrying={ask.isPending}
                 onRetry={() => void retrySameProvider()}
@@ -1187,6 +1165,9 @@ function AskMeetings({
           {sessionStatus === "paused" && identity && (
             <PausedConversation
               identity={identity}
+              repairPath={provider === "xai"
+                ? "/agent-connections?connection=direct-xai&capability=conversation"
+                : "/agent-connections?capability=conversation"}
               reason={pausedReason}
               retrying={ask.isPending}
               onRetry={() => void retrySameProvider()}
@@ -1223,12 +1204,14 @@ function ChatHeader({ title, identity, sub }: { title: string; identity: string 
 
 function PausedConversation({
   identity,
+  repairPath,
   reason,
   retrying,
   onRetry,
   onNew,
 }: {
   identity: string;
+  repairPath: string;
   reason?: string;
   retrying: boolean;
   onRetry: () => void;
@@ -1242,7 +1225,7 @@ function PausedConversation({
       {reason && <em>{reason}</em>}
       <div>
         <button type="button" disabled={retrying} onClick={onRetry}>{t("agentConsole.provider.paused.retry")}</button>
-        <Link to="/settings/llm">{t("settings.providers.open")}</Link>
+        <Link to={repairPath}>{t("settings.providers.open")}</Link>
         <button type="button" onClick={onNew}>{t("agentConsole.provider.paused.newConversation")}</button>
       </div>
       <small>{t("agentConsole.provider.newSessionNote")}</small>
@@ -1588,11 +1571,9 @@ function RunTasks({
 function AgentRolesPanel({
   activeAgent,
   recordingAgent,
-  onChange,
 }: {
   activeAgent: ConsoleAgent | null;
   recordingAgent: RecordingAgentStatus;
-  onChange: () => void;
 }) {
   return (
     <section className="agent-panel agent-role-panel">
@@ -1604,7 +1585,7 @@ function AgentRolesPanel({
             <strong>对话与手动操作</strong>
             <em>{activeAgent?.name ?? "未选择 Agent"}</em>
           </span>
-          <button type="button" className="agent-cap-action" onClick={onChange}>更换</button>
+          <Link className="agent-cap-action" to="/agent-connections?capability=conversation">管理 Agent 连接</Link>
         </div>
         <div className="agent-role-row">
           <span className="agent-role-icon"><Cpu size={17} strokeWidth={1.9} /></span>
@@ -1624,76 +1605,6 @@ function AgentRolesPanel({
         实时字幕、最终转写和听写由 Yulu 使用所选音频引擎执行；摘要与 Connector 由 Agent 执行
         {!recordingAgent.available && recordingAgent.reason ? `：${recordingAgent.reason}` : ""}
       </p>
-    </section>
-  );
-}
-
-function AgentSelector({
-  agents,
-  detecting,
-  detectMessage,
-  onDetect,
-  onConnected,
-  onError,
-}: {
-  agents: ConsoleAgent[];
-  detecting: boolean;
-  detectMessage: string;
-  onDetect: () => void;
-  onConnected: (name: string) => void;
-  onError: (message: string) => void;
-}) {
-  const connect = trpc.agentConsole.connectAgent.useMutation();
-  const utils = trpc.useUtils();
-  const ordered = agents.length > 0 ? agents : (["codex", "claude", "hermes", "openclaw"] as AgentId[]).map((id) => ({
-    id,
-    name: agentName(id),
-    command: id,
-    found: false,
-    path: "",
-    supported: true,
-    connected: false,
-    unavailableReason: "",
-    runtimePreview: "",
-  }));
-  return (
-    <section className="agent-panel agent-selector-panel">
-      <div className="agent-panel-head">
-        <span>选择对话 Agent</span>
-        <button type="button" className="agent-link-btn" disabled={detecting} onClick={onDetect}>
-          {detecting ? <Loader2 className="spin" size={13} strokeWidth={2} /> : <RefreshCw size={13} strokeWidth={2} />}
-          {detecting ? "检测中" : "重新检测"}
-        </button>
-      </div>
-      <div className={"agent-detect-state" + (detecting ? " running" : "")}>{detectMessage}</div>
-      <div className="agent-selector-list">
-        {ordered.map((agent) => {
-          const disabled = agent.connected || !agent.supported || !agent.found || connect.isPending;
-          return (
-            <button
-              key={agent.id}
-              type="button"
-              className={`agent-selector-row${agent.connected ? " active" : ""}${disabled ? " disabled" : ""}`}
-              disabled={disabled}
-              onClick={() => {
-                connect.mutate({ agent: agent.id }, {
-                  onSuccess: (result) => {
-                    if (result.ok) onConnected(agent.name);
-                    else onError(result.error);
-                  },
-                  onError: (error) => onError(error.message),
-                  onSettled: () => void utils.agentConsole.overview.invalidate(),
-                });
-              }}
-            >
-              <span className="agent-selector-main">{AGENT_ICONS[agent.id]}<span>{agent.name}</span></span>
-              <span className="agent-selector-state">
-                {agent.connected ? "当前使用" : agent.found ? "可切换" : "未安装"}
-              </span>
-            </button>
-          );
-        })}
-      </div>
     </section>
   );
 }

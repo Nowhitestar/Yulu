@@ -20,6 +20,7 @@ import { localCaptionRouter } from "./localCaption.js";
 import { xaiAudioRouter } from "./xaiAudio.js";
 import { providersRouter } from "./providers.js";
 import { activationRouter } from "./activation.js";
+import { agentConnectionsRouter } from "./agentConnections.js";
 
 export const appRouter = router({
   recordings:   recordingsRouter,
@@ -43,6 +44,7 @@ export const appRouter = router({
   xaiAudio: xaiAudioRouter,
   providers: providersRouter,
   activation: activationRouter,
+  agentConnections: agentConnectionsRouter,
 });
 
 export type AppRouter = typeof appRouter;

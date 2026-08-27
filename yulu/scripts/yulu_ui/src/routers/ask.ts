@@ -17,6 +17,7 @@ import {
   runSearchCli,
   type ConversationSource,
 } from "./search.js";
+import { hasCurrentXaiConversationDisclosure } from "../conversationDataDisclosure.js";
 
 const MAX_QUESTION_CHARS = 2_000;
 const MAX_SOURCE_COUNT = 8;
@@ -62,10 +63,12 @@ function agentOwnedSearchProjection(question: string) {
   };
 }
 
-function recoveryActions() {
+function recoveryActions(provider: string) {
   return {
     retry: "same_snapshot" as const,
-    settingsPath: "/settings/llm",
+    settingsPath: provider === "xai"
+      ? "/agent-connections?connection=direct-xai&capability=conversation"
+      : "/agent-connections?capability=conversation",
     newConversation: true,
   };
 }
@@ -110,7 +113,7 @@ function pauseResponse(
     remoteSources: [],
     connectorContext: { owner: "agent" as const, outputs: [] },
     agentRuntime,
-    recovery: recoveryActions(),
+    recovery: recoveryActions(session.provider),
     usedFallback: false,
     llmStatus: "error" as const,
     llmError: reason,
@@ -169,6 +172,20 @@ export const askRouter = router({
       const question = retrySnapshot?.question ?? input.question;
 
       if (session.provider === "xai") {
+        if (!hasCurrentXaiConversationDisclosure(ctx.host)) {
+          return {
+            ...pauseResponse(
+              ctx.paths.configDir,
+              session,
+              "The current xAI conversation data path disclosure is required",
+              { owner: "yulu", query: question, hits: [] },
+              undefined,
+              [],
+              retrySnapshot ?? { question, sources: [], retrievalPending: true },
+            ),
+            elapsedMs: Date.now() - startedAt,
+          };
+        }
         if (!session.credentialSource) {
           return {
             ...pauseResponse(

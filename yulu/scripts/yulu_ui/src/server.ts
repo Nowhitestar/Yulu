@@ -49,6 +49,8 @@ import { hasCurrentXaiTranscriptionConsent } from "./transcriptionConsent.js";
 import { XaiTextClient } from "./xaiText.js";
 import { AudioTranscriptionService } from "./audioTranscription.js";
 import { createXaiProviderReadiness } from "./routers/providers.js";
+import { AgentConnectionCenter } from "./agentConnections.js";
+import { discoverAgentConnectionCandidates } from "./agentConnectionDiscovery.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -138,6 +140,16 @@ async function startLockedServer(
     xaiAudio,
     () => hasCurrentXaiTranscriptionConsent(hostStore),
   );
+  const agentConnections = new AgentConnectionCenter({
+    config: configManager,
+    host: hostStore,
+    configDir: runtimePaths.configDir,
+    credentials: xaiCredentials,
+    audio: audioTranscription,
+    text: xaiText,
+    readiness: xaiReadiness,
+    discover: discoverAgentConnectionCandidates,
+  });
   void xaiCredentials.status().catch(() => {});
   const recordingPipeline = new RecordingPipeline({
     store: hostStore,
@@ -224,6 +236,7 @@ async function startLockedServer(
     xaiCredentials,
     xaiText,
     xaiReadiness,
+    agentConnections,
     db:        dbProxy,
   };
 

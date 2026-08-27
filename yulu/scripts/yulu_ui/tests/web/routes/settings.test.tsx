@@ -532,11 +532,12 @@ describe("Settings category detail content (re-homed widgets)", () => {
     })));
   });
 
-  it("llm: renders the shared AI Providers settings surface", () => {
+  it("llm: routes connection state and repair to the shared Agent Connection Center", () => {
     const { container } = wrap("/settings/llm");
     const detail = within(container.querySelector(".masterdetail-detail") as HTMLElement);
-    expect(detail.getByText(translate("zh", "settings.providers.heading"))).toBeInTheDocument();
-    expect(detail.getByText(translate("zh", "settings.providers.connection.title"))).toBeInTheDocument();
+    expect(detail.getByText(translate("zh", "settings.connectionCenter.heading"))).toBeInTheDocument();
+    expect(detail.getByRole("link", { name: translate("zh", "settings.connectionCenter.open") }))
+      .toHaveAttribute("href", "/agent-connections");
   });
 
   it("integrations: legacy settings route redirects to Agent Console instead of rendering AI integration UI", () => {

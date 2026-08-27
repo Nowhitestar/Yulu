@@ -286,6 +286,7 @@ export class XaiCredentialManager {
   private cachedConnected = false;
   private cachedSource: XaiCredentialSource | null = null;
   private cachedDetail = "正在检查 Yulu xAI OAuth";
+  private preferredSource: XaiCredentialSource | null | undefined;
 
   constructor(options: XaiCredentialManagerOptions) {
     this.store = options.store;
@@ -304,13 +305,25 @@ export class XaiCredentialManager {
     try {
       const credential = await this.store.read();
       const oauthConnected = credential !== null;
-      this.cachedConnected = oauthConnected || apiKeyConfigured;
-      this.cachedSource = oauthConnected ? "oauth" : apiKeyConfigured ? "api-key" : null;
-      this.cachedDetail = oauthConnected
-        ? "xAI OAuth 已连接"
-        : apiKeyConfigured
-          ? "xAI API Key 已连接"
-          : apiKeyError?.message ?? "需要在 Yulu 中连接 xAI";
+      const selected = this.preferredSource;
+      this.cachedConnected = selected === undefined
+        ? oauthConnected || apiKeyConfigured
+        : selected === "oauth" ? oauthConnected
+          : selected === "api-key" ? apiKeyConfigured : false;
+      this.cachedSource = this.cachedConnected
+        ? selected === undefined ? oauthConnected ? "oauth" : "api-key" : selected
+        : null;
+      this.cachedDetail = selected === null
+        ? "请显式选择 xAI 凭据来源"
+        : selected === "oauth"
+          ? oauthConnected ? "xAI OAuth 已连接" : "已选择 xAI OAuth，但尚未连接"
+          : selected === "api-key"
+            ? apiKeyConfigured ? "xAI API Key 已连接" : "已选择 xAI API Key，但尚未设置"
+            : oauthConnected
+              ? "xAI OAuth 已连接"
+              : apiKeyConfigured
+                ? "xAI API Key 已连接"
+                : apiKeyError?.message ?? "需要在 Yulu 中连接 xAI";
       return {
         connected: this.cachedConnected,
         source: this.cachedSource,
@@ -336,6 +349,14 @@ export class XaiCredentialManager {
 
   cachedStatus(): { connected: boolean; source: XaiCredentialSource | null; detail: string } {
     return { connected: this.cachedConnected, source: this.cachedSource, detail: this.cachedDetail };
+  }
+
+  setPreferredSource(source: XaiCredentialSource | null): void {
+    if (this.preferredSource === source) return;
+    this.preferredSource = source;
+    this.cachedConnected = false;
+    this.cachedSource = null;
+    this.cachedDetail = source === null ? "请显式选择 xAI 凭据来源" : "正在检查所选 xAI 凭据来源";
   }
 
   async setApiKey(value: string): Promise<XaiCredentialStatus> {
@@ -428,17 +449,23 @@ export class XaiCredentialManager {
     this.authorization = { status: "idle", verificationUrl: "", userCode: "", message: "已退出 xAI OAuth" };
   }
 
-  async resolve(): Promise<XaiCredential> {
-    const stored = await this.store.read();
-    if (stored) {
+  async resolve(source: XaiCredentialSource | null | undefined = this.preferredSource): Promise<XaiCredential> {
+    if (source === null) throw new Error("请先显式选择 xAI 凭据来源");
+    if (source !== "api-key") {
+      const stored = await this.store.read();
+      if (stored) {
       if (stored.expiresAt > this.now() + TOKEN_REFRESH_SKEW_MS) {
         return { accessToken: stored.accessToken, source: "oauth" };
       }
       const refreshed = await this.refresh(stored);
       return { accessToken: refreshed.accessToken, source: "oauth" };
+      }
+      if (source === "oauth") throw new Error("已选择 xAI OAuth，但尚未连接");
     }
     const apiKey = await this.apiKeyStore?.read();
-    if (!apiKey) throw new Error("请先在 Yulu 设置中连接 xAI");
+    if (!apiKey) {
+      throw new Error(source === "api-key" ? "已选择 xAI API Key，但尚未设置" : "请先在 Yulu 设置中连接 xAI");
+    }
     return { accessToken: apiKey, source: "api-key" };
   }
 

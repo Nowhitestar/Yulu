@@ -109,6 +109,7 @@ function dataPathDisclosures(ctx: AppContext) {
 
 export const providersRouter = router({
   status: publicProcedure.query(async ({ ctx }) => {
+    if (ctx.agentConnections) return await ctx.agentConnections.xaiProjection();
     const { credentials, readiness } = services(ctx);
     const connection = await credentials.status();
     return {
@@ -121,6 +122,9 @@ export const providersRouter = router({
   acceptDataPathDisclosure: uiMutationProcedure
     .input(DataPathDisclosureInput)
     .mutation(({ ctx, input }) => {
+      if (ctx.agentConnections) {
+        return ctx.agentConnections.acceptDisclosure({ connectionId: "direct-xai", capability: input.capability });
+      }
       if (input.capability === "transcription") {
         const receipt = ctx.host.recordCloudTranscriptionConsent(
           XAI_TRANSCRIPTION_DISCLOSURE_VERSION,
@@ -142,34 +146,43 @@ export const providersRouter = router({
       };
     }),
 
-  authorize: publicProcedure.mutation(async ({ ctx }) => {
+  authorize: uiMutationProcedure.mutation(async ({ ctx }) => {
+    if (ctx.agentConnections) return await ctx.agentConnections.authorize();
     clearReadiness(ctx);
     return await services(ctx).credentials.authorize();
   }),
 
-  cancelAuthorization: publicProcedure.mutation(({ ctx }) =>
-    services(ctx).credentials.cancelAuthorization()),
+  cancelAuthorization: uiMutationProcedure.mutation(({ ctx }) =>
+    ctx.agentConnections
+      ? ctx.agentConnections.cancelAuthorization()
+      : services(ctx).credentials.cancelAuthorization()),
 
-  logoutOAuth: publicProcedure.mutation(async ({ ctx }) => {
+  logoutOAuth: uiMutationProcedure.mutation(async ({ ctx }) => {
+    if (ctx.agentConnections) return await ctx.agentConnections.logoutOAuth();
     const { credentials } = services(ctx);
     await credentials.logout();
     clearReadiness(ctx);
     return await credentials.status();
   }),
 
-  setApiKey: publicProcedure
+  setApiKey: uiMutationProcedure
     .input(z.object({ apiKey: z.string().trim().min(1).max(4_096) }).strict())
     .mutation(async ({ ctx, input }) => {
+      if (ctx.agentConnections) return await ctx.agentConnections.setApiKey(input.apiKey);
       clearReadiness(ctx);
       return await services(ctx).credentials.setApiKey(input.apiKey);
     }),
 
-  clearApiKey: publicProcedure.mutation(async ({ ctx }) => {
+  clearApiKey: uiMutationProcedure.mutation(async ({ ctx }) => {
+    if (ctx.agentConnections) return await ctx.agentConnections.clearApiKey();
     clearReadiness(ctx);
     return await services(ctx).credentials.clearApiKey();
   }),
 
-  probe: publicProcedure.input(ProbeInput).mutation(async ({ ctx, input }) => {
+  probe: uiMutationProcedure.input(ProbeInput).mutation(async ({ ctx, input }) => {
+    if (ctx.agentConnections) {
+      return await ctx.agentConnections.probe({ connectionId: "direct-xai", capability: input.capability });
+    }
     const { credentials, audio, text, readiness } = services(ctx);
     const capability = input.capability;
     const model = configuredModel(ctx, capability);

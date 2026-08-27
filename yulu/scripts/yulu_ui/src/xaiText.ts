@@ -124,7 +124,7 @@ export class XaiTextClient {
 
   async request(request: XaiTextRequest): Promise<XaiTextResult> {
     const { model, maxOutputTokens } = validateRequest(request);
-    const credential = await this.credentials.resolve();
+    const credential = await this.credentials.resolve(request.credentialSource);
     if (request.credentialSource && credential.source !== request.credentialSource) {
       throw new Error(`Pinned xAI credential ${request.credentialSource} does not match resolved credential ${credential.source}`);
     }

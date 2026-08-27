@@ -502,7 +502,7 @@ describe("activation router", () => {
       blocker: {
         capability: "summary",
         retry: "same_task",
-        remediation: { href: "/settings/llm" },
+        remediation: { href: "/agent-connections?capability=summary" },
       },
       summaryRecovery: { canReplace: false },
     });
@@ -726,7 +726,7 @@ describe("activation router", () => {
       blocker: {
         capability: "summary",
         retry: "same_task",
-        remediation: { href: "/settings/llm" },
+        remediation: { href: "/agent-connections?capability=summary" },
       },
       summaryRecovery: { canReplace: false },
     });
@@ -1031,7 +1031,7 @@ describe("activation router", () => {
       blocker: {
         capability: "summary_disclosure",
         reason: "disclosure_required",
-        remediation: { href: "/settings/llm" },
+        remediation: { href: "/agent-connections?capability=summary" },
       },
       readiness: {
         summary: {
@@ -1101,7 +1101,7 @@ describe("activation router", () => {
         capability: "summary_provider",
         reason: "provider_unavailable",
         detail: expect.not.stringMatching(/Hermes/i),
-        remediation: { href: "/settings/llm" },
+        remediation: { href: "/agent-connections?capability=summary" },
       },
       readiness: {
         summary: {

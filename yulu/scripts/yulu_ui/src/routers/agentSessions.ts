@@ -13,6 +13,7 @@ import {
   summarizeAgentSession,
 } from "../agentSessionStore.js";
 import { resolveAgentRuntime } from "../agentRuntime.js";
+import { hasCurrentXaiConversationDisclosure } from "../conversationDataDisclosure.js";
 
 export const agentSessionsRouter = router({
   list: publicProcedure
@@ -39,6 +40,9 @@ export const agentSessionsRouter = router({
       const config = ctx.config.read();
       const selection = config.intelligence.conversation;
       if (selection.provider === "xai") {
+        if (!hasCurrentXaiConversationDisclosure(ctx.host)) {
+          throw new Error("Accept the current xAI conversation data path disclosure in Agent Connection Center");
+        }
         const connection = await ctx.xaiCredentials?.status();
         if (!connection?.connected || !connection.source) {
           throw new Error("Connect xAI before starting an xAI conversation");

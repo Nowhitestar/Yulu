@@ -151,6 +151,11 @@ export interface UpdateResult {
   daemonsNeedingSighup: string[];
 }
 
+export interface ConfigUpdate {
+  key: string;
+  value: unknown;
+}
+
 type JsonRecord = Record<string, unknown>;
 
 function record(value: unknown): JsonRecord {
@@ -359,22 +364,49 @@ export class ConfigManager {
    * last read (someone else wrote to it).
    */
   update(dottedKey: string, value: unknown): UpdateResult {
-    if (isRetiredTranscriptionSetting(dottedKey)) {
-      throw new Error(`setting is retired because Yulu now uses one explicit audio engine: ${dottedKey}`);
+    return this.updateMany([{ key: dottedKey, value }]);
+  }
+
+  /** Preserve retired command-based Agent configuration before clearing it. */
+  archiveLegacyAgentConnection(): string {
+    const raw = JSON.parse(readFileSync(this.path, "utf8")) as Record<string, unknown>;
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const archivePath = join(
+      dirname(this.path),
+      `${basename(this.path, ".json")}.legacy-agent-connection.${stamp}.json`,
+    );
+    const archiveTmp = `${archivePath}.${process.pid}.tmp`;
+    writeFileSync(archiveTmp, `${JSON.stringify({ llm: raw.llm ?? {} }, null, 2)}\n`, {
+      encoding: "utf8",
+      mode: 0o600,
+    });
+    renameSync(archiveTmp, archivePath);
+    return archivePath;
+  }
+
+  /** Apply related configuration changes with one validated atomic rename. */
+  updateMany(changes: ConfigUpdate[]): UpdateResult {
+    if (changes.length === 0) return { daemonsNeedingRestart: [], daemonsNeedingSighup: [] };
+    for (const { key } of changes) {
+      if (isRetiredTranscriptionSetting(key)) {
+        throw new Error(`setting is retired because Yulu now uses one explicit audio engine: ${key}`);
+      }
     }
     const onDiskMtime = statSync(this.path).mtimeMs;
     if (this.cached && onDiskMtime !== this.cachedMtime) {
       throw new Error(`Config file changed externally — reload before writing (${this.path})`);
     }
     const cfg = JSON.parse(readFileSync(this.path, "utf8"));
-    setByDottedKey(cfg, dottedKey, value);
-    const def = defFor(dottedKey);
-    // 校验只在精确路径做（reload 才前缀匹配），否则更新 record 子字段
-    // 会被父级 z.record schema 误拒。
-    if (def && def.path === dottedKey) def.validate.parse(value);
+    for (const { key, value } of changes) {
+      setByDottedKey(cfg, key, value);
+      const def = defFor(key);
+      // 校验只在精确路径做（reload 才前缀匹配），否则更新 record 子字段
+      // 会被父级 z.record schema 误拒。
+      if (def && def.path === key) def.validate.parse(value);
+    }
     const parsed = ConfigSchema.parse(cfg);  // validate before write
     if (
-      (dottedKey === "transcription.engine" || dottedKey === "transcription.language") &&
+      changes.some(({ key }) => key === "transcription.engine" || key === "transcription.language") &&
       parsed.transcription.engine === "local" && parsed.transcription.language === "ja"
     ) {
       throw new Error("本地 Paraformer 仅支持中英文；日语请使用 xAI 云端引擎");
@@ -384,7 +416,14 @@ export class ConfigManager {
     writeFileSync(tmp, JSON.stringify(cfg, null, 2) + "\n", { mode: currentMode });
     renameSync(tmp, this.path);   // POSIX 原子,等价 Python os.replace
     this.cached = null;       // invalidate; next read() re-parses
-    return classify(dottedKey);
+    const restarts = new Set<string>();
+    const sighups = new Set<string>();
+    for (const { key } of changes) {
+      const result = classify(key);
+      result.daemonsNeedingRestart.forEach((daemon) => restarts.add(daemon));
+      result.daemonsNeedingSighup.forEach((daemon) => sighups.add(daemon));
+    }
+    return { daemonsNeedingRestart: [...restarts], daemonsNeedingSighup: [...sighups] };
   }
 }
 

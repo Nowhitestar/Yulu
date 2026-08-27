@@ -134,6 +134,32 @@ describe("XaiCredentialManager", () => {
     expect(apiKeyStore.read).not.toHaveBeenCalled();
   });
 
+  it("resolves only the explicitly selected credential source when both are configured", async () => {
+    const store = new MemoryTokenStore();
+    store.value = {
+      version: 1,
+      accessToken: "oauth-secret",
+      refreshToken: "oauth-refresh",
+      expiresAt: Date.now() + 60_000,
+      tokenEndpoint: "https://auth.x.ai/oauth2/token",
+    };
+    const apiKeyStore = new MemoryApiKeyStore();
+    apiKeyStore.value = "api-key-secret";
+    const manager = new XaiCredentialManager({ store, apiKeyStore });
+
+    manager.setPreferredSource("api-key");
+    await expect(manager.status()).resolves.toMatchObject({
+      connected: true,
+      source: "api-key",
+      oauthConnected: true,
+      apiKeyConfigured: true,
+    });
+    await expect(manager.resolve()).resolves.toEqual({ accessToken: "api-key-secret", source: "api-key" });
+
+    manager.setPreferredSource(null);
+    await expect(manager.resolve()).rejects.toThrow("显式选择");
+  });
+
   it("recovers when one device-token poll has a transport failure", async () => {
     vi.useFakeTimers();
     const store = new MemoryTokenStore();

@@ -14,6 +14,7 @@ import type { XaiTextClient } from "./xaiText.js";
 import type { XaiProviderReadiness } from "./routers/providers.js";
 import type { SearchResponse } from "./routers/search.js";
 import type { SupportedAgentSummaryAdapter } from "./summaryProviderReadiness.js";
+import type { AgentConnectionCenter } from "./agentConnections.js";
 
 export interface AppContext {
   uiMutationAuthorized?: boolean;
@@ -30,6 +31,7 @@ export interface AppContext {
   xaiText?: XaiTextClient;
   xaiReadiness?: XaiProviderReadiness;
   supportedAgentSummaryAdapter?: SupportedAgentSummaryAdapter;
+  agentConnections?: AgentConnectionCenter;
   localSearch?: (
     input: { query: string; since?: string; kinds?: ("meeting_summary" | "meeting_transcript")[]; limit?: number },
     scriptDir: string,

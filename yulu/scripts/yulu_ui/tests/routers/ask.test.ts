@@ -10,6 +10,7 @@ import {
   updateAgentSessionNativeSession,
 } from "../../src/agentSessionStore.js";
 import { createCaller, type AppContext } from "../../src/trpc.js";
+import { XAI_CONVERSATION_DISCLOSURE_VERSION } from "../../src/conversationDataDisclosure.js";
 
 const runAgentCliCommand = vi.hoisted(() => vi.fn());
 vi.mock("../../src/agentCliRunner.js", () => ({ runAgentCliCommand }));
@@ -18,7 +19,11 @@ const roots: string[] = [];
 
 function context(
   config: Record<string, unknown>,
-  injected: { localSearch?: ReturnType<typeof vi.fn>; xaiRequest?: ReturnType<typeof vi.fn> } = {},
+  injected: {
+    localSearch?: ReturnType<typeof vi.fn>;
+    xaiRequest?: ReturnType<typeof vi.fn>;
+    conversationDisclosure?: boolean;
+  } = {},
 ): AppContext {
   const root = mkdtempSync(join(tmpdir(), "yulu-ask-"));
   roots.push(root);
@@ -28,6 +33,15 @@ function context(
   mkdirSync(moviesDir, { recursive: true });
   return {
     config: { read: () => config },
+    host: {
+      getAgentConnectionDisclosure: () => injected.conversationDisclosure === false ? null : ({
+        connectionId: "direct-xai",
+        capability: "conversation",
+        disclosureVersion: XAI_CONVERSATION_DISCLOSURE_VERSION,
+        decision: "accepted",
+        decidedAt: "2026-08-27T00:00:00.000Z",
+      }),
+    },
     paths: { configDir, moviesDir, scriptDir: "/fake/yulu/scripts" },
     ...(injected.localSearch ? { localSearch: injected.localSearch } : {}),
     ...(injected.xaiRequest ? { xaiText: { request: injected.xaiRequest } } : {}),
@@ -191,6 +205,27 @@ describe("pinned Ask flow", () => {
     });
     expect(result.sources).toHaveLength(1);
     expect(runAgentCliCommand).not.toHaveBeenCalled();
+  });
+
+  it("pauses before retrieval when the current xAI Conversation disclosure is missing", async () => {
+    const localSearch = vi.fn();
+    const xaiRequest = vi.fn();
+    const ctx = context({}, { localSearch, xaiRequest, conversationDisclosure: false });
+    const pinned = session(ctx, "xai", "grok-4.6-exact");
+
+    await expect(createCaller(askRouter, ctx).ask({
+      question: "What changed?",
+      sessionId: pinned.id,
+    })).resolves.toMatchObject({
+      ok: false,
+      sessionStatus: "paused",
+      llmError: expect.stringContaining("conversation data path disclosure"),
+      recovery: {
+        settingsPath: "/agent-connections?connection=direct-xai&capability=conversation",
+      },
+    });
+    expect(localSearch).not.toHaveBeenCalled();
+    expect(xaiRequest).not.toHaveBeenCalled();
   });
 
   it("returns the local empty-evidence response without any xAI request", async () => {
