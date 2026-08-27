@@ -21,6 +21,20 @@ function capabilityLabel(t: ReturnType<typeof useT>, capability: Capability): st
   return t(`agentConnections.capability.${capability}`);
 }
 
+function supportedAgentCopy(adapter: string) {
+  if (adapter === "claude-code") return "agentConnections.claude";
+  if (adapter === "hermes") return "agentConnections.hermes";
+  if (adapter === "openclaw") return "agentConnections.openclaw";
+  return "agentConnections.codex";
+}
+
+function candidateModel(adapter: string) {
+  if (adapter === "claude-code") return "claude-sonnet-5";
+  if (adapter === "hermes") return "grok-4.6";
+  if (adapter === "openclaw") return "openai-codex/gpt-5.5";
+  return "gpt-5.6-sol";
+}
+
 function readinessFailure(
   t: ReturnType<typeof useT>,
   readiness: { model: string; reason?: "invalid_model" | "readiness_failed" | "unknown_outcome" },
@@ -55,6 +69,7 @@ export function AgentConnections() {
   const [apiKey, setApiKeyValue] = useState("");
   const [modelDrafts, setModelDrafts] = useState<Partial<Record<Capability, string>>>({});
   const [agentModelDrafts, setAgentModelDrafts] = useState<Record<string, string>>({});
+  const [acceptedSupportedDisclosures, setAcceptedSupportedDisclosures] = useState<Set<string>>(() => new Set());
   const [gatewayDraft, setGatewayDraft] = useState<Partial<{
     endpoint: string;
     summaryModel: string;
@@ -107,8 +122,9 @@ export function AgentConnections() {
   > => item.adapter === "direct-xai");
   const supportedAgentConnections = view.data.connections.filter((item): item is Extract<
     ConnectionView,
-    { adapter: "codex" | "claude-code" }
-  > => item.adapter === "codex" || item.adapter === "claude-code");
+    { adapter: "codex" | "claude-code" | "hermes" | "openclaw" }
+  > => item.adapter === "codex" || item.adapter === "claude-code" ||
+    item.adapter === "hermes" || item.adapter === "openclaw");
   const gatewayConnection = view.data.connections.find((item): item is Extract<
     ConnectionView,
     { adapter: "cliproxyapi" }
@@ -588,9 +604,7 @@ export function AgentConnections() {
       </section>
 
       {supportedAgentConnections.map((agent) => {
-        const copy = agent.adapter === "claude-code"
-          ? "agentConnections.claude"
-          : "agentConnections.codex";
+        const copy = supportedAgentCopy(agent.adapter);
         return (
           <section
             className="agent-connection-card"
@@ -602,6 +616,9 @@ export function AgentConnections() {
               <div>
                 <h2 id={`${agent.id}-title`}>{agent.label}</h2>
                 <p>{t(`${copy}.description`)}</p>
+                {"summaryUnsupported" in agent && (
+                  <p className="agent-capability-detail">{t(`${copy}.summaryUnsupported`)}</p>
+                )}
               </div>
               <span
                 className={`agent-connection-state ${agent.authorization.connected ? "ready" : "muted"}`}
@@ -651,6 +668,7 @@ export function AgentConnections() {
                 const testing = probe.isPending && probe.variables?.connectionId === agent.id &&
                   probe.variables.capability === capability;
                 const current = testing ? "testing" : item.currentReadiness.status;
+                const disclosureAcceptedLocally = acceptedSupportedDisclosures.has(modelKey);
                 return (
                   <article
                     className="agent-connection-capability"
@@ -687,15 +705,15 @@ export function AgentConnections() {
                         }))}
                       />
                     </label>
-                    {item.disclosure?.required && (
+                    {item.disclosure?.required && !disclosureAcceptedLocally && (
                       <div className="agent-connection-guidance" role="alert">
                         {t(`${copy}.disclosure.${capability}`)}
                         <button
                           type="button"
-                          onClick={() => void run(() => acceptDisclosure.mutateAsync({
-                            connectionId: agent.id,
-                            capability,
-                          }))}
+                          onClick={() => void run(async () => {
+                            await acceptDisclosure.mutateAsync({ connectionId: agent.id, capability });
+                            setAcceptedSupportedDisclosures((currentAccepted) => new Set(currentAccepted).add(modelKey));
+                          })}
                         >
                           {t(`${copy}.disclosureAccept.${capability}`)}
                         </button>
@@ -715,7 +733,8 @@ export function AgentConnections() {
                       </button>
                       <button
                         type="button"
-                        disabled={!agent.authorization.connected || probe.isPending}
+                        disabled={!agent.authorization.connected || probe.isPending ||
+                          (item.disclosure?.required === true && !disclosureAcceptedLocally)}
                         onClick={() => void run(() => probe.mutateAsync({
                           connectionId: agent.id,
                           capability,
@@ -731,6 +750,20 @@ export function AgentConnections() {
                 );
               })}
             </div>
+            {"summaryUnsupported" in agent && (
+              <button
+                type="button"
+                className="agent-connection-delete"
+                onClick={(event) => {
+                  deleteButtonRef.current = event.currentTarget;
+                  setActionError(false);
+                  void deletionImpact.mutateAsync({ connectionId: agent.id })
+                    .then((result) => setImpact(result as DeletionImpact), () => setActionError(true));
+                }}
+              >
+                {t("agentConnections.delete")}
+              </button>
+            )}
           </section>
         );
       })}
@@ -742,7 +775,8 @@ export function AgentConnections() {
           <details
             className="agent-connection-card compact"
             data-testid={`agent-candidate-${candidate.adapter}`}
-            open={candidate.adapter === "codex" || candidate.adapter === "claude-code"}
+            open={candidate.adapter === "codex" || candidate.adapter === "claude-code" ||
+              candidate.adapter === "hermes" || candidate.adapter === "openclaw"}
             key={candidate.id}
           >
             <summary>
@@ -754,17 +788,16 @@ export function AgentConnections() {
               <div><dt>{t("agentConnections.detectedPath")}</dt><dd><code>{candidate.detectedPath ?? t("agentConnections.migrated")}</code></dd></div>
               <div><dt>{t("agentConnections.declaredCapabilities")}</dt><dd>{candidate.capabilities.map((item) => capabilityLabel(t, item as Capability)).join(" · ")}</dd></div>
             </dl>
-            {(candidate.adapter === "codex" || candidate.adapter === "claude-code") && candidate.detectedPath && (
+            {(candidate.adapter === "codex" || candidate.adapter === "claude-code" ||
+              candidate.adapter === "hermes" || candidate.adapter === "openclaw") && candidate.detectedPath && (
               <div className="agent-connection-candidate-action">
                 <label className="agent-connection-model" htmlFor={`${candidate.id}-conversation-model`}>
-                  <span>{t(candidate.adapter === "claude-code"
-                    ? "agentConnections.claude.model"
-                    : "agentConnections.codex.model")}</span>
+                  <span>{t(`${supportedAgentCopy(candidate.adapter)}.model`)}</span>
                   <input
                     id={`${candidate.id}-conversation-model`}
                     type="text"
                     maxLength={128}
-                    value={agentModelDrafts[candidate.id] ?? (candidate.adapter === "claude-code" ? "claude-sonnet-5" : "gpt-5.6-sol")}
+                    value={agentModelDrafts[candidate.id] ?? candidateModel(candidate.adapter)}
                     onChange={(event) => setAgentModelDrafts((currentModels) => ({
                       ...currentModels,
                       [candidate.id]: event.target.value,
@@ -773,15 +806,13 @@ export function AgentConnections() {
                 </label>
                 <button
                   type="button"
-                  disabled={confirmCandidate.isPending || !(agentModelDrafts[candidate.id] ?? (candidate.adapter === "claude-code" ? "claude-sonnet-5" : "gpt-5.6-sol")).trim()}
+                  disabled={confirmCandidate.isPending || !(agentModelDrafts[candidate.id] ?? candidateModel(candidate.adapter)).trim()}
                   onClick={() => void run(() => confirmCandidate.mutateAsync({
                     candidateId: candidate.id,
-                    model: agentModelDrafts[candidate.id] ?? (candidate.adapter === "claude-code" ? "claude-sonnet-5" : "gpt-5.6-sol"),
+                    model: agentModelDrafts[candidate.id] ?? candidateModel(candidate.adapter),
                   }))}
                 >
-                  {t(candidate.adapter === "claude-code"
-                    ? "agentConnections.claude.confirm"
-                    : "agentConnections.codex.confirm")}
+                  {t(`${supportedAgentCopy(candidate.adapter)}.confirm`)}
                 </button>
               </div>
             )}
@@ -834,14 +865,20 @@ export function AgentConnections() {
             <ul>{impact.pinnedConversations.map((session) => <li key={session.id}>{session.title}</li>)}</ul>
             <p>{t(deletionConnection.adapter === "cliproxyapi"
               ? "agentConnections.gateway.deleteBoundary"
-              : "agentConnections.delete.oauthBoundary")}</p>
+              : deletionConnection.adapter === "hermes" || deletionConnection.adapter === "openclaw"
+                ? "agentConnections.delete.runtimeBoundary"
+                : "agentConnections.delete.oauthBoundary")}</p>
             <div className="agent-connection-actions">
               <button type="button" onClick={closeDeletionImpact}>{t("agentConnections.delete.cancel")}</button>
               <button
                 type="button"
                 className="agent-connection-delete"
                 onClick={() => void run(async () => {
-                  await remove.mutateAsync({ connectionId: deletionConnection.id, confirmed: true });
+                  const deletedConnectionId = deletionConnection.id;
+                  await remove.mutateAsync({ connectionId: deletedConnectionId, confirmed: true });
+                  setAcceptedSupportedDisclosures((currentAccepted) => new Set(
+                    [...currentAccepted].filter((key) => !key.startsWith(`${deletedConnectionId}:`)),
+                  ));
                   closeDeletionImpact();
                 })}
               >

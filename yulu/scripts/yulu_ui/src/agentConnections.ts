@@ -25,6 +25,9 @@ import {
   CLAUDE_CODE_CONVERSATION_DISCLOSURE_VERSION,
   CLIPROXYAPI_CONVERSATION_DISCLOSURE_VERSION,
   CODEX_CONVERSATION_DISCLOSURE_VERSION,
+  HERMES_CONVERSATION_DISCLOSURE_VERSION,
+  OPENCLAW_CONVERSATION_DISCLOSURE_VERSION,
+  hasCurrentAgentConversationDisclosure,
   hasCurrentXaiConversationDisclosure,
   XAI_CONVERSATION_DISCLOSURE_VERSION,
 } from "./conversationDataDisclosure.js";
@@ -48,6 +51,10 @@ import {
   GatewayRequestUnknownOutcomeError,
   isExactGatewayRuntimeEvidence,
 } from "./cliProxyApiAdapter.js";
+import type {
+  ConversationOnlyAgentAdapter,
+  ConversationOnlyAgentKind,
+} from "./conversationOnlyAgentAdapter.js";
 import type {
   CliProxyApiAdapter,
   GatewaySecretStore,
@@ -103,6 +110,10 @@ export interface AgentConnectionCenterOptions {
     ClaudeCodeAdapter,
     "status" | "probe" | "probeSummary" | "summarize" | "converse"
   >;
+  conversationOnlyAdapter?: (
+    adapter: ConversationOnlyAgentKind,
+    executable: string,
+  ) => Pick<ConversationOnlyAgentAdapter, "status" | "probe" | "converse">;
   gatewaySecretStore?: (credentialIdentity: string) => GatewaySecretStore;
   cliProxyAdapter?: (input: { endpoint: string; httpsApproved: boolean; credentialIdentity: string }) => Pick<
     CliProxyApiAdapter,
@@ -177,6 +188,12 @@ function capabilitiesForAdapter(adapter: string): AgentConnectionCapability[] {
   return [];
 }
 
+function conversationOnlyDisclosureVersion(adapter: ConversationOnlyAgentKind): string {
+  return adapter === "hermes"
+    ? HERMES_CONVERSATION_DISCLOSURE_VERSION
+    : OPENCLAW_CONVERSATION_DISCLOSURE_VERSION;
+}
+
 function codexSummaryIsolationDeclared(
   status: Awaited<ReturnType<CodexAgentAdapter["status"]>> | null,
 ): boolean {
@@ -224,6 +241,10 @@ export class AgentConnectionCenter {
     readiness: XaiReadinessResult;
     identity: string;
   }>();
+  private readonly conversationOnlyReadiness = new Map<string, {
+    readiness: XaiReadinessResult;
+    identity: string;
+  }>();
 
   private codexReadinessKey(connectionId: string, capability: "summary" | "conversation"): string {
     return `${connectionId}:${capability}`;
@@ -240,6 +261,10 @@ export class AgentConnectionCenter {
     model: string,
   ): string {
     return `${connectionId}:${capability}:${credentialIdentity}:${model}`;
+  }
+
+  private conversationOnlyReadinessKey(connectionId: string): string {
+    return `${connectionId}:conversation`;
   }
 
   constructor(private readonly options: AgentConnectionCenterOptions) {
@@ -542,6 +567,74 @@ export class AgentConnectionCenter {
           },
         };
       }));
+    const conversationOnlyConnections = await Promise.all(records
+      .filter((record) => record.kind === "supported-agent" &&
+        (record.adapter === "hermes" || record.adapter === "openclaw"))
+      .map(async (record) => {
+        const kind = record.adapter as ConversationOnlyAgentKind;
+        const executable = String(record.settings.executablePath ?? "");
+        const conversationModel = String(record.settings.conversationModel ?? "").trim();
+        let status: Awaited<ReturnType<ConversationOnlyAgentAdapter["status"]>> | null = null;
+        let statusError: string | null = null;
+        try {
+          status = await this.requireConversationOnlyAdapter(kind, executable).status();
+        } catch {
+          statusError = `${record.label} runtime status is unavailable`;
+        }
+        const readinessKey = this.conversationOnlyReadinessKey(record.id);
+        const proof = status ? this.conversationOnlyReadiness.get(readinessKey) : undefined;
+        const identity = status
+          ? this.conversationOnlyIdentity(kind, executable, conversationModel, status)
+          : null;
+        const currentReadiness = proof && proof.identity === identity
+          ? proof.readiness
+          : untested("conversation", conversationModel);
+        if (proof && proof.identity !== identity) this.conversationOnlyReadiness.delete(readinessKey);
+        const disclosureVersion = conversationOnlyDisclosureVersion(kind);
+        const disclosure = this.host.getAgentConnectionDisclosure(record.id, "conversation");
+        const selection = asRecord(config.intelligence.conversation);
+        return {
+          id: record.id,
+          kind: "supported-agent" as const,
+          adapter: kind,
+          label: record.label,
+          lifecycle: status?.authorized && status.supported ? "connected" as const : "disconnected" as const,
+          authorization: {
+            connected: Boolean(status?.authorized && status.supported),
+            credentialSource: "runtime-oauth" as const,
+            runtimeVersion: status?.runtimeVersion ?? null,
+            minimumVersion: status?.minimumVersion ?? null,
+            supported: status?.supported ?? false,
+            provider: status?.provider ?? null,
+            model: status?.model ?? null,
+            availableModels: status?.availableModels ?? [],
+            features: status?.features ?? [],
+            loginCommand: status?.login.command ?? `${executable} ${kind === "hermes" ? "model" : "configure"}`,
+            statusCommand: status?.login.statusCommand ?? `${executable} ${kind === "hermes" ? "status" : "models status --json --check"}`,
+            remediation: status?.remediation ?? statusError,
+          },
+          capabilities: [{
+            capability: "conversation" as const,
+            declared: true,
+            currentReadiness,
+            readinessHistory: this.host.listAgentConnectionReadinessHistory(record.id, "conversation"),
+            disclosure: {
+              required: disclosure?.disclosureVersion !== disclosureVersion || disclosure.decision !== "accepted",
+              disclosureVersion,
+              data: "conversation_text_and_agent_tool_context" as const,
+              destination: `${record.label} runtime and its configured model/tools/connectors`,
+              decision: disclosure?.disclosureVersion === disclosureVersion ? disclosure.decision : null,
+              decidedAt: disclosure?.disclosureVersion === disclosureVersion ? disclosure.decidedAt : null,
+            },
+            selected: selection.provider === "agent" && selection.connectionId === record.id,
+            remediation: currentReadiness.status === "failed" || !status?.authorized || !status?.supported
+              ? { href: `/agent-connections?connection=${record.id}&capability=conversation` }
+              : null,
+          }],
+          settings: { conversationModel, executablePath: executable },
+          summaryUnsupported: `${record.label} is Conversation-only because its stable interface cannot prove a tool-free background Summary invocation`,
+        };
+      }));
     const gatewayConnections = await Promise.all(records
       .filter((record) => record.kind === "gateway" && record.adapter === "cliproxyapi")
       .map(async (record) => {
@@ -616,7 +709,13 @@ export class AgentConnectionCenter {
           },
         };
       }));
-    const connections = [...directConnections, ...codexConnections, ...claudeConnections, ...gatewayConnections];
+    const connections = [
+      ...directConnections,
+      ...codexConnections,
+      ...claudeConnections,
+      ...conversationOnlyConnections,
+      ...gatewayConnections,
+    ];
     const connectedAdapters = new Set(records
       .filter((record) => record.kind === "supported-agent")
       .map((record) => record.adapter));
@@ -1017,6 +1116,77 @@ export class AgentConnectionCenter {
       }
       return readiness;
     }
+    const conversationOnlyRecord = this.conversationOnlyRecord(input.connectionId);
+    if (conversationOnlyRecord) {
+      const kind = conversationOnlyRecord.adapter as ConversationOnlyAgentKind;
+      const label = conversationOnlyRecord.label;
+      if (input.capability !== "conversation") {
+        throw new Error(`${label} supports Conversation only; Summary is unavailable`);
+      }
+      const disclosureVersion = conversationOnlyDisclosureVersion(kind);
+      if (!hasCurrentAgentConversationDisclosure(this.host, conversationOnlyRecord.id, disclosureVersion)) {
+        throw new Error(`Accept the current ${label} Conversation data path disclosure before testing this model`);
+      }
+      const model = input.model?.trim() ||
+        String(conversationOnlyRecord.settings.conversationModel ?? "").trim();
+      if (!model || model.length > 128) throw new Error(`${label} Conversation model is invalid`);
+      const readinessKey = this.conversationOnlyReadinessKey(conversationOnlyRecord.id);
+      if (model !== conversationOnlyRecord.settings.conversationModel) {
+        this.conversationOnlyReadiness.delete(readinessKey);
+        this.host.upsertAgentConnectionRecord({
+          ...conversationOnlyRecord,
+          settings: { ...conversationOnlyRecord.settings, conversationModel: model },
+        });
+      }
+      const testedAt = new Date().toISOString();
+      const executable = String(conversationOnlyRecord.settings.executablePath ?? "");
+      const adapter = this.requireConversationOnlyAdapter(kind, executable);
+      const result = await adapter.probe({ model });
+      const status = await adapter.status();
+      const exactIdentity = Boolean(
+        status.supported &&
+        status.authorized &&
+        result.evidence?.runtimeVersion === status.runtimeVersion &&
+        result.evidence.requestedProvider === status.provider &&
+        result.evidence.requestedModel === model &&
+        result.evidence.actualProvider &&
+        result.evidence.actualModel === model &&
+        result.evidence.fallbackOccurred === false,
+      );
+      const effectiveStatus = result.status === "ready" && exactIdentity ? "ready" : "failed";
+      const readiness: XaiReadinessResult = {
+        capability: "conversation",
+        status: effectiveStatus,
+        model,
+        credentialSource: null,
+        testedAt,
+        detail: effectiveStatus === "ready"
+          ? `conversation · ${model} passed the ${label} production adapter probe`
+          : result.remediation ?? `conversation · ${model} failed`,
+        ...(effectiveStatus === "failed" ? {
+          reason: result.reason === "unknown_outcome" ? "unknown_outcome" as const : "readiness_failed" as const,
+        } : {}),
+      };
+      this.conversationOnlyReadiness.set(readinessKey, {
+        readiness,
+        identity: this.conversationOnlyIdentity(kind, executable, model, status),
+      });
+      const runtimeEvidence = result.evidence;
+      if (runtimeEvidence) {
+        this.host.recordAgentConnectionReadiness({
+          connectionId: conversationOnlyRecord.id,
+          capability: "conversation",
+          status: effectiveStatus,
+          model,
+          credentialSource: null,
+          detail: readiness.detail,
+          reason: readiness.reason ?? null,
+          runtimeEvidence,
+          testedAt,
+        });
+      }
+      return readiness;
+    }
     if (input.connectionId !== DIRECT_XAI_ID || !this.hasDirectConnection()) {
       throw new Error("Only explicit Agent Connections can run a Capability Probe");
     }
@@ -1145,6 +1315,27 @@ export class AgentConnectionCenter {
       });
       return await this.view();
     }
+    if (candidate.adapter === "hermes" || candidate.adapter === "openclaw") {
+      const adapter = candidate.adapter;
+      const status = await this.requireConversationOnlyAdapter(adapter, candidate.detectedPath).status();
+      if (!status.supported) {
+        throw new Error(status.remediation ?? `${candidate.label} runtime is unsupported`);
+      }
+      this.conversationOnlyReadiness.delete(this.conversationOnlyReadinessKey(adapter));
+      this.host.upsertAgentConnectionRecord({
+        id: adapter,
+        kind: "supported-agent",
+        adapter,
+        label: candidate.label,
+        lifecycle: "available",
+        settings: {
+          executablePath: candidate.detectedPath,
+          conversationModel: model,
+          credentialSource: "runtime-oauth",
+        },
+      });
+      return await this.view();
+    }
     if (candidate.adapter !== "codex") {
       throw new Error("This Connection Candidate does not yet have a supported production adapter");
     }
@@ -1248,6 +1439,27 @@ export class AgentConnectionCenter {
       });
       return await this.view();
     }
+    const conversationOnlyRecord = this.conversationOnlyRecord(input.connectionId);
+    if (conversationOnlyRecord) {
+      const label = conversationOnlyRecord.label;
+      if (input.capability !== "conversation") {
+        throw new Error(`${label} supports Conversation only; Summary is unavailable`);
+      }
+      const model = input.model?.trim() ||
+        String(conversationOnlyRecord.settings.conversationModel ?? "").trim();
+      if (!model || model.length > 128) throw new Error(`${label} Conversation model is invalid`);
+      await this.requireCurrentConversationOnlyReadiness(conversationOnlyRecord.id, model);
+      this.host.upsertAgentConnectionRecord({
+        ...conversationOnlyRecord,
+        settings: { ...conversationOnlyRecord.settings, conversationModel: model },
+      });
+      this.config.update("intelligence.conversation", {
+        provider: "agent",
+        connectionId: conversationOnlyRecord.id,
+        model,
+      });
+      return await this.view();
+    }
     if (input.connectionId !== DIRECT_XAI_ID) {
       const candidate = this.host.listAgentConnectionCandidates()
         .find((item) => item.id === input.connectionId);
@@ -1329,6 +1541,21 @@ export class AgentConnectionCenter {
       });
       return { ...input, accepted: true, disclosureVersion: receipt.disclosureVersion };
     }
+    const conversationOnlyRecord = this.conversationOnlyRecord(input.connectionId);
+    if (conversationOnlyRecord) {
+      if (input.capability !== "conversation") {
+        throw new Error(`${conversationOnlyRecord.label} supports Conversation only; Summary is unavailable`);
+      }
+      const receipt = this.host.recordAgentConnectionDisclosure({
+        connectionId: input.connectionId,
+        capability: "conversation",
+        disclosureVersion: conversationOnlyDisclosureVersion(
+          conversationOnlyRecord.adapter as ConversationOnlyAgentKind,
+        ),
+        decision: "accepted",
+      });
+      return { ...input, accepted: true, disclosureVersion: receipt.disclosureVersion };
+    }
     if (input.connectionId !== DIRECT_XAI_ID || !this.hasDirectConnection()) {
       throw new Error("Agent Connection not found");
     }
@@ -1398,6 +1625,21 @@ export class AgentConnectionCenter {
       });
       return { ...input, decision: receipt.decision, disclosureVersion: receipt.disclosureVersion };
     }
+    const conversationOnlyRecord = this.conversationOnlyRecord(input.connectionId);
+    if (conversationOnlyRecord) {
+      if (input.capability !== "conversation") {
+        throw new Error(`${conversationOnlyRecord.label} supports Conversation only; Summary is unavailable`);
+      }
+      const receipt = this.host.recordAgentConnectionDisclosure({
+        connectionId: input.connectionId,
+        capability: "conversation",
+        disclosureVersion: conversationOnlyDisclosureVersion(
+          conversationOnlyRecord.adapter as ConversationOnlyAgentKind,
+        ),
+        decision: "declined",
+      });
+      return { ...input, decision: receipt.decision, disclosureVersion: receipt.disclosureVersion };
+    }
     if (input.connectionId !== DIRECT_XAI_ID || !this.hasDirectConnection()) {
       throw new Error("Agent Connection not found");
     }
@@ -1444,6 +1686,35 @@ export class AgentConnectionCenter {
         removesYuluManagedCredentials: true,
       };
     }
+    const supported = this.conversationOnlyRecord(input.connectionId);
+    if (supported) {
+      const config = this.config.read();
+      const selectedCapabilities: AgentConnectionCapability[] = [];
+      const selection = config.intelligence.conversation;
+      if (
+        selection.provider === "agent" &&
+        "connectionId" in selection &&
+        selection.connectionId === supported.id
+      ) {
+        selectedCapabilities.push("conversation");
+      }
+      const pinnedConversations = readAgentSessionStore(this.configDir).sessions
+        .filter((session) => session.purpose === "ask" && session.connectionId === supported.id)
+        .map((session) => ({
+          id: session.id,
+          title: session.title,
+          status: session.status,
+          model: session.model,
+        }));
+      return {
+        connectionId: supported.id,
+        selectedCapabilities,
+        pinnedTasks: [],
+        pinnedConversations,
+        removesRuntimeAuthorization: false,
+        removesYuluManagedCredentials: false,
+      };
+    }
     if (input.connectionId !== DIRECT_XAI_ID || !this.hasDirectConnection()) {
       throw new Error("Agent Connection not found");
     }
@@ -1487,9 +1758,19 @@ export class AgentConnectionCenter {
         await this.requireGatewaySecretStore(credentialIdentity).clear();
       }
       this.gatewayReadiness.clear();
+      this.clearGatewaySelections(gateway.id);
       this.host.clearAgentConnectionReadinessHistory(input.connectionId);
       this.host.clearAgentConnectionDisclosures(input.connectionId);
       this.host.deleteAgentConnectionRecord(input.connectionId);
+      return await this.view();
+    }
+    const supported = this.conversationOnlyRecord(input.connectionId);
+    if (supported) {
+      this.conversationOnlyReadiness.delete(this.conversationOnlyReadinessKey(supported.id));
+      this.clearGatewaySelections(supported.id);
+      this.host.clearAgentConnectionReadinessHistory(supported.id);
+      this.host.clearAgentConnectionDisclosures(supported.id);
+      this.host.deleteAgentConnectionRecord(supported.id);
       return await this.view();
     }
     await this.credentials.logout();
@@ -1863,6 +2144,40 @@ export class AgentConnectionCenter {
     }
   }
 
+  async assertConversationOnlyReady(input: { connectionId: string; model: string }): Promise<string> {
+    const record = this.conversationOnlyRecord(input.connectionId);
+    const label = record?.label ?? "Agent";
+    try {
+      return await this.requireCurrentConversationOnlyReadiness(input.connectionId, input.model);
+    } catch {
+      throw new Error(`Test this exact ${label} Conversation model before starting a new conversation`);
+    }
+  }
+
+  async converseConversationOnly(input: {
+    connectionId: string;
+    provider: string;
+    model: string;
+    prompt: string;
+    nativeSessionId?: string;
+  }) {
+    const record = this.conversationOnlyRecord(input.connectionId);
+    if (!record) {
+      throw new Error(
+        `Pinned Conversation-only Agent connection ${input.connectionId} is unavailable; restore it in Agent Connection Center`,
+      );
+    }
+    return await this.requireConversationOnlyAdapter(
+      record.adapter as ConversationOnlyAgentKind,
+      String(record.settings.executablePath ?? ""),
+    ).converse({
+      provider: input.provider,
+      model: input.model,
+      prompt: input.prompt,
+      ...(input.nativeSessionId ? { nativeSessionId: input.nativeSessionId } : {}),
+    });
+  }
+
   async assertGatewayConversationReady(input: { connectionId: string; model: string }): Promise<void> {
     try {
       await this.requireCurrentGatewayReadiness(input.connectionId, "conversation", input.model);
@@ -2185,6 +2500,14 @@ export class AgentConnectionCenter {
     );
   }
 
+  private conversationOnlyRecord(connectionId: string) {
+    return this.host.listAgentConnectionRecords().find((record) =>
+      record.id === connectionId &&
+      record.kind === "supported-agent" &&
+      (record.adapter === "hermes" || record.adapter === "openclaw")
+    );
+  }
+
   private codexIdentity(
     executable: string,
     model: string,
@@ -2216,6 +2539,26 @@ export class AgentConnectionCenter {
       authorized: status.authorized,
       authorizationMethod: status.authorizationMethod,
       apiProvider: status.apiProvider,
+      features: [...status.features].sort(),
+    });
+  }
+
+  private conversationOnlyIdentity(
+    adapter: ConversationOnlyAgentKind,
+    executable: string,
+    model: string,
+    status: Awaited<ReturnType<ConversationOnlyAgentAdapter["status"]>>,
+  ): string {
+    return JSON.stringify({
+      adapter,
+      executable,
+      model,
+      runtimeVersion: status.runtimeVersion,
+      minimumVersion: status.minimumVersion,
+      supported: status.supported,
+      authorized: status.authorized,
+      provider: status.provider,
+      runtimeModel: status.model,
       features: [...status.features].sort(),
     });
   }
@@ -2315,6 +2658,33 @@ export class AgentConnectionCenter {
     }
   }
 
+  private async requireCurrentConversationOnlyReadiness(
+    connectionId: string,
+    model: string,
+  ): Promise<string> {
+    const record = this.conversationOnlyRecord(connectionId);
+    if (!record) throw new Error("Test this exact Conversation-only Agent model before selecting it");
+    const kind = record.adapter as ConversationOnlyAgentKind;
+    const executable = String(record.settings.executablePath ?? "");
+    const status = await this.requireConversationOnlyAdapter(kind, executable).status();
+    const readinessKey = this.conversationOnlyReadinessKey(record.id);
+    const proof = this.conversationOnlyReadiness.get(readinessKey);
+    const identity = this.conversationOnlyIdentity(kind, executable, model, status);
+    if (
+      proof?.readiness.status !== "ready" ||
+      proof.readiness.model !== model ||
+      proof.identity !== identity
+    ) {
+      this.conversationOnlyReadiness.delete(readinessKey);
+      throw new Error(`Test this exact ${record.label} Conversation model before selecting it`);
+    }
+    if (!status.provider) {
+      this.conversationOnlyReadiness.delete(readinessKey);
+      throw new Error(`Test this exact ${record.label} Conversation provider before selecting it`);
+    }
+    return status.provider;
+  }
+
   private requireCodexAdapter(executable: string) {
     if (!executable || !this.options.codexAdapter) throw new Error("Codex production adapter is unavailable");
     return this.options.codexAdapter(executable);
@@ -2325,6 +2695,13 @@ export class AgentConnectionCenter {
       throw new Error("Claude Code production adapter is unavailable");
     }
     return this.options.claudeAdapter(executable);
+  }
+
+  private requireConversationOnlyAdapter(adapter: ConversationOnlyAgentKind, executable: string) {
+    if (!executable || !this.options.conversationOnlyAdapter) {
+      throw new Error(`${adapter === "hermes" ? "Hermes" : "OpenClaw"} production adapter is unavailable`);
+    }
+    return this.options.conversationOnlyAdapter(adapter, executable);
   }
 
   private requireGatewayAdapter(endpoint: string, httpsApproved: boolean, credentialIdentity: string) {

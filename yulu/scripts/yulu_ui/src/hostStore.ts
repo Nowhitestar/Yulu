@@ -204,7 +204,7 @@ export interface PersistedAgentConnectionReadiness {
     requestId: string | null;
     sessionId: string | null;
     terminalStatus: "ready" | "failed" | "unknown";
-    fallbackOccurred: boolean;
+    fallbackOccurred: boolean | null;
     endpoint?: string | null;
     toolsEnabled?: boolean;
   };

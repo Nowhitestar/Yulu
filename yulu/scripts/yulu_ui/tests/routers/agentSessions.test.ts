@@ -9,6 +9,8 @@ import {
   CLAUDE_CODE_CONVERSATION_DISCLOSURE_VERSION,
   CLIPROXYAPI_CONVERSATION_DISCLOSURE_VERSION,
   CODEX_CONVERSATION_DISCLOSURE_VERSION,
+  HERMES_CONVERSATION_DISCLOSURE_VERSION,
+  OPENCLAW_CONVERSATION_DISCLOSURE_VERSION,
   XAI_CONVERSATION_DISCLOSURE_VERSION,
 } from "../../src/conversationDataDisclosure.js";
 
@@ -17,6 +19,7 @@ function makeCtx(configDir: string, config: Record<string, unknown> = {
   llm: { enabled: true, command: ["codex"] },
 }): AppContext {
   return {
+    uiMutationAuthorized: true,
     paths: { configDir },
     config: { read: () => config },
     xaiCredentials: { status: async () => ({ connected: true, source: "oauth" }) },
@@ -35,6 +38,20 @@ function makeCtx(configDir: string, config: Record<string, unknown> = {
         label: "Claude Code",
         lifecycle: "available",
         settings: { executablePath: "/fake/claude", conversationModel: "claude-sonnet-5" },
+      }, {
+        id: "hermes",
+        kind: "supported-agent",
+        adapter: "hermes",
+        label: "Hermes",
+        lifecycle: "available",
+        settings: { executablePath: "/fake/hermes", conversationModel: "grok-4.6" },
+      }, {
+        id: "openclaw",
+        kind: "supported-agent",
+        adapter: "openclaw",
+        label: "OpenClaw",
+        lifecycle: "available",
+        settings: { executablePath: "/fake/openclaw", conversationModel: "openai-codex/gpt-5.5" },
       }, {
         id: "cliproxyapi",
         kind: "gateway",
@@ -293,6 +310,66 @@ describe("agentSessionsRouter", () => {
       connectionId: "claude-code",
       model: "claude-sonnet-5",
     });
+  });
+
+  it.each([
+    ["hermes", "Hermes", "grok-4.6", HERMES_CONVERSATION_DISCLOSURE_VERSION],
+    ["openclaw", "OpenClaw", "openai-codex/gpt-5.5", OPENCLAW_CONVERSATION_DISCLOSURE_VERSION],
+  ] as const)("snapshots the exact %s Conversation connection after current disclosure and readiness", async (
+    adapter,
+    runtimeLabel,
+    model,
+    disclosureVersion,
+  ) => {
+    const root = mkdtempSync(join(tmpdir(), "agent-sessions-"));
+    roots.push(root);
+    const config = {
+      intelligence: { conversation: { provider: "agent", connectionId: adapter, model } },
+      llm: { enabled: false, command: null, agent: { provider: "auto" } },
+    };
+    const ctx = makeCtx(root, config);
+    const runtimeProvider = adapter === "hermes" ? "xai" : "openai-codex";
+    const assertConversationOnlyReady = vi.fn(async () => runtimeProvider);
+    ctx.agentConnections = { assertConversationOnlyReady } as never;
+    let accepted = false;
+    ctx.host.getAgentConnectionDisclosure = () => accepted ? {
+      connectionId: adapter,
+      capability: "conversation",
+      disclosureVersion,
+      decision: "accepted",
+      decidedAt: "2026-08-28T00:00:00.000Z",
+    } : null;
+    const caller = createCaller(agentSessionsRouter, ctx);
+
+    await expect(caller.create({ title: `${runtimeLabel} disclosure` }))
+      .rejects.toThrow(`${runtimeLabel} Conversation data path disclosure`);
+    accepted = true;
+    const created = await caller.create({ title: `${runtimeLabel} pinned` });
+
+    expect(created).toMatchObject({
+      provider: adapter,
+      connectionId: adapter,
+      model,
+      credentialSource: "runtime-oauth",
+      runtimeLabel,
+      runtimeProvider,
+      disclosureVersion,
+    });
+    expect(created.nativeSessionId).toBeUndefined();
+    expect(assertConversationOnlyReady).toHaveBeenCalledWith({
+      connectionId: adapter,
+      model,
+    });
+  });
+
+  it("rejects browser mutations without the UI mutation bearer", async () => {
+    const root = mkdtempSync(join(tmpdir(), "agent-sessions-"));
+    roots.push(root);
+    const ctx = makeCtx(root);
+    ctx.uiMutationAuthorized = false;
+
+    await expect(createCaller(agentSessionsRouter, ctx).create({ title: "Unauthorized" }))
+      .rejects.toThrow("UI mutation bearer required");
   });
 
   it("snapshots the Gateway endpoint, model, credential class, and disclosure for a new conversation", async () => {

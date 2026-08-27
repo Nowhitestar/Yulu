@@ -207,6 +207,15 @@ separate real-request readiness for transcription, summary, and conversation.
 Upgrades archive and remove the retired `transcription.xai_credential_source`
 field; Hermes/OpenClaw credentials are not imported or deleted.
 
+Hermes and OpenClaw are Conversation-only entries in Agent Connection Center;
+they are never selectable as Summary providers. OpenClaw readiness uses the
+runtime-owned Gateway and the stable, raw `infer model run --gateway` surface so
+the probe has no agent tools, prior session, bootstrap context, or bundled MCP.
+The subsequent Conversation stays pinned to the exact provider, model, and
+native session returned by `openclaw agent`. Hermes 0.20.0 has no documented
+empty tool allowlist or equivalent raw probe, so its production adapter remains
+fail-closed even when native OAuth status is healthy.
+
 ## `llm` and Agent Console
 
 `llm` selects the **general Agent** used for interactive Agent Console work.

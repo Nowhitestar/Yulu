@@ -21,11 +21,14 @@ import {
   CLAUDE_CODE_CONVERSATION_DISCLOSURE_VERSION,
   CLIPROXYAPI_CONVERSATION_DISCLOSURE_VERSION,
   CODEX_CONVERSATION_DISCLOSURE_VERSION,
+  HERMES_CONVERSATION_DISCLOSURE_VERSION,
+  OPENCLAW_CONVERSATION_DISCLOSURE_VERSION,
   hasCurrentAgentConversationDisclosure,
   hasCurrentXaiConversationDisclosure,
 } from "../conversationDataDisclosure.js";
 import { CodexConversationError } from "../codexAgentAdapter.js";
 import { ClaudeCodeConversationError } from "../claudeCodeAdapter.js";
+import { ConversationOnlyAgentConversationError } from "../conversationOnlyAgentAdapter.js";
 import {
   GatewayRequestUnknownOutcomeError,
   isExactGatewayRuntimeEvidence,
@@ -358,12 +361,25 @@ export const askRouter = router({
         }
       }
 
-      if (session.provider === "codex" || session.provider === "claude-code") {
+      if (
+        session.provider === "codex" || session.provider === "claude-code" ||
+        ((session.provider === "hermes" || session.provider === "openclaw") &&
+          Boolean(session.connectionId) && session.credentialSource === "runtime-oauth")
+      ) {
         const isClaude = session.provider === "claude-code";
-        const runtimeName = isClaude ? "Claude Code" : "Codex";
+        const isConversationOnly = session.provider === "hermes" || session.provider === "openclaw";
+        const runtimeName = isClaude
+          ? "Claude Code"
+          : session.provider === "hermes"
+            ? "Hermes"
+            : session.provider === "openclaw" ? "OpenClaw" : "Codex";
         const disclosureVersion = isClaude
           ? CLAUDE_CODE_CONVERSATION_DISCLOSURE_VERSION
-          : CODEX_CONVERSATION_DISCLOSURE_VERSION;
+          : session.provider === "hermes"
+            ? HERMES_CONVERSATION_DISCLOSURE_VERSION
+            : session.provider === "openclaw"
+              ? OPENCLAW_CONVERSATION_DISCLOSURE_VERSION
+              : CODEX_CONVERSATION_DISCLOSURE_VERSION;
         const search = agentOwnedSearchProjection(question);
         const snapshot = retrySnapshot ?? { question, sources: [] };
         if (!session.connectionId || session.credentialSource !== "runtime-oauth") {
@@ -372,6 +388,34 @@ export const askRouter = router({
               ctx.paths.configDir,
               session,
               `Pinned ${runtimeName} connection identity is unavailable; create a new conversation after selecting ${runtimeName} again`,
+              search,
+              undefined,
+              [],
+              snapshot,
+            ),
+            elapsedMs: Date.now() - startedAt,
+          };
+        }
+        if (isConversationOnly && session.disclosureVersion !== disclosureVersion) {
+          return {
+            ...pauseResponse(
+              ctx.paths.configDir,
+              session,
+              `Pinned ${runtimeName} disclosure snapshot is unavailable; create a new conversation after accepting the current disclosure`,
+              search,
+              undefined,
+              [],
+              snapshot,
+            ),
+            elapsedMs: Date.now() - startedAt,
+          };
+        }
+        if (isConversationOnly && !session.runtimeProvider) {
+          return {
+            ...pauseResponse(
+              ctx.paths.configDir,
+              session,
+              `Pinned ${runtimeName} provider identity is unavailable; create a new conversation after testing the exact provider and model`,
               search,
               undefined,
               [],
@@ -419,9 +463,14 @@ export const askRouter = router({
             prompt: buildAgentQuestionPrompt(question, input.limit ?? MAX_SOURCE_COUNT),
             ...(session.nativeSessionId ? { nativeSessionId: session.nativeSessionId } : {}),
           };
-          const result = isClaude
-            ? await ctx.agentConnections.converseClaude(request)
-            : await ctx.agentConnections.converseCodex(request);
+          const result = isConversationOnly
+            ? await ctx.agentConnections.converseConversationOnly({
+                ...request,
+                provider: session.runtimeProvider!,
+              })
+            : isClaude
+              ? await ctx.agentConnections.converseClaude(request)
+              : await ctx.agentConnections.converseCodex(request);
           if (!session.nativeSessionId) {
             updateAgentSessionNativeSession(ctx.paths.configDir, session.id, {
               nativeSessionId: result.nativeSessionId,
@@ -449,7 +498,8 @@ export const askRouter = router({
           };
         } catch (error) {
           const isNativeConversationError = error instanceof CodexConversationError ||
-            error instanceof ClaudeCodeConversationError;
+            error instanceof ClaudeCodeConversationError ||
+            error instanceof ConversationOnlyAgentConversationError;
           const unknownWithoutSession = isNativeConversationError && error.unknownOutcome &&
             !session.nativeSessionId && !error.nativeSessionId;
           if (isNativeConversationError && !session.nativeSessionId && error.nativeSessionId) {

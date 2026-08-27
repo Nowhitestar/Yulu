@@ -14,10 +14,13 @@ import {
   CLAUDE_CODE_CONVERSATION_DISCLOSURE_VERSION,
   CLIPROXYAPI_CONVERSATION_DISCLOSURE_VERSION,
   CODEX_CONVERSATION_DISCLOSURE_VERSION,
+  HERMES_CONVERSATION_DISCLOSURE_VERSION,
+  OPENCLAW_CONVERSATION_DISCLOSURE_VERSION,
   XAI_CONVERSATION_DISCLOSURE_VERSION,
 } from "../../src/conversationDataDisclosure.js";
 import { CodexConversationError } from "../../src/codexAgentAdapter.js";
 import { ClaudeCodeConversationError } from "../../src/claudeCodeAdapter.js";
+import { ConversationOnlyAgentConversationError } from "../../src/conversationOnlyAgentAdapter.js";
 import { GatewayRequestUnknownOutcomeError } from "../../src/cliProxyApiAdapter.js";
 
 const runAgentCliCommand = vi.hoisted(() => vi.fn());
@@ -35,6 +38,8 @@ function context(
     codexConverse?: ReturnType<typeof vi.fn>;
     claudeDisclosure?: boolean;
     claudeConverse?: ReturnType<typeof vi.fn>;
+    conversationOnlyDisclosure?: boolean;
+    conversationOnlyConverse?: ReturnType<typeof vi.fn>;
     gatewayDisclosure?: boolean;
     gatewayConverse?: ReturnType<typeof vi.fn>;
     uiMutationAuthorized?: boolean;
@@ -55,6 +60,8 @@ function context(
           ? injected.codexDisclosure === false
           : connectionId === "claude-code"
             ? injected.claudeDisclosure === false
+            : connectionId === "hermes" || connectionId === "openclaw"
+              ? injected.conversationOnlyDisclosure === false
             : connectionId === "cliproxyapi"
               ? injected.gatewayDisclosure === false
             : injected.conversationDisclosure === false)
@@ -65,6 +72,10 @@ function context(
           ? CODEX_CONVERSATION_DISCLOSURE_VERSION
           : connectionId === "claude-code"
             ? CLAUDE_CODE_CONVERSATION_DISCLOSURE_VERSION
+            : connectionId === "hermes"
+              ? HERMES_CONVERSATION_DISCLOSURE_VERSION
+              : connectionId === "openclaw"
+                ? OPENCLAW_CONVERSATION_DISCLOSURE_VERSION
             : connectionId === "cliproxyapi"
               ? CLIPROXYAPI_CONVERSATION_DISCLOSURE_VERSION
             : XAI_CONVERSATION_DISCLOSURE_VERSION,
@@ -75,10 +86,11 @@ function context(
     paths: { configDir, moviesDir, scriptDir: "/fake/yulu/scripts" },
     ...(injected.localSearch ? { localSearch: injected.localSearch } : {}),
     ...(injected.xaiRequest ? { xaiText: { request: injected.xaiRequest } } : {}),
-    ...(injected.codexConverse || injected.claudeConverse || injected.gatewayConverse ? {
+    ...(injected.codexConverse || injected.claudeConverse || injected.conversationOnlyConverse || injected.gatewayConverse ? {
       agentConnections: {
         ...(injected.codexConverse ? { converseCodex: injected.codexConverse } : {}),
         ...(injected.claudeConverse ? { converseClaude: injected.claudeConverse } : {}),
+        ...(injected.conversationOnlyConverse ? { converseConversationOnly: injected.conversationOnlyConverse } : {}),
         ...(injected.gatewayConverse ? { converseGateway: injected.gatewayConverse } : {}),
       },
     } : {}),
@@ -106,6 +118,26 @@ function session(ctx: AppContext, provider: string, model = "runtime-managed") {
       credentialSource: "api-key" as const,
       credentialIdentity: "gateway.cliproxyapi.00000000-0000-4000-8000-000000000137",
     } : {}),
+    title: "Ask",
+  });
+}
+
+function explicitConversationOnlySession(
+  ctx: AppContext,
+  provider: "hermes" | "openclaw",
+  model: string,
+) {
+  return createAgentSession(ctx.paths.configDir, {
+    purpose: "ask",
+    provider,
+    connectionId: provider,
+    model,
+    runtimeProvider: provider === "hermes" ? "xai" : "openai-codex",
+    disclosureVersion: provider === "hermes"
+      ? HERMES_CONVERSATION_DISCLOSURE_VERSION
+      : OPENCLAW_CONVERSATION_DISCLOSURE_VERSION,
+    credentialSource: "runtime-oauth",
+    runtimeLabel: provider === "hermes" ? "Hermes" : "OpenClaw",
     title: "Ask",
   });
 }
@@ -227,6 +259,143 @@ describe("pinned Ask flow", () => {
     });
     expect(runAgentCliCommand).not.toHaveBeenCalled();
     expect(ClaudeCodeConversationError).toBeTypeOf("function");
+  });
+
+  it.each([
+    ["hermes", "Hermes", "grok-4.6"],
+    ["openclaw", "OpenClaw", "openai-codex/gpt-5.5"],
+  ] as const)("pins and resumes the exact %s native Conversation session", async (provider, runtimeLabel, model) => {
+    const nativeSessionId = `${provider}-native-session-138`;
+    const conversationOnlyConverse = vi.fn()
+      .mockResolvedValueOnce({
+        answer: `First ${runtimeLabel} answer`,
+        nativeSessionId,
+        usedFallback: false,
+        evidence: { adapter: provider, requestedModel: model, actualModel: model, sessionId: nativeSessionId },
+      })
+      .mockResolvedValueOnce({
+        answer: `Resumed ${runtimeLabel} answer`,
+        nativeSessionId,
+        usedFallback: false,
+        evidence: { adapter: provider, requestedModel: model, actualModel: model, sessionId: nativeSessionId },
+      });
+    const config = {
+      intelligence: { conversation: { provider: "agent", connectionId: provider, model } },
+      llm: { enabled: false, command: null, agent: { provider: "auto" } },
+    };
+    const ctx = context(config, { conversationOnlyConverse });
+    const pinned = explicitConversationOnlySession(ctx, provider, model);
+
+    const first = await createCaller(askRouter, ctx).ask({ question: "first", sessionId: pinned.id });
+    config.intelligence.conversation = { provider: "xai", model: "changed" } as never;
+    const second = await createCaller(askRouter, ctx).ask({ question: "second", sessionId: pinned.id });
+
+    expect(first).toMatchObject({ ok: true, answer: `First ${runtimeLabel} answer`, provider, model });
+    expect(second).toMatchObject({ ok: true, answer: `Resumed ${runtimeLabel} answer`, provider, model });
+    expect(conversationOnlyConverse).toHaveBeenNthCalledWith(1, {
+      connectionId: provider,
+      model,
+      provider: provider === "hermes" ? "xai" : "openai-codex",
+      prompt: expect.stringContaining("first"),
+    });
+    expect(conversationOnlyConverse).toHaveBeenNthCalledWith(2, {
+      connectionId: provider,
+      model,
+      provider: provider === "hermes" ? "xai" : "openai-codex",
+      prompt: expect.stringContaining("second"),
+      nativeSessionId,
+    });
+    expect(getAgentSession(ctx.paths.configDir, pinned.id)).toMatchObject({
+      provider,
+      connectionId: provider,
+      model,
+      nativeSessionId,
+      runtimeLabel,
+      runtimeProvider: provider === "hermes" ? "xai" : "openai-codex",
+      disclosureVersion: provider === "hermes"
+        ? HERMES_CONVERSATION_DISCLOSURE_VERSION
+        : OPENCLAW_CONVERSATION_DISCLOSURE_VERSION,
+    });
+    expect(runAgentCliCommand).not.toHaveBeenCalled();
+  });
+
+  it("pauses a Conversation-only session whose pinned runtime provider is missing", async () => {
+    const model = "grok-4.6";
+    const conversationOnlyConverse = vi.fn();
+    const ctx = context({}, { conversationOnlyConverse });
+    const pinned = createAgentSession(ctx.paths.configDir, {
+      purpose: "ask",
+      provider: "hermes",
+      connectionId: "hermes",
+      model,
+      credentialSource: "runtime-oauth",
+      disclosureVersion: HERMES_CONVERSATION_DISCLOSURE_VERSION,
+      title: "Legacy",
+    });
+
+    await expect(createCaller(askRouter, ctx).ask({ question: "continue", sessionId: pinned.id }))
+      .resolves.toMatchObject({ ok: false, sessionStatus: "paused" });
+    expect(conversationOnlyConverse).not.toHaveBeenCalled();
+  });
+
+  it("pauses a Conversation-only session whose disclosure snapshot is missing", async () => {
+    const model = "grok-4.6";
+    const conversationOnlyConverse = vi.fn();
+    const ctx = context({}, { conversationOnlyConverse });
+    const pinned = createAgentSession(ctx.paths.configDir, {
+      purpose: "ask",
+      provider: "hermes",
+      connectionId: "hermes",
+      model,
+      runtimeProvider: "xai",
+      credentialSource: "runtime-oauth",
+      title: "Legacy",
+    });
+
+    await expect(createCaller(askRouter, ctx).ask({ question: "continue", sessionId: pinned.id }))
+      .resolves.toMatchObject({ ok: false, sessionStatus: "paused" });
+    expect(conversationOnlyConverse).not.toHaveBeenCalled();
+  });
+
+  it("blocks replay when an OpenClaw Unknown Outcome has no native session identity", async () => {
+    const model = "openai-codex/gpt-5.5";
+    const evidence = {
+      adapter: "openclaw" as const,
+      transport: "openclaw-cli-gateway-json" as const,
+      runtimeVersion: "2026.5.12",
+      requestedProvider: null,
+      requestedModel: model,
+      actualProvider: null,
+      actualModel: null,
+      requestId: null,
+      sessionId: null,
+      terminalStatus: "unknown" as const,
+      fallbackOccurred: null,
+      cancellationRequested: true,
+      cancellationConfirmed: false,
+    };
+    const conversationOnlyConverse = vi.fn().mockRejectedValue(new ConversationOnlyAgentConversationError(
+      "OpenClaw Conversation outcome is unknown; inspect the runtime before starting a new attempt",
+      { evidence, unknownOutcome: true },
+    ));
+    const ctx = context({}, { conversationOnlyConverse });
+    const pinned = explicitConversationOnlySession(ctx, "openclaw", model);
+
+    const failed = await createCaller(askRouter, ctx).ask({ question: "uncertain", sessionId: pinned.id });
+    expect(failed).toMatchObject({
+      ok: false,
+      provider: "openclaw",
+      sessionStatus: "paused",
+      runtimeEvidence: { terminalStatus: "unknown", sessionId: null },
+      recovery: { retry: "unavailable_unknown_outcome", newConversation: true },
+    });
+    expect(getAgentSession(ctx.paths.configDir, pinned.id)).not.toHaveProperty("retrySnapshot");
+    await expect(createCaller(askRouter, ctx).ask({
+      question: "uncertain",
+      sessionId: pinned.id,
+      retry: true,
+    })).resolves.toMatchObject({ recovery: { retry: "unavailable_unknown_outcome" } });
+    expect(conversationOnlyConverse).toHaveBeenCalledOnce();
   });
 
   it("keeps Gateway Conversation on the pinned endpoint and model with bounded tool-free history", async () => {

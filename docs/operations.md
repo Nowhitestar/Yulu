@@ -424,6 +424,31 @@ string. `yulu doctor --json` probes the required `serve`, `sessions export`,
 `agent_pipeline.components.hermes_contract` check as an incompatible Hermes
 installation and update Hermes before retrying a recording.
 
+## Conversation-only Hermes and OpenClaw connections
+
+Agent Connection Center does not spend model quota on open or refresh. A
+Conversation capability test is enabled only after the current disclosure is
+accepted. Readiness requires runtime-owned authorization plus exact runtime,
+provider, model, fallback, and capability-probe evidence; an executable on PATH
+or a configured model is never sufficient.
+
+- OpenClaw 2026.5.12+ is probed through `openclaw infer model run --gateway`.
+  The JSON result must identify `transport=gateway`, the exact provider/model,
+  and an empty fallback-attempt list. Production turns use `openclaw agent` and
+  must return the exact requested session ID; embedded fallback, latest/default
+  session drift, transport loss, and unproven cancellation fail closed.
+- Hermes 0.20.0 exposes `--safe-mode` and `--toolsets`, but neither documents a
+  stable empty tool allowlist. Yulu therefore reports this native Conversation
+  adapter unsupported instead of running a potentially tool-capable probe.
+- A timeout or closed transport is an Unknown Outcome unless the remote runtime
+  proves a terminal result. Do not replay automatically. With no proven native
+  session, the same input remains unavailable for retry; start a new
+  conversation only after inspecting the runtime outcome.
+- Deleting either connection removes its Yulu record, readiness history,
+  disclosure receipt, and future selection. A preserved pinned conversation
+  pauses on its next attempt because the exact connection is gone; Yulu never
+  deletes runtime OAuth, tokens, configuration, or native session history.
+
 ## Build and codesign native capture
 
 For a development checkout:

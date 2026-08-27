@@ -10,13 +10,26 @@ import { createCaller } from "../../src/trpc.js";
 import { createAgentSession, readAgentSessionStore } from "../../src/agentSessionStore.js";
 import { CLAUDE_CODE_CONVERSATION_DISCLOSURE_VERSION } from "../../src/conversationDataDisclosure.js";
 import type { GatewayRuntimeEvidence } from "../../src/cliProxyApiAdapter.js";
+import {
+  ConversationOnlyAgentAdapter,
+  type ConversationOnlyAgentKind,
+  type ConversationOnlyProbeResult,
+  type ConversationOnlyRuntimeClient,
+} from "../../src/conversationOnlyAgentAdapter.js";
+import {
+  ConversationOnlyCliRuntimeClient,
+  type CliCommandRunner,
+} from "../../src/conversationOnlyCliClient.js";
 
 const roots: string[] = [];
 
 function setup(
   config: Record<string, unknown>,
   discovered: Array<{ adapter: "codex" | "claude-code" | "hermes" | "openclaw"; label: string; path: string }> = [],
-  options: { seedDirectCredentialSource?: "oauth" | "api-key" | false } = {},
+  options: {
+    seedDirectCredentialSource?: "oauth" | "api-key" | false;
+    conversationOnlyClient?: ConversationOnlyRuntimeClient;
+  } = {},
 ) {
   const root = mkdtempSync(join(tmpdir(), "yulu-agent-connections-"));
   roots.push(root);
@@ -220,6 +233,58 @@ function setup(
     converse: vi.fn(),
   };
   const claudeAdapter = vi.fn(() => claude);
+  const conversationOnly = {
+    status: vi.fn(async (adapter: ConversationOnlyAgentKind) => ({
+      adapter,
+      transport: adapter === "hermes" ? "hermes-cli-chat" as const : "openclaw-cli-gateway-json" as const,
+      runtimeVersion: adapter === "hermes" ? "0.20.0" : "2026.5.12",
+      minimumVersion: adapter === "hermes" ? "0.20.0" as const : "2026.5.12" as const,
+      supported: true,
+      authorized: true,
+      credentialSource: "runtime-oauth" as const,
+      provider: adapter === "hermes" ? "xai" : "openai-codex",
+      model: adapter === "hermes" ? "grok-4.6" : "openai-codex/gpt-5.5",
+      availableModels: [],
+      features: adapter === "hermes"
+        ? ["status" as const, "model" as const, "query" as const, "resume" as const, "session-id" as const, "probe-bounds" as const, "no-fallback" as const]
+        : ["models/status-json" as const, "model" as const, "message" as const, "session-id" as const, "json" as const, "probe-bounds" as const, "no-fallback" as const],
+      login: {
+        command: adapter === "hermes" ? "/fake/bin/hermes model" : "/fake/bin/openclaw configure",
+        statusCommand: adapter === "hermes" ? "/fake/bin/hermes status" : "/fake/bin/openclaw models status --json --check",
+      },
+      remediation: null,
+    })),
+    probe: vi.fn(async (adapter: ConversationOnlyAgentKind, model: string): Promise<ConversationOnlyProbeResult> => ({
+      status: "ready" as const,
+      reason: null,
+      remediation: null,
+      evidence: {
+        adapter,
+        transport: adapter === "hermes" ? "hermes-cli-chat" as const : "openclaw-cli-gateway-json" as const,
+        runtimeVersion: adapter === "hermes" ? "0.20.0" : "2026.5.12",
+        requestedProvider: adapter === "hermes" ? "xai" : "openai-codex",
+        requestedModel: model,
+        actualProvider: adapter === "hermes" ? "xai" : "openai-codex",
+        actualModel: model,
+        requestId: null,
+        sessionId: `${adapter}-probe-138`,
+        terminalStatus: "ready" as const,
+        fallbackOccurred: false,
+        cancellationRequested: false,
+        cancellationConfirmed: null,
+      },
+    })),
+    converse: vi.fn(),
+  };
+  const conversationOnlyAdapter = vi.fn((adapter: ConversationOnlyAgentKind, executable: string) =>
+    options.conversationOnlyClient
+      ? new ConversationOnlyAgentAdapter({ adapter, executable, client: options.conversationOnlyClient })
+      : {
+          status: () => conversationOnly.status(adapter),
+          probe: ({ model }: { model: string }) => conversationOnly.probe(adapter, model),
+          converse: conversationOnly.converse,
+        }
+  );
   const gatewayKeys = new Map<string, string>();
   const gatewaySecretWrite = vi.fn(async (credentialIdentity: string, value: string) => {
     gatewayKeys.set(credentialIdentity, value);
@@ -302,6 +367,7 @@ function setup(
     discover,
     codexAdapter,
     claudeAdapter,
+    conversationOnlyAdapter,
     gatewaySecretStore,
     cliProxyAdapter,
   });
@@ -325,6 +391,8 @@ function setup(
     codexAdapter,
     claude,
     claudeAdapter,
+    conversationOnly,
+    conversationOnlyAdapter,
     gateway,
     gatewaySecretStore,
     gatewaySecretWrite,
@@ -344,6 +412,7 @@ function setup(
       discover,
       codexAdapter,
       claudeAdapter,
+      conversationOnlyAdapter,
       gatewaySecretStore,
       cliProxyAdapter,
     }),
@@ -952,6 +1021,247 @@ describe("public Agent Connection Host contract", () => {
     await caller.remove({ connectionId: "cliproxyapi", confirmed: true });
     expect(setupResult.gatewaySecretClear).toHaveBeenCalledTimes(2);
     expect(setupResult.gatewayKeys.size).toBe(0);
+    setupResult.host.close();
+  });
+
+  it.each([
+    ["hermes", "Hermes", "/fake/bin/hermes", "grok-4.6"],
+    ["openclaw", "OpenClaw", "/fake/bin/openclaw", "openai-codex/gpt-5.5"],
+  ] as const)("connects %s explicitly as Conversation-only without probing on open", async (
+    adapter,
+    label,
+    path,
+    model,
+  ) => {
+    const setupResult = setup({
+      audio: {},
+      transcription: { engine: "local", language: "zh" },
+      intelligence: {
+        summary: { provider: "xai", model: "grok-4.6" },
+        conversation: { provider: "xai", model: "grok-4.6" },
+      },
+      llm: { agent: { provider: "auto" } },
+    }, [{ adapter, label, path }]);
+    const caller = createCaller(agentConnectionsRouter, {
+      agentConnections: setupResult.center,
+      uiMutationAuthorized: true,
+    } as never);
+
+    await caller.refreshCandidates();
+    expect((await caller.view()).candidates).toContainEqual(expect.objectContaining({
+      adapter,
+      capabilities: ["conversation"],
+      lifecycle: "candidate",
+    }));
+    expect(setupResult.conversationOnly.status).not.toHaveBeenCalled();
+    expect(setupResult.conversationOnly.probe).not.toHaveBeenCalled();
+
+    const connected = await caller.confirmCandidate({ candidateId: `candidate:${adapter}`, model });
+    expect(connected.connections).toContainEqual(expect.objectContaining({
+      id: adapter,
+      adapter,
+      authorization: expect.objectContaining({ connected: true, credentialSource: "runtime-oauth" }),
+      capabilities: [expect.objectContaining({
+        capability: "conversation",
+        currentReadiness: expect.objectContaining({ status: "untested", model }),
+      })],
+    }));
+    const connection = connected.connections.find((item: { id: string }) => item.id === adapter);
+    expect(connection.capabilities.some((item: { capability: string }) => item.capability === "summary")).toBe(false);
+    await expect(caller.probe({ connectionId: adapter, capability: "summary", model }))
+      .rejects.toThrow(/Conversation only/i);
+    await expect(caller.probe({ connectionId: adapter, capability: "conversation", model }))
+      .rejects.toThrow(/disclosure/i);
+    expect(setupResult.conversationOnly.probe).not.toHaveBeenCalled();
+
+    await caller.acceptDisclosure({ connectionId: adapter, capability: "conversation" });
+    await expect(caller.probe({ connectionId: adapter, capability: "conversation", model })).resolves.toMatchObject({
+      capability: "conversation",
+      status: "ready",
+      model,
+    });
+    await caller.select({ connectionId: adapter, capability: "conversation", model });
+    expect(JSON.parse(readFileSync(setupResult.configPath, "utf8"))).toMatchObject({
+      intelligence: { conversation: { provider: "agent", connectionId: adapter, model } },
+    });
+    expect(JSON.stringify(await caller.view())).not.toContain("accessToken");
+    setupResult.host.close();
+  });
+
+  it("accepts captured production OpenClaw Client-to-Adapter-to-Center evidence", async () => {
+    const run: CliCommandRunner = vi.fn(async (command) => {
+      const args = command.slice(1).join(" ");
+      const stdout = args === "--version"
+        ? "OpenClaw 2026.5.12 (f066dd2)\n"
+        : args === "agent --help"
+          ? "--json --model <id> --message <text> --session-id <id>\n"
+          : args === "models status --json --check"
+            ? JSON.stringify({
+                resolvedDefault: "openai-codex/gpt-5.5",
+                fallbacks: [],
+                auth: { missingProvidersInUse: [], unusableProfiles: [] },
+              })
+            : args === "infer model run --help"
+              ? "--local --gateway --model <provider/model> --prompt <text> --json\n"
+              : args.startsWith("infer model run --gateway --model openai-codex/gpt-5.5")
+                ? JSON.stringify({
+                    ok: true,
+                    capability: "model.run",
+                    transport: "gateway",
+                    provider: "openai-codex",
+                    model: "gpt-5.5",
+                    attempts: [],
+                    outputs: [{ text: "YULU_OPENCLAW_PROBE_OK" }],
+                  })
+                : "";
+      return {
+        stdout,
+        stderr: "",
+        code: stdout ? 0 : 1,
+        timedOut: false,
+        cancellationRequested: false,
+        cancellationConfirmed: null,
+      };
+    });
+    const runtime = new ConversationOnlyCliRuntimeClient({
+      adapter: "openclaw",
+      executable: "/fake/bin/openclaw",
+      cwd: "/movies",
+      run,
+    });
+    const setupResult = setup({
+      audio: {},
+      transcription: { engine: "local", language: "zh" },
+      intelligence: {
+        summary: { provider: "xai", model: "grok-4.6" },
+        conversation: { provider: "xai", model: "grok-4.6" },
+      },
+      llm: { agent: { provider: "auto" } },
+    }, [{ adapter: "openclaw", label: "OpenClaw", path: "/fake/bin/openclaw" }], {
+      conversationOnlyClient: runtime,
+    });
+    const caller = createCaller(agentConnectionsRouter, {
+      agentConnections: setupResult.center,
+      uiMutationAuthorized: true,
+    } as never);
+
+    await caller.refreshCandidates();
+    await caller.confirmCandidate({ candidateId: "candidate:openclaw", model: "openai-codex/gpt-5.5" });
+    await caller.acceptDisclosure({ connectionId: "openclaw", capability: "conversation" });
+    await expect(caller.probe({
+      connectionId: "openclaw",
+      capability: "conversation",
+      model: "openai-codex/gpt-5.5",
+    })).resolves.toMatchObject({ status: "ready", model: "openai-codex/gpt-5.5" });
+    expect(setupResult.host.listAgentConnectionReadinessHistory("openclaw", "conversation"))
+      .toEqual([expect.objectContaining({
+        runtimeEvidence: expect.objectContaining({
+          requestedProvider: "openai-codex",
+          actualProvider: "openai-codex",
+          requestedModel: "openai-codex/gpt-5.5",
+          actualModel: "openai-codex/gpt-5.5",
+        }),
+      })]);
+    expect(run).toHaveBeenCalledWith(expect.arrayContaining([
+      "infer", "model", "run", "--gateway", "--model", "openai-codex/gpt-5.5",
+    ]), "/movies", 30_000);
+    setupResult.host.close();
+  });
+
+  it("persists Conversation-only Unknown Outcome evidence across Host restart", async () => {
+    const setupResult = setup({
+      audio: {},
+      transcription: { engine: "local", language: "zh" },
+      intelligence: {
+        summary: { provider: "xai", model: "grok-4.6" },
+        conversation: { provider: "xai", model: "grok-4.6" },
+      },
+      llm: { agent: { provider: "auto" } },
+    }, [{ adapter: "openclaw", label: "OpenClaw", path: "/fake/bin/openclaw" }]);
+    const caller = createCaller(agentConnectionsRouter, {
+      agentConnections: setupResult.center,
+      uiMutationAuthorized: true,
+    } as never);
+    await caller.refreshCandidates();
+    await caller.confirmCandidate({ candidateId: "candidate:openclaw", model: "openai-codex/gpt-5.5" });
+    await caller.acceptDisclosure({ connectionId: "openclaw", capability: "conversation" });
+    setupResult.conversationOnly.probe.mockResolvedValueOnce({
+      status: "failed",
+      reason: "unknown_outcome",
+      remediation: "OpenClaw probe outcome is unknown",
+      evidence: {
+        adapter: "openclaw",
+        transport: "openclaw-cli-gateway-json",
+        runtimeVersion: "2026.5.12",
+        requestedProvider: "openai-codex",
+        requestedModel: "openai-codex/gpt-5.5",
+        actualProvider: null,
+        actualModel: null,
+        requestId: null,
+        sessionId: null,
+        terminalStatus: "unknown",
+        fallbackOccurred: null,
+        cancellationRequested: true,
+        cancellationConfirmed: false,
+      },
+    });
+
+    await expect(caller.probe({
+      connectionId: "openclaw",
+      capability: "conversation",
+      model: "openai-codex/gpt-5.5",
+    })).resolves.toMatchObject({ status: "failed", reason: "unknown_outcome" });
+    expect((await setupResult.makeCenter().view()).connections
+      .find((connection) => connection.id === "openclaw")?.capabilities[0]?.readinessHistory)
+      .toEqual([expect.objectContaining({
+        reason: "unknown_outcome",
+        runtimeEvidence: expect.objectContaining({
+          terminalStatus: "unknown",
+          fallbackOccurred: null,
+        }),
+      })]);
+    setupResult.host.close();
+  });
+
+  it("deletes only the Yulu OpenClaw connection boundary and clears its future selection", async () => {
+    const setupResult = setup({
+      audio: {},
+      transcription: { engine: "local", language: "zh" },
+      intelligence: {
+        summary: { provider: "xai", model: "grok-4.6" },
+        conversation: { provider: "agent", connectionId: "openclaw", model: "openai-codex/gpt-5.5" },
+      },
+      llm: { agent: { provider: "auto" } },
+    }, [{ adapter: "openclaw", label: "OpenClaw", path: "/fake/bin/openclaw" }]);
+    const caller = createCaller(agentConnectionsRouter, {
+      agentConnections: setupResult.center,
+      uiMutationAuthorized: true,
+    } as never);
+    await caller.refreshCandidates();
+    await caller.confirmCandidate({ candidateId: "candidate:openclaw", model: "openai-codex/gpt-5.5" });
+    createAgentSession(setupResult.root, {
+      provider: "openclaw",
+      connectionId: "openclaw",
+      model: "openai-codex/gpt-5.5",
+      runtimeProvider: "openai-codex",
+      disclosureVersion: "openclaw-conversation-v1",
+      credentialSource: "runtime-oauth",
+      title: "Pinned OpenClaw",
+    });
+
+    await expect(caller.deletionImpact({ connectionId: "openclaw" })).resolves.toMatchObject({
+      selectedCapabilities: ["conversation"],
+      pinnedConversations: [expect.objectContaining({ title: "Pinned OpenClaw" })],
+      removesRuntimeAuthorization: false,
+      removesYuluManagedCredentials: false,
+    });
+    await caller.remove({ connectionId: "openclaw", confirmed: true });
+    expect(setupResult.credentials.logout).not.toHaveBeenCalled();
+    expect(setupResult.credentials.clearApiKey).not.toHaveBeenCalled();
+    expect(setupResult.host.listAgentConnectionRecords().some((record) => record.id === "openclaw")).toBe(false);
+    expect(JSON.parse(readFileSync(setupResult.configPath, "utf8"))).toMatchObject({
+      intelligence: { conversation: { provider: "agent", model: "runtime-managed" } },
+    });
     setupResult.host.close();
   });
 

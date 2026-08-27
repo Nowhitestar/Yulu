@@ -29,5 +29,10 @@ def test_provider_secret_slots_keep_values_off_argv_and_validate_slot_names():
 
     assert "FileHandle.standardInput.readDataToEndOfFile()" in source
     assert 'slot == "direct.xai"' in source
-    assert "gateway." not in source
+    assert (
+        r'#"^gateway\.cliproxyapi\.[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-'
+        r'[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"#'
+    ) in source
+    assert 'guard slot == "direct.xai" || gatewaySlot else' in source
+    assert "CommandLine.arguments.count == 2 || CommandLine.arguments.count == 3" in source
     assert "provider-secret" in source

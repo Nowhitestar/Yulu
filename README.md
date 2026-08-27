@@ -256,6 +256,20 @@ After installation, an Agent can handle requests such as:
 Installing the skill alone does not install the native app or transcription
 pipeline. Install Yulu first, then add the skill to each Agent you want to use.
 
+## Agent Connection capability matrix
+
+| Connection | Conversation | Summary | Authorization and readiness boundary |
+|---|---|---|---|
+| Codex / Claude Code | Supported when the exact production adapter proves its current runtime contract | Shown only where the runtime proves the stricter tool-free Summary contract | OAuth remains in the native runtime |
+| OpenClaw 2026.5.12+ | Supported after disclosure and a bounded, tool-free `infer model run --gateway` probe | Not supported | The probe and conversation must prove the same Gateway/provider/model with no fallback |
+| Hermes 0.20.0 | Unavailable until Hermes exposes a stable, tool-free capability-probe surface | Not supported | PATH, config, and OAuth status alone never count as ready |
+| CLIProxyAPI | Supported for an explicitly saved endpoint, exact model, and Yulu-managed inference key | Supported with an independent exact-model readiness proof | Credentials are write-only and never returned to the browser |
+
+Opening Agent Connection Center performs status inspection only and never spends
+model quota. A capability test requires its current Data Path Disclosure first.
+Deleting Hermes or OpenClaw removes only Yulu's connection/readiness history and
+future selection; it does not log out of or reconfigure the native runtime.
+
 ## Data and privacy
 
 - WAV recordings are stored under `~/Movies/Yulu` by default.

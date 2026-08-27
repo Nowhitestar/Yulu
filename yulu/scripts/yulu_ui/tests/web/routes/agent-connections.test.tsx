@@ -25,13 +25,13 @@ const mocks = vi.hoisted(() => ({
   logoutOAuth: vi.fn(async () => ({})),
   setApiKey: vi.fn(async () => ({})),
   clearApiKey: vi.fn(async () => ({})),
-  deletionImpact: vi.fn(async () => ({
-    connectionId: "direct-xai",
+  deletionImpact: vi.fn(async ({ connectionId }: { connectionId: string }) => ({
+    connectionId,
     selectedCapabilities: ["summary", "conversation"],
     pinnedTasks: [{ id: "task-1", recordingStem: "Planning_20260827_120000", title: "Planning", state: "queued", model: "grok-summary" }],
     pinnedConversations: [{ id: "session-1", title: "Launch plan", status: "active", model: "grok-conversation" }],
     removesRuntimeAuthorization: false,
-    removesYuluManagedCredentials: true,
+    removesYuluManagedCredentials: connectionId === "direct-xai" || connectionId === "cliproxyapi",
   })),
   remove: vi.fn(async () => ({})),
   view: {
@@ -196,6 +196,78 @@ const mocks = vi.hoisted(() => ({
         remediation: null,
       }],
     }, {
+      id: "hermes",
+      kind: "supported-agent",
+      adapter: "hermes",
+      label: "Hermes",
+      lifecycle: "connected",
+      authorization: {
+        connected: true,
+        credentialSource: "runtime-oauth",
+        runtimeVersion: "0.20.0",
+        minimumVersion: "0.20.0",
+        supported: true,
+        provider: "xai",
+        model: "grok-4.6",
+        availableModels: [],
+        features: ["status", "model", "query", "resume", "session-id", "probe-bounds", "no-fallback"],
+        loginCommand: "/fake/bin/hermes model",
+        statusCommand: "/fake/bin/hermes status",
+        remediation: null,
+      },
+      settings: { executablePath: "/fake/bin/hermes", conversationModel: "grok-4.6" },
+      capabilities: [{
+        capability: "conversation",
+        declared: true,
+        selected: false,
+        currentReadiness: { status: "ready", model: "grok-4.6", testedAt: "2026-08-28T12:00:00.000Z" },
+        readinessHistory: [],
+        disclosure: {
+          required: true,
+          disclosureVersion: "hermes-conversation-v1",
+          data: "conversation_text_and_agent_tool_context",
+          destination: "Hermes runtime and its configured model/tools/connectors",
+        },
+        remediation: null,
+      }],
+      summaryUnsupported: "Hermes is Conversation-only because its stable interface cannot prove a tool-free background Summary invocation",
+    }, {
+      id: "openclaw",
+      kind: "supported-agent",
+      adapter: "openclaw",
+      label: "OpenClaw",
+      lifecycle: "connected",
+      authorization: {
+        connected: true,
+        credentialSource: "runtime-oauth",
+        runtimeVersion: "2026.5.12",
+        minimumVersion: "2026.5.12",
+        supported: true,
+        provider: "openai-codex",
+        model: "openai-codex/gpt-5.5",
+        availableModels: [],
+        features: ["models/status-json", "model", "message", "session-id", "json", "probe-bounds", "no-fallback"],
+        loginCommand: "/fake/bin/openclaw configure",
+        statusCommand: "/fake/bin/openclaw models status --json --check",
+        remediation: null,
+      },
+      settings: { executablePath: "/fake/bin/openclaw", conversationModel: "openai-codex/gpt-5.5" },
+      capabilities: [{
+        capability: "conversation",
+        declared: true,
+        selected: false,
+        currentReadiness: { status: "ready", model: "openai-codex/gpt-5.5", testedAt: "2026-08-28T12:00:00.000Z" },
+        readinessHistory: [],
+        disclosure: {
+          required: true,
+          disclosureVersion: "openclaw-conversation-v1",
+          data: "conversation_text_and_agent_tool_context",
+          destination: "OpenClaw runtime and its configured model/tools/connectors",
+        },
+        remediation: null,
+      }],
+      summaryUnsupported: "OpenClaw is Conversation-only because its stable interface cannot prove a tool-free background Summary invocation",
+    }, {
       id: "cliproxyapi",
       kind: "gateway",
       adapter: "cliproxyapi",
@@ -267,6 +339,30 @@ const mocks = vi.hoisted(() => ({
       selected: false,
       readiness: "untested",
       remediation: { href: "/agent-connections?candidate=candidate%3Aclaude-code" },
+    }, {
+      id: "candidate:hermes",
+      kind: "supported-agent",
+      adapter: "hermes",
+      label: "Hermes",
+      lifecycle: "candidate",
+      source: "discovered",
+      detectedPath: "/fake/bin/hermes",
+      capabilities: ["conversation"],
+      selected: false,
+      readiness: "untested",
+      remediation: { href: "/agent-connections?candidate=candidate%3Ahermes" },
+    }, {
+      id: "candidate:openclaw",
+      kind: "supported-agent",
+      adapter: "openclaw",
+      label: "OpenClaw",
+      lifecycle: "candidate",
+      source: "discovered",
+      detectedPath: "/fake/bin/openclaw",
+      capabilities: ["conversation"],
+      selected: false,
+      readiness: "untested",
+      remediation: { href: "/agent-connections?candidate=candidate%3Aopenclaw" },
     }],
     legacyConnections: [{
       id: "legacy-custom:migrated",
@@ -346,7 +442,7 @@ describe("shared Agent Connection Center", () => {
     mount();
 
     expect(screen.getByRole("heading", { name: "Agent 连接中心" })).toBeInTheDocument();
-    expect(screen.getAllByText("候选连接，不是已连接")).toHaveLength(2);
+    expect(screen.getAllByText("候选连接，不是已连接")).toHaveLength(4);
     expect(screen.getByText("旧版自定义连接不能证明能力就绪")).toBeInTheDocument();
     const summary = screen.getByTestId("connection-capability-summary");
     expect(within(summary).getByText("需要修复")).toHaveAttribute("role", "alert");
@@ -454,6 +550,44 @@ describe("shared Agent Connection Center", () => {
       capability: "conversation",
       model: "claude-sonnet-5",
     });
+  });
+
+  it.each([
+    ["hermes", "Hermes", "grok-4.6"],
+    ["openclaw", "OpenClaw", "openai-codex/gpt-5.5"],
+  ] as const)("connects %s as Conversation-only with runtime-owned authorization", async (adapter, label, model) => {
+    mount("en");
+    const user = userEvent.setup();
+    const candidate = screen.getByTestId(`agent-candidate-${adapter}`);
+
+    await user.clear(within(candidate).getByRole("textbox", { name: `${label} Conversation model` }));
+    await user.type(within(candidate).getByRole("textbox", { name: `${label} Conversation model` }), model);
+    await user.click(within(candidate).getByRole("button", { name: `Connect ${label} runtime` }));
+    expect(mocks.confirmCandidate).toHaveBeenCalledWith({ candidateId: `candidate:${adapter}`, model });
+
+    const card = screen.getByTestId(`agent-connection-${adapter}`);
+    expect(within(card).queryByRole("heading", { name: "Summary" })).not.toBeInTheDocument();
+    expect(within(card).getByText(/Conversation-only.*tool-free background Summary/)).toBeInTheDocument();
+    expect(within(card).getByText(/never reads or copies.*credentials/i)).toBeInTheDocument();
+    const conversation = within(card).getByTestId(`connection-capability-${adapter}-conversation`);
+    expect(within(conversation).getByRole("button", { name: "Test conversation" })).toBeDisabled();
+    await user.click(within(conversation).getByRole("button", { name: `Accept ${label} Conversation Data Path Disclosure` }));
+    expect(mocks.acceptDisclosure).toHaveBeenCalledWith({ connectionId: adapter, capability: "conversation" });
+    expect(within(conversation).getByRole("button", { name: "Test conversation" })).toBeEnabled();
+    await user.click(within(conversation).getByRole("button", { name: "Test conversation" }));
+    expect(mocks.probe).toHaveBeenCalledWith({ connectionId: adapter, capability: "conversation", model });
+    await user.click(within(conversation).getByRole("button", { name: `Select ${label} for future conversations` }));
+    expect(mocks.select).toHaveBeenCalledWith({ connectionId: adapter, capability: "conversation", model });
+
+    await user.click(within(card).getByRole("button", { name: "Delete connection" }));
+    expect(mocks.deletionImpact).toHaveBeenCalledWith({ connectionId: adapter });
+    const dialog = await screen.findByRole("dialog", { name: `Delete ${label} connection` });
+    expect(within(dialog).getByText(/native OAuth login and runtime configuration remain unchanged/i)).toBeInTheDocument();
+    await user.click(within(dialog).getByRole("button", { name: "Confirm deletion" }));
+    expect(mocks.remove).toHaveBeenCalledWith({ connectionId: adapter, confirmed: true });
+    expect(within(conversation).getByRole("button", { name: `Accept ${label} Conversation Data Path Disclosure` }))
+      .toBeInTheDocument();
+    expect(within(conversation).getByRole("button", { name: "Test conversation" })).toBeDisabled();
   });
 
   it("creates CLIProxyAPI only from explicit endpoint, exact models, write-only key, and confirmation", async () => {
@@ -597,7 +731,7 @@ describe("shared Agent Connection Center", () => {
     mount("en");
 
     expect(screen.getByRole("heading", { name: "Agent Connection Center" })).toBeInTheDocument();
-    expect(screen.getAllByText("Connection candidate, not connected")).toHaveLength(2);
+    expect(screen.getAllByText("Connection candidate, not connected")).toHaveLength(4);
     expect(screen.getByText(/Open this same center from Activation, Settings, or Agent Console/)).toBeInTheDocument();
     expect(screen.getByRole("status", { name: "xAI connection status" })).toHaveTextContent("Connected");
   });

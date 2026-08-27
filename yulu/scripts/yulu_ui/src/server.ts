@@ -56,6 +56,8 @@ import { CodexAppServerRuntimeClient } from "./codexAppServerClient.js";
 import { ClaudeCodeAdapter } from "./claudeCodeAdapter.js";
 import { ClaudeCodeCliRuntimeClient } from "./claudeCodeCliClient.js";
 import { CliProxyApiAdapter, SecureGatewayTransport } from "./cliProxyApiAdapter.js";
+import { ConversationOnlyAgentAdapter } from "./conversationOnlyAgentAdapter.js";
+import { ConversationOnlyCliRuntimeClient } from "./conversationOnlyCliClient.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -168,6 +170,15 @@ async function startLockedServer(
     claudeAdapter: (executable) => new ClaudeCodeAdapter({
       executable,
       client: new ClaudeCodeCliRuntimeClient({
+        executable,
+        cwd: runtimePaths.moviesDir,
+      }),
+    }),
+    conversationOnlyAdapter: (adapter, executable) => new ConversationOnlyAgentAdapter({
+      adapter,
+      executable,
+      client: new ConversationOnlyCliRuntimeClient({
+        adapter,
         executable,
         cwd: runtimePaths.moviesDir,
       }),

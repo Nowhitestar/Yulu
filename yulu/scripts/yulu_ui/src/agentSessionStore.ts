@@ -63,6 +63,7 @@ const persistedSessionSchema = z.object({
   agent: z.string(),
   provider: z.string().trim().min(1).max(128).optional(),
   model: z.string().trim().min(1).max(128).optional(),
+  runtimeProvider: z.string().trim().min(1).max(128).optional(),
   connectionId: z.string().trim().min(1).max(200).optional(),
   endpointIdentity: z.string().trim().min(1).max(2_048).optional(),
   disclosureVersion: z.string().trim().min(1).max(200).optional(),
@@ -159,6 +160,7 @@ export function summarizeAgentSession(session: AgentSession) {
     endpointIdentity: session.endpointIdentity,
     disclosureVersion: session.disclosureVersion,
     model: session.model,
+    runtimeProvider: session.runtimeProvider,
     status: session.status,
     pausedReason: session.pausedReason,
     purpose: session.purpose,
@@ -198,6 +200,7 @@ export function createAgentSession(
       purpose?: "ask";
       provider: string;
       model: string;
+      runtimeProvider?: string;
       connectionId?: string;
       endpointIdentity?: string;
       disclosureVersion?: string;
@@ -221,6 +224,9 @@ export function createAgentSession(
     agent: identity.provider,
     provider: identity.provider,
     model: identity.model,
+    ...(input.purpose !== "background" && input.runtimeProvider
+      ? { runtimeProvider: input.runtimeProvider }
+      : {}),
     ...(input.purpose !== "background" && input.connectionId
       ? { connectionId: input.connectionId }
       : {}),
