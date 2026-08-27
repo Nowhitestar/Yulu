@@ -102,6 +102,7 @@ export class ClaudeCodeCliRuntimeClient implements ClaudeCodeRuntimeClient {
   private readonly env?: NodeJS.ProcessEnv;
   private readonly sessionIdFactory: () => string;
   private readonly cancellationGraceMs: number;
+  private supportsMaxTurns = false;
 
   constructor(options: {
     executable: string;
@@ -171,6 +172,7 @@ export class ClaudeCodeCliRuntimeClient implements ClaudeCodeRuntimeClient {
         throw new Error(helpResult.stderr.trim() || "Claude Code safe-mode feature is unavailable");
       }
       const help = helpResult.stdout;
+      this.supportsMaxTurns = help.includes("--max-turns");
       const features = [
         "auth/status",
         ...(help.includes("--safe-mode") ? ["safe-mode"] : []),
@@ -180,7 +182,9 @@ export class ClaudeCodeCliRuntimeClient implements ClaudeCodeRuntimeClient {
         ...(help.includes("--model") ? ["model"] : []),
         ...(help.includes("--session-id") ? ["session-id"] : []),
         ...(help.includes("--resume") ? ["resume"] : []),
-        ...(help.includes("--max-turns") ? ["probe-bounds"] : []),
+        ...(help.includes("--print") && help.includes("stream-json") && help.includes("--no-session-persistence")
+          ? ["probe-single-result"] : []),
+        ...(this.supportsMaxTurns ? ["probe-bounds"] : []),
         ...(help.includes("--tools") && help.includes("--disallowedTools") &&
           help.includes("--strict-mcp-config") && help.includes("--mcp-config") ? ["tools/none"] : []),
       ...(help.includes("--disable-slash-commands") && help.includes("--no-session-persistence")
@@ -241,7 +245,7 @@ export class ClaudeCodeCliRuntimeClient implements ClaudeCodeRuntimeClient {
         ? ["--resume", input.nativeSessionId]
         : ["--session-id", createdSessionId]),
       ...(isolated ? [
-        "--max-turns", "1",
+        ...(this.supportsMaxTurns ? ["--max-turns", "1"] : []),
         "--tools", "",
         "--disallowedTools", "*",
         "--disallowedTools", "mcp__*",

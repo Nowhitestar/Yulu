@@ -636,7 +636,8 @@ def test_default_build_allows_expected_app_bundle_outputs(tmp_path):
     write_file(
         build_script,
         "#!/usr/bin/env bash\n"
-        "printf 'changed\\n' > \"$(dirname \"$0\")/Yulu.app/Contents/MacOS/audio_daemon\"\n",
+        "printf 'changed\\n' > \"$(dirname \"$0\")/Yulu.app/Contents/MacOS/audio_daemon\"\n"
+        "printf 'changed\\n' > \"$(dirname \"$0\")/Yulu.app/Contents/MacOS/xai_keychain\"\n",
     )
     build_script.chmod(0o755)
 

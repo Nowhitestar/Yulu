@@ -61,6 +61,7 @@ ALLOWED_BUILD_OUTPUTS=(
     "yulu/scripts/meeting_prompt"
     "yulu/scripts/Yulu.app/Contents/Info.plist"
     "yulu/scripts/Yulu.app/Contents/MacOS/audio_daemon"
+    "yulu/scripts/Yulu.app/Contents/MacOS/xai_keychain"
     "yulu/scripts/Yulu.app/Contents/_CodeSignature/CodeResources"
 )
 

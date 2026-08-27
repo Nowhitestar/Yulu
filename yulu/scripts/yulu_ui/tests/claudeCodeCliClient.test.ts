@@ -24,7 +24,7 @@ function fakeClaude() {
     '  process.exit(3);',
     '}',
     'if (args.length === 1 && args[0] === "--version") {',
-    '  process.stdout.write("2.1.169 (Claude Code)\\n");',
+    '  process.stdout.write(`${process.env.YULU_FAKE_CLAUDE_RUNTIME_VERSION || "2.1.169"} (Claude Code)\\n`);',
     '  process.exit(0);',
     '}',
     'if (args[0] === "auth" && args[1] === "status") {',
@@ -32,7 +32,8 @@ function fakeClaude() {
     '  process.exit(0);',
     '}',
     'if (args.includes("--help")) {',
-    '  process.stdout.write("--safe-mode --print --output-format stream-json --verbose --model --session-id --resume --max-turns --tools --disallowedTools --strict-mcp-config --mcp-config --setting-sources --settings --disable-slash-commands --no-chrome --include-hook-events --system-prompt --no-session-persistence --fallback-model");',
+    '  const maxTurns = process.env.YULU_FAKE_CLAUDE_NO_MAX_TURNS === "1" ? "" : " --max-turns";',
+    '  process.stdout.write(`--safe-mode --print --output-format stream-json --verbose --model --session-id --resume${maxTurns} --tools --disallowedTools --strict-mcp-config --mcp-config --setting-sources --settings --disable-slash-commands --no-chrome --include-hook-events --system-prompt --no-session-persistence --fallback-model`);',
     '  process.exit(0);',
     '}',
     'if (args.includes("--print")) {',
@@ -129,6 +130,7 @@ describe("Claude Code production CLI client", () => {
         "model",
         "session-id",
         "resume",
+        "probe-single-result",
         "probe-bounds",
         "tools/none",
         "probe-isolation",
@@ -145,7 +147,7 @@ describe("Claude Code production CLI client", () => {
     expect(JSON.stringify(await client.inspect())).not.toMatch(/token|credential/i);
   });
 
-  it("runs a bounded tool-free probe in safe mode and proves the exact model and returned session identity", async () => {
+  it("fails closed on optional --max-turns when runConversation is called before inspect", async () => {
     const fake = fakeClaude();
     const client = new ClaudeCodeCliRuntimeClient({
       executable: fake.executable,
@@ -182,7 +184,6 @@ describe("Claude Code production CLI client", () => {
       "--verbose",
       "--model", "claude-sonnet-5",
       "--session-id", "019f0000-0000-7000-8000-000000000136",
-      "--max-turns", "1",
       "--tools", "",
       "--disallowedTools", "*",
       "--disallowedTools", "mcp__*",
@@ -200,10 +201,50 @@ describe("Claude Code production CLI client", () => {
       "Reply with exactly YULU_CLAUDE_PROBE_OK and do not use tools.",
     );
     const allArgs = calls.flat();
+    expect(allArgs).not.toContain("--max-turns");
     expect(allArgs).not.toContain("--continue");
     expect(allArgs).not.toContain("-c");
     expect(allArgs).not.toContain("--fallback-model");
     expect(allArgs).not.toContain("--fork-session");
+  });
+
+  it("uses the 2.1.210 single-result print contract when --max-turns is unavailable", async () => {
+    const fake = fakeClaude();
+    const client = new ClaudeCodeCliRuntimeClient({
+      executable: fake.executable,
+      cwd: fake.root,
+      env: {
+        YULU_FAKE_CLAUDE_LOG: fake.logPath,
+        YULU_FAKE_CLAUDE_STDIN_LOG: fake.stdinLogPath,
+        YULU_FAKE_CLAUDE_RUNTIME_VERSION: "2.1.210",
+        YULU_FAKE_CLAUDE_NO_MAX_TURNS: "1",
+      },
+      sessionIdFactory: () => "019f0000-0000-7000-8000-000000000210",
+    });
+
+    await expect(client.inspect()).resolves.toMatchObject({
+      runtimeVersion: "2.1.210",
+      features: expect.arrayContaining(["probe-single-result", "tools/none", "probe-isolation"]),
+    });
+    await expect(client.runConversation({
+      model: "claude-fable-5",
+      prompt: "Reply with exactly YULU_CLAUDE_PROBE_OK and do not use tools.",
+      probe: true,
+      timeoutMs: 10_000,
+    })).resolves.toMatchObject({
+      runtimeVersion: "2.1.210",
+      actualModel: "claude-fable-5",
+      terminalStatus: "completed",
+      toolCalls: [],
+    });
+
+    const calls = readFileSync(fake.logPath, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+    const invocation = calls.at(-1);
+    expect(invocation).toEqual(expect.arrayContaining([
+      "--safe-mode", "--print", "--output-format", "stream-json",
+      "--tools", "", "--no-session-persistence",
+    ]));
+    expect(invocation).not.toContain("--max-turns");
   });
 
   it("runs production Summary through the same fresh tool-free path with a minimal environment", async () => {
@@ -246,7 +287,6 @@ describe("Claude Code production CLI client", () => {
       "--verbose",
       "--model", "claude-sonnet-5",
       "--session-id", "019f0000-0000-7000-8000-000000000140",
-      "--max-turns", "1",
       "--tools", "",
       "--disallowedTools", "*",
       "--disallowedTools", "mcp__*",
@@ -260,6 +300,7 @@ describe("Claude Code production CLI client", () => {
       "--system-prompt", "",
       "--no-session-persistence",
     ]]);
+    expect(calls.flat()).not.toContain("--max-turns");
     const context = JSON.parse(readFileSync(fake.contextLogPath, "utf8").trim());
     expect(context.cwd).not.toBe(fake.root);
     expect(context.env).not.toEqual(expect.arrayContaining([

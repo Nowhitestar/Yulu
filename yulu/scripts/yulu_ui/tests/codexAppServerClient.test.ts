@@ -59,7 +59,9 @@ for await (const line of createInterface({ input: process.stdin })) {
       "computer_use", "enable_mcp_apps", "goals", "hooks", "image_generation",
       "in_app_browser", "memories", "multi_agent", "plugins", "remote_plugin",
       "shell_tool", "skill_mcp_dependency_install", "unified_exec",
-    ].map((name) => ({ name, enabled: false })),
+    ]
+      .filter((name) => !(mode === "missing-feature" && name === "hooks"))
+      .map((name) => ({ name, enabled: mode === "enabled-feature" && name === "hooks" })),
     nextCursor: null,
   } });
   if (message.method === "mcpServerStatus/list") send({ id: message.id, result: {
@@ -70,7 +72,13 @@ for await (const line of createInterface({ input: process.stdin })) {
     nextCursor: null,
   } });
   if (message.method === "app/list") send({ id: message.id, result: {
-    data: mode === "disabled-app" ? [{ id: "disabled", isEnabled: false }] : [],
+    data: mode === "disabled-app"
+      ? [{ id: "disabled", isEnabled: false }]
+      : mode === "enabled-app"
+        ? [{ id: "enabled", isEnabled: true }]
+        : mode === "app-status-missing"
+          ? [{ id: "unknown" }]
+          : [],
     nextCursor: null,
   } });
   if (message.method === "thread/start" || message.method === "thread/resume") {
@@ -81,10 +89,17 @@ for await (const line of createInterface({ input: process.stdin })) {
       thread: { id: threadId },
       model: message.params.model,
       modelProvider: "openai",
-      instructionSources: mode === "inherited-instructions" ? [{ type: "agentsMd", path: "/private/AGENTS.md" }] : [],
+      instructionSources: mode === "inherited-instructions" ||
+        (mode === "project-instructions" && message.params.config?.project_doc_max_bytes !== 0)
+        ? [{ type: "agentsMd", path: "/private/AGENTS.md" }]
+        : [],
     } });
   }
   if (message.method === "turn/start") {
+    if (mode === "reject-turn-start") {
+      send({ id: message.id, error: { code: -32602, message: "invalid turn shape" } });
+      continue;
+    }
     if (mode === "drop-turn-start") continue;
     const prompt = message.params.input[0].text;
     const answer = prompt.includes("YULU_CODEX_PROBE_OK") ? "YULU_CODEX_PROBE_OK" : "Pinned answer";
@@ -180,7 +195,7 @@ describe("Codex app-server stdio client", () => {
         "features.shell_tool": false,
         "features.unified_exec": false,
         "hooks": {},
-        "mcp_servers": {},
+        "project_doc_max_bytes": 0,
         "project_root_markers": [],
         "skills.bundled.enabled": false,
         "skills.config": [],
@@ -238,7 +253,7 @@ describe("Codex app-server stdio client", () => {
         "features.plugins": false,
         "features.shell_tool": false,
         "features.unified_exec": false,
-        "mcp_servers": {},
+        "project_doc_max_bytes": 0,
         "skills.include_instructions": false,
       }),
     });
@@ -318,10 +333,35 @@ describe("Codex app-server stdio client", () => {
       prompt: "Reply with exactly YULU_CODEX_PROBE_OK.",
       probe: true,
       timeoutMs: 100,
-    })).rejects.toThrow(/inherited instructions/i);
+    })).rejects.toMatchObject({
+      name: "CodexRuntimePreDispatchError",
+      stage: "thread-isolation",
+      modelRequestSent: false,
+      message: expect.stringMatching(/inherited instructions/i),
+    });
 
     const messages = readFileSync(fake.audit, "utf8").trim().split("\n").map((line) => JSON.parse(line));
     expect(messages.some((message) => message.method === "turn/start")).toBe(false);
+  });
+
+  it("disables project instruction discovery with a request-scoped zero-byte limit", async () => {
+    const fake = fakeCodexRuntime("project-instructions");
+    const client = new CodexAppServerRuntimeClient({
+      executable: fake.executable,
+      cwd: fake.root,
+      env: { YULU_FAKE_CODEX_AUDIT: fake.audit, YULU_FAKE_CODEX_MODE: fake.mode },
+    });
+
+    await expect(client.runTurn({
+      model: "gpt-5.6-sol",
+      prompt: "Reply with exactly YULU_CODEX_PROBE_OK.",
+      probe: true,
+      timeoutMs: 100,
+    })).resolves.toMatchObject({ terminalStatus: "completed" });
+
+    const messages = readFileSync(fake.audit, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+    expect(messages.find((message) => message.method === "thread/start")?.params.config)
+      .toMatchObject({ project_doc_max_bytes: 0 });
   });
 
   it("allows global MCP configuration when the probe thread proves it was cleared", async () => {
@@ -382,6 +422,58 @@ describe("Codex app-server stdio client", () => {
     })).resolves.toMatchObject({ terminalStatus: "completed" });
   });
 
+  it.each(["enabled-feature", "missing-feature"])(
+    "fails closed before the model turn when a required disabled feature is %s",
+    async (mode) => {
+      const fake = fakeCodexRuntime(mode);
+      const client = new CodexAppServerRuntimeClient({
+        executable: fake.executable,
+        cwd: fake.root,
+        env: { YULU_FAKE_CODEX_AUDIT: fake.audit, YULU_FAKE_CODEX_MODE: fake.mode },
+      });
+
+      await expect(client.runTurn({
+        model: "gpt-5.6-sol",
+        prompt: "Reply with exactly YULU_CODEX_PROBE_OK.",
+        probe: true,
+        timeoutMs: 100,
+      })).rejects.toMatchObject({
+        name: "CodexRuntimePreDispatchError",
+        stage: "thread-isolation",
+        modelRequestSent: false,
+      });
+
+      const messages = readFileSync(fake.audit, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+      expect(messages.some((message) => message.method === "turn/start")).toBe(false);
+    },
+  );
+
+  it.each(["enabled-app", "app-status-missing"])(
+    "fails closed before the model turn when an app is %s",
+    async (mode) => {
+      const fake = fakeCodexRuntime(mode);
+      const client = new CodexAppServerRuntimeClient({
+        executable: fake.executable,
+        cwd: fake.root,
+        env: { YULU_FAKE_CODEX_AUDIT: fake.audit, YULU_FAKE_CODEX_MODE: fake.mode },
+      });
+
+      await expect(client.runTurn({
+        model: "gpt-5.6-sol",
+        prompt: "Reply with exactly YULU_CODEX_PROBE_OK.",
+        probe: true,
+        timeoutMs: 100,
+      })).rejects.toMatchObject({
+        name: "CodexRuntimePreDispatchError",
+        stage: "thread-isolation",
+        modelRequestSent: false,
+      });
+
+      const messages = readFileSync(fake.audit, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+      expect(messages.some((message) => message.method === "turn/start")).toBe(false);
+    },
+  );
+
   it("bounds inspection RPCs instead of hanging on runtime status", async () => {
     const fake = fakeCodexRuntime("hang-account");
     const client = new CodexAppServerRuntimeClient({
@@ -440,6 +532,28 @@ describe("Codex app-server stdio client", () => {
       terminalStatus: "unknown",
       cancellationRequested: false,
       cancellationConfirmed: null,
+    });
+  });
+
+  it("classifies a terminal turn/start rejection as failed instead of Unknown Outcome", async () => {
+    const fake = fakeCodexRuntime("reject-turn-start");
+    const client = new CodexAppServerRuntimeClient({
+      executable: fake.executable,
+      cwd: fake.root,
+      env: { YULU_FAKE_CODEX_AUDIT: fake.audit, YULU_FAKE_CODEX_MODE: fake.mode },
+      rpcTimeoutMs: 2_000,
+    });
+
+    await expect(client.runTurn({
+      model: "gpt-5.6-sol",
+      prompt: "bounded",
+      probe: false,
+      timeoutMs: 25,
+    })).resolves.toMatchObject({
+      nativeSessionId: "019f0000-0000-7000-8000-000000000135",
+      terminalStatus: "failed",
+      failureStage: "turn_start_rejected",
+      requestId: null,
     });
   });
 

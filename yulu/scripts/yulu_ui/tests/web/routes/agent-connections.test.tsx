@@ -152,7 +152,7 @@ const mocks = vi.hoisted(() => ({
         authorizationMethod: "claude.ai",
         apiProvider: "firstParty",
         availableModels: [],
-        features: ["auth/status", "safe-mode", "print/stream-json", "verbose", "model", "session-id", "resume", "probe-bounds", "tools/none", "probe-isolation", "fallback-model/opt-in"],
+        features: ["auth/status", "safe-mode", "print/stream-json", "verbose", "model", "session-id", "resume", "probe-single-result", "tools/none", "probe-isolation", "fallback-model/opt-in"],
         loginCommand: "/fake/bin/claude auth login",
         statusCommand: "/fake/bin/claude auth status",
         remediation: null,

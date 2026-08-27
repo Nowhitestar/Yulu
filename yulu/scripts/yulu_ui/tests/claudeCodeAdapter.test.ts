@@ -14,7 +14,7 @@ const SUPPORTED_FEATURES = [
   "model",
   "session-id",
   "resume",
-  "probe-bounds",
+  "probe-single-result",
   "tools/none",
   "probe-isolation",
   "fallback-model/opt-in",
@@ -165,6 +165,43 @@ describe("Claude Code adapter conformance", () => {
       transcript: "Committed transcript.",
     })).rejects.toThrow("policy-managed hooks");
     expect(runConversation).not.toHaveBeenCalled();
+  });
+
+  it("supports Claude 2.1.210 Conversation without --max-turns when single-result print is proven", async () => {
+    const runtime = client({
+      inspect: vi.fn(async () => ({
+        runtimeVersion: "2.1.210",
+        authorized: true,
+        authorizationMethod: "claude.ai",
+        apiProvider: "firstParty",
+        features: [...SUPPORTED_FEATURES],
+      })),
+    });
+    const adapter = new ClaudeCodeAdapter({ executable: "/fake/claude", client: runtime });
+
+    await expect(adapter.status()).resolves.toMatchObject({
+      supported: true,
+      runtimeVersion: "2.1.210",
+      remediation: null,
+    });
+  });
+
+  it("reports exact missing features instead of telling a newer runtime to upgrade", async () => {
+    const runtime = client({
+      inspect: vi.fn(async () => ({
+        runtimeVersion: "2.1.210",
+        authorized: true,
+        authorizationMethod: "claude.ai",
+        apiProvider: "firstParty",
+        features: SUPPORTED_FEATURES.filter((feature) => feature !== "tools/none"),
+      })),
+    });
+    const adapter = new ClaudeCodeAdapter({ executable: "/fake/claude", client: runtime });
+
+    await expect(adapter.status()).resolves.toMatchObject({
+      supported: false,
+      remediation: "Claude Code 2.1.210 is missing required Yulu features: tools/none",
+    });
   });
 
   it("summarizes only selected instructions and committed transcript through a fresh tool-free invocation", async () => {
@@ -336,7 +373,7 @@ describe("Claude Code adapter conformance", () => {
     expect(runConversation).not.toHaveBeenCalled();
   });
 
-  it.each(["verbose", "probe-bounds", "probe-isolation", "fallback-model/opt-in"])(
+  it.each(["verbose", "probe-single-result", "probe-isolation", "fallback-model/opt-in"])(
     "fails closed when the runtime does not prove required feature %s",
     async (missingFeature) => {
       const runConversation = vi.fn();

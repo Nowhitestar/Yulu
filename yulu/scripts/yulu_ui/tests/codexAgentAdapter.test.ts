@@ -3,6 +3,7 @@ import {
   CODEX_MINIMUM_VERSION,
   CodexAgentAdapter,
   CodexConversationError,
+  CodexRuntimePreDispatchError,
   type CodexRuntimeClient,
 } from "../src/codexAgentAdapter.js";
 
@@ -136,6 +137,39 @@ describe("Codex Agent adapter conformance", () => {
       probe: true,
       toolFree: true,
       timeoutMs: 30_000,
+    });
+  });
+
+  it("reports a typed pre-dispatch failure without claiming a model request was sent", async () => {
+    const runtime = client({
+      runTurn: vi.fn(async () => {
+        throw new CodexRuntimePreDispatchError(
+          "Codex tool-free isolation failed before turn/start; no model request was sent",
+          "thread-isolation",
+        );
+      }),
+    });
+    const adapter = new CodexAgentAdapter({ executable: "/fake/codex", client: runtime });
+
+    await expect(adapter.probe({ model: "gpt-5.6-sol" })).resolves.toEqual({
+      status: "failed",
+      reason: "readiness_failed",
+      remediation: "Codex tool-free isolation failed before turn/start; no model request was sent",
+    });
+  });
+
+  it("treats an unclassified runtime exception as Unknown Outcome and forbids automatic retry", async () => {
+    const runtime = client({
+      runTurn: vi.fn(async () => {
+        throw new Error("transport lost");
+      }),
+    });
+    const adapter = new CodexAgentAdapter({ executable: "/fake/codex", client: runtime });
+
+    await expect(adapter.probe({ model: "gpt-5.6-sol" })).resolves.toEqual({
+      status: "failed",
+      reason: "unknown_outcome",
+      remediation: "Codex probe dispatch could not be classified; inspect the runtime before creating a new attempt and do not retry automatically",
     });
   });
 

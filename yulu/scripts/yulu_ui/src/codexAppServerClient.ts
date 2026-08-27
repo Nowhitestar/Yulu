@@ -9,13 +9,27 @@ import type {
   CodexRuntimeInspection,
   CodexRuntimeTurnResult,
 } from "./codexAgentAdapter.js";
+import { CodexRuntimePreDispatchError } from "./codexAgentAdapter.js";
 
 type JsonRecord = Record<string, unknown>;
 
 interface PendingRequest {
+  method: string;
   resolve: (value: unknown) => void;
   reject: (error: Error) => void;
   timer: NodeJS.Timeout;
+}
+
+class AppServerRequestError extends Error {
+  readonly requestPosted: boolean;
+  readonly terminalResponse: boolean;
+
+  constructor(message: string, options: { requestPosted: boolean; terminalResponse: boolean }) {
+    super(message);
+    this.name = "AppServerRequestError";
+    this.requestPosted = options.requestPosted;
+    this.terminalResponse = options.terminalResponse;
+  }
 }
 
 interface NotificationWaiter {
@@ -77,11 +91,15 @@ class AppServerSession {
     const id = this.nextId++;
     return new Promise((resolve, reject) => {
       const pending: PendingRequest = {
+        method,
         resolve,
         reject,
         timer: setTimeout(() => {
           this.pending.delete(id);
-          reject(new Error(`Codex app-server ${method} timed out`));
+          reject(new AppServerRequestError(`Codex app-server ${method} timed out`, {
+            requestPosted: true,
+            terminalResponse: false,
+          }));
         }, this.rpcTimeoutMs),
       };
       this.pending.set(id, pending);
@@ -90,7 +108,10 @@ class AppServerSession {
       } catch (error) {
         clearTimeout(pending.timer);
         this.pending.delete(id);
-        reject(error instanceof Error ? error : new Error(String(error)));
+        reject(new AppServerRequestError(
+          error instanceof Error ? error.message : String(error),
+          { requestPosted: false, terminalResponse: false },
+        ));
       }
     });
   }
@@ -161,7 +182,10 @@ class AppServerSession {
       clearTimeout(pending.timer);
       if ("error" in message) {
         const error = asRecord(message.error);
-        pending.reject(new Error(stringValue(error.message) || "Codex app-server request failed"));
+        pending.reject(new AppServerRequestError(
+          stringValue(error.message) || "Codex app-server request failed",
+          { requestPosted: true, terminalResponse: true },
+        ));
       } else {
         pending.resolve(message.result);
       }
@@ -178,7 +202,10 @@ class AppServerSession {
     this.closed = true;
     for (const pending of this.pending.values()) {
       clearTimeout(pending.timer);
-      pending.reject(error);
+      pending.reject(new AppServerRequestError(
+        error.message || `Codex app-server ${pending.method} transport failed`,
+        { requestPosted: true, terminalResponse: false },
+      ));
     }
     this.pending.clear();
     for (const waiter of this.waiters) waiter.reject(error);
@@ -277,7 +304,7 @@ const TOOL_FREE_PROBE_CONFIG: JsonRecord = {
   "features.skill_mcp_dependency_install": false,
   "features.unified_exec": false,
   hooks: {},
-  mcp_servers: {},
+  project_doc_max_bytes: 0,
   project_root_markers: [],
   "skills.bundled.enabled": false,
   "skills.config": [],
@@ -423,7 +450,10 @@ export class CodexAppServerRuntimeClient implements CodexRuntimeClient {
   }): Promise<CodexRuntimeTurnResult> {
     const isolated = input.probe || input.toolFree === true;
     if (isolated && input.nativeSessionId) {
-      throw new Error("Tool-free Codex invocations must start a fresh isolated thread");
+      throw new CodexRuntimePreDispatchError(
+        "Tool-free Codex invocations must start a fresh isolated thread before turn/start; no model request was sent",
+        "thread-start",
+      );
     }
     const isolatedCwd = isolated ? mkdtempSync(join(tmpdir(), "yulu-codex-isolated-")) : null;
     const invocationCwd = isolatedCwd ?? this.cwd;
@@ -439,9 +469,18 @@ export class CodexAppServerRuntimeClient implements CodexRuntimeClient {
     let actualModel = "";
     let requestId: string | null = null;
     try {
-      await session.initialize();
-      const threadResponse = asRecord(input.nativeSessionId
-        ? await session.request("thread/resume", {
+      let threadResponse: JsonRecord;
+      try {
+        await session.initialize();
+      } catch {
+        throw new CodexRuntimePreDispatchError(
+          "Codex app-server initialization failed before turn/start; no model request was sent",
+          "initialize",
+        );
+      }
+      try {
+        threadResponse = asRecord(input.nativeSessionId
+          ? await session.request("thread/resume", {
             threadId: input.nativeSessionId,
             model: input.model,
             modelProvider: "openai",
@@ -467,17 +506,32 @@ export class CodexAppServerRuntimeClient implements CodexRuntimeClient {
               developerInstructions: "Follow only the provided input, return only the requested text, and do not invoke tools.",
             } : {}),
           }));
-      if (isolated) {
-        const instructionSources = threadResponse.instructionSources;
-        if (!Array.isArray(instructionSources) || instructionSources.length > 0) {
-          throw new Error("Codex probe refused inherited instructions before execution");
-        }
+      } catch (error) {
+        if (error instanceof CodexRuntimePreDispatchError) throw error;
+        throw new CodexRuntimePreDispatchError(
+          "Codex app-server thread setup failed before turn/start; no model request was sent",
+          "thread-start",
+        );
       }
       const thread = asRecord(threadResponse.thread);
       threadId = stringValue(thread.id);
       actualProvider = stringValue(threadResponse.modelProvider);
       actualModel = stringValue(threadResponse.model);
-      if (isolated) await assertToolFreeThread(session, threadId);
+      if (isolated) {
+        try {
+          const instructionSources = threadResponse.instructionSources;
+          if (!Array.isArray(instructionSources) || instructionSources.length > 0) {
+            throw new Error("Codex probe refused inherited instructions before execution");
+          }
+          await assertToolFreeThread(session, threadId);
+        } catch (error) {
+          const detail = error instanceof Error ? error.message : "Codex tool-free isolation was not proven";
+          throw new CodexRuntimePreDispatchError(
+            `${detail}; failure occurred before turn/start and no model request was sent`,
+            "thread-isolation",
+          );
+        }
+      }
       let start: JsonRecord;
       try {
         start = asRecord(await session.request("turn/start", {
@@ -489,7 +543,28 @@ export class CodexAppServerRuntimeClient implements CodexRuntimeClient {
             sandboxPolicy: { type: "readOnly", networkAccess: false },
           } : {}),
         }));
-      } catch {
+      } catch (error) {
+        if (error instanceof AppServerRequestError && error.terminalResponse) {
+          return {
+            answer: "",
+            nativeSessionId: threadId,
+            actualProvider,
+            actualModel,
+            requestId: null,
+            fallbackOccurred: false,
+            toolCalls: [],
+            terminalStatus: "failed",
+            failureStage: "turn_start_rejected",
+            cancellationRequested: false,
+            cancellationConfirmed: null,
+          };
+        }
+        if (error instanceof AppServerRequestError && !error.requestPosted) {
+          throw new CodexRuntimePreDispatchError(
+            "Codex turn/start could not be written; no model request was sent",
+            "turn-start-write",
+          );
+        }
         // Once turn/start is written, a lost response cannot prove whether the
         // runtime accepted the model request. Preserve the exact thread and do
         // not retry on another thread.

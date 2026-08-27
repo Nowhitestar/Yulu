@@ -162,7 +162,7 @@ function setup(
         "model" as const,
         "session-id" as const,
         "resume" as const,
-        "probe-bounds" as const,
+        "probe-single-result" as const,
         "tools/none" as const,
         "probe-isolation" as const,
         "fallback-model/opt-in" as const,

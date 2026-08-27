@@ -146,7 +146,7 @@ const CLAUDE_CODE_SUMMARY_ISOLATION_FEATURES = [
   "verbose",
   "model",
   "session-id",
-  "probe-bounds",
+  "probe-single-result",
   "tools/none",
   "probe-isolation",
   "fallback-model/opt-in",

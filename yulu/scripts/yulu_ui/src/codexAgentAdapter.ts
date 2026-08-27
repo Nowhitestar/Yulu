@@ -20,6 +20,7 @@ export interface CodexRuntimeTurnResult {
   terminalStatus: "completed" | "failed" | "unknown";
   cancellationRequested?: boolean;
   cancellationConfirmed?: boolean | null;
+  failureStage?: "turn_start_rejected";
 }
 
 export interface CodexRuntimeClient {
@@ -63,6 +64,19 @@ export interface CodexProbeResult {
   reason: CodexProbeFailureReason | null;
   remediation: string | null;
   evidence?: CodexRuntimeEvidence;
+}
+
+export type CodexPreDispatchStage = "initialize" | "thread-start" | "thread-isolation" | "turn-start-write";
+
+export class CodexRuntimePreDispatchError extends Error {
+  readonly stage: CodexPreDispatchStage;
+  readonly modelRequestSent = false;
+
+  constructor(message: string, stage: CodexPreDispatchStage) {
+    super(message);
+    this.name = "CodexRuntimePreDispatchError";
+    this.stage = stage;
+  }
 }
 
 export class CodexConversationError extends Error {
@@ -225,11 +239,18 @@ export class CodexAgentAdapter {
         ...(toolFree ? { toolFree: true } : {}),
         timeoutMs: 30_000,
       });
-    } catch {
+    } catch (error) {
+      if (error instanceof CodexRuntimePreDispatchError) {
+        return {
+          status: "failed",
+          reason: "readiness_failed",
+          remediation: error.message,
+        };
+      }
       return {
         status: "failed",
-        reason: "readiness_failed",
-        remediation: `Codex ${capability} probe failed; restore this runtime authorization and exact model, then test again`,
+        reason: "unknown_outcome",
+        remediation: "Codex probe dispatch could not be classified; inspect the runtime before creating a new attempt and do not retry automatically",
       };
     }
     const runtimeEvidence = evidence(
@@ -238,6 +259,14 @@ export class CodexAgentAdapter {
       result,
       result.terminalStatus === "unknown" ? "unknown" : "failed",
     );
+    if (result.failureStage === "turn_start_rejected") {
+      return {
+        status: "failed",
+        reason: "readiness_failed",
+        remediation: `Codex app-server rejected ${capability} turn/start with a terminal response; no model result was produced`,
+        evidence: runtimeEvidence,
+      };
+    }
     if (
       result.terminalStatus !== "completed" ||
       result.answer.trim() !== "YULU_CODEX_PROBE_OK" ||

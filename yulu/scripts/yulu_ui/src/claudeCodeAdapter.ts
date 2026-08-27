@@ -95,7 +95,7 @@ const REQUIRED_FEATURES = [
   "model",
   "session-id",
   "resume",
-  "probe-bounds",
+  "probe-single-result",
   "tools/none",
   "probe-isolation",
   "fallback-model/opt-in",
@@ -169,8 +169,9 @@ export class ClaudeCodeAdapter {
   async status(input: { toolFree?: boolean } = {}) {
     const inspected = await this.client.inspect(input);
     const requiredFeatures = input.toolFree ? REQUIRED_SUMMARY_FEATURES : REQUIRED_FEATURES;
-    const supported = versionAtLeast(inspected.runtimeVersion, CLAUDE_CODE_MINIMUM_VERSION) &&
-      requiredFeatures.every((feature) => inspected.features.includes(feature));
+    const versionSupported = versionAtLeast(inspected.runtimeVersion, CLAUDE_CODE_MINIMUM_VERSION);
+    const missingFeatures = requiredFeatures.filter((feature) => !inspected.features.includes(feature));
+    const supported = versionSupported && missingFeatures.length === 0;
     return {
       adapter: "claude-code" as const,
       transport: CLAUDE_CODE_TRANSPORT,
@@ -186,11 +187,13 @@ export class ClaudeCodeAdapter {
         command: `${this.executable} auth login`,
         statusCommand: `${this.executable} auth status`,
       },
-      remediation: supported
-        ? inspected.authorized ? null : `Run ${this.executable} auth login, then refresh this connection`
-        : input.toolFree && !inspected.features.includes("managed-hooks/none")
+      remediation: !versionSupported
+        ? `Upgrade Claude Code to ${CLAUDE_CODE_MINIMUM_VERSION} or newer, then refresh this connection`
+        : input.toolFree && missingFeatures.includes("managed-hooks/none")
           ? "Claude Code cannot currently prove policy-managed hooks are disabled; Summary remains unavailable"
-          : `Upgrade Claude Code to ${CLAUDE_CODE_MINIMUM_VERSION} or newer, then refresh this connection`,
+          : missingFeatures.length > 0
+            ? `Claude Code ${inspected.runtimeVersion} is missing required Yulu features: ${missingFeatures.join(", ")}`
+            : inspected.authorized ? null : `Run ${this.executable} auth login, then refresh this connection`,
     };
   }
 
