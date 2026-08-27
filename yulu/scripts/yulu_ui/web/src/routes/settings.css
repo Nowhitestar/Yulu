@@ -178,6 +178,23 @@
   display: grid;
   gap: 0;
 }
+.provider-disclosure-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+.provider-disclosure-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--edge-card));
+  border-radius: var(--radius-control);
+  color: var(--fg-2);
+  font-size: 11px;
+  line-height: 1.45;
+}
 .provider-choice-row,
 .provider-readiness-row {
   display: grid;
@@ -251,6 +268,7 @@
   .provider-readiness-row { grid-template-columns: minmax(0, 1fr); gap: 8px; }
   .provider-choice-controls,
   .provider-api-key-controls { justify-content: flex-start; flex-wrap: wrap; }
+  .provider-disclosure-card { align-items: flex-start; flex-direction: column; }
   .provider-choice-controls .value-input,
   .provider-model-input { width: 100%; max-width: none; }
 }

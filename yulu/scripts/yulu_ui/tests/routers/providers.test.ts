@@ -4,8 +4,10 @@ import {
   providersRouter,
 } from "../../src/routers/providers.js";
 import { createCaller } from "../../src/trpc.js";
+import { XAI_SUMMARY_DISCLOSURE_VERSION } from "../../src/summaryDataDisclosure.js";
+import { XAI_TRANSCRIPTION_DISCLOSURE_VERSION } from "../../src/transcriptionConsent.js";
 
-function setup() {
+function setup(uiMutationAuthorized = true) {
   const selected = {
     transcription: { engine: "xai" },
     intelligence: {
@@ -40,8 +42,34 @@ function setup() {
       capability,
     })),
   };
+  let transcriptionConsent: { disclosureVersion: string; acceptedAt: string } | null = null;
+  let summaryDisclosure: {
+    provider: string;
+    disclosureVersion: string;
+    decision: "accepted" | "declined";
+    decidedAt: string;
+  } | null = null;
+  const host = {
+    getCloudTranscriptionConsent: vi.fn(() => transcriptionConsent),
+    recordCloudTranscriptionConsent: vi.fn((disclosureVersion: string) => {
+      transcriptionConsent = { disclosureVersion, acceptedAt: new Date().toISOString() };
+      return transcriptionConsent;
+    }),
+    getSummaryDataPathDisclosure: vi.fn(() => summaryDisclosure),
+    recordSummaryDataPathDisclosure: vi.fn((provider: string, disclosureVersion: string) => {
+      summaryDisclosure = {
+        provider,
+        disclosureVersion,
+        decision: "accepted",
+        decidedAt: new Date().toISOString(),
+      };
+      return summaryDisclosure;
+    }),
+  };
   const ctx = {
+    uiMutationAuthorized,
     config: { read: vi.fn(() => selected) },
+    host,
     xaiCredentials,
     audioTranscription,
     xaiText,
@@ -138,5 +166,67 @@ describe("providers router", () => {
     expect(ctx.xaiCredentials.authorize).toHaveBeenCalledOnce();
     expect(ctx.xaiCredentials.logout).toHaveBeenCalledOnce();
     await expect(caller.readApiKey()).rejects.toThrow('No procedure found on path "readApiKey"');
+  });
+
+  it("keeps xAI audio and summary disclosures independent and repairable after activation", async () => {
+    const { caller, ctx } = setup();
+
+    await expect(caller.status()).resolves.toMatchObject({
+      disclosures: {
+        transcription: {
+          required: true,
+          disclosureVersion: XAI_TRANSCRIPTION_DISCLOSURE_VERSION,
+          data: "recording_audio",
+          destination: "xAI",
+        },
+        summary: {
+          required: true,
+          disclosureVersion: XAI_SUMMARY_DISCLOSURE_VERSION,
+          data: "transcript_text",
+          destination: "xAI",
+        },
+      },
+    });
+
+    await caller.acceptDataPathDisclosure({ capability: "transcription" });
+    expect(ctx.host.recordCloudTranscriptionConsent)
+      .toHaveBeenCalledWith(XAI_TRANSCRIPTION_DISCLOSURE_VERSION);
+    await expect(caller.status()).resolves.toMatchObject({
+      disclosures: {
+        transcription: { required: false },
+        summary: { required: true },
+      },
+    });
+
+    await caller.acceptDataPathDisclosure({ capability: "summary" });
+    expect(ctx.host.recordSummaryDataPathDisclosure)
+      .toHaveBeenCalledWith("xai", XAI_SUMMARY_DISCLOSURE_VERSION);
+    await expect(caller.status()).resolves.toMatchObject({
+      disclosures: {
+        transcription: { required: false },
+        summary: { required: false },
+      },
+    });
+  });
+
+  it("does not require xAI disclosures for capabilities that are not selected", async () => {
+    const { caller, selected } = setup();
+    selected.transcription.engine = "local";
+    selected.intelligence.summary = { provider: "agent", model: "runtime-managed" };
+
+    await expect(caller.status()).resolves.toMatchObject({
+      disclosures: {
+        transcription: { required: false },
+        summary: { required: false },
+      },
+    });
+  });
+
+  it("requires an authenticated UI mutation before recording a disclosure", async () => {
+    const { caller, ctx } = setup(false);
+
+    await expect(caller.acceptDataPathDisclosure({ capability: "transcription" }))
+      .rejects.toThrow("UI mutation bearer required");
+    expect(ctx.host.recordCloudTranscriptionConsent).not.toHaveBeenCalled();
   });
 });

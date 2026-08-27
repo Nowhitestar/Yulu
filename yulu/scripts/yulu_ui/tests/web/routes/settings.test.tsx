@@ -203,6 +203,7 @@ vi.mock("../../../web/src/trpc.js", () => {
         setApiKey: { useMutation: noopMutation },
         clearApiKey: { useMutation: noopMutation },
         probe: { useMutation: noopMutation },
+        acceptDataPathDisclosure: { useMutation: noopMutation },
       },
       llm: { test: { useMutation: noopMutation } },
       prompts: {

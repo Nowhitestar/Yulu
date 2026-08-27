@@ -22,6 +22,7 @@ export function ProviderSection({ tracker }: { tracker: SettingsRestartTracker }
   const setApiKey = trpc.providers.setApiKey.useMutation({ onSettled: refresh });
   const clearApiKey = trpc.providers.clearApiKey.useMutation({ onSettled: refresh });
   const probe = trpc.providers.probe.useMutation({ onSettled: refresh });
+  const acceptDataPathDisclosure = trpc.providers.acceptDataPathDisclosure.useMutation({ onSettled: refresh });
   const { commit } = useConfigField(tracker);
   const [apiKey, setApiKeyValue] = useState("");
   const t = useT();
@@ -56,6 +57,15 @@ export function ProviderSection({ tracker }: { tracker: SettingsRestartTracker }
   const selectTextModel = (capability: TextCapability, model: string) => {
     const trimmed = model.trim();
     if (trimmed) void commit(`intelligence.${capability}`)({ provider: "xai", model: trimmed });
+  };
+
+  const acceptAndTest = async (capability: "transcription" | "summary") => {
+    try {
+      await acceptDataPathDisclosure.mutateAsync({ capability });
+      await probe.mutateAsync({ capability });
+    } catch {
+      // The mutation state renders a localized recovery below.
+    }
   };
 
   return (
@@ -122,6 +132,52 @@ export function ProviderSection({ tracker }: { tracker: SettingsRestartTracker }
           );
         })}
       </div>
+
+      <div className="provider-disclosure-list">
+        {(["transcription", "summary"] as const).map((capability) => {
+          const selected = capability === "transcription"
+            ? config.transcription.engine === "xai"
+            : config.intelligence.summary.provider === "xai";
+          const disclosure = providers.data?.disclosures?.[capability];
+          if (!selected || !disclosure?.required) return null;
+          const accepting = acceptDataPathDisclosure.isPending
+            && acceptDataPathDisclosure.variables?.capability === capability;
+          const testing = probe.isPending && probe.variables?.capability === capability;
+          return (
+            <div className="provider-disclosure-card" role="alert" key={capability}>
+              <div>{t(`settings.providers.disclosure.${capability}`)}</div>
+              <button
+                type="button"
+                className="path-btn local-caption-primary"
+                disabled={!connection?.connected || authorizing || acceptDataPathDisclosure.isPending || probe.isPending}
+                onClick={() => void acceptAndTest(capability)}
+              >
+                {accepting || testing
+                  ? t("settings.providers.readiness.testing")
+                  : t(`settings.providers.disclosure.acceptTest.${capability}`)}
+              </button>
+            </div>
+          );
+        })}
+      </div>
+      {acceptDataPathDisclosure.error && (
+        <div
+          className="provider-status-note provider-status-note--bad"
+          role="alert"
+          aria-label={t("settings.providers.disclosure.saveFailedTitle")}
+        >
+          {t("settings.providers.disclosure.saveFailed")}
+        </div>
+      )}
+      {probe.error && (
+        <div
+          className="provider-status-note provider-status-note--bad"
+          role="alert"
+          aria-label={t("settings.providers.readiness.requestFailedTitle")}
+        >
+          {t("settings.providers.readiness.requestFailed")}
+        </div>
+      )}
 
       <div className="local-caption-card provider-connection-card" data-installed={connection?.connected ? "true" : "false"}>
         <div className="local-caption-head">

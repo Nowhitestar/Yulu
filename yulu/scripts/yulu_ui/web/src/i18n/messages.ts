@@ -615,6 +615,12 @@ export const en: Messages = {
   "settings.providers.exactModel": "Yulu sends the exact configured model without alias fallback.",
   "settings.providers.model": "{capability} xAI model",
   "settings.providers.openTranscription": "Transcription details",
+  "settings.providers.disclosure.transcription": "Recording audio leaves this computer and is sent directly to xAI. Provider charges may apply.",
+  "settings.providers.disclosure.summary": "Transcript text is sent to xAI to generate the summary. Provider charges may apply.",
+  "settings.providers.disclosure.acceptTest.transcription": "Accept and test transcription",
+  "settings.providers.disclosure.acceptTest.summary": "Accept and test summary",
+  "settings.providers.disclosure.saveFailedTitle": "Data path acknowledgement was not saved",
+  "settings.providers.disclosure.saveFailed": "The data path acknowledgement was not saved, so the capability was not tested. Try again.",
   "settings.providers.connection.title": "xAI connection",
   "settings.providers.connection.sub": "One Keychain connection serves all three capabilities; readiness is tested separately.",
   "settings.providers.connection.oauthHelp": "Uses Grok CLI OAuth. Available capabilities depend on your Grok account.",
@@ -646,6 +652,8 @@ export const en: Messages = {
   "settings.providers.readiness.test.transcription": "Test transcription",
   "settings.providers.readiness.test.summary": "Test summary",
   "settings.providers.readiness.test.conversation": "Test conversation",
+  "settings.providers.readiness.requestFailedTitle": "Capability test did not complete",
+  "settings.providers.readiness.requestFailed": "The capability test did not complete. Review the xAI connection and try again.",
   "settings.providers.open": "Open AI Providers",
 
   // ---- Agent Console: pinned xAI conversation ----
@@ -1521,6 +1529,12 @@ export const zh: Messages = {
   "settings.providers.exactModel": "Yulu 使用配置中的精确模型，不会改用别名或其他模型。",
   "settings.providers.model": "{capability} xAI 模型",
   "settings.providers.openTranscription": "转写详细设置",
+  "settings.providers.disclosure.transcription": "录音音频会离开这台电脑并直接发送给 xAI，可能产生提供商费用。",
+  "settings.providers.disclosure.summary": "转写文本会发送给 xAI 用于生成摘要，可能产生提供商费用。",
+  "settings.providers.disclosure.acceptTest.transcription": "接受并测试转写",
+  "settings.providers.disclosure.acceptTest.summary": "接受并测试摘要",
+  "settings.providers.disclosure.saveFailedTitle": "数据路径确认未保存",
+  "settings.providers.disclosure.saveFailed": "数据路径确认没有保存，因此尚未进行能力测试。请重试。",
   "settings.providers.connection.title": "xAI 连接",
   "settings.providers.connection.sub": "一个钥匙串连接服务三项能力；每项就绪状态单独测试。",
   "settings.providers.connection.oauthHelp": "使用 Grok CLI OAuth；可用能力取决于你的 Grok 账号。",
@@ -1552,6 +1566,8 @@ export const zh: Messages = {
   "settings.providers.readiness.test.transcription": "测试转写",
   "settings.providers.readiness.test.summary": "测试摘要",
   "settings.providers.readiness.test.conversation": "测试对话",
+  "settings.providers.readiness.requestFailedTitle": "能力测试未完成",
+  "settings.providers.readiness.requestFailed": "能力测试未完成。请检查 xAI 连接后重试。",
   "settings.providers.open": "打开智能服务设置",
 
   // ---- Agent Console: pinned xAI conversation ----

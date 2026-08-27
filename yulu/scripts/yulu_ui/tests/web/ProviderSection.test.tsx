@@ -4,10 +4,19 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router";
 import { LanguageProvider } from "../../web/src/i18n/LanguageProvider.js";
 
-const { configUpdate, setApiKey, probe, providerStatus } = vi.hoisted(() => ({
+const { configUpdate, setApiKey, probe, acceptDataPathDisclosure, providerStatus, providerConfig, providerMutationErrors } = vi.hoisted(() => ({
   configUpdate: vi.fn(async () => ({ daemonsNeedingRestart: [], daemonsNeedingSighup: [] })),
   setApiKey: vi.fn(),
   probe: vi.fn(),
+  acceptDataPathDisclosure: vi.fn(async () => ({ accepted: true })),
+  providerMutationErrors: { disclosure: null as Error | null, probe: null as Error | null },
+  providerConfig: {
+    transcription: { engine: "local", language: "zh" },
+    intelligence: {
+      summary: { provider: "agent", model: "runtime-managed" },
+      conversation: { provider: "xai", model: "grok-4.6" },
+    },
+  },
   providerStatus: {
     connection: {
       connected: true,
@@ -22,6 +31,10 @@ const { configUpdate, setApiKey, probe, providerStatus } = vi.hoisted(() => ({
       summary: { capability: "summary", status: "untested", model: "grok-4.6", testedAt: null, detail: "尚未测试", credentialSource: null },
       conversation: { capability: "conversation", status: "ready", model: "grok-4.6", testedAt: "2026-08-24T12:00:00.000Z", detail: "已通过真实请求测试", credentialSource: "oauth" },
     },
+    disclosures: {
+      transcription: { required: true, disclosureVersion: "xai-audio-v1", data: "recording_audio", destination: "xAI" },
+      summary: { required: true, disclosureVersion: "xai-summary-v1", data: "transcript_text", destination: "xAI" },
+    },
   },
 }));
 
@@ -30,13 +43,6 @@ vi.mock("../../web/src/ws.js", () => ({
 }));
 
 vi.mock("../../web/src/trpc.js", () => {
-  const cfg = {
-    transcription: { engine: "local", language: "zh" },
-    intelligence: {
-      summary: { provider: "agent", model: "runtime-managed" },
-      conversation: { provider: "xai", model: "grok-4.6" },
-    },
-  };
   const mutation = (fn = vi.fn()) => ({
     mutate: (input?: unknown, options?: { onSuccess?: (value: unknown) => void }) => {
       fn(input);
@@ -51,7 +57,7 @@ vi.mock("../../web/src/trpc.js", () => {
   return {
     trpc: {
       config: {
-        get: { useQuery: () => ({ data: cfg }) },
+        get: { useQuery: () => ({ data: providerConfig }) },
         schema: { useQuery: () => ({ data: [
           { path: "transcription.engine", label: "音频引擎", reload: { kind: "none" } },
           { path: "intelligence.summary", label: "摘要服务", reload: { kind: "none" } },
@@ -67,7 +73,11 @@ vi.mock("../../web/src/trpc.js", () => {
         logoutOAuth: { useMutation: () => mutation() },
         setApiKey: { useMutation: () => mutation(setApiKey) },
         clearApiKey: { useMutation: () => mutation() },
-        probe: { useMutation: () => mutation(probe) },
+        probe: { useMutation: () => ({ ...mutation(probe), error: providerMutationErrors.probe }) },
+        acceptDataPathDisclosure: { useMutation: () => ({
+          ...mutation(acceptDataPathDisclosure),
+          error: providerMutationErrors.disclosure,
+        }) },
       },
       useUtils: () => ({
         config: { get: { setData: vi.fn(), invalidate: vi.fn() } },
@@ -103,6 +113,15 @@ beforeEach(() => {
   configUpdate.mockClear();
   setApiKey.mockClear();
   probe.mockClear();
+  acceptDataPathDisclosure.mockClear();
+  acceptDataPathDisclosure.mockResolvedValue({ accepted: true });
+  providerMutationErrors.disclosure = null;
+  providerMutationErrors.probe = null;
+  providerConfig.transcription.engine = "local";
+  providerConfig.intelligence.summary = { provider: "agent", model: "runtime-managed" };
+  providerConfig.intelligence.conversation = { provider: "xai", model: "grok-4.6" };
+  providerStatus.disclosures.transcription.required = true;
+  providerStatus.disclosures.summary.required = true;
   providerStatus.readiness.summary.status = "untested";
   providerStatus.connection.authorization.status = "idle";
   providerStatus.connection.authorization.message = "";
@@ -117,6 +136,8 @@ describe("ProviderSection", () => {
     expect(screen.getByLabelText("转写服务")).toHaveValue("local");
     expect(screen.getByLabelText("摘要服务")).toHaveValue("agent");
     expect(screen.getByLabelText("对话服务")).toHaveValue("xai");
+    expect(screen.queryByText(/录音音频会离开这台电脑/)).toBeNull();
+    expect(screen.queryByText(/转写文本会发送给 xAI/)).toBeNull();
     expect(screen.getAllByTestId(/^provider-readiness-/)).toHaveLength(3);
     expect(screen.getByText(/2026-08-24.*grok-4.6/)).toBeInTheDocument();
     expect(within(screen.getByTestId("provider-readiness-conversation")).getByRole("status"))
@@ -179,5 +200,43 @@ describe("ProviderSection", () => {
       "xAI connection failed. Check account or Keychain access, then retry.",
     );
     expect(screen.queryByText(/OAuth 授权失败/)).toBeNull();
+  });
+
+  it("repairs missing post-activation xAI disclosures before testing transcription and summary", async () => {
+    providerConfig.transcription.engine = "xai";
+    providerConfig.intelligence.summary = { provider: "xai", model: "grok-4.6" };
+    mount();
+    const user = userEvent.setup();
+
+    expect(screen.getByText("录音音频会离开这台电脑并直接发送给 xAI，可能产生提供商费用。")).toBeInTheDocument();
+    expect(screen.getByText("转写文本会发送给 xAI 用于生成摘要，可能产生提供商费用。")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "接受并测试转写" }));
+    expect(acceptDataPathDisclosure).toHaveBeenCalledWith({ capability: "transcription" });
+    expect(probe).toHaveBeenCalledWith({ capability: "transcription" });
+
+    await user.click(screen.getByRole("button", { name: "接受并测试摘要" }));
+    expect(acceptDataPathDisclosure).toHaveBeenCalledWith({ capability: "summary" });
+    expect(probe).toHaveBeenCalledWith({ capability: "summary" });
+  });
+
+  it("shows a localized recovery when accepting a disclosure fails and does not probe", async () => {
+    providerConfig.transcription.engine = "xai";
+    providerMutationErrors.disclosure = new Error("transport failed");
+    acceptDataPathDisclosure.mockRejectedValueOnce(new Error("transport failed"));
+    mount();
+    const user = userEvent.setup();
+
+    expect(screen.getByRole("alert", { name: "数据路径确认未保存" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "接受并测试转写" }));
+    expect(probe).not.toHaveBeenCalled();
+  });
+
+  it("keeps a capability-test failure distinct from a data-path disclosure failure", () => {
+    providerMutationErrors.probe = new Error("transport failed");
+    mount();
+
+    expect(screen.getByRole("alert", { name: "能力测试未完成" })).toBeInTheDocument();
+    expect(screen.queryByRole("alert", { name: "数据路径确认未保存" })).toBeNull();
   });
 });

@@ -1,8 +1,16 @@
 import { z } from "zod";
 import { XAI_TEXT_MODEL_DEFAULT } from "../config.js";
+import {
+  hasCurrentXaiSummaryDisclosure,
+  XAI_SUMMARY_DISCLOSURE_VERSION,
+} from "../summaryDataDisclosure.js";
+import {
+  hasCurrentXaiTranscriptionConsent,
+  XAI_TRANSCRIPTION_DISCLOSURE_VERSION,
+} from "../transcriptionConsent.js";
 import type { XaiCredentialSource } from "../xaiCredentials.js";
 import type { AppContext } from "../trpc.js";
-import { publicProcedure, router } from "../trpc.js";
+import { publicProcedure, router, uiMutationProcedure } from "../trpc.js";
 
 export type XaiCapability = "transcription" | "summary" | "conversation";
 export type XaiReadinessStatus = "untested" | "testing" | "ready" | "failed";
@@ -75,6 +83,30 @@ const ProbeInput = z.object({
   capability: z.enum(["transcription", "summary", "conversation"]),
 }).strict();
 
+const DataPathDisclosureInput = z.object({
+  capability: z.enum(["transcription", "summary"]),
+}).strict();
+
+function dataPathDisclosures(ctx: AppContext) {
+  const config = ctx.config.read();
+  return {
+    transcription: {
+      required: config.transcription.engine === "xai"
+        && !hasCurrentXaiTranscriptionConsent(ctx.host),
+      disclosureVersion: XAI_TRANSCRIPTION_DISCLOSURE_VERSION,
+      data: "recording_audio" as const,
+      destination: "xAI" as const,
+    },
+    summary: {
+      required: config.intelligence.summary.provider === "xai"
+        && !hasCurrentXaiSummaryDisclosure(ctx.host),
+      disclosureVersion: XAI_SUMMARY_DISCLOSURE_VERSION,
+      data: "transcript_text" as const,
+      destination: "xAI" as const,
+    },
+  };
+}
+
 export const providersRouter = router({
   status: publicProcedure.query(async ({ ctx }) => {
     const { credentials, readiness } = services(ctx);
@@ -82,8 +114,33 @@ export const providersRouter = router({
     return {
       connection,
       readiness: projection(ctx, readiness, connection.source),
+      disclosures: dataPathDisclosures(ctx),
     };
   }),
+
+  acceptDataPathDisclosure: uiMutationProcedure
+    .input(DataPathDisclosureInput)
+    .mutation(({ ctx, input }) => {
+      if (input.capability === "transcription") {
+        const receipt = ctx.host.recordCloudTranscriptionConsent(
+          XAI_TRANSCRIPTION_DISCLOSURE_VERSION,
+        );
+        return {
+          capability: input.capability,
+          accepted: true,
+          disclosureVersion: receipt.disclosureVersion,
+        };
+      }
+      const receipt = ctx.host.recordSummaryDataPathDisclosure(
+        "xai",
+        XAI_SUMMARY_DISCLOSURE_VERSION,
+      );
+      return {
+        capability: input.capability,
+        accepted: true,
+        disclosureVersion: receipt.disclosureVersion,
+      };
+    }),
 
   authorize: publicProcedure.mutation(async ({ ctx }) => {
     clearReadiness(ctx);
