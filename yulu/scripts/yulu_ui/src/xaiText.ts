@@ -1,7 +1,8 @@
 import type { XaiCredentialManager, XaiCredentialSource } from "./xaiCredentials.js";
 
 const XAI_RESPONSES_URL = "https://api.x.ai/v1/responses";
-const REQUEST_TIMEOUT_MS = 30_000;
+const SUMMARY_REQUEST_TIMEOUT_MS = 180_000;
+const CONVERSATION_REQUEST_TIMEOUT_MS = 30_000;
 const MAX_INPUT_BYTES = 1_000_000;
 const MAX_INPUT_MESSAGES = 64;
 const MAX_OUTPUT_TOKENS = 8_192;
@@ -144,7 +145,9 @@ export class XaiTextClient {
           max_output_tokens: maxOutputTokens,
           store: false,
         }),
-        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        signal: AbortSignal.timeout(request.capability === "summary"
+          ? SUMMARY_REQUEST_TIMEOUT_MS
+          : CONVERSATION_REQUEST_TIMEOUT_MS),
       });
     } catch {
       throw new Error(`xAI ${request.capability} request failed`);

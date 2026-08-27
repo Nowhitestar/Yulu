@@ -9,6 +9,40 @@ function response(payload: unknown, status = 200): Response {
 }
 
 describe("XaiTextClient.request", () => {
+  it("allows full recording summaries longer than the short interactive request window", async () => {
+    const timeout = vi.spyOn(AbortSignal, "timeout")
+      .mockImplementation(() => new AbortController().signal);
+    const credentials = {
+      resolve: vi.fn(async () => ({ accessToken: "oauth-secret", source: "oauth" as const })),
+    };
+    const fetchFn = vi.fn<typeof fetch>(async () => response({
+      model: "grok-4.6",
+      output: [{
+        type: "message",
+        content: [{ type: "output_text", text: "Ready" }],
+      }],
+    }));
+    const client = new XaiTextClient(credentials as never, fetchFn);
+
+    try {
+      await client.request({
+        capability: "summary",
+        model: "grok-4.6",
+        input: [{ role: "user", content: "A committed recording transcript" }],
+      });
+      await client.request({
+        capability: "conversation",
+        model: "grok-4.6",
+        input: [{ role: "user", content: "A short interactive prompt" }],
+      });
+
+      expect(timeout).toHaveBeenNthCalledWith(1, 180_000);
+      expect(timeout).toHaveBeenNthCalledWith(2, 30_000);
+    } finally {
+      timeout.mockRestore();
+    }
+  });
+
   it("sends one exact stateless request to the fixed xAI Responses endpoint", async () => {
     const credentials = {
       resolve: vi.fn(async () => ({ accessToken: "oauth-secret", source: "oauth" as const })),
