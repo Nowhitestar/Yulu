@@ -40,6 +40,39 @@ afterEach(() => {
 });
 
 describe("XaiCredentialManager", () => {
+  it("reports credential-store read certainty separately from credential presence", async () => {
+    const oauthUnavailable = new MemoryTokenStore();
+    oauthUnavailable.read.mockRejectedValueOnce(new Error("OAuth Keychain unavailable"));
+    const apiKeyAvailable = new MemoryApiKeyStore();
+    apiKeyAvailable.value = "configured-api-key";
+    const oauthFailure = new XaiCredentialManager({
+      store: oauthUnavailable,
+      apiKeyStore: apiKeyAvailable,
+    });
+
+    await expect(oauthFailure.status()).resolves.toMatchObject({
+      oauthConnected: false,
+      apiKeyConfigured: true,
+      oauthReadSucceeded: false,
+      apiKeyReadSucceeded: true,
+    });
+
+    const oauthAvailable = new MemoryTokenStore();
+    const apiKeyUnavailable = new MemoryApiKeyStore();
+    apiKeyUnavailable.read.mockRejectedValueOnce(new Error("API Keychain unavailable"));
+    const apiKeyFailure = new XaiCredentialManager({
+      store: oauthAvailable,
+      apiKeyStore: apiKeyUnavailable,
+    });
+
+    await expect(apiKeyFailure.status()).resolves.toMatchObject({
+      oauthConnected: false,
+      apiKeyConfigured: false,
+      oauthReadSucceeded: true,
+      apiKeyReadSucceeded: false,
+    });
+  });
+
   it("returns the xAI device URL immediately and persists successful authorization", async () => {
     vi.useFakeTimers();
     const store = new MemoryTokenStore();

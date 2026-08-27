@@ -55,6 +55,8 @@ export interface XaiCredentialStatus {
   source: XaiCredentialSource | null;
   oauthConnected: boolean;
   apiKeyConfigured: boolean;
+  oauthReadSucceeded?: boolean;
+  apiKeyReadSucceeded?: boolean;
   detail: string;
   authorization: XaiAuthorizationState;
 }
@@ -301,8 +303,12 @@ export class XaiCredentialManager {
   async status(): Promise<XaiCredentialStatus> {
     let apiKeyConfigured = false;
     let apiKeyError: Error | null = null;
+    let apiKeyReadSucceeded = false;
     if (this.apiKeyStore) {
-      try { apiKeyConfigured = (await this.apiKeyStore.read()) !== null; }
+      try {
+        apiKeyConfigured = (await this.apiKeyStore.read()) !== null;
+        apiKeyReadSucceeded = true;
+      }
       catch (error) { apiKeyError = error as Error; }
     }
     try {
@@ -332,6 +338,8 @@ export class XaiCredentialManager {
         source: this.cachedSource,
         oauthConnected,
         apiKeyConfigured,
+        oauthReadSucceeded: true,
+        apiKeyReadSucceeded,
         detail: this.cachedDetail,
         authorization: { ...this.authorization },
       };
@@ -344,6 +352,8 @@ export class XaiCredentialManager {
         source: null,
         oauthConnected: false,
         apiKeyConfigured,
+        oauthReadSucceeded: false,
+        apiKeyReadSucceeded,
         detail: this.cachedDetail,
         authorization: { ...this.authorization },
       };

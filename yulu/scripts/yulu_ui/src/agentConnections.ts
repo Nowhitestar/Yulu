@@ -115,6 +115,7 @@ const CODEX_ID = "codex";
 const CLAUDE_CODE_ID = "claude-code";
 const CLIPROXYAPI_ID = "cliproxyapi";
 const MIGRATION_ID = "agent-connections-v1";
+const DIRECT_XAI_CREDENTIAL_SOURCE_MIGRATION_ID = "direct-xai-credential-source-v1";
 const SUPPORTED_ADAPTERS = new Set(["codex", "claude-code", "hermes", "openclaw"]);
 const CODEX_SUMMARY_ISOLATION_FEATURES = [
   "account/read",
@@ -257,12 +258,20 @@ export class AgentConnectionCenter {
   async view() {
     this.ensureMigrated();
     const config = this.config.read();
-    const records = this.host.listAgentConnectionRecords();
-    const direct = records.find((record) => record.id === DIRECT_XAI_ID);
-    const selectedCredentialSource = direct
+    let records = this.host.listAgentConnectionRecords();
+    let direct = records.find((record) => record.id === DIRECT_XAI_ID);
+    let selectedCredentialSource = direct
       ? this.credentialSource(direct.settings.credentialSource) : null;
     this.credentials.setPreferredSource?.(selectedCredentialSource);
     const status = await this.credentials.status();
+    selectedCredentialSource = this.migrateDirectXaiCredentialSource(
+      config,
+      status,
+    );
+    records = this.host.listAgentConnectionRecords();
+    direct = records.find((record) => record.id === DIRECT_XAI_ID);
+    if (!direct) selectedCredentialSource = null;
+    this.credentials.setPreferredSource?.(selectedCredentialSource);
     const selectedCredentialConnected = selectedCredentialSource === "oauth"
       ? status.oauthConnected
       : selectedCredentialSource === "api-key" ? status.apiKeyConfigured : false;
@@ -2439,6 +2448,39 @@ export class AgentConnectionCenter {
 
   private credentialSource(value: unknown): XaiCredentialSource | null {
     return value === "oauth" || value === "api-key" ? value : null;
+  }
+
+  private migrateDirectXaiCredentialSource(
+    config: ReturnType<ConfigManager["read"]>,
+    status: XaiCredentialStatus,
+  ): XaiCredentialSource | null {
+    const liveRecord = this.host.listAgentConnectionRecords()
+      .find((item) => item.id === DIRECT_XAI_ID);
+    if (!liveRecord) return null;
+    const current = this.credentialSource(liveRecord?.settings.credentialSource);
+    if (this.host.hasAgentConnectionMigration(DIRECT_XAI_CREDENTIAL_SOURCE_MIGRATION_ID)) {
+      return current;
+    }
+
+    if (status.oauthReadSucceeded !== true || status.apiKeyReadSucceeded !== true) {
+      return current;
+    }
+
+    const xaiSelected = config.transcription.engine === "xai" ||
+      config.intelligence.summary.provider === "xai" ||
+      config.intelligence.conversation.provider === "xai";
+    const unambiguousSource = status.oauthConnected !== status.apiKeyConfigured
+      ? status.oauthConnected ? "oauth" as const : "api-key" as const
+      : null;
+    const migrated = current ?? (xaiSelected ? unambiguousSource : null);
+    if (migrated && migrated !== current) {
+      this.host.upsertAgentConnectionRecord({
+        ...liveRecord,
+        settings: { ...liveRecord.settings, credentialSource: migrated },
+      });
+    }
+    this.host.recordAgentConnectionMigration(DIRECT_XAI_CREDENTIAL_SOURCE_MIGRATION_ID);
+    return migrated;
   }
 
   private requireDirectConnection(): void {

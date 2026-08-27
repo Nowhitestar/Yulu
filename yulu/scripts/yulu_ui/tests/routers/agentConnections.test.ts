@@ -16,6 +16,7 @@ const roots: string[] = [];
 function setup(
   config: Record<string, unknown>,
   discovered: Array<{ adapter: "codex" | "claude-code" | "hermes" | "openclaw"; label: string; path: string }> = [],
+  options: { seedDirectCredentialSource?: "oauth" | "api-key" | false } = {},
 ) {
   const root = mkdtempSync(join(tmpdir(), "yulu-agent-connections-"));
   roots.push(root);
@@ -25,9 +26,11 @@ function setup(
   const credentials = {
     status: vi.fn(async () => ({
       connected: true,
-      source: "oauth" as const,
+      source: "oauth" as "oauth" | "api-key" | null,
       oauthConnected: true,
       apiKeyConfigured: false,
+      oauthReadSucceeded: true,
+      apiKeyReadSucceeded: true,
       detail: "xAI OAuth connected",
       authorization: { status: "idle" as const, verificationUrl: "", userCode: "", message: "" },
     })),
@@ -302,14 +305,16 @@ function setup(
     gatewaySecretStore,
     cliProxyAdapter,
   });
-  host.upsertAgentConnectionRecord({
-    id: "direct-xai",
-    kind: "direct-provider",
-    adapter: "direct-xai",
-    label: "xAI",
-    lifecycle: "available",
-    settings: { credentialSource: "oauth" },
-  });
+  if (options.seedDirectCredentialSource !== false) {
+    host.upsertAgentConnectionRecord({
+      id: "direct-xai",
+      kind: "direct-provider",
+      adapter: "direct-xai",
+      label: "xAI",
+      lifecycle: "available",
+      settings: { credentialSource: options.seedDirectCredentialSource ?? "oauth" },
+    });
+  }
   return {
     center,
     host,
@@ -351,6 +356,214 @@ afterEach(() => {
 });
 
 describe("public Agent Connection Host contract", () => {
+  it("migrates an unambiguous existing xAI OAuth credential source exactly once", async () => {
+    const setupResult = setup({
+      audio: {},
+      transcription: { engine: "xai", language: "zh" },
+      intelligence: {
+        summary: { provider: "xai", model: "grok-4.6" },
+        conversation: { provider: "xai", model: "grok-4.6" },
+      },
+      llm: { agent: { provider: "auto" } },
+    }, [], { seedDirectCredentialSource: false });
+
+    const view = await setupResult.center.view();
+
+    expect(view.connections.find(({ id }: { id: string }) => id === "direct-xai"))
+      .toMatchObject({
+        lifecycle: "connected",
+        authorization: { connected: true, credentialSource: "oauth" },
+        settings: { credentialSource: "oauth" },
+      });
+    expect(setupResult.host.listAgentConnectionRecords().find(({ id }) => id === "direct-xai")?.settings)
+      .toMatchObject({ credentialSource: "oauth" });
+    expect(setupResult.credentials.setPreferredSource).toHaveBeenLastCalledWith("oauth");
+    setupResult.host.close();
+  });
+
+  it("keeps concurrent first views on the same migrated xAI source", async () => {
+    const setupResult = setup({
+      audio: {},
+      transcription: { engine: "xai", language: "zh" },
+      intelligence: { summary: { provider: "xai", model: "grok-4.6" } },
+      llm: { agent: { provider: "auto" } },
+    }, [], { seedDirectCredentialSource: false });
+
+    const [first, second] = await Promise.all([
+      setupResult.center.view(),
+      setupResult.center.view(),
+    ]);
+
+    for (const view of [first, second]) {
+      expect(view.connections.find(({ id }: { id: string }) => id === "direct-xai")?.settings)
+        .toMatchObject({ credentialSource: "oauth" });
+    }
+    expect(setupResult.credentials.setPreferredSource).toHaveBeenLastCalledWith("oauth");
+    setupResult.host.close();
+  });
+
+  it("does not resurrect a direct xAI connection deleted while credential status is pending", async () => {
+    const setupResult = setup({
+      audio: {},
+      transcription: { engine: "xai", language: "zh" },
+      intelligence: { summary: { provider: "xai", model: "grok-4.6" } },
+      llm: { agent: { provider: "auto" } },
+    }, [], { seedDirectCredentialSource: false });
+    let resolveStatus!: (value: Awaited<ReturnType<typeof setupResult.credentials.status>>) => void;
+    setupResult.credentials.status.mockReturnValueOnce(new Promise((resolve) => {
+      resolveStatus = resolve;
+    }));
+
+    const pendingView = setupResult.center.view();
+    await vi.waitFor(() => expect(setupResult.credentials.status).toHaveBeenCalled());
+    setupResult.host.deleteAgentConnectionRecord("direct-xai");
+    resolveStatus({
+      connected: true,
+      source: "oauth",
+      oauthConnected: true,
+      apiKeyConfigured: false,
+      oauthReadSucceeded: true,
+      apiKeyReadSucceeded: true,
+      detail: "xAI OAuth connected",
+      authorization: { status: "idle", verificationUrl: "", userCode: "", message: "" },
+    });
+    const deletedDuringView = await pendingView;
+
+    expect(deletedDuringView.connections.some(({ id }: { id: string }) => id === "direct-xai"))
+      .toBe(false);
+    expect(setupResult.host.listAgentConnectionRecords().some(({ id }) => id === "direct-xai"))
+      .toBe(false);
+    const nextView = await setupResult.center.view();
+    expect(nextView.connections.some(({ id }: { id: string }) => id === "direct-xai"))
+      .toBe(false);
+    setupResult.host.close();
+  });
+
+  it("retries the one-time xAI migration after a credential store read failure", async () => {
+    const setupResult = setup({
+      audio: {},
+      transcription: { engine: "xai", language: "zh" },
+      intelligence: { summary: { provider: "xai", model: "grok-4.6" } },
+      llm: { agent: { provider: "auto" } },
+    }, [], { seedDirectCredentialSource: false });
+    setupResult.credentials.status.mockResolvedValueOnce({
+      connected: true,
+      source: "api-key" as const,
+      oauthConnected: false,
+      apiKeyConfigured: true,
+      oauthReadSucceeded: false,
+      apiKeyReadSucceeded: true,
+      detail: "OAuth Keychain read failed",
+      authorization: { status: "idle" as const, verificationUrl: "", userCode: "", message: "" },
+    });
+
+    const unavailable = await setupResult.center.view();
+    expect(unavailable.connections.find(({ id }: { id: string }) => id === "direct-xai")?.settings)
+      .toMatchObject({ credentialSource: null });
+
+    const recovered = await setupResult.center.view();
+    expect(recovered.connections.find(({ id }: { id: string }) => id === "direct-xai")?.settings)
+      .toMatchObject({ credentialSource: "oauth" });
+    setupResult.host.close();
+  });
+
+  it("does not guess an xAI source for fresh or ambiguous credentials after the one-time migration", async () => {
+    const setupResult = setup({
+      audio: {},
+      transcription: { engine: "local", language: "zh" },
+      intelligence: {},
+      llm: { agent: { provider: "auto" } },
+    }, [], { seedDirectCredentialSource: false });
+    setupResult.credentials.status.mockResolvedValueOnce({
+      connected: false,
+      source: null,
+      oauthConnected: false,
+      apiKeyConfigured: false,
+      oauthReadSucceeded: true,
+      apiKeyReadSucceeded: true,
+      detail: "No xAI credential",
+      authorization: { status: "idle" as const, verificationUrl: "", userCode: "", message: "" },
+    });
+
+    const first = await setupResult.center.view();
+    expect(first.connections.find(({ id }: { id: string }) => id === "direct-xai")?.settings)
+      .toMatchObject({ credentialSource: null });
+
+    setupResult.credentials.status.mockResolvedValue({
+      connected: true,
+      source: "oauth" as const,
+      oauthConnected: true,
+      apiKeyConfigured: false,
+      oauthReadSucceeded: true,
+      apiKeyReadSucceeded: true,
+      detail: "xAI OAuth connected later",
+      authorization: { status: "idle" as const, verificationUrl: "", userCode: "", message: "" },
+    });
+    const later = await setupResult.center.view();
+    expect(later.connections.find(({ id }: { id: string }) => id === "direct-xai")?.settings)
+      .toMatchObject({ credentialSource: null });
+    setupResult.host.close();
+
+    const ambiguous = setup({
+      audio: {},
+      transcription: { engine: "xai", language: "zh" },
+      intelligence: { summary: { provider: "xai", model: "grok-4.6" } },
+      llm: { agent: { provider: "auto" } },
+    }, [], { seedDirectCredentialSource: false });
+    ambiguous.credentials.status.mockResolvedValue({
+      connected: true,
+      source: "oauth" as const,
+      oauthConnected: true,
+      apiKeyConfigured: true,
+      oauthReadSucceeded: true,
+      apiKeyReadSucceeded: true,
+      detail: "Both xAI sources exist",
+      authorization: { status: "idle" as const, verificationUrl: "", userCode: "", message: "" },
+    });
+    const ambiguousView = await ambiguous.center.view();
+    expect(ambiguousView.connections.find(({ id }: { id: string }) => id === "direct-xai")?.settings)
+      .toMatchObject({ credentialSource: null });
+    ambiguous.host.close();
+  });
+
+  it("does not auto-select OAuth for fresh non-xAI config and does migrate API-key-only xAI config", async () => {
+    const fresh = setup({
+      audio: {},
+      transcription: { engine: "local", language: "zh" },
+      intelligence: {},
+      llm: { agent: { provider: "auto" } },
+    }, [], { seedDirectCredentialSource: false });
+    const freshView = await fresh.center.view();
+    expect(freshView.connections.find(({ id }: { id: string }) => id === "direct-xai")?.settings)
+      .toMatchObject({ credentialSource: null });
+    fresh.host.close();
+
+    const apiKeyOnly = setup({
+      audio: {},
+      transcription: { engine: "xai", language: "zh" },
+      intelligence: { summary: { provider: "xai", model: "grok-4.6" } },
+      llm: { agent: { provider: "auto" } },
+    }, [], { seedDirectCredentialSource: false });
+    apiKeyOnly.credentials.status.mockResolvedValue({
+      connected: true,
+      source: "api-key" as const,
+      oauthConnected: false,
+      apiKeyConfigured: true,
+      oauthReadSucceeded: true,
+      apiKeyReadSucceeded: true,
+      detail: "xAI API Key connected",
+      authorization: { status: "idle" as const, verificationUrl: "", userCode: "", message: "" },
+    });
+    const apiKeyView = await apiKeyOnly.center.view();
+    expect(apiKeyView.connections.find(({ id }: { id: string }) => id === "direct-xai"))
+      .toMatchObject({
+        lifecycle: "connected",
+        authorization: { credentialSource: "api-key" },
+        settings: { credentialSource: "api-key" },
+      });
+    apiKeyOnly.host.close();
+  });
+
   it("creates a secret-safe CLIProxyAPI Gateway and keeps Summary and Conversation independent", async () => {
     const setupResult = setup({
       audio: {},
