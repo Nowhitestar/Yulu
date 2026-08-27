@@ -53,6 +53,8 @@ import { AgentConnectionCenter } from "./agentConnections.js";
 import { discoverAgentConnectionCandidates } from "./agentConnectionDiscovery.js";
 import { CodexAgentAdapter } from "./codexAgentAdapter.js";
 import { CodexAppServerRuntimeClient } from "./codexAppServerClient.js";
+import { ClaudeCodeAdapter } from "./claudeCodeAdapter.js";
+import { ClaudeCodeCliRuntimeClient } from "./claudeCodeCliClient.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -154,6 +156,13 @@ async function startLockedServer(
     codexAdapter: (executable) => new CodexAgentAdapter({
       executable,
       client: new CodexAppServerRuntimeClient({
+        executable,
+        cwd: runtimePaths.moviesDir,
+      }),
+    }),
+    claudeAdapter: (executable) => new ClaudeCodeAdapter({
+      executable,
+      client: new ClaudeCodeCliRuntimeClient({
         executable,
         cwd: runtimePaths.moviesDir,
       }),

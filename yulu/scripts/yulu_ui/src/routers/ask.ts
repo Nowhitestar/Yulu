@@ -18,11 +18,13 @@ import {
   type ConversationSource,
 } from "./search.js";
 import {
+  CLAUDE_CODE_CONVERSATION_DISCLOSURE_VERSION,
   CODEX_CONVERSATION_DISCLOSURE_VERSION,
   hasCurrentAgentConversationDisclosure,
   hasCurrentXaiConversationDisclosure,
 } from "../conversationDataDisclosure.js";
 import { CodexConversationError } from "../codexAgentAdapter.js";
+import { ClaudeCodeConversationError } from "../claudeCodeAdapter.js";
 
 const MAX_QUESTION_CHARS = 2_000;
 const MAX_SOURCE_COUNT = 8;
@@ -68,9 +70,11 @@ function agentOwnedSearchProjection(question: string) {
   };
 }
 
-function recoveryActions(session: AgentSession) {
+function recoveryActions(session: AgentSession, retryAvailable = true) {
   return {
-    retry: "same_snapshot" as const,
+    retry: retryAvailable
+      ? "same_snapshot" as const
+      : "unavailable_unknown_outcome" as const,
     settingsPath: session.connectionId
       ? `/agent-connections?connection=${encodeURIComponent(session.connectionId)}&capability=conversation`
       : session.provider === "xai"
@@ -108,6 +112,7 @@ function pauseResponse(
   sources: ConversationSource[] = [],
   retrySnapshot?: AgentSessionRetrySnapshot,
   persist = true,
+  retryAvailable = true,
 ) {
   if (persist) pauseAgentSession(configDir, session.id, reason, retrySnapshot);
   return {
@@ -120,7 +125,7 @@ function pauseResponse(
     remoteSources: [],
     connectorContext: { owner: "agent" as const, outputs: [] },
     agentRuntime,
-    recovery: recoveryActions(session),
+    recovery: recoveryActions(session, retryAvailable),
     usedFallback: false,
     llmStatus: "error" as const,
     llmError: reason,
@@ -178,7 +183,12 @@ export const askRouter = router({
       }
       const question = retrySnapshot?.question ?? input.question;
 
-      if (session.provider === "codex") {
+      if (session.provider === "codex" || session.provider === "claude-code") {
+        const isClaude = session.provider === "claude-code";
+        const runtimeName = isClaude ? "Claude Code" : "Codex";
+        const disclosureVersion = isClaude
+          ? CLAUDE_CODE_CONVERSATION_DISCLOSURE_VERSION
+          : CODEX_CONVERSATION_DISCLOSURE_VERSION;
         const search = agentOwnedSearchProjection(question);
         const snapshot = retrySnapshot ?? { question, sources: [] };
         if (!session.connectionId || session.credentialSource !== "runtime-oauth") {
@@ -186,7 +196,7 @@ export const askRouter = router({
             ...pauseResponse(
               ctx.paths.configDir,
               session,
-              "Pinned Codex connection identity is unavailable; create a new conversation after selecting Codex again",
+              `Pinned ${runtimeName} connection identity is unavailable; create a new conversation after selecting ${runtimeName} again`,
               search,
               undefined,
               [],
@@ -198,13 +208,13 @@ export const askRouter = router({
         if (!hasCurrentAgentConversationDisclosure(
           ctx.host,
           session.connectionId,
-          CODEX_CONVERSATION_DISCLOSURE_VERSION,
+          disclosureVersion,
         )) {
           return {
             ...pauseResponse(
               ctx.paths.configDir,
               session,
-              "The current Codex Conversation data path disclosure is required",
+              `The current ${runtimeName} Conversation data path disclosure is required`,
               search,
               undefined,
               [],
@@ -218,7 +228,7 @@ export const askRouter = router({
             ...pauseResponse(
               ctx.paths.configDir,
               session,
-              `Pinned Codex connection ${session.connectionId} is unavailable; restore it in Agent Connection Center`,
+              `Pinned ${runtimeName} connection ${session.connectionId} is unavailable; restore it in Agent Connection Center`,
               search,
               undefined,
               [],
@@ -228,19 +238,22 @@ export const askRouter = router({
           };
         }
         try {
-          const result = await ctx.agentConnections.converseCodex({
+          const request = {
             connectionId: session.connectionId,
             model: session.model,
             prompt: buildAgentQuestionPrompt(question, input.limit ?? MAX_SOURCE_COUNT),
             ...(session.nativeSessionId ? { nativeSessionId: session.nativeSessionId } : {}),
-          });
+          };
+          const result = isClaude
+            ? await ctx.agentConnections.converseClaude(request)
+            : await ctx.agentConnections.converseCodex(request);
           if (!session.nativeSessionId) {
             updateAgentSessionNativeSession(ctx.paths.configDir, session.id, {
               nativeSessionId: result.nativeSessionId,
-              runtimeLabel: "Codex",
+              runtimeLabel: runtimeName,
             });
           } else if (result.nativeSessionId !== session.nativeSessionId) {
-            throw new Error("Codex returned a different thread; latest-thread fallback was rejected");
+            throw new Error(`${runtimeName} returned a different session; latest-session fallback was rejected`);
           }
           if (input.retry) resumeAgentSession(ctx.paths.configDir, session.id);
           return {
@@ -260,14 +273,14 @@ export const askRouter = router({
             elapsedMs: Date.now() - startedAt,
           };
         } catch (error) {
-          if (
-            error instanceof CodexConversationError &&
-            !session.nativeSessionId &&
-            error.nativeSessionId
-          ) {
+          const isNativeConversationError = error instanceof CodexConversationError ||
+            error instanceof ClaudeCodeConversationError;
+          const unknownWithoutSession = isNativeConversationError && error.unknownOutcome &&
+            !session.nativeSessionId && !error.nativeSessionId;
+          if (isNativeConversationError && !session.nativeSessionId && error.nativeSessionId) {
             updateAgentSessionNativeSession(ctx.paths.configDir, session.id, {
               nativeSessionId: error.nativeSessionId,
-              runtimeLabel: "Codex",
+              runtimeLabel: runtimeName,
             });
           }
           return {
@@ -278,9 +291,11 @@ export const askRouter = router({
               search,
               undefined,
               [],
-              snapshot,
+              unknownWithoutSession ? undefined : snapshot,
+              true,
+              !unknownWithoutSession,
             ),
-            ...(error instanceof CodexConversationError
+            ...(isNativeConversationError
               ? { runtimeEvidence: error.evidence }
               : {}),
             elapsedMs: Date.now() - startedAt,

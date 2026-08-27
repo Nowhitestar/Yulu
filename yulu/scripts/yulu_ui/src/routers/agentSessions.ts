@@ -15,6 +15,7 @@ import {
 import { resolveAgentRuntime } from "../agentRuntime.js";
 import { hasCurrentXaiConversationDisclosure } from "../conversationDataDisclosure.js";
 import {
+  CLAUDE_CODE_CONVERSATION_DISCLOSURE_VERSION,
   CODEX_CONVERSATION_DISCLOSURE_VERSION,
   hasCurrentAgentConversationDisclosure,
 } from "../conversationDataDisclosure.js";
@@ -63,33 +64,44 @@ export const agentSessionsRouter = router({
         const connection = ctx.host.listAgentConnectionRecords().find((record) =>
           record.id === selection.connectionId &&
           record.kind === "supported-agent" &&
-          record.adapter === "codex"
+          (record.adapter === "codex" || record.adapter === "claude-code")
         );
         if (!connection) {
-          throw new Error(`Pinned Codex connection ${selection.connectionId} is unavailable in Agent Connection Center`);
+          throw new Error(`Pinned Agent connection ${selection.connectionId} is unavailable in Agent Connection Center`);
         }
+        const runtimeLabel = connection.adapter === "claude-code" ? "Claude Code" : "Codex";
+        const disclosureVersion = connection.adapter === "claude-code"
+          ? CLAUDE_CODE_CONVERSATION_DISCLOSURE_VERSION
+          : CODEX_CONVERSATION_DISCLOSURE_VERSION;
         if (!hasCurrentAgentConversationDisclosure(
           ctx.host,
           connection.id,
-          CODEX_CONVERSATION_DISCLOSURE_VERSION,
+          disclosureVersion,
         )) {
-          throw new Error("Accept the current Codex Conversation data path disclosure in Agent Connection Center");
+          throw new Error(`Accept the current ${runtimeLabel} Conversation data path disclosure in Agent Connection Center`);
         }
         if (!ctx.agentConnections) {
-          throw new Error("Test this exact Codex Conversation model before starting a new conversation");
+          throw new Error(`Test this exact ${runtimeLabel} Conversation model before starting a new conversation`);
         }
-        await ctx.agentConnections.assertCodexConversationReady({
-          connectionId: connection.id,
-          model: selection.model,
-        });
+        if (connection.adapter === "claude-code") {
+          await ctx.agentConnections.assertClaudeConversationReady({
+            connectionId: connection.id,
+            model: selection.model,
+          });
+        } else {
+          await ctx.agentConnections.assertCodexConversationReady({
+            connectionId: connection.id,
+            model: selection.model,
+          });
+        }
         return createAgentSession(ctx.paths.configDir, {
-          provider: "codex",
+          provider: connection.adapter,
           connectionId: connection.id,
           model: selection.model,
           credentialSource: "runtime-oauth",
           title: input.title,
           purpose: "ask",
-          runtimeLabel: connection.label,
+          runtimeLabel: runtimeLabel,
         });
       }
       const runtime = resolveAgentRuntime(config, {

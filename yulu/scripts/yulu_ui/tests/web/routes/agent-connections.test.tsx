@@ -129,6 +129,44 @@ const mocks = vi.hoisted(() => ({
         },
         remediation: null,
       }],
+    }, {
+      id: "claude-code",
+      kind: "supported-agent",
+      adapter: "claude-code",
+      label: "Claude Code",
+      lifecycle: "connected",
+      authorization: {
+        connected: true,
+        credentialSource: "runtime-oauth",
+        runtimeVersion: "2.1.169",
+        minimumVersion: "2.1.169",
+        supported: true,
+        authorizationMethod: "claude.ai",
+        apiProvider: "firstParty",
+        availableModels: [],
+        features: ["auth/status", "safe-mode", "print/stream-json", "verbose", "model", "session-id", "resume", "probe-bounds", "tools/none", "probe-isolation", "fallback-model/opt-in"],
+        loginCommand: "/fake/bin/claude auth login",
+        statusCommand: "/fake/bin/claude auth status",
+        remediation: null,
+      },
+      settings: {
+        executablePath: "/fake/bin/claude",
+        conversationModel: "claude-sonnet-5",
+      },
+      capabilities: [{
+        capability: "conversation",
+        declared: true,
+        selected: false,
+        currentReadiness: { status: "ready", model: "claude-sonnet-5", testedAt: "2026-08-27T12:00:00.000Z" },
+        readinessHistory: [],
+        disclosure: {
+          required: true,
+          disclosureVersion: "claude-code-conversation-v1",
+          data: "conversation_text_and_agent_tool_context",
+          destination: "Claude Code runtime and its configured model/tools",
+        },
+        remediation: null,
+      }],
     }],
     candidates: [{
       id: "candidate:codex",
@@ -142,6 +180,18 @@ const mocks = vi.hoisted(() => ({
       selected: false,
       readiness: "untested",
       remediation: { href: "/agent-connections?candidate=candidate%3Acodex" },
+    }, {
+      id: "candidate:claude-code",
+      kind: "supported-agent",
+      adapter: "claude-code",
+      label: "Claude Code",
+      lifecycle: "candidate",
+      source: "discovered",
+      detectedPath: "/fake/bin/claude",
+      capabilities: ["conversation"],
+      selected: false,
+      readiness: "untested",
+      remediation: { href: "/agent-connections?candidate=candidate%3Aclaude-code" },
     }],
     legacyConnections: [{
       id: "legacy-custom:migrated",
@@ -218,7 +268,7 @@ describe("shared Agent Connection Center", () => {
     mount();
 
     expect(screen.getByRole("heading", { name: "Agent 连接中心" })).toBeInTheDocument();
-    expect(screen.getByText("候选连接，不是已连接")).toBeInTheDocument();
+    expect(screen.getAllByText("候选连接，不是已连接")).toHaveLength(2);
     expect(screen.getByText("旧版自定义连接不能证明能力就绪")).toBeInTheDocument();
     const summary = screen.getByTestId("connection-capability-summary");
     expect(within(summary).getByText("需要修复")).toHaveAttribute("role", "alert");
@@ -285,6 +335,38 @@ describe("shared Agent Connection Center", () => {
     });
   });
 
+  it("connects Claude Code and exposes only its independently disclosed Conversation capability", async () => {
+    mount("en");
+    const user = userEvent.setup();
+    const candidate = screen.getByTestId("agent-candidate-claude-code");
+
+    await user.clear(within(candidate).getByRole("textbox", { name: "Claude Code Conversation model" }));
+    await user.type(within(candidate).getByRole("textbox", { name: "Claude Code Conversation model" }), "claude-sonnet-5");
+    await user.click(within(candidate).getByRole("button", { name: "Connect Claude Code runtime" }));
+    expect(mocks.confirmCandidate).toHaveBeenCalledWith({
+      candidateId: "candidate:claude-code",
+      model: "claude-sonnet-5",
+    });
+
+    const claude = screen.getByTestId("agent-connection-claude-code");
+    expect(within(claude).getByText("/fake/bin/claude auth login")).toBeInTheDocument();
+    expect(within(claude).queryByRole("heading", { name: "Summary" })).not.toBeInTheDocument();
+    await user.click(within(claude).getByRole("button", { name: "Accept Claude Code Conversation Data Path Disclosure" }));
+    expect(mocks.acceptDisclosure).toHaveBeenCalledWith({ connectionId: "claude-code", capability: "conversation" });
+    await user.click(within(claude).getByRole("button", { name: "Test conversation" }));
+    expect(mocks.probe).toHaveBeenCalledWith({
+      connectionId: "claude-code",
+      capability: "conversation",
+      model: "claude-sonnet-5",
+    });
+    await user.click(within(claude).getByRole("button", { name: "Select Claude Code for future conversations" }));
+    expect(mocks.select).toHaveBeenCalledWith({
+      connectionId: "claude-code",
+      capability: "conversation",
+      model: "claude-sonnet-5",
+    });
+  });
+
   it("runs only the explicit capability action and previews deletion impact before confirmation", async () => {
     mount();
     const user = userEvent.setup();
@@ -324,7 +406,7 @@ describe("shared Agent Connection Center", () => {
     mount("en");
 
     expect(screen.getByRole("heading", { name: "Agent Connection Center" })).toBeInTheDocument();
-    expect(screen.getByText("Connection candidate, not connected")).toBeInTheDocument();
+    expect(screen.getAllByText("Connection candidate, not connected")).toHaveLength(2);
     expect(screen.getByText(/Open this same center from Activation, Settings, or Agent Console/)).toBeInTheDocument();
     expect(screen.getByRole("status", { name: "xAI connection status" })).toHaveTextContent("Connected");
   });

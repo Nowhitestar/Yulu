@@ -225,6 +225,7 @@ interface AskResponse {
   usedFallback: boolean;
   llmStatus: string;
   llmError?: string | null;
+  recovery?: ConversationRecovery;
   agentRuntime?: {
     provider: string;
     label: string;
@@ -236,6 +237,12 @@ interface AskResponse {
   connectorContext?: {
     outputs: Array<{ channel: string; label: string; enabled: boolean; connected?: boolean; destination: string }>;
   };
+}
+
+interface ConversationRecovery {
+  retry: "same_snapshot" | "unavailable_unknown_outcome";
+  settingsPath: string;
+  newConversation: boolean;
 }
 
 interface ChatMessage {
@@ -251,6 +258,7 @@ interface AgentSessionSummary {
   id: string;
   agent: string;
   provider?: string;
+  connectionId?: string;
   model?: string;
   status?: "active" | "paused";
   pausedReason?: string;
@@ -273,9 +281,11 @@ interface AgentSession {
   id: string;
   agent: string;
   provider?: string;
+  connectionId?: string;
   model?: string;
   status?: "active" | "paused";
   pausedReason?: string;
+  retrySnapshot?: { question: string };
   title: string;
   updatedAt: string;
   pinnedAt?: string;
@@ -862,6 +872,7 @@ function AskMeetings({
   const [draftSession, setDraftSession] = useState(true);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [sessionStatusOverride, setSessionStatusOverride] = useState<"active" | "paused" | null>(null);
+  const [recoveryOverride, setRecoveryOverride] = useState<ConversationRecovery | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const sessionQuery = trpc.agentSessions.get.useQuery(
     { id: selectedSessionId ?? "__none__" },
@@ -880,6 +891,17 @@ function AskMeetings({
     ?? (draftXai && typeof configuredConversation.model === "string" ? configuredConversation.model : undefined);
   const sessionStatus = sessionStatusOverride ?? selectedSession?.status ?? selectedSessionSummary?.status ?? "active";
   const pausedReason = selectedSession?.pausedReason ?? selectedSessionSummary?.pausedReason;
+  const connectionId = selectedSession?.connectionId ?? selectedSessionSummary?.connectionId;
+  const defaultRepairPath = connectionId
+    ? `/agent-connections?connection=${encodeURIComponent(connectionId)}&capability=conversation`
+    : provider === "xai"
+      ? "/agent-connections?connection=direct-xai&capability=conversation"
+      : "/agent-connections?capability=conversation";
+  const conversationRecovery = recoveryOverride ?? (sessionStatus === "paused" ? {
+    retry: selectedSession?.retrySnapshot ? "same_snapshot" as const : "unavailable_unknown_outcome" as const,
+    settingsPath: defaultRepairPath,
+    newConversation: true,
+  } : null);
   const identity = provider && model ? `${provider === "xai" ? "xAI" : provider} · ${model}` : null;
   const conversationName = provider === "xai"
     ? "xAI"
@@ -925,7 +947,10 @@ function AskMeetings({
     setMessages(sessionMessages(selectedSession));
   }, [selectedSession, ask.isPending]);
 
-  useEffect(() => setSessionStatusOverride(null), [selectedSessionId]);
+  useEffect(() => {
+    setSessionStatusOverride(null);
+    setRecoveryOverride(null);
+  }, [selectedSessionId]);
 
   useEffect(() => {
     const node = scrollRef.current;
@@ -954,6 +979,7 @@ function AskMeetings({
         ...(retry ? { retry: true as const } : {}),
       }) as AskResponse;
       if (result.sessionStatus) setSessionStatusOverride(result.sessionStatus);
+      setRecoveryOverride(result.recovery ?? null);
       const assistantMessage: ChatMessage = {
         role: "assistant",
         text: result.llmStatus === "empty" ? t("agentConsole.xai.empty") : result.answer,
@@ -1006,7 +1032,7 @@ function AskMeetings({
   };
 
   const retrySameProvider = async () => {
-    if (!selectedSessionId || ask.isPending) return;
+    if (!selectedSessionId || ask.isPending || conversationRecovery?.retry !== "same_snapshot") return;
     const question = messages.slice().reverse().find((message) => message.role === "user")?.text.trim();
     if (!question) return;
     await runQuestion(selectedSessionId, question, false, true);
@@ -1018,6 +1044,7 @@ function AskMeetings({
     setMessages([]);
     setInput("");
     setSessionStatusOverride(null);
+    setRecoveryOverride(null);
   };
 
   const selectSession = (id: string) => {
@@ -1094,10 +1121,9 @@ function AskMeetings({
             {sessionStatus === "paused" && identity && (
               <PausedConversation
                 identity={identity}
-                repairPath={provider === "xai"
-                  ? "/agent-connections?connection=direct-xai&capability=conversation"
-                  : "/agent-connections?capability=conversation"}
+                repairPath={conversationRecovery?.settingsPath ?? defaultRepairPath}
                 reason={pausedReason}
+                retryAvailable={conversationRecovery?.retry === "same_snapshot"}
                 retrying={ask.isPending}
                 onRetry={() => void retrySameProvider()}
                 onNew={startNewSession}
@@ -1165,10 +1191,9 @@ function AskMeetings({
           {sessionStatus === "paused" && identity && (
             <PausedConversation
               identity={identity}
-              repairPath={provider === "xai"
-                ? "/agent-connections?connection=direct-xai&capability=conversation"
-                : "/agent-connections?capability=conversation"}
+              repairPath={conversationRecovery?.settingsPath ?? defaultRepairPath}
               reason={pausedReason}
+              retryAvailable={conversationRecovery?.retry === "same_snapshot"}
               retrying={ask.isPending}
               onRetry={() => void retrySameProvider()}
               onNew={startNewSession}
@@ -1206,6 +1231,7 @@ function PausedConversation({
   identity,
   repairPath,
   reason,
+  retryAvailable,
   retrying,
   onRetry,
   onNew,
@@ -1213,6 +1239,7 @@ function PausedConversation({
   identity: string;
   repairPath: string;
   reason?: string;
+  retryAvailable: boolean;
   retrying: boolean;
   onRetry: () => void;
   onNew: () => void;
@@ -1224,7 +1251,7 @@ function PausedConversation({
       <span>{t("agentConsole.provider.paused.body", { identity })}</span>
       {reason && <em>{reason}</em>}
       <div>
-        <button type="button" disabled={retrying} onClick={onRetry}>{t("agentConsole.provider.paused.retry")}</button>
+        {retryAvailable && <button type="button" disabled={retrying} onClick={onRetry}>{t("agentConsole.provider.paused.retry")}</button>}
         <Link to={repairPath}>{t("settings.providers.open")}</Link>
         <button type="button" onClick={onNew}>{t("agentConsole.provider.paused.newConversation")}</button>
       </div>

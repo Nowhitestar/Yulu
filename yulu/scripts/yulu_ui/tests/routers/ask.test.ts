@@ -11,10 +11,12 @@ import {
 } from "../../src/agentSessionStore.js";
 import { createCaller, type AppContext } from "../../src/trpc.js";
 import {
+  CLAUDE_CODE_CONVERSATION_DISCLOSURE_VERSION,
   CODEX_CONVERSATION_DISCLOSURE_VERSION,
   XAI_CONVERSATION_DISCLOSURE_VERSION,
 } from "../../src/conversationDataDisclosure.js";
 import { CodexConversationError } from "../../src/codexAgentAdapter.js";
+import { ClaudeCodeConversationError } from "../../src/claudeCodeAdapter.js";
 
 const runAgentCliCommand = vi.hoisted(() => vi.fn());
 vi.mock("../../src/agentCliRunner.js", () => ({ runAgentCliCommand }));
@@ -29,6 +31,8 @@ function context(
     conversationDisclosure?: boolean;
     codexDisclosure?: boolean;
     codexConverse?: ReturnType<typeof vi.fn>;
+    claudeDisclosure?: boolean;
+    claudeConverse?: ReturnType<typeof vi.fn>;
   } = {},
 ): AppContext {
   const root = mkdtempSync(join(tmpdir(), "yulu-ask-"));
@@ -41,13 +45,19 @@ function context(
     config: { read: () => config },
     host: {
       getAgentConnectionDisclosure: (connectionId: string) =>
-        (connectionId === "codex" ? injected.codexDisclosure === false : injected.conversationDisclosure === false)
+        (connectionId === "codex"
+          ? injected.codexDisclosure === false
+          : connectionId === "claude-code"
+            ? injected.claudeDisclosure === false
+            : injected.conversationDisclosure === false)
           ? null : ({
         connectionId,
         capability: "conversation",
         disclosureVersion: connectionId === "codex"
           ? CODEX_CONVERSATION_DISCLOSURE_VERSION
-          : XAI_CONVERSATION_DISCLOSURE_VERSION,
+          : connectionId === "claude-code"
+            ? CLAUDE_CODE_CONVERSATION_DISCLOSURE_VERSION
+            : XAI_CONVERSATION_DISCLOSURE_VERSION,
         decision: "accepted",
         decidedAt: "2026-08-27T00:00:00.000Z",
       }),
@@ -55,8 +65,11 @@ function context(
     paths: { configDir, moviesDir, scriptDir: "/fake/yulu/scripts" },
     ...(injected.localSearch ? { localSearch: injected.localSearch } : {}),
     ...(injected.xaiRequest ? { xaiText: { request: injected.xaiRequest } } : {}),
-    ...(injected.codexConverse ? {
-      agentConnections: { converseCodex: injected.codexConverse },
+    ...(injected.codexConverse || injected.claudeConverse ? {
+      agentConnections: {
+        ...(injected.codexConverse ? { converseCodex: injected.codexConverse } : {}),
+        ...(injected.claudeConverse ? { converseClaude: injected.claudeConverse } : {}),
+      },
     } : {}),
   } as unknown as AppContext;
 }
@@ -69,6 +82,10 @@ function session(ctx: AppContext, provider: string, model = "runtime-managed") {
     ...(provider === "xai" ? { credentialSource: "oauth" as const } : {}),
     ...(provider === "codex" ? {
       connectionId: "codex",
+      credentialSource: "runtime-oauth" as const,
+    } : {}),
+    ...(provider === "claude-code" ? {
+      connectionId: "claude-code",
       credentialSource: "runtime-oauth" as const,
     } : {}),
     title: "Ask",
@@ -140,6 +157,58 @@ describe("pinned Ask flow", () => {
       nativeSessionId: "019f0000-0000-7000-8000-000000000135",
     });
     expect(runAgentCliCommand).not.toHaveBeenCalled();
+  });
+
+  it("persists the first Claude session and resumes only that session after later selection changes", async () => {
+    const config = {
+      intelligence: {
+        conversation: { provider: "agent", connectionId: "claude-code", model: "claude-sonnet-5" },
+      },
+      llm: { enabled: false, command: null, agent: { provider: "auto" } },
+    };
+    const nativeSessionId = "019f0000-0000-7000-8000-000000000136";
+    const claudeConverse = vi.fn()
+      .mockResolvedValueOnce({
+        answer: "First Claude answer",
+        nativeSessionId,
+        usedFallback: false,
+        evidence: { requestedModel: "claude-sonnet-5", actualModel: "claude-sonnet-5", sessionId: nativeSessionId },
+      })
+      .mockResolvedValueOnce({
+        answer: "Resumed Claude answer",
+        nativeSessionId,
+        usedFallback: false,
+        evidence: { requestedModel: "claude-sonnet-5", actualModel: "claude-sonnet-5", sessionId: nativeSessionId },
+      });
+    const ctx = context(config, { claudeConverse });
+    const pinned = session(ctx, "claude-code", "claude-sonnet-5");
+
+    const first = await createCaller(askRouter, ctx).ask({ question: "first", sessionId: pinned.id });
+    config.intelligence.conversation = { provider: "agent", connectionId: "codex", model: "gpt-5.6-sol" } as never;
+    const second = await createCaller(askRouter, ctx).ask({ question: "second", sessionId: pinned.id });
+
+    expect(first).toMatchObject({ ok: true, answer: "First Claude answer", provider: "claude-code" });
+    expect(second).toMatchObject({ ok: true, answer: "Resumed Claude answer", provider: "claude-code" });
+    expect(claudeConverse).toHaveBeenNthCalledWith(1, {
+      connectionId: "claude-code",
+      model: "claude-sonnet-5",
+      prompt: expect.stringContaining("first"),
+    });
+    expect(claudeConverse).toHaveBeenNthCalledWith(2, {
+      connectionId: "claude-code",
+      model: "claude-sonnet-5",
+      prompt: expect.stringContaining("second"),
+      nativeSessionId,
+    });
+    expect(getAgentSession(ctx.paths.configDir, pinned.id)).toMatchObject({
+      provider: "claude-code",
+      connectionId: "claude-code",
+      model: "claude-sonnet-5",
+      nativeSessionId,
+      runtimeLabel: "Claude Code",
+    });
+    expect(runAgentCliCommand).not.toHaveBeenCalled();
+    expect(ClaudeCodeConversationError).toBeTypeOf("function");
   });
 
   it("pauses Codex with the same input snapshot and exact remediation without fallback", async () => {
@@ -258,6 +327,118 @@ describe("pinned Ask flow", () => {
     })).resolves.toMatchObject({ ok: true, answer: "Recovered the same thread" });
     expect(codexConverse).toHaveBeenNthCalledWith(2, expect.objectContaining({ nativeSessionId }));
     expect(runAgentCliCommand).not.toHaveBeenCalled();
+  });
+
+  it("pins a Claude session created by an unknown first turn and retries the same input only on that session", async () => {
+    const config = {
+      intelligence: { conversation: { provider: "agent", connectionId: "claude-code", model: "claude-sonnet-5" } },
+      llm: { enabled: false, command: null, agent: { provider: "auto" } },
+    };
+    const nativeSessionId = "019f0000-0000-7000-8000-000000000888";
+    const evidence = {
+      adapter: "claude-code" as const,
+      transport: "claude-code-print-stream-json" as const,
+      runtimeVersion: "2.1.169",
+      requestedProvider: null,
+      requestedModel: "claude-sonnet-5",
+      actualProvider: null,
+      actualModel: "claude-sonnet-5",
+      requestId: "request-unknown-136",
+      sessionId: nativeSessionId,
+      terminalStatus: "unknown" as const,
+      fallbackOccurred: false,
+      cancellationRequested: true,
+      cancellationConfirmed: false,
+    };
+    const claudeConverse = vi.fn()
+      .mockRejectedValueOnce(new ClaudeCodeConversationError(
+        "Claude Code Conversation outcome is unknown; inspect the pinned native session and do not retry automatically",
+        { nativeSessionId, evidence, unknownOutcome: true },
+      ))
+      .mockResolvedValueOnce({
+        answer: "Recovered the same Claude session",
+        nativeSessionId,
+        usedFallback: false,
+        evidence: { ...evidence, terminalStatus: "ready" },
+      });
+    const ctx = context(config, { claudeConverse });
+    const pinned = session(ctx, "claude-code", "claude-sonnet-5");
+
+    const failed = await createCaller(askRouter, ctx).ask({ question: "same Claude input", sessionId: pinned.id });
+    expect(failed).toMatchObject({
+      ok: false,
+      sessionStatus: "paused",
+      usedFallback: false,
+      runtimeEvidence: {
+        sessionId: nativeSessionId,
+        terminalStatus: "unknown",
+        cancellationRequested: true,
+        cancellationConfirmed: false,
+      },
+    });
+    expect(getAgentSession(ctx.paths.configDir, pinned.id)).toMatchObject({
+      status: "paused",
+      nativeSessionId,
+      retrySnapshot: { question: "same Claude input", sources: [] },
+    });
+
+    await expect(createCaller(askRouter, ctx).ask({
+      question: "same Claude input",
+      sessionId: pinned.id,
+      retry: true,
+    })).resolves.toMatchObject({ ok: true, answer: "Recovered the same Claude session" });
+    expect(claudeConverse).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      connectionId: "claude-code",
+      model: "claude-sonnet-5",
+      nativeSessionId,
+    }));
+    expect(runAgentCliCommand).not.toHaveBeenCalled();
+  });
+
+  it("blocks retry when an unknown Claude outcome has no observable native session", async () => {
+    const config = {
+      intelligence: { conversation: { provider: "agent", connectionId: "claude-code", model: "claude-sonnet-5" } },
+      llm: { enabled: false, command: null, agent: { provider: "auto" } },
+    };
+    const claudeConverse = vi.fn().mockRejectedValue(new ClaudeCodeConversationError(
+      "Claude Code Conversation outcome is unknown; inspect the pinned native session and do not retry automatically",
+      {
+        unknownOutcome: true,
+        evidence: {
+          adapter: "claude-code",
+          transport: "claude-code-print-stream-json",
+          runtimeVersion: "2.1.169",
+          requestedProvider: null,
+          requestedModel: "claude-sonnet-5",
+          actualProvider: null,
+          actualModel: null,
+          requestId: null,
+          sessionId: null,
+          terminalStatus: "unknown",
+          fallbackOccurred: false,
+          cancellationRequested: false,
+          cancellationConfirmed: false,
+        },
+      },
+    ));
+    const ctx = context(config, { claudeConverse });
+    const pinned = session(ctx, "claude-code", "claude-sonnet-5");
+
+    const failed = await createCaller(askRouter, ctx).ask({ question: "unobservable session", sessionId: pinned.id });
+    expect(failed).toMatchObject({
+      ok: false,
+      recovery: { retry: "unavailable_unknown_outcome", newConversation: true },
+      runtimeEvidence: { terminalStatus: "unknown", sessionId: null },
+    });
+    expect(getAgentSession(ctx.paths.configDir, pinned.id)).toMatchObject({ status: "paused" });
+    expect(getAgentSession(ctx.paths.configDir, pinned.id)?.retrySnapshot).toBeUndefined();
+
+    await expect(createCaller(askRouter, ctx).ask({
+      question: "unobservable session",
+      sessionId: pinned.id,
+      retry: true,
+    })).resolves.toMatchObject({ ok: false, sessionStatus: "paused" });
+    expect(claudeConverse).toHaveBeenCalledTimes(1);
   });
 
   it("keeps the existing Agent-owned prompt for pinned Agent sessions", () => {

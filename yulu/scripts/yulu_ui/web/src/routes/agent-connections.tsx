@@ -50,7 +50,7 @@ export function AgentConnections() {
   const remove = trpc.agentConnections.remove.useMutation();
   const [apiKey, setApiKeyValue] = useState("");
   const [modelDrafts, setModelDrafts] = useState<Partial<Record<Capability, string>>>({});
-  const [codexModels, setCodexModels] = useState<Record<string, string>>({});
+  const [agentModelDrafts, setAgentModelDrafts] = useState<Record<string, string>>({});
   const [impact, setImpact] = useState<DeletionImpact | null>(null);
   const [actionError, setActionError] = useState(false);
   const deleteButtonRef = useRef<HTMLButtonElement>(null);
@@ -93,10 +93,10 @@ export function AgentConnections() {
     ConnectionView,
     { adapter: "direct-xai" }
   > => item.adapter === "direct-xai");
-  const codexConnections = view.data.connections.filter((item): item is Extract<
+  const supportedAgentConnections = view.data.connections.filter((item): item is Extract<
     ConnectionView,
-    { adapter: "codex" }
-  > => item.adapter === "codex");
+    { adapter: "codex" | "claude-code" }
+  > => item.adapter === "codex" || item.adapter === "claude-code");
   const authorizing = connection?.authorization.status === "starting" || connection?.authorization.status === "running";
   const startAuthorization = () => {
     const authorizationWindow = window.open("about:blank", "_blank");
@@ -358,25 +358,28 @@ export function AgentConnections() {
         </section>
       )}
 
-      {codexConnections.map((codex) => {
+      {supportedAgentConnections.map((agent) => {
+        const copy = agent.adapter === "claude-code"
+          ? "agentConnections.claude"
+          : "agentConnections.codex";
         return (
           <section
             className="agent-connection-card"
-            data-testid={`agent-connection-${codex.adapter}`}
-            aria-labelledby={`${codex.id}-title`}
-            key={codex.id}
+            data-testid={`agent-connection-${agent.adapter}`}
+            aria-labelledby={`${agent.id}-title`}
+            key={agent.id}
           >
             <div className="agent-connection-card-head">
               <div>
-                <h2 id={`${codex.id}-title`}>{codex.label}</h2>
-                <p>{t("agentConnections.codex.description")}</p>
+                <h2 id={`${agent.id}-title`}>{agent.label}</h2>
+                <p>{t(`${copy}.description`)}</p>
               </div>
               <span
-                className={`agent-connection-state ${codex.authorization.connected ? "ready" : "muted"}`}
+                className={`agent-connection-state ${agent.authorization.connected ? "ready" : "muted"}`}
                 role="status"
-                aria-label={t("agentConnections.codex.statusAria")}
+                aria-label={t(`${copy}.statusAria`)}
               >
-                {codex.authorization.connected
+                {agent.authorization.connected
                   ? t("agentConnections.connected")
                   : t("agentConnections.disconnected")}
               </span>
@@ -384,44 +387,44 @@ export function AgentConnections() {
 
             <dl className="agent-connection-runtime-details">
               <div>
-                <dt>{t("agentConnections.codex.version")}</dt>
-                <dd>{codex.authorization.runtimeVersion ?? "—"} · {t("agentConnections.codex.minimumVersion", {
-                  version: codex.authorization.minimumVersion ?? "—",
+                <dt>{t(`${copy}.version`)}</dt>
+                <dd>{agent.authorization.runtimeVersion ?? "—"} · {t(`${copy}.minimumVersion`, {
+                  version: agent.authorization.minimumVersion ?? "—",
                 })}</dd>
               </div>
               <div>
-                <dt>{t("agentConnections.codex.authorization")}</dt>
-                <dd>{t("agentConnections.codex.runtimeOAuth")}</dd>
+                <dt>{t(`${copy}.authorization`)}</dt>
+                <dd>{t(`${copy}.runtimeOAuth`)}</dd>
               </div>
               <div>
-                <dt>{t("agentConnections.codex.features")}</dt>
-                <dd>{codex.authorization.features.join(" · ")}</dd>
+                <dt>{t(`${copy}.features`)}</dt>
+                <dd>{agent.authorization.features.join(" · ")}</dd>
               </div>
             </dl>
 
-            <div className="agent-connection-guidance" role={codex.authorization.remediation ? "alert" : "note"}>
-              <p>{t("agentConnections.codex.loginGuidance")}</p>
-              <code>{codex.authorization.loginCommand}</code>
+            <div className="agent-connection-guidance" role={agent.authorization.remediation ? "alert" : "note"}>
+              <p>{t(`${copy}.loginGuidance`)}</p>
+              <code>{agent.authorization.loginCommand}</code>
               <br />
-              <code>{codex.authorization.statusCommand}</code>
-              {codex.authorization.remediation && <p>{codex.authorization.remediation}</p>}
+              <code>{agent.authorization.statusCommand}</code>
+              {agent.authorization.remediation && <p>{agent.authorization.remediation}</p>}
             </div>
 
             <div className="agent-connection-capabilities">
-              {codex.capabilities.map((item) => {
+              {agent.capabilities.map((item) => {
                 const capability = item.capability;
-                const modelKey = `${codex.id}:${capability}`;
-                const configuredModel = capability === "summary"
-                  ? codex.settings.summaryModel
-                  : codex.settings.conversationModel;
-                const model = codexModels[modelKey] ?? configuredModel;
-                const testing = probe.isPending && probe.variables?.connectionId === codex.id &&
+                const modelKey = `${agent.id}:${capability}`;
+                const configuredModel = capability === "summary" && "summaryModel" in agent.settings
+                  ? agent.settings.summaryModel
+                  : agent.settings.conversationModel;
+                const model = agentModelDrafts[modelKey] ?? configuredModel;
+                const testing = probe.isPending && probe.variables?.connectionId === agent.id &&
                   probe.variables.capability === capability;
                 const current = testing ? "testing" : item.currentReadiness.status;
                 return (
                   <article
                     className="agent-connection-capability"
-                    data-testid={`connection-capability-codex-${capability}`}
+                    data-testid={`connection-capability-${agent.adapter}-${capability}`}
                     key={capability}
                   >
                     <div className="agent-connection-capability-head">
@@ -441,14 +444,14 @@ export function AgentConnections() {
                         {readinessFailure(t, item.currentReadiness)}
                       </p>
                     )}
-                    <label className="agent-connection-model" htmlFor={`${codex.id}-${capability}-model`}>
-                      <span>{t(`agentConnections.codex.model.${capability}`)}</span>
+                    <label className="agent-connection-model" htmlFor={`${agent.id}-${capability}-model`}>
+                      <span>{t(`${copy}.model.${capability}`)}</span>
                       <input
-                        id={`${codex.id}-${capability}-model`}
+                        id={`${agent.id}-${capability}-model`}
                         type="text"
                         maxLength={128}
                         value={model}
-                        onChange={(event) => setCodexModels((currentModels) => ({
+                        onChange={(event) => setAgentModelDrafts((currentModels) => ({
                           ...currentModels,
                           [modelKey]: event.target.value,
                         }))}
@@ -456,15 +459,15 @@ export function AgentConnections() {
                     </label>
                     {item.disclosure?.required && (
                       <div className="agent-connection-guidance" role="alert">
-                        {t(`agentConnections.codex.disclosure.${capability}`)}
+                        {t(`${copy}.disclosure.${capability}`)}
                         <button
                           type="button"
                           onClick={() => void run(() => acceptDisclosure.mutateAsync({
-                            connectionId: codex.id,
+                            connectionId: agent.id,
                             capability,
                           }))}
                         >
-                          {t(`agentConnections.codex.disclosureAccept.${capability}`)}
+                          {t(`${copy}.disclosureAccept.${capability}`)}
                         </button>
                       </div>
                     )}
@@ -473,18 +476,18 @@ export function AgentConnections() {
                         type="button"
                         disabled={!model.trim()}
                         onClick={() => void run(() => select.mutateAsync({
-                          connectionId: codex.id,
+                          connectionId: agent.id,
                           capability,
                           model,
                         }))}
                       >
-                        {t(`agentConnections.codex.select.${capability}`)}
+                        {t(`${copy}.select.${capability}`)}
                       </button>
                       <button
                         type="button"
-                        disabled={!codex.authorization.connected || probe.isPending}
+                        disabled={!agent.authorization.connected || probe.isPending}
                         onClick={() => void run(() => probe.mutateAsync({
-                          connectionId: codex.id,
+                          connectionId: agent.id,
                           capability,
                           model,
                         }))}
@@ -509,7 +512,7 @@ export function AgentConnections() {
           <details
             className="agent-connection-card compact"
             data-testid={`agent-candidate-${candidate.adapter}`}
-            open={candidate.adapter === "codex"}
+            open={candidate.adapter === "codex" || candidate.adapter === "claude-code"}
             key={candidate.id}
           >
             <summary>
@@ -521,16 +524,18 @@ export function AgentConnections() {
               <div><dt>{t("agentConnections.detectedPath")}</dt><dd><code>{candidate.detectedPath ?? t("agentConnections.migrated")}</code></dd></div>
               <div><dt>{t("agentConnections.declaredCapabilities")}</dt><dd>{candidate.capabilities.map((item) => capabilityLabel(t, item as Capability)).join(" · ")}</dd></div>
             </dl>
-            {candidate.adapter === "codex" && candidate.detectedPath && (
+            {(candidate.adapter === "codex" || candidate.adapter === "claude-code") && candidate.detectedPath && (
               <div className="agent-connection-candidate-action">
                 <label className="agent-connection-model" htmlFor={`${candidate.id}-conversation-model`}>
-                  <span>{t("agentConnections.codex.model")}</span>
+                  <span>{t(candidate.adapter === "claude-code"
+                    ? "agentConnections.claude.model"
+                    : "agentConnections.codex.model")}</span>
                   <input
                     id={`${candidate.id}-conversation-model`}
                     type="text"
                     maxLength={128}
-                    value={codexModels[candidate.id] ?? "gpt-5.6-sol"}
-                    onChange={(event) => setCodexModels((currentModels) => ({
+                    value={agentModelDrafts[candidate.id] ?? (candidate.adapter === "claude-code" ? "claude-sonnet-5" : "gpt-5.6-sol")}
+                    onChange={(event) => setAgentModelDrafts((currentModels) => ({
                       ...currentModels,
                       [candidate.id]: event.target.value,
                     }))}
@@ -538,13 +543,15 @@ export function AgentConnections() {
                 </label>
                 <button
                   type="button"
-                  disabled={confirmCandidate.isPending || !(codexModels[candidate.id] ?? "gpt-5.6-sol").trim()}
+                  disabled={confirmCandidate.isPending || !(agentModelDrafts[candidate.id] ?? (candidate.adapter === "claude-code" ? "claude-sonnet-5" : "gpt-5.6-sol")).trim()}
                   onClick={() => void run(() => confirmCandidate.mutateAsync({
                     candidateId: candidate.id,
-                    model: codexModels[candidate.id] ?? "gpt-5.6-sol",
+                    model: agentModelDrafts[candidate.id] ?? (candidate.adapter === "claude-code" ? "claude-sonnet-5" : "gpt-5.6-sol"),
                   }))}
                 >
-                  {t("agentConnections.codex.confirm")}
+                  {t(candidate.adapter === "claude-code"
+                    ? "agentConnections.claude.confirm"
+                    : "agentConnections.codex.confirm")}
                 </button>
               </div>
             )}

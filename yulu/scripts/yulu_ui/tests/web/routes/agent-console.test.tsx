@@ -680,6 +680,7 @@ describe("AgentConsole", () => {
     }];
     mockSelectedSession = {
       ...mockSessions[0],
+      retrySnapshot: { question: "Retry this question", sources: [] },
       messages: [
         { role: "user", text: "Retry this question" },
         { role: "assistant", text: "Preserved answer", sources: [] },
@@ -722,6 +723,49 @@ describe("AgentConsole", () => {
     expect(appendSessionMutateAsync).toHaveBeenCalledTimes(1);
   });
 
+  it("does not offer retry and preserves exact Claude remediation when the native session is unknown", async () => {
+    mockSessions = [{
+      id: "session-claude-unknown",
+      agent: "claude-code",
+      provider: "claude-code",
+      connectionId: "claude-code",
+      model: "claude-sonnet-5",
+      status: "active",
+      title: "Claude unknown outcome",
+      updatedAt: "2026-08-27T10:00:00.000Z",
+      messageCount: 0,
+    }];
+    mockSelectedSession = { ...mockSessions[0], messages: [] };
+    askMutateAsync.mockResolvedValueOnce({
+      answer: "",
+      provider: "claude-code",
+      model: "claude-sonnet-5",
+      sessionStatus: "paused",
+      sources: [],
+      usedFallback: false,
+      llmStatus: "error",
+      llmError: "Claude Code Conversation outcome is unknown",
+      recovery: {
+        retry: "unavailable_unknown_outcome",
+        settingsPath: "/agent-connections?connection=claude-code&capability=conversation",
+        newConversation: true,
+      },
+    });
+
+    const { getByText, findByPlaceholderText, getByLabelText, findByText, queryByRole, getByRole } = wrap();
+    fireEvent.click(getByText("Claude unknown outcome"));
+    fireEvent.change(await findByPlaceholderText("问会议记录、决策、行动项..."), { target: { value: "May this be retried?" } });
+    fireEvent.click(getByLabelText("发送"));
+
+    expect(await findByText("服务已暂停")).toBeInTheDocument();
+    expect(queryByRole("button", { name: "使用同一服务重试" })).toBeNull();
+    expect(getByRole("link", { name: "打开智能服务设置" })).toHaveAttribute(
+      "href",
+      "/agent-connections?connection=claude-code&capability=conversation",
+    );
+    expect(askMutateAsync).toHaveBeenCalledTimes(1);
+  });
+
   it("renders pinned provider pause and recovery guidance in English", async () => {
     mockSessions = [{
       id: "session-paused-en",
@@ -736,6 +780,7 @@ describe("AgentConsole", () => {
     }];
     mockSelectedSession = {
       ...mockSessions[0],
+      retrySnapshot: { question: "Retry this question", sources: [] },
       messages: [
         { role: "user", text: "Retry this question" },
         { role: "assistant", text: "Preserved answer", sources: [] },

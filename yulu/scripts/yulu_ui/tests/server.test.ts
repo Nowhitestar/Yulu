@@ -1,5 +1,5 @@
 import { describe, it, expect, afterAll, beforeAll, vi } from "vitest";
-import { mkdtempSync, mkdirSync, cpSync, rmSync, writeFileSync, readFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, mkdirSync, cpSync, rmSync, writeFileSync, readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -131,6 +131,55 @@ describe("server", () => {
       ]));
     } finally {
       store.deleteAgentConnectionRecord("codex");
+      store.close();
+    }
+  });
+
+  it("wires the production Claude Code adapter into the Host without making a model request", async () => {
+    const configDir = join(env.root, ".config", "yulu");
+    const executable = join(env.root, "fake-claude-runtime");
+    writeFileSync(executable, [
+      `#!${process.execPath}`,
+      'const args = process.argv.slice(2);',
+      'if (args.length === 1 && args[0] === "--version") process.stdout.write("2.1.169 (Claude Code)\\n");',
+      'else if (args.includes("--help")) process.stdout.write("--safe-mode --print --output-format stream-json --verbose --model --session-id --resume --max-turns --tools --disallowedTools --strict-mcp-config --mcp-config --disable-slash-commands --no-session-persistence --fallback-model");',
+      'else if (args[0] === "auth" && args[1] === "status") process.stdout.write(JSON.stringify({ loggedIn: true, authMethod: "claude.ai", apiProvider: "firstParty" }));',
+      'else { process.stderr.write("model request forbidden"); process.exitCode = 9; }',
+    ].join("\n"), { mode: 0o700 });
+    chmodSync(executable, 0o700);
+    const store = new HostStore(join(configDir, "host.sqlite"));
+    store.upsertAgentConnectionRecord({
+      id: "claude-code",
+      kind: "supported-agent",
+      adapter: "claude-code",
+      label: "Claude Code",
+      lifecycle: "available",
+      settings: { executablePath: executable, conversationModel: "claude-sonnet-5" },
+    });
+    try {
+      const response = await fetch(`${env.baseUrl}/trpc/agentConnections.view`);
+      expect(response.status).toBe(200);
+      const body = await response.json() as {
+        result: { data: { connections: Array<Record<string, unknown>> } };
+      };
+      expect(body.result.data.connections).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          id: "claude-code",
+          adapter: "claude-code",
+          lifecycle: "connected",
+          authorization: expect.objectContaining({
+            connected: true,
+            credentialSource: "runtime-oauth",
+            runtimeVersion: "2.1.169",
+            authorizationMethod: "claude.ai",
+            loginCommand: `${executable} auth login`,
+            statusCommand: `${executable} auth status`,
+          }),
+          capabilities: [expect.objectContaining({ capability: "conversation" })],
+        }),
+      ]));
+    } finally {
+      store.deleteAgentConnectionRecord("claude-code");
       store.close();
     }
   });

@@ -188,7 +188,7 @@ export interface PersistedAgentConnectionReadiness {
     adapter: string;
     transport: string;
     runtimeVersion: string | null;
-    requestedProvider: string;
+    requestedProvider: string | null;
     requestedModel: string;
     actualProvider: string | null;
     actualModel: string | null;

@@ -6,6 +6,7 @@ import { agentSessionsRouter } from "../../src/routers/agentSessions.js";
 import { createCaller, type AppContext } from "../../src/trpc.js";
 import { updateAgentSessionNativeSession } from "../../src/agentSessionStore.js";
 import {
+  CLAUDE_CODE_CONVERSATION_DISCLOSURE_VERSION,
   CODEX_CONVERSATION_DISCLOSURE_VERSION,
   XAI_CONVERSATION_DISCLOSURE_VERSION,
 } from "../../src/conversationDataDisclosure.js";
@@ -26,6 +27,13 @@ function makeCtx(configDir: string, config: Record<string, unknown> = {
         label: "Codex",
         lifecycle: "available",
         settings: { executablePath: "/fake/codex", conversationModel: "gpt-5.6-sol" },
+      }, {
+        id: "claude-code",
+        kind: "supported-agent",
+        adapter: "claude-code",
+        label: "Claude Code",
+        lifecycle: "available",
+        settings: { executablePath: "/fake/claude", conversationModel: "claude-sonnet-5" },
       }],
       getAgentConnectionDisclosure: () => ({
         connectionId: "direct-xai",
@@ -221,6 +229,52 @@ describe("agentSessionsRouter", () => {
     await expect(createCaller(agentSessionsRouter, ctx).create({ title: "No stale proof" }))
       .rejects.toThrow(/test this exact Codex Conversation model/i);
     await expect(createCaller(agentSessionsRouter, ctx).list()).resolves.toEqual({ sessions: [] });
+  });
+
+  it("snapshots the exact Claude Code connection and model for each new conversation", async () => {
+    const root = mkdtempSync(join(tmpdir(), "agent-sessions-"));
+    roots.push(root);
+    const config = {
+      intelligence: {
+        conversation: { provider: "agent", connectionId: "claude-code", model: "claude-sonnet-5" },
+      },
+      llm: { enabled: false, command: null, agent: { provider: "auto" } },
+    };
+    const ctx = makeCtx(root, config);
+    const assertClaudeConversationReady = vi.fn(async () => undefined);
+    ctx.agentConnections = { assertClaudeConversationReady } as never;
+    ctx.host.getAgentConnectionDisclosure = () => ({
+      connectionId: "claude-code",
+      capability: "conversation",
+      disclosureVersion: CLAUDE_CODE_CONVERSATION_DISCLOSURE_VERSION,
+      decision: "accepted",
+      decidedAt: "2026-08-27T00:00:00.000Z",
+    });
+
+    const created = await createCaller(agentSessionsRouter, ctx).create({ title: "Pinned Claude" });
+    expect(created).toMatchObject({
+      provider: "claude-code",
+      connectionId: "claude-code",
+      model: "claude-sonnet-5",
+      credentialSource: "runtime-oauth",
+      runtimeLabel: "Claude Code",
+    });
+    expect(created.nativeSessionId).toBeUndefined();
+    expect(assertClaudeConversationReady).toHaveBeenCalledWith({
+      connectionId: "claude-code",
+      model: "claude-sonnet-5",
+    });
+
+    config.intelligence.conversation = {
+      provider: "agent",
+      connectionId: "codex",
+      model: "gpt-5.6-sol",
+    } as never;
+    expect(await createCaller(agentSessionsRouter, ctx).get({ id: created.id })).toMatchObject({
+      provider: "claude-code",
+      connectionId: "claude-code",
+      model: "claude-sonnet-5",
+    });
   });
 
   it("renames, pins, archives, and deletes sessions", async () => {

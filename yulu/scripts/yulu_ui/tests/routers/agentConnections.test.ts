@@ -8,6 +8,7 @@ import { AgentConnectionCenter } from "../../src/agentConnections.js";
 import { agentConnectionsRouter } from "../../src/routers/agentConnections.js";
 import { createCaller } from "../../src/trpc.js";
 import { createAgentSession } from "../../src/agentSessionStore.js";
+import { CLAUDE_CODE_CONVERSATION_DISCLOSURE_VERSION } from "../../src/conversationDataDisclosure.js";
 
 const roots: string[] = [];
 
@@ -125,6 +126,56 @@ function setup(
     converse: vi.fn(),
   };
   const codexAdapter = vi.fn(() => codex);
+  const claude = {
+    status: vi.fn(async () => ({
+      adapter: "claude-code" as const,
+      transport: "claude-code-print-stream-json",
+      runtimeVersion: "2.1.169",
+      minimumVersion: "2.1.169",
+      supported: true,
+      authorized: true,
+      authorizationMethod: "claude.ai",
+      apiProvider: "firstParty",
+      availableModels: [],
+      features: [
+        "auth/status" as const,
+        "safe-mode" as const,
+        "print/stream-json" as const,
+        "verbose" as const,
+        "model" as const,
+        "session-id" as const,
+        "resume" as const,
+        "probe-bounds" as const,
+        "tools/none" as const,
+        "probe-isolation" as const,
+        "fallback-model/opt-in" as const,
+      ],
+      login: { command: "/fake/bin/claude auth login", statusCommand: "/fake/bin/claude auth status" },
+      remediation: null,
+    })),
+    probe: vi.fn(async ({ model }: { model: string }) => ({
+      status: "ready" as const,
+      reason: null,
+      remediation: null,
+      evidence: {
+        adapter: "claude-code" as const,
+        transport: "claude-code-print-stream-json" as const,
+        runtimeVersion: "2.1.169",
+        requestedProvider: null,
+        requestedModel: model,
+        actualProvider: null,
+        actualModel: model,
+        requestId: "request-136",
+        sessionId: "019f0000-0000-7000-8000-000000000136",
+        terminalStatus: "ready" as const,
+        fallbackOccurred: false,
+        cancellationRequested: false,
+        cancellationConfirmed: null,
+      },
+    })),
+    converse: vi.fn(),
+  };
+  const claudeAdapter = vi.fn(() => claude);
   const center = new AgentConnectionCenter({
     config: new ConfigManager(configPath),
     host,
@@ -134,6 +185,7 @@ function setup(
     text,
     discover,
     codexAdapter,
+    claudeAdapter,
   });
   host.upsertAgentConnectionRecord({
     id: "direct-xai",
@@ -151,6 +203,8 @@ function setup(
     text,
     codex,
     codexAdapter,
+    claude,
+    claudeAdapter,
     configPath,
     root,
     configManager: new ConfigManager(configPath),
@@ -163,6 +217,7 @@ function setup(
       text,
       discover,
       codexAdapter,
+      claudeAdapter,
     }),
     discover,
   };
@@ -256,6 +311,105 @@ describe("public Agent Connection Host contract", () => {
         }),
       }),
     ]);
+    setupResult.host.close();
+  });
+
+  it("connects Claude Code, proves only Conversation, and keeps readiness bound to its exact runtime identity", async () => {
+    const setupResult = setup({
+      audio: {},
+      transcription: { engine: "local", language: "zh" },
+      intelligence: {
+        summary: { provider: "agent", model: "runtime-managed" },
+        conversation: { provider: "agent", model: "runtime-managed" },
+      },
+      llm: { agent: { provider: "auto" } },
+    }, [{ adapter: "claude-code", label: "Claude Code", path: "/fake/bin/claude" }]);
+    const caller = createCaller(agentConnectionsRouter, {
+      agentConnections: setupResult.center,
+      uiMutationAuthorized: true,
+    } as never);
+
+    await caller.refreshCandidates();
+    const candidateView = await caller.view();
+    expect(candidateView.candidates).toContainEqual(expect.objectContaining({
+      adapter: "claude-code",
+      capabilities: ["conversation"],
+      lifecycle: "candidate",
+      selected: false,
+    }));
+    expect(setupResult.claude.status).not.toHaveBeenCalled();
+    expect(setupResult.claude.probe).not.toHaveBeenCalled();
+
+    await expect(caller.confirmCandidate({
+      candidateId: "candidate:claude-code",
+      model: "claude-sonnet-5",
+    })).resolves.toMatchObject({
+      connections: expect.arrayContaining([expect.objectContaining({
+        id: "claude-code",
+        adapter: "claude-code",
+        authorization: expect.objectContaining({
+          connected: true,
+          credentialSource: "runtime-oauth",
+          runtimeVersion: "2.1.169",
+          authorizationMethod: "claude.ai",
+          loginCommand: "/fake/bin/claude auth login",
+          statusCommand: "/fake/bin/claude auth status",
+        }),
+        capabilities: [expect.objectContaining({
+          capability: "conversation",
+          declared: true,
+          currentReadiness: expect.objectContaining({
+            status: "untested",
+            model: "claude-sonnet-5",
+          }),
+          disclosure: expect.objectContaining({
+            required: true,
+            disclosureVersion: CLAUDE_CODE_CONVERSATION_DISCLOSURE_VERSION,
+            data: "conversation_text_and_agent_tool_context",
+          }),
+        })],
+      })]),
+    });
+    expect(setupResult.claude.probe).not.toHaveBeenCalled();
+
+    await caller.acceptDisclosure({ connectionId: "claude-code", capability: "conversation" });
+    await expect(caller.probe({
+      connectionId: "claude-code",
+      capability: "conversation",
+      model: "claude-sonnet-5",
+    })).resolves.toMatchObject({
+      capability: "conversation",
+      status: "ready",
+      model: "claude-sonnet-5",
+    });
+    await caller.select({
+      connectionId: "claude-code",
+      capability: "conversation",
+      model: "claude-sonnet-5",
+    });
+    await expect(caller.view()).resolves.toMatchObject({
+      selections: { conversation: { connectionId: "claude-code", model: "claude-sonnet-5" } },
+    });
+    expect(setupResult.host.listAgentConnectionReadinessHistory("claude-code", "conversation")).toEqual([
+      expect.objectContaining({
+        status: "ready",
+        runtimeEvidence: expect.objectContaining({
+          adapter: "claude-code",
+          requestedModel: "claude-sonnet-5",
+          actualModel: "claude-sonnet-5",
+          sessionId: "019f0000-0000-7000-8000-000000000136",
+          fallbackOccurred: false,
+        }),
+      }),
+    ]);
+
+    const restarted = await setupResult.makeCenter().view();
+    expect(restarted.connections.find((item) => item.id === "claude-code")?.capabilities[0])
+      .toMatchObject({
+        capability: "conversation",
+        currentReadiness: { status: "untested", testedAt: null },
+        readinessHistory: [expect.objectContaining({ status: "ready", model: "claude-sonnet-5" })],
+      });
     setupResult.host.close();
   });
 
@@ -518,6 +672,27 @@ describe("public Agent Connection Host contract", () => {
     expect(migratedConfig.llm).toMatchObject({ enabled: false, command: null, agent: { provider: "auto" } });
     expect(readdirSync(supported.root).filter((name) => name.includes("legacy-agent-connection"))).toHaveLength(1);
     supported.host.close();
+
+    const migratedClaude = setup({
+      audio: {},
+      transcription: { engine: "local", language: "zh" },
+      intelligence: {},
+      llm: { enabled: true, command: ["claude"], agent: { provider: "claude" } },
+    });
+    await expect(migratedClaude.center.view()).resolves.toMatchObject({
+      candidates: [expect.objectContaining({
+        adapter: "claude-code",
+        capabilities: ["conversation"],
+        lifecycle: "candidate",
+        selected: false,
+      })],
+      legacyConnections: [],
+    });
+    expect(JSON.parse(readFileSync(migratedClaude.configPath, "utf8"))).toMatchObject({
+      llm: { enabled: false, command: null, agent: { provider: "auto" } },
+    });
+    expect(migratedClaude.claude.status).not.toHaveBeenCalled();
+    migratedClaude.host.close();
 
     const legacy = setup({
       audio: {},
