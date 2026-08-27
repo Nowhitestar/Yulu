@@ -4,7 +4,11 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { agentSessionsRouter } from "../../src/routers/agentSessions.js";
 import { createCaller, type AppContext } from "../../src/trpc.js";
-import { updateAgentSessionNativeSession } from "../../src/agentSessionStore.js";
+import {
+  beginAgentSessionInvocation,
+  markAgentSessionInvocationUnknown,
+  updateAgentSessionNativeSession,
+} from "../../src/agentSessionStore.js";
 import {
   CLAUDE_CODE_CONVERSATION_DISCLOSURE_VERSION,
   CLIPROXYAPI_CONVERSATION_DISCLOSURE_VERSION,
@@ -178,17 +182,61 @@ describe("agentSessionsRouter", () => {
     const session = await caller.create({ agent: "codex", title: "Pinned xAI" });
     expect(session).toMatchObject({
       provider: "xai",
+      connectionId: "direct-xai",
       model: "grok-4.6-exact",
       credentialSource: "oauth",
+      disclosureVersion: XAI_CONVERSATION_DISCLOSURE_VERSION,
       status: "active",
     });
 
     config.intelligence.conversation = { provider: "agent", model: "runtime-managed" };
     expect(await caller.get({ id: session.id })).toMatchObject({
       provider: "xai",
+      connectionId: "direct-xai",
       model: "grok-4.6-exact",
       credentialSource: "oauth",
+      disclosureVersion: XAI_CONVERSATION_DISCLOSURE_VERSION,
     });
+  });
+
+  it("requires an authenticated explicit mutation to create a new attempt from Unknown Outcome", async () => {
+    const root = mkdtempSync(join(tmpdir(), "agent-sessions-"));
+    roots.push(root);
+    const config = {
+      intelligence: { conversation: { provider: "xai", model: "grok-4.6-exact" } },
+      llm: { enabled: false, command: null, agent: { provider: "auto" } },
+    };
+    const ctx = makeCtx(root, config);
+    const caller = createCaller(agentSessionsRouter, ctx);
+    const original = await caller.create({ title: "Unknown xAI" });
+    const invocation = beginAgentSessionInvocation(root, original.id, {
+      question: "Preserved explicit input",
+      sources: [],
+    }, {
+      kind: "messages",
+      messages: [{ role: "user", content: "Preserved explicit input" }],
+    });
+    markAgentSessionInvocationUnknown(root, original.id, invocation.executionId, "outcome unknown");
+
+    ctx.uiMutationAuthorized = false;
+    await expect(caller.createAttemptFromUnknown({ id: original.id }))
+      .rejects.toThrow("UI mutation bearer required");
+    ctx.uiMutationAuthorized = true;
+    const replacement = await caller.createAttemptFromUnknown({ id: original.id });
+    expect(replacement).toMatchObject({
+      provider: "xai",
+      connectionId: "direct-xai",
+      model: "grok-4.6-exact",
+      credentialSource: "oauth",
+      disclosureVersion: XAI_CONVERSATION_DISCLOSURE_VERSION,
+      supersedesSessionId: original.id,
+      retrySnapshot: { question: "Preserved explicit input", sources: [] },
+      retryProviderInput: {
+        kind: "messages",
+        messages: [{ role: "user", content: "Preserved explicit input" }],
+      },
+    });
+    expect(replacement.nativeSessionId).toBeUndefined();
   });
 
   it("snapshots the exact Codex connection and model for each new conversation", async () => {

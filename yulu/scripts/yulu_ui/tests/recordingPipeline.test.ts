@@ -13,6 +13,9 @@ import {
   GatewaySummaryUnknownOutcomeError,
 } from "../src/summaryProviderReadiness.js";
 import { paths } from "../src/paths.js";
+import { CodexConversationError } from "../src/codexAgentAdapter.js";
+import { ClaudeCodeConversationError } from "../src/claudeCodeAdapter.js";
+import { XaiTextUnknownOutcomeError } from "../src/xaiText.js";
 
 function wavWithAudio(): Buffer {
   const header = Buffer.alloc(44);
@@ -70,7 +73,9 @@ describe("RecordingPipeline", () => {
     supportedAgentToolNames?: string[];
     supportedAgentSummaryText?: string;
     supportedAgentUnknownOutcome?: boolean;
+    supportedAgentUnknownWithoutSession?: boolean;
     recoveredGatewayArtifacts?: boolean;
+    recoveredGatewayArtifactsPublished?: boolean;
     autoPrompts?: Array<{
       id: string;
       slug: string;
@@ -137,6 +142,7 @@ describe("RecordingPipeline", () => {
       store.recordSummaryDataPathDisclosure("xai", "xai-summary-v1");
     }
     let recoveredGatewayTaskId: string | null = null;
+    let recoveredSummaryBeforePipeline: string | null = null;
     if (opts.recoveredGatewayArtifacts) {
       const task = store.enqueueRecording({
         idempotencyKey: "recording:recovered-gateway-artifacts",
@@ -164,6 +170,7 @@ describe("RecordingPipeline", () => {
       store.recordTranscript(task.id, claimed.leaseToken!, transcript);
       const snapshotted = store.recordSummaryInputSnapshot(task.id, claimed.leaseToken!, transcript);
       store.beginGatewaySummaryExecution(task.id, claimed.leaseToken!, "summary");
+      writeFileSync(join(moviesDir, `${task.recordingStem}.summary.md`), "# Previously verified summary\n");
       artifacts.writeStagedSummary(task.id, "# Durable Gateway Summary\n");
       const runtimeEvidence = {
         adapter: "cliproxyapi",
@@ -180,7 +187,7 @@ describe("RecordingPipeline", () => {
         fallbackOccurred: false,
         toolsEnabled: false,
       };
-      store.recordArtifacts(task.id, claimed.leaseToken!, artifacts.commitFromWorkspace(snapshotted, {
+      store.recordArtifacts(task.id, claimed.leaseToken!, artifacts.prepareFromWorkspace(snapshotted, {
         agentProvider: "cliproxyapi",
         summaryProvider: "cliproxyapi",
         summaryModel: "runtime-managed",
@@ -195,9 +202,18 @@ describe("RecordingPipeline", () => {
         artifactSessionId: "recovered-summary-request",
         committedBy: "yulu-host",
       }));
+      if (opts.recoveredGatewayArtifactsPublished) {
+        const records = store.listArtifacts(task.id);
+        artifacts.publishPreparedArtifacts(snapshotted, records);
+        store.markArtifactsPublished(task.id, claimed.leaseToken!);
+      }
       recoveredGatewayTaskId = task.id;
       store.close();
       store = new HostStore(join(configDir, "host.sqlite"));
+      recoveredSummaryBeforePipeline = readFileSync(
+        join(moviesDir, `${task.recordingStem}.summary.md`),
+        "utf8",
+      );
     }
     const legacyManualTask = opts.legacyManualTask ? store.enqueueRecording({
       idempotencyKey: "manual:legacy-combined-task",
@@ -243,13 +259,15 @@ describe("RecordingPipeline", () => {
       } : undefined;
       writeFileSync(workspace.summaryPath, opts.supportedAgentSummaryText ?? "# Summary\n\nhello\n");
       if (!opts.skipArtifactCommit && !opts.supportedAgentAdapter) {
-        const records = artifacts.commitFromWorkspace(task, {
+        const records = artifacts.prepareFromWorkspace(task, {
           agentProvider: task.summaryProvider,
           summaryProvider: task.summaryProvider,
           summaryModel: task.summaryModel,
           committedBy: "yulu-host",
         });
         store!.recordArtifacts(task.id, leaseToken, records);
+        artifacts.publishPreparedArtifacts(task, records);
+        store!.markArtifactsPublished(task.id, leaseToken);
       }
       return {
         stdout: "artifacts done",
@@ -321,12 +339,38 @@ describe("RecordingPipeline", () => {
       ...gateway,
       provider: supportedAgentProvider,
       runArtifactWorkflow: async (input: Parameters<RecordingAgentGateway["runArtifactWorkflow"]>[0]) => {
+        const gatewayExecutionId = supportedAgentProvider === "cliproxyapi"
+          ? store!.beginGatewaySummaryExecution(input.task.id, input.leaseToken, "summary")
+          : null;
+        if (opts.supportedAgentUnknownWithoutSession) {
+          throw new ClaudeCodeConversationError(
+            "Claude Code Summary outcome is unknown without an observable native session",
+            {
+              unknownOutcome: true,
+              evidence: {
+                adapter: "claude-code",
+                transport: "claude-code-print-stream-json",
+                runtimeVersion: "2.1.169",
+                requestedProvider: null,
+                requestedModel: "runtime-managed",
+                actualProvider: null,
+                actualModel: "runtime-managed",
+                requestId: "unknown-request-no-session",
+                sessionId: null,
+                terminalStatus: "unknown",
+                fallbackOccurred: false,
+                cancellationRequested: true,
+                cancellationConfirmed: false,
+              },
+            },
+          );
+        }
         if (opts.supportedAgentUnknownOutcome) {
           if (supportedAgentProvider === "cliproxyapi") {
             throw new GatewaySummaryUnknownOutcomeError(
               "CLIProxyAPI Summary entered Unknown Outcome; do not retry this execution",
               {
-                executionId: "gateway-execution-137",
+                executionId: gatewayExecutionId!,
                 evidence: {
                   adapter: "cliproxyapi",
                   transport: "openai-responses-loopback-http",
@@ -342,6 +386,30 @@ describe("RecordingPipeline", () => {
                   fallbackOccurred: false,
                   toolsEnabled: false,
                 },
+              },
+            );
+          }
+          if (supportedAgentProvider === "codex") {
+            throw new CodexConversationError(
+              "Codex Summary entered Unknown Outcome; inspect the native session before a new attempt",
+              {
+                nativeSessionId: "unknown-thread-141",
+                evidence: {
+                  adapter: "codex",
+                  transport: "codex-app-server-stdio",
+                  runtimeVersion: "0.144.4",
+                  requestedProvider: "openai",
+                  requestedModel: "runtime-managed",
+                  actualProvider: "openai",
+                  actualModel: "runtime-managed",
+                  requestId: "unknown-turn-141",
+                  sessionId: "unknown-thread-141",
+                  terminalStatus: "unknown",
+                  fallbackOccurred: false,
+                  cancellationRequested: true,
+                  cancellationConfirmed: false,
+                },
+                unknownOutcome: true,
               },
             );
           }
@@ -391,6 +459,9 @@ describe("RecordingPipeline", () => {
             sessionId: supportedAgentProvider === "cliproxyapi" ? null : "artifact-session",
             terminalStatus: "ready" as const,
             fallbackOccurred: false,
+            token: "never-persist-summary-token",
+            prompt: "never-persist-summary-prompt",
+            responseBody: "never-persist-summary-response",
             ...(supportedAgentProvider === "cliproxyapi"
               ? { endpoint: supportedAgentEndpointIdentity, toolsEnabled: false }
               : {}),
@@ -428,8 +499,9 @@ describe("RecordingPipeline", () => {
       probe: async () => { throw new Error("not used"); },
       gateway: () => supportedAgentGateway,
     } : undefined;
+    let gatewayUnavailable = opts.gatewayFactoryThrows === true;
     const gatewayFactory = vi.fn(() => {
-      if (opts.gatewayFactoryThrows) throw new Error("invalid runtime config");
+      if (gatewayUnavailable) throw new Error("invalid runtime config");
       return gateway;
     });
     const runtimePaths = {
@@ -486,6 +558,8 @@ describe("RecordingPipeline", () => {
       notionStartedFromState: () => notionStartedFromState,
       legacyManualTask,
       recoveredGatewayTaskId,
+      recoveredSummaryBeforePipeline,
+      setGatewayAvailable: (available: boolean) => { gatewayUnavailable = !available; },
     };
   }
 
@@ -514,6 +588,8 @@ describe("RecordingPipeline", () => {
   it("resumes only Notion delivery after restart with durably committed Gateway artifacts", async () => {
     const {
       recoveredGatewayTaskId,
+      recoveredSummaryBeforePipeline,
+      moviesDir,
       runArtifactWorkflow,
       runNotionWorkflow,
     } = setup({
@@ -524,7 +600,10 @@ describe("RecordingPipeline", () => {
     });
 
     expect(recoveredGatewayTaskId).toBeTruthy();
+    expect(recoveredSummaryBeforePipeline).toBe("# Previously verified summary\n");
     await vi.waitFor(() => expect(store!.getTask(recoveredGatewayTaskId!)?.state).toBe("completed"));
+    expect(readFileSync(join(moviesDir, "Demo_20260711_120000.summary.md"), "utf8"))
+      .toBe("# Durable Gateway Summary\n");
     expect(runArtifactWorkflow).not.toHaveBeenCalled();
     expect(runNotionWorkflow).toHaveBeenCalledTimes(1);
     expect(store!.getNotionDelivery(recoveredGatewayTaskId!)?.url).toBe("https://notion.so/demo");
@@ -541,6 +620,37 @@ describe("RecordingPipeline", () => {
     expect(store!.listEvents(recoveredGatewayTaskId!).filter(({ type }) => (
       type === "gateway.summary_preflight_intent" || type === "gateway.summary_dispatch_intent"
     ))).toHaveLength(1);
+  });
+
+  it("keeps published artifacts committed while delivery is unavailable, then resumes delivery only", async () => {
+    const {
+      recoveredGatewayTaskId,
+      runArtifactWorkflow,
+      runNotionWorkflow,
+      setGatewayAvailable,
+    } = setup({
+      recoveredGatewayArtifacts: true,
+      recoveredGatewayArtifactsPublished: true,
+      supportedAgentAdapter: true,
+      supportedAgentProvider: "cliproxyapi",
+      gatewayFactoryThrows: true,
+      pollMs: 5,
+    });
+
+    await vi.waitFor(() => expect(store!.getTask(recoveredGatewayTaskId!)).toMatchObject({
+      state: "artifacts_committed",
+      leaseToken: null,
+      error: expect.stringContaining("invalid runtime config"),
+    }));
+    expect(store!.isArtifactPublishPending(recoveredGatewayTaskId!)).toBe(false);
+    expect(runArtifactWorkflow).not.toHaveBeenCalled();
+    expect(runNotionWorkflow).not.toHaveBeenCalled();
+
+    setGatewayAvailable(true);
+    pipeline!.kick();
+    await vi.waitFor(() => expect(store!.getTask(recoveredGatewayTaskId!)?.state).toBe("completed"));
+    expect(runArtifactWorkflow).not.toHaveBeenCalled();
+    expect(runNotionWorkflow).toHaveBeenCalledOnce();
   });
 
   it("rejects delivery session reuse after restoring a committed Gateway Summary identity", async () => {
@@ -830,6 +940,9 @@ describe("RecordingPipeline", () => {
           terminalStatus: "ready",
         }),
       });
+    expect(JSON.stringify(store!.listArtifacts(task.id))).not.toMatch(
+      /never-persist-summary|token|prompt|responseBody/,
+    );
     expect(store!.getCoreActivationEvidence()).toMatchObject({
       taskId: task.id,
       summaryProvider: "codex",
@@ -1044,6 +1157,73 @@ describe("RecordingPipeline", () => {
     ]));
   });
 
+  it("fences Claude Code Summary Unknown Outcome even when no native session is observable", async () => {
+    const { audioPath, moviesDir } = setup({
+      pollMs: 5,
+      supportedAgentAdapter: true,
+      supportedAgentProvider: "claude-code",
+      supportedAgentUnknownWithoutSession: true,
+    });
+    writeFileSync(audioPath, wavWithAudio());
+    const summaryPath = join(moviesDir, "Demo_20260711_120000.summary.md");
+    writeFileSync(summaryPath, "# Prior verified summary\n");
+    store!.recordAgentConnectionDisclosure({
+      connectionId: "claude-code",
+      capability: "summary",
+      disclosureVersion: "claude-code-summary-v1",
+      decision: "accepted",
+    });
+
+    const { task } = pipeline!.enqueueCompletion({ audioPath, title: "Unknown Claude Summary" });
+    await vi.waitFor(() => expect(store!.getTask(task.id)).toMatchObject({
+      state: "execution_unverified",
+      nativeSessionId: expect.stringMatching(/^summary-/),
+      error: expect.stringContaining("Unknown Outcome"),
+    }));
+    expect(store!.listEvents(task.id).filter(({ type }) => type === "summary.dispatch_intent"))
+      .toHaveLength(1);
+    expect(() => pipeline!.retry(task.id)).toThrow("cannot retry from execution_unverified");
+    expect(readFileSync(summaryPath, "utf8")).toBe("# Prior verified summary\n");
+  });
+
+  it("persists Codex Summary Unknown Outcome without allowing retry or replacing a prior summary", async () => {
+    const { audioPath, moviesDir, configDir } = setup({
+      pollMs: 5,
+      supportedAgentAdapter: true,
+      supportedAgentProvider: "codex",
+      supportedAgentUnknownOutcome: true,
+    });
+    writeFileSync(audioPath, wavWithAudio());
+    const summaryPath = join(moviesDir, "Demo_20260711_120000.summary.md");
+    writeFileSync(summaryPath, "# Prior verified summary\n");
+    store!.recordAgentConnectionDisclosure({
+      connectionId: "codex",
+      capability: "summary",
+      disclosureVersion: "codex-summary-v1",
+      decision: "accepted",
+    });
+
+    const { task } = pipeline!.enqueueCompletion({ audioPath, title: "Unknown Codex Summary" });
+    await vi.waitFor(() => expect(store!.getTask(task.id)).toMatchObject({
+      state: "execution_unverified",
+      nativeSessionId: "unknown-thread-141",
+      error: expect.stringContaining("Unknown Outcome"),
+    }));
+    expect(() => pipeline!.retry(task.id)).toThrow("cannot retry from execution_unverified");
+    expect(readFileSync(summaryPath, "utf8")).toBe("# Prior verified summary\n");
+    expect(existsSync(join(configDir, "agent-tasks", task.id, "rejected-summary.md"))).toBe(false);
+    expect(store!.listEvents(task.id)).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        type: "summary.unknown_outcome",
+        payload: expect.objectContaining({
+          provider: "codex",
+          nativeSessionId: "unknown-thread-141",
+          runtimeEvidence: expect.objectContaining({ terminalStatus: "unknown" }),
+        }),
+      }),
+    ]));
+  });
+
   it("durably fences CLIProxyAPI Summary Unknown Outcome without retry or commit", async () => {
     const { audioPath, moviesDir, configDir } = setup({
       pollMs: 5,
@@ -1064,7 +1244,7 @@ describe("RecordingPipeline", () => {
     const { task } = pipeline!.enqueueCompletion({ audioPath, title: "Unknown Gateway Summary" });
     await vi.waitFor(() => expect(store!.getTask(task.id)).toMatchObject({
       state: "execution_unverified",
-      nativeSessionId: "gateway-execution-137",
+      nativeSessionId: expect.stringMatching(/^gateway-summary-/),
       error: expect.stringContaining("Unknown Outcome"),
     }));
     expect(() => pipeline!.retry(task.id)).toThrow("cannot retry from execution_unverified");
@@ -1074,7 +1254,7 @@ describe("RecordingPipeline", () => {
       expect.objectContaining({
         type: "gateway.summary_unknown_outcome",
         payload: expect.objectContaining({
-          executionId: "gateway-execution-137",
+          executionId: expect.stringMatching(/^gateway-summary-/),
           runtimeEvidence: expect.objectContaining({
             endpoint: "http://127.0.0.1:8317/v1",
             terminalStatus: "unknown",
@@ -1173,6 +1353,19 @@ describe("RecordingPipeline", () => {
       summaryProvider: "xai",
       summaryModel: "grok-4.6-exact",
     });
+    expect(store!.listEvents(task.id)).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        type: "summary.dispatch_intent",
+        payload: expect.objectContaining({
+          provider: "xai",
+          connectionId: "direct-xai",
+          model: "grok-4.6-exact",
+          credentialClass: "oauth",
+          disclosureVersion: "xai-summary-v1",
+          inputArtifactSha256: expect.stringMatching(/^[a-f0-9]{64}$/),
+        }),
+      }),
+    ]));
   });
 
   it("routes the exact claimed xAI task without a bounded queue pre-scan", async () => {
@@ -1230,6 +1423,42 @@ describe("RecordingPipeline", () => {
     expect(xaiRequest).toHaveBeenLastCalledWith(expect.objectContaining({ model: "grok-pinned" }));
     expect(transcribe).toHaveBeenCalledOnce();
     expect(runArtifactWorkflow).not.toHaveBeenCalled();
+  });
+
+  it("durably fences xAI Summary transport loss as Unknown Outcome", async () => {
+    const { audioPath, configManager, moviesDir, configDir, xaiRequest } = setup({
+      pollMs: 5,
+      xaiText: true,
+    });
+    writeFileSync(audioPath, wavWithAudio());
+    const summaryPath = join(moviesDir, "Demo_20260711_120000.summary.md");
+    writeFileSync(summaryPath, "# Prior verified summary\n");
+    configManager.update("intelligence.summary", { provider: "xai", model: "grok-4.6-exact" });
+    xaiRequest.mockRejectedValueOnce(new XaiTextUnknownOutcomeError({
+      capability: "summary",
+      model: "grok-4.6-exact",
+      credentialSource: "oauth",
+    }));
+
+    const { task } = pipeline!.enqueueCompletion({ audioPath, title: "Unknown xAI Summary" });
+    await vi.waitFor(() => expect(store!.getTask(task.id)).toMatchObject({
+      state: "execution_unverified",
+      error: expect.stringContaining("Unknown Outcome"),
+    }));
+    expect(() => pipeline!.retry(task.id)).toThrow("cannot retry from execution_unverified");
+    expect(readFileSync(summaryPath, "utf8")).toBe("# Prior verified summary\n");
+    expect(existsSync(join(configDir, "agent-tasks", task.id, "rejected-summary.md"))).toBe(false);
+    expect(store!.listEvents(task.id)).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        type: "summary.unknown_outcome",
+        payload: expect.objectContaining({
+          provider: "xai",
+          connectionId: "direct-xai",
+          credentialClass: "oauth",
+          evidenceValidated: false,
+        }),
+      }),
+    ]));
   });
 
   it("pins xAI summary execution to the readiness credential source", async () => {

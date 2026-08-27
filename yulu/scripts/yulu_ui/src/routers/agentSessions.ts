@@ -5,6 +5,7 @@ import {
   archiveAgentSession,
   appendAgentSessionMessage,
   createAgentSession,
+  createAgentSessionAttemptFromUnknown,
   deleteAgentSession,
   getAgentSession,
   listAgentSessions,
@@ -13,14 +14,15 @@ import {
   summarizeAgentSession,
 } from "../agentSessionStore.js";
 import { resolveAgentRuntime } from "../agentRuntime.js";
-import { hasCurrentXaiConversationDisclosure } from "../conversationDataDisclosure.js";
 import {
   CLAUDE_CODE_CONVERSATION_DISCLOSURE_VERSION,
   CLIPROXYAPI_CONVERSATION_DISCLOSURE_VERSION,
   CODEX_CONVERSATION_DISCLOSURE_VERSION,
   HERMES_CONVERSATION_DISCLOSURE_VERSION,
   OPENCLAW_CONVERSATION_DISCLOSURE_VERSION,
+  XAI_CONVERSATION_DISCLOSURE_VERSION,
   hasCurrentAgentConversationDisclosure,
+  hasCurrentXaiConversationDisclosure,
 } from "../conversationDataDisclosure.js";
 
 export const agentSessionsRouter = router({
@@ -47,6 +49,11 @@ export const agentSessionsRouter = router({
     .mutation(async ({ ctx, input }) => {
       const config = ctx.config.read();
       const selection = config.intelligence.conversation;
+      if ("disabled" in selection && selection.disabled) {
+        throw new Error(
+          "Conversation selection was cleared after its Agent connection was deleted; select and test a new connection",
+        );
+      }
       if (selection.provider === "xai") {
         if (!hasCurrentXaiConversationDisclosure(ctx.host)) {
           throw new Error("Accept the current xAI conversation data path disclosure in Agent Connection Center");
@@ -57,8 +64,10 @@ export const agentSessionsRouter = router({
         }
         return createAgentSession(ctx.paths.configDir, {
           provider: "xai",
+          connectionId: "direct-xai",
           model: selection.model,
           credentialSource: connection.source,
+          disclosureVersion: XAI_CONVERSATION_DISCLOSURE_VERSION,
           title: input.title,
           purpose: "ask",
         });
@@ -181,6 +190,12 @@ export const agentSessionsRouter = router({
     }))
     .mutation(({ ctx, input }) => {
       return appendAgentSessionMessage(ctx.paths.configDir, input.sessionId, input.message);
+    }),
+
+  createAttemptFromUnknown: uiMutationProcedure
+    .input(z.object({ id: z.string().min(1).max(200) }).strict())
+    .mutation(({ ctx, input }) => {
+      return createAgentSessionAttemptFromUnknown(ctx.paths.configDir, input.id);
     }),
 
   rename: uiMutationProcedure

@@ -223,6 +223,40 @@ describe("Codex Agent adapter conformance", () => {
     })).rejects.toThrow(error);
   });
 
+  it("classifies Summary Unknown Outcome as typed even without a native thread id", async () => {
+    const runtime = client({
+      runTurn: vi.fn(async () => ({
+        answer: "",
+        nativeSessionId: "",
+        actualProvider: "openai",
+        actualModel: "gpt-5.6-sol",
+        requestId: null,
+        fallbackOccurred: false,
+        toolCalls: [],
+        terminalStatus: "unknown" as const,
+        cancellationRequested: true,
+        cancellationConfirmed: false,
+      })),
+    });
+    const adapter = new CodexAgentAdapter({ executable: "/fake/codex", client: runtime });
+
+    await expect(adapter.summarize({
+      model: "gpt-5.6-sol",
+      instructions: "Only selected instructions.",
+      transcript: "Only committed transcript.",
+    })).rejects.toMatchObject({
+      name: "CodexConversationError",
+      nativeSessionId: undefined,
+      unknownOutcome: true,
+      evidence: expect.objectContaining({
+        sessionId: null,
+        terminalStatus: "unknown",
+        cancellationRequested: true,
+        cancellationConfirmed: false,
+      }),
+    });
+  });
+
   it.each([
     ["different model", { actualModel: "gpt-5.6-terra" }],
     ["provider substitution", { actualProvider: "third-party" }],

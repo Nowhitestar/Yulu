@@ -64,6 +64,29 @@ describe("agentTasksRouter", () => {
     expect(retry).not.toHaveBeenCalled();
   });
 
+  it("requires the UI bearer for an explicit replacement Summary attempt", async () => {
+    const id = "019f0000-0000-7000-8000-000000000141";
+    const createSummaryAttemptFromUnknown = vi.fn(() => ({
+      id: "019f0000-0000-7000-8000-000000000142",
+      state: "queued",
+      leaseToken: "replacement-secret-lease",
+    }));
+    const ctx = {
+      uiMutationAuthorized: false,
+      recordingPipeline: { createSummaryAttemptFromUnknown },
+    } as unknown as AppContext;
+    const caller = createCaller(agentTasksRouter, ctx);
+
+    await expect(caller.createSummaryAttemptFromUnknown({ id }))
+      .rejects.toThrow("UI mutation bearer required");
+    expect(createSummaryAttemptFromUnknown).not.toHaveBeenCalled();
+
+    ctx.uiMutationAuthorized = true;
+    await expect(caller.createSummaryAttemptFromUnknown({ id }))
+      .resolves.toEqual({ id: "019f0000-0000-7000-8000-000000000142", state: "queued" });
+    expect(createSummaryAttemptFromUnknown).toHaveBeenCalledWith(id);
+  });
+
   it("exposes explicit confirm and abandon actions for uncertain Notion delivery", async () => {
     const id = "019f0000-0000-7000-8000-000000000003";
     const confirmNotionDelivery = vi.fn(() => ({ id, state: "completed", leaseToken: null }));

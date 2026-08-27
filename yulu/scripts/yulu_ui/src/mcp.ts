@@ -224,7 +224,7 @@ function registerRecordingArtifactTools(
     return json({ ok: true, taskId, bytes: Buffer.byteLength(corrected.trim() + "\n", "utf8") });
   });
   server.registerTool("recording_artifact_commit", {
-    description: "Validate the selected Summary Provider/model, then atomically commit the fixed task-scoped transcript.txt and summary.md staging files into Yulu.",
+    description: "Validate the selected Summary Provider/model, durably account for the fixed artifacts in Host, then publish the staged summary.",
     inputSchema: {
       taskId: z.string().uuid(),
       leaseToken: z.string().uuid(),
@@ -250,7 +250,7 @@ function registerRecordingArtifactTools(
       deliverySessionId: _deliverySessionId,
       ...safeProvenance
     } = provenance ?? {};
-    const records = ctx.artifacts.commitFromWorkspace(task, {
+    const records = ctx.artifacts.prepareFromWorkspace(task, {
       ...safeProvenance,
       agentProvider: task.agentProvider,
       summaryProvider: task.summaryProvider,
@@ -258,6 +258,8 @@ function registerRecordingArtifactTools(
       committedBy: "yulu-host",
     });
     const updated = ctx.host.recordArtifacts(taskId, leaseToken, records);
+    ctx.artifacts.publishPreparedArtifacts(updated, records);
+    ctx.host.markArtifactsPublished(taskId, leaseToken);
     ctx.pubsub.publish("recordings-changed", { reason: "changed" });
     return json({
       ok: true,

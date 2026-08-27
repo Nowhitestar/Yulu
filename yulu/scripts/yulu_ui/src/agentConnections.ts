@@ -1686,18 +1686,25 @@ export class AgentConnectionCenter {
         removesYuluManagedCredentials: true,
       };
     }
-    const supported = this.conversationOnlyRecord(input.connectionId);
+    const supported = this.codexRecord(input.connectionId) ??
+      this.claudeRecord(input.connectionId) ??
+      this.conversationOnlyRecord(input.connectionId);
     if (supported) {
       const config = this.config.read();
-      const selectedCapabilities: AgentConnectionCapability[] = [];
-      const selection = config.intelligence.conversation;
-      if (
-        selection.provider === "agent" &&
-        "connectionId" in selection &&
-        selection.connectionId === supported.id
-      ) {
-        selectedCapabilities.push("conversation");
-      }
+      const selectedCapabilities = (["summary", "conversation"] as const).filter((capability) => {
+        const selection = config.intelligence[capability];
+        return selection.provider === "agent" && "connectionId" in selection &&
+          selection.connectionId === supported.id;
+      });
+      const pinnedTasks = this.host.listTasks(10_000)
+        .filter((task) => task.summaryConnectionId === supported.id && !["completed", "cancelled"].includes(task.state))
+        .map((task) => ({
+          id: task.id,
+          recordingStem: task.recordingStem,
+          title: task.title,
+          state: task.state,
+          model: task.summaryModel,
+        }));
       const pinnedConversations = readAgentSessionStore(this.configDir).sessions
         .filter((session) => session.purpose === "ask" && session.connectionId === supported.id)
         .map((session) => ({
@@ -1709,7 +1716,7 @@ export class AgentConnectionCenter {
       return {
         connectionId: supported.id,
         selectedCapabilities,
-        pinnedTasks: [],
+        pinnedTasks,
         pinnedConversations,
         removesRuntimeAuthorization: false,
         removesYuluManagedCredentials: false,
@@ -1764,14 +1771,27 @@ export class AgentConnectionCenter {
       this.host.deleteAgentConnectionRecord(input.connectionId);
       return await this.view();
     }
-    const supported = this.conversationOnlyRecord(input.connectionId);
+    const supported = this.codexRecord(input.connectionId) ??
+      this.claudeRecord(input.connectionId) ??
+      this.conversationOnlyRecord(input.connectionId);
     if (supported) {
-      this.conversationOnlyReadiness.delete(this.conversationOnlyReadinessKey(supported.id));
+      if (supported.adapter === "codex") {
+        this.codexReadiness.delete(this.codexReadinessKey(supported.id, "summary"));
+        this.codexReadiness.delete(this.codexReadinessKey(supported.id, "conversation"));
+      } else if (supported.adapter === "claude-code") {
+        this.claudeReadiness.delete(this.claudeReadinessKey(supported.id, "summary"));
+        this.claudeReadiness.delete(this.claudeReadinessKey(supported.id, "conversation"));
+      } else {
+        this.conversationOnlyReadiness.delete(this.conversationOnlyReadinessKey(supported.id));
+      }
       this.clearGatewaySelections(supported.id);
       this.host.clearAgentConnectionReadinessHistory(supported.id);
       this.host.clearAgentConnectionDisclosures(supported.id);
       this.host.deleteAgentConnectionRecord(supported.id);
       return await this.view();
+    }
+    if (input.connectionId !== DIRECT_XAI_ID || !this.hasDirectConnection()) {
+      throw new Error("Agent Connection not found");
     }
     await this.credentials.logout();
     await this.credentials.clearApiKey();
@@ -2780,6 +2800,7 @@ export class AgentConnectionCenter {
         this.config.update(`intelligence.${capability}`, {
           provider: "agent",
           model: "runtime-managed",
+          disabled: true,
         });
       }
     }

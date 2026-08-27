@@ -21,7 +21,10 @@ import { homedir } from "node:os";
 import type { AppContext } from "./trpc.js";
 import { resolveAgentRuntime } from "./agentRuntime.js";
 import { runAgentCliCommand } from "./agentCliRunner.js";
-import { ensureBackgroundAgentSession } from "./agentSessionStore.js";
+import {
+  ensureBackgroundAgentSession,
+  recoverInterruptedAgentSessionInvocations,
+} from "./agentSessionStore.js";
 import { createCaller } from "./trpc.js";
 import { handleMcpRequest, isAuthorizedToken, isMcpRequest } from "./mcp.js";
 import { HostStore } from "./hostStore.js";
@@ -110,6 +113,12 @@ async function startLockedServer(
 
   const configManager = new ConfigManager(runtimePaths.configFile);
   const hostStore = new HostStore(runtimePaths.hostDb);
+  const recoveredConversationIds = recoverInterruptedAgentSessionInvocations(runtimePaths.configDir);
+  if (recoveredConversationIds.length > 0) {
+    console.warn(
+      `[yulu_ui] fenced ${recoveredConversationIds.length} interrupted Conversation invocation(s) as Unknown Outcome`,
+    );
+  }
   const artifactStore = new ArtifactStore(runtimePaths.moviesDir, runtimePaths.agentTasksDir);
   const retiredLegacyTaskIds = hostStore.retireLegacyImportedTasks();
   for (const taskId of retiredLegacyTaskIds) {

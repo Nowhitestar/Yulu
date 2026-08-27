@@ -56,6 +56,11 @@ export const XAI_TEXT_MODEL_DEFAULT = "grok-4.6";
 export const TextProviderSelectionSchema = z.union([
   z.object({
     provider: z.literal("agent"),
+    model: z.literal("runtime-managed"),
+    disabled: z.literal(true),
+  }).strict(),
+  z.object({
+    provider: z.literal("agent"),
     model: z.literal("runtime-managed").default("runtime-managed"),
   }).strict(),
   z.object({

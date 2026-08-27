@@ -87,6 +87,24 @@ describe("ArtifactStore", () => {
     expect(existsSync(stalePath)).toBe(false);
   });
 
+  it("does not replace the public summary until prepared records are durably accounted for", () => {
+    const { store, task } = setup();
+    const transcriptPath = join(root, "Movies", "Yulu", `${task.recordingStem}.transcript.txt`);
+    const summaryPath = join(root, "Movies", "Yulu", `${task.recordingStem}.summary.md`);
+    writeFileSync(transcriptPath, "committed transcript\n");
+    writeFileSync(summaryPath, "# Previously verified summary\n");
+    store.writeStagedTranscript(task.id, "committed transcript");
+    store.writeStagedSummary(task.id, "# Newly verified summary");
+
+    const records = store.prepareFromWorkspace(task, { summaryProvider: "xai" });
+
+    expect(readFileSync(summaryPath, "utf8")).toBe("# Previously verified summary\n");
+    store.publishPreparedArtifacts(task, records);
+    expect(readFileSync(summaryPath, "utf8")).toBe("# Newly verified summary\n");
+    expect(store.readCommittedSummary(task, records.find((record) => record.kind === "summary")!))
+      .toBe("# Newly verified summary");
+  });
+
   it("rejects a task whose stem does not match its audio path", () => {
     const { store, task } = setup();
     const workspace = store.workspace(task.id);

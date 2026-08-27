@@ -1316,11 +1316,14 @@ describe("activation router", () => {
       "Transcription provider: local",
     );
     artifacts.writeStagedSummary(claimed.id, "# Verified summary");
-    const records = artifacts.commitFromWorkspace(host!.getTask(claimed.id)!, {
+    const artifactTask = host!.getTask(claimed.id)!;
+    const records = artifacts.prepareFromWorkspace(artifactTask, {
       agentProvider: "hermes",
       committedBy: "yulu-host",
     });
     host!.recordArtifacts(claimed.id, claimed.leaseToken!, records);
+    artifacts.publishPreparedArtifacts(artifactTask, records);
+    host!.markArtifactsPublished(claimed.id, claimed.leaseToken!);
     host!.complete(claimed.id, claimed.leaseToken!, { transcriptionProvider: "local" });
     host!.db.prepare("UPDATE agent_tasks SET updated_at = ? WHERE id = ?").run(completedAt, claimed.id);
     return host!.getTask(claimed.id)!;

@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { askRouter, buildAgentQuestionPrompt } from "../../src/routers/ask.js";
 import {
   appendAgentSessionMessage,
+  createAgentSessionAttemptFromUnknown,
   createAgentSession,
   getAgentSession,
   updateAgentSessionNativeSession,
@@ -22,6 +23,7 @@ import { CodexConversationError } from "../../src/codexAgentAdapter.js";
 import { ClaudeCodeConversationError } from "../../src/claudeCodeAdapter.js";
 import { ConversationOnlyAgentConversationError } from "../../src/conversationOnlyAgentAdapter.js";
 import { GatewayRequestUnknownOutcomeError } from "../../src/cliProxyApiAdapter.js";
+import { XaiTextUnknownOutcomeError } from "../../src/xaiText.js";
 
 const runAgentCliCommand = vi.hoisted(() => vi.fn());
 vi.mock("../../src/agentCliRunner.js", () => ({ runAgentCliCommand }));
@@ -689,7 +691,7 @@ describe("pinned Ask flow", () => {
     expect(runAgentCliCommand).not.toHaveBeenCalled();
   });
 
-  it("pins a Codex thread created by an unknown first turn and retries only that thread", async () => {
+  it("pins a Codex thread created by an unknown first turn and blocks replay of that execution", async () => {
     const config = {
       intelligence: { conversation: { provider: "agent", connectionId: "codex", model: "gpt-5.6-sol" } },
       llm: { enabled: false, command: null, agent: { provider: "auto" } },
@@ -742,19 +744,28 @@ describe("pinned Ask flow", () => {
     expect(getAgentSession(ctx.paths.configDir, pinned.id)).toMatchObject({
       status: "paused",
       nativeSessionId,
-      retrySnapshot: { question: "same input", sources: [] },
+      unknownOutcome: {
+        provider: "codex",
+        connectionId: "codex",
+        model: "gpt-5.6-sol",
+        snapshot: { question: "same input", sources: [] },
+      },
     });
+    expect(getAgentSession(ctx.paths.configDir, pinned.id)).not.toHaveProperty("retrySnapshot");
 
     await expect(createCaller(askRouter, ctx).ask({
       question: "same input",
       sessionId: pinned.id,
       retry: true,
-    })).resolves.toMatchObject({ ok: true, answer: "Recovered the same thread" });
-    expect(codexConverse).toHaveBeenNthCalledWith(2, expect.objectContaining({ nativeSessionId }));
+    })).resolves.toMatchObject({
+      ok: false,
+      recovery: { retry: "unavailable_unknown_outcome", newConversation: true },
+    });
+    expect(codexConverse).toHaveBeenCalledOnce();
     expect(runAgentCliCommand).not.toHaveBeenCalled();
   });
 
-  it("pins a Claude session created by an unknown first turn and retries the same input only on that session", async () => {
+  it("pins a Claude session created by an unknown first turn and blocks replay of that execution", async () => {
     const config = {
       intelligence: { conversation: { provider: "agent", connectionId: "claude-code", model: "claude-sonnet-5" } },
       llm: { enabled: false, command: null, agent: { provider: "auto" } },
@@ -804,19 +815,24 @@ describe("pinned Ask flow", () => {
     expect(getAgentSession(ctx.paths.configDir, pinned.id)).toMatchObject({
       status: "paused",
       nativeSessionId,
-      retrySnapshot: { question: "same Claude input", sources: [] },
+      unknownOutcome: {
+        provider: "claude-code",
+        connectionId: "claude-code",
+        model: "claude-sonnet-5",
+        snapshot: { question: "same Claude input", sources: [] },
+      },
     });
+    expect(getAgentSession(ctx.paths.configDir, pinned.id)).not.toHaveProperty("retrySnapshot");
 
     await expect(createCaller(askRouter, ctx).ask({
       question: "same Claude input",
       sessionId: pinned.id,
       retry: true,
-    })).resolves.toMatchObject({ ok: true, answer: "Recovered the same Claude session" });
-    expect(claudeConverse).toHaveBeenNthCalledWith(2, expect.objectContaining({
-      connectionId: "claude-code",
-      model: "claude-sonnet-5",
-      nativeSessionId,
-    }));
+    })).resolves.toMatchObject({
+      ok: false,
+      recovery: { retry: "unavailable_unknown_outcome", newConversation: true },
+    });
+    expect(claudeConverse).toHaveBeenCalledOnce();
     expect(runAgentCliCommand).not.toHaveBeenCalled();
   });
 
@@ -1092,6 +1108,89 @@ describe("pinned Ask flow", () => {
       },
     });
     expect(result.sources).toMatchObject([{ snippet: "Launch decision" }]);
+  });
+
+  it("blocks replay and preserves the exact snapshot when xAI Conversation enters Unknown Outcome", async () => {
+    const localSearch = vi.fn(async () => localHits());
+    let pinnedId = "";
+    const xaiRequest = vi.fn(async () => {
+      expect(getAgentSession(ctx.paths.configDir, pinnedId)?.pendingInvocation).toMatchObject({
+        provider: "xai",
+        model: "grok-4.6-exact",
+        credentialSource: "oauth",
+        snapshot: { question: "uncertain xAI", sources: [{ snippet: "Launch decision" }] },
+      });
+      throw new XaiTextUnknownOutcomeError({
+        capability: "conversation",
+        model: "grok-4.6-exact",
+        credentialSource: "oauth",
+      });
+    });
+    const ctx = context({}, { localSearch, xaiRequest });
+    const pinned = session(ctx, "xai", "grok-4.6-exact");
+    pinnedId = pinned.id;
+
+    const failed = await createCaller(askRouter, ctx).ask({
+      question: "uncertain xAI",
+      sessionId: pinned.id,
+    });
+    expect(failed).toMatchObject({
+      ok: false,
+      sessionStatus: "paused",
+      recovery: { retry: "unavailable_unknown_outcome", newConversation: true },
+    });
+    expect(getAgentSession(ctx.paths.configDir, pinned.id)).toMatchObject({
+      status: "paused",
+      unknownOutcome: {
+        provider: "xai",
+        model: "grok-4.6-exact",
+        credentialSource: "oauth",
+        snapshot: { question: "uncertain xAI", sources: [{ snippet: "Launch decision" }] },
+      },
+    });
+    expect(getAgentSession(ctx.paths.configDir, pinned.id)).not.toHaveProperty("retrySnapshot");
+    await expect(createCaller(askRouter, ctx).ask({
+      question: "uncertain xAI",
+      sessionId: pinned.id,
+      retry: true,
+    })).resolves.toMatchObject({ recovery: { retry: "unavailable_unknown_outcome" } });
+    expect(xaiRequest).toHaveBeenCalledOnce();
+  });
+
+  it("sends an explicit replacement with the exact multi-turn provider input preserved by Unknown Outcome", async () => {
+    const localSearch = vi.fn(async () => localHits());
+    let firstProviderInput: unknown;
+    const xaiRequest = vi.fn()
+      .mockImplementationOnce(async (request: { input: unknown }) => {
+        firstProviderInput = structuredClone(request.input);
+        throw new XaiTextUnknownOutcomeError({
+          capability: "conversation",
+          model: "grok-4.6-exact",
+          credentialSource: "oauth",
+        });
+      })
+      .mockImplementationOnce(async (request: { input: unknown }) => {
+        expect(request.input).toEqual(firstProviderInput);
+        return { text: "Explicit replacement succeeded", model: "grok-4.6-exact", credentialSource: "oauth" };
+      });
+    const ctx = context({}, { localSearch, xaiRequest });
+    const original = session(ctx, "xai", "grok-4.6-exact");
+    appendAgentSessionMessage(ctx.paths.configDir, original.id, { role: "user", text: "Earlier question" });
+    appendAgentSessionMessage(ctx.paths.configDir, original.id, { role: "assistant", text: "Earlier answer" });
+
+    await createCaller(askRouter, ctx).ask({ question: "Uncertain follow-up", sessionId: original.id });
+    const replacement = createAgentSessionAttemptFromUnknown(ctx.paths.configDir, original.id);
+    const result = await createCaller(askRouter, ctx).ask({
+      question: "Uncertain follow-up",
+      sessionId: replacement.id,
+      retry: true,
+    });
+
+    expect(result).toMatchObject({ ok: true, answer: "Explicit replacement succeeded" });
+    expect(localSearch).toHaveBeenCalledOnce();
+    expect(xaiRequest).toHaveBeenCalledTimes(2);
+    expect(JSON.stringify(firstProviderInput)).toContain("Earlier question");
+    expect(JSON.stringify(firstProviderInput)).toContain("Earlier answer");
   });
 
   it("retries atomically with the persisted local evidence snapshot", async () => {

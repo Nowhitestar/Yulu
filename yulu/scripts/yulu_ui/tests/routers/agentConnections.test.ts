@@ -791,6 +791,7 @@ describe("public Agent Connection Host contract", () => {
     expect(setupResult.configManager.read().intelligence.summary).toEqual({
       provider: "agent",
       model: "runtime-managed",
+      disabled: true,
     });
     await caller.probe({ connectionId: "cliproxyapi", capability: "summary" });
     setupResult.host.recordAgentConnectionDisclosure({
@@ -977,6 +978,107 @@ describe("public Agent Connection Host contract", () => {
       expect.objectContaining({ id: session.id, endpointIdentity: "http://127.0.0.1:8317/v1" }),
     ]));
     expect(JSON.stringify(await caller.view()).includes("deletion-key-never-project")).toBe(false);
+    setupResult.host.close();
+  });
+
+  it("deletes a Codex connection without touching runtime OAuth or pinned work", async () => {
+    const setupResult = setup({
+      audio: {},
+      transcription: { engine: "local", language: "zh" },
+      intelligence: {
+        summary: { provider: "agent", connectionId: "codex", model: "gpt-5.6-sol" },
+        conversation: { provider: "agent", connectionId: "codex", model: "gpt-5.6-sol" },
+      },
+      llm: { agent: { provider: "auto" } },
+    });
+    setupResult.host.upsertAgentConnectionRecord({
+      id: "codex",
+      kind: "supported-agent",
+      adapter: "codex",
+      label: "Codex",
+      lifecycle: "available",
+      settings: { executablePath: "/fake/bin/codex", summaryModel: "gpt-5.6-sol", conversationModel: "gpt-5.6-sol" },
+    });
+    const task = setupResult.host.enqueueRecording({
+      idempotencyKey: "recording:pinned-codex-delete",
+      recordingStem: "Pinned_Codex_20260828_010000",
+      title: "Pinned Codex task",
+      audioPath: join(setupResult.root, "Pinned_Codex_20260828_010000.wav"),
+      sendToNotion: false,
+      destinationHint: "",
+      agentProvider: "codex",
+      summaryProvider: "codex",
+      summaryModel: "gpt-5.6-sol",
+      summaryConnectionId: "codex",
+      summaryCredentialClass: "runtime-oauth",
+      summaryDisclosureVersion: "codex-summary-v1",
+    }).task;
+    const session = createAgentSession(setupResult.root, {
+      provider: "codex",
+      connectionId: "codex",
+      model: "gpt-5.6-sol",
+      credentialSource: "runtime-oauth",
+      disclosureVersion: "codex-conversation-v1",
+      title: "Pinned Codex conversation",
+    });
+    const caller = createCaller(agentConnectionsRouter, {
+      agentConnections: setupResult.center,
+      uiMutationAuthorized: true,
+    } as never);
+
+    await expect(caller.deletionImpact({ connectionId: "codex" })).resolves.toMatchObject({
+      connectionId: "codex",
+      selectedCapabilities: ["summary", "conversation"],
+      pinnedTasks: [expect.objectContaining({ id: task.id })],
+      pinnedConversations: [expect.objectContaining({ id: session.id })],
+      removesRuntimeAuthorization: false,
+      removesYuluManagedCredentials: false,
+    });
+    await caller.remove({ connectionId: "codex", confirmed: true });
+
+    expect(setupResult.credentials.logout).not.toHaveBeenCalled();
+    expect(setupResult.credentials.clearApiKey).not.toHaveBeenCalled();
+    expect(setupResult.gatewaySecretClear).not.toHaveBeenCalled();
+    expect(setupResult.host.listAgentConnectionRecords().some((record) => record.id === "codex")).toBe(false);
+    expect(setupResult.host.getTask(task.id)).toMatchObject({ summaryConnectionId: "codex", summaryModel: "gpt-5.6-sol" });
+    expect(readAgentSessionStore(setupResult.root).sessions).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: session.id, connectionId: "codex", model: "gpt-5.6-sol" }),
+    ]));
+    expect(setupResult.configManager.read().intelligence).toMatchObject({
+      summary: { provider: "agent", model: "runtime-managed", disabled: true },
+      conversation: { provider: "agent", model: "runtime-managed", disabled: true },
+    });
+    setupResult.host.close();
+  });
+
+  it("never clears direct xAI credentials when the same supported connection is removed concurrently", async () => {
+    const setupResult = setup({
+      audio: {},
+      transcription: { engine: "local", language: "zh" },
+      intelligence: {
+        summary: { provider: "agent", connectionId: "codex", model: "gpt-5.6-sol" },
+        conversation: { provider: "agent", connectionId: "codex", model: "gpt-5.6-sol" },
+      },
+      llm: { agent: { provider: "auto" } },
+    });
+    setupResult.host.upsertAgentConnectionRecord({
+      id: "codex",
+      kind: "supported-agent",
+      adapter: "codex",
+      label: "Codex",
+      lifecycle: "available",
+      settings: { executablePath: "/fake/bin/codex" },
+    });
+
+    const results = await Promise.allSettled([
+      setupResult.center.remove({ connectionId: "codex", confirmed: true }),
+      setupResult.center.remove({ connectionId: "codex", confirmed: true }),
+    ]);
+
+    expect(results.filter(({ status }) => status === "fulfilled")).toHaveLength(1);
+    expect(results.filter(({ status }) => status === "rejected")).toHaveLength(1);
+    expect(setupResult.credentials.logout).not.toHaveBeenCalled();
+    expect(setupResult.credentials.clearApiKey).not.toHaveBeenCalled();
     setupResult.host.close();
   });
 
@@ -1260,7 +1362,7 @@ describe("public Agent Connection Host contract", () => {
     expect(setupResult.credentials.clearApiKey).not.toHaveBeenCalled();
     expect(setupResult.host.listAgentConnectionRecords().some((record) => record.id === "openclaw")).toBe(false);
     expect(JSON.parse(readFileSync(setupResult.configPath, "utf8"))).toMatchObject({
-      intelligence: { conversation: { provider: "agent", model: "runtime-managed" } },
+      intelligence: { conversation: { provider: "agent", model: "runtime-managed", disabled: true } },
     });
     setupResult.host.close();
   });

@@ -219,4 +219,41 @@ describe("phase-specific recording MCP capability boundaries", () => {
     expect(commitFromWorkspace).not.toHaveBeenCalled();
     expect(recordArtifacts).not.toHaveBeenCalled();
   });
+
+  it("accounts for Hermes artifacts in Host before publishing the public summary", async () => {
+    const order: string[] = [];
+    const task = {
+      id: "019f0000-0000-7000-8000-000000000132",
+      leaseToken: "019f0000-0000-7000-8000-000000000133",
+      state: "transcript_committed",
+      agentProvider: "hermes",
+      summaryProvider: "hermes",
+      summaryModel: "runtime-managed",
+    };
+    const records = [{ kind: "transcript" }, { kind: "summary" }];
+    const prepareFromWorkspace = vi.fn(() => { order.push("prepare"); return records; });
+    const recordArtifacts = vi.fn(() => { order.push("account"); return { ...task, state: "artifacts_committed" }; });
+    const publishPreparedArtifacts = vi.fn(() => { order.push("publish"); });
+    const markArtifactsPublished = vi.fn(() => { order.push("published"); });
+    const server = recordingArtifactMcpServer({
+      host: {
+        getTask: () => task,
+        recordProgress: () => task,
+        recordArtifacts,
+        markArtifactsPublished,
+      },
+      artifacts: { prepareFromWorkspace, publishPreparedArtifacts },
+      pubsub: { publish: vi.fn() },
+    } as unknown as AppContext);
+    const tool = (server as unknown as {
+      _registeredTools: Record<string, { handler: (input: Record<string, unknown>) => Promise<unknown> }>;
+    })._registeredTools.recording_artifact_commit!;
+
+    await expect(tool.handler({
+      taskId: task.id,
+      leaseToken: task.leaseToken,
+    })).resolves.toBeDefined();
+
+    expect(order).toEqual(["prepare", "account", "publish", "published"]);
+  });
 });

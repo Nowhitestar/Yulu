@@ -31,6 +31,26 @@ export interface XaiTextResult {
   credentialSource: XaiCredentialSource;
 }
 
+export class XaiTextUnknownOutcomeError extends Error {
+  readonly capability: XaiTextCapability;
+  readonly model: string;
+  readonly credentialSource: XaiCredentialSource;
+
+  constructor(input: {
+    capability: XaiTextCapability;
+    model: string;
+    credentialSource: XaiCredentialSource;
+  }) {
+    super(`xAI ${input.capability} entered Unknown Outcome; do not retry this execution automatically`);
+    this.name = "XaiTextUnknownOutcomeError";
+    this.capability = input.capability;
+    this.model = input.model;
+    this.credentialSource = input.credentialSource;
+  }
+}
+
+class XaiTextResponseTransportError extends Error {}
+
 function validateRequest(request: XaiTextRequest): { model: string; maxOutputTokens: number } {
   const model = request.model.trim();
   if (!model || model.length > 128) throw new Error("xAI model identity is invalid");
@@ -110,7 +130,7 @@ async function readBoundedResponse(response: Response): Promise<string> {
   } catch (error) {
     if (error instanceof Error && error.message === OUTPUT_LIMIT_ERROR) throw error;
     try { await reader.cancel(); } catch { /* best effort */ }
-    throw new Error("xAI text response was invalid");
+    throw new XaiTextResponseTransportError("xAI text response transport was lost");
   } finally {
     reader.releaseLock();
   }
@@ -150,12 +170,28 @@ export class XaiTextClient {
           : CONVERSATION_REQUEST_TIMEOUT_MS),
       });
     } catch {
-      throw new Error(`xAI ${request.capability} request failed`);
+      throw new XaiTextUnknownOutcomeError({
+        capability: request.capability,
+        model,
+        credentialSource: credential.source,
+      });
     }
     if (!response.ok) {
       throw new Error(`xAI ${request.capability} request failed (HTTP ${response.status})`);
     }
-    const raw = await readBoundedResponse(response);
+    let raw: string;
+    try {
+      raw = await readBoundedResponse(response);
+    } catch (error) {
+      if (error instanceof XaiTextResponseTransportError) {
+        throw new XaiTextUnknownOutcomeError({
+          capability: request.capability,
+          model,
+          credentialSource: credential.source,
+        });
+      }
+      throw error;
+    }
     let payload: unknown;
     try { payload = JSON.parse(raw); }
     catch { throw new Error("xAI text response was invalid"); }

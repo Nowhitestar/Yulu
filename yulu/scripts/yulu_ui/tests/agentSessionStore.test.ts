@@ -4,11 +4,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   appendAgentSessionMessage,
+  beginAgentSessionInvocation,
+  createAgentSessionAttemptFromUnknown,
   createAgentSession,
   getAgentSession,
   pauseAgentSession,
   projectAgentSessionHistory,
   readAgentSessionStore,
+  recoverInterruptedAgentSessionInvocations,
   resumeAgentSession,
   storePath,
   summarizeAgentSession,
@@ -62,7 +65,7 @@ describe("agentSessionStore", () => {
 
     const migrated = JSON.parse(readFileSync(storePath(root), "utf8"));
     expect(migrated).toMatchObject({
-      version: 6,
+      version: 8,
       sessions: [{ provider: "codex", model: "runtime-managed", status: "active" }],
     });
     expect(readFileSync(storePath(root), "utf8")).toBe(JSON.stringify(migrated, null, 2) + "\n");
@@ -168,6 +171,88 @@ describe("agentSessionStore", () => {
       status: "paused",
       pausedReason: "selected model unavailable",
     });
+  });
+
+  it("recovers a dispatched Conversation as Unknown Outcome and creates only an explicit new attempt", () => {
+    const root = mkdtempSync(join(tmpdir(), "agent-session-store-"));
+    roots.push(root);
+    const created = createAgentSession(root, {
+      purpose: "ask",
+      provider: "codex",
+      connectionId: "codex-primary",
+      model: "gpt-5.6-sol",
+      credentialSource: "runtime-oauth",
+      disclosureVersion: "codex-conversation-v1",
+      title: "Pinned conversation",
+    });
+    updateAgentSessionNativeSession(root, created.id, { nativeSessionId: "thread-original" });
+    const invocation = beginAgentSessionInvocation(root, created.id, {
+      question: "Preserve this exact input",
+      sources: [],
+    }, {
+      kind: "prompt",
+      prompt: "Exact outbound Codex prompt",
+    });
+
+    expect(recoverInterruptedAgentSessionInvocations(root)).toEqual([created.id]);
+    expect(getAgentSession(root, created.id)).toMatchObject({
+      status: "paused",
+      provider: "codex",
+      connectionId: "codex-primary",
+      model: "gpt-5.6-sol",
+      credentialSource: "runtime-oauth",
+      disclosureVersion: "codex-conversation-v1",
+      nativeSessionId: "thread-original",
+      unknownOutcome: {
+        executionId: invocation.executionId,
+        inputSha256: expect.stringMatching(/^[a-f0-9]{64}$/),
+        snapshot: { question: "Preserve this exact input", sources: [] },
+        providerInput: { kind: "prompt", prompt: "Exact outbound Codex prompt" },
+      },
+    });
+    expect(getAgentSession(root, created.id)).not.toHaveProperty("retrySnapshot");
+
+    const replacement = createAgentSessionAttemptFromUnknown(root, created.id);
+    expect(replacement).toMatchObject({
+      status: "paused",
+      provider: "codex",
+      connectionId: "codex-primary",
+      model: "gpt-5.6-sol",
+      credentialSource: "runtime-oauth",
+      disclosureVersion: "codex-conversation-v1",
+      supersedesSessionId: created.id,
+      retrySnapshot: { question: "Preserve this exact input", sources: [] },
+      retryProviderInput: { kind: "prompt", prompt: "Exact outbound Codex prompt" },
+    });
+    expect(replacement.nativeSessionId).toBeUndefined();
+    expect(getAgentSession(root, created.id)?.unknownOutcome?.executionId).toBe(invocation.executionId);
+  });
+
+  it("rejects an explicit replacement when the preserved provider input was corrupted", () => {
+    const root = mkdtempSync(join(tmpdir(), "agent-session-store-"));
+    roots.push(root);
+    const created = createAgentSession(root, {
+      purpose: "ask",
+      provider: "xai",
+      model: "grok-4.6-exact",
+      credentialSource: "oauth",
+    });
+    const invocation = beginAgentSessionInvocation(root, created.id, {
+      question: "Preserve this exact input",
+      sources: [],
+    }, {
+      kind: "messages",
+      messages: [{ role: "user", content: "Original provider payload" }],
+    });
+    recoverInterruptedAgentSessionInvocations(root);
+
+    const persisted = JSON.parse(readFileSync(storePath(root), "utf8"));
+    persisted.sessions[0].unknownOutcome.providerInput.messages[0].content = "Tampered payload";
+    writeFileSync(storePath(root), `${JSON.stringify(persisted, null, 2)}\n`);
+
+    expect(() => createAgentSessionAttemptFromUnknown(root, created.id))
+      .toThrow("input snapshot failed integrity validation");
+    expect(getAgentSession(root, created.id)?.unknownOutcome?.executionId).toBe(invocation.executionId);
   });
 
   it("projects only a bounded local message tail without source metadata", () => {

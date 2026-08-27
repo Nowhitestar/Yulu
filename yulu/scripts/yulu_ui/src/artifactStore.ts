@@ -191,7 +191,7 @@ export class ArtifactStore {
     };
   }
 
-  commitFromWorkspace(task: AgentTask, provenance: Record<string, unknown>): ArtifactRecord[] {
+  prepareFromWorkspace(task: AgentTask, provenance: Record<string, unknown>): ArtifactRecord[] {
     const workspace = this.workspace(task.id);
     const transcript = readRequiredText(workspace.transcriptPath, "transcript", MAX_TRANSCRIPT_BYTES);
     const summary = readRequiredText(workspace.summaryPath, "summary", MAX_SUMMARY_BYTES);
@@ -218,10 +218,6 @@ export class ArtifactStore {
       atomicWrite(transcriptPath, transcript);
       transcriptContent = Buffer.from(transcript, "utf8");
     }
-    atomicWrite(summaryPath, summary);
-    const stalePath = join(this.moviesDir, `${task.recordingStem}.summary.stale`);
-    if (existsSync(stalePath)) unlinkSync(stalePath);
-
     const createdAt = new Date().toISOString();
     return [
       {
@@ -249,6 +245,50 @@ export class ArtifactStore {
         createdAt,
       },
     ];
+  }
+
+  publishPreparedArtifacts(task: AgentTask, records: ArtifactRecord[]): void {
+    const transcriptRecord = records.find((record) => record.kind === "transcript");
+    const summaryRecord = records.find((record) => record.kind === "summary");
+    if (!transcriptRecord || !summaryRecord || records.length !== 2) {
+      throw new Error("prepared artifact publication requires one transcript and one summary record");
+    }
+    if (
+      transcriptRecord.taskId !== task.id || summaryRecord.taskId !== task.id ||
+      transcriptRecord.recordingStem !== task.recordingStem || summaryRecord.recordingStem !== task.recordingStem
+    ) {
+      throw new Error("prepared artifact records do not belong to this task");
+    }
+    const transcriptPath = join(this.moviesDir, `${task.recordingStem}.transcript.txt`);
+    const summaryPath = join(this.moviesDir, `${task.recordingStem}.summary.md`);
+    if (
+      !isInside(this.moviesDir, transcriptPath) || !isInside(this.moviesDir, summaryPath) ||
+      resolve(transcriptRecord.path) !== resolve(transcriptPath) ||
+      resolve(summaryRecord.path) !== resolve(summaryPath)
+    ) {
+      throw new Error("prepared artifact record points outside the committed recording target");
+    }
+    const transcript = readFileSync(transcriptPath);
+    if (transcript.length !== transcriptRecord.bytes || sha256(transcript) !== transcriptRecord.sha256) {
+      throw new Error("committed transcript changed after artifact preparation");
+    }
+    const summary = readRequiredText(
+      this.workspace(task.id).summaryPath,
+      "summary",
+      MAX_SUMMARY_BYTES,
+    );
+    if (Buffer.byteLength(summary) !== summaryRecord.bytes || sha256(summary) !== summaryRecord.sha256) {
+      throw new Error("staged summary changed after artifact preparation");
+    }
+    atomicWrite(summaryPath, summary);
+    const stalePath = join(this.moviesDir, `${task.recordingStem}.summary.stale`);
+    if (existsSync(stalePath)) unlinkSync(stalePath);
+  }
+
+  commitFromWorkspace(task: AgentTask, provenance: Record<string, unknown>): ArtifactRecord[] {
+    const records = this.prepareFromWorkspace(task, provenance);
+    this.publishPreparedArtifacts(task, records);
+    return records;
   }
 
   rejectCommittedSummary(task: AgentTask, record: ArtifactRecord): void {

@@ -11,6 +11,7 @@ import {
 import { ArtifactStore } from "./artifactStore.js";
 import {
   HostStore,
+  secretSafeSummaryRuntimeEvidence,
   type AgentTask,
   type AgentTaskTrigger,
   type SummaryCommitRuntimeEvidence,
@@ -35,7 +36,7 @@ import {
   type TranscriptionLanguage,
 } from "./realtimeTranscription.js";
 import type { AudioTranscriptionService } from "./audioTranscription.js";
-import type { XaiTextClient } from "./xaiText.js";
+import { XaiTextUnknownOutcomeError, type XaiTextClient } from "./xaiText.js";
 import type { XaiCredentialSource } from "./xaiCredentials.js";
 import { verifiedCoreActivationEvidence } from "./coreActivation.js";
 import {
@@ -51,7 +52,8 @@ import {
   type SupportedAgentSummaryAdapter,
   type SupportedAgentSummaryGateway,
 } from "./summaryProviderReadiness.js";
-import { isExactGatewayRuntimeEvidence } from "./cliProxyApiAdapter.js";
+import { CodexConversationError } from "./codexAgentAdapter.js";
+import { ClaudeCodeConversationError } from "./claudeCodeAdapter.js";
 
 const REC_FILE_RE = /^(.+?)_(\d{8})_(\d{6})\.wav$/;
 const DISPATCH_POLL_MS = 15_000;
@@ -328,6 +330,11 @@ export class RecordingPipeline {
     endpointIdentity: string | null;
   } {
     const selection = config.intelligence.summary;
+    if ("disabled" in selection && selection.disabled) {
+      throw new InvalidRecordingCompletionError(
+        "Summary Provider selection was cleared after its Agent connection was deleted; select and test a new connection",
+      );
+    }
     if (selection.provider === "xai") {
       const credentialSource = this.options.xaiSummaryCredentialSource?.() ?? null;
       if (!credentialSource) {
@@ -468,6 +475,27 @@ export class RecordingPipeline {
     });
     this.resumeDispatchNow();
     this.reconcileDispatchPolicy(config);
+    this.kick();
+    return task;
+  }
+
+  createSummaryAttemptFromUnknown(id: string): AgentTask {
+    const original = this.options.store.getTask(id);
+    if (!original || original.state !== "execution_unverified") {
+      throw new Error(`task ${id} does not have an Unknown Summary outcome to replace`);
+    }
+    const task = this.options.store.replaceSummaryAttempt(id, {
+      summaryProvider: original.summaryProvider,
+      summaryModel: original.summaryModel,
+      summaryCredentialSource: original.summaryCredentialSource,
+      summaryConnectionId: original.summaryConnectionId,
+      summaryCredentialClass: original.summaryCredentialClass,
+      summaryCredentialIdentity: original.summaryCredentialIdentity,
+      summaryDisclosureVersion: original.summaryDisclosureVersion,
+      summaryEndpointIdentity: original.summaryEndpointIdentity,
+    });
+    this.resumeDispatchNow();
+    this.reconcileDispatchPolicy(this.options.config.read());
     this.kick();
     return task;
   }
@@ -726,28 +754,26 @@ export class RecordingPipeline {
       if (!transcriptArtifact) throw new Error("Summary execution requires a committed transcript artifact");
       let recoveredArtifactSessionId: string | null = null;
       if (resumesCommittedArtifacts) {
-        const summaryArtifact = this.options.store.listArtifacts(task.id)
+        const recoveredRecords = this.options.store.listArtifacts(task.id);
+        const summaryArtifact = recoveredRecords
           .find((artifact) => artifact.kind === "summary");
-        const evidence = summaryArtifact?.provenance.runtimeEvidence as SummaryCommitRuntimeEvidence | undefined;
-        const provenanceSessionId = summaryArtifact?.provenance.artifactSessionId;
         if (
-          !summaryArtifact || task.summaryProvider !== "cliproxyapi" ||
+          !summaryArtifact ||
           summaryArtifact.provenance.summaryProvider !== task.summaryProvider ||
-          summaryArtifact.provenance.summaryModel !== task.summaryModel ||
-          summaryArtifact.provenance.summaryConnectionId !== task.summaryConnectionId ||
-          summaryArtifact.provenance.summaryCredentialIdentity !== task.summaryCredentialIdentity ||
-          summaryArtifact.provenance.summaryEndpointIdentity !== task.summaryEndpointIdentity ||
-          !task.summaryEndpointIdentity || !evidence || typeof provenanceSessionId !== "string" ||
-          !isExactGatewayRuntimeEvidence(evidence, {
-            endpoint: task.summaryEndpointIdentity,
-            model: task.summaryModel,
-            terminalStatus: "ready",
-          }) || provenanceSessionId !== evidence.requestId
+          summaryArtifact.provenance.summaryModel !== task.summaryModel
         ) {
-          throw new Error("Recovered CLIProxyAPI Summary artifacts do not match the pinned committed identity");
+          throw new Error("Recovered Summary artifacts do not match the pinned committed identity");
         }
-        recoveredArtifactSessionId = evidence.requestId;
-        this.options.store.recordPhaseSession(task.id, leaseToken, "artifact", recoveredArtifactSessionId);
+        if (this.options.store.isArtifactPublishPending(task.id)) {
+          this.options.artifacts.publishPreparedArtifacts(task, recoveredRecords);
+          this.options.store.markArtifactsPublished(task.id, leaseToken);
+        }
+        this.options.artifacts.readCommittedSummary(task, summaryArtifact);
+        const provenanceSessionId = summaryArtifact.provenance.artifactSessionId;
+        if (typeof provenanceSessionId === "string" && provenanceSessionId) {
+          recoveredArtifactSessionId = provenanceSessionId;
+          this.options.store.recordPhaseSession(task.id, leaseToken, "artifact", recoveredArtifactSessionId);
+        }
       }
       if (!resumesCommittedArtifacts) {
         this.options.store.recordProgress(
@@ -791,6 +817,7 @@ export class RecordingPipeline {
         }
         let result: Awaited<ReturnType<XaiTextClient["request"]>>;
         try {
+          this.options.store.beginSummaryExecution(task.id, leaseToken);
           result = await xaiText.request({
             capability: "summary",
             model: task.summaryModel,
@@ -801,6 +828,7 @@ export class RecordingPipeline {
             ],
           });
         } catch (error) {
+          if (error instanceof XaiTextUnknownOutcomeError) throw error;
           throw new AgentUnavailableError((error as Error).message);
         }
         if (result.model !== task.summaryModel) {
@@ -817,7 +845,7 @@ export class RecordingPipeline {
         } catch (error) {
           throw new AgentUnavailableError((error as Error).message);
         }
-        const records = this.options.artifacts.commitFromWorkspace(current, {
+        const records = this.options.artifacts.prepareFromWorkspace(current, {
           summaryProvider: "xai",
           summaryModel: result.model,
           storageDisabled: true,
@@ -825,6 +853,8 @@ export class RecordingPipeline {
           committedBy: "yulu-host",
         });
         this.options.store.recordArtifacts(task.id, leaseToken, records);
+        this.options.artifacts.publishPreparedArtifacts(current, records);
+        this.options.store.markArtifactsPublished(task.id, leaseToken);
         this.options.pubsub.publish("recordings-changed", { reason: "changed" });
       } else if (!resumesCommittedArtifacts) {
         summaryGateway ??= usesSupportedAgentSummary
@@ -838,6 +868,9 @@ export class RecordingPipeline {
         const gatewayHealth = summaryGateway.health();
         if (!usesSupportedAgentSummary && !gatewayHealth.available) {
           throw new AgentUnavailableError(gatewayHealth.reason ?? "Summary Agent is unavailable");
+        }
+        if (usesSupportedAgentSummary && task.summaryProvider !== "cliproxyapi") {
+          this.options.store.beginSummaryExecution(task.id, leaseToken);
         }
         const artifactResult = usesSupportedAgentSummary
           ? await (summaryGateway as SupportedAgentSummaryGateway).runArtifactWorkflow(workflowInput)
@@ -866,8 +899,11 @@ export class RecordingPipeline {
             );
           }
           if (!supportedResult.audit.ok) throw new Error(supportedResult.audit.errors.join("; "));
+          const runtimeEvidence = supportedResult.runtimeEvidence
+            ? secretSafeSummaryRuntimeEvidence(supportedResult.runtimeEvidence)
+            : undefined;
           if (task.summaryConnectionId) {
-            if (!supportedResult.runtimeEvidence || !task.summaryCredentialClass || !task.summaryDisclosureVersion) {
+            if (!runtimeEvidence || !task.summaryCredentialClass || !task.summaryDisclosureVersion) {
               throw new Error("Supported Agent Summary did not return complete Runtime Evidence for the pinned task snapshot");
             }
             this.options.store.validateSummaryCommit(task.id, leaseToken, {
@@ -875,12 +911,12 @@ export class RecordingPipeline {
               credentialClass: task.summaryCredentialClass,
               disclosureVersion: task.summaryDisclosureVersion,
               inputArtifact: transcriptArtifact,
-              runtimeEvidence: supportedResult.runtimeEvidence,
+              runtimeEvidence,
               toolCalls: supportedResult.audit.toolNames,
             });
           }
           const stagedTask = this.options.store.getTask(task.id)!;
-          const records = this.options.artifacts.commitFromWorkspace(stagedTask, {
+          const records = this.options.artifacts.prepareFromWorkspace(stagedTask, {
             agentProvider: task.summaryProvider,
             summaryProvider: task.summaryProvider,
             summaryModel: task.summaryModel,
@@ -891,11 +927,13 @@ export class RecordingPipeline {
             summaryEndpointIdentity: current.summaryEndpointIdentity,
             summaryInputArtifactId: current.summaryInputArtifactId,
             summaryInputArtifactSha256: current.summaryInputArtifactSha256,
-            runtimeEvidence: supportedResult.runtimeEvidence,
+            runtimeEvidence,
             artifactSessionId: artifactResult.nativeSessionId,
             committedBy: "yulu-host",
           });
           this.options.store.recordArtifacts(task.id, leaseToken, records);
+          this.options.artifacts.publishPreparedArtifacts(stagedTask, records);
+          this.options.store.markArtifactsPublished(task.id, leaseToken);
           this.options.pubsub.publish("recordings-changed", { reason: "changed" });
         }
         artifactSessionId = artifactResult.nativeSessionId;
@@ -963,6 +1001,16 @@ export class RecordingPipeline {
       this.options.pubsub.publish("recordings-changed", { reason: "changed" });
       return true;
     } catch (error) {
+      const current = this.options.store.getTask(task.id);
+      if (
+        current?.state === "artifacts_committed" && current.leaseToken === leaseToken &&
+        this.options.store.isArtifactPublishPending(task.id)
+      ) {
+        this.options.store.releaseArtifactPublication(task.id, leaseToken, (error as Error).message);
+        this.publish(task, "failed", (error as Error).message);
+        this.deferDispatch(task.attempt);
+        return false;
+      }
       if (error instanceof GatewaySummaryUnknownOutcomeError) {
         this.options.store.markGatewaySummaryUnknownOutcome(
           task.id,
@@ -974,14 +1022,36 @@ export class RecordingPipeline {
         this.publish(task, "failed", error.message);
         return true;
       } else if (error instanceof ClaudeCodeSummaryUnknownOutcomeError) {
-        this.options.store.markClaudeSummaryUnknownOutcome(
-          task.id,
-          leaseToken,
-          error.message,
-          error.nativeSessionId,
-          error.evidence,
-        );
-        this.publish(task, "failed", error.message);
+        const unknown = error.nativeSessionId
+          ? this.options.store.markClaudeSummaryUnknownOutcome(
+              task.id,
+              leaseToken,
+              error.message,
+              error.nativeSessionId,
+              error.evidence,
+            )
+          : this.options.store.markSummaryUnknownOutcome(task.id, leaseToken, {
+              runtimeEvidence: error.evidence,
+            });
+        this.publish(task, "failed", unknown.error ?? error.message);
+        return true;
+      } else if (error instanceof ClaudeCodeConversationError && error.unknownOutcome) {
+        const unknown = this.options.store.markSummaryUnknownOutcome(task.id, leaseToken, {
+          nativeSessionId: error.nativeSessionId,
+          runtimeEvidence: error.evidence,
+        });
+        this.publish(task, "failed", unknown.error ?? error.message);
+        return true;
+      } else if (error instanceof CodexConversationError && error.unknownOutcome) {
+        const unknown = this.options.store.markSummaryUnknownOutcome(task.id, leaseToken, {
+          nativeSessionId: error.nativeSessionId,
+          runtimeEvidence: error.evidence,
+        });
+        this.publish(task, "failed", unknown.error ?? error.message);
+        return true;
+      } else if (error instanceof XaiTextUnknownOutcomeError) {
+        const unknown = this.options.store.markSummaryUnknownOutcome(task.id, leaseToken);
+        this.publish(task, "failed", unknown.error ?? error.message);
         return true;
       } else if (error instanceof AgentUnavailableError) {
         const current = this.options.store.getTask(task.id);
@@ -989,6 +1059,12 @@ export class RecordingPipeline {
           this.options.store.fail(task.id, leaseToken, error.message);
           this.publish(task, "failed", error.message);
           return true;
+        }
+        if (current?.state === "artifacts_committed") {
+          this.options.store.releaseCommittedArtifactsToAwaitingDelivery(task.id, leaseToken, error.message);
+          this.publish(task, "failed", error.message);
+          this.deferDispatch(task.attempt);
+          return false;
         }
         if (current?.state === "transcript_committed") {
           this.options.store.releaseToAwaitingProvider(task.id, leaseToken, error.message);

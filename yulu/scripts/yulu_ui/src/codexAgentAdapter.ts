@@ -295,9 +295,16 @@ export class CodexAgentAdapter {
       result.terminalStatus === "unknown" ? "unknown" : result.terminalStatus === "failed" ? "failed" : "ready",
     );
     if (result.terminalStatus !== "completed") {
-      throw new Error(result.terminalStatus === "unknown"
-        ? "Codex Summary outcome is unknown; do not retry automatically or commit staged output"
-        : "Codex Summary failed before a terminal successful result");
+      throw new CodexConversationError(
+        result.terminalStatus === "unknown"
+          ? "Codex Summary outcome is unknown; do not retry automatically or commit staged output"
+          : "Codex Summary failed before a terminal successful result",
+        {
+          ...(result.nativeSessionId ? { nativeSessionId: result.nativeSessionId } : {}),
+          evidence: runtimeEvidence,
+          unknownOutcome: result.terminalStatus === "unknown",
+        },
+      );
     }
     if (!identityMatches(result, input.model)) {
       throw new Error("Codex Summary returned a different provider, model, or fallback identity");

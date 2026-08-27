@@ -3,7 +3,7 @@ import { chmodSync, existsSync, mkdtempSync, rmSync, statSync, writeFileSync } f
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import Database from "better-sqlite3";
-import { HostStore, type ArtifactRecord, type CoreActivationEvidence } from "../src/hostStore.js";
+import { HostStore, type AgentTask, type ArtifactRecord, type CoreActivationEvidence } from "../src/hostStore.js";
 
 const NOTION_PAGE_ID = "0123456789abcdef0123456789abcdef";
 const SUMMARY_IDENTITY = { summaryProvider: "hermes", summaryModel: "runtime-managed" } as const;
@@ -66,6 +66,12 @@ describe("HostStore", () => {
         createdAt: new Date().toISOString(),
       },
     ];
+  }
+
+  function recordPublishedArtifacts(taskId: string, leaseToken: string): AgentTask {
+    const committed = store!.recordArtifacts(taskId, leaseToken, artifacts(taskId));
+    store!.markArtifactsPublished(taskId, leaseToken);
+    return committed;
   }
 
   function gatewaySummaryTask(idempotencyKey: string, sendToNotion = false) {
@@ -154,6 +160,66 @@ describe("HostStore", () => {
     });
   });
 
+  it("persists and projects only secret-safe Runtime Evidence fields", () => {
+    createStore();
+    store!.upsertAgentConnectionRecord({
+      id: "codex",
+      kind: "supported-agent",
+      adapter: "codex",
+      label: "Codex",
+      lifecycle: "available",
+      settings: { executablePath: "/fake/codex" },
+    });
+
+    const recorded = store!.recordAgentConnectionReadiness({
+      connectionId: "codex",
+      capability: "conversation",
+      status: "ready",
+      model: "gpt-5.6-sol",
+      credentialSource: null,
+      detail: "Exact model ready",
+      reason: null,
+      runtimeEvidence: {
+        adapter: "codex",
+        transport: "codex-app-server-stdio",
+        runtimeVersion: "0.144.4",
+        requestedProvider: "openai",
+        requestedModel: "gpt-5.6-sol",
+        actualProvider: "openai",
+        actualModel: "gpt-5.6-sol",
+        requestId: "turn-safe",
+        sessionId: "thread-safe",
+        terminalStatus: "ready",
+        fallbackOccurred: false,
+        token: "never-persist-token",
+        prompt: "never-persist-prompt",
+        transcript: "never-persist-transcript",
+        responseBody: "never-persist-response",
+      } as never,
+      testedAt: "2026-08-28T01:00:00.000Z",
+    });
+
+    expect(recorded.runtimeEvidence).toEqual({
+      adapter: "codex",
+      transport: "codex-app-server-stdio",
+      runtimeVersion: "0.144.4",
+      requestedProvider: "openai",
+      requestedModel: "gpt-5.6-sol",
+      actualProvider: "openai",
+      actualModel: "gpt-5.6-sol",
+      requestId: "turn-safe",
+      sessionId: "thread-safe",
+      terminalStatus: "ready",
+      fallbackOccurred: false,
+    });
+    const serialized = JSON.stringify(store!.listAgentConnectionReadinessHistory("codex", "conversation"));
+    expect(serialized).not.toMatch(/never-persist|token|prompt|transcript|responseBody/);
+    const stored = store!.db.prepare("SELECT runtime_evidence_json FROM agent_connection_readiness_history").get() as {
+      runtime_evidence_json: string;
+    };
+    expect(stored.runtime_evidence_json).not.toMatch(/never-persist|token|prompt|transcript|responseBody/);
+  });
+
   it("clears the Summary input snapshot only when an explicit retry discards its transcript artifact", () => {
     createStore();
     const task = store!.enqueueRecording({
@@ -205,6 +271,7 @@ describe("HostStore", () => {
     const transcript = artifacts(task.id)[0]!;
     store!.recordTranscript(task.id, claimed.leaseToken!, transcript);
     store!.recordSummaryInputSnapshot(task.id, claimed.leaseToken!, transcript);
+    store!.beginSummaryExecution(task.id, claimed.leaseToken!);
     const unknown = store!.markClaudeSummaryUnknownOutcome(
       task.id,
       claimed.leaseToken!,
@@ -222,7 +289,10 @@ describe("HostStore", () => {
         sessionId: "unknown-session-140",
         terminalStatus: "unknown",
         fallbackOccurred: false,
-      },
+        token: "never-persist-summary-token",
+        prompt: "never-persist-summary-prompt",
+        responseBody: "never-persist-summary-response",
+      } as never,
     );
 
     expect(unknown).toMatchObject({
@@ -243,6 +313,11 @@ describe("HostStore", () => {
         }),
       }),
     ]));
+    expect(JSON.stringify(store!.listEvents(task.id))).not.toMatch(/never-persist-summary|token|prompt|responseBody/);
+    const persisted = store!.db.prepare("SELECT audit_json FROM agent_tasks WHERE id = ?").get(task.id) as {
+      audit_json: string;
+    };
+    expect(persisted.audit_json).not.toMatch(/never-persist-summary|token|prompt|responseBody/);
     expect(() => store!.prepareRecordingDeletion(task.recordingStem)).toThrow("execution_unverified");
   });
 
@@ -286,6 +361,122 @@ describe("HostStore", () => {
     }
   });
 
+  it("does not replay an interrupted Codex Summary after Host restart", () => {
+    createStore();
+    const task = store!.enqueueRecording({
+      idempotencyKey: "recording:codex-crash-after-dispatch",
+      recordingStem: "Demo_20260711_120000",
+      title: "Codex crash fence",
+      audioPath: join(root, "Demo_20260711_120000.wav"),
+      sendToNotion: false,
+      destinationHint: "",
+      agentProvider: "codex",
+      summaryProvider: "codex",
+      summaryModel: "gpt-5.6-sol",
+      summaryConnectionId: "codex",
+      summaryCredentialClass: "runtime-oauth",
+      summaryDisclosureVersion: "codex-summary-v1",
+      instructions: "Use only the committed transcript.",
+    }).task;
+    const claimed = store!.claim(task.id)!;
+    const transcript = artifacts(task.id)[0]!;
+    store!.recordTranscript(task.id, claimed.leaseToken!, transcript);
+    store!.recordSummaryInputSnapshot(task.id, claimed.leaseToken!, transcript);
+    const executionId = store!.beginSummaryExecution(task.id, claimed.leaseToken!);
+    const dbPath = join(root, "host.sqlite");
+
+    store!.close();
+    store = new HostStore(dbPath);
+
+    expect(store.getTask(task.id)).toMatchObject({
+      state: "execution_unverified",
+      phase: "failed",
+      leaseToken: null,
+      nativeSessionId: executionId,
+      artifactSessionId: executionId,
+      error: expect.stringContaining("outcome is unknown"),
+    });
+    expect(store.claimNext()).toBeNull();
+    expect(() => store!.retry(task.id)).toThrow("cannot retry from execution_unverified");
+    expect(store.listEvents(task.id)).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        type: "summary.unknown_outcome",
+        payload: expect.objectContaining({
+          executionId,
+          provider: "codex",
+          model: "gpt-5.6-sol",
+          recoveredAfterRestart: true,
+        }),
+      }),
+    ]));
+  });
+
+  it("fails closed instead of replaying a Summary with a corrupted dispatch journal", () => {
+    createStore();
+    const task = store!.enqueueRecording({
+      idempotencyKey: "recording:codex-corrupted-dispatch-journal",
+      recordingStem: "Demo_20260711_120000",
+      title: "Codex corrupted dispatch fence",
+      audioPath: join(root, "Demo_20260711_120000.wav"),
+      sendToNotion: false,
+      destinationHint: "",
+      agentProvider: "codex",
+      summaryProvider: "codex",
+      summaryModel: "gpt-5.6-sol",
+      summaryConnectionId: "codex",
+      summaryCredentialClass: "runtime-oauth",
+      summaryDisclosureVersion: "codex-summary-v1",
+      instructions: "Use only the committed transcript.",
+    }).task;
+    const claimed = store!.claim(task.id)!;
+    const transcript = artifacts(task.id)[0]!;
+    store!.recordTranscript(task.id, claimed.leaseToken!, transcript);
+    store!.recordSummaryInputSnapshot(task.id, claimed.leaseToken!, transcript);
+    store!.beginSummaryExecution(task.id, claimed.leaseToken!);
+    store!.db.prepare("UPDATE agent_tasks SET audit_json = ? WHERE id = ?")
+      .run(JSON.stringify({ summaryExecution: { model: "attacker-secret-model" } }), task.id);
+    const dbPath = join(root, "host.sqlite");
+
+    store!.close();
+    store = new HostStore(dbPath);
+
+    expect(store.getTask(task.id)).toMatchObject({
+      state: "execution_unverified",
+      phase: "failed",
+      leaseToken: null,
+      nativeSessionId: null,
+      artifactSessionId: null,
+      error: "Host restarted with an unverifiable Summary dispatch journal; outcome is unknown",
+    });
+    expect(store.claimNext()).toBeNull();
+    expect(() => store!.retry(task.id)).toThrow("cannot retry from execution_unverified");
+    expect(JSON.stringify(store.listEvents(task.id))).not.toContain("attacker-secret-model");
+  });
+
+  it("fails closed instead of replaying a Gateway Summary with a corrupted dispatch journal", () => {
+    createStore();
+    const { task, claimed } = claimedGatewaySummary("recording:gateway-corrupted-dispatch-journal");
+    store!.beginGatewaySummaryExecution(task.id, claimed.leaseToken!, "summary");
+    store!.db.prepare("UPDATE agent_tasks SET audit_json = ? WHERE id = ?")
+      .run(JSON.stringify({ gatewayExecution: { stage: "summary", model: "attacker-secret-model" } }), task.id);
+    const dbPath = join(root, "host.sqlite");
+
+    store!.close();
+    store = new HostStore(dbPath);
+
+    expect(store.getTask(task.id)).toMatchObject({
+      state: "execution_unverified",
+      phase: "failed",
+      leaseToken: null,
+      nativeSessionId: null,
+      artifactSessionId: null,
+      error: "Host restarted with an unverifiable CLIProxyAPI Summary dispatch journal; outcome is unknown",
+    });
+    expect(store.claimNext()).toBeNull();
+    expect(() => store!.retry(task.id)).toThrow("cannot retry from execution_unverified");
+    expect(JSON.stringify(store.listEvents(task.id))).not.toContain("attacker-secret-model");
+  });
+
   it("fails closed on malformed Gateway Unknown Outcome evidence and keeps the fence after restart", () => {
     createStore();
     const { task, claimed } = claimedGatewaySummary("recording:gateway-malformed-unknown");
@@ -323,25 +514,13 @@ describe("HostStore", () => {
     const serializedEvents = JSON.stringify(store!.listEvents(task.id));
     expect(serializedEvents).not.toContain("attacker");
     expect(serializedEvents).not.toContain("secret");
-    expect(store!.listEvents(task.id)).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        type: "gateway.summary_unknown_outcome",
-        payload: expect.objectContaining({
-          evidenceValidated: false,
-          runtimeEvidence: expect.objectContaining({
-            adapter: "cliproxyapi",
-            endpoint: "http://127.0.0.1:8317/v1",
-            requestedModel: "gateway-summary-exact",
-            actualModel: null,
-            requestId: null,
-            sessionId: null,
-            terminalStatus: "unknown",
-            fallbackOccurred: false,
-            toolsEnabled: false,
-          }),
-        }),
-      }),
-    ]));
+    const unknownEvent = store!.listEvents(task.id).find(({ type }) => type === "gateway.summary_unknown_outcome");
+    expect(unknownEvent?.payload).toMatchObject({ evidenceValidated: false });
+    expect(unknownEvent?.payload).not.toHaveProperty("runtimeEvidence");
+    const persistedAudit = store!.db.prepare("SELECT audit_json FROM agent_tasks WHERE id = ?").get(task.id) as {
+      audit_json: string;
+    };
+    expect(JSON.parse(persistedAudit.audit_json)).not.toHaveProperty("runtimeEvidence");
 
     const dbPath = join(root, "host.sqlite");
     store!.close();
@@ -361,7 +540,7 @@ describe("HostStore", () => {
       sendToNotion,
     );
     store!.beginGatewaySummaryExecution(task.id, claimed.leaseToken!, "summary");
-    store!.recordArtifacts(task.id, claimed.leaseToken!, artifacts(task.id));
+    recordPublishedArtifacts(task.id, claimed.leaseToken!);
     const dbPath = join(root, "host.sqlite");
 
     store!.close();
@@ -379,6 +558,66 @@ describe("HostStore", () => {
     } else {
       expect(store.claimNext()).toBeNull();
     }
+  });
+
+  it.each([
+    [false, "completed"],
+    [true, "artifacts_committed"],
+  ])("recovers a durably committed Codex Summary without replay when sendToNotion=%s", (sendToNotion, state) => {
+    createStore();
+    const task = store!.enqueueRecording({
+      idempotencyKey: `recording:codex-artifacts-committed:${sendToNotion}`,
+      recordingStem: "Demo_20260711_120000",
+      title: "Codex committed recovery",
+      audioPath: join(root, "Demo_20260711_120000.wav"),
+      sendToNotion,
+      destinationHint: "Yulu Meeting",
+      agentProvider: "codex",
+      summaryProvider: "codex",
+      summaryModel: "gpt-5.6-sol",
+      summaryConnectionId: "codex",
+      summaryCredentialClass: "runtime-oauth",
+      summaryDisclosureVersion: "codex-summary-v1",
+    }).task;
+    const claimed = store!.claim(task.id)!;
+    const transcript = artifacts(task.id)[0]!;
+    store!.recordTranscript(task.id, claimed.leaseToken!, transcript);
+    store!.recordSummaryInputSnapshot(task.id, claimed.leaseToken!, transcript);
+    store!.beginSummaryExecution(task.id, claimed.leaseToken!);
+    recordPublishedArtifacts(task.id, claimed.leaseToken!);
+    const dbPath = join(root, "host.sqlite");
+
+    store!.close();
+    store = new HostStore(dbPath);
+
+    expect(store.getTask(task.id)).toMatchObject({ state, leaseToken: null, error: null });
+    expect(store.listEvents(task.id).filter(({ type }) => type === "summary.unknown_outcome")).toEqual([]);
+    if (sendToNotion) {
+      expect(store.claimNext()).toMatchObject({ id: task.id, state: "artifacts_committed" });
+    } else {
+      expect(store.claimNext()).toBeNull();
+    }
+  });
+
+  it("recovers a Host-accounted but unpublished Summary without completing or replaying it", () => {
+    createStore();
+    const { task, claimed } = claimedGatewaySummary("recording:summary-publish-pending", false);
+    store!.beginGatewaySummaryExecution(task.id, claimed.leaseToken!, "summary");
+    store!.recordArtifacts(task.id, claimed.leaseToken!, artifacts(task.id));
+    expect(store!.isArtifactPublishPending(task.id)).toBe(true);
+    expect(() => store!.complete(task.id, claimed.leaseToken!, {})).toThrow(/publication is pending/);
+    const dbPath = join(root, "host.sqlite");
+
+    store!.close();
+    store = new HostStore(dbPath);
+
+    expect(store.getTask(task.id)).toMatchObject({ state: "artifacts_committed", leaseToken: null });
+    expect(store.isArtifactPublishPending(task.id)).toBe(true);
+    const recovered = store.claim(task.id)!;
+    expect(store.isArtifactPublishPending(task.id)).toBe(true);
+    store.markArtifactsPublished(task.id, recovered.leaseToken!);
+    expect(store.isArtifactPublishPending(task.id)).toBe(false);
+    expect(store.complete(task.id, recovered.leaseToken!, { recovered: true }).state).toBe("completed");
   });
 
   it.each([
@@ -405,6 +644,7 @@ describe("HostStore", () => {
     const transcript = artifacts(task.id)[0]!;
     store!.recordTranscript(task.id, claimed.leaseToken!, transcript);
     store!.recordSummaryInputSnapshot(task.id, claimed.leaseToken!, transcript);
+    store!.beginSummaryExecution(task.id, claimed.leaseToken!);
     const evidence = {
       adapter: "claude-code",
       transport: "claude-code-print-stream-json",
@@ -464,6 +704,15 @@ describe("HostStore", () => {
       fallbackOccurred: false,
     };
 
+    expect(() => store!.validateSummaryCommit(task.id, claimed.leaseToken!, {
+      connectionId: "codex",
+      credentialClass: "runtime-oauth",
+      disclosureVersion: "codex-summary-v1",
+      inputArtifact: transcript,
+      runtimeEvidence,
+      toolCalls: [],
+    })).toThrow(/durable dispatch journal/i);
+    store!.beginSummaryExecution(task.id, claimed.leaseToken!);
     expect(store!.validateSummaryCommit(task.id, claimed.leaseToken!, {
       connectionId: "codex",
       credentialClass: "runtime-oauth",
@@ -535,6 +784,15 @@ describe("HostStore", () => {
       fallbackOccurred: false,
     };
 
+    expect(() => store!.validateSummaryCommit(task.id, claimed.leaseToken!, {
+      connectionId: "claude-code",
+      credentialClass: "runtime-oauth",
+      disclosureVersion: "claude-code-summary-v1",
+      inputArtifact: transcript,
+      runtimeEvidence,
+      toolCalls: [],
+    })).toThrow(/durable dispatch journal/i);
+    store!.beginSummaryExecution(task.id, claimed.leaseToken!);
     expect(store!.validateSummaryCommit(task.id, claimed.leaseToken!, {
       connectionId: "claude-code",
       credentialClass: "runtime-oauth",
@@ -665,6 +923,60 @@ describe("HostStore", () => {
       type: "task.superseded",
       payload: { replacementTaskId: replacement.id },
     });
+  });
+
+  it("creates an explicit same-provider Summary attempt from Unknown without mutating the original fence", () => {
+    createStore();
+    const original = store!.enqueueRecording({
+      idempotencyKey: "recording:codex-unknown-explicit-attempt",
+      recordingStem: "Demo_20260711_120000",
+      title: "Codex Unknown",
+      audioPath: join(root, "Demo_20260711_120000.wav"),
+      sendToNotion: false,
+      destinationHint: "",
+      agentProvider: "codex",
+      summaryProvider: "codex",
+      summaryModel: "gpt-5.6-sol",
+      summaryConnectionId: "codex",
+      summaryCredentialClass: "runtime-oauth",
+      summaryDisclosureVersion: "codex-summary-v1",
+    }).task;
+    const claimed = store!.claim(original.id)!;
+    const transcript = artifacts(original.id)[0]!;
+    store!.recordTranscript(original.id, claimed.leaseToken!, transcript);
+    store!.recordSummaryInputSnapshot(original.id, claimed.leaseToken!, transcript);
+    store!.beginSummaryExecution(original.id, claimed.leaseToken!);
+    store!.markSummaryUnknownOutcome(original.id, claimed.leaseToken!);
+    const originalAudit = (store!.db.prepare("SELECT audit_json FROM agent_tasks WHERE id = ?")
+      .get(original.id) as { audit_json: string }).audit_json;
+
+    const replacement = store!.replaceSummaryAttempt(original.id, {
+      summaryProvider: original.summaryProvider,
+      summaryModel: original.summaryModel,
+      summaryConnectionId: original.summaryConnectionId,
+      summaryCredentialClass: original.summaryCredentialClass,
+      summaryCredentialIdentity: original.summaryCredentialIdentity,
+      summaryDisclosureVersion: original.summaryDisclosureVersion,
+      summaryEndpointIdentity: original.summaryEndpointIdentity,
+    });
+
+    expect(store!.getTask(original.id)).toMatchObject({ state: "execution_unverified" });
+    expect((store!.db.prepare("SELECT audit_json FROM agent_tasks WHERE id = ?")
+      .get(original.id) as { audit_json: string }).audit_json).toBe(originalAudit);
+    expect(replacement).toMatchObject({
+      state: "transcript_committed",
+      summaryProvider: "codex",
+      summaryModel: "gpt-5.6-sol",
+      summaryConnectionId: "codex",
+      summaryCredentialClass: "runtime-oauth",
+    });
+    expect(store!.listArtifacts(replacement.id)).toEqual([
+      expect.objectContaining({
+        kind: "transcript",
+        sha256: transcript.sha256,
+        provenance: expect.objectContaining({ reusedFromTaskId: original.id }),
+      }),
+    ]);
   });
 
   it("creates an explicit xAI replacement when only the credential source changes", () => {
@@ -1223,7 +1535,7 @@ describe("HostStore", () => {
     expect(claimed.leaseToken).toBeTruthy();
     expect(() => store!.recordArtifacts(claimed.id, "stale", artifacts(claimed.id))).toThrow(/stale lease/);
 
-    const committed = store!.recordArtifacts(claimed.id, claimed.leaseToken!, artifacts(claimed.id));
+    const committed = recordPublishedArtifacts(claimed.id, claimed.leaseToken!);
     expect(committed.state).toBe("artifacts_committed");
     const delivery = store!.beginNotionDelivery(claimed.id, claimed.leaseToken!);
     expect(delivery.deliveryKey).toBe(`yulu-${claimed.id}`);
@@ -1241,6 +1553,7 @@ describe("HostStore", () => {
       "task.queued",
       "task.claimed",
       "artifacts.committed",
+      "artifacts.published",
       "notion.delivery_started",
       "notion.delivery_reported",
       "task.completed",
@@ -1250,7 +1563,7 @@ describe("HostStore", () => {
   it("records separate phase sessions and backfills only the audited artifact session", () => {
     createStore();
     const claimed = (() => { enqueue(true); return store!.claimNext()!; })();
-    store!.recordArtifacts(claimed.id, claimed.leaseToken!, artifacts(claimed.id));
+    recordPublishedArtifacts(claimed.id, claimed.leaseToken!);
     store!.recordPhaseSession(claimed.id, claimed.leaseToken!, "artifact", "artifact-session");
     store!.beginNotionDelivery(claimed.id, claimed.leaseToken!);
     store!.recordPhaseSession(claimed.id, claimed.leaseToken!, "delivery", "delivery-session");
@@ -1269,7 +1582,7 @@ describe("HostStore", () => {
   it("never starts Notion when the task did not authorize it", () => {
     createStore();
     const claimed = (() => { enqueue(false); return store!.claimNext()!; })();
-    store!.recordArtifacts(claimed.id, claimed.leaseToken!, artifacts(claimed.id));
+    recordPublishedArtifacts(claimed.id, claimed.leaseToken!);
     expect(() => store!.beginNotionDelivery(claimed.id, claimed.leaseToken!)).toThrow(/not authorized/);
     expect(store!.complete(claimed.id, claimed.leaseToken!, {}).state).toBe("completed");
   });
@@ -1277,7 +1590,7 @@ describe("HostStore", () => {
   it("does not accept an unverifiable Notion delivery report", () => {
     createStore();
     const claimed = (() => { enqueue(true); return store!.claimNext()!; })();
-    store!.recordArtifacts(claimed.id, claimed.leaseToken!, artifacts(claimed.id));
+    recordPublishedArtifacts(claimed.id, claimed.leaseToken!);
     store!.beginNotionDelivery(claimed.id, claimed.leaseToken!);
 
     expect(() => store!.recordNotionDelivery(claimed.id, claimed.leaseToken!, {
@@ -1287,7 +1600,7 @@ describe("HostStore", () => {
   it("keeps the Host-authorized destination when the Agent reports delivery", () => {
     createStore();
     const claimed = (() => { enqueue(true); return store!.claimNext()!; })();
-    store!.recordArtifacts(claimed.id, claimed.leaseToken!, artifacts(claimed.id));
+    recordPublishedArtifacts(claimed.id, claimed.leaseToken!);
     store!.beginNotionDelivery(claimed.id, claimed.leaseToken!);
 
     const reported = store!.recordNotionDelivery(claimed.id, claimed.leaseToken!, {
@@ -1308,7 +1621,7 @@ describe("HostStore", () => {
   ])("rejects an untrusted Notion delivery identifier: %j", (identifier) => {
     createStore();
     const claimed = (() => { enqueue(true); return store!.claimNext()!; })();
-    store!.recordArtifacts(claimed.id, claimed.leaseToken!, artifacts(claimed.id));
+    recordPublishedArtifacts(claimed.id, claimed.leaseToken!);
     store!.beginNotionDelivery(claimed.id, claimed.leaseToken!);
 
     expect(() => store!.recordNotionDelivery(claimed.id, claimed.leaseToken!, {
@@ -1320,7 +1633,7 @@ describe("HostStore", () => {
   it("rejects conflicting Notion URL and page ID identities", () => {
     createStore();
     const claimed = (() => { enqueue(true); return store!.claimNext()!; })();
-    store!.recordArtifacts(claimed.id, claimed.leaseToken!, artifacts(claimed.id));
+    recordPublishedArtifacts(claimed.id, claimed.leaseToken!);
     store!.beginNotionDelivery(claimed.id, claimed.leaseToken!);
 
     expect(() => store!.recordNotionDelivery(claimed.id, claimed.leaseToken!, {
@@ -1406,7 +1719,7 @@ describe("HostStore", () => {
   it("moves an interrupted external delivery to delivery_unverified on restart", () => {
     createStore();
     const claimed = (() => { enqueue(true); return store!.claimNext()!; })();
-    store!.recordArtifacts(claimed.id, claimed.leaseToken!, artifacts(claimed.id));
+    recordPublishedArtifacts(claimed.id, claimed.leaseToken!);
     store!.recordPhaseSession(claimed.id, claimed.leaseToken!, "artifact", "old-artifact-session");
     store!.beginNotionDelivery(claimed.id, claimed.leaseToken!);
     store!.recordPhaseSession(claimed.id, claimed.leaseToken!, "delivery", "old-delivery-session");
@@ -1432,7 +1745,7 @@ describe("HostStore", () => {
   it("requires reconciliation when restart interrupts post-delivery session audit", () => {
     createStore();
     const claimed = (() => { enqueue(true); return store!.claimNext()!; })();
-    store!.recordArtifacts(claimed.id, claimed.leaseToken!, artifacts(claimed.id));
+    recordPublishedArtifacts(claimed.id, claimed.leaseToken!);
     store!.beginNotionDelivery(claimed.id, claimed.leaseToken!);
     store!.recordNotionDelivery(claimed.id, claimed.leaseToken!, {
       url: "https://notion.so/page",
@@ -1455,7 +1768,7 @@ describe("HostStore", () => {
   it("rejects conflicting identities during manual delivery reconciliation", () => {
     createStore();
     const claimed = (() => { enqueue(true); return store!.claimNext()!; })();
-    store!.recordArtifacts(claimed.id, claimed.leaseToken!, artifacts(claimed.id));
+    recordPublishedArtifacts(claimed.id, claimed.leaseToken!);
     store!.beginNotionDelivery(claimed.id, claimed.leaseToken!);
     store!.fail(claimed.id, claimed.leaseToken!, "delivery outcome unknown");
 

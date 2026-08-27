@@ -1,9 +1,9 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
 
-const STORE_VERSION = 6;
+const STORE_VERSION = 8;
 const STORE_FILE = "agent-sessions.json";
 const MAX_TITLE_CHARS = 48;
 const MAX_MESSAGE_CHARS = 80_000;
@@ -45,6 +45,40 @@ const agentSessionRetrySnapshotSchema = z.object({
   retrievalPending: z.boolean().optional(),
 });
 
+const agentSessionProviderMessageSchema = z.object({
+  role: z.enum(["system", "user", "assistant"]),
+  content: z.string().max(120_000),
+}).strict();
+
+const agentSessionProviderInputSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("messages"),
+    messages: z.array(agentSessionProviderMessageSchema).min(1).max(20),
+  }).strict(),
+  z.object({
+    kind: z.literal("prompt"),
+    prompt: z.string().min(1).max(120_000),
+  }).strict(),
+]);
+
+const agentSessionInvocationSchema = z.object({
+  executionId: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/),
+  provider: z.string().trim().min(1).max(128),
+  connectionId: z.string().trim().min(1).max(200).optional(),
+  model: z.string().trim().min(1).max(128),
+  runtimeProvider: z.string().trim().min(1).max(128).optional(),
+  endpointIdentity: z.string().trim().min(1).max(2_048).optional(),
+  disclosureVersion: z.string().trim().min(1).max(200).optional(),
+  credentialIdentity: z.string().trim().min(1).max(200).optional(),
+  credentialSource: z.enum(["oauth", "api-key", "runtime-oauth"]).optional(),
+  nativeSessionId: z.string().trim().min(1).max(200).optional(),
+  inputSha256: z.string().regex(/^[a-f0-9]{64}$/),
+  snapshot: agentSessionRetrySnapshotSchema,
+  providerInput: agentSessionProviderInputSchema,
+  startedAt: z.string(),
+  recoveredAt: z.string().optional(),
+});
+
 export const agentSessionMessageInputSchema = z.object({
   role: z.enum(["user", "assistant"]),
   text: z.string().max(MAX_MESSAGE_CHARS),
@@ -72,6 +106,10 @@ const persistedSessionSchema = z.object({
   status: z.enum(["active", "paused"]).optional(),
   pausedReason: z.string().max(1000).optional(),
   retrySnapshot: agentSessionRetrySnapshotSchema.optional(),
+  retryProviderInput: agentSessionProviderInputSchema.optional(),
+  pendingInvocation: agentSessionInvocationSchema.optional(),
+  unknownOutcome: agentSessionInvocationSchema.optional(),
+  supersedesSessionId: z.string().trim().min(1).max(200).optional(),
   purpose: z.enum(["ask", "background"]).default("ask"),
   title: z.string(),
   createdAt: z.string(),
@@ -98,6 +136,8 @@ export type AgentSession = z.infer<typeof persistedSessionSchema>;
 export type AgentSessionMessage = z.infer<typeof persistedMessageSchema>;
 export type AgentSessionMessageInput = z.infer<typeof agentSessionMessageInputSchema>;
 export type AgentSessionRetrySnapshot = z.infer<typeof agentSessionRetrySnapshotSchema>;
+export type AgentSessionProviderInput = z.infer<typeof agentSessionProviderInputSchema>;
+export type AgentSessionInvocation = z.infer<typeof agentSessionInvocationSchema>;
 
 export interface AgentSessionHistoryMessage {
   role: "user" | "assistant";
@@ -375,6 +415,7 @@ export function pauseAgentSession(
   sessionId: string,
   reason: string,
   retrySnapshot?: AgentSessionRetrySnapshot,
+  retryProviderInput?: AgentSessionProviderInput,
 ): AgentSession {
   const store = readAgentSessionStore(configDir);
   const session = findMutableSession(store, sessionId);
@@ -382,6 +423,8 @@ export function pauseAgentSession(
   session.pausedReason = reason.slice(0, 1000);
   if (retrySnapshot) session.retrySnapshot = agentSessionRetrySnapshotSchema.parse(retrySnapshot);
   else delete session.retrySnapshot;
+  if (retryProviderInput) session.retryProviderInput = agentSessionProviderInputSchema.parse(retryProviderInput);
+  else if (!retrySnapshot) delete session.retryProviderInput;
   session.updatedAt = nowIso();
   writeAgentSessionStore(configDir, store);
   return session;
@@ -390,12 +433,152 @@ export function pauseAgentSession(
 export function resumeAgentSession(configDir: string, sessionId: string): AgentSession {
   const store = readAgentSessionStore(configDir);
   const session = findMutableSession(store, sessionId);
+  if (session.unknownOutcome) {
+    throw new Error("Unknown Outcome requires an explicit new Conversation attempt");
+  }
   session.status = "active";
   delete session.pausedReason;
   delete session.retrySnapshot;
+  delete session.retryProviderInput;
   session.updatedAt = nowIso();
   writeAgentSessionStore(configDir, store);
   return session;
+}
+
+function invocationInputSha256(
+  snapshot: AgentSessionRetrySnapshot,
+  providerInput: AgentSessionProviderInput,
+): string {
+  return createHash("sha256").update(JSON.stringify({ snapshot, providerInput })).digest("hex");
+}
+
+function invocationInputValid(invocation: AgentSessionInvocation): boolean {
+  return invocation.inputSha256 === invocationInputSha256(invocation.snapshot, invocation.providerInput);
+}
+
+export function beginAgentSessionInvocation(
+  configDir: string,
+  sessionId: string,
+  snapshotInput: AgentSessionRetrySnapshot,
+  providerInputValue: AgentSessionProviderInput,
+): AgentSessionInvocation {
+  const store = readAgentSessionStore(configDir);
+  const session = findMutableSession(store, sessionId);
+  if (session.pendingInvocation || session.unknownOutcome) {
+    throw new Error("Conversation already has unresolved remote execution");
+  }
+  const snapshot = agentSessionRetrySnapshotSchema.parse(snapshotInput);
+  const providerInput = agentSessionProviderInputSchema.parse(providerInputValue);
+  const invocation = agentSessionInvocationSchema.parse({
+    executionId: `conversation-${randomUUID()}`,
+    provider: session.provider,
+    connectionId: session.connectionId,
+    model: session.model,
+    runtimeProvider: session.runtimeProvider,
+    endpointIdentity: session.endpointIdentity,
+    disclosureVersion: session.disclosureVersion,
+    credentialIdentity: session.credentialIdentity,
+    credentialSource: session.credentialSource,
+    nativeSessionId: session.nativeSessionId,
+    inputSha256: invocationInputSha256(snapshot, providerInput),
+    snapshot,
+    providerInput,
+    startedAt: nowIso(),
+  });
+  session.pendingInvocation = invocation;
+  session.updatedAt = invocation.startedAt;
+  writeAgentSessionStore(configDir, store);
+  return invocation;
+}
+
+export function completeAgentSessionInvocation(
+  configDir: string,
+  sessionId: string,
+  executionId: string,
+): AgentSession {
+  const store = readAgentSessionStore(configDir);
+  const session = findMutableSession(store, sessionId);
+  if (session.pendingInvocation?.executionId !== executionId) {
+    throw new Error("Conversation execution journal changed before completion");
+  }
+  delete session.pendingInvocation;
+  session.updatedAt = nowIso();
+  writeAgentSessionStore(configDir, store);
+  return session;
+}
+
+export function markAgentSessionInvocationUnknown(
+  configDir: string,
+  sessionId: string,
+  executionId: string,
+  reason: string,
+): AgentSession {
+  const store = readAgentSessionStore(configDir);
+  const session = findMutableSession(store, sessionId);
+  if (session.pendingInvocation?.executionId !== executionId) {
+    throw new Error("Conversation Unknown Outcome does not match its execution journal");
+  }
+  session.unknownOutcome = { ...session.pendingInvocation, recoveredAt: nowIso() };
+  delete session.pendingInvocation;
+  delete session.retrySnapshot;
+  delete session.retryProviderInput;
+  session.status = "paused";
+  session.pausedReason = reason.slice(0, 1000);
+  session.updatedAt = session.unknownOutcome.recoveredAt!;
+  writeAgentSessionStore(configDir, store);
+  return session;
+}
+
+export function recoverInterruptedAgentSessionInvocations(configDir: string): string[] {
+  const store = readAgentSessionStore(configDir);
+  const recovered: string[] = [];
+  const recoveredAt = nowIso();
+  for (const session of store.sessions) {
+    if (!session.pendingInvocation) continue;
+    session.unknownOutcome = { ...session.pendingInvocation, recoveredAt };
+    delete session.pendingInvocation;
+    delete session.retrySnapshot;
+    delete session.retryProviderInput;
+    session.status = "paused";
+    session.pausedReason = `${session.provider} Conversation was interrupted after dispatch; outcome is unknown`;
+    session.updatedAt = recoveredAt;
+    recovered.push(session.id);
+  }
+  if (recovered.length > 0) writeAgentSessionStore(configDir, store);
+  return recovered;
+}
+
+export function createAgentSessionAttemptFromUnknown(configDir: string, sessionId: string): AgentSession {
+  const original = getAgentSession(configDir, sessionId);
+  if (!original?.unknownOutcome) {
+    throw new Error("Conversation does not have an Unknown Outcome to replace");
+  }
+  if (!invocationInputValid(original.unknownOutcome)) {
+    throw new Error("Conversation Unknown Outcome input snapshot failed integrity validation");
+  }
+  const replacement = createAgentSession(configDir, {
+    purpose: "ask",
+    provider: original.provider,
+    model: original.model,
+    runtimeProvider: original.runtimeProvider,
+    connectionId: original.connectionId,
+    endpointIdentity: original.endpointIdentity,
+    disclosureVersion: original.disclosureVersion,
+    credentialIdentity: original.credentialIdentity,
+    credentialSource: original.credentialSource,
+    title: original.title,
+    runtimeLabel: original.runtimeLabel,
+  });
+  const store = readAgentSessionStore(configDir);
+  const created = findMutableSession(store, replacement.id);
+  created.supersedesSessionId = original.id;
+  created.status = "paused";
+  created.pausedReason = "Explicit replacement attempt is ready to send the preserved input";
+  created.retrySnapshot = original.unknownOutcome.snapshot;
+  created.retryProviderInput = original.unknownOutcome.providerInput;
+  created.updatedAt = nowIso();
+  writeAgentSessionStore(configDir, store);
+  return created;
 }
 
 export function renameAgentSession(configDir: string, sessionId: string, title: string): AgentSession {

@@ -32,6 +32,15 @@ export const agentTasksRouter = router({
       }
     }),
 
+  createSummaryAttemptFromUnknown: uiMutationProcedure
+    .input(z.object({ id: z.string().uuid() }))
+    .mutation(({ ctx, input }) => {
+      try { return publicAgentTask(ctx.recordingPipeline.createSummaryAttemptFromUnknown(input.id)); }
+      catch (error) {
+        throw new TRPCError({ code: "PRECONDITION_FAILED", message: (error as Error).message });
+      }
+    }),
+
   confirmNotionDelivery: publicProcedure
     .input(z.object({
       id: z.string().uuid(),

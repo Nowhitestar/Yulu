@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { XaiTextClient } from "../src/xaiText.js";
+import { XaiTextClient, XaiTextUnknownOutcomeError } from "../src/xaiText.js";
 
 function response(payload: unknown, status = 200): Response {
   return new Response(JSON.stringify(payload), {
@@ -153,6 +153,29 @@ describe("XaiTextClient.request", () => {
       input: [{ role: "user", content: "x".repeat(1_000_001) }],
     })).rejects.toThrow("xAI text input exceeds");
     expect(fetchFn).toHaveBeenCalledOnce();
+  });
+
+  it("classifies timeout or transport loss after request creation as Unknown Outcome", async () => {
+    const credentials = {
+      resolve: vi.fn(async () => ({ accessToken: "never-expose-token", source: "oauth" as const })),
+    };
+    const client = new XaiTextClient(credentials as never, vi.fn<typeof fetch>(async () => {
+      throw new DOMException("The operation timed out", "TimeoutError");
+    }));
+
+    const request = client.request({
+      capability: "summary",
+      model: "grok-4.6",
+      credentialSource: "oauth",
+      input: [{ role: "user", content: "private committed transcript" }],
+    });
+    await expect(request).rejects.toBeInstanceOf(XaiTextUnknownOutcomeError);
+    await expect(request).rejects.toMatchObject({
+      capability: "summary",
+      model: "grok-4.6",
+      credentialSource: "oauth",
+    });
+    await expect(request).rejects.not.toThrow(/never-expose-token|private committed transcript/);
   });
 
   it("cancels a chunked response as soon as it exceeds the output byte limit", async () => {
