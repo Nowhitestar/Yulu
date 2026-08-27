@@ -48,6 +48,7 @@ import {
   GatewaySummaryUnknownOutcomeError,
 } from "./summaryProviderReadiness.js";
 import {
+  CLIPROXYAPI_CONTRACT_VERSION,
   GatewayRequestUnknownOutcomeError,
   isExactGatewayRuntimeEvidence,
 } from "./cliProxyApiAdapter.js";
@@ -309,6 +310,12 @@ export class AgentConnectionCenter {
       authorization: {
         connected: selectedCredentialConnected,
         credentialSource: selectedCredentialSource,
+        runtimeVersion: null,
+        minimumVersion: null,
+        compatibilityTarget: "xai-api" as const,
+        versionSource: "not-applicable" as const,
+        supported: true,
+        features: ["transcription", "summary", "conversation", "no-provider-fallback"] as const,
         oauthConnected: status.oauthConnected,
         apiKeyConfigured: status.apiKeyConfigured,
         status: status.authorization.status,
@@ -451,6 +458,7 @@ export class AgentConnectionCenter {
             credentialSource: "runtime-oauth" as const,
             runtimeVersion: status?.runtimeVersion ?? null,
             minimumVersion: status?.minimumVersion ?? null,
+            versionSource: "live-runtime" as const,
             supported: status?.supported ?? false,
             availableModels: status?.availableModels ?? [],
             features: status?.features ?? [],
@@ -550,6 +558,7 @@ export class AgentConnectionCenter {
             credentialSource: "runtime-oauth" as const,
             runtimeVersion: status?.runtimeVersion ?? null,
             minimumVersion: status?.minimumVersion ?? null,
+            versionSource: "live-runtime" as const,
             supported: status?.supported ?? false,
             authorizationMethod: status?.authorizationMethod ?? null,
             apiProvider: status?.apiProvider ?? null,
@@ -604,6 +613,7 @@ export class AgentConnectionCenter {
             credentialSource: "runtime-oauth" as const,
             runtimeVersion: status?.runtimeVersion ?? null,
             minimumVersion: status?.minimumVersion ?? null,
+            versionSource: "live-runtime" as const,
             supported: status?.supported ?? false,
             provider: status?.provider ?? null,
             model: status?.model ?? null,
@@ -645,6 +655,30 @@ export class AgentConnectionCenter {
         const credentialIdentity = this.currentGatewayCredentialIdentity(record);
         const adapter = this.requireGatewayAdapter(endpoint, httpsApproved, credentialIdentity);
         const keyConfigured = await adapter.keyConfigured();
+        const readinessHistory = {
+          summary: this.host.listAgentConnectionReadinessHistory(record.id, "summary"),
+          conversation: this.host.listAgentConnectionReadinessHistory(record.id, "conversation"),
+        };
+        const latestRuntimeEvidence = [
+          ...readinessHistory.summary.map((entry) => ({ entry, model: summaryModel })),
+          ...readinessHistory.conversation.map((entry) => ({ entry, model: conversationModel })),
+        ].sort((left, right) => right.entry.testedAt.localeCompare(left.entry.testedAt))
+          .find(({ entry, model }) => {
+            const evidence = entry.runtimeEvidence;
+            return entry.status === "ready" && typeof evidence.runtimeVersion === "string" &&
+            typeof evidence.fallbackOccurred === "boolean" &&
+            isExactGatewayRuntimeEvidence({
+              ...evidence,
+              runtimeVersion: evidence.runtimeVersion,
+              fallbackOccurred: evidence.fallbackOccurred,
+            }, {
+              endpoint,
+              model,
+              terminalStatus: "ready",
+            });
+          })
+          ?.entry.runtimeEvidence;
+        const runtimeVersion = latestRuntimeEvidence?.runtimeVersion ?? null;
         const capabilities = (["summary", "conversation"] as const).map((capability) => {
           const model = capability === "summary" ? summaryModel : conversationModel;
           const readinessKey = this.gatewayReadinessKey(record.id, capability, credentialIdentity, model);
@@ -669,7 +703,7 @@ export class AgentConnectionCenter {
             capability,
             declared: true,
             currentReadiness,
-            readinessHistory: this.host.listAgentConnectionReadinessHistory(record.id, capability),
+            readinessHistory: readinessHistory[capability],
             disclosure: {
               required: !disclosureAccepted,
               disclosureVersion,
@@ -696,7 +730,18 @@ export class AgentConnectionCenter {
             connected: keyConfigured,
             credentialSource: "api-key" as const,
             keyConfigured,
+            runtimeVersion,
+            minimumVersion: null,
             compatibilityTarget: "v0.23.0-rc.1" as const,
+            versionSource: runtimeVersion ? "readiness-history" as const : "unverified" as const,
+            supported: runtimeVersion ? runtimeVersion === CLIPROXYAPI_CONTRACT_VERSION : null,
+            features: [
+              "openai-responses",
+              "exact-model",
+              "no-provider-fallback",
+              "summary",
+              "conversation",
+            ] as const,
           },
           capabilities,
           settings: {

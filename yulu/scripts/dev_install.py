@@ -368,11 +368,15 @@ def _retire_obsolete_launchagents(
     for pattern in ("agent_queue_worker.py", "stt_daemon"):
         _run(["pkill", "-f", pattern], timeout=10, check=False)
 
-    still_loaded = []
-    for label in labels:
-        result = _run(["launchctl", "print", f"{domain}/{label}"], timeout=10, check=False)
-        if result.returncode == 0:
-            still_loaded.append(label)
+    result = _run(["launchctl", "list"], timeout=10, check=False)
+    if result.returncode != 0:
+        raise RuntimeError("unable to verify retired LaunchAgents with launchctl list")
+    loaded_labels = {
+        line.split()[-1]
+        for line in result.stdout.splitlines()
+        if line.split()
+    }
+    still_loaded = [label for label in labels if label in loaded_labels]
     if still_loaded:
         raise RuntimeError(f"retired LaunchAgents are still loaded: {', '.join(still_loaded)}")
     _cleanup_obsolete_stt_state(config_dir)

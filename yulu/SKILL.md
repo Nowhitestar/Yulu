@@ -286,8 +286,9 @@ scripts cannot bypass macOS privacy controls.
 ## Troubleshooting order
 
 1. **Capture:** `yulu status` and the native socket response.
-2. **Host:** `/healthz`, `launchctl print gui/$(id -u)/com.yulu.ui`, and
-   `yulu logs ui`.
+2. **Host:** `/healthz`, the installed `com.yulu.ui.plist`, the port-7777
+   listener, and `yulu logs ui`. Never use `launchctl print` for diagnosis
+   because its service document can contain credential-bearing environment fields.
 3. **Durability:** `yulu doctor --json` → `host_tasks` and the task state/error.
 4. **Hermes:** Agent capability in doctor and Hermes visibility on the stable
    LaunchAgent PATH.

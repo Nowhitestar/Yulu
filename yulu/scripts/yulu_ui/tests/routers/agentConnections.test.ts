@@ -604,7 +604,16 @@ describe("public Agent Connection Host contract", () => {
     expect(view.connections.find(({ id }: { id: string }) => id === "direct-xai"))
       .toMatchObject({
         lifecycle: "connected",
-        authorization: { connected: true, credentialSource: "oauth" },
+        authorization: {
+          connected: true,
+          credentialSource: "oauth",
+          runtimeVersion: null,
+          minimumVersion: null,
+          compatibilityTarget: "xai-api",
+          versionSource: "not-applicable",
+          supported: true,
+          features: ["transcription", "summary", "conversation", "no-provider-fallback"],
+        },
         settings: { credentialSource: "oauth" },
       });
     expect(setupResult.host.listAgentConnectionRecords().find(({ id }) => id === "direct-xai")?.settings)
@@ -829,7 +838,12 @@ describe("public Agent Connection Host contract", () => {
         connected: true,
         credentialSource: "api-key",
         keyConfigured: true,
+        runtimeVersion: null,
+        minimumVersion: null,
         compatibilityTarget: "v0.23.0-rc.1",
+        versionSource: "unverified",
+        supported: null,
+        features: ["openai-responses", "exact-model", "no-provider-fallback", "summary", "conversation"],
       },
       settings: expect.objectContaining({
         endpoint: "http://127.0.0.1:8317/v1",
@@ -847,12 +861,73 @@ describe("public Agent Connection Host contract", () => {
     expect(setupResult.gateway.probe).not.toHaveBeenCalled();
     expect(JSON.stringify(created).includes("least-privilege-key-never-project")).toBe(false);
 
+    const unknownEvidence: GatewayRuntimeEvidence = {
+      adapter: "cliproxyapi",
+      transport: "openai-responses-loopback-http",
+      runtimeVersion: "cliproxyapi-v0.23.0-rc.1-openai-responses",
+      endpoint: "http://127.0.0.1:8317/v1",
+      requestedProvider: null,
+      requestedModel: "gateway-summary-exact",
+      actualProvider: null,
+      actualModel: null,
+      requestId: null,
+      sessionId: null,
+      terminalStatus: "unknown",
+      fallbackOccurred: false,
+      toolsEnabled: false,
+    };
+    setupResult.host.recordAgentConnectionReadiness({
+      connectionId: "cliproxyapi",
+      capability: "summary",
+      status: "failed",
+      model: "gateway-summary-exact",
+      credentialSource: "api-key",
+      detail: "outcome unknown",
+      reason: "unknown_outcome",
+      runtimeEvidence: {
+        ...unknownEvidence,
+      },
+      testedAt: "2000-01-01T00:00:00.000Z",
+    });
+    expect((await caller.view()).connections
+      .find((item: { id: string }) => item.id === "cliproxyapi")?.authorization)
+      .toMatchObject({ runtimeVersion: null, versionSource: "unverified", supported: null });
+
     await caller.acceptDisclosure({ connectionId: "cliproxyapi", capability: "summary" });
     await caller.acceptDisclosure({ connectionId: "cliproxyapi", capability: "conversation" });
     const summaryReady = await caller.probe({ connectionId: "cliproxyapi", capability: "summary" });
     expect(summaryReady).toMatchObject({ capability: "summary", status: "ready", model: "gateway-summary-exact" });
     expect(summaryReady).not.toHaveProperty("reason");
     let view = await caller.view();
+    expect(view.connections.find((item: { id: string }) => item.id === "cliproxyapi")?.authorization)
+      .toMatchObject({
+        runtimeVersion: "cliproxyapi-v0.23.0-rc.1-openai-responses",
+        compatibilityTarget: "v0.23.0-rc.1",
+        versionSource: "readiness-history",
+        supported: true,
+      });
+    const gatewayRecord = setupResult.host.listAgentConnectionRecords()
+      .find((record) => record.id === "cliproxyapi")!;
+    setupResult.host.upsertAgentConnectionRecord({
+      id: gatewayRecord.id,
+      kind: gatewayRecord.kind,
+      adapter: gatewayRecord.adapter,
+      label: gatewayRecord.label,
+      lifecycle: gatewayRecord.lifecycle,
+      settings: { ...gatewayRecord.settings, endpoint: "http://127.0.0.1:8318/v1" },
+    });
+    expect((await caller.view()).connections
+      .find((item: { id: string }) => item.id === "cliproxyapi")?.authorization)
+      .toMatchObject({ runtimeVersion: null, versionSource: "unverified", supported: null });
+    setupResult.host.upsertAgentConnectionRecord({
+      id: gatewayRecord.id,
+      kind: gatewayRecord.kind,
+      adapter: gatewayRecord.adapter,
+      label: gatewayRecord.label,
+      lifecycle: gatewayRecord.lifecycle,
+      settings: gatewayRecord.settings,
+    });
+    await caller.probe({ connectionId: "cliproxyapi", capability: "summary" });
     expect(view.connections.find((item: { id: string }) => item.id === "cliproxyapi")?.capabilities)
       .toEqual(expect.arrayContaining([
         expect.objectContaining({ capability: "summary", currentReadiness: expect.objectContaining({ status: "ready" }) }),
@@ -913,7 +988,7 @@ describe("public Agent Connection Host contract", () => {
       model: "gateway-summary-exact",
     });
     expect(setupResult.host.listAgentConnectionReadinessHistory("cliproxyapi", "summary"))
-      .toEqual([expect.objectContaining({
+      .toEqual(expect.arrayContaining([expect.objectContaining({
         status: "ready",
         reason: null,
         runtimeEvidence: expect.objectContaining({
@@ -924,7 +999,7 @@ describe("public Agent Connection Host contract", () => {
           fallbackOccurred: false,
           toolsEnabled: false,
         }),
-      })]);
+      })]));
     setupResult.host.close();
   });
 

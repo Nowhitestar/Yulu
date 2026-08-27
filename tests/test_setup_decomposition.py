@@ -68,6 +68,33 @@ STUBBED_COMMANDS = [
 ]
 
 
+def test_runtime_install_paths_never_read_full_launchctl_service_documents():
+    """Service read-back must not expose environment fields containing credentials."""
+    for path in (SCRIPTS / "dev_install.py", SCRIPTS / "setup_daemons.sh"):
+        assert "launchctl\", \"print" not in path.read_text(encoding="utf-8")
+        assert "launchctl print" not in path.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    ("launchctl_body", "message"),
+    [
+        ('[[ "${1:-}" == "list" ]] && exit 42\nexit 0\n', "launchctl list"),
+        ('[[ "${1:-}" == "list" ]] && printf "%b\\n" "-\\t0\\tcom.yulu.sttdaemon"\nexit 0\n', "com.yulu.sttdaemon"),
+    ],
+)
+def test_setup_daemons_fails_closed_when_retired_launchagent_state_is_not_clean(
+    tmp_path, launchctl_body, message,
+):
+    shim = _make_shim_dir(tmp_path)
+    _write_executable(shim / "launchctl", launchctl_body)
+    env = _hermetic_env(tmp_path, shim)
+
+    result = run(["bash", str(SCRIPTS / "setup_daemons.sh"), "release"], cwd=SCRIPTS, env=env)
+
+    assert result.returncode != 0
+    assert message in result.stdout
+
+
 def run(cmd: list[str], cwd: Path, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
     child_env = os.environ.copy()
     if env:

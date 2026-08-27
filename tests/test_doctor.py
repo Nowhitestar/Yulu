@@ -3,6 +3,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+from urllib.error import URLError
 
 ROOT = Path(__file__).resolve().parents[1]
 DOCTOR = ROOT / "yulu" / "scripts" / "doctor.py"
@@ -13,6 +14,340 @@ def load_doctor():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+class _JsonResponse:
+    def __init__(self, payload):
+        self.payload = payload
+        self.status = 200
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False
+
+    def read(self, *_args):
+        return json.dumps(self.payload).encode("utf-8")
+
+
+def test_agent_connection_diagnostics_whitelist_current_history_and_remediation(monkeypatch):
+    doctor = load_doctor()
+    host_view = {
+        "result": {"data": {
+            "connections": [{
+                "id": "codex",
+                "kind": "supported-agent",
+                "adapter": "codex",
+                "label": "Codex",
+                "lifecycle": "connected",
+                "authorization": {
+                    "connected": True,
+                    "credentialSource": "runtime-oauth",
+                    "runtimeVersion": "0.144.4",
+                    "minimumVersion": "0.144.0",
+                    "supported": True,
+                    "features": ["account/read", "model/list", "thread/start"],
+                    "remediation": "Run codex login; api_key=never-report-this",
+                    "rawToken": "never-report-this",
+                },
+                "capabilities": [{
+                    "capability": "summary",
+                    "declared": True,
+                    "selected": True,
+                    "currentReadiness": {
+                        "status": "untested",
+                        "model": "gpt-5.6-sol",
+                        "testedAt": None,
+                        "detail": "Not tested in this Host process",
+                        "credentialSource": None,
+                        "prompt": "never-report-this",
+                    },
+                    "readinessHistory": [{
+                        "status": "ready",
+                        "model": "gpt-5.6-sol",
+                        "credentialSource": "runtime-oauth",
+                        "reason": None,
+                        "testedAt": "2026-08-28T01:00:00.000Z",
+                        "runtimeEvidence": {
+                            "adapter": "codex",
+                            "transport": "codex-app-server-stdio",
+                            "runtimeVersion": "0.144.4",
+                            "requestedProvider": "openai",
+                            "requestedModel": "gpt-5.6-sol",
+                            "actualProvider": "openai",
+                            "actualModel": "gpt-5.6-sol",
+                            "terminalStatus": "ready",
+                            "fallbackOccurred": False,
+                            "token": "never-report-this",
+                            "responseBody": "never-report-this",
+                        },
+                    }],
+                    "remediation": {"href": "/settings/llm?connection=codex&capability=summary"},
+                }],
+                "settings": {"executablePath": "/private/user/bin/codex", "token": "never-report-this"},
+            }],
+            "candidates": [],
+            "legacyConnections": [],
+        }},
+    }
+    monkeypatch.setattr(
+        "urllib.request.urlopen",
+        lambda *_args, **_kwargs: _JsonResponse(host_view),
+    )
+
+    report = doctor.check_agent_connections()
+
+    assert report["ok"] is True
+    assert report["source"] == "host-public-projection"
+    assert report["connections"] == [{
+        "id": "codex",
+        "kind": "supported-agent",
+        "adapter": "codex",
+        "label": "Codex",
+        "lifecycle": "connected",
+        "authorization": {"connected": True, "credential_source": "runtime-oauth"},
+        "compatibility": {
+            "runtime_version": "0.144.4",
+            "minimum_version": "0.144.0",
+            "target_version": None,
+            "version_source": None,
+            "supported": True,
+            "features": ["account/read", "model/list", "thread/start"],
+        },
+        "capabilities": [{
+            "capability": "summary",
+            "declared": True,
+            "selected": True,
+            "current_readiness": {
+                "status": "untested",
+                "model": "gpt-5.6-sol",
+                "tested_at": None,
+                "credential_source": None,
+                "reason": None,
+            },
+            "readiness_history": [{
+                "status": "ready",
+                "model": "gpt-5.6-sol",
+                "credential_source": "runtime-oauth",
+                "reason": None,
+                "tested_at": "2026-08-28T01:00:00.000Z",
+                "runtime_evidence": {
+                    "adapter": "codex",
+                    "transport": "codex-app-server-stdio",
+                    "runtime_version": "0.144.4",
+                    "requested_provider": "openai",
+                    "requested_model": "gpt-5.6-sol",
+                    "actual_provider": "openai",
+                    "actual_model": "gpt-5.6-sol",
+                    "terminal_status": "ready",
+                    "fallback_occurred": False,
+                    "tools_enabled": None,
+                    "cancellation_requested": None,
+                    "cancellation_confirmed": None,
+                },
+            }],
+            "remediation": "/settings/llm?connection=codex&capability=summary",
+        }],
+        "remediation": "/settings/llm?connection=codex",
+    }]
+    serialized = json.dumps(report)
+    assert "never-report-this" not in serialized
+    assert "executablePath" not in serialized
+    assert "rawToken" not in serialized
+
+
+def test_agent_connection_diagnostics_projects_adapter_contracts_and_history_source(monkeypatch):
+    doctor = load_doctor()
+    host_view = {
+        "result": {"data": {
+            "connections": [
+                {
+                    "id": "direct-xai",
+                    "kind": "direct-provider",
+                    "adapter": "direct-xai",
+                    "label": "secret-looking-label-must-not-pass-through",
+                    "lifecycle": "connected",
+                    "authorization": {
+                        "connected": True,
+                        "credentialSource": "oauth",
+                        "runtimeVersion": None,
+                        "minimumVersion": None,
+                        "compatibilityTarget": "xai-api",
+                        "versionSource": "not-applicable",
+                        "supported": True,
+                        "features": ["transcription", "summary", "conversation", "no-provider-fallback"],
+                    },
+                    "capabilities": [],
+                },
+                {
+                    "id": "cliproxyapi",
+                    "kind": "gateway",
+                    "adapter": "cliproxyapi",
+                    "label": "arbitrary-label-must-not-pass-through",
+                    "lifecycle": "connected",
+                    "authorization": {
+                        "connected": True,
+                        "credentialSource": "api-key",
+                        "runtimeVersion": "cliproxyapi-v0.23.0-rc.1-openai-responses",
+                        "minimumVersion": None,
+                        "compatibilityTarget": "v0.23.0-rc.1",
+                        "versionSource": "readiness-history",
+                        "supported": True,
+                        "features": ["openai-responses", "exact-model", "summary", "conversation"],
+                    },
+                    "capabilities": [],
+                },
+            ],
+            "candidates": [],
+            "legacyConnections": [],
+        }},
+    }
+    monkeypatch.setattr("urllib.request.urlopen", lambda *_args, **_kwargs: _JsonResponse(host_view))
+
+    report = doctor.check_agent_connections()
+
+    direct, gateway = report["connections"]
+    assert direct["label"] == "xAI"
+    assert direct["compatibility"] == {
+        "runtime_version": None,
+        "minimum_version": None,
+        "target_version": "xai-api",
+        "version_source": "not-applicable",
+        "supported": True,
+        "features": ["transcription", "summary", "conversation", "no-provider-fallback"],
+    }
+    assert gateway["label"] == "CLIProxyAPI"
+    assert gateway["compatibility"]["runtime_version"] == "cliproxyapi-v0.23.0-rc.1-openai-responses"
+    assert gateway["compatibility"]["target_version"] == "v0.23.0-rc.1"
+    assert gateway["compatibility"]["version_source"] == "readiness-history"
+    assert gateway["compatibility"]["supported"] is True
+    serialized = json.dumps(report)
+    assert "secret-looking-label" not in serialized
+    assert "arbitrary-label" not in serialized
+
+
+def test_agent_connection_diagnostics_fail_closed_without_host(monkeypatch):
+    doctor = load_doctor()
+    monkeypatch.setattr(
+        "urllib.request.urlopen",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(URLError("offline token=never-report-this")),
+    )
+
+    report = doctor.check_agent_connections()
+
+    assert report == {
+        "ok": False,
+        "source": "host-public-projection",
+        "connections": [],
+        "candidates": [],
+        "legacy_connections": [],
+        "error": "Agent Connection diagnostics are unavailable from the local Host",
+        "remediation": "/settings/llm",
+    }
+    assert "never-report-this" not in json.dumps(report)
+
+
+def test_doctor_process_projection_never_returns_command_arguments():
+    doctor = load_doctor()
+    raw = [
+        "user 123 0.0 0.1 1 2 ?? S 10:00AM 0:00.01 /Users/user/.yulu/yulu/scripts/server --mcp-token never-report-this",
+        "user 456 0.0 0.1 1 2 ?? S 10:00AM 0:00.01 /Users/user/legacy/yulu/server --api-key never-report-this",
+    ]
+
+    projected = doctor._safe_process_projection(
+        raw,
+        runtime_root=Path("/Users/user/.yulu"),
+        legacy_root=Path("/Users/user/legacy/yulu"),
+    )
+
+    assert projected == [
+        {"pid": 123, "executable": "server", "scope": "runtime"},
+        {"pid": 456, "executable": "server", "scope": "legacy"},
+    ]
+    assert "never-report-this" not in json.dumps(projected)
+
+
+def test_collect_report_includes_host_agent_connection_diagnostics(tmp_path, monkeypatch):
+    doctor = load_doctor()
+    expected = {
+        "ok": True,
+        "source": "host-public-projection",
+        "connections": [],
+        "candidates": [],
+        "legacy_connections": [],
+        "error": None,
+        "remediation": None,
+    }
+    monkeypatch.setattr(doctor, "_yulu_processes", lambda: [])
+    monkeypatch.setattr(doctor, "_git_info", lambda _root: {"is_repo": True})
+    monkeypatch.setattr(doctor, "_install_info", lambda _root: {"present": False})
+    monkeypatch.setattr(doctor, "_check_command", lambda name, args=None: {
+        "name": name, "ok": False, "path": "",
+    })
+    monkeypatch.setattr(doctor, "_socket_status", lambda _path: {"exists": False})
+    monkeypatch.setattr(doctor, "check_search_index", lambda _config: {"ok": False})
+    monkeypatch.setattr(doctor, "check_yulu_ui", lambda *_args: {"healthz_ok": True})
+    monkeypatch.setattr(doctor, "check_agent_connections", lambda: expected)
+    monkeypatch.setattr(doctor, "_host_capabilities", lambda *_args: {})
+
+    report = doctor.collect_report(
+        source_root=ROOT,
+        runtime_root=tmp_path,
+        legacy_root=tmp_path / "legacy",
+        config_dir=tmp_path / "config",
+    )
+
+    assert report["agent_connections"] == expected
+
+
+def test_human_doctor_distinguishes_current_readiness_from_history(capsys):
+    doctor = load_doctor()
+    report = {
+        "source_root": "/runtime",
+        "source_git": {"is_repo": False},
+        "source_install": {"present": True, "version": "0.23.0", "source": "dev", "asset": None},
+        "runtime_exists": True,
+        "runtime_root": "/runtime",
+        "legacy_root": "/legacy",
+        "legacy_root_exists": False,
+        "legacy_processes": [],
+        "config_exists": True,
+        "config_dir": "/config",
+        "host_tasks": {},
+        "socket": {"path": "/config/audio.sock", "exists": True, "ok": True},
+        "checks": [],
+        "agent_connections": {
+            "ok": True,
+            "connections": [{
+                "adapter": "codex",
+                "label": "Codex",
+                "lifecycle": "connected",
+                "compatibility": {
+                    "runtime_version": "0.144.4",
+                    "supported": True,
+                    "features": ["model/list"],
+                },
+                "capabilities": [{
+                    "capability": "summary",
+                    "declared": True,
+                    "selected": True,
+                    "current_readiness": {"status": "untested"},
+                    "readiness_history": [{"status": "ready"}],
+                    "remediation": "/settings/llm?connection=codex&capability=summary",
+                }],
+                "remediation": None,
+            }],
+            "candidates": [],
+        },
+    }
+
+    doctor.print_human(report)
+    output = capsys.readouterr().out
+
+    assert "Codex: adapter=codex actual=0.144.4 target=n/a version_source=unverified supported=True" in output
+    assert "summary: declared=True selected=True current=untested history=1" in output
+    assert "repair: /settings/llm?connection=codex&capability=summary" in output
 
 
 def test_collect_report_identifies_source_runtime_and_legacy_paths():
@@ -108,7 +443,7 @@ def test_yulu_wrapper_passes_doctor_args(tmp_path):
     assert data["legacy_root_exists"] is False
 
 
-def test_release_runtime_without_git_is_healthy_source(tmp_path, capsys):
+def test_release_runtime_without_git_is_recognized_but_host_unavailability_fails_health(tmp_path, capsys):
     doctor = load_doctor()
     runtime = tmp_path / "runtime"
     runtime.mkdir()
@@ -125,7 +460,7 @@ def test_release_runtime_without_git_is_healthy_source(tmp_path, capsys):
         "--config-dir", str(tmp_path / "missing-config"),
     ])
 
-    assert code == 0
+    assert code == 1
     data = json.loads(capsys.readouterr().out)
     assert data["source_git"]["is_repo"] is False
     assert data["source_install"]["present"] is True
@@ -212,6 +547,37 @@ def test_enabled_agent_pipeline_fails_closed_when_runtime_is_unavailable(tmp_pat
         "source_install": {"present": False},
         "agent_pipeline": pipeline,
     }) is False
+
+
+def test_overall_health_fails_closed_for_unavailable_or_unverified_agent_connections():
+    doctor = load_doctor()
+    base = {
+        "checks": [{"name": "python3", "ok": True}],
+        "legacy_processes": [],
+        "source_git": {"is_repo": True},
+        "source_install": {"present": False},
+        "agent_pipeline": {"enabled": False, "ok": True},
+    }
+
+    assert doctor._overall_ok({
+        **base,
+        "agent_connections": {"ok": False, "connections": []},
+    }) is False
+    for supported in (False, None):
+        assert doctor._overall_ok({
+            **base,
+            "agent_connections": {
+                "ok": True,
+                "connections": [{"compatibility": {"supported": supported}}],
+            },
+        }) is False
+    assert doctor._overall_ok({
+        **base,
+        "agent_connections": {
+            "ok": True,
+            "connections": [{"compatibility": {"supported": True}}],
+        },
+    }) is True
 
 
 def test_hermes_contract_probes_required_command_surfaces(monkeypatch):

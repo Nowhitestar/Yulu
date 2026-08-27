@@ -18,6 +18,7 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 DEFAULT_SOURCE_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_RUNTIME_ROOT = Path.home() / ".yulu"
@@ -336,6 +337,268 @@ def _yulu_processes() -> list[str]:
     return [line for line in out.splitlines() if any(n in line for n in needles) and "doctor.py" not in line]
 
 
+def _safe_process_projection(
+    processes: list[str],
+    *,
+    runtime_root: Path,
+    legacy_root: Path,
+) -> list[dict[str, Any]]:
+    """Return process identity without command arguments or environment values."""
+    projected: list[dict[str, Any]] = []
+    for line in processes:
+        parts = line.split(None, 10)
+        if len(parts) < 11:
+            continue
+        try:
+            pid = int(parts[1])
+        except ValueError:
+            continue
+        command = parts[10].split(maxsplit=1)[0]
+        scope = "other"
+        if str(legacy_root) in line:
+            scope = "legacy"
+        elif str(runtime_root) in line:
+            scope = "runtime"
+        projected.append({
+            "pid": pid,
+            "executable": Path(command).name,
+            "scope": scope,
+        })
+    return projected
+
+
+_ADAPTERS = {"codex", "claude-code", "hermes", "openclaw", "direct-xai", "cliproxyapi"}
+_KINDS = {"supported-agent", "direct-provider", "gateway", "legacy-custom"}
+_LIFECYCLES = {"connected", "disconnected", "candidate", "legacy", "available"}
+_CAPABILITIES = {"transcription", "summary", "conversation"}
+_READINESS_STATUSES = {"ready", "failed", "untested"}
+_READINESS_REASONS = {"invalid_model", "readiness_failed", "unknown_outcome"}
+_CREDENTIAL_SOURCES = {"runtime-oauth", "oauth", "api-key"}
+_VERSION_SOURCES = {"live-runtime", "readiness-history", "not-applicable", "unverified"}
+_LABELS = {
+    "codex": "Codex",
+    "claude-code": "Claude Code",
+    "hermes": "Hermes",
+    "openclaw": "OpenClaw",
+    "direct-xai": "xAI",
+    "cliproxyapi": "CLIProxyAPI",
+}
+
+
+def _enum(value: Any, allowed: set[str]) -> str | None:
+    return value if isinstance(value, str) and value in allowed else None
+
+
+def _structured_text(value: Any, pattern: str, *, limit: int) -> str | None:
+    """Accept only the grammar of a named diagnostic field, never arbitrary text."""
+    if not isinstance(value, str) or not value or len(value) > limit:
+        return None
+    return value if re.fullmatch(pattern, value) else None
+
+
+def _connection_id(value: Any) -> str | None:
+    return _structured_text(value, r"[A-Za-z0-9][A-Za-z0-9._-]*", limit=200)
+
+
+def _model(value: Any) -> str | None:
+    return _structured_text(value, r"[A-Za-z0-9][A-Za-z0-9._:/+@-]*", limit=128)
+
+
+def _version(value: Any) -> str | None:
+    return _structured_text(value, r"[A-Za-z0-9][A-Za-z0-9._:+-]*", limit=128)
+
+
+def _feature(value: Any) -> str | None:
+    return _structured_text(value, r"[A-Za-z0-9][A-Za-z0-9._:/+-]*", limit=100)
+
+
+def _readiness_projection(value: Any) -> dict[str, Any]:
+    item = value if isinstance(value, dict) else {}
+    return {
+        "status": _enum(item.get("status"), _READINESS_STATUSES),
+        "model": _model(item.get("model")),
+        "tested_at": _structured_text(
+            item.get("testedAt"), r"[0-9TZ:.,+-]+", limit=64,
+        ),
+        "credential_source": _enum(item.get("credentialSource"), _CREDENTIAL_SOURCES),
+        "reason": _enum(item.get("reason"), _READINESS_REASONS),
+    }
+
+
+def _runtime_evidence_projection(value: Any) -> dict[str, Any]:
+    item = value if isinstance(value, dict) else {}
+    text_fields = {
+        "adapter": "adapter",
+        "transport": "transport",
+        "runtime_version": "runtimeVersion",
+        "requested_provider": "requestedProvider",
+        "requested_model": "requestedModel",
+        "actual_provider": "actualProvider",
+        "actual_model": "actualModel",
+        "terminal_status": "terminalStatus",
+    }
+    projected = {}
+    for output, source in text_fields.items():
+        raw = item.get(source)
+        if output in {"runtime_version"}:
+            projected[output] = _version(raw)
+        elif output in {"requested_model", "actual_model"}:
+            projected[output] = _model(raw)
+        elif output == "terminal_status":
+            projected[output] = _enum(raw, {"ready", "failed", "unknown"})
+        else:
+            projected[output] = _structured_text(
+                raw, r"[A-Za-z0-9][A-Za-z0-9._:/+-]*", limit=128,
+            )
+    projected.update({
+        "fallback_occurred": item.get("fallbackOccurred")
+        if isinstance(item.get("fallbackOccurred"), bool) else None,
+        "tools_enabled": item.get("toolsEnabled")
+        if isinstance(item.get("toolsEnabled"), bool) else None,
+        "cancellation_requested": item.get("cancellationRequested")
+        if isinstance(item.get("cancellationRequested"), bool) else None,
+        "cancellation_confirmed": item.get("cancellationConfirmed")
+        if isinstance(item.get("cancellationConfirmed"), bool) else None,
+    })
+    return projected
+
+
+def _history_projection(value: Any) -> list[dict[str, Any]]:
+    rows = value if isinstance(value, list) else []
+    projected: list[dict[str, Any]] = []
+    for raw in rows[:10]:
+        item = raw if isinstance(raw, dict) else {}
+        current = _readiness_projection(item)
+        current["runtime_evidence"] = _runtime_evidence_projection(item.get("runtimeEvidence"))
+        projected.append(current)
+    return projected
+
+
+def _connection_projection(value: Any) -> dict[str, Any]:
+    item = value if isinstance(value, dict) else {}
+    authorization = item.get("authorization") if isinstance(item.get("authorization"), dict) else {}
+    features = authorization.get("features") if isinstance(authorization.get("features"), list) else []
+    capabilities = item.get("capabilities") if isinstance(item.get("capabilities"), list) else []
+    connection_id = _connection_id(item.get("id"))
+    adapter = _enum(item.get("adapter"), _ADAPTERS)
+    projected_capabilities: list[dict[str, Any]] = []
+    for raw in capabilities[:10]:
+        capability = raw if isinstance(raw, dict) else {}
+        capability_name = _enum(capability.get("capability"), _CAPABILITIES)
+        needs_remediation = isinstance(capability.get("remediation"), dict)
+        projected_capabilities.append({
+            "capability": capability_name,
+            "declared": capability.get("declared") is True,
+            "selected": capability.get("selected") is True,
+            "current_readiness": _readiness_projection(capability.get("currentReadiness")),
+            "readiness_history": _history_projection(capability.get("readinessHistory")),
+            "remediation": (
+                f"/settings/llm?connection={quote(connection_id)}&capability={capability_name}"
+                if needs_remediation and connection_id and capability_name else None
+            ),
+        })
+    needs_remediation = bool(authorization.get("remediation")) or authorization.get("connected") is not True
+    if authorization.get("supported") is False:
+        needs_remediation = True
+    remediation = (
+        f"/settings/llm?connection={quote(connection_id)}"
+        if needs_remediation and connection_id else "/settings/llm" if needs_remediation else None
+    )
+    return {
+        "id": connection_id,
+        "kind": _enum(item.get("kind"), _KINDS),
+        "adapter": adapter,
+        "label": _LABELS.get(adapter, "Agent Connection"),
+        "lifecycle": _enum(item.get("lifecycle"), _LIFECYCLES),
+        "authorization": {
+            "connected": authorization.get("connected") is True,
+            "credential_source": _enum(authorization.get("credentialSource"), _CREDENTIAL_SOURCES),
+        },
+        "compatibility": {
+            "runtime_version": _version(authorization.get("runtimeVersion")),
+            "minimum_version": _version(authorization.get("minimumVersion")),
+            "target_version": _version(authorization.get("compatibilityTarget")),
+            "version_source": _enum(authorization.get("versionSource"), _VERSION_SOURCES),
+            "supported": authorization.get("supported")
+            if isinstance(authorization.get("supported"), bool) else None,
+            "features": [
+                safe for feature in features[:100] if (safe := _feature(feature))
+            ],
+        },
+        "capabilities": projected_capabilities,
+        "remediation": remediation,
+    }
+
+
+def _simple_connection_projection(value: Any) -> dict[str, Any]:
+    item = value if isinstance(value, dict) else {}
+    capabilities = item.get("capabilities") if isinstance(item.get("capabilities"), list) else []
+    adapter = _enum(item.get("adapter"), _ADAPTERS)
+    connection_id = _connection_id(item.get("id"))
+    lifecycle = _enum(item.get("lifecycle"), _LIFECYCLES)
+    remediation_key = "candidate" if lifecycle == "candidate" else "legacy"
+    return {
+        "id": connection_id,
+        "adapter": adapter,
+        "label": _LABELS.get(adapter, "Agent Connection"),
+        "lifecycle": lifecycle,
+        "capabilities": [
+            safe for capability in capabilities[:10]
+            if (safe := _enum(capability, _CAPABILITIES))
+        ],
+        "remediation": (
+            f"/settings/llm?{remediation_key}={quote(connection_id)}"
+            if connection_id else "/settings/llm"
+        ),
+    }
+
+
+def _agent_connections_unavailable() -> dict[str, Any]:
+    return {
+        "ok": False,
+        "source": "host-public-projection",
+        "connections": [],
+        "candidates": [],
+        "legacy_connections": [],
+        "error": "Agent Connection diagnostics are unavailable from the local Host",
+        "remediation": "/settings/llm",
+    }
+
+
+def check_agent_connections(timeout: float = 2.0) -> dict[str, Any]:
+    """Read and whitelist the Host's public, quota-free Agent Connection view."""
+    try:
+        import urllib.request
+
+        with urllib.request.urlopen(
+            "http://127.0.0.1:7777/trpc/agentConnections.view",
+            timeout=timeout,
+        ) as response:
+            body = response.read(2_000_001)
+            if response.status != 200 or len(body) > 2_000_000:
+                return _agent_connections_unavailable()
+        envelope = json.loads(body.decode("utf-8"))
+        data = envelope.get("result", {}).get("data", {})
+        if not isinstance(data, dict):
+            return _agent_connections_unavailable()
+        connections = data.get("connections")
+        candidates = data.get("candidates")
+        legacy = data.get("legacyConnections")
+        if not all(isinstance(items, list) for items in (connections, candidates, legacy)):
+            return _agent_connections_unavailable()
+        return {
+            "ok": True,
+            "source": "host-public-projection",
+            "connections": [_connection_projection(item) for item in connections[:100]],
+            "candidates": [_simple_connection_projection(item) for item in candidates[:100]],
+            "legacy_connections": [_simple_connection_projection(item) for item in legacy[:100]],
+            "error": None,
+            "remediation": None,
+        }
+    except Exception:
+        return _agent_connections_unavailable()
+
+
 def check_search_index(config_dir: Path) -> dict[str, Any]:
     """Phase 6 health check: open search.sqlite via search.reader.doctor()
     and return a uniform dict. Always returns a dict — never raises —
@@ -497,9 +760,13 @@ def collect_report(
     legacy_root = Path(legacy_root).expanduser()
     config_dir = Path(config_dir).expanduser()
 
-    processes = _yulu_processes()
-    legacy_processes = [p for p in processes if str(legacy_root) in p]
-    runtime_processes = [p for p in processes if str(runtime_root) in p]
+    processes = _safe_process_projection(
+        _yulu_processes(),
+        runtime_root=runtime_root,
+        legacy_root=legacy_root,
+    )
+    legacy_processes = [p for p in processes if p.get("scope") == "legacy"]
+    runtime_processes = [p for p in processes if p.get("scope") == "runtime"]
 
     checks = [
         _check_command("python3", ["--version"]),
@@ -513,6 +780,11 @@ def collect_report(
 
     config_path = config_dir / "config.json"
     ui_report = check_yulu_ui(runtime_root / "yulu" / "scripts", config_dir)
+    agent_connections = (
+        check_agent_connections()
+        if ui_report.get("healthz_ok")
+        else _agent_connections_unavailable()
+    )
     hermes_check = next((item for item in checks if item.get("name") == "hermes"), {})
     hermes_contract = check_hermes_cli_contract(
         str(hermes_check.get("path") or "") if hermes_check.get("ok") else None
@@ -546,6 +818,7 @@ def collect_report(
         # source checkout — a production install (source_root != runtime_root) now reports the
         # installed UI dist honestly. When source_root == runtime_root (dev), behavior is unchanged.
         "yulu_ui": ui_report,
+        "agent_connections": agent_connections,
         "agent_pipeline": agent_pipeline,
         "host_capabilities": _host_capabilities(config_dir, runtime_root),
         "privacy_opt_in": _privacy_opt_in(config_dir),
@@ -568,6 +841,15 @@ def _overall_ok(report: dict[str, Any]) -> bool:
     pipeline = report.get("agent_pipeline", {})
     if pipeline.get("enabled") and not pipeline.get("ok"):
         return False
+    connections = report.get("agent_connections")
+    if connections is not None:
+        if not connections.get("ok"):
+            return False
+        if any(
+            connection.get("compatibility", {}).get("supported") is not True
+            for connection in connections.get("connections", [])
+        ):
+            return False
     return True
 
 
@@ -642,6 +924,43 @@ def print_human(report: dict[str, Any]) -> None:
         )
         if enabled and pipeline.get("reasons"):
             print("  unavailable: " + ", ".join(str(item) for item in pipeline["reasons"]))
+    agent_connections = report.get("agent_connections", {})
+    if agent_connections:
+        print(
+            f"{mark(bool(agent_connections.get('ok')))} agent connections: "
+            f"configured={len(agent_connections.get('connections', []))} "
+            f"candidates={len(agent_connections.get('candidates', []))}"
+        )
+        for connection in agent_connections.get("connections", []):
+            compatibility = connection.get("compatibility", {})
+            runtime_version = compatibility.get("runtime_version") or "n/a"
+            version_source = compatibility.get("version_source") or "unverified"
+            target_version = compatibility.get("target_version") or "n/a"
+            supported = compatibility.get("supported")
+            print(
+                f"  {connection.get('label') or connection.get('adapter')}: "
+                f"adapter={connection.get('adapter')} actual={runtime_version} "
+                f"target={target_version} version_source={version_source} "
+                f"supported={supported} lifecycle={connection.get('lifecycle')}"
+            )
+            features = compatibility.get("features", [])
+            if features:
+                print("    features: " + ", ".join(str(item) for item in features))
+            for capability in connection.get("capabilities", []):
+                current = capability.get("current_readiness", {})
+                history = capability.get("readiness_history", [])
+                print(
+                    f"    {capability.get('capability')}: declared={capability.get('declared')} "
+                    f"selected={capability.get('selected')} current={current.get('status')} "
+                    f"history={len(history)}"
+                )
+                if capability.get("remediation"):
+                    print(f"      repair: {capability['remediation']}")
+            if connection.get("remediation"):
+                print(f"    repair: {connection['remediation']}")
+        if agent_connections.get("error"):
+            print(f"  error: {agent_connections['error']}")
+            print(f"  repair: {agent_connections.get('remediation')}")
     hc = report.get("host_capabilities", {})
     if hc:
         caps = hc.get("capabilities", {}) or {}

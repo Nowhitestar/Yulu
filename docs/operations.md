@@ -50,11 +50,15 @@ permission state. `recording` may be true or false.
 
 ```bash
 curl -fsS http://127.0.0.1:7777/healthz
-launchctl print "gui/$(id -u)/com.yulu.ui" | head -40
+plutil -p ~/Library/LaunchAgents/com.yulu.ui.plist
+lsof -nP -iTCP:7777 -sTCP:LISTEN
 ```
 
 `/healthz` proves only that the Host process is reachable. It does not prove that
-Hermes is installed or that a recording task can finish.
+Hermes is installed or that a recording task can finish. Do not use
+`launchctl print` for diagnosis: a service document can include credential-bearing
+environment fields. The plist, listening socket, logs, health endpoint, and doctor
+provide the required secret-safe read-back.
 
 ### 3. Authenticated MCP
 
@@ -86,8 +90,20 @@ Inspect these report sections:
 | `yulu_ui` | built server present and `healthz_ok=true` |
 | `host_tasks` | database readable; state counts match expected work |
 | `host_capabilities` | Hermes is usable and the recording directory is usable |
+| `agent_connections` | each configured adapter reports version/feature compatibility, capability matrix, current readiness, history, and repair path independently |
 | `agent_pipeline.components.hermes_phase_mcp` | both `yulu_artifact` and `yulu_delivery` are enabled |
 | `legacy_processes` | empty |
+
+`agent_connections.compatibility.runtime_version` is the observed `actual`, not
+the required target. Supported local Agent CLIs use `version_source=live-runtime`;
+direct xAI reports `actual=null` with `version_source=not-applicable`; and
+CLIProxyAPI reports `version_source=readiness-history` only after a persisted,
+terminal-ready probe whose exact model and endpoint still match the current
+configuration. Unknown Outcome and stale-endpoint history remain explanatory
+and cannot establish compatibility. Its compatibility target is exactly
+`v0.23.0-rc.1`. An unverified or
+incompatible configured adapter makes `doctor` exit non-zero, while current
+readiness and persisted readiness history remain separate fields.
 
 The doctor is read-only. A successful process check does not mutate or retry a
 task.

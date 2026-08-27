@@ -191,8 +191,7 @@ def test_retire_obsolete_launchagents_boots_out_by_label_without_plists(monkeypa
 
     def fake_run(cmd, **kwargs):
         calls.append(cmd)
-        returncode = 1 if cmd[:2] == ["launchctl", "print"] else 0
-        return subprocess.CompletedProcess(cmd, returncode, stdout="", stderr="")
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
 
     monkeypatch.setattr(dev_install, "_run", fake_run)
     config_dir = tmp_path / "config"
@@ -207,6 +206,50 @@ def test_retire_obsolete_launchagents_boots_out_by_label_without_plists(monkeypa
     assert ["launchctl", "bootout", f"{domain}/com.yulu.agentqueue"] in calls
     assert ["pkill", "-f", "stt_daemon"] in calls
     assert ["pkill", "-f", "agent_queue_worker.py"] in calls
+    assert ["launchctl", "list"] in calls
+    assert not any(cmd[:2] == ["launchctl", "print"] for cmd in calls)
+
+
+def test_retire_obsolete_launchagents_fails_closed_when_list_still_contains_label(monkeypatch, tmp_path):
+    def fake_run(cmd, **kwargs):
+        stdout = "-\t0\tcom.yulu.sttdaemon\n" if cmd == ["launchctl", "list"] else ""
+        return subprocess.CompletedProcess(cmd, 0, stdout=stdout, stderr="")
+
+    monkeypatch.setattr(dev_install, "_run", fake_run)
+    config_dir = tmp_path / "config"
+    launch_agents = tmp_path / "LaunchAgents"
+    config_dir.mkdir()
+    launch_agents.mkdir()
+
+    try:
+        dev_install._retire_obsolete_launchagents(config_dir, launch_agents)
+    except RuntimeError as exc:
+        assert "com.yulu.sttdaemon" in str(exc)
+    else:
+        raise AssertionError("a still-loaded retired LaunchAgent must stop installation")
+
+
+def test_retire_obsolete_launchagents_fails_closed_when_list_fails(monkeypatch, tmp_path):
+    def fake_run(cmd, **kwargs):
+        return subprocess.CompletedProcess(
+            cmd,
+            1 if cmd == ["launchctl", "list"] else 0,
+            stdout="",
+            stderr="unavailable",
+        )
+
+    monkeypatch.setattr(dev_install, "_run", fake_run)
+    config_dir = tmp_path / "config"
+    launch_agents = tmp_path / "LaunchAgents"
+    config_dir.mkdir()
+    launch_agents.mkdir()
+
+    try:
+        dev_install._retire_obsolete_launchagents(config_dir, launch_agents)
+    except RuntimeError as exc:
+        assert "launchctl list" in str(exc)
+    else:
+        raise AssertionError("an unverifiable retired LaunchAgent state must stop installation")
 
 
 def test_kill_legacy_processes_kills_status_agent_child(monkeypatch, tmp_path):

@@ -69,9 +69,14 @@ setup_daemons() {
     done
     pkill -f "agent_queue_worker.py" 2>/dev/null || true
     pkill -f "stt_daemon" 2>/dev/null || true
+    local loaded_labels
+    loaded_labels="$(launchctl list 2>/dev/null | awk 'NF { print $NF }')" || {
+        err "无法通过 launchctl list 验证 legacy LaunchAgent 状态"
+        return 1
+    }
     for obsolete in com.yulu.agentqueue.plist com.yulu.sttdaemon.plist; do
         label="${obsolete%.plist}"
-        if launchctl print "$launch_domain/$label" >/dev/null 2>&1; then
+        if grep -Fqx "$label" <<<"$loaded_labels"; then
             err "legacy $label 仍处于加载状态，停止安装以避免重复执行"
             retire_failed=true
         fi
