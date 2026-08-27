@@ -14,6 +14,7 @@ const MAX_HELPER_OUTPUT_BYTES = 128_000;
 const MAX_PROVIDER_SECRET_BYTES = 4_096;
 const MAX_POLL_NETWORK_FAILURES = 5;
 const XAI_API_KEY_SLOT = "direct.xai";
+const CLIPROXYAPI_KEY_SLOT_RE = /^gateway\.cliproxyapi\.[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export type XaiCredentialSource = "oauth" | "api-key";
 
@@ -226,7 +227,9 @@ export class KeychainProviderSecretStore implements XaiApiKeyStore {
     private readonly helperPath: string,
     private readonly slot: string,
   ) {
-    if (slot !== XAI_API_KEY_SLOT) throw new Error("无效的提供商钥匙串槽位");
+    if (slot !== XAI_API_KEY_SLOT && !CLIPROXYAPI_KEY_SLOT_RE.test(slot)) {
+      throw new Error("无效的提供商钥匙串槽位");
+    }
   }
 
   async configured(): Promise<boolean> {
@@ -250,7 +253,7 @@ export class KeychainProviderSecretStore implements XaiApiKeyStore {
 
   async write(secret: string): Promise<void> {
     if (!secret || Buffer.byteLength(secret, "utf8") > MAX_PROVIDER_SECRET_BYTES) {
-      throw new Error("xAI API Key 长度无效");
+      throw new Error("提供商 API Key 长度无效");
     }
     const result = await runKeychainHelper(
       this.helperPath,

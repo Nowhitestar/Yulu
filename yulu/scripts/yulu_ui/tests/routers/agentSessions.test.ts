@@ -7,6 +7,7 @@ import { createCaller, type AppContext } from "../../src/trpc.js";
 import { updateAgentSessionNativeSession } from "../../src/agentSessionStore.js";
 import {
   CLAUDE_CODE_CONVERSATION_DISCLOSURE_VERSION,
+  CLIPROXYAPI_CONVERSATION_DISCLOSURE_VERSION,
   CODEX_CONVERSATION_DISCLOSURE_VERSION,
   XAI_CONVERSATION_DISCLOSURE_VERSION,
 } from "../../src/conversationDataDisclosure.js";
@@ -34,6 +35,23 @@ function makeCtx(configDir: string, config: Record<string, unknown> = {
         label: "Claude Code",
         lifecycle: "available",
         settings: { executablePath: "/fake/claude", conversationModel: "claude-sonnet-5" },
+      }, {
+        id: "cliproxyapi",
+        kind: "gateway",
+        adapter: "cliproxyapi",
+        label: "CLIProxyAPI",
+        lifecycle: "available",
+        settings: {
+          endpoint: "http://127.0.0.1:8317/v1",
+          httpsApproved: false,
+          conversationModel: "gateway-conversation-exact",
+          credentialClass: "api-key",
+          credentialIdentity: "gateway.cliproxyapi.00000000-0000-4000-8000-000000000137",
+          conversationDisclosureIdentity: {
+            endpoint: "http://127.0.0.1:8317/v1",
+            credentialIdentity: "gateway.cliproxyapi.00000000-0000-4000-8000-000000000137",
+          },
+        },
       }],
       getAgentConnectionDisclosure: () => ({
         connectionId: "direct-xai",
@@ -274,6 +292,63 @@ describe("agentSessionsRouter", () => {
       provider: "claude-code",
       connectionId: "claude-code",
       model: "claude-sonnet-5",
+    });
+  });
+
+  it("snapshots the Gateway endpoint, model, credential class, and disclosure for a new conversation", async () => {
+    const root = mkdtempSync(join(tmpdir(), "agent-sessions-"));
+    roots.push(root);
+    const config = {
+      intelligence: {
+        conversation: {
+          provider: "agent",
+          connectionId: "cliproxyapi",
+          model: "gateway-conversation-exact",
+        },
+      },
+      llm: { enabled: false, command: null, agent: { provider: "auto" } },
+    };
+    const ctx = makeCtx(root, config);
+    const assertGatewayConversationReady = vi.fn(async () => undefined);
+    ctx.agentConnections = { assertGatewayConversationReady } as never;
+    let accepted = false;
+    ctx.host.getAgentConnectionDisclosure = () => accepted ? {
+      connectionId: "cliproxyapi",
+      capability: "conversation",
+      disclosureVersion: CLIPROXYAPI_CONVERSATION_DISCLOSURE_VERSION,
+      decision: "accepted",
+      decidedAt: "2026-08-27T00:00:00.000Z",
+    } : null;
+    const caller = createCaller(agentSessionsRouter, ctx);
+
+    await expect(caller.create({ title: "Pinned Gateway" }))
+      .rejects.toThrow("CLIProxyAPI Conversation data path disclosure");
+    accepted = true;
+    const created = await caller.create({ title: "Pinned Gateway" });
+    expect(created).toMatchObject({
+      provider: "cliproxyapi",
+      connectionId: "cliproxyapi",
+      endpointIdentity: "http://127.0.0.1:8317/v1",
+      model: "gateway-conversation-exact",
+      credentialSource: "api-key",
+      credentialIdentity: "gateway.cliproxyapi.00000000-0000-4000-8000-000000000137",
+      disclosureVersion: CLIPROXYAPI_CONVERSATION_DISCLOSURE_VERSION,
+      runtimeLabel: "CLIProxyAPI",
+    });
+    expect(assertGatewayConversationReady).toHaveBeenCalledWith({
+      connectionId: "cliproxyapi",
+      model: "gateway-conversation-exact",
+    });
+
+    config.intelligence.conversation = {
+      provider: "agent",
+      connectionId: "codex",
+      model: "gpt-5.6-sol",
+    } as never;
+    expect(await caller.get({ id: created.id })).toMatchObject({
+      provider: "cliproxyapi",
+      endpointIdentity: "http://127.0.0.1:8317/v1",
+      model: "gateway-conversation-exact",
     });
   });
 

@@ -9,7 +9,12 @@ import {
   type RecordingAgentGateway,
 } from "./agentGateway.js";
 import { ArtifactStore } from "./artifactStore.js";
-import { HostStore, type AgentTask, type AgentTaskTrigger } from "./hostStore.js";
+import {
+  HostStore,
+  type AgentTask,
+  type AgentTaskTrigger,
+  type SummaryCommitRuntimeEvidence,
+} from "./hostStore.js";
 import type { SummaryCredentialClass } from "./hostStore.js";
 import {
   InvalidPromptInstructionsError,
@@ -42,9 +47,11 @@ import {
   hasSupportedAgentSummaryIdentity,
   hasSupportedAgentSummaryReadinessProof,
   ClaudeCodeSummaryUnknownOutcomeError,
+  GatewaySummaryUnknownOutcomeError,
   type SupportedAgentSummaryAdapter,
   type SupportedAgentSummaryGateway,
 } from "./summaryProviderReadiness.js";
+import { isExactGatewayRuntimeEvidence } from "./cliProxyApiAdapter.js";
 
 const REC_FILE_RE = /^(.+?)_(\d{8})_(\d{6})\.wav$/;
 const DISPATCH_POLL_MS = 15_000;
@@ -153,7 +160,9 @@ interface PreparedRecordingTask {
   summaryCredentialSource: XaiCredentialSource | null;
   summaryConnectionId: string | null;
   summaryCredentialClass: SummaryCredentialClass | null;
+  summaryCredentialIdentity: string | null;
   summaryDisclosureVersion: string | null;
+  summaryEndpointIdentity: string | null;
   instructions: string;
   trigger: AgentTaskTrigger;
 }
@@ -206,7 +215,9 @@ export class RecordingPipeline {
       summaryCredentialSource: summary.credentialSource,
       summaryConnectionId: summary.connectionId,
       summaryCredentialClass: summary.credentialClass,
+      summaryCredentialIdentity: summary.credentialIdentity,
       summaryDisclosureVersion: summary.disclosureVersion,
+      summaryEndpointIdentity: summary.endpointIdentity,
       instructions,
       trigger: "manual",
     }, `summary-regeneration:${randomUUID()}`);
@@ -271,7 +282,9 @@ export class RecordingPipeline {
       summaryCredentialSource: summary.credentialSource,
       summaryConnectionId: summary.connectionId,
       summaryCredentialClass: summary.credentialClass,
+      summaryCredentialIdentity: summary.credentialIdentity,
       summaryDisclosureVersion: summary.disclosureVersion,
+      summaryEndpointIdentity: summary.endpointIdentity,
       instructions,
       trigger: "automatic",
     };
@@ -310,7 +323,9 @@ export class RecordingPipeline {
     credentialSource: XaiCredentialSource | null;
     connectionId: string | null;
     credentialClass: SummaryCredentialClass | null;
+    credentialIdentity: string | null;
     disclosureVersion: string | null;
+    endpointIdentity: string | null;
   } {
     const selection = config.intelligence.summary;
     if (selection.provider === "xai") {
@@ -323,7 +338,9 @@ export class RecordingPipeline {
         credentialSource,
         connectionId: "direct-xai",
         credentialClass: credentialSource,
+        credentialIdentity: null,
         disclosureVersion: XAI_SUMMARY_DISCLOSURE_VERSION,
+        endpointIdentity: null,
       };
     }
     const explicitConnectionId = selection.provider === "agent" && "connectionId" in selection
@@ -342,7 +359,9 @@ export class RecordingPipeline {
       credentialSource: null,
       connectionId: null,
       credentialClass: null,
+      credentialIdentity: null,
       disclosureVersion: null,
+      endpointIdentity: null,
     };
     if (!hasSupportedAgentSummaryIdentity(readiness)) {
       throw new InvalidRecordingCompletionError("Supported Agent Summary Provider identity is invalid");
@@ -352,10 +371,14 @@ export class RecordingPipeline {
       model: readiness.model.trim(),
       credentialSource: null,
       connectionId: readiness.connectionId ?? null,
-      credentialClass: readiness.credentialSource === "runtime-oauth" ? "runtime-oauth" : null,
+      credentialClass: readiness.credentialSource === "runtime-oauth" || readiness.credentialSource === "api-key"
+        ? readiness.credentialSource
+        : null,
+      credentialIdentity: readiness.credentialIdentity ?? null,
       disclosureVersion: readiness.disclosure?.kind === "external"
         ? readiness.disclosure.disclosureVersion
         : null,
+      endpointIdentity: readiness.endpointIdentity ?? null,
     };
   }
 
@@ -377,7 +400,9 @@ export class RecordingPipeline {
       summaryCredentialSource: input.summaryCredentialSource,
       summaryConnectionId: input.summaryConnectionId,
       summaryCredentialClass: input.summaryCredentialClass,
+      summaryCredentialIdentity: input.summaryCredentialIdentity,
       summaryDisclosureVersion: input.summaryDisclosureVersion,
+      summaryEndpointIdentity: input.summaryEndpointIdentity,
       instructions: input.instructions,
       trigger: input.trigger,
     });
@@ -437,7 +462,9 @@ export class RecordingPipeline {
       summaryCredentialSource: summary.credentialSource,
       summaryConnectionId: summary.connectionId,
       summaryCredentialClass: summary.credentialClass,
+      summaryCredentialIdentity: summary.credentialIdentity,
       summaryDisclosureVersion: summary.disclosureVersion,
+      summaryEndpointIdentity: summary.endpointIdentity,
     });
     this.resumeDispatchNow();
     this.reconcileDispatchPolicy(config);
@@ -552,18 +579,29 @@ export class RecordingPipeline {
       connectionId: task.summaryConnectionId,
       provider: task.summaryProvider,
       model: task.summaryModel,
+      endpointIdentity: task.summaryEndpointIdentity,
+      credentialIdentity: task.summaryCredentialIdentity,
     });
     const provider = readiness.provider.trim().toLowerCase();
     const model = readiness.model.trim();
+    const pinnedGatewayPreflightRequired = provider === "cliproxyapi" &&
+      readiness.status === "untested" &&
+      readiness.endpointIdentity === task.summaryEndpointIdentity &&
+      readiness.credentialIdentity === task.summaryCredentialIdentity;
     if (
       !hasSupportedAgentSummaryIdentity(readiness) ||
-      !hasSupportedAgentSummaryReadinessProof(readiness) ||
+      (!hasSupportedAgentSummaryReadinessProof(readiness) && !pinnedGatewayPreflightRequired) ||
       provider !== task.summaryProvider || model !== task.summaryModel
+      || (provider === "cliproxyapi" && (
+        readiness.endpointIdentity !== task.summaryEndpointIdentity ||
+        readiness.credentialIdentity !== task.summaryCredentialIdentity
+      ))
     ) {
       throw new AgentUnavailableError("The pinned Supported Agent Summary Provider is not currently ready");
     }
     const disclosure = readiness.disclosure;
     if (
+      provider !== "cliproxyapi" &&
       disclosure?.kind === "external" &&
       (disclosure.connectionId
         ? this.options.store.getAgentConnectionDisclosure(disclosure.connectionId, "summary")?.disclosureVersion !==
@@ -583,6 +621,8 @@ export class RecordingPipeline {
       connectionId: task.summaryConnectionId,
       provider: task.summaryProvider,
       model: task.summaryModel,
+      endpointIdentity: task.summaryEndpointIdentity,
+      credentialIdentity: task.summaryCredentialIdentity,
     });
   }
 
@@ -615,6 +655,7 @@ export class RecordingPipeline {
 
   private async runTask(config: YuluConfig, task: AgentTask, leaseToken: string): Promise<boolean> {
     try {
+      const resumesCommittedArtifacts = task.state === "artifacts_committed";
       const usesXaiSummary = task.summaryProvider === "xai";
       const usesSupportedAgentSummary = Boolean(task.summaryConnectionId);
       let summaryGateway: RecordingAgentGateway | null = null;
@@ -626,7 +667,7 @@ export class RecordingPipeline {
           throw new AgentUnavailableError((error as Error).message);
         }
       }
-      if (!usesXaiSummary && !usesSupportedAgentSummary) {
+      if (!resumesCommittedArtifacts && !usesXaiSummary && !usesSupportedAgentSummary) {
         try {
           summaryGateway = deliveryGateway ?? this.resolveGateway(config);
         } catch (error) {
@@ -680,16 +721,46 @@ export class RecordingPipeline {
         this.options.store.recordTranscript(task.id, leaseToken, record);
         this.options.pubsub.publish("recordings-changed", { reason: "changed" });
       }
-      this.options.store.recordProgress(task.id, leaseToken, "summarizing", `Transcription provider: ${transcription.provider}`);
-      this.publish(task, "summarizing");
       const transcriptArtifact = this.options.store.listArtifacts(task.id)
         .find((artifact) => artifact.kind === "transcript");
       if (!transcriptArtifact) throw new Error("Summary execution requires a committed transcript artifact");
-      const current = this.options.store.recordSummaryInputSnapshot(
-        task.id,
-        leaseToken,
-        transcriptArtifact,
-      );
+      let recoveredArtifactSessionId: string | null = null;
+      if (resumesCommittedArtifacts) {
+        const summaryArtifact = this.options.store.listArtifacts(task.id)
+          .find((artifact) => artifact.kind === "summary");
+        const evidence = summaryArtifact?.provenance.runtimeEvidence as SummaryCommitRuntimeEvidence | undefined;
+        const provenanceSessionId = summaryArtifact?.provenance.artifactSessionId;
+        if (
+          !summaryArtifact || task.summaryProvider !== "cliproxyapi" ||
+          summaryArtifact.provenance.summaryProvider !== task.summaryProvider ||
+          summaryArtifact.provenance.summaryModel !== task.summaryModel ||
+          summaryArtifact.provenance.summaryConnectionId !== task.summaryConnectionId ||
+          summaryArtifact.provenance.summaryCredentialIdentity !== task.summaryCredentialIdentity ||
+          summaryArtifact.provenance.summaryEndpointIdentity !== task.summaryEndpointIdentity ||
+          !task.summaryEndpointIdentity || !evidence || typeof provenanceSessionId !== "string" ||
+          !isExactGatewayRuntimeEvidence(evidence, {
+            endpoint: task.summaryEndpointIdentity,
+            model: task.summaryModel,
+            terminalStatus: "ready",
+          }) || provenanceSessionId !== evidence.requestId
+        ) {
+          throw new Error("Recovered CLIProxyAPI Summary artifacts do not match the pinned committed identity");
+        }
+        recoveredArtifactSessionId = evidence.requestId;
+        this.options.store.recordPhaseSession(task.id, leaseToken, "artifact", recoveredArtifactSessionId);
+      }
+      if (!resumesCommittedArtifacts) {
+        this.options.store.recordProgress(
+          task.id,
+          leaseToken,
+          "summarizing",
+          `Transcription provider: ${transcription.provider}`,
+        );
+        this.publish(task, "summarizing");
+      }
+      const current = resumesCommittedArtifacts
+        ? task
+        : this.options.store.recordSummaryInputSnapshot(task.id, leaseToken, transcriptArtifact);
       const committedTranscript = this.options.artifacts.readCommittedTranscript(current, transcriptArtifact);
       const workflowInput = {
         task: current,
@@ -699,9 +770,9 @@ export class RecordingPipeline {
         committedTranscript,
         glossary,
       };
-      let artifactSessionId: string | null = null;
+      let artifactSessionId: string | null = recoveredArtifactSessionId;
       let artifactToolNames: string[] = [];
-      if (usesXaiSummary) {
+      if (!resumesCommittedArtifacts && usesXaiSummary) {
         if (!task.summaryCredentialSource) {
           throw new AgentUnavailableError(
             "xAI Summary Provider credential source was not pinned; create an explicit replacement attempt",
@@ -755,7 +826,7 @@ export class RecordingPipeline {
         });
         this.options.store.recordArtifacts(task.id, leaseToken, records);
         this.options.pubsub.publish("recordings-changed", { reason: "changed" });
-      } else {
+      } else if (!resumesCommittedArtifacts) {
         summaryGateway ??= usesSupportedAgentSummary
           ? this.resolveSupportedAgentGateway(config, task)
           : this.resolveGateway(config);
@@ -815,7 +886,9 @@ export class RecordingPipeline {
             summaryModel: task.summaryModel,
             summaryConnectionId: current.summaryConnectionId,
             summaryCredentialClass: current.summaryCredentialClass,
+            summaryCredentialIdentity: current.summaryCredentialIdentity,
             summaryDisclosureVersion: current.summaryDisclosureVersion,
+            summaryEndpointIdentity: current.summaryEndpointIdentity,
             summaryInputArtifactId: current.summaryInputArtifactId,
             summaryInputArtifactSha256: current.summaryInputArtifactSha256,
             runtimeEvidence: supportedResult.runtimeEvidence,
@@ -890,7 +963,17 @@ export class RecordingPipeline {
       this.options.pubsub.publish("recordings-changed", { reason: "changed" });
       return true;
     } catch (error) {
-      if (error instanceof ClaudeCodeSummaryUnknownOutcomeError) {
+      if (error instanceof GatewaySummaryUnknownOutcomeError) {
+        this.options.store.markGatewaySummaryUnknownOutcome(
+          task.id,
+          leaseToken,
+          error.message,
+          error.executionId,
+          error.evidence,
+        );
+        this.publish(task, "failed", error.message);
+        return true;
+      } else if (error instanceof ClaudeCodeSummaryUnknownOutcomeError) {
         this.options.store.markClaudeSummaryUnknownOutcome(
           task.id,
           leaseToken,

@@ -7,6 +7,7 @@ describe("agentTasksRouter", () => {
     const task = { id: "019f0000-0000-7000-8000-000000000001", state: "failed", leaseToken: "secret-lease" };
     const retry = vi.fn(() => ({ ...task, state: "queued" }));
     const ctx = {
+      uiMutationAuthorized: true,
       recordingPipeline: {
         list: () => [task],
         get: () => task,
@@ -38,6 +39,7 @@ describe("agentTasksRouter", () => {
   it("rejects retry when the durable state machine does not allow it", async () => {
     const id = "019f0000-0000-7000-8000-000000000002";
     const ctx = {
+      uiMutationAuthorized: true,
       recordingPipeline: {
         retry: () => { throw new Error(`task ${id} cannot retry from delivery_unverified`); },
       },
@@ -48,6 +50,18 @@ describe("agentTasksRouter", () => {
       code: "PRECONDITION_FAILED",
       message: `task ${id} cannot retry from delivery_unverified`,
     });
+  });
+
+  it("requires the UI bearer before retry can dispatch paid Gateway work", async () => {
+    const id = "019f0000-0000-7000-8000-000000000137";
+    const retry = vi.fn();
+    const caller = createCaller(agentTasksRouter, {
+      uiMutationAuthorized: false,
+      recordingPipeline: { retry },
+    } as unknown as AppContext);
+
+    await expect(caller.retry({ id })).rejects.toThrow("UI mutation bearer required");
+    expect(retry).not.toHaveBeenCalled();
   });
 
   it("exposes explicit confirm and abandon actions for uncertain Notion delivery", async () => {

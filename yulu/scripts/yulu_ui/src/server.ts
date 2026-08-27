@@ -55,6 +55,7 @@ import { CodexAgentAdapter } from "./codexAgentAdapter.js";
 import { CodexAppServerRuntimeClient } from "./codexAppServerClient.js";
 import { ClaudeCodeAdapter } from "./claudeCodeAdapter.js";
 import { ClaudeCodeCliRuntimeClient } from "./claudeCodeCliClient.js";
+import { CliProxyApiAdapter, SecureGatewayTransport } from "./cliProxyApiAdapter.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -136,6 +137,9 @@ async function startLockedServer(
     store: new KeychainXaiTokenStore(xaiKeychainHelper),
     apiKeyStore: new KeychainProviderSecretStore(xaiKeychainHelper, "direct.xai"),
   });
+  const gatewaySecretStore = (credentialIdentity: string) =>
+    new KeychainProviderSecretStore(xaiKeychainHelper, credentialIdentity);
+  const gatewayTransport = new SecureGatewayTransport();
   const xaiAudio = new XaiAudioClient(xaiCredentials);
   const xaiText = new XaiTextClient(xaiCredentials);
   const xaiReadiness = createXaiProviderReadiness();
@@ -167,6 +171,13 @@ async function startLockedServer(
         executable,
         cwd: runtimePaths.moviesDir,
       }),
+    }),
+    gatewaySecretStore,
+    cliProxyAdapter: ({ endpoint, httpsApproved, credentialIdentity }) => new CliProxyApiAdapter({
+      endpoint,
+      httpsApproved,
+      secrets: gatewaySecretStore(credentialIdentity),
+      transport: gatewayTransport,
     }),
   });
   const supportedAgentSummaryAdapter = agentConnections.summaryAdapter();
@@ -434,6 +445,9 @@ async function startLockedServer(
   });
 
   app.post("/api/voice-chat/ask", async (c) => {
+    if (!isAuthorizedToken(runtimePaths.mcpTokenJson, c.req.header("authorization") ?? "")) {
+      return c.json({ ok: false, error: "unauthorized" }, 401);
+    }
     let body: unknown;
     try {
       body = await c.req.json();
@@ -449,7 +463,7 @@ async function startLockedServer(
       scriptDir: runtimePaths.scriptDir,
       moviesDir: runtimePaths.moviesDir,
     });
-    const caller = createCaller(appRouter, ctx);
+    const caller = createCaller(appRouter, { ...ctx, uiMutationAuthorized: true });
     const agent = runtime.provider === "none" ? "agent" : runtime.provider;
     const existingSessionId = typeof input.sessionId === "string" && input.sessionId.trim()
       ? input.sessionId.trim()

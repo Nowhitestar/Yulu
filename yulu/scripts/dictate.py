@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import json
 import os
 import re
@@ -15,6 +16,7 @@ import sys
 import tempfile
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import wave
 from datetime import date, datetime
@@ -962,6 +964,39 @@ def open_voice_chat_url(url: str) -> None:
     )
 
 
+class _NoHostRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def _open_host_request_without_redirects(request: urllib.request.Request, timeout: float):
+    return urllib.request.build_opener(_NoHostRedirectHandler()).open(request, timeout=timeout)
+
+
+def _validated_voice_chat_origin(base_url: str) -> str:
+    try:
+        parsed = urllib.parse.urlsplit(base_url.strip())
+        host = parsed.hostname or ""
+        address = ipaddress.ip_address(host)
+        port = parsed.port
+    except (ValueError, TypeError) as exc:
+        raise DictationError("voice chat URL must use the exact local Yulu Host origin") from exc
+    expected_port = urllib.parse.urlsplit(DEFAULT_UI_BASE_URL).port
+    if (
+        parsed.scheme != "http"
+        or not address.is_loopback
+        or port != expected_port
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.path not in ("", "/")
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise DictationError("voice chat URL must use the exact local Yulu Host origin")
+    canonical_host = f"[{address.compressed}]" if address.version == 6 else address.compressed
+    return f"http://{canonical_host}:{port}"
+
+
 def send_voice_chat(
     *,
     question: str,
@@ -969,19 +1004,27 @@ def send_voice_chat(
     base_url: str = DEFAULT_UI_BASE_URL,
     open_console: bool = True,
 ) -> dict[str, Any]:
+    host_origin = _validated_voice_chat_origin(base_url)
+    token_doc = _load_json(MCP_TOKEN_PATH)
+    token = str(token_doc.get("token") or "").strip()
+    if not token:
+        raise DictationError("Yulu Host token is unavailable")
     payload = {"question": question, "defer": True}
     if session_id:
         payload["sessionId"] = session_id
     data = json.dumps(payload).encode("utf-8")
-    url = base_url.rstrip("/") + "/api/voice-chat/ask"
+    url = host_origin + "/api/voice-chat/ask"
     req = urllib.request.Request(
         url,
         data=data,
-        headers={"Content-Type": "application/json"},
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        },
         method="POST",
     )
     try:
-        with urllib.request.urlopen(req, timeout=125) as resp:
+        with _open_host_request_without_redirects(req, timeout=125) as resp:
             result = json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")
@@ -991,7 +1034,10 @@ def send_voice_chat(
     if not result.get("ok"):
         raise DictationError(f"voice chat failed: {result.get('error', 'unknown error')}")
     if open_console and result.get("url"):
-        open_voice_chat_url(base_url.rstrip("/") + str(result["url"]))
+        relative_url = str(result["url"])
+        if not relative_url.startswith("/") or relative_url.startswith("//"):
+            raise DictationError("voice chat failed: invalid local console URL")
+        open_voice_chat_url(host_origin + relative_url)
     return result
 
 

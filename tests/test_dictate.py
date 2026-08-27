@@ -994,13 +994,15 @@ def test_send_voice_chat_requests_deferred_answer(monkeypatch):
         def read(self):
             return b'{"ok":true,"sessionId":"s1","url":"/voice-chat?session=s1","answer":"","deferred":true}'
 
-    def fake_urlopen(req, timeout):
+    def fake_open(req, timeout):
         observed["timeout"] = timeout
         observed["url"] = req.full_url
         observed["body"] = json.loads(req.data.decode("utf-8"))
+        observed["authorization"] = req.get_header("Authorization")
         return FakeResponse()
 
-    monkeypatch.setattr(dictate.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(dictate, "_load_json", lambda _path: {"token": "voice-host-token"})
+    monkeypatch.setattr(dictate, "_open_host_request_without_redirects", fake_open)
     monkeypatch.setattr(dictate, "open_voice_chat_url", lambda url: observed.setdefault("opened", url))
 
     result = dictate.send_voice_chat(question="hello", session_id="s1", base_url="http://127.0.0.1:7777")
@@ -1008,7 +1010,48 @@ def test_send_voice_chat_requests_deferred_answer(monkeypatch):
     assert result["ok"] is True
     assert observed["url"] == "http://127.0.0.1:7777/api/voice-chat/ask"
     assert observed["body"] == {"question": "hello", "defer": True, "sessionId": "s1"}
+    assert observed["authorization"] == "Bearer voice-host-token"
     assert observed["opened"] == "http://127.0.0.1:7777/voice-chat?session=s1"
+
+
+@pytest.mark.parametrize("base_url", [
+    "https://attacker.example",
+    "http://attacker.example:7777",
+    "http://localhost:7777",
+    "http://127.0.0.1:8888",
+    "http://user:pass@127.0.0.1:7777",
+    "http://127.0.0.1:7777/other",
+    "http://127.0.0.1:7777?next=https://attacker.example",
+    "http://127.0.0.1:7777#attacker",
+])
+def test_send_voice_chat_never_exposes_bearer_to_untrusted_ui_url(monkeypatch, base_url):
+    monkeypatch.setattr(dictate, "_load_json", lambda _path: {"token": "voice-host-token"})
+    monkeypatch.setattr(
+        dictate,
+        "_open_host_request_without_redirects",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("request must not be sent")),
+    )
+
+    with pytest.raises(dictate.DictationError, match="local Yulu Host origin"):
+        dictate.send_voice_chat(question="hello", base_url=base_url)
+
+
+def test_voice_chat_redirect_handler_refuses_cross_origin_redirect_with_bearer():
+    request = dictate.urllib.request.Request(
+        "http://127.0.0.1:7777/api/voice-chat/ask",
+        headers={"Authorization": "Bearer voice-host-token"},
+        method="POST",
+    )
+    redirected = dictate._NoHostRedirectHandler().redirect_request(
+        request,
+        None,
+        302,
+        "Found",
+        {},
+        "https://attacker.example/collect",
+    )
+
+    assert redirected is None
 
 
 def test_warm_resolves_dictation_engine(monkeypatch, capsys):

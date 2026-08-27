@@ -7,8 +7,9 @@ import { HostStore } from "../../src/hostStore.js";
 import { AgentConnectionCenter } from "../../src/agentConnections.js";
 import { agentConnectionsRouter } from "../../src/routers/agentConnections.js";
 import { createCaller } from "../../src/trpc.js";
-import { createAgentSession } from "../../src/agentSessionStore.js";
+import { createAgentSession, readAgentSessionStore } from "../../src/agentSessionStore.js";
 import { CLAUDE_CODE_CONVERSATION_DISCLOSURE_VERSION } from "../../src/conversationDataDisclosure.js";
+import type { GatewayRuntimeEvidence } from "../../src/cliProxyApiAdapter.js";
 
 const roots: string[] = [];
 
@@ -216,6 +217,78 @@ function setup(
     converse: vi.fn(),
   };
   const claudeAdapter = vi.fn(() => claude);
+  const gatewayKeys = new Map<string, string>();
+  const gatewaySecretWrite = vi.fn(async (credentialIdentity: string, value: string) => {
+    gatewayKeys.set(credentialIdentity, value);
+  });
+  const gatewaySecretClear = vi.fn(async (credentialIdentity: string) => {
+    gatewayKeys.delete(credentialIdentity);
+  });
+  const gatewaySecretStore = vi.fn((credentialIdentity: string) => ({
+    read: vi.fn(async () => gatewayKeys.get(credentialIdentity) ?? null),
+    write: vi.fn(async (value: string) => gatewaySecretWrite(credentialIdentity, value)),
+    clear: vi.fn(async () => gatewaySecretClear(credentialIdentity)),
+  }));
+  const gatewayEvidence = (endpoint: string, model: string, requestId: string): GatewayRuntimeEvidence => ({
+    adapter: "cliproxyapi",
+    transport: endpoint.startsWith("https:")
+      ? "openai-responses-approved-https"
+      : "openai-responses-loopback-http",
+    runtimeVersion: "cliproxyapi-v0.23.0-rc.1-openai-responses",
+    endpoint,
+    requestedProvider: null,
+    requestedModel: model,
+    actualProvider: null,
+    actualModel: model,
+    requestId,
+    sessionId: null,
+    terminalStatus: "ready",
+    fallbackOccurred: false,
+    toolsEnabled: false,
+  });
+  const gateway = {
+    validateEndpoint: vi.fn(async function (this: { endpoint?: string }) {
+      const endpoint = this.endpoint ?? "http://127.0.0.1:8317/v1";
+      return { endpoint, transport: endpoint.startsWith("https:") ? "approved-https" as const : "loopback-http" as const };
+    }),
+    probe: vi.fn(),
+    summarize: vi.fn(async ({ model }: { model: string }) => ({
+      summary: "# Gateway Summary",
+      evidence: gatewayEvidence("http://127.0.0.1:8317/v1", model, "summary-request"),
+    })),
+    converse: vi.fn(async ({ model }: { model: string }) => ({
+      answer: "Gateway answer",
+      evidence: gatewayEvidence("http://127.0.0.1:8317/v1", model, "conversation-request"),
+    })),
+  };
+  const cliProxyAdapter = vi.fn(({
+    endpoint: rawEndpoint,
+    credentialIdentity,
+  }: { endpoint: string; httpsApproved: boolean; credentialIdentity: string }) => {
+    const endpoint = rawEndpoint.replace(/\/$/, "");
+    return {
+      validateEndpoint: vi.fn(async () => ({
+        endpoint,
+        transport: endpoint.startsWith("https:") ? "approved-https" as const : "loopback-http" as const,
+      })),
+      keyConfigured: vi.fn(async () => gatewayKeys.has(credentialIdentity)),
+      probe: vi.fn(async (input: { capability: "summary" | "conversation"; model: string }) => {
+        gateway.probe(input);
+        return {
+          status: "ready" as const,
+          evidence: gatewayEvidence(endpoint, input.model, `probe-${input.capability}`),
+        };
+      }),
+      summarize: vi.fn(async (input: { model: string; instructions: string; transcript: string }) => {
+        const result = await gateway.summarize(input);
+        return { ...result, evidence: gatewayEvidence(endpoint, input.model, "summary-request") };
+      }),
+      converse: vi.fn(async (input: { model: string }) => {
+        const result = await gateway.converse(input);
+        return { ...result, evidence: gatewayEvidence(endpoint, input.model, "conversation-request") };
+      }),
+    };
+  });
   const center = new AgentConnectionCenter({
     config: new ConfigManager(configPath),
     host,
@@ -226,6 +299,8 @@ function setup(
     discover,
     codexAdapter,
     claudeAdapter,
+    gatewaySecretStore,
+    cliProxyAdapter,
   });
   host.upsertAgentConnectionRecord({
     id: "direct-xai",
@@ -245,6 +320,12 @@ function setup(
     codexAdapter,
     claude,
     claudeAdapter,
+    gateway,
+    gatewaySecretStore,
+    gatewaySecretWrite,
+    gatewaySecretClear,
+    gatewayKeys,
+    cliProxyAdapter,
     configPath,
     root,
     configManager: new ConfigManager(configPath),
@@ -258,6 +339,8 @@ function setup(
       discover,
       codexAdapter,
       claudeAdapter,
+      gatewaySecretStore,
+      cliProxyAdapter,
     }),
     discover,
   };
@@ -268,6 +351,397 @@ afterEach(() => {
 });
 
 describe("public Agent Connection Host contract", () => {
+  it("creates a secret-safe CLIProxyAPI Gateway and keeps Summary and Conversation independent", async () => {
+    const setupResult = setup({
+      audio: {},
+      transcription: { engine: "local", language: "zh" },
+      intelligence: {
+        summary: { provider: "xai", model: "grok-summary" },
+        conversation: { provider: "xai", model: "grok-conversation" },
+      },
+      llm: { agent: { provider: "auto" } },
+    });
+    const caller = createCaller(agentConnectionsRouter, {
+      agentConnections: setupResult.center,
+      uiMutationAuthorized: true,
+    } as never);
+
+    const created = await caller.saveGateway({
+      endpoint: "http://127.0.0.1:8317/v1/",
+      summaryModel: "gateway-summary-exact",
+      conversationModel: "gateway-conversation-exact",
+      inferenceKey: "least-privilege-key-never-project",
+      httpsApproved: false,
+      confirmed: true,
+    });
+
+    expect(created.connections).toEqual(expect.arrayContaining([expect.objectContaining({
+      id: "cliproxyapi",
+      kind: "gateway",
+      adapter: "cliproxyapi",
+      lifecycle: "connected",
+      authorization: {
+        connected: true,
+        credentialSource: "api-key",
+        keyConfigured: true,
+        compatibilityTarget: "v0.23.0-rc.1",
+      },
+      settings: expect.objectContaining({
+        endpoint: "http://127.0.0.1:8317/v1",
+        transport: "loopback-http",
+        summaryModel: "gateway-summary-exact",
+        conversationModel: "gateway-conversation-exact",
+        credentialClass: "api-key",
+      }),
+      capabilities: expect.arrayContaining([
+        expect.objectContaining({ capability: "summary", currentReadiness: expect.objectContaining({ status: "untested", model: "gateway-summary-exact", testedAt: null, detail: "Not tested in this Host process", credentialSource: null }) }),
+        expect.objectContaining({ capability: "conversation", currentReadiness: expect.objectContaining({ status: "untested", model: "gateway-conversation-exact", testedAt: null, detail: "Not tested in this Host process", credentialSource: null }) }),
+      ]),
+    })]));
+    expect(setupResult.gatewaySecretWrite.mock.calls[0]?.[1] === "least-privilege-key-never-project").toBe(true);
+    expect(setupResult.gateway.probe).not.toHaveBeenCalled();
+    expect(JSON.stringify(created).includes("least-privilege-key-never-project")).toBe(false);
+
+    await caller.acceptDisclosure({ connectionId: "cliproxyapi", capability: "summary" });
+    await caller.acceptDisclosure({ connectionId: "cliproxyapi", capability: "conversation" });
+    const summaryReady = await caller.probe({ connectionId: "cliproxyapi", capability: "summary" });
+    expect(summaryReady).toMatchObject({ capability: "summary", status: "ready", model: "gateway-summary-exact" });
+    expect(summaryReady).not.toHaveProperty("reason");
+    let view = await caller.view();
+    expect(view.connections.find((item: { id: string }) => item.id === "cliproxyapi")?.capabilities)
+      .toEqual(expect.arrayContaining([
+        expect.objectContaining({ capability: "summary", currentReadiness: expect.objectContaining({ status: "ready" }) }),
+        expect.objectContaining({ capability: "conversation", currentReadiness: expect.objectContaining({ status: "untested" }) }),
+      ]));
+    await expect(caller.select({ connectionId: "cliproxyapi", capability: "conversation" }))
+      .rejects.toThrow(/Test this exact CLIProxyAPI Conversation model/i);
+    await caller.probe({ connectionId: "cliproxyapi", capability: "conversation" });
+    await caller.select({ connectionId: "cliproxyapi", capability: "summary" });
+    await caller.select({ connectionId: "cliproxyapi", capability: "conversation" });
+    view = await caller.view();
+    expect(view.selections).toMatchObject({
+      summary: { connectionId: "cliproxyapi", model: "gateway-summary-exact" },
+      conversation: { connectionId: "cliproxyapi", model: "gateway-conversation-exact" },
+    });
+    expect(setupResult.host.listAgentConnectionReadinessHistory("cliproxyapi", "summary"))
+      .toEqual([expect.objectContaining({
+        status: "ready",
+        reason: null,
+        runtimeEvidence: expect.objectContaining({
+          endpoint: "http://127.0.0.1:8317/v1",
+          requestedProvider: null,
+          actualProvider: null,
+          requestedModel: "gateway-summary-exact",
+          fallbackOccurred: false,
+          toolsEnabled: false,
+        }),
+      })]);
+    setupResult.host.close();
+  });
+
+  it("runs Gateway Summary from the pinned task endpoint after the connection is edited", async () => {
+    const setupResult = setup({
+      audio: {},
+      transcription: { engine: "local", language: "zh" },
+      intelligence: {
+        summary: { provider: "xai", model: "grok-summary" },
+        conversation: { provider: "xai", model: "grok-conversation" },
+      },
+      llm: { agent: { provider: "auto" } },
+    });
+    const caller = createCaller(agentConnectionsRouter, {
+      agentConnections: setupResult.center,
+      uiMutationAuthorized: true,
+    } as never);
+    await caller.saveGateway({
+      endpoint: "http://127.0.0.1:8317/v1",
+      summaryModel: "gateway-summary-exact",
+      conversationModel: "gateway-conversation-exact",
+      inferenceKey: "first-task-key",
+      httpsApproved: true,
+      confirmed: true,
+    });
+    await caller.acceptDisclosure({ connectionId: "cliproxyapi", capability: "summary" });
+    await caller.probe({ connectionId: "cliproxyapi", capability: "summary" });
+    await caller.select({ connectionId: "cliproxyapi", capability: "summary" });
+    const firstRecord = setupResult.host.listAgentConnectionRecords()
+      .find((record) => record.id === "cliproxyapi")!;
+    const firstCredentialIdentity = String(firstRecord.settings.credentialIdentity ?? "");
+    expect(firstRecord.settings.httpsApproved).toBe(false);
+    expect(firstRecord.settings.credentialRevisions).toEqual([
+      expect.objectContaining({ credentialIdentity: firstCredentialIdentity, httpsApproved: false }),
+    ]);
+    const task = setupResult.host.enqueueRecording({
+      idempotencyKey: "recording:gateway-summary-production",
+      recordingStem: "Gateway_20260827_210000",
+      title: "Gateway production Summary",
+      audioPath: join(setupResult.root, "Gateway_20260827_210000.wav"),
+      sendToNotion: false,
+      destinationHint: "",
+      agentProvider: "cliproxyapi",
+      summaryProvider: "cliproxyapi",
+      summaryModel: "gateway-summary-exact",
+      summaryConnectionId: "cliproxyapi",
+      summaryCredentialClass: "api-key",
+      summaryCredentialIdentity: firstCredentialIdentity,
+      summaryDisclosureVersion: "cliproxyapi-summary-v1",
+      summaryEndpointIdentity: "http://127.0.0.1:8317/v1",
+      instructions: "Use only the committed transcript.",
+    }).task;
+
+    await caller.saveGateway({
+      endpoint: "http://127.0.0.1:9417/v1",
+      summaryModel: "edited-summary-model",
+      conversationModel: "edited-conversation-model",
+      inferenceKey: "replacement-task-key",
+      httpsApproved: false,
+      confirmed: true,
+    });
+    const secondCredentialIdentity = String(
+      setupResult.host.listAgentConnectionRecords().find((record) => record.id === "cliproxyapi")
+        ?.settings.credentialIdentity ?? "",
+    );
+    expect(secondCredentialIdentity).not.toBe(firstCredentialIdentity);
+    expect(setupResult.gatewayKeys.get(firstCredentialIdentity) === "first-task-key").toBe(true);
+    expect(setupResult.gatewayKeys.get(secondCredentialIdentity) === "replacement-task-key").toBe(true);
+    expect(setupResult.host.getAgentConnectionDisclosure("cliproxyapi", "summary")).toBeNull();
+    expect(setupResult.host.getAgentConnectionDisclosure("cliproxyapi", "conversation")).toBeNull();
+    expect(setupResult.configManager.read().intelligence.summary).toEqual({
+      provider: "agent",
+      model: "runtime-managed",
+    });
+    await caller.probe({ connectionId: "cliproxyapi", capability: "summary" });
+    setupResult.host.recordAgentConnectionDisclosure({
+      connectionId: "cliproxyapi",
+      capability: "summary",
+      disclosureVersion: "cliproxyapi-summary-v1",
+      decision: "accepted",
+    });
+    await expect(caller.select({ connectionId: "cliproxyapi", capability: "summary" }))
+      .rejects.toThrow(/endpoint.*disclosure|disclosure.*endpoint/i);
+    setupResult.cliProxyAdapter.mockClear();
+    setupResult.gateway.summarize.mockClear();
+    setupResult.gateway.probe.mockClear();
+
+    const restartedCenter = setupResult.makeCenter();
+    expect(restartedCenter.summaryAdapter().current({
+      connectionId: "cliproxyapi",
+      provider: "cliproxyapi",
+      model: "gateway-summary-exact",
+      endpointIdentity: "http://127.0.0.1:8317/v1",
+      credentialIdentity: firstCredentialIdentity,
+    })).toMatchObject({
+      status: "untested",
+      detail: expect.stringMatching(/exact production preflight/i),
+      endpointIdentity: "http://127.0.0.1:8317/v1",
+      credentialIdentity: firstCredentialIdentity,
+    });
+    const gateway = restartedCenter.summaryAdapter().gateway(setupResult.configManager.read(), {
+      connectionId: "cliproxyapi",
+      provider: "cliproxyapi",
+      model: "gateway-summary-exact",
+      endpointIdentity: "http://127.0.0.1:8317/v1",
+      credentialIdentity: firstCredentialIdentity,
+    });
+    const claimed = setupResult.host.claim(task.id)!;
+    const transcriptArtifact = {
+      id: "gateway-production-transcript",
+      taskId: task.id,
+      recordingStem: task.recordingStem,
+      kind: "transcript" as const,
+      path: join(setupResult.root, "Gateway_20260827_210000.transcript.txt"),
+      sha256: "a".repeat(64),
+      bytes: 41,
+      mimeType: "text/plain",
+      provenance: { transcriptionProvider: "local" },
+      createdAt: new Date().toISOString(),
+    };
+    setupResult.host.recordTranscript(task.id, claimed.leaseToken!, transcriptArtifact);
+    const pinnedTask = setupResult.host.recordSummaryInputSnapshot(
+      task.id,
+      claimed.leaseToken!,
+      transcriptArtifact,
+    );
+    await expect(gateway.runArtifactWorkflow({
+      task: pinnedTask,
+      leaseToken: claimed.leaseToken!,
+      workspace: {
+        dir: join(setupResult.root, "private-stage"),
+        transcriptPath: join(setupResult.root, "private-stage", "transcript.txt"),
+        summaryPath: join(setupResult.root, "private-stage", "summary.md"),
+        chunkPattern: join(setupResult.root, "private-stage", "audio-%03d.wav"),
+      },
+      transcriptionProvider: "local",
+      committedTranscript: "Only Host-read committed transcript text.",
+    })).resolves.toMatchObject({
+      nativeSessionId: "summary-request",
+      summary: "# Gateway Summary",
+      summaryIdentity: { provider: "cliproxyapi", model: "gateway-summary-exact" },
+      runtimeEvidence: expect.objectContaining({
+        endpoint: "http://127.0.0.1:8317/v1",
+        toolsEnabled: false,
+        fallbackOccurred: false,
+      }),
+      audit: { toolNames: [], notionWrite: false },
+    });
+    expect(setupResult.cliProxyAdapter).toHaveBeenCalledWith({
+      endpoint: "http://127.0.0.1:8317/v1",
+      httpsApproved: false,
+      credentialIdentity: firstCredentialIdentity,
+    });
+    expect(setupResult.gateway.summarize).toHaveBeenCalledWith({
+      model: "gateway-summary-exact",
+      instructions: "Use only the committed transcript.",
+      transcript: "Only Host-read committed transcript text.",
+    });
+    expect(setupResult.host.listEvents(task.id)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "gateway.summary_preflight_intent" }),
+      expect.objectContaining({ type: "gateway.summary_dispatch_intent" }),
+    ]));
+    expect(setupResult.gateway.probe).toHaveBeenCalledWith({
+      capability: "summary",
+      model: "gateway-summary-exact",
+    });
+    setupResult.cliProxyAdapter.mockClear();
+    await expect(setupResult.center.converseGateway({
+      connectionId: "cliproxyapi",
+      endpointIdentity: "https://attacker.example/v1",
+      credentialIdentity: firstCredentialIdentity,
+      model: "gateway-conversation-exact",
+      input: [{ role: "user", content: "Never send the old key here" }],
+    })).rejects.toThrow(/endpoint.*credential revision|credential revision.*endpoint/i);
+    expect(setupResult.cliProxyAdapter).not.toHaveBeenCalled();
+    await restartedCenter.converseGateway({
+      connectionId: "cliproxyapi",
+      endpointIdentity: "http://127.0.0.1:8317/v1",
+      credentialIdentity: firstCredentialIdentity,
+      model: "gateway-conversation-exact",
+      input: [{ role: "user", content: "Pinned old endpoint conversation" }],
+    });
+    expect(setupResult.cliProxyAdapter).toHaveBeenCalledWith({
+      endpoint: "http://127.0.0.1:8317/v1",
+      httpsApproved: false,
+      credentialIdentity: firstCredentialIdentity,
+    });
+    expect(JSON.stringify(setupResult.host.listAgentConnectionRecords()).includes("replacement-task-key")).toBe(false);
+    setupResult.host.close();
+  });
+
+  it("deletes only the Yulu CLIProxyAPI record and client key while preserving pinned work", async () => {
+    const setupResult = setup({
+      audio: {},
+      transcription: { engine: "local", language: "zh" },
+      intelligence: {
+        summary: { provider: "agent", connectionId: "cliproxyapi", model: "gateway-summary-exact" },
+        conversation: { provider: "agent", connectionId: "cliproxyapi", model: "gateway-conversation-exact" },
+      },
+      llm: { agent: { provider: "auto" } },
+    });
+    const caller = createCaller(agentConnectionsRouter, {
+      agentConnections: setupResult.center,
+      uiMutationAuthorized: true,
+    } as never);
+    await caller.saveGateway({
+      endpoint: "http://127.0.0.1:8317/v1",
+      summaryModel: "gateway-summary-exact",
+      conversationModel: "gateway-conversation-exact",
+      inferenceKey: "deletion-key-never-project",
+      httpsApproved: false,
+      confirmed: true,
+    });
+    setupResult.host.enqueueRecording({
+      idempotencyKey: "recording:pinned-gateway",
+      recordingStem: "Pinned_Gateway_20260827_220000",
+      title: "Pinned Gateway task",
+      audioPath: join(setupResult.root, "Pinned_Gateway_20260827_220000.wav"),
+      sendToNotion: false,
+      destinationHint: "",
+      agentProvider: "cliproxyapi",
+      summaryProvider: "cliproxyapi",
+      summaryModel: "gateway-summary-exact",
+      summaryConnectionId: "cliproxyapi",
+      summaryCredentialClass: "api-key",
+      summaryDisclosureVersion: "cliproxyapi-summary-v1",
+      summaryEndpointIdentity: "http://127.0.0.1:8317/v1",
+    });
+    const session = createAgentSession(setupResult.root, {
+      provider: "cliproxyapi",
+      connectionId: "cliproxyapi",
+      endpointIdentity: "http://127.0.0.1:8317/v1",
+      model: "gateway-conversation-exact",
+      credentialSource: "api-key",
+      disclosureVersion: "cliproxyapi-conversation-v2",
+      title: "Pinned Gateway conversation",
+    });
+
+    await expect(caller.deletionImpact({ connectionId: "cliproxyapi" })).resolves.toMatchObject({
+      connectionId: "cliproxyapi",
+      selectedCapabilities: ["summary", "conversation"],
+      pinnedTasks: [expect.objectContaining({ title: "Pinned Gateway task" })],
+      pinnedConversations: [expect.objectContaining({ id: session.id })],
+      removesRuntimeAuthorization: false,
+      removesYuluManagedCredentials: true,
+    });
+    await caller.remove({ connectionId: "cliproxyapi", confirmed: true });
+    expect(setupResult.gatewaySecretClear).toHaveBeenCalledOnce();
+    expect(setupResult.credentials.logout).not.toHaveBeenCalled();
+    expect(setupResult.credentials.clearApiKey).not.toHaveBeenCalled();
+    expect(setupResult.host.listAgentConnectionRecords().find((record) => record.id === "cliproxyapi"))
+      .toBeUndefined();
+    expect(setupResult.host.listTasks(100)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ title: "Pinned Gateway task", summaryEndpointIdentity: "http://127.0.0.1:8317/v1" }),
+    ]));
+    expect(readAgentSessionStore(setupResult.root).sessions).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: session.id, endpointIdentity: "http://127.0.0.1:8317/v1" }),
+    ]));
+    expect(JSON.stringify(await caller.view()).includes("deletion-key-never-project")).toBe(false);
+    setupResult.host.close();
+  });
+
+  it("merges concurrent Gateway saves without orphaning either immutable credential revision", async () => {
+    const setupResult = setup({
+      audio: {},
+      transcription: { engine: "local", language: "zh" },
+      intelligence: {
+        summary: { provider: "agent", model: "runtime-managed" },
+        conversation: { provider: "agent", model: "runtime-managed" },
+      },
+      llm: { agent: { provider: "auto" } },
+    });
+    const caller = createCaller(agentConnectionsRouter, {
+      agentConnections: setupResult.center,
+      uiMutationAuthorized: true,
+    } as never);
+
+    await Promise.all([
+      caller.saveGateway({
+        endpoint: "http://127.0.0.1:8317/v1",
+        summaryModel: "summary-a",
+        conversationModel: "conversation-a",
+        inferenceKey: "concurrent-key-a",
+        httpsApproved: false,
+        confirmed: true,
+      }),
+      caller.saveGateway({
+        endpoint: "http://127.0.0.1:9417/v1",
+        summaryModel: "summary-b",
+        conversationModel: "conversation-b",
+        inferenceKey: "concurrent-key-b",
+        httpsApproved: false,
+        confirmed: true,
+      }),
+    ]);
+
+    const record = setupResult.host.listAgentConnectionRecords()
+      .find((candidate) => candidate.id === "cliproxyapi")!;
+    expect(record.settings.credentialRevisions).toHaveLength(2);
+    expect(setupResult.gatewayKeys.size).toBe(2);
+    await caller.remove({ connectionId: "cliproxyapi", confirmed: true });
+    expect(setupResult.gatewaySecretClear).toHaveBeenCalledTimes(2);
+    expect(setupResult.gatewayKeys.size).toBe(0);
+    setupResult.host.close();
+  });
+
   it("confirms Codex explicitly and projects native auth without probing either capability", async () => {
     const setupResult = setup({
       audio: {},
@@ -1202,6 +1676,15 @@ describe("public Agent Connection Host contract", () => {
     } as never);
 
     await expect(unauthorized.refreshCandidates()).rejects.toThrow("UI mutation bearer required");
+    await expect(unauthorized.saveGateway({
+      endpoint: "http://127.0.0.1:8317/v1",
+      summaryModel: "gateway-summary-exact",
+      conversationModel: "gateway-conversation-exact",
+      inferenceKey: "must-not-be-written",
+      httpsApproved: false,
+      confirmed: true,
+    })).rejects.toThrow("UI mutation bearer required");
+    expect(setupResult.gatewaySecretWrite).not.toHaveBeenCalled();
     await expect(unauthorized.select({
       connectionId: "direct-xai",
       capability: "summary",

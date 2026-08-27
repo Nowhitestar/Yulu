@@ -67,6 +67,7 @@ function mkCtx(opts: { moviesDir: string; glossaryRows?: Array<Record<string, un
     __rows: promptRows,
   };
   return {
+    uiMutationAuthorized: true,
     paths: {
       moviesDir: opts.moviesDir,
       configDir: join(opts.moviesDir, "config"),
@@ -228,6 +229,12 @@ describe("recordings router", () => {
       moviesDir: mvDir,
       glossaryRows: [{ term: "阿法学院", canonical: "阿尔法学院", scope: "both" }],
     });
+
+    await expect(createCaller(recordingsRouter, {
+      ...ctx,
+      uiMutationAuthorized: false,
+    }).summarize({ stem })).rejects.toThrow("UI mutation bearer required");
+    expect(ctx.recordingPipeline.enqueueSummaryRegeneration).not.toHaveBeenCalled();
 
     await createCaller(recordingsRouter, ctx).summarize({ stem });
 

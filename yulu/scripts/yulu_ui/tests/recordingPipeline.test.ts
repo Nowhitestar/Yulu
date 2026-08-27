@@ -8,7 +8,10 @@ import { HostStore } from "../src/hostStore.js";
 import { PubSub, type AppChannels } from "../src/pubsub.js";
 import { RecordingPipeline, agentRetryDelayMs } from "../src/recordingPipeline.js";
 import { AgentUnavailableError, type RecordingAgentGateway } from "../src/agentGateway.js";
-import { ClaudeCodeSummaryUnknownOutcomeError } from "../src/summaryProviderReadiness.js";
+import {
+  ClaudeCodeSummaryUnknownOutcomeError,
+  GatewaySummaryUnknownOutcomeError,
+} from "../src/summaryProviderReadiness.js";
 import { paths } from "../src/paths.js";
 
 function wavWithAudio(): Buffer {
@@ -61,12 +64,13 @@ describe("RecordingPipeline", () => {
     xaiExecutionCredentialSource?: "oauth" | "api-key";
     xaiSummaryDisclosure?: boolean;
     supportedAgentAdapter?: boolean;
-    supportedAgentProvider?: "codex" | "claude-code";
+    supportedAgentProvider?: "codex" | "claude-code" | "cliproxyapi";
     supportedAgentResultModel?: string;
     supportedAgentMissingEvidence?: boolean;
     supportedAgentToolNames?: string[];
     supportedAgentSummaryText?: string;
     supportedAgentUnknownOutcome?: boolean;
+    recoveredGatewayArtifacts?: boolean;
     autoPrompts?: Array<{
       id: string;
       slug: string;
@@ -85,7 +89,15 @@ describe("RecordingPipeline", () => {
     const supportedAgentProvider = opts.supportedAgentProvider ?? "codex";
     const supportedAgentDisclosureVersion = supportedAgentProvider === "codex"
       ? "codex-summary-v1"
-      : "claude-code-summary-v1";
+      : supportedAgentProvider === "claude-code"
+        ? "claude-code-summary-v1"
+        : "cliproxyapi-summary-v1";
+    const supportedAgentEndpointIdentity = supportedAgentProvider === "cliproxyapi"
+      ? "http://127.0.0.1:8317/v1"
+      : null;
+    const supportedAgentCredentialIdentity = supportedAgentProvider === "cliproxyapi"
+      ? "gateway.cliproxyapi.00000000-0000-4000-8000-000000000137"
+      : null;
     const artifacts = new ArtifactStore(moviesDir, join(configDir, "agent-tasks"));
     writeFileSync(configFile, JSON.stringify({
       transcription: {},
@@ -103,18 +115,89 @@ describe("RecordingPipeline", () => {
     if (opts.supportedAgentAdapter) {
       store.upsertAgentConnectionRecord({
         id: supportedAgentProvider,
-        kind: "supported-agent",
+        kind: supportedAgentProvider === "cliproxyapi" ? "gateway" : "supported-agent",
         adapter: supportedAgentProvider,
-        label: supportedAgentProvider === "codex" ? "Codex" : "Claude Code",
+        label: supportedAgentProvider === "codex" ? "Codex" : supportedAgentProvider === "claude-code" ? "Claude Code" : "CLIProxyAPI",
         lifecycle: "available",
         settings: {
-          executablePath: supportedAgentProvider === "codex" ? "/fake/codex" : "/fake/claude",
+          ...(supportedAgentProvider === "cliproxyapi"
+            ? {
+                endpoint: supportedAgentEndpointIdentity,
+                httpsApproved: false,
+                credentialClass: "api-key",
+                credentialIdentity: supportedAgentCredentialIdentity,
+                credentialIdentities: [supportedAgentCredentialIdentity],
+              }
+            : { executablePath: supportedAgentProvider === "codex" ? "/fake/codex" : "/fake/claude" }),
           summaryModel: "runtime-managed",
         },
       });
     }
     if (opts.xaiSummaryDisclosure === true || (opts.xaiText && opts.xaiSummaryDisclosure !== false)) {
       store.recordSummaryDataPathDisclosure("xai", "xai-summary-v1");
+    }
+    let recoveredGatewayTaskId: string | null = null;
+    if (opts.recoveredGatewayArtifacts) {
+      const task = store.enqueueRecording({
+        idempotencyKey: "recording:recovered-gateway-artifacts",
+        recordingStem: "Demo_20260711_120000",
+        title: "Recovered Gateway delivery",
+        audioPath,
+        sendToNotion: true,
+        destinationHint: "Yulu Meeting",
+        agentProvider: "cliproxyapi",
+        summaryProvider: "cliproxyapi",
+        summaryModel: "runtime-managed",
+        summaryConnectionId: "cliproxyapi",
+        summaryCredentialClass: "api-key",
+        summaryCredentialIdentity: supportedAgentCredentialIdentity,
+        summaryDisclosureVersion: "cliproxyapi-summary-v1",
+        summaryEndpointIdentity: supportedAgentEndpointIdentity,
+        instructions: "Use only committed input.",
+      }).task;
+      const claimed = store.claim(task.id)!;
+      const transcript = artifacts.commitTranscript(task, "hello transcript", {
+        transcriptionProvider: "test-audio",
+        transcriptChunks: 1,
+        committedBy: "yulu-host",
+      });
+      store.recordTranscript(task.id, claimed.leaseToken!, transcript);
+      const snapshotted = store.recordSummaryInputSnapshot(task.id, claimed.leaseToken!, transcript);
+      store.beginGatewaySummaryExecution(task.id, claimed.leaseToken!, "summary");
+      artifacts.writeStagedSummary(task.id, "# Durable Gateway Summary\n");
+      const runtimeEvidence = {
+        adapter: "cliproxyapi",
+        transport: "openai-responses-loopback-http",
+        runtimeVersion: "cliproxyapi-v0.23.0-rc.1-openai-responses",
+        endpoint: supportedAgentEndpointIdentity,
+        requestedProvider: null,
+        requestedModel: "runtime-managed",
+        actualProvider: null,
+        actualModel: "runtime-managed",
+        requestId: "recovered-summary-request",
+        sessionId: null,
+        terminalStatus: "ready" as const,
+        fallbackOccurred: false,
+        toolsEnabled: false,
+      };
+      store.recordArtifacts(task.id, claimed.leaseToken!, artifacts.commitFromWorkspace(snapshotted, {
+        agentProvider: "cliproxyapi",
+        summaryProvider: "cliproxyapi",
+        summaryModel: "runtime-managed",
+        summaryConnectionId: "cliproxyapi",
+        summaryCredentialClass: "api-key",
+        summaryCredentialIdentity: supportedAgentCredentialIdentity,
+        summaryDisclosureVersion: "cliproxyapi-summary-v1",
+        summaryEndpointIdentity: supportedAgentEndpointIdentity,
+        summaryInputArtifactId: snapshotted.summaryInputArtifactId,
+        summaryInputArtifactSha256: snapshotted.summaryInputArtifactSha256,
+        runtimeEvidence,
+        artifactSessionId: "recovered-summary-request",
+        committedBy: "yulu-host",
+      }));
+      recoveredGatewayTaskId = task.id;
+      store.close();
+      store = new HostStore(join(configDir, "host.sqlite"));
     }
     const legacyManualTask = opts.legacyManualTask ? store.enqueueRecording({
       idempotencyKey: "manual:legacy-combined-task",
@@ -200,10 +283,13 @@ describe("RecordingPipeline", () => {
       store!.recordNotionDelivery(task.id, leaseToken, {
         url: "https://notion.so/demo",
       });
+      const reusedArtifactSession = opts.recoveredGatewayArtifacts
+        ? "recovered-summary-request"
+        : "artifact-session";
       return {
         stdout: "delivery done",
-        stderr: `session_id: ${opts.reuseArtifactSessionForDelivery ? "artifact-session" : "delivery-session"}`,
-        nativeSessionId: opts.reuseArtifactSessionForDelivery ? "artifact-session" : "delivery-session",
+        stderr: `session_id: ${opts.reuseArtifactSessionForDelivery ? reusedArtifactSession : "delivery-session"}`,
+        nativeSessionId: opts.reuseArtifactSessionForDelivery ? reusedArtifactSession : "delivery-session",
         audit: {
           ok: true,
           toolNames: [
@@ -236,6 +322,29 @@ describe("RecordingPipeline", () => {
       provider: supportedAgentProvider,
       runArtifactWorkflow: async (input: Parameters<RecordingAgentGateway["runArtifactWorkflow"]>[0]) => {
         if (opts.supportedAgentUnknownOutcome) {
+          if (supportedAgentProvider === "cliproxyapi") {
+            throw new GatewaySummaryUnknownOutcomeError(
+              "CLIProxyAPI Summary entered Unknown Outcome; do not retry this execution",
+              {
+                executionId: "gateway-execution-137",
+                evidence: {
+                  adapter: "cliproxyapi",
+                  transport: "openai-responses-loopback-http",
+                  runtimeVersion: "cliproxyapi-v0.23.0-rc.1-openai-responses",
+                  endpoint: supportedAgentEndpointIdentity,
+                  requestedProvider: null,
+                  requestedModel: "runtime-managed",
+                  actualProvider: null,
+                  actualModel: null,
+                  requestId: null,
+                  sessionId: null,
+                  terminalStatus: "unknown",
+                  fallbackOccurred: false,
+                  toolsEnabled: false,
+                },
+              },
+            );
+          }
           throw new ClaudeCodeSummaryUnknownOutcomeError(
             "Claude Code Summary entered Unknown Outcome; inspect the native session before a new attempt",
             {
@@ -268,16 +377,23 @@ describe("RecordingPipeline", () => {
             adapter: supportedAgentProvider,
             transport: supportedAgentProvider === "codex"
               ? "codex-app-server-stdio"
-              : "claude-code-print-stream-json",
-            runtimeVersion: supportedAgentProvider === "codex" ? "0.144.4" : "2.1.169",
+              : supportedAgentProvider === "claude-code"
+                ? "claude-code-print-stream-json"
+                : "openai-responses-loopback-http",
+            runtimeVersion: supportedAgentProvider === "codex"
+              ? "0.144.4"
+              : supportedAgentProvider === "claude-code" ? "2.1.169" : "cliproxyapi-v0.23.0-rc.1-openai-responses",
             requestedProvider: supportedAgentProvider === "codex" ? "openai" : null,
             requestedModel: "runtime-managed",
             actualProvider: supportedAgentProvider === "codex" ? "openai" : null,
             actualModel: opts.supportedAgentResultModel ?? "runtime-managed",
             requestId: "turn-139",
-            sessionId: "artifact-session",
+            sessionId: supportedAgentProvider === "cliproxyapi" ? null : "artifact-session",
             terminalStatus: "ready" as const,
             fallbackOccurred: false,
+            ...(supportedAgentProvider === "cliproxyapi"
+              ? { endpoint: supportedAgentEndpointIdentity, toolsEnabled: false }
+              : {}),
           },
           audit: {
             ...result.audit,
@@ -295,14 +411,18 @@ describe("RecordingPipeline", () => {
         status: "ready" as const,
         testedAt: "2026-08-25T04:00:00.000Z",
         detail: "ready",
-        credentialSource: "runtime-oauth",
+        credentialSource: supportedAgentProvider === "cliproxyapi" ? "api-key" : "runtime-oauth",
         connectionId: supportedAgentProvider,
+        endpointIdentity: supportedAgentEndpointIdentity,
+        credentialIdentity: supportedAgentCredentialIdentity,
         disclosure: {
           kind: "external" as const,
           connectionId: supportedAgentProvider,
           disclosureVersion: supportedAgentDisclosureVersion,
           data: "transcript_text" as const,
-          destination: `${supportedAgentProvider === "codex" ? "Codex" : "Claude Code"} service`,
+          destination: supportedAgentProvider === "cliproxyapi"
+            ? supportedAgentEndpointIdentity!
+            : `${supportedAgentProvider === "codex" ? "Codex" : "Claude Code"} service`,
         },
       }),
       probe: async () => { throw new Error("not used"); },
@@ -365,6 +485,7 @@ describe("RecordingPipeline", () => {
       pubsub,
       notionStartedFromState: () => notionStartedFromState,
       legacyManualTask,
+      recoveredGatewayTaskId,
     };
   }
 
@@ -388,6 +509,59 @@ describe("RecordingPipeline", () => {
     ))).toBe(true);
     expect(existsSync(join(configDir, "agent-tasks", first.task.id))).toBe(false);
     expect(() => writeFileSync(join(moviesDir, "proof"), "ok")).not.toThrow();
+  });
+
+  it("resumes only Notion delivery after restart with durably committed Gateway artifacts", async () => {
+    const {
+      recoveredGatewayTaskId,
+      runArtifactWorkflow,
+      runNotionWorkflow,
+    } = setup({
+      recoveredGatewayArtifacts: true,
+      supportedAgentAdapter: true,
+      supportedAgentProvider: "cliproxyapi",
+      pollMs: 5,
+    });
+
+    expect(recoveredGatewayTaskId).toBeTruthy();
+    await vi.waitFor(() => expect(store!.getTask(recoveredGatewayTaskId!)?.state).toBe("completed"));
+    expect(runArtifactWorkflow).not.toHaveBeenCalled();
+    expect(runNotionWorkflow).toHaveBeenCalledTimes(1);
+    expect(store!.getNotionDelivery(recoveredGatewayTaskId!)?.url).toBe("https://notion.so/demo");
+    expect(store!.getTask(recoveredGatewayTaskId!)).toMatchObject({
+      artifactSessionId: "recovered-summary-request",
+      deliverySessionId: "delivery-session",
+    });
+    expect(store!.listEvents(recoveredGatewayTaskId!)).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        type: "task.completed",
+        payload: expect.objectContaining({ artifactSessionId: "recovered-summary-request" }),
+      }),
+    ]));
+    expect(store!.listEvents(recoveredGatewayTaskId!).filter(({ type }) => (
+      type === "gateway.summary_preflight_intent" || type === "gateway.summary_dispatch_intent"
+    ))).toHaveLength(1);
+  });
+
+  it("rejects delivery session reuse after restoring a committed Gateway Summary identity", async () => {
+    const {
+      recoveredGatewayTaskId,
+      runArtifactWorkflow,
+    } = setup({
+      recoveredGatewayArtifacts: true,
+      reuseArtifactSessionForDelivery: true,
+      supportedAgentAdapter: true,
+      supportedAgentProvider: "cliproxyapi",
+      pollMs: 5,
+    });
+
+    await vi.waitFor(() => expect(store!.getTask(recoveredGatewayTaskId!)).toMatchObject({
+      state: "delivery_unverified",
+      error: expect.stringContaining("reused the artifact session"),
+    }));
+    expect(runArtifactWorkflow).not.toHaveBeenCalled();
+    expect(store!.getTask(recoveredGatewayTaskId!)?.artifactSessionId)
+      .toBe("recovered-summary-request");
   });
 
   it("persists Core Activation Evidence when a production recording completes", async () => {
@@ -724,6 +898,53 @@ describe("RecordingPipeline", () => {
     });
   });
 
+  it("pins the CLIProxyAPI endpoint and commits only exact tool-free Gateway Runtime Evidence", async () => {
+    const { audioPath, runArtifactWorkflow } = setup({
+      pollMs: 5,
+      supportedAgentAdapter: true,
+      supportedAgentProvider: "cliproxyapi",
+    });
+    writeFileSync(audioPath, wavWithAudio());
+    store!.recordAgentConnectionDisclosure({
+      connectionId: "cliproxyapi",
+      capability: "summary",
+      disclosureVersion: "cliproxyapi-summary-v1",
+      decision: "accepted",
+    });
+
+    const { task } = pipeline!.enqueueCompletion({ audioPath, title: "Gateway Summary" });
+    expect(task).toMatchObject({
+      summaryProvider: "cliproxyapi",
+      summaryConnectionId: "cliproxyapi",
+      summaryCredentialClass: "api-key",
+      summaryDisclosureVersion: "cliproxyapi-summary-v1",
+      summaryEndpointIdentity: "http://127.0.0.1:8317/v1",
+    });
+    await vi.waitFor(() => expect(store!.getTask(task.id)?.state).toBe("completed"));
+    expect(runArtifactWorkflow).toHaveBeenCalledWith(expect.objectContaining({
+      committedTranscript: "hello transcript",
+      task: expect.objectContaining({
+        summaryEndpointIdentity: "http://127.0.0.1:8317/v1",
+        summaryInputArtifactId: expect.any(String),
+      }),
+    }));
+    expect(store!.listArtifacts(task.id).find((artifact) => artifact.kind === "summary")?.provenance)
+      .toMatchObject({
+        summaryProvider: "cliproxyapi",
+        summaryConnectionId: "cliproxyapi",
+        summaryCredentialClass: "api-key",
+        summaryEndpointIdentity: "http://127.0.0.1:8317/v1",
+        runtimeEvidence: expect.objectContaining({
+          adapter: "cliproxyapi",
+          endpoint: "http://127.0.0.1:8317/v1",
+          requestedProvider: null,
+          actualProvider: null,
+          fallbackOccurred: false,
+          toolsEnabled: false,
+        }),
+      });
+  });
+
   it.each([
     ["tool call", { supportedAgentToolNames: ["commandExecution"] }, "attempted a tool call"],
     ["missing Runtime Evidence", { supportedAgentMissingEvidence: true }, "complete Runtime Evidence"],
@@ -818,6 +1039,47 @@ describe("RecordingPipeline", () => {
         payload: expect.objectContaining({
           nativeSessionId: "unknown-session-140",
           runtimeEvidence: expect.objectContaining({ terminalStatus: "unknown" }),
+        }),
+      }),
+    ]));
+  });
+
+  it("durably fences CLIProxyAPI Summary Unknown Outcome without retry or commit", async () => {
+    const { audioPath, moviesDir, configDir } = setup({
+      pollMs: 5,
+      supportedAgentAdapter: true,
+      supportedAgentProvider: "cliproxyapi",
+      supportedAgentUnknownOutcome: true,
+    });
+    writeFileSync(audioPath, wavWithAudio());
+    const summaryPath = join(moviesDir, "Demo_20260711_120000.summary.md");
+    writeFileSync(summaryPath, "# Prior verified summary\n");
+    store!.recordAgentConnectionDisclosure({
+      connectionId: "cliproxyapi",
+      capability: "summary",
+      disclosureVersion: "cliproxyapi-summary-v1",
+      decision: "accepted",
+    });
+
+    const { task } = pipeline!.enqueueCompletion({ audioPath, title: "Unknown Gateway Summary" });
+    await vi.waitFor(() => expect(store!.getTask(task.id)).toMatchObject({
+      state: "execution_unverified",
+      nativeSessionId: "gateway-execution-137",
+      error: expect.stringContaining("Unknown Outcome"),
+    }));
+    expect(() => pipeline!.retry(task.id)).toThrow("cannot retry from execution_unverified");
+    expect(readFileSync(summaryPath, "utf8")).toBe("# Prior verified summary\n");
+    expect(existsSync(join(configDir, "agent-tasks", task.id, "rejected-summary.md"))).toBe(false);
+    expect(store!.listEvents(task.id)).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        type: "gateway.summary_unknown_outcome",
+        payload: expect.objectContaining({
+          executionId: "gateway-execution-137",
+          runtimeEvidence: expect.objectContaining({
+            endpoint: "http://127.0.0.1:8317/v1",
+            terminalStatus: "unknown",
+            toolsEnabled: false,
+          }),
         }),
       }),
     ]));

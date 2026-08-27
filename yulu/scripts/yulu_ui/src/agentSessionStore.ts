@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 
-const STORE_VERSION = 4;
+const STORE_VERSION = 6;
 const STORE_FILE = "agent-sessions.json";
 const MAX_TITLE_CHARS = 48;
 const MAX_MESSAGE_CHARS = 80_000;
@@ -64,6 +64,9 @@ const persistedSessionSchema = z.object({
   provider: z.string().trim().min(1).max(128).optional(),
   model: z.string().trim().min(1).max(128).optional(),
   connectionId: z.string().trim().min(1).max(200).optional(),
+  endpointIdentity: z.string().trim().min(1).max(2_048).optional(),
+  disclosureVersion: z.string().trim().min(1).max(200).optional(),
+  credentialIdentity: z.string().trim().min(1).max(200).optional(),
   credentialSource: z.enum(["oauth", "api-key", "runtime-oauth"]).optional(),
   status: z.enum(["active", "paused"]).optional(),
   pausedReason: z.string().max(1000).optional(),
@@ -153,6 +156,8 @@ export function summarizeAgentSession(session: AgentSession) {
     agent: session.agent,
     provider: session.provider,
     connectionId: session.connectionId,
+    endpointIdentity: session.endpointIdentity,
+    disclosureVersion: session.disclosureVersion,
     model: session.model,
     status: session.status,
     pausedReason: session.pausedReason,
@@ -194,6 +199,9 @@ export function createAgentSession(
       provider: string;
       model: string;
       connectionId?: string;
+      endpointIdentity?: string;
+      disclosureVersion?: string;
+      credentialIdentity?: string;
       credentialSource?: "oauth" | "api-key" | "runtime-oauth";
     }
     | { purpose: "background"; agent: string }
@@ -215,6 +223,15 @@ export function createAgentSession(
     model: identity.model,
     ...(input.purpose !== "background" && input.connectionId
       ? { connectionId: input.connectionId }
+      : {}),
+    ...(input.purpose !== "background" && input.endpointIdentity
+      ? { endpointIdentity: input.endpointIdentity }
+      : {}),
+    ...(input.purpose !== "background" && input.disclosureVersion
+      ? { disclosureVersion: input.disclosureVersion }
+      : {}),
+    ...(input.purpose !== "background" && input.credentialIdentity
+      ? { credentialIdentity: input.credentialIdentity }
       : {}),
     ...(input.purpose !== "background" && input.credentialSource
       ? { credentialSource: input.credentialSource }
@@ -358,6 +375,7 @@ export function pauseAgentSession(
   session.status = "paused";
   session.pausedReason = reason.slice(0, 1000);
   if (retrySnapshot) session.retrySnapshot = agentSessionRetrySnapshotSchema.parse(retrySnapshot);
+  else delete session.retrySnapshot;
   session.updatedAt = nowIso();
   writeAgentSessionStore(configDir, store);
   return session;

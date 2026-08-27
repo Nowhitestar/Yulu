@@ -1,6 +1,7 @@
 import { basename } from "node:path";
+import { randomUUID } from "node:crypto";
 import type { ConfigManager } from "./config.js";
-import type { HostStore } from "./hostStore.js";
+import type { HostStore, PersistedAgentConnection } from "./hostStore.js";
 import type {
   XaiAuthorizationState,
   XaiCredentialSource,
@@ -10,6 +11,7 @@ import type { XaiProviderReadiness, XaiReadinessResult } from "./routers/provide
 import { XAI_TEXT_MODEL_DEFAULT } from "./settingsRegistry.js";
 import {
   CLAUDE_CODE_SUMMARY_DISCLOSURE_VERSION,
+  CLIPROXYAPI_SUMMARY_DISCLOSURE_VERSION,
   CODEX_SUMMARY_DISCLOSURE_VERSION,
   hasCurrentXaiSummaryDisclosure,
   XAI_SUMMARY_DISCLOSURE_VERSION,
@@ -21,6 +23,7 @@ import {
 import { readAgentSessionStore } from "./agentSessionStore.js";
 import {
   CLAUDE_CODE_CONVERSATION_DISCLOSURE_VERSION,
+  CLIPROXYAPI_CONVERSATION_DISCLOSURE_VERSION,
   CODEX_CONVERSATION_DISCLOSURE_VERSION,
   hasCurrentXaiConversationDisclosure,
   XAI_CONVERSATION_DISCLOSURE_VERSION,
@@ -35,8 +38,21 @@ import {
 import type {
   SupportedAgentSummaryAdapter,
   SupportedAgentSummaryReadiness,
+  SupportedAgentSummarySnapshot,
 } from "./summaryProviderReadiness.js";
-import { ClaudeCodeSummaryUnknownOutcomeError } from "./summaryProviderReadiness.js";
+import {
+  ClaudeCodeSummaryUnknownOutcomeError,
+  GatewaySummaryUnknownOutcomeError,
+} from "./summaryProviderReadiness.js";
+import {
+  GatewayRequestUnknownOutcomeError,
+  isExactGatewayRuntimeEvidence,
+} from "./cliProxyApiAdapter.js";
+import type {
+  CliProxyApiAdapter,
+  GatewaySecretStore,
+  GatewayRuntimeEvidence,
+} from "./cliProxyApiAdapter.js";
 
 export type AgentConnectionCapability = "transcription" | "summary" | "conversation";
 
@@ -87,11 +103,17 @@ export interface AgentConnectionCenterOptions {
     ClaudeCodeAdapter,
     "status" | "probe" | "probeSummary" | "summarize" | "converse"
   >;
+  gatewaySecretStore?: (credentialIdentity: string) => GatewaySecretStore;
+  cliProxyAdapter?: (input: { endpoint: string; httpsApproved: boolean; credentialIdentity: string }) => Pick<
+    CliProxyApiAdapter,
+    "validateEndpoint" | "keyConfigured" | "probe" | "summarize" | "converse"
+  >;
 }
 
 const DIRECT_XAI_ID = "direct-xai";
 const CODEX_ID = "codex";
 const CLAUDE_CODE_ID = "claude-code";
+const CLIPROXYAPI_ID = "cliproxyapi";
 const MIGRATION_ID = "agent-connections-v1";
 const SUPPORTED_ADAPTERS = new Set(["codex", "claude-code", "hermes", "openclaw"]);
 const CODEX_SUMMARY_ISOLATION_FEATURES = [
@@ -197,6 +219,10 @@ export class AgentConnectionCenter {
     readiness: XaiReadinessResult;
     identity: string;
   }>();
+  private readonly gatewayReadiness = new Map<string, {
+    readiness: XaiReadinessResult;
+    identity: string;
+  }>();
 
   private codexReadinessKey(connectionId: string, capability: "summary" | "conversation"): string {
     return `${connectionId}:${capability}`;
@@ -204,6 +230,15 @@ export class AgentConnectionCenter {
 
   private claudeReadinessKey(connectionId: string, capability: "summary" | "conversation"): string {
     return `${connectionId}:${capability}`;
+  }
+
+  private gatewayReadinessKey(
+    connectionId: string,
+    capability: "summary" | "conversation",
+    credentialIdentity: string,
+    model: string,
+  ): string {
+    return `${connectionId}:${capability}:${credentialIdentity}:${model}`;
   }
 
   constructor(private readonly options: AgentConnectionCenterOptions) {
@@ -498,7 +533,81 @@ export class AgentConnectionCenter {
           },
         };
       }));
-    const connections = [...directConnections, ...codexConnections, ...claudeConnections];
+    const gatewayConnections = await Promise.all(records
+      .filter((record) => record.kind === "gateway" && record.adapter === "cliproxyapi")
+      .map(async (record) => {
+        const endpoint = String(record.settings.endpoint ?? "").trim();
+        const httpsApproved = record.settings.httpsApproved === true;
+        const summaryModel = String(record.settings.summaryModel ?? "").trim();
+        const conversationModel = String(record.settings.conversationModel ?? "").trim();
+        const credentialIdentity = this.currentGatewayCredentialIdentity(record);
+        const adapter = this.requireGatewayAdapter(endpoint, httpsApproved, credentialIdentity);
+        const keyConfigured = await adapter.keyConfigured();
+        const capabilities = (["summary", "conversation"] as const).map((capability) => {
+          const model = capability === "summary" ? summaryModel : conversationModel;
+          const readinessKey = this.gatewayReadinessKey(record.id, capability, credentialIdentity, model);
+          const identity = this.gatewayIdentity(endpoint, httpsApproved, model, keyConfigured, credentialIdentity);
+          const proof = this.gatewayReadiness.get(readinessKey);
+          const currentReadiness = proof && proof.identity === identity
+            ? proof.readiness
+            : untested(capability, model);
+          if (proof && proof.identity !== identity) this.gatewayReadiness.delete(readinessKey);
+          const disclosure = this.host.getAgentConnectionDisclosure(record.id, capability);
+          const disclosureVersion = capability === "summary"
+            ? CLIPROXYAPI_SUMMARY_DISCLOSURE_VERSION
+            : CLIPROXYAPI_CONVERSATION_DISCLOSURE_VERSION;
+          const disclosureAccepted = this.hasGatewayDisclosure(
+            record,
+            capability,
+            disclosureVersion,
+            endpoint,
+          );
+          const selection = asRecord(config.intelligence[capability]);
+          return {
+            capability,
+            declared: true,
+            currentReadiness,
+            readinessHistory: this.host.listAgentConnectionReadinessHistory(record.id, capability),
+            disclosure: {
+              required: !disclosureAccepted,
+              disclosureVersion,
+              data: capability === "summary"
+                ? "transcript_text" as const
+                : "conversation_text" as const,
+              destination: endpoint,
+              decision: disclosureAccepted ? disclosure?.decision ?? null : null,
+              decidedAt: disclosureAccepted ? disclosure?.decidedAt ?? null : null,
+            },
+            selected: selection.provider === "agent" && selection.connectionId === record.id,
+            remediation: currentReadiness.status === "failed" || !keyConfigured
+              ? { href: `/agent-connections?connection=${record.id}&capability=${capability}` }
+              : null,
+          };
+        });
+        return {
+          id: record.id,
+          kind: "gateway" as const,
+          adapter: "cliproxyapi" as const,
+          label: record.label,
+          lifecycle: keyConfigured ? "connected" as const : "disconnected" as const,
+          authorization: {
+            connected: keyConfigured,
+            credentialSource: "api-key" as const,
+            keyConfigured,
+            compatibilityTarget: "v0.23.0-rc.1" as const,
+          },
+          capabilities,
+          settings: {
+            endpoint,
+            transport: String(record.settings.transport ?? ""),
+            summaryModel,
+            conversationModel,
+            credentialClass: "api-key" as const,
+            httpsApproved,
+          },
+        };
+      }));
+    const connections = [...directConnections, ...codexConnections, ...claudeConnections, ...gatewayConnections];
     const connectedAdapters = new Set(records
       .filter((record) => record.kind === "supported-agent")
       .map((record) => record.adapter));
@@ -615,12 +724,151 @@ export class AgentConnectionCenter {
     };
   }
 
+  async saveGateway(input: {
+    endpoint: string;
+    summaryModel: string;
+    conversationModel: string;
+    inferenceKey: string;
+    httpsApproved: boolean;
+    confirmed: true;
+  }) {
+    this.ensureMigrated();
+    const summaryModel = input.summaryModel.trim();
+    const conversationModel = input.conversationModel.trim();
+    const inferenceKey = input.inferenceKey.trim();
+    if (!summaryModel || summaryModel.length > 128 || !conversationModel || conversationModel.length > 128) {
+      throw new Error("CLIProxyAPI exact Summary and Conversation models are required");
+    }
+    if (!inferenceKey || inferenceKey.length > 4_096) {
+      throw new Error("CLIProxyAPI least-privilege inference key is required");
+    }
+    const credentialIdentity = `gateway.cliproxyapi.${randomUUID()}`;
+    const secretStore = this.requireGatewaySecretStore(credentialIdentity);
+    const identity = await this.requireGatewayAdapter(
+      input.endpoint,
+      input.httpsApproved,
+      credentialIdentity,
+    ).validateEndpoint();
+    const httpsApproved = identity.transport === "approved-https";
+    await secretStore.write(inferenceKey);
+    // Re-read immediately before the synchronous Host upsert so concurrent
+    // authenticated saves merge every immutable revision instead of orphaning one.
+    const existing = this.gatewayRecord(CLIPROXYAPI_ID);
+    const connectionIdentityChanged = Boolean(existing);
+    try {
+      this.host.upsertAgentConnectionRecord({
+        id: CLIPROXYAPI_ID,
+        kind: "gateway",
+        adapter: "cliproxyapi",
+        label: "CLIProxyAPI",
+        lifecycle: "available",
+        settings: {
+          endpoint: identity.endpoint,
+          transport: identity.transport,
+          httpsApproved,
+          summaryModel,
+          conversationModel,
+          credentialClass: "api-key",
+          credentialIdentity,
+          credentialIdentities: [
+            ...this.gatewayCredentialIdentities(existing),
+            credentialIdentity,
+          ],
+          credentialRevisions: [
+            ...this.gatewayCredentialRevisions(existing),
+            {
+              credentialIdentity,
+              endpoint: identity.endpoint,
+              httpsApproved,
+            },
+          ],
+          compatibilityTarget: "v0.23.0-rc.1",
+        },
+      });
+    } catch (error) {
+      await secretStore.clear().catch(() => {});
+      throw error;
+    }
+    if (connectionIdentityChanged) {
+      this.host.clearAgentConnectionDisclosures(CLIPROXYAPI_ID);
+      this.clearGatewaySelections(CLIPROXYAPI_ID);
+    }
+    return await this.view();
+  }
+
   async probe(input: {
     connectionId: string;
     capability: AgentConnectionCapability;
     model?: string;
   }): Promise<XaiReadinessResult> {
     this.ensureMigrated();
+    const gatewayRecord = this.gatewayRecord(input.connectionId);
+    if (gatewayRecord) {
+      if (input.capability !== "summary" && input.capability !== "conversation") {
+        throw new Error("This CLIProxyAPI Gateway supports Summary and Conversation only");
+      }
+      const setting = input.capability === "summary" ? "summaryModel" : "conversationModel";
+      const label = input.capability === "summary" ? "Summary" : "Conversation";
+      const model = input.model?.trim() || String(gatewayRecord.settings[setting] ?? "").trim();
+      if (!model || model.length > 128) throw new Error(`CLIProxyAPI ${label} model is invalid`);
+      const endpoint = String(gatewayRecord.settings.endpoint ?? "").trim();
+      const httpsApproved = gatewayRecord.settings.httpsApproved === true;
+      const credentialIdentity = this.currentGatewayCredentialIdentity(gatewayRecord);
+      const readinessKey = this.gatewayReadinessKey(gatewayRecord.id, input.capability, credentialIdentity, model);
+      if (model !== gatewayRecord.settings[setting]) {
+        this.gatewayReadiness.delete(readinessKey);
+        this.host.upsertAgentConnectionRecord({
+          ...gatewayRecord,
+          settings: { ...gatewayRecord.settings, [setting]: model },
+        });
+      }
+      const adapter = this.requireGatewayAdapter(endpoint, httpsApproved, credentialIdentity);
+      const testedAt = new Date().toISOString();
+      const result = await adapter.probe({ capability: input.capability, model });
+      const keyConfigured = await adapter.keyConfigured();
+      const evidence = result.evidence as GatewayRuntimeEvidence | undefined;
+      const exactIdentity = Boolean(keyConfigured && evidence && isExactGatewayRuntimeEvidence(evidence, {
+        endpoint,
+        model,
+        terminalStatus: "ready",
+      }));
+      const exactUnknown = Boolean(evidence && result.reason === "unknown_outcome" &&
+        isExactGatewayRuntimeEvidence(evidence, { endpoint, model, terminalStatus: "unknown" }));
+      const effectiveStatus = result.status === "ready" && exactIdentity ? "ready" : "failed";
+      const readiness: XaiReadinessResult = {
+        capability: input.capability,
+        status: effectiveStatus,
+        model,
+        credentialSource: "api-key",
+        testedAt,
+        detail: effectiveStatus === "ready"
+          ? `${input.capability} · ${model} passed the CLIProxyAPI production adapter probe`
+          : result.remediation ?? `${input.capability} · ${model} failed`,
+        ...(effectiveStatus === "failed" ? {
+          reason: result.reason === "invalid_model"
+            ? "invalid_model" as const
+            : result.reason === "unknown_outcome" ? "unknown_outcome" as const : "readiness_failed" as const,
+        } : {}),
+      };
+      this.gatewayReadiness.set(readinessKey, {
+        readiness,
+        identity: this.gatewayIdentity(endpoint, httpsApproved, model, keyConfigured, credentialIdentity),
+      });
+      if (exactIdentity || exactUnknown) {
+        this.host.recordAgentConnectionReadiness({
+          connectionId: gatewayRecord.id,
+          capability: input.capability,
+          status: effectiveStatus,
+          model,
+          credentialSource: "api-key",
+          detail: readiness.detail,
+          reason: readiness.reason ?? null,
+          runtimeEvidence: evidence!,
+          testedAt,
+        });
+      }
+      return readiness;
+    }
     const codexRecord = this.codexRecord(input.connectionId);
     if (codexRecord) {
       if (input.capability !== "summary" && input.capability !== "conversation") {
@@ -920,6 +1168,35 @@ export class AgentConnectionCenter {
     model?: string;
   }) {
     this.ensureMigrated();
+    const gatewayRecord = this.gatewayRecord(input.connectionId);
+    if (gatewayRecord) {
+      if (input.capability !== "summary" && input.capability !== "conversation") {
+        throw new Error("This CLIProxyAPI Gateway supports Summary and Conversation only");
+      }
+      const setting = input.capability === "summary" ? "summaryModel" : "conversationModel";
+      const model = input.model?.trim() || String(gatewayRecord.settings[setting] ?? "").trim();
+      if (!model || model.length > 128) throw new Error(`CLIProxyAPI ${input.capability} model is invalid`);
+      await this.requireCurrentGatewayReadiness(gatewayRecord.id, input.capability, model);
+      const disclosureVersion = input.capability === "summary"
+        ? CLIPROXYAPI_SUMMARY_DISCLOSURE_VERSION
+        : CLIPROXYAPI_CONVERSATION_DISCLOSURE_VERSION;
+      const endpoint = String(gatewayRecord.settings.endpoint ?? "").trim();
+      if (!this.hasGatewayDisclosure(gatewayRecord, input.capability, disclosureVersion, endpoint)) {
+        throw new Error(
+          `Accept the current CLIProxyAPI ${input.capability} endpoint data path disclosure before selection`,
+        );
+      }
+      this.host.upsertAgentConnectionRecord({
+        ...gatewayRecord,
+        settings: { ...gatewayRecord.settings, [setting]: model },
+      });
+      this.config.update(`intelligence.${input.capability}`, {
+        provider: "agent",
+        connectionId: gatewayRecord.id,
+        model,
+      });
+      return await this.view();
+    }
     const codexRecord = this.codexRecord(input.connectionId);
     if (codexRecord) {
       if (input.capability !== "summary" && input.capability !== "conversation") {
@@ -995,6 +1272,26 @@ export class AgentConnectionCenter {
 
   acceptDisclosure(input: { connectionId: string; capability: AgentConnectionCapability }) {
     this.ensureMigrated();
+    if (this.gatewayRecord(input.connectionId)) {
+      if (input.capability !== "summary" && input.capability !== "conversation") {
+        throw new Error("This CLIProxyAPI Gateway supports Summary and Conversation only");
+      }
+      const gatewayRecord = this.gatewayRecord(input.connectionId)!;
+      const receipt = this.host.recordAgentConnectionDisclosure({
+        connectionId: input.connectionId,
+        capability: input.capability,
+        disclosureVersion: input.capability === "summary"
+          ? CLIPROXYAPI_SUMMARY_DISCLOSURE_VERSION
+          : CLIPROXYAPI_CONVERSATION_DISCLOSURE_VERSION,
+        decision: "accepted",
+      });
+      this.setGatewayDisclosureEndpoint(
+        gatewayRecord,
+        input.capability,
+        String(gatewayRecord.settings.endpoint ?? ""),
+      );
+      return { ...input, accepted: true, disclosureVersion: receipt.disclosureVersion };
+    }
     if (this.claudeRecord(input.connectionId)) {
       if (input.capability !== "summary" && input.capability !== "conversation") {
         throw new Error("This Claude Code connection supports Summary and Conversation only");
@@ -1048,6 +1345,20 @@ export class AgentConnectionCenter {
     capability: "summary" | "conversation";
   }) {
     this.ensureMigrated();
+    if (this.gatewayRecord(input.connectionId)) {
+      const gatewayRecord = this.gatewayRecord(input.connectionId)!;
+      const disclosureVersion = input.capability === "summary"
+        ? CLIPROXYAPI_SUMMARY_DISCLOSURE_VERSION
+        : CLIPROXYAPI_CONVERSATION_DISCLOSURE_VERSION;
+      const receipt = this.host.recordAgentConnectionDisclosure({
+        connectionId: input.connectionId,
+        capability: input.capability,
+        disclosureVersion,
+        decision: "declined",
+      });
+      this.setGatewayDisclosureEndpoint(gatewayRecord, input.capability, null);
+      return { ...input, decision: receipt.decision, disclosureVersion: receipt.disclosureVersion };
+    }
     if (this.claudeRecord(input.connectionId)) {
       if (input.capability !== "summary" && input.capability !== "conversation") {
         throw new Error("This Claude Code connection supports Summary and Conversation only");
@@ -1096,6 +1407,34 @@ export class AgentConnectionCenter {
 
   async deletionImpact(input: { connectionId: string }) {
     this.ensureMigrated();
+    const gateway = this.gatewayRecord(input.connectionId);
+    if (gateway) {
+      const config = this.config.read();
+      const selectedCapabilities = (["summary", "conversation"] as const).filter((capability) => {
+        const selection = config.intelligence[capability];
+        return selection.provider === "agent" && "connectionId" in selection && selection.connectionId === gateway.id;
+      });
+      const pinnedTasks = this.host.listTasks(10_000)
+        .filter((task) => task.summaryConnectionId === gateway.id && !["completed", "cancelled"].includes(task.state))
+        .map((task) => ({
+          id: task.id,
+          recordingStem: task.recordingStem,
+          title: task.title,
+          state: task.state,
+          model: task.summaryModel,
+        }));
+      const pinnedConversations = readAgentSessionStore(this.configDir).sessions
+        .filter((session) => session.purpose === "ask" && session.connectionId === gateway.id)
+        .map((session) => ({ id: session.id, title: session.title, status: session.status, model: session.model }));
+      return {
+        connectionId: gateway.id,
+        selectedCapabilities,
+        pinnedTasks,
+        pinnedConversations,
+        removesRuntimeAuthorization: false,
+        removesYuluManagedCredentials: true,
+      };
+    }
     if (input.connectionId !== DIRECT_XAI_ID || !this.hasDirectConnection()) {
       throw new Error("Agent Connection not found");
     }
@@ -1133,6 +1472,17 @@ export class AgentConnectionCenter {
 
   async remove(input: { connectionId: string; confirmed: true }) {
     await this.deletionImpact(input);
+    const gateway = this.gatewayRecord(input.connectionId);
+    if (gateway) {
+      for (const credentialIdentity of this.gatewayCredentialIdentities(gateway)) {
+        await this.requireGatewaySecretStore(credentialIdentity).clear();
+      }
+      this.gatewayReadiness.clear();
+      this.host.clearAgentConnectionReadinessHistory(input.connectionId);
+      this.host.clearAgentConnectionDisclosures(input.connectionId);
+      this.host.deleteAgentConnectionRecord(input.connectionId);
+      return await this.view();
+    }
     await this.credentials.logout();
     await this.credentials.clearApiKey();
     this.readiness.clear();
@@ -1219,9 +1569,11 @@ export class AgentConnectionCenter {
         const record = connectionId
           ? this.host.listAgentConnectionRecords().find((candidate) => candidate.id === connectionId)
           : null;
-        const provider = snapshot?.provider === "codex" || snapshot?.provider === "claude-code"
+        const provider = snapshot?.provider === "codex" || snapshot?.provider === "claude-code" || snapshot?.provider === "cliproxyapi"
           ? snapshot.provider
-          : record?.adapter === "codex" || record?.adapter === "claude-code" ? record.adapter : "";
+          : record?.adapter === "codex" || record?.adapter === "claude-code" || record?.adapter === "cliproxyapi"
+            ? record.adapter
+            : "";
         return {
           provider,
           health: () => {
@@ -1234,6 +1586,150 @@ export class AgentConnectionCenter {
           },
           runArtifactWorkflow: async (input: AgentArtifactWorkflowInput) => {
             const task = input.task;
+            if (task.summaryProvider === "cliproxyapi") {
+              if (!task.summaryConnectionId || task.summaryCredentialClass !== "api-key") {
+                throw new AgentUnavailableError("The pinned CLIProxyAPI Gateway credential class is invalid");
+              }
+              const gatewayRecord = this.gatewayRecord(task.summaryConnectionId);
+              if (!gatewayRecord) {
+                throw new AgentUnavailableError(
+                  `Pinned CLIProxyAPI Gateway connection ${task.summaryConnectionId} is unavailable`,
+                );
+              }
+              if (!task.summaryEndpointIdentity) {
+                throw new AgentUnavailableError("The pinned CLIProxyAPI Gateway endpoint is unavailable");
+              }
+              if (!task.summaryCredentialIdentity) {
+                throw new AgentUnavailableError("The pinned CLIProxyAPI Gateway credential identity is unavailable");
+              }
+              const revision = this.gatewayCredentialRevision(gatewayRecord, task.summaryCredentialIdentity);
+              if (!revision) {
+                throw new AgentUnavailableError("The pinned CLIProxyAPI Gateway credential revision is unavailable");
+              }
+              if (revision.endpoint !== task.summaryEndpointIdentity) {
+                throw new AgentUnavailableError(
+                  "The pinned CLIProxyAPI Gateway endpoint does not match its credential revision",
+                );
+              }
+              if (!input.committedTranscript?.trim()) {
+                throw new Error("CLIProxyAPI Gateway Summary requires the committed transcript text");
+              }
+              const adapter = this.requireGatewayAdapter(
+                task.summaryEndpointIdentity,
+                revision.httpsApproved,
+                task.summaryCredentialIdentity,
+              );
+              const readinessKey = this.gatewayReadinessKey(
+                task.summaryConnectionId,
+                "summary",
+                task.summaryCredentialIdentity,
+                task.summaryModel,
+              );
+              const keyConfigured = await adapter.keyConfigured();
+              const readinessIdentity = this.gatewayIdentity(
+                task.summaryEndpointIdentity,
+                revision.httpsApproved,
+                task.summaryModel,
+                keyConfigured,
+                task.summaryCredentialIdentity,
+              );
+              const existingProof = this.gatewayReadiness.get(readinessKey);
+              if (
+                existingProof?.readiness.status !== "ready" ||
+                existingProof.readiness.model !== task.summaryModel ||
+                existingProof.identity !== readinessIdentity
+              ) {
+                this.host.beginGatewaySummaryExecution(task.id, input.leaseToken, "preflight");
+                const preflight = await adapter.probe({ capability: "summary", model: task.summaryModel });
+                const evidence = preflight.evidence as GatewayRuntimeEvidence | undefined;
+                if (preflight.reason === "unknown_outcome" && evidence && isExactGatewayRuntimeEvidence(evidence, {
+                  endpoint: task.summaryEndpointIdentity,
+                  model: task.summaryModel,
+                  terminalStatus: "unknown",
+                })) {
+                  this.host.recordAgentConnectionReadiness({
+                    connectionId: task.summaryConnectionId,
+                    capability: "summary",
+                    status: "failed",
+                    model: task.summaryModel,
+                    credentialSource: "api-key",
+                    detail: "Pinned CLIProxyAPI Summary preflight outcome is unknown; no transcript was sent",
+                    reason: "unknown_outcome",
+                    runtimeEvidence: evidence,
+                    testedAt: new Date().toISOString(),
+                  });
+                  throw new Error(
+                    "Pinned CLIProxyAPI Summary preflight outcome is unknown; the committed transcript was not sent. Verify Gateway state before an authenticated retry",
+                  );
+                }
+                if (
+                  preflight.status !== "ready" || !keyConfigured || !evidence ||
+                  !isExactGatewayRuntimeEvidence(evidence, {
+                    endpoint: task.summaryEndpointIdentity,
+                    model: task.summaryModel,
+                    terminalStatus: "ready",
+                  })
+                ) {
+                  throw new Error(
+                    "Pinned CLIProxyAPI Summary preflight failed for the retained endpoint and credential revision; restore that exact Yulu key before an authenticated retry",
+                  );
+                }
+                const testedAt = new Date().toISOString();
+                this.gatewayReadiness.set(readinessKey, {
+                  identity: readinessIdentity,
+                  readiness: {
+                    capability: "summary",
+                    status: "ready",
+                    model: task.summaryModel,
+                    credentialSource: "api-key",
+                    testedAt,
+                    detail: `summary · ${task.summaryModel} passed the pinned CLIProxyAPI production preflight`,
+                  },
+                });
+              }
+              const executionId = this.host.beginGatewaySummaryExecution(
+                task.id,
+                input.leaseToken,
+                "summary",
+              );
+              let result: Awaited<ReturnType<CliProxyApiAdapter["summarize"]>>;
+              try {
+                result = await adapter.summarize({
+                  model: task.summaryModel,
+                  instructions: task.instructions,
+                  transcript: input.committedTranscript,
+                });
+              } catch (error) {
+                if (error instanceof GatewayRequestUnknownOutcomeError) {
+                  throw new GatewaySummaryUnknownOutcomeError(error.message, {
+                    executionId,
+                    evidence: error.evidence,
+                  });
+                }
+                throw error;
+              }
+              return {
+                stdout: "",
+                stderr: "",
+                nativeSessionId: result.evidence.requestId ?? "",
+                summary: result.summary,
+                runtimeEvidence: result.evidence,
+                summaryIdentity: { provider: task.summaryProvider, model: task.summaryModel },
+                audit: {
+                  ok: true,
+                  toolNames: [],
+                  artifactCommit: false,
+                  notionDeliveryBegin: false,
+                  notionSearch: false,
+                  notionWrite: false,
+                  notionIdempotencyMarker: false,
+                  notionWriteResultVerified: false,
+                  notionDeliveryCommit: false,
+                  notionOrderValid: true,
+                  errors: [],
+                },
+              };
+            }
             const readiness = this.currentSupportedAgentSummaryReadiness({
               connectionId: task.summaryConnectionId,
               provider: task.summaryProvider,
@@ -1358,6 +1854,42 @@ export class AgentConnectionCenter {
     }
   }
 
+  async assertGatewayConversationReady(input: { connectionId: string; model: string }): Promise<void> {
+    try {
+      await this.requireCurrentGatewayReadiness(input.connectionId, "conversation", input.model);
+    } catch {
+      throw new Error("Test this exact CLIProxyAPI Conversation model before starting a new conversation");
+    }
+  }
+
+  async converseGateway(input: {
+    connectionId: string;
+    endpointIdentity: string;
+    credentialIdentity: string;
+    model: string;
+    input: Array<{ role: "system" | "user" | "assistant"; content: string }>;
+  }) {
+    const record = this.gatewayRecord(input.connectionId);
+    if (!record) {
+      throw new Error(
+        `Pinned CLIProxyAPI Gateway connection ${input.connectionId} is unavailable; restore it in Agent Connection Center`,
+      );
+    }
+    const revision = this.gatewayCredentialRevision(record, input.credentialIdentity);
+    if (!revision) {
+      throw new Error("Pinned CLIProxyAPI Gateway credential identity is unavailable");
+    }
+    if (revision.endpoint !== input.endpointIdentity) {
+      throw new Error("Pinned CLIProxyAPI Gateway endpoint does not match its credential revision");
+    }
+    const adapter = this.requireGatewayAdapter(
+      input.endpointIdentity,
+      revision.httpsApproved,
+      input.credentialIdentity,
+    );
+    return await adapter.converse({ model: input.model, input: input.input });
+  }
+
   private unavailableSupportedSummary(detail: string): SupportedAgentSummaryReadiness {
     return {
       capability: "summary",
@@ -1373,11 +1905,9 @@ export class AgentConnectionCenter {
     };
   }
 
-  private currentSupportedAgentSummaryReadiness(snapshot?: {
-    connectionId: string | null;
-    provider: string;
-    model: string;
-  }): SupportedAgentSummaryReadiness {
+  private currentSupportedAgentSummaryReadiness(
+    snapshot?: SupportedAgentSummarySnapshot,
+  ): SupportedAgentSummaryReadiness {
     const selection = this.config.read().intelligence.summary;
     const connectionId = snapshot?.connectionId ?? (
       selection.provider === "agent" && "connectionId" in selection ? selection.connectionId : null
@@ -1386,7 +1916,7 @@ export class AgentConnectionCenter {
       return this.unavailableSupportedSummary("Select an explicit Supported Agent Summary connection before using it");
     }
     const record = this.host.listAgentConnectionRecords().find((candidate) => candidate.id === connectionId);
-    if (!record || (record.adapter !== "codex" && record.adapter !== "claude-code")) {
+    if (!record || (record.adapter !== "codex" && record.adapter !== "claude-code" && record.adapter !== "cliproxyapi")) {
       return this.unavailableSupportedSummary(`Pinned Supported Agent connection ${connectionId} is unavailable`);
     }
     if (snapshot && snapshot.provider !== "agent" && snapshot.provider !== record.adapter) {
@@ -1395,7 +1925,102 @@ export class AgentConnectionCenter {
     const exactSnapshot = snapshot ? { ...snapshot, provider: record.adapter } : undefined;
     return record.adapter === "codex"
       ? this.currentCodexSummaryReadiness(exactSnapshot)
-      : this.currentClaudeSummaryReadiness(exactSnapshot);
+      : record.adapter === "claude-code"
+        ? this.currentClaudeSummaryReadiness(exactSnapshot)
+        : this.currentGatewaySummaryReadiness(exactSnapshot);
+  }
+
+  private currentGatewaySummaryReadiness(
+    snapshot?: SupportedAgentSummarySnapshot,
+  ): SupportedAgentSummaryReadiness {
+    const selection = this.config.read().intelligence.summary;
+    const connectionId = snapshot?.connectionId ?? (
+      selection.provider === "agent" && "connectionId" in selection ? selection.connectionId : null
+    );
+    const model = snapshot?.model ?? selection.model;
+    if (!connectionId || (snapshot && snapshot.provider !== "cliproxyapi")) {
+      return this.unavailableSupportedSummary("Select an explicit CLIProxyAPI Gateway Summary connection before using it");
+    }
+    const record = this.gatewayRecord(connectionId);
+    if (!record) {
+      return this.unavailableSupportedSummary(`Pinned CLIProxyAPI Gateway connection ${connectionId} is unavailable`);
+    }
+    const endpoint = snapshot?.endpointIdentity ?? String(record.settings.endpoint ?? "").trim();
+    const credentialIdentity = snapshot?.credentialIdentity ?? this.currentGatewayCredentialIdentity(record);
+    const revision = this.gatewayCredentialRevision(record, credentialIdentity);
+    if (!revision) {
+      return this.unavailableSupportedSummary("Pinned CLIProxyAPI Gateway credential revision is unavailable");
+    }
+    if (revision.endpoint !== endpoint) {
+      return this.unavailableSupportedSummary(
+        "Pinned CLIProxyAPI Gateway endpoint does not match its credential revision",
+      );
+    }
+    const httpsApproved = revision.httpsApproved;
+    const pinnedWork = Boolean(snapshot?.endpointIdentity && snapshot?.credentialIdentity);
+    if (!pinnedWork && !this.hasGatewayDisclosure(
+      record,
+      "summary",
+      CLIPROXYAPI_SUMMARY_DISCLOSURE_VERSION,
+      endpoint,
+    )) {
+      return this.unavailableSupportedSummary(
+        "Accept the current CLIProxyAPI Summary endpoint and credential data path disclosure before creating new work",
+      );
+    }
+    const proof = this.gatewayReadiness.get(
+      this.gatewayReadinessKey(connectionId, "summary", credentialIdentity, model),
+    );
+    let sameSettings = false;
+    if (proof) {
+      try {
+        const identity = JSON.parse(proof.identity) as {
+          endpoint?: string;
+          httpsApproved?: boolean;
+          model?: string;
+          keyConfigured?: boolean;
+          credentialClass?: string;
+          credentialIdentity?: string;
+        };
+        sameSettings = identity.endpoint === endpoint && identity.httpsApproved === httpsApproved &&
+          identity.model === model && identity.keyConfigured === true && identity.credentialClass === "api-key" &&
+          identity.credentialIdentity === credentialIdentity;
+      } catch {
+        sameSettings = false;
+      }
+    }
+    const readiness = proof && sameSettings && proof.readiness.model === model
+      ? proof.readiness
+      : pinnedWork
+        ? {
+            capability: "summary" as const,
+            status: "untested" as const,
+            model,
+            testedAt: null,
+            detail: "Pinned CLIProxyAPI identity retained; an exact production preflight is required before Summary execution",
+            credentialSource: "api-key" as const,
+          }
+        : untested("summary", model);
+    return {
+      capability: "summary",
+      provider: "cliproxyapi",
+      model,
+      status: readiness.status,
+      testedAt: readiness.testedAt,
+      detail: readiness.detail,
+      credentialSource: "api-key",
+      connectionId,
+      endpointIdentity: endpoint,
+      credentialIdentity,
+      disclosure: {
+        kind: "external",
+        connectionId,
+        disclosureVersion: CLIPROXYAPI_SUMMARY_DISCLOSURE_VERSION,
+        data: "transcript_text",
+        destination: endpoint,
+      },
+      ...(readiness.reason ? { reason: readiness.reason } : {}),
+    };
   }
 
   private currentClaudeSummaryReadiness(snapshot?: {
@@ -1539,6 +2164,12 @@ export class AgentConnectionCenter {
     );
   }
 
+  private gatewayRecord(connectionId: string) {
+    return this.host.listAgentConnectionRecords().find((record) =>
+      record.id === connectionId && record.kind === "gateway" && record.adapter === "cliproxyapi"
+    );
+  }
+
   private claudeRecord(connectionId: string) {
     return this.host.listAgentConnectionRecords().find((record) =>
       record.id === connectionId && record.kind === "supported-agent" && record.adapter === "claude-code"
@@ -1578,6 +2209,53 @@ export class AgentConnectionCenter {
       apiProvider: status.apiProvider,
       features: [...status.features].sort(),
     });
+  }
+
+  private gatewayIdentity(
+    endpoint: string,
+    httpsApproved: boolean,
+    model: string,
+    keyConfigured: boolean,
+    credentialIdentity: string,
+  ): string {
+    return JSON.stringify({
+      endpoint,
+      httpsApproved,
+      model,
+      keyConfigured,
+      credentialClass: "api-key",
+      credentialIdentity,
+    });
+  }
+
+  private async requireCurrentGatewayReadiness(
+    connectionId: string,
+    capability: "summary" | "conversation",
+    model: string,
+  ): Promise<void> {
+    const record = this.gatewayRecord(connectionId);
+    if (!record) throw new Error(`Test this exact CLIProxyAPI ${capability} model before selecting it`);
+    const endpoint = String(record.settings.endpoint ?? "").trim();
+    const httpsApproved = record.settings.httpsApproved === true;
+    const credentialIdentity = this.currentGatewayCredentialIdentity(record);
+    const adapter = this.requireGatewayAdapter(endpoint, httpsApproved, credentialIdentity);
+    const [identity, keyConfigured] = await Promise.all([
+      adapter.validateEndpoint(),
+      adapter.keyConfigured(),
+    ]);
+    const readinessKey = this.gatewayReadinessKey(record.id, capability, credentialIdentity, model);
+    const proof = this.gatewayReadiness.get(readinessKey);
+    const expected = this.gatewayIdentity(
+      identity.endpoint,
+      httpsApproved,
+      model,
+      keyConfigured,
+      credentialIdentity,
+    );
+    if (proof?.readiness.status !== "ready" || proof.readiness.model !== model || proof.identity !== expected) {
+      this.gatewayReadiness.delete(readinessKey);
+      throw new Error(`Test this exact CLIProxyAPI ${capability === "summary" ? "Summary" : "Conversation"} model before selecting it`);
+    }
   }
 
   private async requireCurrentCodexReadiness(
@@ -1638,6 +2316,125 @@ export class AgentConnectionCenter {
       throw new Error("Claude Code production adapter is unavailable");
     }
     return this.options.claudeAdapter(executable);
+  }
+
+  private requireGatewayAdapter(endpoint: string, httpsApproved: boolean, credentialIdentity: string) {
+    if (!endpoint || !this.options.cliProxyAdapter) {
+      throw new Error("CLIProxyAPI production adapter is unavailable");
+    }
+    if (!this.gatewayCredentialIdentityValid(credentialIdentity)) {
+      throw new Error("CLIProxyAPI Gateway credential identity is invalid");
+    }
+    return this.options.cliProxyAdapter({ endpoint, httpsApproved, credentialIdentity });
+  }
+
+  private gatewayCredentialIdentityValid(value: string): boolean {
+    return /^gateway\.cliproxyapi\.[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+  }
+
+  private gatewayCredentialIdentities(record: PersistedAgentConnection | undefined): string[] {
+    return this.gatewayCredentialRevisions(record).map((revision) => revision.credentialIdentity);
+  }
+
+  private gatewayCredentialRevisions(record: PersistedAgentConnection | undefined): Array<{
+    credentialIdentity: string;
+    endpoint: string;
+    httpsApproved: boolean;
+  }> {
+    if (!record) return [];
+    const raw = Array.isArray(record.settings.credentialRevisions)
+      ? record.settings.credentialRevisions
+      : [];
+    const revisions = raw.flatMap((value) => {
+      if (!value || typeof value !== "object") return [];
+      const item = value as Record<string, unknown>;
+      const credentialIdentity = typeof item.credentialIdentity === "string" ? item.credentialIdentity : "";
+      const endpoint = typeof item.endpoint === "string" ? item.endpoint : "";
+      if (!this.gatewayCredentialIdentityValid(credentialIdentity) || !endpoint) return [];
+      return [{ credentialIdentity, endpoint, httpsApproved: item.httpsApproved === true }];
+    });
+    if (revisions.length > 0) {
+      return [...new Map(revisions.map((revision) => [revision.credentialIdentity, revision])).values()];
+    }
+    const credentialIdentity = String(record.settings.credentialIdentity ?? "");
+    const endpoint = String(record.settings.endpoint ?? "");
+    return this.gatewayCredentialIdentityValid(credentialIdentity) && endpoint
+      ? [{ credentialIdentity, endpoint, httpsApproved: record.settings.httpsApproved === true }]
+      : [];
+  }
+
+  private gatewayCredentialRevision(record: PersistedAgentConnection, credentialIdentity: string) {
+    return this.gatewayCredentialRevisions(record)
+      .find((revision) => revision.credentialIdentity === credentialIdentity) ?? null;
+  }
+
+  private currentGatewayCredentialIdentity(record: PersistedAgentConnection): string {
+    const value = String(record.settings.credentialIdentity ?? "").trim();
+    if (!this.gatewayCredentialIdentityValid(value) || !this.gatewayCredentialIdentities(record).includes(value)) {
+      throw new Error("CLIProxyAPI Gateway credential revision is unavailable");
+    }
+    return value;
+  }
+
+  private requireGatewaySecretStore(credentialIdentity: string): GatewaySecretStore {
+    if (!this.gatewayCredentialIdentityValid(credentialIdentity) || !this.options.gatewaySecretStore) {
+      throw new Error("CLIProxyAPI Keychain storage is unavailable");
+    }
+    return this.options.gatewaySecretStore(credentialIdentity);
+  }
+
+  private clearGatewaySelections(connectionId: string): void {
+    const config = this.config.read();
+    for (const capability of ["summary", "conversation"] as const) {
+      const selection = config.intelligence[capability];
+      if (
+        selection.provider === "agent" && "connectionId" in selection &&
+        selection.connectionId === connectionId
+      ) {
+        this.config.update(`intelligence.${capability}`, {
+          provider: "agent",
+          model: "runtime-managed",
+        });
+      }
+    }
+  }
+
+  private hasGatewayDisclosure(
+    record: PersistedAgentConnection,
+    capability: "summary" | "conversation",
+    disclosureVersion: string,
+    endpoint: string,
+  ): boolean {
+    const receipt = this.host.getAgentConnectionDisclosure(record.id, capability);
+    const setting = capability === "summary"
+      ? "summaryDisclosureIdentity"
+      : "conversationDisclosureIdentity";
+    const identity = record.settings[setting];
+    if (!identity || typeof identity !== "object" || Array.isArray(identity)) return false;
+    const pinned = identity as Record<string, unknown>;
+    return receipt?.disclosureVersion === disclosureVersion && receipt.decision === "accepted" &&
+      pinned.endpoint === endpoint &&
+      pinned.credentialIdentity === this.currentGatewayCredentialIdentity(record);
+  }
+
+  private setGatewayDisclosureEndpoint(
+    record: PersistedAgentConnection,
+    capability: "summary" | "conversation",
+    endpoint: string | null,
+  ): void {
+    const setting = capability === "summary"
+      ? "summaryDisclosureIdentity"
+      : "conversationDisclosureIdentity";
+    const settings = { ...record.settings };
+    if (endpoint) {
+      settings[setting] = {
+        endpoint,
+        credentialIdentity: this.currentGatewayCredentialIdentity(record),
+      };
+    } else {
+      delete settings[setting];
+    }
+    this.host.upsertAgentConnectionRecord({ ...record, settings });
   }
 
   private credentialSource(value: unknown): XaiCredentialSource | null {

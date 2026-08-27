@@ -776,13 +776,14 @@ describe("server", () => {
 
   it("/api/voice-chat/ask creates and continues a chat session", async () => {
     const configDir = join(env.root, ".config", "yulu");
+    writeFileSync(join(configDir, "mcp-token.json"), JSON.stringify({ token: "test-token" }));
     const config = JSON.parse(readFileSync(join(configDir, "config.json"), "utf8"));
     config.llm = { enabled: false, command: null };
     writeFileSync(join(configDir, "config.json"), JSON.stringify(config, null, 2));
 
     const r = await fetch(`${env.baseUrl}/api/voice-chat/ask`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", "Authorization": "Bearer test-token" },
       body: JSON.stringify({ question: "hello agent" }),
     });
     expect(r.status).toBe(200);
@@ -793,7 +794,7 @@ describe("server", () => {
 
     const next = await fetch(`${env.baseUrl}/api/voice-chat/ask`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", "Authorization": "Bearer test-token" },
       body: JSON.stringify({ question: "second turn", sessionId: body.sessionId }),
     });
     expect(next.status).toBe(200);
@@ -809,9 +810,16 @@ describe("server", () => {
 
   it("/api/voice-chat/ask can return immediately and answer in the background", async () => {
     const configDir = join(env.root, ".config", "yulu");
-    const r = await fetch(`${env.baseUrl}/api/voice-chat/ask`, {
+    writeFileSync(join(configDir, "mcp-token.json"), JSON.stringify({ token: "test-token" }));
+    const unauthorized = await fetch(`${env.baseUrl}/api/voice-chat/ask`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ question: "must not spend" }),
+    });
+    expect(unauthorized.status).toBe(401);
+    const r = await fetch(`${env.baseUrl}/api/voice-chat/ask`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": "Bearer test-token" },
       body: JSON.stringify({ question: "deferred hello", defer: true }),
     });
     expect(r.status).toBe(200);

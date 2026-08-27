@@ -3,6 +3,7 @@ import type { HostStore } from "./hostStore.js";
 export const XAI_CONVERSATION_DISCLOSURE_VERSION = "xai-conversation-v1";
 export const CODEX_CONVERSATION_DISCLOSURE_VERSION = "codex-conversation-v1";
 export const CLAUDE_CODE_CONVERSATION_DISCLOSURE_VERSION = "claude-code-conversation-v1";
+export const CLIPROXYAPI_CONVERSATION_DISCLOSURE_VERSION = "cliproxyapi-conversation-v2";
 
 export function hasCurrentAgentConversationDisclosure(
   host: Pick<HostStore, "getAgentConnectionDisclosure">,

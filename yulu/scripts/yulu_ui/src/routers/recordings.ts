@@ -8,7 +8,7 @@ import {
   STANDALONE_SUMMARY_INSTRUCTIONS,
 } from "../promptInstructions.js";
 import { TRPCError } from "@trpc/server";
-import { router, publicProcedure } from "../trpc.js";
+import { router, publicProcedure, uiMutationProcedure } from "../trpc.js";
 import {
   publicAgentTask,
   RecordingTaskDeletionBlockedError,
@@ -943,7 +943,7 @@ export const recordingsRouter = router({
       });
     }),
 
-  summarize: publicProcedure
+  summarize: uiMutationProcedure
     .input(z.object({ stem: z.string(), promptId: z.string().nullable().optional() }))
     .mutation(async ({ ctx, input }) => {
       return withManualActionLock(input.stem, "Summary generation", async () => {

@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { publicProcedure, router } from "../trpc.js";
+import { publicProcedure, router, uiMutationProcedure } from "../trpc.js";
 import { publicAgentTask } from "../hostStore.js";
 
 export const agentTasksRouter = router({
@@ -23,7 +23,7 @@ export const agentTasksRouter = router({
       };
     }),
 
-  retry: publicProcedure
+  retry: uiMutationProcedure
     .input(z.object({ id: z.string().uuid() }))
     .mutation(({ ctx, input }) => {
       try { return publicAgentTask(ctx.recordingPipeline.retry(input.id)); }

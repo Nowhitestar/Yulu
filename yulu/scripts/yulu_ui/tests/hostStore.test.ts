@@ -68,6 +68,36 @@ describe("HostStore", () => {
     ];
   }
 
+  function gatewaySummaryTask(idempotencyKey: string, sendToNotion = false) {
+    const current = store ?? createStore();
+    return current.enqueueRecording({
+      idempotencyKey,
+      recordingStem: "Demo_20260711_120000",
+      title: "Gateway Summary",
+      audioPath: join(root, "Demo_20260711_120000.wav"),
+      sendToNotion,
+      destinationHint: "",
+      agentProvider: "cliproxyapi",
+      summaryProvider: "cliproxyapi",
+      summaryModel: "gateway-summary-exact",
+      summaryConnectionId: "cliproxyapi",
+      summaryCredentialClass: "api-key",
+      summaryCredentialIdentity: "gateway.cliproxyapi.00000000-0000-4000-8000-000000000137",
+      summaryDisclosureVersion: "cliproxyapi-summary-v1",
+      summaryEndpointIdentity: "http://127.0.0.1:8317/v1",
+      instructions: "Use only the committed transcript.",
+    }).task;
+  }
+
+  function claimedGatewaySummary(idempotencyKey: string, sendToNotion = false) {
+    const task = gatewaySummaryTask(idempotencyKey, sendToNotion);
+    const claimed = store!.claim(task.id)!;
+    const transcript = artifacts(task.id)[0]!;
+    store!.recordTranscript(task.id, claimed.leaseToken!, transcript);
+    store!.recordSummaryInputSnapshot(task.id, claimed.leaseToken!, transcript);
+    return { task, claimed, transcript };
+  }
+
   function activationEvidence(taskId: string): CoreActivationEvidence {
     return {
       recordingStem: "Demo_20260711_120000",
@@ -214,6 +244,141 @@ describe("HostStore", () => {
       }),
     ]));
     expect(() => store!.prepareRecordingDeletion(task.recordingStem)).toThrow("execution_unverified");
+  });
+
+  it.each([
+    ["preflight" as const, "failed", "no transcript was sent"],
+    ["summary" as const, "execution_unverified", "outcome is unknown"],
+  ])("does not replay an interrupted Gateway %s invocation after Host restart", (stage, state, error) => {
+    createStore();
+    const { task, claimed } = claimedGatewaySummary(`recording:gateway-crash-${stage}`);
+    if (stage === "summary") {
+      store!.beginGatewaySummaryExecution(task.id, claimed.leaseToken!, "preflight");
+    }
+    const executionId = store!.beginGatewaySummaryExecution(task.id, claimed.leaseToken!, stage);
+    const dbPath = join(root, "host.sqlite");
+
+    store!.close();
+    store = new HostStore(dbPath);
+
+    expect(store.getTask(task.id)).toMatchObject({
+      state,
+      phase: "failed",
+      leaseToken: null,
+      ...(stage === "summary"
+        ? { nativeSessionId: executionId, artifactSessionId: executionId }
+        : { nativeSessionId: null, artifactSessionId: null }),
+      error: expect.stringContaining(error),
+    });
+    expect(store.claimNext()).toBeNull();
+    expect(store.listEvents(task.id)).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        type: stage === "summary"
+          ? "gateway.summary_unknown_outcome"
+          : "gateway.summary_preflight_interrupted",
+        payload: expect.objectContaining({ executionId, stage, recoveredAfterRestart: true }),
+      }),
+    ]));
+    if (stage === "summary") {
+      expect(() => store!.retry(task.id)).toThrow("cannot retry from execution_unverified");
+    } else {
+      expect(store.retry(task.id)).toMatchObject({ state: "transcript_committed", leaseToken: null });
+    }
+  });
+
+  it("fails closed on malformed Gateway Unknown Outcome evidence and keeps the fence after restart", () => {
+    createStore();
+    const { task, claimed } = claimedGatewaySummary("recording:gateway-malformed-unknown");
+    store!.beginGatewaySummaryExecution(task.id, claimed.leaseToken!, "summary");
+
+    expect(() => store!.markGatewaySummaryUnknownOutcome(
+      task.id,
+      claimed.leaseToken!,
+      "attacker-controlled-error-secret",
+      "\ninvalid-execution-secret",
+      {
+        adapter: "attacker-provider",
+        transport: "attacker-transport",
+        runtimeVersion: "attacker-runtime-secret",
+        endpoint: "https://attacker.example/secret",
+        requestedProvider: "attacker",
+        requestedModel: "different-model",
+        actualProvider: "attacker",
+        actualModel: "different-model",
+        requestId: "attacker-request-secret",
+        sessionId: "attacker-session-secret",
+        terminalStatus: "unknown",
+        fallbackOccurred: true,
+        toolsEnabled: true,
+      },
+    )).not.toThrow();
+
+    const fenced = store!.getTask(task.id)!;
+    expect(fenced).toMatchObject({
+      state: "execution_unverified",
+      phase: "failed",
+      leaseToken: null,
+      error: "CLIProxyAPI Gateway Summary entered Unknown Outcome; do not retry this execution",
+    });
+    const serializedEvents = JSON.stringify(store!.listEvents(task.id));
+    expect(serializedEvents).not.toContain("attacker");
+    expect(serializedEvents).not.toContain("secret");
+    expect(store!.listEvents(task.id)).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        type: "gateway.summary_unknown_outcome",
+        payload: expect.objectContaining({
+          evidenceValidated: false,
+          runtimeEvidence: expect.objectContaining({
+            adapter: "cliproxyapi",
+            endpoint: "http://127.0.0.1:8317/v1",
+            requestedModel: "gateway-summary-exact",
+            actualModel: null,
+            requestId: null,
+            sessionId: null,
+            terminalStatus: "unknown",
+            fallbackOccurred: false,
+            toolsEnabled: false,
+          }),
+        }),
+      }),
+    ]));
+
+    const dbPath = join(root, "host.sqlite");
+    store!.close();
+    store = new HostStore(dbPath);
+    expect(store.getTask(task.id)).toMatchObject({ state: "execution_unverified", leaseToken: null });
+    expect(store.claimNext()).toBeNull();
+    expect(() => store!.retry(task.id)).toThrow("cannot retry from execution_unverified");
+  });
+
+  it.each([
+    [false, "completed"],
+    [true, "artifacts_committed"],
+  ])("recovers a durably committed Gateway Summary without replay when sendToNotion=%s", (sendToNotion, state) => {
+    createStore();
+    const { task, claimed } = claimedGatewaySummary(
+      `recording:gateway-artifacts-committed:${sendToNotion}`,
+      sendToNotion,
+    );
+    store!.beginGatewaySummaryExecution(task.id, claimed.leaseToken!, "summary");
+    store!.recordArtifacts(task.id, claimed.leaseToken!, artifacts(task.id));
+    const dbPath = join(root, "host.sqlite");
+
+    store!.close();
+    store = new HostStore(dbPath);
+
+    expect(store.getTask(task.id)).toMatchObject({
+      state,
+      leaseToken: null,
+      error: null,
+    });
+    expect(store.listEvents(task.id).filter(({ type }) => type === "gateway.summary_unknown_outcome"))
+      .toEqual([]);
+    if (sendToNotion) {
+      expect(store.claimNext()).toMatchObject({ id: task.id, state: "artifacts_committed" });
+    } else {
+      expect(store.claimNext()).toBeNull();
+    }
   });
 
   it.each([
@@ -1340,6 +1505,22 @@ describe("HostStore", () => {
     expect(store.listAgentConnectionRecords().find((record) => record.id === "codex")).toMatchObject({
       kind: "supported-agent",
       settings: { executablePath: "/fake/bin/codex", conversationModel: "gpt-5.6-sol" },
+    });
+    store.upsertAgentConnectionRecord({
+      id: "cliproxyapi",
+      kind: "gateway",
+      adapter: "cliproxyapi",
+      label: "CLIProxyAPI",
+      lifecycle: "available",
+      settings: {
+        endpoint: "http://127.0.0.1:8317/v1",
+        summaryModel: "gateway-summary-exact",
+        conversationModel: "gateway-conversation-exact",
+      },
+    });
+    expect(store.listAgentConnectionRecords().find((record) => record.id === "cliproxyapi")).toMatchObject({
+      kind: "gateway",
+      settings: { endpoint: "http://127.0.0.1:8317/v1" },
     });
   });
 });

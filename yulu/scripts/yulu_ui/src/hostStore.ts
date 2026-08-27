@@ -5,6 +5,10 @@ import { basename, dirname } from "node:path";
 import { isTrustedNotionUrl, isValidNotionPageId, notionPageIdentityProblem } from "./notionDelivery.js";
 import type { TranscriptionLanguage } from "./realtimeTranscription.js";
 import type { XaiCredentialSource } from "./xaiCredentials.js";
+import {
+  CLIPROXYAPI_CONTRACT_VERSION,
+  isExactGatewayRuntimeEvidence,
+} from "./cliProxyApiAdapter.js";
 
 export type AgentTaskState =
   | "queued"
@@ -54,7 +58,9 @@ export interface AgentTask {
   summaryCredentialSource: XaiCredentialSource | null;
   summaryConnectionId: string | null;
   summaryCredentialClass: SummaryCredentialClass | null;
+  summaryCredentialIdentity: string | null;
   summaryDisclosureVersion: string | null;
+  summaryEndpointIdentity: string | null;
   summaryInputArtifactId: string | null;
   summaryInputArtifactSha256: string | null;
   summaryInputArtifactBytes: number | null;
@@ -100,6 +106,8 @@ export interface SummaryCommitRuntimeEvidence {
   sessionId: string | null;
   terminalStatus: "ready" | "failed" | "unknown";
   fallbackOccurred: boolean;
+  endpoint?: string | null;
+  toolsEnabled?: boolean;
 }
 
 export interface ActivationArtifactFingerprint {
@@ -156,7 +164,7 @@ export interface SummaryDataPathDisclosure {
 
 export interface PersistedAgentConnection {
   id: string;
-  kind: "direct-provider" | "supported-agent" | "legacy-custom";
+  kind: "direct-provider" | "supported-agent" | "gateway" | "legacy-custom";
   adapter: string;
   label: string;
   lifecycle: "available" | "legacy";
@@ -197,6 +205,8 @@ export interface PersistedAgentConnectionReadiness {
     sessionId: string | null;
     terminalStatus: "ready" | "failed" | "unknown";
     fallbackOccurred: boolean;
+    endpoint?: string | null;
+    toolsEnabled?: boolean;
   };
   testedAt: string;
 }
@@ -257,7 +267,9 @@ interface TaskRow {
   summary_credential_source: XaiCredentialSource | null;
   summary_connection_id: string | null;
   summary_credential_class: SummaryCredentialClass | null;
+  summary_credential_identity: string | null;
   summary_disclosure_version: string | null;
+  summary_endpoint_identity: string | null;
   summary_input_artifact_id: string | null;
   summary_input_artifact_sha256: string | null;
   summary_input_artifact_bytes: number | null;
@@ -269,6 +281,37 @@ interface TaskRow {
   error: string | null;
   created_at: string;
   updated_at: string;
+}
+
+type GatewaySummaryExecutionStage = "preflight" | "summary";
+
+interface GatewaySummaryExecutionJournal {
+  stage: GatewaySummaryExecutionStage;
+  executionId: string;
+  endpoint: string;
+  model: string;
+}
+
+function gatewaySummaryExecutionJournal(raw: string | null): GatewaySummaryExecutionJournal | null {
+  try {
+    const audit = JSON.parse(raw ?? "null") as Record<string, unknown> | null;
+    const value = audit?.gatewayExecution;
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+    const journal = value as Record<string, unknown>;
+    const stage = journal.stage;
+    const executionId = journal.executionId;
+    const endpoint = journal.endpoint;
+    const model = journal.model;
+    if (
+      (stage !== "preflight" && stage !== "summary") ||
+      typeof executionId !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/.test(executionId) ||
+      typeof endpoint !== "string" || !endpoint || endpoint.length > 2_000 ||
+      typeof model !== "string" || !model || model.length > 128
+    ) return null;
+    return { stage, executionId, endpoint, model };
+  } catch {
+    return null;
+  }
 }
 
 function now(): string {
@@ -295,7 +338,9 @@ function toTask(row: TaskRow): AgentTask {
     summaryCredentialSource: row.summary_credential_source,
     summaryConnectionId: row.summary_connection_id,
     summaryCredentialClass: row.summary_credential_class,
+    summaryCredentialIdentity: row.summary_credential_identity,
     summaryDisclosureVersion: row.summary_disclosure_version,
+    summaryEndpointIdentity: row.summary_endpoint_identity,
     summaryInputArtifactId: row.summary_input_artifact_id,
     summaryInputArtifactSha256: row.summary_input_artifact_sha256,
     summaryInputArtifactBytes: row.summary_input_artifact_bytes,
@@ -597,7 +642,9 @@ export class HostStore {
     summaryCredentialSource?: XaiCredentialSource | null;
     summaryConnectionId?: string | null;
     summaryCredentialClass?: SummaryCredentialClass | null;
+    summaryCredentialIdentity?: string | null;
     summaryDisclosureVersion?: string | null;
+    summaryEndpointIdentity?: string | null;
     instructions?: string;
     trigger?: AgentTaskTrigger;
   }): { task: AgentTask; created: boolean } {
@@ -632,9 +679,10 @@ export class HostStore {
           id, idempotency_key, recording_stem, title, audio_path, transcription_language, trigger,
           state, phase, send_to_notion, destination_hint, agent_provider,
           summary_provider, summary_model, summary_credential_source,
-          summary_connection_id, summary_credential_class, summary_disclosure_version, instructions,
+          summary_connection_id, summary_credential_class, summary_credential_identity,
+          summary_disclosure_version, summary_endpoint_identity, instructions,
           attempt, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
       `).run(
         id,
         input.idempotencyKey,
@@ -651,7 +699,9 @@ export class HostStore {
         summaryCredentialSource,
         input.summaryConnectionId ?? null,
         input.summaryCredentialClass ?? summaryCredentialSource,
+        input.summaryCredentialIdentity ?? null,
         input.summaryDisclosureVersion ?? null,
+        input.summaryEndpointIdentity ?? null,
         input.instructions ?? "",
         timestamp,
         timestamp,
@@ -666,7 +716,9 @@ export class HostStore {
         summaryCredentialSource,
         summaryConnectionId: input.summaryConnectionId ?? null,
         summaryCredentialClass: input.summaryCredentialClass ?? summaryCredentialSource,
+        summaryCredentialIdentity: input.summaryCredentialIdentity ?? null,
         summaryDisclosureVersion: input.summaryDisclosureVersion ?? null,
+        summaryEndpointIdentity: input.summaryEndpointIdentity ?? null,
       });
       return { task, created: task.id === id };
     });
@@ -818,7 +870,7 @@ export class HostStore {
     const claim = this.db.transaction(() => {
       const row = this.db.prepare(`
         SELECT * FROM agent_tasks
-        WHERE state IN ('queued', 'awaiting_agent', 'transcript_committed')
+        WHERE state IN ('queued', 'awaiting_agent', 'transcript_committed', 'artifacts_committed')
         ORDER BY created_at ASC LIMIT 1
       `).get() as TaskRow | undefined;
       if (!row) return null;
@@ -826,11 +878,20 @@ export class HostStore {
       const timestamp = now();
       const result = this.db.prepare(`
         UPDATE agent_tasks
-        SET state = CASE WHEN state = 'transcript_committed' THEN 'transcript_committed' ELSE 'running' END,
-            phase = CASE WHEN state = 'transcript_committed' THEN 'summarizing' ELSE 'transcribing' END,
-            native_session_id = NULL, artifact_session_id = NULL, delivery_session_id = NULL,
+        SET state = CASE
+              WHEN state IN ('transcript_committed', 'artifacts_committed') THEN state
+              ELSE 'running'
+            END,
+            phase = CASE
+              WHEN state = 'transcript_committed' THEN 'summarizing'
+              WHEN state = 'artifacts_committed' THEN 'committing_artifacts'
+              ELSE 'transcribing'
+            END,
+            native_session_id = CASE WHEN state = 'artifacts_committed' THEN native_session_id ELSE NULL END,
+            artifact_session_id = CASE WHEN state = 'artifacts_committed' THEN artifact_session_id ELSE NULL END,
+            delivery_session_id = NULL,
             lease_token = ?, attempt = attempt + 1, error = NULL, audit_json = NULL, updated_at = ?
-        WHERE id = ? AND state IN ('queued', 'awaiting_agent', 'transcript_committed')
+        WHERE id = ? AND state IN ('queued', 'awaiting_agent', 'transcript_committed', 'artifacts_committed')
       `).run(lease, timestamp, row.id);
       if (result.changes !== 1) return null;
       this.appendEvent(row.id, "task.claimed", {
@@ -847,7 +908,7 @@ export class HostStore {
   hasDispatchableTask(): boolean {
     return this.db.prepare(`
       SELECT 1 FROM agent_tasks
-      WHERE state IN ('queued', 'awaiting_agent', 'transcript_committed')
+      WHERE state IN ('queued', 'awaiting_agent', 'transcript_committed', 'artifacts_committed')
       LIMIT 1
     `).get() !== undefined;
   }
@@ -855,17 +916,26 @@ export class HostStore {
   claim(id: string): AgentTask | null {
     const claim = this.db.transaction(() => {
       const row = this.db.prepare(
-        "SELECT * FROM agent_tasks WHERE id = ? AND state IN ('queued', 'awaiting_agent', 'transcript_committed')",
+        "SELECT * FROM agent_tasks WHERE id = ? AND state IN ('queued', 'awaiting_agent', 'transcript_committed', 'artifacts_committed')",
       ).get(id) as TaskRow | undefined;
       if (!row) return null;
       const lease = randomUUID();
       const result = this.db.prepare(`
         UPDATE agent_tasks
-        SET state = CASE WHEN state = 'transcript_committed' THEN 'transcript_committed' ELSE 'running' END,
-            phase = CASE WHEN state = 'transcript_committed' THEN 'summarizing' ELSE 'transcribing' END,
-            native_session_id = NULL, artifact_session_id = NULL, delivery_session_id = NULL,
+        SET state = CASE
+              WHEN state IN ('transcript_committed', 'artifacts_committed') THEN state
+              ELSE 'running'
+            END,
+            phase = CASE
+              WHEN state = 'transcript_committed' THEN 'summarizing'
+              WHEN state = 'artifacts_committed' THEN 'committing_artifacts'
+              ELSE 'transcribing'
+            END,
+            native_session_id = CASE WHEN state = 'artifacts_committed' THEN native_session_id ELSE NULL END,
+            artifact_session_id = CASE WHEN state = 'artifacts_committed' THEN artifact_session_id ELSE NULL END,
+            delivery_session_id = NULL,
             lease_token = ?, attempt = attempt + 1, error = NULL, audit_json = NULL, updated_at = ?
-        WHERE id = ? AND state IN ('queued', 'awaiting_agent', 'transcript_committed')
+        WHERE id = ? AND state IN ('queued', 'awaiting_agent', 'transcript_committed', 'artifacts_committed')
       `).run(lease, now(), id);
       if (result.changes !== 1) return null;
       this.appendEvent(id, "task.claimed", {
@@ -1071,7 +1141,9 @@ export class HostStore {
       }
       this.db.prepare(`
         UPDATE agent_tasks SET state = 'artifacts_committed', phase = 'committing_artifacts',
-          error = NULL, updated_at = ? WHERE id = ?
+          error = NULL,
+          audit_json = CASE WHEN summary_provider = 'cliproxyapi' THEN NULL ELSE audit_json END,
+          updated_at = ? WHERE id = ?
       `).run(now(), id);
       this.appendEvent(id, "artifacts.committed", {
         artifacts: artifacts.map((artifact) => ({ kind: artifact.kind, sha256: artifact.sha256, bytes: artifact.bytes })),
@@ -1149,6 +1221,38 @@ export class HostStore {
     return snapshot();
   }
 
+  beginGatewaySummaryExecution(
+    id: string,
+    leaseToken: string,
+    stage: GatewaySummaryExecutionStage,
+  ): string {
+    const begin = this.db.transaction(() => {
+      const task = this.requireLease(id, leaseToken);
+      this.requireGatewaySummarySnapshot(task);
+      const current = this.gatewaySummaryExecutionJournal(id);
+      if (current && (stage === "preflight" || current.stage !== "preflight")) {
+        throw new Error(`task ${id} already has a durable CLIProxyAPI ${current.stage} execution intent`);
+      }
+      const executionId = `gateway-${stage}-${randomUUID()}`;
+      const journal: GatewaySummaryExecutionJournal = {
+        stage,
+        executionId,
+        endpoint: task.summaryEndpointIdentity!,
+        model: task.summaryModel,
+      };
+      const result = this.db.prepare(`
+        UPDATE agent_tasks SET audit_json = ?, updated_at = ?
+        WHERE id = ? AND lease_token = ? AND state = 'transcript_committed'
+      `).run(JSON.stringify({ gatewayExecution: journal }), now(), id, leaseToken);
+      if (result.changes !== 1) throw new Error(`task ${id} changed before CLIProxyAPI ${stage} dispatch`);
+      this.appendEvent(id, stage === "preflight"
+        ? "gateway.summary_preflight_intent"
+        : "gateway.summary_dispatch_intent", { ...journal });
+      return executionId;
+    });
+    return begin.immediate();
+  }
+
   validateSummaryCommit(
     id: string,
     leaseToken: string,
@@ -1166,7 +1270,7 @@ export class HostStore {
       throw new Error(`task ${id} cannot authorize a Summary commit from ${task.state}`);
     }
     if (
-      !["codex", "claude-code"].includes(task.summaryProvider) ||
+      !["codex", "claude-code", "cliproxyapi"].includes(task.summaryProvider) ||
       task.summaryConnectionId !== input.connectionId ||
       task.summaryCredentialClass !== input.credentialClass ||
       task.summaryDisclosureVersion !== input.disclosureVersion
@@ -1186,12 +1290,22 @@ export class HostStore {
     const providerIdentityMatches = task.summaryProvider === "codex"
       ? evidence.adapter === "codex" && evidence.transport === "codex-app-server-stdio" &&
         evidence.requestedProvider === "openai" && evidence.actualProvider === "openai"
-      : evidence.adapter === "claude-code" && evidence.transport === "claude-code-print-stream-json" &&
-        evidence.requestedProvider === null && evidence.actualProvider === null;
+      : task.summaryProvider === "claude-code"
+        ? evidence.adapter === "claude-code" && evidence.transport === "claude-code-print-stream-json" &&
+          evidence.requestedProvider === null && evidence.actualProvider === null
+        : Boolean(task.summaryEndpointIdentity) && Boolean(task.summaryCredentialIdentity) &&
+          isExactGatewayRuntimeEvidence(evidence, {
+            endpoint: task.summaryEndpointIdentity!,
+            model: task.summaryModel,
+            terminalStatus: "ready",
+          });
+    const sessionIdentityValid = task.summaryProvider === "cliproxyapi"
+      ? evidence.sessionId === null
+      : Boolean(evidence.sessionId);
     if (
       !providerIdentityMatches || !evidence.runtimeVersion.trim() ||
       evidence.requestedModel !== task.summaryModel || evidence.actualModel !== task.summaryModel ||
-      !evidence.requestId || !evidence.sessionId || evidence.terminalStatus !== "ready" ||
+      !evidence.requestId || !sessionIdentityValid || evidence.terminalStatus !== "ready" ||
       evidence.fallbackOccurred
     ) {
       throw new Error("Supported Agent Summary Runtime Evidence does not match the pinned task identity");
@@ -1862,6 +1976,76 @@ export class HostStore {
     return this.getTask(id)!;
   }
 
+  markGatewaySummaryUnknownOutcome(
+    id: string,
+    leaseToken: string,
+    error: string,
+    executionId: string,
+    evidence: SummaryCommitRuntimeEvidence,
+  ): AgentTask {
+    const task = this.requireLease(id, leaseToken);
+    if (task.state !== "transcript_committed") {
+      throw new Error(`task ${id} cannot enter Unknown Outcome from ${task.state}`);
+    }
+    this.requireGatewaySummarySnapshot(task);
+    const evidenceMatches = task.summaryProvider === "cliproxyapi" &&
+      task.summaryCredentialClass === "api-key" && Boolean(task.summaryCredentialIdentity) &&
+      Boolean(task.summaryEndpointIdentity) && isExactGatewayRuntimeEvidence(evidence, {
+        endpoint: task.summaryEndpointIdentity!,
+        model: task.summaryModel,
+        terminalStatus: "unknown",
+      });
+    const journal = this.gatewaySummaryExecutionJournal(id);
+    const journalMatches = journal?.stage === "summary" &&
+      journal.endpoint === task.summaryEndpointIdentity && journal.model === task.summaryModel;
+    const suppliedExecutionId = executionId.trim();
+    const safeExecutionId = journalMatches
+      ? journal.executionId
+      : /^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/.test(suppliedExecutionId)
+        ? suppliedExecutionId
+        : `gateway-summary-${randomUUID()}`;
+    const safeEvidence: SummaryCommitRuntimeEvidence = evidenceMatches ? evidence : {
+      adapter: "cliproxyapi",
+      transport: task.summaryEndpointIdentity!.startsWith("https:")
+        ? "openai-responses-approved-https"
+        : "openai-responses-loopback-http",
+      runtimeVersion: CLIPROXYAPI_CONTRACT_VERSION,
+      endpoint: task.summaryEndpointIdentity,
+      requestedProvider: null,
+      requestedModel: task.summaryModel,
+      actualProvider: null,
+      actualModel: null,
+      requestId: null,
+      sessionId: null,
+      terminalStatus: "unknown",
+      fallbackOccurred: false,
+      toolsEnabled: false,
+    };
+    const safeError = "CLIProxyAPI Gateway Summary entered Unknown Outcome; do not retry this execution";
+    const audit = {
+      gatewayExecution: {
+        stage: "summary",
+        executionId: safeExecutionId,
+        endpoint: task.summaryEndpointIdentity,
+        model: task.summaryModel,
+        outcome: "unknown",
+      },
+      runtimeEvidence: safeEvidence,
+      evidenceValidated: evidenceMatches,
+    };
+    this.db.prepare(`
+      UPDATE agent_tasks SET state = 'execution_unverified', phase = 'failed', lease_token = NULL,
+        native_session_id = ?, artifact_session_id = ?, error = ?, audit_json = ?, updated_at = ? WHERE id = ?
+    `).run(safeExecutionId, safeExecutionId, safeError, JSON.stringify(audit), now(), id);
+    this.appendEvent(id, "gateway.summary_unknown_outcome", {
+      error: safeError,
+      executionId: safeExecutionId,
+      runtimeEvidence: safeEvidence,
+      evidenceValidated: evidenceMatches,
+    });
+    return this.getTask(id)!;
+  }
+
   retry(
     id: string,
     options: { allowCancelled?: boolean; allowCompleted?: boolean; discardArtifacts?: boolean } = {},
@@ -1917,7 +2101,9 @@ export class HostStore {
       summaryCredentialSource?: XaiCredentialSource | null;
       summaryConnectionId?: string | null;
       summaryCredentialClass?: SummaryCredentialClass | null;
+      summaryCredentialIdentity?: string | null;
       summaryDisclosureVersion?: string | null;
+      summaryEndpointIdentity?: string | null;
     },
   ): AgentTask {
     const replace = this.db.transaction(() => {
@@ -1931,7 +2117,9 @@ export class HostStore {
       const summaryCredentialSource = selection.summaryCredentialSource ?? null;
       const summaryConnectionId = selection.summaryConnectionId ?? null;
       const summaryCredentialClass = selection.summaryCredentialClass ?? summaryCredentialSource;
+      const summaryCredentialIdentity = selection.summaryCredentialIdentity ?? null;
       const summaryDisclosureVersion = selection.summaryDisclosureVersion ?? null;
+      const summaryEndpointIdentity = selection.summaryEndpointIdentity ?? null;
       if (!summaryProvider || summaryProvider.length > 100 || !summaryModel || summaryModel.length > 128) {
         throw new Error("replacement Summary Provider identity is invalid");
       }
@@ -1944,7 +2132,9 @@ export class HostStore {
           summaryCredentialSource === original.summaryCredentialSource &&
           summaryConnectionId === original.summaryConnectionId &&
           summaryCredentialClass === original.summaryCredentialClass &&
-          summaryDisclosureVersion === original.summaryDisclosureVersion
+          summaryCredentialIdentity === original.summaryCredentialIdentity &&
+          summaryDisclosureVersion === original.summaryDisclosureVersion &&
+          summaryEndpointIdentity === original.summaryEndpointIdentity
       ) {
         throw new Error("replacement Summary Provider must differ from the original task snapshot");
       }
@@ -1970,10 +2160,11 @@ export class HostStore {
           id, idempotency_key, recording_stem, title, audio_path, transcription_language, trigger,
           state, phase, send_to_notion, destination_hint, agent_provider,
           summary_provider, summary_model, summary_credential_source,
-          summary_connection_id, summary_credential_class, summary_disclosure_version,
+          summary_connection_id, summary_credential_class, summary_credential_identity,
+          summary_disclosure_version, summary_endpoint_identity,
           summary_input_artifact_id, summary_input_artifact_sha256, summary_input_artifact_bytes,
           instructions, attempt, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, 'manual', 'transcript_committed', 'summarizing', 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, 'manual', 'transcript_committed', 'summarizing', 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
       `).run(
         replacementId,
         `summary-regeneration:${randomUUID()}`,
@@ -1988,7 +2179,9 @@ export class HostStore {
         summaryCredentialSource,
         summaryConnectionId,
         summaryCredentialClass,
+        summaryCredentialIdentity,
         summaryDisclosureVersion,
+        summaryEndpointIdentity,
         replacementTranscriptId,
         transcript.sha256,
         transcript.bytes,
@@ -2023,7 +2216,9 @@ export class HostStore {
         summaryCredentialSource,
         summaryConnectionId,
         summaryCredentialClass,
+        summaryCredentialIdentity,
         summaryDisclosureVersion,
+        summaryEndpointIdentity,
       });
       this.appendEvent(replacementId, "task.queued", {
         trigger: "manual",
@@ -2032,7 +2227,9 @@ export class HostStore {
         summaryCredentialSource,
         summaryConnectionId,
         summaryCredentialClass,
+        summaryCredentialIdentity,
         summaryDisclosureVersion,
+        summaryEndpointIdentity,
         reusedTranscriptFromTaskId: original.id,
       });
       return this.getTask(replacementId)!;
@@ -2066,37 +2263,137 @@ export class HostStore {
     `).run(randomUUID(), taskId, type, JSON.stringify(payload), now());
   }
 
-  private recoverInterrupted(): void {
-    const timestamp = now();
-    this.db.prepare(`
-      UPDATE agent_tasks SET state = 'transcript_committed', phase = 'summarizing', lease_token = NULL,
-        native_session_id = NULL, artifact_session_id = NULL, delivery_session_id = NULL,
-        error = 'Host restarted after transcript commit', audit_json = NULL, updated_at = ?
-      WHERE state IN ('running', 'transcript_committed', 'artifacts_committed')
-        AND EXISTS (SELECT 1 FROM artifacts WHERE artifacts.task_id = agent_tasks.id AND kind = 'transcript')
-    `).run(timestamp);
-    this.db.prepare(`
-      UPDATE agent_tasks SET state = 'queued', phase = 'queued', lease_token = NULL,
-        native_session_id = NULL, artifact_session_id = NULL, delivery_session_id = NULL,
-        error = 'Host restarted before Agent task completed', audit_json = NULL,
-        updated_at = ?
-      WHERE state IN ('running', 'artifacts_committed')
-    `).run(timestamp);
-    const uncertain = this.db.prepare(`
-      SELECT id, state FROM agent_tasks WHERE state IN ('sending', 'delivery_reported')
-    `).all() as Array<{ id: string; state: "sending" | "delivery_reported" }>;
-    this.db.prepare(`
-      UPDATE agent_tasks SET state = 'delivery_unverified', phase = 'failed', lease_token = NULL,
-        native_session_id = NULL, artifact_session_id = NULL, delivery_session_id = NULL,
-        error = 'Host restarted before the Notion delivery session audit completed', audit_json = NULL, updated_at = ?
-      WHERE state IN ('sending', 'delivery_reported')
-    `).run(timestamp);
-    for (const task of uncertain) {
-      this.appendEvent(task.id, "notion.delivery_unverified", {
-        error: "Host restarted before the Notion delivery session audit completed",
-        previousState: task.state,
-      });
+  private gatewaySummaryExecutionJournal(id: string): GatewaySummaryExecutionJournal | null {
+    const row = this.db.prepare("SELECT audit_json FROM agent_tasks WHERE id = ?")
+      .get(id) as { audit_json: string | null } | undefined;
+    return gatewaySummaryExecutionJournal(row?.audit_json ?? null);
+  }
+
+  private requireGatewaySummarySnapshot(task: AgentTask): ArtifactRecord {
+    if (
+      task.state !== "transcript_committed" || task.summaryProvider !== "cliproxyapi" ||
+      task.summaryCredentialClass !== "api-key" || !task.summaryCredentialIdentity ||
+      !task.summaryEndpointIdentity
+    ) {
+      throw new Error(`task ${task.id} does not have a pinned CLIProxyAPI Summary execution identity`);
     }
+    const artifact = this.listArtifacts(task.id).find((record) => record.kind === "transcript");
+    if (
+      !artifact || task.summaryInputArtifactId !== artifact.id ||
+      task.summaryInputArtifactSha256 !== artifact.sha256 || task.summaryInputArtifactBytes !== artifact.bytes
+    ) {
+      throw new Error("Summary input artifact identity changed before CLIProxyAPI execution");
+    }
+    return artifact;
+  }
+
+  private recoverInterrupted(): void {
+    const recover = this.db.transaction(() => {
+      const timestamp = now();
+      const committedGatewayRows = this.db.prepare(`
+        SELECT id, send_to_notion FROM agent_tasks
+        WHERE summary_provider = 'cliproxyapi' AND state = 'artifacts_committed'
+          AND EXISTS (SELECT 1 FROM artifacts
+            WHERE artifacts.task_id = agent_tasks.id AND artifacts.kind = 'summary')
+      `).all() as Array<{ id: string; send_to_notion: number }>;
+      for (const row of committedGatewayRows) {
+        const completed = row.send_to_notion !== 1;
+        this.db.prepare(`
+          UPDATE agent_tasks SET state = ?, phase = ?, lease_token = NULL,
+            error = NULL, audit_json = ?, updated_at = ? WHERE id = ?
+        `).run(
+          completed ? "completed" : "artifacts_committed",
+          completed ? "completed" : "committing_artifacts",
+          completed ? JSON.stringify({ recoveredAfterArtifactCommit: true }) : null,
+          timestamp,
+          row.id,
+        );
+        this.appendEvent(row.id, completed ? "task.completed" : "gateway.summary_artifacts_recovered", {
+          recoveredAfterArtifactCommit: true,
+          summaryReplayPrevented: true,
+        });
+      }
+      const gatewayRows = this.db.prepare(`
+        SELECT id, state, summary_endpoint_identity, summary_model, audit_json
+        FROM agent_tasks
+        WHERE summary_provider = 'cliproxyapi'
+          AND state = 'transcript_committed'
+      `).all() as Array<{
+        id: string;
+        state: "transcript_committed" | "artifacts_committed";
+        summary_endpoint_identity: string | null;
+        summary_model: string;
+        audit_json: string | null;
+      }>;
+      for (const row of gatewayRows) {
+        const journal = gatewaySummaryExecutionJournal(row.audit_json);
+        if (!journal || journal.endpoint !== row.summary_endpoint_identity || journal.model !== row.summary_model) {
+          continue;
+        }
+        const summaryDispatched = journal.stage === "summary";
+        const error = summaryDispatched
+          ? "Host restarted after CLIProxyAPI Summary dispatch; outcome is unknown"
+          : "Host restarted during CLIProxyAPI Summary preflight; no transcript was sent. Verify Gateway state before an authenticated retry";
+        this.db.prepare(`
+          UPDATE agent_tasks SET state = ?, phase = 'failed', lease_token = NULL,
+            native_session_id = ?, artifact_session_id = ?, delivery_session_id = NULL,
+            error = ?, audit_json = ?, updated_at = ? WHERE id = ?
+        `).run(
+          summaryDispatched ? "execution_unverified" : "failed",
+          summaryDispatched ? journal.executionId : null,
+          summaryDispatched ? journal.executionId : null,
+          error,
+          JSON.stringify({ gatewayExecution: { ...journal, recoveredAfterRestart: true } }),
+          timestamp,
+          row.id,
+        );
+        this.appendEvent(row.id, summaryDispatched
+          ? "gateway.summary_unknown_outcome"
+          : "gateway.summary_preflight_interrupted", {
+          error,
+          executionId: journal.executionId,
+          stage: journal.stage,
+          recoveredAfterRestart: true,
+          previousState: row.state,
+        });
+      }
+      this.db.prepare(`
+        UPDATE agent_tasks SET state = 'transcript_committed', phase = 'summarizing', lease_token = NULL,
+          native_session_id = NULL, artifact_session_id = NULL, delivery_session_id = NULL,
+          error = 'Host restarted after transcript commit', audit_json = NULL, updated_at = ?
+        WHERE state IN ('running', 'transcript_committed', 'artifacts_committed')
+          AND EXISTS (SELECT 1 FROM artifacts WHERE artifacts.task_id = agent_tasks.id AND kind = 'transcript')
+          AND NOT (state = 'artifacts_committed' AND summary_provider = 'cliproxyapi'
+            AND EXISTS (SELECT 1 FROM artifacts summary_artifact
+              WHERE summary_artifact.task_id = agent_tasks.id AND summary_artifact.kind = 'summary'))
+      `).run(timestamp);
+      this.db.prepare(`
+        UPDATE agent_tasks SET state = 'queued', phase = 'queued', lease_token = NULL,
+          native_session_id = NULL, artifact_session_id = NULL, delivery_session_id = NULL,
+          error = 'Host restarted before Agent task completed', audit_json = NULL,
+          updated_at = ?
+        WHERE state IN ('running', 'artifacts_committed')
+          AND NOT (state = 'artifacts_committed' AND summary_provider = 'cliproxyapi'
+            AND EXISTS (SELECT 1 FROM artifacts summary_artifact
+              WHERE summary_artifact.task_id = agent_tasks.id AND summary_artifact.kind = 'summary'))
+      `).run(timestamp);
+      const uncertain = this.db.prepare(`
+        SELECT id, state FROM agent_tasks WHERE state IN ('sending', 'delivery_reported')
+      `).all() as Array<{ id: string; state: "sending" | "delivery_reported" }>;
+      this.db.prepare(`
+        UPDATE agent_tasks SET state = 'delivery_unverified', phase = 'failed', lease_token = NULL,
+          native_session_id = NULL, artifact_session_id = NULL, delivery_session_id = NULL,
+          error = 'Host restarted before the Notion delivery session audit completed', audit_json = NULL, updated_at = ?
+        WHERE state IN ('sending', 'delivery_reported')
+      `).run(timestamp);
+      for (const task of uncertain) {
+        this.appendEvent(task.id, "notion.delivery_unverified", {
+          error: "Host restarted before the Notion delivery session audit completed",
+          previousState: task.state,
+        });
+      }
+    });
+    recover.immediate();
   }
 
   private migrate(): void {
@@ -2119,7 +2416,9 @@ export class HostStore {
         summary_credential_source TEXT CHECK(summary_credential_source IN ('oauth', 'api-key')),
         summary_connection_id TEXT,
         summary_credential_class TEXT CHECK(summary_credential_class IN ('oauth', 'api-key', 'runtime-oauth')),
+        summary_credential_identity TEXT,
         summary_disclosure_version TEXT,
+        summary_endpoint_identity TEXT,
         summary_input_artifact_id TEXT,
         summary_input_artifact_sha256 TEXT,
         summary_input_artifact_bytes INTEGER,
@@ -2223,7 +2522,7 @@ export class HostStore {
 
       CREATE TABLE IF NOT EXISTS agent_connections (
         id TEXT PRIMARY KEY,
-        kind TEXT NOT NULL CHECK(kind IN ('direct-provider', 'supported-agent', 'legacy-custom')),
+        kind TEXT NOT NULL CHECK(kind IN ('direct-provider', 'supported-agent', 'gateway', 'legacy-custom')),
         adapter TEXT NOT NULL,
         label TEXT NOT NULL,
         lifecycle TEXT NOT NULL CHECK(lifecycle IN ('available', 'legacy')),
@@ -2275,14 +2574,14 @@ export class HostStore {
     const agentConnectionTable = this.db.prepare(
       "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'agent_connections'",
     ).get() as { sql: string } | undefined;
-    if (agentConnectionTable && !agentConnectionTable.sql.includes("supported-agent")) {
+    if (agentConnectionTable && !agentConnectionTable.sql.includes("'gateway'")) {
       this.db.pragma("foreign_keys = OFF");
       try {
         this.db.exec(`
           BEGIN;
           CREATE TABLE agent_connections_v2 (
             id TEXT PRIMARY KEY,
-            kind TEXT NOT NULL CHECK(kind IN ('direct-provider', 'supported-agent', 'legacy-custom')),
+            kind TEXT NOT NULL CHECK(kind IN ('direct-provider', 'supported-agent', 'gateway', 'legacy-custom')),
             adapter TEXT NOT NULL,
             label TEXT NOT NULL,
             lifecycle TEXT NOT NULL CHECK(lifecycle IN ('available', 'legacy')),
@@ -2340,8 +2639,14 @@ export class HostStore {
     if (!columns.some((column) => column.name === "summary_credential_class")) {
       this.db.exec("ALTER TABLE agent_tasks ADD COLUMN summary_credential_class TEXT");
     }
+    if (!columns.some((column) => column.name === "summary_credential_identity")) {
+      this.db.exec("ALTER TABLE agent_tasks ADD COLUMN summary_credential_identity TEXT");
+    }
     if (!columns.some((column) => column.name === "summary_disclosure_version")) {
       this.db.exec("ALTER TABLE agent_tasks ADD COLUMN summary_disclosure_version TEXT");
+    }
+    if (!columns.some((column) => column.name === "summary_endpoint_identity")) {
+      this.db.exec("ALTER TABLE agent_tasks ADD COLUMN summary_endpoint_identity TEXT");
     }
     if (!columns.some((column) => column.name === "summary_input_artifact_id")) {
       this.db.exec("ALTER TABLE agent_tasks ADD COLUMN summary_input_artifact_id TEXT");

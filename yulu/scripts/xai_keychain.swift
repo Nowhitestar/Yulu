@@ -14,7 +14,11 @@ private func target(for slot: String?) -> Target {
     guard let slot else {
         return Target(service: oauthService, account: "default")
     }
-    guard slot == "direct.xai" else {
+    let gatewaySlot = slot.range(
+        of: #"^gateway\.cliproxyapi\.[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"#,
+        options: .regularExpression
+    ) != nil
+    guard slot == "direct.xai" || gatewaySlot else {
         fail("Invalid provider secret slot")
     }
     return Target(service: providerSecretService, account: slot)
@@ -84,7 +88,7 @@ private func deleteSecret(_ target: Target) {
 }
 
 guard CommandLine.arguments.count == 2 || CommandLine.arguments.count == 3 else {
-    fail("Usage: xai_keychain <read|write|delete> [direct.xai]")
+    fail("Usage: xai_keychain <read|write|delete> [direct.xai|gateway.cliproxyapi.<revision>]")
 }
 
 private let selectedTarget = target(for: CommandLine.arguments.count == 3 ? CommandLine.arguments[2] : nil)

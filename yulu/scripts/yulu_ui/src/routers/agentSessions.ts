@@ -16,6 +16,7 @@ import { resolveAgentRuntime } from "../agentRuntime.js";
 import { hasCurrentXaiConversationDisclosure } from "../conversationDataDisclosure.js";
 import {
   CLAUDE_CODE_CONVERSATION_DISCLOSURE_VERSION,
+  CLIPROXYAPI_CONVERSATION_DISCLOSURE_VERSION,
   CODEX_CONVERSATION_DISCLOSURE_VERSION,
   hasCurrentAgentConversationDisclosure,
 } from "../conversationDataDisclosure.js";
@@ -63,27 +64,46 @@ export const agentSessionsRouter = router({
       if (selection.provider === "agent" && "connectionId" in selection && selection.connectionId) {
         const connection = ctx.host.listAgentConnectionRecords().find((record) =>
           record.id === selection.connectionId &&
-          record.kind === "supported-agent" &&
-          (record.adapter === "codex" || record.adapter === "claude-code")
+          ((record.kind === "supported-agent" &&
+            (record.adapter === "codex" || record.adapter === "claude-code")) ||
+            (record.kind === "gateway" && record.adapter === "cliproxyapi"))
         );
         if (!connection) {
           throw new Error(`Pinned Agent connection ${selection.connectionId} is unavailable in Agent Connection Center`);
         }
-        const runtimeLabel = connection.adapter === "claude-code" ? "Claude Code" : "Codex";
+        const runtimeLabel = connection.adapter === "claude-code"
+          ? "Claude Code"
+          : connection.adapter === "cliproxyapi" ? "CLIProxyAPI" : "Codex";
         const disclosureVersion = connection.adapter === "claude-code"
           ? CLAUDE_CODE_CONVERSATION_DISCLOSURE_VERSION
-          : CODEX_CONVERSATION_DISCLOSURE_VERSION;
+          : connection.adapter === "cliproxyapi"
+            ? CLIPROXYAPI_CONVERSATION_DISCLOSURE_VERSION
+            : CODEX_CONVERSATION_DISCLOSURE_VERSION;
+        const gatewayDisclosureIdentity = connection.settings.conversationDisclosureIdentity;
+        const gatewayDisclosureMatches = connection.adapter !== "cliproxyapi" || (
+          gatewayDisclosureIdentity !== null &&
+          typeof gatewayDisclosureIdentity === "object" &&
+          !Array.isArray(gatewayDisclosureIdentity) &&
+          (gatewayDisclosureIdentity as Record<string, unknown>).endpoint === connection.settings.endpoint &&
+          (gatewayDisclosureIdentity as Record<string, unknown>).credentialIdentity ===
+            connection.settings.credentialIdentity
+        );
         if (!hasCurrentAgentConversationDisclosure(
           ctx.host,
           connection.id,
           disclosureVersion,
-        )) {
+        ) || !gatewayDisclosureMatches) {
           throw new Error(`Accept the current ${runtimeLabel} Conversation data path disclosure in Agent Connection Center`);
         }
         if (!ctx.agentConnections) {
           throw new Error(`Test this exact ${runtimeLabel} Conversation model before starting a new conversation`);
         }
-        if (connection.adapter === "claude-code") {
+        if (connection.adapter === "cliproxyapi") {
+          await ctx.agentConnections.assertGatewayConversationReady({
+            connectionId: connection.id,
+            model: selection.model,
+          });
+        } else if (connection.adapter === "claude-code") {
           await ctx.agentConnections.assertClaudeConversationReady({
             connectionId: connection.id,
             model: selection.model,
@@ -98,7 +118,14 @@ export const agentSessionsRouter = router({
           provider: connection.adapter,
           connectionId: connection.id,
           model: selection.model,
-          credentialSource: "runtime-oauth",
+          credentialSource: connection.adapter === "cliproxyapi" ? "api-key" : "runtime-oauth",
+          ...(connection.adapter === "cliproxyapi"
+            ? {
+                endpointIdentity: String(connection.settings.endpoint ?? ""),
+                disclosureVersion,
+                credentialIdentity: String(connection.settings.credentialIdentity ?? ""),
+              }
+            : {}),
           title: input.title,
           purpose: "ask",
           runtimeLabel: runtimeLabel,
