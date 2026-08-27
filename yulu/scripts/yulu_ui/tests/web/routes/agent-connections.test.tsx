@@ -97,8 +97,25 @@ const mocks = vi.hoisted(() => ({
         statusCommand: "/fake/bin/codex login status",
         remediation: null,
       },
-      settings: { executablePath: "/fake/bin/codex", conversationModel: "gpt-5.6-sol" },
+      settings: {
+        executablePath: "/fake/bin/codex",
+        summaryModel: "gpt-5.6-sol",
+        conversationModel: "gpt-5.6-sol",
+      },
       capabilities: [{
+        capability: "summary",
+        declared: true,
+        selected: false,
+        currentReadiness: { status: "ready", model: "gpt-5.6-sol", testedAt: "2026-08-27T12:00:00.000Z" },
+        readinessHistory: [],
+        disclosure: {
+          required: true,
+          disclosureVersion: "codex-summary-v1",
+          data: "transcript_text",
+          destination: "Codex runtime and its configured model provider",
+        },
+        remediation: null,
+      }, {
         capability: "conversation",
         declared: true,
         selected: false,
@@ -121,7 +138,7 @@ const mocks = vi.hoisted(() => ({
       lifecycle: "candidate",
       source: "discovered",
       detectedPath: "/fake/bin/codex",
-      capabilities: ["summary", "conversation"],
+      capabilities: ["conversation"],
       selected: false,
       readiness: "untested",
       remediation: { href: "/agent-connections?candidate=candidate%3Acodex" },
@@ -240,6 +257,30 @@ describe("shared Agent Connection Center", () => {
     expect(mocks.select).toHaveBeenCalledWith({
       connectionId: "codex",
       capability: "conversation",
+      model: "gpt-5.6-sol",
+    });
+  });
+
+  it("renders and routes Codex Summary independently from Conversation", async () => {
+    mount("en");
+    const user = userEvent.setup();
+    const summary = screen.getByTestId("connection-capability-codex-summary");
+    const conversation = screen.getByTestId("connection-capability-codex-conversation");
+
+    expect(within(summary).getByRole("heading", { name: "Summary" })).toBeInTheDocument();
+    expect(within(conversation).getByRole("heading", { name: "Conversation" })).toBeInTheDocument();
+    await user.click(within(summary).getByRole("button", { name: "Accept Summary Data Path Disclosure" }));
+    expect(mocks.acceptDisclosure).toHaveBeenCalledWith({ connectionId: "codex", capability: "summary" });
+    await user.click(within(summary).getByRole("button", { name: "Test summary" }));
+    expect(mocks.probe).toHaveBeenCalledWith({
+      connectionId: "codex",
+      capability: "summary",
+      model: "gpt-5.6-sol",
+    });
+    await user.click(within(summary).getByRole("button", { name: "Select Codex for future summaries" }));
+    expect(mocks.select).toHaveBeenCalledWith({
+      connectionId: "codex",
+      capability: "summary",
       model: "gpt-5.6-sol",
     });
   });

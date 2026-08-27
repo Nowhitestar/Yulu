@@ -115,6 +115,114 @@ describe("Codex Agent adapter conformance", () => {
     });
   });
 
+  it("uses the same exact-model tool-free adapter for Summary probes", async () => {
+    const runtime = client();
+    const adapter = new CodexAgentAdapter({ executable: "/fake/codex", client: runtime });
+
+    await expect(adapter.probeSummary({ model: "gpt-5.6-sol" })).resolves.toMatchObject({
+      status: "ready",
+      evidence: {
+        requestedProvider: "openai",
+        requestedModel: "gpt-5.6-sol",
+        actualProvider: "openai",
+        actualModel: "gpt-5.6-sol",
+        fallbackOccurred: false,
+        terminalStatus: "ready",
+      },
+    });
+    expect(runtime.runTurn).toHaveBeenCalledWith({
+      model: "gpt-5.6-sol",
+      prompt: "Reply with exactly YULU_CODEX_PROBE_OK and do not use tools.",
+      probe: true,
+      toolFree: true,
+      timeoutMs: 30_000,
+    });
+  });
+
+  it("summarizes from only selected instructions and committed transcript in a fresh tool-free session", async () => {
+    const runTurn = vi.fn(async (input: Parameters<CodexRuntimeClient["runTurn"]>[0]) => ({
+      answer: "# Decisions\n\nShip the safe path.",
+      nativeSessionId: "019f0000-0000-7000-8000-000000000139",
+      actualProvider: "openai",
+      actualModel: input.model,
+      requestId: "turn-139",
+      fallbackOccurred: false,
+      toolCalls: [],
+      terminalStatus: "completed" as const,
+    }));
+    const runtime = client({
+      runTurn,
+    });
+    const adapter = new CodexAgentAdapter({ executable: "/fake/codex", client: runtime });
+
+    await expect(adapter.summarize({
+      model: "gpt-5.6-sol",
+      instructions: "Summarize decisions and owners.",
+      transcript: "Alice: Ship the safe path.",
+    })).resolves.toMatchObject({
+      summary: "# Decisions\n\nShip the safe path.",
+      nativeSessionId: "019f0000-0000-7000-8000-000000000139",
+      evidence: {
+        requestedProvider: "openai",
+        requestedModel: "gpt-5.6-sol",
+        actualProvider: "openai",
+        actualModel: "gpt-5.6-sol",
+        terminalStatus: "ready",
+        fallbackOccurred: false,
+      },
+    });
+    expect(runtime.runTurn).toHaveBeenCalledWith({
+      model: "gpt-5.6-sol",
+      prompt: [
+        "Produce the recording summary from only the selected instructions and committed transcript below.",
+        "Return only the Markdown summary. Do not use tools or perform side effects.",
+        "",
+        "Selected instructions:",
+        "Summarize decisions and owners.",
+        "",
+        "Committed transcript:",
+        "Alice: Ship the safe path.",
+      ].join("\n"),
+      probe: false,
+      toolFree: true,
+      timeoutMs: 300_000,
+    });
+    expect(JSON.stringify(runTurn.mock.calls)).not.toContain("/Users/");
+    expect(JSON.stringify(runTurn.mock.calls)).not.toContain("credential");
+  });
+
+  it.each([
+    ["non-terminal failure", { terminalStatus: "failed" as const }, /failed before a terminal successful result/],
+    ["unknown outcome", { terminalStatus: "unknown" as const }, /outcome is unknown/],
+    ["provider substitution", { actualProvider: "third-party" }, /different provider, model, or fallback identity/],
+    ["model substitution", { actualModel: "gpt-5.6-terra" }, /different provider, model, or fallback identity/],
+    ["fallback", { fallbackOccurred: true }, /different provider, model, or fallback identity/],
+    ["tool call", { toolCalls: ["commandExecution"] }, /tool call or direct side effect/],
+    ["empty output", { answer: "   " }, /empty or invalid output/],
+    ["invalid output", { answer: "bad\u0000summary" }, /empty or invalid output/],
+  ])("fails closed on Summary %s", async (_name, changed, error) => {
+    const runtime = client({
+      runTurn: vi.fn(async () => ({
+        answer: "# Valid summary",
+        nativeSessionId: "019f0000-0000-7000-8000-000000000139",
+        actualProvider: "openai",
+        actualModel: "gpt-5.6-sol",
+        requestId: "turn-139",
+        fallbackOccurred: false,
+        toolCalls: [],
+        terminalStatus: "completed" as const,
+        ...changed,
+      })),
+    });
+    const adapter = new CodexAgentAdapter({ executable: "/fake/codex", client: runtime });
+
+    await expect(adapter.summarize({
+      model: "gpt-5.6-sol",
+      instructions: "Only selected instructions.",
+      transcript: "Only committed transcript.",
+    })).rejects.toThrow(error);
+  });
+
   it.each([
     ["different model", { actualModel: "gpt-5.6-terra" }],
     ["provider substitution", { actualProvider: "third-party" }],

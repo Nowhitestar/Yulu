@@ -6,6 +6,7 @@ import type {
   RecordingAgentGateway,
 } from "./agentGateway.js";
 import type { YuluConfig } from "./config.js";
+import type { SummaryCommitRuntimeEvidence } from "./hostStore.js";
 
 export type SummaryDisclosureMetadata =
   | { kind: "local" }
@@ -14,6 +15,7 @@ export type SummaryDisclosureMetadata =
       disclosureVersion: string;
       data: "transcript_text";
       destination: string;
+      connectionId?: string;
     };
 
 export interface SupportedAgentSummaryReadiness {
@@ -24,12 +26,13 @@ export interface SupportedAgentSummaryReadiness {
   testedAt: string | null;
   detail: string;
   credentialSource: string | null;
+  connectionId?: string | null;
   disclosure: SummaryDisclosureMetadata | null;
   reason?: "missing_credentials" | "invalid_model" | "provider_unavailable" | "readiness_failed" | "readiness_required";
 }
 
 export interface SupportedAgentSummaryAdapter {
-  current: () => SupportedAgentSummaryReadiness;
+  current: (snapshot?: { connectionId: string | null; provider: string; model: string }) => SupportedAgentSummaryReadiness;
   probe: () => Promise<SupportedAgentSummaryReadiness>;
   gateway: (config: YuluConfig) => SupportedAgentSummaryGateway;
 }
@@ -37,7 +40,11 @@ export interface SupportedAgentSummaryAdapter {
 export interface SupportedAgentSummaryGateway extends RecordingAgentGateway {
   runArtifactWorkflow(
     input: AgentArtifactWorkflowInput,
-  ): Promise<AgentWorkflowResult & { summaryIdentity: { provider: string; model: string } }>;
+  ): Promise<AgentWorkflowResult & {
+    summaryIdentity: { provider: string; model: string };
+    summary?: string;
+    runtimeEvidence?: SummaryCommitRuntimeEvidence;
+  }>;
 }
 
 export function hasSupportedAgentSummaryIdentity(result: SupportedAgentSummaryReadiness): boolean {

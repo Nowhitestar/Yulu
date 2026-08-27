@@ -159,6 +159,7 @@ async function startLockedServer(
       }),
     }),
   });
+  const supportedAgentSummaryAdapter = agentConnections.summaryAdapter();
   void xaiCredentials.status().catch(() => {});
   const recordingPipeline = new RecordingPipeline({
     store: hostStore,
@@ -174,6 +175,7 @@ async function startLockedServer(
       const proof = xaiReadiness.get("summary");
       return proof?.status === "ready" ? proof.credentialSource : null;
     },
+    supportedAgentSummaryAdapter,
   });
   if (localCaption.status().installed && configManager.read().transcription.engine === "local") {
     void localCaption.warm().catch((error) => {
@@ -245,6 +247,7 @@ async function startLockedServer(
     xaiCredentials,
     xaiText,
     xaiReadiness,
+    supportedAgentSummaryAdapter,
     agentConnections,
     db:        dbProxy,
   };

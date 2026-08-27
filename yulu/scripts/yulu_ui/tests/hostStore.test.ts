@@ -84,6 +84,148 @@ describe("HostStore", () => {
     };
   }
 
+  it("snapshots Codex connection, credential class, disclosure, and committed transcript identity before Summary execution", () => {
+    createStore();
+    const task = store!.enqueueRecording({
+      idempotencyKey: "recording:codex-summary-snapshot",
+      recordingStem: "Demo_20260711_120000",
+      title: "Demo",
+      audioPath: join(root, "Demo_20260711_120000.wav"),
+      sendToNotion: false,
+      destinationHint: "",
+      agentProvider: "codex",
+      summaryProvider: "codex",
+      summaryModel: "gpt-5.6-sol",
+      summaryConnectionId: "codex",
+      summaryCredentialClass: "runtime-oauth",
+      summaryDisclosureVersion: "codex-summary-v1",
+    }).task;
+    expect(task).toMatchObject({
+      summaryConnectionId: "codex",
+      summaryCredentialClass: "runtime-oauth",
+      summaryDisclosureVersion: "codex-summary-v1",
+      summaryInputArtifactId: null,
+      summaryInputArtifactSha256: null,
+      summaryInputArtifactBytes: null,
+    });
+
+    const claimed = store!.claim(task.id)!;
+    const transcript = artifacts(task.id)[0]!;
+    store!.recordTranscript(task.id, claimed.leaseToken!, transcript);
+    const snapshotted = store!.recordSummaryInputSnapshot(task.id, claimed.leaseToken!, transcript);
+
+    expect(snapshotted).toMatchObject({
+      summaryConnectionId: "codex",
+      summaryCredentialClass: "runtime-oauth",
+      summaryDisclosureVersion: "codex-summary-v1",
+      summaryInputArtifactId: "transcript-id",
+      summaryInputArtifactSha256: "a".repeat(64),
+      summaryInputArtifactBytes: 10,
+    });
+  });
+
+  it("clears the Summary input snapshot only when an explicit retry discards its transcript artifact", () => {
+    createStore();
+    const task = store!.enqueueRecording({
+      idempotencyKey: "recording:codex-summary-discard",
+      recordingStem: "Demo_20260711_120000",
+      title: "Demo",
+      audioPath: join(root, "Demo_20260711_120000.wav"),
+      sendToNotion: false,
+      destinationHint: "",
+      agentProvider: "codex",
+      summaryProvider: "codex",
+      summaryModel: "gpt-5.6-sol",
+      summaryConnectionId: "codex",
+      summaryCredentialClass: "runtime-oauth",
+      summaryDisclosureVersion: "codex-summary-v1",
+    }).task;
+    const claimed = store!.claim(task.id)!;
+    const transcript = artifacts(task.id)[0]!;
+    store!.recordTranscript(task.id, claimed.leaseToken!, transcript);
+    store!.recordSummaryInputSnapshot(task.id, claimed.leaseToken!, transcript);
+    store!.fail(task.id, claimed.leaseToken, "failed before commit");
+
+    expect(store!.retry(task.id, { discardArtifacts: true })).toMatchObject({
+      state: "queued",
+      summaryInputArtifactId: null,
+      summaryInputArtifactSha256: null,
+      summaryInputArtifactBytes: null,
+    });
+    expect(store!.listArtifacts(task.id)).toEqual([]);
+  });
+
+  it("authorizes a Codex Summary commit only for unchanged lease/input and exact terminal Runtime Evidence", () => {
+    createStore();
+    const task = store!.enqueueRecording({
+      idempotencyKey: "recording:codex-summary-commit-fence",
+      recordingStem: "Demo_20260711_120000",
+      title: "Demo",
+      audioPath: join(root, "Demo_20260711_120000.wav"),
+      sendToNotion: false,
+      destinationHint: "",
+      agentProvider: "codex",
+      summaryProvider: "codex",
+      summaryModel: "gpt-5.6-sol",
+      summaryConnectionId: "codex",
+      summaryCredentialClass: "runtime-oauth",
+      summaryDisclosureVersion: "codex-summary-v1",
+    }).task;
+    const claimed = store!.claim(task.id)!;
+    const transcript = artifacts(task.id)[0]!;
+    store!.recordTranscript(task.id, claimed.leaseToken!, transcript);
+    store!.recordSummaryInputSnapshot(task.id, claimed.leaseToken!, transcript);
+    const runtimeEvidence = {
+      adapter: "codex",
+      transport: "codex-app-server-stdio",
+      runtimeVersion: "0.144.4",
+      requestedProvider: "openai",
+      requestedModel: "gpt-5.6-sol",
+      actualProvider: "openai",
+      actualModel: "gpt-5.6-sol",
+      requestId: "turn-139",
+      sessionId: "thread-139",
+      terminalStatus: "ready" as const,
+      fallbackOccurred: false,
+    };
+
+    expect(store!.validateSummaryCommit(task.id, claimed.leaseToken!, {
+      connectionId: "codex",
+      credentialClass: "runtime-oauth",
+      disclosureVersion: "codex-summary-v1",
+      inputArtifact: transcript,
+      runtimeEvidence,
+      toolCalls: [],
+    })).toMatchObject({ id: task.id, state: "transcript_committed" });
+    expect(() => store!.validateSummaryCommit(task.id, claimed.leaseToken!, {
+      connectionId: "codex",
+      credentialClass: "runtime-oauth",
+      disclosureVersion: "codex-summary-v1",
+      inputArtifact: transcript,
+      runtimeEvidence: { ...runtimeEvidence, actualModel: "gpt-5.6-terra" },
+      toolCalls: [],
+    })).toThrow(/Runtime Evidence/i);
+    expect(() => store!.validateSummaryCommit(task.id, claimed.leaseToken!, {
+      connectionId: "codex",
+      credentialClass: "runtime-oauth",
+      disclosureVersion: "codex-summary-v1",
+      inputArtifact: transcript,
+      runtimeEvidence,
+      toolCalls: ["commandExecution"],
+    })).toThrow(/tool call/i);
+
+    store!.db.prepare("UPDATE artifacts SET sha256 = ? WHERE task_id = ? AND kind = 'transcript'")
+      .run("c".repeat(64), task.id);
+    expect(() => store!.validateSummaryCommit(task.id, claimed.leaseToken!, {
+      connectionId: "codex",
+      credentialClass: "runtime-oauth",
+      disclosureVersion: "codex-summary-v1",
+      inputArtifact: transcript,
+      runtimeEvidence,
+      toolCalls: [],
+    })).toThrow(/input artifact identity changed/i);
+  });
+
   it("keeps Core Activation Evidence after task cleanup and Host restart", () => {
     createStore();
     const task = enqueue(false).task;
@@ -508,10 +650,24 @@ describe("HostStore", () => {
       agentProvider: "codex",
       summaryProvider: "codex",
       summaryModel: "runtime-managed",
+      summaryConnectionId: null,
+      summaryCredentialClass: null,
+      summaryDisclosureVersion: null,
+      summaryInputArtifactId: null,
+      summaryInputArtifactSha256: null,
+      summaryInputArtifactBytes: null,
     });
     const columns = store.db.prepare("PRAGMA table_info(agent_tasks)").all() as Array<{ name: string; notnull: number }>;
     expect(columns.find((column) => column.name === "summary_provider")?.notnull).toBe(1);
     expect(columns.find((column) => column.name === "summary_model")?.notnull).toBe(1);
+    expect(columns.map((column) => column.name)).toEqual(expect.arrayContaining([
+      "summary_connection_id",
+      "summary_credential_class",
+      "summary_disclosure_version",
+      "summary_input_artifact_id",
+      "summary_input_artifact_sha256",
+      "summary_input_artifact_bytes",
+    ]));
   });
 
   it("refuses retry when the recording already has another active task", () => {

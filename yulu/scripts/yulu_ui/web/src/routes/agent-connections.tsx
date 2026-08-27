@@ -359,10 +359,6 @@ export function AgentConnections() {
       )}
 
       {codexConnections.map((codex) => {
-        const capability = codex.capabilities[0]!;
-        const model = codexModels[codex.id] ?? codex.settings.conversationModel;
-        const testing = probe.isPending && probe.variables?.connectionId === codex.id;
-        const current = testing ? "testing" : capability.currentReadiness.status;
         return (
           <section
             className="agent-connection-card"
@@ -411,81 +407,97 @@ export function AgentConnections() {
               {codex.authorization.remediation && <p>{codex.authorization.remediation}</p>}
             </div>
 
-            <article
-              className="agent-connection-capability"
-              data-testid="connection-capability-codex-conversation"
-            >
-              <div className="agent-connection-capability-head">
-                <div>
-                  <h3>{capabilityLabel(t, "conversation")}</h3>
-                  <p>{capability.currentReadiness.model}</p>
-                </div>
-                <span
-                  className={`agent-capability-state ${current}`}
-                  role={current === "failed" ? "alert" : "status"}
-                >
-                  {t(`agentConnections.readiness.${current}`)}
-                </span>
-              </div>
-              {capability.currentReadiness.status === "failed" && (
-                <p className="agent-capability-detail">
-                  {readinessFailure(t, capability.currentReadiness)}
-                </p>
-              )}
-              <label className="agent-connection-model" htmlFor={`${codex.id}-conversation-model`}>
-                <span>{t("agentConnections.codex.model")}</span>
-                <input
-                  id={`${codex.id}-conversation-model`}
-                  type="text"
-                  maxLength={128}
-                  value={model}
-                  onChange={(event) => setCodexModels((currentModels) => ({
-                    ...currentModels,
-                    [codex.id]: event.target.value,
-                  }))}
-                />
-              </label>
-              {capability.disclosure?.required && (
-                <div className="agent-connection-guidance" role="alert">
-                  {t("agentConnections.codex.disclosure")}
-                  <button
-                    type="button"
-                    onClick={() => void run(() => acceptDisclosure.mutateAsync({
-                      connectionId: codex.id,
-                      capability: "conversation",
-                    }))}
+            <div className="agent-connection-capabilities">
+              {codex.capabilities.map((item) => {
+                const capability = item.capability;
+                const modelKey = `${codex.id}:${capability}`;
+                const configuredModel = capability === "summary"
+                  ? codex.settings.summaryModel
+                  : codex.settings.conversationModel;
+                const model = codexModels[modelKey] ?? configuredModel;
+                const testing = probe.isPending && probe.variables?.connectionId === codex.id &&
+                  probe.variables.capability === capability;
+                const current = testing ? "testing" : item.currentReadiness.status;
+                return (
+                  <article
+                    className="agent-connection-capability"
+                    data-testid={`connection-capability-codex-${capability}`}
+                    key={capability}
                   >
-                    {t("agentConnections.codex.disclosureAccept")}
-                  </button>
-                </div>
-              )}
-              <div className="agent-connection-actions">
-                <button
-                  type="button"
-                  disabled={!model.trim()}
-                  onClick={() => void run(() => select.mutateAsync({
-                    connectionId: codex.id,
-                    capability: "conversation",
-                    model,
-                  }))}
-                >
-                  {t("agentConnections.codex.select")}
-                </button>
-                <button
-                  type="button"
-                  disabled={!codex.authorization.connected || probe.isPending}
-                  onClick={() => void run(() => probe.mutateAsync({
-                    connectionId: codex.id,
-                    capability: "conversation",
-                    model,
-                  }))}
-                >
-                  {testing
-                    ? t("agentConnections.readiness.testing")
-                    : t("agentConnections.test.conversation")}
-                </button>
-              </div>
-            </article>
+                    <div className="agent-connection-capability-head">
+                      <div>
+                        <h3>{capabilityLabel(t, capability)}</h3>
+                        <p>{item.currentReadiness.model}</p>
+                      </div>
+                      <span
+                        className={`agent-capability-state ${current}`}
+                        role={current === "failed" ? "alert" : "status"}
+                      >
+                        {t(`agentConnections.readiness.${current}`)}
+                      </span>
+                    </div>
+                    {item.currentReadiness.status === "failed" && (
+                      <p className="agent-capability-detail">
+                        {readinessFailure(t, item.currentReadiness)}
+                      </p>
+                    )}
+                    <label className="agent-connection-model" htmlFor={`${codex.id}-${capability}-model`}>
+                      <span>{t(`agentConnections.codex.model.${capability}`)}</span>
+                      <input
+                        id={`${codex.id}-${capability}-model`}
+                        type="text"
+                        maxLength={128}
+                        value={model}
+                        onChange={(event) => setCodexModels((currentModels) => ({
+                          ...currentModels,
+                          [modelKey]: event.target.value,
+                        }))}
+                      />
+                    </label>
+                    {item.disclosure?.required && (
+                      <div className="agent-connection-guidance" role="alert">
+                        {t(`agentConnections.codex.disclosure.${capability}`)}
+                        <button
+                          type="button"
+                          onClick={() => void run(() => acceptDisclosure.mutateAsync({
+                            connectionId: codex.id,
+                            capability,
+                          }))}
+                        >
+                          {t(`agentConnections.codex.disclosureAccept.${capability}`)}
+                        </button>
+                      </div>
+                    )}
+                    <div className="agent-connection-actions">
+                      <button
+                        type="button"
+                        disabled={!model.trim()}
+                        onClick={() => void run(() => select.mutateAsync({
+                          connectionId: codex.id,
+                          capability,
+                          model,
+                        }))}
+                      >
+                        {t(`agentConnections.codex.select.${capability}`)}
+                      </button>
+                      <button
+                        type="button"
+                        disabled={!codex.authorization.connected || probe.isPending}
+                        onClick={() => void run(() => probe.mutateAsync({
+                          connectionId: codex.id,
+                          capability,
+                          model,
+                        }))}
+                      >
+                        {testing
+                          ? t("agentConnections.readiness.testing")
+                          : t(`agentConnections.test.${capability}`)}
+                      </button>
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
           </section>
         );
       })}

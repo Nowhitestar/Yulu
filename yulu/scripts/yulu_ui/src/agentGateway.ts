@@ -230,6 +230,7 @@ export interface AgentArtifactWorkflowInput {
   leaseToken: string;
   workspace: AgentTaskWorkspace;
   transcriptionProvider: string;
+  committedTranscript?: string;
   glossary?: GlossaryContract;
 }
 

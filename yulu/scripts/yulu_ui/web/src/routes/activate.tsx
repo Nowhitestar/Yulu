@@ -251,6 +251,8 @@ export function Activate() {
       : summary?.selected.provider === "agent"
         ? t("activation.summary.agent")
         : summary?.selected.provider ?? "";
+    const summaryDisclosureConnectionId = summary?.disclosure?.connectionId ??
+      (summary?.selected.provider === "xai" ? "direct-xai" : null);
     const summaryBlocker = data?.blocker && "reason" in data.blocker ? data.blocker : null;
     const summaryDisclosureIsDeclined = summaryDisclosureDeclined ||
       summaryBlocker?.reason === "disclosure_declined";
@@ -472,9 +474,11 @@ export function Activate() {
                 <button
                   type="button"
                   className="activate-action primary"
+                  disabled={!summaryDisclosureConnectionId}
                   onClick={() => void run(async () => {
+                    if (!summaryDisclosureConnectionId) throw new Error("Summary disclosure connection is unavailable");
                     await acceptAgentConnectionDisclosure.mutateAsync({
-                      connectionId: "direct-xai",
+                      connectionId: summaryDisclosureConnectionId,
                       capability: "summary",
                     });
                     setSummaryDisclosureDeclined(false);
@@ -486,9 +490,11 @@ export function Activate() {
                 <button
                   type="button"
                   className="activate-action"
+                  disabled={!summaryDisclosureConnectionId}
                   onClick={() => void run(async () => {
+                    if (!summaryDisclosureConnectionId) throw new Error("Summary disclosure connection is unavailable");
                     await declineAgentConnectionDisclosure.mutateAsync({
-                      connectionId: "direct-xai",
+                      connectionId: summaryDisclosureConnectionId,
                       capability: "summary",
                     });
                     setSummaryDisclosureDeclined(true);

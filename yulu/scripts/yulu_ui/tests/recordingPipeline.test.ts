@@ -61,6 +61,9 @@ describe("RecordingPipeline", () => {
     xaiSummaryDisclosure?: boolean;
     supportedAgentAdapter?: boolean;
     supportedAgentResultModel?: string;
+    supportedAgentMissingEvidence?: boolean;
+    supportedAgentToolNames?: string[];
+    supportedAgentSummaryText?: string;
     autoPrompts?: Array<{
       id: string;
       slug: string;
@@ -79,11 +82,27 @@ describe("RecordingPipeline", () => {
     const artifacts = new ArtifactStore(moviesDir, join(configDir, "agent-tasks"));
     writeFileSync(configFile, JSON.stringify({
       transcription: {},
+      ...(opts.supportedAgentAdapter ? {
+        intelligence: {
+          summary: { provider: "agent", connectionId: "codex", model: "runtime-managed" },
+          conversation: { provider: "agent", model: "runtime-managed" },
+        },
+      } : {}),
       llm: { enabled: true, agent: { provider: "hermes" } },
       agent_pipeline: { enabled: opts.enabled !== false, auto_process_recordings: opts.autoProcess !== false, notion_destination: "Yulu Meeting" },
     }));
     writeFileSync(audioPath, Buffer.alloc(44));
     store = new HostStore(join(configDir, "host.sqlite"));
+    if (opts.supportedAgentAdapter) {
+      store.upsertAgentConnectionRecord({
+        id: "codex",
+        kind: "supported-agent",
+        adapter: "codex",
+        label: "Codex",
+        lifecycle: "available",
+        settings: { executablePath: "/fake/codex", summaryModel: "runtime-managed" },
+      });
+    }
     if (opts.xaiSummaryDisclosure === true || (opts.xaiText && opts.xaiSummaryDisclosure !== false)) {
       store.recordSummaryDataPathDisclosure("xai", "xai-summary-v1");
     }
@@ -129,7 +148,7 @@ describe("RecordingPipeline", () => {
         provider: "codex",
         model: opts.supportedAgentResultModel ?? "runtime-managed",
       } : undefined;
-      writeFileSync(workspace.summaryPath, "# Summary\n\nhello\n");
+      writeFileSync(workspace.summaryPath, opts.supportedAgentSummaryText ?? "# Summary\n\nhello\n");
       if (!opts.skipArtifactCommit && !opts.supportedAgentAdapter) {
         const records = artifacts.commitFromWorkspace(task, {
           agentProvider: task.summaryProvider,
@@ -205,13 +224,35 @@ describe("RecordingPipeline", () => {
     const supportedAgentGateway = {
       ...gateway,
       provider: "codex",
-      runArtifactWorkflow: async (input: Parameters<RecordingAgentGateway["runArtifactWorkflow"]>[0]) => ({
-        ...await runArtifactWorkflow(input),
-        summaryIdentity: {
-          provider: "codex",
-          model: opts.supportedAgentResultModel ?? "runtime-managed",
-        },
-      }),
+      runArtifactWorkflow: async (input: Parameters<RecordingAgentGateway["runArtifactWorkflow"]>[0]) => {
+        const result = await runArtifactWorkflow(input);
+        return {
+          ...result,
+          summaryIdentity: {
+            provider: "codex",
+            model: opts.supportedAgentResultModel ?? "runtime-managed",
+          },
+          summary: opts.supportedAgentSummaryText ?? "# Summary\n\nhello\n",
+          runtimeEvidence: opts.supportedAgentMissingEvidence ? undefined : {
+            adapter: "codex",
+            transport: "codex-app-server-stdio",
+            runtimeVersion: "0.144.4",
+            requestedProvider: "openai",
+            requestedModel: "runtime-managed",
+            actualProvider: "openai",
+            actualModel: opts.supportedAgentResultModel ?? "runtime-managed",
+            requestId: "turn-139",
+            sessionId: "artifact-session",
+            terminalStatus: "ready" as const,
+            fallbackOccurred: false,
+          },
+          audit: {
+            ...result.audit,
+            toolNames: opts.supportedAgentToolNames ?? [],
+            artifactCommit: false,
+          },
+        };
+      },
     };
     const supportedAgentSummaryAdapter = opts.supportedAgentAdapter ? {
       current: () => ({
@@ -221,9 +262,11 @@ describe("RecordingPipeline", () => {
         status: "ready" as const,
         testedAt: "2026-08-25T04:00:00.000Z",
         detail: "ready",
-        credentialSource: "oauth",
+        credentialSource: "runtime-oauth",
+        connectionId: "codex",
         disclosure: {
           kind: "external" as const,
+          connectionId: "codex",
           disclosureVersion: "codex-summary-v1",
           data: "transcript_text" as const,
           destination: "Codex service",
@@ -530,6 +573,11 @@ describe("RecordingPipeline", () => {
     writeFileSync(audioPath, wavWithAudio());
 
     const { task } = pipeline!.enqueueCompletion({ audioPath, title: "Supported Agent" });
+    expect(task).toMatchObject({
+      summaryConnectionId: "codex",
+      summaryCredentialClass: "runtime-oauth",
+      summaryDisclosureVersion: "codex-summary-v1",
+    });
     await vi.waitFor(() => expect(store!.getTask(task.id)).toMatchObject({
       state: "awaiting_provider",
       summaryProvider: "codex",
@@ -538,21 +586,80 @@ describe("RecordingPipeline", () => {
     }));
     expect(runArtifactWorkflow).not.toHaveBeenCalled();
 
-    store!.recordSummaryDataPathDisclosure("codex", "codex-summary-v1");
+    store!.recordAgentConnectionDisclosure({
+      connectionId: "codex",
+      capability: "summary",
+      disclosureVersion: "codex-summary-v1",
+      decision: "accepted",
+    });
     pipeline!.retry(task.id);
     await vi.waitFor(() => expect(store!.getTask(task.id)?.state).toBe("completed"));
     expect(runArtifactWorkflow).toHaveBeenCalledOnce();
+    expect(runArtifactWorkflow).toHaveBeenCalledWith(expect.objectContaining({
+      committedTranscript: "hello transcript",
+    }));
+    expect(store!.getTask(task.id)).toMatchObject({
+      summaryConnectionId: "codex",
+      summaryCredentialClass: "runtime-oauth",
+      summaryDisclosureVersion: "codex-summary-v1",
+      summaryInputArtifactId: expect.any(String),
+      summaryInputArtifactSha256: expect.stringMatching(/^[a-f0-9]{64}$/),
+      summaryInputArtifactBytes: 17,
+    });
     expect(store!.listArtifacts(task.id).find((artifact) => artifact.kind === "summary")?.provenance)
       .toMatchObject({
         agentProvider: "codex",
         summaryProvider: "codex",
         summaryModel: "runtime-managed",
+        summaryConnectionId: "codex",
+        summaryCredentialClass: "runtime-oauth",
+        summaryDisclosureVersion: "codex-summary-v1",
+        summaryInputArtifactId: expect.any(String),
+        summaryInputArtifactSha256: expect.stringMatching(/^[a-f0-9]{64}$/),
+        runtimeEvidence: expect.objectContaining({
+          actualProvider: "openai",
+          actualModel: "runtime-managed",
+          fallbackOccurred: false,
+          terminalStatus: "ready",
+        }),
       });
     expect(store!.getCoreActivationEvidence()).toMatchObject({
       taskId: task.id,
       summaryProvider: "codex",
       summaryModel: "runtime-managed",
     });
+  });
+
+  it.each([
+    ["tool call", { supportedAgentToolNames: ["commandExecution"] }, "attempted a tool call"],
+    ["missing Runtime Evidence", { supportedAgentMissingEvidence: true }, "complete Runtime Evidence"],
+    ["empty output", { supportedAgentSummaryText: "   " }, "empty summary"],
+    ["invalid output", { supportedAgentSummaryText: "bad\u0000summary" }, "invalid summary"],
+  ])("fails closed on Codex %s without replacing a prior summary", async (_name, failure, error) => {
+    const { audioPath, moviesDir, configDir } = setup({
+      pollMs: 5,
+      supportedAgentAdapter: true,
+      ...failure,
+    });
+    writeFileSync(audioPath, wavWithAudio());
+    const summaryPath = join(moviesDir, "Demo_20260711_120000.summary.md");
+    writeFileSync(summaryPath, "# Prior verified summary\n");
+    store!.recordAgentConnectionDisclosure({
+      connectionId: "codex",
+      capability: "summary",
+      disclosureVersion: "codex-summary-v1",
+      decision: "accepted",
+    });
+
+    const { task } = pipeline!.enqueueCompletion({ audioPath, title: `Fail closed ${_name}` });
+    await vi.waitFor(() => expect(store!.getTask(task.id)).toMatchObject({
+      state: "failed",
+      error: expect.stringContaining(error),
+    }));
+    expect(readFileSync(summaryPath, "utf8")).toBe("# Prior verified summary\n");
+    expect(existsSync(join(moviesDir, `${task.recordingStem}.summary.stale`))).toBe(false);
+    expect(existsSync(join(configDir, "agent-tasks", task.id, "rejected-summary.md"))).toBe(false);
+    expect(store!.getCoreActivationEvidence()).toBeNull();
   });
 
   it("rejects Supported Agent artifacts without the pinned model provenance", async () => {
@@ -564,7 +671,12 @@ describe("RecordingPipeline", () => {
     writeFileSync(audioPath, wavWithAudio());
     const summaryPath = join(moviesDir, "Demo_20260711_120000.summary.md");
     writeFileSync(summaryPath, "# Prior verified summary\n");
-    store!.recordSummaryDataPathDisclosure("codex", "codex-summary-v1");
+    store!.recordAgentConnectionDisclosure({
+      connectionId: "codex",
+      capability: "summary",
+      disclosureVersion: "codex-summary-v1",
+      decision: "accepted",
+    });
 
     const { task } = pipeline!.enqueueCompletion({ audioPath, title: "Wrong Agent model" });
     await vi.waitFor(() => expect(store!.getTask(task.id)).toMatchObject({
@@ -587,7 +699,12 @@ describe("RecordingPipeline", () => {
     writeFileSync(audioPath, wavWithAudio());
     const summaryPath = join(moviesDir, "Demo_20260711_120000.summary.md");
     writeFileSync(summaryPath, "# Prior verified summary\n");
-    store!.recordSummaryDataPathDisclosure("codex", "codex-summary-v1");
+    store!.recordAgentConnectionDisclosure({
+      connectionId: "codex",
+      capability: "summary",
+      disclosureVersion: "codex-summary-v1",
+      decision: "accepted",
+    });
 
     const { task } = pipeline!.enqueueCompletion({ audioPath, title: "Preserve prior summary" });
     await vi.waitFor(() => expect(store!.getTask(task.id)).toMatchObject({

@@ -1,4 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { envWithFallbackPath } from "./executables.js";
 import type {
@@ -44,7 +47,7 @@ class AppServerSession {
   constructor(options: { executable: string; cwd: string; env?: NodeJS.ProcessEnv; rpcTimeoutMs: number }) {
     this.process = spawn(options.executable, ["app-server", "--stdio"], {
       cwd: options.cwd,
-      env: envWithFallbackPath({ ...process.env, ...options.env }),
+      env: envWithFallbackPath(options.env ?? process.env),
       stdio: ["pipe", "pipe", "pipe"],
     });
     const lines = createInterface({ input: this.process.stdout });
@@ -187,7 +190,7 @@ function runtimeVersion(executable: string, cwd: string, env?: NodeJS.ProcessEnv
   return new Promise((resolve, reject) => {
     const child = spawn(executable, ["--version"], {
       cwd,
-      env: envWithFallbackPath({ ...process.env, ...env }),
+      env: envWithFallbackPath(env ?? process.env),
       stdio: ["ignore", "pipe", "pipe"],
     });
     let stdout = "";
@@ -340,15 +343,46 @@ export class CodexAppServerRuntimeClient implements CodexRuntimeClient {
     this.rpcTimeoutMs = options.rpcTimeoutMs ?? 10_000;
   }
 
-  async inspect(): Promise<CodexRuntimeInspection> {
-    const version = await runtimeVersion(this.executable, this.cwd, this.env);
-    const session = new AppServerSession({
-      executable: this.executable,
-      cwd: this.cwd,
-      env: this.env,
-      rpcTimeoutMs: this.rpcTimeoutMs,
-    });
+  private runtimeEnv(toolFree: boolean): NodeJS.ProcessEnv {
+    const source = { ...process.env, ...this.env };
+    if (!toolFree) return envWithFallbackPath(source);
+    const allowed = [
+      "HOME",
+      "CODEX_HOME",
+      "PATH",
+      "TMPDIR",
+      "TMP",
+      "TEMP",
+      "LANG",
+      "LC_ALL",
+      "LC_CTYPE",
+    ] as const;
+    const env: NodeJS.ProcessEnv = {};
+    for (const key of allowed) {
+      if (source[key] !== undefined) env[key] = source[key];
+    }
+    if (process.env.NODE_ENV === "test") {
+      for (const [key, value] of Object.entries(this.env ?? {})) {
+        if (key.startsWith("YULU_FAKE_CODEX_") && value !== undefined) env[key] = value;
+      }
+    }
+    return envWithFallbackPath(env);
+  }
+
+  async inspect(input: { toolFree?: boolean } = {}): Promise<CodexRuntimeInspection> {
+    const toolFree = input.toolFree === true;
+    const env = this.runtimeEnv(toolFree);
+    const isolatedCwd = toolFree ? mkdtempSync(join(tmpdir(), "yulu-codex-inspect-")) : null;
+    const invocationCwd = isolatedCwd ?? this.cwd;
+    let session: AppServerSession | null = null;
     try {
+      const version = await runtimeVersion(this.executable, invocationCwd, env);
+      session = new AppServerSession({
+        executable: this.executable,
+        cwd: invocationCwd,
+        env,
+        rpcTimeoutMs: this.rpcTimeoutMs,
+      });
       await session.initialize();
       const accountResponse = asRecord(await session.request("account/read", { refreshToken: false }));
       const authorized = accountResponse.account !== null && accountResponse.account !== undefined;
@@ -374,7 +408,8 @@ export class CodexAppServerRuntimeClient implements CodexRuntimeClient {
       }
       return { runtimeVersion: version, authorized, models: [...new Set(models)] };
     } finally {
-      session.close();
+      session?.close();
+      if (isolatedCwd) rmSync(isolatedCwd, { recursive: true, force: true });
     }
   }
 
@@ -382,13 +417,21 @@ export class CodexAppServerRuntimeClient implements CodexRuntimeClient {
     model: string;
     prompt: string;
     probe: boolean;
+    toolFree?: boolean;
     timeoutMs: number;
     nativeSessionId?: string;
   }): Promise<CodexRuntimeTurnResult> {
+    const isolated = input.probe || input.toolFree === true;
+    if (isolated && input.nativeSessionId) {
+      throw new Error("Tool-free Codex invocations must start a fresh isolated thread");
+    }
+    const isolatedCwd = isolated ? mkdtempSync(join(tmpdir(), "yulu-codex-isolated-")) : null;
+    const invocationCwd = isolatedCwd ?? this.cwd;
+    const env = this.runtimeEnv(isolated);
     const session = new AppServerSession({
       executable: this.executable,
-      cwd: this.cwd,
-      env: this.env,
+      cwd: invocationCwd,
+      env,
       rpcTimeoutMs: this.rpcTimeoutMs,
     });
     let threadId = input.nativeSessionId ?? "";
@@ -402,7 +445,7 @@ export class CodexAppServerRuntimeClient implements CodexRuntimeClient {
             threadId: input.nativeSessionId,
             model: input.model,
             modelProvider: "openai",
-            cwd: this.cwd,
+            cwd: invocationCwd,
             approvalPolicy: "never",
             sandbox: "read-only",
             excludeTurns: true,
@@ -411,20 +454,20 @@ export class CodexAppServerRuntimeClient implements CodexRuntimeClient {
             model: input.model,
             modelProvider: "openai",
             allowProviderModelFallback: false,
-            cwd: this.cwd,
+            cwd: invocationCwd,
             approvalPolicy: "never",
             sandbox: "read-only",
-            ...(input.probe ? {
+            ...(isolated ? {
               ephemeral: true,
               environments: [],
               dynamicTools: [],
               selectedCapabilityRoots: [],
               config: TOOL_FREE_PROBE_CONFIG,
-              baseInstructions: "This is a bounded Yulu capability probe. Do not invoke any tool.",
-              developerInstructions: "Return only the requested acknowledgement and do not invoke tools.",
+              baseInstructions: "This is a bounded, isolated Yulu invocation. Do not invoke any tool.",
+              developerInstructions: "Follow only the provided input, return only the requested text, and do not invoke tools.",
             } : {}),
           }));
-      if (input.probe) {
+      if (isolated) {
         const instructionSources = threadResponse.instructionSources;
         if (!Array.isArray(instructionSources) || instructionSources.length > 0) {
           throw new Error("Codex probe refused inherited instructions before execution");
@@ -434,13 +477,13 @@ export class CodexAppServerRuntimeClient implements CodexRuntimeClient {
       threadId = stringValue(thread.id);
       actualProvider = stringValue(threadResponse.modelProvider);
       actualModel = stringValue(threadResponse.model);
-      if (input.probe) await assertToolFreeThread(session, threadId);
+      if (isolated) await assertToolFreeThread(session, threadId);
       let start: JsonRecord;
       try {
         start = asRecord(await session.request("turn/start", {
           threadId,
           input: [{ type: "text", text: input.prompt, text_elements: [] }],
-          ...(input.probe ? {
+          ...(isolated ? {
             environments: [],
             approvalPolicy: "never",
             sandboxPolicy: { type: "readOnly", networkAccess: false },
@@ -513,6 +556,7 @@ export class CodexAppServerRuntimeClient implements CodexRuntimeClient {
       };
     } finally {
       session.close();
+      if (isolatedCwd) rmSync(isolatedCwd, { recursive: true, force: true });
     }
   }
 }

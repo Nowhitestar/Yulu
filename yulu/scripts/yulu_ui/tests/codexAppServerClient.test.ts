@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { CodexAppServerRuntimeClient } from "../src/codexAppServerClient.js";
@@ -12,11 +12,24 @@ function fakeCodexRuntime(mode = "normal") {
   const executable = join(root, "codex");
   const runtime = join(root, "runtime.mjs");
   const audit = join(root, "audit.jsonl");
+  const envAudit = join(root, "env-audit.jsonl");
   writeFileSync(executable, `#!/bin/sh\nexec "${process.execPath}" "${runtime}" "$@"\n`);
   chmodSync(executable, 0o755);
   writeFileSync(runtime, `
 import { appendFileSync } from "node:fs";
 import { createInterface } from "node:readline";
+
+if (process.env.YULU_FAKE_CODEX_ENV_AUDIT) {
+  appendFileSync(process.env.YULU_FAKE_CODEX_ENV_AUDIT, JSON.stringify({
+    notionCredentialPresent: Boolean(process.env.NOTION_TOKEN),
+    xaiCredentialPresent: Boolean(process.env.XAI_API_KEY),
+    cloudCredentialPresent: Boolean(process.env.AWS_SECRET_ACCESS_KEY),
+    projectContextPresent: Boolean(process.env.YULU_PROJECT_CONTEXT),
+    pwdIsIsolated: /\\/yulu-codex-(?:inspect|isolated)-/.test(process.env.PWD ?? ""),
+    homePresent: Boolean(process.env.HOME),
+    pathPresent: Boolean(process.env.PATH),
+  }) + "\\n");
+}
 
 if (process.argv.includes("--version")) {
   process.stdout.write("codex-cli 0.144.4\\n");
@@ -90,7 +103,7 @@ for await (const line of createInterface({ input: process.stdin })) {
   if (message.method === "turn/interrupt" && mode !== "never-complete") send({ id: message.id, result: {} });
 }
 `);
-  return { root, executable, audit, mode };
+  return { root, executable, audit, envAudit, mode };
 }
 
 afterEach(() => {
@@ -149,7 +162,8 @@ describe("Codex app-server stdio client", () => {
     });
 
     const messages = readFileSync(fake.audit, "utf8").trim().split("\n").map((line) => JSON.parse(line));
-    expect(messages.find((message) => message.method === "thread/start")?.params).toMatchObject({
+    const threadStart = messages.find((message) => message.method === "thread/start")?.params;
+    expect(threadStart).toMatchObject({
       model: "gpt-5.6-sol",
       allowProviderModelFallback: false,
       approvalPolicy: "never",
@@ -185,6 +199,110 @@ describe("Codex app-server stdio client", () => {
     expect(methods.indexOf("mcpServerStatus/list")).toBeLessThan(methods.indexOf("turn/start"));
     expect(methods.indexOf("experimentalFeature/list")).toBeLessThan(methods.indexOf("turn/start"));
     expect(methods.indexOf("app/list")).toBeLessThan(methods.indexOf("turn/start"));
+  });
+
+  it("uses the same machine-proven isolated thread for production Summary turns", async () => {
+    const fake = fakeCodexRuntime();
+    const client = new CodexAppServerRuntimeClient({
+      executable: fake.executable,
+      cwd: fake.root,
+      env: { YULU_FAKE_CODEX_AUDIT: fake.audit },
+    });
+
+    await expect(client.runTurn({
+      model: "gpt-5.6-sol",
+      prompt: "selected instructions\ncommitted transcript",
+      probe: false,
+      toolFree: true,
+      timeoutMs: 30_000,
+    })).resolves.toMatchObject({
+      answer: "Pinned answer",
+      actualProvider: "openai",
+      actualModel: "gpt-5.6-sol",
+      fallbackOccurred: false,
+      toolCalls: [],
+      terminalStatus: "completed",
+    });
+
+    const messages = readFileSync(fake.audit, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+    const threadStart = messages.find((message) => message.method === "thread/start")?.params;
+    expect(threadStart).toMatchObject({
+      model: "gpt-5.6-sol",
+      allowProviderModelFallback: false,
+      ephemeral: true,
+      environments: [],
+      dynamicTools: [],
+      selectedCapabilityRoots: [],
+      config: expect.objectContaining({
+        "features.hooks": false,
+        "features.plugins": false,
+        "features.shell_tool": false,
+        "features.unified_exec": false,
+        "mcp_servers": {},
+        "skills.include_instructions": false,
+      }),
+    });
+    expect(threadStart.cwd).toMatch(/^\/.*\/yulu-codex-isolated-/);
+    expect(threadStart.cwd).not.toBe(fake.root);
+    expect(existsSync(threadStart.cwd)).toBe(false);
+    const methods = messages.map((message) => message.method);
+    expect(methods.indexOf("experimentalFeature/list")).toBeLessThan(methods.indexOf("turn/start"));
+    expect(methods.indexOf("mcpServerStatus/list")).toBeLessThan(methods.indexOf("turn/start"));
+    expect(methods.indexOf("app/list")).toBeLessThan(methods.indexOf("turn/start"));
+  });
+
+  it("removes unrelated credentials and project context from Summary inspection and execution", async () => {
+    const fake = fakeCodexRuntime();
+    const previous = {
+      NOTION_TOKEN: process.env.NOTION_TOKEN,
+      XAI_API_KEY: process.env.XAI_API_KEY,
+      AWS_SECRET_ACCESS_KEY: process.env.AWS_SECRET_ACCESS_KEY,
+      YULU_PROJECT_CONTEXT: process.env.YULU_PROJECT_CONTEXT,
+    };
+    process.env.NOTION_TOKEN = "test-notion-secret";
+    process.env.XAI_API_KEY = "test-xai-secret";
+    process.env.AWS_SECRET_ACCESS_KEY = "test-cloud-secret";
+    process.env.YULU_PROJECT_CONTEXT = "test-project-context";
+    try {
+      const client = new CodexAppServerRuntimeClient({
+        executable: fake.executable,
+        cwd: fake.root,
+        env: {
+          YULU_FAKE_CODEX_AUDIT: fake.audit,
+          YULU_FAKE_CODEX_ENV_AUDIT: fake.envAudit,
+        },
+      });
+
+      await client.inspect({ toolFree: true });
+      await client.runTurn({
+        model: "gpt-5.6-sol",
+        prompt: "selected instructions\ncommitted transcript",
+        probe: false,
+        toolFree: true,
+        timeoutMs: 30_000,
+      });
+
+      const environments = readFileSync(fake.envAudit, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+      expect(environments.length).toBeGreaterThanOrEqual(3);
+      expect(environments).toEqual(expect.arrayContaining([expect.objectContaining({
+        notionCredentialPresent: false,
+        xaiCredentialPresent: false,
+        cloudCredentialPresent: false,
+        projectContextPresent: false,
+        pwdIsIsolated: true,
+        homePresent: true,
+        pathPresent: true,
+      })]));
+      expect(environments.every((environment) =>
+        !environment.notionCredentialPresent && !environment.xaiCredentialPresent &&
+        !environment.cloudCredentialPresent && !environment.projectContextPresent && environment.pwdIsIsolated
+      )).toBe(true);
+    } finally {
+      for (const [key, value] of Object.entries(previous)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
   });
 
   it("fails closed before the probe turn when inherited instructions are reported", async () => {

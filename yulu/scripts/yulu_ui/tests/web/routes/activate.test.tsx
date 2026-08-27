@@ -111,6 +111,7 @@ interface UnresolvedData {
         required: boolean;
         data: "transcript_text";
         destination: string;
+        connectionId?: string;
       } | null;
       publicOnboardingSupported: boolean;
       remediation: { href: string } | null;
@@ -809,6 +810,37 @@ describe("/activate", () => {
     expect(screen.getByRole("link", { name: "Open AI Provider Settings" })).toHaveAttribute("href", "/agent-connections?capability=summary");
     expect(activation.updateConfig).not.toHaveBeenCalled();
     expect(activation.probeXai).not.toHaveBeenCalled();
+  });
+
+  it("records Codex Summary disclosure against its selected connection", async () => {
+    activation.data = unresolvedData();
+    activation.data.nextStep = "summary_provider";
+    activation.data.blocker = {
+      capability: "summary_disclosure",
+      reason: "disclosure_required",
+      detail: "Codex disclosure required",
+      remediation: { href: "/agent-connections?capability=summary" },
+    };
+    activation.data.readiness.summary.selected = { provider: "codex", model: "gpt-5.6-sol" };
+    activation.data.readiness.summary.state = "disclosure_required";
+    activation.data.readiness.summary.disclosure = {
+      provider: "codex",
+      connectionId: "codex",
+      disclosureVersion: "codex-summary-v1",
+      acceptedDisclosureVersion: null,
+      declined: false,
+      required: true,
+      data: "transcript_text",
+      destination: "Codex runtime and its configured model provider",
+    };
+    renderRoute("en");
+    const user = userEvent.setup();
+
+    await user.click(screen.getByRole("button", { name: "Accept Data Path Disclosure" }));
+    expect(activation.acceptAgentConnectionDisclosure).toHaveBeenCalledWith({
+      connectionId: "codex",
+      capability: "summary",
+    });
   });
 
   it("retries the selected Supported Agent capability instead of only refetching stale state", async () => {

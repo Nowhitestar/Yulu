@@ -23,11 +23,12 @@ export interface CodexRuntimeTurnResult {
 }
 
 export interface CodexRuntimeClient {
-  inspect(): Promise<CodexRuntimeInspection>;
+  inspect(input?: { toolFree?: boolean }): Promise<CodexRuntimeInspection>;
   runTurn(input: {
     model: string;
     prompt: string;
     probe: boolean;
+    toolFree?: boolean;
     timeoutMs: number;
     nativeSessionId?: string;
   }): Promise<CodexRuntimeTurnResult>;
@@ -158,8 +159,8 @@ export class CodexAgentAdapter {
     this.client = options.client;
   }
 
-  async status() {
-    const inspected = await this.client.inspect();
+  async status(input: { toolFree?: boolean } = {}) {
+    const inspected = await this.client.inspect(input);
     const supported = versionAtLeast(inspected.runtimeVersion, CODEX_MINIMUM_VERSION);
     return {
       adapter: "codex" as const,
@@ -181,19 +182,31 @@ export class CodexAgentAdapter {
   }
 
   async probe(input: { model: string }): Promise<CodexProbeResult> {
-    const status = await this.status();
+    return this.runProbe(input, "Conversation", false);
+  }
+
+  async probeSummary(input: { model: string }): Promise<CodexProbeResult> {
+    return this.runProbe(input, "Summary", true);
+  }
+
+  private async runProbe(
+    input: { model: string },
+    capability: "Conversation" | "Summary",
+    toolFree: boolean,
+  ): Promise<CodexProbeResult> {
+    const status = await this.status({ toolFree });
     if (!status.supported) {
       return {
         status: "failed",
         reason: "unsupported_runtime",
-        remediation: `Upgrade Codex to ${CODEX_MINIMUM_VERSION} or newer, then test Conversation again`,
+        remediation: `Upgrade Codex to ${CODEX_MINIMUM_VERSION} or newer, then test ${capability} again`,
       };
     }
     if (!status.authorized) {
       return {
         status: "failed",
         reason: "authorization_required",
-        remediation: `Run ${this.executable} login, then test Conversation again`,
+        remediation: `Run ${this.executable} login, then test ${capability} again`,
       };
     }
     if (!status.availableModels.includes(input.model)) {
@@ -209,13 +222,14 @@ export class CodexAgentAdapter {
         model: input.model,
         prompt: PROBE_PROMPT,
         probe: true,
+        ...(toolFree ? { toolFree: true } : {}),
         timeoutMs: 30_000,
       });
     } catch {
       return {
         status: "failed",
         reason: "readiness_failed",
-        remediation: "Codex Conversation probe failed; restore this runtime authorization and exact model, then test again",
+        remediation: `Codex ${capability} probe failed; restore this runtime authorization and exact model, then test again`,
       };
     }
     const runtimeEvidence = evidence(
@@ -235,7 +249,7 @@ export class CodexAgentAdapter {
         reason: result.terminalStatus === "unknown" ? "unknown_outcome" : "identity_mismatch",
         remediation: result.terminalStatus === "unknown"
           ? "Codex probe outcome is unknown; restore this exact connection and inspect the pinned thread before creating a new attempt"
-          : "Codex did not prove the exact requested Conversation identity; restore this connection and model, then test again",
+          : `Codex did not prove the exact requested ${capability} identity; restore this connection and model, then test again`,
         evidence: runtimeEvidence,
       };
     }
@@ -244,6 +258,61 @@ export class CodexAgentAdapter {
       reason: null,
       remediation: null,
       evidence: { ...runtimeEvidence, terminalStatus: "ready" },
+    };
+  }
+
+  async summarize(input: {
+    model: string;
+    instructions: string;
+    transcript: string;
+  }) {
+    const status = await this.status({ toolFree: true });
+    if (!status.supported) throw new Error(status.remediation ?? "Codex runtime is unsupported");
+    if (!status.authorized) throw new Error(`Run ${this.executable} login, then retry this same Summary input`);
+    if (!status.availableModels.includes(input.model)) {
+      throw new Error(`Codex model ${input.model} is not available; restore the pinned model, then retry this same Summary input`);
+    }
+    const result = await this.client.runTurn({
+      model: input.model,
+      prompt: [
+        "Produce the recording summary from only the selected instructions and committed transcript below.",
+        "Return only the Markdown summary. Do not use tools or perform side effects.",
+        "",
+        "Selected instructions:",
+        input.instructions,
+        "",
+        "Committed transcript:",
+        input.transcript,
+      ].join("\n"),
+      probe: false,
+      toolFree: true,
+      timeoutMs: 300_000,
+    });
+    const runtimeEvidence = evidence(
+      status.runtimeVersion,
+      input.model,
+      result,
+      result.terminalStatus === "unknown" ? "unknown" : result.terminalStatus === "failed" ? "failed" : "ready",
+    );
+    if (result.terminalStatus !== "completed") {
+      throw new Error(result.terminalStatus === "unknown"
+        ? "Codex Summary outcome is unknown; do not retry automatically or commit staged output"
+        : "Codex Summary failed before a terminal successful result");
+    }
+    if (!identityMatches(result, input.model)) {
+      throw new Error("Codex Summary returned a different provider, model, or fallback identity");
+    }
+    if (result.toolCalls.length > 0) {
+      throw new Error("Codex Summary attempted a tool call or direct side effect");
+    }
+    const summary = result.answer.trim();
+    if (!summary || summary.includes("\0")) {
+      throw new Error("Codex Summary returned empty or invalid output");
+    }
+    return {
+      summary,
+      nativeSessionId: result.nativeSessionId,
+      evidence: runtimeEvidence,
     };
   }
 

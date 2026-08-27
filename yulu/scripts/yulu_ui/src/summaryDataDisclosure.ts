@@ -1,6 +1,7 @@
 import type { HostStore } from "./hostStore.js";
 
 export const XAI_SUMMARY_DISCLOSURE_VERSION = "xai-summary-v1";
+export const CODEX_SUMMARY_DISCLOSURE_VERSION = "codex-summary-v1";
 
 export function hasCurrentSummaryDataPathDisclosure(
   host: Pick<HostStore, "getSummaryDataPathDisclosure">,

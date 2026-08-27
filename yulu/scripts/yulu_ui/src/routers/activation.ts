@@ -72,9 +72,11 @@ function summaryBlocker(
 function summaryDisclosure(
   ctx: AppContext,
   provider: string,
-  metadata: { disclosureVersion: string; data: "transcript_text"; destination: string },
+  metadata: { disclosureVersion: string; data: "transcript_text"; destination: string; connectionId?: string },
 ) {
-  const receipt = ctx.host.getSummaryDataPathDisclosure(provider);
+  const receipt = metadata.connectionId
+    ? ctx.host.getAgentConnectionDisclosure(metadata.connectionId, "summary")
+    : ctx.host.getSummaryDataPathDisclosure(provider);
   const current = receipt?.disclosureVersion === metadata.disclosureVersion;
   return {
     provider,
@@ -826,7 +828,10 @@ export const activationRouter = router({
   acceptSummaryDataPathDisclosure: uiMutationProcedure.input(summaryDisclosureInput).mutation(({ ctx, input }) => {
     const disclosure = currentSummaryDisclosure(ctx, input);
     if (ctx.agentConnections) {
-      return ctx.agentConnections.acceptDisclosure({ connectionId: "direct-xai", capability: "summary" });
+      return ctx.agentConnections.acceptDisclosure({
+        connectionId: disclosure.connectionId ?? "direct-xai",
+        capability: "summary",
+      });
     }
     return ctx.host.recordSummaryDataPathDisclosure(
       disclosure.provider,
@@ -837,7 +842,7 @@ export const activationRouter = router({
     const disclosure = currentSummaryDisclosure(ctx, input);
     if (ctx.agentConnections) {
       return ctx.agentConnections.declineDisclosure({
-        connectionId: "direct-xai",
+        connectionId: disclosure.connectionId ?? "direct-xai",
         capability: "summary",
       });
     }

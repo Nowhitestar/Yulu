@@ -32,6 +32,7 @@ export type AgentTaskPhase =
   | "failed";
 
 export type AgentTaskTrigger = "automatic" | "manual";
+export type SummaryCredentialClass = XaiCredentialSource | "runtime-oauth";
 
 export interface AgentTask {
   id: string;
@@ -50,6 +51,12 @@ export interface AgentTask {
   summaryProvider: string;
   summaryModel: string;
   summaryCredentialSource: XaiCredentialSource | null;
+  summaryConnectionId: string | null;
+  summaryCredentialClass: SummaryCredentialClass | null;
+  summaryDisclosureVersion: string | null;
+  summaryInputArtifactId: string | null;
+  summaryInputArtifactSha256: string | null;
+  summaryInputArtifactBytes: number | null;
   nativeSessionId: string | null;
   artifactSessionId: string | null;
   deliverySessionId: string | null;
@@ -78,6 +85,20 @@ export interface ArtifactRecord {
   mimeType: string;
   provenance: Record<string, unknown>;
   createdAt: string;
+}
+
+export interface SummaryCommitRuntimeEvidence {
+  adapter: string;
+  transport: string;
+  runtimeVersion: string;
+  requestedProvider: string;
+  requestedModel: string;
+  actualProvider: string | null;
+  actualModel: string | null;
+  requestId: string | null;
+  sessionId: string | null;
+  terminalStatus: "ready" | "failed" | "unknown";
+  fallbackOccurred: boolean;
 }
 
 export interface ActivationArtifactFingerprint {
@@ -233,6 +254,12 @@ interface TaskRow {
   summary_provider: string;
   summary_model: string;
   summary_credential_source: XaiCredentialSource | null;
+  summary_connection_id: string | null;
+  summary_credential_class: SummaryCredentialClass | null;
+  summary_disclosure_version: string | null;
+  summary_input_artifact_id: string | null;
+  summary_input_artifact_sha256: string | null;
+  summary_input_artifact_bytes: number | null;
   native_session_id: string | null;
   artifact_session_id: string | null;
   delivery_session_id: string | null;
@@ -265,6 +292,12 @@ function toTask(row: TaskRow): AgentTask {
     summaryProvider: row.summary_provider,
     summaryModel: row.summary_model,
     summaryCredentialSource: row.summary_credential_source,
+    summaryConnectionId: row.summary_connection_id,
+    summaryCredentialClass: row.summary_credential_class,
+    summaryDisclosureVersion: row.summary_disclosure_version,
+    summaryInputArtifactId: row.summary_input_artifact_id,
+    summaryInputArtifactSha256: row.summary_input_artifact_sha256,
+    summaryInputArtifactBytes: row.summary_input_artifact_bytes,
     nativeSessionId: row.native_session_id,
     artifactSessionId: row.artifact_session_id,
     deliverySessionId: row.delivery_session_id,
@@ -557,6 +590,9 @@ export class HostStore {
     summaryProvider: string;
     summaryModel: string;
     summaryCredentialSource?: XaiCredentialSource | null;
+    summaryConnectionId?: string | null;
+    summaryCredentialClass?: SummaryCredentialClass | null;
+    summaryDisclosureVersion?: string | null;
     instructions?: string;
     trigger?: AgentTaskTrigger;
   }): { task: AgentTask; created: boolean } {
@@ -589,9 +625,10 @@ export class HostStore {
         INSERT OR IGNORE INTO agent_tasks (
           id, idempotency_key, recording_stem, title, audio_path, transcription_language, trigger,
           state, phase, send_to_notion, destination_hint, agent_provider,
-          summary_provider, summary_model, summary_credential_source, instructions,
+          summary_provider, summary_model, summary_credential_source,
+          summary_connection_id, summary_credential_class, summary_disclosure_version, instructions,
           attempt, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', 'queued', ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
       `).run(
         id,
         input.idempotencyKey,
@@ -606,6 +643,9 @@ export class HostStore {
         input.summaryProvider,
         input.summaryModel,
         summaryCredentialSource,
+        input.summaryConnectionId ?? null,
+        input.summaryCredentialClass ?? summaryCredentialSource,
+        input.summaryDisclosureVersion ?? null,
         input.instructions ?? "",
         timestamp,
         timestamp,
@@ -618,6 +658,9 @@ export class HostStore {
         summaryProvider: input.summaryProvider,
         summaryModel: input.summaryModel,
         summaryCredentialSource,
+        summaryConnectionId: input.summaryConnectionId ?? null,
+        summaryCredentialClass: input.summaryCredentialClass ?? summaryCredentialSource,
+        summaryDisclosureVersion: input.summaryDisclosureVersion ?? null,
       });
       return { task, created: task.id === id };
     });
@@ -1062,6 +1105,91 @@ export class HostStore {
       return this.getTask(id)!;
     });
     return commit();
+  }
+
+  recordSummaryInputSnapshot(id: string, leaseToken: string, artifact: ArtifactRecord): AgentTask {
+    const snapshot = this.db.transaction(() => {
+      const task = this.requireLease(id, leaseToken);
+      if (task.state !== "transcript_committed" || artifact.taskId !== id || artifact.kind !== "transcript") {
+        throw new Error(`task ${id} cannot snapshot Summary input before transcript commit`);
+      }
+      const committed = this.listArtifacts(id).find((record) => record.kind === "transcript");
+      if (
+        !committed || committed.id !== artifact.id || committed.sha256 !== artifact.sha256 ||
+        committed.bytes !== artifact.bytes || committed.path !== artifact.path
+      ) {
+        throw new Error("Summary input snapshot does not match the committed transcript artifact");
+      }
+      if (
+        task.summaryInputArtifactId &&
+        (task.summaryInputArtifactId !== artifact.id ||
+          task.summaryInputArtifactSha256 !== artifact.sha256 ||
+          task.summaryInputArtifactBytes !== artifact.bytes)
+      ) {
+        throw new Error("Summary input artifact identity changed after it was snapshotted");
+      }
+      this.db.prepare(`
+        UPDATE agent_tasks SET summary_input_artifact_id = ?, summary_input_artifact_sha256 = ?,
+          summary_input_artifact_bytes = ?, updated_at = ?
+        WHERE id = ? AND lease_token = ? AND state = 'transcript_committed'
+      `).run(artifact.id, artifact.sha256, artifact.bytes, now(), id, leaseToken);
+      this.appendEvent(id, "summary.input_snapshotted", {
+        artifactId: artifact.id,
+        sha256: artifact.sha256,
+        bytes: artifact.bytes,
+      });
+      return this.getTask(id)!;
+    });
+    return snapshot();
+  }
+
+  validateSummaryCommit(
+    id: string,
+    leaseToken: string,
+    input: {
+      connectionId: string;
+      credentialClass: SummaryCredentialClass;
+      disclosureVersion: string;
+      inputArtifact: ArtifactRecord;
+      runtimeEvidence: SummaryCommitRuntimeEvidence;
+      toolCalls: string[];
+    },
+  ): AgentTask {
+    const task = this.requireLease(id, leaseToken);
+    if (task.state !== "transcript_committed") {
+      throw new Error(`task ${id} cannot authorize a Summary commit from ${task.state}`);
+    }
+    if (
+      task.summaryProvider !== "codex" ||
+      task.summaryConnectionId !== input.connectionId ||
+      task.summaryCredentialClass !== input.credentialClass ||
+      task.summaryDisclosureVersion !== input.disclosureVersion
+    ) {
+      throw new Error("Summary task snapshot changed before commit authorization");
+    }
+    const artifact = this.listArtifacts(id).find((record) => record.kind === "transcript");
+    if (
+      !artifact || artifact.id !== input.inputArtifact.id || artifact.sha256 !== input.inputArtifact.sha256 ||
+      artifact.bytes !== input.inputArtifact.bytes || artifact.path !== input.inputArtifact.path ||
+      task.summaryInputArtifactId !== artifact.id || task.summaryInputArtifactSha256 !== artifact.sha256 ||
+      task.summaryInputArtifactBytes !== artifact.bytes
+    ) {
+      throw new Error("Summary input artifact identity changed before commit authorization");
+    }
+    const evidence = input.runtimeEvidence;
+    if (
+      evidence.adapter !== "codex" || evidence.transport !== "codex-app-server-stdio" ||
+      !evidence.runtimeVersion.trim() || evidence.requestedProvider !== "openai" ||
+      evidence.requestedModel !== task.summaryModel || evidence.actualProvider !== "openai" ||
+      evidence.actualModel !== task.summaryModel || !evidence.requestId || !evidence.sessionId ||
+      evidence.terminalStatus !== "ready" || evidence.fallbackOccurred
+    ) {
+      throw new Error("Codex Summary Runtime Evidence does not match the pinned task identity");
+    }
+    if (input.toolCalls.length > 0) {
+      throw new Error("Codex Summary attempted a tool call or direct side effect");
+    }
+    return task;
   }
 
   listArtifacts(taskId: string): ArtifactRecord[] {
@@ -1706,6 +1834,11 @@ export class HostStore {
       }
       if (options.discardArtifacts) {
         this.db.prepare("DELETE FROM artifacts WHERE task_id = ?").run(id);
+        this.db.prepare(`
+          UPDATE agent_tasks SET summary_input_artifact_id = NULL,
+            summary_input_artifact_sha256 = NULL, summary_input_artifact_bytes = NULL
+          WHERE id = ?
+        `).run(id);
       }
       this.db.prepare(`
         UPDATE agent_tasks SET
@@ -1735,6 +1868,9 @@ export class HostStore {
       summaryProvider: string;
       summaryModel: string;
       summaryCredentialSource?: XaiCredentialSource | null;
+      summaryConnectionId?: string | null;
+      summaryCredentialClass?: SummaryCredentialClass | null;
+      summaryDisclosureVersion?: string | null;
     },
   ): AgentTask {
     const replace = this.db.transaction(() => {
@@ -1746,6 +1882,9 @@ export class HostStore {
       const summaryProvider = selection.summaryProvider.trim().toLowerCase();
       const summaryModel = selection.summaryModel.trim();
       const summaryCredentialSource = selection.summaryCredentialSource ?? null;
+      const summaryConnectionId = selection.summaryConnectionId ?? null;
+      const summaryCredentialClass = selection.summaryCredentialClass ?? summaryCredentialSource;
+      const summaryDisclosureVersion = selection.summaryDisclosureVersion ?? null;
       if (!summaryProvider || summaryProvider.length > 100 || !summaryModel || summaryModel.length > 128) {
         throw new Error("replacement Summary Provider identity is invalid");
       }
@@ -1753,9 +1892,12 @@ export class HostStore {
         throw new Error("replacement xAI Summary Provider credential source is required");
       }
       if (
-        summaryProvider === original.summaryProvider &&
-        summaryModel === original.summaryModel &&
-        summaryCredentialSource === original.summaryCredentialSource
+          summaryProvider === original.summaryProvider &&
+          summaryModel === original.summaryModel &&
+          summaryCredentialSource === original.summaryCredentialSource &&
+          summaryConnectionId === original.summaryConnectionId &&
+          summaryCredentialClass === original.summaryCredentialClass &&
+          summaryDisclosureVersion === original.summaryDisclosureVersion
       ) {
         throw new Error("replacement Summary Provider must differ from the original task snapshot");
       }
@@ -1767,6 +1909,7 @@ export class HostStore {
       }
 
       const replacementId = randomUUID();
+      const replacementTranscriptId = randomUUID();
       const timestamp = now();
       if (original.state === "awaiting_provider") {
         this.db.prepare(`
@@ -1779,8 +1922,11 @@ export class HostStore {
         INSERT INTO agent_tasks (
           id, idempotency_key, recording_stem, title, audio_path, transcription_language, trigger,
           state, phase, send_to_notion, destination_hint, agent_provider,
-          summary_provider, summary_model, summary_credential_source, instructions, attempt, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, 'manual', 'transcript_committed', 'summarizing', 0, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+          summary_provider, summary_model, summary_credential_source,
+          summary_connection_id, summary_credential_class, summary_disclosure_version,
+          summary_input_artifact_id, summary_input_artifact_sha256, summary_input_artifact_bytes,
+          instructions, attempt, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, 'manual', 'transcript_committed', 'summarizing', 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
       `).run(
         replacementId,
         `summary-regeneration:${randomUUID()}`,
@@ -1793,6 +1939,12 @@ export class HostStore {
         summaryProvider,
         summaryModel,
         summaryCredentialSource,
+        summaryConnectionId,
+        summaryCredentialClass,
+        summaryDisclosureVersion,
+        replacementTranscriptId,
+        transcript.sha256,
+        transcript.bytes,
         original.instructions,
         timestamp,
         timestamp,
@@ -1803,7 +1955,7 @@ export class HostStore {
           mime_type, provenance_json, created_at
         ) VALUES (?, ?, ?, 'transcript', ?, ?, ?, ?, ?, ?)
       `).run(
-        randomUUID(),
+        replacementTranscriptId,
         replacementId,
         original.recordingStem,
         transcript.path,
@@ -1822,12 +1974,18 @@ export class HostStore {
         summaryProvider,
         summaryModel,
         summaryCredentialSource,
+        summaryConnectionId,
+        summaryCredentialClass,
+        summaryDisclosureVersion,
       });
       this.appendEvent(replacementId, "task.queued", {
         trigger: "manual",
         summaryProvider,
         summaryModel,
         summaryCredentialSource,
+        summaryConnectionId,
+        summaryCredentialClass,
+        summaryDisclosureVersion,
         reusedTranscriptFromTaskId: original.id,
       });
       return this.getTask(replacementId)!;
@@ -1911,6 +2069,12 @@ export class HostStore {
         summary_provider TEXT NOT NULL,
         summary_model TEXT NOT NULL,
         summary_credential_source TEXT CHECK(summary_credential_source IN ('oauth', 'api-key')),
+        summary_connection_id TEXT,
+        summary_credential_class TEXT CHECK(summary_credential_class IN ('oauth', 'api-key', 'runtime-oauth')),
+        summary_disclosure_version TEXT,
+        summary_input_artifact_id TEXT,
+        summary_input_artifact_sha256 TEXT,
+        summary_input_artifact_bytes INTEGER,
         instructions TEXT NOT NULL DEFAULT '',
         native_session_id TEXT,
         artifact_session_id TEXT,
@@ -2122,6 +2286,28 @@ export class HostStore {
     if (!columns.some((column) => column.name === "summary_credential_source")) {
       this.db.exec("ALTER TABLE agent_tasks ADD COLUMN summary_credential_source TEXT");
     }
+    if (!columns.some((column) => column.name === "summary_connection_id")) {
+      this.db.exec("ALTER TABLE agent_tasks ADD COLUMN summary_connection_id TEXT");
+    }
+    if (!columns.some((column) => column.name === "summary_credential_class")) {
+      this.db.exec("ALTER TABLE agent_tasks ADD COLUMN summary_credential_class TEXT");
+    }
+    if (!columns.some((column) => column.name === "summary_disclosure_version")) {
+      this.db.exec("ALTER TABLE agent_tasks ADD COLUMN summary_disclosure_version TEXT");
+    }
+    if (!columns.some((column) => column.name === "summary_input_artifact_id")) {
+      this.db.exec("ALTER TABLE agent_tasks ADD COLUMN summary_input_artifact_id TEXT");
+    }
+    if (!columns.some((column) => column.name === "summary_input_artifact_sha256")) {
+      this.db.exec("ALTER TABLE agent_tasks ADD COLUMN summary_input_artifact_sha256 TEXT");
+    }
+    if (!columns.some((column) => column.name === "summary_input_artifact_bytes")) {
+      this.db.exec("ALTER TABLE agent_tasks ADD COLUMN summary_input_artifact_bytes INTEGER");
+    }
+    this.db.exec(`
+      UPDATE agent_tasks SET summary_credential_class = summary_credential_source
+      WHERE summary_credential_class IS NULL AND summary_credential_source IS NOT NULL
+    `);
     this.db.exec(`
       UPDATE agent_tasks SET summary_provider = agent_provider
       WHERE summary_provider = 'agent'

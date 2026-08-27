@@ -10,6 +10,7 @@ import {
 } from "./agentGateway.js";
 import { ArtifactStore } from "./artifactStore.js";
 import { HostStore, type AgentTask, type AgentTaskTrigger } from "./hostStore.js";
+import type { SummaryCredentialClass } from "./hostStore.js";
 import {
   InvalidPromptInstructionsError,
   automaticSummaryInstructions,
@@ -41,6 +42,7 @@ import {
   hasSupportedAgentSummaryIdentity,
   hasSupportedAgentSummaryReadinessProof,
   type SupportedAgentSummaryAdapter,
+  type SupportedAgentSummaryGateway,
 } from "./summaryProviderReadiness.js";
 
 const REC_FILE_RE = /^(.+?)_(\d{8})_(\d{6})\.wav$/;
@@ -148,6 +150,9 @@ interface PreparedRecordingTask {
   summaryProvider: string;
   summaryModel: string;
   summaryCredentialSource: XaiCredentialSource | null;
+  summaryConnectionId: string | null;
+  summaryCredentialClass: SummaryCredentialClass | null;
+  summaryDisclosureVersion: string | null;
   instructions: string;
   trigger: AgentTaskTrigger;
 }
@@ -198,6 +203,9 @@ export class RecordingPipeline {
       summaryProvider: summary.provider,
       summaryModel: summary.model,
       summaryCredentialSource: summary.credentialSource,
+      summaryConnectionId: summary.connectionId,
+      summaryCredentialClass: summary.credentialClass,
+      summaryDisclosureVersion: summary.disclosureVersion,
       instructions,
       trigger: "manual",
     }, `summary-regeneration:${randomUUID()}`);
@@ -260,6 +268,9 @@ export class RecordingPipeline {
       summaryProvider: summary.provider,
       summaryModel: summary.model,
       summaryCredentialSource: summary.credentialSource,
+      summaryConnectionId: summary.connectionId,
+      summaryCredentialClass: summary.credentialClass,
+      summaryDisclosureVersion: summary.disclosureVersion,
       instructions,
       trigger: "automatic",
     };
@@ -292,17 +303,46 @@ export class RecordingPipeline {
   private summaryIdentity(
     config: YuluConfig,
     legacyProvider: string,
-  ): { provider: string; model: string; credentialSource: XaiCredentialSource | null } {
+  ): {
+    provider: string;
+    model: string;
+    credentialSource: XaiCredentialSource | null;
+    connectionId: string | null;
+    credentialClass: SummaryCredentialClass | null;
+    disclosureVersion: string | null;
+  } {
     const selection = config.intelligence.summary;
     if (selection.provider === "xai") {
       const credentialSource = this.options.xaiSummaryCredentialSource?.() ?? null;
       if (!credentialSource) {
         throw new InvalidRecordingCompletionError("xAI Summary Provider readiness credential source is unavailable");
       }
-      return { ...selection, credentialSource };
+      return {
+        ...selection,
+        credentialSource,
+        connectionId: "direct-xai",
+        credentialClass: credentialSource,
+        disclosureVersion: XAI_SUMMARY_DISCLOSURE_VERSION,
+      };
     }
-    const readiness = this.options.supportedAgentSummaryAdapter?.current();
-    if (!readiness) return { provider: legacyProvider, model: selection.model, credentialSource: null };
+    const explicitConnectionId = selection.provider === "agent" && "connectionId" in selection
+      ? selection.connectionId
+      : null;
+    const readiness = explicitConnectionId
+      ? this.options.supportedAgentSummaryAdapter?.current({
+          connectionId: explicitConnectionId,
+          provider: "codex",
+          model: selection.model,
+        })
+      : undefined;
+    if (!readiness) return {
+      provider: legacyProvider,
+      model: selection.model,
+      credentialSource: null,
+      connectionId: null,
+      credentialClass: null,
+      disclosureVersion: null,
+    };
     if (!hasSupportedAgentSummaryIdentity(readiness)) {
       throw new InvalidRecordingCompletionError("Supported Agent Summary Provider identity is invalid");
     }
@@ -310,6 +350,11 @@ export class RecordingPipeline {
       provider: readiness.provider.trim().toLowerCase(),
       model: readiness.model.trim(),
       credentialSource: null,
+      connectionId: readiness.connectionId ?? null,
+      credentialClass: readiness.credentialSource === "runtime-oauth" ? "runtime-oauth" : null,
+      disclosureVersion: readiness.disclosure?.kind === "external"
+        ? readiness.disclosure.disclosureVersion
+        : null,
     };
   }
 
@@ -329,6 +374,9 @@ export class RecordingPipeline {
       summaryProvider: input.summaryProvider,
       summaryModel: input.summaryModel,
       summaryCredentialSource: input.summaryCredentialSource,
+      summaryConnectionId: input.summaryConnectionId,
+      summaryCredentialClass: input.summaryCredentialClass,
+      summaryDisclosureVersion: input.summaryDisclosureVersion,
       instructions: input.instructions,
       trigger: input.trigger,
     });
@@ -386,6 +434,9 @@ export class RecordingPipeline {
       summaryProvider: summary.provider,
       summaryModel: summary.model,
       summaryCredentialSource: summary.credentialSource,
+      summaryConnectionId: summary.connectionId,
+      summaryCredentialClass: summary.credentialClass,
+      summaryDisclosureVersion: summary.disclosureVersion,
     });
     this.resumeDispatchNow();
     this.reconcileDispatchPolicy(config);
@@ -493,8 +544,14 @@ export class RecordingPipeline {
 
   private resolveSupportedAgentGateway(config: YuluConfig, task: AgentTask): RecordingAgentGateway {
     const adapter = this.options.supportedAgentSummaryAdapter;
-    if (!adapter) return this.resolveGateway(config);
-    const readiness = adapter.current();
+    if (!adapter) {
+      throw new AgentUnavailableError("The pinned Supported Agent Summary Provider adapter is unavailable");
+    }
+    const readiness = adapter.current({
+      connectionId: task.summaryConnectionId,
+      provider: task.summaryProvider,
+      model: task.summaryModel,
+    });
     const provider = readiness.provider.trim().toLowerCase();
     const model = readiness.model.trim();
     if (
@@ -507,11 +564,15 @@ export class RecordingPipeline {
     const disclosure = readiness.disclosure;
     if (
       disclosure?.kind === "external" &&
-      !hasCurrentSummaryDataPathDisclosure(
-        this.options.store,
-        provider,
-        disclosure.disclosureVersion,
-      )
+      (disclosure.connectionId
+        ? this.options.store.getAgentConnectionDisclosure(disclosure.connectionId, "summary")?.disclosureVersion !==
+            disclosure.disclosureVersion ||
+          this.options.store.getAgentConnectionDisclosure(disclosure.connectionId, "summary")?.decision !== "accepted"
+        : !hasCurrentSummaryDataPathDisclosure(
+            this.options.store,
+            provider,
+            disclosure.disclosureVersion,
+          ))
     ) {
       throw new AgentUnavailableError(
         `${disclosure.destination} Data Path Disclosure (${disclosure.disclosureVersion}) is required; open /settings/llm`,
@@ -550,17 +611,19 @@ export class RecordingPipeline {
   private async runTask(config: YuluConfig, task: AgentTask, leaseToken: string): Promise<boolean> {
     try {
       const usesXaiSummary = task.summaryProvider === "xai";
-      let gateway: RecordingAgentGateway | null = null;
-      if (usesXaiSummary && task.sendToNotion) {
+      const usesSupportedAgentSummary = Boolean(task.summaryConnectionId);
+      let summaryGateway: RecordingAgentGateway | null = null;
+      let deliveryGateway: RecordingAgentGateway | null = null;
+      if (task.sendToNotion) {
         try {
-          gateway = this.resolveGateway(config);
+          deliveryGateway = this.resolveGateway(config);
         } catch (error) {
           throw new AgentUnavailableError((error as Error).message);
         }
       }
-      if (!usesXaiSummary && !this.options.supportedAgentSummaryAdapter) {
+      if (!usesXaiSummary && !usesSupportedAgentSummary) {
         try {
-          gateway = this.resolveGateway(config);
+          summaryGateway = deliveryGateway ?? this.resolveGateway(config);
         } catch (error) {
           throw new AgentUnavailableError((error as Error).message);
         }
@@ -614,12 +677,21 @@ export class RecordingPipeline {
       }
       this.options.store.recordProgress(task.id, leaseToken, "summarizing", `Transcription provider: ${transcription.provider}`);
       this.publish(task, "summarizing");
-      const current = this.options.store.getTask(task.id)!;
+      const transcriptArtifact = this.options.store.listArtifacts(task.id)
+        .find((artifact) => artifact.kind === "transcript");
+      if (!transcriptArtifact) throw new Error("Summary execution requires a committed transcript artifact");
+      const current = this.options.store.recordSummaryInputSnapshot(
+        task.id,
+        leaseToken,
+        transcriptArtifact,
+      );
+      const committedTranscript = this.options.artifacts.readCommittedTranscript(current, transcriptArtifact);
       const workflowInput = {
         task: current,
         leaseToken,
         workspace,
         transcriptionProvider: transcription.provider,
+        committedTranscript,
         glossary,
       };
       let artifactSessionId: string | null = null;
@@ -679,31 +751,69 @@ export class RecordingPipeline {
         this.options.store.recordArtifacts(task.id, leaseToken, records);
         this.options.pubsub.publish("recordings-changed", { reason: "changed" });
       } else {
-        gateway ??= this.resolveSupportedAgentGateway(config, task);
-        if (!gateway || gateway.provider !== task.summaryProvider) {
+        summaryGateway ??= usesSupportedAgentSummary
+          ? this.resolveSupportedAgentGateway(config, task)
+          : this.resolveGateway(config);
+        if (!summaryGateway || summaryGateway.provider !== task.summaryProvider) {
           throw new AgentUnavailableError(
             `Pinned Summary Provider ${task.summaryProvider} is unavailable for model ${task.summaryModel}`,
           );
         }
-        const gatewayHealth = gateway.health();
-        if (!gatewayHealth.available) {
+        const gatewayHealth = summaryGateway.health();
+        if (!usesSupportedAgentSummary && !gatewayHealth.available) {
           throw new AgentUnavailableError(gatewayHealth.reason ?? "Summary Agent is unavailable");
         }
-        const artifactResult = await gateway.runArtifactWorkflow(workflowInput);
-        if (this.options.supportedAgentSummaryAdapter) {
-          const identity = artifactResult.summaryIdentity;
+        const artifactResult = usesSupportedAgentSummary
+          ? await (summaryGateway as SupportedAgentSummaryGateway).runArtifactWorkflow(workflowInput)
+          : await summaryGateway.runArtifactWorkflow(workflowInput);
+        if (usesSupportedAgentSummary) {
+          const supportedResult = artifactResult as Awaited<
+            ReturnType<SupportedAgentSummaryGateway["runArtifactWorkflow"]>
+          >;
+          const identity = supportedResult.summaryIdentity;
           if (
             identity?.provider.trim().toLowerCase() !== task.summaryProvider ||
             identity.model.trim() !== task.summaryModel
           ) {
             throw new Error("Supported Agent returned a different Summary Provider/model identity");
           }
-          if (!artifactResult.audit.ok) throw new Error(artifactResult.audit.errors.join("; "));
+          if (task.summaryConnectionId && supportedResult.summary === undefined) {
+            throw new Error("Codex Summary returned no staged output");
+          }
+          if (supportedResult.summary !== undefined) {
+            if (supportedResult.summary.includes("\u0000")) {
+              throw new Error("Codex Summary returned invalid summary output");
+            }
+            this.options.artifacts.writeStagedSummary(
+              task.id,
+              glossary ? applyGlossaryContract(supportedResult.summary, glossary) : supportedResult.summary,
+            );
+          }
+          if (!supportedResult.audit.ok) throw new Error(supportedResult.audit.errors.join("; "));
+          if (task.summaryConnectionId) {
+            if (!supportedResult.runtimeEvidence || !task.summaryCredentialClass || !task.summaryDisclosureVersion) {
+              throw new Error("Codex Summary did not return complete Runtime Evidence for the pinned task snapshot");
+            }
+            this.options.store.validateSummaryCommit(task.id, leaseToken, {
+              connectionId: task.summaryConnectionId,
+              credentialClass: task.summaryCredentialClass,
+              disclosureVersion: task.summaryDisclosureVersion,
+              inputArtifact: transcriptArtifact,
+              runtimeEvidence: supportedResult.runtimeEvidence,
+              toolCalls: supportedResult.audit.toolNames,
+            });
+          }
           const stagedTask = this.options.store.getTask(task.id)!;
           const records = this.options.artifacts.commitFromWorkspace(stagedTask, {
             agentProvider: task.summaryProvider,
             summaryProvider: task.summaryProvider,
             summaryModel: task.summaryModel,
+            summaryConnectionId: current.summaryConnectionId,
+            summaryCredentialClass: current.summaryCredentialClass,
+            summaryDisclosureVersion: current.summaryDisclosureVersion,
+            summaryInputArtifactId: current.summaryInputArtifactId,
+            summaryInputArtifactSha256: current.summaryInputArtifactSha256,
+            runtimeEvidence: supportedResult.runtimeEvidence,
             artifactSessionId: artifactResult.nativeSessionId,
             committedBy: "yulu-host",
           });
@@ -737,12 +847,12 @@ export class RecordingPipeline {
       // only the Host-verified committed summary through its dedicated MCP.
       let deliveryResult = null;
       if (afterAgent.sendToNotion) {
-        if (!gateway) throw new AgentUnavailableError("Agent delivery runtime is unavailable");
+        if (!deliveryGateway) throw new AgentUnavailableError("Agent delivery runtime is unavailable");
         // Persist the uncertainty fence before the Agent receives any external
         // connector capability. Even a write-before-begin policy violation or
         // process crash must become delivery_unverified, never a retryable task.
         this.options.store.beginNotionDelivery(task.id, leaseToken);
-        deliveryResult = await gateway.runNotionWorkflow({
+        deliveryResult = await deliveryGateway.runNotionWorkflow({
           ...workflowInput,
           task: this.options.store.getTask(task.id)!,
         });

@@ -53,6 +53,11 @@ function setup(
         "model/list" as const,
         "thread/start" as const,
         "thread/resume" as const,
+        "turn/start" as const,
+        "turn/interrupt" as const,
+        "experimentalFeature/list" as const,
+        "mcpServerStatus/list" as const,
+        "app/list" as const,
         "no-provider-model-fallback" as const,
       ],
       login: { command: "/fake/bin/codex login", statusCommand: "/fake/bin/codex login status" },
@@ -72,6 +77,45 @@ function setup(
         actualModel: model,
         requestId: "turn-135",
         sessionId: "thread-probe-135",
+        terminalStatus: "ready" as const,
+        fallbackOccurred: false,
+        cancellationRequested: false,
+        cancellationConfirmed: null,
+      },
+    })),
+    probeSummary: vi.fn(async ({ model }: { model: string }) => ({
+      status: "ready" as const,
+      reason: null,
+      remediation: null,
+      evidence: {
+        adapter: "codex" as const,
+        transport: "codex-app-server-stdio" as const,
+        runtimeVersion: "0.144.4",
+        requestedProvider: "openai" as const,
+        requestedModel: model,
+        actualProvider: "openai",
+        actualModel: model,
+        requestId: "turn-139",
+        sessionId: "thread-probe-139",
+        terminalStatus: "ready" as const,
+        fallbackOccurred: false,
+        cancellationRequested: false,
+        cancellationConfirmed: null,
+      },
+    })),
+    summarize: vi.fn(async ({ model }: { model: string }) => ({
+      summary: "# Summary\n\nOnly committed input.",
+      nativeSessionId: "thread-summary-139",
+      evidence: {
+        adapter: "codex" as const,
+        transport: "codex-app-server-stdio" as const,
+        runtimeVersion: "0.144.4",
+        requestedProvider: "openai" as const,
+        requestedModel: model,
+        actualProvider: "openai",
+        actualModel: model,
+        requestId: "turn-summary-139",
+        sessionId: "thread-summary-139",
         terminalStatus: "ready" as const,
         fallbackOccurred: false,
         cancellationRequested: false,
@@ -129,7 +173,7 @@ afterEach(() => {
 });
 
 describe("public Agent Connection Host contract", () => {
-  it("confirms Codex explicitly, projects native auth without probing, and proves only Conversation", async () => {
+  it("confirms Codex explicitly and projects native auth without probing either capability", async () => {
     const setupResult = setup({
       audio: {},
       transcription: { engine: "local", language: "zh" },
@@ -159,7 +203,7 @@ describe("public Agent Connection Host contract", () => {
           runtimeVersion: "0.144.4",
           loginCommand: "/fake/bin/codex login",
         }),
-        capabilities: [expect.objectContaining({
+        capabilities: expect.arrayContaining([expect.objectContaining({
           capability: "conversation",
           currentReadiness: expect.objectContaining({
             status: "untested",
@@ -168,7 +212,7 @@ describe("public Agent Connection Host contract", () => {
             detail: "Not tested in this Host process",
             credentialSource: null,
           }),
-        })],
+        })]),
       })]),
     });
     expect(setupResult.codex.status).toHaveBeenCalled();
@@ -177,7 +221,7 @@ describe("public Agent Connection Host contract", () => {
 
     const beforeDisclosure = await caller.view();
     const codex = beforeDisclosure.connections.find((connection: { id: string }) => connection.id === "codex");
-    expect(codex.capabilities[0].disclosure).toMatchObject({
+    expect(codex.capabilities.find(({ capability }: { capability: string }) => capability === "conversation").disclosure).toMatchObject({
       required: true,
       data: "conversation_text_and_agent_tool_context",
       destination: "Codex runtime and its configured providers/connectors",
@@ -212,6 +256,154 @@ describe("public Agent Connection Host contract", () => {
         }),
       }),
     ]);
+    setupResult.host.close();
+  });
+
+  it("proves and selects Codex Summary independently from Conversation authorization and disclosure", async () => {
+    const setupResult = setup({
+      audio: {},
+      transcription: { engine: "local", language: "zh" },
+      intelligence: {
+        summary: { provider: "agent", model: "runtime-managed" },
+        conversation: { provider: "agent", model: "runtime-managed" },
+      },
+      llm: { agent: { provider: "auto" } },
+    }, [{ adapter: "codex", label: "Codex", path: "/fake/bin/codex" }]);
+    const caller = createCaller(agentConnectionsRouter, {
+      agentConnections: setupResult.center,
+      uiMutationAuthorized: true,
+    } as never);
+
+    await caller.refreshCandidates();
+    expect((await caller.view()).candidates.find((candidate: { adapter: string }) =>
+      candidate.adapter === "codex")?.capabilities)
+      .toEqual(["conversation"]);
+    await caller.confirmCandidate({ candidateId: "candidate:codex", model: "gpt-5.6-sol" });
+    const before = await caller.view();
+    const codex = before.connections.find((connection: { id: string }) => connection.id === "codex");
+    expect(codex.capabilities).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        capability: "summary",
+        declared: false,
+        currentReadiness: expect.objectContaining({ status: "untested", model: "gpt-5.6-sol" }),
+        disclosure: expect.objectContaining({
+          required: true,
+          disclosureVersion: "codex-summary-v1",
+          data: "transcript_text",
+        }),
+      }),
+      expect.objectContaining({ capability: "conversation" }),
+    ]));
+    expect(setupResult.codex.probeSummary).not.toHaveBeenCalled();
+
+    await caller.acceptDisclosure({ connectionId: "codex", capability: "summary" });
+    expect(setupResult.host.getAgentConnectionDisclosure("codex", "summary")).toMatchObject({
+      decision: "accepted",
+      disclosureVersion: "codex-summary-v1",
+    });
+    expect(setupResult.host.getAgentConnectionDisclosure("codex", "conversation")).toBeNull();
+
+    setupResult.codex.status.mockClear();
+    await expect(caller.probe({ connectionId: "codex", capability: "summary" })).resolves.toMatchObject({
+      capability: "summary",
+      status: "ready",
+      model: "gpt-5.6-sol",
+    });
+    expect(setupResult.codex.probeSummary).toHaveBeenCalledWith({ model: "gpt-5.6-sol" });
+    expect(setupResult.codex.status).toHaveBeenCalledWith({ toolFree: true });
+    expect(setupResult.codex.probe).not.toHaveBeenCalled();
+    const tested = await caller.view();
+    expect(tested.connections.find((connection: { id: string }) => connection.id === "codex")
+      .capabilities.find(({ capability }: { capability: string }) => capability === "summary"))
+      .toMatchObject({ declared: true, currentReadiness: { status: "ready" } });
+
+    setupResult.codex.status.mockClear();
+    await caller.select({ connectionId: "codex", capability: "summary", model: "gpt-5.6-sol" });
+    expect(setupResult.codex.status).toHaveBeenCalledWith({ toolFree: true });
+    await expect(caller.view()).resolves.toMatchObject({
+      selections: { summary: { connectionId: "codex", model: "gpt-5.6-sol" } },
+    });
+    expect(JSON.parse(readFileSync(setupResult.configPath, "utf8"))).toMatchObject({
+      intelligence: { summary: { provider: "agent", connectionId: "codex", model: "gpt-5.6-sol" } },
+    });
+    expect(setupResult.host.listAgentConnectionReadinessHistory("codex", "summary")).toEqual([
+      expect.objectContaining({
+        status: "ready",
+        runtimeEvidence: expect.objectContaining({
+          requestedModel: "gpt-5.6-sol",
+          actualModel: "gpt-5.6-sol",
+          fallbackOccurred: false,
+        }),
+      }),
+    ]);
+
+    const task = setupResult.host.enqueueRecording({
+      idempotencyKey: "recording:codex-summary-production",
+      recordingStem: "Codex_20260827_190000",
+      title: "Codex production Summary",
+      audioPath: join(setupResult.root, "Codex_20260827_190000.wav"),
+      sendToNotion: false,
+      destinationHint: "",
+      agentProvider: "codex",
+      summaryProvider: "codex",
+      summaryModel: "gpt-5.6-sol",
+      summaryConnectionId: "codex",
+      summaryCredentialClass: "runtime-oauth",
+      summaryDisclosureVersion: "codex-summary-v1",
+    }).task;
+    const gateway = setupResult.center.summaryAdapter().gateway(setupResult.configManager.read());
+    await expect(gateway.runArtifactWorkflow({
+      task,
+      leaseToken: "host-owned",
+      workspace: {
+        dir: join(setupResult.root, "private-stage"),
+        transcriptPath: join(setupResult.root, "private-stage", "transcript.txt"),
+        summaryPath: join(setupResult.root, "private-stage", "summary.md"),
+        chunkPattern: join(setupResult.root, "private-stage", "audio-%03d.wav"),
+      },
+      transcriptionProvider: "local",
+      committedTranscript: "Only committed transcript text.",
+    })).resolves.toMatchObject({
+      summary: "# Summary\n\nOnly committed input.",
+      summaryIdentity: { provider: "codex", model: "gpt-5.6-sol" },
+      audit: { toolNames: [], notionWrite: false },
+    });
+    expect(setupResult.codex.summarize).toHaveBeenCalledWith({
+      model: "gpt-5.6-sol",
+      instructions: task.instructions,
+      transcript: "Only committed transcript text.",
+    });
+    setupResult.host.close();
+  });
+
+  it("does not declare Codex Summary when the current runtime cannot prove every isolation feature", async () => {
+    const setupResult = setup({
+      audio: {},
+      transcription: { engine: "local", language: "zh" },
+      intelligence: {
+        summary: { provider: "agent", model: "runtime-managed" },
+        conversation: { provider: "agent", model: "runtime-managed" },
+      },
+      llm: { agent: { provider: "auto" } },
+    }, [{ adapter: "codex", label: "Codex", path: "/fake/bin/codex" }]);
+    const completeStatus = await setupResult.codex.status();
+    setupResult.codex.status.mockResolvedValue({
+      ...completeStatus,
+      features: completeStatus.features.filter((feature) => feature !== "mcpServerStatus/list"),
+    });
+    const caller = createCaller(agentConnectionsRouter, {
+      agentConnections: setupResult.center,
+      uiMutationAuthorized: true,
+    } as never);
+
+    await caller.refreshCandidates();
+    await caller.confirmCandidate({ candidateId: "candidate:codex", model: "gpt-5.6-sol" });
+    const view = await caller.view();
+    const codex = view.connections.find((connection: { id: string }) => connection.id === "codex");
+    expect(codex.capabilities.find(({ capability }: { capability: string }) => capability === "summary"))
+      .toMatchObject({ declared: false, currentReadiness: { status: "untested" } });
+    await expect(caller.probe({ connectionId: "codex", capability: "summary" }))
+      .resolves.toMatchObject({ status: "failed" });
     setupResult.host.close();
   });
 
@@ -253,7 +445,8 @@ describe("public Agent Connection Host contract", () => {
     const readyStatus = await setupResult.codex.status();
     setupResult.codex.status.mockResolvedValue({ ...readyStatus, authorized: false });
     const disconnected = await caller.view();
-    expect(disconnected.connections.find(({ id }: { id: string }) => id === "codex")?.capabilities[0]?.currentReadiness)
+    expect(disconnected.connections.find(({ id }: { id: string }) => id === "codex")?.capabilities
+      .find(({ capability }: { capability: string }) => capability === "conversation")?.currentReadiness)
       .toMatchObject({ status: "untested", model: "gpt-5.6-terra" });
     await expect(caller.select({
       connectionId: "codex",
