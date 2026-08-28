@@ -41,6 +41,11 @@ selected Summary Provider with enough provenance to verify that selection.
 Optional delivery to external destinations is not part of qualification.
 _Avoid_: Test recording, sample recording
 
+**Recording Processing**:
+The automatic, resumable work that turns one saved recording into its transcript
+and summary. It ends when the summary is saved and never includes a Share Action.
+_Avoid_: Recording delivery, automatic sharing, end-to-end publishing
+
 **Activation Attempt**:
 A user-initiated Qualifying Recording made from the Activation Journey to
 establish Core Activation. Its processing continues and remains resumable when
@@ -205,9 +210,10 @@ Agent Connector. Saving the target does not authorize an external write.
 _Avoid_: Connector, automatic delivery authorization
 
 **Share Action**:
-A user-confirmed attempt to send one saved summary to one Share Destination. It
-ends only with a verified receipt, a proven failure, or an Unknown Outcome.
-_Avoid_: Sync, configured sharing, background delivery
+An exclusively user-initiated and user-confirmed attempt to send one saved
+summary to one Share Destination. It ends only with a verified receipt, a proven
+failure, or an Unknown Outcome.
+_Avoid_: Sync, configured sharing, background delivery, automatic sharing
 
 **Test Share**:
 A Share Action containing no meeting content that the user explicitly sends to
@@ -244,6 +250,12 @@ The standard per-user Library locations that hold Yulu configuration, durable
 state, models, caches, and logs outside the signed Application Runtime. User
 recordings remain in their explicit Media Library rather than inside this root.
 _Avoid_: Runtime directory, repository root, recording folder
+
+**Application Migration**:
+A journaled transfer of operational data and service ownership from a legacy
+installation to the current Application Runtime. It commits only after the new
+runtime proves health and otherwise restores the prior runnable state.
+_Avoid_: Upgrade script, partial copy, parallel runtimes
 
 **Media Library**:
 The user-visible, user-selected location for recordings and dictation media,
