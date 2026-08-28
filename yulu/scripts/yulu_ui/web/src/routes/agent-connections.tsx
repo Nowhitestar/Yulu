@@ -61,6 +61,7 @@ function actionFailureReason(error: unknown): string {
 
 function readinessFailure(
   t: ReturnType<typeof useT>,
+  capability: Capability,
   readiness: {
     model: string;
     credentialSource?: "oauth" | "api-key" | null;
@@ -68,14 +69,29 @@ function readinessFailure(
       "identity_mismatch" | "readiness_failed" | "unknown_outcome";
   },
 ): string {
-  if (readiness.reason === "unknown_outcome") {
-    return t("agentConnections.remediation.unknownOutcome", { model: readiness.model });
-  }
   const source = readiness.credentialSource === "api-key"
     ? t("agentConnections.credentialSource.apiKey")
     : readiness.credentialSource === "oauth"
       ? t("agentConnections.credentialSource.oauth")
       : t("agentConnections.credentialSource.none");
+  if (readiness.reason === "unknown_outcome") {
+    return t("agentConnections.remediation.unknownOutcome", { model: readiness.model, source });
+  }
+  if (capability === "transcription") {
+    if (readiness.reason === "missing_credentials") {
+      return t("agentConnections.remediation.transcriptionMissingCredentials", { source });
+    }
+    if (readiness.reason === "entitlement_failed") {
+      return t("agentConnections.remediation.transcriptionEntitlement", { source });
+    }
+    if (readiness.reason === "credential_refresh_failed") {
+      return t("agentConnections.remediation.transcriptionCredentialRefresh", { source });
+    }
+    if (readiness.reason === "identity_mismatch") {
+      return t("agentConnections.remediation.transcriptionIdentityMismatch", { source });
+    }
+    return t("agentConnections.remediation.transcriptionProbeFailed", { source });
+  }
   if (readiness.reason === "missing_credentials") {
     return t("agentConnections.remediation.missingCredentials", { model: readiness.model, source });
   }
@@ -403,7 +419,7 @@ export function AgentConnections({ embedded = false }: { embedded?: boolean } = 
                     </span>
                   </div>
                   {item.currentReadiness.status === "failed" && (
-                    <p className="agent-capability-detail">{readinessFailure(t, item.currentReadiness)}</p>
+                    <p className="agent-capability-detail">{readinessFailure(t, capability, item.currentReadiness)}</p>
                   )}
                   {history && (
                     <p className="agent-readiness-history">

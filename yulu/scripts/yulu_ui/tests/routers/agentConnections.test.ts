@@ -502,6 +502,55 @@ describe("public Agent Connection Host contract", () => {
     setupResult.host.close();
   });
 
+  it("gives actionable realtime Transcription remediation instead of an uneditable model repair", async () => {
+    const setupResult = setup({
+      audio: {},
+      transcription: { engine: "xai", language: "zh" },
+      intelligence: {},
+      llm: { agent: { provider: "auto" } },
+    });
+    setupResult.host.recordCloudTranscriptionConsent("xai-audio-v1");
+    setupResult.audio.testXai.mockRejectedValue(new Error("xAI realtime STT failed (HTTP 404)"));
+
+    const result = await setupResult.center.probe({
+      connectionId: "direct-xai",
+      capability: "transcription",
+    });
+
+    expect(result).toMatchObject({
+      status: "failed",
+      model: "speech-to-text",
+      credentialSource: "oauth",
+      reason: "readiness_failed",
+    });
+    expect(result.detail).toContain("realtime STT availability");
+    expect(result.detail).not.toMatch(/enter an entitled exact model/i);
+    setupResult.host.close();
+  });
+
+  it("records a successful Transcription probe as a realtime WebSocket result", async () => {
+    const setupResult = setup({
+      audio: {},
+      transcription: { engine: "xai", language: "zh" },
+      intelligence: {},
+      llm: { agent: { provider: "auto" } },
+    });
+    setupResult.host.recordCloudTranscriptionConsent("xai-audio-v1");
+    setupResult.audio.testXai.mockResolvedValue({
+      provider: "xai-oauth:yulu",
+      credentialSource: "oauth",
+    });
+
+    await expect(setupResult.center.probe({
+      connectionId: "direct-xai",
+      capability: "transcription",
+    })).resolves.toMatchObject({ status: "ready", credentialSource: "oauth" });
+
+    expect(setupResult.host.listAgentConnectionReadinessHistory("direct-xai", "transcription")[0])
+      .toMatchObject({ runtimeEvidence: { transport: "xai-realtime-websocket" } });
+    setupResult.host.close();
+  });
+
   it.each([
     [
       new Error("xAI summary request failed (HTTP 403)"),

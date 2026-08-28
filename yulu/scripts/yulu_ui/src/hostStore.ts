@@ -801,7 +801,7 @@ export class HostStore {
       input.model,
       input.credentialSource,
       input.detail,
-      input.reason === "unknown_outcome" ? "readiness_failed" : input.reason,
+      input.reason,
       JSON.stringify(runtimeEvidence),
       input.testedAt,
     );
@@ -3588,7 +3588,10 @@ export class HostStore {
         model TEXT NOT NULL,
         credential_source TEXT CHECK(credential_source IN ('oauth', 'api-key')),
         detail TEXT NOT NULL,
-        reason TEXT CHECK(reason IN ('invalid_model', 'readiness_failed')),
+        reason TEXT CHECK(reason IN (
+          'invalid_model', 'missing_credentials', 'entitlement_failed', 'credential_refresh_failed',
+          'identity_mismatch', 'readiness_failed', 'unknown_outcome'
+        )),
         runtime_evidence_json TEXT NOT NULL DEFAULT '{}',
         tested_at TEXT NOT NULL
       );
@@ -3703,6 +3706,46 @@ export class HostStore {
       .all() as Array<{ name: string }>;
     if (!readinessColumns.some((column) => column.name === "runtime_evidence_json")) {
       this.db.exec("ALTER TABLE agent_connection_readiness_history ADD COLUMN runtime_evidence_json TEXT NOT NULL DEFAULT '{}'");
+    }
+    const readinessTable = this.db.prepare(
+      "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'agent_connection_readiness_history'",
+    ).get() as { sql: string } | undefined;
+    if (readinessTable && !readinessTable.sql.includes("'missing_credentials'")) {
+      this.db.pragma("foreign_keys = OFF");
+      try {
+        this.db.exec(`
+          BEGIN;
+          CREATE TABLE agent_connection_readiness_history_v2 (
+            id TEXT PRIMARY KEY,
+            connection_id TEXT NOT NULL REFERENCES agent_connections(id) ON DELETE CASCADE,
+            capability TEXT NOT NULL CHECK(capability IN ('transcription', 'summary', 'conversation')),
+            status TEXT NOT NULL CHECK(status IN ('ready', 'failed')),
+            model TEXT NOT NULL,
+            credential_source TEXT CHECK(credential_source IN ('oauth', 'api-key')),
+            detail TEXT NOT NULL,
+            reason TEXT CHECK(reason IN (
+              'invalid_model', 'missing_credentials', 'entitlement_failed', 'credential_refresh_failed',
+              'identity_mismatch', 'readiness_failed', 'unknown_outcome'
+            )),
+            runtime_evidence_json TEXT NOT NULL DEFAULT '{}',
+            tested_at TEXT NOT NULL
+          );
+          INSERT INTO agent_connection_readiness_history_v2
+            SELECT id, connection_id, capability, status, model, credential_source, detail, reason,
+              runtime_evidence_json, tested_at
+            FROM agent_connection_readiness_history;
+          DROP TABLE agent_connection_readiness_history;
+          ALTER TABLE agent_connection_readiness_history_v2 RENAME TO agent_connection_readiness_history;
+          CREATE INDEX idx_agent_connection_readiness
+            ON agent_connection_readiness_history(connection_id, capability, tested_at DESC);
+          COMMIT;
+        `);
+      } catch (error) {
+        if (this.db.inTransaction) this.db.exec("ROLLBACK");
+        throw error;
+      } finally {
+        this.db.pragma("foreign_keys = ON");
+      }
     }
     const columns = this.db.prepare("PRAGMA table_info(agent_tasks)").all() as Array<{ name: string }>;
     if (!columns.some((column) => column.name === "instructions")) {

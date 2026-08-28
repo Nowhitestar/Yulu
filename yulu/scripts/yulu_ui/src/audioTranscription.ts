@@ -181,7 +181,7 @@ export class AudioTranscriptionService implements StreamingCaptionEngine {
   }
 
   async testXai() {
-    return await this.xai.testCredential();
+    return await this.xai.testRealtimeCredential();
   }
 
   private xaiCredentialStatus() {

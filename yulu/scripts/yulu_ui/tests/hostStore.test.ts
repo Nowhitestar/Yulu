@@ -204,6 +204,101 @@ describe("HostStore", () => {
     expect(stored.runtime_evidence_json).not.toMatch(/never-persist|token|prompt|transcript|responseBody/);
   });
 
+  it.each([
+    "invalid_model",
+    "missing_credentials",
+    "entitlement_failed",
+    "credential_refresh_failed",
+    "identity_mismatch",
+    "readiness_failed",
+    "unknown_outcome",
+  ] as const)("persists the exact secret-safe readiness reason %s", (reason) => {
+    createStore();
+    store!.upsertAgentConnectionRecord({
+      id: "direct-xai",
+      kind: "direct-provider",
+      adapter: "direct-xai",
+      label: "xAI",
+      lifecycle: "available",
+      settings: { credentialSource: "oauth" },
+    });
+
+    store!.recordAgentConnectionReadiness({
+      connectionId: "direct-xai",
+      capability: "summary",
+      status: "failed",
+      model: "grok-summary-exact",
+      credentialSource: "oauth",
+      detail: "Secret-safe repair detail",
+      reason,
+      runtimeEvidence: {
+        adapter: "direct-xai",
+        transport: "xai-http",
+        runtimeVersion: null,
+        requestedProvider: "xai",
+        requestedModel: "grok-summary-exact",
+        actualProvider: null,
+        actualModel: null,
+        requestId: null,
+        sessionId: null,
+        terminalStatus: reason === "unknown_outcome" ? "unknown" : "failed",
+        fallbackOccurred: false,
+      },
+      testedAt: "2026-08-29T01:00:00.000Z",
+    });
+
+    expect(store!.listAgentConnectionReadinessHistory("direct-xai", "summary")[0]?.reason).toBe(reason);
+  });
+
+  it("migrates the legacy readiness-reason constraint without losing history", () => {
+    root = mkdtempSync(join(tmpdir(), "yulu-host-store-"));
+    const databasePath = join(root, "host.sqlite");
+    const legacy = new Database(databasePath);
+    legacy.exec(`
+      PRAGMA foreign_keys = ON;
+      CREATE TABLE agent_connections (
+        id TEXT PRIMARY KEY,
+        kind TEXT NOT NULL CHECK(kind IN ('direct-provider', 'supported-agent', 'legacy-custom')),
+        adapter TEXT NOT NULL,
+        label TEXT NOT NULL,
+        lifecycle TEXT NOT NULL CHECK(lifecycle IN ('available', 'legacy')),
+        settings_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE TABLE agent_connection_readiness_history (
+        id TEXT PRIMARY KEY,
+        connection_id TEXT NOT NULL REFERENCES agent_connections(id) ON DELETE CASCADE,
+        capability TEXT NOT NULL CHECK(capability IN ('transcription', 'summary', 'conversation')),
+        status TEXT NOT NULL CHECK(status IN ('ready', 'failed')),
+        model TEXT NOT NULL,
+        credential_source TEXT CHECK(credential_source IN ('oauth', 'api-key')),
+        detail TEXT NOT NULL,
+        reason TEXT CHECK(reason IN ('invalid_model', 'readiness_failed')),
+        runtime_evidence_json TEXT NOT NULL DEFAULT '{}',
+        tested_at TEXT NOT NULL
+      );
+      INSERT INTO agent_connections VALUES (
+        'direct-xai', 'direct-provider', 'direct-xai', 'xAI', 'available',
+        '{"credentialSource":"oauth"}', '2026-08-28T01:00:00.000Z', '2026-08-28T01:00:00.000Z'
+      );
+      INSERT INTO agent_connection_readiness_history VALUES (
+        'legacy-ready', 'direct-xai', 'summary', 'failed', 'grok-summary-exact', 'oauth',
+        'Legacy failure', 'readiness_failed', '{}', '2026-08-28T01:00:00.000Z'
+      );
+    `);
+    legacy.close();
+
+    store = new HostStore(databasePath);
+
+    expect(store.listAgentConnectionReadinessHistory("direct-xai", "summary"))
+      .toEqual([expect.objectContaining({ id: "legacy-ready", reason: "readiness_failed" })]);
+    const schema = store.db.prepare(
+      "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'agent_connection_readiness_history'",
+    ).get() as { sql: string };
+    expect(schema.sql).toContain("'credential_refresh_failed'");
+  });
+
   it("reads back an explicit Share Destination and invalidates its Test Share receipt when configuration changes", () => {
     createStore();
     store!.upsertAgentConnectionRecord({

@@ -535,6 +535,38 @@ describe("shared Agent Connection Center", () => {
     summary.currentReadiness = original;
   });
 
+  it("gives capability-specific Transcription repair and no nonexistent session for xAI unknown outcomes", () => {
+    const direct = mocks.view.connections.find((connection) => connection.id === "direct-xai")!;
+    const transcription = direct.capabilities.find((capability) => capability.capability === "transcription")!;
+    const summary = direct.capabilities.find((capability) => capability.capability === "summary")!;
+    const originalTranscription = { ...transcription.currentReadiness };
+    const originalSummary = { ...summary.currentReadiness };
+    Object.assign(transcription.currentReadiness, {
+      status: "failed",
+      reason: "readiness_failed",
+      credentialSource: "oauth",
+    });
+    Object.assign(summary.currentReadiness, {
+      status: "failed",
+      reason: "unknown_outcome",
+      credentialSource: "oauth",
+    });
+
+    mount("en");
+
+    expect(within(screen.getByTestId("connection-capability-transcription")).getByText(
+      "The realtime Transcription WebSocket probe failed with selected Grok OAuth. Verify that source and xAI realtime STT availability, then test again; Yulu did not switch the source or model.",
+    )).toBeInTheDocument();
+    const unknown = within(screen.getByTestId("connection-capability-summary")).getByText(
+      "The grok-summary probe outcome with selected Grok OAuth is unknown. Yulu did not retry or switch. Check xAI service status and account activity, then explicitly test the same source and model again.",
+    );
+    expect(unknown).toBeInTheDocument();
+    expect(unknown).not.toHaveTextContent(/native session/i);
+
+    transcription.currentReadiness = originalTranscription;
+    summary.currentReadiness = originalSummary;
+  });
+
   it("shows a non-secret OAuth class mismatch and disables stale Codex readiness actions", () => {
     const codex = mocks.view.connections.find((connection) => connection.id === "codex");
     expect(codex).toBeDefined();

@@ -207,10 +207,13 @@ function untested(capability: AgentConnectionCapability, model: string): XaiRead
   };
 }
 
-function xaiReadinessFailureReason(error: unknown): XaiReadinessFailureReason {
+function xaiReadinessFailureReason(
+  capability: AgentConnectionCapability,
+  error: unknown,
+): XaiReadinessFailureReason {
   if (error instanceof XaiTextUnknownOutcomeError) return "unknown_outcome";
   const message = error instanceof Error ? error.message : "";
-  if (/HTTP 404/i.test(message)) return "invalid_model";
+  if (/HTTP 404/i.test(message)) return capability === "transcription" ? "readiness_failed" : "invalid_model";
   if (/HTTP 403|没有.*(?:权限|entitlement)|not entitled/i.test(message)) return "entitlement_failed";
   if (/OAuth.*(?:失效|刷新失败)|refresh(?:ed|ing)? credential|refresh failed/i.test(message)) {
     return "credential_refresh_failed";
@@ -228,6 +231,18 @@ function xaiReadinessFailureDetail(
   reason: XaiReadinessFailureReason,
 ): string {
   const selected = source === "oauth" ? "Grok OAuth" : "Yulu-managed API Key";
+  if (capability === "transcription") {
+    if (reason === "entitlement_failed") {
+      return `transcription realtime STT is not entitled for the selected ${selected}; verify xAI realtime transcription access or explicitly select another credential source, then test again`;
+    }
+    if (reason === "credential_refresh_failed") {
+      return `transcription realtime STT could not use the selected ${selected}; reconnect that source, then test again`;
+    }
+    if (reason === "identity_mismatch") {
+      return `transcription realtime STT returned a different credential source; Yulu rejected it and kept the selected ${selected}`;
+    }
+    return `transcription realtime WebSocket probe failed with the selected ${selected}; verify that source and xAI realtime STT availability, then test again`;
+  }
   if (reason === "invalid_model") {
     return `${capability} · ${model} is unavailable to the selected ${selected}; enter an entitled exact model, then test again`;
   }
@@ -1186,7 +1201,7 @@ export class AgentConnectionCenter {
         actualModel,
       });
     } catch (error) {
-      const reason = xaiReadinessFailureReason(error);
+      const reason = xaiReadinessFailureReason(capability, error);
       return this.finishProbe({
         capability,
         status: "failed",
@@ -2053,7 +2068,7 @@ export class AgentConnectionCenter {
       reason: result.reason ?? null,
       runtimeEvidence: {
         adapter: DIRECT_XAI_ID,
-        transport: "xai-http",
+        transport: result.capability === "transcription" ? "xai-realtime-websocket" : "xai-http",
         runtimeVersion: null,
         requestedProvider: "xai",
         requestedModel: result.model,

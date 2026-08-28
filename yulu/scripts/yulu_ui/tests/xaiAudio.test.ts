@@ -8,6 +8,7 @@ const roots: string[] = [];
 const originalPath = process.env.PATH;
 
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
   process.env.PATH = originalPath;
   delete process.env.FFMPEG_ARGS_FILE;
@@ -16,6 +17,40 @@ afterEach(() => {
 });
 
 describe("XaiAudioClient", () => {
+  it("probes the production realtime handshake without sending user audio or disturbing an active stream", async () => {
+    const credentials = {
+      resolve: vi.fn(async () => ({ accessToken: "test-oauth-token", source: "oauth" as const })),
+      cachedStatus: vi.fn(),
+    };
+    const client = new XaiAudioClient(credentials as never);
+    const activeClose = vi.fn();
+    (client as unknown as { socket: { readyState: number; close(): void } }).socket = {
+      readyState: 1,
+      close: activeClose,
+    };
+    const connectRealtime = vi.spyOn(
+      XaiAudioClient.prototype as unknown as {
+        connectRealtime(
+          credential: { accessToken: string; source: "oauth" },
+          url: URL,
+        ): Promise<void>;
+      },
+      "connectRealtime",
+    ).mockResolvedValue(undefined);
+
+    await expect(client.testRealtimeCredential()).resolves.toEqual({
+      ok: true,
+      provider: "xai-oauth:yulu",
+      credentialSource: "oauth",
+    });
+
+    expect(connectRealtime).toHaveBeenCalledOnce();
+    expect(connectRealtime.mock.instances[0]).not.toBe(client);
+    expect(connectRealtime.mock.calls[0]?.[0]).toEqual({ accessToken: "test-oauth-token", source: "oauth" });
+    expect(String(connectRealtime.mock.calls[0]?.[1])).toMatch(/^wss:\/\/api\.x\.ai\/v1\/stt\?/);
+    expect(activeClose).not.toHaveBeenCalled();
+  });
+
   it("keeps partials live while replacing segmented finals with xAI's corrected full transcript", () => {
     const credentials = { resolve: vi.fn(), cachedStatus: vi.fn() };
     const client = new XaiAudioClient(credentials as never);

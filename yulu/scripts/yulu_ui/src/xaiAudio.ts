@@ -76,6 +76,19 @@ function xaiLanguage(language: TranscriptionLanguage): string | null {
   return language === "en" || language === "ja" ? language : null;
 }
 
+function realtimeUrl(language: TranscriptionLanguage): URL {
+  const url = new URL("wss://api.x.ai/v1/stt");
+  url.searchParams.set("sample_rate", "16000");
+  url.searchParams.set("encoding", "pcm");
+  url.searchParams.set("interim_results", "true");
+  url.searchParams.set("endpointing", "800");
+  url.searchParams.set("multichannel", "true");
+  url.searchParams.set("channels", "2");
+  const formattedLanguage = xaiLanguage(language);
+  if (formattedLanguage) url.searchParams.set("language", formattedLanguage);
+  return url;
+}
+
 function isRetryableRealtimeStartError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   return /TLS|socket|ECONN|ETIMEDOUT|ENET|EAI_AGAIN|network|closed early|timed out/i.test(message);
@@ -146,15 +159,7 @@ export class XaiAudioClient implements StreamingCaptionEngine {
     this.replayChunks = [];
     this.replayBytes = 0;
 
-    const url = new URL("wss://api.x.ai/v1/stt");
-    url.searchParams.set("sample_rate", "16000");
-    url.searchParams.set("encoding", "pcm");
-    url.searchParams.set("interim_results", "true");
-    url.searchParams.set("endpointing", "800");
-    url.searchParams.set("multichannel", "true");
-    url.searchParams.set("channels", "2");
-    const formattedLanguage = xaiLanguage(language);
-    if (formattedLanguage) url.searchParams.set("language", formattedLanguage);
+    const url = realtimeUrl(language);
     this.realtimeUrl = url;
 
     await this.connectRealtimeWithRetry(url);
@@ -376,6 +381,25 @@ export class XaiAudioClient implements StreamingCaptionEngine {
     });
     if (!response.ok) throw new Error(`xAI 音频权限验证失败（HTTP ${response.status}）`);
     return { ok: true, provider: providerFor(credential.source), credentialSource: credential.source };
+  }
+
+  async testRealtimeCredential(): Promise<{
+    ok: true;
+    provider: string;
+    credentialSource: XaiCredential["source"];
+  }> {
+    const credential = await this.credentials.resolve();
+    const probe = new XaiAudioClient(this.credentials);
+    try {
+      await probe.connectRealtime(credential, realtimeUrl("auto"));
+      return {
+        ok: true,
+        provider: providerFor(credential.source),
+        credentialSource: credential.source,
+      };
+    } finally {
+      await probe.abort();
+    }
   }
 
   credentialStatus() {

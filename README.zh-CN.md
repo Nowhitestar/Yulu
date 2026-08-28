@@ -271,7 +271,8 @@ yulu mcp test
 - 选择 xAI 本身不等于授权云处理；在把录音音频直接发送给 xAI 前，Yulu 还会要求
   当前版本的「云端转写同意」。「设置 → 智能服务」把 OAuth 令牌和显式提交的 API Key
   保存在 macOS 钥匙串。保存 API Key 不会选中它；Credential Source 仍需单独明确选择。
-  Yulu 会分别测试转写、摘要和对话能力。Hermes/OpenClaw 不会收到该凭据。选择本地引擎时，
+  Yulu 会通过不发送用户音频的生产 WebSocket 握手测试实时转写，并分别测试摘要和对话。
+  Hermes/OpenClaw 不会收到该凭据。选择本地引擎时，
   语音识别留在本机。
 - 外部投递必须经过明确授权；结果不确定时不会盲目重试。
 
