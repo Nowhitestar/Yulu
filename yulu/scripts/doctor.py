@@ -734,18 +734,21 @@ def check_yulu_ui(
     if code == 0 and any("com.yulu.ui" in line for line in out.splitlines()):
         report["launchctl_loaded"] = True
 
-    # /healthz
-    try:
-        import urllib.request
-        with urllib.request.urlopen(
-            f"http://127.0.0.1:{report['port']}/healthz", timeout=timeout
-        ) as resp:
-            body = resp.read().decode("utf-8", errors="replace")[:200]
-            report["healthz_response"] = body
-            if resp.status == 200 and '"status":"ok"' in body:
-                report["healthz_ok"] = True
-    except Exception as exc:
-        report["error"] = f"healthz fetch failed: {exc}"
+    # A healthy process on the fixed localhost port is not evidence for an
+    # arbitrary --runtime-root.  Refuse to attribute that process to this
+    # runtime unless the runtime itself contains the shipped Host artifacts.
+    if report["dist_server_present"] and report["dist_web_present"]:
+        try:
+            import urllib.request
+            with urllib.request.urlopen(
+                f"http://127.0.0.1:{report['port']}/healthz", timeout=timeout
+            ) as resp:
+                body = resp.read().decode("utf-8", errors="replace")[:200]
+                report["healthz_response"] = body
+                if resp.status == 200 and '"status":"ok"' in body:
+                    report["healthz_ok"] = True
+        except Exception as exc:
+            report["error"] = f"healthz fetch failed: {exc}"
 
     # Categorize the most actionable single error message
     if not report["dist_server_present"] or not report["dist_web_present"]:
