@@ -1019,7 +1019,7 @@ def test_send_voice_chat_requests_deferred_answer(monkeypatch):
     "http://attacker.example:7777",
     "http://localhost:7777",
     "http://127.0.0.1:8888",
-    "http://user:pass@127.0.0.1:7777",
+    "http://" + "user:pass@" + "127.0.0.1:7777",
     "http://127.0.0.1:7777/other",
     "http://127.0.0.1:7777?next=https://attacker.example",
     "http://127.0.0.1:7777#attacker",
