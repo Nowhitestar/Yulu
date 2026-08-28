@@ -5,7 +5,6 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 const navigateMock = vi.fn();
 const reprocessMutate = vi.fn();
-const sendSummaryMutate = vi.fn();
 const connectAgentMutate = vi.fn();
 const configurePluginMutate = vi.fn();
 const setDestinationMutate = vi.fn();
@@ -181,7 +180,6 @@ vi.mock("../../../web/src/trpc.js", () => {
       },
       recordings: {
         reprocess: { useMutation: () => mutation(reprocessMutate) },
-        sendSummary: { useMutation: () => mutation(sendSummaryMutate) },
       },
       ask: {
         ask: { useMutation: () => ({ mutateAsync: askMutateAsync, isPending: false }) },
@@ -246,7 +244,6 @@ beforeEach(() => {
   localStorage.removeItem("yulu_ui.agent.history_height");
   navigateMock.mockClear();
   reprocessMutate.mockClear();
-  sendSummaryMutate.mockClear();
   connectAgentMutate.mockReset();
   configurePluginMutate.mockClear();
   setDestinationMutate.mockClear();
@@ -371,20 +368,14 @@ describe("AgentConsole", () => {
     expect(queryByText("添加能力")).not.toBeInTheDocument();
   });
 
-  it("shows Share as the next action when transcript and summary already exist", () => {
-    const { getByRole, getByText, container } = wrap();
+  it("routes completed recordings to their detail surface without sending meeting content", () => {
+    const { getByRole, getByText, queryByRole, container } = wrap();
     expect(getByText("Product Sync")).toBeInTheDocument();
     expect(container.querySelector(".agent-stage-line")).toBeNull();
 
-    fireEvent.click(getByRole("button", { name: "分享" }));
-    expect(getByRole("menu", { name: "选择分享渠道" })).toBeInTheDocument();
-    fireEvent.click(getByRole("menuitem", { name: /分享到 Notion/ }));
-    expect(sendSummaryMutate).toHaveBeenCalledWith({
-      stem: "ProductSync_20260625_093000",
-      channel: "notion",
-      label: "Notion",
-      destination: "Yulu Meeting",
-    }, expect.any(Object));
+    fireEvent.click(getByRole("button", { name: "查看并分享" }));
+    expect(navigateMock).toHaveBeenCalledWith("/inbox/ProductSync_20260625_093000");
+    expect(queryByRole("menu", { name: "选择分享渠道" })).toBeNull();
     expect(reprocessMutate).not.toHaveBeenCalled();
   });
 
@@ -406,7 +397,7 @@ describe("AgentConsole", () => {
     const { getByRole, queryByText } = wrap();
 
     expect(queryByText("Agent 自动处理已暂停")).toBeNull();
-    const actionsButton = getByRole("button", { name: "分享" });
+    const actionsButton = getByRole("button", { name: "查看并分享" });
     expect(actionsButton).toBeEnabled();
     expect(reprocessMutate).not.toHaveBeenCalled();
   });
@@ -431,7 +422,7 @@ describe("AgentConsole", () => {
 
     expect(queryByText(/Legacy queue task retired/)).toBeNull();
     expect(queryByText("Hermes 任务已取消")).toBeNull();
-    expect(getByRole("button", { name: "分享" })).toBeInTheDocument();
+    expect(getByRole("button", { name: "查看并分享" })).toBeInTheDocument();
   });
 
   it("keeps an uncertain Notion delivery fenced in the main Agent Console", () => {
@@ -518,13 +509,13 @@ describe("AgentConsole", () => {
     expect(reprocessMutate).not.toHaveBeenCalled();
   });
 
-  it("offers every configured Agent share channel", () => {
+  it("keeps recording-content sharing out of Agent Console", () => {
     mockZulipConfigured = true;
-    const { getByRole } = wrap();
-    fireEvent.click(getByRole("button", { name: "分享" }));
-    expect(getByRole("menuitem", { name: /分享到 Notion/ })).toBeInTheDocument();
-    expect(getByRole("menuitem", { name: /分享到 Zulip/ })).toBeInTheDocument();
-    expect(getByRole("menuitem", { name: /更多分享渠道/ })).toBeInTheDocument();
+    const { getByRole, queryByRole } = wrap();
+    fireEvent.click(getByRole("button", { name: "查看并分享" }));
+    expect(navigateMock).toHaveBeenCalledWith("/inbox/ProductSync_20260625_093000");
+    expect(queryByRole("menuitem", { name: /分享到 Notion/ })).toBeNull();
+    expect(queryByRole("menuitem", { name: /分享到 Zulip/ })).toBeNull();
   });
 
   it("opens the shared Agent Connection Center instead of mutating a separate Agent selection", () => {

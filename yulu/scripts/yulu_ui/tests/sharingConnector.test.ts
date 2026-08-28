@@ -214,6 +214,65 @@ describe("AgentSharingConnectorAdapter", () => {
     });
   });
 
+  it("shares the exact summary to a saved destination whose identity contains meeting", async () => {
+    const destination = JSON.stringify({ page_id: "meeting-parent-123" });
+    const summary = "# Meeting decision\n\nShip the manual flow.";
+    const run = vi.fn()
+      .mockResolvedValueOnce({
+        code: 0,
+        stdout: JSON.stringify({
+          status: "sent", connector: "notion", destination,
+          id: "page-production-1", url: "https://notion.so/page-production-1",
+        }),
+        stderr: "",
+        rawStdout: codexToolEvidence({
+          name: "notion_create_pages",
+          arguments: {
+            parent: { page_id: "meeting-parent-123" },
+            pages: [{ content: summary }],
+          },
+          result: {
+            content: [{
+              type: "text",
+              text: JSON.stringify({ pages: [{ id: "page-production-1", url: "https://notion.so/page-production-1" }] }),
+            }],
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        code: 0,
+        stdout: JSON.stringify({
+          status: "verified", connector: "notion", destination, content: summary,
+          id: "page-production-1", url: "https://notion.so/page-production-1",
+        }),
+        stderr: "",
+        rawStdout: codexToolEvidence({
+          name: "notion_fetch",
+          arguments: { id: "page-production-1" },
+          result: {
+            content: [{
+              type: "text",
+              text: JSON.stringify({
+                parent: { type: "page_id", page_id: "meeting-parent-123" },
+                content: summary,
+                id: "page-production-1",
+                url: "https://notion.so/page-production-1",
+              }),
+            }],
+          },
+        }),
+      });
+    const adapter = new AgentSharingConnectorAdapter({ scriptDir: "/app/scripts", configDir: "/config", run });
+
+    const receipt = await adapter.share({ connection, connector: "notion", destination, content: summary });
+    await expect(adapter.verifyReceipt({ connection, connector: "notion", destination, content: summary, receipt }))
+      .resolves.toEqual(receipt);
+    expect(run.mock.calls[0]![0].connectorToolPolicy).toMatchObject({
+      connector: "notion",
+      writeGuard: { destination, content: summary },
+    });
+  });
+
   it("reports an unverifiable write as Unknown Outcome and rejects Conversation-only OpenClaw", async () => {
     const run = vi.fn(async (_input: Parameters<typeof runAgentCliCommand>[0]) => ({
       code: 1,
@@ -616,6 +675,18 @@ describe("AgentSharingConnectorAdapter", () => {
           { content: YULU_TEST_SHARE_CONTENT },
           { content: YULU_TEST_SHARE_CONTENT },
         ],
+      },
+      {
+        parent: { page_id: "parent-123" },
+        pages: [{
+          content: YULU_TEST_SHARE_CONTENT,
+          properties: { Project: { select: { name: "Secret" } } },
+        }],
+      },
+      {
+        parent: { page_id: "parent-123" },
+        pages: [{ content: YULU_TEST_SHARE_CONTENT }],
+        metadata: { mode: "silent" },
       },
     ];
     const run = vi.fn();

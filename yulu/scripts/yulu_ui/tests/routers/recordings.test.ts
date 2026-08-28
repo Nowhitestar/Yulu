@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { mkdtempSync, writeFileSync, rmSync, mkdirSync, existsSync, readFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync, rmSync, mkdirSync, existsSync, readFileSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { recordingsRouter } from "../../src/routers/recordings.js";
@@ -11,23 +11,6 @@ import { ConfigManager } from "../../src/config.js";
 import { RecordingPipeline } from "../../src/recordingPipeline.js";
 import { paths } from "../../src/paths.js";
 import { XAI_SUMMARY_DISCLOSURE_VERSION } from "../../src/summaryDataDisclosure.js";
-
-const agentActions = vi.hoisted(() => ({
-  DeliveryError: class AgentDeliveryFailedError extends Error {},
-  summarize: vi.fn(async () => ({ stdout: "# Fresh summary\n", stderr: "", sessionId: "summary-session" })),
-  share: vi.fn(async () => ({
-    stdout: "sent",
-    stderr: "",
-    sessionId: "share-session",
-    delivery: { status: "sent", channel: "slack", destination: "#meetings", url: "", id: "msg-1" },
-  })),
-}));
-
-vi.mock("../../src/agentActions.js", () => ({
-  AgentDeliveryFailedError: agentActions.DeliveryError,
-  runAgentSummarize: agentActions.summarize,
-  runAgentShareSummary: agentActions.share,
-}));
 
 function mkCtx(opts: { moviesDir: string; glossaryRows?: Array<Record<string, unknown>> }): AppContext {
   const promptRows: Array<Record<string, unknown>> = [];
@@ -136,8 +119,6 @@ function wavWithDuration(seconds: number): Buffer {
 describe("recordings router", () => {
   let root: string; let mvDir: string;
   beforeEach(() => {
-    agentActions.summarize.mockClear();
-    agentActions.share.mockClear();
     root = mkdtempSync(join(tmpdir(), "rec_"));
     mvDir = join(root, "movies");
     mkdirSync(mvDir);
@@ -216,8 +197,6 @@ describe("recordings router", () => {
     expect(readFileSync(join(mvDir, `${stem}.raw.transcript.txt`), "utf8")).toBe("fresh transcript\n");
     expect(readFileSync(join(mvDir, `${stem}.summary.md`), "utf8")).toBe("old summary");
     expect(existsSync(join(mvDir, `${stem}.summary.stale`))).toBe(true);
-    expect(agentActions.summarize).not.toHaveBeenCalled();
-    expect(agentActions.share).not.toHaveBeenCalled();
     expect(result.provider).toBe("hermes-test");
   });
 
@@ -244,7 +223,78 @@ describe("recordings router", () => {
       title: "TeamSync",
       instructions: expect.stringContaining("阿法学院 => 阿尔法学院"),
     }));
-    expect(agentActions.summarize).not.toHaveBeenCalled();
+  });
+
+  it("requires the UI bearer and loads the immutable summary server-side for a confirmed Share Action", async () => {
+    const stem = "TeamSync_20260102_090000";
+    const summary = "# Decision\n\nShip the manual flow.\n";
+    writeFileSync(join(mvDir, `${stem}.wav`), wavWithDuration(1));
+    writeFileSync(join(mvDir, `${stem}.transcript.txt`), "current transcript");
+    writeFileSync(join(mvDir, `${stem}.summary.md`), summary);
+    const shareRecording = vi.fn(async () => ({ status: "ready", latestAction: { status: "verified" } }));
+    const recordingShareView = vi.fn(() => ({ status: "ready" }));
+    const ctx = {
+      ...mkCtx({ moviesDir: mvDir }),
+      sharing: { shareRecording, recordingShareView },
+    } as unknown as AppContext;
+    const input = {
+      confirmed: true,
+      actionId: "00000000-0000-4000-8000-000000000149",
+      stem,
+      snapshotHash: "a".repeat(64),
+      duplicateConfirmed: false,
+    } as const;
+
+    await expect(createCaller(recordingsRouter, {
+      ...ctx,
+      uiMutationAuthorized: false,
+    }).shareRecording(input)).rejects.toThrow("UI mutation bearer required");
+    expect(shareRecording).not.toHaveBeenCalled();
+
+    await expect(createCaller(recordingsRouter, ctx).shareRecording(input)).resolves.toMatchObject({
+      latestAction: { status: "verified" },
+    });
+    expect(shareRecording).toHaveBeenCalledWith({
+      actionId: input.actionId,
+      recordingStem: stem,
+      summary,
+      snapshotHash: input.snapshotHash,
+      duplicateConfirmed: false,
+    });
+  });
+
+  it("rejects traversal and summary symlinks before recording content reaches Sharing", async () => {
+    const shareRecording = vi.fn(async () => ({ status: "ready" }));
+    const ctx = {
+      ...mkCtx({ moviesDir: mvDir }),
+      sharing: { shareRecording, recordingShareView: vi.fn(() => ({ status: "ready" })) },
+    } as unknown as AppContext;
+    const caller = createCaller(recordingsRouter, ctx);
+    const traversalStem = "../Secret_20260828_090000";
+    writeFileSync(join(root, "Secret_20260828_090000.wav"), wavWithDuration(1));
+    writeFileSync(join(root, "Secret_20260828_090000.summary.md"), "outside summary");
+
+    await expect(caller.shareRecording({
+      confirmed: true,
+      actionId: "00000000-0000-4000-8000-000000000150",
+      stem: traversalStem,
+      snapshotHash: "a".repeat(64),
+      duplicateConfirmed: false,
+    })).rejects.toThrow(/recording stem|recordings directory/i);
+
+    const symlinkStem = "Linked_20260828_090000";
+    const outsideSummary = join(root, "outside-summary.md");
+    writeFileSync(join(mvDir, `${symlinkStem}.wav`), wavWithDuration(1));
+    writeFileSync(outsideSummary, "outside summary through symlink");
+    symlinkSync(outsideSummary, join(mvDir, `${symlinkStem}.summary.md`));
+    await expect(caller.shareRecording({
+      confirmed: true,
+      actionId: "00000000-0000-4000-8000-000000000151",
+      stem: symlinkStem,
+      snapshotHash: "a".repeat(64),
+      duplicateConfirmed: false,
+    })).rejects.toThrow(/recordings directory/i);
+    expect(shareRecording).not.toHaveBeenCalled();
   });
 
   it("regenerates through a pinned xAI durable task using only the committed transcript", async () => {
@@ -350,7 +400,12 @@ describe("recordings router", () => {
     writeFileSync(join(mvDir, `${stem}.wav`), wavWithDuration(1));
     writeFileSync(join(mvDir, `${stem}.summary.md`), "old summary");
     writeSpeakerFixture(mvDir, stem);
-    const ctx = mkCtx({ moviesDir: mvDir });
+    const shareRecording = vi.fn(async () => ({ status: "ready", latestAction: { status: "verified" } }));
+    const recordingShareView = vi.fn(() => ({ status: "ready" }));
+    const ctx = {
+      ...mkCtx({ moviesDir: mvDir }),
+      sharing: { shareRecording, recordingShareView },
+    } as unknown as AppContext;
     const caller = createCaller(recordingsRouter, ctx);
 
     await caller.transcribe({ stem });
@@ -358,13 +413,26 @@ describe("recordings router", () => {
     expect(stale.summaryStale).toBe(true);
     expect(stale.speakerData).toBeNull();
     expect((await caller.list({}))[0].hasSummary).toBe(false);
-    await expect(caller.sendSummary({ stem, channel: "slack", label: "Slack", destination: "#meetings" }))
+    await expect(caller.shareRecording({
+      confirmed: true,
+      actionId: "019f0000-0000-7000-8000-000000000149",
+      stem,
+      snapshotHash: "a".repeat(64),
+      duplicateConfirmed: false,
+    }))
       .rejects.toThrow("older transcript");
+    expect(shareRecording).not.toHaveBeenCalled();
 
     await caller.summarize({ stem });
     expect((await caller.get({ stem })).summaryStale).toBe(false);
-    await expect(caller.sendSummary({ stem, channel: "slack", label: "Slack", destination: "#meetings" }))
-      .resolves.toMatchObject({ ok: true });
+    await expect(caller.shareRecording({
+      confirmed: true,
+      actionId: "019f0000-0000-7000-8000-000000000149",
+      stem,
+      snapshotHash: "a".repeat(64),
+      duplicateConfirmed: false,
+    }))
+      .resolves.toMatchObject({ status: "ready" });
   });
 
   it("serializes manual actions for one recording", async () => {
@@ -395,42 +463,9 @@ describe("recordings router", () => {
     expect(ctx.artifacts.cleanupWorkspace).toHaveBeenCalledWith("paused-task");
   });
 
-  it("allows repeated shares to any Agent-supported channel and records each attempt", async () => {
-    const stem = "TeamSync_20260102_090000";
-    writeFileSync(join(mvDir, `${stem}.wav`), wavWithDuration(1));
-    writeFileSync(join(mvDir, `${stem}.summary.md`), "summary to share");
-    const ctx = mkCtx({ moviesDir: mvDir });
-    const caller = createCaller(recordingsRouter, ctx);
-
-    await caller.sendSummary({ stem, channel: "slack", label: "Slack", destination: "#meetings" });
-    await caller.sendSummary({ stem, channel: "slack", label: "Slack", destination: "#meetings" });
-
-    expect(agentActions.share).toHaveBeenCalledTimes(2);
-    expect(agentActions.share).toHaveBeenLastCalledWith(expect.objectContaining({
-      channel: "slack",
-      channelLabel: "Slack",
-      destinationHint: "#meetings",
-    }));
-    const history = JSON.parse(readFileSync(join(mvDir, `${stem}.shares.json`), "utf8")) as Array<Record<string, unknown>>;
-    expect(history).toHaveLength(2);
-    expect(history.every((entry) => entry.channel === "slack" && entry.status === "success")).toBe(true);
-  });
-
-  it("records an explicit Agent connector rejection as failed instead of uncertain", async () => {
-    const stem = "TeamSync_20260102_090000";
-    writeFileSync(join(mvDir, `${stem}.wav`), wavWithDuration(1));
-    writeFileSync(join(mvDir, `${stem}.summary.md`), "summary to share");
-    agentActions.share.mockRejectedValueOnce(new agentActions.DeliveryError("connector unavailable"));
-
-    await expect(createCaller(recordingsRouter, mkCtx({ moviesDir: mvDir })).sendSummary({
-      stem,
-      channel: "slack",
-      label: "Slack",
-      destination: "#meetings",
-    })).rejects.toThrow("connector unavailable");
-
-    const history = JSON.parse(readFileSync(join(mvDir, `${stem}.shares.json`), "utf8")) as Array<Record<string, unknown>>;
-    expect(history[0]).toMatchObject({ status: "failed", message: "connector unavailable" });
+  it("does not expose the retired public recording-content share procedure", () => {
+    const caller = createCaller(recordingsRouter, mkCtx({ moviesDir: mvDir }));
+    expect("sendSummary" in caller).toBe(false);
   });
 
   it("does not expose the retired combined manual reprocess procedure", () => {

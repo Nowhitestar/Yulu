@@ -37,6 +37,7 @@ describe("SharingConfiguration", () => {
       discover: vi.fn(),
       probe: vi.fn(),
       testShare: vi.fn(),
+      share: vi.fn(),
       verifyReceipt: vi.fn(),
     };
     return { host, adapter, sharing: new SharingConfiguration({ host, adapter }) };
@@ -360,5 +361,140 @@ describe("SharingConfiguration", () => {
 
     expect(adapter.testShare).toHaveBeenCalledTimes(1);
     expect(adapter.verifyReceipt).toHaveBeenCalledTimes(1);
+  });
+
+  it("pins one production Share Action snapshot and replays its durable outcome without another write", async () => {
+    const { adapter, host: currentHost, sharing } = setup();
+    const productionWrite = vi.fn(async () => ({
+      destination: "Product Notes",
+      receiptId: "page-production-1",
+      receiptUrl: "https://notion.so/page-production-1",
+    }));
+    vi.mocked(adapter.share).mockImplementation(productionWrite);
+    vi.mocked(adapter.probe).mockResolvedValue({ detail: "Notion read access verified" });
+    vi.mocked(adapter.testShare).mockResolvedValue({
+      destination: "Product Notes",
+      receiptId: "page-test-1",
+      receiptUrl: "https://notion.so/page-test-1",
+    });
+    vi.mocked(adapter.verifyReceipt)
+      .mockResolvedValueOnce({
+        destination: "Product Notes",
+        receiptId: "page-test-1",
+        receiptUrl: "https://notion.so/page-test-1",
+      })
+      .mockResolvedValue({
+        destination: "Product Notes",
+        receiptId: "page-production-1",
+        receiptUrl: "https://notion.so/page-production-1",
+      });
+    sharing.select({ connectionId: "codex", connector: "notion" });
+    await sharing.probe();
+    sharing.saveDestination({ destination: "Product Notes" });
+    await sharing.testShare(testAction(false));
+
+    const summary = "# Product decision\n\nShip the verified manual flow.";
+    const preview = (sharing as unknown as {
+      recordingShareView(input: { recordingStem: string; summary: string }): {
+        status: string;
+        snapshot: { hash: string; summary: string; connection: { id: string; label: string; adapter: string }; destination: string };
+      };
+    }).recordingShareView({ recordingStem: "TeamSync_20260828_090000", summary });
+    expect(preview).toMatchObject({
+      status: "ready",
+      snapshot: {
+        summary,
+        connection: { id: "codex", label: "Codex", adapter: "codex" },
+        destination: "Product Notes",
+      },
+    });
+
+    const input = {
+      actionId: "00000000-0000-4000-8000-000000000099",
+      recordingStem: "TeamSync_20260828_090000",
+      summary,
+      snapshotHash: preview.snapshot.hash,
+      duplicateConfirmed: false,
+    };
+    const first = await (sharing as unknown as {
+      shareRecording(input: {
+        actionId: string; recordingStem: string; summary: string;
+        snapshotHash: string; duplicateConfirmed: boolean;
+      }): Promise<unknown>;
+    }).shareRecording(input);
+    const replay = await (sharing as unknown as {
+      shareRecording(input: {
+        actionId: string; recordingStem: string; summary: string;
+        snapshotHash: string; duplicateConfirmed: boolean;
+      }): Promise<unknown>;
+    }).shareRecording(input);
+
+    expect(first).toMatchObject({ latestAction: { id: input.actionId, status: "verified" } });
+    expect(replay).toEqual(first);
+    expect(productionWrite).toHaveBeenCalledTimes(1);
+    expect(adapter.verifyReceipt).toHaveBeenCalledTimes(2);
+    expect(currentHost.getRecordingShareAction(input.actionId)).toMatchObject({
+      id: input.actionId,
+      recordingStem: input.recordingStem,
+      summary,
+      connectionId: "codex",
+      connectionAdapter: "codex",
+      connectionLabel: "Codex",
+      destination: "Product Notes",
+      status: "verified",
+      receiptId: "page-production-1",
+    });
+  });
+
+  it("warns before a verified duplicate and fences an Unknown Outcome from ordinary retry", async () => {
+    const { adapter, sharing } = setup();
+    vi.mocked(adapter.probe).mockResolvedValue({ detail: "Notion read access verified" });
+    vi.mocked(adapter.testShare).mockResolvedValue({
+      destination: "Product Notes",
+      receiptId: "page-test-1",
+      receiptUrl: "https://notion.so/page-test-1",
+    });
+    vi.mocked(adapter.share).mockResolvedValue({
+      destination: "Product Notes",
+      receiptId: "page-production-1",
+      receiptUrl: "https://notion.so/page-production-1",
+    });
+    vi.mocked(adapter.verifyReceipt).mockImplementation(async (input) => input.receipt);
+    sharing.select({ connectionId: "codex", connector: "notion" });
+    await sharing.probe();
+    sharing.saveDestination({ destination: "Product Notes" });
+    await sharing.testShare(testAction(false));
+
+    const summary = "# Decision\n\nShip it.";
+    const view = sharing.recordingShareView({ recordingStem: "TeamSync_20260828_090000", summary });
+    const action = (suffix: string, duplicateConfirmed: boolean) => ({
+      actionId: `00000000-0000-4000-8000-${suffix}`,
+      recordingStem: "TeamSync_20260828_090000",
+      summary,
+      snapshotHash: view.snapshot!.hash,
+      duplicateConfirmed,
+    });
+    await sharing.shareRecording(action("000000000101", false));
+    expect(sharing.recordingShareView({ recordingStem: "TeamSync_20260828_090000", summary }))
+      .toMatchObject({ duplicateWarningRequired: true });
+    await expect(sharing.shareRecording(action("000000000102", false))).rejects.toThrow(/already delivered/i);
+    await sharing.shareRecording(action("000000000102", true));
+
+    vi.mocked(adapter.verifyReceipt).mockRejectedValueOnce(
+      new SharingConnectorUnknownOutcomeError("production receipt read-back timed out"),
+    );
+    const unknown = await sharing.shareRecording(action("000000000103", true));
+    expect(unknown).toMatchObject({
+      status: "unknown",
+      latestAction: { id: "00000000-0000-4000-8000-000000000103", status: "unknown" },
+      remediation: expect.stringMatching(/Do not retry/i),
+    });
+    await expect(sharing.shareRecording(action("000000000104", true))).rejects.toThrow(/Unknown Outcome/i);
+    expect(adapter.share).toHaveBeenCalledTimes(3);
+
+    (sharing as unknown as { abandonRecordingUnknown(input: { actionId: string }): unknown })
+      .abandonRecordingUnknown({ actionId: "00000000-0000-4000-8000-000000000103" });
+    await sharing.shareRecording(action("000000000104", true));
+    expect(adapter.share).toHaveBeenCalledTimes(4);
   });
 });

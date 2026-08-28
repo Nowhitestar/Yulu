@@ -158,12 +158,6 @@ interface ConnectorGuide {
   message: string;
 }
 
-interface MeetingShareTarget {
-  channel: "notion" | "zulip";
-  label: string;
-  destination: string;
-}
-
 type MeetingNextAction = "transcribe" | "summarize" | "share";
 
 interface AskSource {
@@ -353,15 +347,6 @@ function nextMeetingAction(task: AgentTask): MeetingNextAction {
   return "share";
 }
 
-function configuredMeetingShareTargets(plugins: AgentPluginOverview): MeetingShareTarget[] {
-  return plugins.all.flatMap((plugin) => {
-    if ((plugin.id !== "notion" && plugin.id !== "zulip") || plugin.status !== "configured") return [];
-    const destination = plugin.destination?.value?.trim() ?? "";
-    if (!plugin.destination?.configured || !destination) return [];
-    return [{ channel: plugin.id, label: plugin.label, destination }];
-  });
-}
-
 export function AgentConsole() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -372,7 +357,6 @@ export function AgentConsole() {
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [connectorGuide, setConnectorGuide] = useState<ConnectorGuide | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [sharingStem, setSharingStem] = useState<string | null>(null);
 
   const overview = trpc.agentConsole.overview.useQuery(undefined, { refetchInterval: 5000 });
   const detectAgents = trpc.agentConsole.detectAgents.useQuery(undefined, { enabled: false });
@@ -382,7 +366,6 @@ export function AgentConsole() {
   const toggleRecording = trpc.recording.toggle.useMutation({
     onSettled: () => void utils.agentConsole.overview.invalidate(),
   });
-  const sendSummary = trpc.recordings.sendSummary.useMutation();
   const configurePlugin = trpc.agentConsole.configurePlugin.useMutation({
     onSuccess: (result) => {
       setConnectorGuide({
@@ -422,7 +405,6 @@ export function AgentConsole() {
     }
     return latest;
   }, [agentTasksQuery.data]);
-  const meetingShareTargets = useMemo(() => configuredMeetingShareTargets(plugins), [plugins]);
 
   const activeAgent = useMemo(() => {
     const agents = (overview.data?.agents as ConsoleAgent[] | undefined) ?? [];
@@ -442,35 +424,14 @@ export function AgentConsole() {
     }
   };
 
-  const runMeetingShare = (task: AgentTask, target: MeetingShareTarget) => {
-    setNotice(null);
-    setSharingStem(task.stem);
-    sendSummary.mutate({
-      stem: task.stem,
-      channel: target.channel,
-      label: target.label,
-      destination: target.destination,
-    }, {
-      onSuccess: () => setNotice(`已分享到 ${target.label} · ${target.destination}`),
-      onError: (error) => setNotice(error.message),
-      onSettled: () => {
-        setSharingStem(null);
-        void utils.agentConsole.overview.invalidate();
-      },
-    });
-  };
-
   const taskRail: TaskRailProps = {
     tasks,
     agentTasks: latestAgentTaskByStem,
     isLoading: overview.isPending,
     actionPending: toggleRecording.isPending,
-    shareTargets: meetingShareTargets,
-    sharingStem,
     onToggleRecording: () => toggleRecording.mutate(),
     onOpenAll: () => navigate("/inbox"),
     onOpenTask: (task) => { if (task.stem) navigate(`/inbox/${task.stem}`); },
-    onShare: runMeetingShare,
   };
 
   return (
@@ -579,12 +540,9 @@ interface TaskRailProps {
   agentTasks: ReadonlyMap<string, DurableAgentTask>;
   isLoading: boolean;
   actionPending: boolean;
-  shareTargets: MeetingShareTarget[];
-  sharingStem: string | null;
   onToggleRecording: () => void;
   onOpenAll: () => void;
   onOpenTask: (task: AgentTask) => void;
-  onShare: (task: AgentTask, target: MeetingShareTarget) => void;
 }
 
 function TaskRail({
@@ -592,12 +550,9 @@ function TaskRail({
   agentTasks,
   isLoading,
   actionPending,
-  shareTargets,
-  sharingStem,
   onToggleRecording,
   onOpenAll,
   onOpenTask,
-  onShare,
 }: TaskRailProps) {
   return (
     <>
@@ -620,9 +575,6 @@ function TaskRail({
             agentTask={agentTasks.get(task.stem)}
             onOpen={() => onOpenTask(task)}
             onStopRecording={onToggleRecording}
-            shareTargets={shareTargets}
-            sharePending={sharingStem === task.stem}
-            onShare={(target) => onShare(task, target)}
           />
         ))}
       </div>
@@ -636,18 +588,12 @@ function TaskCard({
   agentTask,
   onOpen,
   onStopRecording,
-  shareTargets,
-  sharePending,
-  onShare,
 }: {
   task: AgentTask;
   disabled: boolean;
   agentTask?: DurableAgentTask;
   onOpen: () => void;
   onStopRecording: () => void;
-  shareTargets: MeetingShareTarget[];
-  sharePending: boolean;
-  onShare: (target: MeetingShareTarget) => void;
 }) {
   const failed = agentTask?.state === "delivery_unverified" || agentTask?.state === "execution_unverified";
   const error = agentTask?.error || (Object.values(task.stages).includes("failed") ? task.error : "");
@@ -669,9 +615,6 @@ function TaskCard({
         disabled={disabled}
         onOpen={onOpen}
         onStopRecording={onStopRecording}
-        shareTargets={shareTargets}
-        sharePending={sharePending}
-        onShare={onShare}
       />
     </div>
   );
@@ -692,20 +635,13 @@ function TaskAction({
   disabled,
   onOpen,
   onStopRecording,
-  shareTargets,
-  sharePending,
-  onShare,
 }: {
   task: AgentTask;
   agentTask?: DurableAgentTask;
   disabled: boolean;
   onOpen: () => void;
   onStopRecording: () => void;
-  shareTargets: MeetingShareTarget[];
-  sharePending: boolean;
-  onShare: (target: MeetingShareTarget) => void;
 }) {
-  const [shareOpen, setShareOpen] = useState(false);
   if (task.stages.record === "running") {
     return (
       <RecordingBar startedAt={task.recordedAt} disabled={disabled} onStop={onStopRecording} />
@@ -720,36 +656,10 @@ function TaskAction({
   const nextAction = nextMeetingAction(task);
   if (nextAction === "share") {
     return (
-      <div className="agent-task-share">
-        <button
-          type="button"
-          className="agent-action primary"
-          disabled={disabled || sharePending}
-          aria-expanded={shareOpen}
-          onClick={() => setShareOpen((open) => !open)}
-        >
-          {sharePending ? <Loader2 className="spin" size={14} strokeWidth={2} /> : <Share2 size={14} strokeWidth={2} />}
-          {sharePending ? "分享中" : "分享"}
-          {!sharePending && <ChevronDown size={13} strokeWidth={2} />}
-        </button>
-        {shareOpen && !sharePending && (
-          <div className="agent-task-share-menu" role="menu" aria-label="选择分享渠道">
-            {shareTargets.map((target) => (
-              <button key={target.channel} type="button" role="menuitem" onClick={() => {
-                setShareOpen(false);
-                onShare(target);
-              }}>
-                <span>分享到 {target.label}</span>
-                <small>{target.destination}</small>
-              </button>
-            ))}
-            <button type="button" role="menuitem" onClick={onOpen}>
-              <span>更多分享渠道…</span>
-              <small>由当前 Agent 支持的渠道决定</small>
-            </button>
-          </div>
-        )}
-      </div>
+      <button type="button" className="agent-action primary" disabled={disabled} onClick={onOpen}>
+        <Share2 size={14} strokeWidth={2} />
+        查看并分享
+      </button>
     );
   }
   const actionLabel = nextAction === "transcribe" ? "转录" : "总结";

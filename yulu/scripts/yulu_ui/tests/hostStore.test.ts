@@ -352,6 +352,85 @@ describe("HostStore", () => {
     ]);
   });
 
+  it("persists a Share Action snapshot and fences an interrupted production write across restart", () => {
+    createStore();
+    store!.upsertAgentConnectionRecord({
+      id: "codex",
+      kind: "supported-agent",
+      adapter: "codex",
+      label: "Codex",
+      lifecycle: "available",
+      settings: { executablePath: "/fake/codex" },
+    });
+    store!.selectSharingConfiguration({ connectionId: "codex", connector: "notion" });
+    store!.saveShareDestination({ connectionId: "codex", connector: "notion", destination: "Product Notes" });
+    const { action: testShare } = store!.beginSharingTestAction({
+      id: "00000000-0000-4000-8000-000000000110",
+      connectionId: "codex",
+      connectionAdapter: "codex",
+      connectionLabel: "Codex",
+      connector: "notion",
+      destination: "Product Notes",
+      contentSha256: "a".repeat(64),
+      duplicateConfirmed: false,
+    });
+    store!.markSharingTestActionVerified(testShare.id, {
+      receiptId: "page-test-110",
+      receiptUrl: "https://notion.so/page-test-110",
+      detail: "Connector read-back matched",
+    });
+    const connection = store!.listAgentConnectionRecords().find((record) => record.id === "codex")!;
+    const snapshot = {
+      recordingStem: "TeamSync_20260828_090000",
+      summary: "# Decision\n\nShip it.",
+      summarySha256: "b".repeat(64),
+      snapshotSha256: "c".repeat(64),
+      connectionId: "codex",
+      connectionAdapter: "codex",
+      connectionLabel: "Codex",
+      connectionUpdatedAt: connection.updatedAt,
+      connector: "notion" as const,
+      destination: "Product Notes",
+      duplicateConfirmed: false,
+    };
+    const { action: pending } = store!.beginRecordingShareAction({
+      id: "00000000-0000-4000-8000-000000000111",
+      ...snapshot,
+    });
+    expect(pending).toMatchObject({ status: "pending", summary: snapshot.summary });
+
+    const dbPath = join(root, "host.sqlite");
+    store!.close();
+    store = new HostStore(dbPath);
+    expect(store!.getRecordingShareAction(pending.id)).toMatchObject({
+      status: "unknown",
+      detail: "Host restarted before the Share Action receipt was verified",
+    });
+    expect(() => store!.beginRecordingShareAction({
+      id: "00000000-0000-4000-8000-000000000112",
+      ...snapshot,
+    })).toThrow(/pending or has an Unknown Outcome/);
+
+    store!.abandonRecordingShareAction(pending.id);
+    const { action: verified } = store!.beginRecordingShareAction({
+      id: "00000000-0000-4000-8000-000000000113",
+      ...snapshot,
+    });
+    store!.markRecordingShareActionVerified(verified.id, {
+      receiptId: "page-production-113",
+      receiptUrl: "https://notion.so/page-production-113",
+      detail: "Connector read-back matched",
+    });
+    expect(store!.getRecordingShareAction(verified.id)).toMatchObject({
+      status: "verified",
+      receiptId: "page-production-113",
+    });
+    expect(store!.getRecordingShareAction(pending.id)).toMatchObject({
+      status: "abandoned",
+      summary: snapshot.summary,
+    });
+  });
+
   it("clears the Summary input snapshot only when an explicit retry discards its transcript artifact", () => {
     createStore();
     const task = store!.enqueueRecording({

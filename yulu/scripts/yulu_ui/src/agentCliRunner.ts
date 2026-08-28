@@ -365,43 +365,35 @@ process.stdin.on("end", () => {
     if (value && typeof value === "object") return \`{\${Object.keys(value).sort().map((key) => \`\${JSON.stringify(key)}:\${stable(value[key])}\`).join(",")}}\`;
     return JSON.stringify(value);
   };
-  const targetMatches = () => {
+  const exactKeys = (value, keys) => Boolean(
+    value && typeof value === "object" && !Array.isArray(value) &&
+    stable(Object.keys(value).sort()) === stable([...keys].sort())
+  );
+  const payloadMatches = () => {
     const wanted = parse(expected.destination);
     if (expected.connector === "notion") {
       const parent = parse(input.parent);
       const pages = parse(input.pages);
       return Boolean(
+        exactKeys(input, ["parent", "pages"]) &&
         wanted && typeof wanted === "object" && !Array.isArray(wanted) &&
         parent && typeof parent === "object" && !Array.isArray(parent) &&
         stable(parent) === stable(wanted) &&
         Array.isArray(pages) && pages.length === 1 &&
         pages[0] && typeof pages[0] === "object" && !Array.isArray(pages[0]) &&
+        exactKeys(pages[0], ["content"]) &&
         pages[0].content === expected.content
       );
     }
+    const keys = input.type === "stream"
+      ? ["type", "to", "topic", "content"]
+      : ["type", "to", "content"];
     const observed = input.type === "stream"
       ? { type: "stream", to: input.to, topic: input.topic }
       : { type: input.type, to: input.to };
-    return stable(observed) === stable(wanted);
+    return exactKeys(input, keys) && stable(observed) === stable(wanted) && input.content === expected.content;
   };
-  const content = [];
-  const walk = (value, key = "") => {
-    if (typeof value === "string") {
-      if (/(?:^|_)(?:content|text|message|body|markdown|plain_text|rich_text)(?:_|$)/i.test(key)) content.push(value);
-      if (value !== expected.content && /(?:meeting|transcript|summary|participant|attendee)/i.test(value)) deny("Sharing blocked meeting content");
-      return;
-    }
-    if (Array.isArray(value)) return value.forEach((item) => walk(item, key));
-    if (value && typeof value === "object") {
-      for (const [childKey, child] of Object.entries(value)) {
-        if (/(?:meeting|transcript|summary|participant|attendee)/i.test(childKey) && child != null && child !== "") deny("Sharing blocked meeting data", tool);
-        walk(child, childKey);
-      }
-    }
-  };
-  walk(input);
-  if (!targetMatches()) return deny("Sharing blocked a destination mismatch", tool);
-  if (content.length !== 1 || content[0] !== expected.content) return deny("Sharing blocked a content mismatch", tool);
+  if (!payloadMatches()) return deny("Sharing blocked a payload mismatch", tool);
   try {
     writeFileSync(writeAuthorizationPath, tool, { encoding: "utf8", mode: 0o600, flag: "wx" });
   } catch {

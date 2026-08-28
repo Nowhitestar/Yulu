@@ -186,15 +186,24 @@ function exactReceiptDestination(value: unknown, connector: SharingConnector, ex
   return exactZulipDestination(record, expected);
 }
 
+function hasExactKeys(value: unknown, expected: readonly string[]): boolean {
+  const record = asRecord(decodedChild(value));
+  return canonicalJson(Object.keys(record).sort()) === canonicalJson([...expected].sort());
+}
+
 function exactWriteContent(value: unknown, connector: SharingConnector, expected: string): boolean {
   const record = asRecord(decodedChild(value));
   if (connector === "notion") {
     const pages = decodedChild(record.pages);
     if (!Array.isArray(pages) || pages.length !== 1) return false;
     const page = asRecord(decodedChild(pages[0]));
-    return page.content === expected && contentStrings(record).length === 1;
+    return hasExactKeys(record, ["parent", "pages"]) &&
+      hasExactKeys(page, ["content"]) && page.content === expected;
   }
-  return record.content === expected && contentStrings(record).length === 1;
+  const keys = record.type === "stream"
+    ? ["type", "to", "topic", "content"]
+    : ["type", "to", "content"];
+  return hasExactKeys(record, keys) && record.content === expected;
 }
 
 function exactReceiptContent(value: unknown, connector: SharingConnector, expected: string): boolean {
@@ -240,36 +249,6 @@ function exactReceiptReadArgument(
       (receiptUrl && record.id === receiptUrl));
   }
   return Boolean(receiptId && exactIdentifier(record.message_id ?? record.id, receiptId));
-}
-
-const CONTENT_KEY_RE = /(?:^|_)(?:content|text|message|body|markdown|plain_text|rich_text)(?:_|$)/i;
-const MEETING_DATA_KEY_RE = /(?:meeting|transcript|summary|participant|attendee)/i;
-
-function contentStrings(value: unknown, key = ""): string[] {
-  if (typeof value === "string") {
-    const parsed = parsedJson(value);
-    if (parsed !== value) return contentStrings(parsed, key);
-    return CONTENT_KEY_RE.test(key) ? [value] : [];
-  }
-  if (Array.isArray(value)) return value.flatMap((item) => contentStrings(item, key));
-  if (!value || typeof value !== "object") return [];
-  return Object.entries(value as Record<string, unknown>)
-    .flatMap(([childKey, child]) => contentStrings(child, childKey));
-}
-
-function containsMeetingData(value: unknown, expectedContent: string, key = ""): boolean {
-  if (typeof value === "string") {
-    const parsed = parsedJson(value);
-    if (parsed !== value) return containsMeetingData(parsed, expectedContent, key);
-    if (value === expectedContent) return false;
-    return MEETING_DATA_KEY_RE.test(key) || MEETING_DATA_KEY_RE.test(value);
-  }
-  if (Array.isArray(value)) {
-    return value.some((item) => containsMeetingData(item, expectedContent, key));
-  }
-  if (!value || typeof value !== "object") return false;
-  return Object.entries(value as Record<string, unknown>)
-    .some(([childKey, child]) => containsMeetingData(child, expectedContent, childKey));
 }
 
 function hasFailedStatus(value: unknown, key = ""): boolean {
@@ -576,13 +555,37 @@ export class AgentSharingConnectorAdapter implements SharingConnectorAdapter {
     if (input.content !== YULU_TEST_SHARE_CONTENT) {
       throw new Error("Test Share content must be the fixed meeting-free verification message");
     }
+    return this.writeShare(input, true);
+  }
+
+  async share(input: {
+    connection: PersistedAgentConnection;
+    connector: SharingConnector;
+    destination: string;
+    content: string;
+  }): Promise<{ destination: string; receiptId: string; receiptUrl: string }> {
+    if (!input.content.trim()) throw new Error("Share Action requires a non-empty summary snapshot");
+    return this.writeShare(input, false);
+  }
+
+  private async writeShare(input: {
+    connection: PersistedAgentConnection;
+    connector: SharingConnector;
+    destination: string;
+    content: string;
+  }, test: boolean): Promise<{ destination: string; receiptId: string; receiptUrl: string }> {
+    const actionName = test ? "Test Share" : "Share Action";
     const prompt = [
-      `Use only the configured ${input.connector} connector to perform exactly one external Test Share write.`,
+      `Use only the configured ${input.connector} connector to perform exactly one external ${actionName} write.`,
       `Destination: ${input.destination}`,
-      `Content: ${YULU_TEST_SHARE_CONTENT}`,
-      "This payload has no meeting title, transcript, summary, participant, or meeting metadata. Do not add any.",
+      `Content: ${input.content}`,
+      ...(test ? [
+        "This payload has no meeting title, transcript, summary, participant, or meeting metadata. Do not add any.",
+      ] : [
+        "The content above is the complete immutable summary snapshot. Do not add transcript, participant, or other meeting data.",
+      ]),
       ...(input.connector === "notion" ? [
-        "Pass the saved destination object as the exact top-level parent and create exactly one page whose content is the exact fixed message.",
+        `Pass the saved destination object as the exact top-level parent and create exactly one page whose content is the exact ${test ? "fixed message" : "summary snapshot"}.`,
       ] : []),
       `Return only JSON: {"status":"sent","connector":"${input.connector}","destination":"${input.destination}","id":"external receipt id","url":"external receipt URL if available"}.`,
     ].join("\n");
@@ -599,7 +602,7 @@ export class AgentSharingConnectorAdapter implements SharingConnectorAdapter {
       );
     }
     if (result.code !== 0 || !result.stdout.trim()) {
-      const detail = (result.stderr || result.stdout || "Test Share transport ended without a receipt").trim();
+      const detail = (result.stderr || result.stdout || `${actionName} transport ended without a receipt`).trim();
       if (result.connectorWriteState === "not-started") throw new Error(detail);
       throw new SharingConnectorUnknownOutcomeError(detail);
     }
@@ -618,7 +621,7 @@ export class AgentSharingConnectorAdapter implements SharingConnectorAdapter {
       destination !== input.destination || (!receiptId && !receiptUrl)
     ) {
       throw new SharingConnectorUnknownOutcomeError(
-        boundedString(value.error ?? value.detail, 1_000) || "Agent returned no matching Test Share receipt",
+        boundedString(value.error ?? value.detail, 1_000) || `Agent returned no matching ${actionName} receipt`,
       );
     }
     try {
@@ -644,7 +647,7 @@ export class AgentSharingConnectorAdapter implements SharingConnectorAdapter {
     let result: AgentCliRunResult;
     try {
       result = await this.runOperation(input.connection, input.connector, 60_000, [
-        `Use only the configured ${input.connector} connector to read back this external Test Share receipt.`,
+        `Use only the configured ${input.connector} connector to read back this external Share receipt.`,
         "This is a read-only verification. Do not write, create, update, or delete anything.",
         `Saved destination: ${input.destination}`,
         `Receipt ID: ${input.receipt.receiptId}`,
@@ -674,7 +677,7 @@ export class AgentSharingConnectorAdapter implements SharingConnectorAdapter {
       destination !== input.destination || value.content !== input.content ||
       receiptId !== input.receipt.receiptId || receiptUrl !== input.receipt.receiptUrl
     ) {
-      throw new SharingConnectorUnknownOutcomeError("Connector read-back did not match the Test Share receipt and payload");
+      throw new SharingConnectorUnknownOutcomeError("Connector read-back did not match the Share receipt and payload");
     }
     try {
       this.requireReadBackEvidence(result, input.connector, input);
@@ -751,7 +754,7 @@ export class AgentSharingConnectorAdapter implements SharingConnectorAdapter {
     const writes = this.selectedConnectorCalls(result, connector)
       .filter((call) => WRITE_TOOL_RE.test(call.name));
     if (writes.length !== 1 || !writes[0]!.success) {
-      throw new Error("Test Share returned no single successful selected-connector write tool-call evidence");
+      throw new Error("Share returned no single successful selected-connector write tool-call evidence");
     }
     const write = writes[0]!;
     const argumentsValue = decodedValue(write.argumentsText);
@@ -759,10 +762,9 @@ export class AgentSharingConnectorAdapter implements SharingConnectorAdapter {
     if (
       !exactWriteDestination(argumentsValue, connector, expected.destination) ||
       !exactWriteContent(argumentsValue, connector, expected.content) ||
-      containsMeetingData(argumentsValue, expected.content) ||
       !exactReceiptIdentity(resultValue, connector, expected.receiptId, expected.receiptUrl)
     ) {
-      throw new Error("Test Share connector write evidence did not match its destination, exact content, and receipt");
+      throw new Error("Share connector write evidence did not match its destination, exact content, and receipt");
     }
   }
 
@@ -792,7 +794,6 @@ export class AgentSharingConnectorAdapter implements SharingConnectorAdapter {
       ) &&
         exactReceiptDestination(resultValue, connector, input.destination) &&
         exactReceiptContent(resultValue, connector, input.content) &&
-        !containsMeetingData(resultValue, input.content) &&
         exactReceiptIdentity(
           resultValue,
           connector,

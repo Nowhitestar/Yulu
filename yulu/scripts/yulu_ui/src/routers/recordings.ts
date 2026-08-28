@@ -1,6 +1,5 @@
-import { closeSync, existsSync, openSync, readFileSync, readSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { randomUUID } from "node:crypto";
-import { dirname, join, resolve, relative, isAbsolute } from "node:path";
+import { closeSync, existsSync, openSync, readFileSync, readSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { basename, dirname, join, resolve, relative, isAbsolute } from "node:path";
 import { z } from "zod";
 import {
   recordingDateFromStem,
@@ -21,12 +20,6 @@ import {
   readTagsSidecar,
   writeTagsSidecar,
 } from "../recordingMeta.js";
-import { resolveAgentRuntime } from "../agentRuntime.js";
-import {
-  AgentDeliveryFailedError,
-  runAgentShareSummary,
-} from "../agentActions.js";
-import { agentDestinationHint, agentPluginOverview, normalizeConsoleAgent } from "../agentPlugins.js";
 import { loadGlossaryContract } from "../glossaryContract.js";
 
 // Every recording is a meeting now (voicemails were unified into meetings and
@@ -47,26 +40,7 @@ interface SummaryPromptSnapshot {
   content: string;
 }
 
-interface ShareHistoryEntry {
-  id: string;
-  channel: string;
-  label: string;
-  destination: string;
-  sentAt: string;
-  status: "success" | "failed" | "unverified";
-  message?: string;
-}
-
 const manualActionLocks = new Map<string, string>();
-
-interface ShareTarget {
-  channel: string;
-  label: string;
-  destination: string;
-  enabled: boolean;
-  disabledReason: string | null;
-  lastShare: ShareHistoryEntry | null;
-}
 
 const ACTIVE_AGENT_TASK_STATES = new Set([
   "queued", "awaiting_agent", "awaiting_provider", "running", "transcript_committed", "artifacts_committed",
@@ -103,6 +77,24 @@ function isoFromStem(date: string, time: string): string {
 function isInside(parent: string, child: string): boolean {
   const rel = relative(resolve(parent), resolve(child));
   return rel.length > 0 && !rel.startsWith("..") && !isAbsolute(rel);
+}
+
+function assertRootRecordingStem(stem: string): void {
+  if (
+    !stem || stem.includes("/") || stem.includes("\\") || basename(stem) !== stem ||
+    !REC_FILE_RE.test(`${stem}.wav`)
+  ) {
+    throw new TRPCError({ code: "BAD_REQUEST", message: "Share Action requires a root-level recording stem" });
+  }
+}
+
+function assertExistingRecordingPathInside(dir: string, path: string): void {
+  if (!isInside(realpathSync(dir), realpathSync(path))) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "Share Action recording content must remain inside the recordings directory",
+    });
+  }
 }
 
 function firstWordsOf(path: string): string | null {
@@ -498,93 +490,6 @@ function writeTextAtomic(path: string, body: string): void {
   renameSync(tmp, path);
 }
 
-function shareHistoryPath(dir: string, stem: string): string {
-  return join(dir, `${stem}.shares.json`);
-}
-
-function normalizeChannel(value: unknown): string | null {
-  const channel = typeof value === "string" ? value.trim().toLowerCase() : "";
-  return /^[a-z0-9][a-z0-9_-]{0,39}$/.test(channel) ? channel : null;
-}
-
-function channelLabel(channel: string): string {
-  if (channel === "notion") return "Notion";
-  if (channel === "zulip") return "Zulip";
-  return channel.split(/[-_]/).filter(Boolean)
-    .map((part) => part[0]!.toUpperCase() + part.slice(1))
-    .join(" ");
-}
-
-function normalizeShareHistoryEntry(value: unknown): ShareHistoryEntry | null {
-  if (!isRecord(value)) return null;
-  const channel = normalizeChannel(value.channel);
-  const status = value.status === "success" || value.status === "failed" || value.status === "unverified"
-    ? value.status
-    : null;
-  if (!channel || !status || typeof value.sentAt !== "string") return null;
-  return {
-    id: typeof value.id === "string" ? value.id : `${value.sentAt}-${channel}`,
-    channel,
-    label: typeof value.label === "string" ? value.label : channelLabel(channel),
-    destination: typeof value.destination === "string" ? value.destination : "",
-    sentAt: value.sentAt,
-    status,
-    message: typeof value.message === "string" ? value.message : undefined,
-  };
-}
-
-function readShareHistory(path: string): ShareHistoryEntry[] {
-  try {
-    const parsed = JSON.parse(readFileSync(path, "utf8"));
-    if (!Array.isArray(parsed)) return [];
-    return parsed.map(normalizeShareHistoryEntry)
-      .filter((entry): entry is ShareHistoryEntry => entry !== null)
-      .sort((a, b) => b.sentAt.localeCompare(a.sentAt));
-  } catch {
-    return [];
-  }
-}
-
-function appendShareHistory(dir: string, stem: string, entry: Omit<ShareHistoryEntry, "id" | "sentAt">): void {
-  const next = {
-    id: randomUUID(),
-    sentAt: new Date().toISOString().replace(/\.\d+Z$/, "Z"),
-    ...entry,
-  };
-  const entries = [next, ...readShareHistory(shareHistoryPath(dir, stem))].slice(0, 50);
-  writeTextAtomic(shareHistoryPath(dir, stem), `${JSON.stringify(entries, null, 2)}\n`);
-}
-
-function shareTargets(config: unknown, opts: {
-  hasSummary: boolean;
-  history: ShareHistoryEntry[];
-  scriptDir: string;
-  moviesDir: string;
-}): ShareTarget[] {
-  const runtime = resolveAgentRuntime(config, { scriptDir: opts.scriptDir, moviesDir: opts.moviesDir });
-  const agent = normalizeConsoleAgent(runtime.provider);
-  return agentPluginOverview(config, { agent: runtime.provider, agentReady: !runtime.disabledReason }).current
-    .filter((plugin) => plugin.id === "notion" || plugin.id === "zulip")
-    .map((plugin) => {
-      const channel = plugin.id as "notion" | "zulip";
-      const label = channelLabel(channel);
-      const destination = plugin.destination?.value || agentDestinationHint(config, agent, channel, "");
-      let disabledReason: string | null = null;
-      if (!opts.hasSummary) disabledReason = "Needs AI Summary";
-      else if (runtime.disabledReason) disabledReason = runtime.disabledReason;
-      else if (plugin.status !== "configured") disabledReason = plugin.detail || `${label} Agent plugin is not configured`;
-      else if (plugin.destination && !plugin.destination.configured) disabledReason = plugin.destination.missingReason || "Destination missing";
-      return {
-        channel,
-        label,
-        destination,
-        enabled: disabledReason === null,
-        disabledReason,
-        lastShare: opts.history.find((entry) => entry.channel === channel) ?? null,
-      };
-    });
-}
-
 function assertNoActiveAgentTask(host: HostStore, stem: string): void {
   const task = host.latestForRecording(stem);
   if (task && ACTIVE_AGENT_TASK_STATES.has(task.state)) {
@@ -725,7 +630,7 @@ export const recordingsRouter = router({
       const notionDelivery = agentTask ? ctx.host?.getNotionDelivery(agentTask.id) ?? null : null;
       const transcript = read(".transcript.txt");
       const raw = read(".raw.transcript.txt");
-      const shareHistory = readShareHistory(shareHistoryPath(dir, input.stem));
+      const summary = read(".summary.md");
       const hasSummary = hasCurrentSummary(dir, input.stem);
       const summaryStale = existsSync(join(dir, `${input.stem}.summary.md`)) && !hasSummary;
       // Older Yulu releases wrote identical `.transcript.txt` and
@@ -740,21 +645,17 @@ export const recordingsRouter = router({
         transcript,
         raw,
         rawDiffers,
-        summary: read(".summary.md"),
+        summary,
         summaryStale,
+        recordingShare: ctx.sharing && summary && !summaryStale
+          ? ctx.sharing.recordingShareView({ recordingStem: input.stem, summary })
+          : null,
         realtime: read(".realtime.transcript.txt"),
         hasRealtime: existsSync(join(dir, `${input.stem}.realtime.transcript.txt`)),
         speakerData: existsSync(speakersStalePath(dir, input.stem)) ? null : readSpeakerSidecar(dir, input.stem),
         status: currentStatus.status, statusError: currentStatus.statusError,
         agentTask: agentTask ? publicAgentTask(agentTask) : null,
         notionDelivery,
-        shareTargets: shareTargets(ctx.config.read(), {
-          hasSummary,
-          history: shareHistory,
-          scriptDir: ctx.paths.scriptDir,
-          moviesDir: ctx.paths.moviesDir,
-        }),
-        shareHistory,
         summaryTemplateOptions: summaryTemplateOptions(ctx.db?.prompts),
         defaultSummaryTemplateId: defaultSummaryTemplateId(summaryTemplateOptions(ctx.db?.prompts)),
       };
@@ -976,98 +877,47 @@ export const recordingsRouter = router({
       });
     }),
 
-  sendSummary: publicProcedure
+  shareRecording: uiMutationProcedure
     .input(z.object({
+      confirmed: z.literal(true),
+      actionId: z.string().uuid(),
       stem: z.string(),
-      channel: z.string().trim().regex(/^[a-z0-9][a-z0-9_-]{0,39}$/),
-      label: z.string().trim().min(1).max(80).optional(),
-      destination: z.string().trim().max(500).optional(),
-    }))
+      snapshotHash: z.string().regex(/^[a-f0-9]{64}$/i),
+      duplicateConfirmed: z.boolean(),
+    }).strict())
     .mutation(async ({ ctx, input }) => {
-      return withManualActionLock(input.stem, "Sharing", async () => {
-        const dir = ctx.paths.moviesDir;
-        const summaryPath = join(dir, `${input.stem}.summary.md`);
-        if (!existsSync(join(dir, `${input.stem}.wav`))) {
-          throw new TRPCError({ code: "NOT_FOUND", message: `recording not found: ${input.stem}` });
-        }
-        if (!existsSync(summaryPath)) {
-          throw new TRPCError({ code: "PRECONDITION_FAILED", message: "summary missing" });
-        }
-        if (!hasCurrentSummary(dir, input.stem)) {
-          throw new TRPCError({
-            code: "PRECONDITION_FAILED",
-            message: "Summary is based on an older transcript — regenerate it before sharing",
-          });
-        }
-        prepareManualAction(ctx.host, (taskId) => ctx.artifacts.cleanupWorkspace(taskId), input.stem);
-        const config = ctx.config.read();
-        const runtime = resolveAgentRuntime(config, {
-          scriptDir: ctx.paths.scriptDir,
-          moviesDir: ctx.paths.moviesDir,
+      if (!ctx.sharing) throw new Error("Sharing configuration is unavailable");
+      assertRootRecordingStem(input.stem);
+      const dir = ctx.paths.moviesDir;
+      const wavPath = join(dir, `${input.stem}.wav`);
+      const summaryPath = join(dir, `${input.stem}.summary.md`);
+      if (!existsSync(wavPath)) {
+        throw new TRPCError({ code: "NOT_FOUND", message: `recording not found: ${input.stem}` });
+      }
+      if (!existsSync(summaryPath)) {
+        throw new TRPCError({ code: "PRECONDITION_FAILED", message: "summary missing" });
+      }
+      assertExistingRecordingPathInside(dir, wavPath);
+      assertExistingRecordingPathInside(dir, summaryPath);
+      if (!hasCurrentSummary(dir, input.stem)) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: "Summary is based on an older transcript — regenerate it before sharing",
         });
-        const history = readShareHistory(shareHistoryPath(dir, input.stem));
-        const knownTarget = shareTargets(config, {
-          hasSummary: true,
-          history,
-          scriptDir: ctx.paths.scriptDir,
-          moviesDir: ctx.paths.moviesDir,
-        }).find((target) => target.channel === input.channel);
-        const label = input.label || knownTarget?.label || channelLabel(input.channel);
-        const destination = input.destination || knownTarget?.destination || "";
-        const recordFailure = (message: string) => appendShareHistory(dir, input.stem, {
-          channel: input.channel,
-          label,
-          destination,
-          status: "failed",
-          message,
-        });
-        if (knownTarget && !knownTarget.enabled) {
-          const message = knownTarget.disabledReason || `${label} is not configured`;
-          recordFailure(message);
-          throw new TRPCError({ code: "PRECONDITION_FAILED", message });
-        }
-        if (runtime.disabledReason) {
-          const message = runtime.disabledReason;
-          recordFailure(message);
-          throw new TRPCError({ code: "PRECONDITION_FAILED", message });
-        }
-        const derivedTitle = `${input.stem}.wav`.match(REC_FILE_RE)?.[1] ?? input.stem;
-        const title = resolveTitle(dir, input.stem, derivedTitle) ?? input.stem;
-        try {
-          const result = await runAgentShareSummary({
-            configDir: ctx.paths.configDir,
-            scriptDir: ctx.paths.scriptDir,
-            runtime,
-            channel: input.channel,
-            channelLabel: label,
-            summaryPath,
-            title,
-            destinationHint: destination,
-          });
-          appendShareHistory(dir, input.stem, {
-            channel: input.channel,
-            label,
-            destination,
-            status: "success",
-            message: result.delivery.url || result.delivery.id || result.delivery.destination || undefined,
-          });
-          ctx.pubsub.publish("recordings-changed", { reason: "changed" });
-          return { ok: true as const, sessionId: result.sessionId };
-        } catch (error) {
-          const message = (error as Error).message;
-          if (error instanceof AgentDeliveryFailedError) {
-            recordFailure(message);
-            throw new TRPCError({ code: "PRECONDITION_FAILED", message });
-          }
-          appendShareHistory(dir, input.stem, {
-            channel: input.channel,
-            label,
-            destination,
-            status: "unverified",
-            message: `Delivery result is uncertain. Verify the destination before retrying. ${message}`,
-          });
-          throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message });
-        }
+      }
+      return ctx.sharing.shareRecording({
+        actionId: input.actionId,
+        recordingStem: input.stem,
+        summary: readFileSync(summaryPath, "utf8"),
+        snapshotHash: input.snapshotHash,
+        duplicateConfirmed: input.duplicateConfirmed,
       });
+    }),
+
+  abandonRecordingShare: uiMutationProcedure
+    .input(z.object({ actionId: z.string().uuid(), confirmed: z.literal(true) }).strict())
+    .mutation(({ ctx, input }) => {
+      if (!ctx.sharing) throw new Error("Sharing configuration is unavailable");
+      return ctx.sharing.abandonRecordingUnknown({ actionId: input.actionId });
     }),
 });

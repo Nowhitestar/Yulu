@@ -39,6 +39,10 @@ export interface SharingConnectorAdapter {
     destination: string;
     content: string;
   }): Promise<SharingReceipt>;
+  share(input: SharingConnectorContext & {
+    destination: string;
+    content: string;
+  }): Promise<SharingReceipt>;
   verifyReceipt(input: SharingConnectorContext & {
     destination: string;
     content: string;
@@ -275,6 +279,175 @@ export class SharingConfiguration {
     return this.view();
   }
 
+  recordingShareView(input: { recordingStem: string; summary: string }) {
+    const persisted = this.options.host.getSharingConfiguration();
+    const connection = persisted
+      ? this.options.host.listAgentConnectionRecords().find((record) => (
+          record.id === persisted.connectionId && record.kind === "supported-agent"
+        ))
+      : undefined;
+    const summarySha256 = createHash("sha256").update(input.summary).digest("hex");
+    const snapshot = persisted?.destination && persisted.destinationSavedAt && connection
+      ? this.recordingSnapshot({
+          recordingStem: input.recordingStem,
+          summary: input.summary,
+          summarySha256,
+          connection,
+          connector: persisted.connector,
+          destination: persisted.destination,
+        })
+      : null;
+    const connectorReadiness = persisted && connection
+      ? this.readiness.get(this.stateKey(connection, persisted.connector)) ?? { ...UNTESTED }
+      : { ...UNTESTED };
+    const readiness = this.sharingReadinessView(persisted, connectorReadiness);
+    const latest = snapshot ? this.options.host.latestRecordingShareAction(snapshot.hash) : null;
+    const duplicateWarningRequired = snapshot
+      ? this.options.host.hasVerifiedRecordingShareAction(snapshot.hash)
+      : false;
+    const latestAction = latest ? {
+      id: latest.id,
+      status: latest.status,
+      receiptId: latest.receiptId ?? "",
+      receiptUrl: latest.receiptUrl ?? "",
+      detail: latest.detail,
+    } : null;
+    if (!input.recordingStem.trim() || !input.summary.trim()) {
+      return {
+        status: "unavailable" as const,
+        detail: "A current non-empty recording summary is required",
+        remediation: "Generate a current summary before sharing.",
+        snapshot,
+        latestAction,
+        duplicateWarningRequired,
+      };
+    }
+    if (latest?.status === "pending" || latest?.status === "unknown") {
+      return {
+        status: "unknown" as const,
+        detail: latest.detail || "Share Action receipt verification is incomplete",
+        remediation: `Do not retry. Reconcile or abandon Share Action ${latest.id} before creating another attempt.`,
+        snapshot,
+        latestAction,
+        duplicateWarningRequired,
+      };
+    }
+    if (!snapshot || readiness.status !== "ready") {
+      return {
+        status: "unavailable" as const,
+        detail: readiness.detail,
+        remediation: readiness.remediation || "Return to Settings > Sharing and prove the selected destination.",
+        snapshot,
+        latestAction,
+        duplicateWarningRequired,
+      };
+    }
+    return {
+      status: "ready" as const,
+      detail: "Ready for a fresh explicit Share Action",
+      remediation: "",
+      snapshot,
+      latestAction,
+      duplicateWarningRequired,
+    };
+  }
+
+  async shareRecording(input: {
+    actionId: string;
+    recordingStem: string;
+    summary: string;
+    snapshotHash: string;
+    duplicateConfirmed: boolean;
+  }) {
+    const preview = this.recordingShareView(input);
+    if (!preview.snapshot || preview.snapshot.hash !== input.snapshotHash) {
+      throw new Error("Share Action confirmation no longer matches the current immutable snapshot");
+    }
+    const replay = this.options.host.getRecordingShareAction(input.actionId);
+    if (replay) {
+      if (
+        replay.recordingStem !== input.recordingStem || replay.summary !== input.summary ||
+        replay.snapshotSha256 !== input.snapshotHash || replay.duplicateConfirmed !== input.duplicateConfirmed
+      ) {
+        throw new Error("Share Action id is already bound to a different immutable snapshot");
+      }
+      return this.recordingShareView(input);
+    }
+    if (preview.status === "unknown") {
+      throw new Error(`Share Action ${preview.latestAction?.id ?? ""} has an Unknown Outcome; reconcile or abandon it before retrying`);
+    }
+    if (preview.status !== "ready") {
+      throw new Error(preview.detail || "Prove Sharing Readiness before creating a Share Action");
+    }
+    if (preview.duplicateWarningRequired && !input.duplicateConfirmed) {
+      throw new Error("This summary was already delivered to the same destination; confirm the duplicate external write to continue");
+    }
+    const begun = this.options.host.beginRecordingShareAction({
+      id: input.actionId,
+      recordingStem: preview.snapshot.recordingStem,
+      summary: preview.snapshot.summary,
+      summarySha256: preview.snapshot.summarySha256,
+      snapshotSha256: preview.snapshot.hash,
+      connectionId: preview.snapshot.connection.id,
+      connectionAdapter: preview.snapshot.connection.adapter,
+      connectionLabel: preview.snapshot.connection.label,
+      connectionUpdatedAt: preview.snapshot.connection.updatedAt,
+      connector: preview.snapshot.connector,
+      destination: preview.snapshot.destination,
+      duplicateConfirmed: input.duplicateConfirmed,
+    });
+    if (!begun.created) return this.recordingShareView(input);
+    let provisional: SharingReceipt | undefined;
+    try {
+      const connection = this.options.host.listAgentConnectionRecords()
+        .find((record) => record.id === preview.snapshot!.connection.id)!;
+      provisional = await this.options.adapter.share({
+        connection,
+        connector: preview.snapshot.connector,
+        destination: preview.snapshot.destination,
+        content: preview.snapshot.summary,
+      });
+      this.assertReceipt(provisional, preview.snapshot.destination);
+      const verified = await this.options.adapter.verifyReceipt({
+        connection,
+        connector: preview.snapshot.connector,
+        destination: preview.snapshot.destination,
+        content: preview.snapshot.summary,
+        receipt: provisional,
+      });
+      this.assertReceipt(verified, preview.snapshot.destination, provisional);
+      this.options.host.markRecordingShareActionVerified(begun.action.id, {
+        receiptId: verified.receiptId,
+        receiptUrl: verified.receiptUrl,
+        detail: "Connector read-back matched the exact Share Action snapshot and receipt",
+      });
+    } catch (error) {
+      const detail = this.errorMessage(error);
+      if (error instanceof SharingConnectorUnknownOutcomeError || provisional) {
+        this.options.host.markRecordingShareActionUnknown(begun.action.id, {
+          detail,
+          receiptId: provisional?.receiptId,
+          receiptUrl: provisional?.receiptUrl,
+        });
+      } else {
+        this.options.host.markRecordingShareActionFailed(begun.action.id, detail);
+      }
+    }
+    return this.recordingShareView(input);
+  }
+
+  abandonRecordingUnknown(input: { actionId: string }) {
+    const action = this.options.host.getRecordingShareAction(input.actionId);
+    if (!action || action.status !== "unknown") {
+      throw new Error("Only an Unknown Outcome Share Action can be abandoned");
+    }
+    this.options.host.abandonRecordingShareAction(action.id);
+    return this.recordingShareView({
+      recordingStem: action.recordingStem,
+      summary: action.summary,
+    });
+  }
+
   async reconcileUnknown(input: { actionId: string; receiptId: string; receiptUrl: string }) {
     const { persisted, connection } = this.requireSelection();
     if (!persisted.destination || !persisted.destinationSavedAt) {
@@ -437,6 +610,33 @@ export class SharingConfiguration {
       connectionId: persisted.connectionId,
       connector: persisted.connector,
       destination: persisted.destination,
+    };
+  }
+
+  private recordingSnapshot(input: {
+    recordingStem: string;
+    summary: string;
+    summarySha256: string;
+    connection: PersistedAgentConnection;
+    connector: SharingConnector;
+    destination: string;
+  }) {
+    const identity = {
+      recordingStem: input.recordingStem,
+      summary: input.summary,
+      summarySha256: input.summarySha256,
+      connection: {
+        id: input.connection.id,
+        adapter: input.connection.adapter,
+        label: input.connection.label,
+        updatedAt: input.connection.updatedAt,
+      },
+      connector: input.connector,
+      destination: input.destination,
+    };
+    return {
+      ...identity,
+      hash: createHash("sha256").update(JSON.stringify(identity)).digest("hex"),
     };
   }
 

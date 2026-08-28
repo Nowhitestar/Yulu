@@ -12,7 +12,7 @@ import { TagEditor } from "../../components/TagEditor.js";
 import { EmptyState } from "../../components/EmptyState.js";
 import { ReprocessButton, type ReprocessButtonState } from "../../components/ReprocessButton.js";
 import { RecordingStatusBadge } from "../../components/RecordingStatusBadge.js";
-import { SharePopover, type ShareHistoryEntry, type ShareTarget } from "../../components/SharePopover.js";
+import { SharePopover, type RecordingShareView } from "../../components/SharePopover.js";
 import { useConfirm } from "../../hooks/useConfirm.js";
 import { useT } from "../../i18n/LanguageProvider.js";
 import { useWsChannel } from "../../ws.js";
@@ -388,7 +388,6 @@ export function RecordingReader() {
   const qc = useQueryClient();
   const [completedAction, setCompletedAction] = useState<ManualAction | null>(null);
   const [actionError, setActionError] = useState<{ action: ManualAction; message: string } | null>(null);
-  const [pendingShareChannel, setPendingShareChannel] = useState<string | null>(null);
   const [summaryTemplateId, setSummaryTemplateId] = useState("");
   const [keptPausedTaskId, setKeptPausedTaskId] = useState<string | null>(null);
   const targetAudioSrc = data ? audioSrcFor(data) : null;
@@ -396,7 +395,6 @@ export function RecordingReader() {
   useEffect(() => {
     setCompletedAction(null);
     setActionError(null);
-    setPendingShareChannel(null);
     setKeptPausedTaskId(null);
   }, [stem]);
   const [mountedAudioSrc, setMountedAudioSrc] = useState<string | null>(null);
@@ -405,7 +403,8 @@ export function RecordingReader() {
 
   const transcribeMut = trpc.recordings.transcribe.useMutation();
   const summarizeMut = trpc.recordings.summarize.useMutation();
-  const sendSummaryMut = trpc.recordings.sendSummary.useMutation();
+  const shareRecordingMut = trpc.recordings.shareRecording.useMutation();
+  const abandonRecordingShareMut = trpc.recordings.abandonRecordingShare.useMutation();
   const renameMut = trpc.recordings.rename.useMutation();
   const setTagsMut = trpc.recordings.setTags.useMutation();
   const deleteMut = trpc.recordings.delete.useMutation();
@@ -559,23 +558,37 @@ export function RecordingReader() {
     });
   };
 
-  const handleShare = (target: { channel: string; label: string; destination: string }) => {
-    if (!confirm(t("reader.send.confirm", { label: target.label, destination: target.destination || t("value.unset") }))) return;
+  const handleShare = (input: { snapshotHash: string; duplicateConfirmed: boolean }) => {
     setCompletedAction(null);
     setActionError(null);
-    setPendingShareChannel(target.channel);
-    sendSummaryMut.mutate({
+    shareRecordingMut.mutate({
+      confirmed: true,
+      actionId: crypto.randomUUID(),
       stem,
-      channel: target.channel,
-      label: target.label,
-      destination: target.destination,
+      snapshotHash: input.snapshotHash,
+      duplicateConfirmed: input.duplicateConfirmed,
     }, {
-      onSuccess: () => setCompletedAction("share"),
+      onSuccess: (result) => {
+        if (result.latestAction?.status === "verified") {
+          setCompletedAction("share");
+          return;
+        }
+        setActionError({
+          action: "share",
+          message: result.latestAction?.detail || t("share.confirm.unverified"),
+        });
+      },
       onError: (err) => setActionError({ action: "share", message: err.message }),
       onSettled: () => {
-        setPendingShareChannel(null);
         invalidateBoth();
       },
+    });
+  };
+
+  const handleAbandonRecordingShare = (actionId: string) => {
+    abandonRecordingShareMut.mutate({ actionId, confirmed: true }, {
+      onError: (err) => setActionError({ action: "share", message: err.message }),
+      onSettled: invalidateBoth,
     });
   };
 
@@ -716,13 +729,12 @@ export function RecordingReader() {
   const manualPolicyOverrideAllowed = allowsManualPolicyOverride(agentTask);
   const taskBlocksManualActions = taskActive && !manualPolicyOverrideAllowed;
   const taskDeleteBlocked = taskActive;
-  const manualActionPending = transcribeMut.isPending || summarizeMut.isPending || sendSummaryMut.isPending;
+  const manualActionPending = transcribeMut.isPending || summarizeMut.isPending || shareRecordingMut.isPending;
   const taskActionBlocked = taskBlocksManualActions;
   const actionsDisabledReason = taskActionBlocked
       ? t("reader.disabled.agentTaskActive")
       : undefined;
-  const shareTargets = (data.shareTargets ?? []) as ShareTarget[];
-  const shareHistory = (data.shareHistory ?? []) as ShareHistoryEntry[];
+  const recordingShare = (data.recordingShare ?? null) as RecordingShareView | null;
   const summaryTemplateOptions = mergeSummaryTemplateOptions(
     (data.summaryTemplateOptions ?? []) as SummaryTemplateOption[],
     summaryPrompts as SummaryPromptRow[] | undefined,
@@ -835,10 +847,10 @@ export function RecordingReader() {
           />
           <SharePopover
             className="reader-action-share"
-            targets={shareTargets}
-            history={shareHistory}
-            pendingChannel={pendingShareChannel}
-            onSend={handleShare}
+            view={recordingShare}
+            pending={shareRecordingMut.isPending || abandonRecordingShareMut.isPending}
+            onConfirm={handleShare}
+            onAbandonUnknown={handleAbandonRecordingShare}
             disabled={!data.summary || data.summaryStale || taskActionBlocked || manualActionPending}
           />
           </div>

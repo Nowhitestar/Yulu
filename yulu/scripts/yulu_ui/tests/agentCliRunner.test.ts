@@ -171,8 +171,8 @@ describe("agentCliRunner", () => {
         connector: "notion",
         allowedTools: ["notion_create_pages"],
         writeGuard: {
-          destination: JSON.stringify({ page_id: "parent-123" }),
-          content: "Yulu Test Share — connection verification only. This message contains no meeting content.",
+          destination: JSON.stringify({ page_id: "meeting-parent-123" }),
+          content: "# Product summary\n\nShip it.",
         },
       }, join(dir, "audit.jsonl")));
       return spawnSync(process.execPath, [guardPath], {
@@ -184,16 +184,30 @@ describe("agentCliRunner", () => {
         encoding: "utf8",
       });
     };
-    const content = "Yulu Test Share — connection verification only. This message contains no meeting content.";
+    const content = "# Product summary\n\nShip it.";
+
+    expect(run({
+      parent: { page_id: "meeting-parent-123" },
+      pages: [{ content }],
+    }).status).toBe(0);
 
     expect(run({
       parent: { page_id: "wrong-parent" },
-      metadata: { destination: { page_id: "parent-123" } },
+      metadata: { destination: { page_id: "meeting-parent-123" } },
       pages: [{ content }],
     }).status).toBe(2);
     expect(run({
-      parent: { page_id: "parent-123" },
+      parent: { page_id: "meeting-parent-123" },
       pages: [{ content }, { content }],
+    }).status).toBe(2);
+    expect(run({
+      parent: { page_id: "meeting-parent-123" },
+      pages: [{ content, properties: { Project: { select: { name: "Secret" } } } }],
+    }).status).toBe(2);
+    expect(run({
+      parent: { page_id: "meeting-parent-123" },
+      pages: [{ content }],
+      metadata: { mode: "silent" },
     }).status).toBe(2);
   });
 

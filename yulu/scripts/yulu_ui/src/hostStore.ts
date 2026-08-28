@@ -254,6 +254,28 @@ export interface SharingTestAction {
   updatedAt: string;
 }
 
+export interface RecordingShareAction {
+  id: string;
+  recordingStem: string;
+  summary: string;
+  summarySha256: string;
+  snapshotSha256: string;
+  connectionId: string;
+  connectionAdapter: string;
+  connectionLabel: string;
+  connectionUpdatedAt: string;
+  connector: SharingConnector;
+  destination: string;
+  confirmedAt: string;
+  duplicateConfirmed: boolean;
+  status: "pending" | "verified" | "failed" | "unknown" | "abandoned";
+  receiptId: string | null;
+  receiptUrl: string | null;
+  detail: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 function summaryDisclosureIdentity(provider: string, disclosureVersion: string) {
   const normalized = provider.trim().toLowerCase();
   const version = disclosureVersion.trim();
@@ -1103,6 +1125,176 @@ export class HostStore {
       confirmedAt: String(row.confirmed_at),
       duplicateConfirmed: Number(row.duplicate_confirmed) === 1,
       status: row.status as SharingTestAction["status"],
+      receiptId: row.receipt_id === null ? null : String(row.receipt_id),
+      receiptUrl: row.receipt_url === null ? null : String(row.receipt_url),
+      detail: String(row.detail),
+      createdAt: String(row.created_at),
+      updatedAt: String(row.updated_at),
+    };
+  }
+
+  getRecordingShareAction(id: string): RecordingShareAction | null {
+    const row = this.db.prepare("SELECT * FROM recording_share_actions WHERE id = ?").get(id);
+    return row ? this.recordingShareActionFromRow(row as Record<string, unknown>) : null;
+  }
+
+  latestRecordingShareAction(snapshotSha256: string): RecordingShareAction | null {
+    const row = this.db.prepare(`
+      SELECT * FROM recording_share_actions
+      WHERE snapshot_sha256 = ? ORDER BY created_at DESC, rowid DESC LIMIT 1
+    `).get(snapshotSha256.toLowerCase());
+    return row ? this.recordingShareActionFromRow(row as Record<string, unknown>) : null;
+  }
+
+  hasVerifiedRecordingShareAction(snapshotSha256: string): boolean {
+    return Boolean(this.db.prepare(`
+      SELECT 1 FROM recording_share_actions
+      WHERE snapshot_sha256 = ? AND status = 'verified' LIMIT 1
+    `).get(snapshotSha256.toLowerCase()));
+  }
+
+  beginRecordingShareAction(input: {
+    id: string;
+    recordingStem: string;
+    summary: string;
+    summarySha256: string;
+    snapshotSha256: string;
+    connectionId: string;
+    connectionAdapter: string;
+    connectionLabel: string;
+    connectionUpdatedAt: string;
+    connector: SharingConnector;
+    destination: string;
+    duplicateConfirmed: boolean;
+  }): { action: RecordingShareAction; created: boolean } {
+    const destination = input.destination.trim();
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(input.id)) {
+      throw new Error("Share Action id must be a UUID");
+    }
+    if (!input.recordingStem.trim() || !input.summary.trim()) {
+      throw new Error("Share Action requires a recording and non-empty summary snapshot");
+    }
+    if (!/^[a-f0-9]{64}$/i.test(input.summarySha256) || !/^[a-f0-9]{64}$/i.test(input.snapshotSha256)) {
+      throw new Error("Share Action snapshot fingerprint is invalid");
+    }
+    const begin = this.db.transaction(() => {
+      const config = this.getSharingConfiguration();
+      const connection = this.listAgentConnectionRecords().find((record) => record.id === input.connectionId);
+      if (
+        !config || config.connectionId !== input.connectionId || config.connector !== input.connector ||
+        config.destination !== destination || !config.destinationSavedAt || !config.testReceipt ||
+        !connection || connection.kind !== "supported-agent" || connection.adapter !== input.connectionAdapter ||
+        connection.label !== input.connectionLabel || connection.updatedAt !== input.connectionUpdatedAt
+      ) {
+        throw new Error("Share Action must snapshot the current proven Sharing configuration");
+      }
+      const existing = this.getRecordingShareAction(input.id);
+      if (existing) {
+        if (
+          existing.recordingStem !== input.recordingStem || existing.summary !== input.summary ||
+          existing.summarySha256 !== input.summarySha256.toLowerCase() ||
+          existing.snapshotSha256 !== input.snapshotSha256.toLowerCase() ||
+          existing.connectionId !== input.connectionId || existing.connectionAdapter !== input.connectionAdapter ||
+          existing.connectionLabel !== input.connectionLabel || existing.connectionUpdatedAt !== input.connectionUpdatedAt ||
+          existing.connector !== input.connector || existing.destination !== destination ||
+          existing.duplicateConfirmed !== input.duplicateConfirmed
+        ) {
+          throw new Error("Share Action id is already bound to a different immutable snapshot");
+        }
+        return { action: existing, created: false };
+      }
+      const unknown = this.db.prepare(`
+        SELECT id FROM recording_share_actions
+        WHERE snapshot_sha256 = ? AND status IN ('pending', 'unknown') LIMIT 1
+      `).get(input.snapshotSha256.toLowerCase());
+      if (unknown) {
+        throw new Error("A Share Action is pending or has an Unknown Outcome; reconcile or abandon it before creating another action");
+      }
+      const timestamp = now();
+      this.db.prepare(`
+        INSERT INTO recording_share_actions (
+          id, recording_stem, summary, summary_sha256, snapshot_sha256,
+          connection_id, connection_adapter, connection_label, connection_updated_at,
+          connector, destination, confirmed_at, duplicate_confirmed,
+          status, receipt_id, receipt_url, detail, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', NULL, NULL, '', ?, ?)
+      `).run(
+        input.id, input.recordingStem, input.summary, input.summarySha256.toLowerCase(),
+        input.snapshotSha256.toLowerCase(), input.connectionId, input.connectionAdapter,
+        input.connectionLabel, input.connectionUpdatedAt, input.connector, destination,
+        timestamp, input.duplicateConfirmed ? 1 : 0, timestamp, timestamp,
+      );
+      return { action: this.getRecordingShareAction(input.id)!, created: true };
+    });
+    return begin.immediate();
+  }
+
+  markRecordingShareActionVerified(id: string, input: {
+    receiptId: string;
+    receiptUrl: string;
+    detail: string;
+  }): RecordingShareAction {
+    const receiptId = input.receiptId.trim();
+    const receiptUrl = input.receiptUrl.trim();
+    if (!receiptId && !receiptUrl) throw new Error("A verified Share Action requires an external receipt identifier or URL");
+    const result = this.db.prepare(`
+      UPDATE recording_share_actions SET status = 'verified', receipt_id = ?, receipt_url = ?,
+        detail = ?, updated_at = ? WHERE id = ? AND status IN ('pending', 'unknown')
+    `).run(receiptId, receiptUrl, input.detail.trim(), now(), id);
+    if (result.changes !== 1) throw new Error("Only a pending or Unknown Outcome Share Action can be verified");
+    return this.getRecordingShareAction(id)!;
+  }
+
+  markRecordingShareActionFailed(id: string, detail: string): RecordingShareAction {
+    const result = this.db.prepare(`
+      UPDATE recording_share_actions SET status = 'failed', detail = ?, updated_at = ?
+      WHERE id = ? AND status = 'pending'
+    `).run(detail.trim(), now(), id);
+    if (result.changes !== 1) throw new Error("Only a pending Share Action can fail");
+    return this.getRecordingShareAction(id)!;
+  }
+
+  markRecordingShareActionUnknown(id: string, input: {
+    detail: string;
+    receiptId?: string;
+    receiptUrl?: string;
+  }): RecordingShareAction {
+    const result = this.db.prepare(`
+      UPDATE recording_share_actions SET status = 'unknown', detail = ?, receipt_id = ?,
+        receipt_url = ?, updated_at = ? WHERE id = ? AND status = 'pending'
+    `).run(
+      input.detail.trim(), input.receiptId?.trim() || null, input.receiptUrl?.trim() || null, now(), id,
+    );
+    if (result.changes !== 1) throw new Error("Only a pending Share Action can become Unknown Outcome");
+    return this.getRecordingShareAction(id)!;
+  }
+
+  abandonRecordingShareAction(id: string): RecordingShareAction {
+    const result = this.db.prepare(`
+      UPDATE recording_share_actions SET status = 'abandoned',
+        detail = 'User abandoned the Unknown Outcome without claiming delivery', updated_at = ?
+      WHERE id = ? AND status = 'unknown'
+    `).run(now(), id);
+    if (result.changes !== 1) throw new Error("Only an Unknown Outcome Share Action can be abandoned");
+    return this.getRecordingShareAction(id)!;
+  }
+
+  private recordingShareActionFromRow(row: Record<string, unknown>): RecordingShareAction {
+    return {
+      id: String(row.id),
+      recordingStem: String(row.recording_stem),
+      summary: String(row.summary),
+      summarySha256: String(row.summary_sha256),
+      snapshotSha256: String(row.snapshot_sha256),
+      connectionId: String(row.connection_id),
+      connectionAdapter: String(row.connection_adapter),
+      connectionLabel: String(row.connection_label),
+      connectionUpdatedAt: String(row.connection_updated_at),
+      connector: row.connector as SharingConnector,
+      destination: String(row.destination),
+      confirmedAt: String(row.confirmed_at),
+      duplicateConfirmed: Number(row.duplicate_confirmed) === 1,
+      status: row.status as RecordingShareAction["status"],
       receiptId: row.receipt_id === null ? null : String(row.receipt_id),
       receiptUrl: row.receipt_url === null ? null : String(row.receipt_url),
       detail: String(row.detail),
@@ -2992,6 +3184,11 @@ export class HostStore {
           detail = 'Host restarted before the Test Share receipt was verified', updated_at = ?
         WHERE status = 'pending'
       `).run(timestamp);
+      this.db.prepare(`
+        UPDATE recording_share_actions SET status = 'unknown',
+          detail = 'Host restarted before the Share Action receipt was verified', updated_at = ?
+        WHERE status = 'pending'
+      `).run(timestamp);
     });
     recover.immediate();
   }
@@ -3227,6 +3424,30 @@ export class HostStore {
       );
       CREATE INDEX IF NOT EXISTS idx_sharing_test_actions_config
         ON sharing_test_actions(connection_id, connector, destination, created_at DESC);
+
+      CREATE TABLE IF NOT EXISTS recording_share_actions (
+        id TEXT PRIMARY KEY,
+        recording_stem TEXT NOT NULL,
+        summary TEXT NOT NULL,
+        summary_sha256 TEXT NOT NULL,
+        snapshot_sha256 TEXT NOT NULL,
+        connection_id TEXT NOT NULL,
+        connection_adapter TEXT NOT NULL,
+        connection_label TEXT NOT NULL,
+        connection_updated_at TEXT NOT NULL,
+        connector TEXT NOT NULL CHECK(connector IN ('notion', 'zulip')),
+        destination TEXT NOT NULL,
+        confirmed_at TEXT NOT NULL,
+        duplicate_confirmed INTEGER NOT NULL DEFAULT 0,
+        status TEXT NOT NULL CHECK(status IN ('pending', 'verified', 'failed', 'unknown', 'abandoned')),
+        receipt_id TEXT,
+        receipt_url TEXT,
+        detail TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_recording_share_actions_snapshot
+        ON recording_share_actions(snapshot_sha256, created_at DESC);
     `);
     const agentConnectionTable = this.db.prepare(
       "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'agent_connections'",

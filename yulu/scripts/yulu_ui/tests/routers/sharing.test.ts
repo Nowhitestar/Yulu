@@ -39,6 +39,7 @@ describe("sharingRouter", () => {
         receiptId: "page-123",
         receiptUrl: "https://notion.so/page-123",
       })),
+      share: vi.fn(),
       verifyReceipt: vi.fn(async () => ({
         destination: "Product Notes",
         receiptId: "page-123",

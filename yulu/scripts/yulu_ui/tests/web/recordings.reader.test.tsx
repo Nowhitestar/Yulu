@@ -6,7 +6,8 @@ const getMock = vi.fn();
 const reprocessMutate = vi.fn();
 const transcribeMutate = vi.fn();
 const summarizeMutate = vi.fn();
-const sendSummaryMutate = vi.fn();
+const shareRecordingMutate = vi.fn();
+const abandonRecordingShareMutate = vi.fn();
 const renameMutate = vi.fn();
 const setTagsMutate = vi.fn();
 const deleteMutate = vi.fn();
@@ -30,7 +31,8 @@ vi.mock("../../web/src/trpc.js", () => ({
       reprocess: { useMutation: () => ({ mutate: reprocessMutate, isPending: false }) },
       transcribe: { useMutation: () => ({ mutate: transcribeMutate, isPending: false }) },
       summarize: { useMutation: () => ({ mutate: summarizeMutate, isPending: false }) },
-      sendSummary: { useMutation: () => ({ mutate: sendSummaryMutate, isPending: false }) },
+      shareRecording: { useMutation: () => ({ mutate: shareRecordingMutate, isPending: false }) },
+      abandonRecordingShare: { useMutation: () => ({ mutate: abandonRecordingShareMutate, isPending: false }) },
       rename: { useMutation: () => ({ mutate: renameMutate, isPending: false }) },
       setTags: { useMutation: () => ({ mutate: setTagsMutate, isPending: false }) },
       delete: { useMutation: () => ({ mutate: deleteMutate, isPending: false }) },
@@ -96,7 +98,7 @@ beforeEach(() => {
   });
   clipboardWriteText.mockClear();
   reprocessMutate.mockClear();
-  transcribeMutate.mockClear(); summarizeMutate.mockClear(); sendSummaryMutate.mockClear();
+  transcribeMutate.mockClear(); summarizeMutate.mockClear(); shareRecordingMutate.mockClear(); abandonRecordingShareMutate.mockClear();
   promptListMock.mockReset();
   promptListMock.mockReturnValue({ data: [] });
   renameMutate.mockClear(); setTagsMutate.mockClear(); deleteMutate.mockClear();
@@ -163,22 +165,146 @@ describe("RecordingReader", () => {
     expect(screen.queryByText(/未找到录音/)).toBeNull();
   });
 
-  it("shares the current summary without reprocessing it", () => {
+  it("shows the immutable Share Action snapshot and cancellation makes no mutation", () => {
     getMock.mockReturnValue({ data: {
       ...baseData,
-      shareTargets: [{ channel: "notion", label: "Notion", destination: "Yulu Meeting", enabled: true, disabledReason: null, lastShare: null }],
-      shareHistory: [],
+      recordingShare: {
+        status: "ready",
+        detail: "Ready for a fresh explicit Share Action",
+        remediation: "",
+        duplicateWarningRequired: false,
+        latestAction: null,
+        snapshot: {
+          hash: "a".repeat(64),
+          recordingStem: baseData.stem,
+          summary: "s",
+          summarySha256: "b".repeat(64),
+          connection: { id: "codex", adapter: "codex", label: "Codex", updatedAt: "2026-08-28T09:00:00Z" },
+          connector: "notion",
+          destination: "Product Notes",
+        },
+      },
     }, isPending: false });
     renderAt(baseData.stem);
 
     fireEvent.click(screen.getByRole("button", { name: /分享摘要/i }));
-    fireEvent.click(screen.getByRole("button", { name: /Notion/i }));
-    expect(sendSummaryMutate).toHaveBeenCalledWith(
-      { stem: baseData.stem, channel: "notion", label: "Notion", destination: "Yulu Meeting" },
+    expect(screen.getByRole("dialog", { name: /确认分享摘要/i })).toHaveTextContent("s");
+    expect(screen.getByRole("dialog", { name: /确认分享摘要/i })).toHaveTextContent("Codex");
+    expect(screen.getByRole("dialog", { name: /确认分享摘要/i })).toHaveTextContent("Product Notes");
+    fireEvent.click(screen.getByRole("button", { name: /取消/i }));
+    expect(shareRecordingMutate).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: /分享摘要/i }));
+    fireEvent.click(screen.getByRole("button", { name: /确认分享/i }));
+    expect(shareRecordingMutate).toHaveBeenCalledWith(
+      {
+        confirmed: true,
+        actionId: expect.stringMatching(/^[0-9a-f-]{36}$/i),
+        stem: baseData.stem,
+        snapshotHash: "a".repeat(64),
+        duplicateConfirmed: false,
+      },
       expect.anything(),
     );
     expect(transcribeMutate).not.toHaveBeenCalled();
     expect(summarizeMutate).not.toHaveBeenCalled();
+  });
+
+  it("requires explicit duplicate confirmation and fences an Unknown Outcome from retry", () => {
+    const snapshot = {
+      hash: "a".repeat(64),
+      recordingStem: baseData.stem,
+      summary: "s",
+      summarySha256: "b".repeat(64),
+      connection: { id: "codex", adapter: "codex", label: "Codex", updatedAt: "2026-08-28T09:00:00Z" },
+      connector: "notion" as const,
+      destination: "Product Notes",
+    };
+    getMock.mockReturnValue({
+      data: {
+        ...baseData,
+        recordingShare: {
+          status: "ready",
+          detail: "Ready",
+          remediation: "",
+          duplicateWarningRequired: true,
+          latestAction: { id: "share-1", status: "verified", receiptId: "page-1", receiptUrl: "", detail: "Verified" },
+          snapshot,
+        },
+      },
+      isPending: false,
+    });
+    const rendered = renderAt(baseData.stem);
+
+    fireEvent.click(screen.getByRole("button", { name: /分享摘要/i }));
+    expect(screen.getByRole("alert")).toHaveTextContent("全新的显式 Share Action");
+    fireEvent.click(screen.getByRole("button", { name: /确认再次分享/i }));
+    expect(shareRecordingMutate).toHaveBeenCalledWith(
+      expect.objectContaining({ snapshotHash: snapshot.hash, duplicateConfirmed: true }),
+      expect.anything(),
+    );
+
+    rendered.unmount();
+    shareRecordingMutate.mockClear();
+    getMock.mockReturnValue({
+      data: {
+        ...baseData,
+        recordingShare: {
+          status: "unknown",
+          detail: "Receipt verification timed out",
+          remediation: "Do not retry. Reconcile or abandon Share Action share-unknown.",
+          duplicateWarningRequired: false,
+          latestAction: { id: "share-unknown", status: "unknown", receiptId: "", receiptUrl: "", detail: "Timed out" },
+          snapshot,
+        },
+      },
+      isPending: false,
+    });
+    renderAt(baseData.stem);
+
+    fireEvent.click(screen.getByRole("button", { name: /分享摘要/i }));
+    expect(screen.getByText(/Do not retry/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /确认分享/i })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: /放弃结果未知的尝试/i }));
+    expect(abandonRecordingShareMutate).toHaveBeenCalledWith(
+      { actionId: "share-unknown", confirmed: true },
+      expect.anything(),
+    );
+    expect(shareRecordingMutate).not.toHaveBeenCalled();
+  });
+
+  it("surfaces a durable non-verified Share Action outcome instead of claiming success", () => {
+    shareRecordingMutate.mockImplementationOnce((_input, options) => options.onSuccess({
+      latestAction: { status: "unknown", detail: "Receipt verification timed out" },
+    }));
+    getMock.mockReturnValue({
+      data: {
+        ...baseData,
+        recordingShare: {
+          status: "ready",
+          detail: "Ready",
+          remediation: "",
+          duplicateWarningRequired: false,
+          latestAction: null,
+          snapshot: {
+            hash: "a".repeat(64),
+            recordingStem: baseData.stem,
+            summary: "s",
+            summarySha256: "b".repeat(64),
+            connection: { id: "codex", adapter: "codex", label: "Codex", updatedAt: "2026-08-28T09:00:00Z" },
+            connector: "notion",
+            destination: "Product Notes",
+          },
+        },
+      },
+      isPending: false,
+    });
+    renderAt(baseData.stem);
+
+    fireEvent.click(screen.getByRole("button", { name: /分享摘要/i }));
+    fireEvent.click(screen.getByRole("button", { name: /确认分享/i }));
+
+    expect(screen.getByRole("alert")).toHaveTextContent("Receipt verification timed out");
   });
 
   it("only disables re-transcription when the WAV is missing", () => {
@@ -343,7 +469,6 @@ describe("RecordingReader", () => {
     fireEvent.click(screen.getByRole("button", { name: /重新转写/i }));
     expect(transcribeMutate).toHaveBeenCalledWith({ stem: baseData.stem }, expect.anything());
     expect(summarizeMutate).not.toHaveBeenCalled();
-    expect(sendSummaryMutate).not.toHaveBeenCalled();
   });
 
   it("passes the selected summary template when regenerating summary", () => {
