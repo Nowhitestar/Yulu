@@ -11,6 +11,12 @@ developers. It includes Core Activation and optional capabilities, and ends at
 Onboarding Completion.
 _Avoid_: Installation wizard
 
+**Onboarding Home**:
+The shared progress surface that presents Core Activation and each optional
+capability without owning their configuration. It returns users to the same
+journey state after an authoritative capability surface completes or defers work.
+_Avoid_: Setup wizard, duplicate settings, first-run overlay
+
 **Activation Journey**:
 The resumable part of Onboarding that guides a user who lacks verified Core
 Activation to that milestone. It may be deferred and reopened without losing
@@ -121,6 +127,12 @@ interactive reads or explicit writes. It is separate from a Yulu Calendar Source
 and does not authorize a Share Action by being configured.
 _Avoid_: Yulu integration, Calendar Source, Share Destination
 
+**Connector Readiness**:
+Current evidence from a bounded Agent Connector operation that its selected
+external service can be reached with runtime-owned authorization. Installation,
+configuration, or destination discovery alone is not readiness.
+_Avoid_: Connector configured, OAuth detected, destination saved
+
 **Capability Readiness**:
 Current, capability-specific evidence from a real invocation that an explicit
 Agent Connection and model can perform the named Agent Capability. Installation,
@@ -176,6 +188,11 @@ native capture. It is distinct from an Agent Connector used for interactive
 calendar reasoning or actions.
 _Avoid_: Calendar connector, Agent calendar
 
+**Calendar Source Readiness**:
+Current evidence that Yulu can access and enumerate the selected Calendar Source.
+An empty event window remains ready when access and enumeration succeed.
+_Avoid_: Upcoming meeting found, calendar configured
+
 **Share Destination**:
 An explicit external target for a saved summary, reached through a selected
 Agent Connector. Saving the target does not authorize an external write.
@@ -185,6 +202,12 @@ _Avoid_: Connector, automatic delivery authorization
 A user-confirmed attempt to send one saved summary to one Share Destination. It
 ends only with a verified receipt, a proven failure, or an Unknown Outcome.
 _Avoid_: Sync, configured sharing, background delivery
+
+**Test Share**:
+A Share Action containing no meeting content that the user explicitly sends to
+prove a selected Agent Connector and Share Destination can accept writes. A
+verified receipt adopts sharing for Onboarding; an unverified result does not.
+_Avoid_: Dry run, implicit write probe, sample meeting share
 
 **Activation Blocker**:
 A named capability that currently prevents progress toward Core Activation. It
