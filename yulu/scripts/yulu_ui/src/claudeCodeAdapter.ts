@@ -274,8 +274,24 @@ export class ClaudeCodeAdapter {
     } catch {
       return {
         status: "failed",
-        reason: "readiness_failed",
-        remediation: `Claude Code ${capability} probe failed; restore native authorization and the exact model, then test again`,
+        reason: "unknown_outcome",
+        remediation: `Claude Code ${capability} probe outcome is unknown; inspect the runtime before creating a new attempt and do not retry automatically`,
+        evidence: {
+          adapter: "claude-code",
+          transport: CLAUDE_CODE_TRANSPORT,
+          runtimeVersion: status.runtimeVersion,
+          authorizationClass: status.authorizationClass,
+          requestedProvider: toolFree ? status.apiProvider : null,
+          requestedModel: input.model,
+          actualProvider: null,
+          actualModel: null,
+          requestId: null,
+          sessionId: null,
+          terminalStatus: "unknown",
+          fallbackOccurred: true,
+          cancellationRequested: false,
+          cancellationConfirmed: null,
+        },
       };
     }
     const evidence = runtimeEvidence(

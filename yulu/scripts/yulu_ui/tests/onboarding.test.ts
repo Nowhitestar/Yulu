@@ -38,6 +38,36 @@ function activationEvidence() {
   };
 }
 
+function conversationEvidence(reference = "conversation-proof-1") {
+  return {
+    kind: "agent-capability-probe",
+    reference,
+    snapshot: {
+      capability: "conversation" as const,
+      connectionId: "codex",
+      adapter: "codex",
+      provider: "codex",
+      model: "gpt-5.6-sol",
+      credentialSource: "runtime-oauth" as const,
+      testedAt: "2026-08-29T00:10:00.000Z",
+      runtimeEvidence: {
+        adapter: "codex",
+        transport: "codex-app-server-stdio",
+        runtimeVersion: "0.144.4",
+        authorizationClass: "chatgpt" as const,
+        requestedProvider: "openai",
+        requestedModel: "gpt-5.6-sol",
+        actualProvider: "openai",
+        actualModel: "gpt-5.6-sol",
+        requestId: "turn-154",
+        sessionId: "thread-154",
+        terminalStatus: "ready" as const,
+        fallbackOccurred: false,
+      },
+    },
+  };
+}
+
 describe("Onboarding durable state", () => {
   let root = "";
   let host: HostStore | undefined;
@@ -61,10 +91,7 @@ describe("Onboarding durable state", () => {
       capability: "conversation",
       contractVersion: "conversation-v1",
       outcome: "adopted",
-      evidence: {
-        kind: "agent-capability-probe",
-        reference: "conversation-proof-1",
-      },
+      evidence: conversationEvidence(),
     });
     const deferred = store.recordOptionalCapabilityOutcome({
       onboardingVersion: "phase-13-v1",
@@ -111,7 +138,7 @@ describe("Onboarding durable state", () => {
       capability: "conversation",
       contractVersion: "conversation-v1",
       outcome: "adopted",
-      evidence: { kind: "agent-capability-probe", reference: "conversation-proof-1" },
+      evidence: conversationEvidence(),
     }, V1_COMPLETION);
     expect(store.getLatestOnboardingCompletion()).toBeNull();
     store.recordOptionalCapabilityOutcome({
@@ -193,6 +220,34 @@ describe("Onboarding durable state", () => {
     });
     expect(onboardingHome(store, V1, {}).completion).toMatchObject({ completed: false });
     expect(store.getLatestOnboardingCompletion()).toBeNull();
+  });
+
+  it("does not project a stored current completion whose Conversation adoption snapshot is invalid", () => {
+    const store = createHost();
+    store.recordCoreActivationEvidence(activationEvidence(), V1_COMPLETION);
+    store.db.prepare(`
+      INSERT INTO optional_capability_outcomes (
+        onboarding_version, capability, contract_version, outcome,
+        evidence_kind, evidence_reference, evidence_snapshot_json, decided_at
+      ) VALUES (?, 'conversation', 'conversation-v1', 'adopted', ?, ?, NULL, ?)
+    `).run(V1.version, "agent-capability-probe", "legacy-mutable-pointer", "2026-08-28T00:00:00.000Z");
+    store.recordOptionalCapabilityOutcome({
+      onboardingVersion: V1.version,
+      capability: "sharing",
+      contractVersion: "sharing-v1",
+      outcome: "deferred",
+      evidence: null,
+    });
+    store.db.prepare(`
+      INSERT INTO onboarding_completions (version, completed_at) VALUES (?, ?)
+    `).run(V1.version, "2026-08-28T00:05:00.000Z");
+
+    expect(onboardingHome(store, V1, {})).toMatchObject({
+      optionalCapabilities: expect.arrayContaining([
+        expect.objectContaining({ id: "conversation", outcome: null }),
+      ]),
+      completion: { completed: false, currentVersionCompleted: false, version: null },
+    });
   });
 
   it("requests one automatic entry only for a fresh Host database", () => {

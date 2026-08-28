@@ -9,6 +9,32 @@ import { CURRENT_ONBOARDING_COMPLETION_REQUIREMENTS } from "../src/onboarding.js
 const NOTION_PAGE_ID = "0123456789abcdef0123456789abcdef";
 const SUMMARY_IDENTITY = { summaryProvider: "hermes", summaryModel: "runtime-managed" } as const;
 
+function exactCodexConversationSnapshot() {
+  return {
+    capability: "conversation" as const,
+    connectionId: "codex",
+    adapter: "codex",
+    provider: "codex",
+    model: "gpt-5.6-sol",
+    credentialSource: "runtime-oauth" as const,
+    testedAt: "2026-08-29T00:10:00.000Z",
+    runtimeEvidence: {
+      adapter: "codex",
+      transport: "codex-app-server-stdio",
+      runtimeVersion: "0.144.4",
+      authorizationClass: "chatgpt" as const,
+      requestedProvider: "openai",
+      requestedModel: "gpt-5.6-sol",
+      actualProvider: "openai",
+      actualModel: "gpt-5.6-sol",
+      requestId: "turn-154",
+      sessionId: "thread-154",
+      terminalStatus: "ready" as const,
+      fallbackOccurred: false,
+    },
+  };
+}
+
 describe("HostStore", () => {
   let root = "";
   let store: HostStore | undefined;
@@ -202,6 +228,275 @@ describe("HostStore", () => {
       runtime_evidence_json: string;
     };
     expect(stored.runtime_evidence_json).not.toMatch(/never-persist|token|prompt|transcript|responseBody/);
+  });
+
+  it("keeps an immutable secret-safe Conversation adoption snapshot after readiness history is removed", () => {
+    createStore();
+    store!.upsertAgentConnectionRecord({
+      id: "codex",
+      kind: "supported-agent",
+      adapter: "codex",
+      label: "Codex",
+      lifecycle: "available",
+      settings: { executablePath: "/fake/codex" },
+    });
+    const readiness = store!.recordAgentConnectionReadiness({
+      connectionId: "codex",
+      capability: "conversation",
+      status: "ready",
+      model: "gpt-5.6-sol",
+      credentialSource: null,
+      detail: "Exact Conversation ready",
+      reason: null,
+      runtimeEvidence: {
+        adapter: "codex",
+        transport: "codex-app-server-stdio",
+        runtimeVersion: "0.144.4",
+        authorizationClass: "chatgpt",
+        requestedProvider: "openai",
+        requestedModel: "gpt-5.6-sol",
+        actualProvider: "openai",
+        actualModel: "gpt-5.6-sol",
+        requestId: "turn-154",
+        sessionId: "thread-154",
+        terminalStatus: "ready",
+        fallbackOccurred: false,
+      },
+      testedAt: "2026-08-29T00:10:00.000Z",
+    });
+
+    store!.recordOptionalCapabilityOutcome({
+      onboardingVersion: "phase-13-v1",
+      capability: "conversation",
+      contractVersion: "conversation-v1",
+      outcome: "adopted",
+      evidence: {
+        kind: "agent-capability-probe",
+        reference: readiness.id,
+        snapshot: {
+          capability: "conversation",
+          connectionId: "codex",
+          adapter: "codex",
+          provider: "codex",
+          model: "gpt-5.6-sol",
+          credentialSource: "runtime-oauth",
+          testedAt: "2026-08-29T00:10:00.000Z",
+          runtimeEvidence: {
+            ...readiness.runtimeEvidence,
+            token: "never-persist-token",
+            prompt: "never-persist-prompt",
+            executablePath: "/Users/private/bin/codex",
+            responseBody: "never-persist-response",
+          } as never,
+        },
+      },
+    });
+    store!.clearAgentConnectionReadinessHistory("codex");
+
+    const outcome = store!.listOptionalCapabilityOutcomes()[0];
+    expect(outcome).toMatchObject({
+      outcome: "adopted",
+      evidence: {
+        kind: "agent-capability-probe",
+        reference: readiness.id,
+        snapshot: {
+          connectionId: "codex",
+          provider: "codex",
+          model: "gpt-5.6-sol",
+          credentialSource: "runtime-oauth",
+          runtimeEvidence: {
+            requestedProvider: "openai",
+            requestedModel: "gpt-5.6-sol",
+            actualProvider: "openai",
+            actualModel: "gpt-5.6-sol",
+            sessionId: "thread-154",
+            terminalStatus: "ready",
+            fallbackOccurred: false,
+          },
+        },
+      },
+    });
+    const serialized = JSON.stringify(outcome);
+    expect(serialized).not.toMatch(/never-persist|token|prompt|executablePath|\/Users\/private/);
+  });
+
+  it("rejects an adopted Conversation outcome without a complete exact evidence snapshot", () => {
+    createStore();
+    expect(() => store!.recordOptionalCapabilityOutcome({
+      onboardingVersion: "phase-13-v1",
+      capability: "conversation",
+      contractVersion: "conversation-v1",
+      outcome: "adopted",
+      evidence: { kind: "agent-capability-probe", reference: "mutable-readiness-pointer" },
+    })).toThrow(/Conversation.*complete.*snapshot/i);
+  });
+
+  it("recovers an interrupted explicit Conversation probe as Unknown after Host restart", () => {
+    createStore();
+    const identity = {
+      connectionId: "codex",
+      adapter: "codex",
+      capability: "conversation" as const,
+      model: "gpt-5.6-sol",
+    };
+    store!.recordAgentConnectionUnknownOutcomeFence(identity);
+    const interruptedAttempt = store!.beginAgentConnectionUnknownOutcomeAttempt(identity);
+    expect(store!.getAgentConnectionUnknownOutcomeFence(identity)).toMatchObject({
+      state: "attempting",
+      attemptId: interruptedAttempt,
+    });
+
+    const dbPath = join(root, "host.sqlite");
+    store!.close();
+    store = new HostStore(dbPath);
+    expect(store.getAgentConnectionUnknownOutcomeFence(identity)).toMatchObject({
+      state: "unknown",
+      attemptId: null,
+    });
+    expect(store.beginAgentConnectionUnknownOutcomeAttempt(identity)).toEqual(expect.any(String));
+  });
+
+  it.each(["ready", "failed"] as const)(
+    "reconciles an interrupted fence from a durably proven %s probe after restart",
+    (status) => {
+      createStore();
+      const identity = {
+        connectionId: "codex",
+        adapter: "codex",
+        capability: "conversation" as const,
+        model: "gpt-5.6-sol",
+      };
+      store!.upsertAgentConnectionRecord({
+        id: "codex",
+        kind: "supported-agent",
+        adapter: "codex",
+        label: "Codex",
+        lifecycle: "available",
+        settings: { executablePath: "/fake/codex", conversationModel: "gpt-5.6-sol" },
+      });
+      store!.recordAgentConnectionUnknownOutcomeFence(identity);
+      store!.beginAgentConnectionUnknownOutcomeAttempt(identity);
+      store!.recordAgentConnectionReadiness({
+        connectionId: "codex",
+        capability: "conversation",
+        status,
+        model: "gpt-5.6-sol",
+        credentialSource: null,
+        detail: `Conversation ${status}`,
+        reason: status === "ready" ? null : "readiness_failed",
+        runtimeEvidence: {
+          adapter: "codex",
+          transport: "codex-app-server-stdio",
+          runtimeVersion: "0.144.4",
+          authorizationClass: "chatgpt",
+          requestedProvider: "openai",
+          requestedModel: "gpt-5.6-sol",
+          actualProvider: status === "ready" ? "openai" : null,
+          actualModel: status === "ready" ? "gpt-5.6-sol" : null,
+          requestId: null,
+          sessionId: status === "ready" ? "thread-154" : null,
+          terminalStatus: status,
+          fallbackOccurred: status === "ready" ? false : true,
+        },
+        testedAt: new Date(Date.now() + 1_000).toISOString(),
+      });
+
+      const dbPath = join(root, "host.sqlite");
+      store!.close();
+      store = new HostStore(dbPath);
+      expect(store.getAgentConnectionUnknownOutcomeFence(identity)).toBeNull();
+    },
+  );
+
+  it.each([
+    ["malformed JSON", "{not-json"],
+    ["structurally incomplete JSON", JSON.stringify({ capability: "conversation", model: "gpt-5.6-sol" })],
+    ["wrong capability", JSON.stringify({ ...exactCodexConversationSnapshot(), capability: "summary" })],
+    ["invalid testedAt", JSON.stringify({ ...exactCodexConversationSnapshot(), testedAt: "not-a-date" })],
+    ["empty transport", JSON.stringify({
+      ...exactCodexConversationSnapshot(),
+      runtimeEvidence: { ...exactCodexConversationSnapshot().runtimeEvidence, transport: "" },
+    })],
+    ["missing runtime version", JSON.stringify({
+      ...exactCodexConversationSnapshot(),
+      runtimeEvidence: { ...exactCodexConversationSnapshot().runtimeEvidence, runtimeVersion: null },
+    })],
+  ])("fails closed instead of projecting adopted Conversation with %s", (_label, snapshotJson) => {
+    createStore();
+    store!.db.prepare(`
+      INSERT INTO optional_capability_outcomes (
+        onboarding_version, capability, contract_version, outcome,
+        evidence_kind, evidence_reference, evidence_snapshot_json, decided_at
+      ) VALUES (?, 'conversation', 'conversation-v1', 'adopted', ?, ?, ?, ?)
+    `).run(
+      "phase-13-v1",
+      "agent-capability-probe",
+      "readiness-proof-154",
+      snapshotJson,
+      "2026-08-29T00:10:00.000Z",
+    );
+
+    expect(store!.listOptionalCapabilityOutcomes()).toEqual([]);
+  });
+
+  it("allows an invalid legacy Conversation adoption audit row to be replaced by explicit deferral", () => {
+    createStore();
+    store!.db.prepare(`
+      INSERT INTO optional_capability_outcomes (
+        onboarding_version, capability, contract_version, outcome,
+        evidence_kind, evidence_reference, evidence_snapshot_json, decided_at
+      ) VALUES ('phase-13-v1', 'conversation', 'conversation-v1', 'adopted', ?, ?, NULL, ?)
+    `).run("agent-capability-probe", "legacy-mutable-pointer", "2026-08-28T00:00:00.000Z");
+
+    expect(store!.recordOptionalCapabilityOutcome({
+      onboardingVersion: "phase-13-v1",
+      capability: "conversation",
+      contractVersion: "conversation-v1",
+      outcome: "deferred",
+      evidence: null,
+    })).toMatchObject({ capability: "conversation", outcome: "deferred", evidence: null });
+    expect(store!.listOptionalCapabilityOutcomes()).toEqual([
+      expect.objectContaining({ capability: "conversation", outcome: "deferred" }),
+    ]);
+  });
+
+  it("adds the Conversation evidence snapshot column to an existing onboarding database", () => {
+    root = mkdtempSync(join(tmpdir(), "yulu-host-store-"));
+    const dbPath = join(root, "host.sqlite");
+    const legacy = new Database(dbPath);
+    legacy.exec(`
+      CREATE TABLE optional_capability_outcomes (
+        onboarding_version TEXT NOT NULL,
+        capability TEXT NOT NULL,
+        contract_version TEXT NOT NULL,
+        outcome TEXT NOT NULL,
+        evidence_kind TEXT,
+        evidence_reference TEXT,
+        decided_at TEXT NOT NULL,
+        PRIMARY KEY(onboarding_version, capability, contract_version)
+      );
+      INSERT INTO optional_capability_outcomes VALUES (
+        'phase-13-v1', 'conversation', 'conversation-v1', 'deferred', NULL, NULL,
+        '2026-08-28T00:00:00.000Z'
+      );
+      INSERT INTO optional_capability_outcomes VALUES (
+        'phase-12-v1', 'conversation', 'conversation-v1', 'adopted',
+        'agent-capability-probe', 'legacy-mutable-pointer', '2026-08-27T00:00:00.000Z'
+      );
+    `);
+    legacy.close();
+
+    store = new HostStore(dbPath);
+    expect(store.db.prepare("PRAGMA table_info(optional_capability_outcomes)").all())
+      .toEqual(expect.arrayContaining([expect.objectContaining({ name: "evidence_snapshot_json" })]));
+    expect(store.listOptionalCapabilityOutcomes()).toEqual([
+      expect.objectContaining({
+        onboardingVersion: "phase-13-v1",
+        capability: "conversation",
+        outcome: "deferred",
+        evidence: null,
+      }),
+    ]);
   });
 
   it.each([

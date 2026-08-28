@@ -82,7 +82,9 @@ function readinessFailure(
       ? t("agentConnections.credentialSource.oauth")
       : t("agentConnections.credentialSource.none");
   if (readiness.reason === "unknown_outcome") {
-    return t("agentConnections.remediation.unknownOutcome", { model: readiness.model, source });
+    return t(capability === "conversation"
+      ? "agentConnections.remediation.conversationUnknownOutcome"
+      : "agentConnections.remediation.unknownOutcome", { model: readiness.model, source });
   }
   if (capability === "transcription") {
     if (readiness.reason === "missing_credentials") {
@@ -128,6 +130,7 @@ export function AgentConnections({ embedded = false }: { embedded?: boolean } = 
   const select = trpc.agentConnections.select.useMutation();
   const selectCredentialSource = trpc.agentConnections.selectCredentialSource.useMutation();
   const probe = trpc.agentConnections.probe.useMutation();
+  const createConversationProbeAttempt = trpc.agentConnections.createConversationProbeAttempt.useMutation();
   const acceptDisclosure = trpc.agentConnections.acceptDisclosure.useMutation();
   const restoreDirectXai = trpc.agentConnections.restoreDirectXai.useMutation();
   const authorize = trpc.agentConnections.authorize.useMutation();
@@ -446,6 +449,9 @@ export function AgentConnections({ embedded = false }: { embedded?: boolean } = 
               const current = testing ? "testing" : item.currentReadiness.status;
               const history = item.readinessHistory[0];
               const model = modelDrafts[capability] ?? item.currentReadiness.model;
+              const requiresNewAttempt = capability === "conversation" &&
+                ((item.currentReadiness.reason === "unknown_outcome" && item.currentReadiness.model === model) ||
+                  (history?.reason === "unknown_outcome" && history.model === model));
               return (
                 <article
                   id={`agent-connection-${connection.id}-${capability}`}
@@ -524,12 +530,20 @@ export function AgentConnections({ embedded = false }: { embedded?: boolean } = 
                     <button
                       type="button"
                       disabled={!connection.authorization.connected || !item.selected ||
-                        item.disclosure?.required === true || probe.isPending}
-                      onClick={() => void run(() => probe.mutateAsync({ connectionId: connection.id, capability }))}
+                        item.disclosure?.required === true || probe.isPending ||
+                        createConversationProbeAttempt.isPending}
+                      onClick={() => void run(() => requiresNewAttempt
+                        ? createConversationProbeAttempt.mutateAsync({
+                            connectionId: connection.id,
+                            model,
+                          })
+                        : probe.mutateAsync({ connectionId: connection.id, capability }))}
                     >
                       {testing
                         ? t("agentConnections.readiness.testing")
-                        : t(`agentConnections.test.${capability}`)}
+                        : requiresNewAttempt
+                          ? t("agentConnections.test.newConversationAttempt")
+                          : t(`agentConnections.test.${capability}`)}
                     </button>
                   </div>
                 </article>
@@ -646,6 +660,10 @@ export function AgentConnections({ embedded = false }: { embedded?: boolean } = 
                 const testing = probe.isPending && probe.variables?.connectionId === agent.id &&
                   probe.variables.capability === capability;
                 const current = testing ? "testing" : item.currentReadiness.status;
+                const history = item.readinessHistory[0];
+                const requiresNewAttempt = capability === "conversation" &&
+                  ((item.currentReadiness.reason === "unknown_outcome" && item.currentReadiness.model === model) ||
+                    (history?.reason === "unknown_outcome" && history.model === model));
                 const disclosureAcceptedLocally = acceptedSupportedDisclosures.has(modelKey);
                 return (
                   <article
@@ -716,16 +734,24 @@ export function AgentConnections({ embedded = false }: { embedded?: boolean } = 
                       <button
                         type="button"
                         disabled={!agent.authorization.connected || probe.isPending ||
+                          createConversationProbeAttempt.isPending ||
                           (item.disclosure?.required === true && !disclosureAcceptedLocally)}
-                        onClick={() => void run(() => probe.mutateAsync({
-                          connectionId: agent.id,
-                          capability,
-                          model,
-                        }))}
+                        onClick={() => void run(() => requiresNewAttempt
+                          ? createConversationProbeAttempt.mutateAsync({
+                              connectionId: agent.id,
+                              model,
+                            })
+                          : probe.mutateAsync({
+                              connectionId: agent.id,
+                              capability,
+                              model,
+                            }))}
                       >
                         {testing
                           ? t("agentConnections.readiness.testing")
-                          : t(`agentConnections.test.${capability}`)}
+                          : requiresNewAttempt
+                            ? t("agentConnections.test.newConversationAttempt")
+                            : t(`agentConnections.test.${capability}`)}
                       </button>
                     </div>
                   </article>

@@ -201,6 +201,32 @@ describe.each(["hermes", "openclaw"] as const)("%s Conversation-only adapter", (
     expect(ConversationOnlyAgentConversationError).toBeTypeOf("function");
   });
 
+  it("classifies an unproven post-dispatch transport loss as Unknown Outcome with minimal evidence", async () => {
+    const model = kind === "hermes" ? "grok-4.6" : "openai/gpt-5.5";
+    const runtime = client(kind, {
+      runConversation: vi.fn(async () => {
+        throw new Error("transport lost after dispatch");
+      }),
+    });
+    const adapter = new ConversationOnlyAgentAdapter({ adapter: kind, executable: `/fake/${kind}`, client: runtime });
+
+    await expect(adapter.probe({ model })).resolves.toMatchObject({
+      status: "failed",
+      reason: "unknown_outcome",
+      evidence: {
+        adapter: kind,
+        requestedProvider: kind === "hermes" ? "xai" : "openai-codex",
+        requestedModel: model,
+        actualProvider: null,
+        actualModel: null,
+        requestId: null,
+        sessionId: null,
+        terminalStatus: "unknown",
+        fallbackOccurred: null,
+      },
+    });
+  });
+
   it("rejects provider drift before invoking a paid Conversation", async () => {
     const runtime = client(kind);
     const adapter = new ConversationOnlyAgentAdapter({ adapter: kind, executable: `/fake/${kind}`, client: runtime });

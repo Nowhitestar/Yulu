@@ -24,6 +24,7 @@ const READINESS_LABELS = {
 export function OnboardingHome() {
   const t = useT();
   const home = trpc.onboarding.status.useQuery(undefined, { retry: false });
+  const adoptConversation = trpc.onboarding.adoptConversation.useMutation();
   const deferOptional = trpc.onboarding.deferOptionalCapability.useMutation();
   const deferActivation = trpc.onboarding.deferActivationJourney.useMutation();
   const utils = trpc.useUtils();
@@ -132,6 +133,16 @@ export function OnboardingHome() {
                   <Link className="onboarding-action primary" to={capability.href}>
                     {t("onboarding.action.open")}
                   </Link>
+                )}
+                {capability.id === "conversation" && !capability.outcome && (
+                  <button
+                    type="button"
+                    className="onboarding-action"
+                    disabled={adoptConversation.isPending}
+                    onClick={() => void run(() => adoptConversation.mutateAsync())}
+                  >
+                    {t("onboarding.action.adoptConversation")}
+                  </button>
                 )}
                 {!capability.outcome && (
                   <button

@@ -180,6 +180,7 @@ vi.mock("../../../web/src/trpc.js", () => {
         select: { useMutation: noopMutation },
         selectCredentialSource: { useMutation: noopMutation },
         probe: { useMutation: noopMutation },
+        createConversationProbeAttempt: { useMutation: noopMutation },
         acceptDisclosure: { useMutation: noopMutation },
         restoreDirectXai: { useMutation: noopMutation },
         authorize: { useMutation: noopMutation },

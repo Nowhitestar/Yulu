@@ -5,6 +5,7 @@ import { createMemoryRouter, RouterProvider } from "react-router";
 import { LanguageProvider } from "../../../web/src/i18n/LanguageProvider.js";
 
 const onboarding = vi.hoisted(() => ({
+  adoptConversation: vi.fn(async () => ({})),
   deferOptional: vi.fn(async () => ({})),
   deferActivation: vi.fn(async () => ({})),
   invalidate: vi.fn(async () => ({})),
@@ -64,6 +65,9 @@ vi.mock("../../../web/src/trpc.js", () => ({
       deferOptionalCapability: {
         useMutation: () => ({ mutateAsync: onboarding.deferOptional, isPending: false }),
       },
+      adoptConversation: {
+        useMutation: () => ({ mutateAsync: onboarding.adoptConversation, isPending: false }),
+      },
       deferActivationJourney: {
         useMutation: () => ({ mutateAsync: onboarding.deferActivation, isPending: false }),
       },
@@ -90,6 +94,7 @@ function renderRoute() {
 afterEach(() => {
   localStorage.clear();
   onboarding.deferOptional.mockClear();
+  onboarding.adoptConversation.mockClear();
   onboarding.deferActivation.mockClear();
   onboarding.invalidate.mockClear();
 });
@@ -124,5 +129,24 @@ describe("/onboarding", () => {
 
     expect(onboarding.deferOptional).toHaveBeenCalledWith({ capability: "calendar-source" });
     expect(onboarding.invalidate).toHaveBeenCalledOnce();
+  });
+
+  it("explicitly adopts a selected and proven Conversation without changing its settings", async () => {
+    const conversation = onboarding.data.optionalCapabilities[0]!;
+    const savedOutcome = conversation.outcome;
+    const savedReadiness = conversation.readiness;
+    conversation.outcome = null as never;
+    conversation.readiness = { state: "ready", detail: "Exact Codex probe passed" };
+    const user = userEvent.setup();
+    renderRoute();
+
+    const card = screen.getByTestId("onboarding-capability-conversation");
+    await user.click(screen.getByRole("button", { name: "Adopt proven Conversation" }));
+
+    expect(onboarding.adoptConversation).toHaveBeenCalledWith();
+    expect(onboarding.invalidate).toHaveBeenCalledOnce();
+    expect(card.querySelector('a[href="/settings/llm?capability=conversation"]')).not.toBeNull();
+    conversation.outcome = savedOutcome;
+    conversation.readiness = savedReadiness;
   });
 });

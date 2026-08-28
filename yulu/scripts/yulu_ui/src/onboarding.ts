@@ -78,8 +78,7 @@ export function onboardingHome(
 ) {
   const evidence = host.getCoreActivationEvidence();
   const outcomes = host.listOptionalCapabilityOutcomes();
-  const previousCompletion = host.getLatestOnboardingCompletion();
-  const currentCompletion = host.getOnboardingCompletion(manifest.version);
+  const latestCompletion = host.getLatestOnboardingCompletion();
   const optionalCapabilities = manifest.optionalCapabilities.map((capability) => ({
     ...capability,
     outcome: outcomeFor(outcomes, capability.id, capability.contractVersion),
@@ -87,9 +86,16 @@ export function onboardingHome(
       state: "not_tested" as const,
       detail: "Current readiness has not been evaluated",
     },
-    isNew: previousCompletion !== null &&
+    isNew: latestCompletion !== null &&
       outcomeFor(outcomes, capability.id, capability.contractVersion) === null,
   }));
+  const storedCurrentCompletion = host.getOnboardingCompletion(manifest.version);
+  const currentCompletion = evidence !== null && optionalCapabilities.every((capability) =>
+      capability.outcome !== null
+    )
+    ? storedCurrentCompletion
+    : null;
+  const previousCompletion = currentCompletion ?? host.getLatestOnboardingCompletion(manifest.version);
   const completion = currentCompletion ?? previousCompletion;
 
   return {

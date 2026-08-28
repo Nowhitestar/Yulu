@@ -90,6 +90,35 @@ export const onboardingRouter = router({
     journey: ctx.host.deferActivationJourney(),
     attempt: ctx.host.getActivationAttempt(),
   })),
+  adoptConversation: uiMutationProcedure.mutation(async ({ ctx }) => {
+    if (!ctx.agentConnections) {
+      throw new Error("Agent Connection Center is unavailable");
+    }
+    const proof = await ctx.agentConnections.conversationAdoptionEvidence();
+    const outcome = ctx.host.recordOptionalCapabilityOutcome({
+      onboardingVersion: CURRENT_ONBOARDING_MANIFEST.version,
+      capability: "conversation",
+      contractVersion: CURRENT_ONBOARDING_MANIFEST.optionalCapabilities.find(
+        (capability) => capability.id === "conversation",
+      )!.contractVersion,
+      outcome: "adopted",
+      evidence: {
+        kind: proof.kind,
+        reference: proof.reference,
+        snapshot: {
+          capability: "conversation",
+          connectionId: proof.connectionId,
+          adapter: proof.adapter,
+          provider: proof.provider,
+          model: proof.model,
+          credentialSource: proof.credentialSource ?? "runtime-oauth",
+          testedAt: proof.testedAt,
+          runtimeEvidence: proof.runtimeEvidence,
+        },
+      },
+    }, CURRENT_ONBOARDING_COMPLETION_REQUIREMENTS);
+    return { outcome, proof };
+  }),
   deferOptionalCapability: uiMutationProcedure
     .input(z.object({ capability: optionalCapability }).strict())
     .mutation(({ ctx, input }) => {

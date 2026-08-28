@@ -45,6 +45,12 @@ export const agentConnectionsRouter = router({
       model: z.string().trim().min(1).max(128).optional(),
     }).strict())
     .mutation(({ ctx, input }) => center(ctx).probe(input)),
+  createConversationProbeAttempt: uiMutationProcedure
+    .input(z.object({
+      connectionId: z.string().min(1).max(200),
+      model: z.string().trim().min(1).max(128).optional(),
+    }).strict())
+    .mutation(({ ctx, input }) => center(ctx).createConversationProbeAttempt(input)),
   acceptDisclosure: uiMutationProcedure
     .input(z.object({
       connectionId: z.string().min(1).max(200),

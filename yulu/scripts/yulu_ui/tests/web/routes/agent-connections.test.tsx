@@ -6,6 +6,7 @@ import { LanguageProvider } from "../../../web/src/i18n/LanguageProvider.js";
 
 const mocks = vi.hoisted(() => ({
   probe: vi.fn(async () => ({ status: "ready" })),
+  createConversationProbeAttempt: vi.fn(async () => ({ status: "ready" })),
   refresh: vi.fn(async () => ({})),
   startNativeAuthorization: vi.fn(async () => ({ launched: true })),
   refreshNativeAuthorizationStatus: vi.fn(async () => ({
@@ -355,6 +356,9 @@ vi.mock("../../../web/src/trpc.js", () => {
       agentConnections: {
         view: { useQuery: () => ({ data: mocks.view, isPending: false, isError: false, refetch: mocks.refetchView }) },
         probe: { useMutation: () => mutation(mocks.probe) },
+        createConversationProbeAttempt: {
+          useMutation: () => mutation(mocks.createConversationProbeAttempt),
+        },
         refreshCandidates: { useMutation: () => mutation(mocks.refresh) },
         startNativeAuthorization: { useMutation: () => mutation(mocks.startNativeAuthorization) },
         refreshNativeAuthorizationStatus: { useMutation: () => mutation(mocks.refreshNativeAuthorizationStatus) },
@@ -405,6 +409,81 @@ beforeEach(() => {
 });
 
 describe("shared Agent Connection Center", () => {
+  it("requires an explicit new Conversation probe attempt after Unknown Outcome", async () => {
+    const direct = mocks.view.connections.find((connection) => connection.id === "direct-xai")!;
+    const conversation = direct.capabilities.find((capability) => capability.capability === "conversation")!;
+    const saved = conversation.currentReadiness;
+    const savedHistory = conversation.readinessHistory;
+    conversation.currentReadiness = {
+      status: "untested",
+      model: "grok-conversation",
+      credentialSource: null,
+      testedAt: null,
+      detail: "Not tested in this Host process",
+    } as never;
+    conversation.readinessHistory = [{
+      status: "failed",
+      model: "grok-conversation",
+      credentialSource: "oauth",
+      testedAt: "2026-08-29T00:00:00.000Z",
+      detail: "Conversation probe entered Unknown Outcome",
+      reason: "unknown_outcome",
+    }] as never;
+    mount("en");
+    const user = userEvent.setup();
+    const capability = screen.getByTestId("connection-capability-conversation");
+
+    expect(within(capability).queryByRole("button", { name: "Test conversation" }))
+      .not.toBeInTheDocument();
+    await user.click(within(capability).getByRole("button", {
+      name: "Create new Conversation test attempt",
+    }));
+
+    expect(mocks.createConversationProbeAttempt).toHaveBeenCalledWith({
+      connectionId: "direct-xai",
+      model: "grok-conversation",
+    });
+    expect(mocks.probe).not.toHaveBeenCalled();
+    conversation.currentReadiness = saved;
+    conversation.readinessHistory = savedHistory;
+  });
+
+  it("does not apply an old-model Conversation Unknown fence to a new model draft", async () => {
+    const direct = mocks.view.connections.find((connection) => connection.id === "direct-xai")!;
+    const conversation = direct.capabilities.find((capability) => capability.capability === "conversation")!;
+    const saved = conversation.currentReadiness;
+    const savedHistory = conversation.readinessHistory;
+    conversation.currentReadiness = {
+      status: "untested",
+      model: "grok-old",
+      credentialSource: null,
+      testedAt: null,
+      detail: "Not tested in this Host process",
+      reason: "unknown_outcome",
+    } as never;
+    conversation.readinessHistory = [{
+      status: "failed",
+      model: "grok-old",
+      credentialSource: null,
+      reason: "unknown_outcome",
+      testedAt: "2026-08-29T00:00:00.000Z",
+      detail: "Conversation probe entered Unknown Outcome",
+    }] as never;
+    mount("en");
+    const user = userEvent.setup();
+    const capability = screen.getByTestId("connection-capability-conversation");
+    await user.clear(within(capability).getByRole("textbox"));
+    await user.type(within(capability).getByRole("textbox"), "grok-new");
+
+    expect(within(capability).getByRole("button", { name: "Test conversation" }))
+      .toBeInTheDocument();
+    expect(within(capability).queryByRole("button", {
+      name: "Create new Conversation test attempt",
+    })).not.toBeInTheDocument();
+    conversation.currentReadiness = saved;
+    conversation.readinessHistory = savedHistory;
+  });
+
   it("preserves exact remediation parameters when redirecting the legacy center path", async () => {
     render(
       <MemoryRouter initialEntries={["/agent-connections?connection=codex&capability=summary"]}>

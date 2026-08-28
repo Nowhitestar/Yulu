@@ -157,8 +157,20 @@ export interface OptionalCapabilityOutcome {
   evidence: {
     kind: string;
     reference: string;
+    snapshot?: ConversationCapabilityEvidenceSnapshot;
   } | null;
   decidedAt: string;
+}
+
+export interface ConversationCapabilityEvidenceSnapshot {
+  capability: "conversation";
+  connectionId: string;
+  adapter: string;
+  provider: string;
+  model: string;
+  credentialSource: "oauth" | "api-key" | "runtime-oauth";
+  testedAt: string;
+  runtimeEvidence: PersistedAgentConnectionReadiness["runtimeEvidence"];
 }
 
 export interface OnboardingCompletion {
@@ -261,6 +273,16 @@ export interface PersistedAgentConnectionReadiness {
     cancellationConfirmed?: boolean | null;
   };
   testedAt: string;
+}
+
+export interface AgentConnectionUnknownOutcomeFence {
+  connectionId: string;
+  adapter: string;
+  capability: "conversation";
+  model: string;
+  state: "unknown" | "probing" | "attempting";
+  attemptId: string | null;
+  updatedAt: string;
 }
 
 export interface AgentConnectionDataPathDisclosure {
@@ -482,6 +504,86 @@ function secretSafeReadinessEvidence(
       ? { cancellationConfirmed: raw.cancellationConfirmed as boolean | null }
       : {}),
   };
+}
+
+function secretSafeConversationEvidenceSnapshot(
+  input: ConversationCapabilityEvidenceSnapshot,
+): ConversationCapabilityEvidenceSnapshot | null {
+  const raw = input as unknown as Record<string, unknown>;
+  const connectionId = boundedEvidenceString(raw.connectionId, 200);
+  const adapter = boundedEvidenceString(raw.adapter, 100);
+  const provider = boundedEvidenceString(raw.provider, 128);
+  const model = boundedEvidenceString(raw.model, 128);
+  const testedAt = boundedEvidenceString(raw.testedAt, 100);
+  const credentialSource = raw.credentialSource === "oauth" || raw.credentialSource === "api-key" ||
+    raw.credentialSource === "runtime-oauth" ? raw.credentialSource : null;
+  if (raw.capability !== "conversation" || !connectionId || !adapter || !provider || !model ||
+    !testedAt || !credentialSource || Number.isNaN(Date.parse(testedAt)) ||
+    new Date(testedAt).toISOString() !== testedAt) return null;
+  if (!raw.runtimeEvidence || typeof raw.runtimeEvidence !== "object" || Array.isArray(raw.runtimeEvidence)) {
+    return null;
+  }
+  const runtimeEvidence = secretSafeReadinessEvidence(
+    raw.runtimeEvidence as PersistedAgentConnectionReadiness["runtimeEvidence"],
+  );
+  const directXai = adapter === "direct-xai";
+  const supportedAgent = adapter === "codex" || adapter === "claude-code" ||
+    adapter === "hermes" || adapter === "openclaw";
+  const expectedTransport = adapter === "direct-xai"
+    ? "xai-http"
+    : adapter === "codex"
+      ? "codex-app-server-stdio"
+      : adapter === "claude-code"
+        ? "claude-code-print-stream-json"
+        : adapter === "hermes" ? "hermes-cli-chat" : "openclaw-cli-gateway-json";
+  const exactRuntimeIdentity = runtimeEvidence.transport === expectedTransport &&
+    (directXai
+      ? runtimeEvidence.runtimeVersion === null
+      : Boolean(runtimeEvidence.runtimeVersion && /^\d+\.\d+\.\d+(?:[-+ ].*)?$/.test(
+          runtimeEvidence.runtimeVersion,
+        )));
+  const exactProvider = directXai
+    ? provider === "xai" && runtimeEvidence.requestedProvider === "xai" &&
+      runtimeEvidence.actualProvider === "xai"
+    : adapter === "codex"
+      ? provider === "codex" && runtimeEvidence.requestedProvider === "openai" &&
+        runtimeEvidence.actualProvider === "openai" && runtimeEvidence.authorizationClass === "chatgpt"
+      : adapter === "claude-code"
+        ? provider === "claude-code" && runtimeEvidence.requestedProvider === null &&
+          runtimeEvidence.actualProvider === null && runtimeEvidence.authorizationClass === "claude-subscription"
+        : provider === adapter && Boolean(runtimeEvidence.requestedProvider) &&
+          runtimeEvidence.actualProvider === runtimeEvidence.requestedProvider;
+  const exactCredential = directXai
+    ? credentialSource === "oauth" || credentialSource === "api-key"
+    : credentialSource === "runtime-oauth";
+  if (
+    (!directXai && !supportedAgent) || runtimeEvidence.adapter !== adapter ||
+    runtimeEvidence.requestedModel !== model || runtimeEvidence.actualModel !== model ||
+    runtimeEvidence.terminalStatus !== "ready" || runtimeEvidence.fallbackOccurred !== false ||
+    !exactProvider || !exactCredential || !exactRuntimeIdentity ||
+    (!directXai && adapter !== "openclaw" && !runtimeEvidence.sessionId)
+  ) return null;
+  return {
+    capability: "conversation",
+    connectionId,
+    adapter,
+    provider,
+    model,
+    credentialSource,
+    testedAt,
+    runtimeEvidence,
+  };
+}
+
+function readConversationEvidenceSnapshot(value: string | null): ConversationCapabilityEvidenceSnapshot | null {
+  if (!value) return null;
+  try {
+    return secretSafeConversationEvidenceSnapshot(
+      JSON.parse(value) as ConversationCapabilityEvidenceSnapshot,
+    );
+  } catch {
+    return null;
+  }
 }
 
 export interface NotionDelivery {
@@ -889,6 +991,168 @@ export class HostStore {
   clearAgentConnectionReadinessHistory(connectionId: string): void {
     this.db.prepare("DELETE FROM agent_connection_readiness_history WHERE connection_id = ?")
       .run(connectionId);
+  }
+
+  getAgentConnectionUnknownOutcomeFence(input: {
+    connectionId: string;
+    adapter: string;
+    capability: "conversation";
+    model: string;
+  }): AgentConnectionUnknownOutcomeFence | null {
+    const row = this.db.prepare(`
+      SELECT connection_id, adapter, capability, model, state, attempt_id, updated_at
+      FROM agent_connection_unknown_outcome_fences
+      WHERE connection_id = ? AND adapter = ? AND capability = ? AND model = ?
+    `).get(input.connectionId, input.adapter, input.capability, input.model) as {
+      connection_id: string;
+      adapter: string;
+      capability: "conversation";
+      model: string;
+      state: "unknown" | "probing" | "attempting";
+      attempt_id: string | null;
+      updated_at: string;
+    } | undefined;
+    return row ? {
+      connectionId: row.connection_id,
+      adapter: row.adapter,
+      capability: row.capability,
+      model: row.model,
+      state: row.state,
+      attemptId: row.attempt_id,
+      updatedAt: row.updated_at,
+    } : null;
+  }
+
+  recordAgentConnectionUnknownOutcomeFence(input: {
+    connectionId: string;
+    adapter: string;
+    capability: "conversation";
+    model: string;
+  }): AgentConnectionUnknownOutcomeFence {
+    this.db.prepare(`
+      INSERT INTO agent_connection_unknown_outcome_fences (
+        connection_id, adapter, capability, model, state, attempt_id, updated_at
+      ) VALUES (?, ?, ?, ?, 'unknown', NULL, ?)
+      ON CONFLICT(connection_id, adapter, capability, model) DO UPDATE SET
+        state = 'unknown', attempt_id = NULL, updated_at = excluded.updated_at
+      WHERE agent_connection_unknown_outcome_fences.state = 'unknown'
+    `).run(input.connectionId, input.adapter, input.capability, input.model, now());
+    return this.getAgentConnectionUnknownOutcomeFence(input)!;
+  }
+
+  beginAgentConnectionUnknownOutcomeAttempt(input: {
+    connectionId: string;
+    adapter: string;
+    capability: "conversation";
+    model: string;
+  }): string {
+    return this.db.transaction(() => {
+      const fence = this.getAgentConnectionUnknownOutcomeFence(input);
+      if (!fence) {
+        throw new Error("Conversation does not have an Unknown Outcome requiring a new probe attempt");
+      }
+      if (fence.state === "attempting") {
+        throw new Error("An explicit Conversation probe attempt is already in progress");
+      }
+      const attemptId = randomUUID();
+      const updated = this.db.prepare(`
+        UPDATE agent_connection_unknown_outcome_fences
+        SET state = 'attempting', attempt_id = ?, updated_at = ?
+        WHERE connection_id = ? AND adapter = ? AND capability = ? AND model = ?
+          AND state = 'unknown' AND attempt_id IS NULL
+      `).run(
+        attemptId,
+        now(),
+        input.connectionId,
+        input.adapter,
+        input.capability,
+        input.model,
+      );
+      if (updated.changes !== 1) {
+        throw new Error("An explicit Conversation probe attempt is already in progress");
+      }
+      return attemptId;
+    })();
+  }
+
+  beginAgentConnectionProbe(input: {
+    connectionId: string;
+    adapter: string;
+    capability: "conversation";
+    model: string;
+  }): string {
+    return this.db.transaction(() => {
+      const fence = this.getAgentConnectionUnknownOutcomeFence(input);
+      if (fence?.state === "unknown") {
+        throw new Error(
+          "Conversation Capability Probe has an Unknown Outcome; create an explicit new attempt before testing again",
+        );
+      }
+      if (fence) throw new Error("A Conversation probe is already in progress");
+      const attemptId = randomUUID();
+      this.db.prepare(`
+        INSERT INTO agent_connection_unknown_outcome_fences (
+          connection_id, adapter, capability, model, state, attempt_id, updated_at
+        ) VALUES (?, ?, ?, ?, 'probing', ?, ?)
+      `).run(
+        input.connectionId,
+        input.adapter,
+        input.capability,
+        input.model,
+        attemptId,
+        now(),
+      );
+      return attemptId;
+    })();
+  }
+
+  finishAgentConnectionProbe(input: {
+    connectionId: string;
+    adapter: string;
+    capability: "conversation";
+    model: string;
+    attemptId: string;
+    outcome: "terminal" | "unknown";
+  }): void {
+    this.db.transaction(() => {
+      if (input.outcome === "unknown") {
+        this.db.prepare(`
+          UPDATE agent_connection_unknown_outcome_fences
+          SET state = 'unknown', attempt_id = NULL, updated_at = ?
+          WHERE connection_id = ? AND adapter = ? AND capability = ? AND model = ?
+            AND attempt_id = ? AND state IN ('probing', 'attempting')
+        `).run(
+          now(),
+          input.connectionId,
+          input.adapter,
+          input.capability,
+          input.model,
+          input.attemptId,
+        );
+      } else {
+        this.db.prepare(`
+          DELETE FROM agent_connection_unknown_outcome_fences
+          WHERE connection_id = ? AND adapter = ? AND capability = ? AND model = ?
+            AND attempt_id = ? AND state IN ('probing', 'attempting')
+        `).run(
+          input.connectionId,
+          input.adapter,
+          input.capability,
+          input.model,
+          input.attemptId,
+        );
+      }
+    })();
+  }
+
+  resolveAgentConnectionUnknownOutcomeAttempt(input: {
+    connectionId: string;
+    adapter: string;
+    capability: "conversation";
+    model: string;
+    attemptId: string;
+  }): void {
+    this.finishAgentConnectionProbe({ ...input, outcome: "terminal" });
   }
 
   getAgentConnectionDisclosure(
@@ -2489,7 +2753,7 @@ export class HostStore {
   listOptionalCapabilityOutcomes(): OptionalCapabilityOutcome[] {
     const rows = this.db.prepare(`
       SELECT onboarding_version, capability, contract_version, outcome,
-        evidence_kind, evidence_reference, decided_at
+        evidence_kind, evidence_reference, evidence_snapshot_json, decided_at
       FROM optional_capability_outcomes
       ORDER BY onboarding_version, capability, contract_version
     `).all() as Array<{
@@ -2499,19 +2763,27 @@ export class HostStore {
       outcome: OptionalCapabilityOutcome["outcome"];
       evidence_kind: string | null;
       evidence_reference: string | null;
+      evidence_snapshot_json: string | null;
       decided_at: string;
     }>;
-    return rows.map((row) => ({
-      onboardingVersion: row.onboarding_version,
-      capability: row.capability,
-      contractVersion: row.contract_version,
-      outcome: row.outcome,
-      evidence: row.evidence_kind && row.evidence_reference ? {
-        kind: row.evidence_kind,
-        reference: row.evidence_reference,
-      } : null,
-      decidedAt: row.decided_at,
-    }));
+    return rows.flatMap((row) => {
+      const snapshot = readConversationEvidenceSnapshot(row.evidence_snapshot_json);
+      if (row.capability === "conversation" && row.outcome === "adopted" && !snapshot) {
+        return [];
+      }
+      return [{
+        onboardingVersion: row.onboarding_version,
+        capability: row.capability,
+        contractVersion: row.contract_version,
+        outcome: row.outcome,
+        evidence: row.evidence_kind && row.evidence_reference ? {
+          kind: row.evidence_kind,
+          reference: row.evidence_reference,
+          ...(snapshot ? { snapshot } : {}),
+        } : null,
+        decidedAt: row.decided_at,
+      }];
+    });
   }
 
   recordOptionalCapabilityOutcome(
@@ -2523,25 +2795,52 @@ export class HostStore {
     const contractVersion = boundedIdentity(input.contractVersion, "Optional capability contract version");
     const evidenceKind = input.evidence?.kind.trim() || null;
     const evidenceReference = input.evidence?.reference.trim() || null;
+    const evidenceSnapshot = input.evidence?.snapshot
+      ? secretSafeConversationEvidenceSnapshot(input.evidence.snapshot)
+      : null;
     if (input.outcome === "adopted" && (!evidenceKind || !evidenceReference)) {
       throw new Error("An adopted Optional Capability Outcome requires durable evidence");
     }
+    if (input.capability === "conversation" && input.outcome === "adopted" && !evidenceSnapshot) {
+      throw new Error("An adopted Conversation outcome requires a complete exact evidence snapshot");
+    }
     if (input.outcome === "deferred" && input.evidence !== null) {
       throw new Error("A deferred Optional Capability Outcome cannot claim adoption evidence");
+    }
+    if (input.evidence?.snapshot && !evidenceSnapshot) {
+      throw new Error("Optional Capability Evidence snapshot is incomplete");
     }
     if ((evidenceKind?.length ?? 0) > 100 || (evidenceReference?.length ?? 0) > 500) {
       throw new Error("Optional Capability Evidence is too long");
     }
     const commit = this.db.transaction(() => {
+      if (capability === "conversation") {
+        const existing = this.db.prepare(`
+          SELECT outcome, evidence_snapshot_json
+          FROM optional_capability_outcomes
+          WHERE onboarding_version = ? AND capability = ? AND contract_version = ?
+        `).get(onboardingVersion, capability, contractVersion) as {
+          outcome: OptionalCapabilityOutcome["outcome"];
+          evidence_snapshot_json: string | null;
+        } | undefined;
+        if (existing?.outcome === "adopted" &&
+          !readConversationEvidenceSnapshot(existing.evidence_snapshot_json)) {
+          this.db.prepare(`
+            DELETE FROM optional_capability_outcomes
+            WHERE onboarding_version = ? AND capability = ? AND contract_version = ?
+          `).run(onboardingVersion, capability, contractVersion);
+        }
+      }
       this.db.prepare(`
         INSERT INTO optional_capability_outcomes (
           onboarding_version, capability, contract_version, outcome,
-          evidence_kind, evidence_reference, decided_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+          evidence_kind, evidence_reference, evidence_snapshot_json, decided_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(onboarding_version, capability, contract_version) DO UPDATE SET
           outcome = excluded.outcome,
           evidence_kind = excluded.evidence_kind,
           evidence_reference = excluded.evidence_reference,
+          evidence_snapshot_json = excluded.evidence_snapshot_json,
           decided_at = excluded.decided_at
         WHERE optional_capability_outcomes.outcome = 'deferred'
           AND excluded.outcome = 'adopted'
@@ -2552,6 +2851,7 @@ export class HostStore {
         input.outcome,
         evidenceKind,
         evidenceReference,
+        evidenceSnapshot ? JSON.stringify(evidenceSnapshot) : null,
         now(),
       );
       if (completionRequirements) this.recordOnboardingCompletionIfSatisfied(completionRequirements);
@@ -2564,14 +2864,23 @@ export class HostStore {
     return commit.immediate();
   }
 
-  getLatestOnboardingCompletion(): OnboardingCompletion | null {
-    const row = this.db.prepare(`
+  getLatestOnboardingCompletion(excludeVersion?: string): OnboardingCompletion | null {
+    const row = excludeVersion
+      ? this.db.prepare(`
+          SELECT version, completed_at
+          FROM onboarding_completions
+          WHERE version != ?
+          ORDER BY completed_at DESC, rowid DESC
+          LIMIT 1
+        `).get(boundedIdentity(excludeVersion, "Onboarding version"))
+      : this.db.prepare(`
       SELECT version, completed_at
       FROM onboarding_completions
       ORDER BY completed_at DESC, rowid DESC
       LIMIT 1
-    `).get() as { version: string; completed_at: string } | undefined;
-    return row ? { version: row.version, completedAt: row.completed_at } : null;
+    `).get();
+    const completion = row as { version: string; completed_at: string } | undefined;
+    return completion ? { version: completion.version, completedAt: completion.completed_at } : null;
   }
 
   getOnboardingCompletion(version: string): OnboardingCompletion | null {
@@ -3633,6 +3942,7 @@ export class HostStore {
         outcome TEXT NOT NULL CHECK(outcome IN ('adopted', 'deferred')),
         evidence_kind TEXT,
         evidence_reference TEXT,
+        evidence_snapshot_json TEXT,
         decided_at TEXT NOT NULL,
         PRIMARY KEY(onboarding_version, capability, contract_version),
         CHECK(
@@ -3709,6 +4019,21 @@ export class HostStore {
       );
       CREATE INDEX IF NOT EXISTS idx_agent_connection_readiness
         ON agent_connection_readiness_history(connection_id, capability, tested_at DESC);
+
+      CREATE TABLE IF NOT EXISTS agent_connection_unknown_outcome_fences (
+        connection_id TEXT NOT NULL,
+        adapter TEXT NOT NULL,
+        capability TEXT NOT NULL CHECK(capability = 'conversation'),
+        model TEXT NOT NULL,
+        state TEXT NOT NULL CHECK(state IN ('unknown', 'probing', 'attempting')),
+        attempt_id TEXT,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY(connection_id, adapter, capability, model),
+        CHECK(
+          (state = 'unknown' AND attempt_id IS NULL) OR
+          (state IN ('probing', 'attempting') AND attempt_id IS NOT NULL)
+        )
+      );
 
       CREATE TABLE IF NOT EXISTS agent_connection_disclosures (
         connection_id TEXT NOT NULL REFERENCES agent_connections(id) ON DELETE CASCADE,
@@ -3813,6 +4138,11 @@ export class HostStore {
       } finally {
         this.db.pragma("foreign_keys = ON");
       }
+    }
+    const optionalOutcomeColumns = this.db.prepare("PRAGMA table_info(optional_capability_outcomes)")
+      .all() as Array<{ name: string }>;
+    if (!optionalOutcomeColumns.some((column) => column.name === "evidence_snapshot_json")) {
+      this.db.exec("ALTER TABLE optional_capability_outcomes ADD COLUMN evidence_snapshot_json TEXT");
     }
     const readinessColumns = this.db.prepare("PRAGMA table_info(agent_connection_readiness_history)")
       .all() as Array<{ name: string }>;
@@ -3921,6 +4251,38 @@ export class HostStore {
       UPDATE agent_tasks SET summary_provider = agent_provider
       WHERE summary_provider = 'agent'
     `);
+    this.db.exec(`
+      DELETE FROM agent_connection_unknown_outcome_fences
+      WHERE state IN ('probing', 'attempting')
+        AND EXISTS (
+          SELECT 1 FROM agent_connection_readiness_history AS terminal
+          WHERE terminal.connection_id = agent_connection_unknown_outcome_fences.connection_id
+            AND terminal.capability = agent_connection_unknown_outcome_fences.capability
+            AND terminal.model = agent_connection_unknown_outcome_fences.model
+            AND terminal.reason IS NOT 'unknown_outcome'
+            AND terminal.tested_at >= agent_connection_unknown_outcome_fences.updated_at
+        );
+      UPDATE agent_connection_unknown_outcome_fences
+      SET state = 'unknown', attempt_id = NULL, updated_at = CURRENT_TIMESTAMP
+      WHERE state IN ('probing', 'attempting');
+      INSERT OR IGNORE INTO agent_connection_unknown_outcome_fences (
+        connection_id, adapter, capability, model, state, attempt_id, updated_at
+      )
+      SELECT history.connection_id, connections.adapter, history.capability, history.model,
+        'unknown', NULL, history.tested_at
+      FROM agent_connection_readiness_history AS history
+      JOIN agent_connections AS connections ON connections.id = history.connection_id
+      WHERE history.capability = 'conversation'
+        AND history.reason = 'unknown_outcome'
+        AND NOT EXISTS (
+          SELECT 1 FROM agent_connection_readiness_history AS later
+          WHERE later.connection_id = history.connection_id
+            AND later.capability = history.capability
+            AND later.model = history.model
+            AND (later.tested_at > history.tested_at OR
+              (later.tested_at = history.tested_at AND later.id > history.id))
+        );
+    `);
   }
 
   private initializeOnboardingEntryState(
@@ -3938,17 +4300,16 @@ export class HostStore {
   ): OnboardingCompletion | null {
     const version = boundedIdentity(requirements.version, "Onboarding version");
     if (!this.getCoreActivationEvidence()) return null;
+    const outcomes = this.listOptionalCapabilityOutcomes();
     const complete = requirements.optionalCapabilities.every((capability) => {
       const capabilityId = boundedIdentity(capability.capability, "Optional capability");
       const contractVersion = boundedIdentity(
         capability.contractVersion,
         "Optional capability contract version",
       );
-      return this.db.prepare(`
-        SELECT 1 FROM optional_capability_outcomes
-        WHERE capability = ? AND contract_version = ?
-        LIMIT 1
-      `).get(capabilityId, contractVersion) !== undefined;
+      return outcomes.some((outcome) =>
+        outcome.capability === capabilityId && outcome.contractVersion === contractVersion
+      );
     });
     return complete ? this.recordOnboardingCompletion(version) : null;
   }

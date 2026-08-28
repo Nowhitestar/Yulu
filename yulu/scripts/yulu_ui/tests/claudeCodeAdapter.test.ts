@@ -144,6 +144,31 @@ describe("Claude Code adapter conformance", () => {
     });
   });
 
+  it("classifies an unproven post-dispatch transport loss as Unknown Outcome with minimal evidence", async () => {
+    const runtime = client({
+      runConversation: vi.fn(async () => {
+        throw new Error("transport lost after dispatch");
+      }),
+    });
+    const adapter = new ClaudeCodeAdapter({ executable: "/fake/claude", client: runtime });
+
+    await expect(adapter.probe({ model: "claude-sonnet-5" })).resolves.toMatchObject({
+      status: "failed",
+      reason: "unknown_outcome",
+      evidence: {
+        adapter: "claude-code",
+        requestedProvider: null,
+        requestedModel: "claude-sonnet-5",
+        actualProvider: null,
+        actualModel: null,
+        requestId: null,
+        sessionId: null,
+        terminalStatus: "unknown",
+        fallbackOccurred: true,
+      },
+    });
+  });
+
   it("keeps Summary unavailable when the runtime cannot prove the invocation provider", async () => {
     const runConversation = vi.fn();
     const runtime = client({

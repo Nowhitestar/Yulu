@@ -221,8 +221,23 @@ export class ConversationOnlyAgentAdapter {
     } catch {
       return {
         status: "failed",
-        reason: "readiness_failed",
-        remediation: `${label} Conversation probe failed; restore native authorization and the exact model, then test again`,
+        reason: "unknown_outcome",
+        remediation: `${label} Conversation probe outcome is unknown; inspect the runtime before creating a new attempt and do not retry automatically`,
+        evidence: {
+          adapter: this.adapter,
+          transport: CONTRACTS[this.adapter].transport,
+          runtimeVersion: status.runtimeVersion,
+          requestedProvider: status.provider,
+          requestedModel: input.model,
+          actualProvider: null,
+          actualModel: null,
+          requestId: null,
+          sessionId: null,
+          terminalStatus: "unknown",
+          fallbackOccurred: null,
+          cancellationRequested: false,
+          cancellationConfirmed: null,
+        },
       };
     }
     const runtimeEvidence = evidence(

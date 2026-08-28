@@ -360,6 +360,574 @@ afterEach(() => {
 });
 
 describe("public Agent Connection Host contract", () => {
+  it("projects a crash-recovered fence without readiness history as a public Conversation Unknown Outcome", async () => {
+    const setupResult = setup({
+      audio: {},
+      transcription: { engine: "local", language: "zh" },
+      intelligence: {
+        summary: { provider: "xai", model: "grok-summary-exact" },
+        conversation: { provider: "xai", model: "grok-conversation-exact" },
+      },
+      llm: { agent: { provider: "auto" } },
+    });
+    setupResult.host.beginAgentConnectionProbe({
+      connectionId: "direct-xai",
+      adapter: "direct-xai",
+      capability: "conversation",
+      model: "grok-conversation-exact",
+    });
+    setupResult.host.close();
+
+    const restartedHost = new HostStore(join(setupResult.root, "host.sqlite"));
+    const restartedCenter = new AgentConnectionCenter({
+      config: new ConfigManager(setupResult.configPath),
+      host: restartedHost,
+      configDir: setupResult.root,
+      credentials: setupResult.credentials,
+      audio: setupResult.audio,
+      text: setupResult.text,
+      discover: setupResult.discover,
+      codexAdapter: setupResult.codexAdapter,
+      claudeAdapter: setupResult.claudeAdapter,
+      conversationOnlyAdapter: setupResult.conversationOnlyAdapter,
+      nativeAuthorization: setupResult.nativeAuthorization,
+    });
+
+    const view = await restartedCenter.view();
+    expect(restartedHost.listAgentConnectionReadinessHistory("direct-xai", "conversation"))
+      .toEqual([]);
+    expect(view.connections.find(({ id }) => id === "direct-xai")?.capabilities
+      .find(({ capability }) => capability === "conversation")?.currentReadiness)
+      .toMatchObject({
+        status: "failed",
+        reason: "unknown_outcome",
+        model: "grok-conversation-exact",
+        testedAt: expect.any(String),
+      });
+    restartedHost.close();
+  });
+
+  it("returns durable exact Conversation adoption evidence without changing Summary authority", async () => {
+    const setupResult = setup({
+      audio: {},
+      transcription: { engine: "local", language: "zh" },
+      intelligence: {
+        summary: { provider: "xai", model: "grok-summary-exact" },
+        conversation: { provider: "xai", model: "grok-conversation-exact" },
+      },
+      llm: { agent: { provider: "auto" } },
+    });
+    setupResult.center.acceptDisclosure({ connectionId: "direct-xai", capability: "conversation" });
+    setupResult.text.request.mockResolvedValue({
+      credentialSource: "oauth",
+      model: "grok-conversation-exact",
+    });
+
+    await setupResult.center.probe({ connectionId: "direct-xai", capability: "conversation" });
+    await expect(setupResult.center.conversationAdoptionEvidence()).resolves.toMatchObject({
+      kind: "agent-capability-probe",
+      connectionId: "direct-xai",
+      adapter: "direct-xai",
+      provider: "xai",
+      model: "grok-conversation-exact",
+      credentialSource: "oauth",
+      testedAt: expect.any(String),
+      reference: expect.any(String),
+      runtimeEvidence: {
+        transport: "xai-http",
+        requestedProvider: "xai",
+        requestedModel: "grok-conversation-exact",
+        actualProvider: "xai",
+        actualModel: "grok-conversation-exact",
+        terminalStatus: "ready",
+        fallbackOccurred: false,
+      },
+    });
+    expect(setupResult.configManager.read().intelligence.summary).toEqual({
+      provider: "xai",
+      model: "grok-summary-exact",
+    });
+    setupResult.host.close();
+  });
+
+  it("rejects adoption while the exact Conversation identity has an unresolved fence", async () => {
+    const setupResult = setup({
+      audio: {},
+      transcription: { engine: "local", language: "zh" },
+      intelligence: {
+        summary: { provider: "xai", model: "grok-summary-exact" },
+        conversation: { provider: "xai", model: "grok-conversation-exact" },
+      },
+      llm: { agent: { provider: "auto" } },
+    });
+    setupResult.center.acceptDisclosure({ connectionId: "direct-xai", capability: "conversation" });
+    setupResult.text.request.mockResolvedValue({
+      credentialSource: "oauth",
+      model: "grok-conversation-exact",
+    });
+    await setupResult.center.probe({ connectionId: "direct-xai", capability: "conversation" });
+    setupResult.host.recordAgentConnectionUnknownOutcomeFence({
+      connectionId: "direct-xai",
+      adapter: "direct-xai",
+      capability: "conversation",
+      model: "grok-conversation-exact",
+    });
+
+    await expect(setupResult.center.conversationAdoptionEvidence())
+      .rejects.toThrow(/unresolved Unknown Outcome/i);
+    setupResult.host.close();
+  });
+
+  it.each([
+    ["codex", "Codex", "gpt-5.6-sol", "chatgpt"],
+    ["claude-code", "Claude Code", "claude-sonnet-5", "claude-subscription"],
+    ["hermes", "Hermes", "grok-4.6", undefined],
+    ["openclaw", "OpenClaw", "openai-codex/gpt-5.5", undefined],
+  ] as const)("adopts exact %s Conversation proof without depending on another Agent", async (
+    adapter,
+    label,
+    model,
+    authorizationClass,
+  ) => {
+    const setupResult = setup({
+      audio: {},
+      transcription: { engine: "local", language: "zh" },
+      intelligence: {
+        summary: { provider: "xai", model: "grok-summary-exact" },
+        conversation: { provider: "agent", connectionId: adapter, model },
+      },
+      llm: { agent: { provider: "auto" } },
+    }, [{ adapter, label, path: `/fake/bin/${adapter}` }]);
+    const caller = createCaller(agentConnectionsRouter, {
+      agentConnections: setupResult.center,
+      uiMutationAuthorized: true,
+    } as never);
+    await caller.refreshCandidates();
+    await caller.confirmCandidate({ candidateId: `candidate:${adapter}`, model });
+    await caller.acceptDisclosure({ connectionId: adapter, capability: "conversation" });
+    await caller.probe({ connectionId: adapter, capability: "conversation", model });
+
+    await expect(setupResult.center.conversationAdoptionEvidence()).resolves.toMatchObject({
+      connectionId: adapter,
+      adapter,
+      provider: adapter,
+      model,
+      credentialSource: null,
+      runtimeEvidence: {
+        adapter,
+        requestedModel: model,
+        actualModel: model,
+        terminalStatus: "ready",
+        fallbackOccurred: false,
+        ...(authorizationClass ? { authorizationClass } : {}),
+      },
+    });
+    expect(setupResult.configManager.read().intelligence.summary).toEqual({
+      provider: "xai",
+      model: "grok-summary-exact",
+    });
+    setupResult.host.close();
+  });
+
+  it("fences a Conversation probe Unknown Outcome until an explicit new attempt", async () => {
+    const setupResult = setup({
+      audio: {},
+      transcription: { engine: "local", language: "zh" },
+      intelligence: {
+        summary: { provider: "xai", model: "grok-summary-exact" },
+        conversation: { provider: "xai", model: "grok-conversation-exact" },
+      },
+      llm: { agent: { provider: "auto" } },
+    });
+    setupResult.center.acceptDisclosure({ connectionId: "direct-xai", capability: "conversation" });
+    setupResult.text.request.mockRejectedValueOnce(new XaiTextUnknownOutcomeError({
+      capability: "conversation",
+      model: "grok-conversation-exact",
+      credentialSource: "oauth",
+    }));
+    const caller = createCaller(agentConnectionsRouter, {
+      agentConnections: setupResult.center,
+      uiMutationAuthorized: true,
+    } as never);
+
+    await expect(caller.createConversationProbeAttempt({
+      connectionId: "direct-xai",
+      model: "grok-conversation-exact",
+    })).rejects.toThrow(/does not have an Unknown Outcome/i);
+    await expect(caller.probe({ connectionId: "direct-xai", capability: "conversation" }))
+      .resolves.toMatchObject({ status: "failed", reason: "unknown_outcome" });
+    await expect(caller.probe({ connectionId: "direct-xai", capability: "conversation" }))
+      .rejects.toThrow(/Unknown Outcome.*explicit new attempt/i);
+    expect(setupResult.text.request).toHaveBeenCalledTimes(1);
+
+    setupResult.text.request.mockResolvedValueOnce({
+      credentialSource: "oauth",
+      model: "grok-conversation-exact",
+    });
+    await expect(caller.createConversationProbeAttempt({
+      connectionId: "direct-xai",
+      model: "grok-conversation-exact",
+    })).resolves.toMatchObject({ status: "ready", model: "grok-conversation-exact" });
+    expect(setupResult.text.request).toHaveBeenCalledTimes(2);
+    setupResult.host.close();
+  });
+
+  it("fails closed when persisting an xAI Conversation Unknown Outcome fails after dispatch", async () => {
+    const setupResult = setup({
+      audio: {},
+      transcription: { engine: "local", language: "zh" },
+      intelligence: {
+        summary: { provider: "xai", model: "grok-summary-exact" },
+        conversation: { provider: "xai", model: "grok-conversation-exact" },
+      },
+      llm: { agent: { provider: "auto" } },
+    });
+    setupResult.center.acceptDisclosure({ connectionId: "direct-xai", capability: "conversation" });
+    setupResult.text.request.mockRejectedValueOnce(new XaiTextUnknownOutcomeError({
+      capability: "conversation",
+      model: "grok-conversation-exact",
+      credentialSource: "oauth",
+    }));
+    vi.spyOn(setupResult.host, "recordAgentConnectionReadiness")
+      .mockImplementationOnce(() => { throw new Error("simulated durable-write failure"); });
+
+    await expect(setupResult.center.probe({
+      connectionId: "direct-xai",
+      capability: "conversation",
+    })).rejects.toThrow("simulated durable-write failure");
+    expect(setupResult.host.getAgentConnectionUnknownOutcomeFence({
+      connectionId: "direct-xai",
+      adapter: "direct-xai",
+      capability: "conversation",
+      model: "grok-conversation-exact",
+    })).toMatchObject({ state: "unknown" });
+    await expect(setupResult.center.probe({
+      connectionId: "direct-xai",
+      capability: "conversation",
+    })).rejects.toThrow(/Unknown Outcome.*explicit new attempt/i);
+    expect(setupResult.text.request).toHaveBeenCalledTimes(1);
+    setupResult.host.close();
+  });
+
+  it("fails closed when a Codex post-dispatch status check cannot classify an Unknown Outcome", async () => {
+    const setupResult = setup({
+      audio: {},
+      transcription: { engine: "local", language: "zh" },
+      intelligence: {
+        summary: { provider: "xai", model: "grok-summary-exact" },
+        conversation: { provider: "agent", connectionId: "codex", model: "gpt-5.6-sol" },
+      },
+      llm: { agent: { provider: "auto" } },
+    }, [{ adapter: "codex", label: "Codex", path: "/fake/bin/codex" }]);
+    const caller = createCaller(agentConnectionsRouter, {
+      agentConnections: setupResult.center,
+      uiMutationAuthorized: true,
+    } as never);
+    await caller.refreshCandidates();
+    await caller.confirmCandidate({ candidateId: "candidate:codex", model: "gpt-5.6-sol" });
+    await caller.acceptDisclosure({ connectionId: "codex", capability: "conversation" });
+    setupResult.codex.probe.mockResolvedValueOnce({
+      status: "failed",
+      reason: "unknown_outcome",
+      remediation: "Codex probe outcome is unknown",
+    } as never);
+    setupResult.codex.status.mockRejectedValueOnce(new Error("post-dispatch status unavailable"));
+
+    await expect(caller.probe({
+      connectionId: "codex",
+      capability: "conversation",
+      model: "gpt-5.6-sol",
+    })).rejects.toThrow("post-dispatch status unavailable");
+    expect(setupResult.host.getAgentConnectionUnknownOutcomeFence({
+      connectionId: "codex",
+      adapter: "codex",
+      capability: "conversation",
+      model: "gpt-5.6-sol",
+    })).toMatchObject({ state: "unknown" });
+    await expect(caller.probe({
+      connectionId: "codex",
+      capability: "conversation",
+      model: "gpt-5.6-sol",
+    })).rejects.toThrow(/Unknown Outcome.*explicit new attempt/i);
+    expect(setupResult.codex.probe).toHaveBeenCalledTimes(1);
+    setupResult.host.close();
+  });
+
+  it.each([
+    ["codex", "Codex", "gpt-5.6-sol"],
+    ["claude-code", "Claude Code", "claude-sonnet-5"],
+    ["hermes", "Hermes", "grok-4.6"],
+    ["openclaw", "OpenClaw", "openai-codex/gpt-5.5"],
+  ] as const)("durably fences a no-evidence %s Conversation Unknown Outcome across restart", async (
+    adapter,
+    label,
+    model,
+  ) => {
+    const setupResult = setup({
+      audio: {},
+      transcription: { engine: "local", language: "zh" },
+      intelligence: {
+        summary: { provider: "xai", model: "grok-summary-exact" },
+        conversation: { provider: "agent", connectionId: adapter, model },
+      },
+      llm: { agent: { provider: "auto" } },
+    }, [{ adapter, label, path: `/fake/bin/${adapter}` }]);
+    const caller = createCaller(agentConnectionsRouter, {
+      agentConnections: setupResult.center,
+      uiMutationAuthorized: true,
+    } as never);
+    await caller.refreshCandidates();
+    await caller.confirmCandidate({ candidateId: `candidate:${adapter}`, model });
+    await caller.acceptDisclosure({ connectionId: adapter, capability: "conversation" });
+    const adapterProbe = adapter === "codex"
+      ? setupResult.codex.probe
+      : adapter === "claude-code"
+        ? setupResult.claude.probe
+        : setupResult.conversationOnly.probe;
+    adapterProbe.mockResolvedValueOnce({
+      status: "failed",
+      reason: "unknown_outcome",
+      remediation: `${label} transport outcome is unknown`,
+    } as never);
+
+    await expect(caller.probe({ connectionId: adapter, capability: "conversation", model }))
+      .resolves.toMatchObject({ status: "failed", reason: "unknown_outcome" });
+    expect(setupResult.host.listAgentConnectionReadinessHistory(adapter, "conversation")[0])
+      .toMatchObject({ reason: "unknown_outcome", runtimeEvidence: { terminalStatus: "unknown" } });
+    await expect(caller.probe({ connectionId: adapter, capability: "conversation", model }))
+      .rejects.toThrow(/Unknown Outcome.*explicit new attempt/i);
+
+    const restarted = createCaller(agentConnectionsRouter, {
+      agentConnections: setupResult.makeCenter(),
+      uiMutationAuthorized: true,
+    } as never);
+    await expect(restarted.probe({ connectionId: adapter, capability: "conversation", model }))
+      .rejects.toThrow(/Unknown Outcome.*explicit new attempt/i);
+    expect(adapterProbe).toHaveBeenCalledTimes(1);
+    setupResult.host.close();
+  });
+
+  it("preserves a Conversation Unknown fence across deletion without applying it to a new model", async () => {
+    const setupResult = setup({
+      audio: {},
+      transcription: { engine: "local", language: "zh" },
+      intelligence: {
+        summary: { provider: "xai", model: "grok-summary-exact" },
+        conversation: { provider: "xai", model: "grok-conversation-exact" },
+      },
+      llm: { agent: { provider: "auto" } },
+    });
+    setupResult.center.acceptDisclosure({ connectionId: "direct-xai", capability: "conversation" });
+    setupResult.text.request.mockRejectedValueOnce(new XaiTextUnknownOutcomeError({
+      capability: "conversation",
+      model: "grok-conversation-exact",
+      credentialSource: "oauth",
+    }));
+    const caller = createCaller(agentConnectionsRouter, {
+      agentConnections: setupResult.center,
+      uiMutationAuthorized: true,
+    } as never);
+
+    await caller.probe({ connectionId: "direct-xai", capability: "conversation" });
+    await caller.remove({ connectionId: "direct-xai", confirmed: true });
+    await caller.restoreDirectXai();
+    await caller.select({
+      connectionId: "direct-xai",
+      capability: "conversation",
+      model: "grok-conversation-new",
+    });
+    await caller.acceptDisclosure({ connectionId: "direct-xai", capability: "conversation" });
+    setupResult.text.request.mockResolvedValueOnce({
+      credentialSource: "oauth",
+      model: "grok-conversation-new",
+    });
+    await expect(caller.probe({ connectionId: "direct-xai", capability: "conversation" }))
+      .resolves.toMatchObject({ status: "ready", model: "grok-conversation-new" });
+
+    await caller.select({
+      connectionId: "direct-xai",
+      capability: "conversation",
+      model: "grok-conversation-exact",
+    });
+    await expect(caller.probe({ connectionId: "direct-xai", capability: "conversation" }))
+      .rejects.toThrow(/Unknown Outcome.*new attempt/i);
+    expect(setupResult.text.request).toHaveBeenCalledTimes(2);
+    setupResult.host.close();
+  });
+
+  it("atomically permits only one explicit new Conversation probe attempt", async () => {
+    const setupResult = setup({
+      audio: {},
+      transcription: { engine: "local", language: "zh" },
+      intelligence: {
+        summary: { provider: "xai", model: "grok-summary-exact" },
+        conversation: { provider: "xai", model: "grok-conversation-exact" },
+      },
+      llm: { agent: { provider: "auto" } },
+    });
+    setupResult.center.acceptDisclosure({ connectionId: "direct-xai", capability: "conversation" });
+    setupResult.text.request.mockRejectedValueOnce(new XaiTextUnknownOutcomeError({
+      capability: "conversation",
+      model: "grok-conversation-exact",
+      credentialSource: "oauth",
+    }));
+    const caller = createCaller(agentConnectionsRouter, {
+      agentConnections: setupResult.center,
+      uiMutationAuthorized: true,
+    } as never);
+    await caller.probe({ connectionId: "direct-xai", capability: "conversation" });
+
+    let finish!: (value: { credentialSource: "oauth"; model: string }) => void;
+    setupResult.text.request.mockImplementationOnce(() => new Promise((resolve) => {
+      finish = resolve;
+    }));
+    const first = caller.createConversationProbeAttempt({
+      connectionId: "direct-xai",
+      model: "grok-conversation-exact",
+    });
+    await vi.waitFor(() => expect(setupResult.text.request).toHaveBeenCalledTimes(2));
+    await expect(caller.createConversationProbeAttempt({
+      connectionId: "direct-xai",
+      model: "grok-conversation-exact",
+    })).rejects.toThrow(/explicit Conversation probe attempt is already in progress/i);
+    expect(setupResult.text.request).toHaveBeenCalledTimes(2);
+    finish({ credentialSource: "oauth", model: "grok-conversation-exact" });
+    await expect(first).resolves.toMatchObject({ status: "ready" });
+    setupResult.text.request.mockResolvedValueOnce({
+      credentialSource: "oauth",
+      model: "grok-conversation-exact",
+    });
+    await expect(caller.probe({ connectionId: "direct-xai", capability: "conversation" }))
+      .resolves.toMatchObject({ status: "ready" });
+    expect(setupResult.text.request).toHaveBeenCalledTimes(3);
+    setupResult.host.close();
+  });
+
+  it("permits only one initial Conversation probe and does not let stale Unknown overwrite an explicit attempt", async () => {
+    const setupResult = setup({
+      audio: {},
+      transcription: { engine: "local", language: "zh" },
+      intelligence: {
+        summary: { provider: "xai", model: "grok-summary-exact" },
+        conversation: { provider: "xai", model: "grok-conversation-exact" },
+      },
+      llm: { agent: { provider: "auto" } },
+    });
+    setupResult.center.acceptDisclosure({ connectionId: "direct-xai", capability: "conversation" });
+    let rejectInitial!: (error: Error) => void;
+    setupResult.text.request.mockImplementationOnce(() => new Promise((_resolve, reject) => {
+      rejectInitial = reject;
+    }));
+    const caller = createCaller(agentConnectionsRouter, {
+      agentConnections: setupResult.center,
+      uiMutationAuthorized: true,
+    } as never);
+    const first = caller.probe({ connectionId: "direct-xai", capability: "conversation" });
+    await vi.waitFor(() => expect(setupResult.text.request).toHaveBeenCalledTimes(1));
+    await expect(caller.probe({ connectionId: "direct-xai", capability: "conversation" }))
+      .rejects.toThrow(/Conversation probe.*already in progress/i);
+    rejectInitial(new XaiTextUnknownOutcomeError({
+      capability: "conversation",
+      model: "grok-conversation-exact",
+      credentialSource: "oauth",
+    }));
+    await expect(first).resolves.toMatchObject({ reason: "unknown_outcome" });
+
+    let finishExplicit!: (value: { credentialSource: "oauth"; model: string }) => void;
+    setupResult.text.request.mockImplementationOnce(() => new Promise((resolve) => {
+      finishExplicit = resolve;
+    }));
+    const explicit = caller.createConversationProbeAttempt({
+      connectionId: "direct-xai",
+      model: "grok-conversation-exact",
+    });
+    await vi.waitFor(() => expect(setupResult.text.request).toHaveBeenCalledTimes(2));
+    setupResult.host.recordAgentConnectionUnknownOutcomeFence({
+      connectionId: "direct-xai",
+      adapter: "direct-xai",
+      capability: "conversation",
+      model: "grok-conversation-exact",
+    });
+    await expect(caller.createConversationProbeAttempt({
+      connectionId: "direct-xai",
+      model: "grok-conversation-exact",
+    })).rejects.toThrow(/already in progress/i);
+    expect(setupResult.text.request).toHaveBeenCalledTimes(2);
+    finishExplicit({ credentialSource: "oauth", model: "grok-conversation-exact" });
+    await expect(explicit).resolves.toMatchObject({ status: "ready" });
+    setupResult.host.close();
+  });
+
+  it.each([
+    ["codex", "Codex", "gpt-5.6-sol"],
+    ["claude-code", "Claude Code", "claude-sonnet-5"],
+  ] as const)("requires current %s Conversation disclosure for probe and adoption", async (
+    adapter,
+    label,
+    model,
+  ) => {
+    const setupResult = setup({
+      audio: {},
+      transcription: { engine: "local", language: "zh" },
+      intelligence: {
+        summary: { provider: "xai", model: "grok-summary-exact" },
+        conversation: { provider: "agent", connectionId: adapter, model },
+      },
+      llm: { agent: { provider: "auto" } },
+    }, [{ adapter, label, path: `/fake/bin/${adapter}` }]);
+    const caller = createCaller(agentConnectionsRouter, {
+      agentConnections: setupResult.center,
+      uiMutationAuthorized: true,
+    } as never);
+    await caller.refreshCandidates();
+    await caller.confirmCandidate({ candidateId: `candidate:${adapter}`, model });
+    await expect(caller.probe({ connectionId: adapter, capability: "conversation", model }))
+      .rejects.toThrow(/disclosure/i);
+    const adapterProbe = adapter === "codex" ? setupResult.codex.probe : setupResult.claude.probe;
+    expect(adapterProbe).not.toHaveBeenCalled();
+
+    await caller.acceptDisclosure({ connectionId: adapter, capability: "conversation" });
+    await caller.probe({ connectionId: adapter, capability: "conversation", model });
+    await caller.declineDisclosure({ connectionId: adapter, capability: "conversation" });
+    await expect(setupResult.center.conversationAdoptionEvidence()).rejects.toThrow(/disclosure/i);
+    setupResult.host.close();
+  });
+
+  it("clears the Unknown fence after an explicit probe reaches a proven failure", async () => {
+    const setupResult = setup({
+      audio: {},
+      transcription: { engine: "local", language: "zh" },
+      intelligence: {
+        summary: { provider: "xai", model: "grok-summary-exact" },
+        conversation: { provider: "xai", model: "grok-conversation-exact" },
+      },
+      llm: { agent: { provider: "auto" } },
+    });
+    setupResult.center.acceptDisclosure({ connectionId: "direct-xai", capability: "conversation" });
+    setupResult.text.request
+      .mockRejectedValueOnce(new XaiTextUnknownOutcomeError({
+        capability: "conversation",
+        model: "grok-conversation-exact",
+        credentialSource: "oauth",
+      }))
+      .mockRejectedValueOnce(new Error("HTTP 404 invalid model"))
+      .mockResolvedValueOnce({ credentialSource: "oauth", model: "grok-conversation-exact" });
+    const caller = createCaller(agentConnectionsRouter, {
+      agentConnections: setupResult.center,
+      uiMutationAuthorized: true,
+    } as never);
+
+    await caller.probe({ connectionId: "direct-xai", capability: "conversation" });
+    await expect(caller.createConversationProbeAttempt({
+      connectionId: "direct-xai",
+      model: "grok-conversation-exact",
+    })).resolves.toMatchObject({ status: "failed", reason: "invalid_model" });
+    await expect(caller.probe({ connectionId: "direct-xai", capability: "conversation" }))
+      .resolves.toMatchObject({ status: "ready" });
+    expect(setupResult.text.request).toHaveBeenCalledTimes(3);
+    setupResult.host.close();
+  });
+
   it("stores an xAI API key without changing the explicitly selected credential source", async () => {
     const setupResult = setup({
       audio: {},
@@ -1348,6 +1916,17 @@ describe("public Agent Connection Host contract", () => {
       capability: "conversation",
       model: "openai-codex/gpt-5.5",
     })).resolves.toMatchObject({ status: "ready", model: "openai-codex/gpt-5.5" });
+    await caller.select({
+      connectionId: "openclaw",
+      capability: "conversation",
+      model: "openai-codex/gpt-5.5",
+    });
+    await expect(setupResult.center.conversationAdoptionEvidence()).resolves.toMatchObject({
+      connectionId: "openclaw",
+      adapter: "openclaw",
+      model: "openai-codex/gpt-5.5",
+      runtimeEvidence: { sessionId: null, terminalStatus: "ready" },
+    });
     expect(setupResult.host.listAgentConnectionReadinessHistory("openclaw", "conversation"))
       .toEqual([expect.objectContaining({
         runtimeEvidence: expect.objectContaining({
@@ -2266,6 +2845,7 @@ describe("public Agent Connection Host contract", () => {
 
     await caller.refreshCandidates();
     await caller.confirmCandidate({ candidateId: "candidate:codex", model: "gpt-5.6-sol" });
+    await caller.acceptDisclosure({ connectionId: "codex", capability: "conversation" });
     await expect(caller.probe({
       connectionId: "codex",
       capability: "conversation",
@@ -2537,6 +3117,10 @@ describe("public Agent Connection Host contract", () => {
     })).rejects.toThrow("UI mutation bearer required");
     await expect(unauthorized.refreshNativeAuthorizationStatus({
       connectionId: "candidate:claude-code",
+    })).rejects.toThrow("UI mutation bearer required");
+    await expect(unauthorized.createConversationProbeAttempt({
+      connectionId: "direct-xai",
+      model: "grok-conversation-exact",
     })).rejects.toThrow("UI mutation bearer required");
     expect(setupResult.discover).not.toHaveBeenCalled();
 

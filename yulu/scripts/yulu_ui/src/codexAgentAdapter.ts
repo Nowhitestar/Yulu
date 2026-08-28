@@ -285,6 +285,22 @@ export class CodexAgentAdapter {
         status: "failed",
         reason: "unknown_outcome",
         remediation: "Codex probe dispatch could not be classified; inspect the runtime before creating a new attempt and do not retry automatically",
+        evidence: {
+          adapter: "codex",
+          transport: CODEX_TRANSPORT,
+          runtimeVersion: status.runtimeVersion,
+          authorizationClass: status.authorizationClass,
+          requestedProvider: CODEX_PROVIDER,
+          requestedModel: input.model,
+          actualProvider: null,
+          actualModel: null,
+          requestId: null,
+          sessionId: null,
+          terminalStatus: "unknown",
+          fallbackOccurred: true,
+          cancellationRequested: false,
+          cancellationConfirmed: null,
+        },
       };
     }
     const runtimeEvidence = evidence(

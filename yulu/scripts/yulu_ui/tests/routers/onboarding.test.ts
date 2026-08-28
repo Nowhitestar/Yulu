@@ -29,6 +29,36 @@ function activationEvidence() {
   };
 }
 
+function conversationEvidence() {
+  return {
+    kind: "agent-capability-probe",
+    reference: "conversation-proof-1",
+    snapshot: {
+      capability: "conversation" as const,
+      connectionId: "codex",
+      adapter: "codex",
+      provider: "codex",
+      model: "gpt-5.6-sol",
+      credentialSource: "runtime-oauth" as const,
+      testedAt: "2026-08-29T00:10:00.000Z",
+      runtimeEvidence: {
+        adapter: "codex",
+        transport: "codex-app-server-stdio",
+        runtimeVersion: "0.144.4",
+        authorizationClass: "chatgpt" as const,
+        requestedProvider: "openai",
+        requestedModel: "gpt-5.6-sol",
+        actualProvider: "openai",
+        actualModel: "gpt-5.6-sol",
+        requestId: "turn-154",
+        sessionId: "thread-154",
+        terminalStatus: "ready" as const,
+        fallbackOccurred: false,
+      },
+    },
+  };
+}
+
 describe("onboarding router", () => {
   let root = "";
   let host: HostStore | undefined;
@@ -63,6 +93,30 @@ describe("onboarding router", () => {
             }],
           }],
         })),
+        conversationAdoptionEvidence: vi.fn(async () => ({
+          kind: "agent-capability-probe" as const,
+          reference: "readiness-proof-154",
+          connectionId: "codex",
+          adapter: "codex",
+          provider: "codex",
+          model: "gpt-5.6-sol",
+          credentialSource: null,
+          testedAt: "2026-08-29T00:10:00.000Z",
+          runtimeEvidence: {
+            adapter: "codex",
+            transport: "codex-app-server-stdio",
+            runtimeVersion: "0.144.4",
+            authorizationClass: "chatgpt",
+            requestedProvider: "openai",
+            requestedModel: "gpt-5.6-sol",
+            actualProvider: "openai",
+            actualModel: "gpt-5.6-sol",
+            requestId: "turn-154",
+            sessionId: "thread-154",
+            terminalStatus: "ready",
+            fallbackOccurred: false,
+          },
+        })),
       },
       sharing: {
         view: vi.fn(() => ({
@@ -94,9 +148,7 @@ describe("onboarding router", () => {
         capability: capability[0],
         contractVersion: capability[1],
         outcome: capability[0] === "conversation" ? "adopted" : "deferred",
-        evidence: capability[0] === "conversation"
-          ? { kind: "agent-capability-probe", reference: "conversation-proof-1" }
-          : null,
+        evidence: capability[0] === "conversation" ? conversationEvidence() : null,
       }, CURRENT_ONBOARDING_COMPLETION_REQUIREMENTS);
     }
   }
@@ -138,6 +190,57 @@ describe("onboarding router", () => {
       outcome: { outcome: "deferred" },
       readiness: { state: "not_tested" },
     });
+  });
+
+  it("adopts Conversation only from exact production evidence and preserves it across restart", async () => {
+    const { ctx, caller, setConversationStatus } = setup();
+    host!.recordCoreActivationEvidence(activationEvidence(), CURRENT_ONBOARDING_COMPLETION_REQUIREMENTS);
+    for (const capability of ["calendar-source", "agent-calendar-connector", "sharing"] as const) {
+      await caller().deferOptionalCapability({ capability });
+    }
+
+    await expect(caller().adoptConversation()).resolves.toMatchObject({
+      outcome: {
+        onboardingVersion: "phase-13-v1",
+        capability: "conversation",
+        contractVersion: "conversation-v1",
+        outcome: "adopted",
+        evidence: { kind: "agent-capability-probe", reference: "readiness-proof-154" },
+      },
+      proof: {
+        connectionId: "codex",
+        provider: "codex",
+        model: "gpt-5.6-sol",
+        runtimeEvidence: {
+          authorizationClass: "chatgpt",
+          terminalStatus: "ready",
+          fallbackOccurred: false,
+        },
+      },
+    });
+    await expect(caller().status()).resolves.toMatchObject({
+      completion: { completed: true, currentVersionCompleted: true },
+      optionalCapabilities: expect.arrayContaining([expect.objectContaining({
+        id: "conversation",
+        outcome: expect.objectContaining({ outcome: "adopted" }),
+        readiness: { state: "ready", detail: "Current probe passed" },
+      })]),
+    });
+
+    setConversationStatus("untested");
+    const dbPath = join(root, "host.sqlite");
+    host!.close();
+    host = new HostStore(dbPath);
+    ctx.host = host;
+    const restarted = await caller().status();
+    expect(restarted.completion).toMatchObject({ completed: true, currentVersionCompleted: true });
+    expect(restarted.optionalCapabilities.find((capability: ProjectedOptionalCapability) =>
+      capability.id === "conversation"))
+      .toMatchObject({
+        outcome: { outcome: "adopted" },
+        readiness: { state: "not_tested" },
+      });
+    expect(JSON.stringify(restarted)).not.toMatch(/oauth.*token|access_token|refresh_token/i);
   });
 
   it("defers exact current steps and resumes the same Activation Attempt after restart", async () => {
