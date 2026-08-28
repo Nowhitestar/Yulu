@@ -1,0 +1,34 @@
+.sharing-settings { display: grid; gap: 18px; }
+.sharing-settings header h2,
+.sharing-state-card h3,
+.sharing-destination h3,
+.sharing-test-share h3 { margin: 0; }
+.sharing-eyebrow { margin: 0; color: var(--accent); font: 600 12px/1 var(--font-mono, monospace); text-transform: uppercase; letter-spacing: .12em; }
+.sharing-selection,
+.sharing-state-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.sharing-selection label,
+.sharing-destination label { display: grid; gap: 7px; }
+.sharing-selection select,
+.sharing-destination input { min-height: 38px; border: 1px solid var(--edge); border-radius: 8px; background: var(--field-bg); color: var(--fg); }
+.sharing-state-card,
+.sharing-destination,
+.sharing-test-share { padding: 16px; border: 1px solid var(--edge); border-radius: 12px; background: var(--glass-paper); }
+.sharing-section-heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.sharing-badge { padding: 4px 9px; border: 1px solid var(--edge); border-radius: 999px; font-size: 12px; }
+.sharing-badge.ready { color: var(--green); }
+.sharing-badge.failed,
+.sharing-badge.unknown,
+.sharing-error { color: var(--red); }
+.sharing-badge.untested { color: var(--fg-3); }
+.sharing-remediation { padding: 10px; border-left: 3px solid var(--accent); background: var(--glass-2); overflow-wrap: anywhere; }
+.sharing-suggestions { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
+.sharing-unknown-reconciliation { display: grid; gap: 10px; padding: 12px; border: 1px solid var(--edge); border-radius: 8px; }
+.sharing-unknown-reconciliation label { display: grid; gap: 7px; }
+.sharing-unknown-reconciliation input { min-height: 38px; border: 1px solid var(--edge); border-radius: 8px; background: var(--field-bg); color: var(--fg); }
+.sharing-unknown-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.sharing-settings button { min-height: 36px; border: 1px solid var(--edge); border-radius: 8px; background: var(--surface-solid); color: var(--fg); cursor: pointer; }
+.sharing-settings button:disabled { cursor: not-allowed; opacity: .55; }
+.sharing-settings button:focus-visible,
+.sharing-settings select:focus-visible,
+.sharing-settings input:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+@media (max-width: 760px) { .sharing-selection, .sharing-state-grid { grid-template-columns: 1fr; } }

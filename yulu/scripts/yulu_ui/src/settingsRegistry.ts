@@ -12,7 +12,7 @@ export type ReloadAction =
 
 export type SettingCategory =
   | "transcription" | "audio" | "llm"
-  | "automation" | "integrations" | "general" | "voice";
+  | "automation" | "integrations" | "general" | "voice" | "sharing";
 
 export interface SettingDef {
   path: string;

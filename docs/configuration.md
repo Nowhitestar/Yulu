@@ -257,6 +257,68 @@ hints. Credentials, OAuth state, connector tools, and actual connection settings
 belong to the Agent. The legacy `agent_pipeline.notion_destination` value cannot
 independently trigger sharing. A manual Share Action pins its destination separately.
 
+## Sharing configuration
+
+Settings → Sharing is the authoritative destination and Test Share surface. It
+selects a Supported Agent Connection independently from `intelligence.summary`
+and `intelligence.conversation`, discovers connector targets with a read-only
+operation, and reports Connector Readiness only after a separate bounded probe.
+A suggested target remains unconfigured until the user explicitly saves it and
+the Host reads back the exact destination. Notion discovery stores the exact
+structured `notion_create_pages` parent (`{"page_id":"..."}` or
+`{"data_source_id":"..."}`), not a matching page title or nested hint.
+
+Sharing Readiness additionally requires a freshly confirmed Test Share that
+contains only Yulu's connection-verification message. The selected Agent must
+then read the external object back through the connector and prove that its
+destination, exact content, and receipt match. Connector credentials remain
+owned by the selected Agent runtime; Yulu persists only the non-secret
+connection, connector, destination, receipt identity, and per-attempt status in
+the Host database. Codex runs these operations from a short-lived project that
+contains only Yulu's guard, empty config marker, and non-secret audit file while
+inheriting the unchanged user `CODEX_HOME`, auth, and connector configuration.
+Yulu passes the guard as a per-invocation `PreToolUse` hook overlay because that
+is the Codex 0.144.4 path proven to load without mutating persistent trust or
+configuration. The hook runs for every tool call: foreign tools are denied before
+execution, read phases permit only their explicit read allowlist, and the write
+phase permits one selected-connector tool only when its structured destination
+and single fixed meeting-free payload match exactly. That authorization is
+consumed atomically before execution, so a second write in the same Test Share
+is denied before it can reach the connector. Before starting any connector
+turn, Yulu also requires `codex features list` to report exactly
+`hooks stable true`; experimental, disabled, or unavailable hooks fail closed.
+Yulu never copies MCP `env`,
+`env_vars`, `http_headers`, or `env_http_headers` into the project. A missing,
+unsupported, or bypassed hook fails the operation closed.
+
+Codex 0.144.4 can still initialize other servers inherited from its runtime
+configuration; it does not expose a credential-safe selected-server-only switch.
+Yulu intentionally does not inspect or reconstruct the credential-bearing MCP
+inventory. Those foreign servers remain unusable by this operation because the
+pre-tool guard denies every non-selected tool call before execution.
+
+Discovery, access, write, and read-back results are accepted only when the Agent
+session contains a successful selected-connector tool call. Write/read-back
+evidence must contain exact structured destination, content, and receipt values
+rather than matching substrings, and every nested result status that is present
+must be an explicit success value. Standard MCP text envelopes are decoded only
+when they contain one structured JSON result; Notion's single-page receipt shape
+is verified explicitly. Matching model-authored JSON alone is not evidence. An interrupted or
+unverifiable write is fenced as an Unknown Outcome across Host restarts; a hook
+feature rejection or guard denial proven to occur before authorization is an
+ordinary failed attempt, not an Unknown Outcome. An unknown attempt
+cannot be retried until the user reconciles a verified receipt or abandons that
+attempt. Each confirmation creates one durable client action ID, making request
+replay idempotent, and a prior verified Test Share requires a duplicate-write
+confirmation before another is sent. Sharing Readiness also requires a current
+Connector Readiness proof for the selected connection revision.
+
+The Unknown Outcome fence is intentionally snapshot-scoped, not global: it
+prevents a duplicate external effect for the same Agent Connection, Connector,
+explicit destination, and fixed Test Share content. Selecting and saving a
+different snapshot creates a different external-effect target; returning to the
+old snapshot restores its unresolved fence.
+
 ## `status_agent`
 
 The menu-bar Agent exposes recording state and global shortcuts. Hotkey modifiers

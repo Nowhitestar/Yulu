@@ -5,6 +5,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   readdirSync,
   rmSync,
   symlinkSync,
@@ -25,6 +26,13 @@ export interface AgentCliRunResult {
   code: number;
   nativeSessionId?: string;
   rawStdout?: string;
+  connectorWriteState?: "not-started" | "authorized" | "unknown";
+}
+
+export interface ConnectorToolPolicy {
+  connector: string;
+  allowedTools: readonly string[];
+  writeGuard?: { destination: string; content: string };
 }
 
 interface CodexSessionIndexEntry {
@@ -252,7 +260,10 @@ export function extractHermesSessionId(stderr: string): string | undefined {
  * scoped config both extends that bounded wait and avoids starting unrelated
  * connectors, while leaving the user's real Hermes config untouched.
  */
-export function buildHermesConnectorConfig(raw: string, connector: string): string {
+export function buildHermesConnectorConfig(
+  raw: string,
+  connector: string,
+): string {
   if (!HERMES_CONNECTOR_RE.test(connector)) {
     throw new Error(`Invalid Hermes connector name: ${connector}`);
   }
@@ -276,7 +287,10 @@ interface HermesConnectorProfile {
   cleanup: () => void;
 }
 
-export function prepareHermesConnectorProfile(connector: string, sourceHome?: string): HermesConnectorProfile {
+export function prepareHermesConnectorProfile(
+  connector: string,
+  sourceHome?: string,
+): HermesConnectorProfile {
   const source = sourceHome || process.env.HERMES_HOME?.trim() || join(homedir(), ".hermes");
   const configPath = join(source, "config.yaml");
   if (!existsSync(configPath)) throw new Error(`Hermes config not found: ${configPath}`);
@@ -298,6 +312,263 @@ export function prepareHermesConnectorProfile(connector: string, sourceHome?: st
     home,
     cleanup: () => rmSync(home, { recursive: true, force: true }),
   };
+}
+
+function connectorPolicy(policy: ConnectorToolPolicy): ConnectorToolPolicy {
+  if (!HERMES_CONNECTOR_RE.test(policy.connector)) {
+    throw new Error(`Invalid connector name: ${policy.connector}`);
+  }
+  const allowedTools = [...new Set(policy.allowedTools.map((tool) => tool.trim()).filter(Boolean))];
+  if (allowedTools.length === 0 || allowedTools.some((tool) => !/^[a-zA-Z0-9_.-]+$/.test(tool))) {
+    throw new Error("Connector tool allowlist must contain only explicit tool names");
+  }
+  return { ...policy, connector: policy.connector, allowedTools };
+}
+
+function connectorServerNames(connector: string): string[] {
+  return connector === "zulip" ? ["zulip", "zulipchat"] : [connector];
+}
+
+export function buildSharingGuardSource(rawPolicy: ConnectorToolPolicy, auditPath: string): string {
+  const policy = connectorPolicy(rawPolicy);
+  const expected = JSON.stringify({
+    connector: policy.connector,
+    tools: policy.allowedTools,
+    ...policy.writeGuard,
+  });
+  return `
+import { appendFileSync, writeFileSync } from "node:fs";
+const expected = ${expected};
+const auditPath = ${JSON.stringify(auditPath)};
+const writeAuthorizationPath = auditPath + ".write-authorized";
+let raw = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => { raw += chunk; });
+process.stdin.on("end", () => {
+  const audit = (decision, tool = "") => appendFileSync(auditPath, JSON.stringify({ decision, tool }) + "\\n", { encoding: "utf8", mode: 0o600 });
+  const deny = (message, tool = "") => { audit("deny", tool); process.stderr.write(message); process.exit(2); };
+  let event;
+  try { event = JSON.parse(raw); } catch { return deny("Invalid Sharing authorization event"); }
+  if (event?.hook_event_name === "SessionStart") { audit("ready"); process.exit(0); }
+  const input = event && typeof event.tool_input === "object" && event.tool_input ? event.tool_input : {};
+  const tool = String(event?.tool_name || "");
+  const serverNames = expected.connector === "zulip" ? ["zulip", "zulipchat"] : [expected.connector];
+  const allowedNames = serverNames.flatMap((server) => expected.tools.map((name) => \`mcp__\${server}__\${name}\`));
+  if (!allowedNames.includes(tool)) return deny("Sharing blocked an unexpected connector tool", tool);
+  if (typeof expected.destination !== "string" || typeof expected.content !== "string") {
+    audit("allow", tool);
+    process.exit(0);
+  }
+  const parse = (value) => { try { return JSON.parse(value); } catch { return value; } };
+  const stable = (value) => {
+    if (Array.isArray(value)) return \`[\${value.map(stable).join(",")}]\`;
+    if (value && typeof value === "object") return \`{\${Object.keys(value).sort().map((key) => \`\${JSON.stringify(key)}:\${stable(value[key])}\`).join(",")}}\`;
+    return JSON.stringify(value);
+  };
+  const targetMatches = () => {
+    const wanted = parse(expected.destination);
+    if (expected.connector === "notion") {
+      const parent = parse(input.parent);
+      const pages = parse(input.pages);
+      return Boolean(
+        wanted && typeof wanted === "object" && !Array.isArray(wanted) &&
+        parent && typeof parent === "object" && !Array.isArray(parent) &&
+        stable(parent) === stable(wanted) &&
+        Array.isArray(pages) && pages.length === 1 &&
+        pages[0] && typeof pages[0] === "object" && !Array.isArray(pages[0]) &&
+        pages[0].content === expected.content
+      );
+    }
+    const observed = input.type === "stream"
+      ? { type: "stream", to: input.to, topic: input.topic }
+      : { type: input.type, to: input.to };
+    return stable(observed) === stable(wanted);
+  };
+  const content = [];
+  const walk = (value, key = "") => {
+    if (typeof value === "string") {
+      if (/(?:^|_)(?:content|text|message|body|markdown|plain_text|rich_text)(?:_|$)/i.test(key)) content.push(value);
+      if (value !== expected.content && /(?:meeting|transcript|summary|participant|attendee)/i.test(value)) deny("Sharing blocked meeting content");
+      return;
+    }
+    if (Array.isArray(value)) return value.forEach((item) => walk(item, key));
+    if (value && typeof value === "object") {
+      for (const [childKey, child] of Object.entries(value)) {
+        if (/(?:meeting|transcript|summary|participant|attendee)/i.test(childKey) && child != null && child !== "") deny("Sharing blocked meeting data", tool);
+        walk(child, childKey);
+      }
+    }
+  };
+  walk(input);
+  if (!targetMatches()) return deny("Sharing blocked a destination mismatch", tool);
+  if (content.length !== 1 || content[0] !== expected.content) return deny("Sharing blocked a content mismatch", tool);
+  try {
+    writeFileSync(writeAuthorizationPath, tool, { encoding: "utf8", mode: 0o600, flag: "wx" });
+  } catch {
+    return deny("Sharing blocked more than one external write", tool);
+  }
+  audit("allow", tool);
+  process.exit(0);
+});
+`;
+}
+
+export interface CodexConnectorProfile {
+  cwd: string;
+  guardPath: string;
+  auditPath: string;
+  cleanup: () => void;
+}
+
+function hookCommand(guardPath: string): string {
+  return `${JSON.stringify(process.execPath)} ${JSON.stringify(guardPath)}`;
+}
+
+export function prepareCodexConnectorProfile(
+  rawPolicy: ConnectorToolPolicy,
+): CodexConnectorProfile {
+  const policy = connectorPolicy(rawPolicy);
+  const cwd = realpathSync(mkdtempSync(join(tmpdir(), "yulu-codex-sharing-")));
+  chmodSync(cwd, 0o700);
+  const gitDir = join(cwd, ".git");
+  mkdirSync(join(gitDir, "objects"), { recursive: true, mode: 0o700 });
+  mkdirSync(join(gitDir, "refs", "heads"), { recursive: true, mode: 0o700 });
+  writeFileSync(join(gitDir, "HEAD"), "ref: refs/heads/main\n", { encoding: "utf8", mode: 0o600 });
+  writeFileSync(join(gitDir, "config"), [
+    "[core]",
+    "\trepositoryformatversion = 0",
+    "\tfilemode = true",
+    "\tbare = false",
+    "\tlogallrefupdates = true",
+    "",
+  ].join("\n"), { encoding: "utf8", mode: 0o600 });
+  const projectConfigDir = join(cwd, ".codex");
+  mkdirSync(projectConfigDir, { mode: 0o700 });
+  writeFileSync(join(projectConfigDir, "config.toml"), "", { encoding: "utf8", mode: 0o600 });
+  const guardPath = join(projectConfigDir, "sharing-guard.mjs");
+  const auditPath = join(projectConfigDir, "sharing-guard-audit.jsonl");
+  writeFileSync(guardPath, buildSharingGuardSource(policy, auditPath), { encoding: "utf8", mode: 0o700 });
+  return {
+    cwd,
+    guardPath,
+    auditPath,
+    cleanup: () => rmSync(cwd, { recursive: true, force: true }),
+  };
+}
+
+export function buildCodexConnectorCommand(
+  command: string[],
+  profile: Pick<CodexConnectorProfile, "cwd" | "guardPath">,
+): string[] {
+  const handler = `{type="command",command=${JSON.stringify(hookCommand(profile.guardPath))},timeout=5}`;
+  const hooks = `{SessionStart=[{hooks=[${handler}]}],PreToolUse=[{matcher=".*",hooks=[${handler}]}]}`;
+  return [
+    ...command,
+    "-c", `projects.${JSON.stringify(profile.cwd)}.trust_level="trusted"`,
+    "-c", `hooks=${hooks}`,
+    "--dangerously-bypass-hook-trust",
+  ];
+}
+
+function inspectSharingHookAudit(profile: Pick<CodexConnectorProfile, "auditPath">): {
+  error: string | null;
+  writeState: NonNullable<AgentCliRunResult["connectorWriteState"]>;
+} {
+  if (!existsSync(profile.auditPath)) return {
+    error: "Sharing guard did not execute; connector operation was not authorized",
+    writeState: "unknown",
+  };
+  const decisions = readFileSync(profile.auditPath, "utf8")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .flatMap((line): string[] => {
+      try {
+        const value = JSON.parse(line) as Record<string, unknown>;
+        return typeof value.decision === "string" ? [value.decision] : [];
+      } catch {
+        return [];
+      }
+    });
+  if (decisions.includes("deny")) {
+    return decisions.includes("allow") ? {
+      error: "Sharing guard denied a tool call after an authorized connector write",
+      writeState: "authorized",
+    } : {
+      error: "Sharing guard denied before any connector write was authorized",
+      writeState: "not-started",
+    };
+  }
+  if (!decisions.includes("ready") || !decisions.includes("allow")) {
+    return {
+      error: "Sharing guard did not prove lifecycle and pre-tool authorization",
+      writeState: "unknown",
+    };
+  }
+  return { error: null, writeState: "authorized" };
+}
+
+interface ClaudeConnectorProfile {
+  configPaths: string[];
+  settingsPath: string;
+  auditPath: string;
+  cleanup: () => void;
+}
+
+function prepareClaudeConnectorProfile(policy: ConnectorToolPolicy, cwd: string): ClaudeConnectorProfile {
+  const configPaths = [
+    join(cwd, ".mcp.json"),
+    join(homedir(), ".claude.json"),
+  ].filter((path) => existsSync(path));
+  if (configPaths.length === 0) throw new Error(`Claude Code connector configuration is unavailable: ${policy.connector}`);
+  const home = mkdtempSync(join(tmpdir(), "yulu-claude-sharing-"));
+  chmodSync(home, 0o700);
+  const settingsPath = join(home, "settings.json");
+  const guardPath = join(home, "sharing-guard.mjs");
+  const auditPath = join(home, "sharing-guard-audit.jsonl");
+  const serverNames = connectorServerNames(policy.connector);
+  const allowed = serverNames.flatMap((server) => (
+    policy.allowedTools.map((tool) => `mcp__${server}__${tool}`)
+  ));
+  const settings: Record<string, unknown> = {
+    disableClaudeAiConnectors: true,
+    permissions: { allow: allowed },
+  };
+  writeFileSync(guardPath, buildSharingGuardSource(policy, auditPath), { encoding: "utf8", mode: 0o700 });
+  settings.hooks = {
+    SessionStart: [{ hooks: [{ type: "command", command: hookCommand(guardPath), timeout: 5 }] }],
+    PreToolUse: [{
+      matcher: ".*",
+      hooks: [{ type: "command", command: hookCommand(guardPath), timeout: 5 }],
+    }],
+  };
+  writeFileSync(settingsPath, JSON.stringify(settings), { encoding: "utf8", mode: 0o600 });
+  return { configPaths, settingsPath, auditPath, cleanup: () => rmSync(home, { recursive: true, force: true }) };
+}
+
+export function buildClaudeConnectorCommand(
+  command: string[],
+  profile: Pick<ClaudeConnectorProfile, "configPaths" | "settingsPath">,
+  rawPolicy: ConnectorToolPolicy,
+): string[] {
+  const policy = connectorPolicy(rawPolicy);
+  const allowed = connectorServerNames(policy.connector).flatMap((server) => (
+    policy.allowedTools.map((tool) => `mcp__${server}__${tool}`)
+  ));
+  return [
+    ...command,
+    "--tools", "",
+    "--permission-mode", "dontAsk",
+    "--allowedTools", allowed.join(","),
+    "--strict-mcp-config",
+    "--mcp-config", ...profile.configPaths,
+    "--setting-sources", "",
+    "--settings", profile.settingsPath,
+    "--disable-slash-commands",
+    "--no-chrome",
+    "--system-prompt", "",
+    "--no-session-persistence",
+  ];
 }
 
 function extractCodexFinalMessage(stdout: string): string {
@@ -351,6 +622,21 @@ function extractOpenClawFinalMessage(stdout: string): string {
   }
 }
 
+function extractClaudeFinalMessage(stdout: string): string {
+  let last = "";
+  for (const line of stdout.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith("{")) continue;
+    try {
+      const value = JSON.parse(trimmed) as Record<string, unknown>;
+      if (value.type === "result" && typeof value.result === "string") last = value.result.trim();
+    } catch {
+      // Ignore non-event output.
+    }
+  }
+  return last;
+}
+
 function runSpawnCommand(command: string[], input: {
   cwd: string;
   stdin: string;
@@ -390,6 +676,22 @@ function runSpawnCommand(command: string[], input: {
   });
 }
 
+async function requireCodexSharingHooks(runtime: AgentRuntime, timeoutMs: number): Promise<string | null> {
+  const executable = runtime.command[0];
+  if (!executable) return "Codex hooks are unavailable because the configured command is empty";
+  const result = await runSpawnCommand([executable, "features", "list"], {
+    cwd: runtime.cwd,
+    stdin: "",
+    timeoutMs: Math.min(timeoutMs, 5_000),
+  });
+  if (result.code === 0 && /^hooks\s+stable\s+true\s*$/m.test(result.stdout)) return null;
+  const detail = (result.stderr || result.stdout).trim();
+  return [
+    'Codex hooks are unavailable; update Codex until "codex features list" reports "hooks stable true"',
+    detail,
+  ].filter(Boolean).join("\n");
+}
+
 export async function runAgentCliCommand(args: {
   runtime: AgentRuntime;
   scriptDir: string;
@@ -400,6 +702,7 @@ export async function runAgentCliCommand(args: {
   configDir?: string;
   hermesToolsets?: readonly string[];
   hermesConnector?: string;
+  connectorToolPolicy?: ConnectorToolPolicy;
 }): Promise<AgentCliRunResult> {
   if (!args.configDir) {
     return runLlmCommand(args.runtime.command, args.scriptDir, args.prompt, args.timeoutMs, args.runtime.cwd);
@@ -407,16 +710,49 @@ export async function runAgentCliCommand(args: {
 
   if (isClaudeRuntime(args.runtime)) {
     const nativeSessionId = args.nativeSessionId || args.yuluSessionId || randomUUID();
-    const command = buildClaudeSessionCommand(args.runtime.command, { nativeSessionId });
-    const result = await runSpawnCommand(command, {
-      cwd: args.runtime.cwd,
-      stdin: args.prompt,
-      timeoutMs: args.timeoutMs,
-    });
-    return { ...result, nativeSessionId };
+    let command = buildClaudeSessionCommand(args.runtime.command, { nativeSessionId });
+    const profile = args.connectorToolPolicy
+      ? prepareClaudeConnectorProfile(connectorPolicy(args.connectorToolPolicy), args.runtime.cwd)
+      : null;
+    if (profile && args.connectorToolPolicy) {
+      command = buildClaudeConnectorCommand(command, profile, args.connectorToolPolicy);
+    }
+    let result: AgentCliRunResult;
+    try {
+      result = await runSpawnCommand(command, {
+        cwd: args.runtime.cwd,
+        stdin: args.prompt,
+        timeoutMs: args.timeoutMs,
+      });
+      if (profile) {
+        const audit = inspectSharingHookAudit(profile);
+        result = { ...result, connectorWriteState: audit.writeState };
+        if (audit.error) result = {
+          ...result,
+          stderr: [result.stderr.trim(), audit.error].filter(Boolean).join("\n"),
+          code: 1,
+        };
+      }
+    } finally {
+      profile?.cleanup();
+    }
+    return {
+      ...result,
+      stdout: extractClaudeFinalMessage(result.stdout) || result.stdout,
+      nativeSessionId,
+      rawStdout: result.stdout,
+    };
   }
 
   if (isHermesRuntime(args.runtime)) {
+    if (args.connectorToolPolicy) {
+      return {
+        stdout: "",
+        stderr: "Hermes does not provide the required Sharing pre-tool authorization boundary",
+        code: 1,
+        connectorWriteState: "not-started",
+      };
+    }
     const command = buildHermesSessionCommand(args.runtime.command, {
       nativeSessionId: args.nativeSessionId,
       prompt: args.prompt,
@@ -466,18 +802,45 @@ export async function runAgentCliCommand(args: {
     return runLlmCommand(args.runtime.command, args.scriptDir, args.prompt, args.timeoutMs, args.runtime.cwd);
   }
 
+  if (args.connectorToolPolicy) {
+    const hooksError = await requireCodexSharingHooks(args.runtime, args.timeoutMs);
+    if (hooksError) return {
+      stdout: "", stderr: hooksError, code: 1, connectorWriteState: "not-started",
+    };
+  }
+
   mkdirSync(args.configDir, { recursive: true });
   const outputPath = join(args.configDir, `codex-last-message.${process.pid}.${Date.now()}.${randomUUID()}.txt`);
   const before = args.nativeSessionId ? [] : readCodexSessionIndex();
-  const command = buildCodexSessionCommand(args.runtime.command, {
+  const profile = args.connectorToolPolicy
+    ? prepareCodexConnectorProfile(args.connectorToolPolicy)
+    : null;
+  const runtimeCommand = profile
+    ? buildCodexConnectorCommand(args.runtime.command, profile)
+    : args.runtime.command;
+  const command = buildCodexSessionCommand(runtimeCommand, {
     nativeSessionId: args.nativeSessionId,
     outputPath,
   });
-  const result = await runSpawnCommand(command, {
-    cwd: args.runtime.cwd,
-    stdin: args.prompt,
-    timeoutMs: args.timeoutMs,
-  });
+  let result: AgentCliRunResult;
+  try {
+    result = await runSpawnCommand(command, {
+      cwd: profile?.cwd ?? args.runtime.cwd,
+      stdin: args.prompt,
+      timeoutMs: args.timeoutMs,
+    });
+    if (profile) {
+      const audit = inspectSharingHookAudit(profile);
+      result = { ...result, connectorWriteState: audit.writeState };
+      if (audit.error) result = {
+        ...result,
+        stderr: [result.stderr.trim(), audit.error].filter(Boolean).join("\n"),
+        code: 1,
+      };
+    }
+  } finally {
+    profile?.cleanup();
+  }
   const fileMessage = existsSync(outputPath) ? readFileSync(outputPath, "utf8").trim() : "";
   try {
     if (existsSync(outputPath)) unlinkSync(outputPath);
@@ -494,5 +857,6 @@ export async function runAgentCliCommand(args: {
     code: result.code,
     nativeSessionId,
     rawStdout: result.stdout,
+    connectorWriteState: result.connectorWriteState,
   };
 }

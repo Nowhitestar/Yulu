@@ -203,6 +203,155 @@ describe("HostStore", () => {
     expect(stored.runtime_evidence_json).not.toMatch(/never-persist|token|prompt|transcript|responseBody/);
   });
 
+  it("reads back an explicit Share Destination and invalidates its Test Share receipt when configuration changes", () => {
+    createStore();
+    store!.upsertAgentConnectionRecord({
+      id: "codex",
+      kind: "supported-agent",
+      adapter: "codex",
+      label: "Codex",
+      lifecycle: "available",
+      settings: { executablePath: "/fake/codex" },
+    });
+
+    expect(store!.selectSharingConfiguration({ connectionId: "codex", connector: "notion" }))
+      .toMatchObject({
+        connectionId: "codex",
+        connector: "notion",
+        destination: null,
+        destinationSavedAt: null,
+        testReceipt: null,
+      });
+
+    const saved = store!.saveShareDestination({
+      connectionId: "codex",
+      connector: "notion",
+      destination: "Product Notes",
+    });
+    expect(saved).toMatchObject({
+      destination: "Product Notes",
+      destinationSavedAt: expect.any(String),
+      testReceipt: null,
+    });
+    expect(store!.getSharingConfiguration()).toEqual(saved);
+
+    const { action } = store!.beginSharingTestAction({
+      id: "00000000-0000-4000-8000-000000000001",
+      connectionId: "codex",
+      connectionAdapter: "codex",
+      connectionLabel: "Codex",
+      connector: "notion",
+      destination: "Product Notes",
+      contentSha256: "a".repeat(64),
+      duplicateConfirmed: false,
+    });
+    store!.markSharingTestActionVerified(action.id, {
+      receiptId: "page-123",
+      receiptUrl: "https://notion.so/page-123",
+      detail: "Connector read-back matched",
+    });
+    expect(store!.getSharingConfiguration()?.testReceipt).toEqual({
+      id: "page-123",
+      url: "https://notion.so/page-123",
+      verifiedAt: expect.any(String),
+    });
+
+    store!.saveShareDestination({
+      connectionId: "codex",
+      connector: "notion",
+      destination: "Research Notes",
+    });
+    expect(store!.getSharingConfiguration()).toMatchObject({
+      destination: "Research Notes",
+      testReceipt: null,
+    });
+  });
+
+  it("persists every Test Share action and fences an interrupted action as Unknown Outcome across restart", () => {
+    createStore();
+    store!.upsertAgentConnectionRecord({
+      id: "codex",
+      kind: "supported-agent",
+      adapter: "codex",
+      label: "Codex",
+      lifecycle: "available",
+      settings: { executablePath: "/fake/codex" },
+    });
+    store!.selectSharingConfiguration({ connectionId: "codex", connector: "notion" });
+    store!.saveShareDestination({ connectionId: "codex", connector: "notion", destination: "Product Notes" });
+
+    const { action: pending } = store!.beginSharingTestAction({
+      id: "00000000-0000-4000-8000-000000000002",
+      connectionId: "codex",
+      connectionAdapter: "codex",
+      connectionLabel: "Codex",
+      connector: "notion",
+      destination: "Product Notes",
+      contentSha256: "a".repeat(64),
+      duplicateConfirmed: false,
+    });
+    expect(pending).toMatchObject({ status: "pending", destination: "Product Notes" });
+    expect(store!.beginSharingTestAction({
+      id: pending.id,
+      connectionId: "codex",
+      connectionAdapter: "codex",
+      connectionLabel: "Codex",
+      connector: "notion",
+      destination: "Product Notes",
+      contentSha256: "a".repeat(64),
+      duplicateConfirmed: false,
+    })).toMatchObject({ created: false, action: { id: pending.id, status: "pending" } });
+    expect(() => store!.beginSharingTestAction({
+      id: "00000000-0000-4000-8000-000000000003",
+      connectionId: "codex",
+      connectionAdapter: "codex",
+      connectionLabel: "Codex",
+      connector: "notion",
+      destination: "Product Notes",
+      contentSha256: "a".repeat(64),
+      duplicateConfirmed: false,
+    })).toThrow(/pending or has an Unknown Outcome/);
+
+    const dbPath = join(root, "host.sqlite");
+    store!.close();
+    store = new HostStore(dbPath);
+    expect(store!.getSharingTestAction(pending.id)).toMatchObject({
+      status: "unknown",
+      detail: "Host restarted before the Test Share receipt was verified",
+    });
+    expect(() => store!.beginSharingTestAction({
+      id: "00000000-0000-4000-8000-000000000004",
+      connectionId: "codex",
+      connectionAdapter: "codex",
+      connectionLabel: "Codex",
+      connector: "notion",
+      destination: "Product Notes",
+      contentSha256: "a".repeat(64),
+      duplicateConfirmed: false,
+    })).toThrow(/Unknown Outcome/);
+
+    store!.abandonSharingTestAction(pending.id);
+    const { action: next } = store!.beginSharingTestAction({
+      id: "00000000-0000-4000-8000-000000000005",
+      connectionId: "codex",
+      connectionAdapter: "codex",
+      connectionLabel: "Codex",
+      connector: "notion",
+      destination: "Product Notes",
+      contentSha256: "a".repeat(64),
+      duplicateConfirmed: false,
+    });
+    store!.markSharingTestActionVerified(next.id, {
+      receiptId: "page-456",
+      receiptUrl: "https://notion.so/page-456",
+      detail: "Connector read-back matched",
+    });
+    expect(store!.listSharingTestActions()).toEqual([
+      expect.objectContaining({ id: next.id, status: "verified", receiptId: "page-456" }),
+      expect.objectContaining({ id: pending.id, status: "abandoned" }),
+    ]);
+  });
+
   it("clears the Summary input snapshot only when an explicit retry discards its transcript artifact", () => {
     createStore();
     const task = store!.enqueueRecording({

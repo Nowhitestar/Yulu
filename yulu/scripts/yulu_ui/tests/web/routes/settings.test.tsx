@@ -187,6 +187,35 @@ vi.mock("../../../web/src/trpc.js", () => {
         deletionImpact: { useMutation: noopMutation },
         remove: { useMutation: noopMutation },
       },
+      sharing: {
+        view: { useQuery: () => ({
+          data: {
+            connections: [],
+            selection: null,
+            connectorDiscovery: { status: "untested", detail: "Not tested", remediation: "", options: [] },
+            connectorReadiness: { status: "untested", detail: "Not tested", remediation: "" },
+            destination: { configured: false, value: "", savedAt: null },
+            sharingReadiness: {
+              status: "untested",
+              detail: "Not tested",
+              remediation: "",
+              receipt: null,
+              actionId: null,
+              action: null,
+              duplicateWarningRequired: false,
+            },
+          },
+          isPending: false,
+          isError: false,
+        }) },
+        select: { useMutation: noopMutation },
+        discover: { useMutation: noopMutation },
+        probe: { useMutation: noopMutation },
+        saveDestination: { useMutation: noopMutation },
+        testShare: { useMutation: noopMutation },
+        reconcileUnknown: { useMutation: noopMutation },
+        abandonUnknown: { useMutation: noopMutation },
+      },
       localCaption: {
         status: { useQuery: () => ({ data: {
           installed: false,
@@ -571,6 +600,15 @@ describe("Settings category detail content (re-homed widgets)", () => {
       .toBeInTheDocument();
     expect(detail.queryByRole("link", { name: translate("zh", "settings.connectionCenter.open") }))
       .toBeNull();
+  });
+
+  it("sharing: reaches the reusable Sharing configuration surface from Settings", () => {
+    const { container } = wrap("/settings/sharing");
+    const detail = within(container.querySelector(".masterdetail-detail") as HTMLElement);
+    expect(detail.getByRole("heading", { name: translate("zh", "sharing.title") }))
+      .toBeInTheDocument();
+    expect(detail.getByText(translate("zh", "sharing.noConnections"))).toBeInTheDocument();
+    expect(container.querySelector('[href="/settings/sharing"]')).not.toBeNull();
   });
 
   it("integrations: legacy settings route redirects to Agent Console instead of rendering AI integration UI", () => {

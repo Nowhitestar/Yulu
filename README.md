@@ -77,6 +77,19 @@ Activation and Agent Console deep-link to that exact connection and capability.
 New conversations require an explicit ready selection; existing pinned sessions
 keep their creation-time provider, model, connection, and native session.
 
+Open **Settings → Sharing** to configure external delivery without changing the
+Summary or Conversation Provider. Select a supported Agent Connection, run
+read-only destination discovery and a separate bounded connector probe, then
+explicitly save the destination. Sharing becomes ready only after you confirm a
+meeting-free Test Share and the selected Agent reads back its external receipt.
+Interrupted writes remain an **Unknown outcome** until you reconcile a verified
+receipt or abandon that attempt; Yulu does not retry them automatically. Yulu
+requires successful selected-connector tool-call evidence for discovery, access,
+the write, and receipt read-back, and one client action ID cannot create two writes.
+Codex uses a temporary project-scoped pre-tool guard while retaining its normal
+runtime-owned auth; the guard blocks foreign tools and mismatched write inputs
+before execution without copying connector credentials.
+
 <p align="center">
   <img src="assets/demos/recordings-reader.png" alt="Yulu recording library with audio playback and transcript reader" />
 </p>
@@ -109,8 +122,9 @@ center of the currently active display.
 - Apple Silicon (arm64) for official release installs.
 - Python 3.10 or newer.
 - A ready Summary Provider connection in Settings (xAI, Codex, or Claude Code)
-  when you want automatic summaries. Hermes is required only for
-  authorized connector delivery; Hermes and OpenClaw remain Conversation-only.
+  when you want automatic summaries. Sharing currently requires a supported
+  Codex or Claude Code connection with a proven pre-tool authorization boundary;
+  Hermes and OpenClaw remain Conversation-only.
 - The local transcription model (default), or xAI OAuth authorized directly in
   Settings plus the current Cloud Transcription Consent when you explicitly
   select xAI.
@@ -211,7 +225,8 @@ The split is intentional:
   and dictation. Selection is explicit and never falls back automatically.
 - **The pinned Summary Provider** owns summary generation through the exact
   eligible xAI, Codex, or Claude Code connection selected when the
-  task was created. Hermes may still own explicitly authorized Notion delivery.
+  task was created. Explicit connector delivery uses the independently selected
+  supported connection in Settings → Sharing.
 - **The selected general Agent** owns Agent Console conversation and its own
   connectors.
 

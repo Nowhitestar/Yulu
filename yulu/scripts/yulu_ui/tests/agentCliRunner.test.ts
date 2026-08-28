@@ -1,14 +1,19 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { chmodSync, existsSync, lstatSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  buildClaudeConnectorCommand,
   buildClaudeSessionCommand,
+  buildCodexConnectorCommand,
   buildCodexSessionCommand,
   buildHermesConnectorConfig,
   buildHermesSessionCommand,
   buildOpenClawSessionCommand,
+  buildSharingGuardSource,
   extractHermesSessionId,
+  prepareCodexConnectorProfile,
   prepareHermesConnectorProfile,
   runAgentCliCommand,
 } from "../src/agentCliRunner.js";
@@ -80,6 +85,209 @@ describe("agentCliRunner", () => {
       "--session-id",
       "019f0000-0000-7000-8000-000000000001",
     ]);
+  });
+
+  it("isolates Claude to one connector and an explicit tool allowlist", () => {
+    const command = buildClaudeConnectorCommand(
+      ["claude", "--print"],
+      { configPaths: ["/app/.mcp.json", "/home/me/.claude.json"], settingsPath: "/tmp/settings.json" },
+      { connector: "notion", allowedTools: ["notion_search", "notion_fetch"] },
+    );
+    expect(command).toEqual(expect.arrayContaining([
+      "--permission-mode", "dontAsk",
+      "--allowedTools", "mcp__notion__notion_search,mcp__notion__notion_fetch",
+      "--strict-mcp-config",
+      "--mcp-config", "/app/.mcp.json", "/home/me/.claude.json",
+      "--setting-sources", "",
+      "--settings", "/tmp/settings.json",
+    ]));
+  });
+
+  it("creates a project-scoped Codex guard without copying runtime-owned auth or config", () => {
+    const source = mkdtempSync(join(tmpdir(), "yulu-codex-source-"));
+    tempDirs.push(source);
+    mkdirSync(join(source, ".codex"));
+    writeFileSync(join(source, ".codex", "config.toml"), 'token = "runtime-owned-secret"\n');
+
+    const profile = prepareCodexConnectorProfile({
+      connector: "notion",
+      allowedTools: ["notion_search"],
+    });
+    tempDirs.push(profile.cwd);
+
+    expect(readFileSync(join(profile.cwd, ".codex", "config.toml"), "utf8")).toBe("");
+    expect(existsSync(join(profile.cwd, ".git"))).toBe(true);
+    expect(existsSync(join(profile.cwd, ".codex", "hooks.json"))).toBe(false);
+    expect(readFileSync(profile.guardPath, "utf8")).not.toContain("runtime-owned-secret");
+    const command = buildCodexConnectorCommand(["codex", "exec"], profile);
+    expect(command).toEqual(expect.arrayContaining([
+      "codex", "exec",
+      "-c", `projects.${JSON.stringify(profile.cwd)}.trust_level="trusted"`,
+      "-c", expect.stringMatching(/^hooks=\{SessionStart=/),
+      "--dangerously-bypass-hook-trust",
+    ]));
+    expect(command.join(" ")).toContain(profile.guardPath);
+  });
+
+  it("fails closed before connector execution unless a project hook authorizes the exact tool input", () => {
+    const dir = mkdtempSync(join(tmpdir(), "yulu-sharing-guard-"));
+    tempDirs.push(dir);
+    const auditPath = join(dir, "audit.jsonl");
+    const guardPath = join(dir, "guard.mjs");
+    const destination = JSON.stringify({ page_id: "parent-123" });
+    writeFileSync(guardPath, buildSharingGuardSource({
+      connector: "notion",
+      allowedTools: ["notion_create_pages"],
+      writeGuard: {
+        destination,
+        content: "Yulu Test Share — connection verification only. This message contains no meeting content.",
+      },
+    }, auditPath));
+    const run = (tool_name: string, tool_input: Record<string, unknown>) => spawnSync(
+      process.execPath,
+      [guardPath],
+      { input: JSON.stringify({ hook_event_name: "PreToolUse", tool_name, tool_input }), encoding: "utf8" },
+    );
+
+    expect(run("mcp__notion__notion_create_pages", {
+      parent: { page_id: "parent-123" },
+      pages: [{ content: "Yulu Test Share — connection verification only. This message contains no meeting content." }],
+    }).status).toBe(0);
+    expect(run("mcp__notion__notion_create_pages", {
+      parent: { page_id: "parent-123" },
+      pages: [{ content: "Yulu Test Share — connection verification only. This message contains no meeting content." }],
+    }).status).toBe(2);
+    expect(run("mcp__notion__notion_delete_page", { id: "other" }).status).toBe(2);
+    expect(readFileSync(auditPath, "utf8")).toMatch(/"decision":"allow"/);
+    expect(readFileSync(auditPath, "utf8")).toMatch(/"decision":"deny"/);
+  });
+
+  it("authorizes only the authoritative Notion parent and one exact page payload", () => {
+    const run = (tool_input: Record<string, unknown>) => {
+      const dir = mkdtempSync(join(tmpdir(), "yulu-sharing-notion-guard-"));
+      tempDirs.push(dir);
+      const guardPath = join(dir, "guard.mjs");
+      writeFileSync(guardPath, buildSharingGuardSource({
+        connector: "notion",
+        allowedTools: ["notion_create_pages"],
+        writeGuard: {
+          destination: JSON.stringify({ page_id: "parent-123" }),
+          content: "Yulu Test Share — connection verification only. This message contains no meeting content.",
+        },
+      }, join(dir, "audit.jsonl")));
+      return spawnSync(process.execPath, [guardPath], {
+        input: JSON.stringify({
+          hook_event_name: "PreToolUse",
+          tool_name: "mcp__notion__notion_create_pages",
+          tool_input,
+        }),
+        encoding: "utf8",
+      });
+    };
+    const content = "Yulu Test Share — connection verification only. This message contains no meeting content.";
+
+    expect(run({
+      parent: { page_id: "wrong-parent" },
+      metadata: { destination: { page_id: "parent-123" } },
+      pages: [{ content }],
+    }).status).toBe(2);
+    expect(run({
+      parent: { page_id: "parent-123" },
+      pages: [{ content }, { content }],
+    }).status).toBe(2);
+  });
+
+  it("denies mutation and foreign tools during a read-only connector phase", () => {
+    const dir = mkdtempSync(join(tmpdir(), "yulu-sharing-read-guard-"));
+    tempDirs.push(dir);
+    const auditPath = join(dir, "audit.jsonl");
+    const guardPath = join(dir, "guard.mjs");
+    writeFileSync(guardPath, buildSharingGuardSource({
+      connector: "notion",
+      allowedTools: ["notion_search", "notion_fetch"],
+    }, auditPath));
+    const run = (tool_name: string) => spawnSync(process.execPath, [guardPath], {
+      input: JSON.stringify({ hook_event_name: "PreToolUse", tool_name, tool_input: {} }),
+      encoding: "utf8",
+    });
+
+    expect(run("mcp__notion__notion_search").status).toBe(0);
+    expect(run("mcp__notion__notion_create_pages").status).toBe(2);
+    expect(run("mcp__zulip__get_messages").status).toBe(2);
+  });
+
+  it("fails a Codex connector run when the CLI does not execute the project hook", async () => {
+    const source = mkdtempSync(join(tmpdir(), "yulu-fake-codex-"));
+    tempDirs.push(source);
+    const executable = join(source, "fake-codex");
+    writeFileSync(executable, [
+      "#!/bin/sh",
+      "if [ \"$1\" = 'features' ]; then printf '%s\\n' 'hooks stable true'; exit 0; fi",
+      "previous=''",
+      "for argument in \"$@\"; do",
+      "  if [ \"$previous\" = '-o' ]; then printf '%s' '{\"status\":\"ready\"}' > \"$argument\"; fi",
+      "  previous=\"$argument\"",
+      "done",
+      "exit 0",
+    ].join("\n"));
+    chmodSync(executable, 0o755);
+
+    const result = await runAgentCliCommand({
+      runtime: {
+        provider: "codex",
+        label: "Codex",
+        source: "configured-command",
+        command: [executable, "exec", "--sandbox", "read-only"],
+        cwd: source,
+        disabledReason: null,
+      },
+      scriptDir: source,
+      configDir: source,
+      prompt: "read only",
+      timeoutMs: 5_000,
+      connectorToolPolicy: { connector: "notion", allowedTools: ["notion_search"] },
+    });
+
+    expect(result.code).toBe(1);
+    expect(result.stderr).toMatch(/guard did not execute/i);
+    expect(result.connectorWriteState).toBe("unknown");
+  });
+
+  it("does not start a connector turn when Codex hooks are unavailable", async () => {
+    const source = mkdtempSync(join(tmpdir(), "yulu-old-codex-"));
+    tempDirs.push(source);
+    const executable = join(source, "old-codex");
+    const turnMarker = join(source, "turn-started");
+    writeFileSync(executable, [
+      "#!/bin/sh",
+      "if [ \"$1\" = 'features' ]; then printf '%s\\n' 'hooks experimental true'; exit 0; fi",
+      `printf '%s' started > ${JSON.stringify(turnMarker)}`,
+      "exit 0",
+    ].join("\n"));
+    chmodSync(executable, 0o755);
+
+    const result = await runAgentCliCommand({
+      runtime: {
+        provider: "codex",
+        label: "Codex",
+        source: "configured-command",
+        command: [executable, "exec"],
+        cwd: source,
+        disabledReason: null,
+      },
+      scriptDir: source,
+      configDir: source,
+      prompt: "must not run",
+      timeoutMs: 5_000,
+      connectorToolPolicy: { connector: "notion", allowedTools: ["notion_search"] },
+    });
+
+    expect(result).toMatchObject({
+      code: 1,
+      stderr: expect.stringMatching(/hooks.*unavailable/i),
+      connectorWriteState: "not-started",
+    });
+    expect(existsSync(turnMarker)).toBe(false);
   });
 
   it("builds a Hermes one-shot command that can resume a native session", () => {
@@ -205,7 +413,7 @@ describe("agentCliRunner", () => {
     );
   });
 
-  it("runs Hermes with the scoped connector home and removes it afterward", async () => {
+  it("fails closed instead of using Hermes for a Sharing connector operation", async () => {
     const source = mkdtempSync(join(tmpdir(), "yulu-hermes-source-"));
     tempDirs.push(source);
     writeFileSync(join(source, "config.yaml"), [
@@ -219,12 +427,7 @@ describe("agentCliRunner", () => {
     process.env.HERMES_HOME = source;
 
     const fakeHermes = join(source, "hermes");
-    writeFileSync(fakeHermes, [
-      "#!/bin/sh",
-      "grep -q '  zulip:' \"$HERMES_HOME/config.yaml\" || exit 41",
-      "if grep -q '  notion:' \"$HERMES_HOME/config.yaml\"; then exit 42; fi",
-      "printf '%s\\n' \"$HERMES_HOME\"",
-    ].join("\n"));
+    writeFileSync(fakeHermes, "#!/bin/sh\nexit 99\n");
     chmodSync(fakeHermes, 0o755);
 
     const result = await runAgentCliCommand({
@@ -242,12 +445,11 @@ describe("agentCliRunner", () => {
       timeoutMs: 5_000,
       hermesToolsets: ["zulip"],
       hermesConnector: "zulip",
+      connectorToolPolicy: { connector: "zulip", allowedTools: ["get_messages"] },
     });
 
-    const scopedHome = result.stdout.trim();
-    expect(result.code).toBe(0);
-    expect(scopedHome).toMatch(/yulu-hermes-connector-/);
-    expect(existsSync(scopedHome)).toBe(false);
+    expect(result.code).toBe(1);
+    expect(result.stderr).toMatch(/pre-tool authorization/i);
     expect(readFileSync(join(source, "config.yaml"), "utf8")).toContain("  notion:");
   });
 

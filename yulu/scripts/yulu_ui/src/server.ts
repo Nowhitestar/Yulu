@@ -63,6 +63,8 @@ import { ClaudeCodeAdapter } from "./claudeCodeAdapter.js";
 import { ClaudeCodeCliRuntimeClient } from "./claudeCodeCliClient.js";
 import { ConversationOnlyAgentAdapter } from "./conversationOnlyAgentAdapter.js";
 import { ConversationOnlyCliRuntimeClient } from "./conversationOnlyCliClient.js";
+import { SharingConfiguration } from "./sharingConfiguration.js";
+import { AgentSharingConnectorAdapter } from "./sharingConnector.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const RETIRED_GATEWAY_CONNECTION_ID = "cliproxyapi";
@@ -208,6 +210,13 @@ async function startLockedServer(
     }),
   });
   const supportedAgentSummaryAdapter = agentConnections.summaryAdapter();
+  const sharing = new SharingConfiguration({
+    host: hostStore,
+    adapter: new AgentSharingConnectorAdapter({
+      scriptDir: runtimePaths.scriptDir,
+      configDir: runtimePaths.configDir,
+    }),
+  });
   void xaiCredentials.status().catch(() => {});
   const recordingPipeline = new RecordingPipeline({
     store: hostStore,
@@ -297,6 +306,7 @@ async function startLockedServer(
     xaiReadiness,
     supportedAgentSummaryAdapter,
     agentConnections,
+    sharing,
     db:        dbProxy,
   };
 

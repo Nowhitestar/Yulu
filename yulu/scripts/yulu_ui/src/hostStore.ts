@@ -222,6 +222,38 @@ export interface AgentConnectionDataPathDisclosure {
   decidedAt: string;
 }
 
+export type SharingConnector = "notion" | "zulip";
+
+export interface PersistedSharingConfiguration {
+  connectionId: string;
+  connector: SharingConnector;
+  destination: string | null;
+  destinationSavedAt: string | null;
+  testReceipt: {
+    id: string;
+    url: string;
+    verifiedAt: string;
+  } | null;
+}
+
+export interface SharingTestAction {
+  id: string;
+  connectionId: string;
+  connectionAdapter: string;
+  connectionLabel: string;
+  connector: SharingConnector;
+  destination: string;
+  contentSha256: string;
+  confirmedAt: string;
+  duplicateConfirmed: boolean;
+  status: "pending" | "verified" | "failed" | "unknown" | "abandoned";
+  receiptId: string | null;
+  receiptUrl: string | null;
+  detail: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 function summaryDisclosureIdentity(provider: string, disclosureVersion: string) {
   const normalized = provider.trim().toLowerCase();
   const version = disclosureVersion.trim();
@@ -762,6 +794,321 @@ export class HostStore {
   clearAgentConnectionDisclosures(connectionId: string): void {
     this.db.prepare("DELETE FROM agent_connection_disclosures WHERE connection_id = ?")
       .run(connectionId);
+  }
+
+  getSharingConfiguration(): PersistedSharingConfiguration | null {
+    const row = this.db.prepare("SELECT * FROM sharing_configuration WHERE id = 1").get() as {
+      connection_id: string;
+      connector: SharingConnector;
+      destination: string | null;
+      destination_saved_at: string | null;
+      test_receipt_id: string | null;
+      test_receipt_url: string | null;
+      test_verified_at: string | null;
+    } | undefined;
+    if (!row) return null;
+    const hasReceipt = row.test_verified_at !== null && Boolean(row.test_receipt_id || row.test_receipt_url);
+    return {
+      connectionId: row.connection_id,
+      connector: row.connector,
+      destination: row.destination,
+      destinationSavedAt: row.destination_saved_at,
+      testReceipt: hasReceipt ? {
+        id: row.test_receipt_id ?? "",
+        url: row.test_receipt_url ?? "",
+        verifiedAt: row.test_verified_at!,
+      } : null,
+    };
+  }
+
+  selectSharingConfiguration(input: {
+    connectionId: string;
+    connector: SharingConnector;
+  }): PersistedSharingConfiguration {
+    const connection = this.db.prepare("SELECT kind FROM agent_connections WHERE id = ?")
+      .get(input.connectionId) as { kind: PersistedAgentConnection["kind"] } | undefined;
+    if (connection?.kind !== "supported-agent") {
+      throw new Error("Sharing requires a Supported Agent Connection");
+    }
+    const current = this.getSharingConfiguration();
+    if (current?.connectionId === input.connectionId && current.connector === input.connector) return current;
+    const timestamp = now();
+    this.db.prepare(`
+      INSERT INTO sharing_configuration (
+        id, connection_id, connector, destination, destination_saved_at,
+        test_receipt_id, test_receipt_url, test_verified_at, updated_at
+      ) VALUES (1, ?, ?, NULL, NULL, NULL, NULL, NULL, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        connection_id = excluded.connection_id,
+        connector = excluded.connector,
+        destination = NULL,
+        destination_saved_at = NULL,
+        test_receipt_id = NULL,
+        test_receipt_url = NULL,
+        test_verified_at = NULL,
+        updated_at = excluded.updated_at
+    `).run(input.connectionId, input.connector, timestamp);
+    return this.getSharingConfiguration()!;
+  }
+
+  saveShareDestination(input: {
+    connectionId: string;
+    connector: SharingConnector;
+    destination: string;
+  }): PersistedSharingConfiguration {
+    const destination = input.destination.trim();
+    if (!destination || destination.length > 500) throw new Error("Share Destination must be 1-500 characters");
+    const timestamp = now();
+    const result = this.db.prepare(`
+      UPDATE sharing_configuration SET
+        destination = ?, destination_saved_at = ?,
+        test_receipt_id = NULL, test_receipt_url = NULL, test_verified_at = NULL,
+        updated_at = ?
+      WHERE id = 1 AND connection_id = ? AND connector = ?
+    `).run(destination, timestamp, timestamp, input.connectionId, input.connector);
+    if (result.changes !== 1) throw new Error("Select the Agent Connection and connector before saving a destination");
+    return this.getSharingConfiguration()!;
+  }
+
+  clearSharingTestReceipt(): void {
+    this.db.prepare(`
+      UPDATE sharing_configuration SET
+        test_receipt_id = NULL, test_receipt_url = NULL, test_verified_at = NULL, updated_at = ?
+      WHERE id = 1
+    `).run(now());
+  }
+
+  private recordSharingTestReceipt(input: {
+    connectionId: string;
+    connector: SharingConnector;
+    destination: string;
+    receiptId: string;
+    receiptUrl: string;
+    verifiedAt: string;
+  }): PersistedSharingConfiguration {
+    const receiptId = input.receiptId.trim();
+    const receiptUrl = input.receiptUrl.trim();
+    if (!receiptId && !receiptUrl) throw new Error("A verified Test Share receipt requires an external identifier or URL");
+    const result = this.db.prepare(`
+      UPDATE sharing_configuration SET
+        test_receipt_id = ?, test_receipt_url = ?, test_verified_at = ?, updated_at = ?
+      WHERE id = 1 AND connection_id = ? AND connector = ? AND destination = ?
+    `).run(
+      receiptId,
+      receiptUrl,
+      input.verifiedAt,
+      now(),
+      input.connectionId,
+      input.connector,
+      input.destination.trim(),
+    );
+    if (result.changes !== 1) throw new Error("Test Share receipt does not match the saved Share Destination");
+    return this.getSharingConfiguration()!;
+  }
+
+  getSharingTestAction(id: string): SharingTestAction | null {
+    const row = this.db.prepare("SELECT * FROM sharing_test_actions WHERE id = ?").get(id);
+    return row ? this.sharingTestActionFromRow(row as Record<string, unknown>) : null;
+  }
+
+  listSharingTestActions(limit = 100): SharingTestAction[] {
+    return (this.db.prepare(`
+      SELECT * FROM sharing_test_actions ORDER BY created_at DESC, rowid DESC LIMIT ?
+    `).all(Math.max(1, Math.min(1_000, limit))) as Array<Record<string, unknown>>)
+      .map((row) => this.sharingTestActionFromRow(row));
+  }
+
+  latestSharingTestAction(input: {
+    connectionId: string;
+    connector: SharingConnector;
+    destination: string;
+  }): SharingTestAction | null {
+    const row = this.db.prepare(`
+      SELECT * FROM sharing_test_actions
+      WHERE connection_id = ? AND connector = ? AND destination = ?
+      ORDER BY created_at DESC, rowid DESC LIMIT 1
+    `).get(input.connectionId, input.connector, input.destination.trim());
+    return row ? this.sharingTestActionFromRow(row as Record<string, unknown>) : null;
+  }
+
+  hasVerifiedSharingTestAction(input: {
+    connectionId: string;
+    connector: SharingConnector;
+    destination: string;
+  }): boolean {
+    return Boolean(this.db.prepare(`
+      SELECT 1 FROM sharing_test_actions
+      WHERE connection_id = ? AND connector = ? AND destination = ? AND status = 'verified'
+      LIMIT 1
+    `).get(input.connectionId, input.connector, input.destination.trim()));
+  }
+
+  beginSharingTestAction(input: {
+    id: string;
+    connectionId: string;
+    connectionAdapter: string;
+    connectionLabel: string;
+    connector: SharingConnector;
+    destination: string;
+    contentSha256: string;
+    duplicateConfirmed: boolean;
+  }): { action: SharingTestAction; created: boolean } {
+    const destination = input.destination.trim();
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(input.id)) {
+      throw new Error("Test Share action id must be a UUID");
+    }
+    if (!/^[a-f0-9]{64}$/i.test(input.contentSha256)) throw new Error("Test Share content fingerprint is invalid");
+    const begin = this.db.transaction(() => {
+      const config = this.getSharingConfiguration();
+      if (
+        !config || config.connectionId !== input.connectionId ||
+        config.connector !== input.connector || config.destination !== destination ||
+        !config.destinationSavedAt
+      ) {
+        throw new Error("Test Share must snapshot the selected Agent Connection and saved Share Destination");
+      }
+      const existing = this.getSharingTestAction(input.id);
+      if (existing) {
+        if (
+          existing.connectionId !== input.connectionId ||
+          existing.connectionAdapter !== input.connectionAdapter ||
+          existing.connectionLabel !== input.connectionLabel ||
+          existing.connector !== input.connector || existing.destination !== destination ||
+          existing.contentSha256 !== input.contentSha256.toLowerCase() ||
+          existing.duplicateConfirmed !== input.duplicateConfirmed
+        ) {
+          throw new Error("Test Share action id is already bound to a different immutable snapshot");
+        }
+        return { action: existing, created: false };
+      }
+      const unknown = this.db.prepare(`
+        SELECT id FROM sharing_test_actions
+        WHERE connection_id = ? AND connector = ? AND destination = ?
+          AND status IN ('pending', 'unknown')
+        LIMIT 1
+      `).get(input.connectionId, input.connector, destination);
+      if (unknown) throw new Error("A Test Share is pending or has an Unknown Outcome; reconcile or abandon it before creating another action");
+      const timestamp = now();
+      this.db.prepare(`
+        INSERT INTO sharing_test_actions (
+          id, connection_id, connection_adapter, connection_label, connector,
+          destination, content_sha256, confirmed_at, duplicate_confirmed,
+          status, receipt_id, receipt_url, detail, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', NULL, NULL, '', ?, ?)
+      `).run(
+        input.id,
+        input.connectionId,
+        input.connectionAdapter,
+        input.connectionLabel,
+        input.connector,
+        destination,
+        input.contentSha256.toLowerCase(),
+        timestamp,
+        input.duplicateConfirmed ? 1 : 0,
+        timestamp,
+        timestamp,
+      );
+      this.clearSharingTestReceipt();
+      return { action: this.getSharingTestAction(input.id)!, created: true };
+    });
+    return begin.immediate();
+  }
+
+  markSharingTestActionVerified(inputId: string, input: {
+    receiptId: string;
+    receiptUrl: string;
+    detail: string;
+  }): SharingTestAction {
+    const receiptId = input.receiptId.trim();
+    const receiptUrl = input.receiptUrl.trim();
+    if (!receiptId && !receiptUrl) throw new Error("A verified Test Share requires an external receipt identifier or URL");
+    const finish = this.db.transaction(() => {
+      const action = this.getSharingTestAction(inputId);
+      if (!action || (action.status !== "pending" && action.status !== "unknown")) {
+        throw new Error("Only a pending or Unknown Outcome Test Share can be verified");
+      }
+      const timestamp = now();
+      this.db.prepare(`
+        UPDATE sharing_test_actions SET
+          status = 'verified', receipt_id = ?, receipt_url = ?, detail = ?, updated_at = ?
+        WHERE id = ?
+      `).run(receiptId, receiptUrl, input.detail.trim(), timestamp, inputId);
+      const config = this.getSharingConfiguration();
+      if (
+        config?.connectionId === action.connectionId && config.connector === action.connector &&
+        config.destination === action.destination
+      ) {
+        this.recordSharingTestReceipt({
+          connectionId: action.connectionId,
+          connector: action.connector,
+          destination: action.destination,
+          receiptId,
+          receiptUrl,
+          verifiedAt: timestamp,
+        });
+      }
+      return this.getSharingTestAction(inputId)!;
+    });
+    return finish.immediate();
+  }
+
+  markSharingTestActionFailed(id: string, detail: string): SharingTestAction {
+    const result = this.db.prepare(`
+      UPDATE sharing_test_actions SET status = 'failed', detail = ?, updated_at = ?
+      WHERE id = ? AND status = 'pending'
+    `).run(detail.trim(), now(), id);
+    if (result.changes !== 1) throw new Error("Only a pending Test Share can fail");
+    return this.getSharingTestAction(id)!;
+  }
+
+  markSharingTestActionUnknown(id: string, input: {
+    detail: string;
+    receiptId?: string;
+    receiptUrl?: string;
+  }): SharingTestAction {
+    const result = this.db.prepare(`
+      UPDATE sharing_test_actions SET status = 'unknown', detail = ?,
+        receipt_id = ?, receipt_url = ?, updated_at = ?
+      WHERE id = ? AND status = 'pending'
+    `).run(
+      input.detail.trim(),
+      input.receiptId?.trim() || null,
+      input.receiptUrl?.trim() || null,
+      now(),
+      id,
+    );
+    if (result.changes !== 1) throw new Error("Only a pending Test Share can become Unknown Outcome");
+    return this.getSharingTestAction(id)!;
+  }
+
+  abandonSharingTestAction(id: string): SharingTestAction {
+    const result = this.db.prepare(`
+      UPDATE sharing_test_actions SET status = 'abandoned',
+        detail = 'User abandoned the Unknown Outcome without claiming delivery', updated_at = ?
+      WHERE id = ? AND status = 'unknown'
+    `).run(now(), id);
+    if (result.changes !== 1) throw new Error("Only an Unknown Outcome Test Share can be abandoned");
+    return this.getSharingTestAction(id)!;
+  }
+
+  private sharingTestActionFromRow(row: Record<string, unknown>): SharingTestAction {
+    return {
+      id: String(row.id),
+      connectionId: String(row.connection_id),
+      connectionAdapter: String(row.connection_adapter),
+      connectionLabel: String(row.connection_label),
+      connector: row.connector as SharingConnector,
+      destination: String(row.destination),
+      contentSha256: String(row.content_sha256),
+      confirmedAt: String(row.confirmed_at),
+      duplicateConfirmed: Number(row.duplicate_confirmed) === 1,
+      status: row.status as SharingTestAction["status"],
+      receiptId: row.receipt_id === null ? null : String(row.receipt_id),
+      receiptUrl: row.receipt_url === null ? null : String(row.receipt_url),
+      detail: String(row.detail),
+      createdAt: String(row.created_at),
+      updatedAt: String(row.updated_at),
+    };
   }
 
   enqueueRecording(input: {
@@ -2640,6 +2987,11 @@ export class HostStore {
           previousState: task.state,
         });
       }
+      this.db.prepare(`
+        UPDATE sharing_test_actions SET status = 'unknown',
+          detail = 'Host restarted before the Test Share receipt was verified', updated_at = ?
+        WHERE status = 'pending'
+      `).run(timestamp);
     });
     recover.immediate();
   }
@@ -2843,6 +3195,38 @@ export class HostStore {
         decided_at TEXT NOT NULL,
         PRIMARY KEY(connection_id, capability)
       );
+
+      CREATE TABLE IF NOT EXISTS sharing_configuration (
+        id INTEGER PRIMARY KEY CHECK(id = 1),
+        connection_id TEXT NOT NULL REFERENCES agent_connections(id) ON DELETE CASCADE,
+        connector TEXT NOT NULL CHECK(connector IN ('notion', 'zulip')),
+        destination TEXT,
+        destination_saved_at TEXT,
+        test_receipt_id TEXT,
+        test_receipt_url TEXT,
+        test_verified_at TEXT,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS sharing_test_actions (
+        id TEXT PRIMARY KEY,
+        connection_id TEXT NOT NULL,
+        connection_adapter TEXT NOT NULL,
+        connection_label TEXT NOT NULL,
+        connector TEXT NOT NULL CHECK(connector IN ('notion', 'zulip')),
+        destination TEXT NOT NULL,
+        content_sha256 TEXT NOT NULL,
+        confirmed_at TEXT NOT NULL,
+        duplicate_confirmed INTEGER NOT NULL CHECK(duplicate_confirmed IN (0, 1)),
+        status TEXT NOT NULL CHECK(status IN ('pending', 'verified', 'failed', 'unknown', 'abandoned')),
+        receipt_id TEXT,
+        receipt_url TEXT,
+        detail TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_sharing_test_actions_config
+        ON sharing_test_actions(connection_id, connector, destination, created_at DESC);
     `);
     const agentConnectionTable = this.db.prepare(
       "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'agent_connections'",
