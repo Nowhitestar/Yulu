@@ -1157,10 +1157,10 @@ export class AgentConnectionCenter {
         reason: "missing_credentials",
       }, null);
     }
+    let actualProvider: string | null = null;
+    let actualModel: string | null = null;
     try {
       let credentialSource: XaiCredentialSource;
-      let actualProvider: string | null = null;
-      let actualModel: string | null = null;
       if (capability === "transcription") {
         const result = await this.audio.testXai();
         credentialSource = result.credentialSource ?? selectedCredentialSource;
@@ -1181,10 +1181,10 @@ export class AgentConnectionCenter {
           maxOutputTokens: 32,
           credentialSource: selectedCredentialSource,
         });
-        if (result.model !== model) throw new Error("provider returned a different model");
         credentialSource = result.credentialSource;
         actualProvider = "xai";
         actualModel = result.model;
+        if (result.model !== model) throw new Error("provider returned a different model");
       }
       if (credentialSource !== selectedCredentialSource) {
         throw new Error("xAI probe returned a different credential source");
@@ -1210,7 +1210,7 @@ export class AgentConnectionCenter {
         testedAt: new Date().toISOString(),
         detail: xaiReadinessFailureDetail(capability, model, selectedCredentialSource, reason),
         reason,
-      }, null);
+      }, { actualProvider, actualModel });
     }
   }
 
@@ -2057,7 +2057,7 @@ export class AgentConnectionCenter {
     actual: { actualProvider: string | null; actualModel: string | null } | null,
   ): XaiReadinessResult {
     this.readiness.set(result.capability, result);
-    if (!actual || result.status !== "ready") return result;
+    if (!actual) return result;
     this.host.recordAgentConnectionReadiness({
       connectionId: DIRECT_XAI_ID,
       capability: result.capability,
@@ -2076,7 +2076,9 @@ export class AgentConnectionCenter {
         actualModel: actual.actualModel,
         requestId: null,
         sessionId: null,
-        terminalStatus: result.status === "ready" ? "ready" : "failed",
+        terminalStatus: result.reason === "unknown_outcome"
+          ? "unknown"
+          : result.status === "ready" ? "ready" : "failed",
         fallbackOccurred: false,
       },
       testedAt: result.testedAt ?? new Date().toISOString(),

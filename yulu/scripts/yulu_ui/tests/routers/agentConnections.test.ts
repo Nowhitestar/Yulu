@@ -499,6 +499,8 @@ describe("public Agent Connection Host contract", () => {
         credentialSource: "oauth",
       });
     expect(setupResult.configManager.read().transcription.engine).toBe("xai");
+    expect(setupResult.host.listAgentConnectionReadinessHistory("direct-xai", "transcription")[0])
+      .toMatchObject({ status: "failed", reason: "identity_mismatch" });
     setupResult.host.close();
   });
 
@@ -525,6 +527,8 @@ describe("public Agent Connection Host contract", () => {
     });
     expect(result.detail).toContain("realtime STT availability");
     expect(result.detail).not.toMatch(/enter an entitled exact model/i);
+    expect(setupResult.host.listAgentConnectionReadinessHistory("direct-xai", "transcription")[0])
+      .toMatchObject({ status: "failed", reason: "readiness_failed" });
     setupResult.host.close();
   });
 
@@ -552,6 +556,10 @@ describe("public Agent Connection Host contract", () => {
   });
 
   it.each([
+    [
+      new Error("xAI summary request failed (HTTP 404)"),
+      "invalid_model",
+    ],
     [
       new Error("xAI summary request failed (HTTP 403)"),
       "entitlement_failed",
@@ -594,6 +602,19 @@ describe("public Agent Connection Host contract", () => {
       provider: "xai",
       model: "grok-summary-exact",
     });
+    expect(setupResult.host.listAgentConnectionReadinessHistory("direct-xai", "summary")[0])
+      .toMatchObject({
+        status: "failed",
+        model: "grok-summary-exact",
+        credentialSource: "oauth",
+        reason,
+        runtimeEvidence: {
+          requestedProvider: "xai",
+          requestedModel: "grok-summary-exact",
+          terminalStatus: "failed",
+          fallbackOccurred: false,
+        },
+      });
     setupResult.host.close();
   });
 
