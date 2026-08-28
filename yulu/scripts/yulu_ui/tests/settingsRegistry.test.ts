@@ -108,6 +108,7 @@ describe("settingsRegistry", () => {
     expect(defFor("connectors.zulip.send_summary")).toBeUndefined();
     expect(defFor("output.telegram.chat_id")).toBeUndefined();
     expect(defFor("output.channel")).toBeUndefined();
+    expect(defFor("agent_pipeline.auto_send_notion")).toBeUndefined();
   });
   it("Agent runtime, calendar, and pipeline controls remain hidden compatibility settings", () => {
     for (const p of [
@@ -116,7 +117,6 @@ describe("settingsRegistry", () => {
       "llm.agent.provider",
       "calendars",
       "connectors.gog.read_calendar",
-      "agent_pipeline.auto_send_notion",
     ]) {
       expect(defFor(p)?.hidden).toBe(true);
     }
@@ -131,7 +131,7 @@ describe("settingsRegistry", () => {
     }
   });
   it("非危险项不带 danger 标记(确认对话不该拦正常编辑)", () => {
-    for (const p of ["transcription.language", "llm.enabled", "meeting_detection.enabled", "agent_pipeline.auto_send_notion"]) {
+    for (const p of ["transcription.language", "llm.enabled", "meeting_detection.enabled"]) {
       expect(defFor(p)?.danger).toBeFalsy();
     }
   });

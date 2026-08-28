@@ -74,6 +74,17 @@ describe("HostStore", () => {
     return committed;
   }
 
+  function seedStartedNotionDelivery(task: AgentTask): void {
+    const timestamp = "2026-07-11T12:10:00.000Z";
+    store!.db.prepare(`
+      INSERT INTO notion_deliveries (
+        task_id, delivery_key, status, destination, created_at, updated_at
+      ) VALUES (?, ?, 'sending', 'Yulu Meeting', ?, ?)
+    `).run(task.id, `yulu-${task.id}`, timestamp, timestamp);
+    store!.db.prepare("UPDATE agent_tasks SET state = 'sending', phase = 'sending_notion' WHERE id = ?")
+      .run(task.id);
+  }
+
   function activationEvidence(taskId: string): CoreActivationEvidence {
     return {
       recordingStem: "Demo_20260711_120000",
@@ -1285,6 +1296,105 @@ describe("HostStore", () => {
     expect(store!.getTask(previouslyMisclassified.id)?.state).toBe("cancelled");
   });
 
+  it("retires only unstarted legacy automatic delivery intent and preserves started delivery audit fences", () => {
+    createStore();
+    const legacyTask = (suffix: string) => store!.enqueueRecording({
+      idempotencyKey: `recording:legacy-auto-share:${suffix}`,
+      recordingStem: `Legacy_${suffix}_20260711_120000`,
+      title: `Legacy ${suffix}`,
+      audioPath: join(root, `Legacy_${suffix}_20260711_120000.wav`),
+      sendToNotion: true,
+      destinationHint: "Yulu Meeting",
+      agentProvider: "hermes",
+      ...SUMMARY_IDENTITY,
+    }).task;
+    const unstarted = legacyTask("unstarted");
+    const started = legacyTask("started");
+    const completed = legacyTask("completed");
+    const unknown = legacyTask("unknown");
+    const summaryUnknown = legacyTask("summary-unknown");
+    const timestamp = "2026-07-11T12:10:00.000Z";
+    for (const [task, state, status] of [
+      [started, "sending", "sending"],
+      [completed, "completed", "reported"],
+      [unknown, "delivery_unverified", "sending"],
+    ] as const) {
+      store!.db.prepare("UPDATE agent_tasks SET state = ?, phase = ? WHERE id = ?")
+        .run(state, state === "completed" ? "completed" : state === "sending" ? "sending_notion" : "failed", task.id);
+      store!.db.prepare(`
+        INSERT INTO notion_deliveries (
+          task_id, delivery_key, status, destination, url, created_at, updated_at
+        ) VALUES (?, ?, ?, 'Yulu Meeting', ?, ?, ?)
+      `).run(
+        task.id,
+        `yulu-${task.id}`,
+        status,
+        status === "reported" ? `https://notion.so/${NOTION_PAGE_ID}` : null,
+        timestamp,
+        timestamp,
+      );
+    }
+    store!.db.prepare("UPDATE agent_tasks SET state = 'execution_unverified', phase = 'failed' WHERE id = ?")
+      .run(summaryUnknown.id);
+    const dbPath = join(root, "host.sqlite");
+    store!.close();
+    store = new HostStore(dbPath);
+
+    expect(store.getTask(unstarted.id)).toMatchObject({ state: "queued", sendToNotion: false });
+    expect(store.listEvents(unstarted.id).at(-1)).toMatchObject({
+      type: "legacy.automatic_delivery_intent_retired",
+      payload: { previousState: "queued", automaticRetryPrevented: true },
+    });
+    expect(store.getNotionDelivery(unstarted.id)).toBeNull();
+
+    expect(store.getTask(started.id)).toMatchObject({ state: "delivery_unverified", sendToNotion: true });
+    expect(store.getTask(completed.id)).toMatchObject({ state: "completed", sendToNotion: true });
+    expect(store.getTask(unknown.id)).toMatchObject({ state: "delivery_unverified", sendToNotion: true });
+    expect(store.getNotionDelivery(started.id)?.status).toBe("sending");
+    expect(store.getNotionDelivery(completed.id)?.status).toBe("reported");
+    expect(store.getNotionDelivery(unknown.id)?.status).toBe("sending");
+    expect(store.getTask(summaryUnknown.id)).toMatchObject({
+      state: "execution_unverified",
+      sendToNotion: false,
+    });
+
+    expect(store.claimNext()?.id).toBe(unstarted.id);
+    expect(store.claimNext()).toBeNull();
+
+    store.close();
+    store = new HostStore(dbPath);
+    expect(store.listEvents(unstarted.id).filter(({ type }) => (
+      type === "legacy.automatic_delivery_intent_retired"
+    ))).toHaveLength(1);
+    expect(store.listEvents(summaryUnknown.id).filter(({ type }) => (
+      type === "legacy.automatic_delivery_intent_retired"
+    ))).toHaveLength(1);
+  });
+
+  it("cannot reuse a completed legacy delivery authorization after retry", () => {
+    createStore();
+    const task = enqueue(true).task;
+    const timestamp = "2026-07-11T12:10:00.000Z";
+    store!.db.prepare("UPDATE agent_tasks SET state = 'completed', phase = 'completed' WHERE id = ?")
+      .run(task.id);
+    store!.db.prepare(`
+      INSERT INTO notion_deliveries (
+        task_id, delivery_key, status, destination, url, created_at, updated_at
+      ) VALUES (?, ?, 'reported', 'Yulu Meeting', ?, ?, ?)
+    `).run(task.id, `yulu-${task.id}`, `https://notion.so/${NOTION_PAGE_ID}`, timestamp, timestamp);
+
+    expect(store!.retry(task.id, { allowCompleted: true })).toMatchObject({
+      state: "queued",
+      sendToNotion: false,
+    });
+    const claimed = store!.claim(task.id)!;
+    recordPublishedArtifacts(claimed.id, claimed.leaseToken!);
+
+    expect(() => store!.beginNotionDelivery(claimed.id, claimed.leaseToken!)).toThrow(/retired/);
+    expect(store!.complete(claimed.id, claimed.leaseToken!, {}).state).toBe("completed");
+    expect(store!.getNotionDelivery(task.id)?.status).toBe("reported");
+  });
+
   it("cancels only policy-paused automatic work before a manual action", () => {
     createStore();
     const automatic = enqueue(false).task;
@@ -1367,7 +1477,7 @@ describe("HostStore", () => {
     });
   });
 
-  it("requires the current lease and commits artifacts before Notion", () => {
+  it("requires the current lease and completes after committing artifacts", () => {
     createStore();
     const queued = enqueue().task;
     const claimed = store!.claimNext()!;
@@ -1377,15 +1487,6 @@ describe("HostStore", () => {
 
     const committed = recordPublishedArtifacts(claimed.id, claimed.leaseToken!);
     expect(committed.state).toBe("artifacts_committed");
-    const delivery = store!.beginNotionDelivery(claimed.id, claimed.leaseToken!);
-    expect(delivery.deliveryKey).toBe(`yulu-${claimed.id}`);
-    expect(store!.getTask(claimed.id)?.state).toBe("sending");
-    expect(store!.beginNotionDelivery(claimed.id, claimed.leaseToken!)).toEqual(delivery);
-
-    store!.recordNotionDelivery(claimed.id, claimed.leaseToken!, {
-      url: `https://notion.so/page-${NOTION_PAGE_ID}`,
-      pageId: NOTION_PAGE_ID,
-    });
     const completed = store!.complete(claimed.id, claimed.leaseToken!, { verifiedTools: true });
     expect(completed.state).toBe("completed");
     expect(completed.leaseToken).toBeNull();
@@ -1394,8 +1495,6 @@ describe("HostStore", () => {
       "task.claimed",
       "artifacts.committed",
       "artifacts.published",
-      "notion.delivery_started",
-      "notion.delivery_reported",
       "task.completed",
     ]);
   });
@@ -1405,7 +1504,7 @@ describe("HostStore", () => {
     const claimed = (() => { enqueue(true); return store!.claimNext()!; })();
     recordPublishedArtifacts(claimed.id, claimed.leaseToken!);
     store!.recordPhaseSession(claimed.id, claimed.leaseToken!, "artifact", "artifact-session");
-    store!.beginNotionDelivery(claimed.id, claimed.leaseToken!);
+    seedStartedNotionDelivery(claimed);
     store!.recordPhaseSession(claimed.id, claimed.leaseToken!, "delivery", "delivery-session");
 
     expect(store!.getTask(claimed.id)).toMatchObject({
@@ -1423,7 +1522,17 @@ describe("HostStore", () => {
     createStore();
     const claimed = (() => { enqueue(false); return store!.claimNext()!; })();
     recordPublishedArtifacts(claimed.id, claimed.leaseToken!);
-    expect(() => store!.beginNotionDelivery(claimed.id, claimed.leaseToken!)).toThrow(/not authorized/);
+    expect(() => store!.beginNotionDelivery(claimed.id, claimed.leaseToken!)).toThrow(/retired/);
+    expect(store!.complete(claimed.id, claimed.leaseToken!, {}).state).toBe("completed");
+  });
+
+  it("never starts a new Notion delivery from a saved legacy authorization", () => {
+    createStore();
+    const claimed = (() => { enqueue(true); return store!.claimNext()!; })();
+    recordPublishedArtifacts(claimed.id, claimed.leaseToken!);
+
+    expect(() => store!.beginNotionDelivery(claimed.id, claimed.leaseToken!)).toThrow(/retired/);
+    expect(store!.getNotionDelivery(claimed.id)).toBeNull();
     expect(store!.complete(claimed.id, claimed.leaseToken!, {}).state).toBe("completed");
   });
 
@@ -1431,7 +1540,7 @@ describe("HostStore", () => {
     createStore();
     const claimed = (() => { enqueue(true); return store!.claimNext()!; })();
     recordPublishedArtifacts(claimed.id, claimed.leaseToken!);
-    store!.beginNotionDelivery(claimed.id, claimed.leaseToken!);
+    seedStartedNotionDelivery(claimed);
 
     expect(() => store!.recordNotionDelivery(claimed.id, claimed.leaseToken!, {
     })).toThrow("page URL or page ID");
@@ -1441,7 +1550,7 @@ describe("HostStore", () => {
     createStore();
     const claimed = (() => { enqueue(true); return store!.claimNext()!; })();
     recordPublishedArtifacts(claimed.id, claimed.leaseToken!);
-    store!.beginNotionDelivery(claimed.id, claimed.leaseToken!);
+    seedStartedNotionDelivery(claimed);
 
     const reported = store!.recordNotionDelivery(claimed.id, claimed.leaseToken!, {
       destination: "Agent-controlled destination",
@@ -1462,7 +1571,7 @@ describe("HostStore", () => {
     createStore();
     const claimed = (() => { enqueue(true); return store!.claimNext()!; })();
     recordPublishedArtifacts(claimed.id, claimed.leaseToken!);
-    store!.beginNotionDelivery(claimed.id, claimed.leaseToken!);
+    seedStartedNotionDelivery(claimed);
 
     expect(() => store!.recordNotionDelivery(claimed.id, claimed.leaseToken!, {
       ...identifier,
@@ -1474,7 +1583,7 @@ describe("HostStore", () => {
     createStore();
     const claimed = (() => { enqueue(true); return store!.claimNext()!; })();
     recordPublishedArtifacts(claimed.id, claimed.leaseToken!);
-    store!.beginNotionDelivery(claimed.id, claimed.leaseToken!);
+    seedStartedNotionDelivery(claimed);
 
     expect(() => store!.recordNotionDelivery(claimed.id, claimed.leaseToken!, {
       url: `https://app.notion.com/p/${NOTION_PAGE_ID}`,
@@ -1561,7 +1670,7 @@ describe("HostStore", () => {
     const claimed = (() => { enqueue(true); return store!.claimNext()!; })();
     recordPublishedArtifacts(claimed.id, claimed.leaseToken!);
     store!.recordPhaseSession(claimed.id, claimed.leaseToken!, "artifact", "old-artifact-session");
-    store!.beginNotionDelivery(claimed.id, claimed.leaseToken!);
+    seedStartedNotionDelivery(claimed);
     store!.recordPhaseSession(claimed.id, claimed.leaseToken!, "delivery", "old-delivery-session");
     const dbPath = join(root, "host.sqlite");
     store!.close();
@@ -1586,7 +1695,7 @@ describe("HostStore", () => {
     createStore();
     const claimed = (() => { enqueue(true); return store!.claimNext()!; })();
     recordPublishedArtifacts(claimed.id, claimed.leaseToken!);
-    store!.beginNotionDelivery(claimed.id, claimed.leaseToken!);
+    seedStartedNotionDelivery(claimed);
     store!.recordNotionDelivery(claimed.id, claimed.leaseToken!, {
       url: "https://notion.so/page",
     });
@@ -1609,7 +1718,7 @@ describe("HostStore", () => {
     createStore();
     const claimed = (() => { enqueue(true); return store!.claimNext()!; })();
     recordPublishedArtifacts(claimed.id, claimed.leaseToken!);
-    store!.beginNotionDelivery(claimed.id, claimed.leaseToken!);
+    seedStartedNotionDelivery(claimed);
     store!.fail(claimed.id, claimed.leaseToken!, "delivery outcome unknown");
 
     expect(() => store!.confirmNotionDelivery(claimed.id, {

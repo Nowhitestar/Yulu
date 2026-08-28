@@ -94,7 +94,6 @@ export const SETTINGS: SettingDef[] = [
   { path: "calendars",                   category: "integrations", label: "日历",   type: "text",    validate: z.array(z.unknown()),        reload: R.restart("calendar", "scheduler"), hidden: true },
   { path: "connectors.gog.read_calendar", category: "integrations", label: "Read Google calendars", type: "toggle", validate: z.boolean(), reload: R.restart("calendar", "scheduler"), hidden: true },
   { path: "connectors.feishu.read_calendar", category: "integrations", label: "Read Feishu calendars", type: "toggle", validate: z.boolean(), reload: R.restart("calendar", "scheduler"), hidden: true },
-  { path: "agent_pipeline.auto_send_notion", category: "integrations", label: "Ask Hermes to send completed notes to Notion", type: "toggle", validate: z.boolean(), reload: R.none, hidden: true },
   { path: "agent_pipeline.enabled", category: "automation", label: "Agent recording pipeline", type: "toggle", validate: z.boolean(), reload: R.none },
   { path: "agent_pipeline.auto_process_recordings", category: "automation", label: "Automatic recording processing", type: "toggle", validate: z.boolean(), reload: R.none },
   // meeting_detection: the detector daemon reads config at startup, so changes restart it.

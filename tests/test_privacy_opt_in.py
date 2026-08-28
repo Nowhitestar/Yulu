@@ -39,7 +39,7 @@ def test_disabled_agent_pipeline_does_not_disable_audio_engine():
     assert report["transcription"]["ok"] is True
 
 
-def test_external_summary_opt_ins_are_reported():
+def test_legacy_automatic_summary_opt_in_is_retired():
     mod = load_privacy()
 
     report = mod.privacy_opt_in_report({
@@ -49,8 +49,8 @@ def test_external_summary_opt_ins_are_reported():
 
     assert report["ok"] is True
     assert report["transcription"]["provider"] == "local"
-    assert report["summary_delivery"]["auto_external_opt_in"] is True
-    assert report["summary_delivery"]["external_opt_in_channels"] == ["notion"]
+    assert report["summary_delivery"]["auto_external_opt_in"] is False
+    assert report["summary_delivery"]["external_opt_in_channels"] == []
     assert report["summary_delivery"]["owner"] == "hermes"
 
 

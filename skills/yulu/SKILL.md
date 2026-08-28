@@ -15,7 +15,7 @@ Yulu 是 macOS 原生会议记录器和可信本地控制面：
 - `Yulu.app` 负责 ScreenCaptureKit 系统音频、AVFoundation 麦克风和 macOS 权限；
 - Yulu Host 负责持久化任务、幂等、租约、恢复、产物原子提交和审计；
 - Yulu 明确选择的本地/xAI 音频引擎负责实时字幕、最终转写和听写，绝不自动回退；
-- Yulu 直接管理 xAI OAuth 并把凭据保存在 macOS 钥匙串；Hermes 负责会议纪要和经任务明确授权的 Notion 投递；
+- Yulu 直接管理 xAI OAuth 并把凭据保存在 macOS 钥匙串；Hermes 负责会议纪要；
 - Agent Console 选中的通用 Agent 负责交互式对话和它自己的连接器。
 
 Yulu 只管理受限的本地音频模型，不运行总结 worker、对话引擎或 connector runtime。不要寻找或恢复旧的 STT daemon、JSON Agent 队列或 Yulu-owned Notion 路径。
@@ -26,7 +26,7 @@ Yulu 只管理受限的本地音频模型，不运行总结 worker、对话引�
 
 - 开始、停止或查看会议录音状态；
 - 查找某次历史会议、转录或纪要；
-- 查看录音处理进度，判断失败发生在录音、所选音频引擎、Hermes 纪要、产物提交还是 Notion 投递；
+- 查看录音处理进度，判断失败发生在录音、所选音频引擎、Hermes 纪要或产物提交；
 - 重跑某次录音的 Agent 处理流程；
 - 查看或管理 Yulu 的提示词、术语表和本地搜索；
 - 验证 Yulu Host、MCP、Hermes 或 macOS 录音权限。
@@ -62,9 +62,9 @@ Yulu Host 提供 loopback-only、bearer-authenticated MCP。优先调用已注�
 | `recording_task_transcript_read` | 仅通过 Host 读取当前租约任务的转录，不暴露文件路径 |
 | `recording_task_summary_stage` | 通过 Host 提交当前任务的最终 Markdown 纪要 |
 | `recording_artifact_commit` | 原子提交当前任务由 Host 管理的转录和纪要 |
-| `recording_begin_notion_delivery` | 在产物提交后申请一次明确授权的 Notion 投递 |
-| `recording_committed_summary_read` | 在独立投递阶段仅读取 Host 校验过的已提交纪要 |
-| `recording_commit_notion_delivery` | 报告实际 Notion 页面 URL 或 ID |
+| `recording_begin_notion_delivery` | 已退役的兼容端点；拒绝开始任何新投递 |
+| `recording_committed_summary_read` | 历史投递审计兼容：读取 Host 校验过的已提交纪要 |
+| `recording_commit_notion_delivery` | 仅保留历史投递审计兼容，不用于新录音处理 |
 
 只有当前租约持有者可以调用这些写工具。普通 Agent 不应伪造 task ID、lease 或完成状态。
 
@@ -103,9 +103,9 @@ yulu record stop
 | `running` | 当前租约正在转写或总结 |
 | `transcript_committed` | 最终转录已持久化，纪要仍可等待或重试 |
 | `artifacts_committed` | 转录和纪要均已提交 |
-| `sending` | Host 已授权 Hermes 联系 Notion |
-| `delivery_reported` | Hermes 已报告 Notion 页面 URL 或 ID |
-| `completed` | 所需产物和可选投递审计全部通过 |
+| `sending` | 历史投递已开始；升级后会进入结果不明围栏 |
+| `delivery_reported` | 历史 Hermes 投递已报告 Notion 页面 URL 或 ID |
+| `completed` | 所需转录和纪要产物已提交；历史投递收据仍可审计 |
 | `failed` | 确定性处理或校验失败 |
 | `delivery_unverified` | 外部投递结果不确定，必须先人工核对 |
 
@@ -125,19 +125,11 @@ yulu record stop
 
 从录音详情页分别使用“重新转写”“重新生成纪要”“分享”动作。不要手工覆盖最终 sidecar 或手工插入 SQLite 任务。每个动作都显式、可独立重跑；自动完成事件本身仍保持幂等。
 
-### Notion 投递
+### 分享边界
 
-录音任务只有在创建时记录 `sendToNotion=true`，或用户在统一重处理动作中明确选择发送，才允许投递。合法顺序是：
+录音处理只负责转写并持久化转录与纪要，到此结束。`sendToNotion`、旧配置、完成事件和兼容 MCP 端点都不能开始新投递。分享必须从对应录音详情页发起一个全新的手动 Share Action，并经过独立确认。历史上已经开始且结果不明的投递只能显式确认或放弃，禁止普通重试。
 
-1. 用户选择的 Yulu 音频引擎完成转写，Host 先持久化提交转录；
-2. 独立 artifact session 调用 `recording_task_transcript_read`，按任务快照的总结指令生成纪要；
-3. 该 session 调用 `recording_task_summary_stage`，再调用 `recording_artifact_commit`；
-4. 如获授权，Host 启动全新的 delivery session；它先调用 `recording_begin_notion_delivery` 和 `recording_committed_summary_read`；
-5. 若 begin 返回 Host 已验证的页面，直接更新该页面，禁止再次搜索或创建；只有新投递才允许用稳定 key 精确搜索一次，并在结果明确为空时创建；
-6. delivery session 用 Hermes 自己的 Notion connector 写页面并携带稳定 key；
-7. delivery session 用页面 URL 或 ID 调用 `recording_commit_notion_delivery`。
-
-不要把普通 Agent Console 对话中的 Notion 请求和录音任务投递混为一条路径，也不要让 Yulu 保存 Notion 凭据。
+不要把普通 Agent Console 对话中的 Notion 请求和录音分享混为一条路径，也不要让 Yulu 保存 Notion 凭据。
 
 ## Hermes 租约任务规则
 
@@ -147,11 +139,10 @@ yulu record stop
 2. artifact session 调用 `recording_task_transcript_read` 获取当前任务转录。
 3. 使用任务附带的总结指令生成最终 Markdown，并调用 `recording_task_summary_stage` 提交给 Host。
 4. 调用 `recording_artifact_commit`，让 Host 校验并原子提交转录与纪要。
-5. 未授权 Notion 时立即停止外部动作。
-6. 已授权时必须进入全新的 delivery session；严格走 begin → `recording_committed_summary_read` → Hermes connector → commit 顺序。该 session 不得请求或接触原始转录。
-7. 最后报告简短状态；文字报告不能替代 Host 工具提交。
+5. 产物提交后立即停止；录音处理任务不得调用任何外部写入或投递工具。
+6. 最后报告简短状态；文字报告不能替代 Host 工具提交。
 
-如果 Hermes 无法完成纪要或投递，保留明确错误供 Host 记录。不要切换到另一个通用 Agent 作为隐式 fallback；音频引擎也不得在本地与 xAI 之间自动切换。
+如果 Hermes 无法完成纪要，保留明确错误供 Host 记录。不要切换到另一个通用 Agent 作为隐式 fallback；音频引擎也不得在本地与 xAI 之间自动切换。历史投递的 Unknown Outcome 只能人工核对，不能重试。
 
 ## 本地路径
 
@@ -176,9 +167,9 @@ Host 暂时不可用时，录音完成事件会原子暂存并在恢复后重放
 2. **本地 Host**：`curl -fsS http://127.0.0.1:7777/healthz` 和 `yulu logs ui`。
 3. **持久化任务**：`recording_task_get` 或 `yulu doctor --json` 的 `host_tasks`。
 4. **音频引擎**：本地模型状态，或 xAI OAuth 来源与 xAI STT 错误。
-5. **Hermes**：纪要/投递 Agent capability，以及 Yulu LaunchAgent 能看到的稳定 Hermes PATH。
+5. **Hermes**：纪要 Agent capability，以及 Yulu LaunchAgent 能看到的稳定 Hermes PATH。
 6. **产物**：检查独立提交的 transcript artifact 和后续 summary artifact。
-7. **Notion**：检查任务 opt-in、delivery record、页面 URL/ID 和稳定标记。
+7. **历史 Notion 投递**：只检查 delivery record、页面 URL/ID 和稳定标记；不要触发新投递。
 
 常用命令：
 

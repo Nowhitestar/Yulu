@@ -93,7 +93,6 @@ def test_stop_posts_completion_to_host_and_never_runs_legacy_pipeline(monkeypatc
         "payload": {
             "audioPath": str(wav.resolve()),
             "title": "Team Sync",
-            "sendToNotion": True,
             "language": "zh",
         },
         "timeout": 5.0,
@@ -122,7 +121,6 @@ def test_stop_spools_completion_atomically_when_host_is_unavailable(monkeypatch,
     assert json.loads(events[0].read_text(encoding="utf-8")) == {
         "audioPath": str(wav.resolve()),
         "title": "Team Sync",
-        "sendToNotion": True,
         "language": "zh",
     }
     assert not list(meeting_daemon.RECORDING_EVENTS_DIR.glob("*.tmp"))
@@ -172,7 +170,7 @@ def test_capture_edge_keeps_recording_without_dispatch_when_auto_processing_is_d
     assert not meeting_daemon.RECORDING_EVENTS_DIR.exists()
 
 
-def test_auto_send_notion_uses_agent_pipeline_consent(monkeypatch, tmp_path):
+def test_recording_completion_never_carries_legacy_automatic_share_intent(monkeypatch, tmp_path):
     import meeting_daemon
 
     cfg = tmp_path / "config.json"
@@ -180,14 +178,14 @@ def test_auto_send_notion_uses_agent_pipeline_consent(monkeypatch, tmp_path):
     cfg.write_text(json.dumps({
         "agent_pipeline": {"auto_send_notion": False},
     }), encoding="utf-8")
-    assert meeting_daemon._recording_completed_payload("/tmp/a.wav", "A")["sendToNotion"] is False
+    assert "sendToNotion" not in meeting_daemon._recording_completed_payload("/tmp/a.wav", "A")
     assert meeting_daemon._recording_completed_payload("/tmp/a.wav", "A")["language"] == "zh"
 
     cfg.write_text(json.dumps({"agent_pipeline": {"auto_send_notion": True}}), encoding="utf-8")
-    assert meeting_daemon._recording_completed_payload("/tmp/a.wav", "A")["sendToNotion"] is True
+    assert "sendToNotion" not in meeting_daemon._recording_completed_payload("/tmp/a.wav", "A")
 
     cfg.write_text("{}", encoding="utf-8")
-    assert meeting_daemon._recording_completed_payload("/tmp/a.wav", "A")["sendToNotion"] is False
+    assert "sendToNotion" not in meeting_daemon._recording_completed_payload("/tmp/a.wav", "A")
 
 
 def test_realtime_request_freezes_configured_language_and_uses_bearer_token(monkeypatch, tmp_path):

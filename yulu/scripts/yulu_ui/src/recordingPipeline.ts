@@ -117,6 +117,7 @@ function pipelineDisabledReason(config: YuluConfig): string | null {
 export interface RecordingCompletionInput {
   audioPath: string;
   title?: string;
+  /** @deprecated Recording completion never authorizes an external write. */
   sendToNotion?: boolean;
   language?: TranscriptionLanguage;
 }
@@ -153,7 +154,6 @@ interface PreparedRecordingTask {
   transcriptionLanguage: TranscriptionLanguage;
   stem: string;
   title: string;
-  sendToNotion: boolean;
   destinationHint: string;
   agentProvider: string;
   summaryProvider: string;
@@ -202,7 +202,6 @@ export class RecordingPipeline {
       transcriptionLanguage: normalizeTranscriptionLanguage(config.transcription.language),
       stem: recording.stem,
       title: input.title?.trim() || recording.title,
-      sendToNotion: false,
       destinationHint: pipelineConfig(config).notion_destination,
       agentProvider: summary.provider,
       summaryProvider: summary.provider,
@@ -263,7 +262,6 @@ export class RecordingPipeline {
       ),
       stem: recording.stem,
       title,
-      sendToNotion: input.sendToNotion === true,
       destinationHint: pipelineConfig(config).notion_destination,
       agentProvider: summary.provider,
       summaryProvider: summary.provider,
@@ -373,7 +371,7 @@ export class RecordingPipeline {
       title: input.title,
       audioPath: input.audioPath,
       transcriptionLanguage: input.transcriptionLanguage,
-      sendToNotion: input.sendToNotion,
+      sendToNotion: false,
       destinationHint: input.destinationHint,
       agentProvider: input.agentProvider,
       summaryProvider: input.summaryProvider,
@@ -639,17 +637,9 @@ export class RecordingPipeline {
       const usesXaiSummary = task.summaryProvider === "xai";
       const usesSupportedAgentSummary = Boolean(task.summaryConnectionId);
       let summaryGateway: RecordingAgentGateway | null = null;
-      let deliveryGateway: RecordingAgentGateway | null = null;
-      if (task.sendToNotion) {
-        try {
-          deliveryGateway = this.resolveGateway(config);
-        } catch (error) {
-          throw new AgentUnavailableError((error as Error).message);
-        }
-      }
       if (!resumesCommittedArtifacts && !usesXaiSummary && !usesSupportedAgentSummary) {
         try {
-          summaryGateway = deliveryGateway ?? this.resolveGateway(config);
+          summaryGateway = this.resolveGateway(config);
         } catch (error) {
           throw new AgentUnavailableError((error as Error).message);
         }
@@ -908,38 +898,11 @@ export class RecordingPipeline {
         });
       }
 
-      // The delivery phase starts a new native session. It receives neither
-      // the artifact session context nor filesystem capability, and can read
-      // only the Host-verified committed summary through its dedicated MCP.
-      let deliveryResult = null;
-      if (afterAgent.sendToNotion) {
-        if (!deliveryGateway) throw new AgentUnavailableError("Agent delivery runtime is unavailable");
-        // Persist the uncertainty fence before the Agent receives any external
-        // connector capability. Even a write-before-begin policy violation or
-        // process crash must become delivery_unverified, never a retryable task.
-        this.options.store.beginNotionDelivery(task.id, leaseToken);
-        deliveryResult = await deliveryGateway.runNotionWorkflow({
-          ...workflowInput,
-          task: this.options.store.getTask(task.id)!,
-        });
-      }
-      if (deliveryResult) {
-        if (artifactSessionId && deliveryResult.nativeSessionId === artifactSessionId) {
-          throw new Error("Hermes reused the artifact session for Notion delivery");
-        }
-        this.options.store.recordPhaseSession(task.id, leaseToken, "delivery", deliveryResult.nativeSessionId);
-        if (!deliveryResult.audit.ok) throw new Error(deliveryResult.audit.errors.join("; "));
-      }
-      const afterDelivery = this.options.store.getTask(task.id)!;
-      const expected = afterDelivery.sendToNotion ? "delivery_reported" : "artifacts_committed";
-      if (afterDelivery.state !== expected) {
-        throw new Error(`Summary Provider exited without completing the required Host commits (state=${afterDelivery.state})`);
-      }
       const completionAudit = {
         artifactSessionId,
         artifactToolNames,
-        deliverySessionId: deliveryResult?.nativeSessionId ?? null,
-        deliveryToolNames: deliveryResult?.audit.toolNames ?? [],
+        deliverySessionId: null,
+        deliveryToolNames: [],
         transcriptChunks: transcription.chunks,
         transcriptionProvider: transcription.provider,
       };

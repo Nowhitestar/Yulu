@@ -288,11 +288,11 @@ function registerRecordingDeliveryTools(
     return json({ taskId, summary: ctx.artifacts.readCommittedSummary(task, summary), sha256: summary.sha256 });
   });
   server.registerTool("recording_begin_notion_delivery", {
-    description: "Authorize the active leased task to begin its configured Notion side effect after artifacts are committed.",
+    description: "Retired compatibility endpoint. New recording delivery requires a manual Share Action.",
     inputSchema: { taskId: z.string().uuid(), leaseToken: z.string().uuid() },
   }, async ({ taskId, leaseToken }) => json(ctx.host.beginNotionDelivery(taskId, leaseToken)));
   server.registerTool("recording_commit_notion_delivery", {
-    description: "Record a Notion delivery result after Hermes' own Notion connector reports success.",
+    description: "Legacy audit compatibility endpoint for a Notion delivery that already started.",
     inputSchema: {
       taskId: z.string().uuid(),
       leaseToken: z.string().uuid(),

@@ -519,6 +519,7 @@ export class HostStore {
       this.db.pragma("busy_timeout = 5000");
       this.migrate();
       this.recoverInterrupted();
+      this.retireUnstartedLegacyAutomaticDeliveryIntent();
       for (const dbPath of [path, `${path}-wal`, `${path}-shm`]) {
         if (existsSync(dbPath)) chmodSync(dbPath, 0o600);
       }
@@ -1948,48 +1949,8 @@ export class HostStore {
   }
 
   beginNotionDelivery(id: string, leaseToken: string): NotionDelivery {
-    const begin = this.db.transaction(() => {
-      const task = this.requireLease(id, leaseToken);
-      if (!task.sendToNotion) throw new Error("Notion delivery was not authorized for this task");
-      if (this.listArtifacts(id).length < 2) throw new Error("artifacts must be committed before Notion delivery");
-      if (this.isArtifactPublishPending(id)) {
-        throw new Error("artifact publication is pending before Notion delivery");
-      }
-      if (task.state === "sending") {
-        const existing = this.getNotionDelivery(id);
-        if (!existing || existing.status !== "sending") {
-          throw new Error(`task ${id} has an inconsistent Notion delivery fence`);
-        }
-        return existing;
-      }
-      if (task.state !== "artifacts_committed") {
-        throw new Error(`task ${id} cannot begin Notion delivery from ${task.state}`);
-      }
-      const timestamp = now();
-      const delivery: NotionDelivery = {
-        taskId: id,
-        deliveryKey: `yulu-${id}`,
-        status: "sending",
-        destination: task.destinationHint,
-        url: null,
-        pageId: null,
-        detail: null,
-        createdAt: timestamp,
-        updatedAt: timestamp,
-      };
-      this.db.prepare(`
-        INSERT INTO notion_deliveries (
-          task_id, delivery_key, status, destination, created_at, updated_at
-        ) VALUES (?, ?, 'sending', ?, ?, ?)
-        ON CONFLICT(task_id) DO UPDATE SET status = 'sending',
-          destination = excluded.destination, updated_at = excluded.updated_at
-      `).run(id, delivery.deliveryKey, delivery.destination, timestamp, timestamp);
-      this.db.prepare("UPDATE agent_tasks SET state = 'sending', phase = 'sending_notion', updated_at = ? WHERE id = ?")
-        .run(timestamp, id);
-      this.appendEvent(id, "notion.delivery_started", { deliveryKey: delivery.deliveryKey, destination: delivery.destination });
-      return this.getNotionDelivery(id)!;
-    });
-    return begin();
+    this.requireLease(id, leaseToken);
+    throw new Error("Automatic Notion delivery is retired; begin a new manual Share Action instead");
   }
 
   recordNotionDelivery(id: string, leaseToken: string, result: {
@@ -2079,7 +2040,7 @@ export class HostStore {
 
   complete(id: string, leaseToken: string, audit: Record<string, unknown>): AgentTask {
     const task = this.requireLease(id, leaseToken);
-    const expectedState = task.sendToNotion ? "delivery_reported" : "artifacts_committed";
+    const expectedState = "artifacts_committed";
     if (task.state !== expectedState) {
       throw new Error(`task ${id} cannot complete from ${task.state}; expected ${expectedState}`);
     }
@@ -2336,8 +2297,14 @@ export class HostStore {
           END,
           lease_token = NULL,
           native_session_id = NULL, artifact_session_id = NULL, delivery_session_id = NULL,
-          attempt = 0, error = NULL, audit_json = NULL, updated_at = ? WHERE id = ?
+          send_to_notion = 0, attempt = 0, error = NULL, audit_json = NULL, updated_at = ? WHERE id = ?
       `).run(now(), id);
+      if (task.sendToNotion) {
+        this.appendEvent(id, "legacy.automatic_delivery_intent_retired", {
+          previousState: task.state,
+          automaticRetryPrevented: true,
+        });
+      }
       this.appendEvent(id, "task.retried", {});
       return this.getTask(id)!;
     });
@@ -2675,6 +2642,31 @@ export class HostStore {
       }
     });
     recover.immediate();
+  }
+
+  private retireUnstartedLegacyAutomaticDeliveryIntent(): void {
+    const retire = this.db.transaction(() => {
+      const rows = this.db.prepare(`
+        SELECT id, state FROM agent_tasks
+        WHERE send_to_notion = 1
+          AND NOT EXISTS (
+            SELECT 1 FROM notion_deliveries WHERE notion_deliveries.task_id = agent_tasks.id
+          )
+        ORDER BY created_at
+      `).all() as Array<{ id: string; state: AgentTaskState }>;
+      const timestamp = now();
+      for (const row of rows) {
+        this.db.prepare(`
+          UPDATE agent_tasks SET send_to_notion = 0, updated_at = ?
+          WHERE id = ? AND send_to_notion = 1
+        `).run(timestamp, row.id);
+        this.appendEvent(row.id, "legacy.automatic_delivery_intent_retired", {
+          previousState: row.state,
+          automaticRetryPrevented: true,
+        });
+      }
+    });
+    retire.immediate();
   }
 
   private migrate(): void {

@@ -78,7 +78,6 @@
   "agent_pipeline": {
     "enabled": true,
     "auto_process_recordings": true,
-    "auto_send_notion": false,
     "notion_destination": "Yulu Meeting"
   },
   "llm": {

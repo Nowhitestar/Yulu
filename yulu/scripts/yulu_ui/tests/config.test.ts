@@ -83,7 +83,7 @@ describe("ConfigManager", () => {
     }));
     try {
       const cfg = new ConfigManager(path).read();
-      expect(cfg.agent_pipeline.auto_send_notion).toBe(true);
+      expect(cfg.agent_pipeline).not.toHaveProperty("auto_send_notion");
       expect(cfg.agent_pipeline.notion_destination).toBe("Meetings DB");
       expect(cfg.agent_console.destinations.hermes?.notion.target).toBe("Meetings DB");
       const raw = JSON.parse(readFileSync(path, "utf8"));
@@ -109,6 +109,27 @@ describe("ConfigManager", () => {
     }));
     try {
       expect(new ConfigManager(path).read().agent_pipeline.notion_destination).toBe("Explicit target");
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it("archives and removes the retired automatic-sharing flag idempotently", () => {
+    const dir = mkdtempSync(join(tmpdir(), "yulu_auto_share_migration_"));
+    const path = join(dir, "config.json");
+    fs.writeFileSync(path, JSON.stringify({
+      audio: { output_dir: "~/Movies/Yulu" },
+      agent_pipeline: { auto_send_notion: true, notion_destination: "Meetings DB" },
+    }));
+    try {
+      new ConfigManager(path).read();
+      new ConfigManager(path).read();
+
+      const raw = JSON.parse(readFileSync(path, "utf8"));
+      expect(raw.agent_pipeline).toEqual({ notion_destination: "Meetings DB" });
+      const archives = readdirSync(dir).filter((name) => name.includes("legacy-automatic-share"));
+      expect(archives).toHaveLength(1);
+      expect(JSON.parse(readFileSync(join(dir, archives[0]!), "utf8"))).toMatchObject({
+        agent_pipeline: { auto_send_notion: true },
+      });
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 
@@ -355,12 +376,10 @@ describe("registry-driven classify + per-field validation", () => {
       expect(() => mgr.update("meeting_detection.interval_sec", 0)).toThrow(ZodError);
     } finally { cleanup(); }
   });
-  it("agent_pipeline auto-send consent writes without daemon reload", () => {
+  it("rejects the retired automatic-sharing setting", () => {
     const { mgr, cleanup } = makeCfg();
     try {
-      expect(mgr.update("agent_pipeline.auto_send_notion", true)).toEqual({ daemonsNeedingRestart: [], daemonsNeedingSighup: [] });
-      expect(mgr.read().agent_pipeline.auto_send_notion).toBe(true);
-      expect(() => mgr.update("agent_pipeline.auto_send_notion", "yes")).toThrow(ZodError);
+      expect(() => mgr.update("agent_pipeline.auto_send_notion", true)).toThrow(/manual-only/);
     } finally { cleanup(); }
   });
 });

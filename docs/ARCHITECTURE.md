@@ -198,58 +198,27 @@ Host:
 
 Directly writing a final recording sidecar does not complete a task.
 
-## Notion side-effect boundary
+## Recording completion and legacy delivery boundary
 
-Notion is disabled per task unless `sendToNotion=true` was recorded at enqueue
-time. Recording work uses two non-overlapping MCP servers:
+Recording Processing ends after transcript and summary artifacts are committed.
+No completion event, legacy task flag, or configuration value may begin an
+external write. Recording work uses two non-overlapping MCP servers:
 
 - `/mcp/recording-artifact`, configured in Hermes as `yulu_artifact`, exposes
   only task get/progress, task-scoped transcript read, summary stage, and artifact
   commit;
-- `/mcp/recording-delivery`, configured as `yulu_delivery`, exposes only task get,
-  Host-verified committed-summary read, and Notion begin/commit boundaries.
+- `/mcp/recording-delivery`, configured as `yulu_delivery`, retains the historical
+  committed-summary and Notion delivery endpoints for legacy audit compatibility;
+  its begin endpoint rejects every new delivery.
 
 The general `/mcp` server remains the full Yulu capability surface for interactive
 Agents. The artifact session receives only `yulu_artifact`; it has neither `file`
-nor any connector toolset. If delivery is authorized, the Host starts a new native
-Hermes session with only `yulu_delivery,notion`. It never resumes the artifact
-session containing raw-transcript context. The Host records and audits the two
-native session IDs separately, then backfills artifact provenance with the actual
-artifact session ID.
-
-After artifacts are committed:
-
-1. The Host validates the lease, opt-in, task state, and artifacts, then persists
-   `sending` and the stable delivery key before giving the new Agent session any
-   connector capability.
-2. Hermes requests `recording_begin_notion_delivery` to confirm the authorization
-   and receive any page identity already verified by an earlier delivery.
-3. Hermes reads the summary through `recording_committed_summary_read`; the Host
-   verifies the artifact row, expected path, byte count, and SHA-256 first.
-4. If the Host returned an existing page URL/ID, Hermes updates exactly that page
-   without search or create. Otherwise it searches the stable key
-   (`yulu-<task-id>`) once, updates the single exact match, or creates one page
-   only when the parsed search result is explicitly empty.
-6. Hermes uses its own Notion connector and includes that key as an idempotency
-   marker.
-7. Hermes reports the destination and page URL or ID with
-   `recording_commit_notion_delivery`.
-8. The Host accepts completion only when the delivery session contains no extra
-   connector calls, exactly one matching write, and a write result consistent
-   with the reported URL or page ID.
-
-The delivery identity is keyed by recording plus destination, not by whether the
-task happens to be `completed` at lookup time. If a later local reprocessing
-attempt fails before another external write, the next authorized send reuses the
-reported task, page identity, and stable `yulu-<task-id>` key. An uncertain write
-must instead be resolved through explicit confirm-or-abandon reconciliation;
-normal retry cannot cross that boundary.
-
-Yulu never reads Notion credentials and never treats Agent prose as proof that a
-page was created. Completion also requires an exported Hermes session showing
-either a direct update of the Host-verified page or a successful exact-marker
-search branch, plus a Notion write result matching the reported page identity and
-the Host calls in the required order.
+nor any connector toolset. After an upgrade, unstarted legacy intent is cleared.
+Started and reported legacy deliveries recover to `delivery_unverified`, remain
+unclaimable, and require explicit confirm-or-abandon reconciliation. Their delivery
+rows and completed receipts remain auditable, and ordinary retry cannot cross the
+Unknown Outcome fence. A later manual Share Action is a new, separately confirmed
+operation governed by ADRs 0025 and 0026.
 
 ## General Agent separation
 
@@ -268,12 +237,11 @@ The recording pipeline and interactive Agent Console are deliberately separate:
   expose local recordings, search, prompts, glossary, health, and task tools, but
   it does not proxy arbitrary connector calls.
 
-Connector ownership is partitioned by intent. Delivery of a recording's committed
-artifacts to Notion always belongs to the leased Hermes recording task and uses
-`agent_pipeline.notion_destination`, task opt-in, and the Host delivery key.
-A Notion action requested inside an unrelated conversation belongs to the selected
-general Agent and is not a recording delivery. The two paths must not silently
-trigger one another.
+Connector ownership is partitioned by intent. Recording Processing owns only the
+local transcript and summary commits. A recording Share belongs to a fresh manual
+Share Action with its own pinned destination; a Notion action requested inside an
+unrelated conversation belongs to the selected general Agent. These paths must not
+silently trigger one another.
 
 ## Python capture edge
 
@@ -313,9 +281,9 @@ directly to xAI; selecting local keeps it on the Mac. Yulu stores the xAI OAuth
 grant in macOS Keychain and never sends it to an Agent. The summary Agent receives the committed
 transcript and bounded task instructions, not an audio-transcription role.
 
-Notion requires a separate per-task opt-in. Other interactive connector actions
-belong to the general Agent and follow that Agent's own consent and credential
-model. Yulu configuration must not contain connector secrets.
+Sharing requires a fresh explicit manual action and confirmation. Other interactive
+connector actions belong to the general Agent and follow that Agent's own consent
+and credential model. Yulu configuration must not contain connector secrets.
 
 Runtime databases, bearer tokens, task workspaces, sockets, locks, and event
 spools must remain machine-local. A user may choose another recording content

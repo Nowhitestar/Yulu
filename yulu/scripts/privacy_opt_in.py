@@ -31,9 +31,6 @@ def privacy_opt_in_report(config: Mapping[str, Any] | None) -> dict[str, Any]:
     conversation_provider = str(agent.get("provider") or "hermes").strip().lower()
     pipeline_enabled = agent_pipeline.get("enabled") is not False
 
-    auto_notion = bool(agent_pipeline.get("auto_send_notion"))
-    external_channels = ["notion"] if auto_notion else []
-
     return {
         "schema_version": 1,
         "ok": pipeline_enabled,
@@ -53,9 +50,9 @@ def privacy_opt_in_report(config: Mapping[str, Any] | None) -> dict[str, Any]:
         },
         "summary_delivery": {
             "owner": "hermes",
-            "auto_channel": "notion" if auto_notion else "file",
-            "auto_external_opt_in": auto_notion,
-            "external_opt_in_channels": external_channels,
+            "auto_channel": "file",
+            "auto_external_opt_in": False,
+            "external_opt_in_channels": [],
             "ok": True,
         },
     }

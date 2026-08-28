@@ -554,7 +554,7 @@ describe("server", () => {
     ]);
   });
 
-  it("accepts an authenticated recording completion once and exposes its durable task", async () => {
+  it("accepts an authenticated recording completion once without carrying legacy automatic Share intent", async () => {
     const configDir = join(env.root, ".config", "yulu");
     const moviesDir = join(env.root, "Movies", "Yulu");
     const token = "test-token";
@@ -586,7 +586,7 @@ describe("server", () => {
       arguments: { taskId: firstBody.taskId },
     }) as { result?: { content?: Array<{ text?: string }> } };
     const task = JSON.parse(taskCall.result?.content?.[0]?.text ?? "{}");
-    expect(task).toMatchObject({ id: firstBody.taskId, recordingStem: "Pipeline_20260711_120000", sendToNotion: true });
+    expect(task).toMatchObject({ id: firstBody.taskId, recordingStem: "Pipeline_20260711_120000", sendToNotion: false });
   });
 
   it("returns a permanent policy result instead of creating a disabled completion task", async () => {
@@ -638,7 +638,7 @@ describe("server", () => {
     }
   });
 
-  it("preserves legacy task-scoped artifact commits before allowing a Notion delivery report", async () => {
+  it("preserves task-scoped artifact commits while rejecting legacy automatic delivery", async () => {
     const configDir = join(env.root, ".config", "yulu");
     const moviesDir = join(env.root, "Movies", "Yulu");
     const token = "test-token";
@@ -687,22 +687,16 @@ describe("server", () => {
     const begin = await mcpPost("tools/call", {
       name: "recording_begin_notion_delivery",
       arguments: { taskId, leaseToken: claimed!.leaseToken },
-    }, "/mcp/recording-delivery") as { result?: { content?: Array<{ text?: string }> } };
-    expect(JSON.parse(begin.result?.content?.[0]?.text ?? "{}").status).toBe("sending");
+    }, "/mcp/recording-delivery") as { result?: { content?: Array<{ text?: string }>; isError?: boolean } };
+    expect(begin.result?.isError).toBe(true);
+    expect(begin.result?.content?.[0]?.text).toContain("retired");
     const committedSummary = await mcpPost("tools/call", {
       name: "recording_committed_summary_read",
       arguments: { taskId, leaseToken: claimed!.leaseToken },
     }, "/mcp/recording-delivery") as { result?: { content?: Array<{ text?: string }> } };
     expect(JSON.parse(committedSummary.result?.content?.[0]?.text ?? "{}").summary).toContain("阿尔法学院 summary");
-    await mcpPost("tools/call", {
-      name: "recording_commit_notion_delivery",
-      arguments: {
-        taskId,
-        leaseToken: claimed!.leaseToken,
-        url: "https://www.notion.so/test-page",
-      },
-    }, "/mcp/recording-delivery");
-    expect(secondWriter.getTask(taskId)?.state).toBe("delivery_reported");
+    expect(secondWriter.getNotionDelivery(taskId)).toBeNull();
+    expect(secondWriter.complete(taskId, claimed!.leaseToken!, {}).state).toBe("completed");
     expect(readFileSync(join(moviesDir, "Commit_20260711_120000.transcript.txt"), "utf8")).toContain("committed transcript");
     expect(readFileSync(join(moviesDir, "Commit_20260711_120000.summary.md"), "utf8")).toContain("阿尔法学院 summary");
     secondWriter.close();

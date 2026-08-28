@@ -42,7 +42,6 @@ capability silently falls back to another provider or model.
   "agent_pipeline": {
     "enabled": true,
     "auto_process_recordings": true,
-    "auto_send_notion": false,
     "notion_destination": "Yulu Meeting"
   },
   "llm": {
@@ -130,17 +129,17 @@ This section controls durable recording work, not an AI implementation.
 
 | Field | Default | Meaning |
 |---|---:|---|
-| `enabled` | `true` | Master switch for automatic summary/delivery work. When false, durable Agent work pauses in `awaiting_policy`; the separately selected audio engine remains available for transcription and dictation. |
+| `enabled` | `true` | Master switch for automatic recording processing. When false, durable Agent work pauses in `awaiting_policy`; the separately selected audio engine remains available for transcription and dictation. |
 | `auto_process_recordings` | `true` | Accept completed recordings and dispatch automatic tasks. When false, recordings remain saved, automatic work pauses, and explicit manual processing stays available. |
-| `auto_send_notion` | `false` | Add explicit Notion authorization to automatically created recording tasks. |
-| `notion_destination` | `"Yulu Meeting"` | Human-readable destination hint passed to Hermes. It is not a credential or database secret. |
+| `notion_destination` | `"Yulu Meeting"` | Legacy human-readable destination hint retained for migration. It cannot trigger sharing and is not a credential or database secret. |
 
-Setting `auto_send_notion=true` is a real side-effect opt-in. The Host will allow
-Hermes to begin delivery only after the transcript has been durably committed and
-the summary has been generated and committed.
+Recording Processing always ends after the transcript and summary are durably
+committed. The retired `auto_send_notion` compatibility setting is archived and
+removed on upgrade and cannot authorize an external write. Sharing begins only
+from a new explicit manual Share Action.
 
-The switches have deliberately different scope. `enabled=false` pauses summary and
-delivery work at `awaiting_policy`; it does not disable the independently selected
+The switches have deliberately different scope. `enabled=false` pauses recording
+processing at `awaiting_policy`; it does not disable the independently selected
 audio engine. `auto_process_recordings=false` pauses only automatic intake and
 automatic dispatch. Explicit transcription and dictation remain available, and
 choosing a manual summary action for an automatic `awaiting_policy` task promotes
@@ -248,16 +247,15 @@ priority order. This does not change any existing audio/task/session snapshot.
 If the pinned Summary Provider is unavailable, a recording transcript remains
 committed while its summary task waits in `awaiting_provider`.
 
-To pause automatic summary and delivery work, set `agent_pipeline.enabled=false`.
+To pause automatic recording processing, set `agent_pipeline.enabled=false`.
 Realtime captions, transcription, and dictation remain controlled by the selected
 audio engine. `llm.enabled=false` only disables general conversation work.
 
 `agent_console.plugins.added` is a presentation filter for capabilities shown in
 Agent Console. `agent_console.destinations` stores human-readable destination
 hints. Credentials, OAuth state, connector tools, and actual connection settings
-belong to the Agent. For a durable recording delivery,
-`agent_pipeline.notion_destination` is the authoritative destination hint;
-`agent_console.destinations` must not independently trigger delivery.
+belong to the Agent. The legacy `agent_pipeline.notion_destination` value cannot
+independently trigger sharing. A manual Share Action pins its destination separately.
 
 ## `status_agent`
 

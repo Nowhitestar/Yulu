@@ -72,7 +72,6 @@ const AgentConsoleSchema = z.object({
 const AgentPipelineSchema = z.object({
   enabled: z.boolean().default(true),
   auto_process_recordings: z.boolean().default(true),
-  auto_send_notion: z.boolean().default(false),
   notion_destination: z.string().default("Yulu Meeting"),
 }).passthrough().default({});
 
@@ -207,9 +206,9 @@ function hasOwn(record: JsonRecord, key: string): boolean {
 /**
  * Retire Yulu-owned connector configuration without destroying it.
  *
- * Destination preferences move to the Hermes Agent projection, the explicit
- * Notion opt-in moves to agent_pipeline, and the removed connector/output
- * blocks are written to a mode-0600 archive before the active config changes.
+ * Destination preferences move to the Hermes Agent projection, and the removed
+ * connector/output blocks are written to a mode-0600 archive before the active
+ * config changes. Legacy automatic-sharing authorization is not migrated.
  */
 export function migrateAgentNativeConfig(path: string): AgentNativeConfigMigration {
   if (!existsSync(path)) return { changed: false, archivePath: null };
@@ -227,9 +226,6 @@ export function migrateAgentNativeConfig(path: string): AgentNativeConfigMigrati
   if (!hasLegacy) return { changed: false, archivePath: null };
 
   const pipeline = ensureRecord(root, "agent_pipeline");
-  if (typeof pipeline.auto_send_notion !== "boolean") {
-    pipeline.auto_send_notion = legacyNotion.send_summary === true || legacyOutput.channel === "notion";
-  }
 
   const consoleConfig = ensureRecord(root, "agent_console");
   const destinations = ensureRecord(consoleConfig, "destinations");
@@ -339,6 +335,39 @@ export function migrateLegacyTranscriptionConfig(path: string): AgentNativeConfi
   return { changed: true, archivePath };
 }
 
+/** Archive and remove the retired automatic-sharing authorization setting. */
+export function migrateRetiredAutomaticSharingConfig(path: string): AgentNativeConfigMigration {
+  if (!existsSync(path)) return { changed: false, archivePath: null };
+  const raw = JSON.parse(readFileSync(path, "utf8")) as unknown;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new Error("Yulu config must contain a JSON object");
+  }
+  const root = raw as JsonRecord;
+  const pipeline = record(root.agent_pipeline);
+  if (!hasOwn(pipeline, "auto_send_notion")) return { changed: false, archivePath: null };
+
+  const stamp = new Date().toISOString().replace(/[-:.]/g, "");
+  const archivePath = join(dirname(path), `${basename(path, ".json")}.legacy-automatic-share.${stamp}.json`);
+  const archiveTmp = `${archivePath}.${process.pid}.tmp`;
+  writeFileSync(archiveTmp, `${JSON.stringify({
+    version: 1,
+    migratedAt: new Date().toISOString(),
+    sourcePath: path,
+    agent_pipeline: { auto_send_notion: pipeline.auto_send_notion },
+  }, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+  renameSync(archiveTmp, archivePath);
+
+  delete pipeline.auto_send_notion;
+  root.agent_pipeline = pipeline;
+  const configTmp = `${path}.${process.pid}.retired-automatic-share.tmp`;
+  writeFileSync(configTmp, `${JSON.stringify(root, null, 2)}\n`, {
+    encoding: "utf8",
+    mode: statSync(path).mode,
+  });
+  renameSync(configTmp, path);
+  return { changed: true, archivePath };
+}
+
 const RETIRED_GATEWAY_CONNECTION_ID = "cliproxyapi";
 
 /** Clear only selections for the removed Yulu-owned Gateway connection. */
@@ -374,6 +403,7 @@ export class ConfigManager {
 
   constructor(private readonly path: string) {
     migrateAgentNativeConfig(path);
+    migrateRetiredAutomaticSharingConfig(path);
     migrateLegacyTranscriptionConfig(path);
     migrateRetiredGatewaySelections(path);
   }
@@ -418,6 +448,9 @@ export class ConfigManager {
   updateMany(changes: ConfigUpdate[]): UpdateResult {
     if (changes.length === 0) return { daemonsNeedingRestart: [], daemonsNeedingSighup: [] };
     for (const { key } of changes) {
+      if (key === "agent_pipeline.auto_send_notion" || key.startsWith("agent_pipeline.auto_send_notion.")) {
+        throw new Error(`setting is retired because recording sharing is manual-only: ${key}`);
+      }
       if (isRetiredTranscriptionSetting(key)) {
         throw new Error(`setting is retired because Yulu now uses one explicit audio engine: ${key}`);
       }

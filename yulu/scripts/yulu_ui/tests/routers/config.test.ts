@@ -41,7 +41,7 @@ describe("configRouter", () => {
       const cfg = await caller.get();
       expect(cfg.transcription.language).toBe("zh");
       expect(cfg.transcription.dictation.prompt_slug).toBe("dictation-cleanup");
-      expect(cfg.agent_pipeline.auto_send_notion).toBe(false);
+      expect(cfg.agent_pipeline).not.toHaveProperty("auto_send_notion");
       expect(cfg.connectors.feishu.read_calendar).toBe(false);
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
@@ -55,13 +55,14 @@ describe("configRouter", () => {
     } finally { cleanup(); }
   });
 
-  it("update(agent_pipeline.auto_send_notion) needs no daemon restart", async () => {
+  it("rejects updates to retired automatic-sharing authorization", async () => {
     const { ctx, cleanup } = makeCtx();
     try {
       const caller = createCaller(configRouter, ctx);
-      const r = await caller.update({ key: "agent_pipeline.auto_send_notion", value: true });
-      expect(r.daemonsNeedingRestart).toEqual([]);
-      expect(r.daemonsNeedingSighup).toEqual([]);
+      await expect(caller.update({
+        key: "agent_pipeline.auto_send_notion",
+        value: true,
+      })).rejects.toThrow(/manual-only/);
     } finally { cleanup(); }
   });
 

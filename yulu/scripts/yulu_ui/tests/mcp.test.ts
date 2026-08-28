@@ -47,7 +47,7 @@ describe("MCP recording_stop pipeline handoff", () => {
     expect(enqueueCompletion).not.toHaveBeenCalled();
   });
 
-  it("enqueues the final path and prefers explicit Agent pipeline Notion consent", async () => {
+  it("enqueues the final path without legacy automatic Share intent", async () => {
     const enqueueCompletion = vi.fn(() => ({
       task: { id: "task-1", recordingStem: "Team_20260711_120000", state: "queued" },
       created: true,
@@ -69,7 +69,6 @@ describe("MCP recording_stop pipeline handoff", () => {
     });
     expect(enqueueCompletion).toHaveBeenCalledWith({
       audioPath: "/Users/test/Movies/Yulu/Team_20260711_120000.wav",
-      sendToNotion: false,
     });
     expect(result.pipeline).toEqual({
       accepted: true,
@@ -82,9 +81,9 @@ describe("MCP recording_stop pipeline handoff", () => {
   });
 
   it.each([
-    [{ agent_pipeline: { auto_send_notion: true } }, true],
-    [{ agent_pipeline: { auto_send_notion: false } }, false],
-  ])("uses the migrated Agent pipeline consent", async (config, expected) => {
+    { agent_pipeline: { auto_send_notion: true } },
+    { agent_pipeline: { auto_send_notion: false } },
+  ])("never carries legacy automatic-sharing authorization into manual or MCP completion", async (config) => {
     const enqueueCompletion = vi.fn(() => ({
       task: { id: "task-1", recordingStem: "Team_20260711_120000", state: "queued" },
       created: true,
@@ -97,7 +96,9 @@ describe("MCP recording_stop pipeline handoff", () => {
       stderr: "",
     }));
 
-    expect(enqueueCompletion).toHaveBeenCalledWith(expect.objectContaining({ sendToNotion: expected }));
+    expect(enqueueCompletion).toHaveBeenCalledWith({
+      audioPath: "/Users/test/Movies/Yulu/Team_20260711_120000.wav",
+    });
   });
 
   it.each([

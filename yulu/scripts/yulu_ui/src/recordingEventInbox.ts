@@ -62,7 +62,6 @@ export function startRecordingEventInbox(input: {
         input.pipeline.enqueueCompletion({
           audioPath: payload.audioPath,
           title: typeof payload.title === "string" ? payload.title : undefined,
-          sendToNotion: payload.sendToNotion === true,
         });
         unlinkSync(path);
       } catch (error) {

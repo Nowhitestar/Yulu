@@ -27,6 +27,10 @@ describe("recording completion spool", () => {
     const path = join(root, "019f0000-0000-7000-8000-000000000001.json");
     writeFileSync(path, JSON.stringify({ audioPath: "/movies/Demo_20260711_120000.wav", title: "Demo", sendToNotion: true }));
     await vi.waitFor(() => expect(calls).toHaveLength(1));
+    expect(calls).toEqual([{
+      audioPath: "/movies/Demo_20260711_120000.wav",
+      title: "Demo",
+    }]);
     expect(existsSync(path)).toBe(false);
     inbox.scan();
     expect(calls).toHaveLength(1);

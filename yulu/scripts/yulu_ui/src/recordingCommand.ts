@@ -49,10 +49,10 @@ export async function stopRecordingAndEnqueue(
   if (!audioPath) throw new Error("recording stopped but FINAL_RECORDING_PATH was missing");
   const recordingStem = basename(audioPath, extname(audioPath));
   onRecordingStopped?.({ audioPath, recordingStem });
-  const sendToNotion = ctx.config.read().agent_pipeline.auto_send_notion;
+  const sendToNotion = false;
   let enqueued;
   try {
-    enqueued = ctx.recordingPipeline.enqueueCompletion({ audioPath, sendToNotion });
+    enqueued = ctx.recordingPipeline.enqueueCompletion({ audioPath });
   } catch (error) {
     if (error instanceof RecordingPipelinePolicyDisabledError) {
       return {

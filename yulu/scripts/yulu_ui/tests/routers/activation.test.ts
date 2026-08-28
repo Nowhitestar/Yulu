@@ -159,13 +159,13 @@ describe("activation router", () => {
         summaryCredentialSource: selected.provider === "xai" ? xaiConnection.source : null,
       });
     });
-    const enqueueCompletion = vi.fn((input: { audioPath: string; title: string; sendToNotion: boolean }) => ({
+    const enqueueCompletion = vi.fn((input: { audioPath: string; title: string; sendToNotion?: boolean }) => ({
       ...host!.enqueueRecording({
         idempotencyKey: `activation-recovery:${input.audioPath}`,
         recordingStem: input.audioPath.split("/").at(-1)!.replace(/\.wav$/, ""),
         title: input.title,
         audioPath: input.audioPath,
-        sendToNotion: input.sendToNotion,
+        sendToNotion: input.sendToNotion === true,
         destinationHint: "",
         agentProvider: agentReadiness.provider,
         summaryProvider: agentReadiness.provider,
@@ -532,7 +532,8 @@ describe("activation router", () => {
   });
 
   it("recovers a saved stopped recording after a crash before enqueue", async () => {
-    const { caller, moviesDir, enqueueCompletion } = setup();
+    const { caller, moviesDir, enqueueCompletion, configValue } = setup();
+    configValue.agent_pipeline.auto_send_notion = true;
     const stem = "Crash_before_enqueue_20260825_141500";
     writeFileSync(join(moviesDir, `${stem}.wav`), wavWithAudio());
     const attempt = host!.beginActivationAttempt().attempt;
@@ -557,7 +558,6 @@ describe("activation router", () => {
     expect(enqueueCompletion).toHaveBeenCalledWith({
       audioPath: join(moviesDir, `${stem}.wav`),
       title: "Core Activation",
-      sendToNotion: false,
     });
   });
 

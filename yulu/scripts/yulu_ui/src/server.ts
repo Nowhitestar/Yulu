@@ -353,7 +353,11 @@ async function startLockedServer(
     }
     try {
       await realtimeTranscription.stop(parsed.audioPath);
-      const result = recordingPipeline.enqueueCompletion(parsed);
+      const result = recordingPipeline.enqueueCompletion({
+        audioPath: parsed.audioPath,
+        title: parsed.title,
+        language: parsed.language,
+      });
       return c.json({
         ok: true,
         taskId: result.task.id,

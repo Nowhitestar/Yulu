@@ -607,7 +607,6 @@ export const activationRouter = router({
     const result = ctx.recordingPipeline.enqueueCompletion({
       audioPath,
       title: "Core Activation",
-      sendToNotion: ctx.config.read().agent_pipeline.auto_send_notion,
     });
     ctx.host.correlateActivationAttempt(attempt.id, result.task.id);
     return await activeAttempt(ctx);

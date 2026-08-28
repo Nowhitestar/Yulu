@@ -83,9 +83,6 @@ describe("RecordingPipeline", () => {
     gatewayFactoryThrows?: boolean;
     transcribeContractGate?: Promise<void>;
     skipArtifactCommit?: boolean;
-    reuseArtifactSessionForDelivery?: boolean;
-    notionThrowsAfterCapability?: boolean;
-    notionUnavailableAfterCapability?: boolean;
     legacyManualTask?: boolean;
     pollMs?: number;
     glossaryRows?: Array<{ term: string; canonical: string; scope: "prompt" | "replace" | "both" }>;
@@ -186,7 +183,6 @@ describe("RecordingPipeline", () => {
         credentialSource,
       };
     });
-    let notionStartedFromState = "";
     const runArtifactWorkflow = vi.fn(async ({ task, leaseToken, workspace }: Parameters<RecordingAgentGateway["runArtifactWorkflow"]>[0]) => {
       const reportedIdentity = opts.supportedAgentAdapter ? {
         provider: supportedAgentProvider,
@@ -224,41 +220,8 @@ describe("RecordingPipeline", () => {
         },
       };
     });
-    const runNotionWorkflow = vi.fn(async ({ task, leaseToken }: Parameters<RecordingAgentGateway["runNotionWorkflow"]>[0]) => {
-      notionStartedFromState = store!.getTask(task.id)?.state ?? "";
-      if (opts.notionThrowsAfterCapability) {
-        throw new Error("Hermes delivery exited after connector access");
-      }
-      if (opts.notionUnavailableAfterCapability) {
-        throw new AgentUnavailableError("Hermes delivery runtime became unavailable");
-      }
-      const delivery = store!.beginNotionDelivery(task.id, leaseToken);
-      store!.recordNotionDelivery(task.id, leaseToken, {
-        url: "https://notion.so/demo",
-      });
-      return {
-        stdout: "delivery done",
-        stderr: `session_id: ${opts.reuseArtifactSessionForDelivery ? "artifact-session" : "delivery-session"}`,
-        nativeSessionId: opts.reuseArtifactSessionForDelivery ? "artifact-session" : "delivery-session",
-        audit: {
-          ok: true,
-          toolNames: [
-            "mcp_yulu_delivery_recording_committed_summary_read",
-            "mcp_notion_notion_search",
-            "mcp_notion_notion_create_pages",
-            "mcp_yulu_delivery_recording_commit_notion_delivery",
-          ],
-          artifactCommit: true,
-          notionDeliveryBegin: true,
-          notionSearch: true,
-          notionWrite: true,
-          notionIdempotencyMarker: true,
-          notionWriteResultVerified: true,
-          notionDeliveryCommit: true,
-          notionOrderValid: true,
-          errors: [],
-        },
-      };
+    const runNotionWorkflow = vi.fn(async () => {
+      throw new Error("automatic delivery must not run");
     });
     const gateway: RecordingAgentGateway = {
       provider: "hermes",
@@ -456,13 +419,12 @@ describe("RecordingPipeline", () => {
       runArtifactWorkflow,
       runNotionWorkflow,
       pubsub,
-      notionStartedFromState: () => notionStartedFromState,
       legacyManualTask,
     };
   }
 
-  it("runs selected audio transcription, summary Agent commit, and Notion in one durable task", async () => {
-    const { audioPath, moviesDir, configDir, runArtifactWorkflow, runNotionWorkflow, notionStartedFromState } = setup({
+  it("ends recording processing after non-empty transcript and summary commits without an external write", async () => {
+    const { audioPath, moviesDir, configDir, runArtifactWorkflow, runNotionWorkflow } = setup({
       supportedAgentAdapter: true,
     });
     acceptSupportedAgentSummary();
@@ -471,13 +433,15 @@ describe("RecordingPipeline", () => {
     expect(duplicate.task.id).toBe(first.task.id);
     await vi.waitFor(() => expect(store!.getTask(first.task.id)?.state).toBe("completed"));
     expect(store!.listArtifacts(first.task.id)).toHaveLength(2);
-    expect(store!.getNotionDelivery(first.task.id)?.url).toBe("https://notion.so/demo");
-    expect(notionStartedFromState()).toBe("sending");
+    expect(readFileSync(join(moviesDir, `${first.task.recordingStem}.transcript.txt`), "utf8").trim()).not.toBe("");
+    expect(readFileSync(join(moviesDir, `${first.task.recordingStem}.summary.md`), "utf8").trim()).not.toBe("");
+    expect(store!.getTask(first.task.id)?.sendToNotion).toBe(false);
+    expect(store!.getNotionDelivery(first.task.id)).toBeNull();
     expect(runArtifactWorkflow).toHaveBeenCalledTimes(1);
-    expect(runNotionWorkflow).toHaveBeenCalledWith(expect.not.objectContaining({ nativeSessionId: expect.anything() }));
+    expect(runNotionWorkflow).not.toHaveBeenCalled();
     expect(store!.getTask(first.task.id)).toMatchObject({
       artifactSessionId: "artifact-session",
-      deliverySessionId: "delivery-session",
+      deliverySessionId: null,
     });
     expect(store!.listArtifacts(first.task.id).every((record) => (
       record.provenance.artifactSessionId === "artifact-session"
@@ -1429,55 +1393,6 @@ describe("RecordingPipeline", () => {
     expect(runNotionWorkflow).not.toHaveBeenCalled();
   });
 
-  it("fails closed if Hermes reuses the raw-transcript artifact session for delivery", async () => {
-    const { audioPath } = setup({
-      supportedAgentAdapter: true,
-      reuseArtifactSessionForDelivery: true,
-    });
-    acceptSupportedAgentSummary();
-    const { task } = pipeline!.enqueueCompletion({ audioPath, sendToNotion: true });
-
-    await vi.waitFor(() => expect(store!.getTask(task.id)?.state).toBe("delivery_unverified"));
-    expect(store!.getTask(task.id)?.error).toContain("reused the artifact session");
-    expect(store!.getTask(task.id)?.deliverySessionId).toBeNull();
-  });
-
-  it("fences connector uncertainty before the delivery Agent can make a write", async () => {
-    const { audioPath, notionStartedFromState, pubsub } = setup({
-      supportedAgentAdapter: true,
-      notionThrowsAfterCapability: true,
-    });
-    acceptSupportedAgentSummary();
-    const completed: AppChannels["core-activation"][] = [];
-    pubsub.subscribe("core-activation", (event) => completed.push(event));
-    writeFileSync(audioPath, wavWithAudio());
-    const { task } = pipeline!.enqueueCompletion({ audioPath, sendToNotion: true });
-
-    await vi.waitFor(() => expect(store!.getTask(task.id)?.state).toBe("delivery_unverified"));
-    expect(notionStartedFromState()).toBe("sending");
-    expect(store!.getNotionDelivery(task.id)).toMatchObject({
-      deliveryKey: `yulu-${task.id}`,
-      status: "sending",
-    });
-    expect(store!.getCoreActivationEvidence()).toMatchObject({ taskId: task.id });
-    expect(completed).toEqual([{ taskId: task.id, recordingStem: task.recordingStem }]);
-    expect(() => pipeline!.retry(task.id)).toThrow(/cannot retry from delivery_unverified/);
-  });
-
-  it("keeps the delivery fence when Hermes becomes unavailable after connector access", async () => {
-    const { audioPath, notionStartedFromState } = setup({
-      supportedAgentAdapter: true,
-      notionUnavailableAfterCapability: true,
-    });
-    acceptSupportedAgentSummary();
-    const { task } = pipeline!.enqueueCompletion({ audioPath, sendToNotion: true });
-
-    await vi.waitFor(() => expect(store!.getTask(task.id)?.state).toBe("delivery_unverified"));
-    expect(notionStartedFromState()).toBe("sending");
-    expect(store!.listEvents(task.id).map((event) => event.type)).not.toContain("task.awaiting_agent");
-    expect(() => pipeline!.retry(task.id)).toThrow(/cannot retry from delivery_unverified/);
-  });
-
   it("does not hot-loop when the selected audio engine fails after claim", async () => {
     const { audioPath, transcribe } = setup({ transcribeUnavailable: true });
     const { task } = pipeline!.enqueueCompletion({ audioPath, title: "Demo" });
@@ -1611,21 +1526,6 @@ describe("RecordingPipeline", () => {
     });
     expect(transcribe).not.toHaveBeenCalled();
     expect(store!.claimNext()).toBeNull();
-  });
-
-  it("reuses the same task and delivery marker when reconciling an uncertain Notion result", async () => {
-    const { audioPath } = setup({ supportedAgentAdapter: true });
-    acceptSupportedAgentSummary();
-    const first = pipeline!.enqueueCompletion({ audioPath, sendToNotion: true });
-    await vi.waitFor(() => expect(store!.getTask(first.task.id)?.state).toBe("completed"));
-    store!.db.prepare(`
-      UPDATE agent_tasks SET state = 'delivery_unverified', phase = 'failed',
-        error = 'Host restarted during Notion delivery' WHERE id = ?
-    `).run(first.task.id);
-
-    expect(() => pipeline!.retry(first.task.id)).toThrow(/cannot retry from delivery_unverified/);
-    expect(pipeline!.confirmNotionDelivery(first.task.id, {}).state).toBe("completed");
-    expect(store!.getNotionDelivery(first.task.id)?.deliveryKey).toBe(`yulu-${first.task.id}`);
   });
 
   it("rejects a recording symlink that escapes the recordings directory", () => {

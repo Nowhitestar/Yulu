@@ -70,18 +70,6 @@ def load_config():
         return json.load(f)
 
 
-def _auto_send_notion(path: Path | None = None) -> bool:
-    path = path or CONFIG_PATH
-    try:
-        config = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return False
-    if not isinstance(config, dict):
-        return False
-    pipeline = config.get("agent_pipeline")
-    return bool(pipeline.get("auto_send_notion")) if isinstance(pipeline, dict) else False
-
-
 def _transcription_language(path: Path | None = None) -> str:
     path = path or CONFIG_PATH
     try:
@@ -116,7 +104,6 @@ def _recording_completed_payload(audio_path: str, title: str, language: str | No
     return {
         "audioPath": audio_path,
         "title": title,
-        "sendToNotion": _auto_send_notion(),
         "language": language if language in {"zh", "en", "ja", "auto"} else _transcription_language(),
     }
 
