@@ -9,8 +9,7 @@
 # D-12 — This is a THIN ORCHESTRATOR. It:
 #   1. resolves the install mode ONCE (dev|release) via lib/common.sh source-detection
 #      (.yulu-install.json `source` field + an explicit `--dev` override),
-#   2. owns interactive prompts (deps confirm,
-#      calendar opt-in, upgrade detection) and resolves them into variables/env, then
+#   2. owns the dependency confirmation and upgrade detection, then
 #   3. sequences the four decomposed setup_*.sh concern scripts in order, passing the
 #      resolved `mode` + decisions DOWN via args/env (Pitfall 5 — no shared globals).
 #
@@ -196,7 +195,7 @@ create_config() {
   "calendars": [
     {
       "type": "macos",
-      "enabled": true,
+      "enabled": false,
       "watch_calendars": []
     },
     {
@@ -257,124 +256,6 @@ CONFIG
     mkdir -p "$RECORDING_DIR"
     ok "配置文件已创建: $CONFIG_DIR/config.json"
     ok "录制目录已创建: $RECORDING_DIR"
-}
-
-# ─── Step 5: Google Calendar setup ───────────────────
-
-setup_calendar() {
-    header "Google 日历配置（可选）"
-
-    # Upgrade fast-path: if gog already has at least one calendar-scoped account, don't
-    # rerun OAuth — that's a 5-step browser dance the user will not thank us for.
-    if [[ "$UPGRADE_MODE" == true ]] && command -v gog &>/dev/null; then
-        if gog auth list 2>/dev/null | grep -qE "calendar"; then
-            ok "Google 日历已授权（升级模式跳过 OAuth）"
-            return
-        fi
-    fi
-
-    echo "  Yulu 可以读取 Google 日历来自动提醒和录制会议。"
-    echo "  跳过此步骤也可以使用，只是不会有日历自动同步功能。"
-    echo
-
-    prompt "配置 Google 日历？[y/N]"
-    read -r ans
-    if [[ ! "$ans" =~ ^[yY] ]]; then
-        warn "跳过日历配置"
-        return
-    fi
-
-    # Check gog
-    if ! command -v gog &>/dev/null; then
-        err "gog 未安装，请先运行安装步骤"
-        return
-    fi
-
-    # OAuth credentials
-    echo
-    echo "  需要 Google Cloud OAuth 凭据："
-    echo "    1. 打开 https://console.cloud.google.com/"
-    echo "    2. 创建项目或选择已有项目"
-    echo "    3. 启用 Google Calendar API"
-    echo "    4. 凭据 → 创建凭据 → OAuth 客户端 ID → 桌面应用"
-    echo "    5. 下载 JSON 文件"
-    echo
-
-    prompt "请输入 client_secret.json 的路径（或拖入终端）:"
-    read -r cred_path
-    cred_path="${cred_path/#\~/$HOME}"
-
-    if [[ ! -f "$cred_path" ]]; then
-        err "文件不存在: $cred_path"
-        return
-    fi
-
-    mkdir -p "$GCP_DIR"
-    cp "$cred_path" "$GCP_DIR/client_secret.json"
-    ok "凭据已保存到 $GCP_DIR/client_secret.json"
-
-    # gog auth
-    echo
-    gog auth credentials "$GCP_DIR/client_secret.json"
-    ok "gog 凭据已注册"
-
-    prompt "请输入你的 Google 邮箱 (如 user@example.com):"
-    read -r email
-
-    echo
-    info "即将打开浏览器进行 OAuth 授权..."
-    echo "  授权后浏览器可能会显示「无法连接」，这是正常的。"
-    echo "  切换到终端，gog 会自动完成授权。"
-    echo
-
-    gog auth add "$email" --services calendar
-
-    # Verify
-    info "验证日历访问..."
-    gog auth list
-    ok "gog 授权完成"
-
-    # Update config
-    local tmp
-    tmp=$(mktemp)
-    python3 -c "
-import json
-cfg = json.load(open('$CONFIG_DIR/config.json'))
-for cal in cfg.get('calendars', []):
-    if cal.get('type') == 'google':
-        cal['enabled'] = True
-        cal['gog_account'] = '$email'
-json.dump(cfg, open('$tmp', 'w'), indent=2, ensure_ascii=False)
-" 2>/dev/null
-    mv "$tmp" "$CONFIG_DIR/config.json"
-    ok "配置文件已更新"
-
-    # Test
-    echo
-    info "测试日历读取..."
-    gog calendar events "$email" --from "$(date -u +%Y-%m-%dT00:00:00Z)" --to "$(date -u -v+1d +%Y-%m-%dT00:00:00Z)" 2>&1
-    ok "日历读取成功"
-
-    # Signal that the calendar LaunchAgent should be installed by setup_daemons.sh.
-    YULU_INSTALL_CALENDAR=1
-    export YULU_INSTALL_CALENDAR
-}
-
-# Calendar-plist opt-in prompt (the monolith asked this inside install_launchagents;
-# the orchestrator owns it now and passes YULU_INSTALL_CALENDAR=1 to setup_daemons.sh).
-confirm_calendar_plist() {
-    [[ -f "$SCRIPT_DIR/com.yulu.calendar.plist" ]] || return 0
-    # Already opted in during setup_calendar (fresh OAuth) → keep it.
-    [[ "${YULU_INSTALL_CALENDAR:-}" == "1" ]] && return 0
-    # On upgrade, setup_daemons.sh inherits the prior decision; no prompt needed.
-    [[ "$UPGRADE_MODE" == true ]] && return 0
-
-    prompt "安装日历同步服务（Native Scheduler，用于提醒/自动录制）？[y/N]"
-    read -r ans
-    if [[ "$ans" =~ ^[yY] ]]; then
-        YULU_INSTALL_CALENDAR=1
-        export YULU_INSTALL_CALENDAR
-    fi
 }
 
 # ─── Step 7: Install yulu CLI shim ─────────────────
@@ -646,9 +527,8 @@ run_setup_deps || exit 1
 # Config is Agent-native: Yulu records local capture/pipeline preferences only.
 create_config
 
-# Calendar opt-in stays in the orchestrator because it may need OAuth/user input.
-setup_calendar
-confirm_calendar_plist
+# Calendar Source selection and gog OAuth are configured only in Yulu's
+# authoritative Integrations settings after the Host starts.
 
 # Register token-protected Host MCP endpoints before loading the Host. Agent
 # discovery and registration are optional; core recording does not choose one.

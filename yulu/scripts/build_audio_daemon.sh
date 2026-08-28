@@ -8,6 +8,7 @@ BIN="$SCRIPT_DIR/audio_daemon"
 KEYCHAIN_BIN="$SCRIPT_DIR/xai_keychain"
 APP_BIN="$APP/Contents/MacOS/audio_daemon"
 APP_KEYCHAIN_BIN="$APP/Contents/MacOS/xai_keychain"
+APP_CALENDAR_BIN="$APP/Contents/MacOS/calendar_probe"
 RES_DIR="$APP/Contents/Resources"
 INFO="$APP/Contents/Info.plist"
 ICNS_SRC="$REPO_DIR/assets/Yulu.icns"
@@ -18,6 +19,8 @@ SWIFT_TARGET=(-target arm64-apple-macosx13.0)
 
 cd "$SCRIPT_DIR"
 
+mkdir -p "$APP/Contents/MacOS" "$RES_DIR"
+
 swiftc "${SWIFT_TARGET[@]}" -o "$BIN" audio_daemon.swift \
   -framework Cocoa \
   -framework ScreenCaptureKit \
@@ -27,12 +30,16 @@ swiftc "${SWIFT_TARGET[@]}" -o "$BIN" audio_daemon.swift \
   -framework AudioToolbox
 swiftc "${SWIFT_TARGET[@]}" -o "$KEYCHAIN_BIN" xai_keychain.swift \
   -framework Security
+swiftc "${SWIFT_TARGET[@]}" -o "$APP_CALENDAR_BIN" calendar_probe.swift \
+  -framework EventKit \
+  -Xlinker -sectcreate -Xlinker __TEXT -Xlinker __info_plist \
+  -Xlinker "$SCRIPT_DIR/calendar_probe-Info.plist"
 
-mkdir -p "$APP/Contents/MacOS" "$RES_DIR"
 cp "$BIN" "$APP_BIN"
 cp "$KEYCHAIN_BIN" "$APP_KEYCHAIN_BIN"
 chmod +x "$APP_BIN"
 chmod +x "$APP_KEYCHAIN_BIN"
+chmod +x "$APP_CALENDAR_BIN"
 
 # Bundle the Yulu icon so System Settings, the Dock, TCC prompts, and
 # terminal-notifier (via -sender com.yulu.audiodaemon) all show the
@@ -65,6 +72,8 @@ plist_set_or_add NSScreenCaptureUsageDescription string "Yulu captures system au
 # prompt ("System Audio Recording Only" scope). Required for the tap arm
 # (Pitfall 4); the SCK arm uses NSScreenCaptureUsageDescription above.
 plist_set_or_add NSAudioCaptureUsageDescription string "Yulu captures system audio for meeting notes."
+plist_set_or_add NSCalendarsUsageDescription string "Yulu reads your calendars to offer recording reminders for scheduled meetings."
+plist_set_or_add NSCalendarsFullAccessUsageDescription string "Yulu reads your calendars to offer recording reminders for scheduled meetings."
 
 # Code-signing identity selection.
 #
@@ -105,6 +114,8 @@ fi
 ENTITLEMENTS="$SCRIPT_DIR/Yulu.app.entitlements"
 codesign --force --options runtime --timestamp \
   --sign "$IDENTITY" "$APP_KEYCHAIN_BIN"
+codesign --force --options runtime --timestamp \
+  --sign "$IDENTITY" "$APP_CALENDAR_BIN"
 codesign --force --options runtime --timestamp \
   --entitlements "$ENTITLEMENTS" --sign "$IDENTITY" "$APP_BIN"
 codesign --force --options runtime --timestamp \

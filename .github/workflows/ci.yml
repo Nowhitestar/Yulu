@@ -123,11 +123,16 @@ jobs:
           done
           printf 'swiftc xai_keychain.swift (Security)\n'
           swiftc -target arm64-apple-macosx13.0 -o ".ci-build/xai_keychain" yulu/scripts/xai_keychain.swift -framework Security
+          printf 'swiftc calendar_probe.swift (EventKit)\n'
+          swiftc -target arm64-apple-macosx13.0 -o ".ci-build/calendar_probe" yulu/scripts/calendar_probe.swift -framework EventKit \
+            -Xlinker -sectcreate -Xlinker __TEXT -Xlinker __info_plist \
+            -Xlinker yulu/scripts/calendar_probe-Info.plist
           printf 'swiftc status_agent.swift (Cocoa + Carbon)\n'
           swiftc -target arm64-apple-macosx13.0 -o ".ci-build/status_agent" yulu/scripts/status_agent.swift -framework Cocoa -framework Carbon
           bash packaging/scripts/check_macos_deployment_target.sh \
             .ci-build/audio_daemon \
             .ci-build/xai_keychain \
+            .ci-build/calendar_probe \
             .ci-build/status_agent \
             .ci-build/recorder_status \
             .ci-build/meeting_prompt

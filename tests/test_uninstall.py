@@ -97,5 +97,6 @@ def test_uninstall_boots_out_known_jobs_even_when_plists_are_missing():
     assert 'launchctl bootout "$launch_domain/$label"' in text
     assert "com.yulu.agentqueue" in text
     assert "com.yulu.sttdaemon" in text
+    assert "com.yulu.calendar" in text
     assert 'pkill -f "agent_queue_worker.py"' in text
     assert 'pkill -f "stt_daemon"' in text

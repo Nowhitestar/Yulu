@@ -11,9 +11,8 @@
 #   Pitfall 5   PYTHON_BIN / NODE_BIN / SCRIPT_DIR / LAUNCH_AGENTS_DIR are taken
 #               via env (with safe defaults) and EXPORTED so the hoisted
 #               install_plist sees them. The monolith's interactive calendar
-#               prompt (842-844) moves to the orchestrator; standalone runs are
-#               non-interactive and only refresh the calendar plist on upgrade if
-#               it was already installed.
+#               Calendar polling is now a core installed service. Choosing the
+#               advanced gog source remains an explicit, separate decision.
 #
 # Not touched: com.yulu.audiodaemon.plist's launch form (§8b is a Phase 2
 # concern). install_plist substitutes only the tokens present in each template,
@@ -69,6 +68,10 @@ setup_daemons() {
     done
     pkill -f "agent_queue_worker.py" 2>/dev/null || true
     pkill -f "stt_daemon" 2>/dev/null || true
+    # Phase 13 retired the legacy Google webhook/tunnel path. Stop only the
+    # exact Yulu quick-tunnel command left by an interrupted older service;
+    # preserve .watch_state.json as inert audit history.
+    pkill -f "cloudflared tunnel --url http://localhost:8899" 2>/dev/null || true
     local loaded_labels
     loaded_labels="$(launchctl list 2>/dev/null | awk 'NF { print $NF }')" || {
         err "无法通过 launchctl list 验证 legacy LaunchAgent 状态"
@@ -146,23 +149,79 @@ setup_daemons() {
         warn "search index 初始化失败（可稍后重试: yulu search --reindex）"
     fi
 
-    # Calendar service (optional, only if gog configured). The interactive
-    # "install calendar?" prompt the monolith had (842-844) is owned by the
-    # orchestrator now. Standalone behavior: on upgrade, refresh the calendar
-    # plist only if it was already installed (inherit the prior decision); on a
-    # fresh non-interactive run, skip it (the orchestrator opts in via YULU_INSTALL_CALENDAR=1).
+    # Calendar polling is part of the core Yulu runtime for the recommended
+    # macOS EventKit source. The optional gog CLI/OAuth path is configured
+    # separately and is never required to install or start this service.
     if [[ -f "$plist_dir/com.yulu.calendar.plist" ]]; then
-        local install_calendar=false
-        if [[ "${YULU_INSTALL_CALENDAR:-}" == "1" ]]; then
-            install_calendar=true
-        elif [[ "$UPGRADE_MODE" == true && -f "$LAUNCH_AGENTS_DIR/com.yulu.calendar.plist" ]]; then
-            install_calendar=true
+        local calendar_dest="$LAUNCH_AGENTS_DIR/com.yulu.calendar.plist"
+        local calendar_backup=""
+        local calendar_was_loaded=false
+        if grep -Fqx "com.yulu.calendar" <<<"$loaded_labels"; then
+            calendar_was_loaded=true
         fi
-        if [[ "$install_calendar" == true ]]; then
-            install_plist "$plist_dir/com.yulu.calendar.plist" "com.yulu.calendar.plist"
-            launchctl load "$LAUNCH_AGENTS_DIR/com.yulu.calendar.plist" 2>/dev/null || true
-            ok "calendar 已加载"
+        if [[ -f "$calendar_dest" ]]; then
+            calendar_backup="$(mktemp "$LAUNCH_AGENTS_DIR/.com.yulu.calendar.plist.backup.XXXXXX")" || return 1
+            if ! cp "$calendar_dest" "$calendar_backup"; then
+                rm -f "$calendar_backup"
+                err "calendar LaunchAgent 备份失败"
+                return 1
+            fi
         fi
+        local calendar_activation_ok=false
+        local calendar_activation_error="calendar LaunchAgent 加载失败"
+        if install_plist "$plist_dir/com.yulu.calendar.plist" "com.yulu.calendar.plist" \
+            && launchctl load "$calendar_dest" 2>/dev/null; then
+            if launchctl list 2>/dev/null \
+                | awk '$3 == "com.yulu.calendar" && $1 ~ /^[0-9]+$/ && $1 > 0 { found=1 } END { exit !found }'; then
+                calendar_activation_ok=true
+            else
+                calendar_activation_error="calendar LaunchAgent 加载后未运行"
+            fi
+        fi
+        if [[ "$calendar_activation_ok" != true ]]; then
+            # `launchctl load` can return non-zero after partially registering
+            # the new job. Remove by label before deleting/restoring its plist,
+            # then prove the failed registration is gone.
+            launchctl bootout "$launch_domain/com.yulu.calendar" 2>/dev/null || true
+            launchctl remove "com.yulu.calendar" 2>/dev/null || true
+            local calendar_cleanup_labels
+            calendar_cleanup_labels="$(launchctl list 2>/dev/null | awk 'NF { print $NF }')" || {
+                err "无法验证 calendar LaunchAgent 残留状态"
+                return 1
+            }
+            if grep -Fqx "com.yulu.calendar" <<<"$calendar_cleanup_labels"; then
+                err "calendar LaunchAgent 加载失败且残留注册无法移除"
+                return 1
+            fi
+            rm -f "$calendar_dest"
+            if [[ -n "$calendar_backup" && -f "$calendar_backup" ]]; then
+                if ! mv "$calendar_backup" "$calendar_dest"; then
+                    err "旧 calendar LaunchAgent plist 回滚失败"
+                    return 1
+                fi
+                if [[ "$calendar_was_loaded" == true ]]; then
+                    if ! launchctl load "$calendar_dest" 2>/dev/null; then
+                        err "旧 calendar LaunchAgent 回滚后重新加载失败"
+                        return 1
+                    fi
+                    if ! launchctl list 2>/dev/null \
+                        | awk '$3 == "com.yulu.calendar" && $1 ~ /^[0-9]+$/ && $1 > 0 { found=1 } END { exit !found }'; then
+                        err "旧 calendar LaunchAgent 回滚后未恢复运行"
+                        return 1
+                    fi
+                    ok "旧 calendar LaunchAgent 已恢复并重新加载"
+                else
+                    ok "旧 calendar LaunchAgent plist 已恢复（先前未加载）"
+                fi
+            fi
+            err "$calendar_activation_error"
+            return 1
+        fi
+        [[ -z "$calendar_backup" ]] || rm -f "$calendar_backup"
+        ok "calendar 已加载"
+    else
+        err "com.yulu.calendar.plist 缺失"
+        return 1
     fi
 
     echo

@@ -574,26 +574,7 @@ describe("agentConsoleRouter", () => {
     ]));
   });
 
-  it("updates Console calendar settings and restarts calendar scheduler services", async () => {
-    const root = mkdtempSync(join(tmpdir(), "agent-console-"));
-    roots.push(root);
-    const moviesDir = join(root, "movies");
-    mkdirSync(moviesDir);
-    const configState = {
-      llm: { enabled: true, command: null, agent: { provider: "codex" } },
-      calendars: [{ type: "google", enabled: true, gog_account: "", watch_calendars: [] }],
-    };
-    const ctx = makeCtx(moviesDir, configState);
-    const caller = createCaller(agentConsoleRouter, ctx);
-
-    const result = await caller.updateCalendarConfig({
-      key: "calendars.0.watch_calendars",
-      value: ["primary", "team"],
-    });
-
-    expect(configState.calendars[0]).toMatchObject({ watch_calendars: ["primary", "team"] });
-    expect(result.restartErrors).toEqual([]);
-    expect(ctx.launchctl.restart).toHaveBeenCalledWith("com.yulu.calendar");
-    expect(ctx.launchctl.restart).toHaveBeenCalledWith("com.yulu.scheduler");
+  it("does not expose a second mutable Calendar Source authority", () => {
+    expect(Object.keys(agentConsoleRouter._def.procedures)).not.toContain("updateCalendarConfig");
   });
 });

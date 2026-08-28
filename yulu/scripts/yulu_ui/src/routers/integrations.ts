@@ -1,7 +1,6 @@
 import { spawn } from "node:child_process";
-import { join } from "node:path";
 import { z } from "zod";
-import { router, publicProcedure } from "../trpc.js";
+import { router, publicProcedure, uiMutationProcedure } from "../trpc.js";
 import { envWithFallbackPath, resolveExecutable } from "../executables.js";
 
 function runSpawn(
@@ -121,6 +120,33 @@ function parseCalendarList(stdout: string): CalendarOption[] {
 }
 
 export const integrationsRouter = router({
+  calendarSources: publicProcedure.query(({ ctx }) => {
+    if (!ctx.calendarSources) throw new Error("Calendar Source service is unavailable");
+    return ctx.calendarSources.view();
+  }),
+
+  selectCalendarSource: uiMutationProcedure
+    .input(z.object({
+      source: z.enum(["macos", "gog"]),
+      account: z.string().trim().max(320).nullable().optional(),
+    }).strict())
+    .mutation(async ({ ctx, input }) => {
+      if (!ctx.calendarSources) throw new Error("Calendar Source service is unavailable");
+      const result = ctx.calendarSources.select(input);
+      const restartErrors: string[] = [];
+      for (const label of ["com.yulu.calendar", "com.yulu.scheduler"] as const) {
+        try { await ctx.launchctl.restart(label); }
+        catch (error) { restartErrors.push(`${label}: ${(error as Error).message}`); }
+      }
+      if (restartErrors.length > 0) ctx.calendarSources.markServiceActivationFailed(restartErrors);
+      return { ...result, restartErrors, readiness: ctx.calendarSources.view().readiness };
+    }),
+
+  probeCalendarSource: uiMutationProcedure.mutation(({ ctx }) => {
+    if (!ctx.calendarSources) throw new Error("Calendar Source service is unavailable");
+    return ctx.calendarSources.probe();
+  }),
+
   accountList: publicProcedure.query(async () => {
     const { stdout, stderr, code } = await runSpawn(
       "gog",
@@ -137,26 +163,6 @@ export const integrationsRouter = router({
       stderr,
     };
   }),
-
-  // Test that calendar integration works by running Yulu's OWN check_meetings.py
-  // in `json` mode. It reads config.json, queries `gog` for the enabled Google
-  // calendars and prints the events as JSON — exactly the path the scheduler uses.
-  // PYTHONPATH points at scriptDir (no hardcoded/personal path) so check_meetings
-  // and its imports resolve. `json` is a POSITIONAL command, never a --provider flag.
-  // Google is the only supported calendar provider (Feishu was a dead stub,
-  // removed in P4a-4). The provider is accepted for forward-compat but the test
-  // path is provider-agnostic (it runs Yulu's own check_meetings.py).
-  test: publicProcedure
-    .input(z.object({ provider: z.enum(["google", "macos"]) }))
-    .mutation(async ({ ctx }) => {
-      const { stdout, stderr, code } = await runSpawn(
-        "python3",
-        [join(ctx.paths.scriptDir, "check_meetings.py"), "json"],
-        { ...process.env, PYTHONPATH: ctx.paths.scriptDir },
-        10_000,
-      );
-      return { ok: code === 0, stdout, stderr };
-    }),
 
   calendarList: publicProcedure
     .input(z.object({ account: z.string() }))

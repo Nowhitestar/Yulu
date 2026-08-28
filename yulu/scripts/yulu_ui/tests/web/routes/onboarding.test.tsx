@@ -6,6 +6,7 @@ import { LanguageProvider } from "../../../web/src/i18n/LanguageProvider.js";
 
 const onboarding = vi.hoisted(() => ({
   adoptConversation: vi.fn(async () => ({})),
+  adoptCalendarSource: vi.fn(async () => ({})),
   deferOptional: vi.fn(async () => ({})),
   deferActivation: vi.fn(async () => ({})),
   invalidate: vi.fn(async () => ({})),
@@ -49,7 +50,7 @@ const onboarding = vi.hoisted(() => ({
       {
         id: "calendar-source",
         contractVersion: "calendar-source-v1",
-        href: null,
+        href: "/settings/integrations",
         outcome: null,
         readiness: { state: "not_tested", detail: "Not tested" },
         isNew: true,
@@ -67,6 +68,9 @@ vi.mock("../../../web/src/trpc.js", () => ({
       },
       adoptConversation: {
         useMutation: () => ({ mutateAsync: onboarding.adoptConversation, isPending: false }),
+      },
+      adoptCalendarSource: {
+        useMutation: () => ({ mutateAsync: onboarding.adoptCalendarSource, isPending: false }),
       },
       deferActivationJourney: {
         useMutation: () => ({ mutateAsync: onboarding.deferActivation, isPending: false }),
@@ -95,6 +99,7 @@ afterEach(() => {
   localStorage.clear();
   onboarding.deferOptional.mockClear();
   onboarding.adoptConversation.mockClear();
+  onboarding.adoptCalendarSource.mockClear();
   onboarding.deferActivation.mockClear();
   onboarding.invalidate.mockClear();
 });
@@ -117,7 +122,8 @@ describe("/onboarding", () => {
     expect(sharing).toHaveTextContent("Current readiness: Ready");
 
     expect(screen.getByTestId("onboarding-capability-calendar-source")).toHaveTextContent("New");
-    expect(screen.getByTestId("onboarding-capability-calendar-source").querySelector("a")).toBeNull();
+    expect(screen.getByTestId("onboarding-capability-calendar-source")
+      .querySelector('a[href="/settings/integrations"]')).not.toBeNull();
   });
 
   it("defers only the selected optional step and refreshes the home", async () => {
@@ -125,7 +131,7 @@ describe("/onboarding", () => {
     renderRoute();
 
     await user.click(screen.getByTestId("onboarding-capability-calendar-source")
-      .querySelector("button")!);
+      .querySelectorAll("button")[1]!);
 
     expect(onboarding.deferOptional).toHaveBeenCalledWith({ capability: "calendar-source" });
     expect(onboarding.invalidate).toHaveBeenCalledOnce();
@@ -148,5 +154,17 @@ describe("/onboarding", () => {
     expect(card.querySelector('a[href="/settings/llm?capability=conversation"]')).not.toBeNull();
     conversation.outcome = savedOutcome;
     conversation.readiness = savedReadiness;
+  });
+
+  it("explicitly adopts a selected and proven Calendar Source", async () => {
+    const calendarSource = onboarding.data.optionalCapabilities[2]!;
+    calendarSource.readiness = { state: "ready", detail: "EventKit enumeration passed with 0 events" };
+    const user = userEvent.setup();
+    renderRoute();
+
+    await user.click(screen.getByRole("button", { name: "Adopt proven Calendar Source" }));
+
+    expect(onboarding.adoptCalendarSource).toHaveBeenCalledWith();
+    expect(onboarding.invalidate).toHaveBeenCalledOnce();
   });
 });

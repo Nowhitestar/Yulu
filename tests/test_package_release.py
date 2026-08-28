@@ -40,6 +40,8 @@ def make_project(tmp_path: Path, version: str = "0.5.0-dev", git_marker: str | N
     write_file(project / "yulu" / "scripts" / "release_installer.py", "print('installer')\n")
     write_file(project / "yulu" / "scripts" / "Yulu.app" / "Contents" / "MacOS" / "audio_daemon", "binary\n")
     write_file(project / "yulu" / "scripts" / "Yulu.app" / "Contents" / "MacOS" / "xai_keychain", "binary\n")
+    write_file(project / "yulu" / "scripts" / "Yulu.app" / "Contents" / "MacOS" / "calendar_probe", "signed-binary\n")
+    write_file(project / "yulu" / "scripts" / "calendar_probe", "linker-adhoc-build-artifact\n")
     write_file(project / "yulu" / "scripts" / "recorder_status", "binary\n")
     write_file(project / "tests" / "test_dev_only.py", "def test_dev_only(): pass\n")
     write_file(project / ".github" / "workflows" / "ci.yml", "name: ci\n")
@@ -190,6 +192,8 @@ def test_package_writes_expected_zip_with_runtime_layout(tmp_path):
     assert "yulu/yulu/scripts/yulu" in names
     assert "yulu/yulu/scripts/release_installer.py" in names
     assert "yulu/yulu/scripts/recorder_status" in names
+    assert "yulu/yulu/scripts/Yulu.app/Contents/MacOS/calendar_probe" in names
+    assert "yulu/yulu/scripts/calendar_probe" not in names
     assert "yulu/yulu/scripts/yulu_ui/dist/server.js" in names
     assert "yulu/yulu/scripts/yulu_ui/dist/web/index.html" in names
     assert "yulu/.git" not in names

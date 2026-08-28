@@ -9,7 +9,6 @@ const connectAgentMutate = vi.fn();
 const configurePluginMutate = vi.fn();
 const setDestinationMutate = vi.fn();
 const refreshDestinationMutate = vi.fn();
-const updateCalendarMutate = vi.fn();
 const detectRefetch = vi.fn();
 const askMutateAsync = vi.fn();
 const createSessionMutateAsync = vi.fn();
@@ -148,7 +147,6 @@ vi.mock("../../../web/src/trpc.js", () => {
           }),
         },
         refreshDestinationOptions: { useMutation: () => ({ mutate: refreshDestinationMutate, isPending: false, data: null }) },
-        updateCalendarConfig: { useMutation: () => ({ mutate: updateCalendarMutate, isPending: false, data: null }) },
       },
       config: {
         get: {
@@ -248,7 +246,6 @@ beforeEach(() => {
   configurePluginMutate.mockClear();
   setDestinationMutate.mockClear();
   refreshDestinationMutate.mockClear();
-  updateCalendarMutate.mockClear();
   detectRefetch.mockReset();
   askMutateAsync.mockReset();
   createSessionMutateAsync.mockReset();
@@ -543,6 +540,17 @@ describe("AgentConsole", () => {
     expect(getByText("日历")).toBeInTheDocument();
     expect(getByText("Connector 凭据保存在 Agent 内，不由 Yulu 保存。")).toBeInTheDocument();
     expect(queryByLabelText(/移除/)).not.toBeInTheDocument();
+  });
+
+  it("keeps Agent Calendar Connector management separate from Calendar Source settings", () => {
+    const { getByText, getByLabelText, queryByText } = wrap();
+    fireEvent.click(getByText("Agents"));
+    const row = getByText("日历").closest(".agent-connector-row") as HTMLElement;
+    fireEvent.click(within(row).getByText("管理"));
+
+    expect(getByLabelText("日历 Connector 管理")).toBeInTheDocument();
+    expect(queryByText("+ macOS 日历")).toBeNull();
+    expect(queryByText("+ Google")).toBeNull();
   });
 
   it("opens native Connector management without automatic Agent discovery", async () => {

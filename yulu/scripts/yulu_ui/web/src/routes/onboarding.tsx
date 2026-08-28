@@ -25,6 +25,7 @@ export function OnboardingHome() {
   const t = useT();
   const home = trpc.onboarding.status.useQuery(undefined, { retry: false });
   const adoptConversation = trpc.onboarding.adoptConversation.useMutation();
+  const adoptCalendarSource = trpc.onboarding.adoptCalendarSource.useMutation();
   const deferOptional = trpc.onboarding.deferOptionalCapability.useMutation();
   const deferActivation = trpc.onboarding.deferActivationJourney.useMutation();
   const utils = trpc.useUtils();
@@ -142,6 +143,16 @@ export function OnboardingHome() {
                     onClick={() => void run(() => adoptConversation.mutateAsync())}
                   >
                     {t("onboarding.action.adoptConversation")}
+                  </button>
+                )}
+                {capability.id === "calendar-source" && !capability.outcome && (
+                  <button
+                    type="button"
+                    className="onboarding-action"
+                    disabled={capability.readiness.state !== "ready" || adoptCalendarSource.isPending}
+                    onClick={() => void run(() => adoptCalendarSource.mutateAsync())}
+                  >
+                    {t("onboarding.action.adoptCalendarSource")}
                   </button>
                 )}
                 {!capability.outcome && (

@@ -85,7 +85,7 @@ setup_deps() {
         return 0
     fi
 
-    echo "  日历功能已明确启用，将安装 gog 和 cloudflared。"
+    echo "  高级 Google Calendar Source 已明确启用，将安装 gog。"
     if ! command -v brew >/dev/null 2>&1; then
         err "日历工具需要 Homebrew；请先安装 Homebrew 后重试。"
         return 1
@@ -105,12 +105,6 @@ setup_deps() {
         fi
         ok "gog CLI 安装完成"
     fi
-
-    if ! ensure_brew_command cloudflared cloudflared; then
-        err "cloudflared 安装失败"
-        return 1
-    fi
-    ok "cloudflared 安装完成"
 }
 
 [[ "${BASH_SOURCE[0]}" == "${0}" ]] && setup_deps "$@"

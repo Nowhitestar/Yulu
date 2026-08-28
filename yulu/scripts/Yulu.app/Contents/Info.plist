@@ -17,18 +17,22 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>0.22.2</string>
+	<string>0.23.0</string>
 	<key>CFBundleVersion</key>
-	<string>529</string>
+	<string>730</string>
 	<key>LSUIElement</key>
 	<true/>
 	<key>NSAudioCaptureUsageDescription</key>
 	<string>Yulu captures system audio for meeting notes.</string>
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>Yulu reads your calendars to offer recording reminders for scheduled meetings.</string>
+	<key>NSCalendarsUsageDescription</key>
+	<string>Yulu reads your calendars to offer recording reminders for scheduled meetings.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Yulu records microphone audio for meeting notes.</string>
 	<key>NSScreenCaptureUsageDescription</key>
 	<string>Yulu captures system audio for meeting notes.</string>
 	<key>YuluVersion</key>
-	<string>0.22.2</string>
+	<string>0.23.0-rc.3</string>
 </dict>
 </plist>

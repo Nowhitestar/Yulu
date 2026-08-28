@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleDevelopmentRegion</key>
+  <string>en</string>
+  <key>CFBundleDisplayName</key>
+  <string>Yulu</string>
+  <key>CFBundleExecutable</key>
+  <string>calendar_probe</string>
+  <key>CFBundleIdentifier</key>
+  <string>com.yulu.calendarprobe</string>
+  <key>CFBundleInfoDictionaryVersion</key>
+  <string>6.0</string>
+  <key>CFBundleName</key>
+  <string>Yulu</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+  <key>NSCalendarsUsageDescription</key>
+  <string>Yulu reads your calendars to offer recording reminders for scheduled meetings.</string>
+  <key>NSCalendarsFullAccessUsageDescription</key>
+  <string>Yulu reads your calendars to offer recording reminders for scheduled meetings.</string>
+</dict>
+</plist>

@@ -7,6 +7,88 @@
   flex-direction: column;
   height: 100%;
 }
+
+.calendar-source-section {
+  display: grid;
+  gap: 16px;
+}
+
+.calendar-source-outcome,
+.calendar-source-readiness,
+.calendar-source-connector-boundary {
+  display: grid;
+  gap: 6px;
+  padding: 14px;
+  border: 1px solid var(--edge-card);
+  border-radius: 12px;
+  background: var(--glass-2);
+}
+
+.calendar-source-card {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  padding: 16px;
+  border: 1px solid var(--edge-card);
+  border-radius: 12px;
+}
+
+.calendar-source-card[data-selected="true"] {
+  border-color: var(--accent);
+}
+
+.calendar-source-card h3,
+.calendar-source-card p {
+  margin: 4px 0;
+}
+
+.calendar-source-badge {
+  display: inline-flex;
+  padding: 2px 8px;
+  border-radius: 999px;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.calendar-source-badge.advanced {
+  color: var(--text-secondary);
+  background: var(--glass-2);
+}
+
+.calendar-source-onboarding-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.calendar-source-oauth-guidance {
+  display: grid;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.calendar-source-oauth-guidance code {
+  width: fit-content;
+  max-width: 100%;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: var(--glass-2);
+  overflow-wrap: anywhere;
+}
+
+.calendar-source-error {
+  color: var(--red);
+}
+
+@media (max-width: 720px) {
+  .calendar-source-card {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
 .settings-banner {
   position: sticky;
   top: 0;

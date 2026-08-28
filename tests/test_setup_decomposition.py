@@ -95,6 +95,287 @@ def test_setup_daemons_fails_closed_when_retired_launchagent_state_is_not_clean(
     assert message in result.stdout
 
 
+def test_fresh_install_registers_calendar_polling_service_without_gog_opt_in(tmp_path):
+    shim = _make_shim_dir(tmp_path)
+    env = _hermetic_env(tmp_path, shim)
+    env.pop("YULU_INSTALL_CALENDAR", None)
+
+    for upgrade_mode in ("false", "false", "true"):
+        env["UPGRADE_MODE"] = upgrade_mode
+        result = run(["bash", str(SCRIPTS / "setup_daemons.sh"), "release"], cwd=SCRIPTS, env=env)
+        assert result.returncode == 0, result.stderr + result.stdout
+    installed = Path(env["LAUNCH_AGENTS_DIR"]) / "com.yulu.calendar.plist"
+    assert installed.is_file()
+    assert list(Path(env["LAUNCH_AGENTS_DIR"]).glob("com.yulu.calendar.plist")) == [installed]
+    payload = plistlib.loads(installed.read_bytes())
+    assert payload["Label"] == "com.yulu.calendar"
+
+
+def test_calendar_service_load_failure_restores_legacy_upgrade_plist(tmp_path):
+    shim = _make_shim_dir(tmp_path)
+    loads = tmp_path / "calendar-loads"
+    _write_executable(
+        shim / "launchctl",
+        'if [[ "${1:-}" == "load" && "${2:-}" == *com.yulu.calendar.plist ]]; then '
+        f"printf 'load\\n' >> {loads}; exit 42; fi\n"
+        "exit 0\n",
+    )
+    env = _hermetic_env(tmp_path, shim)
+    env["UPGRADE_MODE"] = "true"
+    installed = Path(env["LAUNCH_AGENTS_DIR"]) / "com.yulu.calendar.plist"
+    legacy = b"legacy-calendar-plist\n"
+    installed.write_bytes(legacy)
+
+    result = run(["bash", str(SCRIPTS / "setup_daemons.sh"), "release"], cwd=SCRIPTS, env=env)
+
+    assert result.returncode != 0
+    assert installed.read_bytes() == legacy
+    assert loads.read_text().splitlines() == ["load"]
+    assert not list(installed.parent.glob(".com.yulu.calendar.plist.backup.*"))
+
+
+def test_calendar_upgrade_reload_failure_restores_and_reloads_previously_loaded_job(tmp_path):
+    shim = _make_shim_dir(tmp_path)
+    loads = tmp_path / "calendar-loads"
+    state = tmp_path / "calendar-state"
+    state.write_text("old", encoding="utf-8")
+    _write_executable(
+        shim / "launchctl",
+        f'''state={state!s}
+loads={loads!s}
+case "${{1:-}}" in
+  list) [[ -f "$state" ]] && printf "%b\\n" "321\\t0\\tcom.yulu.calendar"; exit 0 ;;
+  unload) [[ "${{2:-}}" == *com.yulu.calendar.plist ]] && rm -f "$state"; exit 0 ;;
+  load)
+    if [[ "${{2:-}}" == *com.yulu.calendar.plist ]]; then
+      printf 'load\\n' >> "$loads"
+      [[ $(wc -l < "$loads") -eq 1 ]] && printf 'new' > "$state" && exit 42
+      printf 'old' > "$state"
+    fi
+    exit 0 ;;
+  bootout|remove) [[ "$*" == *com.yulu.calendar* ]] && rm -f "$state"; exit 0 ;;
+  *) exit 0 ;;
+esac
+''',
+    )
+    env = _hermetic_env(tmp_path, shim)
+    env["UPGRADE_MODE"] = "true"
+    installed = Path(env["LAUNCH_AGENTS_DIR"]) / "com.yulu.calendar.plist"
+    legacy = b"legacy-calendar-plist\n"
+    installed.write_bytes(legacy)
+
+    result = run(["bash", str(SCRIPTS / "setup_daemons.sh"), "release"], cwd=SCRIPTS, env=env)
+
+    assert result.returncode != 0
+    assert installed.read_bytes() == legacy
+    assert loads.read_text().splitlines() == ["load", "load"]
+    assert "旧 calendar LaunchAgent 已恢复并重新加载" in result.stdout
+
+
+def test_calendar_upgrade_surfaces_failed_rollback_reload(tmp_path):
+    shim = _make_shim_dir(tmp_path)
+    state = tmp_path / "calendar-state"
+    state.write_text("old", encoding="utf-8")
+    _write_executable(
+        shim / "launchctl",
+        f'''state={state!s}
+case "${{1:-}}" in
+  list) [[ -f "$state" ]] && printf "%b\\n" "321\\t0\\tcom.yulu.calendar"; exit 0 ;;
+  unload) [[ "${{2:-}}" == *com.yulu.calendar.plist ]] && rm -f "$state"; exit 0 ;;
+  load)
+    [[ "${{2:-}}" == *com.yulu.calendar.plist ]] && printf 'new' > "$state" && exit 42
+    exit 0 ;;
+  bootout|remove) [[ "$*" == *com.yulu.calendar* ]] && rm -f "$state"; exit 0 ;;
+  *) exit 0 ;;
+esac
+''',
+    )
+    env = _hermetic_env(tmp_path, shim)
+    env["UPGRADE_MODE"] = "true"
+    installed = Path(env["LAUNCH_AGENTS_DIR"]) / "com.yulu.calendar.plist"
+    legacy = b"legacy-calendar-plist\n"
+    installed.write_bytes(legacy)
+
+    result = run(["bash", str(SCRIPTS / "setup_daemons.sh"), "release"], cwd=SCRIPTS, env=env)
+
+    assert result.returncode != 0
+    assert installed.read_bytes() == legacy
+    assert "旧 calendar LaunchAgent 回滚后重新加载失败" in result.stdout
+
+
+def test_fresh_calendar_load_failure_removes_partially_registered_label(tmp_path):
+    shim = _make_shim_dir(tmp_path)
+    state = tmp_path / "calendar-state"
+    _write_executable(
+        shim / "launchctl",
+        f'''state={state!s}
+case "${{1:-}}" in
+  list)
+    [[ -f "$state" ]] && printf "%b\\n" "321\\t0\\tcom.yulu.calendar"
+    exit 0 ;;
+  load)
+    if [[ "${{2:-}}" == *com.yulu.calendar.plist ]]; then
+      printf 'new' > "$state"
+      exit 42
+    fi
+    exit 0 ;;
+  bootout|remove)
+    [[ "$*" == *com.yulu.calendar* ]] && rm -f "$state"
+    exit 0 ;;
+  *) exit 0 ;;
+esac
+''',
+    )
+    env = _hermetic_env(tmp_path, shim)
+    installed = Path(env["LAUNCH_AGENTS_DIR"]) / "com.yulu.calendar.plist"
+
+    result = run(["bash", str(SCRIPTS / "setup_daemons.sh"), "release"], cwd=SCRIPTS, env=env)
+
+    assert result.returncode != 0
+    assert not state.exists()
+    assert not installed.exists()
+
+
+def test_calendar_upgrade_clears_partial_registration_before_restoring_old_job(tmp_path):
+    shim = _make_shim_dir(tmp_path)
+    state = tmp_path / "calendar-state"
+    state.write_text("old", encoding="utf-8")
+    loads = tmp_path / "calendar-loads"
+    cleanup = tmp_path / "calendar-cleanup"
+    _write_executable(
+        shim / "launchctl",
+        f'''state={state!s}
+loads={loads!s}
+cleanup={cleanup!s}
+case "${{1:-}}" in
+  list)
+    [[ -f "$state" ]] && printf "%b\\n" "321\\t0\\tcom.yulu.calendar"
+    exit 0 ;;
+  unload)
+    [[ "${{2:-}}" == *com.yulu.calendar.plist ]] && rm -f "$state"
+    exit 0 ;;
+  load)
+    if [[ "${{2:-}}" == *com.yulu.calendar.plist ]]; then
+      printf 'load\\n' >> "$loads"
+      if [[ $(wc -l < "$loads") -eq 1 ]]; then
+        printf 'new' > "$state"
+        exit 42
+      fi
+      printf 'old' > "$state"
+    fi
+    exit 0 ;;
+  bootout|remove)
+    if [[ "$*" == *com.yulu.calendar* ]]; then
+      printf 'cleanup\\n' >> "$cleanup"
+      rm -f "$state"
+    fi
+    exit 0 ;;
+  *) exit 0 ;;
+esac
+''',
+    )
+    env = _hermetic_env(tmp_path, shim)
+    env["UPGRADE_MODE"] = "true"
+    installed = Path(env["LAUNCH_AGENTS_DIR"]) / "com.yulu.calendar.plist"
+    legacy = b"legacy-calendar-plist\n"
+    installed.write_bytes(legacy)
+
+    result = run(["bash", str(SCRIPTS / "setup_daemons.sh"), "release"], cwd=SCRIPTS, env=env)
+
+    assert result.returncode != 0
+    assert installed.read_bytes() == legacy
+    assert state.read_text(encoding="utf-8") == "old"
+    assert loads.read_text(encoding="utf-8").splitlines() == ["load", "load"]
+    assert cleanup.read_text(encoding="utf-8").splitlines() == ["cleanup", "cleanup"]
+
+
+def test_calendar_load_zero_without_live_pid_rolls_back_fresh_install(tmp_path):
+    shim = _make_shim_dir(tmp_path)
+    _write_executable(
+        shim / "launchctl",
+        '''case "${1:-}" in
+  list) exit 0 ;;
+  load) exit 0 ;;
+  bootout|remove|unload) exit 0 ;;
+  *) exit 0 ;;
+esac
+''',
+    )
+    env = _hermetic_env(tmp_path, shim)
+    installed = Path(env["LAUNCH_AGENTS_DIR"]) / "com.yulu.calendar.plist"
+
+    result = run(["bash", str(SCRIPTS / "setup_daemons.sh"), "release"], cwd=SCRIPTS, env=env)
+
+    assert result.returncode != 0
+    assert not installed.exists()
+    assert "calendar LaunchAgent 加载后未运行" in result.stdout
+
+
+def test_calendar_load_zero_without_live_pid_restores_running_upgrade(tmp_path):
+    shim = _make_shim_dir(tmp_path)
+    state = tmp_path / "calendar-state"
+    state.write_text("old", encoding="utf-8")
+    loads = tmp_path / "calendar-loads"
+    _write_executable(
+        shim / "launchctl",
+        f'''state={state!s}
+loads={loads!s}
+case "${{1:-}}" in
+  list) [[ -f "$state" ]] && printf "%b\\n" "321\\t0\\tcom.yulu.calendar"; exit 0 ;;
+  unload) [[ "${{2:-}}" == *com.yulu.calendar.plist ]] && rm -f "$state"; exit 0 ;;
+  load)
+    if [[ "${{2:-}}" == *com.yulu.calendar.plist ]]; then
+      printf 'load\\n' >> "$loads"
+      [[ $(wc -l < "$loads") -eq 1 ]] && exit 0
+      printf 'old' > "$state"
+    fi
+    exit 0 ;;
+  bootout|remove) [[ "$*" == *com.yulu.calendar* ]] && rm -f "$state"; exit 0 ;;
+  *) exit 0 ;;
+esac
+''',
+    )
+    env = _hermetic_env(tmp_path, shim)
+    env["UPGRADE_MODE"] = "true"
+    installed = Path(env["LAUNCH_AGENTS_DIR"]) / "com.yulu.calendar.plist"
+    legacy = b"legacy-calendar-plist\n"
+    installed.write_bytes(legacy)
+
+    result = run(["bash", str(SCRIPTS / "setup_daemons.sh"), "release"], cwd=SCRIPTS, env=env)
+
+    assert result.returncode != 0
+    assert installed.read_bytes() == legacy
+    assert state.read_text(encoding="utf-8") == "old"
+    assert loads.read_text(encoding="utf-8").splitlines() == ["load", "load"]
+
+
+def test_calendar_rollback_fails_closed_when_residual_state_cannot_be_read(tmp_path):
+    shim = _make_shim_dir(tmp_path)
+    lists = tmp_path / "calendar-lists"
+    _write_executable(
+        shim / "launchctl",
+        f'''lists={lists!s}
+case "${{1:-}}" in
+  list)
+    printf 'list\\n' >> "$lists"
+    [[ $(wc -l < "$lists") -gt 1 ]] && exit 42
+    exit 0 ;;
+  load)
+    [[ "${{2:-}}" == *com.yulu.calendar.plist ]] && exit 42
+    exit 0 ;;
+  bootout|remove|unload) exit 0 ;;
+  *) exit 0 ;;
+esac
+''',
+    )
+    env = _hermetic_env(tmp_path, shim)
+
+    result = run(["bash", str(SCRIPTS / "setup_daemons.sh"), "release"], cwd=SCRIPTS, env=env)
+
+    assert result.returncode != 0
+    assert "无法验证 calendar LaunchAgent 残留状态" in result.stdout
+
+
 def run(cmd: list[str], cwd: Path, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
     child_env = os.environ.copy()
     if env:
@@ -115,11 +396,18 @@ def _make_shim_dir(tmp_path: Path) -> Path:
         stub = shim / name
         if name == "launchctl":
             # An absent service makes `launchctl print` non-zero; model that
-            # separately from successful no-op load/bootout commands.
+            # separately while preserving the Calendar job's live PID after a
+            # successful load.
             stub.write_text(
                 "#!/usr/bin/env bash\n"
-                "[[ \"${1:-}\" == \"print\" ]] && exit 1\n"
-                "exit 0\n"
+                "state=\"${0}.calendar-state\"\n"
+                "case \"${1:-}\" in\n"
+                "  print) exit 1 ;;\n"
+                "  list) [[ -f \"$state\" ]] && printf '%b\\n' '321\\t0\\tcom.yulu.calendar'; exit 0 ;;\n"
+                "  load) [[ \"${2:-}\" == *com.yulu.calendar.plist ]] && touch \"$state\"; exit 0 ;;\n"
+                "  unload|bootout|remove) [[ \"$*\" == *com.yulu.calendar* ]] && rm -f \"$state\"; exit 0 ;;\n"
+                "  *) exit 0 ;;\n"
+                "esac\n"
             )
         elif name == "node":
             stub.write_text(
@@ -309,7 +597,6 @@ def test_calendar_opt_in_is_the_only_optional_install_path_and_is_idempotent(tmp
     (shim / "cloudflared").unlink()
     brew = shim / "brew"
     gog = shim / "gog"
-    cloudflared = shim / "cloudflared"
     calls = tmp_path / "brew-calls"
     brew.write_text(
         "#!/usr/bin/env bash\n"
@@ -318,10 +605,6 @@ def test_calendar_opt_in_is_the_only_optional_install_path_and_is_idempotent(tmp
         f"  printf '#!/usr/bin/env bash\\nexit 0\\n' > {gog}\n"
         f"  chmod +x {gog}\n"
         "  exit 42\n"
-        "fi\n"
-        "if [[ \"$*\" == *cloudflared* ]]; then\n"
-        f"  printf '#!/usr/bin/env bash\\nexit 0\\n' > {cloudflared}\n"
-        f"  chmod +x {cloudflared}\n"
         "fi\n"
         "exit 0\n"
     )
@@ -345,10 +628,7 @@ def test_calendar_opt_in_is_the_only_optional_install_path_and_is_idempotent(tmp
     for _ in range(2):
         result = run(["bash", "-c", command], cwd=SCRIPTS, env=env)
         assert result.returncode == 0, result.stderr + result.stdout
-    assert calls.read_text().splitlines() == [
-        "install steipete/tap/gogcli",
-        "install cloudflared",
-    ]
+    assert calls.read_text().splitlines() == ["install steipete/tap/gogcli"]
 
 
 def test_system_preflight_never_bootstraps_homebrew():
@@ -381,64 +661,42 @@ raise SystemExit(mcp.main([
     assert "registration skipped" in result.stdout
 
 
-def test_calendar_service_empty_answer_defers(tmp_path):
+def test_installer_routes_calendar_selection_and_oauth_to_authoritative_ui():
     text = (SCRIPTS / "setup.sh").read_text(encoding="utf-8")
-    block = text[text.index("confirm_calendar_plist() {"):text.index("# ─── Step 7")]
-    shell = "\n".join((
-        "set -u",
-        "prompt() { :; }",
-        "warn() { :; }",
-        block,
-        "unset YULU_INSTALL_CALENDAR",
-        "confirm_calendar_plist",
-        '[[ -z "${YULU_INSTALL_CALENDAR:-}" ]]',
-    ))
-    result = subprocess.run(
-        ["bash", "-c", shell],
-        input="\n",
-        text=True,
-        capture_output=True,
-        env={"SCRIPT_DIR": str(SCRIPTS), "UPGRADE_MODE": "false", "PATH": "/usr/bin:/bin"},
-        check=False,
-    )
-    assert result.returncode == 0, result.stderr + result.stdout
+    assert "setup_calendar()" not in text
+    assert "confirm_calendar_plist()" not in text
+    assert "gog auth credentials" not in text
+    assert "gog auth add" not in text
+    assert "eval echo" not in text
 
 
-def test_calendar_credential_path_is_never_evaluated_as_shell(tmp_path):
+def test_fresh_config_keeps_calendar_source_unselected_until_explicit_ui_choice(tmp_path):
     text = (SCRIPTS / "setup.sh").read_text(encoding="utf-8")
-    block = text[text.index("setup_calendar() {"):text.index("# Calendar-plist opt-in prompt")]
-    shim = tmp_path / "bin"
-    shim.mkdir()
-    _write_executable(shim / "gog")
-    marker = tmp_path / "executed"
+    block = text[text.index("create_config() {"):text.index("# ─── Step 7")]
+    config_dir = tmp_path / "config"
+    recording_dir = tmp_path / "recordings"
     shell = "\n".join((
         "set -u",
         "header() { :; }",
-        "prompt() { :; }",
-        "warn() { :; }",
-        "err() { :; }",
         "ok() { :; }",
+        "warn() { :; }",
+        "prompt() { :; }",
         "info() { :; }",
         block,
-        "setup_calendar",
+        "create_config",
     ))
-    result = subprocess.run(
+    result = run(
         ["bash", "-c", shell],
-        input=f'y\n$(touch "{marker}")\n',
-        text=True,
-        capture_output=True,
+        cwd=SCRIPTS,
         env={
-            "HOME": str(tmp_path / "home"),
-            "GCP_DIR": str(tmp_path / "gcp"),
-            "CONFIG_DIR": str(tmp_path / "config"),
+            "CONFIG_DIR": str(config_dir),
+            "RECORDING_DIR": str(recording_dir),
             "UPGRADE_MODE": "false",
-            "PATH": f"{shim}:/usr/bin:/bin",
         },
-        check=False,
     )
     assert result.returncode == 0, result.stderr + result.stdout
-    assert not marker.exists()
-    assert "eval echo" not in text
+    config = json.loads((config_dir / "config.json").read_text(encoding="utf-8"))
+    assert [item["enabled"] for item in config["calendars"]] == [False, False]
 
 
 def test_orchestrator_propagates_each_core_concern_failure():

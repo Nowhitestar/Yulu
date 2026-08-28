@@ -22,6 +22,7 @@ export const CATEGORIES: CategoryMeta[] = [
   { id: "transcription", labelKey: "settings.category.transcription.label", descKey: "settings.category.transcription.desc" },
   { id: "llm",           labelKey: "settings.category.llm.label",           descKey: "settings.category.llm.desc" },
   { id: "sharing",       labelKey: "settings.category.sharing.label",       descKey: "settings.category.sharing.desc" },
+  { id: "integrations",  labelKey: "settings.category.integrations.label",  descKey: "settings.category.integrations.desc" },
   { id: "voice",         labelKey: "settings.category.voice.label",         descKey: "settings.category.voice.desc" },
   { id: "automation",    labelKey: "settings.category.automation.label",    descKey: "settings.category.automation.desc" },
 ];

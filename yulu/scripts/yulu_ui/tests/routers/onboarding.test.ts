@@ -74,6 +74,21 @@ describe("onboarding router", () => {
     host = new HostStore(join(root, "host.sqlite"));
     let conversationStatus: "ready" | "failed" | "untested" = "ready";
     let sharingStatus: "ready" | "failed" | "untested" | "unknown" = "ready";
+    let calendarStatus: "ready" | "failed" | "untested" = "untested";
+    const calendarSnapshot = {
+      capability: "calendar-source" as const,
+      source: "macos" as const,
+      adapter: "eventkit" as const,
+      selectionFingerprint: "d".repeat(64),
+      accessGranted: true as const,
+      enumerationSucceeded: true as const,
+      eventCount: 0,
+      window: {
+        start: "2026-08-29T02:00:00.000Z",
+        end: "2026-08-30T02:00:00.000Z",
+      },
+      testedAt: "2026-08-29T02:00:00.000Z",
+    };
     const ctx = {
       uiMutationAuthorized: true,
       host,
@@ -126,12 +141,30 @@ describe("onboarding router", () => {
           },
         })),
       },
+      calendarSources: {
+        view: vi.fn(() => ({
+          readiness: {
+            status: calendarStatus,
+            source: "macos",
+            detail: calendarStatus === "ready"
+              ? "EventKit enumeration passed with 0 events"
+              : "Calendar needs attention",
+            evidence: calendarStatus === "ready" ? calendarSnapshot : null,
+          },
+        })),
+        adoptionEvidence: vi.fn(async () => ({
+          kind: "calendar-source-probe",
+          reference: `calendar-source:${calendarSnapshot.selectionFingerprint}:${calendarSnapshot.testedAt}`,
+          snapshot: calendarSnapshot,
+        })),
+      },
     } as unknown as AppContext;
     return {
       ctx,
       caller: () => createCaller(onboardingRouter, ctx),
       setConversationStatus: (status: typeof conversationStatus) => { conversationStatus = status; },
       setSharingStatus: (status: typeof sharingStatus) => { sharingStatus = status; },
+      setCalendarStatus: (status: typeof calendarStatus) => { calendarStatus = status; },
     };
   }
 
@@ -269,6 +302,40 @@ describe("onboarding router", () => {
         journey: { deferredAt: expect.any(String) },
         attempt: { id: attempt.id },
       },
+    });
+  });
+
+  it("adopts Calendar Source only from the exact ready production probe and keeps readiness separate", async () => {
+    const { caller, setCalendarStatus } = setup();
+    setCalendarStatus("ready");
+
+    await expect(caller().adoptCalendarSource()).resolves.toMatchObject({
+      outcome: {
+        capability: "calendar-source",
+        contractVersion: "calendar-source-v1",
+        outcome: "adopted",
+        evidence: {
+          kind: "calendar-source-probe",
+          reference: `calendar-source:${"d".repeat(64)}:2026-08-29T02:00:00.000Z`,
+          snapshot: { source: "macos", adapter: "eventkit", eventCount: 0 },
+        },
+      },
+    });
+    await expect(caller().status()).resolves.toMatchObject({
+      optionalCapabilities: expect.arrayContaining([expect.objectContaining({
+        id: "calendar-source",
+        outcome: expect.objectContaining({ outcome: "adopted" }),
+        readiness: { state: "ready", detail: "EventKit enumeration passed with 0 events" },
+      })]),
+    });
+
+    setCalendarStatus("untested");
+    await expect(caller().status()).resolves.toMatchObject({
+      optionalCapabilities: expect.arrayContaining([expect.objectContaining({
+        id: "calendar-source",
+        outcome: expect.objectContaining({ outcome: "adopted" }),
+        readiness: { state: "not_tested", detail: "Calendar needs attention" },
+      })]),
     });
   });
 

@@ -15,6 +15,7 @@ import { VoiceInputSection } from "../components/settings/VoiceInputSection.js";
 import { AutomationSection } from "../components/settings/AutomationSection.js";
 import { AgentConnections } from "./agent-connections.js";
 import { SharingSettings } from "./sharing.js";
+import { CalendarSourceSection } from "../components/settings/CalendarSourceSection.js";
 
 /**
  * Maps a settings category to the rich section components that render its
@@ -42,6 +43,7 @@ const CATEGORY_SECTIONS: Record<string, (tracker: SettingsRestartTracker) => Rea
   transcription: (tracker) => <TranscriptionSection tracker={tracker} />,
   llm: () => <AgentConnections embedded />,
   sharing: () => <SharingSettings />,
+  integrations: () => <CalendarSourceSection />,
   voice: (tracker) => <VoiceInputSection tracker={tracker} />,
   automation: (tracker) => <AutomationSection tracker={tracker} />,
 };

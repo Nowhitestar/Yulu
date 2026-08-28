@@ -12,6 +12,37 @@ export interface DaemonStatus {
   label: string;
 }
 
+export type LaunchctlInspection =
+  | { state: "running"; status: DaemonStatus }
+  | { state: "not_running"; status: DaemonStatus }
+  | { state: "not_loaded" }
+  | { state: "disabled" }
+  | { state: "permission_denied" }
+  | { state: "command_failed" };
+
+function launchctlFailure(error: unknown): "permission_denied" | "command_failed" {
+  const failure = error as Error & { stderr?: string };
+  const detail = `${failure?.message ?? ""} ${failure?.stderr ?? ""}`;
+  return /operation not permitted|permission denied|not privileged/i.test(detail)
+    ? "permission_denied"
+    : "command_failed";
+}
+
+function parseStatus(stdout: string, label: string): DaemonStatus | null {
+  for (const raw of stdout.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line || line.startsWith("PID")) continue;
+    const [pidStr, exitStr, listedLabel] = line.split(/\s+/);
+    if (listedLabel !== label) continue;
+    return {
+      pid: pidStr === "-" ? 0 : Number(pidStr) || 0,
+      exitStatus: Number(exitStr) || 0,
+      label: listedLabel,
+    };
+  }
+  return null;
+}
+
 export class LaunchctlClient {
   constructor(
     private readonly launchAgentsDir: string,
@@ -42,23 +73,38 @@ export class LaunchctlClient {
    * Returns null when service is not loaded.
    */
   async status(label: string): Promise<DaemonStatus | null> {
+    const inspection = await this.inspect(label);
+    return inspection.state === "running" || inspection.state === "not_running"
+      ? inspection.status
+      : null;
+  }
+
+  async inspect(label: string): Promise<LaunchctlInspection> {
+    let stdout: string;
     try {
-      const { stdout } = await exec("launchctl", ["list"]);
-      for (const raw of stdout.split(/\r?\n/)) {
-        const line = raw.trim();
-        if (!line || line.startsWith("PID")) continue;
-        const [pidStr, exitStr, lbl] = line.split(/\s+/);
-        if (lbl !== label) continue;
-        return {
-          pid: pidStr === "-" ? 0 : Number(pidStr) || 0,
-          exitStatus: Number(exitStr) || 0,
-          label: lbl,
-        };
-      }
-      return null;
-    } catch {
-      return null;
+      ({ stdout } = await exec("launchctl", ["list"]));
+    } catch (error) {
+      return { state: launchctlFailure(error) };
     }
+    const status = parseStatus(stdout, label);
+    if (status) {
+      return status.pid > 0
+        ? { state: "running", status }
+        : { state: "not_running", status };
+    }
+
+    let disabledOutput: string;
+    try {
+      ({ stdout: disabledOutput } = await exec("launchctl", [
+        "print-disabled",
+        `gui/${process.getuid?.() ?? 0}`,
+      ]));
+    } catch (error) {
+      return { state: launchctlFailure(error) };
+    }
+    const escapedLabel = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const disabled = new RegExp(`(?:"${escapedLabel}"|${escapedLabel})\\s*=>\\s*true(?:\\s|$)`).test(disabledOutput);
+    return { state: disabled ? "disabled" : "not_loaded" };
   }
 
   async sighup(label: string): Promise<void> {

@@ -36,7 +36,7 @@ export const CURRENT_ONBOARDING_MANIFEST: OnboardingManifest = {
     {
       id: "calendar-source",
       contractVersion: "calendar-source-v1",
-      href: null,
+      href: "/settings/integrations",
     },
     {
       id: "agent-calendar-connector",

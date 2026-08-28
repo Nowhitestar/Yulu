@@ -68,6 +68,27 @@ function conversationEvidence(reference = "conversation-proof-1") {
   };
 }
 
+function calendarSourceEvidence(reference = `calendar-source:${"d".repeat(64)}:2026-08-29T02:00:00.000Z`) {
+  return {
+    kind: "calendar-source-probe",
+    reference,
+    snapshot: {
+      capability: "calendar-source" as const,
+      source: "macos" as const,
+      adapter: "eventkit" as const,
+      selectionFingerprint: "d".repeat(64),
+      accessGranted: true as const,
+      enumerationSucceeded: true as const,
+      eventCount: 0,
+      window: {
+        start: "2026-08-29T02:00:00.000Z",
+        end: "2026-08-30T02:00:00.000Z",
+      },
+      testedAt: "2026-08-29T02:00:00.000Z",
+    },
+  };
+}
+
 describe("Onboarding durable state", () => {
   let root = "";
   let host: HostStore | undefined;
@@ -128,6 +149,96 @@ describe("Onboarding durable state", () => {
     store.close();
     host = new HostStore(dbPath);
     expect(host.listOptionalCapabilityOutcomes()).toEqual([adopted, deferred]);
+  });
+
+  it("persists exact Calendar Source probe evidence across restart, including an empty event window", () => {
+    const store = createHost();
+    const adopted = store.recordOptionalCapabilityOutcome({
+      onboardingVersion: "phase-13-v1",
+      capability: "calendar-source",
+      contractVersion: "calendar-source-v1",
+      outcome: "adopted",
+      evidence: calendarSourceEvidence(),
+    });
+
+    expect(adopted).toMatchObject({
+      capability: "calendar-source",
+      outcome: "adopted",
+      evidence: {
+        kind: "calendar-source-probe",
+        reference: `calendar-source:${"d".repeat(64)}:2026-08-29T02:00:00.000Z`,
+        snapshot: {
+          source: "macos",
+          adapter: "eventkit",
+          accessGranted: true,
+          enumerationSucceeded: true,
+          eventCount: 0,
+        },
+      },
+    });
+
+    const dbPath = join(root, "host.sqlite");
+    store.close();
+    host = new HostStore(dbPath);
+    expect(host.listOptionalCapabilityOutcomes()).toContainEqual(adopted);
+  });
+
+  it("fails closed when stored Calendar Source adoption evidence is malformed", () => {
+    const store = createHost();
+    store.recordOptionalCapabilityOutcome({
+      onboardingVersion: "phase-13-v1",
+      capability: "calendar-source",
+      contractVersion: "calendar-source-v1",
+      outcome: "adopted",
+      evidence: calendarSourceEvidence(),
+    });
+    store.db.prepare(`
+      UPDATE optional_capability_outcomes
+      SET evidence_reference = 'mutable-calendar-pointer'
+      WHERE capability = 'calendar-source'
+    `).run();
+    expect(store.listOptionalCapabilityOutcomes().find((outcome) =>
+      outcome.capability === "calendar-source")).toBeUndefined();
+    store.db.prepare(`
+      UPDATE optional_capability_outcomes
+      SET evidence_reference = ?
+      WHERE capability = 'calendar-source'
+    `).run(calendarSourceEvidence().reference);
+    store.db.prepare(`
+      UPDATE optional_capability_outcomes
+      SET evidence_snapshot_json = ?
+      WHERE capability = 'calendar-source'
+    `).run(JSON.stringify({
+      ...calendarSourceEvidence().snapshot,
+      source: "gog",
+      adapter: "eventkit",
+    }));
+
+    expect(store.listOptionalCapabilityOutcomes().find((outcome) =>
+      outcome.capability === "calendar-source")).toBeUndefined();
+    expect(() => store.recordOptionalCapabilityOutcome({
+      onboardingVersion: "phase-13-v1",
+      capability: "calendar-source",
+      contractVersion: "calendar-source-v1",
+      outcome: "adopted",
+      evidence: {
+        ...calendarSourceEvidence("bad-window"),
+        snapshot: {
+          ...calendarSourceEvidence().snapshot,
+          window: {
+            start: "2026-08-30T02:00:00.000Z",
+            end: "2026-08-29T02:00:00.000Z",
+          },
+        },
+      },
+    })).toThrow(/Calendar Source.*exact evidence snapshot/i);
+    expect(() => store.recordOptionalCapabilityOutcome({
+      onboardingVersion: "phase-13-v1",
+      capability: "calendar-source",
+      contractVersion: "calendar-source-v1",
+      outcome: "adopted",
+      evidence: calendarSourceEvidence("mutable-calendar-pointer"),
+    })).toThrow(/Calendar Source.*exact probe evidence/i);
   });
 
   it("records completion only on the final authorized durable transition and keeps status reads pure", () => {

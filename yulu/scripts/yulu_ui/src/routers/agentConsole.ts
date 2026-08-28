@@ -41,10 +41,6 @@ const DESTINATION_SCHEMA = z.discriminatedUnion("channel", [
     topic: z.string().trim().max(300),
   }),
 ]);
-const CALENDAR_CONFIG_SCHEMA = z.object({
-  key: z.string().regex(/^calendars(?:\.\d+\.(?:enabled|gog_account|watch_calendars))?$/),
-  value: z.unknown(),
-});
 const RECENT_DAYS_MS = 3 * 24 * 60 * 60 * 1000;
 const DESTINATION_DISCOVERY_TIMEOUT_MS = 120_000;
 
@@ -525,25 +521,6 @@ export const agentConsoleRouter = router({
         channel: input.channel,
         error,
         options: destinationOptions(nextConfig, agent, input.channel),
-      };
-    }),
-
-  updateCalendarConfig: publicProcedure
-    .input(CALENDAR_CONFIG_SCHEMA)
-    .mutation(async ({ ctx, input }) => {
-      const result = ctx.config.update(input.key, input.value);
-      const restartErrors: string[] = [];
-      for (const daemon of result.daemonsNeedingRestart) {
-        if (daemon !== "calendar" && daemon !== "scheduler") continue;
-        try {
-          await ctx.launchctl.restart(`com.yulu.${daemon}`);
-        } catch (exc) {
-          restartErrors.push(`${daemon}: ${(exc as Error).message}`);
-        }
-      }
-      return {
-        ...result,
-        restartErrors,
       };
     }),
 

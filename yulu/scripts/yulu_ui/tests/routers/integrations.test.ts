@@ -12,7 +12,10 @@ vi.mock("node:child_process", async (importOriginal) => {
 beforeEach(() => spawnMock.mockReset());
 
 function ctx(): AppContext {
-  return { paths: { scriptDir: "/fake/yulu/scripts", configDir: "/fake/yulu/config" } } as unknown as AppContext;
+  return {
+    uiMutationAuthorized: true,
+    paths: { scriptDir: "/fake/yulu/scripts", configDir: "/fake/yulu/config" },
+  } as unknown as AppContext;
 }
 
 function mockSpawn(stdout: string, exitCode = 0, stderr = "") {
@@ -29,42 +32,9 @@ function mockSpawn(stdout: string, exitCode = 0, stderr = "") {
   });
 }
 
-describe("integrationsRouter.test", () => {
-  it("spawns check_meetings.py with the `json` positional (no --provider) and PYTHONPATH=scriptDir", async () => {
-    mockSpawn(JSON.stringify([]));
-    const caller = createCaller(integrationsRouter, ctx());
-    const r = await caller.test({ provider: "google" });
-    expect(r.ok).toBe(true);
-
-    const call = spawnMock.mock.calls[0]!;
-    expect(basename(String(call[0]))).toBe("python3");
-    const args = call[1] as string[];
-    // Runs Yulu's own check_meetings.py in JSON mode — `json` is a positional command.
-    expect(args[0]).toBe("/fake/yulu/scripts/check_meetings.py");
-    expect(args).toContain("json");
-    // The dead `yulu.calendar.detect` module + the unsupported --provider flag are gone.
-    expect(args).not.toContain("--provider");
-    expect(args.join(" ")).not.toContain("yulu.calendar.detect");
-
-    // PYTHONPATH is derived from ctx.paths.scriptDir — never a hardcoded/personal path.
-    const opts = call[2] as { env?: Record<string, string> };
-    expect(opts.env?.PYTHONPATH).toBe("/fake/yulu/scripts");
-  });
-
-  it("returns ok=false when check_meetings.py exits non-zero", async () => {
-    mockSpawn("", 1, "Config not found");
-    const caller = createCaller(integrationsRouter, ctx());
-    const r = await caller.test({ provider: "google" });
-    expect(r.ok).toBe(false);
-    expect(r.stderr).toContain("Config not found");
-  });
-
-  it("includes stdout + stderr in the response", async () => {
-    mockSpawn("[]\n", 0, "warning: x\n");
-    const caller = createCaller(integrationsRouter, ctx());
-    const r = await caller.test({ provider: "google" });
-    expect(r.stdout).toBe("[]\n");
-    expect(r.stderr).toBe("warning: x\n");
+describe("integrationsRouter Calendar Source authority", () => {
+  it("does not expose the retired direct-script probe", () => {
+    expect(Object.keys(integrationsRouter._def.procedures)).not.toContain("test");
   });
 });
 
@@ -148,5 +118,86 @@ describe("integrationsRouter.accountList", () => {
     expect(r.ok).toBe(false);
     expect(r.accounts).toEqual([]);
     expect(r.stderr).toContain("keyring unavailable");
+  });
+});
+
+describe("integrationsRouter Calendar Source authority", () => {
+  it("projects source selection and current readiness without changing either", async () => {
+    const context = ctx();
+    context.calendarSources = {
+      view: vi.fn(() => ({
+        selectedSource: null,
+        sources: [
+          { id: "macos", recommended: true, advanced: false, externalRuntime: false },
+          { id: "gog", recommended: false, advanced: true, externalRuntime: true },
+        ],
+        readiness: { status: "untested", source: null, evidence: null },
+      })),
+    } as unknown as AppContext["calendarSources"];
+    const caller = createCaller(integrationsRouter, context);
+
+    await expect(caller.calendarSources()).resolves.toMatchObject({
+      selectedSource: null,
+      readiness: { status: "untested", source: null },
+    });
+    expect(context.calendarSources!.view).toHaveBeenCalledOnce();
+  });
+
+  it("selects and probes only through explicit UI mutations", async () => {
+    const context = ctx();
+    context.launchctl = { restart: vi.fn(async () => ({})) } as unknown as AppContext["launchctl"];
+    const select = vi.fn(() => ({ selection: { source: "gog", account: "me@example.com" } }));
+    const probe = vi.fn(async () => ({
+      status: "ready",
+      source: "gog",
+      evidence: { source: "gog", adapter: "gog-cli", eventCount: 0 },
+    }));
+    const view = vi.fn(() => ({
+      readiness: { status: "untested", source: "gog", evidence: null },
+    }));
+    context.calendarSources = { select, probe, view } as unknown as AppContext["calendarSources"];
+    const caller = createCaller(integrationsRouter, context);
+
+    await expect(caller.selectCalendarSource({ source: "gog", account: "me@example.com" }))
+      .resolves.toMatchObject({ selection: { source: "gog" } });
+    await expect(caller.probeCalendarSource()).resolves.toMatchObject({
+      status: "ready",
+      source: "gog",
+      evidence: { eventCount: 0 },
+    });
+    expect(select).toHaveBeenCalledWith({ source: "gog", account: "me@example.com" });
+    expect(probe).toHaveBeenCalledOnce();
+  });
+
+  it("fails readiness closed when a production polling service cannot restart", async () => {
+    const context = ctx();
+    context.launchctl = {
+      restart: vi.fn(async (label: string) => {
+        if (label === "com.yulu.calendar") throw new Error("service not found");
+        return {};
+      }),
+    } as unknown as AppContext["launchctl"];
+    const markServiceActivationFailed = vi.fn();
+    context.calendarSources = {
+      select: vi.fn(() => ({ selection: { source: "macos", account: null } })),
+      markServiceActivationFailed,
+      view: vi.fn(() => ({
+        readiness: {
+          status: "failed",
+          source: "macos",
+          reason: "service_activation_failed",
+          evidence: null,
+        },
+      })),
+    } as unknown as AppContext["calendarSources"];
+    const caller = createCaller(integrationsRouter, context);
+
+    await expect(caller.selectCalendarSource({ source: "macos" })).resolves.toMatchObject({
+      restartErrors: [expect.stringContaining("com.yulu.calendar")],
+      readiness: { status: "failed", reason: "service_activation_failed" },
+    });
+    expect(markServiceActivationFailed).toHaveBeenCalledWith([
+      expect.stringContaining("com.yulu.calendar"),
+    ]);
   });
 });

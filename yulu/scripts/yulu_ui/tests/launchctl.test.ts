@@ -59,6 +59,49 @@ describe("LaunchctlClient", () => {
     expect(await c.status("com.yulu.missing")).toBeNull();
   });
 
+  it("inspect() distinguishes a disabled service from one that is merely not loaded", async () => {
+    execFileMock.mockImplementation((...args: unknown[]) => {
+      const commandArgs = args[1] as string[];
+      if (!commandArgs) return;
+      if (commandArgs[0] === "list") {
+        cbOf(args)?.(null, { stdout: "PID\tStatus\tLabel\n", stderr: "" });
+        return;
+      }
+      cbOf(args)?.(null, {
+        stdout: 'disabled services = {\n\t"com.yulu.calendar" => true\n}\n',
+        stderr: "",
+      });
+    });
+    const c = new LaunchctlClient("/Users/x/Library/LaunchAgents");
+
+    await expect(c.inspect("com.yulu.calendar")).resolves.toEqual({ state: "disabled" });
+    await expect(c.inspect("com.yulu.scheduler")).resolves.toEqual({ state: "not_loaded" });
+  });
+
+  it.each([
+    ["Operation not permitted", "permission_denied"],
+    ["launchctl transport unavailable", "command_failed"],
+  ] as const)("inspect() classifies launchctl failure %s", async (stderr, state) => {
+    fail(1, stderr);
+    const c = new LaunchctlClient("/Users/x/Library/LaunchAgents");
+
+    await expect(c.inspect("com.yulu.calendar")).resolves.toEqual({ state });
+  });
+
+  it("inspect() distinguishes loaded but stopped from running", async () => {
+    ok("PID\tStatus\tLabel\n-\t1\tcom.yulu.calendar\n123\t0\tcom.yulu.scheduler\n");
+    const c = new LaunchctlClient("/Users/x/Library/LaunchAgents");
+
+    await expect(c.inspect("com.yulu.calendar")).resolves.toMatchObject({
+      state: "not_running",
+      status: { pid: 0, exitStatus: 1 },
+    });
+    await expect(c.inspect("com.yulu.scheduler")).resolves.toMatchObject({
+      state: "running",
+      status: { pid: 123, exitStatus: 0 },
+    });
+  });
+
   it("sighup(statusagent) signals the app pid file instead of launchctl wrapper pid", async () => {
     const dir = mkdtempSync(join(tmpdir(), "yulu_statusagent_pid_"));
     const pidFile = join(dir, "status_agent.pid");

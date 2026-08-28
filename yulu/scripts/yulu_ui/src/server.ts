@@ -66,6 +66,8 @@ import { ConversationOnlyCliRuntimeClient } from "./conversationOnlyCliClient.js
 import { MacOsNativeAgentAuthorizationLauncher } from "./nativeAgentAuthorization.js";
 import { SharingConfiguration } from "./sharingConfiguration.js";
 import { AgentSharingConnectorAdapter } from "./sharingConnector.js";
+import { CalendarSourceManager } from "./calendarSources.js";
+import { createCalendarSourceAdapters } from "./calendarSourceAdapters.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const RETIRED_GATEWAY_CONNECTION_ID = "cliproxyapi";
@@ -220,6 +222,19 @@ async function startLockedServer(
       configDir: runtimePaths.configDir,
     }),
   });
+  const launchctl = new LaunchctlClient(launchAgents);
+  const calendarSources = new CalendarSourceManager({
+    config: configManager,
+    adapters: createCalendarSourceAdapters({ scriptDir: runtimePaths.scriptDir }),
+    verifyServices: async () => {
+      const errors: string[] = [];
+      for (const label of ["com.yulu.calendar", "com.yulu.scheduler"] as const) {
+        const inspection = await launchctl.inspect(label);
+        if (inspection.state !== "running") errors.push(`${label}: ${inspection.state}`);
+      }
+      return errors.length === 0 ? { ok: true } : { ok: false, errors };
+    },
+  });
   void xaiCredentials.status().catch(() => {});
   const recordingPipeline = new RecordingPipeline({
     store: hostStore,
@@ -296,7 +311,7 @@ async function startLockedServer(
 
   const ctx: AppContext = {
     config:    configManager,
-    launchctl: new LaunchctlClient(launchAgents),
+    launchctl,
     pubsub:    appPubSub,
     paths:     runtimePaths,
     host:      hostStore,
@@ -310,6 +325,7 @@ async function startLockedServer(
     supportedAgentSummaryAdapter,
     agentConnections,
     sharing,
+    calendarSources,
     db:        dbProxy,
   };
 

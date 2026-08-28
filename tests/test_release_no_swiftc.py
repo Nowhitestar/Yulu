@@ -155,6 +155,7 @@ def test_release_fork_invokes_no_swiftc(tmp_path):
     audio_binary = work / "Yulu.app" / "Contents" / "MacOS" / "audio_daemon"
     audio_binary.parent.mkdir(parents=True)
     audio_binary.write_text("prebuilt release binary")
+    (audio_binary.parent / "calendar_probe").write_text("prebuilt EventKit helper")
 
     shim, sentinel = _recording_shim(tmp_path)
 

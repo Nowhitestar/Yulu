@@ -17,11 +17,25 @@ function makeCtx() {
   const sighup = vi.fn().mockResolvedValue(undefined);
   const start = vi.fn().mockResolvedValue(undefined);
   const stop = vi.fn().mockResolvedValue(undefined);
-  const ctx = { config: new ConfigManager(path), launchctl: { sighup, start, stop } } as unknown as AppContext;
+  const ctx = {
+    uiMutationAuthorized: true,
+    config: new ConfigManager(path),
+    launchctl: { sighup, start, stop },
+  } as unknown as AppContext;
   return { ctx, sighup, start, stop, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
 describe("configRouter", () => {
+  it("requires the process-local UI bearer for generic settings mutations", async () => {
+    const { ctx, cleanup } = makeCtx();
+    ctx.uiMutationAuthorized = false;
+    try {
+      const caller = createCaller(configRouter, ctx);
+      await expect(caller.update({ key: "audio.silence_threshold", value: 0.02 }))
+        .rejects.toThrow("UI mutation bearer required");
+    } finally { cleanup(); }
+  });
+
   it("get() returns parsed config", async () => {
     const { ctx, cleanup } = makeCtx();
     try {
@@ -119,13 +133,22 @@ describe("configRouter", () => {
     } finally { cleanup(); }
   });
 
-  it("update(connectors.feishu.read_calendar) restarts calendar scheduler services", async () => {
+  it.each([
+    "calendars",
+    "calendars.0.enabled",
+    "connectors",
+    "connectors.gog",
+    "connectors.gog.read_calendar",
+    "connectors.feishu.read_calendar",
+  ])("rejects Calendar Source authority path %s outside CalendarSourceManager", async (key) => {
     const { ctx, cleanup } = makeCtx();
     try {
       const caller = createCaller(configRouter, ctx);
-      const r = await caller.update({ key: "connectors.feishu.read_calendar", value: true });
-      expect(r.daemonsNeedingRestart).toEqual(["calendar", "scheduler"]);
-      expect(r.daemonsNeedingSighup).toEqual([]);
+      await expect(caller.update({ key, value: true }))
+        .rejects.toThrow("Calendar Source settings must use CalendarSourceManager");
+      expect(SETTINGS.some((setting) => setting.genericMutable === false && (
+        key === setting.path || key.startsWith(`${setting.path}.`) || setting.path.startsWith(`${key}.`)
+      ))).toBe(true);
     } finally { cleanup(); }
   });
 

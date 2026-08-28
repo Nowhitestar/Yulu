@@ -11,11 +11,20 @@
 	</dict>
 	<key>files2</key>
 	<dict>
+		<key>MacOS/calendar_probe</key>
+		<dict>
+			<key>cdhash</key>
+			<data>
+			wAek3I0JjO9Vqjr7cVUohlUGpg8=
+			</data>
+			<key>requirement</key>
+			<string>identifier "com.yulu.calendarprobe" and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = WMU9678ZQL</string>
+		</dict>
 		<key>MacOS/xai_keychain</key>
 		<dict>
 			<key>cdhash</key>
 			<data>
-			V/gXxC9O+Y7VaYxxVhaaQL63CwU=
+			GqubdDKvkgdNF6/HjgOCb4mT1kU=
 			</data>
 			<key>requirement</key>
 			<string>identifier "xai_keychain" and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = WMU9678ZQL</string>

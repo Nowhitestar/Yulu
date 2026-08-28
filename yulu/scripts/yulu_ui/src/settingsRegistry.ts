@@ -25,6 +25,7 @@ export interface SettingDef {
   danger?: boolean;
   advanced?: boolean;
   hidden?: boolean;
+  genericMutable?: boolean;
 }
 
 const R = {
@@ -91,9 +92,9 @@ export const SETTINGS: SettingDef[] = [
   { path: "llm.agent.provider",          category: "llm", label: "Agent provider", type: "select",  validate: z.enum(["auto", "codex", "claude", "claude-code", "hermes", "openclaw"]), reload: R.none, hidden: true },
   { path: "intelligence.summary",        category: "llm", label: "Summary provider", type: "select", validate: TextProviderSelectionSchema, reload: R.none },
   { path: "intelligence.conversation",   category: "llm", label: "Conversation provider", type: "select", validate: TextProviderSelectionSchema, reload: R.none },
-  { path: "calendars",                   category: "integrations", label: "日历",   type: "text",    validate: z.array(z.unknown()),        reload: R.restart("calendar", "scheduler"), hidden: true },
-  { path: "connectors.gog.read_calendar", category: "integrations", label: "Read Google calendars", type: "toggle", validate: z.boolean(), reload: R.restart("calendar", "scheduler"), hidden: true },
-  { path: "connectors.feishu.read_calendar", category: "integrations", label: "Read Feishu calendars", type: "toggle", validate: z.boolean(), reload: R.restart("calendar", "scheduler"), hidden: true },
+  { path: "calendars",                   category: "integrations", label: "日历",   type: "text",    validate: z.array(z.unknown()),        reload: R.restart("calendar", "scheduler"), hidden: true, genericMutable: false },
+  { path: "connectors.gog.read_calendar", category: "integrations", label: "Read Google calendars", type: "toggle", validate: z.boolean(), reload: R.restart("calendar", "scheduler"), hidden: true, genericMutable: false },
+  { path: "connectors.feishu.read_calendar", category: "integrations", label: "Read Feishu calendars", type: "toggle", validate: z.boolean(), reload: R.restart("calendar", "scheduler"), hidden: true, genericMutable: false },
   { path: "agent_pipeline.enabled", category: "automation", label: "Agent recording pipeline", type: "toggle", validate: z.boolean(), reload: R.none },
   { path: "agent_pipeline.auto_process_recordings", category: "automation", label: "Automatic recording processing", type: "toggle", validate: z.boolean(), reload: R.none },
   // meeting_detection: the detector daemon reads config at startup, so changes restart it.

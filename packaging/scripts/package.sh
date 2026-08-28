@@ -34,6 +34,7 @@ EXCLUDES=(
     "._*"
     "node_modules"
     "tests"
+    "yulu/scripts/calendar_probe"
     "docs/superpowers"
     "packaging"
     "worktrees"
@@ -62,6 +63,7 @@ ALLOWED_BUILD_OUTPUTS=(
     "yulu/scripts/Yulu.app/Contents/Info.plist"
     "yulu/scripts/Yulu.app/Contents/MacOS/audio_daemon"
     "yulu/scripts/Yulu.app/Contents/MacOS/xai_keychain"
+    "yulu/scripts/Yulu.app/Contents/MacOS/calendar_probe"
     "yulu/scripts/Yulu.app/Contents/_CodeSignature/CodeResources"
 )
 

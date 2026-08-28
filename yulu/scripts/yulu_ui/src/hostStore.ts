@@ -5,6 +5,7 @@ import { basename, dirname } from "node:path";
 import { isTrustedNotionUrl, isValidNotionPageId, notionPageIdentityProblem } from "./notionDelivery.js";
 import type { TranscriptionLanguage } from "./realtimeTranscription.js";
 import type { XaiCredentialSource } from "./xaiCredentials.js";
+import type { CalendarSourceEvidenceSnapshot } from "./calendarSources.js";
 
 export type AgentTaskState =
   | "queued"
@@ -157,7 +158,7 @@ export interface OptionalCapabilityOutcome {
   evidence: {
     kind: string;
     reference: string;
-    snapshot?: ConversationCapabilityEvidenceSnapshot;
+    snapshot?: OptionalCapabilityEvidenceSnapshot;
   } | null;
   decidedAt: string;
 }
@@ -172,6 +173,10 @@ export interface ConversationCapabilityEvidenceSnapshot {
   testedAt: string;
   runtimeEvidence: PersistedAgentConnectionReadiness["runtimeEvidence"];
 }
+
+export type OptionalCapabilityEvidenceSnapshot =
+  | ConversationCapabilityEvidenceSnapshot
+  | CalendarSourceEvidenceSnapshot;
 
 export interface OnboardingCompletion {
   version: string;
@@ -584,6 +589,81 @@ function readConversationEvidenceSnapshot(value: string | null): ConversationCap
   } catch {
     return null;
   }
+}
+
+function secretSafeCalendarSourceEvidenceSnapshot(
+  input: CalendarSourceEvidenceSnapshot,
+): CalendarSourceEvidenceSnapshot | null {
+  const raw = input as unknown as Record<string, unknown>;
+  const source = raw.source === "macos" || raw.source === "gog" ? raw.source : null;
+  const adapter = raw.adapter === "eventkit" || raw.adapter === "gog-cli" ? raw.adapter : null;
+  const selectionFingerprint = boundedEvidenceString(raw.selectionFingerprint, 64);
+  const eventCount = raw.eventCount;
+  const testedAt = boundedEvidenceString(raw.testedAt, 100);
+  const window = raw.window && typeof raw.window === "object" && !Array.isArray(raw.window)
+    ? raw.window as Record<string, unknown>
+    : null;
+  const start = boundedEvidenceString(window?.start, 100);
+  const end = boundedEvidenceString(window?.end, 100);
+  if (
+    raw.capability !== "calendar-source" || !source || !adapter ||
+    (source === "macos" ? adapter !== "eventkit" : adapter !== "gog-cli") ||
+    !selectionFingerprint || !/^[a-f0-9]{64}$/.test(selectionFingerprint) ||
+    raw.accessGranted !== true || raw.enumerationSucceeded !== true ||
+    typeof eventCount !== "number" || !Number.isSafeInteger(eventCount) || eventCount < 0 ||
+    !testedAt || !start || !end || testedAt !== start
+  ) return null;
+  const startMs = Date.parse(start);
+  const endMs = Date.parse(end);
+  if (
+    Number.isNaN(startMs) || Number.isNaN(endMs) || endMs <= startMs ||
+    endMs - startMs > 48 * 60 * 60 * 1000 ||
+    new Date(startMs).toISOString() !== start || new Date(endMs).toISOString() !== end
+  ) return null;
+  return {
+    capability: "calendar-source",
+    source,
+    adapter,
+    selectionFingerprint,
+    accessGranted: true,
+    enumerationSucceeded: true,
+    eventCount,
+    window: { start, end },
+    testedAt,
+  };
+}
+
+function secretSafeOptionalCapabilityEvidenceSnapshot(
+  input: OptionalCapabilityEvidenceSnapshot,
+): OptionalCapabilityEvidenceSnapshot | null {
+  return input.capability === "conversation"
+    ? secretSafeConversationEvidenceSnapshot(input)
+    : input.capability === "calendar-source"
+      ? secretSafeCalendarSourceEvidenceSnapshot(input)
+      : null;
+}
+
+function readOptionalCapabilityEvidenceSnapshot(
+  value: string | null,
+): OptionalCapabilityEvidenceSnapshot | null {
+  if (!value) return null;
+  try {
+    return secretSafeOptionalCapabilityEvidenceSnapshot(
+      JSON.parse(value) as OptionalCapabilityEvidenceSnapshot,
+    );
+  } catch {
+    return null;
+  }
+}
+
+function isExactCalendarSourceProbeEvidence(
+  kind: string | null,
+  reference: string | null,
+  snapshot: OptionalCapabilityEvidenceSnapshot | null,
+): snapshot is CalendarSourceEvidenceSnapshot {
+  return snapshot?.capability === "calendar-source" &&
+    kind === "calendar-source-probe" &&
+    reference === `calendar-source:${snapshot.selectionFingerprint}:${snapshot.testedAt}`;
 }
 
 export interface NotionDelivery {
@@ -2767,8 +2847,12 @@ export class HostStore {
       decided_at: string;
     }>;
     return rows.flatMap((row) => {
-      const snapshot = readConversationEvidenceSnapshot(row.evidence_snapshot_json);
+      const snapshot = readOptionalCapabilityEvidenceSnapshot(row.evidence_snapshot_json);
       if (row.capability === "conversation" && row.outcome === "adopted" && !snapshot) {
+        return [];
+      }
+      if (row.capability === "calendar-source" && row.outcome === "adopted" &&
+          !isExactCalendarSourceProbeEvidence(row.evidence_kind, row.evidence_reference, snapshot)) {
         return [];
       }
       return [{
@@ -2796,13 +2880,21 @@ export class HostStore {
     const evidenceKind = input.evidence?.kind.trim() || null;
     const evidenceReference = input.evidence?.reference.trim() || null;
     const evidenceSnapshot = input.evidence?.snapshot
-      ? secretSafeConversationEvidenceSnapshot(input.evidence.snapshot)
+      ? secretSafeOptionalCapabilityEvidenceSnapshot(input.evidence.snapshot)
       : null;
     if (input.outcome === "adopted" && (!evidenceKind || !evidenceReference)) {
       throw new Error("An adopted Optional Capability Outcome requires durable evidence");
     }
     if (input.capability === "conversation" && input.outcome === "adopted" && !evidenceSnapshot) {
       throw new Error("An adopted Conversation outcome requires a complete exact evidence snapshot");
+    }
+    if (capability === "calendar-source" && input.outcome === "adopted" &&
+        evidenceSnapshot?.capability !== "calendar-source") {
+      throw new Error("An adopted Calendar Source outcome requires a complete exact evidence snapshot");
+    }
+    if (capability === "calendar-source" && input.outcome === "adopted" &&
+        !isExactCalendarSourceProbeEvidence(evidenceKind, evidenceReference, evidenceSnapshot)) {
+      throw new Error("An adopted Calendar Source outcome requires exact probe evidence");
     }
     if (input.outcome === "deferred" && input.evidence !== null) {
       throw new Error("A deferred Optional Capability Outcome cannot claim adoption evidence");
@@ -2814,17 +2906,28 @@ export class HostStore {
       throw new Error("Optional Capability Evidence is too long");
     }
     const commit = this.db.transaction(() => {
-      if (capability === "conversation") {
+      if (capability === "conversation" || capability === "calendar-source") {
         const existing = this.db.prepare(`
-          SELECT outcome, evidence_snapshot_json
+          SELECT outcome, evidence_kind, evidence_reference, evidence_snapshot_json
           FROM optional_capability_outcomes
           WHERE onboarding_version = ? AND capability = ? AND contract_version = ?
         `).get(onboardingVersion, capability, contractVersion) as {
           outcome: OptionalCapabilityOutcome["outcome"];
+          evidence_kind: string | null;
+          evidence_reference: string | null;
           evidence_snapshot_json: string | null;
         } | undefined;
-        if (existing?.outcome === "adopted" &&
-          !readConversationEvidenceSnapshot(existing.evidence_snapshot_json)) {
+        const existingSnapshot = existing
+          ? readOptionalCapabilityEvidenceSnapshot(existing.evidence_snapshot_json)
+          : null;
+        const existingEvidenceInvalid = capability === "calendar-source"
+          ? !isExactCalendarSourceProbeEvidence(
+              existing?.evidence_kind ?? null,
+              existing?.evidence_reference ?? null,
+              existingSnapshot,
+            )
+          : !existingSnapshot;
+        if (existing?.outcome === "adopted" && existingEvidenceInvalid) {
           this.db.prepare(`
             DELETE FROM optional_capability_outcomes
             WHERE onboarding_version = ? AND capability = ? AND contract_version = ?

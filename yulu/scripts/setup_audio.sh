@@ -54,6 +54,7 @@ setup_audio() {
     local _bin
     for _bin in "$SCRIPT_DIR/Yulu.app/Contents/MacOS/audio_daemon" \
                 "$SCRIPT_DIR/Yulu.app/Contents/MacOS/xai_keychain" \
+                "$SCRIPT_DIR/Yulu.app/Contents/MacOS/calendar_probe" \
                 "$SCRIPT_DIR/StatusAgent.app/Contents/MacOS/status_agent" \
                 "$SCRIPT_DIR/recorder_status" \
                 "$SCRIPT_DIR/meeting_prompt"; do
@@ -101,7 +102,8 @@ setup_audio() {
         # the zip. NO swiftc, NO xattr quarantine strip — the stapled notarized
         # bundle passes Gatekeeper unaided. The exec-bit self-heal loop above is
         # all the release path needs.
-        if [[ -f "$SCRIPT_DIR/Yulu.app/Contents/MacOS/audio_daemon" ]]; then
+        if [[ -f "$SCRIPT_DIR/Yulu.app/Contents/MacOS/audio_daemon" && \
+              -f "$SCRIPT_DIR/Yulu.app/Contents/MacOS/calendar_probe" ]]; then
             ok "Yulu.app: 使用发布包内已签名+公证的二进制（不编译）"
         else
             err "Yulu.app 二进制缺失；发布包不完整"

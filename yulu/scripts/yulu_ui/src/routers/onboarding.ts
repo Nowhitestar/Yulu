@@ -64,10 +64,27 @@ function sharingReadiness(ctx: AppContext): OnboardingCapabilityReadiness {
   }
 }
 
+function calendarSourceReadiness(ctx: AppContext): OnboardingCapabilityReadiness {
+  if (!ctx.calendarSources) return { state: "unavailable", detail: "Calendar Source settings are unavailable" };
+  try {
+    const current = ctx.calendarSources.view().readiness;
+    return {
+      state: current.status === "ready"
+        ? "ready"
+        : current.status === "failed"
+          ? "needs_attention"
+          : "not_tested",
+      detail: current.detail,
+    };
+  } catch {
+    return { state: "unavailable", detail: "Current Calendar Source readiness is unavailable" };
+  }
+}
+
 async function currentReadiness(ctx: AppContext) {
   return {
     conversation: await conversationReadiness(ctx),
-    "calendar-source": notTested("Open Calendar Source settings to evaluate current readiness"),
+    "calendar-source": calendarSourceReadiness(ctx),
     "agent-calendar-connector": notTested("Open the Agent Console to evaluate current Connector Readiness"),
     sharing: sharingReadiness(ctx),
   };
@@ -116,6 +133,20 @@ export const onboardingRouter = router({
           runtimeEvidence: proof.runtimeEvidence,
         },
       },
+    }, CURRENT_ONBOARDING_COMPLETION_REQUIREMENTS);
+    return { outcome, proof };
+  }),
+  adoptCalendarSource: uiMutationProcedure.mutation(async ({ ctx }) => {
+    if (!ctx.calendarSources) throw new Error("Calendar Source settings are unavailable");
+    const proof = await ctx.calendarSources.adoptionEvidence();
+    const outcome = ctx.host.recordOptionalCapabilityOutcome({
+      onboardingVersion: CURRENT_ONBOARDING_MANIFEST.version,
+      capability: "calendar-source",
+      contractVersion: CURRENT_ONBOARDING_MANIFEST.optionalCapabilities.find(
+        (capability) => capability.id === "calendar-source",
+      )!.contractVersion,
+      outcome: "adopted",
+      evidence: proof,
     }, CURRENT_ONBOARDING_COMPLETION_REQUIREMENTS);
     return { outcome, proof };
   }),

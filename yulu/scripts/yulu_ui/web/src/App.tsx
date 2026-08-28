@@ -81,7 +81,6 @@ const router = createBrowserRouter([
         handle: settingsHandle,
         children: [
           { index: true, element: <Navigate to="/settings/general" replace /> },
-          { path: "integrations", element: <Navigate to="/agent-console" replace /> },
           {
             path: ":category",
             Component: SettingsCategory,

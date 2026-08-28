@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { router, publicProcedure } from "../trpc.js";
+import { router, publicProcedure, uiMutationProcedure } from "../trpc.js";
 import { SETTINGS, type SettingDef } from "../settingsRegistry.js";
 
 // Serializable settings metadata: the registry entry minus the Zod `validate`
@@ -8,6 +8,12 @@ export type SettingMeta = Omit<SettingDef, "validate">;
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function isCalendarSourceAuthorityPath(key: string): boolean {
+  return SETTINGS.some((setting) => setting.genericMutable === false && (
+    key === setting.path || key.startsWith(`${setting.path}.`) || setting.path.startsWith(`${key}.`)
+  ));
 }
 
 export const configRouter = router({
@@ -32,12 +38,15 @@ export const configRouter = router({
       return { present: typeof v === "string" && v.length > 0 };
     }),
 
-  update: publicProcedure
+  update: uiMutationProcedure
     .input(z.object({
       key: z.string().regex(/^[a-z0-9_]+(\.[a-z0-9_]+)*$/i),
       value: z.unknown(),
     }))
     .mutation(async ({ ctx, input }) => {
+      if (isCalendarSourceAuthorityPath(input.key)) {
+        throw new Error("Calendar Source settings must use CalendarSourceManager");
+      }
       const result = ctx.config.update(input.key, input.value);
       const applyErrors: string[] = [];
       if (input.key === "transcription.engine") ctx.xaiReadiness?.delete("transcription");

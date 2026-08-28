@@ -81,6 +81,8 @@ vi.mock("../../../web/src/trpc.js", () => {
     localCaption: { status: { invalidate: () => {} } },
     xaiAudio: { status: { invalidate: () => {} } },
     agentConnections: { view: { invalidate: () => Promise.resolve() } },
+    integrations: { calendarSources: { invalidate: () => Promise.resolve() } },
+    onboarding: { status: { invalidate: () => Promise.resolve() } },
   };
   return {
     trpc: {
@@ -140,6 +142,25 @@ vi.mock("../../../web/src/trpc.js", () => {
         test: { useMutation: noopMutation },
         accountList: { useQuery: () => ({ data: { ok: true, accounts: [] }, isPending: false }) },
         calendarList: { useQuery: () => ({ data: { ok: true, calendars: [] }, isPending: false }) },
+        calendarSources: { useQuery: () => ({
+          data: {
+            selectedSource: null,
+            sources: [
+              { id: "macos", label: "macOS Calendar", recommended: true, advanced: false, externalRuntime: false },
+              { id: "gog", label: "Google Calendar via gog", recommended: false, advanced: true, externalRuntime: true },
+            ],
+            readiness: { status: "untested", source: null, reason: null, detail: "Not tested", remediation: "Select a source", evidence: null },
+          },
+          isPending: false,
+          isError: false,
+        }) },
+        selectCalendarSource: { useMutation: noopMutation },
+        probeCalendarSource: { useMutation: noopMutation },
+      },
+      onboarding: {
+        status: { useQuery: () => ({ data: { optionalCapabilities: [{ id: "calendar-source", outcome: null }] } }) },
+        adoptCalendarSource: { useMutation: noopMutation },
+        deferOptionalCapability: { useMutation: noopMutation },
       },
       agentConsole: {
         overview: {
@@ -344,7 +365,6 @@ function routesTree() {
           handle: settingsHandle,
           children: [
             { index: true, element: <Navigate to="/settings/general" replace /> },
-            { path: "integrations", element: <Navigate to="/agent-console" replace /> },
             {
               path: ":category",
               Component: SettingsCategory,
@@ -615,12 +635,13 @@ describe("Settings category detail content (re-homed widgets)", () => {
     expect(container.querySelector('[href="/settings/sharing"]')).not.toBeNull();
   });
 
-  it("integrations: legacy settings route redirects to Agent Console instead of rendering AI integration UI", () => {
-    const tree = routesTree();
-    const settingsRoute = tree[0]!.children!.find((c) => c.path === "settings")!;
-    const integrationsRoute = settingsRoute.children!.find((c) => c.path === "integrations")!;
-    const el = integrationsRoute.element as React.ReactElement<{ to: string }>;
-    expect(el.props.to).toBe("/agent-console");
+  it("integrations: hosts authoritative Calendar Sources and keeps Agent Calendar Connector separate", () => {
+    const { container } = wrap("/settings/integrations");
+    const detail = within(container.querySelector(".masterdetail-detail") as HTMLElement);
+    expect(detail.getByRole("heading", { name: translate("zh", "settings.calendarSource.heading") }))
+      .toBeInTheDocument();
+    expect(detail.getByRole("link", { name: translate("zh", "settings.calendarSource.connector.open") }))
+      .toHaveAttribute("href", "/agent-console");
   });
 
   it("does not list the retired local transcription Advanced category", () => {

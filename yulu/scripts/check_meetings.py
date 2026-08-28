@@ -11,13 +11,30 @@
 """
 
 import json
-import os
 import subprocess
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 CONFIG_PATH = Path.home() / ".config" / "yulu" / "config.json"
+
+STABLE_FAILURE_REASONS = {
+    "runtime_missing",
+    "authorization_denied",
+    "authorization_restricted",
+    "authorization_not_determined",
+    "enumeration_failed",
+}
+
+
+class CalendarSourceError(RuntimeError):
+    """A stable provider failure that never includes command output or secrets."""
+
+    def __init__(self, source, reason):
+        stable_reason = reason if reason in STABLE_FAILURE_REASONS else "enumeration_failed"
+        self.source = source
+        self.reason = stable_reason
+        super().__init__(f"calendar_source_error:{source}:{stable_reason}")
 
 
 def load_config():
@@ -34,8 +51,6 @@ def fetch_meetings(start, end, config=None):
         config = load_config()
 
     calendars = config.get("calendars", [])
-    if not calendars and sys.platform == "darwin":
-        calendars = [{"type": "macos", "enabled": True}]
 
     all_meetings = []
     for cal in calendars:
@@ -80,36 +95,91 @@ def _fetch_google(config, start, end):
     通过 gog CLI 获取 Google Calendar 会议列表。
     不需要 Google API Python 库，gog 处理了 OAuth。
     """
-    import subprocess
-
     account = config.get("gog_account")
     if not account:
-        print("⚠️ Google Calendar: 未配置 gog_account", file=sys.stderr)
-        return []
+        raise CalendarSourceError("gog", "authorization_not_determined")
 
     fmt_start = start.strftime("%Y-%m-%dT%H:%M:%S%z") if hasattr(start, 'strftime') else str(start)
     fmt_end = end.strftime("%Y-%m-%dT%H:%M:%S%z") if hasattr(end, 'strftime') else str(end)
 
     cmd = [
-        "gog", "calendar", "events", account,
+        "gog",
+        "--json",
+        "--results-only",
+        "--no-input",
+        "--account", account,
+        "calendar", "events", "primary",
+        "--all-pages",
         "--from", fmt_start,
         "--to", fmt_end,
-        "--json",
     ]
-    env = {**os.environ, "GOG_ACCOUNT": account}
 
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=30, env=env)
-        if r.returncode != 0:
-            print(f"⚠️ gog error: {r.stderr.strip()}", file=sys.stderr)
-            return []
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    except FileNotFoundError as error:
+        raise CalendarSourceError("gog", "runtime_missing") from error
+    except (subprocess.TimeoutExpired, OSError) as error:
+        raise CalendarSourceError("gog", "enumeration_failed") from error
+
+    if r.returncode != 0:
+        diagnostic = f"{r.stdout}\n{r.stderr}".lower()
+        reason = "authorization_denied" if any(marker in diagnostic for marker in (
+            "not authenticated",
+            "unauthorized",
+            "unauthorised",
+            "oauth",
+            "auth required",
+            "login required",
+            "credential",
+            "token expired",
+        )) else "enumeration_failed"
+        raise CalendarSourceError("gog", reason)
+    try:
         data = json.loads(r.stdout)
-    except Exception as e:
-        print(f"⚠️ Google Calendar 获取失败: {e}", file=sys.stderr)
-        return []
+    except (json.JSONDecodeError, TypeError) as error:
+        raise CalendarSourceError("gog", "enumeration_failed") from error
+
+    if isinstance(data, list):
+        events = data
+    elif isinstance(data, dict):
+        if "events" in data:
+            events = data["events"]
+        elif "items" in data:
+            events = data["items"]
+        elif "result" in data:
+            nested = data["result"]
+            if isinstance(nested, list):
+                events = nested
+            elif isinstance(nested, dict) and "events" in nested:
+                events = nested["events"]
+            elif isinstance(nested, dict) and "items" in nested:
+                events = nested["items"]
+            else:
+                events = None
+        else:
+            events = None
+    else:
+        events = None
+    if not isinstance(events, list):
+        raise CalendarSourceError("gog", "enumeration_failed")
+
+    for event in events:
+        if not isinstance(event, dict):
+            raise CalendarSourceError("gog", "enumeration_failed")
+        for boundary in ("start", "end"):
+            value = event.get(boundary)
+            if not isinstance(value, dict):
+                raise CalendarSourceError("gog", "enumeration_failed")
+            raw = value.get("dateTime") or value.get("date")
+            if not isinstance(raw, str):
+                raise CalendarSourceError("gog", "enumeration_failed")
+            try:
+                datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            except ValueError as error:
+                raise CalendarSourceError("gog", "enumeration_failed") from error
 
     meetings = []
-    for ev in data.get("events", []):
+    for ev in events:
         start_raw = ev.get("start", {}).get("dateTime") or ev.get("start", {}).get("date")
         end_raw = ev.get("end", {}).get("dateTime") or ev.get("end", {}).get("date")
         if not start_raw:
@@ -144,105 +214,87 @@ def _fetch_google(config, start, end):
     return meetings
 
 
-MACOS_CALENDAR_JXA = r"""
-function env(name) {
-  const value = $.NSProcessInfo.processInfo.environment.objectForKey(name);
-  return value ? String(value) : "";
-}
+def _calendar_probe_path():
+    return Path(__file__).resolve().parent / "Yulu.app" / "Contents" / "MacOS" / "calendar_probe"
 
-const start = new Date(Number(env("YULU_CALENDAR_START_MS")));
-const end = new Date(Number(env("YULU_CALENDAR_END_MS")));
-const wantedRaw = env("YULU_CALENDAR_NAMES_JSON") || "[]";
-let wanted = [];
-try { wanted = JSON.parse(wantedRaw); } catch (_) { wanted = []; }
-const wantedSet = new Set(wanted.map(String).filter(Boolean));
 
-const Calendar = Application("Calendar");
-const out = [];
-for (const cal of Calendar.calendars()) {
-  const calName = String(cal.name());
-  if (wantedSet.size > 0 && !wantedSet.has(calName)) continue;
-  for (const ev of cal.events()) {
-    const startDate = ev.startDate();
-    const endDate = ev.endDate();
-    if (!startDate || !endDate) continue;
-    if (endDate < start || startDate > end) continue;
-    let link = "";
-    let notes = "";
-    try { link = String(ev.url() || ""); } catch (_) {}
-    try { notes = String(ev.description() || ""); } catch (_) {}
-    out.push({
-      id: String(ev.uid ? ev.uid() : `${calName}:${ev.summary()}:${startDate.toISOString()}`),
-      title: String(ev.summary() || "(无标题)"),
-      start: startDate.toISOString(),
-      end: endDate.toISOString(),
-      link,
-      attendees: [],
-      description: notes,
-      calendar: calName,
-      source: "macos",
-    });
-  }
-}
-JSON.stringify(out);
-"""
+def _calendar_iso(value):
+    return value.astimezone(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
 def _fetch_macos_calendar(config, start, end):
-    """
-    通过 macOS 系统 Calendar 读取会议列表。
-
-    这条路径复用用户已经接入系统日历的 Google/Exchange/iCloud 账号，不要求
-    Yulu 另做 Google OAuth。系统会由 macOS 统一弹出 Calendar 权限。
-    """
+    """Read the selected system calendars through Yulu's signed EventKit helper."""
     if sys.platform != "darwin":
-        return []
+        raise CalendarSourceError("macos", "runtime_missing")
 
     watch = config.get("watch_calendars") or config.get("calendar_names") or []
     if not isinstance(watch, list):
         watch = []
-
-    env = {
-        **os.environ,
-        "YULU_CALENDAR_START_MS": str(int(start.timestamp() * 1000)),
-        "YULU_CALENDAR_END_MS": str(int(end.timestamp() * 1000)),
-        "YULU_CALENDAR_NAMES_JSON": json.dumps(watch, ensure_ascii=False),
-    }
-    try:
-        r = subprocess.run(
-            ["osascript", "-l", "JavaScript", "-e", MACOS_CALENDAR_JXA],
-            capture_output=True, text=True, timeout=30, env=env,
-        )
-        if r.returncode != 0:
-            print(f"⚠️ macOS Calendar error: {r.stderr.strip()}", file=sys.stderr)
-            return []
-        data = json.loads(r.stdout)
-    except Exception as e:
-        print(f"⚠️ macOS Calendar 获取失败: {e}", file=sys.stderr)
-        return []
+    data = []
+    cursor = start
+    while cursor < end:
+        chunk_end = min(cursor + timedelta(hours=48), end)
+        command = [
+            str(_calendar_probe_path()),
+            "--events",
+            "--start", _calendar_iso(cursor),
+            "--end", _calendar_iso(chunk_end),
+            "--calendars-json", json.dumps([str(item) for item in watch if item], ensure_ascii=False),
+        ]
+        try:
+            result = subprocess.run(command, capture_output=True, text=True, timeout=35)
+        except FileNotFoundError as error:
+            raise CalendarSourceError("macos", "runtime_missing") from error
+        except (subprocess.TimeoutExpired, OSError) as error:
+            raise CalendarSourceError("macos", "enumeration_failed") from error
+        try:
+            payload = json.loads(result.stdout)
+        except (json.JSONDecodeError, TypeError) as error:
+            raise CalendarSourceError("macos", "enumeration_failed") from error
+        if result.returncode != 0 or not isinstance(payload, dict) or payload.get("ok") is not True:
+            reason = payload.get("reason", "enumeration_failed") if isinstance(payload, dict) else "enumeration_failed"
+            raise CalendarSourceError("macos", reason)
+        if payload.get("start") != command[3] or payload.get("end") != command[5]:
+            raise CalendarSourceError("macos", "enumeration_failed")
+        chunk_events = payload.get("events")
+        if not isinstance(chunk_events, list):
+            raise CalendarSourceError("macos", "enumeration_failed")
+        data.extend(chunk_events)
+        cursor = chunk_end
 
     meetings = []
-    for ev in data if isinstance(data, list) else []:
-        if not isinstance(ev, dict):
+    seen = set()
+    for event in data:
+        if not isinstance(event, dict):
+            raise CalendarSourceError("macos", "enumeration_failed")
+        start_raw = event.get("start")
+        end_raw = event.get("end")
+        if not isinstance(start_raw, str) or not isinstance(end_raw, str):
+            raise CalendarSourceError("macos", "enumeration_failed")
+        attendees = event.get("attendees")
+        if not isinstance(attendees, list) or not all(isinstance(item, str) for item in attendees):
+            raise CalendarSourceError("macos", "enumeration_failed")
+        try:
+            datetime.fromisoformat(start_raw.replace("Z", "+00:00"))
+            datetime.fromisoformat(end_raw.replace("Z", "+00:00"))
+        except ValueError as error:
+            raise CalendarSourceError("macos", "enumeration_failed") from error
+        identity = (str(event.get("id", "")), str(start_raw), str(end_raw))
+        if identity in seen:
             continue
-        start_raw = ev.get("start")
-        end_raw = ev.get("end")
-        if not start_raw or not end_raw:
-            continue
+        seen.add(identity)
         meetings.append({
-            "id": str(ev.get("id", "")),
-            "title": str(ev.get("title") or "(无标题)"),
+            "id": str(event.get("id", "")),
+            "title": str(event.get("title") or "(无标题)"),
             "start": str(start_raw),
             "end": str(end_raw),
-            "link": str(ev.get("link", "")),
-            "attendees": [str(a) for a in ev.get("attendees", []) if a],
-            "description": str(ev.get("description", "")),
-            "calendar": str(ev.get("calendar", "")),
+            "link": str(event.get("link", "")),
+            "attendees": [attendee for attendee in attendees if attendee],
+            "description": str(event.get("description", "")),
+            "calendar": str(event.get("calendar", "")),
             "source": "macos",
         })
-
     return meetings
-
 
 def print_meetings(meetings):
     """打印会议列表。"""
@@ -269,33 +321,35 @@ def main():
 
     now = datetime.now().astimezone()
 
-    if cmd == "today":
-        start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        end = start + timedelta(days=1)
-    elif cmd == "tomorrow":
-        start = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
-        end = start + timedelta(days=1)
-    elif cmd == "yesterday":
-        start = (now - timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
-        end = start + timedelta(days=1)
-    elif cmd == "upcoming":
-        start = now
-        end = now + timedelta(hours=24)
-    elif cmd == "week":
-        start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        end = start + timedelta(days=7)
-    elif cmd == "json":
-        start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        end = start + timedelta(days=1)
-        meetings = fetch_meetings(start, end)
-        print(json.dumps(meetings, ensure_ascii=False, indent=2))
-        return
-    else:
-        print(f"Unknown command: {cmd}", file=sys.stderr)
-        sys.exit(1)
+    try:
+        if cmd == "today":
+            start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            end = start + timedelta(days=1)
+        elif cmd == "tomorrow":
+            start = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+            end = start + timedelta(days=1)
+        elif cmd == "yesterday":
+            start = (now - timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+            end = start + timedelta(days=1)
+        elif cmd == "upcoming":
+            start = now
+            end = now + timedelta(hours=24)
+        elif cmd == "week":
+            start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            end = start + timedelta(days=7)
+        elif cmd == "json":
+            start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            end = start + timedelta(days=1)
+        else:
+            print(f"Unknown command: {cmd}", file=sys.stderr)
+            sys.exit(1)
 
-    meetings = fetch_meetings(start, end)
-    if use_json:
+        meetings = fetch_meetings(start, end)
+    except CalendarSourceError as error:
+        print(str(error), file=sys.stderr)
+        sys.exit(2)
+
+    if use_json or cmd == "json":
         print(json.dumps(meetings, ensure_ascii=False, indent=2))
     else:
         print_meetings(meetings)
