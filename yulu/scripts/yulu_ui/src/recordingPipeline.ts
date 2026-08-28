@@ -13,6 +13,7 @@ import {
   ClaudeSummaryEvidenceMismatchError,
   HostStore,
   secretSafeSummaryRuntimeEvidence,
+  type ActivationSummarySnapshot,
   type AgentTask,
   type AgentTaskTrigger,
   type SummaryCommitRuntimeEvidence,
@@ -57,6 +58,7 @@ import { CodexConversationError } from "./codexAgentAdapter.js";
 import { ClaudeCodeConversationError } from "./claudeCodeAdapter.js";
 
 const REC_FILE_RE = /^(.+?)_(\d{8})_(\d{6})\.wav$/;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const DISPATCH_POLL_MS = 15_000;
 const MAX_AGENT_ATTEMPTS = 3;
 const MAX_AGENT_RETRY_DELAY_MS = 5 * 60_000;
@@ -119,9 +121,13 @@ function pipelineDisabledReason(config: YuluConfig): string | null {
 export interface RecordingCompletionInput {
   audioPath: string;
   title?: string;
+  /** Durable guided-attempt identity; never derived from mutable provider Settings. */
+  activationAttemptId?: string;
   /** @deprecated Recording completion never authorizes an external write. */
   sendToNotion?: boolean;
   language?: TranscriptionLanguage;
+  /** A non-secret provider identity proven before a guided Activation Attempt began. */
+  summarySnapshot?: ActivationSummarySnapshot;
 }
 
 export interface OnDemandTranscriptionInput {
@@ -187,7 +193,13 @@ export class RecordingPipeline {
   }
 
   enqueueCompletion(input: RecordingCompletionInput): { task: AgentTask; created: boolean } {
-    return this.persist(this.prepare(input), null);
+    if (input.activationAttemptId !== undefined && !UUID_RE.test(input.activationAttemptId)) {
+      throw new InvalidRecordingCompletionError("Activation Attempt id must be a UUID");
+    }
+    return this.persist(
+      this.prepare(input),
+      input.activationAttemptId ? `activation-attempt:${input.activationAttemptId}` : null,
+    );
   }
 
   enqueueSummaryRegeneration(input: SummaryRegenerationInput): { task: AgentTask; created: boolean } {
@@ -242,7 +254,19 @@ export class RecordingPipeline {
       throw new RecordingPipelinePolicyDisabledError("Automatic Agent recording processing is paused by policy");
     }
     const recording = this.resolveRecording(input.audioPath);
-    const summary = this.summaryIdentity(config);
+    const summary = input.summarySnapshot
+      ? {
+          provider: input.summarySnapshot.provider,
+          model: input.summarySnapshot.model,
+          credentialSource: input.summarySnapshot.credentialClass === "oauth" ||
+              input.summarySnapshot.credentialClass === "api-key"
+            ? input.summarySnapshot.credentialClass
+            : null,
+          connectionId: input.summarySnapshot.connectionId,
+          credentialClass: input.summarySnapshot.credentialClass,
+          disclosureVersion: input.summarySnapshot.disclosureVersion,
+        }
+      : this.summaryIdentity(config);
     const title = input.title?.trim() || recording.title;
     const instructionContext = {
       title,
@@ -422,7 +446,10 @@ export class RecordingPipeline {
     options: { allowCancelled?: boolean; allowCompleted?: boolean; discardArtifacts?: boolean } = {},
   ): AgentTask {
     const config = this.options.config.read();
-    const task = this.options.store.retry(id, options);
+    const current = this.options.store.getTask(id);
+    const task = current?.state === "artifacts_committed" && current.error
+      ? current
+      : this.options.store.retry(id, options);
     this.resumeDispatchNow();
     this.reconcileDispatchPolicy(config);
     this.kick();

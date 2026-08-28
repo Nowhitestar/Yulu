@@ -188,6 +188,16 @@ export interface ActivationAttempt {
   handoffError: string | null;
   taskId: string | null;
   recordingStem: string | null;
+  summarySnapshot: ActivationSummarySnapshot | null;
+}
+
+export interface ActivationSummarySnapshot {
+  connectionId: string;
+  provider: string;
+  model: string;
+  credentialClass: SummaryCredentialClass;
+  disclosureVersion: string | null;
+  testedAt: string;
 }
 
 export interface CloudTranscriptionConsent {
@@ -334,6 +344,60 @@ function boundedIdentity(value: string, label: string): string {
 
 function boundedEvidenceString(value: unknown, max: number): string | null {
   return typeof value === "string" && value.length <= max ? value : null;
+}
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function activationSummarySnapshot(raw: string | null): ActivationSummarySnapshot | null {
+  if (!raw) return null;
+  try {
+    const value = JSON.parse(raw) as Record<string, unknown>;
+    const connectionId = boundedEvidenceString(value.connectionId, 200)?.trim() || null;
+    const provider = boundedEvidenceString(value.provider, 100)?.trim().toLowerCase() || null;
+    const model = boundedEvidenceString(value.model, 128)?.trim() || null;
+    const credentialClass = value.credentialClass;
+    const hasDisclosureVersion = Object.hasOwn(value, "disclosureVersion");
+    const disclosureVersion = value.disclosureVersion === null
+      ? null
+      : boundedEvidenceString(value.disclosureVersion, 200)?.trim() || null;
+    const testedAt = boundedEvidenceString(value.testedAt, 100)?.trim() || null;
+    if (
+      !connectionId || !provider || !/^[a-z0-9][a-z0-9._-]{0,99}$/.test(provider) || !model ||
+      !["oauth", "api-key", "runtime-oauth"].includes(String(credentialClass)) ||
+      !hasDisclosureVersion || (value.disclosureVersion !== null && !disclosureVersion) ||
+      !testedAt || Number.isNaN(Date.parse(testedAt))
+    ) return null;
+    return {
+      connectionId,
+      provider,
+      model,
+      credentialClass: credentialClass as SummaryCredentialClass,
+      disclosureVersion,
+      testedAt,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function requireActivationSummarySnapshot(
+  input: ActivationSummarySnapshot | null,
+): ActivationSummarySnapshot | null {
+  if (!input) return null;
+  const snapshot = activationSummarySnapshot(JSON.stringify(input));
+  if (!snapshot) throw new Error("Activation Summary Provider snapshot is invalid");
+  return snapshot;
+}
+
+function taskMatchesActivationSummarySnapshot(
+  task: AgentTask,
+  snapshot: ActivationSummarySnapshot,
+): boolean {
+  return task.summaryConnectionId === snapshot.connectionId &&
+    task.summaryProvider === snapshot.provider &&
+    task.summaryModel === snapshot.model &&
+    task.summaryCredentialClass === snapshot.credentialClass &&
+    task.summaryDisclosureVersion === snapshot.disclosureVersion;
 }
 
 function runtimeAuthorizationClass(value: unknown): RuntimeAuthorizationClass | null {
@@ -2226,7 +2290,7 @@ export class HostStore {
   getActivationAttempt(): ActivationAttempt | null {
     const row = this.db.prepare(`
       SELECT attempt_id, started_at, stop_requested_at, completion_opened_at,
-        handoff_error, task_id, recording_stem
+        handoff_error, task_id, recording_stem, summary_snapshot_json
       FROM activation_attempt WHERE id = 1
     `).get() as {
       attempt_id: string;
@@ -2236,8 +2300,17 @@ export class HostStore {
       handoff_error: string | null;
       task_id: string | null;
       recording_stem: string | null;
+      summary_snapshot_json: string | null;
     } | undefined;
-    return row ? {
+    if (!row) return null;
+    if (!UUID_RE.test(row.attempt_id)) {
+      throw new Error("Activation Attempt identity is corrupt");
+    }
+    const summarySnapshot = activationSummarySnapshot(row.summary_snapshot_json);
+    if (row.summary_snapshot_json !== null && !summarySnapshot) {
+      throw new Error("Activation Summary Provider snapshot is corrupt");
+    }
+    return {
       id: row.attempt_id,
       startedAt: row.started_at,
       stopRequestedAt: row.stop_requested_at,
@@ -2245,17 +2318,21 @@ export class HostStore {
       handoffError: row.handoff_error,
       taskId: row.task_id,
       recordingStem: row.recording_stem,
-    } : null;
+      summarySnapshot,
+    };
   }
 
-  beginActivationAttempt(): { attempt: ActivationAttempt; created: boolean } {
+  beginActivationAttempt(
+    summarySnapshot: ActivationSummarySnapshot | null = null,
+  ): { attempt: ActivationAttempt; created: boolean } {
     const existing = this.getActivationAttempt();
     if (existing) return { attempt: existing, created: false };
     if (this.getCoreActivationEvidence()) throw new Error("Core Activation is already established");
+    const snapshot = requireActivationSummarySnapshot(summarySnapshot);
     const result = this.db.prepare(`
-      INSERT OR IGNORE INTO activation_attempt (id, attempt_id, started_at)
-      VALUES (1, ?, ?)
-    `).run(randomUUID(), now());
+      INSERT OR IGNORE INTO activation_attempt (id, attempt_id, started_at, summary_snapshot_json)
+      VALUES (1, ?, ?, ?)
+    `).run(randomUUID(), now(), snapshot ? JSON.stringify(snapshot) : null);
     return { attempt: this.getActivationAttempt()!, created: result.changes === 1 };
   }
 
@@ -2267,7 +2344,11 @@ export class HostStore {
     return result.changes === 1;
   }
 
-  restartActivationAttempt(attemptId: string): ActivationAttempt {
+  restartActivationAttempt(
+    attemptId: string,
+    summarySnapshot: ActivationSummarySnapshot | null = null,
+  ): ActivationAttempt {
+    const snapshot = requireActivationSummarySnapshot(summarySnapshot);
     const restart = this.db.transaction(() => {
       const attempt = this.getActivationAttempt();
       if (!attempt || attempt.id !== attemptId) throw new Error("Activation Attempt not found");
@@ -2279,9 +2360,9 @@ export class HostStore {
       }
       this.db.prepare("DELETE FROM activation_attempt WHERE id = 1 AND attempt_id = ?").run(attemptId);
       this.db.prepare(`
-        INSERT INTO activation_attempt (id, attempt_id, started_at)
-        VALUES (1, ?, ?)
-      `).run(randomUUID(), now());
+        INSERT INTO activation_attempt (id, attempt_id, started_at, summary_snapshot_json)
+        VALUES (1, ?, ?, ?)
+      `).run(randomUUID(), now(), snapshot ? JSON.stringify(snapshot) : null);
       return this.getActivationAttempt()!;
     });
     return restart.immediate();
@@ -2328,24 +2409,30 @@ export class HostStore {
   }
 
   correlateActivationAttempt(attemptId: string, taskId: string): ActivationAttempt {
-    const attempt = this.getActivationAttempt();
-    if (!attempt || attempt.id !== attemptId) throw new Error("Activation Attempt not found");
-    const task = this.getTask(taskId);
-    if (
-      !task ||
-      task.createdAt < attempt.startedAt ||
-      (attempt.recordingStem !== null && attempt.recordingStem !== task.recordingStem)
-    ) {
-      throw new Error("Activation Attempt task identity is invalid");
-    }
-    if (attempt.taskId && attempt.taskId !== task.id) {
-      throw new Error("Activation Attempt is already correlated to another task");
-    }
-    this.db.prepare(`
-      UPDATE activation_attempt SET task_id = ?, recording_stem = ?
-      WHERE id = 1 AND attempt_id = ?
-    `).run(task.id, task.recordingStem, attemptId);
-    return this.getActivationAttempt()!;
+    const correlate = this.db.transaction(() => {
+      const attempt = this.getActivationAttempt();
+      if (!attempt || attempt.id !== attemptId) throw new Error("Activation Attempt not found");
+      const task = this.getTask(taskId);
+      if (
+        !task ||
+        task.createdAt < attempt.startedAt ||
+        (attempt.recordingStem !== null && attempt.recordingStem !== task.recordingStem)
+      ) {
+        throw new Error("Activation Attempt task identity is invalid");
+      }
+      if (attempt.summarySnapshot && !taskMatchesActivationSummarySnapshot(task, attempt.summarySnapshot)) {
+        throw new Error("Activation task does not match the proven Summary Provider snapshot");
+      }
+      if (attempt.taskId && attempt.taskId !== task.id) {
+        throw new Error("Activation Attempt is already correlated to another task");
+      }
+      this.db.prepare(`
+        UPDATE activation_attempt SET task_id = ?, recording_stem = ?, handoff_error = NULL
+        WHERE id = 1 AND attempt_id = ?
+      `).run(task.id, task.recordingStem, attemptId);
+      return this.getActivationAttempt()!;
+    });
+    return correlate.immediate();
   }
 
   recoverActivationAttemptTask(attemptId: string): ActivationAttempt {
@@ -2359,9 +2446,19 @@ export class HostStore {
       ORDER BY created_at ASC
       LIMIT 2
     `).all(attempt.stopRequestedAt ?? attempt.startedAt, attempt.recordingStem) as TaskRow[];
-    return rows.length === 1
-      ? this.correlateActivationAttempt(attempt.id, rows[0]!.id)
-      : attempt;
+    const matchingRows = attempt.summarySnapshot
+      ? rows.filter((row) => taskMatchesActivationSummarySnapshot(toTask(row), attempt.summarySnapshot!))
+      : rows;
+    if (matchingRows.length === 1) {
+      return this.correlateActivationAttempt(attempt.id, matchingRows[0]!.id);
+    }
+    if (attempt.summarySnapshot && rows.length > 0 && matchingRows.length === 0) {
+      return this.failActivationAttemptHandoff(
+        attempt.id,
+        "Saved activation task does not match the proven Summary Provider snapshot",
+      );
+    }
+    return attempt;
   }
 
   acknowledgeAutomaticActivationEntry(): {
@@ -3525,7 +3622,8 @@ export class HostStore {
         completion_opened_at TEXT,
         handoff_error TEXT,
         task_id TEXT,
-        recording_stem TEXT
+        recording_stem TEXT,
+        summary_snapshot_json TEXT
       );
 
       CREATE TABLE IF NOT EXISTS optional_capability_outcomes (
@@ -3809,6 +3907,11 @@ export class HostStore {
     }
     if (!columns.some((column) => column.name === "summary_input_artifact_bytes")) {
       this.db.exec("ALTER TABLE agent_tasks ADD COLUMN summary_input_artifact_bytes INTEGER");
+    }
+    const activationAttemptColumns = this.db.prepare("PRAGMA table_info(activation_attempt)")
+      .all() as Array<{ name: string }>;
+    if (!activationAttemptColumns.some((column) => column.name === "summary_snapshot_json")) {
+      this.db.exec("ALTER TABLE activation_attempt ADD COLUMN summary_snapshot_json TEXT");
     }
     this.db.exec(`
       UPDATE agent_tasks SET summary_credential_class = summary_credential_source

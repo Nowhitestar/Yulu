@@ -11,6 +11,7 @@ import type { AppContext } from "../trpc.js";
 import { publicProcedure, router, uiMutationProcedure } from "../trpc.js";
 import {
   publicAgentTask,
+  type ActivationSummarySnapshot,
   type ActivationAttempt,
   type AgentTask,
   type CoreActivationEvidence,
@@ -206,6 +207,34 @@ async function activationReadiness(ctx: AppContext) {
   };
 }
 
+function provenSummarySnapshot(summary: {
+  selected: { connectionId: string | null; provider: string; model: string };
+  state: "ready" | "blocked" | "disclosure_required";
+  credentialSource: "oauth" | "api-key" | "runtime-oauth" | null;
+  testedAt: string | null;
+  disclosure: { disclosureVersion: string; acceptedDisclosureVersion: string | null } | null;
+}): ActivationSummarySnapshot {
+  const connectionId = summary.selected.connectionId?.trim() || "";
+  const provider = summary.selected.provider.trim().toLowerCase();
+  const model = summary.selected.model.trim();
+  const testedAt = summary.testedAt?.trim() || "";
+  const credentialClass = summary.credentialSource;
+  if (
+    summary.state !== "ready" || !connectionId || !provider || !model || !testedAt ||
+    !credentialClass || !["oauth", "api-key", "runtime-oauth"].includes(credentialClass)
+  ) {
+    throw new Error("Activation requires current proof for an explicit Summary Provider and model");
+  }
+  return {
+    connectionId,
+    provider,
+    model,
+    credentialClass,
+    disclosureVersion: summary.disclosure?.acceptedDisclosureVersion ?? null,
+    testedAt,
+  };
+}
+
 function journeyState(ctx: { host: {
   getActivationJourneyState: () => {
     automaticEntryAcknowledgedAt: string | null;
@@ -219,10 +248,20 @@ function journeyState(ctx: { host: {
   };
 }
 
+function publicActivationAttempt(attempt: ActivationAttempt) {
+  const { id: _internalId, summarySnapshot: _internalSummarySnapshot, ...safe } = attempt;
+  return safe;
+}
+
+function publicActivationTask(task: AgentTask) {
+  const { idempotencyKey: _internalIdempotencyKey, ...safe } = publicAgentTask(task);
+  return safe;
+}
+
 async function activeAttempt(ctx: AppContext) {
   const existing = ctx.host.getActivationAttempt();
   if (!existing) return null;
-  const attempt = existing.taskId || !existing.stopRequestedAt
+  const attempt = existing.taskId || !existing.stopRequestedAt || !existing.summarySnapshot
     ? existing
     : ctx.host.recoverActivationAttemptTask(existing.id);
   const task = attempt.taskId ? ctx.host.getTask(attempt.taskId) : null;
@@ -230,11 +269,13 @@ async function activeAttempt(ctx: AppContext) {
   const transcriptCommitted = task !== null && hasValidCommittedTranscript(ctx, task);
   const currentSummary = blocker && transcriptCommitted ? await activationSummaryReadiness(ctx) : null;
   return {
-    state: task || attempt.recordingStem || attempt.handoffError ? "processing" as const : "recording" as const,
+    state: task || attempt.recordingStem || attempt.handoffError || blocker
+      ? "processing" as const
+      : "recording" as const,
     evidence: null,
     journey: journeyState(ctx),
-    attempt,
-    task: task ? publicAgentTask(task) : null,
+    attempt: publicActivationAttempt(attempt),
+    task: task ? publicActivationTask(task) : null,
     blocker,
     summaryRecovery: currentSummary ? {
       selected: currentSummary.selected,
@@ -277,7 +318,28 @@ function activationAttemptBlocker(
   attempt: ActivationAttempt,
   task: AgentTask | null,
 ) {
+  if (!attempt.summarySnapshot && !attempt.taskId) {
+    return {
+      capability: "provider" as const,
+      detail: "This Activation Attempt predates durable Summary Provider proof and cannot use current Settings",
+      retry: "rerecord" as const,
+      remediation: SUMMARY_SETTINGS,
+    };
+  }
   if (attempt.handoffError) {
+    if (/Summary Provider snapshot/i.test(attempt.handoffError)) {
+      const connectionId = attempt.summarySnapshot?.connectionId;
+      return {
+        capability: "provider" as const,
+        detail: attempt.handoffError,
+        retry: "rerecord" as const,
+        remediation: {
+          href: connectionId
+            ? `/settings/llm?connection=${encodeURIComponent(connectionId)}&capability=summary`
+            : SUMMARY_SETTINGS.href,
+        },
+      };
+    }
     if (/recording (?:processing|pipeline)|pipeline.*(?:disabled|paused)|paused by policy/i.test(attempt.handoffError)) {
       return {
         capability: "recording_pipeline" as const,
@@ -335,6 +397,14 @@ function activationAttemptBlocker(
       detail: task.error,
       retry: "new_summary_attempt" as const,
       remediation: { href: summarySettingsForTask(task) },
+    };
+  }
+  if (task?.state === "artifacts_committed" && task.error) {
+    return {
+      capability: "recording_pipeline" as const,
+      detail: task.error,
+      retry: "same_task" as const,
+      remediation: { href: "/settings/automation" },
     };
   }
   if (!task || ![
@@ -412,6 +482,9 @@ async function stopAndCorrelateAttempt(ctx: AppContext, attempt: ActivationAttem
       { timeoutMs: ACTIVATION_RECORDING_COMMAND_TIMEOUT_MS },
     ), ({ recordingStem }) => {
       ctx.host.recordActivationAttemptStopped(attempt.id, recordingStem);
+    }, {
+      activationAttemptId: attempt.id,
+      ...(attempt.summarySnapshot ? { summarySnapshot: attempt.summarySnapshot } : {}),
     });
     if (!result.pipeline.accepted) {
       ctx.host.failActivationAttemptHandoff(attempt.id, result.pipeline.reason);
@@ -567,7 +640,8 @@ export const activationRouter = router({
     if (!policy.enabled || !policy.auto_process_recordings) {
       throw new Error("Activation is blocked by recording pipeline policy");
     }
-    const { attempt, created } = ctx.host.beginActivationAttempt();
+    const summarySnapshot = provenSummarySnapshot(readiness.readiness.summary);
+    const { attempt, created } = ctx.host.beginActivationAttempt(summarySnapshot);
     if (!created) return await activeAttempt(ctx);
     try {
       await runRecordAudio(
@@ -582,7 +656,7 @@ export const activationRouter = router({
       );
       throw error;
     }
-    return { state: "recording" as const, attempt };
+    return { state: "recording" as const, attempt: publicActivationAttempt(attempt) };
   }),
   stopAttempt: uiMutationProcedure.mutation(async ({ ctx }) => {
     const attempt = ctx.host.getActivationAttempt();
@@ -599,7 +673,12 @@ export const activationRouter = router({
     if (!blocker) throw new Error("Activation Attempt is still making progress");
     if (blocker.retry === "rerecord") throw new Error("Activation audio must be recorded again");
     if (blocker.retry === "start_recording") {
-      const restarted = ctx.host.restartActivationAttempt(attempt.id);
+      const readiness = await activationReadiness(ctx);
+      if (readiness.nextStep) throw new Error(`Activation is blocked by ${readiness.nextStep}`);
+      const restarted = ctx.host.restartActivationAttempt(
+        attempt.id,
+        provenSummarySnapshot(readiness.readiness.summary),
+      );
       try {
         await runRecordAudio(
           ctx,
@@ -636,6 +715,8 @@ export const activationRouter = router({
     const result = ctx.recordingPipeline.enqueueCompletion({
       audioPath,
       title: "Core Activation",
+      activationAttemptId: attempt.id,
+      ...(attempt.summarySnapshot ? { summarySnapshot: attempt.summarySnapshot } : {}),
     });
     ctx.host.correlateActivationAttempt(attempt.id, result.task.id);
     return await activeAttempt(ctx);
@@ -647,7 +728,12 @@ export const activationRouter = router({
     if (activationAttemptBlocker(ctx, attempt, task)?.retry !== "rerecord") {
       throw new Error("Activation audio remains recoverable");
     }
-    const restarted = ctx.host.restartActivationAttempt(attempt.id);
+    const readiness = await activationReadiness(ctx);
+    if (readiness.nextStep) throw new Error(`Activation is blocked by ${readiness.nextStep}`);
+    const restarted = ctx.host.restartActivationAttempt(
+      attempt.id,
+      provenSummarySnapshot(readiness.readiness.summary),
+    );
     try {
       await runRecordAudio(
         ctx,
@@ -661,7 +747,7 @@ export const activationRouter = router({
       );
       throw error;
     }
-    return { state: "recording" as const, attempt: restarted };
+    return { state: "recording" as const, attempt: publicActivationAttempt(restarted) };
   }),
   replaceSummaryProvider: uiMutationProcedure.mutation(async ({ ctx }) => {
     const attempt = ctx.host.getActivationAttempt();

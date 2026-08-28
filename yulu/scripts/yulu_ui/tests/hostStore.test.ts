@@ -1068,6 +1068,110 @@ describe("HostStore", () => {
     });
   });
 
+  it("rejects an invalid Activation Summary snapshot instead of losing it on restart", () => {
+    createStore();
+
+    expect(() => store!.beginActivationAttempt({
+      connectionId: "codex",
+      provider: "codex",
+      model: "gpt-5.6-sol",
+      credentialClass: "copied-oauth-token",
+      disclosureVersion: "codex-summary-v1",
+      testedAt: "not-a-timestamp",
+    } as never)).toThrow("Activation Summary Provider snapshot is invalid");
+    expect(store!.getActivationAttempt()).toBeNull();
+  });
+
+  it("fails closed when a non-null Activation Summary snapshot is corrupt on restart", () => {
+    createStore();
+    store!.beginActivationAttempt({
+      connectionId: "codex",
+      provider: "codex",
+      model: "gpt-5.6-sol",
+      credentialClass: "runtime-oauth",
+      disclosureVersion: "codex-summary-v1",
+      testedAt: "2026-08-28T00:00:00.000Z",
+    });
+    store!.db.prepare("UPDATE activation_attempt SET summary_snapshot_json = ? WHERE id = 1")
+      .run('{"provider":"codex","credentialClass":"copied-token"}');
+    const dbPath = join(root, "host.sqlite");
+    store!.close();
+    store = new HostStore(dbPath);
+
+    expect(() => store!.getActivationAttempt()).toThrow(
+      "Activation Summary Provider snapshot is corrupt",
+    );
+  });
+
+  it("fails closed when a persisted Activation snapshot has an invalid disclosure type", () => {
+    createStore();
+    store!.beginActivationAttempt({
+      connectionId: "codex",
+      provider: "codex",
+      model: "gpt-5.6-sol",
+      credentialClass: "runtime-oauth",
+      disclosureVersion: "codex-summary-v1",
+      testedAt: "2026-08-28T00:00:00.000Z",
+    });
+    store!.db.prepare("UPDATE activation_attempt SET summary_snapshot_json = ? WHERE id = 1").run(
+      JSON.stringify({
+        connectionId: "codex",
+        provider: "codex",
+        model: "gpt-5.6-sol",
+        credentialClass: "runtime-oauth",
+        disclosureVersion: 123,
+        testedAt: "2026-08-28T00:00:00.000Z",
+      }),
+    );
+
+    expect(() => store!.getActivationAttempt()).toThrow(
+      "Activation Summary Provider snapshot is corrupt",
+    );
+  });
+
+  it("fails closed when a persisted Activation Attempt identity is not a UUID", () => {
+    createStore();
+    store!.beginActivationAttempt();
+    store!.db.prepare("UPDATE activation_attempt SET attempt_id = ? WHERE id = 1")
+      .run("corrupt-attempt-id");
+
+    expect(() => store!.getActivationAttempt()).toThrow(
+      "Activation Attempt identity is corrupt",
+    );
+  });
+
+  it("refuses to correlate the same recording stem to a different Summary authority", () => {
+    createStore();
+    const attempt = store!.beginActivationAttempt({
+      connectionId: "codex",
+      provider: "codex",
+      model: "gpt-5.6-sol",
+      credentialClass: "runtime-oauth",
+      disclosureVersion: "codex-summary-v1",
+      testedAt: "2026-08-28T00:00:00.000Z",
+    }).attempt;
+    const task = store!.enqueueRecording({
+      idempotencyKey: "activation:same-stem-different-summary",
+      recordingStem: "Activation_20260828_120000",
+      title: "Activation",
+      audioPath: join(root, "Activation_20260828_120000.wav"),
+      sendToNotion: false,
+      destinationHint: "",
+      agentProvider: "xai",
+      summaryProvider: "xai",
+      summaryModel: "grok-4.6",
+      summaryCredentialSource: "oauth",
+      summaryConnectionId: "direct-xai",
+      summaryCredentialClass: "oauth",
+      summaryDisclosureVersion: "xai-summary-v1",
+    }).task;
+
+    expect(() => store!.correlateActivationAttempt(attempt.id, task.id)).toThrow(
+      "does not match the proven Summary Provider snapshot",
+    );
+    expect(store!.getActivationAttempt()).toMatchObject({ taskId: null });
+  });
+
   it("creates a new pinned summary attempt over the correlated committed transcript", () => {
     createStore();
     const activationAttempt = store!.beginActivationAttempt().attempt;

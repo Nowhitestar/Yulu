@@ -193,6 +193,14 @@ delivery happens afterward and cannot gate activation. A guided completion opens
 the saved note; manual, scheduled, and verified historical completions announce
 the saved note without navigating or moving focus.
 
+Before capture starts, the Activation Attempt durably snapshots the exact ready
+Summary connection, provider, model, non-secret credential class, disclosure
+version, and probe time. Changing Settings while that recording is active cannot
+replace its Summary authority; a different provider requires a new explicit
+attempt. The snapshot contains no OAuth token or API key. An unbound attempt
+created before this snapshot existed must be recorded again; Yulu never fills
+missing authority from the current Settings.
+
 Drag the six-dot handle to reposition the overlay. Use the down arrow to collapse
 it to the breathing Yulu logo, then click the logo to restore captions. Click the
 `录制中` control to stop; the overlay disappears after capture stops.

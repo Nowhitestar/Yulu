@@ -780,7 +780,16 @@ describe("RecordingPipeline", () => {
             detail: null,
             credentialSource: "runtime-oauth",
             testedAt: "2026-08-28T00:00:00.000Z",
-            disclosure: null,
+            disclosure: {
+              provider,
+              connectionId: provider,
+              disclosureVersion,
+              acceptedDisclosureVersion: disclosureVersion,
+              declined: false,
+              required: false,
+              data: "transcript_text" as const,
+              destination: `${label} runtime and its configured model provider`,
+            },
             publicOnboardingSupported: true,
             remediation: null,
             blocker: null,
@@ -1384,6 +1393,52 @@ describe("RecordingPipeline", () => {
       summaryProvider: "xai",
       summaryModel: "grok-new-explicit",
     });
+  });
+
+  it("uses one durable idempotency identity for repeated Activation Attempt enqueue", () => {
+    const { audioPath } = setup({ available: false });
+    const activationAttemptId = "9a9b9cd3-0a6e-4eb3-9bc1-71815ca1b8e4";
+
+    const first = pipeline!.enqueueCompletion({
+      audioPath,
+      title: "Guided activation",
+      activationAttemptId,
+    });
+    const repeated = pipeline!.enqueueCompletion({
+      audioPath,
+      title: "Guided activation",
+      activationAttemptId,
+    });
+
+    expect(first.created).toBe(true);
+    expect(repeated.created).toBe(false);
+    expect(repeated.task.id).toBe(first.task.id);
+    expect(first.task.idempotencyKey).toBe(`activation-attempt:${activationAttemptId}`);
+    expect(store!.listTasks()).toHaveLength(1);
+  });
+
+  it("explicitly retries a stalled committed-artifact publication on the same task", async () => {
+    const { audioPath, artifacts, transcribe, runArtifactWorkflow } = setup({
+      supportedAgentAdapter: true,
+      pollMs: 60_000,
+    });
+    acceptSupportedAgentSummary();
+    const publish = vi.spyOn(artifacts, "publishPreparedArtifacts")
+      .mockImplementationOnce(() => { throw new Error("summary target is temporarily unavailable"); });
+    const task = pipeline!.enqueueCompletion({ audioPath, title: "Guided activation" }).task;
+
+    await vi.waitFor(() => expect(store!.getTask(task.id)).toMatchObject({
+      state: "artifacts_committed",
+      leaseToken: null,
+      error: "summary target is temporarily unavailable",
+    }));
+
+    expect(pipeline!.retry(task.id)).toMatchObject({ id: task.id, state: "artifacts_committed" });
+    await vi.waitFor(() => expect(store!.getTask(task.id)?.state).toBe("completed"));
+    expect(publish).toHaveBeenCalledTimes(2);
+    expect(transcribe).toHaveBeenCalledOnce();
+    expect(runArtifactWorkflow).toHaveBeenCalledOnce();
+    expect(store!.listTasks()).toHaveLength(1);
   });
 
   it("pauses a replacement transcript when the global pipeline is disabled", async () => {

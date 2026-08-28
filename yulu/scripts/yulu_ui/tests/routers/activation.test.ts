@@ -64,7 +64,8 @@ function summaryContract(input: {
   };
   const state = input.state ?? "ready";
   const blocker = input.blocker ?? null;
-  const credentialSource = input.credentialSource ?? null;
+  const credentialSource = input.credentialSource ??
+    (selected.provider === "xai" ? "oauth" : "runtime-oauth");
   return {
     selected,
     options: state === "ready" && selected.connectionId ? [{
@@ -160,19 +161,58 @@ describe("activation router", () => {
         summaryCredentialSource: selected.provider === "xai" ? xaiConnection.source : null,
       });
     });
-    const enqueueCompletion = vi.fn((input: { audioPath: string; title: string; sendToNotion?: boolean }) => ({
-      ...host!.enqueueRecording({
-        idempotencyKey: `activation-recovery:${input.audioPath}`,
+    const enqueueCompletion = vi.fn((input: {
+      audioPath: string;
+      title: string;
+      sendToNotion?: boolean;
+      activationAttemptId?: string;
+      summarySnapshot?: {
+        connectionId: string;
+        provider: string;
+        model: string;
+        credentialSource: "oauth" | "api-key" | null;
+        credentialClass: "oauth" | "api-key" | "runtime-oauth" | null;
+        disclosureVersion: string | null;
+        testedAt: string;
+      };
+    }) => {
+      const selected = input.summarySnapshot ?? (configValue.intelligence.summary.provider === "xai"
+        ? {
+            connectionId: "direct-xai",
+            provider: "xai",
+            model: configValue.intelligence.summary.model,
+            credentialSource: xaiConnection.source,
+            credentialClass: xaiConnection.source,
+            disclosureVersion: XAI_SUMMARY_DISCLOSURE_VERSION,
+          }
+        : {
+            connectionId: "codex",
+            provider: agentReadiness.provider,
+            model: agentReadiness.model,
+            credentialSource: null,
+            credentialClass: "runtime-oauth" as const,
+            disclosureVersion: null,
+          });
+      return {
+        ...host!.enqueueRecording({
+        idempotencyKey: input.activationAttemptId
+          ? `activation-attempt:${input.activationAttemptId}`
+          : `activation-recovery:${input.audioPath}`,
         recordingStem: input.audioPath.split("/").at(-1)!.replace(/\.wav$/, ""),
         title: input.title,
         audioPath: input.audioPath,
         sendToNotion: input.sendToNotion === true,
         destinationHint: "",
-        agentProvider: agentReadiness.provider,
-        summaryProvider: agentReadiness.provider,
-        summaryModel: agentReadiness.model,
+        agentProvider: selected.provider,
+        summaryProvider: selected.provider,
+        summaryModel: selected.model,
+        summaryCredentialSource: selected.credentialSource,
+        summaryConnectionId: selected.connectionId,
+        summaryCredentialClass: selected.credentialClass,
+        summaryDisclosureVersion: selected.disclosureVersion,
       }),
-    }));
+      };
+    });
     const ctx = {
       uiMutationAuthorized: true,
       host,
@@ -349,8 +389,10 @@ describe("activation router", () => {
     expect(runRecordAudioMock).toHaveBeenCalledWith(ctx, ["start", "Core Activation"], { timeoutMs: 30_000 });
     expect(started).toMatchObject({
       state: "recording",
-      attempt: { id: expect.any(String), taskId: null, recordingStem: null },
+      attempt: { taskId: null, recordingStem: null },
     });
+    expect(started.attempt).not.toHaveProperty("id");
+    expect(started.attempt).not.toHaveProperty("summarySnapshot");
 
     const task = host!.enqueueRecording({
       idempotencyKey: "recording:guided-activation",
@@ -363,6 +405,8 @@ describe("activation router", () => {
       summaryProvider: "codex",
       summaryConnectionId: "codex",
       summaryModel: "runtime-managed",
+      summaryCredentialClass: "runtime-oauth",
+      summaryDisclosureVersion: null,
     }).task;
     stopRecordingAndEnqueueMock.mockImplementation(async (
       _ctx: AppContext,
@@ -399,10 +443,150 @@ describe("activation router", () => {
     host!.close();
     host = new HostStore(join(root, "host.sqlite"));
     const restartedCaller = createCaller(activationRouter, { ...ctx, host } as unknown as AppContext);
-    await expect(restartedCaller.status()).resolves.toMatchObject({
+    const restarted = await restartedCaller.status();
+    expect(restarted).toMatchObject({
       state: "processing",
       attempt: { taskId: task.id, recordingStem: task.recordingStem },
       task: { id: task.id, state: "queued" },
+    });
+    if ("attempt" in restarted && restarted.attempt) {
+      expect(restarted.attempt).not.toHaveProperty("id");
+      expect(restarted.attempt).not.toHaveProperty("summarySnapshot");
+    }
+  });
+
+  it("pins the proven Summary Provider to the Activation Attempt before recording starts", async () => {
+    const { caller, ctx, configValue, setSummaryActivation } = setup();
+    runRecordAudioMock.mockResolvedValue({ ok: true, stdout: "recording started\n", stderr: "" });
+
+    await caller.startAttempt();
+    expect(host!.getActivationAttempt()).toMatchObject({
+      summarySnapshot: {
+        connectionId: "codex",
+        provider: "codex",
+        model: "runtime-managed",
+        credentialClass: "runtime-oauth",
+        testedAt: "2026-08-25T04:00:00.000Z",
+      },
+    });
+
+    configValue.intelligence.summary = { provider: "xai", model: "grok-4.6" };
+    setSummaryActivation(summaryContract({
+      connectionId: "direct-xai",
+      provider: "xai",
+      label: "xAI",
+      model: "grok-4.6",
+      credentialSource: "oauth",
+    }));
+    const audioPath = join(root, "movies", "Activation_20260825_141500.wav");
+    writeFileSync(audioPath, wavWithAudio());
+    stopRecordingAndEnqueueMock.mockImplementation(async (
+      stopCtx: AppContext,
+      _stop: unknown,
+      onRecordingStopped?: (identity: { audioPath: string; recordingStem: string }) => void,
+      options?: {
+        activationAttemptId?: string;
+        summarySnapshot?: NonNullable<ReturnType<HostStore["getActivationAttempt"]>>["summarySnapshot"];
+      },
+    ) => {
+      onRecordingStopped?.({ audioPath, recordingStem: "Activation_20260825_141500" });
+      const enqueued = stopCtx.recordingPipeline.enqueueCompletion({
+        audioPath,
+        title: "Core Activation",
+        activationAttemptId: options?.activationAttemptId,
+        summarySnapshot: options?.summarySnapshot,
+      } as never);
+      return {
+        ok: true,
+        stdout: `FINAL_RECORDING_PATH=${audioPath}\n`,
+        stderr: "",
+        pipeline: {
+          accepted: true,
+          taskId: enqueued.task.id,
+          recordingStem: enqueued.task.recordingStem,
+          state: enqueued.task.state,
+          created: enqueued.created,
+          sendToNotion: false,
+        },
+      };
+    });
+
+    const internalAttemptId = host!.getActivationAttempt()!.id;
+    const stopped = await caller.stopAttempt();
+    expect(stopped).toMatchObject({
+      state: "processing",
+      task: {
+        summaryProvider: "codex",
+        summaryModel: "runtime-managed",
+        summaryConnectionId: "codex",
+        summaryCredentialClass: "runtime-oauth",
+        sendToNotion: false,
+      },
+    });
+    expect(stopped.task).not.toHaveProperty("idempotencyKey");
+    expect(JSON.stringify(stopped)).not.toContain(internalAttemptId);
+
+    host!.close();
+    host = new HostStore(join(root, "host.sqlite"));
+    const restartedCaller = createCaller(activationRouter, { ...ctx, host } as unknown as AppContext);
+    await expect(restartedCaller.status()).resolves.toMatchObject({
+      state: "processing",
+      task: { summaryProvider: "codex", summaryModel: "runtime-managed" },
+    });
+    expect(host!.getActivationAttempt()?.summarySnapshot).toMatchObject({
+      connectionId: "codex",
+      provider: "codex",
+      model: "runtime-managed",
+    });
+  });
+
+  it("persists the exact ready xAI model and credential class without storing credentials", async () => {
+    const { caller, ctx, configValue, setSummaryActivation } = setup();
+    configValue.intelligence.summary = { provider: "xai", model: "grok-4.6" };
+    setSummaryActivation(summaryContract({
+      connectionId: "direct-xai",
+      provider: "xai",
+      label: "xAI",
+      model: "grok-4.6",
+      credentialSource: "oauth",
+      disclosure: {
+        provider: "xai",
+        connectionId: "direct-xai",
+        disclosureVersion: XAI_SUMMARY_DISCLOSURE_VERSION,
+        acceptedDisclosureVersion: XAI_SUMMARY_DISCLOSURE_VERSION,
+        declined: false,
+        required: false,
+        data: "transcript_text",
+        destination: "xAI",
+      },
+    }));
+    runRecordAudioMock.mockResolvedValue({ ok: true, stdout: "recording started\n", stderr: "" });
+
+    await expect(caller.startAttempt()).resolves.toMatchObject({
+      state: "recording",
+      attempt: { taskId: null },
+    });
+    expect(host!.getActivationAttempt()?.summarySnapshot).toEqual({
+      connectionId: "direct-xai",
+      provider: "xai",
+      model: "grok-4.6",
+      credentialClass: "oauth",
+      disclosureVersion: XAI_SUMMARY_DISCLOSURE_VERSION,
+      testedAt: "2026-08-25T04:00:00.000Z",
+    });
+    expect(JSON.stringify(host!.getActivationAttempt())).not.toMatch(/access_token|refresh_token|api[-_]?key/i);
+
+    host!.close();
+    host = new HostStore(join(root, "host.sqlite"));
+    const restartedCaller = createCaller(activationRouter, { ...ctx, host } as unknown as AppContext);
+    await expect(restartedCaller.status()).resolves.toMatchObject({
+      state: "recording",
+      attempt: { taskId: null },
+    });
+    expect(host!.getActivationAttempt()?.summarySnapshot).toMatchObject({
+      provider: "xai",
+      model: "grok-4.6",
+      credentialClass: "oauth",
     });
   });
 
@@ -421,13 +605,14 @@ describe("activation router", () => {
     const second = caller.startAttempt();
     await expect(second).resolves.toMatchObject({
       state: "recording",
-      attempt: { id: expect.any(String), taskId: null },
+      attempt: { taskId: null },
     });
+    const durableAttemptId = host!.getActivationAttempt()!.id;
     releaseStart();
     const started = await first;
 
     expect(runRecordAudioMock).toHaveBeenCalledOnce();
-    expect(host!.getActivationAttempt()?.id).toBe(started.attempt.id);
+    expect(host!.getActivationAttempt()?.id).toBe(durableAttemptId);
   });
 
   it("durably names a bounded production-recorder start failure and retries capture", async () => {
@@ -532,7 +717,7 @@ describe("activation router", () => {
     });
   });
 
-  it("recovers a saved stopped recording after a crash before enqueue", async () => {
+  it("fails closed for a pre-migration stopped recording without pinned Summary authority", async () => {
     const { caller, moviesDir, enqueueCompletion, configValue } = setup();
     configValue.agent_pipeline.auto_send_notion = true;
     const stem = "Crash_before_enqueue_20260825_141500";
@@ -545,32 +730,129 @@ describe("activation router", () => {
       state: "processing",
       task: null,
       blocker: {
-        capability: "recording_pipeline",
-        retry: "same_audio",
-        remediation: { href: "/settings/automation" },
+        capability: "provider",
+        retry: "rerecord",
+        remediation: { href: "/settings/llm?capability=summary" },
       },
     });
 
-    await expect(caller.retryAttempt()).resolves.toMatchObject({
+    await expect(caller.retryAttempt()).rejects.toThrow("Activation audio must be recorded again");
+    expect(enqueueCompletion).not.toHaveBeenCalled();
+  });
+
+  it("reuses the proven Summary snapshot when a stopped recording is enqueued after restart", async () => {
+    const { caller, ctx, moviesDir, enqueueCompletion, configValue, setSummaryActivation } = setup();
+    runRecordAudioMock.mockResolvedValue({ ok: true, stdout: "recording started\n", stderr: "" });
+    await caller.startAttempt();
+    const stem = "Crash_with_snapshot_20260825_141500";
+    const audioPath = join(moviesDir, `${stem}.wav`);
+    writeFileSync(audioPath, wavWithAudio());
+    stopRecordingAndEnqueueMock.mockImplementation(async (
+      _ctx: AppContext,
+      _stop: unknown,
+      onRecordingStopped?: (identity: { audioPath: string; recordingStem: string }) => void,
+    ) => {
+      onRecordingStopped?.({ audioPath, recordingStem: stem });
+      throw new Error("Host stopped after saving activation audio");
+    });
+    await expect(caller.stopAttempt()).rejects.toThrow("Host stopped after saving activation audio");
+
+    host!.close();
+    host = new HostStore(join(root, "host.sqlite"));
+    configValue.intelligence.summary = { provider: "xai", model: "grok-changed-after-restart" };
+    setSummaryActivation(summaryContract({
+      connectionId: "direct-xai",
+      provider: "xai",
+      label: "xAI",
+      model: "grok-changed-after-restart",
+      credentialSource: "oauth",
+    }));
+    const restartedCaller = createCaller(activationRouter, { ...ctx, host } as unknown as AppContext);
+
+    await expect(restartedCaller.retryAttempt()).resolves.toMatchObject({
       state: "processing",
-      attempt: { recordingStem: stem, taskId: expect.any(String) },
-      task: { recordingStem: stem, state: "queued" },
+      blocker: null,
+      task: {
+        summaryProvider: "codex",
+        summaryModel: "runtime-managed",
+        summaryConnectionId: "codex",
+      },
     });
     expect(enqueueCompletion).toHaveBeenCalledWith({
-      audioPath: join(moviesDir, `${stem}.wav`),
+      audioPath,
       title: "Core Activation",
+      activationAttemptId: expect.any(String),
+      summarySnapshot: expect.objectContaining({
+        connectionId: "codex",
+        provider: "codex",
+        model: "runtime-managed",
+      }),
     });
+    expect(enqueueCompletion.mock.lastCall?.[0].activationAttemptId).toBe(
+      host!.getActivationAttempt()?.id,
+    );
+  });
+
+  it("turns a recovered same-stem task with different Summary authority into a named blocker", async () => {
+    const { caller, moviesDir } = setup();
+    runRecordAudioMock.mockResolvedValue({ ok: true, stdout: "recording started\n", stderr: "" });
+    await caller.startAttempt();
+    const startedAttemptId = host!.getActivationAttempt()!.id;
+    const stem = "Mismatched_recovery_20260825_141500";
+    const audioPath = join(moviesDir, `${stem}.wav`);
+    writeFileSync(audioPath, wavWithAudio());
+    host!.markActivationAttemptStopping(startedAttemptId);
+    host!.recordActivationAttemptStopped(startedAttemptId, stem);
+    host!.enqueueRecording({
+      idempotencyKey: "activation:mismatched-recovery",
+      recordingStem: stem,
+      title: "Core Activation",
+      audioPath,
+      sendToNotion: false,
+      destinationHint: "",
+      agentProvider: "xai",
+      summaryProvider: "xai",
+      summaryModel: "grok-4.6",
+      summaryCredentialSource: "oauth",
+      summaryConnectionId: "direct-xai",
+      summaryCredentialClass: "oauth",
+      summaryDisclosureVersion: XAI_SUMMARY_DISCLOSURE_VERSION,
+    });
+
+    await expect(caller.status()).resolves.toMatchObject({
+      state: "processing",
+      task: null,
+      blocker: {
+        capability: "provider",
+        retry: "rerecord",
+        remediation: { href: "/settings/llm?connection=codex&capability=summary" },
+      },
+      attempt: {
+        taskId: null,
+        handoffError: "Saved activation task does not match the proven Summary Provider snapshot",
+      },
+    });
+
+    await expect(caller.rerecordAttempt()).resolves.toMatchObject({
+      state: "recording",
+      attempt: {
+        taskId: null,
+        handoffError: null,
+      },
+    });
+    expect(host!.getActivationAttempt()?.id).not.toBe(startedAttemptId);
   });
 
   it("turns a pre-correlation stop failure into a named durable audio blocker", async () => {
     const { caller, ctx } = setup();
     runRecordAudioMock.mockResolvedValue({ ok: true, stdout: "recording started\n", stderr: "" });
-    const started = await caller.startAttempt();
+    await caller.startAttempt();
+    const startedAttemptId = host!.getActivationAttempt()!.id;
     stopRecordingAndEnqueueMock.mockRejectedValue(new Error("audio daemon stop timed out"));
 
     await expect(caller.stopAttempt()).rejects.toThrow("audio daemon stop timed out");
     expect(host!.getActivationAttempt()).toMatchObject({
-      id: started.attempt.id,
+      id: startedAttemptId,
       recordingStem: null,
       taskId: null,
       handoffError: "audio daemon stop timed out",
@@ -648,6 +930,47 @@ describe("activation router", () => {
         summaryProvider: "codex",
         summaryModel: "runtime-managed",
       },
+    });
+    expect(retryTask).toHaveBeenCalledWith(task.id, { allowCancelled: true });
+  });
+
+  it("names and explicitly retries stalled committed-artifact publication", async () => {
+    const { caller, moviesDir, retryTask } = setup();
+    const stem = "Guided_20260825_141502";
+    const audioPath = join(moviesDir, `${stem}.wav`);
+    writeFileSync(audioPath, wavWithAudio());
+    const attempt = host!.beginActivationAttempt().attempt;
+    const task = host!.enqueueRecording({
+      idempotencyKey: "recording:guided-publication-blocker",
+      recordingStem: stem,
+      title: "Core Activation",
+      audioPath,
+      sendToNotion: false,
+      destinationHint: "",
+      agentProvider: "codex",
+      summaryProvider: "codex",
+      summaryConnectionId: "codex",
+      summaryModel: "runtime-managed",
+    }).task;
+    host!.correlateActivationAttempt(attempt.id, task.id);
+    host!.db.prepare(`
+      UPDATE agent_tasks SET state = 'artifacts_committed', phase = 'committing_artifacts',
+        lease_token = NULL, error = ? WHERE id = ?
+    `).run("summary target is temporarily unavailable", task.id);
+    retryTask.mockImplementationOnce((id: string) => host!.getTask(id)!);
+
+    await expect(caller.status()).resolves.toMatchObject({
+      state: "processing",
+      blocker: {
+        capability: "recording_pipeline",
+        detail: "summary target is temporarily unavailable",
+        retry: "same_task",
+        remediation: { href: "/settings/automation" },
+      },
+    });
+    await expect(caller.retryAttempt()).resolves.toMatchObject({
+      state: "processing",
+      task: { id: task.id, state: "artifacts_committed" },
     });
     expect(retryTask).toHaveBeenCalledWith(task.id, { allowCancelled: true });
   });
@@ -1003,8 +1326,9 @@ describe("activation router", () => {
     });
     await expect(caller.rerecordAttempt()).resolves.toMatchObject({
       state: "recording",
-      attempt: { id: expect.not.stringMatching(attempt.id), taskId: null },
+      attempt: { taskId: null },
     });
+    expect(host!.getActivationAttempt()?.id).not.toBe(attempt.id);
     expect(runRecordAudioMock).toHaveBeenCalledWith(ctx, ["start", "Core Activation"], { timeoutMs: 30_000 });
   });
 
@@ -1140,8 +1464,9 @@ describe("activation router", () => {
     runRecordAudioMock.mockResolvedValue({ ok: true, stdout: "recording started\n", stderr: "" });
     await expect(caller.rerecordAttempt()).resolves.toMatchObject({
       state: "recording",
-      attempt: { id: expect.not.stringMatching(attempt.id), taskId: null },
+      attempt: { taskId: null },
     });
+    expect(host!.getActivationAttempt()?.id).not.toBe(attempt.id);
   });
 
   it("does not correlate unrelated work while the guided recorder is still active", async () => {
@@ -1687,7 +2012,14 @@ describe("activation router", () => {
 
   it("keeps an active guided recording in place when unrelated work establishes activation", async () => {
     const { moviesDir, artifacts, caller } = setup();
-    const attempt = host!.beginActivationAttempt().attempt;
+    host!.beginActivationAttempt({
+      connectionId: "codex",
+      provider: "codex",
+      model: "runtime-managed",
+      credentialClass: "runtime-oauth",
+      disclosureVersion: null,
+      testedAt: "2026-08-25T04:00:00.000Z",
+    });
     const unrelated = completeRecording(
       moviesDir,
       artifacts,
@@ -1703,7 +2035,7 @@ describe("activation router", () => {
 
     await expect(caller.status()).resolves.toMatchObject({
       state: "recording",
-      attempt: { id: attempt.id, taskId: null },
+      attempt: { taskId: null },
       task: null,
       backgroundEvidence: { taskId: unrelated.id, recordingStem: unrelated.recordingStem },
     });

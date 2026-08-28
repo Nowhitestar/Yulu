@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import { basename, extname, join } from "node:path";
 import { promisify } from "node:util";
 import { RecordingPipelinePolicyDisabledError } from "./recordingPipeline.js";
+import type { ActivationSummarySnapshot } from "./hostStore.js";
 import type { AppContext } from "./trpc.js";
 
 const exec = promisify(execFile) as (
@@ -29,6 +30,10 @@ export async function runRecordAudio(
 
 export type RecordingStopResult = { ok: true; stdout: string; stderr: string };
 export interface StoppedRecordingIdentity { audioPath: string; recordingStem: string }
+export interface RecordingEnqueueOptions {
+  activationAttemptId?: string;
+  summarySnapshot?: ActivationSummarySnapshot;
+}
 
 function finalRecordingPath(stdout: string): string | undefined {
   for (const line of stdout.split(/\r?\n/)) {
@@ -43,6 +48,7 @@ export async function stopRecordingAndEnqueue(
   ctx: AppContext,
   stopRecording: () => Promise<RecordingStopResult> = () => runRecordAudio(ctx, ["stop"]),
   onRecordingStopped?: (identity: StoppedRecordingIdentity) => void,
+  options: RecordingEnqueueOptions = {},
 ) {
   const result = await stopRecording();
   const audioPath = finalRecordingPath(result.stdout);
@@ -52,7 +58,11 @@ export async function stopRecordingAndEnqueue(
   const sendToNotion = false;
   let enqueued;
   try {
-    enqueued = ctx.recordingPipeline.enqueueCompletion({ audioPath });
+    enqueued = ctx.recordingPipeline.enqueueCompletion({
+      audioPath,
+      ...(options.activationAttemptId ? { activationAttemptId: options.activationAttemptId } : {}),
+      ...(options.summarySnapshot ? { summarySnapshot: options.summarySnapshot } : {}),
+    });
   } catch (error) {
     if (error instanceof RecordingPipelinePolicyDisabledError) {
       return {
