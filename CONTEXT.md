@@ -209,10 +209,16 @@ An explicit external target for a saved summary, reached through a selected
 Agent Connector. Saving the target does not authorize an external write.
 _Avoid_: Connector, automatic delivery authorization
 
+**Sharing Readiness**:
+Current evidence that a selected Agent Connection and Agent Connector can write
+to an explicit Share Destination, established by a verified Test Share. A found,
+suggested, or saved target without read-back is not ready.
+_Avoid_: Destination found, default target, sharing configured
+
 **Share Action**:
-An exclusively user-initiated and user-confirmed attempt to send one saved
-summary to one Share Destination. It ends only with a verified receipt, a proven
-failure, or an Unknown Outcome.
+An exclusively user-initiated and user-confirmed attempt that pins one saved
+summary, Agent Connection, and Share Destination. Repeating a share creates a
+new action; each ends with a verified receipt, proven failure, or Unknown Outcome.
 _Avoid_: Sync, configured sharing, background delivery, automatic sharing
 
 **Test Share**:
