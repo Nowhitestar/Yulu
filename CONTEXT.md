@@ -59,6 +59,12 @@ or explicitly deferred. It completes that onboarding step but does not claim the
 capability remains currently ready.
 _Avoid_: Readiness flag, required setup, permanent dismissal
 
+**Optional Capability Evidence**:
+Versioned durable evidence that an adopted optional capability satisfied its
+exact Onboarding contract. Current readiness is reported separately, and weak
+legacy configuration or activity does not qualify automatically.
+_Avoid_: Existing config, historical success, current health
+
 **Cloud Transcription Consent**:
 Versioned consent to send recording audio to xAI for transcription after the
 privacy and cost implications have been disclosed. It does not grant consent
@@ -208,6 +214,12 @@ A Share Action containing no meeting content that the user explicitly sends to
 prove a selected Agent Connector and Share Destination can accept writes. A
 verified receipt adopts sharing for Onboarding; an unverified result does not.
 _Avoid_: Dry run, implicit write probe, sample meeting share
+
+**Release Candidate Acceptance**:
+Versioned evidence that a public signed and notarized release candidate passed
+the required fresh-install, stable-upgrade, Onboarding, and production-runtime
+checks. A development install, packaging check, or green unit suite is not this.
+_Avoid_: Build passed, local dev acceptance, release created
 
 **Activation Blocker**:
 A named capability that currently prevents progress toward Core Activation. It
