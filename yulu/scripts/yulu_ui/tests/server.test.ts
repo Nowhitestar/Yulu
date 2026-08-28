@@ -638,7 +638,7 @@ describe("server", () => {
     }
   });
 
-  it("commits task-scoped artifacts before allowing a Notion delivery report", async () => {
+  it("preserves legacy task-scoped artifact commits before allowing a Notion delivery report", async () => {
     const configDir = join(env.root, ".config", "yulu");
     const moviesDir = join(env.root, "Movies", "Yulu");
     const token = "test-token";
@@ -649,14 +649,20 @@ describe("server", () => {
     });
     const audioPath = join(moviesDir, "Commit_20260711_120000.wav");
     writeFileSync(audioPath, Buffer.alloc(44));
-    const response = await fetch(`${env.baseUrl}/api/recordings/completed`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}` },
-      body: JSON.stringify({ audioPath, title: "Commit", sendToNotion: true }),
-    });
-    const { taskId } = await response.json() as { taskId: string };
-
     const secondWriter = new HostStore(join(configDir, "host.sqlite"));
+    const { task: legacyTask } = secondWriter.enqueueRecording({
+      idempotencyKey: "legacy-hermes-artifact-commit",
+      recordingStem: "Commit_20260711_120000",
+      title: "Commit",
+      audioPath,
+      sendToNotion: true,
+      destinationHint: "Yulu Meeting",
+      agentProvider: "hermes",
+      summaryProvider: "hermes",
+      summaryModel: "runtime-managed",
+      trigger: "automatic",
+    });
+    const taskId = legacyTask.id;
     const claimed = secondWriter.claim(taskId);
     expect(claimed?.id).toBe(taskId);
     const workspace = join(configDir, "agent-tasks", taskId);

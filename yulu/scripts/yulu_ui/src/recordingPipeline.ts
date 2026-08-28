@@ -196,11 +196,7 @@ export class RecordingPipeline {
     const recording = this.resolveRecording(input.audioPath);
     const instructions = input.instructions.trim();
     if (!instructions) throw new InvalidRecordingCompletionError("summary instructions are empty");
-    const runtime = resolveHermesAgentRuntime(config, {
-      scriptDir: this.options.paths.scriptDir,
-      moviesDir: this.options.paths.moviesDir,
-    });
-    const summary = this.summaryIdentity(config, runtime.provider);
+    const summary = this.summaryIdentity(config);
     return this.persist({
       audioPath: recording.audioPath,
       transcriptionLanguage: normalizeTranscriptionLanguage(config.transcription.language),
@@ -245,11 +241,7 @@ export class RecordingPipeline {
       throw new RecordingPipelinePolicyDisabledError("Automatic Agent recording processing is paused by policy");
     }
     const recording = this.resolveRecording(input.audioPath);
-    const runtime = resolveHermesAgentRuntime(config, {
-      scriptDir: this.options.paths.scriptDir,
-      moviesDir: this.options.paths.moviesDir,
-    });
-    const summary = this.summaryIdentity(config, runtime.provider);
+    const summary = this.summaryIdentity(config);
     const title = input.title?.trim() || recording.title;
     const instructionContext = {
       title,
@@ -309,10 +301,7 @@ export class RecordingPipeline {
     };
   }
 
-  private summaryIdentity(
-    config: YuluConfig,
-    legacyProvider: string,
-  ): {
+  private summaryIdentity(config: YuluConfig): {
     provider: string;
     model: string;
     credentialSource: XaiCredentialSource | null;
@@ -350,7 +339,7 @@ export class RecordingPipeline {
         })
       : undefined;
     if (!readiness) return {
-      provider: legacyProvider,
+      provider: "none",
       model: selection.model,
       credentialSource: null,
       connectionId: null,
@@ -442,10 +431,7 @@ export class RecordingPipeline {
 
   replaceSummaryProvider(id: string): AgentTask {
     const config = this.options.config.read();
-    const summary = this.summaryIdentity(config, resolveHermesAgentRuntime(config, {
-      scriptDir: this.options.paths.scriptDir,
-      moviesDir: this.options.paths.moviesDir,
-    }).provider);
+    const summary = this.summaryIdentity(config);
     const task = this.options.store.replaceSummaryAttempt(id, {
       summaryProvider: summary.provider,
       summaryModel: summary.model,

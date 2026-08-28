@@ -66,9 +66,17 @@ describe("RecordingPipeline", () => {
     root = "";
   });
 
+  function acceptSupportedAgentSummary(provider: "codex" | "claude-code" = "codex"): void {
+    store!.recordAgentConnectionDisclosure({
+      connectionId: provider,
+      capability: "summary",
+      disclosureVersion: provider === "codex" ? "codex-summary-v1" : "claude-code-summary-v1",
+      decision: "accepted",
+    });
+  }
+
   function setup(opts: {
     available?: boolean;
-    sendToNotion?: boolean;
     autoProcess?: boolean;
     enabled?: boolean;
     transcribeUnavailable?: boolean;
@@ -454,7 +462,10 @@ describe("RecordingPipeline", () => {
   }
 
   it("runs selected audio transcription, summary Agent commit, and Notion in one durable task", async () => {
-    const { audioPath, moviesDir, configDir, runArtifactWorkflow, runNotionWorkflow, notionStartedFromState } = setup({ sendToNotion: true });
+    const { audioPath, moviesDir, configDir, runArtifactWorkflow, runNotionWorkflow, notionStartedFromState } = setup({
+      supportedAgentAdapter: true,
+    });
+    acceptSupportedAgentSummary();
     const first = pipeline!.enqueueCompletion({ audioPath, title: "Demo", sendToNotion: true });
     const duplicate = pipeline!.enqueueCompletion({ audioPath, title: "Demo", sendToNotion: true });
     expect(duplicate.task.id).toBe(first.task.id);
@@ -476,7 +487,8 @@ describe("RecordingPipeline", () => {
   });
 
   it("persists Core Activation Evidence when a production recording completes", async () => {
-    const { audioPath, pubsub } = setup();
+    const { audioPath, pubsub } = setup({ supportedAgentAdapter: true });
+    acceptSupportedAgentSummary();
     const completed: AppChannels["core-activation"][] = [];
     pubsub.subscribe("core-activation", (event) => completed.push(event));
     writeFileSync(audioPath, wavWithAudio());
@@ -488,7 +500,7 @@ describe("RecordingPipeline", () => {
       recordingStem: task.recordingStem,
       taskId: task.id,
       transcriptionProvider: "test-audio",
-      summaryProvider: "hermes",
+      summaryProvider: "codex",
       summaryModel: "runtime-managed",
       artifacts: {
         audio: { bytes: 45, sha256: expect.stringMatching(/^[a-f0-9]{64}$/) },
@@ -503,7 +515,8 @@ describe("RecordingPipeline", () => {
   });
 
   it("announces only the recording that first establishes Core Activation Evidence", async () => {
-    const { audioPath, moviesDir, pubsub } = setup();
+    const { audioPath, moviesDir, pubsub } = setup({ supportedAgentAdapter: true });
+    acceptSupportedAgentSummary();
     const completed: AppChannels["core-activation"][] = [];
     pubsub.subscribe("core-activation", (event) => completed.push(event));
     writeFileSync(audioPath, wavWithAudio());
@@ -522,7 +535,8 @@ describe("RecordingPipeline", () => {
   });
 
   it("asks the selected audio service for the final transcript", async () => {
-    const { audioPath, moviesDir, transcribe } = setup();
+    const { audioPath, moviesDir, transcribe } = setup({ supportedAgentAdapter: true });
+    acceptSupportedAgentSummary();
     writeFileSync(audioPath.replace(/\.wav$/, ".realtime.transcript.txt"), "这是会议的实时转写，with Alpha。\n");
     writeFileSync(audioPath.replace(/\.wav$/, ".realtime.coverage.json"), JSON.stringify({
       language: "zh",
@@ -546,11 +560,13 @@ describe("RecordingPipeline", () => {
 
   it("applies glossary aliases to transcription and passes canonical terms to summary", async () => {
     const setupResult = setup({
+      supportedAgentAdapter: true,
       glossaryRows: [
         { term: "阿尔法学院", canonical: "阿尔法学院", scope: "both" },
         { term: "阿法学院", canonical: "阿尔法学院", scope: "both" },
       ],
     });
+    acceptSupportedAgentSummary();
     setupResult.transcribe.mockImplementationOnce(async (_audioPath, language) => {
       return { transcript: "阿法学院会议", provider: "test-audio", chunks: 1, language };
     });
@@ -601,8 +617,8 @@ describe("RecordingPipeline", () => {
     expect(store!.listTasks()).toEqual([]);
   });
 
-  it("pauses an unavailable summary provider until explicit same-snapshot retry", async () => {
-    const { audioPath, configManager, transcribe } = setup({ available: false, pollMs: 5 });
+  it("pauses an unselected Summary Provider until an explicit replacement is created", async () => {
+    const { audioPath, configManager, runArtifactWorkflow, transcribe } = setup({ pollMs: 5 });
     expect(pipeline!.transcriptionHealth()).toEqual({
       available: true,
       provider: "test-audio",
@@ -614,7 +630,7 @@ describe("RecordingPipeline", () => {
     await vi.waitFor(() => expect(store!.getTask(task.id)).toMatchObject({
       state: "awaiting_provider",
       attempt: 1,
-      summaryProvider: "hermes",
+      summaryProvider: "none",
       summaryModel: "runtime-managed",
     }));
     expect(store!.listArtifacts(task.id)).toEqual([
@@ -629,13 +645,14 @@ describe("RecordingPipeline", () => {
     await vi.waitFor(() => expect(store!.getTask(task.id)).toMatchObject({
       state: "awaiting_provider",
       attempt: 1,
-      summaryProvider: "hermes",
+      summaryProvider: "none",
       summaryModel: "runtime-managed",
     }));
     expect(store!.getTask(task.id)).toMatchObject({
-      error: "Hermes offline",
+      error: "Pinned Summary Provider none is unavailable for model runtime-managed",
     });
     expect(store!.listEvents(task.id).filter((event) => event.type === "task.awaiting_provider")).toHaveLength(2);
+    expect(runArtifactWorkflow).not.toHaveBeenCalled();
     expect(transcribe).toHaveBeenCalledOnce();
   });
 
@@ -1341,7 +1358,7 @@ describe("RecordingPipeline", () => {
 
     expect(store!.getTask(original.id)).toMatchObject({
       state: "cancelled",
-      summaryProvider: "hermes",
+      summaryProvider: "none",
       summaryModel: "runtime-managed",
     });
     expect(store!.getTask(replacement.id)).toMatchObject({
@@ -1398,17 +1415,26 @@ describe("RecordingPipeline", () => {
     expect(store!.claimNext()).toBeNull();
   });
 
-  it("never exposes Notion when the Host did not observe the artifact commit", async () => {
-    const { audioPath, runNotionWorkflow } = setup({ skipArtifactCommit: true });
+  it("never exposes Notion when Supported Agent output fails Host commit validation", async () => {
+    const { audioPath, runNotionWorkflow } = setup({
+      supportedAgentAdapter: true,
+      supportedAgentMissingEvidence: true,
+    });
+    acceptSupportedAgentSummary();
     const { task } = pipeline!.enqueueCompletion({ audioPath, sendToNotion: true });
 
     await vi.waitFor(() => expect(store!.getTask(task.id)?.state).toBe("failed"));
-    expect(store!.getTask(task.id)?.error).toContain("artifact Host commit");
+    expect(store!.getTask(task.id)?.error).toContain("complete Runtime Evidence");
+    expect(store!.listArtifacts(task.id).map((artifact) => artifact.kind)).toEqual(["transcript"]);
     expect(runNotionWorkflow).not.toHaveBeenCalled();
   });
 
   it("fails closed if Hermes reuses the raw-transcript artifact session for delivery", async () => {
-    const { audioPath } = setup({ reuseArtifactSessionForDelivery: true });
+    const { audioPath } = setup({
+      supportedAgentAdapter: true,
+      reuseArtifactSessionForDelivery: true,
+    });
+    acceptSupportedAgentSummary();
     const { task } = pipeline!.enqueueCompletion({ audioPath, sendToNotion: true });
 
     await vi.waitFor(() => expect(store!.getTask(task.id)?.state).toBe("delivery_unverified"));
@@ -1417,7 +1443,11 @@ describe("RecordingPipeline", () => {
   });
 
   it("fences connector uncertainty before the delivery Agent can make a write", async () => {
-    const { audioPath, notionStartedFromState, pubsub } = setup({ notionThrowsAfterCapability: true });
+    const { audioPath, notionStartedFromState, pubsub } = setup({
+      supportedAgentAdapter: true,
+      notionThrowsAfterCapability: true,
+    });
+    acceptSupportedAgentSummary();
     const completed: AppChannels["core-activation"][] = [];
     pubsub.subscribe("core-activation", (event) => completed.push(event));
     writeFileSync(audioPath, wavWithAudio());
@@ -1435,7 +1465,11 @@ describe("RecordingPipeline", () => {
   });
 
   it("keeps the delivery fence when Hermes becomes unavailable after connector access", async () => {
-    const { audioPath, notionStartedFromState } = setup({ notionUnavailableAfterCapability: true });
+    const { audioPath, notionStartedFromState } = setup({
+      supportedAgentAdapter: true,
+      notionUnavailableAfterCapability: true,
+    });
+    acceptSupportedAgentSummary();
     const { task } = pipeline!.enqueueCompletion({ audioPath, sendToNotion: true });
 
     await vi.waitFor(() => expect(store!.getTask(task.id)?.state).toBe("delivery_unverified"));
@@ -1580,7 +1614,8 @@ describe("RecordingPipeline", () => {
   });
 
   it("reuses the same task and delivery marker when reconciling an uncertain Notion result", async () => {
-    const { audioPath } = setup();
+    const { audioPath } = setup({ supportedAgentAdapter: true });
+    acceptSupportedAgentSummary();
     const first = pipeline!.enqueueCompletion({ audioPath, sendToNotion: true });
     await vi.waitFor(() => expect(store!.getTask(first.task.id)?.state).toBe("completed"));
     store!.db.prepare(`
