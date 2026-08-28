@@ -214,7 +214,9 @@ function xaiReadinessFailureReason(
   if (error instanceof XaiTextUnknownOutcomeError) return "unknown_outcome";
   const message = error instanceof Error ? error.message : "";
   if (/HTTP 404/i.test(message)) return capability === "transcription" ? "readiness_failed" : "invalid_model";
-  if (/HTTP 403|没有.*(?:权限|entitlement)|not entitled/i.test(message)) return "entitlement_failed";
+  if (/(?:HTTP|server response:)\s*403|没有.*(?:权限|entitlement)|not entitled/i.test(message)) {
+    return "entitlement_failed";
+  }
   if (/OAuth.*(?:失效|刷新失败)|refresh(?:ed|ing)? credential|refresh failed/i.test(message)) {
     return "credential_refresh_failed";
   }

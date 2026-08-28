@@ -541,6 +541,34 @@ describe("public Agent Connection Host contract", () => {
     setupResult.host.close();
   });
 
+  it("classifies the realtime WebSocket 403 upgrade response as an entitlement repair", async () => {
+    const setupResult = setup({
+      audio: {},
+      transcription: { engine: "xai", language: "zh" },
+      intelligence: {},
+      llm: { agent: { provider: "auto" } },
+    });
+    setupResult.host.recordCloudTranscriptionConsent("xai-audio-v1");
+    setupResult.audio.testXai.mockRejectedValue(new Error("Unexpected server response: 403"));
+
+    const result = await setupResult.center.probe({
+      connectionId: "direct-xai",
+      capability: "transcription",
+    });
+
+    expect(result).toMatchObject({
+      status: "failed",
+      credentialSource: "oauth",
+      reason: "entitlement_failed",
+    });
+    expect(result.detail).toContain("verify xAI realtime transcription access");
+    expect((await setupResult.makeCenter().view()).connections
+      .find(({ id }) => id === "direct-xai")?.capabilities
+      .find(({ capability }) => capability === "transcription")?.currentReadiness)
+      .toMatchObject({ status: "failed", reason: "entitlement_failed", credentialSource: "oauth" });
+    setupResult.host.close();
+  });
+
   it("records a successful Transcription probe as a realtime WebSocket result", async () => {
     const setupResult = setup({
       audio: {},
