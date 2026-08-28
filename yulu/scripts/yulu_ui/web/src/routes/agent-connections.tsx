@@ -61,14 +61,36 @@ function actionFailureReason(error: unknown): string {
 
 function readinessFailure(
   t: ReturnType<typeof useT>,
-  readiness: { model: string; reason?: "invalid_model" | "readiness_failed" | "unknown_outcome" },
+  readiness: {
+    model: string;
+    credentialSource?: "oauth" | "api-key" | null;
+    reason?: "invalid_model" | "missing_credentials" | "entitlement_failed" | "credential_refresh_failed" |
+      "identity_mismatch" | "readiness_failed" | "unknown_outcome";
+  },
 ): string {
   if (readiness.reason === "unknown_outcome") {
     return t("agentConnections.remediation.unknownOutcome", { model: readiness.model });
   }
+  const source = readiness.credentialSource === "api-key"
+    ? t("agentConnections.credentialSource.apiKey")
+    : readiness.credentialSource === "oauth"
+      ? t("agentConnections.credentialSource.oauth")
+      : t("agentConnections.credentialSource.none");
+  if (readiness.reason === "missing_credentials") {
+    return t("agentConnections.remediation.missingCredentials", { model: readiness.model, source });
+  }
+  if (readiness.reason === "entitlement_failed") {
+    return t("agentConnections.remediation.entitlement", { model: readiness.model, source });
+  }
+  if (readiness.reason === "credential_refresh_failed") {
+    return t("agentConnections.remediation.credentialRefresh", { model: readiness.model, source });
+  }
+  if (readiness.reason === "identity_mismatch") {
+    return t("agentConnections.remediation.identityMismatch", { model: readiness.model, source });
+  }
   return readiness.reason === "invalid_model"
-    ? t("agentConnections.remediation.invalidModel", { model: readiness.model })
-    : t("agentConnections.remediation.probeFailed", { model: readiness.model });
+    ? t("agentConnections.remediation.invalidModel", { model: readiness.model, source })
+    : t("agentConnections.remediation.probeFailed", { model: readiness.model, source });
 }
 
 export function AgentConnections({ embedded = false }: { embedded?: boolean } = {}) {
@@ -406,12 +428,15 @@ export function AgentConnections({ embedded = false }: { embedded?: boolean } = 
                   )}
                   {item.disclosure?.required && (
                     <div className="agent-connection-guidance" role="alert">
-                      {t(`agentConnections.disclosure.${capability}`)}
+                      <strong>{t(`agentConnections.disclosure.title.${capability}`, {
+                        version: item.disclosure.disclosureVersion,
+                      })}</strong>
+                      <p>{t(`agentConnections.disclosure.${capability}`)}</p>
                       <button
                         type="button"
                         onClick={() => void run(() => acceptDisclosure.mutateAsync({ connectionId: connection.id, capability }))}
                       >
-                        {t("agentConnections.disclosure.accept")}
+                        {t(`agentConnections.disclosure.accept.${capability}`)}
                       </button>
                     </div>
                   )}
@@ -433,7 +458,8 @@ export function AgentConnections({ embedded = false }: { embedded?: boolean } = 
                     )}
                     <button
                       type="button"
-                      disabled={!connection.authorization.connected || probe.isPending}
+                      disabled={!connection.authorization.connected || !item.selected ||
+                        item.disclosure?.required === true || probe.isPending}
                       onClick={() => void run(() => probe.mutateAsync({ connectionId: connection.id, capability }))}
                     >
                       {testing

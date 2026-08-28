@@ -61,6 +61,7 @@ const mocks = vi.hoisted(() => ({
           currentReadiness: {
             status: "failed",
             model: "grok-summary",
+            credentialSource: "oauth",
             testedAt: "2026-08-27T12:00:00.000Z",
             detail: "summary · grok-summary failed; check account access and the exact model, then test again",
             reason: "invalid_model",
@@ -452,13 +453,86 @@ describe("shared Agent Connection Center", () => {
     expect(screen.getByText("旧版自定义连接不能证明能力就绪")).toBeInTheDocument();
     const summary = screen.getByTestId("connection-capability-summary");
     expect(within(summary).getByText("需要修复")).toHaveAttribute("role", "alert");
-    expect(within(summary).getByText("模型 grok-summary 不可用。请输入账户可访问的准确模型 ID，然后重新测试。")).toBeInTheDocument();
+    expect(within(summary).getByText(
+      "所选 Grok OAuth 无法使用模型 grok-summary。请输入账户有权限的准确模型 ID 后重试；在你明确修改前，Yulu 会保留当前来源和模型。",
+    )).toBeInTheDocument();
     expect(within(summary).getByText(/历史：已就绪/)).toBeInTheDocument();
     const codex = screen.getByTestId("agent-connection-codex");
     expect(within(codex).getByText("/fake/bin/codex login")).toBeInTheDocument();
     expect(within(codex).getByText(/0.144.4/)).toBeInTheDocument();
     expect(mocks.probe).not.toHaveBeenCalled();
     expect(mocks.confirmCandidate).not.toHaveBeenCalled();
+  });
+
+  it("shows versioned xAI consent and disclosures separately from authorization before enabling probes", () => {
+    const direct = mocks.view.connections.find((connection) => connection.id === "direct-xai")!;
+    const previous = direct.capabilities.map((capability) => ({
+      disclosure: { ...capability.disclosure },
+    }));
+    for (const capability of direct.capabilities) capability.disclosure.required = true;
+
+    mount("en");
+
+    const transcription = screen.getByTestId("connection-capability-transcription");
+    expect(within(transcription).getByText("Cloud Transcription Consent · xai-audio-v1"))
+      .toBeInTheDocument();
+    expect(within(transcription).getByRole("button", { name: "Test transcription" })).toBeDisabled();
+    const summary = screen.getByTestId("connection-capability-summary");
+    expect(within(summary).getByText("Summary Data Path Disclosure · xai-summary-v1"))
+      .toBeInTheDocument();
+    expect(within(summary).getByRole("button", { name: "Test summary" })).toBeDisabled();
+    const conversation = screen.getByTestId("connection-capability-conversation");
+    expect(within(conversation).getByText("Conversation Data Path Disclosure · xai-conversation-v1"))
+      .toBeInTheDocument();
+    expect(within(conversation).getByRole("button", { name: "Test conversation" })).toBeDisabled();
+    expect(within(screen.getByRole("heading", { name: "xAI" }).closest("section")!)
+      .getByRole("button", { name: "Reconnect Grok OAuth" })).toBeEnabled();
+    expect(mocks.probe).not.toHaveBeenCalled();
+
+    direct.capabilities.forEach((capability, index) => {
+      capability.disclosure = previous[index]!.disclosure;
+    });
+  });
+
+  it("stores an API key separately from explicitly selecting it as the xAI Credential Source", async () => {
+    mount("en");
+    const user = userEvent.setup();
+    const xai = screen.getByRole("heading", { name: "xAI" }).closest("section")!;
+    expect(within(xai).getByText(
+      "Write-only and stored in macOS Keychain. Saving does not select it; Yulu never shows it again or silently falls back to it.",
+    )).toBeInTheDocument();
+
+    await user.type(within(xai).getByLabelText("xAI API Key alternative"), "submitted-once");
+    await user.click(within(xai).getByRole("button", { name: "Save API Key" }));
+
+    expect(mocks.setApiKey).toHaveBeenCalledWith({ apiKey: "submitted-once" });
+    expect(mocks.selectCredentialSource).not.toHaveBeenCalled();
+
+    await user.click(within(xai).getByRole("radio", { name: "Yulu-managed API Key" }));
+    expect(mocks.selectCredentialSource).toHaveBeenCalledWith({
+      connectionId: "direct-xai",
+      credentialSource: "api-key",
+    });
+  });
+
+  it("shows exact source-and-model-preserving remediation for xAI entitlement failure", () => {
+    const direct = mocks.view.connections.find((connection) => connection.id === "direct-xai")!;
+    const summary = direct.capabilities.find((capability) => capability.capability === "summary")!;
+    const original = { ...summary.currentReadiness };
+    Object.assign(summary.currentReadiness, {
+      reason: "entitlement_failed",
+      credentialSource: "oauth",
+    });
+
+    mount("en");
+
+    expect(within(screen.getByTestId("connection-capability-summary")).getByText(
+      "Selected Grok OAuth is not entitled to grok-summary. Verify xAI account access or explicitly choose another Credential Source, then test again; Yulu did not switch either value.",
+    )).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: "Grok OAuth" })).toBeChecked();
+    expect(screen.getByRole("textbox", { name: "Summary model" })).toHaveValue("grok-summary");
+
+    summary.currentReadiness = original;
   });
 
   it("shows a non-secret OAuth class mismatch and disables stale Codex readiness actions", () => {
@@ -670,6 +744,10 @@ describe("shared Agent Connection Center", () => {
   });
 
   it("runs only the explicit capability action and previews deletion impact before confirmation", async () => {
+    const direct = mocks.view.connections.find((connection) => connection.id === "direct-xai")!;
+    const summary = direct.capabilities.find((capability) => capability.capability === "summary")!;
+    const disclosureRequired = summary.disclosure.required;
+    summary.disclosure.required = false;
     mount();
     const user = userEvent.setup();
     const xaiCard = screen.getByRole("heading", { name: "xAI" }).closest("section")!;
@@ -703,6 +781,7 @@ describe("shared Agent Connection Center", () => {
     const reopenedDialog = await screen.findByRole("dialog", { name: "删除 xAI 连接" });
     await user.click(within(reopenedDialog).getByRole("button", { name: "确认删除" }));
     expect(mocks.remove).toHaveBeenCalledWith({ connectionId: "direct-xai", confirmed: true });
+    summary.disclosure.required = disclosureRequired;
   });
 
   it("provides bilingual accessible status and exact repair guidance", () => {

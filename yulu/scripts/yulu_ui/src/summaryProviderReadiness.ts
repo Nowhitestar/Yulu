@@ -43,7 +43,9 @@ export interface SupportedAgentSummaryReadiness {
   credentialSource: string | null;
   connectionId?: string | null;
   disclosure: SummaryDisclosureMetadata | null;
-  reason?: "missing_credentials" | "invalid_model" | "provider_unavailable" | "readiness_failed" | "readiness_required" | "unknown_outcome";
+  reason?: "missing_credentials" | "invalid_model" | "entitlement_failed" |
+    "credential_refresh_failed" | "identity_mismatch" | "provider_unavailable" |
+    "readiness_failed" | "readiness_required" | "unknown_outcome";
 }
 
 export interface SupportedAgentSummarySnapshot {

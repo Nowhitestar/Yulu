@@ -14,6 +14,14 @@ import { publicProcedure, router, uiMutationProcedure } from "../trpc.js";
 
 export type XaiCapability = "transcription" | "summary" | "conversation";
 export type XaiReadinessStatus = "untested" | "testing" | "ready" | "failed";
+export type XaiReadinessFailureReason =
+  | "invalid_model"
+  | "missing_credentials"
+  | "entitlement_failed"
+  | "credential_refresh_failed"
+  | "identity_mismatch"
+  | "readiness_failed"
+  | "unknown_outcome";
 
 export interface XaiReadinessResult {
   capability: XaiCapability;
@@ -22,7 +30,7 @@ export interface XaiReadinessResult {
   testedAt: string | null;
   detail: string;
   credentialSource: XaiCredentialSource | null;
-  reason?: "invalid_model" | "readiness_failed" | "unknown_outcome";
+  reason?: XaiReadinessFailureReason;
 }
 
 export type XaiProviderReadiness = Map<XaiCapability, XaiReadinessResult>;

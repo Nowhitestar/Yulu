@@ -6,7 +6,11 @@ import type {
   XaiCredentialSource,
   XaiCredentialStatus,
 } from "./xaiCredentials.js";
-import type { XaiProviderReadiness, XaiReadinessResult } from "./routers/providers.js";
+import type {
+  XaiProviderReadiness,
+  XaiReadinessFailureReason,
+  XaiReadinessResult,
+} from "./routers/providers.js";
 import { XAI_TEXT_MODEL_DEFAULT } from "./settingsRegistry.js";
 import {
   CLAUDE_CODE_SUMMARY_DISCLOSURE_VERSION,
@@ -43,6 +47,7 @@ import type {
 import {
   ClaudeCodeSummaryUnknownOutcomeError,
 } from "./summaryProviderReadiness.js";
+import { XaiTextUnknownOutcomeError } from "./xaiText.js";
 import type {
   ConversationOnlyAgentAdapter,
   ConversationOnlyAgentKind,
@@ -200,6 +205,45 @@ function untested(capability: AgentConnectionCapability, model: string): XaiRead
     detail: "Not tested in this Host process",
     credentialSource: null,
   };
+}
+
+function xaiReadinessFailureReason(error: unknown): XaiReadinessFailureReason {
+  if (error instanceof XaiTextUnknownOutcomeError) return "unknown_outcome";
+  const message = error instanceof Error ? error.message : "";
+  if (/HTTP 404/i.test(message)) return "invalid_model";
+  if (/HTTP 403|没有.*(?:权限|entitlement)|not entitled/i.test(message)) return "entitlement_failed";
+  if (/OAuth.*(?:失效|刷新失败)|refresh(?:ed|ing)? credential|refresh failed/i.test(message)) {
+    return "credential_refresh_failed";
+  }
+  if (/different (?:credential source|model)|does not match (?:resolved credential|response model)/i.test(message)) {
+    return "identity_mismatch";
+  }
+  return "readiness_failed";
+}
+
+function xaiReadinessFailureDetail(
+  capability: AgentConnectionCapability,
+  model: string,
+  source: XaiCredentialSource,
+  reason: XaiReadinessFailureReason,
+): string {
+  const selected = source === "oauth" ? "Grok OAuth" : "Yulu-managed API Key";
+  if (reason === "invalid_model") {
+    return `${capability} · ${model} is unavailable to the selected ${selected}; enter an entitled exact model, then test again`;
+  }
+  if (reason === "entitlement_failed") {
+    return `${capability} · ${model} is not entitled for the selected ${selected}; verify xAI account access or explicitly select another credential source, then test again`;
+  }
+  if (reason === "credential_refresh_failed") {
+    return `${capability} · ${model} could not use the selected ${selected}; reconnect that source, then test again`;
+  }
+  if (reason === "identity_mismatch") {
+    return `${capability} · ${model} returned a different credential source or model; Yulu rejected it and kept the selected ${selected}`;
+  }
+  if (reason === "unknown_outcome") {
+    return `${capability} · ${model} probe outcome is unknown; inspect the same selected ${selected} before another attempt`;
+  }
+  return `${capability} · ${model} failed with the selected ${selected}; verify that source and exact model, then test again`;
 }
 
 export class AgentConnectionCenter {
@@ -1077,6 +1121,7 @@ export class AgentConnectionCenter {
       : config.intelligence[capability].provider === "xai"
         ? config.intelligence[capability].model
         : XAI_TEXT_MODEL_DEFAULT;
+    this.requireCurrentXaiDisclosure(capability);
     const direct = this.host.listAgentConnectionRecords().find((record) => record.id === DIRECT_XAI_ID);
     const selectedCredentialSource = this.credentialSource(direct?.settings.credentialSource);
     this.credentials.setPreferredSource?.(selectedCredentialSource);
@@ -1089,10 +1134,12 @@ export class AgentConnectionCenter {
         capability,
         status: "failed",
         model,
-        credentialSource: null,
+        credentialSource: selectedCredentialSource,
         testedAt: new Date().toISOString(),
-        detail: `${capability} · ${model} failed; select and connect one xAI credential source, then test again`,
-        reason: "readiness_failed",
+        detail: selectedCredentialSource
+          ? `${capability} · ${model} cannot use the selected ${selectedCredentialSource}; connect that exact source, then test again`
+          : `${capability} · ${model} cannot run until one xAI credential source is explicitly selected and connected`,
+        reason: "missing_credentials",
       }, null);
     }
     try {
@@ -1124,6 +1171,9 @@ export class AgentConnectionCenter {
         actualProvider = "xai";
         actualModel = result.model;
       }
+      if (credentialSource !== selectedCredentialSource) {
+        throw new Error("xAI probe returned a different credential source");
+      }
       return this.finishProbe({
         capability,
         status: "ready",
@@ -1136,16 +1186,14 @@ export class AgentConnectionCenter {
         actualModel,
       });
     } catch (error) {
-      const reason = /HTTP 404/i.test(error instanceof Error ? error.message : "")
-        ? "invalid_model" as const
-        : "readiness_failed" as const;
+      const reason = xaiReadinessFailureReason(error);
       return this.finishProbe({
         capability,
         status: "failed",
         model,
         credentialSource: selectedCredentialSource,
         testedAt: new Date().toISOString(),
-        detail: `${capability} · ${model} failed; check account access and the exact model, then test again`,
+        detail: xaiReadinessFailureDetail(capability, model, selectedCredentialSource, reason),
         reason,
       }, null);
     }
@@ -1597,7 +1645,7 @@ export class AgentConnectionCenter {
   }
 
   async authorize() {
-    this.persistCredentialSource("oauth");
+    this.requireDirectConnection();
     this.readiness.clear();
     return await this.credentials.authorize();
   }
@@ -1618,7 +1666,6 @@ export class AgentConnectionCenter {
     this.requireDirectConnection();
     this.readiness.clear();
     await this.credentials.setApiKey(apiKey);
-    this.persistCredentialSource("api-key");
     return await this.view();
   }
 
@@ -2254,6 +2301,30 @@ export class AgentConnectionCenter {
   private requireDirectConnection(): void {
     this.ensureMigrated();
     if (!this.hasDirectConnection()) throw new Error("Agent Connection not found");
+  }
+
+  private requireCurrentXaiDisclosure(capability: AgentConnectionCapability): void {
+    if (capability === "transcription") {
+      if (!hasCurrentXaiTranscriptionConsent(this.host)) {
+        throw new Error(
+          `Accept the current Cloud Transcription Consent (${XAI_TRANSCRIPTION_DISCLOSURE_VERSION}) before testing xAI Transcription`,
+        );
+      }
+      return;
+    }
+    if (capability === "summary") {
+      if (!hasCurrentXaiSummaryDisclosure(this.host)) {
+        throw new Error(
+          `Accept the current Summary Data Path Disclosure (${XAI_SUMMARY_DISCLOSURE_VERSION}) before testing xAI Summary`,
+        );
+      }
+      return;
+    }
+    if (!hasCurrentXaiConversationDisclosure(this.host)) {
+      throw new Error(
+        `Accept the current Conversation Data Path Disclosure (${XAI_CONVERSATION_DISCLOSURE_VERSION}) before testing xAI Conversation`,
+      );
+    }
   }
 
   private persistCredentialSource(source: XaiCredentialSource): void {

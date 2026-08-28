@@ -310,7 +310,8 @@ history and future selection; it does not log out of or reconfigure the runtime.
   recording audio directly to xAI for speech-to-text, Yulu requires the current
   Cloud Transcription Consent after disclosing that audio leaves the computer and
   provider charges may apply. Settings → Intelligent Services keeps OAuth tokens and
-  explicitly submitted API keys in macOS Keychain and tests transcription,
+  explicitly submitted API keys in macOS Keychain. Saving an API key does not select
+  it; Credential Source remains a separate explicit choice. Yulu tests transcription,
   summary, and conversation separately; Hermes and OpenClaw do not receive the
   credential or run Yulu's audio pipeline. Selecting local keeps speech
   recognition local.

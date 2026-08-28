@@ -268,9 +268,11 @@ yulu mcp test
 - 运行数据库、任务状态、token、socket 和日志保存在 `~/.config/yulu`。
 - Host 只监听回环地址，并使用每次安装生成的 bearer token 保护完成事件、转写和 MCP 请求。
 - Yulu 不保存 Agent 的连接器凭据。
-- 选择 xAI 代表允许 Yulu 把音频直接发送给 xAI；「设置 → 智能服务」把 OAuth
-  令牌和显式提交的 API Key 保存在 macOS 钥匙串，并分别测试转写、摘要和对话能力。
-  Hermes/OpenClaw 不会收到该凭据。选择本地引擎时，语音识别留在本机。
+- 选择 xAI 本身不等于授权云处理；在把录音音频直接发送给 xAI 前，Yulu 还会要求
+  当前版本的「云端转写同意」。「设置 → 智能服务」把 OAuth 令牌和显式提交的 API Key
+  保存在 macOS 钥匙串。保存 API Key 不会选中它；Credential Source 仍需单独明确选择。
+  Yulu 会分别测试转写、摘要和对话能力。Hermes/OpenClaw 不会收到该凭据。选择本地引擎时，
+  语音识别留在本机。
 - 外部投递必须经过明确授权；结果不确定时不会盲目重试。
 
 详细控制与排障见[配置](docs/configuration.md)、[运维](docs/operations.md)和

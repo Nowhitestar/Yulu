@@ -350,6 +350,234 @@ afterEach(() => {
 });
 
 describe("public Agent Connection Host contract", () => {
+  it("stores an xAI API key without changing the explicitly selected credential source", async () => {
+    const setupResult = setup({
+      audio: {},
+      transcription: { engine: "local", language: "zh" },
+      intelligence: {
+        summary: { provider: "xai", model: "grok-summary-exact" },
+        conversation: { provider: "xai", model: "grok-conversation-exact" },
+      },
+      llm: { agent: { provider: "auto" } },
+    });
+    const caller = createCaller(agentConnectionsRouter, {
+      agentConnections: setupResult.center,
+      uiMutationAuthorized: true,
+    } as never);
+
+    await caller.setApiKey({ apiKey: "submitted-once" });
+
+    expect(setupResult.credentials.setApiKey).toHaveBeenCalledWith("submitted-once");
+    expect(setupResult.host.listAgentConnectionRecords()
+      .find(({ id }) => id === "direct-xai")?.settings).toMatchObject({
+        credentialSource: "oauth",
+      });
+    expect(setupResult.credentials.setPreferredSource).not.toHaveBeenCalledWith("api-key");
+    setupResult.host.close();
+  });
+
+  it("starts Grok OAuth authorization without changing the explicitly selected credential source", async () => {
+    const setupResult = setup({
+      audio: {},
+      transcription: { engine: "local", language: "zh" },
+      intelligence: {},
+      llm: { agent: { provider: "auto" } },
+    }, [], { seedDirectCredentialSource: "api-key" });
+    setupResult.credentials.authorize.mockResolvedValue({
+      status: "running",
+      verificationUrl: "https://accounts.x.ai/oauth2/device",
+      userCode: "ABCD-EFGH",
+      message: "Complete authorization",
+    });
+    const caller = createCaller(agentConnectionsRouter, {
+      agentConnections: setupResult.center,
+      uiMutationAuthorized: true,
+    } as never);
+
+    await caller.authorize();
+
+    expect(setupResult.host.listAgentConnectionRecords()
+      .find(({ id }) => id === "direct-xai")?.settings).toMatchObject({
+        credentialSource: "api-key",
+      });
+    expect(setupResult.credentials.setPreferredSource).not.toHaveBeenCalledWith("oauth");
+    setupResult.host.close();
+  });
+
+  it.each([
+    ["transcription", /Cloud Transcription Consent \(xai-audio-v1\)/],
+    ["summary", /Summary Data Path Disclosure \(xai-summary-v1\)/],
+    ["conversation", /Conversation Data Path Disclosure \(xai-conversation-v1\)/],
+  ] as const)("requires the current xAI %s disclosure before a real probe", async (
+    capability,
+    expected,
+  ) => {
+    const setupResult = setup({
+      audio: {},
+      transcription: { engine: "xai", language: "zh" },
+      intelligence: {
+        summary: { provider: "xai", model: "grok-summary-exact" },
+        conversation: { provider: "xai", model: "grok-conversation-exact" },
+      },
+      llm: { agent: { provider: "auto" } },
+    });
+    const caller = createCaller(agentConnectionsRouter, {
+      agentConnections: setupResult.center,
+      uiMutationAuthorized: true,
+    } as never);
+
+    await expect(caller.probe({ connectionId: "direct-xai", capability }))
+      .rejects.toThrow(expected);
+    expect(setupResult.audio.testXai).not.toHaveBeenCalled();
+    expect(setupResult.text.request).not.toHaveBeenCalled();
+    setupResult.host.close();
+  });
+
+  it("presents each selected xAI disclosure independently from authorization", async () => {
+    const setupResult = setup({
+      audio: {},
+      transcription: { engine: "xai", language: "zh" },
+      intelligence: {
+        summary: { provider: "xai", model: "grok-summary-exact" },
+        conversation: { provider: "xai", model: "grok-conversation-exact" },
+      },
+      llm: { agent: { provider: "auto" } },
+    });
+    setupResult.credentials.status.mockResolvedValue({
+      connected: false,
+      source: null,
+      oauthConnected: false,
+      apiKeyConfigured: false,
+      oauthReadSucceeded: true,
+      apiKeyReadSucceeded: true,
+      detail: "Selected Grok OAuth is not connected",
+      authorization: { status: "idle", verificationUrl: "", userCode: "", message: "" },
+    });
+
+    const direct = (await setupResult.center.view()).connections
+      .find(({ id }: { id: string }) => id === "direct-xai");
+
+    expect(direct?.capabilities.map(({ capability, selected, disclosure }) => ({
+      capability,
+      selected,
+      required: disclosure.required,
+      version: disclosure.disclosureVersion,
+    }))).toEqual([
+      { capability: "transcription", selected: true, required: true, version: "xai-audio-v1" },
+      { capability: "summary", selected: true, required: true, version: "xai-summary-v1" },
+      { capability: "conversation", selected: true, required: true, version: "xai-conversation-v1" },
+    ]);
+    expect(setupResult.audio.testXai).not.toHaveBeenCalled();
+    expect(setupResult.text.request).not.toHaveBeenCalled();
+    setupResult.host.close();
+  });
+
+  it("fails closed when an xAI probe returns a different credential source", async () => {
+    const setupResult = setup({
+      audio: {},
+      transcription: { engine: "xai", language: "zh" },
+      intelligence: {},
+      llm: { agent: { provider: "auto" } },
+    });
+    setupResult.host.recordCloudTranscriptionConsent("xai-audio-v1");
+    setupResult.audio.testXai.mockResolvedValue({
+      provider: "xai-api-key:yulu",
+      credentialSource: "api-key",
+    });
+
+    await expect(setupResult.center.probe({
+      connectionId: "direct-xai",
+      capability: "transcription",
+    })).resolves.toMatchObject({
+      status: "failed",
+      model: "speech-to-text",
+      credentialSource: "oauth",
+      reason: "identity_mismatch",
+    });
+    expect(setupResult.host.listAgentConnectionRecords()
+      .find(({ id }) => id === "direct-xai")?.settings).toMatchObject({
+        credentialSource: "oauth",
+      });
+    expect(setupResult.configManager.read().transcription.engine).toBe("xai");
+    setupResult.host.close();
+  });
+
+  it.each([
+    [
+      new Error("xAI summary request failed (HTTP 403)"),
+      "entitlement_failed",
+    ],
+    [
+      new Error("xAI OAuth 已失效，请在 Yulu 设置中重新授权"),
+      "credential_refresh_failed",
+    ],
+  ] as const)("preserves the selected xAI source and model after %s", async (
+    failure,
+    reason,
+  ) => {
+    const setupResult = setup({
+      audio: {},
+      transcription: { engine: "local", language: "zh" },
+      intelligence: {
+        summary: { provider: "xai", model: "grok-summary-exact" },
+        conversation: { provider: "xai", model: "grok-conversation-exact" },
+      },
+      llm: { agent: { provider: "auto" } },
+    });
+    setupResult.center.acceptDisclosure({
+      connectionId: "direct-xai",
+      capability: "summary",
+    });
+    setupResult.text.request.mockRejectedValue(failure);
+
+    await expect(setupResult.center.probe({
+      connectionId: "direct-xai",
+      capability: "summary",
+    })).resolves.toMatchObject({
+      status: "failed",
+      model: "grok-summary-exact",
+      credentialSource: "oauth",
+      reason,
+    });
+    expect(setupResult.host.listAgentConnectionRecords()
+      .find(({ id }) => id === "direct-xai")?.settings).toMatchObject({ credentialSource: "oauth" });
+    expect(setupResult.configManager.read().intelligence.summary).toEqual({
+      provider: "xai",
+      model: "grok-summary-exact",
+    });
+    setupResult.host.close();
+  });
+
+  it("reports the exact selected xAI source when that source is not connected", async () => {
+    const setupResult = setup({
+      audio: {},
+      transcription: { engine: "local", language: "zh" },
+      intelligence: {
+        summary: { provider: "xai", model: "grok-summary-exact" },
+        conversation: { provider: "xai", model: "grok-conversation-exact" },
+      },
+      llm: { agent: { provider: "auto" } },
+    }, [], { seedDirectCredentialSource: "api-key" });
+    setupResult.center.acceptDisclosure({
+      connectionId: "direct-xai",
+      capability: "summary",
+    });
+
+    await expect(setupResult.center.probe({
+      connectionId: "direct-xai",
+      capability: "summary",
+    })).resolves.toMatchObject({
+      status: "failed",
+      model: "grok-summary-exact",
+      credentialSource: "api-key",
+      reason: "missing_credentials",
+    });
+    expect(setupResult.text.request).not.toHaveBeenCalled();
+    expect(setupResult.host.listAgentConnectionRecords()
+      .find(({ id }) => id === "direct-xai")?.settings).toMatchObject({ credentialSource: "api-key" });
+    setupResult.host.close();
+  });
+
   it("projects only currently eligible Summary Providers from the shared contract", async () => {
     const setupResult = setup({
       audio: {},
@@ -2063,6 +2291,10 @@ describe("public Agent Connection Host contract", () => {
     setupResult.text.request.mockResolvedValue({
       model: "grok-summary-exact",
       credentialSource: "oauth",
+    });
+    setupResult.center.acceptDisclosure({
+      connectionId: "direct-xai",
+      capability: "summary",
     });
 
     await expect(setupResult.center.probe({

@@ -225,7 +225,8 @@ export interface PersistedAgentConnectionReadiness {
   model: string;
   credentialSource: XaiCredentialSource | null;
   detail: string;
-  reason: "invalid_model" | "readiness_failed" | "unknown_outcome" | null;
+  reason: "invalid_model" | "missing_credentials" | "entitlement_failed" | "credential_refresh_failed" |
+    "identity_mismatch" | "readiness_failed" | "unknown_outcome" | null;
   runtimeEvidence: {
     adapter: string;
     transport: string;
