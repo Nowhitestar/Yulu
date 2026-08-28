@@ -227,6 +227,12 @@ The immutable, signed code and core toolchain shipped inside the installed
 host Python, npm, or pip.
 _Avoid_: Repository runtime, bootstrap install, host dependencies
 
+**Application Product Boundary**:
+The single user-visible Yulu product installed and managed as one Application
+Runtime, even when its responsibilities run in independently supervised
+components. Those components are not separate products for the user to install.
+_Avoid_: Single process, multiple Yulu apps, external daemon installation
+
 **Optional Runtime Pack**:
 A versioned, integrity-checked capability payload downloaded outside the signed
 Application Runtime, such as the local transcription model. Its absence does not
