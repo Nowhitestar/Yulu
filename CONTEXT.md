@@ -233,6 +233,18 @@ Application Runtime, such as the local transcription model. Its absence does not
 prevent Yulu from opening or presenting another explicit capability choice.
 _Avoid_: Missing dependency, App patch, bundled user data
 
+**Application Data Root**:
+The standard per-user Library locations that hold Yulu configuration, durable
+state, models, caches, and logs outside the signed Application Runtime. User
+recordings remain in their explicit Media Library rather than inside this root.
+_Avoid_: Runtime directory, repository root, recording folder
+
+**Media Library**:
+The user-visible, user-selected location for recordings and dictation media,
+defaulting to `~/Movies/Yulu`. Application replacement and operational-data
+migration never silently relocate it.
+_Avoid_: Application Data Root, cache, App resources
+
 **Activation Blocker**:
 A named capability that currently prevents progress toward Core Activation. It
 ends the waiting state and gives the user a retry or an exact remediation path.
