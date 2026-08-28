@@ -7,6 +7,16 @@ import { LanguageProvider } from "../../../web/src/i18n/LanguageProvider.js";
 const mocks = vi.hoisted(() => ({
   probe: vi.fn(async () => ({ status: "ready" })),
   refresh: vi.fn(async () => ({})),
+  startNativeAuthorization: vi.fn(async () => ({ launched: true })),
+  refreshNativeAuthorizationStatus: vi.fn(async () => ({
+    connectionId: "candidate:codex",
+    adapter: "codex",
+    supported: true,
+    authorized: true,
+    runtimeVersion: "0.144.4",
+    detail: "Codex native authorization is available",
+  })),
+  refetchView: vi.fn(async () => ({})),
   confirmCandidate: vi.fn(async () => ({})),
   select: vi.fn(async () => ({})),
   acceptDisclosure: vi.fn(async () => ({})),
@@ -271,7 +281,7 @@ const mocks = vi.hoisted(() => ({
       lifecycle: "candidate",
       source: "discovered",
       detectedPath: "/fake/bin/codex",
-      capabilities: ["conversation"],
+      capabilities: ["summary", "conversation"],
       selected: false,
       readiness: "untested",
       remediation: { href: "/settings/llm?candidate=candidate%3Acodex" },
@@ -283,7 +293,7 @@ const mocks = vi.hoisted(() => ({
       lifecycle: "candidate",
       source: "discovered",
       detectedPath: "/fake/bin/claude",
-      capabilities: ["conversation"],
+      capabilities: ["summary", "conversation"],
       selected: false,
       readiness: "untested",
       remediation: { href: "/settings/llm?candidate=candidate%3Aclaude-code" },
@@ -343,9 +353,11 @@ vi.mock("../../../web/src/trpc.js", () => {
   return {
     trpc: {
       agentConnections: {
-        view: { useQuery: () => ({ data: mocks.view, isPending: false, isError: false, refetch: vi.fn() }) },
+        view: { useQuery: () => ({ data: mocks.view, isPending: false, isError: false, refetch: mocks.refetchView }) },
         probe: { useMutation: () => mutation(mocks.probe) },
         refreshCandidates: { useMutation: () => mutation(mocks.refresh) },
+        startNativeAuthorization: { useMutation: () => mutation(mocks.startNativeAuthorization) },
+        refreshNativeAuthorizationStatus: { useMutation: () => mutation(mocks.refreshNativeAuthorizationStatus) },
         confirmCandidate: { useMutation: () => mutation(mocks.confirmCandidate) },
         select: { useMutation: () => mutation(mocks.select) },
         acceptDisclosure: { useMutation: () => mutation(mocks.acceptDisclosure) },
@@ -462,6 +474,44 @@ describe("shared Agent Connection Center", () => {
     expect(within(codex).getByText(/0.144.4/)).toBeInTheDocument();
     expect(mocks.probe).not.toHaveBeenCalled();
     expect(mocks.confirmCandidate).not.toHaveBeenCalled();
+  });
+
+  it("guides installation or location without treating any runtime as selected", () => {
+    mount("en");
+
+    const guidance = screen.getByTestId("agent-runtime-install-guidance");
+    expect(within(guidance).getByRole("heading", { name: "Install or locate a runtime" }))
+      .toBeInTheDocument();
+    expect(within(guidance).getByText(/Codex.*codex executable.*Yulu Host PATH/i)).toBeInTheDocument();
+    expect(within(guidance).getByText(/Claude Code.*claude executable.*Yulu Host PATH/i)).toBeInTheDocument();
+    expect(within(guidance).getByText(/Hermes.*hermes executable.*Yulu Host PATH/i)).toBeInTheDocument();
+    expect(within(guidance).getByText(/OpenClaw.*openclaw executable.*Yulu Host PATH/i)).toBeInTheDocument();
+    expect(mocks.confirmCandidate).not.toHaveBeenCalled();
+    expect(mocks.select).not.toHaveBeenCalled();
+    expect(mocks.probe).not.toHaveBeenCalled();
+  });
+
+  it("launches candidate native login and lets the user refresh status after returning", async () => {
+    mount("en");
+    const user = userEvent.setup();
+    const candidate = screen.getByTestId("agent-candidate-codex");
+
+    await user.click(within(candidate).getByRole("button", { name: "Open Codex native login" }));
+    expect(mocks.startNativeAuthorization).toHaveBeenCalledWith({
+      connectionId: "candidate:codex",
+    });
+    expect(mocks.confirmCandidate).not.toHaveBeenCalled();
+    expect(mocks.select).not.toHaveBeenCalled();
+    expect(mocks.probe).not.toHaveBeenCalled();
+
+    await user.click(within(candidate).getByRole("button", { name: "Refresh status after returning" }));
+    expect(mocks.refreshNativeAuthorizationStatus).toHaveBeenCalledWith({
+      connectionId: "candidate:codex",
+    });
+    expect(mocks.refetchView).toHaveBeenCalledOnce();
+    expect(within(candidate).getByRole("status")).toHaveTextContent(
+      "Codex native authorization is available",
+    );
   });
 
   it("shows versioned xAI consent and disclosures separately from authorization before enabling probes", () => {
@@ -595,8 +645,8 @@ describe("shared Agent Connection Center", () => {
     const user = userEvent.setup();
     const candidate = screen.getByTestId("agent-candidate-codex");
 
-    await user.clear(within(candidate).getByRole("textbox", { name: "Codex Conversation model" }));
-    await user.type(within(candidate).getByRole("textbox", { name: "Codex Conversation model" }), "gpt-5.6-sol");
+    await user.clear(within(candidate).getByRole("textbox", { name: "Codex initial Summary and Conversation model" }));
+    await user.type(within(candidate).getByRole("textbox", { name: "Codex initial Summary and Conversation model" }), "gpt-5.6-sol");
     await user.click(within(candidate).getByRole("button", { name: "Connect Codex runtime" }));
     expect(mocks.confirmCandidate).toHaveBeenCalledWith({
       candidateId: "candidate:codex",
@@ -649,8 +699,8 @@ describe("shared Agent Connection Center", () => {
     const user = userEvent.setup();
     const candidate = screen.getByTestId("agent-candidate-claude-code");
 
-    await user.clear(within(candidate).getByRole("textbox", { name: "Claude Code Conversation model" }));
-    await user.type(within(candidate).getByRole("textbox", { name: "Claude Code Conversation model" }), "claude-sonnet-5");
+    await user.clear(within(candidate).getByRole("textbox", { name: "Claude Code initial Summary and Conversation model" }));
+    await user.type(within(candidate).getByRole("textbox", { name: "Claude Code initial Summary and Conversation model" }), "claude-sonnet-5");
     await user.click(within(candidate).getByRole("button", { name: "Connect Claude Code runtime" }));
     expect(mocks.confirmCandidate).toHaveBeenCalledWith({
       candidateId: "candidate:claude-code",

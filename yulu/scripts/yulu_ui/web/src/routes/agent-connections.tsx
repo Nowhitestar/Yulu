@@ -13,6 +13,13 @@ export function LegacyAgentConnectionsRedirect() {
 
 type Capability = "transcription" | "summary" | "conversation";
 
+const SUPPORTED_RUNTIME_GUIDANCE = [
+  { adapter: "codex", label: "Codex", command: "codex" },
+  { adapter: "claude-code", label: "Claude Code", command: "claude" },
+  { adapter: "hermes", label: "Hermes", command: "hermes" },
+  { adapter: "openclaw", label: "OpenClaw", command: "openclaw" },
+] as const;
+
 interface DeletionImpact {
   connectionId: string;
   selectedCapabilities: Capability[];
@@ -115,6 +122,8 @@ export function AgentConnections({ embedded = false }: { embedded?: boolean } = 
   const view = trpc.agentConnections.view.useQuery();
   const utils = trpc.useUtils();
   const refreshCandidates = trpc.agentConnections.refreshCandidates.useMutation();
+  const startNativeAuthorization = trpc.agentConnections.startNativeAuthorization.useMutation();
+  const refreshNativeAuthorizationStatus = trpc.agentConnections.refreshNativeAuthorizationStatus.useMutation();
   const confirmCandidate = trpc.agentConnections.confirmCandidate.useMutation();
   const select = trpc.agentConnections.select.useMutation();
   const selectCredentialSource = trpc.agentConnections.selectCredentialSource.useMutation();
@@ -132,6 +141,8 @@ export function AgentConnections({ embedded = false }: { embedded?: boolean } = 
   const [modelDrafts, setModelDrafts] = useState<Partial<Record<Capability, string>>>({});
   const [agentModelDrafts, setAgentModelDrafts] = useState<Record<string, string>>({});
   const [acceptedSupportedDisclosures, setAcceptedSupportedDisclosures] = useState<Set<string>>(() => new Set());
+  const [nativeLoginStarted, setNativeLoginStarted] = useState<string | null>(null);
+  const [nativeAuthorizationStatus, setNativeAuthorizationStatus] = useState<Record<string, string>>({});
   const [impact, setImpact] = useState<DeletionImpact | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const deleteButtonRef = useRef<HTMLButtonElement | null>(null);
@@ -177,6 +188,44 @@ export function AgentConnections({ embedded = false }: { embedded?: boolean } = 
       setActionError(actionFailureReason(error));
     }
   };
+  const launchNativeLogin = (connectionId: string) => void run(async () => {
+    await startNativeAuthorization.mutateAsync({ connectionId });
+    setNativeLoginStarted(connectionId);
+  });
+  const refreshAfterNativeLogin = (connectionId: string) => void (async () => {
+    setActionError(null);
+    try {
+      const status = await refreshNativeAuthorizationStatus.mutateAsync({ connectionId });
+      await view.refetch();
+      setNativeAuthorizationStatus((current) => ({ ...current, [connectionId]: status.detail }));
+      setNativeLoginStarted((current) => current === connectionId ? null : current);
+    } catch (error) {
+      setActionError(actionFailureReason(error));
+    }
+  })();
+  const nativeAuthorizationActions = (connectionId: string, label: string) => (
+    <div className="agent-connection-actions">
+      <button
+        type="button"
+        disabled={startNativeAuthorization.isPending}
+        onClick={() => launchNativeLogin(connectionId)}
+      >
+        {t("agentConnections.nativeAuthorization.open", { agent: label })}
+      </button>
+      {nativeLoginStarted === connectionId && (
+        <button
+          type="button"
+          disabled={refreshNativeAuthorizationStatus.isPending}
+          onClick={() => refreshAfterNativeLogin(connectionId)}
+        >
+          {t("agentConnections.nativeAuthorization.refresh")}
+        </button>
+      )}
+      {nativeAuthorizationStatus[connectionId] && (
+        <p role="status">{nativeAuthorizationStatus[connectionId]}</p>
+      )}
+    </div>
+  );
 
   if (view.isPending) return <section className="agent-connections-page" aria-live="polite">{t("agentConnections.loading")}</section>;
   if (view.isError || !view.data) {
@@ -582,6 +631,7 @@ export function AgentConnections({ embedded = false }: { embedded?: boolean } = 
               <br />
               <code>{agent.authorization.statusCommand}</code>
               {agent.authorization.remediation && <p>{agent.authorization.remediation}</p>}
+              {nativeAuthorizationActions(agent.id, agent.label)}
             </div>
 
             <div className="agent-connection-capabilities">
@@ -701,6 +751,25 @@ export function AgentConnections({ embedded = false }: { embedded?: boolean } = 
         );
       })}
 
+      <section
+        className="agent-connections-list"
+        data-testid="agent-runtime-install-guidance"
+        aria-labelledby="agent-runtime-install-guidance-title"
+      >
+        <h2 id="agent-runtime-install-guidance-title">{t("agentConnections.install.title")}</h2>
+        <p>{t("agentConnections.install.explanation")}</p>
+        <ul>
+          {SUPPORTED_RUNTIME_GUIDANCE.map((runtime) => (
+            <li key={runtime.adapter}>
+              {t("agentConnections.install.runtime", {
+                agent: runtime.label,
+                command: runtime.command,
+              })}
+            </li>
+          ))}
+        </ul>
+      </section>
+
       <section className="agent-connections-list" aria-labelledby="agent-candidates-title">
         <h2 id="agent-candidates-title">{t("agentConnections.candidates.title")}</h2>
         <p>{t("agentConnections.candidates.explanation")}</p>
@@ -747,6 +816,7 @@ export function AgentConnections({ embedded = false }: { embedded?: boolean } = 
                 >
                   {t(`${supportedAgentCopy(candidate.adapter)}.confirm`)}
                 </button>
+                {nativeAuthorizationActions(candidate.id, candidate.label)}
               </div>
             )}
           </details>

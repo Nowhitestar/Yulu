@@ -216,6 +216,15 @@ failure never causes an automatic switch to the saved API key. The page records
 separate real-request readiness for transcription, summary, and conversation.
 Opening or deep-linking it performs status inspection only; it does not
 implicitly run a capability probe or model request.
+Discovery remains non-mutating: it creates Connection Candidates but never
+selects an Agent or capability. If a supported runtime is missing, install it
+or make it visible on the Yulu Host PATH. Agent Connection Center can open that
+runtime's fixed native login command in Terminal; after login, return and
+refresh its non-secret native status before explicitly connecting and selecting
+a capability. Starting reauthorization invalidates current readiness without
+deleting history. Yulu does not read, parse, or copy the runtime's OAuth token
+files. Claude Summary remains unavailable unless one isolated invocation proves
+both the exact provider and model; missing provider evidence is not readiness.
 Upgrades archive and remove the retired `transcription.xai_credential_source`
 field; Hermes/OpenClaw credentials are not imported or deleted.
 

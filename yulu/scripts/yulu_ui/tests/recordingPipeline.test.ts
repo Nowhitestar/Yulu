@@ -97,6 +97,7 @@ describe("RecordingPipeline", () => {
     supportedAgentToolNames?: string[];
     supportedAgentSummaryText?: string;
     supportedAgentUnknownOutcome?: boolean;
+    supportedAgentUnknownMissingProvider?: boolean;
     supportedAgentUnknownWithoutSession?: boolean;
     autoPrompts?: Array<{
       id: string;
@@ -244,9 +245,9 @@ describe("RecordingPipeline", () => {
                 transport: "claude-code-print-stream-json",
                 runtimeVersion: "2.1.169",
                 authorizationClass: "claude-subscription",
-                requestedProvider: null,
+                requestedProvider: "firstParty",
                 requestedModel: "runtime-managed",
-                actualProvider: null,
+                actualProvider: "firstParty",
                 actualModel: "runtime-managed",
                 requestId: "unknown-request-no-session",
                 sessionId: null,
@@ -292,9 +293,9 @@ describe("RecordingPipeline", () => {
                 adapter: "claude-code",
                 transport: "claude-code-print-stream-json",
                 runtimeVersion: "2.1.169",
-                requestedProvider: null,
+                requestedProvider: opts.supportedAgentUnknownMissingProvider ? null : "firstParty",
                 requestedModel: "runtime-managed",
-                actualProvider: null,
+                actualProvider: opts.supportedAgentUnknownMissingProvider ? null : "firstParty",
                 actualModel: "runtime-managed",
                 requestId: null,
                 sessionId: "unknown-session-140",
@@ -320,9 +321,9 @@ describe("RecordingPipeline", () => {
             runtimeVersion: supportedAgentProvider === "codex"
               ? "0.144.4"
               : "2.1.169",
-            requestedProvider: supportedAgentProvider === "codex" ? "openai" : null,
+            requestedProvider: supportedAgentProvider === "codex" ? "openai" : "firstParty",
             requestedModel: "runtime-managed",
-            actualProvider: supportedAgentProvider === "codex" ? "openai" : null,
+            actualProvider: supportedAgentProvider === "codex" ? "openai" : "firstParty",
             actualModel: opts.supportedAgentResultModel ?? "runtime-managed",
             requestId: "turn-139",
             sessionId: "artifact-session",
@@ -875,8 +876,8 @@ describe("RecordingPipeline", () => {
         summaryInputArtifactSha256: expect.stringMatching(/^[a-f0-9]{64}$/),
         runtimeEvidence: expect.objectContaining({
           adapter: "claude-code",
-          requestedProvider: null,
-          actualProvider: null,
+          requestedProvider: "firstParty",
+          actualProvider: "firstParty",
           actualModel: "runtime-managed",
           fallbackOccurred: false,
           terminalStatus: "ready",
@@ -1015,6 +1016,37 @@ describe("RecordingPipeline", () => {
       .toHaveLength(1);
     expect(() => pipeline!.retry(task.id)).toThrow("cannot retry from execution_unverified");
     expect(readFileSync(summaryPath, "utf8")).toBe("# Prior verified summary\n");
+  });
+
+  it("fences Claude Code Summary Unknown Outcome when provider identity is not observable", async () => {
+    const { audioPath } = setup({
+      pollMs: 5,
+      supportedAgentAdapter: true,
+      supportedAgentProvider: "claude-code",
+      supportedAgentUnknownOutcome: true,
+      supportedAgentUnknownMissingProvider: true,
+    });
+    writeFileSync(audioPath, wavWithAudio());
+    store!.recordAgentConnectionDisclosure({
+      connectionId: "claude-code",
+      capability: "summary",
+      disclosureVersion: "claude-code-summary-v1",
+      decision: "accepted",
+    });
+
+    const { task } = pipeline!.enqueueCompletion({ audioPath, title: "Unknown Claude provider" });
+    await vi.waitFor(() => expect(store!.getTask(task.id)).toMatchObject({
+      state: "execution_unverified",
+      nativeSessionId: expect.stringMatching(/^summary-/),
+      error: expect.stringContaining("Unknown Outcome"),
+    }));
+    expect(store!.listEvents(task.id)).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        type: "summary.unknown_outcome",
+        payload: expect.objectContaining({ evidenceValidated: false }),
+      }),
+    ]));
+    expect(() => pipeline!.retry(task.id)).toThrow("cannot retry from execution_unverified");
   });
 
   it("persists Codex Summary Unknown Outcome without allowing retry or replacing a prior summary", async () => {

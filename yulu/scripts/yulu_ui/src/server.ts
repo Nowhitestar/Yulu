@@ -63,6 +63,7 @@ import { ClaudeCodeAdapter } from "./claudeCodeAdapter.js";
 import { ClaudeCodeCliRuntimeClient } from "./claudeCodeCliClient.js";
 import { ConversationOnlyAgentAdapter } from "./conversationOnlyAgentAdapter.js";
 import { ConversationOnlyCliRuntimeClient } from "./conversationOnlyCliClient.js";
+import { MacOsNativeAgentAuthorizationLauncher } from "./nativeAgentAuthorization.js";
 import { SharingConfiguration } from "./sharingConfiguration.js";
 import { AgentSharingConnectorAdapter } from "./sharingConnector.js";
 
@@ -170,6 +171,7 @@ async function startLockedServer(
   const xaiAudio = new XaiAudioClient(xaiCredentials);
   const xaiText = new XaiTextClient(xaiCredentials);
   const xaiReadiness = createXaiProviderReadiness();
+  const nativeAgentAuthorization = new MacOsNativeAgentAuthorizationLauncher();
   const audioTranscription = new AudioTranscriptionService(
     configManager,
     localCaption,
@@ -208,6 +210,7 @@ async function startLockedServer(
         cwd: runtimePaths.moviesDir,
       }),
     }),
+    nativeAuthorization: (input) => nativeAgentAuthorization.launch(input),
   });
   const supportedAgentSummaryAdapter = agentConnections.summaryAdapter();
   const sharing = new SharingConfiguration({

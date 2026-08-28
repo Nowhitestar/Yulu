@@ -19,7 +19,7 @@ const SUPPORTED_FEATURES = [
   "probe-isolation",
   "fallback-model/opt-in",
 ];
-const SUMMARY_SUPPORTED_FEATURES = [...SUPPORTED_FEATURES, "managed-hooks/none"];
+const SUMMARY_SUPPORTED_FEATURES = [...SUPPORTED_FEATURES, "managed-hooks/none", "provider-identity"];
 
 function client(overrides: Partial<ClaudeCodeRuntimeClient> = {}): ClaudeCodeRuntimeClient {
   return {
@@ -36,6 +36,7 @@ function client(overrides: Partial<ClaudeCodeRuntimeClient> = {}): ClaudeCodeRun
       answer: input.probe ? "YULU_CLAUDE_PROBE_OK" : "Pinned answer",
       nativeSessionId: input.nativeSessionId ?? "019f0000-0000-7000-8000-000000000136",
       actualModel: input.model,
+      actualProvider: input.toolFree ? "firstParty" : null,
       requestId: "request-136",
       fallbackOccurred: false,
       toolCalls: [],
@@ -143,16 +144,43 @@ describe("Claude Code adapter conformance", () => {
     });
   });
 
-  it("uses the exact-model tool-free adapter for an independent Summary probe", async () => {
+  it("keeps Summary unavailable when the runtime cannot prove the invocation provider", async () => {
+    const runConversation = vi.fn();
+    const runtime = client({
+      inspect: vi.fn(async () => ({
+        runtimeVersion: "2.1.169",
+        authorized: true,
+        authorizationClass: "claude-subscription" as const,
+        authorizationMethod: "claude.ai",
+        apiProvider: "firstParty",
+        features: SUMMARY_SUPPORTED_FEATURES.filter((feature) => feature !== "provider-identity"),
+      })),
+      runConversation,
+    });
+    const adapter = new ClaudeCodeAdapter({ executable: "/fake/claude", client: runtime });
+
+    await expect(adapter.status({ toolFree: true })).resolves.toMatchObject({
+      supported: false,
+      remediation: expect.stringContaining("exact provider identity"),
+    });
+    await expect(adapter.probeSummary({ model: "claude-sonnet-5" })).resolves.toMatchObject({
+      status: "failed",
+      reason: "unsupported_runtime",
+      remediation: expect.stringContaining("exact provider identity"),
+    });
+    expect(runConversation).not.toHaveBeenCalled();
+  });
+
+  it("declares Summary ready only with exact provider and model evidence", async () => {
     const runtime = client();
     const adapter = new ClaudeCodeAdapter({ executable: "/fake/claude", client: runtime });
 
     await expect(adapter.probeSummary({ model: "claude-sonnet-5" })).resolves.toMatchObject({
       status: "ready",
       evidence: {
-        requestedProvider: null,
+        requestedProvider: "firstParty",
         requestedModel: "claude-sonnet-5",
-        actualProvider: null,
+        actualProvider: "firstParty",
         actualModel: "claude-sonnet-5",
         fallbackOccurred: false,
       },
@@ -244,6 +272,7 @@ describe("Claude Code adapter conformance", () => {
         answer: "# Safe summary",
         nativeSessionId: "019f0000-0000-7000-8000-000000000140",
         actualModel: input.model,
+        actualProvider: "firstParty",
         requestId: "request-140",
         fallbackOccurred: false,
         toolCalls: [],
@@ -265,9 +294,9 @@ describe("Claude Code adapter conformance", () => {
         transport: "claude-code-print-stream-json",
         runtimeVersion: "2.1.169",
         authorizationClass: "claude-subscription",
-        requestedProvider: null,
+        requestedProvider: "firstParty",
         requestedModel: "claude-sonnet-5",
-        actualProvider: null,
+        actualProvider: "firstParty",
         actualModel: "claude-sonnet-5",
         requestId: "request-140",
         sessionId: "019f0000-0000-7000-8000-000000000140",
@@ -309,6 +338,7 @@ describe("Claude Code adapter conformance", () => {
         answer: "# Summary",
         nativeSessionId: "019f0000-0000-7000-8000-000000000140",
         actualModel: input.model,
+        actualProvider: "firstParty",
         requestId: "request-140",
         fallbackOccurred: false,
         toolCalls: [],
@@ -333,6 +363,7 @@ describe("Claude Code adapter conformance", () => {
         answer: "YULU_CLAUDE_PROBE_OK",
         nativeSessionId: "019f0000-0000-7000-8000-000000000140",
         actualModel: input.model,
+        actualProvider: "firstParty",
         requestId: null,
         fallbackOccurred: false,
         toolCalls: [],

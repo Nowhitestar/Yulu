@@ -13,6 +13,12 @@ export const agentConnectionsRouter = router({
   view: publicProcedure.query(({ ctx }) => center(ctx).view()),
   summaryActivation: publicProcedure.query(({ ctx }) => center(ctx).summaryActivation()),
   refreshCandidates: uiMutationProcedure.mutation(({ ctx }) => center(ctx).refreshCandidates()),
+  refreshNativeAuthorizationStatus: uiMutationProcedure
+    .input(z.object({ connectionId: z.string().min(1).max(200) }).strict())
+    .mutation(({ ctx, input }) => center(ctx).refreshNativeAuthorizationStatus(input)),
+  startNativeAuthorization: uiMutationProcedure
+    .input(z.object({ connectionId: z.string().min(1).max(200) }).strict())
+    .mutation(({ ctx, input }) => center(ctx).startNativeAuthorization(input)),
   confirmCandidate: uiMutationProcedure
     .input(z.object({
       candidateId: z.string().min(1).max(200),

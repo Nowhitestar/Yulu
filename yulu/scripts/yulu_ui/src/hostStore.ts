@@ -105,6 +105,13 @@ export interface SummaryCommitRuntimeEvidence {
   cancellationConfirmed?: boolean | null;
 }
 
+export class ClaudeSummaryEvidenceMismatchError extends Error {
+  constructor() {
+    super("Claude Code Unknown Outcome evidence does not match the pinned Summary task identity");
+    this.name = "ClaudeSummaryEvidenceMismatchError";
+  }
+}
+
 export type RuntimeAuthorizationClass =
   | "chatgpt"
   | "claude-subscription"
@@ -364,6 +371,13 @@ export function secretSafeSummaryRuntimeEvidence(
       ? { cancellationConfirmed: raw.cancellationConfirmed as boolean | null }
       : {}),
   };
+}
+
+function hasExactNonEmptyProviderIdentity(evidence: SummaryCommitRuntimeEvidence): boolean {
+  return Boolean(
+    evidence.requestedProvider?.trim() &&
+    evidence.actualProvider === evidence.requestedProvider,
+  );
 }
 
 function secretSafeReadinessEvidence(
@@ -2130,7 +2144,7 @@ export class HostStore {
         evidence.requestedProvider === "openai" && evidence.actualProvider === "openai"
       : task.summaryProvider === "claude-code" &&
         evidence.adapter === "claude-code" && evidence.transport === "claude-code-print-stream-json" &&
-        evidence.requestedProvider === null && evidence.actualProvider === null;
+        hasExactNonEmptyProviderIdentity(evidence);
     const sessionIdentityValid = Boolean(evidence.sessionId);
     if (
       !providerIdentityMatches || !evidence.runtimeVersion.trim() ||
@@ -2900,14 +2914,14 @@ export class HostStore {
     const evidence = secretSafeSummaryRuntimeEvidence(inputEvidence);
     const providerIdentityMatches = task.summaryProvider === "claude-code" &&
       evidence.adapter === "claude-code" && evidence.transport === "claude-code-print-stream-json" &&
-      evidence.requestedProvider === null && evidence.actualProvider === null;
+      hasExactNonEmptyProviderIdentity(evidence);
     if (
       !providerIdentityMatches || !evidence.runtimeVersion.trim() ||
       evidence.requestedModel !== task.summaryModel || evidence.actualModel !== task.summaryModel ||
       evidence.sessionId !== nativeSessionId ||
       evidence.terminalStatus !== "unknown" || evidence.fallbackOccurred
     ) {
-      throw new Error("Claude Code Unknown Outcome evidence does not match the pinned Summary task identity");
+      throw new ClaudeSummaryEvidenceMismatchError();
     }
     this.db.prepare(`
       UPDATE agent_tasks SET state = 'execution_unverified', phase = 'failed', lease_token = NULL,

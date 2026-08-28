@@ -10,6 +10,7 @@ import {
 } from "./agentGateway.js";
 import { ArtifactStore } from "./artifactStore.js";
 import {
+  ClaudeSummaryEvidenceMismatchError,
   HostStore,
   secretSafeSummaryRuntimeEvidence,
   type AgentTask,
@@ -929,17 +930,30 @@ export class RecordingPipeline {
         return false;
       }
       if (error instanceof ClaudeCodeSummaryUnknownOutcomeError) {
-        const unknown = error.nativeSessionId
-          ? this.options.store.markClaudeSummaryUnknownOutcome(
+        let unknown: AgentTask;
+        if (error.nativeSessionId) {
+          try {
+            unknown = this.options.store.markClaudeSummaryUnknownOutcome(
               task.id,
               leaseToken,
               error.message,
               error.nativeSessionId,
               error.evidence,
-            )
-          : this.options.store.markSummaryUnknownOutcome(task.id, leaseToken, {
+            );
+          } catch (fenceError) {
+            if (!(fenceError instanceof ClaudeSummaryEvidenceMismatchError)) {
+              throw fenceError;
+            }
+            unknown = this.options.store.markSummaryUnknownOutcome(task.id, leaseToken, {
+              nativeSessionId: error.nativeSessionId,
               runtimeEvidence: error.evidence,
             });
+          }
+        } else {
+          unknown = this.options.store.markSummaryUnknownOutcome(task.id, leaseToken, {
+            runtimeEvidence: error.evidence,
+          });
+        }
         this.publish(task, "failed", unknown.error ?? error.message);
         return true;
       } else if (error instanceof ClaudeCodeConversationError && error.unknownOutcome) {

@@ -20,6 +20,7 @@ import {
   ConversationOnlyCliRuntimeClient,
   type CliCommandRunner,
 } from "../../src/conversationOnlyCliClient.js";
+import type { NativeAgentAuthorizationTarget } from "../../src/nativeAgentAuthorization.js";
 
 const roots: string[] = [];
 
@@ -29,6 +30,7 @@ function setup(
   options: {
     seedDirectCredentialSource?: "oauth" | "api-key" | false;
     conversationOnlyClient?: ConversationOnlyRuntimeClient;
+    nativeAuthorization?: (input: NativeAgentAuthorizationTarget) => Promise<unknown>;
   } = {},
 ) {
   const root = mkdtempSync(join(tmpdir(), "yulu-agent-connections-"));
@@ -57,6 +59,9 @@ function setup(
   const audio = { testXai: vi.fn() };
   const text = { request: vi.fn() };
   const discover = vi.fn(() => discovered);
+  const nativeAuthorization = vi.fn(
+    options.nativeAuthorization ?? (async (_input: NativeAgentAuthorizationTarget) => ({ launched: true as const })),
+  );
   const codex = {
     status: vi.fn(async () => ({
       adapter: "codex" as const,
@@ -172,6 +177,7 @@ function setup(
         "probe-isolation" as const,
         "fallback-model/opt-in" as const,
         "managed-hooks/none" as const,
+        "provider-identity" as const,
       ],
       login: { command: "/fake/bin/claude auth login", statusCommand: "/fake/bin/claude auth status" },
       remediation: null,
@@ -206,9 +212,9 @@ function setup(
         transport: "claude-code-print-stream-json" as const,
         runtimeVersion: "2.1.169",
         authorizationClass: "claude-subscription" as const,
-        requestedProvider: null,
+        requestedProvider: "firstParty",
         requestedModel: model,
-        actualProvider: null,
+        actualProvider: "firstParty",
         actualModel: model,
         requestId: "request-probe-140",
         sessionId: "019f0000-0000-7000-8000-000000000140",
@@ -226,9 +232,9 @@ function setup(
         transport: "claude-code-print-stream-json" as const,
         runtimeVersion: "2.1.169",
         authorizationClass: "claude-subscription" as const,
-        requestedProvider: null,
+        requestedProvider: "firstParty",
         requestedModel: model,
-        actualProvider: null,
+        actualProvider: "firstParty",
         actualModel: model,
         requestId: "request-summary-140",
         sessionId: "019f0000-0000-7000-8000-000000000141",
@@ -304,6 +310,7 @@ function setup(
     codexAdapter,
     claudeAdapter,
     conversationOnlyAdapter,
+    nativeAuthorization,
   });
   if (options.seedDirectCredentialSource !== false) {
     host.upsertAgentConnectionRecord({
@@ -341,8 +348,10 @@ function setup(
       codexAdapter,
       claudeAdapter,
       conversationOnlyAdapter,
+      nativeAuthorization,
     }),
     discover,
+    nativeAuthorization,
   };
 }
 
@@ -1616,7 +1625,7 @@ describe("public Agent Connection Host contract", () => {
     const candidateView = await caller.view();
     expect(candidateView.candidates).toContainEqual(expect.objectContaining({
       adapter: "claude-code",
-      capabilities: ["conversation"],
+      capabilities: ["summary", "conversation"],
       lifecycle: "candidate",
       selected: false,
     }));
@@ -1966,8 +1975,8 @@ describe("public Agent Connection Host contract", () => {
         status: "ready",
         runtimeEvidence: expect.objectContaining({
           adapter: "claude-code",
-          requestedProvider: null,
-          actualProvider: null,
+          requestedProvider: "firstParty",
+          actualProvider: "firstParty",
           requestedModel: "claude-sonnet-5",
           actualModel: "claude-sonnet-5",
           fallbackOccurred: false,
@@ -2106,7 +2115,7 @@ describe("public Agent Connection Host contract", () => {
     await caller.refreshCandidates();
     expect((await caller.view()).candidates.find((candidate: { adapter: string }) =>
       candidate.adapter === "codex")?.capabilities)
-      .toEqual(["conversation"]);
+      .toEqual(["summary", "conversation"]);
     await caller.confirmCandidate({ candidateId: "candidate:codex", model: "gpt-5.6-sol" });
     const before = await caller.view();
     const codex = before.connections.find((connection: { id: string }) => connection.id === "codex");
@@ -2357,7 +2366,7 @@ describe("public Agent Connection Host contract", () => {
     await expect(migratedClaude.center.view()).resolves.toMatchObject({
       candidates: [expect.objectContaining({
         adapter: "claude-code",
-        capabilities: ["conversation"],
+        capabilities: ["summary", "conversation"],
         lifecycle: "candidate",
         selected: false,
       })],
@@ -2523,6 +2532,12 @@ describe("public Agent Connection Host contract", () => {
       connectionId: "direct-xai",
       credentialSource: "api-key",
     })).rejects.toThrow("UI mutation bearer required");
+    await expect(unauthorized.startNativeAuthorization({
+      connectionId: "candidate:claude-code",
+    })).rejects.toThrow("UI mutation bearer required");
+    await expect(unauthorized.refreshNativeAuthorizationStatus({
+      connectionId: "candidate:claude-code",
+    })).rejects.toThrow("UI mutation bearer required");
     expect(setupResult.discover).not.toHaveBeenCalled();
 
     await expect(authorized.refreshCandidates()).resolves.toMatchObject({
@@ -2644,6 +2659,138 @@ describe("public Agent Connection Host contract", () => {
       connections: [expect.objectContaining({ id: "direct-xai" })],
     });
     expect(setupResult.credentials.authorize).not.toHaveBeenCalled();
+    setupResult.host.close();
+  });
+
+  it.each([
+    ["codex", "Codex", "/fake/bin/codex"],
+    ["claude-code", "Claude Code", "/fake/bin/claude"],
+    ["hermes", "Hermes", "/fake/bin/hermes"],
+    ["openclaw", "OpenClaw", "/fake/bin/openclaw"],
+  ] as const)("launches %s native authorization from a candidate without selecting or probing", async (
+    adapter,
+    label,
+    path,
+  ) => {
+    const setupResult = setup({
+      audio: {},
+      transcription: { engine: "local", language: "zh" },
+      intelligence: {
+        summary: { provider: "xai", model: "grok-summary-exact" },
+        conversation: { provider: "xai", model: "grok-conversation-exact" },
+      },
+      llm: { agent: { provider: "auto" } },
+    }, [{ adapter, label, path }]);
+    const caller = createCaller(agentConnectionsRouter, {
+      agentConnections: setupResult.center,
+      uiMutationAuthorized: true,
+    } as never);
+
+    await caller.refreshCandidates();
+    const configBefore = readFileSync(setupResult.configPath, "utf8");
+    await expect(caller.startNativeAuthorization({ connectionId: `candidate:${adapter}` }))
+      .resolves.toEqual({
+        connectionId: `candidate:${adapter}`,
+        adapter,
+        launched: true,
+        resume: "refresh-status",
+      });
+
+    expect(setupResult.nativeAuthorization).toHaveBeenCalledWith({ adapter, executable: path });
+    expect(readFileSync(setupResult.configPath, "utf8")).toBe(configBefore);
+    expect(setupResult.host.listAgentConnectionRecords()
+      .some((record) => record.kind === "supported-agent")).toBe(false);
+    expect(setupResult.codex.probe).not.toHaveBeenCalled();
+    expect(setupResult.codex.probeSummary).not.toHaveBeenCalled();
+    expect(setupResult.claude.probe).not.toHaveBeenCalled();
+    expect(setupResult.claude.probeSummary).not.toHaveBeenCalled();
+    expect(setupResult.conversationOnly.probe).not.toHaveBeenCalled();
+    setupResult.host.close();
+  });
+
+  it.each([
+    ["codex", "Codex", "/fake/bin/codex", "0.144.4"],
+    ["claude-code", "Claude Code", "/fake/bin/claude", "2.1.169"],
+    ["hermes", "Hermes", "/fake/bin/hermes", "0.20.0"],
+    ["openclaw", "OpenClaw", "/fake/bin/openclaw", "2026.5.12"],
+  ] as const)("refreshes %s candidate authorization status without connecting, selecting, or probing", async (
+    adapter,
+    label,
+    path,
+    runtimeVersion,
+  ) => {
+    const setupResult = setup({
+      audio: {},
+      transcription: { engine: "local", language: "zh" },
+      intelligence: {
+        summary: { provider: "xai", model: "grok-summary-exact" },
+        conversation: { provider: "xai", model: "grok-conversation-exact" },
+      },
+      llm: { agent: { provider: "auto" } },
+    }, [{ adapter, label, path }]);
+    const caller = createCaller(agentConnectionsRouter, {
+      agentConnections: setupResult.center,
+      uiMutationAuthorized: true,
+    } as never);
+
+    await caller.refreshCandidates();
+    const configBefore = readFileSync(setupResult.configPath, "utf8");
+    await expect(caller.refreshNativeAuthorizationStatus({ connectionId: `candidate:${adapter}` }))
+      .resolves.toMatchObject({
+        connectionId: `candidate:${adapter}`,
+        adapter,
+        supported: true,
+        authorized: true,
+        runtimeVersion,
+      });
+
+    expect(readFileSync(setupResult.configPath, "utf8")).toBe(configBefore);
+    expect(setupResult.host.listAgentConnectionRecords()
+      .some((record) => record.kind === "supported-agent")).toBe(false);
+    expect(setupResult.codex.probe).not.toHaveBeenCalled();
+    expect(setupResult.codex.probeSummary).not.toHaveBeenCalled();
+    expect(setupResult.claude.probe).not.toHaveBeenCalled();
+    expect(setupResult.claude.probeSummary).not.toHaveBeenCalled();
+    expect(setupResult.conversationOnly.probe).not.toHaveBeenCalled();
+    setupResult.host.close();
+  });
+
+  it("invalidates current readiness when native reauthorization can change runtime identity", async () => {
+    const setupResult = setup({
+      audio: {},
+      transcription: { engine: "local", language: "zh" },
+      intelligence: {
+        summary: { provider: "xai", model: "grok-summary-exact" },
+        conversation: { provider: "xai", model: "grok-conversation-exact" },
+      },
+      llm: { agent: { provider: "auto" } },
+    }, [{ adapter: "codex", label: "Codex", path: "/fake/bin/codex" }]);
+    const caller = createCaller(agentConnectionsRouter, {
+      agentConnections: setupResult.center,
+      uiMutationAuthorized: true,
+    } as never);
+
+    await caller.refreshCandidates();
+    await caller.confirmCandidate({ candidateId: "candidate:codex", model: "gpt-5.6-sol" });
+    await caller.acceptDisclosure({ connectionId: "codex", capability: "summary" });
+    await caller.probe({ connectionId: "codex", capability: "summary", model: "gpt-5.6-sol" });
+    const before = await caller.view();
+    expect(before.connections.find((connection: { id: string }) => connection.id === "codex")
+      ?.capabilities.find(({ capability }: { capability: string }) => capability === "summary"))
+      .toMatchObject({
+        currentReadiness: { status: "ready" },
+        readinessHistory: [expect.objectContaining({ status: "ready" })],
+      });
+
+    await caller.startNativeAuthorization({ connectionId: "codex" });
+
+    const after = await caller.view();
+    expect(after.connections.find((connection: { id: string }) => connection.id === "codex")
+      ?.capabilities.find(({ capability }: { capability: string }) => capability === "summary"))
+      .toMatchObject({
+        currentReadiness: { status: "untested", testedAt: null },
+        readinessHistory: [expect.objectContaining({ status: "ready" })],
+      });
     setupResult.host.close();
   });
 });

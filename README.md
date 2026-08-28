@@ -81,6 +81,10 @@ history until one explicit same-snapshot retry or a new conversation.
 Open **Settings → Intelligent Services** for the authoritative Agent Connection
 Center. It connects, discloses, tests, selects, repairs, and deletes each
 capability without sending a model request merely because the page opened.
+Discovery only lists candidates. Install or place the runtime on the Yulu Host
+PATH, open its native login in Terminal, then return and refresh before making
+an explicit connection and capability selection. Yulu never reads or copies a
+runtime's OAuth tokens.
 Activation and Agent Console deep-link to that exact connection and capability.
 New conversations require an explicit ready selection; existing pinned sessions
 keep their creation-time provider, model, connection, and native session.

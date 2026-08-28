@@ -588,9 +588,9 @@ describe("HostStore", () => {
         adapter: "claude-code",
         transport: "claude-code-print-stream-json",
         runtimeVersion: "2.1.169",
-        requestedProvider: null,
+        requestedProvider: "firstParty",
         requestedModel: "claude-sonnet-5",
-        actualProvider: null,
+        actualProvider: "firstParty",
         actualModel: "claude-sonnet-5",
         requestId: null,
         sessionId: "unknown-session-140",
@@ -801,6 +801,7 @@ describe("HostStore", () => {
     ["wrong terminal", { terminalStatus: "ready" as const }],
     ["wrong model", { actualModel: "claude-fallback" }],
     ["wrong provider", { actualProvider: "anthropic" }],
+    ["missing provider", { requestedProvider: null, actualProvider: null }],
   ])("rejects Unknown Outcome persistence with %s evidence", (_label, evidenceOverride) => {
     createStore();
     const task = store!.enqueueRecording({
@@ -826,9 +827,9 @@ describe("HostStore", () => {
       adapter: "claude-code",
       transport: "claude-code-print-stream-json",
       runtimeVersion: "2.1.169",
-      requestedProvider: null,
+      requestedProvider: "firstParty",
       requestedModel: "claude-sonnet-5",
-      actualProvider: null,
+      actualProvider: "firstParty",
       actualModel: "claude-sonnet-5",
       requestId: "unknown-result-140",
       sessionId: "unknown-session-140",
@@ -927,7 +928,7 @@ describe("HostStore", () => {
     })).toThrow(/input artifact identity changed/i);
   });
 
-  it("authorizes a Claude Code Summary commit only from exact observable null-provider Runtime Evidence", () => {
+  it("authorizes a Claude Code Summary commit only from exact non-empty provider Runtime Evidence", () => {
     createStore();
     const task = store!.enqueueRecording({
       idempotencyKey: "recording:claude-summary-commit-fence",
@@ -951,9 +952,9 @@ describe("HostStore", () => {
       adapter: "claude-code",
       transport: "claude-code-print-stream-json",
       runtimeVersion: "2.1.169",
-      requestedProvider: null,
+      requestedProvider: "firstParty",
       requestedModel: "claude-sonnet-5",
-      actualProvider: null,
+      actualProvider: "firstParty",
       actualModel: "claude-sonnet-5",
       requestId: "request-summary-140",
       sessionId: "019f0000-0000-7000-8000-000000000140",
@@ -983,7 +984,15 @@ describe("HostStore", () => {
       credentialClass: "runtime-oauth",
       disclosureVersion: "claude-code-summary-v1",
       inputArtifact: transcript,
-      runtimeEvidence: { ...runtimeEvidence, actualProvider: "anthropic" },
+      runtimeEvidence: { ...runtimeEvidence, actualProvider: "thirdParty" },
+      toolCalls: [],
+    })).toThrow(/Runtime Evidence/i);
+    expect(() => store!.validateSummaryCommit(task.id, claimed.leaseToken!, {
+      connectionId: "claude-code",
+      credentialClass: "runtime-oauth",
+      disclosureVersion: "claude-code-summary-v1",
+      inputArtifact: transcript,
+      runtimeEvidence: { ...runtimeEvidence, requestedProvider: null, actualProvider: null },
       toolCalls: [],
     })).toThrow(/Runtime Evidence/i);
     expect(() => store!.validateSummaryCommit(task.id, claimed.leaseToken!, {

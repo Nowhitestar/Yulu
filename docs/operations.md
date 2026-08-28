@@ -468,13 +468,22 @@ ready result. The earlier result remains visible as history; current readiness
 returns to untested until the required native OAuth login is restored and the
 capability is tested explicitly. Use the exact native login remediation shown
 by Agent Connection Center; Yulu never changes or copies runtime credentials.
+The center launches only the detected runtime's fixed command: `codex login`,
+`claude auth login`, `hermes model`, or `openclaw configure`. It does not accept
+arbitrary arguments or inspect the interactive login output. Complete login in
+the runtime-owned Terminal session, return to Yulu, refresh status, and then run
+the desired capability test explicitly. Launching reauthorization clears only
+current in-process readiness because the runtime account may change; non-secret
+readiness history remains available for diagnosis. Candidate refresh performs a
+read-only native status check and never creates a connection or selection.
 
 On the 2026-08-28 Phase 12 acceptance machine, Claude Code is externally
 blocked: its runtime reports API-key authorization rather than a Claude
 subscription login, and the current CLI contract cannot prove that managed
-hooks are empty for a Summary invocation. Keep Claude fail-closed and marked as
-an external acceptance blocker; this does not block direct xAI or Codex
-acceptance.
+hooks are empty or expose exact invocation-provider identity for a Summary
+request. Keep Claude Summary fail-closed and marked as an external acceptance
+blocker; this does not block Claude Conversation, direct xAI, Codex, Hermes, or
+OpenClaw selection within each Agent's declared capabilities.
 
 Hermes compatibility is feature-gated rather than inferred from a version
 string. `yulu doctor --json` probes the required `serve`, `sessions export`,

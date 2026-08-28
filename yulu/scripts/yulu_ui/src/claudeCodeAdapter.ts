@@ -18,6 +18,7 @@ export interface ClaudeCodeRuntimeConversationResult {
   answer: string;
   nativeSessionId: string;
   actualModel: string;
+  actualProvider?: string | null;
   requestId: string | null;
   fallbackOccurred: boolean;
   toolCalls: string[];
@@ -44,7 +45,7 @@ export interface ClaudeCodeRuntimeEvidence {
   transport: typeof CLAUDE_CODE_TRANSPORT;
   runtimeVersion: string;
   authorizationClass: ClaudeCodeAuthorizationClass;
-  requestedProvider: null;
+  requestedProvider: string | null;
   requestedModel: string;
   actualProvider: string | null;
   actualModel: string | null;
@@ -108,6 +109,7 @@ const REQUIRED_FEATURES = [
 const REQUIRED_SUMMARY_FEATURES = [
   ...REQUIRED_FEATURES,
   "managed-hooks/none",
+  "provider-identity",
 ] as const;
 
 function versionParts(value: string): number[] | null {
@@ -128,6 +130,7 @@ function versionAtLeast(actual: string, minimum: string): boolean {
 
 function runtimeEvidence(
   authorizationClass: ClaudeCodeAuthorizationClass,
+  requestedProvider: string | null,
   requestedModel: string,
   result: ClaudeCodeRuntimeConversationResult,
   terminalStatus: ClaudeCodeRuntimeEvidence["terminalStatus"],
@@ -137,9 +140,9 @@ function runtimeEvidence(
     transport: CLAUDE_CODE_TRANSPORT,
     runtimeVersion: result.runtimeVersion,
     authorizationClass,
-    requestedProvider: null,
+    requestedProvider,
     requestedModel,
-    actualProvider: null,
+    actualProvider: result.actualProvider ?? null,
     actualModel: result.actualModel || null,
     requestId: result.requestId,
     sessionId: result.nativeSessionId || null,
@@ -214,6 +217,8 @@ export class ClaudeCodeAdapter {
         ? `Upgrade Claude Code to ${CLAUDE_CODE_MINIMUM_VERSION} or newer, then refresh this connection`
         : input.toolFree && missingFeatures.includes("managed-hooks/none")
           ? "Claude Code cannot currently prove policy-managed hooks are disabled; Summary remains unavailable"
+          : input.toolFree && missingFeatures.includes("provider-identity")
+            ? "Claude Code cannot currently prove the exact provider identity for a Summary invocation; Summary remains unavailable"
           : missingFeatures.length > 0
             ? `Claude Code ${inspected.runtimeVersion} is missing required Yulu features: ${missingFeatures.join(", ")}`
             : authorized ? null : authorizationRemediation(
@@ -275,6 +280,7 @@ export class ClaudeCodeAdapter {
     }
     const evidence = runtimeEvidence(
       status.authorizationClass,
+      toolFree ? status.apiProvider : null,
       input.model,
       result,
       result.terminalStatus === "unknown" ? "unknown" : "failed",
@@ -284,6 +290,7 @@ export class ClaudeCodeAdapter {
       result.answer.trim() !== "YULU_CLAUDE_PROBE_OK" ||
       result.toolCalls.length > 0 ||
       (toolFree && (result.isolationProven !== true || !result.requestId)) ||
+      (toolFree && (!status.apiProvider || result.actualProvider !== status.apiProvider)) ||
       !identityMatches(result, input.model, status.runtimeVersion)
     ) {
       return {
@@ -335,6 +342,7 @@ export class ClaudeCodeAdapter {
     });
     const evidence = runtimeEvidence(
       status.authorizationClass,
+      status.apiProvider,
       input.model,
       result,
       result.terminalStatus === "unknown" ? "unknown" : result.terminalStatus === "failed" ? "failed" : "ready",
@@ -356,6 +364,9 @@ export class ClaudeCodeAdapter {
     }
     if (!result.requestId) {
       throw new Error("Claude Code Summary did not return terminal result identity");
+    }
+    if (!status.apiProvider || result.actualProvider !== status.apiProvider) {
+      throw new Error("Claude Code Summary did not prove the exact provider identity");
     }
     if (!identityMatches(result, input.model, status.runtimeVersion)) {
       throw new Error("Claude Code Summary returned a different model, session, or fallback identity");
@@ -397,6 +408,7 @@ export class ClaudeCodeAdapter {
     });
     const evidence = runtimeEvidence(
       status.authorizationClass,
+      null,
       input.model,
       result,
       result.terminalStatus === "unknown" ? "unknown" : result.terminalStatus === "failed" ? "failed" : "ready",

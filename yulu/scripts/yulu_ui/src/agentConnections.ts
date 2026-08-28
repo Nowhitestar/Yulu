@@ -52,6 +52,7 @@ import type {
   ConversationOnlyAgentAdapter,
   ConversationOnlyAgentKind,
 } from "./conversationOnlyAgentAdapter.js";
+import type { NativeAgentAdapter, NativeAgentAuthorizationTarget } from "./nativeAgentAuthorization.js";
 
 export type AgentConnectionCapability = "transcription" | "summary" | "conversation";
 
@@ -106,6 +107,7 @@ export interface AgentConnectionCenterOptions {
     adapter: ConversationOnlyAgentKind,
     executable: string,
   ) => Pick<ConversationOnlyAgentAdapter, "status" | "probe" | "converse">;
+  nativeAuthorization?: (input: NativeAgentAuthorizationTarget) => Promise<unknown>;
 }
 
 const DIRECT_XAI_ID = "direct-xai";
@@ -136,6 +138,7 @@ const CLAUDE_CODE_SUMMARY_ISOLATION_FEATURES = [
   "probe-isolation",
   "fallback-model/opt-in",
   "managed-hooks/none",
+  "provider-identity",
 ] as const;
 
 const LABELS: Record<string, string> = {
@@ -169,8 +172,7 @@ function adapterFromCommand(command: string[]): string | null {
 
 function capabilitiesForAdapter(adapter: string): AgentConnectionCapability[] {
   if (adapter === "hermes" || adapter === "openclaw") return ["conversation"];
-  if (adapter === "codex") return ["conversation"];
-  if (adapter === "claude-code") return ["conversation"];
+  if (adapter === "codex" || adapter === "claude-code") return ["summary", "conversation"];
   return [];
 }
 
@@ -1030,9 +1032,10 @@ export class AgentConnectionCenter {
         (input.capability !== "summary" || claudeSummaryIsolationDeclared(status)) &&
         status.authorized &&
         result.evidence?.runtimeVersion === status.runtimeVersion &&
-        result.evidence.requestedProvider === null &&
+        result.evidence.requestedProvider === (input.capability === "summary" ? status.apiProvider : null) &&
         result.evidence.requestedModel === model &&
-        result.evidence.actualProvider === null &&
+        (input.capability !== "summary" || Boolean(status.apiProvider)) &&
+        result.evidence.actualProvider === (input.capability === "summary" ? status.apiProvider : null) &&
         result.evidence.actualModel === model &&
         result.evidence.sessionId &&
         result.evidence.fallbackOccurred === false,
@@ -1242,6 +1245,65 @@ export class AgentConnectionCenter {
       });
     }
     return await this.view();
+  }
+
+  private nativeAuthorizationTarget(connectionId: string) {
+    const record = this.host.listAgentConnectionRecords().find((candidate) =>
+      candidate.id === connectionId && candidate.kind === "supported-agent"
+    );
+    const candidate = this.host.listAgentConnectionCandidates().find((item) => item.id === connectionId);
+    const adapter = normalizeAdapter(record?.adapter ?? candidate?.adapter) as NativeAgentAdapter | null;
+    const executable = record
+      ? String(record.settings.executablePath ?? "")
+      : candidate?.detectedPath ?? "";
+    if (!adapter || !executable) {
+      throw new Error("Locate a supported Agent runtime before starting native authorization");
+    }
+    return { record, adapter, executable };
+  }
+
+  async refreshNativeAuthorizationStatus(input: { connectionId: string }) {
+    this.ensureMigrated();
+    const { adapter, executable } = this.nativeAuthorizationTarget(input.connectionId);
+    const status = adapter === "codex"
+      ? await this.requireCodexAdapter(executable).status()
+      : adapter === "claude-code"
+        ? await this.requireClaudeAdapter(executable).status()
+        : await this.requireConversationOnlyAdapter(adapter, executable).status();
+    return {
+      connectionId: input.connectionId,
+      adapter,
+      supported: status.supported,
+      authorized: status.authorized,
+      runtimeVersion: status.runtimeVersion,
+      detail: status.authorized && status.supported
+        ? `${LABELS[adapter]} native authorization is available`
+        : status.remediation ?? `${LABELS[adapter]} native authorization is unavailable`,
+    };
+  }
+
+  async startNativeAuthorization(input: { connectionId: string }) {
+    this.ensureMigrated();
+    const { record, adapter, executable } = this.nativeAuthorizationTarget(input.connectionId);
+    if (!this.options.nativeAuthorization) {
+      throw new Error("Native Agent authorization is unavailable");
+    }
+    await this.options.nativeAuthorization({ adapter, executable });
+    if (record?.adapter === "codex") {
+      this.codexReadiness.delete(this.codexReadinessKey(record.id, "summary"));
+      this.codexReadiness.delete(this.codexReadinessKey(record.id, "conversation"));
+    } else if (record?.adapter === "claude-code") {
+      this.claudeReadiness.delete(this.claudeReadinessKey(record.id, "summary"));
+      this.claudeReadiness.delete(this.claudeReadinessKey(record.id, "conversation"));
+    } else if (record?.adapter === "hermes" || record?.adapter === "openclaw") {
+      this.conversationOnlyReadiness.delete(this.conversationOnlyReadinessKey(record.id));
+    }
+    return {
+      connectionId: input.connectionId,
+      adapter,
+      launched: true as const,
+      resume: "refresh-status" as const,
+    };
   }
 
   async confirmCandidate(input: { candidateId: string; model: string }) {
