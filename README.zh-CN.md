@@ -24,8 +24,8 @@ Yulu 不需要账号。录音文件和任务状态保存在你的 Mac 上。实�
 
 核心激活会明确显示所选摘要服务与模型。只有当前模型和凭据来源通过真实能力探测，且用户
 接受当前版本的数据路径披露后，xAI 摘要才会就绪；OAuth 或 API Key 的存在不等于同意发送
-转写文本。激活页只列出当前满足共享摘要契约的连接：direct xAI、Codex、Claude Code 或
-CLIProxyAPI。Hermes 与 OpenClaw 仅支持对话，绝不会作为摘要选项出现。
+转写文本。激活页只列出当前满足共享摘要契约的连接：direct xAI、Codex 或 Claude Code。
+Hermes 与 OpenClaw 仅支持对话，绝不会作为摘要选项出现。
 
 当激活准备状态全部就绪时，`/activate` 会启动 Yulu 其他入口共用的生产录音器，并建议自然录制
 10–20 秒。持久化 Host 任务会在离开页面或重启后继续处理。只有音频、转写、当前摘要、完整性与
@@ -87,8 +87,8 @@ Agent Console 是默认工作台。你可以在同一个页面开始或停止录
 - macOS 13 或更高版本。
 - 正式 Release 目前支持 Apple Silicon（arm64）。
 - Python 3.10 或更高版本。
-- 自动生成纪要时，需要先在「设置」中准备好 xAI、Codex、Claude Code 或
-  CLIProxyAPI 纪要连接。只有授权投递连接器时才需要 Hermes；Hermes 与
+- 自动生成纪要时，需要先在「设置」中准备好 xAI、Codex 或 Claude Code
+  纪要连接。只有授权投递连接器时才需要 Hermes；Hermes 与
   OpenClaw 仅支持对话，不能选作纪要提供方。
 - 转写、听写和实时字幕默认使用本地引擎；也可显式选择 xAI，并直接在 Yulu
   设置中完成 OAuth。两种引擎不会自动切换。
@@ -189,7 +189,7 @@ Agent Console -> 用户选择的通用 Agent -> 该 Agent 自己的连接器
 - **Yulu 所选音频引擎** 负责实时字幕、最终转写和听写；默认本地，也可显式选择
   xAI 云端，绝不自动降级或切换。
 - **Yulu** 直接管理 xAI OAuth，并把凭据保存在 macOS 钥匙串；音频协议与执行均由 Yulu 负责。
-- **固定的摘要服务** 通过任务创建时选定的准确 xAI、Codex、Claude Code 或 CLIProxyAPI
+- **固定的摘要服务** 通过任务创建时选定的准确 xAI、Codex 或 Claude Code
   连接生成纪要。Hermes 仍可负责经过明确授权的连接器投递。
 - **用户选择的通用 Agent** 负责 Agent Console 对话和它自己的连接器。
 
@@ -243,7 +243,6 @@ yulu mcp test
 | Codex / Claude Code | 仅在生产适配器证明当前运行时合同时可用 | 只有运行时能证明更严格的无工具摘要合同时才显示 | OAuth 始终由原生运行时保管 |
 | OpenClaw 2026.5.12+ | 接受说明并通过有界、无工具的 `infer model run --gateway` 测试后可用 | 不支持 | 测试与对话必须证明同一 Gateway、Provider 和模型，且没有 fallback |
 | Hermes 0.20.0 | 在 Hermes 提供稳定的无工具能力测试接口前不可用 | 不支持 | PATH、配置和 OAuth 状态都不能单独代表已就绪 |
-| CLIProxyAPI | 显式保存端点、准确模型和由 Yulu 管理的推理密钥后可用 | 通过独立的准确模型就绪证明后可用 | 凭据只写入，不会返回浏览器 |
 
 「设置 → 智能服务」是唯一权威的 Agent 连接中心。打开它只会检查状态，不会探测模型或消耗
 模型额度；能力测试前必须先接受当前数据路径说明。删除运行时自有连接只会移除 Yulu 的

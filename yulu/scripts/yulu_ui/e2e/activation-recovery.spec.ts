@@ -124,7 +124,6 @@ function readySummaryActivation() {
       { connectionId: "direct-xai", provider: "xai", label: "xAI", model: "grok-summary-exact", selected: true },
       { connectionId: "codex", provider: "codex", label: "Codex", model: "gpt-5.6-sol", selected: false },
       { connectionId: "claude-code", provider: "claude-code", label: "Claude Code", model: "claude-sonnet-5", selected: false },
-      { connectionId: "cliproxyapi", provider: "cliproxyapi", label: "CLIProxyAPI", model: "gateway-summary", selected: false },
     ],
   };
 }
@@ -156,7 +155,6 @@ test("unresolved activation defers, re-enters, skips proven steps, and discloses
   await expect(page.getByRole("radio", { name: "xAI" })).toBeVisible();
   await expect(page.getByRole("radio", { name: "Codex" })).toBeVisible();
   await expect(page.getByRole("radio", { name: "Claude Code" })).toBeVisible();
-  await expect(page.getByRole("radio", { name: "CLIProxyAPI" })).toBeVisible();
   await expect(page.getByRole("radio", { name: /Hermes|OpenClaw/ })).toHaveCount(0);
   await expect(page.getByRole("radio", { name: "Local transcription" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Start recording" })).toBeVisible();

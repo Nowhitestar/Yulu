@@ -8,9 +8,8 @@ or brokers the OAuth token. A user may instead explicitly select a direct API
 key, which is a separate credential source stored in the system keychain and is
 never used as an automatic fallback.
 
-User-managed Gateways follow the same ownership boundary. Yulu stores only the
-least-privilege client key required for inference and does not request a
-management key, inspect upstream authorization files, or claim which upstream
-account a model uses. This preserves subscription and credential ownership in
-the system that issued it while allowing Yulu to prove each selected capability
-through non-secret runtime evidence.
+External proxy projects may be studied to understand native OAuth protocols,
+but they are neither a Yulu runtime dependency nor an Agent Connection type.
+Yulu invokes only the supported local runtimes above and direct xAI. This keeps
+subscription and credential ownership in the system that issued it while Yulu
+proves each selected capability through non-secret runtime evidence.

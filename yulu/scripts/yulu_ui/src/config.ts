@@ -339,6 +339,35 @@ export function migrateLegacyTranscriptionConfig(path: string): AgentNativeConfi
   return { changed: true, archivePath };
 }
 
+const RETIRED_GATEWAY_CONNECTION_ID = "cliproxyapi";
+
+/** Clear only selections for the removed Yulu-owned Gateway connection. */
+export function migrateRetiredGatewaySelections(path: string): boolean {
+  if (!existsSync(path)) return false;
+  const raw = JSON.parse(readFileSync(path, "utf8")) as unknown;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new Error("Yulu config must contain a JSON object");
+  }
+  const root = raw as JsonRecord;
+  const intelligence = record(root.intelligence);
+  let changed = false;
+  for (const capability of ["summary", "conversation"] as const) {
+    const selection = record(intelligence[capability]);
+    if (selection.provider !== "agent" || selection.connectionId !== RETIRED_GATEWAY_CONNECTION_ID) continue;
+    intelligence[capability] = { provider: "agent", model: "runtime-managed", disabled: true };
+    changed = true;
+  }
+  if (!changed) return false;
+  root.intelligence = intelligence;
+  const tmp = `${path}.${process.pid}.retired-gateway.tmp`;
+  writeFileSync(tmp, `${JSON.stringify(root, null, 2)}\n`, {
+    encoding: "utf8",
+    mode: statSync(path).mode,
+  });
+  renameSync(tmp, path);
+  return true;
+}
+
 export class ConfigManager {
   private cached: YuluConfig | null = null;
   private cachedMtime = 0;
@@ -346,6 +375,7 @@ export class ConfigManager {
   constructor(private readonly path: string) {
     migrateAgentNativeConfig(path);
     migrateLegacyTranscriptionConfig(path);
+    migrateRetiredGatewaySelections(path);
   }
 
   read(): YuluConfig {

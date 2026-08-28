@@ -67,9 +67,7 @@ const agentSessionInvocationSchema = z.object({
   connectionId: z.string().trim().min(1).max(200).optional(),
   model: z.string().trim().min(1).max(128),
   runtimeProvider: z.string().trim().min(1).max(128).optional(),
-  endpointIdentity: z.string().trim().min(1).max(2_048).optional(),
   disclosureVersion: z.string().trim().min(1).max(200).optional(),
-  credentialIdentity: z.string().trim().min(1).max(200).optional(),
   credentialSource: z.enum(["oauth", "api-key", "runtime-oauth"]).optional(),
   nativeSessionId: z.string().trim().min(1).max(200).optional(),
   inputSha256: z.string().regex(/^[a-f0-9]{64}$/),
@@ -99,9 +97,7 @@ const persistedSessionSchema = z.object({
   model: z.string().trim().min(1).max(128).optional(),
   runtimeProvider: z.string().trim().min(1).max(128).optional(),
   connectionId: z.string().trim().min(1).max(200).optional(),
-  endpointIdentity: z.string().trim().min(1).max(2_048).optional(),
   disclosureVersion: z.string().trim().min(1).max(200).optional(),
-  credentialIdentity: z.string().trim().min(1).max(200).optional(),
   credentialSource: z.enum(["oauth", "api-key", "runtime-oauth"]).optional(),
   status: z.enum(["active", "paused"]).optional(),
   pausedReason: z.string().max(1000).optional(),
@@ -197,7 +193,6 @@ export function summarizeAgentSession(session: AgentSession) {
     agent: session.agent,
     provider: session.provider,
     connectionId: session.connectionId,
-    endpointIdentity: session.endpointIdentity,
     disclosureVersion: session.disclosureVersion,
     model: session.model,
     runtimeProvider: session.runtimeProvider,
@@ -242,9 +237,7 @@ export function createAgentSession(
       model: string;
       runtimeProvider?: string;
       connectionId?: string;
-      endpointIdentity?: string;
       disclosureVersion?: string;
-      credentialIdentity?: string;
       credentialSource?: "oauth" | "api-key" | "runtime-oauth";
     }
     | { purpose: "background"; agent: string }
@@ -270,14 +263,8 @@ export function createAgentSession(
     ...(input.purpose !== "background" && input.connectionId
       ? { connectionId: input.connectionId }
       : {}),
-    ...(input.purpose !== "background" && input.endpointIdentity
-      ? { endpointIdentity: input.endpointIdentity }
-      : {}),
     ...(input.purpose !== "background" && input.disclosureVersion
       ? { disclosureVersion: input.disclosureVersion }
-      : {}),
-    ...(input.purpose !== "background" && input.credentialIdentity
-      ? { credentialIdentity: input.credentialIdentity }
       : {}),
     ...(input.purpose !== "background" && input.credentialSource
       ? { credentialSource: input.credentialSource }
@@ -475,9 +462,7 @@ export function beginAgentSessionInvocation(
     connectionId: session.connectionId,
     model: session.model,
     runtimeProvider: session.runtimeProvider,
-    endpointIdentity: session.endpointIdentity,
     disclosureVersion: session.disclosureVersion,
-    credentialIdentity: session.credentialIdentity,
     credentialSource: session.credentialSource,
     nativeSessionId: session.nativeSessionId,
     inputSha256: invocationInputSha256(snapshot, providerInput),
@@ -548,6 +533,34 @@ export function recoverInterruptedAgentSessionInvocations(configDir: string): st
   return recovered;
 }
 
+/** Pause local history pinned to a removed connection without creating a replacement attempt. */
+export function retireAgentSessionsForConnection(configDir: string, connectionId: string): string[] {
+  const normalized = connectionId.trim();
+  if (!normalized) throw new Error("retired Agent connection ID is required");
+  const store = readAgentSessionStore(configDir);
+  const retired: string[] = [];
+  const reason = "Pinned Conversation connection was retired; select a supported provider to start a new conversation";
+  const retiredAt = nowIso();
+  for (const session of store.sessions) {
+    if (session.connectionId !== normalized || session.unknownOutcome) continue;
+    if (session.pendingInvocation) {
+      session.unknownOutcome = { ...session.pendingInvocation, recoveredAt: retiredAt };
+      delete session.pendingInvocation;
+    }
+    const alreadyRetired = session.status === "paused" && session.pausedReason === reason &&
+      !session.retrySnapshot && !session.retryProviderInput && !session.pendingInvocation;
+    if (alreadyRetired) continue;
+    session.status = "paused";
+    session.pausedReason = reason;
+    delete session.retrySnapshot;
+    delete session.retryProviderInput;
+    session.updatedAt = retiredAt;
+    retired.push(session.id);
+  }
+  if (retired.length > 0) writeAgentSessionStore(configDir, store);
+  return retired;
+}
+
 export function createAgentSessionAttemptFromUnknown(configDir: string, sessionId: string): AgentSession {
   const original = getAgentSession(configDir, sessionId);
   if (!original?.unknownOutcome) {
@@ -562,9 +575,7 @@ export function createAgentSessionAttemptFromUnknown(configDir: string, sessionI
     model: original.model,
     runtimeProvider: original.runtimeProvider,
     connectionId: original.connectionId,
-    endpointIdentity: original.endpointIdentity,
     disclosureVersion: original.disclosureVersion,
-    credentialIdentity: original.credentialIdentity,
     credentialSource: original.credentialSource,
     title: original.title,
     runtimeLabel: original.runtimeLabel,

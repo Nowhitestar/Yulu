@@ -15,21 +15,6 @@ export class ClaudeCodeSummaryUnknownOutcomeError extends Error {
   }
 }
 
-export class GatewaySummaryUnknownOutcomeError extends Error {
-  readonly executionId: string;
-  readonly evidence: SummaryCommitRuntimeEvidence;
-
-  constructor(message: string, options: {
-    executionId: string;
-    evidence: SummaryCommitRuntimeEvidence;
-  }) {
-    super(message);
-    this.name = "GatewaySummaryUnknownOutcomeError";
-    this.executionId = options.executionId;
-    this.evidence = options.evidence;
-  }
-}
-
 import type {
   AgentArtifactWorkflowInput,
   AgentWorkflowResult,
@@ -57,8 +42,6 @@ export interface SupportedAgentSummaryReadiness {
   detail: string;
   credentialSource: string | null;
   connectionId?: string | null;
-  endpointIdentity?: string | null;
-  credentialIdentity?: string | null;
   disclosure: SummaryDisclosureMetadata | null;
   reason?: "missing_credentials" | "invalid_model" | "provider_unavailable" | "readiness_failed" | "readiness_required" | "unknown_outcome";
 }
@@ -67,8 +50,6 @@ export interface SupportedAgentSummarySnapshot {
   connectionId: string | null;
   provider: string;
   model: string;
-  endpointIdentity?: string | null;
-  credentialIdentity?: string | null;
 }
 
 export interface SupportedAgentSummaryAdapter {

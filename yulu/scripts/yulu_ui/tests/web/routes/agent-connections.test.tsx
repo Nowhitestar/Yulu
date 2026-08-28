@@ -6,14 +6,6 @@ import { LanguageProvider } from "../../../web/src/i18n/LanguageProvider.js";
 
 const mocks = vi.hoisted(() => ({
   probe: vi.fn(async () => ({ status: "ready" })),
-  saveGateway: vi.fn(async (_input: {
-    endpoint: string;
-    summaryModel: string;
-    conversationModel: string;
-    inferenceKey: string;
-    httpsApproved: boolean;
-    confirmed: true;
-  }) => ({})),
   refresh: vi.fn(async () => ({})),
   confirmCandidate: vi.fn(async () => ({})),
   select: vi.fn(async () => ({})),
@@ -31,7 +23,7 @@ const mocks = vi.hoisted(() => ({
     pinnedTasks: [{ id: "task-1", recordingStem: "Planning_20260827_120000", title: "Planning", state: "queued", model: "grok-summary" }],
     pinnedConversations: [{ id: "session-1", title: "Launch plan", status: "active", model: "grok-conversation" }],
     removesRuntimeAuthorization: false,
-    removesYuluManagedCredentials: connectionId === "direct-xai" || connectionId === "cliproxyapi",
+    removesYuluManagedCredentials: connectionId === "direct-xai",
   })),
   remove: vi.fn(async () => ({})),
   view: {
@@ -269,53 +261,6 @@ const mocks = vi.hoisted(() => ({
         remediation: null,
       }],
       summaryUnsupported: "OpenClaw is Conversation-only because its stable interface cannot prove a tool-free background Summary invocation",
-    }, {
-      id: "cliproxyapi",
-      kind: "gateway",
-      adapter: "cliproxyapi",
-      label: "CLIProxyAPI",
-      lifecycle: "connected",
-      authorization: {
-        connected: true,
-        credentialSource: "api-key",
-        keyConfigured: true,
-        compatibilityTarget: "v0.23.0-rc.1",
-      },
-      settings: {
-        endpoint: "http://127.0.0.1:8317/v1",
-        transport: "loopback-http",
-        summaryModel: "gateway-summary-exact",
-        conversationModel: "gateway-conversation-exact",
-        credentialClass: "api-key",
-        httpsApproved: false,
-      },
-      capabilities: [{
-        capability: "summary",
-        declared: true,
-        selected: false,
-        currentReadiness: { status: "ready", model: "gateway-summary-exact", testedAt: "2026-08-27T12:00:00.000Z" },
-        readinessHistory: [],
-        disclosure: {
-          required: true,
-          disclosureVersion: "cliproxyapi-summary-v1",
-          data: "transcript_text",
-          destination: "http://127.0.0.1:8317/v1",
-        },
-        remediation: null,
-      }, {
-        capability: "conversation",
-        declared: true,
-        selected: false,
-        currentReadiness: { status: "untested", model: "gateway-conversation-exact", testedAt: null },
-        readinessHistory: [],
-        disclosure: {
-          required: true,
-          disclosureVersion: "cliproxyapi-conversation-v2",
-          data: "conversation_text",
-          destination: "http://127.0.0.1:8317/v1",
-        },
-        remediation: null,
-      }],
     }],
     candidates: [{
       id: "candidate:codex",
@@ -398,7 +343,6 @@ vi.mock("../../../web/src/trpc.js", () => {
     trpc: {
       agentConnections: {
         view: { useQuery: () => ({ data: mocks.view, isPending: false, isError: false, refetch: vi.fn() }) },
-        saveGateway: { useMutation: () => mutation(mocks.saveGateway) },
         probe: { useMutation: () => mutation(mocks.probe) },
         refreshCandidates: { useMutation: () => mutation(mocks.refresh) },
         confirmCandidate: { useMutation: () => mutation(mocks.confirmCandidate) },
@@ -705,89 +649,6 @@ describe("shared Agent Connection Center", () => {
       .toBeInTheDocument();
     await user.click(within(dialog).getByRole("button", { name: "Confirm deletion" }));
     expect(mocks.remove).toHaveBeenCalledWith({ connectionId: "codex", confirmed: true });
-  });
-
-  it("creates CLIProxyAPI only from explicit endpoint, exact models, write-only key, and confirmation", async () => {
-    const saved = mocks.view.connections;
-    mocks.view.connections = saved.filter((connection) => connection.id !== "cliproxyapi");
-    mount("en");
-    const user = userEvent.setup();
-    const form = screen.getByTestId("cliproxyapi-create");
-
-    await user.type(within(form).getByRole("textbox", { name: "CLIProxyAPI endpoint" }), "http://127.0.0.1:8317/v1");
-    await user.type(within(form).getByRole("textbox", { name: "Exact Summary model" }), "gateway-summary-exact");
-    await user.type(within(form).getByRole("textbox", { name: "Exact Conversation model" }), "gateway-conversation-exact");
-    await user.type(within(form).getByLabelText("Least-privilege inference key"), "write-only-gateway-key");
-    expect(within(form).getByLabelText("Least-privilege inference key")).toHaveAttribute("type", "password");
-    await user.click(within(form).getByRole("checkbox", { name: /I confirm this endpoint, both exact models, and the least-privilege key/ }));
-    await user.click(within(form).getByRole("button", { name: "Save CLIProxyAPI Gateway" }));
-
-    const savedGateway = mocks.saveGateway.mock.calls[0]?.[0];
-    expect({ ...savedGateway, inferenceKey: undefined }).toEqual({
-      endpoint: "http://127.0.0.1:8317/v1",
-      summaryModel: "gateway-summary-exact",
-      conversationModel: "gateway-conversation-exact",
-      inferenceKey: undefined,
-      httpsApproved: false,
-      confirmed: true,
-    });
-    expect(savedGateway?.inferenceKey === "write-only-gateway-key").toBe(true);
-    mocks.view.connections = saved;
-  });
-
-  it("shows independent CLIProxyAPI capabilities and deletes only the Yulu Gateway record and key", async () => {
-    mount("en");
-    const user = userEvent.setup();
-    const card = screen.getByTestId("agent-connection-cliproxyapi");
-    expect(within(card).getByText("http://127.0.0.1:8317/v1")).toBeInTheDocument();
-    expect(within(card).getByText("Configured in macOS Keychain (write-only)")).toBeInTheDocument();
-    expect(card).not.toHaveTextContent("write-only-gateway-key");
-    const summary = within(card).getByTestId("connection-capability-cliproxyapi-summary");
-    const conversation = within(card).getByTestId("connection-capability-cliproxyapi-conversation");
-    expect(within(conversation).getByText(/bounded local meeting evidence/i)).toBeInTheDocument();
-    await user.click(within(summary).getByRole("button", { name: "Accept CLIProxyAPI Summary Data Path Disclosure" }));
-    await user.click(within(summary).getByRole("button", { name: "Test summary" }));
-    await user.click(within(summary).getByRole("button", { name: "Select CLIProxyAPI for future summaries" }));
-    expect(mocks.acceptDisclosure).toHaveBeenCalledWith({ connectionId: "cliproxyapi", capability: "summary" });
-    expect(mocks.probe).toHaveBeenCalledWith({
-      connectionId: "cliproxyapi",
-      capability: "summary",
-      model: "gateway-summary-exact",
-    });
-    expect(mocks.select).toHaveBeenCalledWith({
-      connectionId: "cliproxyapi",
-      capability: "summary",
-      model: "gateway-summary-exact",
-    });
-    expect(within(conversation).getByRole("button", { name: "Select CLIProxyAPI for future conversations" }))
-      .toBeDisabled();
-
-    mocks.deletionImpact.mockResolvedValueOnce({
-      connectionId: "cliproxyapi",
-      selectedCapabilities: ["summary"],
-      pinnedTasks: [],
-      pinnedConversations: [],
-      removesRuntimeAuthorization: false,
-      removesYuluManagedCredentials: true,
-    });
-    await user.click(within(card).getByRole("button", { name: "Delete connection" }));
-    const dialog = await screen.findByRole("dialog", { name: "Delete CLIProxyAPI connection" });
-    expect(within(dialog).getByText(/never changes Gateway upstream OAuth accounts or configuration/)).toBeInTheDocument();
-    await user.click(within(dialog).getByRole("button", { name: "Confirm deletion" }));
-    expect(mocks.remove).toHaveBeenCalledWith({ connectionId: "cliproxyapi", confirmed: true });
-  });
-
-  it("projects a missing CLIProxyAPI client key instead of claiming it is configured", () => {
-    const gateway = mocks.view.connections.find((connection) => connection.id === "cliproxyapi");
-    expect(gateway).toBeDefined();
-    gateway!.authorization.keyConfigured = false;
-
-    mount("en");
-
-    const card = screen.getByTestId("agent-connection-cliproxyapi");
-    expect(within(card).getByText("Not configured in macOS Keychain")).toBeInTheDocument();
-    expect(within(card).queryByText("Configured in macOS Keychain (write-only)")).not.toBeInTheDocument();
-    gateway!.authorization.keyConfigured = true;
   });
 
   it("migrates a #136 Conversation-only Claude connection without declaring Summary ready", () => {

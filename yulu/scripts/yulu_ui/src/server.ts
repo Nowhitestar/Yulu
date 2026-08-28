@@ -25,6 +25,7 @@ import { runAgentCliCommand } from "./agentCliRunner.js";
 import {
   ensureBackgroundAgentSession,
   recoverInterruptedAgentSessionInvocations,
+  retireAgentSessionsForConnection,
 } from "./agentSessionStore.js";
 import { createCaller } from "./trpc.js";
 import { handleMcpRequest, isAuthorizedToken, isMcpRequest } from "./mcp.js";
@@ -44,9 +45,10 @@ import { RealtimeTranscriptionCoordinator } from "./realtimeTranscription.js";
 import { LocalCaptionManager } from "./localCaptionManager.js";
 import { applyGlossaryContract, loadGlossaryContract } from "./glossaryContract.js";
 import {
-  KeychainProviderSecretStore,
+  KeychainXaiApiKeyStore,
   KeychainXaiTokenStore,
   XaiCredentialManager,
+  purgeRetiredGatewaySecrets,
 } from "./xaiCredentials.js";
 import { XaiAudioClient } from "./xaiAudio.js";
 import { hasCurrentXaiTranscriptionConsent } from "./transcriptionConsent.js";
@@ -59,11 +61,11 @@ import { CodexAgentAdapter } from "./codexAgentAdapter.js";
 import { CodexAppServerRuntimeClient } from "./codexAppServerClient.js";
 import { ClaudeCodeAdapter } from "./claudeCodeAdapter.js";
 import { ClaudeCodeCliRuntimeClient } from "./claudeCodeCliClient.js";
-import { CliProxyApiAdapter, SecureGatewayTransport } from "./cliProxyApiAdapter.js";
 import { ConversationOnlyAgentAdapter } from "./conversationOnlyAgentAdapter.js";
 import { ConversationOnlyCliRuntimeClient } from "./conversationOnlyCliClient.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+const RETIRED_GATEWAY_CONNECTION_ID = "cliproxyapi";
 
 export interface RunningServer {
   http: HttpServer;
@@ -120,6 +122,17 @@ async function startLockedServer(
       `[yulu_ui] fenced ${recoveredConversationIds.length} interrupted Conversation invocation(s) as Unknown Outcome`,
     );
   }
+  const retiredGatewayTaskIds = hostStore.retireTasksForConnection(RETIRED_GATEWAY_CONNECTION_ID);
+  const retiredGatewaySessionIds = retireAgentSessionsForConnection(
+    runtimePaths.configDir,
+    RETIRED_GATEWAY_CONNECTION_ID,
+  );
+  if (retiredGatewayTaskIds.length > 0 || retiredGatewaySessionIds.length > 0) {
+    console.warn(
+      `[yulu_ui] retired obsolete Gateway state without replay: tasks=${retiredGatewayTaskIds.length} ` +
+      `sessions=${retiredGatewaySessionIds.length}`,
+    );
+  }
   const artifactStore = new ArtifactStore(runtimePaths.moviesDir, runtimePaths.agentTasksDir);
   const retiredLegacyTaskIds = hostStore.retireLegacyImportedTasks();
   for (const taskId of retiredLegacyTaskIds) {
@@ -145,13 +158,13 @@ async function startLockedServer(
     selected: () => configManager.read().transcription.engine === "local",
   });
   const xaiKeychainHelper = join(runtimePaths.scriptDir, "Yulu.app", "Contents", "MacOS", "xai_keychain");
+  void purgeRetiredGatewaySecrets(xaiKeychainHelper).catch((error) => {
+    console.warn(`[yulu_ui] retired Gateway Keychain cleanup will retry next start: ${(error as Error).message}`);
+  });
   const xaiCredentials = new XaiCredentialManager({
     store: new KeychainXaiTokenStore(xaiKeychainHelper),
-    apiKeyStore: new KeychainProviderSecretStore(xaiKeychainHelper, "direct.xai"),
+    apiKeyStore: new KeychainXaiApiKeyStore(xaiKeychainHelper, "direct.xai"),
   });
-  const gatewaySecretStore = (credentialIdentity: string) =>
-    new KeychainProviderSecretStore(xaiKeychainHelper, credentialIdentity);
-  const gatewayTransport = new SecureGatewayTransport();
   const xaiAudio = new XaiAudioClient(xaiCredentials);
   const xaiText = new XaiTextClient(xaiCredentials);
   const xaiReadiness = createXaiProviderReadiness();
@@ -192,13 +205,6 @@ async function startLockedServer(
         executable,
         cwd: runtimePaths.moviesDir,
       }),
-    }),
-    gatewaySecretStore,
-    cliProxyAdapter: ({ endpoint, httpsApproved, credentialIdentity }) => new CliProxyApiAdapter({
-      endpoint,
-      httpsApproved,
-      secrets: gatewaySecretStore(credentialIdentity),
-      transport: gatewayTransport,
     }),
   });
   const supportedAgentSummaryAdapter = agentConnections.summaryAdapter();

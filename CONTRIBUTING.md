@@ -7,7 +7,7 @@ Thanks for considering a contribution. Yulu is small enough that the process is 
 - **Privacy boundaries must be explicit.** Native capture and durable task state stay local. Model execution belongs to the explicitly selected capability provider, while connectors belong to the selected local Agent; every Yulu-triggered external delivery must be separately authorized and auditable.
 - **No virtual audio devices.** The whole point of the ScreenCaptureKit path is that users do not need to install BlackHole / Loopback / multi-output devices. PRs that introduce a virtual driver as a hard requirement will not be accepted.
 - **Recording must always ask.** `notify.py` consent prompts are not optional, even for "convenience" auto-record paths.
-- **Keep capability boundaries separate.** The explicitly selected Yulu audio engine owns realtime captions, final transcription, and dictation. The task's pinned Summary Provider—xAI, Codex, Claude Code, or CLIProxyAPI—owns summary generation. Hermes and OpenClaw are Conversation-only; Hermes separately owns authorized connector delivery. Yulu owns native capture, durable tasks, leases, task-scoped artifacts, policy, and audit. No capability may silently fall back to another provider or model.
+- **Keep capability boundaries separate.** The explicitly selected Yulu audio engine owns realtime captions, final transcription, and dictation. The task's pinned Summary Provider—xAI, Codex, or Claude Code—owns summary generation. Hermes and OpenClaw are Conversation-only; Hermes separately owns authorized connector delivery. Yulu owns native capture, durable tasks, leases, task-scoped artifacts, policy, and audit. No capability may silently fall back to another provider or model.
 
 ## Before you open a PR
 

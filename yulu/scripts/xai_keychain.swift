@@ -3,6 +3,7 @@ import Security
 
 private let oauthService = "com.yulu.xai-oauth"
 private let providerSecretService = "com.yulu.provider-secret"
+private let retiredGatewayAccountPrefix = "gateway.cliproxyapi."
 private let notFoundExit: Int32 = 44
 
 private struct Target {
@@ -14,11 +15,7 @@ private func target(for slot: String?) -> Target {
     guard let slot else {
         return Target(service: oauthService, account: "default")
     }
-    let gatewaySlot = slot.range(
-        of: #"^gateway\.cliproxyapi\.[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"#,
-        options: .regularExpression
-    ) != nil
-    guard slot == "direct.xai" || gatewaySlot else {
+    guard slot == "direct.xai" else {
         fail("Invalid provider secret slot")
     }
     return Target(service: providerSecretService, account: slot)
@@ -87,14 +84,42 @@ private func deleteSecret(_ target: Target) {
     }
 }
 
-guard CommandLine.arguments.count == 2 || CommandLine.arguments.count == 3 else {
-    fail("Usage: xai_keychain <read|write|delete> [direct.xai|gateway.cliproxyapi.<revision>]")
+private func deleteRetiredGatewaySecrets() {
+    let query: [CFString: Any] = [
+        kSecClass: kSecClassGenericPassword,
+        kSecAttrService: providerSecretService,
+        kSecReturnAttributes: true,
+        kSecMatchLimit: kSecMatchLimitAll,
+    ]
+    var result: CFTypeRef?
+    let status = SecItemCopyMatching(query as CFDictionary, &result)
+    if status == errSecItemNotFound { return }
+    guard status == errSecSuccess, let items = result as? [[String: Any]] else {
+        fail("Unable to enumerate retired Yulu provider secrets", status: status)
+    }
+    for item in items {
+        guard
+            let account = item[kSecAttrAccount as String] as? String,
+            account.hasPrefix(retiredGatewayAccountPrefix),
+            UUID(uuidString: String(account.dropFirst(retiredGatewayAccountPrefix.count))) != nil
+        else { continue }
+        let deleteStatus = SecItemDelete(baseQuery(Target(service: providerSecretService, account: account)) as CFDictionary)
+        guard deleteStatus == errSecSuccess || deleteStatus == errSecItemNotFound else {
+            fail("Unable to delete retired Yulu provider secret", status: deleteStatus)
+        }
+    }
 }
 
-private let selectedTarget = target(for: CommandLine.arguments.count == 3 ? CommandLine.arguments[2] : nil)
+guard CommandLine.arguments.count == 2 || CommandLine.arguments.count == 3 else {
+    fail("Usage: xai_keychain <read|write|delete> [direct.xai] | delete-retired-gateway-secrets")
+}
+
 switch CommandLine.arguments[1] {
-case "read": readSecret(selectedTarget)
-case "write": writeSecret(selectedTarget)
-case "delete": deleteSecret(selectedTarget)
+case "read": readSecret(target(for: CommandLine.arguments.count == 3 ? CommandLine.arguments[2] : nil))
+case "write": writeSecret(target(for: CommandLine.arguments.count == 3 ? CommandLine.arguments[2] : nil))
+case "delete": deleteSecret(target(for: CommandLine.arguments.count == 3 ? CommandLine.arguments[2] : nil))
+case "delete-retired-gateway-secrets":
+    guard CommandLine.arguments.count == 2 else { fail("Retired provider cleanup does not accept a slot") }
+    deleteRetiredGatewaySecrets()
 default: fail("Unknown command")
 }

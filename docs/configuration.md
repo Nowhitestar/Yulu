@@ -152,7 +152,7 @@ automatic work.
 `summary` and `conversation` are independent provider/model selections. `agent`
 uses an explicit Agent Connection Center selection in the form
 `{ "provider": "agent", "connectionId": "…", "model": "exact-model" }`.
-Codex, Claude Code, and CLIProxyAPI therefore keep both the exact connection ID
+Codex and Claude Code therefore keep both the exact connection ID
 and exact tested model; `runtime-managed` is only a legacy compatibility value,
 not proof that a current connection is ready. `xai` stores the exact configured
 model name and resolves to the direct xAI connection. Summary tasks and

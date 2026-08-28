@@ -240,7 +240,6 @@ const activation = vi.hoisted(() => ({
       { connectionId: "direct-xai", provider: "xai", label: "xAI", model: "grok-summary-exact", selected: true },
       { connectionId: "codex", provider: "codex", label: "Codex", model: "gpt-5.6-sol", selected: false },
       { connectionId: "claude-code", provider: "claude-code", label: "Claude Code", model: "claude-sonnet-5", selected: false },
-      { connectionId: "cliproxyapi", provider: "cliproxyapi", label: "CLIProxyAPI", model: "gateway-summary", selected: false },
     ],
   },
   summaryRefetch: vi.fn(async () => ({})),
@@ -1081,7 +1080,6 @@ describe("/activate", () => {
     expect(screen.getByRole("radio", { name: "xAI" })).toBeInTheDocument();
     expect(screen.getByRole("radio", { name: "Codex" })).toBeInTheDocument();
     expect(screen.getByRole("radio", { name: "Claude Code" })).toBeInTheDocument();
-    expect(screen.getByRole("radio", { name: "CLIProxyAPI" })).toBeInTheDocument();
     expect(screen.queryByRole("radio", { name: "Hermes" })).not.toBeInTheDocument();
     expect(screen.queryByRole("radio", { name: "OpenClaw" })).not.toBeInTheDocument();
     await user.click(screen.getByRole("radio", { name: "Codex" }));
@@ -1102,7 +1100,6 @@ describe("/activate", () => {
     expect(screen.getByRole("radio", { name: "xAI" })).toBeChecked();
     expect(screen.getByRole("radio", { name: "Codex" })).toBeInTheDocument();
     expect(screen.getByRole("radio", { name: "Claude Code" })).toBeInTheDocument();
-    expect(screen.getByRole("radio", { name: "CLIProxyAPI" })).toBeInTheDocument();
   });
 
   it("exits microphone blocking with exact macOS guidance and bounded retry", async () => {

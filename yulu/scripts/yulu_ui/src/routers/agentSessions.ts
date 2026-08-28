@@ -15,7 +15,6 @@ import {
 } from "../agentSessionStore.js";
 import {
   CLAUDE_CODE_CONVERSATION_DISCLOSURE_VERSION,
-  CLIPROXYAPI_CONVERSATION_DISCLOSURE_VERSION,
   CODEX_CONVERSATION_DISCLOSURE_VERSION,
   HERMES_CONVERSATION_DISCLOSURE_VERSION,
   OPENCLAW_CONVERSATION_DISCLOSURE_VERSION,
@@ -94,10 +93,9 @@ export const agentSessionsRouter = router({
       if (selection.provider === "agent" && "connectionId" in selection && selection.connectionId) {
         const connection = ctx.host.listAgentConnectionRecords().find((record) =>
           record.id === selection.connectionId &&
-          ((record.kind === "supported-agent" &&
-            (record.adapter === "codex" || record.adapter === "claude-code" ||
-              record.adapter === "hermes" || record.adapter === "openclaw")) ||
-            (record.kind === "gateway" && record.adapter === "cliproxyapi"))
+          record.kind === "supported-agent" &&
+          (record.adapter === "codex" || record.adapter === "claude-code" ||
+            record.adapter === "hermes" || record.adapter === "openclaw")
         );
         if (!connection) {
           conversationConnectionRequired(
@@ -110,30 +108,19 @@ export const agentSessionsRouter = router({
             ? "Hermes"
             : connection.adapter === "openclaw"
               ? "OpenClaw"
-          : connection.adapter === "cliproxyapi" ? "CLIProxyAPI" : "Codex";
+              : "Codex";
         const disclosureVersion = connection.adapter === "claude-code"
           ? CLAUDE_CODE_CONVERSATION_DISCLOSURE_VERSION
           : connection.adapter === "hermes"
             ? HERMES_CONVERSATION_DISCLOSURE_VERSION
             : connection.adapter === "openclaw"
               ? OPENCLAW_CONVERSATION_DISCLOSURE_VERSION
-          : connection.adapter === "cliproxyapi"
-            ? CLIPROXYAPI_CONVERSATION_DISCLOSURE_VERSION
-            : CODEX_CONVERSATION_DISCLOSURE_VERSION;
-        const gatewayDisclosureIdentity = connection.settings.conversationDisclosureIdentity;
-        const gatewayDisclosureMatches = connection.adapter !== "cliproxyapi" || (
-          gatewayDisclosureIdentity !== null &&
-          typeof gatewayDisclosureIdentity === "object" &&
-          !Array.isArray(gatewayDisclosureIdentity) &&
-          (gatewayDisclosureIdentity as Record<string, unknown>).endpoint === connection.settings.endpoint &&
-          (gatewayDisclosureIdentity as Record<string, unknown>).credentialIdentity ===
-            connection.settings.credentialIdentity
-        );
+              : CODEX_CONVERSATION_DISCLOSURE_VERSION;
         if (!hasCurrentAgentConversationDisclosure(
           ctx.host,
           connection.id,
           disclosureVersion,
-        ) || !gatewayDisclosureMatches) {
+        )) {
           conversationConnectionRequired(
             `Accept the current ${runtimeLabel} Conversation data path disclosure in Agent Connection Center`,
           );
@@ -143,12 +130,7 @@ export const agentSessionsRouter = router({
             `Test this exact ${runtimeLabel} Conversation model before starting a new conversation`,
           );
         }
-        if (connection.adapter === "cliproxyapi") {
-          await requireConversationReadiness(() => ctx.agentConnections!.assertGatewayConversationReady({
-              connectionId: connection.id,
-              model: selection.model,
-            }));
-        } else if (connection.adapter === "claude-code") {
+        if (connection.adapter === "claude-code") {
           await requireConversationReadiness(() => ctx.agentConnections!.assertClaudeConversationReady({
               connectionId: connection.id,
               model: selection.model,
@@ -185,13 +167,7 @@ export const agentSessionsRouter = router({
           provider: connection.adapter,
           connectionId: connection.id,
           model: selection.model,
-          credentialSource: connection.adapter === "cliproxyapi" ? "api-key" : "runtime-oauth",
-          ...(connection.adapter === "cliproxyapi"
-            ? {
-                endpointIdentity: String(connection.settings.endpoint ?? ""),
-                credentialIdentity: String(connection.settings.credentialIdentity ?? ""),
-              }
-            : {}),
+          credentialSource: "runtime-oauth",
           disclosureVersion,
           title: input.title,
           purpose: "ask",

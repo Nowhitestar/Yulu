@@ -96,12 +96,9 @@ Inspect these report sections:
 
 `agent_connections.compatibility.runtime_version` is the observed `actual`, not
 the required target. Supported local Agent CLIs use `version_source=live-runtime`;
-direct xAI reports `actual=null` with `version_source=not-applicable`; and
-CLIProxyAPI reports `version_source=readiness-history` only after a persisted,
-terminal-ready probe whose exact model and endpoint still match the current
-configuration. Unknown Outcome and stale-endpoint history remain explanatory
-and cannot establish compatibility. Its compatibility target is exactly
-`v0.23.0-rc.1`. An unverified or
+direct xAI reports `actual=null` with `version_source=not-applicable`. Unknown
+Outcome and stale readiness history remain explanatory and cannot establish
+compatibility. An unverified or
 incompatible configured adapter makes `doctor` exit non-zero, while current
 readiness and persisted readiness history remain separate fields.
 
@@ -171,7 +168,7 @@ Selecting xAI or saving its credential is not consent. Yulu never switches engin
 automatically when the selected engine is unavailable.
 
 Settings → Intelligent Services owns the authoritative Agent Connection Center,
-including direct xAI and supported runtime/Gateway connections. Opening it does
+including direct xAI and supported local Agent connections. Opening it does
 not probe a model. Its three capability readiness results are independent: a
 green Summary or Conversation result does not establish Transcription readiness
 (or vice versa). An API key is used only after the user explicitly saves it,
@@ -183,8 +180,8 @@ versioned disclosure that transcript text goes to xAI. Authorization alone does
 not satisfy that disclosure. Declining it is durable and leaves xAI selected but
 blocked, with remediation at `/settings/llm`; there is no fallback. Activation
 lists only Summary connections whose shared contract currently proves explicit
-identity, readiness, and accepted disclosure: xAI, Codex, Claude Code, or
-CLIProxyAPI. Hermes and OpenClaw remain Conversation-only.
+identity, readiness, and accepted disclosure: xAI, Codex, or Claude Code.
+Hermes and OpenClaw remain Conversation-only.
 
 `/activate` records through the production recording command and correlates the
 returned Host task identity to a durable Activation Attempt. The page reads task
@@ -280,7 +277,7 @@ yulu logs ui
 ```
 
 Use Settings → Intelligent Services to inspect the exact pinned dependency.
-Current Summary connections are xAI, Codex, Claude Code, or CLIProxyAPI; a
+Current Summary connections are xAI, Codex, or Claude Code; a
 legacy already-pinned Hermes task may still require a stable Hermes executable
 path. Reinstall or reload Yulu when a required runtime is visible only through a
 shell-specific PATH and therefore unavailable to `com.yulu.ui`.
@@ -323,7 +320,7 @@ required Host commit calls.
 ### Task is `execution_unverified`
 
 This state is deliberately not equivalent to `failed`. The pinned xAI, Codex,
-Claude Code, or CLIProxyAPI Summary request may already have executed, so Yulu
+or Claude Code Summary request may already have executed, so Yulu
 does not offer ordinary same-execution retry and never replays it on restart.
 The Activation and recording-reader surfaces preserve the exact connection,
 provider, model, and failure reason. Choose one explicit action:
@@ -471,6 +468,13 @@ ready result. The earlier result remains visible as history; current readiness
 returns to untested until the required native OAuth login is restored and the
 capability is tested explicitly. Use the exact native login remediation shown
 by Agent Connection Center; Yulu never changes or copies runtime credentials.
+
+On the 2026-08-28 Phase 12 acceptance machine, Claude Code is externally
+blocked: its runtime reports API-key authorization rather than a Claude
+subscription login, and the current CLI contract cannot prove that managed
+hooks are empty for a Summary invocation. Keep Claude fail-closed and marked as
+an external acceptance blocker; this does not block direct xAI or Codex
+acceptance.
 
 Hermes compatibility is feature-gated rather than inferred from a version
 string. `yulu doctor --json` probes the required `serve`, `sessions export`,

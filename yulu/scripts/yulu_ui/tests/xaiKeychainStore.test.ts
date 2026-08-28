@@ -3,8 +3,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
-  KeychainProviderSecretStore,
+  KeychainXaiApiKeyStore,
   KeychainXaiTokenStore,
+  purgeRetiredGatewaySecrets,
   type StoredXaiCredential,
 } from "../src/xaiCredentials.js";
 
@@ -15,56 +16,9 @@ afterEach(() => {
 });
 
 describe("KeychainXaiTokenStore", () => {
-  it("accepts only the issue-scoped direct xAI and CLIProxyAPI provider slots", () => {
-    expect(() => new KeychainProviderSecretStore("/tmp/helper", "direct.xai")).not.toThrow();
-    expect(() => new KeychainProviderSecretStore(
-      "/tmp/helper",
-      "gateway.cliproxyapi.00000000-0000-4000-8000-000000000137",
-    )).not.toThrow();
-    expect(() => new KeychainProviderSecretStore("/tmp/helper", "gateway.cliproxyapi")).toThrow("无效的提供商钥匙串槽位");
-    expect(() => new KeychainProviderSecretStore("/tmp/helper", "direct.other")).toThrow("无效的提供商钥匙串槽位");
-    expect(() => new KeychainProviderSecretStore("/tmp/helper", "gateway.hermes")).toThrow("无效的提供商钥匙串槽位");
-  });
-
-  it("uses the isolated CLIProxyAPI slot without putting the key in argv", async () => {
-    const root = mkdtempSync(join(tmpdir(), "yulu-gateway-keychain-test-"));
-    roots.push(root);
-    const helper = join(root, "xai_keychain");
-    const storage = join(root, "stored.json");
-    const argvLog = join(root, "argv.json");
-    writeFileSync(helper, [
-      "#!/usr/bin/env node",
-      "const fs = require('node:fs');",
-      `const storage = ${JSON.stringify(storage)};`,
-      `fs.writeFileSync(${JSON.stringify(argvLog)}, JSON.stringify(process.argv));`,
-      "const action = process.argv[2];",
-      "if (action === 'read') {",
-      "  if (!fs.existsSync(storage)) process.exit(44);",
-      "  process.stdout.write(fs.readFileSync(storage));",
-      "} else if (action === 'write') {",
-      "  const chunks = [];",
-      "  process.stdin.on('data', (chunk) => chunks.push(chunk));",
-      "  process.stdin.on('end', () => fs.writeFileSync(storage, Buffer.concat(chunks)));",
-      "} else if (action === 'delete') {",
-      "  if (!fs.existsSync(storage)) process.exit(44);",
-      "  fs.rmSync(storage);",
-      "} else process.exit(1);",
-    ].join("\n"));
-    chmodSync(helper, 0o755);
-    const store = new KeychainProviderSecretStore(
-      helper,
-      "gateway.cliproxyapi.00000000-0000-4000-8000-000000000137",
-    );
-
-    await store.write("gateway-secret-never-argv");
-    const argv = JSON.parse(readFileSync(argvLog, "utf8")) as string[];
-    expect(argv.slice(-2)).toEqual([
-      "write",
-      "gateway.cliproxyapi.00000000-0000-4000-8000-000000000137",
-    ]);
-    expect(JSON.stringify(argv)).not.toContain("gateway-secret-never-argv");
-    await store.clear();
-    await expect(store.read()).resolves.toBeNull();
+  it("accepts only the direct xAI provider slot", () => {
+    expect(() => new KeychainXaiApiKeyStore("/tmp/helper", "direct.xai")).not.toThrow();
+    expect(() => new KeychainXaiApiKeyStore("/tmp/helper", "direct.other")).toThrow("无效的提供商钥匙串槽位");
   });
 
   it("passes OAuth JSON over stdin and handles Keychain not-found status", async () => {
@@ -131,7 +85,7 @@ describe("KeychainXaiTokenStore", () => {
       "} else process.exit(1);",
     ].join("\n"));
     chmodSync(helper, 0o755);
-    const store = new KeychainProviderSecretStore(helper, "direct.xai");
+    const store = new KeychainXaiApiKeyStore(helper, "direct.xai");
 
     await expect(store.configured()).resolves.toBe(false);
     await store.write("xai-explicit-secret");
@@ -142,6 +96,24 @@ describe("KeychainXaiTokenStore", () => {
     await expect(store.read()).resolves.toBe("xai-explicit-secret");
     await store.clear();
     await expect(store.configured()).resolves.toBe(false);
+  });
+
+  it("asks the helper to purge only retired Yulu-owned Gateway secrets", async () => {
+    const root = mkdtempSync(join(tmpdir(), "yulu-retired-keychain-test-"));
+    roots.push(root);
+    const helper = join(root, "xai_keychain");
+    const argvLog = join(root, "argv.json");
+    writeFileSync(helper, [
+      "#!/usr/bin/env node",
+      "const fs = require('node:fs');",
+      `fs.writeFileSync(${JSON.stringify(argvLog)}, JSON.stringify(process.argv));`,
+      "process.exit(process.argv[2] === 'delete-retired-gateway-secrets' ? 0 : 1);",
+    ].join("\n"));
+    chmodSync(helper, 0o755);
+
+    await purgeRetiredGatewaySecrets(helper);
+    const argv = JSON.parse(readFileSync(argvLog, "utf8")) as string[];
+    expect(argv.slice(-1)).toEqual(["delete-retired-gateway-secrets"]);
   });
 
   it("handles a helper that exits before consuming stdin", async () => {

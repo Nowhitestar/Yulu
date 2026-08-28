@@ -367,8 +367,8 @@ def _safe_process_projection(
     return projected
 
 
-_ADAPTERS = {"codex", "claude-code", "hermes", "openclaw", "direct-xai", "cliproxyapi"}
-_KINDS = {"supported-agent", "direct-provider", "gateway", "legacy-custom"}
+_ADAPTERS = {"codex", "claude-code", "hermes", "openclaw", "direct-xai"}
+_KINDS = {"supported-agent", "direct-provider", "legacy-custom"}
 _LIFECYCLES = {"connected", "disconnected", "candidate", "legacy", "available"}
 _CAPABILITIES = {"transcription", "summary", "conversation"}
 _READINESS_STATUSES = {"ready", "failed", "untested"}
@@ -382,7 +382,6 @@ _LABELS = {
     "hermes": "Hermes",
     "openclaw": "OpenClaw",
     "direct-xai": "xAI",
-    "cliproxyapi": "CLIProxyAPI",
 }
 
 

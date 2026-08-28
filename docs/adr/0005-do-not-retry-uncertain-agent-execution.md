@@ -8,7 +8,7 @@ remote operation stopped. The user may wait, restore the original connection,
 or explicitly create a new attempt over the preserved input and artifacts.
 
 This sacrifices automatic recovery for at-most-one intentional execution.
-Some Agent and Gateway transports may continue work after the local client
+Some Agent transports may continue work after the local client
 disconnects, so an automatic retry could duplicate model cost, summary work, or
 connector side effects. Ordinary failures with a proven terminal result remain
 eligible for the existing explicit retry path.

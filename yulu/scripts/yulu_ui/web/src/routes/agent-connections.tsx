@@ -76,7 +76,6 @@ export function AgentConnections({ embedded = false }: { embedded?: boolean } = 
   const [searchParams] = useSearchParams();
   const view = trpc.agentConnections.view.useQuery();
   const utils = trpc.useUtils();
-  const saveGateway = trpc.agentConnections.saveGateway.useMutation();
   const refreshCandidates = trpc.agentConnections.refreshCandidates.useMutation();
   const confirmCandidate = trpc.agentConnections.confirmCandidate.useMutation();
   const select = trpc.agentConnections.select.useMutation();
@@ -95,14 +94,6 @@ export function AgentConnections({ embedded = false }: { embedded?: boolean } = 
   const [modelDrafts, setModelDrafts] = useState<Partial<Record<Capability, string>>>({});
   const [agentModelDrafts, setAgentModelDrafts] = useState<Record<string, string>>({});
   const [acceptedSupportedDisclosures, setAcceptedSupportedDisclosures] = useState<Set<string>>(() => new Set());
-  const [gatewayDraft, setGatewayDraft] = useState<Partial<{
-    endpoint: string;
-    summaryModel: string;
-    conversationModel: string;
-    httpsApproved: boolean;
-  }>>({});
-  const [gatewayKey, setGatewayKey] = useState("");
-  const [gatewayConfirmed, setGatewayConfirmed] = useState(false);
   const [impact, setImpact] = useState<DeletionImpact | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const deleteButtonRef = useRef<HTMLButtonElement | null>(null);
@@ -169,14 +160,6 @@ export function AgentConnections({ embedded = false }: { embedded?: boolean } = 
     { adapter: "codex" | "claude-code" | "hermes" | "openclaw" }
   > => item.adapter === "codex" || item.adapter === "claude-code" ||
     item.adapter === "hermes" || item.adapter === "openclaw");
-  const gatewayConnection = view.data.connections.find((item): item is Extract<
-    ConnectionView,
-    { adapter: "cliproxyapi" }
-  > => item.adapter === "cliproxyapi");
-  const gatewayEndpoint = gatewayDraft.endpoint ?? gatewayConnection?.settings.endpoint ?? "";
-  const gatewaySummaryModel = gatewayDraft.summaryModel ?? gatewayConnection?.settings.summaryModel ?? "";
-  const gatewayConversationModel = gatewayDraft.conversationModel ?? gatewayConnection?.settings.conversationModel ?? "";
-  const gatewayHttpsApproved = gatewayDraft.httpsApproved ?? gatewayConnection?.settings.httpsApproved ?? false;
   const deletionConnection = impact
     ? view.data.connections.find((item) => item.id === impact.connectionId)
     : undefined;
@@ -495,222 +478,6 @@ export function AgentConnections({ embedded = false }: { embedded?: boolean } = 
         </section>
       )}
 
-      <section
-        id={`agent-connection-${gatewayConnection?.id ?? "cliproxyapi"}`}
-        className="agent-connection-card"
-        data-testid={gatewayConnection ? "agent-connection-cliproxyapi" : "cliproxyapi-create"}
-        aria-labelledby="cliproxyapi-title"
-        aria-current={remediationTargetId === `agent-connection-${gatewayConnection?.id ?? "cliproxyapi"}`
-          ? "location" : undefined}
-        tabIndex={-1}
-      >
-        <div className="agent-connection-card-head">
-          <div>
-            <h2 id="cliproxyapi-title">CLIProxyAPI</h2>
-            <p>{t("agentConnections.gateway.description")}</p>
-          </div>
-          <span
-            className={`agent-connection-state ${gatewayConnection?.authorization.connected ? "ready" : "muted"}`}
-            role="status"
-            aria-label={t("agentConnections.gateway.statusAria")}
-          >
-            {gatewayConnection?.authorization.connected
-              ? t("agentConnections.connected")
-              : t("agentConnections.disconnected")}
-          </span>
-        </div>
-
-        {gatewayConnection && (
-          <dl className="agent-connection-runtime-details">
-            <div><dt>{t("agentConnections.gateway.endpoint")}</dt><dd>{gatewayConnection.settings.endpoint}</dd></div>
-            <div><dt>{t("agentConnections.gateway.transport")}</dt><dd>{gatewayConnection.settings.transport}</dd></div>
-            <div><dt>{t("agentConnections.gateway.compatibility")}</dt><dd>{gatewayConnection.authorization.compatibilityTarget}</dd></div>
-            <div>
-              <dt>{t("agentConnections.gateway.keyStatus")}</dt>
-              <dd>{t(gatewayConnection.authorization.keyConfigured
-                ? "agentConnections.gateway.keyConfigured"
-                : "agentConnections.gateway.keyMissing")}</dd>
-            </div>
-          </dl>
-        )}
-
-        <form
-          className="agent-connection-api-key"
-          data-testid={gatewayConnection ? "cliproxyapi-edit" : "cliproxyapi-create-form"}
-          onSubmit={(event) => {
-            event.preventDefault();
-            void run(async () => {
-              await saveGateway.mutateAsync({
-                endpoint: gatewayEndpoint,
-                summaryModel: gatewaySummaryModel,
-                conversationModel: gatewayConversationModel,
-                inferenceKey: gatewayKey,
-                httpsApproved: gatewayHttpsApproved,
-                confirmed: true,
-              });
-              setGatewayKey("");
-              setGatewayConfirmed(false);
-            });
-          }}
-        >
-          <label className="agent-connection-model" htmlFor="cliproxyapi-endpoint">
-            <span>{t("agentConnections.gateway.endpoint")}</span>
-            <input
-              id="cliproxyapi-endpoint"
-              type="url"
-              maxLength={2_048}
-              value={gatewayEndpoint}
-              onChange={(event) => setGatewayDraft((current) => ({ ...current, endpoint: event.target.value }))}
-            />
-          </label>
-          <label className="agent-connection-model" htmlFor="cliproxyapi-summary-model">
-            <span>{t("agentConnections.gateway.model.summary")}</span>
-            <input
-              id="cliproxyapi-summary-model"
-              type="text"
-              maxLength={128}
-              value={gatewaySummaryModel}
-              onChange={(event) => setGatewayDraft((current) => ({ ...current, summaryModel: event.target.value }))}
-            />
-          </label>
-          <label className="agent-connection-model" htmlFor="cliproxyapi-conversation-model">
-            <span>{t("agentConnections.gateway.model.conversation")}</span>
-            <input
-              id="cliproxyapi-conversation-model"
-              type="text"
-              maxLength={128}
-              value={gatewayConversationModel}
-              onChange={(event) => setGatewayDraft((current) => ({ ...current, conversationModel: event.target.value }))}
-            />
-          </label>
-          <label className="agent-connection-model" htmlFor="cliproxyapi-key">
-            <span>{t("agentConnections.gateway.key")}</span>
-            <input
-              id="cliproxyapi-key"
-              type="password"
-              autoComplete="new-password"
-              maxLength={4_096}
-              value={gatewayKey}
-              onChange={(event) => setGatewayKey(event.target.value)}
-            />
-          </label>
-          <small>{t("agentConnections.gateway.keyHelp")}</small>
-          <label>
-            <input
-              type="checkbox"
-              checked={gatewayHttpsApproved}
-              onChange={(event) => setGatewayDraft((current) => ({ ...current, httpsApproved: event.target.checked }))}
-            />
-            {t("agentConnections.gateway.httpsApproval")}
-          </label>
-          <label>
-            <input
-              type="checkbox"
-              checked={gatewayConfirmed}
-              onChange={(event) => setGatewayConfirmed(event.target.checked)}
-            />
-            {t("agentConnections.gateway.confirm")}
-          </label>
-          <button
-            type="submit"
-            disabled={
-              saveGateway.isPending || !gatewayEndpoint.trim() || !gatewaySummaryModel.trim() ||
-              !gatewayConversationModel.trim() || !gatewayKey.trim() || !gatewayConfirmed
-            }
-          >
-            {t("agentConnections.gateway.save")}
-          </button>
-        </form>
-
-        {gatewayConnection && (
-          <div className="agent-connection-capabilities">
-            {gatewayConnection.capabilities.map((item) => {
-              const capability = item.capability;
-              const model = capability === "summary" ? gatewaySummaryModel : gatewayConversationModel;
-              const testing = probe.isPending && probe.variables?.connectionId === gatewayConnection.id &&
-                probe.variables.capability === capability;
-              const current = testing ? "testing" : item.currentReadiness.status;
-              return (
-                <article
-                  id={`agent-connection-${gatewayConnection.id}-${capability}`}
-                  className="agent-connection-capability"
-                  data-testid={`connection-capability-cliproxyapi-${capability}`}
-                  aria-current={remediationTargetId === `agent-connection-${gatewayConnection.id}-${capability}` ? "location" : undefined}
-                  tabIndex={-1}
-                  key={capability}
-                >
-                  <div className="agent-connection-capability-head">
-                    <div><h3>{capabilityLabel(t, capability)}</h3><p>{item.currentReadiness.model}</p></div>
-                    <span className={`agent-capability-state ${current}`} role={current === "failed" ? "alert" : "status"}>
-                      {t(`agentConnections.readiness.${current}`)}
-                    </span>
-                  </div>
-                  {item.currentReadiness.status === "failed" && (
-                    <p className="agent-capability-detail">{item.currentReadiness.detail}</p>
-                  )}
-                  {item.disclosure.required && (
-                    <div className="agent-connection-guidance" role="alert">
-                      {t(`agentConnections.gateway.disclosure.${capability}`, { endpoint: gatewayConnection.settings.endpoint })}
-                      <button
-                        type="button"
-                        onClick={() => void run(() => acceptDisclosure.mutateAsync({
-                          connectionId: gatewayConnection.id,
-                          capability,
-                        }))}
-                      >
-                        {t(`agentConnections.gateway.disclosureAccept.${capability}`)}
-                      </button>
-                    </div>
-                  )}
-                  <div className="agent-connection-actions">
-                    <button
-                      type="button"
-                      disabled={!model.trim() || item.currentReadiness.status !== "ready"}
-                      onClick={() => void run(() => select.mutateAsync({
-                        connectionId: gatewayConnection.id,
-                        capability,
-                        model,
-                      }))}
-                    >
-                      {t(`agentConnections.gateway.select.${capability}`)}
-                    </button>
-                    <button
-                      type="button"
-                      disabled={!gatewayConnection.authorization.connected || probe.isPending}
-                      onClick={() => void run(() => probe.mutateAsync({
-                        connectionId: gatewayConnection.id,
-                        capability,
-                        model,
-                      }))}
-                    >
-                      {testing ? t("agentConnections.readiness.testing") : t(`agentConnections.test.${capability}`)}
-                    </button>
-                  </div>
-                </article>
-              );
-            })}
-          </div>
-        )}
-
-        {gatewayConnection && (
-          <button
-            type="button"
-            className="agent-connection-delete"
-            onClick={(event) => {
-              deleteButtonRef.current = event.currentTarget;
-              setActionError(null);
-              void deletionImpact.mutateAsync({ connectionId: gatewayConnection.id })
-                .then(
-                  (result) => setImpact(result as DeletionImpact),
-                  (error) => setActionError(actionFailureReason(error)),
-                );
-            }}
-          >
-            {t("agentConnections.delete")}
-          </button>
-        )}
-      </section>
-
       {supportedAgentConnections.map((agent) => {
         const copy = supportedAgentCopy(agent.adapter);
         return (
@@ -989,9 +756,7 @@ export function AgentConnections({ embedded = false }: { embedded?: boolean } = 
             <ul>{impact.pinnedTasks.map((task) => <li key={task.id}>{task.title} · {task.recordingStem}</li>)}</ul>
             <h3>{t("agentConnections.delete.conversations")}</h3>
             <ul>{impact.pinnedConversations.map((session) => <li key={session.id}>{session.title}</li>)}</ul>
-            <p>{t(deletionConnection.adapter === "cliproxyapi"
-              ? "agentConnections.gateway.deleteBoundary"
-              : deletionConnection.adapter !== "direct-xai"
+            <p>{t(deletionConnection.adapter !== "direct-xai"
                 ? "agentConnections.delete.runtimeBoundary"
                 : "agentConnections.delete.oauthBoundary")}</p>
             <div className="agent-connection-actions">

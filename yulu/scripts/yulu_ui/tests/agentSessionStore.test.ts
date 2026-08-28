@@ -12,6 +12,7 @@ import {
   projectAgentSessionHistory,
   readAgentSessionStore,
   recoverInterruptedAgentSessionInvocations,
+  retireAgentSessionsForConnection,
   resumeAgentSession,
   storePath,
   summarizeAgentSession,
@@ -171,6 +172,41 @@ describe("agentSessionStore", () => {
       status: "paused",
       pausedReason: "selected model unavailable",
     });
+  });
+
+  it("retires sessions for a removed connection without replaying or deleting history", () => {
+    const root = mkdtempSync(join(tmpdir(), "agent-session-store-"));
+    roots.push(root);
+    const retired = createAgentSession(root, {
+      purpose: "ask",
+      provider: "cliproxyapi",
+      connectionId: "cliproxyapi",
+      model: "retired-model",
+      title: "Retired conversation",
+    });
+    appendAgentSessionMessage(root, retired.id, { role: "user", text: "Preserve this local history" });
+    pauseAgentSession(root, retired.id, "temporarily unavailable", {
+      question: "Do not replay this input",
+      sources: [],
+    });
+    const supported = createAgentSession(root, {
+      purpose: "ask",
+      provider: "codex",
+      connectionId: "codex",
+      model: "gpt-5.6-sol",
+      title: "Supported conversation",
+    });
+
+    expect(retireAgentSessionsForConnection(root, "cliproxyapi")).toEqual([retired.id]);
+    expect(retireAgentSessionsForConnection(root, "cliproxyapi")).toEqual([]);
+    expect(getAgentSession(root, retired.id)).toMatchObject({
+      status: "paused",
+      connectionId: "cliproxyapi",
+      pausedReason: expect.stringContaining("retired"),
+      messages: [{ text: "Preserve this local history" }],
+    });
+    expect(getAgentSession(root, retired.id)).not.toHaveProperty("retrySnapshot");
+    expect(getAgentSession(root, supported.id)).toMatchObject({ status: "active", connectionId: "codex" });
   });
 
   it("recovers a dispatched Conversation as Unknown Outcome and creates only an explicit new attempt", () => {

@@ -12,16 +12,6 @@ const capability = z.enum(["transcription", "summary", "conversation"]);
 export const agentConnectionsRouter = router({
   view: publicProcedure.query(({ ctx }) => center(ctx).view()),
   summaryActivation: publicProcedure.query(({ ctx }) => center(ctx).summaryActivation()),
-  saveGateway: uiMutationProcedure
-    .input(z.object({
-      endpoint: z.string().trim().min(1).max(2_048),
-      summaryModel: z.string().trim().min(1).max(128),
-      conversationModel: z.string().trim().min(1).max(128),
-      inferenceKey: z.string().trim().min(1).max(4_096),
-      httpsApproved: z.boolean(),
-      confirmed: z.literal(true),
-    }).strict())
-    .mutation(({ ctx, input }) => center(ctx).saveGateway(input)),
   refreshCandidates: uiMutationProcedure.mutation(({ ctx }) => center(ctx).refreshCandidates()),
   confirmCandidate: uiMutationProcedure
     .input(z.object({

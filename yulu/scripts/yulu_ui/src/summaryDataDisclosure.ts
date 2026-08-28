@@ -3,7 +3,6 @@ import type { HostStore } from "./hostStore.js";
 export const XAI_SUMMARY_DISCLOSURE_VERSION = "xai-summary-v1";
 export const CODEX_SUMMARY_DISCLOSURE_VERSION = "codex-summary-v1";
 export const CLAUDE_CODE_SUMMARY_DISCLOSURE_VERSION = "claude-code-summary-v1";
-export const CLIPROXYAPI_SUMMARY_DISCLOSURE_VERSION = "cliproxyapi-summary-v1";
 
 export function hasCurrentSummaryDataPathDisclosure(
   host: Pick<HostStore, "getSummaryDataPathDisclosure">,

@@ -1,5 +1,11 @@
 import { describe, it, expect, vi } from "vitest";
-import { ConfigManager, ConfigSchema, XAI_TEXT_MODEL_DEFAULT, migrateLegacyTranscriptionConfig } from "../src/config.js";
+import {
+  ConfigManager,
+  ConfigSchema,
+  XAI_TEXT_MODEL_DEFAULT,
+  migrateLegacyTranscriptionConfig,
+  migrateRetiredGatewaySelections,
+} from "../src/config.js";
 import * as fs from "node:fs";
 import { ZodError } from "zod";
 import { cpSync, mkdtempSync, readdirSync, rmSync, utimesSync, statSync, readFileSync } from "node:fs";
@@ -103,6 +109,33 @@ describe("ConfigManager", () => {
     }));
     try {
       expect(new ConfigManager(path).read().agent_pipeline.notion_destination).toBe("Explicit target");
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it("clears only retired Gateway selections and is idempotent", () => {
+    const dir = mkdtempSync(join(tmpdir(), "yulu_gateway_selection_migration_"));
+    const path = join(dir, "config.json");
+    fs.writeFileSync(path, JSON.stringify({
+      audio: { output_dir: "~/Movies/Yulu" },
+      intelligence: {
+        summary: { provider: "agent", connectionId: "cliproxyapi", model: "retired-model" },
+        conversation: { provider: "agent", connectionId: "codex", model: "gpt-5.6-sol" },
+      },
+    }));
+    try {
+      expect(migrateRetiredGatewaySelections(path)).toBe(true);
+      expect(migrateRetiredGatewaySelections(path)).toBe(false);
+      const active = JSON.parse(readFileSync(path, "utf8"));
+      expect(active.intelligence.summary).toEqual({
+        provider: "agent",
+        model: "runtime-managed",
+        disabled: true,
+      });
+      expect(active.intelligence.conversation).toEqual({
+        provider: "agent",
+        connectionId: "codex",
+        model: "gpt-5.6-sol",
+      });
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 

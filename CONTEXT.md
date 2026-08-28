@@ -71,8 +71,8 @@ authorization and whose current readiness Yulu can prove.
 _Avoid_: Hermes, detected CLI, configured Agent
 
 **Agent Connection**:
-The user's explicit choice to let Yulu invoke one Supported Agent or
-user-managed Gateway for named capabilities. An Agent Connection records the
+The user's explicit choice to let Yulu invoke one Supported Agent for named
+capabilities. An Agent Connection records the
 connection type and its non-secret settings; it does not by itself select a
 Summary Provider or Conversation Provider and does not prove readiness.
 _Avoid_: detected Agent, connected CLI, active provider
@@ -102,13 +102,6 @@ An explicitly selected alternative Credential Source stored by Yulu in the
 system keychain and supplied only to the selected capability invocation. It is
 never an automatic fallback from Runtime-owned Authorization.
 _Avoid_: backup credential, automatic fallback key
-
-**Gateway Connection**:
-An Agent Connection to an independently managed inference endpoint using its
-base URL and a least-privilege client key. Yulu can prove the endpoint, model,
-and capability it invoked, but does not claim knowledge of the Gateway's
-upstream account or authorization method.
-_Avoid_: Agent OAuth, managed proxy, gateway account
 
 **Agent Capability**:
 A named operation an Agent Connection may provide. Phase 12 capabilities are

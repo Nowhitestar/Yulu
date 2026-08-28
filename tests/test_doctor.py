@@ -187,24 +187,6 @@ def test_agent_connection_diagnostics_projects_adapter_contracts_and_history_sou
                     },
                     "capabilities": [],
                 },
-                {
-                    "id": "cliproxyapi",
-                    "kind": "gateway",
-                    "adapter": "cliproxyapi",
-                    "label": "arbitrary-label-must-not-pass-through",
-                    "lifecycle": "connected",
-                    "authorization": {
-                        "connected": True,
-                        "credentialSource": "api-key",
-                        "runtimeVersion": "cliproxyapi-v0.23.0-rc.1-openai-responses",
-                        "minimumVersion": None,
-                        "compatibilityTarget": "v0.23.0-rc.1",
-                        "versionSource": "readiness-history",
-                        "supported": True,
-                        "features": ["openai-responses", "exact-model", "summary", "conversation"],
-                    },
-                    "capabilities": [],
-                },
             ],
             "candidates": [],
             "legacyConnections": [],
@@ -214,7 +196,7 @@ def test_agent_connection_diagnostics_projects_adapter_contracts_and_history_sou
 
     report = doctor.check_agent_connections()
 
-    direct, gateway = report["connections"]
+    [direct] = report["connections"]
     assert direct["label"] == "xAI"
     assert direct["compatibility"] == {
         "runtime_version": None,
@@ -224,14 +206,8 @@ def test_agent_connection_diagnostics_projects_adapter_contracts_and_history_sou
         "supported": True,
         "features": ["transcription", "summary", "conversation", "no-provider-fallback"],
     }
-    assert gateway["label"] == "CLIProxyAPI"
-    assert gateway["compatibility"]["runtime_version"] == "cliproxyapi-v0.23.0-rc.1-openai-responses"
-    assert gateway["compatibility"]["target_version"] == "v0.23.0-rc.1"
-    assert gateway["compatibility"]["version_source"] == "readiness-history"
-    assert gateway["compatibility"]["supported"] is True
     serialized = json.dumps(report)
     assert "secret-looking-label" not in serialized
-    assert "arbitrary-label" not in serialized
 
 
 def test_agent_connection_diagnostics_rejects_unrecognized_authorization_classes():

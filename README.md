@@ -34,7 +34,7 @@ ready only after its current model and credential source pass a real capability
 probe and the current versioned Data Path Disclosure is accepted; OAuth or API
 key presence is not acceptance to send transcript text. Activation lists only
 connections that currently satisfy the shared Summary contract: direct xAI,
-Codex, Claude Code, or CLIProxyAPI. Hermes and OpenClaw are Conversation-only
+Codex, or Claude Code. Hermes and OpenClaw are Conversation-only
 and never appear as Summary choices.
 
 When activation readiness is green, `/activate` starts the same production
@@ -108,8 +108,8 @@ center of the currently active display.
 - macOS 13 or later.
 - Apple Silicon (arm64) for official release installs.
 - Python 3.10 or newer.
-- A ready Summary Provider connection in Settings (xAI, Codex, Claude Code, or
-  CLIProxyAPI) when you want automatic summaries. Hermes is required only for
+- A ready Summary Provider connection in Settings (xAI, Codex, or Claude Code)
+  when you want automatic summaries. Hermes is required only for
   authorized connector delivery; Hermes and OpenClaw remain Conversation-only.
 - The local transcription model (default), or xAI OAuth authorized directly in
   Settings plus the current Cloud Transcription Consent when you explicitly
@@ -210,7 +210,7 @@ The split is intentional:
 - **The selected Yulu audio engine** owns realtime captions, final transcripts,
   and dictation. Selection is explicit and never falls back automatically.
 - **The pinned Summary Provider** owns summary generation through the exact
-  eligible xAI, Codex, Claude Code, or CLIProxyAPI connection selected when the
+  eligible xAI, Codex, or Claude Code connection selected when the
   task was created. Hermes may still own explicitly authorized Notion delivery.
 - **The selected general Agent** owns Agent Console conversation and its own
   connectors.
@@ -267,7 +267,6 @@ pipeline. Install Yulu first, then add the skill to each Agent you want to use.
 | Codex / Claude Code | Supported when the exact production adapter proves its current runtime contract | Shown only where the runtime proves the stricter tool-free Summary contract | Codex requires native ChatGPT OAuth; Claude Code requires a native Claude subscription login. API-key or Bedrock login is reported but never accepted as Runtime-owned OAuth |
 | OpenClaw 2026.5.12+ | Supported after disclosure and a bounded, tool-free `infer model run --gateway` probe | Not supported | The probe and conversation must prove the same Gateway/provider/model with no fallback |
 | Hermes 0.20.0 | Unavailable until Hermes exposes a stable, tool-free capability-probe surface | Not supported | PATH, config, and OAuth status alone never count as ready |
-| CLIProxyAPI | Supported for an explicitly saved endpoint, exact model, and Yulu-managed inference key | Supported with an independent exact-model readiness proof | Credentials are write-only and never returned to the browser |
 
 Settings → Intelligent Services is the authoritative Agent Connection Center.
 Opening it performs status inspection only and never probes a model or spends

@@ -48,7 +48,6 @@ import {
   hasSupportedAgentSummaryIdentity,
   hasSupportedAgentSummaryReadinessProof,
   ClaudeCodeSummaryUnknownOutcomeError,
-  GatewaySummaryUnknownOutcomeError,
   type SupportedAgentSummaryAdapter,
   type SupportedAgentSummaryGateway,
 } from "./summaryProviderReadiness.js";
@@ -162,9 +161,7 @@ interface PreparedRecordingTask {
   summaryCredentialSource: XaiCredentialSource | null;
   summaryConnectionId: string | null;
   summaryCredentialClass: SummaryCredentialClass | null;
-  summaryCredentialIdentity: string | null;
   summaryDisclosureVersion: string | null;
-  summaryEndpointIdentity: string | null;
   instructions: string;
   trigger: AgentTaskTrigger;
 }
@@ -217,9 +214,7 @@ export class RecordingPipeline {
       summaryCredentialSource: summary.credentialSource,
       summaryConnectionId: summary.connectionId,
       summaryCredentialClass: summary.credentialClass,
-      summaryCredentialIdentity: summary.credentialIdentity,
       summaryDisclosureVersion: summary.disclosureVersion,
-      summaryEndpointIdentity: summary.endpointIdentity,
       instructions,
       trigger: "manual",
     }, `summary-regeneration:${randomUUID()}`);
@@ -284,9 +279,7 @@ export class RecordingPipeline {
       summaryCredentialSource: summary.credentialSource,
       summaryConnectionId: summary.connectionId,
       summaryCredentialClass: summary.credentialClass,
-      summaryCredentialIdentity: summary.credentialIdentity,
       summaryDisclosureVersion: summary.disclosureVersion,
-      summaryEndpointIdentity: summary.endpointIdentity,
       instructions,
       trigger: "automatic",
     };
@@ -325,9 +318,7 @@ export class RecordingPipeline {
     credentialSource: XaiCredentialSource | null;
     connectionId: string | null;
     credentialClass: SummaryCredentialClass | null;
-    credentialIdentity: string | null;
     disclosureVersion: string | null;
-    endpointIdentity: string | null;
   } {
     const selection = config.intelligence.summary;
     if ("disabled" in selection && selection.disabled) {
@@ -345,9 +336,7 @@ export class RecordingPipeline {
         credentialSource,
         connectionId: "direct-xai",
         credentialClass: credentialSource,
-        credentialIdentity: null,
         disclosureVersion: XAI_SUMMARY_DISCLOSURE_VERSION,
-        endpointIdentity: null,
       };
     }
     const explicitConnectionId = selection.provider === "agent" && "connectionId" in selection
@@ -366,9 +355,7 @@ export class RecordingPipeline {
       credentialSource: null,
       connectionId: null,
       credentialClass: null,
-      credentialIdentity: null,
       disclosureVersion: null,
-      endpointIdentity: null,
     };
     if (!hasSupportedAgentSummaryIdentity(readiness)) {
       throw new InvalidRecordingCompletionError("Supported Agent Summary Provider identity is invalid");
@@ -381,11 +368,9 @@ export class RecordingPipeline {
       credentialClass: readiness.credentialSource === "runtime-oauth" || readiness.credentialSource === "api-key"
         ? readiness.credentialSource
         : null,
-      credentialIdentity: readiness.credentialIdentity ?? null,
       disclosureVersion: readiness.disclosure?.kind === "external"
         ? readiness.disclosure.disclosureVersion
         : null,
-      endpointIdentity: readiness.endpointIdentity ?? null,
     };
   }
 
@@ -407,9 +392,7 @@ export class RecordingPipeline {
       summaryCredentialSource: input.summaryCredentialSource,
       summaryConnectionId: input.summaryConnectionId,
       summaryCredentialClass: input.summaryCredentialClass,
-      summaryCredentialIdentity: input.summaryCredentialIdentity,
       summaryDisclosureVersion: input.summaryDisclosureVersion,
-      summaryEndpointIdentity: input.summaryEndpointIdentity,
       instructions: input.instructions,
       trigger: input.trigger,
     });
@@ -469,9 +452,7 @@ export class RecordingPipeline {
       summaryCredentialSource: summary.credentialSource,
       summaryConnectionId: summary.connectionId,
       summaryCredentialClass: summary.credentialClass,
-      summaryCredentialIdentity: summary.credentialIdentity,
       summaryDisclosureVersion: summary.disclosureVersion,
-      summaryEndpointIdentity: summary.endpointIdentity,
     });
     this.resumeDispatchNow();
     this.reconcileDispatchPolicy(config);
@@ -490,9 +471,7 @@ export class RecordingPipeline {
       summaryCredentialSource: original.summaryCredentialSource,
       summaryConnectionId: original.summaryConnectionId,
       summaryCredentialClass: original.summaryCredentialClass,
-      summaryCredentialIdentity: original.summaryCredentialIdentity,
       summaryDisclosureVersion: original.summaryDisclosureVersion,
-      summaryEndpointIdentity: original.summaryEndpointIdentity,
     });
     this.resumeDispatchNow();
     this.reconcileDispatchPolicy(this.options.config.read());
@@ -607,29 +586,18 @@ export class RecordingPipeline {
       connectionId: task.summaryConnectionId,
       provider: task.summaryProvider,
       model: task.summaryModel,
-      endpointIdentity: task.summaryEndpointIdentity,
-      credentialIdentity: task.summaryCredentialIdentity,
     });
     const provider = readiness.provider.trim().toLowerCase();
     const model = readiness.model.trim();
-    const pinnedGatewayPreflightRequired = provider === "cliproxyapi" &&
-      readiness.status === "untested" &&
-      readiness.endpointIdentity === task.summaryEndpointIdentity &&
-      readiness.credentialIdentity === task.summaryCredentialIdentity;
     if (
       !hasSupportedAgentSummaryIdentity(readiness) ||
-      (!hasSupportedAgentSummaryReadinessProof(readiness) && !pinnedGatewayPreflightRequired) ||
+      !hasSupportedAgentSummaryReadinessProof(readiness) ||
       provider !== task.summaryProvider || model !== task.summaryModel
-      || (provider === "cliproxyapi" && (
-        readiness.endpointIdentity !== task.summaryEndpointIdentity ||
-        readiness.credentialIdentity !== task.summaryCredentialIdentity
-      ))
     ) {
       throw new AgentUnavailableError("The pinned Supported Agent Summary Provider is not currently ready");
     }
     const disclosure = readiness.disclosure;
     if (
-      provider !== "cliproxyapi" &&
       disclosure?.kind === "external" &&
       (disclosure.connectionId
         ? this.options.store.getAgentConnectionDisclosure(disclosure.connectionId, "summary")?.disclosureVersion !==
@@ -649,8 +617,6 @@ export class RecordingPipeline {
       connectionId: task.summaryConnectionId,
       provider: task.summaryProvider,
       model: task.summaryModel,
-      endpointIdentity: task.summaryEndpointIdentity,
-      credentialIdentity: task.summaryCredentialIdentity,
     });
   }
 
@@ -869,7 +835,7 @@ export class RecordingPipeline {
         if (!usesSupportedAgentSummary && !gatewayHealth.available) {
           throw new AgentUnavailableError(gatewayHealth.reason ?? "Summary Agent is unavailable");
         }
-        if (usesSupportedAgentSummary && task.summaryProvider !== "cliproxyapi") {
+        if (usesSupportedAgentSummary) {
           this.options.store.beginSummaryExecution(task.id, leaseToken);
         }
         const artifactResult = usesSupportedAgentSummary
@@ -922,9 +888,7 @@ export class RecordingPipeline {
             summaryModel: task.summaryModel,
             summaryConnectionId: current.summaryConnectionId,
             summaryCredentialClass: current.summaryCredentialClass,
-            summaryCredentialIdentity: current.summaryCredentialIdentity,
             summaryDisclosureVersion: current.summaryDisclosureVersion,
-            summaryEndpointIdentity: current.summaryEndpointIdentity,
             summaryInputArtifactId: current.summaryInputArtifactId,
             summaryInputArtifactSha256: current.summaryInputArtifactSha256,
             runtimeEvidence,
@@ -1011,17 +975,7 @@ export class RecordingPipeline {
         this.deferDispatch(task.attempt);
         return false;
       }
-      if (error instanceof GatewaySummaryUnknownOutcomeError) {
-        this.options.store.markGatewaySummaryUnknownOutcome(
-          task.id,
-          leaseToken,
-          error.message,
-          error.executionId,
-          error.evidence,
-        );
-        this.publish(task, "failed", error.message);
-        return true;
-      } else if (error instanceof ClaudeCodeSummaryUnknownOutcomeError) {
+      if (error instanceof ClaudeCodeSummaryUnknownOutcomeError) {
         const unknown = error.nativeSessionId
           ? this.options.store.markClaudeSummaryUnknownOutcome(
               task.id,

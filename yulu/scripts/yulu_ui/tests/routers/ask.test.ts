@@ -13,7 +13,6 @@ import {
 import { createCaller, type AppContext } from "../../src/trpc.js";
 import {
   CLAUDE_CODE_CONVERSATION_DISCLOSURE_VERSION,
-  CLIPROXYAPI_CONVERSATION_DISCLOSURE_VERSION,
   CODEX_CONVERSATION_DISCLOSURE_VERSION,
   HERMES_CONVERSATION_DISCLOSURE_VERSION,
   OPENCLAW_CONVERSATION_DISCLOSURE_VERSION,
@@ -22,7 +21,6 @@ import {
 import { CodexConversationError } from "../../src/codexAgentAdapter.js";
 import { ClaudeCodeConversationError } from "../../src/claudeCodeAdapter.js";
 import { ConversationOnlyAgentConversationError } from "../../src/conversationOnlyAgentAdapter.js";
-import { GatewayRequestUnknownOutcomeError } from "../../src/cliProxyApiAdapter.js";
 import { XaiTextUnknownOutcomeError } from "../../src/xaiText.js";
 
 const runAgentCliCommand = vi.hoisted(() => vi.fn());
@@ -42,8 +40,6 @@ function context(
     claudeConverse?: ReturnType<typeof vi.fn>;
     conversationOnlyDisclosure?: boolean;
     conversationOnlyConverse?: ReturnType<typeof vi.fn>;
-    gatewayDisclosure?: boolean;
-    gatewayConverse?: ReturnType<typeof vi.fn>;
     uiMutationAuthorized?: boolean;
   } = {},
 ): AppContext {
@@ -64,8 +60,6 @@ function context(
             ? injected.claudeDisclosure === false
             : connectionId === "hermes" || connectionId === "openclaw"
               ? injected.conversationOnlyDisclosure === false
-            : connectionId === "cliproxyapi"
-              ? injected.gatewayDisclosure === false
             : injected.conversationDisclosure === false)
           ? null : ({
         connectionId,
@@ -78,8 +72,6 @@ function context(
               ? HERMES_CONVERSATION_DISCLOSURE_VERSION
               : connectionId === "openclaw"
                 ? OPENCLAW_CONVERSATION_DISCLOSURE_VERSION
-            : connectionId === "cliproxyapi"
-              ? CLIPROXYAPI_CONVERSATION_DISCLOSURE_VERSION
             : XAI_CONVERSATION_DISCLOSURE_VERSION,
         decision: "accepted",
         decidedAt: "2026-08-27T00:00:00.000Z",
@@ -88,12 +80,11 @@ function context(
     paths: { configDir, moviesDir, scriptDir: "/fake/yulu/scripts" },
     ...(injected.localSearch ? { localSearch: injected.localSearch } : {}),
     ...(injected.xaiRequest ? { xaiText: { request: injected.xaiRequest } } : {}),
-    ...(injected.codexConverse || injected.claudeConverse || injected.conversationOnlyConverse || injected.gatewayConverse ? {
+    ...(injected.codexConverse || injected.claudeConverse || injected.conversationOnlyConverse ? {
       agentConnections: {
         ...(injected.codexConverse ? { converseCodex: injected.codexConverse } : {}),
         ...(injected.claudeConverse ? { converseClaude: injected.claudeConverse } : {}),
         ...(injected.conversationOnlyConverse ? { converseConversationOnly: injected.conversationOnlyConverse } : {}),
-        ...(injected.gatewayConverse ? { converseGateway: injected.gatewayConverse } : {}),
       },
     } : {}),
   } as unknown as AppContext;
@@ -112,13 +103,6 @@ function session(ctx: AppContext, provider: string, model = "runtime-managed") {
     ...(provider === "claude-code" ? {
       connectionId: "claude-code",
       credentialSource: "runtime-oauth" as const,
-    } : {}),
-    ...(provider === "cliproxyapi" ? {
-      connectionId: "cliproxyapi",
-      endpointIdentity: "http://127.0.0.1:8317/v1",
-      disclosureVersion: CLIPROXYAPI_CONVERSATION_DISCLOSURE_VERSION,
-      credentialSource: "api-key" as const,
-      credentialIdentity: "gateway.cliproxyapi.00000000-0000-4000-8000-000000000137",
     } : {}),
     title: "Ask",
   });
@@ -398,244 +382,6 @@ describe("pinned Ask flow", () => {
       retry: true,
     })).resolves.toMatchObject({ recovery: { retry: "unavailable_unknown_outcome" } });
     expect(conversationOnlyConverse).toHaveBeenCalledOnce();
-  });
-
-  it("keeps Gateway Conversation on the pinned endpoint and model with bounded tool-free history", async () => {
-    const config = {
-      intelligence: {
-        conversation: {
-          provider: "agent",
-          connectionId: "cliproxyapi",
-          model: "gateway-conversation-exact",
-        },
-      },
-      llm: { enabled: false, command: null, agent: { provider: "auto" } },
-    };
-    const gatewayConverse = vi.fn()
-      .mockResolvedValueOnce({
-        answer: "First Gateway answer",
-        evidence: {
-          adapter: "cliproxyapi",
-          transport: "openai-responses-loopback-http",
-          runtimeVersion: "cliproxyapi-v0.23.0-rc.1-openai-responses",
-          endpoint: "http://127.0.0.1:8317/v1",
-          requestedProvider: null,
-          requestedModel: "gateway-conversation-exact",
-          actualProvider: null,
-          actualModel: "gateway-conversation-exact",
-          requestId: "gateway-conversation-1",
-          sessionId: null,
-          terminalStatus: "ready",
-          toolsEnabled: false,
-          fallbackOccurred: false,
-        },
-      })
-      .mockResolvedValueOnce({
-        answer: "Second Gateway answer",
-        evidence: {
-          adapter: "cliproxyapi",
-          transport: "openai-responses-loopback-http",
-          runtimeVersion: "cliproxyapi-v0.23.0-rc.1-openai-responses",
-          endpoint: "http://127.0.0.1:8317/v1",
-          requestedProvider: null,
-          requestedModel: "gateway-conversation-exact",
-          actualProvider: null,
-          actualModel: "gateway-conversation-exact",
-          requestId: "gateway-conversation-2",
-          sessionId: null,
-          terminalStatus: "ready",
-          toolsEnabled: false,
-          fallbackOccurred: false,
-        },
-      });
-    const localSearch = vi.fn(async () => localHits());
-    const ctx = context(config, { gatewayConverse, localSearch });
-    const pinned = session(ctx, "cliproxyapi", "gateway-conversation-exact");
-
-    const first = await createCaller(askRouter, ctx).ask({ question: "first", sessionId: pinned.id });
-    appendAgentSessionMessage(ctx.paths.configDir, pinned.id, { role: "user", text: "first" });
-    appendAgentSessionMessage(ctx.paths.configDir, pinned.id, { role: "assistant", text: first.answer });
-    config.intelligence.conversation = {
-      provider: "agent",
-      connectionId: "codex",
-      model: "gpt-5.6-sol",
-    } as never;
-    const second = await createCaller(askRouter, ctx).ask({ question: "second", sessionId: pinned.id });
-
-    expect(first).toMatchObject({
-      ok: true,
-      answer: "First Gateway answer",
-      provider: "cliproxyapi",
-      model: "gateway-conversation-exact",
-      sources: [expect.objectContaining({ snippet: "Launch decision" })],
-      runtimeEvidence: expect.objectContaining({ toolsEnabled: false, fallbackOccurred: false }),
-    });
-    expect(second).toMatchObject({ ok: true, answer: "Second Gateway answer" });
-    expect(gatewayConverse).toHaveBeenNthCalledWith(1, {
-      connectionId: "cliproxyapi",
-      endpointIdentity: "http://127.0.0.1:8317/v1",
-      credentialIdentity: "gateway.cliproxyapi.00000000-0000-4000-8000-000000000137",
-      model: "gateway-conversation-exact",
-      input: [
-        expect.objectContaining({ role: "system", content: expect.stringContaining("Do not use tools") }),
-        { role: "user", content: expect.stringContaining("Launch decision") },
-      ],
-    });
-    expect(gatewayConverse).toHaveBeenNthCalledWith(2, {
-      connectionId: "cliproxyapi",
-      endpointIdentity: "http://127.0.0.1:8317/v1",
-      credentialIdentity: "gateway.cliproxyapi.00000000-0000-4000-8000-000000000137",
-      model: "gateway-conversation-exact",
-      input: [
-        expect.objectContaining({ role: "system", content: expect.stringContaining("Do not use tools") }),
-        { role: "user", content: "first" },
-        { role: "assistant", content: "First Gateway answer" },
-        { role: "user", content: expect.stringContaining("Launch decision") },
-      ],
-    });
-    expect(localSearch).toHaveBeenCalledTimes(2);
-    expect(runAgentCliCommand).not.toHaveBeenCalled();
-  });
-
-  it("blocks Gateway Conversation retry when transport loss leaves no observable execution", async () => {
-    const config = {
-      intelligence: {
-        conversation: {
-          provider: "agent",
-          connectionId: "cliproxyapi",
-          model: "gateway-conversation-exact",
-        },
-      },
-      llm: { enabled: false, command: null, agent: { provider: "auto" } },
-    };
-    const evidence = {
-      adapter: "cliproxyapi",
-      transport: "openai-responses-loopback-http",
-      runtimeVersion: "cliproxyapi-v0.23.0-rc.1-openai-responses",
-      endpoint: "http://127.0.0.1:8317/v1",
-      requestedProvider: null,
-      requestedModel: "gateway-conversation-exact",
-      actualProvider: null,
-      actualModel: null,
-      requestId: null,
-      sessionId: null,
-      terminalStatus: "unknown" as const,
-      fallbackOccurred: false,
-      toolsEnabled: false as const,
-    };
-    const gatewayConverse = vi.fn().mockRejectedValue(new GatewayRequestUnknownOutcomeError(
-      "CLIProxyAPI Gateway request outcome is unknown; do not retry this execution",
-      evidence,
-    ));
-    const ctx = context(config, { gatewayConverse, localSearch: vi.fn(async () => localHits()) });
-    const pinned = session(ctx, "cliproxyapi", "gateway-conversation-exact");
-
-    const failed = await createCaller(askRouter, ctx).ask({ question: "uncertain input", sessionId: pinned.id });
-    expect(failed).toMatchObject({
-      ok: false,
-      sessionStatus: "paused",
-      runtimeEvidence: { terminalStatus: "unknown", endpoint: "http://127.0.0.1:8317/v1" },
-      recovery: { retry: "unavailable_unknown_outcome", newConversation: true },
-    });
-    const paused = getAgentSession(ctx.paths.configDir, pinned.id);
-    expect(paused).toMatchObject({ status: "paused" });
-    expect(paused).not.toHaveProperty("retrySnapshot");
-    await expect(createCaller(askRouter, ctx).ask({
-      question: "uncertain input",
-      sessionId: pinned.id,
-      retry: true,
-    })).resolves.toMatchObject({
-      ok: false,
-      recovery: { retry: "unavailable_unknown_outcome" },
-    });
-    expect(gatewayConverse).toHaveBeenCalledOnce();
-  });
-
-  it("blocks retry but does not project malformed Gateway Unknown Outcome evidence", async () => {
-    const config = {
-      intelligence: { conversation: { provider: "agent", connectionId: "cliproxyapi", model: "gateway-conversation-exact" } },
-      llm: { enabled: false, command: null, agent: { provider: "auto" } },
-    };
-    const malformedEvidence = {
-      adapter: "cliproxyapi",
-      transport: "openai-responses-approved-https",
-      runtimeVersion: "malformed-contract",
-      endpoint: "https://attacker.example/v1",
-      requestedProvider: null,
-      requestedModel: "other-model",
-      actualProvider: null,
-      actualModel: null,
-      requestId: null,
-      sessionId: null,
-      terminalStatus: "unknown" as const,
-      fallbackOccurred: false,
-      toolsEnabled: false as const,
-    };
-    const gatewayConverse = vi.fn().mockRejectedValue(new GatewayRequestUnknownOutcomeError(
-      "unknown with malformed evidence",
-      malformedEvidence,
-    ));
-    const ctx = context(config, { gatewayConverse, localSearch: vi.fn(async () => localHits()) });
-    const pinned = session(ctx, "cliproxyapi", "gateway-conversation-exact");
-
-    const failed = await createCaller(askRouter, ctx).ask({ question: "uncertain malformed", sessionId: pinned.id });
-    expect(failed).toMatchObject({
-      ok: false,
-      recovery: { retry: "unavailable_unknown_outcome" },
-    });
-    expect(failed).not.toHaveProperty("runtimeEvidence");
-    expect(getAgentSession(ctx.paths.configDir, pinned.id)).not.toHaveProperty("retrySnapshot");
-    expect(JSON.stringify(failed)).not.toContain("attacker.example");
-  });
-
-  it("clears a prior durable Gateway retry snapshot when the retry enters Unknown Outcome", async () => {
-    const config = {
-      intelligence: { conversation: { provider: "agent", connectionId: "cliproxyapi", model: "gateway-conversation-exact" } },
-      llm: { enabled: false, command: null, agent: { provider: "auto" } },
-    };
-    const evidence = {
-      adapter: "cliproxyapi",
-      transport: "openai-responses-loopback-http",
-      runtimeVersion: "cliproxyapi-v0.23.0-rc.1-openai-responses",
-      endpoint: "http://127.0.0.1:8317/v1",
-      requestedProvider: null,
-      requestedModel: "gateway-conversation-exact",
-      actualProvider: null,
-      actualModel: null,
-      requestId: null,
-      sessionId: null,
-      terminalStatus: "unknown" as const,
-      fallbackOccurred: false,
-      toolsEnabled: false as const,
-    };
-    const gatewayConverse = vi.fn()
-      .mockRejectedValueOnce(new Error("known Gateway failure"))
-      .mockRejectedValueOnce(new GatewayRequestUnknownOutcomeError("unknown Gateway outcome", evidence));
-    const localSearch = vi.fn(async () => localHits());
-    const ctx = context(config, { gatewayConverse, localSearch });
-    const pinned = session(ctx, "cliproxyapi", "gateway-conversation-exact");
-
-    await createCaller(askRouter, ctx).ask({ question: "retry snapshot", sessionId: pinned.id });
-    expect(getAgentSession(ctx.paths.configDir, pinned.id)?.retrySnapshot?.sources).toHaveLength(1);
-    await createCaller(askRouter, ctx).ask({ question: "retry snapshot", sessionId: pinned.id, retry: true });
-    expect(getAgentSession(ctx.paths.configDir, pinned.id)).not.toHaveProperty("retrySnapshot");
-    await expect(createCaller(askRouter, ctx).ask({
-      question: "retry snapshot",
-      sessionId: pinned.id,
-      retry: true,
-    })).resolves.toMatchObject({ recovery: { retry: "unavailable_unknown_outcome" } });
-    expect(gatewayConverse).toHaveBeenCalledTimes(2);
-    expect(localSearch).toHaveBeenCalledOnce();
-  });
-
-  it("requires mutation bearer authorization before a Gateway invocation", async () => {
-    const gatewayConverse = vi.fn();
-    const ctx = context({}, { gatewayConverse, uiMutationAuthorized: false });
-    const pinned = session(ctx, "cliproxyapi", "gateway-conversation-exact");
-
-    await expect(createCaller(askRouter, ctx).ask({ question: "paid request", sessionId: pinned.id }))
-      .rejects.toThrow("UI mutation bearer required");
-    expect(gatewayConverse).not.toHaveBeenCalled();
   });
 
   it("pauses Codex with the same input snapshot and exact remediation without fallback", async () => {

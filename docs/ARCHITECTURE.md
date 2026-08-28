@@ -26,7 +26,7 @@ The selected Yulu audio engine owns realtime captions, final speech recognition,
 and dictation. `local` is the default; `xai` connects directly to xAI with OAuth
 authorized in Yulu and stored in macOS Keychain. The exact Summary Provider pinned
 at task creation owns summary generation through its explicit xAI, Codex,
-Claude Code, or CLIProxyAPI connection. Hermes may still own Notion delivery.
+or Claude Code connection. Hermes may still own Notion delivery.
 The explicit ready connection selected for a new Agent Console session owns its
 interactive conversation and connectors. No capability silently falls back to
 another provider, model, connection, or credential source.
@@ -44,7 +44,7 @@ another provider, model, connection, or credential source.
 | Realtime coordinator | `realtimeTranscription.ts` | Feed mic/system streams and publish partial/stable captions from the selected engine |
 | Durable store | `hostStore.ts` | Persist tasks, pinned summary identity, events, leases, artifact records, and Notion delivery records in `host.sqlite` |
 | Pipeline coordinator | `recordingPipeline.ts` | Commit the selected-engine transcript first, then dispatch summary/delivery Agent work and recover failures |
-| Recording gateways | `supportedAgentSummaryAdapter.ts`, `agentGateway.ts` | Run the task's pinned xAI/Codex/Claude Code/CLIProxyAPI Summary workflow; retain legacy pinned Hermes artifact work and use a separate audited Hermes session only for authorized connector delivery; they do not execute production audio transcription |
+| Summary execution | `supportedAgentSummaryAdapter.ts`, `agentGateway.ts` | Run the task's pinned xAI/Codex/Claude Code Summary workflow; retain legacy pinned Hermes artifact work and use a separate audited Hermes session only for authorized connector delivery; they do not execute production audio transcription |
 | Artifact boundary | `artifactStore.ts` | Independently commit transcript, then validate and atomically commit summary artifacts with hashes and provenance |
 | General Agent runtime | `agentRuntime.ts`, Agent Console | Resolve Codex, Claude Code, Hermes, OpenClaw, or a configured command for conversation |
 | Local context | prompt, glossary, search SQLite databases | Supply instructions and discoverable local data; never execute AI work |
@@ -171,7 +171,7 @@ artifact fence:
 
 - direct xAI returns Markdown for the exact pinned model and credential source;
   the Host stages it without exposing either task path;
-- Codex, Claude Code, and CLIProxyAPI return staged Summary output plus exact,
+- Codex and Claude Code return staged Summary output plus exact,
   secret-safe runtime evidence; the Host validates their pinned connection,
   provider, model, disclosure, input artifact, and no-fallback identity before
   staging or committing anything;
@@ -255,8 +255,8 @@ the Host calls in the required order.
 
 The recording pipeline and interactive Agent Console are deliberately separate:
 
-- The task-pinned Summary connection resolves xAI, Codex, Claude Code, or
-  CLIProxyAPI independently from Conversation. Hermes and OpenClaw are never
+- The task-pinned Summary connection resolves xAI, Codex, or Claude Code
+  independently from Conversation. Hermes and OpenClaw are never
   Summary choices.
 - New conversations resolve only the explicit ready connection selected in the
   Agent Connection Center. Existing sessions keep their pinned native identity.
