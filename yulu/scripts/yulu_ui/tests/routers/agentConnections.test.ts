@@ -8,6 +8,7 @@ import { AgentConnectionCenter } from "../../src/agentConnections.js";
 import { agentConnectionsRouter } from "../../src/routers/agentConnections.js";
 import { createCaller } from "../../src/trpc.js";
 import { createAgentSession, readAgentSessionStore } from "../../src/agentSessionStore.js";
+import { XaiTextUnknownOutcomeError } from "../../src/xaiText.js";
 import { CLAUDE_CODE_CONVERSATION_DISCLOSURE_VERSION } from "../../src/conversationDataDisclosure.js";
 import {
   ConversationOnlyAgentAdapter,
@@ -501,6 +502,10 @@ describe("public Agent Connection Host contract", () => {
     expect(setupResult.configManager.read().transcription.engine).toBe("xai");
     expect(setupResult.host.listAgentConnectionReadinessHistory("direct-xai", "transcription")[0])
       .toMatchObject({ status: "failed", reason: "identity_mismatch" });
+    expect((await setupResult.makeCenter().view()).connections
+      .find(({ id }) => id === "direct-xai")?.capabilities
+      .find(({ capability }) => capability === "transcription")?.currentReadiness)
+      .toMatchObject({ status: "failed", reason: "identity_mismatch", credentialSource: "oauth" });
     setupResult.host.close();
   });
 
@@ -529,6 +534,10 @@ describe("public Agent Connection Host contract", () => {
     expect(result.detail).not.toMatch(/enter an entitled exact model/i);
     expect(setupResult.host.listAgentConnectionReadinessHistory("direct-xai", "transcription")[0])
       .toMatchObject({ status: "failed", reason: "readiness_failed" });
+    expect((await setupResult.makeCenter().view()).connections
+      .find(({ id }) => id === "direct-xai")?.capabilities
+      .find(({ capability }) => capability === "transcription")?.currentReadiness)
+      .toMatchObject({ status: "failed", reason: "readiness_failed", credentialSource: "oauth" });
     setupResult.host.close();
   });
 
@@ -559,18 +568,31 @@ describe("public Agent Connection Host contract", () => {
     [
       new Error("xAI summary request failed (HTTP 404)"),
       "invalid_model",
+      "failed",
     ],
     [
       new Error("xAI summary request failed (HTTP 403)"),
       "entitlement_failed",
+      "failed",
     ],
     [
       new Error("xAI OAuth 已失效，请在 Yulu 设置中重新授权"),
       "credential_refresh_failed",
+      "failed",
+    ],
+    [
+      new XaiTextUnknownOutcomeError({
+        capability: "summary",
+        model: "grok-summary-exact",
+        credentialSource: "oauth",
+      }),
+      "unknown_outcome",
+      "unknown",
     ],
   ] as const)("preserves the selected xAI source and model after %s", async (
     failure,
     reason,
+    terminalStatus,
   ) => {
     const setupResult = setup({
       audio: {},
@@ -584,6 +606,29 @@ describe("public Agent Connection Host contract", () => {
     setupResult.center.acceptDisclosure({
       connectionId: "direct-xai",
       capability: "summary",
+    });
+    setupResult.host.recordAgentConnectionReadiness({
+      connectionId: "direct-xai",
+      capability: "summary",
+      status: "ready",
+      model: "grok-summary-exact",
+      credentialSource: "oauth",
+      detail: "Older successful probe",
+      reason: null,
+      runtimeEvidence: {
+        adapter: "direct-xai",
+        transport: "xai-http",
+        runtimeVersion: null,
+        requestedProvider: "xai",
+        requestedModel: "grok-summary-exact",
+        actualProvider: "xai",
+        actualModel: "grok-summary-exact",
+        requestId: null,
+        sessionId: null,
+        terminalStatus: "ready",
+        fallbackOccurred: false,
+      },
+      testedAt: "2026-08-28T01:00:00.000Z",
     });
     setupResult.text.request.mockRejectedValue(failure);
 
@@ -611,9 +656,18 @@ describe("public Agent Connection Host contract", () => {
         runtimeEvidence: {
           requestedProvider: "xai",
           requestedModel: "grok-summary-exact",
-          terminalStatus: "failed",
+          terminalStatus,
           fallbackOccurred: false,
         },
+      });
+    const restarted = await setupResult.makeCenter().view();
+    expect(restarted.connections.find(({ id }) => id === "direct-xai")?.capabilities
+      .find(({ capability }) => capability === "summary")?.currentReadiness)
+      .toMatchObject({
+        status: "failed",
+        model: "grok-summary-exact",
+        credentialSource: "oauth",
+        reason,
       });
     setupResult.host.close();
   });

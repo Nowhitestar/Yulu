@@ -355,7 +355,23 @@ export class AgentConnectionCenter {
           : config.intelligence[capability].provider === "xai"
             ? config.intelligence[capability].model
             : XAI_TEXT_MODEL_DEFAULT;
-        const current = this.readiness.get(capability);
+        const readinessHistory = this.host.listAgentConnectionReadinessHistory(
+          DIRECT_XAI_ID,
+          capability,
+        );
+        const latest = readinessHistory[0];
+        const persistedCurrent: XaiReadinessResult | undefined = latest?.status === "failed"
+          ? {
+              capability,
+              status: latest.status,
+              model: latest.model,
+              credentialSource: latest.credentialSource,
+              testedAt: latest.testedAt,
+              detail: latest.detail,
+              ...(latest.reason ? { reason: latest.reason } : {}),
+            }
+          : undefined;
+        const current = this.readiness.get(capability) ?? persistedCurrent;
         const currentReadiness = selectedCredentialConnected && current?.model === model &&
           current.credentialSource === selectedCredentialSource
           ? current
@@ -398,10 +414,7 @@ export class AgentConnectionCenter {
           capability,
           declared: true,
           currentReadiness,
-          readinessHistory: this.host.listAgentConnectionReadinessHistory(
-            DIRECT_XAI_ID,
-            capability,
-          ),
+          readinessHistory,
           disclosure,
           selected: capability === "transcription"
             ? config.transcription.engine === "xai"
