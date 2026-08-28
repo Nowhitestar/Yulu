@@ -221,6 +221,18 @@ the required fresh-install, stable-upgrade, Onboarding, and production-runtime
 checks. A development install, packaging check, or green unit suite is not this.
 _Avoid_: Build passed, local dev acceptance, release created
 
+**Application Runtime**:
+The immutable, signed code and core toolchain shipped inside the installed
+`Yulu.app`. It can start and provide core capture without Homebrew, host Node,
+host Python, npm, or pip.
+_Avoid_: Repository runtime, bootstrap install, host dependencies
+
+**Optional Runtime Pack**:
+A versioned, integrity-checked capability payload downloaded outside the signed
+Application Runtime, such as the local transcription model. Its absence does not
+prevent Yulu from opening or presenting another explicit capability choice.
+_Avoid_: Missing dependency, App patch, bundled user data
+
 **Activation Blocker**:
 A named capability that currently prevents progress toward Core Activation. It
 ends the waiting state and gives the user a retry or an exact remediation path.
