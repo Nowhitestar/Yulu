@@ -27,9 +27,9 @@ export function HotkeySection() {
         <div className="row-status" />
       </div>
       <div className="row">
-        <div className="row-label">{t("settings.activation.label")}</div>
+        <div className="row-label">{t("settings.onboarding.label")}</div>
         <div className="row-value">
-          <Link to="/activate">{t("settings.activation.open")}</Link>
+          <Link to="/onboarding">{t("settings.onboarding.open")}</Link>
         </div>
         <div className="row-status" />
       </div>

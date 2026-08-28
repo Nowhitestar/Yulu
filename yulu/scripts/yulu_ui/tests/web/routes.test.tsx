@@ -51,6 +51,7 @@ import { Health }    from "../../web/src/routes/health.js";
 import { AgentConsole } from "../../web/src/routes/agent-console.js";
 import { VoiceInput } from "../../web/src/routes/voice-input.js";
 import { Activate } from "../../web/src/routes/activate.js";
+import { OnboardingHome } from "../../web/src/routes/onboarding.js";
 
 const ROUTES: { name: string; Component: React.ComponentType }[] = [
   { name: "agent-console",          Component: AgentConsole },
@@ -62,6 +63,7 @@ const ROUTES: { name: string; Component: React.ComponentType }[] = [
   { name: "health",                 Component: Health },
   { name: "voice-input",            Component: VoiceInput },
   { name: "activate",               Component: Activate },
+  { name: "onboarding",             Component: OnboardingHome },
 ];
 
 describe("placeholder routes smoke", () => {
@@ -83,8 +85,8 @@ describe("placeholder routes smoke", () => {
     ).not.toThrow();
   });
 
-  it("has exactly 9 routes", () => {
-    expect(ROUTES).toHaveLength(9);
+  it("has exactly 10 routes", () => {
+    expect(ROUTES).toHaveLength(10);
   });
 
   it("keeps the three voice-input reference cards and removes redundant action controls", () => {

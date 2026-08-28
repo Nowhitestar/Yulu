@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import Database from "better-sqlite3";
 import { HostStore, type AgentTask, type ArtifactRecord, type CoreActivationEvidence } from "../src/hostStore.js";
+import { CURRENT_ONBOARDING_COMPLETION_REQUIREMENTS } from "../src/onboarding.js";
 
 const NOTION_PAGE_ID = "0123456789abcdef0123456789abcdef";
 const SUMMARY_IDENTITY = { summaryProvider: "hermes", summaryModel: "runtime-managed" } as const;
@@ -905,12 +906,15 @@ describe("HostStore", () => {
     const task = enqueue(false).task;
     store!.db.prepare("UPDATE agent_tasks SET state = 'completed', phase = 'completed' WHERE id = ?").run(task.id);
 
-    expect(store!.recordCoreActivationEvidence(activationEvidence(task.id))).toEqual(activationEvidence(task.id));
+    expect(store!.recordCoreActivationEvidence(
+      activationEvidence(task.id),
+      CURRENT_ONBOARDING_COMPLETION_REQUIREMENTS,
+    )).toEqual(activationEvidence(task.id));
     expect(store!.recordCoreActivationEvidence({
       ...activationEvidence("later-task"),
       summaryProvider: "xai",
       summaryModel: "grok-later",
-    })).toEqual(activationEvidence(task.id));
+    }, CURRENT_ONBOARDING_COMPLETION_REQUIREMENTS)).toEqual(activationEvidence(task.id));
     store!.purgeRecordingTasks(task.recordingStem);
     expect(store!.getCoreActivationEvidence()).toEqual(activationEvidence(task.id));
 

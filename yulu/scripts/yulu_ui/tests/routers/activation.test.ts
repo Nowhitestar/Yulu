@@ -20,6 +20,7 @@ import { XAI_SUMMARY_DISCLOSURE_VERSION } from "../../src/summaryDataDisclosure.
 import type { SupportedAgentSummaryReadiness } from "../../src/summaryProviderReadiness.js";
 import type { AgentConnectionCenter } from "../../src/agentConnections.js";
 import { activationRouter } from "../../src/routers/activation.js";
+import { CURRENT_ONBOARDING_COMPLETION_REQUIREMENTS } from "../../src/onboarding.js";
 import { createCaller, type AppContext } from "../../src/trpc.js";
 
 function wavWithAudio(): Buffer {
@@ -1606,14 +1607,24 @@ describe("activation router", () => {
     return host!.getTask(claimed.id)!;
   }
 
-  it("bootstraps the most recent fully verified historical recording", async () => {
+  it("atomically completes onboarding when authorized historical Core Activation is discovered last", async () => {
     const { moviesDir, artifacts, caller } = setup();
     completeRecording(moviesDir, artifacts, "Older_20260710_100000", "2026-07-10T10:05:00.000Z");
     const recent = completeRecording(moviesDir, artifacts, "Recent_20260711_120000", "2026-07-11T12:05:00.000Z");
+    for (const capability of CURRENT_ONBOARDING_COMPLETION_REQUIREMENTS.optionalCapabilities) {
+      host!.recordOptionalCapabilityOutcome({
+        onboardingVersion: CURRENT_ONBOARDING_COMPLETION_REQUIREMENTS.version,
+        capability: capability.capability,
+        contractVersion: capability.contractVersion,
+        outcome: "deferred",
+        evidence: null,
+      }, CURRENT_ONBOARDING_COMPLETION_REQUIREMENTS);
+    }
 
     await expect(caller.status()).resolves.toMatchObject({
       state: "activated",
-      evidenceCreated: true,
+      evidenceCreated: false,
+      evidencePending: true,
       evidence: {
         recordingStem: recent.recordingStem,
         taskId: recent.id,
@@ -1624,12 +1635,23 @@ describe("activation router", () => {
       sourceArtifacts: { audio: true, transcript: true, summary: true },
       completedNoteAvailable: true,
     });
+    expect(host!.getCoreActivationEvidence()).toBeNull();
+    expect(host!.getLatestOnboardingCompletion()).toBeNull();
+
+    await expect(caller.commitDiscoveredEvidence()).resolves.toMatchObject({
+      created: true,
+      evidence: { taskId: recent.id },
+    });
     expect(host!.getCoreActivationEvidence()?.taskId).toBe(recent.id);
+    expect(host!.getLatestOnboardingCompletion()).toMatchObject({
+      version: CURRENT_ONBOARDING_COMPLETION_REQUIREMENTS.version,
+    });
 
     rmSync(recent.audioPath);
     await expect(caller.status()).resolves.toMatchObject({
       state: "activated",
       evidenceCreated: false,
+      evidencePending: false,
       evidence: { taskId: recent.id },
       sourceArtifacts: { audio: false, transcript: true, summary: true },
       completedNoteAvailable: true,
@@ -1653,6 +1675,14 @@ describe("activation router", () => {
       completedNoteAvailable: false,
       completedNote: null,
     });
+
+    const dbPath = join(root, "host.sqlite");
+    host!.close();
+    host = new HostStore(dbPath);
+    expect(host.getCoreActivationEvidence()?.taskId).toBe(recent.id);
+    expect(host.getLatestOnboardingCompletion()).toMatchObject({
+      version: CURRENT_ONBOARDING_COMPLETION_REQUIREMENTS.version,
+    });
   });
 
   it("keeps an active guided recording in place when unrelated work establishes activation", async () => {
@@ -1669,7 +1699,7 @@ describe("activation router", () => {
       ? await verifiedCoreActivationEvidence(candidate, artifacts, moviesDir)
       : null;
     expect(unrelatedEvidence).not.toBeNull();
-    host!.recordCoreActivationEvidence(unrelatedEvidence!);
+    host!.recordCoreActivationEvidence(unrelatedEvidence!, CURRENT_ONBOARDING_COMPLETION_REQUIREMENTS);
 
     await expect(caller.status()).resolves.toMatchObject({
       state: "recording",
@@ -1740,7 +1770,7 @@ describe("activation router", () => {
     );
     const backgroundCandidate = host!.getCoreActivationCandidate(background.id)!;
     const backgroundEvidence = (await verifiedCoreActivationEvidence(backgroundCandidate, artifacts, moviesDir))!;
-    host!.recordCoreActivationEvidence(backgroundEvidence);
+    host!.recordCoreActivationEvidence(backgroundEvidence, CURRENT_ONBOARDING_COMPLETION_REQUIREMENTS);
     const guided = completeRecording(
       moviesDir,
       artifacts,

@@ -39,6 +39,7 @@ import type { AudioTranscriptionService } from "./audioTranscription.js";
 import { XaiTextUnknownOutcomeError, type XaiTextClient } from "./xaiText.js";
 import type { XaiCredentialSource } from "./xaiCredentials.js";
 import { verifiedCoreActivationEvidence } from "./coreActivation.js";
+import { CURRENT_ONBOARDING_COMPLETION_REQUIREMENTS } from "./onboarding.js";
 import {
   hasCurrentSummaryDataPathDisclosure,
   hasCurrentXaiSummaryDisclosure,
@@ -891,7 +892,10 @@ export class RecordingPipeline {
         transcriptionProvider: transcription.provider,
       }, this.options.artifacts, this.options.paths.moviesDir);
       if (activationEvidence && !this.options.store.getCoreActivationEvidence()) {
-        const evidence = this.options.store.recordCoreActivationEvidence(activationEvidence);
+        const evidence = this.options.store.recordCoreActivationEvidence(
+          activationEvidence,
+          CURRENT_ONBOARDING_COMPLETION_REQUIREMENTS,
+        );
         this.options.pubsub.publish("core-activation", {
           taskId: evidence.taskId,
           recordingStem: evidence.recordingStem,

@@ -1,6 +1,6 @@
 // web/src/components/Sidebar.tsx
 import { NavLink } from "react-router";
-import { Settings as SettingsIcon, HeartPulse, Mic, FileText, BookOpen, Bot, AudioLines, CirclePlay } from "lucide-react";
+import { Settings as SettingsIcon, HeartPulse, Mic, FileText, BookOpen, Bot, AudioLines, ListChecks } from "lucide-react";
 import type { ReactNode } from "react";
 import type { CSSProperties } from "react";
 import { Logo } from "./Logo.js";
@@ -24,7 +24,7 @@ const TOP_SECTIONS: { headingKey: string; items: NavItem[] }[] = [
   {
     headingKey: "nav.section.system",
     items: [
-      { to: "/activate", labelKey: "nav.activate", icon: <CirclePlay size={15} strokeWidth={1.8} />, depth: 1 },
+      { to: "/onboarding", labelKey: "nav.onboarding", icon: <ListChecks size={15} strokeWidth={1.8} />, depth: 1 },
       { to: "/settings", labelKey: "nav.settings", icon: <SettingsIcon size={15} strokeWidth={1.8} />, depth: 1 },
       { to: "/health", labelKey: "nav.health", icon: <HeartPulse size={15} strokeWidth={1.8} />, showHealth: true, depth: 1 },
     ],

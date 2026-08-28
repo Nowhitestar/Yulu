@@ -22,6 +22,7 @@ export function Activate() {
   const retryAttempt = trpc.activation.retryAttempt.useMutation();
   const rerecordAttempt = trpc.activation.rerecordAttempt.useMutation();
   const replaceSummaryProvider = trpc.activation.replaceSummaryProvider.useMutation();
+  const commitDiscoveredEvidence = trpc.activation.commitDiscoveredEvidence.useMutation();
   const createSummaryAttemptFromUnknown = trpc.agentTasks.createSummaryAttemptFromUnknown.useMutation();
   const defer = trpc.activation.defer.useMutation();
   const updateConfig = trpc.config.update.useMutation();
@@ -42,6 +43,7 @@ export function Activate() {
   const titleRef = useRef<HTMLHeadingElement>(null);
   const titleFocused = useRef(false);
   const openingGuidedTask = useRef<string | null>(null);
+  const committingDiscoveredEvidence = useRef(false);
   const navigate = useNavigate();
   const { lang } = useLang();
   const t = useT();
@@ -49,6 +51,21 @@ export function Activate() {
   useEffect(() => {
     if (
       activation.data?.state !== "activated" ||
+      !activation.data.evidencePending ||
+      committingDiscoveredEvidence.current
+    ) return;
+    committingDiscoveredEvidence.current = true;
+    void commitDiscoveredEvidence.mutateAsync().then(
+      () => activation.refetch(),
+      (error) => {
+        setActionFailed(error instanceof Error ? error.message : String(error));
+      },
+    );
+  }, [activation, commitDiscoveredEvidence]);
+  useEffect(() => {
+    if (
+      activation.data?.state !== "activated" ||
+      activation.data.evidencePending ||
       !activation.data.guidedCompletionPending ||
       !activation.data.guidedCompletion
     ) return;

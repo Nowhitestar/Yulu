@@ -142,6 +142,37 @@ export interface ActivationJourneyState {
   deferredAt: string | null;
 }
 
+export interface OptionalCapabilityOutcome {
+  onboardingVersion: string;
+  capability: string;
+  contractVersion: string;
+  outcome: "adopted" | "deferred";
+  evidence: {
+    kind: string;
+    reference: string;
+  } | null;
+  decidedAt: string;
+}
+
+export interface OnboardingCompletion {
+  version: string;
+  completedAt: string;
+}
+
+export interface OnboardingCompletionRequirements {
+  version: string;
+  optionalCapabilities: ReadonlyArray<{
+    capability: string;
+    contractVersion: string;
+  }>;
+}
+
+export interface OnboardingEntryState {
+  installationKind: "fresh" | "returning";
+  automaticEntryAcknowledgedAt: string | null;
+  shouldAutoEnter: boolean;
+}
+
 export interface ActivationAttempt {
   id: string;
   startedAt: string;
@@ -283,6 +314,14 @@ function summaryDisclosureIdentity(provider: string, disclosureVersion: string) 
     throw new Error("Summary Data Path Disclosure identity is invalid");
   }
   return { provider: normalized, disclosureVersion: version };
+}
+
+function boundedIdentity(value: string, label: string): string {
+  const normalized = value.trim();
+  if (!/^[a-z0-9][a-z0-9._-]{0,99}$/.test(normalized)) {
+    throw new Error(`${label} is invalid`);
+  }
+  return normalized;
 }
 
 function boundedEvidenceString(value: unknown, max: number): string | null {
@@ -562,6 +601,7 @@ export class HostStore {
   readonly db: DbType;
 
   constructor(path: string) {
+    const existingDatabase = existsSync(path);
     const parent = dirname(path);
     const previousUmask = process.umask(0o077);
     try {
@@ -572,6 +612,7 @@ export class HostStore {
       this.db.pragma("foreign_keys = ON");
       this.db.pragma("busy_timeout = 5000");
       this.migrate();
+      this.initializeOnboardingEntryState(existingDatabase ? "returning" : "fresh");
       this.recoverInterrupted();
       this.retireUnstartedLegacyAutomaticDeliveryIntent();
       for (const dbPath of [path, `${path}-wal`, `${path}-shm`]) {
@@ -2333,6 +2374,142 @@ export class HostStore {
     return this.getActivationJourneyState();
   }
 
+  listOptionalCapabilityOutcomes(): OptionalCapabilityOutcome[] {
+    const rows = this.db.prepare(`
+      SELECT onboarding_version, capability, contract_version, outcome,
+        evidence_kind, evidence_reference, decided_at
+      FROM optional_capability_outcomes
+      ORDER BY onboarding_version, capability, contract_version
+    `).all() as Array<{
+      onboarding_version: string;
+      capability: string;
+      contract_version: string;
+      outcome: OptionalCapabilityOutcome["outcome"];
+      evidence_kind: string | null;
+      evidence_reference: string | null;
+      decided_at: string;
+    }>;
+    return rows.map((row) => ({
+      onboardingVersion: row.onboarding_version,
+      capability: row.capability,
+      contractVersion: row.contract_version,
+      outcome: row.outcome,
+      evidence: row.evidence_kind && row.evidence_reference ? {
+        kind: row.evidence_kind,
+        reference: row.evidence_reference,
+      } : null,
+      decidedAt: row.decided_at,
+    }));
+  }
+
+  recordOptionalCapabilityOutcome(
+    input: Omit<OptionalCapabilityOutcome, "decidedAt">,
+    completionRequirements?: OnboardingCompletionRequirements,
+  ): OptionalCapabilityOutcome {
+    const onboardingVersion = boundedIdentity(input.onboardingVersion, "Onboarding version");
+    const capability = boundedIdentity(input.capability, "Optional capability");
+    const contractVersion = boundedIdentity(input.contractVersion, "Optional capability contract version");
+    const evidenceKind = input.evidence?.kind.trim() || null;
+    const evidenceReference = input.evidence?.reference.trim() || null;
+    if (input.outcome === "adopted" && (!evidenceKind || !evidenceReference)) {
+      throw new Error("An adopted Optional Capability Outcome requires durable evidence");
+    }
+    if (input.outcome === "deferred" && input.evidence !== null) {
+      throw new Error("A deferred Optional Capability Outcome cannot claim adoption evidence");
+    }
+    if ((evidenceKind?.length ?? 0) > 100 || (evidenceReference?.length ?? 0) > 500) {
+      throw new Error("Optional Capability Evidence is too long");
+    }
+    const commit = this.db.transaction(() => {
+      this.db.prepare(`
+        INSERT INTO optional_capability_outcomes (
+          onboarding_version, capability, contract_version, outcome,
+          evidence_kind, evidence_reference, decided_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(onboarding_version, capability, contract_version) DO UPDATE SET
+          outcome = excluded.outcome,
+          evidence_kind = excluded.evidence_kind,
+          evidence_reference = excluded.evidence_reference,
+          decided_at = excluded.decided_at
+        WHERE optional_capability_outcomes.outcome = 'deferred'
+          AND excluded.outcome = 'adopted'
+      `).run(
+        onboardingVersion,
+        capability,
+        contractVersion,
+        input.outcome,
+        evidenceKind,
+        evidenceReference,
+        now(),
+      );
+      if (completionRequirements) this.recordOnboardingCompletionIfSatisfied(completionRequirements);
+      return this.listOptionalCapabilityOutcomes().find((outcome) =>
+        outcome.onboardingVersion === onboardingVersion &&
+        outcome.capability === capability &&
+        outcome.contractVersion === contractVersion
+      )!;
+    });
+    return commit.immediate();
+  }
+
+  getLatestOnboardingCompletion(): OnboardingCompletion | null {
+    const row = this.db.prepare(`
+      SELECT version, completed_at
+      FROM onboarding_completions
+      ORDER BY completed_at DESC, rowid DESC
+      LIMIT 1
+    `).get() as { version: string; completed_at: string } | undefined;
+    return row ? { version: row.version, completedAt: row.completed_at } : null;
+  }
+
+  getOnboardingCompletion(version: string): OnboardingCompletion | null {
+    const normalized = boundedIdentity(version, "Onboarding version");
+    const row = this.db.prepare(`
+      SELECT version, completed_at FROM onboarding_completions WHERE version = ?
+    `).get(normalized) as { version: string; completed_at: string } | undefined;
+    return row ? { version: row.version, completedAt: row.completed_at } : null;
+  }
+
+  private recordOnboardingCompletion(version: string): OnboardingCompletion {
+    const normalized = boundedIdentity(version, "Onboarding version");
+    this.db.prepare(`
+      INSERT OR IGNORE INTO onboarding_completions (version, completed_at)
+      VALUES (?, ?)
+    `).run(normalized, now());
+    const row = this.db.prepare(`
+      SELECT version, completed_at FROM onboarding_completions WHERE version = ?
+    `).get(normalized) as { version: string; completed_at: string };
+    return { version: row.version, completedAt: row.completed_at };
+  }
+
+  getOnboardingEntryState(): OnboardingEntryState {
+    const row = this.db.prepare(`
+      SELECT installation_kind, automatic_entry_acknowledged_at
+      FROM onboarding_entry_state WHERE id = 1
+    `).get() as {
+      installation_kind: OnboardingEntryState["installationKind"];
+      automatic_entry_acknowledged_at: string | null;
+    };
+    return {
+      installationKind: row.installation_kind,
+      automaticEntryAcknowledgedAt: row.automatic_entry_acknowledged_at,
+      shouldAutoEnter: row.installation_kind === "fresh" &&
+        row.automatic_entry_acknowledged_at === null,
+    };
+  }
+
+  acknowledgeAutomaticOnboardingEntry(): {
+    acknowledged: boolean;
+    state: OnboardingEntryState;
+  } {
+    const result = this.db.prepare(`
+      UPDATE onboarding_entry_state SET automatic_entry_acknowledged_at = ?
+      WHERE id = 1 AND installation_kind = 'fresh'
+        AND automatic_entry_acknowledged_at IS NULL
+    `).run(now());
+    return { acknowledged: result.changes === 1, state: this.getOnboardingEntryState() };
+  }
+
   getCloudTranscriptionConsent(): CloudTranscriptionConsent | null {
     const row = this.db.prepare(`
       SELECT disclosure_version, accepted_at
@@ -2411,7 +2588,10 @@ export class HostStore {
       .run(provider.trim().toLowerCase());
   }
 
-  recordCoreActivationEvidence(evidence: CoreActivationEvidence): CoreActivationEvidence {
+  recordCoreActivationEvidence(
+    evidence: CoreActivationEvidence,
+    completionRequirements: OnboardingCompletionRequirements,
+  ): CoreActivationEvidence {
     const fingerprints = Object.values(evidence.artifacts);
     if (
       !evidence.recordingStem.trim() || !evidence.taskId.trim() ||
@@ -2421,27 +2601,31 @@ export class HostStore {
     ) {
       throw new Error("Core Activation Evidence is incomplete");
     }
-    this.db.prepare(`
-      INSERT OR IGNORE INTO core_activation_evidence (
-        id, recording_stem, task_id, transcription_provider, summary_provider, summary_model,
-        audio_sha256, audio_bytes, transcript_sha256, transcript_bytes,
-        summary_sha256, summary_bytes, completed_at
-      ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      evidence.recordingStem,
-      evidence.taskId,
-      evidence.transcriptionProvider,
-      evidence.summaryProvider,
-      evidence.summaryModel,
-      evidence.artifacts.audio.sha256,
-      evidence.artifacts.audio.bytes,
-      evidence.artifacts.transcript.sha256,
-      evidence.artifacts.transcript.bytes,
-      evidence.artifacts.summary.sha256,
-      evidence.artifacts.summary.bytes,
-      evidence.completedAt,
-    );
-    return this.getCoreActivationEvidence()!;
+    const commit = this.db.transaction(() => {
+      this.db.prepare(`
+        INSERT OR IGNORE INTO core_activation_evidence (
+          id, recording_stem, task_id, transcription_provider, summary_provider, summary_model,
+          audio_sha256, audio_bytes, transcript_sha256, transcript_bytes,
+          summary_sha256, summary_bytes, completed_at
+        ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        evidence.recordingStem,
+        evidence.taskId,
+        evidence.transcriptionProvider,
+        evidence.summaryProvider,
+        evidence.summaryModel,
+        evidence.artifacts.audio.sha256,
+        evidence.artifacts.audio.bytes,
+        evidence.artifacts.transcript.sha256,
+        evidence.artifacts.transcript.bytes,
+        evidence.artifacts.summary.sha256,
+        evidence.artifacts.summary.bytes,
+        evidence.completedAt,
+      );
+      this.recordOnboardingCompletionIfSatisfied(completionRequirements);
+      return this.getCoreActivationEvidence()!;
+    });
+    return commit.immediate();
   }
 
   listCoreActivationCandidates(limit = 50): CoreActivationCandidate[] {
@@ -3329,6 +3513,32 @@ export class HostStore {
         recording_stem TEXT
       );
 
+      CREATE TABLE IF NOT EXISTS optional_capability_outcomes (
+        onboarding_version TEXT NOT NULL,
+        capability TEXT NOT NULL,
+        contract_version TEXT NOT NULL,
+        outcome TEXT NOT NULL CHECK(outcome IN ('adopted', 'deferred')),
+        evidence_kind TEXT,
+        evidence_reference TEXT,
+        decided_at TEXT NOT NULL,
+        PRIMARY KEY(onboarding_version, capability, contract_version),
+        CHECK(
+          (outcome = 'adopted' AND evidence_kind IS NOT NULL AND evidence_reference IS NOT NULL) OR
+          (outcome = 'deferred' AND evidence_kind IS NULL AND evidence_reference IS NULL)
+        )
+      );
+
+      CREATE TABLE IF NOT EXISTS onboarding_completions (
+        version TEXT PRIMARY KEY,
+        completed_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS onboarding_entry_state (
+        id INTEGER PRIMARY KEY CHECK(id = 1),
+        installation_kind TEXT NOT NULL CHECK(installation_kind IN ('fresh', 'returning')),
+        automatic_entry_acknowledged_at TEXT
+      );
+
       CREATE TABLE IF NOT EXISTS cloud_transcription_consent (
         id INTEGER PRIMARY KEY CHECK(id = 1),
         disclosure_version TEXT NOT NULL,
@@ -3550,5 +3760,35 @@ export class HostStore {
       UPDATE agent_tasks SET summary_provider = agent_provider
       WHERE summary_provider = 'agent'
     `);
+  }
+
+  private initializeOnboardingEntryState(
+    installationKind: OnboardingEntryState["installationKind"],
+  ): void {
+    this.db.prepare(`
+      INSERT OR IGNORE INTO onboarding_entry_state (
+        id, installation_kind, automatic_entry_acknowledged_at
+      ) VALUES (1, ?, NULL)
+    `).run(installationKind);
+  }
+
+  private recordOnboardingCompletionIfSatisfied(
+    requirements: OnboardingCompletionRequirements,
+  ): OnboardingCompletion | null {
+    const version = boundedIdentity(requirements.version, "Onboarding version");
+    if (!this.getCoreActivationEvidence()) return null;
+    const complete = requirements.optionalCapabilities.every((capability) => {
+      const capabilityId = boundedIdentity(capability.capability, "Optional capability");
+      const contractVersion = boundedIdentity(
+        capability.contractVersion,
+        "Optional capability contract version",
+      );
+      return this.db.prepare(`
+        SELECT 1 FROM optional_capability_outcomes
+        WHERE capability = ? AND contract_version = ?
+        LIMIT 1
+      `).get(capabilityId, contractVersion) !== undefined;
+    });
+    return complete ? this.recordOnboardingCompletion(version) : null;
   }
 }

@@ -1,12 +1,12 @@
 import { Outlet, useLocation } from "react-router";
 import { Sidebar } from "../components/Sidebar.js";
 import { TopBar } from "../components/TopBar.js";
-import { ActivationEntry } from "./entry.js";
+import { OnboardingEntry } from "./entry.js";
 
 export function RootLayout() {
   const location = useLocation();
   const isAgentConsole = location.pathname.startsWith("/agent-console");
-  const isActivation = location.pathname === "/activate";
+  const isGuidedFlow = location.pathname === "/activate" || location.pathname === "/onboarding";
   return (
     <div className={`root-shell${isAgentConsole ? " agent-console-shell" : ""}`}>
       <div className="root-sidebar-pane">
@@ -15,7 +15,7 @@ export function RootLayout() {
       <main className="root-main">
         <TopBar />
         <div className="root-body">
-          {isActivation ? <Outlet /> : <ActivationEntry><Outlet /></ActivationEntry>}
+          {isGuidedFlow ? <Outlet /> : <OnboardingEntry><Outlet /></OnboardingEntry>}
         </div>
       </main>
     </div>

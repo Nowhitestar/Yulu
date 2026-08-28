@@ -44,6 +44,14 @@ audio, transcript, summary, integrity, and provider provenance establish the
 milestone; guided completion opens the saved note, while other qualifying
 recordings show a nonblocking link without changing the current page.
 
+On a fresh install, Yulu opens **Onboarding Home** once to organize Core
+Activation and optional capabilities. Returning users enter it only from the
+normal, nonblocking navigation. Adopted or deferred optional outcomes and prior
+Onboarding Completion stay durable across restarts and onboarding versions;
+current readiness is shown separately and can need attention without revoking
+that history. Onboarding links to existing authoritative Settings surfaces and
+never copies provider, connector, OAuth, or token configuration.
+
 ## What you can do
 
 | Experience | What Yulu provides |

@@ -455,10 +455,10 @@ describe("Settings category detail content (re-homed widgets)", () => {
     expect(detail.getByText("0.8.0")).toBeInTheDocument();
   });
 
-  it("general: exposes persistent Activation Journey re-entry", () => {
+  it("general: exposes persistent Onboarding Home re-entry", () => {
     const { container } = wrap("/settings/general");
     const detail = within(container.querySelector(".masterdetail-detail") as HTMLElement);
-    expect(detail.getByRole("link", { name: "打开激活流程" })).toHaveAttribute("href", "/activate");
+    expect(detail.getByRole("link", { name: "打开新手引导" })).toHaveAttribute("href", "/onboarding");
   });
 
   it("audio: audio rows + storage dbStats/logs", () => {

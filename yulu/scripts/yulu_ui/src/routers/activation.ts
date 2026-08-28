@@ -16,6 +16,7 @@ import {
   type CoreActivationEvidence,
 } from "../hostStore.js";
 import { runRecordAudio, stopRecordingAndEnqueue } from "../recordingCommand.js";
+import { CURRENT_ONBOARDING_COMPLETION_REQUIREMENTS } from "../onboarding.js";
 
 const MICROPHONE_SETTINGS = "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone";
 const ACTIVATION_RECORDING_COMMAND_TIMEOUT_MS = 30_000;
@@ -448,6 +449,7 @@ function activatedStatus(
   evidenceCreated: boolean,
   guidedCompletionPending = false,
   guidedCompletion: { taskId: string; recordingStem: string } | null = null,
+  evidencePending = false,
 ) {
   const safeStem = basename(evidence.recordingStem) === evidence.recordingStem;
   const sourceArtifacts = {
@@ -468,6 +470,7 @@ function activatedStatus(
     state: "activated" as const,
     evidence,
     evidenceCreated,
+    evidencePending,
     guidedCompletionPending,
     guidedCompletion: guidedCompletionPending ? guidedCompletion : null,
     sourceArtifacts,
@@ -476,10 +479,33 @@ function activatedStatus(
   };
 }
 
+async function commitDiscoveredCoreEvidence(ctx: AppContext) {
+  const stored = ctx.host.getCoreActivationEvidence();
+  if (stored) return { created: false, evidence: stored };
+  const attempt = await activeAttempt(ctx);
+  let evidence = attempt?.attempt.taskId
+    ? await verifiedAttemptEvidence(ctx, attempt.attempt.taskId, null)
+    : null;
+  if (!evidence) {
+    for (const candidate of ctx.host.listCoreActivationCandidates()) {
+      evidence = await verifiedCoreActivationEvidence(candidate, ctx.artifacts, ctx.paths.moviesDir);
+      if (evidence) break;
+    }
+  }
+  if (!evidence) return { created: false, evidence: null };
+  return {
+    created: true,
+    evidence: ctx.host.recordCoreActivationEvidence(
+      evidence,
+      CURRENT_ONBOARDING_COMPLETION_REQUIREMENTS,
+    ),
+  };
+}
+
 export const activationRouter = router({
   status: publicProcedure.query(async ({ ctx }) => {
     let evidence = ctx.host.getCoreActivationEvidence();
-    let evidenceCreated = false;
+    let evidencePending = false;
     const attempt = await activeAttempt(ctx);
     if (attempt) {
       const guidedEvidence = attempt.attempt.taskId
@@ -487,33 +513,34 @@ export const activationRouter = router({
         : null;
       if (guidedEvidence) {
         if (!evidence) {
-          evidence = ctx.host.recordCoreActivationEvidence(guidedEvidence);
-          evidenceCreated = true;
+          evidence = guidedEvidence;
+          evidencePending = true;
         }
         const guidedCompletionPending = attempt.attempt.completionOpenedAt === null;
         return activatedStatus(
           ctx,
           evidence,
-          evidenceCreated,
+          false,
           guidedCompletionPending,
           guidedCompletionPending ? {
             taskId: guidedEvidence.taskId,
             recordingStem: guidedEvidence.recordingStem,
           } : null,
+          evidencePending,
         );
       }
       return {
         ...attempt,
         backgroundEvidence: evidence,
-        backgroundEvidenceCreated: evidenceCreated,
+        backgroundEvidenceCreated: false,
       };
     }
     if (!evidence) {
       for (const candidate of ctx.host.listCoreActivationCandidates()) {
         const verified = await verifiedCoreActivationEvidence(candidate, ctx.artifacts, ctx.paths.moviesDir);
         if (verified) {
-          evidence = ctx.host.recordCoreActivationEvidence(verified);
-          evidenceCreated = true;
+          evidence = verified;
+          evidencePending = true;
           break;
         }
       }
@@ -526,8 +553,10 @@ export const activationRouter = router({
         ...await activationReadiness(ctx),
       };
     }
-    return activatedStatus(ctx, evidence, evidenceCreated);
+    return activatedStatus(ctx, evidence, false, false, null, evidencePending);
   }),
+  commitDiscoveredEvidence: uiMutationProcedure.mutation(({ ctx }) =>
+    commitDiscoveredCoreEvidence(ctx)),
   startAttempt: uiMutationProcedure.mutation(async ({ ctx }) => {
     const readiness = await activationReadiness(ctx);
     if (readiness.nextStep === "recording_pipeline") {
@@ -664,9 +693,16 @@ export const activationRouter = router({
         ctx.host.getCoreActivationEvidence(),
       );
       if (!evidence) return { acknowledged: false };
+      if (!ctx.host.getCoreActivationEvidence()) {
+        ctx.host.recordCoreActivationEvidence(
+          evidence,
+          CURRENT_ONBOARDING_COMPLETION_REQUIREMENTS,
+        );
+      }
       return { acknowledged: ctx.host.acknowledgeGuidedCompletion(input.taskId) };
     }),
-  acknowledgeAutomaticEntry: uiMutationProcedure.mutation(({ ctx }) => {
+  acknowledgeAutomaticEntry: uiMutationProcedure.mutation(async ({ ctx }) => {
+    await commitDiscoveredCoreEvidence(ctx);
     const result = ctx.host.acknowledgeAutomaticActivationEntry();
     return {
       acknowledged: result.acknowledged,

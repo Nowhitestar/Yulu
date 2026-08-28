@@ -7,6 +7,7 @@ import { LanguageProvider } from "../../../web/src/i18n/LanguageProvider.js";
 
 interface ActivatedData {
   state: "activated";
+  evidencePending?: boolean;
   guidedCompletionPending?: boolean;
   guidedCompletion?: { taskId: string; recordingStem: string } | null;
   evidence: {
@@ -219,6 +220,7 @@ const activation = vi.hoisted(() => ({
   rerecordAttempt: vi.fn(async () => ({ state: "recording" })),
   replaceSummaryProvider: vi.fn(async () => ({ state: "processing" })),
   acknowledgeGuidedCompletion: vi.fn(async () => ({ acknowledged: true })),
+  commitDiscoveredEvidence: vi.fn(async () => ({ created: true })),
   defer: vi.fn(async () => ({ journey: { shouldAutoEnter: false } })),
   acceptXaiDisclosure: vi.fn(async () => ({ disclosureVersion: "xai-audio-v1" })),
   acceptSummaryDisclosure: vi.fn(async () => ({ disclosureVersion: "xai-summary-v1" })),
@@ -273,6 +275,9 @@ vi.mock("../../../web/src/trpc.js", () => ({
       },
       acknowledgeGuidedCompletion: {
         useMutation: () => ({ mutateAsync: activation.acknowledgeGuidedCompletion, isPending: false }),
+      },
+      commitDiscoveredEvidence: {
+        useMutation: () => ({ mutateAsync: activation.commitDiscoveredEvidence, isPending: false }),
       },
       defer: { useMutation: () => ({ mutateAsync: activation.defer, isPending: false }) },
       acceptXaiTranscriptionDisclosure: {
@@ -357,6 +362,7 @@ afterEach(() => {
   activation.rerecordAttempt.mockClear();
   activation.replaceSummaryProvider.mockClear();
   activation.acknowledgeGuidedCompletion.mockClear();
+  activation.commitDiscoveredEvidence.mockClear();
   activation.acceptXaiDisclosure.mockClear();
   activation.acceptSummaryDisclosure.mockClear();
   activation.declineSummaryDisclosure.mockClear();
@@ -383,6 +389,14 @@ afterEach(() => {
 });
 
 describe("/activate", () => {
+  it("commits verified discovered evidence through an authorized mutation", async () => {
+    (activation.data as ActivatedData).evidencePending = true;
+    renderRoute("en");
+
+    await waitFor(() => expect(activation.commitDiscoveredEvidence).toHaveBeenCalledOnce());
+    expect(activation.refetch).toHaveBeenCalledOnce();
+  });
+
   it("renders localized accessible activation evidence and actions", () => {
     renderRoute("en");
 

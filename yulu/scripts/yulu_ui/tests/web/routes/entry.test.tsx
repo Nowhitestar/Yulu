@@ -28,12 +28,45 @@ const activation = vi.hoisted(() => ({
   queryOptions: undefined as { retry?: boolean } | undefined,
 }));
 
+const onboarding = vi.hoisted(() => ({
+  data: {
+    entry: {
+      installationKind: "fresh" as "fresh" | "returning",
+      automaticEntryAcknowledgedAt: null as string | null,
+      shouldAutoEnter: true,
+    },
+  } as {
+    entry: {
+      installationKind: "fresh" | "returning";
+      automaticEntryAcknowledgedAt: string | null;
+      shouldAutoEnter: boolean;
+    };
+  } | undefined,
+  acknowledge: vi.fn(async () => ({ acknowledged: true })),
+  isPending: false,
+  isError: false,
+  queryOptions: undefined as { retry?: boolean } | undefined,
+}));
+
 const ws = vi.hoisted(() => ({
   coreActivation: undefined as ((event: { taskId: string; recordingStem: string }) => void) | undefined,
 }));
 
 vi.mock("../../../web/src/trpc.js", () => ({
   trpc: {
+    onboarding: {
+      status: { useQuery: (_input: undefined, options?: { retry?: boolean }) => {
+        onboarding.queryOptions = options;
+        return {
+          data: onboarding.data,
+          isPending: onboarding.isPending,
+          isError: onboarding.isError,
+        };
+      } },
+      acknowledgeAutomaticEntry: {
+        useMutation: () => ({ mutateAsync: onboarding.acknowledge }),
+      },
+    },
     activation: {
       status: { useQuery: (_input: undefined, options?: { retry?: boolean }) => {
         activation.queryOptions = options;
@@ -57,17 +90,18 @@ vi.mock("../../../web/src/ws.js", () => ({
   },
 }));
 
-import { ActivationEntry } from "../../../web/src/routes/entry.js";
+import { OnboardingEntry } from "../../../web/src/routes/entry.js";
 
 function renderEntry(initial = "/inbox") {
   const router = createMemoryRouter([
+    { path: "/onboarding", element: <h1>Onboarding home</h1> },
     { path: "/activate", element: <h1>Activation journey</h1> },
     {
       path: "*",
       element: (
-        <ActivationEntry>
+        <OnboardingEntry>
           <h1>Normal product</h1>
-        </ActivationEntry>
+        </OnboardingEntry>
       ),
     },
   ], { initialEntries: [initial] });
@@ -80,6 +114,17 @@ function renderEntry(initial = "/inbox") {
 }
 
 afterEach(() => {
+  onboarding.data = {
+    entry: {
+      installationKind: "fresh",
+      automaticEntryAcknowledgedAt: null,
+      shouldAutoEnter: true,
+    },
+  };
+  onboarding.acknowledge.mockClear();
+  onboarding.isPending = false;
+  onboarding.isError = false;
+  onboarding.queryOptions = undefined;
   activation.data = {
     state: "unresolved",
     journey: {
@@ -97,22 +142,38 @@ afterEach(() => {
 });
 
 describe("/ entry", () => {
-  it("automatically enters the Activation Journey once when unresolved", async () => {
+  it("automatically enters Onboarding Home once for a fresh install", async () => {
     const router = renderEntry("/inbox");
 
-    expect(await screen.findByRole("heading", { name: "Activation journey" })).toBeInTheDocument();
-    expect(router.state.location.pathname).toBe("/activate");
-    expect(activation.acknowledge).toHaveBeenCalledOnce();
+    expect(await screen.findByRole("heading", { name: "Onboarding home" })).toBeInTheDocument();
+    expect(router.state.location.pathname).toBe("/onboarding");
+    expect(onboarding.acknowledge).toHaveBeenCalledOnce();
+    expect(activation.acknowledge).not.toHaveBeenCalled();
   });
 
-  it("opens the normal product when Core Activation Evidence exists", async () => {
+  it("keeps returning users in the requested product route", async () => {
+    onboarding.data!.entry = {
+      installationKind: "returning",
+      automaticEntryAcknowledgedAt: null,
+      shouldAutoEnter: false,
+    };
     activation.data!.state = "activated";
     activation.data!.evidenceCreated = false;
     const router = renderEntry("/inbox");
 
     expect(await screen.findByRole("heading", { name: "Normal product" })).toBeInTheDocument();
     expect(router.state.location.pathname).toBe("/inbox");
-    expect(activation.acknowledge).not.toHaveBeenCalled();
+    expect(onboarding.acknowledge).not.toHaveBeenCalled();
+  });
+
+  it("still enters Onboarding Home for a fresh install whose Core Activation is complete", async () => {
+    activation.data!.state = "activated";
+    activation.data!.evidenceCreated = false;
+    const router = renderEntry("/inbox");
+
+    expect(await screen.findByRole("heading", { name: "Onboarding home" })).toBeInTheDocument();
+    expect(router.state.location.pathname).toBe("/onboarding");
+    expect(onboarding.acknowledge).toHaveBeenCalledOnce();
   });
 
   it("does not steal focus back to activation while a durable attempt processes", async () => {
@@ -121,11 +182,11 @@ describe("/ entry", () => {
 
     expect(await screen.findByRole("heading", { name: "Normal product" })).toBeInTheDocument();
     expect(router.state.location.pathname).toBe("/agent-console");
-    expect(activation.acknowledge).not.toHaveBeenCalled();
+    expect(onboarding.acknowledge).not.toHaveBeenCalled();
   });
 
   it("announces a background completion without changing the current route", async () => {
-    activation.data!.journey.shouldAutoEnter = false;
+    onboarding.data!.entry.shouldAutoEnter = false;
     const router = renderEntry("/agent-console");
     await screen.findByRole("heading", { name: "Normal product" });
 
@@ -144,6 +205,11 @@ describe("/ entry", () => {
   });
 
   it("announces historical evidence discovered by the Host without redirecting", async () => {
+    onboarding.data!.entry = {
+      installationKind: "returning",
+      automaticEntryAcknowledgedAt: null,
+      shouldAutoEnter: false,
+    };
     activation.data = {
       state: "activated",
       evidenceCreated: true,
@@ -160,34 +226,34 @@ describe("/ entry", () => {
     expect(router.state.location.pathname).toBe("/inbox");
   });
 
-  it("opens the normal product after entry was acknowledged or deferred", async () => {
-    activation.data!.journey.shouldAutoEnter = false;
-    activation.data!.journey.deferredAt = "2026-08-25T04:00:00.000Z";
+  it("opens the normal product after automatic Onboarding entry was acknowledged", async () => {
+    onboarding.data!.entry.shouldAutoEnter = false;
+    onboarding.data!.entry.automaticEntryAcknowledgedAt = "2026-08-25T04:00:00.000Z";
     const router = renderEntry("/agent-console");
 
     expect(await screen.findByRole("heading", { name: "Normal product" })).toBeInTheDocument();
     expect(router.state.location.pathname).toBe("/agent-console");
-    expect(activation.acknowledge).not.toHaveBeenCalled();
+    expect(onboarding.acknowledge).not.toHaveBeenCalled();
   });
 
   it("keeps the requested product route when status is unavailable", async () => {
-    activation.data = undefined;
-    activation.isError = true;
+    onboarding.data = undefined;
+    onboarding.isError = true;
     const router = renderEntry("/inbox");
 
     expect(await screen.findByRole("heading", { name: "Normal product" })).toBeInTheDocument();
     expect(router.state.location.pathname).toBe("/inbox");
-    expect(activation.acknowledge).not.toHaveBeenCalled();
-    expect(activation.queryOptions).toMatchObject({ retry: false });
+    expect(onboarding.acknowledge).not.toHaveBeenCalled();
+    expect(onboarding.queryOptions).toMatchObject({ retry: false });
   });
 
-  it("shows a bounded pending state without entering activation", () => {
-    activation.data = undefined;
-    activation.isPending = true;
+  it("shows a bounded pending state without entering onboarding", () => {
+    onboarding.data = undefined;
+    onboarding.isPending = true;
     renderEntry("/inbox");
 
     expect(screen.getByRole("status")).toHaveTextContent("正在检查激活状态");
-    expect(activation.acknowledge).not.toHaveBeenCalled();
-    expect(activation.queryOptions).toMatchObject({ retry: false });
+    expect(onboarding.acknowledge).not.toHaveBeenCalled();
+    expect(onboarding.queryOptions).toMatchObject({ retry: false });
   });
 });

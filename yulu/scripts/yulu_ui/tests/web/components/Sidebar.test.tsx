@@ -62,9 +62,9 @@ describe("Sidebar", () => {
     expect(getByText("设置").closest("a")?.getAttribute("href")).toBe("/settings");
   });
 
-  it("keeps a non-blocking Activation Journey re-entry in the normal product", () => {
+  it("keeps a non-blocking Onboarding Home entry in the normal product", () => {
     const { getByText } = wrap(<Sidebar />);
-    expect(getByText("激活 Yulu").closest("a")?.getAttribute("href")).toBe("/activate");
+    expect(getByText("新手引导").closest("a")?.getAttribute("href")).toBe("/onboarding");
   });
 
   it("renders Health link in the System section with a health-state dot", () => {

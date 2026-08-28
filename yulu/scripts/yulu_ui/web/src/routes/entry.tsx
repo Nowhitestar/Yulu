@@ -6,11 +6,12 @@ import { trpc } from "../trpc.js";
 import { useWsChannel } from "../ws.js";
 import "./activate.css";
 
-export function ActivationEntry({ children }: { children: ReactNode }) {
+export function OnboardingEntry({ children }: { children: ReactNode }) {
+  const onboarding = trpc.onboarding.status.useQuery(undefined, { retry: false });
   const activation = trpc.activation.status.useQuery(undefined, { retry: false });
-  const acknowledge = trpc.activation.acknowledgeAutomaticEntry.useMutation();
+  const acknowledge = trpc.onboarding.acknowledgeAutomaticEntry.useMutation();
   const started = useRef(false);
-  const [target, setTarget] = useState<"activate" | "normal" | null>(null);
+  const [target, setTarget] = useState<"onboarding" | "normal" | null>(null);
   const [completedStem, setCompletedStem] = useState<string | null>(null);
   const t = useT();
 
@@ -20,8 +21,8 @@ export function ActivationEntry({ children }: { children: ReactNode }) {
   });
 
   useEffect(() => {
-    if (activation.isPending || started.current) return;
-    if (!activation.data) {
+    if (onboarding.isPending || activation.isPending || started.current) return;
+    if (!onboarding.data || !activation.data) {
       started.current = true;
       setTarget("normal");
       return;
@@ -30,25 +31,23 @@ export function ActivationEntry({ children }: { children: ReactNode }) {
       if (activation.data.evidenceCreated) {
         setCompletedStem(activation.data.evidence.recordingStem);
       }
-      setTarget("normal");
-      return;
     }
     if (
       activation.data.state === "recording" ||
       activation.data.state === "processing" ||
-      !activation.data.journey.shouldAutoEnter
+      !onboarding.data.entry.shouldAutoEnter
     ) {
       setTarget("normal");
       return;
     }
     started.current = true;
     void acknowledge.mutateAsync().then(
-      (result) => setTarget(result.acknowledged ? "activate" : "normal"),
+      (result) => setTarget(result.acknowledged ? "onboarding" : "normal"),
       () => setTarget("normal"),
     );
-  }, [acknowledge, activation.data, activation.isPending]);
+  }, [acknowledge, activation.data, activation.isPending, onboarding.data, onboarding.isPending]);
 
-  if (target === "activate") return <Navigate to="/activate" replace />;
+  if (target === "onboarding") return <Navigate to="/onboarding" replace />;
   if (target === "normal") return (
     <>
       {children}

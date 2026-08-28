@@ -22,6 +22,7 @@ import { providersRouter } from "./providers.js";
 import { activationRouter } from "./activation.js";
 import { agentConnectionsRouter } from "./agentConnections.js";
 import { sharingRouter } from "./sharing.js";
+import { onboardingRouter } from "./onboarding.js";
 
 export const appRouter = router({
   recordings:   recordingsRouter,
@@ -47,6 +48,7 @@ export const appRouter = router({
   activation: activationRouter,
   agentConnections: agentConnectionsRouter,
   sharing: sharingRouter,
+  onboarding: onboardingRouter,
 });
 
 export type AppRouter = typeof appRouter;
