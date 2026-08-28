@@ -572,7 +572,7 @@ def _agent_connections_unavailable() -> dict[str, Any]:
     }
 
 
-def check_agent_connections(timeout: float = 2.0) -> dict[str, Any]:
+def check_agent_connections(timeout: float = 30.0) -> dict[str, Any]:
     """Read and whitelist the Host's public, quota-free Agent Connection view."""
     try:
         import urllib.request

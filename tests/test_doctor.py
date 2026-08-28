@@ -254,6 +254,26 @@ def test_agent_connection_diagnostics_fail_closed_without_host(monkeypatch):
     assert "never-report-this" not in json.dumps(report)
 
 
+def test_agent_connection_diagnostics_allow_runtime_status_inspection_budget(monkeypatch):
+    doctor = load_doctor()
+    observed = {}
+
+    def fake_urlopen(_url, *, timeout):
+        observed["timeout"] = timeout
+        return _JsonResponse({
+            "result": {"data": {
+                "connections": [],
+                "candidates": [],
+                "legacyConnections": [],
+            }},
+        })
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    assert doctor.check_agent_connections()["ok"] is True
+    assert observed["timeout"] == 30.0
+
+
 def test_doctor_process_projection_never_returns_command_arguments():
     doctor = load_doctor()
     raw = [
