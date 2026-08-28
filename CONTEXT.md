@@ -47,6 +47,12 @@ Yulu. It suppresses forced re-entry in the same local user environment, includin
 after ordinary upgrades, while keeping a non-blocking path back.
 _Avoid_: Onboarding Completion, dismissal
 
+**Optional Capability Outcome**:
+A durable Onboarding record that an optional capability was successfully adopted
+or explicitly deferred. It completes that onboarding step but does not claim the
+capability remains currently ready.
+_Avoid_: Readiness flag, required setup, permanent dismissal
+
 **Cloud Transcription Consent**:
 Versioned consent to send recording audio to xAI for transcription after the
 privacy and cost implications have been disclosed. It does not grant consent
@@ -109,6 +115,12 @@ Summary and Conversation; connectors, delivery, transcription, and runtime
 provisioning are separate capabilities and are not implied by the connection.
 _Avoid_: Agent support, connected features
 
+**Agent Connector**:
+An external-service capability managed and authorized by a Supported Agent for
+interactive reads or explicit writes. It is separate from a Yulu Calendar Source
+and does not authorize a Share Action by being configured.
+_Avoid_: Yulu integration, Calendar Source, Share Destination
+
 **Capability Readiness**:
 Current, capability-specific evidence from a real invocation that an explicit
 Agent Connection and model can perform the named Agent Capability. Installation,
@@ -158,12 +170,29 @@ Current evidence that the explicitly selected Summary Provider can be invoked
 before an Activation Attempt. Saved configuration alone is not readiness.
 _Avoid_: Provider configured, provider detected
 
+**Calendar Source**:
+A calendar already available to Yulu for finding scheduled meetings and offering
+native capture. It is distinct from an Agent Connector used for interactive
+calendar reasoning or actions.
+_Avoid_: Calendar connector, Agent calendar
+
+**Share Destination**:
+An explicit external target for a saved summary, reached through a selected
+Agent Connector. Saving the target does not authorize an external write.
+_Avoid_: Connector, automatic delivery authorization
+
+**Share Action**:
+A user-confirmed attempt to send one saved summary to one Share Destination. It
+ends only with a verified receipt, a proven failure, or an Unknown Outcome.
+_Avoid_: Sync, configured sharing, background delivery
+
 **Activation Blocker**:
 A named capability that currently prevents progress toward Core Activation. It
 ends the waiting state and gives the user a retry or an exact remediation path.
 _Avoid_: Setup failed, unknown error, loading
 
 **Onboarding Completion**:
-The point after Core Activation when every optional capability has either been
-activated or explicitly deferred by the user.
+The point after Core Activation when every optional capability in that Onboarding
+version has an Optional Capability Outcome. Later capabilities or readiness
+changes do not revoke it; they surface separately as new or needing attention.
 _Avoid_: Every integration enabled
