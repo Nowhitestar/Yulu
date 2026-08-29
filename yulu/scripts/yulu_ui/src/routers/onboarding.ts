@@ -7,6 +7,7 @@ import {
 } from "../onboarding.js";
 import type { AppContext } from "../trpc.js";
 import { publicProcedure, router, uiMutationProcedure } from "../trpc.js";
+import { ConversationAdoptionEvidenceUnavailableError } from "../agentConnections.js";
 
 const optionalCapability = z.enum([
   "conversation",
@@ -116,6 +117,87 @@ async function status(ctx: AppContext) {
   };
 }
 
+type ConversationAdoptionProof = Awaited<ReturnType<
+  NonNullable<AppContext["agentConnections"]>["conversationAdoptionEvidence"]
+>>;
+
+function recordConversationOutcome(
+  ctx: Pick<AppContext, "host">,
+  proof: ConversationAdoptionProof,
+) {
+  const outcome = ctx.host.recordOptionalCapabilityOutcome({
+    onboardingVersion: CURRENT_ONBOARDING_MANIFEST.version,
+    capability: "conversation",
+    contractVersion: CURRENT_ONBOARDING_MANIFEST.optionalCapabilities.find(
+      (capability) => capability.id === "conversation",
+    )!.contractVersion,
+    outcome: "adopted",
+    evidence: {
+      kind: proof.kind,
+      reference: proof.reference,
+      snapshot: {
+        capability: "conversation",
+        connectionId: proof.connectionId,
+        adapter: proof.adapter,
+        provider: proof.provider,
+        model: proof.model,
+        credentialSource: proof.credentialSource ?? "runtime-oauth",
+        testedAt: proof.testedAt,
+        runtimeEvidence: proof.runtimeEvidence,
+      },
+    },
+  }, CURRENT_ONBOARDING_COMPLETION_REQUIREMENTS);
+  return { outcome, proof };
+}
+
+async function adoptConversationOutcome(ctx: Pick<AppContext, "host" | "agentConnections">) {
+  if (!ctx.agentConnections) {
+    throw new Error("Agent Connection Center is unavailable");
+  }
+  return recordConversationOutcome(ctx, await ctx.agentConnections.conversationAdoptionEvidence());
+}
+
+const ONBOARDING_OUTCOME_MIGRATION_ID = "phase-13-onboarding-outcomes-v1";
+
+export async function migrateExistingOnboardingOutcomes(
+  ctx: Pick<AppContext, "host" | "agentConnections">,
+) {
+  if (ctx.host.getOnboardingEntryState().installationKind !== "returning") {
+    return { status: "skipped" as const, conversation: "fresh" as const };
+  }
+  if (ctx.host.hasOnboardingOutcomeMigration(ONBOARDING_OUTCOME_MIGRATION_ID)) {
+    return { status: "already_completed" as const, conversation: "preserved" as const };
+  }
+
+  const conversationContract = CURRENT_ONBOARDING_MANIFEST.optionalCapabilities.find(
+    (capability) => capability.id === "conversation",
+  )!.contractVersion;
+  const existing = ctx.host.listOptionalCapabilityOutcomes().find((outcome) =>
+    outcome.capability === "conversation" && outcome.contractVersion === conversationContract
+  );
+  const hasExistingRecord = ctx.host.hasOptionalCapabilityOutcomeRecord(
+    "conversation",
+    conversationContract,
+  );
+  let conversation: "adopted" | "preserved" | "unresolved" = existing ? "preserved" : "unresolved";
+  if (!hasExistingRecord && ctx.agentConnections) {
+    let proof: ConversationAdoptionProof | null = null;
+    try {
+      proof = await ctx.agentConnections.conversationAdoptionEvidence();
+    } catch (error) {
+      // Missing, stale, malformed, or legacy evidence remains unresolved by design.
+      if (!(error instanceof ConversationAdoptionEvidenceUnavailableError)) throw error;
+    }
+    if (proof) {
+      recordConversationOutcome(ctx, proof);
+      conversation = "adopted";
+    }
+  }
+  ctx.host.recordOnboardingCompletionIfSatisfied(CURRENT_ONBOARDING_COMPLETION_REQUIREMENTS);
+  ctx.host.recordOnboardingOutcomeMigration(ONBOARDING_OUTCOME_MIGRATION_ID);
+  return { status: "completed" as const, conversation };
+}
+
 export const onboardingRouter = router({
   status: publicProcedure.query(({ ctx }) => status(ctx)),
   acknowledgeAutomaticEntry: uiMutationProcedure.mutation(({ ctx }) => {
@@ -126,35 +208,7 @@ export const onboardingRouter = router({
     journey: ctx.host.deferActivationJourney(),
     attempt: ctx.host.getActivationAttempt(),
   })),
-  adoptConversation: uiMutationProcedure.mutation(async ({ ctx }) => {
-    if (!ctx.agentConnections) {
-      throw new Error("Agent Connection Center is unavailable");
-    }
-    const proof = await ctx.agentConnections.conversationAdoptionEvidence();
-    const outcome = ctx.host.recordOptionalCapabilityOutcome({
-      onboardingVersion: CURRENT_ONBOARDING_MANIFEST.version,
-      capability: "conversation",
-      contractVersion: CURRENT_ONBOARDING_MANIFEST.optionalCapabilities.find(
-        (capability) => capability.id === "conversation",
-      )!.contractVersion,
-      outcome: "adopted",
-      evidence: {
-        kind: proof.kind,
-        reference: proof.reference,
-        snapshot: {
-          capability: "conversation",
-          connectionId: proof.connectionId,
-          adapter: proof.adapter,
-          provider: proof.provider,
-          model: proof.model,
-          credentialSource: proof.credentialSource ?? "runtime-oauth",
-          testedAt: proof.testedAt,
-          runtimeEvidence: proof.runtimeEvidence,
-        },
-      },
-    }, CURRENT_ONBOARDING_COMPLETION_REQUIREMENTS);
-    return { outcome, proof };
-  }),
+  adoptConversation: uiMutationProcedure.mutation(({ ctx }) => adoptConversationOutcome(ctx)),
   adoptCalendarSource: uiMutationProcedure.mutation(async ({ ctx }) => {
     if (!ctx.calendarSources) throw new Error("Calendar Source settings are unavailable");
     const proof = await ctx.calendarSources.adoptionEvidence();

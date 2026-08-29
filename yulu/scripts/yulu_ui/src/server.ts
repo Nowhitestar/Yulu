@@ -69,6 +69,7 @@ import { AgentSharingConnectorAdapter } from "./sharingConnector.js";
 import { CalendarSourceManager } from "./calendarSources.js";
 import { createCalendarSourceAdapters } from "./calendarSourceAdapters.js";
 import { AgentCalendarConnector, AgentCalendarConnectorRuntimeAdapter } from "./agentCalendarConnector.js";
+import { migrateExistingOnboardingOutcomes } from "./routers/onboarding.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const RETIRED_GATEWAY_CONNECTION_ID = "cliproxyapi";
@@ -337,6 +338,12 @@ async function startLockedServer(
     agentCalendarConnector,
     db:        dbProxy,
   };
+
+  try {
+    await migrateExistingOnboardingOutcomes(ctx);
+  } catch (error) {
+    console.warn(`[yulu_ui] Onboarding outcome migration will retry next start: ${(error as Error).message}`);
+  }
 
   try {
     const config = ctx.config.read();

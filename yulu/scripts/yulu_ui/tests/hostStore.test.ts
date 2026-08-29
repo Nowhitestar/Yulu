@@ -460,6 +460,27 @@ describe("HostStore", () => {
     ]);
   });
 
+  it("allows an invalid legacy outcome discriminator to be replaced by explicit deferral", () => {
+    createStore();
+    store!.db.pragma("ignore_check_constraints = ON");
+    store!.db.prepare(`
+      INSERT INTO optional_capability_outcomes (
+        onboarding_version, capability, contract_version, outcome,
+        evidence_kind, evidence_reference, evidence_snapshot_json, decided_at
+      ) VALUES ('phase-13-v1', 'conversation', 'conversation-v1', 'legacy-unknown', NULL, NULL, NULL, ?)
+    `).run("2026-08-28T00:00:00.000Z");
+    store!.db.pragma("ignore_check_constraints = OFF");
+
+    expect(store!.listOptionalCapabilityOutcomes()).toEqual([]);
+    expect(store!.recordOptionalCapabilityOutcome({
+      onboardingVersion: "phase-13-v1",
+      capability: "conversation",
+      contractVersion: "conversation-v1",
+      outcome: "deferred",
+      evidence: null,
+    })).toMatchObject({ capability: "conversation", outcome: "deferred", evidence: null });
+  });
+
   it("adds the Conversation evidence snapshot column to an existing onboarding database", () => {
     root = mkdtempSync(join(tmpdir(), "yulu-host-store-"));
     const dbPath = join(root, "host.sqlite");
@@ -545,7 +566,63 @@ describe("HostStore", () => {
     expect(store!.listAgentConnectionReadinessHistory("direct-xai", "summary")[0]?.reason).toBe(reason);
   });
 
-  it("migrates the legacy readiness-reason constraint without losing history", () => {
+  it("skips malformed readiness JSON without exposing persisted bytes or hiding older valid rows", () => {
+    createStore();
+    store!.upsertAgentConnectionRecord({
+      id: "direct-xai",
+      kind: "direct-provider",
+      adapter: "direct-xai",
+      label: "xAI",
+      lifecycle: "available",
+      settings: { credentialSource: "oauth" },
+    });
+    store!.recordAgentConnectionReadiness({
+      connectionId: "direct-xai",
+      capability: "conversation",
+      status: "failed",
+      model: "grok-conversation-exact",
+      credentialSource: "oauth",
+      detail: "Older valid failure",
+      reason: "readiness_failed",
+      runtimeEvidence: {
+        adapter: "direct-xai",
+        transport: "xai-http",
+        runtimeVersion: null,
+        requestedProvider: "xai",
+        requestedModel: "grok-conversation-exact",
+        actualProvider: null,
+        actualModel: null,
+        requestId: null,
+        sessionId: null,
+        terminalStatus: "failed",
+        fallbackOccurred: false,
+      },
+      testedAt: "2026-08-29T00:10:00.000Z",
+    });
+    const insertMalformed = store!.db.prepare(`
+      INSERT INTO agent_connection_readiness_history (
+        id, connection_id, capability, status, model, credential_source, detail, reason,
+        runtime_evidence_json, tested_at
+      ) VALUES (
+        ?, 'direct-xai', 'conversation', 'ready', 'grok-conversation-exact',
+        'oauth', 'Malformed legacy evidence', NULL, ?, ?
+      )
+    `);
+    for (let index = 0; index < 10; index += 1) {
+      insertMalformed.run(
+        `malformed-newer-${index}`,
+        "oauth-secret-token-not-json",
+        new Date(Date.UTC(2026, 7, 29, 0, 11, index)).toISOString(),
+      );
+    }
+
+    expect(() => store!.listAgentConnectionReadinessHistory("direct-xai", "conversation"))
+      .not.toThrow();
+    expect(store!.listAgentConnectionReadinessHistory("direct-xai", "conversation"))
+      .toEqual([expect.objectContaining({ detail: "Older valid failure" })]);
+  });
+
+  it("migrates the legacy readiness-reason constraint without projecting malformed history", () => {
     root = mkdtempSync(join(tmpdir(), "yulu-host-store-"));
     const databasePath = join(root, "host.sqlite");
     const legacy = new Database(databasePath);
@@ -586,8 +663,10 @@ describe("HostStore", () => {
 
     store = new HostStore(databasePath);
 
-    expect(store.listAgentConnectionReadinessHistory("direct-xai", "summary"))
-      .toEqual([expect.objectContaining({ id: "legacy-ready", reason: "readiness_failed" })]);
+    expect(store.listAgentConnectionReadinessHistory("direct-xai", "summary")).toEqual([]);
+    expect(store.db.prepare(`
+      SELECT id, reason FROM agent_connection_readiness_history WHERE id = 'legacy-ready'
+    `).get()).toEqual({ id: "legacy-ready", reason: "readiness_failed" });
     const schema = store.db.prepare(
       "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'agent_connection_readiness_history'",
     ).get() as { sql: string };

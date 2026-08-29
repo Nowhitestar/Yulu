@@ -1,6 +1,11 @@
 import { basename } from "node:path";
 import type { ConfigManager } from "./config.js";
-import type { HostStore, PersistedAgentConnection } from "./hostStore.js";
+import {
+  exactConversationEvidenceSnapshot,
+  type HostStore,
+  type PersistedAgentConnection,
+  type PersistedAgentConnectionReadiness,
+} from "./hostStore.js";
 import type {
   XaiAuthorizationState,
   XaiCredentialSource,
@@ -55,6 +60,10 @@ import type {
 import type { NativeAgentAdapter, NativeAgentAuthorizationTarget } from "./nativeAgentAuthorization.js";
 
 export type AgentConnectionCapability = "transcription" | "summary" | "conversation";
+
+export class ConversationAdoptionEvidenceUnavailableError extends Error {
+  override readonly name = "ConversationAdoptionEvidenceUnavailableError";
+}
 
 interface CredentialBoundary {
   status(): Promise<XaiCredentialStatus>;
@@ -206,6 +215,28 @@ function untested(capability: AgentConnectionCapability, model: string): XaiRead
     testedAt: null,
     detail: "Not tested in this Host process",
     credentialSource: null,
+  };
+}
+
+function persistedReadinessFailure(
+  history: PersistedAgentConnectionReadiness[],
+  capability: AgentConnectionCapability,
+  model: string,
+): XaiReadinessResult | null {
+  const latest = history[0];
+  if (
+    latest?.status !== "failed" || latest.model !== model || !latest.detail.trim() ||
+    Number.isNaN(Date.parse(latest.testedAt)) ||
+    new Date(Date.parse(latest.testedAt)).toISOString() !== latest.testedAt
+  ) return null;
+  return {
+    capability,
+    status: "failed",
+    model,
+    credentialSource: latest.credentialSource,
+    testedAt: latest.testedAt,
+    detail: latest.detail,
+    ...(latest.reason ? { reason: latest.reason } : {}),
   };
 }
 
@@ -483,9 +514,13 @@ export class AgentConnectionCenter {
           const readinessKey = this.codexReadinessKey(record.id, capability);
           const proof = status ? this.codexReadiness.get(readinessKey) : undefined;
           const identity = status ? this.codexIdentity(executable, model, status) : null;
+          const readinessHistory = this.host.listAgentConnectionReadinessHistory(record.id, capability);
+          const persistedFailure = capability === "conversation"
+            ? persistedReadinessFailure(readinessHistory, capability, model)
+            : null;
           const baseCurrentReadiness = proof && proof.identity === identity
             ? proof.readiness
-            : untested(capability, model);
+            : persistedFailure ?? untested(capability, model);
           const currentReadiness = capability === "conversation"
             ? this.projectConversationUnknownOutcome(record.id, record.adapter, model, baseCurrentReadiness)
             : baseCurrentReadiness;
@@ -501,7 +536,7 @@ export class AgentConnectionCenter {
               ? codexSummaryIsolationDeclared(status)
               : true,
             currentReadiness,
-            readinessHistory: this.host.listAgentConnectionReadinessHistory(record.id, capability),
+            readinessHistory,
             disclosure: {
               required: disclosure?.disclosureVersion !== disclosureVersion || disclosure.decision !== "accepted",
               disclosureVersion,
@@ -578,9 +613,13 @@ export class AgentConnectionCenter {
           const readinessKey = this.claudeReadinessKey(record.id, capability);
           const proof = capabilityStatus ? this.claudeReadiness.get(readinessKey) : undefined;
           const identity = capabilityStatus ? this.claudeIdentity(executable, model, capabilityStatus) : null;
+          const readinessHistory = this.host.listAgentConnectionReadinessHistory(record.id, capability);
+          const persistedFailure = capability === "conversation"
+            ? persistedReadinessFailure(readinessHistory, capability, model)
+            : null;
           let currentReadiness = proof && proof.identity === identity
             ? proof.readiness
-            : untested(capability, model);
+            : persistedFailure ?? untested(capability, model);
           if (capability === "summary" && (!summaryStatus || !summaryStatus.supported)) {
             currentReadiness = {
               ...currentReadiness,
@@ -610,7 +649,7 @@ export class AgentConnectionCenter {
               ? claudeSummaryIsolationDeclared(summaryStatus)
               : true,
             currentReadiness,
-            readinessHistory: this.host.listAgentConnectionReadinessHistory(record.id, capability),
+            readinessHistory,
             disclosure: {
               required: disclosure?.disclosureVersion !== disclosureVersion || disclosure.decision !== "accepted",
               disclosureVersion,
@@ -678,9 +717,15 @@ export class AgentConnectionCenter {
         const identity = status
           ? this.conversationOnlyIdentity(kind, executable, conversationModel, status)
           : null;
+        const readinessHistory = this.host.listAgentConnectionReadinessHistory(record.id, "conversation");
+        const persistedFailure = persistedReadinessFailure(
+          readinessHistory,
+          "conversation",
+          conversationModel,
+        );
         const baseCurrentReadiness = proof && proof.identity === identity
           ? proof.readiness
-          : untested("conversation", conversationModel);
+          : persistedFailure ?? untested("conversation", conversationModel);
         const currentReadiness = this.projectConversationUnknownOutcome(
           record.id,
           record.adapter,
@@ -716,7 +761,7 @@ export class AgentConnectionCenter {
             capability: "conversation" as const,
             declared: true,
             currentReadiness,
-            readinessHistory: this.host.listAgentConnectionReadinessHistory(record.id, "conversation"),
+            readinessHistory,
             disclosure: {
               required: disclosure?.disclosureVersion !== disclosureVersion || disclosure.decision !== "accepted",
               disclosureVersion,
@@ -1408,14 +1453,18 @@ export class AgentConnectionCenter {
     const view = await this.view();
     const selection = view.selections.conversation;
     if (!selection.connectionId) {
-      throw new Error("Select an explicit Conversation connection before adopting Conversation");
+      throw new ConversationAdoptionEvidenceUnavailableError(
+        "Select an explicit Conversation connection before adopting Conversation",
+      );
     }
     const connection = view.connections.find((candidate) => candidate.id === selection.connectionId);
     const capability = connection?.capabilities.find((candidate) =>
       candidate.capability === "conversation"
     );
     if (!connection || !capability || !("readinessHistory" in capability)) {
-      throw new Error("The selected Conversation connection has no production adapter evidence");
+      throw new ConversationAdoptionEvidenceUnavailableError(
+        "The selected Conversation connection has no production adapter evidence",
+      );
     }
     const disclosureCurrent = connection.adapter === "direct-xai"
       ? hasCurrentXaiConversationDisclosure(this.host)
@@ -1437,7 +1486,9 @@ export class AgentConnectionCenter {
               conversationOnlyDisclosureVersion(connection.adapter as ConversationOnlyAgentKind),
             );
     if (!disclosureCurrent) {
-      throw new Error("Adopting Conversation requires the current selected data path disclosure");
+      throw new ConversationAdoptionEvidenceUnavailableError(
+        "Adopting Conversation requires the current selected data path disclosure",
+      );
     }
     if (this.host.getAgentConnectionUnknownOutcomeFence({
       connectionId: connection.id,
@@ -1445,41 +1496,40 @@ export class AgentConnectionCenter {
       capability: "conversation",
       model: selection.model,
     })) {
-      throw new Error("Adopting Conversation is blocked by an unresolved Unknown Outcome");
+      throw new ConversationAdoptionEvidenceUnavailableError(
+        "Adopting Conversation is blocked by an unresolved Unknown Outcome",
+      );
     }
-    const proof = capability.readinessHistory[0];
+    let proof: PersistedAgentConnectionReadiness | undefined;
+    for (const candidate of this.host.iterateAgentConnectionReadinessHistory({
+      connectionId: connection.id,
+      capability: "conversation",
+      status: "ready",
+      model: selection.model,
+    })) {
+      const exactStoredCredential = connection.adapter === "direct-xai"
+        ? candidate.credentialSource !== null &&
+          candidate.credentialSource === connection.authorization.credentialSource
+        : candidate.credentialSource === null;
+      const exactSnapshot = exactConversationEvidenceSnapshot({
+        capability: "conversation",
+        connectionId: connection.id,
+        adapter: connection.adapter,
+        provider: connection.adapter === "direct-xai" ? "xai" : connection.adapter,
+        model: candidate.model,
+        credentialSource: candidate.credentialSource ?? "runtime-oauth",
+        testedAt: candidate.testedAt,
+        runtimeEvidence: candidate.runtimeEvidence,
+      });
+      if (exactStoredCredential && exactSnapshot) {
+        proof = candidate;
+        break;
+      }
+    }
     const runtimeEvidence = proof?.runtimeEvidence;
-    const exactAdapter = runtimeEvidence?.adapter === connection.adapter ||
-      (connection.adapter === "direct-xai" && runtimeEvidence?.adapter === DIRECT_XAI_ID);
-    const exactProvider = connection.adapter === "direct-xai"
-      ? runtimeEvidence?.requestedProvider === "xai" && runtimeEvidence.actualProvider === "xai"
-      : connection.adapter === "codex"
-        ? runtimeEvidence?.requestedProvider === "openai" && runtimeEvidence.actualProvider === "openai"
-        : connection.adapter === "claude-code"
-          ? runtimeEvidence?.requestedProvider === null && runtimeEvidence.actualProvider === null
-          : Boolean(runtimeEvidence?.requestedProvider) &&
-            runtimeEvidence?.actualProvider === runtimeEvidence?.requestedProvider;
-    const exactReadyEvidence = proof?.status === "ready" &&
-      proof.model === selection.model &&
-      runtimeEvidence?.requestedModel === selection.model &&
-      runtimeEvidence.actualModel === selection.model &&
-      runtimeEvidence.terminalStatus === "ready" &&
-      runtimeEvidence.fallbackOccurred === false &&
-      exactAdapter &&
-      exactProvider;
-    const exactCredential = connection.adapter === "direct-xai"
-      ? proof?.credentialSource !== null &&
-        proof?.credentialSource === connection.authorization.credentialSource
-      : connection.adapter === "codex"
-        ? proof?.credentialSource === null && runtimeEvidence?.authorizationClass === "chatgpt"
-        : connection.adapter === "claude-code"
-          ? proof?.credentialSource === null && runtimeEvidence?.authorizationClass === "claude-subscription"
-          : proof?.credentialSource === null;
-    const exactNativeSession = connection.adapter === "direct-xai" || connection.adapter === "openclaw" ||
-      Boolean(runtimeEvidence?.sessionId);
-    if (!proof || !runtimeEvidence || !exactReadyEvidence || !exactCredential || !exactNativeSession) {
-      throw new Error(
-        "Adopting Conversation requires the latest exact selected connection, provider, model, credential, and production adapter probe evidence",
+    if (!proof || !runtimeEvidence) {
+      throw new ConversationAdoptionEvidenceUnavailableError(
+        "Adopting Conversation requires exact selected connection, provider, model, credential, and production adapter probe evidence",
       );
     }
     return {

@@ -308,6 +308,19 @@ export interface PersistedAgentConnectionReadiness {
   testedAt: string;
 }
 
+interface AgentConnectionReadinessRow {
+  id: string;
+  connection_id: string;
+  capability: PersistedAgentConnectionReadiness["capability"];
+  status: PersistedAgentConnectionReadiness["status"];
+  model: string;
+  credential_source: XaiCredentialSource | null;
+  detail: string;
+  reason: PersistedAgentConnectionReadiness["reason"];
+  runtime_evidence_json: string;
+  tested_at: string;
+}
+
 export interface AgentConnectionUnknownOutcomeFence {
   connectionId: string;
   adapter: string;
@@ -404,8 +417,66 @@ function boundedIdentity(value: string, label: string): string {
   return normalized;
 }
 
+function isExactBoundedIdentity(value: unknown): value is string {
+  return typeof value === "string" && value === value.trim() &&
+    /^[a-z0-9][a-z0-9._-]{0,99}$/.test(value);
+}
+
 function boundedEvidenceString(value: unknown, max: number): string | null {
   return typeof value === "string" && value.length <= max ? value : null;
+}
+
+function exactIsoTimestamp(value: unknown): value is string {
+  return typeof value === "string" && !Number.isNaN(Date.parse(value)) &&
+    new Date(Date.parse(value)).toISOString() === value;
+}
+
+function exactCoreActivationEvidence(
+  raw: Record<string, unknown>,
+): CoreActivationEvidence | null {
+  const recordingStem = boundedEvidenceString(raw.recordingStem, 240);
+  const taskId = boundedEvidenceString(raw.taskId, 200);
+  const transcriptionProvider = boundedEvidenceString(raw.transcriptionProvider, 100);
+  const summaryProvider = boundedEvidenceString(raw.summaryProvider, 100);
+  const summaryModel = boundedEvidenceString(raw.summaryModel, 200);
+  const artifacts = raw.artifacts && typeof raw.artifacts === "object" && !Array.isArray(raw.artifacts)
+    ? raw.artifacts as Record<string, unknown>
+    : null;
+  const fingerprint = (value: unknown): ActivationArtifactFingerprint | null => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+    const candidate = value as Record<string, unknown>;
+    return typeof candidate.sha256 === "string" && /^[a-f0-9]{64}$/i.test(candidate.sha256) &&
+      typeof candidate.bytes === "number" && Number.isSafeInteger(candidate.bytes) && candidate.bytes > 0
+      ? { sha256: candidate.sha256, bytes: candidate.bytes }
+      : null;
+  };
+  const audio = fingerprint(artifacts?.audio);
+  const transcript = fingerprint(artifacts?.transcript);
+  const summary = fingerprint(artifacts?.summary);
+  if (
+    !recordingStem || recordingStem !== recordingStem.trim() || basename(recordingStem) !== recordingStem ||
+    !taskId || taskId !== taskId.trim() || !transcriptionProvider ||
+    transcriptionProvider !== transcriptionProvider.trim() || !summaryProvider ||
+    summaryProvider !== summaryProvider.trim() || !summaryModel || summaryModel !== summaryModel.trim() ||
+    !audio || !transcript || !summary || !exactIsoTimestamp(raw.completedAt)
+  ) return null;
+  return {
+    recordingStem,
+    taskId,
+    transcriptionProvider,
+    summaryProvider,
+    summaryModel,
+    artifacts: { audio, transcript, summary },
+    completedAt: raw.completedAt,
+  };
+}
+
+function exactOnboardingCompletion(
+  row: { version: unknown; completed_at: unknown } | undefined,
+): OnboardingCompletion | null {
+  return row && isExactBoundedIdentity(row.version) && exactIsoTimestamp(row.completed_at)
+    ? { version: row.version, completedAt: row.completed_at }
+    : null;
 }
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -546,7 +617,103 @@ function secretSafeReadinessEvidence(
   };
 }
 
-function secretSafeConversationEvidenceSnapshot(
+function hasExactReadinessRowSemantics(
+  row: AgentConnectionReadinessRow,
+  evidence: PersistedAgentConnectionReadiness["runtimeEvidence"],
+): boolean {
+  const adapter = evidence.adapter;
+  const supportedAgent = adapter === "codex" || adapter === "claude-code" ||
+    adapter === "hermes" || adapter === "openclaw";
+  const expectedTransport = adapter === "direct-xai"
+    ? row.capability === "transcription" ? "xai-realtime-websocket" : "xai-http"
+    : adapter === "codex"
+      ? "codex-app-server-stdio"
+      : adapter === "claude-code"
+        ? "claude-code-print-stream-json"
+        : adapter === "hermes" ? "hermes-cli-chat" : "openclaw-cli-gateway-json";
+  const supportedCapability = adapter === "direct-xai" ||
+    ((adapter === "codex" || adapter === "claude-code") && row.capability !== "transcription") ||
+    ((adapter === "hermes" || adapter === "openclaw") && row.capability === "conversation");
+  const exactRuntimeIdentity = adapter === "direct-xai"
+    ? evidence.runtimeVersion === null
+    : supportedAgent && Boolean(
+        evidence.runtimeVersion && /^\d+\.\d+\.\d+(?:[-+ ].*)?$/.test(evidence.runtimeVersion),
+      );
+  const exactProvider = adapter === "direct-xai"
+    ? evidence.requestedProvider === "xai"
+    : adapter === "codex"
+      ? evidence.requestedProvider === "openai" && evidence.authorizationClass === "chatgpt"
+      : adapter === "claude-code"
+        ? (row.capability === "conversation"
+            ? evidence.requestedProvider === null
+            : Boolean(evidence.requestedProvider)) &&
+          evidence.authorizationClass === "claude-subscription"
+        : Boolean(evidence.requestedProvider);
+  const exactCredential = adapter === "direct-xai"
+    ? row.credential_source === "oauth" || row.credential_source === "api-key"
+    : row.credential_source === null;
+  const exactReadyProvider = adapter === "direct-xai" && row.capability === "transcription"
+    ? Boolean(evidence.actualProvider)
+    : evidence.actualProvider === evidence.requestedProvider;
+  const exactReadyModel = adapter === "direct-xai" && row.capability === "transcription"
+    ? evidence.actualModel === null
+    : evidence.actualModel === row.model;
+  const exactReadyResult = row.status !== "ready" || (
+    evidence.terminalStatus === "ready" && exactReadyModel && exactReadyProvider &&
+    evidence.fallbackOccurred === false &&
+    (adapter === "direct-xai" || adapter === "openclaw" || Boolean(evidence.sessionId))
+  );
+  return isExactBoundedIdentity(row.id) && isExactBoundedIdentity(row.connection_id) &&
+    row.model === row.model.trim() && Boolean(row.model) && row.model.length <= 128 &&
+    Boolean(row.detail.trim()) && exactIsoTimestamp(row.tested_at) &&
+    supportedCapability && evidence.transport === expectedTransport && exactRuntimeIdentity &&
+    evidence.requestedModel === row.model && exactProvider && exactCredential && exactReadyResult;
+}
+
+function hasReadinessEvidenceShape(raw: Record<string, unknown>): boolean {
+  const nullableString = (value: unknown) => value === null || typeof value === "string";
+  return typeof raw.adapter === "string" && typeof raw.transport === "string" &&
+    nullableString(raw.runtimeVersion) && nullableString(raw.requestedProvider) &&
+    typeof raw.requestedModel === "string" && nullableString(raw.actualProvider) &&
+    nullableString(raw.actualModel) && nullableString(raw.requestId) && nullableString(raw.sessionId) &&
+    (raw.terminalStatus === "ready" || raw.terminalStatus === "failed" || raw.terminalStatus === "unknown") &&
+    (typeof raw.fallbackOccurred === "boolean" || raw.fallbackOccurred === null) &&
+    (raw.authorizationClass === undefined || raw.authorizationClass === null ||
+      runtimeAuthorizationClass(raw.authorizationClass) !== null) &&
+    (raw.cancellationRequested === undefined || typeof raw.cancellationRequested === "boolean") &&
+    (raw.cancellationConfirmed === undefined || raw.cancellationConfirmed === null ||
+      typeof raw.cancellationConfirmed === "boolean");
+}
+
+function readAgentConnectionReadinessRow(
+  row: AgentConnectionReadinessRow,
+): PersistedAgentConnectionReadiness | null {
+  try {
+    const parsed = JSON.parse(row.runtime_evidence_json) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+    if (!hasReadinessEvidenceShape(parsed as Record<string, unknown>)) return null;
+    const runtimeEvidence = secretSafeReadinessEvidence(
+      parsed as PersistedAgentConnectionReadiness["runtimeEvidence"],
+    );
+    if (!hasExactReadinessRowSemantics(row, runtimeEvidence)) return null;
+    return {
+      id: row.id,
+      connectionId: row.connection_id,
+      capability: row.capability,
+      status: row.status,
+      model: row.model,
+      credentialSource: row.credential_source,
+      detail: row.detail,
+      reason: runtimeEvidence.terminalStatus === "unknown" ? "unknown_outcome" : row.reason,
+      runtimeEvidence,
+      testedAt: row.tested_at,
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function exactConversationEvidenceSnapshot(
   input: ConversationCapabilityEvidenceSnapshot,
 ): ConversationCapabilityEvidenceSnapshot | null {
   const raw = input as unknown as Record<string, unknown>;
@@ -618,7 +785,7 @@ function secretSafeConversationEvidenceSnapshot(
 function readConversationEvidenceSnapshot(value: string | null): ConversationCapabilityEvidenceSnapshot | null {
   if (!value) return null;
   try {
-    return secretSafeConversationEvidenceSnapshot(
+    return exactConversationEvidenceSnapshot(
       JSON.parse(value) as ConversationCapabilityEvidenceSnapshot,
     );
   } catch {
@@ -749,7 +916,7 @@ function secretSafeOptionalCapabilityEvidenceSnapshot(
   input: OptionalCapabilityEvidenceSnapshot,
 ): OptionalCapabilityEvidenceSnapshot | null {
   return input.capability === "conversation"
-    ? secretSafeConversationEvidenceSnapshot(input)
+    ? exactConversationEvidenceSnapshot(input)
     : input.capability === "calendar-source"
       ? secretSafeCalendarSourceEvidenceSnapshot(input)
       : input.capability === "agent-calendar-connector"
@@ -770,6 +937,15 @@ function readOptionalCapabilityEvidenceSnapshot(
   } catch {
     return null;
   }
+}
+
+function isExactConversationProbeEvidence(
+  kind: string | null,
+  reference: string | null,
+  snapshot: OptionalCapabilityEvidenceSnapshot | null,
+): snapshot is ConversationCapabilityEvidenceSnapshot {
+  return snapshot?.capability === "conversation" && kind === "agent-capability-probe" &&
+    Boolean(reference?.trim());
 }
 
 function isExactCalendarSourceProbeEvidence(
@@ -1143,39 +1319,82 @@ export class HostStore {
     capability: PersistedAgentConnectionReadiness["capability"],
     limit = 10,
   ): PersistedAgentConnectionReadiness[] {
-    const rows = this.db.prepare(`
-      SELECT * FROM agent_connection_readiness_history
-      WHERE connection_id = ? AND capability = ?
-      ORDER BY tested_at DESC, id DESC LIMIT ?
-    `).all(connectionId, capability, Math.max(1, Math.min(100, limit))) as Array<{
-      id: string;
-      connection_id: string;
-      capability: PersistedAgentConnectionReadiness["capability"];
-      status: PersistedAgentConnectionReadiness["status"];
-      model: string;
-      credential_source: XaiCredentialSource | null;
-      detail: string;
-      reason: PersistedAgentConnectionReadiness["reason"];
-      runtime_evidence_json: string;
-      tested_at: string;
-    }>;
-    return rows.map((row) => {
-      const runtimeEvidence = secretSafeReadinessEvidence(
-        JSON.parse(row.runtime_evidence_json) as PersistedAgentConnectionReadiness["runtimeEvidence"],
-      );
-      return {
-        id: row.id,
-        connectionId: row.connection_id,
-        capability: row.capability,
-        status: row.status,
-        model: row.model,
-        credentialSource: row.credential_source,
-        detail: row.detail,
-        reason: runtimeEvidence.terminalStatus === "unknown" ? "unknown_outcome" : row.reason,
-        runtimeEvidence,
-        testedAt: row.tested_at,
-      };
-    });
+    const requestedLimit = Math.max(1, Math.min(100, limit));
+    const pageSize = 100;
+    const history: PersistedAgentConnectionReadiness[] = [];
+    let cursor: { testedAt: string; id: string } | null = null;
+    while (history.length < requestedLimit) {
+      const rows = (cursor
+        ? this.db.prepare(`
+            SELECT * FROM agent_connection_readiness_history
+            WHERE connection_id = ? AND capability = ?
+              AND (tested_at < ? OR (tested_at = ? AND id < ?))
+            ORDER BY tested_at DESC, id DESC LIMIT ?
+          `).all(
+            connectionId,
+            capability,
+            cursor.testedAt,
+            cursor.testedAt,
+            cursor.id,
+            pageSize,
+          )
+        : this.db.prepare(`
+            SELECT * FROM agent_connection_readiness_history
+            WHERE connection_id = ? AND capability = ?
+            ORDER BY tested_at DESC, id DESC LIMIT ?
+          `).all(connectionId, capability, pageSize)
+      ) as AgentConnectionReadinessRow[];
+      for (const row of rows) {
+        const parsed = readAgentConnectionReadinessRow(row);
+        if (parsed) history.push(parsed);
+        if (history.length === requestedLimit) return history;
+      }
+      if (rows.length < pageSize) return history;
+      const last = rows[rows.length - 1]!;
+      cursor = { testedAt: last.tested_at, id: last.id };
+    }
+    return history;
+  }
+
+  *iterateAgentConnectionReadinessHistory(input: {
+    connectionId: string;
+    capability: PersistedAgentConnectionReadiness["capability"];
+    status: PersistedAgentConnectionReadiness["status"];
+    model: string;
+  }): IterableIterator<PersistedAgentConnectionReadiness> {
+    const pageSize = 100;
+    let cursor: { testedAt: string; id: string } | null = null;
+    while (true) {
+      const rows = (cursor
+        ? this.db.prepare(`
+            SELECT * FROM agent_connection_readiness_history
+            WHERE connection_id = ? AND capability = ? AND status = ? AND model = ?
+              AND (tested_at < ? OR (tested_at = ? AND id < ?))
+            ORDER BY tested_at DESC, id DESC LIMIT ?
+          `).all(
+            input.connectionId,
+            input.capability,
+            input.status,
+            input.model,
+            cursor.testedAt,
+            cursor.testedAt,
+            cursor.id,
+            pageSize,
+          )
+        : this.db.prepare(`
+            SELECT * FROM agent_connection_readiness_history
+            WHERE connection_id = ? AND capability = ? AND status = ? AND model = ?
+            ORDER BY tested_at DESC, id DESC LIMIT ?
+          `).all(input.connectionId, input.capability, input.status, input.model, pageSize)
+      ) as AgentConnectionReadinessRow[];
+      for (const row of rows) {
+        const parsed = readAgentConnectionReadinessRow(row);
+        if (parsed) yield parsed;
+      }
+      if (rows.length < pageSize) return;
+      const last = rows[rows.length - 1]!;
+      cursor = { testedAt: last.tested_at, id: last.id };
+    }
   }
 
   recordAgentConnectionReadiness(
@@ -2788,7 +3007,7 @@ export class HostStore {
       summary_bytes: number;
       completed_at: string;
     } | undefined;
-    return row ? {
+    return row ? exactCoreActivationEvidence({
       recordingStem: row.recording_stem,
       taskId: row.task_id,
       transcriptionProvider: row.transcription_provider,
@@ -2800,7 +3019,7 @@ export class HostStore {
         summary: { sha256: row.summary_sha256, bytes: row.summary_bytes },
       },
       completedAt: row.completed_at,
-    } : null;
+    }) : null;
   }
 
   getActivationJourneyState(): ActivationJourneyState {
@@ -3055,8 +3274,17 @@ export class HostStore {
       decided_at: string;
     }>;
     return rows.flatMap((row) => {
+      if (
+        !isExactBoundedIdentity(row.onboarding_version) || !isExactBoundedIdentity(row.capability) ||
+        !isExactBoundedIdentity(row.contract_version) || !exactIsoTimestamp(row.decided_at) ||
+        (row.outcome !== "adopted" && row.outcome !== "deferred")
+      ) return [];
+      if (row.outcome === "deferred" && (
+        row.evidence_kind !== null || row.evidence_reference !== null || row.evidence_snapshot_json !== null
+      )) return [];
       const snapshot = readOptionalCapabilityEvidenceSnapshot(row.evidence_snapshot_json);
-      if (row.capability === "conversation" && row.outcome === "adopted" && !snapshot) {
+      if (row.capability === "conversation" && row.outcome === "adopted" &&
+          !isExactConversationProbeEvidence(row.evidence_kind, row.evidence_reference, snapshot)) {
         return [];
       }
       if (row.capability === "calendar-source" && row.outcome === "adopted" &&
@@ -3086,6 +3314,18 @@ export class HostStore {
     });
   }
 
+  hasOptionalCapabilityOutcomeRecord(capability: string, contractVersion: string): boolean {
+    return Boolean(this.db.prepare(`
+      SELECT 1
+      FROM optional_capability_outcomes
+      WHERE capability = ? AND contract_version = ?
+      LIMIT 1
+    `).get(
+      boundedIdentity(capability, "Optional capability"),
+      boundedIdentity(contractVersion, "Optional capability contract version"),
+    ));
+  }
+
   recordOptionalCapabilityOutcome(
     input: Omit<OptionalCapabilityOutcome, "decidedAt">,
     completionRequirements?: OnboardingCompletionRequirements,
@@ -3101,7 +3341,8 @@ export class HostStore {
     if (input.outcome === "adopted" && (!evidenceKind || !evidenceReference)) {
       throw new Error("An adopted Optional Capability Outcome requires durable evidence");
     }
-    if (input.capability === "conversation" && input.outcome === "adopted" && !evidenceSnapshot) {
+    if (input.capability === "conversation" && input.outcome === "adopted" &&
+        !isExactConversationProbeEvidence(evidenceKind, evidenceReference, evidenceSnapshot)) {
       throw new Error("An adopted Conversation outcome requires a complete exact evidence snapshot");
     }
     if (capability === "calendar-source" && input.outcome === "adopted" &&
@@ -3139,14 +3380,15 @@ export class HostStore {
         capability === "agent-calendar-connector" || capability === "sharing"
       ) {
         const existing = this.db.prepare(`
-          SELECT outcome, evidence_kind, evidence_reference, evidence_snapshot_json
+          SELECT outcome, evidence_kind, evidence_reference, evidence_snapshot_json, decided_at
           FROM optional_capability_outcomes
           WHERE onboarding_version = ? AND capability = ? AND contract_version = ?
         `).get(onboardingVersion, capability, contractVersion) as {
-          outcome: OptionalCapabilityOutcome["outcome"];
+          outcome: unknown;
           evidence_kind: string | null;
           evidence_reference: string | null;
           evidence_snapshot_json: string | null;
+          decided_at: string;
         } | undefined;
         const existingSnapshot = existing
           ? readOptionalCapabilityEvidenceSnapshot(existing.evidence_snapshot_json)
@@ -3169,8 +3411,22 @@ export class HostStore {
                   existing?.evidence_reference ?? null,
                   existingSnapshot,
                 )
-              : !existingSnapshot;
-        if (existing?.outcome === "adopted" && existingEvidenceInvalid) {
+              : !isExactConversationProbeEvidence(
+                  existing?.evidence_kind ?? null,
+                  existing?.evidence_reference ?? null,
+                  existingSnapshot,
+                );
+        const existingDeferralInvalid = existing?.outcome === "deferred" && (
+          existing.evidence_kind !== null || existing.evidence_reference !== null ||
+          existing.evidence_snapshot_json !== null
+        );
+        const existingOutcomeInvalid = existing &&
+          existing.outcome !== "adopted" && existing.outcome !== "deferred";
+        if (existing && (
+          !exactIsoTimestamp(existing.decided_at) ||
+          (existing.outcome === "adopted" && existingEvidenceInvalid) || existingDeferralInvalid ||
+          existingOutcomeInvalid
+        )) {
           this.db.prepare(`
             DELETE FROM optional_capability_outcomes
             WHERE onboarding_version = ? AND capability = ? AND contract_version = ?
@@ -3211,42 +3467,51 @@ export class HostStore {
   }
 
   getLatestOnboardingCompletion(excludeVersion?: string): OnboardingCompletion | null {
-    const row = excludeVersion
+    const rows = excludeVersion
       ? this.db.prepare(`
           SELECT version, completed_at
           FROM onboarding_completions
           WHERE version != ?
           ORDER BY completed_at DESC, rowid DESC
-          LIMIT 1
-        `).get(boundedIdentity(excludeVersion, "Onboarding version"))
+        `).all(boundedIdentity(excludeVersion, "Onboarding version"))
       : this.db.prepare(`
       SELECT version, completed_at
       FROM onboarding_completions
       ORDER BY completed_at DESC, rowid DESC
-      LIMIT 1
-    `).get();
-    const completion = row as { version: string; completed_at: string } | undefined;
-    return completion ? { version: completion.version, completedAt: completion.completed_at } : null;
+    `).all();
+    for (const row of rows as Array<{ version: unknown; completed_at: unknown }>) {
+      const completion = exactOnboardingCompletion(row);
+      if (completion) return completion;
+    }
+    return null;
   }
 
   getOnboardingCompletion(version: string): OnboardingCompletion | null {
     const normalized = boundedIdentity(version, "Onboarding version");
     const row = this.db.prepare(`
       SELECT version, completed_at FROM onboarding_completions WHERE version = ?
-    `).get(normalized) as { version: string; completed_at: string } | undefined;
-    return row ? { version: row.version, completedAt: row.completed_at } : null;
+    `).get(normalized) as { version: unknown; completed_at: unknown } | undefined;
+    return exactOnboardingCompletion(row);
   }
 
   private recordOnboardingCompletion(version: string): OnboardingCompletion {
     const normalized = boundedIdentity(version, "Onboarding version");
-    this.db.prepare(`
-      INSERT OR IGNORE INTO onboarding_completions (version, completed_at)
-      VALUES (?, ?)
-    `).run(normalized, now());
-    const row = this.db.prepare(`
-      SELECT version, completed_at FROM onboarding_completions WHERE version = ?
-    `).get(normalized) as { version: string; completed_at: string };
-    return { version: row.version, completedAt: row.completed_at };
+    const commit = this.db.transaction(() => {
+      const row = this.db.prepare(`
+        SELECT version, completed_at FROM onboarding_completions WHERE version = ?
+      `).get(normalized) as { version: unknown; completed_at: unknown } | undefined;
+      const existing = exactOnboardingCompletion(row);
+      if (existing) return existing;
+      if (row) {
+        this.db.prepare("DELETE FROM onboarding_completions WHERE version = ?").run(normalized);
+      }
+      const completedAt = now();
+      this.db.prepare(`
+        INSERT INTO onboarding_completions (version, completed_at) VALUES (?, ?)
+      `).run(normalized, completedAt);
+      return { version: normalized, completedAt };
+    });
+    return commit.immediate();
   }
 
   getOnboardingEntryState(): OnboardingEntryState {
@@ -3275,6 +3540,21 @@ export class HostStore {
         AND automatic_entry_acknowledged_at IS NULL
     `).run(now());
     return { acknowledged: result.changes === 1, state: this.getOnboardingEntryState() };
+  }
+
+  hasOnboardingOutcomeMigration(id: string): boolean {
+    const normalized = boundedIdentity(id, "Onboarding outcome migration");
+    const row = this.db.prepare(`
+      SELECT completed_at FROM onboarding_outcome_migrations WHERE id = ?
+    `).get(normalized) as { completed_at: string } | undefined;
+    return exactIsoTimestamp(row?.completed_at);
+  }
+
+  recordOnboardingOutcomeMigration(id: string): void {
+    const normalized = boundedIdentity(id, "Onboarding outcome migration");
+    this.db.prepare(`
+      INSERT OR IGNORE INTO onboarding_outcome_migrations (id, completed_at) VALUES (?, ?)
+    `).run(normalized, now());
   }
 
   getCloudTranscriptionConsent(): CloudTranscriptionConsent | null {
@@ -3359,16 +3639,14 @@ export class HostStore {
     evidence: CoreActivationEvidence,
     completionRequirements: OnboardingCompletionRequirements,
   ): CoreActivationEvidence {
-    const fingerprints = Object.values(evidence.artifacts);
-    if (
-      !evidence.recordingStem.trim() || !evidence.taskId.trim() ||
-      !evidence.transcriptionProvider.trim() || !evidence.summaryProvider.trim() ||
-      !evidence.summaryModel.trim() || !Number.isFinite(Date.parse(evidence.completedAt)) ||
-      fingerprints.some((item) => !/^[a-f0-9]{64}$/i.test(item.sha256) || item.bytes <= 0)
-    ) {
+    const exactEvidence = exactCoreActivationEvidence(evidence as unknown as Record<string, unknown>);
+    if (!exactEvidence) {
       throw new Error("Core Activation Evidence is incomplete");
     }
     const commit = this.db.transaction(() => {
+      if (!this.getCoreActivationEvidence()) {
+        this.db.prepare("DELETE FROM core_activation_evidence WHERE id = 1").run();
+      }
       this.db.prepare(`
         INSERT OR IGNORE INTO core_activation_evidence (
           id, recording_stem, task_id, transcription_provider, summary_provider, summary_model,
@@ -3376,18 +3654,18 @@ export class HostStore {
           summary_sha256, summary_bytes, completed_at
         ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
-        evidence.recordingStem,
-        evidence.taskId,
-        evidence.transcriptionProvider,
-        evidence.summaryProvider,
-        evidence.summaryModel,
-        evidence.artifacts.audio.sha256,
-        evidence.artifacts.audio.bytes,
-        evidence.artifacts.transcript.sha256,
-        evidence.artifacts.transcript.bytes,
-        evidence.artifacts.summary.sha256,
-        evidence.artifacts.summary.bytes,
-        evidence.completedAt,
+        exactEvidence.recordingStem,
+        exactEvidence.taskId,
+        exactEvidence.transcriptionProvider,
+        exactEvidence.summaryProvider,
+        exactEvidence.summaryModel,
+        exactEvidence.artifacts.audio.sha256,
+        exactEvidence.artifacts.audio.bytes,
+        exactEvidence.artifacts.transcript.sha256,
+        exactEvidence.artifacts.transcript.bytes,
+        exactEvidence.artifacts.summary.sha256,
+        exactEvidence.artifacts.summary.bytes,
+        exactEvidence.completedAt,
       );
       this.recordOnboardingCompletionIfSatisfied(completionRequirements);
       return this.getCoreActivationEvidence()!;
@@ -4308,6 +4586,11 @@ export class HostStore {
         automatic_entry_acknowledged_at TEXT
       );
 
+      CREATE TABLE IF NOT EXISTS onboarding_outcome_migrations (
+        id TEXT PRIMARY KEY,
+        completed_at TEXT NOT NULL
+      );
+
       CREATE TABLE IF NOT EXISTS cloud_transcription_consent (
         id INTEGER PRIMARY KEY CHECK(id = 1),
         disclosure_version TEXT NOT NULL,
@@ -4365,6 +4648,10 @@ export class HostStore {
       );
       CREATE INDEX IF NOT EXISTS idx_agent_connection_readiness
         ON agent_connection_readiness_history(connection_id, capability, tested_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_agent_connection_readiness_adoption
+        ON agent_connection_readiness_history(
+          connection_id, capability, status, model, tested_at DESC, id DESC
+        );
 
       CREATE TABLE IF NOT EXISTS agent_connection_unknown_outcome_fences (
         connection_id TEXT NOT NULL,
@@ -4539,6 +4826,10 @@ export class HostStore {
           ALTER TABLE agent_connection_readiness_history_v2 RENAME TO agent_connection_readiness_history;
           CREATE INDEX idx_agent_connection_readiness
             ON agent_connection_readiness_history(connection_id, capability, tested_at DESC);
+          CREATE INDEX idx_agent_connection_readiness_adoption
+            ON agent_connection_readiness_history(
+              connection_id, capability, status, model, tested_at DESC, id DESC
+            );
           COMMIT;
         `);
       } catch (error) {
@@ -4654,7 +4945,7 @@ export class HostStore {
     `).run(installationKind);
   }
 
-  private recordOnboardingCompletionIfSatisfied(
+  recordOnboardingCompletionIfSatisfied(
     requirements: OnboardingCompletionRequirements,
   ): OnboardingCompletion | null {
     const version = boundedIdentity(requirements.version, "Onboarding version");

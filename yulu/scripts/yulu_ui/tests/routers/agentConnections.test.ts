@@ -450,6 +450,158 @@ describe("public Agent Connection Host contract", () => {
     setupResult.host.close();
   });
 
+  it("keeps an exact successful Conversation probe adoptable after later readiness loss", async () => {
+    const setupResult = setup({
+      audio: {},
+      transcription: { engine: "local", language: "zh" },
+      intelligence: {
+        summary: { provider: "xai", model: "grok-summary-exact" },
+        conversation: { provider: "xai", model: "grok-conversation-exact" },
+      },
+      llm: { agent: { provider: "auto" } },
+    });
+    setupResult.center.acceptDisclosure({ connectionId: "direct-xai", capability: "conversation" });
+    setupResult.text.request.mockResolvedValue({
+      credentialSource: "oauth",
+      model: "grok-conversation-exact",
+    });
+
+    await setupResult.center.probe({ connectionId: "direct-xai", capability: "conversation" });
+    const durableProof = setupResult.host.listAgentConnectionReadinessHistory(
+      "direct-xai",
+      "conversation",
+    )[0]!;
+    for (let second = 0; second < 10; second += 1) {
+      setupResult.host.recordAgentConnectionReadiness({
+        connectionId: "direct-xai",
+        capability: "conversation",
+        status: "failed",
+        model: "grok-conversation-exact",
+        credentialSource: "oauth",
+        detail: "The selected runtime is currently unavailable",
+        reason: "readiness_failed",
+        runtimeEvidence: {
+          ...durableProof.runtimeEvidence,
+          terminalStatus: "failed",
+        },
+        testedAt: `2099-08-29T00:10:${String(second).padStart(2, "0")}.000Z`,
+      });
+    }
+    const insertMalformedReady = setupResult.host.db.prepare(`
+      INSERT INTO agent_connection_readiness_history (
+        id, connection_id, capability, status, model, credential_source, detail, reason,
+        runtime_evidence_json, tested_at
+      ) VALUES (?, 'direct-xai', 'conversation', 'ready', 'grok-conversation-exact', 'oauth',
+        'Malformed legacy evidence', NULL, ?, ?)
+    `);
+    for (let index = 0; index < 101; index += 1) {
+      insertMalformedReady.run(
+        `malformed-ready-${String(index).padStart(3, "0")}`,
+        "oauth-secret-token-not-json",
+        new Date(Date.UTC(2098, 7, 29, 0, index, 0)).toISOString(),
+      );
+    }
+    insertMalformedReady.run(
+      "semantically-malformed-ready",
+      JSON.stringify({
+        ...durableProof.runtimeEvidence,
+        transport: "legacy-config",
+      }),
+      "2098-12-31T00:00:00.000Z",
+    );
+
+    const restarted = setupResult.makeCenter();
+    const historySpy = vi.spyOn(setupResult.host, "listAgentConnectionReadinessHistory");
+    await expect(restarted.conversationAdoptionEvidence()).resolves.toMatchObject({
+      reference: durableProof.id,
+      model: "grok-conversation-exact",
+      runtimeEvidence: { terminalStatus: "ready", fallbackOccurred: false },
+    });
+    expect(historySpy).not.toHaveBeenCalledWith("direct-xai", "conversation", null);
+    expect((await restarted.view()).connections
+      .find(({ id }) => id === "direct-xai")?.capabilities
+      .find(({ capability }) => capability === "conversation")?.currentReadiness)
+      .toMatchObject({ status: "failed", detail: "The selected runtime is currently unavailable" });
+    setupResult.host.close();
+  });
+
+  it.each([
+    ["codex", "Codex", "gpt-5.6-sol", "codex-app-server-stdio", "openai", "0.144.4"],
+    ["claude-code", "Claude Code", "claude-sonnet-5", "claude-code-print-stream-json", null, "2.1.169"],
+    ["hermes", "Hermes", "grok-4.6", "hermes-cli-chat", "xai", "0.20.0"],
+    ["openclaw", "OpenClaw", "openai-codex/gpt-5.5", "openclaw-cli-gateway-json", "openai-codex", "2026.5.12"],
+  ] as const)("projects persisted %s Conversation readiness loss after restart", async (
+    adapter,
+    label,
+    model,
+    transport,
+    provider,
+    runtimeVersion,
+  ) => {
+    const setupResult = setup({
+      audio: {},
+      transcription: { engine: "local", language: "zh" },
+      intelligence: {
+        summary: { provider: "xai", model: "grok-summary-exact" },
+        conversation: { provider: "agent", connectionId: adapter, model },
+      },
+      llm: { agent: { provider: "auto" } },
+    }, [{ adapter, label, path: `/fake/bin/${adapter}` }]);
+    const caller = createCaller(agentConnectionsRouter, {
+      agentConnections: setupResult.center,
+      uiMutationAuthorized: true,
+    } as never);
+    await caller.refreshCandidates();
+    await caller.confirmCandidate({ candidateId: `candidate:${adapter}`, model });
+    setupResult.host.recordAgentConnectionReadiness({
+      connectionId: adapter,
+      capability: "conversation",
+      status: "failed",
+      model,
+      credentialSource: null,
+      detail: `${label} is currently unavailable`,
+      reason: "readiness_failed",
+      runtimeEvidence: {
+        adapter,
+        transport,
+        runtimeVersion,
+        ...(adapter === "codex" ? { authorizationClass: "chatgpt" as const } : {}),
+        ...(adapter === "claude-code" ? { authorizationClass: "claude-subscription" as const } : {}),
+        requestedProvider: provider,
+        requestedModel: model,
+        actualProvider: provider,
+        actualModel: null,
+        requestId: null,
+        sessionId: null,
+        terminalStatus: "failed",
+        fallbackOccurred: false,
+      },
+      testedAt: "2026-08-29T00:11:00.000Z",
+    });
+    setupResult.host.db.prepare(`
+      INSERT INTO agent_connection_readiness_history (
+        id, connection_id, capability, status, model, credential_source, detail, reason,
+        runtime_evidence_json, tested_at
+      ) VALUES (?, ?, 'conversation', 'ready', ?, NULL, 'Malformed legacy evidence', NULL, '{}', ?)
+    `).run(
+      `semantically-malformed-ready-${adapter}`,
+      adapter,
+      model,
+      "2026-08-29T00:12:00.000Z",
+    );
+
+    const restarted = await setupResult.makeCenter().view();
+    expect(restarted.connections.find(({ id }) => id === adapter)?.capabilities
+      .find(({ capability }) => capability === "conversation")?.currentReadiness)
+      .toMatchObject({
+        status: "failed",
+        model,
+        detail: `${label} is currently unavailable`,
+        testedAt: "2026-08-29T00:11:00.000Z",
+      });
+    setupResult.host.close();
+  });
+
   it("rejects adoption while the exact Conversation identity has an unresolved fence", async () => {
     const setupResult = setup({
       audio: {},

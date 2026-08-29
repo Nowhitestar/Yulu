@@ -563,4 +563,41 @@ describe("onboarding router", () => {
     });
     await expect(caller().acknowledgeAutomaticEntry()).resolves.toMatchObject({ acknowledged: false });
   });
+
+  it("preserves only exact Core Activation Evidence across an ordinary upgrade", async () => {
+    const { ctx, caller } = setup();
+    host!.recordCoreActivationEvidence(
+      activationEvidence(),
+      CURRENT_ONBOARDING_COMPLETION_REQUIREMENTS,
+    );
+    const dbPath = join(root, "host.sqlite");
+    host!.close();
+    host = new HostStore(dbPath);
+    ctx.host = host;
+
+    await expect(caller().status()).resolves.toMatchObject({
+      coreActivation: {
+        completed: true,
+        evidence: {
+          taskId: "activation-task",
+          artifacts: {
+            audio: { sha256: "a".repeat(64), bytes: 45 },
+            transcript: { sha256: "b".repeat(64), bytes: 20 },
+            summary: { sha256: "c".repeat(64), bytes: 30 },
+          },
+        },
+      },
+      entry: { installationKind: "fresh", shouldAutoEnter: true },
+    });
+
+    host.db.prepare(`
+      UPDATE core_activation_evidence
+      SET audio_sha256 = 'legacy-mutable-pointer'
+      WHERE id = 1
+    `).run();
+
+    await expect(caller().status()).resolves.toMatchObject({
+      coreActivation: { completed: false, evidence: null },
+    });
+  });
 });
