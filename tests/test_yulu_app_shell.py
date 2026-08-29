@@ -4,6 +4,7 @@ import json
 import os
 import subprocess
 import shutil
+import unicodedata
 
 import pytest
 
@@ -207,6 +208,318 @@ def test_shell_authenticates_host_and_capture_uses_stable_runtime_paths():
     assert 'HOME.appendingPathComponent("Movies/Yulu")' in capture
     assert 'ProcessInfo.processInfo.environment["YULU_SCRIPT_DIR"]' in capture
     assert 'appendingPathComponent("Contents/Resources/runtime/yulu/scripts"' in capture
+
+
+def test_shell_propagates_the_standard_path_contract_to_both_runtimes():
+    shell = (SCRIPTS / "yulu_app.swift").read_text(encoding="utf-8")
+
+    for name in (
+        "YULU_APPLICATION_SUPPORT_DIR",
+        "YULU_MODELS_DIR",
+        "YULU_CACHE_DIR",
+        "YULU_IPC_DIR",
+        "YULU_LOG_DIR",
+        "YULU_MEDIA_LIBRARY_DIR",
+        "YULU_LEGACY_READ_ONLY_DATA_DIR",
+    ):
+        assert name in shell
+    assert "applicationPaths.environment" in shell
+    assert "hostEnvironment.merge" in shell
+    assert "captureEnvironment.merge" in shell
+
+
+def test_shell_path_contract_reads_legacy_media_without_using_developer_home(tmp_path: Path):
+    binary = tmp_path / "yulu_app"
+    compile_result = subprocess.run(
+        [
+            "swiftc",
+            "-module-cache-path",
+            str(tmp_path / "swift-cache"),
+            "-o",
+            str(binary),
+            str(SCRIPTS / "yulu_app.swift"),
+            "-framework",
+            "Cocoa",
+            "-framework",
+            "WebKit",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert compile_result.returncode == 0, compile_result.stderr
+
+    fake_home = tmp_path / "isolated-home"
+    legacy = fake_home / ".config/yulu"
+    legacy.mkdir(parents=True)
+    custom_media = tmp_path / "external-media" / "Yulu"
+    (legacy / "config.json").write_text(
+        json.dumps({"audio": {"output_dir": str(custom_media)}}),
+        encoding="utf-8",
+    )
+
+    inspected = subprocess.run(
+        [str(binary), "--inspect-paths", str(fake_home)],
+        capture_output=True,
+        text=True,
+        timeout=5,
+        check=False,
+    )
+
+    assert inspected.returncode == 0, inspected.stderr
+    assert json.loads(inspected.stdout) == {
+        "cacheDir": str(fake_home / "Library/Caches/Yulu"),
+        "configFile": str(fake_home / "Library/Application Support/Yulu/config.json"),
+        "configReadFiles": [
+            str(fake_home / "Library/Application Support/Yulu/config.json"),
+            str(legacy / "config.json"),
+        ],
+        "durableDataDir": str(fake_home / "Library/Application Support/Yulu"),
+        "ipcDir": str(fake_home / "Library/Caches/Yulu"),
+        "legacyReadOnlyDataDir": str(legacy),
+        "logsDir": str(fake_home / "Library/Logs/Yulu"),
+        "mediaLibraryDir": str(custom_media),
+        "modelsDir": str(fake_home / "Library/Application Support/Yulu/Models"),
+    }
+
+    standard = fake_home / "Library/Application Support/Yulu/config.json"
+    standard.parent.mkdir(parents=True)
+    standard_media = tmp_path / "standard-media" / "Yulu"
+    standard.write_text(
+        json.dumps({"audio": {"output_dir": str(standard_media)}}),
+        encoding="utf-8",
+    )
+    propagated = subprocess.run(
+        [str(binary), "--inspect-component-paths", str(fake_home)],
+        capture_output=True,
+        text=True,
+        timeout=5,
+        check=False,
+    )
+    assert propagated.returncode == 0, propagated.stderr
+    expected_environment = {
+        "YULU_APPLICATION_SUPPORT_DIR": str(fake_home / "Library/Application Support/Yulu"),
+        "YULU_CACHE_DIR": str(fake_home / "Library/Caches/Yulu"),
+        "YULU_IPC_DIR": str(fake_home / "Library/Caches/Yulu"),
+        "YULU_LEGACY_READ_ONLY_DATA_DIR": str(legacy),
+        "YULU_LOG_DIR": str(fake_home / "Library/Logs/Yulu"),
+        "YULU_MEDIA_LIBRARY_DIR": str(standard_media),
+        "YULU_MODELS_DIR": str(fake_home / "Library/Application Support/Yulu/Models"),
+    }
+    assert json.loads(propagated.stdout) == {
+        "capture": expected_environment,
+        "host": expected_environment,
+    }
+
+    cache = fake_home / "Library/Caches/Yulu"
+    cache.mkdir(parents=True)
+    media_alias = fake_home / "media-alias"
+    media_alias.symlink_to(cache, target_is_directory=True)
+    standard.write_text(
+        json.dumps({"audio": {"output_dir": str(media_alias)}}),
+        encoding="utf-8",
+    )
+    (legacy / "config.json").write_text(
+        json.dumps({"audio": {"output_dir": "../relative-media"}}),
+        encoding="utf-8",
+    )
+    rejected = subprocess.run(
+        [str(binary), "--inspect-paths", str(fake_home)],
+        capture_output=True,
+        text=True,
+        timeout=5,
+        check=False,
+    )
+    assert rejected.returncode == 0, rejected.stderr
+    assert json.loads(rejected.stdout)["mediaLibraryDir"] == str(fake_home / "Movies/Yulu")
+
+    durable = fake_home / "Library/Application Support/Yulu"
+    legacy_alias = fake_home / "legacy-alias"
+    legacy_alias.symlink_to(durable, target_is_directory=True)
+    unsafe = subprocess.run(
+        [str(binary), "--inspect-paths-environment", str(fake_home)],
+        env={
+            **os.environ,
+            "YULU_APPLICATION_SUPPORT_DIR": "../relative-data",
+            "YULU_MODELS_DIR": str(legacy),
+            "YULU_CACHE_DIR": str(cache / "../../Application Support/Yulu"),
+            "YULU_IPC_DIR": str(fake_home / "outside-ipc"),
+            "YULU_LOG_DIR": str(durable),
+            "YULU_MEDIA_LIBRARY_DIR": str(media_alias),
+            "YULU_LEGACY_READ_ONLY_DATA_DIR": str(legacy_alias),
+        },
+        capture_output=True,
+        text=True,
+        timeout=5,
+        check=False,
+    )
+    assert unsafe.returncode == 0, unsafe.stderr
+    unsafe_paths = json.loads(unsafe.stdout)
+    assert unsafe_paths["durableDataDir"] == str(durable)
+    assert unsafe_paths["modelsDir"] == str(durable / "Models")
+    assert unsafe_paths["cacheDir"] == str(cache)
+    assert unsafe_paths["ipcDir"] == str(cache)
+    assert unsafe_paths["logsDir"] == str(fake_home / "Library/Logs/Yulu")
+    assert unsafe_paths["mediaLibraryDir"] == str(fake_home / "Movies/Yulu")
+    assert unsafe_paths["legacyReadOnlyDataDir"] == str(legacy)
+
+    legacy_media_collision = subprocess.run(
+        [str(binary), "--inspect-paths-environment", str(fake_home)],
+        env={
+            **os.environ,
+            "YULU_LEGACY_READ_ONLY_DATA_DIR": str(fake_home / "Movies/Yulu"),
+        },
+        capture_output=True,
+        text=True,
+        timeout=5,
+        check=False,
+    )
+    assert legacy_media_collision.returncode == 0, legacy_media_collision.stderr
+    collision_paths = json.loads(legacy_media_collision.stdout)
+    assert collision_paths["legacyReadOnlyDataDir"] == str(legacy)
+    assert collision_paths["mediaLibraryDir"] == str(fake_home / "Movies/Yulu")
+
+    loop = fake_home / "media-loop"
+    dangling = fake_home / "media-dangling"
+    blocked = fake_home / "not-a-directory"
+    loop.symlink_to(loop, target_is_directory=True)
+    dangling.symlink_to(fake_home / "missing-target", target_is_directory=True)
+    blocked.write_text("file")
+    standard.write_text(
+        json.dumps({"audio": {"output_dir": f"{fake_home}/bad\0path"}}),
+        encoding="utf-8",
+    )
+    (legacy / "config.json").write_text(
+        json.dumps({"audio": {"output_dir": str(dangling)}}),
+        encoding="utf-8",
+    )
+    malformed = subprocess.run(
+        [str(binary), "--inspect-paths-environment", str(fake_home)],
+        env={**os.environ, "YULU_MEDIA_LIBRARY_DIR": str(loop)},
+        capture_output=True,
+        text=True,
+        timeout=5,
+        check=False,
+    )
+    assert malformed.returncode == 0, malformed.stderr
+    assert json.loads(malformed.stdout)["mediaLibraryDir"] == str(
+        fake_home / "Movies/Yulu"
+    )
+
+    standard.write_text(
+        json.dumps({"audio": {"output_dir": str(blocked / "child")}}),
+        encoding="utf-8",
+    )
+    unusable = subprocess.run(
+        [str(binary), "--inspect-paths-environment", str(fake_home)],
+        env={**os.environ, "YULU_MEDIA_LIBRARY_DIR": str(dangling)},
+        capture_output=True,
+        text=True,
+        timeout=5,
+        check=False,
+    )
+    assert unusable.returncode == 0, unusable.stderr
+    assert json.loads(unusable.stdout)["mediaLibraryDir"] == str(
+        fake_home / "Movies/Yulu"
+    )
+
+    durable_target = fake_home / "targets/durable"
+    media_target = fake_home / "targets/media"
+    durable_target.mkdir(parents=True)
+    media_target.mkdir(parents=True)
+    durable_alias = fake_home / "durable-stable-alias"
+    media_stable_alias = fake_home / "media-stable-alias"
+    durable_alias.symlink_to(durable_target, target_is_directory=True)
+    media_stable_alias.symlink_to(media_target, target_is_directory=True)
+    stable = subprocess.run(
+        [str(binary), "--inspect-component-paths-environment", str(fake_home)],
+        env={
+            **os.environ,
+            "YULU_APPLICATION_SUPPORT_DIR": str(durable_alias),
+            "YULU_MEDIA_LIBRARY_DIR": str(media_stable_alias),
+        },
+        capture_output=True,
+        text=True,
+        timeout=5,
+        check=False,
+    )
+    assert stable.returncode == 0, stable.stderr
+    stable_paths = json.loads(stable.stdout)
+    for component in ("host", "capture"):
+        assert stable_paths[component]["YULU_APPLICATION_SUPPORT_DIR"] == str(
+            durable_target.resolve(strict=True)
+        )
+        assert stable_paths[component]["YULU_MODELS_DIR"] == str(
+            durable_target.resolve(strict=True) / "Models"
+        )
+        assert stable_paths[component]["YULU_MEDIA_LIBRARY_DIR"] == str(
+            media_target.resolve(strict=True)
+        )
+
+    durable_alias.unlink()
+    media_stable_alias.unlink()
+    durable_alias.symlink_to(legacy, target_is_directory=True)
+    media_stable_alias.symlink_to(legacy, target_is_directory=True)
+    for component in ("host", "capture"):
+        assert stable_paths[component]["YULU_APPLICATION_SUPPORT_DIR"] == str(
+            durable_target.resolve(strict=True)
+        )
+        assert stable_paths[component]["YULU_MEDIA_LIBRARY_DIR"] == str(
+            media_target.resolve(strict=True)
+        )
+
+    case_alias = subprocess.run(
+        [str(binary), "--inspect-component-paths-environment", str(fake_home)],
+        env={
+            **os.environ,
+            "YULU_APPLICATION_SUPPORT_DIR": str(fake_home / "CaseRoot/Yulu"),
+            "YULU_MODELS_DIR": str(fake_home / "caseroot/yulu"),
+            "YULU_MEDIA_LIBRARY_DIR": str(fake_home / "caseroot/yulu/Recordings"),
+        },
+        capture_output=True,
+        text=True,
+        timeout=5,
+        check=False,
+    )
+    assert case_alias.returncode == 0, case_alias.stderr
+    for component in ("host", "capture"):
+        case_child_paths = json.loads(case_alias.stdout)[component]
+        assert case_child_paths["YULU_MODELS_DIR"] == str(
+            fake_home / "CaseRoot/Yulu/Models"
+        )
+        assert case_child_paths["YULU_MEDIA_LIBRARY_DIR"] == str(
+            fake_home / "Movies/Yulu"
+        )
+
+    composed_durable = fake_home / "Operational/M\u00e9dia"
+    decomposed_nested_media = fake_home / "operational/ME\u0301DIA/Recordings"
+    unicode_alias = subprocess.run(
+        [str(binary), "--inspect-component-paths-environment", str(fake_home)],
+        env={
+            **os.environ,
+            "YULU_APPLICATION_SUPPORT_DIR": str(composed_durable),
+            "YULU_MODELS_DIR": str(fake_home / "operational/ME\u0301DIA"),
+            "YULU_MEDIA_LIBRARY_DIR": str(decomposed_nested_media),
+        },
+        capture_output=True,
+        text=True,
+        timeout=5,
+        check=False,
+    )
+    assert unicode_alias.returncode == 0, unicode_alias.stderr
+    unicode_child_paths = json.loads(unicode_alias.stdout)
+    for component in ("host", "capture"):
+        assert unicodedata.normalize(
+            "NFC",
+            unicode_child_paths[component]["YULU_APPLICATION_SUPPORT_DIR"],
+        ) == str(composed_durable)
+        assert unicodedata.normalize(
+            "NFC",
+            unicode_child_paths[component]["YULU_MODELS_DIR"],
+        ) == str(composed_durable / "Models")
+        assert unicode_child_paths[component]["YULU_MEDIA_LIBRARY_DIR"] == str(
+            fake_home / "Movies/Yulu"
+        )
 
 
 def test_development_smoke_probes_the_native_better_sqlite_binding():

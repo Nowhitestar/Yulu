@@ -1,4 +1,5 @@
 import Cocoa
+import Darwin
 import WebKit
 
 struct LaunchPolicy: Encodable {
@@ -148,6 +149,278 @@ struct BuildContract: Encodable {
     }
 }
 
+struct ApplicationDataPaths: Encodable {
+    let durableDataDir: URL
+    let configFile: URL
+    let modelsDir: URL
+    let cacheDir: URL
+    let ipcDir: URL
+    let logsDir: URL
+    let mediaLibraryDir: URL
+    let legacyReadOnlyDataDir: URL
+    let configReadFiles: [URL]
+
+    static func resolve(
+        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> ApplicationDataPaths {
+        guard (homeDirectory.path as NSString).isAbsolutePath else {
+            fatalError("Yulu application path home must be absolute")
+        }
+        let defaultDurable = homeDirectory.appendingPathComponent("Library/Application Support/Yulu", isDirectory: true)
+        let defaultCache = homeDirectory.appendingPathComponent("Library/Caches/Yulu", isDirectory: true)
+        let defaultLogs = homeDirectory.appendingPathComponent("Library/Logs/Yulu", isDirectory: true)
+        let defaultMedia = homeDirectory.appendingPathComponent("Movies/Yulu", isDirectory: true)
+        let defaultLegacy = homeDirectory.appendingPathComponent(".config/yulu", isDirectory: true)
+        guard let defaultLegacyCanonical = canonical(defaultLegacy),
+              let defaultMediaCanonical = canonical(defaultMedia) else {
+            fatalError("unsafe Yulu standard path defaults")
+        }
+        let durableDataDir = chooseURL(
+            "YULU_APPLICATION_SUPPORT_DIR",
+            environment: environment,
+            homeDirectory: homeDirectory,
+            fallback: defaultDurable
+        ) { candidate in
+            !overlaps(candidate, defaultLegacyCanonical) && !overlaps(candidate, defaultMediaCanonical)
+        }
+        let durableCanonical = durableDataDir
+        let cacheDir = chooseURL(
+            "YULU_CACHE_DIR",
+            environment: environment,
+            homeDirectory: homeDirectory,
+            fallback: defaultCache
+        ) { candidate in
+            !overlaps(candidate, durableCanonical)
+                && !overlaps(candidate, defaultLegacyCanonical)
+                && !overlaps(candidate, defaultMediaCanonical)
+        }
+        let cacheCanonical = cacheDir
+        let logsDir = chooseURL(
+            "YULU_LOG_DIR",
+            environment: environment,
+            homeDirectory: homeDirectory,
+            fallback: defaultLogs
+        ) { candidate in
+            !overlaps(candidate, durableCanonical)
+                && !overlaps(candidate, cacheCanonical)
+                && !overlaps(candidate, defaultLegacyCanonical)
+                && !overlaps(candidate, defaultMediaCanonical)
+        }
+        let logsCanonical = logsDir
+        let modelsDir = chooseURL(
+            "YULU_MODELS_DIR",
+            environment: environment,
+            homeDirectory: homeDirectory,
+            fallback: durableDataDir.appendingPathComponent("Models", isDirectory: true)
+        ) { candidate in
+            isStrictlyNested(candidate, root: durableCanonical)
+        }
+        let ipcDir = chooseURL(
+            "YULU_IPC_DIR",
+            environment: environment,
+            homeDirectory: homeDirectory,
+            fallback: cacheDir
+        ) { candidate in
+            isSameOrNested(candidate, root: cacheCanonical)
+        }
+        let legacyReadOnlyDataDir = chooseURL(
+            "YULU_LEGACY_READ_ONLY_DATA_DIR",
+            environment: environment,
+            homeDirectory: homeDirectory,
+            fallback: defaultLegacy
+        ) { candidate in
+            !overlaps(candidate, durableCanonical)
+                && !overlaps(candidate, cacheCanonical)
+                && !overlaps(candidate, logsCanonical)
+                && !overlaps(candidate, defaultMediaCanonical)
+        }
+        let legacyCanonical = legacyReadOnlyDataDir
+        let configFile = durableDataDir.appendingPathComponent("config.json")
+        let configReadFiles = [configFile, legacyReadOnlyDataDir.appendingPathComponent("config.json")]
+        let mediaLibraryDir = resolveMediaLibrary(
+            homeDirectory: homeDirectory,
+            environment: environment,
+            configReadFiles: configReadFiles,
+            fallback: defaultMedia
+        ) { candidate in
+            !overlaps(candidate, durableCanonical)
+                && !overlaps(candidate, cacheCanonical)
+                && !overlaps(candidate, logsCanonical)
+                && !overlaps(candidate, legacyCanonical)
+        }
+        return ApplicationDataPaths(
+            durableDataDir: durableDataDir,
+            configFile: configFile,
+            modelsDir: modelsDir,
+            cacheDir: cacheDir,
+            ipcDir: ipcDir,
+            logsDir: logsDir,
+            mediaLibraryDir: mediaLibraryDir,
+            legacyReadOnlyDataDir: legacyReadOnlyDataDir,
+            configReadFiles: configReadFiles
+        )
+    }
+
+    private static func absoluteURL(_ raw: String?, homeDirectory: URL) -> URL? {
+        guard let value = raw?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !value.isEmpty,
+              !value.contains("\0") else { return nil }
+        if value.hasPrefix("~/") {
+            let path = (homeDirectory.path as NSString).appendingPathComponent(String(value.dropFirst(2)))
+            return URL(fileURLWithPath: (path as NSString).standardizingPath, isDirectory: true)
+        }
+        guard (value as NSString).isAbsolutePath else { return nil }
+        return URL(fileURLWithPath: (value as NSString).standardizingPath, isDirectory: true)
+    }
+
+    private static func chooseURL(
+        _ name: String,
+        environment: [String: String],
+        homeDirectory: URL,
+        fallback: URL,
+        safe: (URL) -> Bool
+    ) -> URL {
+        if let candidate = absoluteURL(environment[name], homeDirectory: homeDirectory),
+           let resolved = canonical(candidate),
+           safe(resolved) {
+            return resolved
+        }
+        guard let resolvedFallback = canonical(fallback), safe(resolvedFallback) else {
+            fatalError("unsafe Yulu standard path: \(name)")
+        }
+        return resolvedFallback
+    }
+
+    private static func canonical(_ url: URL) -> URL? {
+        guard !url.path.contains("\0") else { return nil }
+        var existing = URL(
+            fileURLWithPath: (url.path as NSString).standardizingPath,
+            isDirectory: true
+        )
+        var missing: [String] = []
+        while true {
+            var metadata = stat()
+            let status = existing.path.withCString { lstat($0, &metadata) }
+            if status == 0 {
+                guard let resolvedPointer = existing.path.withCString({ realpath($0, nil) }) else {
+                    return nil
+                }
+                defer { free(resolvedPointer) }
+                let resolved = URL(
+                    fileURLWithPath: String(cString: resolvedPointer),
+                    isDirectory: true
+                )
+                var resolvedIsDirectory: ObjCBool = false
+                guard FileManager.default.fileExists(atPath: resolved.path, isDirectory: &resolvedIsDirectory),
+                      resolvedIsDirectory.boolValue else { return nil }
+                return missing.reduce(resolved) { result, component in
+                    result.appendingPathComponent(component, isDirectory: true)
+                }
+            }
+            guard errno == ENOENT else { return nil }
+            let parent = existing.deletingLastPathComponent()
+            if parent.path == existing.path { return nil }
+            missing.insert(existing.lastPathComponent, at: 0)
+            existing = parent
+        }
+    }
+
+    private static func comparisonComponents(_ value: URL) -> [String] {
+        value.pathComponents.map { component in
+            component.precomposedStringWithCanonicalMapping
+                .lowercased(with: Locale(identifier: "en_US_POSIX"))
+                .precomposedStringWithCanonicalMapping
+        }
+    }
+
+    private static func hasComparisonRoot(_ url: URL, root: URL, strict: Bool) -> Bool {
+        let path = comparisonComponents(url)
+        let rootPath = comparisonComponents(root)
+        return path.count >= rootPath.count + (strict ? 1 : 0)
+            && Array(path.prefix(rootPath.count)) == rootPath
+    }
+
+    private static func isSameOrNested(_ url: URL, root: URL) -> Bool {
+        hasComparisonRoot(url, root: root, strict: false)
+    }
+
+    private static func isStrictlyNested(_ url: URL, root: URL) -> Bool {
+        hasComparisonRoot(url, root: root, strict: true)
+    }
+
+    private static func overlaps(_ left: URL, _ right: URL) -> Bool {
+        isSameOrNested(left, root: right) || isSameOrNested(right, root: left)
+    }
+
+    private static func resolveMediaLibrary(
+        homeDirectory: URL,
+        environment: [String: String],
+        configReadFiles: [URL],
+        fallback: URL,
+        safe: (URL) -> Bool
+    ) -> URL {
+        var candidates = [absoluteURL(environment["YULU_MEDIA_LIBRARY_DIR"], homeDirectory: homeDirectory)]
+        for configFile in configReadFiles {
+            guard let data = try? Data(contentsOf: configFile),
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let audio = json["audio"] as? [String: Any],
+                  let raw = audio["output_dir"] as? String else {
+                candidates.append(nil)
+                continue
+            }
+            candidates.append(absoluteURL(raw, homeDirectory: homeDirectory))
+        }
+        candidates.append(fallback)
+        for candidate in candidates.compactMap({ $0 }) {
+            if let resolved = canonical(candidate), safe(resolved) {
+                return resolved
+            }
+        }
+        fatalError("no safe Yulu Media Library path")
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case durableDataDir, configFile, modelsDir, cacheDir, ipcDir, logsDir
+        case mediaLibraryDir, legacyReadOnlyDataDir, configReadFiles
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(durableDataDir.path, forKey: .durableDataDir)
+        try container.encode(configFile.path, forKey: .configFile)
+        try container.encode(modelsDir.path, forKey: .modelsDir)
+        try container.encode(cacheDir.path, forKey: .cacheDir)
+        try container.encode(ipcDir.path, forKey: .ipcDir)
+        try container.encode(logsDir.path, forKey: .logsDir)
+        try container.encode(mediaLibraryDir.path, forKey: .mediaLibraryDir)
+        try container.encode(legacyReadOnlyDataDir.path, forKey: .legacyReadOnlyDataDir)
+        try container.encode(configReadFiles.map(\.path), forKey: .configReadFiles)
+    }
+
+    var environment: [String: String] {
+        [
+            "YULU_APPLICATION_SUPPORT_DIR": durableDataDir.path,
+            "YULU_MODELS_DIR": modelsDir.path,
+            "YULU_CACHE_DIR": cacheDir.path,
+            "YULU_IPC_DIR": ipcDir.path,
+            "YULU_LOG_DIR": logsDir.path,
+            "YULU_MEDIA_LIBRARY_DIR": mediaLibraryDir.path,
+            "YULU_LEGACY_READ_ONLY_DATA_DIR": legacyReadOnlyDataDir.path,
+        ]
+    }
+
+    static let environmentNames = [
+        "YULU_APPLICATION_SUPPORT_DIR",
+        "YULU_MODELS_DIR",
+        "YULU_CACHE_DIR",
+        "YULU_IPC_DIR",
+        "YULU_LOG_DIR",
+        "YULU_MEDIA_LIBRARY_DIR",
+        "YULU_LEGACY_READ_ONLY_DATA_DIR",
+    ]
+}
+
 func writeJSON<T: Encodable>(_ value: T) throws {
     let encoder = JSONEncoder()
     encoder.outputFormatting = [.sortedKeys]
@@ -169,6 +442,22 @@ if CommandLine.arguments.count == 3, CommandLine.arguments[1] == "--inspect-bund
 
 if CommandLine.arguments.count == 2, CommandLine.arguments[1] == "--inspect-build" {
     try writeJSON(BuildContract.current)
+    exit(0)
+}
+
+if CommandLine.arguments.count == 3, CommandLine.arguments[1] == "--inspect-paths" {
+    try writeJSON(ApplicationDataPaths.resolve(
+        homeDirectory: URL(fileURLWithPath: CommandLine.arguments[2], isDirectory: true),
+        environment: [:]
+    ))
+    exit(0)
+}
+
+if CommandLine.arguments.count == 3, CommandLine.arguments[1] == "--inspect-paths-environment" {
+    try writeJSON(ApplicationDataPaths.resolve(
+        homeDirectory: URL(fileURLWithPath: CommandLine.arguments[2], isDirectory: true),
+        environment: ProcessInfo.processInfo.environment
+    ))
     exit(0)
 }
 
@@ -266,10 +555,18 @@ final class ProductSupervisor {
         developmentNode: URL? = nil,
         developmentScriptDir: URL? = nil,
         developmentSmoke: Bool = false,
-        hostNonce: String = UUID().uuidString
+        hostNonce: String = UUID().uuidString,
+        applicationPaths suppliedApplicationPaths: ApplicationDataPaths? = nil
     ) {
         self.hostNonce = hostNonce
+        let applicationPaths: ApplicationDataPaths
+        if let suppliedApplicationPaths {
+            applicationPaths = suppliedApplicationPaths
+        } else {
+            applicationPaths = ApplicationDataPaths.resolve(environment: [:])
+        }
         var hostEnvironment = sanitizedRuntimeEnvironment()
+        hostEnvironment.merge(applicationPaths.environment) { _, contract in contract }
         hostEnvironment["YULU_UI_PORT"] = String(port)
         hostEnvironment["YULU_UI_DIST_WEB"] = layout.hostWeb.path
         hostEnvironment["YULU_HOST_NONCE"] = hostNonce
@@ -292,6 +589,7 @@ final class ProductSupervisor {
             currentDirectoryURL: layout.hostEntry.deletingLastPathComponent()
         )
         var captureEnvironment = sanitizedRuntimeEnvironment()
+        captureEnvironment.merge(applicationPaths.environment) { _, contract in contract }
         captureEnvironment["YULU_SCRIPT_DIR"] = developmentScriptDir?.path
             ?? layout.bundledScriptDir.path
         captureEnvironment["YULU_PYTHON"] = layout.bundledPython.path
@@ -318,10 +616,54 @@ final class ProductSupervisor {
     func restartCapture() { capture.restart() }
     var hostIsRunning: Bool { host.isRunning }
 
+    var pathContractEnvironments: ComponentPathEnvironments {
+        func contractOnly(_ environment: [String: String]) -> [String: String] {
+            Dictionary(uniqueKeysWithValues: ApplicationDataPaths.environmentNames.compactMap { name in
+                environment[name].map { (name, $0) }
+            })
+        }
+        return ComponentPathEnvironments(
+            host: contractOnly(host.environment),
+            capture: contractOnly(capture.environment)
+        )
+    }
+
     func stop() {
         host.stop()
         capture.stop()
     }
+}
+
+struct ComponentPathEnvironments: Encodable {
+    let host: [String: String]
+    let capture: [String: String]
+}
+
+if CommandLine.arguments.count == 3, CommandLine.arguments[1] == "--inspect-component-paths" {
+    let homeDirectory = URL(fileURLWithPath: CommandLine.arguments[2], isDirectory: true)
+    let applicationPaths = ApplicationDataPaths.resolve(homeDirectory: homeDirectory, environment: [:])
+    let supervisor = ProductSupervisor(
+        layout: BundleLayout(bundleURL: URL(fileURLWithPath: "/Applications/Yulu.app", isDirectory: true)),
+        port: 7777,
+        applicationPaths: applicationPaths
+    )
+    try writeJSON(supervisor.pathContractEnvironments)
+    exit(0)
+}
+
+if CommandLine.arguments.count == 3, CommandLine.arguments[1] == "--inspect-component-paths-environment" {
+    let homeDirectory = URL(fileURLWithPath: CommandLine.arguments[2], isDirectory: true)
+    let applicationPaths = ApplicationDataPaths.resolve(
+        homeDirectory: homeDirectory,
+        environment: ProcessInfo.processInfo.environment
+    )
+    let supervisor = ProductSupervisor(
+        layout: BundleLayout(bundleURL: URL(fileURLWithPath: "/Applications/Yulu.app", isDirectory: true)),
+        port: 7777,
+        applicationPaths: applicationPaths
+    )
+    try writeJSON(supervisor.pathContractEnvironments)
+    exit(0)
 }
 
 func sanitizedRuntimeEnvironment() -> [String: String] {

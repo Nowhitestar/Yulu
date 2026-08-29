@@ -9,6 +9,7 @@ This is the Wave-0 scaffold (RESEARCH §544-546): RED now (impls don't exist),
 GREEN after Tasks 2-3 land ``MacOSPathResolver`` / ``MacOSDaemonManager``.
 """
 
+import json
 import platform
 import plistlib
 import sys
@@ -136,6 +137,254 @@ def test_path_resolver_missing_config_falls_back(tmp_path, monkeypatch):
     monkeypatch.delenv("YULU_OUTPUT_DIR", raising=False)
     # No config.json on disk → default.
     assert resolver.data_dir() == fake_home / "Movies/Yulu"
+
+
+def test_application_data_paths_use_standard_roots_without_real_home(tmp_path, monkeypatch):
+    from yulu_platform.macos import MacOSPathResolver
+
+    fake_home = tmp_path / "isolated-home"
+    resolved = MacOSPathResolver().application_paths(home=fake_home, environment={})
+
+    assert resolved.durable_data_dir == fake_home / "Library/Application Support/Yulu"
+    assert resolved.config_file == resolved.durable_data_dir / "config.json"
+    assert resolved.models_dir == resolved.durable_data_dir / "Models"
+    assert resolved.cache_dir == fake_home / "Library/Caches/Yulu"
+    assert resolved.ipc_dir == resolved.cache_dir
+    assert resolved.logs_dir == fake_home / "Library/Logs/Yulu"
+    assert resolved.media_library_dir == fake_home / "Movies/Yulu"
+    assert resolved.legacy_read_only_data_dir == fake_home / ".config/yulu"
+    assert resolved.config_read_files == (
+        resolved.config_file,
+        resolved.legacy_read_only_data_dir / "config.json",
+    )
+
+
+def test_application_data_paths_keep_configured_media_library_separate(tmp_path, monkeypatch):
+    from yulu_platform.macos import MacOSPathResolver
+
+    fake_home = tmp_path / "isolated-home"
+    custom_media = tmp_path / "external-media" / "Yulu"
+    resolved = MacOSPathResolver().application_paths(
+        home=fake_home,
+        environment={"YULU_MEDIA_LIBRARY_DIR": str(custom_media)},
+    )
+
+    assert resolved.media_library_dir == custom_media
+    assert not resolved.media_library_dir.is_relative_to(resolved.durable_data_dir)
+    assert not resolved.media_library_dir.is_relative_to(resolved.cache_dir)
+    assert not resolved.media_library_dir.is_relative_to(resolved.logs_dir)
+
+
+def test_application_data_paths_share_media_precedence_with_other_runtimes(tmp_path):
+    from yulu_platform.macos import MacOSPathResolver
+
+    home = tmp_path / "isolated-home"
+    standard = home / "Library/Application Support/Yulu/config.json"
+    legacy = home / ".config/yulu/config.json"
+    standard.parent.mkdir(parents=True)
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text('{"audio":{"output_dir":"~/Legacy Media/Yulu"}}')
+    standard.write_text('{"audio":{"output_dir":"~/Standard Media/Yulu"}}')
+    resolver = MacOSPathResolver()
+
+    assert resolver.application_paths(home=home, environment={}).media_library_dir == (
+        home / "Standard Media/Yulu"
+    )
+    standard.unlink()
+    assert resolver.application_paths(home=home, environment={}).media_library_dir == (
+        home / "Legacy Media/Yulu"
+    )
+    assert resolver.application_paths(
+        home=home,
+        environment={"YULU_MEDIA_LIBRARY_DIR": str(home / "Environment Media/Yulu")},
+    ).media_library_dir == home / "Environment Media/Yulu"
+
+
+def test_application_data_paths_reject_unsafe_and_symlink_equivalent_roots(tmp_path):
+    from yulu_platform.macos import MacOSPathResolver
+
+    home = tmp_path / "isolated-home"
+    durable = home / "Library/Application Support/Yulu"
+    cache = home / "Library/Caches/Yulu"
+    legacy = home / ".config/yulu"
+    durable.mkdir(parents=True)
+    cache.mkdir(parents=True)
+    media_alias = home / "media-alias"
+    legacy_alias = home / "legacy-alias"
+    media_alias.symlink_to(cache, target_is_directory=True)
+    legacy_alias.symlink_to(durable, target_is_directory=True)
+
+    resolved = MacOSPathResolver().application_paths(
+        home=home,
+        environment={
+            "YULU_APPLICATION_SUPPORT_DIR": "../relative-data",
+            "YULU_MODELS_DIR": str(legacy),
+            "YULU_CACHE_DIR": str(cache / "../../Application Support/Yulu"),
+            "YULU_IPC_DIR": str(home / "outside-ipc"),
+            "YULU_LOG_DIR": str(durable),
+            "YULU_MEDIA_LIBRARY_DIR": str(media_alias),
+            "YULU_LEGACY_READ_ONLY_DATA_DIR": str(legacy_alias),
+        },
+    )
+
+    assert resolved.durable_data_dir == durable
+    assert resolved.models_dir == durable / "Models"
+    assert resolved.cache_dir == cache
+    assert resolved.ipc_dir == cache
+    assert resolved.logs_dir == home / "Library/Logs/Yulu"
+    assert resolved.media_library_dir == home / "Movies/Yulu"
+    assert resolved.legacy_read_only_data_dir == legacy
+
+    legacy_media_collision = MacOSPathResolver().application_paths(
+        home=home,
+        environment={
+            "YULU_LEGACY_READ_ONLY_DATA_DIR": str(home / "Movies/Yulu"),
+        },
+    )
+    assert legacy_media_collision.legacy_read_only_data_dir == legacy
+    assert legacy_media_collision.media_library_dir == home / "Movies/Yulu"
+
+
+def test_application_data_paths_skip_malformed_and_unusable_media_candidates(tmp_path):
+    from yulu_platform.macos import MacOSPathResolver
+
+    home = tmp_path / "isolated-home"
+    standard = home / "Library/Application Support/Yulu/config.json"
+    legacy = home / ".config/yulu/config.json"
+    loop = home / "media-loop"
+    dangling = home / "media-dangling"
+    blocked = home / "not-a-directory"
+    standard_media = home / "Standard Media/Yulu"
+    legacy_media = home / "Legacy Media/Yulu"
+    standard.parent.mkdir(parents=True)
+    legacy.parent.mkdir(parents=True)
+    loop.symlink_to(loop, target_is_directory=True)
+    dangling.symlink_to(home / "missing-target", target_is_directory=True)
+    blocked.write_text("file")
+    standard.write_text(json.dumps({"audio": {"output_dir": str(standard_media)}}))
+    legacy.write_text(json.dumps({"audio": {"output_dir": str(legacy_media)}}))
+    resolver = MacOSPathResolver()
+
+    assert resolver.application_paths(
+        home=home,
+        environment={"YULU_MEDIA_LIBRARY_DIR": str(loop)},
+    ).media_library_dir == standard_media
+
+    standard.write_text(
+        json.dumps({"audio": {"output_dir": f"{home}/bad\0path"}})
+    )
+    assert resolver.application_paths(home=home, environment={}).media_library_dir == (
+        legacy_media
+    )
+
+    standard.write_text(json.dumps({"audio": {"output_dir": str(dangling)}}))
+    legacy.write_text(
+        json.dumps({"audio": {"output_dir": str(blocked / "child")}})
+    )
+    assert resolver.application_paths(home=home, environment={}).media_library_dir == (
+        home / "Movies/Yulu"
+    )
+
+
+def test_application_data_paths_return_stable_canonical_targets(tmp_path):
+    from yulu_platform.macos import MacOSPathResolver
+
+    home = tmp_path / "isolated-home"
+    durable_target = home / "targets/durable"
+    media_target = home / "targets/media"
+    durable_alias = home / "durable-alias"
+    media_alias = home / "media-alias"
+    legacy = home / ".config/yulu"
+    durable_target.mkdir(parents=True)
+    media_target.mkdir(parents=True)
+    legacy.mkdir(parents=True)
+    durable_alias.symlink_to(durable_target, target_is_directory=True)
+    media_alias.symlink_to(media_target, target_is_directory=True)
+
+    resolved = MacOSPathResolver().application_paths(
+        home=home,
+        environment={
+            "YULU_APPLICATION_SUPPORT_DIR": str(durable_alias),
+            "YULU_MEDIA_LIBRARY_DIR": str(media_alias),
+        },
+    )
+    canonical_durable = durable_target.resolve(strict=True)
+    canonical_media = media_target.resolve(strict=True)
+
+    assert resolved.durable_data_dir == canonical_durable
+    assert resolved.config_file == canonical_durable / "config.json"
+    assert resolved.models_dir == canonical_durable / "Models"
+    assert resolved.media_library_dir == canonical_media
+
+    durable_alias.unlink()
+    media_alias.unlink()
+    durable_alias.symlink_to(legacy, target_is_directory=True)
+    media_alias.symlink_to(legacy, target_is_directory=True)
+
+    assert resolved.durable_data_dir == canonical_durable
+    assert resolved.media_library_dir == canonical_media
+
+
+def test_application_data_paths_reject_casefolded_and_unicode_media_collisions(
+    tmp_path,
+):
+    from yulu_platform.macos import MacOSPathResolver
+
+    home = tmp_path / "isolated-home"
+    home.mkdir()
+    resolver = MacOSPathResolver()
+    default_media = home / "Movies/Yulu"
+
+    case_alias = resolver.application_paths(
+        home=home,
+        environment={
+            "YULU_MEDIA_LIBRARY_DIR": str(
+                home / "Library/Application Support/yulu"
+            ),
+        },
+    )
+    assert case_alias.media_library_dir == default_media
+
+    case_equal_models = resolver.application_paths(
+        home=home,
+        environment={
+            "YULU_MODELS_DIR": str(home / "Library/Application Support/yulu"),
+        },
+    )
+    assert case_equal_models.models_dir == (
+        home / "Library/Application Support/Yulu/Models"
+    )
+
+    nested_case_alias = resolver.application_paths(
+        home=home,
+        environment={
+            "YULU_MEDIA_LIBRARY_DIR": str(
+                home / "Library/Application Support/yULU/Recordings"
+            ),
+        },
+    )
+    assert nested_case_alias.media_library_dir == default_media
+
+    composed_durable = home / "Operational/M\u00e9dia"
+    decomposed_nested_media = home / "operational/ME\u0301DIA/Recordings"
+    unicode_alias = resolver.application_paths(
+        home=home,
+        environment={
+            "YULU_APPLICATION_SUPPORT_DIR": str(composed_durable),
+            "YULU_MEDIA_LIBRARY_DIR": str(decomposed_nested_media),
+        },
+    )
+    assert unicode_alias.durable_data_dir == composed_durable
+    assert unicode_alias.media_library_dir == default_media
+
+    unicode_equal_models = resolver.application_paths(
+        home=home,
+        environment={
+            "YULU_APPLICATION_SUPPORT_DIR": str(composed_durable),
+            "YULU_MODELS_DIR": str(home / "operational/ME\u0301DIA"),
+        },
+    )
+    assert unicode_equal_models.models_dir == composed_durable / "Models"
 
 
 # --- Phase 5 DATA-02: runtime_dir locked + assert_runtime_not_synced guard ---

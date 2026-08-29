@@ -5,11 +5,12 @@ from __future__ import annotations
 from .audio_capture import MacOSAudioCaptureController
 from .daemon_manager import MacOSDaemonManager
 from .dependency_manager import MacOSDependencyManager
-from .path_resolver import MacOSPathResolver
+from .path_resolver import ApplicationDataPaths, MacOSPathResolver
 from .permission_model import MacOSPermissionModel
 
 __all__ = [
     "MacOSAudioCaptureController",
+    "ApplicationDataPaths",
     "MacOSDaemonManager",
     "MacOSDependencyManager",
     "MacOSPathResolver",

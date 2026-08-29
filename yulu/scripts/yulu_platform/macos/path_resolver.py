@@ -20,7 +20,10 @@ from __future__ import annotations
 import json
 import os
 import platform
+import unicodedata
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Mapping
 
 from yulu_platform.base import PathResolver
 
@@ -28,6 +31,21 @@ from yulu_platform.base import PathResolver
 # audio_daemon.swift defaultRecordingDir).
 _DEFAULT_CONFIG_SUBDIR = ".config/yulu"
 _DEFAULT_DATA_SUBDIR = "Movies/Yulu"
+
+
+@dataclass(frozen=True)
+class ApplicationDataPaths:
+    """Standard writable roots plus the explicit legacy compatibility reader."""
+
+    durable_data_dir: Path
+    config_file: Path
+    models_dir: Path
+    cache_dir: Path
+    ipc_dir: Path
+    logs_dir: Path
+    media_library_dir: Path
+    legacy_read_only_data_dir: Path
+    config_read_files: tuple[Path, ...]
 
 
 class MacOSPathResolver(PathResolver):
@@ -59,6 +77,228 @@ class MacOSPathResolver(PathResolver):
             return configured
 
         return Path.home() / _DEFAULT_DATA_SUBDIR
+
+    def application_paths(
+        self,
+        *,
+        home: Path | None = None,
+        environment: Mapping[str, str] | None = None,
+    ) -> ApplicationDataPaths:
+        """Resolve Phase 13's standard cross-runtime mutable-data contract.
+
+        ``config_dir``/``runtime_dir`` intentionally retain their pre-migration
+        behavior until the dedicated caller migrations in #162 and #163. This
+        expanded contract makes every new write authority standard while keeping
+        the old root available only in ``config_read_files``.
+        """
+        home = home or Path.home()
+        environment = environment if environment is not None else os.environ
+        if not home.is_absolute():
+            raise ValueError("Yulu application path home must be absolute")
+        default_durable = home / "Library/Application Support/Yulu"
+        default_cache = home / "Library/Caches/Yulu"
+        default_logs = home / "Library/Logs/Yulu"
+        default_media = home / _DEFAULT_DATA_SUBDIR
+        default_legacy = home / _DEFAULT_CONFIG_SUBDIR
+        default_legacy_canonical = self._required_canonical(
+            default_legacy, "YULU_LEGACY_READ_ONLY_DATA_DIR"
+        )
+        default_media_canonical = self._required_canonical(
+            default_media, "YULU_MEDIA_LIBRARY_DIR"
+        )
+
+        durable_data_dir = self._choose_path(
+            "YULU_APPLICATION_SUPPORT_DIR",
+            default_durable,
+            environment,
+            home,
+            lambda candidate: not self._overlaps(candidate, default_legacy_canonical)
+            and not self._overlaps(candidate, default_media_canonical),
+        )
+        durable_canonical = durable_data_dir
+        config_file = durable_data_dir / "config.json"
+        cache_dir = self._choose_path(
+            "YULU_CACHE_DIR",
+            default_cache,
+            environment,
+            home,
+            lambda candidate: not self._overlaps(candidate, durable_canonical)
+            and not self._overlaps(candidate, default_legacy_canonical)
+            and not self._overlaps(candidate, default_media_canonical),
+        )
+        cache_canonical = cache_dir
+        logs_dir = self._choose_path(
+            "YULU_LOG_DIR",
+            default_logs,
+            environment,
+            home,
+            lambda candidate: not self._overlaps(candidate, durable_canonical)
+            and not self._overlaps(candidate, cache_canonical)
+            and not self._overlaps(candidate, default_legacy_canonical)
+            and not self._overlaps(candidate, default_media_canonical),
+        )
+        logs_canonical = logs_dir
+        models_dir = self._choose_path(
+            "YULU_MODELS_DIR",
+            durable_data_dir / "Models",
+            environment,
+            home,
+            lambda candidate: self._is_strictly_nested(
+                candidate, durable_canonical
+            ),
+        )
+        ipc_dir = self._choose_path(
+            "YULU_IPC_DIR",
+            cache_dir,
+            environment,
+            home,
+            lambda candidate: self._is_same_or_nested(candidate, cache_canonical),
+        )
+        legacy_read_only_data_dir = self._choose_path(
+            "YULU_LEGACY_READ_ONLY_DATA_DIR",
+            default_legacy,
+            environment,
+            home,
+            lambda candidate: not self._overlaps(candidate, durable_canonical)
+            and not self._overlaps(candidate, cache_canonical)
+            and not self._overlaps(candidate, logs_canonical)
+            and not self._overlaps(candidate, default_media_canonical),
+        )
+        legacy_canonical = legacy_read_only_data_dir
+        config_read_files = (
+            config_file,
+            legacy_read_only_data_dir / "config.json",
+        )
+        media_candidates = (
+            self._absolute_path(environment.get("YULU_MEDIA_LIBRARY_DIR"), home),
+            *(self._media_from_config(path, home) for path in config_read_files),
+            default_media,
+        )
+        media_library_dir = None
+        for candidate in media_candidates:
+            resolved = self._try_canonical(candidate) if candidate is not None else None
+            if (
+                resolved is not None
+                and not self._overlaps(resolved, durable_canonical)
+                and not self._overlaps(resolved, cache_canonical)
+                and not self._overlaps(resolved, logs_canonical)
+                and not self._overlaps(resolved, legacy_canonical)
+            ):
+                media_library_dir = resolved
+                break
+        if media_library_dir is None:
+            raise RuntimeError("no safe Yulu Media Library path")
+        return ApplicationDataPaths(
+            durable_data_dir=durable_data_dir,
+            config_file=config_file,
+            models_dir=models_dir,
+            cache_dir=cache_dir,
+            ipc_dir=ipc_dir,
+            logs_dir=logs_dir,
+            media_library_dir=media_library_dir,
+            legacy_read_only_data_dir=legacy_read_only_data_dir,
+            config_read_files=config_read_files,
+        )
+
+    @classmethod
+    def _choose_path(
+        cls,
+        name: str,
+        fallback: Path,
+        environment: Mapping[str, str],
+        home: Path,
+        safe,
+    ) -> Path:
+        configured = cls._absolute_path(environment.get(name), home)
+        candidate = cls._try_canonical(configured) if configured is not None else None
+        if candidate is not None and safe(candidate):
+            return candidate
+        resolved_fallback = cls._required_canonical(fallback, name)
+        if not safe(resolved_fallback):
+            raise RuntimeError(f"unsafe Yulu standard path: {name}")
+        return resolved_fallback
+
+    @staticmethod
+    def _absolute_path(raw: str | None, home: Path) -> Path | None:
+        value = raw.strip() if isinstance(raw, str) else ""
+        if not value or "\0" in value:
+            return None
+        candidate = home / value[2:] if value.startswith("~/") else Path(value)
+        return Path(os.path.normpath(candidate)) if candidate.is_absolute() else None
+
+    @staticmethod
+    def _canonical(path: Path) -> Path:
+        existing = path
+        missing: list[str] = []
+        while True:
+            try:
+                existing.lstat()
+                break
+            except FileNotFoundError:
+                parent = existing.parent
+                if parent == existing:
+                    raise
+                missing.insert(0, existing.name)
+                existing = parent
+        resolved = existing.resolve(strict=True)
+        if not resolved.is_dir():
+            raise NotADirectoryError(resolved)
+        return resolved.joinpath(*missing)
+
+    @classmethod
+    def _try_canonical(cls, path: Path) -> Path | None:
+        try:
+            return cls._canonical(path)
+        except (OSError, RuntimeError, ValueError):
+            return None
+
+    @classmethod
+    def _required_canonical(cls, path: Path, name: str) -> Path:
+        resolved = cls._try_canonical(path)
+        if resolved is None:
+            raise RuntimeError(f"unsafe Yulu standard path: {name}")
+        return resolved
+
+    @staticmethod
+    def _comparison_components(value: Path) -> tuple[str, ...]:
+        return tuple(
+            unicodedata.normalize(
+                "NFC", unicodedata.normalize("NFC", component).lower()
+            )
+            for component in value.parts
+        )
+
+    @classmethod
+    def _has_comparison_root(cls, path: Path, root: Path, *, strict: bool) -> bool:
+        path_components = cls._comparison_components(path)
+        root_components = cls._comparison_components(root)
+        minimum_length = len(root_components) + (1 if strict else 0)
+        return len(path_components) >= minimum_length and path_components[
+            : len(root_components)
+        ] == root_components
+
+    @classmethod
+    def _is_same_or_nested(cls, path: Path, root: Path) -> bool:
+        return cls._has_comparison_root(path, root, strict=False)
+
+    @classmethod
+    def _is_strictly_nested(cls, path: Path, root: Path) -> bool:
+        return cls._has_comparison_root(path, root, strict=True)
+
+    @classmethod
+    def _overlaps(cls, left: Path, right: Path) -> bool:
+        return cls._is_same_or_nested(left, right) or cls._is_same_or_nested(right, left)
+
+    @classmethod
+    def _media_from_config(cls, config_file: Path, home: Path) -> Path | None:
+        try:
+            data = json.loads(config_file.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        if not isinstance(data, dict) or not isinstance(data.get("audio"), dict):
+            return None
+        raw = data["audio"].get("output_dir")
+        return cls._absolute_path(raw, home) if isinstance(raw, str) else None
 
     # ── Phase 5 DATA-02: the runtime/content split (D-01) ──────────────────────
     #
