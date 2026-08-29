@@ -43,12 +43,13 @@ jobs:
     name: Publish assets for the cut release
     needs: release-please
     if: ${{ needs.release-please.outputs.release_created == 'true' }}
-    # The reusable release-publish.yml job requests id-token + attestations (for the
-    # SLSA build-provenance attestation). A reusable-workflow call cannot escalate
+    # The reusable release-publish.yml jobs request actions:read for the immutable
+    # handoff plus id-token + attestations for SLSA provenance. A call cannot escalate
     # beyond the permissions GRANTED here, and GitHub validates that at workflow
     # startup — BEFORE the `if:` is evaluated — so granting only contents:write made
-    # every push to main fail with `startup_failure` (A4). Grant all three here.
+    # every push to main fail with `startup_failure` (A4). Grant the required scopes here.
     permissions:
+      actions: read
       contents: write
       id-token: write
       attestations: write

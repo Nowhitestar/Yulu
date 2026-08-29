@@ -10,6 +10,9 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
   build:
     name: Syntax + Swift build
@@ -19,6 +22,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Bash syntax check
         run: |
@@ -178,6 +183,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Read locked Application Runtime Node version
         id: application-runtime-node
@@ -202,7 +209,7 @@ jobs:
           test "$(node --version)" = "v$EXPECTED_NODE_VERSION"
 
       - name: Install dependencies
-        run: npm ci
+        run: bash "$GITHUB_WORKSPACE/packaging/scripts/install_application_node_dependencies.sh" "$PWD"
 
       - name: TypeScript typecheck
         run: npm run typecheck

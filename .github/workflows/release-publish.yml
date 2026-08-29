@@ -18,15 +18,15 @@ on:
         type: string
 
 permissions:
-  contents: write # existing — needed for `gh release`
-  id-token: write # OIDC token used to sign the build-provenance attestation
-  attestations: write # persist the attestation to the repo
+  contents: read
 
 jobs:
-  publish:
-    name: Build & publish release assets
+  build:
+    name: Build and verify release assets
     runs-on: macos-latest
     timeout-minutes: 30
+    permissions:
+      contents: read
     env:
       TAG: ${{ inputs.tag }}
     steps:
@@ -37,6 +37,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          persist-credentials: false
           ref: ${{ github.sha }}
 
       - name: Verify tag matches VERSION
@@ -57,6 +58,7 @@ jobs:
                    packaging/scripts/pkg_postinstall.sh \
                    packaging/scripts/checksums.sh \
                    packaging/scripts/check_macos_deployment_target.sh \
+                   packaging/scripts/install_application_node_dependencies.sh \
                    packaging/scripts/prepare_application_runtime.sh \
                    packaging/scripts/sign_and_notarize.sh \
                    packaging/scripts/verify_application_runtime.sh \
@@ -121,7 +123,7 @@ jobs:
         working-directory: yulu/scripts/yulu_ui
         run: |
           set -euo pipefail
-          npm ci
+          bash "$GITHUB_WORKSPACE/packaging/scripts/install_application_node_dependencies.sh" "$PWD"
           npm run typecheck
           npm test
           npm run build
@@ -133,6 +135,7 @@ jobs:
           test -s yulu/scripts/local_caption_runtime_pack.json
           python3 - <<'PY'
           import json
+          import re
           from pathlib import Path
 
           lock = json.loads(Path("packaging/runtime-lock.json").read_text())
@@ -141,6 +144,24 @@ jobs:
               assert len(lock[component]["sha256"]) == 64
               assert lock[component].get("url", "").startswith("https://")
           assert lock["ffmpeg"]["url"].startswith("https://ffmpeg.org/releases/")
+          native = lock["betterSqlite3"]
+          package_lock = json.loads(
+              Path("yulu/scripts/yulu_ui/package-lock.json").read_text()
+          )
+          locked_addon_version = package_lock["packages"]["node_modules/better-sqlite3"]["version"]
+          assert native["version"] == locked_addon_version
+          assert native["nodeAbi"] == "137"
+          assert native["platform"] == "darwin"
+          assert native["architecture"] == "arm64"
+          expected_asset = (
+              f"better-sqlite3-v{locked_addon_version}-node-v137-darwin-arm64.tar.gz"
+          )
+          assert native["url"] == (
+              "https://github.com/WiseLibs/better-sqlite3/releases/download/"
+              f"v{locked_addon_version}/{expected_asset}"
+          )
+          assert re.fullmatch(r"[0-9a-f]{64}", native["sha256"])
+          assert re.fullmatch(r"[0-9a-f]{64}", native["binarySha256"])
           pack = json.loads(Path("yulu/scripts/local_caption_runtime_pack.json").read_text())
           assert pack["schema"] == 1
           assert pack["architecture"] == "arm64"
@@ -222,18 +243,6 @@ jobs:
           bash packaging/scripts/verify_application_runtime.sh \
             "$PWD/yulu/scripts/Yulu.app"
 
-      # SLSA build-provenance attestation for the release zip (BUILD-04). Minted
-      # from this workflow's OIDC token; verifiable with `gh attestation verify
-      # <zip> --repo Nowhitestar/Yulu`. Requires id-token/attestations: write
-      # (declared on this job above). A4: confirm the reusable workflow inherits
-      # those permissions on a real run.
-      - name: Attest release zip provenance
-        uses: actions/attest-build-provenance@v4
-        with:
-          subject-path: |
-            dist/yulu-macos-arm64-${{ inputs.tag }}.zip
-            dist/yulu-local-caption-runtime-macos-arm64-${{ inputs.tag }}.zip
-
       - name: Prepare release notes
         run: |
           set -euo pipefail
@@ -245,7 +254,7 @@ jobs:
           tag = os.environ["TAG"]
           version = tag[1:]
           changelog = pathlib.Path("CHANGELOG.md")
-          notes = pathlib.Path(os.environ["RUNNER_TEMP"]) / "release-notes.md"
+          notes = pathlib.Path("dist/release-notes.md")
 
           text = changelog.read_text() if changelog.exists() else ""
           pattern = rf"^## \[{re.escape(version)}\].*?(?=^## \[|\Z)"
@@ -260,6 +269,67 @@ jobs:
           notes.write_text(body + "\n")
           print(notes)
           PY
+
+      # upload-artifact@v4 artifacts are immutable, so the privileged publish
+      # job receives exactly the bytes verified above and cannot replace them.
+      - name: Upload immutable verified release assets
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: yulu-release-${{ inputs.tag }}
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
+          path: |
+            dist/yulu-macos-arm64-${{ inputs.tag }}.zip
+            dist/yulu-local-caption-runtime-macos-arm64-${{ inputs.tag }}.zip
+            dist/install.sh
+            dist/checksums.txt
+            dist/release-notes.md
+
+      # Tear down the ephemeral signing keychain and remove the decoded cert/key,
+      # ALWAYS — even if an earlier step failed — so the imported Developer ID
+      # identity never lingers on a shared runner (D-08, Pattern 3, T-01-19).
+      # Each line is `|| true` so cleanup never masks the real job result.
+      - name: Clean up signing keychain
+        if: always()
+        run: |
+          security delete-keychain "$RUNNER_TEMP/yulu-signing.keychain-db" 2>/dev/null || true
+          rm -f "$RUNNER_TEMP/cert.p12" "$RUNNER_TEMP/asc_key.p8" \
+                "$RUNNER_TEMP"/*-notarize.zip 2>/dev/null || true
+
+  publish:
+    name: Attest and publish verified release assets
+    needs: build
+    runs-on: macos-latest
+    timeout-minutes: 15
+    permissions:
+      actions: read
+      contents: write
+      id-token: write
+      attestations: write
+    env:
+      TAG: ${{ inputs.tag }}
+    steps:
+      - name: Download immutable verified release assets
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: yulu-release-${{ inputs.tag }}
+          path: dist
+
+      - name: Verify handed-off release assets
+        run: |
+          set -euo pipefail
+          test -s dist/release-notes.md
+          (cd dist && shasum -a 256 -c checksums.txt)
+
+      # SLSA build-provenance attestation for the release zips (BUILD-04).
+      # Only this narrow job can mint the OIDC token and publish attestations.
+      - name: Attest release zip provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            dist/yulu-macos-arm64-${{ inputs.tag }}.zip
+            dist/yulu-local-caption-runtime-macos-arm64-${{ inputs.tag }}.zip
 
       - name: Upload verified assets to draft GitHub Release
         env:
@@ -278,7 +348,7 @@ jobs:
             EDIT_ARGS=(
               "$TAG"
               --title "$TAG"
-              --notes-file "$RUNNER_TEMP/release-notes.md"
+              --notes-file "dist/release-notes.md"
               --draft
             )
             if [[ "$TAG" == *-* ]]; then
@@ -293,7 +363,7 @@ jobs:
               "$TAG"
               "${ASSETS[@]}"
               --title "$TAG"
-              --notes-file "$RUNNER_TEMP/release-notes.md"
+              --notes-file "dist/release-notes.md"
               --draft
             )
             if [[ "$TAG" == *-* ]]; then
@@ -346,14 +416,3 @@ jobs:
             PUBLISH_ARGS+=(--prerelease=false)
           fi
           gh release edit "${PUBLISH_ARGS[@]}"
-
-      # Tear down the ephemeral signing keychain and remove the decoded cert/key,
-      # ALWAYS — even if an earlier step failed — so the imported Developer ID
-      # identity never lingers on a shared runner (D-08, Pattern 3, T-01-19).
-      # Each line is `|| true` so cleanup never masks the real job result.
-      - name: Clean up signing keychain
-        if: always()
-        run: |
-          security delete-keychain "$RUNNER_TEMP/yulu-signing.keychain-db" 2>/dev/null || true
-          rm -f "$RUNNER_TEMP/cert.p12" "$RUNNER_TEMP/asc_key.p8" \
-                "$RUNNER_TEMP"/*-notarize.zip 2>/dev/null || true

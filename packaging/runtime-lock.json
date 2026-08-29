@@ -5,6 +5,15 @@
     "url": "https://nodejs.org/download/release/v24.20.0/node-v24.20.0-darwin-arm64.tar.gz",
     "sha256": "40e5607e5ecb3db9192723776da2d75d966260fc74a7a9e731c1bd67dda96bc8"
   },
+  "betterSqlite3": {
+    "version": "12.11.1",
+    "nodeAbi": "137",
+    "platform": "darwin",
+    "architecture": "arm64",
+    "url": "https://github.com/WiseLibs/better-sqlite3/releases/download/v12.11.1/better-sqlite3-v12.11.1-node-v137-darwin-arm64.tar.gz",
+    "sha256": "6eaefc8a9c088fea873365f7db2c0f89be6ea021ede62f6a71832f5130826a93",
+    "binarySha256": "c6fac315df023cf5efec45a3511e6515c6b0f7461a4a284b1b7a79c7ef8febe7"
+  },
   "python": {
     "version": "3.13.15+20260825",
     "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260825/cpython-3.13.15%2B20260825-aarch64-apple-darwin-install_only_stripped.tar.gz",

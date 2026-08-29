@@ -534,6 +534,97 @@ def test_deployment_target_workflow_gate_checks_exact_release_inventory():
     assert "shell=True" not in release_validation
 
 
+def test_ci_and_release_workflows_use_least_privilege_and_immutable_handoff():
+    ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    release = (ROOT / ".github" / "workflows" / "release-publish.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert "\npermissions:\n  contents: read\n" in ci.split("jobs:\n", 1)[0]
+    assert ci.count("uses: actions/checkout@v4") == ci.count(
+        "persist-credentials: false"
+    )
+
+    release_header = release.split("jobs:\n", 1)[0]
+    build = release.split("  build:\n", 1)[1].split("  publish:\n", 1)[0]
+    publish = release.split("  publish:\n", 1)[1]
+    assert "\npermissions:\n  contents: read\n" in release_header
+    assert "    permissions:\n      contents: read\n" in build
+    assert "persist-credentials: false" in build
+    assert "contents: write" not in build
+    assert "id-token: write" not in build
+    assert "attestations: write" not in build
+    assert "actions/attest-build-provenance" not in build
+    assert "gh release" not in build
+    assert "actions/upload-artifact@" in build
+    assert "name: yulu-release-${{ inputs.tag }}" in build
+    assert "dist/release-notes.md" in build
+
+    assert "needs: build" in publish
+    assert "contents: write" in publish
+    assert "id-token: write" in publish
+    assert "attestations: write" in publish
+    assert "actions: read" in publish
+    assert "actions/download-artifact@" in publish
+    assert "name: yulu-release-${{ inputs.tag }}" in publish
+    assert publish.index("actions/download-artifact@") < publish.index(
+        "actions/attest-build-provenance@"
+    )
+    assert publish.index("actions/attest-build-provenance@") < publish.index(
+        "gh release upload"
+    )
+    assert "npm " not in publish
+    assert "sign_and_notarize.sh" not in publish
+
+    pinned_release_actions = {
+        "actions/upload-artifact": (
+            "ea165f8d65b6e75b540449e92b4886f43607fa02",
+            "v4.6.2",
+        ),
+        "actions/download-artifact": (
+            "d3f86a106a0bac45b974a628896c90dbdf5c8093",
+            "v4.3.0",
+        ),
+        "actions/attest-build-provenance": (
+            "4d101475d8b20a2381f78447822ac1eab6504dd8",
+            "v4.2.2",
+        ),
+    }
+    for action, (commit, version) in pinned_release_actions.items():
+        assert f"uses: {action}@{commit} # {version}" in release
+        assert f"uses: {action}@v" not in release
+
+    manual_caller = (ROOT / ".github" / "workflows" / "release.yml").read_text(
+        encoding="utf-8"
+    )
+    automatic_caller = (
+        ROOT / ".github" / "workflows" / "release-please.yml"
+    ).read_text(encoding="utf-8")
+    automatic_publish = automatic_caller.split("  publish:\n", 1)[1]
+    assert "actions: read" in manual_caller.split("jobs:\n", 1)[0]
+    assert "actions: read" in automatic_publish.split("uses:", 1)[0]
+
+
+def test_release_validates_the_complete_locked_native_addon_contract():
+    workflow = (ROOT / ".github" / "workflows" / "release-publish.yml").read_text(
+        encoding="utf-8"
+    )
+    validation = workflow.split("Validate locked Application Runtime inputs", 1)[1].split(
+        "Sign and notarize bundles", 1
+    )[0]
+
+    assert 'native = lock["betterSqlite3"]' in validation
+    assert 'Path("yulu/scripts/yulu_ui/package-lock.json")' in validation
+    assert 'package_lock["packages"]["node_modules/better-sqlite3"]["version"]' in validation
+    assert 'native["version"] == locked_addon_version' in validation
+    assert 'native["nodeAbi"] == "137"' in validation
+    assert 'native["platform"] == "darwin"' in validation
+    assert 'native["architecture"] == "arm64"' in validation
+    assert "https://github.com/WiseLibs/better-sqlite3/releases/download/" in validation
+    assert 're.fullmatch(r"[0-9a-f]{64}", native["sha256"])' in validation
+    assert 're.fullmatch(r"[0-9a-f]{64}", native["binarySha256"])' in validation
+
+
 def test_release_publish_uploads_zip_installer_and_checksums_without_pkg():
     workflow = (ROOT / ".github" / "workflows" / "release-publish.yml").read_text(encoding="utf-8")
     release_block = workflow.split("Upload verified assets to draft GitHub Release", 1)[1]
@@ -557,7 +648,12 @@ def test_release_publish_uploads_zip_installer_and_checksums_without_pkg():
     assert "Checkout release commit" in workflow
     assert "ref: ${{ github.sha }}" in workflow
     assert "ref: ${{ inputs.tag }}" not in workflow
-    for command in ("npm ci", "npm run typecheck", "npm test", "npm run build"):
+    for command in (
+        "install_application_node_dependencies.sh",
+        "npm run typecheck",
+        "npm test",
+        "npm run build",
+    ):
         assert command in workflow
     assert "(cd dist && shasum -a 256 -c checksums.txt)" in workflow
     assert "verify_release_bundle_security(runtime, require_staple=True)" in workflow

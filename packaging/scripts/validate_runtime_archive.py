@@ -18,7 +18,7 @@ def _archive_path(name: str) -> str:
     return normalized
 
 
-def validate(archive: Path) -> None:
+def validate(archive: Path, expected_regular_member: str | None = None) -> None:
     seen: set[str] = set()
     with tarfile.open(archive, "r:*") as bundle:
         members = bundle.getmembers()
@@ -64,13 +64,36 @@ def validate(archive: Path) -> None:
             if not (member.isdir() or member.isreg()):
                 raise ValueError(f"archive contains a special file: {member.name}")
 
+        if expected_regular_member is not None:
+            expected = _archive_path(expected_regular_member)
+            selected = [
+                member
+                for member, normalized in normalized_members
+                if normalized == expected
+            ]
+            if len(selected) != 1 or not selected[0].isreg():
+                raise ValueError(
+                    f"archive does not contain the expected regular member: {expected}"
+                )
+            parts = PurePosixPath(expected).parts
+            parent_prefixes = (
+                "/".join(parts[:index]) for index in range(1, len(parts))
+            )
+            if any(prefix in symlinks for prefix in parent_prefixes):
+                raise ValueError(
+                    f"archive expected member has a symlinked parent: {expected}"
+                )
+
 
 def main(argv: list[str]) -> int:
-    if len(argv) != 2:
-        print("usage: validate_runtime_archive.py ARCHIVE", file=sys.stderr)
+    if len(argv) not in (2, 3):
+        print(
+            "usage: validate_runtime_archive.py ARCHIVE [EXPECTED_REGULAR_MEMBER]",
+            file=sys.stderr,
+        )
         return 2
     try:
-        validate(Path(argv[1]))
+        validate(Path(argv[1]), argv[2] if len(argv) == 3 else None)
     except (OSError, tarfile.TarError, ValueError) as exc:
         print(f"validate_runtime_archive.py: {exc}", file=sys.stderr)
         return 1

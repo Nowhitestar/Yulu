@@ -142,6 +142,11 @@ for required in \
   "$UI_SOURCE/node_modules/better-sqlite3/build/Release/better_sqlite3.node"; do
   [[ -f "$required" ]] || fail "built Host artifact missing: $required"
 done
+ADDON="$UI_SOURCE/node_modules/better-sqlite3/build/Release/better_sqlite3.node"
+ACTUAL_ADDON_SHA256="$(shasum -a 256 "$ADDON" | awk '{print $1}')"
+EXPECTED_ADDON_SHA256="$(json_field betterSqlite3 binarySha256)"
+[[ "$ACTUAL_ADDON_SHA256" == "$EXPECTED_ADDON_SHA256" ]] || \
+  fail "betterSqlite3 binary checksum mismatch: expected $EXPECTED_ADDON_SHA256, got $ACTUAL_ADDON_SHA256"
 cp "$UI_SOURCE/dist/server.js" "$HOST/server.js"
 if [[ -f "$UI_SOURCE/dist/server.js.map" ]]; then
   cp "$UI_SOURCE/dist/server.js.map" "$HOST/server.js.map"

@@ -13,6 +13,9 @@ VERIFY = ROOT / "packaging" / "scripts" / "verify_application_runtime.sh"
 SMOKE = ROOT / "yulu" / "scripts" / "smoke_yulu_app.sh"
 SHELL_SOURCE = ROOT / "yulu" / "scripts" / "yulu_app.swift"
 VALIDATE_ARCHIVE = ROOT / "packaging" / "scripts" / "validate_runtime_archive.py"
+INSTALL_NODE_DEPENDENCIES = (
+    ROOT / "packaging" / "scripts" / "install_application_node_dependencies.sh"
+)
 
 
 def write(path: Path, content: bytes = b"fixture\n", *, executable: bool = False) -> Path:
@@ -88,6 +91,13 @@ def runtime_fixture(tmp_path: Path) -> tuple[Path, dict[str, str]]:
     lock = {
         "schema": 1,
         "node": {"version": "test-node", "sha256": sha256(node_archive)},
+        "betterSqlite3": {
+            "version": "test-addon",
+            "nodeAbi": "test-abi",
+            "binarySha256": sha256(
+                ui / "node_modules/better-sqlite3/build/Release/better_sqlite3.node"
+            ),
+        },
         "python": {"version": "test-python", "sha256": sha256(python_archive)},
         "ffmpeg": {"version": "test-ffmpeg", "sha256": sha256(ffmpeg)},
         "ffmpegLicense": {"sha256": sha256(ffmpeg_license)},
@@ -170,6 +180,26 @@ def test_prepare_application_runtime_stages_only_core_runtime_and_production_hos
     assert (resources / "runtime/yulu/scripts/local_caption_runtime_pack.json").is_file()
     assert not (resources / "runtime/yulu/scripts/local-caption-model.bin").exists()
     assert not any(path.name.endswith(".onnx") for path in resources.rglob("*"))
+
+
+def test_prepare_application_runtime_rejects_an_unpinned_native_addon(tmp_path: Path):
+    app, overrides = runtime_fixture(tmp_path)
+    addon = (
+        Path(overrides["YULU_RUNTIME_UI_SOURCE"])
+        / "node_modules/better-sqlite3/build/Release/better_sqlite3.node"
+    )
+    addon.write_bytes(b"locally-compiled-native-addon\n")
+
+    result = subprocess.run(
+        ["bash", str(PREPARE), str(app)],
+        env={**os.environ, **overrides},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "betterSqlite3 binary checksum mismatch" in result.stderr
 
 
 def test_application_runtime_inventory_fails_closed_for_missing_wrong_arch_unsigned_and_changed_files(
@@ -382,6 +412,42 @@ def test_runtime_archive_validator_rejects_members_beneath_symlinked_parents(tmp
     assert result.returncode != 0
 
 
+def test_runtime_archive_validator_requires_selected_addon_to_be_a_regular_member(tmp_path):
+    expected = "build/Release/better_sqlite3.node"
+    safe_archive = tmp_path / "safe-prebuild.tar.gz"
+    with tarfile.open(safe_archive, "w:gz") as bundle:
+        payload = tarfile.TarInfo(expected)
+        payload.size = len(b"addon")
+        bundle.addfile(payload, fileobj=io.BytesIO(b"addon"))
+
+    safe = subprocess.run(
+        ["python3", str(VALIDATE_ARCHIVE), str(safe_archive), expected],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert safe.returncode == 0, safe.stderr
+
+    symlinked_archive = tmp_path / "symlinked-prebuild.tar.gz"
+    with tarfile.open(symlinked_archive, "w:gz") as bundle:
+        symlink = tarfile.TarInfo("build/Release")
+        symlink.type = tarfile.SYMTYPE
+        symlink.linkname = "../outside"
+        bundle.addfile(symlink)
+        payload = tarfile.TarInfo(expected)
+        payload.size = len(b"addon")
+        bundle.addfile(payload, fileobj=io.BytesIO(b"addon"))
+
+    rejected = subprocess.run(
+        ["python3", str(VALIDATE_ARCHIVE), str(symlinked_archive), expected],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert rejected.returncode != 0
+    assert "symlinked parent" in rejected.stderr
+
+
 def test_prepare_validates_every_downloaded_archive_before_extraction():
     prepare = PREPARE.read_text(encoding="utf-8")
 
@@ -579,10 +645,11 @@ def test_application_runtime_workflows_build_native_addons_with_exact_locked_nod
     )
 
     for workflow in workflows:
+        assert "npm ci" not in workflow
         lock = workflow.index("      - name: Read locked Application Runtime Node version\n")
         setup = workflow.index("        uses: actions/setup-node@v4\n", lock)
         verify = workflow.index("      - name: Verify Application Runtime Node toolchain\n", setup)
-        install = workflow.index("npm ci", verify)
+        install = workflow.index("install_application_node_dependencies.sh", verify)
 
         assert lock < setup < verify < install
         contract = workflow[lock:install]
@@ -594,6 +661,117 @@ def test_application_runtime_workflows_build_native_addons_with_exact_locked_nod
         assert "EXPECTED_NODE_VERSION: ${{ steps.application-runtime-node.outputs.version }}" in contract
         assert 'test "$(node --version)" = "v$EXPECTED_NODE_VERSION"' in contract
         assert '"v${{ steps.application-runtime-node.outputs.version }}"' not in contract
+
+
+def test_application_node_dependency_install_is_prebuilt_only_and_fail_closed(tmp_path: Path):
+    ui = tmp_path / "ui"
+    ui.mkdir()
+    write(ui / "package.json", b'{"dependencies":{"better-sqlite3":"^12.11.1"}}\n')
+    write(ui / "package-lock.json", b"{}\n")
+
+    prebuild_root = tmp_path / "prebuild"
+    write(prebuild_root / "build/Release/better_sqlite3.node", b"verified-prebuild\n")
+    prebuild = archive(
+        prebuild_root / "build",
+        tmp_path / "better-sqlite3-prebuild.tar.gz",
+        "build",
+    )
+    lock = tmp_path / "runtime-lock.json"
+    lock.write_text(
+        json.dumps(
+            {
+                "schema": 1,
+                "node": {"version": "24.20.0"},
+                "betterSqlite3": {
+                    "version": "12.11.1",
+                    "nodeAbi": "137",
+                    "platform": "darwin",
+                    "architecture": "arm64",
+                    "url": "https://example.invalid/better-sqlite3-prebuild.tar.gz",
+                    "sha256": sha256(prebuild),
+                    "binarySha256": sha256(
+                        prebuild_root / "build/Release/better_sqlite3.node"
+                    ),
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    tools = tmp_path / "tools"
+    npm_log = tmp_path / "npm.log"
+    write(
+        tools / "npm",
+        b"#!/usr/bin/env bash\n"
+        b"printf '%s\\n' \"$*\" > \"$YULU_TEST_NPM_LOG\"\n"
+        b"mkdir -p node_modules/better-sqlite3\n"
+        b"printf '%s\\n' '{\"version\":\"12.11.1\"}' > node_modules/better-sqlite3/package.json\n",
+        executable=True,
+    )
+    write(
+        tools / "node",
+        b"#!/usr/bin/env bash\nprintf '%s\\n' '24.20.0|137|darwin|arm64|12.11.1|1'\n",
+        executable=True,
+    )
+    env = {
+        **os.environ,
+        "PATH": f"{tools}:/usr/bin:/bin",
+        "YULU_RUNTIME_LOCK": str(lock),
+        "YULU_BETTER_SQLITE3_ARCHIVE": str(prebuild),
+        "YULU_TEST_NPM_LOG": str(npm_log),
+    }
+
+    installed = subprocess.run(
+        ["bash", str(INSTALL_NODE_DEPENDENCIES), str(ui)],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert installed.returncode == 0, installed.stderr + installed.stdout
+    assert npm_log.read_text(encoding="utf-8").strip() == "ci --ignore-scripts"
+    assert (ui / "node_modules/better-sqlite3/build/Release/better_sqlite3.node").read_bytes() == (
+        b"verified-prebuild\n"
+    )
+
+    prebuild.write_bytes(prebuild.read_bytes() + b"tampered")
+    rejected = subprocess.run(
+        ["bash", str(INSTALL_NODE_DEPENDENCIES), str(ui)],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert rejected.returncode != 0
+    assert "betterSqlite3 checksum mismatch" in rejected.stderr
+
+
+def test_node24_native_addon_uses_a_release_with_environment_cleanup_support():
+    ui = ROOT / "yulu/scripts/yulu_ui"
+    package = json.loads((ui / "package.json").read_text(encoding="utf-8"))
+    lock = json.loads((ui / "package-lock.json").read_text(encoding="utf-8"))
+
+    declared = package["dependencies"]["better-sqlite3"]
+    assert declared.startswith("^")
+    assert tuple(map(int, declared[1:].split("."))) >= (12, 1, 0)
+
+    locked = lock["packages"]["node_modules/better-sqlite3"]["version"]
+    assert tuple(map(int, locked.split("."))) >= (12, 1, 0)
+
+    runtime_lock = json.loads(
+        (ROOT / "packaging/runtime-lock.json").read_text(encoding="utf-8")
+    )
+    native = runtime_lock["betterSqlite3"]
+    assert native["version"] == locked
+    assert native["nodeAbi"] == "137"
+    assert native["platform"] == "darwin"
+    assert native["architecture"] == "arm64"
+    assert native["url"].endswith(
+        f"better-sqlite3-v{locked}-node-v137-darwin-arm64.tar.gz"
+    )
+    assert len(native["sha256"]) == 64
+    assert len(native["binarySha256"]) == 64
 
 
 def test_application_runtime_exec_probes_exact_versions_and_native_addon_abi(tmp_path: Path):
