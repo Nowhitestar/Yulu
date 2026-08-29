@@ -48,6 +48,7 @@ SCRIPTS_DIR="$REPO_DIR/yulu/scripts"
 # meeting_daemon.py launches for the floating recording window.
 YULU_APP="$SCRIPTS_DIR/Yulu.app"
 STATUS_APP="$SCRIPTS_DIR/StatusAgent.app"
+LOCAL_CAPTION_PACK="$REPO_DIR/dist/yulu-local-caption-runtime-macos-arm64-$TAG.zip"
 
 require_env() {
   local name="$1"
@@ -98,13 +99,25 @@ security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN
 # shellcheck disable=SC2046
 security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
 
+# Build the optional local-caption capability as a separately downloadable,
+# same-Team signed Runtime Pack. The signed App carries only its immutable pack
+# definition; the large pack remains outside Yulu.app and cannot block startup.
+mkdir -p "$REPO_DIR/dist"
+python3 "$REPO_DIR/packaging/scripts/build_local_caption_runtime_pack.py" \
+  --identity "$YULU_CODESIGN_IDENTITY" \
+  --output "$LOCAL_CAPTION_PACK"
+[[ -s "$LOCAL_CAPTION_PACK" ]] || {
+  echo "::error::sign_and_notarize.sh: local caption Runtime Pack was not built" >&2
+  exit 1
+}
+
 # --- Build + bottom-up hardened-runtime sign (Pattern 1, via build_*.sh) ----
 # The build scripts read $YULU_CODESIGN_IDENTITY and sign inner-Mach-O-then-bundle
 # with -o runtime + --entitlements + --timestamp. They are the single source of
 # signing truth; we only orchestrate keychain + notarization around them.
 echo "Building + signing Yulu.app and StatusAgent.app (bottom-up, hardened runtime)"
 rm -f "$RUNTIME_MANIFEST"
-bash "$SCRIPTS_DIR/build_audio_daemon.sh"
+YULU_BUNDLE_APPLICATION_RUNTIME=1 bash "$SCRIPTS_DIR/build_audio_daemon.sh"
 bash "$SCRIPTS_DIR/build_status_agent.sh"
 
 # --- Signed runtime manifest ------------------------------------------------
@@ -135,6 +148,7 @@ codesign --force --options runtime --timestamp \
   --entitlements "$SCRIPTS_DIR/YuluShell.app.entitlements" \
   --sign "$YULU_CODESIGN_IDENTITY" "$YULU_APP"
 codesign --verify --deep --strict --verbose=2 "$YULU_APP"
+bash "$REPO_DIR/packaging/scripts/verify_application_runtime.sh" "$YULU_APP"
 
 # --- Notarize + staple (Pattern 2 / Pitfall 4) -----------------------------
 # Decode the App Store Connect API key once (never echoed).

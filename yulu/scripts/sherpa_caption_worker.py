@@ -176,10 +176,18 @@ def _reply(request_id: Any, *, result: dict[str, Any] | None = None, error: str 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Yulu local sherpa caption worker")
+    parser.add_argument("--runtime-pack", type=Path, required=True)
     parser.add_argument("--model-dir", type=Path, required=True)
     parser.add_argument("--threads", type=int, default=4)
     args = parser.parse_args(argv)
     try:
+        trusted_script_dir = Path(__file__).resolve().parent
+        sys.path.insert(0, str(trusted_script_dir))
+        from local_caption_runtime import verify_runtime_pack
+
+        runtime_pack = args.runtime_pack.expanduser().resolve()
+        verify_runtime_pack(runtime_pack)
+        sys.path.insert(0, str(runtime_pack / "Contents/Resources/site-packages"))
         worker = CaptionWorker(args.model_dir.expanduser().resolve(), threads=max(1, args.threads))
     except Exception as exc:
         print(json.dumps({"fatal": str(exc)}, ensure_ascii=False), file=sys.stderr, flush=True)

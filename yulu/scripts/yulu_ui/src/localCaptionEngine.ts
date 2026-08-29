@@ -33,6 +33,8 @@ export interface StreamingCaptionEngine {
 
 export interface LocalCaptionRuntime {
   python: string;
+  pythonPath: string;
+  runtimePack: string;
   workerPath: string;
   modelDir: string;
 }
@@ -41,7 +43,8 @@ const MODEL_NAME = "sherpa-onnx-streaming-paraformer-bilingual-zh-en";
 const REQUIRED_MODEL_FILES = ["tokens.txt", "encoder.int8.onnx", "decoder.int8.onnx"] as const;
 
 function usableRuntime(runtime: LocalCaptionRuntime): boolean {
-  return existsSync(runtime.python) && existsSync(runtime.workerPath) &&
+  return existsSync(runtime.python) && existsSync(runtime.pythonPath) &&
+    existsSync(runtime.runtimePack) && existsSync(runtime.workerPath) &&
     REQUIRED_MODEL_FILES.every((name) => existsSync(join(runtime.modelDir, name)));
 }
 
@@ -51,14 +54,19 @@ export function resolveLocalCaptionRuntime(input: {
   env?: NodeJS.ProcessEnv;
 }): LocalCaptionRuntime | null {
   const env = input.env ?? process.env;
-  const configured = {
-    python: env.YULU_LOCAL_CAPTION_PYTHON?.trim() || "",
-    modelDir: env.YULU_LOCAL_CAPTION_MODEL_DIR?.trim() || "",
-  };
   const runtime: LocalCaptionRuntime = {
-    python: configured.python || join(input.configDir, "local-caption", "venv", "bin", "python"),
+    python: env.YULU_PYTHON?.trim() || "",
+    pythonPath: join(
+      input.configDir,
+      "local-caption",
+      "YuluLocalCaptionRuntime.bundle",
+      "Contents",
+      "Resources",
+      "site-packages",
+    ),
+    runtimePack: join(input.configDir, "local-caption", "YuluLocalCaptionRuntime.bundle"),
     workerPath: join(input.scriptDir, "sherpa_caption_worker.py"),
-    modelDir: configured.modelDir || join(input.configDir, "models", MODEL_NAME),
+    modelDir: env.YULU_LOCAL_CAPTION_MODEL_DIR?.trim() || join(input.configDir, "models", MODEL_NAME),
   };
   return usableRuntime(runtime) ? runtime : null;
 }
@@ -128,12 +136,19 @@ export class SherpaCaptionEngine implements StreamingCaptionEngine {
   private ensureChild(): ChildProcessWithoutNullStreams {
     if (this.child && this.child.exitCode === null && !this.child.killed) return this.child;
     const child = spawn(this.runtime.python, [
+      "-I",
+      "-S",
       this.runtime.workerPath,
+      "--runtime-pack", this.runtime.runtimePack,
       "--model-dir", this.runtime.modelDir,
       "--threads", String(this.options.threads ?? 4),
     ], {
       stdio: ["pipe", "pipe", "pipe"],
-      env: { ...process.env, PYTHONUNBUFFERED: "1" },
+      env: {
+        ...process.env,
+        PYTHONNOUSERSITE: "1",
+        PYTHONUNBUFFERED: "1",
+      },
     });
     this.child = child;
     this.stderr = "";

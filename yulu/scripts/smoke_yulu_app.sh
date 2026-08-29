@@ -11,24 +11,6 @@ cleanup() {
 }
 trap cleanup EXIT
 
-NODE_BIN=""
-for candidate in \
-  "${YULU_DEV_NODE:-}" \
-  "/opt/homebrew/opt/node@24/bin/node" \
-  "$(command -v node || true)"; do
-  if [[ -n "$candidate" && -x "$candidate" ]] && (
-    cd "$SCRIPT_DIR/yulu_ui"
-    "$candidate" -e "const Database=require('better-sqlite3'); const db=new Database(':memory:'); db.close();"
-  ) >/dev/null 2>&1; then
-    NODE_BIN="$candidate"
-    break
-  fi
-done
-if [[ -z "$NODE_BIN" ]]; then
-  echo "A Node binary compatible with the installed better-sqlite3 build is required" >&2
-  exit 69
-fi
-
 (
   cd "$SCRIPT_DIR/yulu_ui"
   npm run build
@@ -37,6 +19,7 @@ fi
 APP="$SMOKE_ROOT/Yulu.app"
 YULU_APP_OUTPUT_PATH="$APP" \
 YULU_BUNDLE_DEVELOPMENT_HOST=1 \
+YULU_BUNDLE_APPLICATION_RUNTIME=1 \
 YULU_CODESIGN_IDENTITY=- \
 YULU_SWIFT_MODULE_CACHE_PATH="$SMOKE_ROOT/swift-module-cache" \
 bash "$SCRIPT_DIR/build_audio_daemon.sh"
@@ -44,9 +27,59 @@ bash "$SCRIPT_DIR/build_audio_daemon.sh"
 PORT="$((30000 + ($$ % 20000)))"
 mkdir -p "$SMOKE_ROOT/home"
 mkdir -p "$SMOKE_ROOT/home/.config/yulu"
+mkdir -p "$SMOKE_ROOT/denied-host-runtime"
+for command in node python3 ffmpeg npm pip brew swiftc; do
+  printf '%s\n' \
+    '#!/bin/sh' \
+    'printf "%s\n" "$(basename "$0")" >> "$YULU_FORBIDDEN_RUNTIME_LOG"' \
+    'exit 126' \
+    > "$SMOKE_ROOT/denied-host-runtime/$command"
+  chmod +x "$SMOKE_ROOT/denied-host-runtime/$command"
+done
+printf '%s\n' \
+  "require('node:fs').appendFileSync(process.env.YULU_HOSTILE_RUNTIME_LOG, 'node-options\\n')" \
+  > "$SMOKE_ROOT/node-options-payload.js"
+printf '%s\n' \
+  '#!/bin/sh' \
+  'printf "%s\n" fake-caption-python >> "$YULU_HOSTILE_RUNTIME_LOG"' \
+  'exit 126' \
+  > "$SMOKE_ROOT/hostile-caption-python"
+chmod +x "$SMOKE_ROOT/hostile-caption-python"
 cp "$SCRIPT_DIR/config.example.json" "$SMOKE_ROOT/home/.config/yulu/config.json"
+if find "$APP" -type f \( -name '*.onnx' -o -name '*paraformer*' \) -print | grep -q .; then
+  echo "Optional Runtime Pack content must not ship inside Yulu.app" >&2
+  exit 1
+fi
+(
+  cd "$APP"
+  find . -type f -print0 | sort -z | xargs -0 shasum -a 256
+) > "$SMOKE_ROOT/application-runtime.before.sha256"
 HOME="$SMOKE_ROOT/home" \
-YULU_DEV_NODE="$NODE_BIN" \
-YULU_DEV_SCRIPT_DIR="$SCRIPT_DIR" \
+PATH="$SMOKE_ROOT/denied-host-runtime" \
+YULU_FORBIDDEN_RUNTIME_LOG="$SMOKE_ROOT/forbidden-runtime.log" \
+YULU_HOSTILE_RUNTIME_LOG="$SMOKE_ROOT/hostile-runtime.log" \
+NODE_OPTIONS="--require=$SMOKE_ROOT/node-options-payload.js" \
+YULU_LOCAL_CAPTION_PYTHON="$SMOKE_ROOT/hostile-caption-python" \
 YULU_UI_PORT="$PORT" \
-"$APP/Contents/MacOS/yulu_app" --development-smoke
+"$APP/Contents/MacOS/yulu_app" --development-smoke \
+  > "$SMOKE_ROOT/smoke-output.txt"
+if [[ -s "$SMOKE_ROOT/forbidden-runtime.log" ]]; then
+  echo "Application startup invoked a forbidden host runtime:" >&2
+  sed 's/^/  /' "$SMOKE_ROOT/forbidden-runtime.log" >&2
+  exit 1
+fi
+[[ ! -s "$SMOKE_ROOT/forbidden-runtime.log" ]]
+if [[ -s "$SMOKE_ROOT/hostile-runtime.log" ]]; then
+  echo "Application startup executed parent-injected runtime code:" >&2
+  sed 's/^/  /' "$SMOKE_ROOT/hostile-runtime.log" >&2
+  exit 1
+fi
+[[ ! -s "$SMOKE_ROOT/hostile-runtime.log" ]]
+(
+  cd "$APP"
+  find . -type f -print0 | sort -z | xargs -0 shasum -a 256
+) > "$SMOKE_ROOT/application-runtime.after.sha256"
+diff -u \
+  "$SMOKE_ROOT/application-runtime.before.sha256" \
+  "$SMOKE_ROOT/application-runtime.after.sha256"
+cat "$SMOKE_ROOT/smoke-output.txt"

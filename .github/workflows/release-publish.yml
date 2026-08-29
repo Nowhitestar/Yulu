@@ -57,7 +57,9 @@ jobs:
                    packaging/scripts/pkg_postinstall.sh \
                    packaging/scripts/checksums.sh \
                    packaging/scripts/check_macos_deployment_target.sh \
+                   packaging/scripts/prepare_application_runtime.sh \
                    packaging/scripts/sign_and_notarize.sh \
+                   packaging/scripts/verify_application_runtime.sh \
                    yulu/scripts/setup.sh \
                    yulu/scripts/setup_deps.sh \
                    yulu/scripts/setup_audio.sh \
@@ -80,6 +82,8 @@ jobs:
             printf 'py_compile %s\n' "$f"
             python3 -m py_compile "$f"
           done
+          python3 -m py_compile packaging/scripts/build_local_caption_runtime_pack.py
+          python3 -m py_compile packaging/scripts/validate_runtime_archive.py
 
       - name: Python unit tests
         run: |
@@ -105,6 +109,29 @@ jobs:
           npm run typecheck
           npm test
           npm run build
+
+      - name: Validate locked Application Runtime inputs
+        run: |
+          set -euo pipefail
+          test -s packaging/runtime-lock.json
+          test -s yulu/scripts/local_caption_runtime_pack.json
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          lock = json.loads(Path("packaging/runtime-lock.json").read_text())
+          assert lock["schema"] == 1
+          for component in ("node", "python", "ffmpeg"):
+              assert len(lock[component]["sha256"]) == 64
+              assert lock[component].get("url", "").startswith("https://")
+          assert lock["ffmpeg"]["url"].startswith("https://ffmpeg.org/releases/")
+          pack = json.loads(Path("yulu/scripts/local_caption_runtime_pack.json").read_text())
+          assert pack["schema"] == 1
+          assert pack["architecture"] == "arm64"
+          assert pack["pythonAbi"] == "cp313"
+          assert "{tag}" in pack["assetUrlTemplate"]
+          assert all(len(wheel["sha256"]) == 64 for wheel in pack["wheels"])
+          PY
 
       # Sign + notarize + staple BEFORE packaging (Pitfall 4 ordering): the .app
       # DIRECTORIES are stapled here so the ticket travels inside the zip that the
@@ -136,6 +163,7 @@ jobs:
           make package TAG="$TAG" PACKAGE_ARGS=--skip-build
           make checksums
           test -f "dist/yulu-macos-arm64-$TAG.zip"
+          test -f "dist/yulu-local-caption-runtime-macos-arm64-$TAG.zip"
           test -f "dist/install.sh"
           test -f "dist/checksums.txt"
           (cd dist && shasum -a 256 -c checksums.txt)
@@ -175,6 +203,8 @@ jobs:
                   check=True,
               )
           PY
+          bash packaging/scripts/verify_application_runtime.sh \
+            "$PWD/yulu/scripts/Yulu.app"
 
       # SLSA build-provenance attestation for the release zip (BUILD-04). Minted
       # from this workflow's OIDC token; verifiable with `gh attestation verify
@@ -184,7 +214,9 @@ jobs:
       - name: Attest release zip provenance
         uses: actions/attest-build-provenance@v4
         with:
-          subject-path: dist/yulu-macos-arm64-${{ inputs.tag }}.zip
+          subject-path: |
+            dist/yulu-macos-arm64-${{ inputs.tag }}.zip
+            dist/yulu-local-caption-runtime-macos-arm64-${{ inputs.tag }}.zip
 
       - name: Prepare release notes
         run: |
@@ -220,6 +252,7 @@ jobs:
           set -euo pipefail
           ASSETS=(
             "dist/yulu-macos-arm64-$TAG.zip"
+            "dist/yulu-local-caption-runtime-macos-arm64-$TAG.zip"
             "dist/install.sh"
             "dist/checksums.txt"
           )

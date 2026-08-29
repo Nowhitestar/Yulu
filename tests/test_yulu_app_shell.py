@@ -210,47 +210,30 @@ def test_shell_authenticates_host_and_capture_uses_stable_runtime_paths():
 
 
 def test_development_smoke_probes_the_native_better_sqlite_binding():
-    smoke = (SCRIPTS / "smoke_yulu_app.sh").read_text(encoding="utf-8")
+    verifier = (
+        ROOT / "packaging" / "scripts" / "verify_application_runtime.sh"
+    ).read_text(encoding="utf-8")
 
-    assert "const Database=require('better-sqlite3')" in smoke
-    assert "const db=new Database(':memory:'); db.close()" in smoke
+    assert "const Database=require('better-sqlite3')" in verifier
+    assert "const db=new Database(':memory:'); db.close()" in verifier
 
 
 def development_shell_smoke_runtime_available() -> bool:
     if shutil.which("swiftc") is None:
         return False
-
-    for candidate in (
-        os.environ.get("YULU_DEV_NODE"),
-        "/opt/homebrew/opt/node@24/bin/node",
-        shutil.which("node"),
-    ):
-        if not candidate or not Path(candidate).is_file() or not os.access(candidate, os.X_OK):
-            continue
-        try:
-            result = subprocess.run(
-                [
-                    candidate,
-                    "-e",
-                    "const Database=require('better-sqlite3'); "
-                    "const db=new Database(':memory:'); db.close();",
-                ],
-                cwd=SCRIPTS / "yulu_ui",
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                timeout=5,
-                check=False,
-            )
-        except (OSError, subprocess.TimeoutExpired):
-            continue
-        if result.returncode == 0:
-            return True
-    return False
+    return all(
+        (value := os.environ.get(name)) is not None and Path(value).is_file()
+        for name in (
+            "YULU_NODE_ARCHIVE",
+            "YULU_PYTHON_ARCHIVE",
+            "YULU_FFMPEG_SOURCE_ARCHIVE",
+        )
+    )
 
 
 @pytest.mark.skipif(
     not development_shell_smoke_runtime_available(),
-    reason="development Yulu.app smoke requires Swift and Node with better-sqlite3",
+    reason="development Yulu.app smoke requires Swift and the three pinned runtime archives",
 )
 def test_development_shell_reaches_a_healthy_bundled_host():
     result = subprocess.run(
@@ -258,7 +241,7 @@ def test_development_shell_reaches_a_healthy_bundled_host():
         cwd=ROOT,
         capture_output=True,
         text=True,
-        timeout=120,
+        timeout=300,
         check=False,
     )
     assert result.returncode == 0, result.stderr + result.stdout

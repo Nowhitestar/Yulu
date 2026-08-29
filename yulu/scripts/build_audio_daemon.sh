@@ -37,6 +37,7 @@ SHELL_SWIFT_FLAGS=()
 if [[ "${YULU_BUNDLE_DEVELOPMENT_HOST:-0}" == "1" ]]; then
   SHELL_SWIFT_FLAGS=(-D YULU_DEVELOPMENT_SMOKE)
 fi
+BUNDLE_APPLICATION_RUNTIME="${YULU_BUNDLE_APPLICATION_RUNTIME:-0}"
 
 cd "$SCRIPT_DIR"
 
@@ -88,7 +89,9 @@ else
 fi
 
 DEVELOPMENT_HOST_NATIVE=""
-if [[ "${YULU_BUNDLE_DEVELOPMENT_HOST:-0}" == "1" ]]; then
+if [[ "$BUNDLE_APPLICATION_RUNTIME" == "1" ]]; then
+  bash "$REPO_DIR/packaging/scripts/prepare_application_runtime.sh" "$APP"
+elif [[ "${YULU_BUNDLE_DEVELOPMENT_HOST:-0}" == "1" ]]; then
   UI_DIR="$SCRIPT_DIR/yulu_ui"
   HOST_DIR="$RES_DIR/Host"
   for required in \
@@ -185,6 +188,12 @@ fi
 #   1. inner Mach-O first ($APP_BIN), then 2. the bundle ($APP).
 CAPTURE_ENTITLEMENTS="$SCRIPT_DIR/Yulu.app.entitlements"
 SHELL_ENTITLEMENTS="$SCRIPT_DIR/YuluShell.app.entitlements"
+NODE_ENTITLEMENTS="$SCRIPT_DIR/NodeRuntime.entitlements"
+if [[ "$IDENTITY" == "-" ]]; then
+  # Ad-hoc signatures have no Team ID, so hardened Node cannot otherwise load
+  # the separately signed native addon during local builds and smoke tests.
+  NODE_ENTITLEMENTS="$SCRIPT_DIR/NodeRuntimeAdHoc.entitlements"
+fi
 codesign --force --options runtime --timestamp \
   --sign "$IDENTITY" "$APP_KEYCHAIN_BIN"
 codesign --force --options runtime --timestamp \
@@ -192,6 +201,18 @@ codesign --force --options runtime --timestamp \
 if [[ -n "$DEVELOPMENT_HOST_NATIVE" ]]; then
   codesign --force --options runtime --timestamp \
     --sign "$IDENTITY" "$DEVELOPMENT_HOST_NATIVE"
+fi
+if [[ "$BUNDLE_APPLICATION_RUNTIME" == "1" ]]; then
+  while IFS= read -r -d '' runtime_code; do
+    if /usr/bin/file -b "$runtime_code" | grep -q 'Mach-O'; then
+      if [[ "$runtime_code" == "$RES_DIR/runtime/bin/node" ]]; then
+        codesign --force --options runtime --timestamp \
+          --entitlements "$NODE_ENTITLEMENTS" --sign "$IDENTITY" "$runtime_code"
+      else
+        codesign --force --options runtime --timestamp --sign "$IDENTITY" "$runtime_code"
+      fi
+    fi
+  done < <(find "$RES_DIR/runtime" "$RES_DIR/Host" -type f -print0)
 fi
 codesign --force --options runtime --timestamp \
   --entitlements "$CAPTURE_ENTITLEMENTS" --sign "$IDENTITY" "$APP_BIN"
@@ -201,9 +222,15 @@ codesign --force --options runtime --timestamp \
   --entitlements "$CAPTURE_ENTITLEMENTS" --sign "$IDENTITY" "$CAPTURE_APP"
 codesign --force --options runtime --timestamp \
   --entitlements "$SHELL_ENTITLEMENTS" --sign "$IDENTITY" "$SHELL_BIN"
+if [[ "$BUNDLE_APPLICATION_RUNTIME" == "1" ]]; then
+  bash "$REPO_DIR/packaging/scripts/verify_application_runtime.sh" --write-inventory "$APP"
+fi
 codesign --force --options runtime --timestamp \
   --entitlements "$SHELL_ENTITLEMENTS" --sign "$IDENTITY" "$APP"
 codesign --verify --strict --verbose=2 "$APP"
+if [[ "$BUNDLE_APPLICATION_RUNTIME" == "1" ]]; then
+  bash "$REPO_DIR/packaging/scripts/verify_application_runtime.sh" "$APP"
+fi
 codesign --display --entitlements :- "$APP"
 
 echo "✅ Built and signed Yulu.app"

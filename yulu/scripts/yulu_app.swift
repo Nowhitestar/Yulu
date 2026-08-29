@@ -59,6 +59,22 @@ struct BundleLayout {
         bundleURL.appendingPathComponent("Contents/Resources/runtime/yulu/scripts", isDirectory: true)
     }
 
+    var bundledPython: URL {
+        bundleURL.appendingPathComponent("Contents/Resources/runtime/python/bin/python3")
+    }
+
+    var bundledPythonBin: URL {
+        bundledPython.deletingLastPathComponent()
+    }
+
+    var bundledFFmpeg: URL {
+        bundleURL.appendingPathComponent("Contents/Resources/runtime/bin/ffmpeg")
+    }
+
+    var bundledBin: URL {
+        bundleURL.appendingPathComponent("Contents/Resources/runtime/bin", isDirectory: true)
+    }
+
     var captureExecutable: URL {
         bundleURL.appendingPathComponent(
             "Contents/Helpers/YuluCapture.app/Contents/MacOS/audio_daemon"
@@ -248,12 +264,17 @@ final class ProductSupervisor {
         hostNonce: String = UUID().uuidString
     ) {
         self.hostNonce = hostNonce
-        var hostEnvironment = ProcessInfo.processInfo.environment
+        var hostEnvironment = sanitizedRuntimeEnvironment()
         hostEnvironment["YULU_UI_PORT"] = String(port)
         hostEnvironment["YULU_UI_DIST_WEB"] = layout.hostWeb.path
         hostEnvironment["YULU_HOST_NONCE"] = hostNonce
         hostEnvironment["YULU_SCRIPT_DIR"] = developmentScriptDir?.path
             ?? layout.bundledScriptDir.path
+        hostEnvironment["YULU_PYTHON"] = layout.bundledPython.path
+        hostEnvironment["YULU_FFMPEG"] = layout.bundledFFmpeg.path
+        hostEnvironment["PYTHONDONTWRITEBYTECODE"] = "1"
+        let bundledRuntimePath = "\(layout.bundledBin.path):\(layout.bundledPythonBin.path):/usr/bin:/bin:/usr/sbin:/sbin"
+        hostEnvironment["PATH"] = bundledRuntimePath
         host = ManagedComponent(
             name: "Host",
             executableURL: developmentNode ?? layout.hostNode,
@@ -261,9 +282,13 @@ final class ProductSupervisor {
             environment: hostEnvironment,
             currentDirectoryURL: layout.hostEntry.deletingLastPathComponent()
         )
-        var captureEnvironment = ProcessInfo.processInfo.environment
+        var captureEnvironment = sanitizedRuntimeEnvironment()
         captureEnvironment["YULU_SCRIPT_DIR"] = developmentScriptDir?.path
             ?? layout.bundledScriptDir.path
+        captureEnvironment["YULU_PYTHON"] = layout.bundledPython.path
+        captureEnvironment["YULU_FFMPEG"] = layout.bundledFFmpeg.path
+        captureEnvironment["PYTHONDONTWRITEBYTECODE"] = "1"
+        captureEnvironment["PATH"] = bundledRuntimePath
         capture = ManagedComponent(
             name: "Capture",
             executableURL: layout.captureExecutable,
@@ -290,6 +315,21 @@ final class ProductSupervisor {
     }
 }
 
+func sanitizedRuntimeEnvironment() -> [String: String] {
+    var environment = ProcessInfo.processInfo.environment
+    for key in Array(environment.keys) {
+        if key == "NODE_OPTIONS"
+            || key == "NODE_PATH"
+            || key.hasPrefix("PYTHON")
+            || key.hasPrefix("DYLD_")
+            || key.hasPrefix("YULU_DEV_")
+            || key.hasPrefix("YULU_LOCAL_CAPTION_") {
+            environment.removeValue(forKey: key)
+        }
+    }
+    return environment
+}
+
 func healthResponseIsValid(data: Data?, response: URLResponse?, nonce: String) -> Bool {
     guard (response as? HTTPURLResponse)?.statusCode == 200,
           let data,
@@ -305,6 +345,8 @@ struct DevelopmentSmokeReport: Encodable {
     let status: String
     let healthURL: String
     let hostEntry: String
+    let hostReady: Bool
+    let captureReady: Bool
     let captureStarted: Bool
 }
 
@@ -319,14 +361,38 @@ func hostIsHealthy(url: URL, nonce: String) -> Bool {
     return healthy
 }
 
+func runCaptureSelfTest(layout: BundleLayout) -> Bool {
+    guard FileManager.default.isExecutableFile(atPath: layout.captureExecutable.path) else {
+        return false
+    }
+    let process = Process()
+    process.executableURL = layout.captureExecutable
+    process.arguments = ["--self-test"]
+    let inheritedPath = ProcessInfo.processInfo.environment["PATH"] ?? "/usr/bin:/bin"
+    process.environment = [
+        "HOME": ProcessInfo.processInfo.environment["HOME"] ?? "/private/tmp",
+        "YULU_PYTHON": layout.bundledPython.path,
+        "YULU_FFMPEG": layout.bundledFFmpeg.path,
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "PATH": "\(layout.bundledBin.path):\(layout.bundledPythonBin.path):\(inheritedPath)",
+    ]
+    process.standardOutput = Pipe()
+    process.standardError = Pipe()
+    do {
+        try process.run()
+        process.waitUntilExit()
+        return process.terminationStatus == 0
+    } catch {
+        return false
+    }
+}
+
 func runDevelopmentSmoke(layout: BundleLayout, port: Int) throws -> DevelopmentSmokeReport {
-    guard let node = ProcessInfo.processInfo.environment["YULU_DEV_NODE"],
-          !node.isEmpty,
-          FileManager.default.isExecutableFile(atPath: node) else {
+    guard FileManager.default.isExecutableFile(atPath: layout.hostNode.path) else {
         throw NSError(
             domain: "YuluDevelopmentSmoke",
             code: 1,
-            userInfo: [NSLocalizedDescriptionKey: "YULU_DEV_NODE must name an executable Node binary"]
+            userInfo: [NSLocalizedDescriptionKey: "bundled Node is missing: \(layout.hostNode.path)"]
         )
     }
     guard FileManager.default.isReadableFile(atPath: layout.hostEntry.path) else {
@@ -336,13 +402,16 @@ func runDevelopmentSmoke(layout: BundleLayout, port: Int) throws -> DevelopmentS
             userInfo: [NSLocalizedDescriptionKey: "bundled Host entry is missing: \(layout.hostEntry.path)"]
         )
     }
-    let developmentScriptDir = ProcessInfo.processInfo.environment["YULU_DEV_SCRIPT_DIR"]
-        .flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: $0, isDirectory: true) }
+    guard runCaptureSelfTest(layout: layout) else {
+        throw NSError(
+            domain: "YuluDevelopmentSmoke",
+            code: 4,
+            userInfo: [NSLocalizedDescriptionKey: "bundled Capture self-test failed"]
+        )
+    }
     let supervisor = ProductSupervisor(
         layout: layout,
-        port: port,
-        developmentNode: URL(fileURLWithPath: node),
-        developmentScriptDir: developmentScriptDir
+        port: port
     )
     supervisor.startHostForDevelopmentSmoke()
     defer {
@@ -357,6 +426,8 @@ func runDevelopmentSmoke(layout: BundleLayout, port: Int) throws -> DevelopmentS
                 status: "ok",
                 healthURL: healthURL.absoluteString,
                 hostEntry: layout.hostEntry.path,
+                hostReady: true,
+                captureReady: true,
                 captureStarted: false
             )
         }

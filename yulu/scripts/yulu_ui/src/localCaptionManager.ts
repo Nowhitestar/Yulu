@@ -50,10 +50,7 @@ function directoryBytes(path: string): number {
 function bootstrapPython(): string {
   const configured = process.env.YULU_PYTHON?.trim();
   if (configured && existsSync(configured)) return configured;
-  for (const candidate of ["/opt/homebrew/bin/python3", "/usr/local/bin/python3", "/usr/bin/python3"]) {
-    if (existsSync(candidate)) return candidate;
-  }
-  return "python3";
+  throw new Error("Application Runtime 内置 Python 不可用");
 }
 
 export class LocalCaptionManager implements StreamingCaptionEngine {
@@ -259,9 +256,21 @@ export class LocalCaptionManager implements StreamingCaptionEngine {
   private runInstaller(action: "install" | "uninstall"): Promise<void> {
     const script = join(this.options.scriptDir, "local_caption_runtime.py");
     return new Promise((resolve, reject) => {
-      const child = spawn(bootstrapPython(), [script, action, "--config-dir", this.options.configDir], {
+      const environment = { ...process.env };
+      for (const key of Object.keys(environment)) {
+        if (key.startsWith("PYTHON")) delete environment[key];
+      }
+      const child = spawn(bootstrapPython(), [
+        "-I",
+        "-S",
+        "-B",
+        script,
+        action,
+        "--config-dir",
+        this.options.configDir,
+      ], {
         stdio: ["ignore", "pipe", "pipe"],
-        env: process.env,
+        env: environment,
       });
       let stderr = "";
       let finalError = "";

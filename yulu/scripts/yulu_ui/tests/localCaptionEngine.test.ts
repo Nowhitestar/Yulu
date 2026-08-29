@@ -1,4 +1,4 @@
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -25,20 +25,31 @@ describe("local caption runtime discovery", () => {
     const scriptDir = join(root, "scripts");
     const configDir = join(root, "config");
     const python = join(configDir, "local-caption/venv/bin/python");
+    const hostilePython = join(root, "hostile-caption-python");
+    const runtimePack = join(configDir, "local-caption/YuluLocalCaptionRuntime.bundle");
+    const pythonPath = join(runtimePack, "Contents/Resources/site-packages");
     const modelDir = join(configDir, "models/sherpa-onnx-streaming-paraformer-bilingual-zh-en");
     mkdirSync(join(configDir, "local-caption/venv/bin"), { recursive: true });
+    mkdirSync(pythonPath, { recursive: true });
     mkdirSync(modelDir, { recursive: true });
     mkdirSync(scriptDir, { recursive: true });
     writeFileSync(python, "");
+    writeFileSync(hostilePython, "");
     writeFileSync(join(scriptDir, "sherpa_caption_worker.py"), "");
     writeFileSync(join(modelDir, "tokens.txt"), "tokens");
     writeFileSync(join(modelDir, "encoder.int8.onnx"), "encoder");
 
-    expect(resolveLocalCaptionRuntime({ scriptDir, configDir })).toBeNull();
+    const env = {
+      YULU_PYTHON: python,
+      YULU_LOCAL_CAPTION_PYTHON: hostilePython,
+    };
+    expect(resolveLocalCaptionRuntime({ scriptDir, configDir, env })).toBeNull();
 
     writeFileSync(join(modelDir, "decoder.int8.onnx"), "decoder");
-    expect(resolveLocalCaptionRuntime({ scriptDir, configDir })).toEqual({
+    expect(resolveLocalCaptionRuntime({ scriptDir, configDir, env })).toEqual({
       python,
+      pythonPath,
+      runtimePack,
       workerPath: join(scriptDir, "sherpa_caption_worker.py"),
       modelDir,
     });
@@ -67,6 +78,8 @@ describe("SherpaCaptionEngine", () => {
     chmodSync(workerPath, 0o755);
     const engine = new SherpaCaptionEngine({
       python: "/usr/bin/python3",
+      pythonPath: root,
+      runtimePack: root,
       workerPath,
       modelDir: root,
     });
@@ -102,6 +115,8 @@ describe("SherpaCaptionEngine", () => {
     chmodSync(workerPath, 0o755);
     const engine = new SherpaCaptionEngine({
       python: "/usr/bin/python3",
+      pythonPath: root,
+      runtimePack: root,
       workerPath,
       modelDir: root,
     });
@@ -111,6 +126,45 @@ describe("SherpaCaptionEngine", () => {
     await engine.warm();
     await delay(250);
     await expect(engine.feed({ mic: Buffer.from([1, 0]) })).resolves.toEqual({ updates: {} });
+    await engine.close();
+  });
+
+  it("passes only the verified runtime-pack site-packages to bundled Python", async () => {
+    const root = tempRoot("yulu-local-caption-python-path-");
+    const pythonPath = join(root, "site-packages");
+    const workerPath = join(root, "fake_worker.py");
+    const sitecustomizeMarker = join(root, "sitecustomize-ran");
+    mkdirSync(pythonPath, { recursive: true });
+    writeFileSync(join(pythonPath, "pack_probe.py"), "READY = True\n");
+    writeFileSync(join(pythonPath, "sitecustomize.py"), [
+      "from pathlib import Path",
+      `Path(${JSON.stringify(sitecustomizeMarker)}).write_text('unsafe')`,
+      "raise RuntimeError('pack code ran before verification')",
+      "",
+    ].join("\n"));
+    writeFileSync(workerPath, [
+      "#!/usr/bin/env python3",
+      "import json, os, sys",
+      "runtime_pack = sys.argv[sys.argv.index('--runtime-pack') + 1]",
+      "sys.path.insert(0, os.path.join(runtime_pack, 'site-packages'))",
+      "import pack_probe",
+      "for line in sys.stdin:",
+      "    req = json.loads(line)",
+      "    print(json.dumps({'id': req['id'], 'ok': pack_probe.READY, 'result': {'ready': True}}), flush=True)",
+      "    if req['action'] == 'shutdown': break",
+      "",
+    ].join("\n"));
+    chmodSync(workerPath, 0o755);
+    const engine = new SherpaCaptionEngine({
+      python: "/usr/bin/python3",
+      pythonPath,
+      runtimePack: root,
+      workerPath,
+      modelDir: root,
+    });
+
+    await expect(engine.warm()).resolves.toBeUndefined();
+    expect(existsSync(sitecustomizeMarker)).toBe(false);
     await engine.close();
   });
 });

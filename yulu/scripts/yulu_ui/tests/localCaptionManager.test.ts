@@ -1,13 +1,19 @@
 import { execFileSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { LocalCaptionManager } from "../src/localCaptionManager.js";
 
 const roots: string[] = [];
+const originalYuluPython = process.env.YULU_PYTHON;
+const originalPythonPath = process.env.PYTHONPATH;
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  if (originalYuluPython === undefined) delete process.env.YULU_PYTHON;
+  else process.env.YULU_PYTHON = originalYuluPython;
+  if (originalPythonPath === undefined) delete process.env.PYTHONPATH;
+  else process.env.PYTHONPATH = originalPythonPath;
 });
 
 function fixture(
@@ -18,14 +24,17 @@ function fixture(
   const scriptDir = join(root, "scripts");
   const configDir = join(root, "config");
   const modelDir = join(configDir, "models/sherpa-onnx-streaming-paraformer-bilingual-zh-en");
-  const binDir = join(configDir, "local-caption/venv/bin");
+  const packSitePackages = join(
+    configDir,
+    "local-caption/YuluLocalCaptionRuntime.bundle/Contents/Resources/site-packages",
+  );
   mkdirSync(scriptDir, { recursive: true });
   mkdirSync(modelDir, { recursive: true });
-  mkdirSync(binDir, { recursive: true });
+  mkdirSync(packSitePackages, { recursive: true });
   const python = existsSync("/opt/homebrew/bin/python3")
     ? "/opt/homebrew/bin/python3"
     : execFileSync("which", ["python3"], { encoding: "utf8" }).trim();
-  symlinkSync(python, join(binDir, "python"));
+  process.env.YULU_PYTHON = python;
   for (const name of ["tokens.txt", "encoder.int8.onnx", "decoder.int8.onnx"]) {
     writeFileSync(join(modelDir, name), name);
   }
@@ -87,6 +96,39 @@ describe("LocalCaptionManager", () => {
       installed: true,
       operation: "idle",
     });
+    await manager.close();
+  });
+
+  it("starts the installer isolated from inherited Python startup code and modules", async () => {
+    const manager = fixture(false);
+    const root = roots.at(-1)!;
+    const malicious = join(root, "malicious-python-path");
+    const startupMarker = join(root, "sitecustomize-ran");
+    const shadowMarker = join(root, "shadow-module-ran");
+    const environmentMarker = join(root, "python-environment.txt");
+    mkdirSync(malicious, { recursive: true });
+    writeFileSync(join(malicious, "sitecustomize.py"), [
+      "from pathlib import Path",
+      `Path(${JSON.stringify(startupMarker)}).write_text('unsafe')`,
+      "",
+    ].join("\n"));
+    writeFileSync(join(malicious, "fractions.py"), [
+      "from pathlib import Path",
+      `Path(${JSON.stringify(shadowMarker)}).write_text('unsafe')`,
+      "",
+    ].join("\n"));
+    writeFileSync(join(root, "scripts/local_caption_runtime.py"), [
+      "from pathlib import Path",
+      "import fractions, os",
+      `Path(${JSON.stringify(environmentMarker)}).write_text(','.join(sorted(key for key in os.environ if key.startswith('PYTHON'))))`,
+      "",
+    ].join("\n"));
+    process.env.PYTHONPATH = malicious;
+
+    await expect(manager.install()).resolves.toMatchObject({ operation: "idle" });
+    expect(existsSync(startupMarker)).toBe(false);
+    expect(existsSync(shadowMarker)).toBe(false);
+    expect(readFileSync(environmentMarker, "utf8")).toBe("");
     await manager.close();
   });
 

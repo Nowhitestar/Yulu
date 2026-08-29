@@ -32,7 +32,7 @@ EXCLUDES=(
     ".ruff_cache"
     ".DS_Store"
     "._*"
-    "node_modules"
+    "yulu/scripts/yulu_ui/node_modules"
     "tests"
     "yulu/scripts/calendar_probe"
     "docs/superpowers"
