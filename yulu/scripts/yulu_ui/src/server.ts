@@ -372,7 +372,11 @@ async function startLockedServer(
     await next();
   });
 
-  app.get("/healthz", (c) => c.json({ status: "ok", uptime: process.uptime() }));
+  app.get("/healthz", (c) => c.json({
+    status: "ok",
+    uptime: process.uptime(),
+    instanceNonce: process.env.YULU_HOST_NONCE ?? null,
+  }));
   app.get("/api/ui-token", (c) => {
     c.header("Cache-Control", "no-store");
     return c.json({ token: uiToken });

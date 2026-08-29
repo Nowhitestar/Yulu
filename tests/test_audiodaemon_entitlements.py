@@ -20,7 +20,15 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "yulu" / "scripts"
-INFO_PLIST = SCRIPTS / "Yulu.app" / "Contents" / "Info.plist"
+INFO_PLIST = (
+    SCRIPTS
+    / "Yulu.app"
+    / "Contents"
+    / "Helpers"
+    / "YuluCapture.app"
+    / "Contents"
+    / "Info.plist"
+)
 ENTITLEMENTS = SCRIPTS / "Yulu.app.entitlements"
 BUILD_SH = SCRIPTS / "build_audio_daemon.sh"
 
@@ -61,7 +69,7 @@ def test_info_plist_has_audio_capture_usage_description():
 def test_build_ladder_writes_audio_capture_usage_description():
     """build_audio_daemon.sh is the source of truth — it must write the key too."""
     text = _build()
-    assert "plist_set_or_add NSAudioCaptureUsageDescription" in text, (
+    assert 'plist_set_or_add "$CAPTURE_INFO" NSAudioCaptureUsageDescription' in text, (
         "build_audio_daemon.sh must add an NSAudioCaptureUsageDescription "
         "plist_set_or_add line (the build-time ladder is the source of truth)"
     )

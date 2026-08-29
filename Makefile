@@ -8,7 +8,7 @@ YULU_TEST_TMPDIR ?= $(YULU_TEST_TMP_ROOT)/yulu-pytest-tmp
 YULU_TEST_SOCKET_DIR ?= $(YULU_TEST_TMP_ROOT)/yulu-test-sockets
 
 PY_FILES := $(wildcard yulu/scripts/*.py)
-SWIFT_FILES := yulu/scripts/audio_daemon.swift yulu/scripts/window_scanner.swift yulu/scripts/recorder_status.swift yulu/scripts/meeting_prompt.swift yulu/scripts/xai_keychain.swift yulu/scripts/calendar_probe.swift
+SWIFT_FILES := yulu/scripts/audio_daemon.swift yulu/scripts/yulu_app.swift yulu/scripts/window_scanner.swift yulu/scripts/recorder_status.swift yulu/scripts/meeting_prompt.swift yulu/scripts/xai_keychain.swift yulu/scripts/calendar_probe.swift
 
 
 doctor:
@@ -41,6 +41,8 @@ swift-build:
 			case "$$stem" in \
 				audio_daemon) \
 					FW="-framework Cocoa -framework ScreenCaptureKit -framework AVFoundation -framework CoreMedia -framework CoreAudio -framework AudioToolbox" ;; \
+				yulu_app) \
+					FW="-framework Cocoa -framework WebKit" ;; \
 				xai_keychain) \
 					FW="-framework Security" ;; \
 				calendar_probe) \

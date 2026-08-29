@@ -42,9 +42,14 @@ def build_fake_asset(tmp_path: Path, tag: str = "v0.5.0", setup_body: str | None
     root = tmp_path / "asset-root" / "yulu"
     (root / "yulu" / "scripts").mkdir(parents=True)
     write_idle_recording_guard(root / "yulu" / "scripts")
-    keychain_helper = root / "yulu" / "scripts" / "Yulu.app" / "Contents" / "MacOS" / "xai_keychain"
+    app_contents = root / "yulu" / "scripts" / "Yulu.app" / "Contents"
+    keychain_helper = app_contents / "MacOS" / "xai_keychain"
     keychain_helper.parent.mkdir(parents=True)
     keychain_helper.write_text("binary\n", encoding="utf-8")
+    (app_contents / "MacOS" / "yulu_app").write_text("binary\n", encoding="utf-8")
+    capture = app_contents / "Helpers" / "YuluCapture.app" / "Contents" / "MacOS" / "audio_daemon"
+    capture.parent.mkdir(parents=True)
+    capture.write_text("binary\n", encoding="utf-8")
     (root / "VERSION").write_text(tag.removeprefix("v") + "\n", encoding="utf-8")
     setup_script = setup_body or '#!/usr/bin/env bash\necho setup "$@"\n'
     (root / "yulu" / "scripts" / "setup.sh").write_text(setup_script, encoding="utf-8")

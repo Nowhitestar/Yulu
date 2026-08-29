@@ -4,23 +4,54 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 APP="$SCRIPT_DIR/Yulu.app"
+APP_TEMPLATE="$APP"
+if [[ -n "${YULU_APP_OUTPUT_PATH:-}" ]]; then
+  case "$YULU_APP_OUTPUT_PATH" in
+    /*.app) APP="$YULU_APP_OUTPUT_PATH" ;;
+    *) echo "YULU_APP_OUTPUT_PATH must be an absolute .app path" >&2; exit 64 ;;
+  esac
+  if [[ -e "$APP" ]]; then
+    echo "YULU_APP_OUTPUT_PATH already exists: $APP" >&2
+    exit 73
+  fi
+fi
 BIN="$SCRIPT_DIR/audio_daemon"
 KEYCHAIN_BIN="$SCRIPT_DIR/xai_keychain"
-APP_BIN="$APP/Contents/MacOS/audio_daemon"
+SHELL_BIN="$APP/Contents/MacOS/yulu_app"
+CAPTURE_APP="$APP/Contents/Helpers/YuluCapture.app"
+APP_BIN="$CAPTURE_APP/Contents/MacOS/audio_daemon"
+LEGACY_APP_BIN="$APP/Contents/MacOS/audio_daemon"
 APP_KEYCHAIN_BIN="$APP/Contents/MacOS/xai_keychain"
 APP_CALENDAR_BIN="$APP/Contents/MacOS/calendar_probe"
 RES_DIR="$APP/Contents/Resources"
 INFO="$APP/Contents/Info.plist"
+CAPTURE_INFO="$CAPTURE_APP/Contents/Info.plist"
 ICNS_SRC="$REPO_DIR/assets/Yulu.icns"
 YULU_VERSION_RAW="$(tr -d '[:space:]' < "$REPO_DIR/VERSION" 2>/dev/null || echo "0.0.0+unknown")"
 YULU_BUNDLE_VERSION="${YULU_VERSION_RAW%%[-+]*}"
 YULU_BUILD_NUMBER="$(git -C "$REPO_DIR" rev-list --count HEAD 2>/dev/null || echo 0)"
 SWIFT_TARGET=(-target arm64-apple-macosx13.0)
+SWIFT_MODULE_CACHE="${YULU_SWIFT_MODULE_CACHE_PATH:-/private/tmp/yulu-swift-module-cache}"
+SWIFT_TARGET+=(-module-cache-path "$SWIFT_MODULE_CACHE")
+SHELL_SWIFT_FLAGS=()
+if [[ "${YULU_BUNDLE_DEVELOPMENT_HOST:-0}" == "1" ]]; then
+  SHELL_SWIFT_FLAGS=(-D YULU_DEVELOPMENT_SMOKE)
+fi
 
 cd "$SCRIPT_DIR"
 
-mkdir -p "$APP/Contents/MacOS" "$RES_DIR"
+mkdir -p "$SWIFT_MODULE_CACHE"
+if [[ "$APP" != "$APP_TEMPLATE" ]]; then
+  mkdir -p "$APP/Contents/Helpers/YuluCapture.app/Contents"
+  cp "$APP_TEMPLATE/Contents/Info.plist" "$APP/Contents/Info.plist"
+  cp "$APP_TEMPLATE/Contents/Helpers/YuluCapture.app/Contents/Info.plist" \
+    "$APP/Contents/Helpers/YuluCapture.app/Contents/Info.plist"
+fi
+mkdir -p "$APP/Contents/MacOS" "$CAPTURE_APP/Contents/MacOS" "$RES_DIR"
 
+swiftc "${SWIFT_TARGET[@]}" "${SHELL_SWIFT_FLAGS[@]}" -o "$SHELL_BIN" yulu_app.swift \
+  -framework Cocoa \
+  -framework WebKit
 swiftc "${SWIFT_TARGET[@]}" -o "$BIN" audio_daemon.swift \
   -framework Cocoa \
   -framework ScreenCaptureKit \
@@ -36,8 +67,14 @@ swiftc "${SWIFT_TARGET[@]}" -o "$APP_CALENDAR_BIN" calendar_probe.swift \
   -Xlinker "$SCRIPT_DIR/calendar_probe-Info.plist"
 
 cp "$BIN" "$APP_BIN"
+# Keep the historical binary path during the pre-migration development window.
+# The visible shell and the legacy launch path both execute the same signed build;
+# normal product supervision uses the nested Capture bundle above.
+cp "$BIN" "$LEGACY_APP_BIN"
 cp "$KEYCHAIN_BIN" "$APP_KEYCHAIN_BIN"
 chmod +x "$APP_BIN"
+chmod +x "$LEGACY_APP_BIN"
+chmod +x "$SHELL_BIN"
 chmod +x "$APP_KEYCHAIN_BIN"
 chmod +x "$APP_CALENDAR_BIN"
 
@@ -50,30 +87,65 @@ else
   echo "⚠️ assets/Yulu.icns missing — bundle will have no icon." >&2
 fi
 
+DEVELOPMENT_HOST_NATIVE=""
+if [[ "${YULU_BUNDLE_DEVELOPMENT_HOST:-0}" == "1" ]]; then
+  UI_DIR="$SCRIPT_DIR/yulu_ui"
+  HOST_DIR="$RES_DIR/Host"
+  for required in \
+    "$UI_DIR/dist/server.js" \
+    "$UI_DIR/dist/web/index.html" \
+    "$UI_DIR/node_modules/better-sqlite3/build/Release/better_sqlite3.node"; do
+    if [[ ! -f "$required" ]]; then
+      echo "development Host artifact missing: $required" >&2
+      exit 66
+    fi
+  done
+  mkdir -p "$HOST_DIR/node_modules"
+  cp "$UI_DIR/dist/server.js" "$HOST_DIR/server.js"
+  if [[ -f "$UI_DIR/dist/server.js.map" ]]; then
+    cp "$UI_DIR/dist/server.js.map" "$HOST_DIR/server.js.map"
+  fi
+  cp -R "$UI_DIR/dist/web" "$HOST_DIR/web"
+  cp -R "$UI_DIR/node_modules/better-sqlite3" "$HOST_DIR/node_modules/better-sqlite3"
+  cp -R "$UI_DIR/node_modules/bindings" "$HOST_DIR/node_modules/bindings"
+  cp -R "$UI_DIR/node_modules/file-uri-to-path" "$HOST_DIR/node_modules/file-uri-to-path"
+  DEVELOPMENT_HOST_NATIVE="$HOST_DIR/node_modules/better-sqlite3/build/Release/better_sqlite3.node"
+fi
+
 # Force-write the Info.plist fields that govern macOS identity, icon, and
 # TCC prompt copy. This script is the single source of truth.
 plist_set_or_add() {
-  local key="$1" type="$2" value="$3"
-  /usr/libexec/PlistBuddy -c "Set :$key $value" "$INFO" >/dev/null 2>&1 || \
-    /usr/libexec/PlistBuddy -c "Add :$key $type $value" "$INFO" >/dev/null 2>&1 || true
+  local plist="$1" key="$2" type="$3" value="$4"
+  /usr/libexec/PlistBuddy -c "Set :$key $value" "$plist" >/dev/null 2>&1 || \
+    /usr/libexec/PlistBuddy -c "Add :$key $type $value" "$plist" >/dev/null 2>&1 || true
 }
 
-plist_set_or_add CFBundleIdentifier      string  com.yulu.audiodaemon
-plist_set_or_add CFBundleName            string  Yulu
-plist_set_or_add CFBundleDisplayName     string  Yulu
-plist_set_or_add CFBundleShortVersionString string "$YULU_BUNDLE_VERSION"
-plist_set_or_add CFBundleVersion         string  "$YULU_BUILD_NUMBER"
-plist_set_or_add YuluVersion             string  "$YULU_VERSION_RAW"
-plist_set_or_add CFBundleIconFile        string  Yulu
-plist_set_or_add CFBundleIconName        string  Yulu
-plist_set_or_add NSMicrophoneUsageDescription   string  "Yulu records microphone audio for meeting notes."
-plist_set_or_add NSScreenCaptureUsageDescription string "Yulu captures system audio for meeting notes."
+plist_set_or_add "$INFO" CFBundleExecutable string yulu_app
+plist_set_or_add "$INFO" CFBundleIdentifier string com.yulu.app
+plist_set_or_add "$INFO" CFBundleName string Yulu
+plist_set_or_add "$INFO" CFBundleDisplayName string Yulu
+plist_set_or_add "$INFO" CFBundleShortVersionString string "$YULU_BUNDLE_VERSION"
+plist_set_or_add "$INFO" CFBundleVersion string "$YULU_BUILD_NUMBER"
+plist_set_or_add "$INFO" YuluVersion string "$YULU_VERSION_RAW"
+plist_set_or_add "$INFO" CFBundleIconFile string Yulu
+plist_set_or_add "$INFO" CFBundleIconName string Yulu
+
+plist_set_or_add "$CAPTURE_INFO" CFBundleExecutable string audio_daemon
+plist_set_or_add "$CAPTURE_INFO" CFBundleIdentifier string com.yulu.audiodaemon
+plist_set_or_add "$CAPTURE_INFO" CFBundleName string "Yulu Capture"
+plist_set_or_add "$CAPTURE_INFO" CFBundleDisplayName string "Yulu Capture"
+plist_set_or_add "$CAPTURE_INFO" CFBundleShortVersionString string "$YULU_BUNDLE_VERSION"
+plist_set_or_add "$CAPTURE_INFO" CFBundleVersion string "$YULU_BUILD_NUMBER"
+plist_set_or_add "$CAPTURE_INFO" YuluVersion string "$YULU_VERSION_RAW"
+plist_set_or_add "$CAPTURE_INFO" LSUIElement bool true
+plist_set_or_add "$CAPTURE_INFO" NSMicrophoneUsageDescription string "Yulu records microphone audio for meeting notes."
+plist_set_or_add "$CAPTURE_INFO" NSScreenCaptureUsageDescription string "Yulu captures system audio for meeting notes."
 # NSAudioCaptureUsageDescription drives the macOS 14.4+ Core Audio process-tap
 # prompt ("System Audio Recording Only" scope). Required for the tap arm
 # (Pitfall 4); the SCK arm uses NSScreenCaptureUsageDescription above.
-plist_set_or_add NSAudioCaptureUsageDescription string "Yulu captures system audio for meeting notes."
-plist_set_or_add NSCalendarsUsageDescription string "Yulu reads your calendars to offer recording reminders for scheduled meetings."
-plist_set_or_add NSCalendarsFullAccessUsageDescription string "Yulu reads your calendars to offer recording reminders for scheduled meetings."
+plist_set_or_add "$CAPTURE_INFO" NSAudioCaptureUsageDescription string "Yulu captures system audio for meeting notes."
+plist_set_or_add "$INFO" NSCalendarsUsageDescription string "Yulu reads your calendars to offer recording reminders for scheduled meetings."
+plist_set_or_add "$INFO" NSCalendarsFullAccessUsageDescription string "Yulu reads your calendars to offer recording reminders for scheduled meetings."
 
 # Code-signing identity selection.
 #
@@ -111,15 +183,26 @@ fi
 # signs Mach-O files and re-signs nested code with the wrong flags), and we use
 # a real secure timestamp (an unsigned/absent timestamp makes notarization fail).
 #   1. inner Mach-O first ($APP_BIN), then 2. the bundle ($APP).
-ENTITLEMENTS="$SCRIPT_DIR/Yulu.app.entitlements"
+CAPTURE_ENTITLEMENTS="$SCRIPT_DIR/Yulu.app.entitlements"
+SHELL_ENTITLEMENTS="$SCRIPT_DIR/YuluShell.app.entitlements"
 codesign --force --options runtime --timestamp \
   --sign "$IDENTITY" "$APP_KEYCHAIN_BIN"
 codesign --force --options runtime --timestamp \
   --sign "$IDENTITY" "$APP_CALENDAR_BIN"
+if [[ -n "$DEVELOPMENT_HOST_NATIVE" ]]; then
+  codesign --force --options runtime --timestamp \
+    --sign "$IDENTITY" "$DEVELOPMENT_HOST_NATIVE"
+fi
 codesign --force --options runtime --timestamp \
-  --entitlements "$ENTITLEMENTS" --sign "$IDENTITY" "$APP_BIN"
+  --entitlements "$CAPTURE_ENTITLEMENTS" --sign "$IDENTITY" "$APP_BIN"
 codesign --force --options runtime --timestamp \
-  --entitlements "$ENTITLEMENTS" --sign "$IDENTITY" "$APP"
+  --entitlements "$CAPTURE_ENTITLEMENTS" --sign "$IDENTITY" "$LEGACY_APP_BIN"
+codesign --force --options runtime --timestamp \
+  --entitlements "$CAPTURE_ENTITLEMENTS" --sign "$IDENTITY" "$CAPTURE_APP"
+codesign --force --options runtime --timestamp \
+  --entitlements "$SHELL_ENTITLEMENTS" --sign "$IDENTITY" "$SHELL_BIN"
+codesign --force --options runtime --timestamp \
+  --entitlements "$SHELL_ENTITLEMENTS" --sign "$IDENTITY" "$APP"
 codesign --verify --strict --verbose=2 "$APP"
 codesign --display --entitlements :- "$APP"
 

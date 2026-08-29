@@ -697,9 +697,14 @@ def test_verify_checksum_passes_and_fails(tmp_path):
 def make_runtime(root: Path, version: str = "0.5.0") -> Path:
     runtime = root / "yulu"
     (runtime / "yulu" / "scripts").mkdir(parents=True)
-    keychain_helper = runtime / "yulu" / "scripts" / "Yulu.app" / "Contents" / "MacOS" / "xai_keychain"
+    app_contents = runtime / "yulu" / "scripts" / "Yulu.app" / "Contents"
+    keychain_helper = app_contents / "MacOS" / "xai_keychain"
     keychain_helper.parent.mkdir(parents=True)
     keychain_helper.write_text("binary\n", encoding="utf-8")
+    (app_contents / "MacOS" / "yulu_app").write_text("binary\n", encoding="utf-8")
+    capture = app_contents / "Helpers" / "YuluCapture.app" / "Contents" / "MacOS" / "audio_daemon"
+    capture.parent.mkdir(parents=True)
+    capture.write_text("binary\n", encoding="utf-8")
     (runtime / "VERSION").write_text(version + "\n", encoding="utf-8")
     (runtime / "yulu" / "scripts" / "setup.sh").write_text("#!/usr/bin/env bash\n", encoding="utf-8")
     (runtime / "yulu" / "scripts" / "yulu").write_text("#!/usr/bin/env bash\n", encoding="utf-8")
@@ -963,6 +968,21 @@ def test_validate_runtime_layout_rejects_required_directory(tmp_path):
         validate_runtime_layout(runtime, "v0.5.0")
 
 
+@pytest.mark.parametrize(
+    "relative_path",
+    [
+        "yulu/scripts/Yulu.app/Contents/MacOS/yulu_app",
+        "yulu/scripts/Yulu.app/Contents/Helpers/YuluCapture.app/Contents/MacOS/audio_daemon",
+    ],
+)
+def test_validate_runtime_layout_requires_visible_shell_and_nested_capture(tmp_path, relative_path):
+    runtime = make_runtime(tmp_path, "0.5.0")
+    (runtime / relative_path).unlink()
+
+    with pytest.raises(InstallError, match=Path(relative_path).name):
+        validate_runtime_layout(runtime, "v0.5.0")
+
+
 def test_validate_runtime_layout_never_executes_untrusted_version_script(tmp_path):
     runtime = make_runtime(tmp_path, "0.5.0")
     marker = tmp_path / "executed"
@@ -1029,6 +1049,15 @@ def test_release_bundle_security_requires_developer_id_and_expected_team(tmp_pat
     runtime = tmp_path / "runtime"
     for name in ("Yulu.app", "StatusAgent.app"):
         (runtime / "yulu" / "scripts" / name).mkdir(parents=True)
+    (
+        runtime
+        / "yulu"
+        / "scripts"
+        / "Yulu.app"
+        / "Contents"
+        / "Helpers"
+        / "YuluCapture.app"
+    ).mkdir(parents=True)
     calls = []
 
     def fake_which(name):
@@ -1051,9 +1080,13 @@ def test_release_bundle_security_requires_developer_id_and_expected_team(tmp_pat
 
     verify_release_bundle_security(runtime)
 
-    assert len(calls) == 4
+    assert len(calls) == 6
     assert all("--deep" in call for call in calls if "--verify" in call)
-    assert {Path(call[-1]).name for call in calls} == {"Yulu.app", "StatusAgent.app"}
+    assert {Path(call[-1]).name for call in calls} == {
+        "Yulu.app",
+        "YuluCapture.app",
+        "StatusAgent.app",
+    }
 
 
 def test_release_bundle_security_rejects_wrong_team(tmp_path, monkeypatch):
@@ -1084,6 +1117,15 @@ def test_release_bundle_security_validates_staple_when_available(tmp_path, monke
     runtime = tmp_path / "runtime"
     for name in ("Yulu.app", "StatusAgent.app"):
         (runtime / "yulu" / "scripts" / name).mkdir(parents=True)
+    (
+        runtime
+        / "yulu"
+        / "scripts"
+        / "Yulu.app"
+        / "Contents"
+        / "Helpers"
+        / "YuluCapture.app"
+    ).mkdir(parents=True)
     calls = []
 
     monkeypatch.setattr(
@@ -1114,6 +1156,15 @@ def test_stapler_failure_is_best_effort_for_offline_install_but_mandatory_in_rel
     runtime = tmp_path / "runtime"
     for name in ("Yulu.app", "StatusAgent.app"):
         (runtime / "yulu" / "scripts" / name).mkdir(parents=True)
+    (
+        runtime
+        / "yulu"
+        / "scripts"
+        / "Yulu.app"
+        / "Contents"
+        / "Helpers"
+        / "YuluCapture.app"
+    ).mkdir(parents=True)
 
     monkeypatch.setattr(
         release_installer.shutil,

@@ -292,7 +292,18 @@ def validate_runtime_layout(runtime_dir: Path, tag: str) -> None:
         runtime_dir / "yulu" / "scripts" / "setup.sh",
         runtime_dir / "yulu" / "scripts" / "yulu",
         runtime_dir / "yulu" / "scripts" / "version.py",
+        runtime_dir / "yulu" / "scripts" / "Yulu.app" / "Contents" / "MacOS" / "yulu_app",
         runtime_dir / "yulu" / "scripts" / "Yulu.app" / "Contents" / "MacOS" / "xai_keychain",
+        runtime_dir
+        / "yulu"
+        / "scripts"
+        / "Yulu.app"
+        / "Contents"
+        / "Helpers"
+        / "YuluCapture.app"
+        / "Contents"
+        / "MacOS"
+        / "audio_daemon",
     ]
     for path in required:
         if not path.is_file():
@@ -450,11 +461,13 @@ def verify_release_bundle_security(runtime_dir: Path, *, require_staple: bool = 
     codesign = shutil.which("codesign")
     if not codesign:
         raise InstallError("macOS codesign is required to verify release app bundles")
-    bundles = [
-        runtime_dir / "yulu" / "scripts" / "Yulu.app",
+    product_app = runtime_dir / "yulu" / "scripts" / "Yulu.app"
+    signed_bundles = [
+        product_app,
+        product_app / "Contents" / "Helpers" / "YuluCapture.app",
         runtime_dir / "yulu" / "scripts" / "StatusAgent.app",
     ]
-    for bundle in bundles:
+    for bundle in signed_bundles:
         if not bundle.is_dir():
             raise InstallError(f"Invalid release asset: missing {bundle.relative_to(runtime_dir)}")
         verify = _run_verification(
@@ -483,7 +496,7 @@ def verify_release_bundle_security(runtime_dir: Path, *, require_staple: bool = 
     find_stapler = _run_verification([xcrun, "--find", "stapler"])
     if find_stapler.returncode != 0:
         return
-    for bundle in bundles:
+    for bundle in (product_app, runtime_dir / "yulu" / "scripts" / "StatusAgent.app"):
         stapler = _run_verification([xcrun, "stapler", "validate", str(bundle)])
         if stapler.returncode != 0:
             detail = (stapler.stderr or stapler.stdout).strip()

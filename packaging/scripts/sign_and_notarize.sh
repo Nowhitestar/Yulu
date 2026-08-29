@@ -132,7 +132,7 @@ PY
 # The build script signed Yulu.app before the manifest existed. Re-sign only the
 # outer bundle now; the inner Mach-O remains signed with the same identity.
 codesign --force --options runtime --timestamp \
-  --entitlements "$SCRIPTS_DIR/Yulu.app.entitlements" \
+  --entitlements "$SCRIPTS_DIR/YuluShell.app.entitlements" \
   --sign "$YULU_CODESIGN_IDENTITY" "$YULU_APP"
 codesign --verify --deep --strict --verbose=2 "$YULU_APP"
 

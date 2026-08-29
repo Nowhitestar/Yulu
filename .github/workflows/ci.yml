@@ -129,10 +129,13 @@ jobs:
             -Xlinker yulu/scripts/calendar_probe-Info.plist
           printf 'swiftc status_agent.swift (Cocoa + Carbon)\n'
           swiftc -target arm64-apple-macosx13.0 -o ".ci-build/status_agent" yulu/scripts/status_agent.swift -framework Cocoa -framework Carbon
+          printf 'swiftc yulu_app.swift (Cocoa + WebKit)\n'
+          swiftc -target arm64-apple-macosx13.0 -o ".ci-build/yulu_app" yulu/scripts/yulu_app.swift -framework Cocoa -framework WebKit
           bash packaging/scripts/check_macos_deployment_target.sh \
             .ci-build/audio_daemon \
             .ci-build/xai_keychain \
             .ci-build/calendar_probe \
+            .ci-build/yulu_app \
             .ci-build/status_agent \
             .ci-build/recorder_status \
             .ci-build/meeting_prompt

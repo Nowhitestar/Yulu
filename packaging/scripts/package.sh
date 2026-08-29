@@ -61,9 +61,13 @@ ALLOWED_BUILD_OUTPUTS=(
     "yulu/scripts/recorder_status"
     "yulu/scripts/meeting_prompt"
     "yulu/scripts/Yulu.app/Contents/Info.plist"
+    "yulu/scripts/Yulu.app/Contents/MacOS/yulu_app"
     "yulu/scripts/Yulu.app/Contents/MacOS/audio_daemon"
     "yulu/scripts/Yulu.app/Contents/MacOS/xai_keychain"
     "yulu/scripts/Yulu.app/Contents/MacOS/calendar_probe"
+    "yulu/scripts/Yulu.app/Contents/Helpers/YuluCapture.app/Contents/Info.plist"
+    "yulu/scripts/Yulu.app/Contents/Helpers/YuluCapture.app/Contents/MacOS/audio_daemon"
+    "yulu/scripts/Yulu.app/Contents/Helpers/YuluCapture.app/Contents/_CodeSignature/CodeResources"
     "yulu/scripts/Yulu.app/Contents/_CodeSignature/CodeResources"
 )
 

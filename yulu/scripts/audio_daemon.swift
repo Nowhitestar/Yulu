@@ -35,14 +35,23 @@ var MIC_ERROR = ""
 var SYS_FORMAT_LOGGED = false
 
 func defaultRecordingDir() -> URL {
-    // Yulu.app lives at <repo>/yulu/scripts/Yulu.app.
-    // Store recordings at <repo>/meeting-recordings by default.
-    let app = Bundle.main.bundleURL
-    let repo = app
-        .deletingLastPathComponent() // scripts
-        .deletingLastPathComponent() // nested yulu
-        .deletingLastPathComponent() // repo root
-    return repo.appendingPathComponent("meeting-recordings")
+    HOME.appendingPathComponent("Movies/Yulu")
+}
+
+func runtimeScriptDir() -> URL {
+    if let override = ProcessInfo.processInfo.environment["YULU_SCRIPT_DIR"],
+       !override.isEmpty {
+        return URL(fileURLWithPath: override, isDirectory: true)
+    }
+    let bundle = Bundle.main.bundleURL
+    if bundle.lastPathComponent == "YuluCapture.app" {
+        let productApp = bundle
+            .deletingLastPathComponent() // Helpers
+            .deletingLastPathComponent() // Contents
+            .deletingLastPathComponent() // Yulu.app
+        return productApp.appendingPathComponent("Contents/Resources/runtime/yulu/scripts", isDirectory: true)
+    }
+    return bundle.deletingLastPathComponent()
 }
 
 func loadRecordingDir() -> URL {
@@ -69,7 +78,7 @@ func log(_ msg: String) {
 }
 
 func launchMeetingSilencePrompt() -> Bool {
-    let scriptDir = Bundle.main.bundleURL.deletingLastPathComponent()
+    let scriptDir = runtimeScriptDir()
     let meetingDaemon = scriptDir.appendingPathComponent("meeting_daemon.py")
     guard FileManager.default.fileExists(atPath: meetingDaemon.path) else {
         log("Silence prompt adapter missing: \(meetingDaemon.path)")

@@ -163,6 +163,8 @@ jobs:
                   [
                       "bash",
                       "packaging/scripts/check_macos_deployment_target.sh",
+                      str(runtime / "yulu/scripts/Yulu.app/Contents/MacOS/yulu_app"),
+                      str(runtime / "yulu/scripts/Yulu.app/Contents/Helpers/YuluCapture.app/Contents/MacOS/audio_daemon"),
                       str(runtime / "yulu/scripts/Yulu.app/Contents/MacOS/audio_daemon"),
                       str(runtime / "yulu/scripts/Yulu.app/Contents/MacOS/xai_keychain"),
                       str(runtime / "yulu/scripts/Yulu.app/Contents/MacOS/calendar_probe"),

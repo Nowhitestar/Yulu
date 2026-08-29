@@ -29,6 +29,7 @@ function rawHttp(port: number, path: string, hostHeader: string): Promise<{ stat
 const HERE = dirname(fileURLToPath(import.meta.url));
 
 let env: { root: string; cleanup: () => void; server: RunningServer; baseUrl: string };
+const originalHostNonce = process.env.YULU_HOST_NONCE;
 
 function pcmWav(): Buffer {
   const wav = Buffer.alloc(45);
@@ -68,6 +69,7 @@ beforeAll(async () => {
   mkdirSync(moviesDir, { recursive: true });
   process.env.HOME = root;
   process.env.YULU_UI_PORT = "0";
+  process.env.YULU_HOST_NONCE = "server-test-nonce";
   const server = await startServer({
     configDir,
     configFile: join(configDir, "config.json"),
@@ -83,13 +85,21 @@ beforeAll(async () => {
   env = { root, cleanup: () => rmSync(root, { recursive: true, force: true }), server, baseUrl };
 });
 
-afterAll(async () => { await env.server.close(); env.cleanup(); });
+afterAll(async () => {
+  await env.server.close();
+  env.cleanup();
+  if (originalHostNonce === undefined) delete process.env.YULU_HOST_NONCE;
+  else process.env.YULU_HOST_NONCE = originalHostNonce;
+});
 
 describe("server", () => {
   it("/healthz returns ok", async () => {
     const r = await fetch(`${env.baseUrl}/healthz`);
     expect(r.status).toBe(200);
-    expect(await r.json()).toMatchObject({ status: "ok" });
+    expect(await r.json()).toMatchObject({
+      status: "ok",
+      instanceNonce: "server-test-nonce",
+    });
   });
 
   it("/trpc/system.version returns version", async () => {
