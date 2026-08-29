@@ -14,11 +14,12 @@ import {
 } from "./sharingConfiguration.js";
 
 type ConnectorRunner = (input: Parameters<typeof runAgentCliCommand>[0]) => Promise<AgentCliRunResult>;
-interface AuditedConnectorToolCall {
+export interface AuditedConnectorToolCall {
   connector: string;
   name: string;
   argumentsText: string;
   resultText: string;
+  transportError: boolean | null;
   success: boolean;
 }
 
@@ -30,7 +31,7 @@ function asRecord(value: unknown): Record<string, unknown> {
     : {};
 }
 
-function parseObject(output: string): Record<string, unknown> {
+export function parseObject(output: string): Record<string, unknown> {
   const trimmed = output.trim();
   const fenced = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i)?.[1] ?? trimmed;
   try {
@@ -320,7 +321,7 @@ function connectorToolIdentity(name: string): { connector: string; tool: string 
   return single ? { connector: single[1]!, tool: single[2]! } : null;
 }
 
-function connectorMatches(actual: string, selected: SharingConnector): boolean {
+export function connectorMatches(actual: string, selected: string): boolean {
   const normalized = actual.toLowerCase();
   return selected === "zulip"
     ? normalized === "zulip" || normalized === "zulipchat"
@@ -339,7 +340,7 @@ function toolResultSucceeded(result: string, isError = false): boolean {
   );
 }
 
-function extractConnectorToolCalls(raw: string): AuditedConnectorToolCall[] {
+export function extractConnectorToolCalls(raw: string): AuditedConnectorToolCall[] {
   const rows = jsonLines(raw);
   const calls: AuditedConnectorToolCall[] = [];
   const byId = new Map<string, AuditedConnectorToolCall>();
@@ -349,13 +350,17 @@ function extractConnectorToolCalls(raw: string): AuditedConnectorToolCall[] {
     if (item.type === "mcp_tool_call") {
       const connector = boundedString(item.server, 100);
       const name = boundedString(item.tool, 200);
-      const resultText = serialized(item.result);
+      const resultText = [
+        item.result === null || item.result === undefined ? "" : serialized(item.result),
+        item.error ? serialized(item.error) : "",
+      ].filter(Boolean).join("\n");
       if (connector && name) {
         calls.push({
           connector,
           name,
           argumentsText: serialized(item.arguments),
           resultText,
+          transportError: item.status === "completed" ? Boolean(item.error) : true,
           success: item.status === "completed" && !item.error && toolResultSucceeded(resultText),
         });
       }
@@ -381,6 +386,7 @@ function extractConnectorToolCalls(raw: string): AuditedConnectorToolCall[] {
             name: identity.tool,
             argumentsText: serialized(block.input),
             resultText: "",
+            transportError: null,
             success: false,
           };
           calls.push(call);
@@ -393,6 +399,7 @@ function extractConnectorToolCalls(raw: string): AuditedConnectorToolCall[] {
         const call = byId.get(boundedString(block.tool_use_id, 200));
         if (!call) continue;
         call.resultText = serialized(block.content);
+        call.transportError = block.is_error === true;
         call.success = toolResultSucceeded(call.resultText, block.is_error === true);
       }
 
@@ -408,6 +415,7 @@ function extractConnectorToolCalls(raw: string): AuditedConnectorToolCall[] {
           name: identity.tool,
           argumentsText: serialized(fn.arguments),
           resultText: "",
+          transportError: null,
           success: false,
         };
         calls.push(call);

@@ -125,7 +125,7 @@ describe("CalendarSourceSection", () => {
     expect(screen.getByText(/No external CLI required/)).toBeInTheDocument();
     expect(screen.queryByText("Google Calendar via gog")).toBeNull();
     expect(screen.getByRole("link", { name: "Open Agent Calendar Connector" }))
-      .toHaveAttribute("href", "/agent-console");
+      .toHaveAttribute("href", "/settings/integrations#agent-calendar-connector");
     expect(screen.getByText(/does not establish Calendar Source readiness/)).toBeInTheDocument();
   });
 

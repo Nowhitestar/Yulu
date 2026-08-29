@@ -26,6 +26,7 @@ export function OnboardingHome() {
   const home = trpc.onboarding.status.useQuery(undefined, { retry: false });
   const adoptConversation = trpc.onboarding.adoptConversation.useMutation();
   const adoptCalendarSource = trpc.onboarding.adoptCalendarSource.useMutation();
+  const adoptAgentCalendarConnector = trpc.onboarding.adoptAgentCalendarConnector.useMutation();
   const deferOptional = trpc.onboarding.deferOptionalCapability.useMutation();
   const deferActivation = trpc.onboarding.deferActivationJourney.useMutation();
   const utils = trpc.useUtils();
@@ -153,6 +154,19 @@ export function OnboardingHome() {
                     onClick={() => void run(() => adoptCalendarSource.mutateAsync())}
                   >
                     {t("onboarding.action.adoptCalendarSource")}
+                  </button>
+                )}
+                {capability.id === "agent-calendar-connector" && !capability.outcome && (
+                  <button
+                    type="button"
+                    className="onboarding-action"
+                    disabled={
+                      capability.readiness.state !== "ready" ||
+                      adoptAgentCalendarConnector.isPending
+                    }
+                    onClick={() => void run(() => adoptAgentCalendarConnector.mutateAsync())}
+                  >
+                    {t("onboarding.action.adoptAgentCalendarConnector")}
                   </button>
                 )}
                 {!capability.outcome && (

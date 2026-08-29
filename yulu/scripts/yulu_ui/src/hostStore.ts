@@ -174,9 +174,20 @@ export interface ConversationCapabilityEvidenceSnapshot {
   runtimeEvidence: PersistedAgentConnectionReadiness["runtimeEvidence"];
 }
 
+export interface AgentCalendarConnectorEvidenceSnapshot {
+  capability: "agent-calendar-connector";
+  connectionId: string;
+  adapter: "codex" | "claude-code";
+  connector: string;
+  connectionRevision: string;
+  operation: string;
+  testedAt: string;
+}
+
 export type OptionalCapabilityEvidenceSnapshot =
   | ConversationCapabilityEvidenceSnapshot
-  | CalendarSourceEvidenceSnapshot;
+  | CalendarSourceEvidenceSnapshot
+  | AgentCalendarConnectorEvidenceSnapshot;
 
 export interface OnboardingCompletion {
   version: string;
@@ -299,6 +310,12 @@ export interface AgentConnectionDataPathDisclosure {
 }
 
 export type SharingConnector = "notion" | "zulip";
+
+export interface PersistedAgentCalendarConnectorSelection {
+  connectionId: string;
+  connector: string;
+  selectedAt: string;
+}
 
 export interface PersistedSharingConfiguration {
   connectionId: string;
@@ -633,6 +650,37 @@ function secretSafeCalendarSourceEvidenceSnapshot(
   };
 }
 
+function secretSafeAgentCalendarConnectorEvidenceSnapshot(
+  input: AgentCalendarConnectorEvidenceSnapshot,
+): AgentCalendarConnectorEvidenceSnapshot | null {
+  const raw = input as unknown as Record<string, unknown>;
+  const connectionId = boundedEvidenceString(raw.connectionId, 200)?.trim() || null;
+  const adapter = raw.adapter === "codex" || raw.adapter === "claude-code" ? raw.adapter : null;
+  const connector = boundedEvidenceString(raw.connector, 100)?.trim() || null;
+  const connectionRevision = boundedEvidenceString(raw.connectionRevision, 64);
+  const operation = boundedEvidenceString(raw.operation, 100)?.trim() || null;
+  const testedAt = boundedEvidenceString(raw.testedAt, 100);
+  if (
+    raw.capability !== "agent-calendar-connector" || !connectionId || !adapter || !connector ||
+    !/^[a-z0-9][a-z0-9._-]{0,99}$/.test(connector) ||
+    !connectionRevision || !/^[a-f0-9]{64}$/.test(connectionRevision) ||
+    !operation || ![
+      "list_calendars", "get_calendars", "list_events", "get_events",
+      "search_events", "calendar_list", "events_list",
+    ].includes(operation) || !testedAt || Number.isNaN(Date.parse(testedAt)) ||
+    new Date(Date.parse(testedAt)).toISOString() !== testedAt
+  ) return null;
+  return {
+    capability: "agent-calendar-connector",
+    connectionId,
+    adapter,
+    connector,
+    connectionRevision,
+    operation,
+    testedAt,
+  };
+}
+
 function secretSafeOptionalCapabilityEvidenceSnapshot(
   input: OptionalCapabilityEvidenceSnapshot,
 ): OptionalCapabilityEvidenceSnapshot | null {
@@ -640,7 +688,9 @@ function secretSafeOptionalCapabilityEvidenceSnapshot(
     ? secretSafeConversationEvidenceSnapshot(input)
     : input.capability === "calendar-source"
       ? secretSafeCalendarSourceEvidenceSnapshot(input)
-      : null;
+      : input.capability === "agent-calendar-connector"
+        ? secretSafeAgentCalendarConnectorEvidenceSnapshot(input)
+        : null;
 }
 
 function readOptionalCapabilityEvidenceSnapshot(
@@ -664,6 +714,16 @@ function isExactCalendarSourceProbeEvidence(
   return snapshot?.capability === "calendar-source" &&
     kind === "calendar-source-probe" &&
     reference === `calendar-source:${snapshot.selectionFingerprint}:${snapshot.testedAt}`;
+}
+
+function isExactAgentCalendarConnectorProbeEvidence(
+  kind: string | null,
+  reference: string | null,
+  snapshot: OptionalCapabilityEvidenceSnapshot | null,
+): snapshot is AgentCalendarConnectorEvidenceSnapshot {
+  return snapshot?.capability === "agent-calendar-connector" &&
+    kind === "agent-calendar-connector-probe" &&
+    reference === `agent-calendar-connector:${snapshot.connectionRevision}:${snapshot.testedAt}`;
 }
 
 export interface NotionDelivery {
@@ -1280,6 +1340,53 @@ export class HostStore {
   clearAgentConnectionDisclosures(connectionId: string): void {
     this.db.prepare("DELETE FROM agent_connection_disclosures WHERE connection_id = ?")
       .run(connectionId);
+  }
+
+  getAgentCalendarConnectorSelection(): PersistedAgentCalendarConnectorSelection | null {
+    const row = this.db.prepare(`
+      SELECT connection_id, connector, selected_at
+      FROM agent_calendar_connector_selection
+      WHERE id = 1
+    `).get() as {
+      connection_id: string;
+      connector: string;
+      selected_at: string;
+    } | undefined;
+    if (
+      !row || !row.connection_id || row.connection_id.length > 200 ||
+      !/^[a-z0-9][a-z0-9._-]{0,99}$/.test(row.connector) ||
+      Number.isNaN(Date.parse(row.selected_at))
+    ) return null;
+    return {
+      connectionId: row.connection_id,
+      connector: row.connector,
+      selectedAt: row.selected_at,
+    };
+  }
+
+  selectAgentCalendarConnector(input: {
+    connectionId: string;
+    connector: string;
+  }): PersistedAgentCalendarConnectorSelection {
+    const connectionId = input.connectionId.trim();
+    const connector = boundedIdentity(input.connector, "Agent Calendar Connector");
+    const connection = this.db.prepare("SELECT kind FROM agent_connections WHERE id = ?")
+      .get(connectionId) as { kind: PersistedAgentConnection["kind"] } | undefined;
+    if (connection?.kind !== "supported-agent") {
+      throw new Error("Agent Calendar Connector requires a Supported Agent Connection");
+    }
+    const current = this.getAgentCalendarConnectorSelection();
+    if (current?.connectionId === connectionId && current.connector === connector) return current;
+    const selectedAt = now();
+    this.db.prepare(`
+      INSERT INTO agent_calendar_connector_selection (id, connection_id, connector, selected_at)
+      VALUES (1, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        connection_id = excluded.connection_id,
+        connector = excluded.connector,
+        selected_at = excluded.selected_at
+    `).run(connectionId, connector, selectedAt);
+    return this.getAgentCalendarConnectorSelection()!;
   }
 
   getSharingConfiguration(): PersistedSharingConfiguration | null {
@@ -2855,6 +2962,10 @@ export class HostStore {
           !isExactCalendarSourceProbeEvidence(row.evidence_kind, row.evidence_reference, snapshot)) {
         return [];
       }
+      if (row.capability === "agent-calendar-connector" && row.outcome === "adopted" &&
+          !isExactAgentCalendarConnectorProbeEvidence(row.evidence_kind, row.evidence_reference, snapshot)) {
+        return [];
+      }
       return [{
         onboardingVersion: row.onboarding_version,
         capability: row.capability,
@@ -2896,6 +3007,10 @@ export class HostStore {
         !isExactCalendarSourceProbeEvidence(evidenceKind, evidenceReference, evidenceSnapshot)) {
       throw new Error("An adopted Calendar Source outcome requires exact probe evidence");
     }
+    if (capability === "agent-calendar-connector" && input.outcome === "adopted" &&
+        !isExactAgentCalendarConnectorProbeEvidence(evidenceKind, evidenceReference, evidenceSnapshot)) {
+      throw new Error("An adopted Agent Calendar Connector outcome requires exact probe evidence");
+    }
     if (input.outcome === "deferred" && input.evidence !== null) {
       throw new Error("A deferred Optional Capability Outcome cannot claim adoption evidence");
     }
@@ -2906,7 +3021,10 @@ export class HostStore {
       throw new Error("Optional Capability Evidence is too long");
     }
     const commit = this.db.transaction(() => {
-      if (capability === "conversation" || capability === "calendar-source") {
+      if (
+        capability === "conversation" || capability === "calendar-source" ||
+        capability === "agent-calendar-connector"
+      ) {
         const existing = this.db.prepare(`
           SELECT outcome, evidence_kind, evidence_reference, evidence_snapshot_json
           FROM optional_capability_outcomes
@@ -2926,7 +3044,13 @@ export class HostStore {
               existing?.evidence_reference ?? null,
               existingSnapshot,
             )
-          : !existingSnapshot;
+          : capability === "agent-calendar-connector"
+            ? !isExactAgentCalendarConnectorProbeEvidence(
+                existing?.evidence_kind ?? null,
+                existing?.evidence_reference ?? null,
+                existingSnapshot,
+              )
+            : !existingSnapshot;
         if (existing?.outcome === "adopted" && existingEvidenceInvalid) {
           this.db.prepare(`
             DELETE FROM optional_capability_outcomes
@@ -4157,6 +4281,13 @@ export class HostStore {
         test_receipt_url TEXT,
         test_verified_at TEXT,
         updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS agent_calendar_connector_selection (
+        id INTEGER PRIMARY KEY CHECK(id = 1),
+        connection_id TEXT NOT NULL REFERENCES agent_connections(id) ON DELETE CASCADE,
+        connector TEXT NOT NULL,
+        selected_at TEXT NOT NULL
       );
 
       CREATE TABLE IF NOT EXISTS sharing_test_actions (

@@ -75,6 +75,7 @@ describe("onboarding router", () => {
     let conversationStatus: "ready" | "failed" | "untested" = "ready";
     let sharingStatus: "ready" | "failed" | "untested" | "unknown" = "ready";
     let calendarStatus: "ready" | "failed" | "untested" = "untested";
+    let connectorStatus: "ready" | "failed" | "untested" = "untested";
     const calendarSnapshot = {
       capability: "calendar-source" as const,
       source: "macos" as const,
@@ -158,6 +159,42 @@ describe("onboarding router", () => {
           snapshot: calendarSnapshot,
         })),
       },
+      agentCalendarConnector: {
+        view: vi.fn(() => ({
+          readiness: {
+            status: connectorStatus,
+            failure: connectorStatus === "failed" ? "authorization" : null,
+            detail: connectorStatus === "ready"
+              ? "Calendar connector read access verified"
+              : connectorStatus === "failed"
+                ? "Calendar connector authorization was denied"
+                : "Calendar connector has not been tested",
+            remediation: connectorStatus === "failed" ? "Reauthorize through the Agent native flow" : "",
+            evidence: connectorStatus === "ready" ? {
+              capability: "agent-calendar-connector",
+              connectionId: "codex",
+              adapter: "codex",
+              connector: "google_calendar",
+              connectionRevision: "e".repeat(64),
+              operation: "list_calendars",
+              testedAt: "2026-08-29T04:00:00.000Z",
+            } : null,
+          },
+        })),
+        adoptionEvidence: vi.fn(() => ({
+          kind: "agent-calendar-connector-probe",
+          reference: `agent-calendar-connector:${"e".repeat(64)}:2026-08-29T04:00:00.000Z`,
+          snapshot: {
+            capability: "agent-calendar-connector",
+            connectionId: "codex",
+            adapter: "codex",
+            connector: "google_calendar",
+            connectionRevision: "e".repeat(64),
+            operation: "list_calendars",
+            testedAt: "2026-08-29T04:00:00.000Z",
+          },
+        })),
+      },
     } as unknown as AppContext;
     return {
       ctx,
@@ -165,6 +202,7 @@ describe("onboarding router", () => {
       setConversationStatus: (status: typeof conversationStatus) => { conversationStatus = status; },
       setSharingStatus: (status: typeof sharingStatus) => { sharingStatus = status; },
       setCalendarStatus: (status: typeof calendarStatus) => { calendarStatus = status; },
+      setConnectorStatus: (status: typeof connectorStatus) => { connectorStatus = status; },
     };
   }
 
@@ -337,6 +375,49 @@ describe("onboarding router", () => {
         readiness: { state: "not_tested", detail: "Calendar needs attention" },
       })]),
     });
+  });
+
+  it("keeps Calendar Source and Agent Calendar Connector readiness and adoption independent", async () => {
+    const { caller, setCalendarStatus, setConnectorStatus } = setup();
+    setCalendarStatus("ready");
+
+    let current = await caller().status();
+    expect(current.optionalCapabilities).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "calendar-source", readiness: expect.objectContaining({ state: "ready" }) }),
+      expect.objectContaining({ id: "agent-calendar-connector", readiness: expect.objectContaining({ state: "not_tested" }) }),
+    ]));
+
+    setCalendarStatus("failed");
+    setConnectorStatus("ready");
+    current = await caller().status();
+    expect(current.optionalCapabilities).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "calendar-source", readiness: expect.objectContaining({ state: "needs_attention" }) }),
+      expect.objectContaining({ id: "agent-calendar-connector", readiness: expect.objectContaining({ state: "ready" }) }),
+    ]));
+
+    await expect(caller().adoptAgentCalendarConnector()).resolves.toMatchObject({
+      outcome: {
+        capability: "agent-calendar-connector",
+        contractVersion: "agent-calendar-connector-v1",
+        outcome: "adopted",
+        evidence: {
+          kind: "agent-calendar-connector-probe",
+          snapshot: {
+            connectionId: "codex",
+            connector: "google_calendar",
+            operation: "list_calendars",
+          },
+        },
+      },
+    });
+    current = await caller().status();
+    expect(current.optionalCapabilities).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "calendar-source", outcome: null }),
+      expect.objectContaining({
+        id: "agent-calendar-connector",
+        outcome: expect.objectContaining({ outcome: "adopted" }),
+      }),
+    ]));
   });
 
   it("acknowledges a fresh automatic entry exactly once", async () => {

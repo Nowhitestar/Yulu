@@ -162,7 +162,9 @@ export function CalendarSourceSection() {
       <aside className="calendar-source-connector-boundary">
         <strong>{t("settings.calendarSource.connector.title")}</strong>
         <p>{t("settings.calendarSource.connector.detail")}</p>
-        <Link to="/agent-console">{t("settings.calendarSource.connector.open")}</Link>
+        <Link to="/settings/integrations#agent-calendar-connector">
+          {t("settings.calendarSource.connector.open")}
+        </Link>
       </aside>
 
       {error && <p role="alert" className="calendar-source-error">{error}</p>}

@@ -82,6 +82,7 @@ vi.mock("../../../web/src/trpc.js", () => {
     xaiAudio: { status: { invalidate: () => {} } },
     agentConnections: { view: { invalidate: () => Promise.resolve() } },
     integrations: { calendarSources: { invalidate: () => Promise.resolve() } },
+    agentCalendarConnector: { view: { invalidate: () => Promise.resolve() } },
     onboarding: { status: { invalidate: () => Promise.resolve() } },
   };
   return {
@@ -158,9 +159,32 @@ vi.mock("../../../web/src/trpc.js", () => {
         probeCalendarSource: { useMutation: noopMutation },
       },
       onboarding: {
-        status: { useQuery: () => ({ data: { optionalCapabilities: [{ id: "calendar-source", outcome: null }] } }) },
+        status: { useQuery: () => ({ data: { optionalCapabilities: [
+          { id: "calendar-source", outcome: null },
+          { id: "agent-calendar-connector", outcome: null },
+        ] } }) },
         adoptCalendarSource: { useMutation: noopMutation },
+        adoptAgentCalendarConnector: { useMutation: noopMutation },
         deferOptionalCapability: { useMutation: noopMutation },
+      },
+      agentCalendarConnector: {
+        view: { useQuery: () => ({
+          data: {
+            connections: [],
+            selection: null,
+            readiness: {
+              status: "untested",
+              failure: null,
+              detail: "Not tested",
+              remediation: "Run the read-only test",
+              evidence: null,
+            },
+          },
+          isPending: false,
+          isError: false,
+        }) },
+        select: { useMutation: noopMutation },
+        probe: { useMutation: noopMutation },
       },
       agentConsole: {
         overview: {
@@ -641,7 +665,9 @@ describe("Settings category detail content (re-homed widgets)", () => {
     expect(detail.getByRole("heading", { name: translate("zh", "settings.calendarSource.heading") }))
       .toBeInTheDocument();
     expect(detail.getByRole("link", { name: translate("zh", "settings.calendarSource.connector.open") }))
-      .toHaveAttribute("href", "/agent-console");
+      .toHaveAttribute("href", "/settings/integrations#agent-calendar-connector");
+    expect(detail.getByRole("heading", { name: translate("zh", "settings.agentCalendarConnector.heading") }))
+      .toBeInTheDocument();
   });
 
   it("does not list the retired local transcription Advanced category", () => {

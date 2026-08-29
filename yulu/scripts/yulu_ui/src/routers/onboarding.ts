@@ -81,11 +81,30 @@ function calendarSourceReadiness(ctx: AppContext): OnboardingCapabilityReadiness
   }
 }
 
+function agentCalendarConnectorReadiness(ctx: AppContext): OnboardingCapabilityReadiness {
+  if (!ctx.agentCalendarConnector) {
+    return { state: "unavailable", detail: "Agent Calendar Connector settings are unavailable" };
+  }
+  try {
+    const current = ctx.agentCalendarConnector.view().readiness;
+    return {
+      state: current.status === "ready"
+        ? "ready"
+        : current.status === "failed"
+          ? "needs_attention"
+          : "not_tested",
+      detail: current.detail,
+    };
+  } catch {
+    return { state: "unavailable", detail: "Current Agent Calendar Connector readiness is unavailable" };
+  }
+}
+
 async function currentReadiness(ctx: AppContext) {
   return {
     conversation: await conversationReadiness(ctx),
     "calendar-source": calendarSourceReadiness(ctx),
-    "agent-calendar-connector": notTested("Open the Agent Console to evaluate current Connector Readiness"),
+    "agent-calendar-connector": agentCalendarConnectorReadiness(ctx),
     sharing: sharingReadiness(ctx),
   };
 }
@@ -144,6 +163,20 @@ export const onboardingRouter = router({
       capability: "calendar-source",
       contractVersion: CURRENT_ONBOARDING_MANIFEST.optionalCapabilities.find(
         (capability) => capability.id === "calendar-source",
+      )!.contractVersion,
+      outcome: "adopted",
+      evidence: proof,
+    }, CURRENT_ONBOARDING_COMPLETION_REQUIREMENTS);
+    return { outcome, proof };
+  }),
+  adoptAgentCalendarConnector: uiMutationProcedure.mutation(({ ctx }) => {
+    if (!ctx.agentCalendarConnector) throw new Error("Agent Calendar Connector settings are unavailable");
+    const proof = ctx.agentCalendarConnector.adoptionEvidence();
+    const outcome = ctx.host.recordOptionalCapabilityOutcome({
+      onboardingVersion: CURRENT_ONBOARDING_MANIFEST.version,
+      capability: "agent-calendar-connector",
+      contractVersion: CURRENT_ONBOARDING_MANIFEST.optionalCapabilities.find(
+        (capability) => capability.id === "agent-calendar-connector",
       )!.contractVersion,
       outcome: "adopted",
       evidence: proof,

@@ -17,6 +17,7 @@ import type { SupportedAgentSummaryAdapter } from "./summaryProviderReadiness.js
 import type { AgentConnectionCenter } from "./agentConnections.js";
 import type { SharingConfiguration } from "./sharingConfiguration.js";
 import type { CalendarSourceManager } from "./calendarSources.js";
+import type { AgentCalendarConnector } from "./agentCalendarConnector.js";
 
 export interface AppContext {
   uiMutationAuthorized?: boolean;
@@ -36,6 +37,7 @@ export interface AppContext {
   agentConnections?: AgentConnectionCenter;
   sharing?: SharingConfiguration;
   calendarSources?: CalendarSourceManager;
+  agentCalendarConnector?: AgentCalendarConnector;
   localSearch?: (
     input: { query: string; since?: string; kinds?: ("meeting_summary" | "meeting_transcript")[]; limit?: number },
     scriptDir: string,

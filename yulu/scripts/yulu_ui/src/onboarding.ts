@@ -41,7 +41,7 @@ export const CURRENT_ONBOARDING_MANIFEST: OnboardingManifest = {
     {
       id: "agent-calendar-connector",
       contractVersion: "agent-calendar-connector-v1",
-      href: null,
+      href: "/settings/integrations#agent-calendar-connector",
     },
     {
       id: "sharing",

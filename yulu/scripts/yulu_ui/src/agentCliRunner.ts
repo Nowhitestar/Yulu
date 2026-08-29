@@ -32,6 +32,11 @@ export interface AgentCliRunResult {
 export interface ConnectorToolPolicy {
   connector: string;
   allowedTools: readonly string[];
+  readGuard?: {
+    maxResults: number;
+    maxWindowHours: number;
+    timeWindowTools?: readonly string[];
+  };
   writeGuard?: { destination: string; content: string };
 }
 
@@ -322,7 +327,21 @@ function connectorPolicy(policy: ConnectorToolPolicy): ConnectorToolPolicy {
   if (allowedTools.length === 0 || allowedTools.some((tool) => !/^[a-zA-Z0-9_.-]+$/.test(tool))) {
     throw new Error("Connector tool allowlist must contain only explicit tool names");
   }
-  return { ...policy, connector: policy.connector, allowedTools };
+  const readGuard = policy.readGuard
+    ? {
+        maxResults: policy.readGuard.maxResults,
+        maxWindowHours: policy.readGuard.maxWindowHours,
+        timeWindowTools: [...new Set(policy.readGuard.timeWindowTools ?? [])],
+      }
+    : undefined;
+  if (readGuard && (
+    !Number.isSafeInteger(readGuard.maxResults) || readGuard.maxResults < 1 ||
+    !Number.isSafeInteger(readGuard.maxWindowHours) || readGuard.maxWindowHours < 1 ||
+    readGuard.timeWindowTools.some((tool) => !allowedTools.includes(tool))
+  )) {
+    throw new Error("Connector read guard must define positive bounds for allowed tools");
+  }
+  return { ...policy, connector: policy.connector, allowedTools, readGuard };
 }
 
 function connectorServerNames(connector: string): string[] {
@@ -334,12 +353,14 @@ export function buildSharingGuardSource(rawPolicy: ConnectorToolPolicy, auditPat
   const expected = JSON.stringify({
     connector: policy.connector,
     tools: policy.allowedTools,
+    readGuard: policy.readGuard,
     ...policy.writeGuard,
   });
   return `
 import { appendFileSync, writeFileSync } from "node:fs";
 const expected = ${expected};
 const auditPath = ${JSON.stringify(auditPath)};
+const readAuthorizationPath = auditPath + ".read-authorized";
 const writeAuthorizationPath = auditPath + ".write-authorized";
 let raw = "";
 process.stdin.setEncoding("utf8");
@@ -355,6 +376,35 @@ process.stdin.on("end", () => {
   const serverNames = expected.connector === "zulip" ? ["zulip", "zulipchat"] : [expected.connector];
   const allowedNames = serverNames.flatMap((server) => expected.tools.map((name) => \`mcp__\${server}__\${name}\`));
   if (!allowedNames.includes(tool)) return deny("Sharing blocked an unexpected connector tool", tool);
+  if (expected.readGuard) {
+    const toolName = expected.tools.find((name) => serverNames.some((server) => tool === \`mcp__\${server}__\${name}\`));
+    const limitKeys = ["max_results", "maxResults", "limit", "page_size", "pageSize"];
+    const limitKey = limitKeys.find((key) => Object.prototype.hasOwnProperty.call(input, key));
+    const limit = limitKey ? input[limitKey] : undefined;
+    if (typeof limit !== "number" || !Number.isSafeInteger(limit) || limit < 1 || limit > expected.readGuard.maxResults) {
+      return deny("Connector read blocked because its result bound is missing or too large", tool);
+    }
+    const startKeys = ["time_min", "timeMin", "start", "start_time", "startTime"];
+    const endKeys = ["time_max", "timeMax", "end", "end_time", "endTime"];
+    const startKey = startKeys.find((key) => Object.prototype.hasOwnProperty.call(input, key));
+    const endKey = endKeys.find((key) => Object.prototype.hasOwnProperty.call(input, key));
+    const needsWindow = expected.readGuard.timeWindowTools.includes(toolName);
+    if (needsWindow || startKey || endKey) {
+      const start = startKey ? Date.parse(String(input[startKey])) : NaN;
+      const end = endKey ? Date.parse(String(input[endKey])) : NaN;
+      const maxWindowMs = expected.readGuard.maxWindowHours * 60 * 60 * 1000;
+      if (!Number.isFinite(start) || !Number.isFinite(end) || end < start || end - start > maxWindowMs) {
+        return deny("Connector read blocked because its time window is missing or too large", tool);
+      }
+    }
+    try {
+      writeFileSync(readAuthorizationPath, tool, { encoding: "utf8", mode: 0o600, flag: "wx" });
+    } catch {
+      return deny("Connector read blocked more than one operation", tool);
+    }
+    audit("allow", tool);
+    process.exit(0);
+  }
   if (typeof expected.destination !== "string" || typeof expected.content !== "string") {
     audit("allow", tool);
     process.exit(0);

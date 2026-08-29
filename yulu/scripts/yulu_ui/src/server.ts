@@ -68,6 +68,7 @@ import { SharingConfiguration } from "./sharingConfiguration.js";
 import { AgentSharingConnectorAdapter } from "./sharingConnector.js";
 import { CalendarSourceManager } from "./calendarSources.js";
 import { createCalendarSourceAdapters } from "./calendarSourceAdapters.js";
+import { AgentCalendarConnector, AgentCalendarConnectorRuntimeAdapter } from "./agentCalendarConnector.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const RETIRED_GATEWAY_CONNECTION_ID = "cliproxyapi";
@@ -222,6 +223,13 @@ async function startLockedServer(
       configDir: runtimePaths.configDir,
     }),
   });
+  const agentCalendarConnector = new AgentCalendarConnector({
+    host: hostStore,
+    adapter: new AgentCalendarConnectorRuntimeAdapter({
+      scriptDir: runtimePaths.scriptDir,
+      configDir: runtimePaths.configDir,
+    }),
+  });
   const launchctl = new LaunchctlClient(launchAgents);
   const calendarSources = new CalendarSourceManager({
     config: configManager,
@@ -326,6 +334,7 @@ async function startLockedServer(
     agentConnections,
     sharing,
     calendarSources,
+    agentCalendarConnector,
     db:        dbProxy,
   };
 

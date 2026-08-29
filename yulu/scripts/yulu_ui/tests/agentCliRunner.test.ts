@@ -230,6 +230,72 @@ describe("agentCliRunner", () => {
     expect(run("mcp__zulip__get_messages").status).toBe(2);
   });
 
+  it("enforces calendar result and time-window bounds before connector execution", () => {
+    const dir = mkdtempSync(join(tmpdir(), "yulu-calendar-read-guard-"));
+    tempDirs.push(dir);
+    const guardPath = join(dir, "guard.mjs");
+    writeFileSync(guardPath, buildSharingGuardSource({
+      connector: "google_calendar",
+      allowedTools: ["list_events", "list_calendars"],
+      readGuard: {
+        maxResults: 1,
+        maxWindowHours: 24,
+        timeWindowTools: ["list_events"],
+      },
+    }, join(dir, "audit.jsonl")));
+    const run = (tool_input: Record<string, unknown>) => spawnSync(process.execPath, [guardPath], {
+      input: JSON.stringify({
+        hook_event_name: "PreToolUse",
+        tool_name: "mcp__google_calendar__list_events",
+        tool_input,
+      }),
+      encoding: "utf8",
+    });
+
+    const validEventRead = {
+      max_results: 1,
+      time_min: "2026-08-29T00:00:00.000Z",
+      time_max: "2026-08-30T00:00:00.000Z",
+    };
+    expect(run({
+      max_results: 2,
+      time_min: "2026-08-29T00:00:00.000Z",
+      time_max: "2026-08-30T00:00:00.000Z",
+    }).status).toBe(2);
+    expect(run({
+      max_results: true,
+      time_min: "2026-08-29T00:00:00.000Z",
+      time_max: "2026-08-30T00:00:00.000Z",
+    }).status).toBe(2);
+    expect(run({
+      time_min: "2026-08-29T00:00:00.000Z",
+      time_max: "2026-08-30T00:00:00.000Z",
+    }).status).toBe(2);
+    expect(run({
+      max_results: 1,
+      time_min: "2026-08-29T00:00:00.000Z",
+      time_max: "2026-08-30T00:00:00.001Z",
+    }).status).toBe(2);
+    expect(run({ max_results: 1, time_min: "2026-08-29T00:00:00.000Z" }).status).toBe(2);
+    expect(run(validEventRead).status).toBe(0);
+    expect(run(validEventRead).status).toBe(2);
+    const calendarGuardPath = join(dir, "calendar-guard.mjs");
+    writeFileSync(calendarGuardPath, buildSharingGuardSource({
+      connector: "google_calendar",
+      allowedTools: ["list_calendars"],
+      readGuard: { maxResults: 1, maxWindowHours: 24 },
+    }, join(dir, "calendar-audit.jsonl")));
+    const calendarList = spawnSync(process.execPath, [calendarGuardPath], {
+      input: JSON.stringify({
+        hook_event_name: "PreToolUse",
+        tool_name: "mcp__google_calendar__list_calendars",
+        tool_input: { max_results: 1 },
+      }),
+      encoding: "utf8",
+    });
+    expect(calendarList.status).toBe(0);
+  });
+
   it("fails a Codex connector run when the CLI does not execute the project hook", async () => {
     const source = mkdtempSync(join(tmpdir(), "yulu-fake-codex-"));
     tempDirs.push(source);

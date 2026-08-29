@@ -7,6 +7,7 @@ import { LanguageProvider } from "../../../web/src/i18n/LanguageProvider.js";
 const onboarding = vi.hoisted(() => ({
   adoptConversation: vi.fn(async () => ({})),
   adoptCalendarSource: vi.fn(async () => ({})),
+  adoptAgentCalendarConnector: vi.fn(async () => ({})),
   deferOptional: vi.fn(async () => ({})),
   deferActivation: vi.fn(async () => ({})),
   invalidate: vi.fn(async () => ({})),
@@ -55,6 +56,14 @@ const onboarding = vi.hoisted(() => ({
         readiness: { state: "not_tested", detail: "Not tested" },
         isNew: true,
       },
+      {
+        id: "agent-calendar-connector",
+        contractVersion: "agent-calendar-connector-v1",
+        href: "/settings/integrations#agent-calendar-connector",
+        outcome: null,
+        readiness: { state: "ready", detail: "Calendar connector read access verified" },
+        isNew: true,
+      },
     ],
   },
 }));
@@ -71,6 +80,9 @@ vi.mock("../../../web/src/trpc.js", () => ({
       },
       adoptCalendarSource: {
         useMutation: () => ({ mutateAsync: onboarding.adoptCalendarSource, isPending: false }),
+      },
+      adoptAgentCalendarConnector: {
+        useMutation: () => ({ mutateAsync: onboarding.adoptAgentCalendarConnector, isPending: false }),
       },
       deferActivationJourney: {
         useMutation: () => ({ mutateAsync: onboarding.deferActivation, isPending: false }),
@@ -100,6 +112,7 @@ afterEach(() => {
   onboarding.deferOptional.mockClear();
   onboarding.adoptConversation.mockClear();
   onboarding.adoptCalendarSource.mockClear();
+  onboarding.adoptAgentCalendarConnector.mockClear();
   onboarding.deferActivation.mockClear();
   onboarding.invalidate.mockClear();
 });
@@ -166,5 +179,18 @@ describe("/onboarding", () => {
 
     expect(onboarding.adoptCalendarSource).toHaveBeenCalledWith();
     expect(onboarding.invalidate).toHaveBeenCalledOnce();
+  });
+
+  it("opens and adopts the Agent Calendar Connector independently", async () => {
+    const user = userEvent.setup();
+    renderRoute();
+
+    const card = screen.getByTestId("onboarding-capability-agent-calendar-connector");
+    expect(card.querySelector('a[href="/settings/integrations#agent-calendar-connector"]')).not.toBeNull();
+    await user.click(screen.getByRole("button", { name: "Adopt proven Agent Calendar Connector" }));
+
+    expect(onboarding.adoptAgentCalendarConnector).toHaveBeenCalledWith();
+    expect(onboarding.invalidate).toHaveBeenCalledOnce();
+    expect(onboarding.deferOptional).not.toHaveBeenCalled();
   });
 });
