@@ -18,7 +18,7 @@ for candidate in \
   "$(command -v node || true)"; do
   if [[ -n "$candidate" && -x "$candidate" ]] && (
     cd "$SCRIPT_DIR/yulu_ui"
-    "$candidate" -e 'require("better-sqlite3")'
+    "$candidate" -e "const Database=require('better-sqlite3'); const db=new Database(':memory:'); db.close();"
   ) >/dev/null 2>&1; then
     NODE_BIN="$candidate"
     break

@@ -209,9 +209,48 @@ def test_shell_authenticates_host_and_capture_uses_stable_runtime_paths():
     assert 'appendingPathComponent("Contents/Resources/runtime/yulu/scripts"' in capture
 
 
+def test_development_smoke_probes_the_native_better_sqlite_binding():
+    smoke = (SCRIPTS / "smoke_yulu_app.sh").read_text(encoding="utf-8")
+
+    assert "const Database=require('better-sqlite3')" in smoke
+    assert "const db=new Database(':memory:'); db.close()" in smoke
+
+
+def development_shell_smoke_runtime_available() -> bool:
+    if shutil.which("swiftc") is None:
+        return False
+
+    for candidate in (
+        os.environ.get("YULU_DEV_NODE"),
+        "/opt/homebrew/opt/node@24/bin/node",
+        shutil.which("node"),
+    ):
+        if not candidate or not Path(candidate).is_file() or not os.access(candidate, os.X_OK):
+            continue
+        try:
+            result = subprocess.run(
+                [
+                    candidate,
+                    "-e",
+                    "const Database=require('better-sqlite3'); "
+                    "const db=new Database(':memory:'); db.close();",
+                ],
+                cwd=SCRIPTS / "yulu_ui",
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=5,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        if result.returncode == 0:
+            return True
+    return False
+
+
 @pytest.mark.skipif(
-    shutil.which("swiftc") is None or shutil.which("node") is None,
-    reason="development Yulu.app smoke requires Swift and Node",
+    not development_shell_smoke_runtime_available(),
+    reason="development Yulu.app smoke requires Swift and Node with better-sqlite3",
 )
 def test_development_shell_reaches_a_healthy_bundled_host():
     result = subprocess.run(
@@ -227,6 +266,18 @@ def test_development_shell_reaches_a_healthy_bundled_host():
     assert report["status"] == "ok"
     assert report["hostEntry"].endswith("Yulu.app/Contents/Resources/Host/server.js")
     assert report["captureStarted"] is False
+
+
+def test_ci_runs_development_shell_smoke_after_node_dependencies_and_build():
+    workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    node_job = workflow.split("  yulu_ui:\n", 1)[1]
+
+    install = node_job.index("      - name: Install dependencies\n")
+    build = node_job.index("      - name: Build\n")
+    smoke = node_job.index("      - name: Development Yulu.app bundled Host smoke\n")
+
+    assert install < build < smoke
+    assert "        run: bash ../smoke_yulu_app.sh\n" in node_job[smoke:]
 
 
 def test_release_gates_cover_the_shell_and_nested_capture():

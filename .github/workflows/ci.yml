@@ -207,3 +207,6 @@ jobs:
           test -d dist/web/assets
           ls -la dist/web/assets | head -10
           echo "yulu_ui build artifacts OK"
+
+      - name: Development Yulu.app bundled Host smoke
+        run: bash ../smoke_yulu_app.sh
