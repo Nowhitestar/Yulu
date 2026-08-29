@@ -84,6 +84,7 @@ jobs:
           done
           python3 -m py_compile packaging/scripts/build_local_caption_runtime_pack.py
           python3 -m py_compile packaging/scripts/validate_runtime_archive.py
+          python3 -m py_compile packaging/scripts/runtime_node_version.py
 
       - name: Python unit tests
         run: |
@@ -94,12 +95,27 @@ jobs:
           python -m pip install pytest
           python -m pytest -q
 
+      - name: Read locked Application Runtime Node version
+        id: application-runtime-node
+        working-directory: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          version="$(python3 packaging/scripts/runtime_node_version.py packaging/runtime-lock.json)"
+          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
+
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "24"
+          node-version: ${{ steps.application-runtime-node.outputs.version }}
           cache: npm
           cache-dependency-path: yulu/scripts/yulu_ui/package-lock.json
+
+      - name: Verify Application Runtime Node toolchain
+        env:
+          EXPECTED_NODE_VERSION: ${{ steps.application-runtime-node.outputs.version }}
+        run: |
+          set -euo pipefail
+          test "$(node --version)" = "v$EXPECTED_NODE_VERSION"
 
       - name: Node typecheck, tests, and build
         working-directory: yulu/scripts/yulu_ui

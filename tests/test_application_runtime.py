@@ -572,6 +572,30 @@ def test_release_pipeline_builds_and_rechecks_the_locked_application_runtime():
     assert '\n    "node_modules"\n' not in package
 
 
+def test_application_runtime_workflows_build_native_addons_with_exact_locked_node():
+    workflows = (
+        (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8").split("  yulu_ui:\n", 1)[1],
+        (ROOT / ".github/workflows/release-publish.yml").read_text(encoding="utf-8"),
+    )
+
+    for workflow in workflows:
+        lock = workflow.index("      - name: Read locked Application Runtime Node version\n")
+        setup = workflow.index("        uses: actions/setup-node@v4\n", lock)
+        verify = workflow.index("      - name: Verify Application Runtime Node toolchain\n", setup)
+        install = workflow.index("npm ci", verify)
+
+        assert lock < setup < verify < install
+        contract = workflow[lock:install]
+        assert "packaging/runtime-lock.json" in contract
+        assert "id: application-runtime-node" in contract
+        assert "working-directory: ${{ github.workspace }}" in contract
+        assert "python3 packaging/scripts/runtime_node_version.py packaging/runtime-lock.json" in contract
+        assert "node-version: ${{ steps.application-runtime-node.outputs.version }}" in contract
+        assert "EXPECTED_NODE_VERSION: ${{ steps.application-runtime-node.outputs.version }}" in contract
+        assert 'test "$(node --version)" = "v$EXPECTED_NODE_VERSION"' in contract
+        assert '"v${{ steps.application-runtime-node.outputs.version }}"' not in contract
+
+
 def test_application_runtime_exec_probes_exact_versions_and_native_addon_abi(tmp_path: Path):
     app, overrides = runtime_fixture(tmp_path)
     prepared = subprocess.run(
