@@ -7,6 +7,8 @@ import subprocess
 import zipfile
 from pathlib import Path
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -671,6 +673,192 @@ def test_default_build_allows_expected_app_bundle_outputs(tmp_path):
 
     assert result.returncode == 0, result.stderr + result.stdout
     assert (tmp_path / "dist" / "yulu-macos-arm64-v0.5.0-dev.zip").exists()
+
+
+def test_default_build_allows_exact_untracked_nested_capture_outputs(tmp_path):
+    project = make_project(tmp_path, git_marker=None)
+    write_file(project / ".gitignore", "audio_daemon\nCodeResources\n")
+    capture_contents = (
+        project
+        / "yulu"
+        / "scripts"
+        / "Yulu.app"
+        / "Contents"
+        / "Helpers"
+        / "YuluCapture.app"
+        / "Contents"
+    )
+    write_file(capture_contents / "Info.plist", "tracked plist\n")
+    build_script = project / "yulu" / "scripts" / "build_audio_daemon.sh"
+    write_file(
+        build_script,
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        "capture=\"$(dirname \"$0\")/Yulu.app/Contents/Helpers/YuluCapture.app/Contents\"\n"
+        "mkdir -p \"$capture/MacOS\" \"$capture/_CodeSignature\"\n"
+        "printf 'binary\\n' > \"$capture/MacOS/audio_daemon\"\n"
+        "printf 'signature\\n' > \"$capture/_CodeSignature/CodeResources\"\n",
+    )
+    build_script.chmod(0o755)
+
+    init = run(["git", "init"], cwd=project)
+    assert init.returncode == 0, init.stderr + init.stdout
+    add = run(["git", "add", "."], cwd=project)
+    assert add.returncode == 0, add.stderr + add.stdout
+    commit = run(
+        [
+            "git",
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "-m",
+            "fixture",
+        ],
+        cwd=project,
+    )
+    assert commit.returncode == 0, commit.stderr + commit.stdout
+
+    result = run(
+        ["bash", "packaging/scripts/package.sh", "v0.5.0-dev", "--dist", str(tmp_path / "dist")],
+        cwd=project,
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert (tmp_path / "dist" / "yulu-macos-arm64-v0.5.0-dev.zip").exists()
+
+
+@pytest.mark.parametrize("unexpected_name", ["unexpected-helper", "unexpected.key"])
+def test_default_build_refuses_unexpected_file_inside_nested_capture_output_directory(
+    tmp_path, unexpected_name
+):
+    project = make_project(tmp_path, git_marker=None)
+    write_file(project / ".gitignore", "*.key\n")
+    capture_contents = (
+        project
+        / "yulu"
+        / "scripts"
+        / "Yulu.app"
+        / "Contents"
+        / "Helpers"
+        / "YuluCapture.app"
+        / "Contents"
+    )
+    write_file(capture_contents / "Info.plist", "tracked plist\n")
+    build_script = project / "yulu" / "scripts" / "build_audio_daemon.sh"
+    write_file(
+        build_script,
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        "capture=\"$(dirname \"$0\")/Yulu.app/Contents/Helpers/YuluCapture.app/Contents\"\n"
+        "mkdir -p \"$capture/MacOS\" \"$capture/_CodeSignature\"\n"
+        "printf 'binary\\n' > \"$capture/MacOS/audio_daemon\"\n"
+        f"printf 'unexpected\\n' > \"$capture/MacOS/{unexpected_name}\"\n"
+        "printf 'signature\\n' > \"$capture/_CodeSignature/CodeResources\"\n",
+    )
+    build_script.chmod(0o755)
+
+    init = run(["git", "init"], cwd=project)
+    assert init.returncode == 0, init.stderr + init.stdout
+    add = run(["git", "add", "."], cwd=project)
+    assert add.returncode == 0, add.stderr + add.stdout
+    commit = run(
+        [
+            "git",
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "-m",
+            "fixture",
+        ],
+        cwd=project,
+    )
+    assert commit.returncode == 0, commit.stderr + commit.stdout
+
+    result = run(
+        ["bash", "packaging/scripts/package.sh", "v0.5.0-dev", "--dist", str(tmp_path / "dist")],
+        cwd=project,
+    )
+
+    assert result.returncode != 0
+    assert "Worktree is dirty after build" in result.stderr
+    assert f"YuluCapture.app/Contents/MacOS/{unexpected_name}" in result.stderr
+    assert not (tmp_path / "dist" / "yulu-macos-arm64-v0.5.0-dev.zip").exists()
+
+
+def test_default_build_fails_closed_when_ignored_output_inventory_fails(tmp_path):
+    project = make_project(tmp_path, git_marker=None)
+    write_file(project / ".gitignore", "*.key\n")
+    capture_contents = (
+        project
+        / "yulu"
+        / "scripts"
+        / "Yulu.app"
+        / "Contents"
+        / "Helpers"
+        / "YuluCapture.app"
+        / "Contents"
+    )
+    write_file(capture_contents / "Info.plist", "tracked plist\n")
+    build_script = project / "yulu" / "scripts" / "build_audio_daemon.sh"
+    write_file(
+        build_script,
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        "capture=\"$(dirname \"$0\")/Yulu.app/Contents/Helpers/YuluCapture.app/Contents\"\n"
+        "mkdir -p \"$capture/MacOS\" \"$capture/_CodeSignature\"\n"
+        "printf 'binary\\n' > \"$capture/MacOS/audio_daemon\"\n"
+        "printf 'hidden\\n' > \"$capture/MacOS/unexpected.key\"\n"
+        "printf 'signature\\n' > \"$capture/_CodeSignature/CodeResources\"\n",
+    )
+    build_script.chmod(0o755)
+
+    init = run(["git", "init"], cwd=project)
+    assert init.returncode == 0, init.stderr + init.stdout
+    add = run(["git", "add", "."], cwd=project)
+    assert add.returncode == 0, add.stderr + add.stdout
+    commit = run(
+        [
+            "git",
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "-m",
+            "fixture",
+        ],
+        cwd=project,
+    )
+    assert commit.returncode == 0, commit.stderr + commit.stdout
+
+    real_git = shutil.which("git")
+    assert real_git is not None
+    fake_bin = tmp_path / "bin"
+    fake_git = fake_bin / "git"
+    write_file(
+        fake_git,
+        "#!/usr/bin/env bash\n"
+        "if [[ \"$*\" == *\"ls-files --others --ignored --exclude-standard\"* ]]; then\n"
+        "  exit 71\n"
+        "fi\n"
+        f'exec "{real_git}" "$@"\n',
+    )
+    fake_git.chmod(0o755)
+    dist = tmp_path / "dist"
+
+    result = run(
+        ["bash", "packaging/scripts/package.sh", "v0.5.0-dev", "--dist", str(dist)],
+        cwd=project,
+        env={"PATH": f"{fake_bin}:{os.environ['PATH']}"},
+    )
+
+    assert result.returncode != 0
+    assert "Failed to inspect ignored Capture build outputs" in result.stderr
+    assert not (dist / "yulu-macos-arm64-v0.5.0-dev.zip").exists()
 
 
 def test_default_build_refuses_unexpected_dirty_outputs(tmp_path):

@@ -70,6 +70,10 @@ ALLOWED_BUILD_OUTPUTS=(
     "yulu/scripts/Yulu.app/Contents/Helpers/YuluCapture.app/Contents/_CodeSignature/CodeResources"
     "yulu/scripts/Yulu.app/Contents/_CodeSignature/CodeResources"
 )
+PROTECTED_BUILD_OUTPUT_DIRS=(
+    "yulu/scripts/Yulu.app/Contents/Helpers/YuluCapture.app/Contents/MacOS"
+    "yulu/scripts/Yulu.app/Contents/Helpers/YuluCapture.app/Contents/_CodeSignature"
+)
 
 rsync_exclude_args() {
     local pattern
@@ -112,10 +116,7 @@ check_clean_worktree() {
     fi
 
     local dirty
-    dirty="$(git -C "$ROOT" status --porcelain)"
-    if [[ -z "$dirty" ]]; then
-        return 0
-    fi
+    dirty="$(git -C "$ROOT" status --porcelain --untracked-files=all)"
 
     local unexpected=()
     local line path
@@ -127,6 +128,25 @@ check_clean_worktree() {
         fi
         unexpected+=("$line")
     done <<< "$dirty"
+
+    # `git status` deliberately omits ignored files. Inspect the generated
+    # Capture directories separately so an ignored sibling cannot ride along
+    # in the release archive without appearing in the exact output allowlist.
+    local ignored_outputs
+    if ! ignored_outputs="$(
+        git -C "$ROOT" ls-files --others --ignored --exclude-standard -- \
+            "${PROTECTED_BUILD_OUTPUT_DIRS[@]}"
+    )"; then
+        echo "Failed to inspect ignored Capture build outputs; refusing to package release assets." >&2
+        exit 1
+    fi
+    while IFS= read -r path; do
+        [[ -n "$path" ]] || continue
+        if [[ "$phase" == "after build" ]] && is_allowed_build_output "$path"; then
+            continue
+        fi
+        unexpected+=("!! $path")
+    done <<< "$ignored_outputs"
 
     if ((${#unexpected[@]} > 0)); then
         echo "Worktree is dirty $phase; refusing to package release assets." >&2
