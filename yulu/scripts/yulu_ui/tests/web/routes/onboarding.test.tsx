@@ -8,6 +8,7 @@ const onboarding = vi.hoisted(() => ({
   adoptConversation: vi.fn(async () => ({})),
   adoptCalendarSource: vi.fn(async () => ({})),
   adoptAgentCalendarConnector: vi.fn(async () => ({})),
+  adoptSharing: vi.fn(async () => ({})),
   deferOptional: vi.fn(async () => ({})),
   deferActivation: vi.fn(async () => ({})),
   invalidate: vi.fn(async () => ({})),
@@ -84,6 +85,9 @@ vi.mock("../../../web/src/trpc.js", () => ({
       adoptAgentCalendarConnector: {
         useMutation: () => ({ mutateAsync: onboarding.adoptAgentCalendarConnector, isPending: false }),
       },
+      adoptSharing: {
+        useMutation: () => ({ mutateAsync: onboarding.adoptSharing, isPending: false }),
+      },
       deferActivationJourney: {
         useMutation: () => ({ mutateAsync: onboarding.deferActivation, isPending: false }),
       },
@@ -113,6 +117,7 @@ afterEach(() => {
   onboarding.adoptConversation.mockClear();
   onboarding.adoptCalendarSource.mockClear();
   onboarding.adoptAgentCalendarConnector.mockClear();
+  onboarding.adoptSharing.mockClear();
   onboarding.deferActivation.mockClear();
   onboarding.invalidate.mockClear();
 });
@@ -192,5 +197,25 @@ describe("/onboarding", () => {
     expect(onboarding.adoptAgentCalendarConnector).toHaveBeenCalledWith();
     expect(onboarding.invalidate).toHaveBeenCalledOnce();
     expect(onboarding.deferOptional).not.toHaveBeenCalled();
+  });
+
+  it("opens the authoritative Sharing surface and explicitly adopts its verified Test Share", async () => {
+    const sharing = onboarding.data.optionalCapabilities[1]!;
+    const savedOutcome = sharing.outcome;
+    const savedReadiness = sharing.readiness;
+    sharing.outcome = null as never;
+    sharing.readiness = { state: "ready", detail: "Current Test Share receipt verified" };
+    const user = userEvent.setup();
+    renderRoute();
+
+    const card = screen.getByTestId("onboarding-capability-sharing");
+    expect(card.querySelector('a[href="/settings/sharing"]')).not.toBeNull();
+    await user.click(screen.getByRole("button", { name: "Adopt proven Sharing" }));
+
+    expect(onboarding.adoptSharing).toHaveBeenCalledWith();
+    expect(onboarding.invalidate).toHaveBeenCalledOnce();
+    expect(onboarding.deferOptional).not.toHaveBeenCalled();
+    sharing.outcome = savedOutcome;
+    sharing.readiness = savedReadiness;
   });
 });

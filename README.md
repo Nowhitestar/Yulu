@@ -50,7 +50,9 @@ normal, nonblocking navigation. Adopted or deferred optional outcomes and prior
 Onboarding Completion stay durable across restarts and onboarding versions;
 current readiness is shown separately and can need attention without revoking
 that history. Onboarding links to existing authoritative Settings surfaces and
-never copies provider, connector, OAuth, or token configuration.
+never copies provider, connector, OAuth, or token configuration. Sharing is
+adopted only when you explicitly adopt the current verified, meeting-free Test
+Share from **Settings → Sharing**; deferring it never changes current readiness.
 
 ## What you can do
 

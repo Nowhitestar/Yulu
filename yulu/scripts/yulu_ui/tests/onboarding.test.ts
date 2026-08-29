@@ -89,6 +89,27 @@ function calendarSourceEvidence(reference = `calendar-source:${"d".repeat(64)}:2
   };
 }
 
+function sharingEvidence(actionId = "00000000-0000-4000-8000-000000000157") {
+  return {
+    kind: "sharing-test-share",
+    reference: `sharing-test-share:${actionId}`,
+    snapshot: {
+      capability: "sharing" as const,
+      connectionId: "codex",
+      adapter: "codex" as const,
+      connectionRevision: "f".repeat(64),
+      connector: "notion" as const,
+      destination: "Product Notes",
+      destinationSavedAt: "2026-08-29T04:00:00.000Z",
+      actionId,
+      contentSha256: "6efa1b2d90a7d7946bd0942ebdb55bef26b6ee71b37489b77a9592b723f9ebde",
+      receiptId: "page-adoption-1",
+      receiptUrl: "https://notion.so/page-adoption-1",
+      verifiedAt: "2026-08-29T04:01:00.000Z",
+    },
+  };
+}
+
 describe("Onboarding durable state", () => {
   let root = "";
   let host: HostStore | undefined;
@@ -181,6 +202,99 @@ describe("Onboarding durable state", () => {
     store.close();
     host = new HostStore(dbPath);
     expect(host.listOptionalCapabilityOutcomes()).toContainEqual(adopted);
+  });
+
+  it("persists only exact verified meeting-free Test Share adoption evidence", () => {
+    const store = createHost();
+    const proof = sharingEvidence();
+    expect(() => store.recordOptionalCapabilityOutcome({
+      onboardingVersion: "phase-13-v1",
+      capability: "sharing",
+      contractVersion: "sharing-v1",
+      outcome: "adopted",
+      evidence: proof,
+    })).toThrow(/Sharing.*exact verified Test Share/i);
+
+    store.upsertAgentConnectionRecord({
+      id: "codex",
+      kind: "supported-agent",
+      adapter: "codex",
+      label: "Codex",
+      lifecycle: "available",
+      settings: { executablePath: "/fake/codex" },
+    });
+    store.selectSharingConfiguration({ connectionId: "codex", connector: "notion" });
+    store.saveShareDestination({
+      connectionId: "codex",
+      connector: "notion",
+      destination: "Product Notes",
+    });
+    const persisted = store.getSharingConfiguration()!;
+    const begun = store.beginSharingTestAction({
+      id: proof.snapshot.actionId,
+      connectionId: "codex",
+      connectionAdapter: "codex",
+      connectionLabel: "Codex",
+      connector: "notion",
+      destination: "Product Notes",
+      contentSha256: proof.snapshot.contentSha256,
+      duplicateConfirmed: false,
+    });
+    const exactProof = {
+      ...proof,
+      snapshot: {
+        ...proof.snapshot,
+        connectionRevision: begun.action.connectionRevision,
+        destinationSavedAt: persisted.destinationSavedAt!,
+      },
+    };
+    store.markSharingTestActionVerified(exactProof.snapshot.actionId, {
+      receiptId: exactProof.snapshot.receiptId,
+      receiptUrl: exactProof.snapshot.receiptUrl,
+      detail: "Connector read-back matched the exact Test Share destination, content, and receipt",
+    });
+    const verified = store.getSharingConfiguration()!;
+    const adoption = {
+      ...exactProof,
+      snapshot: { ...exactProof.snapshot, verifiedAt: verified.testReceipt!.verifiedAt },
+    };
+
+    const adopted = store.recordOptionalCapabilityOutcome({
+      onboardingVersion: "phase-13-v1",
+      capability: "sharing",
+      contractVersion: "sharing-v1",
+      outcome: "adopted",
+      evidence: adoption,
+    });
+    expect(adopted).toMatchObject({
+      capability: "sharing",
+      outcome: "adopted",
+      evidence: {
+        kind: "sharing-test-share",
+        reference: `sharing-test-share:${exactProof.snapshot.actionId}`,
+        snapshot: {
+          connectionId: "codex",
+          adapter: "codex",
+          connector: "notion",
+          destination: "Product Notes",
+          actionId: exactProof.snapshot.actionId,
+          contentSha256: exactProof.snapshot.contentSha256,
+          receiptId: "page-adoption-1",
+        },
+      },
+    });
+
+    const dbPath = join(root, "host.sqlite");
+    store.close();
+    host = new HostStore(dbPath);
+    expect(host.listOptionalCapabilityOutcomes()).toContainEqual(adopted);
+    host.db.prepare(`
+      UPDATE optional_capability_outcomes
+      SET evidence_reference = 'sharing-test-share:another-action'
+      WHERE capability = 'sharing'
+    `).run();
+    expect(host.listOptionalCapabilityOutcomes().find((outcome) => outcome.capability === "sharing"))
+      .toBeUndefined();
   });
 
   it("fails closed when stored Calendar Source adoption evidence is malformed", () => {

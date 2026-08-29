@@ -183,6 +183,20 @@ export const onboardingRouter = router({
     }, CURRENT_ONBOARDING_COMPLETION_REQUIREMENTS);
     return { outcome, proof };
   }),
+  adoptSharing: uiMutationProcedure.mutation(({ ctx }) => {
+    if (!ctx.sharing) throw new Error("Sharing configuration is unavailable");
+    const proof = ctx.sharing.adoptionEvidence();
+    const outcome = ctx.host.recordOptionalCapabilityOutcome({
+      onboardingVersion: CURRENT_ONBOARDING_MANIFEST.version,
+      capability: "sharing",
+      contractVersion: CURRENT_ONBOARDING_MANIFEST.optionalCapabilities.find(
+        (capability) => capability.id === "sharing",
+      )!.contractVersion,
+      outcome: "adopted",
+      evidence: proof,
+    }, CURRENT_ONBOARDING_COMPLETION_REQUIREMENTS);
+    return { outcome, proof };
+  }),
   deferOptionalCapability: uiMutationProcedure
     .input(z.object({ capability: optionalCapability }).strict())
     .mutation(({ ctx, input }) => {

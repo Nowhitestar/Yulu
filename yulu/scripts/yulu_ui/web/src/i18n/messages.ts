@@ -144,6 +144,7 @@ export const en: Messages = {
   "onboarding.action.adoptConversation": "Adopt proven Conversation",
   "onboarding.action.adoptCalendarSource": "Adopt proven Calendar Source",
   "onboarding.action.adoptAgentCalendarConnector": "Adopt proven Agent Calendar Connector",
+  "onboarding.action.adoptSharing": "Adopt proven Sharing",
   "onboarding.action.defer": "Defer this capability",
   "onboarding.actionFailed": "Onboarding action failed: {error}",
 
@@ -1385,6 +1386,7 @@ export const zh: Messages = {
   "onboarding.action.adoptConversation": "采用已验证的对话能力",
   "onboarding.action.adoptCalendarSource": "采用已验证的日历来源",
   "onboarding.action.adoptAgentCalendarConnector": "采用已验证的 Agent 日历连接器",
+  "onboarding.action.adoptSharing": "采用已验证的分享能力",
   "onboarding.action.defer": "暂缓这项能力",
   "onboarding.actionFailed": "新手引导操作失败：{error}",
 

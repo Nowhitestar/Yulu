@@ -76,6 +76,24 @@ describe("onboarding router", () => {
     let sharingStatus: "ready" | "failed" | "untested" | "unknown" = "ready";
     let calendarStatus: "ready" | "failed" | "untested" = "untested";
     let connectorStatus: "ready" | "failed" | "untested" = "untested";
+    const sharingAdoptionEvidence = vi.fn(() => ({
+      kind: "sharing-test-share" as const,
+      reference: "sharing-test-share:00000000-0000-4000-8000-000000000157",
+      snapshot: {
+        capability: "sharing" as const,
+        connectionId: "codex",
+        adapter: "codex" as const,
+        connectionRevision: "f".repeat(64),
+        connector: "notion" as const,
+        destination: "Product Notes",
+        destinationSavedAt: "2026-08-29T04:00:00.000Z",
+        actionId: "00000000-0000-4000-8000-000000000157",
+        contentSha256: "6efa1b2d90a7d7946bd0942ebdb55bef26b6ee71b37489b77a9592b723f9ebde",
+        receiptId: "page-adoption-1",
+        receiptUrl: "https://notion.so/page-adoption-1",
+        verifiedAt: "2026-08-29T04:01:00.000Z",
+      },
+    }));
     const calendarSnapshot = {
       capability: "calendar-source" as const,
       source: "macos" as const,
@@ -141,6 +159,7 @@ describe("onboarding router", () => {
             detail: sharingStatus === "ready" ? "Current Test Share is ready" : "Current Sharing needs attention",
           },
         })),
+        adoptionEvidence: sharingAdoptionEvidence,
       },
       calendarSources: {
         view: vi.fn(() => ({
@@ -203,6 +222,7 @@ describe("onboarding router", () => {
       setSharingStatus: (status: typeof sharingStatus) => { sharingStatus = status; },
       setCalendarStatus: (status: typeof calendarStatus) => { calendarStatus = status; },
       setConnectorStatus: (status: typeof connectorStatus) => { connectorStatus = status; },
+      sharingAdoptionEvidence,
     };
   }
 
@@ -418,6 +438,117 @@ describe("onboarding router", () => {
         outcome: expect.objectContaining({ outcome: "adopted" }),
       }),
     ]));
+  });
+
+  it("adopts Sharing only from the authoritative verified Test Share evidence", async () => {
+    const { caller, setSharingStatus, sharingAdoptionEvidence } = setup();
+    host!.upsertAgentConnectionRecord({
+      id: "codex",
+      kind: "supported-agent",
+      adapter: "codex",
+      label: "Codex",
+      lifecycle: "available",
+      settings: { executablePath: "/fake/codex" },
+    });
+    host!.selectSharingConfiguration({ connectionId: "codex", connector: "notion" });
+    host!.saveShareDestination({
+      connectionId: "codex",
+      connector: "notion",
+      destination: "Product Notes",
+    });
+    const begun = host!.beginSharingTestAction({
+      id: "00000000-0000-4000-8000-000000000157",
+      connectionId: "codex",
+      connectionAdapter: "codex",
+      connectionLabel: "Codex",
+      connector: "notion",
+      destination: "Product Notes",
+      contentSha256: "6efa1b2d90a7d7946bd0942ebdb55bef26b6ee71b37489b77a9592b723f9ebde",
+      duplicateConfirmed: false,
+    });
+    host!.markSharingTestActionVerified("00000000-0000-4000-8000-000000000157", {
+      receiptId: "page-adoption-1",
+      receiptUrl: "https://notion.so/page-adoption-1",
+      detail: "Connector read-back matched the exact Test Share destination, content, and receipt",
+    });
+    const saved = host!.getSharingConfiguration()!;
+    sharingAdoptionEvidence.mockReturnValue({
+      kind: "sharing-test-share",
+      reference: "sharing-test-share:00000000-0000-4000-8000-000000000157",
+      snapshot: {
+        capability: "sharing",
+        connectionId: "codex",
+        adapter: "codex",
+        connectionRevision: begun.action.connectionRevision,
+        connector: "notion",
+        destination: "Product Notes",
+        destinationSavedAt: saved.destinationSavedAt!,
+        actionId: "00000000-0000-4000-8000-000000000157",
+        contentSha256: "6efa1b2d90a7d7946bd0942ebdb55bef26b6ee71b37489b77a9592b723f9ebde",
+        receiptId: "page-adoption-1",
+        receiptUrl: "https://notion.so/page-adoption-1",
+        verifiedAt: saved.testReceipt!.verifiedAt,
+      },
+    });
+    setSharingStatus("ready");
+
+    await expect(caller().adoptSharing()).resolves.toMatchObject({
+      outcome: {
+        capability: "sharing",
+        contractVersion: "sharing-v1",
+        outcome: "adopted",
+        evidence: {
+          kind: "sharing-test-share",
+          reference: "sharing-test-share:00000000-0000-4000-8000-000000000157",
+          snapshot: {
+            connectionId: "codex",
+            connector: "notion",
+            destination: "Product Notes",
+            actionId: "00000000-0000-4000-8000-000000000157",
+            receiptId: "page-adoption-1",
+          },
+        },
+      },
+    });
+    expect(sharingAdoptionEvidence).toHaveBeenCalledOnce();
+
+    setSharingStatus("untested");
+    await expect(caller().status()).resolves.toMatchObject({
+      optionalCapabilities: expect.arrayContaining([expect.objectContaining({
+        id: "sharing",
+        outcome: expect.objectContaining({ outcome: "adopted" }),
+        readiness: { state: "not_tested", detail: "Current Sharing needs attention" },
+      })]),
+    });
+  });
+
+  it("defers Sharing without claiming proof or changing current readiness", async () => {
+    const { caller, setSharingStatus, sharingAdoptionEvidence } = setup();
+    setSharingStatus("ready");
+
+    await expect(caller().deferOptionalCapability({ capability: "sharing" })).resolves.toMatchObject({
+      capability: "sharing",
+      contractVersion: "sharing-v1",
+      outcome: "deferred",
+      evidence: null,
+    });
+    await expect(caller().status()).resolves.toMatchObject({
+      optionalCapabilities: expect.arrayContaining([expect.objectContaining({
+        id: "sharing",
+        outcome: expect.objectContaining({ outcome: "deferred", evidence: null }),
+        readiness: { state: "ready", detail: "Current Test Share is ready" },
+      })]),
+    });
+    expect(sharingAdoptionEvidence).not.toHaveBeenCalled();
+  });
+
+  it("requires the process-local UI bearer before adopting Sharing", async () => {
+    const { ctx, caller, sharingAdoptionEvidence } = setup();
+    ctx.uiMutationAuthorized = false;
+
+    await expect(caller().adoptSharing()).rejects.toMatchObject({ code: "UNAUTHORIZED" });
+    expect(sharingAdoptionEvidence).not.toHaveBeenCalled();
+    expect(host!.listOptionalCapabilityOutcomes()).toEqual([]);
   });
 
   it("acknowledges a fresh automatic entry exactly once", async () => {

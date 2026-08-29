@@ -16,6 +16,7 @@ describe("SharingConfiguration", () => {
   let actionNumber = 0;
 
   afterEach(() => {
+    vi.useRealTimers();
     host?.close();
     host = undefined;
     actionNumber = 0;
@@ -229,6 +230,50 @@ describe("SharingConfiguration", () => {
     );
   });
 
+  it("exposes exact meeting-free Test Share evidence only after the current receipt is verified", async () => {
+    const { adapter, sharing } = setup();
+    vi.mocked(adapter.discover).mockResolvedValue({
+      options: [{ label: "Product Notes", value: "Product Notes" }],
+      detail: "Found Product Notes",
+    });
+    vi.mocked(adapter.probe).mockResolvedValue({ detail: "Notion read access verified" });
+    vi.mocked(adapter.testShare).mockResolvedValue({
+      destination: "Product Notes",
+      receiptId: "page-adoption-1",
+      receiptUrl: "https://notion.so/page-adoption-1",
+    });
+    vi.mocked(adapter.verifyReceipt).mockImplementation(async (input) => input.receipt);
+
+    sharing.select({ connectionId: "codex", connector: "notion" });
+    await sharing.discover();
+    expect(() => sharing.adoptionEvidence()).toThrow(/verified Test Share/i);
+    await sharing.probe();
+    sharing.saveDestination({ destination: "Product Notes" });
+    expect(() => sharing.adoptionEvidence()).toThrow(/verified Test Share/i);
+
+    const action = testAction(false);
+    await sharing.testShare(action);
+    expect(sharing.adoptionEvidence()).toEqual({
+      kind: "sharing-test-share",
+      reference: `sharing-test-share:${action.actionId}`,
+      snapshot: {
+        capability: "sharing",
+        connectionId: "codex",
+        adapter: "codex",
+        connectionRevision: expect.stringMatching(/^[a-f0-9]{64}$/),
+        connector: "notion",
+        destination: "Product Notes",
+        destinationSavedAt: expect.any(String),
+        actionId: action.actionId,
+        contentSha256: "6efa1b2d90a7d7946bd0942ebdb55bef26b6ee71b37489b77a9592b723f9ebde",
+        receiptId: "page-adoption-1",
+        receiptUrl: "https://notion.so/page-adoption-1",
+        verifiedAt: expect.any(String),
+      },
+    });
+    expect(JSON.stringify(sharing.adoptionEvidence())).not.toMatch(/recording|transcript|summary/i);
+  });
+
   it("fences an unverifiable receipt as Unknown Outcome until the user abandons it", async () => {
     const { adapter, sharing } = setup();
     vi.mocked(adapter.probe).mockResolvedValue({ detail: "Notion read access verified" });
@@ -253,6 +298,7 @@ describe("SharingConfiguration", () => {
         remediation: expect.stringMatching(/Do not retry.*reconcile or abandon/i),
       },
     });
+    expect(() => sharing.adoptionEvidence()).toThrow(/verified Test Share/i);
     await expect(sharing.testShare(testAction(true))).rejects.toThrow(/Unknown Outcome/);
     expect(adapter.testShare).toHaveBeenCalledTimes(1);
 
@@ -333,6 +379,40 @@ describe("SharingConfiguration", () => {
       connectorReadiness: { status: "failed" },
       sharingReadiness: { status: "failed", receipt: null },
     });
+  });
+
+  it("requires a fresh Test Share when the selected Agent Connection revision changes", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-29T04:00:00.000Z"));
+    const { adapter, host: currentHost, sharing } = setup();
+    vi.mocked(adapter.probe).mockResolvedValue({ detail: "Notion read access verified" });
+    vi.mocked(adapter.testShare).mockResolvedValue({
+      destination: "Product Notes",
+      receiptId: "page-revision-a",
+      receiptUrl: "https://notion.so/page-revision-a",
+    });
+    vi.mocked(adapter.verifyReceipt).mockImplementation(async (input) => input.receipt);
+    sharing.select({ connectionId: "codex", connector: "notion" });
+    await sharing.probe();
+    sharing.saveDestination({ destination: "Product Notes" });
+    await sharing.testShare(testAction(false));
+    expect(sharing.adoptionEvidence().snapshot.adapter).toBe("codex");
+
+    currentHost.upsertAgentConnectionRecord({
+      id: "codex",
+      kind: "supported-agent",
+      adapter: "codex",
+      label: "Codex",
+      lifecycle: "available",
+      settings: { executablePath: "/fake/codex-revision-b" },
+    });
+    await sharing.probe();
+
+    expect(sharing.view().sharingReadiness).toMatchObject({
+      status: "untested",
+      receipt: null,
+    });
+    expect(() => sharing.adoptionEvidence()).toThrow(/current verified Test Share/i);
   });
 
   it("replays one client action id without creating another external write", async () => {

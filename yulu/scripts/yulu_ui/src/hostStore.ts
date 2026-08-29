@@ -6,6 +6,7 @@ import { isTrustedNotionUrl, isValidNotionPageId, notionPageIdentityProblem } fr
 import type { TranscriptionLanguage } from "./realtimeTranscription.js";
 import type { XaiCredentialSource } from "./xaiCredentials.js";
 import type { CalendarSourceEvidenceSnapshot } from "./calendarSources.js";
+import { agentConnectionRevision } from "./agentConnectionRevision.js";
 
 export type AgentTaskState =
   | "queued"
@@ -184,10 +185,26 @@ export interface AgentCalendarConnectorEvidenceSnapshot {
   testedAt: string;
 }
 
+export interface SharingCapabilityEvidenceSnapshot {
+  capability: "sharing";
+  connectionId: string;
+  adapter: "codex" | "claude-code";
+  connectionRevision: string;
+  connector: SharingConnector;
+  destination: string;
+  destinationSavedAt: string;
+  actionId: string;
+  contentSha256: string;
+  receiptId: string;
+  receiptUrl: string;
+  verifiedAt: string;
+}
+
 export type OptionalCapabilityEvidenceSnapshot =
   | ConversationCapabilityEvidenceSnapshot
   | CalendarSourceEvidenceSnapshot
-  | AgentCalendarConnectorEvidenceSnapshot;
+  | AgentCalendarConnectorEvidenceSnapshot
+  | SharingCapabilityEvidenceSnapshot;
 
 export interface OnboardingCompletion {
   version: string;
@@ -334,6 +351,7 @@ export interface SharingTestAction {
   connectionId: string;
   connectionAdapter: string;
   connectionLabel: string;
+  connectionRevision: string;
   connector: SharingConnector;
   destination: string;
   contentSha256: string;
@@ -681,6 +699,52 @@ function secretSafeAgentCalendarConnectorEvidenceSnapshot(
   };
 }
 
+const YULU_TEST_SHARE_SHA256 = "6efa1b2d90a7d7946bd0942ebdb55bef26b6ee71b37489b77a9592b723f9ebde";
+
+function secretSafeSharingEvidenceSnapshot(
+  input: SharingCapabilityEvidenceSnapshot,
+): SharingCapabilityEvidenceSnapshot | null {
+  const raw = input as unknown as Record<string, unknown>;
+  const connectionId = boundedEvidenceString(raw.connectionId, 200)?.trim() || null;
+  const adapter = raw.adapter === "codex" || raw.adapter === "claude-code" ? raw.adapter : null;
+  const connectionRevision = boundedEvidenceString(raw.connectionRevision, 64);
+  const connector = raw.connector === "notion" || raw.connector === "zulip" ? raw.connector : null;
+  const destination = boundedEvidenceString(raw.destination, 500)?.trim() || null;
+  const destinationSavedAt = boundedEvidenceString(raw.destinationSavedAt, 100);
+  const actionId = boundedEvidenceString(raw.actionId, 100);
+  const contentSha256 = boundedEvidenceString(raw.contentSha256, 64);
+  const receiptId = boundedEvidenceString(raw.receiptId, 500);
+  const receiptUrl = boundedEvidenceString(raw.receiptUrl, 2_000);
+  const verifiedAt = boundedEvidenceString(raw.verifiedAt, 100);
+  if (
+    raw.capability !== "sharing" || !connectionId || !adapter ||
+    !connectionRevision || !/^[a-f0-9]{64}$/.test(connectionRevision) ||
+    !connector || !destination || !destinationSavedAt || !actionId ||
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(actionId) ||
+    contentSha256 !== YULU_TEST_SHARE_SHA256 || receiptId === null || receiptUrl === null ||
+    (!receiptId.trim() && !receiptUrl.trim()) || !verifiedAt
+  ) return null;
+  for (const timestamp of [destinationSavedAt, verifiedAt]) {
+    if (Number.isNaN(Date.parse(timestamp)) || new Date(Date.parse(timestamp)).toISOString() !== timestamp) {
+      return null;
+    }
+  }
+  return {
+    capability: "sharing",
+    connectionId,
+    adapter,
+    connectionRevision,
+    connector,
+    destination,
+    destinationSavedAt,
+    actionId,
+    contentSha256,
+    receiptId: receiptId.trim(),
+    receiptUrl: receiptUrl.trim(),
+    verifiedAt,
+  };
+}
+
 function secretSafeOptionalCapabilityEvidenceSnapshot(
   input: OptionalCapabilityEvidenceSnapshot,
 ): OptionalCapabilityEvidenceSnapshot | null {
@@ -690,7 +754,9 @@ function secretSafeOptionalCapabilityEvidenceSnapshot(
       ? secretSafeCalendarSourceEvidenceSnapshot(input)
       : input.capability === "agent-calendar-connector"
         ? secretSafeAgentCalendarConnectorEvidenceSnapshot(input)
-        : null;
+        : input.capability === "sharing"
+          ? secretSafeSharingEvidenceSnapshot(input)
+          : null;
 }
 
 function readOptionalCapabilityEvidenceSnapshot(
@@ -724,6 +790,15 @@ function isExactAgentCalendarConnectorProbeEvidence(
   return snapshot?.capability === "agent-calendar-connector" &&
     kind === "agent-calendar-connector-probe" &&
     reference === `agent-calendar-connector:${snapshot.connectionRevision}:${snapshot.testedAt}`;
+}
+
+function isExactSharingTestShareEvidence(
+  kind: string | null,
+  reference: string | null,
+  snapshot: OptionalCapabilityEvidenceSnapshot | null,
+): snapshot is SharingCapabilityEvidenceSnapshot {
+  return snapshot?.capability === "sharing" && kind === "sharing-test-share" &&
+    reference === `sharing-test-share:${snapshot.actionId}`;
 }
 
 export interface NotionDelivery {
@@ -1553,10 +1628,12 @@ export class HostStore {
     if (!/^[a-f0-9]{64}$/i.test(input.contentSha256)) throw new Error("Test Share content fingerprint is invalid");
     const begin = this.db.transaction(() => {
       const config = this.getSharingConfiguration();
+      const connection = this.listAgentConnectionRecords().find((record) => record.id === input.connectionId);
       if (
         !config || config.connectionId !== input.connectionId ||
         config.connector !== input.connector || config.destination !== destination ||
-        !config.destinationSavedAt
+        !config.destinationSavedAt || !connection || connection.adapter !== input.connectionAdapter ||
+        connection.label !== input.connectionLabel
       ) {
         throw new Error("Test Share must snapshot the selected Agent Connection and saved Share Destination");
       }
@@ -1584,15 +1661,16 @@ export class HostStore {
       const timestamp = now();
       this.db.prepare(`
         INSERT INTO sharing_test_actions (
-          id, connection_id, connection_adapter, connection_label, connector,
+          id, connection_id, connection_adapter, connection_label, connection_revision, connector,
           destination, content_sha256, confirmed_at, duplicate_confirmed,
           status, receipt_id, receipt_url, detail, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', NULL, NULL, '', ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', NULL, NULL, '', ?, ?)
       `).run(
         input.id,
         input.connectionId,
         input.connectionAdapter,
         input.connectionLabel,
+        agentConnectionRevision(connection),
         input.connector,
         destination,
         input.contentSha256.toLowerCase(),
@@ -1690,6 +1768,7 @@ export class HostStore {
       connectionId: String(row.connection_id),
       connectionAdapter: String(row.connection_adapter),
       connectionLabel: String(row.connection_label),
+      connectionRevision: String(row.connection_revision),
       connector: row.connector as SharingConnector,
       destination: String(row.destination),
       contentSha256: String(row.content_sha256),
@@ -2937,6 +3016,28 @@ export class HostStore {
     return this.getActivationJourneyState();
   }
 
+  private hasCurrentSharingAdoptionEvidence(
+    snapshot: OptionalCapabilityEvidenceSnapshot | null,
+  ): snapshot is SharingCapabilityEvidenceSnapshot {
+    if (snapshot?.capability !== "sharing") return false;
+    const config = this.getSharingConfiguration();
+    const action = this.getSharingTestAction(snapshot.actionId);
+    const connection = this.listAgentConnectionRecords().find((record) => record.id === snapshot.connectionId);
+    return Boolean(
+      config && action && connection && action.status === "verified" &&
+      config.connectionId === snapshot.connectionId && config.connector === snapshot.connector &&
+      config.destination === snapshot.destination && config.destinationSavedAt === snapshot.destinationSavedAt &&
+      config.testReceipt?.id === snapshot.receiptId && config.testReceipt.url === snapshot.receiptUrl &&
+      config.testReceipt.verifiedAt === snapshot.verifiedAt && connection.adapter === snapshot.adapter &&
+      agentConnectionRevision(connection) === snapshot.connectionRevision &&
+      action.connectionId === snapshot.connectionId && action.connectionAdapter === snapshot.adapter &&
+      action.connectionRevision === snapshot.connectionRevision &&
+      action.connector === snapshot.connector && action.destination === snapshot.destination &&
+      action.contentSha256 === snapshot.contentSha256 && action.receiptId === snapshot.receiptId &&
+      action.receiptUrl === snapshot.receiptUrl,
+    );
+  }
+
   listOptionalCapabilityOutcomes(): OptionalCapabilityOutcome[] {
     const rows = this.db.prepare(`
       SELECT onboarding_version, capability, contract_version, outcome,
@@ -2964,6 +3065,10 @@ export class HostStore {
       }
       if (row.capability === "agent-calendar-connector" && row.outcome === "adopted" &&
           !isExactAgentCalendarConnectorProbeEvidence(row.evidence_kind, row.evidence_reference, snapshot)) {
+        return [];
+      }
+      if (row.capability === "sharing" && row.outcome === "adopted" &&
+          !isExactSharingTestShareEvidence(row.evidence_kind, row.evidence_reference, snapshot)) {
         return [];
       }
       return [{
@@ -3011,6 +3116,14 @@ export class HostStore {
         !isExactAgentCalendarConnectorProbeEvidence(evidenceKind, evidenceReference, evidenceSnapshot)) {
       throw new Error("An adopted Agent Calendar Connector outcome requires exact probe evidence");
     }
+    if (capability === "sharing" && input.outcome === "adopted" &&
+        !isExactSharingTestShareEvidence(evidenceKind, evidenceReference, evidenceSnapshot)) {
+      throw new Error("An adopted Sharing outcome requires exact verified Test Share evidence");
+    }
+    if (capability === "sharing" && input.outcome === "adopted" &&
+        !this.hasCurrentSharingAdoptionEvidence(evidenceSnapshot)) {
+      throw new Error("An adopted Sharing outcome requires the current exact verified Test Share");
+    }
     if (input.outcome === "deferred" && input.evidence !== null) {
       throw new Error("A deferred Optional Capability Outcome cannot claim adoption evidence");
     }
@@ -3023,7 +3136,7 @@ export class HostStore {
     const commit = this.db.transaction(() => {
       if (
         capability === "conversation" || capability === "calendar-source" ||
-        capability === "agent-calendar-connector"
+        capability === "agent-calendar-connector" || capability === "sharing"
       ) {
         const existing = this.db.prepare(`
           SELECT outcome, evidence_kind, evidence_reference, evidence_snapshot_json
@@ -3050,7 +3163,13 @@ export class HostStore {
                 existing?.evidence_reference ?? null,
                 existingSnapshot,
               )
-            : !existingSnapshot;
+            : capability === "sharing"
+              ? !isExactSharingTestShareEvidence(
+                  existing?.evidence_kind ?? null,
+                  existing?.evidence_reference ?? null,
+                  existingSnapshot,
+                )
+              : !existingSnapshot;
         if (existing?.outcome === "adopted" && existingEvidenceInvalid) {
           this.db.prepare(`
             DELETE FROM optional_capability_outcomes
@@ -4295,6 +4414,7 @@ export class HostStore {
         connection_id TEXT NOT NULL,
         connection_adapter TEXT NOT NULL,
         connection_label TEXT NOT NULL,
+        connection_revision TEXT NOT NULL,
         connector TEXT NOT NULL CHECK(connector IN ('notion', 'zulip')),
         destination TEXT NOT NULL,
         content_sha256 TEXT NOT NULL,
@@ -4377,6 +4497,11 @@ export class HostStore {
       .all() as Array<{ name: string }>;
     if (!optionalOutcomeColumns.some((column) => column.name === "evidence_snapshot_json")) {
       this.db.exec("ALTER TABLE optional_capability_outcomes ADD COLUMN evidence_snapshot_json TEXT");
+    }
+    const sharingActionColumns = this.db.prepare("PRAGMA table_info(sharing_test_actions)")
+      .all() as Array<{ name: string }>;
+    if (!sharingActionColumns.some((column) => column.name === "connection_revision")) {
+      this.db.exec("ALTER TABLE sharing_test_actions ADD COLUMN connection_revision TEXT NOT NULL DEFAULT ''");
     }
     const readinessColumns = this.db.prepare("PRAGMA table_info(agent_connection_readiness_history)")
       .all() as Array<{ name: string }>;

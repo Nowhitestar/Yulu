@@ -1,8 +1,10 @@
 import { createHash } from "node:crypto";
+import { agentConnectionRevision } from "./agentConnectionRevision.js";
 import type {
   HostStore,
   PersistedAgentConnection,
   PersistedSharingConfiguration,
+  SharingCapabilityEvidenceSnapshot,
   SharingConnector,
 } from "./hostStore.js";
 
@@ -279,6 +281,57 @@ export class SharingConfiguration {
     return this.view();
   }
 
+  adoptionEvidence(): {
+    kind: "sharing-test-share";
+    reference: string;
+    snapshot: SharingCapabilityEvidenceSnapshot;
+  } {
+    const { persisted, connection, key } = this.requireSelection();
+    const readiness = this.sharingReadinessView(
+      persisted,
+      this.readiness.get(key) ?? { ...UNTESTED },
+    );
+    if (
+      readiness.status !== "ready" || !readiness.actionId || !readiness.receipt ||
+      !persisted.destination || !persisted.destinationSavedAt
+    ) {
+      throw new Error("Sharing adoption requires a current verified Test Share receipt");
+    }
+    const adapter = connection.adapter;
+    if (adapter !== "codex" && adapter !== "claude-code") {
+      throw new Error("Sharing adoption requires a Supported Agent with an exact connector boundary");
+    }
+    const action = this.options.host.getSharingTestAction(readiness.actionId);
+    if (
+      !action || action.status !== "verified" || action.connectionId !== persisted.connectionId ||
+      action.connectionAdapter !== adapter || action.connector !== persisted.connector ||
+      action.connectionRevision !== agentConnectionRevision(connection) ||
+      action.destination !== persisted.destination || action.contentSha256 !== TEST_SHARE_SHA256 ||
+      (action.receiptId ?? "") !== readiness.receipt.id ||
+      (action.receiptUrl ?? "") !== readiness.receipt.url
+    ) {
+      throw new Error("Sharing adoption requires an exact verified Test Share receipt");
+    }
+    return {
+      kind: "sharing-test-share" as const,
+      reference: `sharing-test-share:${action.id}`,
+      snapshot: {
+        capability: "sharing" as const,
+        connectionId: persisted.connectionId,
+        adapter,
+        connectionRevision: agentConnectionRevision(connection),
+        connector: persisted.connector,
+        destination: persisted.destination,
+        destinationSavedAt: persisted.destinationSavedAt,
+        actionId: action.id,
+        contentSha256: action.contentSha256,
+        receiptId: readiness.receipt.id,
+        receiptUrl: readiness.receipt.url,
+        verifiedAt: readiness.receipt.verifiedAt,
+      },
+    };
+  }
+
   recordingShareView(input: { recordingStem: string; summary: string }) {
     const persisted = this.options.host.getSharingConfiguration();
     const connection = persisted
@@ -532,6 +585,22 @@ export class SharingConfiguration {
         duplicateWarningRequired,
       };
     }
+    const selectedConnection = this.options.host.listAgentConnectionRecords()
+      .find((candidate) => candidate.id === action.connectionId);
+    if (
+      !selectedConnection ||
+      agentConnectionRevision(selectedConnection) !== action.connectionRevision
+    ) {
+      return {
+        status: "untested",
+        detail: "The selected Agent Connection changed after this Test Share was verified",
+        remediation: "Prove current Connector Readiness and send a fresh meeting-free Test Share.",
+        receipt: null,
+        actionId: action.id,
+        action: actionView,
+        duplicateWarningRequired,
+      };
+    }
     if (connectorReadiness.status !== "ready") {
       return {
         status: connectorReadiness.status === "failed" ? "failed" : "untested",
@@ -656,13 +725,7 @@ export class SharingConfiguration {
   }
 
   private stateKey(connection: PersistedAgentConnection, connector: SharingConnector) {
-    const revision = createHash("sha256").update(JSON.stringify({
-      adapter: connection.adapter,
-      label: connection.label,
-      lifecycle: connection.lifecycle,
-      settings: connection.settings,
-    })).digest("hex");
-    return `${connection.id}:${connection.updatedAt}:${revision}:${connector}`;
+    return `${connection.id}:${agentConnectionRevision(connection)}:${connector}`;
   }
 
   private connectorRemediation(
