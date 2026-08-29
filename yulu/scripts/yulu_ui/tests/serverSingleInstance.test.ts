@@ -20,6 +20,8 @@ import { startServer, type RunningServer } from "../src/server.js";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const roots: string[] = [];
 const originalPort = process.env.YULU_UI_PORT;
+const originalNativeHelperDir = process.env.YULU_NATIVE_HELPER_DIR;
+const originalDevelopmentSmoke = process.env.YULU_DEV_SMOKE;
 
 function makeRuntime() {
   const root = mkdtempSync(join(tmpdir(), "yulu_single_server_"));
@@ -59,11 +61,53 @@ function closeHttp(server: HttpServer): Promise<void> {
 afterEach(() => {
   if (originalPort === undefined) delete process.env.YULU_UI_PORT;
   else process.env.YULU_UI_PORT = originalPort;
+  if (originalNativeHelperDir === undefined) delete process.env.YULU_NATIVE_HELPER_DIR;
+  else process.env.YULU_NATIVE_HELPER_DIR = originalNativeHelperDir;
+  if (originalDevelopmentSmoke === undefined) delete process.env.YULU_DEV_SMOKE;
+  else process.env.YULU_DEV_SMOKE = originalDevelopmentSmoke;
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
   vi.restoreAllMocks();
 });
 
 describe("server single-instance lifecycle", () => {
+  it("never mutates retired Keychain credentials during the development App smoke", async () => {
+    process.env.YULU_UI_PORT = "0";
+    process.env.YULU_DEV_SMOKE = "1";
+    const runtime = makeRuntime();
+    const helperDir = join(runtime.root, "Yulu.app", "Contents", "MacOS");
+    mkdirSync(helperDir, { recursive: true });
+    const cleanupSentinel = join(runtime.root, "retired-keychain-cleanup-ran");
+    const xaiKeychain = join(helperDir, "xai_keychain");
+    writeFileSync(xaiKeychain, [
+      "#!/bin/sh",
+      `if [ "$1" = "delete-retired-gateway-secrets" ]; then printf ran > ${JSON.stringify(cleanupSentinel)}; fi`,
+      'if [ "$1" = "read" ]; then exit 44; fi',
+      "exit 0",
+    ].join("\n"), { mode: 0o700 });
+    const calendarProbe = join(helperDir, "calendar_probe");
+    writeFileSync(calendarProbe, "#!/bin/sh\nexit 0\n", { mode: 0o700 });
+    process.env.YULU_NATIVE_HELPER_DIR = helperDir;
+
+    const server = await startServer(runtime.paths);
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      expect(existsSync(cleanupSentinel)).toBe(false);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("fails readiness when the App declares a missing native helper directory", async () => {
+    process.env.YULU_UI_PORT = "0";
+    const runtime = makeRuntime();
+    process.env.YULU_NATIVE_HELPER_DIR = join(runtime.root, "Yulu.app", "Contents", "MacOS");
+
+    await expect(startServer(runtime.paths)).rejects.toThrow(
+      /xai_keychain.*missing or not executable/,
+    );
+    expect(existsSync(hostInstanceLockPath(runtime.configDir))).toBe(false);
+  });
+
   it("rejects the same configDir before Host recovery and can restart after close", async () => {
     process.env.YULU_UI_PORT = "0";
     const runtime = makeRuntime();

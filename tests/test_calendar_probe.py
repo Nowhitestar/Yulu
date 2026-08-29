@@ -16,6 +16,8 @@ def test_native_calendar_probe_uses_eventkit_and_returns_enumeration_evidence():
     assert '"enumerationSucceeded"' in source
     assert '"eventCount"' in source
     assert 'CommandLine.arguments.contains("--events")' in source
+    assert 'CommandLine.arguments.contains("--self-test")' in source
+    assert '"helper": "calendar_probe"' in source
     assert '"events": events.map(eventPayload)' in source
     assert "osascript" not in source
 
@@ -54,10 +56,13 @@ def test_release_inventory_requires_calendar_probe_without_runtime_compilation()
 
 def test_production_paths_fail_closed_without_the_embedded_signed_helper():
     adapter = (SCRIPTS / "yulu_ui" / "src" / "calendarSourceAdapters.ts").read_text(encoding="utf-8")
+    helpers = (SCRIPTS / "yulu_ui" / "src" / "nativeHelpers.ts").read_text(encoding="utf-8")
     polling = (SCRIPTS / "check_meetings.py").read_text(encoding="utf-8")
 
-    assert 'join(scriptDir, "Yulu.app", "Contents", "MacOS", "calendar_probe")' in adapter
-    assert 'join(scriptDir, "calendar_probe")' not in adapter
+    assert "resolveNativeHelperPaths" in adapter
+    assert "nativeHelperDir" in adapter
+    assert 'join(options.scriptDir, "Yulu.app", "Contents", "MacOS")' in helpers
+    assert 'calendarProbe: join(helperDir, "calendar_probe")' in helpers
     assert 'Yulu.app" / "Contents" / "MacOS" / "calendar_probe"' in polling
     assert 'return Path(__file__).resolve().parent / "calendar_probe"' not in polling
 

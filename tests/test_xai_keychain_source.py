@@ -12,6 +12,8 @@ def test_xai_oauth_uses_standard_macos_login_keychain():
     assert "kSecClassGenericPassword" in source
     assert "kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly" in source
     assert "kSecUseDataProtectionKeychain" not in source
+    assert 'case "self-test"' in source
+    assert '"helper": "xai_keychain"' in source
 
 
 def test_xai_oauth_pins_official_grok_cli_identity_and_reviewed_scopes():

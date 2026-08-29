@@ -28,7 +28,11 @@ describe("production Calendar Source adapters", () => {
       stderr: "",
       errorCode: null,
     });
-    const adapters = createCalendarSourceAdapters({ scriptDir: "/Applications/Yulu.app/Contents/Resources/yulu/scripts", runner: command });
+    const adapters = createCalendarSourceAdapters({
+      scriptDir: "/Applications/Yulu.app/Contents/Resources/runtime/yulu/scripts",
+      nativeHelperDir: "/Applications/Yulu.app/Contents/MacOS",
+      runner: command,
+    });
 
     await expect(adapters.macos.probe({ ...window, account: null })).resolves.toEqual({
       ok: true,
@@ -37,6 +41,7 @@ describe("production Calendar Source adapters", () => {
       ...window,
     });
     const [executable, args] = (command.run as ReturnType<typeof vi.fn>).mock.calls[0] as [string, string[], number];
+    expect(executable).toBe("/Applications/Yulu.app/Contents/MacOS/calendar_probe");
     expect(basename(executable)).toBe("calendar_probe");
     expect(args).toEqual(["--start", window.start, "--end", window.end]);
     expect(command.run).toHaveBeenCalledWith(executable, args, 35_000);

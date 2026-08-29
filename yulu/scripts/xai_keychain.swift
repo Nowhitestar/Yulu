@@ -110,8 +110,15 @@ private func deleteRetiredGatewaySecrets() {
     }
 }
 
+private func selfTest() {
+    let payload: [String: Any] = ["ok": true, "helper": "xai_keychain"]
+    let data = try! JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
+    FileHandle.standardOutput.write(data)
+    FileHandle.standardOutput.write(Data("\n".utf8))
+}
+
 guard CommandLine.arguments.count == 2 || CommandLine.arguments.count == 3 else {
-    fail("Usage: xai_keychain <read|write|delete> [direct.xai] | delete-retired-gateway-secrets")
+    fail("Usage: xai_keychain <read|write|delete> [direct.xai] | delete-retired-gateway-secrets | self-test")
 }
 
 switch CommandLine.arguments[1] {
@@ -121,5 +128,8 @@ case "delete": deleteSecret(target(for: CommandLine.arguments.count == 3 ? Comma
 case "delete-retired-gateway-secrets":
     guard CommandLine.arguments.count == 2 else { fail("Retired provider cleanup does not accept a slot") }
     deleteRetiredGatewaySecrets()
+case "self-test":
+    guard CommandLine.arguments.count == 2 else { fail("Self-test does not accept a slot") }
+    selfTest()
 default: fail("Unknown command")
 }

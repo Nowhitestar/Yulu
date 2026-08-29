@@ -59,6 +59,10 @@ struct BundleLayout {
         bundleURL.appendingPathComponent("Contents/Resources/runtime/yulu/scripts", isDirectory: true)
     }
 
+    var executableDir: URL {
+        bundleURL.appendingPathComponent("Contents/MacOS", isDirectory: true)
+    }
+
     var bundledPython: URL {
         bundleURL.appendingPathComponent("Contents/Resources/runtime/python/bin/python3")
     }
@@ -261,6 +265,7 @@ final class ProductSupervisor {
         port: Int,
         developmentNode: URL? = nil,
         developmentScriptDir: URL? = nil,
+        developmentSmoke: Bool = false,
         hostNonce: String = UUID().uuidString
     ) {
         self.hostNonce = hostNonce
@@ -270,6 +275,10 @@ final class ProductSupervisor {
         hostEnvironment["YULU_HOST_NONCE"] = hostNonce
         hostEnvironment["YULU_SCRIPT_DIR"] = developmentScriptDir?.path
             ?? layout.bundledScriptDir.path
+        hostEnvironment["YULU_NATIVE_HELPER_DIR"] = layout.executableDir.path
+        if developmentSmoke {
+            hostEnvironment["YULU_DEV_SMOKE"] = "1"
+        }
         hostEnvironment["YULU_PYTHON"] = layout.bundledPython.path
         hostEnvironment["YULU_FFMPEG"] = layout.bundledFFmpeg.path
         hostEnvironment["PYTHONDONTWRITEBYTECODE"] = "1"
@@ -323,7 +332,8 @@ func sanitizedRuntimeEnvironment() -> [String: String] {
             || key.hasPrefix("PYTHON")
             || key.hasPrefix("DYLD_")
             || key.hasPrefix("YULU_DEV_")
-            || key.hasPrefix("YULU_LOCAL_CAPTION_") {
+            || key.hasPrefix("YULU_LOCAL_CAPTION_")
+            || key == "YULU_NATIVE_HELPER_DIR" {
             environment.removeValue(forKey: key)
         }
     }
@@ -411,7 +421,8 @@ func runDevelopmentSmoke(layout: BundleLayout, port: Int) throws -> DevelopmentS
     }
     let supervisor = ProductSupervisor(
         layout: layout,
-        port: port
+        port: port,
+        developmentSmoke: true
     )
     supervisor.startHostForDevelopmentSmoke()
     defer {

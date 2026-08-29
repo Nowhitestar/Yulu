@@ -262,6 +262,10 @@ def test_host_runtime_denied_smoke_proves_host_capture_and_bundle_immutability()
     assert "NODE_OPTIONS" in smoke
     assert "YULU_LOCAL_CAPTION_PYTHON" in smoke
     assert "hostile-runtime.log" in smoke
+    assert '"$APP/Contents/MacOS/xai_keychain" self-test' in smoke
+    assert '"$APP/Contents/MacOS/calendar_probe" --self-test' in smoke
+    assert "retired Gateway Keychain cleanup will retry next start" in smoke
+    assert "smoke-error.txt" in smoke
     for command in ("node", "python3", "ffmpeg", "npm", "pip", "brew", "swiftc"):
         assert command in smoke
     assert '[[ ! -s "$SMOKE_ROOT/forbidden-runtime.log" ]]' in smoke
@@ -282,8 +286,12 @@ def test_host_runtime_denied_smoke_proves_host_capture_and_bundle_immutability()
         'key.hasPrefix("DYLD_")',
         'key.hasPrefix("YULU_DEV_")',
         'key.hasPrefix("YULU_LOCAL_CAPTION_")',
+        'key == "YULU_NATIVE_HELPER_DIR"',
     ):
         assert dangerous in shell
+    assert 'hostEnvironment["YULU_NATIVE_HELPER_DIR"] = layout.executableDir.path' in shell
+    assert 'hostEnvironment["YULU_DEV_SMOKE"] = "1"' in shell
+    assert 'developmentSmoke: true' in shell
     assert "hostReady" in shell
     assert "captureReady" in shell
 

@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
-import { join } from "node:path";
 import { envWithFallbackPath, resolveExecutable } from "./executables.js";
+import { resolveNativeHelperPaths } from "./nativeHelpers.js";
 import type {
   CalendarSourceAdapterResult,
   CalendarSourceFailureReason,
@@ -123,10 +123,6 @@ function parseJson(stdout: string): unknown {
   }
 }
 
-function nativeHelperPath(scriptDir: string): string {
-  return join(scriptDir, "Yulu.app", "Contents", "MacOS", "calendar_probe");
-}
-
 function helperFailureReason(value: unknown): CalendarSourceFailureReason {
   const reason = object(value)?.reason;
   return reason === "authorization_denied" || reason === "authorization_restricted" ||
@@ -171,14 +167,16 @@ function validGogEvent(value: unknown): boolean {
 
 export function createCalendarSourceAdapters(options: {
   scriptDir: string;
+  nativeHelperDir?: string;
   runner?: CalendarCommandRunner;
 }) {
   const runner = options.runner ?? new SpawnCalendarCommandRunner();
+  const nativeHelpers = resolveNativeHelperPaths(options);
   return {
     macos: {
       async probe(input): Promise<CalendarSourceAdapterResult> {
         const result = await runner.run(
-          nativeHelperPath(options.scriptDir),
+          nativeHelpers.calendarProbe,
           ["--start", input.start, "--end", input.end],
           35_000,
         );

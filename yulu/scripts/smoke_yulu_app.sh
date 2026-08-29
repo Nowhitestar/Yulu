@@ -54,6 +54,14 @@ fi
   cd "$APP"
   find . -type f -print0 | sort -z | xargs -0 shasum -a 256
 ) > "$SMOKE_ROOT/application-runtime.before.sha256"
+"$APP/Contents/MacOS/xai_keychain" self-test \
+  > "$SMOKE_ROOT/xai-keychain-self-test.json"
+"$APP/Contents/MacOS/calendar_probe" --self-test \
+  > "$SMOKE_ROOT/calendar-probe-self-test.json"
+grep -q '"helper":"xai_keychain"' "$SMOKE_ROOT/xai-keychain-self-test.json"
+grep -q '"ok":true' "$SMOKE_ROOT/xai-keychain-self-test.json"
+grep -q '"helper":"calendar_probe"' "$SMOKE_ROOT/calendar-probe-self-test.json"
+grep -q '"ok":true' "$SMOKE_ROOT/calendar-probe-self-test.json"
 HOME="$SMOKE_ROOT/home" \
 PATH="$SMOKE_ROOT/denied-host-runtime" \
 YULU_FORBIDDEN_RUNTIME_LOG="$SMOKE_ROOT/forbidden-runtime.log" \
@@ -62,7 +70,14 @@ NODE_OPTIONS="--require=$SMOKE_ROOT/node-options-payload.js" \
 YULU_LOCAL_CAPTION_PYTHON="$SMOKE_ROOT/hostile-caption-python" \
 YULU_UI_PORT="$PORT" \
 "$APP/Contents/MacOS/yulu_app" --development-smoke \
-  > "$SMOKE_ROOT/smoke-output.txt"
+  > "$SMOKE_ROOT/smoke-output.txt" \
+  2> "$SMOKE_ROOT/smoke-error.txt"
+if grep -Eq 'retired Gateway Keychain cleanup will retry next start|xAI 钥匙串组件不可用' \
+  "$SMOKE_ROOT/smoke-error.txt"; then
+  echo "Bundled Host could not use its staged xAI Keychain helper:" >&2
+  sed 's/^/  /' "$SMOKE_ROOT/smoke-error.txt" >&2
+  exit 1
+fi
 if [[ -s "$SMOKE_ROOT/forbidden-runtime.log" ]]; then
   echo "Application startup invoked a forbidden host runtime:" >&2
   sed 's/^/  /' "$SMOKE_ROOT/forbidden-runtime.log" >&2

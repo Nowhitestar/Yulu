@@ -68,6 +68,7 @@ import { SharingConfiguration } from "./sharingConfiguration.js";
 import { AgentSharingConnectorAdapter } from "./sharingConnector.js";
 import { CalendarSourceManager } from "./calendarSources.js";
 import { createCalendarSourceAdapters } from "./calendarSourceAdapters.js";
+import { requireNativeHelpers, resolveNativeHelperPaths } from "./nativeHelpers.js";
 import { AgentCalendarConnector, AgentCalendarConnectorRuntimeAdapter } from "./agentCalendarConnector.js";
 import { migrateExistingOnboardingOutcomes } from "./routers/onboarding.js";
 
@@ -164,10 +165,16 @@ async function startLockedServer(
     configDir: runtimePaths.configDir,
     selected: () => configManager.read().transcription.engine === "local",
   });
-  const xaiKeychainHelper = join(runtimePaths.scriptDir, "Yulu.app", "Contents", "MacOS", "xai_keychain");
-  void purgeRetiredGatewaySecrets(xaiKeychainHelper).catch((error) => {
-    console.warn(`[yulu_ui] retired Gateway Keychain cleanup will retry next start: ${(error as Error).message}`);
-  });
+  const nativeHelperDir = process.env.YULU_NATIVE_HELPER_DIR?.trim() || undefined;
+  const nativeHelpers = nativeHelperDir
+    ? requireNativeHelpers({ scriptDir: runtimePaths.scriptDir, nativeHelperDir })
+    : resolveNativeHelperPaths({ scriptDir: runtimePaths.scriptDir });
+  const xaiKeychainHelper = nativeHelpers.xaiKeychain;
+  if (process.env.YULU_DEV_SMOKE !== "1") {
+    void purgeRetiredGatewaySecrets(xaiKeychainHelper).catch((error) => {
+      console.warn(`[yulu_ui] retired Gateway Keychain cleanup will retry next start: ${(error as Error).message}`);
+    });
+  }
   const xaiCredentials = new XaiCredentialManager({
     store: new KeychainXaiTokenStore(xaiKeychainHelper),
     apiKeyStore: new KeychainXaiApiKeyStore(xaiKeychainHelper, "direct.xai"),
@@ -234,7 +241,10 @@ async function startLockedServer(
   const launchctl = new LaunchctlClient(launchAgents);
   const calendarSources = new CalendarSourceManager({
     config: configManager,
-    adapters: createCalendarSourceAdapters({ scriptDir: runtimePaths.scriptDir }),
+    adapters: createCalendarSourceAdapters({
+      scriptDir: runtimePaths.scriptDir,
+      nativeHelperDir,
+    }),
     verifyServices: async () => {
       const errors: string[] = [];
       for (const label of ["com.yulu.calendar", "com.yulu.scheduler"] as const) {

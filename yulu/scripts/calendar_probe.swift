@@ -103,6 +103,13 @@ private func requestEventAccess(_ store: EKEventStore) {
     _ = semaphore.wait(timeout: .now() + 30)
 }
 
+if CommandLine.arguments.contains("--self-test") {
+    guard CommandLine.arguments.count == 2 else {
+        emit(["ok": false, "reason": "invalid_self_test"], exitCode: 2)
+    }
+    emit(["ok": true, "helper": "calendar_probe"], exitCode: 0)
+}
+
 guard let startRaw = argument("--start"),
       let endRaw = argument("--end"),
       let start = parseDate(startRaw),
