@@ -46,15 +46,16 @@ def _dir_size(path: Path) -> int:
     return sum(item.stat().st_size for item in path.rglob("*") if item.is_file())
 
 
-def runtime_paths(config_dir: Path) -> dict[str, Path]:
+def runtime_paths(config_dir: Path, *, models_dir: Path | None = None) -> dict[str, Path]:
     runtime = config_dir / "local-caption"
     pack = runtime / "YuluLocalCaptionRuntime.bundle"
+    model_root = models_dir or config_dir / "models"
     return {
         "runtime": runtime,
         "pack": pack,
         "site_packages": pack / "Contents" / "Resources" / "site-packages",
         "python": Path(os.environ.get("YULU_PYTHON", sys.executable)).resolve(),
-        "model": config_dir / "models" / MODEL_NAME,
+        "model": model_root / MODEL_NAME,
         "manifest": runtime / "manifest.json",
     }
 
@@ -264,8 +265,8 @@ def _sherpa_import_ok(python: Path, site_packages: Path) -> bool:
         return False
 
 
-def status(config_dir: Path) -> dict[str, Any]:
-    paths = runtime_paths(config_dir)
+def status(config_dir: Path, *, models_dir: Path | None = None) -> dict[str, Any]:
+    paths = runtime_paths(config_dir, models_dir=models_dir)
     try:
         definition = _load_runtime_pack_definition()
         pack_ok = _runtime_pack_ok(paths["pack"], definition)
@@ -437,8 +438,8 @@ def _download_model(model_dir: Path) -> None:
         shutil.move(str(staging), str(model_dir))
 
 
-def install(config_dir: Path) -> dict[str, Any]:
-    paths = runtime_paths(config_dir)
+def install(config_dir: Path, *, models_dir: Path | None = None) -> dict[str, Any]:
+    paths = runtime_paths(config_dir, models_dir=models_dir)
     paths["runtime"].mkdir(parents=True, exist_ok=True)
     definition = _load_runtime_pack_definition()
     _install_runtime_pack(paths["runtime"], definition)
@@ -455,31 +456,34 @@ def install(config_dir: Path) -> dict[str, Any]:
         "runtimePack": definition["id"],
     }
     paths["manifest"].write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
-    result = status(config_dir)
+    result = status(config_dir, models_dir=models_dir)
     if not result["installed"]:
         raise RuntimeError("本地实时转录运行时安装后未通过自检")
     return result
 
 
-def uninstall(config_dir: Path) -> dict[str, Any]:
-    paths = runtime_paths(config_dir)
+def uninstall(config_dir: Path, *, models_dir: Path | None = None) -> dict[str, Any]:
+    paths = runtime_paths(config_dir, models_dir=models_dir)
     shutil.rmtree(paths["runtime"], ignore_errors=True)
     shutil.rmtree(paths["model"], ignore_errors=True)
-    return status(config_dir)
+    return status(config_dir, models_dir=models_dir)
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Manage Yulu local caption runtime")
     parser.add_argument("action", choices=("status", "install", "uninstall"))
     parser.add_argument("--config-dir", type=Path, default=Path.home() / ".config/yulu")
+    parser.add_argument("--models-dir", type=Path)
     args = parser.parse_args(argv)
+    config_dir = args.config_dir.expanduser()
+    models_dir = args.models_dir.expanduser() if args.models_dir else None
     try:
         if args.action == "install":
-            result = install(args.config_dir.expanduser())
+            result = install(config_dir, models_dir=models_dir)
         elif args.action == "uninstall":
-            result = uninstall(args.config_dir.expanduser())
+            result = uninstall(config_dir, models_dir=models_dir)
         else:
-            result = status(args.config_dir.expanduser())
+            result = status(config_dir, models_dir=models_dir)
         _emit("result", ok=True, status=result)
         return 0
     except Exception as exc:

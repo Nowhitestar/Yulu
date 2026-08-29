@@ -2,7 +2,10 @@ import json
 import stat
 import sys
 from argparse import Namespace
+from io import BytesIO
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "yulu" / "scripts"
@@ -28,6 +31,137 @@ def test_token_file_created_0600_reused_and_rotated(tmp_path):
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
 
 
+def test_default_token_uses_standard_first_and_migrates_legacy_fallback(monkeypatch, tmp_path):
+    standard = tmp_path / "Library/Application Support/Yulu/mcp-token.json"
+    legacy = tmp_path / ".config/yulu/mcp-token.json"
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text(json.dumps({"token": "legacy-secret-token-value"}), encoding="utf-8")
+    legacy.chmod(0o600)
+    monkeypatch.setattr(mcp, "TOKEN_PATH", standard)
+    monkeypatch.setattr(mcp, "LEGACY_TOKEN_PATH", legacy)
+
+    assert mcp.read_token() == "legacy-secret-token-value"
+    assert mcp.ensure_token() == "legacy-secret-token-value"
+    assert json.loads(standard.read_text(encoding="utf-8"))["token"] == "legacy-secret-token-value"
+    assert stat.S_IMODE(standard.stat().st_mode) == 0o600
+
+    standard.write_text(json.dumps({"token": "standard-secret-token-value"}), encoding="utf-8")
+    standard.chmod(0o600)
+    assert mcp.read_token() == "standard-secret-token-value"
+
+
+def test_rotate_updates_only_standard_authority_and_redacts_output(monkeypatch, tmp_path, capsys):
+    standard = tmp_path / "Library/Application Support/Yulu/mcp-token.json"
+    legacy = tmp_path / ".config/yulu/mcp-token.json"
+    for path in (standard, legacy):
+        path.parent.mkdir(parents=True)
+        path.write_text(json.dumps({"token": "old-secret-token-value"}), encoding="utf-8")
+        path.chmod(0o600)
+    monkeypatch.setattr(mcp, "TOKEN_PATH", standard)
+    monkeypatch.setattr(mcp, "LEGACY_TOKEN_PATH", legacy)
+    monkeypatch.setattr(mcp, "cmd_install", lambda _args: 0)
+
+    assert mcp.cmd_rotate(Namespace()) == 0
+
+    new_token = json.loads(standard.read_text(encoding="utf-8"))["token"]
+    output = capsys.readouterr().out
+    assert new_token != "old-secret-token-value"
+    assert json.loads(legacy.read_text(encoding="utf-8"))["token"] == "old-secret-token-value"
+    assert stat.S_IMODE(standard.stat().st_mode) == 0o600
+    assert str(standard) not in output
+    assert str(legacy) not in output
+    assert new_token not in output
+    assert "old-secret-token-value" not in output
+
+
+def test_status_and_missing_test_never_expose_token_paths_or_values(monkeypatch, tmp_path, capsys):
+    standard = tmp_path / "Library/Application Support/Yulu/mcp-token.json"
+    legacy = tmp_path / ".config/yulu/mcp-token.json"
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text(json.dumps({"token": "legacy-secret-token-value"}), encoding="utf-8")
+    legacy.chmod(0o600)
+    monkeypatch.setattr(mcp, "TOKEN_PATH", standard)
+    monkeypatch.setattr(mcp, "LEGACY_TOKEN_PATH", legacy)
+    monkeypatch.setattr(mcp, "detected", lambda _agent: False)
+    monkeypatch.setattr(mcp, "configured", lambda _agent: False)
+
+    assert mcp.cmd_status(Namespace(endpoint=mcp.ENDPOINT)) == 0
+    status_output = capsys.readouterr().out
+    assert json.loads(status_output)["tokenPresent"] is True
+    assert "tokenFile" not in status_output
+    assert str(standard) not in status_output
+    assert str(legacy) not in status_output
+    assert "legacy-secret-token-value" not in status_output
+
+    legacy.unlink()
+    assert mcp.cmd_test(Namespace(endpoint=mcp.ENDPOINT)) == 1
+    test_output = capsys.readouterr()
+    assert str(standard) not in test_output.err
+    assert str(legacy) not in test_output.err
+
+
+def test_standard_token_symlink_is_replaced_without_following_target(monkeypatch, tmp_path):
+    standard = tmp_path / "Library/Application Support/Yulu/mcp-token.json"
+    legacy = tmp_path / ".config/yulu/mcp-token.json"
+    external = tmp_path / "outside-token.json"
+    standard.parent.mkdir(parents=True)
+    legacy.parent.mkdir(parents=True)
+    external.write_text(json.dumps({"token": "external-secret-token-value"}), encoding="utf-8")
+    external.chmod(0o644)
+    standard.symlink_to(external)
+    legacy.write_text(json.dumps({"token": "legacy-secret-token-value"}), encoding="utf-8")
+    legacy.chmod(0o600)
+    monkeypatch.setattr(mcp, "TOKEN_PATH", standard)
+    monkeypatch.setattr(mcp, "LEGACY_TOKEN_PATH", legacy)
+
+    assert mcp.read_token() == ""
+    replacement = mcp.ensure_token()
+
+    assert replacement not in {"external-secret-token-value", "legacy-secret-token-value"}
+    assert standard.is_file() and not standard.is_symlink()
+    assert stat.S_IMODE(standard.stat().st_mode) == 0o600
+    assert json.loads(external.read_text(encoding="utf-8"))["token"] == "external-secret-token-value"
+    assert stat.S_IMODE(external.stat().st_mode) == 0o644
+
+
+def test_token_writer_rejects_symlinked_parent_without_touching_external_directory(monkeypatch, tmp_path):
+    external = tmp_path / "external-token-root"
+    external.mkdir(mode=0o755)
+    alias = tmp_path / "standard-token-root"
+    alias.symlink_to(external, target_is_directory=True)
+    monkeypatch.setattr(mcp, "TOKEN_PATH", alias / "mcp-token.json")
+    monkeypatch.setattr(mcp, "LEGACY_TOKEN_PATH", tmp_path / "missing-legacy-token.json")
+
+    with pytest.raises(OSError):
+        mcp.ensure_token(rotate=True)
+
+    assert list(external.iterdir()) == []
+    assert stat.S_IMODE(external.stat().st_mode) == 0o755
+
+
+def test_http_failure_never_echoes_token_or_response_body(monkeypatch, tmp_path, capsys):
+    standard = tmp_path / "mcp-token.json"
+    secret = "standard-secret-token-value"
+    standard.write_text(json.dumps({"token": secret}), encoding="utf-8")
+    standard.chmod(0o600)
+    monkeypatch.setattr(mcp, "TOKEN_PATH", standard)
+    monkeypatch.setattr(mcp, "LEGACY_TOKEN_PATH", tmp_path / "missing-legacy-token.json")
+    error = mcp.urllib.error.HTTPError(
+        mcp.ENDPOINT,
+        401,
+        "unauthorized",
+        {},
+        BytesIO(f"rejected bearer {secret}".encode("utf-8")),
+    )
+    monkeypatch.setattr(mcp.urllib.request, "urlopen", lambda *_args, **_kwargs: (_ for _ in ()).throw(error))
+
+    assert mcp.cmd_test(Namespace(endpoint=mcp.ENDPOINT)) == 1
+
+    output = capsys.readouterr().err
+    assert secret not in output
+    assert "rejected bearer" not in output
+
+
 def test_install_agent_builds_agent_specific_argv(monkeypatch):
     calls = []
     monkeypatch.setattr(mcp, "set_launchctl_env", lambda _token: None)
@@ -48,6 +182,7 @@ def test_install_agent_builds_agent_specific_argv(monkeypatch):
 
 def test_detected_only_skips_missing_agents(monkeypatch, tmp_path, capsys):
     monkeypatch.setattr(mcp, "TOKEN_PATH", tmp_path / "mcp-token.json")
+    monkeypatch.setattr(mcp, "LEGACY_TOKEN_PATH", tmp_path / "missing-legacy-token.json")
     monkeypatch.setattr(mcp, "detected", lambda _agent: False)
     monkeypatch.setattr(mcp, "install_agent", lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("should skip")))
 
@@ -59,6 +194,7 @@ def test_detected_only_skips_missing_agents(monkeypatch, tmp_path, capsys):
 
 def test_non_fatal_registration_failure_returns_success(monkeypatch, tmp_path):
     monkeypatch.setattr(mcp, "TOKEN_PATH", tmp_path / "mcp-token.json")
+    monkeypatch.setattr(mcp, "LEGACY_TOKEN_PATH", tmp_path / "missing-legacy-token.json")
     monkeypatch.setattr(mcp, "detected", lambda agent: agent == "codex")
     monkeypatch.setattr(mcp, "install_agent", lambda *_a, **_k: False)
 

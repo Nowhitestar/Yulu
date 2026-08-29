@@ -398,7 +398,7 @@ export const agentConsoleRouter = router({
     const runtime = resolveAgentRuntime(config, { scriptDir: ctx.paths.scriptDir, moviesDir: ctx.paths.moviesDir });
     const active = activeAgent(config, ctx.paths.scriptDir, ctx.paths.moviesDir);
     const backgroundSession = runtime.provider !== "none"
-      ? ensureBackgroundAgentSession(ctx.paths.configDir, { agent: runtime.provider, runtimeLabel: runtime.label })
+      ? ensureBackgroundAgentSession(ctx.paths.durableDataDir, { agent: runtime.provider, runtimeLabel: runtime.label })
       : null;
     const recState = await recordingState(ctx.paths.statusAgentSock);
     const tasks = recentTasks(ctx.paths.moviesDir, ctx.host);
@@ -481,7 +481,7 @@ export const agentConsoleRouter = router({
           options: destinationOptions(config, agent, input.channel),
         };
       }
-      const session = ensureBackgroundAgentSession(ctx.paths.configDir, {
+      const session = ensureBackgroundAgentSession(ctx.paths.durableDataDir, {
         agent: runtime.provider,
         runtimeLabel: runtime.label,
       });
@@ -490,12 +490,12 @@ export const agentConsoleRouter = router({
         scriptDir: ctx.paths.scriptDir,
         prompt: discoveryPrompt(input.channel),
         timeoutMs: DESTINATION_DISCOVERY_TIMEOUT_MS,
-        configDir: ctx.paths.configDir,
+        configDir: ctx.paths.durableDataDir,
         nativeSessionId: session.nativeSessionId,
         yuluSessionId: session.id,
       });
       if (result.nativeSessionId && result.nativeSessionId !== session.nativeSessionId) {
-        updateAgentSessionNativeSession(ctx.paths.configDir, session.id, {
+        updateAgentSessionNativeSession(ctx.paths.durableDataDir, session.id, {
           nativeSessionId: result.nativeSessionId,
           runtimeLabel: runtime.label,
         });

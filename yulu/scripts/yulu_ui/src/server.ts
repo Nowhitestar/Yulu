@@ -71,6 +71,7 @@ import { createCalendarSourceAdapters } from "./calendarSourceAdapters.js";
 import { requireNativeHelpers, resolveNativeHelperPaths } from "./nativeHelpers.js";
 import { AgentCalendarConnector, AgentCalendarConnectorRuntimeAdapter } from "./agentCalendarConnector.js";
 import { migrateExistingOnboardingOutcomes } from "./routers/onboarding.js";
+import { prepareHostDurableData } from "./hostDataMigration.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const RETIRED_GATEWAY_CONNECTION_ID = "cliproxyapi";
@@ -86,13 +87,29 @@ type RuntimePaths = typeof paths;
 export async function startServer(pathOverrides: Partial<RuntimePaths> = {}): Promise<RunningServer> {
   const port = Number(process.env.YULU_UI_PORT ?? 7777);
   const host = "127.0.0.1";
+  const configDir = pathOverrides.configDir ?? paths.configDir;
+  const hasConfigDirOverride = pathOverrides.configDir !== undefined;
+  const legacyReadOnlyDataDir = pathOverrides.legacyReadOnlyDataDir ??
+    (pathOverrides.configDir ? configDir : paths.legacyReadOnlyDataDir);
   const runtimePaths = {
     ...paths,
     ...pathOverrides,
-    hostDb: pathOverrides.hostDb ?? (pathOverrides.configDir ? join(pathOverrides.configDir, "host.sqlite") : paths.hostDb),
-    agentTasksDir: pathOverrides.agentTasksDir ?? (pathOverrides.configDir ? join(pathOverrides.configDir, "agent-tasks") : paths.agentTasksDir),
-    recordingEventsDir: pathOverrides.recordingEventsDir ?? (pathOverrides.configDir ? join(pathOverrides.configDir, "recording-events") : paths.recordingEventsDir),
-    agentQueueJson: pathOverrides.agentQueueJson ?? (pathOverrides.configDir ? join(pathOverrides.configDir, "agent-queue.json") : paths.agentQueueJson),
+    durableDataDir: pathOverrides.durableDataDir ?? (hasConfigDirOverride ? configDir : paths.durableDataDir),
+    legacyReadOnlyDataDir,
+    configDir,
+    configFile: pathOverrides.configFile ?? (hasConfigDirOverride ? join(configDir, "config.json") : paths.configFile),
+    promptsDb: pathOverrides.promptsDb ?? (hasConfigDirOverride ? join(configDir, "prompts.sqlite") : paths.promptsDb),
+    vocabDb: pathOverrides.vocabDb ?? (hasConfigDirOverride ? join(configDir, "vocab.sqlite") : paths.vocabDb),
+    searchDb: pathOverrides.searchDb ?? (hasConfigDirOverride ? join(configDir, "search.sqlite") : paths.searchDb),
+    hostDb: pathOverrides.hostDb ?? (hasConfigDirOverride ? join(configDir, "host.sqlite") : paths.hostDb),
+    modelsDir: pathOverrides.modelsDir ?? (hasConfigDirOverride ? join(configDir, "Models") : paths.modelsDir),
+    mcpTokenJson: pathOverrides.mcpTokenJson ?? (hasConfigDirOverride ? join(configDir, "mcp-token.json") : paths.mcpTokenJson),
+    agentTasksDir: pathOverrides.agentTasksDir ??
+      (hasConfigDirOverride && pathOverrides.durableDataDir === undefined
+        ? join(configDir, "agent-tasks")
+        : join(pathOverrides.durableDataDir ?? paths.durableDataDir, "agent-tasks")),
+    recordingEventsDir: pathOverrides.recordingEventsDir ?? join(configDir, "recording-events"),
+    agentQueueJson: pathOverrides.agentQueueJson ?? join(configDir, "agent-queue.json"),
   } as RuntimePaths;
   const launchAgents = runtimePaths.launchAgentsDir;
 
@@ -112,6 +129,8 @@ async function startLockedServer(
   const { port, host, launchAgents, instanceLock } = options;
   const uiToken = randomBytes(32).toString("base64url");
 
+  await prepareHostDurableData(runtimePaths);
+
   // Lazy DB getters so /healthz works even when the SQLite files aren't present yet
   let _prompts: ReturnType<typeof openDb> | null = null;
   let _vocab: ReturnType<typeof openDb> | null = null;
@@ -124,7 +143,7 @@ async function startLockedServer(
 
   const configManager = new ConfigManager(runtimePaths.configFile);
   const hostStore = new HostStore(runtimePaths.hostDb);
-  const recoveredConversationIds = recoverInterruptedAgentSessionInvocations(runtimePaths.configDir);
+  const recoveredConversationIds = recoverInterruptedAgentSessionInvocations(runtimePaths.durableDataDir);
   if (recoveredConversationIds.length > 0) {
     console.warn(
       `[yulu_ui] fenced ${recoveredConversationIds.length} interrupted Conversation invocation(s) as Unknown Outcome`,
@@ -132,7 +151,7 @@ async function startLockedServer(
   }
   const retiredGatewayTaskIds = hostStore.retireTasksForConnection(RETIRED_GATEWAY_CONNECTION_ID);
   const retiredGatewaySessionIds = retireAgentSessionsForConnection(
-    runtimePaths.configDir,
+    runtimePaths.durableDataDir,
     RETIRED_GATEWAY_CONNECTION_ID,
   );
   if (retiredGatewayTaskIds.length > 0 || retiredGatewaySessionIds.length > 0) {
@@ -162,7 +181,10 @@ async function startLockedServer(
   }
   const localCaption = new LocalCaptionManager({
     scriptDir: runtimePaths.scriptDir,
-    configDir: runtimePaths.configDir,
+    configDir: runtimePaths.durableDataDir,
+    modelsDir: runtimePaths.modelsDir,
+    legacyConfigDir: runtimePaths.legacyReadOnlyDataDir,
+    legacyModelsDir: join(runtimePaths.legacyReadOnlyDataDir, "models"),
     selected: () => configManager.read().transcription.engine === "local",
   });
   const nativeHelperDir = process.env.YULU_NATIVE_HELPER_DIR?.trim() || undefined;
@@ -192,7 +214,7 @@ async function startLockedServer(
   const agentConnections = new AgentConnectionCenter({
     config: configManager,
     host: hostStore,
-    configDir: runtimePaths.configDir,
+    configDir: runtimePaths.durableDataDir,
     credentials: xaiCredentials,
     audio: audioTranscription,
     text: xaiText,
@@ -228,14 +250,14 @@ async function startLockedServer(
     host: hostStore,
     adapter: new AgentSharingConnectorAdapter({
       scriptDir: runtimePaths.scriptDir,
-      configDir: runtimePaths.configDir,
+      configDir: runtimePaths.durableDataDir,
     }),
   });
   const agentCalendarConnector = new AgentCalendarConnector({
     host: hostStore,
     adapter: new AgentCalendarConnectorRuntimeAdapter({
       scriptDir: runtimePaths.scriptDir,
-      configDir: runtimePaths.configDir,
+      configDir: runtimePaths.durableDataDir,
     }),
   });
   const launchctl = new LaunchctlClient(launchAgents);
@@ -299,7 +321,7 @@ async function startLockedServer(
           disabledReason: null,
         },
         scriptDir: runtimePaths.scriptDir,
-        configDir: runtimePaths.configDir,
+        configDir: runtimePaths.durableDataDir,
         timeoutMs: 10_000,
         prompt: JSON.stringify({ sourceText, targetLanguage, context }),
       });
@@ -362,7 +384,7 @@ async function startLockedServer(
       moviesDir: runtimePaths.moviesDir,
     });
     if (runtime.provider !== "none") {
-      ensureBackgroundAgentSession(runtimePaths.configDir, {
+      ensureBackgroundAgentSession(runtimePaths.durableDataDir, {
         agent: runtime.provider,
         runtimeLabel: runtime.label,
       });

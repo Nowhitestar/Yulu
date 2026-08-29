@@ -1,20 +1,33 @@
 import { describe, it, expect } from "vitest";
-import { paths, resolveApplicationDataPaths } from "../src/paths.js";
-import { homedir, tmpdir } from "node:os";
+import { resolveApplicationDataPaths, resolveHostPaths } from "../src/paths.js";
+import { tmpdir } from "node:os";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 describe("paths", () => {
-  it("anchors all paths under ~/.config/yulu", () => {
-    const home = homedir();
-    expect(paths.configDir).toBe(`${home}/.config/yulu`);
-    expect(paths.configFile).toBe(`${home}/.config/yulu/config.json`);
-    expect(paths.promptsDb).toBe(`${home}/.config/yulu/prompts.sqlite`);
-    expect(paths.vocabDb).toBe(`${home}/.config/yulu/vocab.sqlite`);
-    expect(paths.searchDb).toBe(`${home}/.config/yulu/search.sqlite`);
-    expect(paths.audioDaemonSock).toBe(`${home}/.config/yulu/audio_daemon.sock`);
-    expect(paths.statusAgentSock).toBe(`${home}/.config/yulu/status_agent.sock`);
-    expect(paths.moviesDir).toBe(`${home}/Movies/Yulu`);
+  it("routes Host durable state to the standard root without taking over #163 paths", () => {
+    const home = "/test/home";
+    const resolved = resolveHostPaths({ homeDir: home, environment: {} });
+
+    expect(resolved.durableDataDir).toBe(`${home}/Library/Application Support/Yulu`);
+    expect(resolved.configDir).toBe(`${home}/.config/yulu`);
+    expect(resolved.configFile).toBe(`${home}/Library/Application Support/Yulu/config.json`);
+    expect(resolved.promptsDb).toBe(`${home}/Library/Application Support/Yulu/prompts.sqlite`);
+    expect(resolved.vocabDb).toBe(`${home}/Library/Application Support/Yulu/vocab.sqlite`);
+    expect(resolved.searchDb).toBe(`${home}/Library/Application Support/Yulu/search.sqlite`);
+    expect(resolved.hostDb).toBe(`${home}/Library/Application Support/Yulu/host.sqlite`);
+    expect(resolved.agentTasksDir).toBe(`${home}/Library/Application Support/Yulu/agent-tasks`);
+    expect(resolved.recordingEventsDir).toBe(`${home}/.config/yulu/recording-events`);
+    expect(resolved.agentQueueJson).toBe(`${home}/.config/yulu/agent-queue.json`);
+    expect(resolved.mcpTokenJson).toBe(`${home}/Library/Application Support/Yulu/mcp-token.json`);
+    expect(resolved.modelsDir).toBe(`${home}/Library/Application Support/Yulu/Models`);
+
+    expect(resolved.legacyReadOnlyDataDir).toBe(`${home}/.config/yulu`);
+    expect(resolved.audioDaemonSock).toBe(`${home}/.config/yulu/audio_daemon.sock`);
+    expect(resolved.statusAgentSock).toBe(`${home}/.config/yulu/status_agent.sock`);
+    expect(resolved.uiLog).toBe(`${home}/.config/yulu/ui.log`);
+    expect(resolved.uiPid).toBe(`${home}/.config/yulu/yulu_ui.pid`);
+    expect(resolved.moviesDir).toBe(`${home}/Movies/Yulu`);
   });
 
   it("resolves the standard Application Data Root contract from an injected home", () => {

@@ -25,7 +25,13 @@ function mockSpawn(stdout: string, exitCode = 0, stderr = "") {
 }
 
 function context() {
-  return { paths: { scriptDir: "/fake/yulu/scripts", configDir: "/fake/home/.config/yulu" } } as unknown as AppContext;
+  return {
+    paths: {
+      scriptDir: "/fake/yulu/scripts",
+      configDir: "/fake/home/.config/yulu",
+      durableDataDir: "/fake/home/Library/Application Support/Yulu",
+    },
+  } as unknown as AppContext;
 }
 
 const report = JSON.stringify({
@@ -57,6 +63,16 @@ describe("capabilitiesRouter.host_capabilities", () => {
     const [command, args] = spawnMock.mock.calls[0]!;
     expect(command).toBe("python3");
     expect((args as string[]).join(" ")).toContain("_host_capabilities");
+  });
+
+  it("reads Host capability configuration from standard durable state, not the divergent legacy rollback", async () => {
+    mockSpawn(report);
+
+    await createCaller(capabilitiesRouter, context()).host_capabilities();
+
+    const args = spawnMock.mock.calls[0]![1] as string[];
+    expect(args.at(-1)).toBe("/fake/home/Library/Application Support/Yulu");
+    expect(args.at(-1)).not.toBe("/fake/home/.config/yulu");
   });
 
   it("accepts a valid degraded report even when the collector exits non-zero", async () => {

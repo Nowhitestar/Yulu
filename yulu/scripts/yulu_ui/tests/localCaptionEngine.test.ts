@@ -54,6 +54,50 @@ describe("local caption runtime discovery", () => {
       modelDir,
     });
   });
+
+  it("prefers standard Models and falls back to the explicit legacy runtime", () => {
+    const root = tempRoot("yulu-local-caption-standard-models-");
+    const scriptDir = join(root, "scripts");
+    const standardDataDir = join(root, "Library/Application Support/Yulu");
+    const standardModelsDir = join(standardDataDir, "Models");
+    const legacyDataDir = join(root, ".config/yulu");
+    const legacyModelsDir = join(legacyDataDir, "models");
+    const python = join(root, "python");
+    mkdirSync(scriptDir, { recursive: true });
+    writeFileSync(join(scriptDir, "sherpa_caption_worker.py"), "");
+    writeFileSync(python, "");
+
+    const makeComplete = (dataDir: string, modelsDir: string) => {
+      const runtimePack = join(dataDir, "local-caption/YuluLocalCaptionRuntime.bundle");
+      mkdirSync(join(runtimePack, "Contents/Resources/site-packages"), { recursive: true });
+      const modelDir = join(modelsDir, "sherpa-onnx-streaming-paraformer-bilingual-zh-en");
+      mkdirSync(modelDir, { recursive: true });
+      for (const name of ["tokens.txt", "encoder.int8.onnx", "decoder.int8.onnx"]) {
+        writeFileSync(join(modelDir, name), name);
+      }
+      return { runtimePack, modelDir };
+    };
+    const legacy = makeComplete(legacyDataDir, legacyModelsDir);
+    const input = {
+      scriptDir,
+      configDir: standardDataDir,
+      modelsDir: standardModelsDir,
+      legacyConfigDir: legacyDataDir,
+      legacyModelsDir,
+      env: { YULU_PYTHON: python },
+    };
+
+    expect(resolveLocalCaptionRuntime(input)).toMatchObject({
+      runtimePack: legacy.runtimePack,
+      modelDir: legacy.modelDir,
+    });
+
+    const standard = makeComplete(standardDataDir, standardModelsDir);
+    expect(resolveLocalCaptionRuntime(input)).toMatchObject({
+      runtimePack: standard.runtimePack,
+      modelDir: standard.modelDir,
+    });
+  });
 });
 
 describe("SherpaCaptionEngine", () => {

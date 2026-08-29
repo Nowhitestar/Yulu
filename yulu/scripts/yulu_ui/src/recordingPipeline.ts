@@ -584,7 +584,7 @@ export class RecordingPipeline {
     this.gatewayKey = key;
     this.gateway = new HermesRecordingGateway(
       runtime,
-      this.options.paths.configDir,
+      this.options.paths.durableDataDir,
       this.options.paths.scriptDir,
     );
     return this.gateway;

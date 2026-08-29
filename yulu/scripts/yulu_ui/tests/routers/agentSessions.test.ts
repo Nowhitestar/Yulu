@@ -23,7 +23,7 @@ function makeCtx(configDir: string, config: Record<string, unknown> = {
 }): AppContext {
   return {
     uiMutationAuthorized: true,
-    paths: { configDir },
+    paths: { configDir, durableDataDir: configDir },
     config: { read: () => config },
     xaiCredentials: { status: async () => ({ connected: true, source: "oauth" }) },
     host: {

@@ -549,6 +549,53 @@ def test_agent_pipeline_health_is_ok_when_required_runtime_is_ready(tmp_path):
     assert report["components"]["mcp_token"]["mode"] == "0600"
 
 
+def test_agent_pipeline_token_is_standard_first_with_redacted_legacy_fallback(tmp_path):
+    doctor = load_doctor()
+    (tmp_path / "config.json").write_text(
+        '{"agent_pipeline": {"enabled": true}}', encoding="utf-8"
+    )
+    standard = tmp_path / "Library/Application Support/Yulu/mcp-token.json"
+    legacy = tmp_path / ".config/yulu/mcp-token.json"
+    for path, token in (
+        (standard, "short"),
+        (legacy, "legacy-secret-token-value"),
+    ):
+        path.parent.mkdir(parents=True)
+        path.write_text(json.dumps({"token": token}), encoding="utf-8")
+        path.chmod(0o600)
+
+    standard_report = doctor.check_agent_pipeline(
+        tmp_path,
+        [
+            {"name": "hermes", "ok": True, "path": "/bin/hermes", "version": "1"},
+            {"name": "ffmpeg", "ok": True, "path": "/bin/ffmpeg", "version": "1"},
+        ],
+        {"healthz_ok": True, "port": 7777},
+        token_path=standard,
+        legacy_token_path=legacy,
+    )
+    assert standard_report["components"]["mcp_token"]["ok"] is False
+
+    standard.unlink()
+    fallback_report = doctor.check_agent_pipeline(
+        tmp_path,
+        [
+            {"name": "hermes", "ok": True, "path": "/bin/hermes", "version": "1"},
+            {"name": "ffmpeg", "ok": True, "path": "/bin/ffmpeg", "version": "1"},
+        ],
+        {"healthz_ok": True, "port": 7777},
+        token_path=standard,
+        legacy_token_path=legacy,
+    )
+    token_component = fallback_report["components"]["mcp_token"]
+    serialized = json.dumps(token_component)
+    assert token_component["ok"] is True
+    assert str(standard) not in serialized
+    assert str(legacy) not in serialized
+    assert "legacy-secret-token-value" not in serialized
+    assert "path" not in token_component
+
+
 def test_enabled_agent_pipeline_fails_closed_when_runtime_is_unavailable(tmp_path):
     doctor = load_doctor()
     (tmp_path / "config.json").write_text(

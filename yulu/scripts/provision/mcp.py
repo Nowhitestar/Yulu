@@ -12,6 +12,7 @@ import json
 import os
 import secrets
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -25,8 +26,25 @@ ENDPOINT = "http://127.0.0.1:7777/mcp"
 ARTIFACT_ENDPOINT = f"{ENDPOINT}/recording-artifact"
 DELIVERY_ENDPOINT = f"{ENDPOINT}/recording-delivery"
 ENV_NAME = "YULU_MCP_TOKEN"
-CONFIG_DIR = Path.home() / ".config" / "yulu"
-TOKEN_PATH = CONFIG_DIR / "mcp-token.json"
+
+
+def _default_token_paths() -> tuple[Path, Path]:
+    if sys.platform == "darwin":
+        from yulu_platform.macos.path_resolver import MacOSPathResolver
+
+        paths = MacOSPathResolver().application_paths()
+        return (
+            paths.durable_data_dir / "mcp-token.json",
+            paths.legacy_read_only_data_dir / "mcp-token.json",
+        )
+    home = Path.home()
+    return (
+        home / "Library/Application Support/Yulu/mcp-token.json",
+        home / ".config/yulu/mcp-token.json",
+    )
+
+
+TOKEN_PATH, LEGACY_TOKEN_PATH = _default_token_paths()
 AGENTS = ("codex", "claude", "openclaw", "hermes")
 LOGIN_PATH_MARKER = "__YULU_LOGIN_PATH__"
 
@@ -109,37 +127,143 @@ def resolve_executable(command: str) -> str | None:
     return _which(command, executable_search_path())
 
 
-def ensure_token(path: Path = TOKEN_PATH, rotate: bool = False) -> str:
-    path.parent.mkdir(parents=True, exist_ok=True)
+def _write_token(path: Path, token: str) -> None:
+    parent_fd = _open_directory(path.parent, create=True)
     try:
-        path.parent.chmod(0o700)
+        os.fchmod(parent_fd, 0o700)
+        tmp_name = f".{path.name}.{os.getpid()}.{secrets.token_hex(16)}.tmp"
+        fd = os.open(
+            tmp_name,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+            0o600,
+            dir_fd=parent_fd,
+        )
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                json.dump({
+                    "token": token,
+                    "created_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+                    "endpoint": ENDPOINT,
+                }, handle, indent=2)
+                handle.write("\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(
+                tmp_name,
+                path.name,
+                src_dir_fd=parent_fd,
+                dst_dir_fd=parent_fd,
+            )
+            committed = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
+            if not stat.S_ISREG(committed.st_mode) or committed.st_mode & 0o077:
+                raise OSError("MCP token authority is unsafe")
+        finally:
+            try:
+                os.unlink(tmp_name, dir_fd=parent_fd)
+            except FileNotFoundError:
+                pass
+    finally:
+        os.close(parent_fd)
+
+
+def _open_directory(path: Path, *, create: bool) -> int:
+    path = Path(path)
+    if not path.is_absolute():
+        raise ValueError("MCP token path must be absolute")
+    current_fd = os.open("/", os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        for component in path.parts[1:]:
+            try:
+                next_fd = os.open(
+                    component,
+                    os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0),
+                    dir_fd=current_fd,
+                )
+            except FileNotFoundError:
+                if not create:
+                    raise
+                os.mkdir(component, 0o700, dir_fd=current_fd)
+                next_fd = os.open(
+                    component,
+                    os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0),
+                    dir_fd=current_fd,
+                )
+            os.close(current_fd)
+            current_fd = next_fd
+        return current_fd
+    except Exception:
+        os.close(current_fd)
+        raise
+
+
+def _path_entry_exists(path: Path) -> bool:
+    parent_fd: int | None = None
+    try:
+        parent_fd = _open_directory(path.parent, create=False)
+        os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
+        return True
+    except FileNotFoundError:
+        return False
     except OSError:
-        pass
+        return True
+    finally:
+        if parent_fd is not None:
+            os.close(parent_fd)
+
+
+def _read_token_file(path: Path, *, repair_permissions: bool = False) -> str:
+    parent_fd: int | None = None
+    try:
+        parent_fd = _open_directory(path.parent, create=False)
+        before = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
+        if not stat.S_ISREG(before.st_mode):
+            return ""
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+        with os.fdopen(os.open(path.name, flags, dir_fd=parent_fd), "r", encoding="utf-8") as handle:
+            opened = os.fstat(handle.fileno())
+            if (
+                not stat.S_ISREG(opened.st_mode)
+                or (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino)
+            ):
+                return ""
+            if opened.st_mode & 0o077:
+                if not repair_permissions:
+                    return ""
+                os.fchmod(handle.fileno(), 0o600)
+            raw = json.load(handle)
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        return ""
+    finally:
+        if parent_fd is not None:
+            os.close(parent_fd)
+    token = raw.get("token") if isinstance(raw, dict) else None
+    return token if isinstance(token, str) and token else ""
+
+
+def ensure_token(path: Path | None = None, rotate: bool = False) -> str:
+    use_default_paths = path is None
+    path = TOKEN_PATH if path is None else path
     if not rotate:
-        token = read_token(path)
+        token = _read_token_file(path, repair_permissions=True)
         if token:
-            chmod_600(path)
             return token
+        if use_default_paths and not _path_entry_exists(path):
+            token = _read_token_file(LEGACY_TOKEN_PATH)
+            if token:
+                _write_token(path, token)
+                return token
     token = secrets.token_urlsafe(32)
-    tmp = path.with_suffix(f".{os.getpid()}.tmp")
-    tmp.write_text(json.dumps({
-        "token": token,
-        "created_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
-        "endpoint": ENDPOINT,
-    }, indent=2) + "\n", encoding="utf-8")
-    chmod_600(tmp)
-    os.replace(tmp, path)
-    chmod_600(path)
+    _write_token(path, token)
     return token
 
 
-def read_token(path: Path = TOKEN_PATH) -> str:
-    try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return ""
-    token = raw.get("token")
-    return token if isinstance(token, str) and token else ""
+def read_token(path: Path | None = None) -> str:
+    use_default_paths = path is None
+    path = TOKEN_PATH if path is None else path
+    token = _read_token_file(path)
+    if token or not use_default_paths or _path_entry_exists(path):
+        return token
+    return _read_token_file(LEGACY_TOKEN_PATH)
 
 
 def chmod_600(path: Path) -> None:
@@ -446,14 +570,13 @@ def cmd_remove(args: argparse.Namespace) -> int:
 
 def cmd_rotate(args: argparse.Namespace) -> int:
     ensure_token(rotate=True)
-    print(f"Rotated {TOKEN_PATH}")
+    print("MCP token rotated.")
     return cmd_install(args)
 
 
 def cmd_status(args: argparse.Namespace) -> int:
     print(json.dumps({
         "endpoint": args.endpoint,
-        "tokenFile": str(TOKEN_PATH),
         "tokenPresent": bool(read_token()),
         "agents": {agent: {"detected": detected(agent), "configured": configured(agent)} for agent in AGENTS},
     }, indent=2))
@@ -484,7 +607,7 @@ def configured(agent: str) -> Optional[bool]:
 def cmd_test(args: argparse.Namespace) -> int:
     token = read_token()
     if not token:
-        print(f"token missing at {TOKEN_PATH}", file=sys.stderr)
+        print("token missing", file=sys.stderr)
         return 1
     body = json.dumps({
         "jsonrpc": "2.0",
@@ -507,9 +630,9 @@ def cmd_test(args: argparse.Namespace) -> int:
             print(f"ok: HTTP {resp.status}")
             return 0
     except urllib.error.HTTPError as exc:
-        print(f"failed: HTTP {exc.code} {exc.read().decode('utf-8', 'ignore')}", file=sys.stderr)
-    except Exception as exc:
-        print(f"failed: {exc}", file=sys.stderr)
+        print(f"failed: HTTP {exc.code}", file=sys.stderr)
+    except Exception:
+        print("failed: request error", file=sys.stderr)
     return 1
 
 

@@ -4,8 +4,6 @@ import { basename, dirname, isAbsolute, join, normalize, resolve } from "node:pa
 import { fileURLToPath } from "node:url";
 
 const HOME = homedir();
-const CONFIG_DIR = join(HOME, ".config", "yulu");
-const MOVIES_DIR = join(HOME, "Movies", "Yulu");
 
 export interface ApplicationDataPaths {
   durableDataDir: string;
@@ -20,7 +18,7 @@ export interface ApplicationDataPaths {
   configReadFiles: readonly string[];
 }
 
-interface ApplicationDataPathInput {
+export interface ApplicationDataPathInput {
   homeDir?: string;
   environment?: Readonly<Record<string, string | undefined>>;
   readConfigFile?: (path: string) => string | undefined;
@@ -258,24 +256,34 @@ const SCRIPT_DIR = locateScriptDir();
 // levels up — the same anchor version.py uses (REPO_DIR = parents[2]).
 const REPO_ROOT = resolve(SCRIPT_DIR, "..", "..");
 
-export const paths = {
-  configDir:        CONFIG_DIR,
-  configFile:       join(CONFIG_DIR, "config.json"),
-  promptsDb:        join(CONFIG_DIR, "prompts.sqlite"),
-  vocabDb:          join(CONFIG_DIR, "vocab.sqlite"),
-  searchDb:         join(CONFIG_DIR, "search.sqlite"),
-  hostDb:           join(CONFIG_DIR, "host.sqlite"),
-  agentTasksDir:    join(CONFIG_DIR, "agent-tasks"),
-  recordingEventsDir: join(CONFIG_DIR, "recording-events"),
-  audioDaemonSock:  join(CONFIG_DIR, "audio_daemon.sock"),
-  statusAgentSock:  join(CONFIG_DIR, "status_agent.sock"),
-  uiLog:            join(CONFIG_DIR, "ui.log"),
-  uiPid:            join(CONFIG_DIR, "yulu_ui.pid"),
-  moviesDir:        MOVIES_DIR,
-  launchAgentsDir:  join(HOME, "Library", "LaunchAgents"),
-  scriptDir:        SCRIPT_DIR,
-  agentQueueJson:   join(CONFIG_DIR, "agent-queue.json"),
-  mcpTokenJson:     join(CONFIG_DIR, "mcp-token.json"),
-  versionFile:      join(REPO_ROOT, "VERSION"),
-  installJson:      join(REPO_ROOT, ".yulu-install.json"),
-} as const;
+/** Resolve Host/Web paths while #163 still owns Capture, IPC, logs, and media. */
+export function resolveHostPaths(input: ApplicationDataPathInput = {}) {
+  const application = resolveApplicationDataPaths(input);
+  const homeDir = input.homeDir ?? homedir();
+  const legacyDir = application.legacyReadOnlyDataDir;
+  const durableDir = application.durableDataDir;
+  return {
+    ...application,
+    configDir:          legacyDir,
+    configFile:         application.configFile,
+    promptsDb:          join(durableDir, "prompts.sqlite"),
+    vocabDb:            join(durableDir, "vocab.sqlite"),
+    searchDb:           join(durableDir, "search.sqlite"),
+    hostDb:             join(durableDir, "host.sqlite"),
+    agentTasksDir:      join(durableDir, "agent-tasks"),
+    recordingEventsDir: join(legacyDir, "recording-events"),
+    agentQueueJson:     join(legacyDir, "agent-queue.json"),
+    mcpTokenJson:       join(durableDir, "mcp-token.json"),
+    audioDaemonSock:    join(legacyDir, "audio_daemon.sock"),
+    statusAgentSock:    join(legacyDir, "status_agent.sock"),
+    uiLog:              join(legacyDir, "ui.log"),
+    uiPid:              join(legacyDir, "yulu_ui.pid"),
+    moviesDir:          join(homeDir, "Movies", "Yulu"),
+    launchAgentsDir:    join(homeDir, "Library", "LaunchAgents"),
+    scriptDir:          SCRIPT_DIR,
+    versionFile:        join(REPO_ROOT, "VERSION"),
+    installJson:        join(REPO_ROOT, ".yulu-install.json"),
+  };
+}
+
+export const paths = resolveHostPaths({ homeDir: HOME });

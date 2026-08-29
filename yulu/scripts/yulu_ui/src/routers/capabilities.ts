@@ -75,7 +75,7 @@ export const capabilitiesRouter = router({
   host_capabilities: publicProcedure.query(async ({ ctx }): Promise<HostCapabilities> => {
     const { stdout, code } = await runSpawn(
       PYTHON,
-      ["-c", HOST_CAPABILITIES_PY, ctx.paths.configDir],
+      ["-c", HOST_CAPABILITIES_PY, ctx.paths.durableDataDir],
       pyEnv(ctx.paths.scriptDir),
       SPAWN_TIMEOUT_MS,
     );

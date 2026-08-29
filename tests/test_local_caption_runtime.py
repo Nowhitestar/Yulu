@@ -19,6 +19,16 @@ def create_complete_runtime(config_dir: Path):
     return paths
 
 
+def test_runtime_paths_keep_runtime_in_durable_data_and_models_in_standard_child(tmp_path):
+    data_dir = tmp_path / "Library" / "Application Support" / "Yulu"
+    models_dir = data_dir / "Models"
+
+    paths = runtime.runtime_paths(data_dir, models_dir=models_dir)
+
+    assert paths["runtime"] == data_dir / "local-caption"
+    assert paths["model"] == models_dir / runtime.MODEL_NAME
+
+
 def test_status_requires_both_runtime_and_all_int8_model_files(monkeypatch, tmp_path):
     paths = create_complete_runtime(tmp_path)
     monkeypatch.setattr(runtime, "_runtime_pack_ok", lambda pack, _definition: pack == paths["pack"])

@@ -43,6 +43,7 @@ function makeCtx(
     paths: {
       moviesDir,
       configDir: join(moviesDir, "config"),
+      durableDataDir: join(moviesDir, "config"),
       scriptDir: "/fake/yulu/scripts",
       statusAgentSock: join(moviesDir, "missing-status.sock"),
     },

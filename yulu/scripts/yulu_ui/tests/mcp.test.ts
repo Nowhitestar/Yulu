@@ -1,13 +1,44 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { IncomingMessage } from "node:http";
+import { chmodSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { AppContext } from "../src/trpc.js";
 import {
   isMcpRequest,
+  isAuthorizedToken,
   recordingArtifactMcpServer,
   recordingDeliveryMcpServer,
   stopRecordingAndEnqueue,
 } from "../src/mcp.js";
 import { RecordingPipelinePolicyDisabledError } from "../src/recordingPipeline.js";
+
+const roots: string[] = [];
+
+afterEach(() => {
+  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+});
+
+describe("MCP token file authority", () => {
+  it("rejects symbolic and non-private token files", () => {
+    const root = mkdtempSync(join(tmpdir(), "yulu-mcp-token-authority-"));
+    roots.push(root);
+    const canonicalRoot = realpathSync.native(root);
+    const token = "private-mcp-token-value";
+    const regular = join(canonicalRoot, "mcp-token.json");
+    writeFileSync(regular, JSON.stringify({ token }), { mode: 0o600 });
+    expect(isAuthorizedToken(regular, `Bearer ${token}`)).toBe(true);
+
+    chmodSync(regular, 0o644);
+    expect(isAuthorizedToken(regular, `Bearer ${token}`)).toBe(false);
+
+    const external = join(canonicalRoot, "external-token.json");
+    writeFileSync(external, JSON.stringify({ token }), { mode: 0o600 });
+    const alias = join(canonicalRoot, "token-alias.json");
+    symlinkSync(external, alias);
+    expect(isAuthorizedToken(alias, `Bearer ${token}`)).toBe(false);
+  });
+});
 
 function context(
   config: Record<string, unknown>,

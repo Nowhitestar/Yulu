@@ -258,7 +258,7 @@ describe("server", () => {
 
   it("/mcp rejects a wrong bearer token", async () => {
     const configDir = join(env.root, ".config", "yulu");
-    writeFileSync(join(configDir, "mcp-token.json"), JSON.stringify({ token: "test-token" }));
+    writeFileSync(join(configDir, "mcp-token.json"), JSON.stringify({ token: "test-token" }), { mode: 0o600 });
     const r = await fetch(`${env.baseUrl}/mcp`, {
       method: "POST",
       headers: {
@@ -273,7 +273,7 @@ describe("server", () => {
 
   it("protects compatibility audio transcription endpoints with the Bearer token", async () => {
     const configDir = join(env.root, ".config", "yulu");
-    writeFileSync(join(configDir, "mcp-token.json"), JSON.stringify({ token: "test-token" }));
+    writeFileSync(join(configDir, "mcp-token.json"), JSON.stringify({ token: "test-token" }), { mode: 0o600 });
     for (const path of ["/api/agent/transcription/warm", "/api/agent/transcribe"]) {
       const response = await fetch(`${env.baseUrl}${path}`, {
         method: "POST",
@@ -287,7 +287,7 @@ describe("server", () => {
   it("returns selected-engine warm and on-demand transcription results to authenticated callers", async () => {
     const configDir = join(env.root, ".config", "yulu");
     const audioPath = join(env.root, "Movies", "Yulu", "Dictation_20260711_130000.wav");
-    writeFileSync(join(configDir, "mcp-token.json"), JSON.stringify({ token: "test-token" }));
+    writeFileSync(join(configDir, "mcp-token.json"), JSON.stringify({ token: "test-token" }), { mode: 0o600 });
     writeFileSync(audioPath, Buffer.alloc(44));
     const warmSpy = vi.spyOn(RecordingPipeline.prototype, "warmTranscription")
       .mockResolvedValueOnce({ provider: "local" });
@@ -321,7 +321,7 @@ describe("server", () => {
   it("protects and forwards realtime recording start/stop requests", async () => {
     const configDir = join(env.root, ".config", "yulu");
     const audioPath = join(env.root, "Movies", "Yulu", "Realtime_20260714_160000.wav");
-    writeFileSync(join(configDir, "mcp-token.json"), JSON.stringify({ token: "test-token" }));
+    writeFileSync(join(configDir, "mcp-token.json"), JSON.stringify({ token: "test-token" }), { mode: 0o600 });
     writeFileSync(audioPath, Buffer.alloc(44));
     const startSpy = vi.spyOn(RealtimeTranscriptionCoordinator.prototype, "start").mockResolvedValueOnce();
     const stopSpy = vi.spyOn(RealtimeTranscriptionCoordinator.prototype, "stop").mockResolvedValueOnce(null);
@@ -374,7 +374,7 @@ describe("server", () => {
 
   it("rejects out-of-scope transcription paths before contacting the audio engine", async () => {
     const configDir = join(env.root, ".config", "yulu");
-    writeFileSync(join(configDir, "mcp-token.json"), JSON.stringify({ token: "test-token" }));
+    writeFileSync(join(configDir, "mcp-token.json"), JSON.stringify({ token: "test-token" }), { mode: 0o600 });
     const outside = join(env.root, "outside.wav");
     writeFileSync(outside, Buffer.alloc(44));
     const response = await fetch(`${env.baseUrl}/api/agent/transcribe`, {
@@ -389,7 +389,7 @@ describe("server", () => {
   it("surfaces an unavailable selected audio engine without falling back", async () => {
     const configDir = join(env.root, ".config", "yulu");
     const moviesDir = join(env.root, "Movies", "Yulu");
-    writeFileSync(join(configDir, "mcp-token.json"), JSON.stringify({ token: "test-token" }));
+    writeFileSync(join(configDir, "mcp-token.json"), JSON.stringify({ token: "test-token" }), { mode: 0o600 });
     const audioPath = join(moviesDir, "Dictation_20260711_120000.wav");
     writeFileSync(audioPath, Buffer.alloc(44));
     const headers = { "Content-Type": "application/json", "Authorization": "Bearer test-token" };
@@ -431,7 +431,7 @@ describe("server", () => {
     };
     config.agent_pipeline = { ...config.agent_pipeline, enabled: true, auto_process_recordings: true };
     writeFileSync(configFile, JSON.stringify(config));
-    writeFileSync(join(configDir, "mcp-token.json"), JSON.stringify({ token: "consent-guard-token" }));
+    writeFileSync(join(configDir, "mcp-token.json"), JSON.stringify({ token: "consent-guard-token" }), { mode: 0o600 });
     const audioPath = join(moviesDir, "Scheduled_20260711_140000.wav");
     writeFileSync(audioPath, pcmWav());
     const xaiStart = vi.spyOn(XaiAudioClient.prototype, "start");
@@ -503,7 +503,7 @@ describe("server", () => {
 
   it("/mcp initializes with the correct token", async () => {
     const configDir = join(env.root, ".config", "yulu");
-    writeFileSync(join(configDir, "mcp-token.json"), JSON.stringify({ token: "test-token" }));
+    writeFileSync(join(configDir, "mcp-token.json"), JSON.stringify({ token: "test-token" }), { mode: 0o600 });
     const body = await mcpPost("initialize", {
       protocolVersion: "2025-06-18",
       capabilities: {},
@@ -514,7 +514,7 @@ describe("server", () => {
 
   it("/mcp lists Yulu tools without destructive delete tools", async () => {
     const configDir = join(env.root, ".config", "yulu");
-    writeFileSync(join(configDir, "mcp-token.json"), JSON.stringify({ token: "test-token" }));
+    writeFileSync(join(configDir, "mcp-token.json"), JSON.stringify({ token: "test-token" }), { mode: 0o600 });
     const body = await mcpPost("tools/list") as { result?: { tools?: Array<{ name: string }> } };
     const names = body.result?.tools?.map((tool) => tool.name) ?? [];
     expect(names).toContain("recording_get");
@@ -529,7 +529,7 @@ describe("server", () => {
 
   it("exposes separate minimal artifact and delivery MCP capability sets", async () => {
     const configDir = join(env.root, ".config", "yulu");
-    writeFileSync(join(configDir, "mcp-token.json"), JSON.stringify({ token: "test-token" }));
+    writeFileSync(join(configDir, "mcp-token.json"), JSON.stringify({ token: "test-token" }), { mode: 0o600 });
     const initialized = await mcpPost("initialize", {
       protocolVersion: "2025-06-18",
       capabilities: {},
@@ -568,7 +568,7 @@ describe("server", () => {
     const configDir = join(env.root, ".config", "yulu");
     const moviesDir = join(env.root, "Movies", "Yulu");
     const token = "test-token";
-    writeFileSync(join(configDir, "mcp-token.json"), JSON.stringify({ token }));
+    writeFileSync(join(configDir, "mcp-token.json"), JSON.stringify({ token }), { mode: 0o600 });
     const audioPath = join(moviesDir, "Pipeline_20260711_120000.wav");
     writeFileSync(audioPath, Buffer.alloc(44));
 
@@ -613,7 +613,7 @@ describe("server", () => {
       auto_process_recordings: true,
     };
     writeFileSync(configFile, JSON.stringify(config));
-    writeFileSync(join(configDir, "mcp-token.json"), JSON.stringify({ token: "policy-token" }));
+    writeFileSync(join(configDir, "mcp-token.json"), JSON.stringify({ token: "policy-token" }), { mode: 0o600 });
     const audioPath = join(moviesDir, "Paused_20260711_130000.wav");
     writeFileSync(audioPath, Buffer.alloc(44));
     const server = await startServer({
@@ -652,7 +652,7 @@ describe("server", () => {
     const configDir = join(env.root, ".config", "yulu");
     const moviesDir = join(env.root, "Movies", "Yulu");
     const token = "test-token";
-    writeFileSync(join(configDir, "mcp-token.json"), JSON.stringify({ token }));
+    writeFileSync(join(configDir, "mcp-token.json"), JSON.stringify({ token }), { mode: 0o600 });
     await mcpPost("tools/call", {
       name: "glossary_add",
       arguments: { term: "阿法学院", canonical: "阿尔法学院", scope: "both" },
@@ -715,7 +715,7 @@ describe("server", () => {
   it("/mcp exposes recording text without WAV bytes", async () => {
     const configDir = join(env.root, ".config", "yulu");
     const moviesDir = join(env.root, "Movies", "Yulu");
-    writeFileSync(join(configDir, "mcp-token.json"), JSON.stringify({ token: "test-token" }));
+    writeFileSync(join(configDir, "mcp-token.json"), JSON.stringify({ token: "test-token" }), { mode: 0o600 });
     writeFileSync(join(moviesDir, "McpRec_20260101_120000.wav"), Buffer.alloc(44));
     writeFileSync(join(moviesDir, "McpRec_20260101_120000.transcript.txt"), "hello transcript");
     writeFileSync(join(moviesDir, "McpRec_20260101_120000.summary.md"), "# hello summary");
@@ -788,7 +788,7 @@ describe("server", () => {
 
   it("/api/voice-chat/ask rejects implicit creation and continues an existing pinned session", async () => {
     const configDir = join(env.root, ".config", "yulu");
-    writeFileSync(join(configDir, "mcp-token.json"), JSON.stringify({ token: "test-token" }));
+    writeFileSync(join(configDir, "mcp-token.json"), JSON.stringify({ token: "test-token" }), { mode: 0o600 });
     const config = JSON.parse(readFileSync(join(configDir, "config.json"), "utf8"));
     config.llm = { enabled: false, command: null };
     writeFileSync(join(configDir, "config.json"), JSON.stringify(config, null, 2));
@@ -844,7 +844,7 @@ describe("server", () => {
 
   it("/api/voice-chat/ask can return immediately for an existing pinned session", async () => {
     const configDir = join(env.root, ".config", "yulu");
-    writeFileSync(join(configDir, "mcp-token.json"), JSON.stringify({ token: "test-token" }));
+    writeFileSync(join(configDir, "mcp-token.json"), JSON.stringify({ token: "test-token" }), { mode: 0o600 });
     const unauthorized = await fetch(`${env.baseUrl}/api/voice-chat/ask`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },

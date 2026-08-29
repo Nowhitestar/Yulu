@@ -164,12 +164,12 @@ export const askRouter = router({
     }))
     .mutation(async ({ input, ctx }) => {
       const startedAt = Date.now();
-      const session = getAgentSession(ctx.paths.configDir, input.sessionId);
+      const session = getAgentSession(ctx.paths.durableDataDir, input.sessionId);
       if (!session || session.purpose !== "ask") throw new Error("Ask session not found");
       if (session.status === "paused" && !input.retry) {
         return {
           ...pauseResponse(
-            ctx.paths.configDir,
+            ctx.paths.durableDataDir,
             session,
             session.pausedReason || "Conversation is paused; retry the same provider or create a new conversation",
             { owner: session.provider === "xai" ? "yulu" : "agent", query: input.question, hits: [] },
@@ -192,7 +192,7 @@ export const askRouter = router({
       if (input.retry && (!retrySnapshot || retrySnapshot.question !== input.question)) {
         return {
           ...pauseResponse(
-            ctx.paths.configDir,
+            ctx.paths.durableDataDir,
             session,
             "The persisted retry snapshot is unavailable or does not match this question",
             { owner: session.provider === "xai" ? "yulu" : "agent", query: input.question, hits: [] },
@@ -231,7 +231,7 @@ export const askRouter = router({
         if (!session.connectionId || session.credentialSource !== "runtime-oauth") {
           return {
             ...pauseResponse(
-              ctx.paths.configDir,
+              ctx.paths.durableDataDir,
               session,
               `Pinned ${runtimeName} connection identity is unavailable; create a new conversation after selecting ${runtimeName} again`,
               search,
@@ -245,7 +245,7 @@ export const askRouter = router({
         if (isConversationOnly && session.disclosureVersion !== disclosureVersion) {
           return {
             ...pauseResponse(
-              ctx.paths.configDir,
+              ctx.paths.durableDataDir,
               session,
               `Pinned ${runtimeName} disclosure snapshot is unavailable; create a new conversation after accepting the current disclosure`,
               search,
@@ -259,7 +259,7 @@ export const askRouter = router({
         if (isConversationOnly && !session.runtimeProvider) {
           return {
             ...pauseResponse(
-              ctx.paths.configDir,
+              ctx.paths.durableDataDir,
               session,
               `Pinned ${runtimeName} provider identity is unavailable; create a new conversation after testing the exact provider and model`,
               search,
@@ -277,7 +277,7 @@ export const askRouter = router({
         )) {
           return {
             ...pauseResponse(
-              ctx.paths.configDir,
+              ctx.paths.durableDataDir,
               session,
               `The current ${runtimeName} Conversation data path disclosure is required`,
               search,
@@ -291,7 +291,7 @@ export const askRouter = router({
         if (!ctx.agentConnections) {
           return {
             ...pauseResponse(
-              ctx.paths.configDir,
+              ctx.paths.durableDataDir,
               session,
               `Pinned ${runtimeName} connection ${session.connectionId} is unavailable; restore it in Agent Connection Center`,
               search,
@@ -309,7 +309,7 @@ export const askRouter = router({
           ? retryProviderInput.prompt
           : nativeAgentPrompt(session, question, input.limit ?? MAX_SOURCE_COUNT);
         const providerInput: AgentSessionProviderInput = { kind: "prompt", prompt: outboundPrompt };
-        const invocation = beginAgentSessionInvocation(ctx.paths.configDir, session.id, snapshot, providerInput);
+        const invocation = beginAgentSessionInvocation(ctx.paths.durableDataDir, session.id, snapshot, providerInput);
         try {
           const request = {
             connectionId: session.connectionId,
@@ -326,15 +326,15 @@ export const askRouter = router({
               ? await ctx.agentConnections.converseClaude(request)
               : await ctx.agentConnections.converseCodex(request);
           if (!session.nativeSessionId) {
-            updateAgentSessionNativeSession(ctx.paths.configDir, session.id, {
+            updateAgentSessionNativeSession(ctx.paths.durableDataDir, session.id, {
               nativeSessionId: result.nativeSessionId,
               runtimeLabel: runtimeName,
             });
           } else if (result.nativeSessionId !== session.nativeSessionId) {
             throw new Error(`${runtimeName} returned a different session; latest-session fallback was rejected`);
           }
-          completeAgentSessionInvocation(ctx.paths.configDir, session.id, invocation.executionId);
-          if (input.retry) resumeAgentSession(ctx.paths.configDir, session.id);
+          completeAgentSessionInvocation(ctx.paths.durableDataDir, session.id, invocation.executionId);
+          if (input.retry) resumeAgentSession(ctx.paths.durableDataDir, session.id);
           return {
             ok: true,
             answer: result.answer,
@@ -357,24 +357,24 @@ export const askRouter = router({
             error instanceof ConversationOnlyAgentConversationError;
           const unknownOutcome = isNativeConversationError && error.unknownOutcome;
           if (isNativeConversationError && !session.nativeSessionId && error.nativeSessionId) {
-            updateAgentSessionNativeSession(ctx.paths.configDir, session.id, {
+            updateAgentSessionNativeSession(ctx.paths.durableDataDir, session.id, {
               nativeSessionId: error.nativeSessionId,
               runtimeLabel: runtimeName,
             });
           }
           if (unknownOutcome) {
             markAgentSessionInvocationUnknown(
-              ctx.paths.configDir,
+              ctx.paths.durableDataDir,
               session.id,
               invocation.executionId,
               `${runtimeName} Conversation entered Unknown Outcome; create a new attempt before sending again`,
             );
           } else {
-            completeAgentSessionInvocation(ctx.paths.configDir, session.id, invocation.executionId);
+            completeAgentSessionInvocation(ctx.paths.durableDataDir, session.id, invocation.executionId);
           }
           return {
             ...pauseResponse(
-              ctx.paths.configDir,
+              ctx.paths.durableDataDir,
               session,
               (error as Error).message,
               search,
@@ -397,7 +397,7 @@ export const askRouter = router({
         if (!hasCurrentXaiConversationDisclosure(ctx.host)) {
           return {
             ...pauseResponse(
-              ctx.paths.configDir,
+              ctx.paths.durableDataDir,
               session,
               "The current xAI conversation data path disclosure is required",
               { owner: "yulu", query: question, hits: [] },
@@ -411,7 +411,7 @@ export const askRouter = router({
         if (session.credentialSource !== "oauth" && session.credentialSource !== "api-key") {
           return {
             ...pauseResponse(
-              ctx.paths.configDir,
+              ctx.paths.durableDataDir,
               session,
               "Pinned xAI conversation credential identity is unavailable",
               { owner: "yulu", query: question, hits: [] },
@@ -434,7 +434,7 @@ export const askRouter = router({
           } catch (error) {
             return {
               ...pauseResponse(
-                ctx.paths.configDir,
+                ctx.paths.durableDataDir,
                 session,
                 (error as Error).message,
                 { owner: "yulu", query: question, hits: [] },
@@ -458,7 +458,7 @@ export const askRouter = router({
             };
         const snapshot = { question, sources };
         if (sources.length === 0) {
-          if (input.retry) resumeAgentSession(ctx.paths.configDir, session.id);
+          if (input.retry) resumeAgentSession(ctx.paths.durableDataDir, session.id);
           return {
             ok: false,
             answer: EMPTY_EVIDENCE,
@@ -478,7 +478,7 @@ export const askRouter = router({
         if (!ctx.xaiText) {
           return {
             ...pauseResponse(
-              ctx.paths.configDir,
+              ctx.paths.durableDataDir,
               session,
               `Pinned conversation provider xai is unavailable for model ${session.model}`,
               searchProjection,
@@ -496,7 +496,7 @@ export const askRouter = router({
           ? retryProviderInput.messages
           : xaiInput(session, question, sources);
         const providerInput: AgentSessionProviderInput = { kind: "messages", messages: outboundMessages };
-        const invocation = beginAgentSessionInvocation(ctx.paths.configDir, session.id, snapshot, providerInput);
+        const invocation = beginAgentSessionInvocation(ctx.paths.durableDataDir, session.id, snapshot, providerInput);
         try {
           const result = await ctx.xaiText.request({
             capability: "conversation",
@@ -510,8 +510,8 @@ export const askRouter = router({
           if (result.credentialSource !== session.credentialSource) {
             throw new Error(`Pinned xAI credential ${session.credentialSource} returned as ${result.credentialSource}`);
           }
-          completeAgentSessionInvocation(ctx.paths.configDir, session.id, invocation.executionId);
-          if (input.retry) resumeAgentSession(ctx.paths.configDir, session.id);
+          completeAgentSessionInvocation(ctx.paths.durableDataDir, session.id, invocation.executionId);
+          if (input.retry) resumeAgentSession(ctx.paths.durableDataDir, session.id);
           return {
             ok: true,
             answer: result.text,
@@ -531,17 +531,17 @@ export const askRouter = router({
           const unknownOutcome = error instanceof XaiTextUnknownOutcomeError;
           if (unknownOutcome) {
             markAgentSessionInvocationUnknown(
-              ctx.paths.configDir,
+              ctx.paths.durableDataDir,
               session.id,
               invocation.executionId,
               "xAI Conversation entered Unknown Outcome; create a new attempt before sending again",
             );
           } else {
-            completeAgentSessionInvocation(ctx.paths.configDir, session.id, invocation.executionId);
+            completeAgentSessionInvocation(ctx.paths.durableDataDir, session.id, invocation.executionId);
           }
           return {
             ...pauseResponse(
-              ctx.paths.configDir,
+              ctx.paths.durableDataDir,
               session,
               (error as Error).message,
               searchProjection,
@@ -568,7 +568,7 @@ export const askRouter = router({
         const current = runtime.disabledReason ? `${runtime.provider} (${runtime.disabledReason})` : runtime.provider;
         return {
           ...pauseResponse(
-            ctx.paths.configDir,
+            ctx.paths.durableDataDir,
             session,
             `Pinned conversation provider ${session.provider} does not match current Agent runtime ${current}`,
             search,
@@ -588,10 +588,10 @@ export const askRouter = router({
           timeoutMs: AGENT_TIMEOUT_MS,
           nativeSessionId: session.nativeSessionId,
           yuluSessionId: session.id,
-          configDir: ctx.paths.configDir,
+          configDir: ctx.paths.durableDataDir,
         });
         if (result.nativeSessionId && result.nativeSessionId !== session.nativeSessionId) {
-          updateAgentSessionNativeSession(ctx.paths.configDir, session.id, {
+          updateAgentSessionNativeSession(ctx.paths.durableDataDir, session.id, {
             nativeSessionId: result.nativeSessionId,
             runtimeLabel: runtime.label,
           });
@@ -602,11 +602,11 @@ export const askRouter = router({
           : (result.stderr || result.stdout || `Agent exited ${result.code}`).trim();
         if (error) {
           return {
-            ...pauseResponse(ctx.paths.configDir, session, error, search, agentRuntime, [], { question, sources: [] }),
+            ...pauseResponse(ctx.paths.durableDataDir, session, error, search, agentRuntime, [], { question, sources: [] }),
             elapsedMs: Date.now() - startedAt,
           };
         }
-        if (input.retry) resumeAgentSession(ctx.paths.configDir, session.id);
+        if (input.retry) resumeAgentSession(ctx.paths.durableDataDir, session.id);
         return {
           ok: true,
           answer,
@@ -626,7 +626,7 @@ export const askRouter = router({
       } catch (error) {
         return {
           ...pauseResponse(
-            ctx.paths.configDir,
+            ctx.paths.durableDataDir,
             session,
             (error as Error).message,
             search,

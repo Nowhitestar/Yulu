@@ -51,24 +51,31 @@ function usableRuntime(runtime: LocalCaptionRuntime): boolean {
 export function resolveLocalCaptionRuntime(input: {
   scriptDir: string;
   configDir: string;
+  modelsDir?: string;
+  legacyConfigDir?: string;
+  legacyModelsDir?: string;
   env?: NodeJS.ProcessEnv;
 }): LocalCaptionRuntime | null {
   const env = input.env ?? process.env;
-  const runtime: LocalCaptionRuntime = {
-    python: env.YULU_PYTHON?.trim() || "",
-    pythonPath: join(
-      input.configDir,
-      "local-caption",
-      "YuluLocalCaptionRuntime.bundle",
-      "Contents",
-      "Resources",
-      "site-packages",
-    ),
-    runtimePack: join(input.configDir, "local-caption", "YuluLocalCaptionRuntime.bundle"),
-    workerPath: join(input.scriptDir, "sherpa_caption_worker.py"),
-    modelDir: env.YULU_LOCAL_CAPTION_MODEL_DIR?.trim() || join(input.configDir, "models", MODEL_NAME),
-  };
-  return usableRuntime(runtime) ? runtime : null;
+  const candidates = [
+    { dataDir: input.configDir, modelsDir: input.modelsDir ?? join(input.configDir, "models") },
+    ...(input.legacyConfigDir ? [{
+      dataDir: input.legacyConfigDir,
+      modelsDir: input.legacyModelsDir ?? join(input.legacyConfigDir, "models"),
+    }] : []),
+  ];
+  for (const candidate of candidates) {
+    const runtimePack = join(candidate.dataDir, "local-caption", "YuluLocalCaptionRuntime.bundle");
+    const runtime: LocalCaptionRuntime = {
+      python: env.YULU_PYTHON?.trim() || "",
+      pythonPath: join(runtimePack, "Contents", "Resources", "site-packages"),
+      runtimePack,
+      workerPath: join(input.scriptDir, "sherpa_caption_worker.py"),
+      modelDir: env.YULU_LOCAL_CAPTION_MODEL_DIR?.trim() || join(candidate.modelsDir, MODEL_NAME),
+    };
+    if (usableRuntime(runtime)) return runtime;
+  }
+  return null;
 }
 
 interface WorkerResponse {

@@ -1,7 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { timingSafeEqual } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { z } from "zod";
@@ -337,13 +337,30 @@ function isAuthorized(req: IncomingMessage, tokenPath: string): boolean {
 }
 
 export function isAuthorizedToken(tokenPath: string, authorization = "", xToken = ""): boolean {
-  if (!existsSync(tokenPath)) return false;
   let token = "";
+  let fd: number | null = null;
   try {
-    const raw = JSON.parse(readFileSync(tokenPath, "utf8")) as { token?: unknown };
+    const parent = dirname(tokenPath);
+    const parentStat = lstatSync(parent);
+    if (parentStat.isSymbolicLink() || !parentStat.isDirectory()) return false;
+    const before = lstatSync(tokenPath);
+    if (before.isSymbolicLink() || !before.isFile() || (before.mode & 0o777) !== 0o600) return false;
+    fd = openSync(tokenPath, constants.O_RDONLY | constants.O_NOFOLLOW);
+    const opened = fstatSync(fd);
+    if (
+      !opened.isFile()
+      || opened.dev !== before.dev
+      || opened.ino !== before.ino
+      || (opened.mode & 0o777) !== 0o600
+    ) return false;
+    const raw = JSON.parse(readFileSync(fd, "utf8")) as { token?: unknown };
+    const after = fstatSync(fd);
+    if (after.dev !== opened.dev || after.ino !== opened.ino || (after.mode & 0o777) !== 0o600) return false;
     token = typeof raw.token === "string" ? raw.token : "";
   } catch {
     return false;
+  } finally {
+    if (fd !== null) closeSync(fd);
   }
   const candidate = bearerToken(authorization) || xToken.trim();
   if (!token || !candidate) return false;

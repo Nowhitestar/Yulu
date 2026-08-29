@@ -47,7 +47,7 @@ export const agentSessionsRouter = router({
     .input(z.object({ agent: z.string().optional() }).optional())
     .query(({ ctx, input }) => {
       return {
-        sessions: listAgentSessions(ctx.paths.configDir, { agent: input?.agent, purpose: "ask" })
+        sessions: listAgentSessions(ctx.paths.durableDataDir, { agent: input?.agent, purpose: "ask" })
           .map((session) => summarizeAgentSession(session)),
       };
     }),
@@ -55,7 +55,7 @@ export const agentSessionsRouter = router({
   get: publicProcedure
     .input(z.object({ id: z.string().min(1) }))
     .query(({ ctx, input }) => {
-      return getAgentSession(ctx.paths.configDir, input.id);
+      return getAgentSession(ctx.paths.durableDataDir, input.id);
     }),
 
   create: uiMutationProcedure
@@ -80,7 +80,7 @@ export const agentSessionsRouter = router({
         }
         const credentialSource = await requireConversationReadiness(() =>
           ctx.agentConnections!.assertXaiConversationReady({ model: selection.model }));
-        return createAgentSession(ctx.paths.configDir, {
+        return createAgentSession(ctx.paths.durableDataDir, {
           provider: "xai",
           connectionId: "direct-xai",
           model: selection.model,
@@ -146,7 +146,7 @@ export const agentSessionsRouter = router({
               `Test this exact ${runtimeLabel} Conversation provider and model before starting a new conversation`,
             );
           }
-          return createAgentSession(ctx.paths.configDir, {
+          return createAgentSession(ctx.paths.durableDataDir, {
             provider: connection.adapter,
             connectionId: connection.id,
             model: selection.model,
@@ -163,7 +163,7 @@ export const agentSessionsRouter = router({
               model: selection.model,
             }));
         }
-        return createAgentSession(ctx.paths.configDir, {
+        return createAgentSession(ctx.paths.durableDataDir, {
           provider: connection.adapter,
           connectionId: connection.id,
           model: selection.model,
@@ -185,13 +185,13 @@ export const agentSessionsRouter = router({
       message: agentSessionMessageInputSchema,
     }))
     .mutation(({ ctx, input }) => {
-      return appendAgentSessionMessage(ctx.paths.configDir, input.sessionId, input.message);
+      return appendAgentSessionMessage(ctx.paths.durableDataDir, input.sessionId, input.message);
     }),
 
   createAttemptFromUnknown: uiMutationProcedure
     .input(z.object({ id: z.string().min(1).max(200) }).strict())
     .mutation(({ ctx, input }) => {
-      return createAgentSessionAttemptFromUnknown(ctx.paths.configDir, input.id);
+      return createAgentSessionAttemptFromUnknown(ctx.paths.durableDataDir, input.id);
     }),
 
   rename: uiMutationProcedure
@@ -200,24 +200,24 @@ export const agentSessionsRouter = router({
       title: z.string().trim().min(1).max(48),
     }))
     .mutation(({ ctx, input }) => {
-      return renameAgentSession(ctx.paths.configDir, input.id, input.title);
+      return renameAgentSession(ctx.paths.durableDataDir, input.id, input.title);
     }),
 
   delete: uiMutationProcedure
     .input(z.object({ id: z.string().min(1) }))
     .mutation(({ ctx, input }) => {
-      return deleteAgentSession(ctx.paths.configDir, input.id);
+      return deleteAgentSession(ctx.paths.durableDataDir, input.id);
     }),
 
   pin: uiMutationProcedure
     .input(z.object({ id: z.string().min(1), pinned: z.boolean() }))
     .mutation(({ ctx, input }) => {
-      return pinAgentSession(ctx.paths.configDir, input.id, input.pinned);
+      return pinAgentSession(ctx.paths.durableDataDir, input.id, input.pinned);
     }),
 
   archive: uiMutationProcedure
     .input(z.object({ id: z.string().min(1), archived: z.boolean() }))
     .mutation(({ ctx, input }) => {
-      return archiveAgentSession(ctx.paths.configDir, input.id, input.archived);
+      return archiveAgentSession(ctx.paths.durableDataDir, input.id, input.archived);
     }),
 });

@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { existsSync, readdirSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { createInterface } from "node:readline";
 import {
   resolveLocalCaptionRuntime,
@@ -65,6 +65,9 @@ export class LocalCaptionManager implements StreamingCaptionEngine {
   constructor(private readonly options: {
     scriptDir: string;
     configDir: string;
+    modelsDir?: string;
+    legacyConfigDir?: string;
+    legacyModelsDir?: string;
     selected: () => boolean;
   }) {}
 
@@ -73,17 +76,15 @@ export class LocalCaptionManager implements StreamingCaptionEngine {
   }
 
   status(): LocalCaptionStatus {
-    const runtime = resolveLocalCaptionRuntime({
-      scriptDir: this.options.scriptDir,
-      configDir: this.options.configDir,
-    });
+    const runtime = this.resolveRuntime();
+    const modelsDir = this.options.modelsDir ?? join(this.options.configDir, "models");
     return {
       installed: runtime !== null,
       ready: runtime !== null && this.error === null,
       provider: this.provider,
       model: MODEL_NAME,
-      runtimeBytes: directoryBytes(join(this.options.configDir, "local-caption")),
-      modelBytes: directoryBytes(join(this.options.configDir, "models", MODEL_NAME)),
+      runtimeBytes: directoryBytes(runtime ? dirname(runtime.runtimePack) : join(this.options.configDir, "local-caption")),
+      modelBytes: directoryBytes(runtime?.modelDir ?? join(modelsDir, MODEL_NAME)),
       operation: this.operation,
       phase: this.phase,
       percent: this.percent,
@@ -161,10 +162,7 @@ export class LocalCaptionManager implements StreamingCaptionEngine {
       }
       return;
     }
-    const runtime = resolveLocalCaptionRuntime({
-      scriptDir: this.options.scriptDir,
-      configDir: this.options.configDir,
-    });
+    const runtime = this.resolveRuntime();
     if (runtime) await this.warm();
   }
 
@@ -236,13 +234,20 @@ export class LocalCaptionManager implements StreamingCaptionEngine {
 
   private ensureEngine(): SherpaCaptionEngine {
     if (this.engine) return this.engine;
-    const runtime = resolveLocalCaptionRuntime({
-      scriptDir: this.options.scriptDir,
-      configDir: this.options.configDir,
-    });
+    const runtime = this.resolveRuntime();
     if (!runtime) throw new Error("本地 sherpa-onnx 模型尚未安装");
     this.engine = new SherpaCaptionEngine(runtime);
     return this.engine;
+  }
+
+  private resolveRuntime() {
+    return resolveLocalCaptionRuntime({
+      scriptDir: this.options.scriptDir,
+      configDir: this.options.configDir,
+      modelsDir: this.options.modelsDir,
+      legacyConfigDir: this.options.legacyConfigDir,
+      legacyModelsDir: this.options.legacyModelsDir,
+    });
   }
 
   private setOperation(operation: LocalCaptionStatus["operation"], phase: string, message: string): void {
@@ -268,6 +273,8 @@ export class LocalCaptionManager implements StreamingCaptionEngine {
         action,
         "--config-dir",
         this.options.configDir,
+        "--models-dir",
+        this.options.modelsDir ?? join(this.options.configDir, "models"),
       ], {
         stdio: ["ignore", "pipe", "pipe"],
         env: environment,

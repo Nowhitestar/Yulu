@@ -14,6 +14,7 @@ import re
 import shutil
 import sqlite3
 import socket
+import stat
 import subprocess
 import sys
 from pathlib import Path
@@ -24,6 +25,7 @@ DEFAULT_SOURCE_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_RUNTIME_ROOT = Path.home() / ".yulu"
 DEFAULT_LEGACY_ROOT = Path.home() / ".openclaw/workspace/meeting-assistant/yulu"
 DEFAULT_CONFIG_DIR = Path.home() / ".config/yulu"
+DEFAULT_APPLICATION_DATA_DIR = Path.home() / "Library/Application Support/Yulu"
 
 
 def check_host_tasks(config_dir: Path) -> dict[str, Any]:
@@ -51,6 +53,8 @@ def check_agent_pipeline(
     ui_report: dict[str, Any],
     hermes_contract: dict[str, Any] | None = None,
     hermes_phase_registration: dict[str, Any] | None = None,
+    token_path: Path | None = None,
+    legacy_token_path: Path | None = None,
 ) -> dict[str, Any]:
     """Verify the dependencies required by the Agent-owned recording pipeline.
 
@@ -86,26 +90,46 @@ def check_agent_pipeline(
     hermes = by_name.get("hermes", {})
     ffmpeg = by_name.get("ffmpeg", {})
 
-    token_path = Path(config_dir) / "mcp-token.json"
-    token_present = token_path.is_file()
+    standard_token_path = Path(token_path) if token_path is not None else Path(config_dir) / "mcp-token.json"
+    selected_token_path = standard_token_path
+    using_legacy_token = False
+    try:
+        standard_token_stat = standard_token_path.lstat()
+    except FileNotFoundError:
+        standard_token_stat = None
+    except OSError:
+        standard_token_stat = None
+    if standard_token_stat is None and legacy_token_path is not None:
+        selected_token_path = Path(legacy_token_path)
+        using_legacy_token = True
+    try:
+        selected_token_stat = selected_token_path.lstat()
+    except FileNotFoundError:
+        selected_token_stat = None
+    except OSError:
+        selected_token_stat = None
+    token_present = selected_token_stat is not None
     token_valid = False
     token_mode: str | None = None
     token_mode_secure = False
     token_error = ""
     if token_present:
-        try:
-            token_doc = json.loads(token_path.read_text(encoding="utf-8"))
-            token = token_doc.get("token") if isinstance(token_doc, dict) else None
-            mode = token_path.stat().st_mode & 0o777
-            token_mode = f"{mode:04o}"
-            token_mode_secure = (mode & 0o077) == 0
-            token_valid = isinstance(token, str) and len(token.strip()) >= 16 and token_mode_secure
-            if not token_mode_secure:
-                token_error = "token permissions must be 0600"
-            elif not isinstance(token, str) or len(token.strip()) < 16:
-                token_error = "token is missing or too short"
-        except Exception as exc:
-            token_error = str(exc)
+        if selected_token_stat is None or not stat.S_ISREG(selected_token_stat.st_mode):
+            token_error = "token file is not a regular file"
+        else:
+            try:
+                token_doc = json.loads(selected_token_path.read_text(encoding="utf-8"))
+                token = token_doc.get("token") if isinstance(token_doc, dict) else None
+                mode = selected_token_stat.st_mode & 0o777
+                token_mode = f"{mode:04o}"
+                token_mode_secure = (mode & 0o077) == 0
+                token_valid = isinstance(token, str) and len(token.strip()) >= 16 and token_mode_secure
+                if not token_mode_secure:
+                    token_error = "token permissions must be 0600"
+                elif not isinstance(token, str) or len(token.strip()) < 16:
+                    token_error = "token is missing or too short"
+            except Exception:
+                token_error = "token unreadable"
 
     components = {
         "hermes_cli": {
@@ -130,10 +154,10 @@ def check_agent_pipeline(
         },
         "mcp_token": {
             "ok": token_valid,
-            "path": str(token_path),
             "present": token_present,
             "mode": token_mode,
             "mode_secure": token_mode_secure,
+            "legacy_fallback": using_legacy_token,
             "error": token_error,
         },
         "ui_healthz": {
@@ -764,11 +788,19 @@ def collect_report(
     runtime_root: Path = DEFAULT_RUNTIME_ROOT,
     legacy_root: Path = DEFAULT_LEGACY_ROOT,
     config_dir: Path = DEFAULT_CONFIG_DIR,
+    application_data_dir: Path | None = None,
 ) -> dict[str, Any]:
     source_root = Path(source_root).expanduser().resolve()
     runtime_root = Path(runtime_root).expanduser()
     legacy_root = Path(legacy_root).expanduser()
     config_dir = Path(config_dir).expanduser()
+    if application_data_dir is None:
+        application_data_dir = (
+            DEFAULT_APPLICATION_DATA_DIR
+            if config_dir == DEFAULT_CONFIG_DIR
+            else config_dir
+        )
+    application_data_dir = Path(application_data_dir).expanduser()
 
     processes = _safe_process_projection(
         _yulu_processes(),
@@ -808,6 +840,8 @@ def collect_report(
         ui_report,
         hermes_contract=hermes_contract,
         hermes_phase_registration=hermes_phase_registration,
+        token_path=application_data_dir / "mcp-token.json",
+        legacy_token_path=config_dir / "mcp-token.json",
     )
 
     return {
@@ -994,9 +1028,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--runtime-root", type=Path, default=DEFAULT_RUNTIME_ROOT)
     parser.add_argument("--legacy-root", type=Path, default=DEFAULT_LEGACY_ROOT)
     parser.add_argument("--config-dir", type=Path, default=DEFAULT_CONFIG_DIR)
+    parser.add_argument("--application-data-dir", type=Path, default=DEFAULT_APPLICATION_DATA_DIR)
     args = parser.parse_args(argv)
 
-    report = collect_report(args.source_root, args.runtime_root, args.legacy_root, args.config_dir)
+    report = collect_report(
+        args.source_root,
+        args.runtime_root,
+        args.legacy_root,
+        args.config_dir,
+        args.application_data_dir,
+    )
     if args.json:
         print(json.dumps(report, ensure_ascii=False, indent=2))
     else:

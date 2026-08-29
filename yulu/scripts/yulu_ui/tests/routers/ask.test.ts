@@ -77,7 +77,7 @@ function context(
         decidedAt: "2026-08-27T00:00:00.000Z",
       }),
     },
-    paths: { configDir, moviesDir, scriptDir: "/fake/yulu/scripts" },
+    paths: { configDir, durableDataDir: configDir, moviesDir, scriptDir: "/fake/yulu/scripts" },
     ...(injected.localSearch ? { localSearch: injected.localSearch } : {}),
     ...(injected.xaiRequest ? { xaiText: { request: injected.xaiRequest } } : {}),
     ...(injected.codexConverse || injected.claudeConverse || injected.conversationOnlyConverse ? {

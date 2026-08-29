@@ -7,11 +7,14 @@ import { LocalCaptionManager } from "../src/localCaptionManager.js";
 
 const roots: string[] = [];
 const originalYuluPython = process.env.YULU_PYTHON;
+const originalLocalCaptionModelDir = process.env.YULU_LOCAL_CAPTION_MODEL_DIR;
 const originalPythonPath = process.env.PYTHONPATH;
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
   if (originalYuluPython === undefined) delete process.env.YULU_PYTHON;
   else process.env.YULU_PYTHON = originalYuluPython;
+  if (originalLocalCaptionModelDir === undefined) delete process.env.YULU_LOCAL_CAPTION_MODEL_DIR;
+  else process.env.YULU_LOCAL_CAPTION_MODEL_DIR = originalLocalCaptionModelDir;
   if (originalPythonPath === undefined) delete process.env.PYTHONPATH;
   else process.env.PYTHONPATH = originalPythonPath;
 });
@@ -57,6 +60,38 @@ function fixture(
 }
 
 describe("LocalCaptionManager", () => {
+  it("uses the standard Models directory supplied by the Host", () => {
+    const root = mkdtempSync(join(tmpdir(), "yulu-caption-standard-models-"));
+    roots.push(root);
+    const scriptDir = join(root, "scripts");
+    const configDir = join(root, "Library/Application Support/Yulu");
+    const modelsDir = join(configDir, "Standard Models");
+    const modelDir = join(modelsDir, "sherpa-onnx-streaming-paraformer-bilingual-zh-en");
+    const packSitePackages = join(
+      configDir,
+      "local-caption/YuluLocalCaptionRuntime.bundle/Contents/Resources/site-packages",
+    );
+    mkdirSync(scriptDir, { recursive: true });
+    mkdirSync(modelDir, { recursive: true });
+    mkdirSync(packSitePackages, { recursive: true });
+    writeFileSync(join(scriptDir, "sherpa_caption_worker.py"), "");
+    for (const name of ["tokens.txt", "encoder.int8.onnx", "decoder.int8.onnx"]) {
+      writeFileSync(join(modelDir, name), name);
+    }
+    process.env.YULU_PYTHON = process.execPath;
+    delete process.env.YULU_LOCAL_CAPTION_MODEL_DIR;
+
+    const manager = new LocalCaptionManager({
+      scriptDir,
+      configDir,
+      modelsDir,
+      selected: () => true,
+    });
+
+    expect(manager.status()).toMatchObject({ installed: true });
+    expect(manager.status().modelBytes).toBeGreaterThan(0);
+  });
+
   it("reports a complete runtime and runs a warm self-test", async () => {
     const manager = fixture();
     expect(manager.status()).toMatchObject({
@@ -97,6 +132,40 @@ describe("LocalCaptionManager", () => {
       operation: "idle",
     });
     await manager.close();
+  });
+
+  it("passes the Host standard Models directory to the installer", async () => {
+    const root = mkdtempSync(join(tmpdir(), "yulu-caption-installer-models-"));
+    roots.push(root);
+    const scriptDir = join(root, "scripts");
+    const configDir = join(root, "Library/Application Support/Yulu");
+    const modelsDir = join(configDir, "Standard Models");
+    const argvPath = join(root, "installer-argv.json");
+    mkdirSync(scriptDir, { recursive: true });
+    writeFileSync(join(scriptDir, "local_caption_runtime.py"), [
+      "import json, sys",
+      `open(${JSON.stringify(argvPath)}, 'w').write(json.dumps(sys.argv[1:]))`,
+      "",
+    ].join("\n"));
+    process.env.YULU_PYTHON = existsSync("/opt/homebrew/bin/python3")
+      ? "/opt/homebrew/bin/python3"
+      : execFileSync("which", ["python3"], { encoding: "utf8" }).trim();
+
+    const manager = new LocalCaptionManager({
+      scriptDir,
+      configDir,
+      modelsDir,
+      selected: () => false,
+    });
+    await manager.install();
+
+    expect(JSON.parse(readFileSync(argvPath, "utf8"))).toEqual([
+      "install",
+      "--config-dir",
+      configDir,
+      "--models-dir",
+      modelsDir,
+    ]);
   });
 
   it("starts the installer isolated from inherited Python startup code and modules", async () => {
