@@ -3,6 +3,7 @@ import io
 import json
 import os
 import plistlib
+import shutil
 import subprocess
 import tarfile
 from pathlib import Path
@@ -407,7 +408,7 @@ def test_runtime_verifier_requires_nonexpiring_signed_feed_failures_as_integer_z
     assert accepted.returncode == 0, accepted.stderr + accepted.stdout
 
 
-def test_signing_current_zip_workflow_and_explicit_update_mode_have_separate_contracts(
+def test_signing_current_dmg_workflow_and_explicit_update_mode_have_separate_contracts(
     tmp_path: Path,
 ):
     signer = ROOT / "packaging/scripts/sign_and_notarize.sh"
@@ -419,9 +420,11 @@ def test_signing_current_zip_workflow_and_explicit_update_mode_have_separate_con
     base64 = fake_bin / "base64"
     base64.write_text("#!/bin/sh\ncat >/dev/null\n", encoding="utf-8")
     base64.chmod(0o755)
+    node = shutil.which("node")
+    assert node is not None
     core = {
         **os.environ,
-        "PATH": f"{fake_bin}:/usr/bin:/bin:/usr/sbin:/sbin",
+        "PATH": f"{fake_bin}:{Path(node).parent}:/usr/bin:/bin:/usr/sbin:/sbin",
         "YULU_CODESIGN_IDENTITY": "test identity",
         "YULU_CODESIGN_P12_BASE64": "test",
         "P12_PWD": "test",
@@ -453,18 +456,37 @@ def test_signing_current_zip_workflow_and_explicit_update_mode_have_separate_con
     assert missing.returncode == 1
     assert "YULU_SPARKLE_FEED_URL" in missing.stderr
 
-    explicit = subprocess.run(
+    update_env = {
+        **core,
+        "YULU_SPARKLE_FEED_URL": "https://updates.yulu.app/appcast.xml",
+        "YULU_SPARKLE_PUBLIC_ED_KEY": (
+            "11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo="
+        ),
+        "YULU_SPARKLE_PRIVATE_ED_KEY": (
+            "nWGxne/9WmC6hEr0kuwsxERJxWl7MmkZcDusAxyuf2A="
+        ),
+        "YULU_RELEASE_VERSION": "0.23.0-rc.4",
+        "YULU_BUNDLE_SHORT_VERSION": "0.23.0",
+        "YULU_BUILD_NUMBER": "749",
+    }
+    mismatched = subprocess.run(
         ["bash", str(signer), "--update-release"],
         env={
-            **core,
-            "YULU_SPARKLE_FEED_URL": "https://updates.yulu.app/appcast.xml",
+            **update_env,
             "YULU_SPARKLE_PUBLIC_ED_KEY": (
                 "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
             ),
-            "YULU_RELEASE_VERSION": "0.23.0-rc.4",
-            "YULU_BUNDLE_SHORT_VERSION": "0.23.0",
-            "YULU_BUILD_NUMBER": "749",
         },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert mismatched.returncode == 1
+    assert "public and private Sparkle keys do not match" in mismatched.stderr
+
+    explicit = subprocess.run(
+        ["bash", str(signer), "--update-release"],
+        env=update_env,
         capture_output=True,
         text=True,
         check=False,
@@ -997,13 +1019,16 @@ def test_release_pipeline_builds_and_rechecks_the_locked_application_runtime():
     package = (ROOT / "packaging/scripts/package.sh").read_text(encoding="utf-8")
 
     assert "YULU_BUNDLE_APPLICATION_RUNTIME=1" in signing
-    manifest_resign = signing.split("# The build script signed Yulu.app", 1)[1]
-    assert "verify_application_runtime.sh" in manifest_resign
+    build = signing.index('build_audio_daemon.sh"')
+    runtime_verify = signing.index("verify_application_runtime.sh")
+    app_notarize = signing.index('notarize_app "$YULU_APP"')
+    package_dmg = signing.index('package.sh" "$TAG"')
+    assert build < runtime_verify < app_notarize < package_dmg
     assert "prepare_application_runtime.sh" in workflow
     assert "verify_application_runtime.sh" in workflow
+    assert "verify_dmg.sh" in workflow
     assert "packaging/runtime-lock.json" in workflow
-    assert '"yulu/scripts/yulu_ui/node_modules"' in package
-    assert '\n    "node_modules"\n' not in package
+    assert "YULU_BUNDLE_APPLICATION_RUNTIME=1" in package
 
 
 def test_runtime_inspection_finishes_with_a_deep_bundle_signature_gate():

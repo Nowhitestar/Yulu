@@ -31,7 +31,10 @@ those files and maintains the release PR:
 
 ## Package contents
 
-A public package must include runtime code and setup files only. Exclude:
+The public DMG contains exactly `Yulu.app` and an `Applications` alias pointing
+to `/Applications`. The App is the immutable, self-contained Application
+Runtime. The DMG must not contain an installer script, repository checkout, or
+writable runtime payload. Exclude from every release asset:
 
 - `~/.config/yulu`
 - `~/Movies/Yulu`
@@ -53,16 +56,18 @@ make test
 3. Review that PR's VERSION and CHANGELOG diff, wait for CI, then merge it.
 4. release-please creates the tag and a **draft** GitHub Release.
 5. The chained publish job checks out that tag, reruns Python/Node/Swift gates,
-   signs, notarizes, staples, packages and attests the runtime ZIP, uploads all
-   required assets, and verifies their remote sizes.
+   signs, notarizes, staples, packages and attests the DMG, uploads all required
+   assets, and verifies their remote bytes.
 6. Only after all assets are present does the workflow make the Release public.
 
 If publish fails, the Release stays draft and is not returned as latest stable.
 
 Required assets, exactly:
 
-- `yulu-macos-arm64-<tag>.zip`
-- `install.sh`
+- `yulu-macos-arm64-<tag>.dmg`
+- `yulu-local-caption-runtime-macos-arm64-<tag>.zip` (Optional Runtime Pack;
+  never an installer or DMG payload)
+- `appcast.xml` (signed Sparkle feed pointing to the same DMG)
 - `checksums.txt`
 
 Tags with a prerelease suffix, such as `v0.5.0-beta.1` or `v0.5.0-dogfood`, are published as prereleases.
@@ -81,6 +86,10 @@ Build the package and checksums locally when you want a packaging dry run:
 VERSION="$(cat VERSION)"
 DRY_DIST="$(mktemp -d "${TMPDIR:-/tmp}/yulu-release-dry-run.XXXXXX")"
 packaging/scripts/package.sh "v${VERSION}" --dist "$DRY_DIST" --skip-build
-packaging/scripts/checksums.sh "$DRY_DIST"
+packaging/scripts/checksums.sh "$DRY_DIST" "v${VERSION}"
 echo "$DRY_DIST"
 ```
+
+This creates an unsigned packaging-only DMG. Developer ID signing, App and DMG
+notarization/stapling, Gatekeeper checks, and Sparkle signature verification run
+only in the credentialed release workflow.

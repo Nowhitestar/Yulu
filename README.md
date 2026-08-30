@@ -134,7 +134,6 @@ center of the currently active display.
 
 - macOS 13 or later.
 - Apple Silicon (arm64) for official release installs.
-- Python 3.10 or newer.
 - A ready Summary Provider connection in Settings (xAI, Codex, or Claude Code)
   when you want automatic summaries. Sharing currently requires a supported
   Codex or Claude Code connection with a proven pre-tool authorization boundary;
@@ -145,26 +144,14 @@ center of the currently active display.
 - Optionally, Codex CLI, Claude Code, OpenClaw, Hermes, or a custom command for
   Agent Console conversation.
 
-The installer provisions a compatible Node.js runtime and Yulu's audio tools
-when they are missing.
+The official App contains its compatible Application Runtime and audio tools.
 
 ### Install
 
-Latest stable release:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/Nowhitestar/Yulu/main/install.sh | bash
-```
-
-Then make sure the CLI is on your shell path:
-
-```bash
-echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
-exec zsh
-```
-
-Yulu installs under `~/.yulu`, opens the setup flow, and guides you through the
-three macOS permissions it needs:
+Open the [latest GitHub Release](https://github.com/Nowhitestar/Yulu/releases/latest),
+download `yulu-macos-arm64-vX.Y.Z.dmg`, open it, and drag `Yulu.app` onto the
+`/Applications` alias. Launch `/Applications/Yulu.app`; the self-contained App
+opens the setup flow and guides you through the three macOS permissions it needs:
 
 | Component | Permission | Why |
 |---|---|---|
@@ -182,27 +169,19 @@ yulu record status
 yulu record stop
 ```
 
-### Install another channel
+### Install another version
 
-```bash
-# One specific release
-curl -fsSL https://raw.githubusercontent.com/Nowhitestar/Yulu/main/install.sh | bash -s -- --version v0.21.0
-
-# Current main branch for development dogfood
-curl -fsSL https://raw.githubusercontent.com/Nowhitestar/Yulu/main/install.sh | bash -s -- --dev
-```
+Open that version on the [Releases page](https://github.com/Nowhitestar/Yulu/releases),
+download its `yulu-macos-arm64-vX.Y.Z.dmg`, and replace `Yulu.app` in
+`/Applications`. Contributors can install the current checkout for development
+dogfood with `make dev-install`.
 
 ### Update or uninstall
 
-```bash
-yulu update                    # latest stable
-yulu update --version v0.21.0  # one specific release
-yulu update --dev              # current main branch
-yulu uninstall
-```
-
-Updates preserve configuration, recordings, and macOS permissions. Stable
-updates verify the published checksum before replacing the installed runtime.
+Yulu uses its signed Sparkle feed for stable updates. Manual recovery uses the
+same release DMG: quit Yulu, drag its `Yulu.app` over the existing copy in
+`/Applications`, then reopen it. Replacing the App preserves configuration and
+recordings stored outside the bundle.
 
 ## How Yulu works
 

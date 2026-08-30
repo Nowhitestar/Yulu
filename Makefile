@@ -1,4 +1,4 @@
-.PHONY: doctor doctor-json test py-compile pytest swift-build dev-install-dry-run sync-skill sync-skill-dry-run package package-pkg checksums
+.PHONY: doctor doctor-json test py-compile pytest swift-build dev-install-dry-run sync-skill sync-skill-dry-run package checksums
 
 PYTHON ?= python3
 SWIFT_BUILD_DIR ?= .ci-build
@@ -82,11 +82,6 @@ package:
 	bash packaging/scripts/package.sh "$(TAG)" $(PACKAGE_ARGS)
 
 
-package-pkg:
-	@echo "NOTE: package-pkg is a local diagnostic artifact only; official releases publish the notarized runtime zip until a Developer ID Installer certificate is configured."
-	@if [ -z "$(TAG)" ]; then echo "Usage: make package-pkg TAG=vX.Y.Z"; exit 1; fi
-	bash packaging/scripts/package_pkg.sh "$(TAG)" $(PACKAGE_PKG_ARGS)
-
-
 checksums:
-	bash packaging/scripts/checksums.sh dist
+	@if [ -z "$(TAG)" ]; then echo "Usage: make checksums TAG=vX.Y.Z"; exit 1; fi
+	bash packaging/scripts/checksums.sh dist "$(TAG)"

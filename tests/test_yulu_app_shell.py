@@ -2489,6 +2489,7 @@ def test_ci_runs_development_shell_smoke_after_node_dependencies_and_build():
 def test_release_gates_cover_the_shell_and_nested_capture():
     package = (ROOT / "packaging" / "scripts" / "package.sh").read_text(encoding="utf-8")
     signing = (ROOT / "packaging" / "scripts" / "sign_and_notarize.sh").read_text(encoding="utf-8")
+    build = (ROOT / "yulu" / "scripts" / "build_audio_daemon.sh").read_text(encoding="utf-8")
     ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
     release = (ROOT / ".github" / "workflows" / "release-publish.yml").read_text(encoding="utf-8")
 
@@ -2500,9 +2501,9 @@ def test_release_gates_cover_the_shell_and_nested_capture():
     ):
         assert output in package
 
-    manifest_resign = signing.split("# The build script signed Yulu.app", 1)[1]
-    assert '--entitlements "$SCRIPTS_DIR/YuluShell.app.entitlements"' in manifest_resign
-    assert '--entitlements "$SCRIPTS_DIR/Yulu.app.entitlements"' not in manifest_resign
+    assert 'SHELL_ENTITLEMENTS="$SCRIPT_DIR/YuluShell.app.entitlements"' in build
+    assert '--entitlements "$SHELL_ENTITLEMENTS" --sign "$IDENTITY" "$APP"' in build
+    assert 'codesign --verify --deep --strict --verbose=2 "$YULU_APP"' in signing
 
     assert ".ci-build/yulu_app" in ci
     for binary in (

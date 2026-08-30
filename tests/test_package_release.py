@@ -1,10 +1,8 @@
-import base64
 import json
 import os
 import re
 import shutil
 import subprocess
-import zipfile
 from pathlib import Path
 
 import pytest
@@ -102,66 +100,6 @@ def run(cmd: list[str], cwd: Path, env: dict[str, str] | None = None) -> subproc
     return subprocess.run(cmd, cwd=cwd, env=child_env, capture_output=True, text=True, check=False)
 
 
-def write_fake_pkg_tools(bin_dir: Path) -> None:
-    pkgbuild = bin_dir / "pkgbuild"
-    write_file(
-        pkgbuild,
-        "#!/usr/bin/env bash\n"
-        "set -euo pipefail\n"
-        "root=''\n"
-        "out=''\n"
-        "while [[ $# -gt 0 ]]; do\n"
-        "  case \"$1\" in\n"
-        "    --root) root=\"$2\"; shift 2 ;;\n"
-        "    --scripts|--identifier|--version|--install-location|--sign) shift 2 ;;\n"
-        "    *) out=\"$1\"; shift ;;\n"
-        "  esac\n"
-        "done\n"
-        "if [[ -z \"$root\" || -z \"$out\" ]]; then\n"
-        "  echo 'bad pkgbuild args' >&2\n"
-        "  exit 2\n"
-        "fi\n"
-        "find \"$root\" -print | LC_ALL=C sort > \"$out.manifest\"\n"
-        "if [[ -n \"${YULU_FAKE_PKG_MANIFEST:-}\" ]]; then\n"
-        "  cp \"$out.manifest\" \"$YULU_FAKE_PKG_MANIFEST\"\n"
-        "fi\n"
-        "printf 'pkg\\n' > \"$out\"\n",
-    )
-    pkgbuild.chmod(0o755)
-
-    pkgutil = bin_dir / "pkgutil"
-    write_file(
-        pkgutil,
-        "#!/usr/bin/env bash\n"
-        "set -euo pipefail\n"
-        "case \"$1\" in\n"
-        "  --expand)\n"
-        "    mkdir -p \"$3\"\n"
-        "    printf '<pkg-info><payload numberOfFiles=\"0\" installKBytes=\"0\"/></pkg-info>\\n' > \"$3/PackageInfo\"\n"
-        "    printf 'bom\\n' > \"$3/Bom\"\n"
-        "    printf 'payload\\n' > \"$3/Payload\"\n"
-        "    ;;\n"
-        "  --flatten)\n"
-        "    printf 'pkg\\n' > \"$3\"\n"
-        "    ;;\n"
-        "  *)\n"
-        "    echo \"unsupported fake pkgutil args: $*\" >&2\n"
-        "    exit 2\n"
-        "    ;;\n"
-        "esac\n",
-    )
-    pkgutil.chmod(0o755)
-
-    mkbom = bin_dir / "mkbom"
-    write_file(
-        mkbom,
-        "#!/usr/bin/env bash\n"
-        "set -euo pipefail\n"
-        "printf 'bom\\n' > \"$2\"\n",
-    )
-    mkbom.chmod(0o755)
-
-
 def write_fake_xcrun(bin_dir: Path) -> Path:
     args_log = bin_dir / "xcrun-args.log"
     xcrun = bin_dir / "xcrun"
@@ -179,82 +117,97 @@ def write_fake_xcrun(bin_dir: Path) -> Path:
     return args_log
 
 
-def test_package_writes_expected_zip_with_runtime_layout(tmp_path):
+def write_fake_hdiutil(bin_dir: Path) -> tuple[Path, Path]:
+    args_log = bin_dir / "hdiutil-args.log"
+    stage_manifest = bin_dir / "dmg-stage.txt"
+    hdiutil = bin_dir / "hdiutil"
+    write_file(
+        hdiutil,
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        "printf '%s\\n' \"$*\" >> \"$YULU_HDIUTIL_ARGS\"\n"
+        "case \"$1\" in\n"
+        "  create)\n"
+        "    source=''\n"
+        "    output=\"${@: -1}\"\n"
+        "    while [[ $# -gt 0 ]]; do\n"
+        "      case \"$1\" in\n"
+        "        -srcfolder) source=\"$2\"; shift 2 ;;\n"
+        "        *) shift ;;\n"
+        "      esac\n"
+        "    done\n"
+        "    [[ -n \"$source\" ]]\n"
+        "    for item in \"$source\"/*; do\n"
+        "      name=\"$(basename \"$item\")\"\n"
+        "      if [[ -L \"$item\" ]]; then\n"
+        "        printf '%s -> %s\\n' \"$name\" \"$(readlink \"$item\")\"\n"
+        "      else\n"
+        "        printf '%s\\n' \"$name\"\n"
+        "      fi\n"
+        "    done | LC_ALL=C sort > \"$YULU_DMG_STAGE_MANIFEST\"\n"
+        "    printf 'read-write image\\n' > \"$output\"\n"
+        "    ;;\n"
+        "  convert)\n"
+        "    input=\"$2\"\n"
+        "    output=''\n"
+        "    shift 2\n"
+        "    while [[ $# -gt 0 ]]; do\n"
+        "      case \"$1\" in\n"
+        "        -o) output=\"$2\"; shift 2 ;;\n"
+        "        *) shift ;;\n"
+        "      esac\n"
+        "    done\n"
+        "    cp \"$input\" \"$output\"\n"
+        "    ;;\n"
+        "  *) exit 2 ;;\n"
+        "esac\n",
+    )
+    hdiutil.chmod(0o755)
+    return args_log, stage_manifest
+
+
+def test_package_writes_only_yulu_app_and_applications_alias_to_dmg(tmp_path):
     project = make_project(tmp_path)
     dist = tmp_path / "dist"
     tag = "v0.5.0-dev"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    args_log, stage_manifest = write_fake_hdiutil(bin_dir)
 
     result = run(
         ["bash", "packaging/scripts/package.sh", tag, "--dist", str(dist), "--skip-build"],
         cwd=project,
+        env={
+            "PATH": f"{bin_dir}:{os.environ['PATH']}",
+            "YULU_HDIUTIL_ARGS": str(args_log),
+            "YULU_DMG_STAGE_MANIFEST": str(stage_manifest),
+        },
     )
 
     assert result.returncode == 0, result.stderr + result.stdout
-    zip_path = dist / f"yulu-macos-arm64-{tag}.zip"
-    assert zip_path.exists()
-    assert (dist / "install.sh").exists()
-
-    with zipfile.ZipFile(zip_path) as archive:
-        names = archive.namelist()
-
-    assert "yulu/VERSION" in names
-    assert "yulu/install.sh" in names
-    assert "yulu/README.md" in names
-    assert "yulu/README.zh-CN.md" in names
-    assert "yulu/CHANGELOG.md" in names
-    assert "yulu/skills/yulu/SKILL.md" in names
-    assert "yulu/yulu/scripts/setup.sh" in names
-    assert "yulu/yulu/scripts/yulu" in names
-    assert "yulu/yulu/scripts/release_installer.py" in names
-    assert "yulu/yulu/scripts/recorder_status" in names
-    assert "yulu/yulu/scripts/Yulu.app/Contents/MacOS/calendar_probe" in names
-    assert (
-        "yulu/yulu/scripts/Yulu.app/Contents/Resources/Host/"
-        "node_modules/better-sqlite3/package.json"
-    ) in names
-    assert "yulu/yulu/scripts/calendar_probe" not in names
-    assert "yulu/yulu/scripts/yulu_ui/dist/server.js" in names
-    assert "yulu/yulu/scripts/yulu_ui/dist/web/index.html" in names
-    assert "yulu/.git" not in names
-    assert not any(name.startswith("yulu/.git/") for name in names)
-    assert not any(name.startswith("yulu/.github/") for name in names)
-    assert not any(name.startswith("yulu/dist/") for name in names)
-    assert not any(name.startswith("yulu/.ci-build/") for name in names)
-    assert not any(name.startswith("yulu/tests/") for name in names)
-    assert not any(name.startswith("yulu/docs/superpowers/") for name in names)
-    excluded = {
-        "yulu/.DS_Store",
-        "yulu/._README.md",
-        "yulu/AGENTS.md",
-        "yulu/.agents/local.md",
-        "yulu/.codex/local.md",
-        "yulu/.gstack/browse-audit.jsonl",
-        "yulu/.mcp/zulipchat/zulipchat.duckdb",
-        "yulu/.planning/STATE.md",
-        "yulu/yulu/scripts/yulu_ui/node_modules/left-pad/index.js",
-        "yulu/.venv/pyvenv.cfg",
-        "yulu/.pytest_cache/README.md",
-        "yulu/debug.log",
-        "yulu/run.pid",
-        "yulu/server.sock",
-        "yulu/client_secret_desktop.json",
-        "yulu/refresh_token.json",
-        "yulu/secrets/prod.json",
-        "yulu/tokens/oauth.json",
-        "yulu/.env",
-    }
-    assert excluded.isdisjoint(names)
+    assert (dist / f"yulu-macos-arm64-{tag}.dmg").is_file()
+    assert not (dist / f"yulu-macos-arm64-{tag}.zip").exists()
+    assert not (dist / "install.sh").exists()
+    assert stage_manifest.read_text(encoding="utf-8").splitlines() == [
+        "Applications -> /Applications",
+        "Yulu.app",
+    ]
+    invocations = args_log.read_text(encoding="utf-8")
+    assert "create" in invocations
+    assert "-format UDRW" in invocations
+    assert "-fs HFS+" in invocations
+    assert "-volname Yulu" in invocations
+    assert "convert" in invocations
+    assert "-format UDZO" in invocations
+    assert "-imagekey zlib-level=9" in invocations
 
 
-def test_package_tar_fallback_keeps_nested_runtime_dist(tmp_path):
+def test_package_requires_hdiutil_instead_of_falling_back_to_repository_zip(tmp_path):
     project = make_project(tmp_path)
     dist = tmp_path / "dist"
     bin_dir = tmp_path / "tar-path"
     bin_dir.mkdir()
-    for command in (
-        "awk", "base64", "chmod", "cp", "dirname", "find", "git", "grep",
-        "mkdir", "mktemp", "mv", "rm", "sort", "tar", "touch", "tr", "zip",
-    ):
+    for command in ("dirname", "mkdir", "tr"):
         resolved = shutil.which(command)
         assert resolved, command
         (bin_dir / command).symlink_to(resolved)
@@ -265,12 +218,10 @@ def test_package_tar_fallback_keeps_nested_runtime_dist(tmp_path):
         env={"PATH": str(bin_dir)},
     )
 
-    assert result.returncode == 0, result.stderr + result.stdout
-    with zipfile.ZipFile(dist / "yulu-macos-arm64-v0.5.0-dev.zip") as archive:
-        names = archive.namelist()
-    assert "yulu/yulu/scripts/yulu_ui/dist/server.js" in names
-    assert "yulu/yulu/scripts/yulu_ui/dist/web/index.html" in names
-    assert not any(name.startswith("yulu/dist/") for name in names)
+    assert result.returncode != 0
+    assert "hdiutil is required to build the macOS DMG" in result.stderr
+    assert not (dist / "yulu-macos-arm64-v0.5.0-dev.dmg").exists()
+    assert not (dist / "yulu-macos-arm64-v0.5.0-dev.zip").exists()
 
 
 def test_package_requires_matching_tag(tmp_path):
@@ -285,32 +236,12 @@ def test_package_requires_matching_tag(tmp_path):
     assert "must match VERSION" in result.stderr
 
 
-def test_package_pkg_builds_installer_payload_from_runtime_zip(tmp_path):
-    project = make_project(tmp_path)
-    dist = tmp_path / "dist"
-    tag = "v0.5.0-dev"
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    write_fake_pkg_tools(bin_dir)
-    manifest_path = dist / f"yulu-macos-arm64-{tag}.pkg.manifest"
+def test_makefile_exposes_only_dmg_release_packaging_and_tag_scoped_checksums():
+    makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
 
-    result = run(
-        ["bash", "packaging/scripts/package_pkg.sh", tag, "--dist", str(dist), "--skip-build"],
-        cwd=project,
-        env={"PATH": f"{bin_dir}:{os.environ['PATH']}", "YULU_FAKE_PKG_MANIFEST": str(manifest_path)},
-    )
-
-    assert result.returncode == 0, result.stderr + result.stdout
-    pkg_path = dist / f"yulu-macos-arm64-{tag}.pkg"
-    assert pkg_path.exists()
-    manifest = manifest_path.read_text(encoding="utf-8").splitlines()
-    assert any(row.endswith("/Applications/Yulu.app/Contents/MacOS/audio_daemon") for row in manifest)
-    assert any(row.endswith("/Library/Application Support/Yulu/runtime/VERSION") for row in manifest)
-    assert any(row.endswith("/Library/Application Support/Yulu/runtime/yulu/scripts/setup.sh") for row in manifest)
-    assert not any(
-        row.endswith("/Library/Application Support/Yulu/runtime/yulu/scripts/Yulu.app/Contents/MacOS/audio_daemon")
-        for row in manifest
-    )
+    assert "package-pkg" not in makefile
+    assert 'bash packaging/scripts/package.sh "$(TAG)"' in makefile
+    assert 'bash packaging/scripts/checksums.sh dist "$(TAG)"' in makefile
 
 
 def test_pkg_postinstall_restores_runtime_app_and_uses_installer_env():
@@ -501,8 +432,8 @@ def test_deployment_target_workflow_gate_checks_exact_release_inventory():
     ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
     release = (ROOT / ".github" / "workflows" / "release-publish.yml").read_text(encoding="utf-8")
     ci_build = ci.split("Swift build", 1)[1].split("Skill manifest sanity", 1)[0]
-    release_validation = release.split("Package release assets", 1)[1].split(
-        "Attest release zip provenance", 1
+    release_validation = release.split("Verify packaged release assets", 1)[1].split(
+        "Attest release asset provenance", 1
     )[0]
     shipped = (
         "audio_daemon",
@@ -519,16 +450,12 @@ def test_deployment_target_workflow_gate_checks_exact_release_inventory():
     for path in (
         "yulu/scripts/Yulu.app/Contents/MacOS/audio_daemon",
         "yulu/scripts/Yulu.app/Contents/MacOS/xai_keychain",
-        "yulu/scripts/StatusAgent.app/Contents/MacOS/status_agent",
-        "yulu/scripts/recorder_status",
-        "yulu/scripts/meeting_prompt",
     ):
         assert path in release_validation
-    assert "verify_release_bundle_security(runtime, require_staple=True)" in release_validation
-    assert "verify_runtime_manifest(runtime)" in release_validation
-    gate = release.index(checker, release.index("Package release assets"))
-    assert release.index("verify_runtime_manifest(runtime)") < gate
-    assert gate < release.index("Attest release zip provenance")
+    assert "verify_dmg.sh" in release_validation
+    gate = release.index(checker, release.index("Verify packaged release assets"))
+    assert release.index("verify_dmg.sh", release.index("Verify packaged release assets")) < gate
+    assert gate < release.index("Attest release asset provenance")
     assert gate < release.index("gh release upload")
     assert gate < release.index("Publish completed GitHub Release")
     assert "shell=True" not in release_validation
@@ -610,7 +537,7 @@ def test_release_validates_the_complete_locked_native_addon_contract():
         encoding="utf-8"
     )
     validation = workflow.split("Validate locked Application Runtime inputs", 1)[1].split(
-        "Sign and notarize bundles", 1
+        "Sign, package, and notarize release DMG", 1
     )[0]
 
     assert 'native = lock["betterSqlite3"]' in validation
@@ -625,22 +552,37 @@ def test_release_validates_the_complete_locked_native_addon_contract():
     assert 're.fullmatch(r"[0-9a-f]{64}", native["binarySha256"])' in validation
 
 
-def test_release_publish_uploads_zip_installer_and_checksums_without_pkg():
+def test_release_publish_uploads_exact_dmg_optional_pack_feed_and_checksums():
     workflow = (ROOT / ".github" / "workflows" / "release-publish.yml").read_text(encoding="utf-8")
     release_block = workflow.split("Upload verified assets to draft GitHub Release", 1)[1]
     assets_block = release_block.split(")", 1)[0]
 
-    assert '"dist/yulu-macos-arm64-$TAG.zip"' in assets_block
+    assert '"dist/yulu-macos-arm64-$TAG.dmg"' in assets_block
     assert '"dist/yulu-local-caption-runtime-macos-arm64-$TAG.zip"' in assets_block
-    assert '"dist/install.sh"' in assets_block
+    assert '"dist/appcast.xml"' in assets_block
     assert '"dist/checksums.txt"' in assets_block
+    assert '"dist/install.sh"' not in assets_block
+    assert '"dist/yulu-macos-arm64-$TAG.zip"' not in assets_block
     assert '"dist/yulu-macos-arm64-$TAG.pkg"' not in workflow
     assert "make package-pkg" not in workflow
-    assert "make checksums" in workflow
-    assert "dist/yulu-macos-arm64-${{ inputs.tag }}.zip" in workflow
+    assert 'make checksums TAG="$TAG"' in workflow
+    assert "dist/yulu-macos-arm64-${{ inputs.tag }}.dmg" in workflow
     assert "dist/yulu-local-caption-runtime-macos-arm64-${{ inputs.tag }}.zip" in workflow
+    assert "dist/appcast.xml" in workflow
+    assert "bash packaging/scripts/sign_and_notarize.sh --update-release" in workflow
+    assert "YULU_SPARKLE_PRIVATE_ED_KEY: ${{ secrets.YULU_SPARKLE_PRIVATE_ED_KEY }}" not in workflow
+    assert 'YULU_SPARKLE_PRIVATE_ED_KEY="${{ secrets.YULU_SPARKLE_PRIVATE_ED_KEY }}" \\' in workflow
+    assert "YULU_SPARKLE_PUBLIC_ED_KEY: ${{ secrets.YULU_SPARKLE_PUBLIC_ED_KEY }}" in workflow
+    assert "YULU_SPARKLE_FEED_URL: ${{ secrets.YULU_SPARKLE_FEED_URL }}" in workflow
+    assert "bash packaging/scripts/verify_dmg.sh" in workflow
     assert 'gh release download "$TAG" --pattern "$name"' in workflow
     assert 'cmp "$asset" "$REMOTE_DIR/$name"' in workflow
+    assert 'expected-release-assets.txt' in workflow
+    assert 'remote-release-assets.txt' in workflow
+    assert 'Unexpected or missing draft release assets' in workflow
+    exact_remote_gate = workflow.index('Unexpected or missing draft release assets')
+    assert workflow.index('release-assets.tsv') < exact_remote_gate
+    assert exact_remote_gate < workflow.index('--draft=false')
     assert 'pathlib.Path("docs/release-notes") / f"{tag}.md"' in workflow
     assert (ROOT / "docs" / "release-notes" / "v0.18.0.md").is_file()
     assert "timeout-minutes: 30" in workflow
@@ -656,12 +598,41 @@ def test_release_publish_uploads_zip_installer_and_checksums_without_pkg():
     ):
         assert command in workflow
     assert "(cd dist && shasum -a 256 -c checksums.txt)" in workflow
-    assert "verify_release_bundle_security(runtime, require_staple=True)" in workflow
-    assert "verify_runtime_manifest(runtime)" in workflow
+    assert "release_installer" not in workflow
     assert "--draft=false" in workflow
     assert workflow.index("gh release upload") < workflow.index("--draft=false")
     release_please = (ROOT / "release-please-config.json").read_text(encoding="utf-8")
     assert '"draft": true' in release_please
+
+
+def test_user_and_operator_guidance_use_dmg_as_the_only_installable_release():
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    readme_zh = (ROOT / "README.zh-CN.md").read_text(encoding="utf-8")
+    security = (ROOT / "SECURITY.md").read_text(encoding="utf-8")
+    release = (ROOT / "docs" / "RELEASE.md").read_text(encoding="utf-8")
+    operations = (ROOT / "docs" / "operations.md").read_text(encoding="utf-8")
+    skill = (ROOT / "skills" / "yulu" / "SKILL.md").read_text(encoding="utf-8")
+    bundled_skill = (ROOT / "yulu" / "SKILL.md").read_text(encoding="utf-8")
+
+    for guide in (readme, readme_zh, skill, bundled_skill):
+        assert "yulu-macos-arm64-vX.Y.Z.dmg" in guide
+        assert "/Applications" in guide
+        assert "raw.githubusercontent.com/Nowhitestar/Yulu/main/install.sh" not in guide
+    assert "gh attestation verify yulu-macos-arm64-vX.Y.Z.dmg" in security
+    assert "grep '  yulu-macos-arm64-vX.Y.Z.dmg$' checksums.txt | shasum -a 256 -c -" in security
+    assert "shasum -a 256 -c checksums.txt" not in security
+    assert "hdiutil attach -readonly -nobrowse" in security
+    assert "spctl -a -vv -t open --context context:primary-signature" in security
+    for asset in (
+        "yulu-macos-arm64-<tag>.dmg",
+        "yulu-local-caption-runtime-macos-arm64-<tag>.zip",
+        "appcast.xml",
+        "checksums.txt",
+    ):
+        assert asset in release
+    assert "install.sh" not in release
+    assert "make package-pkg" not in operations
+    assert "same DMG" in operations
 
 
 def test_draft_release_forces_tag_creation_before_release_pr_reconciliation():
@@ -672,14 +643,133 @@ def test_draft_release_forces_tag_creation_before_release_pr_reconciliation():
     assert package["force-tag-creation"] is True
 
 
-def test_signing_builds_manifest_then_resigns_before_notarization():
+def test_signing_notarizes_the_app_before_building_and_notarizing_the_dmg():
     script = (ROOT / "packaging" / "scripts" / "sign_and_notarize.sh").read_text(encoding="utf-8")
 
-    preliminary = script.index('package.sh" "$TAG"')
-    manifest = script.index("write_runtime_manifest")
-    resign = script.index('codesign --force --options runtime --timestamp', manifest)
-    notarize = script.index('notarize_and_staple "$YULU_APP"')
-    assert preliminary < manifest < resign < notarize
+    build = script.index('build_audio_daemon.sh"')
+    app_verify = script.index('codesign --verify --deep --strict --verbose=2 "$YULU_APP"')
+    app_notarize = script.index('notarize_app "$YULU_APP"')
+    package = script.index('package.sh" "$TAG"')
+    dmg_sign = script.index('codesign --force --timestamp --sign "$YULU_CODESIGN_IDENTITY" "$DMG"')
+    dmg_notarize = script.index('notarytool submit "$DMG"')
+    dmg_staple = script.index('stapler staple "$DMG"')
+    dmg_verify = script.index('verify_dmg.sh" "$DMG"')
+
+    assert build < app_verify < app_notarize < package
+    assert package < dmg_sign < dmg_notarize < dmg_staple < dmg_verify
+    assert "runtime-manifest.json" not in script
+    assert "StatusAgent.app" not in script
+
+
+def test_dmg_verifier_checks_ticket_gatekeeper_and_exact_read_only_layout():
+    script = (ROOT / "packaging" / "scripts" / "verify_dmg.sh").read_text(encoding="utf-8")
+
+    assert 'codesign --verify --strict --verbose=2 "$DMG"' in script
+    assert 'xcrun stapler validate "$DMG"' in script
+    assert 'spctl -a -vv -t open --context context:primary-signature "$DMG"' in script
+    assert 'hdiutil attach -readonly -nobrowse -noautoopen -plist "$DMG"' in script
+    assert 'diskutil info -plist "$MOUNT_POINT"' in script
+    assert 'payload.get("VolumeName") != "Yulu"' in script
+    assert 'expected = {"Applications", "Yulu.app"}' in script
+    assert 'os.readlink(applications) != "/Applications"' in script
+    assert 'codesign --verify --deep --strict --verbose=2 "$APP"' in script
+    assert 'xcrun stapler validate "$APP"' in script
+    assert 'spctl -a -vv -t exec "$APP"' in script
+    assert "YULU_REQUIRE_SPARKLE_CONFIGURATION=1" in script
+    assert 'verify_application_runtime.sh" "$APP"' in script
+
+
+def test_dmg_verifier_rejects_a_wrong_final_volume_label(tmp_path):
+    scripts = tmp_path / "packaging" / "scripts"
+    scripts.mkdir(parents=True)
+    shutil.copy2(ROOT / "packaging" / "scripts" / "verify_dmg.sh", scripts / "verify_dmg.sh")
+    runtime_verify = scripts / "verify_application_runtime.sh"
+    write_file(runtime_verify, "#!/usr/bin/env bash\nexit 0\n")
+    runtime_verify.chmod(0o755)
+
+    mount = tmp_path / "mount"
+    (mount / "Yulu.app").mkdir(parents=True)
+    (mount / "Applications").symlink_to("/Applications")
+    dmg = tmp_path / "yulu-macos-arm64-v0.5.0-dev.dmg"
+    write_file(dmg, "dmg\n")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    for name, body in {
+        "codesign": (
+            "if [[ \" $* \" == *\" --display \"* ]]; then\n"
+            "  printf '%s\\n' 'Authority=Developer ID Application: Yulu' "
+            "'TeamIdentifier=WMU9678ZQL' >&2\n"
+            "fi\n"
+        ),
+        "xcrun": "exit 0\n",
+        "spctl": "exit 0\n",
+        "hdiutil": (
+            "if [[ \"$1\" == \"attach\" ]]; then\n"
+            "  printf '%s\\n' '<?xml version=\"1.0\" encoding=\"UTF-8\"?>' "
+            "'<plist version=\"1.0\"><dict><key>system-entities</key><array><dict>' "
+            "'<key>mount-point</key><string>'\"$YULU_TEST_MOUNT_POINT\"'</string>' "
+            "'</dict></array></dict></plist>'\n"
+            "fi\n"
+        ),
+        "diskutil": (
+            "printf '%s\\n' '<?xml version=\"1.0\" encoding=\"UTF-8\"?>' "
+            "'<plist version=\"1.0\"><dict><key>VolumeName</key>' "
+            "'<string>NotYulu</string></dict></plist>'\n"
+        ),
+    }.items():
+        command = bin_dir / name
+        write_file(command, "#!/usr/bin/env bash\nset -euo pipefail\n" + body)
+        command.chmod(0o755)
+
+    result = run(
+        ["bash", str(scripts / "verify_dmg.sh"), str(dmg)],
+        cwd=tmp_path,
+        env={
+            "PATH": f"{bin_dir}:{os.environ['PATH']}",
+            "YULU_TEST_MOUNT_POINT": str(mount),
+        },
+    )
+
+    assert result.returncode != 0
+    assert "DMG volume label must be exactly Yulu" in result.stderr
+
+
+def test_sparkle_feed_signs_the_exact_public_dmg_without_delta_payloads():
+    signing = (ROOT / "packaging" / "scripts" / "sign_and_notarize.sh").read_text(
+        encoding="utf-8"
+    )
+    sparkle = (ROOT / "packaging" / "scripts" / "prepare_sparkle_framework.sh").read_text(
+        encoding="utf-8"
+    )
+
+    assert "YULU_SPARKLE_PRIVATE_ED_KEY" in signing
+    assert 'SPARKLE_PRIVATE_ED_KEY="${YULU_SPARKLE_PRIVATE_ED_KEY:-}"' in signing
+    assert "unset YULU_SPARKLE_PRIVATE_ED_KEY" in signing
+    assert signing.index("unset YULU_SPARKLE_PRIVATE_ED_KEY") < signing.index('SCRIPT_DIR="$(')
+    assert 'printf \'%s\\n\' "$SPARKLE_PRIVATE_ED_KEY"' in signing
+    assert "verify_sparkle_key_pair" in signing
+    assert "createPrivateKey" in signing
+    assert "timingSafeEqual" in signing
+    assert 'YULU_SPARKLE_TOOLS_DIR="$SPARKLE_TOOLS"' in signing
+    assert 'cp "$DMG" "$APPCAST_WORK/$(basename "$DMG")"' in signing
+    assert '"$SPARKLE_TOOLS/generate_appcast"' in signing
+    assert "--ed-key-file -" in signing
+    assert "--download-url-prefix" in signing
+    assert "--maximum-deltas 0" in signing
+    assert 'expected_name = f"yulu-macos-arm64-{tag}.dmg"' in signing
+    assert 'expected_length = dmg.stat().st_size' in signing
+    assert 'int(length) != expected_length' in signing
+    assert "edSignature" in signing
+    assert 'if list(root.iter(f"{sparkle}deltas")):' in signing
+    assert 'SIGNATURE_FILE="$APPCAST_WORK/enclosure-signature.txt"' in signing
+    assert 'signature_file.write_text(signature + "\\n", encoding="utf-8")' in signing
+    assert '--ed-key-file - --verify "$DMG" "$ENCLOSURE_SIGNATURE"' in signing
+    assert '--ed-key-file - --verify "$APPCAST_WORK/appcast.xml"' in signing
+    assert 'cp "$APPCAST_WORK/appcast.xml" "$REPO_DIR/dist/appcast.xml"' in signing
+
+    assert "YULU_SPARKLE_TOOLS_DIR" in sparkle
+    assert "generate_appcast" in sparkle
+    assert "sign_update" in sparkle
 
 
 def test_ci_workflows_reference_only_existing_shell_scripts():
@@ -690,53 +780,29 @@ def test_ci_workflows_reference_only_existing_shell_scripts():
         assert not missing, f"{workflow_name} references missing shell scripts: {missing}"
 
 
-def test_checksums_include_zip_and_install_asset(tmp_path):
+def test_checksums_include_only_current_dmg_optional_pack_and_appcast(tmp_path):
     project = make_project(tmp_path)
     dist = tmp_path / "dist"
     tag = "v0.5.0-dev"
+    dist.mkdir()
+    write_file(dist / f"yulu-macos-arm64-{tag}.dmg", "dmg\n")
+    write_file(dist / f"yulu-local-caption-runtime-macos-arm64-{tag}.zip", "pack\n")
+    write_file(dist / "appcast.xml", "<rss/>\n")
+    write_file(dist / f"yulu-macos-arm64-{tag}.zip", "retired repository zip\n")
+    write_file(dist / "install.sh", "retired installer\n")
+    write_file(dist / f"yulu-macos-arm64-{tag}.pkg", "retired pkg\n")
 
-    package_result = run(
-        ["bash", "packaging/scripts/package.sh", "--dist", str(dist), "--skip-build"],
-        cwd=project,
-        env={"TAG": tag},
+    checksum_result = run(
+        ["bash", "packaging/scripts/checksums.sh", str(dist), tag], cwd=project
     )
-    assert package_result.returncode == 0, package_result.stderr + package_result.stdout
-    checksum_result = run(["bash", "packaging/scripts/checksums.sh", str(dist)], cwd=project)
 
     assert checksum_result.returncode == 0, checksum_result.stderr + checksum_result.stdout
     rows = (dist / "checksums.txt").read_text(encoding="utf-8").splitlines()
-    assert any(row.endswith(f"  yulu-macos-arm64-{tag}.zip") for row in rows)
-    assert any(row.endswith("  install.sh") for row in rows)
-    assert len(rows) == 2
-
-
-def test_packaged_install_script_embeds_exact_release_helper(tmp_path):
-    project = make_project(tmp_path)
-    dist = tmp_path / "dist"
-    tag = "v0.5.0-dev"
-
-    result = run(
-        ["bash", "packaging/scripts/package.sh", tag, "--dist", str(dist), "--skip-build"],
-        cwd=project,
-    )
-
-    assert result.returncode == 0, result.stderr + result.stdout
-    packaged = (dist / "install.sh").read_text(encoding="utf-8")
-    match = re.search(r'^EMBEDDED_HELPER_BASE64="([A-Za-z0-9+/=]+)"$', packaged, re.M)
-    assert match
-    decoded = base64.b64decode(match.group(1)).decode("utf-8")
-    assert decoded == (project / "yulu" / "scripts" / "release_installer.py").read_text(encoding="utf-8")
-    assert "__YULU_EMBEDDED_RELEASE_INSTALLER_BASE64__" not in packaged
-
-
-def test_pkg_target_is_explicitly_non_release_without_installer_certificate():
-    makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
-    script = (ROOT / "packaging" / "scripts" / "package_pkg.sh").read_text(encoding="utf-8")
-
-    assert "local diagnostic artifact only" in makefile
-    assert "Developer ID Installer certificate" in makefile
-    assert "Local diagnostics only" in script
-    assert "Do not upload this pkg as an official release" in script
+    assert [row.split("  ", 1)[1] for row in rows] == [
+        "appcast.xml",
+        f"yulu-local-caption-runtime-macos-arm64-{tag}.zip",
+        f"yulu-macos-arm64-{tag}.dmg",
+    ]
 
 
 def test_checksums_fail_when_no_artifacts(tmp_path):
@@ -744,21 +810,30 @@ def test_checksums_fail_when_no_artifacts(tmp_path):
     dist = tmp_path / "empty-dist"
     dist.mkdir()
 
-    result = run(["bash", "packaging/scripts/checksums.sh", str(dist)], cwd=project)
+    tag = "v0.5.0-dev"
+    result = run(["bash", "packaging/scripts/checksums.sh", str(dist), tag], cwd=project)
 
     assert result.returncode != 0
-    assert "expected dist/*.zip, dist/*.pkg, and/or dist/install.sh" in result.stderr
+    assert "No current DMG, Optional Runtime Pack, or appcast found" in result.stderr
     assert not (dist / "checksums.txt").exists()
 
 
-def test_default_build_allows_expected_app_bundle_outputs(tmp_path):
+def test_default_build_packages_self_contained_runtime_from_isolated_app_output(tmp_path):
     project = make_project(tmp_path, git_marker=None)
+    build_mode = tmp_path / "build-mode.txt"
     build_script = project / "yulu" / "scripts" / "build_audio_daemon.sh"
     write_file(
         build_script,
         "#!/usr/bin/env bash\n"
-        "printf 'changed\\n' > \"$(dirname \"$0\")/Yulu.app/Contents/MacOS/audio_daemon\"\n"
-        "printf 'changed\\n' > \"$(dirname \"$0\")/Yulu.app/Contents/MacOS/xai_keychain\"\n",
+        "set -euo pipefail\n"
+        "printf '%s\\n%s\\n' \"${YULU_BUNDLE_APPLICATION_RUNTIME:-0}\" \"${YULU_APP_OUTPUT_PATH:-}\" > \"$YULU_BUILD_MODE_LOG\"\n"
+        "app=\"${YULU_APP_OUTPUT_PATH:?}\"\n"
+        "mkdir -p \"$app/Contents/MacOS\" \"$app/Contents/Resources/runtime/bin\" \\\n"
+        "  \"$app/Contents/Resources/Host\" \"$app/Contents/Frameworks/Sparkle.framework\"\n"
+        "printf 'app\\n' > \"$app/Contents/MacOS/yulu_app\"\n"
+        "printf 'node\\n' > \"$app/Contents/Resources/runtime/bin/node\"\n"
+        "printf 'host\\n' > \"$app/Contents/Resources/Host/server.js\"\n"
+        "printf '{}\\n' > \"$app/Contents/Resources/application-runtime.json\"\n",
     )
     build_script.chmod(0o755)
 
@@ -781,13 +856,29 @@ def test_default_build_allows_expected_app_bundle_outputs(tmp_path):
     )
     assert commit.returncode == 0, commit.stderr + commit.stdout
 
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    args_log, stage_manifest = write_fake_hdiutil(bin_dir)
+    dist = tmp_path / "dist"
+
     result = run(
-        ["bash", "packaging/scripts/package.sh", "v0.5.0-dev", "--dist", str(tmp_path / "dist")],
+        ["bash", "packaging/scripts/package.sh", "v0.5.0-dev", "--dist", str(dist)],
         cwd=project,
+        env={
+            "PATH": f"{bin_dir}:{os.environ['PATH']}",
+            "YULU_HDIUTIL_ARGS": str(args_log),
+            "YULU_DMG_STAGE_MANIFEST": str(stage_manifest),
+            "YULU_BUILD_MODE_LOG": str(build_mode),
+        },
     )
 
     assert result.returncode == 0, result.stderr + result.stdout
-    assert (tmp_path / "dist" / "yulu-macos-arm64-v0.5.0-dev.zip").exists()
+    mode, output_path = build_mode.read_text(encoding="utf-8").splitlines()
+    assert mode == "1"
+    assert Path(output_path).is_absolute()
+    assert output_path.endswith("/Yulu.app")
+    assert output_path != str(project / "yulu" / "scripts" / "Yulu.app")
+    assert (dist / "yulu-macos-arm64-v0.5.0-dev.dmg").exists()
 
 
 def test_default_build_allows_exact_untracked_nested_capture_outputs(tmp_path):
@@ -809,7 +900,7 @@ def test_default_build_allows_exact_untracked_nested_capture_outputs(tmp_path):
         build_script,
         "#!/usr/bin/env bash\n"
         "set -euo pipefail\n"
-        "capture=\"$(dirname \"$0\")/Yulu.app/Contents/Helpers/YuluCapture.app/Contents\"\n"
+        "capture=\"${YULU_APP_OUTPUT_PATH:?}/Contents/Helpers/YuluCapture.app/Contents\"\n"
         "mkdir -p \"$capture/MacOS\" \"$capture/_CodeSignature\"\n"
         "printf 'binary\\n' > \"$capture/MacOS/audio_daemon\"\n"
         "printf 'signature\\n' > \"$capture/_CodeSignature/CodeResources\"\n",
@@ -835,13 +926,21 @@ def test_default_build_allows_exact_untracked_nested_capture_outputs(tmp_path):
     )
     assert commit.returncode == 0, commit.stderr + commit.stdout
 
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    args_log, stage_manifest = write_fake_hdiutil(bin_dir)
     result = run(
         ["bash", "packaging/scripts/package.sh", "v0.5.0-dev", "--dist", str(tmp_path / "dist")],
         cwd=project,
+        env={
+            "PATH": f"{bin_dir}:{os.environ['PATH']}",
+            "YULU_HDIUTIL_ARGS": str(args_log),
+            "YULU_DMG_STAGE_MANIFEST": str(stage_manifest),
+        },
     )
 
     assert result.returncode == 0, result.stderr + result.stdout
-    assert (tmp_path / "dist" / "yulu-macos-arm64-v0.5.0-dev.zip").exists()
+    assert (tmp_path / "dist" / "yulu-macos-arm64-v0.5.0-dev.dmg").exists()
 
 
 @pytest.mark.parametrize("unexpected_name", ["unexpected-helper", "unexpected.key"])
@@ -901,7 +1000,7 @@ def test_default_build_refuses_unexpected_file_inside_nested_capture_output_dire
     assert result.returncode != 0
     assert "Worktree is dirty after build" in result.stderr
     assert f"YuluCapture.app/Contents/MacOS/{unexpected_name}" in result.stderr
-    assert not (tmp_path / "dist" / "yulu-macos-arm64-v0.5.0-dev.zip").exists()
+    assert not (tmp_path / "dist" / "yulu-macos-arm64-v0.5.0-dev.dmg").exists()
 
 
 def test_default_build_fails_closed_when_ignored_output_inventory_fails(tmp_path):
@@ -973,7 +1072,7 @@ def test_default_build_fails_closed_when_ignored_output_inventory_fails(tmp_path
 
     assert result.returncode != 0
     assert "Failed to inspect ignored Capture build outputs" in result.stderr
-    assert not (dist / "yulu-macos-arm64-v0.5.0-dev.zip").exists()
+    assert not (dist / "yulu-macos-arm64-v0.5.0-dev.dmg").exists()
 
 
 def test_default_build_refuses_unexpected_dirty_outputs(tmp_path):

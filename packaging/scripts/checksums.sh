@@ -2,9 +2,14 @@
 set -euo pipefail
 
 DIST="${1:-dist}"
+TAG="${2:-${TAG:-}}"
 
 if [[ ! -d "$DIST" ]]; then
     echo "No dist directory: $DIST" >&2
+    exit 1
+fi
+if [[ -z "$TAG" || ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]; then
+    echo "A valid release tag is required to select exact checksum subjects." >&2
     exit 1
 fi
 
@@ -17,11 +22,18 @@ cleanup() {
 }
 trap cleanup EXIT
 
-find "$DIST" -maxdepth 1 \( -name '*.zip' -o -name '*.pkg' -o -name 'install.sh' \) -type f -print \
-    | LC_ALL=C sort > "$ARTIFACTS"
+: > "$ARTIFACTS"
+for artifact in \
+    "$DIST/appcast.xml" \
+    "$DIST/yulu-local-caption-runtime-macos-arm64-$TAG.zip" \
+    "$DIST/yulu-macos-arm64-$TAG.dmg"; do
+    if [[ -f "$artifact" ]]; then
+        printf '%s\n' "$artifact" >> "$ARTIFACTS"
+    fi
+done
 
 if [[ ! -s "$ARTIFACTS" ]]; then
-    echo "No release artifacts found in $DIST (expected dist/*.zip, dist/*.pkg, and/or dist/install.sh)." >&2
+    echo "No current DMG, Optional Runtime Pack, or appcast found in $DIST for $TAG." >&2
     exit 1
 fi
 

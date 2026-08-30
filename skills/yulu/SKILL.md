@@ -194,10 +194,11 @@ yulu repair-permissions
 
 ## 开发和安装
 
-本 skill 只是 Agent 契约，不能单独安装原生录音和 Host。安装或刷新运行态：
+本 skill 只是 Agent 契约，不能单独安装原生录音和 Host。稳定版安装：从
+[GitHub Releases](https://github.com/Nowhitestar/Yulu/releases) 下载
+`yulu-macos-arm64-vX.Y.Z.dmg`，打开后将 `Yulu.app` 拖入 `/Applications`，再运行：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Nowhitestar/Yulu/main/install.sh | bash
 yulu skill install --agent codex
 yulu mcp status
 yulu mcp test

@@ -103,7 +103,6 @@ Codex 会在临时项目中加载仅属于 Yulu 的调用前守卫，同时继�
 
 - macOS 13 或更高版本。
 - 正式 Release 目前支持 Apple Silicon（arm64）。
-- Python 3.10 或更高版本。
 - 自动生成纪要时，需要先在「设置」中准备好 xAI、Codex 或 Claude Code
   纪要连接。分享需要具备已证明调用前授权边界的 Codex 或 Claude Code 连接；Hermes 与
   OpenClaw 仅支持对话，不能选作纪要或分享提供方。
@@ -111,24 +110,14 @@ Codex 会在临时项目中加载仅属于 Yulu 的调用前守卫，同时继�
   设置中完成 OAuth。两种引擎不会自动切换。
 - Agent Console 可选使用 Codex CLI、Claude Code、OpenClaw、Hermes 或自定义命令。
 
-缺少兼容的 Node.js 与必要音频工具时，安装器会自动准备。
+官方 App 已内含兼容的 Application Runtime 与必要音频工具。
 
 ### 安装
 
-安装最新稳定版：
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/Nowhitestar/Yulu/main/install.sh | bash
-```
-
-确保 CLI 已加入 shell 的 PATH：
-
-```bash
-echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
-exec zsh
-```
-
-Yulu 默认安装到 `~/.yulu`，并在设置流程中引导授权三项 macOS 权限：
+打开 [GitHub 最新 Release](https://github.com/Nowhitestar/Yulu/releases/latest)，
+下载 `yulu-macos-arm64-vX.Y.Z.dmg`，打开后把 `Yulu.app` 拖到
+`/Applications` 别名。启动 `/Applications/Yulu.app`；自包含 App 会打开设置流程，
+并引导授权三项 macOS 权限：
 
 | 组件 | 权限 | 用途 |
 |---|---|---|
@@ -146,27 +135,17 @@ yulu record status
 yulu record stop
 ```
 
-### 安装其它通道
+### 安装其它版本
 
-```bash
-# 安装指定版本
-curl -fsSL https://raw.githubusercontent.com/Nowhitestar/Yulu/main/install.sh | bash -s -- --version v0.21.0
-
-# 安装 main 分支，用于本地 dogfood
-curl -fsSL https://raw.githubusercontent.com/Nowhitestar/Yulu/main/install.sh | bash -s -- --dev
-```
+在 [Releases 页面](https://github.com/Nowhitestar/Yulu/releases)打开对应版本，
+下载其 `yulu-macos-arm64-vX.Y.Z.dmg`，并替换 `/Applications` 中的
+`Yulu.app`。贡献者仍可用 `make dev-install` 安装当前 checkout 做开发 dogfood。
 
 ### 更新与卸载
 
-```bash
-yulu update                    # 最新稳定版
-yulu update --version v0.21.0  # 指定版本
-yulu update --dev              # 当前 main 分支
-yulu uninstall
-```
-
-更新会保留配置、录音和 macOS 权限。稳定版更新会先校验 Release 中发布的 checksum，
-再替换本机运行时。
+Yulu 通过签名的 Sparkle feed 获取稳定版更新。手动恢复也使用同一 Release DMG：
+退出 Yulu，把其中的 `Yulu.app` 拖入 `/Applications` 覆盖现有版本，再重新打开。
+替换 App 不会删除保存在 bundle 外的配置与录音。
 
 ## 工作原理
 

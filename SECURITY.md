@@ -45,21 +45,26 @@ These are not vulnerabilities in Yulu, but they are the failure modes I see most
 
 ## Verifying releases
 
-Official releases contain a checksum-verified runtime zip with signed, notarized,
-and stapled app bundles. After downloading the zip and `checksums.txt`, verify the
-actual release asset before installing:
+Official releases contain one checksum-verified DMG with a signed, notarized,
+and stapled immutable `Yulu.app`. After downloading the DMG and `checksums.txt`,
+verify the actual release asset before installing:
 
 ```bash
-(cd <download-directory> && shasum -a 256 -c checksums.txt)
-gh attestation verify yulu-macos-arm64-vX.Y.Z.zip --repo Nowhitestar/Yulu
-unzip yulu-macos-arm64-vX.Y.Z.zip -d /tmp/yulu-release-check
-codesign --verify --deep --strict /tmp/yulu-release-check/yulu/yulu/scripts/Yulu.app
-codesign -dv --verbose=4 /tmp/yulu-release-check/yulu/yulu/scripts/Yulu.app
-xcrun stapler validate /tmp/yulu-release-check/yulu/yulu/scripts/Yulu.app
+(cd <download-directory> && \
+  grep '  yulu-macos-arm64-vX.Y.Z.dmg$' checksums.txt | shasum -a 256 -c -)
+gh attestation verify yulu-macos-arm64-vX.Y.Z.dmg --repo Nowhitestar/Yulu
+codesign --verify --strict yulu-macos-arm64-vX.Y.Z.dmg
+xcrun stapler validate yulu-macos-arm64-vX.Y.Z.dmg
+spctl -a -vv -t open --context context:primary-signature yulu-macos-arm64-vX.Y.Z.dmg
+hdiutil attach -readonly -nobrowse yulu-macos-arm64-vX.Y.Z.dmg
+codesign --verify --deep --strict /Volumes/Yulu/Yulu.app
+codesign -dv --verbose=4 /Volumes/Yulu/Yulu.app
+xcrun stapler validate /Volumes/Yulu/Yulu.app
+spctl -a -vv -t exec /Volumes/Yulu/Yulu.app
+hdiutil detach /Volumes/Yulu
 ```
 
 The signature must be a Developer ID Application identity with Team ID
-`WMU9678ZQL`. Repeat the checks for `StatusAgent.app`. If verification fails, do
-not run the asset; report it through the security channel above. The installer
-also verifies the full non-bundle runtime against the manifest covered by
-`Yulu.app`'s signature before it executes any packaged script.
+`WMU9678ZQL`. The mounted volume must contain only `Yulu.app` and an
+`Applications` alias resolving to `/Applications`. If verification fails, do
+not run the asset; report it through the security channel above.

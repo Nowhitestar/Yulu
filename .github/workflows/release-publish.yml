@@ -4,10 +4,9 @@ name: Release publish (reusable)
 #   - release-please.yml (automatic, on Release PR merge)
 #   - release.yml        (manual escape hatch, on `v*.*.*` tag push)
 # It checks out the tag, re-runs the test suite, packages the assets, and
-# creates/updates the GitHub Release with a notarized user-level runtime zip.
-# package-pkg remains a local diagnostic target only: this repository does not
-# currently hold a Developer ID Installer certificate, so unsigned pkg files
-# must never be presented as production release assets.
+# creates/updates the GitHub Release with one signed, notarized, stapled DMG.
+# The local-caption Runtime Pack remains a separate optional asset; it is not an
+# installer and is never included in the drag-to-Applications disk image.
 
 on:
   workflow_call:
@@ -52,16 +51,15 @@ jobs:
       - name: Bash syntax check
         run: |
           set -euo pipefail
-          for f in install.sh \
-                   packaging/scripts/package.sh \
-                   packaging/scripts/package_pkg.sh \
-                   packaging/scripts/pkg_postinstall.sh \
+          for f in packaging/scripts/package.sh \
                    packaging/scripts/checksums.sh \
                    packaging/scripts/check_macos_deployment_target.sh \
                    packaging/scripts/install_application_node_dependencies.sh \
+                   packaging/scripts/prepare_sparkle_framework.sh \
                    packaging/scripts/prepare_application_runtime.sh \
                    packaging/scripts/sign_and_notarize.sh \
                    packaging/scripts/verify_application_runtime.sh \
+                   packaging/scripts/verify_dmg.sh \
                    yulu/scripts/setup.sh \
                    yulu/scripts/setup_deps.sh \
                    yulu/scripts/setup_audio.sh \
@@ -170,15 +168,13 @@ jobs:
           assert all(len(wheel["sha256"]) == 64 for wheel in pack["wheels"])
           PY
 
-      # Sign + notarize + staple BEFORE packaging (Pitfall 4 ordering): the .app
-      # DIRECTORIES are stapled here so the ticket travels inside the zip that the
-      # next step builds. sign_and_notarize.sh also runs build_*.sh (bottom-up
-      # hardened-runtime signing), so the package step below uses --skip-build to
-      # avoid re-running the build and overwriting the stapled bundles.
+      # sign_and_notarize.sh builds and signs nested code bottom-up, notarizes and
+      # staples the immutable App, packages it with an Applications alias, then
+      # signs/notarizes/staples and mounts the final public DMG for verification.
       # Secrets are passed by NAME only (D-08); the helper never echoes a value
       # and uses no `set -x`. The keychain it creates is torn down in the
       # always-run "Clean up signing keychain" step at the end of the job.
-      - name: Sign and notarize bundles
+      - name: Sign, package, and notarize release DMG
         env:
           YULU_CODESIGN_IDENTITY: ${{ secrets.YULU_CODESIGN_IDENTITY }}
           YULU_CODESIGN_P12_BASE64: ${{ secrets.YULU_CODESIGN_P12_BASE64 }}
@@ -187,61 +183,34 @@ jobs:
           ASC_KEY_P8_BASE64: ${{ secrets.ASC_KEY_P8_BASE64 }}
           ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
           ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
-        run: bash packaging/scripts/sign_and_notarize.sh
-
-      - name: Package release assets
+          YULU_SPARKLE_FEED_URL: ${{ secrets.YULU_SPARKLE_FEED_URL }}
+          YULU_SPARKLE_PUBLIC_ED_KEY: ${{ secrets.YULU_SPARKLE_PUBLIC_ED_KEY }}
         run: |
           set -euo pipefail
-          # --skip-build: the bundles are already built, signed, notarized, and
-          # stapled by the previous step. Re-running build_*.sh here would strip
-          # the staple. --skip-build also skips check_clean_worktree, which is
-          # correct: signing/stapling intentionally mutates the allowlisted
-          # bundle bytes (Info.plist, Mach-O, _CodeSignature/CodeResources).
-          make package TAG="$TAG" PACKAGE_ARGS=--skip-build
-          make checksums
-          test -f "dist/yulu-macos-arm64-$TAG.zip"
+          YULU_RELEASE_VERSION="${TAG#v}"
+          YULU_BUNDLE_SHORT_VERSION="${YULU_RELEASE_VERSION%%-*}"
+          YULU_BUILD_NUMBER="$(git rev-list --count HEAD)"
+          export YULU_RELEASE_VERSION YULU_BUNDLE_SHORT_VERSION YULU_BUILD_NUMBER
+          YULU_SPARKLE_PRIVATE_ED_KEY="${{ secrets.YULU_SPARKLE_PRIVATE_ED_KEY }}" \
+            bash packaging/scripts/sign_and_notarize.sh --update-release
+
+      - name: Verify packaged release assets
+        run: |
+          set -euo pipefail
+          make checksums TAG="$TAG"
+          test -f "dist/yulu-macos-arm64-$TAG.dmg"
           test -f "dist/yulu-local-caption-runtime-macos-arm64-$TAG.zip"
-          test -f "dist/install.sh"
+          test -f "dist/appcast.xml"
           test -f "dist/checksums.txt"
           (cd dist && shasum -a 256 -c checksums.txt)
-          PYTHONPATH=yulu/scripts python3 - <<'PY'
-          import os
-          import subprocess
-          import tempfile
-          from pathlib import Path
-
-          from release_installer import (
-              extract_release_zip,
-              validate_runtime_layout,
-              verify_release_bundle_security,
-              verify_runtime_manifest,
-          )
-
-          tag = os.environ["TAG"]
-          archive = Path("dist") / f"yulu-macos-arm64-{tag}.zip"
-          with tempfile.TemporaryDirectory() as temporary:
-              runtime = extract_release_zip(archive, Path(temporary))
-              validate_runtime_layout(runtime, tag)
-              verify_release_bundle_security(runtime, require_staple=True)
-              verify_runtime_manifest(runtime)
-              subprocess.run(
-                  [
-                      "bash",
-                      "packaging/scripts/check_macos_deployment_target.sh",
-                      str(runtime / "yulu/scripts/Yulu.app/Contents/MacOS/yulu_app"),
-                      str(runtime / "yulu/scripts/Yulu.app/Contents/Helpers/YuluCapture.app/Contents/MacOS/audio_daemon"),
-                      str(runtime / "yulu/scripts/Yulu.app/Contents/MacOS/audio_daemon"),
-                      str(runtime / "yulu/scripts/Yulu.app/Contents/MacOS/xai_keychain"),
-                      str(runtime / "yulu/scripts/Yulu.app/Contents/MacOS/calendar_probe"),
-                      str(runtime / "yulu/scripts/StatusAgent.app/Contents/MacOS/status_agent"),
-                      str(runtime / "yulu/scripts/recorder_status"),
-                      str(runtime / "yulu/scripts/meeting_prompt"),
-                  ],
-                  check=True,
-              )
-          PY
-          bash packaging/scripts/verify_application_runtime.sh \
-            "$PWD/yulu/scripts/Yulu.app"
+          bash packaging/scripts/verify_dmg.sh \
+            "$PWD/dist/yulu-macos-arm64-$TAG.dmg"
+          bash packaging/scripts/check_macos_deployment_target.sh \
+            "$PWD/yulu/scripts/Yulu.app/Contents/MacOS/yulu_app" \
+            "$PWD/yulu/scripts/Yulu.app/Contents/Helpers/YuluCapture.app/Contents/MacOS/audio_daemon" \
+            "$PWD/yulu/scripts/Yulu.app/Contents/MacOS/audio_daemon" \
+            "$PWD/yulu/scripts/Yulu.app/Contents/MacOS/xai_keychain" \
+            "$PWD/yulu/scripts/Yulu.app/Contents/MacOS/calendar_probe"
 
       - name: Prepare release notes
         run: |
@@ -280,9 +249,9 @@ jobs:
           retention-days: 1
           compression-level: 0
           path: |
-            dist/yulu-macos-arm64-${{ inputs.tag }}.zip
+            dist/yulu-macos-arm64-${{ inputs.tag }}.dmg
             dist/yulu-local-caption-runtime-macos-arm64-${{ inputs.tag }}.zip
-            dist/install.sh
+            dist/appcast.xml
             dist/checksums.txt
             dist/release-notes.md
 
@@ -296,6 +265,8 @@ jobs:
           security delete-keychain "$RUNNER_TEMP/yulu-signing.keychain-db" 2>/dev/null || true
           rm -f "$RUNNER_TEMP/cert.p12" "$RUNNER_TEMP/asc_key.p8" \
                 "$RUNNER_TEMP"/*-notarize.zip 2>/dev/null || true
+          rm -rf "$RUNNER_TEMP/yulu-sparkle-tools" \
+                 "$RUNNER_TEMP"/yulu-appcast.* 2>/dev/null || true
 
   publish:
     name: Attest and publish verified release assets
@@ -322,14 +293,15 @@ jobs:
           test -s dist/release-notes.md
           (cd dist && shasum -a 256 -c checksums.txt)
 
-      # SLSA build-provenance attestation for the release zips (BUILD-04).
+      # SLSA build-provenance attestation for every published update payload.
       # Only this narrow job can mint the OIDC token and publish attestations.
-      - name: Attest release zip provenance
+      - name: Attest release asset provenance
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: |
-            dist/yulu-macos-arm64-${{ inputs.tag }}.zip
+            dist/yulu-macos-arm64-${{ inputs.tag }}.dmg
             dist/yulu-local-caption-runtime-macos-arm64-${{ inputs.tag }}.zip
+            dist/appcast.xml
 
       - name: Upload verified assets to draft GitHub Release
         env:
@@ -337,9 +309,9 @@ jobs:
         run: |
           set -euo pipefail
           ASSETS=(
-            "dist/yulu-macos-arm64-$TAG.zip"
+            "dist/yulu-macos-arm64-$TAG.dmg"
             "dist/yulu-local-caption-runtime-macos-arm64-$TAG.zip"
-            "dist/install.sh"
+            "dist/appcast.xml"
             "dist/checksums.txt"
           )
           if gh release view "$TAG" >/dev/null 2>&1; then
@@ -376,6 +348,19 @@ jobs:
           # non-zero size. The release remains draft on any failure above/below.
           gh release view "$TAG" --json assets --jq '.assets[] | [.name, .size] | @tsv' \
             > "$RUNNER_TEMP/release-assets.tsv"
+          EXPECTED_NAMES="$RUNNER_TEMP/expected-release-assets.txt"
+          REMOTE_NAMES="$RUNNER_TEMP/remote-release-assets.txt"
+          : > "$EXPECTED_NAMES"
+          for asset in "${ASSETS[@]}"; do
+            basename "$asset" >> "$EXPECTED_NAMES"
+          done
+          LC_ALL=C sort -o "$EXPECTED_NAMES" "$EXPECTED_NAMES"
+          cut -f 1 "$RUNNER_TEMP/release-assets.tsv" | LC_ALL=C sort > "$REMOTE_NAMES"
+          if ! cmp -s "$EXPECTED_NAMES" "$REMOTE_NAMES"; then
+            echo "Unexpected or missing draft release assets; refusing to publish:" >&2
+            diff -u "$EXPECTED_NAMES" "$REMOTE_NAMES" >&2 || true
+            exit 1
+          fi
           for asset in "${ASSETS[@]}"; do
             name="$(basename "$asset")"
             awk -F '\t' -v expected="$name" '

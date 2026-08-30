@@ -250,9 +250,9 @@ Do not edit task state directly in SQLite.
 
 Stable installation:
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/Nowhitestar/Yulu/main/install.sh | bash
-```
+Download `yulu-macos-arm64-vX.Y.Z.dmg` from
+[GitHub Releases](https://github.com/Nowhitestar/Yulu/releases), open it, and
+drag `Yulu.app` into `/Applications`.
 
 Development checkout:
 

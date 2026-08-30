@@ -10,56 +10,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 DIST="dist"
 SKIP_BUILD=false
-export COPYFILE_DISABLE=1
-EXCLUDES=(
-    ".git"
-    ".github"
-    ".agents"
-    ".codex"
-    ".gstack"
-    ".mcp"
-    ".omc"
-    ".claude"
-    ".planning"
-    "AGENTS.md"
-    "/dist"
-    ".ci-build"
-    ".venv*"
-    "venv"
-    "__pycache__"
-    ".pytest_cache"
-    ".mypy_cache"
-    ".ruff_cache"
-    ".DS_Store"
-    "._*"
-    "yulu/scripts/yulu_ui/node_modules"
-    "tests"
-    "yulu/scripts/calendar_probe"
-    "docs/superpowers"
-    "packaging"
-    "worktrees"
-    "*.log"
-    "*.pid"
-    "*.sock"
-    "client_secret*.json"
-    "*token*.json"
-    "secrets"
-    "tokens"
-    ".env"
-    ".env.*"
-)
-# Tracked files that the build legitimately rewrites and may therefore be dirty
-# "after build". The *.entitlements files are committed source (never rewritten
-# by the build) and are deliberately NOT listed here. The _CodeSignature/
-# CodeResources files ARE tracked and ARE regenerated every time codesign signs
-# the bundle (hardened runtime + entitlements), so re-signing makes them dirty —
-# they must be allowlisted alongside the Mach-O binaries and Info.plist.
+YULU_APP="$ROOT/yulu/scripts/Yulu.app"
+BUILD_WORK=""
+WORK=""
+OUTPUT_WORK=""
 ALLOWED_BUILD_OUTPUTS=(
-    "yulu/scripts/StatusAgent.app/Contents/Info.plist"
-    "yulu/scripts/StatusAgent.app/Contents/MacOS/status_agent"
-    "yulu/scripts/StatusAgent.app/Contents/_CodeSignature/CodeResources"
-    "yulu/scripts/recorder_status"
-    "yulu/scripts/meeting_prompt"
     "yulu/scripts/Yulu.app/Contents/Info.plist"
     "yulu/scripts/Yulu.app/Contents/MacOS/yulu_app"
     "yulu/scripts/Yulu.app/Contents/MacOS/audio_daemon"
@@ -75,36 +30,17 @@ PROTECTED_BUILD_OUTPUT_DIRS=(
     "yulu/scripts/Yulu.app/Contents/Helpers/YuluCapture.app/Contents/_CodeSignature"
 )
 
-rsync_exclude_args() {
-    local pattern
-    for pattern in "${EXCLUDES[@]}"; do
-        printf '%s\n' "--exclude=$pattern"
-    done
+cleanup() {
+    if [[ -n "$BUILD_WORK" ]]; then rm -rf "$BUILD_WORK"; fi
+    if [[ -n "$WORK" ]]; then rm -rf "$WORK"; fi
+    if [[ -n "$OUTPUT_WORK" ]]; then rm -rf "$OUTPUT_WORK"; fi
 }
-
-tar_exclude_args() {
-    local pattern
-    for pattern in "${EXCLUDES[@]}"; do
-        if [[ "$pattern" == /* ]]; then
-            # bsdtar treats even a seemingly anchored `./dist` pattern as a
-            # basename match at every depth. Copy it here, then remove only the
-            # staged top-level path below so nested runtime dist/ directories
-            # remain in the release payload.
-            continue
-        else
-            printf '%s\n' "--exclude=$pattern"
-            printf '%s\n' "--exclude=./$pattern"
-        fi
-    done
-}
+trap cleanup EXIT
 
 is_allowed_build_output() {
-    local candidate="$1"
-    local allowed
+    local candidate="$1" allowed
     for allowed in "${ALLOWED_BUILD_OUTPUTS[@]}"; do
-        if [[ "$candidate" == "$allowed" ]]; then
-            return 0
-        fi
+        [[ "$candidate" == "$allowed" ]] && return 0
     done
     return 1
 }
@@ -115,11 +51,7 @@ check_clean_worktree() {
         return 0
     fi
 
-    local dirty
-    dirty="$(git -C "$ROOT" status --porcelain --untracked-files=all)"
-
-    local unexpected=()
-    local line path
+    local unexpected=() line path ignored_outputs
     while IFS= read -r line; do
         [[ -n "$line" ]] || continue
         path="${line:3}"
@@ -127,12 +59,8 @@ check_clean_worktree() {
             continue
         fi
         unexpected+=("$line")
-    done <<< "$dirty"
+    done < <(git -C "$ROOT" status --porcelain --untracked-files=all)
 
-    # `git status` deliberately omits ignored files. Inspect the generated
-    # Capture directories separately so an ignored sibling cannot ride along
-    # in the release archive without appearing in the exact output allowlist.
-    local ignored_outputs
     if ! ignored_outputs="$(
         git -C "$ROOT" ls-files --others --ignored --exclude-standard -- \
             "${PROTECTED_BUILD_OUTPUT_DIRS[@]}"
@@ -166,10 +94,7 @@ fi
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --dist)
-            if [[ $# -lt 2 ]]; then
-                usage
-                exit 1
-            fi
+            [[ $# -ge 2 ]] || { usage; exit 1; }
             DIST="$2"
             shift 2
             ;;
@@ -194,12 +119,10 @@ if [[ -z "$TAG" ]]; then
     usage
     exit 1
 fi
-
 if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]; then
     echo "Invalid release tag: $TAG" >&2
     exit 1
 fi
-
 if [[ -f "$ROOT/VERSION" ]]; then
     VERSION="$(tr -d '[:space:]' < "$ROOT/VERSION")"
     EXPECTED_TAG="v$VERSION"
@@ -211,77 +134,61 @@ fi
 
 if [[ "$SKIP_BUILD" != true ]]; then
     check_clean_worktree "before build"
-    if [[ -x "$ROOT/yulu/scripts/build_audio_daemon.sh" ]]; then
+    BUILD_WORK="$(mktemp -d "${TMPDIR:-/tmp}/yulu-application-runtime.XXXXXX")"
+    YULU_APP="$BUILD_WORK/Yulu.app"
+    YULU_APP_OUTPUT_PATH="$YULU_APP" \
+        YULU_BUNDLE_APPLICATION_RUNTIME=1 \
         bash "$ROOT/yulu/scripts/build_audio_daemon.sh"
-    fi
-    if [[ -x "$ROOT/yulu/scripts/build_status_agent.sh" ]]; then
-        bash "$ROOT/yulu/scripts/build_status_agent.sh"
-    fi
     check_clean_worktree "after build"
 fi
 
-DIST_ABS="$(mkdir -p "$DIST" && cd "$DIST" && pwd)"
-ZIP_PATH="$DIST_ABS/yulu-macos-arm64-$TAG.zip"
-INSTALL_ASSET="$DIST_ABS/install.sh"
-STAGE="$(mktemp -d "${TMPDIR:-/tmp}/yulu-package.XXXXXX")"
-
-cleanup() {
-    rm -rf "$STAGE"
+[[ -d "$YULU_APP/Contents" ]] || {
+    echo "Immutable Application Runtime missing: $YULU_APP" >&2
+    exit 1
 }
-trap cleanup EXIT
+command -v hdiutil >/dev/null 2>&1 || {
+    echo "hdiutil is required to build the macOS DMG." >&2
+    exit 1
+}
+command -v ditto >/dev/null 2>&1 || {
+    echo "ditto is required to preserve the signed App bundle." >&2
+    exit 1
+}
 
-mkdir -p "$STAGE/yulu"
+DIST_ABS="$(mkdir -p "$DIST" && cd "$DIST" && pwd)"
+DMG_PATH="$DIST_ABS/yulu-macos-arm64-$TAG.dmg"
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/yulu-dmg.XXXXXX")"
+OUTPUT_WORK="$(mktemp -d "$DIST_ABS/.yulu-dmg.XXXXXX")"
+STAGE="$WORK/stage"
+RW_DMG="$WORK/Yulu-read-write.dmg"
+DMG_TMP="$OUTPUT_WORK/yulu-macos-arm64-$TAG.dmg"
 
-if command -v rsync >/dev/null 2>&1; then
-    RSYNC_ARGS=(-a)
-    while IFS= read -r arg; do
-        RSYNC_ARGS+=("$arg")
-    done < <(rsync_exclude_args)
-    rsync "${RSYNC_ARGS[@]}" "$ROOT/" "$STAGE/yulu/"
-else
-    TAR_ARGS=()
-    while IFS= read -r arg; do
-        TAR_ARGS+=("$arg")
-    done < <(tar_exclude_args)
-    (cd "$ROOT" && tar "${TAR_ARGS[@]}" -cf - .) | (cd "$STAGE/yulu" && tar -xf -)
+mkdir -p "$STAGE"
+ditto "$YULU_APP" "$STAGE/Yulu.app"
+ln -s /Applications "$STAGE/Applications"
+
+[[ -d "$STAGE/Yulu.app/Contents" && ! -L "$STAGE/Yulu.app" ]] || {
+    echo "DMG staging failed to preserve Yulu.app." >&2
+    exit 1
+}
+[[ -L "$STAGE/Applications" && "$(readlink "$STAGE/Applications")" == "/Applications" ]] || {
+    echo "DMG Applications alias must resolve exactly to /Applications." >&2
+    exit 1
+}
+if [[ "$(find "$STAGE" -mindepth 1 -maxdepth 1 -print | wc -l | tr -d '[:space:]')" != "2" ]]; then
+    echo "DMG staging must contain only Yulu.app and the Applications alias." >&2
+    exit 1
 fi
 
-# `/dist` is a repository-root build-output directory. Keep nested runtime
-# directories such as yulu/scripts/yulu_ui/dist, which contain the signed Host.
-rm -rf "$STAGE/yulu/dist"
+hdiutil create -quiet -ov -format UDRW -fs HFS+ -volname Yulu \
+    -srcfolder "$STAGE" "$RW_DMG"
+hdiutil convert "$RW_DMG" -quiet -ov -format UDZO -imagekey zlib-level=9 \
+    -o "$DMG_TMP"
+[[ -s "$DMG_TMP" ]] || {
+    echo "DMG conversion did not produce an artifact: $DMG_TMP" >&2
+    exit 1
+}
 
-if [[ -f "$ROOT/install.sh" ]]; then
-    cp "$ROOT/install.sh" "$INSTALL_ASSET"
-    # The versioned release installer must remain immutable even if main moves on.
-    # Pair the release installer code and runtime selection in one atomic rewrite.
-    HELPER_PAYLOAD="$(base64 < "$ROOT/yulu/scripts/release_installer.py" | tr -d '\r\n')"
-    INSTALL_TMP="$(mktemp "$DIST_ABS/install.sh.XXXXXX")"
-    awk -v payload="$HELPER_PAYLOAD" -v tag="$TAG" '
-        {
-            sub(/__YULU_EMBEDDED_RELEASE_INSTALLER_BASE64__/, payload)
-            sub(/__YULU_PACKAGED_RELEASE_TAG__/, tag)
-            print
-        }
-    ' "$INSTALL_ASSET" > "$INSTALL_TMP"
-    if grep -Eq '__YULU_(EMBEDDED_RELEASE_INSTALLER_BASE64|PACKAGED_RELEASE_TAG)__' "$INSTALL_TMP"; then
-        echo "Failed to embed release_installer.py and release tag into release install.sh" >&2
-        rm -f "$INSTALL_TMP"
-        exit 1
-    fi
-    chmod +x "$INSTALL_TMP"
-    mv "$INSTALL_TMP" "$INSTALL_ASSET"
-fi
-
-rm -f "$ZIP_PATH"
-(cd "$STAGE" && find yulu -type f -exec touch -t 202001010000 {} +)
-(cd "$STAGE" && find yulu -type d -exec touch -t 202001010000 {} +)
-# Belt-and-suspenders: re-assert +x on every git-executable file in the staged
-# tree so the packaged zip carries correct modes even if the source checkout's
-# permission bits have drifted. zip stores these in external_attr; chmod only
-# touches the mode, not mtime, so the reproducible timestamps above stay intact.
-while IFS= read -r _exe; do
-    [[ -n "$_exe" && -f "$STAGE/yulu/$_exe" ]] && chmod +x "$STAGE/yulu/$_exe"
-done < <(git -C "$ROOT" ls-files --stage 2>/dev/null | awk '$1=="100755"{print $4}')
-(cd "$STAGE" && find yulu -print | LC_ALL=C sort | zip -X -q "$ZIP_PATH" -@)
-
-echo "$ZIP_PATH"
+rm -f "$DMG_PATH"
+mv "$DMG_TMP" "$DMG_PATH"
+echo "$DMG_PATH"

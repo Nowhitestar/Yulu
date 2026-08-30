@@ -400,44 +400,19 @@ Use `yulu where` to confirm the effective installation and recording paths.
 
 ## Upgrade and migration checks
 
-Stable releases contain a user-level runtime zip plus `install.sh` and
-`checksums.txt`. The app bundles inside the zip are signed, notarized, and
-stapled before packaging, and the zip has GitHub build-provenance attestation.
-Before replacing the active runtime, the installer requires both `Yulu.app` and
-`StatusAgent.app` to pass strict Developer ID verification for Apple Team ID
-`WMU9678ZQL`; when `xcrun stapler` is available it also validates each embedded
-notarization ticket on a best-effort basis because Apple's validation service
-can be unavailable offline. Release CI performs the same check as a mandatory
-post-package gate on the extracted zip. A manifest stored inside signed
-`Yulu.app` hashes every file outside the two signed app bundles; installation
-rejects missing, modified, or additional runtime files before executing setup.
-Checksums detect transfer corruption but are not treated as publisher
-authentication.
-The optional `make package-pkg` target is not a production artifact until a
-Developer ID Installer certificate is configured.
+Stable releases publish `yulu-macos-arm64-<tag>.dmg`, `appcast.xml`, and
+`checksums.txt`. The local-caption Runtime Pack remains a separate optional ZIP;
+it is not an installation path and is never inside the DMG. Release CI verifies
+the Developer ID Application signature for Team ID `WMU9678ZQL`, App and DMG
+notarization tickets, Gatekeeper acceptance, the exact two-item mounted layout,
+and the self-contained Application Runtime before publishing.
 
-The v0.17.x updater only recognizes the retired pkg asset. Bridge it once with:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/Nowhitestar/Yulu/main/install.sh | bash
-```
-
-From v0.18 onward the bundled helper understands the zip contract. A pinned
-`yulu update --version ...` never downloads mutable installer code from `main`;
-future asset-format migrations require an explicit, documented bridge.
-
-Before an upgrade runs setup, the release installer snapshots
-`~/.config/yulu/config.json` beside the source file with mode `0600`. If setup or
-post-setup health fails, runtime rollback restores that exact config atomically;
-if no config existed before the attempt, a newly created config is removed.
-Successful upgrades delete this transaction snapshot. Timestamped migration
-archives created by ConfigManager are separate audit artifacts and are preserved.
-The same config transaction covers `--dev`: replacing a release runtime with a
-new clone restores the prior runtime and config, then repairs its services if
-dev setup fails. Before updating an existing Git checkout, the installer requires
-an exact clean worktree and records its HEAD plus branch/detached state. Failure
-restores that exact ref and SHA, restores config, repairs the old services, then
-reasserts a clean tracked worktree.
+Sparkle and manual recovery use the same DMG. Sparkle verifies both the signed
+feed and the DMG enclosure signature before installation. For manual recovery,
+quit Yulu, download the matching DMG from GitHub Releases, open it, drag
+`Yulu.app` onto `/Applications`, and relaunch. Do not use a repository ZIP,
+`install.sh`, or pkg as a release bridge. Replacing the immutable App leaves
+configuration, credentials, and recordings outside the bundle unchanged.
 
 After an upgrade:
 

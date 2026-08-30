@@ -57,6 +57,25 @@ SOURCE="$EXTRACT/Sparkle.xcframework/macos-arm64_x86_64/Sparkle.framework"
 [[ -d "$SOURCE/Versions" && -f "$SOURCE/Versions/Current/Sparkle" ]] || \
   fail "locked Sparkle archive does not contain the macOS framework"
 
+# Release CI uses the generator from this same checksum-pinned Sparkle archive,
+# so the App and its signed feed cannot silently drift to different toolchains.
+# The tool remains build-only and is never copied into Yulu.app.
+if [[ -n "${YULU_SPARKLE_TOOLS_DIR:-}" ]]; then
+  case "$YULU_SPARKLE_TOOLS_DIR" in
+    /*) ;;
+    *) fail "YULU_SPARKLE_TOOLS_DIR must be absolute" ;;
+  esac
+  GENERATE_APPCAST="$(find "$EXTRACT" -type f -name generate_appcast -perm -111 -print -quit)"
+  SIGN_UPDATE="$(find "$EXTRACT" -type f -name sign_update -perm -111 -print -quit)"
+  [[ -n "$GENERATE_APPCAST" ]] || fail "locked Sparkle archive lacks generate_appcast"
+  [[ -n "$SIGN_UPDATE" ]] || fail "locked Sparkle archive lacks sign_update"
+  mkdir -p "$YULU_SPARKLE_TOOLS_DIR"
+  cp "$GENERATE_APPCAST" "$YULU_SPARKLE_TOOLS_DIR/generate_appcast"
+  cp "$SIGN_UPDATE" "$YULU_SPARKLE_TOOLS_DIR/sign_update"
+  chmod 755 "$YULU_SPARKLE_TOOLS_DIR/generate_appcast" \
+    "$YULU_SPARKLE_TOOLS_DIR/sign_update"
+fi
+
 FRAMEWORKS="$APP/Contents/Frameworks"
 DESTINATION="$FRAMEWORKS/Sparkle.framework"
 mkdir -p "$FRAMEWORKS" "$APP/Contents/Resources"
