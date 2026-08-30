@@ -38,6 +38,7 @@ REQUIRED_FILES=(
   "Contents/Resources/runtime/python/bin/python3"
   "Contents/Resources/runtime/runtime-versions.json"
   "Contents/Resources/runtime/yulu/scripts/record_audio.py"
+  "Contents/Resources/runtime/yulu/scripts/application_migration.py"
   "Contents/Resources/runtime/yulu/scripts/local_caption_runtime_pack.json"
   "Contents/Resources/Host/server.js"
   "Contents/Resources/Host/web/index.html"

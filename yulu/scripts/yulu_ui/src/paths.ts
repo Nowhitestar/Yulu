@@ -264,7 +264,7 @@ export function resolveHostPaths(input: ApplicationDataPathInput = {}) {
   const durableDir = application.durableDataDir;
   return {
     ...application,
-    configDir:          legacyDir,
+    configDir:          durableDir,
     configFile:         application.configFile,
     promptsDb:          join(durableDir, "prompts.sqlite"),
     vocabDb:            join(durableDir, "vocab.sqlite"),
@@ -272,7 +272,8 @@ export function resolveHostPaths(input: ApplicationDataPathInput = {}) {
     hostDb:             join(durableDir, "host.sqlite"),
     agentTasksDir:      join(durableDir, "agent-tasks"),
     recordingEventsDir: join(durableDir, "recording-events"),
-    agentQueueJson:     join(legacyDir, "agent-queue.json"),
+    agentQueueJson:     join(durableDir, "agent-queue.json"),
+    legacyAgentQueueJson: join(legacyDir, "agent-queue.json"),
     mcpTokenJson:       join(durableDir, "mcp-token.json"),
     audioDaemonSock:    join(application.ipcDir, "audio_daemon.sock"),
     statusAgentSock:    join(application.ipcDir, "status_agent.sock"),

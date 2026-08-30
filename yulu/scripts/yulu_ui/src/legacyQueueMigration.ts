@@ -1,13 +1,12 @@
 import { createHash } from "node:crypto";
 import {
   existsSync,
+  fstatSync,
+  fsyncSync,
   readFileSync,
-  renameSync,
   statSync,
-  unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { basename, dirname, join } from "node:path";
 
 type LegacyEntry = Record<string, unknown>;
 
@@ -62,8 +61,23 @@ function isFile(path: string): boolean {
   catch { return false; }
 }
 
-function migrationStamp(date: Date): string {
-  return date.toISOString().replace(/[-:.]/g, "");
+function requirePrivateOutputDescriptor(descriptor: number, name: string): void {
+  if (!Number.isSafeInteger(descriptor) || descriptor < 0) {
+    throw new Error(`${name} descriptor is invalid`);
+  }
+  const metadata = fstatSync(descriptor);
+  if (!metadata.isFile()
+      || metadata.size !== 0
+      || metadata.nlink !== 1
+      || (metadata.mode & 0o777) !== 0o600
+      || (process.geteuid !== undefined && metadata.uid !== process.geteuid())) {
+    throw new Error(`${name} descriptor is unsafe`);
+  }
+}
+
+function writeOutputDescriptor(descriptor: number, content: string): void {
+  writeFileSync(descriptor, content, { encoding: "utf8" });
+  fsyncSync(descriptor);
 }
 
 /**
@@ -75,12 +89,32 @@ function migrationStamp(date: Date): string {
  * can explicitly reprocess any preserved recording from the current UI.
  */
 export function migrateLegacyAgentQueue(input: {
-  queuePath: string;
+  queueFD: number | null;
+  archiveFD: number | null;
+  auditFD: number | null;
+  sourcePath: string;
+  archiveName: string;
+  auditName: string;
   now?: Date;
 }): LegacyQueueMigrationReport | null {
-  if (!existsSync(input.queuePath)) return null;
+  if (input.queueFD === null) return null;
+  if (!Number.isSafeInteger(input.queueFD) || input.queueFD < 0) {
+    throw new Error("legacy Agent queue descriptor is invalid");
+  }
+  const metadata = fstatSync(input.queueFD);
+  if (!metadata.isFile()
+      || metadata.size < 0
+      || metadata.size > 16 * 1024 * 1024
+      || (process.geteuid !== undefined && metadata.uid !== process.geteuid())) {
+    throw new Error("legacy Agent queue descriptor is unsafe");
+  }
+  if (input.archiveFD === null || input.auditFD === null) {
+    throw new Error("legacy Agent queue output descriptors are missing");
+  }
+  requirePrivateOutputDescriptor(input.archiveFD, "legacy Agent queue archive");
+  requirePrivateOutputDescriptor(input.auditFD, "legacy Agent queue audit");
 
-  const raw = readFileSync(input.queuePath, "utf8");
+  const raw = readFileSync(input.queueFD, "utf8");
   const parsed = JSON.parse(raw) as unknown;
   if (!Array.isArray(parsed)) throw new Error("legacy Agent queue must contain a JSON array");
   const entries = parsed.filter((value): value is LegacyEntry => (
@@ -88,11 +122,6 @@ export function migrateLegacyAgentQueue(input: {
   ));
 
   const timestamp = input.now ?? new Date();
-  const stamp = migrationStamp(timestamp);
-  const dir = dirname(input.queuePath);
-  const root = basename(input.queuePath, ".json");
-  const archivePath = join(dir, `${root}.legacy.${stamp}.json`);
-  const auditPath = join(dir, `${root}.migration.${stamp}.json`);
   const items: LegacyQueueMigrationItem[] = [];
 
   for (const [index, entry] of entries.entries()) {
@@ -139,9 +168,9 @@ export function migrateLegacyAgentQueue(input: {
   const report: LegacyQueueMigrationReport = {
     version: 2,
     migratedAt: timestamp.toISOString(),
-    sourcePath: input.queuePath,
-    archivePath,
-    auditPath,
+    sourcePath: input.sourcePath,
+    archivePath: input.archiveName,
+    auditPath: input.auditName,
     total: entries.length,
     actionable: items.length - count("archived"),
     alreadyMaterialized: count("already_materialized"),
@@ -151,14 +180,7 @@ export function migrateLegacyAgentQueue(input: {
     items,
   };
 
-  const auditTmp = `${auditPath}.${process.pid}.tmp`;
-  try {
-    writeFileSync(auditTmp, `${JSON.stringify(report, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
-    renameSync(input.queuePath, archivePath);
-    renameSync(auditTmp, auditPath);
-  } catch (error) {
-    try { unlinkSync(auditTmp); } catch { /* best effort */ }
-    throw error;
-  }
+  writeOutputDescriptor(input.archiveFD, raw);
+  writeOutputDescriptor(input.auditFD, `${JSON.stringify(report, null, 2)}\n`);
   return report;
 }

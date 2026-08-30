@@ -1,5 +1,6 @@
 from pathlib import Path
 import ctypes
+import fcntl
 import plistlib
 import json
 import os
@@ -82,6 +83,82 @@ def test_clean_app_output_copies_embedded_smappservice_agents_before_signing():
     assert 'cp -R "$APP_TEMPLATE/Contents/Library" "$APP/Contents/Library"' in output_branch
 
 
+def test_runtime_node_signing_pins_the_host_code_identifier_only_for_node():
+    build = (SCRIPTS / "build_audio_daemon.sh").read_text(encoding="utf-8")
+    runtime_signing = build.split(
+        'if [[ "$BUNDLE_APPLICATION_RUNTIME" == "1" ]]; then', 2
+    )[2].split("fi\n", 1)[0]
+    node_branch, other_runtime_code = runtime_signing.split("else", 1)
+
+    assert '--identifier node' in node_branch
+    assert '--identifier node' not in other_runtime_code
+    assert build.count('--identifier node') == 1
+
+
+def test_migration_stderr_is_drained_concurrently_bounded_and_redacted(tmp_path: Path):
+    binary = tmp_path / "yulu_app"
+    compile_result = subprocess.run(
+        [
+            "swiftc",
+            "-D",
+            "YULU_DEVELOPMENT_SMOKE",
+            "-module-cache-path",
+            str(tmp_path / "swift-cache"),
+            "-o",
+            str(binary),
+            str(SCRIPTS / "yulu_app.swift"),
+            "-framework",
+            "Cocoa",
+            "-framework",
+            "WebKit",
+            "-framework",
+            "ServiceManagement",
+            "-framework",
+            "Security",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert compile_result.returncode == 0, compile_result.stderr
+
+    lock_path = tmp_path / "attempt.lock"
+    child = tmp_path / "stderr_child.py"
+    secret = "migration-secret-must-never-surface"
+    child.write_text(
+        "import fcntl, os, sys\n"
+        f"handle = open({str(lock_path)!r}, 'w')\n"
+        "fcntl.flock(handle, fcntl.LOCK_EX)\n"
+        f"os.write(2, ({secret!r} * 8192).encode())\n",
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        [
+            str(binary),
+            "--inspect-migration-stderr-drain",
+            sys.executable,
+            str(child),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    observation = json.loads(result.stdout)
+    assert observation == {
+        "exited": True,
+        "hadStderr": True,
+        "redacted": True,
+        "truncated": True,
+    }
+    assert secret not in result.stdout
+    assert secret not in result.stderr
+    with lock_path.open("a+") as handle:
+        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+
 def test_shell_plans_persistent_service_registration_only_from_applications(tmp_path: Path):
     binary = tmp_path / "yulu_app"
     compile_result = subprocess.run(
@@ -127,6 +204,205 @@ def test_shell_plans_persistent_service_registration_only_from_applications(tmp_
             "register": [],
             "unregister": [],
         }
+
+
+def test_transaction_actions_are_nonce_bound_and_cannot_mutate_outside_applications(
+    tmp_path: Path,
+):
+    binary = tmp_path / "yulu_app"
+    compile_result = subprocess.run(
+        [
+            "swiftc",
+            "-module-cache-path",
+            str(tmp_path / "swift-cache"),
+            "-o",
+            str(binary),
+            str(SCRIPTS / "yulu_app.swift"),
+            "-framework",
+            "Cocoa",
+            "-framework",
+            "WebKit",
+            "-framework",
+            "ServiceManagement",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert compile_result.returncode == 0, compile_result.stderr
+
+    action = json.dumps(
+        {
+            "action": "register_services",
+            "transactionId": "transaction-1",
+            "nonce": "nonce-1",
+            "services": ["com.yulu.ui.plist", "com.yulu.audiodaemon.plist"],
+        }
+    )
+
+    def inspect(bundle_path: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [
+                str(binary),
+                "--inspect-migration-service-action",
+                bundle_path,
+                action,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+
+    installed = inspect("/Applications/Yulu.app")
+    assert installed.returncode == 0, installed.stderr
+    assert json.loads(installed.stdout) == {
+        "persistentFileWrites": [],
+        "register": ["com.yulu.ui.plist", "com.yulu.audiodaemon.plist"],
+        "unregister": [],
+    }
+
+    outside = inspect("/Volumes/Yulu/Yulu.app")
+    assert outside.returncode == 0, outside.stderr
+    assert json.loads(outside.stdout) == {
+        "persistentFileWrites": [],
+        "register": [],
+        "unregister": [],
+    }
+
+
+def test_installed_shell_uses_the_bundled_python_migration_authority_command(
+    tmp_path: Path,
+):
+    binary = tmp_path / "yulu_app"
+    compile_result = subprocess.run(
+        [
+            "swiftc",
+            "-module-cache-path",
+            str(tmp_path / "swift-cache"),
+            "-o",
+            str(binary),
+            str(SCRIPTS / "yulu_app.swift"),
+            "-framework",
+            "Cocoa",
+            "-framework",
+            "WebKit",
+            "-framework",
+            "ServiceManagement",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert compile_result.returncode == 0, compile_result.stderr
+
+    home = tmp_path / "home"
+    home.mkdir()
+    installed = subprocess.run(
+        [
+            str(binary),
+            "--inspect-migration-command",
+            "/Applications/Yulu.app",
+            str(home),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=5,
+        check=False,
+    )
+    assert installed.returncode == 0, installed.stderr
+    payload = json.loads(installed.stdout)
+    assert payload["executable"] == (
+        "/Applications/Yulu.app/Contents/Resources/runtime/python/bin/python3"
+    )
+    assert payload["arguments"][0] == (
+        "/Applications/Yulu.app/Contents/Resources/runtime/yulu/scripts/"
+        "application_migration.py"
+    )
+    assert payload["arguments"][1] == "session"
+    assert payload["arguments"] == [
+        payload["arguments"][0],
+        "session",
+        "--home",
+        str(home),
+        "--durable",
+        str(home / "Library/Application Support/Yulu"),
+        "--cache",
+        str(home / "Library/Caches/Yulu"),
+        "--legacy",
+        str(home / ".config/yulu"),
+        "--launch-agents",
+        str(home / "Library/LaunchAgents"),
+        "--archive",
+        str(
+            home
+            / "Library/Application Support/Yulu/application-migration/rollback/LaunchAgents"
+        ),
+        "--capture-socket",
+        str(home / ".config/yulu/audio_daemon.sock"),
+        "--node",
+        "/Applications/Yulu.app/Contents/Resources/runtime/bin/node",
+        "--server",
+        "/Applications/Yulu.app/Contents/Resources/Host/server.js",
+        "--app",
+        "/Applications/Yulu.app",
+    ]
+
+    outside = subprocess.run(
+        [
+            str(binary),
+            "--inspect-migration-command",
+            "/Volumes/Yulu/Yulu.app",
+            str(home),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=5,
+        check=False,
+    )
+    assert outside.returncode == 0, outside.stderr
+    assert json.loads(outside.stdout) is None
+
+    rollback_action = json.dumps(
+        {
+            "action": "unregister_services",
+            "transactionId": "transaction-123",
+            "nonce": "nonce-123",
+            "services": ["com.yulu.ui.plist", "com.yulu.audiodaemon.plist"],
+        },
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    outside_adapter = subprocess.run(
+        [str(binary), "--apply-migration-service-action", rollback_action],
+        capture_output=True,
+        text=True,
+        timeout=5,
+        check=False,
+    )
+    assert outside_adapter.returncode == 78
+
+    source = (SCRIPTS / "yulu_app.swift").read_text(encoding="utf-8")
+    launch_body = source.split(
+        "func applicationDidFinishLaunching(_ notification: Notification)", 1
+    )[1].split("func applicationShouldTerminateAfterLastWindowClosed", 1)[0]
+    assert "backgroundServices.registerBundledOwners(policy: launchPolicy)" not in launch_body
+    assert "coordinator.advance()" in launch_body
+    active_body = source.split(
+        "func applicationDidBecomeActive(_ notification: Notification)", 1
+    )[1].split("func applicationShouldHandleReopen", 1)[0]
+    assert 'migrationCoordinator?.advance(event: "resume")' in active_body
+    coordinator = source.split("final class ApplicationMigrationCoordinator", 1)[1].split(
+        "func writeJSON", 1
+    )[0]
+    assert "process.standardInput = input" in coordinator
+    assert "migrationProcess" in coordinator
+    assert "JSONSerialization.data(withJSONObject: envelope)" in coordinator
+    assert "migrationProcess?.terminate()" not in coordinator
+    assert "migrationInput?.closeFile()" in coordinator
+    fresh_path = coordinator.split('case "fresh_install":', 1)[1].split("case ", 1)[0]
+    assert "services.registerBundledOwners(policy: policy)" in fresh_path
+    assert 'onStateChange?("committed", nil)' in fresh_path
 
 
 def test_service_state_contract_never_treats_approval_as_health_or_readiness(tmp_path: Path):
@@ -812,13 +1088,15 @@ def test_production_startup_plan_has_smappservice_owners_and_no_direct_children(
     }
 
 
-def test_production_application_registers_smappservice_without_starting_product_supervisor():
+def test_production_application_routes_smappservice_through_the_migration_coordinator():
     source = (SCRIPTS / "yulu_app.swift").read_text()
     application = source.split("final class YuluApplication", 1)[1].split(
         "let policy = LaunchPolicy.evaluate", 1
     )[0]
 
-    assert "backgroundServices.registerBundledOwners(policy: launchPolicy)" in application
+    assert "ApplicationMigrationCoordinator(" in application
+    assert "coordinator.advance()" in application
+    assert "backgroundServices.registerBundledOwners(policy: launchPolicy)" not in application
     assert "ProductSupervisor(" not in application
     assert "supervisor.start()" not in application
     assert "supervisor?.restart" not in application
@@ -826,6 +1104,7 @@ def test_production_application_registers_smappservice_without_starting_product_
         "func applicationDidBecomeActive", 1
     )[1].split("func applicationShouldHandleReopen", 1)[0]
     assert "registerBundledOwners" not in did_become_active
+    assert 'migrationCoordinator?.advance(event: "resume")' in did_become_active
     assert "refreshServiceWindow()" in did_become_active
     assert "beginServicePolling()" in did_become_active
 
@@ -1091,6 +1370,98 @@ def test_release_shell_excludes_the_development_smoke_entrypoint(tmp_path: Path)
     assert json.loads(development.stdout) == {"developmentSmoke": True}
 
 
+def test_compiled_code_identity_attestation_binds_static_and_live_code(tmp_path: Path):
+    binary = tmp_path / "yulu_app_identity_probe"
+    compile_result = subprocess.run(
+        [
+            "swiftc",
+            "-module-cache-path",
+            str(tmp_path / "swift-cache"),
+            "-D",
+            "YULU_DEVELOPMENT_SMOKE",
+            "-o",
+            str(binary),
+            str(SCRIPTS / "yulu_app.swift"),
+            "-framework",
+            "Cocoa",
+            "-framework",
+            "WebKit",
+            "-framework",
+            "Security",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert compile_result.returncode == 0, compile_result.stderr
+    signed = subprocess.run(
+        [
+            "/usr/bin/codesign",
+            "--force",
+            "--sign",
+            "-",
+            "--identifier",
+            binary.name,
+            str(binary),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert signed.returncode == 0, signed.stderr
+
+    self_result = subprocess.run(
+        [
+            str(binary),
+            "--inspect-code-identity",
+            "self",
+            str(binary),
+            binary.name,
+            "adhoc",
+            "1",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=5,
+        check=False,
+    )
+    assert self_result.returncode == 0, self_result.stderr
+    self_evidence = json.loads(self_result.stdout)
+    assert self_evidence == {
+        "accepted": True,
+        "identifier": binary.name,
+        "teamIdentifier": "adhoc",
+        "cdHash": self_evidence["cdHash"],
+        "staticSealValid": True,
+        "dynamicValid": True,
+        "staticDynamicMatch": True,
+    }
+    assert len(self_evidence["cdHash"]) >= 40
+
+    sleeper = subprocess.Popen(["/bin/sleep", "30"])
+    try:
+        mixed = subprocess.run(
+            [
+                str(binary),
+                "--inspect-code-identity",
+                str(sleeper.pid),
+                str(binary),
+                binary.name,
+                "adhoc",
+                "1",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    finally:
+        sleeper.terminate()
+        sleeper.wait(timeout=5)
+    assert mixed.returncode == 0, mixed.stderr
+    assert json.loads(mixed.stdout)["accepted"] is False
+
+
 def test_development_smoke_resolves_component_paths_from_its_fake_home(tmp_path: Path):
     binary = tmp_path / "yulu_app-development"
     compile_result = subprocess.run(
@@ -1161,6 +1532,7 @@ def test_shell_authenticates_host_and_capture_uses_stable_runtime_paths():
     assert "LOCAL_PEERPID" in shell
     assert "proc_pidpath" in shell
     assert 'appendingPathComponent("host-instance.lock/owner.json")' in shell
+    assert "let ownerURL = applicationPaths.durableDataDir" in shell
     assert 'process.env.YULU_HOST_NONCE ?? null' in host
 
     for name in (

@@ -111,6 +111,8 @@ export function resolveServerRuntimePaths(pathOverrides: Partial<RuntimePaths> =
         ? join(configDir, "recording-events")
         : join(pathOverrides.durableDataDir ?? paths.durableDataDir, "recording-events")),
     agentQueueJson: pathOverrides.agentQueueJson ?? join(configDir, "agent-queue.json"),
+    legacyAgentQueueJson: pathOverrides.legacyAgentQueueJson ??
+      join(legacyReadOnlyDataDir, "agent-queue.json"),
   } as RuntimePaths;
   return runtimePaths;
 }
@@ -128,6 +130,58 @@ export async function startServer(pathOverrides: Partial<RuntimePaths> = {}): Pr
     instanceLock.release();
     throw error;
   }
+}
+
+export async function runServerCommand(
+  arguments_: readonly string[],
+  pathOverrides: Partial<RuntimePaths> = {},
+  migrationInput: {
+    legacyQueueFD?: number | null;
+    legacyQueueArchiveFD?: number | null;
+    legacyQueueAuditFD?: number | null;
+    legacyQueueArchiveName?: string;
+    legacyQueueAuditName?: string;
+  } = {},
+): Promise<RunningServer | null> {
+  if (arguments_.length === 1 && arguments_[0] === "--prepare-application-data") {
+    const runtimePaths = resolveServerRuntimePaths(pathOverrides);
+    await prepareHostDurableData(runtimePaths);
+    const inheritedRaw = process.env.YULU_LEGACY_AGENT_QUEUE_FD;
+    const inheritedFD = inheritedRaw !== undefined && /^\d+$/.test(inheritedRaw)
+      ? Number(inheritedRaw)
+      : Number.NaN;
+    const legacyQueueFD = migrationInput.legacyQueueFD
+      ?? (Number.isSafeInteger(inheritedFD) && inheritedFD >= 0 ? inheritedFD : null);
+    const inheritedArchiveFD = Number(process.env.YULU_LEGACY_AGENT_QUEUE_ARCHIVE_FD);
+    const inheritedAuditFD = Number(process.env.YULU_LEGACY_AGENT_QUEUE_AUDIT_FD);
+    const legacyQueueArchiveFD = migrationInput.legacyQueueArchiveFD
+      ?? (Number.isSafeInteger(inheritedArchiveFD) && inheritedArchiveFD >= 0 ? inheritedArchiveFD : null);
+    const legacyQueueAuditFD = migrationInput.legacyQueueAuditFD
+      ?? (Number.isSafeInteger(inheritedAuditFD) && inheritedAuditFD >= 0 ? inheritedAuditFD : null);
+    const migrationTimestamp = process.env.YULU_MIGRATION_TIMESTAMP;
+    const migrationNow = migrationTimestamp === undefined ? undefined : new Date(migrationTimestamp);
+    if (migrationNow !== undefined && Number.isNaN(migrationNow.getTime())) {
+      throw new Error("application migration timestamp is invalid");
+    }
+    migrateLegacyAgentQueue({
+      queueFD: legacyQueueFD,
+      archiveFD: legacyQueueArchiveFD,
+      auditFD: legacyQueueAuditFD,
+      sourcePath: runtimePaths.legacyAgentQueueJson,
+      archiveName: migrationInput.legacyQueueArchiveName
+        ?? process.env.YULU_LEGACY_AGENT_QUEUE_ARCHIVE_NAME
+        ?? "",
+      auditName: migrationInput.legacyQueueAuditName
+        ?? process.env.YULU_LEGACY_AGENT_QUEUE_AUDIT_NAME
+        ?? "",
+      ...(migrationNow ? { now: migrationNow } : {}),
+    });
+    return null;
+  }
+  if (arguments_.length > 0) {
+    throw new Error(`unknown Yulu Host argument: ${arguments_[0]}`);
+  }
+  return startServer(pathOverrides);
 }
 
 async function startLockedServer(
@@ -346,21 +400,6 @@ async function startLockedServer(
     defaultTranslationEnabled: false,
     allowedRoots: [runtimePaths.moviesDir],
   });
-  try {
-    const migration = migrateLegacyAgentQueue({
-      queuePath: runtimePaths.agentQueueJson,
-    });
-    if (migration) {
-      console.warn(
-        `[yulu_ui] archived legacy Agent queue: retired=${migration.retiredPending} ` +
-        `materialized=${migration.alreadyMaterialized} unresolvable=${migration.unresolvable} ` +
-        `archive=${migration.archivePath}`,
-      );
-    }
-  } catch (error) {
-    console.warn(`[yulu_ui] legacy Agent queue migration failed; source preserved: ${(error as Error).message}`);
-  }
-
   const ctx: AppContext = {
     config:    configManager,
     launchctl,
@@ -894,7 +933,8 @@ async function bridgeNodeToFetch(
 
 // CLI entry
 if (import.meta.url === `file://${process.argv[1]}`) {
-  startServer().then((server) => {
+  runServerCommand(process.argv.slice(2)).then((server) => {
+    if (!server) return;
     console.log(`[yulu_ui] listening on http://127.0.0.1:${server.address.port}`);
     let stopping = false;
     const shutdown = () => {

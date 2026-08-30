@@ -1,5 +1,6 @@
 import Cocoa
 import Darwin
+import Security
 import ServiceManagement
 import WebKit
 
@@ -87,6 +88,10 @@ protocol PersistentServiceRegistering {
     func register(_ service: BackgroundServiceDescriptor)
 }
 
+protocol PersistentServiceMutating: PersistentServiceRegistering {
+    func unregister(_ service: BackgroundServiceDescriptor)
+}
+
 struct BackgroundServiceOwnership {
     static func registerBundledOwners(
         policy: LaunchPolicy,
@@ -113,13 +118,46 @@ struct ServiceRegistrationDecision: Encodable {
     }
 }
 
-final class ServiceActionRecorder: PersistentServiceRegistering, Encodable {
+final class ServiceActionRecorder: PersistentServiceMutating, Encodable {
     private(set) var register: [String] = []
-    let unregister: [String] = []
+    private(set) var unregister: [String] = []
     let persistentFileWrites: [String] = []
 
     func register(_ service: BackgroundServiceDescriptor) {
         register.append(service.plistName)
+    }
+
+    func unregister(_ service: BackgroundServiceDescriptor) {
+        unregister.append(service.plistName)
+    }
+}
+
+struct MigrationServiceAction: Decodable {
+    let action: String
+    let transactionId: String
+    let nonce: String
+    let services: [String]
+
+    func apply(policy: LaunchPolicy, registrar: PersistentServiceMutating) -> Bool {
+        guard policy.persistentRegistrationAllowed,
+              !transactionId.isEmpty,
+              !nonce.isEmpty,
+              services == BackgroundServiceDescriptor.bundledOwners.map(\.plistName) else {
+            return false
+        }
+        switch action {
+        case "register_services":
+            for service in BackgroundServiceDescriptor.bundledOwners {
+                registrar.register(service)
+            }
+        case "unregister_services":
+            for service in BackgroundServiceDescriptor.bundledOwners {
+                registrar.unregister(service)
+            }
+        default:
+            return false
+        }
+        return true
     }
 }
 
@@ -256,10 +294,173 @@ struct BundledServicesPresentation: Encodable {
     }
 }
 
+enum ProductSigningPolicy {
+    static let teamIdentifier = "WMU9678ZQL"
+    static let applicationIdentifier = "com.yulu.app"
+    static let hostIdentifier = "node"
+    static let captureIdentifier = "com.yulu.audiodaemon"
+
+    static var allowDevelopmentAdHoc: Bool {
+        #if YULU_DEVELOPMENT_SMOKE
+        true
+        #else
+        false
+        #endif
+    }
+}
+
+struct CodeIdentityEvidence: Encodable {
+    let accepted: Bool
+    let identifier: String
+    let teamIdentifier: String
+    let cdHash: String
+    let staticSealValid: Bool
+    let dynamicValid: Bool
+    let staticDynamicMatch: Bool
+
+    var dictionary: [String: Any] {
+        [
+            "accepted": accepted,
+            "identifier": identifier,
+            "teamIdentifier": teamIdentifier,
+            "cdHash": cdHash,
+            "staticSealValid": staticSealValid,
+            "dynamicValid": dynamicValid,
+            "staticDynamicMatch": staticDynamicMatch,
+        ]
+    }
+}
+
+private struct SigningInformation {
+    let identifier: String
+    let teamIdentifier: String?
+    let cdHash: Data
+}
+
+private func signingInformation(_ code: SecStaticCode) -> SigningInformation? {
+    var raw: CFDictionary?
+    guard SecCodeCopySigningInformation(
+        code,
+        SecCSFlags(rawValue: kSecCSSigningInformation),
+        &raw
+    ) == errSecSuccess,
+    let information = raw as? [String: Any],
+    let identifier = information[kSecCodeInfoIdentifier as String] as? String,
+    let cdHash = information[kSecCodeInfoUnique as String] as? Data,
+    !identifier.isEmpty,
+    !cdHash.isEmpty else { return nil }
+    return SigningInformation(
+        identifier: identifier,
+        teamIdentifier: information[kSecCodeInfoTeamIdentifier as String] as? String,
+        cdHash: cdHash
+    )
+}
+
+private func codeRequirement(
+    identifier: String,
+    teamIdentifier: String,
+    allowAdHoc: Bool
+) -> SecRequirement? {
+    let escapedIdentifier = identifier.replacingOccurrences(of: "\"", with: "\\\"")
+    let requirementText: String
+    if allowAdHoc {
+        requirementText = "identifier \"\(escapedIdentifier)\""
+    } else {
+        let escapedTeam = teamIdentifier.replacingOccurrences(of: "\"", with: "\\\"")
+        requirementText = "anchor apple generic and identifier \"\(escapedIdentifier)\" and certificate leaf[subject.OU] = \"\(escapedTeam)\""
+    }
+    var requirement: SecRequirement?
+    guard SecRequirementCreateWithString(
+        requirementText as CFString,
+        SecCSFlags(),
+        &requirement
+    ) == errSecSuccess else { return nil }
+    return requirement
+}
+
+func codeIdentityEvidence(
+    pid: Int,
+    staticURL: URL,
+    expectedIdentifier: String,
+    expectedTeamIdentifier: String,
+    allowAdHoc: Bool = false
+) -> CodeIdentityEvidence? {
+    guard pid > 1 else { return nil }
+    let requirement = allowAdHoc
+        ? nil
+        : codeRequirement(
+            identifier: expectedIdentifier,
+            teamIdentifier: expectedTeamIdentifier,
+            allowAdHoc: false
+        )
+    if !allowAdHoc && requirement == nil { return nil }
+    var dynamicCode: SecCode?
+    let dynamicStatus: OSStatus
+    if pid == Int(getpid()) {
+        dynamicStatus = SecCodeCopySelf(SecCSFlags(), &dynamicCode)
+    } else {
+        dynamicStatus = SecCodeCopyGuestWithAttributes(
+            nil,
+            [kSecGuestAttributePid as String: pid] as CFDictionary,
+            SecCSFlags(),
+            &dynamicCode
+        )
+    }
+    guard dynamicStatus == errSecSuccess, let dynamicCode else { return nil }
+    var expectedStaticCode: SecStaticCode?
+    guard SecStaticCodeCreateWithPath(
+        staticURL as CFURL,
+        SecCSFlags(),
+        &expectedStaticCode
+    ) == errSecSuccess,
+    let expectedStaticCode else { return nil }
+    let strictFlags = SecCSFlags(
+        rawValue: kSecCSStrictValidate | kSecCSCheckAllArchitectures
+    )
+    let staticValid = SecStaticCodeCheckValidity(
+        expectedStaticCode,
+        strictFlags,
+        requirement
+    ) == errSecSuccess
+    let dynamicValid = SecCodeCheckValidity(
+        dynamicCode,
+        SecCSFlags(),
+        requirement
+    ) == errSecSuccess
+    var dynamicStaticCode: SecStaticCode?
+    guard SecCodeCopyStaticCode(
+        dynamicCode,
+        SecCSFlags(),
+        &dynamicStaticCode
+    ) == errSecSuccess,
+    let dynamicStaticCode,
+    let expectedInformation = signingInformation(expectedStaticCode),
+    let dynamicInformation = signingInformation(dynamicStaticCode) else { return nil }
+    let normalizedTeam = expectedInformation.teamIdentifier ?? (allowAdHoc ? "adhoc" : "")
+    let identifiersMatch = expectedInformation.identifier == expectedIdentifier
+        && dynamicInformation.identifier == expectedIdentifier
+    let teamsMatch = allowAdHoc
+        ? expectedInformation.teamIdentifier == nil && dynamicInformation.teamIdentifier == nil
+        : expectedInformation.teamIdentifier == expectedTeamIdentifier
+            && dynamicInformation.teamIdentifier == expectedTeamIdentifier
+    let hashesMatch = expectedInformation.cdHash == dynamicInformation.cdHash
+    let accepted = staticValid && dynamicValid && identifiersMatch && teamsMatch && hashesMatch
+    return CodeIdentityEvidence(
+        accepted: accepted,
+        identifier: expectedInformation.identifier,
+        teamIdentifier: normalizedTeam,
+        cdHash: expectedInformation.cdHash.map { String(format: "%02x", $0) }.joined(),
+        staticSealValid: staticValid,
+        dynamicValid: dynamicValid,
+        staticDynamicMatch: hashesMatch
+    )
+}
+
 struct RuntimeOwnerEvidence: Encodable {
     let running: Bool
     let capabilityReady: Bool?
     let ownerPID: Int?
+    var codeIdentity: CodeIdentityEvidence? = nil
 
     enum CodingKeys: String, CodingKey {
         case running, capabilityReady, ownerPID
@@ -312,14 +513,16 @@ struct RuntimeOwnerEvidence: Encodable {
             return RuntimeOwnerEvidence(
                 running: healthy,
                 capabilityReady: nil,
-                ownerPID: healthy ? pid : nil
+                ownerPID: healthy ? pid : nil,
+                codeIdentity: healthy ? attestation.codeIdentity : nil
             )
         }
         return RuntimeOwnerEvidence(
             running: true,
             capabilityReady: payload["micReady"] as? Bool == true
                 && payload["sysReady"] as? Bool == true,
-            ownerPID: pid
+            ownerPID: pid,
+            codeIdentity: attestation.codeIdentity
         )
     }
 }
@@ -331,6 +534,22 @@ struct RuntimeOwnerAttestation: Encodable {
     let executableMatches: Bool
     let argumentsMatch: Bool
     let generationStable: Bool
+    var codeIdentity: CodeIdentityEvidence? = nil
+
+    enum CodingKeys: String, CodingKey {
+        case ownerPID, authorityToken, generation
+        case executableMatches, argumentsMatch, generationStable
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(ownerPID, forKey: .ownerPID)
+        try container.encodeIfPresent(authorityToken, forKey: .authorityToken)
+        try container.encodeIfPresent(generation, forKey: .generation)
+        try container.encode(executableMatches, forKey: .executableMatches)
+        try container.encode(argumentsMatch, forKey: .argumentsMatch)
+        try container.encode(generationStable, forKey: .generationStable)
+    }
 
     static func decode(_ payload: [String: Any]) -> RuntimeOwnerAttestation? {
         guard let ownerPID = payload["ownerPID"] as? Int,
@@ -361,7 +580,7 @@ func appServiceStatusName(_ status: SMAppService.Status) -> String {
     }
 }
 
-final class BackgroundServiceRegistry {
+final class BackgroundServiceRegistry: PersistentServiceMutating {
     private(set) var registrationErrors: [String: String] = [:]
 
     func registerBundledOwners(policy: LaunchPolicy) {
@@ -375,6 +594,28 @@ final class BackgroundServiceRegistry {
             } catch {
                 registrationErrors[descriptor.plistName] = error.localizedDescription
             }
+        }
+    }
+
+    func register(_ descriptor: BackgroundServiceDescriptor) {
+        let service = SMAppService.agent(plistName: descriptor.plistName)
+        guard service.status == .notRegistered else { return }
+        do {
+            try service.register()
+            registrationErrors.removeValue(forKey: descriptor.plistName)
+        } catch {
+            registrationErrors[descriptor.plistName] = error.localizedDescription
+        }
+    }
+
+    func unregister(_ descriptor: BackgroundServiceDescriptor) {
+        let service = SMAppService.agent(plistName: descriptor.plistName)
+        guard service.status != .notRegistered, service.status != .notFound else { return }
+        do {
+            try service.unregister()
+            registrationErrors.removeValue(forKey: descriptor.plistName)
+        } catch {
+            registrationErrors[descriptor.plistName] = error.localizedDescription
         }
     }
 
@@ -818,11 +1059,542 @@ struct HostServiceExecution: Encodable {
     }
 }
 
+struct ApplicationMigrationCommand: Encodable {
+    let executableURL: URL
+    let arguments: [String]
+
+    enum CodingKeys: String, CodingKey {
+        case executable, arguments
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(executableURL.path, forKey: .executable)
+        try container.encode(arguments, forKey: .arguments)
+    }
+
+    static func make(
+        policy: LaunchPolicy,
+        layout: BundleLayout,
+        applicationPaths: ApplicationDataPaths,
+        homeDirectory: URL
+    ) -> ApplicationMigrationCommand? {
+        guard policy.persistentRegistrationAllowed else { return nil }
+        let migrationScript = layout.bundledScriptDir
+            .appendingPathComponent("application_migration.py")
+        let migrationRoot = applicationPaths.durableDataDir
+            .appendingPathComponent("application-migration", isDirectory: true)
+        var arguments = [
+                migrationScript.path,
+                "session",
+                "--home", homeDirectory.path,
+                "--durable", applicationPaths.durableDataDir.path,
+                "--cache", applicationPaths.cacheDir.path,
+                "--legacy", applicationPaths.legacyReadOnlyDataDir.path,
+                "--launch-agents", homeDirectory
+                    .appendingPathComponent("Library/LaunchAgents", isDirectory: true).path,
+                "--archive", migrationRoot
+                    .appendingPathComponent("rollback/LaunchAgents", isDirectory: true).path,
+                "--capture-socket", applicationPaths.legacyReadOnlyDataDir
+                    .appendingPathComponent("audio_daemon.sock").path,
+                "--node", layout.hostNode.path,
+                "--server", layout.hostEntry.path,
+                "--app", layout.bundleURL.path,
+            ]
+        #if YULU_DEVELOPMENT_SMOKE
+        arguments.append("--allow-development-adhoc")
+        #endif
+        return ApplicationMigrationCommand(
+            executableURL: layout.bundledPython,
+            arguments: arguments
+        )
+    }
+}
+
+struct ApplicationMigrationAction: Decodable {
+    let action: String
+    let transactionId: String?
+    let nonce: String?
+    let services: [String]?
+    let deadlineAt: String?
+    let detail: String?
+}
+
+final class BoundedRedactedStderrDrain {
+    private static let maximumBufferedBytes = 4 * 1024
+    private let lock = NSLock()
+    private let reachedEOF = DispatchSemaphore(value: 0)
+    private weak var handle: FileHandle?
+    private var redactedBuffer = Data()
+    private var didReachEOF = false
+    private var didTruncate = false
+
+    func start(_ handle: FileHandle) {
+        self.handle = handle
+        handle.readabilityHandler = { [weak self] readable in
+            guard let self else { return }
+            let data = readable.availableData
+            if data.isEmpty {
+                self.lock.lock()
+                if !self.didReachEOF {
+                    self.didReachEOF = true
+                    self.reachedEOF.signal()
+                }
+                self.lock.unlock()
+                readable.readabilityHandler = nil
+                return
+            }
+            self.lock.lock()
+            let remaining = max(
+                0,
+                Self.maximumBufferedBytes - self.redactedBuffer.count
+            )
+            let retained = min(remaining, data.count)
+            if retained > 0 {
+                self.redactedBuffer.append(
+                    Data(repeating: 0x23, count: retained)
+                )
+            }
+            if retained < data.count {
+                self.didTruncate = true
+            }
+            self.lock.unlock()
+        }
+    }
+
+    func finishAfterProcessExit() {
+        _ = reachedEOF.wait(timeout: .now() + 1)
+        handle?.readabilityHandler = nil
+        handle = nil
+    }
+
+    var hadOutput: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return !redactedBuffer.isEmpty
+    }
+
+    var truncated: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return didTruncate
+    }
+
+    var userFacingDetail: String? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !redactedBuffer.isEmpty else { return nil }
+        return didTruncate
+            ? "Migration authority emitted redacted diagnostic output (truncated)."
+            : "Migration authority emitted redacted diagnostic output."
+    }
+}
+
+final class ApplicationMigrationCoordinator {
+    private let policy: LaunchPolicy
+    private let layout: BundleLayout
+    private let applicationPaths: ApplicationDataPaths
+    private let homeDirectory: URL
+    private let services: BackgroundServiceRegistry
+    private var migrationProcess: Process?
+    private var migrationInput: FileHandle?
+    private var migrationOutputBuffer = Data()
+    private var migrationTerminalSeen = false
+    private var currentBinding: (transactionId: String, nonce: String)?
+    private var pendingHealth: (transactionId: String, nonce: String)?
+
+    var onStateChange: ((String, String?) -> Void)?
+    var onNeedsHealth: (() -> Void)?
+
+    init(
+        policy: LaunchPolicy,
+        layout: BundleLayout,
+        applicationPaths: ApplicationDataPaths,
+        homeDirectory: URL,
+        services: BackgroundServiceRegistry
+    ) {
+        self.policy = policy
+        self.layout = layout
+        self.applicationPaths = applicationPaths
+        self.homeDirectory = homeDirectory
+        self.services = services
+    }
+
+    func advance(event: String? = nil, observation: [String: Any]? = nil) {
+        if migrationProcess == nil {
+            guard event == nil, observation == nil else { return }
+            startSession()
+            return
+        }
+        guard let binding = currentBinding else { return }
+        var envelope: [String: Any] = [
+            "transactionId": binding.transactionId,
+            "nonce": binding.nonce,
+        ]
+        if let event {
+            envelope["event"] = event
+        } else if let observation {
+            envelope["observation"] = observation
+        } else {
+            return
+        }
+        guard let encoded = try? JSONSerialization.data(withJSONObject: envelope),
+              encoded.count <= 64 * 1024,
+              let migrationInput else {
+            self.migrationInput?.closeFile()
+            self.migrationInput = nil
+            onStateChange?("blocked", "Migration session message was invalid.")
+            return
+        }
+        do {
+            try migrationInput.write(contentsOf: encoded + Data("\n".utf8))
+        } catch {
+            migrationInput.closeFile()
+            self.migrationInput = nil
+        }
+    }
+
+    private func startSession() {
+        guard let command = ApplicationMigrationCommand.make(
+                policy: policy,
+                layout: layout,
+                applicationPaths: applicationPaths,
+                homeDirectory: homeDirectory
+              ) else { return }
+        migrationTerminalSeen = false
+        migrationOutputBuffer.removeAll(keepingCapacity: true)
+        currentBinding = nil
+        let input = Pipe()
+        let output = Pipe()
+        let errors = Pipe()
+        let process = Process()
+        process.executableURL = command.executableURL
+        process.arguments = command.arguments
+        var environment = sanitizedRuntimeEnvironment()
+        environment.merge(applicationPaths.environment) { _, contract in contract }
+        environment["HOME"] = homeDirectory.path
+        environment["PYTHONDONTWRITEBYTECODE"] = "1"
+        environment["PATH"] = "\(layout.bundledPythonBin.path):/usr/bin:/bin:/usr/sbin:/sbin"
+        process.environment = environment
+        process.currentDirectoryURL = layout.bundledScriptDir
+        process.standardInput = input
+        process.standardOutput = output
+        process.standardError = errors
+        let stderrDrain = BoundedRedactedStderrDrain()
+        stderrDrain.start(errors.fileHandleForReading)
+        migrationProcess = process
+        migrationInput = input.fileHandleForWriting
+        output.fileHandleForReading.readabilityHandler = { [weak self] handle in
+            let data = handle.availableData
+            guard !data.isEmpty else { return }
+            DispatchQueue.main.async {
+                self?.consumeSessionOutput(data)
+            }
+        }
+        process.terminationHandler = { [weak self] process in
+            stderrDrain.finishAfterProcessExit()
+            let errorDetail = stderrDrain.userFacingDetail
+            DispatchQueue.main.async {
+                guard let self else { return }
+                output.fileHandleForReading.readabilityHandler = nil
+                self.migrationProcess = nil
+                self.migrationInput = nil
+                self.currentBinding = nil
+                if !self.migrationTerminalSeen {
+                    self.onStateChange?(
+                        "blocked",
+                        errorDetail != nil
+                            ? errorDetail
+                            : "Migration authority exited before a terminal state."
+                    )
+                }
+            }
+        }
+        do {
+            try process.run()
+            errors.fileHandleForWriting.closeFile()
+        } catch {
+            errors.fileHandleForWriting.closeFile()
+            stderrDrain.finishAfterProcessExit()
+            migrationProcess = nil
+            migrationInput = nil
+            onStateChange?("blocked", error.localizedDescription)
+        }
+    }
+
+    private func consumeSessionOutput(_ data: Data) {
+        migrationOutputBuffer.append(data)
+        if migrationOutputBuffer.count > 64 * 1024,
+           !migrationOutputBuffer.contains(0x0A) {
+            migrationInput?.closeFile()
+            migrationInput = nil
+            return
+        }
+        while let newline = migrationOutputBuffer.firstIndex(of: 0x0A) {
+            let line = migrationOutputBuffer[..<newline]
+            migrationOutputBuffer.removeSubrange(...newline)
+            guard line.count <= 64 * 1024,
+                  let action = try? JSONDecoder().decode(
+                    ApplicationMigrationAction.self,
+                    from: Data(line)
+                  ) else {
+                migrationInput?.closeFile()
+                migrationInput = nil
+                return
+            }
+            if let transactionId = action.transactionId, let nonce = action.nonce {
+                currentBinding = (transactionId, nonce)
+            }
+            handle(action)
+        }
+    }
+
+    func cancel() {
+        advance(event: "cancel")
+    }
+
+    func submitHealth(host: RuntimeOwnerEvidence, capture: RuntimeOwnerEvidence) {
+        guard let pendingHealth,
+              host.running,
+              capture.running,
+              let hostPID = host.ownerPID,
+              let capturePID = capture.ownerPID,
+              let hostCodeIdentity = host.codeIdentity,
+              hostCodeIdentity.accepted,
+              let captureCodeIdentity = capture.codeIdentity,
+              captureCodeIdentity.accepted,
+              let applicationCodeIdentity = codeIdentityEvidence(
+                pid: Int(getpid()),
+                staticURL: layout.bundleURL,
+                expectedIdentifier: ProductSigningPolicy.applicationIdentifier,
+                expectedTeamIdentifier: ProductSigningPolicy.teamIdentifier,
+                allowAdHoc: ProductSigningPolicy.allowDevelopmentAdHoc
+              ),
+              applicationCodeIdentity.accepted else { return }
+        self.pendingHealth = nil
+        advance(observation: [
+            "kind": "health",
+            "transactionId": pendingHealth.transactionId,
+            "nonce": pendingHealth.nonce,
+            "app": [
+                "installed": policy.installed,
+                "bundlePath": layout.bundleURL.standardizedFileURL
+                    .resolvingSymlinksInPath().path,
+                "executablePath": layout.bundleURL
+                    .appendingPathComponent("Contents/MacOS/yulu_app")
+                    .standardizedFileURL.resolvingSymlinksInPath().path,
+                "codeIdentity": applicationCodeIdentity.dictionary,
+            ],
+            "host": [
+                "running": true,
+                "ownerPID": hostPID,
+                "port": HostServiceExecution.declaredPort,
+                "codeIdentity": hostCodeIdentity.dictionary,
+            ],
+            "capture": [
+                "running": true,
+                "ownerPID": capturePID,
+                "socketOwned": true,
+                "codeIdentity": captureCodeIdentity.dictionary,
+            ],
+        ])
+    }
+
+    private func handle(_ action: ApplicationMigrationAction) {
+        switch action.action {
+        case "register_services", "unregister_services":
+            guard let transactionId = action.transactionId,
+                  let nonce = action.nonce,
+                  let serviceNames = action.services else {
+                onStateChange?("blocked", "Migration service action was not transaction-bound.")
+                return
+            }
+            let serviceAction = MigrationServiceAction(
+                action: action.action,
+                transactionId: transactionId,
+                nonce: nonce,
+                services: serviceNames
+            )
+            guard serviceAction.apply(policy: policy, registrar: services) else {
+                onStateChange?("blocked", "Migration service action was rejected.")
+                return
+            }
+            observeServiceAction(serviceAction, attempt: 0)
+        case "observe_services":
+            guard let transactionId = action.transactionId,
+                  let nonce = action.nonce else {
+                onStateChange?("blocked", "Migration observation was not transaction-bound.")
+                return
+            }
+            observeServiceAction(
+                MigrationServiceAction(
+                    action: "observe_services",
+                    transactionId: transactionId,
+                    nonce: nonce,
+                    services: BackgroundServiceDescriptor.bundledOwners.map(\.plistName)
+                ),
+                attempt: 0
+            )
+        case "await_approval":
+            onStateChange?("awaiting_approval", action.deadlineAt)
+            if let raw = action.deadlineAt,
+               let deadline = ISO8601DateFormatter().date(from: raw) {
+                DispatchQueue.main.asyncAfter(deadline: .now() + max(0, deadline.timeIntervalSinceNow)) { [weak self] in
+                    self?.advance(event: "resume")
+                }
+            }
+        case "verify_health":
+            guard let transactionId = action.transactionId,
+                  let nonce = action.nonce else {
+                onStateChange?("blocked", "Health verification was not transaction-bound.")
+                return
+            }
+            pendingHealth = (transactionId, nonce)
+            onStateChange?("verifying", nil)
+            onNeedsHealth?()
+        case "fresh_install":
+            migrationTerminalSeen = true
+            services.registerBundledOwners(policy: policy)
+            onStateChange?("committed", nil)
+        case "committed":
+            migrationTerminalSeen = true
+            pendingHealth = nil
+            onStateChange?("committed", nil)
+        case "rolled_back":
+            migrationTerminalSeen = true
+            pendingHealth = nil
+            onStateChange?("rolled_back", nil)
+        case "blocked":
+            migrationTerminalSeen = true
+            onStateChange?("blocked", action.detail)
+        case "busy":
+            migrationTerminalSeen = true
+            onStateChange?("busy", "Another Yulu migration attempt is active.")
+        default:
+            onStateChange?("blocked", "Unknown migration action: \(action.action)")
+        }
+    }
+
+    private func observeServiceAction(_ action: MigrationServiceAction, attempt: Int) {
+        let statuses = services.statuses()
+        let values = BackgroundServiceDescriptor.bundledOwners.map {
+            statuses[$0.plistName] ?? "notFound"
+        }
+        let terminal: Bool
+        if action.action == "unregister_services" {
+            terminal = values.allSatisfy { $0 == "notRegistered" || $0 == "notFound" }
+        } else {
+            terminal = values.allSatisfy { $0 == "enabled" || $0 == "requiresApproval" }
+        }
+        if !terminal && attempt < 40 {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+                self?.observeServiceAction(action, attempt: attempt + 1)
+            }
+            return
+        }
+        advance(observation: [
+            "kind": "services",
+            "transactionId": action.transactionId,
+            "nonce": action.nonce,
+            "statuses": statuses,
+        ])
+    }
+}
+
 func writeJSON<T: Encodable>(_ value: T) throws {
     let encoder = JSONEncoder()
     encoder.outputFormatting = [.sortedKeys]
     FileHandle.standardOutput.write(try encoder.encode(value))
     FileHandle.standardOutput.write(Data("\n".utf8))
+}
+
+#if YULU_DEVELOPMENT_SMOKE
+if CommandLine.arguments.count == 4,
+   CommandLine.arguments[1] == "--inspect-migration-stderr-drain" {
+    let errors = Pipe()
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: CommandLine.arguments[2])
+    process.arguments = [CommandLine.arguments[3]]
+    process.standardInput = FileHandle.nullDevice
+    process.standardOutput = FileHandle.nullDevice
+    process.standardError = errors
+    let drain = BoundedRedactedStderrDrain()
+    drain.start(errors.fileHandleForReading)
+    do {
+        try process.run()
+        errors.fileHandleForWriting.closeFile()
+        process.waitUntilExit()
+        drain.finishAfterProcessExit()
+        try writeJSON([
+            "exited": process.terminationReason == .exit,
+            "hadStderr": drain.hadOutput,
+            "redacted": drain.hadOutput,
+            "truncated": drain.truncated,
+        ])
+        exit(0)
+    } catch {
+        errors.fileHandleForWriting.closeFile()
+        drain.finishAfterProcessExit()
+        try writeJSON([
+            "exited": false,
+            "hadStderr": drain.hadOutput,
+            "redacted": drain.hadOutput,
+            "truncated": drain.truncated,
+        ])
+        exit(1)
+    }
+}
+
+if CommandLine.arguments.count == 7,
+   CommandLine.arguments[1] == "--inspect-code-identity" {
+    let pid = CommandLine.arguments[2] == "self"
+        ? Int(getpid())
+        : Int(CommandLine.arguments[2])
+    let allowAdHoc = CommandLine.arguments[6] == "1"
+    if let pid,
+       let evidence = codeIdentityEvidence(
+        pid: pid,
+        staticURL: URL(fileURLWithPath: CommandLine.arguments[3]),
+        expectedIdentifier: CommandLine.arguments[4],
+        expectedTeamIdentifier: CommandLine.arguments[5],
+        allowAdHoc: allowAdHoc
+       ) {
+        try writeJSON(evidence)
+    } else {
+        try writeJSON(["accepted": false])
+    }
+    exit(0)
+}
+#endif
+
+if CommandLine.arguments.count == 3,
+   CommandLine.arguments[1] == "--apply-migration-service-action" {
+    let policy = LaunchPolicy.evaluate(bundlePath: Bundle.main.bundleURL.path)
+    guard policy.persistentRegistrationAllowed,
+          let data = CommandLine.arguments[2].data(using: .utf8),
+          let action = try? JSONDecoder().decode(MigrationServiceAction.self, from: data),
+          action.action == "unregister_services" else {
+        fputs("migration rollback adapter rejected the action\n", stderr)
+        exit(78)
+    }
+    let registry = BackgroundServiceRegistry()
+    guard action.apply(policy: policy, registrar: registry) else {
+        fputs("migration rollback adapter could not apply the action\n", stderr)
+        exit(78)
+    }
+    var statuses = registry.statuses()
+    for _ in 0..<40 {
+        if statuses.values.allSatisfy({ $0 == "notRegistered" || $0 == "notFound" }) {
+            break
+        }
+        Thread.sleep(forTimeInterval: 0.25)
+        statuses = registry.statuses()
+    }
+    try writeJSON(["statuses": statuses])
+    guard statuses.values.allSatisfy({ $0 == "notRegistered" || $0 == "notFound" }) else {
+        exit(75)
+    }
+    exit(0)
 }
 
 if CommandLine.arguments.count == 3, CommandLine.arguments[1] == "--inspect-launch" {
@@ -836,6 +1608,20 @@ if CommandLine.arguments.count == 3, CommandLine.arguments[1] == "--inspect-serv
         policy: LaunchPolicy.evaluate(bundlePath: CommandLine.arguments[2]),
         registrar: recorder
     )
+    try writeJSON(recorder)
+    exit(0)
+}
+
+if CommandLine.arguments.count == 4,
+   CommandLine.arguments[1] == "--inspect-migration-service-action" {
+    let policy = LaunchPolicy.evaluate(bundlePath: CommandLine.arguments[2])
+    guard let data = CommandLine.arguments[3].data(using: .utf8),
+          let action = try? JSONDecoder().decode(MigrationServiceAction.self, from: data) else {
+        fputs("invalid migration service action\n", stderr)
+        exit(64)
+    }
+    let recorder = ServiceActionRecorder()
+    _ = action.apply(policy: policy, registrar: recorder)
     try writeJSON(recorder)
     exit(0)
 }
@@ -968,6 +1754,23 @@ if CommandLine.arguments.count == 4, CommandLine.arguments[1] == "--inspect-host
         layout: BundleLayout(bundleURL: bundleURL),
         applicationPaths: ApplicationDataPaths.resolve(homeDirectory: homeURL, environment: [:]),
         hostNonce: "inspection"
+    ))
+    exit(0)
+}
+
+if CommandLine.arguments.count == 4,
+   CommandLine.arguments[1] == "--inspect-migration-command" {
+    let bundleURL = URL(fileURLWithPath: CommandLine.arguments[2], isDirectory: true)
+    let homeURL = URL(fileURLWithPath: CommandLine.arguments[3], isDirectory: true)
+    let policy = LaunchPolicy.evaluate(bundlePath: bundleURL.path)
+    try writeJSON(ApplicationMigrationCommand.make(
+        policy: policy,
+        layout: BundleLayout(bundleURL: bundleURL),
+        applicationPaths: ApplicationDataPaths.resolve(
+            homeDirectory: homeURL,
+            environment: [:]
+        ),
+        homeDirectory: homeURL
     ))
     exit(0)
 }
@@ -1400,6 +2203,13 @@ func hostRuntimeAttestation(
         pid: owner.pid,
         expected: expectedArguments
     )
+    let codeIdentity = codeIdentityEvidence(
+        pid: owner.pid,
+        staticURL: expectedExecutable,
+        expectedIdentifier: ProductSigningPolicy.hostIdentifier,
+        expectedTeamIdentifier: ProductSigningPolicy.teamIdentifier,
+        allowAdHoc: ProductSigningPolicy.allowDevelopmentAdHoc
+    )
     let generationAfter = processStartGeneration(pid: owner.pid)
     return RuntimeOwnerAttestation(
         ownerPID: owner.pid,
@@ -1407,7 +2217,8 @@ func hostRuntimeAttestation(
         generation: generationAfter,
         executableMatches: executableMatches,
         argumentsMatch: argumentsMatch,
-        generationStable: generationBefore != nil && generationBefore == generationAfter
+        generationStable: generationBefore != nil && generationBefore == generationAfter,
+        codeIdentity: codeIdentity
     )
 }
 
@@ -1470,6 +2281,13 @@ func captureRuntimeEvidence(socketURL: URL, expectedExecutable: URL) -> RuntimeO
         pid: Int(peerPID),
         expectedURL: expectedExecutable
     )
+    let codeIdentity = codeIdentityEvidence(
+        pid: Int(peerPID),
+        staticURL: expectedExecutable,
+        expectedIdentifier: ProductSigningPolicy.captureIdentifier,
+        expectedTeamIdentifier: ProductSigningPolicy.teamIdentifier,
+        allowAdHoc: ProductSigningPolicy.allowDevelopmentAdHoc
+    )
     #if YULU_DEVELOPMENT_SMOKE
     if let marker = ProcessInfo.processInfo.environment["YULU_TEST_CAPTURE_AFTER_IDENTITY_MARKER"] {
         _ = FileManager.default.createFile(atPath: marker, contents: Data())
@@ -1488,7 +2306,8 @@ func captureRuntimeEvidence(socketURL: URL, expectedExecutable: URL) -> RuntimeO
         argumentsMatch: true,
         generationStable: generationBefore != nil
             && generationBefore == generationAfterResponse
-            && generationAfterResponse == generationAfterIdentity
+            && generationAfterResponse == generationAfterIdentity,
+        codeIdentity: codeIdentity
     )
     return RuntimeOwnerEvidence.evaluate(
         kind: "capture",
@@ -1636,6 +2455,8 @@ final class YuluApplication: NSObject, NSApplicationDelegate {
     private var webView: WKWebView?
     private var serviceWindow: NSWindow?
     private let backgroundServices = BackgroundServiceRegistry()
+    private var migrationCoordinator: ApplicationMigrationCoordinator?
+    private var migrationCommitted = false
     private var hostPollAttempts = 0
     private var pollGeneration = 0
     private var hostEvidence = RuntimeOwnerEvidence(
@@ -1667,16 +2488,29 @@ final class YuluApplication: NSObject, NSApplicationDelegate {
             defer: false
         )
         window.title = "Yulu"
+        self.window = window
         if let guidance = launchPolicy.guidance {
             window.contentView = centeredMessage(guidance, detail: "Yulu runs services and updates only from /Applications/Yulu.app.")
-        } else {
+        } else if let applicationPaths {
             window.contentView = centeredMessage("Starting Yulu…", detail: "Waiting for the bundled Host.")
-            backgroundServices.registerBundledOwners(policy: launchPolicy)
-            beginServicePolling()
+            let coordinator = ApplicationMigrationCoordinator(
+                policy: launchPolicy,
+                layout: layout,
+                applicationPaths: applicationPaths,
+                homeDirectory: FileManager.default.homeDirectoryForCurrentUser,
+                services: backgroundServices
+            )
+            coordinator.onStateChange = { [weak self] state, detail in
+                self?.migrationStateChanged(state, detail: detail)
+            }
+            coordinator.onNeedsHealth = { [weak self] in
+                self?.beginServicePolling()
+            }
+            migrationCoordinator = coordinator
+            coordinator.advance()
         }
         window.center()
         window.makeKeyAndOrderFront(nil)
-        self.window = window
         NSApp.activate(ignoringOtherApps: true)
     }
 
@@ -1687,7 +2521,8 @@ final class YuluApplication: NSObject, NSApplicationDelegate {
     func applicationDidBecomeActive(_ notification: Notification) {
         guard launchPolicy.installed else { return }
         refreshServiceWindow()
-        beginServicePolling()
+        migrationCoordinator?.advance(event: "resume")
+        if migrationCommitted { beginServicePolling() }
     }
 
     func applicationShouldHandleReopen(
@@ -1755,6 +2590,12 @@ final class YuluApplication: NSObject, NSApplicationDelegate {
             keyEquivalent: ""
         )
         backgroundSettings.target = self
+        let cancelMigration = components.addItem(
+            withTitle: "Cancel Service Migration…",
+            action: #selector(onCancelMigration),
+            keyEquivalent: ""
+        )
+        cancelMigration.target = self
         componentsItem.submenu = components
         NSApp.mainMenu = root
     }
@@ -1778,6 +2619,43 @@ final class YuluApplication: NSObject, NSApplicationDelegate {
     @objc private func onOpenBackgroundSettings() {
         guard launchPolicy.installed else { return }
         SMAppService.openSystemSettingsLoginItems()
+    }
+
+    @objc private func onCancelMigration() {
+        guard launchPolicy.installed, !migrationCommitted else { return }
+        migrationCoordinator?.cancel()
+    }
+
+    private func migrationStateChanged(_ state: String, detail: String?) {
+        switch state {
+        case "awaiting_approval":
+            window?.contentView = centeredMessage(
+                "Background approval is required",
+                detail: "Open Login Items settings to allow Yulu in the background, then return here. You can cancel from Components."
+            )
+            refreshServiceWindow(show: true)
+        case "verifying":
+            window?.contentView = centeredMessage(
+                "Finishing migration…",
+                detail: "Verifying the bundled Host and Capture owners."
+            )
+        case "committed":
+            migrationCommitted = true
+            window?.contentView = centeredMessage("Starting Yulu…", detail: "Waiting for the bundled Host.")
+            beginServicePolling()
+        case "rolled_back":
+            window?.contentView = centeredMessage(
+                "Migration was cancelled",
+                detail: "The previous Yulu background services were restored."
+            )
+        case "blocked":
+            window?.contentView = centeredMessage(
+                "Yulu migration needs attention",
+                detail: detail ?? "No persistent service state was changed further."
+            )
+        default:
+            break
+        }
     }
 
     private func refreshServiceWindow(show: Bool = false) {
@@ -1873,7 +2751,7 @@ final class YuluApplication: NSObject, NSApplicationDelegate {
             let payload = data.flatMap {
                 try? JSONSerialization.jsonObject(with: $0) as? [String: Any]
             }
-            let ownerURL = applicationPaths.legacyReadOnlyDataDir
+            let ownerURL = applicationPaths.durableDataDir
                 .appendingPathComponent("host-instance.lock/owner.json")
             let attestation = hostRuntimeAttestation(
                 ownerURL: ownerURL,
@@ -1894,10 +2772,14 @@ final class YuluApplication: NSObject, NSApplicationDelegate {
             DispatchQueue.main.async {
                 guard generation == self.pollGeneration else { return }
                 self.hostEvidence = evidence
+                self.migrationCoordinator?.submitHealth(
+                    host: self.hostEvidence,
+                    capture: self.captureEvidence
+                )
                 self.refreshServiceWindow()
                 if responseHealthy {
                     self.hostPollAttempts = 0
-                    if self.webView == nil { self.open(route: "/") }
+                    if self.migrationCommitted && self.webView == nil { self.open(route: "/") }
                     DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
                         self.pollHost(generation: generation)
                     }
@@ -1928,6 +2810,10 @@ final class YuluApplication: NSObject, NSApplicationDelegate {
             DispatchQueue.main.async {
                 guard generation == self.pollGeneration else { return }
                 self.captureEvidence = evidence
+                self.migrationCoordinator?.submitHealth(
+                    host: self.hostEvidence,
+                    capture: self.captureEvidence
+                )
                 self.refreshServiceWindow()
             }
         }

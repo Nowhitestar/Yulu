@@ -91,6 +91,7 @@ def runtime_fixture(tmp_path: Path) -> tuple[Path, dict[str, str]]:
 
     scripts = tmp_path / "scripts"
     write(scripts / "record_audio.py", b"print('record')\n")
+    write(scripts / "application_migration.py", b"print('migrate')\n")
     write(scripts / "search/cli.py", b"print('search')\n")
     write(scripts / "config.example.json", b"{}\n")
     write(
@@ -205,6 +206,7 @@ def test_prepare_application_runtime_stages_only_core_runtime_and_production_hos
     assert (resources / "Host/node_modules/bindings/package.json").is_file()
     assert (resources / "Host/node_modules/file-uri-to-path/package.json").is_file()
     assert (resources / "runtime/yulu/scripts/record_audio.py").is_file()
+    assert (resources / "runtime/yulu/scripts/application_migration.py").is_file()
     assert (resources / "runtime/yulu/scripts/search/cli.py").is_file()
     assert (resources / "runtime/yulu/scripts/local_caption_runtime_pack.json").is_file()
     assert not (resources / "runtime/yulu/scripts/local-caption-model.bin").exists()
@@ -275,6 +277,25 @@ def test_application_runtime_inventory_fails_closed_for_missing_wrong_arch_unsig
         check=False,
     )
     assert verified.returncode == 0, verified.stderr + verified.stdout
+
+    migration_authority = (
+        app / "Contents/Resources/runtime/yulu/scripts/application_migration.py"
+    )
+    original_migration_authority = migration_authority.read_bytes()
+    migration_authority.unlink()
+    missing_authority = subprocess.run(
+        ["bash", str(VERIFY), str(app)],
+        env=verify_env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert missing_authority.returncode != 0
+    assert (
+        "required Application Runtime file missing: "
+        "Contents/Resources/runtime/yulu/scripts/application_migration.py"
+    ) in missing_authority.stderr
+    migration_authority.write_bytes(original_migration_authority)
 
     node = app / "Contents/Resources/runtime/bin/node"
     original_node = node.read_bytes()

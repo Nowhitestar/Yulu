@@ -5,12 +5,12 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, unlinkSync, 
 import { join } from "node:path";
 
 describe("paths", () => {
-  it("routes Capture callers without moving the remaining Host/Web compatibility root", () => {
+  it("moves Host writable authority to standard data while keeping legacy reads explicit", () => {
     const home = "/test/home";
     const resolved = resolveHostPaths({ homeDir: home, environment: {} });
 
     expect(resolved.durableDataDir).toBe(`${home}/Library/Application Support/Yulu`);
-    expect(resolved.configDir).toBe(`${home}/.config/yulu`);
+    expect(resolved.configDir).toBe(`${home}/Library/Application Support/Yulu`);
     expect(resolved.configFile).toBe(`${home}/Library/Application Support/Yulu/config.json`);
     expect(resolved.promptsDb).toBe(`${home}/Library/Application Support/Yulu/prompts.sqlite`);
     expect(resolved.vocabDb).toBe(`${home}/Library/Application Support/Yulu/vocab.sqlite`);
@@ -18,7 +18,8 @@ describe("paths", () => {
     expect(resolved.hostDb).toBe(`${home}/Library/Application Support/Yulu/host.sqlite`);
     expect(resolved.agentTasksDir).toBe(`${home}/Library/Application Support/Yulu/agent-tasks`);
     expect(resolved.recordingEventsDir).toBe(`${home}/Library/Application Support/Yulu/recording-events`);
-    expect(resolved.agentQueueJson).toBe(`${home}/.config/yulu/agent-queue.json`);
+    expect(resolved.agentQueueJson).toBe(`${home}/Library/Application Support/Yulu/agent-queue.json`);
+    expect(resolved.legacyAgentQueueJson).toBe(`${home}/.config/yulu/agent-queue.json`);
     expect(resolved.mcpTokenJson).toBe(`${home}/Library/Application Support/Yulu/mcp-token.json`);
     expect(resolved.modelsDir).toBe(`${home}/Library/Application Support/Yulu/Models`);
 

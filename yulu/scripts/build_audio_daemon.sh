@@ -209,6 +209,7 @@ if [[ "$BUNDLE_APPLICATION_RUNTIME" == "1" ]]; then
     if /usr/bin/file -b "$runtime_code" | grep -q 'Mach-O'; then
       if [[ "$runtime_code" == "$RES_DIR/runtime/bin/node" ]]; then
         codesign --force --options runtime --timestamp \
+          --identifier node \
           --entitlements "$NODE_ENTITLEMENTS" --sign "$IDENTITY" "$runtime_code"
       else
         codesign --force --options runtime --timestamp --sign "$IDENTITY" "$runtime_code"

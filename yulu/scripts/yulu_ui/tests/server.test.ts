@@ -1,11 +1,11 @@
 import { describe, it, expect, afterAll, beforeAll, vi } from "vitest";
-import { chmodSync, mkdtempSync, mkdirSync, cpSync, rmSync, writeFileSync, readFileSync } from "node:fs";
+import { chmodSync, closeSync, constants, mkdtempSync, mkdirSync, openSync, cpSync, readdirSync, rmSync, writeFileSync, readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { request as httpRequest } from "node:http";
 import Database from "better-sqlite3";
-import { startServer, type RunningServer } from "../src/server.js";
+import { runServerCommand, startServer, type RunningServer } from "../src/server.js";
 import { HostStore } from "../src/hostStore.js";
 import { RecordingPipeline } from "../src/recordingPipeline.js";
 import { AgentUnavailableError } from "../src/agentGateway.js";
@@ -31,6 +31,56 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 let env: { root: string; cleanup: () => void; server: RunningServer; baseUrl: string };
 const originalHostNonce = process.env.YULU_HOST_NONCE;
 const originalServiceOwner = process.env.YULU_SERVICE_OWNER;
+
+it("runs application data preparation as a one-shot leaf without starting Host", async () => {
+  const root = mkdtempSync(join(tmpdir(), "yulu-prepare-leaf-"));
+  const legacy = join(root, "legacy");
+  const durable = join(root, "durable");
+  mkdirSync(legacy, { recursive: true, mode: 0o700 });
+  writeFileSync(join(legacy, "config.json"), '{"prepared":true}\n', { mode: 0o600 });
+  writeFileSync(join(legacy, "agent-queue.json"), "[]\n", { mode: 0o600 });
+  const queueFD = openSync(join(legacy, "agent-queue.json"), constants.O_RDONLY | constants.O_NOFOLLOW);
+  const queueArchiveDir = join(durable, "legacy-agent-queue");
+  mkdirSync(queueArchiveDir, { recursive: true, mode: 0o700 });
+  const queueArchivePath = join(queueArchiveDir, "agent-queue.legacy.test.json");
+  const queueAuditPath = join(queueArchiveDir, "agent-queue.migration.test.json");
+  const queueArchiveFD = openSync(queueArchivePath, constants.O_RDWR | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
+  const queueAuditFD = openSync(queueAuditPath, constants.O_RDWR | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
+  try {
+    const result = await runServerCommand(["--prepare-application-data"], {
+      configDir: legacy,
+      durableDataDir: durable,
+      legacyReadOnlyDataDir: legacy,
+      configFile: join(durable, "config.json"),
+      promptsDb: join(durable, "prompts.sqlite"),
+      vocabDb: join(durable, "vocab.sqlite"),
+      searchDb: join(durable, "search.sqlite"),
+      hostDb: join(durable, "host.sqlite"),
+      modelsDir: join(durable, "Models"),
+      agentTasksDir: join(durable, "agent-tasks"),
+      mcpTokenJson: join(durable, "mcp-token.json"),
+    }, {
+      legacyQueueFD: queueFD,
+      legacyQueueArchiveFD: queueArchiveFD,
+      legacyQueueAuditFD: queueAuditFD,
+      legacyQueueArchiveName: "agent-queue.legacy.test.json",
+      legacyQueueAuditName: "agent-queue.migration.test.json",
+    });
+
+    expect(result).toBeNull();
+    expect(readFileSync(join(durable, "config.json"), "utf8")).toBe('{"prepared":true}\n');
+    expect(readFileSync(join(legacy, "agent-queue.json"), "utf8")).toBe("[]\n");
+    expect(readdirSync(join(durable, "legacy-agent-queue"))).toEqual([
+      "agent-queue.legacy.test.json",
+      "agent-queue.migration.test.json",
+    ]);
+  } finally {
+    closeSync(queueAuditFD);
+    closeSync(queueArchiveFD);
+    closeSync(queueFD);
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 function pcmWav(): Buffer {
   const wav = Buffer.alloc(45);
