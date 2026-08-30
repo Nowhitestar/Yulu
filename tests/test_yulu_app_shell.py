@@ -242,6 +242,15 @@ def test_development_smoke_prints_captured_host_failure_diagnostics():
     assert 'sed \'s/^/  /\' "$SMOKE_ROOT/smoke-error.txt" >&2' in smoke
 
 
+def test_development_smoke_uses_a_real_fake_home_custom_media_library():
+    smoke = (SCRIPTS / "smoke_yulu_app.sh").read_text(encoding="utf-8")
+
+    assert 'SMOKE_MEDIA_LIBRARY="$SMOKE_ROOT/home/Custom Media/Yulu"' in smoke
+    assert 'config.audio.output_dir = mediaLibrary' in smoke
+    assert 'cp "$SCRIPT_DIR/config.example.json"' not in smoke
+    assert '[[ -d "$SMOKE_MEDIA_LIBRARY" ]]' in smoke
+
+
 def test_shell_authenticates_host_and_capture_uses_stable_runtime_paths():
     shell = (SCRIPTS / "yulu_app.swift").read_text(encoding="utf-8")
     capture = (SCRIPTS / "audio_daemon.swift").read_text(encoding="utf-8")

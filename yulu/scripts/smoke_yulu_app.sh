@@ -27,6 +27,7 @@ bash "$SCRIPT_DIR/build_audio_daemon.sh"
 PORT="$((30000 + ($$ % 20000)))"
 mkdir -p "$SMOKE_ROOT/home"
 mkdir -p "$SMOKE_ROOT/home/.config/yulu"
+SMOKE_MEDIA_LIBRARY="$SMOKE_ROOT/home/Custom Media/Yulu"
 mkdir -p "$SMOKE_ROOT/denied-host-runtime"
 for command in node python3 ffmpeg npm pip brew swiftc; do
   printf '%s\n' \
@@ -45,7 +46,16 @@ printf '%s\n' \
   'exit 126' \
   > "$SMOKE_ROOT/hostile-caption-python"
 chmod +x "$SMOKE_ROOT/hostile-caption-python"
-cp "$SCRIPT_DIR/config.example.json" "$SMOKE_ROOT/home/.config/yulu/config.json"
+NODE_OPTIONS= "$APP/Contents/Resources/runtime/bin/node" -e '
+  const fs = require("node:fs");
+  const [source, target, mediaLibrary] = process.argv.slice(1);
+  const config = JSON.parse(fs.readFileSync(source, "utf8"));
+  config.audio.output_dir = mediaLibrary;
+  fs.writeFileSync(target, `${JSON.stringify(config, null, 2)}\n`);
+' \
+  "$SCRIPT_DIR/config.example.json" \
+  "$SMOKE_ROOT/home/.config/yulu/config.json" \
+  "$SMOKE_MEDIA_LIBRARY"
 if find "$APP" -type f \( -name '*.onnx' -o -name '*paraformer*' \) -print | grep -q .; then
   echo "Optional Runtime Pack content must not ship inside Yulu.app" >&2
   exit 1
@@ -80,6 +90,7 @@ YULU_UI_PORT="$PORT" \
   fi
   exit 1
 fi
+[[ -d "$SMOKE_MEDIA_LIBRARY" ]]
 if grep -Eq 'retired Gateway Keychain cleanup will retry next start|xAI 钥匙串组件不可用' \
   "$SMOKE_ROOT/smoke-error.txt"; then
   echo "Bundled Host could not use its staged xAI Keychain helper:" >&2
