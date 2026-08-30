@@ -25,10 +25,12 @@ import threading
 from datetime import datetime
 from pathlib import Path
 
-CONFIG_DIR = Path.home() / ".config" / "yulu"
+from application_paths import DURABLE_DATA_DIR, IPC_DIR, LEGACY_READ_ONLY_DATA_DIR, LOGS_DIR
+
+CONFIG_DIR = DURABLE_DATA_DIR
 SCHEDULE_PATH = CONFIG_DIR / "schedule.json"
-PID_PATH = CONFIG_DIR / ".scheduler.pid"
-LOG_PATH = CONFIG_DIR / "scheduler.log"
+PID_PATH = IPC_DIR / ".scheduler.pid"
+LOG_PATH = LOGS_DIR / "scheduler.log"
 SCRIPT_DIR = Path(__file__).resolve().parent
 
 
@@ -55,11 +57,16 @@ class Scheduler:
         with self.lock:
             self.heap = []
             self.seq = 0
-            if not SCHEDULE_PATH.exists():
+            schedule_path = SCHEDULE_PATH
+            if not schedule_path.exists():
+                legacy = LEGACY_READ_ONLY_DATA_DIR / "schedule.json"
+                if legacy.exists():
+                    schedule_path = legacy
+            if not schedule_path.exists():
                 log("schedule.json 不存在，事件队列为空")
                 return
             try:
-                with open(SCHEDULE_PATH) as f:
+                with open(schedule_path) as f:
                     data = json.load(f)
             except Exception as e:
                 log(f"读取 schedule.json 失败: {e}")
@@ -156,7 +163,7 @@ class Scheduler:
 
 
 def main():
-    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    PID_PATH.parent.mkdir(parents=True, exist_ok=True)
     PID_PATH.write_text(str(os.getpid()))
     log(f"📡 scheduler daemon 启动 (pid={os.getpid()})")
 

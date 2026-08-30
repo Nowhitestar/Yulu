@@ -16,7 +16,9 @@ import tempfile
 from datetime import datetime, timedelta
 from pathlib import Path
 
-CONFIG_DIR = Path.home() / ".config" / "yulu"
+from application_paths import DURABLE_DATA_DIR, LEGACY_READ_ONLY_DATA_DIR
+
+CONFIG_DIR = DURABLE_DATA_DIR
 SCHEDULE_PATH = CONFIG_DIR / "schedule.json"
 PREFERENCE_PATH = CONFIG_DIR / "meeting_prompt.json"
 
@@ -33,7 +35,12 @@ def _timestamp(value):
     return parse_iso(value).timestamp()
 
 
-def load_schedule(path=SCHEDULE_PATH):
+def load_schedule(path=None):
+    path = Path(path) if path is not None else SCHEDULE_PATH
+    if path == SCHEDULE_PATH and not path.exists():
+        legacy = LEGACY_READ_ONLY_DATA_DIR / "schedule.json"
+        if legacy.exists():
+            path = legacy
     if not Path(path).exists():
         return {"events": [], "meetings": []}
     try:
@@ -48,7 +55,12 @@ def load_schedule(path=SCHEDULE_PATH):
     return data
 
 
-def load_primary_action(path=PREFERENCE_PATH):
+def load_primary_action(path=None):
+    path = Path(path) if path is not None else PREFERENCE_PATH
+    if path == PREFERENCE_PATH and not path.exists():
+        legacy = LEGACY_READ_ONLY_DATA_DIR / "meeting_prompt.json"
+        if legacy.exists():
+            path = legacy
     try:
         with open(path) as f:
             raw = json.load(f)
@@ -58,10 +70,10 @@ def load_primary_action(path=PREFERENCE_PATH):
     return action if action in PRIMARY_ACTIONS else DEFAULT_PRIMARY_ACTION
 
 
-def save_primary_action(action, path=PREFERENCE_PATH):
+def save_primary_action(action, path=None):
     if action not in PRIMARY_ACTIONS:
         action = DEFAULT_PRIMARY_ACTION
-    path = Path(path)
+    path = Path(path) if path is not None else PREFERENCE_PATH
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "primary_action": action,
@@ -137,7 +149,7 @@ def open_meeting_link(meeting):
     return True
 
 
-def current_payload(schedule_path=SCHEDULE_PATH, preference_path=PREFERENCE_PATH):
+def current_payload(schedule_path=None, preference_path=None):
     schedule = load_schedule(schedule_path)
     meeting = current_meeting(schedule=schedule)
     return {

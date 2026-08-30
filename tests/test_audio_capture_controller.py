@@ -45,3 +45,16 @@ def test_macos_audio_capture_controller_missing_socket_degrades(monkeypatch, tmp
     ctrl = audio_capture.MacOSAudioCaptureController(tmp_path / "missing.sock")
 
     assert ctrl.status() is None
+
+
+def test_macos_audio_capture_controller_uses_standard_ipc_path(monkeypatch, tmp_path):
+    from yulu_platform.macos import audio_capture
+
+    monkeypatch.setattr(audio_capture.platform, "system", lambda: "Darwin")
+    ipc_dir = tmp_path / "Library" / "Caches" / "Yulu"
+    monkeypatch.setenv("YULU_CACHE_DIR", str(ipc_dir))
+    monkeypatch.setenv("YULU_IPC_DIR", str(ipc_dir))
+
+    ctrl = audio_capture.MacOSAudioCaptureController()
+
+    assert ctrl.socket_path == ipc_dir / "audio_daemon.sock"

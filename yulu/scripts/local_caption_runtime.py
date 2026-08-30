@@ -19,6 +19,8 @@ import zipfile
 from pathlib import Path
 from typing import Any
 
+from application_paths import DURABLE_DATA_DIR, MODELS_DIR
+
 
 MODEL_NAME = "sherpa-onnx-streaming-paraformer-bilingual-zh-en"
 MODEL_URL = (
@@ -472,11 +474,11 @@ def uninstall(config_dir: Path, *, models_dir: Path | None = None) -> dict[str, 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Manage Yulu local caption runtime")
     parser.add_argument("action", choices=("status", "install", "uninstall"))
-    parser.add_argument("--config-dir", type=Path, default=Path.home() / ".config/yulu")
+    parser.add_argument("--config-dir", type=Path, default=DURABLE_DATA_DIR)
     parser.add_argument("--models-dir", type=Path)
     args = parser.parse_args(argv)
     config_dir = args.config_dir.expanduser()
-    models_dir = args.models_dir.expanduser() if args.models_dir else None
+    models_dir = args.models_dir.expanduser() if args.models_dir else MODELS_DIR
     try:
         if args.action == "install":
             result = install(config_dir, models_dir=models_dir)

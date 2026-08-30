@@ -17,9 +17,9 @@
     <true/>
 
     <key>StandardOutPath</key>
-    <string>__HOME__/.config/yulu/audio_daemon.log</string>
+    <string>__HOME__/Library/Logs/Yulu/audio_daemon.log</string>
 
     <key>StandardErrorPath</key>
-    <string>__HOME__/.config/yulu/audio_daemon.log</string>
+    <string>__HOME__/Library/Logs/Yulu/audio_daemon.log</string>
 </dict>
 </plist>

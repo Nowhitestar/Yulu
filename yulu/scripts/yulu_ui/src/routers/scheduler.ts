@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
-import { router, publicProcedure } from "../trpc.js";
+import { router, publicProcedure, type AppContext } from "../trpc.js";
 
 type ScheduleEvent = Record<string, unknown>;
 type PrimaryAction = "record" | "record_join";
@@ -42,8 +42,19 @@ function normalizeMeeting(meeting: ScheduleEvent) {
   };
 }
 
-function readPrimaryAction(configDir: string): PrimaryAction {
-  const raw = readJson(join(configDir, "meeting_prompt.json"));
+function durablePath(ctx: { paths: AppContext["paths"] }, filename: string): string {
+  return join(ctx.paths.durableDataDir, filename);
+}
+
+function readablePath(ctx: { paths: AppContext["paths"] }, filename: string): string {
+  const standard = durablePath(ctx, filename);
+  if (existsSync(standard)) return standard;
+  const legacy = join(ctx.paths.legacyReadOnlyDataDir, filename);
+  return existsSync(legacy) ? legacy : standard;
+}
+
+function readPrimaryAction(ctx: { paths: AppContext["paths"] }): PrimaryAction {
+  const raw = readJson(readablePath(ctx, "meeting_prompt.json"));
   return raw.primary_action === "record_join" ? "record_join" : DEFAULT_PRIMARY_ACTION;
 }
 
@@ -92,8 +103,8 @@ function runMeetingDaemon(scriptDir: string, args: string[]): Promise<{ ok: bool
 
 export const schedulerRouter = router({
   overview: publicProcedure.query(async ({ ctx }) => {
-    const schedulePath = join(ctx.paths.configDir, "schedule.json");
-    const pidPath = join(ctx.paths.configDir, ".scheduler.pid");
+    const schedulePath = readablePath(ctx, "schedule.json");
+    const pidPath = join(ctx.paths.ipcDir, ".scheduler.pid");
     const raw = readJson(schedulePath);
     const rawEvents = Array.isArray(raw.events) ? raw.events : [];
     const rawMeetings = Array.isArray(raw.meetings) ? raw.meetings : [];
@@ -126,7 +137,7 @@ export const schedulerRouter = router({
   }),
 
   current: publicProcedure.query(({ ctx }) => {
-    const schedulePath = join(ctx.paths.configDir, "schedule.json");
+    const schedulePath = readablePath(ctx, "schedule.json");
     const raw = readJson(schedulePath);
     const rawMeetings = Array.isArray(raw.meetings) ? raw.meetings : [];
     const meetings = rawMeetings
@@ -134,14 +145,14 @@ export const schedulerRouter = router({
       .map(normalizeMeeting);
     return {
       meeting: currentMeeting(meetings),
-      primaryAction: readPrimaryAction(ctx.paths.configDir),
+      primaryAction: readPrimaryAction(ctx),
     };
   }),
 
   setPrimaryAction: publicProcedure
     .input(z.object({ action: primaryActionSchema }))
     .mutation(({ ctx, input }) => ({
-      primaryAction: writePrimaryAction(ctx.paths.configDir, input.action),
+      primaryAction: writePrimaryAction(ctx.paths.durableDataDir, input.action),
     })),
 
   startMeeting: publicProcedure
@@ -150,14 +161,14 @@ export const schedulerRouter = router({
       action: primaryActionSchema,
     }))
     .mutation(async ({ ctx, input }) => {
-      writePrimaryAction(ctx.paths.configDir, input.action);
+      writePrimaryAction(ctx.paths.durableDataDir, input.action);
       const args = ["start_meeting", input.meetingId];
       if (input.action === "record_join") args.push("--join");
       return runMeetingDaemon(ctx.paths.scriptDir, args);
     }),
 
   reload: publicProcedure.mutation(({ ctx }) => {
-    const pidPath = join(ctx.paths.configDir, ".scheduler.pid");
+    const pidPath = join(ctx.paths.ipcDir, ".scheduler.pid");
     if (!existsSync(pidPath)) return { ok: false, error: "scheduler pid file not found" };
     const pid = Number(readFileSync(pidPath, "utf8").trim());
     if (!pid) return { ok: false, error: "scheduler pid file is invalid" };

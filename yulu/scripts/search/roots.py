@@ -48,19 +48,17 @@ class SearchRootRegistry:
 def _resolve_data_dir() -> Path:
     try:
         from yulu_platform.macos.path_resolver import MacOSPathResolver
-
-        return MacOSPathResolver().data_dir()
-    except Exception:
+    except ImportError:
         return Path.home() / "Movies" / "Yulu"
+    return MacOSPathResolver().application_paths().media_library_dir
 
 
 def _resolve_runtime_dir() -> Path:
     try:
         from yulu_platform.macos.path_resolver import MacOSPathResolver
-
-        return MacOSPathResolver().runtime_dir()
-    except Exception:
-        return Path.home() / ".config" / "yulu"
+    except ImportError:
+        return Path.home() / "Library" / "Application Support" / "Yulu"
+    return MacOSPathResolver().application_paths().durable_data_dir
 
 
 def _is_relative_to(path: Path, parent: Path) -> bool:

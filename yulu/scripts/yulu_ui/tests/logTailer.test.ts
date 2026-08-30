@@ -25,20 +25,20 @@ describe("logTailer", () => {
   function waitMs(ms: number) { return new Promise((r) => setTimeout(r, ms)); }
 
   it("publishes new lines appended to a watched log file", async () => {
-    writeFileSync(join(root, "audiodaemon.log"), "initial\n");
+    writeFileSync(join(root, "audio_daemon.log"), "initial\n");
     tailer = startLogTailer({ configDir: root, pubsub });
     await waitMs(50);
-    appendFileSync(join(root, "audiodaemon.log"), "new line 1\nnew line 2\n");
+    appendFileSync(join(root, "audio_daemon.log"), "new line 1\nnew line 2\n");
     await vi.waitFor(() => expect(events.length).toBeGreaterThanOrEqual(2), { timeout: 1000 });
     const lines = events.filter((e) => e.name === "audiodaemon").map((e) => e.line);
     expect(lines).toEqual(expect.arrayContaining(["new line 1", "new line 2"]));
   });
 
   it("uses the short daemon name (sans com.yulu. prefix) in published events", async () => {
-    writeFileSync(join(root, "statusagent.log"), "");
+    writeFileSync(join(root, "status_agent.log"), "");
     tailer = startLogTailer({ configDir: root, pubsub });
     await waitMs(50);
-    appendFileSync(join(root, "statusagent.log"), "hello\n");
+    appendFileSync(join(root, "status_agent.log"), "hello\n");
     await vi.waitFor(() => expect(events.some((e) => e.name === "statusagent")).toBe(true));
   });
 
@@ -81,7 +81,7 @@ describe("logTailer", () => {
 
   it("survives logrotate-style rotation (mv + new inode at same path)", async () => {
     const renameSync = (await import("node:fs")).renameSync;
-    const logPath = join(root, "audiodaemon.log");
+    const logPath = join(root, "audio_daemon.log");
     writeFileSync(logPath, "");
     tailer = startLogTailer({ configDir: root, pubsub });
     await waitMs(50);
@@ -91,7 +91,7 @@ describe("logTailer", () => {
     await vi.waitFor(() => expect(events.some((e) => e.line === "before rotation")).toBe(true), { timeout: 1000 });
 
     // Rotate: rename, recreate fresh file at the same path with new inode.
-    renameSync(logPath, join(root, "audiodaemon.log.1"));
+    renameSync(logPath, join(root, "audio_daemon.log.1"));
     writeFileSync(logPath, "");           // new inode at the original path
     await waitMs(100);
     appendFileSync(logPath, "after rotation\n");

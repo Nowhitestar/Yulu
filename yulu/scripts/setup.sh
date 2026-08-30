@@ -371,7 +371,7 @@ PY
 
     echo "  - Yulu 录音 daemon"
     local audio_status
-    audio_status=$(echo '{"action":"status"}' | nc -w 2 -U "$HOME/.config/yulu/audio_daemon.sock" 2>/dev/null || true)
+    audio_status=$(echo '{"action":"status"}' | nc -w 2 -U "$HOME/Library/Caches/Yulu/audio_daemon.sock" 2>/dev/null || true)
     if echo "$audio_status" | grep -q '"sysReady":true' && echo "$audio_status" | grep -q '"micReady":true'; then
         verify_ok "Yulu 运行正常"
     else

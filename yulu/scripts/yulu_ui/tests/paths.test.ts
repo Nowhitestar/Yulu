@@ -5,7 +5,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, unlinkSync, 
 import { join } from "node:path";
 
 describe("paths", () => {
-  it("routes Host durable state to the standard root without taking over #163 paths", () => {
+  it("routes Capture callers without moving the remaining Host/Web compatibility root", () => {
     const home = "/test/home";
     const resolved = resolveHostPaths({ homeDir: home, environment: {} });
 
@@ -17,16 +17,16 @@ describe("paths", () => {
     expect(resolved.searchDb).toBe(`${home}/Library/Application Support/Yulu/search.sqlite`);
     expect(resolved.hostDb).toBe(`${home}/Library/Application Support/Yulu/host.sqlite`);
     expect(resolved.agentTasksDir).toBe(`${home}/Library/Application Support/Yulu/agent-tasks`);
-    expect(resolved.recordingEventsDir).toBe(`${home}/.config/yulu/recording-events`);
+    expect(resolved.recordingEventsDir).toBe(`${home}/Library/Application Support/Yulu/recording-events`);
     expect(resolved.agentQueueJson).toBe(`${home}/.config/yulu/agent-queue.json`);
     expect(resolved.mcpTokenJson).toBe(`${home}/Library/Application Support/Yulu/mcp-token.json`);
     expect(resolved.modelsDir).toBe(`${home}/Library/Application Support/Yulu/Models`);
 
     expect(resolved.legacyReadOnlyDataDir).toBe(`${home}/.config/yulu`);
-    expect(resolved.audioDaemonSock).toBe(`${home}/.config/yulu/audio_daemon.sock`);
-    expect(resolved.statusAgentSock).toBe(`${home}/.config/yulu/status_agent.sock`);
-    expect(resolved.uiLog).toBe(`${home}/.config/yulu/ui.log`);
-    expect(resolved.uiPid).toBe(`${home}/.config/yulu/yulu_ui.pid`);
+    expect(resolved.audioDaemonSock).toBe(`${home}/Library/Caches/Yulu/audio_daemon.sock`);
+    expect(resolved.statusAgentSock).toBe(`${home}/Library/Caches/Yulu/status_agent.sock`);
+    expect(resolved.uiLog).toBe(`${home}/Library/Logs/Yulu/ui.log`);
+    expect(resolved.uiPid).toBe(`${home}/Library/Caches/Yulu/yulu_ui.pid`);
     expect(resolved.moviesDir).toBe(`${home}/Movies/Yulu`);
   });
 
@@ -65,6 +65,10 @@ describe("paths", () => {
       resolved.configFile,
       resolved.legacyReadOnlyConfigFile,
     ]);
+    expect(resolveHostPaths({
+      homeDir: "/test/home",
+      environment: { YULU_MEDIA_LIBRARY_DIR: "/Volumes/Archive/Yulu" },
+    }).moviesDir).toBe("/Volumes/Archive/Yulu");
   });
 
   it("uses one Media Library precedence across environment, standard config, legacy config, and default", () => {

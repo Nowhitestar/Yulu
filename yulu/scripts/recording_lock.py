@@ -8,7 +8,7 @@ arbiter — but it prevents the race where two callers each think they're
 the one starting and both send `start` (the daemon answers "already
 recording" to the second, which the caller misreads as success).
 
-The lock file (default ``~/.config/yulu/.recording.lock``) is opened by
+The lock file in Yulu's standard IPC directory is opened by
 the calling process and held via ``fcntl.flock(LOCK_EX | LOCK_NB)`` for
 the lifetime of the context manager. On process exit / crash, the OS
 releases the lock automatically (no stale-cleanup needed).
@@ -26,9 +26,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator, Optional
 
-DEFAULT_LOCK_PATH = Path(
-    os.environ.get("YULU_CONFIG_DIR") or Path.home() / ".config" / "yulu"
-).expanduser() / ".recording.lock"
+from application_paths import IPC_DIR
+
+DEFAULT_LOCK_PATH = IPC_DIR / ".recording.lock"
 
 
 @dataclass

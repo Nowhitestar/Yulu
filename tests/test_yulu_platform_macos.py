@@ -527,6 +527,15 @@ def test_permission_model_conformance(tmp_path, monkeypatch):
         assert status in _NEUTRAL_STATUS, f"{token!r} → {status!r} not neutral"
 
 
+def test_permission_model_uses_standard_ipc_root(tmp_path, monkeypatch):
+    from yulu_platform.macos import permission_model
+
+    monkeypatch.setenv("YULU_CACHE_DIR", str(tmp_path))
+    monkeypatch.setenv("YULU_IPC_DIR", str(tmp_path))
+
+    assert permission_model._daemon_socket_path() == tmp_path / "audio_daemon.sock"
+
+
 def test_dependency_manager_conformance():
     """MacOSDependencyManager subclasses the frozen ABC, constructs, and
     is_available returns a bool without raising even for an absent formula."""

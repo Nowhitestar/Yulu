@@ -14,14 +14,20 @@ import os
 import plistlib
 import shutil
 import socket
+import stat
 import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+from application_paths import DURABLE_DATA_DIR, IPC_DIR, LEGACY_READ_ONLY_DATA_DIR, LOGS_DIR
+
 SOURCE_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_RUNTIME_ROOT = Path.home() / ".yulu"
-DEFAULT_CONFIG_DIR = Path.home() / ".config/yulu"
+DEFAULT_CONFIG_DIR = LEGACY_READ_ONLY_DATA_DIR
+DEFAULT_APPLICATION_DATA_DIR = DURABLE_DATA_DIR
+DEFAULT_IPC_DIR = IPC_DIR
+DEFAULT_LOGS_DIR = LOGS_DIR
 DEFAULT_LEGACY_ROOT = Path.home() / ".openclaw/workspace/meeting-assistant/yulu"
 LAUNCH_AGENTS_DIR = Path.home() / "Library/LaunchAgents"
 LOCAL_BIN = Path.home() / ".local/bin"
@@ -216,8 +222,11 @@ def plan(source_root: Path, runtime_root: Path, config_dir: Path, legacy_root: P
     source_root = Path(source_root)
     runtime_root = Path(runtime_root)
     config_dir = Path(config_dir)
-    socket = _socket_status(config_dir)
-    recording = bool(socket.get("recording")) or _state_recording(config_dir)
+    standard_contract = config_dir == DEFAULT_CONFIG_DIR
+    socket = _socket_status(DEFAULT_IPC_DIR if standard_contract else config_dir)
+    recording = bool(socket.get("recording")) or _state_recording(
+        DEFAULT_APPLICATION_DATA_DIR if standard_contract else config_dir
+    )
     copies = []
     for rel in RUNTIME_ITEMS:
         src = source_root / rel
@@ -331,20 +340,23 @@ def _unload(dest: Path) -> None:
 
 def _load(dest: Path) -> None:
     _run(["plutil", "-lint", str(dest)], timeout=10, check=True)
-    _run(["launchctl", "load", str(dest)], timeout=15, check=False)
+    _run(["launchctl", "load", str(dest)], timeout=15, check=True)
 
 
-def _cleanup_obsolete_stt_state(config_dir: Path = DEFAULT_CONFIG_DIR) -> None:
-    """Remove stale IPC/PID markers only after the old LaunchAgent is unloaded."""
-    for path in (
-        config_dir / "stt_daemon.sock",
-        config_dir / "stt_daemon.pid",
-        config_dir / "dictation" / "realtime.pid",
-    ):
+def _prepare_log_directory(logs_dir: Path = DEFAULT_LOGS_DIR) -> None:
+    if logs_dir.exists() or logs_dir.is_symlink():
         try:
-            path.unlink(missing_ok=True)
-        except OSError:
-            pass
+            metadata = logs_dir.lstat()
+        except OSError as exc:
+            raise RuntimeError(f"unable to inspect Yulu log directory: {logs_dir}") from exc
+        if not stat.S_ISDIR(metadata.st_mode) or stat.S_ISLNK(metadata.st_mode):
+            raise RuntimeError(f"Yulu log directory must be a real directory: {logs_dir}")
+    else:
+        logs_dir.mkdir(mode=0o700, parents=True)
+        metadata = logs_dir.lstat()
+        if not stat.S_ISDIR(metadata.st_mode) or stat.S_ISLNK(metadata.st_mode):
+            raise RuntimeError(f"Yulu log directory must be a real directory: {logs_dir}")
+    logs_dir.chmod(0o700)
 
 
 def _retire_obsolete_launchagents(
@@ -379,7 +391,6 @@ def _retire_obsolete_launchagents(
     still_loaded = [label for label in labels if label in loaded_labels]
     if still_loaded:
         raise RuntimeError(f"retired LaunchAgents are still loaded: {', '.join(still_loaded)}")
-    _cleanup_obsolete_stt_state(config_dir)
 
 
 def _kill_legacy_processes(legacy_root: Path) -> None:
@@ -392,6 +403,7 @@ def _kill_legacy_processes(legacy_root: Path) -> None:
 
 def _install_launchagents(script_dir: Path, *, python_bin: str) -> None:
     LAUNCH_AGENTS_DIR.mkdir(parents=True, exist_ok=True)
+    _prepare_log_directory()
     node_bin = preferred_node(script_dir)
     launch_path = _launch_path(node_bin)
     _retire_obsolete_launchagents()

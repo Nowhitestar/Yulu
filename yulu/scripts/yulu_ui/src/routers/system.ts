@@ -6,6 +6,7 @@ import { z } from "zod";
 import { router, publicProcedure } from "../trpc.js";
 import { openDb } from "../db.js";
 import { ipcSend } from "../ipc.js";
+import { YULU_DAEMON_LOG_SOURCES } from "../daemonLogs.js";
 
 // esbuild inlines these via `define` at build time. In dev (tsx) the
 // identifiers are undefined and we fall back to reading package.json.
@@ -205,8 +206,10 @@ export const systemRouter = router({
   }),
 
   logPaths: publicProcedure.query(({ ctx }) => {
-    const names = ["audiodaemon", "statusagent", "scheduler", "detector", "calendar", "ui"];
-    return names.map((name) => ({ name, path: `${ctx.paths.configDir}/${name}.log` }));
+    return YULU_DAEMON_LOG_SOURCES.map(({ shortName, filename }) => ({
+      name: shortName,
+      path: `${ctx.paths.logsDir}/${filename}`,
+    }));
   }),
 
   // DATA-03: classify a candidate data-folder against the macOS cloud-sync roots so the

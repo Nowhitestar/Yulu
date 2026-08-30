@@ -22,6 +22,15 @@ import wave
 from datetime import datetime
 from pathlib import Path
 
+from application_paths import (
+    CONFIG_PATH,
+    CONFIG_READ_PATHS,
+    DURABLE_DATA_DIR,
+    IPC_DIR,
+    LEGACY_READ_ONLY_DATA_DIR,
+    MEDIA_LIBRARY_DIR,
+)
+
 from state_store import (
     is_recording_active,
     load_state as load_recording_state,
@@ -37,10 +46,9 @@ from recording_lock import (
     RecordingBusy,
 )
 
-CONFIG_DIR = Path(os.environ.get("YULU_CONFIG_DIR") or Path.home() / ".config" / "yulu").expanduser()
-CONFIG_PATH = CONFIG_DIR / "config.json"
-SOCKET_PATH = CONFIG_DIR / "audio_daemon.sock"
-STATE_PATH = CONFIG_DIR / ".state.json"
+CONFIG_DIR = DURABLE_DATA_DIR
+SOCKET_PATH = IPC_DIR / "audio_daemon.sock"
+STATE_PATH = DURABLE_DATA_DIR / ".state.json"
 SCRIPT_DIR = Path(__file__).resolve().parent
 
 
@@ -49,12 +57,9 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 # default (~/Movies/Yulu), not a repo-relative dir. Existing-file migration is
 # Phase 7 (D-08). Lazy + guarded resolver import (mirrors probes.probe_recording_dir).
 def _resolve_data_dir() -> Path:
-    try:
-        from yulu_platform.macos.path_resolver import MacOSPathResolver
+    from yulu_platform.macos.path_resolver import MacOSPathResolver
 
-        return MacOSPathResolver().data_dir()
-    except Exception:
-        return Path.home() / "Movies" / "Yulu"
+    return MacOSPathResolver().application_paths().media_library_dir
 
 
 def log(msg):
@@ -64,11 +69,12 @@ def log(msg):
 
 def load_config():
     cfg = {}
-    if CONFIG_PATH.exists():
+    for config_path in CONFIG_READ_PATHS:
         try:
-            cfg = json.loads(CONFIG_PATH.read_text())
+            cfg = json.loads(config_path.read_text())
+            break
         except Exception:
-            pass
+            continue
     audio_cfg = cfg.get("audio", {})
     audio_cfg.setdefault("backend", "daemon")  # "daemon" or "sox"
     if audio_cfg.get("backend") == "sox":
@@ -81,7 +87,7 @@ def load_config():
             audio_cfg["mic_device"] = ""
         if "system_audio_device" not in audio_cfg:
             audio_cfg["system_audio_device"] = None
-    audio_cfg.setdefault("output_dir", str(_resolve_data_dir()))
+    audio_cfg["output_dir"] = str(_resolve_data_dir())
     audio_cfg.setdefault("silence_threshold", 0.01)
     audio_cfg.setdefault("silence_duration_sec", 300)
     # The old realtime-transcription config default was vestigial, so capture no
@@ -139,7 +145,12 @@ def _capture_controller():
 
 
 def read_state():
-    return load_recording_state(STATE_PATH)
+    path = STATE_PATH
+    if not path.exists():
+        legacy = LEGACY_READ_ONLY_DATA_DIR / ".state.json"
+        if legacy.exists():
+            path = legacy
+    return load_recording_state(path)
 
 
 def write_state(state):
@@ -483,7 +494,8 @@ def sox_start(title, lock_handle=None):
         stderr=subprocess.DEVNULL,
         start_new_session=True,
     )
-    (CONFIG_DIR / ".recording_pid").write_text(str(proc.pid))
+    IPC_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
+    (IPC_DIR / ".recording_pid").write_text(str(proc.pid))
     if lock_handle is not None:
         record_lock(
             lock_handle,
@@ -495,7 +507,7 @@ def sox_start(title, lock_handle=None):
 
 
 def sox_stop():
-    pid_path = CONFIG_DIR / ".recording_pid"
+    pid_path = IPC_DIR / ".recording_pid"
     if pid_path.exists():
         try:
             pid = int(pid_path.read_text().strip())
@@ -513,7 +525,7 @@ def sox_stop():
 
 def sox_status():
     state = read_state()
-    if (CONFIG_DIR / ".recording_pid").exists():
+    if (IPC_DIR / ".recording_pid").exists():
         state["recording"] = True
     return state
 

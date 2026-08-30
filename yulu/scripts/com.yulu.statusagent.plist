@@ -22,9 +22,9 @@
     <integer>10</integer>
 
     <key>StandardOutPath</key>
-    <string>__HOME__/.config/yulu/status_agent.log</string>
+    <string>__HOME__/Library/Logs/Yulu/status_agent.log</string>
 
     <key>StandardErrorPath</key>
-    <string>__HOME__/.config/yulu/status_agent.log</string>
+    <string>__HOME__/Library/Logs/Yulu/status_agent.log</string>
 </dict>
 </plist>

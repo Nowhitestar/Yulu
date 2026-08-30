@@ -64,6 +64,32 @@ def test_dev_install_manages_status_agent_plist():
     assert "assets/Yulu.icns" in dev_install.RUNTIME_ITEMS
 
 
+def test_dev_install_recording_guard_uses_standard_capture_paths(monkeypatch, tmp_path):
+    observed = {}
+
+    def socket_status(path):
+        observed["socket"] = path
+        return {"recording": False}
+
+    def state_recording(path):
+        observed["state"] = path
+        return False
+
+    monkeypatch.setattr(dev_install, "_socket_status", socket_status)
+    monkeypatch.setattr(dev_install, "_state_recording", state_recording)
+
+    dev_install.plan(
+        source_root=tmp_path / "source",
+        runtime_root=tmp_path / "runtime",
+        config_dir=dev_install.DEFAULT_CONFIG_DIR,
+    )
+
+    assert observed == {
+        "socket": dev_install.DEFAULT_IPC_DIR,
+        "state": dev_install.DEFAULT_APPLICATION_DATA_DIR,
+    }
+
+
 def test_dev_install_metadata_marks_runtime_as_dev(monkeypatch, tmp_path):
     source = tmp_path / "source"
     runtime = tmp_path / "runtime"
@@ -167,7 +193,7 @@ def test_dev_install_retires_legacy_stt_daemon():
     assert "com.yulu.sttdaemon.plist" in dev_install.OBSOLETE_LAUNCHAGENTS
 
 
-def test_cleanup_obsolete_stt_state_removes_only_runtime_markers(tmp_path):
+def test_retiring_obsolete_stt_jobs_keeps_legacy_rollback_tree_immutable(monkeypatch, tmp_path):
     paths = [
         tmp_path / "stt_daemon.sock",
         tmp_path / "stt_daemon.pid",
@@ -179,11 +205,50 @@ def test_cleanup_obsolete_stt_state_removes_only_runtime_markers(tmp_path):
     log = tmp_path / "logs" / "stt_daemon.log"
     log.parent.mkdir()
     log.write_text("audit", encoding="utf-8")
+    launch_agents = tmp_path / "LaunchAgents"
+    launch_agents.mkdir()
 
-    dev_install._cleanup_obsolete_stt_state(tmp_path)
+    def fake_run(cmd, **_kwargs):
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
 
-    assert all(not path.exists() for path in paths)
-    assert log.read_text(encoding="utf-8") == "audit"
+    before = {path.relative_to(tmp_path): path.read_bytes() for path in [*paths, log]}
+    monkeypatch.setattr(dev_install, "_run", fake_run)
+    dev_install._retire_obsolete_launchagents(tmp_path, launch_agents)
+
+    after = {path.relative_to(tmp_path): path.read_bytes() for path in [*paths, log]}
+    assert after == before
+
+
+def test_prepare_log_directory_is_private_and_rejects_aliases(tmp_path):
+    logs_dir = tmp_path / "Library" / "Logs" / "Yulu"
+    logs_dir.mkdir(parents=True, mode=0o777)
+    logs_dir.chmod(0o777)
+
+    dev_install._prepare_log_directory(logs_dir)
+
+    assert logs_dir.stat().st_mode & 0o777 == 0o700
+    moved = tmp_path / "actual-logs"
+    logs_dir.rename(moved)
+    logs_dir.symlink_to(moved, target_is_directory=True)
+    try:
+        dev_install._prepare_log_directory(logs_dir)
+    except RuntimeError as exc:
+        assert "real directory" in str(exc)
+    else:
+        raise AssertionError("log directory aliases must fail closed")
+
+
+def test_load_fails_when_launchctl_load_fails(monkeypatch, tmp_path):
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append((cmd, kwargs))
+        return subprocess.CompletedProcess(cmd, 1 if cmd[:2] == ["launchctl", "load"] else 0, stdout="", stderr="load failed")
+
+    monkeypatch.setattr(dev_install, "_run", fake_run)
+    dev_install._load(tmp_path / "com.yulu.test.plist")
+
+    assert calls[-1][1]["check"] is True
 
 
 def test_retire_obsolete_launchagents_boots_out_by_label_without_plists(monkeypatch, tmp_path):

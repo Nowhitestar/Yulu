@@ -10,10 +10,104 @@ import Carbon
 import ApplicationServices
 import WebKit
 
-let CONFIG_DIR = ("~/.config/yulu" as NSString).expandingTildeInPath
-let PID_FILE = "\(CONFIG_DIR)/status_agent.pid"
-let LOG_FILE = "\(CONFIG_DIR)/status_agent.log"
-let IPC_SOCKET_PATH = "\(CONFIG_DIR)/status_agent.sock"
+let HOME_DIR = FileManager.default.homeDirectoryForCurrentUser.path
+
+func canonicalDirectory(_ raw: String) -> URL? {
+    let value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !value.isEmpty, !value.contains("\0") else { return nil }
+    let path = value.hasPrefix("~/")
+        ? (value as NSString).expandingTildeInPath
+        : value
+    guard path.hasPrefix("/") else { return nil }
+    let manager = FileManager.default
+    var existing = URL(fileURLWithPath: path, isDirectory: true).standardizedFileURL
+    var missing: [String] = []
+    while true {
+        var isDirectory: ObjCBool = false
+        if manager.fileExists(atPath: existing.path, isDirectory: &isDirectory) {
+            guard isDirectory.boolValue else { return nil }
+            var resolved = existing.resolvingSymlinksInPath().standardizedFileURL
+            for component in missing {
+                resolved.appendPathComponent(component, isDirectory: true)
+            }
+            return resolved.standardizedFileURL
+        }
+        if (try? manager.destinationOfSymbolicLink(atPath: existing.path)) != nil {
+            return nil
+        }
+        let parent = existing.deletingLastPathComponent()
+        guard parent.path != existing.path else { return nil }
+        missing.insert(existing.lastPathComponent, at: 0)
+        existing = parent
+    }
+}
+
+func normalizedPathComponents(_ url: URL) -> [String] {
+    url.standardizedFileURL.pathComponents
+        .filter { $0 != "/" }
+        .map { $0.precomposedStringWithCanonicalMapping.lowercased(with: Locale(identifier: "en_US_POSIX")) }
+}
+
+func isSameOrNested(_ candidate: URL, under root: URL) -> Bool {
+    let path = normalizedPathComponents(candidate)
+    let base = normalizedPathComponents(root)
+    return path.count >= base.count && Array(path.prefix(base.count)) == base
+}
+
+func pathsOverlap(_ left: URL, _ right: URL) -> Bool {
+    isSameOrNested(left, under: right) || isSameOrNested(right, under: left)
+}
+
+func environmentDirectory(_ name: String, fallback: String) -> String {
+    guard let raw = ProcessInfo.processInfo.environment[name],
+          raw.hasPrefix("/"),
+          !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        return fallback
+    }
+    return (raw as NSString).standardizingPath
+}
+
+let DURABLE_DATA_DIR = environmentDirectory(
+    "YULU_APPLICATION_SUPPORT_DIR",
+    fallback: "\(HOME_DIR)/Library/Application Support/Yulu"
+)
+let IPC_DIR = environmentDirectory(
+    "YULU_IPC_DIR",
+    fallback: "\(HOME_DIR)/Library/Caches/Yulu"
+)
+let LOGS_DIR = environmentDirectory(
+    "YULU_LOG_DIR",
+    fallback: "\(HOME_DIR)/Library/Logs/Yulu"
+)
+let LEGACY_READ_ONLY_DATA_DIR = environmentDirectory(
+    "YULU_LEGACY_READ_ONLY_DATA_DIR",
+    fallback: "\(HOME_DIR)/.config/yulu"
+)
+let CONFIG_DIR = DURABLE_DATA_DIR
+let CONFIG_READ_PATHS = [
+    "\(DURABLE_DATA_DIR)/config.json",
+    "\(LEGACY_READ_ONLY_DATA_DIR)/config.json",
+]
+let PID_FILE = "\(IPC_DIR)/status_agent.pid"
+let LOG_FILE = "\(LOGS_DIR)/status_agent.log"
+let IPC_SOCKET_PATH = "\(IPC_DIR)/status_agent.sock"
+let DICTATION_MEDIA_DIR = "\(loadRecordingDir())/Dictation"
+
+func firstReadableData(_ relativePath: String) -> Data? {
+    for root in [DURABLE_DATA_DIR, LEGACY_READ_ONLY_DATA_DIR] {
+        if let data = FileManager.default.contents(atPath: "\(root)/\(relativePath)") {
+            return data
+        }
+    }
+    return nil
+}
+
+func configData() -> Data? {
+    for path in CONFIG_READ_PATHS {
+        if let data = FileManager.default.contents(atPath: path) { return data }
+    }
+    return nil
+}
 
 enum AppLanguage: String {
     case zh, en
@@ -22,8 +116,7 @@ enum AppLanguage: String {
 var activeAppLanguage: AppLanguage = .zh
 
 func readAppLanguage() -> AppLanguage {
-    let path = "\(CONFIG_DIR)/config.json"
-    guard let data = FileManager.default.contents(atPath: path),
+    guard let data = configData(),
           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
           let ui = json["ui"] as? [String: Any],
           let raw = ui["language"] as? String,
@@ -98,8 +191,7 @@ func writePidFile() {
 }
 
 func feedbackSoundsEnabled() -> Bool {
-    let path = "\(CONFIG_DIR)/config.json"
-    guard let data = FileManager.default.contents(atPath: path),
+    guard let data = configData(),
           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
           let block = json["status_agent"] as? [String: Any] else { return true }
     return block["feedback_sounds"] as? Bool ?? true
@@ -370,8 +462,7 @@ func parseScheduleDate(_ value: String) -> Date? {
 }
 
 func loadCurrentMeeting() -> CurrentMeeting? {
-    let path = "\(CONFIG_DIR)/schedule.json"
-    guard let data = FileManager.default.contents(atPath: path),
+    guard let data = firstReadableData("schedule.json"),
           let raw = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
           let meetings = raw["meetings"] as? [[String: Any]] else {
         return nil
@@ -427,24 +518,43 @@ func recentRecordingMenuTitle(time: String, name: String) -> NSAttributedString 
 // Ported from audio_daemon.swift:45-58 — kept on status_agent's
 // NSString.expandingTildeInPath / NSHomeDirectory() idiom (line 10) for in-file
 // consistency, rather than FileManager.homeDirectoryForCurrentUser.
-func loadRecordingDir() -> String {
-    let defaultDir = ("~/Movies/Yulu" as NSString).expandingTildeInPath
-    let configPath = "\(CONFIG_DIR)/config.json"
-    guard let data = FileManager.default.contents(atPath: configPath),
-          let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-          let audio = json["audio"] as? [String: Any],
-          let raw = audio["output_dir"] as? String,
-          !raw.isEmpty else {
-        return defaultDir
+func configuredRecordingDirectory(_ raw: String) -> String? {
+    safeMediaDirectory(raw)?.path
+}
+
+func safeMediaDirectory(_ raw: String) -> URL? {
+    guard let candidate = canonicalDirectory(raw) else { return nil }
+    for root in [DURABLE_DATA_DIR, IPC_DIR, LOGS_DIR, LEGACY_READ_ONLY_DATA_DIR] {
+        guard let canonicalRoot = canonicalDirectory(root) else { return nil }
+        if pathsOverlap(candidate, canonicalRoot) { return nil }
     }
-    return raw.hasPrefix("~/")
-        ? ("\(raw)" as NSString).expandingTildeInPath
-        : raw
+    return candidate
+}
+
+func loadRecordingDir() -> String {
+    if let raw = ProcessInfo.processInfo.environment["YULU_MEDIA_LIBRARY_DIR"],
+       let configured = safeMediaDirectory(raw) {
+        return configured.path
+    }
+    for configPath in CONFIG_READ_PATHS {
+        guard let data = FileManager.default.contents(atPath: configPath),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let audio = json["audio"] as? [String: Any],
+              let raw = audio["output_dir"] as? String,
+              let configured = configuredRecordingDirectory(raw) else {
+            continue
+        }
+        return configured
+    }
+    let fallback = "\(HOME_DIR)/Movies/Yulu"
+    guard let safeFallback = safeMediaDirectory(fallback) else {
+        fatalError("no safe Yulu Media Library path")
+    }
+    return safeFallback.path
 }
 
 func activeDictationIntent() -> String {
-    let path = "\(CONFIG_DIR)/dictation/state.json"
-    guard let data = FileManager.default.contents(atPath: path),
+    guard let data = firstReadableData("dictation/state.json"),
           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
         return ""
     }
@@ -452,8 +562,7 @@ func activeDictationIntent() -> String {
 }
 
 func dictationTargetLanguage(fallback: String) -> String {
-    let configPath = "\(CONFIG_DIR)/config.json"
-    guard let data = FileManager.default.contents(atPath: configPath),
+    guard let data = configData(),
           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
           let transcription = json["transcription"] as? [String: Any],
           let dictation = transcription["dictation"] as? [String: Any],
@@ -806,7 +915,7 @@ func loadRecentRecordings(limit: Int = 5) -> [RecentRecording] {
 // line-delimited JSON contract: write one JSON object + newline, read
 // one JSON object back.
 class DaemonClient {
-    static let socketPath = (("~/.config/yulu/audio_daemon.sock") as NSString).expandingTildeInPath
+    static let socketPath = "\(IPC_DIR)/audio_daemon.sock"
 
     static func send(_ payload: [String: Any]) -> [String: Any]? {
         guard let json = try? JSONSerialization.data(withJSONObject: payload, options: []) else {
@@ -903,7 +1012,7 @@ class RecordingLauncher {
     }
 
     private static func launcherLog() -> FileHandle {
-        let logPath = (("~/.config/yulu/status_agent_launcher.log") as NSString).expandingTildeInPath
+        let logPath = "\(LOGS_DIR)/status_agent_launcher.log"
         if !FileManager.default.fileExists(atPath: logPath) {
             FileManager.default.createFile(atPath: logPath, contents: nil)
         }
@@ -1493,6 +1602,12 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var ipcServer: IPCServer?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        for directory in [DURABLE_DATA_DIR, IPC_DIR, LOGS_DIR, loadRecordingDir()] {
+            try? FileManager.default.createDirectory(
+                atPath: directory,
+                withIntermediateDirectories: true
+            )
+        }
         writePidFile()
         log("🟢 Yulu Status Agent started (pid=\(ProcessInfo.processInfo.processIdentifier))")
         activeAppLanguage = readAppLanguage()
@@ -1619,7 +1734,7 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         if recording {
             let file = (resp["file"] as? String) ?? ""
-            activeRecordingIsDictation = file.hasPrefix("\(CONFIG_DIR)/dictation/")
+            activeRecordingIsDictation = file.hasPrefix("\(DICTATION_MEDIA_DIR)/")
             applyState(.recording)
             if activeRecordingIsDictation, let text = pendingStartFeedbackText {
                 pendingStartFeedbackText = nil

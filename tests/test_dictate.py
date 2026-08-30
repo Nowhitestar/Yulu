@@ -2,7 +2,11 @@ import sys
 import wave
 import json
 import io
+import os
+import signal
 import subprocess
+import tracemalloc
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -13,6 +17,460 @@ sys.path.insert(0, str(SCRIPTS))
 
 import dictate
 from prompts import PromptsRepo, Category, Source, open_db
+
+
+def test_dictation_uses_standard_media_durable_and_ipc_roots(tmp_path):
+    durable_dir = tmp_path / "Library" / "Application Support" / "Yulu"
+    cache_dir = tmp_path / "Library" / "Caches" / "Yulu"
+    media_dir = tmp_path / "Custom Media" / "Yulu"
+    env = {
+        **os.environ,
+        "HOME": str(tmp_path),
+        "PYTHONPATH": str(SCRIPTS),
+        "YULU_APPLICATION_SUPPORT_DIR": str(durable_dir),
+        "YULU_CACHE_DIR": str(cache_dir),
+        "YULU_IPC_DIR": str(cache_dir),
+        "YULU_MEDIA_LIBRARY_DIR": str(media_dir),
+    }
+    env.pop("YULU_CONFIG_DIR", None)
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import dictate; "
+            "print(dictate.CONFIG_PATH); print(dictate.AUDIO_SOCKET); "
+            "print(dictate.DICTATION_DIR); print(dictate.STATE_PATH); "
+            "print(dictate.HISTORY_PATH); print(dictate.LEGACY_DICTATION_MEDIA_DIR); "
+            "print(dictate.LEGACY_REALTIME_PID_PATH); "
+            "print(dictate.LEGACY_REALTIME_CLEANUP_CLAIMS_DIR)",
+        ],
+        env=env,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.stdout.splitlines() == [
+        str(durable_dir / "config.json"),
+        str(cache_dir / "audio_daemon.sock"),
+        str(media_dir / "Dictation"),
+        str(durable_dir / "dictation" / "state.json"),
+        str(durable_dir / "dictation" / "history.jsonl"),
+        str(tmp_path / "Movies" / "Yulu" / "Dictation"),
+        str(tmp_path / ".config" / "yulu" / "dictation" / "realtime.pid"),
+        str(durable_dir / "dictation" / "legacy-realtime-cleanup"),
+    ]
+
+
+def test_legacy_dictation_media_is_copied_losslessly_for_rollback(tmp_path):
+    legacy_dir = tmp_path / ".config" / "yulu" / "dictation"
+    media_dir = tmp_path / "Movies" / "Yulu" / "Dictation"
+    legacy_dir.mkdir(parents=True)
+    audio = b"RIFF\x00\x01legacy-dictation-bytes"
+    source = legacy_dir / "Dictation_20260830_090000.wav"
+    source.write_bytes(audio)
+    (legacy_dir / "state.json").write_text('{"recording":false}', encoding="utf-8")
+
+    migrated = dictate.migrate_legacy_dictation_media(
+        legacy_dir=legacy_dir,
+        media_dir=media_dir,
+    )
+    repeated = dictate.migrate_legacy_dictation_media(
+        legacy_dir=legacy_dir,
+        media_dir=media_dir,
+    )
+
+    destination = media_dir / source.name
+    assert migrated == [destination]
+    assert repeated == migrated
+    assert destination.read_bytes() == audio
+    assert source.read_bytes() == audio
+    assert not (media_dir / "state.json").exists()
+
+
+def test_legacy_dictation_media_defaults_to_the_agreed_movies_location(monkeypatch, tmp_path):
+    legacy_dir = tmp_path / ".config" / "yulu" / "dictation"
+    agreed_dir = tmp_path / "Movies" / "Yulu" / "Dictation"
+    legacy_dir.mkdir(parents=True)
+    source = legacy_dir / "Dictation_20260830_090000.wav"
+    source.write_bytes(b"legacy-audio")
+    monkeypatch.setattr(dictate, "LEGACY_DICTATION_MEDIA_DIR", agreed_dir)
+
+    migrated = dictate.migrate_legacy_dictation_media(legacy_dir=legacy_dir)
+
+    assert migrated == [agreed_dir / source.name]
+    assert migrated[0].read_bytes() == b"legacy-audio"
+    assert source.read_bytes() == b"legacy-audio"
+
+
+@pytest.mark.parametrize("contents", ["999999\n", "not-a-pid\n"])
+def test_legacy_realtime_pid_cleanup_keeps_the_rollback_file_read_only(monkeypatch, tmp_path, contents):
+    legacy_pid = tmp_path / ".config" / "yulu" / "dictation" / "realtime.pid"
+    claims_dir = tmp_path / "Library" / "Application Support" / "Yulu" / "dictation" / "legacy-realtime-cleanup"
+    legacy_pid.parent.mkdir(parents=True)
+    legacy_pid.write_text(contents, encoding="utf-8")
+    original = legacy_pid.read_bytes()
+    monkeypatch.setattr(dictate, "LEGACY_REALTIME_PID_PATH", legacy_pid)
+    monkeypatch.setattr(dictate, "LEGACY_REALTIME_CLEANUP_CLAIMS_DIR", claims_dir, raising=False)
+    monkeypatch.setattr(dictate.os, "waitpid", lambda *_args: (_ for _ in ()).throw(ChildProcessError()))
+    monkeypatch.setattr(dictate.os, "kill", lambda *_args: (_ for _ in ()).throw(ProcessLookupError()))
+
+    dictate.cleanup_legacy_realtime_sidecar()
+
+    assert legacy_pid.read_bytes() == original
+
+
+def test_legacy_realtime_pid_cleanup_never_signals_an_unverified_process(monkeypatch, tmp_path):
+    legacy_pid = tmp_path / ".config" / "yulu" / "dictation" / "realtime.pid"
+    claims_dir = tmp_path / "Library" / "Application Support" / "Yulu" / "dictation" / "legacy-realtime-cleanup"
+    legacy_pid.parent.mkdir(parents=True)
+    legacy_pid.write_text("4242\n", encoding="utf-8")
+    original = legacy_pid.read_bytes()
+    signals = []
+    monkeypatch.setattr(dictate, "LEGACY_REALTIME_PID_PATH", legacy_pid)
+    monkeypatch.setattr(dictate, "LEGACY_REALTIME_CLEANUP_CLAIMS_DIR", claims_dir, raising=False)
+    monkeypatch.setattr(dictate.os, "waitpid", lambda *_args: (_ for _ in ()).throw(ChildProcessError()))
+    monkeypatch.setattr(dictate.os, "kill", lambda *_args: None)
+    monkeypatch.setattr(dictate.os, "killpg", lambda pid, sig: signals.append((pid, sig)))
+
+    dictate.cleanup_legacy_realtime_sidecar(wait=False)
+
+    assert signals == []
+    assert legacy_pid.read_bytes() == original
+    assert not claims_dir.exists()
+
+
+def test_verified_legacy_realtime_pid_is_claimed_once(monkeypatch, tmp_path):
+    legacy_pid = tmp_path / ".config" / "yulu" / "dictation" / "realtime.pid"
+    claims_dir = tmp_path / "Library" / "Application Support" / "Yulu" / "dictation" / "legacy-realtime-cleanup"
+    legacy_pid.parent.mkdir(parents=True)
+    legacy_pid.write_text("4242\n", encoding="utf-8")
+    signals = []
+    monkeypatch.setattr(dictate, "LEGACY_REALTIME_PID_PATH", legacy_pid)
+    monkeypatch.setattr(dictate, "LEGACY_REALTIME_CLEANUP_CLAIMS_DIR", claims_dir)
+    monkeypatch.setattr(dictate, "_legacy_realtime_sidecar_matches", lambda *_args: True, raising=False)
+    monkeypatch.setattr(dictate.os, "waitpid", lambda *_args: (_ for _ in ()).throw(ChildProcessError()))
+    monkeypatch.setattr(dictate.os, "kill", lambda *_args: None)
+    monkeypatch.setattr(dictate.os, "killpg", lambda pid, sig: signals.append((pid, sig)))
+
+    dictate.cleanup_legacy_realtime_sidecar(wait=False)
+    dictate.cleanup_legacy_realtime_sidecar(wait=False)
+
+    assert signals == [(4242, signal.SIGTERM)]
+
+
+def test_same_legacy_pid_with_a_new_generation_gets_a_new_claim(monkeypatch, tmp_path):
+    legacy_pid = tmp_path / ".config" / "yulu" / "dictation" / "realtime.pid"
+    claims_dir = tmp_path / "Library" / "Application Support" / "Yulu" / "dictation" / "legacy-realtime-cleanup"
+    legacy_pid.parent.mkdir(parents=True)
+    legacy_pid.write_text("4242\n", encoding="utf-8")
+    signals = []
+    monkeypatch.setattr(dictate, "LEGACY_REALTIME_PID_PATH", legacy_pid)
+    monkeypatch.setattr(dictate, "LEGACY_REALTIME_CLEANUP_CLAIMS_DIR", claims_dir)
+    monkeypatch.setattr(dictate, "_legacy_realtime_sidecar_matches", lambda *_args: True)
+    monkeypatch.setattr(dictate.os, "waitpid", lambda *_args: (_ for _ in ()).throw(ChildProcessError()))
+    monkeypatch.setattr(dictate.os, "killpg", lambda pid, sig: signals.append((pid, sig)))
+
+    dictate.cleanup_legacy_realtime_sidecar(wait=False)
+    metadata = legacy_pid.stat()
+    os.utime(
+        legacy_pid,
+        ns=(metadata.st_atime_ns, metadata.st_mtime_ns + 1_000_000_000),
+    )
+    dictate.cleanup_legacy_realtime_sidecar(wait=False)
+
+    assert signals == [
+        (4242, signal.SIGTERM),
+        (4242, signal.SIGTERM),
+    ]
+
+
+def test_legacy_realtime_identity_requires_expected_command_uid_and_generation(monkeypatch, tmp_path):
+    pid_file = tmp_path / "realtime.pid"
+    pid_file.write_text("4242\n", encoding="utf-8")
+    metadata = pid_file.stat()
+    started = datetime.fromtimestamp(metadata.st_mtime).strftime("%a %b %d %H:%M:%S %Y")
+    expected_script = Path(dictate.__file__).with_name("realtime_transcribe.py").resolve(strict=False)
+    uid = os.getuid()
+
+    def ps(command):
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout=(
+                f"{uid} {started} /usr/bin/python3 {expected_script} /tmp/audio.wav "
+                "Dictation --chunk-sec 2 --unsubscribe-reason dictation_stopped\n"
+            ),
+            stderr="",
+        )
+
+    monkeypatch.setattr(dictate.subprocess, "run", lambda command, **_kwargs: ps(command))
+    assert dictate._legacy_realtime_sidecar_matches(4242, metadata) is True
+
+    monkeypatch.setattr(
+        dictate.subprocess,
+        "run",
+        lambda command, **_kwargs: subprocess.CompletedProcess(
+            command,
+            0,
+            stdout=f"{uid} {started} /usr/bin/sleep 999\n",
+            stderr="",
+        ),
+    )
+    assert dictate._legacy_realtime_sidecar_matches(4242, metadata) is False
+
+
+def test_legacy_realtime_cleanup_rechecks_generation_before_escalating(monkeypatch, tmp_path):
+    legacy_pid = tmp_path / ".config" / "yulu" / "dictation" / "realtime.pid"
+    claims_dir = tmp_path / "claims"
+    legacy_pid.parent.mkdir(parents=True)
+    legacy_pid.write_text("4242\n", encoding="utf-8")
+    matches = iter([True, True, False, False])
+    signals = []
+    monkeypatch.setattr(dictate, "LEGACY_REALTIME_PID_PATH", legacy_pid)
+    monkeypatch.setattr(dictate, "LEGACY_REALTIME_CLEANUP_CLAIMS_DIR", claims_dir)
+    monkeypatch.setattr(dictate, "_legacy_realtime_sidecar_matches", lambda *_args: next(matches))
+    monkeypatch.setattr(dictate.os, "waitpid", lambda *_args: (_ for _ in ()).throw(ChildProcessError()))
+    monkeypatch.setattr(dictate.os, "killpg", lambda pid, sig: signals.append((pid, sig)))
+
+    dictate.cleanup_legacy_realtime_sidecar(wait=True)
+
+    assert signals == [(4242, signal.SIGTERM)]
+
+
+def test_legacy_dictation_migration_fails_closed_when_media_parent_is_swapped(monkeypatch, tmp_path):
+    legacy_dir = tmp_path / "legacy"
+    media_dir = tmp_path / "media"
+    moved_media_dir = tmp_path / "anchored-media"
+    external_dir = tmp_path / "external"
+    legacy_dir.mkdir()
+    media_dir.mkdir()
+    external_dir.mkdir()
+    source = legacy_dir / "Dictation_20260830_090000.wav"
+    source.write_bytes(b"secret-audio")
+    real_require = dictate._require_directory_anchor
+    swapped = False
+    target_checks = 0
+
+    def require_and_swap(path, metadata, *, label):
+        nonlocal swapped, target_checks
+        if path == media_dir:
+            target_checks += 1
+        if path == media_dir and target_checks == 2 and not swapped:
+            media_dir.rename(moved_media_dir)
+            media_dir.symlink_to(external_dir, target_is_directory=True)
+            swapped = True
+        return real_require(path, metadata, label=label)
+
+    monkeypatch.setattr(dictate, "_require_directory_anchor", require_and_swap)
+
+    with pytest.raises(dictate.DictationError, match="Media Library root changed"):
+        dictate.migrate_legacy_dictation_media(legacy_dir=legacy_dir, media_dir=media_dir)
+
+    assert not (external_dir / source.name).exists()
+
+
+def test_legacy_dictation_migration_fails_closed_when_source_parent_is_swapped(monkeypatch, tmp_path):
+    legacy_dir = tmp_path / "legacy"
+    moved_legacy_dir = tmp_path / "anchored-legacy"
+    media_dir = tmp_path / "media"
+    replacement_dir = tmp_path / "replacement"
+    legacy_dir.mkdir()
+    replacement_dir.mkdir()
+    source = legacy_dir / "Dictation_20260830_090000.wav"
+    source.write_bytes(b"original-audio")
+    (replacement_dir / source.name).write_bytes(b"redirected-audio")
+    real_require = dictate._require_directory_anchor
+    source_checks = 0
+
+    def require_and_swap(path, metadata, *, label):
+        nonlocal source_checks
+        if path == legacy_dir:
+            source_checks += 1
+        if path == legacy_dir and source_checks == 2:
+            legacy_dir.rename(moved_legacy_dir)
+            replacement_dir.rename(legacy_dir)
+        return real_require(path, metadata, label=label)
+
+    monkeypatch.setattr(dictate, "_require_directory_anchor", require_and_swap)
+
+    with pytest.raises(dictate.DictationError, match="legacy dictation source root changed"):
+        dictate.migrate_legacy_dictation_media(legacy_dir=legacy_dir, media_dir=media_dir)
+
+    assert not (media_dir / source.name).exists()
+
+
+
+def test_legacy_dictation_media_preserves_both_files_on_name_collision(tmp_path):
+    legacy_dir = tmp_path / ".config" / "yulu" / "dictation"
+    media_dir = tmp_path / "Movies" / "Yulu" / "Dictation"
+    legacy_dir.mkdir(parents=True)
+    media_dir.mkdir(parents=True)
+    source = legacy_dir / "Dictation_20260830_090000.wav"
+    destination = media_dir / source.name
+    source.write_bytes(b"legacy-audio")
+    destination.write_bytes(b"current-audio")
+
+    migrated = dictate.migrate_legacy_dictation_media(
+        legacy_dir=legacy_dir,
+        media_dir=media_dir,
+    )
+    repeated = dictate.migrate_legacy_dictation_media(
+        legacy_dir=legacy_dir,
+        media_dir=media_dir,
+    )
+
+    assert destination.read_bytes() == b"current-audio"
+    assert source.read_bytes() == b"legacy-audio"
+    assert len(migrated) == 1
+    assert migrated[0] != destination
+    assert migrated[0].read_bytes() == b"legacy-audio"
+    assert repeated == migrated
+    assert sorted(path.name for path in media_dir.glob("*.wav")) == sorted([
+        destination.name,
+        migrated[0].name,
+    ])
+
+
+def test_legacy_dictation_media_never_overwrites_a_concurrent_destination(
+    monkeypatch, tmp_path
+):
+    legacy_dir = tmp_path / ".config" / "yulu" / "dictation"
+    media_dir = tmp_path / "Movies" / "Yulu" / "Dictation"
+    legacy_dir.mkdir(parents=True)
+    media_dir.mkdir(parents=True)
+    source = legacy_dir / "Dictation_20260830_090000.wav"
+    destination = media_dir / source.name
+    source.write_bytes(b"legacy-audio")
+    real_replace = os.replace
+    real_link = os.link
+
+    def race_replace(staged, target):
+        Path(target).write_bytes(b"concurrent-current-audio")
+        return real_replace(staged, target)
+
+    def race_link(staged, target, *args, **kwargs):
+        if Path(target).name == destination.name and not destination.exists():
+            destination.write_bytes(b"concurrent-current-audio")
+        return real_link(staged, target, *args, **kwargs)
+
+    monkeypatch.setattr(dictate.os, "replace", race_replace)
+    monkeypatch.setattr(dictate.os, "link", race_link)
+
+    migrated = dictate.migrate_legacy_dictation_media(
+        legacy_dir=legacy_dir,
+        media_dir=media_dir,
+    )
+
+    assert destination.read_bytes() == b"concurrent-current-audio"
+    assert migrated[0] != destination
+    assert migrated[0].read_bytes() == b"legacy-audio"
+    assert source.read_bytes() == b"legacy-audio"
+
+
+def test_legacy_dictation_media_rejects_a_destination_replaced_after_link(
+    monkeypatch, tmp_path
+):
+    legacy_dir = tmp_path / "legacy"
+    media_dir = tmp_path / "media"
+    legacy_dir.mkdir()
+    media_dir.mkdir()
+    source = legacy_dir / "Dictation_20260830_090000.wav"
+    destination = media_dir / source.name
+    source.write_bytes(b"legacy-audio")
+    real_link = os.link
+
+    def replace_after_link(staged, target, *args, **kwargs):
+        result = real_link(staged, target, *args, **kwargs)
+        if Path(target).name == destination.name:
+            destination.unlink()
+            destination.write_bytes(b"concurrent-replacement")
+        return result
+
+    monkeypatch.setattr(dictate.os, "link", replace_after_link)
+
+    with pytest.raises(dictate.DictationError, match="changed during migration"):
+        dictate.migrate_legacy_dictation_media(
+            legacy_dir=legacy_dir,
+            media_dir=media_dir,
+        )
+
+    assert source.read_bytes() == b"legacy-audio"
+    assert destination.read_bytes() == b"concurrent-replacement"
+
+
+def test_legacy_dictation_migration_streams_large_media_with_bounded_memory(tmp_path):
+    legacy_dir = tmp_path / "legacy"
+    media_dir = tmp_path / "media"
+    legacy_dir.mkdir()
+    source = legacy_dir / "Dictation_large.wav"
+    with source.open("wb") as handle:
+        handle.truncate(32 * 1024 * 1024)
+
+    tracemalloc.start()
+    try:
+        migrated = dictate.migrate_legacy_dictation_media(
+            legacy_dir=legacy_dir,
+            media_dir=media_dir,
+        )
+        _current, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+
+    assert migrated == [media_dir / source.name]
+    assert migrated[0].stat().st_size == source.stat().st_size
+    assert peak < 8 * 1024 * 1024
+
+
+def test_legacy_dictation_manifest_skips_unchanged_media_but_discovers_new_files(
+    monkeypatch, tmp_path
+):
+    legacy_dir = tmp_path / "legacy"
+    media_dir = tmp_path / "media"
+    manifest_path = tmp_path / "durable" / "legacy-media-migration.json"
+    legacy_dir.mkdir()
+    first = legacy_dir / "Dictation_first.wav"
+    first.write_bytes(b"first-audio")
+
+    assert dictate.migrate_legacy_dictation_media(
+        legacy_dir=legacy_dir,
+        media_dir=media_dir,
+        manifest_path=manifest_path,
+    ) == [media_dir / first.name]
+
+    stream = dictate._stream_legacy_media_to_stage
+    monkeypatch.setattr(
+        dictate,
+        "_stream_legacy_media_to_stage",
+        lambda *_args, **_kwargs: pytest.fail("unchanged legacy media was reread"),
+    )
+    assert dictate.migrate_legacy_dictation_media(
+        legacy_dir=legacy_dir,
+        media_dir=media_dir,
+        manifest_path=manifest_path,
+    ) == [media_dir / first.name]
+
+    monkeypatch.setattr(dictate, "_stream_legacy_media_to_stage", stream)
+    second = legacy_dir / "Dictation_second.wav"
+    second.write_bytes(b"second-audio")
+    assert dictate.migrate_legacy_dictation_media(
+        legacy_dir=legacy_dir,
+        media_dir=media_dir,
+        manifest_path=manifest_path,
+    ) == [media_dir / first.name, media_dir / second.name]
+
+
+def test_dictation_state_reads_legacy_when_standard_is_missing(monkeypatch, tmp_path):
+    standard = tmp_path / "Library" / "Application Support" / "Yulu" / "dictation" / "state.json"
+    legacy_root = tmp_path / ".config" / "yulu"
+    legacy_state = legacy_root / "dictation" / "state.json"
+    legacy_state.parent.mkdir(parents=True)
+    legacy_state.write_text('{"intent":"dictation","audio_path":"/legacy.wav"}', encoding="utf-8")
+    monkeypatch.setattr(dictate, "STATE_PATH", standard)
+    monkeypatch.setattr(dictate, "LEGACY_READ_ONLY_DATA_DIR", legacy_root)
+
+    assert dictate._state()["audio_path"] == "/legacy.wav"
 
 
 def test_dictation_error_payload_distinguishes_user_actions(tmp_path):
@@ -58,6 +516,41 @@ def test_host_empty_transcript_is_a_no_speech_error(monkeypatch, tmp_path):
     monkeypatch.setattr(dictate.urllib.request, "urlopen", fail_request)
     with pytest.raises(dictate.DictationNoSpeechError, match="empty transcript"):
         dictate._host_agent_request("/api/agent/transcribe", {}, timeout_sec=1)
+
+
+def test_host_request_reads_legacy_token_during_rollback_window(monkeypatch, tmp_path):
+    standard = tmp_path / "Library" / "Application Support" / "Yulu" / "mcp-token.json"
+    legacy_root = tmp_path / ".config" / "yulu"
+    legacy_root.mkdir(parents=True)
+    (legacy_root / "mcp-token.json").write_text(
+        json.dumps({"token": "rollback-token"}), encoding="utf-8"
+    )
+    observed = {}
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return b'{"ok":true,"transcript":"hello"}'
+
+    def fake_open(request, timeout):
+        observed["authorization"] = request.get_header("Authorization")
+        return FakeResponse()
+
+    monkeypatch.setattr(dictate, "MCP_TOKEN_PATH", standard)
+    monkeypatch.setattr(dictate, "LEGACY_READ_ONLY_DATA_DIR", legacy_root)
+    monkeypatch.setattr(dictate.urllib.request, "urlopen", fake_open)
+
+    result = dictate._host_agent_request(
+        "/api/agent/transcribe", {}, timeout_sec=1
+    )
+
+    assert result["ok"] is True
+    assert observed["authorization"] == "Bearer rollback-token"
 
 
 def _write_silent_wav(path: Path, *, seconds: float = 1.0, rate: int = 16000) -> None:

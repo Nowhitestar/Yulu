@@ -253,7 +253,17 @@ def test_shell_authenticates_host_and_capture_uses_stable_runtime_paths():
     assert "Int.random(in: 49152...65535)" in shell
     assert 'process.env.YULU_HOST_NONCE ?? null' in host
 
-    assert 'HOME.appendingPathComponent("Movies/Yulu")' in capture
+    for name in (
+        "YULU_MEDIA_LIBRARY_DIR",
+        "YULU_APPLICATION_SUPPORT_DIR",
+        "YULU_IPC_DIR",
+        "YULU_LOG_DIR",
+    ):
+        assert name in capture
+    assert 'SOCKET_PATH = IPC_DIR.appendingPathComponent("audio_daemon.sock")' in capture
+    assert 'LOG_PATH = LOGS_DIR.appendingPathComponent("audio_daemon.log")' in capture
+    assert "for configPath in CONFIG_READ_PATHS" in capture
+    assert "func configuredRecordingDirectory(_ raw: String) -> URL?" in capture
     assert 'ProcessInfo.processInfo.environment["YULU_SCRIPT_DIR"]' in capture
     assert 'appendingPathComponent("Contents/Resources/runtime/yulu/scripts"' in capture
 
@@ -274,6 +284,51 @@ def test_shell_propagates_the_standard_path_contract_to_both_runtimes():
     assert "applicationPaths.environment" in shell
     assert "hostEnvironment.merge" in shell
     assert "captureEnvironment.merge" in shell
+
+
+def test_native_capture_companions_use_standard_paths_with_legacy_config_reads():
+    status_agent = (SCRIPTS / "status_agent.swift").read_text(encoding="utf-8")
+    recorder_status = (SCRIPTS / "recorder_status.swift").read_text(encoding="utf-8")
+    meeting_prompt = (SCRIPTS / "meeting_prompt.swift").read_text(encoding="utf-8")
+
+    for source in (status_agent, recorder_status, meeting_prompt):
+        assert "YULU_APPLICATION_SUPPORT_DIR" in source
+        assert "YULU_LEGACY_READ_ONLY_DATA_DIR" in source
+        assert "CONFIG_READ_PATHS" in source
+
+    for name in ("YULU_IPC_DIR", "YULU_LOG_DIR", "YULU_MEDIA_LIBRARY_DIR"):
+        assert name in status_agent
+    assert 'PID_FILE = "\\(IPC_DIR)/status_agent.pid"' in status_agent
+    assert 'LOG_FILE = "\\(LOGS_DIR)/status_agent.log"' in status_agent
+    assert 'IPC_SOCKET_PATH = "\\(IPC_DIR)/status_agent.sock"' in status_agent
+    assert 'static let socketPath = "\\(IPC_DIR)/audio_daemon.sock"' in status_agent
+    assert 'let socketPath = "\\(IPC_DIR)/audio_daemon.sock"' in recorder_status
+    assert "func configuredRecordingDirectory(_ raw: String) -> String?" in status_agent
+
+
+def test_native_capture_rejects_unsafe_media_aliases_and_request_overrides():
+    capture = (SCRIPTS / "audio_daemon.swift").read_text(encoding="utf-8")
+    status_agent = (SCRIPTS / "status_agent.swift").read_text(encoding="utf-8")
+
+    for source in (capture, status_agent):
+        assert "func canonicalDirectory(" in source
+        assert "func pathsOverlap(" in source
+        assert "func safeMediaDirectory(" in source
+        assert "resolvingSymlinksInPath()" in source
+    assert "func safeRecordingSubdirectory(" in capture
+    assert 'resp = ["error":"unsafe_output_dir"]' in capture
+    assert 'outputDir = URL(fileURLWithPath: dir)' not in capture
+
+
+def test_native_capture_anchors_media_directory_at_recording_start():
+    capture = (SCRIPTS / "audio_daemon.swift").read_text(encoding="utf-8")
+
+    assert "class AnchoredRecordingDirectory" in capture
+    assert "Darwin.openat(" in capture
+    assert "O_DIRECTORY | O_NOFOLLOW" in capture
+    assert "Darwin.unlinkat(" in capture
+    assert 'CommandLine.arguments.contains("--path-contract-self-test")' in capture
+    assert "root swap unexpectedly created external audio" in capture
 
 
 def test_shell_path_contract_reads_legacy_media_without_using_developer_home(tmp_path: Path):

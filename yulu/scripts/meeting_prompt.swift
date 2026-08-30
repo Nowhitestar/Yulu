@@ -1,12 +1,42 @@
 import Cocoa
 
+let HOME_DIR = FileManager.default.homeDirectoryForCurrentUser.path
+
+func environmentDirectory(_ name: String, fallback: String) -> String {
+    guard let raw = ProcessInfo.processInfo.environment[name],
+          raw.hasPrefix("/"),
+          !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        return fallback
+    }
+    return (raw as NSString).standardizingPath
+}
+
+let DURABLE_DATA_DIR = environmentDirectory(
+    "YULU_APPLICATION_SUPPORT_DIR",
+    fallback: "\(HOME_DIR)/Library/Application Support/Yulu"
+)
+let LEGACY_READ_ONLY_DATA_DIR = environmentDirectory(
+    "YULU_LEGACY_READ_ONLY_DATA_DIR",
+    fallback: "\(HOME_DIR)/.config/yulu"
+)
+let CONFIG_READ_PATHS = [
+    "\(DURABLE_DATA_DIR)/config.json",
+    "\(LEGACY_READ_ONLY_DATA_DIR)/config.json",
+]
+
+func configData() -> Data? {
+    for path in CONFIG_READ_PATHS {
+        if let data = FileManager.default.contents(atPath: path) { return data }
+    }
+    return nil
+}
+
 enum AppLanguage: String {
     case zh, en
 }
 
 func readAppLanguage() -> AppLanguage {
-    let url = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".config/yulu/config.json")
-    guard let data = try? Data(contentsOf: url),
+    guard let data = configData(),
           let raw = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
           let ui = raw["ui"] as? [String: Any],
           let value = ui["language"] as? String,
@@ -46,8 +76,7 @@ struct PromptTheme {
     let red: NSColor
 
     static func load() -> PromptTheme {
-        let url = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".config/yulu/config.json")
-        guard let data = try? Data(contentsOf: url),
+        guard let data = configData(),
               let raw = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let ui = raw["ui"] as? [String: Any],
               let theme = ui["theme"] as? [String: Any] else {

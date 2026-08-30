@@ -18,13 +18,54 @@ let stableCaptionCharacterLimit = 160
 let partialCaptionCharacterLimit = 120
 let captionLayoutCharacterLimit = 240
 
+let HOME_DIR = FileManager.default.homeDirectoryForCurrentUser.path
+
+func environmentDirectory(_ name: String, fallback: String) -> String {
+    guard let raw = ProcessInfo.processInfo.environment[name],
+          raw.hasPrefix("/"),
+          !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        return fallback
+    }
+    return (raw as NSString).standardizingPath
+}
+
+let DURABLE_DATA_DIR = environmentDirectory(
+    "YULU_APPLICATION_SUPPORT_DIR",
+    fallback: "\(HOME_DIR)/Library/Application Support/Yulu"
+)
+let IPC_DIR = environmentDirectory(
+    "YULU_IPC_DIR",
+    fallback: "\(HOME_DIR)/Library/Caches/Yulu"
+)
+let LEGACY_READ_ONLY_DATA_DIR = environmentDirectory(
+    "YULU_LEGACY_READ_ONLY_DATA_DIR",
+    fallback: "\(HOME_DIR)/.config/yulu"
+)
+let CONFIG_READ_PATHS = [
+    "\(DURABLE_DATA_DIR)/config.json",
+    "\(LEGACY_READ_ONLY_DATA_DIR)/config.json",
+]
+
+func configData() -> Data? {
+    for path in CONFIG_READ_PATHS {
+        if let data = FileManager.default.contents(atPath: path) { return data }
+    }
+    return nil
+}
+
+func applicationData(_ filename: String) -> Data? {
+    for root in [DURABLE_DATA_DIR, LEGACY_READ_ONLY_DATA_DIR] {
+        if let data = FileManager.default.contents(atPath: "\(root)/\(filename)") { return data }
+    }
+    return nil
+}
+
 enum AppLanguage: String {
     case zh, en
 }
 
 func readAppLanguage() -> AppLanguage {
-    let url = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".config/yulu/config.json")
-    guard let data = try? Data(contentsOf: url),
+    guard let data = configData(),
           let raw = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
           let ui = raw["ui"] as? [String: Any],
           let value = ui["language"] as? String,
@@ -1014,8 +1055,7 @@ final class AppDel: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     func loadTargetLanguage() -> String {
-        let url = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".config/yulu/config.json")
-        guard let data = try? Data(contentsOf: url),
+        guard let data = configData(),
               let raw = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let transcription = raw["transcription"] as? [String: Any],
               let dictation = transcription["dictation"] as? [String: Any],
@@ -1056,8 +1096,7 @@ final class AppDel: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     func readMcpToken() -> String? {
-        let url = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".config/yulu/mcp-token.json")
-        guard let data = try? Data(contentsOf: url),
+        guard let data = applicationData("mcp-token.json"),
               let raw = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let token = raw["token"] as? String,
               !token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
@@ -1203,7 +1242,7 @@ final class AppDel: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     func audioDaemonStatus() -> [String: Any]? {
-        let socketPath = NSHomeDirectory() + "/.config/yulu/audio_daemon.sock"
+        let socketPath = "\(IPC_DIR)/audio_daemon.sock"
         let fd = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
         if fd < 0 { return nil }
         defer { Darwin.close(fd) }

@@ -4,13 +4,16 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import ipaddress
 import json
 import os
 import re
+import shlex
 import shutil
 import signal
 import socket
+import stat
 import subprocess
 import sys
 import tempfile
@@ -23,27 +26,32 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
+from application_paths import (
+    CONFIG_PATH,
+    CONFIG_READ_PATHS,
+    DURABLE_DATA_DIR,
+    IPC_DIR,
+    LEGACY_READ_ONLY_DATA_DIR,
+    MEDIA_LIBRARY_DIR,
+)
 
-def _resolve_runtime_dir() -> Path:
-    try:
-        from yulu_platform.macos.path_resolver import MacOSPathResolver
 
-        return MacOSPathResolver().runtime_dir()
-    except Exception:
-        return Path.home() / ".config" / "yulu"
-
-
-CONFIG_DIR = _resolve_runtime_dir()
-CONFIG_PATH = CONFIG_DIR / "config.json"
-AUDIO_SOCKET = CONFIG_DIR / "audio_daemon.sock"
-STATUS_AGENT_SOCKET = CONFIG_DIR / "status_agent.sock"
-MCP_TOKEN_PATH = CONFIG_DIR / "mcp-token.json"
-PROMPTS_DB = CONFIG_DIR / "prompts.sqlite"
-VOCAB_DB = CONFIG_DIR / "vocab.sqlite"
-DICTATION_DIR = CONFIG_DIR / "dictation"
-STATE_PATH = DICTATION_DIR / "state.json"
-HISTORY_PATH = DICTATION_DIR / "history.jsonl"
-LEGACY_REALTIME_PID_PATH = DICTATION_DIR / "realtime.pid"
+CONFIG_DIR = DURABLE_DATA_DIR
+AUDIO_SOCKET = IPC_DIR / "audio_daemon.sock"
+STATUS_AGENT_SOCKET = IPC_DIR / "status_agent.sock"
+MCP_TOKEN_PATH = DURABLE_DATA_DIR / "mcp-token.json"
+PROMPTS_DB = DURABLE_DATA_DIR / "prompts.sqlite"
+VOCAB_DB = DURABLE_DATA_DIR / "vocab.sqlite"
+DICTATION_DIR = MEDIA_LIBRARY_DIR / "Dictation"
+LEGACY_DICTATION_MEDIA_DIR = Path.home() / "Movies" / "Yulu" / "Dictation"
+DICTATION_STATE_DIR = DURABLE_DATA_DIR / "dictation"
+STATE_PATH = DICTATION_STATE_DIR / "state.json"
+HISTORY_PATH = DICTATION_STATE_DIR / "history.jsonl"
+LEGACY_REALTIME_PID_PATH = LEGACY_READ_ONLY_DATA_DIR / "dictation" / "realtime.pid"
+LEGACY_REALTIME_CLEANUP_CLAIMS_DIR = DICTATION_STATE_DIR / "legacy-realtime-cleanup"
+LEGACY_MEDIA_MIGRATION_MANIFEST_PATH = DICTATION_STATE_DIR / "legacy-media-migration-v1.json"
+LEGACY_MEDIA_MIGRATION_VERSION = 1
+MEDIA_COPY_CHUNK_BYTES = 1024 * 1024
 DEFAULT_PROMPT_SLUG = "dictation-cleanup"
 DEFAULT_TRANSLATE_PROMPT_SLUG = "dictation-translate"
 DEFAULT_UI_BASE_URL = "http://127.0.0.1:7777"
@@ -114,6 +122,407 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def _fsync_directory(path: Path) -> None:
+    try:
+        fd = os.open(path, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(fd)
+    except OSError:
+        pass
+    finally:
+        os.close(fd)
+
+
+def _open_directory_anchor(path: Path, *, label: str, create: bool = False) -> tuple[int, os.stat_result]:
+    if create:
+        path.mkdir(mode=0o700, parents=True, exist_ok=True)
+    try:
+        fd = os.open(
+            path,
+            os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0),
+        )
+    except OSError as exc:
+        raise DictationError(f"unsafe {label}: {path}") from exc
+    metadata = os.fstat(fd)
+    if not stat.S_ISDIR(metadata.st_mode):
+        os.close(fd)
+        raise DictationError(f"unsafe {label}: {path}")
+    try:
+        _require_directory_anchor(path, metadata, label=label)
+    except Exception:
+        os.close(fd)
+        raise
+    return fd, metadata
+
+
+def _require_directory_anchor(path: Path, metadata: os.stat_result, *, label: str) -> None:
+    try:
+        current = path.stat(follow_symlinks=False)
+    except OSError as exc:
+        raise DictationError(f"{label} root changed during migration: {path}") from exc
+    if (
+        not stat.S_ISDIR(current.st_mode)
+        or current.st_dev != metadata.st_dev
+        or current.st_ino != metadata.st_ino
+    ):
+        raise DictationError(f"{label} root changed during migration: {path}")
+
+
+def _regular_media_metadata_at(directory_fd: int, name: str, *, label: str) -> os.stat_result:
+    try:
+        metadata = os.stat(
+            name,
+            dir_fd=directory_fd,
+            follow_symlinks=False,
+        )
+    except OSError as exc:
+        raise DictationError(f"unsafe {label}: {name}") from exc
+    if not stat.S_ISREG(metadata.st_mode):
+        raise DictationError(f"unsafe {label}: {name}")
+    return metadata
+
+
+def _optional_regular_media_metadata_at(
+    directory_fd: int,
+    name: str,
+    *,
+    label: str,
+) -> os.stat_result | None:
+    try:
+        metadata = os.stat(
+            name,
+            dir_fd=directory_fd,
+            follow_symlinks=False,
+        )
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        raise DictationError(f"unsafe {label}: {name}") from exc
+    if not stat.S_ISREG(metadata.st_mode):
+        raise DictationError(f"unsafe {label}: {name}")
+    return metadata
+
+
+def _media_identity(metadata: os.stat_result) -> dict[str, int]:
+    return {
+        "device": metadata.st_dev,
+        "inode": metadata.st_ino,
+        "size": metadata.st_size,
+        "mtime_ns": metadata.st_mtime_ns,
+        "ctime_ns": metadata.st_ctime_ns,
+    }
+
+
+def _hash_regular_media_at(directory_fd: int, name: str, *, label: str) -> str:
+    digest = hashlib.sha256()
+    try:
+        fd = os.open(
+            name,
+            os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+            dir_fd=directory_fd,
+        )
+    except OSError as exc:
+        raise DictationError(f"unsafe {label}: {name}") from exc
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise DictationError(f"unsafe {label}: {name}")
+        with os.fdopen(fd, "rb") as handle:
+            fd = -1
+            while chunk := handle.read(MEDIA_COPY_CHUNK_BYTES):
+                digest.update(chunk)
+    finally:
+        if fd >= 0:
+            os.close(fd)
+    return digest.hexdigest()
+
+
+def _stream_legacy_media_to_stage(
+    source_directory_fd: int,
+    target_directory_fd: int,
+    source_name: str,
+    expected_source: os.stat_result,
+) -> tuple[str, str, os.stat_result, os.stat_result]:
+    for _attempt in range(100):
+        staged_name = f".{source_name}.{os.getpid()}.{time.time_ns()}.migration"
+        source_fd = -1
+        target_fd = -1
+        try:
+            target_fd = os.open(
+                staged_name,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+                0o600,
+                dir_fd=target_directory_fd,
+            )
+        except FileExistsError:
+            continue
+        try:
+            source_fd = os.open(
+                source_name,
+                os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+                dir_fd=source_directory_fd,
+            )
+            opened_source = os.fstat(source_fd)
+            if (
+                not stat.S_ISREG(opened_source.st_mode)
+                or _media_identity(opened_source) != _media_identity(expected_source)
+            ):
+                raise DictationError(
+                    f"legacy dictation media changed during migration: {source_name}"
+                )
+            digest = hashlib.sha256()
+            with os.fdopen(source_fd, "rb") as source_handle, os.fdopen(
+                target_fd,
+                "wb",
+            ) as target_handle:
+                source_fd = -1
+                target_fd = -1
+                while chunk := source_handle.read(MEDIA_COPY_CHUNK_BYTES):
+                    digest.update(chunk)
+                    target_handle.write(chunk)
+                target_handle.flush()
+                os.fsync(target_handle.fileno())
+                final_source = os.fstat(source_handle.fileno())
+            if _media_identity(final_source) != _media_identity(opened_source):
+                raise DictationError(
+                    f"legacy dictation media changed during migration: {source_name}"
+                )
+            staged_metadata = _regular_media_metadata_at(
+                target_directory_fd,
+                staged_name,
+                label="staged legacy dictation media",
+            )
+            return staged_name, digest.hexdigest(), final_source, staged_metadata
+        except Exception:
+            try:
+                os.unlink(staged_name, dir_fd=target_directory_fd)
+            except OSError:
+                pass
+            raise
+        finally:
+            if source_fd >= 0:
+                os.close(source_fd)
+            if target_fd >= 0:
+                os.close(target_fd)
+    raise DictationError(f"unable to stage legacy dictation media: {source_name}")
+
+
+def _load_legacy_media_manifest(
+    path: Path | None,
+    *,
+    legacy_dir: Path,
+    media_dir: Path,
+) -> dict[str, Any]:
+    empty = {
+        "version": LEGACY_MEDIA_MIGRATION_VERSION,
+        "legacy_dir": str(legacy_dir),
+        "media_dir": str(media_dir),
+        "sources": {},
+    }
+    if path is None:
+        return empty
+    payload = _load_json(path)
+    if (
+        payload.get("version") != LEGACY_MEDIA_MIGRATION_VERSION
+        or payload.get("legacy_dir") != str(legacy_dir)
+        or payload.get("media_dir") != str(media_dir)
+        or not isinstance(payload.get("sources"), dict)
+    ):
+        return empty
+    return payload
+
+
+def _write_legacy_media_manifest(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    fd, staged = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            fd = -1
+            json.dump(payload, handle, ensure_ascii=False, separators=(",", ":"))
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(staged, path)
+        _fsync_directory(path.parent)
+    finally:
+        if fd >= 0:
+            os.close(fd)
+        try:
+            os.unlink(staged)
+        except FileNotFoundError:
+            pass
+
+
+def migrate_legacy_dictation_media(
+    *,
+    legacy_dir: Path = LEGACY_READ_ONLY_DATA_DIR / "dictation",
+    media_dir: Path | None = None,
+    manifest_path: Path | None = None,
+) -> list[Path]:
+    """Copy legacy WAVs into the Media Library without changing rollback data."""
+    media_dir = media_dir or LEGACY_DICTATION_MEDIA_DIR
+    if not legacy_dir.exists():
+        return []
+    source_fd, source_root_metadata = _open_directory_anchor(
+        legacy_dir,
+        label="legacy dictation source",
+    )
+    try:
+        target_fd, target_metadata = _open_directory_anchor(
+            media_dir,
+            label="Media Library",
+            create=True,
+        )
+    except Exception:
+        os.close(source_fd)
+        raise
+    try:
+        migrated: list[Path] = []
+        manifest = _load_legacy_media_manifest(
+            manifest_path,
+            legacy_dir=legacy_dir,
+            media_dir=media_dir,
+        )
+        manifest_sources = manifest["sources"]
+        source_names = sorted(name for name in os.listdir(source_fd) if name.endswith(".wav"))
+        for source_name in source_names:
+            source_metadata = _regular_media_metadata_at(
+                source_fd,
+                source_name,
+                label="legacy dictation media",
+            )
+            recorded = manifest_sources.get(source_name)
+            if isinstance(recorded, dict) and recorded.get("source") == _media_identity(source_metadata):
+                destination_name = recorded.get("destination")
+                if isinstance(destination_name, str) and destination_name:
+                    destination_metadata = _optional_regular_media_metadata_at(
+                        target_fd,
+                        destination_name,
+                        label="Dictation Media Library entry",
+                    )
+                    if (
+                        destination_metadata is not None
+                        and recorded.get("destination_identity")
+                        == _media_identity(destination_metadata)
+                    ):
+                        migrated.append(media_dir / destination_name)
+                        continue
+            _require_directory_anchor(
+                legacy_dir,
+                source_root_metadata,
+                label="legacy dictation source",
+            )
+            _require_directory_anchor(media_dir, target_metadata, label="Media Library")
+            source = Path(source_name)
+            (
+                staged_name,
+                full_digest,
+                final_source_metadata,
+                staged_metadata,
+            ) = _stream_legacy_media_to_stage(
+                source_fd, target_fd, source_name, source_metadata
+            )
+            digest = full_digest[:12]
+            primary_name = source_name
+            destination_name = primary_name
+            expected_destination_file: tuple[int, int, int] | None = None
+            try:
+                while True:
+                    _require_directory_anchor(media_dir, target_metadata, label="Media Library")
+                    destination_metadata = _optional_regular_media_metadata_at(
+                        target_fd,
+                        destination_name,
+                        label="Dictation Media Library entry",
+                    )
+                    if destination_metadata is not None:
+                        if _hash_regular_media_at(
+                            target_fd,
+                            destination_name,
+                            label="Dictation Media Library entry",
+                        ) == full_digest:
+                            expected_destination_file = (
+                                destination_metadata.st_dev,
+                                destination_metadata.st_ino,
+                                destination_metadata.st_size,
+                            )
+                            break
+                        if destination_name == primary_name:
+                            destination_name = f"{source.stem}.legacy-{digest}{source.suffix}"
+                            continue
+                        raise DictationError(
+                            f"Dictation Media Library conflict: {destination_name}"
+                        )
+                    try:
+                        os.link(
+                            staged_name,
+                            destination_name,
+                            src_dir_fd=target_fd,
+                            dst_dir_fd=target_fd,
+                            follow_symlinks=False,
+                        )
+                    except FileExistsError:
+                        continue
+                    published_metadata = _regular_media_metadata_at(
+                        target_fd,
+                        destination_name,
+                        label="Dictation Media Library entry",
+                    )
+                    if (
+                        published_metadata.st_dev != staged_metadata.st_dev
+                        or published_metadata.st_ino != staged_metadata.st_ino
+                        or published_metadata.st_size != staged_metadata.st_size
+                    ):
+                        raise DictationError(
+                            f"Dictation Media Library entry changed during migration: {destination_name}"
+                        )
+                    expected_destination_file = (
+                        published_metadata.st_dev,
+                        published_metadata.st_ino,
+                        published_metadata.st_size,
+                    )
+                    os.fsync(target_fd)
+                    break
+            finally:
+                os.unlink(staged_name, dir_fd=target_fd)
+            _require_directory_anchor(media_dir, target_metadata, label="Media Library")
+            destination_metadata = _regular_media_metadata_at(
+                target_fd,
+                destination_name,
+                label="Dictation Media Library entry",
+            )
+            if (
+                (
+                    destination_metadata.st_dev,
+                    destination_metadata.st_ino,
+                    destination_metadata.st_size,
+                )
+                != expected_destination_file
+                or _hash_regular_media_at(
+                    target_fd,
+                    destination_name,
+                    label="Dictation Media Library entry",
+                )
+                != full_digest
+            ):
+                raise DictationError(
+                    f"Dictation Media Library entry changed during migration: {destination_name}"
+                )
+            migrated.append(media_dir / destination_name)
+            manifest_sources[source_name] = {
+                "source": _media_identity(final_source_metadata),
+                "destination": destination_name,
+                "destination_identity": _media_identity(destination_metadata),
+                "sha256": full_digest,
+            }
+            if manifest_path is not None:
+                _write_legacy_media_manifest(manifest_path, manifest)
+        return migrated
+    finally:
+        os.close(target_fd)
+        os.close(source_fd)
+
+
 def append_history(result: dict[str, Any], *, history_path: Path | None = None) -> None:
     text = str(result.get("text") or "").strip()
     if not text:
@@ -169,11 +578,21 @@ def _socket_send(socket_path: Path, payload: dict[str, Any], *, timeout: float =
 
 
 def _config() -> dict[str, Any]:
-    return _load_json(CONFIG_PATH)
+    candidates = (CONFIG_PATH, *(path for path in CONFIG_READ_PATHS if path != CONFIG_PATH))
+    for path in candidates:
+        if path.exists():
+            return _load_json(path)
+    return {}
+
+
+def _host_token_document() -> dict[str, Any]:
+    if MCP_TOKEN_PATH.exists():
+        return _load_json(MCP_TOKEN_PATH)
+    return _load_json(LEGACY_READ_ONLY_DATA_DIR / "mcp-token.json")
 
 
 def _host_agent_request(path: str, payload: dict[str, Any], *, timeout_sec: float) -> dict[str, Any]:
-    token_doc = _load_json(MCP_TOKEN_PATH)
+    token_doc = _host_token_document()
     token = str(token_doc.get("token") or "").strip()
     if not token:
         raise DictationError("Yulu Host token is unavailable")
@@ -363,7 +782,12 @@ def glossary_hint(*, vocab_db: Path = VOCAB_DB, limit: int = 400) -> str:
 
 
 def _state() -> dict[str, Any]:
-    return _load_json(STATE_PATH)
+    path = STATE_PATH
+    if not path.exists():
+        legacy = LEGACY_READ_ONLY_DATA_DIR / "dictation" / "state.json"
+        if legacy.exists():
+            path = legacy
+    return _load_json(path)
 
 
 def _now() -> str:
@@ -382,14 +806,115 @@ def _is_dictation_audio_path(value: Any) -> bool:
         return text.startswith(str(DICTATION_DIR))
 
 
+def _read_legacy_realtime_pid_record() -> tuple[bytes, os.stat_result] | None:
+    try:
+        fd = os.open(
+            LEGACY_REALTIME_PID_PATH,
+            os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+        )
+    except OSError:
+        return None
+    try:
+        metadata = os.fstat(fd)
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > 64:
+            return None
+        record = os.read(fd, 65)
+        return (record, metadata) if len(record) <= 64 else None
+    except OSError:
+        return None
+    finally:
+        os.close(fd)
+
+
+def _claim_legacy_realtime_cleanup(record: bytes, metadata: os.stat_result) -> bool:
+    try:
+        LEGACY_REALTIME_CLEANUP_CLAIMS_DIR.mkdir(
+            mode=0o700,
+            parents=True,
+            exist_ok=True,
+        )
+        generation = ":".join(
+            str(value)
+            for value in (
+                metadata.st_dev,
+                metadata.st_ino,
+                metadata.st_uid,
+                metadata.st_mtime_ns,
+                metadata.st_ctime_ns,
+            )
+        ).encode("ascii")
+        claim_path = LEGACY_REALTIME_CLEANUP_CLAIMS_DIR / hashlib.sha256(
+            record + b"\0" + generation
+        ).hexdigest()
+        fd = os.open(
+            claim_path,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+            0o600,
+        )
+    except FileExistsError:
+        return False
+    except OSError:
+        return False
+    try:
+        try:
+            os.fsync(fd)
+        except OSError:
+            pass
+    finally:
+        os.close(fd)
+    _fsync_directory(LEGACY_REALTIME_CLEANUP_CLAIMS_DIR)
+    return True
+
+
+def _legacy_realtime_sidecar_matches(pid: int, metadata: os.stat_result) -> bool:
+    if metadata.st_uid != os.getuid():
+        return False
+    try:
+        result = subprocess.run(
+            ["ps", "-p", str(pid), "-o", "uid=", "-o", "lstart=", "-o", "command="],
+            capture_output=True,
+            text=True,
+            timeout=1,
+            check=False,
+        )
+        if result.returncode != 0:
+            return False
+        fields = result.stdout.strip().split(None, 6)
+        if len(fields) != 7 or int(fields[0]) != os.getuid():
+            return False
+        started_at = datetime.strptime(
+            " ".join(fields[1:6]),
+            "%a %b %d %H:%M:%S %Y",
+        ).timestamp()
+        if started_at > metadata.st_mtime + 2 or metadata.st_mtime - started_at > 30:
+            return False
+        argv = shlex.split(fields[6])
+        expected_script = Path(__file__).with_name("realtime_transcribe.py").resolve(strict=False)
+        if len(argv) < 3 or Path(argv[1]).expanduser().resolve(strict=False) != expected_script:
+            return False
+        if "Dictation" not in argv:
+            return False
+        reason_index = argv.index("--unsubscribe-reason")
+        return argv[reason_index + 1] == "dictation_stopped"
+    except (OSError, ValueError, IndexError, subprocess.SubprocessError):
+        return False
+
+
 def cleanup_legacy_realtime_sidecar(*, wait: bool = True) -> None:
     """Stop a stale pre-Agent-native sidecar left by an older installation."""
-    if not LEGACY_REALTIME_PID_PATH.exists():
+    loaded = _read_legacy_realtime_pid_record()
+    if loaded is None:
         return
+    record, metadata = loaded
     try:
-        pid = int(LEGACY_REALTIME_PID_PATH.read_text(encoding="utf-8").strip())
-    except Exception:
-        LEGACY_REALTIME_PID_PATH.unlink(missing_ok=True)
+        pid = int(record.decode("utf-8").strip())
+    except (UnicodeDecodeError, ValueError):
+        return
+    if pid <= 1 or pid == os.getpid():
+        return
+    if not _legacy_realtime_sidecar_matches(pid, metadata):
+        return
+    if not _claim_legacy_realtime_cleanup(record, metadata):
         return
 
     def alive() -> bool:
@@ -401,13 +926,7 @@ def cleanup_legacy_realtime_sidecar(*, wait: bool = True) -> None:
             pass
         except Exception:
             pass
-        try:
-            os.kill(pid, 0)
-            return True
-        except ProcessLookupError:
-            return False
-        except Exception:
-            return False
+        return _legacy_realtime_sidecar_matches(pid, metadata)
 
     try:
         if alive():
@@ -429,7 +948,6 @@ def cleanup_legacy_realtime_sidecar(*, wait: bool = True) -> None:
                             pass
     except Exception:
         pass
-    LEGACY_REALTIME_PID_PATH.unlink(missing_ok=True)
 
 
 def start_recording(
@@ -445,6 +963,9 @@ def start_recording(
     target_bundle_id: str = "",
     target_app_name: str = "",
 ) -> dict[str, Any]:
+    migrate_legacy_dictation_media(
+        manifest_path=LEGACY_MEDIA_MIGRATION_MANIFEST_PATH,
+    )
     status = _socket_send(AUDIO_SOCKET, {"action": "status"}, timeout=2)
     if status.get("recording"):
         raise DictationError(f"audio_daemon already recording: {status.get('file') or '<unknown>'}")
@@ -1005,7 +1526,7 @@ def send_voice_chat(
     open_console: bool = True,
 ) -> dict[str, Any]:
     host_origin = _validated_voice_chat_origin(base_url)
-    token_doc = _load_json(MCP_TOKEN_PATH)
+    token_doc = _host_token_document()
     token = str(token_doc.get("token") or "").strip()
     if not token:
         raise DictationError("Yulu Host token is unavailable")

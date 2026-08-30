@@ -124,6 +124,17 @@ def test_probe_recording_dir_never_raises():
     assert cap.status in {Status.USABLE, Status.PRESENT_BUT_UNVERIFIED, Status.ABSENT}
 
 
+def test_llm_probe_reads_legacy_config_only_as_fallback(monkeypatch, tmp_path):
+    standard = tmp_path / "Library" / "Application Support" / "Yulu" / "config.json"
+    legacy = tmp_path / ".config" / "yulu" / "config.json"
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text('{"llm":{"command":["hermes"]}}', encoding="utf-8")
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path / "isolated-home"))
+    monkeypatch.setattr(probes, "CONFIG_READ_PATHS", (standard, legacy), raising=False)
+
+    assert probes._load_llm_command() == ["hermes"]
+
+
 def test_resolve_on_login_path_uses_launchagent_fallback_before_shell(monkeypatch):
     calls = []
 

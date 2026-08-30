@@ -36,7 +36,10 @@ done
 SCRIPT_DIR="$(cd "$(dirname "$SOURCE")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
-CONFIG_DIR="$HOME/.config/yulu"
+CONFIG_DIR="${YULU_APPLICATION_SUPPORT_DIR:-$HOME/Library/Application Support/Yulu}"
+IPC_DIR="${YULU_IPC_DIR:-$HOME/Library/Caches/Yulu}"
+LOGS_DIR="${YULU_LOG_DIR:-$HOME/Library/Logs/Yulu}"
+LEGACY_READ_ONLY_DIR="${YULU_LEGACY_READ_ONLY_DATA_DIR:-$HOME/.config/yulu}"
 LAUNCH_AGENTS_DIR="$HOME/Library/LaunchAgents"
 
 # Colors
@@ -182,30 +185,22 @@ cmd_status() {
     fi
     echo
     info "audio_daemon socket:"
-    if [[ -S "$CONFIG_DIR/audio_daemon.sock" ]]; then
+    if [[ -S "$IPC_DIR/audio_daemon.sock" ]]; then
         local resp
-        resp=$(echo '{"action":"status"}' | nc -w 2 -U "$CONFIG_DIR/audio_daemon.sock" 2>/dev/null || true)
+        resp=$(echo '{"action":"status"}' | nc -w 2 -U "$IPC_DIR/audio_daemon.sock" 2>/dev/null || true)
         if [[ -n "$resp" ]]; then
             echo "$resp" | python3 -m json.tool 2>/dev/null || echo "$resp"
         else
             warn "socket exists but no response"
         fi
     else
-        warn "socket not found at $CONFIG_DIR/audio_daemon.sock"
+        warn "socket not found at $IPC_DIR/audio_daemon.sock"
     fi
     echo
     info "Recent recordings:"
     local rec_dir
-    rec_dir=$(python3 -c "
-import json
-from pathlib import Path
-try:
-    cfg = json.loads(Path.home().joinpath('.config/yulu/config.json').read_text())
-    print(cfg.get('audio', {}).get('output_dir', ''))
-except Exception:
-    pass
-" 2>/dev/null)
-    rec_dir="${rec_dir/#\~/$HOME}"
+    rec_dir=$(PYTHONPATH="$SCRIPT_DIR:${PYTHONPATH:-}" python3 -c \
+        "from application_paths import MEDIA_LIBRARY_DIR; print(MEDIA_LIBRARY_DIR)" 2>/dev/null)
     if [[ -n "$rec_dir" && -d "$rec_dir" ]]; then
         echo "  $rec_dir"
         ls -lt "$rec_dir"/*.wav 2>/dev/null | head -5 | awk '{print "    "$NF" ("$5" bytes)"}'
@@ -229,17 +224,17 @@ cmd_version() {
 
 cmd_logs() {
     local name="${1:-audio_daemon}"
-    local log_path="$CONFIG_DIR/${name}.log"
+    local log_path="$LOGS_DIR/${name}.log"
     if [[ ! -f "$log_path" ]]; then
-        # Try alternative paths used by some daemons.
-        local alt="$HOME/Library/Logs/yulu/${name}.log"
+        # Rollback compatibility: old logs remain readable but are never written.
+        local alt="$LEGACY_READ_ONLY_DIR/${name}.log"
         if [[ -f "$alt" ]]; then
             log_path="$alt"
         else
             err "No log file at $log_path or $alt"
             echo "Available logs:"
-            ls "$CONFIG_DIR"/*.log 2>/dev/null
-            ls "$HOME/Library/Logs/yulu"/*.log 2>/dev/null
+            ls "$LOGS_DIR"/*.log 2>/dev/null
+            ls "$LEGACY_READ_ONLY_DIR"/*.log 2>/dev/null
             exit 1
         fi
     fi
@@ -282,17 +277,12 @@ cmd_repair_permissions() {
 cmd_where() {
     echo "Repo (code):       $REPO_DIR"
     echo "Config:            $CONFIG_DIR"
+    echo "IPC:               $IPC_DIR"
+    echo "Logs:              $LOGS_DIR"
     echo "LaunchAgents:      $LAUNCH_AGENTS_DIR/com.yulu.*.plist"
     local rec_dir
-    rec_dir=$(python3 -c "
-import json
-from pathlib import Path
-try:
-    cfg = json.loads(Path.home().joinpath('.config/yulu/config.json').read_text())
-    print(cfg.get('audio', {}).get('output_dir', '<unset>'))
-except Exception:
-    print('<config not readable>')
-" 2>/dev/null)
+    rec_dir=$(PYTHONPATH="$SCRIPT_DIR:${PYTHONPATH:-}" python3 -c \
+        "from application_paths import MEDIA_LIBRARY_DIR; print(MEDIA_LIBRARY_DIR)" 2>/dev/null)
     echo "Recordings:        $rec_dir"
     echo "Yulu.app:          $REPO_DIR/yulu/scripts/Yulu.app"
 }

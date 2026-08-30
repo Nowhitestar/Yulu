@@ -31,6 +31,7 @@ import subprocess
 from pathlib import Path
 
 from yulu_platform.base import PermissionModel
+from yulu_platform.macos.path_resolver import MacOSPathResolver
 
 # Platform-neutral status vocabulary the ABC promises (never a raw TCC verdict).
 _GRANTED = "granted"
@@ -53,8 +54,11 @@ _TOKEN_TO_RESET_SERVICE = {
 }
 
 # The daemon control-channel socket and the audio daemon's bundle identifier.
-_SOCKET_SUBPATH = ".config/yulu/audio_daemon.sock"
 _BUNDLE_ID = "com.yulu.audiodaemon"
+
+
+def _daemon_socket_path() -> Path:
+    return MacOSPathResolver().application_paths().ipc_dir / "audio_daemon.sock"
 
 
 class MacOSPermissionModel(PermissionModel):
@@ -110,7 +114,7 @@ class MacOSPermissionModel(PermissionModel):
         the read-only ``{"action":"status"}`` probe (threat T-02-08: no other
         action is sent). Never raises; a missing socket or bad reply → None.
         """
-        sock_path = Path.home() / _SOCKET_SUBPATH
+        sock_path = _daemon_socket_path()
         if not sock_path.exists():
             return None
         try:

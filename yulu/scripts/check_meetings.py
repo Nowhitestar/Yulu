@@ -16,7 +16,7 @@ import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-CONFIG_PATH = Path.home() / ".config" / "yulu" / "config.json"
+from application_paths import CONFIG_PATH, CONFIG_READ_PATHS
 
 STABLE_FAILURE_REASONS = {
     "runtime_missing",
@@ -38,10 +38,13 @@ class CalendarSourceError(RuntimeError):
 
 
 def load_config():
-    if not CONFIG_PATH.exists():
+    path = CONFIG_PATH if CONFIG_PATH.exists() else next(
+        (candidate for candidate in CONFIG_READ_PATHS if candidate.exists()), None
+    )
+    if path is None:
         print(f"Config not found at {CONFIG_PATH}", file=sys.stderr)
         sys.exit(1)
-    with open(CONFIG_PATH) as f:
+    with open(path) as f:
         return json.load(f)
 
 

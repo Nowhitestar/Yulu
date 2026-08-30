@@ -29,6 +29,20 @@ def test_runtime_paths_keep_runtime_in_durable_data_and_models_in_standard_child
     assert paths["model"] == models_dir / runtime.MODEL_NAME
 
 
+def test_cli_defaults_to_standard_durable_and_models_roots(monkeypatch):
+    observed = {}
+    monkeypatch.setattr(runtime, "status", lambda config_dir, *, models_dir=None: (
+        observed.update(config_dir=config_dir, models_dir=models_dir)
+        or {"installed": False}
+    ))
+
+    assert runtime.main(["status"]) == 0
+    assert observed == {
+        "config_dir": runtime.DURABLE_DATA_DIR,
+        "models_dir": runtime.MODELS_DIR,
+    }
+
+
 def test_status_requires_both_runtime_and_all_int8_model_files(monkeypatch, tmp_path):
     paths = create_complete_runtime(tmp_path)
     monkeypatch.setattr(runtime, "_runtime_pack_ok", lambda pack, _definition: pack == paths["pack"])

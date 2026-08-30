@@ -327,6 +327,48 @@ def test_collect_report_includes_host_agent_connection_diagnostics(tmp_path, mon
     assert report["agent_connections"] == expected
 
 
+def test_collect_report_routes_socket_search_and_ui_log_to_standard_roots(tmp_path, monkeypatch):
+    doctor = load_doctor()
+    observed = {}
+    monkeypatch.setattr(doctor, "_yulu_processes", lambda: [])
+    monkeypatch.setattr(doctor, "_git_info", lambda _root: {"is_repo": True})
+    monkeypatch.setattr(doctor, "_install_info", lambda _root: {"present": False})
+    monkeypatch.setattr(doctor, "_check_command", lambda name, args=None: {
+        "name": name, "ok": False, "path": "",
+    })
+    def socket_status(path):
+        observed["socket"] = path
+        return {"exists": False}
+
+    def search_index(path):
+        observed["search"] = path
+        return {"ok": False}
+
+    def yulu_ui(_script, path):
+        observed["logs"] = path
+        return {"healthz_ok": False}
+
+    monkeypatch.setattr(doctor, "_socket_status", socket_status)
+    monkeypatch.setattr(doctor, "check_search_index", search_index)
+    monkeypatch.setattr(doctor, "check_yulu_ui", yulu_ui)
+    monkeypatch.setattr(doctor, "_host_capabilities", lambda *_args: {})
+    durable = tmp_path / "Library" / "Application Support" / "Yulu"
+
+    doctor.collect_report(
+        source_root=ROOT,
+        runtime_root=tmp_path,
+        legacy_root=tmp_path / "legacy",
+        config_dir=doctor.DEFAULT_CONFIG_DIR,
+        application_data_dir=durable,
+    )
+
+    assert observed == {
+        "socket": doctor.DEFAULT_IPC_DIR / "audio_daemon.sock",
+        "search": durable,
+        "logs": doctor.DEFAULT_LOGS_DIR,
+    }
+
+
 def test_human_doctor_distinguishes_current_readiness_from_history(capsys):
     doctor = load_doctor()
     report = {

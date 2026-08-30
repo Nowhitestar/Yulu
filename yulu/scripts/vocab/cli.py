@@ -10,11 +10,13 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Optional
 
+from application_paths import CONFIG_READ_PATHS, DURABLE_DATA_DIR
+
 from .db import VocabRepo, Scope, Source, open_db
 from .seed import seed_from_current, restore_defaults
 
 
-DEFAULT_DB = Path.home() / ".config" / "yulu" / "vocab.sqlite"
+DEFAULT_DB = DURABLE_DATA_DIR / "vocab.sqlite"
 
 
 def _word_to_dict(w) -> dict:
@@ -151,8 +153,8 @@ def _cmd_import(args: argparse.Namespace, repo: VocabRepo) -> int:
 
 
 def _load_config_replacements() -> Optional[dict[str, str]]:
-    config = Path.home() / ".config" / "yulu" / "config.json"
-    if not config.exists():
+    config = next((path for path in CONFIG_READ_PATHS if path.exists()), None)
+    if config is None:
         return None
     try:
         data = json.loads(config.read_text(encoding="utf-8"))

@@ -46,7 +46,7 @@ function parseStatus(stdout: string, label: string): DaemonStatus | null {
 export class LaunchctlClient {
   constructor(
     private readonly launchAgentsDir: string,
-    private readonly statusAgentPidFile = join(homedir(), ".config", "yulu", "status_agent.pid"),
+    private readonly statusAgentPidFile = join(homedir(), "Library", "Caches", "Yulu", "status_agent.pid"),
   ) {}
 
   private plist(label: string): string {

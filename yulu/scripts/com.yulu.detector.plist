@@ -19,10 +19,10 @@
     <true/>
 
     <key>StandardOutPath</key>
-    <string>__HOME__/.config/yulu/detector.log</string>
+    <string>__HOME__/Library/Logs/Yulu/detector.log</string>
 
     <key>StandardErrorPath</key>
-    <string>__HOME__/.config/yulu/detector.log</string>
+    <string>__HOME__/Library/Logs/Yulu/detector.log</string>
 
     <key>EnvironmentVariables</key>
     <dict>

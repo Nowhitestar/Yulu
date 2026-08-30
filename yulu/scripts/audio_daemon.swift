@@ -14,12 +14,99 @@ import CoreAudio
 import AudioToolbox
 
 let HOME = FileManager.default.homeDirectoryForCurrentUser
-let CONFIG_DIR = HOME.appendingPathComponent(".config/yulu")
-let SOCKET_PATH = CONFIG_DIR.appendingPathComponent("audio_daemon.sock")
-let SOCKET_LOCK_PATH = CONFIG_DIR.appendingPathComponent(".audio_daemon.lock")
-let STATE_PATH = CONFIG_DIR.appendingPathComponent(".state.json")
-let PID_PATH = CONFIG_DIR.appendingPathComponent(".audio_daemon.pid")
-let LOG_PATH = CONFIG_DIR.appendingPathComponent("audio_daemon.log")
+
+func realDirectoryURL(_ path: String) -> URL? {
+    var buffer = [CChar](repeating: 0, count: Int(PATH_MAX))
+    let resolved = buffer.withUnsafeMutableBufferPointer { output in
+        path.withCString { input in
+            Darwin.realpath(input, output.baseAddress)
+        }
+    }
+    guard resolved != nil else { return nil }
+    return URL(fileURLWithPath: String(cString: buffer), isDirectory: true)
+}
+
+func canonicalDirectory(_ raw: String) -> URL? {
+    let value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !value.isEmpty, !value.contains("\0") else { return nil }
+    let expanded = value.hasPrefix("~/")
+        ? HOME.appendingPathComponent(String(value.dropFirst(2)), isDirectory: true).path
+        : value
+    guard expanded.hasPrefix("/") else { return nil }
+    let manager = FileManager.default
+    var existing = URL(fileURLWithPath: expanded, isDirectory: true).standardizedFileURL
+    var missing: [String] = []
+    while true {
+        var isDirectory: ObjCBool = false
+        if manager.fileExists(atPath: existing.path, isDirectory: &isDirectory) {
+            guard isDirectory.boolValue,
+                  var resolved = realDirectoryURL(existing.path) else { return nil }
+            for component in missing {
+                resolved.appendPathComponent(component, isDirectory: true)
+            }
+            return resolved
+        }
+        if (try? manager.destinationOfSymbolicLink(atPath: existing.path)) != nil {
+            return nil
+        }
+        let parent = existing.deletingLastPathComponent()
+        guard parent.path != existing.path else { return nil }
+        missing.insert(existing.lastPathComponent, at: 0)
+        existing = parent
+    }
+}
+
+func normalizedPathComponents(_ url: URL) -> [String] {
+    url.standardizedFileURL.pathComponents
+        .filter { $0 != "/" }
+        .map { $0.precomposedStringWithCanonicalMapping.lowercased(with: Locale(identifier: "en_US_POSIX")) }
+}
+
+func isSameOrNested(_ candidate: URL, under root: URL) -> Bool {
+    let path = normalizedPathComponents(candidate)
+    let base = normalizedPathComponents(root)
+    return path.count >= base.count && Array(path.prefix(base.count)) == base
+}
+
+func pathsOverlap(_ left: URL, _ right: URL) -> Bool {
+    isSameOrNested(left, under: right) || isSameOrNested(right, under: left)
+}
+
+func environmentDirectory(_ name: String, fallback: URL) -> URL {
+    guard let raw = ProcessInfo.processInfo.environment[name],
+          raw.hasPrefix("/"),
+          !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        return fallback
+    }
+    return URL(fileURLWithPath: raw, isDirectory: true).standardizedFileURL
+}
+
+let DURABLE_DATA_DIR = environmentDirectory(
+    "YULU_APPLICATION_SUPPORT_DIR",
+    fallback: HOME.appendingPathComponent("Library/Application Support/Yulu", isDirectory: true)
+)
+let IPC_DIR = environmentDirectory(
+    "YULU_IPC_DIR",
+    fallback: HOME.appendingPathComponent("Library/Caches/Yulu", isDirectory: true)
+)
+let LOGS_DIR = environmentDirectory(
+    "YULU_LOG_DIR",
+    fallback: HOME.appendingPathComponent("Library/Logs/Yulu", isDirectory: true)
+)
+let LEGACY_READ_ONLY_DATA_DIR = environmentDirectory(
+    "YULU_LEGACY_READ_ONLY_DATA_DIR",
+    fallback: HOME.appendingPathComponent(".config/yulu", isDirectory: true)
+)
+let CONFIG_DIR = DURABLE_DATA_DIR
+let CONFIG_READ_PATHS = [
+    DURABLE_DATA_DIR.appendingPathComponent("config.json"),
+    LEGACY_READ_ONLY_DATA_DIR.appendingPathComponent("config.json"),
+]
+let SOCKET_PATH = IPC_DIR.appendingPathComponent("audio_daemon.sock")
+let SOCKET_LOCK_PATH = IPC_DIR.appendingPathComponent(".audio_daemon.lock")
+let STATE_PATH = DURABLE_DATA_DIR.appendingPathComponent(".state.json")
+let PID_PATH = IPC_DIR.appendingPathComponent(".audio_daemon.pid")
+let LOG_PATH = LOGS_DIR.appendingPathComponent("audio_daemon.log")
 let DEFAULT_SILENCE_THRESHOLD: Float = 0.01
 let DEFAULT_SILENCE_SEC: TimeInterval = 300
 let SAMPLE_RATE: UInt32 = 48000
@@ -35,7 +122,11 @@ var MIC_ERROR = ""
 var SYS_FORMAT_LOGGED = false
 
 func defaultRecordingDir() -> URL {
-    HOME.appendingPathComponent("Movies/Yulu")
+    let candidate = HOME.appendingPathComponent("Movies/Yulu", isDirectory: true)
+    guard let safe = safeMediaDirectory(candidate.path) else {
+        fatalError("no safe Yulu Media Library path")
+    }
+    return safe
 }
 
 func runtimeScriptDir() -> URL {
@@ -54,20 +145,48 @@ func runtimeScriptDir() -> URL {
     return bundle.deletingLastPathComponent()
 }
 
-func loadRecordingDir() -> URL {
-    let configPath = CONFIG_DIR.appendingPathComponent("config.json")
-    guard let data = try? Data(contentsOf: configPath),
-          let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-          let audio = json["audio"] as? [String: Any],
-          let raw = audio["output_dir"] as? String,
-          !raw.isEmpty else {
-        return defaultRecordingDir()
+func configuredRecordingDirectory(_ raw: String) -> URL? {
+    safeMediaDirectory(raw)
+}
+
+func safeMediaDirectory(_ raw: String) -> URL? {
+    guard let candidate = canonicalDirectory(raw) else { return nil }
+    let operationalRoots = [DURABLE_DATA_DIR, IPC_DIR, LOGS_DIR, LEGACY_READ_ONLY_DATA_DIR]
+    for root in operationalRoots {
+        guard let canonicalRoot = canonicalDirectory(root.path) else { return nil }
+        if pathsOverlap(candidate, canonicalRoot) { return nil }
     }
-    let path = raw.hasPrefix("~/") ? HOME.appendingPathComponent(String(raw.dropFirst(2))).path : raw
-    return URL(fileURLWithPath: path)
+    return candidate
+}
+
+func loadRecordingDir() -> URL {
+    if let raw = ProcessInfo.processInfo.environment["YULU_MEDIA_LIBRARY_DIR"],
+       let configured = safeMediaDirectory(raw) {
+        return configured
+    }
+    for configPath in CONFIG_READ_PATHS {
+        guard let data = try? Data(contentsOf: configPath),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let audio = json["audio"] as? [String: Any],
+              let raw = audio["output_dir"] as? String,
+              let configured = configuredRecordingDirectory(raw) else {
+            continue
+        }
+        return configured
+    }
+    return defaultRecordingDir()
 }
 
 let RECORDING_DIR = loadRecordingDir()
+
+func safeRecordingSubdirectory(_ raw: String) -> URL? {
+    guard let candidate = canonicalDirectory(raw),
+          let recordingRoot = canonicalDirectory(RECORDING_DIR.path),
+          isSameOrNested(candidate, under: recordingRoot) else {
+        return nil
+    }
+    return candidate
+}
 
 var logFile: FileHandle?
 func log(_ msg: String) {
@@ -103,18 +222,168 @@ func launchMeetingSilencePrompt() -> Bool {
 
 // ─── WAV 写入器 ───────────────────────────────────────
 
+final class AnchoredRecordingDirectory {
+    let rootURL: URL
+    let targetURL: URL
+    private let rootFD: Int32
+    private let targetFD: Int32
+    private let rootMetadata: stat
+    private let targetMetadata: stat
+
+    init?(root: URL, target: URL) {
+        let approvedRoot = root
+        let approvedTarget = target
+        guard isSameOrNested(approvedTarget, under: approvedRoot),
+              let openedRoot = Self.openOrCreateAbsoluteDirectory(approvedRoot) else {
+            return nil
+        }
+        var openedRootMetadata = stat()
+        guard Darwin.fstat(openedRoot, &openedRootMetadata) == 0 else {
+            Darwin.close(openedRoot)
+            return nil
+        }
+        let rootComponents = approvedRoot.pathComponents
+        let targetComponents = approvedTarget.pathComponents
+        let relativeComponents = Array(targetComponents.dropFirst(rootComponents.count))
+        guard let openedTarget = Self.openOrCreateRelativeDirectory(
+            parentFD: openedRoot,
+            components: relativeComponents
+        ) else {
+            Darwin.close(openedRoot)
+            return nil
+        }
+        var openedTargetMetadata = stat()
+        guard Darwin.fstat(openedTarget, &openedTargetMetadata) == 0,
+              Self.pathStillNamesDirectory(approvedRoot, metadata: openedRootMetadata),
+              Self.pathStillNamesDirectory(approvedTarget, metadata: openedTargetMetadata) else {
+            Darwin.close(openedTarget)
+            Darwin.close(openedRoot)
+            return nil
+        }
+        rootURL = approvedRoot
+        targetURL = approvedTarget
+        rootFD = openedRoot
+        targetFD = openedTarget
+        rootMetadata = openedRootMetadata
+        targetMetadata = openedTargetMetadata
+    }
+
+    deinit {
+        Darwin.close(targetFD)
+        Darwin.close(rootFD)
+    }
+
+    func createFile(named filename: String) -> (url: URL, handle: FileHandle)? {
+        guard !filename.isEmpty,
+              filename != ".",
+              filename != "..",
+              !filename.contains("/"),
+              stillAnchored() else {
+            return nil
+        }
+        let fd = filename.withCString {
+            Darwin.openat(
+                targetFD,
+                $0,
+                O_RDWR | O_CREAT | O_EXCL | O_NOFOLLOW,
+                mode_t(0o600)
+            )
+        }
+        guard fd >= 0 else { return nil }
+        guard stillAnchored() else {
+            Darwin.close(fd)
+            filename.withCString { _ = Darwin.unlinkat(targetFD, $0, 0) }
+            return nil
+        }
+        return (
+            targetURL.appendingPathComponent(filename, isDirectory: false),
+            FileHandle(fileDescriptor: fd, closeOnDealloc: true)
+        )
+    }
+
+    func removeFile(named filename: String) {
+        filename.withCString { _ = Darwin.unlinkat(targetFD, $0, 0) }
+    }
+
+    private func stillAnchored() -> Bool {
+        Self.pathStillNamesDirectory(rootURL, metadata: rootMetadata)
+            && Self.pathStillNamesDirectory(targetURL, metadata: targetMetadata)
+    }
+
+    private static func openOrCreateAbsoluteDirectory(_ url: URL) -> Int32? {
+        var directoryFD = Darwin.open("/", O_RDONLY | O_DIRECTORY | O_NOFOLLOW)
+        guard directoryFD >= 0 else { return nil }
+        for component in url.pathComponents where component != "/" {
+            guard let nextFD = openOrCreateDirectory(parentFD: directoryFD, name: component) else {
+                Darwin.close(directoryFD)
+                return nil
+            }
+            Darwin.close(directoryFD)
+            directoryFD = nextFD
+        }
+        return directoryFD
+    }
+
+    private static func openOrCreateRelativeDirectory(
+        parentFD: Int32,
+        components: [String]
+    ) -> Int32? {
+        var directoryFD = Darwin.dup(parentFD)
+        guard directoryFD >= 0 else { return nil }
+        for component in components {
+            guard component != ".", component != "..", !component.contains("/"),
+                  let nextFD = openOrCreateDirectory(parentFD: directoryFD, name: component) else {
+                Darwin.close(directoryFD)
+                return nil
+            }
+            Darwin.close(directoryFD)
+            directoryFD = nextFD
+        }
+        return directoryFD
+    }
+
+    private static func openOrCreateDirectory(parentFD: Int32, name: String) -> Int32? {
+        let flags = O_RDONLY | O_DIRECTORY | O_NOFOLLOW
+        var opened = name.withCString { Darwin.openat(parentFD, $0, flags) }
+        if opened < 0 && errno == ENOENT {
+            let created = name.withCString { Darwin.mkdirat(parentFD, $0, mode_t(0o700)) }
+            guard created == 0 || errno == EEXIST else { return nil }
+            opened = name.withCString { Darwin.openat(parentFD, $0, flags) }
+        }
+        return opened >= 0 ? opened : nil
+    }
+
+    private static func pathStillNamesDirectory(_ url: URL, metadata: stat) -> Bool {
+        var current = stat()
+        let result = url.path.withCString { Darwin.lstat($0, &current) }
+        return result == 0
+            && (current.st_mode & S_IFMT) == S_IFDIR
+            && current.st_dev == metadata.st_dev
+            && current.st_ino == metadata.st_ino
+    }
+}
+
 class WavWriter {
     let url: URL
+    private let directory: AnchoredRecordingDirectory
     private var handle: FileHandle?
     private var audioSize: UInt32 = 0
     private var lastHeaderPatch = Date.distantPast
     private let lock = NSLock()
 
-    init?(url: URL) {
-        self.url = url
+    init?(directory: AnchoredRecordingDirectory, filename: String) {
+        guard let created = directory.createFile(named: filename) else { return nil }
+        self.url = created.url
+        self.directory = directory
         // 82 bytes = RIFF(12) + fmt chunk(24) + LIST-INFO-ICMT chunk(38) + data header(8)
-        FileManager.default.createFile(atPath: url.path, contents: Data(repeating: 0, count: 82))
-        guard let h = try? FileHandle(forUpdating: url) else { return nil }
+        let h = created.handle
+        do {
+            try h.write(contentsOf: Data(repeating: 0, count: 82))
+        } catch {
+            try? h.close()
+            directory.removeFile(named: filename)
+            return nil
+        }
         self.handle = h
         patchHeader(sync: true)
     }
@@ -438,9 +707,14 @@ class AudioRecorder {
 
             let df = DateFormatter(); df.dateFormat = "yyyyMMdd_HHmmss"
             let fn = "\(title.components(separatedBy: .alphanumerics.inverted).joined())_\(df.string(from: Date())).wav"
-            let url = outputDirState.appendingPathComponent(fn)
-            try? FileManager.default.createDirectory(at: outputDirState, withIntermediateDirectories: true)
-            guard let w = WavWriter(url: url) else { return nil }
+            guard let directory = AnchoredRecordingDirectory(
+                root: RECORDING_DIR,
+                target: outputDirState
+            ), let w = WavWriter(directory: directory, filename: fn) else {
+                log("Recording directory changed or is unsafe: \(outputDirState.path)")
+                return nil
+            }
+            let url = w.url
             writer = w
             isRecordingState = true
             startTime = Date()
@@ -1869,7 +2143,12 @@ class SocketServer {
             // next meeting recording.
             let outputDir: URL
             if let dir = json["output_dir"] as? String, !dir.isEmpty {
-                outputDir = URL(fileURLWithPath: dir)
+                guard let safeOutputDir = safeRecordingSubdirectory(dir) else {
+                    resp = ["error":"unsafe_output_dir"]
+                    send(c, resp)
+                    return
+                }
+                outputDir = safeOutputDir
             } else {
                 outputDir = RECORDING_DIR
             }
@@ -1947,7 +2226,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var socketServer: SocketServer?
 
     func applicationDidFinishLaunching(_ n: Notification) {
-        try? FileManager.default.createDirectory(at: CONFIG_DIR, withIntermediateDirectories: true)
+        for directory in [DURABLE_DATA_DIR, IPC_DIR, LOGS_DIR, RECORDING_DIR] {
+            try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        }
         if !FileManager.default.fileExists(atPath: LOG_PATH.path) {
             FileManager.default.createFile(atPath: LOG_PATH.path, contents: nil)
         }
@@ -2042,6 +2323,47 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 }
 
 // ─── 入口 ──────────────────────────────────────────────
+
+if CommandLine.arguments.contains("--path-contract-self-test") {
+    let manager = FileManager.default
+    let testParent = manager.fileExists(atPath: "/private/tmp")
+        ? URL(fileURLWithPath: "/private/tmp", isDirectory: true)
+        : manager.temporaryDirectory.resolvingSymlinksInPath()
+    let testRoot = testParent
+        .appendingPathComponent("yulu-audio-path-contract-\(UUID().uuidString)", isDirectory: true)
+    let approved = testRoot.appendingPathComponent("approved", isDirectory: true)
+    let movedApproved = testRoot.appendingPathComponent("moved-approved", isDirectory: true)
+    let external = testRoot.appendingPathComponent("external", isDirectory: true)
+    try! manager.createDirectory(at: approved, withIntermediateDirectories: true)
+    try! manager.createDirectory(at: external, withIntermediateDirectories: true)
+    let cachedApprovedPath = canonicalDirectory(approved.path)!
+    guard let initialAnchor = AnchoredRecordingDirectory(
+        root: cachedApprovedPath,
+        target: cachedApprovedPath
+    ), let initialWriter = WavWriter(directory: initialAnchor, filename: "initial.wav") else {
+        fputs("path-contract self-test could not anchor approved root: \(cachedApprovedPath.path)\n", stderr)
+        try? manager.removeItem(at: testRoot)
+        exit(1)
+    }
+    initialWriter.finalize()
+    try! manager.moveItem(at: approved, to: movedApproved)
+    try! manager.createSymbolicLink(at: approved, withDestinationURL: external)
+
+    if let redirected = AnchoredRecordingDirectory(
+        root: cachedApprovedPath,
+        target: cachedApprovedPath
+    ) {
+        _ = WavWriter(directory: redirected, filename: "redirected.wav")
+    }
+    if manager.fileExists(atPath: external.appendingPathComponent("redirected.wav").path) {
+        fputs("root swap unexpectedly created external audio\n", stderr)
+        try? manager.removeItem(at: testRoot)
+        exit(1)
+    }
+    try? manager.removeItem(at: testRoot)
+    print("path-contract-self-test passed")
+    exit(0)
+}
 
 if CommandLine.arguments.contains("--self-test") {
     let socketTestRoot = FileManager.default.fileExists(atPath: "/private/tmp")

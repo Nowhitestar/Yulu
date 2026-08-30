@@ -46,10 +46,12 @@ function publishState(ctx: Pick<AppContext, "pubsub">, stateAfter: string) {
   }
 }
 
-async function readHistory(configDir: string) {
+async function readHistory(configDir: string, legacyReadOnlyDataDir: string, logsDir: string) {
   const rows = [
     ...await readHistoryJsonl(configDir),
-    ...await readHistoryLog(configDir),
+    ...await readHistoryJsonl(legacyReadOnlyDataDir),
+    ...await readHistoryLog(logsDir),
+    ...await readHistoryLog(legacyReadOnlyDataDir),
   ];
   const byId = new Map<string, HistoryItem>();
   for (const row of rows) byId.set(row.id, row);
@@ -168,7 +170,11 @@ function parseJsonObjects(raw: string): unknown[] {
 }
 
 export const recordingRouter = router({
-  history: publicProcedure.query(({ ctx }) => readHistory(ctx.paths.configDir)),
+  history: publicProcedure.query(({ ctx }) => readHistory(
+    ctx.paths.durableDataDir,
+    ctx.paths.legacyReadOnlyDataDir,
+    ctx.paths.logsDir,
+  )),
 
   state: publicProcedure.query(async ({ ctx }) => {
     try {

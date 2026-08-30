@@ -18,10 +18,10 @@
     <true/>
 
     <key>StandardOutPath</key>
-    <string>__HOME__/.config/yulu/scheduler.log</string>
+    <string>__HOME__/Library/Logs/Yulu/scheduler.log</string>
 
     <key>StandardErrorPath</key>
-    <string>__HOME__/.config/yulu/scheduler.log</string>
+    <string>__HOME__/Library/Logs/Yulu/scheduler.log</string>
 
     <key>EnvironmentVariables</key>
     <dict>

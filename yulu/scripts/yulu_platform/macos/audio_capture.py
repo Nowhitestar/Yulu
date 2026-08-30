@@ -31,7 +31,14 @@ class MacOSAudioCaptureController(AudioCaptureController):
     ) -> None:
         if platform.system() != "Darwin":
             raise RuntimeError("MacOSAudioCaptureController requires macOS")
-        self.socket_path = socket_path or Path.home() / ".config/yulu/audio_daemon.sock"
+        if socket_path is None:
+            from yulu_platform.macos.path_resolver import MacOSPathResolver
+
+            socket_path = (
+                MacOSPathResolver().application_paths().ipc_dir
+                / "audio_daemon.sock"
+            )
+        self.socket_path = socket_path
         self.timeout = timeout
         self._socket_send = socket_send
 

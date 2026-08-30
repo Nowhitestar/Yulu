@@ -172,7 +172,7 @@ setup_ui() {
     if [[ "$healthy" == true ]]; then
         ok "yulu_ui 健康检查通过：http://127.0.0.1:7777/"
     else
-        err "Yulu Host 未在 10 秒内响应 /healthz；查看 ~/.config/yulu/ui.log"
+        err "Yulu Host 未在 10 秒内响应 /healthz；查看 ~/Library/Logs/Yulu/ui.log"
         return 1
     fi
 }

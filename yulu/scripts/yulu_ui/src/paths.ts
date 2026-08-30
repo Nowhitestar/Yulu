@@ -256,7 +256,7 @@ const SCRIPT_DIR = locateScriptDir();
 // levels up — the same anchor version.py uses (REPO_DIR = parents[2]).
 const REPO_ROOT = resolve(SCRIPT_DIR, "..", "..");
 
-/** Resolve Host/Web paths while #163 still owns Capture, IPC, logs, and media. */
+/** Resolve Host/Web paths after Capture, IPC, logs, and media joined the standard contract. */
 export function resolveHostPaths(input: ApplicationDataPathInput = {}) {
   const application = resolveApplicationDataPaths(input);
   const homeDir = input.homeDir ?? homedir();
@@ -271,14 +271,14 @@ export function resolveHostPaths(input: ApplicationDataPathInput = {}) {
     searchDb:           join(durableDir, "search.sqlite"),
     hostDb:             join(durableDir, "host.sqlite"),
     agentTasksDir:      join(durableDir, "agent-tasks"),
-    recordingEventsDir: join(legacyDir, "recording-events"),
+    recordingEventsDir: join(durableDir, "recording-events"),
     agentQueueJson:     join(legacyDir, "agent-queue.json"),
     mcpTokenJson:       join(durableDir, "mcp-token.json"),
-    audioDaemonSock:    join(legacyDir, "audio_daemon.sock"),
-    statusAgentSock:    join(legacyDir, "status_agent.sock"),
-    uiLog:              join(legacyDir, "ui.log"),
-    uiPid:              join(legacyDir, "yulu_ui.pid"),
-    moviesDir:          join(homeDir, "Movies", "Yulu"),
+    audioDaemonSock:    join(application.ipcDir, "audio_daemon.sock"),
+    statusAgentSock:    join(application.ipcDir, "status_agent.sock"),
+    uiLog:              join(application.logsDir, "ui.log"),
+    uiPid:              join(application.ipcDir, "yulu_ui.pid"),
+    moviesDir:          application.mediaLibraryDir,
     launchAgentsDir:    join(homeDir, "Library", "LaunchAgents"),
     scriptDir:          SCRIPT_DIR,
     versionFile:        join(REPO_ROOT, "VERSION"),

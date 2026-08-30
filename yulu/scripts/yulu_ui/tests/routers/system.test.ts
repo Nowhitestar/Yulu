@@ -154,15 +154,21 @@ describe("system.dbStats", () => {
 });
 
 describe("system.logPaths", () => {
-  it("returns the 7 current yulu daemon log paths under configDir", async () => {
-    const ctx = { paths: { configDir: "/x/.config/yulu" } } as unknown as AppContext;
+  it("returns the current yulu daemon log paths under logsDir", async () => {
+    const ctx = { paths: { configDir: "/wrong/durable-root", logsDir: "/x/Library/Logs/Yulu" } } as unknown as AppContext;
     const caller = createCaller(systemRouter, ctx);
     const r = await caller.logPaths();
     expect(r).toHaveLength(6);
     expect(r.map((p: { name: string }) => p.name).sort()).toEqual(
       ["audiodaemon","calendar","detector","scheduler","statusagent","ui"]
     );
-    expect(r.every((p: { path: string }) => p.path.startsWith("/x/.config/yulu/"))).toBe(true);
-    expect(r.every((p: { path: string }) => p.path.endsWith(".log"))).toBe(true);
+    expect(r).toEqual([
+      { name: "audiodaemon", path: "/x/Library/Logs/Yulu/audio_daemon.log" },
+      { name: "statusagent", path: "/x/Library/Logs/Yulu/status_agent.log" },
+      { name: "scheduler", path: "/x/Library/Logs/Yulu/scheduler.log" },
+      { name: "detector", path: "/x/Library/Logs/Yulu/detector.log" },
+      { name: "calendar", path: "/x/Library/Logs/Yulu/calendar_services.log" },
+      { name: "ui", path: "/x/Library/Logs/Yulu/ui.log" },
+    ]);
   });
 });

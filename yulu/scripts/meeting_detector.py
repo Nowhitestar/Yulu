@@ -23,14 +23,21 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+from application_paths import (
+    CONFIG_PATH,
+    CONFIG_READ_PATHS,
+    DURABLE_DATA_DIR,
+    IPC_DIR,
+    LEGACY_READ_ONLY_DATA_DIR,
+    LOGS_DIR,
+)
 from state_store import is_recording_active as state_recording_active, load_state as load_recording_state
 
-CONFIG_DIR = Path.home() / ".config" / "yulu"
-CONFIG_PATH = CONFIG_DIR / "config.json"
+CONFIG_DIR = DURABLE_DATA_DIR
 STATE_PATH = CONFIG_DIR / ".detector_state.json"
 RECORDING_STATE_PATH = CONFIG_DIR / ".state.json"
-PID_PATH = CONFIG_DIR / ".detector.pid"
-LOG_PATH = CONFIG_DIR / "detector.log"
+PID_PATH = IPC_DIR / ".detector.pid"
+LOG_PATH = LOGS_DIR / "detector.log"
 SCRIPT_DIR = Path(__file__).resolve().parent
 
 DEFAULT_CONFIG = {
@@ -80,7 +87,7 @@ def log(msg):
     print(line, flush=True)
 
 
-AUDIO_DAEMON_SOCKET = Path.home() / ".config" / "yulu" / "audio_daemon.sock"
+AUDIO_DAEMON_SOCKET = IPC_DIR / "audio_daemon.sock"
 WINDOW_SCANNER = SCRIPT_DIR / "window_scanner"
 
 
@@ -159,10 +166,13 @@ def collect_windows(target_app_names=None):
 
 
 def load_config():
-    if not CONFIG_PATH.exists():
+    path = CONFIG_PATH if CONFIG_PATH.exists() else next(
+        (candidate for candidate in CONFIG_READ_PATHS if candidate.exists()), None
+    )
+    if path is None:
         return DEFAULT_CONFIG.copy()
     try:
-        with CONFIG_PATH.open() as f:
+        with path.open() as f:
             full = json.load(f)
     except Exception:
         return DEFAULT_CONFIG.copy()
@@ -172,10 +182,15 @@ def load_config():
 
 
 def load_state():
-    if not STATE_PATH.exists():
+    path = STATE_PATH
+    if not path.exists():
+        legacy = LEGACY_READ_ONLY_DATA_DIR / ".detector_state.json"
+        if legacy.exists():
+            path = legacy
+    if not path.exists():
         return {"prompted": {}}
     try:
-        return json.loads(STATE_PATH.read_text())
+        return json.loads(path.read_text())
     except Exception:
         return {"prompted": {}}
 
@@ -192,7 +207,7 @@ def is_recording_active():
             return True
     except Exception:
         pass
-    return (CONFIG_DIR / ".recording_pid").exists()
+    return (IPC_DIR / ".recording_pid").exists()
 
 
 def _osascript(script, timeout=3):
@@ -385,7 +400,7 @@ def run_daemon(args):
         log("meeting_detection disabled")
         return
 
-    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    PID_PATH.parent.mkdir(parents=True, exist_ok=True)
     PID_PATH.write_text(str(os.getpid()))
     interval = int(cfg.get("interval_sec", 10))
     stable_sec = int(cfg.get("stable_sec", 15))

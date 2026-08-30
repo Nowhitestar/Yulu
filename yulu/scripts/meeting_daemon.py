@@ -32,6 +32,14 @@ from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+from application_paths import (
+    CONFIG_PATH,
+    CONFIG_READ_PATHS,
+    DURABLE_DATA_DIR,
+    IPC_DIR,
+    LEGACY_READ_ONLY_DATA_DIR,
+    LOGS_DIR,
+)
 import meeting_actions
 from state_store import (
     load_state as load_recording_state,
@@ -46,13 +54,13 @@ from recording_lock import (
     RecordingBusy,
 )
 
-CONFIG_DIR = Path.home() / ".config" / "yulu"
-CONFIG_PATH = CONFIG_DIR / "config.json"
+CONFIG_DIR = DURABLE_DATA_DIR
 SCHEDULE_PATH = CONFIG_DIR / "schedule.json"
 STATE_PATH = CONFIG_DIR / ".state.json"
-SCHEDULER_PID = CONFIG_DIR / ".scheduler.pid"
+SCHEDULER_PID = IPC_DIR / ".scheduler.pid"
 MCP_TOKEN_PATH = CONFIG_DIR / "mcp-token.json"
 RECORDING_EVENTS_DIR = CONFIG_DIR / "recording-events"
+RECORDER_STATUS_LOG_PATH = LOGS_DIR / "recorder_status.log"
 SCRIPT_DIR = Path(__file__).resolve().parent
 
 DEFAULT_DURATION_MIN = 60
@@ -63,15 +71,23 @@ DEFAULT_DURATION_MIN = 60
 # ───────────────────────────────────────────────
 
 def load_config():
-    if not CONFIG_PATH.exists():
+    path = CONFIG_PATH if CONFIG_PATH.exists() else next(
+        (candidate for candidate in CONFIG_READ_PATHS if candidate.exists()), None
+    )
+    if path is None:
         print(f"Config not found at {CONFIG_PATH}", file=sys.stderr)
         sys.exit(1)
-    with open(CONFIG_PATH) as f:
+    with open(path) as f:
         return json.load(f)
 
 
 def _transcription_language(path: Path | None = None) -> str:
-    path = path or CONFIG_PATH
+    path = path or (
+        CONFIG_PATH if CONFIG_PATH.exists() else next(
+            (candidate for candidate in CONFIG_READ_PATHS if candidate.exists()),
+            CONFIG_PATH,
+        )
+    )
     try:
         config = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
@@ -87,7 +103,12 @@ def _agent_pipeline_auto_processing(path: Path | None = None) -> bool:
     The Host remains authoritative and returns a permanent policy result if its
     current config differs. Missing legacy keys retain the schema defaults.
     """
-    path = path or CONFIG_PATH
+    path = path or (
+        CONFIG_PATH if CONFIG_PATH.exists() else next(
+            (candidate for candidate in CONFIG_READ_PATHS if candidate.exists()),
+            CONFIG_PATH,
+        )
+    )
     try:
         config = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
@@ -109,7 +130,11 @@ def _recording_completed_payload(audio_path: str, title: str, language: str | No
 
 
 def _read_mcp_token(path: Path | None = None) -> str:
-    path = path or MCP_TOKEN_PATH
+    path = path or (
+        MCP_TOKEN_PATH
+        if MCP_TOKEN_PATH.exists()
+        else LEGACY_READ_ONLY_DATA_DIR / "mcp-token.json"
+    )
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
@@ -216,9 +241,14 @@ def _dispatch_recording_completed(audio_path: str, title: str, language: str | N
 
 
 def load_schedule():
-    if not SCHEDULE_PATH.exists():
+    path = SCHEDULE_PATH
+    if not path.exists():
+        legacy = LEGACY_READ_ONLY_DATA_DIR / "schedule.json"
+        if legacy.exists():
+            path = legacy
+    if not path.exists():
         return {"events": [], "meetings": []}
-    with open(SCHEDULE_PATH) as f:
+    with open(path) as f:
         data = json.load(f)
     data.setdefault("events", [])
     data.setdefault("meetings", [])
@@ -722,8 +752,8 @@ def _launch_status_window(title):
     if not status_bin.exists():
         print("⚠️ recorder_status 未编译，跳过浮窗")
         return
-    log_path = CONFIG_DIR / "recorder_status.log"
-    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    log_path = RECORDER_STATUS_LOG_PATH
+    log_path.parent.mkdir(parents=True, exist_ok=True)
     log_file = log_path.open("ab")
     proc = subprocess.Popen(
         [str(status_bin), title, str(STATE_PATH)],

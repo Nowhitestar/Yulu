@@ -16,7 +16,7 @@ SCRIPTS = ROOT / "yulu" / "scripts"
 
 def test_module_init_creates_search_db(tmp_path):
     """`python3 -m search.indexer init` creates schema_version=1 db at
-    the default location ($HOME/.config/yulu/search.sqlite)."""
+    the standard durable-data location."""
     env = {
         **os.environ,
         "HOME": str(tmp_path),
@@ -27,7 +27,7 @@ def test_module_init_creates_search_db(tmp_path):
         env=env, capture_output=True, text=True, timeout=10,
     )
     assert result.returncode == 0, result.stderr
-    db = tmp_path / ".config" / "yulu" / "search.sqlite"
+    db = tmp_path / "Library" / "Application Support" / "Yulu" / "search.sqlite"
     assert db.exists()
     conn = sqlite3.connect(str(db))
     try:

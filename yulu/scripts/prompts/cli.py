@@ -10,13 +10,15 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Optional
 
+from application_paths import DURABLE_DATA_DIR
+
 from .db import (
     PromptsRepo, Prompt, Category, Source, open_db,
 )
 from .seed import seed_from_current, restore_defaults
 
 
-DEFAULT_DB = Path.home() / ".config" / "yulu" / "prompts.sqlite"
+DEFAULT_DB = DURABLE_DATA_DIR / "prompts.sqlite"
 def _prompt_to_dict(p: Prompt) -> dict:
     d = asdict(p)
     d["category"] = p.category.value

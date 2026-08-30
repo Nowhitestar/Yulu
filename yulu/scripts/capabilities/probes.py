@@ -15,6 +15,8 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from application_paths import CONFIG_READ_PATHS
+
 from . import report
 from .report import Capability, Provenance, Status
 
@@ -99,7 +101,7 @@ def probe_recording_dir() -> Capability:
     except Exception as exc:
         return report.absent(f"path resolver unavailable: {exc}")
     try:
-        directory = Path(MacOSPathResolver().data_dir())
+        directory = MacOSPathResolver().application_paths().media_library_dir
         if directory.exists() and os.access(directory, os.W_OK):
             free = shutil.disk_usage(directory).free
             return Capability(Provenance.YULU_MANAGED, Status.USABLE, str(directory), f"free={free}")
@@ -115,7 +117,7 @@ def probe_recording_dir() -> Capability:
 
 def _load_llm_command(config_path: Path | None = None) -> list[str]:
     if config_path is None:
-        config_path = Path.home() / ".config" / "yulu" / "config.json"
+        config_path = next((path for path in CONFIG_READ_PATHS if path.exists()), CONFIG_READ_PATHS[0])
     try:
         cfg = json.loads(Path(config_path).read_text(encoding="utf-8"))
     except Exception:

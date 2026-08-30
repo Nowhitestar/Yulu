@@ -135,7 +135,12 @@ describe("recordingRouter", () => {
       ].join("\n"),
       "utf8",
     );
-    const ctx = { paths: { configDir: tempDir } } as unknown as AppContext;
+    const ctx = { paths: {
+      configDir: join(tempDir, "wrong-legacy-root"),
+      durableDataDir: tempDir,
+      legacyReadOnlyDataDir: join(tempDir, "legacy"),
+      logsDir: join(tempDir, "logs"),
+    } } as unknown as AppContext;
     const caller = createCaller(recordingRouter, ctx);
     const r = await caller.history();
     expect(r.map((item: { id: string }) => item.id)).toEqual(["two", "one"]);
@@ -149,8 +154,10 @@ describe("recordingRouter", () => {
 
   it("history() backfills successful dictation stops from the launcher log", async () => {
     tempDir = await mkdtemp(join(tmpdir(), "yulu-recording-history-"));
+    const logsDir = join(tempDir, "logs");
+    await mkdir(logsDir, { recursive: true });
     await writeFile(
-      join(tempDir, "status_agent_launcher.log"),
+      join(logsDir, "status_agent_launcher.log"),
       [
         '{',
         '  "text": "/tmp/Dictation_20260701_120000.wav",',
@@ -169,7 +176,12 @@ describe("recordingRouter", () => {
       ].join("\n"),
       "utf8",
     );
-    const ctx = { paths: { configDir: tempDir } } as unknown as AppContext;
+    const ctx = { paths: {
+      configDir: join(tempDir, "durable"),
+      durableDataDir: join(tempDir, "durable"),
+      legacyReadOnlyDataDir: join(tempDir, "legacy"),
+      logsDir,
+    } } as unknown as AppContext;
     const caller = createCaller(recordingRouter, ctx);
     const r = await caller.history();
     expect(r).toHaveLength(1);
@@ -178,5 +190,26 @@ describe("recordingRouter", () => {
       text: "hello from log",
       createdAt: "2026-07-01T12:00:00",
     });
+  });
+
+  it("history() keeps legacy dictation history readable during rollback", async () => {
+    tempDir = await mkdtemp(join(tmpdir(), "yulu-recording-history-"));
+    const legacyDir = join(tempDir, "legacy");
+    await mkdir(join(legacyDir, "dictation"), { recursive: true });
+    await writeFile(
+      join(legacyDir, "dictation", "history.jsonl"),
+      JSON.stringify({ id: "legacy", created_at: "2026-07-01T10:00:00", text: "旧听写" }),
+      "utf8",
+    );
+    const ctx = { paths: {
+      configDir: join(tempDir, "durable"),
+      durableDataDir: join(tempDir, "durable"),
+      legacyReadOnlyDataDir: legacyDir,
+      logsDir: join(tempDir, "logs"),
+    } } as unknown as AppContext;
+
+    const r = await createCaller(recordingRouter, ctx).history();
+
+    expect(r.map((item: { id: string }) => item.id)).toEqual(["legacy"]);
   });
 });

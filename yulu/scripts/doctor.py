@@ -21,11 +21,20 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
+from application_paths import (
+    DURABLE_DATA_DIR,
+    IPC_DIR,
+    LEGACY_READ_ONLY_DATA_DIR,
+    LOGS_DIR,
+)
+
 DEFAULT_SOURCE_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_RUNTIME_ROOT = Path.home() / ".yulu"
 DEFAULT_LEGACY_ROOT = Path.home() / ".openclaw/workspace/meeting-assistant/yulu"
-DEFAULT_CONFIG_DIR = Path.home() / ".config/yulu"
-DEFAULT_APPLICATION_DATA_DIR = Path.home() / "Library/Application Support/Yulu"
+DEFAULT_CONFIG_DIR = LEGACY_READ_ONLY_DATA_DIR
+DEFAULT_APPLICATION_DATA_DIR = DURABLE_DATA_DIR
+DEFAULT_IPC_DIR = IPC_DIR
+DEFAULT_LOGS_DIR = LOGS_DIR
 
 
 def check_host_tasks(config_dir: Path) -> dict[str, Any]:
@@ -821,7 +830,11 @@ def collect_report(
     ]
 
     config_path = config_dir / "config.json"
-    ui_report = check_yulu_ui(runtime_root / "yulu" / "scripts", config_dir)
+    uses_standard_contract = config_dir == DEFAULT_CONFIG_DIR
+    ui_report = check_yulu_ui(
+        runtime_root / "yulu" / "scripts",
+        DEFAULT_LOGS_DIR if uses_standard_contract else config_dir,
+    )
     agent_connections = (
         check_agent_connections()
         if ui_report.get("healthz_ok")
@@ -856,8 +869,11 @@ def collect_report(
         "config_exists": config_dir.exists(),
         "config_path_exists": config_path.exists(),
         "host_tasks": check_host_tasks(config_dir),
-        "socket": _socket_status(config_dir / "audio_daemon.sock"),
-        "search_index": check_search_index(config_dir),
+        "socket": _socket_status(
+            (DEFAULT_IPC_DIR if uses_standard_contract else config_dir)
+            / "audio_daemon.sock"
+        ),
+        "search_index": check_search_index(application_data_dir),
         # §5d fix (CONCERNS §5d, D-07): the UI check must look at the RUNTIME install, not the
         # source checkout — a production install (source_root != runtime_root) now reports the
         # installed UI dist honestly. When source_root == runtime_root (dev), behavior is unchanged.

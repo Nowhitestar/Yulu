@@ -62,7 +62,7 @@ def test_indexer_data_helper_follows_config(tmp_path, monkeypatch):
     custom = tmp_path / "MyCloudFolder" / "Yulu"
     _write_config(tmp_path, monkeypatch, custom)
 
-    assert indexer._resolve_data_dir() == MacOSPathResolver().data_dir()
+    assert indexer._resolve_data_dir() == MacOSPathResolver().application_paths().media_library_dir
     assert indexer._resolve_data_dir() == custom
     assert indexer._resolve_data_dir() != Path.home() / "Movies" / "Yulu"
 
@@ -76,7 +76,7 @@ def test_record_audio_fallback_follows_config(tmp_path, monkeypatch):
     custom = tmp_path / "MyCloudFolder" / "Yulu"
     _write_config(tmp_path, monkeypatch, custom)
 
-    assert record_audio._resolve_data_dir() == MacOSPathResolver().data_dir()
+    assert record_audio._resolve_data_dir() == MacOSPathResolver().application_paths().media_library_dir
     assert record_audio._resolve_data_dir() == custom
     # The old repo-relative fallback must be gone.
     assert "meeting-recordings" not in str(record_audio._resolve_data_dir())
@@ -95,27 +95,27 @@ def test_corpus_root_wired_to_data_helper():
 
 
 @darwin_only
-def test_search_db_path_routes_through_runtime_not_data(tmp_path, monkeypatch):
-    """SEARCH_DB_PATH resolves under runtime_dir() (== ~/.config/yulu), NEVER under
+def test_search_db_path_routes_through_standard_durable_not_data(tmp_path, monkeypatch):
+    """SEARCH_DB_PATH resolves under Application Support, NEVER under
     a configured data_dir() — the runtime/content split holds."""
     from yulu_platform.macos.path_resolver import MacOSPathResolver
 
     custom = tmp_path / "MyCloudFolder" / "Yulu"
-    cfg_dir = _write_config(tmp_path, monkeypatch, custom)
+    _write_config(tmp_path, monkeypatch, custom)
     resolver = MacOSPathResolver()
+    application = resolver.application_paths()
 
     # The runtime helper points at the locked runtime dir, not the content dir —
     # under the configured output_dir, runtime resolves to ~/.config/yulu, data to custom.
-    assert indexer._resolve_runtime_dir() == resolver.runtime_dir()
-    assert indexer._resolve_runtime_dir() == cfg_dir
-    assert indexer._resolve_runtime_dir() != resolver.data_dir()
-    # The module-level DB name is the search.sqlite under a .config/yulu runtime root
+    assert indexer._resolve_runtime_dir() == application.durable_data_dir
+    assert indexer._resolve_runtime_dir() != application.media_library_dir
+    # The module-level DB name is search.sqlite under Application Support
     # (frozen at import time), and crucially is NEVER under a configured content dir.
     assert indexer.SEARCH_DB_PATH.name == "search.sqlite"
-    assert indexer.SEARCH_DB_PATH.parent.name == "yulu"
-    assert indexer.SEARCH_DB_PATH.parent.parent.name == ".config"
+    assert indexer.SEARCH_DB_PATH.parent.name == "Yulu"
+    assert indexer.SEARCH_DB_PATH.parent.parent.name == "Application Support"
     assert custom not in indexer.SEARCH_DB_PATH.parents
-    assert resolver.data_dir() not in indexer.SEARCH_DB_PATH.parents
+    assert application.media_library_dir not in indexer.SEARCH_DB_PATH.parents
 
 
 # --- Import-fallback: resolver unavailable → historical literal, never crash -----
@@ -145,7 +145,7 @@ def test_indexer_data_helper_falls_back_when_resolver_unavailable(tmp_path, monk
 
 
 def test_indexer_runtime_helper_falls_back_when_resolver_unavailable(tmp_path, monkeypatch):
-    """The runtime helper falls back to ~/.config/yulu when the resolver is
+    """The runtime helper falls back to Application Support when the resolver is
     unimportable — machine-local default, never crashes."""
     import builtins
 
@@ -163,4 +163,24 @@ def test_indexer_runtime_helper_falls_back_when_resolver_unavailable(tmp_path, m
 
     monkeypatch.setattr(builtins, "__import__", blocked_import)
 
-    assert indexer._resolve_runtime_dir() == fake_home / ".config" / "yulu"
+    assert indexer._resolve_runtime_dir() == fake_home / "Library" / "Application Support" / "Yulu"
+
+
+def test_search_path_resolution_fails_closed_on_unsafe_authority(monkeypatch):
+    from yulu_platform.macos import path_resolver
+    from search import roots
+
+    class UnsafeResolver:
+        def application_paths(self):
+            raise RuntimeError("unsafe Yulu path alias")
+
+    monkeypatch.setattr(path_resolver, "MacOSPathResolver", UnsafeResolver)
+
+    with pytest.raises(RuntimeError, match="unsafe Yulu path alias"):
+        indexer._resolve_runtime_dir()
+    with pytest.raises(RuntimeError, match="unsafe Yulu path alias"):
+        indexer._resolve_data_dir()
+    with pytest.raises(RuntimeError, match="unsafe Yulu path alias"):
+        roots._resolve_runtime_dir()
+    with pytest.raises(RuntimeError, match="unsafe Yulu path alias"):
+        roots._resolve_data_dir()

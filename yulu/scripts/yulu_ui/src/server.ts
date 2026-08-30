@@ -84,9 +84,7 @@ export interface RunningServer {
 
 type RuntimePaths = typeof paths;
 
-export async function startServer(pathOverrides: Partial<RuntimePaths> = {}): Promise<RunningServer> {
-  const port = Number(process.env.YULU_UI_PORT ?? 7777);
-  const host = "127.0.0.1";
+export function resolveServerRuntimePaths(pathOverrides: Partial<RuntimePaths> = {}): RuntimePaths {
   const configDir = pathOverrides.configDir ?? paths.configDir;
   const hasConfigDirOverride = pathOverrides.configDir !== undefined;
   const legacyReadOnlyDataDir = pathOverrides.legacyReadOnlyDataDir ??
@@ -108,9 +106,19 @@ export async function startServer(pathOverrides: Partial<RuntimePaths> = {}): Pr
       (hasConfigDirOverride && pathOverrides.durableDataDir === undefined
         ? join(configDir, "agent-tasks")
         : join(pathOverrides.durableDataDir ?? paths.durableDataDir, "agent-tasks")),
-    recordingEventsDir: pathOverrides.recordingEventsDir ?? join(configDir, "recording-events"),
+    recordingEventsDir: pathOverrides.recordingEventsDir ??
+      (hasConfigDirOverride && pathOverrides.durableDataDir === undefined
+        ? join(configDir, "recording-events")
+        : join(pathOverrides.durableDataDir ?? paths.durableDataDir, "recording-events")),
     agentQueueJson: pathOverrides.agentQueueJson ?? join(configDir, "agent-queue.json"),
   } as RuntimePaths;
+  return runtimePaths;
+}
+
+export async function startServer(pathOverrides: Partial<RuntimePaths> = {}): Promise<RunningServer> {
+  const port = Number(process.env.YULU_UI_PORT ?? 7777);
+  const host = "127.0.0.1";
+  const runtimePaths = resolveServerRuntimePaths(pathOverrides);
   const launchAgents = runtimePaths.launchAgentsDir;
 
   const instanceLock = acquireHostInstanceLock(runtimePaths.configDir);
@@ -260,7 +268,10 @@ async function startLockedServer(
       configDir: runtimePaths.durableDataDir,
     }),
   });
-  const launchctl = new LaunchctlClient(launchAgents);
+  const launchctl = new LaunchctlClient(
+    launchAgents,
+    join(runtimePaths.ipcDir, "status_agent.pid"),
+  );
   const calendarSources = new CalendarSourceManager({
     config: configManager,
     adapters: createCalendarSourceAdapters({
@@ -333,7 +344,7 @@ async function startLockedServer(
     },
     defaultTargetLanguage: () => configManager.read().transcription.dictation.target_language || "English",
     defaultTranslationEnabled: false,
-    allowedRoots: [runtimePaths.moviesDir, join(runtimePaths.configDir, "dictation")],
+    allowedRoots: [runtimePaths.moviesDir],
   });
   try {
     const migration = migrateLegacyAgentQueue({
@@ -699,7 +710,7 @@ async function startLockedServer(
   });
 
   const logTailer = startLogTailer({
-    configDir: runtimePaths.configDir,
+    configDir: runtimePaths.logsDir,
     pubsub: appPubSub,
   });
 

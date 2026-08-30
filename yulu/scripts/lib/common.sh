@@ -223,6 +223,9 @@ install_plist() {
         return 1
     fi
 
+    mkdir -p "$HOME/Library/Logs/Yulu"
+    chmod 700 "$HOME/Library/Logs/Yulu"
+
     if [[ -f "$dest" ]]; then
         launchctl unload "$dest" 2>/dev/null || true
     fi

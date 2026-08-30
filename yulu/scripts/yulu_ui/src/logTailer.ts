@@ -1,11 +1,7 @@
 import { watch, type FSWatcher, existsSync, statSync, openSync, readSync, closeSync } from "node:fs";
 import { join } from "node:path";
 import type { PubSub, AppChannels } from "./pubsub.js";
-
-const DAEMON_SHORT_NAMES = [
-  "audiodaemon", "statusagent",
-  "scheduler", "detector", "calendar", "ui",
-] as const;
+import { YULU_DAEMON_LOG_SOURCES } from "./daemonLogs.js";
 
 const READ_CHUNK_SIZE = 64 * 1024;
 const ROTATION_POLL_MS = 250;
@@ -115,8 +111,8 @@ export function startLogTailer(opts: LogTailerOptions): LogTailer {
     });
   }
 
-  for (const shortName of DAEMON_SHORT_NAMES) {
-    const path = join(opts.configDir, `${shortName}.log`);
+  for (const { shortName, filename } of YULU_DAEMON_LOG_SOURCES) {
+    const path = join(opts.configDir, filename);
     if (!existsSync(path)) continue;
     try {
       const fd = openSync(path, "r");

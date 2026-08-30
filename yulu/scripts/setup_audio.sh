@@ -35,7 +35,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # State taken via env/arg, NOT monolith globals (Pitfall 5).
 UPGRADE_MODE="${UPGRADE_MODE:-false}"
 LAUNCH_AGENTS_DIR="${LAUNCH_AGENTS_DIR:-$HOME/Library/LaunchAgents}"
-CONFIG_DIR="${CONFIG_DIR:-$HOME/.config/yulu}"
+IPC_DIR="${YULU_IPC_DIR:-$HOME/Library/Caches/Yulu}"
 YULU_FORCE_TCC_RESET="${YULU_FORCE_TCC_RESET:-false}"
 
 setup_audio() {
@@ -124,7 +124,7 @@ setup_audio() {
     # explicit YULU_FORCE_TCC_RESET=true repair run.
     if [[ "$UPGRADE_MODE" == true ]]; then
         local existing
-        existing=$(echo '{"action":"status"}' | nc -w 2 -U "$CONFIG_DIR/audio_daemon.sock" 2>/dev/null || true)
+        existing=$(echo '{"action":"status"}' | nc -w 2 -U "$IPC_DIR/audio_daemon.sock" 2>/dev/null || true)
         if echo "$existing" | grep -q '"sysReady":true' && echo "$existing" | grep -q '"micReady":true'; then
             info "重载 daemon 让它跑新 binary（TCC 状态保留）..."
             pkill -f "Yulu.app/Contents/MacOS/audio_daemon" 2>/dev/null || true
@@ -147,7 +147,7 @@ setup_audio() {
                 sleep 3
             fi
             local after_restart
-            after_restart=$(echo '{"action":"status"}' | nc -w 2 -U "$CONFIG_DIR/audio_daemon.sock" 2>/dev/null || true)
+            after_restart=$(echo '{"action":"status"}' | nc -w 2 -U "$IPC_DIR/audio_daemon.sock" 2>/dev/null || true)
             if echo "$after_restart" | grep -q '"sysReady":true' && echo "$after_restart" | grep -q '"micReady":true'; then
                 ok "麦克风 + 屏幕录制权限已就绪；daemon 已重载"
             else
@@ -186,7 +186,7 @@ setup_audio() {
     open "$SCRIPT_DIR/Yulu.app"
     sleep 4
     local status
-    status=$(echo '{"action":"status"}' | nc -w 2 -U "$CONFIG_DIR/audio_daemon.sock" 2>/dev/null || true)
+    status=$(echo '{"action":"status"}' | nc -w 2 -U "$IPC_DIR/audio_daemon.sock" 2>/dev/null || true)
     if echo "$status" | grep -q '"sysReady":true' && echo "$status" | grep -q '"micReady":true'; then
         ok "Yulu 捕获权限正常"
     else

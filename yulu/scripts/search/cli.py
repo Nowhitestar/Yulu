@@ -20,16 +20,17 @@ from datetime import timedelta
 from pathlib import Path
 from typing import Optional
 
+from yulu_platform.macos.path_resolver import MacOSPathResolver
+
 # Import lazily where possible so help / --doctor / --reindex don't
 # pay the cost of opening the SQLite connection unless they need it.
 
-IPC_SOCKET_PATH = Path.home() / ".config" / "yulu" / "status_agent.sock"
+IPC_SOCKET_PATH = MacOSPathResolver().application_paths().ipc_dir / "status_agent.sock"
 
 
 def _resolved_ipc_socket_path() -> Path:
-    config_dir = os.environ.get("YULU_CONFIG_DIR")
-    if config_dir:
-        return Path(config_dir).expanduser() / "status_agent.sock"
+    if os.environ.get("YULU_IPC_DIR"):
+        return MacOSPathResolver().application_paths().ipc_dir / "status_agent.sock"
     return IPC_SOCKET_PATH
 
 _DURATION_RE = re.compile(r"^(?P<n>\d+)\s*(?P<unit>[smhdw])$")

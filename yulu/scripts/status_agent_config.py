@@ -13,9 +13,10 @@ import json
 import sys
 from pathlib import Path
 
-CONFIG_PATH = Path.home() / ".config" / "yulu" / "config.json"
-PID_PATH = Path.home() / ".config" / "yulu" / "status_agent.pid"
-IPC_SOCKET_PATH = Path.home() / ".config" / "yulu" / "status_agent.sock"
+from application_paths import CONFIG_PATH, CONFIG_READ_PATHS, IPC_DIR
+
+PID_PATH = IPC_DIR / "status_agent.pid"
+IPC_SOCKET_PATH = IPC_DIR / "status_agent.sock"
 
 DEFAULT_BLOCK = {
     "enabled": True,
@@ -49,8 +50,12 @@ _KEYCODES = {
 
 
 def _read_full_config() -> dict:
+    path = CONFIG_PATH if CONFIG_PATH.exists() else next(
+        (candidate for candidate in CONFIG_READ_PATHS if candidate.exists()),
+        CONFIG_PATH,
+    )
     try:
-        return json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+        return json.loads(path.read_text(encoding="utf-8"))
     except (FileNotFoundError, json.JSONDecodeError):
         return {}
 

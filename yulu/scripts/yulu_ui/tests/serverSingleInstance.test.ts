@@ -15,7 +15,8 @@ import { fileURLToPath } from "node:url";
 import Database from "better-sqlite3";
 import { HostStore } from "../src/hostStore.js";
 import { hostInstanceLockPath } from "../src/hostInstanceLock.js";
-import { startServer, type RunningServer } from "../src/server.js";
+import { resolveServerRuntimePaths, startServer, type RunningServer } from "../src/server.js";
+import { paths } from "../src/paths.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const roots: string[] = [];
@@ -70,6 +71,17 @@ afterEach(() => {
 });
 
 describe("server single-instance lifecycle", () => {
+  it("preserves the standard recording-event inbox without moving Host-owned legacy paths", () => {
+    const runtimePaths = resolveServerRuntimePaths();
+    const isolatedConfigDir = join(tmpdir(), "isolated-yulu-config");
+    const isolatedPaths = resolveServerRuntimePaths({ configDir: isolatedConfigDir });
+
+    expect(runtimePaths.configDir).toBe(paths.configDir);
+    expect(runtimePaths.recordingEventsDir).toBe(paths.recordingEventsDir);
+    expect(runtimePaths.agentQueueJson).toBe(paths.agentQueueJson);
+    expect(isolatedPaths.recordingEventsDir).toBe(join(isolatedConfigDir, "recording-events"));
+  });
+
   it("never mutates retired Keychain credentials during the development App smoke", async () => {
     process.env.YULU_UI_PORT = "0";
     process.env.YULU_DEV_SMOKE = "1";

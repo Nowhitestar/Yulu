@@ -638,7 +638,7 @@ export class RecordingPipeline {
     if (!requested || !isAbsolute(requested)) {
       throw new InvalidTranscriptionInputError("audioPath must be an absolute WAV path");
     }
-    const dictationDir = join(this.options.paths.configDir, "dictation");
+    const dictationDir = join(this.options.paths.moviesDir, "Dictation");
     mkdirSync(dictationDir, { recursive: true, mode: 0o700 });
     let audioPath: string;
     try {

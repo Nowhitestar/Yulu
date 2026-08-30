@@ -15,7 +15,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-CONFIG_DIR = Path.home() / ".config" / "yulu"
+from application_paths import DURABLE_DATA_DIR, LEGACY_READ_ONLY_DATA_DIR
+
+CONFIG_DIR = DURABLE_DATA_DIR
 STATE_PATH = CONFIG_DIR / ".state.json"
 STATE_VERSION = 2
 
@@ -79,7 +81,12 @@ def normalize_state(raw: Any) -> dict[str, Any]:
     return state
 
 
-def load_state(path: Path = STATE_PATH) -> dict[str, Any]:
+def load_state(path: Path | None = None) -> dict[str, Any]:
+    path = path or STATE_PATH
+    if path == STATE_PATH:
+        legacy = LEGACY_READ_ONLY_DATA_DIR / ".state.json"
+        if not path.exists() and legacy.exists():
+            path = legacy
     if not path.exists():
         return normalize_state({})
     try:
@@ -88,7 +95,8 @@ def load_state(path: Path = STATE_PATH) -> dict[str, Any]:
         return normalize_state({})
 
 
-def save_state(state: dict[str, Any], path: Path = STATE_PATH) -> dict[str, Any]:
+def save_state(state: dict[str, Any], path: Path | None = None) -> dict[str, Any]:
+    path = path or STATE_PATH
     state = normalize_state(state)
     state["updated_at"] = _now()
     _atomic_write_json(path, state)
@@ -101,7 +109,7 @@ def set_recording_started(
     *,
     meeting_id: str = "",
     backend: str = "daemon",
-    path: Path = STATE_PATH,
+    path: Path | None = None,
     extra: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     state: dict[str, Any] = {
@@ -123,7 +131,7 @@ def set_recording_started(
 def set_recording_stopped(
     *,
     status: str = "idle",
-    path: Path = STATE_PATH,
+    path: Path | None = None,
     extra: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     previous = load_state(path)

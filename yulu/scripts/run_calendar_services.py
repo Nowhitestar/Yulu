@@ -16,9 +16,12 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-CONFIG_DIR = Path.home() / ".config" / "yulu"
+from application_paths import DURABLE_DATA_DIR, IPC_DIR, LEGACY_READ_ONLY_DATA_DIR
+
+CONFIG_DIR = DURABLE_DATA_DIR
 SCRIPT_DIR = Path(__file__).resolve().parent
-LEGACY_PUSH_AUDIT_PATH = CONFIG_DIR / ".watch_state.json"
+LEGACY_PUSH_AUDIT_PATH = LEGACY_READ_ONLY_DATA_DIR / ".watch_state.json"
+PID_PATH = IPC_DIR / ".calendar_services.pid"
 
 LAST_SYNC = 0
 SYNC_COOLDOWN = 10
@@ -32,6 +35,10 @@ def log(message):
 
 def _existing_schedule_has_future_events():
     path = CONFIG_DIR / "schedule.json"
+    if not path.exists():
+        legacy = LEGACY_READ_ONLY_DATA_DIR / "schedule.json"
+        if legacy.exists():
+            path = legacy
     if not path.exists():
         return False
     try:
@@ -147,7 +154,9 @@ def sync_calendar_to_schedule():
                 })
 
         schedule = {"events": events, "meetings": meetings}
-        (CONFIG_DIR / "schedule.json").write_text(
+        schedule_path = CONFIG_DIR / "schedule.json"
+        schedule_path.parent.mkdir(parents=True, exist_ok=True)
+        schedule_path.write_text(
             json.dumps(schedule, indent=2, ensure_ascii=False),
         )
         log(f"✅ schedule.json 已更新，{len(events)} 个事件")
@@ -170,8 +179,8 @@ def sync_calendar_to_schedule():
 
 
 def main():
-    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    pid_path = CONFIG_DIR / ".calendar_services.pid"
+    PID_PATH.parent.mkdir(parents=True, exist_ok=True)
+    pid_path = PID_PATH
     if pid_path.exists():
         try:
             old_pid = int(pid_path.read_text().strip())

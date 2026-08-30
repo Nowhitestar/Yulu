@@ -1638,12 +1638,13 @@ describe("RecordingPipeline", () => {
     await expect(pipeline!.warmTranscription()).resolves.toEqual({ provider: "test-audio" });
     const first = await pipeline!.transcribeOnDemand({ audioPath: setupResult.audioPath });
 
-    const dictationDir = join(setupResult.configDir, "dictation");
+    const dictationDir = join(setupResult.moviesDir, "Dictation");
     mkdirSync(dictationDir, { recursive: true });
     const dictationWav = join(dictationDir, "dictation.wav");
     writeFileSync(dictationWav, Buffer.alloc(44));
     const second = await pipeline!.transcribeOnDemand({ audioPath: dictationWav, language: "ja" });
 
+    expect(existsSync(join(setupResult.configDir, "dictation"))).toBe(false);
     expect(first).toEqual({ transcript: "打开玉录", provider: "test-audio", chunks: 1, language: "zh" });
     expect(second).toEqual({ transcript: "打开玉录", provider: "test-audio", chunks: 1, language: "ja" });
     expect(setupResult.gatewayFactory).not.toHaveBeenCalled();
@@ -1668,7 +1669,7 @@ describe("RecordingPipeline", () => {
     writeFileSync(outside, Buffer.alloc(44));
     await expect(pipeline!.transcribeOnDemand({ audioPath: outside })).rejects.toThrow("outside Yulu recordings");
 
-    const dictationDir = join(setupResult.configDir, "dictation");
+    const dictationDir = join(setupResult.moviesDir, "Dictation");
     mkdirSync(dictationDir, { recursive: true });
     const escapedLink = join(dictationDir, "escaped.wav");
     symlinkSync(outside, escapedLink);

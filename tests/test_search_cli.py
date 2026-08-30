@@ -162,8 +162,9 @@ def test_cli_falls_back_to_in_process_when_agent_down(tmp_path, monkeypatch, cap
     assert "Plan" in out
 
 
-def test_cli_ipc_socket_follows_isolated_config_dir(tmp_path, monkeypatch):
-    monkeypatch.setenv("YULU_CONFIG_DIR", str(tmp_path))
+def test_cli_ipc_socket_follows_standard_ipc_dir(tmp_path, monkeypatch):
+    monkeypatch.setenv("YULU_CACHE_DIR", str(tmp_path))
+    monkeypatch.setenv("YULU_IPC_DIR", str(tmp_path))
     monkeypatch.setattr(search_cli, "IPC_SOCKET_PATH", Path("/sentinel/status_agent.sock"))
 
     assert search_cli._resolved_ipc_socket_path() == tmp_path / "status_agent.sock"

@@ -129,16 +129,17 @@ def test_status_agent_scans_single_root_no_voicemails_subdir():
 
 def test_status_agent_movies_yulu_only_as_fallback():
     src = _swift_source()
-    # The historical ~/Movies/Yulu literal is permitted, but ONLY inside
-    # loadRecordingDir() as the fallback default — never as a live source.
+    # The historical default remains the resolver fallback, while the live
+    # recording source follows the resolved Media Library contract.
     assert "\\(home)/Movies/Yulu" not in src, (
         "status_agent still hardcodes \\(home)/Movies/Yulu as a recordings source"
     )
+    assert '"YULU_MEDIA_LIBRARY_DIR"' in src
+    assert 'let fallback = "\\(HOME_DIR)/Movies/Yulu"' in src
     reader_start = src.index("func loadRecordingDir()")
-    reader_body = src[reader_start : reader_start + 600]
-    assert "Movies/Yulu" in reader_body, (
-        "the ~/Movies/Yulu fallback default must live inside loadRecordingDir()"
-    )
+    reader_body = src[reader_start : reader_start + 1_200]
+    assert "safeMediaDirectory" in reader_body
+    assert "return safeFallback.path" in reader_body
 
 
 def test_status_agent_has_hotkeys_no_voicemail():
@@ -279,7 +280,8 @@ def test_status_agent_has_dictation_menu_entry():
     assert "capturedPasteTarget = pasteTarget" in src
     assert '"--deadline-sec", "6"' not in src
     assert '"--timeout-sec", "6"' not in src
-    assert 'file.hasPrefix("\\(CONFIG_DIR)/dictation/")' in src
+    assert 'file.hasPrefix("\\(DICTATION_MEDIA_DIR)/")' in src
+    assert 'let DICTATION_MEDIA_DIR = "\\(loadRecordingDir())/Dictation"' in src
     assert "dictation recording active; ignoring meeting stop" in src
 
 

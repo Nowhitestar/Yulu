@@ -1,26 +1,20 @@
 import { readFileSync, existsSync, statSync } from "node:fs";
-import { join } from "node:path";
 import { z } from "zod";
 import { router, publicProcedure } from "../trpc.js";
+import {
+  daemonLogPath,
+  YULU_DAEMONS,
+  type YuluDaemon,
+} from "../daemonLogs.js";
+export {
+  daemonLogPath,
+  YULU_DAEMON_LOG_FILES,
+  YULU_DAEMONS,
+} from "../daemonLogs.js";
 
-export const YULU_DAEMONS = [
-  "com.yulu.audiodaemon",
-  "com.yulu.statusagent",
-  "com.yulu.scheduler",
-  "com.yulu.detector",
-  "com.yulu.calendar",
-  "com.yulu.ui",
-] as const;
-
-type YuluDaemon = typeof YULU_DAEMONS[number];
 const DaemonName = z.enum(YULU_DAEMONS);
 type HealthStatus = "stopped" | "crashed" | "running" | "idle";
 type LaunchStatus = { pid: number; exitStatus: number; label: string } | null;
-
-function logPath(name: YuluDaemon, configDir: string): string {
-  const short = name.replace(/^com\.yulu\./, "");
-  return join(configDir, `${short === "ui" ? "ui" : short}.log`);
-}
 
 function classifyStatus(name: YuluDaemon, s: LaunchStatus): HealthStatus {
   if (!s) return "stopped";
@@ -34,7 +28,7 @@ export const daemonsRouter = router({
     const out = [];
     for (const name of YULU_DAEMONS) {
       const s = await ctx.launchctl.status(name);
-      const log = logPath(name, ctx.paths.configDir);
+      const log = daemonLogPath(name, ctx.paths.logsDir, ctx.paths.legacyReadOnlyDataDir);
       let lastLog = "";
       if (existsSync(log)) {
         const stat = statSync(log);

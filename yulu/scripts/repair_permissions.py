@@ -17,11 +17,13 @@ import sys
 import time
 from pathlib import Path
 
+from application_paths import IPC_DIR
+
 BUNDLE_ID = "com.yulu.audiodaemon"
 SCRIPT_DIR = Path(__file__).resolve().parent
 APP_PATH = SCRIPT_DIR / "Yulu.app"
 PLIST_PATH = Path.home() / "Library/LaunchAgents/com.yulu.audiodaemon.plist"
-SOCKET_PATH = Path.home() / ".config/yulu/audio_daemon.sock"
+SOCKET_PATH = IPC_DIR / "audio_daemon.sock"
 
 
 def screen_capture_settings_url() -> str:
