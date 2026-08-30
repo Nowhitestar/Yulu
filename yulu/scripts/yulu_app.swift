@@ -702,6 +702,30 @@ struct DevelopmentSmokeReport: Encodable {
     let captureStarted: Bool
 }
 
+func developmentSmokeApplicationPaths(environment: [String: String]) throws -> ApplicationDataPaths {
+    guard let rawHome = environment["HOME"]?.trimmingCharacters(in: .whitespacesAndNewlines),
+          !rawHome.isEmpty,
+          !rawHome.contains("\0"),
+          (rawHome as NSString).isAbsolutePath else {
+        throw NSError(
+            domain: "YuluDevelopmentSmoke",
+            code: 5,
+            userInfo: [NSLocalizedDescriptionKey: "development smoke requires an absolute HOME"]
+        )
+    }
+    let homeDirectory = URL(
+        fileURLWithPath: (rawHome as NSString).standardizingPath,
+        isDirectory: true
+    )
+    return ApplicationDataPaths.resolve(homeDirectory: homeDirectory, environment: [:])
+}
+
+if CommandLine.arguments.count == 2,
+   CommandLine.arguments[1] == "--inspect-development-smoke-paths" {
+    try writeJSON(developmentSmokeApplicationPaths(environment: ProcessInfo.processInfo.environment))
+    exit(0)
+}
+
 func hostIsHealthy(url: URL, nonce: String) -> Bool {
     let semaphore = DispatchSemaphore(value: 0)
     var healthy = false
@@ -761,10 +785,14 @@ func runDevelopmentSmoke(layout: BundleLayout, port: Int) throws -> DevelopmentS
             userInfo: [NSLocalizedDescriptionKey: "bundled Capture self-test failed"]
         )
     }
+    let applicationPaths = try developmentSmokeApplicationPaths(
+        environment: ProcessInfo.processInfo.environment
+    )
     let supervisor = ProductSupervisor(
         layout: layout,
         port: port,
-        developmentSmoke: true
+        developmentSmoke: true,
+        applicationPaths: applicationPaths
     )
     supervisor.startHostForDevelopmentSmoke()
     defer {

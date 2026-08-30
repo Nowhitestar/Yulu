@@ -62,7 +62,7 @@ grep -q '"helper":"xai_keychain"' "$SMOKE_ROOT/xai-keychain-self-test.json"
 grep -q '"ok":true' "$SMOKE_ROOT/xai-keychain-self-test.json"
 grep -q '"helper":"calendar_probe"' "$SMOKE_ROOT/calendar-probe-self-test.json"
 grep -q '"ok":true' "$SMOKE_ROOT/calendar-probe-self-test.json"
-HOME="$SMOKE_ROOT/home" \
+if ! HOME="$SMOKE_ROOT/home" \
 PATH="$SMOKE_ROOT/denied-host-runtime" \
 YULU_FORBIDDEN_RUNTIME_LOG="$SMOKE_ROOT/forbidden-runtime.log" \
 YULU_HOSTILE_RUNTIME_LOG="$SMOKE_ROOT/hostile-runtime.log" \
@@ -71,7 +71,15 @@ YULU_LOCAL_CAPTION_PYTHON="$SMOKE_ROOT/hostile-caption-python" \
 YULU_UI_PORT="$PORT" \
 "$APP/Contents/MacOS/yulu_app" --development-smoke \
   > "$SMOKE_ROOT/smoke-output.txt" \
-  2> "$SMOKE_ROOT/smoke-error.txt"
+  2> "$SMOKE_ROOT/smoke-error.txt"; then
+  echo "Development Yulu.app smoke failed:" >&2
+  if [[ -s "$SMOKE_ROOT/smoke-error.txt" ]]; then
+    sed 's/^/  /' "$SMOKE_ROOT/smoke-error.txt" >&2
+  else
+    echo "  bundled Host produced no stderr" >&2
+  fi
+  exit 1
+fi
 if grep -Eq 'retired Gateway Keychain cleanup will retry next start|xAI 钥匙串组件不可用' \
   "$SMOKE_ROOT/smoke-error.txt"; then
   echo "Bundled Host could not use its staged xAI Keychain helper:" >&2
