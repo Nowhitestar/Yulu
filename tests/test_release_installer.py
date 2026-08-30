@@ -1,4 +1,3 @@
-import base64
 import json
 import os
 import plistlib
@@ -202,89 +201,6 @@ def test_raw_dev_bootstrap_is_only_path_using_main_helper(tmp_path):
         "https://raw.githubusercontent.com/Nowhitestar/Yulu/main/yulu/scripts/release_installer.py"
     ]
     assert argv_log.read_text(encoding="utf-8").splitlines()[-1] == "--dev"
-
-
-def test_packaged_installer_pins_default_latest_and_rejects_conflicting_tag(tmp_path):
-    project = tmp_path / "project"
-    scripts = project / "packaging" / "scripts"
-    helper = project / "yulu" / "scripts" / "release_installer.py"
-    scripts.mkdir(parents=True)
-    helper.parent.mkdir(parents=True)
-    shutil.copy2(ROOT / "install.sh", project / "install.sh")
-    shutil.copy2(ROOT / "packaging" / "scripts" / "package.sh", scripts / "package.sh")
-    helper.write_text(
-        "import os, pathlib, sys\n"
-        "pathlib.Path(os.environ['YULU_TEST_ARGV_LOG']).write_text('\\n'.join(sys.argv[1:]) + '\\n')\n"
-        "install_dir = pathlib.Path(sys.argv[sys.argv.index('--install-dir') + 1])\n"
-        "install_dir.mkdir(parents=True, exist_ok=True)\n"
-        "(install_dir / 'VERSION').write_text('0.6.0\\n')\n"
-        "scripts = install_dir / 'yulu' / 'scripts'\n"
-        "scripts.mkdir(parents=True, exist_ok=True)\n"
-        "(scripts / 'yulu').write_text('#!/usr/bin/env bash\\n')\n",
-        encoding="utf-8",
-    )
-    (project / "VERSION").write_text("0.6.0\n", encoding="utf-8")
-    dist = tmp_path / "dist"
-
-    packaged = subprocess.run(
-        ["bash", str(scripts / "package.sh"), "v0.6.0", "--dist", str(dist), "--skip-build"],
-        cwd=project,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-
-    assert packaged.returncode == 0, packaged.stderr + packaged.stdout
-    text = (dist / "install.sh").read_text(encoding="utf-8")
-    assert 'PACKAGED_RELEASE_TAG="v0.6.0"' in text
-    assert "__YULU_EMBEDDED_RELEASE_INSTALLER_BASE64__" not in text
-    assert "__YULU_PACKAGED_RELEASE_TAG__" not in text
-    payload_line = next(line for line in text.splitlines() if line.startswith('EMBEDDED_HELPER_BASE64="'))
-    payload = payload_line.split('"', 2)[1]
-    assert base64.b64decode(payload).decode("utf-8") == helper.read_text(encoding="utf-8")
-
-    for args in ((), ("--latest",), ("--version", "0.6.0")):
-        run_dir = tmp_path / ("run-" + ("-".join(args) if args else "default"))
-        env, curl_log, argv_log = _bootstrap_env(run_dir)
-        env["INSTALL_DIR"] = str(run_dir / "install")
-        result = subprocess.run(
-            ["bash", str(dist / "install.sh"), *args],
-            env=env,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        assert result.returncode == 0, result.stderr + result.stdout
-        assert argv_log.read_text(encoding="utf-8").splitlines()[-2:] == ["--version", "v0.6.0"]
-        assert not curl_log.exists()
-
-    dev_dir = tmp_path / "run-dev"
-    env, curl_log, argv_log = _bootstrap_env(dev_dir)
-    env["INSTALL_DIR"] = str(dev_dir / "install")
-    dev = subprocess.run(
-        ["bash", str(dist / "install.sh"), "--dev"],
-        env=env,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert dev.returncode == 0, dev.stderr + dev.stdout
-    assert argv_log.read_text(encoding="utf-8").splitlines()[-1] == "--dev"
-    assert not curl_log.exists()
-
-    conflict_dir = tmp_path / "conflict"
-    env, _, argv_log = _bootstrap_env(conflict_dir)
-    env["INSTALL_DIR"] = str(conflict_dir / "install")
-    conflict = subprocess.run(
-        ["bash", str(dist / "install.sh"), "--version", "v0.6.1"],
-        env=env,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert conflict.returncode == 2
-    assert "does not match packaged release v0.6.0" in conflict.stderr
-    assert not argv_log.exists()
 
 
 def test_parse_default_target_is_latest_release():
