@@ -292,7 +292,8 @@ def test_smappservice_capture_uses_only_the_bundled_python_for_silence_prompt():
     body = src[start:end]
 
     assert "bundledPythonExecutable()" in body
-    assert 'task.arguments = [meetingDaemon.path, "auto_stop"]' in body
+    assert 'task.arguments = ["-B", meetingDaemon.path, "auto_stop"]' in body
+    assert 'environment["PYTHONDONTWRITEBYTECODE"] = "1"' in body
     assert 'URL(fileURLWithPath: "/usr/bin/env")' not in body
     assert '"python3", meetingDaemon.path' not in body
 

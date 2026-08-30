@@ -1,12 +1,14 @@
 from pathlib import Path
 import ctypes
 import fcntl
+import io
 import plistlib
 import json
 import os
 import subprocess
 import shutil
 import socket
+import sqlite3
 import sys
 import tempfile
 import threading
@@ -32,6 +34,518 @@ CAPTURE_INFO = (
 def read_plist(path: Path) -> dict[str, object]:
     with path.open("rb") as handle:
         return plistlib.load(handle)
+
+
+def compile_yulu_app_inspector(tmp_path: Path) -> Path:
+    binary = tmp_path / "yulu_app"
+    result = subprocess.run(
+        [
+            "swiftc",
+            "-module-cache-path",
+            str(tmp_path / "swift-cache"),
+            "-o",
+            str(binary),
+            str(SCRIPTS / "yulu_app.swift"),
+            "-framework",
+            "Cocoa",
+            "-framework",
+            "WebKit",
+            "-framework",
+            "ServiceManagement",
+            "-framework",
+            "Security",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    return binary
+
+
+def compile_audio_daemon_inspector(tmp_path: Path) -> Path:
+    binary = tmp_path / "audio_daemon"
+    result = subprocess.run(
+        [
+            "swiftc",
+            "-module-cache-path",
+            str(tmp_path / "audio-swift-cache"),
+            "-o",
+            str(binary),
+            str(SCRIPTS / "audio_daemon.swift"),
+            "-framework",
+            "Cocoa",
+            "-framework",
+            "ScreenCaptureKit",
+            "-framework",
+            "AVFoundation",
+            "-framework",
+            "CoreMedia",
+            "-framework",
+            "CoreAudio",
+            "-framework",
+            "AudioToolbox",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    return binary
+
+
+def inspect_recording_start_gate(binary: Path, cache_root: Path) -> str:
+    result = subprocess.run(
+        [str(binary), "--inspect-recording-start-gate", str(cache_root)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    return json.loads(result.stdout)["state"]
+
+
+def test_capture_bundled_python_disables_bytecode_writes_explicitly():
+    source = (SCRIPTS / "audio_daemon.swift").read_text(encoding="utf-8")
+    prompt = source.split("func launchMeetingSilencePrompt() -> Bool {", 1)[1].split(
+        "\n}\n", 1
+    )[0]
+
+    assert 'task.arguments = ["-B", meetingDaemon.path, "auto_stop"]' in prompt
+    assert 'environment["PYTHONDONTWRITEBYTECODE"] = "1"' in prompt
+
+
+def test_update_public_swift_contracts_are_fail_closed_and_use_bundled_authority(
+    tmp_path: Path,
+):
+    binary = compile_yulu_app_inspector(tmp_path)
+
+    def inspect_configuration(payload: dict[str, object]) -> dict[str, object]:
+        plist_path = tmp_path / "UpdateInfo.plist"
+        with plist_path.open("wb") as handle:
+            plistlib.dump(payload, handle)
+        result = subprocess.run(
+            [str(binary), "--inspect-update-configuration", str(plist_path)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr
+        return json.loads(result.stdout)
+
+    secure = {
+        "SUFeedURL": "https://updates.yulu.app/appcast.xml",
+        "SUPublicEDKey": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "SUVerifyUpdateBeforeExtraction": True,
+        "SURequireSignedFeed": True,
+        "SUSignedFeedFailureExpirationInterval": 0,
+        "SUEnableAutomaticChecks": True,
+        "SUAllowsAutomaticUpdates": False,
+        "SUAutomaticallyUpdate": False,
+    }
+    assert inspect_configuration(secure) == {
+        "automaticChecks": True,
+        "enabled": True,
+        "explicitInstallOnly": True,
+        "reason": None,
+    }
+    for mutation in (
+        {"SUFeedURL": "http://updates.yulu.app/appcast.xml"},
+        {"SUPublicEDKey": "not-a-public-key"},
+        {"SUVerifyUpdateBeforeExtraction": False},
+        {"SURequireSignedFeed": False},
+        {"SUSignedFeedFailureExpirationInterval": 1},
+        {"SUSignedFeedFailureExpirationInterval": False},
+        {"SUSignedFeedFailureExpirationInterval": 0.0},
+        {"SUSignedFeedFailureExpirationInterval": "0"},
+        {"SUAllowsAutomaticUpdates": True},
+        {"SUAutomaticallyUpdate": True},
+    ):
+        invalid = secure | mutation
+        assert inspect_configuration(invalid)["enabled"] is False
+    missing_expiration = dict(secure)
+    missing_expiration.pop("SUSignedFeedFailureExpirationInterval")
+    assert inspect_configuration(missing_expiration)["enabled"] is False
+
+    termination_cases = {
+        ("0", "0", "0"): True,
+        ("1", "0", "0"): False,
+        ("1", "1", "0"): True,
+        ("1", "0", "1"): True,
+    }
+    for arguments, expected in termination_cases.items():
+        result = subprocess.run(
+            [str(binary), "--inspect-update-termination", *arguments],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr
+        assert json.loads(result.stdout) == {"allowTermination": expected}
+
+    home = tmp_path / "home"
+    home.mkdir()
+    result = subprocess.run(
+        [
+            str(binary),
+            "--inspect-update-command",
+            "/Applications/Yulu.app",
+            str(home),
+            "0.24.0",
+            "741",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    command = json.loads(result.stdout)
+    assert command["executable"] == (
+        "/Applications/Yulu.app/Contents/Resources/runtime/python/bin/python3"
+    )
+    assert command["arguments"][:3] == [
+        "-B",
+        "/Applications/Yulu.app/Contents/Resources/runtime/yulu/scripts/application_update.py",
+        "session",
+    ]
+    assert command["arguments"][-4:] == [
+        "--target-version",
+        "0.24.0",
+        "--target-build",
+        "741",
+    ]
+    assert "--host-database" in command["arguments"]
+
+
+def test_update_health_payload_contains_concrete_runtime_attestation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    binary = compile_yulu_app_inspector(tmp_path)
+    result = subprocess.run(
+        [str(binary), "--inspect-update-health-payload", "/Applications/Yulu.app"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    health = json.loads(result.stdout)
+
+    assert health["application"] == {
+        "identifier": "com.yulu.app",
+        "teamIdentifier": "WMU9678ZQL",
+        "cdHash": "a" * 40,
+        "version": "0.23.0",
+        "build": "732",
+        "pid": 101,
+        "uid": os.geteuid(),
+        "generation": "100:1",
+        "executable": "/Applications/Yulu.app/Contents/MacOS/yulu_app",
+    }
+    assert health["host"] == {
+        "identifier": "node",
+        "teamIdentifier": "WMU9678ZQL",
+        "cdHash": "b" * 40,
+        "productVersion": "0.23.0",
+        "bundleVersion": "732",
+        "hostIPCVersion": 1,
+        "serviceOwner": "com.yulu.ui",
+        "pid": 102,
+        "uid": os.geteuid(),
+        "generation": "100:2",
+        "executable": "/Applications/Yulu.app/Contents/Resources/runtime/bin/node",
+        "hostNonce": "11111111-1111-4111-8111-111111111111",
+        "instanceLockToken": "host-lock-token-1234",
+        "portOwnerPID": 102,
+        "database": {
+            "status": "ok",
+            "quickCheck": "ok",
+            "schemaVersion": 1,
+            "minimumReadableVersion": 1,
+        },
+    }
+    assert health["capture"] == {
+        "identifier": "com.yulu.audiodaemon",
+        "teamIdentifier": "WMU9678ZQL",
+        "cdHash": "c" * 40,
+        "productVersion": "0.23.0",
+        "bundleVersion": "732",
+        "captureIPCVersion": 1,
+        "serviceOwner": "com.yulu.audiodaemon",
+        "pid": 103,
+        "uid": os.geteuid(),
+        "generation": "100:3",
+        "executable": (
+            "/Applications/Yulu.app/Contents/Helpers/"
+            "YuluCapture.app/Contents/MacOS/audio_daemon"
+        ),
+        "socketOwnerPID": 103,
+    }
+    assert health["services"] == {
+        "com.yulu.ui.plist": "enabled",
+        "com.yulu.audiodaemon.plist": "enabled",
+    }
+
+    monkeypatch.syspath_prepend(str(SCRIPTS))
+    from application_update import _valid_update_health
+
+    assert _valid_update_health(
+        health,
+        expected={"version": "0.23.0", "build": "732"},
+    )
+    assert "accepted" not in json.dumps(health)
+
+
+def test_capture_start_uses_the_shared_attempt_lock_and_rejects_unsafe_entries(
+    tmp_path: Path,
+) -> None:
+    binary = compile_audio_daemon_inspector(tmp_path)
+    cache_root = tmp_path / "Caches/Yulu"
+    lock_dir = cache_root / "application-migration"
+    lock_dir.mkdir(parents=True, mode=0o700)
+    lock_path = lock_dir / "attempt.lock"
+
+    assert inspect_recording_start_gate(binary, cache_root) == "available"
+    lock_path.touch(mode=0o600)
+    lock_path.chmod(0o600)
+    with lock_path.open("r+") as lock_handle:
+        fcntl.flock(lock_handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        assert inspect_recording_start_gate(binary, cache_root) == "busy"
+    assert inspect_recording_start_gate(binary, cache_root) == "available"
+
+    lock_path.chmod(0o644)
+    assert inspect_recording_start_gate(binary, cache_root) == "unsafe"
+    lock_path.unlink()
+    outside = tmp_path / "outside-lock"
+    outside.touch(mode=0o600)
+    outside.chmod(0o600)
+    os.link(outside, lock_path)
+    assert inspect_recording_start_gate(binary, cache_root) == "unsafe"
+    lock_path.unlink()
+    lock_path.symlink_to(outside)
+    assert inspect_recording_start_gate(binary, cache_root) == "unsafe"
+
+
+def test_update_session_and_capture_start_share_one_live_attempt_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    binary = compile_audio_daemon_inspector(tmp_path)
+    monkeypatch.syspath_prepend(str(SCRIPTS))
+    from application_update import ApplicationUpdatePaths, run_update_session
+
+    paths = ApplicationUpdatePaths(
+        durable_root=tmp_path / "Application Support/Yulu",
+        cache_root=tmp_path / "Caches/Yulu",
+    )
+    application = tmp_path / "Applications/Yulu.app"
+    application.mkdir(parents=True)
+    database = paths.durable_root / "host.sqlite"
+    database.parent.mkdir(parents=True, mode=0o700)
+    with sqlite3.connect(database) as connection:
+        connection.execute("CREATE TABLE agent_tasks (id TEXT PRIMARY KEY)")
+    database.chmod(0o600)
+
+    class GateObservingInput(io.StringIO):
+        def __init__(self, messages: list[dict[str, object]]) -> None:
+            super().__init__(
+                "\n".join(json.dumps(message) for message in messages) + "\n"
+            )
+            self.states: list[str] = []
+
+        def readline(self, *args, **kwargs):
+            self.states.append(inspect_recording_start_gate(binary, paths.cache_root))
+            return super().readline(*args, **kwargs)
+
+    # A start can win before the updater locks; the authoritative locked
+    # recording recheck then defers without creating any update journal.
+    raced_input = GateObservingInput([{"recording": False}, {"recording": True}])
+    raced = run_update_session(
+        paths=paths,
+        application_path=application,
+        current_version="0.23.0-rc.4",
+        current_build="731",
+        target_version="0.23.0",
+        target_build="732",
+        databases={"host": database},
+        input_stream=raced_input,
+        output_stream=io.StringIO(),
+    )
+    assert raced["action"] == "defer_installation"
+    assert raced_input.states == ["available", "busy"]
+    assert not paths.journal_dir.exists()
+
+    class GateObservingOutput(io.StringIO):
+        def __init__(self) -> None:
+            super().__init__()
+            self.handler_state: str | None = None
+
+        def write(self, value: str) -> int:
+            if '"action":"invoke_install_handler"' in value:
+                self.handler_state = inspect_recording_start_gate(
+                    binary, paths.cache_root
+                )
+            return super().write(value)
+
+    locked_input = GateObservingInput(
+        [
+            {"recording": False},
+            {"recording": False},
+            {
+                "statuses": {
+                    "com.yulu.ui.plist": "notRegistered",
+                    "com.yulu.audiodaemon.plist": "notRegistered",
+                },
+                "owners": {
+                    "host": {
+                        "state": "absent",
+                        "proof": "tcp-refused-owner-record-absent",
+                    },
+                    "capture": {
+                        "state": "absent",
+                        "proof": "unix-missing-or-refused",
+                    },
+                },
+            },
+            {"action": "authorize_install"},
+        ]
+    )
+    output = GateObservingOutput()
+    terminal = run_update_session(
+        paths=paths,
+        application_path=application,
+        current_version="0.23.0-rc.4",
+        current_build="731",
+        target_version="0.23.0",
+        target_build="732",
+        databases={"host": database},
+        input_stream=locked_input,
+        output_stream=output,
+        copy_application=lambda _, destination: destination.mkdir(parents=True),
+        verify_application=lambda _: {
+            "identifier": "com.yulu.app",
+            "teamIdentifier": "WMU9678ZQL",
+            "cdHash": "a" * 40,
+            "version": "0.23.0-rc.4",
+            "build": "731",
+        },
+    )
+    assert terminal["action"] == "invoke_install_handler"
+    assert locked_input.states == ["available", "busy", "busy", "busy"]
+    assert output.handler_state == "busy"
+
+
+def test_all_capture_recording_starts_are_guarded_before_mutation() -> None:
+    source = (SCRIPTS / "audio_daemon.swift").read_text(encoding="utf-8")
+    start_case = source.split('case "start":', 1)[1].split('case "stop":', 1)[0]
+    assert start_case.index("acquireRecordingStartGate") < start_case.index(
+        "SYS_DISABLED ="
+    )
+    assert source.count("recorder.start(title:") == 1
+    assert source.count("rec.start(title:") == 1
+    assert source.count("acquireRecordingStartGate") >= 4
+
+
+def test_sparkle_adapter_routes_every_install_handler_through_update_authority():
+    source = (SCRIPTS / "yulu_app.swift").read_text(encoding="utf-8")
+    capture_source = (SCRIPTS / "audio_daemon.swift").read_text(encoding="utf-8")
+    assert "SPUStandardUpdaterController" in source
+    assert "shouldPostponeRelaunchForUpdate" in source
+    assert "willInstallUpdateOnQuit" not in source
+    assert 'item.installationType == "application"' in source
+    assert "item.deltaUpdates?[currentBuild] == nil" in source
+    assert "applicationShouldTerminate(_ sender: NSApplication)" in source
+    assert "UpdateTerminationGate.allowTermination" in source
+    assert 'forInfoDictionaryKey: "YuluReleaseVersion"' in source
+    assert 'info["YuluReleaseVersion"]' in source
+    assert 'forInfoDictionaryKey: "YuluReleaseVersion"' in capture_source
+    coordinator = source.split("final class ApplicationUpdateCoordinator", 1)[1].split(
+        "func writeJSON", 1
+    )[0]
+    install = coordinator.split('case "invoke_install_handler":', 1)[1].split(
+        'case "register_services":', 1
+    )[0]
+    rollback = coordinator.split("private func launchRollbackHelper", 1)[1]
+    assert 'helper.arguments = [\n            "-B",\n            script,' in rollback
+    assert 'environment["PYTHONDONTWRITEBYTECODE"] = "1"' in rollback
+    assert install.index("installAuthorized = true") < install.index("handler()")
+    adapter = source.split("final class SparkleUpdateAdapter", 1)[1].split(
+        "final class YuluApplication", 1
+    )[0]
+    assert adapter.count("coordinator.prepareInstall(") == 1
+    termination = coordinator.split("child.terminationHandler =", 1)[1].split(
+        "do {", 1
+    )[0]
+    assert termination.index("self.process = nil") < termination.index(
+        "self.onCanStartMigration?()"
+    )
+
+
+def test_update_quiescence_is_tri_state_and_only_kernel_absence_passes(
+    tmp_path: Path,
+):
+    binary = compile_yulu_app_inspector(tmp_path)
+    owner = tmp_path / "host-instance.lock/owner.json"
+    executable = tmp_path / "node"
+    entry = tmp_path / "server.js"
+    executable.write_bytes(b"")
+    entry.write_bytes(b"")
+
+    probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    probe.bind(("127.0.0.1", 0))
+    port = probe.getsockname()[1]
+    probe.close()
+
+    def host() -> dict[str, object]:
+        result = subprocess.run(
+            [
+                str(binary),
+                "--inspect-host-quiescence",
+                str(owner),
+                str(executable),
+                str(entry),
+                str(port),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr
+        return json.loads(result.stdout)
+
+    assert host() == {
+        "state": "absent",
+        "proof": "tcp-refused-owner-record-absent",
+    }
+
+    owner.parent.mkdir(mode=0o700)
+    owner.write_text("not-json", encoding="utf-8")
+    owner.chmod(0o600)
+    assert host()["state"] == "unknown"
+    owner.unlink()
+
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    listener.bind(("127.0.0.1", port))
+    listener.listen(1)
+    try:
+        assert host()["state"] == "unknown"
+    finally:
+        listener.close()
+
+    capture = subprocess.run(
+        [
+            str(binary),
+            "--inspect-capture-quiescence",
+            f"/tmp/yulu-quiescence-{os.getpid()}.sock",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert capture.returncode == 0, capture.stderr
+    assert json.loads(capture.stdout) == {
+        "state": "absent",
+        "proof": "unix-missing-or-refused",
+    }
 
 
 def test_one_visible_app_contains_the_established_capture_identity():
@@ -86,8 +600,8 @@ def test_clean_app_output_copies_embedded_smappservice_agents_before_signing():
 def test_runtime_node_signing_pins_the_host_code_identifier_only_for_node():
     build = (SCRIPTS / "build_audio_daemon.sh").read_text(encoding="utf-8")
     runtime_signing = build.split(
-        'if [[ "$BUNDLE_APPLICATION_RUNTIME" == "1" ]]; then', 2
-    )[2].split("fi\n", 1)[0]
+        "while IFS= read -r -d '' runtime_code; do", 1
+    )[1].split("done < <", 1)[0]
     node_branch, other_runtime_code = runtime_signing.split("else", 1)
 
     assert '--identifier node' in node_branch
@@ -315,13 +829,15 @@ def test_installed_shell_uses_the_bundled_python_migration_authority_command(
     assert payload["executable"] == (
         "/Applications/Yulu.app/Contents/Resources/runtime/python/bin/python3"
     )
-    assert payload["arguments"][0] == (
+    assert payload["arguments"][0] == "-B"
+    assert payload["arguments"][1] == (
         "/Applications/Yulu.app/Contents/Resources/runtime/yulu/scripts/"
         "application_migration.py"
     )
-    assert payload["arguments"][1] == "session"
+    assert payload["arguments"][2] == "session"
     assert payload["arguments"] == [
-        payload["arguments"][0],
+        "-B",
+        payload["arguments"][1],
         "session",
         "--home",
         str(home),
@@ -387,7 +903,8 @@ def test_installed_shell_uses_the_bundled_python_migration_authority_command(
         "func applicationDidFinishLaunching(_ notification: Notification)", 1
     )[1].split("func applicationShouldTerminateAfterLastWindowClosed", 1)[0]
     assert "backgroundServices.registerBundledOwners(policy: launchPolicy)" not in launch_body
-    assert "coordinator.advance()" in launch_body
+    assert "coordinator.resume()" in launch_body
+    assert "self?.startMigration()" in launch_body
     active_body = source.split(
         "func applicationDidBecomeActive(_ notification: Notification)", 1
     )[1].split("func applicationShouldHandleReopen", 1)[0]
@@ -674,6 +1191,7 @@ def test_runtime_evidence_requires_the_expected_owner_and_keeps_capability_separ
         "serviceOwner": "com.yulu.ui",
         "pid": 2468,
         "instanceLockToken": "host-lock-generation",
+        "instanceNonce": "host-instance-nonce",
     }, {
         "ownerPID": 2468,
         "authorityToken": "host-lock-generation",
@@ -681,6 +1199,8 @@ def test_runtime_evidence_requires_the_expected_owner_and_keeps_capability_separ
         "executableMatches": True,
         "argumentsMatch": True,
         "generationStable": True,
+        "ownerUID": os.geteuid(),
+        "executablePath": "/Applications/Yulu.app/Contents/Resources/runtime/node/bin/node",
     }) == {
         "capabilityReady": None,
         "ownerPID": 2468,
@@ -697,6 +1217,11 @@ def test_runtime_evidence_requires_the_expected_owner_and_keeps_capability_separ
         "executableMatches": True,
         "argumentsMatch": True,
         "generationStable": True,
+        "ownerUID": os.geteuid(),
+        "executablePath": (
+            "/Applications/Yulu.app/Contents/Helpers/"
+            "YuluCapture.app/Contents/MacOS/audio_daemon"
+        ),
     }) == {
         "capabilityReady": False,
         "ownerPID": 1357,

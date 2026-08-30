@@ -26,6 +26,18 @@
 	<string>Yulu reads your calendars to offer recording reminders for scheduled meetings.</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
+	<key>SUAllowsAutomaticUpdates</key>
+	<false/>
+	<key>SUAutomaticallyUpdate</key>
+	<false/>
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
+	<key>SURequireSignedFeed</key>
+	<true/>
+	<key>SUSignedFeedFailureExpirationInterval</key>
+	<integer>0</integer>
+	<key>SUVerifyUpdateBeforeExtraction</key>
+	<true/>
 	<key>YuluVersion</key>
 	<string>0.23.0-rc.3</string>
 </dict>

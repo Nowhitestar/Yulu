@@ -23,5 +23,10 @@
     "version": "8.1.2",
     "url": "https://ffmpeg.org/releases/ffmpeg-8.1.2.tar.xz",
     "sha256": "464beb5e7bf0c311e68b45ae2f04e9cc2af88851abb4082231742a74d97b524c"
+  },
+  "sparkle": {
+    "version": "2.9.6",
+    "url": "https://github.com/sparkle-project/Sparkle/releases/download/2.9.6/Sparkle-for-Swift-Package-Manager.zip",
+    "sha256": "8d5fb41d960b43f4a68aa14126bf62b098544ec8d191cdcc73eb14e63a8e7606"
   }
 }

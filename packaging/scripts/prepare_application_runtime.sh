@@ -174,7 +174,8 @@ cat > "$RUNTIME/runtime-versions.json" <<EOF
   "architecture": "arm64",
   "node": "$(json_field node version)",
   "python": "$(json_field python version)",
-  "ffmpeg": "$(json_field ffmpeg version)"
+  "ffmpeg": "$(json_field ffmpeg version)",
+  "sparkle": "$(json_field sparkle version)"
 }
 EOF
 

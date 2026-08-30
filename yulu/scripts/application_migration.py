@@ -8,6 +8,7 @@ import argparse
 import errno
 import fcntl
 import hashlib
+import grp
 import json
 import os
 import plistlib
@@ -77,6 +78,8 @@ _LOCAL_PEERPID = 0x002
 _MAX_PATH_BYTES = 4096
 _MAX_STATUS_BYTES = 64 * 1024
 _PROC_PIDTBSDINFO = 3
+_F_GETPATH = 50
+_DARWIN_MAX_PATH_BYTES = 1024
 _MAX_PLIST_BYTES = 1024 * 1024
 _MAX_JOURNAL_BYTES = 4 * 1024 * 1024
 _MAX_SESSION_MESSAGE_BYTES = 64 * 1024
@@ -707,16 +710,19 @@ def _present_kind(path: Path) -> str | None:
     raise MigrationBlocked(f"unsafe migration output: {path.name}")
 
 
-def _sqlite_identity(path: Path, kind: str) -> dict[str, str]:
-    source: sqlite3.Connection | None = None
+def _sqlite_connection_identity(
+    source: sqlite3.Connection,
+    *,
+    display_name: str,
+    kind: str,
+) -> dict[str, str]:
     snapshot: sqlite3.Connection | None = None
     try:
-        source = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
         snapshot = sqlite3.connect(":memory:")
         source.backup(snapshot)
         integrity = snapshot.execute("PRAGMA integrity_check").fetchone()
         if integrity != ("ok",):
-            raise MigrationBlocked(f"invalid SQLite output: {path.name}")
+            raise MigrationBlocked(f"invalid SQLite output: {display_name}")
         tables = {
             row[0]
             for row in snapshot.execute(
@@ -730,13 +736,13 @@ def _sqlite_identity(path: Path, kind: str) -> dict[str, str]:
             or (kind == "host" and "agent_tasks" in tables)
         )
         if not recognized:
-            raise MigrationBlocked(f"invalid SQLite schema: {path.name}")
+            raise MigrationBlocked(f"invalid SQLite schema: {display_name}")
         if kind != "host" and "meta" in tables:
             version = snapshot.execute(
                 "SELECT value FROM meta WHERE key = 'schema_version'"
             ).fetchone()
             if version is not None and version[0] != "1":
-                raise MigrationBlocked(f"invalid SQLite schema: {path.name}")
+                raise MigrationBlocked(f"invalid SQLite schema: {display_name}")
         schema_rows = snapshot.execute(
             "SELECT type, name, tbl_name, COALESCE(sql, '') FROM sqlite_master "
             "ORDER BY type, name, tbl_name, sql"
@@ -750,12 +756,368 @@ def _sqlite_identity(path: Path, kind: str) -> dict[str, str]:
     except MigrationBlocked:
         raise
     except (OSError, sqlite3.Error) as exc:
-        raise MigrationBlocked(f"invalid SQLite output: {path.name}") from exc
+        raise MigrationBlocked(f"invalid SQLite output: {display_name}") from exc
     finally:
         if snapshot is not None:
             snapshot.close()
+
+
+def _sqlite_identity(path: Path, kind: str) -> dict[str, str]:
+    source: sqlite3.Connection | None = None
+    try:
+        source = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        return _sqlite_connection_identity(
+            source,
+            display_name=path.name,
+            kind=kind,
+        )
+    except MigrationBlocked:
+        raise
+    except (OSError, sqlite3.Error) as exc:
+        raise MigrationBlocked(f"invalid SQLite output: {path.name}") from exc
+    finally:
         if source is not None:
             source.close()
+
+
+@dataclass
+class _SQLiteCapturedEntry:
+    name: str
+    file_fd: int
+    fingerprint: tuple[int, int, int, int, int, int, int, str] | None = None
+
+
+def _sqlite_entry_is_safe(info: os.stat_result) -> bool:
+    return (
+        stat.S_ISREG(info.st_mode)
+        and info.st_uid == os.geteuid()
+        and stat.S_IMODE(info.st_mode) == 0o600
+        and info.st_nlink == 1
+    )
+
+
+def _open_sqlite_source_entry(
+    parent_fd: int,
+    name: str,
+    *,
+    required: bool,
+) -> _SQLiteCapturedEntry | None:
+    try:
+        file_fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=parent_fd)
+    except FileNotFoundError:
+        if not required:
+            return None
+        raise MigrationBlocked("SQLite checkpoint source is unsafe")
+    except OSError as exc:
+        raise MigrationBlocked("SQLite checkpoint source is unsafe") from exc
+    info = os.fstat(file_fd)
+    if not _sqlite_entry_is_safe(info):
+        os.close(file_fd)
+        raise MigrationBlocked("SQLite checkpoint source is unsafe")
+    return _SQLiteCapturedEntry(name=name, file_fd=file_fd)
+
+
+def _fingerprint_sqlite_fd(
+    file_fd: int,
+    *,
+    copy_to_fd: int = -1,
+) -> tuple[int, int, int, int, int, int, int, str]:
+    before = os.fstat(file_fd)
+    if not _sqlite_entry_is_safe(before) or before.st_size < 0:
+        raise MigrationBlocked("SQLite checkpoint source is unsafe")
+    digest = hashlib.sha256()
+    offset = 0
+    while offset < before.st_size:
+        chunk = os.pread(file_fd, min(1024 * 1024, before.st_size - offset), offset)
+        if not chunk:
+            raise MigrationBlocked("SQLite checkpoint source changed")
+        digest.update(chunk)
+        if copy_to_fd >= 0:
+            _write_all(copy_to_fd, chunk)
+        offset += len(chunk)
+    if os.pread(file_fd, 1, offset):
+        raise MigrationBlocked("SQLite checkpoint source changed")
+    after = os.fstat(file_fd)
+    metadata = (
+        before.st_dev,
+        before.st_ino,
+        before.st_size,
+        before.st_mtime_ns,
+        before.st_ctime_ns,
+        before.st_uid,
+        stat.S_IMODE(before.st_mode),
+    )
+    if not _sqlite_entry_is_safe(after) or metadata != (
+        after.st_dev,
+        after.st_ino,
+        after.st_size,
+        after.st_mtime_ns,
+        after.st_ctime_ns,
+        after.st_uid,
+        stat.S_IMODE(after.st_mode),
+    ):
+        raise MigrationBlocked("SQLite checkpoint source changed")
+    return (*metadata, digest.hexdigest())
+
+
+def _revalidate_sqlite_triplet(
+    parent_fd: int,
+    names: tuple[str, str, str],
+    entries: list[_SQLiteCapturedEntry | None],
+) -> None:
+    for name, entry in zip(names, entries, strict=True):
+        if entry is None:
+            try:
+                os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+            except FileNotFoundError:
+                continue
+            except OSError as exc:
+                raise MigrationBlocked("SQLite checkpoint source changed") from exc
+            raise MigrationBlocked("SQLite checkpoint source changed")
+        try:
+            named = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+        except OSError as exc:
+            raise MigrationBlocked("SQLite checkpoint source changed") from exc
+        assert entry.fingerprint is not None
+        if (
+            not _sqlite_entry_is_safe(named)
+            or (named.st_dev, named.st_ino) != entry.fingerprint[:2]
+            or _fingerprint_sqlite_fd(entry.file_fd) != entry.fingerprint
+        ):
+            raise MigrationBlocked("SQLite checkpoint source changed")
+
+
+def checkpoint_sqlite_database(
+    source_path: Path,
+    destination_path: Path,
+    kind: str,
+    *,
+    _after_source_capture: Callable[[], None] = lambda: None,
+    _after_backup: Callable[[], None] = lambda: None,
+) -> dict[str, str]:
+    """Capture a stable SQLite WAL triplet and write a verified checkpoint."""
+    if kind not in {"host", "prompts", "vocab", "search"}:
+        raise MigrationBlocked("invalid SQLite checkpoint kind")
+    if not source_path.is_absolute() or not destination_path.is_absolute():
+        raise MigrationBlocked("SQLite checkpoint paths must be absolute")
+    source_parent_fd = _open_existing_private_directory(source_path.parent)
+    if source_parent_fd < 0:
+        raise MigrationBlocked("SQLite checkpoint source directory is unsafe")
+    destination_parent_fd = _open_existing_private_directory(destination_path.parent)
+    if destination_parent_fd < 0:
+        os.close(source_parent_fd)
+        raise MigrationBlocked("SQLite checkpoint directory is missing")
+    source_entries: list[_SQLiteCapturedEntry | None] = []
+    stage_name: str | None = None
+    stage_fd = -1
+    destination_fd = -1
+    source: sqlite3.Connection | None = None
+    destination: sqlite3.Connection | None = None
+    checkpoint_file: sqlite3.Connection | None = None
+    try:
+        source_names = (
+            source_path.name,
+            f"{source_path.name}-wal",
+            f"{source_path.name}-shm",
+        )
+        source_entries = [
+            _open_sqlite_source_entry(
+                source_parent_fd,
+                name,
+                required=index == 0,
+            )
+            for index, name in enumerate(source_names)
+        ]
+
+        stage_name = f".sqlite-stage.{uuid.uuid4().hex}"
+        os.mkdir(stage_name, 0o700, dir_fd=destination_parent_fd)
+        stage_fd = os.open(
+            stage_name,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+            dir_fd=destination_parent_fd,
+        )
+        stage_info = os.fstat(stage_fd)
+        if (
+            not stat.S_ISDIR(stage_info.st_mode)
+            or stage_info.st_uid != os.geteuid()
+            or stat.S_IMODE(stage_info.st_mode) != 0o700
+        ):
+            raise MigrationBlocked("SQLite checkpoint staging directory is unsafe")
+        for entry in source_entries:
+            if entry is None:
+                continue
+            staged_fd = os.open(
+                entry.name,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                0o600,
+                dir_fd=stage_fd,
+            )
+            try:
+                entry.fingerprint = _fingerprint_sqlite_fd(
+                    entry.file_fd,
+                    copy_to_fd=staged_fd,
+                )
+                os.fsync(staged_fd)
+            finally:
+                os.close(staged_fd)
+        os.fsync(stage_fd)
+        _after_source_capture()
+        _revalidate_sqlite_triplet(source_parent_fd, source_names, source_entries)
+
+        named_stage = os.stat(
+            stage_name,
+            dir_fd=destination_parent_fd,
+            follow_symlinks=False,
+        )
+        if (
+            not stat.S_ISDIR(named_stage.st_mode)
+            or (named_stage.st_dev, named_stage.st_ino)
+            != (stage_info.st_dev, stage_info.st_ino)
+        ):
+            raise MigrationBlocked("SQLite checkpoint staging directory changed")
+        stage_path_raw = fcntl.fcntl(
+            stage_fd,
+            _F_GETPATH,
+            b"\0" * _DARWIN_MAX_PATH_BYTES,
+        )
+        stage_path = Path(stage_path_raw.split(b"\0", 1)[0].decode())
+        if not stage_path.is_absolute() or stage_path.name != stage_name:
+            raise MigrationBlocked("SQLite checkpoint staging directory changed")
+        staged_main = stage_path / source_path.name
+        source = sqlite3.connect(staged_main)
+        source.execute("PRAGMA query_only=ON")
+        before = _sqlite_connection_identity(
+            source,
+            display_name=source_path.name,
+            kind=kind,
+        )
+        try:
+            destination_fd = os.open(
+                destination_path.name,
+                os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                0o600,
+                dir_fd=destination_parent_fd,
+            )
+        except OSError as exc:
+            raise MigrationBlocked("SQLite checkpoint destination is unsafe") from exc
+        created = os.fstat(destination_fd)
+        if (
+            not stat.S_ISREG(created.st_mode)
+            or created.st_uid != os.geteuid()
+            or stat.S_IMODE(created.st_mode) != 0o600
+            or created.st_nlink != 1
+        ):
+            raise MigrationBlocked("SQLite checkpoint destination is unsafe")
+        destination = sqlite3.connect(":memory:")
+        source.backup(destination)
+        # A backup from a WAL database retains WAL read/write header bytes even
+        # though the destination has no sidecars. VACUUM normalizes the private
+        # in-memory checkpoint into a self-contained rollback-journal image.
+        destination.execute("VACUUM")
+        checkpoint = _sqlite_connection_identity(
+            destination,
+            display_name=destination_path.name,
+            kind=kind,
+        )
+        encoded_checkpoint = destination.serialize()
+        os.ftruncate(destination_fd, 0)
+        os.lseek(destination_fd, 0, os.SEEK_SET)
+        written = 0
+        while written < len(encoded_checkpoint):
+            count = os.write(destination_fd, encoded_checkpoint[written:])
+            if count <= 0:
+                raise MigrationBlocked("cannot create SQLite checkpoint")
+            written += count
+        os.fsync(destination_fd)
+        _after_backup()
+        _revalidate_sqlite_triplet(source_parent_fd, source_names, source_entries)
+        try:
+            destination_after = os.stat(
+                destination_path.name,
+                dir_fd=destination_parent_fd,
+                follow_symlinks=False,
+            )
+        except OSError as exc:
+            raise MigrationBlocked("SQLite checkpoint destination changed") from exc
+        if (
+            (destination_after.st_dev, destination_after.st_ino)
+            != (created.st_dev, created.st_ino)
+            or not stat.S_ISREG(destination_after.st_mode)
+            or destination_after.st_uid != os.geteuid()
+            or stat.S_IMODE(destination_after.st_mode) != 0o600
+            or destination_after.st_nlink != 1
+        ):
+            raise MigrationBlocked("SQLite checkpoint destination changed")
+        after = _sqlite_connection_identity(
+            source,
+            display_name=source_path.name,
+            kind=kind,
+        )
+        destination_contents = os.fstat(destination_fd)
+        destination_bytes = os.pread(destination_fd, destination_contents.st_size, 0)
+        if len(destination_bytes) != destination_contents.st_size:
+            raise MigrationBlocked("SQLite checkpoint destination changed")
+        checkpoint_file = sqlite3.connect(":memory:")
+        checkpoint_file.deserialize(destination_bytes)
+        checkpoint_from_fd = _sqlite_connection_identity(
+            checkpoint_file,
+            display_name=destination_path.name,
+            kind=kind,
+        )
+        checkpoint_file.close()
+        checkpoint_file = None
+        destination.close()
+        destination = None
+        source.close()
+        source = None
+
+        observed = os.fstat(destination_fd)
+        if (
+            (observed.st_dev, observed.st_ino) != (created.st_dev, created.st_ino)
+            or not stat.S_ISREG(observed.st_mode)
+            or observed.st_uid != os.geteuid()
+            or stat.S_IMODE(observed.st_mode) != 0o600
+            or observed.st_nlink != 1
+        ):
+            raise MigrationBlocked("SQLite checkpoint destination changed")
+        os.fsync(destination_fd)
+        os.fsync(destination_parent_fd)
+        if (
+            before != after
+            or after != checkpoint
+            or checkpoint != checkpoint_from_fd
+        ):
+            raise MigrationBlocked("SQLite changed while checkpointing")
+        return checkpoint
+    except MigrationBlocked:
+        raise
+    except (OSError, sqlite3.Error) as exc:
+        raise MigrationBlocked("cannot create SQLite checkpoint") from exc
+    finally:
+        if checkpoint_file is not None:
+            checkpoint_file.close()
+        if destination is not None:
+            destination.close()
+        if source is not None:
+            source.close()
+        for entry in source_entries:
+            if entry is not None:
+                os.close(entry.file_fd)
+        if destination_fd >= 0:
+            os.close(destination_fd)
+        if stage_fd >= 0:
+            _remove_owned_tree_at(stage_fd)
+            os.fsync(stage_fd)
+            os.close(stage_fd)
+            stage_fd = -1
+        if stage_name is not None:
+            try:
+                os.rmdir(stage_name, dir_fd=destination_parent_fd)
+                os.fsync(destination_parent_fd)
+            except FileNotFoundError:
+                pass
+        os.close(destination_parent_fd)
+        os.close(source_parent_fd)
 
 
 def preflight_standard_outputs(
@@ -1789,7 +2151,7 @@ def snapshot_legacy_jobs(
         os.close(opened_directory_fd)
 
 
-def _open_existing_private_directory(path: Path) -> int:
+def _open_existing_anchored_directory(path: Path) -> int:
     if not path.is_absolute() or any(part in {".", ".."} for part in path.parts):
         raise MigrationBlocked("private migration directory must be absolute")
     current_fd = os.open(path.anchor, os.O_RDONLY | os.O_DIRECTORY)
@@ -1807,15 +2169,49 @@ def _open_existing_private_directory(path: Path) -> int:
                 raise MigrationBlocked("unsafe private migration directory") from exc
             os.close(current_fd)
             current_fd = next_fd
-        info = os.fstat(current_fd)
-        if info.st_uid != os.geteuid() or stat.S_IMODE(info.st_mode) != 0o700:
-            raise MigrationBlocked("unsafe private migration directory owner or mode")
         result = current_fd
         current_fd = -1
         return result
     finally:
         if current_fd >= 0:
             os.close(current_fd)
+
+
+def _open_existing_private_directory(path: Path) -> int:
+    directory_fd = _open_existing_anchored_directory(path)
+    if directory_fd < 0:
+        return -1
+    info = os.fstat(directory_fd)
+    if info.st_uid != os.geteuid() or stat.S_IMODE(info.st_mode) != 0o700:
+        os.close(directory_fd)
+        raise MigrationBlocked("unsafe private migration directory owner or mode")
+    return directory_fd
+
+
+def open_existing_trusted_install_directory(path: Path) -> int:
+    """Anchor a private directory or macOS's root:admin Applications directory."""
+    directory_fd = _open_existing_anchored_directory(path)
+    if directory_fd < 0:
+        return -1
+    info = os.fstat(directory_fd)
+    try:
+        admin_gid = grp.getgrnam("admin").gr_gid
+    except KeyError:
+        admin_gid = -1
+    user_private = info.st_uid == os.geteuid() and not info.st_mode & 0o022
+    system_applications = (
+        info.st_uid == 0
+        and info.st_gid == admin_gid
+        and not info.st_mode & 0o002
+        and admin_gid in os.getgroups()
+    )
+    root_read_only = info.st_uid == 0 and not info.st_mode & 0o022
+    if not stat.S_ISDIR(info.st_mode) or not (
+        user_private or system_applications or root_read_only
+    ):
+        os.close(directory_fd)
+        raise MigrationBlocked("unsafe application install directory")
+    return directory_fd
 
 
 def _migration_journal_entry_present(path: Path) -> bool:
@@ -2009,6 +2405,40 @@ def _rename_exclusive_at(
     raise MigrationBlocked("exclusive migration restore failed") from OSError(
         error, os.strerror(error)
     )
+
+
+def swap_entries_at(directory_fd: int, left_name: str, right_name: str) -> None:
+    """Atomically exchange two entries in one already-anchored directory."""
+    if any(
+        not name or name in {".", ".."} or "/" in name
+        for name in (left_name, right_name)
+    ):
+        raise MigrationBlocked("invalid application swap name")
+    libc = ctypes.CDLL(None, use_errno=True)
+    try:
+        renameatx_np = libc.renameatx_np
+    except AttributeError as exc:
+        raise MigrationBlocked("atomic application swap is unavailable") from exc
+    renameatx_np.argtypes = [
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_uint,
+    ]
+    renameatx_np.restype = ctypes.c_int
+    if renameatx_np(
+        directory_fd,
+        os.fsencode(left_name),
+        directory_fd,
+        os.fsencode(right_name),
+        0x00000002,  # RENAME_SWAP
+    ) != 0:
+        error = ctypes.get_errno()
+        raise MigrationBlocked("atomic application swap failed") from OSError(
+            error, os.strerror(error)
+        )
+    os.fsync(directory_fd)
 
 
 def _read_private_file_at(parent_fd: int, name: str) -> bytes:

@@ -15,6 +15,9 @@ import AudioToolbox
 
 let HOME = FileManager.default.homeDirectoryForCurrentUser
 let SERVICE_OWNER = ProcessInfo.processInfo.environment["YULU_SERVICE_OWNER"] ?? "unmanaged"
+let PRODUCT_VERSION = Bundle.main.object(forInfoDictionaryKey: "YuluReleaseVersion") as? String ?? ""
+let BUNDLE_VERSION = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? ""
+let CAPTURE_IPC_VERSION = 1
 
 func realDirectoryURL(_ path: String) -> URL? {
     var buffer = [CChar](repeating: 0, count: Int(PATH_MAX))
@@ -229,7 +232,7 @@ func launchMeetingSilencePrompt() -> Bool {
     }
     let task = Process()
     task.executableURL = python
-    task.arguments = [meetingDaemon.path, "auto_stop"]
+    task.arguments = ["-B", meetingDaemon.path, "auto_stop"]
     var environment = ProcessInfo.processInfo.environment
     environment["PYTHONPATH"] = scriptDir.path
     environment["PYTHONDONTWRITEBYTECODE"] = "1"
@@ -1946,6 +1949,110 @@ func acquireExclusiveFileLock(at path: URL) -> Int32? {
     return fd
 }
 
+enum RecordingStartGateState: String {
+    case available
+    case busy
+    case unsafe
+}
+
+final class RecordingStartGateLease {
+    let state: RecordingStartGateState
+    private var fd: Int32
+
+    init(state: RecordingStartGateState, fd: Int32 = -1) {
+        self.state = state
+        self.fd = fd
+    }
+
+    func release() {
+        if fd >= 0 {
+            Darwin.close(fd)
+            fd = -1
+        }
+    }
+
+    deinit { release() }
+}
+
+private enum ExistingDirectoryResult {
+    case opened(Int32)
+    case missing
+    case unsafe
+}
+
+private func openExistingAnchoredDirectory(_ directory: URL) -> ExistingDirectoryResult {
+    let components = directory.pathComponents
+    guard directory.path.hasPrefix("/"),
+          !components.contains("."),
+          !components.contains("..") else {
+        return .unsafe
+    }
+    var directoryFD = Darwin.open("/", O_RDONLY | O_DIRECTORY | O_NOFOLLOW)
+    guard directoryFD >= 0 else { return .unsafe }
+    for component in components where component != "/" {
+        let nextFD = component.withCString {
+            Darwin.openat(directoryFD, $0, O_RDONLY | O_DIRECTORY | O_NOFOLLOW)
+        }
+        if nextFD < 0 {
+            let failure = errno
+            Darwin.close(directoryFD)
+            return failure == ENOENT ? .missing : .unsafe
+        }
+        Darwin.close(directoryFD)
+        directoryFD = nextFD
+    }
+    return .opened(directoryFD)
+}
+
+func acquireRecordingStartGate(cacheRoot: URL = IPC_DIR) -> RecordingStartGateLease {
+    let lockDirectory = cacheRoot.appendingPathComponent(
+        "application-migration",
+        isDirectory: true
+    )
+    let directoryFD: Int32
+    switch openExistingAnchoredDirectory(lockDirectory) {
+    case .missing:
+        return RecordingStartGateLease(state: .available)
+    case .unsafe:
+        return RecordingStartGateLease(state: .unsafe)
+    case .opened(let opened):
+        directoryFD = opened
+    }
+    defer { Darwin.close(directoryFD) }
+
+    var directoryMetadata = stat()
+    guard Darwin.fstat(directoryFD, &directoryMetadata) == 0,
+          (directoryMetadata.st_mode & S_IFMT) == S_IFDIR,
+          directoryMetadata.st_uid == geteuid(),
+          (directoryMetadata.st_mode & mode_t(0o777)) == mode_t(0o700) else {
+        return RecordingStartGateLease(state: .unsafe)
+    }
+
+    let lockFD = "attempt.lock".withCString {
+        Darwin.openat(directoryFD, $0, O_RDWR | O_NOFOLLOW)
+    }
+    if lockFD < 0 {
+        return RecordingStartGateLease(state: errno == ENOENT ? .available : .unsafe)
+    }
+    var lockMetadata = stat()
+    guard Darwin.fstat(lockFD, &lockMetadata) == 0,
+          (lockMetadata.st_mode & S_IFMT) == S_IFREG,
+          lockMetadata.st_uid == geteuid(),
+          (lockMetadata.st_mode & mode_t(0o777)) == mode_t(0o600),
+          lockMetadata.st_nlink == 1 else {
+        Darwin.close(lockFD)
+        return RecordingStartGateLease(state: .unsafe)
+    }
+    if flock(lockFD, LOCK_EX | LOCK_NB) != 0 {
+        let failure = errno
+        Darwin.close(lockFD)
+        return RecordingStartGateLease(
+            state: failure == EWOULDBLOCK || failure == EAGAIN ? .busy : .unsafe
+        )
+    }
+    return RecordingStartGateLease(state: .available, fd: lockFD)
+}
+
 class SocketServer {
     let recorder: AudioRecorder
     var sock: Int32 = -1
@@ -2134,6 +2241,17 @@ class SocketServer {
         var resp: [String: Any]
         switch action {
         case "start":
+            let startGate = acquireRecordingStartGate()
+            guard startGate.state == .available else {
+                resp = [
+                    "error": startGate.state == .busy
+                        ? "application_transaction_in_progress"
+                        : "application_transaction_lock_unsafe"
+                ]
+                send(c, resp)
+                return
+            }
+            defer { startGate.release() }
             // Reset SYS_DISABLED per-request so each "start" reflects the caller's intent
             // cleanly (a sys-disabled recording followed by a normal one must NOT inherit
             // the previous flag).
@@ -2205,7 +2323,7 @@ class SocketServer {
             if wasRecording { onRecordingStop?() }
             resp = ["status":"stopped", "file": p ?? "", "duration": d]
         case "status":
-            resp = ["recording": recorder.isRecording, "file": recorder.currentFilePath, "micLevel": recorder.micLevel, "sysReady": SYS_READY, "sysError": SYS_ERROR, "micReady": MIC_READY, "micError": MIC_ERROR, "meetingMicState": recorder.meetingMicState.rawValue, "serviceOwner": SERVICE_OWNER, "pid": ProcessInfo.processInfo.processIdentifier]
+            resp = ["recording": recorder.isRecording, "file": recorder.currentFilePath, "micLevel": recorder.micLevel, "sysReady": SYS_READY, "sysError": SYS_ERROR, "micReady": MIC_READY, "micError": MIC_ERROR, "meetingMicState": recorder.meetingMicState.rawValue, "serviceOwner": SERVICE_OWNER, "pid": ProcessInfo.processInfo.processIdentifier, "productVersion": PRODUCT_VERSION, "bundleVersion": BUNDLE_VERSION, "captureIPCVersion": CAPTURE_IPC_VERSION]
         case "audio_devices":
             resp = listAudioDevices?() ?? ["error": "coreaudio_device_provider_unavailable"]
         case "quit": resp = ["status":"bye"]; send(c, resp)
@@ -2332,9 +2450,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         try? "\(ProcessInfo.processInfo.processIdentifier)".write(to: PID_PATH, atomically: true, encoding: .utf8)
-        if let title = interruptedRecordingTitle(), let p = rec.start(title: title) {
-            log("⚠️ Resuming interrupted recording: \(p)")
-            ss.onRecordingStart?()
+        if let title = interruptedRecordingTitle() {
+            let startGate = acquireRecordingStartGate()
+            if startGate.state == .available, let p = rec.start(title: title) {
+                log("⚠️ Resuming interrupted recording: \(p)")
+                ss.onRecordingStart?()
+            } else if startGate.state != .available {
+                log("Interrupted recording resume deferred by application transaction")
+            }
+            startGate.release()
         }
         log("Ready")
     }
@@ -2348,6 +2472,21 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 }
 
 // ─── 入口 ──────────────────────────────────────────────
+
+if CommandLine.arguments.count == 3,
+   CommandLine.arguments[1] == "--inspect-recording-start-gate" {
+    let gate = acquireRecordingStartGate(
+        cacheRoot: URL(fileURLWithPath: CommandLine.arguments[2], isDirectory: true)
+    )
+    let state = gate.state.rawValue
+    gate.release()
+    let encoded = try! JSONSerialization.data(
+        withJSONObject: ["state": state],
+        options: [.sortedKeys]
+    )
+    FileHandle.standardOutput.write(encoded + Data("\n".utf8))
+    exit(0)
+}
 
 if CommandLine.arguments.contains("--path-contract-self-test") {
     let manager = FileManager.default

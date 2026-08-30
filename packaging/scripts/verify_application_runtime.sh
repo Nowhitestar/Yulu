@@ -23,6 +23,8 @@ CODESIGN_TOOL="${YULU_VERIFY_CODESIGN:-/usr/bin/codesign}"
 RESOURCES="$APP/Contents/Resources"
 RUNTIME="$RESOURCES/runtime"
 HOST="$RESOURCES/Host"
+FRAMEWORKS="$APP/Contents/Frameworks"
+SPARKLE="$FRAMEWORKS/Sparkle.framework"
 INVENTORY="$RESOURCES/application-runtime.json"
 VERSIONS="$RUNTIME/runtime-versions.json"
 
@@ -32,6 +34,7 @@ REQUIRED_FILES=(
   "Contents/Library/LaunchAgents/com.yulu.audiodaemon.plist"
   "Contents/MacOS/xai_keychain"
   "Contents/MacOS/calendar_probe"
+  "Contents/Helpers/YuluCapture.app/Contents/Info.plist"
   "Contents/Helpers/YuluCapture.app/Contents/MacOS/audio_daemon"
   "Contents/Resources/runtime/bin/node"
   "Contents/Resources/runtime/bin/ffmpeg"
@@ -39,7 +42,14 @@ REQUIRED_FILES=(
   "Contents/Resources/runtime/runtime-versions.json"
   "Contents/Resources/runtime/yulu/scripts/record_audio.py"
   "Contents/Resources/runtime/yulu/scripts/application_migration.py"
+  "Contents/Resources/runtime/yulu/scripts/application_update.py"
   "Contents/Resources/runtime/yulu/scripts/local_caption_runtime_pack.json"
+  "Contents/Resources/Sparkle-LICENSE.txt"
+  "Contents/Frameworks/Sparkle.framework/Versions/Current/Sparkle"
+  "Contents/Frameworks/Sparkle.framework/Versions/Current/Autoupdate"
+  "Contents/Frameworks/Sparkle.framework/Versions/Current/Updater.app/Contents/MacOS/Updater"
+  "Contents/Frameworks/Sparkle.framework/Versions/Current/XPCServices/Downloader.xpc/Contents/MacOS/Downloader"
+  "Contents/Frameworks/Sparkle.framework/Versions/Current/XPCServices/Installer.xpc/Contents/MacOS/Installer"
   "Contents/Resources/Host/server.js"
   "Contents/Resources/Host/web/index.html"
   "Contents/Resources/Host/node_modules/better-sqlite3/package.json"
@@ -56,11 +66,78 @@ REQUIRED_MACHO=(
   "Contents/Resources/runtime/bin/ffmpeg"
   "Contents/Resources/runtime/python/bin/python3"
   "Contents/Resources/Host/node_modules/better-sqlite3/build/Release/better_sqlite3.node"
+  "Contents/Frameworks/Sparkle.framework/Versions/Current/Sparkle"
+  "Contents/Frameworks/Sparkle.framework/Versions/Current/Autoupdate"
+  "Contents/Frameworks/Sparkle.framework/Versions/Current/Updater.app/Contents/MacOS/Updater"
+  "Contents/Frameworks/Sparkle.framework/Versions/Current/XPCServices/Downloader.xpc/Contents/MacOS/Downloader"
+  "Contents/Frameworks/Sparkle.framework/Versions/Current/XPCServices/Installer.xpc/Contents/MacOS/Installer"
 )
 
 for relative in "${REQUIRED_FILES[@]}"; do
   [[ -f "$APP/$relative" ]] || fail "required Application Runtime file missing: $relative"
 done
+python3 - \
+  "$APP/Contents/Info.plist" \
+  "$APP/Contents/Helpers/YuluCapture.app/Contents/Info.plist" \
+  "${YULU_REQUIRE_SPARKLE_CONFIGURATION:-0}" <<'PY'
+import base64
+import plistlib
+import re
+import sys
+from urllib.parse import urlsplit
+
+with open(sys.argv[1], "rb") as source:
+    info = plistlib.load(source)
+with open(sys.argv[2], "rb") as source:
+    capture_info = plistlib.load(source)
+required = {
+    "SUVerifyUpdateBeforeExtraction": True,
+    "SURequireSignedFeed": True,
+    "SUEnableAutomaticChecks": True,
+    "SUAllowsAutomaticUpdates": False,
+    "SUAutomaticallyUpdate": False,
+}
+if any(info.get(key) != value for key, value in required.items()):
+    raise SystemExit("verify_application_runtime.sh: unsafe Sparkle update policy")
+signed_feed_expiration = info.get("SUSignedFeedFailureExpirationInterval")
+if type(signed_feed_expiration) is not int or signed_feed_expiration != 0:
+    raise SystemExit("verify_application_runtime.sh: unsafe signed-feed expiration policy")
+short_version = info.get("CFBundleShortVersionString")
+release_version = info.get("YuluReleaseVersion")
+build = info.get("CFBundleVersion")
+if (
+    re.fullmatch(r"[0-9]+(?:[.][0-9]+){2}", str(short_version)) is None
+    or re.fullmatch(
+        r"[0-9]+(?:[.][0-9]+){2}(?:-[0-9A-Za-z]+(?:[.][0-9A-Za-z]+)*)?",
+        str(release_version),
+    ) is None
+    or re.fullmatch(r"[1-9][0-9]*", str(build)) is None
+    or any(
+        capture_info.get(key) != value
+        for key, value in {
+            "CFBundleShortVersionString": short_version,
+            "YuluReleaseVersion": release_version,
+            "CFBundleVersion": build,
+        }.items()
+    )
+):
+    raise SystemExit("verify_application_runtime.sh: invalid release identity")
+if sys.argv[3] == "1":
+    feed = urlsplit(str(info.get("SUFeedURL", "")))
+    try:
+        key = base64.b64decode(str(info.get("SUPublicEDKey", "")), validate=True)
+    except ValueError:
+        key = b""
+    if (
+        feed.scheme.lower() != "https"
+        or not feed.hostname
+        or feed.username is not None
+        or feed.password is not None
+        or feed.fragment
+        or len(key) != 32
+    ):
+        raise SystemExit("verify_application_runtime.sh: Sparkle release configuration is missing or invalid")
+PY
 python3 - "$APP" <<'PY'
 import plistlib
 import sys
@@ -148,9 +225,18 @@ done
 while IFS= read -r -d '' candidate; do
   check_macho "$candidate" 0
 done < <(
-  find "$RUNTIME" "$HOST" "$APP/Contents/MacOS" "$APP/Contents/Helpers/YuluCapture.app/Contents/MacOS" \
+  find -H "$RUNTIME" "$HOST" "$FRAMEWORKS" "$APP/Contents/MacOS" "$APP/Contents/Helpers/YuluCapture.app/Contents/MacOS" \
     -type f -print0
 )
+
+for nested_code in \
+  "$SPARKLE/Versions/Current/XPCServices/Downloader.xpc" \
+  "$SPARKLE/Versions/Current/XPCServices/Installer.xpc" \
+  "$SPARKLE/Versions/Current/Updater.app" \
+  "$SPARKLE"; do
+  "$CODESIGN_TOOL" --verify --strict "$nested_code" >/dev/null 2>&1 || \
+    fail "Sparkle nested code signature invalid: ${nested_code#"$APP"/}"
+done
 
 NODE_ENTITLEMENTS="$($CODESIGN_TOOL --display --entitlements :- "$RUNTIME/bin/node" 2>&1)" || \
   fail "could not read bundled Node entitlements"
@@ -217,6 +303,7 @@ destination = Path(sys.argv[2])
 roots = [
     app / "Contents/Resources/runtime",
     app / "Contents/Resources/Host",
+    app / "Contents/Frameworks",
 ]
 fixed = [
     app / "Contents/MacOS/yulu_app",
@@ -225,6 +312,7 @@ fixed = [
     app / "Contents/MacOS/xai_keychain",
     app / "Contents/MacOS/calendar_probe",
     app / "Contents/Helpers/YuluCapture.app/Contents/MacOS/audio_daemon",
+    app / "Contents/Resources/Sparkle-LICENSE.txt",
 ]
 paths = set(fixed)
 for root in roots:
@@ -258,7 +346,7 @@ versions = json.loads((app / "Contents/Resources/runtime/runtime-versions.json")
 payload = {
     "schema": 1,
     "architecture": "arm64",
-    "versions": {name: versions[name] for name in ("node", "python", "ffmpeg")},
+    "versions": {name: versions[name] for name in ("node", "python", "ffmpeg", "sparkle")},
     "files": files,
 }
 temporary = destination.with_suffix(".json.tmp")
@@ -284,7 +372,11 @@ inventory = json.loads(inventory_path.read_text(encoding="utf-8"))
 if inventory.get("schema") != 1 or inventory.get("architecture") != "arm64":
     raise SystemExit("verify_application_runtime.sh: invalid Application Runtime inventory header")
 
-roots = [app / "Contents/Resources/runtime", app / "Contents/Resources/Host"]
+roots = [
+    app / "Contents/Resources/runtime",
+    app / "Contents/Resources/Host",
+    app / "Contents/Frameworks",
+]
 fixed = {
     "Contents/MacOS/yulu_app",
     "Contents/Library/LaunchAgents/com.yulu.ui.plist",
@@ -292,6 +384,7 @@ fixed = {
     "Contents/MacOS/xai_keychain",
     "Contents/MacOS/calendar_probe",
     "Contents/Helpers/YuluCapture.app/Contents/MacOS/audio_daemon",
+    "Contents/Resources/Sparkle-LICENSE.txt",
 }
 actual = set(fixed)
 for root in roots:
@@ -334,5 +427,8 @@ for entry in inventory["files"]:
     if digest.hexdigest() != entry.get("sha256"):
         raise SystemExit(f"verify_application_runtime.sh: inventory hash mismatch: {relative}")
 PY
+
+"$CODESIGN_TOOL" --verify --deep --strict "$APP" >/dev/null 2>&1 || \
+  fail "final Application Runtime bundle signature invalid after inspection"
 
 echo "Verified self-contained Application Runtime: $APP"

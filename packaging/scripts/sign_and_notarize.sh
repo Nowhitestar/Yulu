@@ -39,6 +39,19 @@
 #   RUNNER_TEMP              provided by GitHub Actions
 set -euo pipefail
 
+UPDATE_RELEASE_MODE=0
+if [[ $# -gt 1 ]]; then
+  echo "usage: sign_and_notarize.sh [--update-release]" >&2
+  exit 64
+fi
+if [[ $# -eq 1 ]]; then
+  [[ "$1" == "--update-release" ]] || {
+    echo "usage: sign_and_notarize.sh [--update-release]" >&2
+    exit 64
+  }
+  UPDATE_RELEASE_MODE=1
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 SCRIPTS_DIR="$REPO_DIR/yulu/scripts"
@@ -59,6 +72,12 @@ require_env() {
   fi
 }
 
+require_update_env() {
+  if [[ "$UPDATE_RELEASE_MODE" == "1" ]]; then
+    require_env "$1"
+  fi
+}
+
 require_env YULU_CODESIGN_IDENTITY
 require_env YULU_CODESIGN_P12_BASE64
 require_env P12_PWD
@@ -66,6 +85,11 @@ require_env KEYCHAIN_PWD
 require_env ASC_KEY_P8_BASE64
 require_env ASC_KEY_ID
 require_env ASC_ISSUER_ID
+require_update_env YULU_SPARKLE_FEED_URL
+require_update_env YULU_SPARKLE_PUBLIC_ED_KEY
+require_update_env YULU_RELEASE_VERSION
+require_update_env YULU_BUNDLE_SHORT_VERSION
+require_update_env YULU_BUILD_NUMBER
 : "${RUNNER_TEMP:?RUNNER_TEMP must be set (GitHub Actions provides it)}"
 : "${TAG:?TAG must be set to the release tag}"
 
@@ -148,7 +172,12 @@ codesign --force --options runtime --timestamp \
   --entitlements "$SCRIPTS_DIR/YuluShell.app.entitlements" \
   --sign "$YULU_CODESIGN_IDENTITY" "$YULU_APP"
 codesign --verify --deep --strict --verbose=2 "$YULU_APP"
-bash "$REPO_DIR/packaging/scripts/verify_application_runtime.sh" "$YULU_APP"
+if [[ "$UPDATE_RELEASE_MODE" == "1" ]]; then
+  YULU_REQUIRE_SPARKLE_CONFIGURATION=1 \
+    bash "$REPO_DIR/packaging/scripts/verify_application_runtime.sh" "$YULU_APP"
+else
+  bash "$REPO_DIR/packaging/scripts/verify_application_runtime.sh" "$YULU_APP"
+fi
 
 # --- Notarize + staple (Pattern 2 / Pitfall 4) -----------------------------
 # Decode the App Store Connect API key once (never echoed).

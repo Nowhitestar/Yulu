@@ -31,6 +31,8 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 let env: { root: string; cleanup: () => void; server: RunningServer; baseUrl: string };
 const originalHostNonce = process.env.YULU_HOST_NONCE;
 const originalServiceOwner = process.env.YULU_SERVICE_OWNER;
+const originalProductVersion = process.env.YULU_PRODUCT_VERSION;
+const originalBundleVersion = process.env.YULU_BUNDLE_VERSION;
 
 it("runs application data preparation as a one-shot leaf without starting Host", async () => {
   const root = mkdtempSync(join(tmpdir(), "yulu-prepare-leaf-"));
@@ -122,6 +124,8 @@ beforeAll(async () => {
   process.env.YULU_UI_PORT = "0";
   process.env.YULU_HOST_NONCE = "server-test-nonce";
   process.env.YULU_SERVICE_OWNER = "com.yulu.ui";
+  process.env.YULU_PRODUCT_VERSION = "0.23.0-test";
+  process.env.YULU_BUNDLE_VERSION = "999";
   const server = await startServer({
     configDir,
     configFile: join(configDir, "config.json"),
@@ -144,6 +148,10 @@ afterAll(async () => {
   else process.env.YULU_HOST_NONCE = originalHostNonce;
   if (originalServiceOwner === undefined) delete process.env.YULU_SERVICE_OWNER;
   else process.env.YULU_SERVICE_OWNER = originalServiceOwner;
+  if (originalProductVersion === undefined) delete process.env.YULU_PRODUCT_VERSION;
+  else process.env.YULU_PRODUCT_VERSION = originalProductVersion;
+  if (originalBundleVersion === undefined) delete process.env.YULU_BUNDLE_VERSION;
+  else process.env.YULU_BUNDLE_VERSION = originalBundleVersion;
 });
 
 describe("server", () => {
@@ -156,6 +164,14 @@ describe("server", () => {
       serviceOwner: "com.yulu.ui",
       instanceLockToken: expect.any(String),
       pid: expect.any(Number),
+      productVersion: "0.23.0-test",
+      bundleVersion: "999",
+      hostIPCVersion: 1,
+      database: {
+        status: "ok",
+        schemaVersion: 1,
+        minimumReadableVersion: 1,
+      },
     });
   });
 

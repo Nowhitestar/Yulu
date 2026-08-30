@@ -30,6 +30,7 @@ import {
 import { createCaller } from "./trpc.js";
 import { handleMcpRequest, isAuthorizedToken, isMcpRequest } from "./mcp.js";
 import { HostStore } from "./hostStore.js";
+import { YULU_HOST_IPC_VERSION } from "./runtimeContract.js";
 import { ArtifactStore } from "./artifactStore.js";
 import { AgentUnavailableError } from "./agentGateway.js";
 import {
@@ -205,6 +206,7 @@ async function startLockedServer(
 
   const configManager = new ConfigManager(runtimePaths.configFile);
   const hostStore = new HostStore(runtimePaths.hostDb);
+  const databaseHealth = hostStore.runtimeDatabaseHealth();
   const recoveredConversationIds = recoverInterruptedAgentSessionInvocations(runtimePaths.durableDataDir);
   if (recoveredConversationIds.length > 0) {
     console.warn(
@@ -461,6 +463,10 @@ async function startLockedServer(
     instanceLockToken: instanceLock.token,
     serviceOwner: process.env.YULU_SERVICE_OWNER ?? null,
     pid: process.pid,
+    productVersion: process.env.YULU_PRODUCT_VERSION ?? null,
+    bundleVersion: process.env.YULU_BUNDLE_VERSION ?? null,
+    hostIPCVersion: YULU_HOST_IPC_VERSION,
+    database: databaseHealth,
   }));
   app.get("/api/ui-token", (c) => {
     c.header("Cache-Control", "no-store");

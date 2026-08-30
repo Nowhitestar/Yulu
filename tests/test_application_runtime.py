@@ -47,6 +47,45 @@ def runtime_fixture(tmp_path: Path) -> tuple[Path, dict[str, str]]:
         "Helpers/YuluCapture.app/Contents/MacOS/audio_daemon",
     ):
         write(contents / relative, executable=True)
+    write(
+        contents / "Info.plist",
+        plistlib.dumps(
+            {
+                "CFBundleShortVersionString": "0.23.0",
+                "CFBundleVersion": "731",
+                "YuluReleaseVersion": "0.23.0-rc.4",
+                "SUVerifyUpdateBeforeExtraction": True,
+                "SURequireSignedFeed": True,
+                "SUSignedFeedFailureExpirationInterval": 0,
+                "SUEnableAutomaticChecks": True,
+                "SUAllowsAutomaticUpdates": False,
+                "SUAutomaticallyUpdate": False,
+            }
+        ),
+    )
+    write(
+        contents / "Helpers/YuluCapture.app/Contents/Info.plist",
+        plistlib.dumps(
+            {
+                "CFBundleShortVersionString": "0.23.0",
+                "CFBundleVersion": "731",
+                "YuluReleaseVersion": "0.23.0-rc.4",
+            }
+        ),
+    )
+    sparkle = contents / "Frameworks/Sparkle.framework"
+    sparkle_version = sparkle / "Versions/B"
+    for relative in (
+        "Sparkle",
+        "Autoupdate",
+        "Updater.app/Contents/MacOS/Updater",
+        "XPCServices/Downloader.xpc/Contents/MacOS/Downloader",
+        "XPCServices/Installer.xpc/Contents/MacOS/Installer",
+    ):
+        write(sparkle_version / relative, b"sparkle-arm64\n", executable=True)
+    (sparkle / "Versions/Current").symlink_to("B")
+    (sparkle / "Sparkle").symlink_to("Versions/Current/Sparkle")
+    write(contents / "Resources/Sparkle-LICENSE.txt", b"sparkle license\n")
     launch_agents = contents / "Library/LaunchAgents"
     for label, bundle_program, arguments in (
         (
@@ -92,6 +131,7 @@ def runtime_fixture(tmp_path: Path) -> tuple[Path, dict[str, str]]:
     scripts = tmp_path / "scripts"
     write(scripts / "record_audio.py", b"print('record')\n")
     write(scripts / "application_migration.py", b"print('migrate')\n")
+    write(scripts / "application_update.py", b"print('update')\n")
     write(scripts / "search/cli.py", b"print('search')\n")
     write(scripts / "config.example.json", b"{}\n")
     write(
@@ -131,6 +171,7 @@ def runtime_fixture(tmp_path: Path) -> tuple[Path, dict[str, str]]:
         "python": {"version": "test-python", "sha256": sha256(python_archive)},
         "ffmpeg": {"version": "test-ffmpeg", "sha256": sha256(ffmpeg)},
         "ffmpegLicense": {"sha256": sha256(ffmpeg_license)},
+        "sparkle": {"version": "test-sparkle"},
     }
     lock_path = tmp_path / "runtime-lock.json"
     lock_path.write_text(json.dumps(lock), encoding="utf-8")
@@ -207,10 +248,228 @@ def test_prepare_application_runtime_stages_only_core_runtime_and_production_hos
     assert (resources / "Host/node_modules/file-uri-to-path/package.json").is_file()
     assert (resources / "runtime/yulu/scripts/record_audio.py").is_file()
     assert (resources / "runtime/yulu/scripts/application_migration.py").is_file()
+    assert (resources / "runtime/yulu/scripts/application_update.py").is_file()
     assert (resources / "runtime/yulu/scripts/search/cli.py").is_file()
     assert (resources / "runtime/yulu/scripts/local_caption_runtime_pack.json").is_file()
     assert not (resources / "runtime/yulu/scripts/local-caption-model.bin").exists()
     assert not any(path.name.endswith(".onnx") for path in resources.rglob("*"))
+
+
+def test_sparkle_runtime_is_exactly_pinned_embedded_arm64_and_release_configured(
+    tmp_path: Path,
+):
+    lock = json.loads((ROOT / "packaging/runtime-lock.json").read_text(encoding="utf-8"))
+    assert lock["sparkle"] == {
+        "version": "2.9.6",
+        "url": "https://github.com/sparkle-project/Sparkle/releases/download/2.9.6/Sparkle-for-Swift-Package-Manager.zip",
+        "sha256": "8d5fb41d960b43f4a68aa14126bf62b098544ec8d191cdcc73eb14e63a8e7606",
+    }
+    build = (ROOT / "yulu/scripts/build_audio_daemon.sh").read_text(encoding="utf-8")
+    assert "prepare_sparkle_framework.sh" in build
+    assert '-framework Sparkle' in build
+    assert '@executable_path/../Frameworks' in build
+    assert '/usr/bin/lipo -thin arm64' in (
+        ROOT / "packaging/scripts/prepare_sparkle_framework.sh"
+    ).read_text(encoding="utf-8")
+    nested = [
+        "Downloader.xpc",
+        "Installer.xpc",
+        "Updater.app",
+        "Versions/Current/Autoupdate",
+        'sign "$IDENTITY" "$SPARKLE_FRAMEWORK"',
+    ]
+    positions = [build.index(marker) for marker in nested]
+    assert positions == sorted(positions)
+    assert build.index('sign "$IDENTITY" "$SPARKLE_FRAMEWORK"') < build.index(
+        'sign "$IDENTITY" "$APP"'
+    )
+
+    info = plistlib.loads(
+        (ROOT / "yulu/scripts/Yulu.app/Contents/Info.plist").read_bytes()
+    )
+    assert info["SUVerifyUpdateBeforeExtraction"] is True
+    assert info["SURequireSignedFeed"] is True
+    assert info["SUEnableAutomaticChecks"] is True
+    assert info["SUAllowsAutomaticUpdates"] is False
+    assert info["SUAutomaticallyUpdate"] is False
+    assert info["SUSignedFeedFailureExpirationInterval"] == 0
+    assert "SUFeedURL" not in info
+    assert "SUPublicEDKey" not in info
+
+    app, overrides = runtime_fixture(tmp_path)
+    prepared = subprocess.run(
+        ["bash", str(PREPARE), str(app)],
+        env={**os.environ, **overrides},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert prepared.returncode == 0, prepared.stderr + prepared.stdout
+    verify_env = {
+        **os.environ,
+        **fake_verification_tools(tmp_path),
+        "YULU_REQUIRE_SPARKLE_CONFIGURATION": "1",
+    }
+    rejected = subprocess.run(
+        ["bash", str(VERIFY), "--write-inventory", str(app)],
+        env=verify_env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert rejected.returncode != 0
+    assert "Sparkle release configuration is missing or invalid" in rejected.stderr
+
+    info_path = app / "Contents/Info.plist"
+    configured = plistlib.loads(info_path.read_bytes())
+    configured["SUFeedURL"] = "https://updates.yulu.app/appcast.xml"
+    configured["SUPublicEDKey"] = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+    info_path.write_bytes(plistlib.dumps(configured))
+    accepted = subprocess.run(
+        ["bash", str(VERIFY), "--write-inventory", str(app)],
+        env=verify_env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert accepted.returncode == 0, accepted.stderr + accepted.stdout
+
+
+def test_update_release_mode_accepts_explicit_release_identity_and_build_metadata():
+    # #166 consumes generic release/build metadata. Proving that RC and stable
+    # artifacts originate from the same source commit belongs to #171's
+    # publication metadata and artifact readback acceptance.
+    build = (ROOT / "yulu/scripts/build_audio_daemon.sh").read_text(encoding="utf-8")
+    signing = (ROOT / "packaging/scripts/sign_and_notarize.sh").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'YULU_BUNDLE_SHORT_VERSION="${YULU_BUNDLE_SHORT_VERSION:-' in build
+    assert '${YULU_VERSION_RAW%%[-+]*}' in build
+    assert 'YULU_RELEASE_VERSION="${YULU_RELEASE_VERSION:-$YULU_VERSION_RAW}"' in build
+    assert 'YULU_BUILD_NUMBER="${YULU_BUILD_NUMBER:-' in build
+    assert 'CFBundleShortVersionString string "$YULU_BUNDLE_SHORT_VERSION"' in build
+    assert 'YuluReleaseVersion string "$YULU_RELEASE_VERSION"' in build
+    assert 'CFBundleVersion string "$YULU_BUILD_NUMBER"' in build
+    assert (
+        'SUSignedFeedFailureExpirationInterval integer 0' in build
+    )
+    assert '[[ "$1" == "--update-release" ]]' in signing
+    for name in (
+        "YULU_RELEASE_VERSION",
+        "YULU_BUNDLE_SHORT_VERSION",
+        "YULU_BUILD_NUMBER",
+    ):
+        assert f"require_update_env {name}" in signing
+
+
+def test_runtime_verifier_requires_nonexpiring_signed_feed_failures_as_integer_zero(
+    tmp_path: Path,
+) -> None:
+    app, overrides = runtime_fixture(tmp_path)
+    prepared = subprocess.run(
+        ["bash", str(PREPARE), str(app)],
+        env={**os.environ, **overrides},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert prepared.returncode == 0, prepared.stderr + prepared.stdout
+    info_path = app / "Contents/Info.plist"
+    baseline = plistlib.loads(info_path.read_bytes())
+    verify_env = {**os.environ, **fake_verification_tools(tmp_path)}
+
+    for mutation in (None, False, 0.0, "0", 1):
+        changed = dict(baseline)
+        if mutation is None:
+            changed.pop("SUSignedFeedFailureExpirationInterval")
+        else:
+            changed["SUSignedFeedFailureExpirationInterval"] = mutation
+        info_path.write_bytes(plistlib.dumps(changed))
+        rejected = subprocess.run(
+            ["bash", str(VERIFY), "--write-inventory", str(app)],
+            env=verify_env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert rejected.returncode != 0
+        assert "unsafe signed-feed expiration policy" in rejected.stderr
+
+    info_path.write_bytes(plistlib.dumps(baseline))
+    accepted = subprocess.run(
+        ["bash", str(VERIFY), "--write-inventory", str(app)],
+        env=verify_env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert accepted.returncode == 0, accepted.stderr + accepted.stdout
+
+
+def test_signing_current_zip_workflow_and_explicit_update_mode_have_separate_contracts(
+    tmp_path: Path,
+):
+    signer = ROOT / "packaging/scripts/sign_and_notarize.sh"
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    security = fake_bin / "security"
+    security.write_text("#!/bin/sh\nexit 91\n", encoding="utf-8")
+    security.chmod(0o755)
+    base64 = fake_bin / "base64"
+    base64.write_text("#!/bin/sh\ncat >/dev/null\n", encoding="utf-8")
+    base64.chmod(0o755)
+    core = {
+        **os.environ,
+        "PATH": f"{fake_bin}:/usr/bin:/bin:/usr/sbin:/sbin",
+        "YULU_CODESIGN_IDENTITY": "test identity",
+        "YULU_CODESIGN_P12_BASE64": "test",
+        "P12_PWD": "test",
+        "KEYCHAIN_PWD": "test",
+        "ASC_KEY_P8_BASE64": "test",
+        "ASC_KEY_ID": "test",
+        "ASC_ISSUER_ID": "test",
+        "RUNNER_TEMP": str(tmp_path),
+        "TAG": "v0.23.0-rc.4",
+    }
+
+    current = subprocess.run(
+        ["bash", str(signer)],
+        env=core,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert current.returncode == 91
+    assert "YULU_SPARKLE_FEED_URL" not in current.stderr
+
+    missing = subprocess.run(
+        ["bash", str(signer), "--update-release"],
+        env=core,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert missing.returncode == 1
+    assert "YULU_SPARKLE_FEED_URL" in missing.stderr
+
+    explicit = subprocess.run(
+        ["bash", str(signer), "--update-release"],
+        env={
+            **core,
+            "YULU_SPARKLE_FEED_URL": "https://updates.yulu.app/appcast.xml",
+            "YULU_SPARKLE_PUBLIC_ED_KEY": (
+                "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+            ),
+            "YULU_RELEASE_VERSION": "0.23.0-rc.4",
+            "YULU_BUNDLE_SHORT_VERSION": "0.23.0",
+            "YULU_BUILD_NUMBER": "749",
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert explicit.returncode == 91
 
 
 def test_prepare_application_runtime_rejects_an_unpinned_native_addon(tmp_path: Path):
@@ -745,6 +1004,48 @@ def test_release_pipeline_builds_and_rechecks_the_locked_application_runtime():
     assert "packaging/runtime-lock.json" in workflow
     assert '"yulu/scripts/yulu_ui/node_modules"' in package
     assert '\n    "node_modules"\n' not in package
+
+
+def test_runtime_inspection_finishes_with_a_deep_bundle_signature_gate():
+    build = (ROOT / "yulu/scripts/build_audio_daemon.sh").read_text(encoding="utf-8")
+    verifier = VERIFY.read_text(encoding="utf-8")
+
+    build_verify = build.rindex(
+        'bash "$REPO_DIR/packaging/scripts/verify_application_runtime.sh" "$APP"'
+    )
+    build_final_signature = build.rindex(
+        'codesign --verify --deep --strict --verbose=2 "$APP"'
+    )
+    build_last_inspector = build.rindex('codesign -dvvv "$APP"')
+    assert build_verify < build_last_inspector < build_final_signature
+
+    inventory_verify = verifier.rindex("inventory hash mismatch")
+    verifier_final_signature = verifier.rindex(
+        '"$CODESIGN_TOOL" --verify --deep --strict "$APP"'
+    )
+    assert inventory_verify < verifier_final_signature
+
+
+def test_runtime_build_handles_empty_optional_swift_flags_under_nounset():
+    build = (ROOT / "yulu/scripts/build_audio_daemon.sh").read_text(encoding="utf-8")
+    for variable in ("SHELL_SWIFT_FLAGS", "SPARKLE_LINK_FLAGS"):
+        safe_expansion = f'${{{variable}[@]+"${{{variable}[@]}}"}}'
+        assert safe_expansion in build
+
+        result = subprocess.run(
+            [
+                "/bin/bash",
+                "-u",
+                "-c",
+                f'{variable}=(); set -- ${{{variable}[@]+"${{{variable}[@]}}"}}; test "$#" -eq 0',
+            ],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr
+
 
 
 def test_application_runtime_workflows_build_native_addons_with_exact_locked_node():

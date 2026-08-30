@@ -7,6 +7,11 @@ import type { TranscriptionLanguage } from "./realtimeTranscription.js";
 import type { XaiCredentialSource } from "./xaiCredentials.js";
 import type { CalendarSourceEvidenceSnapshot } from "./calendarSources.js";
 import { agentConnectionRevision } from "./agentConnectionRevision.js";
+import {
+  YULU_HOST_DATABASE_MINIMUM_READABLE_VERSION,
+  YULU_HOST_DATABASE_SCHEMA_VERSION,
+  type RuntimeDatabaseHealth,
+} from "./runtimeContract.js";
 
 export type AgentTaskState =
   | "queued"
@@ -1197,6 +1202,20 @@ export class HostStore {
 
   close(): void {
     this.db.close();
+  }
+
+  runtimeDatabaseHealth(): RuntimeDatabaseHealth {
+    const quickCheck = this.db.pragma("quick_check", { simple: true });
+    const schemaVersion = this.db.pragma("user_version", { simple: true });
+    if (quickCheck !== "ok" || schemaVersion !== YULU_HOST_DATABASE_SCHEMA_VERSION) {
+      throw new Error("Host database runtime contract is unhealthy");
+    }
+    return {
+      status: "ok",
+      quickCheck: "ok",
+      schemaVersion: YULU_HOST_DATABASE_SCHEMA_VERSION,
+      minimumReadableVersion: YULU_HOST_DATABASE_MINIMUM_READABLE_VERSION,
+    };
   }
 
   listAgentConnectionRecords(): PersistedAgentConnection[] {
@@ -4933,6 +4952,7 @@ export class HostStore {
               (later.tested_at = history.tested_at AND later.id > history.id))
         );
     `);
+    this.db.pragma(`user_version = ${YULU_HOST_DATABASE_SCHEMA_VERSION}`);
   }
 
   private initializeOnboardingEntryState(

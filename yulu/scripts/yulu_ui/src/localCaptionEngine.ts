@@ -143,6 +143,7 @@ export class SherpaCaptionEngine implements StreamingCaptionEngine {
   private ensureChild(): ChildProcessWithoutNullStreams {
     if (this.child && this.child.exitCode === null && !this.child.killed) return this.child;
     const child = spawn(this.runtime.python, [
+      "-B",
       "-I",
       "-S",
       this.runtime.workerPath,
@@ -153,6 +154,7 @@ export class SherpaCaptionEngine implements StreamingCaptionEngine {
       stdio: ["pipe", "pipe", "pipe"],
       env: {
         ...process.env,
+        PYTHONDONTWRITEBYTECODE: "1",
         PYTHONNOUSERSITE: "1",
         PYTHONUNBUFFERED: "1",
       },

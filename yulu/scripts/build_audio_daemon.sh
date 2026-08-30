@@ -28,8 +28,22 @@ INFO="$APP/Contents/Info.plist"
 CAPTURE_INFO="$CAPTURE_APP/Contents/Info.plist"
 ICNS_SRC="$REPO_DIR/assets/Yulu.icns"
 YULU_VERSION_RAW="$(tr -d '[:space:]' < "$REPO_DIR/VERSION" 2>/dev/null || echo "0.0.0+unknown")"
-YULU_BUNDLE_VERSION="${YULU_VERSION_RAW%%[-+]*}"
-YULU_BUILD_NUMBER="$(git -C "$REPO_DIR" rev-list --count HEAD 2>/dev/null || echo 0)"
+YULU_BUNDLE_SHORT_VERSION="${YULU_BUNDLE_SHORT_VERSION:-${YULU_VERSION_RAW%%[-+]*}}"
+YULU_RELEASE_VERSION="${YULU_RELEASE_VERSION:-$YULU_VERSION_RAW}"
+DEFAULT_BUILD_NUMBER="$(git -C "$REPO_DIR" rev-list --count HEAD 2>/dev/null || echo 0)"
+YULU_BUILD_NUMBER="${YULU_BUILD_NUMBER:-$DEFAULT_BUILD_NUMBER}"
+if [[ ! "$YULU_BUNDLE_SHORT_VERSION" =~ ^[0-9]+([.][0-9]+){2}$ ]]; then
+  echo "YULU_BUNDLE_SHORT_VERSION must be three period-separated integers" >&2
+  exit 64
+fi
+if [[ ! "$YULU_RELEASE_VERSION" =~ ^[0-9]+([.][0-9]+){2}(-[0-9A-Za-z]+([.][0-9A-Za-z]+)*)?$ ]]; then
+  echo "YULU_RELEASE_VERSION must be an exact numeric release with an optional prerelease label" >&2
+  exit 64
+fi
+if [[ ! "$YULU_BUILD_NUMBER" =~ ^[1-9][0-9]*$ ]]; then
+  echo "YULU_BUILD_NUMBER must be a positive decimal integer" >&2
+  exit 64
+fi
 SWIFT_TARGET=(-target arm64-apple-macosx13.0)
 SWIFT_MODULE_CACHE="${YULU_SWIFT_MODULE_CACHE_PATH:-/private/tmp/yulu-swift-module-cache}"
 SWIFT_TARGET+=(-module-cache-path "$SWIFT_MODULE_CACHE")
@@ -38,6 +52,7 @@ if [[ "${YULU_BUNDLE_DEVELOPMENT_HOST:-0}" == "1" ]]; then
   SHELL_SWIFT_FLAGS=(-D YULU_DEVELOPMENT_SMOKE)
 fi
 BUNDLE_APPLICATION_RUNTIME="${YULU_BUNDLE_APPLICATION_RUNTIME:-0}"
+SPARKLE_FRAMEWORK="$APP/Contents/Frameworks/Sparkle.framework"
 
 cd "$SCRIPT_DIR"
 
@@ -51,10 +66,22 @@ if [[ "$APP" != "$APP_TEMPLATE" ]]; then
 fi
 mkdir -p "$APP/Contents/MacOS" "$CAPTURE_APP/Contents/MacOS" "$RES_DIR"
 
-swiftc "${SWIFT_TARGET[@]}" "${SHELL_SWIFT_FLAGS[@]}" -o "$SHELL_BIN" yulu_app.swift \
+SPARKLE_LINK_FLAGS=()
+if [[ "$BUNDLE_APPLICATION_RUNTIME" == "1" ]]; then
+  bash "$REPO_DIR/packaging/scripts/prepare_sparkle_framework.sh" "$APP"
+  SPARKLE_LINK_FLAGS=(
+    -F "$APP/Contents/Frameworks"
+    -framework Sparkle
+    -Xlinker -rpath -Xlinker @executable_path/../Frameworks
+  )
+fi
+
+swiftc "${SWIFT_TARGET[@]}" ${SHELL_SWIFT_FLAGS[@]+"${SHELL_SWIFT_FLAGS[@]}"} -o "$SHELL_BIN" yulu_app.swift \
   -framework Cocoa \
   -framework ServiceManagement \
-  -framework WebKit
+  -framework WebKit \
+  -framework Security \
+  ${SPARKLE_LINK_FLAGS[@]+"${SPARKLE_LINK_FLAGS[@]}"}
 swiftc "${SWIFT_TARGET[@]}" -o "$BIN" audio_daemon.swift \
   -framework Cocoa \
   -framework ScreenCaptureKit \
@@ -129,19 +156,57 @@ plist_set_or_add "$INFO" CFBundleExecutable string yulu_app
 plist_set_or_add "$INFO" CFBundleIdentifier string com.yulu.app
 plist_set_or_add "$INFO" CFBundleName string Yulu
 plist_set_or_add "$INFO" CFBundleDisplayName string Yulu
-plist_set_or_add "$INFO" CFBundleShortVersionString string "$YULU_BUNDLE_VERSION"
+plist_set_or_add "$INFO" CFBundleShortVersionString string "$YULU_BUNDLE_SHORT_VERSION"
 plist_set_or_add "$INFO" CFBundleVersion string "$YULU_BUILD_NUMBER"
-plist_set_or_add "$INFO" YuluVersion string "$YULU_VERSION_RAW"
+plist_set_or_add "$INFO" YuluVersion string "$YULU_RELEASE_VERSION"
+plist_set_or_add "$INFO" YuluReleaseVersion string "$YULU_RELEASE_VERSION"
 plist_set_or_add "$INFO" CFBundleIconFile string Yulu
 plist_set_or_add "$INFO" CFBundleIconName string Yulu
+plist_set_or_add "$INFO" SUVerifyUpdateBeforeExtraction bool true
+plist_set_or_add "$INFO" SURequireSignedFeed bool true
+plist_set_or_add "$INFO" SUSignedFeedFailureExpirationInterval integer 0
+plist_set_or_add "$INFO" SUEnableAutomaticChecks bool true
+plist_set_or_add "$INFO" SUAllowsAutomaticUpdates bool false
+plist_set_or_add "$INFO" SUAutomaticallyUpdate bool false
+SPARKLE_FEED_URL="${YULU_SPARKLE_FEED_URL:-}"
+SPARKLE_PUBLIC_ED_KEY="${YULU_SPARKLE_PUBLIC_ED_KEY:-}"
+if [[ -n "$SPARKLE_FEED_URL" || -n "$SPARKLE_PUBLIC_ED_KEY" ]]; then
+  [[ -n "$SPARKLE_FEED_URL" && -n "$SPARKLE_PUBLIC_ED_KEY" ]] || {
+    echo "Sparkle release configuration requires both URL and public key" >&2
+    exit 78
+  }
+  python3 - "$SPARKLE_FEED_URL" "$SPARKLE_PUBLIC_ED_KEY" <<'PY'
+import base64
+import sys
+from urllib.parse import urlsplit
+
+feed = urlsplit(sys.argv[1])
+try:
+    key = base64.b64decode(sys.argv[2], validate=True)
+except ValueError:
+    key = b""
+if (
+    feed.scheme.lower() != "https"
+    or not feed.hostname
+    or feed.username is not None
+    or feed.password is not None
+    or feed.fragment
+    or len(key) != 32
+):
+    raise SystemExit("invalid Sparkle release URL or public EdDSA key")
+PY
+  plist_set_or_add "$INFO" SUFeedURL string "$SPARKLE_FEED_URL"
+  plist_set_or_add "$INFO" SUPublicEDKey string "$SPARKLE_PUBLIC_ED_KEY"
+fi
 
 plist_set_or_add "$CAPTURE_INFO" CFBundleExecutable string audio_daemon
 plist_set_or_add "$CAPTURE_INFO" CFBundleIdentifier string com.yulu.audiodaemon
 plist_set_or_add "$CAPTURE_INFO" CFBundleName string "Yulu Capture"
 plist_set_or_add "$CAPTURE_INFO" CFBundleDisplayName string "Yulu Capture"
-plist_set_or_add "$CAPTURE_INFO" CFBundleShortVersionString string "$YULU_BUNDLE_VERSION"
+plist_set_or_add "$CAPTURE_INFO" CFBundleShortVersionString string "$YULU_BUNDLE_SHORT_VERSION"
 plist_set_or_add "$CAPTURE_INFO" CFBundleVersion string "$YULU_BUILD_NUMBER"
-plist_set_or_add "$CAPTURE_INFO" YuluVersion string "$YULU_VERSION_RAW"
+plist_set_or_add "$CAPTURE_INFO" YuluVersion string "$YULU_RELEASE_VERSION"
+plist_set_or_add "$CAPTURE_INFO" YuluReleaseVersion string "$YULU_RELEASE_VERSION"
 plist_set_or_add "$CAPTURE_INFO" LSUIElement bool true
 plist_set_or_add "$CAPTURE_INFO" NSMicrophoneUsageDescription string "Yulu records microphone audio for meeting notes."
 plist_set_or_add "$CAPTURE_INFO" NSScreenCaptureUsageDescription string "Yulu captures system audio for meeting notes."
@@ -216,6 +281,18 @@ if [[ "$BUNDLE_APPLICATION_RUNTIME" == "1" ]]; then
       fi
     fi
   done < <(find "$RES_DIR/runtime" "$RES_DIR/Host" -type f -print0)
+  for nested_code in \
+    "$SPARKLE_FRAMEWORK/Versions/Current/XPCServices/Downloader.xpc" \
+    "$SPARKLE_FRAMEWORK/Versions/Current/XPCServices/Installer.xpc" \
+    "$SPARKLE_FRAMEWORK/Versions/Current/Updater.app" \
+    "$SPARKLE_FRAMEWORK/Versions/Current/Autoupdate"; do
+    codesign --force --options runtime --timestamp \
+      --preserve-metadata=identifier,entitlements \
+      --sign "$IDENTITY" "$nested_code"
+  done
+  codesign --force --options runtime --timestamp \
+    --preserve-metadata=identifier,entitlements \
+    --sign "$IDENTITY" "$SPARKLE_FRAMEWORK"
 fi
 codesign --force --options runtime --timestamp \
   --entitlements "$CAPTURE_ENTITLEMENTS" --sign "$IDENTITY" "$APP_BIN"
@@ -237,6 +314,7 @@ fi
 codesign --display --entitlements :- "$APP"
 
 echo "✅ Built and signed Yulu.app"
-echo "   version: $YULU_VERSION_RAW (bundle $YULU_BUNDLE_VERSION, build $YULU_BUILD_NUMBER)"
+echo "   release: $YULU_RELEASE_VERSION (bundle $YULU_BUNDLE_SHORT_VERSION, build $YULU_BUILD_NUMBER)"
 echo "   identity: $IDENTITY"
 codesign -dvvv "$APP" 2>&1 | grep -E 'Identifier|Authority|TeamIdentifier|CDHash|Signature|Version' || true
+codesign --verify --deep --strict --verbose=2 "$APP"

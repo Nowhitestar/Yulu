@@ -3,6 +3,9 @@ import Darwin
 import Security
 import ServiceManagement
 import WebKit
+#if canImport(Sparkle)
+import Sparkle
+#endif
 
 struct LaunchPolicy: Encodable {
     static let installedBundlePath = "/Applications/Yulu.app"
@@ -309,6 +312,13 @@ enum ProductSigningPolicy {
     }
 }
 
+enum ApplicationRuntimeContract {
+    static let hostIPCVersion = 1
+    static let captureIPCVersion = 1
+    static let hostDatabaseSchemaVersion = 1
+    static let hostDatabaseMinimumReadableVersion = 1
+}
+
 struct CodeIdentityEvidence: Encodable {
     let accepted: Bool
     let identifier: String
@@ -456,11 +466,27 @@ func codeIdentityEvidence(
     )
 }
 
+struct RuntimeDatabaseEvidence {
+    let status: String
+    let quickCheck: String
+    let schemaVersion: Int
+    let minimumReadableVersion: Int
+}
+
 struct RuntimeOwnerEvidence: Encodable {
     let running: Bool
     let capabilityReady: Bool?
     let ownerPID: Int?
     var codeIdentity: CodeIdentityEvidence? = nil
+    var productVersion: String? = nil
+    var bundleVersion: String? = nil
+    var ipcVersion: Int? = nil
+    var database: RuntimeDatabaseEvidence? = nil
+    var ownerUID: Int? = nil
+    var generation: String? = nil
+    var executablePath: String? = nil
+    var authorityToken: String? = nil
+    var instanceNonce: String? = nil
 
     enum CodingKeys: String, CodingKey {
         case running, capabilityReady, ownerPID
@@ -499,6 +525,9 @@ struct RuntimeOwnerEvidence: Encodable {
               attestation.executableMatches,
               attestation.argumentsMatch,
               attestation.generationStable,
+              attestation.ownerUID == Int(geteuid()),
+              let executablePath = attestation.executablePath,
+              !executablePath.isEmpty,
               let processGeneration = attestation.generation,
               !processGeneration.isEmpty else {
             return RuntimeOwnerEvidence(running: false, capabilityReady: nil, ownerPID: nil)
@@ -506,7 +535,9 @@ struct RuntimeOwnerEvidence: Encodable {
         if kind == "host" {
             guard let authorityToken = attestation.authorityToken,
                   !authorityToken.isEmpty,
-                  payload["instanceLockToken"] as? String == authorityToken else {
+                  payload["instanceLockToken"] as? String == authorityToken,
+                  let instanceNonce = payload["instanceNonce"] as? String,
+                  !instanceNonce.isEmpty else {
                 return RuntimeOwnerEvidence(running: false, capabilityReady: nil, ownerPID: nil)
             }
             let healthy = payload["status"] as? String == "ok"
@@ -514,7 +545,29 @@ struct RuntimeOwnerEvidence: Encodable {
                 running: healthy,
                 capabilityReady: nil,
                 ownerPID: healthy ? pid : nil,
-                codeIdentity: healthy ? attestation.codeIdentity : nil
+                codeIdentity: healthy ? attestation.codeIdentity : nil,
+                productVersion: payload["productVersion"] as? String,
+                bundleVersion: payload["bundleVersion"] as? String,
+                ipcVersion: payload["hostIPCVersion"] as? Int,
+                database: (payload["database"] as? [String: Any]).flatMap { database in
+                    guard let status = database["status"] as? String,
+                          let quickCheck = database["quickCheck"] as? String,
+                          let schemaVersion = database["schemaVersion"] as? Int,
+                          let minimumReadableVersion = database["minimumReadableVersion"] as? Int else {
+                        return nil
+                    }
+                    return RuntimeDatabaseEvidence(
+                        status: status,
+                        quickCheck: quickCheck,
+                        schemaVersion: schemaVersion,
+                        minimumReadableVersion: minimumReadableVersion
+                    )
+                },
+                ownerUID: attestation.ownerUID,
+                generation: processGeneration,
+                executablePath: executablePath,
+                authorityToken: authorityToken,
+                instanceNonce: instanceNonce
             )
         }
         return RuntimeOwnerEvidence(
@@ -522,7 +575,13 @@ struct RuntimeOwnerEvidence: Encodable {
             capabilityReady: payload["micReady"] as? Bool == true
                 && payload["sysReady"] as? Bool == true,
             ownerPID: pid,
-            codeIdentity: attestation.codeIdentity
+            codeIdentity: attestation.codeIdentity,
+            productVersion: payload["productVersion"] as? String,
+            bundleVersion: payload["bundleVersion"] as? String,
+            ipcVersion: payload["captureIPCVersion"] as? Int,
+            ownerUID: attestation.ownerUID,
+            generation: processGeneration,
+            executablePath: executablePath
         )
     }
 }
@@ -535,10 +594,13 @@ struct RuntimeOwnerAttestation: Encodable {
     let argumentsMatch: Bool
     let generationStable: Bool
     var codeIdentity: CodeIdentityEvidence? = nil
+    var ownerUID: Int? = nil
+    var executablePath: String? = nil
 
     enum CodingKeys: String, CodingKey {
         case ownerPID, authorityToken, generation
         case executableMatches, argumentsMatch, generationStable
+        case ownerUID, executablePath
     }
 
     func encode(to encoder: Encoder) throws {
@@ -549,6 +611,8 @@ struct RuntimeOwnerAttestation: Encodable {
         try container.encode(executableMatches, forKey: .executableMatches)
         try container.encode(argumentsMatch, forKey: .argumentsMatch)
         try container.encode(generationStable, forKey: .generationStable)
+        try container.encodeIfPresent(ownerUID, forKey: .ownerUID)
+        try container.encodeIfPresent(executablePath, forKey: .executablePath)
     }
 
     static func decode(_ payload: [String: Any]) -> RuntimeOwnerAttestation? {
@@ -565,7 +629,9 @@ struct RuntimeOwnerAttestation: Encodable {
             generation: payload["generation"] as? String,
             executableMatches: executableMatches,
             argumentsMatch: argumentsMatch,
-            generationStable: generationStable
+            generationStable: generationStable,
+            ownerUID: payload["ownerUID"] as? Int,
+            executablePath: payload["executablePath"] as? String
         )
     }
 }
@@ -650,6 +716,10 @@ struct BundleLayout {
         bundleURL.appendingPathComponent("Contents/MacOS", isDirectory: true)
     }
 
+    var applicationExecutable: URL {
+        executableDir.appendingPathComponent("yulu_app")
+    }
+
     var bundledPython: URL {
         bundleURL.appendingPathComponent("Contents/Resources/runtime/python/bin/python3")
     }
@@ -713,6 +783,101 @@ struct BuildContract: Encodable {
         #else
         BuildContract(developmentSmoke: false)
         #endif
+    }
+}
+
+struct ApplicationUpdateConfiguration: Encodable {
+    let enabled: Bool
+    let automaticChecks: Bool
+    let explicitInstallOnly: Bool
+    let reason: String?
+
+    enum CodingKeys: String, CodingKey {
+        case enabled, automaticChecks, explicitInstallOnly, reason
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(enabled, forKey: .enabled)
+        try container.encode(automaticChecks, forKey: .automaticChecks)
+        try container.encode(explicitInstallOnly, forKey: .explicitInstallOnly)
+        if let reason {
+            try container.encode(reason, forKey: .reason)
+        } else {
+            try container.encodeNil(forKey: .reason)
+        }
+    }
+
+    static func evaluate(info: [String: Any]) -> ApplicationUpdateConfiguration {
+        guard let feed = info["SUFeedURL"] as? String,
+              let feedURL = URL(string: feed),
+              feedURL.scheme?.lowercased() == "https",
+              feedURL.host?.isEmpty == false,
+              feedURL.user == nil,
+              feedURL.password == nil,
+              feedURL.fragment == nil else {
+            return disabled("Sparkle feed configuration is missing or unsafe.")
+        }
+        guard let encodedKey = info["SUPublicEDKey"] as? String,
+              Data(base64Encoded: encodedKey)?.count == 32 else {
+            return disabled("Sparkle public key configuration is missing or invalid.")
+        }
+        guard info["SUVerifyUpdateBeforeExtraction"] as? Bool == true,
+              info["SURequireSignedFeed"] as? Bool == true else {
+            return disabled("Sparkle signature verification must fail closed.")
+        }
+        guard let signedFeedExpiration = info["SUSignedFeedFailureExpirationInterval"] as? NSNumber,
+              CFGetTypeID(signedFeedExpiration) != CFBooleanGetTypeID(),
+              !["f", "d"].contains(String(cString: signedFeedExpiration.objCType)),
+              signedFeedExpiration.int64Value == 0 else {
+            return disabled("Sparkle signed-feed failures must never expire.")
+        }
+        guard info["SUEnableAutomaticChecks"] as? Bool == true,
+              info["SUAllowsAutomaticUpdates"] as? Bool == false,
+              info["SUAutomaticallyUpdate"] as? Bool == false else {
+            return disabled("Yulu updates require automatic checks and explicit installation.")
+        }
+        return ApplicationUpdateConfiguration(
+            enabled: true,
+            automaticChecks: true,
+            explicitInstallOnly: true,
+            reason: nil
+        )
+    }
+
+    private static func disabled(_ reason: String) -> ApplicationUpdateConfiguration {
+        ApplicationUpdateConfiguration(
+            enabled: false,
+            automaticChecks: false,
+            explicitInstallOnly: true,
+            reason: reason
+        )
+    }
+}
+
+struct UpdateTerminationGate: Encodable {
+    let allowTermination: Bool
+
+    static func evaluate(
+        updatePending: Bool,
+        installAuthorized: Bool,
+        rollbackHelperLaunched: Bool
+    ) -> UpdateTerminationGate {
+        UpdateTerminationGate(
+            allowTermination: allowTermination(
+                updatePending: updatePending,
+                installAuthorized: installAuthorized,
+                rollbackHelperLaunched: rollbackHelperLaunched
+            )
+        )
+    }
+
+    static func allowTermination(
+        updatePending: Bool,
+        installAuthorized: Bool,
+        rollbackHelperLaunched: Bool
+    ) -> Bool {
+        !updatePending || installAuthorized || rollbackHelperLaunched
     }
 }
 
@@ -1007,6 +1172,12 @@ struct HostServiceExecution: Encodable {
         environment["YULU_UI_DIST_WEB"] = layout.hostWeb.path
         environment["YULU_HOST_NONCE"] = hostNonce
         environment["YULU_SERVICE_OWNER"] = owner
+        environment["YULU_PRODUCT_VERSION"] = Bundle.main.object(
+            forInfoDictionaryKey: "YuluReleaseVersion"
+        ) as? String ?? ""
+        environment["YULU_BUNDLE_VERSION"] = Bundle.main.object(
+            forInfoDictionaryKey: "CFBundleVersion"
+        ) as? String ?? ""
         environment["YULU_SCRIPT_DIR"] = layout.bundledScriptDir.path
         environment["YULU_NATIVE_HELPER_DIR"] = layout.executableDir.path
         environment["YULU_PYTHON"] = layout.bundledPython.path
@@ -1085,6 +1256,7 @@ struct ApplicationMigrationCommand: Encodable {
         let migrationRoot = applicationPaths.durableDataDir
             .appendingPathComponent("application-migration", isDirectory: true)
         var arguments = [
+                "-B",
                 migrationScript.path,
                 "session",
                 "--home", homeDirectory.path,
@@ -1105,6 +1277,64 @@ struct ApplicationMigrationCommand: Encodable {
         arguments.append("--allow-development-adhoc")
         #endif
         return ApplicationMigrationCommand(
+            executableURL: layout.bundledPython,
+            arguments: arguments
+        )
+    }
+}
+
+struct ApplicationUpdateCommand: Encodable {
+    let executableURL: URL
+    let arguments: [String]
+
+    enum CodingKeys: String, CodingKey {
+        case executable, arguments
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(executableURL.path, forKey: .executable)
+        try container.encode(arguments, forKey: .arguments)
+    }
+
+    static func make(
+        policy: LaunchPolicy,
+        layout: BundleLayout,
+        applicationPaths: ApplicationDataPaths,
+        currentVersion: String,
+        currentBuild: String,
+        targetVersion: String? = nil,
+        targetBuild: String? = nil,
+        requestRollback: Bool = false
+    ) -> ApplicationUpdateCommand? {
+        guard policy.persistentRegistrationAllowed,
+              !currentVersion.isEmpty,
+              !currentBuild.isEmpty,
+              (targetVersion == nil) == (targetBuild == nil) else { return nil }
+        let script = layout.bundledScriptDir.appendingPathComponent("application_update.py")
+        let databaseRoot = applicationPaths.durableDataDir
+        var arguments = [
+            "-B",
+            script.path,
+            "session",
+            "--durable", applicationPaths.durableDataDir.path,
+            "--cache", applicationPaths.cacheDir.path,
+            "--application", layout.bundleURL.path,
+            "--current-version", currentVersion,
+            "--current-build", currentBuild,
+            "--host-database", databaseRoot.appendingPathComponent("host.sqlite").path,
+            "--prompts-database", databaseRoot.appendingPathComponent("prompts.sqlite").path,
+            "--vocab-database", databaseRoot.appendingPathComponent("vocab.sqlite").path,
+            "--search-database", databaseRoot.appendingPathComponent("search.sqlite").path,
+        ]
+        if let targetVersion, let targetBuild {
+            arguments += [
+                "--target-version", targetVersion,
+                "--target-build", targetBuild,
+            ]
+        }
+        if requestRollback { arguments.append("--request-rollback") }
+        return ApplicationUpdateCommand(
             executableURL: layout.bundledPython,
             arguments: arguments
         )
@@ -1501,10 +1731,563 @@ final class ApplicationMigrationCoordinator {
     }
 }
 
+struct ApplicationUpdateAction: Decodable {
+    let action: String
+    let scope: String?
+    let transactionId: String?
+    let nonce: String?
+    let services: [String]?
+    let target: [String: String]?
+    let executable: String?
+    let script: String?
+    let failure: String?
+    let reason: String?
+}
+
+func applicationUpdateHealthPayload(
+    currentVersion: String,
+    currentBuild: String,
+    applicationPID: Int,
+    applicationUID: Int,
+    applicationGeneration: String,
+    applicationExecutable: String,
+    applicationIdentity: CodeIdentityEvidence,
+    host: RuntimeOwnerEvidence,
+    capture: RuntimeOwnerEvidence,
+    serviceStatuses: [String: String]
+) -> [String: Any]? {
+    guard applicationIdentity.accepted,
+          host.running,
+          capture.running,
+          let hostPID = host.ownerPID,
+          let hostUID = host.ownerUID,
+          hostUID == applicationUID,
+          let hostGeneration = host.generation,
+          let hostExecutable = host.executablePath,
+          let hostNonce = host.instanceNonce,
+          let hostLockToken = host.authorityToken,
+          let hostIdentity = host.codeIdentity,
+          hostIdentity.accepted,
+          let hostProductVersion = host.productVersion,
+          let hostBundleVersion = host.bundleVersion,
+          let hostIPCVersion = host.ipcVersion,
+          hostIPCVersion == ApplicationRuntimeContract.hostIPCVersion,
+          let database = host.database,
+          database.status == "ok",
+          database.quickCheck == "ok",
+          database.schemaVersion == ApplicationRuntimeContract.hostDatabaseSchemaVersion,
+          database.minimumReadableVersion
+            == ApplicationRuntimeContract.hostDatabaseMinimumReadableVersion,
+          let capturePID = capture.ownerPID,
+          let captureUID = capture.ownerUID,
+          captureUID == applicationUID,
+          let captureGeneration = capture.generation,
+          let captureExecutable = capture.executablePath,
+          let captureIdentity = capture.codeIdentity,
+          captureIdentity.accepted,
+          let captureProductVersion = capture.productVersion,
+          let captureBundleVersion = capture.bundleVersion,
+          let captureIPCVersion = capture.ipcVersion,
+          captureIPCVersion == ApplicationRuntimeContract.captureIPCVersion else {
+        return nil
+    }
+    return [
+        "application": [
+            "identifier": applicationIdentity.identifier,
+            "teamIdentifier": applicationIdentity.teamIdentifier,
+            "cdHash": applicationIdentity.cdHash,
+            "version": currentVersion,
+            "build": currentBuild,
+            "pid": applicationPID,
+            "uid": applicationUID,
+            "generation": applicationGeneration,
+            "executable": applicationExecutable,
+        ],
+        "host": [
+            "identifier": hostIdentity.identifier,
+            "teamIdentifier": hostIdentity.teamIdentifier,
+            "cdHash": hostIdentity.cdHash,
+            "productVersion": hostProductVersion,
+            "bundleVersion": hostBundleVersion,
+            "hostIPCVersion": hostIPCVersion,
+            "serviceOwner": "com.yulu.ui",
+            "pid": hostPID,
+            "uid": hostUID,
+            "generation": hostGeneration,
+            "executable": hostExecutable,
+            "hostNonce": hostNonce,
+            "instanceLockToken": hostLockToken,
+            "portOwnerPID": hostPID,
+            "database": [
+                "status": database.status,
+                "quickCheck": database.quickCheck,
+                "schemaVersion": database.schemaVersion,
+                "minimumReadableVersion": database.minimumReadableVersion,
+            ],
+        ],
+        "capture": [
+            "identifier": captureIdentity.identifier,
+            "teamIdentifier": captureIdentity.teamIdentifier,
+            "cdHash": captureIdentity.cdHash,
+            "productVersion": captureProductVersion,
+            "bundleVersion": captureBundleVersion,
+            "captureIPCVersion": captureIPCVersion,
+            "serviceOwner": "com.yulu.audiodaemon",
+            "pid": capturePID,
+            "uid": captureUID,
+            "generation": captureGeneration,
+            "executable": captureExecutable,
+            "socketOwnerPID": capturePID,
+        ],
+        "services": serviceStatuses,
+    ]
+}
+
+final class ApplicationUpdateCoordinator {
+    private let policy: LaunchPolicy
+    private let layout: BundleLayout
+    private let applicationPaths: ApplicationDataPaths
+    private let services: BackgroundServiceRegistry
+    private let currentVersion: String
+    private let currentBuild: String
+    private var process: Process?
+    private var input: FileHandle?
+    private var outputBuffer = Data()
+    private var terminalSeen = false
+    private var binding: (transactionId: String, nonce: String)?
+    private var retainedInstallHandler: (() -> Void)?
+    private var deferredTarget: (version: String, build: String)?
+    private var sessionGeneration = 0
+    private var startMigrationAfterTermination = false
+
+    private(set) var updatePending = false
+    private(set) var installAuthorized = false
+    private(set) var rollbackHelperLaunched = false
+
+    var onStateChange: ((String, String?) -> Void)?
+    var onCanStartMigration: (() -> Void)?
+    var onNeedsHealth: (() -> Void)?
+    var currentHealth: (() -> (host: RuntimeOwnerEvidence, capture: RuntimeOwnerEvidence))?
+    var onRollbackHelperLaunched: (() -> Void)?
+
+    init(
+        policy: LaunchPolicy,
+        layout: BundleLayout,
+        applicationPaths: ApplicationDataPaths,
+        services: BackgroundServiceRegistry
+    ) {
+        self.policy = policy
+        self.layout = layout
+        self.applicationPaths = applicationPaths
+        self.services = services
+        let info = Bundle.main.infoDictionary ?? [:]
+        self.currentVersion = info["YuluReleaseVersion"] as? String ?? ""
+        self.currentBuild = info["CFBundleVersion"] as? String ?? ""
+    }
+
+    func resume() {
+        guard process == nil, retainedInstallHandler == nil else { return }
+        startSession(targetVersion: nil, targetBuild: nil, requestRollback: false)
+    }
+
+    func prepareInstall(
+        targetVersion: String,
+        targetBuild: String,
+        installHandler: @escaping () -> Void
+    ) {
+        guard process == nil, retainedInstallHandler == nil else { return }
+        retainedInstallHandler = installHandler
+        deferredTarget = (targetVersion, targetBuild)
+        updatePending = true
+        startSession(
+            targetVersion: targetVersion,
+            targetBuild: targetBuild,
+            requestRollback: false
+        )
+    }
+
+    func requestRollback() {
+        guard process == nil else { return }
+        updatePending = true
+        startSession(targetVersion: nil, targetBuild: nil, requestRollback: true)
+    }
+
+    func submitHealth() {
+        guard let health = healthPayload() else { return }
+        send(["health": health])
+    }
+
+    private func startSession(
+        targetVersion: String?,
+        targetBuild: String?,
+        requestRollback: Bool
+    ) {
+        guard let command = ApplicationUpdateCommand.make(
+            policy: policy,
+            layout: layout,
+            applicationPaths: applicationPaths,
+            currentVersion: currentVersion,
+            currentBuild: currentBuild,
+            targetVersion: targetVersion,
+            targetBuild: targetBuild,
+            requestRollback: requestRollback
+        ) else {
+            onStateChange?("blocked", "Application update command is unavailable.")
+            return
+        }
+        sessionGeneration += 1
+        let generation = sessionGeneration
+        terminalSeen = false
+        binding = nil
+        outputBuffer.removeAll(keepingCapacity: true)
+        let inputPipe = Pipe()
+        let outputPipe = Pipe()
+        let errorPipe = Pipe()
+        let child = Process()
+        child.executableURL = command.executableURL
+        child.arguments = command.arguments
+        child.standardInput = inputPipe
+        child.standardOutput = outputPipe
+        child.standardError = errorPipe
+        child.currentDirectoryURL = layout.bundledScriptDir
+        var environment = sanitizedRuntimeEnvironment()
+        environment.merge(applicationPaths.environment) { _, contract in contract }
+        environment["PYTHONDONTWRITEBYTECODE"] = "1"
+        environment["PATH"] = "\(layout.bundledPythonBin.path):/usr/bin:/bin:/usr/sbin:/sbin"
+        child.environment = environment
+        let stderrDrain = BoundedRedactedStderrDrain()
+        stderrDrain.start(errorPipe.fileHandleForReading)
+        process = child
+        input = inputPipe.fileHandleForWriting
+        outputPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
+            let data = handle.availableData
+            guard !data.isEmpty else { return }
+            DispatchQueue.main.async {
+                guard generation == self?.sessionGeneration else { return }
+                self?.consume(data)
+            }
+        }
+        child.terminationHandler = { [weak self] _ in
+            stderrDrain.finishAfterProcessExit()
+            DispatchQueue.main.async {
+                guard let self, generation == self.sessionGeneration else { return }
+                outputPipe.fileHandleForReading.readabilityHandler = nil
+                self.process = nil
+                self.input = nil
+                self.binding = nil
+                if !self.terminalSeen {
+                    self.onStateChange?(
+                        "blocked",
+                        stderrDrain.userFacingDetail
+                            ?? "Application update authority exited before a terminal state."
+                    )
+                } else if self.startMigrationAfterTermination {
+                    self.startMigrationAfterTermination = false
+                    self.onCanStartMigration?()
+                }
+            }
+        }
+        do {
+            try child.run()
+            errorPipe.fileHandleForWriting.closeFile()
+        } catch {
+            errorPipe.fileHandleForWriting.closeFile()
+            stderrDrain.finishAfterProcessExit()
+            process = nil
+            input = nil
+            onStateChange?("blocked", error.localizedDescription)
+        }
+    }
+
+    private func send(_ payload: [String: Any], requiresBinding: Bool = true) {
+        guard let input else { return }
+        var envelope = payload
+        if requiresBinding {
+            guard let binding else { return }
+            envelope["transactionId"] = binding.transactionId
+            envelope["nonce"] = binding.nonce
+        }
+        guard let data = try? JSONSerialization.data(withJSONObject: envelope),
+              data.count <= 64 * 1024 else {
+            input.closeFile()
+            self.input = nil
+            return
+        }
+        do {
+            try input.write(contentsOf: data + Data("\n".utf8))
+        } catch {
+            input.closeFile()
+            self.input = nil
+        }
+    }
+
+    private func consume(_ data: Data) {
+        outputBuffer.append(data)
+        if outputBuffer.count > 64 * 1024, !outputBuffer.contains(0x0A) {
+            input?.closeFile()
+            input = nil
+            return
+        }
+        while let newline = outputBuffer.firstIndex(of: 0x0A) {
+            let line = outputBuffer[..<newline]
+            outputBuffer.removeSubrange(...newline)
+            guard line.count <= 64 * 1024,
+                  let action = try? JSONDecoder().decode(
+                    ApplicationUpdateAction.self,
+                    from: Data(line)
+                  ) else {
+                input?.closeFile()
+                input = nil
+                return
+            }
+            if let transactionId = action.transactionId, let nonce = action.nonce {
+                binding = (transactionId, nonce)
+            }
+            handle(action)
+        }
+    }
+
+    private func handle(_ action: ApplicationUpdateAction) {
+        switch action.action {
+        case "idle", "committed", "aborted", "rolled_back":
+            terminalSeen = true
+            updatePending = false
+            retainedInstallHandler = nil
+            deferredTarget = nil
+            onStateChange?(action.action, action.failure)
+            startMigrationAfterTermination = true
+        case "observe_recording":
+            observeRecording(requiresBinding: action.scope == nil)
+        case "defer_installation":
+            terminalSeen = true
+            onStateChange?("deferred", action.reason)
+            if retainedInstallHandler != nil {
+                scheduleDeferredRecordingProbe()
+            } else {
+                updatePending = false
+                startMigrationAfterTermination = true
+            }
+        case "unregister_services", "unregister_services_for_rollback":
+            guard policy.persistentRegistrationAllowed else {
+                onStateChange?("blocked", "Application update service action was rejected.")
+                return
+            }
+            BackgroundServiceDescriptor.bundledOwners.forEach { services.unregister($0) }
+            observeQuiescence(attempt: 0)
+        case "install_update":
+            send(["action": "authorize_install"])
+        case "invoke_install_handler":
+            terminalSeen = true
+            guard let handler = retainedInstallHandler else {
+                updatePending = false
+                onStateChange?("blocked", "Sparkle install handler is unavailable.")
+                return
+            }
+            retainedInstallHandler = nil
+            deferredTarget = nil
+            installAuthorized = true
+            onStateChange?("installing", nil)
+            handler()
+        case "register_services":
+            guard policy.persistentRegistrationAllowed else {
+                onStateChange?("blocked", "Application update service action was rejected.")
+                return
+            }
+            BackgroundServiceDescriptor.bundledOwners.forEach { services.register($0) }
+            observeRegistration(attempt: 0)
+        case "observe_services":
+            onStateChange?("awaiting_approval", nil)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+                self?.observeRegistration(attempt: 0)
+            }
+        case "verify_update_health", "verify_previous_health":
+            onStateChange?("verifying", nil)
+            onNeedsHealth?()
+            submitHealth()
+        case "offer_return_to_previous_application":
+            terminalSeen = true
+            updatePending = true
+            onStateChange?("rollback_offered", action.failure)
+        case "launch_rollback_helper":
+            terminalSeen = true
+            launchRollbackHelper(action)
+        case "blocked":
+            terminalSeen = true
+            updatePending = true
+            onStateChange?("blocked", action.failure)
+        default:
+            input?.closeFile()
+            input = nil
+        }
+    }
+
+    private func observeRecording(requiresBinding: Bool) {
+        let socket = applicationPaths.ipcDir.appendingPathComponent("audio_daemon.sock")
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            guard let self else { return }
+            let status = captureRuntimeStatus(
+                socketURL: socket,
+                expectedExecutable: self.layout.captureExecutable
+            )
+            DispatchQueue.main.async {
+                self.send(
+                    ["recording": status.recording ?? NSNull()],
+                    requiresBinding: requiresBinding
+                )
+            }
+        }
+    }
+
+    private func scheduleDeferredRecordingProbe() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+            guard let self,
+                  self.process == nil,
+                  self.retainedInstallHandler != nil,
+                  let target = self.deferredTarget else { return }
+            let socket = self.applicationPaths.ipcDir
+                .appendingPathComponent("audio_daemon.sock")
+            DispatchQueue.global(qos: .utility).async { [weak self] in
+                guard let self else { return }
+                let status = captureRuntimeStatus(
+                    socketURL: socket,
+                    expectedExecutable: self.layout.captureExecutable
+                )
+                DispatchQueue.main.async {
+                    guard self.process == nil,
+                          self.retainedInstallHandler != nil else { return }
+                    if status.recording == false {
+                        self.startSession(
+                            targetVersion: target.version,
+                            targetBuild: target.build,
+                            requestRollback: false
+                        )
+                    } else {
+                        self.scheduleDeferredRecordingProbe()
+                    }
+                }
+            }
+        }
+    }
+
+    private func observeQuiescence(attempt: Int) {
+        let statuses = services.statuses()
+        let host = hostQuiescenceEvidence(
+            ownerURL: applicationPaths.durableDataDir.appendingPathComponent(
+                "host-instance.lock/owner.json"
+            ),
+            expectedExecutable: layout.hostNode,
+            expectedArguments: [layout.hostNode.path, layout.hostEntry.path],
+            port: HostServiceExecution.declaredPort
+        )
+        let capture = captureQuiescenceEvidence(
+            socketURL: applicationPaths.ipcDir.appendingPathComponent("audio_daemon.sock")
+        )
+        let ownersGone = host["state"] as? String == "absent"
+            && capture["state"] as? String == "absent"
+        let statusesStopped = statuses.values.allSatisfy { $0 == "notRegistered" }
+        if (!ownersGone || !statusesStopped), attempt < 40 {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+                self?.observeQuiescence(attempt: attempt + 1)
+            }
+            return
+        }
+        send([
+            "statuses": statuses,
+            "owners": ["host": host, "capture": capture],
+        ])
+    }
+
+    private func observeRegistration(attempt: Int) {
+        let statuses = services.statuses()
+        let stable = statuses.values.allSatisfy {
+            $0 == "enabled" || $0 == "requiresApproval"
+        }
+        if !stable, attempt < 40 {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+                self?.observeRegistration(attempt: attempt + 1)
+            }
+            return
+        }
+        send(["statuses": statuses])
+    }
+
+    private func healthPayload() -> [String: Any]? {
+        guard let currentHealth,
+              let appIdentity = codeIdentityEvidence(
+                pid: Int(getpid()),
+                staticURL: layout.bundleURL,
+                expectedIdentifier: ProductSigningPolicy.applicationIdentifier,
+                expectedTeamIdentifier: ProductSigningPolicy.teamIdentifier,
+                allowAdHoc: ProductSigningPolicy.allowDevelopmentAdHoc
+              ),
+              let appGeneration = processStartGeneration(pid: Int(getpid())) else { return nil }
+        let health = currentHealth()
+        return applicationUpdateHealthPayload(
+            currentVersion: currentVersion,
+            currentBuild: currentBuild,
+            applicationPID: Int(getpid()),
+            applicationUID: Int(geteuid()),
+            applicationGeneration: appGeneration,
+            applicationExecutable: layout.bundleURL
+                .appendingPathComponent("Contents/MacOS/yulu_app")
+                .standardizedFileURL.resolvingSymlinksInPath().path,
+            applicationIdentity: appIdentity,
+            host: health.host,
+            capture: health.capture,
+            serviceStatuses: services.statuses()
+        )
+    }
+
+    private func launchRollbackHelper(_ action: ApplicationUpdateAction) {
+        guard let executable = action.executable,
+              let script = action.script,
+              let transactionId = action.transactionId,
+              let generation = processStartGeneration(pid: Int(getpid()))?.split(separator: ":"),
+              generation.count == 2 else {
+            onStateChange?("blocked", "Rollback helper attestation is incomplete.")
+            return
+        }
+        let helper = Process()
+        helper.executableURL = URL(fileURLWithPath: executable)
+        helper.arguments = [
+            "-B",
+            script,
+            "recover",
+            "--durable", applicationPaths.durableDataDir.path,
+            "--cache", applicationPaths.cacheDir.path,
+            "--application", layout.bundleURL.path,
+            "--transaction-id", transactionId,
+            "--parent-pid", String(getpid()),
+            "--parent-start-seconds", String(generation[0]),
+            "--parent-start-microseconds", String(generation[1]),
+        ]
+        var environment = sanitizedRuntimeEnvironment()
+        environment["PYTHONDONTWRITEBYTECODE"] = "1"
+        helper.environment = environment
+        helper.standardInput = FileHandle.nullDevice
+        helper.standardOutput = FileHandle.nullDevice
+        helper.standardError = FileHandle.nullDevice
+        do {
+            try helper.run()
+            rollbackHelperLaunched = true
+            onRollbackHelperLaunched?()
+        } catch {
+            onStateChange?("blocked", "Verified rollback helper could not launch.")
+        }
+    }
+}
+
 func writeJSON<T: Encodable>(_ value: T) throws {
     let encoder = JSONEncoder()
     encoder.outputFormatting = [.sortedKeys]
     FileHandle.standardOutput.write(try encoder.encode(value))
+    FileHandle.standardOutput.write(Data("\n".utf8))
+}
+
+func writeJSONObject(_ value: [String: Any]) throws {
+    FileHandle.standardOutput.write(
+        try JSONSerialization.data(withJSONObject: value, options: [.sortedKeys])
+    )
     FileHandle.standardOutput.write(Data("\n".utf8))
 }
 
@@ -1747,6 +2530,38 @@ if CommandLine.arguments.count == 4, CommandLine.arguments[1] == "--inspect-capt
     exit(0)
 }
 
+if CommandLine.arguments.count == 6,
+   CommandLine.arguments[1] == "--inspect-host-quiescence",
+   let port = Int(CommandLine.arguments[5]) {
+    let evidence = hostQuiescenceEvidence(
+        ownerURL: URL(fileURLWithPath: CommandLine.arguments[2]),
+        expectedExecutable: URL(fileURLWithPath: CommandLine.arguments[3]),
+        expectedArguments: [CommandLine.arguments[3], CommandLine.arguments[4]],
+        port: port
+    )
+    try FileHandle.standardOutput.write(
+        contentsOf: JSONSerialization.data(
+            withJSONObject: evidence,
+            options: [.sortedKeys]
+        ) + Data("\n".utf8)
+    )
+    exit(0)
+}
+
+if CommandLine.arguments.count == 3,
+   CommandLine.arguments[1] == "--inspect-capture-quiescence" {
+    let evidence = captureQuiescenceEvidence(
+        socketURL: URL(fileURLWithPath: CommandLine.arguments[2])
+    )
+    try FileHandle.standardOutput.write(
+        contentsOf: JSONSerialization.data(
+            withJSONObject: evidence,
+            options: [.sortedKeys]
+        ) + Data("\n".utf8)
+    )
+    exit(0)
+}
+
 if CommandLine.arguments.count == 4, CommandLine.arguments[1] == "--inspect-host-service" {
     let bundleURL = URL(fileURLWithPath: CommandLine.arguments[2], isDirectory: true)
     let homeURL = URL(fileURLWithPath: CommandLine.arguments[3], isDirectory: true)
@@ -1772,6 +2587,119 @@ if CommandLine.arguments.count == 4,
         ),
         homeDirectory: homeURL
     ))
+    exit(0)
+}
+
+if CommandLine.arguments.count == 3,
+   CommandLine.arguments[1] == "--inspect-update-configuration" {
+    guard let info = NSDictionary(contentsOfFile: CommandLine.arguments[2]) as? [String: Any] else {
+        fputs("invalid update configuration plist\n", stderr)
+        exit(64)
+    }
+    try writeJSON(ApplicationUpdateConfiguration.evaluate(info: info))
+    exit(0)
+}
+
+if CommandLine.arguments.count == 5,
+   CommandLine.arguments[1] == "--inspect-update-termination" {
+    let values = CommandLine.arguments[2...].map { $0 == "1" }
+    try writeJSON(UpdateTerminationGate.evaluate(
+        updatePending: values[values.startIndex],
+        installAuthorized: values[values.index(after: values.startIndex)],
+        rollbackHelperLaunched: values[values.index(values.startIndex, offsetBy: 2)]
+    ))
+    exit(0)
+}
+
+if CommandLine.arguments.count == 6,
+   CommandLine.arguments[1] == "--inspect-update-command" {
+    let bundleURL = URL(fileURLWithPath: CommandLine.arguments[2], isDirectory: true)
+    let homeURL = URL(fileURLWithPath: CommandLine.arguments[3], isDirectory: true)
+    try writeJSON(ApplicationUpdateCommand.make(
+        policy: LaunchPolicy.evaluate(bundlePath: bundleURL.path),
+        layout: BundleLayout(bundleURL: bundleURL),
+        applicationPaths: ApplicationDataPaths.resolve(homeDirectory: homeURL, environment: [:]),
+        currentVersion: "0.23.0",
+        currentBuild: "730",
+        targetVersion: CommandLine.arguments[4],
+        targetBuild: CommandLine.arguments[5]
+    ))
+    exit(0)
+}
+
+if CommandLine.arguments.count == 3,
+   CommandLine.arguments[1] == "--inspect-update-health-payload" {
+    let layout = BundleLayout(
+        bundleURL: URL(fileURLWithPath: CommandLine.arguments[2], isDirectory: true)
+    )
+    func inspectedIdentity(identifier: String, hash: String) -> CodeIdentityEvidence {
+        CodeIdentityEvidence(
+            accepted: true,
+            identifier: identifier,
+            teamIdentifier: ProductSigningPolicy.teamIdentifier,
+            cdHash: hash,
+            staticSealValid: true,
+            dynamicValid: true,
+            staticDynamicMatch: true
+        )
+    }
+    let uid = Int(geteuid())
+    let host = RuntimeOwnerEvidence(
+        running: true,
+        capabilityReady: nil,
+        ownerPID: 102,
+        codeIdentity: inspectedIdentity(identifier: "node", hash: String(repeating: "b", count: 40)),
+        productVersion: "0.23.0",
+        bundleVersion: "732",
+        ipcVersion: ApplicationRuntimeContract.hostIPCVersion,
+        database: RuntimeDatabaseEvidence(
+            status: "ok",
+            quickCheck: "ok",
+            schemaVersion: ApplicationRuntimeContract.hostDatabaseSchemaVersion,
+            minimumReadableVersion: ApplicationRuntimeContract.hostDatabaseMinimumReadableVersion
+        ),
+        ownerUID: uid,
+        generation: "100:2",
+        executablePath: layout.hostNode.path,
+        authorityToken: "host-lock-token-1234",
+        instanceNonce: "11111111-1111-4111-8111-111111111111"
+    )
+    let capture = RuntimeOwnerEvidence(
+        running: true,
+        capabilityReady: true,
+        ownerPID: 103,
+        codeIdentity: inspectedIdentity(
+            identifier: ProductSigningPolicy.captureIdentifier,
+            hash: String(repeating: "c", count: 40)
+        ),
+        productVersion: "0.23.0",
+        bundleVersion: "732",
+        ipcVersion: ApplicationRuntimeContract.captureIPCVersion,
+        ownerUID: uid,
+        generation: "100:3",
+        executablePath: layout.captureExecutable.path
+    )
+    guard let payload = applicationUpdateHealthPayload(
+        currentVersion: "0.23.0",
+        currentBuild: "732",
+        applicationPID: 101,
+        applicationUID: uid,
+        applicationGeneration: "100:1",
+        applicationExecutable: layout.applicationExecutable.path,
+        applicationIdentity: inspectedIdentity(
+            identifier: ProductSigningPolicy.applicationIdentifier,
+            hash: String(repeating: "a", count: 40)
+        ),
+        host: host,
+        capture: capture,
+        serviceStatuses: [
+            "com.yulu.ui.plist": "enabled",
+            "com.yulu.audiodaemon.plist": "enabled",
+        ]
+    ) else {
+        exit(1)
+    }
+    try writeJSONObject(payload)
     exit(0)
 }
 
@@ -2085,6 +3013,20 @@ func processStartGeneration(pid: Int) -> String? {
     return "\(info.pbi_start_tvsec):\(info.pbi_start_tvusec)"
 }
 
+func processUID(pid: Int) -> Int? {
+    guard pid > 1 else { return nil }
+    var info = proc_bsdinfo()
+    let expectedSize = Int32(MemoryLayout<proc_bsdinfo>.size)
+    guard proc_pidinfo(
+        Int32(pid),
+        PROC_PIDTBSDINFO,
+        0,
+        &info,
+        expectedSize
+    ) == expectedSize else { return nil }
+    return Int(info.pbi_uid)
+}
+
 func processArguments(pid: Int) -> [String]? {
     guard pid > 1 else { return nil }
     var argMaxMIB = [Int32(CTL_KERN), Int32(KERN_ARGMAX)]
@@ -2218,18 +3160,33 @@ func hostRuntimeAttestation(
         executableMatches: executableMatches,
         argumentsMatch: argumentsMatch,
         generationStable: generationBefore != nil && generationBefore == generationAfter,
-        codeIdentity: codeIdentity
+        codeIdentity: codeIdentity,
+        ownerUID: processUID(pid: owner.pid),
+        executablePath: expectedExecutable.standardizedFileURL
+            .resolvingSymlinksInPath().path
     )
 }
 
-func captureRuntimeEvidence(socketURL: URL, expectedExecutable: URL) -> RuntimeOwnerEvidence {
+struct CaptureRuntimeStatus {
+    let evidence: RuntimeOwnerEvidence
+    let recording: Bool?
+
+    static var unavailable: CaptureRuntimeStatus {
+        CaptureRuntimeStatus(
+            evidence: RuntimeOwnerEvidence(running: false, capabilityReady: nil, ownerPID: nil),
+            recording: nil
+        )
+    }
+}
+
+func captureRuntimeStatus(socketURL: URL, expectedExecutable: URL) -> CaptureRuntimeStatus {
     let socketPath = socketURL.path
     guard socketPath.utf8.count <= 103 else {
-        return RuntimeOwnerEvidence(running: false, capabilityReady: nil, ownerPID: nil)
+        return .unavailable
     }
     let fd = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
     guard fd >= 0 else {
-        return RuntimeOwnerEvidence(running: false, capabilityReady: nil, ownerPID: nil)
+        return .unavailable
     }
     defer { Darwin.close(fd) }
     var timeout = timeval(tv_sec: 1, tv_usec: 0)
@@ -2246,7 +3203,7 @@ func captureRuntimeEvidence(socketURL: URL, expectedExecutable: URL) -> RuntimeO
         }
     }
     guard connected == 0 else {
-        return RuntimeOwnerEvidence(running: false, capabilityReady: nil, ownerPID: nil)
+        return .unavailable
     }
     var peerPID: Int32 = 0
     var peerPIDSize = socklen_t(MemoryLayout<Int32>.size)
@@ -2256,12 +3213,12 @@ func captureRuntimeEvidence(socketURL: URL, expectedExecutable: URL) -> RuntimeO
           getpeereid(fd, &peerUID, &peerGID) == 0,
           peerPID > 1,
           peerUID == geteuid() else {
-        return RuntimeOwnerEvidence(running: false, capabilityReady: nil, ownerPID: nil)
+        return .unavailable
     }
     let generationBefore = processStartGeneration(pid: Int(peerPID))
     let request = Data("{\"action\":\"status\"}".utf8)
     guard request.withUnsafeBytes({ Darwin.write(fd, $0.baseAddress, request.count) }) == request.count else {
-        return RuntimeOwnerEvidence(running: false, capabilityReady: nil, ownerPID: nil)
+        return .unavailable
     }
     shutdown(fd, SHUT_WR)
     var response = Data()
@@ -2274,7 +3231,7 @@ func captureRuntimeEvidence(socketURL: URL, expectedExecutable: URL) -> RuntimeO
     guard !response.isEmpty,
           response.count < 65_536,
           let payload = try? JSONSerialization.jsonObject(with: response) as? [String: Any] else {
-        return RuntimeOwnerEvidence(running: false, capabilityReady: nil, ownerPID: nil)
+        return .unavailable
     }
     let generationAfterResponse = processStartGeneration(pid: Int(peerPID))
     let executableMatches = processExecutableMatches(
@@ -2307,13 +3264,156 @@ func captureRuntimeEvidence(socketURL: URL, expectedExecutable: URL) -> RuntimeO
         generationStable: generationBefore != nil
             && generationBefore == generationAfterResponse
             && generationAfterResponse == generationAfterIdentity,
-        codeIdentity: codeIdentity
+        codeIdentity: codeIdentity,
+        ownerUID: Int(peerUID),
+        executablePath: expectedExecutable.standardizedFileURL
+            .resolvingSymlinksInPath().path
     )
-    return RuntimeOwnerEvidence.evaluate(
+    guard let evidence = RuntimeOwnerEvidence.evaluate(
         kind: "capture",
         payload: payload,
         attestation: attestation
-    ) ?? RuntimeOwnerEvidence(running: false, capabilityReady: nil, ownerPID: nil)
+    ) else { return .unavailable }
+    return CaptureRuntimeStatus(
+        evidence: evidence,
+        recording: payload["recording"] as? Bool
+    )
+}
+
+func captureRuntimeEvidence(socketURL: URL, expectedExecutable: URL) -> RuntimeOwnerEvidence {
+    captureRuntimeStatus(socketURL: socketURL, expectedExecutable: expectedExecutable).evidence
+}
+
+private func hostPortQuiescenceEvidence(port: Int) -> [String: Any] {
+    let fd = Darwin.socket(AF_INET, SOCK_STREAM, 0)
+    guard fd >= 0 else {
+        return ["state": "unknown", "proof": "tcp-socket-unavailable"]
+    }
+    defer { Darwin.close(fd) }
+    var timeout = timeval(tv_sec: 1, tv_usec: 0)
+    setsockopt(
+        fd,
+        SOL_SOCKET,
+        SO_SNDTIMEO,
+        &timeout,
+        socklen_t(MemoryLayout<timeval>.size)
+    )
+    var address = sockaddr_in()
+    address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+    address.sin_family = sa_family_t(AF_INET)
+    address.sin_port = in_port_t(UInt16(port).bigEndian)
+    address.sin_addr = in_addr(s_addr: inet_addr("127.0.0.1"))
+    let connected = withUnsafePointer(to: &address) {
+        $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+            Darwin.connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+        }
+    }
+    if connected == 0 {
+        return ["state": "unknown", "proof": "tcp-listener-present"]
+    }
+    if errno == ECONNREFUSED {
+        return ["state": "absent", "proof": "tcp-refused"]
+    }
+    return ["state": "unknown", "proof": "tcp-observation-failed"]
+}
+
+private func ownerRecordPresence(_ ownerURL: URL) -> String {
+    var metadata = stat()
+    if Darwin.lstat(ownerURL.path, &metadata) == 0 {
+        return "present"
+    }
+    return errno == ENOENT ? "absent" : "unknown"
+}
+
+func hostQuiescenceEvidence(
+    ownerURL: URL,
+    expectedExecutable: URL,
+    expectedArguments: [String],
+    port: Int
+) -> [String: Any] {
+    let portEvidence = hostPortQuiescenceEvidence(port: port)
+    let recordPresence = ownerRecordPresence(ownerURL)
+    let attestation = hostRuntimeAttestation(
+        ownerURL: ownerURL,
+        expectedExecutable: expectedExecutable,
+        expectedArguments: expectedArguments
+    )
+    if portEvidence["state"] as? String == "absent",
+       recordPresence == "absent" {
+        return [
+            "state": "absent",
+            "proof": "tcp-refused-owner-record-absent",
+        ]
+    }
+    if let attestation,
+       attestation.generationStable,
+       attestation.executableMatches,
+       attestation.argumentsMatch {
+        return [
+            "state": "present-attested",
+            "pid": attestation.ownerPID,
+            "generation": attestation.generation ?? "",
+        ]
+    }
+    return [
+        "state": "unknown",
+        "proof": recordPresence == "present"
+            ? "owner-record-unattested"
+            : (portEvidence["proof"] as? String ?? "host-observation-failed"),
+    ]
+}
+
+func captureQuiescenceEvidence(socketURL: URL) -> [String: Any] {
+    let socketPath = socketURL.path
+    guard socketPath.utf8.count <= 103 else {
+        return ["state": "unknown", "proof": "unix-path-invalid"]
+    }
+    let fd = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
+    guard fd >= 0 else {
+        return ["state": "unknown", "proof": "unix-socket-unavailable"]
+    }
+    defer { Darwin.close(fd) }
+    var timeout = timeval(tv_sec: 1, tv_usec: 0)
+    setsockopt(
+        fd,
+        SOL_SOCKET,
+        SO_SNDTIMEO,
+        &timeout,
+        socklen_t(MemoryLayout<timeval>.size)
+    )
+    var address = sockaddr_un()
+    address.sun_family = sa_family_t(AF_UNIX)
+    _ = socketPath.withCString { pointer in
+        strncpy(&address.sun_path.0, pointer, 103)
+    }
+    let connected = withUnsafePointer(to: &address) {
+        $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+            Darwin.connect(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
+        }
+    }
+    if connected != 0 {
+        if errno == ENOENT || errno == ECONNREFUSED {
+            return ["state": "absent", "proof": "unix-missing-or-refused"]
+        }
+        return ["state": "unknown", "proof": "unix-observation-failed"]
+    }
+    var peerPID: Int32 = 0
+    var peerPIDSize = socklen_t(MemoryLayout<Int32>.size)
+    var peerUID = uid_t(0)
+    var peerGID = gid_t(0)
+    guard getsockopt(fd, SOL_LOCAL, LOCAL_PEERPID, &peerPID, &peerPIDSize) == 0,
+          getpeereid(fd, &peerUID, &peerGID) == 0,
+          peerPID > 1,
+          peerUID == geteuid(),
+          let generation = processStartGeneration(pid: Int(peerPID)) else {
+        return ["state": "unknown", "proof": "unix-peer-unattested"]
+    }
+    return [
+        "state": "present-attested",
+        "pid": Int(peerPID),
+        "uid": Int(peerUID),
+        "generation": generation,
+    ]
 }
 
 #if YULU_DEVELOPMENT_SMOKE
@@ -2446,6 +3546,65 @@ func runDevelopmentSmoke(layout: BundleLayout, port: Int) throws -> DevelopmentS
 }
 #endif
 
+#if canImport(Sparkle)
+final class SparkleUpdateAdapter: NSObject, SPUUpdaterDelegate {
+    private let coordinator: ApplicationUpdateCoordinator
+    private let currentBuild: String
+    private lazy var controller = SPUStandardUpdaterController(
+        updaterDelegate: self,
+        userDriverDelegate: nil
+    )
+
+    init(coordinator: ApplicationUpdateCoordinator, currentBuild: String) {
+        self.coordinator = coordinator
+        self.currentBuild = currentBuild
+        super.init()
+        _ = controller
+    }
+
+    func checkForUpdates() {
+        controller.checkForUpdates(nil)
+    }
+
+    func updater(
+        _ updater: SPUUpdater,
+        shouldProceedWithUpdate item: SUAppcastItem,
+        updateCheck: SPUUpdateCheck
+    ) throws {
+        guard item.installationType == "application",
+              item.fileURL?.scheme?.lowercased() == "https",
+              item.fileURL?.pathExtension.lowercased() == "dmg",
+              item.deltaUpdates?[currentBuild] == nil,
+              let current = Int(currentBuild),
+              let target = Int(item.versionString),
+              target > current else {
+            throw NSError(
+                domain: "YuluApplicationUpdate",
+                code: 1,
+                userInfo: [
+                    NSLocalizedDescriptionKey:
+                        "Yulu requires a monotonic, whole-application, signed DMG update without a delta."
+                ]
+            )
+        }
+    }
+
+    func updater(
+        _ updater: SPUUpdater,
+        shouldPostponeRelaunchForUpdate item: SUAppcastItem,
+        untilInvokingBlock installHandler: @escaping () -> Void
+    ) -> Bool {
+        coordinator.prepareInstall(
+            targetVersion: item.displayVersionString,
+            targetBuild: item.versionString,
+            installHandler: installHandler
+        )
+        return true
+    }
+
+}
+#endif
+
 final class YuluApplication: NSObject, NSApplicationDelegate {
     private let launchPolicy: LaunchPolicy
     private let layout: BundleLayout
@@ -2456,7 +3615,12 @@ final class YuluApplication: NSObject, NSApplicationDelegate {
     private var serviceWindow: NSWindow?
     private let backgroundServices = BackgroundServiceRegistry()
     private var migrationCoordinator: ApplicationMigrationCoordinator?
+    private var updateCoordinator: ApplicationUpdateCoordinator?
+    #if canImport(Sparkle)
+    private var sparkleAdapter: SparkleUpdateAdapter?
+    #endif
     private var migrationCommitted = false
+    private var migrationStarted = false
     private var hostPollAttempts = 0
     private var pollGeneration = 0
     private var hostEvidence = RuntimeOwnerEvidence(
@@ -2493,21 +3657,31 @@ final class YuluApplication: NSObject, NSApplicationDelegate {
             window.contentView = centeredMessage(guidance, detail: "Yulu runs services and updates only from /Applications/Yulu.app.")
         } else if let applicationPaths {
             window.contentView = centeredMessage("Starting Yulu…", detail: "Waiting for the bundled Host.")
-            let coordinator = ApplicationMigrationCoordinator(
+            let coordinator = ApplicationUpdateCoordinator(
                 policy: launchPolicy,
                 layout: layout,
                 applicationPaths: applicationPaths,
-                homeDirectory: FileManager.default.homeDirectoryForCurrentUser,
                 services: backgroundServices
             )
             coordinator.onStateChange = { [weak self] state, detail in
-                self?.migrationStateChanged(state, detail: detail)
+                self?.updateStateChanged(state, detail: detail)
             }
+            coordinator.onCanStartMigration = { [weak self] in self?.startMigration() }
             coordinator.onNeedsHealth = { [weak self] in
                 self?.beginServicePolling()
             }
-            migrationCoordinator = coordinator
-            coordinator.advance()
+            coordinator.currentHealth = { [weak self] in
+                guard let self else {
+                    return (
+                        RuntimeOwnerEvidence(running: false, capabilityReady: nil, ownerPID: nil),
+                        RuntimeOwnerEvidence(running: false, capabilityReady: nil, ownerPID: nil)
+                    )
+                }
+                return (self.hostEvidence, self.captureEvidence)
+            }
+            coordinator.onRollbackHelperLaunched = { NSApp.terminate(nil) }
+            updateCoordinator = coordinator
+            coordinator.resume()
         }
         window.center()
         window.makeKeyAndOrderFront(nil)
@@ -2516,6 +3690,16 @@ final class YuluApplication: NSObject, NSApplicationDelegate {
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         false
+    }
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard let updateCoordinator else { return .terminateNow }
+        let allowTermination = UpdateTerminationGate.allowTermination(
+            updatePending: updateCoordinator.updatePending,
+            installAuthorized: updateCoordinator.installAuthorized,
+            rollbackHelperLaunched: updateCoordinator.rollbackHelperLaunched
+        )
+        return allowTermination ? .terminateNow : .terminateCancel
     }
 
     func applicationDidBecomeActive(_ notification: Notification) {
@@ -2562,6 +3746,12 @@ final class YuluApplication: NSObject, NSApplicationDelegate {
         root.addItem(appItem)
         let appMenu = NSMenu(title: "Yulu")
         appMenu.addItem(withTitle: "About Yulu", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
+        let checkForUpdates = appMenu.addItem(
+            withTitle: "Check for Updates…",
+            action: #selector(onCheckForUpdates),
+            keyEquivalent: ""
+        )
+        checkForUpdates.target = self
         appMenu.addItem(.separator())
         appMenu.addItem(withTitle: "Quit Yulu", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         appItem.submenu = appMenu
@@ -2626,6 +3816,86 @@ final class YuluApplication: NSObject, NSApplicationDelegate {
         migrationCoordinator?.cancel()
     }
 
+    @objc private func onCheckForUpdates() {
+        #if canImport(Sparkle)
+        sparkleAdapter?.checkForUpdates()
+        #endif
+    }
+
+    @objc private func onReturnToPreviousApplication() {
+        updateCoordinator?.requestRollback()
+    }
+
+    private func startMigration() {
+        guard !migrationStarted, let applicationPaths else { return }
+        migrationStarted = true
+        let coordinator = ApplicationMigrationCoordinator(
+            policy: launchPolicy,
+            layout: layout,
+            applicationPaths: applicationPaths,
+            homeDirectory: FileManager.default.homeDirectoryForCurrentUser,
+            services: backgroundServices
+        )
+        coordinator.onStateChange = { [weak self] state, detail in
+            self?.migrationStateChanged(state, detail: detail)
+        }
+        coordinator.onNeedsHealth = { [weak self] in self?.beginServicePolling() }
+        migrationCoordinator = coordinator
+        coordinator.advance()
+    }
+
+    private func updateStateChanged(_ state: String, detail: String?) {
+        switch state {
+        case "deferred":
+            window?.contentView = centeredMessage(
+                "Update deferred",
+                detail: detail == "recording-active"
+                    ? "Yulu will continue after the active recording finishes."
+                    : "Yulu could not safely verify recording state and will retry."
+            )
+        case "installing":
+            window?.contentView = centeredMessage(
+                "Installing Yulu update…",
+                detail: "The previous whole application and a data checkpoint are verified."
+            )
+        case "verifying":
+            window?.contentView = centeredMessage(
+                "Validating the Yulu update…",
+                detail: "Checking application, Host, Capture, database, service, and IPC compatibility."
+            )
+        case "awaiting_approval":
+            window?.contentView = centeredMessage(
+                "Background approval is required",
+                detail: "Open Login Items settings to allow Yulu in the background, then return here."
+            )
+            refreshServiceWindow(show: true)
+        case "rollback_offered":
+            let message = centeredMessage(
+                "The Yulu update did not pass its health check",
+                detail: "Your live data remains in place. You can return to the verified previous application."
+            )
+            let button = NSButton(
+                title: "Return to Previous Yulu…",
+                target: self,
+                action: #selector(onReturnToPreviousApplication)
+            )
+            button.translatesAutoresizingMaskIntoConstraints = false
+            message.addSubview(button)
+            NSLayoutConstraint.activate([
+                button.centerXAnchor.constraint(equalTo: message.centerXAnchor),
+                button.bottomAnchor.constraint(equalTo: message.bottomAnchor, constant: -80),
+            ])
+            window?.contentView = message
+        case "blocked":
+            window?.contentView = centeredMessage(
+                "Yulu update needs attention",
+                detail: detail ?? "The update stopped without changing data further."
+            )
+        default:
+            break
+        }
+    }
+
     private func migrationStateChanged(_ state: String, detail: String?) {
         switch state {
         case "awaiting_approval":
@@ -2642,6 +3912,7 @@ final class YuluApplication: NSObject, NSApplicationDelegate {
         case "committed":
             migrationCommitted = true
             window?.contentView = centeredMessage("Starting Yulu…", detail: "Waiting for the bundled Host.")
+            configureUpdater()
             beginServicePolling()
         case "rolled_back":
             window?.contentView = centeredMessage(
@@ -2656,6 +3927,23 @@ final class YuluApplication: NSObject, NSApplicationDelegate {
         default:
             break
         }
+    }
+
+    private func configureUpdater() {
+        #if canImport(Sparkle)
+        guard sparkleAdapter == nil,
+              ApplicationUpdateConfiguration.evaluate(
+                info: Bundle.main.infoDictionary ?? [:]
+              ).enabled,
+              let updateCoordinator,
+              let currentBuild = Bundle.main.infoDictionary?["CFBundleVersion"] as? String else {
+            return
+        }
+        sparkleAdapter = SparkleUpdateAdapter(
+            coordinator: updateCoordinator,
+            currentBuild: currentBuild
+        )
+        #endif
     }
 
     private func refreshServiceWindow(show: Bool = false) {
@@ -2776,6 +4064,7 @@ final class YuluApplication: NSObject, NSApplicationDelegate {
                     host: self.hostEvidence,
                     capture: self.captureEvidence
                 )
+                self.updateCoordinator?.submitHealth()
                 self.refreshServiceWindow()
                 if responseHealthy {
                     self.hostPollAttempts = 0
@@ -2814,6 +4103,7 @@ final class YuluApplication: NSObject, NSApplicationDelegate {
                     host: self.hostEvidence,
                     capture: self.captureEvidence
                 )
+                self.updateCoordinator?.submitHealth()
                 self.refreshServiceWindow()
             }
         }

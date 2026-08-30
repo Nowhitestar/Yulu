@@ -211,4 +211,36 @@ describe("SherpaCaptionEngine", () => {
     expect(existsSync(sitecustomizeMarker)).toBe(false);
     await engine.close();
   });
+
+  it("starts bundled Python with bytecode writes disabled explicitly", async () => {
+    const root = tempRoot("yulu-local-caption-no-bytecode-");
+    const python = join(root, "python");
+    const workerPath = join(root, "fake_worker.py");
+    writeFileSync(python, [
+      "#!/bin/sh",
+      "test \"${PYTHONDONTWRITEBYTECODE:-}\" = 1 || exit 70",
+      "test \"${1:-}\" = -B || exit 71",
+      "exec /usr/bin/python3 \"$@\"",
+      "",
+    ].join("\n"));
+    chmodSync(python, 0o755);
+    writeFileSync(workerPath, [
+      "import json, sys",
+      "for line in sys.stdin:",
+      "    req = json.loads(line)",
+      "    print(json.dumps({'id': req['id'], 'ok': True, 'result': {'ready': True}}), flush=True)",
+      "    if req['action'] == 'shutdown': break",
+      "",
+    ].join("\n"));
+    const engine = new SherpaCaptionEngine({
+      python,
+      pythonPath: root,
+      runtimePack: root,
+      workerPath,
+      modelDir: root,
+    });
+
+    await expect(engine.warm()).resolves.toBeUndefined();
+    await engine.close();
+  });
 });
