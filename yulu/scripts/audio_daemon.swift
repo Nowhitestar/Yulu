@@ -14,6 +14,7 @@ import CoreAudio
 import AudioToolbox
 
 let HOME = FileManager.default.homeDirectoryForCurrentUser
+let SERVICE_OWNER = ProcessInfo.processInfo.environment["YULU_SERVICE_OWNER"] ?? "unmanaged"
 
 func realDirectoryURL(_ path: String) -> URL? {
     var buffer = [CChar](repeating: 0, count: Int(PATH_MAX))
@@ -145,6 +146,28 @@ func runtimeScriptDir() -> URL {
     return bundle.deletingLastPathComponent()
 }
 
+func bundledPythonExecutable() -> URL? {
+    let bundle = Bundle.main.bundleURL
+    if bundle.lastPathComponent == "YuluCapture.app" {
+        let productApp = bundle
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let bundled = productApp.appendingPathComponent(
+            "Contents/Resources/runtime/python/bin/python3"
+        )
+        if FileManager.default.isExecutableFile(atPath: bundled.path) {
+            return bundled
+        }
+    }
+    if let override = ProcessInfo.processInfo.environment["YULU_PYTHON"],
+       override.hasPrefix("/"),
+       FileManager.default.isExecutableFile(atPath: override) {
+        return URL(fileURLWithPath: override)
+    }
+    return nil
+}
+
 func configuredRecordingDirectory(_ raw: String) -> URL? {
     safeMediaDirectory(raw)
 }
@@ -199,16 +222,18 @@ func log(_ msg: String) {
 func launchMeetingSilencePrompt() -> Bool {
     let scriptDir = runtimeScriptDir()
     let meetingDaemon = scriptDir.appendingPathComponent("meeting_daemon.py")
-    guard FileManager.default.fileExists(atPath: meetingDaemon.path) else {
+    guard FileManager.default.fileExists(atPath: meetingDaemon.path),
+          let python = bundledPythonExecutable() else {
         log("Silence prompt adapter missing: \(meetingDaemon.path)")
         return false
     }
     let task = Process()
-    task.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-    task.arguments = [
-        "PYTHONPATH=\(scriptDir.path)",
-        "python3", meetingDaemon.path, "auto_stop",
-    ]
+    task.executableURL = python
+    task.arguments = [meetingDaemon.path, "auto_stop"]
+    var environment = ProcessInfo.processInfo.environment
+    environment["PYTHONPATH"] = scriptDir.path
+    environment["PYTHONDONTWRITEBYTECODE"] = "1"
+    task.environment = environment
     task.currentDirectoryURL = scriptDir
     do {
         try task.run()
@@ -2180,7 +2205,7 @@ class SocketServer {
             if wasRecording { onRecordingStop?() }
             resp = ["status":"stopped", "file": p ?? "", "duration": d]
         case "status":
-            resp = ["recording": recorder.isRecording, "file": recorder.currentFilePath, "micLevel": recorder.micLevel, "sysReady": SYS_READY, "sysError": SYS_ERROR, "micReady": MIC_READY, "micError": MIC_ERROR, "meetingMicState": recorder.meetingMicState.rawValue]
+            resp = ["recording": recorder.isRecording, "file": recorder.currentFilePath, "micLevel": recorder.micLevel, "sysReady": SYS_READY, "sysError": SYS_ERROR, "micReady": MIC_READY, "micError": MIC_ERROR, "meetingMicState": recorder.meetingMicState.rawValue, "serviceOwner": SERVICE_OWNER, "pid": ProcessInfo.processInfo.processIdentifier]
         case "audio_devices":
             resp = listAudioDevices?() ?? ["error": "coreaudio_device_provider_unavailable"]
         case "quit": resp = ["status":"bye"]; send(c, resp)

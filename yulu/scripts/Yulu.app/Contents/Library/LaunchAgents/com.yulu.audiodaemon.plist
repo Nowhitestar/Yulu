@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.yulu.audiodaemon</string>
+	<key>BundleProgram</key>
+	<string>Contents/Helpers/YuluCapture.app/Contents/MacOS/audio_daemon</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>audio_daemon</string>
+	</array>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>YULU_SERVICE_OWNER</key>
+		<string>com.yulu.audiodaemon</string>
+	</dict>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<true/>
+</dict>
+</plist>

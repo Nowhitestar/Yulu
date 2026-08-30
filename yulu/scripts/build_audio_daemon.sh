@@ -47,11 +47,13 @@ if [[ "$APP" != "$APP_TEMPLATE" ]]; then
   cp "$APP_TEMPLATE/Contents/Info.plist" "$APP/Contents/Info.plist"
   cp "$APP_TEMPLATE/Contents/Helpers/YuluCapture.app/Contents/Info.plist" \
     "$APP/Contents/Helpers/YuluCapture.app/Contents/Info.plist"
+  cp -R "$APP_TEMPLATE/Contents/Library" "$APP/Contents/Library"
 fi
 mkdir -p "$APP/Contents/MacOS" "$CAPTURE_APP/Contents/MacOS" "$RES_DIR"
 
 swiftc "${SWIFT_TARGET[@]}" "${SHELL_SWIFT_FLAGS[@]}" -o "$SHELL_BIN" yulu_app.swift \
   -framework Cocoa \
+  -framework ServiceManagement \
   -framework WebKit
 swiftc "${SWIFT_TARGET[@]}" -o "$BIN" audio_daemon.swift \
   -framework Cocoa \

@@ -28,6 +28,8 @@ VERSIONS="$RUNTIME/runtime-versions.json"
 
 REQUIRED_FILES=(
   "Contents/MacOS/yulu_app"
+  "Contents/Library/LaunchAgents/com.yulu.ui.plist"
+  "Contents/Library/LaunchAgents/com.yulu.audiodaemon.plist"
   "Contents/MacOS/xai_keychain"
   "Contents/MacOS/calendar_probe"
   "Contents/Helpers/YuluCapture.app/Contents/MacOS/audio_daemon"
@@ -58,6 +60,45 @@ REQUIRED_MACHO=(
 for relative in "${REQUIRED_FILES[@]}"; do
   [[ -f "$APP/$relative" ]] || fail "required Application Runtime file missing: $relative"
 done
+python3 - "$APP" <<'PY'
+import plistlib
+import sys
+from pathlib import Path
+
+app = Path(sys.argv[1])
+expected = {
+    "com.yulu.ui": ("Contents/MacOS/yulu_app", ["yulu_app", "--run-host-service"]),
+    "com.yulu.audiodaemon": (
+        "Contents/Helpers/YuluCapture.app/Contents/MacOS/audio_daemon",
+        ["audio_daemon"],
+    ),
+}
+for label, (bundle_program, arguments) in expected.items():
+    path = app / f"Contents/Library/LaunchAgents/{label}.plist"
+    try:
+        payload = plistlib.loads(path.read_bytes())
+    except Exception as error:
+        raise SystemExit(
+            f"verify_application_runtime.sh: invalid bundle-relative SMAppService agent {label}: {error}"
+        )
+    if (
+        payload.get("Label") != label
+        or payload.get("BundleProgram") != bundle_program
+        or payload.get("ProgramArguments") != arguments
+        or "Program" in payload
+        or Path(str(payload.get("BundleProgram", ""))).is_absolute()
+    ):
+        raise SystemExit(
+            f"verify_application_runtime.sh: invalid bundle-relative SMAppService agent {label}"
+        )
+    if label == "com.yulu.audiodaemon" and (
+        payload.get("EnvironmentVariables", {}).get("YULU_SERVICE_OWNER")
+        != "com.yulu.audiodaemon"
+    ):
+        raise SystemExit(
+            "verify_application_runtime.sh: invalid Capture service owner marker"
+        )
+PY
 python3 - "$RUNTIME/yulu/scripts/local_caption_runtime_pack.json" <<'PY'
 import json
 import sys
@@ -178,6 +219,8 @@ roots = [
 ]
 fixed = [
     app / "Contents/MacOS/yulu_app",
+    app / "Contents/Library/LaunchAgents/com.yulu.ui.plist",
+    app / "Contents/Library/LaunchAgents/com.yulu.audiodaemon.plist",
     app / "Contents/MacOS/xai_keychain",
     app / "Contents/MacOS/calendar_probe",
     app / "Contents/Helpers/YuluCapture.app/Contents/MacOS/audio_daemon",
@@ -243,6 +286,8 @@ if inventory.get("schema") != 1 or inventory.get("architecture") != "arm64":
 roots = [app / "Contents/Resources/runtime", app / "Contents/Resources/Host"]
 fixed = {
     "Contents/MacOS/yulu_app",
+    "Contents/Library/LaunchAgents/com.yulu.ui.plist",
+    "Contents/Library/LaunchAgents/com.yulu.audiodaemon.plist",
     "Contents/MacOS/xai_keychain",
     "Contents/MacOS/calendar_probe",
     "Contents/Helpers/YuluCapture.app/Contents/MacOS/audio_daemon",

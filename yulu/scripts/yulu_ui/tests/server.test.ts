@@ -30,6 +30,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 
 let env: { root: string; cleanup: () => void; server: RunningServer; baseUrl: string };
 const originalHostNonce = process.env.YULU_HOST_NONCE;
+const originalServiceOwner = process.env.YULU_SERVICE_OWNER;
 
 function pcmWav(): Buffer {
   const wav = Buffer.alloc(45);
@@ -70,6 +71,7 @@ beforeAll(async () => {
   process.env.HOME = root;
   process.env.YULU_UI_PORT = "0";
   process.env.YULU_HOST_NONCE = "server-test-nonce";
+  process.env.YULU_SERVICE_OWNER = "com.yulu.ui";
   const server = await startServer({
     configDir,
     configFile: join(configDir, "config.json"),
@@ -90,6 +92,8 @@ afterAll(async () => {
   env.cleanup();
   if (originalHostNonce === undefined) delete process.env.YULU_HOST_NONCE;
   else process.env.YULU_HOST_NONCE = originalHostNonce;
+  if (originalServiceOwner === undefined) delete process.env.YULU_SERVICE_OWNER;
+  else process.env.YULU_SERVICE_OWNER = originalServiceOwner;
 });
 
 describe("server", () => {
@@ -99,6 +103,9 @@ describe("server", () => {
     expect(await r.json()).toMatchObject({
       status: "ok",
       instanceNonce: "server-test-nonce",
+      serviceOwner: "com.yulu.ui",
+      instanceLockToken: expect.any(String),
+      pid: expect.any(Number),
     });
   });
 

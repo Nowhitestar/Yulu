@@ -1,5 +1,6 @@
 import Cocoa
 import Darwin
+import ServiceManagement
 import WebKit
 
 struct LaunchPolicy: Encodable {
@@ -38,6 +39,350 @@ struct LaunchPolicy: Encodable {
             componentsStarted: installed,
             guidance: installed ? nil : "Drag Yulu to Applications before opening it."
         )
+    }
+}
+
+struct BackgroundServiceDescriptor {
+    let plistName: String
+
+    static let bundledOwners = [
+        BackgroundServiceDescriptor(plistName: "com.yulu.ui.plist"),
+        BackgroundServiceDescriptor(plistName: "com.yulu.audiodaemon.plist"),
+    ]
+}
+
+struct ProductionStartupPlan: Encodable {
+    let persistentRegistrations: [String]
+    let directChildren: [String] = []
+    let hostHealthURL: String?
+
+    enum CodingKeys: String, CodingKey {
+        case persistentRegistrations, directChildren, hostHealthURL
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(persistentRegistrations, forKey: .persistentRegistrations)
+        try container.encode(directChildren, forKey: .directChildren)
+        if let hostHealthURL {
+            try container.encode(hostHealthURL, forKey: .hostHealthURL)
+        } else {
+            try container.encodeNil(forKey: .hostHealthURL)
+        }
+    }
+
+    static func make(policy: LaunchPolicy) -> ProductionStartupPlan {
+        ProductionStartupPlan(
+            persistentRegistrations: policy.persistentRegistrationAllowed
+                ? BackgroundServiceDescriptor.bundledOwners.map(\.plistName)
+                : [],
+            hostHealthURL: policy.installed
+                ? "http://127.0.0.1:\(HostServiceExecution.declaredPort)/healthz"
+                : nil
+        )
+    }
+}
+
+protocol PersistentServiceRegistering {
+    func register(_ service: BackgroundServiceDescriptor)
+}
+
+struct BackgroundServiceOwnership {
+    static func registerBundledOwners(
+        policy: LaunchPolicy,
+        registrar: PersistentServiceRegistering
+    ) {
+        guard policy.persistentRegistrationAllowed else { return }
+        for service in BackgroundServiceDescriptor.bundledOwners {
+            registrar.register(service)
+        }
+    }
+}
+
+struct ServiceRegistrationDecision: Encodable {
+    let register: Bool
+    let unregister = false
+
+    static func make(policy: LaunchPolicy, status: String) -> ServiceRegistrationDecision? {
+        guard ["notRegistered", "enabled", "requiresApproval", "notFound"].contains(status) else {
+            return nil
+        }
+        return ServiceRegistrationDecision(
+            register: policy.persistentRegistrationAllowed && status == "notRegistered"
+        )
+    }
+}
+
+final class ServiceActionRecorder: PersistentServiceRegistering, Encodable {
+    private(set) var register: [String] = []
+    let unregister: [String] = []
+    let persistentFileWrites: [String] = []
+
+    func register(_ service: BackgroundServiceDescriptor) {
+        register.append(service.plistName)
+    }
+}
+
+enum RegistrationEvidence: String, Encodable {
+    case notRegistered = "not_registered"
+    case registered
+    case notFound = "not_found"
+}
+
+enum SystemApprovalEvidence: String, Encodable {
+    case unknown
+    case requiresApproval = "requires_approval"
+    case approved
+}
+
+enum RunningHealth: String, Encodable {
+    case unknown
+    case stopped
+    case healthy
+}
+
+enum CapabilityReadiness: String, Encodable {
+    case unknown
+    case blocked
+    case ready
+}
+
+struct BackgroundServiceState: Encodable {
+    let registration: RegistrationEvidence
+    let systemApproval: SystemApprovalEvidence
+    let runningHealth: RunningHealth
+    let capabilityReadiness: CapabilityReadiness
+
+    static func evaluate(status: String, running: String, ready: String) -> BackgroundServiceState? {
+        let registration: RegistrationEvidence
+        let approval: SystemApprovalEvidence
+        switch status {
+        case "notRegistered":
+            registration = .notRegistered
+            approval = .unknown
+        case "requiresApproval":
+            registration = .registered
+            approval = .requiresApproval
+        case "enabled":
+            registration = .registered
+            approval = .approved
+        case "notFound":
+            registration = .notFound
+            approval = .unknown
+        default:
+            return nil
+        }
+
+        func signal<T>(_ raw: String, unknown: T, negative: T, positive: T) -> T? {
+            switch raw {
+            case "unknown": unknown
+            case "false": negative
+            case "true": positive
+            default: nil
+            }
+        }
+        guard let runningHealth = signal(
+            running,
+            unknown: RunningHealth.unknown,
+            negative: .stopped,
+            positive: .healthy
+        ), let capabilityReadiness = signal(
+            ready,
+            unknown: CapabilityReadiness.unknown,
+            negative: .blocked,
+            positive: .ready
+        ) else { return nil }
+        return BackgroundServiceState(
+            registration: registration,
+            systemApproval: approval,
+            runningHealth: runningHealth,
+            capabilityReadiness: capabilityReadiness
+        )
+    }
+}
+
+struct ApprovalRemediation: Encodable {
+    let action = "open_login_items_settings"
+    let path = "System Settings → General → Login Items → Allow in the Background"
+    let resumeOn = "applicationDidBecomeActive"
+}
+
+struct ServiceStateRow: Encodable {
+    let label: String
+    let value: String
+}
+
+struct BackgroundServicePresentation: Encodable {
+    let title = "Background Services"
+    let rows: [ServiceStateRow]
+    let remediation: ApprovalRemediation?
+
+    static func make(state: BackgroundServiceState) -> BackgroundServicePresentation {
+        func title<T: RawRepresentable>(_ value: T) -> String where T.RawValue == String {
+            let normalized = value.rawValue.replacingOccurrences(of: "_", with: " ")
+            return normalized.prefix(1).uppercased() + normalized.dropFirst()
+        }
+        return BackgroundServicePresentation(
+            rows: [
+                ServiceStateRow(label: "Registration", value: title(state.registration)),
+                ServiceStateRow(label: "System approval", value: title(state.systemApproval)),
+                ServiceStateRow(label: "Running health", value: title(state.runningHealth)),
+                ServiceStateRow(label: "Capability readiness", value: title(state.capabilityReadiness)),
+            ],
+            remediation: state.systemApproval == .requiresApproval ? ApprovalRemediation() : nil
+        )
+    }
+}
+
+struct OwnerServicePresentation: Encodable {
+    let label: String
+    let state: BackgroundServicePresentation
+}
+
+struct BundledServicesPresentation: Encodable {
+    let services: [OwnerServicePresentation]
+
+    static func make(host: BackgroundServiceState, capture: BackgroundServiceState) -> BundledServicesPresentation {
+        BundledServicesPresentation(services: [
+            OwnerServicePresentation(
+                label: "Host — com.yulu.ui",
+                state: BackgroundServicePresentation.make(state: host)
+            ),
+            OwnerServicePresentation(
+                label: "Capture — com.yulu.audiodaemon",
+                state: BackgroundServicePresentation.make(state: capture)
+            ),
+        ])
+    }
+}
+
+struct RuntimeOwnerEvidence: Encodable {
+    let running: Bool
+    let capabilityReady: Bool?
+    let ownerPID: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case running, capabilityReady, ownerPID
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(running, forKey: .running)
+        if let capabilityReady {
+            try container.encode(capabilityReady, forKey: .capabilityReady)
+        } else {
+            try container.encodeNil(forKey: .capabilityReady)
+        }
+        if let ownerPID {
+            try container.encode(ownerPID, forKey: .ownerPID)
+        } else {
+            try container.encodeNil(forKey: .ownerPID)
+        }
+    }
+
+    static func evaluate(
+        kind: String,
+        payload: [String: Any],
+        attestation: RuntimeOwnerAttestation
+    ) -> RuntimeOwnerEvidence? {
+        let expectedOwner: String
+        switch kind {
+        case "host": expectedOwner = "com.yulu.ui"
+        case "capture": expectedOwner = "com.yulu.audiodaemon"
+        default: return nil
+        }
+        guard payload["serviceOwner"] as? String == expectedOwner,
+              let pid = payload["pid"] as? Int,
+              pid > 1,
+              pid == attestation.ownerPID,
+              attestation.executableMatches,
+              attestation.argumentsMatch,
+              attestation.generationStable,
+              let processGeneration = attestation.generation,
+              !processGeneration.isEmpty else {
+            return RuntimeOwnerEvidence(running: false, capabilityReady: nil, ownerPID: nil)
+        }
+        if kind == "host" {
+            guard let authorityToken = attestation.authorityToken,
+                  !authorityToken.isEmpty,
+                  payload["instanceLockToken"] as? String == authorityToken else {
+                return RuntimeOwnerEvidence(running: false, capabilityReady: nil, ownerPID: nil)
+            }
+            let healthy = payload["status"] as? String == "ok"
+            return RuntimeOwnerEvidence(
+                running: healthy,
+                capabilityReady: nil,
+                ownerPID: healthy ? pid : nil
+            )
+        }
+        return RuntimeOwnerEvidence(
+            running: true,
+            capabilityReady: payload["micReady"] as? Bool == true
+                && payload["sysReady"] as? Bool == true,
+            ownerPID: pid
+        )
+    }
+}
+
+struct RuntimeOwnerAttestation: Encodable {
+    let ownerPID: Int
+    let authorityToken: String?
+    let generation: String?
+    let executableMatches: Bool
+    let argumentsMatch: Bool
+    let generationStable: Bool
+
+    static func decode(_ payload: [String: Any]) -> RuntimeOwnerAttestation? {
+        guard let ownerPID = payload["ownerPID"] as? Int,
+              ownerPID > 1,
+              let executableMatches = payload["executableMatches"] as? Bool,
+              let argumentsMatch = payload["argumentsMatch"] as? Bool,
+              let generationStable = payload["generationStable"] as? Bool else {
+            return nil
+        }
+        return RuntimeOwnerAttestation(
+            ownerPID: ownerPID,
+            authorityToken: payload["authorityToken"] as? String,
+            generation: payload["generation"] as? String,
+            executableMatches: executableMatches,
+            argumentsMatch: argumentsMatch,
+            generationStable: generationStable
+        )
+    }
+}
+
+func appServiceStatusName(_ status: SMAppService.Status) -> String {
+    switch status {
+    case .notRegistered: "notRegistered"
+    case .enabled: "enabled"
+    case .requiresApproval: "requiresApproval"
+    case .notFound: "notFound"
+    @unknown default: "notFound"
+    }
+}
+
+final class BackgroundServiceRegistry {
+    private(set) var registrationErrors: [String: String] = [:]
+
+    func registerBundledOwners(policy: LaunchPolicy) {
+        guard policy.persistentRegistrationAllowed else { return }
+        for descriptor in BackgroundServiceDescriptor.bundledOwners {
+            let service = SMAppService.agent(plistName: descriptor.plistName)
+            guard service.status == .notRegistered else { continue }
+            do {
+                try service.register()
+                registrationErrors.removeValue(forKey: descriptor.plistName)
+            } catch {
+                registrationErrors[descriptor.plistName] = error.localizedDescription
+            }
+        }
+    }
+
+    func statuses() -> [String: String] {
+        Dictionary(uniqueKeysWithValues: BackgroundServiceDescriptor.bundledOwners.map { descriptor in
+            let service = SMAppService.agent(plistName: descriptor.plistName)
+            return (descriptor.plistName, appServiceStatusName(service.status))
+        })
     }
 }
 
@@ -88,26 +433,10 @@ struct BundleLayout {
 }
 
 struct ComponentContract: Encodable {
-    let executable: String
+    let servicePlist: String
+    let bundleProgram: String
     let arguments: [String]
-    let restartable: Bool
-    let bundleIdentifier: String?
-
-    enum CodingKeys: String, CodingKey {
-        case executable, arguments, restartable, bundleIdentifier
-    }
-
-    func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(executable, forKey: .executable)
-        if !arguments.isEmpty {
-            try container.encode(arguments, forKey: .arguments)
-        }
-        try container.encode(restartable, forKey: .restartable)
-        if let bundleIdentifier {
-            try container.encode(bundleIdentifier, forKey: .bundleIdentifier)
-        }
-    }
+    let directlySpawned = false
 }
 
 struct ShellContract: Encodable {
@@ -116,22 +445,19 @@ struct ShellContract: Encodable {
     let host: ComponentContract
     let capture: ComponentContract
 
-    static func describe(bundleURL: URL, port: Int = 7777) -> ShellContract {
-        let layout = BundleLayout(bundleURL: bundleURL)
+    static func describe(bundleURL _: URL, port: Int = 7777) -> ShellContract {
         return ShellContract(
             windowURL: "http://127.0.0.1:\(port)/",
             menuRoutes: ["/", "/onboarding", "/inbox", "/settings"],
             host: ComponentContract(
-                executable: layout.hostNode.path,
-                arguments: [layout.hostEntry.path],
-                restartable: true,
-                bundleIdentifier: nil
+                servicePlist: "com.yulu.ui.plist",
+                bundleProgram: "Contents/MacOS/yulu_app",
+                arguments: ["yulu_app", "--run-host-service"]
             ),
             capture: ComponentContract(
-                executable: layout.captureExecutable.path,
-                arguments: [],
-                restartable: true,
-                bundleIdentifier: "com.yulu.audiodaemon"
+                servicePlist: "com.yulu.audiodaemon.plist",
+                bundleProgram: "Contents/Helpers/YuluCapture.app/Contents/MacOS/audio_daemon",
+                arguments: ["audio_daemon"]
             )
         )
     }
@@ -421,6 +747,77 @@ struct ApplicationDataPaths: Encodable {
     ]
 }
 
+struct HostServiceExecution: Encodable {
+    static let declaredPort = 7777
+    static let owner = "com.yulu.ui"
+
+    let executableURL: URL
+    let arguments: [String]
+    let environment: [String: String]
+
+    static func make(
+        layout: BundleLayout,
+        applicationPaths: ApplicationDataPaths,
+        hostNonce: String = UUID().uuidString
+    ) -> HostServiceExecution {
+        var environment = sanitizedRuntimeEnvironment()
+        environment.merge(applicationPaths.environment) { _, contract in contract }
+        environment["YULU_UI_PORT"] = String(declaredPort)
+        environment["YULU_UI_DIST_WEB"] = layout.hostWeb.path
+        environment["YULU_HOST_NONCE"] = hostNonce
+        environment["YULU_SERVICE_OWNER"] = owner
+        environment["YULU_SCRIPT_DIR"] = layout.bundledScriptDir.path
+        environment["YULU_NATIVE_HELPER_DIR"] = layout.executableDir.path
+        environment["YULU_PYTHON"] = layout.bundledPython.path
+        environment["YULU_FFMPEG"] = layout.bundledFFmpeg.path
+        environment["PYTHONDONTWRITEBYTECODE"] = "1"
+        environment["PATH"] = "\(layout.bundledBin.path):\(layout.bundledPythonBin.path):/usr/bin:/bin:/usr/sbin:/sbin"
+        return HostServiceExecution(
+            executableURL: layout.hostNode,
+            arguments: [layout.hostEntry.path],
+            environment: environment
+        )
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case executable, arguments, port, serviceOwner
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(executableURL.path, forKey: .executable)
+        try container.encode(arguments, forKey: .arguments)
+        try container.encode(Self.declaredPort, forKey: .port)
+        try container.encode(Self.owner, forKey: .serviceOwner)
+    }
+
+    func replaceCurrentProcess() -> Never {
+        var argv = ([executableURL.path] + arguments).map { strdup($0) as UnsafeMutablePointer<CChar>? }
+        argv.append(nil)
+        let environmentStrings: [String] = environment
+            .map { name, value in "\(name)=\(value)" }
+            .sorted()
+        var envp: [UnsafeMutablePointer<CChar>?] = environmentStrings
+            .map { strdup($0) as UnsafeMutablePointer<CChar>? }
+        envp.append(nil)
+        defer { argv.compactMap { $0 }.forEach { free($0) } }
+        defer { envp.compactMap { $0 }.forEach { free($0) } }
+        executableURL.path.withCString { executable in
+            argv.withUnsafeMutableBufferPointer { buffer in
+                envp.withUnsafeMutableBufferPointer { environmentBuffer in
+                    _ = Darwin.execve(
+                        executable,
+                        buffer.baseAddress,
+                        environmentBuffer.baseAddress
+                    )
+                }
+            }
+        }
+        fputs("[Yulu] failed to exec bundled Host: \(String(cString: strerror(errno)))\n", stderr)
+        exit(71)
+    }
+}
+
 func writeJSON<T: Encodable>(_ value: T) throws {
     let encoder = JSONEncoder()
     encoder.outputFormatting = [.sortedKeys]
@@ -432,6 +829,161 @@ if CommandLine.arguments.count == 3, CommandLine.arguments[1] == "--inspect-laun
     try writeJSON(LaunchPolicy.evaluate(bundlePath: CommandLine.arguments[2]))
     exit(0)
 }
+
+if CommandLine.arguments.count == 3, CommandLine.arguments[1] == "--inspect-service-actions" {
+    let recorder = ServiceActionRecorder()
+    BackgroundServiceOwnership.registerBundledOwners(
+        policy: LaunchPolicy.evaluate(bundlePath: CommandLine.arguments[2]),
+        registrar: recorder
+    )
+    try writeJSON(recorder)
+    exit(0)
+}
+
+if CommandLine.arguments.count == 3, CommandLine.arguments[1] == "--inspect-startup-plan" {
+    try writeJSON(ProductionStartupPlan.make(
+        policy: LaunchPolicy.evaluate(bundlePath: CommandLine.arguments[2])
+    ))
+    exit(0)
+}
+
+if CommandLine.arguments.count == 4, CommandLine.arguments[1] == "--inspect-registration-decision" {
+    guard let decision = ServiceRegistrationDecision.make(
+        policy: LaunchPolicy.evaluate(bundlePath: CommandLine.arguments[2]),
+        status: CommandLine.arguments[3]
+    ) else {
+        fputs("invalid service registration status\n", stderr)
+        exit(64)
+    }
+    try writeJSON(decision)
+    exit(0)
+}
+
+if CommandLine.arguments.count == 5, CommandLine.arguments[1] == "--inspect-service-state" {
+    guard let state = BackgroundServiceState.evaluate(
+        status: CommandLine.arguments[2],
+        running: CommandLine.arguments[3],
+        ready: CommandLine.arguments[4]
+    ) else {
+        fputs("invalid service-state inspection input\n", stderr)
+        exit(64)
+    }
+    try writeJSON(state)
+    exit(0)
+}
+
+if CommandLine.arguments.count == 5, CommandLine.arguments[1] == "--inspect-service-presentation" {
+    guard let state = BackgroundServiceState.evaluate(
+        status: CommandLine.arguments[2],
+        running: CommandLine.arguments[3],
+        ready: CommandLine.arguments[4]
+    ) else {
+        fputs("invalid service-presentation inspection input\n", stderr)
+        exit(64)
+    }
+    try writeJSON(BackgroundServicePresentation.make(state: state))
+    exit(0)
+}
+
+if CommandLine.arguments.count == 8, CommandLine.arguments[1] == "--inspect-owner-presentations" {
+    guard let host = BackgroundServiceState.evaluate(
+        status: CommandLine.arguments[2],
+        running: CommandLine.arguments[3],
+        ready: CommandLine.arguments[4]
+    ), let capture = BackgroundServiceState.evaluate(
+        status: CommandLine.arguments[5],
+        running: CommandLine.arguments[6],
+        ready: CommandLine.arguments[7]
+    ) else {
+        fputs("invalid owner-presentations inspection input\n", stderr)
+        exit(64)
+    }
+    try writeJSON(BundledServicesPresentation.make(host: host, capture: capture))
+    exit(0)
+}
+
+if CommandLine.arguments.count == 2, CommandLine.arguments[1] == "--inspect-approval-remediation" {
+    try writeJSON(ApprovalRemediation())
+    exit(0)
+}
+
+if CommandLine.arguments.count == 5, CommandLine.arguments[1] == "--inspect-runtime-evidence" {
+    guard let data = CommandLine.arguments[3].data(using: .utf8),
+          let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+          let attestationData = CommandLine.arguments[4].data(using: .utf8),
+          let attestationPayload = try? JSONSerialization.jsonObject(with: attestationData) as? [String: Any],
+          let attestation = RuntimeOwnerAttestation.decode(attestationPayload),
+          let evidence = RuntimeOwnerEvidence.evaluate(
+            kind: CommandLine.arguments[2],
+            payload: payload,
+            attestation: attestation
+          ) else {
+        fputs("invalid runtime-evidence inspection input\n", stderr)
+        exit(64)
+    }
+    try writeJSON(evidence)
+    exit(0)
+}
+
+if CommandLine.arguments.count >= 4, CommandLine.arguments[1] == "--inspect-host-lock-attestation" {
+    let ownerURL = URL(fileURLWithPath: CommandLine.arguments[2])
+    var afterLockOpened: (() -> Bool)?
+    #if YULU_DEVELOPMENT_SMOKE
+    if let replacementPath = ProcessInfo.processInfo.environment["YULU_TEST_SWAP_HOST_LOCK_WITH"] {
+        afterLockOpened = {
+            let lockURL = ownerURL.deletingLastPathComponent()
+            let parkedURL = lockURL
+                .deletingLastPathComponent()
+                .appendingPathComponent("host-instance.lock.anchored-original")
+            return Darwin.rename(lockURL.path, parkedURL.path) == 0
+                && Darwin.rename(replacementPath, lockURL.path) == 0
+        }
+    }
+    #endif
+    guard let attestation = hostRuntimeAttestation(
+        ownerURL: ownerURL,
+        expectedExecutable: URL(fileURLWithPath: CommandLine.arguments[3]),
+        expectedArguments: Array(CommandLine.arguments.dropFirst(3)),
+        afterLockOpened: afterLockOpened
+    ) else {
+        fputs("host lock attestation rejected\n", stderr)
+        exit(66)
+    }
+    try writeJSON(attestation)
+    exit(0)
+}
+
+if CommandLine.arguments.count == 4, CommandLine.arguments[1] == "--inspect-capture-runtime" {
+    try writeJSON(captureRuntimeEvidence(
+        socketURL: URL(fileURLWithPath: CommandLine.arguments[2]),
+        expectedExecutable: URL(fileURLWithPath: CommandLine.arguments[3])
+    ))
+    exit(0)
+}
+
+if CommandLine.arguments.count == 4, CommandLine.arguments[1] == "--inspect-host-service" {
+    let bundleURL = URL(fileURLWithPath: CommandLine.arguments[2], isDirectory: true)
+    let homeURL = URL(fileURLWithPath: CommandLine.arguments[3], isDirectory: true)
+    try writeJSON(HostServiceExecution.make(
+        layout: BundleLayout(bundleURL: bundleURL),
+        applicationPaths: ApplicationDataPaths.resolve(homeDirectory: homeURL, environment: [:]),
+        hostNonce: "inspection"
+    ))
+    exit(0)
+}
+
+#if YULU_DEVELOPMENT_SMOKE
+if CommandLine.arguments.count == 4,
+   CommandLine.arguments[1] == "--development-run-host-service" {
+    let bundleURL = URL(fileURLWithPath: CommandLine.arguments[2], isDirectory: true)
+    let homeURL = URL(fileURLWithPath: CommandLine.arguments[3], isDirectory: true)
+    HostServiceExecution.make(
+        layout: BundleLayout(bundleURL: bundleURL),
+        applicationPaths: ApplicationDataPaths.resolve(homeDirectory: homeURL, environment: [:]),
+        hostNonce: "development-environment-inspection"
+    ).replaceCurrentProcess()
+}
+#endif
 
 if CommandLine.arguments.count == 3, CommandLine.arguments[1] == "--inspect-bundle" {
     try writeJSON(ShellContract.describe(
@@ -666,6 +1218,18 @@ if CommandLine.arguments.count == 3, CommandLine.arguments[1] == "--inspect-comp
     exit(0)
 }
 
+if CommandLine.arguments.count == 2, CommandLine.arguments[1] == "--run-host-service" {
+    let policy = LaunchPolicy.evaluate(bundlePath: Bundle.main.bundleURL.path)
+    guard policy.persistentRegistrationAllowed else {
+        fputs("[Yulu] Host service refuses to run outside /Applications/Yulu.app\n", stderr)
+        exit(78)
+    }
+    HostServiceExecution.make(
+        layout: BundleLayout(bundleURL: Bundle.main.bundleURL),
+        applicationPaths: ApplicationDataPaths.resolve(environment: [:])
+    ).replaceCurrentProcess()
+}
+
 func sanitizedRuntimeEnvironment() -> [String: String] {
     var environment = ProcessInfo.processInfo.environment
     for key in Array(environment.keys) {
@@ -690,6 +1254,247 @@ func healthResponseIsValid(data: Data?, response: URLResponse?, nonce: String) -
     }
     return json["status"] as? String == "ok"
         && json["instanceNonce"] as? String == nonce
+}
+
+func processExecutableMatches(pid: Int, expectedURL: URL) -> Bool {
+    guard pid > 1 else { return false }
+    var buffer = [CChar](repeating: 0, count: 4 * Int(MAXPATHLEN))
+    let count = proc_pidpath(Int32(pid), &buffer, UInt32(buffer.count))
+    guard count > 0 else { return false }
+    let actual = URL(fileURLWithPath: String(cString: buffer))
+        .standardizedFileURL
+        .resolvingSymlinksInPath()
+    let expected = expectedURL.standardizedFileURL.resolvingSymlinksInPath()
+    return actual.path == expected.path
+}
+
+func processStartGeneration(pid: Int) -> String? {
+    guard pid > 1 else { return nil }
+    var info = proc_bsdinfo()
+    let expectedSize = Int32(MemoryLayout<proc_bsdinfo>.size)
+    guard proc_pidinfo(
+        Int32(pid),
+        PROC_PIDTBSDINFO,
+        0,
+        &info,
+        expectedSize
+    ) == expectedSize else { return nil }
+    return "\(info.pbi_start_tvsec):\(info.pbi_start_tvusec)"
+}
+
+func processArguments(pid: Int) -> [String]? {
+    guard pid > 1 else { return nil }
+    var argMaxMIB = [Int32(CTL_KERN), Int32(KERN_ARGMAX)]
+    var argMax = Int32(0)
+    var argMaxSize = MemoryLayout<Int32>.size
+    guard sysctl(&argMaxMIB, 2, &argMax, &argMaxSize, nil, 0) == 0,
+          argMax > 0,
+          argMax <= 2 * 1024 * 1024 else { return nil }
+
+    var bytes = [UInt8](repeating: 0, count: Int(argMax))
+    var byteCount = bytes.count
+    var processMIB = [Int32(CTL_KERN), Int32(KERN_PROCARGS2), Int32(pid)]
+    let result = bytes.withUnsafeMutableBytes { storage in
+        sysctl(&processMIB, 3, storage.baseAddress, &byteCount, nil, 0)
+    }
+    guard result == 0,
+          byteCount >= MemoryLayout<Int32>.size else { return nil }
+    bytes.removeSubrange(byteCount..<bytes.count)
+
+    let argumentCount = bytes.withUnsafeBytes {
+        Int($0.loadUnaligned(as: Int32.self))
+    }
+    guard argumentCount > 0, argumentCount <= 4096 else { return nil }
+    var cursor = MemoryLayout<Int32>.size
+    while cursor < bytes.count, bytes[cursor] != 0 { cursor += 1 }
+    guard cursor < bytes.count else { return nil }
+    while cursor < bytes.count, bytes[cursor] == 0 { cursor += 1 }
+
+    var arguments: [String] = []
+    for _ in 0..<argumentCount {
+        let start = cursor
+        while cursor < bytes.count, bytes[cursor] != 0 { cursor += 1 }
+        guard cursor < bytes.count else { return nil }
+        arguments.append(String(decoding: bytes[start..<cursor], as: UTF8.self))
+        cursor += 1
+    }
+    return arguments
+}
+
+func processArgumentsMatch(pid: Int, expected: [String]) -> Bool {
+    guard !expected.isEmpty,
+          let actual = processArguments(pid: pid),
+          actual.count == expected.count else { return false }
+    let actualExecutable = URL(fileURLWithPath: actual[0])
+        .standardizedFileURL
+        .resolvingSymlinksInPath()
+    let expectedExecutable = URL(fileURLWithPath: expected[0])
+        .standardizedFileURL
+        .resolvingSymlinksInPath()
+    return actualExecutable.path == expectedExecutable.path
+        && Array(actual.dropFirst()) == Array(expected.dropFirst())
+}
+
+private struct HostLockOwner: Decodable {
+    let pid: Int
+    let token: String
+}
+
+func hostRuntimeAttestation(
+    ownerURL: URL,
+    expectedExecutable: URL,
+    expectedArguments: [String],
+    afterLockOpened: (() -> Bool)? = nil
+) -> RuntimeOwnerAttestation? {
+    let lockURL = ownerURL.deletingLastPathComponent()
+    let rootURL = lockURL.deletingLastPathComponent()
+    let rootFD = Darwin.open(rootURL.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW)
+    guard rootFD >= 0 else { return nil }
+    defer { Darwin.close(rootFD) }
+    var rootMetadata = stat()
+    guard Darwin.fstat(rootFD, &rootMetadata) == 0,
+          (rootMetadata.st_mode & S_IFMT) == S_IFDIR,
+          (rootMetadata.st_mode & mode_t(0o777)) == mode_t(0o700),
+          rootMetadata.st_uid == geteuid() else { return nil }
+
+    let lockFD = Darwin.openat(rootFD, "host-instance.lock", O_RDONLY | O_DIRECTORY | O_NOFOLLOW)
+    guard lockFD >= 0 else { return nil }
+    defer { Darwin.close(lockFD) }
+    var lockMetadata = stat()
+    guard Darwin.fstat(lockFD, &lockMetadata) == 0,
+          (lockMetadata.st_mode & S_IFMT) == S_IFDIR,
+          (lockMetadata.st_mode & mode_t(0o777)) == mode_t(0o700),
+          lockMetadata.st_uid == geteuid(),
+          afterLockOpened?() != false else { return nil }
+
+    let fd = Darwin.openat(lockFD, "owner.json", O_RDONLY | O_NOFOLLOW)
+    guard fd >= 0 else { return nil }
+    defer { Darwin.close(fd) }
+    var metadata = stat()
+    guard Darwin.fstat(fd, &metadata) == 0,
+          (metadata.st_mode & S_IFMT) == S_IFREG,
+          (metadata.st_mode & mode_t(0o777)) == mode_t(0o600),
+          metadata.st_uid == geteuid(),
+          metadata.st_size > 0,
+          metadata.st_size <= 4096 else { return nil }
+    var data = Data()
+    var buffer = [UInt8](repeating: 0, count: 4096)
+    while data.count < 4096 {
+        let count = Darwin.read(fd, &buffer, min(buffer.count, 4096 - data.count))
+        if count < 0 { return nil }
+        if count == 0 { break }
+        data.append(buffer, count: count)
+    }
+    guard data.count == metadata.st_size,
+          let owner = try? JSONDecoder().decode(HostLockOwner.self, from: data),
+          owner.pid > 1,
+          owner.token.range(of: "^[A-Za-z0-9-]{16,}$", options: .regularExpression) != nil else {
+        return nil
+    }
+    let generationBefore = processStartGeneration(pid: owner.pid)
+    let executableMatches = processExecutableMatches(
+        pid: owner.pid,
+        expectedURL: expectedExecutable
+    )
+    let argumentsMatch = processArgumentsMatch(
+        pid: owner.pid,
+        expected: expectedArguments
+    )
+    let generationAfter = processStartGeneration(pid: owner.pid)
+    return RuntimeOwnerAttestation(
+        ownerPID: owner.pid,
+        authorityToken: owner.token,
+        generation: generationAfter,
+        executableMatches: executableMatches,
+        argumentsMatch: argumentsMatch,
+        generationStable: generationBefore != nil && generationBefore == generationAfter
+    )
+}
+
+func captureRuntimeEvidence(socketURL: URL, expectedExecutable: URL) -> RuntimeOwnerEvidence {
+    let socketPath = socketURL.path
+    guard socketPath.utf8.count <= 103 else {
+        return RuntimeOwnerEvidence(running: false, capabilityReady: nil, ownerPID: nil)
+    }
+    let fd = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
+    guard fd >= 0 else {
+        return RuntimeOwnerEvidence(running: false, capabilityReady: nil, ownerPID: nil)
+    }
+    defer { Darwin.close(fd) }
+    var timeout = timeval(tv_sec: 1, tv_usec: 0)
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+    var address = sockaddr_un()
+    address.sun_family = sa_family_t(AF_UNIX)
+    _ = socketPath.withCString { pointer in
+        strncpy(&address.sun_path.0, pointer, 103)
+    }
+    let connected = withUnsafePointer(to: &address) {
+        $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+            Darwin.connect(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
+        }
+    }
+    guard connected == 0 else {
+        return RuntimeOwnerEvidence(running: false, capabilityReady: nil, ownerPID: nil)
+    }
+    var peerPID: Int32 = 0
+    var peerPIDSize = socklen_t(MemoryLayout<Int32>.size)
+    var peerUID = uid_t(0)
+    var peerGID = gid_t(0)
+    guard getsockopt(fd, SOL_LOCAL, LOCAL_PEERPID, &peerPID, &peerPIDSize) == 0,
+          getpeereid(fd, &peerUID, &peerGID) == 0,
+          peerPID > 1,
+          peerUID == geteuid() else {
+        return RuntimeOwnerEvidence(running: false, capabilityReady: nil, ownerPID: nil)
+    }
+    let generationBefore = processStartGeneration(pid: Int(peerPID))
+    let request = Data("{\"action\":\"status\"}".utf8)
+    guard request.withUnsafeBytes({ Darwin.write(fd, $0.baseAddress, request.count) }) == request.count else {
+        return RuntimeOwnerEvidence(running: false, capabilityReady: nil, ownerPID: nil)
+    }
+    shutdown(fd, SHUT_WR)
+    var response = Data()
+    var buffer = [UInt8](repeating: 0, count: 4096)
+    while response.count < 65_536 {
+        let count = Darwin.read(fd, &buffer, buffer.count)
+        if count <= 0 { break }
+        response.append(buffer, count: count)
+    }
+    guard !response.isEmpty,
+          response.count < 65_536,
+          let payload = try? JSONSerialization.jsonObject(with: response) as? [String: Any] else {
+        return RuntimeOwnerEvidence(running: false, capabilityReady: nil, ownerPID: nil)
+    }
+    let generationAfterResponse = processStartGeneration(pid: Int(peerPID))
+    let executableMatches = processExecutableMatches(
+        pid: Int(peerPID),
+        expectedURL: expectedExecutable
+    )
+    #if YULU_DEVELOPMENT_SMOKE
+    if let marker = ProcessInfo.processInfo.environment["YULU_TEST_CAPTURE_AFTER_IDENTITY_MARKER"] {
+        _ = FileManager.default.createFile(atPath: marker, contents: Data())
+    }
+    if let delay = ProcessInfo.processInfo.environment["YULU_TEST_CAPTURE_POST_IDENTITY_DELAY_US"],
+       let microseconds = useconds_t(delay) {
+        usleep(microseconds)
+    }
+    #endif
+    let generationAfterIdentity = processStartGeneration(pid: Int(peerPID))
+    let attestation = RuntimeOwnerAttestation(
+        ownerPID: Int(peerPID),
+        authorityToken: nil,
+        generation: generationAfterIdentity,
+        executableMatches: executableMatches,
+        argumentsMatch: true,
+        generationStable: generationBefore != nil
+            && generationBefore == generationAfterResponse
+            && generationAfterResponse == generationAfterIdentity
+    )
+    return RuntimeOwnerEvidence.evaluate(
+        kind: "capture",
+        payload: payload,
+        attestation: attestation
+    ) ?? RuntimeOwnerEvidence(running: false, capabilityReady: nil, ownerPID: nil)
 }
 
 #if YULU_DEVELOPMENT_SMOKE
@@ -826,15 +1631,31 @@ final class YuluApplication: NSObject, NSApplicationDelegate {
     private let launchPolicy: LaunchPolicy
     private let layout: BundleLayout
     private let port: Int
+    private let applicationPaths: ApplicationDataPaths?
     private var window: NSWindow?
     private var webView: WKWebView?
-    private var supervisor: ProductSupervisor?
+    private var serviceWindow: NSWindow?
+    private let backgroundServices = BackgroundServiceRegistry()
     private var hostPollAttempts = 0
+    private var pollGeneration = 0
+    private var hostEvidence = RuntimeOwnerEvidence(
+        running: false,
+        capabilityReady: nil,
+        ownerPID: nil
+    )
+    private var captureEvidence = RuntimeOwnerEvidence(
+        running: false,
+        capabilityReady: nil,
+        ownerPID: nil
+    )
 
     init(launchPolicy: LaunchPolicy, layout: BundleLayout, port: Int) {
         self.launchPolicy = launchPolicy
         self.layout = layout
         self.port = port
+        self.applicationPaths = launchPolicy.installed
+            ? ApplicationDataPaths.resolve(environment: [:])
+            : nil
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -850,10 +1671,8 @@ final class YuluApplication: NSObject, NSApplicationDelegate {
             window.contentView = centeredMessage(guidance, detail: "Yulu runs services and updates only from /Applications/Yulu.app.")
         } else {
             window.contentView = centeredMessage("Starting Yulu…", detail: "Waiting for the bundled Host.")
-            let supervisor = ProductSupervisor(layout: layout, port: port)
-            self.supervisor = supervisor
-            supervisor.start()
-            pollHost()
+            backgroundServices.registerBundledOwners(policy: launchPolicy)
+            beginServicePolling()
         }
         window.center()
         window.makeKeyAndOrderFront(nil)
@@ -865,16 +1684,18 @@ final class YuluApplication: NSObject, NSApplicationDelegate {
         false
     }
 
+    func applicationDidBecomeActive(_ notification: Notification) {
+        guard launchPolicy.installed else { return }
+        refreshServiceWindow()
+        beginServicePolling()
+    }
+
     func applicationShouldHandleReopen(
         _ sender: NSApplication,
         hasVisibleWindows flag: Bool
     ) -> Bool {
         window?.makeKeyAndOrderFront(nil)
         return true
-    }
-
-    func applicationWillTerminate(_ notification: Notification) {
-        supervisor?.stop()
     }
 
     private func centeredMessage(_ title: String, detail: String) -> NSView {
@@ -922,10 +1743,18 @@ final class YuluApplication: NSObject, NSApplicationDelegate {
         let componentsItem = NSMenuItem()
         root.addItem(componentsItem)
         let components = NSMenu(title: "Components")
-        let restartHost = components.addItem(withTitle: "Restart Host", action: #selector(onRestartHost), keyEquivalent: "")
-        restartHost.target = self
-        let restartCapture = components.addItem(withTitle: "Restart Capture", action: #selector(onRestartCapture), keyEquivalent: "")
-        restartCapture.target = self
+        let serviceStatus = components.addItem(
+            withTitle: "Background Services…",
+            action: #selector(onShowBackgroundServices),
+            keyEquivalent: ""
+        )
+        serviceStatus.target = self
+        let backgroundSettings = components.addItem(
+            withTitle: "Background Item Settings…",
+            action: #selector(onOpenBackgroundSettings),
+            keyEquivalent: ""
+        )
+        backgroundSettings.target = self
         componentsItem.submenu = components
         NSApp.mainMenu = root
     }
@@ -941,43 +1770,167 @@ final class YuluApplication: NSObject, NSApplicationDelegate {
         open(route: route)
     }
 
-    @objc private func onRestartHost() {
+    @objc private func onShowBackgroundServices() {
         guard launchPolicy.installed else { return }
+        refreshServiceWindow(show: true)
+    }
+
+    @objc private func onOpenBackgroundSettings() {
+        guard launchPolicy.installed else { return }
+        SMAppService.openSystemSettingsLoginItems()
+    }
+
+    private func refreshServiceWindow(show: Bool = false) {
+        guard launchPolicy.installed else { return }
+        let statuses = backgroundServices.statuses()
+        func state(_ plistName: String, evidence: RuntimeOwnerEvidence) -> BackgroundServiceState {
+            let readiness = evidence.capabilityReady.map { $0 ? "true" : "false" } ?? "unknown"
+            return BackgroundServiceState.evaluate(
+                status: statuses[plistName] ?? "notFound",
+                running: evidence.running ? "true" : "false",
+                ready: readiness
+            ) ?? BackgroundServiceState(
+                registration: .notFound,
+                systemApproval: .unknown,
+                runningHealth: .stopped,
+                capabilityReadiness: .blocked
+            )
+        }
+        let presentation = BundledServicesPresentation.make(
+            host: state("com.yulu.ui.plist", evidence: hostEvidence),
+            capture: state("com.yulu.audiodaemon.plist", evidence: captureEvidence)
+        )
+        let stack = NSStackView()
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 16
+        var needsRemediation = false
+        for (index, service) in presentation.services.enumerated() {
+            let titleLabel = NSTextField(labelWithString: service.label)
+            titleLabel.font = .systemFont(ofSize: 16, weight: .semibold)
+            stack.addArrangedSubview(titleLabel)
+            let detail = service.state.rows
+                .map { "\($0.label): \($0.value)" }
+                .joined(separator: "\n")
+            stack.addArrangedSubview(NSTextField(wrappingLabelWithString: detail))
+            let plistName = BackgroundServiceDescriptor.bundledOwners[index].plistName
+            if let error = backgroundServices.registrationErrors[plistName] {
+                let errorLabel = NSTextField(wrappingLabelWithString: "Registration error: \(error)")
+                errorLabel.textColor = .systemRed
+                stack.addArrangedSubview(errorLabel)
+            }
+            needsRemediation = needsRemediation || service.state.remediation != nil
+        }
+        if needsRemediation {
+            stack.addArrangedSubview(NSButton(
+                title: "Open Login Items Settings…",
+                target: self,
+                action: #selector(onOpenBackgroundSettings)
+            ))
+        }
+        let content = NSView(frame: NSRect(x: 0, y: 0, width: 440, height: 430))
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        content.addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 24),
+            stack.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -24),
+            stack.topAnchor.constraint(equalTo: content.topAnchor, constant: 24),
+        ])
+        let serviceWindow: NSWindow
+        if let existing = self.serviceWindow {
+            serviceWindow = existing
+            serviceWindow.contentView = content
+        } else {
+            serviceWindow = NSWindow(
+                contentRect: content.frame,
+                styleMask: [.titled, .closable],
+                backing: .buffered,
+                defer: false
+            )
+            serviceWindow.title = "Background Services"
+            serviceWindow.contentView = content
+            serviceWindow.center()
+            self.serviceWindow = serviceWindow
+        }
+        if show { serviceWindow.makeKeyAndOrderFront(nil) }
+    }
+
+    private func beginServicePolling() {
+        pollGeneration += 1
         hostPollAttempts = 0
-        supervisor?.restartHost()
-        pollHost()
+        pollHost(generation: pollGeneration)
     }
 
-    @objc private func onRestartCapture() {
-        guard launchPolicy.installed else { return }
-        supervisor?.restartCapture()
-    }
-
-    private func pollHost() {
-        guard launchPolicy.installed else { return }
+    private func pollHost(generation: Int) {
+        guard launchPolicy.installed,
+              generation == pollGeneration,
+              let applicationPaths else { return }
+        pollCapture(generation: generation)
         hostPollAttempts += 1
         let url = URL(string: "http://127.0.0.1:\(port)/healthz")!
         URLSession.shared.dataTask(with: url) { [weak self] data, response, _ in
             guard let self else { return }
-            let responseHealthy = healthResponseIsValid(
-                data: data,
-                response: response,
-                nonce: self.supervisor?.hostNonce ?? ""
+            let payload = data.flatMap {
+                try? JSONSerialization.jsonObject(with: $0) as? [String: Any]
+            }
+            let ownerURL = applicationPaths.legacyReadOnlyDataDir
+                .appendingPathComponent("host-instance.lock/owner.json")
+            let attestation = hostRuntimeAttestation(
+                ownerURL: ownerURL,
+                expectedExecutable: self.layout.hostNode,
+                expectedArguments: [self.layout.hostNode.path, self.layout.hostEntry.path]
             )
+            let evidence = payload.flatMap { payload in
+                attestation.flatMap {
+                    RuntimeOwnerEvidence.evaluate(
+                        kind: "host",
+                        payload: payload,
+                        attestation: $0
+                    )
+                }
+            } ?? RuntimeOwnerEvidence(running: false, capabilityReady: nil, ownerPID: nil)
+            let responseHealthy = (response as? HTTPURLResponse)?.statusCode == 200
+                && evidence.running
             DispatchQueue.main.async {
-                let healthy = responseHealthy && self.supervisor?.hostIsRunning == true
-                if healthy {
-                    self.open(route: "/")
+                guard generation == self.pollGeneration else { return }
+                self.hostEvidence = evidence
+                self.refreshServiceWindow()
+                if responseHealthy {
+                    self.hostPollAttempts = 0
+                    if self.webView == nil { self.open(route: "/") }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                        self.pollHost(generation: generation)
+                    }
                 } else if self.hostPollAttempts < 60 {
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { self.pollHost() }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                        self.pollHost(generation: generation)
+                    }
                 } else {
                     self.window?.contentView = self.centeredMessage(
                         "Yulu Host is unavailable",
-                        detail: "Choose Components > Restart Host to try again."
+                        detail: "Choose Components > Background Services for registration and approval status."
                     )
                 }
             }
         }.resume()
+    }
+
+    private func pollCapture(generation: Int) {
+        guard let applicationPaths else { return }
+        let socketURL = applicationPaths.ipcDir
+            .appendingPathComponent("audio_daemon.sock")
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            guard let self else { return }
+            let evidence = captureRuntimeEvidence(
+                socketURL: socketURL,
+                expectedExecutable: self.layout.captureExecutable
+            )
+            DispatchQueue.main.async {
+                guard generation == self.pollGeneration else { return }
+                self.captureEvidence = evidence
+                self.refreshServiceWindow()
+            }
+        }
     }
 
     private func open(route: String) {
@@ -1011,7 +1964,7 @@ if CommandLine.arguments.count == 2, CommandLine.arguments[1] == "--development-
     }
 }
 #else
-let port = Int.random(in: 49152...65535)
+let port = HostServiceExecution.declaredPort
 #endif
 let app = NSApplication.shared
 let delegate = YuluApplication(launchPolicy: policy, layout: layout, port: port)

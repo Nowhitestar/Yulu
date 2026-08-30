@@ -419,6 +419,9 @@ async function startLockedServer(
     status: "ok",
     uptime: process.uptime(),
     instanceNonce: process.env.YULU_HOST_NONCE ?? null,
+    instanceLockToken: instanceLock.token,
+    serviceOwner: process.env.YULU_SERVICE_OWNER ?? null,
+    pid: process.pid,
   }));
   app.get("/api/ui-token", (c) => {
     c.header("Cache-Control", "no-store");

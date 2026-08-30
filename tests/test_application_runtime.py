@@ -2,6 +2,7 @@ import hashlib
 import io
 import json
 import os
+import plistlib
 import subprocess
 import tarfile
 from pathlib import Path
@@ -46,6 +47,34 @@ def runtime_fixture(tmp_path: Path) -> tuple[Path, dict[str, str]]:
         "Helpers/YuluCapture.app/Contents/MacOS/audio_daemon",
     ):
         write(contents / relative, executable=True)
+    launch_agents = contents / "Library/LaunchAgents"
+    for label, bundle_program, arguments in (
+        (
+            "com.yulu.ui",
+            "Contents/MacOS/yulu_app",
+            ["yulu_app", "--run-host-service"],
+        ),
+        (
+            "com.yulu.audiodaemon",
+            "Contents/Helpers/YuluCapture.app/Contents/MacOS/audio_daemon",
+            ["audio_daemon"],
+        ),
+    ):
+        payload = {
+            "Label": label,
+            "BundleProgram": bundle_program,
+            "ProgramArguments": arguments,
+            "RunAtLoad": True,
+            "KeepAlive": True,
+        }
+        if label == "com.yulu.audiodaemon":
+            payload["EnvironmentVariables"] = {
+                "YULU_SERVICE_OWNER": "com.yulu.audiodaemon"
+            }
+        write(
+            launch_agents / f"{label}.plist",
+            plistlib.dumps(payload),
+        )
 
     node_root = tmp_path / "node-vtest-darwin-arm64"
     write(node_root / "bin/node", b"node-arm64\n", executable=True)
@@ -280,6 +309,65 @@ def test_application_runtime_inventory_fails_closed_for_missing_wrong_arch_unsig
     )
     assert changed.returncode != 0
     assert "inventory hash mismatch" in changed.stderr
+
+
+def test_application_runtime_inventory_seals_bundle_relative_smappservice_agents(tmp_path: Path):
+    app, overrides = runtime_fixture(tmp_path)
+    prepared = subprocess.run(
+        ["bash", str(PREPARE), str(app)],
+        env={**os.environ, **overrides},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert prepared.returncode == 0, prepared.stderr + prepared.stdout
+    verify_env = {**os.environ, **fake_verification_tools(tmp_path)}
+
+    inventoried = subprocess.run(
+        ["bash", str(VERIFY), "--write-inventory", str(app)],
+        env=verify_env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert inventoried.returncode == 0, inventoried.stderr + inventoried.stdout
+    inventory = json.loads(
+        (app / "Contents/Resources/application-runtime.json").read_text(encoding="utf-8")
+    )
+    declared = {entry["path"] for entry in inventory["files"]}
+    assert {
+        "Contents/Library/LaunchAgents/com.yulu.ui.plist",
+        "Contents/Library/LaunchAgents/com.yulu.audiodaemon.plist",
+    } <= declared
+
+    host_plist = app / "Contents/Library/LaunchAgents/com.yulu.ui.plist"
+    unsafe = plistlib.loads(host_plist.read_bytes())
+    unsafe["Program"] = "/tmp/unbundled-host"
+    host_plist.write_bytes(plistlib.dumps(unsafe))
+    rejected = subprocess.run(
+        ["bash", str(VERIFY), "--write-inventory", str(app)],
+        env=verify_env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert rejected.returncode != 0
+    assert "bundle-relative SMAppService agent" in rejected.stderr
+
+    host_plist.write_bytes(plistlib.dumps({key: value for key, value in unsafe.items() if key != "Program"}))
+    capture_plist = app / "Contents/Library/LaunchAgents/com.yulu.audiodaemon.plist"
+    missing_owner = plistlib.loads(capture_plist.read_bytes())
+    missing_owner.pop("EnvironmentVariables")
+    capture_plist.write_bytes(plistlib.dumps(missing_owner))
+    rejected_owner = subprocess.run(
+        ["bash", str(VERIFY), "--write-inventory", str(app)],
+        env=verify_env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert rejected_owner.returncode != 0
+    assert "service owner marker" in rejected_owner.stderr
 
 
 def test_host_runtime_denied_smoke_proves_host_capture_and_bundle_immutability():

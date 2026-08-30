@@ -285,6 +285,18 @@ def test_meeting_silence_threshold_prompts_instead_of_stopping_capture_directly(
     assert 'meetingDaemon.path, "auto_stop"' in src
 
 
+def test_smappservice_capture_uses_only_the_bundled_python_for_silence_prompt():
+    src = _source()
+    start = src.index("func launchMeetingSilencePrompt()")
+    end = src.index("// ─── WAV", start)
+    body = src[start:end]
+
+    assert "bundledPythonExecutable()" in body
+    assert 'task.arguments = [meetingDaemon.path, "auto_stop"]' in body
+    assert 'URL(fileURLWithPath: "/usr/bin/env")' not in body
+    assert '"python3", meetingDaemon.path' not in body
+
+
 def test_tap_feeds_existing_sink():
     # The tap must push into the SAME frame sink as the SCK arm and reuse the
     # exact SysAudioOutput Int16 clamp (no re-derivation).
